@@ -732,12 +732,13 @@ The app uses list mode at start-up, to attach every held terminal again, and
 for the Machines page.
 
 **A connection.** The holder first writes its hello line, then a line end:
-`caps` is `["core","local"]` in a holder from before hook events and
-`["core","local","hooks"]` from 2.1.3-beta.8, `session.state` is `new` before
-a launch and `live` after. The app's first frame must be a `hello.ack` with
+`caps` is `["core","local"]` in a holder from before hook events,
+`["core","local","hooks"]` from 2.1.3-beta.8 and
+`["core","local","hooks","mcp"]` from 2.1.3-beta.10, `session.state` is `new`
+before a launch and `live` after. The app's first frame must be a `hello.ack` with
 exactly `t`, `proto` and `caps`: `proto` 1, `caps` holding `core` and nothing
 the holder did not offer; `local` allows the messages below, `hooks` the hook
-events (below). A first frame that is raw, or
+events and `mcp` the tool streams (both below). A first frame that is raw, or
 JSON off channel 0, gets `bad-frame`; another type `unknown-type`, another
 version `proto-mismatch`, anything else `bad-field`; then the holder closes the
 connection. With no `hello.ack` in 10 s it sends `timeout` and
@@ -745,7 +746,8 @@ closes; after that, with no frame from the app in 60 s it sends `timeout` and
 closes (the app pings every 15 s). Each limit is for the whole frame: one sent
 a byte at a time must still be whole in time. A frame's JSON is at most 4 KiB
 before the `hello.ack`, at most 64 KiB once the session is launched or a launch
-is under way, and otherwise 16 MiB as section 6 allows: a larger one is
+is under way (on a connection that acked `mcp`, which may carry a tool result,
+16 MiB then too), and otherwise 16 MiB as section 6 allows: a larger one is
 `bad-frame` and a close, refused on its header before its payload is read, and
 a payload's buffer grows only as its bytes arrive. At most 16 connections at
 once: the next one gets the hello, `busy`, and is closed. When the holder
@@ -767,7 +769,7 @@ the last column of section 8's table):
 | `timeout` | yes: no `hello.ack` in 10 s, or no frame in 60 s |
 | `bad-field` | yes for the first frame; otherwise no, within the budget of 20 in 60 s |
 | `too-large` | no, within that budget |
-| `busy` | yes when 16 connections are served already, the connection fell 256 chunks behind, or no thread could be started to carry its live output; no for typed input not taken or a second launch |
+| `busy` | yes when 16 connections are served already, the connection fell 256 chunks behind, or no thread could be started to carry its live output; no for typed input not taken, a second launch or a ninth tool stream |
 | `not-found`, `not-connected`, `io` | no |
 
 | Type | Reply | Fields and rules |
@@ -780,9 +782,13 @@ the last column of section 8's table):
 | `term.exit` | none | `{code}`, from the holder to the attached connection, once: after the program's last output, and also when another connection ended the session, which then closes this one |
 | `hook.event` | `hook.taken` `{re, seq}` | `{id, kind, payload}`; only on a connection that acked `hooks`, attached or not; while the session is ending, `not-found` (hook events, below) |
 | `event` | none | `{seq, kind, payload, lost?}`, from the holder to the attached connection, only if that connection acked `hooks` (hook events, below) |
+| `mcp.open` | none | `{stream}`; from a relay that is not attached, for its one stream, and from the holder to the attached connection that acked `mcp`, on the holder's number for it; with no such connection, `not-connected` (tool streams, below) |
+| `mcp` | none | `{stream, message}`, one JSON-RPC message: from a relay on its stream, and from the attached connection on a stream it was sent `mcp.open` for; each passed to the other side on that side's number (tool streams, below) |
+| `mcp.close` | none | `{stream}`; from a relay, and from the holder to whichever side is still there when the other ends (tool streams, below) |
 
 Ids are even, as in section 9, and at most 2^53 - 1. Every message has exactly
-its fields; `code` is present only once the program has exited.
+its fields; `code` is present only once the program has exited. The tool
+stream messages carry no id: a refusal of one has no `re`.
 
 - **Launch.** `argv` holds 1 to 256 strings of at most 8192 characters, none
   with a NUL character; `argv[0]` is an absolute path (no search of `PATH`).
@@ -990,9 +996,94 @@ treats the payload as untrusted text. Fixtures: the `hooks` part of
   whose send failed waits for the next attach, and the app drops a `seq` it
   has already seen (section 9). A holder that ends drops its queue.
 
+**Tool streams (capability `mcp`, from 2.1.3-beta.10).** A session's tool
+server can be a relay that its CLI starts, carrying the session's tool calls
+through its holder to the app, so the Conductor tools no longer depend on a
+port of one app run. These are the three messages section 8 names for R8, on
+a holder's own endpoint. A holder from 2.1.3-beta.10 offers `mcp` in its
+hello. No connection the app makes acks it yet, and nothing in the app starts
+the relay or names it: the step that wires a session's tools to it comes
+later, behind the agent sessions' setting. The holder only numbers a stream
+and passes its messages on: it reads no message, and runs, opens and writes
+nothing for one. Fixtures: the `mcp` part of `helper/fixtures/local.json`.
+
+- **The relay mode.** A CLI starts, as a tool server on its standard input
+  and output,
+
+  ```
+  aicc-helper mcp --store <folder> --session <sid>
+  ```
+
+  as its own child, with pipes and no shell. The store and session come from
+  the command line alone, never from the environment, which a CLI may pass
+  almost none of. The relay reads the session's record with the store's
+  strict reader and connects with the helper's own client, as list mode and
+  the hook mode do: the endpoint's checks above, then the hello's `nonce` and
+  `session`, with 2 s to connect and 2 s for the whole hello line. A holder
+  whose hello does not offer `mcp` (one
+  from before 2.1.3-beta.10) is sent nothing, not even the ack. Otherwise the
+  relay sends `hello.ack` with `caps` `["core","local","mcp"]` and
+  `mcp.open` for its one stream, number 1, then sends each line it reads on
+  standard input as one `mcp`, and writes the message of each `mcp` the holder
+  sends on that stream as one line on standard output, as compact JSON. It
+  passes whatever method comes, in the order it came, and waits for no
+  `initialize`. It pings every 15 s, so the connection is not dropped as idle.
+  A line that is not one JSON object or array (an empty line, text that is
+  not JSON, a value more than 31 levels deep, an escaped lone surrogate), or
+  whose message is over 1,048,320 bytes as compact JSON, is dropped and the
+  next line read; a line over 1 MiB is read to its end and dropped the same
+  way. It exits 0 when its standard input ends, after `mcp.close`. It exits 1
+  as soon as its stream cannot be had or cannot go on: a command line it does
+  not take, no record or no holder, a holder without `mcp`, `not-connected`,
+  `busy`, an `mcp.close` from the holder, any other `error` but `too-large`,
+  or the connection lost. Standard output carries only the messages: it
+  prints nothing else, writes nothing on standard error and writes no file.
+- **`mcp.open`** `{stream}`, from a connection that acked `mcp` and is not
+  attached to the terminal, for the one stream it may have open at a time
+  (`stream` its own number for it, a whole number from 1 to 2^53 - 1). From
+  then on that connection is a relay for the rest of its life: a
+  `term.launch`, `term.attach`, `term.resize`, `term.detach` or `term.end`
+  from it is `unknown-type` and a close, as raw bytes from it are
+  `bad-frame` and a close. An attached connection opens no stream
+  (`bad-field`), nor a relay a second one while one is open (`bad-field`).
+  The holder numbers each stream itself, from 1, never using a number twice
+  in its life, and sends `mcp.open` with its number to the attached
+  connection that acked `mcp`. With no such connection attached the answer
+  is `not-connected`; with 8 streams open, `busy`. Neither takes a number.
+- **`mcp`** `{stream, message}`: `message` is a JSON object (one JSON-RPC
+  message) or an array (a batch). From a relay, on its stream, it goes to the
+  attached connection on the holder's number; its message is at most
+  1,048,320 bytes as compact JSON (1 MiB less 256, the room the `mcp` around
+  it needs), or it is `too-large` and nothing is passed on, while the stream
+  goes on. From the attached connection, on a stream it was sent `mcp.open`
+  for, it goes to that stream's relay on the relay's number; its message is
+  at most 16,776,960 bytes (16 MiB less 256), or it is `too-large`. A number
+  that is not one of the sender's open streams is `not-found`. Each side
+  sees only its own number for a stream, so neither can name another's.
+- **`mcp.close`** `{stream}`: from a relay, its stream ends and the attached
+  connection is told (`mcp.close`, on the holder's number). A relay whose
+  connection goes without it (a CLI's end does not always end its tool
+  server's input) ends its stream the same way. The attached connection does
+  not send it (`not-found`): its streams end with its attach. When it lets
+  go (`term.detach`, a newer attach, `term.exit`, falling behind or no thread
+  for its output, a dropped connection) every stream it carried ends and
+  each relay is told, on the relay's number; it is not told itself, and no
+  tool message follows its last word, as no hook event does. A holder that
+  ends tells no one: each relay reads the end of its connection.
+- **What is not here yet.** While no connection takes tool streams, as when
+  the app is away, a relay's `mcp.open` is `not-connected` and the relay
+  exits. Holding a call for about 30 seconds and the fixed updating answer
+  are protocol change 9 (ADR-030), a later step. The app's side, when it
+  sends `mcp`, must keep each message to what the holder reads: JSON with no
+  escaped lone surrogate and at most 31 levels deep, or the frame is
+  `bad-frame` and its connection is closed.
+
 **Change.** The `hold` and `list` command lines and their exit codes, the
 record and the listing are frozen within version 1; new fields need a new
 record version or capability. A message may gain an optional field, as
 `term.launch` gained `line` and `conpty` (2.1.3-beta.7): a holder from before
 it refuses the field with `bad-field`. The `hook` command line (2.1.3-beta.8)
 is frozen with them: its options, its exit status (always 0) and its silence.
+So is the `mcp` command line (2.1.3-beta.10): its options, its exit status (0
+at the end of its input, 1 otherwise) and a standard output that carries only
+messages.

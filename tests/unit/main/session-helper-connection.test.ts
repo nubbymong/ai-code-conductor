@@ -6,7 +6,10 @@
 //  - every JSON control message travels on channel 0: one off channel 0 is
 //    dropped, whatever it carries, and never answers a waiting request;
 //  - an `event` is read as an event before any reply lookup, so one carrying
-//    a `re` is refused (its fields are exact) and answers no request.
+//    a `re` is refused (its fields are exact) and answers no request;
+//  - `mcp` the same way (2.1.3-beta.10, plan section B2): acked only when the
+//    connection is asked for it AND the hello offers it, and `mcp.open`, `mcp`
+//    and `mcp.close` reported only on a connection that acked it.
 import { describe, it, expect, afterEach } from 'vitest'
 import { FrameReader, encodeJsonFrame, type HolderRecord } from '../../../src/main/session-helper/protocol'
 import { HolderConnection } from '../../../src/main/session-helper/connection'
@@ -21,6 +24,11 @@ const RECORD: HolderRecord = {
   helper: '0.1.0', started: 1, away: 120, attached: false, child: 'running', code: null,
 }
 const STOP = { t: 'event', seq: 1, kind: 'Stop', payload: { hook_event_name: 'Stop', session_id: 'c1' } }
+/** What a holder of 2.1.3-beta.10 offers, and the three tool stream messages it sends the app. */
+const ALL_CAPS = ['core', 'local', 'hooks', 'mcp']
+const OPEN = { t: 'mcp.open', stream: 1 }
+const CALL = { t: 'mcp', stream: 1, message: { jsonrpc: '2.0', id: 1, method: 'tools/list' } }
+const CLOSE = { t: 'mcp.close', stream: 1 }
 
 const tick = (ms = 0) => new Promise((r) => setTimeout(r, ms))
 async function until(cond: () => boolean, what: string, ms = 3000): Promise<void> {
@@ -35,20 +43,24 @@ const open: HolderConnection[] = []
 afterEach(() => { for (const c of open.splice(0)) c.close() })
 
 /** A holder that says hello offering `caps`, and the app's connection to it
- *  (`hooks`: the connection wants hook events). */
-async function connected(caps: string[], hooks: boolean) {
+ *  (`hooks`: the connection wants hook events; `mcp`: it carries tool streams). */
+async function connected(caps: string[], hooks: boolean, mcp = false) {
   const [app, holder] = duplexPair()
   const fromApp: Json[] = []
   const reader = new FrameReader('app_to_helper')
   holder.on('data', (chunk: Buffer) => { for (const f of reader.push(chunk)) if (f.kind === 0) fromApp.push(f.json as Json) })
   const hello = { proto: [1], helper: { version: '0.1.0' }, os: 'windows', arch: 'x86_64', caps, session: { sid: SID, state: 'live' } }
   holder.write(`AICC-HELLO ${NONCE} ${JSON.stringify(hello)}\n`)
-  const conn = await HolderConnection.open({ record: RECORD, os: 'windows', openStream: async () => app, hooks, pingEveryMs: 600_000 })
+  const conn = await HolderConnection.open({ record: RECORD, os: 'windows', openStream: async () => app, hooks, mcp, pingEveryMs: 600_000 })
   open.push(conn)
   const events: unknown[] = []
   conn.on('event', (e) => { events.push(e) })
+  const tools: unknown[] = []
+  conn.on('mcpOpen', (stream) => { tools.push(['open', stream]) })
+  conn.on('mcp', (stream, message) => { tools.push(['mcp', stream, message]) })
+  conn.on('mcpClose', (stream) => { tools.push(['close', stream]) })
   await until(() => fromApp.length >= 1, 'the hello.ack')
-  return { conn, fromApp, events, send: (m: unknown, channel = 0) => { holder.write(encodeJsonFrame(m, channel)) } }
+  return { conn, fromApp, events, tools, send: (m: unknown, channel = 0) => { holder.write(encodeJsonFrame(m, channel)) } }
 }
 
 describe('the connection acks hooks only when it wants them and the holder offers them', () => {
@@ -81,6 +93,48 @@ describe('the connection acks hooks only when it wants them and the holder offer
   })
 })
 
+describe('the connection acks mcp only when asked for it and the holder offers it', () => {
+  it('a hello that offers mcp, to a connection not asked for it (as every connection the app makes today): never acked, and tool messages are dropped', async () => {
+    for (const hooks of [false, true]) {
+      const c = await connected(ALL_CAPS, hooks)
+      expect(c.fromApp[0]).toEqual({ t: 'hello.ack', proto: 1, caps: hooks ? ['core', 'local', 'hooks'] : ['core', 'local'] })
+      expect(c.conn.mcp).toBe(false)
+      for (const m of [OPEN, CALL, CLOSE]) c.send(m)
+      await tick(30)
+      expect(c.tools).toEqual([])
+      expect(c.conn.isClosed).toBe(false)
+    }
+  })
+
+  it('a connection asked for mcp, to a hello that does not offer it: not acked, and tool messages are dropped', async () => {
+    const c = await connected(['core', 'local', 'hooks'], true, true)
+    expect(c.fromApp[0]).toEqual({ t: 'hello.ack', proto: 1, caps: ['core', 'local', 'hooks'] })
+    expect(c.conn.mcp).toBe(false)
+    for (const m of [OPEN, CALL, CLOSE]) c.send(m)
+    await tick(30)
+    expect(c.tools).toEqual([])
+  })
+
+  it('both: mcp is acked and the three messages are reported in order, read strictly', async () => {
+    for (const hooks of [false, true]) {
+      const c = await connected(ALL_CAPS, hooks, true)
+      expect(c.fromApp[0]).toEqual({ t: 'hello.ack', proto: 1, caps: hooks ? ALL_CAPS : ['core', 'local', 'mcp'] })
+      expect(c.conn.mcp).toBe(true)
+      c.send(OPEN)
+      c.send(CALL)
+      // Each refused: a field it does not have, a message that is text, stream 0.
+      c.send({ ...CALL, seq: 1 })
+      c.send({ ...CALL, message: 'tools/list' })
+      c.send({ ...OPEN, stream: 0 })
+      c.send(CLOSE)
+      await until(() => c.tools.length >= 3, 'the tool messages')
+      await tick(20)
+      expect(c.tools).toEqual([['open', 1], ['mcp', 1, CALL.message], ['close', 1]])
+      expect(c.conn.isClosed).toBe(false)
+    }
+  })
+})
+
 describe('control messages travel on channel 0 only', () => {
   it('an event on channel 1 is dropped; the same event on channel 0 is not', async () => {
     const c = await connected(['core', 'local', 'hooks'], true)
@@ -100,6 +154,19 @@ describe('control messages travel on channel 0 only', () => {
     await tick(30)
     expect(c.events).toEqual([])
     // The request still waits for its own reply.
+    c.send({ t: 'term.resized', re: id })
+    expect(await reply).toEqual({ t: 'term.resized', re: id })
+  })
+
+  it("a tool message on channel 1 is dropped, and one carrying a waiting request's `re` answers no request", async () => {
+    const c = await connected(ALL_CAPS, false, true)
+    c.send(OPEN, 1)
+    const reply = c.conn.request({ t: 'term.resize', cols: 100, rows: 40 })
+    await until(() => c.fromApp.some((m) => m.t === 'term.resize'), 'the request')
+    const id = c.fromApp.find((m) => m.t === 'term.resize')!.id as number
+    c.send({ ...CLOSE, re: id })
+    await tick(30)
+    expect(c.tools).toEqual([])
     c.send({ t: 'term.resized', re: id })
     expect(await reply).toEqual({ t: 'term.resized', re: id })
   })

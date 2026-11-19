@@ -11,6 +11,9 @@ import {
   JSON_FROM_HELPER_MAX,
   JSON_TO_HELPER_MAX,
   LAUNCH_LIMITS,
+  MCP_CAP,
+  MCP_MESSAGE_TO_APP_MAX,
+  MCP_MESSAGE_TO_HELPER_MAX,
   NONCE_RE,
   RAW_MAX,
   SID_RE,
@@ -27,6 +30,9 @@ import {
   parseVersionLine,
   readEventFrame,
   readListing,
+  readMcp,
+  readMcpClose,
+  readMcpOpen,
   readRecord,
   validEndpoint,
   type HelperOs,
@@ -378,5 +384,76 @@ describe('session helper protocol: hook events (capability hooks, section 15)', 
       ['not an object', ['event', 3]],
     ]
     for (const [what, msg] of bad) expect(asRead(msg), what).toBeNull()
+  })
+})
+
+// 2.1.3-beta.10, plan section B2: the `mcp` part of helper/fixtures/local.json,
+// read from the app's side. No connection the app makes acks `mcp` yet; these
+// are the readers the step that wires a session's tools will use.
+describe('session helper protocol: tool streams (capability mcp, section 15)', () => {
+  const M = local.mcp
+  /** A tool message as the app's reader gets it from a holder's frame. */
+  const read = (msg: unknown) => {
+    const f = decodeOneFrame(encodeJsonFrame(msg), 'helper_to_app')
+    if ('error' in f || f.kind !== 0) throw new Error('not one JSON frame')
+    const t = (f.json as { t?: unknown }).t
+    return t === 'mcp' ? readMcp(f.json, f.size) : t === 'mcp.open' ? readMcpOpen(f.json) : readMcpClose(f.json)
+  }
+  const fields = (v: { t?: string; type?: string; stream: number; message?: unknown }) =>
+    (v.t ?? v.type) === 'mcp' ? { stream: v.stream, message: v.message } : { stream: v.stream }
+
+  it("the cap, the caps a holder offers and the message limits are the helper's", () => {
+    expect(MCP_CAP).toBe('mcp')
+    expect(M.offered).toEqual(['core', 'local', HOOKS_CAP, MCP_CAP])
+    expect(M.relay_caps).toEqual(['core', 'local', MCP_CAP])
+    expect(MCP_MESSAGE_TO_APP_MAX).toBe(M.limits.message_to_app_bytes)
+    expect(MCP_MESSAGE_TO_HELPER_MAX).toBe(M.limits.message_to_helper_bytes)
+    // Each leaves the 256 bytes the `mcp` around a message needs.
+    expect(MCP_MESSAGE_TO_APP_MAX + 256).toBe(JSON_FROM_HELPER_MAX)
+    expect(MCP_MESSAGE_TO_HELPER_MAX + 256).toBe(JSON_TO_HELPER_MAX)
+  })
+
+  it('the ack names mcp only when asked to, after hooks when both are', () => {
+    expect(helloAck(false, true)).toEqual({ t: 'hello.ack', proto: 1, caps: ['core', 'local', MCP_CAP] })
+    expect(helloAck(true, true)).toEqual({ t: 'hello.ack', proto: 1, caps: ['core', 'local', HOOKS_CAP, MCP_CAP] })
+    expect(helloAck(true)).toEqual({ t: 'hello.ack', proto: 1, caps: ['core', 'local', HOOKS_CAP] })
+    expect(helloAck(false, false)).toEqual(helloAck())
+  })
+
+  it('every message vector reads as its fields say, exactly as the holder sends it', () => {
+    expect(M.messages.map((v: { type: string }) => v.type)).toEqual(expect.arrayContaining(['mcp.open', 'mcp', 'mcp.close']))
+    for (const v of M.messages) {
+      const f = decodeOneFrame(encodeJsonFrame(JSON.parse(v.json)), 'helper_to_app')
+      if ('error' in f || f.kind !== 0) throw new Error(v.name)
+      expect(f.size, v.name).toBe(Buffer.byteLength(v.json, 'utf8'))
+      expect(read(JSON.parse(v.json)), v.name).toEqual(fields(v))
+    }
+  })
+
+  it('what a holder takes from a relay, the app reads when the holder passes it on', () => {
+    for (const v of M.requests.valid) {
+      const req = JSON.parse(v.json)
+      expect(read(req), v.name).toEqual(fields(req))
+    }
+  })
+
+  it('a message that breaks its schema is refused', () => {
+    expect(M.invalid_messages.length).toBeGreaterThanOrEqual(8)
+    for (const v of M.invalid_messages) expect(read(JSON.parse(v.json)), v.name).toBeNull()
+    // Each reader reads its own type only, and an object only.
+    expect(readMcpOpen({ t: 'mcp.close', stream: 1 })).toBeNull()
+    expect(readMcpClose({ t: 'mcp.open', stream: 1 })).toBeNull()
+    expect(readMcp({ t: 'mcp.open', stream: 1, message: {} }, 40)).toBeNull()
+    expect(readMcpOpen(['mcp.open', 1])).toBeNull()
+    expect(readMcp(null, 4)).toBeNull()
+  })
+
+  it('the largest message to the app is read; one byte larger is not, nor a message over a frame', () => {
+    const ofSize = (bytes: number) => ['x'.repeat(bytes - 4)]
+    const largest = { t: 'mcp', stream: Number.MAX_SAFE_INTEGER, message: ofSize(MCP_MESSAGE_TO_APP_MAX) }
+    expect(Buffer.byteLength(JSON.stringify(largest.message), 'utf8')).toBe(MCP_MESSAGE_TO_APP_MAX)
+    expect(read(largest)).toEqual({ stream: Number.MAX_SAFE_INTEGER, message: largest.message })
+    expect(read({ ...largest, message: ofSize(MCP_MESSAGE_TO_APP_MAX + 1) })).toBeNull()
+    expect(readMcp(largest, JSON_FROM_HELPER_MAX + 1)).toBeNull()
   })
 })

@@ -25,20 +25,41 @@
 //! hook event is only numbered and passed on: nothing is run, opened or
 //! written for it.
 //!
-//! Locks: a connection's stream gate (`Conn::live`) first, then the hook
-//! events (`Serve::hooks`), then the record, then the serve state, then the
-//! holder's own (never the other way), and nothing is written to a connection
-//! while the record or the serve state is held. Hook events are written to a
+//! Tool streams (capability `mcp`, from 2.1.3-beta.10): a relay
+//! (`aicc-helper mcp`, `relay.rs`) opens a stream with `mcp.open` and carries
+//! one JSON-RPC message at a time on it (`mcp`), until `mcp.close` or its
+//! connection goes. The holder numbers the stream itself (from 1, never
+//! twice) and passes the three messages, and nothing else, between the relay
+//! and the attached connection that acked `mcp`, which answers with `mcp` on
+//! the holder's number. With no such connection attached, `mcp.open` gets
+//! `not-connected`. A connection that opened a stream is a relay for the rest
+//! of its life: it may not launch, attach, type, resize, detach or end. A
+//! connection attached to the terminal opens no stream. At most
+//! `MAX_TOOL_STREAMS` are open at once. When the attached connection lets go
+//! (detach, a newer attach, `term.exit`, falling behind, a drop) every stream
+//! it carried ends and each relay is told (`mcp.close`); when a relay goes,
+//! the app is told. A tool message is only passed on: nothing is run, opened
+//! or written for it.
+//!
+//! Locks: a connection's stream gate (`Conn::live`) first (the attached
+//! connection's before a relay's, which guards that relay's tool messages),
+//! then the hook events (`Serve::hooks`), then the tool streams
+//! (`Serve::tools`), then the record, then the serve state, then the holder's
+//! own (never the other way), and nothing is written to a connection while
+//! the record or the serve state is held. Hook events are written to a
 //! connection under its gate and the hook lock, so they go out in `seq` order
 //! and never inside an attach's reply and replay or after its last word; the
-//! hook lock is held for at most `WRITE_TIMEOUT` of writing at a time.
+//! hook lock is held for at most `WRITE_TIMEOUT` of writing at a time. A tool
+//! message is written under the gate of the connection it goes to, and only
+//! while its stream is open, which a stream is opened and ended under; so no
+//! tool message follows the last word either.
 
 use crate::frame::{self, Body, Direction, Frame, FrameError};
 use crate::hello::{self, Hello, PROTO_VERSIONS};
 use crate::holder::{lock, HookEvent, HookQueue, Holder};
 use crate::json::Value;
 use crate::pty::SpawnOptions;
-use crate::request::{self, Allowed, Launch, Refusal, Request};
+use crate::request::{self, Allowed, Launch, Refusal, Request, MAX_MCP_TO_APP};
 use crate::ring::RingError;
 use crate::store::{self, Record};
 use crate::transport::{self, Listener, Stream};
@@ -52,11 +73,17 @@ use std::time::{Duration, Instant};
 
 /// The capability that allows hook events.
 pub const HOOKS_CAP: &str = "hooks";
+/// The capability that allows tool streams (from 2.1.3-beta.10).
+pub const MCP_CAP: &str = "mcp";
 /// What a holder offers in its hello: the frozen core, `local` for the
-/// terminal messages and `hooks` for hook events (from 2.1.3-beta.8). The
-/// app acks `core` and `local` (`hello::LOCAL_CAPS`); the hook mode acks all
-/// three.
-pub const HOLDER_CAPS: [&str; 3] = ["core", "local", HOOKS_CAP];
+/// terminal messages, `hooks` for hook events (from 2.1.3-beta.8) and `mcp`
+/// for tool streams (from 2.1.3-beta.10). The app acks `core` and `local`
+/// (`hello::LOCAL_CAPS`), and `hooks` on a connection that takes hook events;
+/// the hook mode acks `hook::ACK_CAPS` and the relay `relay::ACK_CAPS`.
+pub const HOLDER_CAPS: [&str; 4] = ["core", "local", HOOKS_CAP, MCP_CAP];
+/// Tool streams one session may have open at once; one more `mcp.open` gets
+/// `busy`.
+pub const MAX_TOOL_STREAMS: usize = 8;
 /// Connections served at once; the next one gets `busy` and is closed.
 pub const MAX_CONNECTIONS: usize = 16;
 /// The app must ack the hello in this time.
@@ -117,10 +144,15 @@ struct Conn {
     /// forwarder sends each live chunk under it, and only while it still
     /// names the forwarder's own attach. So output queued for an older attach
     /// never follows a newer attach's reply, and a detach or a replacement
-    /// stops it before saying so.
+    /// stops it before saying so. On a relay, which never attaches, it is
+    /// the gate of its tool messages: one goes to it, and its stream ends,
+    /// only under this lock.
     live: Mutex<u64>,
     /// Set, under `live`, once this connection has been sent `term.exit`.
     told_exit: AtomicBool,
+    /// Set once this connection has opened a tool stream: it is a relay for
+    /// the rest of its life, and never uses the terminal.
+    relay: AtomicBool,
 }
 
 impl Conn {
@@ -158,6 +190,18 @@ impl Conn {
 
     fn send_json(&self, v: Value) -> io::Result<()> {
         self.send_frame(&Frame::json(0, v))
+    }
+
+    /// A tool message to a relay. It goes on to a CLI, the way section 6
+    /// calls app to helper, so its frame may be as large as that way allows
+    /// (a tool result can carry a screenshot).
+    fn send_to_relay(&self, v: Value) -> io::Result<()> {
+        let bytes = frame::encode(&Frame::json(0, v), Direction::AppToHelper).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))?;
+        self.send_bytes(&bytes)
+    }
+
+    fn is_relay(&self) -> bool {
+        self.relay.load(Ordering::SeqCst)
     }
 
     fn send_error(&self, re: Option<u64>, code: &str, text: &str) -> io::Result<()> {
@@ -275,12 +319,37 @@ struct Hooks {
     to: Option<(Arc<Conn>, u64)>,
 }
 
+/// One tool stream: the relay's connection and the relay's own number for
+/// it, the attached connection it was opened toward, and the holder's
+/// number for it, the one that connection sees.
+struct ToolStream {
+    num: u64,
+    relay: Arc<Conn>,
+    relay_num: u64,
+    app: Arc<Conn>,
+}
+
+/// The session's tool streams, and the attached connection that takes new
+/// ones (None: `mcp.open` gets `not-connected`). Every open stream is with
+/// that connection: when it lets go they all end.
+struct Tools {
+    to: Option<Arc<Conn>>,
+    open: Vec<ToolStream>,
+    /// The number the last stream took: each takes the next, from 1, and no
+    /// number is used twice in a holder's life.
+    last: u64,
+}
+
+/// A tool message for a stream that is not open (or not this connection's).
+const NO_STREAM: (&str, &str) = (request::CODE_NOT_FOUND, "no tool stream of this connection has that number");
+
 struct Serve {
     opts: Options,
     nonce: String,
     listener: Listener,
     state: Mutex<State>,
     hooks: Mutex<Hooks>,
+    tools: Mutex<Tools>,
     record: Mutex<Record>,
     /// `State::ending`, for threads that only look.
     ending: AtomicBool,
@@ -332,6 +401,22 @@ pub fn hook_taken(re: u64, seq: u64) -> Value {
     reply("hook.taken", re, vec![("seq", Value::uint(seq))])
 }
 
+/// `mcp.open`: tool stream `stream` begins (from a relay, its own number;
+/// from the holder to the app, the holder's).
+pub fn mcp_open(stream: u64) -> Value {
+    Value::obj(vec![("t", Value::str("mcp.open")), ("stream", Value::uint(stream))])
+}
+
+/// `mcp`: one JSON-RPC message on tool stream `stream`.
+pub fn mcp_message(stream: u64, message: Value) -> Value {
+    Value::obj(vec![("t", Value::str("mcp")), ("stream", Value::uint(stream)), ("message", message)])
+}
+
+/// `mcp.close`: tool stream `stream` ends.
+pub fn mcp_close(stream: u64) -> Value {
+    Value::obj(vec![("t", Value::str("mcp.close")), ("stream", Value::uint(stream))])
+}
+
 /// Send `conn` every hook event waiting, oldest first; each leaves the queue
 /// once it is sent. The whole queue goes within `WRITE_TIMEOUT`, however
 /// many events it holds, so the hook lock is never held longer: a connection
@@ -367,7 +452,7 @@ fn say_ended(conn: &Conn, re: u64, code: Option<i32>) {
 
 /// Check the first frame: a `hello.ack` with exactly `t`, `proto` and `caps`,
 /// a version this holder speaks, and capabilities it offered, `core` among
-/// them. Returns what the ack allowed: `local`, `hooks`.
+/// them. Returns what the ack allowed: `local`, `hooks`, `mcp`.
 fn check_ack(v: &Value) -> Result<Allowed, Refusal> {
     let bad = |code: &'static str, text: &str| Err(Refusal { code, re: None, text: text.to_string() });
     match v.get("t").and_then(Value::as_str) {
@@ -396,7 +481,7 @@ fn check_ack(v: &Value) -> Result<Allowed, Refusal> {
     if !seen.contains(&"core") {
         return bad(request::CODE_BAD_FIELD, "caps must hold core");
     }
-    Ok(Allowed { local: seen.contains(&"local"), hooks: seen.contains(&HOOKS_CAP) })
+    Ok(Allowed { local: seen.contains(&"local"), hooks: seen.contains(&HOOKS_CAP), mcp: seen.contains(&MCP_CAP) })
 }
 
 impl Serve {
@@ -474,9 +559,163 @@ impl Serve {
         }
     }
 
+    /// `conn`, attached by attach `gen`, takes tool streams from now on. The
+    /// caller holds `conn.live` and has sent the `term.attached` reply and
+    /// its replay.
+    fn take_tools(&self, conn: &Arc<Conn>, gen: u64) {
+        let mut tools = lock(&self.tools);
+        if self.is_current(conn, gen) {
+            tools.to = Some(Arc::clone(conn));
+        }
+    }
+
+    /// `app` takes no more tool streams, and every stream it carried ends:
+    /// each relay is told (`mcp.close`, on the relay's number). Called under
+    /// `app.live`, beside `stop_hooks`: before the last message `app` gets as
+    /// the attached connection, and when it goes. `app` is not told.
+    fn stop_tools(&self, app: &Conn) {
+        let carried: Vec<(Arc<Conn>, u64)> = {
+            let mut tools = lock(&self.tools);
+            if tools.to.as_ref().map(|c| c.id) == Some(app.id) {
+                tools.to = None;
+            }
+            tools.open.iter().filter(|s| s.app.id == app.id).map(|s| (Arc::clone(&s.relay), s.num)).collect()
+        };
+        for (relay, num) in carried {
+            let _gate = lock(&relay.live);
+            if let Some(ended) = self.end_stream(num) {
+                let _ = relay.send_json(mcp_close(ended.relay_num));
+            }
+        }
+    }
+
+    /// Take stream `num` out of the table; None when it has ended already.
+    fn end_stream(&self, num: u64) -> Option<ToolStream> {
+        let mut tools = lock(&self.tools);
+        let at = tools.open.iter().position(|s| s.num == num)?;
+        Some(tools.open.remove(at))
+    }
+
+    fn stream_open(&self, num: u64) -> bool {
+        lock(&self.tools).open.iter().any(|s| s.num == num)
+    }
+
+    /// `relay`'s stream (the one it numbered `relay_num`, or whichever it has
+    /// for None): the app connection it is with, and the holder's number.
+    fn stream_of_relay(&self, relay: &Conn, relay_num: Option<u64>) -> Option<(Arc<Conn>, u64)> {
+        let tools = lock(&self.tools);
+        let s = tools.open.iter().find(|s| s.relay.id == relay.id && relay_num.map_or(true, |n| n == s.relay_num))?;
+        Some((Arc::clone(&s.app), s.num))
+    }
+
+    /// The stream `app` knows as `num`: its relay, and the relay's number.
+    fn stream_of_app(&self, app: &Conn, num: u64) -> Option<(Arc<Conn>, u64)> {
+        let tools = lock(&self.tools);
+        let s = tools.open.iter().find(|s| s.app.id == app.id && s.num == num)?;
+        Some((Arc::clone(&s.relay), s.relay_num))
+    }
+
+    /// `mcp.open` from `relay`, for the stream it numbers `relay_num` (it has
+    /// none open: `admit`): the holder numbers it too and tells the attached
+    /// connection that takes tool streams. Refused `not-connected` when none
+    /// does, `busy` when `MAX_TOOL_STREAMS` are open.
+    fn open_stream(&self, relay: &Arc<Conn>, relay_num: u64) -> Result<(), (&'static str, &'static str)> {
+        let not_connected = (request::CODE_NOT_CONNECTED, "no connection attached to the terminal takes tool streams");
+        let app = lock(&self.tools).to.clone().ok_or(not_connected)?;
+        let _app_gate = lock(&app.live);
+        let num = {
+            let mut tools = lock(&self.tools);
+            if tools.to.as_ref().map(|c| c.id) != Some(app.id) {
+                // It let go meanwhile.
+                return Err(not_connected);
+            }
+            if tools.open.len() >= MAX_TOOL_STREAMS {
+                return Err((request::CODE_BUSY, "this session has 8 tool streams open, the most it may"));
+            }
+            tools.last += 1;
+            let num = tools.last;
+            tools.open.push(ToolStream { num, relay: Arc::clone(relay), relay_num, app: Arc::clone(&app) });
+            num
+        };
+        relay.relay.store(true, Ordering::SeqCst);
+        // A write that fails ends that connection, and the stream with it.
+        let _ = app.send_json(mcp_open(num));
+        Ok(())
+    }
+
+    /// `mcp` from `relay` on its stream `relay_num`: to the app, on the
+    /// holder's number.
+    fn relay_says(&self, relay: &Conn, relay_num: u64, message: Value) -> Result<(), (&'static str, &'static str)> {
+        let (app, num) = self.stream_of_relay(relay, Some(relay_num)).ok_or(NO_STREAM)?;
+        let _app_gate = lock(&app.live);
+        if !self.stream_open(num) {
+            return Err(NO_STREAM);
+        }
+        let _ = app.send_json(mcp_message(num, message));
+        Ok(())
+    }
+
+    /// `mcp` from the app on stream `num`: to that stream's relay, on the
+    /// relay's number.
+    fn app_says(&self, app: &Conn, num: u64, message: Value) -> Result<(), (&'static str, &'static str)> {
+        let (relay, relay_num) = self.stream_of_app(app, num).ok_or(NO_STREAM)?;
+        let _relay_gate = lock(&relay.live);
+        if !self.stream_open(num) {
+            return Err(NO_STREAM);
+        }
+        let _ = relay.send_to_relay(mcp_message(relay_num, message));
+        Ok(())
+    }
+
+    /// `relay`'s stream ends: `mcp.close` from it (the stream it numbers
+    /// `relay_num`), or its connection went (None). The app is told, unless
+    /// the stream had ended already. False when there was no such stream.
+    fn relay_ends(&self, relay: &Conn, relay_num: Option<u64>) -> bool {
+        let (app, num) = match self.stream_of_relay(relay, relay_num) {
+            Some(found) => found,
+            None => return false,
+        };
+        let _app_gate = lock(&app.live);
+        let _relay_gate = lock(&relay.live);
+        if self.end_stream(num).is_none() {
+            return false;
+        }
+        let _ = app.send_json(mcp_close(num));
+        true
+    }
+
+    /// The rules a message must also keep that depend on the connection: one
+    /// that opened a tool stream is a relay for the rest of its life and does
+    /// not use the terminal (`unknown-type`, and a close); one attached to the
+    /// terminal opens no tool stream, and a relay one at a time (`bad-field`);
+    /// and a relay's message goes on to the app, whose frames hold 1 MiB
+    /// (`too-large`). Only this connection's own thread opens its stream, so
+    /// what is checked here still holds when the message is carried out.
+    fn admit(&self, conn: &Conn, req: Request) -> Result<Request, Refusal> {
+        let relay = conn.is_relay();
+        let refused: Option<(&'static str, &'static str)> = match &req {
+            Request::Launch(_) | Request::Attach { .. } | Request::Resize { .. } | Request::Detach { .. } | Request::End { .. } if relay => {
+                Some((request::CODE_UNKNOWN_TYPE, "a connection that opened a tool stream does not use the terminal"))
+            }
+            Request::McpOpen { .. } if self.is_attached(conn) => Some((request::CODE_BAD_FIELD, "a connection attached to the terminal opens no tool stream")),
+            Request::McpOpen { .. } if self.stream_of_relay(conn, None).is_some() => Some((request::CODE_BAD_FIELD, "this connection has a tool stream open already")),
+            Request::Mcp { bytes, .. } if relay && *bytes > MAX_MCP_TO_APP => Some((request::CODE_TOO_LARGE, "message is over 1048320 bytes as JSON, the most the app takes")),
+            _ => None,
+        };
+        match refused {
+            Some((code, text)) => Err(Refusal { code, re: None, text: text.to_string() }),
+            None => Ok(req),
+        }
+    }
+
     /// The most JSON the next frame may hold: a launch may be large; once
-    /// the session is launched or launching, only small messages come.
-    fn max_json(&self) -> usize {
+    /// the session is launched or launching, only small messages come, except
+    /// on a connection that acked `mcp` (`takes_tools`), which may carry a
+    /// tool result and so takes what section 6 allows.
+    fn max_json(&self, takes_tools: bool) -> usize {
+        if takes_tools {
+            return frame::MAX_JSON_APP_TO_HELPER;
+        }
         let st = lock(&self.state);
         if st.holder.is_some() || st.launching {
             MAX_JSON_AFTER_LAUNCH
@@ -577,6 +816,13 @@ impl Serve {
         // one being sent finishes first, and later ones are refused
         // (`ending`) or wait in a queue that ends with the process.
         lock(&self.hooks).to = None;
+        {
+            // No tool message either: each relay reads the end of its
+            // connection when the process exits.
+            let mut tools = lock(&self.tools);
+            tools.to = None;
+            tools.open.clear();
+        }
         let mut told: Vec<Arc<Conn>> = Vec::new();
         for (conn, re) in requester.map(|(c, re)| (Arc::clone(c), re)).into_iter().chain(enders) {
             say_ended(&conn, re, code);
@@ -647,7 +893,7 @@ impl Serve {
             _ => return,
         };
         let mut reader = stream;
-        let conn = Arc::new(Conn { id, writer: Mutex::new(writer), closer, live: Mutex::new(0), told_exit: AtomicBool::new(false) });
+        let conn = Arc::new(Conn { id, writer: Mutex::new(writer), closer, live: Mutex::new(0), told_exit: AtomicBool::new(false), relay: AtomicBool::new(false) });
         let admitted = {
             let mut st = lock(&self.state);
             if st.conns >= MAX_CONNECTIONS {
@@ -732,7 +978,7 @@ impl Serve {
         let mut refusals: VecDeque<Instant> = VecDeque::new();
         let mut input = InputGate::default();
         loop {
-            let f = match self.next_frame(conn, reader, IDLE_TIMEOUT, "no frame from the app in 60 seconds", self.max_json()) {
+            let f = match self.next_frame(conn, reader, IDLE_TIMEOUT, "no frame from the app in 60 seconds", self.max_json(allowed.mcp)) {
                 Some(f) => f,
                 None => return,
             };
@@ -756,7 +1002,7 @@ impl Serve {
                         let _ = conn.send_error(None, frame::CODE_BAD_FRAME, "a control message off channel 0");
                         return;
                     }
-                    match request::parse_allowed(&v, allowed) {
+                    match request::parse_allowed(&v, allowed).and_then(|req| self.admit(conn, req)) {
                         Ok(req) => {
                             if matches!(req, Request::Ping { .. }) {
                                 input.ping();
@@ -796,7 +1042,27 @@ impl Serve {
                 self.launch(conn, l);
                 Flow::Continue
             }
-            Request::Attach { id, from } => self.attach(conn, id, from, allowed.hooks),
+            Request::Attach { id, from } => self.attach(conn, id, from, allowed),
+            Request::McpOpen { stream } => {
+                if let Err((code, text)) = self.open_stream(conn, stream) {
+                    let _ = conn.send_error(None, code, text);
+                }
+                Flow::Continue
+            }
+            Request::Mcp { stream, message, .. } => {
+                let passed = if conn.is_relay() { self.relay_says(conn, stream, message) } else { self.app_says(conn, stream, message) };
+                if let Err((code, text)) = passed {
+                    let _ = conn.send_error(None, code, text);
+                }
+                Flow::Continue
+            }
+            Request::McpClose { stream } => {
+                // Only a relay ends a stream: the app's side ends with its attach.
+                if !self.relay_ends(conn, Some(stream)) {
+                    let _ = conn.send_error(None, NO_STREAM.0, NO_STREAM.1);
+                }
+                Flow::Continue
+            }
             Request::HookEvent { id, kind, payload, bytes } => {
                 match self.post_hook(kind, payload, bytes) {
                     Some(seq) => {
@@ -851,10 +1117,12 @@ impl Serve {
                     return Flow::Continue;
                 }
                 self.update_record(|_| {});
-                // No live output, and no hook event, after the reply.
+                // No live output, no hook event and no tool message after
+                // the reply.
                 let mut live = lock(&conn.live);
                 *live = 0;
                 self.stop_hooks(conn);
+                self.stop_tools(conn);
                 let _ = conn.send_json(reply("term.detached", id, vec![]));
                 drop(live);
                 Flow::Close
@@ -909,9 +1177,9 @@ impl Serve {
         }
     }
 
-    /// `takes_hooks`: the connection acked `hooks`, so the hook events go to
-    /// it once it is attached.
-    fn attach(self: &Arc<Self>, conn: &Arc<Conn>, id: u64, from: u64, takes_hooks: bool) -> Flow {
+    /// `allowed`: what the connection acked. With `hooks`, the hook events go
+    /// to it once it is attached; with `mcp`, it takes tool streams.
+    fn attach(self: &Arc<Self>, conn: &Arc<Conn>, id: u64, from: u64, allowed: Allowed) -> Flow {
         let taken = {
             let mut st = lock(&self.state);
             if st.ending {
@@ -950,6 +1218,7 @@ impl Serve {
             let mut live = lock(&old.live);
             *live = 0;
             self.stop_hooks(&old);
+            self.stop_tools(&old);
             let _ = old.send_error(None, request::CODE_REPLACED, "a newer connection attached to this terminal");
             old.closer.close_after_writes();
             drop(live);
@@ -981,8 +1250,11 @@ impl Serve {
             }
             // The hook events waiting go right after the reply and its
             // replay, before any live output.
-            if takes_hooks && !self.take_hooks(conn, gen) {
+            if allowed.hooks && !self.take_hooks(conn, gen) {
                 return Flow::Close;
+            }
+            if allowed.mcp {
+                self.take_tools(conn, gen);
             }
         }
         let forwarding = match forwarding {
@@ -1014,8 +1286,9 @@ impl Serve {
                 return;
             }
             // No hook event after either last word: later ones wait for the
-            // next attach.
+            // next attach. The tool streams end with it.
             serve.stop_hooks(&conn);
+            serve.stop_tools(&conn);
             match holder.exit_code() {
                 Some(code) => conn.send_exit(code),
                 None => {
@@ -1032,6 +1305,7 @@ impl Serve {
             let mut live = lock(&conn.live);
             *live = 0;
             self.stop_hooks(conn);
+            self.stop_tools(conn);
             let _ = conn.send_error(None, request::CODE_BUSY, "the holder could not carry live output; attach again from the last offset seen");
             drop(live);
             return Flow::Close;
@@ -1055,6 +1329,15 @@ impl Serve {
             }
         };
         self.stop_hooks(conn);
+        {
+            // The streams it carried as the attached connection end with it,
+            // and its own stream as a relay (whether or not it said
+            // `mcp.close`: a CLI's end does not always end its tool server's
+            // input).
+            let _gate = lock(&conn.live);
+            self.stop_tools(conn);
+        }
+        self.relay_ends(conn, None);
         if was_attached {
             self.update_record(|_| {});
         }
@@ -1121,6 +1404,7 @@ pub fn run(opts: Options) -> io::Result<()> {
             ended: None,
         }),
         hooks: Mutex::new(Hooks { queue: HookQueue::new(), to: None }),
+        tools: Mutex::new(Tools { to: None, open: Vec::new(), last: 0 }),
         record: Mutex::new(record),
         ending: AtomicBool::new(false),
         next_id: AtomicU64::new(1),
@@ -1167,14 +1451,41 @@ mod tests {
 
     #[test]
     fn hooks_is_offered_and_an_ack_of_it_allows_hook_events() {
-        assert_eq!(HOLDER_CAPS, ["core", "local", "hooks"]);
-        let both = Allowed { local: true, hooks: true };
+        assert_eq!(HOLDER_CAPS, ["core", "local", "hooks", "mcp"]);
+        let both = Allowed { local: true, hooks: true, mcp: false };
         assert_eq!(acked("{\"t\":\"hello.ack\",\"proto\":1,\"caps\":[\"core\",\"local\",\"hooks\"]}"), Ok(both));
-        assert_eq!(acked("{\"t\":\"hello.ack\",\"proto\":1,\"caps\":[\"core\",\"hooks\"]}"), Ok(Allowed { local: false, hooks: true }));
+        assert_eq!(acked("{\"t\":\"hello.ack\",\"proto\":1,\"caps\":[\"core\",\"hooks\"]}"), Ok(Allowed { local: false, hooks: true, mcp: false }));
         // The app's own ack: no hook event will ever be sent to it.
-        assert_eq!(acked("{\"t\":\"hello.ack\",\"proto\":1,\"caps\":[\"core\",\"local\"]}"), Ok(Allowed { local: true, hooks: false }));
+        assert_eq!(acked("{\"t\":\"hello.ack\",\"proto\":1,\"caps\":[\"core\",\"local\"]}"), Ok(Allowed { local: true, hooks: false, mcp: false }));
         assert_eq!(acked("{\"t\":\"hello.ack\",\"proto\":1,\"caps\":[\"hooks\"]}"), Err(request::CODE_BAD_FIELD));
         assert_eq!(acked("{\"t\":\"hello.ack\",\"proto\":1,\"caps\":[\"core\",\"hooks\",\"hooks\"]}"), Err(request::CODE_BAD_FIELD));
+    }
+
+    #[test]
+    fn mcp_is_offered_and_an_ack_of_it_allows_tool_streams() {
+        // The relay's ack, and everything a holder offers.
+        assert_eq!(acked("{\"t\":\"hello.ack\",\"proto\":1,\"caps\":[\"core\",\"local\",\"mcp\"]}"), Ok(Allowed { local: true, hooks: false, mcp: true }));
+        assert_eq!(acked("{\"t\":\"hello.ack\",\"proto\":1,\"caps\":[\"mcp\",\"hooks\",\"local\",\"core\"]}"), Ok(Allowed { local: true, hooks: true, mcp: true }));
+        assert_eq!(acked("{\"t\":\"hello.ack\",\"proto\":1,\"caps\":[\"mcp\"]}"), Err(request::CODE_BAD_FIELD));
+        assert_eq!(acked("{\"t\":\"hello.ack\",\"proto\":1,\"caps\":[\"core\",\"mcp\",\"mcp\"]}"), Err(request::CODE_BAD_FIELD));
+        assert_eq!(MAX_TOOL_STREAMS, 8);
+    }
+
+    #[test]
+    fn tool_messages_are_the_documented_bytes_and_the_largest_fits_its_frame() {
+        assert_eq!(mcp_open(1).to_json(), "{\"t\":\"mcp.open\",\"stream\":1}");
+        assert_eq!(mcp_close(9).to_json(), "{\"t\":\"mcp.close\",\"stream\":9}");
+        let message = json::parse(b"{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{}}").unwrap();
+        assert_eq!(mcp_message(3, message).to_json(), "{\"t\":\"mcp\",\"stream\":3,\"message\":{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{}}}");
+        // The most each way may carry, on the longest stream number: it fits
+        // the frame its way holds, and the wrapper is within the 256 bytes.
+        let of_size = |bytes: usize| json::parse(format!("[\"{}\"]", "x".repeat(bytes - 4)).as_bytes()).unwrap();
+        for (most, flow, limit) in [(MAX_MCP_TO_APP, Direction::HelperToApp, frame::MAX_JSON_HELPER_TO_APP), (request::MAX_MCP_TO_HELPER, Direction::AppToHelper, frame::MAX_JSON_APP_TO_HELPER)] {
+            let wrapped = mcp_message(request::MAX_SAFE_INTEGER, of_size(most));
+            let text = wrapped.to_json();
+            assert!(text.len() <= limit && text.len() - most <= 48, "{} bytes around {most}", text.len() - most);
+            assert!(frame::encode(&Frame::json(0, wrapped), flow).is_ok(), "{most} does not fit {flow:?}");
+        }
     }
 
     fn event(seq: u64) -> HookEvent {
@@ -1206,7 +1517,7 @@ mod tests {
         let id = request::MAX_SAFE_INTEGER - 1;
         let message = format!("{{\"t\":\"hook.event\",\"id\":{id},\"kind\":\"{kind}\",\"payload\":{over}}}");
         assert!(message.len() <= MAX_JSON_AFTER_LAUNCH, "a hook.event one byte over is {} bytes", message.len());
-        let refused = request::parse_allowed(&json::parse(message.as_bytes()).unwrap(), Allowed { local: true, hooks: true }).unwrap_err();
+        let refused = request::parse_allowed(&json::parse(message.as_bytes()).unwrap(), Allowed { local: true, hooks: true, mcp: false }).unwrap_err();
         assert_eq!(refused.code, request::CODE_TOO_LARGE);
     }
 

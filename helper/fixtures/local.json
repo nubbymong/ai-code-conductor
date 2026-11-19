@@ -1832,5 +1832,315 @@
       "lost": 9007199254740991,
       "event_bytes": 65377
     }
+  },
+  "mcp": {
+    "_doc": "Tool stream vectors for docs/remote/helper-protocol.md section 15 (capability mcp, from 2.1.3-beta.10). Read by helper/tests/fixtures.rs and tests/unit/main/session-helper-protocol.test.ts. A request is read as a connection that acked core, local and mcp (the relay's ack) reads it, unless the vector says what was acked (acked). messages are the exact bytes the holder sends the app, and the app reads each as its fields say; invalid_messages are ones the app refuses. The limits on a message are for its message as compact JSON.",
+    "offered": [
+      "core",
+      "local",
+      "hooks",
+      "mcp"
+    ],
+    "relay_caps": [
+      "core",
+      "local",
+      "mcp"
+    ],
+    "limits": {
+      "message_to_app_bytes": 1048320,
+      "message_to_helper_bytes": 16776960,
+      "streams": 8,
+      "ping_secs": 15,
+      "connect_secs": 2,
+      "line_bytes": 1048576
+    },
+    "requests": {
+      "valid": [
+        {
+          "name": "an open",
+          "json": "{\"t\":\"mcp.open\",\"stream\":1}",
+          "expect": {
+            "type": "mcp.open",
+            "stream": 1
+          }
+        },
+        {
+          "name": "an open with the largest stream number",
+          "json": "{\"t\":\"mcp.open\",\"stream\":9007199254740991}",
+          "expect": {
+            "type": "mcp.open",
+            "stream": 9007199254740991
+          }
+        },
+        {
+          "name": "a request",
+          "json": "{\"t\":\"mcp\",\"stream\":1,\"message\":{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/list\"}}",
+          "expect": {
+            "type": "mcp",
+            "stream": 1,
+            "message": {
+              "jsonrpc": "2.0",
+              "id": 1,
+              "method": "tools/list"
+            }
+          }
+        },
+        {
+          "name": "a method before initialize",
+          "json": "{\"t\":\"mcp\",\"stream\":1,\"message\":{\"jsonrpc\":\"2.0\",\"id\":0,\"method\":\"server/discover\"}}",
+          "expect": {
+            "type": "mcp",
+            "stream": 1,
+            "message": {
+              "jsonrpc": "2.0",
+              "id": 0,
+              "method": "server/discover"
+            }
+          }
+        },
+        {
+          "name": "an answer with escapes and characters outside ASCII",
+          "json": "{\"t\":\"mcp\",\"stream\":2,\"message\":{\"jsonrpc\":\"2.0\",\"id\":2,\"result\":{\"content\":[{\"type\":\"text\",\"text\":\"café 😀 \\\"quoted\\\" \\\\ and a tab\\t\"}]}}}",
+          "expect": {
+            "type": "mcp",
+            "stream": 2,
+            "message": {
+              "jsonrpc": "2.0",
+              "id": 2,
+              "result": {
+                "content": [
+                  {
+                    "type": "text",
+                    "text": "café 😀 \"quoted\" \\ and a tab\t"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "name": "a batch",
+          "json": "{\"t\":\"mcp\",\"stream\":1,\"message\":[{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"},{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/list\"}]}",
+          "expect": {
+            "type": "mcp",
+            "stream": 1,
+            "message": [
+              {
+                "jsonrpc": "2.0",
+                "method": "notifications/initialized"
+              },
+              {
+                "jsonrpc": "2.0",
+                "id": 3,
+                "method": "tools/list"
+              }
+            ]
+          }
+        },
+        {
+          "name": "a close",
+          "json": "{\"t\":\"mcp.close\",\"stream\":1}",
+          "expect": {
+            "type": "mcp.close",
+            "stream": 1
+          }
+        },
+        {
+          "name": "on a connection that acked mcp without local",
+          "acked": [
+            "core",
+            "mcp"
+          ],
+          "json": "{\"t\":\"mcp.open\",\"stream\":1}",
+          "expect": {
+            "type": "mcp.open",
+            "stream": 1
+          }
+        }
+      ],
+      "invalid": [
+        {
+          "name": "stream 0",
+          "json": "{\"t\":\"mcp.open\",\"stream\":0}",
+          "error": "bad-field"
+        },
+        {
+          "name": "a stream past 2^53 - 1",
+          "json": "{\"t\":\"mcp.open\",\"stream\":9007199254740992}",
+          "error": "bad-field"
+        },
+        {
+          "name": "a negative stream",
+          "json": "{\"t\":\"mcp.close\",\"stream\":-1}",
+          "error": "bad-field"
+        },
+        {
+          "name": "a stream that is not whole",
+          "json": "{\"t\":\"mcp.close\",\"stream\":1.5}",
+          "error": "bad-field"
+        },
+        {
+          "name": "a stream as text",
+          "json": "{\"t\":\"mcp.open\",\"stream\":\"1\"}",
+          "error": "bad-field"
+        },
+        {
+          "name": "no stream",
+          "json": "{\"t\":\"mcp\",\"message\":{}}",
+          "error": "bad-field"
+        },
+        {
+          "name": "an id, which a tool message does not carry",
+          "json": "{\"t\":\"mcp.open\",\"stream\":1,\"id\":2}",
+          "error": "bad-field"
+        },
+        {
+          "name": "a field given twice",
+          "json": "{\"t\":\"mcp.open\",\"stream\":1,\"stream\":1}",
+          "error": "bad-field"
+        },
+        {
+          "name": "a message on a close",
+          "json": "{\"t\":\"mcp.close\",\"stream\":1,\"message\":{}}",
+          "error": "bad-field"
+        },
+        {
+          "name": "no message",
+          "json": "{\"t\":\"mcp\",\"stream\":1}",
+          "error": "bad-field"
+        },
+        {
+          "name": "a message that is a string",
+          "json": "{\"t\":\"mcp\",\"stream\":1,\"message\":\"{}\"}",
+          "error": "bad-field"
+        },
+        {
+          "name": "a message that is a number",
+          "json": "{\"t\":\"mcp\",\"stream\":1,\"message\":1}",
+          "error": "bad-field"
+        },
+        {
+          "name": "a message that is null",
+          "json": "{\"t\":\"mcp\",\"stream\":1,\"message\":null}",
+          "error": "bad-field"
+        },
+        {
+          "name": "on a connection whose hello.ack did not name mcp",
+          "acked": [
+            "core",
+            "local",
+            "hooks"
+          ],
+          "json": "{\"t\":\"mcp.open\",\"stream\":1}",
+          "error": "unknown-type"
+        },
+        {
+          "name": "on a connection that acked the core alone",
+          "acked": [
+            "core"
+          ],
+          "json": "{\"t\":\"mcp\",\"stream\":1,\"message\":{}}",
+          "error": "unknown-type"
+        }
+      ]
+    },
+    "messages": [
+      {
+        "name": "a stream opened",
+        "type": "mcp.open",
+        "stream": 1,
+        "json": "{\"t\":\"mcp.open\",\"stream\":1}"
+      },
+      {
+        "name": "a request on it",
+        "type": "mcp",
+        "stream": 1,
+        "message": {
+          "jsonrpc": "2.0",
+          "id": 1,
+          "method": "tools/list"
+        },
+        "json": "{\"t\":\"mcp\",\"stream\":1,\"message\":{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/list\"}}"
+      },
+      {
+        "name": "a request with escapes and characters outside ASCII",
+        "type": "mcp",
+        "stream": 8,
+        "message": {
+          "jsonrpc": "2.0",
+          "id": 2,
+          "result": {
+            "content": [
+              {
+                "type": "text",
+                "text": "café 😀 \"quoted\" \\ and a tab\t"
+              }
+            ]
+          }
+        },
+        "json": "{\"t\":\"mcp\",\"stream\":8,\"message\":{\"jsonrpc\":\"2.0\",\"id\":2,\"result\":{\"content\":[{\"type\":\"text\",\"text\":\"café 😀 \\\"quoted\\\" \\\\ and a tab\\t\"}]}}}"
+      },
+      {
+        "name": "a batch",
+        "type": "mcp",
+        "stream": 2,
+        "message": [
+          {
+            "jsonrpc": "2.0",
+            "method": "notifications/initialized"
+          },
+          {
+            "jsonrpc": "2.0",
+            "id": 3,
+            "method": "tools/list"
+          }
+        ],
+        "json": "{\"t\":\"mcp\",\"stream\":2,\"message\":[{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"},{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/list\"}]}"
+      },
+      {
+        "name": "the stream ended",
+        "type": "mcp.close",
+        "stream": 9007199254740991,
+        "json": "{\"t\":\"mcp.close\",\"stream\":9007199254740991}"
+      }
+    ],
+    "invalid_messages": [
+      {
+        "name": "stream 0",
+        "json": "{\"t\":\"mcp.open\",\"stream\":0}"
+      },
+      {
+        "name": "a stream past 2^53 - 1",
+        "json": "{\"t\":\"mcp.close\",\"stream\":9007199254740992}"
+      },
+      {
+        "name": "a stream as text",
+        "json": "{\"t\":\"mcp\",\"stream\":\"1\",\"message\":{}}"
+      },
+      {
+        "name": "no stream",
+        "json": "{\"t\":\"mcp.close\"}"
+      },
+      {
+        "name": "a re",
+        "json": "{\"t\":\"mcp.open\",\"stream\":1,\"re\":2}"
+      },
+      {
+        "name": "a message on an open",
+        "json": "{\"t\":\"mcp.open\",\"stream\":1,\"message\":{}}"
+      },
+      {
+        "name": "no message",
+        "json": "{\"t\":\"mcp\",\"stream\":1}"
+      },
+      {
+        "name": "a message that is a string",
+        "json": "{\"t\":\"mcp\",\"stream\":1,\"message\":\"{}\"}"
+      },
+      {
+        "name": "a message that is null",
+        "json": "{\"t\":\"mcp\",\"stream\":1,\"message\":null}"
+      }
+    ]
   }
 }

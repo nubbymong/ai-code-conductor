@@ -417,6 +417,45 @@ rollback returns to the earlier beta's rows, and every row has a negative test.
   slice S12). The hook mode reads untrusted input on its standard input, keeps
   at most 4 MiB of it, and never prints or exits other than 0, so nothing it
   reads reaches the CLI's conversation through it.
+- **Tool streams through a holder (capability `mcp`, from 2.1.3-beta.10).**
+  The relay (`aicc-helper mcp`, protocol 15, "Tool streams") carries a
+  session's tool calls between its CLI and the connection attached to the
+  session's terminal. Nothing in the app starts it or acks `mcp` yet, so in
+  this beta no tool call goes this way. What a relay may do: open one stream
+  at a time, at most 8 in a session, and pass JSON-RPC messages on it to the
+  attached connection that acked `mcp`, at most 1,048,320 bytes each, and get
+  that connection's answers. What it may not: use the terminal (a launch,
+  attach, resize, detach or end from a connection that opened a stream is
+  refused and the connection closed; typed bytes from it are refused too),
+  reach another session (a holder serves one session, and the app connection
+  is that holder's own), or name another relay's stream (each side sees only
+  its own number for a stream). The holder passes a message on and nothing
+  more: it runs, opens and writes nothing for it. Any process of the same user
+  can connect to the endpoint and open a stream, so it can reach whatever the
+  app answers on one; that is the boundary there is today, where any process
+  of the same user can read a session's settings or launch flags and reach the
+  Conductor server. So the step that wires a session's tools to a relay keeps
+  3.5's rule for a stream: the session a call acts for comes from the stream
+  (the holder it came through) alone, never from a message, a message that
+  names another session is refused, and the session's own allow-list and
+  switches apply. The relay trusts a holder only once its hello carries the
+  record's nonce and session, so a process that took the endpoint's name first
+  is sent nothing. A connection that acked `mcp` may send frames of up to 16
+  MiB, as any connection may before a launch: 16 connections at most. Two
+  limits for that step to settle: a tool message to a relay is written from
+  the attached connection's own thread, so a relay that does not read holds
+  that connection's other messages for up to 5 s (the write's limit, after
+  which the relay's connection is closed); and the app must send only JSON the
+  holder reads (no escaped lone surrogate, at most 31 levels inside the
+  message), or the frame is `bad-frame` and the app's connection is closed.
+  Tested in `helper/tests/relay.rs`:
+  `a_connection_that_opened_a_tool_stream_never_uses_the_terminal`,
+  `a_relays_message_over_what_the_app_takes_is_too_large_and_its_stream_goes_on`,
+  `a_session_has_at_most_its_bound_of_tool_streams_and_a_closed_one_makes_room`,
+  `with_no_stream_to_have_the_relay_exits_1_at_once_and_prints_nothing` (an
+  app connection that did not ack `mcp` is passed nothing) and
+  `a_holder_from_before_tool_streams_is_sent_nothing`. An adversarial pass of
+  it is owed to the security round before 2.1 stable (aicc_planning #320).
 - **A program the helper starts for the app keeps none of the app's handles
   (from 2.1.3-beta.8, Windows).** `aicc-helper start` (protocol 15, "Starting
   a program") starts the program the app names, by the drive-absolute path it

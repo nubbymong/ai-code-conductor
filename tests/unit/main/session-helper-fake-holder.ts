@@ -15,6 +15,11 @@
  * mode would, and the holder sends it as an `event` to the attached connection
  * when that connection acked `hooks`, else keeps it for the next such attach.
  *
+ * Tool streams (section 15, capability `mcp`, 2.1.3-beta.10): a holder offers
+ * `mcp` too, as a real one of this version does, so the manager's tests that
+ * check what a connection acked also show that no connection the app makes
+ * acks it. This fake passes no tool message.
+ *
  * The away clock (section 15) runs only when a test gives the helper one
  * (`awayClock`): then a holder with no connection attached ends itself `away`
  * seconds after its start or after the last attached connection let go,
@@ -125,7 +130,7 @@ export class FakeHolder {
   /** It ended by its away clock. */
   endedAway = false
   /** What its hello offers. */
-  caps: string[] = ['core', 'local', 'hooks']
+  caps: string[] = ['core', 'local', 'hooks', 'mcp']
   /** The last `seq` a hook event took. */
   seq = 0
   /** Hook events waiting for an attach that acked `hooks`. */
@@ -359,7 +364,7 @@ export class FakeHelper {
   /** The holders' away clock in ms, for the holders `hold` starts from now on; null: none. */
   awayClock: (() => number) | null = null
   /** What the hello of each holder `hold` starts from now on offers. */
-  holderCaps: string[] = ['core', 'local', 'hooks']
+  holderCaps: string[] = ['core', 'local', 'hooks', 'mcp']
   /** Each frame of typed input any holder's program gets, with its holder. */
   onTyped: ((h: FakeHolder, bytes: Buffer) => void) | null = null
 
