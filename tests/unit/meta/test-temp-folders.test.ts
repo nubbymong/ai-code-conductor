@@ -128,7 +128,7 @@ function liveTempWrites(file: string, src: string): string[] {
   return n === 0 ? [] : [`${file}: names os.tmpdir() outside a mkdtemp call ${n} time(s); a file made straight in the machine temp folder is never removed`]
 }
 
-const rel =(abs: string): string => relative(ROOT, abs).split(sep).join('/')
+const rel = (abs: string): string => relative(ROOT, abs).split(sep).join('/')
 const files = walk(join(ROOT, 'tests')).map(rel).filter((p) => p !== SELF).sort()
 const sources = new Map(files.map((p) => [p, readFileSync(join(ROOT, p), 'utf8')]))
 const configs = readdirSync(ROOT).filter((n) => CONFIG_NAME.test(n)).sort()

@@ -9,8 +9,9 @@ Plan 2.1.3-beta.10, section C1 (aicc_planning #332; #232 as a rider).
   it closes, right after the teardown), with how many names were there at the start and how
   many now, so an unreadable folder cannot pass for a clean run. Decision line, written in the
   measurement commit before any log was read: an entry whose name starts with a prefix a test
-  of ours passes to mkdtemp is a leak to fix here; none means the unit run already leaves nothing and #560 fixed the ticket's
-  unit part. Run 44463829599 (Ubuntu, macOS, the four Windows parts): no such entry anywhere, so
+  of ours passes to mkdtemp is a leak to fix here; none means the unit run already leaves
+  nothing and #560 fixed the ticket's unit part. Run 44463829599 (Ubuntu, macOS, the four
+  Windows parts): no such entry anywhere, so
   the 19,204 folders the ticket counted predate #560 or came from runs outside the test config.
   Each run listed vitest's module-copy folder (a 21-character random name), since left out of the
   line. macOS listed 28 folders of Apple's own services (com.apple.*, betaenrollmentagent).
