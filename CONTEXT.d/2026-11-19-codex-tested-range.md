@@ -14,11 +14,12 @@ newest tested version; a red check leaves the range below it.
 - CI run 44530382595, 0.157.1: every leg green on all three systems. Its model
   list is the same seven ids as 0.156.1, and the rust-v0.157.1 tag's
   models.json gives the same labels, effort levels and order.
-- CI run 44530368458, 0.170.0: the rc leg red on all three systems. Its model
-  list names four models the registry lacks (gpt-6.2-sol, gpt-6.2-astra,
-  gpt-6.1-terra, gpt-6.1-sol), and on macOS the app's own PATH resolution found
-  `bin/codex.js` and read no version it recognises. Both are on #185 for a
-  later beta. Versions between the two were not run.
+- CI run 44530368458, 0.170.0: the rc leg red on all three systems. On Windows
+  and Linux its model list names four models the registry lacks (gpt-6.2-sol,
+  gpt-6.2-astra, gpt-6.1-terra, gpt-6.1-sol); on macOS the app's own PATH
+  resolution found `bin/codex.js` and read no version it recognises, so no
+  model list was read there. Both go on #185, for a later beta, when this
+  merges. Versions between the two were not run.
 
 **What changed.** `CODEX_MAX_TESTED_VERSION` is 0.157.1. The pin (0.155.1) and
 the minimum (0.153.4) stay, with their captures and the oracle. What a too-new
@@ -31,7 +32,7 @@ by its sha256 to the WP1.30 evidence record taken at the 2.1.1 head
 (tests/wp1/traceability.json), and a row added there turns the traceability
 test red or re-signs that record at a head it was not taken at.
 
-Four places the plan's file list did not name had to move with the number:
+Places the plan's file list did not name, or named only in general, had to move with the number:
 - resources/codex-model-catalogue.json lists 0.157.1 among the versions it was
   read from (a test requires the newest tested version there since S18).
 - Two usage-read tests used 0.157.1 as their example of a too-new Codex; they
@@ -43,6 +44,12 @@ Four places the plan's file list did not name had to move with the number:
 - The app-knowledge test tied the 2.1.1 What's New row, which is history, to
   the live constant; that row now pins its own 0.156.1, and the Feature Guide
   entry still follows the constant.
+- ADR-022's bound 5 and its evidence paragraph gave 0.156.1 as the top and
+  0.157.1 as never read; they now say when each held.
+
+The review added one pin of today's behaviour in tests/wp1/cli-discovery.test.ts:
+a pre-release of the top (0.157.1-alpha.1) and a zero-padded top (0.157.01)
+read as supported. The ADR-009 pass owed before stable decides them.
 
 **Shown red.** Against the old constant, tests/wp1/cli-discovery.test.ts ("reaches
 0.157.1 ...": too-new, not supported) and tests/unit/main/codex-usage-read.test.ts

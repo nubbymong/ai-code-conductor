@@ -93,9 +93,10 @@ owner decision and a new ADR.
 
 5. **Supported versions only, proven by probe.** The owner said "Test the
    supported versions": a read is tried only when discovery proved the CLI and
-   its version classifies as `supported` (`classifyCodexVersion`, today
-   0.153.4 to 0.156.1, `cli-contract.ts`). A `too-new` CLI (0.157.1
-   included), a `too-old` one or an `unknown` version is never read; it shows
+   its version classifies as `supported` (`classifyCodexVersion`, 0.153.4
+   to 0.156.1 when this was decided, 0.153.4 to 0.157.1 from 2.1.3-beta.11,
+   `cli-contract.ts`). A `too-new` CLI, a `too-old` one or an `unknown`
+   version is never read; it shows
    the last-seen reading. The executable discovery proved is captured when
    the read begins, and the helper starts only if discovery still names that
    same executable (path, size, times, file id) at the same version, still
@@ -140,7 +141,7 @@ owner decision and a new ADR.
 ## Evidence
 
 The three messages were compared offline on 0.153.4 (the minimum), 0.155.1
-(the pinned reference) and 0.157.1 (newer than tested) with
+(the pinned reference) and 0.157.1 (newer than tested then) with
 `codex app-server generate-json-schema`, an empty `CODEX_HOME` and every proxy
 pointed at a closed port; the app-server was never started and nothing signed
 in. The excerpts, each message with the closure of the definitions it
@@ -150,7 +151,7 @@ optional fields only (0.155.1: optional `account/rateLimits/read` parameters,
 `ordinaryUsageAllowed` in the answer, `normalModelSlug` in each snapshot;
 0.157.1: the `explicitGatewayOauth` initialize capability). The validator must
 therefore accept unknown extra fields and must not require the new ones.
-0.157.1 was checked for drift only: it is `too-new` and is not read (bound 5).
+0.157.1 was checked for drift only when this was decided; it joined the tested range in 2.1.3-beta.11 (aicc_planning#185, CI run 44530382595) and is read from then on (bound 5).
 
 A real read on 0.153.4 and 0.155.1 with a signed-in account was made on the
 test VM (MP8, 2026-09-27, at 81ed64a8 and again at fa2907e7; the VM journal
