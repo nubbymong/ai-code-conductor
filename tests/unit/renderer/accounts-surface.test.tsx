@@ -21,8 +21,9 @@
  *   - Add account: the API key through sendSecret only; output and cancel;
  *     the cancel race while beginSetup is in flight; the unmount abandon;
  *     linking to an existing identity;
- *   - Sign in again: when it is offered, the same-account gate, the method
- *     family, the API key path and its cancel race, refusals;
+ *   - Sign in again: when it is offered, the same-account question (a
+ *     required choice of two, neither chosen: #289), the method family, the
+ *     API key path and its cancel race, refusals;
  *   - registry-not-ready, conflicts, the external adoption states, pending
  *     setups.
  */
@@ -1182,12 +1183,13 @@ describe('Sign in again', () => {
   const externalOut = { ...local, lastKnownAuthState: 'signed-out' as const }
   const blockedOut = { ...old, lastKnownAuthState: 'signed-out' as const }
 
-  /** Opens the dialog; by default also ticks "same account as before". */
-  async function openFor(accountId: string, confirmSame = true) {
+  /** Opens the dialog; by default also answers "The same account as before"
+   *  (null: answers nothing). */
+  async function openFor(accountId: string, answer: 'same' | 'different' | null = 'same') {
     await click(`account-menu-btn-${accountId}`)
     await click(`account-menu-sign-in-again-${accountId}`)
     expect(q('sign-in-again-dialog'), 'the sign-in-again dialog did not open').toBeTruthy()
-    if (confirmSame) await click('sign-in-again-confirm')
+    if (answer) await click(`sign-in-again-${answer}`)
   }
 
   it('is offered on an unblocked, non-archived account, signed in or not (P3.3), never on this computer\'s own sign-in (O5, #196)', async () => {
@@ -1201,38 +1203,105 @@ describe('Sign in again', () => {
     for (const st of ['signed-in', 'signed-out', 'expired'] as const) expect(canOfferSignInAgain({ ...local, lastKnownAuthState: st }), st).toBe(false)
   })
 
-  it('ticked, it signs the same account in again and takes the key; not ticked, it adds a new account instead (P3.3)', async () => {
-    pa.issueSecretHandle.mockResolvedValue({ ok: true, handle: HANDLE })
-    pa.signInAgain.mockResolvedValue({ ok: true, state: 'signed-in' })
+  it('asks which account you mean with neither answer chosen, and no sign-in button works until one is (#289)', async () => {
     pa.beginSetup.mockResolvedValue({ ok: true, accountId: 'acc-new' })
-    render(snapshot({ accounts: [work, keyAccount] }))
-    await openFor('acc-key', false)
+    render(snapshot({ accounts: [work, expired, keyAccount] }))
+    // One account of each method family, so the button under both of its
+    // labels: "Sign in" (ChatGPT, device code) and "Continue" (API key).
+    for (const [id, label] of [['acc-work', 'Sign in'], ['acc-exp', 'Sign in'], ['acc-key', 'Continue']] as const) {
+      await openFor(id, null)
+      const go = q('sign-in-again-continue') as HTMLButtonElement
+      expect(go.textContent, id).toBe(label)
+      expect(go.disabled, id).toBe(true)
+      await click('sign-in-again-continue')
+      expect(q('sign-in-again-dialog'), id).toBeTruthy()
+      expect(q('add-account-dialog'), id).toBeNull()
+      // Both answers offered as one question, neither chosen.
+      expect(q('sign-in-again-which')?.getAttribute('role'), id).toBe('radiogroup')
+      expect(q('sign-in-again-which')?.getAttribute('aria-labelledby'), id).toBe('sign-in-again-which-title')
+      expect(document.getElementById('sign-in-again-which-title')?.textContent, id).toBe('Which account are you signing in to?')
+      expect((q('sign-in-again-same') as HTMLInputElement).checked, id).toBe(false)
+      expect((q('sign-in-again-different') as HTMLInputElement).checked, id).toBe(false)
+      // Choosing a method is not an answer.
+      for (const m of ['browser', 'device', 'apiKey']) {
+        if (!q(`sign-in-again-method-${m}`)) continue
+        await click(`sign-in-again-method-${m}`)
+        expect((q('sign-in-again-continue') as HTMLButtonElement).disabled, `${id} ${m}`).toBe(true)
+      }
+      await click('sign-in-again-cancel')
+      expect(q('sign-in-again-dialog'), id).toBeNull()
+    }
+    expect(pa.signInAgain).not.toHaveBeenCalled()
+    expect(pa.beginSetup).not.toHaveBeenCalled()
+    expect(pa.issueSecretHandle).not.toHaveBeenCalled()
+  })
 
+  it('names both answers in full; the old box and its hint are gone (#289)', async () => {
+    render(snapshot({ accounts: [work, keyAccount] }))
+    await openFor('acc-key', null)
     expect(q('sign-in-again-who')?.textContent).toContain('Personal')
     expect(q('sign-in-again-who')?.textContent).toContain('alex@home.example')
-    expect(q('sign-in-again-confirm-label')?.textContent).toBe('Sign in to the same account as before (alex@home.example).')
-    expect(q('sign-in-again-confirm-hint')?.textContent).toBe('Not ticked, the sign-in is added as a new account, and this one stays as it is.')
-    await click('sign-in-again-confirm')
-    expect(q('sign-in-again-confirm-hint')?.textContent).toBe('If it is signed in a different way than before, the account waits until you confirm it in Accounts.')
+    expect(q('sign-in-again-same-label')?.textContent).toBe('The same account as before')
+    expect(q('sign-in-again-same-hint')?.textContent).toBe('If it is signed in a different way than before, the account waits until you confirm it in Accounts.')
+    expect(q('sign-in-again-different-label')?.textContent).toBe('A different account (add it as a new account)')
+    expect(q('sign-in-again-different-hint')?.textContent).toBe('This account stays as it is.')
+    const dialog = q('sign-in-again-dialog')!
+    expect(q('sign-in-again-confirm')).toBeNull()
+    expect(q('sign-in-again-confirm-hint')).toBeNull()
+    expect(dialog.querySelector('input[type="checkbox"]')).toBeNull()
+    expect(dialog.textContent).not.toContain('Not ticked')
+    // The answers do not change with the choice.
+    await click('sign-in-again-same')
+    expect(q('sign-in-again-same-hint')?.textContent).toBe('If it is signed in a different way than before, the account waits until you confirm it in Accounts.')
+    expect(q('sign-in-again-different-hint')?.textContent).toBe('This account stays as it is.')
+  })
+
+  it('"The same account as before" signs it in again with the explicit yes and takes the key here (#289, P3.3)', async () => {
+    pa.issueSecretHandle.mockResolvedValue({ ok: true, handle: HANDLE })
+    pa.signInAgain.mockResolvedValue({ ok: true, state: 'signed-in' })
+    render(snapshot({ accounts: [work, keyAccount] }))
+    // A change of mind: the last answer is the one that counts.
+    await openFor('acc-key', 'different')
+    await click('sign-in-again-same')
+    expect((q('sign-in-again-same') as HTMLInputElement).checked).toBe(true)
+    expect((q('sign-in-again-different') as HTMLInputElement).checked).toBe(false)
+    expect((q('sign-in-again-continue') as HTMLButtonElement).disabled).toBe(false)
     await click('sign-in-again-continue')
     typeKey(q('sign-in-again-key') as HTMLInputElement, KEY)
     await click('sign-in-again-key-continue')
     expect(pa.issueSecretHandle).toHaveBeenCalledTimes(1)
     expect(pa.signInAgain).toHaveBeenCalledTimes(1)
+    expect(pa.signInAgain).toHaveBeenCalledWith({ accountId: 'acc-key', method: 'apiKey', secretHandle: HANDLE, sameAccount: true })
     expect(pa.beginSetup).not.toHaveBeenCalled()
     expect(q('sign-in-again-dialog')).toBeNull()
+    expect(q('add-account-dialog')).toBeNull()
+  })
 
-    // Not ticked: nothing runs here and no key is taken here; Add account
-    // takes over with the method chosen here.
-    pa.issueSecretHandle.mockClear()
-    pa.signInAgain.mockClear()
-    await openFor('acc-key', false)
-    expect((q('sign-in-again-continue') as HTMLButtonElement).disabled).toBe(false)
+  it('"A different account" starts a new account through Add account, and nothing runs or is taken here (#289, P3.3)', async () => {
+    pa.beginSetup.mockResolvedValue({ ok: true, accountId: 'acc-new' })
+    pa.signIn.mockResolvedValue({ ok: false, code: 'cancelled', message: 'Cancelled.' })
+    render(snapshot({ accounts: [work, keyAccount] }))
+    // API key: Add account takes over at its key step, with the method chosen here.
+    await openFor('acc-key', 'same')
+    await click('sign-in-again-different')
+    expect((q('sign-in-again-different') as HTMLInputElement).checked).toBe(true)
+    expect((q('sign-in-again-same') as HTMLInputElement).checked).toBe(false)
     await click('sign-in-again-continue')
     expect(q('sign-in-again-dialog')).toBeNull()
     expect(q('add-account-dialog')).toBeTruthy()
     expect(pa.beginSetup).toHaveBeenCalledWith({ providerId: 'codex', method: 'apiKey' })
     expect(q('add-account-key')).toBeTruthy()
+    await click('add-account-cancel')
+    expect(q('add-account-dialog')).toBeNull()
+
+    // ChatGPT: Add account starts the new account's own sign-in at once.
+    pa.beginSetup.mockClear()
+    await openFor('acc-work', 'different')
+    await click('sign-in-again-continue')
+    expect(q('sign-in-again-dialog')).toBeNull()
+    expect(q('add-account-dialog')).toBeTruthy()
+    expect(pa.beginSetup).toHaveBeenCalledWith({ providerId: 'codex', method: 'browser' })
+    expect(pa.signIn).toHaveBeenCalledWith({ accountId: 'acc-new', method: 'browser' })
     expect(pa.signInAgain).not.toHaveBeenCalled()
     expect(pa.issueSecretHandle).not.toHaveBeenCalled()
   })
@@ -1331,10 +1400,12 @@ describe('Sign in again', () => {
     expect(pa.signInAgain).toHaveBeenCalledWith({ accountId: 'acc-work', method: 'browser', sameAccount: true })
   })
 
-  it('asks without an address when the account has no label', async () => {
+  it('asks the same question, without an address, when the account has no label', async () => {
     render(snapshot({ accounts: [work, signedOut] }))
-    await openFor('acc-out', false)
-    expect(q('sign-in-again-confirm-label')?.textContent).toBe('Sign in to the same account as before.')
+    await openFor('acc-out', null)
+    expect(q('sign-in-again-who')?.textContent).toBe('Personal')
+    expect(q('sign-in-again-same-label')?.textContent).toBe('The same account as before')
+    expect(q('sign-in-again-different-label')?.textContent).toBe('A different account (add it as a new account)')
   })
 
   it("offers only the account's recorded method family, with the recorded one selected", async () => {
@@ -1411,7 +1482,7 @@ describe('Sign in again', () => {
     const s = snapshot({ accounts: [work, keyAccount] })
     s.providers[1] = { ...s.providers[1], signInMethods: { ...s.providers[1].signInMethods, apiKey: { enabled: false, labelExperimental: false } } }
     render(s)
-    await openFor('acc-key', false)
+    await openFor('acc-key')
     expect((q('sign-in-again-continue') as HTMLButtonElement).disabled).toBe(true)
     act(() => { q('sign-in-again-cancel')!.focus() })
     const tab = new KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true })
