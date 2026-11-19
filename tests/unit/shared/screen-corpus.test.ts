@@ -1,0 +1,406 @@
+// The screen corpus (plan 2.1.3-beta.11, section A2; aicc_planning #341).
+//
+// helper/fixtures/screens/ holds recordings of Claude Code's and Codex's real
+// output, and of the system's default shell, on Windows (node-pty's bundled
+// ConPTY and the one built into Windows), macOS and Linux, taken from probe
+// P19's runs (ADR-030; helper/probes/p19-record.cjs). One recording per
+// program, system and state: <program>-<system>-<state>.json, each from the
+// session's first byte to the end of that state's own measurement by the
+// probe (its same-size resize and its nudge, one row shorter and back). Each
+// recording names the CLI and its version, the system, the size, and holds the
+// chunks as node-pty handed them over (on macOS and Linux a character split
+// across two reads joins the second, as node-pty's own decoder does), with
+// the resize marks, the state marks and the keys the probe typed, in order.
+// Nothing in them was signed in: each CLI talked to the probe's stand-in model
+// on the same machine.
+//
+// Beside each, <name>.rows.json: what @xterm/headless 6.0.0 shows when fed
+// the recording's chunks through main's CSI clamp (clampAnsiChunk, the one the
+// Watchdog's pane and the Codex pane use), at the Watchdog pane's settings
+// (200 lines of scrollback): the screen as readXtermScreen returns it (text,
+// typed, inverse, width, end per row) after each resize mark and after the
+// last chunk, and the last 200 lines as text after the last chunk (the text
+// half of the Watchdog's tail). At a resize mark the pane is resized, as the
+// Watchdog's pane and the holder's screen are when the session is. The rows
+// files are written by this test: run it with SCREEN_CORPUS_WRITE=1 to write
+// them, and without it to compare. There is no other script.
+//
+// The cases:
+//  1. the rows made now equal the committed rows, for every recording, so an
+//     xterm.js bump that moves a row shows here first;
+//  2. the reader of each recording's program reads the state in its name
+//     (readClaudeScreen, readCodexScreen; for the shell both read no prompt);
+//  3. the names come from the fixed sets, each recording has its rows file,
+//     each runs on from its first byte with no gap, and the size caps hold
+//     (256 KiB a recording, 3 MiB for all of them: a longer one needs a
+//     shorter scenario, never a cut);
+//  4. no recording or rows file holds a path under a home folder other than
+//     the generic ones (the test machine's own test user, GitHub's runner
+//     accounts), an e-mail shape, or anything shaped like a key.
+// A recording a reader misreads is a finding, not a fixture to bend: it is
+// listed in KNOWN_MISREADS with its ticket, and the reader is fixed.
+//
+// Not checked here:
+//  - colours, bold and every attribute but dim and inverse;
+//  - the cursor's shape, and where it is;
+//  - timing between chunks (the `t` of each event is kept, never read);
+//  - the dim-blanked copy of the tail (the Watchdog's send gate builds its own);
+//  - answers to the CLI's terminal queries: the replay answers none (the
+//    recording already holds what the CLI drew after the probe answered);
+//  - a home path written with no drive letter and no root before it, and a
+//    key of a shape not in KEY_SHAPES;
+//  - the rows files' size (only the recordings have caps).
+import { describe, it, expect, vi } from 'vitest'
+import { existsSync, readdirSync, readFileSync, writeFileSync } from 'fs'
+import { resolve } from 'path'
+import { Terminal } from '@xterm/headless'
+import { readXtermScreen, readCodexScreen, type ScreenLine } from '../../../src/shared/codex-screen'
+import { readClaudeScreen } from '../../../src/shared/claude-screen'
+
+// The clamp lives in the Watchdog's manager; these keep its imports inert.
+vi.mock('../../../src/main/config-manager', () => ({ readConfig: vi.fn(() => ({})) }))
+vi.mock('../../../src/main/debug-logger', () => ({ logInfo: vi.fn(), logWarn: vi.fn(), logError: vi.fn() }))
+vi.mock('../../../src/main/hooks/index', () => ({ getGateway: () => null }))
+const { clampAnsiChunk } = await import('../../../src/main/watchdog/watchdog-manager')
+
+const ROOT = resolve(__dirname, '../../..')
+const DIR = resolve(ROOT, 'helper/fixtures/screens')
+const WRITE = process.env.SCREEN_CORPUS_WRITE === '1'
+
+/** The Watchdog pane's scrollback and tail (watchdog-manager.ts). */
+const SCROLLBACK = 200
+const TAIL_LINES = 200
+const RECORDING_CAP = 256 * 1024
+const CORPUS_CAP = 3 * 1024 * 1024
+const XTERM_VERSION = (JSON.parse(readFileSync(resolve(ROOT, 'node_modules/@xterm/headless/package.json'), 'utf-8')) as { version: string }).version
+
+// ── the fixed sets ──────────────────────────────────────────────────────────
+const CLI_STATES = ['first-screen', 'ready', 'mid-reply', 'after-reply'] as const
+const STATES: Record<string, readonly string[]> = { claude: CLI_STATES, codex: CLI_STATES, shell: ['after-output'] }
+const PROGRAMS = Object.keys(STATES)
+const SYSTEMS = ['windows-bundled', 'windows-system', 'macos', 'linux'] as const
+/** The ConPTY each system's recordings ran under (null: not Windows). */
+const CONPTY: Record<string, string | null> = { 'windows-bundled': 'bundled', 'windows-system': 'system', macos: null, linux: null }
+const CLI_NAME: Record<string, string> = { claude: 'Claude Code', codex: 'Codex', shell: 'default shell' }
+
+/** What each reader must read for a state. "working" is the readers' busy.
+ *  Claude Code's first screen with no account is its theme picker, drawn
+ *  where the prompt box would be, so its reader reads no prompt (a picker
+ *  takes the prompt's place: claude-screen.ts); Codex's is its sign-in
+ *  choice, which its reader knows by "Press enter to continue". */
+const EXPECTED: Record<string, Record<string, string>> = {
+  claude: { 'first-screen': 'no-prompt', ready: 'ready', 'mid-reply': 'busy', 'after-reply': 'ready' },
+  codex: { 'first-screen': 'blocked', ready: 'ready', 'mid-reply': 'busy', 'after-reply': 'ready' },
+  shell: { 'after-output': 'no-prompt' },
+}
+
+/** States the corpus does not hold, on every system, and why. The fragment
+ *  CONTEXT.d/2026-11-19-screen-corpus.md says what would bring them in. */
+const LEFT_OUT: Record<string, string> = {
+  'codex mid-reply': 'over 256 KiB: Codex wrote 434 KB to 877 KB before the end of this measurement in P19 (a shorter scenario is needed, not a cut)',
+  'codex after-reply': 'over 256 KiB: Codex wrote 0.9 MB to 1.7 MB before the end of this measurement in P19 (a shorter scenario is needed, not a cut)',
+}
+
+/** A recording a reader misreads: its name and the ticket that fixes the
+ *  reader. Each stays listed until its reader is fixed; the test then fails
+ *  until the line is removed.
+ *  Codex 0.157.1 at its ready composer draws "? for shortcuts" on the last
+ *  row, under the footer, and Codex's reader takes a footer that is not the
+ *  last row as unrecognised (codex-screen.ts, layout): the same on every
+ *  system. */
+const KNOWN_MISREADS: Record<string, string> = {
+  'codex-windows-bundled-ready': 'TICKET-PENDING',
+  'codex-windows-system-ready': 'TICKET-PENDING',
+  'codex-macos-ready': 'TICKET-PENDING',
+  'codex-linux-ready': 'TICKET-PENDING',
+}
+
+const NAMES = PROGRAMS.flatMap((p) => SYSTEMS.flatMap((s) => STATES[p].map((st) => ({ name: `${p}-${s}-${st}`, program: p, system: s, state: st }))))
+const NAME_BY = new Map(NAMES.map((n) => [n.name, n]))
+
+// ── the files ───────────────────────────────────────────────────────────────
+interface ChunkEvent { o: number; t: number; text: string }
+interface OtherEvent { o: number; t: number; ev: 'resize' | 'mark' | 'keys'; cols?: number; rows?: number; state?: string; keys?: string }
+type RecEvent = ChunkEvent | OtherEvent
+interface Recording {
+  program: string; cli: string; version: string | null; system: string; os: string; machine: string; conpty: string | null
+  state: string; cols: number; rows: number; source: string; events: RecEvent[]
+}
+interface Screen { after: 'resize' | 'last chunk'; event: number; cols: number; rows: number; buffer: string; lines: ScreenLine[] }
+interface Made { screens: Screen[]; tail: string[] }
+
+const listDir = (): string[] => (existsSync(DIR) ? readdirSync(DIR).sort() : [])
+const RECORDINGS = listDir().filter((f) => f.endsWith('.json') && !f.endsWith('.rows.json')).map((f) => f.slice(0, -'.json'.length))
+/** A file's size as the repository holds it (a Windows checkout may write CRLF). */
+const sizeOf = (f: string): number => Buffer.byteLength(readFileSync(resolve(DIR, f), 'utf-8').replace(/\r\n/g, '\n'))
+const readRecording = (name: string): Recording => JSON.parse(readFileSync(resolve(DIR, `${name}.json`), 'utf-8')) as Recording
+const isChunk = (e: RecEvent): e is ChunkEvent => typeof (e as ChunkEvent).text === 'string'
+
+// ── the replay ──────────────────────────────────────────────────────────────
+function screenOf(term: Terminal, after: Screen['after'], event: number): Screen {
+  return { after, event, cols: term.cols, rows: term.rows, buffer: term.buffer.active.type, lines: readXtermScreen(term) }
+}
+
+/** The last TAIL_LINES lines, scrollback and screen, as text, trailing blank
+ *  lines dropped: the text half of the Watchdog's tail (readPanePair). */
+function tailOf(term: Terminal): string[] {
+  const buf = term.buffer.active
+  const out: string[] = []
+  for (let i = Math.max(0, buf.length - TAIL_LINES); i < buf.length; i++) out.push(buf.getLine(i)?.translateToString(true) ?? '')
+  while (out.length > 0 && out[out.length - 1].trim() === '') out.pop()
+  return out
+}
+
+/** Feeds a recording to a pane as main feeds the Watchdog's: each chunk
+ *  through the clamp, the pane resized at each resize mark. */
+async function replay(rec: Recording): Promise<Made> {
+  const term = new Terminal({ cols: rec.cols, rows: rec.rows, scrollback: SCROLLBACK, allowProposedApi: true })
+  const clamp = { residual: '' }
+  const flush = (): Promise<void> => new Promise((done) => term.write('', done))
+  const screens: Screen[] = []
+  try {
+    for (const [i, e] of rec.events.entries()) {
+      if (isChunk(e)) {
+        term.write(clampAnsiChunk(e.text, clamp))
+      } else if (e.ev === 'resize') {
+        await flush()
+        term.resize(e.cols as number, e.rows as number)
+        screens.push(screenOf(term, 'resize', i))
+      }
+    }
+    await flush()
+    screens.push(screenOf(term, 'last chunk', rec.events.length - 1))
+    return { screens, tail: tailOf(term) }
+  } finally {
+    term.dispose()
+  }
+}
+
+const made = new Map<string, Promise<Made>>()
+const rowsOf = (name: string): Promise<Made> => {
+  if (!made.has(name)) made.set(name, replay(readRecording(name)))
+  return made.get(name) as Promise<Made>
+}
+
+/** A rows file, one row or line of text a line, so a diff shows the row. */
+function rowsFileText(name: string, m: Made): string {
+  const j = JSON.stringify
+  const out = ['{']
+  out.push(`  "_doc": ${j('The rows @xterm/headless gives for the recording beside it, fed through main\'s CSI clamp at the Watchdog pane\'s settings. Written by tests/unit/shared/screen-corpus.test.ts with SCREEN_CORPUS_WRITE=1, and compared by it otherwise.')},`)
+  out.push(`  "recording": ${j(`${name}.json`)},`)
+  out.push(`  "xterm": ${j(XTERM_VERSION)},`)
+  out.push(`  "scrollback": ${SCROLLBACK},`)
+  out.push(`  "tailLines": ${TAIL_LINES},`)
+  out.push('  "screens": [')
+  m.screens.forEach((s, i) => {
+    const { lines, ...head } = s
+    out.push(`    {${Object.entries(head).map(([k, v]) => `${j(k)}: ${j(v)}`).join(', ')}, "lines": [`)
+    lines.forEach((l, k) => out.push(`      ${j(l)}${k < lines.length - 1 ? ',' : ''}`))
+    out.push(`    ]}${i < m.screens.length - 1 ? ',' : ''}`)
+  })
+  out.push('  ],')
+  out.push('  "tail": [')
+  m.tail.forEach((l, k) => out.push(`    ${j(l)}${k < m.tail.length - 1 ? ',' : ''}`))
+  out.push('  ]')
+  out.push('}')
+  return `${out.join('\n')}\n`
+}
+
+const readRows = (name: string): Made => {
+  const r = JSON.parse(readFileSync(resolve(DIR, `${name}.rows.json`), 'utf-8')) as Made
+  return { screens: r.screens, tail: r.tail }
+}
+
+// ── the checks, as functions, so the planted cases below run the same code ──
+/** Where two sets of rows differ: "screen 2 row 7" and the like. */
+function rowDifferences(want: Made, got: Made): string[] {
+  const out: string[] = []
+  if (want.screens.length !== got.screens.length) out.push(`${got.screens.length} screens, ${want.screens.length} committed`)
+  for (let i = 0; i < Math.min(want.screens.length, got.screens.length); i++) {
+    const a = want.screens[i]
+    const b = got.screens[i]
+    const { lines: al, ...ah } = a
+    const { lines: bl, ...bh } = b
+    if (JSON.stringify(ah) !== JSON.stringify(bh)) out.push(`screen ${i}: ${JSON.stringify(bh)}, committed ${JSON.stringify(ah)}`)
+    for (let r = 0; r < Math.max(al.length, bl.length); r++) {
+      if (JSON.stringify(al[r]) !== JSON.stringify(bl[r])) out.push(`screen ${i} (${a.after}, event ${a.event}) row ${r}: ${JSON.stringify(bl[r])}, committed ${JSON.stringify(al[r])}`)
+    }
+  }
+  if (JSON.stringify(want.tail) !== JSON.stringify(got.tail)) out.push(`the tail differs (${got.tail.length} lines, ${want.tail.length} committed)`)
+  return out
+}
+
+/** What the program's reader reads on a screen; for the shell, both readers. */
+function readerAnswer(program: string, lines: ScreenLine[]): { screen: string; text: string } {
+  if (program === 'claude') return readClaudeScreen(lines)
+  if (program === 'codex') return readCodexScreen(lines)
+  const claude = readClaudeScreen(lines)
+  const codex = readCodexScreen(lines)
+  return claude.screen === codex.screen ? claude : { screen: `${claude.screen} (Claude Code's reader), ${codex.screen} (Codex's)`, text: '' }
+}
+
+/** Whether the reader's answer is the state in the recording's name. */
+function readsAsNamed(name: string, lines: ScreenLine[]): string | null {
+  const n = NAME_BY.get(name)
+  if (!n) return `${name} is not a corpus name`
+  const want = EXPECTED[n.program][n.state]
+  const got = readerAnswer(n.program, lines)
+  if (got.screen !== want) return `${name}: read ${got.screen}, its name says ${n.state} (${want})`
+  if ((n.state === 'ready' || n.state === 'after-reply') && got.text !== '') return `${name}: the prompt holds ${JSON.stringify(got.text)}, not nothing`
+  return null
+}
+
+/** The home folders a recording may name: the test machine's test user and
+ *  GitHub's runner accounts. */
+const GENERIC_HOMES = ['user', 'runneradmin', 'runner']
+/** A home folder: C:\Users\<name> (either slash), /Users/<name>, /home/<name>. */
+const HOME_RE = /(?:\b[A-Za-z]:[\\/]+Users[\\/]+|\/Users\/|\/home\/)([^\\/\s"'<>|:*?\x00-\x1f]+)/gi
+const EMAIL_RE = /[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}/g
+/** Shapes of keys and tokens: the providers' API keys, GitHub's tokens, an AWS
+ *  key id, Slack's tokens, a private key block, a JSON web token. */
+const KEY_SHAPES: RegExp[] = [
+  /\bsk-[A-Za-z0-9_-]{16,}/,
+  /\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})/,
+  /\bAKIA[0-9A-Z]{16}\b/,
+  /\bxox[abprs]-[A-Za-z0-9-]{10,}/,
+  /-----BEGIN [A-Z ]*PRIVATE KEY-----/,
+  /\beyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}/,
+]
+
+/** Every string a parsed file holds, keys and values. */
+function stringsOf(v: unknown, out: string[] = []): string[] {
+  if (typeof v === 'string') out.push(v)
+  else if (Array.isArray(v)) for (const x of v) stringsOf(x, out)
+  else if (v && typeof v === 'object') for (const [k, x] of Object.entries(v)) { out.push(k); stringsOf(x, out) }
+  return out
+}
+
+/** What in these texts is personal or secret. */
+function privateFinds(texts: string[]): string[] {
+  const out: string[] = []
+  for (const t of texts) {
+    for (const m of t.matchAll(HOME_RE)) if (!GENERIC_HOMES.includes(m[1].toLowerCase())) out.push(`a home folder: ${JSON.stringify(m[0])}`)
+    for (const m of t.matchAll(EMAIL_RE)) out.push(`an e-mail shape: ${JSON.stringify(m[0])}`)
+    for (const re of KEY_SHAPES) { const m = re.exec(t); if (m) out.push(`a key shape: ${JSON.stringify(m[0].slice(0, 12))}...`) }
+  }
+  return out
+}
+
+/** What a recording's structure gets wrong for its name. */
+function structureProblems(name: string, rec: Recording): string[] {
+  const n = NAME_BY.get(name)
+  if (!n) return [`${name} is not <program>-<system>-<state> from the fixed sets`]
+  const out: string[] = []
+  const want = { program: n.program, system: n.system, state: n.state, cli: CLI_NAME[n.program], conpty: CONPTY[n.system] }
+  const fields = rec as unknown as Record<string, unknown>
+  for (const [k, v] of Object.entries(want)) if (fields[k] !== v) out.push(`${k} is ${JSON.stringify(fields[k])}, its name says ${JSON.stringify(v)}`)
+  if (n.program === 'shell' ? rec.version !== null : !/^\d+\.\d+\.\d+$/.test(String(rec.version))) out.push(`version ${JSON.stringify(rec.version)}`)
+  if (!Number.isInteger(rec.cols) || !Number.isInteger(rec.rows) || rec.cols < 2 || rec.rows < 2) out.push(`size ${rec.cols}x${rec.rows}`)
+  if (!Array.isArray(rec.events) || rec.events.length === 0) return [...out, 'no events']
+  // From the session's first byte, nothing cut: each event's offset is the
+  // bytes of the chunks before it.
+  let offset = 0
+  for (const [i, e] of rec.events.entries()) {
+    if (e.o !== offset) { out.push(`event ${i} is at byte ${e.o}, after ${offset} bytes of chunks`); break }
+    if (isChunk(e)) offset += Buffer.byteLength(e.text, 'utf-8')
+    else if (!['resize', 'mark', 'keys'].includes(e.ev)) out.push(`event ${i} is a ${JSON.stringify(e.ev)}`)
+  }
+  const marks = rec.events.filter((e): e is OtherEvent => !isChunk(e) && e.ev === 'mark')
+  if (marks.length === 0 || marks[marks.length - 1].state !== n.state) out.push(`its last state mark is ${JSON.stringify(marks[marks.length - 1]?.state)}, not ${n.state}`)
+  return out
+}
+
+// ── the cases ───────────────────────────────────────────────────────────────
+describe('the screen corpus (helper/fixtures/screens)', () => {
+  it('holds recordings (a vacuous pass is no pass)', () => {
+    expect(RECORDINGS.length).toBeGreaterThan(0)
+  })
+
+  describe('1. the rows xterm.js gives now are the committed rows', () => {
+    it.each(RECORDINGS)('%s', async (name) => {
+      const got = await rowsOf(name)
+      if (WRITE) writeFileSync(resolve(DIR, `${name}.rows.json`), rowsFileText(name, got))
+      expect(existsSync(resolve(DIR, `${name}.rows.json`)), `${name}.rows.json`).toBe(true)
+      expect(rowDifferences(readRows(name), got)).toEqual([])
+    }, 30_000)
+  })
+
+  describe('2. each reader reads the state in the recording\'s name', () => {
+    it.each(RECORDINGS)('%s', async (name) => {
+      const { screens } = await rowsOf(name)
+      const problem = readsAsNamed(name, screens[screens.length - 1].lines)
+      if (KNOWN_MISREADS[name]) {
+        expect(problem, `${name} is listed as a known misread (${KNOWN_MISREADS[name]}) but reads right: remove it from KNOWN_MISREADS`).not.toBeNull()
+      } else {
+        expect(problem).toBeNull()
+      }
+    }, 30_000)
+  })
+
+  describe('3. the names, the structure and the size caps', () => {
+    it('every file is a recording or its rows file, by a name from the fixed sets, and each recording has its rows file', () => {
+      const files = listDir()
+      const bad = files.filter((f) => {
+        const base = f.endsWith('.rows.json') ? f.slice(0, -'.rows.json'.length) : f.endsWith('.json') ? f.slice(0, -'.json'.length) : null
+        return base === null || !NAME_BY.has(base)
+      })
+      expect(bad).toEqual([])
+      expect(files.filter((f) => f.endsWith('.rows.json')).map((f) => f.slice(0, -'.rows.json'.length))).toEqual(RECORDINGS)
+    })
+
+    it('every program, system and state is in the corpus or in LEFT_OUT, never both', () => {
+      const missing = NAMES.filter((n) => !RECORDINGS.includes(n.name) && !LEFT_OUT[`${n.program} ${n.state}`]).map((n) => n.name)
+      const both = NAMES.filter((n) => RECORDINGS.includes(n.name) && LEFT_OUT[`${n.program} ${n.state}`]).map((n) => n.name)
+      expect({ missing, both }).toEqual({ missing: [], both: [] })
+    })
+
+    it.each(RECORDINGS)('%s: its fields are its name\'s, and it runs on from its first byte', (name) => {
+      expect(structureProblems(name, readRecording(name))).toEqual([])
+    })
+
+    it('each recording is at most 256 KiB, and all of them at most 3 MiB', () => {
+      const sizes = RECORDINGS.map((name) => ({ name, size: sizeOf(`${name}.json`) }))
+      expect(sizes.filter((s) => s.size > RECORDING_CAP)).toEqual([])
+      expect(sizes.reduce((a, s) => a + s.size, 0)).toBeLessThanOrEqual(CORPUS_CAP)
+    })
+  })
+
+  describe('4. nothing personal: no home folder but the generic ones, no e-mail, no key', () => {
+    it.each(RECORDINGS)('%s', (name) => {
+      const rec = readRecording(name)
+      // The chunks joined too, so a path split across two chunks is seen.
+      const joined = rec.events.filter(isChunk).map((e) => e.text).join('')
+      const texts = [...stringsOf(rec), joined, ...(existsSync(resolve(DIR, `${name}.rows.json`)) ? stringsOf(JSON.parse(readFileSync(resolve(DIR, `${name}.rows.json`), 'utf-8'))) : [])]
+      expect(privateFinds(texts)).toEqual([])
+    })
+  })
+
+  describe('the checks catch what they are for (planted)', () => {
+    it('case 1: one cell changed in a committed screen is a difference', async () => {
+      const name = RECORDINGS[0]
+      const got = await rowsOf(name)
+      const planted: Made = JSON.parse(JSON.stringify(got)) as Made
+      const line = planted.screens[planted.screens.length - 1].lines[0]
+      line.text = `${line.text}x`
+      expect(rowDifferences(planted, got)).toHaveLength(1)
+      expect(rowDifferences(got, got)).toEqual([])
+    })
+
+    it('case 2: a recording under another state\'s name is caught', async () => {
+      const ready = RECORDINGS.find((n) => n.startsWith('claude-') && n.endsWith('-ready')) as string
+      const { screens } = await rowsOf(ready)
+      const last = screens[screens.length - 1].lines
+      expect(readsAsNamed(ready, last)).toBeNull()
+      expect(readsAsNamed(ready.replace(/-ready$/, '-mid-reply'), last)).not.toBeNull()
+    })
+
+    it('case 4: a home folder, an e-mail shape and a key shape are found; the generic homes are not', () => {
+      expect(privateFinds(['PS C:\\Users\\User\\work>', '/home/runner/work', '/Users/runner/x', 'C:/Users/runneradmin/a'])).toEqual([])
+      expect(privateFinds(['PS C:\\Users\\someone\\work>'])).toHaveLength(1)
+      expect(privateFinds(['cd /home/someone/src'])).toHaveLength(1)
+      expect(privateFinds(['/Users/someone/Library'])).toHaveLength(1)
+      expect(privateFinds([['someone', 'example.org'].join('@')])).toHaveLength(1)
+      expect(privateFinds([`key ${['sk', 'x'.repeat(24)].join('-')}`])).toHaveLength(1)
+    })
+  })
+})
