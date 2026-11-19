@@ -19,7 +19,7 @@ little.
 answers as before; neither names a platform, so the full-path check is the
 host's, as it was.
 
-**One change.** `helperRootDir` now takes the full-path check too. Before, a
+**What changes.** `helperRootDir` now takes the full-path check too. Before, a
 relative `CCC_E2E_DATA_DIR` or `CCC_DEV_DATA_DIR` was joined as it was, so the
 helper's folder went under the folder the run started in (the config-dot-cwd
 failure class). Now such a root is ignored and the run uses the folder it would
@@ -27,6 +27,15 @@ use with no override: the installed app's folder when packaged, its `dev`
 folder otherwise. A relative end-to-end root is not swapped for the dev root.
 Red-first test: the new `helperRootDir` case in
 `tests/unit/main/session-helper-install.test.ts`.
+
+The review found the same class one step further on, in older code: on
+Windows the no-override folder joined a relative `LOCALAPPDATA` as it was. A
+relative dev root built from that same `LOCALAPPDATA` (`index.ts`) was then
+ignored, and the fallback still put the helper under the working folder. A
+`LOCALAPPDATA` that is not a full path is now ignored as well, for
+`<home>\AppData\Local`. Red-first test: the `LOCALAPPDATA` case beside it.
+`dataDirCandidates` (`data-paths.ts`) and `index.ts` read `LOCALAPPDATA` the
+same way and are left alone here.
 
 **Left alone.** `getDataDirectory` and `getResourcesDirectory` in
 `data-paths.ts` read both variables by a rule of their own (no packaged check,

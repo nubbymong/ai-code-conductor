@@ -31,13 +31,14 @@ export const HELPER_EXE_NAME = (platform: NodeJS.Platform = process.platform): s
 
 /**
  * The per-user folder the helper lives in: never roaming, never the install
- * folder. A dev or test run never touches the installed app's holders: it
+ * folder. A dev or test run keeps away from the installed app's holders: it
  * uses its own data root when it has one (dev-data-root.ts devDataRoot), and
  * otherwise a `dev` folder of its own inside the installed app's (which the
  * installed app's clean-up of old version folders leaves alone). A root that
- * is not a full path, by the rules of `platform`, is ignored: the run uses
- * the folder it would use with no override, and never writes under the
- * folder it started in.
+ * is not a full path, by the rules of `platform`, is ignored and the folder
+ * used with no override is used instead, so the root never puts the helper
+ * under the folder the run started in. For a packaged build that is the
+ * installed app's own folder, even in an end-to-end run.
  */
 export function helperRootDir(opts: { platform?: NodeJS.Platform; env?: NodeJS.ProcessEnv; home?: string; isPackaged: boolean }): string {
   const platform = opts.platform ?? process.platform
@@ -46,8 +47,10 @@ export function helperRootDir(opts: { platform?: NodeJS.Platform; env?: NodeJS.P
   const join = platform === 'win32' ? path.win32.join : path.posix.join
   const root = devDataRoot(env, opts.isPackaged, platform)
   if (root) return join(root, 'helper')
+  // A LOCALAPPDATA that is not a full path is ignored too, for the same reason.
+  const local = env.LOCALAPPDATA && path.win32.isAbsolute(env.LOCALAPPDATA) ? env.LOCALAPPDATA : join(home, 'AppData', 'Local')
   const installed = platform === 'win32'
-    ? join(env.LOCALAPPDATA || join(home, 'AppData', 'Local'), 'AI Code Conductor', 'helper')
+    ? join(local, 'AI Code Conductor', 'helper')
     : platform === 'darwin'
       ? join(home, 'Library', 'Application Support', 'AI Code Conductor', 'helper')
       : join(home, '.ai-code-conductor', 'helper')
