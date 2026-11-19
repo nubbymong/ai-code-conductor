@@ -1,4 +1,4 @@
-// The tests' one RegExp escape (tests/helpers/escape-regexp.ts): each special
+// The tests' shared RegExp escape (tests/helpers/escape-regexp.ts): each special
 // character, a text made of all of them, and the texts the callers pass are
 // matched as themselves and only as themselves, with and without the u flag.
 import { describe, it, expect } from 'vitest'

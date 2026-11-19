@@ -211,7 +211,7 @@ describe('debug:openAccountLogFolder -- what a folder must be', () => {
     for (const p of ['C:\\a\\x.{g}', 'C:\\x.{g}\\a', 'C:\\a\\x.{g}.', 'C:\\a\\x.{g} . \\b', 'C:/a/x.{}/b', 'x.{g}']) expect(hasShellObjectName(p), p).toBe(true)
     for (const p of ['C:\\a\\x{g}', 'C:\\a\\{g}', 'C:\\a\\x.{g}y', 'C:\\a\\x.g}', 'C:\\a\\logs', 'C:\\a.{b\\c}']) expect(hasShellObjectName(p), p).toBe(false)
     // One pass: four times the path takes under eight times as long (growth,
-    // not wall-clock time, so a loaded machine does not fail it). The two sizes
+    // not wall-clock time, above the floor below). The two sizes
     // are timed in turn, after one warm-up run of each, and each keeps its best
     // of seven, so a slow spell on the runner lands on both sizes, not on one.
     // Under NOISE_FLOOR_MS the smaller time is mostly timer and scheduler

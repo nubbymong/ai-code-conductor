@@ -41,15 +41,26 @@ path for each segment. A constant slowdown is not growth, and this check never
 judged one.
 
 **One regex escape (#293).** `tests/helpers/escape-regexp.ts` escapes every
-character a pattern reads specially. Three places escaped only some: the
+character a pattern reads specially. The plan's three places escaped only some
+(tests/unit/credential-file-mode-hardening.test.ts:57 has the same dots-only
+shape and is left for its own ticket): the
 parentheses in window-ipc-registered-once.test.ts, and the dots in
 onboarding-layout-contract.test.ts and tests/wp1/binding.ts. That is the shape
 code scanning flags as an incomplete sanitization. All three use the helper
-now, and binding.ts's own full copy gives way to it. A planted text that an
+now, and binding.ts's own two full copies (its escapeRe and an inline one in
+the cites pattern) give way to it. A planted text that an
 unescaped pattern would accept turns each check red: the call without its
 parentheses, `xmark` for `.mark`, and `WP1x11` for `WP1.11`.
 `tests/unit/meta/escape-regexp.test.ts` checks the helper on every special
 character, with and without the u flag, and is red on the old dots-only shape.
 The ticket's fourth place (a single replace in app-server-client.test.ts) is
-not in this section. The alerts on main stay open until a fixed tree lands
-there.
+not in this section. The code scanning alerts on main for the three places
+were already dismissed as used in tests on 2026-10-14; this removes the shape
+they flagged.
+
+**Not changed here.** docs/wp1/evidence/skip-ledger.md (lines 288-294) still
+lists #187 and #210 as known flaky tests, with the old ranges, and says a red
+Test job that names one is re-run once. It is WP1.65 evidence pinned by its
+sha256 at d1525759, so it is retaken at the next WP1 binding, not edited here.
+After this change, a red run that names one of these tests is read as a new
+failure, not re-run.

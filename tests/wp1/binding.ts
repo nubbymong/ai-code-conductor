@@ -181,7 +181,7 @@ export function unavailableProblems(
     // The reference whole: a record citing #D10, #D1_x or #D1.2 does not cite
     // #D1 (a full stop that ends the sentence does). Text inside an HTML
     // comment never counts.
-    const cites = new RegExp(`${decision.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![A-Za-z0-9_-]|\\.[A-Za-z0-9])`)
+    const cites = new RegExp(`${escapeRegExp(decision)}(?![A-Za-z0-9_-]|\\.[A-Za-z0-9])`)
     if (records.length === 0) out.push(`${i.id}: an unavailable item needs a docs/wp1/evidence/ record, which says what was not taken`)
     else if (!records.some((e) => cites.test(shownText(textOf(e) ?? '')))) {
       out.push(`${i.id}: none of its evidence records (${records.join(', ')}) cites ${decision}: say there what was not taken, and cite the decision`)
