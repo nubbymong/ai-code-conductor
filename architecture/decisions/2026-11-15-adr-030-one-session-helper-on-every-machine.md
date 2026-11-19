@@ -3,7 +3,7 @@
 - Status: Accepted (owner decisions D1 to D20 of 2026-11-15; plan approved on
   the Agent Canvas, 2026-11-15). Only the scope of 2.1.3-beta.4 is approved for
   building. Every later slice comes back one beta at a time, and each of the
-  seventeen probes below can still stop or reshape the slice it gates.
+  eighteen probes below can still stop or reshape the slice it gates.
 - Date: 2026-11-15
 - Builds on: ADR-029 (remote sessions run through a device helper),
   `docs/remote/helper-protocol.md` (protocol version 1),
@@ -346,7 +346,7 @@ otherwise carried from earlier measurement.
 - **Pace.** After each release the next beta is cut from the measured hours
   per slice, not from a calendar. Soak time (D15) is not in those hours.
 - **Honest cost.** Until the remote deletion the SDLC is heavier, not lighter:
-  a Rust toolchain and signing, seventeen probes on real machines, two session
+  a Rust toolchain and signing, eighteen probes on real machines, two session
   paths side by side, and five dedicated adversarial rounds that the decisions
   add (the token on This computer, the token on a remote machine, the remote
   conversation intake, Windows provisioning, the user's own pre-launch
@@ -389,6 +389,7 @@ their questions, gates and fallbacks are restated for the slice plan.
 | P15 | On a Windows host, can a helper started by sshd create a console terminal that outlives the connection, and which shell does sshd give an exec? | Windows remote hosts | The terminal is carried as frames on the side connection; the owner is told before Windows machines become the default |
 | P16 | What does starting one helper process per hook event cost on Windows? | Hooks through the holder | Declared exception 11 |
 | P17 | On Windows and Linux, does binding a Standard login by config folder separate identity the way moving the home folder does? | Standard login by config folder there | Declared exception 1 |
+| P18 | On Windows, how do Claude Code and Codex start a tool server over standard input and output, and is it gone when the CLI ends? | Tools through the helper (S15) | The relay's start is planned again for that CLI, whose sessions keep today's loopback route to the tools until then |
 
 P12 result (2026-11-15): a Token session runs and keeps its usage figures;
 Remote Control and extra-usage credits need a Standard login; which kind is
@@ -430,6 +431,41 @@ about 1.0 ms of wall time and 1.5 ms of CPU per POST, client and server. One fas
 desktop CPU was measured (`helper/probes/p16-windows-hook-cost.ps1`). Hooks through the
 holder (S12) are unblocked on the machine measured; the hook command must be written for
 Git Bash (forward slashes, quoted paths).
+
+P18 result (2026-11-19, Windows test machine, Claude Code 2.1.328 and Codex 0.157.1, each
+with no account signed in and no API key, in a fresh environment whose home, app data and
+config folders were in the probe's own temporary folder): pass for both, on the line the
+beta 10 plan wrote before measuring. Each CLI's own add command (`claude mcp add --scope
+user`, `codex mcp add`) stored the program's path as given, a path with a space included,
+and each CLI started the program as its own direct child: no shell between them, the path
+and arguments as given, its input, output and error output as pipes, and the CLI's working
+folder as its own. Each start also made a console host for the program (a hidden console of
+its own), as P16 found for a hook's launcher. In 4 of 4 runs per CLI (three from a folder
+with no space in its path, one with), the stand-in answered its first request 19 to 23 ms
+after it started (186 to 198 ms after Claude Code started, 157 to 296 ms after Codex did),
+against a line of 5 s. Claude Code sends `server/discover` before `initialize` (the
+stand-in refused it as unknown, and Claude Code went on); Codex sends `initialize` first,
+and in the two check runs before the measured one it began its turn within a second while
+`initialize` was still unanswered. The two end the program differently. At a normal end
+Claude Code closes the program's input and the program ends itself, 9 to 17 ms before the
+CLI exits; Codex ends the program itself (no end of input seen in 4 of 4 runs; exit status 1
+in the 3 whose end the process trace caught). With the CLI ended from outside (Stop-Process on the
+CLI alone, while the stand-in held its first request), another process ended the program at
+once for both (exit status 0, no end of input seen). That fits a job object that ends its
+processes when the CLI goes, which was not checked directly, since the probe's own SSH
+session runs in a job. In 10 of 10 runs, nothing of the run (CLI, program or console host)
+was still running 2 s after the CLI's end. Claude Code passes the program its whole
+environment and adds its own variables; Codex passes only a fixed list of 17 system
+variables, without HOME or CODEX_HOME, so the relay must take what it needs from its command
+line, as `--store` and `--session` do. For S15: the relay can be a plain program the CLI
+starts by its full path; it cannot count on end of input to send `mcp.close` (only Claude
+Code's normal end gives one), so the holder takes a relay connection that drops as a closed
+stream; and each relay has a console host of its own while it runs. Limits: the stand-in is
+a node script, not the helper; Claude Code was measured through its connection check
+(`claude mcp list`) and Codex through a `codex exec` whose turn a local model stand-in
+refused, not through an interactive session; one machine. The probe is
+`helper/probes/p18-windows-tool-server-start.ps1`. The check of a real tool call through the
+relay, with signed-in CLIs, is owed at the step that wires it.
 
 ## Parked questions
 
