@@ -3,9 +3,9 @@
 // and run by p18-windows-tool-server-start.ps1 beside it. It speaks the tool
 // protocol's local framing: one JSON-RPC message per line on standard input
 // and output. It answers initialize, tools/list and ping, refuses any other
-// request, and with --hold answers nothing. Like the helper's relay mode it
-// ends at end of input. It reads no other file, opens no connection and writes
-// nothing to standard output but its answers.
+// request, and with --hold answers nothing. As the helper's planned relay
+// mode will, it ends at end of input. It reads no other file, opens no
+// connection and writes nothing to standard output but its answers.
 //
 //   node p18-stand-in.cjs <log file> [--hold]
 //

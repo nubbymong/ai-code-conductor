@@ -16,17 +16,17 @@ the probe's own temporary folder, so no real config is read or written. No
 account is signed in and no API key is given. Claude Code's API address is a
 closed local port. Codex's model provider is a stand-in on a local port that
 refuses every request at once (on a closed port Codex waits for the network
-and never ends). Nothing leaves the machine. Each CLI shares the probe's
-console, as a CLI in the app shares its terminal's.
+and never ends). Every API address the probe sets is on this machine; other
+traffic is not checked. Each CLI is attached to the probe's console, but its
+own input and output are pipes, not a console as in the app's terminal.
 
 For each CLI (Claude Code; Codex when one is installed):
 1. Register the stand-in from a folder with no space in its path, with the
    CLI's own add command, and run the CLI's connection check -Runs times. The
    check is `claude mcp list` for Claude Code. Codex has no check of its own
-   (`codex mcp list` only reads its config), so with -CodexCheck exec (the
-   default) a `codex exec` run stands in for it: it starts its tool servers,
-   its turn is refused, and it ends; -CodexCheck list runs `codex mcp list`.
-   The CLI ends by itself.
+   (`codex mcp list` only reads its config), so a `codex exec` run stands in
+   for it: it starts its tool servers, its turn is refused, and it ends. The
+   CLI ends by itself.
 2. The same once with node.exe and the stand-in in a folder whose path has a
    space in it, as the helper's own folder has ("AI Code Conductor").
 3. Once more from that folder with the stand-in holding its first request
@@ -43,15 +43,14 @@ the CLI's direct child or goes through a shell; whether a console host was made
 for it; how its input and output are connected; the time from its start, and
 from the CLI's start, to its first answer; whether it ended itself at end of
 input or was ended by another process; and whether it was gone after the CLI's
-end. Which
-process started which is read from Win32_ProcessStartTrace and
+end. Which process started which is read from Win32_ProcessStartTrace and
 Win32_ProcessStopTrace (an administrator session; without one the result says
-so and relies on the process lists) and a process list at each check. Times
+so and relies on the process lists, and a console host it did not see is
+recorded as not seen, not as absent) and a process list at each check. Times
 never come from the trace, whose events arrive a second or more late: the
-stand-in's start is its creation time when a process list saw it running, and
-otherwise its own first log line's time less node's uptime (which leaves out
-the few milliseconds before node's clock starts); its answers and its end are
-the times it logged.
+stand-in's start is its own first log line's time less node's uptime, so the
+time before node's clock starts (process creation and load) is not counted;
+its answers and its end are the times it logged.
 
 Decision lines (the 2.1.3-beta.10 plan, section B1, written before measuring):
 PASS for a CLI when the stand-in is started from a path with a space, answers
@@ -60,10 +59,13 @@ its first request within 5 s, and is gone within 10 s of the CLI's end in 3 of
 the 3 runs before it, the CLI starts the stand-in and ends by itself, the
 stand-in answers its first request within 5 s of its own start, and no
 stand-in is left 10 s after the CLI's end.
-CANNOT MEASURE when no run started the stand-in; the CLI's last words are
-recorded, so a sign-in demand can be told from any other reason. Anything else
+CANNOT MEASURE when no run started the stand-in and the CLI's words ask for a
+sign-in; any other run that started nothing is FAIL, with the CLI's words. The
+CLI's words are what each run printed, what its add command printed, and why a
+run was not run; a sign-in is read from them with $SignInWords. Anything else
 is FAIL, with its reasons. The end from outside (step 3) is recorded beside the
-verdict, not in it. Only -Runs 3 gives a verdict; any other count is a CHECK RUN.
+verdict, not in it. Only -Runs 3 can give PASS; any other count that meets the
+line is a CHECK RUN.
 
 It refuses to run when the temporary folder's path has a space (the runs from
 a path with no space would then have one), when the stand-in is missing beside
@@ -80,10 +82,11 @@ temporary folder and lists anything of its own still running.
 Writes p18-result.json and p18-messages.jsonl to -OutDir, with the temporary
 folder, node, the CLIs and the user profile written as <temp>, <node>,
 <claude>, <codex> and <home>. The last line is "P18 RESULT: Claude Code <...>;
-Codex <...>", each PASS, FAIL - <reasons>, CANNOT MEASURE - <reason>,
-CHECK RUN or NOT RUN - <reason>, with "; clean-up incomplete: <what>" added when
-something was left. Exit code 0 when no CLI failed and at least one passed, 1
-any FAIL, 2 could not run or clean-up incomplete, 3 otherwise.
+Codex <...>" (or "P18 RESULT: COULD NOT RUN - <reason>"), each PASS, FAIL -
+<reasons>, CANNOT MEASURE - <reason>, CHECK RUN or NOT RUN - <reason>, with
+"; clean-up incomplete: <what>" added when something was left. Exit code 0
+when no CLI failed and at least one passed, 1 any FAIL, 2 could not run or
+clean-up incomplete, 3 otherwise.
 
 .EXAMPLE
 .\p18-windows-tool-server-start.ps1 -ClaudePath "$env:APPDATA\npm\node_modules\@anthropic-ai\claude-code\bin\claude.exe" -CodexPath "$env:LOCALAPPDATA\Programs\OpenAI\Codex\bin\codex.exe" -OutDir C:\p18-out
@@ -94,7 +97,6 @@ runs, and the codex.exe of OpenAI's own installer, first on PATH there)
 param(
     [string] $ClaudePath = '',
     [string] $CodexPath = '',
-    [ValidateSet('exec', 'list')] [string] $CodexCheck = 'exec',
     [string] $NodePath = '',
     [ValidateRange(1, 10)] [int] $Runs = 3,
     [string] $OutDir = '.'
@@ -107,6 +109,9 @@ Set-StrictMode -Version 2
 $PassFirstAnswerMs = 5000
 $PassGoneMs = 10000
 $PlanRuns = 3
+# The plan keeps CANNOT MEASURE for a CLI that will not start a tool server
+# without a sign-in. Words that ask for one (read case-insensitively, by -match):
+$SignInWords = '\b(sign(ed|ing)?|log(ged|ging)?) ?in\b|authenticat|api[ _-]?key|credential|unauthori[sz]ed'
 
 # Codex's model provider in this probe: a local server that refuses every
 # request at once with HTTP 400. On a closed port Codex waits for the network
@@ -190,6 +195,15 @@ function New-FreshEnv([hashtable] $extra) {
     return $envs
 }
 
+# Every process the probe starts (the CLIs, node, the stand-in's self-test and
+# the model stand-in) runs in the probe's work folder with only the variables
+# given, never with what the probe's own session holds.
+function Set-FreshStart($psi, [hashtable] $envs) {
+    $psi.WorkingDirectory = $work
+    $psi.Environment.Clear()
+    foreach ($k in $envs.Keys) { $psi.Environment[$k] = $envs[$k] }
+}
+
 # Start a program in a fresh environment, sharing the probe's console, with its
 # input closed and its output read. Every process started is kept for clean-up.
 function Start-Fresh([string] $exe, [string[]] $argList, [hashtable] $envs) {
@@ -203,9 +217,7 @@ function Start-Fresh([string] $exe, [string[]] $argList, [hashtable] $envs) {
     $psi.RedirectStandardError = $true
     $psi.StandardOutputEncoding = [Text.Encoding]::UTF8
     $psi.StandardErrorEncoding = [Text.Encoding]::UTF8
-    $psi.WorkingDirectory = $work
-    $psi.Environment.Clear()
-    foreach ($k in $envs.Keys) { $psi.Environment[$k] = $envs[$k] }
+    Set-FreshStart $psi $envs
     $proc = [Diagnostics.Process]::Start($psi)
     # A .cmd runs as cmd.exe: the process's own name is the one checked later.
     $name = [IO.Path]::GetFileName($exe)
@@ -339,7 +351,6 @@ function Invoke-Run($cli, [string] $label, [string] $logFile, [bool] $fromOutsid
     $cliStart = $r.Start
     $rootId = $r.Proc.Id
     $held = $null
-    $heldCreated = $null
     $cliEnd = $null
     if ($fromOutside) {
         $deadline = [datetime]::UtcNow.AddMilliseconds($HoldWaitMs)
@@ -359,7 +370,6 @@ function Invoke-Run($cli, [string] $label, [string] $logFile, [bool] $fromOutsid
             $snap = Get-Snapshot
             $byId = @{}
             foreach ($s in $snap) { $byId[$s.procId] = $s }
-            if ($byId.ContainsKey([int]$st0[0].pid)) { $heldCreated = $byId[[int]$st0[0].pid].at }
             $held = @()
             $cur = [int]$st0[0].ppid
             for ($i = 0; $i -lt 10 -and $byId.ContainsKey($cur); $i++) {
@@ -427,12 +437,10 @@ function Invoke-Run($cli, [string] $label, [string] $logFile, [bool] $fromOutsid
     $row.started = [bool]$st
     if (-not $st) { return $row }
     $s0 = $st[0]
-    # Its start: the exact creation time when a process list saw it running;
-    # otherwise its own start line's time less node's uptime, which leaves out
-    # the few milliseconds before node's clock starts. The trace's times are
-    # never used: WMI delivers its events a second or more late.
+    # Its start: its own start line's time less node's uptime; the time before
+    # node's clock starts (process creation and load) is not counted. The
+    # trace's times are never used: WMI delivers its events a second or more late.
     $created = (ConvertTo-Utc $s0.t).AddMilliseconds(-[double]$s0.up)
-    if ($heldCreated) { $created = $heldCreated }
 
     # Its parents, up to the process the probe started.
     $chain = @()
@@ -450,8 +458,12 @@ function Invoke-Run($cli, [string] $label, [string] $logFile, [bool] $fromOutsid
     $row.startedBy = $(if ($cliProc) { $cliProc[0].name } else { '(not seen)' })
     $row.directChild = ($between.Count -eq 0) -and [bool]$cliProc -and ($chain[0].name -ne '(ended before it was seen)')
     $own = @($standInId) + @($between | ForEach-Object { $_.procId })
-    $row.consoleHostMadeForIt = [bool]@($seen.Values | Where-Object { $_.name -ieq 'conhost.exe' -and $own -contains $_.parentId }).Count
-    $row.cliHasConsoleHostOfItsOwn = [bool]@($seen.Values | Where-Object { $_.name -ieq 'conhost.exe' -and $_.parentId -eq $rootId }).Count
+    # A console host that has ended is seen only by the process trace: with the
+    # trace off, one not seen is recorded as not seen, never as absent.
+    $madeForIt = [bool]@($seen.Values | Where-Object { $_.name -ieq 'conhost.exe' -and $own -contains $_.parentId }).Count
+    $ofItsOwn = [bool]@($seen.Values | Where-Object { $_.name -ieq 'conhost.exe' -and $_.parentId -eq $rootId }).Count
+    $row.consoleHostMadeForIt = $(if ($madeForIt -or $traceOn) { $madeForIt } else { 'not seen: process trace off' })
+    $row.cliHasConsoleHostOfItsOwn = $(if ($ofItsOwn -or $traceOn) { $ofItsOwn } else { 'not seen: process trace off' })
     $row.input = $s0.stdin; $row.output = $s0.stdout; $row.errorOutput = $s0.stderr
     $row.workingFolder = Hide-Personal ([string]$s0.cwd)
     $row.arguments = @($s0.argv | ForEach-Object { Hide-Personal ([string]$_) })
@@ -476,8 +488,15 @@ function Get-Verdict($c) {
     if ($c.Contains('notRun')) { return "NOT RUN - $($c.notRun)" }
     $normal = @($c.runs | Where-Object { $_.run -ne 'from outside' })
     if (-not @($c.runs | Where-Object { $_.Contains('started') -and $_.started }).Count) {
-        $said = @($normal | ForEach-Object { $_['cliSaid'] } | Where-Object { $_ } | Select-Object -Last 3) -join ' | '
-        return "CANNOT MEASURE - no run started the stand-in; the CLI said: $said"
+        # The CLI's words: why a run was not run, what its add command said,
+        # and what each run printed. The plan keeps CANNOT MEASURE for a CLI
+        # that asks for a sign-in; any other reason is FAIL.
+        $words = @(@(@($c.runs | Where-Object { $_.endedBy -like 'not run*' } | ForEach-Object { $_.endedBy }) +
+                @($c.Keys | Where-Object { $_ -like 'registered: *' } | ForEach-Object { $c[$_].said }) +
+                @($c.runs | ForEach-Object { $_['cliSaid'] })) | Where-Object { $_ } | Select-Object -Unique)
+        $signIn = @($words | Where-Object { $_ -match $SignInWords })
+        if ($signIn.Count) { return "CANNOT MEASURE - no run started the stand-in; the CLI asked for a sign-in: $(@($signIn | Select-Object -Last 3) -join ' | ')" }
+        return "FAIL - no run started the stand-in, and the CLI asked for no sign-in; it said: $(@($words | Select-Object -Last 3) -join ' | ')"
     }
     $reasons = @()
     if (-not @($normal | Where-Object { $_.run -like 'path with a space*' }).Count) { $reasons += 'the stand-in was not registered from a path with a space' }
@@ -561,6 +580,7 @@ try {
     $psi.UseShellExecute = $false
     $psi.RedirectStandardInput = $true
     $psi.RedirectStandardOutput = $true
+    Set-FreshStart $psi (New-FreshEnv $null)
     $self = [Diagnostics.Process]::Start($psi)
     [void]$startedProcs.Add([pscustomobject]@{ Proc = $self; Name = 'node.exe'; Start = $self.StartTime.ToUniversalTime() })
     $self.StandardInput.Write('{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18"}}' + "`n" + '{"jsonrpc":"2.0","id":2,"method":"tools/list"}' + "`n")
@@ -570,7 +590,7 @@ try {
     $answers = @((Get-TaskText $selfOut) -split "`n" | Where-Object { $_.Trim() -like '{*' } | ForEach-Object { $_ | ConvertFrom-Json })
     if ($self.ExitCode -ne 0 -or $answers.Count -ne 2 -or $answers[0].id -ne 1 -or $answers[1].id -ne 2) { throw "could not run: the stand-in's self-test gave $($answers.Count) answers, exit $($self.ExitCode)" }
     $result.standInSelfTest = 'two answers, ended at end of input'
-    $result.node = (& $nodeSource --version).Trim()
+    $result.node = (Invoke-Fresh $nodeSource @('--version') (New-FreshEnv $null)).Text
 
     $closed = 'http://127.0.0.1:9'
     $clis = @()
@@ -593,6 +613,7 @@ try {
         $mpsi.UseShellExecute = $false
         $mpsi.RedirectStandardInput = $true
         $mpsi.RedirectStandardOutput = $true
+        Set-FreshStart $mpsi (New-FreshEnv $null)
         $model = [Diagnostics.Process]::Start($mpsi)
         [void]$startedProcs.Add([pscustomobject]@{ Proc = $model; Name = 'node.exe'; Start = $model.StartTime.ToUniversalTime() })
         $portTask = $model.StandardOutput.ReadLineAsync()
@@ -604,7 +625,7 @@ try {
             Name = 'Codex'; Exe = $codexExe
             Env = (New-FreshEnv @{ P18_PROBE_KEY = 'p18-probe-placeholder-not-a-key' })
             Add = @('mcp', 'add', 'p18', '--'); Remove = @('mcp', 'remove', 'p18')
-            Check = $(if ($CodexCheck -eq 'list') { @('mcp', 'list') } else { @('exec', '--skip-git-repo-check', 'p18 probe') })
+            Check = @('exec', '--skip-git-repo-check', 'p18 probe')
             Stored = { $t = Join-Path $tempRoot 'codex\config.toml'; if (Test-Path -LiteralPath $t) { (Get-Content -LiteralPath $t) -join "`n" } else { '(no config.toml)' } }
         }
     }
