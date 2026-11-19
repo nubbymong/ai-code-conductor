@@ -189,7 +189,7 @@ function codexProvider(): Record<string, unknown> {
   }
 }
 
-const { spawnPty, killPty, gracefulExitPty } = await import('../../../src/main/pty-manager')
+const { spawnPty, killPty, gracefulExitPty, isSessionWritable } = await import('../../../src/main/pty-manager')
 const { submitLine, typeKeys, submitMarker, askQuestion, handOffAskQuestion, ASK_READY_WAIT_MS, setSessionInputPorts, pasteEnvelope, sendExitKeys } = await import('../../../src/main/session-input')
 type Run = Parameters<typeof sendExitKeys>[1]
 const { MARKER_FALLBACK_FLUSH_MS } = await import('../../../src/main/canvas/canvas-marker-queue')
@@ -485,6 +485,9 @@ describe('pasteEnvelope: a channel message, as a Tier 1 paste', () => {
     // A restart: a new run of the same session.
     try { spawnPty(fakeWin, SID, { cwd: os.tmpdir(), cols: 100, rows: 30 }) } catch { /* registered before any later throw */ }
     expect(h.ptys.length).toBe(before + 1)
+    // The new run is the session's terminal now: a spawn that threw before
+    // registering it would leave none, and beta's presence-only check would pass.
+    expect(isSessionWritable(SID)).toBe(true)
     await vi.advanceTimersByTimeAsync(1000)
     expect(first.writes).toEqual(['Q'.repeat(256)])
     const second = h.ptys[before].writes.join('')
@@ -555,6 +558,9 @@ describe('the quit keys into a CLI the app started', () => {
     const before = h.ptys.length
     try { spawnPty(fakeWin, SID, { cwd: os.tmpdir(), cols: 100, rows: 30 }) } catch { /* registered before any later throw */ }
     expect(h.ptys.length).toBe(before + 1)
+    // The new run is the session's terminal now: a spawn that threw before
+    // registering it would leave none, and beta's presence-only check would pass.
+    expect(isSessionWritable(SID)).toBe(true)
     vi.advanceTimersByTime(1000)
     expect(first.writes).toEqual(['\x1b'])
     const second = h.ptys[before].writes

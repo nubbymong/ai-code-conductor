@@ -28,7 +28,7 @@ pty-manager.ts's writeEnvelopeChunked and gracefulExitPty entries and
 channel-bus.ts's entry. It was red on exactly those three sites until the
 move. A new check holds sendExitKeys to pty-manager.ts, since it skips the
 quit's own checks, as askQuestion skips the Ask check. pty-manager.ts went
-from 8,245 to 8,204 lines and its cap was lowered to match.
+from 8,228 lines (beta after #724) to 8,187 and its cap was lowered to match.
 scripts/perf/service-map.json names pasteEnvelope and sendExitKeys in place of
 pastePty.
 

@@ -81,9 +81,11 @@
 // a handle, a screen or the module's codexRunScreen; a computed key that is
 // not a literal, except on a namespace of a module that exports a typing
 // function, which then counts whole; a reach through
-// `Reflect`, `eval` or a require whose name is built at run time; and a local
-// name that shadows a typing function's (counted as one, which only
-// over-counts).
+// `Reflect`, `eval` or a require whose name is built at run time; a namespace
+// of this module handed on whole (passed to a function, spread or stored), so
+// that a door only the PTY manager may reach (askQuestion, sendExitKeys) is
+// read from it elsewhere; and a local name that shadows a typing function's
+// (counted as one, which only over-counts).
 import { describe, it, expect } from 'vitest'
 import { readdirSync, readFileSync, statSync } from 'node:fs'
 import { join, posix, relative, resolve, sep } from 'node:path'
