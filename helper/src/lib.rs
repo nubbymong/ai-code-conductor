@@ -8,6 +8,7 @@
 
 pub mod client;
 pub mod cmdline;
+pub mod consoles;
 pub mod detach;
 pub mod frame;
 pub mod hello;

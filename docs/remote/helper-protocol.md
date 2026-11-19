@@ -579,6 +579,43 @@ milliseconds: the app uses it on the exits that cannot wait (quit, an update
 install, SIGTERM) as well as at a stop and a relaunch. On macOS and Linux the
 mode exits 1.
 
+**Console hosts a run left (Windows only, from 2.1.3-beta.9).** Each terminal
+tab of the app is a pseudoconsole, and Windows starts its console host
+(`conhost.exe`, or node-pty's bundled `OpenConsole.exe` for a tab that asks for
+it) as a child of the app's main process. When the app is ended from outside,
+nothing closes the pseudoconsole, and on some Windows builds the host keeps
+running until sign-out. So the app records its own pid and creation time at
+start-up (`app-run.json` in its user data folder,
+`src/main/console-host-leftovers.ts`) and at the next start runs, once,
+
+```
+aicc-helper console-hosts [--pid <n> --created <t>]
+```
+
+with that record, `<n>` and `<t>` as for `end`. The helper reads its own
+creation time, then the process list once, and ends each process that is named
+`conhost.exe` (its program file Windows' own `System32\conhost.exe`) or
+`OpenConsole.exe` (a file of that name), is listed with `<n>` as its parent,
+was made in a later microsecond than `<t>` and before both the helper's own
+creation time and the creation time of any process that has `<n>` now, and
+runs as the helper's own user. Each is held open from its check to its end, so
+its pid cannot pass on in between. A pid passes on only once its process has
+gone, so a process made after the pid's new owner names that owner as its
+parent, not the run before. It ends nothing when `<n>` still has `<t>` and that
+process still runs, when the process that has `<n>` now cannot be opened or
+read (its creation time, or whether it still runs), or when `<t>` is before
+Windows last started (with a minute's slack). It also names the process that
+started it, its parent in the same list, made before it, for the app to
+record: it prints one line, `{"pid":<n>,"created":"<t>","ended":<k>}`, and
+exits 0, with a note for the app's log on stderr when it ended nothing for one
+of those reasons or could not end a host. It exits 1 with a message, ending
+nothing, when it cannot read its own creation time or its own user, the process
+list, the process that started it, or the system folder (where Windows' own
+`conhost.exe` is); the app then does not record that run. It exits 2 on a
+command line it cannot read. No PowerShell and no WMI. On macOS and Linux the
+mode exits 1. The app runs it from the install folder, as it runs `start` and
+`end`.
+
 **Endpoint: only this user can connect.** No network socket is opened.
 
 - **Windows:** the named pipe `\\.\pipe\aicc-helper-<sid>-<32 hex>`. Its

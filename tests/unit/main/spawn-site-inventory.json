@@ -85,6 +85,11 @@
    "how": "system-folder",
    "reason": "taskkill.exe by its full path in the system folder (systemTool); with no plain system folder to name it from, none is started."
   },
+  "src/main/console-host-leftovers.ts :: execFile(helper": {
+   "count": 1,
+   "how": "app-path",
+   "reason": "Windows only, once at start-up: the session helper the installer put beside the app (resources/helper, bundledHelperPath), by its full path and only when that file exists, arguments as a list (its console-hosts mode, with a pid and a creation time of digits read strictly from the app's own record), no shell, a 10 s bound. The helper starts nothing; it ends the console hosts the run before left (aicc_planning #330) and exits."
+  },
   "src/main/first-start-worker.cjs :: spawn(req.file": {
    "count": 1,
    "how": "full-path",
