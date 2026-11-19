@@ -79,8 +79,9 @@ const PARTNER_NOTE_MS = 6000
  *  sent:". The four reasons from Codex's submit rule (busy-timeout,
  *  prompt-on-screen, too-tall, not-drawn) keep Ask Conductor's words
  *  (askConductor.ts), with "the session" where those name the Ask tab.
- *  `refused-text` here is main refusing the message itself (empty, or over
- *  the cap): Codex's own refused-text comes back as typed, not sent
+ *  `refused-text` here is main refusing the message itself (empty, over the
+ *  channel's cap, or on Codex over PROMPT_CODEX_MAX_CODE_POINTS): the submit
+ *  primitive's own refused-text comes back as typed, not sent
  *  (PROMPT_TYPED_REFUSED). `session-gone` is any session's. */
 const PROMPT_NOT_SENT: Record<SubmitNotDeliveredReason, string> = {
   'busy-timeout': 'Codex was still working, and its prompt did not come free in time.',
