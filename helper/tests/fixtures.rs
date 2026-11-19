@@ -421,6 +421,9 @@ fn the_tool_stream_limits_match_the_constants() {
     assert_eq!(n("ping_secs"), relay::PING_EVERY.as_secs());
     assert_eq!(n("connect_secs"), relay::CONNECT.as_secs());
     assert_eq!(n("line_bytes"), relay::MAX_LINE as u64);
+    assert_eq!(n("open_wait_secs"), relay::OPEN_WAIT.as_secs());
+    assert_eq!(n("out_queue_bytes"), relay::OUT_QUEUE_BYTES as u64);
+    assert_eq!(n("drain_secs"), relay::DRAIN.as_secs());
     // Each limit leaves the 256 bytes the `mcp` around a message needs.
     assert_eq!(request::MAX_MCP_TO_APP + 256, frame::MAX_JSON_HELPER_TO_APP);
     assert_eq!(request::MAX_MCP_TO_HELPER + 256, frame::MAX_JSON_APP_TO_HELPER);

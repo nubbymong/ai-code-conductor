@@ -9,13 +9,18 @@
 //! connects with the client list mode and the hook mode use (the endpoint's
 //! checks, then the hello's nonce and session). A holder whose hello does not
 //! offer `mcp` (one from before 2.1.3-beta.10) is sent nothing, not even the
-//! ack. Otherwise the relay acks `core`, `local` and `mcp` and opens its one
-//! stream (`mcp.open`, number 1). From then on each line it reads goes to the
-//! holder as one `mcp`, and each `mcp` the holder sends on that stream goes to
-//! standard output as one line, its message alone, as compact JSON. It reads
-//! no message: whatever method comes is passed on in the order it came, and
-//! nothing waits for an `initialize`. It pings the holder every 15 s, as the
-//! app does, so the connection is not dropped as idle.
+//! ack. Otherwise the relay acks `core`, `local` and `mcp`, opens its one
+//! stream (`mcp.open`, number 1) and pings: the holder answers in order, so the
+//! `pong` says the open was taken, and only then is standard input read (10 s
+//! at most). From then on each line it reads goes to the holder as one `mcp`,
+//! and each `mcp` the holder sends on that stream goes to standard output as
+//! one line, its message alone, as compact JSON. It reads no message: whatever
+//! method comes is passed on in the order it came, and nothing waits for an
+//! `initialize`. It pings the holder every 15 s, as the app does, so the
+//! connection is not dropped as idle. Standard output is written by a thread
+//! of its own, so the end of the stream is seen even while the CLI is not
+//! reading: a CLI that falls 64 MiB behind is not taking what it is sent, and
+//! once the stream is over the lines still waiting have 5 s to go.
 //!
 //! A line that is not one JSON object or array (an empty line, text that is
 //! not JSON, a value more than 31 levels deep, an escaped lone surrogate), or
@@ -26,9 +31,10 @@
 //! It exits 0 when its standard input ends, after `mcp.close`. It exits 1 as
 //! soon as its stream cannot be had or cannot go on: a command line it does not
 //! take, no record or no holder, a holder without `mcp`, no connection that
-//! takes tool streams (`not-connected`), too many streams (`busy`), its stream
-//! ended from the other side (`mcp.close` from the holder, once the app let
-//! go), any other `error` but `too-large`, or the connection lost. Standard
+//! takes tool streams (`not-connected`), too many streams (`busy`), no `pong`
+//! to the open in time, its stream ended from the other side (`mcp.close`
+//! from the holder, once the app let go), any other `error` but `too-large`,
+//! a CLI 64 MiB behind, or the connection lost. Standard
 //! output carries only the messages: it prints nothing else, nothing on
 //! standard error, and writes no file. Its store and session come from its
 //! command line alone, never from its environment, which a CLI may pass
@@ -44,7 +50,9 @@ use crate::serve::{mcp_close, mcp_message, mcp_open, MCP_CAP};
 use crate::store;
 use crate::transport::{self, Stream};
 use std::io::{self, BufRead, Write};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError, SyncSender};
+use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
@@ -67,6 +75,18 @@ pub const EXIT_FAILED: u8 = 1;
 /// Messages read and not yet sent, at most: a CLI that writes faster than
 /// the holder takes them waits for room.
 const WAITING: usize = 16;
+/// The id of the ping sent right after `mcp.open`. The holder answers a
+/// connection's messages in order, so its `pong` says the open was taken: a
+/// refusal of the open comes before it.
+const OPEN_PING: u64 = 2;
+/// How long the relay waits for that `pong` before it gives up.
+pub const OPEN_WAIT: Duration = Duration::from_secs(10);
+/// Lines for the CLI not yet written, at most, in bytes: a CLI that falls
+/// this far behind is not taking what it is sent, and the relay exits.
+pub const OUT_QUEUE_BYTES: usize = 64 * 1024 * 1024;
+/// How long the lines still queued for the CLI may take, once the stream is
+/// over, before the relay exits all the same.
+pub const DRAIN: Duration = transport::WRITE_TIMEOUT;
 
 /// Run the relay on `args` (what follows `mcp`): its exit status. It returns
 /// at the end of standard input; every other end exits the process from the
@@ -106,12 +126,18 @@ fn relay(args: &[String]) -> Option<u8> {
     let mut from_holder = to_holder.try_clone().ok()?;
     from_holder.set_read_timeout(None).ok()?;
     // The reader first, so the answer to the open is never missed.
-    thread::Builder::new().spawn(move || read_holder(from_holder)).ok()?;
+    let (opened_tx, opened) = mpsc::channel::<()>();
+    thread::Builder::new().spawn(move || read_holder(from_holder, opened_tx)).ok()?;
     send(&mut to_holder, hello::ack_message(1, &ACK_CAPS)).ok()?;
     send(&mut to_holder, mcp_open(STREAM)).ok()?;
+    send(&mut to_holder, ping(OPEN_PING)).ok()?;
+    // Nothing is read from the CLI until the holder has taken the open, so
+    // an input that ends at once never passes for a stream that was had: a
+    // refusal ends the process from the reader, before the `pong`.
+    opened.recv_timeout(OPEN_WAIT).ok()?;
     let (tx, rx) = mpsc::sync_channel(WAITING);
     thread::Builder::new().spawn(move || read_cli(tx)).ok()?;
-    let mut ping_id: u64 = 2;
+    let mut ping_id: u64 = OPEN_PING + 2;
     loop {
         match rx.recv_timeout(PING_EVERY) {
             Ok(FromCli::Message(message)) => send(&mut to_holder, mcp_message(STREAM, message)).ok()?,
@@ -120,7 +146,7 @@ fn relay(args: &[String]) -> Option<u8> {
                 return Some(code);
             }
             Err(RecvTimeoutError::Timeout) => {
-                send(&mut to_holder, Value::obj(vec![("t", Value::str("ping")), ("id", Value::uint(ping_id))])).ok()?;
+                send(&mut to_holder, ping(ping_id)).ok()?;
                 ping_id += 2;
             }
             // The reader of standard input is gone without a word.
@@ -139,21 +165,41 @@ fn send(stream: &mut Stream, v: Value) -> io::Result<()> {
     stream.write_all_within(&bytes, transport::WRITE_TIMEOUT)
 }
 
+/// A `ping` with this id.
+fn ping(id: u64) -> Value {
+    Value::obj(vec![("t", Value::str("ping")), ("id", Value::uint(id))])
+}
+
 /// Read what the holder sends until the stream cannot go on (`pass_to_cli`),
-/// then end the process with `EXIT_FAILED`, a panic included.
-fn read_holder(stream: Stream) {
-    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || pass_to_cli(stream)));
+/// then end the process with `EXIT_FAILED`, a panic included. Standard output
+/// is written by a thread of its own (`write_cli`), so the end of the stream
+/// is seen even while the CLI is not reading; the lines still queued then have
+/// `DRAIN` to go, in order.
+fn read_holder(stream: Stream, opened: mpsc::Sender<()>) {
+    let queued = Arc::new(AtomicUsize::new(0));
+    let (lines_tx, lines) = mpsc::channel::<String>();
+    let (drained_tx, drained) = mpsc::channel::<()>();
+    let counted = Arc::clone(&queued);
+    let writer = thread::Builder::new().spawn(move || {
+        write_cli(lines, &counted);
+        let _ = drained_tx.send(());
+    });
+    if writer.is_ok() {
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || pass_to_cli(stream, &opened, lines_tx, &queued)));
+        let _ = drained.recv_timeout(DRAIN);
+    }
     std::process::exit(i32::from(EXIT_FAILED));
 }
 
-/// Each `mcp` on this relay's stream goes to standard output as one line.
-/// Returns when the stream cannot go on: `mcp.close` for it, an `error` other
+/// Each `mcp` on this relay's stream goes to `out`, in order, as one line for
+/// the CLI; the `pong` for `OPEN_PING` goes to `opened`. Returns (dropping
+/// `out`) when the stream cannot go on: `mcp.close` for it, an `error` other
 /// than `too-large` (which refused one message, and the stream goes on), a
-/// frame that does not read, standard output closed, or the connection lost.
-/// A frame toward the relay may hold what section 6's app to helper allows: a
-/// tool result can carry a screenshot.
-fn pass_to_cli(mut stream: Stream) {
-    let stdout = io::stdout();
+/// frame that does not read, the connection lost, standard output closed, or
+/// more than `OUT_QUEUE_BYTES` waiting for the CLI. A frame toward the relay
+/// may hold what section 6's app to helper allows: a tool result can carry a
+/// screenshot.
+fn pass_to_cli(mut stream: Stream, opened: &mpsc::Sender<()>, out: mpsc::Sender<String>, queued: &AtomicUsize) {
     loop {
         let v = match frame::read_frame(&mut stream, Direction::AppToHelper) {
             Ok(Some(Frame { channel: 0, body: Body::Json(v) })) => v,
@@ -169,16 +215,32 @@ fn pass_to_cli(mut stream: Stream) {
                 };
                 let mut line = message.to_json();
                 line.push('\n');
-                let mut out = stdout.lock();
-                if out.write_all(line.as_bytes()).and_then(|_| out.flush()).is_err() {
+                if queued.fetch_add(line.len(), Ordering::SeqCst) + line.len() > OUT_QUEUE_BYTES || out.send(line).is_err() {
                     return;
                 }
             }
             Some("mcp.close") if on_stream => return,
+            Some("pong") if v.get("re").and_then(Value::as_u64) == Some(OPEN_PING) => {
+                let _ = opened.send(());
+            }
             Some("error") if v.get("code").and_then(Value::as_str) != Some(CODE_TOO_LARGE) => return,
-            // A `pong`, or a refusal of one message that was too large.
+            // A keep-alive `pong`, or a refusal of one message that was too
+            // large.
             _ => {}
         }
+    }
+}
+
+/// Write each line to standard output as it comes, until there are no more
+/// or the output is closed; `queued` counts what still waits.
+fn write_cli(lines: mpsc::Receiver<String>, queued: &AtomicUsize) {
+    let stdout = io::stdout();
+    for line in lines {
+        let mut out = stdout.lock();
+        if out.write_all(line.as_bytes()).and_then(|_| out.flush()).is_err() {
+            return;
+        }
+        queued.fetch_sub(line.len(), Ordering::SeqCst);
     }
 }
 
@@ -318,7 +380,10 @@ mod tests {
         assert_eq!((CONNECT, PING_EVERY, STREAM), (Duration::from_secs(2), Duration::from_secs(15), 1));
         assert_eq!((EXIT_ENDED, EXIT_FAILED), (0, 1));
         assert_eq!(MAX_LINE, 1024 * 1024);
-        // A ping keeps the connection inside the holder's idle limit.
+        assert_eq!((OPEN_WAIT, OUT_QUEUE_BYTES, DRAIN), (Duration::from_secs(10), 64 * 1024 * 1024, Duration::from_secs(5)));
+        // A ping keeps the connection inside the holder's idle limit, and the
+        // queue for the CLI holds more than the largest message.
         assert!(PING_EVERY * 3 < crate::serve::IDLE_TIMEOUT);
+        assert!(OUT_QUEUE_BYTES > crate::request::MAX_MCP_TO_HELPER * 3);
     }
 }

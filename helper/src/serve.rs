@@ -34,7 +34,8 @@
 //! the holder's number. With no such connection attached, `mcp.open` gets
 //! `not-connected`. A connection that opened a stream is a relay for the rest
 //! of its life: it may not launch, attach, type, resize, detach or end. A
-//! connection attached to the terminal opens no stream. At most
+//! connection attached to the terminal opens no stream, and an attach that
+//! only replays a program that has exited takes none. At most
 //! `MAX_TOOL_STREAMS` are open at once. When the attached connection lets go
 //! (detach, a newer attach, `term.exit`, falling behind, a drop) every stream
 //! it carried ends and each relay is told (`mcp.close`); when a relay goes,
@@ -1253,8 +1254,13 @@ impl Serve {
             if allowed.hooks && !self.take_hooks(conn, gen) {
                 return Flow::Close;
             }
-            if allowed.mcp {
+            // Tool streams go to an attach that carries live output only: one
+            // that replays a program that has exited takes none, and ends any
+            // this connection took before, as no forwarder is left to end them.
+            if allowed.mcp && forwarding.is_some() {
                 self.take_tools(conn, gen);
+            } else {
+                self.stop_tools(conn);
             }
         }
         let forwarding = match forwarding {

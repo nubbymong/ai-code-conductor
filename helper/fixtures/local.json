@@ -1852,7 +1852,10 @@
       "streams": 8,
       "ping_secs": 15,
       "connect_secs": 2,
-      "line_bytes": 1048576
+      "line_bytes": 1048576,
+      "open_wait_secs": 10,
+      "out_queue_bytes": 67108864,
+      "drain_secs": 5
     },
     "requests": {
       "valid": [

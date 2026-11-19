@@ -21,7 +21,7 @@ use aicc_helper::transport::{self, Listener};
 use std::fs;
 use std::io::{BufRead, Read, Write};
 use std::path::PathBuf;
-use std::process::{Child, ChildStdin, Command, ExitStatus, Stdio};
+use std::process::{Child, ChildStdin, ChildStdout, Command, ExitStatus, Stdio};
 use std::sync::{mpsc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
@@ -320,6 +320,8 @@ struct Relay {
     child: Child,
     stdin: Option<ChildStdin>,
     lines: mpsc::Receiver<Vec<u8>>,
+    /// Its standard output, kept open and never read (`start_unread`).
+    unread: Option<ChildStdout>,
     stderr: mpsc::Receiver<Vec<u8>>,
     started: Instant,
 }
@@ -329,7 +331,16 @@ impl Relay {
         Relay::with_args(&["--store", &store_dir.arg(), "--session", sid])
     }
 
+    /// A relay whose CLI keeps its standard output open and never reads it.
+    fn start_unread(store_dir: &Folder, sid: &str) -> Relay {
+        Relay::spawn(&["--store", &store_dir.arg(), "--session", sid], false)
+    }
+
     fn with_args(args: &[&str]) -> Relay {
+        Relay::spawn(args, true)
+    }
+
+    fn spawn(args: &[&str], read_out: bool) -> Relay {
         let started = Instant::now();
         let mut child = Command::new(HELPER)
             .arg("mcp")
@@ -342,27 +353,33 @@ impl Relay {
         let stdout = child.stdout.take().expect("its standard output");
         let mut stderr = child.stderr.take().expect("its standard error");
         let (line_tx, lines) = mpsc::channel();
-        std::thread::spawn(move || {
-            let mut out = std::io::BufReader::new(stdout);
-            loop {
-                let mut line = Vec::new();
-                match out.read_until(b'\n', &mut line) {
-                    Ok(0) | Err(_) => return,
-                    Ok(_) => {
-                        if line_tx.send(line).is_err() {
-                            return;
+        let unread = if read_out {
+            std::thread::spawn(move || {
+                let mut out = std::io::BufReader::new(stdout);
+                loop {
+                    let mut line = Vec::new();
+                    match out.read_until(b'\n', &mut line) {
+                        Ok(0) | Err(_) => return,
+                        Ok(_) => {
+                            if line_tx.send(line).is_err() {
+                                return;
+                            }
                         }
                     }
                 }
-            }
-        });
+            });
+            None
+        } else {
+            drop(line_tx);
+            Some(stdout)
+        };
         let (err_tx, stderr_rx) = mpsc::channel();
         std::thread::spawn(move || {
             let mut text = Vec::new();
             let _ = stderr.read_to_end(&mut text);
             let _ = err_tx.send(text);
         });
-        Relay { stdin: child.stdin.take(), child, lines, stderr: stderr_rx, started }
+        Relay { stdin: child.stdin.take(), child, lines, unread, stderr: stderr_rx, started }
     }
 
     /// Write `text` to its standard input, as the CLI does.
@@ -421,6 +438,8 @@ impl Drop for Relay {
             let _ = self.child.kill();
         }
         let _ = self.child.wait();
+        // Its output closes only once it has gone.
+        drop(self.unread.take());
     }
 }
 
@@ -528,6 +547,15 @@ fn requests_and_answers_pass_through_the_relay_whole_and_in_order() {
     // The session runs on.
     app.client.send_raw(1, b"still here\r").expect("type into the terminal");
     app.wait_text("echo: still here");
+
+    // A relay whose input ends at once had its stream all the same: it opens,
+    // closes, and the relay exits 0.
+    let mut brief = Relay::start(&store_dir, sid);
+    brief.end_input();
+    app.expect(&mcp_open(2));
+    app.expect(&mcp_close(2));
+    let status = brief.exit_by(Instant::now() + WAIT).expect("the relay still runs after its input ended");
+    assert_eq!(status.code(), Some(0), "{status}");
     end(&held.0);
 }
 
@@ -555,6 +583,13 @@ fn with_no_stream_to_have_the_relay_exits_1_at_once_and_prints_nothing() {
     let sid = "relay-none-02";
     let held = Held(hold(&store_dir, sid));
     Relay::start(&store_dir, sid).fails_quietly("nothing attached");
+    // Its input closed at once: still 1, as it never had a stream, whichever
+    // comes first, the end of its input or the refusal.
+    for _ in 0..3 {
+        let mut closed = Relay::start(&store_dir, sid);
+        closed.end_input();
+        closed.fails_quietly("nothing attached, its input closed at once");
+    }
 
     // The app attached, but its ack did not name mcp (the app's own ack, with
     // hooks): it is passed nothing, and the relay is not-connected.
@@ -764,5 +799,61 @@ fn a_relay_that_goes_without_a_word_ends_its_stream() {
     relay.child.kill().expect("kill the relay");
     let _ = relay.child.wait();
     app.expect(&mcp_close(2));
+    end(&held.0);
+}
+
+#[test]
+fn a_relay_whose_cli_stops_reading_still_sees_its_stream_end() {
+    let _serial = one_at_a_time();
+    let store_dir = Folder::new("store-unread");
+    let work = Folder::new("work-unread");
+    let sid = "relay-unread-01";
+    let held = Held(hold(&store_dir, sid));
+    let mut app = app_attached(&held.0, &work);
+    let mut relay = Relay::start_unread(&store_dir, sid);
+    app.expect(&mcp_open(1));
+    // An answer of 2 MiB the CLI never reads: more than any pipe holds, so
+    // the relay's write of it to standard output cannot finish.
+    let big = format!("{{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{{\"data\":\"{}\"}}}}", "A".repeat(2 * 1024 * 1024));
+    app.client.send(mcp_message(1, parse(&big))).expect("send");
+    std::thread::sleep(Duration::from_millis(500));
+    // The app lets go: the relay sees the end of its stream all the same, and
+    // exits 1 once what waits for the CLI has had its time.
+    let id = app.id();
+    let detached = app.call(msg("term.detach", id, vec![]));
+    assert_eq!(t_of(&detached), "term.detached", "{}", detached.to_json());
+    let status = relay.exit_by(Instant::now() + aicc_helper::relay::DRAIN + BOUND).expect("the relay did not see its stream end while its CLI was not reading");
+    assert_eq!(status.code(), Some(1), "{status}");
+    end(&held.0);
+}
+
+#[test]
+fn after_the_program_exits_no_attach_takes_tool_streams() {
+    let _serial = one_at_a_time();
+    let store_dir = Folder::new("store-exited");
+    let work = Folder::new("work-exited");
+    let sid = "relay-exited-01";
+    let held = Held(hold(&store_dir, sid));
+    let mut app = app_attached(&held.0, &work);
+    app.wait_text("FAKE-CLI READY");
+    let mut relay = Conn::relay(&held.0, 1);
+    app.expect(&mcp_open(1));
+
+    // The program's end ends the stream, and the relay is told.
+    app.client.send_raw(1, b"exit 3\r").expect("type into the terminal");
+    relay.expect(&mcp_close(1));
+    let exit = app.next(WAIT).expect("a message once the program exits");
+    assert_eq!((t_of(&exit), num(&exit, "code")), ("term.exit", Some(3)), "{}", exit.to_json());
+
+    // An attach after the end only replays, on the same connection or a new
+    // one: neither takes tool streams, and nothing is passed to it.
+    attach(&mut app);
+    relay.client.send(mcp_open(1)).expect("send");
+    relay.expect_error("not-connected");
+    let mut again = Conn::connect(&held.0, &HOLDER_CAPS);
+    attach(&mut again);
+    let mut late = Conn::relay(&held.0, 1);
+    late.expect_error("not-connected");
+    again.quiet_for(Duration::from_secs(1));
     end(&held.0);
 }

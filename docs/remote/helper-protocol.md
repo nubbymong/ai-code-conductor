@@ -1022,12 +1022,19 @@ nothing for one. Fixtures: the `mcp` part of `helper/fixtures/local.json`.
   `session`, with 2 s to connect and 2 s for the whole hello line. A holder
   whose hello does not offer `mcp` (one
   from before 2.1.3-beta.10) is sent nothing, not even the ack. Otherwise the
-  relay sends `hello.ack` with `caps` `["core","local","mcp"]` and
-  `mcp.open` for its one stream, number 1, then sends each line it reads on
-  standard input as one `mcp`, and writes the message of each `mcp` the holder
-  sends on that stream as one line on standard output, as compact JSON. It
-  passes whatever method comes, in the order it came, and waits for no
-  `initialize`. It pings every 15 s, so the connection is not dropped as idle.
+  relay sends `hello.ack` with `caps` `["core","local","mcp"]`, `mcp.open`
+  for its one stream, number 1, and a `ping`: the holder answers a
+  connection's messages in order, so the `pong` says the open was taken (a
+  refusal comes before it), and the relay reads nothing on standard input
+  until it comes, 10 s at most. Then it sends each line it reads as one
+  `mcp`, and writes the message of each `mcp` the holder sends on that stream
+  as one line on standard output, as compact JSON. It passes whatever method
+  comes, in the order it came, and waits for no `initialize`. It pings every
+  15 s, so the connection is not dropped as idle. Standard output is written
+  by a thread of its own, so the relay sees the end of its stream even while
+  the CLI is not reading; at most 64 MiB of lines wait for the CLI (one more
+  and the relay exits 1), and once the stream is over those still waiting
+  have 5 s to go.
   A line that is not one JSON object or array (an empty line, text that is
   not JSON, a value more than 31 levels deep, an escaped lone surrogate), or
   whose message is over 1,048,320 bytes as compact JSON, is dropped and the
@@ -1035,8 +1042,10 @@ nothing for one. Fixtures: the `mcp` part of `helper/fixtures/local.json`.
   way. It exits 0 when its standard input ends, after `mcp.close`. It exits 1
   as soon as its stream cannot be had or cannot go on: a command line it does
   not take, no record or no holder, a holder without `mcp`, `not-connected`,
-  `busy`, an `mcp.close` from the holder, any other `error` but `too-large`,
-  or the connection lost. Standard output carries only the messages: it
+  `busy`, no `pong` to the open in time, an `mcp.close` from the holder, any
+  other `error` but `too-large`, a CLI 64 MiB behind, or the connection lost.
+  An input that ends at once still exits 1 when the stream was never had.
+  Standard output carries only the messages: it
   prints nothing else, writes nothing on standard error and writes no file.
 - **`mcp.open`** `{stream}`, from a connection that acked `mcp` and is not
   attached to the terminal, for the one stream it may have open at a time
@@ -1050,6 +1059,9 @@ nothing for one. Fixtures: the `mcp` part of `helper/fixtures/local.json`.
   in its life, and sends `mcp.open` with its number to the attached
   connection that acked `mcp`. With no such connection attached the answer
   is `not-connected`; with 8 streams open, `busy`. Neither takes a number.
+  Only an attach that carries live output takes tool streams: one that only
+  replays a program that has exited takes none, and ends any its connection
+  had.
 - **`mcp`** `{stream, message}`: `message` is a JSON object (one JSON-RPC
   message) or an array (a batch). From a relay, on its stream, it goes to the
   attached connection on the holder's number; its message is at most

@@ -31,6 +31,11 @@ changes.
 - **The app side** (session-helper/protocol.ts, connection.ts): readers for the three messages
   and an `mcp` option on a connection, which no caller sets. The fake holder in the unit tests now
   offers `mcp` as a real one does, so the unchanged manager tests show no connection acks it.
+- **From the PR's review** (three points, each fixed with a test): the relay pings right after
+  `mcp.open` and reads nothing from the CLI until the `pong`, so an input that ends at once never
+  passes for a stream that was had (exit 1, not 0); standard output has a writer thread of its
+  own behind a 64 MiB queue, so the end of the stream is seen while the CLI is not reading; and
+  an attach that only replays a program that has exited takes no tool streams.
 - **Two existing helper tests changed by one line each**: hooks.rs and probe_transport.rs pinned
   the holder's hello caps as three; they now name four.
 - **Not built here** (later steps): the tool host serving a stream and a session's config naming
