@@ -9,10 +9,16 @@
 //    a `re` is refused (its fields are exact) and answers no request;
 //  - `mcp` the same way (2.1.3-beta.10, plan section B2): acked only when the
 //    connection is asked for it AND the hello offers it, and `mcp.open`, `mcp`
-//    and `mcp.close` reported only on a connection that acked it.
+//    and `mcp.close` reported only on a connection that acked it;
+//  - the app's own sends on a tool stream (2.1.3-beta.11, plan section B1):
+//    one `mcp` frame, only on a stream the holder opened on a connection that
+//    acked `mcp`; a message the holder would not read is never sent (its call
+//    is answered with an error and the app's side of the stream ends), and
+//    the connection stays up; the app's end of a stream sends no `mcp.close`
+//    (the holder takes none from the attached connection).
 import { describe, it, expect, afterEach } from 'vitest'
 import { FrameReader, encodeJsonFrame, type HolderRecord } from '../../../src/main/session-helper/protocol'
-import { HolderConnection } from '../../../src/main/session-helper/connection'
+import { HolderConnection, MCP_MESSAGE_TO_HELPER_MAX, TOOL_STREAM_SENTENCES } from '../../../src/main/session-helper/connection'
 import { duplexPair } from './session-helper-fake-holder'
 
 type Json = Record<string, unknown>
@@ -132,6 +138,99 @@ describe('the connection acks mcp only when asked for it and the holder offers i
       expect(c.tools).toEqual([['open', 1], ['mcp', 1, CALL.message], ['close', 1]])
       expect(c.conn.isClosed).toBe(false)
     }
+  })
+})
+
+describe("the app's sends on a tool stream (2.1.3-beta.11, plan section B1)", () => {
+  /** The tool host's answer to the relay's tools/list. */
+  const ANSWER = { jsonrpc: '2.0', id: 7, result: { tools: [{ name: 'vision_status' }] } }
+  /** An answer `levels` deep in all: the message is the first level, its
+   *  `result` the second, and the rest is arrays round an empty object. */
+  const nested = (levels: number) => {
+    let v: unknown = {}
+    for (let i = 3; i < levels; i++) v = [v]
+    return { jsonrpc: '2.0', id: 7, result: { content: v } }
+  }
+  const text = (t: string) => ({ jsonrpc: '2.0', id: 7, result: { content: [{ type: 'text', text: t }] } })
+  const mcpFrames = (fromApp: Json[]) => fromApp.filter((m) => m.t === 'mcp' || m.t === 'mcp.close')
+  const errorFor = (id: number, message: string) => ({ jsonrpc: '2.0', id, error: { code: -32603, message } })
+
+  it('a send writes one `mcp` frame on the stream the holder opened, and nothing on any other', async () => {
+    const c = await connected(ALL_CAPS, false, true)
+    c.send(OPEN)
+    await until(() => c.tools.length === 1, 'the open')
+    // Readable at the edges: 31 levels, and a pair of surrogates (one character).
+    const edge = [ANSWER, nested(31), text(`a ${String.fromCodePoint(0x1f600)} b`)]
+    for (const m of edge) expect(c.conn.sendMcp(1, m)).toBe('sent')
+    // A stream the holder never opened here.
+    expect(c.conn.sendMcp(2, ANSWER)).toBe('not-open')
+    await until(() => mcpFrames(c.fromApp).length === 3, 'the three frames')
+    // The holder ends the stream: nothing more goes on it.
+    c.send(CLOSE)
+    await until(() => c.tools.length === 2, 'the close')
+    expect(c.conn.sendMcp(1, ANSWER)).toBe('not-open')
+    await tick(30)
+    expect(mcpFrames(c.fromApp)).toEqual(edge.map((message) => ({ t: 'mcp', stream: 1, message })))
+    expect(c.conn.isClosed).toBe(false)
+  })
+
+  it('a message the holder would not read is not sent: its call is answered with an error, the stream ends on the app\'s side, and the connection stays up', async () => {
+    const unreadable: Array<[string, Record<string, unknown>]> = [
+      ['a lone high surrogate', text(`a ${String.fromCharCode(0xd800)} b`)],
+      ['a lone low surrogate', text(`a ${String.fromCharCode(0xdc00)} b`)],
+      ['32 levels', nested(32)],
+      ['over the size limit', text('x'.repeat(MCP_MESSAGE_TO_HELPER_MAX))],
+    ]
+    for (const [what, m] of unreadable) {
+      const c = await connected(ALL_CAPS, false, true)
+      c.send(OPEN)
+      await until(() => c.tools.length === 1, `the open (${what})`)
+      expect(c.conn.sendMcp(1, m), what).toBe('refused')
+      await until(() => mcpFrames(c.fromApp).length === 1, `the error answer (${what})`)
+      expect(mcpFrames(c.fromApp), what).toEqual([{ t: 'mcp', stream: 1, message: errorFor(7, TOOL_STREAM_SENTENCES.notPassed) }])
+      // Ended on the app's side: the next call on it is answered here, not reported.
+      c.send({ t: 'mcp', stream: 1, message: { jsonrpc: '2.0', id: 8, method: 'tools/list' } })
+      await until(() => mcpFrames(c.fromApp).length === 2, `the answer to the next call (${what})`)
+      expect(mcpFrames(c.fromApp)[1], what).toEqual({ t: 'mcp', stream: 1, message: errorFor(8, TOOL_STREAM_SENTENCES.ended) })
+      expect(c.conn.sendMcp(1, ANSWER), what).toBe('not-open')
+      expect(c.tools, what).toEqual([['open', 1]])
+      expect(c.conn.isClosed, what).toBe(false)
+    }
+  })
+
+  it('a send on a connection that did not ack `mcp` does nothing', async () => {
+    // Not asked for it, and asked for it of a holder that does not offer it.
+    for (const [caps, asked] of [[ALL_CAPS, false], [['core', 'local', 'hooks'], true]] as const) {
+      const c = await connected([...caps], false, asked)
+      c.send(OPEN)
+      await tick(20)
+      expect(c.conn.sendMcp(1, ANSWER)).toBe('not-open')
+      c.conn.closeMcp(1)
+      await tick(30)
+      expect(c.fromApp.map((m) => m.t)).toEqual(['hello.ack'])
+    }
+  })
+
+  it('the app\'s end of a stream sends no `mcp.close`: each call on it is answered with an error, nothing on it is reported, and neither is the holder\'s end of it', async () => {
+    const c = await connected(ALL_CAPS, false, true)
+    c.send(OPEN)
+    c.send({ ...OPEN, stream: 2 })
+    await until(() => c.tools.length === 2, 'the two opens')
+    c.conn.closeMcp(1)
+    c.send({ t: 'mcp', stream: 1, message: { jsonrpc: '2.0', id: 1, method: 'tools/list' } })
+    c.send({ t: 'mcp', stream: 1, message: { jsonrpc: '2.0', method: 'notifications/initialized' } })
+    c.send({ t: 'mcp', stream: 1, message: [{ jsonrpc: '2.0', id: 2, method: 'tools/list' }, { jsonrpc: '2.0', id: 'three', method: 'ping' }] })
+    // The other stream goes on.
+    c.send({ ...CALL, stream: 2 })
+    await until(() => mcpFrames(c.fromApp).length === 2 && c.tools.length === 3, 'the answers and the other stream\'s call')
+    c.send(CLOSE)
+    await tick(30)
+    expect(mcpFrames(c.fromApp)).toEqual([
+      { t: 'mcp', stream: 1, message: errorFor(1, TOOL_STREAM_SENTENCES.ended) },
+      { t: 'mcp', stream: 1, message: [errorFor(2, TOOL_STREAM_SENTENCES.ended), { jsonrpc: '2.0', id: 'three', error: { code: -32603, message: TOOL_STREAM_SENTENCES.ended } }] },
+    ])
+    expect(c.tools).toEqual([['open', 1], ['open', 2], ['mcp', 2, CALL.message]])
+    expect(c.conn.isClosed).toBe(false)
   })
 })
 

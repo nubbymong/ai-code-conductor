@@ -51,6 +51,11 @@
  * agent sessions' path: a crash's start ends it, Re-attach refuses it, and the
  * Machines page lists it with End. It has no per-session settings file, so its
  * hooks never go through its holder.
+ *
+ * 2.1.3-beta.11 (plan section B1, dormant): given the tool functions for a
+ * provider (deps.tools), an agent session's connections ack `mcp`, and each
+ * tool stream its holder opens is handed to the tool host under the tab's id
+ * (toolRoute). app-wiring.ts gives none yet, so no connection asks for `mcp`.
  */
 import { execFile } from 'child_process'
 import * as fs from 'fs'
@@ -82,6 +87,7 @@ import {
   type HolderRecord,
   type HookEventFrame,
   type LaunchSpec,
+  type McpMessage,
 } from './protocol'
 import type { HelperHookTarget, HelperHooksResult } from '../hooks/session-hooks-writer'
 import { InstallError, bundledConptySource, checkedConpty, copyMatches, installHelperCopy, removeOldVersionFolders, sha256File, type InstalledHelper } from './install'
@@ -155,6 +161,84 @@ export interface SessionHelperDeps {
    *  gives Claude Code's only). A provider with none keeps its hooks on the
    *  hooks gateway. */
   hooks?: Partial<Record<ProviderId, HelperHookDeps>>
+  /** Agent sessions' tool calls through their holders, by provider
+   *  (2.1.3-beta.11, plan section B1). app-wiring.ts gives none yet (section
+   *  B2), so no connection asks for `mcp`. */
+  tools?: Partial<Record<ProviderId, HelperToolDeps>>
+}
+
+/** What a session's tool calls through its holder need of the app
+ *  (2.1.3-beta.11, plan section B1). */
+export interface HelperToolDeps {
+  /** Serve one tool stream the tab's holder opened, for the tab's session
+   *  (conductor-mcp-server.ts serveToolStream, which takes the session's CLI
+   *  from its own record). It calls the link's take before it returns. False
+   *  when it refused the stream: it has closed the link then. */
+  serve(appPtyId: string, link: HelperToolLink): boolean
+}
+
+/** One tool stream as the tool host is handed it (conductor-mcp-server.ts
+ *  ToolStreamLink). */
+export interface HelperToolLink {
+  /** One JSON-RPC message to the session's CLI. */
+  send(message: McpMessage): void
+  /** What takes each message the CLI sends, and what hears the stream end
+   *  from the holder's side. Once; a message before it is dropped. */
+  take(onMessage: (message: McpMessage) => void, onClose: () => void): void
+  /** End the stream from the tool host's side. */
+  close(): void
+}
+
+/** One tab's tool streams through its holder (toolRoute). */
+interface ToolRoute {
+  connected(conn: HolderConnection): void
+}
+
+/**
+ * One tool stream a holder opened on a connection, as the tool host is handed
+ * it: what the tool host sends goes on the stream, and what the relay sends
+ * reaches it, until either side ends the stream or the connection goes.
+ */
+class StreamLink implements HelperToolLink {
+  private onMessage: ((message: McpMessage) => void) | null = null
+  private onClose: (() => void) | null = null
+  private over = false
+
+  constructor(private readonly conn: HolderConnection, private readonly stream: number, private readonly forget: () => void) {}
+
+  send(message: McpMessage): void {
+    if (this.over) return
+    // One the holder would not read is answered and ends the stream on the
+    // connection's side (connection.ts sendMcp): the tool host's side ends too.
+    if (this.conn.sendMcp(this.stream, message) === 'refused') this.ended()
+  }
+
+  take(onMessage: (message: McpMessage) => void, onClose: () => void): void {
+    if (this.over || this.onMessage) return
+    this.onMessage = onMessage
+    this.onClose = onClose
+  }
+
+  close(): void {
+    if (this.over) return
+    this.over = true
+    this.conn.closeMcp(this.stream)
+    this.forget()
+  }
+
+  /** One message the relay sent on the stream. */
+  deliver(message: McpMessage): void {
+    if (!this.over) this.onMessage?.(message)
+  }
+
+  /** The stream ended from the holder's side, or its connection went. */
+  ended(): void {
+    if (this.over) return
+    this.over = true
+    this.conn.closeMcp(this.stream)
+    this.forget()
+    try { this.onClose?.() } catch { /* the tool host's own */ }
+  }
 }
 
 /** What a Claude Code session's hooks through its holder need of the app
@@ -781,7 +865,8 @@ export class SessionHelperManager implements MachinesSource {
     const refused = checkLaunch(spec, this.os)
     if (refused) return usualWay(`the helper would refuse ${refused.why}`, true)
     const hooks = this.hookRoute(ctx, sid)
-    const driver: HelperPtyDriver = { ...this.driver(direct, true, spec.conpty === 'bundled', cleared, hooks), ...own }
+    const tools = this.toolRoute(ctx)
+    const driver: HelperPtyDriver = { ...this.driver(direct, true, spec.conpty === 'bundled', cleared, hooks, tools), ...own }
     const wrapper = this.track(new HelperPty({ sid, label: ctx.sessionId, spec, driver }), ctx.sessionId)
     if (hooks) void wrapper.ended.then(() => hooks.ended())
     return wrapper
@@ -865,6 +950,47 @@ export class SessionHelperManager implements MachinesSource {
   }
 
   /**
+   * A session's tool calls through its holder (2.1.3-beta.11, plan section
+   * B1), when the app gives the tool functions for its provider (deps.tools;
+   * app-wiring.ts gives none yet). Its connections ack `mcp` when the holder
+   * offers it. Each `mcp.open` on one becomes a link the tool host is handed
+   * under the tab's id: the session a call acts for is the tab, never anything
+   * a message says. Each `mcp` goes to its stream's link, and the stream's
+   * `mcp.close`, or the connection's close, ends it. None for a run of the
+   * app's own (spawnRun).
+   */
+  private toolRoute(ctx: AgentSpawnContext): ToolRoute | undefined {
+    if (ctx.run) return undefined
+    const deps = this.deps.tools?.[ctx.kind]
+    if (!deps) return undefined
+    const appId = ctx.sessionId
+    return {
+      connected: (conn) => {
+        const links = new Map<number, StreamLink>()
+        // The connection reports these only when it acked `mcp`, and only for
+        // a stream the holder opened on it (connection.ts): that is the guard.
+        conn.on('mcpOpen', (stream) => {
+          const link = new StreamLink(conn, stream, () => { if (links.get(stream) === link) links.delete(stream) })
+          links.set(stream, link)
+          let served = false
+          try {
+            served = deps.serve(appId, link)
+          } catch (err) {
+            this.deps.log(`[session-helper] ${appId}: the tool host failed on a tool stream: ${message(err)}`)
+          }
+          if (!served) {
+            link.close()
+            this.deps.log(`[session-helper] ${appId}: a tool stream its holder opened was not served`)
+          }
+        })
+        conn.on('mcp', (stream, m) => links.get(stream)?.deliver(m))
+        conn.on('mcpClose', (stream) => links.get(stream)?.ended())
+        conn.on('close', () => { for (const link of [...links.values()]) link.ended() })
+      },
+    }
+  }
+
+  /**
    * An agent session's launch: the very program, folder, environment and size
    * the spawn was given. An argument line given as one string (an npm
    * launcher run through cmd.exe, which node-pty passes verbatim) goes as the
@@ -938,11 +1064,12 @@ export class SessionHelperManager implements MachinesSource {
    *  helper is checked before the holder starts. `cleared` (an agent
    *  session): what must settle before a holder starts, in place of the plain
    *  terminal's wait for an earlier holder's end; it throws to start none.
-   *  `hooks`: a Claude Code session's hooks through its holder (hookRoute). */
-  private driver(direct: () => IPty, checkHash: boolean, bundled = false, cleared?: () => Promise<void>, hooks?: HookRoute): HelperPtyDriver {
+   *  `hooks`: a Claude Code session's hooks through its holder (hookRoute).
+   *  `tools`: a session's tool calls through its holder (toolRoute). */
+  private driver(direct: () => IPty, checkHash: boolean, bundled = false, cleared?: () => Promise<void>, hooks?: HookRoute, tools?: ToolRoute): HelperPtyDriver {
     return {
       hold: (sid, label, abandoned) => this.hold(sid, label, abandoned, bundled, cleared),
-      connect: (record) => this.connectFor(record, checkHash, hooks),
+      connect: (record) => this.connectFor(record, checkHash, hooks, tools),
       ...(hooks ? { launched: (conn: HolderConnection) => hooks.launched(conn) } : {}),
       direct,
       ending: (sid, done) => {
@@ -955,7 +1082,7 @@ export class SessionHelperManager implements MachinesSource {
     }
   }
 
-  private async open(record: HolderRecord, sha256?: string, hooks?: HookRoute): Promise<HolderConnection> {
+  private async open(record: HolderRecord, sha256?: string, hooks?: HookRoute, tools?: ToolRoute): Promise<HolderConnection> {
     const conn = await HolderConnection.open({
       record,
       os: this.os,
@@ -964,10 +1091,12 @@ export class SessionHelperManager implements MachinesSource {
       checkEndpointFolder: this.deps.checkEndpointFolder,
       replyTimeoutMs: this.deps.replyTimeoutMs,
       ...(hooks ? { hooks: true } : {}),
+      ...(tools ? { mcp: true } : {}),
     })
     // The connection reports an event only when it acked `hooks` (connection.ts;
     // tests/unit/main/session-helper-connection.test.ts): that is the one guard.
     if (hooks) conn.on('event', (e) => hooks.event(e))
+    if (tools) tools.connected(conn)
     return conn
   }
 
@@ -1026,11 +1155,11 @@ export class SessionHelperManager implements MachinesSource {
     return record
   }
 
-  private async connectFor(record: HolderRecord, checkHash: boolean, hooks?: HookRoute): Promise<HolderConnection> {
+  private async connectFor(record: HolderRecord, checkHash: boolean, hooks?: HookRoute, tools?: ToolRoute): Promise<HolderConnection> {
     // A keeper attaches first; the tab's attach then replaces it, never the other way.
     const keeper = this.keepers.get(record.session)
     if (keeper) await keeper.ready
-    return this.open(record, checkHash ? this.info?.sha256 : undefined, hooks)
+    return this.open(record, checkHash ? this.info?.sha256 : undefined, hooks, tools)
   }
 
   /** Keep a held terminal alive (attached, output dropped) until a tab takes it. */

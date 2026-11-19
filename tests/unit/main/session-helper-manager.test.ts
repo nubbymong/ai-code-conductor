@@ -24,8 +24,8 @@ vi.mock('../../../src/main/account-profiles', async (importOriginal) => {
 })
 
 import { createRequire } from 'module'
-import { HELPER_SENTENCES, SessionHelperManager, agentRecordsIn, crashMarkIn, nodePtyCommandLine, offStillHoldingSentence, setSessionHelper, spawnAgentPty, spawnPlainPty, spawnRunPty, whenHeldKnown } from '../../../src/main/session-helper/manager'
-import { HolderConnection } from '../../../src/main/session-helper/connection'
+import { HELPER_SENTENCES, SessionHelperManager, agentRecordsIn, crashMarkIn, nodePtyCommandLine, offStillHoldingSentence, setSessionHelper, spawnAgentPty, spawnPlainPty, spawnRunPty, whenHeldKnown, type HelperToolDeps, type HelperToolLink } from '../../../src/main/session-helper/manager'
+import { HolderConnection, TOOL_STREAM_SENTENCES } from '../../../src/main/session-helper/connection'
 import { HelperPty } from '../../../src/main/session-helper/helper-pty'
 import { heldAgentSessionId, heldIdKind, heldSessionId } from '../../../src/main/session-helper/protocol'
 import { versionFolderName } from '../../../src/main/session-helper/install'
@@ -2354,6 +2354,153 @@ describe('Claude Code sessions: hooks through the holder (2.1.3-beta.8, plan sec
     const sid = heldAgentSessionId(id, 'claude')
     await until(() => !!helper.holders.get(sid)?.attached, 'the session to attach')
     expect(helper.holders.get(sid)!.attached!.ackedCaps).toEqual(['core', 'local'])
+  })
+})
+
+// ── 2.1.3-beta.11, plan section B1: tool calls through the holder ────────────
+
+describe('agent sessions: tool calls through the holder (2.1.3-beta.11, plan section B1)', () => {
+  /** Each link the stand-in tool host was handed, with the id it came under. */
+  const served: Array<{ id: string; link: HelperToolLink }> = []
+  /** What reached the tool host from the CLI, by session id. */
+  const received: Array<[string, unknown]> = []
+  /** Each stream the tool host heard end, by session id. */
+  const ended: string[] = []
+  const logs: string[] = []
+  /** Whether the tool host serves a stream (false: it refuses, as with no record). */
+  let serving = true
+
+  /** A stand-in tool host, as conductor-mcp-server.ts serveToolStream answers. */
+  const toolHost: HelperToolDeps = {
+    serve: (id, link) => {
+      served.push({ id, link })
+      if (!serving) {
+        link.close()
+        return false
+      }
+      link.take((m) => { received.push([id, m]) }, () => { ended.push(id) })
+      return true
+    },
+  }
+  function toolsManager(over: Partial<ConstructorParameters<typeof SessionHelperManager>[0]> = {}): SessionHelperManager {
+    return makeManager({ log: (m) => logs.push(m), tools: { claude: toolHost, codex: toolHost }, ...over })
+  }
+  async function attachedTab(m: SessionHelperManager, tab: { sessionId: string; kind: 'claude' | 'codex' }): Promise<FakeHolder> {
+    setSessionHelper(m)
+    spawnAgentPty(tab, SHELL, [], agentOpts())
+    const sid = heldAgentSessionId(tab.sessionId, tab.kind)
+    await until(() => !!helper.holders.get(sid)?.attached, 'the session to attach')
+    return helper.holders.get(sid)!
+  }
+  const CALL = { jsonrpc: '2.0', id: 1, method: 'tools/list' }
+  const toolError = (id: number, message: string) => ({ jsonrpc: '2.0', id, error: { code: -32603, message } })
+
+  beforeEach(() => {
+    served.length = 0
+    received.length = 0
+    ended.length = 0
+    logs.length = 0
+    serving = true
+  })
+
+  it("with the tool functions, a Claude Code tab's connection acks mcp, and an mcp.open reaches them under the tab's id; messages pass both ways; the stream's end and the connection's end each end it", async () => {
+    const id = 'abcdef0123456789abcdef90'
+    const h = await attachedTab(await startedWith(toolsManager(), ON_AGENTS), claudeTab(id))
+    expect(h.attached!.ackedCaps).toEqual(['core', 'local', 'mcp'])
+    const n = h.openToolStream()!
+    await until(() => served.length === 1, 'the stream to reach the tool host')
+    expect(served[0].id).toBe(id)
+    h.relay(n, CALL)
+    await until(() => received.length === 1, 'the call')
+    expect(received).toEqual([[id, CALL]])
+    const reply = { jsonrpc: '2.0', id: 1, result: { tools: [{ name: 'vision_status' }] } }
+    served[0].link.send(reply)
+    await until(() => h.toolSent.length === 1, 'the answer')
+    expect(h.toolSent).toEqual([{ stream: n, message: reply }])
+    // The relay ends its stream: the tool host hears it.
+    h.endToolStream(n)
+    await until(() => ended.length === 1, 'the stream\'s end')
+    // A second stream, then the connection drops: the holder ends the streams
+    // with the attach, and the tool host hears that from the app.
+    h.openToolStream()
+    await until(() => served.length === 2, 'the second stream')
+    expect(served[1].id).toBe(id)
+    const first = h.attached!
+    first.close()
+    await until(() => ended.length === 2, 'the end with the connection')
+    expect(ended).toEqual([id, id])
+    // The connection that attaches again acks mcp too.
+    await until(() => h.attaches === 2 && !!h.attached && h.attached !== first, 'the attach again')
+    expect(h.attached!.ackedCaps).toEqual(['core', 'local', 'mcp'])
+  })
+
+  it("a Codex tab: its stream reaches the tool functions under its own tab id; with both the hook and the tool functions, a Claude Code tab acks hooks and mcp", async () => {
+    const m = await startedWith(toolsManager({
+      hooks: { claude: { taking: () => true, useHelperHooks: () => 'switched', event: () => {}, ended: () => {} } },
+    }), ON_AGENTS)
+    const codex = 'abcdef0123456789abcdef91'
+    const hc = await attachedTab(m, codexTab(codex))
+    expect(hc.attached!.ackedCaps).toEqual(['core', 'local', 'mcp'])
+    hc.openToolStream()
+    await until(() => served.length === 1, 'the Codex stream')
+    expect(served.map((s) => s.id)).toEqual([codex])
+    const claude = 'abcdef0123456789abcdef92'
+    const h = await attachedTab(m, claudeTab(claude))
+    expect(h.attached!.ackedCaps).toEqual(['core', 'local', 'hooks', 'mcp'])
+  })
+
+  it('never for a run of the app\'s own: its connections ack no mcp, and no stream of its holder reaches the tool functions', async () => {
+    const m = await startedWith(toolsManager(), ON_AGENTS)
+    setSessionHelper(m)
+    const runId = 'insights-work'
+    spawnRunPty({ runId, kind: 'claude' }, 'C:\\Users\\someone\\.local\\bin\\claude.exe', [], agentOpts())
+    const sid = heldAgentSessionId(runId, 'claude')
+    await until(() => !!helper.holders.get(sid)?.attached, 'the run to attach')
+    const h = helper.holders.get(sid)!
+    expect(h.attached!.ackedCaps).toEqual(['core', 'local'])
+    // A relay of it finds no connection that takes tool streams.
+    expect(h.openToolStream()).toBeNull()
+    await tick(20)
+    expect(served).toEqual([])
+  })
+
+  it("tool functions for one provider only: the other provider's tab acks no mcp", async () => {
+    const m = await startedWith(makeManager({ tools: { claude: toolHost } }), ON_AGENTS)
+    const id = 'abcdef0123456789abcdef93'
+    const h = await attachedTab(m, codexTab(id))
+    expect(h.attached!.ackedCaps).toEqual(['core', 'local'])
+    expect(h.openToolStream()).toBeNull()
+  })
+
+  it('a stream the tool host refuses ends on the app\'s side: each call on it is answered with an error there, nothing reaches the tool host, no mcp.close goes, and the terminal stays attached', async () => {
+    serving = false
+    const id = 'abcdef0123456789abcdef94'
+    const h = await attachedTab(await startedWith(toolsManager(), ON_AGENTS), claudeTab(id))
+    const attached = h.attached!
+    const n = h.openToolStream()!
+    await until(() => served.length === 1, 'the refused stream')
+    h.relay(n, CALL)
+    await until(() => h.toolSent.length === 1, 'the error answer')
+    expect(h.toolSent).toEqual([{ stream: n, message: toolError(1, TOOL_STREAM_SENTENCES.ended) }])
+    expect(received).toEqual([])
+    expect(logs).toContain(`[session-helper] ${id}: a tool stream its holder opened was not served`)
+    expect(h.requests.some((r) => r.t === 'mcp.close')).toBe(false)
+    expect(h.attached).toBe(attached)
+    expect(attached.closed).toBe(false)
+  })
+
+  it('an answer the holder would not read is not sent: its call is answered with an error, the tool host hears the stream end, and the terminal stays attached', async () => {
+    const id = 'abcdef0123456789abcdef95'
+    const h = await attachedTab(await startedWith(toolsManager(), ON_AGENTS), claudeTab(id))
+    const attached = h.attached!
+    const n = h.openToolStream()!
+    await until(() => served.length === 1, 'the stream')
+    served[0].link.send({ jsonrpc: '2.0', id: 1, result: { content: [{ type: 'text', text: `a ${String.fromCharCode(0xd800)} b` }] } })
+    await until(() => h.toolSent.length === 1 && ended.length === 1, 'the error answer and the end')
+    expect(h.toolSent).toEqual([{ stream: n, message: toolError(1, TOOL_STREAM_SENTENCES.notPassed) }])
+    expect(ended).toEqual([id])
+    expect(h.attached).toBe(attached)
+    expect(attached.closed).toBe(false)
   })
 })
 
