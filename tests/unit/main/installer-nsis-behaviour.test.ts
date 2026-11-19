@@ -2522,9 +2522,10 @@ describe.skipIf(!MAKENSIS)('installer.nsh behavioural probe: the uninstaller nam
     await endHeld(f.pid)
   }, 60_000)
 
-  it('all users, inside Program Files, run by Setup with --delete-app-data in place of --updated: names the file and sets nothing for the next restart, as a new install goes into this folder next', async () => {
+  it('all users, inside Program Files, given --delete-app-data (by Setup in place of --updated, or by a person): names the file and sets nothing for the next restart', async () => {
     // installUtil.nsh uninstallOldVersion passes --delete-app-data INSTEAD of
     // --updated when Setup itself was given it, so ${isUpdated} is false here.
+    // A person's full uninstall given the flag is treated the same: it keeps.
     const f = await fixture('delete-app-data', true)
     const r = runRemove({ instdir: f.instdir, installMode: 'all', programFiles: f.programFiles, args: ['--delete-app-data'] })
     expect(r.details, r.log).toEqual([

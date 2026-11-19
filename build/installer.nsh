@@ -3034,9 +3034,11 @@ FunctionEnd
 ; runs before anything can check the path again (the rule beside
 ; RemoveUserHelperFolder). So nothing is set to go at the next start on a
 ; per-user uninstall, from an all-users install outside Program Files, or
-; when a new install goes into this same folder next: an update (--updated),
-; or an uninstall Setup runs with --delete-app-data in place of --updated
-; (installUtil.nsh uninstallOldVersion, when Setup itself was given it). An
+; when a new install may go into this same folder next: an update
+; (--updated), or any uninstall given --delete-app-data. Setup passes that
+; flag in place of --updated (installUtil.nsh uninstallOldVersion, when Setup
+; itself was given it); a person or a management tool may pass it too, for a
+; full uninstall, whose held files then stay rather than wait for a restart. An
 ; all-users install also stops while such a removal waits in its folder
 ; (CccStopOnPendingRemoval), because the restart would take the new files at
 ; those paths too. Nobody is asked to restart now: another user may be signed
@@ -3130,9 +3132,9 @@ FunctionEnd
       DetailPrint "No file is left in it, but the folder itself could not be removed."
     ${EndIf}
 
-    ; Whether a new install goes into this folder next: 1 on an update, 2
-    ; when Setup ran this uninstall with --delete-app-data in place of
-    ; --updated. Either way nothing is set for the next restart.
+    ; Whether a new install may go into this folder next: 1 on an update, 2
+    ; on any uninstall given --delete-app-data (Setup's, in place of --updated,
+    ; or a person's full uninstall). Either way nothing is set for the restart.
     StrCpy $R1 0
     ${If} ${isUpdated}
       StrCpy $R1 1

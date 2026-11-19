@@ -2174,9 +2174,9 @@ describe('installer: the uninstaller removes the program files as electron-build
       { open: ['${If} $installMode == "all"', '${AndIf} $R1 == 0'], via: [] },
       { open: ['${If} ${FileExists} "$INSTDIR\\*.*"'], via: [] },
     ])
-    // $R1 is 0 only when this is not an update and Setup did not run it with
-    // --delete-app-data in place of --updated (installUtil.nsh
-    // uninstallOldVersion): either way a new install goes into this folder next.
+    // $R1 is 0 only when this is not an update and the uninstall was not given
+    // --delete-app-data (Setup passes it in place of --updated, installUtil.nsh
+    // uninstallOldVersion; a person may pass it too): then nothing is set.
     const flag = body.indexOf('StrCpy $R1 0')
     expect(body.slice(flag, flag + 14)).toEqual([
       'StrCpy $R1 0',
@@ -2220,7 +2220,7 @@ describe('installer: the uninstaller removes the program files as electron-build
     const again = body.indexOf('SetRebootFlag false', at)
     expect(body.slice(again - 1, again + 3).map(quiet)).toEqual(['${EndIf}', 'SetRebootFlag false', '${Else}', 'DetailPrint "..."'])
     expect(body[again + 2]).toMatch(/not inside Program Files/)
-    // A per-user uninstall, or one Setup ran with --delete-app-data, says the
+    // A per-user uninstall, or any uninstall given --delete-app-data, says the
     // files stay, and sets nothing; an update says nothing more.
     const stay = body.indexOf('${ElseIf} $R1 != 1')
     expect(stay).toBeGreaterThan(at)

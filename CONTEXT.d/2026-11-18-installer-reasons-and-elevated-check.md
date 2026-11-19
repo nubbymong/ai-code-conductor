@@ -26,8 +26,10 @@ Plan 2.1.3-beta.9 section C4 (aicc_planning #328, #327, #330).
   again"), when Windows has a removal or rename waiting for its next restart
   on its folder (CccStopOnPendingRemoval, reading PendingFileRenameOperations
   through advapi32), in customCheckAppRunning and in the elevated block of
-  customInit; a silent run exits 2. An uninstall Setup runs with
-  --delete-app-data in place of --updated sets nothing for the restart either.
+  customInit; a silent run exits 2. Any uninstall given --delete-app-data
+  (Setup's, in place of --updated, or a person's full uninstall) sets nothing
+  for the restart either: its held files stay and are named. Accepted by the
+  orchestrator over matching Setup's exact command line, as the safe side.
   The walk's bound of 1000 folders is now tested as each comes off the stack.
 - #327. customInit's elevated inner instance (which installSection.nsh never
   gives CHECK_APP_RUNNING) runs the same check and boxes as
