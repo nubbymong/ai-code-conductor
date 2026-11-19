@@ -161,7 +161,7 @@ touches a radius file or pty-manager.ts.
      the sweeps skip the ids the helper still holds), and the take-over writes again only what the
      CLI reads again (the URL file, `hook.json`).
    - Radius or pty-manager.ts: the sweeps are in index.ts and boot-cleanup.ts (no); the exit block
-     is pty-manager.ts (yes).
+     is pty-manager.ts (yes, unless step 3 moves its removal of the files out).
 
 7. **The account lease, and the tool host's record of the session.**
    - Codex's lease: pty:spawn prepares the launch and takes a lease on the account
@@ -190,14 +190,16 @@ touches a radius file or pty-manager.ts.
 8. **The PTY manager's launch state for a restored tab** (which a re-attached session must skip).
    - Today a restored tab's spawn (pty-manager.ts:2723) runs the whole launch: the resume decision
      (Codex at :6109-6124), the files (item 6), a new gateway secret (:7107, :6097), a new tool host
-     record, the agent templates, then the watchdog (:7302-7311) and the logging run (from :7319).
-     For Claude Code it also types the launch line 300 ms after the spawn (:7235-7246). A plain
+     record, the agent templates, then the watchdog (:7302-7311) and the logging run (item 12). For
+     Claude Code it also types the launch line 300 ms after the spawn (:7235-7246). A plain
      terminal is taken over inside spawnPlainPty (manager.ts:816-821), where pty-manager.ts has done
      nothing else for it; an agent tab reaches spawnAgentPty (pty-manager.ts:6914, :6236) only after
      the launch's bindings are made.
-   - For a kept session all of that is skipped: the CLI is running, and a typed launch line would land
-     in Claude Code's composer. What it still needs is the session's entry, where writes, resizes and
-     ends reach it (ptySessions, :314, :7282), its input guard (:7285) and its meta (:7286).
+   - For a kept session the launch itself is skipped (the resume, the files, the typed line): the CLI
+     is running, and a typed launch line would land in Claude Code's composer. What the launch binds
+     is made again instead (items 1, 2, 4, 5, 7, 9, 10 and 12), and the session needs its entry, where
+     writes, resizes and ends reach it (ptySessions, :314, :7282), its input guard (:7285) and its
+     meta (:7286).
    - Closed by: S16's take-over (ADR-030 row 3's session client is its long-term home).
    - Radius or pty-manager.ts: yes, one entry before the provider branches, net zero against the cap.
 
@@ -246,10 +248,23 @@ touches a radius file or pty-manager.ts.
     restored tab resumes its conversation in a new CLI. macOS and Linux let go of nothing
     (update-handlers.ts:327; manager.ts:1496).
 
-12. **Smaller state** that starts empty for a taken-over session and needs no protocol change: the
-    Claude transcript binder's bind (a hook event's `transcript_path` binds it again), the integrity
-    monitor's count, the attention source, the session meta, and canvas markers queued but not yet
-    typed (lost at the update; the review itself is kept).
+12. **The logging run.**
+    - Today: at the launch, under the logging switches, pty-manager.ts:7319-7391 registers a run with
+      the transcripts worker (runStart at :7375-7391), and a Codex run's log binder starts its run
+      (:7397). The worker drops a transcript bind for a session with no run
+      (logging/transcripts-worker.ts:845-850), and a worker that starts again does not refill that
+      map (:592-597).
+    - At an update today: the run ends with the session.
+    - When the process is replaced: the new run's worker has no run for the session, so a hook
+      event's `transcript_path`, or Codex's claim, would bind nothing until a run is registered.
+    - Closed by: S16's take-over registers the run (a new one, or the one the last version left
+      marked crashed, reopened), under the same switches, before the hook route or the telemetry
+      binds a transcript.
+    - Radius or pty-manager.ts: yes today (step 3 moves it).
+
+13. **Smaller state** that starts empty for a taken-over session and needs no protocol change: the
+    integrity monitor's count, the attention source, the session meta, and canvas markers queued but
+    not yet typed (lost at the update; the review itself is kept).
 
 **Proposed order of steps.** All behind the existing switch, Windows first, and none turns a default
 on.
@@ -266,27 +281,31 @@ on.
 3. Move a launch's bindings out of pty-manager.ts (8 h; no behaviour change): the Claude Code block
    (the account capture, the review and canvas registrations, :6926-7029), the Codex block (the hook
    token and folder, the lease, the pane, the colour answers, the telemetry, the log binder and the
-   registrations, :6087-6108, :6179-6189, :6231-6232, :6265-6414), and their part of the teardown
-   (:7768-7773, :7812-7843, :7863-7905), into one module that a launch and a take-over both call.
+   registrations, :6087-6108, :6179-6189, :6231-6232, :6265-6414), the logging run (:7319-7397),
+   their part of the teardown (:7768-7773, :7812-7843, :7863-7905), and the exit block's removal of
+   the per-session files (:7527-7532), into one module that a launch and a take-over both call.
    pty-manager.ts gets shorter and the cap is lowered to its new length. The SSH branch is unchanged,
    but pty-manager.ts is a radius file: the live SSH matrix runs once.
 4. Keep a held agent session through an update, on Windows (8 h). releaseForUpdate also lets go of an
    attached agent session of a saved tab whose tools, and for Claude Code whose hook events, go
-   through its holder; any other ends as today. The release keeps its files (the exit block and step
-   3's teardown skip it; the start-up sweeps skip the ids the helper still holds) and records what the
-   next run needs: the provider, the conversation id, the account and Codex's hook folder. The next
-   start keeps such a session for its tab when its mark says "update" (it ends it today,
-   manager.ts:596-602), counting its account in use at once; the keeper does not ack `mcp`
-   (manager.ts:1312-1325), so streams wait for the tab. No radius file once step 3 is in. ADR-009
-   pass owed before stable: a process kept across an update, and a record the next start acts on.
+   through its holder; any other ends as today. The release keeps its files (step 3's module skips
+   them for it, at the exit and in the teardown; the start-up sweeps skip the ids the helper still
+   holds) and records what the next run needs: the provider, the conversation id, the account and
+   Codex's hook folder. The next start keeps such a session for its tab when its mark says "update"
+   (it ends it today, manager.ts:596-602), counting its account in use at once; the keeper does not
+   ack `mcp` (manager.ts:1312-1325), so streams wait for the tab. No radius file once step 3 has
+   moved both the teardown's part and the exit block's file removal out; without step 3 it touches
+   pty-manager.ts and the live SSH matrix runs. ADR-009 pass owed before stable: a process kept
+   across an update, and a record the next start acts on.
 5. Take a kept agent session over in its restored tab (14 h). No launch: step 3's module makes the
    bindings again for the running CLI (a tool host record with no credential; the review and canvas
    registrations; the lease and the account capture; the telemetry by the saved conversation id; a
-   gateway token for Codex with its `hook.json` written again; the status URL file written again),
-   and the hook and tool routes are on from the attach. Then the replay: both panes fed it, with
-   Codex's colour answers off for replayed bytes; A3's modes written; A1's nudge. The tab shows a
-   terminal shown again, with no resume. One entry in pty-manager.ts, net zero against step 3's cap;
-   the live SSH matrix runs once. Needs S15 complete (B1, B2), A1, A3 and step 4. ADR-009 pass owed
+   gateway token for Codex with its `hook.json` written again; the status URL file written again;
+   the logging run, under its switches, before anything binds a transcript), and the hook and tool
+   routes are on from the attach. Then the replay: both panes fed it, with Codex's colour answers
+   off for replayed bytes; A3's modes written; A1's nudge. The tab shows a terminal shown again,
+   with no resume. One entry in pty-manager.ts, net zero against step 3's cap; the live SSH matrix
+   runs once. Needs S15 complete (B1, B2), A1, A3 and step 4. ADR-009 pass owed
    before stable: a record made with no credential, a stream given back to a new run, and the
    take-over's inputs.
 6. The tool list after an update (2 h): once a stream is given back to a new run, the tool host sends
