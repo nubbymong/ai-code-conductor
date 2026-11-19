@@ -17,7 +17,9 @@
  *
  * The same file holds the one check on `LOCALAPPDATA` that the folders built
  * without such a root share (fullLocalAppData), for the same reason: a
- * relative value would put them under the folder the run started in.
+ * relative value would put them under the folder the run started in. Its
+ * callers: dataDirCandidates (data-paths.ts), the dev root index.ts builds,
+ * helperRootDir, and getBrowserPaths (browser-paths.ts).
  *
  * A LEAF: it imports `path` and nothing else. No Electron, registry or logger
  * import, because install.ts is loaded by helper tests that mock little, and
@@ -52,8 +54,10 @@ export function devDataRoot(env: NodeJS.ProcessEnv, isPackaged: boolean, platfor
  *
  * For code that cannot ask Electron's `app.isPackaged`: data-paths.ts is
  * loaded by the hooks worker too (through the logger), where there is no
- * `app`. A build this reads wrongly reads as not packaged, which is how
- * getDataDirectory read the dev root before it had a packaged check.
+ * `app`. It differs from app.isPackaged in two cases: a packaged build
+ * without an archive reads as not packaged (how getDataDirectory read the dev
+ * root before it had a packaged check), and an unpackaged Electron started on
+ * an app.asar reads as packaged.
  */
 export function runsFromAppArchive(dir: string): boolean {
   return /[\\/]app\.asar(?:[\\/]|$)/.test(dir)

@@ -179,6 +179,9 @@ describe('normaliseCodexRateLimits from the app-server read (camelCase)', () => 
   // schema it adds promax, sci and sci_plus, which carry the names that
   // version's own display names give them (protocol/src/auth.rs,
   // KnownPlan::display_name). aicc_planning#348.
+  // The list is typed in by hand, because no 0.170.0 schema fixture is
+  // recorded yet. When one is (aicc_planning#347), add '0.170.0' to the
+  // it.each above, drop this list and keep only the three exact-label expects.
   it('names every plan the 0.170.0 schema lists, and the three it adds as that CLI names them', () => {
     const planTypes = [
       'free', 'go', 'plus', 'pro', 'prolite', 'promax', 'team', 'self_serve_business_prolite',

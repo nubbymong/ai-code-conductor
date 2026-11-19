@@ -7,7 +7,10 @@
 //     and helperRootDir already did;
 //   - a root that is not a full path is ignored, instead of putting the data
 //     folder under the folder the app started in, and a relative end-to-end
-//     root is not swapped for the dev root;
+//     root is not swapped for the dev root. A run that is not installed then
+//     uses a `dev` folder inside the installed app's data folder, as
+//     helperRootDir does, so it still keeps off that app's data; an installed
+//     app uses its own folders;
 //   - a relative LOCALAPPDATA gives the <home>\AppData\Local default.
 // What did not change is proven by the existing data-path tests, run as they
 // were (data-paths-dev.test.ts, data-paths.test.ts and the others).
@@ -16,6 +19,8 @@
 // folder, or nothing, so no case reads the real registry. Packaged is read
 // from where the code runs (runsFromAppArchive), which a test cannot move, so
 // the packaged cases replace that one function and keep the rest of the leaf.
+// The stub records the folder it is asked about, so the cases also pin that
+// data-paths asks about its own folder.
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import * as path from 'path'
 import { homedir } from 'os'
@@ -25,6 +30,8 @@ const h = vi.hoisted(() => ({
   registry: {} as Record<string, string>,
   /** True: the code reads as running from inside the app's archive. */
   packaged: false,
+  /** Every folder runsFromAppArchive was asked about. */
+  dirs: [] as string[],
 }))
 
 vi.mock('../../../src/main/registry', () => ({
@@ -33,7 +40,13 @@ vi.mock('../../../src/main/registry', () => ({
 }))
 vi.mock('../../../src/main/dev-data-root', async (importOriginal) => {
   const real = await importOriginal<typeof import('../../../src/main/dev-data-root')>()
-  return { ...real, runsFromAppArchive: (dir: string) => h.packaged || real.runsFromAppArchive(dir) }
+  return {
+    ...real,
+    runsFromAppArchive: (dir: string) => {
+      h.dirs.push(dir)
+      return h.packaged || real.runsFromAppArchive(dir)
+    },
+  }
 })
 vi.unmock('../../../src/main/data-paths')
 
@@ -41,6 +54,8 @@ vi.unmock('../../../src/main/data-paths')
 const full = (name: string) => path.join(process.platform === 'win32' ? 'C:\\' : '/', 'ccc-test', name)
 const REG_DATA = full('registry-data')
 const REG_RES = full('registry-resources')
+/** The folder data-paths.ts sits in. */
+const DATA_PATHS_DIR = path.resolve(__dirname, '..', '..', '..', 'src', 'main')
 
 const VARS = ['CCC_E2E_DATA_DIR', 'CCC_DEV_DATA_DIR', 'LOCALAPPDATA'] as const
 const saved: Record<string, string | undefined> = {}
@@ -61,6 +76,7 @@ beforeEach(() => {
   delete process.env.CCC_DEV_DATA_DIR
   h.registry = { DataDirectory: REG_DATA, ResourcesDirectory: REG_RES }
   h.packaged = false
+  h.dirs = []
 })
 
 afterEach(() => {
@@ -79,6 +95,9 @@ describe('an installed app ignores CCC_DEV_DATA_DIR', () => {
     const { mod } = await load()
     expect(mod.getDataDirectory()).toBe(REG_DATA)
     expect(mod.getResourcesDirectory()).toBe(REG_RES)
+    // "Installed" is read from data-paths' own folder: an installed app runs
+    // it from inside its archive, while its program and working folders are not.
+    expect(h.dirs.map((d) => path.resolve(d))).toContain(DATA_PATHS_DIR)
   })
 
   it('a full end-to-end root is still used, packaged or not', async () => {
@@ -93,11 +112,14 @@ describe('an installed app ignores CCC_DEV_DATA_DIR', () => {
 })
 
 describe('a root that is not a full path is ignored', () => {
-  it('a relative dev root: the registry folders, and the log says why', async () => {
+  it('a relative dev root: a dev folder inside the installed app\'s data folder, and the log says why', async () => {
     process.env.CCC_DEV_DATA_DIR = path.join('rel', 'dev')
     const { mod, logInfo } = await load()
-    expect(mod.getDataDirectory()).toBe(REG_DATA)
-    expect(mod.getResourcesDirectory()).toBe(REG_RES)
+    expect(mod.getDataDirectory()).toBe(path.join(REG_DATA, 'dev'))
+    // Treated as configured, as a dev root is: the setup wizard is skipped.
+    expect(mod.isDataDirFromRegistry()).toBe(true)
+    // Never the installed app's resources folder, even though the registry names one.
+    expect(mod.getResourcesDirectory()).toBe(path.join(REG_DATA, 'dev', 'resources'))
     expect(logInfo).toHaveBeenCalledWith('[setup] CCC_DEV_DATA_DIR ignored: it is not a full path')
   })
 
@@ -105,16 +127,31 @@ describe('a root that is not a full path is ignored', () => {
     process.env.CCC_E2E_DATA_DIR = path.join('rel', 'e2e')
     process.env.CCC_DEV_DATA_DIR = full('dev')
     const { mod, logInfo } = await load()
-    expect(mod.getDataDirectory()).toBe(REG_DATA)
-    expect(mod.getResourcesDirectory()).toBe(REG_RES)
+    expect(mod.getDataDirectory()).toBe(path.join(REG_DATA, 'dev'))
+    expect(mod.getResourcesDirectory()).toBe(path.join(REG_DATA, 'dev', 'resources'))
     expect(logInfo).toHaveBeenCalledWith('[setup] CCC_E2E_DATA_DIR ignored: it is not a full path')
   })
 
-  it('with nothing in the registry, the resources folder is under the data folder that is used', async () => {
-    h.registry = { DataDirectory: REG_DATA }
+  it('with nothing saved, the dev folder is inside the default data folder', async () => {
+    h.registry = {}
+    Object.defineProperty(process, 'platform', { value: 'win32', configurable: true })
+    process.env.LOCALAPPDATA = path.join(homedir(), 'local-app-data')
     process.env.CCC_DEV_DATA_DIR = path.join('rel', 'dev')
     const { mod } = await load()
-    expect(mod.getResourcesDirectory()).toBe(path.join(REG_DATA, 'resources'))
+    const data = mod.getDataDirectory()
+    expect(path.basename(data)).toBe('dev')
+    expect(path.dirname(path.dirname(data))).toBe(process.env.LOCALAPPDATA)
+    expect(mod.isDataDirFromRegistry()).toBe(true)
+    expect(mod.getResourcesDirectory()).toBe(path.join(data, 'resources'))
+  })
+
+  it('an installed app with a relative end-to-end root uses its own folders', async () => {
+    h.packaged = true
+    process.env.CCC_E2E_DATA_DIR = path.join('rel', 'e2e')
+    const { mod, logInfo } = await load()
+    expect(mod.getDataDirectory()).toBe(REG_DATA)
+    expect(mod.getResourcesDirectory()).toBe(REG_RES)
+    expect(logInfo).toHaveBeenCalledWith('[setup] CCC_E2E_DATA_DIR ignored: it is not a full path')
   })
 })
 

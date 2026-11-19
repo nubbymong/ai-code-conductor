@@ -70,17 +70,28 @@ let dataDirFromRegistry = false // true if DataDirectory was found in registry
  * production install, and CCC_DEV_DATA_DIR (set by index.ts when the app is
  * not packaged, and by the ccc launcher) gives it its OWN data root, so it
  * never shares CONFIG/sessions/transcripts with prod. An installed app ignores
- * CCC_DEV_DATA_DIR, as devSessionDataDir and helperRootDir do, so the three
- * cannot disagree. A root that is not a full path is ignored too (null): it
- * would put the data folder under the folder the app started in.
+ * CCC_DEV_DATA_DIR, as devSessionDataDir and helperRootDir do. They read
+ * "installed" from app.isPackaged and this from runsFromAppArchive; the two
+ * differ only for an unpackaged Electron started on an app.asar (this repo's
+ * packaged builds always have the archive: package.json build.asar). A root
+ * that is not a full path is ignored too (null): it would put the data folder
+ * under the folder the app started in.
+ *
+ * `devFolder` is true when the root is ignored for that reason and this run is
+ * not installed: it then uses a `dev` folder inside the installed app's data
+ * folder, as helperRootDir does, so it still keeps off that app's
+ * CONFIG/sessions. An installed app uses its own folders.
  *
  * This module cannot ask Electron's app.isPackaged (the hooks worker loads it),
  * so packaged reads as "this code runs from inside the app's archive"
  * (dev-data-root.ts runsFromAppArchive).
  */
-function devOrE2eRoot(): { root: string | null | undefined; source: 'E2E' | 'DEV' } {
-  const root = devDataRoot(process.env, runsFromAppArchive(__dirname))
-  return { root, source: process.env.CCC_E2E_DATA_DIR ? 'E2E' : 'DEV' }
+function devOrE2eRoot(): { root: string | null | undefined; source: 'E2E' | 'DEV'; devFolder: boolean } {
+  const packaged = runsFromAppArchive(__dirname)
+  const root = devDataRoot(process.env, packaged)
+  // The label mirrors devDataRoot's order (CCC_E2E_DATA_DIR first when it is
+  // not empty); it names the variable for the log line only.
+  return { root, source: process.env.CCC_E2E_DATA_DIR ? 'E2E' : 'DEV', devFolder: root === null && !packaged }
 }
 
 // Read data directory from registry (cached after first call)
@@ -91,7 +102,7 @@ export function getDataDirectory(): string {
   // registry, so a dev run ignores prod's configured folder and an E2E run
   // stays off the user's real data. Treated as configured, so the setup
   // wizard is skipped.
-  const { root, source } = devOrE2eRoot()
+  const { root, source, devFolder } = devOrE2eRoot()
   if (root) {
     cachedDataDir = root
     dataDirFromRegistry = true
@@ -99,17 +110,17 @@ export function getDataDirectory(): string {
     return cachedDataDir
   }
 
+  // With no root, the registry's folder, else the default one. A root that is
+  // not a full path, in a run that is not installed (devFolder): a `dev`
+  // folder inside that folder, treated as configured, as a root is.
   const regVal = readRegistry('DataDirectory')
-  if (regVal) {
-    cachedDataDir = regVal
-    dataDirFromRegistry = true
-  } else {
-    cachedDataDir = getDefaultDataDir()
-  }
+  const folder = regVal || getDefaultDataDir()
+  cachedDataDir = devFolder ? path.join(folder, 'dev') : folder
+  if (regVal || devFolder) dataDirFromRegistry = true
   // Logged only once the folder is cached: the logger asks for this folder on
   // its first line, and would otherwise ask again from inside this call.
   if (root === null) logInfo(`[setup] CCC_${source}_DATA_DIR ignored: it is not a full path`)
-  logInfo(`[setup] Data directory ${regVal ? 'from registry' : 'default'}: ${cachedDataDir}`)
+  logInfo(`[setup] Data directory ${devFolder ? 'for this run, a dev folder' : regVal ? 'from registry' : 'default'}: ${cachedDataDir}`)
   return cachedDataDir
 }
 
@@ -165,10 +176,19 @@ export function getResourcesDirectory(): string {
   // The dev or end-to-end root (devOrE2eRoot, as getDataDirectory): resources
   // live under it, so CONFIG/, screenshots/, skills/ etc. are all isolated
   // from prod. A root that is ignored is ignored here too.
-  const { root, source } = devOrE2eRoot()
+  const { root, source, devFolder } = devOrE2eRoot()
   if (root) {
     cachedResourcesDir = path.join(root, 'resources')
     logInfo(`[setup] Resources directory from ${source} override: ${cachedResourcesDir}`)
+    return cachedResourcesDir
+  }
+
+  // A run that uses a dev folder (devFolder, as getDataDirectory) keeps its
+  // resources inside it, never in the installed app's, even when the registry
+  // names one.
+  if (devFolder) {
+    cachedResourcesDir = path.join(getDataDirectory(), 'resources')
+    logInfo(`[setup] Resources directory for this run, in its dev folder: ${cachedResourcesDir}`)
     return cachedResourcesDir
   }
 

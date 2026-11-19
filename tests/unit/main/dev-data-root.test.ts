@@ -124,14 +124,15 @@ describe('fullLocalAppData', () => {
   })
 })
 
-// The data folder (data-paths.ts), the dev root (index.ts) and the helper
-// folder (session-helper/install.ts) read LOCALAPPDATA through
-// fullLocalAppData only. A name-level check of those three files.
+// The data folder (data-paths.ts), the dev root (index.ts), the helper
+// folder (session-helper/install.ts) and the per-user browser candidates
+// (browser-paths.ts) read LOCALAPPDATA through fullLocalAppData only. A
+// name-level check of those four files.
 // Not checked here: a read through a renamed or destructured env object, a
 // computed key, and any other file.
 describe('the folders built on LOCALAPPDATA read it through fullLocalAppData', () => {
   const ROOT = path.resolve(__dirname, '..', '..', '..')
-  it.each(['src/main/data-paths.ts', 'src/main/index.ts', 'src/main/session-helper/install.ts'])('%s', (file) => {
+  it.each(['src/main/data-paths.ts', 'src/main/index.ts', 'src/main/session-helper/install.ts', 'src/main/browser-paths.ts'])('%s', (file) => {
     const src = readFileSync(path.join(ROOT, file), 'utf8')
     expect(src).not.toMatch(/\benv\.LOCALAPPDATA\b|\benv\[\s*['"]LOCALAPPDATA['"]\s*\]/)
     expect(src).toMatch(/\bfullLocalAppData\(/)

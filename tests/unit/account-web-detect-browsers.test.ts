@@ -75,6 +75,21 @@ describe('detectAuthBrowsers — a per-user Chrome beside a system Edge (aicc_pl
     fakeEnv.LOCALAPPDATA = LOCAL
     expect(resolveBrowserBinary('edge')).toEqual({ browser: 'edge', path: SYSTEM_EDGE })
   })
+
+  // aicc_planning#345: a LOCALAPPDATA that is not a full path gives no per-user
+  // candidate at all, never one under the folder the app started in.
+  it('a LOCALAPPDATA that is not a full path lists no per-user Chrome or Edge', async () => {
+    fakeEnv.LOCALAPPDATA = 'rel\\local'
+    PRESENT.add('rel\\local\\Google\\Chrome\\Application\\chrome.exe')
+    PRESENT.add('rel\\local\\Microsoft\\Edge\\Application\\msedge.exe')
+    const { getBrowserPaths } = await import('../../src/main/browser-paths')
+    for (const b of ['chrome', 'edge'] as const) {
+      expect(getBrowserPaths(b).filter((p) => p.startsWith('rel\\')), b).toEqual([])
+    }
+    // So asking for Chrome is answered by the system Edge, as with no LOCALAPPDATA.
+    expect(resolveBrowserBinary('chrome')).toEqual({ browser: 'edge', path: SYSTEM_EDGE })
+    expect(detectAuthBrowsers()).toEqual(['edge'])
+  })
 })
 
 // The two branches the adversarial pass found correct but unasserted: the
