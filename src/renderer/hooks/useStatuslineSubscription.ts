@@ -44,9 +44,9 @@ export function useStatuslineSubscription(sessionId: string) {
       if (data.usageBuckets) updates.usageBuckets = data.usageBuckets
       // Usage track MP5: that nothing will report the allowance (D3), for the
       // multi-account footer and the strip. The mark is sent once, and a
-      // reading can still arrive after it (aicc_planning#292: the session's
-      // own hook claims its record late), so an update that carries a reading
-      // clears it. A reading is what the strip's placeholder rule reads: a
+      // reading can still arrive after it (aicc_planning#292: the CLI's own
+      // session hook can name the session's rollout after the 30 s deadline),
+      // so an update that carries a reading clears it. A reading is what the strip's placeholder rule reads: a
       // non-empty bucket list or a current rate limit figure.
       const hasReading = (data.usageBuckets != null && data.usageBuckets.length > 0) || data.rateLimitCurrent != null
       if (hasReading) updates.usageUnavailable = undefined

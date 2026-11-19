@@ -6,8 +6,8 @@ Plan 2.1.3-beta.10, section C3 (aicc_planning #292).
   rollout is claimed within 30 s (providers/codex/telemetry.ts). The session's own hook can still
   claim the rollout after that, and readings then arrive, but the renderer copied the mark only
   when it was set and nothing cleared it before a restart (useRestartSession.ts). The session kept
-  the mark beside good readings. No screen showed it: the footer counts a marked session only for
-  a group with no buckets, and the strip's placeholder is off whenever readings are present.
+  the mark beside good readings. No screen showed it: the footer reads the mark only for a group
+  with no buckets, and the strip's placeholder is off whenever readings are present.
 - **The fix (renderer only).** In useStatuslineSubscription.ts an update that carries a reading
   clears the mark. A reading is what the strip's placeholder rule already reads: a non-empty
   bucket list or a current rate limit figure. A weekly figure alone, an empty bucket list or other
