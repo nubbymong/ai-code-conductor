@@ -124,10 +124,10 @@ each CLI it runs the CLI's connection check (for Codex, a `codex exec` run whose
 turn is refused) three times with the stand-in in a folder with no space in its
 path, once from a folder with one, and once more with the stand-in holding its
 first request while the CLI is ended from outside, and lists what is left 2 s
-and 10 s after each end. The pass line is
-in the script's header and was fixed before measuring. It cleans up in a
-`finally` block, each process stopped only after its name and start time are
-checked. The last line is `P18 RESULT: Claude Code <...>; Codex <...>` (PASS,
+and 10 s after each end. The pass line is in the script's header and was fixed
+before measuring. It cleans up in a `finally` block, each process stopped only
+after its name and start time are checked. The last line is
+`P18 RESULT: Claude Code <...>; Codex <...>` (PASS,
 FAIL, CANNOT MEASURE, CHECK RUN or NOT RUN for each) or `P18 RESULT: COULD NOT
 RUN - <reason>`, with `; clean-up incomplete: <what>` added (and exit 2) when
 something was left; the exit codes are in the script's header. The record is
