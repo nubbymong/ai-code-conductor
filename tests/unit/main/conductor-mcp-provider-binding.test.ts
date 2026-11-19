@@ -57,7 +57,7 @@ let heldVision: unknown = null
 
 let port = 0
 beforeAll(async () => {
-  // Its own range, so it cannot draw the port of another MCP test running beside it.
+  // Its own range, below 32768 where Linux's outgoing ports start: no other MCP test or outgoing socket takes it.
   port = 30000 + Math.floor(Math.random() * 1000)
   await server.startMcpServer(port, () => heldVision as never)
 })

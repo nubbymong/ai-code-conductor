@@ -47,8 +47,7 @@ afterAll(() => {
 
 describe('conductor MCP server SSE viability', () => {
   it('listens with requestTimeout disabled so an SSE stream can outlive 300 s', async () => {
-    // Ephemeral-ish port in the dynamic range to avoid colliding with a real
-    // conductor instance on this machine.
+    // Its own range, below 32768 where Linux's outgoing ports start: no other MCP test or outgoing socket takes it.
     const port = 29000 + Math.floor(Math.random() * 1000)
     await server.startMcpServer(port, () => null)
     expect(server.isMcpServerRunning()).toBe(true)
