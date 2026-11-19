@@ -69,7 +69,7 @@ import {
   type RegistryPaths, type UserPathAppendResult,
 } from './windows-registry-path'
 import { mergeWindowsPath, windowsPathKey } from './windows-path-refresh'
-import { findOnWindowsPathAsync, folderFileTest, pathWalkDeadline, windowsEnvValue } from './windows-programs'
+import { findOnWindowsPathAsync, folderFileTest, pathWalkDeadline, windowsEnvValue, type PathWalkDeadline } from './windows-programs'
 import { windowsPathFolderIsFullyQualified } from './providers/windows-path-names'
 import { CLAUDE_WINDOWS_NAMES } from './claude-cli-probe'
 import { defaultLoginShell } from './login-shell'
@@ -154,6 +154,10 @@ export interface InstallFolderDeps {
   env: Record<string, string | undefined>
   /** What `p` itself is (lstat: a link is a link, never followed). */
   entryKind: (p: string) => Promise<EntryKind>
+  /** The deadline of one check's looks in an install folder, which may be on
+   *  a share that does not answer (a redirected %APPDATA%). Default: the
+   *  wait a walk of PATH has (pathWalkDeadline). */
+  lookDeadline?: () => PathWalkDeadline
   /** Whether `p` is a file, following links (stat). */
   isFile: (p: string) => Promise<boolean>
   /** The system and user PATH values as stored. */
@@ -167,19 +171,33 @@ export interface InstallFolderDeps {
   log: (line: string) => void
 }
 
+async function lstatKind(p: string): Promise<EntryKind> {
+  try {
+    const s = await fs.promises.lstat(p)
+    return s.isSymbolicLink() ? 'link' : s.isDirectory() ? 'dir' : s.isFile() ? 'file' : 'other'
+  } catch {
+    return 'none'
+  }
+}
+
+/** The lstat each path has outstanding. A look at a path whose last look has
+ *  not ended (a share that does not answer holds one of the few threads file
+ *  tests share, for tens of seconds) gets that look's answer, so pressing
+ *  Check again over and over starts no more of them. */
+const pendingLooks = new Map<string, Promise<EntryKind>>()
+
 /** The real ones. */
 export function installFolderDeps(): InstallFolderDeps {
   return {
     platform: process.platform,
     home: os.homedir(),
     env: process.env,
-    entryKind: async (p) => {
-      try {
-        const s = await fs.promises.lstat(p)
-        return s.isSymbolicLink() ? 'link' : s.isDirectory() ? 'dir' : s.isFile() ? 'file' : 'other'
-      } catch {
-        return 'none'
-      }
+    entryKind: (p) => {
+      const pending = pendingLooks.get(p)
+      if (pending) return pending
+      const look = lstatKind(p).finally(() => { if (pendingLooks.get(p) === look) pendingLooks.delete(p) })
+      pendingLooks.set(p, look)
+      return look
     },
     // On Windows through the shared file test (windows-programs.ts
     // folderFileTest): this is the test the walk of the registry's PATH
@@ -227,13 +245,31 @@ function windowsFolder(providerId: ProviderId, deps: Pick<InstallFolderDeps, 'ho
   return appendableFolder(dir) ? { dir, known } : null
 }
 
-/** The publisher's file is there, a regular file in a real folder. */
+/** What `p` is (deps.entryKind), or 'none' once `deadline` has passed with
+ *  no answer: the check is not held past it. A look that fails is 'none'. */
+function lookWithin(deps: InstallFolderDeps, p: string, deadline: PathWalkDeadline): Promise<EntryKind> {
+  if (deadline.passed) return Promise.resolve('none')
+  return new Promise<EntryKind>((answer) => {
+    const off = deadline.onPassed(() => answer('none'))
+    const settle = (kind: EntryKind) => { off(); answer(kind) }
+    Promise.resolve().then(() => deps.entryKind(p)).then(settle, () => settle('none'))
+  })
+}
+
+/** The publisher's file is there, a regular file in a real folder, seen
+ *  before the deadline of the looks (a folder that does not answer in time
+ *  holds nothing, so there is no hint and no add). */
 async function installedThere(deps: InstallFolderDeps, dir: string, known: WindowsKnownFolder): Promise<boolean> {
-  if ((await deps.entryKind(dir)) !== 'dir') return false
-  for (const name of known.names ?? [known.file]) {
-    if ((await deps.entryKind(path.win32.join(dir, name))) === 'file') return true
+  const deadline = (deps.lookDeadline ?? pathWalkDeadline)()
+  try {
+    if ((await lookWithin(deps, dir, deadline)) !== 'dir') return false
+    for (const name of known.names ?? [known.file]) {
+      if ((await lookWithin(deps, path.win32.join(dir, name), deadline)) === 'file') return true
+    }
+    return false
+  } finally {
+    deadline.clear()
   }
-  return false
 }
 
 async function registryOrNull(deps: InstallFolderDeps): Promise<RegistryPaths | null> {

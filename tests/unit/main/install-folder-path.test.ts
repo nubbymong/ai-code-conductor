@@ -8,13 +8,14 @@
 // PURE: the file system, the registry and the PATH write are stand-ins;
 // nothing is started and the real registry and PATH are never touched.
 import { describe, it, expect, vi } from 'vitest'
+import * as fs from 'fs'
 import * as path from 'path'
 import {
-  pathHintFor, addToolFolderToPath, shellProfileFor, POSIX_PATH_LINE, FISH_PATH_LINE, POSIX_PATH_COMMANDS,
+  pathHintFor, addToolFolderToPath, shellProfileFor, installFolderDeps, POSIX_PATH_LINE, FISH_PATH_LINE, POSIX_PATH_COMMANDS,
   type InstallFolderDeps, type EntryKind,
 } from '../../../src/main/install-folder-path'
 import type { RegistryPaths, UserPathAppendResult } from '../../../src/main/windows-registry-path'
-import { findOnWindowsPathAsync } from '../../../src/main/windows-programs'
+import { findOnWindowsPathAsync, pathWalkDeadline, WINDOWS_PATH_WALK_WAIT_MS } from '../../../src/main/windows-programs'
 
 const BS = String.fromCharCode(92)
 const DS = '$'
@@ -267,6 +268,35 @@ describe("Codex installed with npm on Windows: npm's own folder, %APPDATA%\\npm 
     }
   })
 
+  // A redirected %APPDATA% on a share that is down (review of #732): a look
+  // that never answers holds the check only until the deadline of the
+  // looks, then the folder counts as holding nothing.
+  it('a look in the folder that never answers (a share that is down): no hint and no add once the deadline passes', async () => {
+    const seen: Record<string, EntryKind> = { [NPM]: 'dir', [CODEX_CMD]: 'file' }
+    for (const hangs of [NPM, CODEX_CMD]) {
+      const entryKind = (p: string): Promise<EntryKind> => p === hangs ? new Promise<EntryKind>(() => {}) : Promise.resolve(seen[p] ?? 'none')
+      const r = npm({ entryKind, files: [], lookDeadline: () => pathWalkDeadline(10) })
+      expect(await pathHintFor('codex', r.d), hangs).toBeUndefined()
+      expect(await addToolFolderToPath('codex', r.d), hangs).toMatchObject({ outcome: 'refused' })
+      expect(r.appendUserPath).not.toHaveBeenCalled()
+    }
+  })
+
+  it('the looks wait as long as a walk of PATH does, by default, and no longer', async () => {
+    vi.useFakeTimers()
+    try {
+      const r = npm({ entryKind: () => new Promise<EntryKind>(() => {}), files: [] })
+      let settled = false
+      const hint = pathHintFor('codex', r.d).then((h) => { settled = true; return h })
+      await vi.advanceTimersByTimeAsync(WINDOWS_PATH_WALK_WAIT_MS - 1)
+      expect(settled).toBe(false)
+      await vi.advanceTimersByTimeAsync(1)
+      expect(await hint).toBeUndefined()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it("Claude Code is never looked for in npm's folder: its rows are unchanged", async () => {
     const claudeCmd = w('C:/Users/u/AppData/Roaming/npm/claude.cmd')
     const { d, appendUserPath } = npm({ entries: { [NPM]: 'dir', [claudeCmd]: 'file' }, files: [] })
@@ -409,5 +439,33 @@ describe('Add it to PATH for me: only ever the one folder main computes, appende
     expect(d.env.Path).toBe(before)
     expect(log).toHaveBeenCalledTimes(2)
     for (const [line] of log.mock.calls) expect(line).toContain(LOCAL_BIN)
+  })
+})
+
+// The real looks (installFolderDeps().entryKind): lstat is a stand-in here,
+// so nothing on disk is read. A look on a share that is down holds one of
+// the few threads file tests share for tens of seconds, so a path whose
+// look has not ended is not looked at again until it has (review of #732).
+describe('the real looks: one lstat outstanding per path', () => {
+  it('a look at a path whose last look has not ended gets that look; another path, or a look after it ended, starts its own', async () => {
+    const gone = () => Object.assign(new Error('gone'), { code: 'ENOENT' })
+    let end: (e: Error) => void = () => {}
+    const lstat = vi.spyOn(fs.promises, 'lstat')
+      .mockImplementationOnce((() => new Promise((_, reject) => { end = reject })) as never)
+      .mockImplementation((() => Promise.reject(gone())) as never)
+    try {
+      const p = w('C:/nowhere/npm')
+      const first = installFolderDeps().entryKind(p)
+      expect(installFolderDeps().entryKind(p)).toBe(first)
+      expect(lstat).toHaveBeenCalledTimes(1)
+      expect(await installFolderDeps().entryKind(w('C:/nowhere/other'))).toBe('none')
+      expect(lstat).toHaveBeenCalledTimes(2)
+      end(gone())
+      expect(await first).toBe('none')
+      expect(await installFolderDeps().entryKind(p)).toBe('none')
+      expect(lstat).toHaveBeenCalledTimes(3)
+    } finally {
+      lstat.mockRestore()
+    }
   })
 })
