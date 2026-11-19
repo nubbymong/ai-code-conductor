@@ -26,8 +26,9 @@ unchanged.
 
 **A failed key write.** Review found that the quit keys, on beta and after the
 move, had no try/catch. A process that has died before its exit is told is
-still the session's, and a key written to it can throw: out of a timer (which
-main's global handler rethrows), or, for the Escape, out of gracefulExitPty,
+still the session's, and a key written to it can throw: out of a timer (main's
+global handler logs an EPIPE or EIO and rethrows any other error), or, for the
+Escape, out of gracefulExitPty,
 whose promise then failed and took gracefulExitAllPty's with it. Each key's
 write is now caught and dropped, as the envelope writer's slices already were
 (R-010). No byte, order or timing changed: the next key is still tried at its

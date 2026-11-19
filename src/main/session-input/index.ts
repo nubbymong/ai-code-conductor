@@ -17,7 +17,8 @@
 // but for what A2 changed in sendExitKeys, described at that function: it
 // writes each quit key only while the terminal it was handed is still the
 // session's, and a key whose write fails is dropped rather than thrown. (Like
-// every door here, pasteEnvelope also throws before the ports are registered.)
+// every door that types through a port, pasteEnvelope also throws before the
+// ports are registered.)
 // The rules of WHEN to type stay where they were (the Watchdog's Codex rule in
 // watchdog-manager.ts, the Claude Code marker's in canvas/claude-marker-typing.ts,
 // the Codex composer's in the Codex package); they type only through what this
