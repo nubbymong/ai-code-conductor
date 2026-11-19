@@ -27,13 +27,24 @@ const h = vi.hoisted(() => ({
   helperEvent: vi.fn(),
   helperEnded: vi.fn(),
   helperTaking: vi.fn(() => true),
+  /** 2.1.3-beta.11 (B2): what the tools wiring calls. */
+  mcpPort: 19333,
+  serveStream: vi.fn((_id: string, _link: unknown) => true),
+  switchMcp: vi.fn((_a: unknown) => 'switched'),
+  providers: {} as Record<string, unknown>,
 }))
 
 vi.mock('electron', () => ({ app: { isPackaged: false, getAppPath: () => 'C:\\app' } }))
 vi.mock('../../../src/main/config-manager', () => ({ readConfig: () => { if (h.settings === null) throw new Error('unreadable'); return h.settings } }))
 vi.mock('../../../src/main/debug-logger', () => ({ logInfo: () => {} }))
 vi.mock('../../../src/main/ipc/machines-handlers', () => ({ setMachinesSource: h.machinesSource }))
-vi.mock('../../../src/main/hooks/per-session-settings', () => ({ getLocalSessionSettingsPath: (id: string) => `C:/Users/u/.claude/settings-${id}.json` }))
+vi.mock('../../../src/main/hooks/per-session-settings', () => ({
+  getLocalSessionSettingsPath: (id: string) => `C:/Users/u/.claude/settings-${id}.json`,
+  getLocalSessionMcpConfigPath: (id: string) => `C:/Users/u/.claude/mcp-${id}.json`,
+  switchMcpConfigToHelper: h.switchMcp,
+}))
+vi.mock('../../../src/main/conductor-mcp-server', () => ({ getConductorMcpPort: () => h.mcpPort, serveToolStream: h.serveStream }))
+vi.mock('../../../src/main/providers', () => ({ tryGetProvider: (id: string) => h.providers[id] }))
 vi.mock('../../../src/main/hooks/session-hooks-writer', () => ({ switchHooksToHelper: h.switchHooks }))
 vi.mock('../../../src/main/session-signals/hooks', () => ({ helperHookEvent: h.helperEvent, endHelperHooks: h.helperEnded, helperHooksTaken: h.helperTaking }))
 vi.mock('../../../src/main/session-helper/install', () => ({ helperRootDir: () => 'C:\\user\\helper', bundledHelperPath: () => 'C:\\app\\helper\\aicc-helper.exe' }))
@@ -385,5 +396,44 @@ describe("Claude Code sessions' hooks through the holder (2.1.3-beta.8, plan sec
     expect(h.helperEvent).toHaveBeenCalledWith('abcdef0123456789abcdef01', e)
     hooks.claude.ended('abcdef0123456789abcdef01')
     expect(h.helperEnded).toHaveBeenCalledWith('abcdef0123456789abcdef01')
+  })
+})
+
+describe('the Conductor tools through the holder (2.1.3-beta.11, plan section B2)', () => {
+  type Tools = { serve: (id: string, link: unknown) => boolean; serving: () => boolean; useRelayConfig?: (id: string, r: unknown) => unknown; relayLaunch?: (id: string, l: unknown, r: unknown) => unknown }
+  const relay = { helperPath: 'C:/h/aicc-helper.exe', store: 'C:/h/store', sid: 'ag0123456789abcdef0123456789abcd' }
+
+  it('the manager gets the tool functions for Claude Code and Codex: the tool host serves the streams while it is started; Claude Code switches its MCP config file, Codex its launch, through its package', () => {
+    h.settings = { agentSessionsThroughHelper: true }
+    initSessionHelper(() => {})
+    const tools = h.made[0].deps.tools as Record<string, Tools>
+    expect(Object.keys(tools).sort()).toEqual(['claude', 'codex'])
+    for (const t of Object.values(tools)) {
+      // Serving is the tool host's live state: its port.
+      h.mcpPort = 0
+      expect(t.serving()).toBe(false)
+      h.mcpPort = 19333
+      expect(t.serving()).toBe(true)
+      const link = { send() {}, take() {}, close() {} }
+      h.serveStream.mockReturnValueOnce(false)
+      expect(t.serve('abcdef0123456789abcdef01', link)).toBe(false)
+      expect(h.serveStream).toHaveBeenLastCalledWith('abcdef0123456789abcdef01', link)
+    }
+    // Claude Code: its own file, through the writer; no launch form.
+    expect(tools.claude.relayLaunch).toBeUndefined()
+    expect(tools.claude.useRelayConfig!('abcdef0123456789abcdef01', relay)).toBe('switched')
+    expect(h.switchMcp).toHaveBeenCalledWith({ configPath: 'C:/Users/u/.claude/mcp-abcdef0123456789abcdef01.json', sessionId: 'abcdef0123456789abcdef01', relay })
+    // Codex: its package's relay form; no package, or none offered, keeps the loopback route.
+    expect(tools.codex.useRelayConfig).toBeUndefined()
+    const launch = { file: 'C:/c/codex.exe', args: ['-m', 'x'], env: {} }
+    h.providers = {}
+    expect(tools.codex.relayLaunch!('abcdef0123456789abcdef02', launch, relay)).toEqual({ refused: 'no-tools' })
+    h.providers = { codex: {} }
+    expect(tools.codex.relayLaunch!('abcdef0123456789abcdef02', launch, relay)).toEqual({ refused: 'no-tools' })
+    const heldToolLaunch = vi.fn(() => ({ args: ['-m', 'x', '--relay'] }))
+    h.providers = { codex: { heldToolLaunch } }
+    expect(tools.codex.relayLaunch!('abcdef0123456789abcdef02', launch, relay)).toEqual({ args: ['-m', 'x', '--relay'] })
+    expect(heldToolLaunch).toHaveBeenCalledWith('abcdef0123456789abcdef02', launch, relay)
+    h.providers = {}
   })
 })

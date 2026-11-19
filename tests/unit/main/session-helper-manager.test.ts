@@ -23,8 +23,15 @@ vi.mock('../../../src/main/account-profiles', async (importOriginal) => {
   }
 })
 
+// The tool host is a stand-in here (deps.tools). The per-session settings
+// module the Claude Code relay switch lives in imports the real one, whose
+// functions that switch never calls: a stub with none of them.
+vi.mock('../../../src/main/conductor-mcp-server', () => ({}))
+
 import { createRequire } from 'module'
 import { HELPER_SENTENCES, SessionHelperManager, agentRecordsIn, crashMarkIn, nodePtyCommandLine, offStillHoldingSentence, setSessionHelper, spawnAgentPty, spawnPlainPty, spawnRunPty, whenHeldKnown, type HelperToolDeps, type HelperToolLink } from '../../../src/main/session-helper/manager'
+import { switchMcpConfigToHelper } from '../../../src/main/hooks/per-session-settings'
+import type { HeldToolLaunch, HeldToolLaunchAnswer, HeldToolRelay } from '../../../src/main/providers/types'
 import { HolderConnection, TOOL_STREAM_SENTENCES } from '../../../src/main/session-helper/connection'
 import { HelperPty } from '../../../src/main/session-helper/helper-pty'
 import { heldAgentSessionId, heldIdKind, heldSessionId } from '../../../src/main/session-helper/protocol'
@@ -2370,7 +2377,10 @@ describe('agent sessions: tool calls through the holder (2.1.3-beta.11, plan sec
   /** Whether the tool host serves a stream (false: it refuses, as with no record). */
   let serving = true
 
-  /** A stand-in tool host, as conductor-mcp-server.ts serveToolStream answers. */
+  /** A stand-in tool host, as conductor-mcp-server.ts serveToolStream answers.
+   *  From section B2 a stream is served only once the session's CLI was
+   *  pointed at its holder: the stand-in switches each tab at once (the
+   *  switch itself is the next describe block's). */
   const toolHost: HelperToolDeps = {
     serve: (id, link) => {
       served.push({ id, link })
@@ -2381,9 +2391,16 @@ describe('agent sessions: tool calls through the holder (2.1.3-beta.11, plan sec
       link.take((m) => { received.push([id, m]) }, () => { ended.push(id) })
       return true
     },
+    serving: () => true,
+    useRelayConfig: () => 'switched',
+  }
+  const codexToolHost: HelperToolDeps = {
+    serve: toolHost.serve,
+    serving: toolHost.serving,
+    relayLaunch: (_id, launch) => ({ args: typeof launch.args === 'string' ? launch.args : [...launch.args] }),
   }
   function toolsManager(over: Partial<ConstructorParameters<typeof SessionHelperManager>[0]> = {}): SessionHelperManager {
-    return makeManager({ log: (m) => logs.push(m), tools: { claude: toolHost, codex: toolHost }, ...over })
+    return makeManager({ log: (m) => logs.push(m), tools: { claude: toolHost, codex: codexToolHost }, ...over })
   }
   async function attachedTab(m: SessionHelperManager, tab: { sessionId: string; kind: 'claude' | 'codex' }): Promise<FakeHolder> {
     setSessionHelper(m)
@@ -2501,6 +2518,319 @@ describe('agent sessions: tool calls through the holder (2.1.3-beta.11, plan sec
     expect(ended).toEqual([id])
     expect(h.attached).toBe(attached)
     expect(attached.closed).toBe(false)
+  })
+})
+
+// ── 2.1.3-beta.11, plan section B2: a held session's CLI pointed at the relay ─
+
+describe('agent sessions: the CLI\'s tool server through the holder (2.1.3-beta.11, plan section B2)', () => {
+  const PORT = 19334
+  const SECRET = '6f1c3d2a-1b2c-4d3e-8f90-a1b2c3d4e5f6'
+  const CODEX_EXE = 'C:\\Users\\someone\\.codex-bin\\codex.exe'
+  /** A Codex launch as the builder makes it (spawn.ts), for the tab `id`. */
+  const codexArgs = (id: string) => ['-m', 'gpt-5.5', '--sandbox', 'workspace-write', '-c', `mcp_servers.conductor.url=http://localhost:${PORT}/mcp?cccSessionId=${id}`, '-c', 'mcp_servers.conductor.enabled=true', '-c', 'mcp_servers.conductor.bearer_token_env_var=CONDUCTOR_MCP_TOKEN', '-c', 'mcp_servers.conductor.tool_timeout_sec=1000.0']
+  const RELAY_ARGS = ['-m', 'gpt-5.5', '--sandbox', 'workspace-write', '-c', 'mcp_servers.conductor.command=the-relay', '-c', 'mcp_servers.conductor.args=[the-relay-args]', '-c', 'mcp_servers.conductor.tool_timeout_sec=1000.0']
+  let filesDir: string
+  const mcpOf = (id: string) => join(filesDir, `mcp-${id}.json`)
+  const settingsOf = (id: string) => join(filesDir, `settings-${id}.json`)
+  const logs: string[] = []
+  const served: string[] = []
+  /** Each Claude Code switch the manager asked for, with what the file held then and whether the holder had launched. */
+  const configAsks: Array<{ id: string; relay: HeldToolRelay; launched: boolean }> = []
+  /** Each Codex relay form the manager asked for. */
+  const launchAsks: Array<{ id: string; launch: HeldToolLaunch; relay: HeldToolRelay }> = []
+  let hostServing = true
+  /** What the stand-in Codex package answers; a function throws. */
+  let codexAnswer: HeldToolLaunchAnswer | (() => never) = { args: RELAY_ARGS }
+  /** Tabs whose config write the stand-in fails. */
+  const failWrite = new Set<string>()
+  /** Make the tools' switch throw. */
+  let configThrows = false
+
+  const onThisHost = (t: HelperHookTarget): HelperHookTarget => (process.platform === 'win32' ? t : { ...t, launcher: 'sh' })
+  /** The per-user copy the holders run from. */
+  const helperCopy = () => join(root, readdirSync(root).find((n) => /^0\.1\.0-/.test(n))!, 'aicc-helper.exe')
+  const relayFor = (id: string, kind: 'claude' | 'codex'): HeldToolRelay => ({ helperPath: helperCopy(), store: join(root, 'store'), sid: heldAgentSessionId(id, kind) })
+  /** As the PTY manager writes it (writeLocalSessionMcpConfig), just after the spawn call. */
+  function spawnedMcp(id: string): string {
+    const text = JSON.stringify({ mcpServers: { conductor: { type: 'sse', url: `http://localhost:${PORT}/sse?cccSessionId=${id}&token=tok-${id}` } } }, null, 2)
+    writeFileSync(mcpOf(id), text)
+    return text
+  }
+  const relayEntry = (id: string) => ({ type: 'stdio', command: helperCopy(), args: ['mcp', '--store', join(root, 'store'), '--session', heldAgentSessionId(id, 'claude')] })
+  const toolLines = (id: string) => logs.filter((l) => l.startsWith(`[session-helper] ${id}: its Conductor tools`))
+
+  const host: Pick<HelperToolDeps, 'serve' | 'serving'> = {
+    serve: (id, link) => {
+      served.push(id)
+      link.take(() => {}, () => {})
+      return true
+    },
+    serving: () => hostServing,
+  }
+  /** As app-wiring.ts gives them: Claude Code's switch is its config file, Codex's its launch. */
+  const claudeTools: HelperToolDeps = {
+    ...host,
+    useRelayConfig: (id, relay) => {
+      configAsks.push({ id, relay, launched: !!helper.holders.get(relay.sid)?.launch })
+      if (configThrows) throw new Error('the stand-in tools switch threw')
+      if (failWrite.has(id)) return 'not-written'
+      return switchMcpConfigToHelper({ configPath: mcpOf(id), sessionId: id, relay })
+    },
+  }
+  const codexTools: HelperToolDeps = {
+    ...host,
+    relayLaunch: (id, launch, relay) => {
+      launchAsks.push({ id, launch, relay })
+      return typeof codexAnswer === 'function' ? codexAnswer() : codexAnswer
+    },
+  }
+  function relayManager(over: Partial<ConstructorParameters<typeof SessionHelperManager>[0]> = {}): SessionHelperManager {
+    return makeManager({ log: (m) => logs.push(m), tools: { claude: claudeTools, codex: codexTools }, ...over })
+  }
+
+  beforeEach(() => {
+    filesDir = join(dir, 'claude')
+    mkdirSync(filesDir, { recursive: true })
+    logs.length = 0
+    served.length = 0
+    configAsks.length = 0
+    launchAsks.length = 0
+    hostServing = true
+    codexAnswer = { args: RELAY_ARGS }
+    failWrite.clear()
+    configThrows = false
+  })
+
+  it('Claude Code: the MCP config file is switched to the relay after the holder launched the session and before the launch line reaches it; streams are served then', async () => {
+    const m = await startedWith(relayManager(), ON_AGENTS)
+    setSessionHelper(m)
+    const id = 'abcdef0123456789abcdefa0'
+    let atFirstByte: string | null = null
+    helper.onTyped = () => { if (atFirstByte === null) atFirstByte = readFileSync(mcpOf(id), 'utf8') }
+    // pty-manager.ts: spawnAgentPty, then writeLocalSessionMcpConfig, no await between.
+    const p = spawnAgentPty(claudeTab(id), SHELL, [], agentOpts())
+    spawnedMcp(id)
+    p.write('claude --mcp-config x\r')
+    const sid = heldAgentSessionId(id, 'claude')
+    await until(() => Buffer.concat(helper.holders.get(sid)?.input ?? []).toString() === 'claude --mcp-config x\r', 'the launch line')
+    expect(atFirstByte).not.toBeNull()
+    expect(JSON.parse(atFirstByte!)).toEqual({ mcpServers: { conductor: relayEntry(id) } })
+    expect(configAsks).toEqual([{ id, relay: relayFor(id, 'claude'), launched: true }])
+    expect(toolLines(id)).toEqual([`[session-helper] ${id}: its Conductor tools go through its holder`])
+    const h = helper.holders.get(sid)!
+    expect(h.attached!.ackedCaps).toEqual(['core', 'local', 'mcp'])
+    h.openToolStream()
+    await until(() => served.length === 1, 'the stream to be served')
+    expect(served).toEqual([id])
+  })
+
+  it('Claude Code: a holder without mcp, a tool host that is not serving, or a failed write leaves the file on the loopback route, with one log line each, and serves no stream', async () => {
+    const m = await startedWith(relayManager(), ON_AGENTS)
+    setSessionHelper(m)
+    const cases: Array<{ id: string; why: string; setup: () => void; asked: boolean }> = [
+      { id: 'abcdef0123456789abcdefa1', why: 'its holder does not offer tool streams', setup: () => { helper.holderCaps = ['core', 'local', 'hooks'] }, asked: false },
+      { id: 'abcdef0123456789abcdefa2', why: 'the tool host is not serving', setup: () => { hostServing = false }, asked: false },
+      { id: 'abcdef0123456789abcdefa3', why: 'its MCP config file could not be written', setup: () => { failWrite.add('abcdef0123456789abcdefa3') }, asked: true },
+    ]
+    for (const c of cases) {
+      helper.holderCaps = ['core', 'local', 'hooks', 'mcp']
+      hostServing = true
+      c.setup()
+      const text = spawnedMcp(c.id)
+      spawnAgentPty(claudeTab(c.id), SHELL, [], agentOpts()).write('claude\r')
+      const sid = heldAgentSessionId(c.id, 'claude')
+      await until(() => helper.holders.get(sid)?.input.length === 1, `the launch line of ${c.id}`)
+      expect(readFileSync(mcpOf(c.id), 'utf8'), c.why).toBe(text)
+      expect(toolLines(c.id), c.why).toEqual([`[session-helper] ${c.id}: its Conductor tools stay on the loopback route, because ${c.why}`])
+      expect(configAsks.some((a) => a.id === c.id), c.why).toBe(c.asked)
+      // A stream its holder opens anyway is not served.
+      if (helper.holders.get(sid)!.openToolStream() !== null) {
+        await until(() => logs.includes(`[session-helper] ${c.id}: a tool stream its holder opened was not served, because its CLI was not pointed at its holder`), 'the refusal')
+      }
+    }
+    // A file with no conductor entry (the tools off): the writer's own answer.
+    helper.holderCaps = ['core', 'local', 'hooks', 'mcp']
+    hostServing = true
+    const off = 'abcdef0123456789abcdefa4'
+    writeFileSync(mcpOf(off), JSON.stringify({ mcpServers: {} }, null, 2))
+    spawnAgentPty(claudeTab(off), SHELL, [], agentOpts()).write('claude\r')
+    await until(() => helper.holders.get(heldAgentSessionId(off, 'claude'))?.input.length === 1, 'the launch line')
+    expect(readFileSync(mcpOf(off), 'utf8')).toBe(JSON.stringify({ mcpServers: {} }, null, 2))
+    expect(toolLines(off)).toEqual([`[session-helper] ${off}: its Conductor tools stay on the loopback route, because its MCP config file holds no conductor entry of the app's (the built-in tools are off, the tool host was not started when it started, or the file was not written)`])
+    expect(served).toEqual([])
+  })
+
+  it('Claude Code: the hooks\' switch is made when the tools\' switch fails or throws, and the tools\' when the hooks\' fails', async () => {
+    const hookResults: string[] = []
+    const m = await startedWith(relayManager({
+      hooks: {
+        claude: {
+          taking: () => true,
+          useHelperHooks: (id, target) => {
+            const r = switchHooksToHelper({ settingsPath: settingsOf(id), sessionId: id, target: onThisHost(target) })
+            hookResults.push(`${id} ${r}`)
+            return r
+          },
+          event: () => {},
+          ended: () => {},
+        },
+      },
+    }), ON_AGENTS)
+    setSessionHelper(m)
+    const run = async (id: string, gatewayHooks: boolean): Promise<void> => {
+      writeFileSync(settingsOf(id), JSON.stringify(gatewayHooks ? { hooks: buildHooksBlock(id, PORT, SECRET) } : {}, null, 2))
+      spawnedMcp(id)
+      spawnAgentPty(claudeTab(id), SHELL, [], agentOpts()).write('claude\r')
+      await until(() => helper.holders.get(heldAgentSessionId(id, 'claude'))?.input.length === 1, `the launch line of ${id}`)
+    }
+    // The tools' switch fails, then throws: the hooks' is made all the same.
+    const failed = 'abcdef0123456789abcdefb0'
+    failWrite.add(failed)
+    await run(failed, true)
+    configThrows = true
+    const threw = 'abcdef0123456789abcdefb1'
+    await run(threw, true)
+    configThrows = false
+    expect(hookResults).toEqual([`${failed} switched`, `${threw} switched`])
+    for (const id of [failed, threw]) expect(JSON.parse(readFileSync(settingsOf(id), 'utf8')).hooks.Stop[0].hooks[0].type).toBe('command')
+    // The hooks' switch finds no gateway hooks: the tools' is made all the same.
+    const noHooks = 'abcdef0123456789abcdefb2'
+    await run(noHooks, false)
+    expect(hookResults[2]).toBe(`${noHooks} no-gateway-hooks`)
+    expect(JSON.parse(readFileSync(mcpOf(noHooks), 'utf8'))).toEqual({ mcpServers: { conductor: relayEntry(noHooks) } })
+  })
+
+  it('Codex: the launch its holder runs starts the relay as its tool server; the spawn\'s own arguments are untouched; streams are served then', async () => {
+    const m = await startedWith(relayManager(), ON_AGENTS)
+    setSessionHelper(m)
+    const id = 'abcdef0123456789abcdefc0'
+    const args = codexArgs(id)
+    const before = [...args]
+    const o = agentOpts()
+    spawnAgentPty(codexTab(id), CODEX_EXE, args, o)
+    const sid = heldAgentSessionId(id, 'codex')
+    await until(() => !!helper.holders.get(sid)?.attached, 'the session to attach')
+    const h = helper.holders.get(sid)!
+    expect(h.launch!.argv).toEqual([CODEX_EXE, ...RELAY_ARGS])
+    expect(h.launch!.line).toBeUndefined()
+    expect(h.launch!.env).toEqual(AGENT_ENV)
+    expect(h.launch!.cwd).toBe(CWD)
+    expect(launchAsks).toEqual([{ id, launch: { file: CODEX_EXE, args: before, env: AGENT_ENV }, relay: relayFor(id, 'codex') }])
+    expect(args).toEqual(before)
+    expect(ptySpawn).not.toHaveBeenCalled()
+    expect(toolLines(id)).toEqual([`[session-helper] ${id}: its Conductor tools go through its holder`])
+    h.openToolStream()
+    await until(() => served.length === 1, 'the stream to be served')
+    expect(served).toEqual([id])
+    expect(configAsks).toEqual([])
+  })
+
+  it('Codex: one cmd.exe line (an npm launcher) is sent as the line the relay form gives, through the same program', async () => {
+    const m = await startedWith(relayManager(), ON_AGENTS)
+    setSessionHelper(m)
+    const id = 'abcdef0123456789abcdefc1'
+    const relayLine = '/d /v:off /s /c ""C:\\Users\\someone\\AppData\\Roaming\\npm\\codex.cmd" --relay-form"'
+    codexAnswer = { args: relayLine }
+    spawnAgentPty(codexTab(id), CMD, NPM_LINE, agentOpts())
+    const sid = heldAgentSessionId(id, 'codex')
+    await until(() => !!helper.holders.get(sid)?.launch, 'the launch')
+    const launch = helper.holders.get(sid)!.launch!
+    expect(launch.argv).toEqual([CMD])
+    expect(launch.line).toBe(nodePtyCommandLine(CMD, relayLine))
+    expect(launchAsks.map((a) => a.launch.args)).toEqual([NPM_LINE])
+  })
+
+  it('Codex: the fall-back to the usual start uses the spawn\'s own arguments, never the relay form', async () => {
+    const m = await startedWith(relayManager(), ON_AGENTS)
+    setSessionHelper(m)
+    const id = 'abcdef0123456789abcdefc2'
+    const args = codexArgs(id)
+    const before = [...args]
+    // The holder refuses the launch (it has launched already): the usual way.
+    helper.holdBusy = true
+    const o = agentOpts()
+    const p = spawnAgentPty(codexTab(id), CODEX_EXE, args, o)
+    await until(() => ptySpawn.mock.calls.length === 1, 'the usual start')
+    expect((p as HelperPty).throughHelper).toBe(false)
+    // The relay form was made for the holder's launch, and only for it.
+    expect(launchAsks.length).toBe(1)
+    expect(ptySpawn.mock.calls[0][0]).toBe(CODEX_EXE)
+    expect(ptySpawn.mock.calls[0][1]).toEqual(before)
+    expect(ptySpawn.mock.calls[0][2]).toBe(o)
+  })
+
+  it('Codex: a holder without mcp, a tool host that is not serving, a refused or failed relay form, or one the helper would refuse sends the spawn\'s own launch, with one log line each', async () => {
+    const m = await startedWith(relayManager(), ON_AGENTS)
+    setSessionHelper(m)
+    const many = Array.from({ length: 300 }, (_, i) => `-x${i}`)
+    const cases: Array<{ id: string; why: string; setup: () => void; asked: boolean }> = [
+      { id: 'abcdef0123456789abcdefd1', why: 'its holder does not offer tool streams', setup: () => { helper.holderCaps = ['core', 'local', 'hooks'] }, asked: false },
+      { id: 'abcdef0123456789abcdefd2', why: 'the tool host is not serving', setup: () => { hostServing = false }, asked: false },
+      { id: 'abcdef0123456789abcdefd3', why: 'its launch is one command line through cmd.exe, or hands its arguments to one (an npm launcher), and the relay\'s arguments cannot pass that line\'s quoting rule', setup: () => { codexAnswer = { refused: 'cmd-line' } }, asked: true },
+      { id: 'abcdef0123456789abcdefd4', why: 'its launch names no conductor tool server of the app\'s (the built-in tools are off, or the tool host was not started when it was built)', setup: () => { codexAnswer = { refused: 'no-tools' } }, asked: true },
+      { id: 'abcdef0123456789abcdefd5', why: 'the helper\'s path or its store\'s path cannot be given on its launch exactly', setup: () => { codexAnswer = { refused: 'unsafe-path' } }, asked: true },
+      { id: 'abcdef0123456789abcdefd6', why: 'its launch\'s relay form could not be made', setup: () => { codexAnswer = () => { throw new Error('C:\\a\\path\\that\\stays\\out\\of\\the\\log') } }, asked: true },
+      { id: 'abcdef0123456789abcdefd7', why: 'the helper would refuse its relay form (more than 256 arguments)', setup: () => { codexAnswer = { args: many } }, asked: true },
+    ]
+    for (const c of cases) {
+      helper.holderCaps = ['core', 'local', 'hooks', 'mcp']
+      hostServing = true
+      codexAnswer = { args: RELAY_ARGS }
+      c.setup()
+      const args = codexArgs(c.id)
+      spawnAgentPty(codexTab(c.id), CODEX_EXE, args, agentOpts())
+      const sid = heldAgentSessionId(c.id, 'codex')
+      await until(() => !!helper.holders.get(sid)?.attached, `the session ${c.id} to attach`)
+      const h = helper.holders.get(sid)!
+      expect(h.launch!.argv, c.why).toEqual([CODEX_EXE, ...codexArgs(c.id)])
+      expect(toolLines(c.id), c.why).toEqual([`[session-helper] ${c.id}: its Conductor tools stay on the loopback route, because ${c.why}`])
+      expect(launchAsks.some((a) => a.id === c.id), c.why).toBe(c.asked)
+      if (h.openToolStream() !== null) {
+        await until(() => logs.includes(`[session-helper] ${c.id}: a tool stream its holder opened was not served, because its CLI was not pointed at its holder`), 'the refusal')
+      }
+    }
+    expect(served).toEqual([])
+    // No log line names the helper's path, its store, or what a failure said.
+    expect(logs.filter((l) => l.includes(helperCopy()) || l.includes(join(root, 'store')) || l.includes('stays\\out'))).toEqual([])
+    expect(ptySpawn).not.toHaveBeenCalled()
+  })
+
+  it('a provider given both switches is switched once, by its launch: its config file is not asked', async () => {
+    const m = await startedWith(relayManager({ tools: { codex: { ...codexTools, useRelayConfig: claudeTools.useRelayConfig } } }), ON_AGENTS)
+    setSessionHelper(m)
+    const id = 'abcdef0123456789abcdefc3'
+    const text = spawnedMcp(id)
+    spawnAgentPty(codexTab(id), CODEX_EXE, codexArgs(id), agentOpts())
+    await until(() => !!helper.holders.get(heldAgentSessionId(id, 'codex'))?.attached, 'the session to attach')
+    expect(launchAsks.map((a) => a.id)).toEqual([id])
+    expect(configAsks).toEqual([])
+    expect(readFileSync(mcpOf(id), 'utf8')).toBe(text)
+    expect(toolLines(id)).toEqual([`[session-helper] ${id}: its Conductor tools go through its holder`])
+  })
+
+  it('with the agent sessions\' switch off, or for a run of the app\'s own, nothing is asked and nothing changes', async () => {
+    const m = await startedWith(relayManager(), { atStartup: true, plain: true, agents: false })
+    setSessionHelper(m)
+    const claude = 'abcdef0123456789abcdefe0'
+    const text = spawnedMcp(claude)
+    spawnAgentPty(claudeTab(claude), SHELL, [], agentOpts())
+    const codex = 'abcdef0123456789abcdefe1'
+    const args = codexArgs(codex)
+    spawnAgentPty(codexTab(codex), CODEX_EXE, args, agentOpts())
+    await tick(30)
+    expect(ptySpawn.mock.calls.map((c) => [c[0], c[1]])).toEqual([[SHELL, []], [CODEX_EXE, codexArgs(codex)]])
+    expect(readFileSync(mcpOf(claude), 'utf8')).toBe(text)
+    // A run of the app's own, with the switch on: no route at all.
+    m.setRouting({ plain: true, agents: true })
+    const runId = 'insights-work'
+    spawnRunPty({ runId, kind: 'codex' }, CODEX_EXE, codexArgs(runId), agentOpts())
+    const sid = heldAgentSessionId(runId, 'codex')
+    await until(() => !!helper.holders.get(sid)?.attached, 'the run to attach')
+    expect(helper.holders.get(sid)!.launch!.argv).toEqual([CODEX_EXE, ...codexArgs(runId)])
+    expect(configAsks).toEqual([])
+    expect(launchAsks).toEqual([])
+    expect(logs.filter((l) => l.includes('Conductor tools'))).toEqual([])
   })
 })
 

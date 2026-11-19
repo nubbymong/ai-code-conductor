@@ -1,7 +1,7 @@
 // Codex provider package: public entry point (WP1, design 7.1). Everything
 // outside this directory imports from here; the dependency-boundary test
 // holds the deep imports at zero.
-import type { SessionProvider, SessionRunScreen, SpawnOptions, TelemetrySource, HistorySession, ProviderSpawnCommand, TelemetryOptions } from '../types'
+import type { SessionProvider, SessionRunScreen, SpawnOptions, TelemetrySource, HistorySession, ProviderSpawnCommand, TelemetryOptions, HeldToolLaunch, HeldToolLaunchAnswer, HeldToolRelay } from '../types'
 import type { LegacyVersion, StatuslineData } from '../../../shared/types'
 import type { AllowanceReading } from '../../../shared/usage-types'
 import type { ProviderCapabilities, AuthRealm, RealmUse } from '../../../shared/providers'
@@ -38,6 +38,7 @@ import { createCodexLiveUsage, createCodexUsageOperations, createCodexCarryMarks
 import type { CodexLiveUsage, CodexUsageFsPort, CodexCarryMarks, CodexCarryMarksPort } from './usage'
 import type { CodexFolderLookup, CodexFsEntry, CodexRealmFsPort, CodexRealmFolderDeps, CodexRealmFolderLimits } from './realm-folders'
 import { removeConductorVisionFromCodexConfig } from './mcp-config'
+import { codexHeldToolLaunch } from './held-tool-launch'
 import {
   codexPricingKeys, priceForModel, codexCachedInputPer1M,
   parseLiteLlmOpenAiPricing, parseCachedCodexPricing, serializeCodexPricing, setLiveCodexPricing,
@@ -229,6 +230,12 @@ export class CodexProvider implements SessionProvider {
    *  stop. */
   removeLegacyMcpServerConfig(): void {
     removeConductorVisionFromCodexConfig()
+  }
+
+  /** A held session's launch with its conductor server started as the
+   *  session helper's relay (held-tool-launch.ts, 2.1.3-beta.11 section B2). */
+  heldToolLaunch(sessionId: string, launch: HeldToolLaunch, relay: HeldToolRelay): HeldToolLaunchAnswer {
+    return codexHeldToolLaunch(sessionId, launch, relay)
   }
 
   async deployResumePickerScript(resourcesDir: string): Promise<void> {

@@ -10,11 +10,14 @@ import { readConfig } from '../config-manager'
 import { logInfo } from '../debug-logger'
 import { setMachinesSource } from '../ipc/machines-handlers'
 import { peekSessionState } from '../session-state'
-import { getLocalSessionSettingsPath } from '../hooks/per-session-settings'
+import { getLocalSessionMcpConfigPath, getLocalSessionSettingsPath, switchMcpConfigToHelper } from '../hooks/per-session-settings'
 import { switchHooksToHelper } from '../hooks/session-hooks-writer'
 import { endHelperHooks, helperHookEvent, helperHooksTaken } from '../session-signals/hooks'
+import { getConductorMcpPort, serveToolStream } from '../conductor-mcp-server'
+import { tryGetProvider } from '../providers'
+import type { ProviderId } from '../../shared/providers/ids'
 import { bundledHelperPath, helperRootDir } from './install'
-import { SessionHelperManager, agentRecordsIn, crashMarkIn, getSessionHelper, setSessionHelper, type HelperHookDeps, type HelperRouting, type SessionHelperServiceState } from './manager'
+import { SessionHelperManager, agentRecordsIn, crashMarkIn, getSessionHelper, setSessionHelper, type HelperHookDeps, type HelperRouting, type HelperToolDeps, type SessionHelperServiceState } from './manager'
 
 /** The settings (Settings, General, Terminal): each off unless saved as true. */
 export const PLAIN_TERMINALS_SETTING = 'plainTerminalsThroughHelper'
@@ -61,6 +64,24 @@ const helperHookDeps: HelperHookDeps = {
   ended: (appPtyId) => endHelperHooks(appPtyId),
 }
 
+/**
+ * A held session's Conductor tools through its holder (2.1.3-beta.11, plan
+ * section B2): each tool stream its holder opens is served by the tool host
+ * (conductor-mcp-server.ts serveToolStream) for the tab's session, while the
+ * Conductor tools' server is started. A Claude Code session's per-session MCP
+ * config file (the one the PTY manager wrote just after the spawn call) is
+ * switched to the helper's relay; a Codex session's launch is given its relay
+ * form by the Codex package (heldToolLaunch).
+ */
+const toolHost: Pick<HelperToolDeps, 'serve' | 'serving'> = {
+  serve: (appPtyId, link) => serveToolStream(appPtyId, link),
+  serving: () => getConductorMcpPort() > 0,
+}
+const helperToolDeps: Partial<Record<ProviderId, HelperToolDeps>> = {
+  claude: { ...toolHost, useRelayConfig: (appPtyId, relay) => switchMcpConfigToHelper({ configPath: getLocalSessionMcpConfigPath(appPtyId), sessionId: appPtyId, relay }) },
+  codex: { ...toolHost, relayLaunch: (appPtyId, launch, relay) => tryGetProvider('codex')?.heldToolLaunch?.(appPtyId, launch, relay) ?? { refused: 'no-tools' } },
+}
+
 function ensureManager(): SessionHelperManager {
   const existing = getSessionHelper()
   if (existing) return existing
@@ -70,6 +91,7 @@ function ensureManager(): SessionHelperManager {
     log: (message) => logInfo(message),
     // Claude Code's sessions only: another provider's session keeps its hooks as they are.
     hooks: { claude: helperHookDeps },
+    tools: helperToolDeps,
   })
   m.onChange(() => notify?.())
   setSessionHelper(m)

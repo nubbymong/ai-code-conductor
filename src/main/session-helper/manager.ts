@@ -52,10 +52,18 @@
  * Machines page lists it with End. It has no per-session settings file, so its
  * hooks never go through its holder.
  *
- * 2.1.3-beta.11 (plan section B1, dormant): given the tool functions for a
- * provider (deps.tools), an agent session's connections ack `mcp`, and each
- * tool stream its holder opens is handed to the tool host under the tab's id
- * (toolRoute). app-wiring.ts gives none yet, so no connection asks for `mcp`.
+ * 2.1.3-beta.11 (plan section B1): given the tool functions for a provider
+ * (deps.tools), an agent session's connections ack `mcp`, and each tool
+ * stream its holder opens is handed to the tool host under the tab's id
+ * (toolRoute).
+ *
+ * 2.1.3-beta.11 (plan section B2): app-wiring.ts gives them for Claude Code
+ * and Codex, so with the agent sessions' setting on, a held session's CLI
+ * starts the helper's relay as its Conductor tool server in place of the
+ * loopback server: a Claude Code session's MCP config file is switched once
+ * its holder launched it and before its launch line is typed, and a Codex
+ * session's launch is given the relay form (toolRoute). One that cannot be
+ * switched keeps the loopback route, with one log line.
  */
 import { execFile } from 'child_process'
 import * as fs from 'fs'
@@ -90,6 +98,8 @@ import {
   type McpMessage,
 } from './protocol'
 import type { HelperHookTarget, HelperHooksResult } from '../hooks/session-hooks-writer'
+import type { HelperMcpConfigResult } from '../hooks/per-session-settings'
+import type { HeldToolLaunch, HeldToolLaunchAnswer, HeldToolRelay } from '../providers/types'
 import { InstallError, bundledConptySource, checkedConpty, copyMatches, installHelperCopy, removeOldVersionFolders, sha256File, type InstalledHelper } from './install'
 
 export interface ExecResult {
@@ -162,19 +172,32 @@ export interface SessionHelperDeps {
    *  hooks gateway. */
   hooks?: Partial<Record<ProviderId, HelperHookDeps>>
   /** Agent sessions' tool calls through their holders, by provider
-   *  (2.1.3-beta.11, plan section B1). app-wiring.ts gives none yet (section
-   *  B2), so no connection asks for `mcp`. */
+   *  (2.1.3-beta.11, plan sections B1 and B2). app-wiring.ts gives Claude
+   *  Code's and Codex's. A provider with none keeps its tools on the loopback
+   *  route, and its connections ask for no `mcp`. */
   tools?: Partial<Record<ProviderId, HelperToolDeps>>
 }
 
 /** What a session's tool calls through its holder need of the app
- *  (2.1.3-beta.11, plan section B1). */
+ *  (2.1.3-beta.11, plan sections B1 and B2). */
 export interface HelperToolDeps {
   /** Serve one tool stream the tab's holder opened, for the tab's session
    *  (conductor-mcp-server.ts serveToolStream, which takes the session's CLI
    *  from its own record). It calls the link's take before it returns. False
    *  when it refused the stream: it has closed the link then. */
   serve(appPtyId: string, link: HelperToolLink): boolean
+  /** Whether the tool host serves tool streams now (the Conductor tools'
+   *  server is started). A session is switched to its holder only then. */
+  serving(): boolean
+  /** Claude Code: point the tab's per-session MCP config at the helper's
+   *  relay (per-session-settings.ts switchMcpConfigToHelper), once its holder
+   *  launched it and before its launch line is typed. A provider gives this or
+   *  relayLaunch; given both, only relayLaunch is used. */
+  useRelayConfig?(appPtyId: string, relay: HeldToolRelay): HelperMcpConfigResult
+  /** Codex: the launch's arguments with its tool server started as the
+   *  helper's relay (the Codex package's heldToolLaunch), asked for the launch
+   *  a holder runs only: the usual start keeps the spawn's own arguments. */
+  relayLaunch?(appPtyId: string, launch: HeldToolLaunch, relay: HeldToolRelay): HeldToolLaunchAnswer
 }
 
 /** One tool stream as the tool host is handed it (conductor-mcp-server.ts
@@ -192,6 +215,25 @@ export interface HelperToolLink {
 /** One tab's tool streams through its holder (toolRoute). */
 interface ToolRoute {
   connected(conn: HolderConnection): void
+  /** Claude Code: its holder launched it; its launch line is not typed yet. */
+  launched?(conn: HolderConnection): void
+  /** Codex: what its holder launches, the connection's hello read. */
+  launchArgs?(conn: HolderConnection): Pick<LaunchSpec, 'argv' | 'line'> | undefined
+}
+
+/** Why a session's tools stay on the loopback route, for its one log line:
+ *  what the Claude Code config switch answered. */
+const MCP_CONFIG_STAYS_BECAUSE: Record<Exclude<HelperMcpConfigResult, 'switched'>, string> = {
+  'no-conductor': 'its MCP config file holds no conductor entry of the app\'s (the built-in tools are off, the tool host was not started when it started, or the file was not written)',
+  'unsafe-path': 'the helper\'s path or its store\'s path cannot be written into its MCP config exactly',
+  'not-written': 'its MCP config file could not be written',
+}
+
+/** The same, for what a Codex launch's relay form answered. */
+const RELAY_LAUNCH_STAYS_BECAUSE: Record<Extract<HeldToolLaunchAnswer, { refused: string }>['refused'], string> = {
+  'no-tools': 'its launch names no conductor tool server of the app\'s (the built-in tools are off, or the tool host was not started when it was built)',
+  'unsafe-path': 'the helper\'s path or its store\'s path cannot be given on its launch exactly',
+  'cmd-line': 'its launch is one command line through cmd.exe, or hands its arguments to one (an npm launcher), and the relay\'s arguments cannot pass that line\'s quoting rule',
 }
 
 /**
@@ -865,7 +907,7 @@ export class SessionHelperManager implements MachinesSource {
     const refused = checkLaunch(spec, this.os)
     if (refused) return usualWay(`the helper would refuse ${refused.why}`, true)
     const hooks = this.hookRoute(ctx, sid)
-    const tools = this.toolRoute(ctx)
+    const tools = this.toolRoute(ctx, sid, { file, args, opts })
     const driver: HelperPtyDriver = { ...this.driver(direct, true, spec.conpty === 'bundled', cleared, hooks, tools), ...own }
     const wrapper = this.track(new HelperPty({ sid, label: ctx.sessionId, spec, driver }), ctx.sessionId)
     if (hooks) void wrapper.ended.then(() => hooks.ended())
@@ -950,27 +992,64 @@ export class SessionHelperManager implements MachinesSource {
   }
 
   /**
-   * A session's tool calls through its holder (2.1.3-beta.11, plan section
-   * B1), when the app gives the tool functions for its provider (deps.tools;
-   * app-wiring.ts gives none yet). Its connections ack `mcp` when the holder
-   * offers it. Each `mcp.open` on one becomes a link the tool host is handed
-   * under the tab's id: the session a call acts for is the tab, never anything
-   * a message says. Each `mcp` goes to its stream's link, and the stream's
-   * `mcp.close`, or the connection's close, ends it. None for a run of the
-   * app's own (spawnRun).
+   * A session's tool calls through its holder (2.1.3-beta.11, plan sections
+   * B1 and B2), when the app gives the tool functions for its provider
+   * (deps.tools: Claude Code's and Codex's). Its connections ack `mcp` when
+   * the holder offers it.
+   *
+   * The switch (B2), once per launch: the session's CLI is pointed at the
+   * helper's relay (`<helper copy> mcp --store <store> --session <sid>`) in
+   * place of the loopback server, only when its holder offers `mcp` (the
+   * app's own copy has the relay mode), the helper copy is known, and the
+   * tool host is serving. Claude Code reads its MCP config file when its
+   * launch line starts it, so the file is switched once the holder launched
+   * the session and before that line is typed (`launched`), as its hooks are.
+   * Codex names its tool server in the launch itself, built before the holder
+   * existed, so the launch the holder runs gets the relay form, its hello
+   * read (`launchArgs`); the usual start it falls back to keeps the spawn's
+   * own arguments. A session that cannot be switched keeps the loopback
+   * route, with one log line saying why. The paths go into the session's own
+   * file or launch only, never into a log line.
+   *
+   * Each `mcp.open` on a connection of a switched session becomes a link the
+   * tool host is handed under the tab's id: the session a call acts for is the
+   * tab, never anything a message says. One before the switch, or on a session
+   * that was not switched, is not served. Each `mcp` goes to its stream's
+   * link, and the stream's `mcp.close`, or the connection's close, ends it.
+   * None for a run of the app's own (spawnRun).
    */
-  private toolRoute(ctx: AgentSpawnContext): ToolRoute | undefined {
+  private toolRoute(ctx: AgentSpawnContext, sid: string, launch: { file: string; args: SpawnArgs; opts: SpawnOptions }): ToolRoute | undefined {
     if (ctx.run) return undefined
     const deps = this.deps.tools?.[ctx.kind]
     if (!deps) return undefined
     const appId = ctx.sessionId
-    return {
+    /** The CLI was pointed at the relay: its holder's streams are served. */
+    let on = false
+    const stays = (why: string): void => this.deps.log(`[session-helper] ${appId}: its Conductor tools stay on the loopback route, because ${why}`)
+    const switched = (): void => {
+      on = true
+      this.deps.log(`[session-helper] ${appId}: its Conductor tools go through its holder`)
+    }
+    /** The relay for this session, or null (and the log line) when the session cannot be switched. */
+    const relayFor = (conn: HolderConnection): HeldToolRelay | null => {
+      const exe = this.info?.exe
+      if (!conn.mcp) { stays('its holder does not offer tool streams'); return null }
+      if (!exe) { stays('the helper copy is not known'); return null }
+      if (!deps.serving()) { stays('the tool host is not serving'); return null }
+      return { helperPath: exe, store: this.store, sid }
+    }
+    const route: ToolRoute = {
       connected: (conn) => {
         const links = new Map<number, StreamLink>()
         // The connection reports these only when it acked `mcp`, and only for
         // a stream the holder opened on it (connection.ts): that is the guard.
         conn.on('mcpOpen', (stream) => {
           const link = new StreamLink(conn, stream, () => { if (links.get(stream) === link) links.delete(stream) })
+          if (!on) {
+            link.close()
+            this.deps.log(`[session-helper] ${appId}: a tool stream its holder opened was not served, because its CLI was not pointed at its holder`)
+            return
+          }
           links.set(stream, link)
           let served = false
           try {
@@ -988,6 +1067,43 @@ export class SessionHelperManager implements MachinesSource {
         conn.on('close', () => { for (const link of [...links.values()]) link.ended() })
       },
     }
+    // One switch per launch: by its launch when the provider names its tool
+    // server there, else by its config file.
+    const useRelayConfig = deps.relayLaunch ? undefined : deps.useRelayConfig
+    if (useRelayConfig) {
+      route.launched = (conn) => {
+        // Relies on the PTY manager having written the file already: it does,
+        // with no await between the spawn call and the write (hookRoute).
+        const relay = relayFor(conn)
+        if (!relay) return
+        const r = useRelayConfig(appId, relay)
+        if (r !== 'switched') { stays(MCP_CONFIG_STAYS_BECAUSE[r]); return }
+        switched()
+      }
+    }
+    const relayLaunch = deps.relayLaunch
+    if (relayLaunch) {
+      route.launchArgs = (conn) => {
+        const relay = relayFor(conn)
+        if (!relay) return undefined
+        let answer: HeldToolLaunchAnswer
+        try {
+          // The environment the launch goes with (launchSpec reads the same).
+          answer = relayLaunch(appId, { file: launch.file, args: launch.args, env: launch.opts.env ?? process.env }, relay)
+        } catch {
+          stays('its launch\'s relay form could not be made')
+          return undefined
+        }
+        if ('refused' in answer) { stays(RELAY_LAUNCH_STAYS_BECAUSE[answer.refused]); return undefined }
+        // The same program, folder and environment; only its arguments differ.
+        const spec = this.agentSpec(launch.file, answer.args, launch.opts)
+        const refused = checkLaunch(spec, this.os)
+        if (refused) { stays(`the helper would refuse its relay form (${refused.why})`); return undefined }
+        switched()
+        return { argv: spec.argv, ...(spec.line !== undefined ? { line: spec.line } : {}) }
+      }
+    }
+    return route
   }
 
   /**
@@ -1067,10 +1183,20 @@ export class SessionHelperManager implements MachinesSource {
    *  `hooks`: a Claude Code session's hooks through its holder (hookRoute).
    *  `tools`: a session's tool calls through its holder (toolRoute). */
   private driver(direct: () => IPty, checkHash: boolean, bundled = false, cleared?: () => Promise<void>, hooks?: HookRoute, tools?: ToolRoute): HelperPtyDriver {
+    // The hooks' switch and the tools' switch are each their own: one that
+    // fails or throws leaves the other as it would be alone.
+    const atLaunch = [hooks ? (conn: HolderConnection) => hooks.launched(conn) : null, tools?.launched ?? null].filter((f): f is (conn: HolderConnection) => void => f !== null)
     return {
       hold: (sid, label, abandoned) => this.hold(sid, label, abandoned, bundled, cleared),
       connect: (record) => this.connectFor(record, checkHash, hooks, tools),
-      ...(hooks ? { launched: (conn: HolderConnection) => hooks.launched(conn) } : {}),
+      ...(atLaunch.length > 0 ? {
+        launched: (conn: HolderConnection) => {
+          for (const f of atLaunch) {
+            try { f(conn) } catch (err) { this.deps.log(`[session-helper] after the launch: ${message(err)}`) }
+          }
+        },
+      } : {}),
+      ...(tools?.launchArgs ? { launchArgs: tools.launchArgs } : {}),
       direct,
       ending: (sid, done) => {
         this.endings.set(sid, done)
