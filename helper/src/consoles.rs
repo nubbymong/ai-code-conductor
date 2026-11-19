@@ -136,8 +136,7 @@ pub fn bound_from_pid_owner(owner: &PidOwner, old_pid: u32, self_made: u64) -> R
     match owner {
         PidOwner::Nobody | PidOwner::RunBefore { running: false } => Ok(self_made),
         PidOwner::RunBefore { running: true } => Err(format!("the run before (process {old_pid}) is still running, so nothing was ended")),
-        // MUTANT (round 1 of the #725 review fixes, reverted in the next commit): the pid-reuse bound removed.
-        PidOwner::Other { made: _ } => Ok(self_made),
+        PidOwner::Other { made } => Ok(self_made.min(*made)),
         PidOwner::Unreadable(why) => Err(format!("the process that has the pid of the run before ({old_pid}) cannot be read ({why}), so nothing was ended")),
     }
 }
@@ -439,7 +438,8 @@ mod win {
         let owner = match open(old_pid, READ_RIGHTS) {
             Ok(p) => match creation_time(p.0) {
                 Err(e) => PidOwner::Unreadable(e.to_string()),
-                Ok(made) if app_created(made) != old_created => PidOwner::Other { made },
+                // MUTANT (round 1 of the #725 review fixes, reverted in the next commit): the pid-reuse bound not applied.
+                Ok(made) if app_created(made) != old_created => PidOwner::Nobody,
                 Ok(_) => match exit_code(p.0) {
                     Ok(code) => PidOwner::RunBefore { running: code.is_none() },
                     Err(e) => PidOwner::Unreadable(e.to_string()),
