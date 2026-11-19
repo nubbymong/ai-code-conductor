@@ -46,8 +46,10 @@ Plan 2.1.3-beta.11, section A1 (aicc_planning #340). No product code.
   program ended: Windows keeps a parent id after the parent ends and reuses ids, so the parent id
   alone could name a process the probe never started. The recorded runs stopped only console
   hosts the probe had started. The verdict line also names each state already equal before any
-  resize, where the nudge had nothing to put right (Claude Code after its reply, on every
-  system). Each recording's header and the result name the probe code by the sha256 of its three
+  resize in every run that reached it, where the nudge had nothing to put right (on the counted
+  readings: Claude Code after its reply on every system, Codex's first screen on macOS and
+  Linux, and Claude Code in the middle of its reply under the test machine's system ConPTY).
+  Each recording's header and the result name the probe code by the sha256 of its three
   files. The readings above carry no digest: that the test machine's used the probe as of
   0c49af32 is the builder's record. `tests/unit/scripts/probe-p19-record.test.ts` covers the
   three.

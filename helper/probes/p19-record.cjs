@@ -80,7 +80,10 @@
  * a program that has ended, before that program ended), and the stand-in,
  * are stopped, each only after its name and start time are checked again;
  * then the temporary folder is removed and anything of its own still running
- * is listed.
+ * is listed. A program's end is when node-pty reports its exit (on the
+ * system ConPTY about a second after the real end); the children of a
+ * program whose exit was never reported are left out, neither stopped nor
+ * listed.
  *
  * Usage:
  *   node p19-record.cjs run --root <checkout> --out <folder> [--claude <program>]
