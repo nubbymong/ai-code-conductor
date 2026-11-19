@@ -9,8 +9,9 @@ must close, and a proposed order for it. Nothing here proposes turning a default
 
 **Where each line was read.** At beta 32fb8b36, except the files beta.10 and beta.11 change, read
 at bbe1d6d3 (beta.11 B2's frozen head, which holds #733 and beta.11 B1): session-helper/manager.ts,
-helper-pty.ts, conductor-mcp-server.ts, hooks/per-session-settings.ts and
-docs/remote/helper-protocol.md. ADR-030 lines are all before the probe rows #731 and #737 add, so
+helper-pty.ts, conductor-mcp-server.ts, hooks/per-session-settings.ts,
+docs/remote/helper-protocol.md and providers/codex/held-tool-launch.ts (new there). ADR-030
+lines are all before the probe rows #731 and #737 add, so
 they do not move. ipc/pty-handlers.ts is read at beta; #729 adds 42 lines above the part cited. B1
 and B2 of this beta are cited by section: they were not built when this was written.
 
@@ -27,12 +28,17 @@ and B2 of this beta are cited by section: they were not built when this was writ
   the tool host's record of the session (:149-170), the gateway's secrets (hooks-gateway.ts:158,
   :247-251), and the in-memory bindings a launch makes in pty-manager.ts. A new run must make them
   again for a CLI that is already running, without launching it.
-- Three places remove what a kept session still reads: the session's exit block
-  (pty-manager.ts:7527-7532), its teardown (:7761-7917, run by every kill at :8047), and the
-  start-up sweeps, which run for every session id (index.ts:1098-1103).
+- Four places remove what a kept session still reads: the session's exit block
+  (pty-manager.ts:7527-7532), its teardown (:7761-7917, run by every kill at :8047), the
+  start-up sweeps, which run for every session id (index.ts:1098-1103), and the Codex hook-folder
+  sweep, which goes by a folder's age, not its session (providers/codex/hooks.ts:463-478, called
+  at :384).
 - Only a session whose tools go through its holder can keep them. The loopback route's credential
   sits in the CLI's MCP config (per-session-settings.ts:235) or, for Codex, its environment
-  (providers/codex/spawn.ts:818-820) for the CLI's whole life, and the next run refuses it. On an
+  (providers/codex/spawn.ts:818-820) for the CLI's whole life, and the next run refuses it. Every local launch is issued the `run`
+  form; the `stable` form, the same in every run (conductor-mcp-server.ts:118-129), is issued only
+  to a persistent SSH session (pty-manager.ts:3054), and this list does not propose it for a local
+  one. On an
   installed Windows app, 2 of Codex's 5 launch shapes keep that route (the beta.11 B2 fragment).
 - pty-manager.ts makes and drops a launch's bindings. Making them again for a take-over, without
   growing the file past its cap (8,187, `PTY_MANAGER_LINE_CAP` in scripts/ci/pr-numbers.mjs), needs
@@ -61,7 +67,7 @@ touches a radius file or pty-manager.ts.
      (`notifications/tools/list_changed`; s15 left this to S16, and P20 below asks whether each CLI
      reads it).
    - Radius or pty-manager.ts: no. The record is a new function beside issueMcpSessionToken
-     (conductor-mcp-server.ts:191-205), not the request handler that takes SSH status posts.
+     (conductor-mcp-server.ts:191-201), not the request handler that takes SSH status posts.
 
 2. **Claude Code's hook events, eight kinds** (PostToolUse, Notification, SessionStart, Stop,
    UserPromptSubmit, SubagentStart, SubagentStop, StopFailure).
@@ -74,8 +80,9 @@ touches a radius file or pty-manager.ts.
    - When the process is replaced: the queue does what change 9 asks. The new run's take-over must
      ack `hooks` and turn the route on at the attach, since only a launch runs `launched`. The hook
      command names the old helper copy (a `<version>-<sha12>` folder, session-helper/install.ts:102),
-     which start-up keeps while a holder reports that version (install.ts:381, #727). The signals
-     module takes an event only while the hooks gateway is on and listening (the beta.8 A4 fragment).
+     which start-up keeps while a holder reports that version (install.ts:381, #727). The route is
+     turned on only while the hooks gateway is on and listening, since the signals module takes no
+     event otherwise (deps.taking(), manager.ts:971-973).
    - Closed by: S16's take-over. Nothing in the holder.
    - Radius or pty-manager.ts: no (manager.ts).
 
@@ -89,7 +96,7 @@ touches a radius file or pty-manager.ts.
      hooks-gateway.ts:309-314; the default is 19334, hooks-types.ts:15). The event is lost. What
      Claude Code shows for a refused or unreachable http hook is not measured (P20).
    - Closed by: a small step, not a protocol change. Either PreToolUse joins the eight in the hook
-     mode (the hook mode already takes it, helper-protocol.md:920-929, and the manager drops it
+     mode (the hook mode already takes it, helper-protocol.md:920-932, and the manager drops it
      today, manager.ts:986), so the queue keeps it while the app is away and a held Claude Code
      session needs nothing of the gateway's per-run secret; or it stays on the gateway and the
      take-over registers the session's secret again from its settings file
@@ -122,7 +129,7 @@ touches a radius file or pty-manager.ts.
 
 5. **The status line and its file fall-back.**
    - Today, Claude Code: the statusLine command runs the app's bridge each tick with the session id
-     and the path of `~/.claude/ccc-status-<sid>.url` (statusline-command.ts:34-56;
+     and the path of `~/.claude/ccc-status-<sid>.url` (statusline-command.ts:34-55;
      per-session-settings.ts:125-172). The bridge reads that file each run (statusline-gather.ts:64-67)
      and posts to the tool host's `/status` with this run's credential. On any failure it writes
      `<resources>/status/<sid>.json` instead (statusline.ts:118-141), and statusline-watcher.ts takes
@@ -148,15 +155,17 @@ touches a radius file or pty-manager.ts.
      (per-session-settings.ts:235), or the relay form (:291-311), which names nothing of the run.
    - `~/.claude/ccc-status-<sid>.url`: this run's status URL (:43-46, :342-354). Read every tick.
    - Codex's hook folder and `hook.json` (item 4). Read at every event.
-   - Codex's launch arguments: the loopback URL and its credential variable, or the relay form
-     (spawn.ts:818-826). Fixed for the CLI's life.
+   - Codex's launch arguments: the loopback URL and its credential variable (spawn.ts:818-826), or
+     the relay form (providers/codex/held-tool-launch.ts at bbe1d6d3). Fixed for the CLI's life.
    - Not made for one run: the canvas plugin folder (`--plugin-dir`, pty-manager.ts:7147-7159) and
      the agent templates (pty-manager.ts:6906-6911).
    - Who removes them: the exit block (pty-manager.ts:7527-7532), which a released session also
-     reaches (once killPty has removed its entry, `weAreCurrent` is true, :7471-7479); and every start,
-     for every session id: cleanupStaleMcpConfigs deletes each `mcp-<sid>.json` and
-     `ccc-status-<sid>.url`, and cleanupStaleHookEntries strips the gateway hooks from each
-     `settings-<sid>.json` (index.ts:1098-1103; boot-cleanup.ts:17-41, :59-75).
+     reaches (its kill at :8042 fires its exit at once, helper-pty.ts:236-244 at bbe1d6d3, while its
+     entry still points at it, so `weAreCurrent` is true, :7471-7479); and every start, for every
+     session id: cleanupStaleMcpConfigs deletes each `mcp-<sid>.json` and `ccc-status-<sid>.url`,
+     and cleanupStaleHookEntries deletes the whole `hooks` block, the hook mode's entries included,
+     from each `settings-<sid>.json` that holds a gateway URL (index.ts:1098-1103;
+     boot-cleanup.ts:17-41, :59-75; removeHooks, session-hooks-writer.ts:505-511).
    - Closed by: S16's release keeps them (the exit block and the teardown skip a released session;
      the sweeps skip the ids the helper still holds), and the take-over writes again only what the
      CLI reads again (the URL file, `hook.json`).
@@ -170,7 +179,7 @@ touches a radius file or pty-manager.ts.
      (:392-402). While held, it refuses a sign-out, a deactivation, and turning Codex off (:350-356).
    - Claude Code takes no lease (pty-manager.ts:362-364). Its account is captured at the spawn and
      watched (:6930-6934; claude-account-identity.ts:38, :361), and that capture is what makes a
-     profile count as in use (:236-245).
+     profile count as in use (claude-account-identity.ts:236-243).
    - The tool host keeps, per session: the record (conductor-mcp-server.ts:149-170, made by
      issueMcpSessionToken, released at :209-221 from pty-manager.ts:7867), the review opt-in and the
      session's folder (:715-739, registered at pty-manager.ts:6959 and :6403), and through
@@ -182,8 +191,10 @@ touches a radius file or pty-manager.ts.
      refused in that gap.
    - Closed by: S16. The next start's keep counts each kept session's account in use at once (its
      record says which), and the take-over takes the lease (the usual preparation), the capture, a
-     record with no credential, and the review and canvas registrations from the tab's configured
-     folder, never a transcript's (the rule at pty-manager.ts:6962-6992).
+     record with no credential, and the review and canvas registrations as a launch makes them: the
+     canvas roots from the tab's configured folder, never a transcript's (the rule at
+     pty-manager.ts:6962-6992), and the review from the folder the CLI was launched in (:6947-6960),
+     which a launch keeps on purpose (:6989-6992); the release's record carries it.
    - Radius or pty-manager.ts: the lease map, the capture and the registrations are in pty-manager.ts
      today (yes, unless step 3 moves them).
 
@@ -193,8 +204,12 @@ touches a radius file or pty-manager.ts.
      record, the agent templates, then the watchdog (:7302-7311) and the logging run (item 12). For
      Claude Code it also types the launch line 300 ms after the spawn (:7235-7246). A plain
      terminal is taken over inside spawnPlainPty (manager.ts:816-821), where pty-manager.ts has done
-     nothing else for it; an agent tab reaches spawnAgentPty (pty-manager.ts:6914, :6236) only after
-     the launch's bindings are made.
+     nothing else for it. An agent tab's spawnAgentPty (pty-manager.ts:6914, :6236) sits inside the
+     launch: Codex's hook token and folder (:6087-6108) and its lease (:6231) come before it, and the
+     rest comes after it in the same synchronous run (for Claude Code the account capture :6930, the
+     registrations :6959-7029, the settings file and its gateway secret :7089-7110, the MCP config
+     :7128 and the typed line :7235-7246; for Codex the pane, the colour answers and the telemetry,
+     :6265-6392).
    - For a kept session the launch itself is skipped (the resume, the files, the typed line): the CLI
      is running, and a typed launch line would land in Claude Code's composer. What the launch binds
      is made again instead (items 1, 2, 4, 5, 7, 9, 10 and 12), and the session needs its entry, where
@@ -242,7 +257,8 @@ touches a radius file or pty-manager.ts.
     the held plain and partner terminals of saved tabs are let go of first (manager.ts:1495-1508;
     agent sessions are skipped at :1501). Then killAllPty: every session's kill sends a held agent
     session `term.end` (pty-manager.ts:8042) and runs its teardown (:8047), and its exit block removes
-    its files. Then `app.exit(0)` (update-handlers.ts:369). The next start finds the running mark (on
+    its files. Then hardExitTeardown ends the vision browser the app started (update-handlers.ts:368;
+    hard-exit.ts:24-26), and `app.exit(0)` (update-handlers.ts:369). The next start finds the running mark (on
     Windows it says "update"), takes the crash path and ends every agent session it finds
     (manager.ts:596-602), and each
     restored tab resumes its conversation in a new CLI. macOS and Linux let go of nothing
@@ -255,16 +271,27 @@ touches a radius file or pty-manager.ts.
       (logging/transcripts-worker.ts:845-850), and a worker that starts again does not refill that
       map (:592-597).
     - At an update today: the run ends with the session.
-    - When the process is replaced: the new run's worker has no run for the session, so a hook
-      event's `transcript_path`, or Codex's claim, would bind nothing until a run is registered.
-    - Closed by: S16's take-over registers the run (a new one, or the one the last version left
-      marked crashed, reopened), under the same switches, before the hook route or the telemetry
-      binds a transcript.
+    - When the process is replaced: the new run's worker closes every run left open as crashed and
+      reopens, and goes on tailing, one whose transcript it was tailing (transcripts-worker.ts:582-622),
+      but it does not refill its session map (:592-597), so a hook event's `transcript_path`, or
+      Codex's claim, binds nothing until a run is registered. A release that reaches the exit block
+      ends the run first, as `exited` (logSup.runEnd, pty-manager.ts:7508; the binders' runs,
+      :7512-7514), so nothing is left open to reopen.
+    - Closed by: S16's take-over registers a new run, under the same switches, before the hook route
+      or the telemetry binds a transcript. Keeping the old run open instead needs the release to skip
+      the exit block's run end (:7508-7514), which is pty-manager.ts unless step 3 moves it too.
     - Radius or pty-manager.ts: yes today (step 3 moves it).
 
 13. **Smaller state** that starts empty for a taken-over session and needs no protocol change: the
-    integrity monitor's count, the attention source, the session meta, and canvas markers queued but
-    not yet typed (lost at the update; the review itself is kept).
+    integrity monitor's count, the attention source (codex-idle-attention.ts:13-38), the session
+    meta (session-registry.ts:18), the activity feed's history (hooks-gateway.ts:159;
+    session-signals/hooks.ts:117-121), the canvas link (canvas/canvas-session-link.ts:92, forgotten
+    at pty-manager.ts:7573), the subagent depth and main transcript anchor (background-context.ts:32-36,
+    dropped at :7807), the not-indexed mark and its windows (pty-manager.ts:625;
+    logging/indexing-gaps.ts:95-100; ended at :7820-7824), the session's name for its logs
+    (logging/session-name-sidecar.ts:86; :7517), and canvas markers queued but not yet typed (lost at
+    the update; the review itself is kept). Radius or pty-manager.ts: the parts pty-manager.ts makes
+    and drops (the meta at :7286, the not-indexed mark at :7371-7372) go with step 3's module.
 
 **Proposed order of steps.** All behind the existing switch, Windows first, and none turns a default
 on.
@@ -290,7 +317,7 @@ on.
    attached agent session of a saved tab whose tools, and for Claude Code whose hook events, go
    through its holder; any other ends as today. The release keeps its files (step 3's module skips
    them for it, at the exit and in the teardown; the start-up sweeps skip the ids the helper still
-   holds) and records what the next run needs: the provider, the conversation id, the account and
+   holds, and the Codex hook-folder sweep skips the folders the release recorded) and records what the next run needs: the provider, the conversation id, the account and
    Codex's hook folder. The next start keeps such a session for its tab when its mark says "update"
    (it ends it today, manager.ts:596-602), counting its account in use at once; the keeper does not
    ack `mcp` (manager.ts:1312-1325), so streams wait for the tab. No radius file once step 3 has
@@ -322,7 +349,7 @@ on.
    switched launch shape: a tool call made in the gap waits or is answered "updating"; a hook event
    made in the gap arrives after the take-over; the status line comes back; both panes read a ready
    screen after the nudge; the gap from the release to the next start's keep, against the 2-minute
-   away clock (Q9); the count of console hosts before and after.
+   away clock (ADR-030 Q9); the count of console hosts before and after.
    About 48 h in all, with the two probes.
 
 **Questions, defaults taken.**
