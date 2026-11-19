@@ -56,9 +56,25 @@ describe('the tested range', () => {
   it('older is too-old (blocked), newer is too-new (warned), unparseable is unknown', () => {
     expect(classifyCodexVersion('0.153.3')).toBe('too-old')
     expect(classifyCodexVersion('0.153.4-alpha.1')).toBe('too-old')
-    expect(classifyCodexVersion('0.156.2')).toBe('too-new')
+    expect(classifyCodexVersion('0.157.2')).toBe('too-new')
     expect(classifyCodexVersion('1.0.0')).toBe('too-new')
     expect(classifyCodexVersion(null)).toBe('unknown')
+  })
+
+  // aicc_planning#185 (2.1.3-beta.11): the newest tested version is the
+  // highest one whose every real-CLI conformance check passed on Windows,
+  // macOS and Linux: 0.157.1, in CI run 44530382595. 0.170.0, npm's latest
+  // that day, was red in CI run 44530368458 (on all three systems its model
+  // list names four models the registry lacks), so it stays too-new. The pin
+  // and the minimum do not move (docs/wp1/evidence/codex-tested-range-2026-11-19.md).
+  it('reaches 0.157.1, the highest version that passed on all three systems, and no further; the pin and the minimum stay', () => {
+    expect(classifyCodexVersion('0.157.1')).toBe('supported')
+    expect(CODEX_MAX_TESTED_VERSION).toBe('0.157.1')
+    expect(classifyCodexVersion('0.157.2')).toBe('too-new')
+    expect(classifyCodexVersion('0.170.0')).toBe('too-new')
+    expect(CODEX_PINNED_CLI_VERSION).toBe('0.155.1')
+    expect(CODEX_MIN_SUPPORTED_VERSION).toBe('0.153.4')
+    expect(classifyCodexVersion('0.153.3')).toBe('too-old')
   })
 })
 

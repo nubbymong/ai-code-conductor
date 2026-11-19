@@ -104,7 +104,15 @@ describe('the usage port\'s fresh read (MP8)', () => {
     expect(settled).toBe(true)
   })
 
-  for (const version of ['0.157.1', '0.153.3', 'banana', null]) {
+  // aicc_planning#185 (2.1.3-beta.11): 0.157.1 is the newest tested Codex, so
+  // a closed account's usage is read on it; the next patch above is too-new.
+  it('a CLI on 0.157.1, the newest tested version, is asked', async () => {
+    const t = port({ version: '0.157.1' })
+    expect((await t.ops.read!(REALM)).outcome).toMatchObject({ ok: true })
+    expect(t.calls).toHaveLength(1)
+  })
+
+  for (const version of ['0.157.2', '0.153.3', 'banana', null]) {
     it(`a CLI whose version is ${version === null ? 'not known' : version} is never asked`, async () => {
       const t = port({ version })
       expect((await t.ops.read!(REALM)).outcome).toEqual({ ok: false, failure: 'refused' })
@@ -498,7 +506,7 @@ describe('who is read (ADR-022, bound 2)', () => {
   })
 
   it('a too-new or unknown CLI is never read: the last-seen reading, with its time', async () => {
-    for (const version of ['codex-cli 0.157.1', 'codex-cli banana']) {
+    for (const version of ['codex-cli 0.157.2', 'codex-cli banana']) {
       const t = await setup()
       const a = await addCodexAccount(t.h, 'A')
       t.fs.rollout(sessionsOf(t.h, a), 33)

@@ -10,8 +10,11 @@ export const CODEX_MIN_SUPPORTED_VERSION = '0.153.4'
 /** The release the D7 conformance evidence pins. */
 export const CODEX_PINNED_CLI_VERSION = '0.155.1'
 /** The newest release the managed flows were tested on. Newer is `too-new`:
- *  warned and allowed, never silently called compatible (design 8.4). */
-export const CODEX_MAX_TESTED_VERSION = '0.156.1'
+ *  warned and allowed, never silently called compatible (design 8.4). It is
+ *  the highest version whose every real-CLI conformance check passed on
+ *  Windows, macOS and Linux (0.157.1: CI run 44530382595;
+ *  docs/wp1/evidence/codex-tested-range-2026-11-19.md). */
+export const CODEX_MAX_TESTED_VERSION = '0.157.1'
 
 /** `codex --version` prints `codex-cli <semver>`. Anything else -- or two
  *  banners that disagree -- is not a version this app can reason about, so it

@@ -3,10 +3,11 @@
 //
 // The Codex rows are the list-visible models of the supported Codex CLI's own
 // catalogue (the models catalogue bundled in the 0.153.4 binary, read as bytes,
-// and in 0.155.1 and 0.156.1; resources/codex-model-catalogue.json), with each
-// model's supported reasoning levels. gpt-6-sol and gpt-6-luna come from 0.156.1,
-// the newest Codex the app calls supported (CODEX_MAX_TESTED_VERSION). Claude's
-// pickers never show a Codex row, and Codex's never a Claude one.
+// and in 0.155.1, 0.156.1 and 0.157.1; resources/codex-model-catalogue.json),
+// with each model's supported reasoning levels. gpt-6-sol and gpt-6-luna come
+// from 0.156.1 on; 0.157.1, which lists the same models, is the newest Codex
+// the app calls supported (CODEX_MAX_TESTED_VERSION). Claude's pickers never
+// show a Codex row, and Codex's never a Claude one.
 import { describe, it, expect } from 'vitest'
 import {
   buildModelPickerRows,
