@@ -28,9 +28,9 @@ describe('pr-numbers: the radius list is the one in AGENTS.md', () => {
     return [...para.slice(from, to).matchAll(/`([^`]+)`/g)].map((m) => m[1])
   }
 
-  it('is the same eight files, in no particular order', () => {
+  it('is the same nine files, in no particular order', () => {
     const doc = agentsRadius()
-    expect(doc.length).toBe(8)
+    expect(doc.length).toBe(9)
     expect([...RADIUS_FILES].sort()).toEqual([...doc].sort())
   })
 
@@ -80,7 +80,7 @@ describe('pr-numbers: the table over fixed path lists', () => {
     expect(r.matrixOwed).toBe(false)
     expect(r.failed).toBe(false)
     const text = renderSummary(r)
-    expect(text).toContain('| Touches the SSH blast radius | no (0 of 8) |')
+    expect(text).toContain('| Touches the SSH blast radius | no (0 of 9) |')
     expect(text).toContain('| Live SSH matrix | not owed |')
     expect(text).toContain('**live SSH matrix: not owed**')
     expect(text).not.toContain('live SSH matrix: owed')
@@ -88,14 +88,14 @@ describe('pr-numbers: the table over fixed path lists', () => {
     expect(text).toContain('| Cap | at the cap |')
   })
 
-  it('a PR that adds one line to ssh-tmux.ts: radius touched (1 of 8), matrix owed, still no failure', () => {
+  it('a PR that adds one line to ssh-tmux.ts: radius touched (1 of 9), matrix owed, still no failure', () => {
     const r = report({ paths: ['src/main/ssh-tmux.ts', 'tests/unit/ssh-tmux.test.ts'] })
     expect(r.touchesRadius).toBe(true)
     expect(r.hits).toEqual(['src/main/ssh-tmux.ts'])
     expect(r.matrixOwed).toBe(true)
     expect(r.failed).toBe(false)
     const text = renderSummary(r)
-    expect(text).toContain('| Touches the SSH blast radius | yes, 1 of 8: `src/main/ssh-tmux.ts` |')
+    expect(text).toContain('| Touches the SSH blast radius | yes, 1 of 9: `src/main/ssh-tmux.ts` |')
     expect(text).toContain('| Live SSH matrix | owed |')
     expect(text).toContain('**live SSH matrix: owed**')
     expect(text).toContain('npm run test:live:ssh')
@@ -139,7 +139,7 @@ describe('pr-numbers: the table over fixed path lists', () => {
   it('lists several hits in the order the radius lists them', () => {
     const r = report({ paths: ['src/main/statusline-watcher.ts', 'src/main/ssh-tmux.ts', 'README.md'] })
     expect(r.hits).toEqual(['src/main/ssh-tmux.ts', 'src/main/statusline-watcher.ts'])
-    expect(renderSummary(r)).toContain('yes, 2 of 8: `src/main/ssh-tmux.ts`, `src/main/statusline-watcher.ts`')
+    expect(renderSummary(r)).toContain('yes, 2 of 9: `src/main/ssh-tmux.ts`, `src/main/statusline-watcher.ts`')
   })
 })
 
@@ -279,14 +279,14 @@ describe('pr-numbers: main() in a job', () => {
     expect(r.code).toBe(0)
     expect(r.writes.length).toBe(1)
     expect(r.writes[0][0]).toBe('summary.md')
-    expect(r.writes[0][1]).toContain('| Touches the SSH blast radius | no (0 of 8) |')
+    expect(r.writes[0][1]).toContain('| Touches the SSH blast radius | no (0 of 9) |')
     expect(r.writes[0][1]).toContain('**live SSH matrix: not owed**')
   })
 
   it('a PR that adds a line to src/main/ssh-tmux.ts: exit 0, summary says touched and owed', () => {
     const r = run({ paths: ['src/main/ssh-tmux.ts'], lines: CAP })
     expect(r.code).toBe(0)
-    expect(r.writes[0][1]).toContain('yes, 1 of 8: `src/main/ssh-tmux.ts`')
+    expect(r.writes[0][1]).toContain('yes, 1 of 9: `src/main/ssh-tmux.ts`')
     expect(r.writes[0][1]).toContain('**live SSH matrix: owed**')
   })
 

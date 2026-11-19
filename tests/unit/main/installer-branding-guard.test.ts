@@ -2333,11 +2333,38 @@ describe('installer: the uninstaller removes the program files as electron-build
     // The buffer has two nulls past the size the read is given, so the walk ends inside it.
     const room = read.indexOf('IntOp $3 $3 + 4096')
     expect(read.slice(room, room + 3)).toEqual(['IntOp $3 $3 + 4096', 'IntOp $8 $3 + 4', 'System::Alloc $8'])
-    // Only a REG_MULTI_SZ (7) is walked; an entry counts by IsSameOrInsideCanon, without its "!" and "\??\".
+    // Only a REG_MULTI_SZ (7) is walked; an entry counts by IsSameOrInsideCanon, without what is in
+    // front of its path: every leading "!" and every leading "*" with its digits, in either order
+    // (Windows 11 was seen to write "*1\??\C:\..."), then one "\??\". The makensis probes in
+    // installer-nsis-behaviour.test.ts run it over each form.
     expect(read.filter((c) => c === '${AndIf} $6 == 7')).toHaveLength(2)
-    expect(read).toContain('!insertmacro IsSameOrInsideCanon "${DIR}" "$7" $9')
-    expect(read).toContain('${If} $9 == "\\??\\"')
-    expect(read).toContain('${If} $9 == "!"')
+    const copied = read.indexOf('System::Call \'kernel32::lstrcpynW(w .r7, p r9, i ${NSIS_MAX_STRLEN}) p\'')
+    const compared = read.indexOf('!insertmacro IsSameOrInsideCanon "${DIR}" "$7" $9')
+    expect(copied).toBeGreaterThan(-1)
+    expect(read.slice(copied + 1, compared)).toEqual([
+      '${Do}',
+      'StrCpy $9 "$7" 1',
+      '${If} $9 == "!"',
+      'StrCpy $7 "$7" "" 1',
+      '${ElseIf} $9 == "*"',
+      'StrCpy $7 "$7" "" 1',
+      '${Do}',
+      'StrCpy $9 "$7" 1',
+      'IntOp $8 $9 + 0',
+      '${If} $8 != $9',
+      '${ExitDo}',
+      '${EndIf}',
+      'StrCpy $7 "$7" "" 1',
+      '${Loop}',
+      '${Else}',
+      '${ExitDo}',
+      '${EndIf}',
+      '${Loop}',
+      'StrCpy $9 "$7" 4',
+      '${If} $9 == "\\??\\"',
+      'StrCpy $7 "$7" "" 4',
+      '${EndIf}',
+    ])
     // Every register comes back; the answer leaves through the stack.
     const saved = ['$0', '$1', '$2', '$3', '$4', '$5', '$6', '$7', '$8', '$9', '$R5', '$R6', '$R7']
     expect(read.slice(0, saved.length)).toEqual(saved.map((r) => `Push ${r}`))

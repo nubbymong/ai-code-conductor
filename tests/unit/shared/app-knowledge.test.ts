@@ -2267,3 +2267,92 @@ describe('the 2.1.3-beta.8 sweep', () => {
     expect(`${entry.highlights}\n${all}`).not.toMatch(/less work|faster|% CPU/i)
   })
 })
+
+// 2.1.3-beta.9 user-facing sweep: an Insights report for a Claude Code account
+// through the session helper (#722, off by default), the installer's reasons,
+// the files an uninstall left and the elevated check (#725), console hosts a
+// run ended from outside left (#725), the helper folder held terminals run
+// from (#727), the vision browser a run could not end (#727), the SSH start's
+// lookup of ssh.exe (#724) and the app's own typing in one place (#723, #726),
+// so a later edit cannot drop them silently.
+describe('the 2.1.3-beta.9 sweep', () => {
+  const body = (id: string) => APP_KNOWLEDGE_SECTIONS.find((x) => x.id === id)!.body
+  const step = (id: string) => trainingSteps.find((s) => s.id === id)!
+  const entry = changelog.find((e) => e.version === '2.1.3-beta.9')!
+  const notes = () => [entry.highlights ?? '', ...entry.warnings!, ...entry.changes.map((c) => c.description)]
+
+  it('the Machines section says an Insights report for a Claude Code account runs inside the helper with the agent setting on (#722)', () => {
+    const m = body('machines')
+    expect(m).toContain('While this setting is on, an Insights report for a Claude Code account also runs inside the session helper: this page lists it as Insights report while it runs, with End')
+    expect(m).toContain('a report the app could not end, after a crash for example, is ended at the next start')
+    expect(m).toContain("A Codex account's report runs as before.")
+    const settingsPage = fs.readFileSync(path.resolve(__dirname, '..', '..', '..', 'src', 'renderer', 'components', 'SettingsPage.tsx'), 'utf8')
+    expect(settingsPage).toContain("Insights' Claude Code report runs this way too.")
+    expect(step('machines').highlights.join('\n')).toContain('an Insights report for a Claude Code account runs inside the helper too, and is listed as **Insights report** while it runs, with **End** only')
+  })
+
+  it('the installer paragraph says the elevated install checks, why a copy was not ended, and what an uninstall left (#725)', () => {
+    const p = body('providers')
+    expect(p).toContain('An install for everyone that you approve with your own administrator account runs the same check before it writes any file.')
+    expect(p).toContain('When the installer cannot end a copy, its details say why: the copy had already exited, access was denied, or the Windows error number.')
+    expect(p).toContain("The uninstaller's details name each file it could not remove from the install folder")
+    expect(p).toContain('After an uninstall for everyone from the Program Files folder, those files are removed when Windows next restarts, and until then an install for everyone into that folder stops and says to restart Windows first.')
+    // The #720 sentences are still there, unchanged.
+    expect(p).toContain("and choose Retry if the installer's box is showing")
+  })
+
+  it('known issues name the elevated install that cannot see your copy and the restart before a reinstall, each with its workaround (#725)', () => {
+    const k = body('known-issues')
+    expect(k).toContain("When you install from a standard account and type an administrator's name and password into the approval box, the installer runs as that administrator and does not see your running copy of AI Code Conductor as its own, so it neither asks it to close nor shows a box.")
+    expect(k).toContain('The same goes for a copy running from a folder you choose on the folder page instead of the one the installer first shows.')
+    expect(k).toContain('Workaround: quit AI Code Conductor before you run the installer for everyone.')
+    // The box's own words (build/installer.nsh).
+    expect(k).toContain('an install for everyone into the same folder stops with Restart Windows before you install AI Code Conductor in this folder again, and installs nothing')
+    expect(k).toContain('Workaround: restart Windows, then run the installer again.')
+    const nsh = fs.readFileSync(path.resolve(__dirname, '..', '..', '..', 'build', 'installer.nsh'), 'utf8')
+    expect(nsh).toContain('"Restart Windows before you install AI Code Conductor in this folder again.')
+  })
+
+  it('the vision known issue applies to an update from 2.1.3-beta.8 or earlier, and later ones end the recorded browser at the next start (#727)', () => {
+    const k = body('known-issues')
+    const vision = k.split('\n\n').find((p) => p.startsWith('After an in-app update on Windows (from 2.1.0'))!
+    expect(vision).toContain('The same can happen after a later in-app update from 2.1.3-beta.8 or earlier on that computer, and the same workaround applies.')
+    const added = 'From 2.1.3-beta.9 on, the app keeps a record of the vision browser it starts, and a browser it could not end at quit or during an update is ended at its next start.'
+    expect(vision).toContain(added)
+    expect(vision).not.toContain('The same can happen after a later in-app update on that computer')
+  })
+
+  it('troubleshooting says the next start ends the console hosts a run ended from outside left (#725)', () => {
+    const t = body('troubleshooting')
+    expect(t).toContain('On Windows, when the app was ended from outside (in Task Manager, for example) or crashed, a console host of one of its terminals (Console Window Host in Task Manager) can stay behind.')
+    expect(t).toContain("The next start of the app ends the console hosts that run left, once, soon after it opens; it ends nothing of another user's or of a run that is still going.")
+  })
+
+  it('the release notes carry the series warning, the two minutes, the way back and every change line', () => {
+    const w = entry.warnings!.join('\n')
+    expect(w).toContain("This beta series begins moving the app's background services")
+    expect(w).toContain('only if the new version opens within two minutes of the old one closing')
+    expect(w).toContain('To go back to 2.1.3-beta.8')
+    expect(entry.highlights).toContain('and an install for everyone asks the running app to close first.')
+    const all = entry.changes.map((c) => c.description).join('\n')
+    for (const said of [
+      'an Insights report for a Claude Code account now runs inside the session helper too',
+      'a preview, off by default',
+      "A Codex account's report, and every report with the setting off, runs as before",
+      'Every place the app types into a session by itself',
+      "a quit now stops typing its keys into a session's terminal once a new terminal has replaced it, after a restart for example",
+      'an SSH session start no longer waits on a slow folder in PATH, such as a network share, once the app has looked for ssh.exe in the background soon after it starts',
+      'its details now say why: the copy had already exited, access was denied, or the Windows error number',
+      'the uninstaller now names the files it could not remove from the install folder',
+      'until then an install for everyone into that folder stops and asks you to restart Windows first',
+      'an install for everyone that you approve with your own administrator account now asks your running copy of the app to close before it writes any file',
+      'are now ended at the next start',
+      'they keep running from their own helper folder: the new version no longer removes it at start',
+      'On Windows, the vision browser is now ended at quit and at the next start also for a user whose sign-in cannot read the process list through WMI. A vision browser the app could not end at quit is ended the next time the app starts.',
+    ]) expect(all).toContain(said)
+    for (const text of notes()) {
+      expect(text, text.slice(0, 40)).not.toMatch(/—/)
+      expect(text, text.slice(0, 40)).not.toMatch(/\bCodex tab\b/)
+    }
+  })
+})

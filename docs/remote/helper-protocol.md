@@ -593,7 +593,8 @@ tab of the app is a pseudoconsole, and Windows starts its console host
 it) as a child of the app's main process. When the app is ended from outside,
 nothing closes the pseudoconsole, and on some Windows builds the host keeps
 running until sign-out. So the app records its own pid and creation time at
-start-up (`app-run.json` in its user data folder,
+start-up (`app-run.json` in its user data folder, a dev or test run's own data
+folder instead, as for `vision-started.json`;
 `src/main/console-host-leftovers.ts`) and at the next start runs, once,
 
 ```

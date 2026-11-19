@@ -9,6 +9,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > `src/renderer/changelog.ts`. After editing that file, run `npm run changelog`
 > (CI enforces that this file is in sync via `npm run changelog:check`).
 
+## [2.1.3-beta.9] - 2026-11-19
+
+### Warnings
+- This beta series begins moving the app's background services, and over the next betas your sessions, onto one helper per machine. If you want a quiet build, stay on the stable release.
+- On Windows, choosing Save sessions at an update keeps the terminals the session helper holds running only if the new version opens within two minutes of the old one closing. The installer's pages count toward those two minutes, so finish the installer promptly.
+- To go back to 2.1.3-beta.8, download its installer from the GitHub releases page and run it over this version.
+
+> On Windows, the installer now says why it could not end a copy of the app, the uninstaller names the files it could not remove, and an install for everyone asks the running app to close first. The console hosts a crashed run left are ended at the next start, an SSH session start no longer waits on a slow folder in PATH, and with Claude Code and Codex sessions through the session helper on, an Insights report for a Claude Code account runs inside the helper too.
+
+### Changed
+- With Claude Code and Codex sessions through the session helper on (a preview, off by default), an Insights report for a Claude Code account now runs inside the session helper too. The Machines page lists it as Insights report while it runs, with End, and a report the app could not end, after a crash for example, is ended at the next start. A Codex account's report, and every report with the setting off, runs as before.
+- Every place the app types into a session by itself (Watchdog retries, canvas notes, Ask Conductor questions into Codex, channel messages and the keys it sends to close a session at quit) now goes through one part of the app. What is typed, and when, is unchanged, except that a quit now stops typing its keys into a session's terminal once a new terminal has replaced it, after a restart for example.
+
+### Fixed
+- On Windows, an SSH session start no longer waits on a slow folder in PATH, such as a network share, once the app has looked for ssh.exe in the background soon after it starts. It runs the one it found, picked by the same rule as before.
+- On Windows, when the installer or uninstaller cannot end a running copy of the app, its details now say why: the copy had already exited, access was denied, or the Windows error number.
+- On Windows, the uninstaller now names the files it could not remove from the install folder, such as those another user's running copy holds. After an uninstall for everyone from Program Files, those files are removed when Windows next restarts, and until then an install for everyone into that folder stops and asks you to restart Windows first.
+- On Windows, an install for everyone that you approve with your own administrator account now asks your running copy of the app to close before it writes any file, or shows the box that says the app is still running. Before, the install could stop with a box that did not say why, or fail on the files the app held open.
+- On Windows, when the app was ended from outside (in Task Manager, for example) or crashed, the console hosts its terminals left running (Console Window Host in Task Manager) are now ended at the next start.
+- On Windows, after an update that keeps held terminals running (Save sessions), they keep running from their own helper folder: the new version no longer removes it at start. It goes at a later start, once no held terminal needs it.
+- On Windows, the vision browser is now ended at quit and at the next start also for a user whose sign-in cannot read the process list through WMI. A vision browser the app could not end at quit is ended the next time the app starts.
+
 ## [2.1.3-beta.8] - 2026-11-18
 
 ### Warnings
@@ -2026,6 +2048,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Tab attention indicators for waiting prompts
 - Context usage tracking via statusline API
 
+[2.1.3-beta.9]: https://github.com/nubbymong/ai-code-conductor/releases/tag/v2.1.3-beta.9
 [2.1.3-beta.8]: https://github.com/nubbymong/ai-code-conductor/releases/tag/v2.1.3-beta.8
 [2.1.3-beta.7]: https://github.com/nubbymong/ai-code-conductor/releases/tag/v2.1.3-beta.7
 [2.1.3-beta.6]: https://github.com/nubbymong/ai-code-conductor/releases/tag/v2.1.3-beta.6
