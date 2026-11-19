@@ -188,11 +188,12 @@ script's header, written before measuring.
   every field of its `modes` (bracketed paste, mouse reporting, application
   cursor keys, the application keypad, focus reporting and the rest). Each
   mode gets KEPT, LOST or NO VERDICT per CLI, per system and per ConPTY.
-- **Codex's other screens.** A short turn of its own (40 lines in 0.8 s, the
-  stand-in's second reply; Codex writes about 120 KB a second while a reply
-  streams, so 2 s was over the cap), recorded in the middle of the reply with
-  no resize and measured after it; a draft typed while that turn runs (the
-  queue hint); a config that rebinds the shortcuts key to F6; and two
+- **Codex's other screens.** A short turn of its own (30 lines in 1.5 s, the
+  stand-in's second reply; once the screen is full Codex redraws it for each
+  new line, about 6 KB, so 40 lines were over the cap), recorded in the
+  middle of the reply with no resize and measured after it; a draft typed
+  while that turn runs (the queue hint); a config that rebinds the shortcuts
+  key to F6; and two
   attempts of up to 60 s each: the agents form of the hint row (`← for
   agents`, the default composer in Codex 0.170.0) and a warning count on the
   hint row (a config with an MCP server that cannot start). A record-only

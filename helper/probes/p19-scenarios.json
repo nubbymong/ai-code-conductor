@@ -21,8 +21,8 @@
     "blockLines": 10
   },
   "shortReply": {
-    "lines": 40,
-    "lineMs": 20,
+    "lines": 30,
+    "lineMs": 50,
     "marker": "p19 short",
     "line": "p19 short line {n} of {total}: the quick brown fox jumps over the lazy dog",
     "after": "\n\n",
