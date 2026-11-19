@@ -15,10 +15,13 @@
 //    acked `mcp`; a message the holder would not read is never sent (its call
 //    is answered with an error and the app's side of the stream ends), and
 //    the connection stays up; the app's end of a stream sends no `mcp.close`
-//    (the holder takes none from the attached connection).
+//    (the holder takes none from the attached connection); each call the
+//    relay sent on a stream the app ends, and the app has not answered, is
+//    answered with an error then (at most MCP_OPEN_CALLS_MAX kept a stream);
+//    the size limit is the holder's, to the byte.
 import { describe, it, expect, afterEach } from 'vitest'
 import { FrameReader, encodeJsonFrame, type HolderRecord } from '../../../src/main/session-helper/protocol'
-import { HolderConnection, MCP_MESSAGE_TO_HELPER_MAX, TOOL_STREAM_SENTENCES } from '../../../src/main/session-helper/connection'
+import { HolderConnection, MCP_MESSAGE_TO_HELPER_MAX, MCP_OPEN_CALLS_MAX, TOOL_STREAM_SENTENCES } from '../../../src/main/session-helper/connection'
 import { duplexPair } from './session-helper-fake-holder'
 
 type Json = Record<string, unknown>
@@ -230,6 +233,82 @@ describe("the app's sends on a tool stream (2.1.3-beta.11, plan section B1)", ()
       { t: 'mcp', stream: 1, message: [errorFor(2, TOOL_STREAM_SENTENCES.ended), { jsonrpc: '2.0', id: 'three', error: { code: -32603, message: TOOL_STREAM_SENTENCES.ended } }] },
     ])
     expect(c.tools).toEqual([['open', 1], ['open', 2], ['mcp', 2, CALL.message]])
+    expect(c.conn.isClosed).toBe(false)
+  })
+
+  it('the size limit is the holder\'s: a message of exactly MCP_MESSAGE_TO_HELPER_MAX bytes as JSON is sent, one byte more is not', async () => {
+    // The holder's own limit (helper/src/request.rs MAX_MCP_TO_HELPER): 16 MiB less 256.
+    expect(MCP_MESSAGE_TO_HELPER_MAX).toBe(16 * 1024 * 1024 - 256)
+    const room = MCP_MESSAGE_TO_HELPER_MAX - Buffer.byteLength(JSON.stringify(text('')))
+    const fits = text('x'.repeat(room))
+    expect(Buffer.byteLength(JSON.stringify(fits))).toBe(MCP_MESSAGE_TO_HELPER_MAX)
+    const c = await connected(ALL_CAPS, false, true)
+    c.send(OPEN)
+    await until(() => c.tools.length === 1, 'the open')
+    expect(c.conn.sendMcp(1, fits)).toBe('sent')
+    await until(() => mcpFrames(c.fromApp).length === 1, 'the frame at the limit')
+    expect((mcpFrames(c.fromApp)[0].message as Json).id).toBe(7)
+    expect(c.conn.sendMcp(1, text('x'.repeat(room + 1)))).toBe('refused')
+    await until(() => mcpFrames(c.fromApp).length === 2, 'the error answer past the limit')
+    expect(mcpFrames(c.fromApp)[1]).toEqual({ t: 'mcp', stream: 1, message: errorFor(7, TOOL_STREAM_SENTENCES.notPassed) })
+    expect(c.conn.isClosed).toBe(false)
+  })
+
+  it('calls in flight when an unreadable answer ends the stream are answered: the one it was for with its error, each other with the ended error', async () => {
+    const c = await connected(ALL_CAPS, false, true)
+    c.send(OPEN)
+    const call = (id: number) => ({ t: 'mcp', stream: 1, message: { jsonrpc: '2.0', id, method: 'tools/call', params: { name: 'vision_status', arguments: {} } } })
+    c.send(call(7))
+    c.send(call(8))
+    await until(() => c.tools.length === 3, 'the open and the two calls')
+    expect(c.conn.sendMcp(1, text(`a ${String.fromCharCode(0xd800)} b`))).toBe('refused')
+    await until(() => mcpFrames(c.fromApp).length === 2, 'the two answers')
+    await tick(30)
+    expect(mcpFrames(c.fromApp)).toEqual([
+      { t: 'mcp', stream: 1, message: errorFor(7, TOOL_STREAM_SENTENCES.notPassed) },
+      { t: 'mcp', stream: 1, message: errorFor(8, TOOL_STREAM_SENTENCES.ended) },
+    ])
+    expect(c.conn.isClosed).toBe(false)
+  })
+
+  it('the app ending a stream answers each call still open on it with the ended error: not one it answered, one the relay cancelled, or one from before the holder ended the stream', async () => {
+    const c = await connected(ALL_CAPS, false, true)
+    // Call 20 is open when the holder ends stream 1; the holder then opens stream 1 again.
+    c.send(OPEN)
+    c.send({ t: 'mcp', stream: 1, message: { jsonrpc: '2.0', id: 20, method: 'tools/list' } })
+    c.send(CLOSE)
+    c.send(OPEN)
+    c.send({ t: 'mcp', stream: 1, message: { jsonrpc: '2.0', id: 9, method: 'tools/list' } })
+    c.send({ t: 'mcp', stream: 1, message: [{ jsonrpc: '2.0', id: 'ten', method: 'ping' }, { jsonrpc: '2.0', id: 11, method: 'tools/list' }] })
+    // The tool host answers no call that is cancelled.
+    c.send({ t: 'mcp', stream: 1, message: { jsonrpc: '2.0', method: 'notifications/cancelled', params: { requestId: 11 } } })
+    await until(() => c.tools.length === 7, 'the opens, the close and the calls')
+    // An answer settles its call; a request of the tool host's own with the same id as a call does not.
+    const answerTen = { jsonrpc: '2.0', id: 'ten', result: {} }
+    const ownRequest = { jsonrpc: '2.0', id: 9, method: 'roots/list' }
+    expect(c.conn.sendMcp(1, answerTen)).toBe('sent')
+    expect(c.conn.sendMcp(1, ownRequest)).toBe('sent')
+    c.conn.closeMcp(1)
+    await until(() => mcpFrames(c.fromApp).length === 3, 'the frames')
+    await tick(30)
+    expect(mcpFrames(c.fromApp)).toEqual([
+      { t: 'mcp', stream: 1, message: answerTen },
+      { t: 'mcp', stream: 1, message: ownRequest },
+      { t: 'mcp', stream: 1, message: errorFor(9, TOOL_STREAM_SENTENCES.ended) },
+    ])
+    expect(c.conn.isClosed).toBe(false)
+  })
+
+  it('at most MCP_OPEN_CALLS_MAX calls are kept open on a stream, so a relay cannot grow the list without end', async () => {
+    const c = await connected(ALL_CAPS, false, true)
+    c.send(OPEN)
+    const batch = Array.from({ length: MCP_OPEN_CALLS_MAX + 1 }, (_, i) => ({ jsonrpc: '2.0', id: i, method: 'ping' }))
+    c.send({ t: 'mcp', stream: 1, message: batch })
+    await until(() => c.tools.length === 2, 'the open and the batch')
+    c.conn.closeMcp(1)
+    await until(() => mcpFrames(c.fromApp).length === MCP_OPEN_CALLS_MAX, 'the ended answers')
+    await tick(30)
+    expect(mcpFrames(c.fromApp).map((f) => (f.message as Json).id)).toEqual(batch.slice(0, MCP_OPEN_CALLS_MAX).map((m) => m.id))
     expect(c.conn.isClosed).toBe(false)
   })
 })

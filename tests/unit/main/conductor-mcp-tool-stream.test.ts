@@ -12,11 +12,17 @@
 //  - releasing the session's record closes the link, and nothing more is
 //    answered on it;
 //  - with the server stopped (or a stream open when it stops) the stream is
-//    refused (closed).
+//    refused (closed);
+//  - a message is read as the /mcp route reads a body: each message of a
+//    batch on its own, a batch over that route's 100 refused whole, and one
+//    that is not a JSON-RPC message answered Invalid Request when it has an
+//    id (an answer never is), dropped otherwise.
 // Not checked here: what each tool does once called (the route tests own
 // that); a holder or a relay (the session helper's tests own those).
 
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from 'vitest'
+import * as fs from 'node:fs'
+import * as path from 'node:path'
 
 const standIn = vi.hoisted(() => ({ listens: 0 }))
 vi.mock('http', async (importOriginal) => {
@@ -59,12 +65,17 @@ vi.mock('../../../src/main/update-watcher', () => ({
   hasSourcePath: vi.fn(() => false),
 }))
 
+/** The resources folder the server is given: made in the temp folder, removed after the file. */
+const tmp = vi.hoisted(() => ({ dir: '' }))
 vi.mock('../../../src/main/ipc/setup-handlers', () => {
   const nodeFs = require('node:fs') as typeof import('node:fs')
   const nodeOs = require('node:os') as typeof import('node:os')
   const nodePath = require('node:path') as typeof import('node:path')
-  const dir = nodeFs.mkdtempSync(nodePath.join(nodeOs.tmpdir(), 'ccc-tool-stream-'))
-  return { getResourcesDirectory: () => dir }
+  tmp.dir = nodeFs.mkdtempSync(nodePath.join(nodeOs.tmpdir(), 'ccc-tool-stream-'))
+  return { getResourcesDirectory: () => tmp.dir }
+})
+afterAll(() => {
+  if (path.basename(tmp.dir).startsWith('ccc-tool-stream-')) fs.rmSync(tmp.dir, { recursive: true, force: true })
 })
 
 const pushed = vi.hoisted(() => vi.fn((_win: unknown, _sessionId: string, _url: string) => true))
@@ -295,5 +306,60 @@ describe('a stream ends with its session', () => {
     link.fromCli({ jsonrpc: '2.0', id: 9, method: 'tools/list', params: {} })
     await tick(30)
     expect(link.sent).toHaveLength(before)
+  })
+})
+
+describe('a stream reads a message as the /mcp route reads a body', () => {
+  const invalid = (id: number, message = 'Invalid Request') => ({ jsonrpc: '2.0', id, error: { code: -32600, message } })
+  const ping = (id: number) => ({ jsonrpc: '2.0', id, method: 'ping' })
+  const answered = (link: FakeLink, ids: number[]) => ids.every((id) => link.sent.some((m) => m.id === id))
+
+  it('a batch on a Codex stream: each call in it is answered', async () => {
+    server.issueMcpSessionToken('ts-batch', 'codex')
+    const link = newLink()
+    expect(server.serveToolStream('ts-batch', link)).toBe(true)
+    await link.initialized()
+    link.fromCli([{ jsonrpc: '2.0', id: 10, method: 'tools/list', params: {} }, ping(11)])
+    await until(() => answered(link, [10, 11]), 'the answers to the batch')
+    expect((link.sent.find((m) => m.id === 10)!.result.tools as Array<{ name: string }>).map((t) => t.name).sort()).toEqual(CODEX_NAMES)
+    expect(link.sent.find((m) => m.id === 11)).toEqual({ jsonrpc: '2.0', id: 11, result: {} })
+    expect(link.closed).toBe(false)
+  })
+
+  it('one that is not a JSON-RPC message is answered Invalid Request when it has an id, and dropped otherwise; an answer is never answered', async () => {
+    server.issueMcpSessionToken('ts-invalid', 'codex')
+    const link = newLink()
+    expect(server.serveToolStream('ts-invalid', link)).toBe(true)
+    await link.initialized()
+    const before = link.sent.length
+    link.fromCli({ id: 12, method: 'tools/list' }) // no jsonrpc
+    link.fromCli({ method: 'tools/list' }) // no id either: dropped
+    link.fromCli({ jsonrpc: '2.0', id: 13, result: 5 }) // a malformed answer: answering it could answer the CLI's own call 13
+    link.fromCli([ping(14), { id: 15, method: 'ping' }]) // in a batch, each on its own
+    await until(() => answered(link, [12, 14, 15]), 'the answers')
+    await tick(30)
+    expect(link.sent.find((m) => m.id === 12)).toEqual(invalid(12))
+    expect(link.sent.find((m) => m.id === 14)).toEqual({ jsonrpc: '2.0', id: 14, result: {} })
+    expect(link.sent.find((m) => m.id === 15)).toEqual(invalid(15))
+    expect(link.sent).toHaveLength(before + 3)
+    expect(link.closed).toBe(false)
+  })
+
+  it('a batch of 100 is taken; one of 101, which the /mcp route refuses, is refused whole: each call in it is answered Invalid Request', async () => {
+    server.issueMcpSessionToken('ts-big-batch', 'claude')
+    const link = newLink()
+    expect(server.serveToolStream('ts-big-batch', link)).toBe(true)
+    await link.initialized()
+    const hundred = Array.from({ length: 100 }, (_, i) => ping(100 + i))
+    link.fromCli(hundred)
+    await until(() => answered(link, hundred.map((m) => m.id)), 'the answers to the batch of 100')
+    expect(hundred.map((m) => link.sent.find((s) => s.id === m.id))).toEqual(hundred.map((m) => ({ jsonrpc: '2.0', id: m.id, result: {} })))
+    const before = link.sent.length
+    const over = Array.from({ length: 101 }, (_, i) => ping(300 + i))
+    link.fromCli(over)
+    await until(() => answered(link, over.map((m) => m.id)), 'the answers to the batch of 101')
+    await tick(30)
+    expect(link.sent.slice(before)).toEqual(over.map((m) => invalid(m.id, 'Invalid Request: Batch must not exceed 100 messages')))
+    expect(link.closed).toBe(false)
   })
 })

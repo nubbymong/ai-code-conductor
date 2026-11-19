@@ -15,8 +15,9 @@
  *
  * On a connection that acked `mcp`, the app sends a tool stream's messages
  * (sendMcp) only when the holder would read them, and ends its side of a
- * stream (closeMcp) without a word to the holder, which takes no `mcp.close`
- * from the attached connection (section 15: its streams end with its attach).
+ * stream (closeMcp), answering each call still open on it with an error,
+ * without a word to the holder, which takes no `mcp.close` from the attached
+ * connection (section 15: its streams end with its attach).
  *
  * Typed input follows section 15 (Attach): a `ping` after every 16 frames or
  * 1 MiB, nothing more until its `pong`, and the frames the holder answered
@@ -147,8 +148,9 @@ function escapesLoneSurrogate(text: string): boolean {
  * when it would: it must be a JSON object or array, at most
  * MCP_MESSAGE_TO_HELPER_MAX bytes as compact JSON, at most 31 levels deep
  * (the `mcp` around it is the 32nd), with no escaped lone surrogate. A frame
- * the holder cannot read closes the app's whole connection (`bad-frame`), so
- * none is sent.
+ * the holder cannot read closes the app's whole connection (`bad-frame`), and
+ * one over the size draws `too-large`, 20 of which in a minute close it too
+ * (section 12), so none is sent.
  */
 export function mcpMessageUnreadable(message: unknown): string | null {
   if (message === null || typeof message !== 'object') return 'it is not a JSON object or array'
@@ -180,6 +182,22 @@ function jsonRpcIds(message: unknown, calls: boolean): Array<string | number> {
   }
   return Array.isArray(message) ? message.flatMap(one) : one(message)
 }
+
+/** The id of the call one JSON-RPC message cancels (`notifications/cancelled`),
+ *  or null. The tool host answers no call that is cancelled. */
+function cancelledCall(m: unknown): string | number | null {
+  if (m === null || typeof m !== 'object' || Array.isArray(m)) return null
+  const r = m as Json
+  if (r.method !== 'notifications/cancelled' || r.params === null || typeof r.params !== 'object') return null
+  const id = (r.params as Json).requestId
+  return typeof id === 'string' || typeof id === 'number' ? id : null
+}
+
+/** The calls the relay has sent on one stream and the app has not answered,
+ *  kept at most: a call past it is passed on as any other, but is not
+ *  answered here when the app ends the stream. So a relay cannot grow the
+ *  list without end. */
+export const MCP_OPEN_CALLS_MAX = 1024
 
 /** JSON-RPC errors for these ids: a batch when what they answer was one,
  *  else one message. Null when there is no id to answer. */
@@ -286,6 +304,10 @@ export class HolderConnection extends EventEmitter<HolderConnectionEvents> {
   /** Tool streams the app ended (closeMcp) and the holder has not: each call
    *  on one is answered with an error here, and nothing on it is reported. */
   private readonly mcpEnded = new Set<number>()
+  /** The calls the relay sent on each open tool stream that the app has not
+   *  answered (at most MCP_OPEN_CALLS_MAX a stream): when the app ends the
+   *  stream, each is answered with an error (closeMcp). */
+  private readonly mcpCalls = new Map<number, Set<string | number>>()
 
   private constructor(stream: Duplex, hello: Hello, rest: Buffer, opts: ConnectionOptions) {
     super()
@@ -402,29 +424,67 @@ export class HolderConnection extends EventEmitter<HolderConnectionEvents> {
    * opened here and neither side has ended ('not-open' otherwise, and nothing
    * is sent). A message the holder would not read (mcpMessageUnreadable) is
    * not sent ('refused'): the calls it answered are answered with an error in
-   * its place, the app's side of the stream ends (closeMcp), and the
-   * connection stays up.
+   * its place, the app's side of the stream ends (closeMcp, which answers each
+   * other call still open on it), and the connection stays up.
    */
   sendMcp(stream: number, message: McpMessage): McpSendResult {
     if (this.closed || !this.mcp || !this.mcpStreams.has(stream)) return 'not-open'
+    const answered = jsonRpcIds(message, false)
     const why = mcpMessageUnreadable(message)
-    if (why === null && this.writeMcp(stream, message)) return 'sent'
+    if (why === null && this.writeMcp(stream, message)) {
+      this.settleCalls(stream, answered)
+      return 'sent'
+    }
     if (this.closed) return 'not-open'
-    const answer = toolErrors(jsonRpcIds(message, false), TOOL_STREAM_SENTENCES.notPassed, Array.isArray(message))
+    // Its calls are answered here, so closeMcp does not answer them again.
+    this.settleCalls(stream, answered)
+    const answer = toolErrors(answered, TOOL_STREAM_SENTENCES.notPassed, Array.isArray(message))
     if (answer && mcpMessageUnreadable(answer) === null) this.writeMcp(stream, answer)
     this.closeMcp(stream)
     return 'refused'
   }
 
   /**
-   * The app's side of tool stream `stream` ends: nothing more is sent on it
-   * or reported from it, and each call the relay sends on it is answered with
-   * an error, until the holder ends it too. No `mcp.close` goes: the holder
-   * takes none from the attached connection (section 15).
+   * The app's side of tool stream `stream` ends: each call the relay sent on
+   * it that the app has not answered is answered with an error now, nothing
+   * more is sent on it or reported from it, and each call the relay sends on
+   * it later is answered with an error, until the holder ends it too. No
+   * `mcp.close` goes: the holder takes none from the attached connection
+   * (section 15).
    */
   closeMcp(stream: number): void {
     if (!this.mcpStreams.delete(stream)) return
-    this.mcpEnded.add(stream)
+    const open = this.mcpCalls.get(stream)
+    this.mcpCalls.delete(stream)
+    for (const id of open ?? []) {
+      if (this.closed) return
+      const answer = toolErrors([id], TOOL_STREAM_SENTENCES.ended, false)
+      if (answer && mcpMessageUnreadable(answer) === null) this.writeMcp(stream, answer)
+    }
+    if (!this.closed) this.mcpEnded.add(stream)
+  }
+
+  /** Keep each call the relay sends on `stream`, in order, and drop each one
+   *  it cancels: the tool host answers none of those. */
+  private keepCalls(stream: number, message: McpMessage): void {
+    let open = this.mcpCalls.get(stream)
+    for (const item of Array.isArray(message) ? message : [message]) {
+      const cancelled = cancelledCall(item)
+      if (cancelled !== null) {
+        open?.delete(cancelled)
+        continue
+      }
+      for (const id of jsonRpcIds(item, true)) {
+        if (!open) this.mcpCalls.set(stream, (open = new Set()))
+        if (open.size < MCP_OPEN_CALLS_MAX) open.add(id)
+      }
+    }
+  }
+
+  /** The app answered these calls on `stream`. */
+  private settleCalls(stream: number, ids: Array<string | number>): void {
+    const open = this.mcpCalls.get(stream)
+    if (open) for (const id of ids) open.delete(id)
   }
 
   /** One `mcp` frame. False when it was not written (the connection then
@@ -524,6 +584,7 @@ export class HolderConnection extends EventEmitter<HolderConnectionEvents> {
     this.waiting.clear()
     this.mcpStreams.clear()
     this.mcpEnded.clear()
+    this.mcpCalls.clear()
     this.emit('close')
   }
 
@@ -603,6 +664,7 @@ export class HolderConnection extends EventEmitter<HolderConnectionEvents> {
       const r = readMcp(m, size)
       if (!r) return
       if (this.mcpStreams.has(r.stream)) {
+        this.keepCalls(r.stream, r.message)
         this.emit('mcp', r.stream, r.message)
       } else if (this.mcpEnded.has(r.stream)) {
         const answer = toolErrors(jsonRpcIds(r.message, true), TOOL_STREAM_SENTENCES.ended, Array.isArray(r.message))
@@ -617,6 +679,7 @@ export class HolderConnection extends EventEmitter<HolderConnectionEvents> {
       const r = readMcpClose(m)
       if (!r) return
       this.mcpEnded.delete(r.stream)
+      this.mcpCalls.delete(r.stream)
       if (this.mcpStreams.delete(r.stream)) this.emit('mcpClose', r.stream)
     }
   }

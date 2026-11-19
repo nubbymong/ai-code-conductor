@@ -1673,6 +1673,10 @@ export interface ToolStreamLink {
   close(): void
 }
 
+/** The most messages one batch on a tool stream may hold: what the /mcp route
+ *  takes in one body (the SDK's MAX_BATCH_SIZE, server/requestBody.js). */
+const TOOL_STREAM_BATCH_MAX = 100
+
 /**
  * The transport a tool stream's server is connected to: a link in place of an
  * HTTP response. It is kept with the session's other streams (transports,
@@ -1689,20 +1693,13 @@ class ToolStreamTransport {
   onmessage?: (message: unknown) => void
   onclose?: () => void
   onerror?: (error: Error) => void
-  private started = false
   private closed = false
-  /** Messages taken before the server's start (none in practice: it starts
-   *  before serveToolStream returns). */
-  private readonly early: unknown[] = []
 
   constructor(private readonly link: ToolStreamLink, private readonly owner: string, private readonly launch: number) {
     link.take((message) => this.receive(message), () => this.end(false))
   }
 
-  async start(): Promise<void> {
-    this.started = true
-    for (const message of this.early.splice(0)) this.onmessage?.(message)
-  }
+  async start(): Promise<void> {}
 
   async send(message: unknown): Promise<void> {
     if (this.closed) return
@@ -1719,23 +1716,45 @@ class ToolStreamTransport {
 
   private receive(message: unknown): void {
     if (this.closed) return
+    // A backstop: a launch ends only through releaseMcpSessionProvider, which
+    // closes this stream first, so no test reaches this.
     if (sessionLaunchOf(this.owner) !== this.launch) {
       logWarn(`[vision-mcp] A tool stream of sid=${this.owner} outlived its launch; closed`)
       this.end(true)
       return
     }
-    // Read as the SSE route reads a POST body; a message that is not one
-    // JSON-RPC message is dropped.
-    let parsed: unknown
-    try {
-      parsed = JSONRPCMessageSchema.parse(message)
-    } catch (err: any) {
-      logDebug(`[vision-mcp] A tool stream message of sid=${this.owner} is not a JSON-RPC message; dropped`)
-      this.onerror?.(err instanceof Error ? err : new Error(String(err)))
+    // Read as the /mcp route reads a body: each message of a batch on its
+    // own; one that is not a JSON-RPC message is answered Invalid Request
+    // when it has an id, and dropped otherwise. An answer is never answered,
+    // and a batch over that route's TOOL_STREAM_BATCH_MAX is refused whole.
+    const items = Array.isArray(message) ? message : [message]
+    if (items.length > TOOL_STREAM_BATCH_MAX) {
+      logDebug(`[vision-mcp] A tool stream batch of sid=${this.owner} holds over ${TOOL_STREAM_BATCH_MAX} messages; refused`)
+      for (const item of items) this.answerInvalid(item, `Invalid Request: Batch must not exceed ${TOOL_STREAM_BATCH_MAX} messages`)
       return
     }
-    if (this.started) this.onmessage?.(parsed)
-    else this.early.push(parsed)
+    for (const item of items) {
+      if (this.closed) return
+      const parsed = JSONRPCMessageSchema.safeParse(item)
+      if (parsed.success) {
+        this.onmessage?.(parsed.data)
+        continue
+      }
+      logDebug(`[vision-mcp] A tool stream message of sid=${this.owner} is not a JSON-RPC message`)
+      this.onerror?.(parsed.error instanceof Error ? parsed.error : new Error(String(parsed.error)))
+      this.answerInvalid(item, 'Invalid Request')
+    }
+  }
+
+  /** Answer `item` with an Invalid Request error when it has an id and is
+   *  not itself an answer: an answer to an answer could answer the CLI's own
+   *  call of the same id. */
+  private answerInvalid(item: unknown, text: string): void {
+    if (item === null || typeof item !== 'object' || Array.isArray(item)) return
+    const r = item as Record<string, unknown>
+    if (typeof r.id !== 'string' && typeof r.id !== 'number') return
+    if (typeof r.method !== 'string' && ('result' in r || 'error' in r)) return
+    void this.send({ jsonrpc: '2.0', id: r.id, error: { code: -32600, message: text } })
   }
 
   /** The stream ends: from here (`fromHere`: the link is closed) or from the far side. */

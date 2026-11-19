@@ -12,18 +12,26 @@ tool functions yet (section B2 does), so no connection the app makes asks for `m
   the session's other streams, so `releaseMcpSessionProvider` and `stopMcpServer` close it, and a
   message that comes after its launch is over closes it too. `createServer` is reached through one
   module reference, set when the server starts and cleared when it stops. The request handler and
-  the routes are not changed, and no credential is made or checked for a stream.
+  the routes are not changed, and no credential is made or checked for a stream. A message is read
+  as the /mcp route reads a body: each message of a batch on its own, a batch over 100 refused
+  whole, and one that is not a JSON-RPC message answered Invalid Request when it has an id.
 - **The connection** (session-helper/connection.ts): `sendMcp` writes one `mcp` frame, only on a
   stream the holder opened on a connection that acked `mcp`. A message the holder would not read
   (an escaped lone surrogate, more than 31 levels, over 16,776,960 bytes) is never sent, because
-  such a frame closes the app's whole connection: the call it answered gets a JSON-RPC error in its
-  place, the app's side of the stream ends, and the connection stays up.
+  such a frame closes the app's whole connection (or, over the size, draws a `too-large` refusal,
+  20 of which in a minute close it): the call it answered gets a JSON-RPC error in its place, the
+  app's side of the stream ends, and the connection stays up. The connection keeps the calls the
+  relay sent on each stream that the app has not answered (at most 1,024 a stream, less the ones
+  the relay cancels), and when the app's side of a stream ends, each of them is answered with a
+  JSON-RPC error, so a call in flight is not left waiting.
 - **One change from the plan's words.** The plan has the connection send `mcp.close`. The holder
   takes no `mcp.close` from the attached connection (protocol section 15: it answers `not-found`,
   and the streams end with the attach), and helper/ is out of scope here, so `closeMcp` ends the
   app's side only: nothing more goes on the stream or is reported from it, and each call the relay
-  still sends on it is answered with a JSON-RPC error by the connection, so the CLI is not left
-  waiting.
+  sends on it later is answered with a JSON-RPC error by the connection. The relay is not told and
+  the holder keeps the stream (one of its 8) until the relay ends it, so the CLI's tool server stays
+  connected but every call fails until it is started again (in Claude Code, /mcp). An app-side end
+  that reaches the relay is a protocol change for the next helper/ step.
 - **The manager** (session-helper/manager.ts): an optional set of tool functions per provider
   (`deps.tools`, beside `deps.hooks`). With one for the tab's provider, the tab's connections ask
   for `mcp`, each `mcp.open` becomes a link handed to the tool host under the tab's id, each `mcp`
