@@ -11,8 +11,9 @@
 // launcher called it, and the home guard every node child of a test loads
 // refused it (exit 1, TEST_ISOLATION_VIOLATION on stderr). Under the job's
 // Node 20.20.2 there is no process.execve, so the launcher started the program
-// as a child and the version was read. The app's discovery was not at fault; the guard now checks
-// the call as it checks a spawn (tests/helpers/home-guard-core.mjs).
+// as a child and the version was read. The app's discovery was not at fault;
+// the guard now checks the call as it checks a spawn
+// (tests/helpers/home-guard-core.mjs).
 //
 // The launcher here is the real one's last step: replace this process with
 // the program when Node offers process.execve, otherwise start it as a child
@@ -24,9 +25,11 @@
 //
 // Starts node children in a temp folder of its own, through the guard; no
 // real CLI. The replacement itself happens only on a POSIX Node 22.15 or
-// later, which no CI test job runs (they run Node 20), so on CI and on
-// Windows these cases take the child route; the conformance job's macOS rc
-// leg runs the real launcher through the guard.
+// later, which no CI test job runs (they run Node 20). On CI the first case
+// takes the child route and the second is skipped (Node 20 has no
+// process.execve); on Windows the first takes the child route and the guard
+// refuses the second's execve before Node is asked. The conformance job's
+// macOS rc leg runs the real launcher through the guard.
 import { afterAll, describe, expect, it } from 'vitest'
 import fs from 'node:fs'
 import os from 'node:os'
