@@ -13,7 +13,7 @@ changes.
   1 at once whenever its stream cannot be had or cannot go on. It pings every 15 s so the holder
   does not drop it as idle.
 - **What probe P18 (section B1, PR #731) changed in it.** Each CLI starts its tool server as its
-  direct child with pipes and no shell. The second CLI passes only 17 system variables (no home or
+  direct child with pipes and no shell. Codex passes only 17 system variables (no home or
   config folder), so the relay takes its store and session from its command line alone. Claude
   Code sends `server/discover` before `initialize`, so the relay passes whatever method comes and
   waits for none. Only Claude Code's normal end closes the program's input (Codex's end and an end
@@ -36,13 +36,17 @@ changes.
   passes for a stream that was had (exit 1, not 0); standard output has a writer thread of its
   own behind a 64 MiB queue, so the end of the stream is seen while the CLI is not reading; and
   an attach that only replays a program that has exited takes no tool streams.
-- **Two existing helper tests changed by one line each**: hooks.rs and probe_transport.rs pinned
-  the holder's hello caps as three; they now name four.
+- **Two existing helper tests changed**: hooks.rs and probe_transport.rs pinned the holder's
+  hello caps as three; they now name four. hooks.rs's stand-in app also acks `hook::ACK_CAPS`
+  (the app's real hook ack) instead of `HOLDER_CAPS`, so each hooks test runs on the ack it used
+  before, and its stand-in holder that offers all four caps checks the hook mode's ack is exactly
+  `core`, `local` and `hooks`.
 - **Not built here** (later steps): the tool host serving a stream and a session's config naming
   the relay (behind the agent sessions' setting); holding a call while the app is away and the
-  fixed updating answer (protocol change 9). The protocol section 15 and threat model 3.13 name
-  two things that step must settle: a slow relay can hold the attached connection's other
-  messages for up to 5 s, and the app must send only JSON the holder reads.
+  fixed updating answer (protocol change 9). Threat model 3.13 names two
+  things that step must settle (protocol section 15 names the second): a slow relay can hold the
+  attached connection's other messages for up to 5 s, and the app must send only JSON the holder
+  reads.
 - **Tests**: helper/tests/relay.rs (CI only: no cargo on the owner's PC), the relay's and the
   holder's unit tests, the shared vectors (local.json `mcp`, hello.json); on the app side the
   protocol and connection tests, with two mutants run locally (the ack taken whatever the caller

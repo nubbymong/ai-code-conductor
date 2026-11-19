@@ -803,6 +803,26 @@ fn a_relay_that_goes_without_a_word_ends_its_stream() {
 }
 
 #[test]
+fn a_relay_whose_holder_goes_away_exits_1_and_prints_nothing() {
+    let _serial = one_at_a_time();
+    let store_dir = Folder::new("store-gone");
+    let work = Folder::new("work-gone");
+    let sid = "relay-gone-01";
+    let held = Held(hold(&store_dir, sid));
+    let mut app = app_attached(&held.0, &work);
+    let mut relay = Relay::start(&store_dir, sid);
+    app.expect(&mcp_open(1));
+
+    // The session ends (`term.end` from another connection): the holder
+    // tells no relay, and its process exits. The relay reads the end of its
+    // connection and exits 1 at once, having printed nothing.
+    end(&held.0);
+    assert!(!pids::alive(held.0.pid), "the holder still runs after term.end");
+    relay.started = Instant::now();
+    relay.fails_quietly("the holder went away");
+}
+
+#[test]
 fn a_relay_whose_cli_stops_reading_still_sees_its_stream_end() {
     let _serial = one_at_a_time();
     let store_dir = Folder::new("store-unread");

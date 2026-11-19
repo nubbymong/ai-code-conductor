@@ -354,9 +354,6 @@ export function readEventFrame(m: unknown, size: number): HookEventFrame | null 
 /** A tool message's `message`, as compact JSON, at most, on its way to the
  *  app: 1 MiB less the room the `mcp` around it needs. */
 export const MCP_MESSAGE_TO_APP_MAX = 1_048_320
-/** The same, on its way from the app to a relay: 16 MiB less that room (a
- *  tool result can carry a screenshot). */
-export const MCP_MESSAGE_TO_HELPER_MAX = 16_776_960
 
 /** One JSON-RPC message, or a batch of them. Untrusted: the holder passes it
  *  on without reading it. */

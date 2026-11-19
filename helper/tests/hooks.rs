@@ -6,8 +6,9 @@
 //! without `hooks`, no answer, no hello at all.
 
 use aicc_helper::client::Client;
-use aicc_helper::frame::{Body, Frame};
+use aicc_helper::frame::{self, Body, Direction, Frame};
 use aicc_helper::hello::{self, Hello, LOCAL_CAPS};
+use aicc_helper::hook::ACK_CAPS;
 use aicc_helper::json::{self, Value};
 use aicc_helper::pids;
 use aicc_helper::serve::HOLDER_CAPS;
@@ -15,7 +16,7 @@ use aicc_helper::store::{self, Record};
 use aicc_helper::transport::{self, Listener};
 use std::ffi::OsString;
 use std::fs;
-use std::io::{Read, Write};
+use std::io::{Cursor, Read, Write};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::{mpsc, Mutex, MutexGuard};
@@ -375,8 +376,8 @@ fn post(app: &mut App, n: u64) -> u64 {
 
 /// A stand-in holder on a real endpoint, with a record in `store_dir`: it
 /// writes a hello offering `caps` (no hello at all for None), then reads
-/// until the client goes, and never answers. It says how many bytes it read.
-fn stand_in(store_dir: &Folder, sid: &str, caps: Option<&[&str]>) -> mpsc::Receiver<usize> {
+/// until the client goes, and never answers. It hands on the bytes it read.
+fn stand_in(store_dir: &Folder, sid: &str, caps: Option<&[&str]>) -> mpsc::Receiver<Vec<u8>> {
     let listener = Listener::bind(sid).expect("listen");
     store::prepare(&store_dir.0).expect("a store");
     store::write(&store_dir.0, &record(sid, listener.endpoint())).expect("a record");
@@ -386,7 +387,7 @@ fn stand_in(store_dir: &Folder, sid: &str, caps: Option<&[&str]>) -> mpsc::Recei
     });
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
-        let mut read: usize = 0;
+        let mut read: Vec<u8> = Vec::new();
         if let Ok(mut s) = listener.accept() {
             if let Some(line) = line {
                 let _ = s.write_all(format!("{line}\n").as_bytes());
@@ -397,7 +398,7 @@ fn stand_in(store_dir: &Folder, sid: &str, caps: Option<&[&str]>) -> mpsc::Recei
             loop {
                 match s.read(&mut buf) {
                     Ok(0) | Err(_) => break,
-                    Ok(n) => read += n,
+                    Ok(n) => read.extend_from_slice(&buf[..n]),
                 }
             }
         }
@@ -413,7 +414,7 @@ fn hook_runs_reach_the_attached_app_in_order_and_whole() {
     let work = Folder::new("work-order");
     let sid = "hooks-order-01";
     let held = Held(hold(&store_dir, sid));
-    let mut app = App::connect(&held.0, &HOLDER_CAPS);
+    let mut app = App::connect(&held.0, &ACK_CAPS);
     assert_eq!(app.client.hello.caps, vec!["core".to_string(), "local".to_string(), "hooks".to_string(), "mcp".to_string()]);
     launch(&mut app, &work);
     attach(&mut app);
@@ -467,7 +468,7 @@ fn a_hook_run_that_cannot_pass_its_event_on_exits_0_and_says_nothing() {
     let work = Folder::new("work-quiet");
     let sid = "hooks-quiet-01";
     let held = Held(hold(&store_dir, sid));
-    let mut app = App::connect(&held.0, &HOLDER_CAPS);
+    let mut app = App::connect(&held.0, &ACK_CAPS);
     launch(&mut app, &work);
     attach(&mut app);
     let good = event_input("Stop", "");
@@ -568,7 +569,7 @@ fn events_wait_while_no_connection_takes_them_and_the_last_256_come_with_the_cou
 
     // A connection that posts hook events and holds no terminal. The
     // holder writes nothing for them: the store is as it was.
-    let mut poster = App::connect(&held.0, &HOLDER_CAPS);
+    let mut poster = App::connect(&held.0, &ACK_CAPS);
     launch(&mut poster, &work);
     let before = files(&store_dir);
     assert!(!before.is_empty(), "no record in the store");
@@ -591,7 +592,7 @@ fn events_wait_while_no_connection_takes_them_and_the_last_256_come_with_the_cou
 
     // A connection that acks hooks and attaches gets the newest 256 right
     // after its reply, the first saying 44 were lost.
-    let mut app = App::connect(&held.0, &HOLDER_CAPS);
+    let mut app = App::connect(&held.0, &ACK_CAPS);
     attach(&mut app);
     let events = app.events(256);
     for (i, event) in events.iter().enumerate() {
@@ -615,7 +616,7 @@ fn events_wait_while_no_connection_takes_them_and_the_last_256_come_with_the_cou
     assert_eq!(post(&mut poster, 302), 302);
     assert!(app.closed(), "the holder kept a detached connection open");
     assert!(app.got.iter().all(|m| t_of(m) != "event"), "a hook event after term.detached: {:?}", texts(&app.got));
-    let mut again = App::connect(&held.0, &HOLDER_CAPS);
+    let mut again = App::connect(&held.0, &ACK_CAPS);
     attach(&mut again);
     let events = again.events(2);
     assert_eq!(events.iter().map(|e| num(e, "seq")).collect::<Vec<_>>(), vec![Some(301), Some(302)]);
@@ -632,7 +633,7 @@ fn a_holder_that_ends_drops_its_hook_events_and_the_next_one_counts_from_1() {
 
     // Two events wait in a holder no connection takes them from; it ends.
     let first = Held(hold(&store_dir, sid));
-    let mut poster = App::connect(&first.0, &HOLDER_CAPS);
+    let mut poster = App::connect(&first.0, &ACK_CAPS);
     launch(&mut poster, &work);
     assert_eq!(post(&mut poster, 1), 1);
     assert_eq!(post(&mut poster, 2), 2);
@@ -641,13 +642,13 @@ fn a_holder_that_ends_drops_its_hook_events_and_the_next_one_counts_from_1() {
 
     // A new holder of the session has none of them, and counts from 1.
     let second = Held(hold(&store_dir, sid));
-    let mut app = App::connect(&second.0, &HOLDER_CAPS);
+    let mut app = App::connect(&second.0, &ACK_CAPS);
     launch(&mut app, &work);
     attach(&mut app);
     if let Some(m) = app.next(Duration::from_secs(1)) {
         panic!("a new holder sent {}", m.to_json());
     }
-    let mut poster = App::connect(&second.0, &HOLDER_CAPS);
+    let mut poster = App::connect(&second.0, &ACK_CAPS);
     assert_eq!(post(&mut poster, 3), 1);
     let event = app.events(1).remove(0);
     assert_eq!(event.get("payload").and_then(|p| num(p, "n")), Some(3), "{}", event.to_json());
@@ -665,7 +666,7 @@ fn a_holder_whose_hello_does_not_offer_hooks_is_sent_nothing() {
     assert!(ran.quiet(), "{}", ran.say());
     assert!(ran.took < HOOK_BOUND, "{}", ran.say());
     let bytes = read.recv_timeout(WAIT).expect("the stand-in saw the hook mode go");
-    assert_eq!(bytes, 0, "the hook mode wrote to a holder that does not offer hooks");
+    assert_eq!(bytes.len(), 0, "the hook mode wrote to a holder that does not offer hooks");
 }
 
 #[test]
@@ -674,15 +675,24 @@ fn a_hook_run_against_a_holder_that_never_answers_ends_by_its_deadline() {
     let store_dir = Folder::new("store-mute");
     let input = event_input("Stop", "");
 
-    // A hello that offers hooks, then nothing: the hook mode acks, sends its
-    // event, and waits for a reply that never comes.
+    // A hello that offers what a holder of this version offers, then
+    // nothing: the hook mode acks, sends its event, and waits for a reply
+    // that never comes. Its ack is its own three caps, never `mcp`, so a
+    // holder from 2.1.3-beta.8 or beta.9 takes it too.
     let sid = "hooks-mute-0001";
     let read = stand_in(&store_dir, sid, Some(&HOLDER_CAPS[..]));
     let ran = hook_to(&store_dir, sid, input.as_bytes());
     assert!(ran.quiet(), "{}", ran.say());
     assert!(ran.took < HOOK_BOUND, "{}", ran.say());
     let bytes = read.recv_timeout(WAIT).expect("the stand-in saw the hook mode go");
-    assert!(bytes > 0, "the hook mode sent nothing to a holder that offers hooks");
+    let ack = match frame::read_frame(&mut Cursor::new(&bytes[..]), Direction::AppToHelper) {
+        Ok(Some(Frame { channel: 0, body: Body::Json(v) })) => v,
+        Ok(Some(f)) => panic!("the hook mode's first frame is not a message: {f:?}"),
+        Ok(None) => panic!("the hook mode sent nothing to a holder that offers hooks"),
+        Err(e) => panic!("the hook mode's first frame does not read ({e}): {} bytes", bytes.len()),
+    };
+    assert_eq!(t_of(&ack), "hello.ack", "{}", ack.to_json());
+    assert_eq!(hello::parse_ack(&ack), Some((1, vec!["core".to_string(), "local".to_string(), "hooks".to_string()])), "{}", ack.to_json());
 
     // No hello at all.
     let sid = "hooks-mute-0002";
@@ -763,7 +773,7 @@ fn no_hook_event_follows_term_exit_and_the_next_attach_gets_what_came_after() {
     let work = Folder::new("work-exit");
     let sid = "hooks-exit-01";
     let held = Held(hold(&store_dir, sid));
-    let mut app = App::connect(&held.0, &HOLDER_CAPS);
+    let mut app = App::connect(&held.0, &ACK_CAPS);
     launch(&mut app, &work);
     attach(&mut app);
     app.wait_text("FAKE-CLI READY");
@@ -773,12 +783,12 @@ fn no_hook_event_follows_term_exit_and_the_next_attach_gets_what_came_after() {
 
     // An event after the program's end is not sent to the app that was told
     // of the end: it waits, and the next attach gets it after its reply.
-    let mut poster = App::connect(&held.0, &HOLDER_CAPS);
+    let mut poster = App::connect(&held.0, &ACK_CAPS);
     assert_eq!(post(&mut poster, 1), 1);
     if let Some(m) = app.next(Duration::from_secs(1)) {
         panic!("after term.exit the app got {}", m.to_json());
     }
-    let mut again = App::connect(&held.0, &HOLDER_CAPS);
+    let mut again = App::connect(&held.0, &ACK_CAPS);
     attach(&mut again);
     let events = again.events(1);
     assert_eq!(num(&events[0], "seq"), Some(1), "{}", events[0].to_json());

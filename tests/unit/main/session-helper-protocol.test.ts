@@ -13,7 +13,6 @@ import {
   LAUNCH_LIMITS,
   MCP_CAP,
   MCP_MESSAGE_TO_APP_MAX,
-  MCP_MESSAGE_TO_HELPER_MAX,
   NONCE_RE,
   RAW_MAX,
   SID_RE,
@@ -402,15 +401,13 @@ describe('session helper protocol: tool streams (capability mcp, section 15)', (
   const fields = (v: { t?: string; type?: string; stream: number; message?: unknown }) =>
     (v.t ?? v.type) === 'mcp' ? { stream: v.stream, message: v.message } : { stream: v.stream }
 
-  it("the cap, the caps a holder offers and the message limits are the helper's", () => {
+  it("the cap, the caps a holder offers and the message limit are the helper's", () => {
     expect(MCP_CAP).toBe('mcp')
     expect(M.offered).toEqual(['core', 'local', HOOKS_CAP, MCP_CAP])
     expect(M.relay_caps).toEqual(['core', 'local', MCP_CAP])
     expect(MCP_MESSAGE_TO_APP_MAX).toBe(M.limits.message_to_app_bytes)
-    expect(MCP_MESSAGE_TO_HELPER_MAX).toBe(M.limits.message_to_helper_bytes)
-    // Each leaves the 256 bytes the `mcp` around a message needs.
+    // It leaves the 256 bytes the `mcp` around a message needs.
     expect(MCP_MESSAGE_TO_APP_MAX + 256).toBe(JSON_FROM_HELPER_MAX)
-    expect(MCP_MESSAGE_TO_HELPER_MAX + 256).toBe(JSON_TO_HELPER_MAX)
   })
 
   it('the ack names mcp only when asked to, after hooks when both are', () => {

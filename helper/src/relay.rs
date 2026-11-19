@@ -20,7 +20,9 @@
 //! connection is not dropped as idle. Standard output is written by a thread
 //! of its own, so the end of the stream is seen even while the CLI is not
 //! reading: a CLI that falls 64 MiB behind is not taking what it is sent, and
-//! once the stream is over the lines still waiting have 5 s to go.
+//! once the holder ends the stream or the connection is lost, the lines
+//! still waiting have 5 s to go (at the end of its input it exits at once
+//! and drops them).
 //!
 //! A line that is not one JSON object or array (an empty line, text that is
 //! not JSON, a value more than 31 levels deep, an escaped lone surrogate), or
@@ -84,13 +86,17 @@ pub const OPEN_WAIT: Duration = Duration::from_secs(10);
 /// Lines for the CLI not yet written, at most, in bytes: a CLI that falls
 /// this far behind is not taking what it is sent, and the relay exits.
 pub const OUT_QUEUE_BYTES: usize = 64 * 1024 * 1024;
-/// How long the lines still queued for the CLI may take, once the stream is
-/// over, before the relay exits all the same.
+/// How long the lines still queued for the CLI may take, once the holder has
+/// ended the stream or the connection is lost, before the relay exits all
+/// the same (at the end of standard input it exits at once).
 pub const DRAIN: Duration = transport::WRITE_TIMEOUT;
 
 /// Run the relay on `args` (what follows `mcp`): its exit status. It returns
-/// at the end of standard input; every other end exits the process from the
-/// thread that reads the holder, with `EXIT_FAILED`.
+/// `EXIT_ENDED` at the end of standard input, and `EXIT_FAILED` when its
+/// stream cannot be had (a command line it does not take, no record or no
+/// holder, no `mcp` offered, no `pong` within `OPEN_WAIT`), a write to the
+/// holder fails or standard input cannot be read; an end the holder brings
+/// exits the process from the thread that reads it, with `EXIT_FAILED`.
 pub fn run(args: &[String]) -> u8 {
     relay(args).unwrap_or(EXIT_FAILED)
 }

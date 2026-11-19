@@ -1033,8 +1033,9 @@ nothing for one. Fixtures: the `mcp` part of `helper/fixtures/local.json`.
   15 s, so the connection is not dropped as idle. Standard output is written
   by a thread of its own, so the relay sees the end of its stream even while
   the CLI is not reading; at most 64 MiB of lines wait for the CLI (one more
-  and the relay exits 1), and once the stream is over those still waiting
-  have 5 s to go.
+  and the relay exits 1), and once the holder ends the stream or the
+  connection is lost those still waiting have 5 s to go; at the end of its
+  input the relay exits at once and drops them.
   A line that is not one JSON object or array (an empty line, text that is
   not JSON, a value more than 31 levels deep, an escaped lone surrogate), or
   whose message is over 1,048,320 bytes as compact JSON, is dropped and the
