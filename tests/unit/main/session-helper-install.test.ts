@@ -79,7 +79,7 @@ describe('helperRootDir', () => {
   })
 
   it('a data root that is not a full path is ignored: the folder used with no override, never one under the working folder (aicc_planning#335)', () => {
-    // Before #335 a relative root was joined as it was, so the helper went under
+    // Before aicc_planning#335 a relative root was joined as it was, so the helper went under
     // whatever folder the run started in (the config-dot-cwd failure class).
     const env = { LOCALAPPDATA: 'C:\\Users\\someone\\AppData\\Local' }
     const installed = 'C:\\Users\\someone\\AppData\\Local\\AI Code Conductor\\helper'
@@ -94,6 +94,15 @@ describe('helperRootDir', () => {
     expect(helperRootDir({ platform: 'linux', home: '/home/someone', env: { CCC_DEV_DATA_DIR: 'C:\\dev-data' }, isPackaged: false })).toBe('/home/someone/.ai-code-conductor/helper/dev')
     expect(helperRootDir({ platform: 'linux', home: '/home/someone', env: { CCC_DEV_DATA_DIR: '/srv/dev-data' }, isPackaged: false })).toBe('/srv/dev-data/helper')
     expect(helperRootDir({ platform: 'darwin', home: '/Users/someone', env: { CCC_E2E_DATA_DIR: 'rel/e2e' }, isPackaged: true })).toBe('/Users/someone/Library/Application Support/AI Code Conductor/helper')
+  })
+
+  it('a LOCALAPPDATA that is not a full path is ignored: the folder under the home folder, never one under the working folder (aicc_planning#335)', () => {
+    // Before, a relative LOCALAPPDATA was joined as it was. With a relative dev
+    // root set from the same LOCALAPPDATA (index.ts), the root was ignored and
+    // the fallback put the helper under the working folder all the same.
+    const installed = 'C:\\Users\\someone\\AppData\\Local\\AI Code Conductor\\helper'
+    expect(helperRootDir({ ...win, env: { LOCALAPPDATA: 'loc' }, isPackaged: true })).toBe(installed)
+    expect(helperRootDir({ ...win, env: { LOCALAPPDATA: 'loc', CCC_DEV_DATA_DIR: 'rel' }, isPackaged: false })).toBe(`${installed}\\dev`)
   })
 })
 
