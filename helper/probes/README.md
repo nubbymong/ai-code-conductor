@@ -117,7 +117,8 @@ follows processes with WMI's process start and stop events):
 ```
 
 Each CLI runs in a fresh environment with every per-user folder in the probe's
-own temporary folder, no account and no API key; nothing leaves the machine
+own temporary folder (TEMP must be a path with no space; it refuses one that
+has), no account and no API key; nothing leaves the machine
 (Codex's model provider is a local stand-in that refuses every request). For
 each CLI it runs the CLI's connection check three times with the stand-in in a
 folder with no space in its path, once from a folder with one, and once more

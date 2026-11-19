@@ -56,13 +56,20 @@ the times it logged.
 Decision lines (the 2.1.3-beta.10 plan, section B1, written before measuring):
 PASS for a CLI when the stand-in is started from a path with a space, answers
 its first request within 5 s, and is gone within 10 s of the CLI's end in 3 of
-3 runs. Read here as: the run from the path with a space, and each of the 3
-runs before it, starts the stand-in, has it answer its first request within
-5 s of its own start, and leaves no stand-in 10 s after the CLI's end.
+3 runs. Read here as: in the run from the path with a space, and in each of
+the 3 runs before it, the CLI starts the stand-in and ends by itself, the
+stand-in answers its first request within 5 s of its own start, and no
+stand-in is left 10 s after the CLI's end.
 CANNOT MEASURE when no run started the stand-in; the CLI's last words are
 recorded, so a sign-in demand can be told from any other reason. Anything else
 is FAIL, with its reasons. The end from outside (step 3) is recorded beside the
 verdict, not in it. Only -Runs 3 gives a verdict; any other count is a CHECK RUN.
+
+It refuses to run when the temporary folder's path has a space (the runs from
+a path with no space would then have one), when the stand-in is missing beside
+it, or when the stand-in alone does not answer two requests and end at end of
+input. It reads a process's output for at most 5 s after the process has
+ended, so a process left behind that holds it open cannot hang the probe.
 
 In a finally block it stops what it started and is still running: each process
 it started itself, each process it saw in a run, and every process started since
@@ -209,6 +216,14 @@ function Start-Fresh([string] $exe, [string[]] $argList, [hashtable] $envs) {
     return [pscustomobject]@{ Proc = $proc; Name = $name; Start = $start; Out = $proc.StandardOutput.ReadToEndAsync(); Err = $proc.StandardError.ReadToEndAsync() }
 }
 
+# The text a process wrote, waiting at most 5 s for its output to close: a
+# process left behind that holds that output open must not hang the probe
+# before its clean-up.
+function Get-TaskText($task) {
+    if ($task.Wait(5000)) { return [string]$task.Result }
+    return '(output still open 5 s after the process ended)'
+}
+
 # Run a short command of a CLI (add, remove, version) and return its exit code and words.
 function Invoke-Fresh([string] $exe, [string[]] $argList, [hashtable] $envs) {
     $r = Start-Fresh $exe $argList $envs
@@ -216,7 +231,7 @@ function Invoke-Fresh([string] $exe, [string[]] $argList, [hashtable] $envs) {
         Stop-Checked $r.Proc.Id $r.Name $r.Start | Out-Null
         throw "$([IO.Path]::GetFileName($exe)) $($argList[0]) did not finish in 60 s"
     }
-    return [pscustomobject]@{ Code = $r.Proc.ExitCode; Text = (Hide-Personal ($r.Out.Result + $r.Err.Result)).Trim() }
+    return [pscustomobject]@{ Code = $r.Proc.ExitCode; Text = (Hide-Personal ((Get-TaskText $r.Out) + (Get-TaskText $r.Err))).Trim() }
 }
 
 # Stop one process, only when it still has the name and start time it was seen with.
@@ -402,7 +417,10 @@ function Invoke-Run($cli, [string] $label, [string] $logFile, [bool] $fromOutsid
 
     # The log is read again now: the stand-in writes its last line after the CLI's end.
     $log1 = Read-StandInLog $logFile
-    $words = (Hide-Personal ($r.Out.Result + "`n" + $r.Err.Result))
+    $outText = Get-TaskText $r.Out
+    $errText = Get-TaskText $r.Err
+    $row.cliOutputClosed = $r.Out.IsCompleted -and $r.Err.IsCompleted
+    $words = (Hide-Personal ($outText + "`n" + $errText))
     $row.cliSaid = @($words -split "`r?`n" | Where-Object { $_.Trim() } | Select-Object -Last 8 | ForEach-Object { $s = $_.Trim(); if ($s.Length -gt 300) { $s.Substring(0, 300) } else { $s } })
     foreach ($line in $log1) { [void]$messages.Add((Hide-Personal (([pscustomobject]@{ cli = $cli.Name; run = $label; line = $line }) | ConvertTo-Json -Compress -Depth 6))) }
 
@@ -464,6 +482,7 @@ function Get-Verdict($c) {
     $reasons = @()
     if (-not @($normal | Where-Object { $_.run -like 'path with a space*' }).Count) { $reasons += 'the stand-in was not registered from a path with a space' }
     foreach ($n in $normal) {
+        if ($n.endedBy -ne 'itself') { $reasons += "$($n.run): the CLI did not end by itself ($($n.endedBy))" }
         if (-not ($n.Contains('started') -and $n.started)) { $reasons += "$($n.run): not started"; continue }
         if ($null -eq $n.firstAnswerMs) { $reasons += "$($n.run): no answer" }
         elseif ($n.firstAnswerMs -gt $PassFirstAnswerMs) { $reasons += "$($n.run): first answer after $($n.firstAnswerMs) ms" }
@@ -511,6 +530,10 @@ try {
     if (-not $claudeExe) { throw 'could not run: no Claude Code found (give -ClaudePath)' }
 
     $tempRoot = Join-Path ([IO.Path]::GetTempPath()) ('p18-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
+    if ($tempRoot.Contains(' ')) {
+        $tempRoot = ''
+        throw 'could not run: the temporary folder''s path has a space, so the runs from a path with no space would have one; set TEMP to a folder without a space for this run'
+    }
     [void](New-Item -ItemType Directory -Path $tempRoot)
     foreach ($d in 'home', 'appdata', 'localappdata', 'claude', 'codex', 'tmp', 'work') { [void](New-Item -ItemType Directory -Path (Join-Path $tempRoot $d)) }
     $work = Join-Path $tempRoot 'work'
@@ -544,7 +567,7 @@ try {
     $self.StandardInput.Close()
     $selfOut = $self.StandardOutput.ReadToEndAsync()
     if (-not $self.WaitForExit(15000)) { throw 'could not run: the stand-in did not end at end of input' }
-    $answers = @($selfOut.Result -split "`n" | Where-Object { $_.Trim() } | ForEach-Object { $_ | ConvertFrom-Json })
+    $answers = @((Get-TaskText $selfOut) -split "`n" | Where-Object { $_.Trim() -like '{*' } | ForEach-Object { $_ | ConvertFrom-Json })
     if ($self.ExitCode -ne 0 -or $answers.Count -ne 2 -or $answers[0].id -ne 1 -or $answers[1].id -ne 2) { throw "could not run: the stand-in's self-test gave $($answers.Count) answers, exit $($self.ExitCode)" }
     $result.standInSelfTest = 'two answers, ended at end of input'
     $result.node = (& $nodeSource --version).Trim()

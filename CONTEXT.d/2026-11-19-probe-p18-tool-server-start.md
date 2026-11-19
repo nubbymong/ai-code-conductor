@@ -17,10 +17,15 @@ Plan 2.1.3-beta.10, section B1 (aicc_planning #337). No product code.
   those events arrive a second or more late. The stand-in's own log gives its times.
 - **Result (WINDOWS_1, Claude Code 2.1.328, Codex 0.157.1): PASS for both** on the plan's line.
   Each CLI starts the program as its direct child, with no shell, from a path with a space as
-  given, over pipes, with a hidden console of its own. First answer 19 to 23 ms after the
-  program started, in 4 of 4 runs per CLI. Nothing of any run was left 2 s after the CLI's end
-  (10 of 10 runs, both normal ends and ends from outside). The full paragraph is in ADR-030
+  given, over pipes, with a hidden console of its own. First answer 19 to 25 ms after the
+  program started, in 8 of 8 runs per CLI over two measured runs (the second with the script as
+  committed, after the review fixes below). Nothing of any run was left 2 s after the CLI's end
+  (20 of 20 runs, both normal ends and ends from outside). The full paragraph is in ADR-030
   after the P16 result.
+- **Review fixes (the PR's automatic review).** Output is read for at most 5 s after a process
+  ends, so a process left holding it cannot hang the probe; a normal run counts only when the
+  CLI ended by itself; the probe refuses a temporary folder whose path has a space. A `.cmd`
+  launcher stays allowed: the VM started npm's `claude.cmd` and `codex.cmd` the same way.
 - **What it means for B2 and the step after.** The relay can be a plain program started by its
   full path. Only Claude Code's normal end closes the program's input; Codex's end and an end
   from outside end the program without it, so the holder takes a dropped relay connection as a
@@ -32,7 +37,7 @@ Plan 2.1.3-beta.10, section B1 (aicc_planning #337). No product code.
   (scripts/wp1/legacy-codex-manifest.mjs), the committed manifest and the ledger are regenerated,
   and the three files have `added` rows (no legacy Codex code path). No other helper file names
   Codex, so nothing else moved; B2 will meet the same rule if its files name Codex.
-- **VM.** Held 06:46Z to 07:01Z under the VM lock. One discovery command, run before the probe
+- **VM.** Held 06:46Z to 07:01Z and 07:27Z to 07:29Z under the VM lock. One discovery command, run before the probe
   in the real environment (`codex exec --help`), left one Codex temporary folder under the real
   profile; it was removed. The probe's folders, processes and the VM's own state were left as
   found.

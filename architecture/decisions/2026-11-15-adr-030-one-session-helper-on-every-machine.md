@@ -435,25 +435,28 @@ Git Bash (forward slashes, quoted paths).
 P18 result (2026-11-19, Windows test machine, Claude Code 2.1.328 and Codex 0.157.1, each
 with no account signed in and no API key, in a fresh environment whose home, app data and
 config folders were in the probe's own temporary folder): pass for both, on the line the
-beta 10 plan wrote before measuring. Each CLI's own add command (`claude mcp add --scope
+beta 10 plan wrote before measuring, in two measured runs (the second with the script as
+committed, after review fixes that change neither what it measures nor its verdict on these
+runs). Each CLI's own add command (`claude mcp add --scope
 user`, `codex mcp add`) stored the program's path as given, a path with a space included,
 and each CLI started the program as its own direct child: no shell between them, the path
 and arguments as given, its input, output and error output as pipes, and the CLI's working
 folder as its own. Each start also made a console host for the program (a hidden console of
-its own), as P16 found for a hook's launcher. In 4 of 4 runs per CLI (three from a folder
-with no space in its path, one with), the stand-in answered its first request 19 to 23 ms
-after it started (186 to 198 ms after Claude Code started, 157 to 296 ms after Codex did),
-against a line of 5 s. Claude Code sends `server/discover` before `initialize` (the
-stand-in refused it as unknown, and Claude Code went on); Codex sends `initialize` first,
-and in the two check runs before the measured one it began its turn within a second while
-`initialize` was still unanswered. The two end the program differently. At a normal end
-Claude Code closes the program's input and the program ends itself, 9 to 17 ms before the
-CLI exits; Codex ends the program itself (no end of input seen in 4 of 4 runs; exit status 1
-in the 3 whose end the process trace caught). With the CLI ended from outside (Stop-Process on the
+its own), as P16 found for a hook's launcher. In 8 of 8 runs per CLI (in each measured run,
+three from a folder with no space in its path and one with), the stand-in answered its
+first request 19 to 25 ms after it started (185 to 198 ms after Claude Code started, 157 to
+296 ms after Codex did), against a line of 5 s. Claude Code sends `server/discover` before
+`initialize` (the stand-in refused it as unknown, and Claude Code went on); Codex sends
+`initialize` first, and in the two check runs before the measured ones it began its turn
+within a second while `initialize` was still unanswered. The two end the program
+differently. At a normal end Claude Code closes the program's input and the program ends
+itself, 9 to 20 ms before the CLI exits; Codex ends the program itself (no end of input seen
+in 8 of 8 runs; exit status 1 in the 7 whose end the process trace caught). With the CLI
+ended from outside (Stop-Process on the
 CLI alone, while the stand-in held its first request), another process ended the program at
-once for both (exit status 0, no end of input seen). That fits a job object that ends its
-processes when the CLI goes, which was not checked directly, since the probe's own SSH
-session runs in a job. In 10 of 10 runs, nothing of the run (CLI, program or console host)
+once for both (exit status 0, no end of input seen, in each measured run). That fits a job
+object that ends its processes when the CLI goes, which was not checked directly, since the
+probe's own SSH session runs in a job. In 20 of 20 runs, nothing of the run (CLI, program or console host)
 was still running 2 s after the CLI's end. Claude Code passes the program its whole
 environment and adds its own variables; Codex passes only a fixed list of 17 system
 variables, without HOME or CODEX_HOME, so the relay must take what it needs from its command
