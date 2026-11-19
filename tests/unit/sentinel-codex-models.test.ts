@@ -23,7 +23,7 @@ const listOf = (ids: string[], fetchedAt = '2026-09-29'): ExpectedModelSet & { c
   source: 'the model catalogue bundled with the Codex CLI', cliVersions: ['0.153.4'], fetchedAt,
   models: ids.map((id) => ({ id, label: id.toUpperCase() })),
 })
-const CODEX_IDS = ['gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'gpt-5.2']
+const CODEX_IDS = ['gpt-6.2-sol', 'gpt-6.2-astra', 'gpt-6.1-terra', 'gpt-6.1-sol', 'gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'gpt-5.2']
 
 describe('Sentinel Codex model coverage (row 39)', () => {
   it('is silent when the shipped registry covers the shipped Codex list', () => {

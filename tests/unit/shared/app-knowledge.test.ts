@@ -1939,7 +1939,9 @@ describe('2.1.1: the stable entry and its known issues', () => {
     const k = knownIssues()
     expect(k.indexOf("If Codex cannot check a closed account's allowance")).toBeGreaterThan(k.indexOf('This release is tested with Codex up to version'))
     expect(row).toContain('such as GPT-6.1-Sol, and Sentinel then says it is not in the model picker: choose Default: follows Codex in the config')
-    expect(entry).toContain('such as GPT-6.1-Sol, and Sentinel then says that model is not in the picker; choose Default: follows Codex in the config')
+    // aicc_planning#347 put GPT-6.1-Sol in the picker, so the entry names no
+    // example any more; the 2.1.1 row above is history and keeps it.
+    expect(entry).toContain('A newer Codex can also offer a model the model picker does not list yet, and Sentinel then says that model is not in the picker; choose Default: follows Codex in the config')
     const models = fs.readFileSync(path.resolve(__dirname, '..', '..', '..', 'src', 'renderer', 'codex-models.ts'), 'utf8')
     expect(models).toContain("label: 'Default: follows Codex'")
     const vision = paraStarting('After an in-app update on Windows (from 2.1.0, or from 2.1.1-beta.1 to beta.3),')

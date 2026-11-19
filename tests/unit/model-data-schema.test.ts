@@ -58,7 +58,7 @@ describe('the bundled file', () => {
   // set "revision" in the file to today's date (YYYYMMDD, higher than the
   // one pinned), then pin the new revision and the digest the failure prints.
   it('its revision is raised with every edit (the content is pinned beside the revision)', () => {
-    const PINNED = { revision: 20261114, digest: '8bb8ca0eb493501f0f6c45b6ac77ed7f44693efa23f0cec7a1243092810bb1b1' }
+    const PINNED = { revision: 20261119, digest: 'f5b89de2f248e4daceabd7b26450b3b8abc4aa743748d8068a5b2a32920a710c' }
     const { revision, ...content } = bundledJson as Loose
     const digest = createHash('sha256').update(JSON.stringify(content)).digest('hex')
     expect({ revision, digest }, 'resources/model-registry.json changed: raise its "revision" to today\'s date, then pin the new revision and digest here').toEqual(PINNED)
