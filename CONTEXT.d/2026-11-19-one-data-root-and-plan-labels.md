@@ -13,8 +13,9 @@ instead of a data folder under the folder the app started in; a relative
 end-to-end root is not swapped for the dev root. A run that is not installed
 then uses a `dev` folder inside the installed app's data folder (the registry
 folder or the default one), with its resources inside it, as `helperRootDir`
-does, so it still keeps off that app's CONFIG and sessions; an installed app
-uses its own folders. A normal install, `ccc`, `npm run dev`, an end-to-end run
+does, so it still keeps off that app's CONFIG and saved sessions (its Electron
+session data stays in the default place: `devSessionDataDir` gives no folder
+for such a root, as before); an installed app uses its own folders. A normal install, `ccc`, `npm run dev`, an end-to-end run
 and the tests (all with full roots, or none) get the same folders as before:
 the existing data-path tests pass as they were.
 
@@ -57,8 +58,9 @@ fixture, '0.170.0' joins the schema cases and the hand list goes.
 **Red first.** Each behaviour change was seen red against the base code
 (428baed0; local run c4b-red over data-paths-dev-root-rule, dev-data-root
 and rate-limits test files), and green after (local run c4b-green): the
-packaged run with `CCC_DEV_DATA_DIR`, the relative dev and end-to-end roots, the relative `LOCALAPPDATA`, the two new
-leaf functions, the name-level check on the three files, and the three plan
+packaged run with `CCC_DEV_DATA_DIR`, the relative dev and end-to-end roots,
+the relative `LOCALAPPDATA`, the two new leaf functions, the name-level check
+on the three files, and the three plan
 labels. The review's fixes were seen red against the code of 6b2217d8 (local
 run c4b-red2 over data-paths-dev-root-rule, dev-data-root and
 account-web-detect-browsers): the `dev` folder for the two relative roots and
