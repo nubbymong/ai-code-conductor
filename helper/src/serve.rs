@@ -695,12 +695,8 @@ impl Serve {
     fn admit(&self, conn: &Conn, req: Request) -> Result<Request, Refusal> {
         let relay = conn.is_relay();
         let refused: Option<(&'static str, &'static str)> = match &req {
-            Request::Launch(_) | Request::Attach { .. } | Request::Resize { .. } | Request::Detach { .. } | Request::End { .. } if relay => {
-                Some((request::CODE_UNKNOWN_TYPE, "a connection that opened a tool stream does not use the terminal"))
-            }
             Request::McpOpen { .. } if self.is_attached(conn) => Some((request::CODE_BAD_FIELD, "a connection attached to the terminal opens no tool stream")),
             Request::McpOpen { .. } if self.stream_of_relay(conn, None).is_some() => Some((request::CODE_BAD_FIELD, "this connection has a tool stream open already")),
-            Request::Mcp { bytes, .. } if relay && *bytes > MAX_MCP_TO_APP => Some((request::CODE_TOO_LARGE, "message is over 1048320 bytes as JSON, the most the app takes")),
             _ => None,
         };
         match refused {
@@ -1257,7 +1253,7 @@ impl Serve {
             // Tool streams go to an attach that carries live output only: one
             // that replays a program that has exited takes none, and ends any
             // this connection took before, as no forwarder is left to end them.
-            if allowed.mcp && forwarding.is_some() {
+            if forwarding.is_some() {
                 self.take_tools(conn, gen);
             } else {
                 self.stop_tools(conn);
