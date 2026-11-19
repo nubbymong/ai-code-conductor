@@ -9,21 +9,24 @@ import { TEST_JOB_RE } from '../../../scripts/release-gate.mjs'
 
 /**
  * The Probe P19 (os) job of ci.yml (ADR-030, probe P19; plan 2.1.3-beta.11,
- * section A1). It installs two third-party CLIs and runs them, so it must
- * start ONLY on a dispatch that names it, never on a pull request or a push,
- * and must not be one of the checks a PR waits for. Its condition is
- * EVALUATED here for each event, the way helper-ci-job.test.ts evaluates the
- * Helper job's, not matched as text.
+ * section A1, and its second run, plan 2.1.3-beta.12 section A2). It installs
+ * two third-party CLIs and runs them, so it must start ONLY on a dispatch
+ * that names it, never on a pull request or a push, and must not be one of
+ * the checks a PR waits for. Its condition, and the Codex version it
+ * installs, are EVALUATED here for each event, the way helper-ci-job.test.ts
+ * evaluates the Helper job's, not matched as text.
  *
  * Not checked here: what the probe measures (helper/probes/README.md; a
- * measurement, not a test), the steps' order and options, and whether the
- * CLIs' packages run install scripts (the job passes --ignore-scripts; that
- * is read in review).
+ * measurement, not a test), the steps' order and options, whether the CLIs'
+ * packages run install scripts (the job passes --ignore-scripts; that is read
+ * in review), and whether a dispatched version is a plain semver (the
+ * conformance job's rc leg on the same dispatch checks that; this job takes
+ * it through env).
  */
 
 const ROOT = resolve(__dirname, '../../..')
 const read = (p: string) => readFileSync(resolve(ROOT, p), 'utf-8').replace(/\r\n/g, '\n')
-type Job = { name?: string; if?: unknown; needs?: unknown; steps: Array<Record<string, unknown>>; strategy?: { matrix: Record<string, unknown> }; permissions?: Record<string, string>; 'continue-on-error'?: unknown }
+type Job = { name?: string; if?: unknown; needs?: unknown; env?: Record<string, unknown>; steps: Array<Record<string, unknown>>; strategy?: { matrix: Record<string, unknown> }; permissions?: Record<string, string>; 'continue-on-error'?: unknown }
 type Input = { type?: string; default?: unknown; required?: boolean }
 const ci = yaml.load(read('.github/workflows/ci.yml')) as { on: { pull_request: { types: string[] }; workflow_dispatch: { inputs: Record<string, Input> } }; jobs: Record<string, Job> }
 const job = ci.jobs['probe-p19']
@@ -64,6 +67,23 @@ describe('ci.yml: the Probe P19 job runs only on a dispatch that names it', () =
     expect(runs(dispatch({ codex_rc_version: '0.160.0', conformance_prove_red: true, probe_p19: false }))).toBe(false)
     expect(runs(dispatch({ codex_rc_version: '', conformance_prove_red: false }))).toBe(false)
     expect(runs(dispatch({}))).toBe(false)
+  })
+
+  it('still starts on a dispatch that names it and gives a Codex version', () => {
+    expect(runs(dispatch({ codex_rc_version: '0.170.0', conformance_prove_red: false, probe_p19: true }))).toBe(true)
+  })
+
+  it('installs the dispatch\'s Codex version when it gives one, and 0.157.1 when it does not', () => {
+    const codex = (ctx: GhaContext) => evalValue(job.env?.P19_CODEX_VERSION, ctx)
+    expect(codex(dispatch({ codex_rc_version: '0.170.0', conformance_prove_red: false, probe_p19: true }))).toBe('0.170.0')
+    expect(codex(dispatch({ codex_rc_version: '', conformance_prove_red: false, probe_p19: true }))).toBe('0.157.1')
+    expect(codex(dispatch({ probe_p19: true }))).toBe('0.157.1')
+    // Claude Code stays the test machine's version either way.
+    expect(job.env?.P19_CLAUDE_VERSION).toBe('2.1.328')
+    // The install step reads the version from env, never from an expression in its shell line.
+    const install = job.steps.find((s) => String(s.name ?? '').startsWith('Install Codex'))
+    expect(String(install?.run)).toContain('"@openai/codex@$P19_CODEX_VERSION"')
+    expect(String(install?.run)).not.toContain('${{')
   })
 
   it('is named by one boolean dispatch input that is off unless set', () => {

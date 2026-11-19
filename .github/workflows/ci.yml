@@ -816,9 +816,11 @@ jobs:
       matrix:
         os: [windows-2025, macos-latest, ubuntu-latest]
     env:
-      # The versions the Windows test machine has (ADR-030, P18 and P19).
+      # The versions the Windows test machine has (ADR-030, P18 and P19); for
+      # Codex, the dispatch's codex_rc_version instead when it gives one (P19's
+      # second run, 0.170.0). It reaches npm through env, never a shell line.
       P19_CLAUDE_VERSION: '2.1.328'
-      P19_CODEX_VERSION: '0.157.1'
+      P19_CODEX_VERSION: ${{ inputs.codex_rc_version != '' && inputs.codex_rc_version || '0.157.1' }}
     steps:
       - uses: actions/checkout@v7
         with:

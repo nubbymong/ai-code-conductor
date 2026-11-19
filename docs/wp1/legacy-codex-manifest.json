@@ -1,8 +1,8 @@
 {
   "schema": "wp1-legacy-codex-manifest/3",
-  "generatedAt": "2026-11-21T01:58:13.346Z",
-  "head": "30bf18108897fb3d5f004797641dd162fc3b62d0",
-  "tree": "abb40ee42028d589e5880560d92a0a09a9088ffe",
+  "generatedAt": "2026-11-21T03:39:52.163Z",
+  "head": "bf572ee7be00e2a91d513202f78d603dcdfcdab7",
+  "tree": "72aa361f4a14ea6a36f799268c0b44f7f4a7734e",
   "scannedWorkingTree": true,
   "predicateDigest": "100a1233edebdc39a5f9004d3fba980a89ebb15b25872e52076386bc84b03153",
   "predicates": [
@@ -116,8 +116,8 @@
     "\\.(png|jpg|jpeg|gif|ico|icns|webp|svg|woff2?|ttf|otf|mp4|zip|asar|node|exe|dll|dylib|so|pdf)$",
     "^package-lock\\.json$"
   ],
-  "trackedFileCount": 3568,
-  "excludedFileCount": 548,
+  "trackedFileCount": 3573,
+  "excludedFileCount": 553,
   "scannedFileCount": 3020,
   "unscopedFileCount": 15,
   "unscoped": [
@@ -139,8 +139,8 @@
   ],
   "unscopedMentions": [],
   "unreadable": [],
-  "matchedPathCount": 964,
-  "pathDigest": "fabfbed01579a8597a8a18f511f1a29819f5f586c49b71bc459e2d4faf76a39e",
+  "matchedPathCount": 965,
+  "pathDigest": "5c241d36b358681bdb8df951abb2ee87fb3d3162fd0630e9b4ae64977f6d1ad1",
   "entries": [
     {
       "path": ".github/workflows/ci.yml",
@@ -148,7 +148,7 @@
         "P04",
         "P14"
       ],
-      "lineCount": 65
+      "lineCount": 66
     },
     {
       "path": ".github/workflows/upstream-cli-watch.yml",
@@ -382,7 +382,7 @@
       "predicates": [
         "P14"
       ],
-      "lineCount": 7
+      "lineCount": 14
     },
     {
       "path": "helper/probes/p18-stand-in.cjs",
@@ -412,14 +412,14 @@
         "P04",
         "P14"
       ],
-      "lineCount": 26
+      "lineCount": 35
     },
     {
       "path": "helper/probes/p19-scenarios.json",
       "predicates": [
         "P14"
       ],
-      "lineCount": 4
+      "lineCount": 22
     },
     {
       "path": "package.json",
@@ -7529,7 +7529,14 @@
       "predicates": [
         "P13"
       ],
-      "lineCount": 5
+      "lineCount": 15
+    },
+    {
+      "path": "tests/unit/scripts/probe-p19-record.test.ts",
+      "predicates": [
+        "P13"
+      ],
+      "lineCount": 4
     },
     {
       "path": "tests/unit/scripts/readme-stage.test.ts",

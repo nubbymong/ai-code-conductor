@@ -1,20 +1,30 @@
 {
-  "about": "Probe P19 (ADR-030): the scenario p19-record.cjs runs for each program, and the reply p19-model-stand-in.cjs streams. Keys are typed as written; {prompt} is the prompt below. A screen pattern is a regular expression over the 40 rows of the attached pane's text, joined by newlines.",
+  "about": "Probe P19 (ADR-030): the scenario p19-record.cjs runs for each program, and the two replies p19-model-stand-in.cjs streams. Keys are typed as written; {prompt} and {shortPrompt} are the prompts below. A screen pattern is a regular expression over the 40 rows of the attached pane's text, joined by newlines. A mark with recordOnly is recorded to the mark and recordOnlyMs on, with no resize. A launch's runs caps how often it runs (never above --runs); codexConfig lines go at the end of that launch's Codex config, with {work} as the run's working folder. A program with onlyWhenNamed runs only when --only names it; cli says which CLI it runs.",
   "size": { "cols": 120, "rows": 40 },
   "runs": 3,
   "cutBytes": 65536,
   "settleMs": 2000,
   "sampleMs": 250,
   "nudgeMs": 300,
+  "recordOnlyMs": 300,
   "tailLines": 200,
   "scrollback": 1000,
   "prompt": "p19 probe: print the probe's lines",
+  "shortPrompt": "p19 short: print the probe's short reply",
   "apiKey": "sk-ant-p19-probe-made-up-not-a-real-key-0000",
   "reply": {
     "lines": 300,
     "lineMs": 120,
     "marker": "p19 probe",
     "line": "p19 line {n} of {total}: the quick brown fox jumps over the lazy dog",
+    "after": "\n\n",
+    "blockLines": 10
+  },
+  "shortReply": {
+    "lines": 40,
+    "lineMs": 50,
+    "marker": "p19 short",
+    "line": "p19 short line {n} of {total}: the quick brown fox jumps over the lazy dog",
     "after": "\n\n",
     "blockLines": 10
   },
@@ -119,6 +129,121 @@
             { "do": "settle", "quietMs": 2000, "minBytes": 0, "timeoutMs": 15000 },
             { "do": "mark", "state": "after-reply" }
           ]
+        },
+        {
+          "id": "short",
+          "seed": "codex",
+          "steps": [
+            {
+              "do": "until",
+              "label": "the ready composer",
+              "screen": "(?:^|\\n) ?›(?:[ \\n]|$)",
+              "not": "esc to interrupt",
+              "timeoutMs": 60000,
+              "rules": [
+                { "label": "folder trust", "screen": "trust the contents|allow Codex to work in this folder|Do you trust", "keys": "\r" },
+                { "label": "press Enter", "screen": "[Pp]ress [Ee]nter to continue", "keys": "\r" }
+              ]
+            },
+            { "do": "settle", "quietMs": 1500, "minBytes": 0, "timeoutMs": 3000 },
+            { "do": "keys", "keys": "{shortPrompt}", "afterMs": 700 },
+            { "do": "keys", "keys": "\r", "afterMs": 0 },
+            { "do": "reply", "atLeast": 0.35, "timeoutMs": 60000 },
+            { "do": "mark", "state": "mid-reply", "recordOnly": true },
+            { "do": "replyDone", "timeoutMs": 30000 },
+            {
+              "do": "until",
+              "label": "the ready composer after the reply",
+              "screen": "(?:^|\\n) ?›(?:[ \\n]|$)",
+              "not": "esc to interrupt",
+              "timeoutMs": 30000,
+              "rules": []
+            },
+            { "do": "settle", "quietMs": 2000, "minBytes": 0, "timeoutMs": 4000 },
+            { "do": "mark", "state": "after-reply" }
+          ]
+        },
+        {
+          "id": "queue",
+          "seed": "codex",
+          "runs": 1,
+          "steps": [
+            {
+              "do": "until",
+              "label": "the ready composer",
+              "screen": "(?:^|\\n) ?›(?:[ \\n]|$)",
+              "not": "esc to interrupt",
+              "timeoutMs": 60000,
+              "rules": [
+                { "label": "folder trust", "screen": "trust the contents|allow Codex to work in this folder|Do you trust", "keys": "\r" },
+                { "label": "press Enter", "screen": "[Pp]ress [Ee]nter to continue", "keys": "\r" }
+              ]
+            },
+            { "do": "settle", "quietMs": 1500, "minBytes": 0, "timeoutMs": 3000 },
+            { "do": "keys", "keys": "{shortPrompt}", "afterMs": 700 },
+            { "do": "keys", "keys": "\r", "afterMs": 300 },
+            { "do": "keys", "keys": "p19 queued draft", "afterMs": 0 },
+            { "do": "until", "label": "the queue hint (a draft typed while the short turn runs)", "screen": "to queue", "timeoutMs": 5000, "rules": [] },
+            { "do": "mark", "state": "queue-hint", "recordOnly": true }
+          ]
+        },
+        {
+          "id": "rebind",
+          "seed": "codex",
+          "runs": 1,
+          "codexConfig": ["[tui.keymap.composer]", "toggle_shortcuts = \"f6\""],
+          "steps": [
+            {
+              "do": "until",
+              "label": "the ready composer, its shortcuts key rebound to F6",
+              "screen": "(?:^|\\n) ?›(?:[ \\n]|$)",
+              "not": "esc to interrupt",
+              "timeoutMs": 60000,
+              "rules": [
+                { "label": "folder trust", "screen": "trust the contents|allow Codex to work in this folder|Do you trust", "keys": "\r" },
+                { "label": "press Enter", "screen": "[Pp]ress [Ee]nter to continue", "keys": "\r" }
+              ]
+            },
+            { "do": "settle", "quietMs": 1500, "minBytes": 0, "timeoutMs": 3000 },
+            { "do": "mark", "state": "rebound-hint", "recordOnly": true }
+          ]
+        },
+        {
+          "id": "agents",
+          "seed": "codex",
+          "runs": 1,
+          "steps": [
+            {
+              "do": "until",
+              "label": "the agents form of the hint row (← for agents), the default composer",
+              "screen": "← for agents",
+              "timeoutMs": 60000,
+              "rules": [
+                { "label": "folder trust", "screen": "trust the contents|allow Codex to work in this folder|Do you trust", "keys": "\r" },
+                { "label": "press Enter", "screen": "[Pp]ress [Ee]nter to continue", "keys": "\r" }
+              ]
+            },
+            { "do": "mark", "state": "agents-hint", "recordOnly": true }
+          ]
+        },
+        {
+          "id": "warning",
+          "seed": "codex",
+          "runs": 1,
+          "codexConfig": ["[mcp_servers.p19probe]", "command = '{work}/p19-no-such-program'"],
+          "steps": [
+            {
+              "do": "until",
+              "label": "a warning count on the hint row (⚠ and a number), an MCP server that cannot start",
+              "screen": "⚠ \\d+",
+              "timeoutMs": 60000,
+              "rules": [
+                { "label": "folder trust", "screen": "trust the contents|allow Codex to work in this folder|Do you trust", "keys": "\r" },
+                { "label": "press Enter", "screen": "[Pp]ress [Ee]nter to continue", "keys": "\r" }
+              ]
+            },
+            { "do": "mark", "state": "warning-hint", "recordOnly": true }
+          ]
         }
       ]
     },
@@ -143,6 +268,50 @@
             },
             { "do": "settle", "quietMs": 1500, "minBytes": 3000, "timeoutMs": 30000 },
             { "do": "mark", "state": "after-output" }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "codex-daemon",
+      "cli": "codex",
+      "name": "Codex with its background server",
+      "verdict": false,
+      "turnVerdict": true,
+      "onlyWhenNamed": true,
+      "args": [],
+      "exitKeys": ["\u0003", "\u0003"],
+      "launches": [
+        {
+          "id": "short",
+          "seed": "codex",
+          "runs": 1,
+          "steps": [
+            {
+              "do": "until",
+              "label": "the ready composer",
+              "screen": "(?:^|\\n) ?›(?:[ \\n]|$)",
+              "not": "esc to interrupt",
+              "timeoutMs": 60000,
+              "rules": [
+                { "label": "folder trust", "screen": "trust the contents|allow Codex to work in this folder|Do you trust", "keys": "\r" },
+                { "label": "press Enter", "screen": "[Pp]ress [Ee]nter to continue", "keys": "\r" }
+              ]
+            },
+            { "do": "settle", "quietMs": 1500, "minBytes": 0, "timeoutMs": 3000 },
+            { "do": "mark", "state": "ready", "recordOnly": true },
+            { "do": "keys", "keys": "{shortPrompt}", "afterMs": 700 },
+            { "do": "keys", "keys": "\r", "afterMs": 0 },
+            { "do": "replyDone", "timeoutMs": 30000 },
+            {
+              "do": "until",
+              "label": "the ready composer after the reply",
+              "screen": "(?:^|\\n) ?›(?:[ \\n]|$)",
+              "not": "esc to interrupt",
+              "timeoutMs": 30000,
+              "rules": []
+            },
+            { "do": "mark", "state": "after-reply", "recordOnly": true }
           ]
         }
       ]

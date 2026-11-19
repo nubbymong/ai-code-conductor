@@ -1,8 +1,8 @@
 {
   "schema": "wp1-legacy-codex-ledger/2",
   "predicateDigest": "100a1233edebdc39a5f9004d3fba980a89ebb15b25872e52076386bc84b03153",
-  "manifestPathDigest": "fabfbed01579a8597a8a18f511f1a29819f5f586c49b71bc459e2d4faf76a39e",
-  "manifestHead": "30bf18108897fb3d5f004797641dd162fc3b62d0",
+  "manifestPathDigest": "5c241d36b358681bdb8df951abb2ee87fb3d3162fd0630e9b4ae64977f6d1ad1",
+  "manifestHead": "bf572ee7be00e2a91d513202f78d603dcdfcdab7",
   "dispositions": {
     "retain": "unchanged observable behaviour, characterization proof",
     "move": "moved behind a package boundary and/or adapted at the call site, regression proof (newPath when relocated)",
@@ -10725,6 +10725,16 @@
       "disposition": "added",
       "evidence": "new 2.1.3-beta.11 A1 test (ADR-030 probe P19): the probe-p19 job of ci.yml runs only on a dispatch that names it, never on a pull request or a push, and is no required check; it names the Codex conformance dispatch inputs only to show they do not start it (WP1.67); tests/unit/scripts/probe-p19-job.test.ts",
       "note": "reads ci.yml only"
+    },
+    {
+      "path": "tests/unit/scripts/probe-p19-record.test.ts",
+      "predicates": [
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "new 2.1.3-beta.11 A1 test (ADR-030 probe P19), extended by 2.1.3-beta.12 A2 (P19's second run): the probe's clean-up ownership, its verdict lines, the modes comparison, a record-only state, the console host counts and the Codex background server row; it names Codex only as the CLI a probe row runs (WP1.67); tests/unit/scripts/probe-p19-record.test.ts",
+      "note": "loads helper/probes/p19-record.cjs without running a CLI"
     },
     {
       "path": "tests/unit/scripts/readme-stage.test.ts",

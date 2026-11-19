@@ -71,6 +71,43 @@
  * pane 2 already matched pane 1 before any resize in every run that reached
  * it: the nudge had nothing to put right there, so it was not put to the test.
  *
+ * The second run (plan 2.1.3-beta.12, section A2, aicc_planning #353) adds:
+ *   The modes. At the mark and after each step, beside the rows, it records
+ *     for both panes what xterm.js says of the terminal's modes: the screen in
+ *     use (`screen`: normal or alternate) and every field of the terminal's
+ *     `modes` (bracketed paste, mouse reporting, application cursor keys,
+ *     application keypad, focus reporting and the rest it lists). The mouse
+ *     encoding and whether the cursor is shown are not in `modes`, so not here.
+ *   States that are record only: the recording runs to the mark and 300 ms on,
+ *     with no second pane and no resize step, so a Codex recording can end
+ *     while a turn still runs. They take no part in any verdict.
+ *   The console hosts, on Windows: after each program's end, the console hosts
+ *     of that run (conhost.exe, OpenConsole.exe) are counted 1, 2, 5, 10, 30
+ *     and 60 s after node-pty reported the exit, before anything of that run is
+ *     stopped (the first run stopped them at 1 s). The next run starts
+ *     meanwhile; a run's processes are the probe's own children started between
+ *     its start and its end, and their descendants.
+ *   A launch may run fewer times than --runs (`runs` in the scenario): the
+ *     record-only screens are kept from one run.
+ *   A reference row that runs only when --only names it: Codex without
+ *     --no-daemon, so with its background server (the test machine only).
+ *   Each state's recording size, as the screen corpus would write it, beside
+ *     the corpus's cap of 256 KiB a recording.
+ * Its decision lines (the plan's, written before measuring):
+ *   A mode, per CLI per system (per ConPTY on Windows): KEPT when pane 2
+ *     equals pane 1 two seconds after the nudge in 3 of 3 runs at every state
+ *     reached. LOST when they differ in 2 of 3 or more at some state.
+ *     Anything else is NO VERDICT. Whether it was already equal before any
+ *     resize is recorded beside it.
+ *   The console host, per ConPTY: ENDS BY ITSELF when none is left 10 s after
+ *     the exit in every run. STAYS when one is left at 60 s in any run. In
+ *     between: IN BETWEEN, recorded with its times.
+ *   Codex with its background server: RUNS A TURN when its turn's reply was
+ *     sent to the end and the composer came back in every run, or FAILS with
+ *     what the screen showed.
+ *   A record-only screen (a hint row): RECORDED, or NOT REACHED with what was
+ *     tried and what the screen showed. Nothing is drawn by hand.
+ *
  * It refuses node-pty or @xterm/headless at any version but the one the
  * checkout's package.json and package-lock.json name, prints both, and
  * refuses a .cmd or .bat program on Windows (node-pty starts a program file).
@@ -83,12 +120,14 @@
  * is listed. A program's end is when node-pty reports its exit (on the
  * system ConPTY about a second after the real end); the children of a
  * program whose exit was never reported are left out, neither stopped nor
- * listed.
+ * listed. node-pty's kill still runs right after the exit, as in the first run.
  *
  * Usage:
  *   node p19-record.cjs run --root <checkout> --out <folder> [--claude <program>]
- *       [--codex <program>] [--conpty bundled|system|both] [--only claude,codex,shell]
- *       [--runs <n>] [--scenarios <file>]
+ *       [--codex <program>] [--conpty bundled|system|both]
+ *       [--only claude,codex,shell,codex-daemon] [--runs <n>] [--scenarios <file>]
+ *   (without --only every program runs but the ones the scenario marks
+ *   `onlyWhenNamed`: the Codex background server row)
  *   node p19-record.cjs locate <claude prefix> <codex prefix>
  *       (CI: the native programs of the two packages npm installed with scripts
  *       off, written to GITHUB_OUTPUT as claude= and codex=)
@@ -97,7 +136,8 @@
  *
  * Writes to --out: recordings/<program>-<conpty>-<launch>-<run>.jsonl (a
  * header line, then one line per chunk {o, t, b: base64}, and one per event:
- * keys, resize, mark, exit) and p19-result.json. The header line and the
+ * keys, resize, mark, mark-end (the end of that state's recording), exit) and
+ * p19-result.json. The header line and the
  * result both name the probe code that made them (`files`: the sha256 of
  * this file, the stand-in and the scenario file, each read with LF line
  * ends, so a Windows checkout gives the same digest and
@@ -105,7 +145,10 @@
  * temporary folder, the home folder and the programs' paths as <temp>, <home>,
  * <claude>, <codex> and <shell>. A recording keeps the bytes as read; the
  * only paths in it are the probe's own temporary folder under the machine's
- * own account. The last line is "P19 RESULT: ..." with each CLI's verdict
+ * own account. Before the last line come "P19 MODES" (each mode's verdict per
+ * CLI), "P19 CONSOLE HOSTS" (Windows) and "P19 SIZES" (the states whose
+ * recording would be over the corpus's cap). The last line is "P19 RESULT:
+ * ..." with each CLI's verdict
  * (per ConPTY on Windows) and the shell's summary, or "P19 RESULT: COULD NOT
  * RUN - <reason>", with "; clean-up incomplete: <what>" added when something
  * was left. Exit code 0 when it ran to the end, 2 when it could not run or
@@ -200,28 +243,36 @@ function conptyModes(ptyDir, wanted) {
 /** A start time as milliseconds, or null when it cannot be read. */
 const startMs = (s) => { const t = Date.parse(s); return Number.isFinite(t) ? t : null; };
 
+/** The process listers still running. Runs overlap while a run's console
+ *  hosts are counted, so a lister another task started is never taken for a
+ *  run's own process. */
+const LISTERS = new Set();
+
 /** Every process on the machine: pid, parent, start time (as listed, and as
  *  milliseconds) and name. Run asynchronously, so the terminals keep being
  *  read meanwhile. */
 function listProcesses() {
   return new Promise((resolve, reject) => {
-    const done = (child, parse) => (err, stdout) => {
+    let child = null;
+    const done = (parse) => (err, stdout) => {
+      if (child) LISTERS.delete(child.pid);
       if (err) { reject(new Error(`the process list failed: ${err.message}`)); return; }
       try { resolve({ self: child.pid, procs: parse(stdout) }); } catch (e) { reject(e); }
     };
     if (IS_WIN) {
       const ps = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
       const cmd = "Get-CimInstance Win32_Process | ForEach-Object { [pscustomobject]@{ p = [int]$_.ProcessId; q = [int]$_.ParentProcessId; s = $(if ($_.CreationDate) { $_.CreationDate.ToUniversalTime().ToString('o') } else { '' }); n = [string]$_.Name } } | ConvertTo-Json -Compress";
-      const child = cp.execFile(ps, ['-NoProfile', '-NonInteractive', '-Command', cmd], { windowsHide: true, timeout: 60000, maxBuffer: 1 << 24 },
-        done({ get pid() { return child.pid; } }, (out) => [].concat(JSON.parse(out)).map((x) => ({ pid: x.p, ppid: x.q, start: x.s, startMs: startMs(x.s), name: x.n }))));
-      return;
+      child = cp.execFile(ps, ['-NoProfile', '-NonInteractive', '-Command', cmd], { windowsHide: true, timeout: 60000, maxBuffer: 1 << 24 },
+        done((out) => [].concat(JSON.parse(out)).map((x) => ({ pid: x.p, ppid: x.q, start: x.s, startMs: startMs(x.s), name: x.n }))));
+    } else {
+      child = cp.execFile('ps', ['-A', '-o', 'pid=,ppid=,lstart=,comm='], { timeout: 60000, maxBuffer: 1 << 24 },
+        done((out) => out.split('\n').filter((l) => l.trim()).map((l) => {
+          const m = /^\s*(\d+)\s+(\d+)\s+(\w{3} \w{3} +\d+ \d+:\d+:\d+ \d{4})\s+(.*)$/.exec(l);
+          const start = m && m[3].replace(/ +/g, ' ');
+          return m ? { pid: Number(m[1]), ppid: Number(m[2]), start, startMs: startMs(start), name: m[4].trim() } : null;
+        }).filter(Boolean)));
     }
-    const child = cp.execFile('ps', ['-A', '-o', 'pid=,ppid=,lstart=,comm='], { timeout: 60000, maxBuffer: 1 << 24 },
-      done({ get pid() { return child.pid; } }, (out) => out.split('\n').filter((l) => l.trim()).map((l) => {
-        const m = /^\s*(\d+)\s+(\d+)\s+(\w{3} \w{3} +\d+ \d+:\d+:\d+ \d{4})\s+(.*)$/.exec(l);
-        const start = m && m[3].replace(/ +/g, ' ');
-        return m ? { pid: Number(m[1]), ppid: Number(m[2]), start, startMs: startMs(start), name: m[4].trim() } : null;
-      }).filter(Boolean)));
+    if (child.pid) LISTERS.add(child.pid);
   });
 }
 
@@ -232,14 +283,18 @@ function listProcesses() {
  *  ids, so a process whose parent id is ours may be another's: a child
  *  counts only when it started after its parent and, for a program that has
  *  ended, before that program ended. When a start or that end is not known,
- *  the child is left out. The lister itself and `skip` are left out. */
-function ownedProcesses(list, known, skip) {
+ *  the child is left out. The lister itself, any other lister still running,
+ *  and `skip` are left out. `window` ({ from, to }, milliseconds) bounds when
+ *  the probe's own children started: one run's processes. */
+function ownedProcesses(list, known, skip, window) {
   const byPid = new Map(list.procs.map((p) => [p.pid, p]));
   const byParent = new Map();
   for (const p of list.procs) { if (!byParent.has(p.ppid)) byParent.set(p.ppid, []); byParent.get(p.ppid).push(p); }
   // Each root with the times its children must have started between.
   const self = byPid.get(process.pid);
-  const roots = [{ pid: process.pid, from: self ? self.startMs : null, to: Infinity }];
+  const roots = [window
+    ? { pid: process.pid, from: window.from, to: window.to }
+    : { pid: process.pid, from: self ? self.startMs : null, to: Infinity }];
   for (const [pid, k] of known) {
     const live = byPid.get(pid);
     if (!live) roots.push({ pid, from: k.startMs, to: k.endMs });
@@ -251,7 +306,7 @@ function ownedProcesses(list, known, skip) {
     const { pid, from, to } = stack.pop();
     if (!Number.isFinite(from) || to == null) continue;
     for (const c of byParent.get(pid) || []) {
-      if (c.pid === process.pid || c.pid === list.self || skip.has(c.pid) || out.has(c.pid)) continue;
+      if (c.pid === process.pid || c.pid === list.self || LISTERS.has(c.pid) || skip.has(c.pid) || out.has(c.pid)) continue;
       if (!Number.isFinite(c.startMs) || c.startMs < from || c.startMs > to) continue;
       out.set(c.pid, c);
       stack.push({ pid: c.pid, from: c.startMs, to: Infinity });
@@ -283,6 +338,47 @@ async function stopChecked(p) {
     if ((await same()) !== true) return 'stopped (SIGKILL)';
   }
   return 'still running after it was stopped';
+}
+
+// ── console hosts (Windows) ────────────────────────────────────────────────
+/** When a run's console hosts are counted: seconds after node-pty reported
+ *  the program's exit. */
+const CONSOLE_HOST_TIMES = [1, 2, 5, 10, 30, 60];
+const isConsoleHost = (p) => /^(conhost|openconsole)\.exe$/i.test(p.name || '');
+
+/** One run's processes in `list`: the probe's own children that started
+ *  between the run's start and `endMs`, the program it started, and their
+ *  descendants. */
+function runProcesses(ctx, run, list, endMs) {
+  const known = run.known ? new Map([[run.known.pid, run.known]]) : new Map();
+  return ownedProcesses(list, known, ctx.skip, { from: run.t0, to: endMs });
+}
+
+/** The console hosts of one run at each of CONSOLE_HOST_TIMES after
+ *  `exitAt`. `waitUntil(ms)` returns at that time; `list(ms)` gives the run's
+ *  processes then. The six readings are taken each at its own time, so a slow
+ *  list does not delay the next; each says when its list started and ended. */
+async function consoleHostCounts(exitAt, list, waitUntil) {
+  return Promise.all(CONSOLE_HOST_TIMES.map(async (s) => {
+    await waitUntil(exitAt + s * 1000);
+    const from = now() - exitAt;
+    const procs = await list(exitAt + s * 1000);
+    const hosts = procs.filter(isConsoleHost);
+    return { s, n: hosts.length, hosts: hosts.map((p) => ({ name: p.name, pid: p.pid })), listedMs: [from, now() - exitAt] };
+  }));
+}
+
+/** The console host's verdict over runs (one ConPTY): the decision lines in
+ *  the header. A run counts only when all six readings were taken. */
+function consoleHostVerdict(readings) {
+  const counted = readings.filter((r) => r.consoleHosts && r.consoleHosts.counted);
+  const notCounted = readings.filter((r) => r.consoleHosts && !r.consoleHosts.counted).length;
+  if (!counted.length) return { verdict: 'NOT COUNTED', runs: 0, notCounted, at: {}, line: `NOT COUNTED (${notCounted} runs not counted)` };
+  const at = {};
+  for (const s of CONSOLE_HOST_TIMES) at[s] = counted.filter((r) => (r.consoleHosts.at.find((x) => x.s === s) || { n: 0 }).n > 0).length;
+  const verdict = at[60] > 0 ? 'STAYS' : at[10] === 0 ? 'ENDS BY ITSELF' : 'IN BETWEEN';
+  const times = CONSOLE_HOST_TIMES.map((s) => `${s} s: ${at[s]}`).join(', ');
+  return { verdict, runs: counted.length, notCounted, at, line: `${verdict} (runs with one left, of ${counted.length}: ${times}${notCounted ? `; ${notCounted} not counted` : ''})` };
 }
 
 // ── panes ──────────────────────────────────────────────────────────────────
@@ -322,6 +418,20 @@ function tailLines(term, n) {
   return out;
 }
 
+/** What xterm.js says of a pane's modes: the screen in use, then every field
+ *  of the terminal's `modes`, in name order. */
+function modesOf(term) {
+  const out = { screen: term.buffer.active.type };
+  const m = term.modes;
+  for (const k of Object.keys(m).sort()) out[k] = m[k];
+  return out;
+}
+
+/** The names of the modes two panes differ in; empty when they agree. */
+function compareModes(a, b) {
+  return [...new Set([...Object.keys(a), ...Object.keys(b)])].filter((k) => a[k] !== b[k]);
+}
+
 /** A pane's state once it has parsed everything written to it so far. */
 function snap(term, n) {
   return new Promise((resolve, reject) => term.write('', () => {
@@ -333,11 +443,13 @@ function snap(term, n) {
         cursor: [term.buffer.active.cursorX, term.buffer.active.cursorY],
         length: term.buffer.active.length,
         buffer: term.buffer.active.type,
+        modes: modesOf(term),
       });
     } catch (e) { reject(e); }
   }));
 }
 
+const modesPair = (a, b) => ({ pane1: a.modes, pane2: b.modes, differ: compareModes(a.modes, b.modes) });
 const sameRow = (a, b) => a.text === b.text && a.typed === b.typed && a.inverse === b.inverse;
 function compareSnaps(a, b, n) {
   const rows = [];
@@ -353,7 +465,7 @@ function compareSnaps(a, b, n) {
   const tb = pad(b.tail);
   let tailDiffer = 0;
   for (let i = 0; i < n; i++) if ((ta[i] ?? '') !== (tb[i] ?? '') || (ta[i] === null) !== (tb[i] === null)) tailDiffer += 1;
-  return { equal: rows.length === 0, rows, tailDiffer, tailLengths: [a.tail.length, b.tail.length], cursor: [a.cursor, b.cursor], buffers: [a.buffer, b.buffer] };
+  return { equal: rows.length === 0, rows, tailDiffer, tailLengths: [a.tail.length, b.tail.length], cursor: [a.cursor, b.cursor], buffers: [a.buffer, b.buffer], modes: modesPair(a, b) };
 }
 
 // ── the probe ──────────────────────────────────────────────────────────────
@@ -433,6 +545,10 @@ function seed(ctx, prog, launch, dirs) {
       `[projects.'${dirs.work}']`,
       'trust_level = "trusted"',
       '',
+      // A launch's own lines (a rebound key, a server that cannot start), with
+      // {work} as the run's working folder; each in the run's own folder.
+      ...(launch.codexConfig || []).map((l) => l.replace(/\{work\}/g, dirs.work)),
+      '',
     ].join('\n');
     fs.writeFileSync(path.join(dirs.codex, 'config.toml'), toml);
   } else if (launch.seed === 'shell' && !IS_WIN) {
@@ -441,24 +557,31 @@ function seed(ctx, prog, launch, dirs) {
   }
 }
 
+/** The CLI a program row runs: its `cli`, or its id (the Codex background
+ *  server row runs Codex). */
+const cliOf = (prog) => prog.cli || prog.id;
+
 function extraEnv(ctx, prog, launch) {
-  if (prog.id === 'claude') {
+  const cli = cliOf(prog);
+  if (cli === 'claude') {
     return {
       ANTHROPIC_BASE_URL: `http://127.0.0.1:${ctx.port}`, DISABLE_AUTOUPDATER: '1', DISABLE_TELEMETRY: '1', DISABLE_ERROR_REPORTING: '1',
       CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1', ...(launch.seed === 'claude' ? { ANTHROPIC_API_KEY: ctx.scenario.apiKey } : {}),
     };
   }
-  if (prog.id === 'codex') return { P19_PROBE_KEY: 'p19-probe-placeholder-not-a-key' };
+  if (cli === 'codex') return { P19_PROBE_KEY: 'p19-probe-placeholder-not-a-key' };
   return {};
 }
 
 function rec(run, o) {
+  // Events (not chunks) are kept for the size estimate (corpusBytes).
+  if (o.ev && run.events) run.events.push(o);
   try { fs.writeSync(run.fd, JSON.stringify(o) + '\n'); } catch { /* a lost line shows as a gap in the offsets */ }
 }
 
 function resolveKeys(ctx, keys) {
   const k = typeof keys === 'object' && !Array.isArray(keys) ? (keys[process.platform] ?? keys.default) : keys;
-  return [].concat(k).map((s) => s.replace(/\{prompt\}/g, ctx.scenario.prompt));
+  return [].concat(k).map((s) => s.replace(/\{prompt\}/g, ctx.scenario.prompt).replace(/\{shortPrompt\}/g, ctx.scenario.shortPrompt || ''));
 }
 
 async function typeKeys(ctx, run, keys) {
@@ -547,21 +670,38 @@ async function observe(ctx, run, name, act) {
   const [a, b] = await Promise.all([snap(run.pane1, S.tailLines), snap(run.pane2, S.tailLines)]);
   const c = compareSnaps(a, b, S.tailLines);
   if (c.equal && firstEqualMs === null) firstEqualMs = now() - tAct;
-  return { step: name, equal: c.equal, bytesAfter: at - from, firstEqualMs: c.equal ? firstEqualMs : null, tailDiffer: c.tailDiffer, tailLengths: c.tailLengths, cursor: c.cursor, buffers: c.buffers, rows: c.rows };
+  return { step: name, equal: c.equal, bytesAfter: at - from, firstEqualMs: c.equal ? firstEqualMs : null, tailDiffer: c.tailDiffer, tailLengths: c.tailLengths, cursor: c.cursor, buffers: c.buffers, modes: c.modes, rows: c.rows };
 }
 
-async function measure(ctx, run, state) {
+/** One mark (`step`: { state, recordOnly }). A record-only state is recorded
+ *  to its mark and `recordOnlyMs` (300 ms) on, with no second pane and no
+ *  resize; its modes are pane 1's. Either way a mark-end event closes the
+ *  state's recording. */
+async function measure(ctx, run, step) {
   const S = ctx.scenario;
   const { cols, rows } = S.size;
+  const state = step.state;
   const n = run.total;
+  const markMs = now() - run.t0;
+  if (step.recordOnly) {
+    rec(run, { ev: 'mark', o: n, t: markMs, state, recordOnly: true });
+    await sleep(S.recordOnlyMs ?? 300);
+    const a = await snap(run.pane1, 1);
+    const end = run.total;
+    rec(run, { ev: 'mark-end', o: end, t: now() - run.t0, state });
+    return { state, launch: run.launch, recordOnly: true, reached: true, markOffset: n, markMs, endOffset: end, buffer: a.buffer, modes: a.modes, steps: [] };
+  }
   const all = Buffer.concat(run.chunks, n);
   const cut = n > S.cutBytes ? n - S.cutBytes : Math.floor(n / 2);
   const pane2 = ctx.newPane();
   pane2.write(all.subarray(cut));
   run.pane2 = pane2;
-  rec(run, { ev: 'mark', o: n, t: now() - run.t0, state, cut });
+  rec(run, { ev: 'mark', o: n, t: markMs, state, cut });
   const steps = [];
+  let atMark;
   try {
+    const [a, b] = await Promise.all([snap(run.pane1, 1), snap(pane2, 1)]);
+    atMark = modesPair(a, b);
     steps.push(await observe(ctx, run, 'nothing', async () => {}));
     steps.push(await observe(ctx, run, 'same size', async () => { resize(run, cols, rows); }));
     steps.push(await observe(ctx, run, 'nudge', async () => { resize(run, cols, rows - 1); await sleep(S.nudgeMs); resize(run, cols, rows); }));
@@ -569,7 +709,9 @@ async function measure(ctx, run, state) {
     run.pane2 = null;
     pane2.dispose();
   }
-  return { state, reached: true, markOffset: n, markMs: now() - run.t0, cut, replayBytes: n - cut, steps };
+  const end = run.total;
+  rec(run, { ev: 'mark-end', o: end, t: now() - run.t0, state });
+  return { state, launch: run.launch, reached: true, markOffset: n, markMs, endOffset: end, cut, replayBytes: n - cut, modesAtMark: atMark, steps };
 }
 
 async function endRun(ctx, run, prog) {
@@ -583,11 +725,27 @@ async function endRun(ctx, run, prog) {
   // node-pty's kill also closes the pseudo console after a program has ended.
   try { run.pty.kill(); } catch { /* already closed */ }
   for (let i = 0; i < 25 && !run.exited; i++) await sleep(200);
-  await sleep(1000);
-  run.leftover = [];
+  const endMs = run.exited ? run.t0 + run.exited.t : now();
+  if (IS_WIN && run.exited) {
+    // Counted in the background, the next run starting meanwhile; this run's
+    // processes are stopped only after the 60 s reading.
+    ctx.pending.push(countThenSweep(ctx, run, endMs));
+  } else {
+    if (IS_WIN) run.consoleHosts.why = 'node-pty never reported the exit';
+    await sleep(1000);
+    await sweepRun(ctx, run, endMs);
+  }
+  run.closed = true;
+  try { run.pane1.dispose(); } catch { /* disposed */ }
+  try { fs.closeSync(run.fd); } catch { /* closed */ }
+}
+
+/** Stops one run's processes, each after its name and start time are
+ *  checked again (stopChecked), and notes each in the run's reading. */
+async function sweepRun(ctx, run, endMs) {
   try {
     const list = await listProcesses();
-    for (const p of ownedProcesses(list, ctx.known, ctx.skip)) {
+    for (const p of runProcesses(ctx, run, list, endMs)) {
       const how = await stopChecked(p);
       run.leftover.push({ name: p.name, pid: p.pid, how });
       if (how.startsWith('still') || how.startsWith('could not')) ctx.incomplete.push(`${p.name} (pid ${p.pid}) ${how}`);
@@ -595,9 +753,34 @@ async function endRun(ctx, run, prog) {
   } catch (e) {
     ctx.incomplete.push(`the processes after ${run.id} could not be listed (${e.message})`);
   }
-  run.closed = true;
-  try { run.pane1.dispose(); } catch { /* disposed */ }
-  try { fs.closeSync(run.fd); } catch { /* closed */ }
+}
+
+/** Windows: the run's console hosts at the six times, then its sweep. */
+async function countThenSweep(ctx, run, endMs) {
+  try {
+    run.consoleHosts.at = await consoleHostCounts(endMs,
+      async () => runProcesses(ctx, run, await listProcesses(), endMs),
+      (ms) => sleep(Math.max(0, ms - now())));
+    run.consoleHosts.counted = true;
+  } catch (e) {
+    run.consoleHosts.why = `a list failed (${e.message})`;
+  }
+  await sweepRun(ctx, run, endMs);
+}
+
+/** About how many bytes the screen corpus's file for a state would take: the
+ *  chunks to the state's end as text (a streaming UTF-8 decode, as the corpus
+ *  keeps them) and the events, one JSON line each, and a header. An estimate,
+ *  beside the corpus's cap. */
+const CORPUS_CAP = 256 * 1024;
+function corpusBytes(run, endOffset) {
+  const dec = new TextDecoder('utf-8');
+  let bytes = 1200;
+  for (let i = 0; i < run.chunks.length && run.offsets[i] < endOffset; i++) {
+    bytes += Buffer.byteLength(JSON.stringify({ o: run.offsets[i], t: run.times[i], text: dec.decode(run.chunks[i], { stream: true }) })) + 6;
+  }
+  for (const e of run.events) if (e.o <= endOffset && e.ev !== 'exit' && e.ev !== 'mark-end') bytes += Buffer.byteLength(JSON.stringify(e)) + 6;
+  return bytes;
 }
 
 async function runOne(ctx, prog, mode, launch, k) {
@@ -609,9 +792,10 @@ async function runOne(ctx, prog, mode, launch, k) {
   const env = freshEnv(dirs, extraEnv(ctx, prog, launch));
   const cmd = ctx.commands[prog.id];
   const run = {
-    id, program: prog.id, conpty: mode.id, launch: launch.id, run: k, chunks: [], total: 0, t0: now(), lastDataAt: now(),
+    id, program: prog.id, conpty: mode.id, launch: launch.id, run: k, chunks: [], offsets: [], times: [], events: [], total: 0, t0: now(), lastDataAt: now(),
     pane1: ctx.newPane(), pane2: null, fd: fs.openSync(path.join(ctx.recDir, `${id}.jsonl`), 'w'),
-    requests: [], answered: [], notes: [], states: [], exited: null,
+    requests: [], answered: [], notes: [], states: [], exited: null, known: null, leftover: [],
+    consoleHosts: IS_WIN ? { counted: false, at: [] } : null,
   };
   rec(run, recordingHeader(ctx, prog, mode, launch, k));
   ctx.current = run;
@@ -624,10 +808,13 @@ async function runOne(ctx, prog, mode, launch, k) {
     if (run.closed) return;
     const b = Buffer.isBuffer(d) ? d : Buffer.from(d, 'utf8');
     const o = run.total;
+    const t = now() - run.t0;
     run.chunks.push(b);
+    run.offsets.push(o);
+    run.times.push(t);
     run.total += b.length;
     run.lastDataAt = now();
-    rec(run, { o, t: now() - run.t0, b: b.toString('base64') });
+    rec(run, { o, t, b: b.toString('base64') });
     run.pane1.write(b);
     if (run.pane2) run.pane2.write(b);
   });
@@ -641,17 +828,17 @@ async function runOne(ctx, prog, mode, launch, k) {
   });
   listProcesses().then((l) => {
     const p = l.procs.find((x) => x.pid === term.pid);
-    if (p) { known = { ...p, endMs: run.exited ? run.t0 + run.exited.t : null }; ctx.known.set(p.pid, known); }
+    if (p) { known = { ...p, endMs: run.exited ? run.t0 + run.exited.t : null }; ctx.known.set(p.pid, known); run.known = known; }
   }).catch(() => { /* the end-of-run sweep lists again */ });
   try {
     let why = null;
     for (const step of launch.steps) {
       if (ctx.fatal.length) throw new CouldNotRun(`an error the probe did not expect: ${ctx.fatal[0]}`);
       if (why) {
-        if (step.do === 'mark') run.states.push({ state: step.state, reached: false, why, screen: await screenText(ctx, run) });
+        if (step.do === 'mark') run.states.push({ state: step.state, launch: launch.id, ...(step.recordOnly ? { recordOnly: true } : {}), reached: false, why, screen: await screenText(ctx, run) });
         continue;
       }
-      if (step.do === 'mark') run.states.push(await measure(ctx, run, step.state));
+      if (step.do === 'mark') run.states.push(await measure(ctx, run, step));
       else if (step.do === 'settle') why = await settle(ctx, run, step);
       else if (step.do === 'until') why = await until(ctx, run, step);
       else if (step.do === 'keys') { await typeKeys(ctx, run, step.keys); if (step.afterMs) await sleep(step.afterMs); }
@@ -663,17 +850,56 @@ async function runOne(ctx, prog, mode, launch, k) {
     ctx.current = null;
     await endRun(ctx, run, prog);
   }
+  for (const s of run.states) if (s.reached) s.corpusBytes = corpusBytes(run, s.endOffset);
+  // `leftover` and `consoleHosts` are filled in later on Windows (countThenSweep).
   return {
     id, program: prog.id, conpty: mode.id, launch: launch.id, run: k, bytes: run.total, exit: run.exited, end: run.end, answered: run.answered,
-    notes: run.notes, requests: run.requests.map((r) => ({ path: r.path, model: r.model, stream: r.stream, tools: r.tools, namesPrompt: r.namesPrompt, reply: r.reply, sent: r.sent, of: r.of, done: !!r.done, closed: !!r.closed })),
-    leftover: run.leftover, states: run.states,
+    notes: run.notes, requests: run.requests.map((r) => ({ path: r.path, model: r.model, stream: r.stream, tools: r.tools, namesPrompt: r.namesPrompt, reply: r.reply, kind: r.kind || null, sent: r.sent, of: r.of, done: !!r.done, closed: !!r.closed })),
+    leftover: run.leftover, consoleHosts: run.consoleHosts, states: run.states,
   };
 }
 
 // ── verdicts ───────────────────────────────────────────────────────────────
+/** A program's states over its readings, grouped by launch and state, each
+ *  named by its state, or `<state> (<launch>)` when two launches of the
+ *  program give a state of that name. `recordOnly` picks the record-only
+ *  states (named against every state) or the measured ones (named against the
+ *  measured ones). */
+function stateGroups(readings, recordOnly) {
+  const groups = new Map();
+  const launchesOf = new Map();
+  for (const r of readings) {
+    for (const s of r.states) {
+      const set = launchesOf.get(s.state) || new Set();
+      if (!s.recordOnly || recordOnly) set.add(s.launch ?? '');
+      launchesOf.set(s.state, set);
+      if (!!s.recordOnly !== recordOnly) continue;
+      const key = `${s.launch ?? ''}\u0000${s.state}`;
+      if (!groups.has(key)) groups.set(key, { state: s.state, launch: s.launch ?? '', list: [] });
+      groups.get(key).list.push(s);
+    }
+  }
+  return [...groups.values()].map((g) => ({ ...g, label: launchesOf.get(g.state).size > 1 ? `${g.state} (${g.launch})` : g.state }));
+}
+
+/** The record-only states: RECORDED in each run that reached them, or NOT
+ *  REACHED with why and the screen (the decision line in the header). */
+function recordedStates(readings) {
+  return stateGroups(readings, true).map((g) => {
+    const reached = g.list.filter((s) => s.reached);
+    const missed = g.list.filter((s) => !s.reached);
+    return {
+      state: g.label, runs: g.list.length, reached: reached.length,
+      verdict: reached.length ? `RECORDED in ${reached.length} of ${g.list.length}` : `NOT REACHED - ${missed.map((s) => s.why).filter((w, i, a) => a.indexOf(w) === i).join('; ')}`,
+      screens: missed.map((s) => s.screen),
+    };
+  });
+}
+
 function verdictFor(prog, readings, runs) {
-  const byState = new Map();
-  for (const r of readings) for (const s of r.states) { if (!byState.has(s.state)) byState.set(s.state, []); byState.get(s.state).push(s); }
+  const byState = new Map(stateGroups(readings, false).map((g) => [g.label, g.list]));
+  const recorded = recordedStates(readings);
+  const recordedText = recorded.length ? `; recorded only: ${recorded.map((r) => `${r.state} ${r.verdict}`).join(', ')}` : '';
   const states = [];
   for (const [state, list] of byState) {
     const reached = list.filter((s) => s.reached);
@@ -687,8 +913,8 @@ function verdictFor(prog, readings, runs) {
       pane1Buffer: [...new Set(reached.map((s) => s.steps[2].buffers[0]))].join('/'), notReached: list.filter((s) => !s.reached).map((s) => s.why),
     });
   }
-  const summary = states.map((s) => `${s.state}: nudge ${s.equalAfterNudge}/${s.reached}, same size ${s.equalAfterSameSize}/${s.reached}, nothing ${s.equalAfterNothing}/${s.reached}${s.reached < s.runs ? `, not reached in ${s.runs - s.reached}` : ''}${s.otherBufferAfterNudge ? `, pane 2 on another screen in ${s.otherBufferAfterNudge}` : ''}`).join('; ');
-  if (!prog.verdict) return { verdict: 'no verdict (a reference row)', states, summary };
+  const summary = states.map((s) => `${s.state}: nudge ${s.equalAfterNudge}/${s.reached}, same size ${s.equalAfterSameSize}/${s.reached}, nothing ${s.equalAfterNothing}/${s.reached}${s.reached < s.runs ? `, not reached in ${s.runs - s.reached}` : ''}${s.otherBufferAfterNudge ? `, pane 2 on another screen in ${s.otherBufferAfterNudge}` : ''}`).join('; ') + recordedText;
+  if (!prog.verdict) return { verdict: 'no verdict (a reference row)', states, recorded, summary };
   const reachedStates = states.filter((s) => s.reached > 0);
   const cannot = states.filter((s) => s.reached === 0).map((s) => s.state);
   const sameSize = reachedStates.filter((s) => s.equalAfterSameSize === s.reached && s.reached === runs).map((s) => s.state);
@@ -711,7 +937,51 @@ function verdictFor(prog, readings, runs) {
   if (already.length) verdict += `; already equal before any resize at ${already.join(', ')}`;
   const other = reachedStates.filter((s) => s.otherBufferAfterNudge > 0).map((s) => `${s.state} (${s.pane1Buffer})`);
   if (other.length) verdict += `; pane 2 stayed on another screen buffer than pane 1 at ${other.join(', ')}`;
-  return { verdict, states, summary };
+  verdict += recordedText;
+  return { verdict, states, recorded, summary };
+}
+
+/** Each mode's verdict (the decision line in the header) over the measured
+ *  states: pane 2 against pane 1 two seconds after the nudge (step 2), and
+ *  beside it where they were already equal before any resize (step 0, in
+ *  every run that reached the state). `pane1` is what pane 1 had there. */
+function modeVerdicts(prog, readings, runs) {
+  if (!prog.verdict) return null;
+  const groups = stateGroups(readings, false).map((g) => ({ label: g.label, reached: g.list.filter((s) => s.reached && s.steps.length === 3 && s.steps[2].modes) }));
+  const names = [];
+  for (const g of groups) for (const s of g.reached) for (const k of Object.keys(s.steps[2].modes.pane1)) if (!names.includes(k)) names.push(k);
+  return names.map((mode) => {
+    const per = groups.filter((g) => g.reached.length).map((g) => {
+      const differ = g.reached.filter((s) => s.steps[2].modes.differ.includes(mode)).length;
+      return {
+        state: g.label, reached: g.reached.length, equalAfterNudge: g.reached.length - differ, differAfterNudge: differ,
+        equalBefore: g.reached.filter((s) => !s.steps[0].modes.differ.includes(mode)).length,
+        pane1: [...new Set(g.reached.map((s) => String(s.steps[2].modes.pane1[mode])))].join('/'),
+      };
+    });
+    const lost = per.filter((p) => p.differAfterNudge >= 2);
+    let verdict;
+    if (!per.length) verdict = 'NO VERDICT - no state reached';
+    else if (lost.length) verdict = `LOST - ${lost.map((p) => `${p.state} differs after the nudge in ${p.differAfterNudge} of ${p.reached}`).join(', ')}`;
+    else if (per.every((p) => p.reached === runs && p.equalAfterNudge === runs)) verdict = 'KEPT';
+    else verdict = `NO VERDICT - ${per.filter((p) => !(p.reached === runs && p.equalAfterNudge === runs)).map((p) => `${p.state}: equal after the nudge in ${p.equalAfterNudge} of ${p.reached} reached`).join(', ')}`;
+    if (runs !== 3 && per.length) verdict = `CHECK RUN (${runs} runs; would read ${verdict})`;
+    const already = per.filter((p) => p.equalBefore === p.reached).map((p) => p.state);
+    return { mode, verdict, alreadyEqualBeforeAnyResize: already, states: per };
+  });
+}
+
+/** The Codex background server row: RUNS A TURN when, in every run, its
+ *  turn's reply was sent to the end and the state after it was reached; else
+ *  FAILS with why and the screen's last rows (the decision line in the
+ *  header). */
+function turnVerdict(readings) {
+  if (!readings.length) return 'FAILS - it did not run';
+  const failed = readings.find((r) => !(r.requests.some((q) => q.reply === 'turn' && q.done && !q.closed) && r.states.length && r.states.every((s) => s.reached)));
+  if (!failed) return `RUNS A TURN (${readings.length} of ${readings.length} runs)`;
+  const miss = failed.states.find((s) => !s.reached);
+  const screen = miss && miss.screen ? miss.screen.split('\n').filter((l) => l.trim()).slice(-6).join(' | ') : '';
+  return `FAILS - ${miss ? miss.why : `no turn finished in ${failed.id}`}${screen ? `; the screen: ${screen}` : ''}${failed.exit ? `; exit code ${failed.exit.code}` : ''}`;
 }
 
 // ── clean-up and output ────────────────────────────────────────────────────
@@ -726,7 +996,7 @@ function codeDigests(scenarioFile) {
 function recordingHeader(ctx, prog, mode, launch, k) {
   const { cols, rows } = ctx.scenario.size;
   return {
-    probe: 'P19', program: prog.name, version: ctx.versions[prog.id] || null, system: ctx.system.label, conpty: mode.id, cols, rows, launch: launch.id, run: k,
+    probe: 'P19', program: prog.name, version: ctx.versions[cliOf(prog)] || null, system: ctx.system.label, conpty: mode.id, cols, rows, launch: launch.id, run: k,
     encoding: IS_WIN ? 'utf-8 strings from node-pty, written back as utf-8' : 'bytes as read', files: ctx.files,
   };
 }
@@ -777,7 +1047,7 @@ async function main() {
   const runs = args.runs ? Number(args.runs) : scenario.runs;
   if (!Number.isInteger(runs) || runs < 1 || runs > 10) throw new CouldNotRun('--runs must be 1 to 10');
   const only = args.only ? args.only.split(',') : null;
-  const programs = scenario.programs.filter((p) => !only || only.includes(p.id));
+  const programs = scenario.programs.filter((p) => (only ? only.includes(p.id) : !p.onlyWhenNamed));
   const mods = loadPinned(path.resolve(args.root));
   const modes = conptyModes(mods['node-pty'].dir, args.conpty || 'bundled');
   const { Terminal } = mods['@xterm/headless'].mod;
@@ -786,7 +1056,7 @@ async function main() {
   fs.mkdirSync(recDir, { recursive: true });
 
   const ctx = {
-    scenario, files: codeDigests(scenarioFile), pty: mods['node-pty'].mod, recDir, known: new Map(), skip: new Set(), incomplete: [], versions: {}, commands: {}, current: null, fatal: [], writeErrors: [],
+    scenario, files: codeDigests(scenarioFile), pty: mods['node-pty'].mod, recDir, known: new Map(), skip: new Set(), incomplete: [], versions: {}, commands: {}, current: null, fatal: [], writeErrors: [], pending: [],
     tempRoot: fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'p19-')),
     // @xterm/headless counts its buffer API as proposed.
     newPane: () => new Terminal({ cols: scenario.size.cols, rows: scenario.size.rows, scrollback: scenario.scrollback, allowProposedApi: true }),
@@ -808,7 +1078,8 @@ async function main() {
     console.error(e.stack);
   });
   for (const s of [process.stdout, process.stderr]) s.on('error', (e) => ctx.writeErrors.push(`the probe's own output: ${e.code || e.message}`));
-  const result = { probe: 'P19', started: new Date().toISOString(), system: ctx.system, files: ctx.files, modules: { 'node-pty': mods['node-pty'].version, '@xterm/headless': mods['@xterm/headless'].version }, conpty: modes.map((m) => m.id), runs, scenario: { size: scenario.size, cutBytes: scenario.cutBytes, settleMs: scenario.settleMs, nudgeMs: scenario.nudgeMs, reply: scenario.reply }, programs: [], readings: [], verdicts: [] };
+  const result = { probe: 'P19', started: new Date().toISOString(), system: ctx.system, files: ctx.files, modules: { 'node-pty': mods['node-pty'].version, '@xterm/headless': mods['@xterm/headless'].version }, conpty: modes.map((m) => m.id), runs, scenario: { size: scenario.size, cutBytes: scenario.cutBytes, settleMs: scenario.settleMs, nudgeMs: scenario.nudgeMs, recordOnlyMs: scenario.recordOnlyMs, reply: scenario.reply, shortReply: scenario.shortReply || null }, programs: [], readings: [], verdicts: [], consoleHosts: [], sizes: [] };
+  const lines = [];
   const sanitize = () => sanitizer([[ctx.tempRoot, '<temp>'], [os.homedir(), '<home>'], ...Object.entries(ctx.commands).map(([id, c]) => [c.file, `<${id}>`])]);
   let standIn = null;
   let line = null;
@@ -831,7 +1102,7 @@ async function main() {
           let m;
           try { m = JSON.parse(l); } catch { continue; }
           if (m.event === 'listening') { clearTimeout(t); resolve(m.port); }
-          else if (m.event === 'request') { const r = { ...m, sent: 0, of: m.reply === 'turn' ? scenario.reply.lines : 1 }; byId.set(m.id, r); if (ctx.current) ctx.current.requests.push(r); }
+          else if (m.event === 'request') { const r = { ...m, sent: 0, of: m.of ?? (m.reply === 'turn' ? scenario.reply.lines : 1) }; byId.set(m.id, r); if (ctx.current) ctx.current.requests.push(r); }
           else if (m.event === 'reply-progress' && byId.has(m.id)) { byId.get(m.id).sent = m.sent; byId.get(m.id).of = m.of; }
           else if (m.event === 'reply-done' && byId.has(m.id)) byId.get(m.id).done = true;
           else if (m.event === 'reply-closed' && byId.has(m.id)) { byId.get(m.id).closed = true; byId.get(m.id).sent = m.sent; }
@@ -844,19 +1115,20 @@ async function main() {
     // The programs and their versions, each asked in a fresh environment.
     for (const prog of programs) {
       let cmd;
+      const cli = cliOf(prog);
       if (prog.id === 'shell') cmd = defaultShell();
       // A program's arguments: a list, or a list per platform (`default` for the rest).
-      else if (args[prog.id]) cmd = { file: path.resolve(args[prog.id]), args: Array.isArray(prog.args) ? prog.args : prog.args ? (prog.args[process.platform] ?? prog.args.default ?? []) : [] };
-      else { result.programs.push({ id: prog.id, name: prog.name, notRun: `no --${prog.id} given` }); continue; }
-      if (IS_WIN && /\.(cmd|bat)$/i.test(cmd.file)) throw new CouldNotRun(`--${prog.id} is a .cmd or .bat file; give the program it runs`);
-      if (!fs.existsSync(cmd.file)) throw new CouldNotRun(`--${prog.id}: no file at ${cmd.file}`);
+      else if (args[cli]) cmd = { file: path.resolve(args[cli]), args: Array.isArray(prog.args) ? prog.args : prog.args ? (prog.args[process.platform] ?? prog.args.default ?? []) : [] };
+      else { result.programs.push({ id: prog.id, name: prog.name, notRun: `no --${cli} given` }); continue; }
+      if (IS_WIN && /\.(cmd|bat)$/i.test(cmd.file)) throw new CouldNotRun(`--${cli} is a .cmd or .bat file; give the program it runs`);
+      if (!fs.existsSync(cmd.file)) throw new CouldNotRun(`--${cli}: no file at ${cmd.file}`);
       ctx.commands[prog.id] = cmd;
-      if (prog.id !== 'shell') {
-        const vdirs = makeDirs(path.join(ctx.tempRoot, `version-${prog.id}`));
-        ctx.versions[prog.id] = (await runFresh(cmd.file, ['--version'], freshEnv(vdirs, extraEnv(ctx, prog, { seed: 'none' })), vdirs.work)).text;
+      if (prog.id !== 'shell' && !ctx.versions[cli]) {
+        const vdirs = makeDirs(path.join(ctx.tempRoot, `version-${cli}`));
+        ctx.versions[cli] = (await runFresh(cmd.file, ['--version'], freshEnv(vdirs, extraEnv(ctx, prog, { seed: 'none' })), vdirs.work)).text;
       }
-      result.programs.push({ id: prog.id, name: prog.name, program: cmd.file, args: cmd.args, version: ctx.versions[prog.id] || null });
-      console.log(`P19: ${prog.name}${ctx.versions[prog.id] ? ` ${ctx.versions[prog.id]}` : ''}: ${cmd.file}`);
+      result.programs.push({ id: prog.id, name: prog.name, program: cmd.file, args: cmd.args, version: ctx.versions[cli] || null });
+      console.log(`P19: ${prog.name}${ctx.versions[cli] ? ` ${ctx.versions[cli]}` : ''}: ${cmd.file}${cmd.args.length ? ` ${cmd.args.join(' ')}` : ''}`);
     }
 
     for (const mode of modes) {
@@ -864,24 +1136,41 @@ async function main() {
         if (!ctx.commands[prog.id]) continue;
         const readings = [];
         for (const launch of prog.launches) {
-          for (let k = 1; k <= runs; k++) {
+          // A launch may ask for fewer runs (the record-only screens): never more.
+          const n = Math.min(launch.runs ?? runs, runs);
+          for (let k = 1; k <= n; k++) {
             const r = await runOne(ctx, prog, mode, launch, k);
             readings.push(r);
             result.readings.push(r);
-            console.log(`P19: ${r.id}: ${r.states.map((s) => (s.reached ? `${s.state} [${s.steps.map((x) => (x.equal ? 'equal' : 'differs')).join(', ')}]` : `${s.state} not reached (${s.why})`)).join('; ')}; ${r.bytes} bytes, ${r.end}`);
+            console.log(`P19: ${r.id}: ${r.states.map((s) => (!s.reached ? `${s.state} not reached (${s.why})` : s.recordOnly ? `${s.state} recorded` : `${s.state} [${s.steps.map((x) => (x.equal ? 'equal' : 'differs')).join(', ')}]`)).join('; ')}; ${r.bytes} bytes, ${r.end}`);
           }
         }
         const v = verdictFor(prog, readings, runs);
-        result.verdicts.push({ program: prog.id, name: prog.name, conpty: mode.id, ...v });
-        console.log(`P19: ${prog.name} (${mode.label}): ${v.verdict}`);
+        const mv = modeVerdicts(prog, readings, runs);
+        const turn = prog.turnVerdict ? turnVerdict(readings) : null;
+        result.verdicts.push({ program: prog.id, name: prog.name, conpty: mode.id, ...v, modes: mv, turn });
+        console.log(`P19: ${prog.name} (${mode.label}): ${turn || v.verdict}`);
       }
     }
-    const by = (m) => result.verdicts.filter((v) => v.conpty === m.id).map((v) => (v.program === 'shell' ? `default shell: ${v.summary}` : `${v.name} ${v.verdict}`)).join('; ');
-    line = `P19 RESULT (${ctx.system.label}): ${modes.map((m) => (IS_WIN ? `${m.label}: ${by(m)}` : by(m))).join(' || ')}`;
+    // The console hosts are counted for 60 s after each run's end: waited for.
+    await Promise.allSettled(ctx.pending);
+    const by = (m) => result.verdicts.filter((v) => v.conpty === m.id).map((v) => (v.program === 'shell' ? `default shell: ${v.summary}` : v.turn ? `${v.name}: ${v.turn}` : `${v.name} ${v.verdict}`)).join('; ');
+    const perMode = (f) => modes.map((m) => (IS_WIN ? `${m.label}: ${f(m)}` : f(m))).filter((x) => x).join(' || ');
+    lines.push(`P19 MODES (${ctx.system.label}): ${perMode((m) => result.verdicts.filter((v) => v.conpty === m.id && v.modes).map((v) => `${v.name}: ${v.modes.map((x) => `${x.mode} ${x.verdict}${x.alreadyEqualBeforeAnyResize.length ? ` (already equal before any resize at ${x.alreadyEqualBeforeAnyResize.join(', ')})` : ''}`).join(', ')}`).join('; '))}`);
+    if (IS_WIN) {
+      for (const m of modes) result.consoleHosts.push({ conpty: m.id, ...consoleHostVerdict(result.readings.filter((r) => r.conpty === m.id)) });
+      lines.push(`P19 CONSOLE HOSTS (${ctx.system.label}): ${result.consoleHosts.map((c) => `${modes.find((m) => m.id === c.conpty).label}: ${c.line}`).join(' || ')}`);
+    }
+    for (const r of result.readings) for (const s of r.states) if (s.reached) result.sizes.push({ id: r.id, state: s.state, bytes: s.corpusBytes, over: s.corpusBytes > CORPUS_CAP });
+    const over = result.sizes.filter((s) => s.over);
+    lines.push(`P19 SIZES: ${over.length ? `${over.length} of ${result.sizes.length} states over 256 KiB: ${over.map((s) => `${s.id} ${s.state} (${Math.round(s.bytes / 1024)} KiB)`).join(', ')}` : `all ${result.sizes.length} states under 256 KiB (largest ${Math.round(Math.max(0, ...result.sizes.map((s) => s.bytes)) / 1024)} KiB)`}`);
+    line = `P19 RESULT (${ctx.system.label}): ${perMode(by)}`;
   } catch (e) {
     line = `P19 RESULT: COULD NOT RUN - ${e.message}`;
     if (!(e instanceof CouldNotRun)) console.error(e.stack);
   } finally {
+    // A run's background count stops that run's processes when it ends.
+    await Promise.allSettled(ctx.pending);
     if (standIn) {
       try { standIn.stdin.end(); } catch { /* ended */ }
       for (let i = 0; i < 15 && standIn.exitCode === null && standIn.signalCode === null; i++) await sleep(200);
@@ -907,7 +1196,9 @@ async function main() {
   result.writeErrors = ctx.writeErrors;
   result.line = line;
   const clean = sanitize();
+  result.lines = lines;
   fs.writeFileSync(path.join(out, 'p19-result.json'), JSON.stringify(clean(result), null, 2) + '\n');
+  for (const l of lines) console.log(clean(l));
   console.log(clean(line));
   return line.includes('COULD NOT RUN') || ctx.incomplete.length ? 2 : 0;
 }
@@ -925,4 +1216,7 @@ if (require.main === module) {
 
 // For tests/unit/scripts/probe-p19-record.test.ts, which loads this file
 // without running it.
-module.exports = { ownedProcesses, verdictFor, codeDigests, recordingHeader };
+module.exports = {
+  ownedProcesses, verdictFor, codeDigests, recordingHeader,
+  compareModes, modesOf, measure, consoleHostCounts, consoleHostVerdict, CONSOLE_HOST_TIMES, modeVerdicts, turnVerdict,
+};
