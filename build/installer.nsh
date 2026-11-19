@@ -717,14 +717,18 @@
 ; RMDir /REBOOTOK, puts each one in PendingFileRenameOperations under
 ; HKLM\SYSTEM\CurrentControlSet\Control\Session Manager: a REG_MULTI_SZ of
 ; pairs, a path and where it goes ("" to remove it; a leading "!" means
-; replace). Every path in it counts, on either side of a pair, without its
-; "!" and its "\??\". ReadRegStr cannot read a REG_MULTI_SZ, so the value is
-; read whole through advapi32 into a zeroed buffer with room to spare and two
-; nulls of its own after it, so the walk always ends inside it. An entry
-; longer than NSIS_MAX_STRLEN is compared by its first part, which still
-; starts with ${DIR} when the entry is inside it. Paths are compared through
-; IsSameOrInsideCanon. Saves and restores every register; ${OUT} may be any,
-; ${DIR} must not be $0 to $9 or $R5 to $R7. Scratch: $cccCanon*.
+; replace). Every path in it counts, on either side of a pair. What comes in
+; front of the path is taken off before it is compared: every leading "!",
+; and every leading "*" with the digits after it, in either order, then one
+; "\??\". Windows 11 (build 22621) was seen to write every entry with a "*1"
+; in front of its "\??\" ("*1\??\C:\..."); the plain form ("\??\C:\...") and
+; the "!" form are read as before. ReadRegStr cannot read a REG_MULTI_SZ, so
+; the value is read whole through advapi32 into a zeroed buffer with room to
+; spare and two nulls of its own after it, so the walk always ends inside it.
+; An entry longer than NSIS_MAX_STRLEN is compared by its first part, which
+; still starts with ${DIR} when the entry is inside it. Paths are compared
+; through IsSameOrInsideCanon. Saves and restores every register; ${OUT} may
+; be any, ${DIR} must not be $0 to $9 or $R5 to $R7. Scratch: $cccCanon*.
 !macro CccPendingRemovalIn DIR OUT
   Push $0
   Push $1
@@ -772,10 +776,27 @@
             System::Call 'kernel32::lstrlenW(p r9) i .r6'
             ${If} $6 > 0
               System::Call 'kernel32::lstrcpynW(w .r7, p r9, i ${NSIS_MAX_STRLEN}) p'
-              StrCpy $9 "$7" 1
-              ${If} $9 == "!"
-                StrCpy $7 "$7" "" 1
-              ${EndIf}
+              ; Every leading "!", and every leading "*" with its digits.
+              ${Do}
+                StrCpy $9 "$7" 1
+                ${If} $9 == "!"
+                  StrCpy $7 "$7" "" 1
+                ${ElseIf} $9 == "*"
+                  StrCpy $7 "$7" "" 1
+                  ${Do}
+                    ; A digit reads back as the same number; any other
+                    ; character, and the end of the entry, does not.
+                    StrCpy $9 "$7" 1
+                    IntOp $8 $9 + 0
+                    ${If} $8 != $9
+                      ${ExitDo}
+                    ${EndIf}
+                    StrCpy $7 "$7" "" 1
+                  ${Loop}
+                ${Else}
+                  ${ExitDo}
+                ${EndIf}
+              ${Loop}
               StrCpy $9 "$7" 4
               ${If} $9 == "\??\"
                 StrCpy $7 "$7" "" 4
