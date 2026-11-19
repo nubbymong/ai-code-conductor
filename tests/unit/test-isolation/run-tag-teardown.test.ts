@@ -36,7 +36,7 @@ import {
   runTempPrefix,
   writeRunOwner,
 } from '../../helpers/vitest-run-tag.mjs'
-import globalSetup, { addedTempEntries, sweepAfterRun } from '../../global-setup'
+import globalSetup, { addedTempEntries, sweepAfterRun, tempNamesAtStart, tempReportLine } from '../../global-setup'
 
 const SCRATCH = fs.mkdtempSync(path.join(os.tmpdir(), 'ccc-run-tag-'))
 
@@ -531,5 +531,28 @@ describe('addedTempEntries (the entries new at the top of the temp folder since 
 
   it('lists nothing for a folder that cannot be read', () => {
     expect(addedTempEntries(path.join(fresh(), 'missing'), new Set(), newRunTag())).toEqual([])
+  })
+
+  it('reads the names at the start only in CI or with CCC_TEMP_REPORT set (a local run does not read the temp folder)', () => {
+    const tmp = fresh()
+    plant(tmp, 'a')
+    plant(tmp, 'b')
+    expect(tempNamesAtStart(tmp, {})).toBeUndefined()
+    expect(tempNamesAtStart(tmp, { CI: 'true' })).toEqual(new Set(['a', 'b']))
+    expect(tempNamesAtStart(tmp, { CCC_TEMP_REPORT: '1' })).toEqual(new Set(['a', 'b']))
+    expect(tempNamesAtStart(path.join(tmp, 'missing'), { CI: 'true' }), 'a folder that cannot be read').toBeNull()
+  })
+
+  it('the line gives the counts at the start and now, so an empty or unreadable folder does not read as a clean run', () => {
+    const tmp = fresh()
+    const tag = newRunTag()
+    plant(tmp, 'there-before')
+    const before = new Set(fs.readdirSync(tmp))
+    plant(tmp, 'left')
+    expect(tempReportLine(tmp, before, tag)).toBe(`[temp check] 1 new entry at the top of ${tmp} since this run started (1 there at the start, 2 now): left`)
+    expect(tempReportLine(tmp, new Set(fs.readdirSync(tmp)), tag)).toBe(`[temp check] 0 new entries at the top of ${tmp} since this run started (2 there at the start, 2 now)`)
+    const missing = path.join(tmp, 'missing')
+    expect(tempReportLine(missing, before, tag)).toBe(`[temp check] ${missing} could not be read at the end of this run, so nothing was compared`)
+    expect(tempReportLine(tmp, null, tag)).toBe(`[temp check] ${tmp} could not be read when this run started, so nothing was compared`)
   })
 })

@@ -98,8 +98,11 @@ describe('LIVE repro: two concurrent sessions to one host (#25/#24)', () => {
       await sleep(500)
     }
 
-    const EV = process.env.CCC_REPRO_EVIDENCE ?? join(tmpdir(), 'ccc-repro-evidence.txt')
-    const log = (s: string) => appendFileSync(EV, s + '\n')
+    // Evidence goes to a file only when asked for (CCC_REPRO_EVIDENCE=<file>), as the
+    // harness's pane dumps do with CCC_LIVE_DUMP; otherwise to the console, so a run
+    // leaves nothing in the machine temp folder (#332).
+    const EV = process.env.CCC_REPRO_EVIDENCE
+    const log = (s: string) => (EV ? appendFileSync(EV, s + '\n') : console.log(s))
     log(`\n==== repro run ${new Date().toISOString()} host=${e.host} ====`)
     for (const [sid, w] of sids) {
       const p = pane(w.events, sid)
@@ -108,7 +111,7 @@ describe('LIVE repro: two concurrent sessions to one host (#25/#24)', () => {
       const bareShell = /\$\s*$|]\$$/.test(p.replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, '').replace(/\x1b\[[\x20-\x3f]*[\x40-\x7e]/g, '').trimEnd())
       log(`${sid}: claudeUi=${claudeUi} bareShell=${bareShell} states=${JSON.stringify(st)} paneLen=${p.length}`)
       log(`${sid} tail: ${JSON.stringify(flat(p).slice(-300))}`)
-      writeFileSync(`${EV}.${sid}.pane.txt`, p) // full RAW pane for offline inspection
+      if (EV) writeFileSync(`${EV}.${sid}.pane.txt`, p) // full RAW pane, only when asked for
     }
     // Remote state snapshot for root-causing.
     try {

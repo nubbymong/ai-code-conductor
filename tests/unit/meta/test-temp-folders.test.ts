@@ -13,7 +13,10 @@ import { join, relative, resolve, sep } from 'node:path'
  *            one elsewhere), or is the live config, vitest.live.config.ts, which runs
  *            real ssh with the user's own keys and so stays outside that guard. There
  *            every folder a file under tests/live makes with mkdtemp is kept in a
- *            variable whose name is passed to rm or rmSync in the same file.
+ *            variable whose name is passed to rm or rmSync in the same file, and
+ *            os.tmpdir() is named only inside a mkdtemp call: a file written straight
+ *            into the machine temp folder stays there (evidence goes to a path the
+ *            user names, as CCC_LIVE_DUMP and CCC_REPRO_EVIDENCE do).
  *   roots    no file under tests/ hands mkdtemp or mkdir a hard-coded temp root: a
  *            string that starts with /tmp, a Windows temp path (AppData\Local\Temp,
  *            C:\Temp, C:\Windows\Temp), %TEMP% or %TMP%, or TEMP, TMP or TMPDIR read
@@ -27,6 +30,9 @@ import { join, relative, resolve, sep } from 'node:path'
  *   - folders made by the code under test, by a child process or by a native addon
  *   - in tests/live: a removal that is written but never called, one done in a loop or
  *     through a helper, and folders made with mkdir rather than mkdtemp
+ *   - outside tests/live, a file (not a folder) written straight into a hard-coded temp
+ *     root (writeFileSync('/tmp/x')); in tests/live, the temp folder reached other than
+ *     by a tmpdir() call
  *   - vitest configs outside the repo root, workspaces and projects, and Playwright
  *
  * It only reads files.
@@ -114,7 +120,15 @@ function liveProblems(file: string, src: string): string[] {
   return problems
 }
 
-const rel = (abs: string): string => relative(ROOT, abs).split(sep).join('/')
+/** Whether a tests/live file names os.tmpdir() outside a mkdtemp call: what it makes there is never removed. */
+function liveTempWrites(file: string, src: string): string[] {
+  let code = stripComments(src)
+  for (const args of callArgs(code, 'mkdtemp|mkdtempSync')) if (args.trim()) code = code.split(args).join('')
+  const n = code.match(/(?<![\w$])tmpdir\s*\(\s*\)/g)?.length ?? 0
+  return n === 0 ? [] : [`${file}: names os.tmpdir() outside a mkdtemp call ${n} time(s); a file made straight in the machine temp folder is never removed`]
+}
+
+const rel =(abs: string): string => relative(ROOT, abs).split(sep).join('/')
 const files = walk(join(ROOT, 'tests')).map(rel).filter((p) => p !== SELF).sort()
 const sources = new Map(files.map((p) => [p, readFileSync(join(ROOT, p), 'utf8')]))
 const configs = readdirSync(ROOT).filter((n) => CONFIG_NAME.test(n)).sort()
@@ -137,6 +151,11 @@ describe('a test run leaves nothing in the machine temp folder', () => {
 
   it('every folder the live pack makes with mkdtemp is removed in the same file', () => {
     expect(liveFiles.flatMap((p) => liveProblems(p, sources.get(p)!))).toEqual([])
+  })
+
+  it('the live pack names os.tmpdir() only as the parent of a folder it makes with mkdtemp', () => {
+    expect(liveFiles.some((p) => /(?<![\w$])tmpdir\s*\(\s*\)/.test(stripComments(sources.get(p)!))), 'no tmpdir() call found under tests/live').toBe(true)
+    expect(liveFiles.flatMap((p) => liveTempWrites(p, sources.get(p)!))).toEqual([])
   })
 
   it('no file under tests/ hands mkdtemp or mkdir a hard-coded temp root (use os.tmpdir())', () => {
@@ -174,6 +193,24 @@ describe('the temp folder rules (verify the verifier)', () => {
     expect(liveProblems('x.ts', `const scratchDir = fs.mkdtempSync(p)\nrmSync(scratch, o)`)).toHaveLength(1)
     expect(liveProblems('x.ts', `const file = join(mkdtempSync(p), 'payload.json')\nrmSync(file)`)).toEqual(['x.ts: a folder made with mkdtemp is not kept in a variable'])
     expect(liveProblems('x.ts', `${made}// rmSync(scratch)`)).toHaveLength(1)
+  })
+
+  it('flags a live file that writes straight into os.tmpdir(), and passes one that only makes folders there', () => {
+    for (const planted of [
+      `const EV = process.env.X ?? join(tmpdir(), 'ccc-repro-evidence.txt')`,
+      `writeFileSync(path.join(os.tmpdir(), 'x.txt'), s)`,
+      `const scratch = mkdtempSync(join(tmpdir(), 'a-'))\nappendFileSync(join(tmpdir(), 'log.txt'), s)`,
+    ]) {
+      expect(liveTempWrites('x.ts', planted), planted).toHaveLength(1)
+    }
+    for (const fine of [
+      `import { tmpdir } from 'node:os'\nconst scratch = mkdtempSync(join(tmpdir(), 'ccc-live-'))`,
+      `const d = await fsp.mkdtemp(path.join(os.tmpdir(), 'x-'))`,
+      `// appendFileSync(join(tmpdir(), 'x.txt'), s)`,
+      `const EV = process.env.CCC_REPRO_EVIDENCE\nif (EV) appendFileSync(EV, s)`,
+    ]) {
+      expect(liveTempWrites('x.ts', fine), fine).toEqual([])
+    }
   })
 
   it('flags a hard-coded temp root handed to mkdtemp or mkdir, and passes os.tmpdir()', () => {

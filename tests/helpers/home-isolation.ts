@@ -19,6 +19,17 @@
 // of the environment: vitest.config.ts pins pool 'forks', and the native config
 // already runs in forks).
 //
+// Not checked by the temp check (#332; add a line when a review finds one):
+//   - a value put back after afterEach (a cleanup returned from beforeEach, an
+//     onTestFinished callback, a test.extend fixture's teardown): the test is failed
+//     although it restores the value; restore it in the test or in an afterEach
+//   - a value set at module level or in beforeAll: beforeEach puts it back without a
+//     failure, so the tests run on the worker's folder, not on that value
+//   - folders made while a temp variable pointed elsewhere and was put back in time:
+//     they stay where they were made (the CI teardown line lists them)
+//   - TMUX_TMPDIR and other programs' own temp variables, a child process given its
+//     own env, and concurrent tests in one file that move a temp variable
+//
 // Not loaded by vitest.live.config.ts (the live SSH pack runs real ssh with the
 // user's real keys) or by Playwright.
 import * as fs from 'fs'
@@ -94,7 +105,7 @@ afterEach(() => {
   if (moved.length > 0) {
     throw new Error(
       `The test ${moved.join(' and ')}, outside this worker's temp folder ${TEST_TMP_ROOT}. ` +
-        'A test that changes TEMP, TMP or TMPDIR puts it back before it ends; it has been put back for the next test.',
+        'A test that changes TEMP, TMP or TMPDIR puts it back in the test itself or in an afterEach hook (a beforeEach cleanup or onTestFinished runs after this check); it has been put back for the next test.',
     )
   }
 })
