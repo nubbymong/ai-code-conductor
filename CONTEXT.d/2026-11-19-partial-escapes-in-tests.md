@@ -1,8 +1,8 @@
-## 2026-11-19 -- Six partial escapes and first-only replaces in the tests
+## 2026-11-19 -- Seven partial escapes and first-only replaces in the tests
 
 Section C2 of the 2.1.3-beta.12 plan (aicc_planning #350), widened in review to
-four more sites of the same shape that the plan's premise check missed. Tests
-only: no product file changes, and no test asserts anything new or less.
+five more sites of the same shape that the plan's premise check missed. Tests
+only: no product file changes, and no changed site asserts anything new or less.
 
 **The two sites of #350.** tests/unit/credential-file-mode-hardening.test.ts:58
 (57 before the import line) built the staging file's pattern with
@@ -20,7 +20,7 @@ answer is one line today, so the bytes fed to the reader are the same. The
 case passes, and is red when the reader is made to refuse a line that ends in
 CR (planted in app-server-client.ts, never committed).
 
-**Four more, found in review.**
+**Five more, found in review.**
 - tests/unit/renderer/onboarding-overflow.test.ts:26 escaped only the first dot
   of a selector (`selector.replace('.', '\\.')`); it is the twin of the
   onboarding-layout-contract line #739 moved to the helper. It now calls
@@ -32,16 +32,23 @@ CR (planted in app-server-client.ts, never committed).
 - tests/unit/main/canvas-distroot-confinement.test.ts:161 builds a text, not a
   pattern: `'index.html%20'.replace('%20', ' ')` becomes a global replace, like
   the CRLF line. HOST QUARANTINE, CI only.
+- tests/unit/scripts/verify-bundled-helper.test.ts:92 escaped only the dots and
+  backslashes of the helper's path (`replace(/[\\.]/g, '\\$&')`, from #719). It
+  now calls `escapeRegExp`.
 
-For every text the six sites pass, the new call gives exactly the old pattern
+For every text the seven sites pass, the new call gives exactly the old pattern
 or text (a scratch check against the real helper, with two controls that show
 it can tell a difference), so no check got weaker or stronger. The helper's
 own test now also matches one text from each new caller as itself.
 
-**What is left.** A search of tests/ finds no other dot replaced by `\\.` (with
-or without `/g`) and no other first-only replace of a line end or a `%20`. The
-remaining first-only replaces in tests/ each swap one known word or character
-in a fixed text (a `#` off a colour, a word in a page), which is their intent.
+**What is left.** A search of tests/ finds no other escape of only some special
+characters before a text goes into a pattern, except two kinds on purpose: the
+glob converter at tests/unit/scripts/helper-packaging.test.ts:42, which turns
+`*` and `?` into wildcards itself, and the character-class escapes at
+tests/helpers/home-guard-core.mjs:746 and :819. It finds no other first-only
+replace of a line end or a `%20`. The remaining first-only replaces in tests/
+each swap one known word or character in a fixed text (a `#` off a colour, a
+word in a page), which is their intent.
 
 **Code scanning.** Alerts 21 (the CRLF line, dismissed on main as used in
 tests) and 16 (the staging pattern, dismissed on main as a false positive),
