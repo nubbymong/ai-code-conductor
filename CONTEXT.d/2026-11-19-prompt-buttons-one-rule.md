@@ -16,18 +16,32 @@ submitLine; it moves into the Claude Code package with S13):
   launch-pending buffer still apply), after the tmux leave key on an SSH
   Persistent session, then Enter as its own write 300 ms after the text's last
   slice, only while the session's terminal process is still the one the text
-  went to. The wait counts the slices: one 12 ms wait per slice after the
-  first, each set after that slice's own timer, so the Enter cannot overtake a
-  slice even when main is held up.
+  went to. The wait is 300 ms, then one 12 ms wait per slice after the first:
+  a slice still to go when the 300 ms ends (main held up, or writePty
+  replaying a text it held for a launch line) had its timer set before each of
+  those waits, in the same timer list, so the Enter cannot overtake a slice.
 - Send, Codex: the Codex package's submit primitive with a 5 s ready wait, as
   canvas notes and Ask Conductor use it. A text it refuses before typing is
   typed with no Enter and answered as typed, not sent.
 - Type only: the text, and no Enter, on every kind.
 - The same text pressed again for a session within 300 ms is dropped (writePty's
   own guard saw it only because the write ended in Enter). Presses go one at a
-  time per session, in order. A session with no terminal process takes nothing,
-  so nothing waits in writePty's buffer for a later start. The log names a
-  prompt by its length only.
+  time per session, in order, and each holds the next until its text has
+  settled as above, typed ones too. A press types only into the terminal
+  process the session had when it was pressed: none, or one replaced while
+  the press waited, takes nothing, so nothing waits in writePty's buffer for a
+  later start. The log names a prompt by its length only.
+
+**Review.** Copilot reviewed the first head on its own (no review was asked
+for). Three of its four threads were right and are fixed: a type-only press
+let the next one land between its slices, and a queued press (the Codex
+refused-text fallback too) chose its terminal process when its turn came, so
+it could type into a restarted session. The fourth asked about writePty's
+launch-line hold. A local Claude Code start holds writes on a 300 ms timer set
+when the session starts. That timer is always set before a press's own
+300 ms wait, so the replay has started when the wait ends. A test now holds
+that, including a press in the start's own millisecond. Ordering the 300 ms
+wait before the slice waits is what makes that last case hold.
 
 **The channel.** `pty:submitPrompt` ({ sessionId, text }), answered to the
 app's window only, with a strict payload and a 100,000-character cap (far

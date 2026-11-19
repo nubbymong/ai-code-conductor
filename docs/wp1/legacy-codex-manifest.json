@@ -1,8 +1,8 @@
 {
   "schema": "wp1-legacy-codex-manifest/3",
-  "generatedAt": "2026-11-19T04:57:26.010Z",
-  "head": "32fb8b36ea5d35bf35cf1c3ab97d9f2b24527436",
-  "tree": "d84ec544fe25a15988d753efe6755b9d321fd132",
+  "generatedAt": "2026-11-19T05:17:39.921Z",
+  "head": "c569623147e7486fc972e44cb768a6e9d5a19254",
+  "tree": "ebabb3467ba7c0a476ea7ebcead50702890d672c",
   "scannedWorkingTree": true,
   "predicateDigest": "53fe7e5238cde4df748b1908c567dfcc9f825c901c109678028d383ec4dfef35",
   "predicates": [
@@ -116,8 +116,8 @@
     "\\.(png|jpg|jpeg|gif|ico|icns|webp|svg|woff2?|ttf|otf|mp4|zip|asar|node|exe|dll|dylib|so|pdf)$",
     "^package-lock\\.json$"
   ],
-  "trackedFileCount": 3449,
-  "excludedFileCount": 520,
+  "trackedFileCount": 3450,
+  "excludedFileCount": 521,
   "scannedFileCount": 2929,
   "unscopedFileCount": 62,
   "unscoped": [
@@ -5107,7 +5107,7 @@
         "P05",
         "P13"
       ],
-      "lineCount": 19
+      "lineCount": 22
     },
     {
       "path": "tests/unit/main/session-input.test.ts",

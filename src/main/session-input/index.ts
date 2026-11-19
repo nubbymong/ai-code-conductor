@@ -146,23 +146,37 @@ const lastPromptPress = new Map<string, { text: string; at: number }>()
 
 const wait = (ms: number): Promise<void> => new Promise((resolve) => { setTimeout(resolve, ms) })
 
-/** Resolves once writePty has sent every slice it cuts `data` into (a write
- *  over WRITE_CHUNK_SIZE units goes in slices WRITE_CHUNK_DELAY ms apart,
- *  pty-chunked-write.ts). One WRITE_CHUNK_DELAY wait per slice after the
- *  first, each set only after the timer of the slice it stands for was set:
- *  timers of one length run in the order they were set, so each wait ends
- *  only after its slice went. Counted from the slices, not from the call: a
- *  main process held up between two slices holds this up as well. */
-async function slicesSent(data: string): Promise<void> {
+/** Resolves PROMPT_ENTER_DELAY_MS after the last slice writePty cuts `data`
+ *  into has gone (a write over WRITE_CHUNK_SIZE units goes in slices
+ *  WRITE_CHUNK_DELAY ms apart, pty-chunked-write.ts). The delay first, then
+ *  one WRITE_CHUNK_DELAY wait per slice after the first. Counted from the
+ *  slices, not from the call: a slice still to go when the delay ends (main
+ *  was held up, or writePty held the text for a launch line and is replaying
+ *  it) had its timer set before each of these waits is, and timers of one
+ *  length run in the order they were set, so each wait ends only after one
+ *  more slice went. */
+async function textSettled(data: string): Promise<void> {
+  await wait(PROMPT_ENTER_DELAY_MS)
   const slices = data.length > WRITE_CHUNK_SIZE ? Math.ceil(data.length / WRITE_CHUNK_SIZE) : 1
   for (let i = 1; i < slices; i++) await wait(WRITE_CHUNK_DELAY)
 }
 
-/** One press, typed. Never rejects: a write that throws is the session gone. */
-async function typePrompt(sessionId: string, text: string, mode: PromptButtonMode): Promise<PromptButtonResult> {
+/**
+ * One press, typed, into `pressedFor` only: the terminal process the session
+ * had when the press was taken (submitPrompt). A press that waited behind
+ * another while the session restarted types nothing into the new process.
+ * Every typed outcome ends only once its text has settled (textSettled), so
+ * the next press cannot land between its slices. Never rejects: a write that
+ * throws is the session gone.
+ */
+async function typePrompt(sessionId: string, text: string, mode: PromptButtonMode, pressedFor: IPty | undefined): Promise<PromptButtonResult> {
+  const gone: PromptButtonResult = { outcome: 'not-sent', reason: 'session-gone' }
   try {
     const p = port()
-    const prefix = p.tmuxWrapped(sessionId) ? TMUX_WHEEL_EXIT_KEY : ''
+    // No process: writePty would hold the text for a later start.
+    const live = (): boolean => !!pressedFor && p.run(sessionId) === pressedFor
+    if (!live()) return gone
+    const data = `${p.tmuxWrapped(sessionId) ? TMUX_WHEEL_EXIT_KEY : ''}${text}`
     if (mode === 'send' && p.isCodexSession(sessionId)) {
       // The primitive answers a session with no pane itself.
       const screen = codexRunScreen()
@@ -174,24 +188,19 @@ async function typePrompt(sessionId: string, text: string, mode: PromptButtonMod
       // Refused before anything was typed (a control character, a line
       // break, a character Codex's composer drops): typed with no Enter, as a
       // press always left it on Codex, for the user to check and send.
-      if (!p.run(sessionId)) return { outcome: 'not-sent', reason: 'session-gone' }
-      p.write(sessionId, `${prefix}${text}`)
+      if (!live()) return gone
+      p.write(sessionId, data)
+      await textSettled(data)
       return { outcome: 'typed', reason: 'refused-text' }
     }
-    // Only into a terminal the session has now: writePty would hold a write
-    // for a session with none and hand it to a later start.
-    const run = p.run(sessionId)
-    if (!run) return { outcome: 'not-sent', reason: 'session-gone' }
-    const data = `${prefix}${text}`
     p.write(sessionId, data)
+    await textSettled(data)
     if (mode === 'type') return { outcome: 'typed' }
-    await slicesSent(data)
-    await wait(PROMPT_ENTER_DELAY_MS)
-    if (p.run(sessionId) !== run) return { outcome: 'not-sent', reason: 'session-gone' }
+    if (!live()) return gone
     p.write(sessionId, '\r')
     return { outcome: 'sent' }
   } catch {
-    return { outcome: 'not-sent', reason: 'session-gone' }
+    return gone
   }
 }
 
@@ -214,7 +223,7 @@ function promptOutcomeWords(result: PromptButtonResult): string {
  *   SSH Persistent session as submitLine does, and no Enter.
  * - Send, a session that is not Codex (Claude Code, on this computer, held by
  *   the session helper or over SSH): the text as above, then Enter as its own
- *   write PROMPT_ENTER_DELAY_MS after the text's last slice went (slicesSent),
+ *   write PROMPT_ENTER_DELAY_MS after the text's last slice went (textSettled),
  *   and only while the session's terminal process is still the one the text
  *   went to. The Enter never rides in the text's write: Codex takes one
  *   write of both as a paste and never submits it, and #333 reports a session
@@ -224,10 +233,17 @@ function promptOutcomeWords(result: PromptButtonResult): string {
  *   for the ready, empty composer; its answer is the answer. A text it refuses
  *   before typing is typed with no Enter, and the answer says so.
  *
- * A session with no terminal process takes nothing (`session-gone`). The same
- * text pressed again for the session within PROMPT_REPEAT_WINDOW_MS is
- * dropped. A session's presses go one at a time in the order pressed: a
- * second waits for the first one's Enter (or its answer, on Codex). The log
+ * A press types only into the terminal process the session had when it was
+ * pressed: none, or one replaced while the press waited, takes nothing
+ * (`session-gone`). The same text pressed again for the session within
+ * PROMPT_REPEAT_WINDOW_MS is dropped. A session's presses go one at a time in
+ * the order pressed: a second waits for the first one's Enter (or its answer,
+ * on Codex), and for a typed one's text to settle. A press in the first
+ * 300 ms of a local Claude Code launch, while writePty holds writes for the
+ * launch line, gets its Enter after the held text too: the hold ends on a
+ * 300 ms timer set when the session started, before this press's own 300 ms
+ * wait was set, so the replay has started when that wait ends, and the slice
+ * waits after it follow the replayed slices. The log
  * names a prompt by its length only. Throws before the PTY manager registers
  * its ports, as every door does; otherwise never rejects.
  *
@@ -236,7 +252,7 @@ function promptOutcomeWords(result: PromptButtonResult): string {
  * Claude Code package.
  */
 export function submitPrompt(sessionId: string, text: string, mode: PromptButtonMode): Promise<PromptButtonResult> {
-  port()
+  const pressedFor = port().run(sessionId)
   const chars = [...text].length
   const now = Date.now()
   const last = lastPromptPress.get(sessionId)
@@ -248,7 +264,7 @@ export function submitPrompt(sessionId: string, text: string, mode: PromptButton
   lastPromptPress.set(sessionId, press)
   setTimeout(() => { if (lastPromptPress.get(sessionId) === press) lastPromptPress.delete(sessionId) }, PROMPT_REPEAT_WINDOW_MS)
   const before = promptChains.get(sessionId)
-  const go = (): Promise<PromptButtonResult> => typePrompt(sessionId, text, mode)
+  const go = (): Promise<PromptButtonResult> => typePrompt(sessionId, text, mode, pressedFor)
   const next = (before ? before.then(go, go) : go()).then((result) => {
     logInfo(`[prompt-button] ${sessionId}: a prompt of ${chars} characters ${promptOutcomeWords(result)}`)
     return result
