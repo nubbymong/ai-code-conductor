@@ -727,7 +727,7 @@ const askHandOffSchema = z.object({
 
 /** #333: the longest prompt button text main types in one press: far above
  *  any prompt a button holds, and a bound on what one message can ask main to
- *  write (about four seconds of writePty's 256-byte slices). */
+ *  write (about five seconds of writePty's 256-unit slices, 12 ms apart). */
 export const PROMPT_BUTTON_MAX_CHARS = 100_000
 
 /** #333: `pty:submitPrompt`'s payload: the session and a prompt button's

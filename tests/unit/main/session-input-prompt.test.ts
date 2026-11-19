@@ -9,8 +9,10 @@
 //    exactly one Enter as its own write 300 ms after the text's last slice
 //    went: on this computer, held by the session helper, and over SSH (an SSH
 //    Persistent session gets the tmux leave key first, in the text's write, as
-//    submitLine does). A 600-byte text's Enter comes 300 ms after its third
-//    slice, not 300 ms after the call.
+//    submitLine does, and again at the start of the Enter's write, so a wheel
+//    turn between the two cannot leave the Enter to tmux's copy-mode). A
+//    600-byte text's Enter comes 300 ms after its third slice, not 300 ms
+//    after the call.
 //  - Type: the text only, and no Enter at all, on each kind (Codex included);
 //    a long text is answered only once it has settled, so a next press cannot
 //    land between its slices.
@@ -27,7 +29,9 @@
 //    releaseLaunchHold does): the Enter comes after the held text's last slice.
 //  - Send, a Codex session: the Codex run screen's submit with a 5 s ready
 //    wait, its answer back, and no raw write; a text the primitive refuses
-//    before typing is typed with no Enter and answered as typed, not sent.
+//    before typing is typed with no Enter and answered as typed, not sent; a
+//    text over 8,000 code points never reaches it, nothing is typed, and it is
+//    answered not sent (refused-text). The count is code points, not units.
 //  - The log names a prompt by its length only.
 //  - Before the PTY manager registers its ports the door throws.
 //
@@ -36,7 +40,8 @@
 // type mode that still sends Enter; the double-press guard removed; an Enter
 // into a replaced terminal process; a Codex prompt written raw with Enter;
 // type mode answered before its text settled; a queued press that types into
-// whatever process the session has when its turn comes.
+// whatever process the session has when its turn comes; an SSH Persistent
+// Enter written bare; a Codex text over the cap handed to the primitive.
 //
 // Not checked here: a main process held up between two slices. A fake clock
 // cannot hold the event loop; textSettled sets each slice wait after the
@@ -76,7 +81,7 @@ vi.mock('../../../src/main/debug-logger', () => ({
 
 const input = await import('../../../src/main/session-input')
 const { runChunkedWrite, WRITE_CHUNK_SIZE } = await import('../../../src/main/pty-chunked-write')
-const { TMUX_WHEEL_EXIT_KEY } = await import('../../../src/shared/tmux-wheel')
+const { TMUX_WHEEL_EXIT_KEY, TMUX_WHEEL_UP_KEY } = await import('../../../src/shared/tmux-wheel')
 
 /** A terminal process: what was written to it, and when. */
 class FakeRun {
@@ -179,13 +184,27 @@ describe('submitPrompt: a command bar prompt button, by one rule', () => {
       expect(datas(run)).toEqual(['explain this file', '\r'])
     })
 
-    it('an SSH Persistent session: the tmux leave key and the text, then the Enter', async () => {
+    it('an SSH Persistent session: the tmux leave key and the text, then the leave key and the Enter', async () => {
       const id = fresh('sshp')
       const run = startRun(id)
       tmux.add(id)
       const answer = input.submitPrompt(id, 'run the tests', 'send')
       await vi.advanceTimersByTimeAsync(300)
-      expect(datas(run)).toEqual([`${TMUX_WHEEL_EXIT_KEY}run the tests`, '\r'])
+      expect(datas(run)).toEqual([`${TMUX_WHEEL_EXIT_KEY}run the tests`, `${TMUX_WHEEL_EXIT_KEY}\r`])
+      expect(await answer).toEqual({ outcome: 'sent' })
+    })
+
+    it('an SSH Persistent session whose wheel opens the scrollback between the text and the Enter: the Enter\'s write still starts with the leave key', async () => {
+      const id = fresh('sshw')
+      const run = startRun(id)
+      tmux.add(id)
+      const answer = input.submitPrompt(id, 'run the tests', 'send')
+      await vi.advanceTimersByTimeAsync(150)
+      // The renderer's wheel, through pty:write, while the Enter waits.
+      ports.write(id, TMUX_WHEEL_UP_KEY)
+      await vi.advanceTimersByTimeAsync(150)
+      expect(datas(run)).toEqual([`${TMUX_WHEEL_EXIT_KEY}run the tests`, TMUX_WHEEL_UP_KEY, `${TMUX_WHEEL_EXIT_KEY}\r`])
+      expect(datas(run)[2].startsWith(TMUX_WHEEL_EXIT_KEY)).toBe(true)
       expect(await answer).toEqual({ outcome: 'sent' })
     })
 
@@ -397,6 +416,31 @@ describe('submitPrompt: a command bar prompt button, by one rule', () => {
       await vi.advanceTimersByTimeAsync(1_000)
       expect(await answer).toEqual({ outcome: 'not-sent', reason })
       expect(datas(run)).toEqual([])
+    })
+
+    it('a text over 8,000 code points: never handed to the primitive, nothing typed, and answered not sent (refused-text)', async () => {
+      const id = fresh('cxl')
+      const run = startRun(id)
+      codex.add(id)
+      expect(input.PROMPT_CODEX_MAX_CODE_POINTS).toBe(8000)
+      const answer = input.submitPrompt(id, 'a'.repeat(8_001), 'send')
+      await vi.advanceTimersByTimeAsync(10_000)
+      expect(await answer).toEqual({ outcome: 'not-sent', reason: 'refused-text' })
+      expect(h.submits).toEqual([])
+      expect(datas(run)).toEqual([])
+      expect(portWrites.filter((w) => w.sessionId === id)).toEqual([])
+    })
+
+    it('the cap counts code points: 8,000 of them in 16,000 UTF-16 units still reach the primitive', async () => {
+      const id = fresh('cxc')
+      startRun(id)
+      codex.add(id)
+      const text = String.fromCodePoint(0x1f600).repeat(8_000)
+      expect(text.length).toBe(16_000)
+      const answer = input.submitPrompt(id, text, 'send')
+      await vi.advanceTimersByTimeAsync(1_000)
+      expect(await answer).toEqual({ outcome: 'sent' })
+      expect(h.submits.map((s) => s.text)).toEqual([text])
     })
 
     it('a text the primitive refuses before typing: typed with no Enter, and answered as typed, not sent', async () => {

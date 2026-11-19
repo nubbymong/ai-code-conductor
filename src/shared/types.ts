@@ -649,9 +649,10 @@ export type SubmitTextResult = { delivered: true } | { delivered: false; reason:
  *  - `dropped`: the same text pressed again for the session within 300 ms,
  *    so nothing was typed for the second press;
  *  - `not-sent`: not submitted, and why: on Codex the submit primitive's own
- *    reasons; `session-gone` also when the session's terminal ended or was
- *    replaced before the Enter; `refused-text` when main refused the message
- *    before typing anything. */
+ *    reasons; `session-gone` also when the session had no terminal at the
+ *    press, or it ended or was replaced before the Enter; `refused-text`
+ *    when main refused the message before typing anything (empty, over the
+ *    channel's cap, or on Codex over 8,000 code points). */
 export type PromptButtonResult =
   | { outcome: 'sent' }
   | { outcome: 'typed'; reason?: 'refused-text' }

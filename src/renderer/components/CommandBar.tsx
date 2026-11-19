@@ -76,17 +76,19 @@ const CODEX_PILL_NOTE_MS = 6000
 const PARTNER_NOTE_MS = 6000
 
 /** #333: why a prompt button's prompt was not sent, after "The prompt was not
- *  sent:" (or "typed but not sent:"). Ask Conductor's words for each reason
- *  (askConductor.ts), with "the session" where those name the Ask tab. Every
- *  reason but `session-gone` comes from Codex's submit rule, apart from
- *  `refused-text` when main refused the message itself. */
+ *  sent:". The four reasons from Codex's submit rule (busy-timeout,
+ *  prompt-on-screen, too-tall, not-drawn) keep Ask Conductor's words
+ *  (askConductor.ts), with "the session" where those name the Ask tab.
+ *  `refused-text` here is main refusing the message itself (empty, or over
+ *  the cap): Codex's own refused-text comes back as typed, not sent
+ *  (PROMPT_TYPED_REFUSED). `session-gone` is any session's. */
 const PROMPT_NOT_SENT: Record<SubmitNotDeliveredReason, string> = {
   'busy-timeout': 'Codex was still working, and its prompt did not come free in time.',
   'prompt-on-screen': 'Codex was showing a question of its own (folder trust, sandbox setup or an approval). Answer it in the session first.',
   'too-tall': 'it is too long to check in Codex\'s prompt at this pane size. Make the pane taller, or the prompt shorter.',
   'not-drawn': 'the app could not confirm it in Codex\'s prompt. If it is still there, send it or clear it in the session.',
   'refused-text': 'it is empty, or too long for the app to type in one press.',
-  'session-gone': 'the session ended or restarted before it could be sent.',
+  'session-gone': 'the session was not running, or it ended or restarted before it could be sent.',
 }
 /** A Codex text its prompt cannot take, typed for the user to check and send. */
 const PROMPT_TYPED_REFUSED = 'it holds characters Codex\'s prompt cannot take, so it was left in the prompt. Check it, then press Enter.'

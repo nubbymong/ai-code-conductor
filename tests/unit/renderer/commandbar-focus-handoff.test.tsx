@@ -164,7 +164,8 @@ describe('a prompt button is typed by main (#333)', () => {
   it.each([
     ['busy-timeout', 'The prompt was not sent: Codex was still working, and its prompt did not come free in time.'],
     ['prompt-on-screen', 'The prompt was not sent: Codex was showing a question of its own (folder trust, sandbox setup or an approval). Answer it in the session first.'],
-    ['session-gone', 'The prompt was not sent: the session ended or restarted before it could be sent.'],
+    ['session-gone', 'The prompt was not sent: the session was not running, or it ended or restarted before it could be sent.'],
+    ['refused-text', 'The prompt was not sent: it is empty, or too long for the app to type in one press.'],
   ])('not sent (%s): the bar\'s note says why', async (reason, words) => {
     SUBMIT_ANSWER = { outcome: 'not-sent', reason }
     COMMANDS = [PROMPT]
@@ -183,7 +184,7 @@ describe('a prompt button is typed by main (#333)', () => {
     SUBMIT_FAILS = true
     COMMANDS = [PROMPT]
     await press()
-    expect(note()).toBe('The prompt was not sent: the session ended or restarted before it could be sent.')
+    expect(note()).toBe('The prompt was not sent: the session was not running, or it ended or restarted before it could be sent.')
     expect(ptyWrite).not.toHaveBeenCalled()
   })
 

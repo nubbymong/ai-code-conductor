@@ -133,6 +133,12 @@ export const PROMPT_REPEAT_WINDOW_MS = 300
 /** #333: how long a Codex session's prompt button waits for Codex's ready,
  *  empty composer before it answers busy. */
 export const PROMPT_CODEX_READY_WAIT_MS = 5_000
+/** #333: the longest text a Codex session's prompt button hands the submit
+ *  primitive, in code points: the most it is known to type and confirm
+ *  (askConductor:handOff caps a question at 8,000). It types the text in one
+ *  write, unsliced, and a missed confirm waits out a window that grows with
+ *  the length before it takes the text back. A longer one is refused. */
+export const PROMPT_CODEX_MAX_CODE_POINTS = 8_000
 
 /** Send the prompt (the default), or type it only (Settings, Custom
  *  Commands): main reads which from the saved settings at each press. */
@@ -176,8 +182,10 @@ async function typePrompt(sessionId: string, text: string, mode: PromptButtonMod
     // No process: writePty would hold the text for a later start.
     const live = (): boolean => !!pressedFor && p.run(sessionId) === pressedFor
     if (!live()) return gone
-    const data = `${p.tmuxWrapped(sessionId) ? TMUX_WHEEL_EXIT_KEY : ''}${text}`
+    const leave = p.tmuxWrapped(sessionId) ? TMUX_WHEEL_EXIT_KEY : ''
+    const data = `${leave}${text}`
     if (mode === 'send' && p.isCodexSession(sessionId)) {
+      if ([...text].length > PROMPT_CODEX_MAX_CODE_POINTS) return { outcome: 'not-sent', reason: 'refused-text' }
       // The primitive answers a session with no pane itself.
       const screen = codexRunScreen()
       const result: SubmitTextResult = screen
@@ -197,7 +205,10 @@ async function typePrompt(sessionId: string, text: string, mode: PromptButtonMod
     await textSettled(data)
     if (mode === 'type') return { outcome: 'typed' }
     if (!live()) return gone
-    p.write(sessionId, '\r')
+    // Its own write, with the leave key again: the wheel may have opened
+    // tmux's scrollback since the text went, and copy-mode would take a bare
+    // Enter. Outside copy-mode the key does nothing (submitLine).
+    p.write(sessionId, `${leave}\r`)
     return { outcome: 'sent' }
   } catch {
     return gone
@@ -225,13 +236,16 @@ function promptOutcomeWords(result: PromptButtonResult): string {
  *   the session helper or over SSH): the text as above, then Enter as its own
  *   write PROMPT_ENTER_DELAY_MS after the text's last slice went (textSettled),
  *   and only while the session's terminal process is still the one the text
- *   went to. The Enter never rides in the text's write: Codex takes one
+ *   went to; on an SSH Persistent session the Enter's write starts with the
+ *   leave key too. The Enter never rides in the text's write: Codex takes one
  *   write of both as a paste and never submits it, and #333 reports a session
  *   on this computer where such a write was typed and not sent.
  * - Send, a Codex session: the Codex package's submit primitive, as canvas
  *   notes and Ask Conductor use it, with PROMPT_CODEX_READY_WAIT_MS to wait
  *   for the ready, empty composer; its answer is the answer. A text it refuses
- *   before typing is typed with no Enter, and the answer says so.
+ *   before typing is typed with no Enter, and the answer says so. A text over
+ *   PROMPT_CODEX_MAX_CODE_POINTS is not handed to it: nothing is typed, and
+ *   the answer is not sent (`refused-text`).
  *
  * A press types only into the terminal process the session had when it was
  * pressed: none, or one replaced while the press waited, takes nothing

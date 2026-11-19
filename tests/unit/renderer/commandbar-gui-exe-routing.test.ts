@@ -128,6 +128,16 @@ describe('a prompt button is never probed', () => {
     expect(probe).not.toHaveBeenCalled()
   })
 
+  it('a Terminal only tab\'s own shell line (aimed at the main pane, no agent) still writes its line and Enter through pty.write', async () => {
+    SESSION = { shellOnly: true }
+    probe.mockResolvedValue({ status: 'console', token: 'make', exePath: 'C:\\bin\\make.exe' })
+    mount([{ id: 'm1', label: 'Build', prompt: 'make', scope: 'global', target: 'claude', kind: 'shell' }])
+    click('Build')
+    await settle()
+    expect(ptyWrite.mock.calls).toEqual([['s-1', 'make\r']])
+    expect(submitPrompt).not.toHaveBeenCalled()
+  })
+
   it('a shell line button still writes its line and Enter through pty.write (#333 leaves it alone)', async () => {
     probe.mockResolvedValue({ status: 'console', token: 'git', exePath: 'C:\\bin\\git.exe' })
     mount([shellCmd({ prompt: 'git', defaultArgs: ['status'] })])
