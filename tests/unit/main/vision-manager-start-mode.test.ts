@@ -376,7 +376,10 @@ describe('Windows: a browser the helper started is ended only by its pid and sta
     expect(powershellRuns()).toEqual([])
   })
 
-  it('with the helper beside the app gone, the quit ends the browser through the copy the session helper checked this run', async () => {
+  // A real copy is hashed, and the end runs only a helper named by a
+  // drive-absolute path, which a temp file has only on a Windows host. The
+  // copy's own check runs on every OS (session-helper-install.test.ts).
+  it.skipIf(process.platform !== 'win32')('with the helper beside the app gone, the quit ends the browser through the copy the session helper checked this run', async () => {
     // The session helper's copy, put in place and checked as a holder start does.
     const bundled = path.join(sys.userData, 'install', 'aicc-helper.exe')
     realFs.mkdirSync(path.dirname(bundled), { recursive: true })
