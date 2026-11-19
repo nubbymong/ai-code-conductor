@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { originalHomeEnv } from '../../helpers/home-guard-core.mjs'
 import { makensisIn, nsisCacheFolders, nsisCachePresent } from '../../helpers/nsis-cache'
+import { escapeRegExp } from '../../helpers/escape-regexp'
 
 /**
  * BEHAVIOURAL tests for the destructive half of build/installer.nsh.
@@ -1854,7 +1855,7 @@ describe.skipIf(!MAKENSIS)('installer.nsh behavioural probe: the app check close
   }
 
   const leftFrom = (name: string, pid: number) =>
-    new RegExp(`^Left ${name.replace(/[.]/g, '\\.')} \\(process ${pid}\\) running from .+\\\\${name.replace(/[.]/g, '\\.')}, which is not this install's folder\\.$`, 'i')
+    new RegExp(`^Left ${escapeRegExp(name)} \\(process ${pid}\\) running from .+\\\\${escapeRegExp(name)}, which is not this install's folder\\.$`, 'i')
   const ASKED = /^Windows of AI Code Conductor asked to close: [1-9]\d*\.$/
   const ENDS = /^(Ended process|Could not end process|Did not end process)/
 

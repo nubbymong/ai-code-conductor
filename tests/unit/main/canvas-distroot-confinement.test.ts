@@ -158,7 +158,7 @@ describe('entry re-validation on the disk-reload path (ADS / traversal)', () => 
 describe('sanitizeContentPath is self-sufficient on Win32 forms', () => {
   it.each([
     [['index.html.']], // trailing dot (Win32 strips it)
-    [['index.html%20'.replace('%20', ' ')]], // trailing space
+    [['index.html%20'.replace(/%20/g, ' ')]], // trailing space
     [['...']], // all-dot segment
     [['....']],
     [['con']], // reserved device basenames

@@ -19,6 +19,7 @@ import { CODEX_CONDUCTOR_TOOLS } from '../../../src/main/providers/codex/conduct
 import { codexModelOptions, codexNewConfigModel } from '../../../src/renderer/codex-models'
 import type { ModelRegistry } from '../../../src/shared/model-registry'
 import registryJson from '../../../resources/model-registry.json'
+import { escapeRegExp } from '../../helpers/escape-regexp'
 
 describe('app knowledge is publishable', () => {
   it('has unique, stable-looking ids and a title and body for every section', () => {
@@ -721,7 +722,7 @@ describe('the P4.11 review: images, privacy and the first-launch session', () =>
     // The record says what was done: the images recaptured on the 2.1.1-beta.2 candidate and
     // approved by the owner, the Memory image not recaptured, and the macOS variants recaptured
     // on a macOS build of that candidate and approved too, with no line left calling them owed.
-    for (const img of ['shot-tokenomics.png', 'shot-sessions.png', 'shot-canvas.png']) expect(rq).toMatch(new RegExp('`docs/screenshots/' + img.replace('.', '\\.') + '` \\| [^|]+ \\| Recaptured on the 2\\.1\\.1-beta\\.2 candidate and approved by the owner on 2026-10-07'))
+    for (const img of ['shot-tokenomics.png', 'shot-sessions.png', 'shot-canvas.png']) expect(rq).toMatch(new RegExp('`docs/screenshots/' + escapeRegExp(img) + '` \\| [^|]+ \\| Recaptured on the 2\\.1\\.1-beta\\.2 candidate and approved by the owner on 2026-10-07'))
     expect(rq).toMatch(/`docs\/screenshots\/shot-memory\.png` \| [^|]+ \| Not recaptured: the README shows no Memory image/)
     expect(rq).not.toMatch(/\| Recaptured at the final head|being recaptured with the README|await the owner's approval/)
     expect(rq).toMatch(/The six README images and the four Feature Guide images \(`v2-shell-hero\.jpg`, `step-session-options\.jpg`, `step-tokenomics\.jpg`, `step-vision\.jpg`\) were then recaptured on the 2\.1\.1-beta\.2 candidate and approved by the owner on 2026-10-07\./)
