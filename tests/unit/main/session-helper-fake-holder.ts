@@ -197,7 +197,8 @@ export class FakeHolder {
 
   /** The attached connection let go: the away clock starts, and the tool
    *  streams it carried end (each relay is told `mcp.close`; the app is not),
-   *  except one whose relay acked `away`, which is kept. */
+   *  except one whose relay acked `away` while the program runs, which is
+   *  kept. */
   detached(): void {
     for (const [n, c] of [...this.toolStreams]) {
       if (c !== this.attached) continue
