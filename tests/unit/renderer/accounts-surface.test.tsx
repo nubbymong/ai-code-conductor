@@ -1206,8 +1206,9 @@ describe('Sign in again', () => {
   it('asks which account you mean with neither answer chosen, and no sign-in button works until one is (#289)', async () => {
     pa.beginSetup.mockResolvedValue({ ok: true, accountId: 'acc-new' })
     render(snapshot({ accounts: [work, expired, keyAccount] }))
-    // One account of each method family, so the button under both of its
-    // labels: "Sign in" (ChatGPT, device code) and "Continue" (API key).
+    // One account per recorded method (ChatGPT in the browser, device code,
+    // API key), so the button under both of its labels: "Sign in" (ChatGPT,
+    // device code) and "Continue" (API key).
     for (const [id, label] of [['acc-work', 'Sign in'], ['acc-exp', 'Sign in'], ['acc-key', 'Continue']] as const) {
       await openFor(id, null)
       const go = q('sign-in-again-continue') as HTMLButtonElement
@@ -1234,6 +1235,24 @@ describe('Sign in again', () => {
     expect(pa.signInAgain).not.toHaveBeenCalled()
     expect(pa.beginSetup).not.toHaveBeenCalled()
     expect(pa.issueSecretHandle).not.toHaveBeenCalled()
+  })
+
+  it('keeps no answer once the dialog closes: chosen, cancelled and opened again, neither answer is chosen (#289)', async () => {
+    render(snapshot({ accounts: [work, keyAccount] }))
+    await openFor('acc-work', 'same')
+    await click('sign-in-again-cancel')
+    expect(q('sign-in-again-dialog')).toBeNull()
+    await openFor('acc-work', null)
+    expect((q('sign-in-again-same') as HTMLInputElement).checked).toBe(false)
+    expect((q('sign-in-again-different') as HTMLInputElement).checked).toBe(false)
+    expect((q('sign-in-again-continue') as HTMLButtonElement).disabled).toBe(true)
+    await click('sign-in-again-cancel')
+    await openFor('acc-work', 'different')
+    await click('sign-in-again-cancel')
+    await openFor('acc-work', null)
+    expect((q('sign-in-again-different') as HTMLInputElement).checked).toBe(false)
+    expect((q('sign-in-again-continue') as HTMLButtonElement).disabled).toBe(true)
+    expect(pa.signInAgain).not.toHaveBeenCalled()
   })
 
   it('names both answers in full; the old box and its hint are gone (#289)', async () => {
