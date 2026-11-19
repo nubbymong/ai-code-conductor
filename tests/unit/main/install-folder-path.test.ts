@@ -181,18 +181,31 @@ describe("Codex installed with npm on Windows: npm's own folder, %APPDATA%\\npm 
     expect(JSON.stringify(hint)).not.toContain('Roaming')
   })
 
-  it('codex.cmd alone counts, as codex.exe does; a link, a folder of that name or another name does not', async () => {
+  it('codex.cmd alone counts, as codex.exe does; a link at either name, a folder of that name or another name does not', async () => {
     for (const file of [CODEX_CMD, CODEX_EXE]) {
       expect(await pathHintFor('codex', npm({ entries: { [NPM]: 'dir', [file]: 'file' } }).d), file).toEqual({ kind: 'add-to-path', folder: SHOWN })
     }
+    // Codex's own lookup (providers/codex/spawn.ts) reads both names in
+    // PATHEXT's order and follows links, so a link beside a regular file may
+    // be what runs once the folder is on PATH.
+    const linkBeside: Array<Record<string, EntryKind>> = [
+      { [NPM]: 'dir', [CODEX_EXE]: 'link', [CODEX_CMD]: 'file' },
+      { [NPM]: 'dir', [CODEX_EXE]: 'file', [CODEX_CMD]: 'link' },
+    ]
     const notAnInstall: Array<Record<string, EntryKind>> = [
       { [NPM]: 'dir', [CODEX_CMD]: 'link' },
       { [NPM]: 'link', [CODEX_CMD]: 'file' },
       { [NPM]: 'dir', [CODEX_CMD]: 'dir' },
       { [NPM]: 'dir', [w('C:/Users/u/AppData/Roaming/npm/codex.ps1')]: 'file', [w('C:/Users/u/AppData/Roaming/npm/codex')]: 'file' },
+      ...linkBeside,
     ]
     for (const entries of notAnInstall) {
       expect(await pathHintFor('codex', npm({ entries, files: [] }).d), JSON.stringify(entries)).toBeUndefined()
+    }
+    for (const entries of linkBeside) {
+      const r = npm({ entries, files: [] })
+      expect(await addToolFolderToPath('codex', r.d), JSON.stringify(entries)).toMatchObject({ outcome: 'refused' })
+      expect(r.appendUserPath).not.toHaveBeenCalled()
     }
   })
 
@@ -202,9 +215,12 @@ describe("Codex installed with npm on Windows: npm's own folder, %APPDATA%\\npm 
   })
 
   it('the folder on PATH: a walk of that PATH finds Codex there (found), and the hint never offers to add it', async () => {
-    // This process's PATH: folder by folder, codex.exe or codex.cmd, as
-    // Codex's own lookup walks it (providers/codex/spawn.ts), so a check
-    // finds Codex and asks for no hint.
+    // This process's PATH, walked folder by folder for codex.exe or
+    // codex.cmd by the shared lookup (findOnWindowsPathAsync). Codex's own
+    // lookup (the async binary lookup in providers/codex/spawn.ts) reads the
+    // same two names and is covered by its own suite
+    // (tests/unit/providers/codex/codex-binary-path-order.test.ts); a check
+    // that finds Codex asks for no hint.
     const on = npm()
     on.d.env.Path = w('C:/Windows/system32;') + NPM
     expect(await findOnWindowsPathAsync(CODEX_NAMES, on.d.env as NodeJS.ProcessEnv, on.d.isFile)).toBe(CODEX_CMD)
@@ -270,15 +286,19 @@ describe("Codex installed with npm on Windows: npm's own folder, %APPDATA%\\npm 
 
   // A redirected %APPDATA% on a share that is down (review of #732): a look
   // that never answers holds the check only until the deadline of the
-  // looks, then the folder counts as holding nothing.
+  // looks, then the folder counts as holding nothing. A name not seen in
+  // time may be a link, so codex.exe seen as a regular file does not count
+  // while the look at codex.cmd has not ended.
   it('a look in the folder that never answers (a share that is down): no hint and no add once the deadline passes', async () => {
     const seen: Record<string, EntryKind> = { [NPM]: 'dir', [CODEX_CMD]: 'file' }
-    for (const hangs of [NPM, CODEX_CMD]) {
-      const entryKind = (p: string): Promise<EntryKind> => p === hangs ? new Promise<EntryKind>(() => {}) : Promise.resolve(seen[p] ?? 'none')
+    const exeSeen: Record<string, EntryKind> = { [NPM]: 'dir', [CODEX_EXE]: 'file', [CODEX_CMD]: 'file' }
+    for (const [hangs, kinds] of [[NPM, seen], [CODEX_CMD, seen], [CODEX_CMD, exeSeen]] as Array<[string, Record<string, EntryKind>]>) {
+      const entryKind = (p: string): Promise<EntryKind> => p === hangs ? new Promise<EntryKind>(() => {}) : Promise.resolve(kinds[p] ?? 'none')
       const r = npm({ entryKind, files: [], lookDeadline: () => pathWalkDeadline(10) })
-      expect(await pathHintFor('codex', r.d), hangs).toBeUndefined()
-      expect(await addToolFolderToPath('codex', r.d), hangs).toMatchObject({ outcome: 'refused' })
-      expect(r.appendUserPath).not.toHaveBeenCalled()
+      const label = hangs + ' ' + JSON.stringify(kinds)
+      expect(await pathHintFor('codex', r.d), label).toBeUndefined()
+      expect(await addToolFolderToPath('codex', r.d), label).toMatchObject({ outcome: 'refused' })
+      expect(r.appendUserPath, label).not.toHaveBeenCalled()
     }
   })
 

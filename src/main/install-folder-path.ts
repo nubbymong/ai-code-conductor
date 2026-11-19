@@ -85,9 +85,9 @@ interface KnownFolder {
 
 /** A Windows install folder. `under` absent: below the user's home folder;
  *  'APPDATA': below the folder %APPDATA% names in this process's environment.
- *  `names`, when set: every name the tool is looked for by there (one that is
- *  a regular file counts); `file` alone otherwise. `file` is the name a
- *  refusal gives. */
+ *  `names`, when set: every name the tool is looked for by there (one must be
+ *  a regular file, and none may be a link); `file` alone otherwise. `file` is
+ *  the name a refusal gives. */
 interface WindowsKnownFolder extends KnownFolder {
   under?: 'APPDATA'
   names?: readonly string[]
@@ -256,17 +256,24 @@ function lookWithin(deps: InstallFolderDeps, p: string, deadline: PathWalkDeadli
   })
 }
 
-/** The publisher's file is there, a regular file in a real folder, seen
- *  before the deadline of the looks (a folder that does not answer in time
- *  holds nothing, so there is no hint and no add). */
+/** The tool's file is there, a regular file in a real folder, and no name the
+ *  lookup reads is a link, seen before the deadline of the looks. A folder
+ *  that does not answer in time holds nothing: no add-to-path hint for it and
+ *  no add (pathHintFor then walks the registry's PATH, as for an empty
+ *  folder). */
 async function installedThere(deps: InstallFolderDeps, dir: string, known: WindowsKnownFolder): Promise<boolean> {
   const deadline = (deps.lookDeadline ?? pathWalkDeadline)()
   try {
     if ((await lookWithin(deps, dir, deadline)) !== 'dir') return false
+    let file = false
     for (const name of known.names ?? [known.file]) {
-      if ((await lookWithin(deps, path.win32.join(dir, name), deadline)) === 'file') return true
+      const kind = await lookWithin(deps, path.win32.join(dir, name), deadline)
+      // A link at any name Codex's lookup reads may be what runs after the add.
+      if (kind === 'link') return false
+      if (kind === 'file') file = true
     }
-    return false
+    // A name whose look did not end in time may be a link.
+    return file && !deadline.passed
   } finally {
     deadline.clear()
   }

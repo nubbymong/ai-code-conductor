@@ -6723,7 +6723,7 @@
       ],
       "category": "TEST",
       "disposition": "added",
-      "evidence": "new first-run install review fix (2026-10-10, ADR-024) test: the PATH hint per platform and provider (Codex has no Windows folder of its own; ~/.local/bin/codex on macOS and Linux gets the shell line), and Add it to PATH for me appends only the folder main computes (WP1.18); tests/unit/main/install-folder-path.test.ts; 2.1.3-beta.10 C2 (aicc_planning#288): Codex's Windows folder is now npm's %APPDATA%\\npm, from the environment's APPDATA only (unset or not a full path: no folder), codex.cmd or codex.exe a regular file there (WP1.18); tests/unit/main/install-folder-path.test.ts",
+      "evidence": "new first-run install review fix (2026-10-10, ADR-024) test: the PATH hint per platform and provider (Codex has no Windows folder of its own; ~/.local/bin/codex on macOS and Linux gets the shell line), and Add it to PATH for me appends only the folder main computes (WP1.18); tests/unit/main/install-folder-path.test.ts; 2.1.3-beta.10 C2 (aicc_planning#288): Codex's Windows folder is now npm's %APPDATA%\\npm, from the environment's APPDATA only (unset or not a full path: no folder), codex.cmd or codex.exe a regular file there and neither a link (WP1.18); tests/unit/main/install-folder-path.test.ts",
       "note": "host-safe: the file system, registry and PATH write are stand-ins"
     },
     {
