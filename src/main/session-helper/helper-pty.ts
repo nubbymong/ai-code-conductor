@@ -19,6 +19,14 @@
  * seen, a few times a minute at most. A terminal that cannot be shown any more
  * reads as ended in its tab, and its holder is ended too, so no shell outlives
  * its tab, unless another connection took it over.
+ *
+ * The holder keeps the last 2 MiB of output. An attach that asks for an
+ * offset older than that is answered from the oldest byte it still holds
+ * (`truncated`), and the tab is told so before the replay, in a line of the
+ * app's own; once the replay is shown, a program still running is asked to
+ * redraw by a resize one row shorter and back (2.1.3-beta.12, plan section
+ * A1; probe P19). The view is not cleared and the terminal not reset: shown
+ * again, the tab's terminal keeps the modes its program set.
  */
 import type { IDisposable, IEvent, IPty } from 'node-pty'
 import { StringDecoder } from 'string_decoder'
@@ -95,6 +103,19 @@ export const REATTACH_TRIES = 3
 export const REATTACH_WINDOW_MS = 60_000
 /** How long an end the app sends of its own accord may take. */
 const END_WAIT_MS = 3_000
+/** The line a terminal shown again from the middle of its output starts
+ *  with, in the shape of the app's other words in a terminal
+ *  (PTY_IO_FAILED_TEXT). */
+export const EARLIER_OUTPUT_NOT_SHOWN = '[Earlier output of this terminal is no longer held, so it is not shown.]'
+/** Before that line: the cancel character ends a sequence the old stream left
+ *  half read, and the attribute reset drops a colour it left set. */
+const CANCEL = '\x18'
+const ATTRIBUTE_RESET = '\x1b[0m'
+/** The redraw: the size one row shorter goes back to the tab's after this
+ *  long (probe P19's 300 ms). */
+export const REDRAW_BACK_MS = 300
+/** At most this many bytes at the replay's start continue a character cut in half. */
+const CUT_CHARACTER_MAX = 3
 
 class Emitter<T> {
   private listeners: Array<(e: T) => void> = []
@@ -148,6 +169,16 @@ export class HelperPty implements IPty {
   private released = false
   /** Ring offset of the next output byte, for an attach again. */
   private offset = 0
+  /** Shown from the middle of its output (`truncated`): the redraw that waits
+   *  for the replay's end on `conn`, and how many bytes were no longer held. */
+  private redraw: { conn: HolderConnection; end: number; lost: number } | undefined
+  /** The redraw's second half (the tab's size again), while it waits. */
+  private redrawTimer: ReturnType<typeof setTimeout> | undefined
+  /** Bytes at the replay's very start that continue a character cut in half
+   *  are dropped: at most this many more. */
+  private cutBytes = 0
+  /** Some of this terminal's output was shown to the tab already. */
+  private shownAny = false
   private reattachTimes: number[] = []
   private resolveEnded!: () => void
   /** Settles once this terminal is over and its holder ended. */
@@ -355,8 +386,11 @@ export class HelperPty implements IPty {
         // the holder starts, and a cut (the ring no longer holds `from`) ends
         // a character split there.
         const start = typeof m.from === 'number' ? m.from : from
-        if (start !== from) this.flushDecoder()
+        const gap = m.truncated === true || start > from
+        if (start !== from || gap) this.flushDecoder()
         this.offset = start
+        this.cutBytes = 0
+        if (gap) this.fromTheMiddle(conn, Math.max(0, start - from), m)
       })
     } catch (err) {
       this.attaching = false
@@ -390,11 +424,69 @@ export class HelperPty implements IPty {
       this.exitAfterReplay(conn, end, code)
       return
     }
-    if (this.sizeChanged) this.sendResize()
+    // After a gap the redraw ends at the tab's size, so this one is not sent as well.
+    if (this.sizeChanged && !this.redraw) this.sendResize()
     const queued = this.queued
     this.queued = []
     this.queuedBytes = 0
     for (const b of queued) conn.sendInput(b)
+    // The replay may have been shown already, before this attach was settled.
+    this.redrawOnce(conn)
+  }
+
+  /**
+   * The holder no longer held the start this attach asked for, so the replay
+   * starts `lost` bytes later. Before its first byte the tab gets the cancel
+   * character, the attribute reset and one line saying so; bytes at the
+   * replay's very start that continue a character cut in half are dropped.
+   * A program still running is asked to redraw once the replay is shown
+   * (redrawOnce). Nothing clears the view or resets the terminal, and no mode
+   * is set: on an attach again the tab's terminal still has the modes its
+   * program set, and a reset would throw them away.
+   */
+  private fromTheMiddle(conn: HolderConnection, lost: number, reply: Record<string, unknown>): void {
+    const start = this.offset
+    const end = typeof reply.ring_end === 'number' && reply.ring_end >= start ? reply.ring_end : start
+    this.cutBytes = CUT_CHARACTER_MAX
+    // Its own line: after output already shown, from the start of the next one.
+    this.show(`${CANCEL}${ATTRIBUTE_RESET}${this.shownAny ? '\r\n' : ''}${EARLIER_OUTPUT_NOT_SHOWN}\r\n`)
+    if (reply.running === false) {
+      this.driver.log(`[session-helper] ${this.sid}: ${lost} bytes of earlier output are no longer held, so they are not shown; its program is over, so no redraw is asked for`)
+      return
+    }
+    this.redraw = { conn, end, lost }
+  }
+
+  /**
+   * Once the replay after a gap is shown and the program still runs: one
+   * resize one row shorter than the tab (one taller for a tab one row high),
+   * then, REDRAW_BACK_MS later, one at the tab's size as it is then. Probe
+   * P19: a resize to the size the terminal already has makes a program redraw
+   * only on the ConPTY built into Windows. To the holder only: no pane is
+   * resized, and a resize the tab asks for meanwhile goes out as usual.
+   */
+  private redrawOnce(conn: HolderConnection): void {
+    const r = this.redraw
+    if (!r || r.conn !== conn || this.conn !== conn || !this.attached || this.ending || this.exited || this.offset < r.end) return
+    this.redraw = undefined
+    const { cols, rows } = this.size
+    // The holder's size differs from the tab's until the second half: an
+    // attach again before it sends the tab's.
+    this.sizeChanged = true
+    conn.request({ t: 'term.resize', cols, rows: rows > 1 ? rows - 1 : rows + 1 }).catch(() => { /* the second half tries again */ })
+    this.driver.log(`[session-helper] ${this.sid}: ${r.lost} bytes of earlier output are no longer held, so they are not shown; asked its program to redraw`)
+    this.redrawTimer = setTimeout(() => {
+      this.redrawTimer = undefined
+      if (this.conn !== conn || conn.isClosed || !this.attached || this.ending || this.exited || this.replaced) return
+      this.sendResize()
+    }, REDRAW_BACK_MS)
+  }
+
+  /** The terminal detached, ended, was let go of or replaced: no redraw is sent after this. */
+  private stopRedraw(): void {
+    this.redraw = undefined
+    if (this.redrawTimer !== undefined) clearTimeout(this.redrawTimer)
+    this.redrawTimer = undefined
   }
 
   // ── the connection ─────────────────────────────────────────────────────────
@@ -404,8 +496,9 @@ export class HelperPty implements IPty {
     conn.on('output', (bytes: Buffer) => {
       if (this.conn !== conn || this.exited) return
       this.offset += bytes.length
-      const text = this.decoder.write(bytes)
-      if (text) this.dataEmitter.fire(text)
+      const text = this.decoder.write(this.cutBytes > 0 ? this.dropCut(bytes) : bytes)
+      if (text) this.show(text)
+      if (this.redraw) this.redrawOnce(conn)
     })
     conn.on('exit', (code: number | null) => {
       if (this.conn !== conn || this.exited) return
@@ -416,6 +509,7 @@ export class HelperPty implements IPty {
       if (this.conn !== conn) return
       if (code === 'replaced') {
         this.replaced = true
+        this.stopRedraw()
         this.driver.log(`[session-helper] ${this.sid}: another connection took this terminal`)
         return
       }
@@ -482,6 +576,7 @@ export class HelperPty implements IPty {
   }
 
   private setDetached(): void {
+    this.stopRedraw()
     if (!this.attached) return
     this.attached = false
     this.driver.attachedChanged(this.sid, false)
@@ -504,6 +599,7 @@ export class HelperPty implements IPty {
   }
 
   private markEnding(): void {
+    this.stopRedraw()
     if (this.ending) return
     this.ending = true
     this.driver.ending(this.sid, this.ended)
@@ -646,7 +742,26 @@ export class HelperPty implements IPty {
 
   private flushDecoder(): void {
     const rest = this.decoder.end()
-    if (rest) this.dataEmitter.fire(rest)
+    if (rest) this.show(rest)
+  }
+
+  /** Output of the holder's terminal, or a line of the app's own, to the tab. */
+  private show(text: string): void {
+    this.shownAny = true
+    this.dataEmitter.fire(text)
+  }
+
+  /** The replay's very start after a gap: the bytes that continue a character
+   *  cut in half (at most CUT_CHARACTER_MAX) are dropped, so the decoder,
+   *  ended at the cut, starts on a whole one. */
+  private dropCut(bytes: Buffer): Buffer {
+    let i = 0
+    while (i < bytes.length && this.cutBytes > 0 && (bytes[i] & 0xc0) === 0x80) {
+      i++
+      this.cutBytes--
+    }
+    if (i < bytes.length) this.cutBytes = 0
+    return i === 0 ? bytes : bytes.subarray(i)
   }
 
   private finish(exitCode: number, signal?: number): void {

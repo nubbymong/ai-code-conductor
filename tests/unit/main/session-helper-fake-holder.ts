@@ -27,6 +27,11 @@
  * streams the attached connection carried end when it lets go, the app not
  * told.
  *
+ * The ring (2.1.3-beta.12, plan section A1) may no longer hold the start of
+ * the output (`ringStart`, `forget`): an attach that asks for an offset older
+ * than it holds is answered from the ring's start with `truncated` true, as a
+ * real holder answers one once 2 MiB have gone past.
+ *
  * The away clock (section 15) runs only when a test gives the helper one
  * (`awayClock`): then a holder with no connection attached ends itself `away`
  * seconds after its start or after the last attached connection let go,
@@ -99,6 +104,9 @@ export class FakeHolder {
   child: 'waiting' | 'running' | 'exited' = 'waiting'
   code: number | null = null
   ring = Buffer.alloc(0)
+  /** The output offset of the ring's first byte: what came before it is no
+   *  longer held (a real ring keeps the last 2 MiB). Raised by forget(). */
+  ringStart = 0
   attached: FakeConn | null = null
   attaches = 0
   ended = false
@@ -290,7 +298,10 @@ export class FakeHolder {
         if (!this.launch) return err('not-found', 'nothing launched')
         if (!this.answerAttach) return
         const from = Number(m.from)
-        if (from > this.ring.length) return err('bad-field', 'from is past the ring')
+        const ringEnd = this.ringStart + this.ring.length
+        if (from > ringEnd) return err('bad-field', 'from is past the ring')
+        // Older than the ring holds: answered from the ring's start, `truncated` true.
+        const start = Math.max(from, this.ringStart)
         if (this.attached && this.attached !== conn) {
           const old = this.attached
           old.sendJson({ t: 'error', code: 'replaced', text: 'a newer connection attached to this terminal' })
@@ -299,8 +310,8 @@ export class FakeHolder {
         this.attached = conn
         this.awaySince = null
         this.attaches++
-        conn.sendJson({ t: 'term.attached', re, from, ring_start: 0, ring_end: this.ring.length, truncated: false, running: this.child !== 'exited', ...(this.child === 'exited' ? { code: this.code } : {}) })
-        conn.sendRaw(this.ring.subarray(from))
+        conn.sendJson({ t: 'term.attached', re, from: start, ring_start: this.ringStart, ring_end: ringEnd, truncated: start > from, running: this.child !== 'exited', ...(this.child === 'exited' ? { code: this.code } : {}) })
+        conn.sendRaw(this.ring.subarray(start - this.ringStart))
         // Waiting hook events go after the reply and its replay.
         if (conn.ackedCaps.includes('hooks')) for (const e of this.waitingEvents.splice(0)) conn.sendJson(e)
         return
@@ -361,6 +372,13 @@ export class FakeHolder {
   outputBytes(b: Buffer): void {
     this.ring = Buffer.concat([this.ring, b])
     this.attached?.sendRaw(b)
+  }
+
+  /** The ring forgets its first `n` bytes, as a full one does. */
+  forget(n: number): void {
+    const k = Math.min(n, this.ring.length)
+    this.ring = this.ring.subarray(k)
+    this.ringStart += k
   }
 
   /** The program ends by itself. */

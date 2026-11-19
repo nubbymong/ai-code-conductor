@@ -348,9 +348,18 @@ has seen; a gap is logged, and noted on the session if a hook event was lost.
   not answer (section 3), a host-key question or change, `hash-mismatch`,
   `proto-mismatch`, `replaced`, `bad-frame`, `unknown-type` or malformed
   input, nor for a one-time-code device. It is never a user-started launch.
-- **Terminal reattach (R9).** From a 2 MiB output ring the app clears the view
-  and runs `attach --from <ring_start>`: reset, replay at the recorded size,
-  then live; the resize makes the CLI redraw. A too-short ring is reported.
+- **Terminal reattach (R9).** The holder keeps the last 2 MiB of output in a
+  ring, and the app attaches from the offset of the last byte it showed (0
+  for a terminal it takes over). A ring that no longer holds that offset
+  answers from `ring_start` with `truncated` true (section 15, Attach). What
+  the app on This computer does then (2.1.3-beta.12): it does not clear the
+  view or reset the terminal. It writes the cancel character, the attribute
+  reset and one line of its own, "[Earlier output of this terminal is no
+  longer held, so it is not shown.]", then the replay. Once the replay is
+  shown and the program still runs, it resizes the terminal one row shorter
+  and, 300 ms later, back to the tab's size, which makes the program redraw
+  (probe P19). The screen in use and the input modes the program set before
+  `ring_start` are not restored yet.
 
 ## 12 Strict validation and budgets
 
@@ -849,7 +858,11 @@ stream messages carry no id: a refusal of one has no `re`.
   helper. The app does not yet send either field or copy those files.
 - **Attach.** `from` is an offset in the output, as in section 11: past
   `ring_end` is `bad-field`; older than the ring holds is answered from
-  `ring_start` with `truncated` true. Typed input goes to the holder as raw
+  `ring_start` with `truncated` true. The app on This computer then shows a
+  line of its own saying earlier output is not shown, the replay after it,
+  and, while the program runs, asks it to redraw by a resize one row shorter
+  and back (section 11); it does not yet restore the screen in use or the
+  input modes set before `ring_start`. Typed input goes to the holder as raw
   frames on channel 1, accepted only from the attached connection: raw bytes on
   any other connection or channel are `bad-frame` and a close. Typed input is
   queued for the program and never waited on: while at most 64 frames of typed

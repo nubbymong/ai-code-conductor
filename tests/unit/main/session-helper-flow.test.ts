@@ -12,8 +12,13 @@
  * 2.1.3-beta.8 (plan section B2): the whole round of an app update on
  * Windows, through two managers and the fake helper's away clock (the
  * test's own clock too).
+ *
+ * 2.1.3-beta.12 (plan section A1): a terminal shown again from the middle of
+ * its output (the holder no longer held the offset asked for) says so, and
+ * its program is asked to redraw; vitest's clock counts the 300 ms.
  */
 import { describe, it, expect, vi, afterEach } from 'vitest'
+import { Terminal } from '@xterm/headless'
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, rmdirSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
@@ -51,6 +56,8 @@ interface Rig {
   conns: HolderConnection[]
   direct: ReturnType<typeof vi.fn>
   clock: { now: number }
+  /** What the terminal logged, in order. */
+  logs: string[]
   text: () => string
   typed: () => string
 }
@@ -90,6 +97,7 @@ function rig(o: {
   o.before?.(h)
   const conns: HolderConnection[] = []
   const clock = { now: 1_000_000 }
+  const logs: string[] = []
   const direct = vi.fn(() => fakeDirect())
   const open = (record: HolderRecord) => HolderConnection.open({
     record,
@@ -114,7 +122,7 @@ function rig(o: {
     direct,
     ending: () => {},
     attachedChanged: () => {},
-    log: () => {},
+    log: (m) => logs.push(m),
     now: () => clock.now,
   }
   const p = new HelperPty({
@@ -129,7 +137,7 @@ function rig(o: {
   p.onData((d) => seen.push(d))
   p.onExit((e) => exits.push(e.exitCode))
   const r: Rig = {
-    h, p, seen, exits, conns, direct, clock,
+    h, p, seen, exits, conns, direct, clock, logs,
     text: () => seen.join(''),
     typed: () => Buffer.concat(h.input).toString('utf8'),
   }
@@ -780,4 +788,219 @@ describe('let go of for an update while it attaches again (plan section B2, PR r
     await until(() => r.h.conns.size === 0, 'the holder to have no connection')
     await killedLocally(r)
   })
+})
+
+/**
+ * 2.1.3-beta.12, plan section A1: the holder's ring keeps the last 2 MiB, so
+ * an attach can ask for an offset it no longer holds. It answers from the
+ * ring's start with `truncated` true; the tab then gets the cancel character,
+ * the attribute reset and one line saying earlier output is not shown, then
+ * the replay, and once the replay is shown and the program runs, the holder
+ * gets one resize one row shorter and, 300 ms later, one at the tab's size
+ * (probe P19's redraw). No clear and no terminal reset: shown again, the
+ * tab's terminal keeps the modes its program set.
+ *
+ * On vitest's clock (setTimeout and clearTimeout only), so the 300 ms are
+ * counted exactly; `settle` gives the in-memory streams a real turn of the
+ * event loop between steps.
+ */
+describe('shown again from the middle of its output (2.1.3-beta.12, plan section A1)', () => {
+  const CANCEL = '\x18'
+  const ATTRIBUTE_RESET = '\x1b[0m'
+  const NOTICE = '[Earlier output of this terminal is no longer held, so it is not shown.]'
+  /** A reset or clear of the terminal or its view, or a screen switch: none may be written. */
+  const RESETS = ['\x1bc', '\x1b[!p', '\x1b[J', '\x1b[0J', '\x1b[1J', '\x1b[2J', '\x1b[3J', '\x1b[?1049h', '\x1b[?1049l', '\x1b[?47h', '\x1b[?1047h']
+
+  /** Runs `body` on vitest's clock. */
+  const onFakeClock = (body: () => Promise<void>) => async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    try {
+      await body()
+    } finally {
+      vi.useRealTimers()
+    }
+  }
+
+  /** A real turn of the event loop, then what is due now on the fake clock, until `cond`. */
+  async function settle(cond: () => boolean, what: string): Promise<void> {
+    for (let i = 0; i < 400; i++) {
+      if (cond()) return
+      await new Promise<void>((res) => setImmediate(res))
+      await vi.advanceTimersByTimeAsync(0)
+    }
+    throw new Error(`timed out waiting for ${what}`)
+  }
+
+  /** A term.resize the app sent, with what the tab had been shown when it went. */
+  type Sent = { cols: unknown; rows: unknown; shown: string }
+  /** A rig whose connections note each term.resize the app sends. */
+  function watched(o: Parameters<typeof rig>[0] = {}): { r: Rig; sent: Sent[] } {
+    const sent: Sent[] = []
+    const box: { r?: Rig } = {}
+    const r = rig({
+      ...o,
+      connect: async (record, open) => {
+        const c = await open(record)
+        const request = c.request.bind(c)
+        c.request = (msg, onReply) => {
+          if (msg.t === 'term.resize') sent.push({ cols: msg.cols, rows: msg.rows, shown: box.r?.text() ?? '' })
+          return request(msg, onReply)
+        }
+        return c
+      },
+    })
+    box.r = r
+    return { r, sent }
+  }
+  const sizes = (sent: Sent[]) => sent.map(({ cols, rows }) => ({ cols, rows }))
+  /** The resizes the holder was asked for, from any connection. */
+  const resizes = (h: FakeHolder) => h.requests.filter((m) => m.t === 'term.resize').map((m) => ({ cols: m.cols, rows: m.rows }))
+
+  /** A holder whose terminal runs, and whose ring no longer holds the first `lost` bytes of its output. */
+  const heldFrom = (lost: number, ring: string | Buffer) => (h: FakeHolder) => {
+    running()(h)
+    h.ring = typeof ring === 'string' ? Buffer.from(ring, 'utf8') : ring
+    h.ringStart = lost
+  }
+
+  it('taken over again with the start of its output gone: the cancel character, the attribute reset, the notice, then the replay; after its last byte one row shorter, and 300 ms later the tab\'s size', onFakeClock(async () => {
+    const { r, sent } = watched({ adopt: true, cols: 132, rows: 50, before: heldFrom(5000, 'the last screen\r\n') })
+    await settle(() => sent.length > 0, 'a resize')
+    expect(r.text()).toBe(`${CANCEL}${ATTRIBUTE_RESET}${NOTICE}\r\nthe last screen\r\n`)
+    // The first half went once the tab had been shown the whole replay.
+    expect(sent).toEqual([{ cols: 132, rows: 49, shown: r.text() }])
+    await vi.advanceTimersByTimeAsync(299)
+    expect(sent).toHaveLength(1)
+    await vi.advanceTimersByTimeAsync(1)
+    expect(sizes(sent)).toEqual([{ cols: 132, rows: 49 }, { cols: 132, rows: 50 }])
+    await settle(() => resizes(r.h).length === 2, 'the holder to get both')
+    expect(resizes(r.h)).toEqual([{ cols: 132, rows: 49 }, { cols: 132, rows: 50 }])
+    expect(r.h.size).toEqual({ cols: 132, rows: 50 })
+    expect(r.exits).toEqual([])
+  }))
+
+  for (const [what, cut] of [
+    ['an unfinished title sequence', '\x1b]0;a title that never en'],
+    ['an unfinished colour sequence', '\x1b[38;5;1'],
+  ] as const) {
+    it(`attached again with bytes lost, the old stream cut inside ${what}: the same notice and redraw, no reset anywhere, and on screen the notice, then the replay, nothing swallowed`, onFakeClock(async () => {
+      const { r, sent } = watched()
+      await settle(() => r.p.isAttached, 'the attach')
+      const before = `before\r\n${cut}`
+      r.h.output(before)
+      await settle(() => r.text() === before, 'the output cut short')
+      r.h.fallBehind()
+      // Nobody attached: the program writes on, and the ring forgets what the tab was never shown.
+      r.h.output('x'.repeat(3000))
+      r.h.output('\r\nafter the gap\r\n')
+      r.h.forget(Buffer.byteLength(before) + 3000)
+      await settle(() => sent.length > 0, 'the first half of the redraw')
+      const stream = r.text()
+      expect(stream).toBe(`${before}${CANCEL}${ATTRIBUTE_RESET}\r\n${NOTICE}\r\n\r\nafter the gap\r\n`)
+      expect(RESETS.filter((s) => stream.includes(s))).toEqual([])
+      await vi.advanceTimersByTimeAsync(300)
+      expect(sizes(sent)).toEqual([{ cols: 80, rows: 23 }, { cols: 80, rows: 24 }])
+      expect(r.h.attaches).toBe(2)
+      // The real clock again: xterm's write buffer runs on setTimeout.
+      vi.useRealTimers()
+      const term = new Terminal({ cols: 80, rows: 24, allowProposedApi: true })
+      try {
+        await new Promise<void>((res) => term.write(stream, res))
+        const b = term.buffer.active
+        const rows = Array.from({ length: b.length }, (_, i) => b.getLine(i)?.translateToString(true) ?? '')
+        const at = rows.indexOf(NOTICE)
+        expect(at, JSON.stringify(rows.slice(0, 6))).toBeGreaterThan(0)
+        expect(rows.slice(at + 1, at + 3)).toEqual(['', 'after the gap'])
+      } finally {
+        term.dispose()
+      }
+    }))
+  }
+
+  it('not truncated, exactly as before: taken over with the whole ring, the replay and one resize at the tab\'s size; attached again with no gap, the output and no resize', onFakeClock(async () => {
+    const whole = watched({ adopt: true, cols: 132, rows: 50, before: running('kept\r\n') })
+    await settle(() => whole.sent.length > 0, 'the resize')
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(whole.r.text()).toBe('kept\r\n')
+    expect(sizes(whole.sent)).toEqual([{ cols: 132, rows: 50 }])
+    expect(whole.r.logs).toEqual([])
+
+    const again = watched()
+    await settle(() => again.r.p.isAttached, 'the attach')
+    again.r.h.output('one ')
+    await settle(() => again.r.text() === 'one ', 'the first output')
+    again.r.h.fallBehind()
+    again.r.h.output('two ')
+    await settle(() => again.r.h.attaches === 2 && again.r.p.isAttached && again.r.text() === 'one two ', 'the attach again')
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(again.r.text()).toBe('one two ')
+    expect(again.sent).toEqual([])
+  }))
+
+  it('a resize from the tab inside the 300 ms goes out at once, and the second half sends the tab\'s newest size again', onFakeClock(async () => {
+    const { r, sent } = watched({ adopt: true, cols: 132, rows: 50, before: heldFrom(5000, 'the last screen\r\n') })
+    await settle(() => sent.length > 0, 'the first half')
+    await vi.advanceTimersByTimeAsync(100)
+    r.p.resize(100, 40)
+    expect(sizes(sent)).toEqual([{ cols: 132, rows: 49 }, { cols: 100, rows: 40 }])
+    await vi.advanceTimersByTimeAsync(200)
+    expect(sizes(sent)).toEqual([{ cols: 132, rows: 49 }, { cols: 100, rows: 40 }, { cols: 100, rows: 40 }])
+    await settle(() => resizes(r.h).length === 3, 'the holder to get all three')
+    expect(r.h.size).toEqual({ cols: 100, rows: 40 })
+  }))
+
+  it('a program that had already exited: the notice and the replay, then its exit code, and no redraw', onFakeClock(async () => {
+    const { r, sent } = watched({ adopt: true, before: (h) => { heldFrom(5000, 'bye\r\n')(h); h.child = 'exited'; h.code = 7 } })
+    await settle(() => r.exits.length === 1, 'the exit')
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(r.text()).toBe(`${CANCEL}${ATTRIBUTE_RESET}${NOTICE}\r\nbye\r\n`)
+    expect(r.exits).toEqual([7])
+    expect(sent).toEqual([])
+  }))
+
+  const stops: Array<[string, (r: Rig) => Promise<void>]> = [
+    ['ended', async (r) => { r.p.kill() }],
+    ['let go of for an update', async (r) => { expect(r.p.release()).toBe(true) }],
+    ['replaced by another connection', async (r) => {
+      const other = await HolderConnection.open({ record: r.h.record(), os: 'windows', openStream: async () => r.h.connect(), replyTimeoutMs: 2000, pingEveryMs: 0 })
+      r.conns.push(other)
+      await other.request({ t: 'term.attach', from: 5000 })
+    }],
+  ]
+  for (const [what, stop] of stops) {
+    it(`${what} inside the 300 ms: no second resize`, onFakeClock(async () => {
+      const { r, sent } = watched({ adopt: true, cols: 132, rows: 50, before: heldFrom(5000, 'the last screen\r\n') })
+      await settle(() => sent.length > 0, 'the first half')
+      await vi.advanceTimersByTimeAsync(100)
+      await stop(r)
+      await settle(() => !r.p.isAttached, 'the terminal to let go')
+      await vi.advanceTimersByTimeAsync(1000)
+      expect(sizes(sent)).toEqual([{ cols: 132, rows: 49 }])
+      expect(resizes(r.h)).toEqual([{ cols: 132, rows: 49 }])
+    }))
+  }
+
+  it('a tab one row high: the redraw goes to two rows and back', onFakeClock(async () => {
+    const { sent } = watched({ adopt: true, cols: 80, rows: 1, before: heldFrom(5000, 'x\r\n') })
+    await settle(() => sent.length > 0, 'the first half')
+    await vi.advanceTimersByTimeAsync(300)
+    expect(sizes(sent)).toEqual([{ cols: 80, rows: 2 }, { cols: 80, rows: 1 }])
+  }))
+
+  it('a replay that starts with two bytes of a character cut in half: they are dropped, and the next character is whole', onFakeClock(async () => {
+    const euro = Buffer.from('€', 'utf8')
+    const ring = Buffer.concat([euro.subarray(1), Buffer.from('éz\r\n', 'utf8')])
+    const { r, sent } = watched({ adopt: true, before: heldFrom(4999, ring) })
+    await settle(() => sent.length > 0, 'the redraw')
+    expect(r.text()).toBe(`${CANCEL}${ATTRIBUTE_RESET}${NOTICE}\r\néz\r\n`)
+    expect(r.text()).not.toContain('�')
+  }))
+
+  it('one log line: the session, how many bytes are no longer held, and that a redraw was asked for; no output text', onFakeClock(async () => {
+    const { r, sent } = watched({ adopt: true, before: heldFrom(5000, 'what the program printed\r\n') })
+    await settle(() => sent.length > 0, 'the redraw')
+    await vi.advanceTimersByTimeAsync(300)
+    expect(r.logs).toEqual([`[session-helper] ${r.h.sid}: 5000 bytes of earlier output are no longer held, so they are not shown; asked its program to redraw`])
+    expect(r.logs.join('\n')).not.toContain('printed')
+  }))
 })
