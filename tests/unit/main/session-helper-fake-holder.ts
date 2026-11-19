@@ -34,6 +34,12 @@
  * short by a close (`cutReplay`), as a holder closes a connection that fell
  * behind in the middle of one.
  *
+ * The away clock (section 15) runs only when a test gives the helper one
+ * (`awayClock`): then a holder with no connection attached ends itself `away`
+ * seconds after its start or after the last attached connection let go,
+ * checked at each list, each connection and each tick(), as the holder's own
+ * timer would. Without one, no holder ends by itself.
+ *
  * Kept tool streams (2.1.3-beta.12, plan sections B1 and B2): a stream opened
  * with `openToolStream({ away: true })` stands for a relay that acked `away`.
  * When the attached connection lets go, that stream is kept with no app side
@@ -45,16 +51,9 @@
  * `mcp.back`, and the held messages go in the order they came. A session
  * that ended keeps nothing; one whose program has exited gives nothing back
  * (its kept streams end at the next attach here, at the exit in a real
- * holder). Each thing a relay
- * was told is in `relayTold`. Not modelled: the relay's 30 s hold, its bounds
- * and its fixed answer, and the 8 streams a session may have (B1's Rust tests
- * own those).
- *
- * The away clock (section 15) runs only when a test gives the helper one
- * (`awayClock`): then a holder with no connection attached ends itself `away`
- * seconds after its start or after the last attached connection let go,
- * checked at each list, each connection and each tick(), as the holder's own
- * timer would. Without one, no holder ends by itself.
+ * holder). Each thing a relay was told is in `relayTold`. Not modelled: the
+ * relay's 30 s hold, its bounds and its fixed answer, and the 8 streams a
+ * session may have (B1's Rust tests own those).
  */
 import { randomBytes } from 'crypto'
 import * as fs from 'fs'
