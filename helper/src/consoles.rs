@@ -429,8 +429,7 @@ mod win {
         let Some((old_pid, old_created)) = req.old else {
             return Ok((answer(0), notes));
         };
-        // MUTANT (round 1 of the #725 review fixes, reverted in the next commit): the boot rule removed.
-        if false && before_boot(old_created, boot_time()) {
+        if before_boot(old_created, boot_time()) {
             notes.push("the run before started before Windows last started, so nothing of it runs now".to_string());
             return Ok((answer(0), notes));
         }
@@ -438,8 +437,7 @@ mod win {
         let owner = match open(old_pid, READ_RIGHTS) {
             Ok(p) => match creation_time(p.0) {
                 Err(e) => PidOwner::Unreadable(e.to_string()),
-                // MUTANT (round 1 of the #725 review fixes, reverted in the next commit): the pid-reuse bound not applied.
-                Ok(made) if app_created(made) != old_created => PidOwner::Nobody,
+                Ok(made) if app_created(made) != old_created => PidOwner::Other { made },
                 Ok(_) => match exit_code(p.0) {
                     Ok(code) => PidOwner::RunBefore { running: code.is_none() },
                     Err(e) => PidOwner::Unreadable(e.to_string()),

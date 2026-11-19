@@ -602,15 +602,19 @@ runs as the helper's own user. Each is held open from its check to its end, so
 its pid cannot pass on in between. A pid passes on only once its process has
 gone, so a process made after the pid's new owner names that owner as its
 parent, not the run before. It ends nothing when `<n>` still has `<t>` and that
-process still runs, when the process that has `<n>` now cannot be read, or when
-`<t>` is before Windows last started (with a minute's slack). It also names the
-process that started it, its parent in the same list, made before it, for the
-app to record: it prints one line, `{"pid":<n>,"created":"<t>","ended":<k>}`,
-and exits 0, with a note for the app's log on stderr when it ended nothing for
-one of those reasons or could not end a host. It exits 1 with a message when it
-cannot read its own times, the process list or its parent, and 2 on a command
-line it cannot read. No PowerShell and no WMI. On macOS and Linux the mode
-exits 1. The app runs it from the install folder, as it runs `start` and `end`.
+process still runs, when the process that has `<n>` now cannot be opened or
+read (its creation time, or whether it still runs), or when `<t>` is before
+Windows last started (with a minute's slack). It also names the process that
+started it, its parent in the same list, made before it, for the app to
+record: it prints one line, `{"pid":<n>,"created":"<t>","ended":<k>}`, and
+exits 0, with a note for the app's log on stderr when it ended nothing for one
+of those reasons or could not end a host. It exits 1 with a message, ending
+nothing, when it cannot read its own creation time or its own user, the process
+list, the process that started it, or the system folder (where Windows' own
+`conhost.exe` is); the app then does not record that run. It exits 2 on a
+command line it cannot read. No PowerShell and no WMI. On macOS and Linux the
+mode exits 1. The app runs it from the install folder, as it runs `start` and
+`end`.
 
 **Endpoint: only this user can connect.** No network socket is opened.
 

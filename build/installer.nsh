@@ -703,6 +703,144 @@
 !macroend
 
 ; ============================================================
+; REMOVALS WAITING FOR THE NEXT RESTART
+; ============================================================
+; An all-users uninstall sets what it could not remove (a file another
+; user's running copy holds) to go when Windows next restarts
+; (CccReportLeftFiles). That removal names paths, not files: an install into
+; the same folder before the restart would lose the new files at those paths
+; when it comes. So an all-users install stops first when one is waiting.
+
+; ${OUT} = 1 when Windows has a file operation waiting for its next restart
+; on ${DIR} or a path inside it, 0 when it has none there, 2 when the list
+; could not be read. MoveFileEx with MOVEFILE_DELAY_UNTIL_REBOOT, and so
+; RMDir /REBOOTOK, puts each one in PendingFileRenameOperations under
+; HKLM\SYSTEM\CurrentControlSet\Control\Session Manager: a REG_MULTI_SZ of
+; pairs, a path and where it goes ("" to remove it; a leading "!" means
+; replace). Every path in it counts, on either side of a pair, without its
+; "!" and its "\??\". ReadRegStr cannot read a REG_MULTI_SZ, so the value is
+; read whole through advapi32 into a zeroed buffer with room to spare and two
+; nulls of its own after it, so the walk always ends inside it. An entry
+; longer than NSIS_MAX_STRLEN is compared by its first part, which still
+; starts with ${DIR} when the entry is inside it. Paths are compared through
+; IsSameOrInsideCanon. Saves and restores every register; ${OUT} may be any,
+; ${DIR} must not be $0 to $9 or $R5 to $R7. Scratch: $cccCanon*.
+!macro CccPendingRemovalIn DIR OUT
+  Push $0
+  Push $1
+  Push $2
+  Push $3
+  Push $4
+  Push $5
+  Push $6
+  Push $7
+  Push $8
+  Push $9
+  Push $R5
+  Push $R6
+  Push $R7
+  StrCpy $0 2
+  StrCpy $1 0
+  System::Call 'advapi32::RegOpenKeyExW(p 0x80000002, w "SYSTEM\CurrentControlSet\Control\Session Manager", i 0, i 0x20119, *p .r1) i .r2'
+  ${If} $2 == 2
+    ; ERROR_FILE_NOT_FOUND: no such key, so nothing is waiting.
+    StrCpy $0 0
+  ${ElseIf} $2 == 0
+    StrCpy $3 0
+    StrCpy $6 0
+    System::Call 'advapi32::RegQueryValueExW(p r1, w "PendingFileRenameOperations", p 0, *i .r6, p 0, *i r3 r3) i .r2'
+    ${If} $2 == 2
+      ; ERROR_FILE_NOT_FOUND: nothing is waiting.
+      StrCpy $0 0
+    ${ElseIf} $2 == 0
+    ${AndIf} $6 == 7
+    ${AndIf} $3 >= 0
+    ${AndIf} $3 < 16777216
+      ; Room for entries added since the size was read, and two nulls after.
+      IntOp $3 $3 + 4096
+      IntOp $8 $3 + 4
+      System::Alloc $8
+      Pop $4
+      ${If} $4 != 0
+        System::Call 'advapi32::RegQueryValueExW(p r1, w "PendingFileRenameOperations", p 0, *i .r6, p r4, *i r3 r3) i .r2'
+        ${If} $2 == 0
+        ${AndIf} $6 == 7
+          StrCpy $0 0
+          StrCpy $5 0
+          ${DoWhile} $5 < $3
+            IntOp $9 $4 + $5
+            System::Call 'kernel32::lstrlenW(p r9) i .r6'
+            ${If} $6 > 0
+              System::Call 'kernel32::lstrcpynW(w .r7, p r9, i ${NSIS_MAX_STRLEN}) p'
+              StrCpy $9 "$7" 1
+              ${If} $9 == "!"
+                StrCpy $7 "$7" "" 1
+              ${EndIf}
+              StrCpy $9 "$7" 4
+              ${If} $9 == "\??\"
+                StrCpy $7 "$7" "" 4
+              ${EndIf}
+              !insertmacro IsSameOrInsideCanon "${DIR}" "$7" $9
+              ${If} $9 == 1
+                StrCpy $0 1
+                ${ExitDo}
+              ${EndIf}
+            ${EndIf}
+            IntOp $6 $6 + 1
+            IntOp $6 $6 * 2
+            IntOp $5 $5 + $6
+          ${Loop}
+        ${EndIf}
+        System::Free $4
+      ${EndIf}
+    ${EndIf}
+    System::Call 'advapi32::RegCloseKey(p r1)'
+  ${EndIf}
+  ClearErrors
+  Pop $R7
+  Pop $R6
+  Pop $R5
+  Pop $9
+  Pop $8
+  Pop $7
+  Pop $6
+  Pop $5
+  Pop $4
+  Pop $3
+  Pop $2
+  Pop $1
+  Exch $0
+  Pop ${OUT}
+!macroend
+
+; Stops the run, with a box, when Windows has a removal waiting for its next
+; restart in ${DIR} (CccPendingRemovalIn): Setup puts back what customInit
+; changed (CccRestoreInstallLocation) and exits with code 2 before anything
+; is installed. A silent run answers the box by itself and stops too. With
+; ${DETAILS} 1 it also writes to the details list; 0 where that list does
+; not exist yet (.onInit). A list that could not be read is no reason to
+; stop. Installer pass only. Saves and restores $R0.
+!macro CccStopOnPendingRemoval DIR DETAILS
+  Push $R0
+  !insertmacro CccPendingRemovalIn "${DIR}" $R0
+  ${If} $R0 == 1
+    MessageBox MB_OK|MB_ICONEXCLAMATION "Restart Windows before you install AI Code Conductor in this folder again.$\n$\nAn earlier uninstall set files in ${DIR} to be removed when Windows next restarts, and that would remove the new ones too." /SD IDOK
+    !if ${DETAILS} == 1
+      DetailPrint "An earlier uninstall set files in ${DIR} to be removed when Windows next restarts, so nothing was installed. Restart Windows, then run Setup again."
+    !endif
+    Call CccRestoreInstallLocation
+    SetErrorLevel 2
+    Quit
+  ${EndIf}
+  !if ${DETAILS} == 1
+    ${If} $R0 == 2
+      DetailPrint "Could not read what Windows will remove at its next restart, so that was not checked."
+    ${EndIf}
+  !endif
+  Pop $R0
+!macroend
+
+; ============================================================
 ; APP-RUNNING CHECK — also the install's commit point
 ; ============================================================
 
@@ -751,8 +889,19 @@
 ; not be read), a second box asks whether to carry on, and a silent run
 ; stops. Either way a run that stops says so in the details log, puts back
 ; what customInit changed (installer pass) and exits with code 2.
+;
+; Before all that, an all-users install (installer pass) stops when an
+; earlier uninstall set files in this folder to be removed at the next
+; restart: that restart would remove the new files too (CccReportLeftFiles,
+; CccStopOnPendingRemoval). A per-user uninstall never sets one.
 !macro customCheckAppRunning
   DetailPrint "=== customCheckAppRunning: this user's copies from this install's folder ==="
+
+  !ifndef BUILD_UNINSTALLER
+    ${If} $installMode == "all"
+      !insertmacro CccStopOnPendingRemoval "$INSTDIR" 1
+    ${EndIf}
+  !endif
 
   Push $R0
   !ifndef BUILD_UNINSTALLER
@@ -946,14 +1095,52 @@
   ; (CccRestoreInstallLocation). The commit point does not move: it stays
   ; in customCheckAppRunning, which this instance never runs.
   ; This instance installs for all users, so the install it replaces is the
-  ; one the all-users record names, read here or as suspended above. $INSTDIR
-  ; is where initMultiUser put it (the all-users install's folder when only
-  ; that one is recorded); the folder page that follows can still change it.
+  ; one the all-users record names, read here or as suspended above. Two
+  ; folders are checked, because $INSTDIR is not yet final here: where
+  ; initMultiUser put it (assistedInstaller.nsh initMultiUser; the per-user
+  ; folder when both installs are recorded, or when neither is), and the
+  ; folder this instance moves it to when it passes the install-mode page
+  ; (multiUserUi.nsh, setInstallModePerAllUsers): the all-users record's
+  ; InstallLocation, else Program Files\${APP_FILENAME}, with /D= last, as
+  ; multiUser.nsh works it out. The folder page after that can still change
+  ; it; a folder chosen there is not checked.
   ; The installer is elevated, so the check's elevated rules apply: another
-  ; user's copy keeps running.
+  ; user's copy keeps running. That includes the user who started Setup when
+  ; an administrator's name and password were typed into the approval box:
+  ; this instance then runs as that administrator, so the starting user's
+  ; copy counts as another user's. It is not closed, the box does not
+  ; appear, and its files fail the install as before.
+  ; This runs in .onInit, before the window with the details list exists,
+  ; so no details line is written here (CccCloseAppCopies's own lines are
+  ; not shown either): what the user sees is the box.
+  ; First of all, a removal an earlier uninstall set for the next restart in
+  ; either folder stops the run (CccStopOnPendingRemoval).
   ${If} ${UAC_IsInnerInstance}
-    DetailPrint "=== The elevated copy of Setup: this user's copies from this install's folder ==="
     Push $R0
+    Push $R1
+    Push $R2
+    ReadRegStr $R1 HKLM "${INSTALL_REGISTRY_KEY}" "InstallLocation"
+    ${If} $R1 == ""
+      StrCpy $R1 "$PROGRAMFILES"
+      !ifdef APP_64
+        ${If} ${RunningX64}
+          StrCpy $R1 "$PROGRAMFILES64"
+        ${EndIf}
+      !endif
+      !ifdef MENU_FILENAME
+        StrCpy $R1 "$R1\${MENU_FILENAME}"
+      !endif
+      StrCpy $R1 "$R1\${APP_FILENAME}"
+    ${EndIf}
+    !insertmacro GetDParameter $R2
+    ${If} $R2 != ""
+      StrCpy $R1 "$R2"
+    ${EndIf}
+    ClearErrors
+    !insertmacro CccStopOnPendingRemoval "$INSTDIR" 0
+    ${If} $R1 != "$INSTDIR"
+      !insertmacro CccStopOnPendingRemoval "$R1" 0
+    ${EndIf}
     ReadRegStr $R0 HKLM "${UNINSTALL_REGISTRY_KEY}" "UninstallString"
     ${If} $R0 == ""
       StrCpy $R0 "$cccSavedPerMachineUninstallString"
@@ -962,12 +1149,23 @@
     ClearErrors
     cccInnerAppStillRunning:
     !insertmacro CccCloseAppCopies "$cccRecordUninstaller"
+    ; Then the folder this instance installs into, when it is another one: a
+    ; copy still running there wins, and so does a check that could not run.
+    ${If} $R0 != 1
+    ${AndIf} $R1 != "$INSTDIR"
+      StrCpy $R2 $R0
+      Push $INSTDIR
+      StrCpy $INSTDIR "$R1"
+      !insertmacro CccCloseAppCopies ""
+      Pop $INSTDIR
+      ${If} $R0 == 0
+        StrCpy $R0 $R2
+      ${EndIf}
+    ${EndIf}
     ${If} $R0 == 1
       MessageBox MB_RETRYCANCEL|MB_ICONEXCLAMATION "AI Code Conductor is still running.$\n$\nIf it is asking whether to save your sessions, answer it first. Otherwise close it yourself.$\n$\nThen click Retry." /SD IDCANCEL IDRETRY cccInnerAppStillRunning
-      DetailPrint "AI Code Conductor is still running, so nothing was installed."
     ${ElseIf} $R0 == 2
       MessageBox MB_OKCANCEL|MB_ICONEXCLAMATION "Could not check whether AI Code Conductor is running.$\n$\nClose it if it is open, then click OK to carry on." /SD IDCANCEL IDOK cccInnerAppCheckCarryOn
-      DetailPrint "Could not check whether AI Code Conductor is running, so nothing was installed."
     ${EndIf}
     ${If} $R0 != 0
       Call CccRestoreInstallLocation
@@ -975,11 +1173,8 @@
       Quit
     ${EndIf}
     cccInnerAppCheckCarryOn:
-    ${If} $R0 == 0
-      DetailPrint "No copy of AI Code Conductor is running from this install's folder. Proceeding."
-    ${Else}
-      DetailPrint "Carrying on without the check, as chosen in the box."
-    ${EndIf}
+    Pop $R2
+    Pop $R1
     Pop $R0
   ${EndIf}
   ; The uninstall RECORD is otherwise deliberately NOT touched here — see the
@@ -2828,21 +3023,29 @@ FunctionEnd
 
 ; When $INSTDIR is still there after the removal, one details line for each
 ; file left in it, at most 50, then how many more. The walk is depth first
-; over the stack and bounded (1000 folders looked in, 256 waiting), and never
-; enters a link: a link is named as left, like a file.
+; over the stack and bounded: at most 1000 folders are looked in (a folder
+; taken off the stack after that is counted as not looked in) and at most
+; 256 wait on the stack. It never enters a link: a link is named as left,
+; like a file.
 ; Then, on an uninstall for all users that is not an update, with $INSTDIR
 ; inside Program Files, what is left is set to go when Windows next restarts
 ; (RMDir /r /REBOOTOK). Only administrators can write there, so nobody can put
 ; a link in its place before that restart: a delete set for the next start
 ; runs before anything can check the path again (the rule beside
 ; RemoveUserHelperFolder). So nothing is set to go at the next start on a
-; per-user uninstall, from an all-users install outside Program Files, or on
-; an update, whose new files go into this same folder. Nobody is asked to
-; restart now: another user may be signed in and using the app, so the
-; reboot flag is cleared again. Saves and restores every register it uses:
-; $0 the files found, $1 the folders looked in, $2 the folders waiting, $3
-; the folder, $4 the search, $5 the name found, $6 the folders not looked in,
-; $R0 an answer; $R5 $R6 $R7 and $cccCanon* are IsSameOrInsideCanon's.
+; per-user uninstall, from an all-users install outside Program Files, or
+; when a new install goes into this same folder next: an update (--updated),
+; or an uninstall Setup runs with --delete-app-data in place of --updated
+; (installUtil.nsh uninstallOldVersion, when Setup itself was given it). An
+; all-users install also stops while such a removal waits in its folder
+; (CccStopOnPendingRemoval), because the restart would take the new files at
+; those paths too. Nobody is asked to restart now: another user may be signed
+; in and using the app, so the reboot flag is cleared again. Saves and
+; restores every register it uses: $0 the files found, $1 the folders looked
+; in, $2 the folders waiting, $3 the folder, $4 the search, $5 the name found,
+; $6 the folders not looked in, $R0 an answer, $R1 1 on an update and 2 on an
+; uninstall given --delete-app-data, $R2 $R3 the command line and an option's
+; value; $R5 $R6 $R7 and $cccCanon* are IsSameOrInsideCanon's.
 !macro CccReportLeftFiles
   Push $0
   Push $1
@@ -2852,6 +3055,9 @@ FunctionEnd
   Push $5
   Push $6
   Push $R0
+  Push $R1
+  Push $R2
+  Push $R3
   Push $R5
   Push $R6
   Push $R7
@@ -2869,6 +3075,10 @@ FunctionEnd
       ${EndIf}
       Pop $3
       IntOp $2 $2 - 1
+      ${If} $1 >= 1000
+        IntOp $6 $6 + 1
+        ${Continue}
+      ${EndIf}
       IntOp $1 $1 + 1
       ClearErrors
       FindFirst $4 $5 "$3\*.*"
@@ -2885,7 +3095,6 @@ FunctionEnd
             ${GetFileAttributes} "$3\$5" "REPARSE_POINT" $R0
             ${If} $R0 == 0
               ${If} $2 < 256
-              ${AndIf} $1 < 1000
                 Push "$3\$5"
                 IntOp $2 $2 + 1
               ${Else}
@@ -2921,8 +3130,23 @@ FunctionEnd
       DetailPrint "No file is left in it, but the folder itself could not be removed."
     ${EndIf}
 
+    ; Whether a new install goes into this folder next: 1 on an update, 2
+    ; when Setup ran this uninstall with --delete-app-data in place of
+    ; --updated. Either way nothing is set for the next restart.
+    StrCpy $R1 0
+    ${If} ${isUpdated}
+      StrCpy $R1 1
+    ${Else}
+      ${GetParameters} $R2
+      ClearErrors
+      ${GetOptions} $R2 "--delete-app-data" $R3
+      ${IfNot} ${Errors}
+        StrCpy $R1 2
+      ${EndIf}
+      ClearErrors
+    ${EndIf}
     ${If} $installMode == "all"
-    ${AndIfNot} ${isUpdated}
+    ${AndIf} $R1 == 0
       StrCpy $R0 0
       !insertmacro IsSameOrInsideCanon "$PROGRAMFILES64" "$INSTDIR" $R0
       ${If} $R0 != 1
@@ -2950,7 +3174,7 @@ FunctionEnd
       ${Else}
         DetailPrint "They stay until they are removed by hand: this folder is not inside Program Files, so they are not set to be removed at the next restart."
       ${EndIf}
-    ${ElseIfNot} ${isUpdated}
+    ${ElseIf} $R1 != 1
       DetailPrint "They stay until they are removed by hand, once the program that has them open has closed."
     ${EndIf}
   ${EndIf}
@@ -2958,6 +3182,9 @@ FunctionEnd
   Pop $R7
   Pop $R6
   Pop $R5
+  Pop $R3
+  Pop $R2
+  Pop $R1
   Pop $R0
   Pop $6
   Pop $5

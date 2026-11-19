@@ -464,11 +464,20 @@ rollback returns to the earlier beta's rows, and every row has a negative test.
   only the process that has the pid now bounds what counts, so a process that
   took the pid and has exited too is not seen; and the record is a file any
   program of the same user can write, as that program could end the user's
-  processes itself. Tested by
+  processes itself. The first, as a case: the run before dies, a console
+  program of the same user gets its pid and starts its own `conhost.exe`, then
+  exits while a child keeps that console (a batch file that runs
+  `start /b server` and ends, say). Nothing has the pid now, so the bound is
+  the helper's own start, and that host (made after the record, before the
+  helper, by the same user, from Windows' own program file) is ended: the
+  child loses its console. Tested in `helper/tests/console_hosts.rs` by
   `it_ends_the_console_host_a_run_ended_from_outside_left_and_nothing_else`
-  (a run that still runs, and a record of another start, end nothing; a run's
-  own host is ended and another run's is not, `helper/tests/console_hosts.rs`),
-  and the bounds by the unit tests in `helper/src/consoles.rs`.
+  (a run that still runs, a record naming a pid another run has now, and a
+  record of another start end nothing; a run's own host is ended and another
+  run's is not),
+  `a_record_whose_pid_another_process_took_after_its_run_had_gone_ends_nothing`
+  and `a_record_from_before_windows_last_started_ends_nothing`, and the bounds
+  by the unit tests in `helper/src/consoles.rs`.
 
 ## 4 Review
 
