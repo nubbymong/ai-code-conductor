@@ -67,16 +67,20 @@
  * than 3 runs that reached it, and no state that differs in 2 or more, gives
  * NO VERDICT (the plan's lines do not cover it). Only --runs 3 gives a plan
  * verdict; another count gives CHECK RUN with what it saw. On Windows each
- * ConPTY gets a verdict of its own.
+ * ConPTY gets a verdict of its own. The verdict also names each state where
+ * pane 2 already matched pane 1 before any resize in every run that reached
+ * it: the nudge had nothing to put right there, so it was not put to the test.
  *
  * It refuses node-pty or @xterm/headless at any version but the one the
  * checkout's package.json and package-lock.json name, prints both, and
  * refuses a .cmd or .bat program on Windows (node-pty starts a program file).
  * It cleans up in finally blocks: each program is ended (its exit keys, then
  * node-pty's kill), then every process that is its or this probe's
- * descendant, and the stand-in, are stopped, each only after its name and
- * start time are checked again; then the temporary folder is removed and
- * anything of its own still running is listed.
+ * descendant (a child counts only when it started after its parent and, for
+ * a program that has ended, before that program ended), and the stand-in,
+ * are stopped, each only after its name and start time are checked again;
+ * then the temporary folder is removed and anything of its own still running
+ * is listed.
  *
  * Usage:
  *   node p19-record.cjs run --root <checkout> --out <folder> [--claude <program>]
@@ -90,8 +94,12 @@
  *
  * Writes to --out: recordings/<program>-<conpty>-<launch>-<run>.jsonl (a
  * header line, then one line per chunk {o, t, b: base64}, and one per event:
- * keys, resize, mark, exit) and p19-result.json, with the temporary folder,
- * the home folder and the programs' paths written as <temp>, <home>,
+ * keys, resize, mark, exit) and p19-result.json. The header line and the
+ * result both name the probe code that made them (`files`: the sha256 of
+ * this file, the stand-in and the scenario file, each read with LF line
+ * ends, so a Windows checkout gives the same digest and
+ * `git show <commit>:<file> | sha256sum` checks it). The result writes the
+ * temporary folder, the home folder and the programs' paths as <temp>, <home>,
  * <claude>, <codex> and <shell>. A recording keeps the bytes as read; the
  * only paths in it are the probe's own temporary folder under the machine's
  * own account. The last line is "P19 RESULT: ..." with each CLI's verdict
@@ -104,6 +112,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const cp = require('child_process');
+const crypto = require('crypto');
 
 const IS_WIN = process.platform === 'win32';
 const STAND_IN = path.join(__dirname, 'p19-model-stand-in.cjs');
@@ -185,8 +194,12 @@ function conptyModes(ptyDir, wanted) {
 }
 
 // ── processes ──────────────────────────────────────────────────────────────
-/** Every process on the machine: pid, parent, start time and name. Run
- *  asynchronously, so the terminals keep being read meanwhile. */
+/** A start time as milliseconds, or null when it cannot be read. */
+const startMs = (s) => { const t = Date.parse(s); return Number.isFinite(t) ? t : null; };
+
+/** Every process on the machine: pid, parent, start time (as listed, and as
+ *  milliseconds) and name. Run asynchronously, so the terminals keep being
+ *  read meanwhile. */
 function listProcesses() {
   return new Promise((resolve, reject) => {
     const done = (child, parse) => (err, stdout) => {
@@ -197,38 +210,48 @@ function listProcesses() {
       const ps = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
       const cmd = "Get-CimInstance Win32_Process | ForEach-Object { [pscustomobject]@{ p = [int]$_.ProcessId; q = [int]$_.ParentProcessId; s = $(if ($_.CreationDate) { $_.CreationDate.ToUniversalTime().ToString('o') } else { '' }); n = [string]$_.Name } } | ConvertTo-Json -Compress";
       const child = cp.execFile(ps, ['-NoProfile', '-NonInteractive', '-Command', cmd], { windowsHide: true, timeout: 60000, maxBuffer: 1 << 24 },
-        done({ get pid() { return child.pid; } }, (out) => [].concat(JSON.parse(out)).map((x) => ({ pid: x.p, ppid: x.q, start: x.s, name: x.n }))));
+        done({ get pid() { return child.pid; } }, (out) => [].concat(JSON.parse(out)).map((x) => ({ pid: x.p, ppid: x.q, start: x.s, startMs: startMs(x.s), name: x.n }))));
       return;
     }
     const child = cp.execFile('ps', ['-A', '-o', 'pid=,ppid=,lstart=,comm='], { timeout: 60000, maxBuffer: 1 << 24 },
       done({ get pid() { return child.pid; } }, (out) => out.split('\n').filter((l) => l.trim()).map((l) => {
         const m = /^\s*(\d+)\s+(\d+)\s+(\w{3} \w{3} +\d+ \d+:\d+:\d+ \d{4})\s+(.*)$/.exec(l);
-        return m ? { pid: Number(m[1]), ppid: Number(m[2]), start: m[3].replace(/ +/g, ' '), name: m[4].trim() } : null;
+        const start = m && m[3].replace(/ +/g, ' ');
+        return m ? { pid: Number(m[1]), ppid: Number(m[2]), start, startMs: startMs(start), name: m[4].trim() } : null;
       }).filter(Boolean)));
   });
 }
 
 /** The processes that are this probe's: its descendants, and any child of a
- *  process it has seen as its own (an orphan keeps its parent's id on
- *  Windows), followed only while that id still names the same process or
- *  none. The lister itself and `skip` are left out. */
+ *  program it started that has ended (an orphan keeps its parent's id on
+ *  Windows). A program it started is followed only while its id still names
+ *  the same process or none. Windows never updates a parent id and reuses
+ *  ids, so a process whose parent id is ours may be another's: a child
+ *  counts only when it started after its parent and, for a program that has
+ *  ended, before that program ended. When a start or that end is not known,
+ *  the child is left out. The lister itself and `skip` are left out. */
 function ownedProcesses(list, known, skip) {
   const byPid = new Map(list.procs.map((p) => [p.pid, p]));
   const byParent = new Map();
   for (const p of list.procs) { if (!byParent.has(p.ppid)) byParent.set(p.ppid, []); byParent.get(p.ppid).push(p); }
-  const roots = [process.pid];
+  // Each root with the times its children must have started between.
+  const self = byPid.get(process.pid);
+  const roots = [{ pid: process.pid, from: self ? self.startMs : null, to: Infinity }];
   for (const [pid, k] of known) {
     const live = byPid.get(pid);
-    if (!live || (live.name === k.name && live.start === k.start)) roots.push(pid);
+    if (!live) roots.push({ pid, from: k.startMs, to: k.endMs });
+    else if (live.name === k.name && live.start === k.start) roots.push({ pid, from: k.startMs, to: Infinity });
   }
   const out = new Map();
   const stack = [...roots];
   while (stack.length) {
-    const pid = stack.pop();
+    const { pid, from, to } = stack.pop();
+    if (!Number.isFinite(from) || to == null) continue;
     for (const c of byParent.get(pid) || []) {
       if (c.pid === process.pid || c.pid === list.self || skip.has(c.pid) || out.has(c.pid)) continue;
+      if (!Number.isFinite(c.startMs) || c.startMs < from || c.startMs > to) continue;
       out.set(c.pid, c);
-      stack.push(c.pid);
+      stack.push({ pid: c.pid, from: c.startMs, to: Infinity });
     }
   }
   return [...out.values()];
@@ -543,7 +566,7 @@ async function measure(ctx, run, state) {
     run.pane2 = null;
     pane2.dispose();
   }
-  return { state, reached: true, markOffset: n, markMs: now() - run.t0, cut, replayBytes: n - cut, firstByteCut: cut > 0, steps };
+  return { state, reached: true, markOffset: n, markMs: now() - run.t0, cut, replayBytes: n - cut, steps };
 }
 
 async function endRun(ctx, run, prog) {
@@ -587,7 +610,7 @@ async function runOne(ctx, prog, mode, launch, k) {
     pane1: ctx.newPane(), pane2: null, fd: fs.openSync(path.join(ctx.recDir, `${id}.jsonl`), 'w'),
     requests: [], answered: [], notes: [], states: [], exited: null,
   };
-  rec(run, { probe: 'P19', program: prog.name, version: ctx.versions[prog.id] || null, system: ctx.system.label, conpty: mode.id, cols, rows, launch: launch.id, run: k, encoding: IS_WIN ? 'utf-8 strings from node-pty, written back as utf-8' : 'bytes as read' });
+  rec(run, recordingHeader(ctx, prog, mode, launch, k));
   ctx.current = run;
   const term = ctx.pty.spawn(cmd.file, cmd.args, { name: 'xterm-256color', cols, rows, cwd: dirs.work, env, ...mode.options });
   run.pty = term;
@@ -605,13 +628,17 @@ async function runOne(ctx, prog, mode, launch, k) {
     run.pane1.write(b);
     if (run.pane2) run.pane2.write(b);
   });
+  // The program as the clean-up knows it: its end, once seen, bounds the
+  // children it can have had (ownedProcesses).
+  let known = null;
   term.onExit(({ exitCode, signal }) => {
     run.exited = { code: exitCode, signal: signal || null, t: now() - run.t0 };
+    if (known) known.endMs = run.t0 + run.exited.t;
     rec(run, { ev: 'exit', o: run.total, t: run.exited.t, code: exitCode, signal: signal || null });
   });
   listProcesses().then((l) => {
     const p = l.procs.find((x) => x.pid === term.pid);
-    if (p) { ctx.known.set(p.pid, p); run.proc = { name: p.name, start: p.start }; }
+    if (p) { known = { ...p, endMs: run.exited ? run.t0 + run.exited.t : null }; ctx.known.set(p.pid, known); }
   }).catch(() => { /* the end-of-run sweep lists again */ });
   try {
     let why = null;
@@ -675,12 +702,32 @@ function verdictFor(prog, readings, runs) {
   }
   if (cannot.length) verdict += `; CANNOT MEASURE ${cannot.join(', ')}`;
   verdict += sameSize.length ? `; a same-size resize was enough at ${sameSize.join(', ')}` : '; a same-size resize was enough at no state';
+  // Where the rows already matched before any resize, the nudge had nothing
+  // to put right: said, so a verdict that rests on such states shows it.
+  const already = reachedStates.filter((s) => s.equalAfterNothing === s.reached).map((s) => s.state);
+  if (already.length) verdict += `; already equal before any resize at ${already.join(', ')}`;
   const other = reachedStates.filter((s) => s.otherBufferAfterNudge > 0).map((s) => `${s.state} (${s.pane1Buffer})`);
   if (other.length) verdict += `; pane 2 stayed on another screen buffer than pane 1 at ${other.join(', ')}`;
   return { verdict, states, summary };
 }
 
 // ── clean-up and output ────────────────────────────────────────────────────
+/** The probe code that makes a reading: the sha256 of this file, the
+ *  stand-in and the scenario file, each read with LF line ends. */
+function codeDigests(scenarioFile) {
+  const sha = (f) => crypto.createHash('sha256').update(fs.readFileSync(f, 'utf8').replace(/\r\n/g, '\n')).digest('hex');
+  return { record: sha(__filename), standIn: sha(STAND_IN), scenarios: sha(scenarioFile) };
+}
+
+/** A recording's first line: what ran, where, and the code that recorded it. */
+function recordingHeader(ctx, prog, mode, launch, k) {
+  const { cols, rows } = ctx.scenario.size;
+  return {
+    probe: 'P19', program: prog.name, version: ctx.versions[prog.id] || null, system: ctx.system.label, conpty: mode.id, cols, rows, launch: launch.id, run: k,
+    encoding: IS_WIN ? 'utf-8 strings from node-pty, written back as utf-8' : 'bytes as read', files: ctx.files,
+  };
+}
+
 function sanitizer(pairs) {
   const list = pairs.filter(([p]) => p && p.length > 3).flatMap(([p, tag]) => [[p, tag], [p.replace(/\\/g, '/'), tag]]).sort((a, b) => b[0].length - a[0].length);
   const fix = (s) => { let out = s; for (const [p, tag] of list) out = out.split(p).join(tag); return out; };
@@ -722,7 +769,8 @@ async function main() {
   if (mode !== 'run') throw new CouldNotRun('usage: node p19-record.cjs run --root <checkout> --out <folder> [...] | locate <claude prefix> <codex prefix>');
   const args = parseArgs(rest);
   if (!args.root || !args.out) throw new CouldNotRun('run needs --root and --out');
-  const scenario = readJson(args.scenarios || path.join(__dirname, 'p19-scenarios.json'));
+  const scenarioFile = args.scenarios ? path.resolve(args.scenarios) : path.join(__dirname, 'p19-scenarios.json');
+  const scenario = readJson(scenarioFile);
   const runs = args.runs ? Number(args.runs) : scenario.runs;
   if (!Number.isInteger(runs) || runs < 1 || runs > 10) throw new CouldNotRun('--runs must be 1 to 10');
   const only = args.only ? args.only.split(',') : null;
@@ -735,7 +783,7 @@ async function main() {
   fs.mkdirSync(recDir, { recursive: true });
 
   const ctx = {
-    scenario, pty: mods['node-pty'].mod, recDir, known: new Map(), skip: new Set(), incomplete: [], versions: {}, commands: {}, current: null, fatal: [], writeErrors: [],
+    scenario, files: codeDigests(scenarioFile), pty: mods['node-pty'].mod, recDir, known: new Map(), skip: new Set(), incomplete: [], versions: {}, commands: {}, current: null, fatal: [], writeErrors: [],
     tempRoot: fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'p19-')),
     // @xterm/headless counts its buffer API as proposed.
     newPane: () => new Terminal({ cols: scenario.size.cols, rows: scenario.size.rows, scrollback: scenario.scrollback, allowProposedApi: true }),
@@ -757,14 +805,14 @@ async function main() {
     console.error(e.stack);
   });
   for (const s of [process.stdout, process.stderr]) s.on('error', (e) => ctx.writeErrors.push(`the probe's own output: ${e.code || e.message}`));
-  const result = { probe: 'P19', started: new Date().toISOString(), system: ctx.system, modules: { 'node-pty': mods['node-pty'].version, '@xterm/headless': mods['@xterm/headless'].version }, conpty: modes.map((m) => m.id), runs, scenario: { size: scenario.size, cutBytes: scenario.cutBytes, settleMs: scenario.settleMs, nudgeMs: scenario.nudgeMs, reply: scenario.reply }, programs: [], readings: [], verdicts: [] };
+  const result = { probe: 'P19', started: new Date().toISOString(), system: ctx.system, files: ctx.files, modules: { 'node-pty': mods['node-pty'].version, '@xterm/headless': mods['@xterm/headless'].version }, conpty: modes.map((m) => m.id), runs, scenario: { size: scenario.size, cutBytes: scenario.cutBytes, settleMs: scenario.settleMs, nudgeMs: scenario.nudgeMs, reply: scenario.reply }, programs: [], readings: [], verdicts: [] };
   const sanitize = () => sanitizer([[ctx.tempRoot, '<temp>'], [os.homedir(), '<home>'], ...Object.entries(ctx.commands).map(([id, c]) => [c.file, `<${id}>`])]);
   let standIn = null;
   let line = null;
   try {
     // The stand-in, in a fresh environment of its own.
     const sdirs = makeDirs(path.join(ctx.tempRoot, 'stand-in'));
-    standIn = cp.spawn(process.execPath, [STAND_IN, args.scenarios ? path.resolve(args.scenarios) : path.join(__dirname, 'p19-scenarios.json')], { cwd: sdirs.work, env: freshEnv(sdirs), stdio: ['pipe', 'pipe', 'inherit'], windowsHide: true });
+    standIn = cp.spawn(process.execPath, [STAND_IN, scenarioFile], { cwd: sdirs.work, env: freshEnv(sdirs), stdio: ['pipe', 'pipe', 'inherit'], windowsHide: true });
     ctx.skip.add(standIn.pid);
     const byId = new Map();
     let buf = '';
@@ -865,7 +913,13 @@ async function main() {
 // Windows output reader can keep the event loop alive after its pseudo
 // console is closed, so the probe ends itself.
 const finish = (code) => process.stdout.write('', () => process.exit(code));
-main().then(finish, (e) => {
-  console.log(`P19 RESULT: COULD NOT RUN - ${e.message}`);
-  finish(2);
-});
+if (require.main === module) {
+  main().then(finish, (e) => {
+    console.log(`P19 RESULT: COULD NOT RUN - ${e.message}`);
+    finish(2);
+  });
+}
+
+// For tests/unit/scripts/probe-p19-record.test.ts, which loads this file
+// without running it.
+module.exports = { ownedProcesses, verdictFor, codeDigests, recordingHeader };

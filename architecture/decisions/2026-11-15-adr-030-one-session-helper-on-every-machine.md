@@ -443,10 +443,13 @@ its ready prompt, the middle of its reply, after the reply), and every state was
 in 3 of 3 runs, a terminal fed only the last 64 KiB of the output (or its second half when
 there was less), cut at a byte, showed the same rows as one fed everything after a nudge:
 the PTY one row shorter, then back 300 ms later. In every run they were already equal at
-the first sample, 250 ms after the size was back. Before the nudge the rows differed (1 to
-32 of the 40) at every state but these: Claude Code after its reply, Codex's first screen
+the first sample, 250 ms after the size was back. Before any resize the rows differed (1
+to 32 of the 40) at every state but these, where they were already equal and the nudge had
+nothing to put right: Claude Code after its reply (on every system), Codex's first screen
 on macOS and Linux, and Claude Code in the middle of its reply under the system ConPTY (in
-3 of 3 runs on the test machine, 2 of 3 on the runner). A same-size resize, what the app
+3 of 3 runs on the test machine, 2 of 3 on the runner). Claude Code's whole output stayed
+under 64 KiB at every state but after its reply on macOS and Linux, so its replays were the
+second half of the output. A same-size resize, what the app
 sends after an attach today, is not enough on the bundled ConPTY, macOS or Linux: at a
 still screen the CLI wrote nothing after it, and it matched only where nothing was needed.
 On the system ConPTY it is enough at every state, on both builds: the console host built
@@ -464,10 +467,12 @@ message is added to the protocol. The step that plans the nudge also decides how
 re-attached terminal gets back to the screen the CLI is on. Not measured: the holder's own
 PTY code (it makes the same system calls; on Windows a session's launch field picks the
 ConPTY), the app's real attach path, a signed-in account's screens, Codex with its
-background server (it ran with `--no-daemon`: 0.157.1 refuses that server in an elevated
-session, which the test machine's SSH session and the Windows runner are, and on macOS the
-server's socket path under the runner's temporary folder is too long), and any size but
-120 by 40. The probe is `helper/probes/p19-record.cjs`.
+background server on Windows and macOS (the counted runs gave it `--no-daemon`: 0.157.1
+refuses that server in an elevated session, which the test machine's SSH session and the
+Windows runner are, and on macOS the server's socket path under the runner's temporary
+folder is too long; the earlier dispatch on 0c49af32, run 44532520348, ran Codex with its
+server on ubuntu-latest and read REPAINTS there too, 3 of 3 at every state), and any size
+but 120 by 40. The probe is `helper/probes/p19-record.cjs`.
 
 ## Parked questions
 

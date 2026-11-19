@@ -37,7 +37,12 @@ const pr = (action: string, label?: string): GhaContext => ({
   inputs: {},
 })
 const push = (): GhaContext => ({ github: { event_name: 'push', event: {} }, inputs: {} })
-const dispatch = (inputs: Record<string, unknown>): GhaContext => ({ github: { event_name: 'workflow_dispatch', event: { inputs } }, inputs })
+// GitHub's two views of a dispatch's inputs: the inputs context keeps each
+// input's type, github.event.inputs holds every value as a string.
+const dispatch = (inputs: Record<string, unknown>): GhaContext => ({
+  github: { event_name: 'workflow_dispatch', event: { inputs: Object.fromEntries(Object.entries(inputs).map(([k, v]) => [k, String(v)])) } },
+  inputs,
+})
 const runs = (ctx: GhaContext) => evalIf(job.if, ctx)
 
 describe('ci.yml: the Probe P19 job runs only on a dispatch that names it', () => {

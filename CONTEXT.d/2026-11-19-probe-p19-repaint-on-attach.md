@@ -29,10 +29,11 @@ Plan 2.1.3-beta.11, section A1 (aicc_planning #340). No product code.
 - **Result: REPAINTS for both CLIs on all three systems**, 3 of 3 runs at every state, on the
   test machine (build 22621, both ConPTYs, the probe as of 0c49af32) and in CI run 44533910780
   (e1392065: windows-2025 on both ConPTYs, macos-latest, ubuntu-latest). An earlier dispatch on
-  0c49af32 (run 44532520348) gave the same on windows-2025 and Linux; its macOS Codex rows failed
-  on the background server above and are not counted. A same-size resize is enough only on the system ConPTY,
-  whose console host redraws the whole screen on any resize. The full paragraph is in ADR-030
-  after the P16 result.
+  0c49af32 (run 44532520348) gave the same on windows-2025 and Linux, where Codex ran with its
+  background server (0c49af32 gave `--no-daemon` on Windows only); its macOS Codex rows failed
+  on the background server above and are not counted. A same-size resize is enough only on the
+  system ConPTY, whose console host redraws the whole screen on any resize. The full paragraph
+  is in ADR-030, after the P18 result (#731).
 - **Beside the verdict.** Both CLIs draw their session on the alternate screen, so a replay cut
   after the switch leaves the re-attached terminal on the normal screen with the right rows (not
   under the test machine's system ConPTY, which passes no alternate screen through). The step that
@@ -40,6 +41,16 @@ Plan 2.1.3-beta.11, section A1 (aicc_planning #340). No product code.
   the system ConPTY a console host was still running a second after node-pty ended the program,
   in 15 of 15 runs on the test machine and 15 of 15 on the runner; the probe stopped each one
   after checking its name and start time (none on the bundled ConPTY, 0 of 15 on each).
+- **After review (the readings above came before it).** The clean-up counts a process as the
+  probe's only when it started after its parent and, for a program that has ended, before that
+  program ended: Windows keeps a parent id after the parent ends and reuses ids, so the parent id
+  alone could name a process the probe never started. The recorded runs stopped only console
+  hosts the probe had started. The verdict line also names each state already equal before any
+  resize, where the nudge had nothing to put right (Claude Code after its reply, on every
+  system). Each recording's header and the result name the probe code by the sha256 of its three
+  files. The readings above carry no digest: that the test machine's used the probe as of
+  0c49af32 is the builder's record. `tests/unit/scripts/probe-p19-record.test.ts` covers the
+  three.
 - **For A2.** The recordings of every run (each chunk with its offset and time, and the keys,
   resizes and marks) are in each run's artifact (`probe-p19-<os>`) and, for the test machine, in
   the orchestrator's scratch folder; nothing signed in was recorded.

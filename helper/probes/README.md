@@ -134,11 +134,14 @@ cut at a byte as the ring cuts, and compares its rows with a terminal fed
 everything, 2 s after each of three steps: nothing, a resize to the same size
 (what the app sends after an attach today), and a nudge (one row shorter, then
 back 300 ms later). The decision lines are in the script's header and were
-fixed before measuring. It cleans up in `finally` blocks, each process stopped
-only after its name and start time are checked. The last line is
+fixed before measuring. It cleans up in `finally` blocks: a process counts as
+its own only when it started after its parent, and each is stopped only after
+its name and start time are checked. The last line is
 `P19 RESULT: ...` with a verdict per CLI (REPAINTS, DOES NOT REPAINT, CANNOT
-MEASURE, NO VERDICT or CHECK RUN; per ConPTY on Windows) or `P19 RESULT: COULD
+MEASURE, NO VERDICT or CHECK RUN; per ConPTY on Windows; naming any state that
+was already equal before any resize) or `P19 RESULT: COULD
 NOT RUN - <reason>`, with `; clean-up incomplete: <what>` added (and exit 2)
 when something was left. The recordings (every chunk with its offset and time)
 and `p19-result.json` go to `--out`; the result writes personal paths as
-placeholders. The answer is in ADR-030 after the P18 result.
+placeholders, and both name the probe code by the sha256 of its three files.
+The answer is in ADR-030 after the P18 result.
