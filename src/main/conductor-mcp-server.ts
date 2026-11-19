@@ -1723,10 +1723,12 @@ class ToolStreamTransport {
       this.end(true)
       return
     }
-    // Read as the /mcp route reads a body: each message of a batch on its
-    // own; one that is not a JSON-RPC message is answered Invalid Request
-    // when it has an id, and dropped otherwise. An answer is never answered,
-    // and a batch over that route's TOOL_STREAM_BATCH_MAX is refused whole.
+    // A batch is taken as the /mcp route takes one, and one over its
+    // TOOL_STREAM_BATCH_MAX is refused whole. Unlike that route, which
+    // refuses a whole body when one message in it is bad, each message of a
+    // batch is read on its own: one that is not a JSON-RPC message is
+    // answered Invalid Request when it has an id, and dropped otherwise. An
+    // answer is never answered.
     const items = Array.isArray(message) ? message : [message]
     if (items.length > TOOL_STREAM_BATCH_MAX) {
       logDebug(`[vision-mcp] A tool stream batch of sid=${this.owner} holds over ${TOOL_STREAM_BATCH_MAX} messages; refused`)

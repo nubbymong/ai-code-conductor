@@ -12,9 +12,10 @@ tool functions yet (section B2 does), so no connection the app makes asks for `m
   the session's other streams, so `releaseMcpSessionProvider` and `stopMcpServer` close it, and a
   message that comes after its launch is over closes it too. `createServer` is reached through one
   module reference, set when the server starts and cleared when it stops. The request handler and
-  the routes are not changed, and no credential is made or checked for a stream. A message is read
-  as the /mcp route reads a body: each message of a batch on its own, a batch over 100 refused
-  whole, and one that is not a JSON-RPC message answered Invalid Request when it has an id.
+  the routes are not changed, and no credential is made or checked for a stream. A batch is taken
+  as on the /mcp route, one over 100 refused whole; unlike that route, which refuses a whole body
+  when one message in it is bad, each message of a batch is read on its own, and one that is not
+  a JSON-RPC message is answered Invalid Request when it has an id.
 - **The connection** (session-helper/connection.ts): `sendMcp` writes one `mcp` frame, only on a
   stream the holder opened on a connection that acked `mcp`. A message the holder would not read
   (an escaped lone surrogate, more than 31 levels, over 16,776,960 bytes) is never sent, because

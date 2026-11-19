@@ -13,10 +13,11 @@
 //    answered on it;
 //  - with the server stopped (or a stream open when it stops) the stream is
 //    refused (closed);
-//  - a message is read as the /mcp route reads a body: each message of a
-//    batch on its own, a batch over that route's 100 refused whole, and one
-//    that is not a JSON-RPC message answered Invalid Request when it has an
-//    id (an answer never is), dropped otherwise.
+//  - a batch is taken as on the /mcp route, one over that route's 100
+//    refused whole, but each message of a batch is read on its own (that
+//    route refuses a whole body with one bad message): one that is not a
+//    JSON-RPC message is answered Invalid Request when it has an id (an
+//    answer never is), dropped otherwise.
 // Not checked here: what each tool does once called (the route tests own
 // that); a holder or a relay (the session helper's tests own those).
 
