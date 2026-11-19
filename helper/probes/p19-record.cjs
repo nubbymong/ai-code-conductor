@@ -22,7 +22,10 @@
  * pointed at p19-model-stand-in.cjs, a server on a loopback port, by its own
  * settings (Claude Code: ANTHROPIC_BASE_URL and a made-up key; Codex: a model
  * provider in config.toml), so it reaches its prompt and runs one turn whose
- * reply is about 300 lines.
+ * reply is about 300 lines. Codex runs with --no-daemon, without its
+ * background server: 0.157.1 refuses that server in an elevated session (the
+ * test machine's SSH session, GitHub's Windows runner), and on macOS the
+ * server's socket path under the runner's temporary folder is too long.
  *
  * The states, per CLI: its first screen with no account (an empty config);
  * its ready prompt; the middle of the streamed reply (35% of its lines sent);
@@ -791,7 +794,8 @@ async function main() {
     for (const prog of programs) {
       let cmd;
       if (prog.id === 'shell') cmd = defaultShell();
-      else if (args[prog.id]) cmd = { file: path.resolve(args[prog.id]), args: [].concat(prog.args ? (prog.args[process.platform] ?? prog.args.default ?? []) : []) };
+      // A program's arguments: a list, or a list per platform (`default` for the rest).
+      else if (args[prog.id]) cmd = { file: path.resolve(args[prog.id]), args: Array.isArray(prog.args) ? prog.args : prog.args ? (prog.args[process.platform] ?? prog.args.default ?? []) : [] };
       else { result.programs.push({ id: prog.id, name: prog.name, notRun: `no --${prog.id} given` }); continue; }
       if (IS_WIN && /\.(cmd|bat)$/i.test(cmd.file)) throw new CouldNotRun(`--${prog.id} is a .cmd or .bat file; give the program it runs`);
       if (!fs.existsSync(cmd.file)) throw new CouldNotRun(`--${prog.id}: no file at ${cmd.file}`);

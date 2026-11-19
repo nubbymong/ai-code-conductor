@@ -75,7 +75,7 @@
       "id": "codex",
       "name": "Codex",
       "verdict": true,
-      "args": { "win32": ["--no-daemon"], "default": [] },
+      "args": ["--no-daemon"],
       "exitKeys": ["\u0003", "\u0003"],
       "launches": [
         {
