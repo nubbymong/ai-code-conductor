@@ -578,7 +578,8 @@ process's times itself, with no PowerShell and no WMI, so it answers in
 milliseconds: the app uses it on the exits that cannot wait (quit, an update
 install, SIGTERM) as well as at a stop and a relaunch. From 2.1.3-beta.9 the
 app also records the pid and creation time `start` printed in
-`vision-started.json` in its user data folder until an end answers `ended` or
+`vision-started.json` in its user data folder (a dev or test run's own data
+folder instead) until an end answers `ended` or
 `left`, and at its next start, and before each launch of the vision browser, it
 ends the program that record names through this mode alone. It runs the mode
 from the install folder, or, when that file is gone (an uninstall for all users

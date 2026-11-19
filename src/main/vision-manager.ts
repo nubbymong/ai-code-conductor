@@ -1002,13 +1002,14 @@ function endHelperPath(): string | null {
 }
 
 // ── The record of the browser the helper started (#329) ───────────────────
-// One file in the user data folder, `vision-started.json`, holds the pid and
-// creation time the helper reported, written when the browser starts and
-// removed once an end has a definite answer. A browser this run could not end
-// (an end that could not tell, or an app ended from outside) is then ended at
-// the next start, and before each launch, by that pid and creation time
-// through the helper's end mode alone: never by its pid alone, and with no
-// PowerShell and no WMI, which a sign-in that may not read WMI cannot use.
+// One file in this instance's data folder (startedRecordPath),
+// `vision-started.json`, holds the pid and creation time the helper reported,
+// written when the browser starts and removed once an end has a definite
+// answer. A browser this run could not end (an end that could not tell, or an
+// app ended from outside) is then ended at the next start, and before each
+// launch, by that pid and creation time through the helper's end mode alone:
+// never by its pid alone, and with no PowerShell and no WMI, which a sign-in
+// that may not read WMI cannot use.
 
 const STARTED_RECORD = 'vision-started.json'
 /** A record is one short line; a larger file is not one. */
@@ -1016,8 +1017,21 @@ const STARTED_RECORD_MAX_BYTES = 256
 
 type StartedRecord = { pid: number; created: string }
 
+/**
+ * Where this instance keeps the record: the user data folder for an
+ * installed app; an E2E or dev run's own data root otherwise, by the rule the
+ * session helper's folder follows (session-helper/install.ts helperRootDir).
+ * A dev run shares the user data folder with an installed app on the same
+ * computer (docs/dev-alongside-prod.md), and must never end that app's
+ * browser. A root that is not absolute gives no record at all. Null when
+ * there is no folder to use.
+ */
 function startedRecordPath(): string | null {
-  try { return path.join(app.getPath('userData'), STARTED_RECORD) } catch { return null }
+  try {
+    const root = process.env.CCC_E2E_DATA_DIR || (app.isPackaged ? undefined : process.env.CCC_DEV_DATA_DIR)
+    if (root) return path.isAbsolute(root) ? path.join(root, STARTED_RECORD) : null
+    return path.join(app.getPath('userData'), STARTED_RECORD)
+  } catch { return null }
 }
 
 /** Write the record of `t`: the whole file or none (atomic), owner-only where

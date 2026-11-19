@@ -45,6 +45,8 @@ const sys = vi.hoisted(() => ({
   userData: '',
   /** The per-user copy of the helper the session helper checked, once a test makes one. */
   copyExe: '',
+  /** An installed app; false for a dev run. */
+  isPackaged: true,
   execFiles: [] as Array<{ file: string; args: string[]; opts: Record<string, unknown> }>,
   spawns: [] as Array<{ executable: string; args: string[]; opts: Record<string, unknown> }>,
   runs: [] as Array<{ file: string; args: string[]; sync: boolean; timeoutMs: number; answer?: string }>,
@@ -106,7 +108,7 @@ vi.mock('net', () => ({
 }))
 vi.mock('electron', () => ({
   app: {
-    isPackaged: true,
+    get isPackaged() { return sys.isPackaged },
     getAppPath: () => 'C:\\AICC\\resources\\app.asar',
     getPath: (name: string) => {
       if (name !== 'userData' || sys.userData === '') throw new Error(`test: no ${name} folder`)
@@ -130,6 +132,8 @@ const realFs = await vi.importActual<typeof import('fs')>('fs')
 const RESOURCES = 'C:\\AICC\\resources'
 // As session-helper/install.ts bundledHelperPath joins it for a packaged app.
 const HELPER = path.join(RESOURCES, 'helper', 'aicc-helper.exe')
+// And for a dev run: the Cargo build beside the app's own folder.
+const DEV_HELPER = path.join('C:\\AICC\\resources\\app.asar', 'helper', 'target', 'release', 'aicc-helper.exe')
 const CHROME = 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe'
 const CHROME_FOLDER = 'C:\\Program Files\\Google\\Chrome\\Application'
 const POSIX_CHROME: Record<string, string> = {
@@ -149,7 +153,7 @@ function answer(file: string, args: string[]): string {
     if (!sys.procs.delete(pid)) throw new Error('exited with status 128')
     return 'SUCCESS\r\n'
   }
-  if (file === HELPER || (sys.copyExe !== '' && file === sys.copyExe)) {
+  if (file === HELPER || file === DEV_HELPER || (sys.copyExe !== '' && file === sys.copyExe)) {
     expect(args[0], 'only the end mode is run synchronously or awaited').toBe('end')
     const pid = Number(args[args.indexOf('--pid') + 1])
     const want = args[args.indexOf('--created') + 1]
@@ -211,8 +215,18 @@ const helperEnd = (pid: number, created: string) => ['end', '--pid', String(pid)
 /** Every line the helper start and end decisions log. */
 const HELPER_LINES = /session helper|started directly|without a full path|app-started browser|exited within/
 
+/** The env vars that give a dev or E2E run its own data root, as the test process had them. */
+const INSTANCE_ROOTS = ['CCC_DEV_DATA_DIR', 'CCC_E2E_DATA_DIR'] as const
+const savedRoots = Object.fromEntries(INSTANCE_ROOTS.map((n) => [n, process.env[n]]))
+
 beforeAll(() => { (process as unknown as { resourcesPath: string }).resourcesPath = RESOURCES })
-afterAll(() => { delete (process as unknown as { resourcesPath?: string }).resourcesPath })
+afterAll(() => {
+  delete (process as unknown as { resourcesPath?: string }).resourcesPath
+  for (const name of INSTANCE_ROOTS) {
+    if (savedRoots[name] === undefined) delete process.env[name]
+    else process.env[name] = savedRoots[name]
+  }
+})
 
 beforeEach(() => {
   setPlatform('win32')
@@ -222,6 +236,9 @@ beforeEach(() => {
   killSpawnedBrowser() // drop anything tracked by an earlier test
   _forgetCheckedHelperCopyForTest()
   sys.copyExe = ''
+  sys.isPackaged = true
+  // An installed app's run unless a test says otherwise: no dev or E2E data root.
+  for (const name of INSTANCE_ROOTS) delete process.env[name]
   sys.userData = realFs.mkdtempSync(path.join(nodeOs.tmpdir(), 'aicc-vision-record-'))
   sys.present = new Set([HELPER, CHROME])
   sys.procs.clear()
@@ -564,6 +581,61 @@ describe('Windows: the record of the browser the helper started', () => {
     expect(sys.procs.has(7005)).toBe(false)
     // The record names the new browser now.
     expect(recordText()).toBe(recordOf(pid, sys.procs.get(pid) as string))
+  })
+
+  // A dev run on the same computer shares the user data folder with the
+  // installed app (docs/dev-alongside-prod.md): it must never end that app's browser.
+  it('a dev or E2E run keeps the record in its own data root, and never reads or ends the browser an installed app recorded in the shared user data folder', async () => {
+    sys.procs.set(7007, '134078000000000500')
+    writeRecord(recordOf(7007, '134078000000000500'))
+    const appsBrowser = () => {
+      expect(sys.procs.get(7007), "the installed app's browser").toBe('134078000000000500')
+      expect(recordText(), "the installed app's record").toBe(recordOf(7007, '134078000000000500'))
+    }
+    const recordIn = (root: string): string | null => {
+      try { return realFs.readFileSync(path.join(root, 'vision-started.json'), 'utf8') } catch { return null }
+    }
+
+    // A dev run: not packaged, its own data root, the Cargo build as its helper.
+    sys.isPackaged = false
+    const devRoot = path.join(sys.userData, 'dev-data')
+    realFs.mkdirSync(devRoot)
+    process.env.CCC_DEV_DATA_DIR = devRoot
+    sys.present = new Set([DEV_HELPER, CHROME])
+    await endRecordedVisionBrowser()
+    expect(sys.runs).toEqual([])
+    const dev = await launchBrowser('chrome', 9222, undefined, true)
+    const devCreated = sys.procs.get(dev.pid) as string
+    expect(sys.events).toEqual([`helper-start:${dev.pid}`])
+    expect(recordIn(devRoot)).toBe(recordOf(dev.pid, devCreated))
+    appsBrowser()
+    // Its next start ends its own recorded browser, and nothing of the installed app's.
+    await endRecordedVisionBrowser()
+    expect(sys.runs).toEqual([{ file: DEV_HELPER, args: helperEnd(dev.pid, devCreated), sync: false, timeoutMs: HELPER_END_TIMEOUT_MS, answer: 'ended\r\n' }])
+    expect(recordIn(devRoot)).toBeNull()
+    appsBrowser()
+
+    // An E2E run: its own data root, packaged or not.
+    sys.isPackaged = true
+    delete process.env.CCC_DEV_DATA_DIR
+    const e2eRoot = path.join(sys.userData, 'e2e-data')
+    realFs.mkdirSync(e2eRoot)
+    process.env.CCC_E2E_DATA_DIR = e2eRoot
+    sys.present = new Set([HELPER, CHROME])
+    sys.runs.length = 0
+    await endRecordedVisionBrowser()
+    expect(sys.runs).toEqual([])
+    const e2e = await launchBrowser('chrome', 9222, undefined, true)
+    expect(recordIn(e2eRoot)).toBe(recordOf(e2e.pid, sys.procs.get(e2e.pid) as string))
+    appsBrowser()
+
+    // A root that is not absolute gives no record at all, never one in the working folder.
+    process.env.CCC_E2E_DATA_DIR = 'aicc-relative-root'
+    killSpawnedBrowser()
+    const third = await launchBrowser('chrome', 9222, undefined, true)
+    expect(sys.procs.has(third.pid)).toBe(true)
+    expect(realFs.existsSync(path.resolve('aicc-relative-root'))).toBe(false)
+    appsBrowser()
   })
 
   it('off Windows nothing is recorded, and a record is left as it is', async () => {

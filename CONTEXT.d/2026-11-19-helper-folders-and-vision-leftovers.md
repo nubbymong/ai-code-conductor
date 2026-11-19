@@ -17,7 +17,9 @@ Plan 2.1.3-beta.9, section C2 (#322, #329; #326 not built).
   The end functions answer `{ answer, reason }` (EndResult); the awaited and synchronous runners
   now read standard error so a failure carries it.
 - **#329, the record.** When the helper starts the vision browser, its pid and creation time go
-  to `vision-started.json` in the user data folder (atomic write). An end that answers `ended` or
+  to `vision-started.json` in the user data folder (atomic write); a dev or E2E run uses its own
+  data root instead, since a dev run shares the user data folder with an installed app on the same
+  computer and must never end that app's browser (found in the PR's review). An end that answers `ended` or
   `left` removes it, unless it names a later browser by then; one that cannot tell keeps it. At
   start-up (index.ts, beside the legacy-marker clean-up) and before each launch's scan by profile,
   the recorded browser is ended through the helper's end mode alone, by that pid and creation
