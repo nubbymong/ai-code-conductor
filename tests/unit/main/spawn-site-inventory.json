@@ -311,12 +311,12 @@
   "src/main/vision-browser-owner.ts :: execFileSync(file": {
    "count": 1,
    "how": "system-folder",
-   "reason": "The browser-ownership checks' synchronous run: taskkill.exe and Windows PowerShell by full paths under an absolute SystemRoot; elsewhere ps by its full path (posixTool). On Windows it also runs the session helper's end mode (endStartedBrowserSync): the helper the installer put beside the app (resources/helper, bundledHelperPath), by a drive-absolute path and only when that file exists, arguments as a list (a pid and a creation time of digits), no shell, a 5 s bound."
+   "reason": "The browser-ownership checks' synchronous run, Windows only: taskkill.exe by its full path under an absolute SystemRoot (the app's own child browser at quit), and the session helper's end mode (endStartedBrowserSync; 2.1.3-beta.9: never Windows PowerShell). The helper is the one the installer put beside the app (resources/helper, bundledHelperPath) when that file exists, else the per-user copy the session helper put in place and checked in this run (checkedHelperCopySync: a plain file whose SHA-256, read again just before, must be the installed helper's), by a drive-absolute path, arguments as a list (a pid and a creation time of digits), no shell, a 5 s bound."
   },
   "src/main/vision-browser-owner.ts :: spawn(file": {
    "count": 1,
    "how": "system-folder",
-   "reason": "The browser-ownership checks: Windows PowerShell by its full path under an absolute SystemRoot (powershellPath); elsewhere ps by its full path (posixTool). On Windows it also runs the session helper's end mode (endStartedBrowser): the helper the installer put beside the app (resources/helper, bundledHelperPath), by a drive-absolute path and only when that file exists, arguments as a list (a pid and a creation time of digits), no shell, a 5 s bound."
+   "reason": "The browser-ownership checks: Windows PowerShell by its full path under an absolute SystemRoot (powershellPath); elsewhere ps by its full path (posixTool). On Windows it also runs the session helper's end mode (endStartedBrowser, and endThroughHelper for the browser an earlier start recorded): the helper the installer put beside the app (resources/helper, bundledHelperPath) when that file exists, else the per-user copy the session helper put in place and checked in this run (checkedHelperCopySync: a plain file whose SHA-256, read again just before, must be the installed helper's), by a drive-absolute path, arguments as a list (a pid and a creation time of digits), no shell, a 5 s bound."
   },
   "src/main/vision-manager.ts :: execFile(helper": {
    "count": 1,

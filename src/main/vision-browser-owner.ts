@@ -18,9 +18,11 @@
  *   pid and creation time, and it is ended only while that pid still has that
  *   creation time, never by its pid alone: by the helper's own end mode
  *   (`aicc-helper end`, which holds the process from its check to its end and
- *   reads no WMI), or by the PowerShell end when the helper is not there
- *   (endStartedBrowser, and endStartedBrowserSync on the exits that cannot
- *   wait).
+ *   reads no WMI), or, at a stop or a relaunch only, by the awaited
+ *   PowerShell end when the helper is not there (endStartedBrowser). The
+ *   exits that cannot wait (endStartedBrowserSync) and the end of a browser
+ *   an earlier run recorded (endThroughHelper) use the helper alone. An end
+ *   that cannot tell says why (EndResult).
  *
  * - A browser left by an earlier run of the app is found by its profile,
  *   whether or not it listens on the debug port, and ended only once it is
@@ -37,8 +39,8 @@
  * profile folder that is locked, profileLockOf). The queries run
  * asynchronously; the only synchronous calls are the exit-time ends of the
  * app's own browser (its taskkill, or for one the helper started the
- * helper's end mode, endStartedBrowserSync, with endVerifiedSync as its
- * fallback). Nothing is put into a PowerShell script except a pid and
+ * helper's end mode, endStartedBrowserSync, which runs nothing when there is
+ * no helper). Nothing is put into a PowerShell script except a pid and
  * a creation time, both checked as plain digits first; command lines are
  * matched here in TypeScript.
  *
@@ -49,6 +51,7 @@ import * as path from 'path'
 import * as fs from 'fs'
 import * as os from 'os'
 import { spawn, execFileSync } from 'child_process'
+import { stripSpoofableText } from '../shared/safe-text'
 
 /** What the OS reports about one process. */
 export interface ProcessFacts {
@@ -78,11 +81,12 @@ export interface OwnerPorts {
   systemRoot: string | undefined
   /** Run a program by absolute path, no shell (a system tool, or the session
    *  helper's end mode). Resolves its standard output; rejects on a non-zero
-   *  exit, an error or the timeout. */
+   *  exit, an error or the timeout, with what endFailureReason reads
+   *  (`timedOut`, `status`, `signal`, `stderr`) where there is one. */
   run(file: string, args: string[], timeoutMs: number): Promise<string>
   /** The synchronous counterpart, used only for the exit-time end of the
    *  app's own browser (its taskkill, or endStartedBrowserSync). Throws on
-   *  failure. */
+   *  failure, with the same fields (a timeout's code is `ETIMEDOUT`). */
   runSync(file: string, args: string[], timeoutMs: number): string
   /** process.kill. */
   signal(pid: number, sig: NodeJS.Signals): void
@@ -109,8 +113,7 @@ export type ProfileLockState = 'free' | 'held' | 'unknown'
 /** Every async query and the awaited verified kill: a cold PowerShell on a
  *  busy machine can take well over 4 s to answer. */
 export const OWNER_QUERY_TIMEOUT_MS = 20000
-/** The synchronous end of the app's own browser at quit: its taskkill, or
- *  endVerifiedSync's script (the fallback when the helper is not there). */
+/** The synchronous end of the app's own child browser at quit: its taskkill. */
 export const OWNER_SYNC_KILL_TIMEOUT_MS = 5000
 /** POSIX: how long a browser gets after SIGTERM before SIGKILL (async paths). */
 export const POSIX_TERM_GRACE_MS = 3000
@@ -121,6 +124,8 @@ export const OWN_EXIT_WAIT_MS = 5000
 
 const POSIX_POLL_MS = 150
 const MAX_OUTPUT = 1024 * 1024
+/** How much standard error the awaited runner keeps for a failure's reason. */
+const MAX_STDERR = 4096
 const POSIX_ENV: NodeJS.ProcessEnv = { PATH: '/usr/bin:/bin:/usr/sbin:/sbin', LC_ALL: 'C' }
 const POSIX_PS = ['/bin/ps', '/usr/bin/ps']
 const POWERSHELL_ARGS = ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command']
@@ -568,7 +573,7 @@ function signalTree(pid: number, sig: NodeJS.Signals, ports: OwnerPorts): boolea
 export async function endVerified(target: VerifiedTarget, ports: OwnerPorts = defaultOwnerPorts()): Promise<boolean> {
   if (!targetOk(target, ports.platform)) return false
   try {
-    if (ports.platform === 'win32') return (await windowsEndAnswer(target, ports)) === 'ended'
+    if (ports.platform === 'win32') return (await windowsEndAnswer(target, ports)).answer === 'ended'
     const ps = posixTool(ports, POSIX_PS)
     if (!ps) return false
     const startOf = async (): Promise<string | null> => {
@@ -597,50 +602,80 @@ export async function endVerified(target: VerifiedTarget, ports: OwnerPorts = de
  */
 export type EndAnswer = 'ended' | 'left' | 'unknown'
 
+/** An end's answer, and for 'unknown' why it could not tell (endFailureReason). */
+export interface EndResult {
+  answer: EndAnswer
+  /** Set exactly when the answer is 'unknown'. */
+  reason?: string
+}
+
 /** The session helper's end mode (`aicc-helper end`): it answers in
  *  milliseconds, a second more at most when an end fails (protocol 15),
  *  with no PowerShell and no WMI; this bounds it. */
 export const HELPER_END_TIMEOUT_MS = 5000
 
-/** An end's output as an answer: exactly `ended` or `left`, or 'unknown'. */
-function endAnswerOf(out: unknown): EndAnswer {
+/** How many characters of a failed end's standard error its reason carries. */
+export const END_REASON_STDERR_CHARS = 200
+
+const unknownBecause = (reason: string): EndResult => ({ answer: 'unknown', reason })
+
+/** An exit status as Node reports it, in hex when it is a Windows status
+ *  (above 255) rather than a program's own exit code. */
+const statusText = (n: number): string => (n > 255 ? `0x${n.toString(16).toUpperCase()}` : String(n))
+
+/**
+ * Why a run that failed could not tell, for the log: no answer within
+ * `timeoutMs`, the status it exited with, or the signal that ended it (else
+ * the error's own message), then the first END_REASON_STDERR_CHARS
+ * characters of its standard error, made safe for a log line
+ * (stripSpoofableText). Reads the fields runAwait and runSync give a
+ * failure: `timedOut` or the code `ETIMEDOUT`, `status`, `signal`, `stderr`.
+ */
+export function endFailureReason(err: unknown, timeoutMs: number): string {
+  const e = (err && typeof err === 'object' ? err : {}) as { timedOut?: unknown; code?: unknown; status?: unknown; signal?: unknown; stderr?: unknown; message?: unknown }
+  let what: string
+  if (e.timedOut === true || e.code === 'ETIMEDOUT') what = `no answer within ${timeoutMs / 1000} s`
+  else if (typeof e.status === 'number') what = `it exited with status ${statusText(e.status)}`
+  else if (typeof e.signal === 'string' && e.signal !== '') what = `it was ended by ${e.signal}`
+  else what = stripSpoofableText(String(e.message ?? err ?? 'it failed'), END_REASON_STDERR_CHARS)
+  const said = typeof e.stderr === 'string' || Buffer.isBuffer(e.stderr)
+    ? stripSpoofableText(String(e.stderr).trim(), END_REASON_STDERR_CHARS).trim()
+    : ''
+  return said ? `${what}: ${said}` : what
+}
+
+/** An end's output as an answer: exactly `ended` or `left`; anything else is
+ *  'unknown', with what it printed (cut and made safe) as the reason. */
+function resultOf(out: unknown): EndResult {
   const s = String(out ?? '').trim()
-  return s === 'ended' || s === 'left' ? s : 'unknown'
+  if (s === 'ended' || s === 'left') return { answer: s }
+  return unknownBecause(s === '' ? 'it printed nothing' : `it printed neither ended nor left: ${stripSpoofableText(s, END_REASON_STDERR_CHARS)}`)
 }
 
 /** endVerified's Windows end (windowsEndScript, awaited), with its answer
  *  told apart. Never throws. */
-async function windowsEndAnswer(target: VerifiedTarget, ports: OwnerPorts): Promise<EndAnswer> {
+async function windowsEndAnswer(target: VerifiedTarget, ports: OwnerPorts): Promise<EndResult> {
   const ps = powershellPath(ports)
-  if (!ps) return 'unknown'
+  if (!ps) return unknownBecause('there is no Windows PowerShell to run')
   try {
-    return endAnswerOf(await ports.run(ps, [...POWERSHELL_ARGS, windowsEndScript(target.pid, target.created)], OWNER_QUERY_TIMEOUT_MS))
-  } catch { return 'unknown' }
-}
-
-/**
- * endVerified's synchronous counterpart, Windows only: the same script
- * (windowsEndScript, which ends the tree only while the pid still has the
- * creation time), run with runSync and bounded by OWNER_SYNC_KILL_TIMEOUT_MS.
- * It starts a PowerShell and asks WMI, so it is the fallback for a browser
- * the session helper started when the helper is not there to end it
- * (endStartedBrowserSync). Never throws; elsewhere than Windows, or with a
- * target that is not a pid and a creation time of digits, or no PowerShell
- * to run, it runs nothing and answers 'unknown'.
- */
-export function endVerifiedSync(target: VerifiedTarget, ports: OwnerPorts = defaultOwnerPorts()): EndAnswer {
-  if (ports.platform !== 'win32' || !targetOk(target, ports.platform)) return 'unknown'
-  const ps = powershellPath(ports)
-  if (!ps) return 'unknown'
-  try {
-    return endAnswerOf(ports.runSync(ps, [...POWERSHELL_ARGS, windowsEndScript(target.pid, target.created)], OWNER_SYNC_KILL_TIMEOUT_MS))
-  } catch { return 'unknown' }
+    return resultOf(await ports.run(ps, [...POWERSHELL_ARGS, windowsEndScript(target.pid, target.created)], OWNER_QUERY_TIMEOUT_MS))
+  } catch (err) { return unknownBecause(endFailureReason(err, OWNER_QUERY_TIMEOUT_MS)) }
 }
 
 /** `helper` when it is a drive-absolute path, else null. */
 const helperOrNull = (helper: string | null): string | null => (isWindowsAbsolute(helper ?? undefined) ? helper : null)
 
 const helperEndArgs = (t: VerifiedTarget): string[] => ['end', '--pid', String(t.pid), '--created', t.created]
+
+/** The answer before anything is run, when nothing may be: off Windows, or a
+ *  target that is not a pid and a creation time of digits. Else null. */
+function notEndable(target: VerifiedTarget, ports: OwnerPorts): EndResult | null {
+  if (ports.platform !== 'win32') return unknownBecause('the end is for Windows only')
+  if (!targetOk(target, ports.platform)) return unknownBecause('it is not named by a pid and a creation time of digits')
+  return null
+}
+
+const NO_HELPER = 'there is no session helper to end it with'
 
 /**
  * End a browser the session helper started (Windows, vision-manager.ts),
@@ -651,31 +686,50 @@ const helperEndArgs = (t: VerifiedTarget): string[] => ['end', '--pid', String(t
  * (`aicc-helper end`, protocol 15) when `helper` names it: it holds the
  * process from its check to its end, reads no WMI and answers in
  * milliseconds, a second more at most when an end fails (protocol 15),
- * bounded by HELPER_END_TIMEOUT_MS. With no helper, the PowerShell end
- * (endVerifiedSync). Never throws; elsewhere than Windows it runs nothing
- * and answers 'unknown'.
+ * bounded by HELPER_END_TIMEOUT_MS. With no helper it runs nothing and
+ * answers 'unknown' at once: the PowerShell end asks WMI, which a sign-in
+ * that may not read it waits on until its bound, holding up the main
+ * process, and then ends nothing (#329). The caller keeps its record of the
+ * browser for the next start. Never throws; elsewhere than Windows it runs
+ * nothing and answers 'unknown'. An 'unknown' carries its reason.
  */
-export function endStartedBrowserSync(target: VerifiedTarget, helper: string | null, ports: OwnerPorts = defaultOwnerPorts()): EndAnswer {
-  if (ports.platform !== 'win32' || !targetOk(target, ports.platform)) return 'unknown'
-  if (pidGone(target.pid, ports)) return 'left'
+export function endStartedBrowserSync(target: VerifiedTarget, helper: string | null, ports: OwnerPorts = defaultOwnerPorts()): EndResult {
+  const refused = notEndable(target, ports)
+  if (refused) return refused
+  if (pidGone(target.pid, ports)) return { answer: 'left' }
   const h = helperOrNull(helper)
-  if (!h) return endVerifiedSync(target, ports)
+  if (!h) return unknownBecause(NO_HELPER)
   try {
-    return endAnswerOf(ports.runSync(h, helperEndArgs(target), HELPER_END_TIMEOUT_MS))
-  } catch { return 'unknown' }
+    return resultOf(ports.runSync(h, helperEndArgs(target), HELPER_END_TIMEOUT_MS))
+  } catch (err) { return unknownBecause(endFailureReason(err, HELPER_END_TIMEOUT_MS)) }
+}
+
+/** The awaited end both endStartedBrowser and endThroughHelper are; with no
+ *  helper, the awaited PowerShell end only when `powershell` is set. */
+async function startedEnd(target: VerifiedTarget, helper: string | null, ports: OwnerPorts, powershell: boolean): Promise<EndResult> {
+  const refused = notEndable(target, ports)
+  if (refused) return refused
+  if (pidGone(target.pid, ports)) return { answer: 'left' }
+  const h = helperOrNull(helper)
+  if (!h) return powershell ? windowsEndAnswer(target, ports) : unknownBecause(NO_HELPER)
+  try {
+    return resultOf(await ports.run(h, helperEndArgs(target), HELPER_END_TIMEOUT_MS))
+  } catch (err) { return unknownBecause(endFailureReason(err, HELPER_END_TIMEOUT_MS)) }
 }
 
 /** endStartedBrowserSync's awaited counterpart (a stop and a relaunch), which
  *  holds up nothing while it runs; with no helper, the awaited PowerShell end
- *  (bounded by OWNER_QUERY_TIMEOUT_MS). Never throws. */
-export async function endStartedBrowser(target: VerifiedTarget, helper: string | null, ports: OwnerPorts = defaultOwnerPorts()): Promise<EndAnswer> {
-  if (ports.platform !== 'win32' || !targetOk(target, ports.platform)) return 'unknown'
-  if (pidGone(target.pid, ports)) return 'left'
-  const h = helperOrNull(helper)
-  if (!h) return windowsEndAnswer(target, ports)
-  try {
-    return endAnswerOf(await ports.run(h, helperEndArgs(target), HELPER_END_TIMEOUT_MS))
-  } catch { return 'unknown' }
+ *  (bounded by OWNER_QUERY_TIMEOUT_MS). Never throws. An 'unknown' carries
+ *  its reason. */
+export function endStartedBrowser(target: VerifiedTarget, helper: string | null, ports: OwnerPorts = defaultOwnerPorts()): Promise<EndResult> {
+  return startedEnd(target, helper, ports, true)
+}
+
+/** The same awaited end through the helper's end mode alone: with no helper
+ *  it runs nothing (no PowerShell, no WMI) and answers 'unknown'. For the
+ *  browser an earlier run recorded (vision-manager.ts). Never throws. */
+export function endThroughHelper(target: VerifiedTarget, helper: string | null, ports: OwnerPorts = defaultOwnerPorts()): Promise<EndResult> {
+  return startedEnd(target, helper, ports, false)
 }
 
 // === The app's own browser ===
@@ -854,11 +908,14 @@ function runOpts(platform: NodeJS.Platform, systemRoot: string | undefined): Run
 
 /** Spawn `file` (no shell) and resolve its standard output when it closes
  *  with status 0; reject on an error, another status or the timeout (the
- *  program is then ended so it does not linger). */
+ *  program is then ended so it does not linger). Another status rejects with
+ *  `status`, `signal` and the first MAX_STDERR characters of `stderr`; the
+ *  timeout with `timedOut`. */
 export function runAwait(file: string, args: string[], timeoutMs: number, opts: RunOpts = {}): Promise<string> {
   return new Promise((resolve, reject) => {
     let settled = false
     let out = ''
+    let errText = ''
     let timer: ReturnType<typeof setTimeout> | null = null
     let child: ReturnType<typeof spawn> | null = null
     const finish = (err: Error | null) => {
@@ -869,14 +926,19 @@ export function runAwait(file: string, args: string[], timeoutMs: number, opts: 
       else resolve(out)
     }
     try {
-      child = spawn(file, args, { ...opts, windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] })
+      child = spawn(file, args, { ...opts, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] })
       child.stdout?.setEncoding('utf8')
       child.stdout?.on('data', (chunk: string) => { if (out.length < MAX_OUTPUT) out += chunk })
+      // Read to its end, so a program that writes much is never held up; only the start is kept.
+      child.stderr?.setEncoding('utf8')
+      child.stderr?.on('data', (chunk: string) => { if (errText.length < MAX_STDERR) errText = (errText + chunk).slice(0, MAX_STDERR) })
       child.on('error', (e: Error) => finish(e))
-      child.on('close', (code: number | null) => finish(code === 0 ? null : new Error(`exited with status ${code}`)))
+      child.on('close', (code: number | null, signal: NodeJS.Signals | null) => finish(code === 0
+        ? null
+        : Object.assign(new Error(code === null ? `ended by ${signal ?? 'a signal'}` : `exited with status ${code}`), { status: code, signal, stderr: errText })))
       timer = setTimeout(() => {
         try { child?.kill() } catch { /* already gone */ }
-        finish(new Error('timed out'))
+        finish(Object.assign(new Error('timed out'), { timedOut: true }))
       }, timeoutMs)
       if (typeof timer.unref === 'function') timer.unref()
     } catch (e) {
@@ -907,9 +969,10 @@ export function defaultOwnerPorts(): OwnerPorts {
     platform,
     systemRoot,
     run: (file, args, timeoutMs) => runAwait(file, args, timeoutMs, runOpts(platform, systemRoot)),
+    // Standard error is read too, so a failure carries it (endFailureReason).
     runSync: (file, args, timeoutMs) => String(execFileSync(file, args, {
       ...runOpts(platform, systemRoot), encoding: 'utf8', windowsHide: true, timeout: timeoutMs,
-      stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: MAX_OUTPUT,
+      stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: MAX_OUTPUT,
     })),
     signal: (pid, sig) => { process.kill(pid, sig) },
     exists: (f) => { try { return fs.statSync(f).isFile() } catch { return false } },

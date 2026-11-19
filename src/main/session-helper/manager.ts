@@ -549,10 +549,11 @@ export class SessionHelperManager implements MachinesSource {
     this.state = 'ready'
     this.changed()
     void this.runSelfTest().catch(() => { /* recorded in runSelfTest */ })
-    // A folder of another version a listed holder runs is kept; every other
-    // old folder goes (see removeOldVersionFolders).
-    const otherVersions = new Set([...this.listing, ...this.heldRecords()].map((r) => r.helper).filter((v) => v !== info.version))
-    const removed = await removeOldVersionFolders(this.root, info.folder, otherVersions)
+    // Every folder of a version a listed or live holder reports is kept, the
+    // current version's other builds included (#322); every other old folder
+    // goes (see removeOldVersionFolders).
+    const heldVersions = new Set([...this.listing, ...this.heldRecords()].map((r) => r.helper))
+    const removed = await removeOldVersionFolders(this.root, info.folder, heldVersions)
     if (removed.length > 0) this.deps.log(`[session-helper] removed old helper folder(s): ${removed.join(', ')}`)
   }
 
