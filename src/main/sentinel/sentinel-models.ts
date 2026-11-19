@@ -197,6 +197,12 @@ function usableCodexLiveList(live: CodexLiveModelList | null | undefined): Codex
   return live && typeof live.version === 'string' && Array.isArray(live.models) && live.models.length > 0 ? live : null
 }
 
+/** Versions as a sentence names them: "a", "a and b", "a, b and c"
+ *  (aicc_planning#346). */
+function versionList(versions: readonly string[]): string {
+  return versions.length > 1 ? `${versions.slice(0, -1).join(', ')} and ${versions[versions.length - 1]}` : versions.join('')
+}
+
 /**
  * True when the shipped list names `id` only for Codex versions newer than
  * `version`: the model's own `cliVersions` are all later than it. That Codex
@@ -207,12 +213,6 @@ function usableCodexLiveList(live: CodexLiveModelList | null | undefined): Codex
  * case, and neither is a model with no versions of its own or a version that
  * does not parse: the notice is said, as before.
  */
-/** Versions as a sentence names them: "a", "a and b", "a, b and c"
- *  (aicc_planning#346). */
-function versionList(versions: readonly string[]): string {
-  return versions.length > 1 ? `${versions.slice(0, -1).join(', ')} and ${versions[versions.length - 1]}` : versions.join('')
-}
-
 function listedOnlyAfter(expected: ExpectedModelSet | null | undefined, id: string, version: string): boolean {
   if (finalRelease(version) === null) return false
   const entry = (Array.isArray(expected?.models) ? expected!.models : []).find((m) => m?.id === id) as { cliVersions?: unknown } | undefined

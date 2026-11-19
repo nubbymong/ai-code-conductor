@@ -10,9 +10,10 @@ which raised the range to 0.157.1), under the plan's process simplification 8.
 - macOS only: the app's discovery by PATH found `bin/codex.js` and read no
   version. The CI log did not say why, so a diagnostic dispatch (CI run
   44543504445, a scratch commit dropped afterwards) logged the app's version
-  run under each PATH. The login shell's PATH on the macOS runner starts with
-  Homebrew's Node 24, which has `process.execve`; the job's own PATH starts
-  with Node 20, which does not. 0.170.0's launcher, unlike 0.157.1's, replaces
+  run under each PATH. The first `node` on the login shell's PATH on the macOS
+  runner is Homebrew's Node 24.22.3, which has `process.execve`; the first on
+  the job's own PATH is Node 20.20.2, which does not. On Linux the first `node`
+  on both PATHs is Node 20.20.2. 0.170.0's launcher, unlike 0.157.1's, replaces
   itself with the native program through `process.execve` when Node offers it,
   outside Windows, and the test suite's home guard, which every node child of a
   test loads, refused that call: exit 1, no version. Under Node 20 the same run

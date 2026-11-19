@@ -386,13 +386,14 @@ describe('reads with a write flag, and the other entry points, aimed at a real h
   // (on macOS and Linux). In a probe the guard checks that call as it checks a
   // spawn of the same program, then hands it to Node. On Windows Node offers
   // the function but answers that it is not available there, which is what
-  // the first case sees on this PC. Not checked here: the replacement itself,
-  // which needs a POSIX Node with process.execve (CI's test jobs run Node 20,
-  // which has none; the conformance job's macOS leg runs the real launcher
-  // through it). The probe gets homes and a temp folder of its own, in a
-  // folder named like a temp folder: a child trusts its parent's temp folder
-  // only when it is named like one, and this case does not depend on what a
-  // test runner calls it.
+  // the first case sees on a Windows machine. Its POSIX branch (the
+  // replacement itself) runs only on a POSIX Node 22.15 or later, which no CI
+  // test job runs (they run Node 20, which has no process.execve), so it has
+  // not been run yet; the conformance job's macOS rc leg runs the real
+  // launcher through the guard. The probe gets homes and a temp folder of its
+  // own, in a folder named like a temp folder: a child trusts its parent's
+  // temp folder only when it is named like one, and this case does not depend
+  // on what a test runner calls it.
   it.runIf(HAS_EXECVE)('in a probe, process.execve of a program whose folder, arguments and environment name no real home is handed to Node', () => {
     const tmp = path.join(mkdtempSync(path.join(SCRATCH, 'execve-own-')), 'tmp')
     const home = path.join(tmp, 'home')

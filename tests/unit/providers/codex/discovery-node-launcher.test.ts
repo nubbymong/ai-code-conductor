@@ -6,26 +6,27 @@
 // CI run 44530368458 (macOS, the rc leg): the app's PATH discovery found
 // .../@openai/codex/bin/codex.js and read no version (state invalid, "the
 // Codex CLI did not report a version this app recognises"). The scratch
-// measurement, CI run 44543504445, gave the cause: the login shell's PATH
-// starts Homebrew's Node 24, which offers process.execve; the launcher called
-// it, and the home guard every node child of a test loads refused it (exit 1,
-// TEST_ISOLATION_VIOLATION on stderr). Under the job's Node 20 there is no
-// process.execve, so the launcher started the program as a child and the
-// version was read. The app's discovery was not at fault; the guard now checks
+// measurement, CI run 44543504445, gave the cause: the first node on the login
+// shell's PATH is Homebrew's Node 24.22.3, which offers process.execve; the
+// launcher called it, and the home guard every node child of a test loads
+// refused it (exit 1, TEST_ISOLATION_VIOLATION on stderr). Under the job's
+// Node 20.20.2 there is no process.execve, so the launcher started the program
+// as a child and the version was read. The app's discovery was not at fault; the guard now checks
 // the call as it checks a spawn (tests/helpers/home-guard-core.mjs).
 //
 // The launcher here is the real one's last step: replace this process with
 // the program when Node offers process.execve, otherwise start it as a child
-// with the same output and exit with its code. One difference, so this PC
-// (Windows) runs the guard's decision too: the real launcher does not try
+// with the same output and exit with its code. One difference, so a Windows
+// machine runs the guard's decision too: the real launcher does not try
 // execve on Windows; this one tries it and, when Node answers that it is not
 // available there, starts the child, as the real one does on Windows. The
 // native program is a node script that prints the version line.
 //
 // Starts node children in a temp folder of its own, through the guard; no
-// real CLI. Not checked here: the replacement itself, which needs a POSIX
-// Node with process.execve (CI's test jobs run Node 20; the conformance job's
-// macOS leg runs the real launcher through it).
+// real CLI. The replacement itself happens only on a POSIX Node 22.15 or
+// later, which no CI test job runs (they run Node 20), so on CI and on
+// Windows these cases take the child route; the conformance job's macOS rc
+// leg runs the real launcher through the guard.
 import { afterAll, describe, expect, it } from 'vitest'
 import fs from 'node:fs'
 import os from 'node:os'
@@ -108,8 +109,12 @@ describe('discovery reads a Node launcher that replaces itself with its program 
     expect(path.basename(r.executable ?? '')).toBe('codex.js')
   }, 60_000)
 
-  // The CI run's shape, kept: a launcher whose replacement the guard refuses
-  // reads as no version, never as found.
+  // The CI run's shape, kept as a characterization: a launcher whose
+  // replacement the guard refuses reads as no version, never as found. It is
+  // green on the base by construction (the base refuses every execve), and on
+  // Windows the launcher's fallback spawn is refused for the same CODEX_HOME,
+  // so it can catch a guard that skips the execve check only on a POSIX Node
+  // 22.15 or later; home-guard.test.ts's env and argv case pins that check.
   it.runIf(HAS_EXECVE)('a replacement the guard refuses reads as the CI run read it: invalid, no version', async () => {
     const launcher = install('refused')
     const real = path.join(os.userInfo().homedir, `.ccc-iso-canary-${process.pid}-${Date.now()}`)
