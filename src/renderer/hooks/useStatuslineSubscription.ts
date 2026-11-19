@@ -43,8 +43,14 @@ export function useStatuslineSubscription(sessionId: string) {
       // bucket that disappeared upstream clears from the strip.
       if (data.usageBuckets) updates.usageBuckets = data.usageBuckets
       // Usage track MP5: that nothing will report the allowance (D3), for the
-      // multi-account footer and the strip.
-      if (data.usageUnavailable) updates.usageUnavailable = data.usageUnavailable
+      // multi-account footer and the strip. The mark is sent once, and a
+      // reading can still arrive after it (aicc_planning#292: the session's
+      // own hook claims its record late), so an update that carries a reading
+      // clears it. A reading is what the strip's placeholder rule reads: a
+      // non-empty bucket list or a current rate limit figure.
+      const hasReading = (data.usageBuckets != null && data.usageBuckets.length > 0) || data.rateLimitCurrent != null
+      if (hasReading) updates.usageUnavailable = undefined
+      else if (data.usageUnavailable) updates.usageUnavailable = data.usageUnavailable
       // v1.5.9: do NOT copy accountEmail / accountColour into the session
       // store FOR LOCAL SESSIONS. The local bridge reads
       // ~/.claude.json:oauthAccount which is a GLOBAL field -- every
