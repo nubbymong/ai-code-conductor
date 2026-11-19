@@ -6594,6 +6594,17 @@
       "note": ""
     },
     {
+      "path": "tests/unit/main/conductor-mcp-tool-stream.test.ts",
+      "predicates": [
+        "P05",
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "new 2.1.3-beta.11 section B1 test (tests/unit/main/conductor-mcp-tool-stream.test.ts): a tool stream through a session's holder is answered the tool set of the session's record, a Codex record's as its /mcp route gives it (CODEX_CONDUCTOR_TOOLS) and a Claude Code record's as its SSE route does; no record or no tool host refuses it; a call that names another session acts for the stream's session only; releasing the record closes it (WP1.68)",
+      "note": "created by 2.1.3-beta.11 section B1; a stand-in link and a stand-in listener, no port, no CLI started"
+    },
+    {
       "path": "tests/unit/main/container-entry-shell-compat.test.ts",
       "predicates": [
         "P13"
