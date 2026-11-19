@@ -136,8 +136,8 @@
           "steps": [
             {
               "do": "until",
-              "label": "the ready composer",
-              "screen": "(?:^|\\n) ?›(?:[ \\n]|$)",
+              "label": "the ready composer with its footer (the session ready)",
+              "screen": "(?:^|\\n) ?›(?:[ \\n]|$)[\\s\\S]*\\n {1,4}p19-probe [^\\n]*·",
               "not": "esc to interrupt",
               "timeoutMs": 60000,
               "rules": [
@@ -170,8 +170,8 @@
           "steps": [
             {
               "do": "until",
-              "label": "the ready composer",
-              "screen": "(?:^|\\n) ?›(?:[ \\n]|$)",
+              "label": "the ready composer with its footer (the session ready)",
+              "screen": "(?:^|\\n) ?›(?:[ \\n]|$)[\\s\\S]*\\n {1,4}p19-probe [^\\n]*·",
               "not": "esc to interrupt",
               "timeoutMs": 60000,
               "rules": [
@@ -195,8 +195,8 @@
           "steps": [
             {
               "do": "until",
-              "label": "the ready composer, its shortcuts key rebound to F6",
-              "screen": "(?:^|\\n) ?›(?:[ \\n]|$)",
+              "label": "the ready composer with its footer, its shortcuts key rebound to F6",
+              "screen": "(?:^|\\n) ?›(?:[ \\n]|$)[\\s\\S]*\\n {1,4}p19-probe [^\\n]*·",
               "not": "esc to interrupt",
               "timeoutMs": 60000,
               "rules": [
@@ -215,8 +215,8 @@
           "steps": [
             {
               "do": "until",
-              "label": "the agents form of the hint row (← for agents), the default composer",
-              "screen": "← for agents",
+              "label": "the agents form of the hint row (← for agents) under the footer, the default composer",
+              "screen": "\\n {1,4}p19-probe [^\\n]*·[\\s\\S]*← for agents",
               "timeoutMs": 60000,
               "rules": [
                 { "label": "folder trust", "screen": "trust the contents|allow Codex to work in this folder|Do you trust", "keys": "\r" },
@@ -234,8 +234,8 @@
           "steps": [
             {
               "do": "until",
-              "label": "a warning count on the hint row (⚠ and a number), an MCP server that cannot start",
-              "screen": "⚠ \\d+",
+              "label": "a warning count on the hint row (⚠ and a number) under the footer, an MCP server that cannot start",
+              "screen": "\\n {1,4}p19-probe [^\\n]*·[\\s\\S]*⚠ \\d+",
               "timeoutMs": 60000,
               "rules": [
                 { "label": "folder trust", "screen": "trust the contents|allow Codex to work in this folder|Do you trust", "keys": "\r" },
@@ -289,8 +289,8 @@
           "steps": [
             {
               "do": "until",
-              "label": "the ready composer",
-              "screen": "(?:^|\\n) ?›(?:[ \\n]|$)",
+              "label": "the ready composer with its footer (the session ready)",
+              "screen": "(?:^|\\n) ?›(?:[ \\n]|$)[\\s\\S]*\\n {1,4}p19-probe [^\\n]*·",
               "not": "esc to interrupt",
               "timeoutMs": 60000,
               "rules": [
