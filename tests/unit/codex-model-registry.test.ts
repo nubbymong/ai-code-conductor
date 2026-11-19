@@ -128,7 +128,8 @@ describe('Codex model catalogue from the registry (row 39)', () => {
 
   // aicc_planning#347 (2.1.3-beta.11): Codex 0.170.0 lists four models before
   // the seven of 0.157.1, with the labels its catalogue gives (rust-v0.170.0;
-  // the real CLI listed the same ids in this order in CI run 44530368458).
+  // the real CLI listed the same ids in this order on Windows, macOS and
+  // Linux in CI run 44547276658).
   it('names the four models 0.170.0 adds, first, with the labels Codex gives them', () => {
     const cat = catalogueJson as unknown as { cliVersions: string[]; models: Array<{ id: string; label: string; cliVersions?: string[] }> }
     expect(cat.cliVersions).toContain('0.170.0')

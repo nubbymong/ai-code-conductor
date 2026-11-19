@@ -8173,6 +8173,18 @@
       "note": "created for the 2.1.1-beta.3 Codex deploy steps; both deploys faked, nothing written"
     },
     {
+      "path": "tests/unit/providers/codex/discovery-node-launcher.test.ts",
+      "predicates": [
+        "P01",
+        "P04",
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "new 2.1.3-beta.11 aicc_planning#347 test: discovery, with the real runner, reads the version of an npm-installed Codex whose bin/codex.js launcher replaces itself with its program through process.execve (the shape of Codex 0.170.0), through the home guard; a replacement the guard refuses reads as no version, as CI run 44530368458 did (WP1.17, WP1.49, WP1.33); tests/unit/providers/codex/discovery-node-launcher.test.ts",
+      "note": ""
+    },
+    {
       "path": "tests/unit/providers/codex/failure-text-hides-credentials.test.ts",
       "predicates": [
         "P01",

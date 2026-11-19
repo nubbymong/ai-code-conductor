@@ -146,10 +146,10 @@ describe('readUsage: who may be read (ADR-022 bounds 2, 5)', () => {
 
   // The last pair is a version above the tested range that discovery calls
   // supported: the version itself is checked again, so it is still refused.
-  // 0.157.2 is the next patch above CODEX_MAX_TESTED_VERSION (0.157.1 since
-  // 2.1.3-beta.11, aicc_planning#185).
+  // 0.170.1 is the next patch above CODEX_MAX_TESTED_VERSION (0.170.0 since
+  // 2.1.3-beta.11, aicc_planning#185 and #347).
   it('never for a version outside the supported range, or an unproven CLI', async () => {
-    for (const [version, compatibility] of [['0.157.2', 'too-new'], ['0.150.0', 'too-old'], ['0.155.1', 'unknown'], ['0.157.2', 'supported']]) {
+    for (const [version, compatibility] of [['0.170.1', 'too-new'], ['0.150.0', 'too-old'], ['0.155.1', 'unknown'], ['0.170.1', 'supported']]) {
       const t = setup({ version, compatibility })
       expect(await t.ops.readUsage({ authRealmId: MANAGED }), `${version} ${compatibility}`).toEqual({ ok: false, kind: 'refused', reason: 'version' })
       expect(t.runs).toHaveLength(0)
@@ -235,7 +235,7 @@ describe('readUsage: the helper is always shut down (ADR-022 bound 4)', () => {
 describe('readUsage: the proven executable, captured once (C-F1)', () => {
   it('discovery naming a newer version while the read was prepared starts nothing', async () => {
     let now = proven('0.155.1')
-    const t = setup({ proven: () => now, beforeEnv: () => { now = proven('0.157.2', 'too-new') } })
+    const t = setup({ proven: () => now, beforeEnv: () => { now = proven('0.170.1', 'too-new') } })
     expect(await t.ops.readUsage({ authRealmId: MANAGED })).toEqual({ ok: false, kind: 'refused', reason: 'version' })
     expect(t.runs).toHaveLength(0)
   })
