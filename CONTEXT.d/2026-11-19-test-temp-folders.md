@@ -18,6 +18,17 @@ Plan 2.1.3-beta.10, section C1 (aicc_planning #332; #232 as a rider).
   Ubuntu listed `tmux-1001`, which is ours: ssh-liveness-r8 runs the production tmux probe, which
   tries /usr/bin/tmux, and tmux keeps its socket folder in TMUX_TMPDIR, else /tmp, never TMPDIR.
   tests/helpers/test-tmp.ts now points TMUX_TMPDIR at the worker's root too.
+  On run 44472972894 the counts did not add up on the Ubuntu and macOS full suites (17 names
+  at the start and 19 now with 0 new; 118 and 141 with 21 new): besides vitest's folder, one
+  of the run's own names was still there after the cleanup, which the line left out. The line
+  now names each of the run's own entries still there, with what the cleanup did to it and a
+  few paths inside it, and a second line does the same when the main process exits, after
+  vitest has stopped its last workers. Run 44476965093 named one worker root on each, whose
+  removal failed with EACCES, holding `ccc-script-deploy-*/deployed.js/index.js`. The
+  afterEach of tests/unit/main/script-deploy-mode.test.ts gave the destination mode 0666 to
+  keep a read-only copy removable; in the four cases that leave a folder there, that took the
+  folder's search bit. It now does so only when the destination is not a folder. Windows
+  ignores that mode on a folder, so its parts never showed it.
 - **The per-test check.** tests/helpers/home-isolation.ts puts TEMP, TMP and TMPDIR back on the
   worker's temp folder before each test, as it does the home variables (a value inside that
   folder is kept), and fails a test that leaves one unset or pointing outside it, naming the
