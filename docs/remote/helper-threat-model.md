@@ -482,8 +482,8 @@ rollback returns to the earlier beta's rows, and every row has a negative test.
   Windows).** The app writes the pid and creation time `start` printed to
   `vision-started.json` in its user data folder (a dev or test run's own data
   folder instead, so a dev run never ends an installed app's browser), and at
-  its next start ends
-  that pid through `aicc-helper end` only while it has that creation time. The
+  its next start, and before each launch of the vision browser, ends that pid
+  through `aicc-helper end` only while it has that creation time. The
   record is read strictly (a plain file of at most 256 bytes holding exactly a
   pid and a creation time of digits); one that does not read is removed and
   ends nothing. A process of the same user that writes it can make the next

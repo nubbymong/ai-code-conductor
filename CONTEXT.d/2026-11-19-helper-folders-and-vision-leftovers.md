@@ -24,7 +24,8 @@ Plan 2.1.3-beta.9, section C2 (#322, #329; #326 not built).
   start-up (index.ts, beside the legacy-marker clean-up) and before each launch's scan by profile,
   the recorded browser is ended through the helper's end mode alone, by that pid and creation
   time: never by pid alone, no PowerShell, no WMI. A record that is not a plain file of at most
-  256 bytes holding exactly a pid and a creation time of digits is removed and ends nothing. The
+  256 bytes holding exactly a pid and a creation time of digits ends nothing and is removed (the
+  log says so when it cannot be, a folder in its place for one). The
   start-up end and a launch's share one run.
 - **#329, the cause (C1, measured on the VM as a user without WMI access).** The helper's end mode
   works for that user (ended, in 14 to 17 ms, 6 of 6 rounds). The quit failed only when the
@@ -42,8 +43,9 @@ Plan 2.1.3-beta.9, section C2 (#322, #329; #326 not built).
 - **Tests.** session-helper-install (keep by version, the checked copy), session-helper-manager
   (start-up keeps the other build's folder a listed holder's version names), vision-browser-owner
   (reasons, the end through the helper alone, the runners' standard error), and
-  vision-manager-start-mode (the record written, removed and kept; the start-up end; pid reuse; a
-  record that does not read; the copy used when the helper beside the app is gone; nothing run
+  vision-manager-start-mode (the record written, removed and kept, by the 2 s look too; an end
+  that leaves a later browser's record; the start-up end; pid reuse; a record that does not read,
+  or a folder in its place; the copy used when the helper beside the app is gone; nothing run
   with neither). The spawn-site inventory's two reasons for the ownership checks name the copy.
 - **Owed.** VM checks at the release smoke (#329 as the user without WMI access; #322 through the
   update from beta.8 with a held plain terminal). An ADR-009 pass before stable for the record a

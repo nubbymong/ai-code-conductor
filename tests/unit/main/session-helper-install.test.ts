@@ -112,6 +112,7 @@ describe('removeOldVersionFolders', () => {
   // keeps a held terminal can leave it running from another build of the
   // version the new app runs (the helper version is not bumped with every
   // change), so every folder of a version a holder reports is kept.
+  // A guard: removeOldVersionFolders already kept a version it was given, so this passes on beta; the red test is in session-helper-manager.test.ts.
   it('keeps every folder of a version a holder reports, the current version\'s other builds included; with none of that version they go; staging folders always go', async () => {
     root = mkdtempSync(join(tmpdir(), 'aicc-helper-folders-'))
     const current = join(root, `0.1.0-${'f'.repeat(12)}`)

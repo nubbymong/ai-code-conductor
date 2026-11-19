@@ -639,9 +639,10 @@ export { getBrowserPaths }
 //   child, so once it exits its pid can name another process: it is tracked
 //   by the pid and creation time the helper reported, and ended only while
 //   that pid still has that creation time, never by its pid alone: through
-//   the helper's end mode (endHelperPath), or at a stop or a relaunch the
-//   awaited PowerShell end when no helper can be used (vision-browser-owner
-//   endStartedBrowser / endStartedBrowserSync). It stays tracked until an end
+//   the helper's end mode (endHelperPath; vision-browser-owner
+//   endStartedBrowserSync at quit, endStartedBrowser at a stop or a
+//   relaunch), or, at a stop or a relaunch only, the awaited PowerShell end
+//   when no helper can be used. It stays tracked until an end
 //   has a definite answer ('ended', or 'left': nothing of it runs). Its pid
 //   and creation time are also kept in a record in the user data folder
 //   until then (recordStartedBrowser), so a browser this run could not end
@@ -1057,8 +1058,10 @@ function readStartedRecord(file: string): StartedRecord | 'bad' | null {
   try { return parseHelperStart(fs.readFileSync(file, 'utf8')) ?? 'bad' } catch { return 'bad' }
 }
 
-function removeStartedRecord(file: string): void {
-  try { fs.unlinkSync(file) } catch { /* gone already, or tried again at the next start */ }
+/** Remove the record: true when it is gone now, false when it could not be
+ *  removed (a folder in its place, say; tried again at the next start). */
+function removeStartedRecord(file: string): boolean {
+  try { fs.unlinkSync(file); return true } catch (err) { return (err as NodeJS.ErrnoException | null)?.code === 'ENOENT' }
 }
 
 /** Remove the record once `t` has a definite end, unless it names another
@@ -1103,8 +1106,8 @@ async function endRecordedBrowser(): Promise<void> {
   const rec = readStartedRecord(file)
   if (rec === null) return
   if (rec === 'bad') {
-    removeStartedRecord(file)
-    logInfo('[vision] The record of the vision browser an earlier start left could not be read; it was removed and nothing was ended')
+    const removed = removeStartedRecord(file)
+    logInfo(`[vision] The record of the vision browser an earlier start left could not be read; ${removed ? 'it was removed' : 'it could not be removed'} and nothing was ended`)
     return
   }
   const result = await endThroughHelper(rec, endHelperPath(), ports)

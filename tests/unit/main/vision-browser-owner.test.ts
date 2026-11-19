@@ -586,7 +586,7 @@ describe('ending a browser the session helper started: by its pid and creation t
       }
       for (const bad of BAD_TARGETS) {
         const { ports, calls } = fakePorts('win32', () => 'ended', { pidGone: () => false })
-        expect(await end(bad, HELPER, ports), `${name} ${JSON.stringify(bad)}`).toEqual({ answer: 'unknown', reason: 'the record is not a pid and a creation time of digits' })
+        expect(await end(bad, HELPER, ports), `${name} ${JSON.stringify(bad)}`).toEqual({ answer: 'unknown', reason: 'it is not named by a pid and a creation time of digits' })
         expect(calls, `${name} ${JSON.stringify(bad)}`).toHaveLength(0)
       }
     }

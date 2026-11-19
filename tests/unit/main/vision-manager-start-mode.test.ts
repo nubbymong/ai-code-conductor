@@ -576,6 +576,25 @@ describe('Windows: the record of the browser the helper started', () => {
     expect(sys.procs.has(7004)).toBe(true)
   })
 
+  it('a record that is a folder ends nothing, and the log says it could not be removed', async () => {
+    sys.procs.set(7008, '134078000000000500')
+    realFs.mkdirSync(recordFile())
+    await endRecordedVisionBrowser()
+    expect(sys.runs).toEqual([])
+    expect(sys.procs.has(7008)).toBe(true)
+    expect(logged(/could not be read/).map(([m]) => m)).toEqual([
+      '[vision] The record of the vision browser an earlier start left could not be read; it could not be removed and nothing was ended',
+    ])
+  })
+
+  it('an end of one browser leaves a record that names a later one', async () => {
+    const first = await launchBrowser('chrome', 9222, undefined, true)
+    writeRecord(recordOf(7009, '134078000000000500')) // a later start's record
+    killSpawnedBrowser() // ends the first: ended
+    expect(sys.procs.has(first.pid)).toBe(false)
+    expect(recordText()).toBe(recordOf(7009, '134078000000000500'))
+  })
+
   it('a launch ends a recorded browser before its scan by profile and its start', async () => {
     sys.procs.set(7005, '134078000000000500')
     writeRecord(recordOf(7005, '134078000000000500'))
@@ -662,6 +681,7 @@ describe('Windows: one look, 2 s after a start through the helper', () => {
     expect(logged(/exited within/)).toEqual([])
     vi.advanceTimersByTime(1)
     expect(logged(new RegExp(`The vision browser \\(pid ${pid}\\) exited within 2 s of its start`))).toHaveLength(1)
+    expect(recordText()).toBeNull()
     // Another process takes the pid. A browser still tracked would now cost the
     // quit a check of it; one no longer tracked costs nothing.
     sys.procs.set(pid, '134078999999999990')
@@ -674,6 +694,7 @@ describe('Windows: one look, 2 s after a start through the helper', () => {
     const { pid } = await launchBrowser('chrome', 9222, undefined, true)
     const created = sys.procs.get(pid) as string
     vi.advanceTimersByTime(2000)
+    expect(recordText()).toBe(recordOf(pid, created))
     expect(logged(/exited within/)).toEqual([])
     killSpawnedBrowser()
     expect(sys.runs).toHaveLength(1)

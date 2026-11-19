@@ -671,7 +671,7 @@ const helperEndArgs = (t: VerifiedTarget): string[] => ['end', '--pid', String(t
  *  target that is not a pid and a creation time of digits. Else null. */
 function notEndable(target: VerifiedTarget, ports: OwnerPorts): EndResult | null {
   if (ports.platform !== 'win32') return unknownBecause('the end is for Windows only')
-  if (!targetOk(target, ports.platform)) return unknownBecause('the record is not a pid and a creation time of digits')
+  if (!targetOk(target, ports.platform)) return unknownBecause('it is not named by a pid and a creation time of digits')
   return null
 }
 
