@@ -2870,6 +2870,158 @@ describe('agent sessions: the CLI\'s tool server through the holder (2.1.3-beta.
   })
 })
 
+// ── 2.1.3-beta.12, plan section B2: the tools through a dropped link ────────
+
+describe('agent sessions: a held session keeps its tools when its link to its holder drops and comes back (2.1.3-beta.12, plan section B2)', () => {
+  // The fake holder keeps a stream whose relay acked `away` when the attached
+  // connection lets go, and gives it back to the connection that attaches
+  // again, as plan section B1's holder does (session-helper-fake-holder.ts).
+  // Not checked here: the relay's hold, its bounds and its fixed answer (B1's
+  // Rust tests); a stream given back to a new run of the app (an agent session
+  // is not shown again after a restart).
+  /** Each link the stand-in tool host was handed, with the id it came under. */
+  const served: Array<{ id: string; link: HelperToolLink }> = []
+  /** What reached the tool host from the CLI: the id and the link it came under. */
+  const received: Array<{ id: string; link: HelperToolLink; message: unknown }> = []
+  /** Each stream the tool host heard end, by session id. */
+  const ended: string[] = []
+  const logs: string[] = []
+  /** Claude Code tabs whose MCP config the stand-in switches to the relay. */
+  const switching = new Set<string>()
+  /** Tabs the tool host has no record of now: released, as when the tab closed. */
+  const released = new Set<string>()
+
+  /** As conductor-mcp-server.ts serveToolStream answers: with no record, the
+   *  stream is refused and its link closed. */
+  const host: Pick<HelperToolDeps, 'serve' | 'serving'> = {
+    serve: (id, link) => {
+      served.push({ id, link })
+      if (released.has(id)) {
+        link.close()
+        return false
+      }
+      link.take((message) => { received.push({ id, link, message }) }, () => { ended.push(id) })
+      return true
+    },
+    serving: () => true,
+  }
+  const claudeTools: HelperToolDeps = { ...host, useRelayConfig: (id) => (switching.has(id) ? 'switched' : 'no-conductor') }
+  const codexTools: HelperToolDeps = { ...host, relayLaunch: (_id, launch) => ({ args: typeof launch.args === 'string' ? launch.args : [...launch.args] }) }
+  async function toolsManager(): Promise<SessionHelperManager> {
+    const m = await startedWith(makeManager({ log: (l) => logs.push(l), tools: { claude: claudeTools, codex: codexTools } }), ON_AGENTS)
+    setSessionHelper(m)
+    return m
+  }
+  async function attachedTab(tab: { sessionId: string; kind: 'claude' | 'codex' }): Promise<FakeHolder> {
+    spawnAgentPty(tab, SHELL, [], agentOpts())
+    const sid = heldAgentSessionId(tab.sessionId, tab.kind)
+    await until(() => !!helper.holders.get(sid)?.attached, 'the session to attach')
+    return helper.holders.get(sid)!
+  }
+  const call = (id: number) => ({ jsonrpc: '2.0', id, method: 'tools/call', params: { name: 'vision_status', arguments: {} } })
+  const answer = (id: number) => ({ jsonrpc: '2.0', id, result: { content: [{ type: 'text', text: `answer ${id}` }] } })
+  const toolError = (id: number, message: string) => ({ jsonrpc: '2.0', id, error: { code: -32603, message } })
+  const givenBackLine = (id: string) => `[session-helper] ${id}: a tool stream is served on the connection that attached again (one its holder kept while the link was down, or a new one)`
+  const notSwitchedLine = (id: string) => `[session-helper] ${id}: a tool stream its holder opened was not served, because its CLI was not pointed at its holder`
+  const answersOn = (h: FakeHolder, n: number) => h.toolSent.filter((s) => s.stream === n).map((s) => (s.message as { id: number }).id)
+
+  beforeEach(() => {
+    served.length = 0
+    received.length = 0
+    ended.length = 0
+    logs.length = 0
+    switching.clear()
+    released.clear()
+  })
+
+  it("a Claude Code tab and a Codex tab: the link drops with a stream open; the attach again acks mcp, is given the stream back, and it is served under the same tab's id, whatever its first call names; a call its relay held meanwhile is answered once, and one that was with the app when the link dropped is never answered on it", async () => {
+    await toolsManager()
+    const claude = 'abcdef0123456789abcdef60'
+    const codex = 'abcdef0123456789abcdef61'
+    switching.add(claude)
+    for (const tab of [claudeTab(claude), codexTab(codex)]) {
+      const id = tab.sessionId
+      const of = <T extends { id: string }>(list: T[]): T[] => list.filter((s) => s.id === id)
+      const base = served.length
+      const h = await attachedTab(tab)
+      const n = h.openToolStream({ away: true })!
+      await until(() => served.length === base + 1, `the stream of ${id}`)
+      const before = served[base]
+      expect(before.id, id).toBe(id)
+      h.relay(n, call(1))
+      await until(() => of(received).length === 1, 'the first call')
+      before.link.send(answer(1))
+      await until(() => answersOn(h, n).length === 1, 'its answer')
+      // A second call is with the app when the holder closes the connection,
+      // which fell behind its output.
+      h.relay(n, call(2))
+      await until(() => of(received).length === 2, 'the second call')
+      const first = h.attached!
+      h.fallBehind()
+      // While the link is down its relay holds a call, whose arguments name another tab.
+      const held = { jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'open_in_app_browser', arguments: { url: 'https://example.com/', sessionId: 'abcdef0123456789abcdef6f' } } }
+      h.relay(n, held)
+      expect(h.keptStreams.get(n), id).toEqual([held])
+      await until(() => served.length === base + 2, `the stream of ${id} given back`)
+      const after = served[base + 1]
+      expect(h.attached, id).not.toBe(first)
+      expect(h.attached!.ackedCaps, id).toContain('mcp')
+      expect(after.id, id).toBe(id)
+      expect(ended.filter((e) => e === id), id).toEqual([id])
+      expect(h.relayTold, id).toEqual([{ stream: n, t: 'mcp.away' }, { stream: n, t: 'mcp.back' }])
+      // The held call reaches the tool host once, on the link given back.
+      await until(() => of(received).length === 3, 'the held call')
+      expect(of(received).map((r) => [r.link === after.link, r.message]), id).toEqual([[false, call(1)], [false, call(2)], [true, held]])
+      after.link.send(answer(3))
+      // The answer to the call that was with the app when the link dropped
+      // goes nowhere: the link it came on ended with that connection.
+      before.link.send(answer(2))
+      await until(() => answersOn(h, n).length === 2, 'the held call\'s answer')
+      await tick(30)
+      expect(answersOn(h, n), id).toEqual([1, 3])
+      expect(logs.filter((l) => l === givenBackLine(id)), id).toEqual([givenBackLine(id)])
+    }
+  })
+
+  it('a session that was not switched: a stream its holder gives back is not served either', async () => {
+    await toolsManager()
+    const id = 'abcdef0123456789abcdef62'
+    const h = await attachedTab(claudeTab(id))
+    // A relay its CLI was not pointed at, started all the same.
+    const n = h.openToolStream({ away: true })!
+    await until(() => logs.includes(notSwitchedLine(id)), 'the refusal')
+    const first = h.attached!
+    h.fallBehind()
+    h.relay(n, call(5))
+    await until(() => logs.filter((l) => l === notSwitchedLine(id)).length === 2, 'the stream given back to be refused')
+    expect(h.attached).not.toBe(first)
+    // Its held call is answered with an error on the app's side; nothing reaches the tool host.
+    await until(() => h.toolSent.length === 1, 'the error answer')
+    expect(h.toolSent).toEqual([{ stream: n, message: toolError(5, TOOL_STREAM_SENTENCES.ended) }])
+    expect(served).toEqual([])
+    expect(logs).not.toContain(givenBackLine(id))
+  })
+
+  it('a tab closed meanwhile (its record released): the stream given back is refused as a new one is; its held call is answered with an error, and nothing reaches the tool host', async () => {
+    await toolsManager()
+    const id = 'abcdef0123456789abcdef63'
+    switching.add(id)
+    const h = await attachedTab(claudeTab(id))
+    const n = h.openToolStream({ away: true })!
+    await until(() => served.length === 1, 'the stream')
+    released.add(id)
+    h.fallBehind()
+    h.relay(n, call(4))
+    await until(() => served.length === 2, 'the stream given back')
+    expect(served[1].id).toBe(id)
+    await until(() => h.toolSent.length === 1, 'the error answer')
+    expect(h.toolSent).toEqual([{ stream: n, message: toolError(4, TOOL_STREAM_SENTENCES.ended) }])
+    expect(received).toEqual([])
+    expect(logs).toContain(`[session-helper] ${id}: a tool stream its holder opened was not served`)
+    expect(logs).not.toContain(givenBackLine(id))
+  })
+})
+
 // ── 2.1.3-beta.9, plan section B1: Insights' report terminal ─────────────────
 
 describe('a run of the app\'s own: Insights\' Claude Code report through the helper (2.1.3-beta.9, plan section B1)', () => {
