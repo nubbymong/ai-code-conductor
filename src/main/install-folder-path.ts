@@ -11,10 +11,16 @@
 // installer adds its own folder to the user PATH on Windows (the refresh in
 // windows-path-refresh.ts then finds it), but on Linux it writes the PATH line
 // to a shell file a login shell does not read, so ~/.local/bin/codex can be
-// missed there too.
+// missed there too. And `npm install -g @openai/codex` on Windows puts
+// codex.cmd in npm's own default folder, %APPDATA%\npm, which the Node.js
+// installer adds to the PATH of the account that ran it only: on another
+// account the check finds nothing either (aicc_planning#288).
 //
 // So when a check finds nothing, main looks in the publisher's fixed folder,
-// computed here from the user's home folder and nothing else:
+// computed here from the user's home folder and nothing else; npm's folder
+// from %APPDATA% in this process's environment and nothing else, as npm
+// builds its own default (no program is started to ask npm, and a custom npm
+// prefix is not guessed):
 //   - Windows, the file there (a regular file: never a link, by lstat) and its
 //     folder on neither the system nor the user PATH in the registry: the
 //     surface says so and offers "Add it to PATH for me" (`add-to-path`).
@@ -49,11 +55,11 @@
 // what happened.
 //
 // What crosses to the renderer is display text only: the folder as
-// `%USERPROFILE%\.local\bin` or `~/.local/bin`, the shell file with the home
-// folder as `~`, and the command, one of a fixed set of constants (its target
-// written with $HOME, and zsh's $ZDOTDIR, for the user's own shell to
-// expand). Never the user's real path, never a value from this process's
-// environment.
+// `%USERPROFILE%\.local\bin`, `%APPDATA%\npm` or `~/.local/bin`, the shell
+// file with the home folder as `~`, and the command, one of a fixed set of
+// constants (its target written with $HOME, and zsh's $ZDOTDIR, for the
+// user's own shell to expand). Never the user's real path, never a value
+// from this process's environment.
 import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
@@ -63,7 +69,8 @@ import {
   type RegistryPaths, type UserPathAppendResult,
 } from './windows-registry-path'
 import { mergeWindowsPath, windowsPathKey } from './windows-path-refresh'
-import { findOnWindowsPathAsync, folderFileTest, pathWalkDeadline } from './windows-programs'
+import { findOnWindowsPathAsync, folderFileTest, pathWalkDeadline, windowsEnvValue } from './windows-programs'
+import { windowsPathFolderIsFullyQualified } from './providers/windows-path-names'
 import { CLAUDE_WINDOWS_NAMES } from './claude-cli-probe'
 import { defaultLoginShell } from './login-shell'
 import { logInfo } from './debug-logger'
@@ -76,10 +83,27 @@ interface KnownFolder {
   display: string
 }
 
+/** A Windows install folder. `under` absent: below the user's home folder;
+ *  'APPDATA': below the folder %APPDATA% names in this process's environment.
+ *  `names`, when set: every name the tool is looked for by there (one that is
+ *  a regular file counts); `file` alone otherwise. `file` is the name a
+ *  refusal gives. */
+interface WindowsKnownFolder extends KnownFolder {
+  under?: 'APPDATA'
+  names?: readonly string[]
+}
+
+/** The names Codex is looked for by on Windows: in npm's folder, and in the
+ *  registry's PATH folders (WINDOWS_NAMES). */
+const CODEX_WINDOWS_NAMES: readonly string[] = Object.freeze(['codex.exe', 'codex.cmd'])
+
 /** Windows: Anthropic's native installer (setup page and troubleshooting
- *  page). Codex has none: OpenAI's installer adds its own folder to PATH. */
-const WINDOWS_FOLDERS: Partial<Record<ProviderId, KnownFolder>> = Object.freeze({
+ *  page). For Codex, npm's own default global folder, where
+ *  `npm install -g @openai/codex` puts codex.cmd; OpenAI's own installer
+ *  adds its folder to PATH itself. */
+const WINDOWS_FOLDERS: Partial<Record<ProviderId, WindowsKnownFolder>> = Object.freeze({
   claude: Object.freeze({ steps: ['.local', 'bin'], file: 'claude.exe', display: '%USERPROFILE%\\.local\\bin' }),
+  codex: Object.freeze({ under: 'APPDATA', steps: ['npm'], file: 'codex.cmd', names: CODEX_WINDOWS_NAMES, display: '%APPDATA%\\npm' }),
 })
 
 /** macOS and Linux: both installers link the tool into ~/.local/bin. */
@@ -92,7 +116,7 @@ const POSIX_FOLDERS: Partial<Record<ProviderId, KnownFolder>> = Object.freeze({
  *  one list every check and start uses), read when asked. */
 const WINDOWS_NAMES: Partial<Record<ProviderId, () => readonly string[]>> = Object.freeze({
   claude: () => CLAUDE_WINDOWS_NAMES,
-  codex: () => ['codex.exe', 'codex.cmd'],
+  codex: () => CODEX_WINDOWS_NAMES,
 })
 
 /** The line every sh-family shell file gets, and fish's own. */
@@ -184,18 +208,32 @@ export function installFolderDeps(): InstallFolderDeps {
   }
 }
 
-/** The Windows folder for `providerId` below `home`, when it is one the
- *  append may write. */
-function windowsFolder(providerId: ProviderId, home: string): { dir: string; known: KnownFolder } | null {
+/** %APPDATA% as this process's environment holds it (its name in any case),
+ *  when it is a full path (a drive or a share): what npm builds its default
+ *  global folder from. Never expanded, never taken from the home folder. */
+function appDataFolder(env: Record<string, string | undefined>): string | null {
+  const value = windowsEnvValue(env as NodeJS.ProcessEnv, 'APPDATA')
+  return typeof value === 'string' && windowsPathFolderIsFullyQualified(value) ? value : null
+}
+
+/** The Windows folder for `providerId`, below the home folder or %APPDATA%,
+ *  when it is one the append may write. */
+function windowsFolder(providerId: ProviderId, deps: Pick<InstallFolderDeps, 'home' | 'env'>): { dir: string; known: WindowsKnownFolder } | null {
   const known = WINDOWS_FOLDERS[providerId]
-  if (!known || typeof home !== 'string' || home === '') return null
-  const dir = path.win32.join(home, ...known.steps)
+  if (!known) return null
+  const base = known.under === 'APPDATA' ? appDataFolder(deps.env) : deps.home
+  if (typeof base !== 'string' || base === '') return null
+  const dir = path.win32.join(base, ...known.steps)
   return appendableFolder(dir) ? { dir, known } : null
 }
 
 /** The publisher's file is there, a regular file in a real folder. */
-async function installedThere(deps: InstallFolderDeps, dir: string, known: KnownFolder): Promise<boolean> {
-  return (await deps.entryKind(dir)) === 'dir' && (await deps.entryKind(path.win32.join(dir, known.file))) === 'file'
+async function installedThere(deps: InstallFolderDeps, dir: string, known: WindowsKnownFolder): Promise<boolean> {
+  if ((await deps.entryKind(dir)) !== 'dir') return false
+  for (const name of known.names ?? [known.file]) {
+    if ((await deps.entryKind(path.win32.join(dir, name))) === 'file') return true
+  }
+  return false
 }
 
 async function registryOrNull(deps: InstallFolderDeps): Promise<RegistryPaths | null> {
@@ -261,7 +299,7 @@ export function shellProfileFor(
 export async function pathHintFor(providerId: ProviderId, deps: InstallFolderDeps = installFolderDeps()): Promise<PathHintView | undefined> {
   const env = deps.env as NodeJS.ProcessEnv
   if (deps.platform === 'win32') {
-    const at = windowsFolder(providerId, deps.home)
+    const at = windowsFolder(providerId, deps)
     if (at && await installedThere(deps, at.dir, at.known)) {
       const reg = await registryOrNull(deps)
       const key = windowsFolderKey(at.dir)
@@ -293,7 +331,7 @@ export type AddToPathOutcome =
  *  folder does not hold the tool as a regular file. */
 export async function addToolFolderToPath(providerId: ProviderId, deps: InstallFolderDeps = installFolderDeps()): Promise<AddToPathOutcome> {
   if (deps.platform !== 'win32') return { outcome: 'refused', message: 'The app adds a folder to PATH only on Windows.' }
-  const at = windowsFolder(providerId, deps.home)
+  const at = windowsFolder(providerId, deps)
   if (!at) return { outcome: 'refused', message: 'There is no install folder the app adds to PATH for this tool.' }
   if (!(await installedThere(deps, at.dir, at.known))) {
     return { outcome: 'refused', message: `${at.known.file} is not in ${at.known.display}, so the folder was not added.` }

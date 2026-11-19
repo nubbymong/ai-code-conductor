@@ -1,8 +1,10 @@
 // A CLI the check did not find, though its publisher's installer put it in
 // its own folder (the PATH finding of the first-run test, 2026-10-10;
 // ADR-024). Anthropic's native installer leaves claude.exe in
-// %USERPROFILE%\.local\bin off PATH; a restart cannot help, so the app says
-// so and, on Windows, may add exactly that one folder to the user's PATH.
+// %USERPROFILE%\.local\bin off PATH, and npm leaves Codex in its own
+// %APPDATA%\npm off the PATH of an account that did not install Node.js
+// (aicc_planning#288); a restart cannot help, so the app says so and, on
+// Windows, may add exactly that one folder to the user's PATH.
 // PURE: the file system, the registry and the PATH write are stand-ins;
 // nothing is started and the real registry and PATH are never touched.
 import { describe, it, expect, vi } from 'vitest'
@@ -12,6 +14,7 @@ import {
   type InstallFolderDeps, type EntryKind,
 } from '../../../src/main/install-folder-path'
 import type { RegistryPaths, UserPathAppendResult } from '../../../src/main/windows-registry-path'
+import { findOnWindowsPathAsync } from '../../../src/main/windows-programs'
 
 const BS = String.fromCharCode(92)
 const DS = '$'
@@ -139,9 +142,137 @@ describe('what a check that found nothing says (Windows)', () => {
     expect(await pathHintFor('claude', deps({ registry: { machine: null, user: { kind: 'ExpandString', data: w('D:/tools;') + '%NVM_SYMLINK%' } }, files: [w('D:/tools/claude.cmd')] }).d)).toEqual({ kind: 'restart' })
   })
 
-  it("Codex on Windows has no folder of its own to add: OpenAI's installer puts its folder on PATH itself", async () => {
+  it("Codex on Windows is never looked for in Anthropic's folder: OpenAI's installer puts its own folder on PATH itself", async () => {
     const codexExe = w('C:/Users/u/.local/bin/codex.exe')
     expect(await pathHintFor('codex', deps({ entries: { [LOCAL_BIN]: 'dir', [codexExe]: 'file' } }).d)).toBeUndefined()
+  })
+})
+
+// aicc_planning#288 (option A): `npm install -g @openai/codex` on Windows
+// puts codex.cmd in npm's own default folder, %APPDATA%\npm, which the
+// Node.js installer adds to the PATH of the account that ran it only. On
+// another account the check found nothing and the page said the Codex CLI
+// was not found (the VM, 2026-10-13). Main now looks in that one folder,
+// built from %APPDATA% in this process's environment as npm builds its own
+// default, and offers to add it as it does for Claude Code. Nothing is
+// started to ask npm, and a custom npm prefix is not guessed.
+describe("Codex installed with npm on Windows: npm's own folder, %APPDATA%\\npm (aicc_planning#288)", () => {
+  const APPDATA = w('C:/Users/u/AppData/Roaming')
+  const CODEX_CMD = w('C:/Users/u/AppData/Roaming/npm/codex.cmd')
+  const CODEX_EXE = w('C:/Users/u/AppData/Roaming/npm/codex.exe')
+  const SHOWN = '%APPDATA%' + BS + 'npm'
+  const CODEX_NAMES = ['codex.exe', 'codex.cmd']
+  /** npm's folder on neither PATH in the registry. */
+  const OFF_PATH: RegistryPaths = { machine: { kind: 'ExpandString', data: w('%SystemRoot%/system32') }, user: { kind: 'ExpandString', data: w('%USERPROFILE%/.cargo/bin') } }
+  /** An account whose PATH lacks npm's folder, with codex.cmd in it, and
+   *  %APPDATA% as given (not set at all when null). */
+  const npm = (over: Parameters<typeof deps>[0] = {}, appData: string | null = APPDATA) => {
+    const r = deps({ registry: OFF_PATH, entries: { [NPM]: 'dir', [CODEX_CMD]: 'file' }, files: [CODEX_CMD], ...over })
+    r.d.env.Path = w('C:/Windows/system32')
+    if (appData !== null) r.d.env.APPDATA = appData
+    return r
+  }
+
+  it('Codex there, the folder on neither PATH: Add it to PATH for me, the folder shown as %APPDATA%\\npm, never the real path', async () => {
+    const hint = await pathHintFor('codex', npm().d)
+    expect(hint).toEqual({ kind: 'add-to-path', folder: SHOWN })
+    expect(JSON.stringify(hint)).not.toContain('Users')
+    expect(JSON.stringify(hint)).not.toContain('Roaming')
+  })
+
+  it('codex.cmd alone counts, as codex.exe does; a link, a folder of that name or another name does not', async () => {
+    for (const file of [CODEX_CMD, CODEX_EXE]) {
+      expect(await pathHintFor('codex', npm({ entries: { [NPM]: 'dir', [file]: 'file' } }).d), file).toEqual({ kind: 'add-to-path', folder: SHOWN })
+    }
+    const notAnInstall: Array<Record<string, EntryKind>> = [
+      { [NPM]: 'dir', [CODEX_CMD]: 'link' },
+      { [NPM]: 'link', [CODEX_CMD]: 'file' },
+      { [NPM]: 'dir', [CODEX_CMD]: 'dir' },
+      { [NPM]: 'dir', [w('C:/Users/u/AppData/Roaming/npm/codex.ps1')]: 'file', [w('C:/Users/u/AppData/Roaming/npm/codex')]: 'file' },
+    ]
+    for (const entries of notAnInstall) {
+      expect(await pathHintFor('codex', npm({ entries, files: [] }).d), JSON.stringify(entries)).toBeUndefined()
+    }
+  })
+
+  it('the folder absent, or no Codex in it: no hint, so the page reads as before', async () => {
+    expect(await pathHintFor('codex', npm({ entries: {}, files: [] }).d)).toBeUndefined()
+    expect(await pathHintFor('codex', npm({ entries: { [NPM]: 'dir' }, files: [] }).d)).toBeUndefined()
+  })
+
+  it('the folder on PATH: a walk of that PATH finds Codex there (found), and the hint never offers to add it', async () => {
+    // This process's PATH: folder by folder, codex.exe or codex.cmd, as
+    // Codex's own lookup walks it (providers/codex/spawn.ts), so a check
+    // finds Codex and asks for no hint.
+    const on = npm()
+    on.d.env.Path = w('C:/Windows/system32;') + NPM
+    expect(await findOnWindowsPathAsync(CODEX_NAMES, on.d.env as NodeJS.ProcessEnv, on.d.isFile)).toBe(CODEX_CMD)
+    // The registry's PATH (the user Path as the Node.js installer writes it,
+    // or the folder written out), which this process could not take in: a
+    // restart, as for Claude Code.
+    for (const data of [w('%APPDATA%/npm'), NPM + BS]) {
+      expect(await pathHintFor('codex', npm({ registry: { machine: null, user: { kind: 'ExpandString', data } } }).d), data).toEqual({ kind: 'restart' })
+    }
+  })
+
+  it('%APPDATA% unset, empty or not a full path: no folder, so no hint and nothing added', async () => {
+    for (const appData of [null, '', w('AppData/Roaming'), 'C:AppData', w('/Users/u/AppData/Roaming'), BS + BS + 'server']) {
+      const r = npm({}, appData)
+      expect(Object.keys(r.d.env).some((k) => k.toUpperCase() === 'APPDATA'), String(appData)).toBe(appData !== null)
+      expect(await pathHintFor('codex', r.d), String(appData)).toBeUndefined()
+      expect(await addToolFolderToPath('codex', r.d), String(appData)).toEqual({ outcome: 'refused', message: 'There is no install folder the app adds to PATH for this tool.' })
+      expect(r.appendUserPath).not.toHaveBeenCalled()
+    }
+  })
+
+  it('%APPDATA% is read from the environment in any case, never from the home folder; one that would read as more than one entry is no folder', async () => {
+    const lower = npm({}, null)
+    lower.d.env.appdata = APPDATA
+    expect(await pathHintFor('codex', lower.d)).toEqual({ kind: 'add-to-path', folder: SHOWN })
+    // A redirected %APPDATA% (a share), with the home folder elsewhere: the
+    // folder is the one the environment names, still shown as %APPDATA%\npm.
+    const share = BS + BS + w('srv/profiles/u/Roaming')
+    const shareNpm = share + BS + 'npm'
+    const redirected = npm({ home: w('D:/home/u'), entries: { [shareNpm]: 'dir', [shareNpm + BS + 'codex.cmd']: 'file' } }, share)
+    expect(await pathHintFor('codex', redirected.d)).toEqual({ kind: 'add-to-path', folder: SHOWN })
+    expect(await addToolFolderToPath('codex', redirected.d)).toEqual({ outcome: 'added' })
+    expect(redirected.appendUserPath).toHaveBeenCalledWith(shareNpm)
+    for (const appData of [APPDATA + ';' + w('D:/x'), w('C:/Users/%U%/AppData/Roaming'), '"' + APPDATA + '"']) {
+      const r = npm({}, appData)
+      expect(await pathHintFor('codex', r.d), appData).toBeUndefined()
+      expect(await addToolFolderToPath('codex', r.d), appData).toMatchObject({ outcome: 'refused' })
+      expect(r.appendUserPath).not.toHaveBeenCalled()
+    }
+  })
+
+  it('Add it to PATH for me appends exactly %APPDATA%\\npm, then this process\'s PATH holds it, so Check again finds Codex', async () => {
+    const { d, appendUserPath, log } = npm()
+    const before = d.env.Path!
+    expect(await findOnWindowsPathAsync(CODEX_NAMES, d.env as NodeJS.ProcessEnv, d.isFile)).toBeNull()
+    expect(await addToolFolderToPath('codex', d)).toEqual({ outcome: 'added' })
+    expect(appendUserPath).toHaveBeenCalledTimes(1)
+    expect(appendUserPath).toHaveBeenCalledWith(NPM)
+    expect(d.env.Path).toBe(`${before};${NPM}`)
+    expect(log).toHaveBeenCalledTimes(1)
+    expect(log.mock.calls[0][0]).toContain(NPM)
+    expect(await findOnWindowsPathAsync(CODEX_NAMES, d.env as NodeJS.ProcessEnv, d.isFile)).toBe(CODEX_CMD)
+  })
+
+  it('refused, with nothing written, when Codex is not there as a regular file', async () => {
+    for (const entries of [{}, { [NPM]: 'dir' }, { [NPM]: 'dir', [CODEX_CMD]: 'link' }, { [NPM]: 'link', [CODEX_CMD]: 'file' }] as Array<Record<string, EntryKind>>) {
+      const { d, appendUserPath } = npm({ entries })
+      const r = await addToolFolderToPath('codex', d)
+      expect(r, JSON.stringify(entries)).toEqual({ outcome: 'refused', message: 'codex.cmd is not in ' + SHOWN + ', so the folder was not added.' })
+      expect(appendUserPath).not.toHaveBeenCalled()
+    }
+  })
+
+  it("Claude Code is never looked for in npm's folder: its rows are unchanged", async () => {
+    const claudeCmd = w('C:/Users/u/AppData/Roaming/npm/claude.cmd')
+    const { d, appendUserPath } = npm({ entries: { [NPM]: 'dir', [claudeCmd]: 'file' }, files: [] })
+    expect(await pathHintFor('claude', d)).toBeUndefined()
+    expect(await addToolFolderToPath('claude', d)).toMatchObject({ outcome: 'refused' })
+    expect(appendUserPath).not.toHaveBeenCalled()
   })
 })
 
@@ -254,7 +385,7 @@ describe('Add it to PATH for me: only ever the one folder main computes, appende
     expect(d.env.Path!.endsWith(`;${LOCAL_BIN}`)).toBe(true)
   })
 
-  it('refused, with nothing written, when the tool is not there as a regular file, off Windows, or for a provider with no folder', async () => {
+  it('refused, with nothing written, when the tool is not there as a regular file, off Windows, or for a provider with no folder here (Codex with no %APPDATA%)', async () => {
     for (const entries of [{}, { [LOCAL_BIN]: 'dir', [CLAUDE_EXE]: 'link' }, { [LOCAL_BIN]: 'link', [CLAUDE_EXE]: 'file' }] as Array<Record<string, EntryKind>>) {
       const { d, appendUserPath } = deps({ entries })
       expect(await addToolFolderToPath('claude', d)).toMatchObject({ outcome: 'refused' })
