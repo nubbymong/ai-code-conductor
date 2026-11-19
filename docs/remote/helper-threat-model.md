@@ -457,26 +457,26 @@ rollback returns to the earlier beta's rows, and every row has a negative test.
   `a_holder_from_before_tool_streams_is_sent_nothing`. An adversarial pass of
   it is owed to the security round before 2.1 stable (aicc_planning #320).
 - **A held session's Conductor tools through its holder (from 2.1.3-beta.11,
-  behind "Claude Code and Codex sessions through the session helper", off by
-  default).** With the switch on, a held Claude Code session's per-session MCP
-  config file, and a held Codex session's launch, name a program to start as
-  the session's `conductor` tool server: the helper copy, by its path, with
-  `mcp --store <folder> --session <sid>`, in place of the loopback address and
-  credential. Those two paths go only into that session's own file, written
-  owner-only by the writer that wrote the credential it replaces, or into its
-  own launch, and never into a log line. The app serves a stream only for a
-  session it switched, under the tab's id (the holder it came through, as
-  above), so the tool set is the one that session's record gives. A session
-  that cannot be switched keeps the loopback route, with one log line saying
-  why, and the loopback server and its credential stay for it, for SSH
-  sessions, for sessions that are not held, and for the status line. A Codex
+  behind the agent sessions' setting, off by default).** With the setting on,
+  a held Claude Code session's per-session MCP config file, and the launch of
+  a held session whose CLI names its tool servers in its launch flags, name a
+  program to start as the session's `conductor` tool server: the helper copy,
+  by its path, with `mcp --store <folder> --session <sid>`, in place of the
+  loopback address and credential. Those two paths go only into that session's
+  own file, written owner-only by the writer that wrote the credential it
+  replaces, or into its own launch, and never into a log line. The app serves
+  a stream only for a session it switched, under the tab's id (the holder it
+  came through, as above), so the tool set is the one that session's record
+  gives. A session that cannot be switched keeps the loopback route, with one
+  log line saying why, and the loopback server and its credential stay for it,
+  for SSH sessions, for sessions that are not held, and for the status line. A
   launch through cmd.exe takes the relay only when cmd.exe's quoting rule
   carries its arguments unchanged; the rule is not widened, so a path with a
   space (the installed app's folder) keeps such a launch on the loopback
   route. An adversarial pass is owed to the same security round: the path
-  written into the file, an argument that changes what Codex starts, a
-  session switched while its holder is another session's, and a fall-back
-  that leaves a session with no tools and no word.
+  written into the file, an argument that changes what that CLI starts, a
+  session switched while its holder is another session's, and a fall-back that
+  leaves a session with no tools and no word.
 - **A program the helper starts for the app keeps none of the app's handles
   (from 2.1.3-beta.8, Windows).** `aicc-helper start` (protocol 15, "Starting
   a program") starts the program the app names, by the drive-absolute path it

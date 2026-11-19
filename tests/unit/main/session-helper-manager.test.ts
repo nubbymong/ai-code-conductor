@@ -2526,7 +2526,7 @@ describe('agent sessions: tool calls through the holder (2.1.3-beta.11, plan sec
 describe('agent sessions: the CLI\'s tool server through the holder (2.1.3-beta.11, plan section B2)', () => {
   const PORT = 19334
   const SECRET = '6f1c3d2a-1b2c-4d3e-8f90-a1b2c3d4e5f6'
-  const CODEX_EXE = 'C:\\Users\\someone\\.codex-bin\\codex.exe'
+  const CODEX_EXE = 'C:\\Users\\someone\\bin\\codex.exe'
   /** A Codex launch as the builder makes it (spawn.ts), for the tab `id`. */
   const codexArgs = (id: string) => ['-m', 'gpt-5.5', '--sandbox', 'workspace-write', '-c', `mcp_servers.conductor.url=http://localhost:${PORT}/mcp?cccSessionId=${id}`, '-c', 'mcp_servers.conductor.enabled=true', '-c', 'mcp_servers.conductor.bearer_token_env_var=CONDUCTOR_MCP_TOKEN', '-c', 'mcp_servers.conductor.tool_timeout_sec=1000.0']
   const RELAY_ARGS = ['-m', 'gpt-5.5', '--sandbox', 'workspace-write', '-c', 'mcp_servers.conductor.command=the-relay', '-c', 'mcp_servers.conductor.args=[the-relay-args]', '-c', 'mcp_servers.conductor.tool_timeout_sec=1000.0']

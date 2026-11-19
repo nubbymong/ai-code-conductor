@@ -47,9 +47,9 @@ export interface HelperPtyDriver {
   launched?(conn: HolderConnection): void
   /** What the launch on `conn` starts, its hello read, when it is not the
    *  spec's own: the same program with other arguments (2.1.3-beta.11, plan
-   *  section B2: a Codex session whose tool server goes through its holder).
-   *  Undefined: the spec's. Only for this launch: the usual way keeps the
-   *  spawn's own arguments. */
+   *  section B2: an agent session whose launch names its tool server, which
+   *  then goes through its holder). Undefined: the spec's. Only for this
+   *  launch: the usual way keeps the spawn's own arguments. */
   launchArgs?(conn: HolderConnection): Pick<LaunchSpec, 'argv' | 'line'> | undefined
   log(message: string): void
   /** The clock for the attach-again budget. */
