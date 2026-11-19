@@ -1,6 +1,7 @@
 // src/main/channel-bus.ts
 import type { ChannelPayload, ChannelEnvelopeMeta } from '../shared/channel-types'
-import { isSessionWritable, pastePty } from './pty-manager'
+import { isSessionWritable } from './pty-manager'
+import { pasteEnvelope } from './session-input'
 import { formatTier1, summarise } from './channel-envelope'
 import { appendLedger } from './channel-ledger'
 import { pickTransport, formatTier2, sendTier2 } from './channel-capability'
@@ -19,7 +20,7 @@ export async function send(req: SendRequest): Promise<SendResult> {
   const target = req.targetLabel ?? targetSessionId
 
   // Defense-in-depth: reject the reserved file-diff kind -- no v1.5.10 send-point
-  // produces it and it must never reach formatTier1/pastePty.
+  // produces it and it must never reach formatTier1/pasteEnvelope.
   if (payload.kind === 'file-diff') {
     const ledgerId = appendLedger({ source: meta.source, target, transport: null, kind: 'failed', summary: 'file-diff payload rejected (not supported in v1.5.10)' })
     return { ok: false, reason: 'file-diff payloads are not supported in v1.5.10', ledgerId }
@@ -59,7 +60,7 @@ export async function send(req: SendRequest): Promise<SendResult> {
 
   // Tier 1 PTY paste
   const envelope = formatTier1(effectivePayload, meta, attachmentPath)
-  const dropped = pastePty(targetSessionId, envelope)
+  const dropped = pasteEnvelope(targetSessionId, envelope)
   if (dropped > 0) {
     const ledgerId = appendLedger({ source: meta.source, target, transport: 'pty', kind: 'bus-overflow', summary: `queue full, dropped ${dropped}: ${summary}` })
     return { ok: false, reason: `Session has too many sends queued; dropped ${dropped}.`, ledgerId }

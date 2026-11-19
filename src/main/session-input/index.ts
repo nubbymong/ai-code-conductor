@@ -8,8 +8,17 @@
 // request. tests/unit/main/session-input-ownership.test.ts holds every other
 // place in main that types into a session to a shrinking allow-list.
 //
+// Since section A2 it also pastes a channel message (pasteEnvelope) and types
+// the quit keys into a CLI the app started (sendExitKeys, for the PTY
+// manager's gracefulExitPty only, which decides which sessions get them).
+//
 // Each function's body moved here from the PTY manager as it was: nothing
-// typed, its order or its timing changed, and no queue, delay or check added.
+// typed, its order or its timing changed, and no queue, delay or check added,
+// but for what A2 changed in sendExitKeys, described at that function: it
+// writes each quit key only while the terminal it was handed is still the
+// session's, and a key whose write fails is dropped rather than thrown. (Like
+// every door that types through a port, pasteEnvelope also throws before the
+// ports are registered.)
 // The rules of WHEN to type stay where they were (the Watchdog's Codex rule in
 // watchdog-manager.ts, the Claude Code marker's in canvas/claude-marker-typing.ts,
 // the Codex composer's in the Codex package); they type only through what this
@@ -22,6 +31,10 @@
 // 256-byte chunking and its launch-pending buffer), or through the Codex
 // package's run screen, reached through the provider registry as the PTY
 // manager reaches it (WP1 rule R4: no deep import into a provider package).
+// The two A2 doors are the exceptions, as they were in the PTY manager: a
+// channel envelope and the quit keys are written to the session's terminal
+// process itself, never through writePty's duplicate guard, and each only
+// while that process is still the session's (for the quit keys, new in A2).
 import type { BrowserWindow } from 'electron'
 import type { IPty } from 'node-pty'
 import { getProvider } from '../providers'
@@ -33,10 +46,12 @@ import type { SubmitTextResult, AskConductorNotice } from '../../shared/types'
 import { MARKER_FALLBACK_FLUSH_MS } from '../canvas/canvas-marker-queue'
 import { queueClaudeMarkerLine } from '../canvas/claude-marker-typing'
 import { logInfo } from '../debug-logger'
+import { PasteQueue } from '../paste-queue'
+import { runChunkedWrite } from '../pty-chunked-write'
 
 /** What the PTY manager lends this module, registered when it loads. */
 export interface SessionInputPorts {
-  /** writePty, unchanged: every byte this module types into a terminal. */
+  /** writePty, unchanged: every byte this module types into a terminal, but a channel envelope's and the quit keys, which go to the run itself (pasteEnvelope, sendExitKeys). */
   write: (sessionId: string, data: string) => void
   /** The session's current terminal process (its ptyProcess), or none. A
    *  restart is a new one. */
@@ -194,4 +209,75 @@ export async function askQuestion(win: BrowserWindow, sessionId: string, questio
 export function handOffAskQuestion(win: BrowserWindow, sessionId: string, question: string): Promise<SubmitTextResult> {
   if (!port().isCodexSession(sessionId) || !port().isCodexAskSession(sessionId)) return Promise.resolve({ delivered: false, reason: 'session-gone' })
   return askQuestion(win, sessionId, question)
+}
+
+// Per-session FIFO paste queues for channel envelopes (P3.1).
+const pasteQueues = new Map<string, PasteQueue>()
+
+// Guard-free chunked write (channel envelopes carry a unique ts: and must not
+// be deduped). Mirrors the PTY manager's writeChunked: its 256-byte/12ms cadence.
+function writeEnvelopeChunked(sessionId: string, data: string): Promise<void> {
+  return new Promise<void>((resolve) => {
+    // Capture THIS pty up front and route through the R-010-tested
+    // runChunkedWrite with an identity-guarded isAlive, so a respawn (new PTY
+    // under the same sessionId) can't receive the tail of a half-written
+    // envelope (P1.5 — mirrors writeChunked). onDone resolves the queue's writer.
+    const proc = port().run(sessionId)
+    if (!proc) return resolve()
+    runChunkedWrite(data, {
+      write: (slice) => proc.write(slice),
+      isAlive: () => port().run(sessionId) === proc,
+      onDone: resolve,
+    })
+  })
+}
+
+/**
+ * A channel message into a session, as a Tier 1 paste (channel-bus.ts): a
+ * fully-wrapped envelope, queued behind the session's earlier ones. Returns
+ * how many waiting envelopes the queue dropped to take it (more than 16
+ * waiting drops the oldest; 0 normally). Moved from the PTY manager's
+ * pastePty as it was. Before the PTY manager registers its ports it throws,
+ * as every door does, rather than queue what could never be typed.
+ */
+export function pasteEnvelope(sessionId: string, envelope: string): number {
+  port()
+  let q = pasteQueues.get(sessionId)
+  if (!q) { q = new PasteQueue((d) => writeEnvelopeChunked(sessionId, d), 16); pasteQueues.set(sessionId, q) }
+  return q.enqueue(envelope)
+}
+
+/** The session's paste queue stopped and dropped, with the PTY manager's other
+ *  per-session state when its terminal goes (cleanupSessionResources): what
+ *  waits is dropped, and an envelope in flight stops at its next slice, its
+ *  terminal no longer the session's. */
+export function cancelPastes(sessionId: string): void {
+  pasteQueues.get(sessionId)?.cancel() // stop draining + drop pending before dropping the ref (P1.5)
+  pasteQueues.delete(sessionId)
+}
+
+/**
+ * The quit keys into a CLI the app started, for the PTY manager's
+ * gracefulExitPty only, which decides which sessions get them (a
+ * tmux-persistent remote is detached and a terminal whose CLI the app did not
+ * start is closed, both without them). Escape (cancel any pending input) at
+ * once, Ctrl-C (interrupt anything) at 100 ms, then /exit and Enter at 300 ms,
+ * written to `proc` itself, as the PTY manager wrote them. Each only while
+ * `proc` is still the session's terminal process: one that ended, or was
+ * replaced by a new run, gets none of the rest. (The PTY manager asked only
+ * whether the session still had a terminal, so a replaced one got the rest.)
+ * A key whose write fails (a process that has died, its exit not yet told) is
+ * dropped, as the envelope writer's slices are (R-010): it never throws out
+ * of a timer or out of gracefulExitPty, whose exit listener or timeout then
+ * ends the quit. The next key is still tried, at its time.
+ */
+export function sendExitKeys(sessionId: string, proc: IPty): void {
+  const live = (): boolean => port().run(sessionId) === proc
+  const key = (data: string): void => {
+    if (!live()) return
+    try { proc.write(data) } catch { /* already gone */ }
+  }
+  key('\x1b') // Escape
+  setTimeout(() => key('\x03'), 100) // Ctrl+C to interrupt anything
+  setTimeout(() => key('/exit\r'), 300)
 }

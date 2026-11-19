@@ -1017,7 +1017,7 @@ describe('agent sessions: the setting on', () => {
     const sid = heldAgentSessionId('abcdef0123456789abcdef6a', 'claude')
     await until(() => !!helper.holders.get(sid)?.attached, 'attached')
     const h = helper.holders.get(sid)!
-    // gracefulExitPty's keys (pty-manager.ts), through the helper's terminal.
+    // gracefulExitPty's keys (sendExitKeys, session-input), through the helper's terminal.
     p.write('\x1b')
     p.write('\x03')
     p.write('/exit\r')

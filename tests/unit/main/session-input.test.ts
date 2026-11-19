@@ -22,19 +22,38 @@
 //    never as the raw question and Enter; the characters Codex's prompt drops
 //    are removed first and the dock told; the log names a question by its
 //    length only.
+//  - pasteEnvelope (a channel message, section A2): each session's envelopes go
+//    out whole and in order, each through the 256-byte, 12 ms chunked writer
+//    with no duplicate guard; with one in flight and 16 waiting the next drops
+//    the oldest waiting and counts it; a terminal replaced mid-envelope gets
+//    none of the rest, nor does the new one; with no terminal nothing is kept.
+//  - sendExitKeys (the quit keys, section A2), directly and through
+//    gracefulExitPty: Escape at once, Ctrl-C at 100 ms, /exit and Enter at
+//    300 ms, also through the session helper's terminal; nothing more once the
+//    terminal ended or was replaced, and nothing into a terminal that is not
+//    the session's. A key whose write fails (a process that died before its
+//    exit was told) is dropped, never thrown out of its timer or the quit; the
+//    next key is still tried at its time, and the quit ends at its timeout.
+//    The pasteEnvelope tests and the other gracefulExitPty ones were run first
+//    on beta, against pastePty and gracefulExitPty, and all held but one:
+//    there a terminal replaced during the quit still got Ctrl-C and /exit
+//    (beta asked only whether the session had a terminal). The two failed-write
+//    tests came in review and were red on the code before that fix.
 //  - the ports: the PTY manager registers them once, when it loads; a second
 //    registration throws and changes nothing, and before any registration
 //    each door that types through a port throws instead of dropping the input.
 //
 // Mutants this must catch: a marker typed into a run started after its own;
 // an Ask question written raw with Enter; a second registration taking over
-// the doors; a door that types nothing, silently, before the registration.
+// the doors; a door that types nothing, silently, before the registration;
+// an envelope deduped; the paste queue's bound changed; an envelope's tail
+// written after its terminal was replaced; a quit key's failed write thrown.
 import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from 'vitest'
 import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
 
-type PtyRecord = { writes: string[] }
+type PtyRecord = { writes: string[]; proc?: unknown }
 type Queued = { sessionId: string; line: string; runLive: () => boolean; canvasId?: string }
 const h = vi.hoisted(() => {
   /** A stand-in for the session helper's terminal (session-helper/helper-pty.ts):
@@ -76,13 +95,14 @@ vi.mock('node-pty', () => ({
   spawn: () => {
     const rec: PtyRecord = { writes: [] }
     h.ptys.push(rec)
-    return {
+    rec.proc = {
       pid: 7300, process: 'pwsh', cols: 100, rows: 30,
       onData: () => ({ dispose: () => {} }),
       onExit: () => ({ dispose: () => {} }),
       write: (d: string) => { rec.writes.push(String(d)) },
       resize: () => {}, kill: () => {}, pause: () => {}, resume: () => {}, clear: () => {},
     }
+    return rec.proc
   },
 }))
 vi.mock('../../../src/main/session-helper/manager', async (importOriginal) => {
@@ -173,8 +193,9 @@ function codexProvider(): Record<string, unknown> {
   }
 }
 
-const { spawnPty, killPty } = await import('../../../src/main/pty-manager')
-const { submitLine, typeKeys, submitMarker, askQuestion, handOffAskQuestion, ASK_READY_WAIT_MS, setSessionInputPorts } = await import('../../../src/main/session-input')
+const { spawnPty, killPty, gracefulExitPty, isSessionWritable } = await import('../../../src/main/pty-manager')
+const { submitLine, typeKeys, submitMarker, askQuestion, handOffAskQuestion, ASK_READY_WAIT_MS, setSessionInputPorts, pasteEnvelope, sendExitKeys } = await import('../../../src/main/session-input')
+type Run = Parameters<typeof sendExitKeys>[1]
 const { MARKER_FALLBACK_FLUSH_MS } = await import('../../../src/main/canvas/canvas-marker-queue')
 const { IPC } = await import('../../../src/shared/ipc-channels')
 type SpawnOpts = NonNullable<Parameters<typeof spawnPty>[2]>
@@ -397,6 +418,225 @@ describe('Ask Conductor on Codex: askQuestion and handOffAskQuestion', () => {
   })
 })
 
+/** A channel envelope as formatTier1 shapes one: bracketed paste around it. */
+const envelope = (words: string): string => `\x1b[200~[ccc-channel:manual ts=2026-11-19T00:00:00Z]\n\n${words}\n\n[/ccc-channel]\x1b[201~`
+
+describe('pasteEnvelope: a channel message, as a Tier 1 paste', () => {
+  it('each session\'s envelopes go out whole, one after another, in the order handed in; two sessions do not mix', async () => {
+    const a = await claudeSession()
+    const A = SID
+    const b = await claudeSession()
+    const B = SID
+    vi.useFakeTimers()
+    const a1 = envelope(`first ${'a'.repeat(600)}`)
+    const a2 = envelope(`second ${'a'.repeat(300)}`)
+    const b1 = envelope(`first ${'b'.repeat(400)}`)
+    const b2 = envelope('second')
+    expect([pasteEnvelope(A, a1), pasteEnvelope(B, b1), pasteEnvelope(A, a2), pasteEnvelope(B, b2)]).toEqual([0, 0, 0, 0])
+    await vi.advanceTimersByTimeAsync(500)
+    const slices = (s: string): string[] => s.match(/[\s\S]{1,256}/g) ?? []
+    expect(a.writes).toEqual([...slices(a1), ...slices(a2)])
+    expect(b.writes).toEqual([...slices(b1), ...slices(b2)])
+  })
+
+  it('each through the chunked writer: 256-byte slices, 12 ms apart', async () => {
+    const term = await claudeSession()
+    vi.useFakeTimers()
+    const env = `${'x'.repeat(600)}\r`
+    pasteEnvelope(SID, env)
+    expect(term.writes).toEqual(['x'.repeat(256)])
+    await vi.advanceTimersByTimeAsync(11)
+    expect(term.writes).toHaveLength(1)
+    await vi.advanceTimersByTimeAsync(1)
+    expect(term.writes).toHaveLength(2)
+    await vi.advanceTimersByTimeAsync(12)
+    expect(term.writes).toEqual(['x'.repeat(256), 'x'.repeat(256), `${'x'.repeat(88)}\r`])
+  })
+
+  it('with no duplicate guard: the same envelope twice goes in twice, a submitted one included', async () => {
+    const term = await claudeSession()
+    vi.useFakeTimers()
+    const same = envelope('the same words')
+    const submitted = '[ccc-channel:manual] the same words\r'
+    pasteEnvelope(SID, same)
+    pasteEnvelope(SID, same)
+    pasteEnvelope(SID, submitted)
+    pasteEnvelope(SID, submitted)
+    await vi.advanceTimersByTimeAsync(50)
+    expect(term.writes).toEqual([same, same, submitted, submitted])
+  })
+
+  it('with one envelope in flight and 16 waiting, the next drops the oldest waiting and counts it; the rest go in order', async () => {
+    const term = await claudeSession()
+    vi.useFakeTimers()
+    const env = (n: number): string => envelope(`${String(n).padStart(2, '0')} ${'e'.repeat(300)}`)
+    const counts: number[] = []
+    for (let n = 1; n <= 17; n++) counts.push(pasteEnvelope(SID, env(n)))
+    expect(counts).toEqual(new Array(17).fill(0))
+    expect(pasteEnvelope(SID, env(18))).toBe(1)
+    await vi.advanceTimersByTimeAsync(2000)
+    const kept = [1, ...Array.from({ length: 16 }, (_, i) => i + 3)]
+    expect(term.writes.join('')).toBe(kept.map(env).join(''))
+  })
+
+  it('a terminal replaced mid-envelope gets none of the rest, nor does the new one, and what waited is dropped', async () => {
+    const first = await claudeSession()
+    vi.useFakeTimers()
+    pasteEnvelope(SID, `${'Q'.repeat(1000)}\r`)
+    pasteEnvelope(SID, envelope('waiting'))
+    expect(first.writes).toEqual(['Q'.repeat(256)])
+    const before = h.ptys.length
+    // A restart: a new run of the same session.
+    try { spawnPty(fakeWin, SID, { cwd: os.tmpdir(), cols: 100, rows: 30 }) } catch { /* registered before any later throw */ }
+    expect(h.ptys.length).toBe(before + 1)
+    // The new run is the session's terminal now: a spawn that threw before
+    // registering it would leave none, and beta's presence-only check would pass.
+    expect(isSessionWritable(SID)).toBe(true)
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(first.writes).toEqual(['Q'.repeat(256)])
+    const second = h.ptys[before].writes.join('')
+    expect(second).not.toContain('QQ')
+    expect(second).not.toContain('waiting')
+  })
+
+  it('a session with no terminal: nothing is typed, and nothing is kept for later', async () => {
+    const term = await claudeSession()
+    killPty(SID)
+    vi.useFakeTimers()
+    const writesBefore = allWrites()
+    expect(pasteEnvelope(SID, envelope('nobody home'))).toBe(0)
+    await vi.advanceTimersByTimeAsync(50)
+    expect(allWrites()).toBe(writesBefore)
+    vi.useRealTimers()
+    await claudeSession(SID)
+    expect(allWrites()).not.toContain('nobody home')
+    expect(term.writes).toEqual([])
+  })
+})
+
+const EXIT_KEYS = ['\x1b', '\x03', '/exit\r']
+
+describe('the quit keys into a CLI the app started', () => {
+  it('through gracefulExitPty: Escape at once, Ctrl-C at 100 ms, then /exit and Enter at 300 ms, and nothing after', async () => {
+    const term = await claudeSession()
+    vi.useFakeTimers()
+    void gracefulExitPty(SID, 5000)
+    expect(term.writes).toEqual(['\x1b'])
+    vi.advanceTimersByTime(99)
+    expect(term.writes).toEqual(['\x1b'])
+    vi.advanceTimersByTime(1)
+    expect(term.writes).toEqual(['\x1b', '\x03'])
+    vi.advanceTimersByTime(199)
+    expect(term.writes).toEqual(['\x1b', '\x03'])
+    vi.advanceTimersByTime(1)
+    expect(term.writes).toEqual(EXIT_KEYS)
+    vi.advanceTimersByTime(1000)
+    expect(term.writes).toEqual(EXIT_KEYS)
+  })
+
+  it('through gracefulExitPty: a session the helper holds gets the same keys as raw input frames, in order', async () => {
+    const id = nextSid()
+    const helper = new h.FakeHelperPty()
+    h.held.set(id, helper)
+    await claudeSession(id)
+    helper.frames.length = 0
+    vi.useFakeTimers()
+    void gracefulExitPty(id, 5000)
+    vi.advanceTimersByTime(300)
+    expect(helper.frames.map((f) => f.toString('utf8'))).toEqual(EXIT_KEYS)
+  })
+
+  it('through gracefulExitPty: nothing more once the terminal ended', async () => {
+    const term = await claudeSession()
+    vi.useFakeTimers()
+    void gracefulExitPty(SID, 5000)
+    killPty(SID)
+    vi.advanceTimersByTime(1000)
+    expect(term.writes).toEqual(['\x1b'])
+  })
+
+  it('through gracefulExitPty: nothing more into a terminal replaced by a new run, and none into the new one', async () => {
+    const first = await claudeSession()
+    vi.useFakeTimers()
+    void gracefulExitPty(SID, 5000)
+    const before = h.ptys.length
+    try { spawnPty(fakeWin, SID, { cwd: os.tmpdir(), cols: 100, rows: 30 }) } catch { /* registered before any later throw */ }
+    expect(h.ptys.length).toBe(before + 1)
+    // The new run is the session's terminal now: a spawn that threw before
+    // registering it would leave none, and beta's presence-only check would pass.
+    expect(isSessionWritable(SID)).toBe(true)
+    vi.advanceTimersByTime(1000)
+    expect(first.writes).toEqual(['\x1b'])
+    const second = h.ptys[before].writes
+    expect(second.filter((w) => EXIT_KEYS.includes(w))).toEqual([])
+  })
+
+  it('sendExitKeys: Escape at once, Ctrl-C at 100 ms, then /exit and Enter at 300 ms, into the terminal it is handed', async () => {
+    const term = await claudeSession()
+    vi.useFakeTimers()
+    sendExitKeys(SID, term.proc as Run)
+    expect(term.writes).toEqual(['\x1b'])
+    vi.advanceTimersByTime(99)
+    expect(term.writes).toEqual(['\x1b'])
+    vi.advanceTimersByTime(1)
+    expect(term.writes).toEqual(['\x1b', '\x03'])
+    vi.advanceTimersByTime(199)
+    expect(term.writes).toEqual(['\x1b', '\x03'])
+    vi.advanceTimersByTime(1)
+    expect(term.writes).toEqual(EXIT_KEYS)
+  })
+
+  it('sendExitKeys: nothing into a terminal that is not the session\'s, and nothing more once the session\'s ended', async () => {
+    const a = await claudeSession()
+    const A = SID
+    const b = await claudeSession()
+    const B = SID
+    vi.useFakeTimers()
+    sendExitKeys(A, b.proc as Run)
+    vi.advanceTimersByTime(1000)
+    expect(a.writes).toEqual([])
+    expect(b.writes).toEqual([])
+    sendExitKeys(B, b.proc as Run)
+    expect(b.writes).toEqual(['\x1b'])
+    killPty(B)
+    vi.advanceTimersByTime(1000)
+    expect(b.writes).toEqual(['\x1b'])
+  })
+
+  /** A write as node-pty's fails into a process that has died. */
+  const pipeGone = (): Error => Object.assign(new Error('write EPIPE'), { code: 'EPIPE' })
+
+  it('sendExitKeys: a key whose write fails is dropped, never thrown out of its timer, and the next is still tried at its time', async () => {
+    const term = await claudeSession()
+    const proc = term.proc as { write: (d: string) => void }
+    const tried: string[] = []
+    // The process died after the Escape and its exit is not told yet, so it
+    // is still the session's terminal.
+    proc.write = (d: string) => { tried.push(d); if (tried.length > 1) throw pipeGone() }
+    vi.useFakeTimers()
+    expect(() => sendExitKeys(SID, proc as unknown as Run)).not.toThrow()
+    expect(() => vi.advanceTimersByTime(100)).not.toThrow()
+    expect(tried).toEqual(['\x1b', '\x03'])
+    expect(() => vi.advanceTimersByTime(200)).not.toThrow()
+    expect(tried).toEqual(EXIT_KEYS)
+  })
+
+  it('through gracefulExitPty: an Escape whose write fails does not end the quit in an error; the quit ends at its timeout', async () => {
+    const term = await claudeSession()
+    const proc = term.proc as { write: (d: string) => void }
+    const tried: string[] = []
+    proc.write = (d: string) => { tried.push(d); throw pipeGone() }
+    vi.useFakeTimers()
+    let outcome = 'waiting'
+    gracefulExitPty(SID, 5000).then(() => { outcome = 'ended' }, () => { outcome = 'failed' })
+    await vi.advanceTimersByTimeAsync(4999)
+    expect(outcome).toBe('waiting')
+    expect(tried).toEqual(EXIT_KEYS)
+    await vi.advanceTimersByTimeAsync(1)
+    expect(outcome).toBe('ended')
+  })
+})
+
 describe('the ports: registered once, by the PTY manager, when it loads', () => {
   it('a second registration throws, and every door still types through the first ports', async () => {
     const term = await claudeSession()
@@ -421,6 +661,14 @@ describe('the ports: registered once, by the PTY manager, when it loads', () => 
     expect(() => fresh.typeKeys(SID, 'continue')).toThrow(/has not registered its ports/)
     expect(() => fresh.submitMarker(SID, MARKER)).toThrow(/has not registered its ports/)
     expect(() => fresh.handOffAskQuestion(fakeWin, SID, 'type this')).toThrow(/has not registered its ports/)
+    expect(() => fresh.pasteEnvelope(SID, envelope('type this'))).toThrow(/has not registered its ports/)
+    // The fake clock first, so a key the door schedules before it throws is
+    // on the clock moved on below.
+    vi.useFakeTimers()
+    const stub = { write: vi.fn() }
+    expect(() => fresh.sendExitKeys(SID, stub as unknown as Run)).toThrow(/has not registered its ports/)
+    vi.advanceTimersByTime(1000)
+    expect(stub.write).not.toHaveBeenCalled()
     expect(allWrites()).toBe(before)
     expect(h.submits).toEqual([])
     expect(h.queued).toEqual([])
