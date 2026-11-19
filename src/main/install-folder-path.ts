@@ -368,10 +368,11 @@ export type AddToPathOutcome =
   | { outcome: 'added' | 'already' }
   | { outcome: 'refused' | 'failed'; message: string }
 
-/** "Add it to PATH for me" (Windows only): the publisher's folder for
- *  `providerId`, computed here, appended to the user PATH in the registry
- *  when neither PATH has it, then to this process's PATH. Refused when that
- *  folder does not hold the tool as a regular file. */
+/** "Add it to PATH for me" (Windows only): the tool's install folder for
+ *  `providerId` (npm's, for Codex), computed here, appended to the user PATH
+ *  in the registry when neither PATH has it, then to this process's PATH.
+ *  Refused when that folder does not hold the tool as a regular file, or
+ *  when a name the tool is looked for by there is a link (installedThere). */
 export async function addToolFolderToPath(providerId: ProviderId, deps: InstallFolderDeps = installFolderDeps()): Promise<AddToPathOutcome> {
   if (deps.platform !== 'win32') return { outcome: 'refused', message: 'The app adds a folder to PATH only on Windows.' }
   const at = windowsFolder(providerId, deps)
