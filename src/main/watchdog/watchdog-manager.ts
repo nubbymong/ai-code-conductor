@@ -16,13 +16,14 @@ import { Terminal } from '@xterm/headless'
 import { SessionWatchdog } from './session-watchdog'
 import { CLAUDE_DETECTORS, CODEX_DETECTORS } from './detectors'
 import type { WatchdogAdapter, WatchdogChecks, WatchdogPublicState } from './session-watchdog'
-import { readXtermScreen, readCodexScreen, codexCommandTyped, codexComposerText } from '../../shared/codex-screen'
+import { readXtermScreen } from '../../shared/codex-screen'
 import { hasActiveMonitors } from './patterns'
 import { onHookEvent } from '../session-signals/hooks'
 import { readConfig } from '../config-manager'
 import { logInfo, logWarn, logError } from '../debug-logger'
 import { IPC } from '../../shared/ipc-channels'
 import type { HookEvent } from '../../shared/hook-types'
+import type { SubmitTextResult } from '../../shared/types'
 import { stallsLastMin as readMainLoopStalls } from '../services/loop-stall-monitor'
 import { createInitialHealth, SERVICE_ID, SERVICE_LABEL } from '../../shared/service-health'
 import type { DiagnosticsSnapshot, WatchdogMonitorSnapshot, WatchdogSessionMonitor } from '../../shared/service-health'
@@ -154,13 +155,6 @@ export function clampAnsiChunk(data: string, state: AnsiClampState): string {
 // every chunk — only once, ~250ms after the last chunk in a burst.
 const FEED_DEBOUNCE_MS = 250
 
-// P3.10: a Codex retry's Enter follows its typing by this long (Codex's
-// composer takes a faster burst ending in Enter as a paste; P3.8's evidence).
-export const CODEX_SUBMIT_DELAY_MS = 300
-/** One Backspace (DEL) and the Enter key, as a terminal sends them. */
-const CODEX_BACKSPACE = String.fromCharCode(0x7f)
-const CODEX_ENTER = String.fromCharCode(13)
-
 // One shared interval drives every active watchdog's tick(); it exists only
 // while at least one watchdog is running (see ensureTickTimer/maybeStopTimer).
 // This is the BASE cadence when the main loop is calm; the throttle (#311-style
@@ -256,19 +250,16 @@ function threadedWatchdogConfig(settings: WatchdogSettings): Record<string, unkn
 export interface WatchdogHostOptions {
   getWindow: () => BrowserWindow | null
   isSessionAlive: (sessionId: string) => boolean
-  /** Submit the retry into the session's PTY. The host wires this to the app's
-   *  command-submit path — writePty(text + '\r'), the same write the command
-   *  button and launch use — so the retry actually submits. The text is already
-   *  sanitized to a single control-char-free line (config.ts), so the lone
-   *  appended '\r' is the only submit and cannot be broken out of. */
-  send: (sessionId: string, text: string) => void
-  /** P3.10: a raw write into the session's PTY, for a Codex session's retry:
-   *  Codex's composer takes a burst of typed characters ending in Enter as a
-   *  paste (the Enter a newline), so its retry is typed, then submitted
-   *  CODEX_SUBMIT_DELAY_MS later, only when the screen shows exactly it
-   *  typed (as the app's own Codex commands are, P3.8). Without it a Codex
-   *  session's watchdog never types. */
-  write?: (sessionId: string, data: string) => void
+  /** Submit the retry into the session, for every CLI. The host wires this to
+   *  the session input module's submitRetry (2.1.3-beta.10 section A2): a
+   *  Claude Code session's is writePty(text + '\r'), with tmux's leave key
+   *  first on an SSH Persistent session, so the retry actually submits; the
+   *  text is already sanitized to a single control-char-free line (config.ts),
+   *  so the lone appended '\r' is the only submit and cannot be broken out of.
+   *  A Codex session's goes through the Codex composer rule, which answers
+   *  whether it was delivered: an answer of not delivered is logged, with its
+   *  reason. */
+  send: (sessionId: string, text: string) => void | Promise<SubmitTextResult>
   /** Main-loop stall count in the last minute — drives the tick throttle.
    *  Injectable for tests; defaults to the loop-stall-monitor singleton. */
   getStalls?: () => number
@@ -563,10 +554,7 @@ export class WatchdogManager {
         const e = this.entries.get(sessionId)
         try { return e ? readXtermScreen(e.term) : null } catch { return null }
       },
-      send: (text: string) => {
-        if (provider === 'codex') this.submitCodex(sessionId, text)
-        else this.host.send(sessionId, text)
-      },
+      send: (text: string) => this.sendRetry(sessionId, text),
       now: () => this.now(),
       log: (level, msg) => {
         const line = `[watchdog:${sessionId}] ${msg}`
@@ -596,39 +584,21 @@ export class WatchdogManager {
   }
 
   /**
-   * P3.10: type a Codex session's retry, then submit it the way the app's own
-   * Codex commands are (P3.8): the Enter only after CODEX_SUBMIT_DELAY_MS, and
-   * only when the pane then shows exactly the retry typed at Codex's composer
-   * with nothing in the way; when the composer holds exactly it but something
-   * else changed (a turn started), it is erased again, only its own
-   * characters; anything else (the user typed too, a prompt came up) is left
-   * as it is and said in the log. Only in the same watcher: a respawn or a
-   * teardown in between types nothing more.
+   * The retry, through the host's send for every CLI (2.1.3-beta.10 section
+   * A2): the host types it by the session's CLI's rule (session-input
+   * submitRetry), so this manager types nothing itself. A Codex session's
+   * answer comes back from the Codex composer rule; one of not delivered is
+   * logged with its reason, and nothing more is typed for it here (the rule
+   * has already taken back what it typed, where it could). Whether and when a
+   * retry is sent is the SessionWatchdog's, unchanged.
    */
-  private submitCodex(sessionId: string, text: string): void {
-    const write = this.host.write
-    const entry = this.entries.get(sessionId)
-    if (!write || !entry) {
-      logWarn(`[watchdog:${sessionId}] Codex retry not typed: no raw writer`)
-      return
-    }
-    write(sessionId, text)
-    const timer = this.setTimer(() => {
-      if (this.entries.get(sessionId) !== entry || !this.host.isSessionAlive(sessionId)) return
-      let screen: ReturnType<typeof readXtermScreen> | null = null
-      try { screen = readXtermScreen(entry.term) } catch { screen = null }
-      if (screen && codexCommandTyped(screen, text)) {
-        write(sessionId, CODEX_ENTER)
-        return
-      }
-      if (screen && readCodexScreen(screen).screen !== 'blocked' && codexComposerText(screen) === text) {
-        write(sessionId, CODEX_BACKSPACE.repeat([...text].length))
-        logInfo(`[watchdog:${sessionId}] Codex retry erased again: the screen changed before its Enter`)
-        return
-      }
-      logWarn(`[watchdog:${sessionId}] Codex retry typed but not submitted: the screen changed before its Enter`)
-    }, CODEX_SUBMIT_DELAY_MS)
-    ;(timer as { unref?: () => void }).unref?.()
+  private sendRetry(sessionId: string, text: string): void {
+    const answer = this.host.send(sessionId, text)
+    if (!answer) return
+    void answer.then(
+      (result) => { if (!result.delivered) logWarn(`[watchdog:${sessionId}] the retry was not delivered (${result.reason})`) },
+      (err: unknown) => { logWarn(`[watchdog:${sessionId}] the retry was not delivered: ${(err as Error)?.message ?? err}`) },
+    )
   }
 
   /** Keep the headless pane's viewport matched to the real session's, so line

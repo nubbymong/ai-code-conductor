@@ -5,8 +5,10 @@
 // Agent Canvas marker, Ask Conductor's question, a channel message and the quit keys. (A Claude Code marker it
 // hands to canvas/claude-marker-typing.ts, which has the renderer type it.)
 // Since 2.1.3-beta.10 (#333) it also types a command bar prompt button's
-// text, which the renderer asks for over pty:submitPrompt.
-// Every other caller asks the module (submitLine, typeKeys, submitMarker,
+// text, which the renderer asks for over pty:submitPrompt. Since 2.1.3-beta.10
+// section A2 the Watchdog's retry comes in through submitRetry, for both CLIs,
+// and typeKeys, the raw writer a Codex retry was typed through, is gone.
+// Every other caller asks the module (submitRetry, submitLine, submitMarker,
 // handOffAskQuestion, pasteEnvelope, submitPrompt); sendExitKeys, which skips the quit's
 // own checks (a CLI the app started, no tmux-persistent remote), is the PTY
 // manager's quit's only (A2); askQuestion, which skips the Ask check, is the PTY
@@ -75,8 +77,8 @@
 // held in an object property other than `ptyProcess` (or a backstop name) of
 // an object that is not `this`; a handle handed to an untyped parameter other
 // than a collection callback's; a writer reached through a field of an
-// injected dependency object (`deps.write`: the composer rule's and the
-// Watchdog's own writers, handed in by the PTY manager and by this module);
+// injected dependency object (`deps.write`: the composer rule's own writer,
+// handed in by the Codex run screen's driver);
 // the module's codexRunScreen handed on as a value and called elsewhere (only
 // the PTY manager may import it, above); a run screen's type written
 // `typeof import('...')`; a `#` private class field (`this.#name`) holding
@@ -912,8 +914,8 @@ describe('the check sees each way of typing into a session (verify the verifier)
     ['the module\'s own handOffAskQuestion, from a folder below', `import { handOffAskQuestion } from '../session-input'\nhandOffAskQuestion(win, id, q)`, 'src/main/ipc/feature.ts'],
     ['the module\'s own submitPrompt, from a folder below, as pty:submitPrompt calls it', `import { submitPrompt } from '../session-input'\nipcMain.handle(ch, async () => submitPrompt(id, text, mode))`, 'src/main/ipc/feature.ts'],
     ['the module through a namespace import', `import * as input from './session-input'\ninput.submitMarker(id, line)\ninput.handOffAskQuestion(win, id, q)`],
-    ['the module named by its index file', `import { typeKeys } from './session-input/index'\nstart({ write: (s, d) => typeKeys(s, d) })`],
-    ['the module\'s own exports handed on through its namespace', `import * as input from './session-input'\nstart({ write: input.typeKeys, ask: input.handOffAskQuestion })\nconst h = input.handOffAskQuestion`],
+    ['the module named by its index file', `import { submitRetry } from './session-input/index'\nstart({ send: (s, t) => submitRetry(s, t) })`],
+    ['the module\'s own exports handed on through its namespace', `import * as input from './session-input'\nstart({ send: input.submitRetry, ask: input.handOffAskQuestion })\nconst h = input.handOffAskQuestion`],
     ['the module\'s own export destructured from a dynamic import', `async function go() {\n  const { handOffAskQuestion } = await import('../session-input')\n  handOffAskQuestion(win, id, q)\n}`, 'src/main/ipc/feature.ts'],
     ['the module required into a name', `const input = require('./session-input')\ninput.handOffAskQuestion(win, id, q)\nstart({ ...input })`],
     ['a declaration, a property name and a type that only share a name', `export function writePty(id: string, d: string): void {}\nconst ports = { pastePty: () => 0 }\ntype W = typeof writePty\nlet f: typeof pastePty`],

@@ -10,7 +10,7 @@ import { sweepAbandonedProfiles } from './account-web/sign-in'
 import { setSignInWindowsQuitting } from './account-web/in-app-sign-in'
 import { warnAboutOrphanedSharedPartitions } from './account-web/orphan-partitions'
 import { killAllPty, gracefulExitAllPty, isSessionWritable, routeHookTranscriptPath, noteCodexHookEvent, isCodexPtySession, codexRolloutForSessionContext, applyLoggingSwitches } from './pty-manager'
-import { submitLine, typeKeys, submitMarker } from './session-input'
+import { submitRetry, submitMarker } from './session-input'
 import { registerResumeHandlers } from './ipc/resume-handlers'
 import { registerCliHandlers } from './ipc/cli-handlers'
 import { registerClipboardHandlers } from './ipc/clipboard-handlers'
@@ -1077,12 +1077,9 @@ if (!gotTheLock) {
     initWatchdogManager({
       getWindow,
       isSessionAlive: isSessionWritable,
-      send: (sessionId, text) => {
-        submitLine(sessionId, text)
-      },
-      // P3.10: a Codex session's retry is typed, then submitted once the
-      // screen shows it (watchdog-manager submitCodex).
-      write: (sessionId, data) => typeKeys(sessionId, data),
+      // 2.1.3-beta.10 A2: a Claude Code session's retry is submitLine's; a
+      // Codex session's goes through the Codex composer rule, which answers.
+      send: (sessionId, text) => submitRetry(sessionId, text),
       // Refresh the services view live when a watchdog state changes; routed
       // through the same merge so the push carries every source (#235).
       onHealthChange: () => pushDiagnostics(),

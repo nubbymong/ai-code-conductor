@@ -1,7 +1,7 @@
 // The session input module (2.1.3-beta.9 section A1; ADR-030 component row
 // 3's submit): the one door through which main types into a session on its
 // own initiative. Main decides here what goes in for the Watchdog's retry
-// (submitLine, typeKeys), an Agent Canvas marker (submitMarker) and Ask
+// (submitRetry), an Agent Canvas marker (submitMarker) and Ask
 // Conductor's question on Codex (askQuestion, handOffAskQuestion), and nowhere
 // else. A Claude Code marker is the one this module does not type itself: it
 // is held by canvas/claude-marker-typing.ts and typed by the renderer at main's
@@ -17,6 +17,13 @@
 // That door is new, not moved: it has its own rule, order and delay, written
 // at it. Everything said below about the moved bodies is about the others.
 //
+// Since 2.1.3-beta.10 section A2 the Watchdog's retry comes in through one
+// door, submitRetry: a Codex session's goes through the Codex package's
+// submit primitive, as a canvas marker's does, instead of the raw writer
+// (typeKeys, removed) the Watchdog typed it through by a rule of its own; a
+// Claude Code session's is submitLine's, unchanged. That changes how a Codex
+// retry is typed, written at submitRetry, and nothing else said below.
+//
 // Each function's body moved here from the PTY manager as it was: nothing
 // typed, its order or its timing changed, and no queue, delay or check added,
 // but for what A2 changed in sendExitKeys, described at that function: it
@@ -24,10 +31,10 @@
 // session's, and a key whose write fails is dropped rather than thrown. (Like
 // every door that types through a port, pasteEnvelope also throws before the
 // ports are registered.)
-// The rules of WHEN to type stay where they were (the Watchdog's Codex rule in
-// watchdog-manager.ts, the Claude Code marker's in canvas/claude-marker-typing.ts,
-// the Codex composer's in the Codex package); they type only through what this
-// module hands them.
+// The rules of WHEN to type stay where they were (the Watchdog's in
+// watchdog/session-watchdog.ts, the Claude Code marker's in
+// canvas/claude-marker-typing.ts, the Codex composer's in the Codex package);
+// they type only through what this module hands them.
 //
 // ONE WAY ROUND. This module imports nothing from the PTY manager: the PTY
 // manager registers its ports here when it loads (setSessionInputPorts), so
@@ -98,8 +105,9 @@ export function codexRunScreen(): SessionRunScreen | undefined {
 }
 
 /**
- * #85 — submit a programmatic LINE into a session (the watchdog's retry),
- * leaving tmux copy-mode first when the session is tmux-wrapped.
+ * #85 — submit a programmatic LINE into a session (the watchdog's retry into a
+ * Claude Code session, through submitRetry), leaving tmux copy-mode first when
+ * the session is tmux-wrapped.
  *
  * The wheel now opens tmux's scrollback view on an SSH Persistent session, and
  * copy-mode SWALLOWS input: a user who scrolled up to read something and then
@@ -115,12 +123,35 @@ export function submitLine(sessionId: string, line: string): void {
   port().write(sessionId, `${prefix}${line}\r`)
 }
 
-/** P3.10: a raw write into the session's PTY, for a Codex session's Watchdog
- *  retry: the Watchdog types the retry, then its Enter or its own Backspaces,
- *  by its own screen check (watchdog-manager submitCodex). Exactly the keys
- *  it is handed, through writePty. */
-export function typeKeys(sessionId: string, data: string): void {
-  port().write(sessionId, data)
+/** 2.1.3-beta.10 section A2: how long a Codex session's Watchdog retry waits
+ *  for Codex's ready, empty composer before it answers not delivered. */
+export const RETRY_CODEX_READY_WAIT_MS = 5_000
+
+/**
+ * 2.1.3-beta.10 section A2 (aicc_planning #336): the Watchdog's retry into a
+ * session, by its CLI's rule. The Watchdog decides when to retry and what;
+ * this decides only how the retry is typed.
+ *
+ * - A Codex session's goes through the Codex package's submit primitive, as a
+ *   canvas marker's and Ask Conductor's question do: typed only at Codex's
+ *   ready, empty composer (ready on two reads 300 ms apart, waited for up to
+ *   RETRY_CODEX_READY_WAIT_MS), its Enter only once the text is confirmed on
+ *   screen, a text not confirmed taken back with Ctrl+U, and only into the run
+ *   whose pane it read. The answer says whether it was delivered, and why not.
+ * - Every other session's (Claude Code's: on this computer, held by the
+ *   session helper, or over SSH) is submitLine's, byte for byte, and answers
+ *   nothing.
+ *
+ * Throws before the PTY manager registers its ports, as every door does.
+ */
+export function submitRetry(sessionId: string, text: string): void | Promise<SubmitTextResult> {
+  if (port().isCodexSession(sessionId)) {
+    // The primitive answers a session with no pane itself.
+    const screen = codexRunScreen()
+    if (!screen) return Promise.resolve({ delivered: false, reason: 'session-gone' })
+    return screen.submit(sessionId, text, { readyWaitMs: RETRY_CODEX_READY_WAIT_MS })
+  }
+  submitLine(sessionId, text)
 }
 
 /** #333: how long a prompt button's Enter follows the last slice of its text

@@ -1,14 +1,16 @@
 // The submit primitive (WP2 PR 4, P4.1; completion plan 9.4 P4.1 and the PR 4
 // VM probes PB3 and PB9): the one way main types a text into a Codex session's
 // composer and submits it. The canvas marker queue uses it for a Codex
-// session, and Ask Conductor's carrier (P4.3) reuses it.
+// session, and Ask Conductor's carrier (P4.3) reuses it, as do a command bar
+// prompt button (#333) and, since 2.1.3-beta.10 section A2, the Watchdog's
+// retry (both through src/main/session-input).
 //
 // PURE: the rule only. The session's screen, its writer, its liveness and the
 // clock are injected (the driver is ./session-screen.ts, which keeps a
 // bounded headless pane fed by the session's own output). Built from the two
-// copies of this rule that already exist, which stay as they are: the
-// renderer's typeIntoCodexComposer (src/renderer/lib/codexComposer.ts) and the
-// Watchdog's submitCodex (src/main/watchdog/watchdog-manager.ts).
+// copies of this rule that existed: the renderer's typeIntoCodexComposer
+// (src/renderer/lib/codexComposer.ts), which stays as it is, and the
+// Watchdog's submitCodex, which section A2 removed.
 //
 // The rule, from the probes of the real 0.153.4 and 0.155.1 TUIs:
 //  - one write of a text and Enter never submits; the text in one write, then
