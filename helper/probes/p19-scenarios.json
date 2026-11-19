@@ -1,0 +1,151 @@
+{
+  "about": "Probe P19 (ADR-030): the scenario p19-record.cjs runs for each program, and the reply p19-model-stand-in.cjs streams. Keys are typed as written; {prompt} is the prompt below. A screen pattern is a regular expression over the 40 rows of the attached pane's text, joined by newlines.",
+  "size": { "cols": 120, "rows": 40 },
+  "runs": 3,
+  "cutBytes": 65536,
+  "settleMs": 2000,
+  "sampleMs": 250,
+  "nudgeMs": 300,
+  "tailLines": 200,
+  "scrollback": 1000,
+  "prompt": "p19 probe: print the probe's lines",
+  "apiKey": "sk-ant-p19-probe-made-up-not-a-real-key-0000",
+  "reply": {
+    "lines": 300,
+    "lineMs": 120,
+    "marker": "p19 probe",
+    "line": "p19 line {n} of {total}: the quick brown fox jumps over the lazy dog",
+    "after": "\n\n",
+    "blockLines": 10
+  },
+  "programs": [
+    {
+      "id": "claude",
+      "name": "Claude Code",
+      "verdict": true,
+      "exitKeys": ["\u0003", "\u0003"],
+      "launches": [
+        {
+          "id": "first",
+          "seed": "none",
+          "steps": [
+            { "do": "settle", "quietMs": 2000, "minBytes": 1, "timeoutMs": 30000 },
+            { "do": "mark", "state": "first-screen" }
+          ]
+        },
+        {
+          "id": "turn",
+          "seed": "claude",
+          "steps": [
+            {
+              "do": "until",
+              "label": "the ready prompt",
+              "screen": "(?:^|\\n) {0,2}\u2500{8,} *\\n {0,2}[\u276f>](?:[ \u00a0][^\\n]*)?\\n {0,2}\u2500{8,}",
+              "not": "esc to interrupt",
+              "timeoutMs": 60000,
+              "rules": [
+                { "label": "theme picker", "screen": "text style|Dark mode", "keys": "\r" },
+                { "label": "API key question", "screen": "use this API key", "keys": ["\u001b[A", "\r"] },
+                { "label": "folder trust", "screen": "trust (the files in )?this folder", "keys": "\r" },
+                { "label": "press Enter", "screen": "Press Enter to continue", "keys": "\r" }
+              ]
+            },
+            { "do": "settle", "quietMs": 1500, "minBytes": 0, "timeoutMs": 10000 },
+            { "do": "mark", "state": "ready" },
+            { "do": "keys", "keys": "{prompt}", "afterMs": 700 },
+            { "do": "keys", "keys": "\r", "afterMs": 0 },
+            { "do": "reply", "atLeast": 0.35, "timeoutMs": 60000 },
+            { "do": "mark", "state": "mid-reply" },
+            { "do": "replyDone", "timeoutMs": 90000 },
+            {
+              "do": "until",
+              "label": "the ready prompt after the reply",
+              "screen": "(?:^|\\n) {0,2}\u2500{8,} *\\n {0,2}[\u276f>](?:[ \u00a0][^\\n]*)?\\n {0,2}\u2500{8,}",
+              "not": "esc to interrupt",
+              "timeoutMs": 30000,
+              "rules": []
+            },
+            { "do": "settle", "quietMs": 2000, "minBytes": 0, "timeoutMs": 15000 },
+            { "do": "mark", "state": "after-reply" }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "codex",
+      "name": "Codex",
+      "verdict": true,
+      "args": { "win32": ["--no-daemon"], "default": [] },
+      "exitKeys": ["\u0003", "\u0003"],
+      "launches": [
+        {
+          "id": "first",
+          "seed": "none",
+          "steps": [
+            { "do": "settle", "quietMs": 2000, "minBytes": 1, "timeoutMs": 30000 },
+            { "do": "mark", "state": "first-screen" }
+          ]
+        },
+        {
+          "id": "turn",
+          "seed": "codex",
+          "steps": [
+            {
+              "do": "until",
+              "label": "the ready composer",
+              "screen": "(?:^|\\n) ?\u203a(?:[ \\n]|$)",
+              "not": "esc to interrupt",
+              "timeoutMs": 60000,
+              "rules": [
+                { "label": "folder trust", "screen": "trust the contents|allow Codex to work in this folder|Do you trust", "keys": "\r" },
+                { "label": "press Enter", "screen": "[Pp]ress [Ee]nter to continue", "keys": "\r" }
+              ]
+            },
+            { "do": "settle", "quietMs": 1500, "minBytes": 0, "timeoutMs": 10000 },
+            { "do": "mark", "state": "ready" },
+            { "do": "keys", "keys": "{prompt}", "afterMs": 700 },
+            { "do": "keys", "keys": "\r", "afterMs": 0 },
+            { "do": "reply", "atLeast": 0.35, "timeoutMs": 60000 },
+            { "do": "mark", "state": "mid-reply" },
+            { "do": "replyDone", "timeoutMs": 90000 },
+            {
+              "do": "until",
+              "label": "the ready composer after the reply",
+              "screen": "(?:^|\\n) ?\u203a(?:[ \\n]|$)",
+              "not": "esc to interrupt",
+              "timeoutMs": 30000,
+              "rules": []
+            },
+            { "do": "settle", "quietMs": 2000, "minBytes": 0, "timeoutMs": 15000 },
+            { "do": "mark", "state": "after-reply" }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "shell",
+      "name": "default shell",
+      "verdict": false,
+      "exitKeys": ["exit\r"],
+      "launches": [
+        {
+          "id": "output",
+          "seed": "shell",
+          "steps": [
+            { "do": "settle", "quietMs": 1500, "minBytes": 1, "timeoutMs": 30000 },
+            {
+              "do": "keys",
+              "keys": {
+                "win32": "1..300 | ForEach-Object { 'p19 line {0:d3} of 300: the quick brown fox jumps over the lazy dog' -f $_ }\r",
+                "default": "for i in $(seq 1 300); do printf 'p19 line %03d of 300: the quick brown fox jumps over the lazy dog\\n' \"$i\"; done\r"
+              },
+              "afterMs": 0
+            },
+            { "do": "settle", "quietMs": 1500, "minBytes": 3000, "timeoutMs": 30000 },
+            { "do": "mark", "state": "after-output" }
+          ]
+        }
+      ]
+    }
+  ]
+}

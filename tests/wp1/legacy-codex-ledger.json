@@ -1,8 +1,8 @@
 {
   "schema": "wp1-legacy-codex-ledger/2",
-  "predicateDigest": "53fe7e5238cde4df748b1908c567dfcc9f825c901c109678028d383ec4dfef35",
-  "manifestPathDigest": "36e83d947ebe48dc7d19aefd6f66000926c8182fcec4e6b36e3bcc59e4627fc2",
-  "manifestHead": "3e36f4f8ca4646bc994bbb1d8016f212eba23240",
+  "predicateDigest": "100a1233edebdc39a5f9004d3fba980a89ebb15b25872e52076386bc84b03153",
+  "manifestPathDigest": "27536206b0efb355370c9a605a77f7d2b34f4ad47a9c2655ab362e16e7fdc358",
+  "manifestHead": "32fb8b36ea5d35bf35cf1c3ab97d9f2b24527436",
   "dispositions": {
     "retain": "unchanged observable behaviour, characterization proof",
     "move": "moved behind a package boundary and/or adapted at the call site, regression proof (newPath when relocated)",
@@ -312,7 +312,7 @@
       ],
       "category": "OTHER",
       "disposition": "replace",
-      "evidence": "WP2 PR 4 P4.8 (rows 59, 60; OD20 D5, D7): ubuntu-latest in the test matrix; the codex-conformance job installs the minimum and pinned Codex CLI (a release candidate by dispatch) per OS and runs the no-sign-in checks, no secrets (WP1.30, WP1.71); tests/integration/codex-real-cli-conformance.test.ts; docs/wp1/evidence/ci-matrix.md; WP2 PR 4 P4.8 review (E-4, c75c3acb): every CLI run in the codex-conformance job gets a fresh CODEX_HOME, and the runner's own home is proven untouched (WP1.71); tests/integration/codex-conformance-ci.mjs; docs/wp1/evidence/ci-matrix.md; WP2 PR 4 P4.10 (60b39238, 2eb1b194): the Linux test job blocks after its first green run (CI run 37134624406), and the help captures are asserted on every OS once each OS was reviewed (WP1.30, WP1.71); docs/wp1/evidence/ci-matrix.md; 2.1.3-beta.1 process track (ADR-028): the codex-conformance job keeps its steps, its matrix and the versions it checks; only its start condition changed: on a PR it still needs ci-run, and another label change or an edit of the PR title or description no longer starts it again (a change of base branch does) (WP1.71); tests/unit/scripts/ci-cadence.test.ts",
+      "evidence": "WP2 PR 4 P4.8 (rows 59, 60; OD20 D5, D7): ubuntu-latest in the test matrix; the codex-conformance job installs the minimum and pinned Codex CLI (a release candidate by dispatch) per OS and runs the no-sign-in checks, no secrets (WP1.30, WP1.71); tests/integration/codex-real-cli-conformance.test.ts; docs/wp1/evidence/ci-matrix.md; WP2 PR 4 P4.8 review (E-4, c75c3acb): every CLI run in the codex-conformance job gets a fresh CODEX_HOME, and the runner's own home is proven untouched (WP1.71); tests/integration/codex-conformance-ci.mjs; docs/wp1/evidence/ci-matrix.md; WP2 PR 4 P4.10 (60b39238, 2eb1b194): the Linux test job blocks after its first green run (CI run 37134624406), and the help captures are asserted on every OS once each OS was reviewed (WP1.30, WP1.71); docs/wp1/evidence/ci-matrix.md; 2.1.3-beta.1 process track (ADR-028): the codex-conformance job keeps its steps, its matrix and the versions it checks; only its start condition changed: on a PR it still needs ci-run, and another label change or an edit of the PR title or description no longer starts it again (a change of base branch does) (WP1.71); tests/unit/scripts/ci-cadence.test.ts; ADR-030 probe P19 (2.1.3-beta.11 section A1): the dispatch-only probe-p19 job installs Claude Code and Codex into prefixes of their own with scripts off and runs the probe, read-only, no secrets (WP1.67); tests/unit/scripts/probe-p19-job.test.ts",
       "note": "the job's name, comments and test paths; no Codex code path; P04 (P4.8 review): CODEX_HOME set to fresh empty folders made by codex-conformance-ci.mjs homes for the PATH check and the flag-drift suite; no global home resolver"
     },
     {
@@ -444,6 +444,47 @@
       "disposition": "added",
       "evidence": "WP2 plan document: maps each planned Codex adapter test (tests/wp1/cli-discovery.test.ts and siblings) to its requirement; no Codex code path (WP1.70); WP2 P3 usage track MP8 (ADR-022): residuals (window focus, switch-off, status check) and the VM step owed (WP1.70); WP2 P3 usage track MP7 round-1 review fixes (ADR-022): the status-check residual restated for the sign-in lock, and the helper version owed to the VM step (WP1.70); WP2 P3 usage track MP9: the Codex re-read deviation and residuals (WP1.70); WP2 P3 usage track MP8 round 2 (VM walk and review fixes; ADR-022): the focus residual resolved, and a residual for the model catalogue the helper still refetches (WP1.70); WP2 P3 usage track MP10: the whole-session attribution residual (WP1.70); WP2 P3 usage track MP9 round 1 (review fixes: B-F1, B-F2, Q-1 to Q-5): the downgrade and linked-folder fixes, the downgrade residual, and the decisions owed to MP12 (WP1.70); WP2 P3 usage track MP11: the no-price and provider-split decision (WP1.70); WP2 P3 usage track MP8 round 3 and MP10 round 1: what a read contacts and why no flag is used, the privacy wording owed to MP13, and the path rule for Claude attribution (WP1.70); WP2 P3 usage track MP12: the decisions for the page resolved, and the VM screenshots owed (WP1.70); WP2 P3 usage track MP11 round 1 (review fixes) and the MP9 lens B nits: the unpriced list over the range, the folders named once the registry is read, and the residual for a build from before #307 (WP1.70); WP2 P3 usage track MP10 round 1 and MP12 round 1 (review fixes): the profile folder the attribution matches, and the account-sorting notice shortened for the owner screenshot review (WP1.70); WP2 P3 usage track MP9 (defect 4 follow-up): the counting state of the account-sorting notice (WP1.70); WP2 P3 usage track records: the usage screenshots done and approved, and the approved copy the mockup does not draw (WP1.70); WP2 PR 4 final review nits: the departures note says what NoDefaultCurrentDirectoryInExePath=1 sets (WP1.70); docs/wp1/evidence/ci-matrix.md",
       "note": "plan text, not a user-facing claim"
+    },
+    {
+      "path": "helper/probes/README.md",
+      "predicates": [
+        "P14"
+      ],
+      "category": "OTHER",
+      "disposition": "added",
+      "evidence": "ADR-030 probe P19 (2.1.3-beta.11 section A1): a measurement of whether Claude Code and Codex redraw their screen after a resize when a re-attach starts mid-stream; run on the Windows test machine and by a dispatch-only CI job, never shipped; no legacy Codex code path; listed in the repository-wide legacy Codex manifest, zero unmatched at the merge gate (WP1.67), tests/wp1/legacy-codex-gate.test.ts",
+      "note": "how to run probes P7, P16 and P19; names Codex as one of the CLIs P19 measures"
+    },
+    {
+      "path": "helper/probes/p19-model-stand-in.cjs",
+      "predicates": [
+        "P14"
+      ],
+      "category": "OTHER",
+      "disposition": "added",
+      "evidence": "ADR-030 probe P19 (2.1.3-beta.11 section A1): a measurement of whether Claude Code and Codex redraw their screen after a resize when a re-attach starts mid-stream; run on the Windows test machine and by a dispatch-only CI job, never shipped; no legacy Codex code path; listed in the repository-wide legacy Codex manifest, zero unmatched at the merge gate (WP1.67), tests/wp1/legacy-codex-gate.test.ts",
+      "note": "the stand-in model endpoint P19 points each CLI at; answers the Responses API request Codex sends"
+    },
+    {
+      "path": "helper/probes/p19-record.cjs",
+      "predicates": [
+        "P04",
+        "P14"
+      ],
+      "category": "OTHER",
+      "disposition": "added",
+      "evidence": "ADR-030 probe P19 (2.1.3-beta.11 section A1): a measurement of whether Claude Code and Codex redraw their screen after a resize when a re-attach starts mid-stream; run on the Windows test machine and by a dispatch-only CI job, never shipped; no legacy Codex code path; listed in the repository-wide legacy Codex manifest, zero unmatched at the merge gate (WP1.67), tests/wp1/legacy-codex-gate.test.ts",
+      "note": "the P19 recorder; runs a Codex CLI in a fresh environment whose CODEX_HOME is the probe's own temporary folder"
+    },
+    {
+      "path": "helper/probes/p19-scenarios.json",
+      "predicates": [
+        "P14"
+      ],
+      "category": "OTHER",
+      "disposition": "added",
+      "evidence": "ADR-030 probe P19 (2.1.3-beta.11 section A1): a measurement of whether Claude Code and Codex redraw their screen after a resize when a re-attach starts mid-stream; run on the Windows test machine and by a dispatch-only CI job, never shipped; no legacy Codex code path; listed in the repository-wide legacy Codex manifest, zero unmatched at the merge gate (WP1.67), tests/wp1/legacy-codex-gate.test.ts",
+      "note": "the keys, marks and reply P19 uses for each CLI, Codex among them"
     },
     {
       "path": "package.json",
@@ -10325,6 +10366,16 @@
       "disposition": "replace",
       "evidence": "WP2 commit 4: existing cases retained (buildResumeArgs now given a UUID), launchTarget and isResumeId cases added; tests/unit/scripts/codex-resume-picker.test.ts (WP1.68)",
       "note": "re-dispositioned in WP2 commit 4 (was retain)"
+    },
+    {
+      "path": "tests/unit/scripts/probe-p19-job.test.ts",
+      "predicates": [
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "new 2.1.3-beta.11 A1 test (ADR-030 probe P19): the probe-p19 job of ci.yml runs only on a dispatch that names it, never on a pull request or a push, and is no required check; it names the Codex conformance dispatch inputs only to show they do not start it (WP1.67); tests/unit/scripts/probe-p19-job.test.ts",
+      "note": "reads ci.yml only"
     },
     {
       "path": "tests/unit/scripts/readme-stage.test.ts",

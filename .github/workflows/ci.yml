@@ -16,7 +16,8 @@ on:
   # Release level (P4.8; OD20 D7, WP1.71): the release-candidate Codex CLI is
   # checked on its own, dispatched with its version, besides the minimum and
   # pinned ones every run checks. On a dispatch the codex-conformance job runs,
-  # with the always-on changelog check; every other job's condition skips it.
+  # with the always-on changelog check, and probe-p19 when the dispatch names
+  # it (probe_p19); every other job's condition skips it.
   # The inputs reach a step through env, never a shell line.
   workflow_dispatch:
     inputs:
@@ -27,6 +28,11 @@ on:
         default: ''
       conformance_prove_red:
         description: 'Run every real-CLI conformance check against a deliberately wrong expectation: the job must go red, each check named'
+        type: boolean
+        required: false
+        default: false
+      probe_p19:
+        description: 'Run probe P19 (ADR-030) on Windows, macOS and Linux: does a resize make Claude Code and Codex redraw their screen after a re-attach that starts mid-stream; the recordings are uploaded'
         type: boolean
         required: false
         default: false
@@ -765,6 +771,108 @@ jobs:
         with:
           name: codex-conformance-${{ matrix.os }}-${{ matrix.cli }}
           path: ${{ runner.temp }}/codex-conformance
+          if-no-files-found: warn
+          retention-days: 30
+
+  # Probe P19 (ADR-030; plan 2.1.3-beta.11, section A1): after a re-attach that
+  # starts mid-stream, does a resize make Claude Code and Codex redraw their
+  # screen? helper/probes/p19-record.cjs runs each CLI on a terminal of its own
+  # in a fresh environment, pointed at a stand-in model on a loopback port (no
+  # account, no key, no secret), and records every chunk; helper/probes/README.md
+  # says how it measures. The Windows test machine gives the main Windows
+  # reading; windows-2025 here is a second one, macOS and Linux the only ones.
+  #
+  # It runs ONLY on a dispatch that names it (`probe_p19`), never on a pull
+  # request or a push, and is not a required check. Built like the Codex
+  # conformance job above: npm ci with scripts off, the native rebuild off
+  # Windows, each CLI's published package into a prefix and a cache of its own
+  # with scripts off (Claude Code's own install script copies its native program
+  # into place; the probe runs that program from its platform package instead),
+  # read-only, and the recordings and the result uploaded as probe-p19-<os>.
+  # tests/unit/scripts/probe-p19-job.test.ts evaluates its condition.
+  probe-p19:
+    if: github.event_name == 'workflow_dispatch' && inputs.probe_p19 == true
+    name: Probe P19 (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2025, macos-latest, ubuntu-latest]
+    env:
+      # The versions the Windows test machine has (ADR-030, P18 and P19).
+      P19_CLAUDE_VERSION: '2.1.328'
+      P19_CODEX_VERSION: '0.157.1'
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      # Claude Code's package asks for node 22 or later.
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - uses: actions/setup-python@v7
+        if: runner.os != 'Windows'
+        with:
+          python-version: '3.12'
+
+      - name: Install Python setuptools
+        if: runner.os != 'Windows'
+        run: pip install setuptools
+
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Rebuild node-pty
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          node -e "
+          const { rebuild } = require('@electron/rebuild');
+          rebuild({
+            buildPath: process.cwd(),
+            electronVersion: require('./node_modules/electron/package.json').version,
+            onlyModules: ['node-pty']
+          }).then(() => console.log('rebuild done')).catch(e => { console.error(e); process.exit(1) })
+          "
+
+      - name: Install Claude Code ${{ env.P19_CLAUDE_VERSION }} into its own prefix
+        shell: bash
+        env:
+          PREFIX: ${{ runner.temp }}/p19-claude
+          NPM_CACHE: ${{ runner.temp }}/npm-p19-claude-cache
+        run: npm install --global --prefix "$PREFIX" --ignore-scripts --cache "$NPM_CACHE" --no-audit --no-fund "@anthropic-ai/claude-code@$P19_CLAUDE_VERSION"
+
+      - name: Install Codex ${{ env.P19_CODEX_VERSION }} into its own prefix
+        shell: bash
+        env:
+          PREFIX: ${{ runner.temp }}/p19-codex
+          NPM_CACHE: ${{ runner.temp }}/npm-p19-codex-cache
+        run: npm install --global --prefix "$PREFIX" --ignore-scripts --cache "$NPM_CACHE" --no-audit --no-fund "@openai/codex@$P19_CODEX_VERSION"
+
+      - name: Locate the two native programs
+        id: bin
+        run: node helper/probes/p19-record.cjs locate "${{ runner.temp }}/p19-claude" "${{ runner.temp }}/p19-codex"
+
+      - name: Run probe P19
+        shell: bash
+        env:
+          P19_CLAUDE: ${{ steps.bin.outputs.claude }}
+          P19_CODEX: ${{ steps.bin.outputs.codex }}
+          P19_OUT: ${{ runner.temp }}/probe-p19
+        run: node helper/probes/p19-record.cjs run --root . --out "$P19_OUT" --claude "$P19_CLAUDE" --codex "$P19_CODEX" --conpty both
+
+      - name: Upload the recordings and the result
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: probe-p19-${{ matrix.os }}
+          path: ${{ runner.temp }}/probe-p19
           if-no-files-found: warn
           retention-days: 30
 

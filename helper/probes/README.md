@@ -101,3 +101,44 @@ or 2), with `; clean-up incomplete: <what>` added (and exit 2) when
 something was left or could not be checked. The raw runs are
 `p16-runs.csv`, and the result files write personal paths as placeholders.
 The answer is in ADR-030 after the P7 result.
+
+# Probe P19: after a re-attach that starts mid-stream, does a resize make the CLI redraw?
+
+`p19-record.cjs` (ADR-030, probe table; it decides whether the holder must
+repaint a terminal on attach, S13). A held terminal whose ring no longer holds
+its first byte is replayed from the middle of its output; this probe measures
+whether a resize then makes Claude Code and Codex draw their whole screen
+again. It runs each program on a terminal of 120 by 40 with node-pty (on
+Windows on node-pty's bundled ConPTY and on the system's, `--conpty both`),
+in a fresh environment with every per-user folder in its own temporary folder,
+no account and no key of anyone's. Each CLI is pointed at
+`p19-model-stand-in.cjs`, a server on a loopback port that streams one fixed
+reply of 300 lines, so it reaches its prompt and runs one turn without a
+sign-in. `p19-scenarios.json` holds the keys typed, the marks and the reply.
+Run it on the Windows test machine from a checkout of the repository (its
+node_modules give node-pty and @xterm/headless at the versions package.json
+names; it refuses any other):
+
+```powershell
+node p19-record.cjs run --root <checkout> --out <folder> --claude <path to claude.exe> --codex <path to codex.exe> --conpty both
+```
+
+In CI the `probe-p19` job of ci.yml runs it on windows-2025, macos-latest and
+ubuntu-latest, only on a dispatch that names it:
+`gh workflow run ci.yml --ref <branch> -f probe_p19=true`.
+
+At each mark (a CLI's first screen, its ready prompt, the middle of the reply,
+after the reply; the shell after 300 lines of output) it makes a second
+terminal fed only the last 64 KiB (or the second half when there is less),
+cut at a byte as the ring cuts, and compares its rows with a terminal fed
+everything, 2 s after each of three steps: nothing, a resize to the same size
+(what the app sends after an attach today), and a nudge (one row shorter, then
+back 300 ms later). The decision lines are in the script's header and were
+fixed before measuring. It cleans up in `finally` blocks, each process stopped
+only after its name and start time are checked. The last line is
+`P19 RESULT: ...` with a verdict per CLI (REPAINTS, DOES NOT REPAINT, CANNOT
+MEASURE, NO VERDICT or CHECK RUN; per ConPTY on Windows) or `P19 RESULT: COULD
+NOT RUN - <reason>`, with `; clean-up incomplete: <what>` added (and exit 2)
+when something was left. The recordings (every chunk with its offset and time)
+and `p19-result.json` go to `--out`; the result writes personal paths as
+placeholders. The answer is in ADR-030 after the P18 result.
