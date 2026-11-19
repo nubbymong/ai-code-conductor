@@ -42,7 +42,7 @@
 //    account shows Fable:93% on Pi/WINDOWS_2/Rocky. So empty buckets
 //    are WARN, never FAIL.
 import { spawn } from 'node:child_process'
-import { existsSync, mkdtempSync, readdirSync } from 'node:fs'
+import { existsSync, mkdtempSync, readdirSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { fileURLToPath } from 'node:url'
@@ -148,6 +148,13 @@ export function summarizeGate(parsed, exitCode = 0) {
   return { ok, rows, fails, warns, vitestFailed, exitFailed, exitCode, summary: parsed.summary }
 }
 
+/** Whether the live run's dump folder (the pane dumps and app logs, in the machine
+ *  temp folder) is kept for a person to read: when the gate failed or a host warned.
+ *  After a clean pass there is nothing to read, so the folder is removed (#332). */
+export function keepDump(gate) {
+  return !gate.ok || gate.warns.length > 0
+}
+
 // ── Orchestration (not exported) ─────────────────────────────────────────────
 
 function run(cmd, args, opts = {}) {
@@ -226,7 +233,11 @@ async function main() {
     console.log(`\n⚠️  ${gate.warns.length} host(s) delivered statusline+account but no usage buckets — a HOST AUTH-STATE condition (that account's stored token is empty/expired/missing on that host), not a code failure. Re-auth that host's claude to populate buckets.`)
   }
   if (gate.summary) console.log(`\nvitest: ${gate.summary.passed} passed | ${gate.summary.failed} failed`)
-  console.log(`dump: ${dump}`)
+  if (keepDump(gate)) console.log(`dump (kept): ${dump}`)
+  else {
+    try { rmSync(dump, { recursive: true, force: true }) } catch { /* best effort */ }
+    console.log('dump: removed (every combo passed)')
+  }
 
   if (!gate.ok) {
     const exit = gate.exitFailed ? `; the live run exited with code ${gate.exitCode} (a pack failed outside the parsed reports: collection, setup or a crash)` : ''

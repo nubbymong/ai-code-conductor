@@ -41,7 +41,9 @@ const { closeDebugLogger } = await import('../../src/main/debug-logger')
 afterAll(async () => {
   try { closeDebugLogger() } catch { /* not open */ }
   await new Promise((r) => setTimeout(r, 500))
+  // Both folders: this pack runs outside the unit config's temp redirect (#332).
   try { rmSync(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }) } catch { /* best effort */ }
+  try { rmSync(scratch, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }) } catch { /* best effort */ }
 })
 
 interface HostEntry { host: string; username: string; port?: number }

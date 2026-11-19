@@ -31,6 +31,11 @@ export default defineConfig({
   // Tests drive the SAME bundled bridge string the app serves — no second,
   // hand-maintained copy of the in-page script to drift.
   plugins: [canvasBridgePlugin()],
+  // vitest's cache in this checkout, not in node_modules (#232). Every run reads
+  // back <cacheDir>/vitest/<hash>/results.json to order its files (failed first,
+  // then slowest), and worktrees that share one junctioned node_modules shared that
+  // file, so one checkout's results ordered another's run. Ignored by .gitignore.
+  cacheDir: '.vite-cache',
   esbuild: {
     jsx: 'automatic',
     jsxImportSource: 'react',

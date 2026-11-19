@@ -73,28 +73,33 @@ function namesIn(dir: string): string[] {
 /**
  * What a run left at the top of the machine temp folder (#332): the names there now
  * that were not there when it started, other than its own `ccc-vitest-<tag>-*` folders
- * and owner record. Names only, sorted; nothing is read or removed.
+ * and owner record, and vitest's own folder for module copies (`vitestTmp`, its
+ * project.tmpDir), which vitest removes as it closes, right after this teardown. Names
+ * only, sorted; nothing is read or removed.
  * @param tmp the machine temp folder
  * @param before the names in it when the run started
  * @param tag this run's tag
+ * @param vitestTmp vitest's temp folder for this run, when known
  */
-export function addedTempEntries(tmp: string, before: ReadonlySet<string>, tag: string): string[] {
+export function addedTempEntries(tmp: string, before: ReadonlySet<string>, tag: string, vitestTmp?: string): string[] {
   const own = [`ccc-vitest-${tag}-`, `ccc-vitest-owner-${tag}`]
+  const vitests = vitestTmp && path.dirname(path.resolve(vitestTmp)) === path.resolve(tmp) ? path.basename(vitestTmp) : null
   return namesIn(tmp)
-    .filter((name) => !before.has(name) && !own.some((p) => name.startsWith(p)))
+    .filter((name) => !before.has(name) && name !== vitests && !own.some((p) => name.startsWith(p)))
     .sort()
 }
 
 /** One line in a CI log (or with CCC_TEMP_REPORT set): what the run left in the temp folder. */
-function reportTempEntries(tmp: string, before: ReadonlySet<string>, tag: string): void {
+function reportTempEntries(tmp: string, before: ReadonlySet<string>, tag: string, vitestTmp?: string): void {
   if (!process.env.CI && !process.env.CCC_TEMP_REPORT) return
-  const added = addedTempEntries(tmp, before, tag)
+  const added = addedTempEntries(tmp, before, tag, vitestTmp)
   const shown = added.slice(0, 100).join(', ')
   const more = added.length > 100 ? `, and ${added.length - 100} more` : ''
   console.log(`[temp check] this run left ${added.length} entries at the top of ${tmp}${added.length ? `: ${shown}${more}` : ''}`)
 }
 
-export default function () {
+/** @param project the project vitest hands a global setup (only its tmpDir is read) */
+export default function (project?: { tmpDir?: string }) {
   // Before any worker starts, so the workers inherit it.
   const tag = newRunTag()
   process.env[RUN_TAG_ENV] = tag
@@ -105,6 +110,6 @@ export default function () {
   writeRunOwner(tmp, tag)
   return () => {
     sweepAfterRun(tag)
-    reportTempEntries(tmp, before, tag)
+    reportTempEntries(tmp, before, tag, project?.tmpDir)
   }
 }

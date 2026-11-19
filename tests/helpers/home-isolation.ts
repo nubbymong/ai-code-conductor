@@ -8,7 +8,11 @@
 //
 // It points the home variables (HOME_VARS in home-guard-core.mjs; HOMEDRIVE/HOMEPATH
 // on Windows, the XDG folders elsewhere) at a fresh folder per worker, re-asserts
-// them before every test, and installs the guard in home-guard-core.mjs. That file
+// them before every test, and installs the guard in home-guard-core.mjs. It does the
+// same for TEMP, TMP and TMPDIR with the worker's temp folder (tests/helpers/test-tmp.ts,
+// #332), and a test that leaves one of them unset or pointing outside that folder fails
+// in afterEach, with the variable named; the next test starts with it put back. A value
+// inside the worker's temp folder is kept. That file
 // lists what the guard covers and what it does not. A refusal the code under test
 // catches still fails the test in afterEach. Installing fails loudly if os.homedir()
 // is not inside the isolated folder afterwards (a worker THREAD keeps its own copy
@@ -21,7 +25,7 @@ import * as fs from 'fs'
 import * as path from 'path'
 import { afterAll, afterEach, beforeEach } from 'vitest'
 // Redirects TEMP/TMP/TMPDIR to the per-worker root; its parent is the original temp folder.
-import { TEST_TMP_ROOT } from './test-tmp'
+import { TEMP_VARS, TEST_TMP_ROOT } from './test-tmp'
 import { assertNoViolations, installHomeGuard, pinDataDirectory, reassertHomeEnv } from './home-guard-core.mjs'
 
 installHomeGuard({ entry: 'vitest', isolate: true, extraTmpRoots: [path.dirname(TEST_TMP_ROOT)] })
@@ -39,13 +43,60 @@ const proc = process as unknown as Record<symbol, string | undefined>
 if (process.env[TEST_DATA_DIR_ENV] === proc[PINNED]) delete process.env[TEST_DATA_DIR_ENV]
 proc[PINNED] = pinDataDirectory(TEST_DATA_DIR_ENV, TEST_DATA_DIR)
 
+// TEMP, TMP and TMPDIR stay on the worker's temp folder (#332): os.tmpdir() reads them,
+// so a test that moved one and never put it back would send every later fixture in this
+// worker outside the folder that is removed at exit. Compared lexically (case folded on
+// Windows and macOS) and, failing that, by real path, so another spelling of the same
+// folder passes.
+const FOLDS_CASE = process.platform === 'win32' || process.platform === 'darwin'
+const pathKey = (p: string): string => (FOLDS_CASE ? path.resolve(p).toLowerCase() : path.resolve(p))
+const realPath = (p: string): string | null => {
+  try {
+    return fs.realpathSync.native(p)
+  } catch {
+    return null
+  }
+}
+const within = (p: string, root: string): boolean => {
+  const k = pathKey(p)
+  const r = pathKey(root)
+  return k === r || k.startsWith(r.endsWith(path.sep) ? r : r + path.sep)
+}
+function inWorkerTemp(value: string | undefined): boolean {
+  if (!value) return false
+  if (within(value, TEST_TMP_ROOT)) return true
+  const real = realPath(value)
+  const root = realPath(TEST_TMP_ROOT)
+  return real !== null && root !== null && within(real, root)
+}
+
+/** Put each temp variable that is unset or outside the worker's temp folder back on it; returns one phrase per variable found. */
+function putTempVarsBack(): string[] {
+  const found: string[] = []
+  for (const name of TEMP_VARS) {
+    const value = process.env[name]
+    if (inWorkerTemp(value)) continue
+    found.push(value ? `left ${name} at ${value}` : `left ${name} unset`)
+    process.env[name] = TEST_TMP_ROOT
+  }
+  return found
+}
+
 beforeEach(() => {
   reassertHomeEnv()
+  putTempVarsBack()
   if (!process.env[TEST_DATA_DIR_ENV]) process.env[TEST_DATA_DIR_ENV] = TEST_DATA_DIR
 })
 
 afterEach(() => {
+  const moved = putTempVarsBack()
   assertNoViolations('the test')
+  if (moved.length > 0) {
+    throw new Error(
+      `The test ${moved.join(' and ')}, outside this worker's temp folder ${TEST_TMP_ROOT}. ` +
+        'A test that changes TEMP, TMP or TMPDIR puts it back before it ends; it has been put back for the next test.',
+    )
+  }
 })
 
 afterAll(() => {

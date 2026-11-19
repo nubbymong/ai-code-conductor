@@ -69,16 +69,19 @@ const { startStatuslineWatcher } = await import('../../src/main/statusline-watch
 export const { startConductorMcpServer, stopConductorMcpServer } = await import('../../src/main/conductor-mcp-server')
 registerProvider(new ClaudeProvider())
 
-// Remove this run's data directory when the lane file finishes. The logger is
-// closed first (and given a moment to flush) so its open stream neither holds
-// nor truncates app.log. With CCC_LIVE_DUMP set, app.log is kept beside the
-// per-test pane dumps (report below), since it is where End-path and setup
-// failures are recorded. The exit hook is a best-effort second pass for a log
-// line written after this hook ran.
+// Remove this run's data and scratch folders when the lane file finishes: this
+// pack runs outside the unit config's temp redirect, so a folder left here stays
+// in the machine temp folder (#332). The logger is closed first (and given a
+// moment to flush) so its open stream neither holds nor truncates app.log. With
+// CCC_LIVE_DUMP set, app.log is kept beside the per-test pane dumps (report
+// below), since it is where End-path and setup failures are recorded. The exit
+// hook is a best-effort second pass for a log line written after this hook ran.
 const { closeDebugLogger } = await import('../../src/main/debug-logger')
-const removeDataDir = (): void => {
+const RM_OPTIONS = { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }
+const removeLiveFolders = (): void => {
   try { closeDebugLogger() } catch { /* not open */ }
-  try { rmSync(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }) } catch { /* best effort */ }
+  try { rmSync(dataDir, RM_OPTIONS) } catch { /* best effort */ }
+  try { rmSync(scratch, RM_OPTIONS) } catch { /* best effort */ }
 }
 afterAll(async () => {
   try { closeDebugLogger() } catch { /* not open */ }
@@ -88,9 +91,9 @@ afterAll(async () => {
   if (dumpDir && existsSync(appLog)) {
     try { copyFileSync(appLog, join(dumpDir, `app-${process.pid}.log`)) } catch { /* diagnostics only */ }
   }
-  removeDataDir()
+  removeLiveFolders()
 })
-process.once('exit', removeDataDir)
+process.once('exit', removeLiveFolders)
 
 /** Per-lane MCP port: base (env CCC_LIVE_MCP_PORT or 43199) + lane offset. */
 export const makeLivePort = (offset: number) => Number(process.env.CCC_LIVE_MCP_PORT ?? 43199) + offset

@@ -36,7 +36,7 @@ import {
   runTempPrefix,
   writeRunOwner,
 } from '../../helpers/vitest-run-tag.mjs'
-import globalSetup, { sweepAfterRun } from '../../global-setup'
+import globalSetup, { addedTempEntries, sweepAfterRun } from '../../global-setup'
 
 const SCRATCH = fs.mkdtempSync(path.join(os.tmpdir(), 'ccc-run-tag-'))
 
@@ -510,5 +510,26 @@ describe('global setup', () => {
     const home = isolatedRoot()
     expect(home, 'no isolated home').toBeTruthy()
     expect(path.basename(home as string).startsWith(`ccc-vitest-${tag}-home-`), path.basename(home as string)).toBe(true)
+  })
+})
+
+describe('addedTempEntries (what a run left at the top of the temp folder, #332)', () => {
+  it('lists the new names, sorted, and leaves out the names already there, this run\'s own and vitest\'s own folder', () => {
+    const tmp = fresh()
+    const tag = newRunTag()
+    let other = newRunTag()
+    while (other === tag) other = newRunTag()
+    plant(tmp, 'there-before')
+    const before = new Set(fs.readdirSync(tmp))
+    for (const name of ['z-left', `ccc-vitest-${tag}-abc`, `ccc-vitest-${other}-abc`, 'a-left', 'Xvitest21charsXXXXXXX']) plant(tmp, name)
+    fs.writeFileSync(path.join(tmp, `ccc-vitest-owner-${tag}.json`), '{}')
+    expect(addedTempEntries(tmp, before, tag, path.join(tmp, 'Xvitest21charsXXXXXXX'))).toEqual(['a-left', `ccc-vitest-${other}-abc`, 'z-left'])
+    // Without vitest's folder, or with one somewhere else, its name is listed like any other.
+    expect(addedTempEntries(tmp, before, tag)).toContain('Xvitest21charsXXXXXXX')
+    expect(addedTempEntries(tmp, before, tag, path.join(tmp, 'sub', 'Xvitest21charsXXXXXXX'))).toContain('Xvitest21charsXXXXXXX')
+  })
+
+  it('lists nothing for a folder that cannot be read', () => {
+    expect(addedTempEntries(path.join(fresh(), 'missing'), new Set(), newRunTag())).toEqual([])
   })
 })
