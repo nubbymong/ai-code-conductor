@@ -1,8 +1,8 @@
 {
   "schema": "wp1-legacy-codex-ledger/2",
-  "predicateDigest": "53fe7e5238cde4df748b1908c567dfcc9f825c901c109678028d383ec4dfef35",
-  "manifestPathDigest": "36e83d947ebe48dc7d19aefd6f66000926c8182fcec4e6b36e3bcc59e4627fc2",
-  "manifestHead": "3e36f4f8ca4646bc994bbb1d8016f212eba23240",
+  "predicateDigest": "100a1233edebdc39a5f9004d3fba980a89ebb15b25872e52076386bc84b03153",
+  "manifestPathDigest": "520466672b149c328c76c5b3f1452b5074d53bcade30d998811fb2048c4ca3c2",
+  "manifestHead": "12057d2cb77aa45a7b240e1c3f353f56857f466d",
   "dispositions": {
     "retain": "unchanged observable behaviour, characterization proof",
     "move": "moved behind a package boundary and/or adapted at the call site, regression proof (newPath when relocated)",
@@ -444,6 +444,37 @@
       "disposition": "added",
       "evidence": "WP2 plan document: maps each planned Codex adapter test (tests/wp1/cli-discovery.test.ts and siblings) to its requirement; no Codex code path (WP1.70); WP2 P3 usage track MP8 (ADR-022): residuals (window focus, switch-off, status check) and the VM step owed (WP1.70); WP2 P3 usage track MP7 round-1 review fixes (ADR-022): the status-check residual restated for the sign-in lock, and the helper version owed to the VM step (WP1.70); WP2 P3 usage track MP9: the Codex re-read deviation and residuals (WP1.70); WP2 P3 usage track MP8 round 2 (VM walk and review fixes; ADR-022): the focus residual resolved, and a residual for the model catalogue the helper still refetches (WP1.70); WP2 P3 usage track MP10: the whole-session attribution residual (WP1.70); WP2 P3 usage track MP9 round 1 (review fixes: B-F1, B-F2, Q-1 to Q-5): the downgrade and linked-folder fixes, the downgrade residual, and the decisions owed to MP12 (WP1.70); WP2 P3 usage track MP11: the no-price and provider-split decision (WP1.70); WP2 P3 usage track MP8 round 3 and MP10 round 1: what a read contacts and why no flag is used, the privacy wording owed to MP13, and the path rule for Claude attribution (WP1.70); WP2 P3 usage track MP12: the decisions for the page resolved, and the VM screenshots owed (WP1.70); WP2 P3 usage track MP11 round 1 (review fixes) and the MP9 lens B nits: the unpriced list over the range, the folders named once the registry is read, and the residual for a build from before #307 (WP1.70); WP2 P3 usage track MP10 round 1 and MP12 round 1 (review fixes): the profile folder the attribution matches, and the account-sorting notice shortened for the owner screenshot review (WP1.70); WP2 P3 usage track MP9 (defect 4 follow-up): the counting state of the account-sorting notice (WP1.70); WP2 P3 usage track records: the usage screenshots done and approved, and the approved copy the mockup does not draw (WP1.70); WP2 PR 4 final review nits: the departures note says what NoDefaultCurrentDirectoryInExePath=1 sets (WP1.70); docs/wp1/evidence/ci-matrix.md",
       "note": "plan text, not a user-facing claim"
+    },
+    {
+      "path": "helper/probes/README.md",
+      "predicates": [
+        "P14"
+      ],
+      "category": "OTHER",
+      "disposition": "added",
+      "evidence": "ADR-030 probe P18 (2.1.3-beta.10 section B1): a Windows test-machine probe that measures how Claude Code and Codex start a tool server; never shipped and never run in CI; no legacy Codex code path; listed in the repository-wide legacy Codex manifest, zero unmatched at the merge gate (WP1.67), tests/wp1/legacy-codex-gate.test.ts",
+      "note": "how to run probe P18; names Codex as one of the two CLIs it measures"
+    },
+    {
+      "path": "helper/probes/p18-stand-in.cjs",
+      "predicates": [
+        "P14"
+      ],
+      "category": "OTHER",
+      "disposition": "added",
+      "evidence": "ADR-030 probe P18 (2.1.3-beta.10 section B1): a Windows test-machine probe that measures how Claude Code and Codex start a tool server; never shipped and never run in CI; no legacy Codex code path; listed in the repository-wide legacy Codex manifest, zero unmatched at the merge gate (WP1.67), tests/wp1/legacy-codex-gate.test.ts",
+      "note": "the stand-in tool server P18 registers; names Codex in its header comment only"
+    },
+    {
+      "path": "helper/probes/p18-windows-tool-server-start.ps1",
+      "predicates": [
+        "P04",
+        "P14"
+      ],
+      "category": "OTHER",
+      "disposition": "added",
+      "evidence": "ADR-030 probe P18 (2.1.3-beta.10 section B1): a Windows test-machine probe that measures how Claude Code and Codex start a tool server; never shipped and never run in CI; no legacy Codex code path; listed in the repository-wide legacy Codex manifest, zero unmatched at the merge gate (WP1.67), tests/wp1/legacy-codex-gate.test.ts",
+      "note": "the P18 probe script; runs a Codex CLI in a fresh environment whose CODEX_HOME is the probe's own temporary folder"
     },
     {
       "path": "package.json",

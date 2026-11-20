@@ -101,3 +101,35 @@ or 2), with `; clean-up incomplete: <what>` added (and exit 2) when
 something was left or could not be checked. The raw runs are
 `p16-runs.csv`, and the result files write personal paths as placeholders.
 The answer is in ADR-030 after the P7 result.
+
+# Probe P18: how do Claude Code and Codex start a tool server on Windows?
+
+`p18-windows-tool-server-start.ps1` (ADR-030, probe table; it gates tools
+through the helper, S15). The helper's relay mode is a program a CLI starts as
+a tool server over standard input and output; this probe registers a stand-in
+for it (`p18-stand-in.cjs`, run by a copy of the machine's own `node.exe`) with
+each CLI's own add command and records how the CLI starts it and ends it. Run
+it on the Windows test machine, not in CI, from an administrator session (it
+follows processes with WMI's process start and stop events):
+
+```powershell
+.\p18-windows-tool-server-start.ps1 -ClaudePath <path to claude.exe> -CodexPath <path to codex.exe> -OutDir <folder>
+```
+
+Each CLI runs in a fresh environment with every per-user folder in the probe's
+own temporary folder (TEMP must be a path with no space; it refuses one that
+has), no account and no API key; every API address it sets is on this machine
+(Codex's model provider is a local stand-in that refuses every request). For
+each CLI it runs the CLI's connection check (for Codex, a `codex exec` run whose
+turn is refused) three times with the stand-in in a folder with no space in its
+path, once from a folder with one, and once more with the stand-in holding its
+first request while the CLI is ended from outside, and lists what is left 2 s
+and 10 s after each end. The pass line is in the script's header and was fixed
+before measuring. It cleans up in a `finally` block, each process stopped only
+after its name and start time are checked. The last line is
+`P18 RESULT: Claude Code <...>; Codex <...>` (PASS,
+FAIL, CANNOT MEASURE, CHECK RUN or NOT RUN for each) or `P18 RESULT: COULD NOT
+RUN - <reason>`, with `; clean-up incomplete: <what>` added (and exit 2) when
+something was left; the exit codes are in the script's header. The record is
+`p18-result.json`, with personal paths written as placeholders. The answer is
+in ADR-030 after the P16 result.
