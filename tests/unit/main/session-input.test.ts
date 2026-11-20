@@ -21,8 +21,10 @@
 //    SSH flow's own proof that such a session is wrapped, and submitLine's
 //    leave key in it, is session-input-ssh.test.ts. A Codex session's goes to
 //    the run screen's submit with a 5 s ready wait and answers its result,
-//    never written raw; with no run screen registered it is the session gone,
-//    and nothing is typed.
+//    never written raw; the wait's end is fixed at the call (readyBy) and the
+//    Watchdog's incident check is handed on with it (PR #746 review; red on
+//    8bbd33ad, which passed neither); with no run screen registered it is the
+//    session gone, and nothing is typed.
 //  - submitMarker (an Agent Canvas marker): a Codex session's goes to the
 //    run screen's submit with the marker queue's bound and answers its result;
 //    a Claude Code session's is held by queueClaudeMarkerLine for the run it
@@ -96,6 +98,8 @@ const h = vi.hoisted(() => {
     infos: [] as string[],
     notices: [] as Array<Record<string, unknown>>,
     submits: [] as Array<{ sessionId: string; text: string; readyWaitMs: number }>,
+    /** Each submit's options in full (PR #746 review: readyBy, stillWanted). */
+    submitOpts: [] as Array<Record<string, unknown>>,
     submitAnswer: { delivered: true } as Record<string, unknown>,
     queued: [] as Queued[],
     withRunScreen: true,
@@ -199,7 +203,7 @@ function codexProvider(): Record<string, unknown> {
       runScreen: {
         open: () => {}, feed: () => {}, resize: () => {}, close: () => {},
         has: () => true,
-        submit: async (sessionId: string, text: string, opts: { readyWaitMs: number }) => { h.submits.push({ sessionId, text, readyWaitMs: opts.readyWaitMs }); return h.submitAnswer },
+        submit: async (sessionId: string, text: string, opts: { readyWaitMs: number }) => { h.submits.push({ sessionId, text, readyWaitMs: opts.readyWaitMs }); h.submitOpts.push({ ...opts }); return h.submitAnswer },
       },
     } : {}),
   }
@@ -253,6 +257,7 @@ beforeEach(() => {
   h.infos = []
   h.notices = []
   h.submits = []
+  h.submitOpts = []
   h.submitAnswer = { delivered: true }
   h.queued = []
   h.withRunScreen = true
@@ -345,6 +350,20 @@ describe('submitRetry: the Watchdog\'s retry into a Codex session, by the Codex 
     expect(h.submits).toEqual([{ sessionId: SID, text: 'continue', readyWaitMs: 5_000 }])
     expect(term.writes).toEqual([])
     expect(allWrites()).toBe(before)
+  })
+
+  it('its 5 s counts from the call (readyBy), and the Watchdog\'s incident check goes with it (PR #746 review)', async () => {
+    await codexSession()
+    const stillWanted = (): boolean => true
+    const from = Date.now()
+    await submitRetry(SID, 'continue', stillWanted)
+    const to = Date.now()
+    const opts = h.submitOpts[0]
+    expect(opts.readyWaitMs).toBe(RETRY_CODEX_READY_WAIT_MS)
+    // Fixed as the Watchdog asks, not when the run's queue reaches it.
+    expect(opts.readyBy).toBeGreaterThanOrEqual(from + RETRY_CODEX_READY_WAIT_MS)
+    expect(opts.readyBy).toBeLessThanOrEqual(to + RETRY_CODEX_READY_WAIT_MS)
+    expect(opts.stillWanted).toBe(stillWanted)
   })
 
   it('with no run screen registered: session gone, nothing typed', async () => {

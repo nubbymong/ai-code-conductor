@@ -34,14 +34,16 @@ src/main/session-input/index.ts, and the Watchdog's host send is wired to it
 
 **One difference worth knowing.** The old rule's Enter was skipped when the
 Watchdog was torn down (switched off, or restarted from the Services panel)
-in the 300 ms after the text went. The composer rule's checks are its run's,
-not the Watchdog's: a retry already handed to it is typed and submitted in
-the same run even if the Watchdog is switched off while it waits for the
-ready composer (up to 5 s). A new run never gets it (the pane belongs to the
-run). A retry message starting with / is no longer submitted while Codex
-shows its command list under it: the composer rule reads the list as part of
-the text and takes it back (the old rule's check allowed the list). The
-default, continue, is not affected.
+in the 300 ms after the text went. Now a retry not yet typed is never typed
+once its incident is over (the Watchdog torn down or replaced, the limit
+cleared, the check turned off: see the 2026-11-20 paragraph below), but a
+retry already typed is confirmed and submitted in the same run, as the
+composer rule finishes what it typed. A new run never gets it (the pane
+belongs to the run). A retry message starting with / is no longer submitted
+while Codex shows its command list under it: the composer rule reads the
+list as part of the composer's text, so it neither submits it nor takes it
+back, and it stays there for the user (the old rule's check allowed the
+list). The default, continue, is not affected.
 
 **Tests.** codex-watchdog-submit.test.ts is rewritten: the real
 SessionWatchdog and the real session input module over fake ports, wired as
@@ -62,6 +64,42 @@ red: a Codex retry written raw with Enter, a Claude Code retry routed to the
 Codex rule, the leave key dropped, a not-delivered answer left unlogged, and
 at index.ts's own wiring, send back to submitLine and a raw write handed in
 again (these two red the index.ts case).
+
+**2026-11-20, the PR #746 review (two regressions, fixed in the one rule).**
+- The take-back cleared the user's typing. The composer rule sent Ctrl+U into
+  any readable screen with no prompt up, so text the user typed beside an
+  unconfirmed retry (or marker, or question) was cleared with it; the old
+  Watchdog rule left such a composer alone. Now Ctrl+U goes only into a
+  composer holding nothing but the rule's own text: empty, a contiguous part
+  of it, or for a folded text the paste placeholder alone. It reads that
+  through a new shared reader, codexComposerDraft (src/shared/codex-screen.ts),
+  which reads the composer as codexTextTyped does. Otherwise nothing is
+  taken back and the answer is the same not delivered.
+- A retry could be typed late. Every submission for a run waits its turn
+  (session-screen's chain), and a retry's 5 s began only when its turn came,
+  so one queued behind a canvas marker or Ask Conductor's question (which
+  wait up to 2 and 5 minutes) could be typed after the session had
+  recovered. Two options of the composer rule, set only by submitRetry:
+  `readyBy`, the end of the 5 s fixed when the Watchdog sends; and
+  `stillWanted`, asked before each read and just before the text is typed,
+  which the Watchdog manager answers from a per-session count of status
+  changes (the same watcher, no status change since the send). A retry whose
+  incident is over is answered session-gone, typed nothing, and the Watchdog
+  logs it as dropped untyped. Canvas markers, Ask Conductor and the prompt
+  buttons set neither option, so they behave as before.
+- Tests: codex-composer-submit.test.ts gains the reader's cases, the take-back
+  cases (the user typing beside an exact and a folded text) and the readyBy
+  and stillWanted cases; codex-watchdog-submit.test.ts gains the incident
+  check (yes while the limit is up; no once it clears, the check is turned
+  off or the watcher is replaced) and three cases through the real run
+  screen's pane with a fake Codex behind it that both panes read: the user
+  typing beside the retry, an earlier submission recovering the session while
+  the retry waits behind it, and one holding the run past the retry's 5 s.
+  session-input.test.ts checks readyBy and stillWanted are handed on.
+  Seen red on 8bbd33ad: every new case in those three files but the two
+  composer cases marked green on it too and the reader's (8bbd33ad has no
+  reader), and the two watchdog-manager.test.ts cases whose send assertions
+  now expect the incident check as a third argument.
 
 **Left.** The renderer's own Codex rule (codexComposer.ts) stays until the
 renderer's typing moves (S13). ADR-009: no path on the AGENTS.md list; on

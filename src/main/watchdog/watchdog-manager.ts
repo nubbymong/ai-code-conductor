@@ -15,7 +15,7 @@ import type { BrowserWindow } from 'electron'
 import { Terminal } from '@xterm/headless'
 import { SessionWatchdog } from './session-watchdog'
 import { CLAUDE_DETECTORS, CODEX_DETECTORS } from './detectors'
-import type { WatchdogAdapter, WatchdogChecks, WatchdogPublicState } from './session-watchdog'
+import type { WatchdogAdapter, WatchdogChecks, WatchdogPublicState, WatchdogStatus } from './session-watchdog'
 import { readXtermScreen } from '../../shared/codex-screen'
 import { hasActiveMonitors } from './patterns'
 import { onHookEvent } from '../session-signals/hooks'
@@ -258,8 +258,11 @@ export interface WatchdogHostOptions {
    *  so the lone appended '\r' is the only submit and cannot be broken out of.
    *  A Codex session's goes through the Codex composer rule, which answers
    *  whether it was delivered: an answer of not delivered is logged, with its
-   *  reason. */
-  send: (sessionId: string, text: string) => void | Promise<SubmitTextResult>
+   *  reason. `stillWanted` says whether the incident the retry was sent for
+   *  is still on (PR #746 review): the composer rule asks it before it types,
+   *  so a retry queued behind another submission is never typed into a
+   *  session that has since recovered. */
+  send: (sessionId: string, text: string, stillWanted: () => boolean) => void | Promise<SubmitTextResult>
   /** Main-loop stall count in the last minute — drives the tick throttle.
    *  Injectable for tests; defaults to the loop-stall-monitor singleton. */
   getStalls?: () => number
@@ -289,6 +292,13 @@ interface Entry {
   silent: boolean
   /** Until this now(), output is a click-redraw, not a wake (RC8). 0 = none. */
   graceUntil: number
+  /** 2.1.3-beta.10 section A2 (PR #746 review): the status the watcher last
+   *  pushed, and a count bumped each time it changes. A retry is wanted only
+   *  while the count is the one it was sent under: once its incident ends
+   *  (the session recovered, the check turned off) it is never typed, even
+   *  if the same status comes back for a new incident. */
+  status: WatchdogStatus
+  incident: number
 }
 
 /** Serialize the pane's last `maxLines` rendered lines (screen + genuinely
@@ -562,7 +572,10 @@ export class WatchdogManager {
         else if (level === 'warn') logWarn(line)
         else logInfo(line)
       },
-      onStateChange: (state: WatchdogPublicState) => this.pushState(state),
+      onStateChange: (state: WatchdogPublicState) => {
+        this.noteStatus(sessionId, state.status)
+        this.pushState(state)
+      },
     }
 
     const wd = new SessionWatchdog(sessionId, adapter, threadedWatchdogConfig(settings))
@@ -572,7 +585,7 @@ export class WatchdogManager {
       scrollback: HEADLESS_SCROLLBACK,
       allowProposedApi: true,
     })
-    this.entries.set(sessionId, { wd, provider, term, ansiClamp: { residual: '' }, feedTimer: null, lastDataAt: this.now(), silent: false, graceUntil: 0 })
+    this.entries.set(sessionId, { wd, provider, term, ansiClamp: { residual: '' }, feedTimer: null, lastDataAt: this.now(), silent: false, graceUntil: 0, status: wd.getState().status, incident: 0 })
     if (this.startedAt === null) this.startedAt = this.now()
     this.ensureTickTimer()
     this.ensureHookSubscription()
@@ -591,14 +604,40 @@ export class WatchdogManager {
    * logged with its reason, and nothing more is typed for it here (the rule
    * has already taken back what it typed, where it could). Whether and when a
    * retry is sent is the SessionWatchdog's, unchanged.
+   *
+   * PR #746 review: the rule types the retry only while `stillWanted` says
+   * its incident is the one it was sent under (the same watcher, and no
+   * status change since: see Entry.incident). The rule asks it only before
+   * typing, so a "no" means the retry was dropped untyped, and is logged so.
    */
   private sendRetry(sessionId: string, text: string): void {
-    const answer = this.host.send(sessionId, text)
+    const entry = this.entries.get(sessionId)
+    const incident = entry?.incident
+    let dropped = false
+    const stillWanted = (): boolean => {
+      const wanted = entry !== undefined && this.entries.get(sessionId) === entry && entry.incident === incident
+      if (!wanted) dropped = true
+      return wanted
+    }
+    const answer = this.host.send(sessionId, text, stillWanted)
     if (!answer) return
     void answer.then(
-      (result) => { if (!result.delivered) logWarn(`[watchdog:${sessionId}] the retry was not delivered (${result.reason})`) },
+      (result) => {
+        if (result.delivered) return
+        if (dropped) logInfo(`[watchdog:${sessionId}] the retry was dropped untyped: the incident it was sent for is over`)
+        else logWarn(`[watchdog:${sessionId}] the retry was not delivered (${result.reason})`)
+      },
       (err: unknown) => { logWarn(`[watchdog:${sessionId}] the retry was not delivered: ${(err as Error)?.message ?? err}`) },
     )
+  }
+
+  /** PR #746 review: keep the entry's last pushed status, and count each
+   *  change (Entry.incident). */
+  private noteStatus(sessionId: string, status: WatchdogStatus): void {
+    const entry = this.entries.get(sessionId)
+    if (!entry || entry.status === status) return
+    entry.status = status
+    entry.incident++
   }
 
   /** Keep the headless pane's viewport matched to the real session's, so line

@@ -134,22 +134,33 @@ export const RETRY_CODEX_READY_WAIT_MS = 5_000
  *
  * - A Codex session's goes through the Codex package's submit primitive, as a
  *   canvas marker's and Ask Conductor's question do: typed only at Codex's
- *   ready, empty composer (ready on two reads 300 ms apart, waited for up to
- *   RETRY_CODEX_READY_WAIT_MS), its Enter only once the text is confirmed on
- *   screen, a text not confirmed taken back with Ctrl+U, and only into the run
- *   whose pane it read. The answer says whether it was delivered, and why not.
+ *   ready, empty composer (ready on two reads 300 ms apart), its Enter only
+ *   once the text is confirmed on screen, a text not confirmed taken back with
+ *   Ctrl+U (only while the composer holds nothing but it), and only into the
+ *   run whose pane it read. The answer says whether it was delivered, and why
+ *   not. Its RETRY_CODEX_READY_WAIT_MS counts from this call (`readyBy`), so
+ *   a retry queued behind another submission for the run is not typed later
+ *   than that; and `stillWanted`, the Watchdog's "its incident is still the
+ *   one it was sent for", is asked before each read and just before the text
+ *   is typed: an incident that is over leaves the retry untyped (PR #746
+ *   review).
  * - Every other session's (Claude Code's: on this computer, held by the
  *   session helper, or over SSH) is submitLine's, byte for byte, and answers
- *   nothing.
+ *   nothing. It is typed at once, as the Watchdog decides, so `stillWanted`
+ *   has nothing to guard there.
  *
  * Throws before the PTY manager registers its ports, as every door does.
  */
-export function submitRetry(sessionId: string, text: string): void | Promise<SubmitTextResult> {
+export function submitRetry(sessionId: string, text: string, stillWanted?: () => boolean): void | Promise<SubmitTextResult> {
   if (port().isCodexSession(sessionId)) {
     // The primitive answers a session with no pane itself.
     const screen = codexRunScreen()
     if (!screen) return Promise.resolve({ delivered: false, reason: 'session-gone' })
-    return screen.submit(sessionId, text, { readyWaitMs: RETRY_CODEX_READY_WAIT_MS })
+    return screen.submit(sessionId, text, {
+      readyWaitMs: RETRY_CODEX_READY_WAIT_MS,
+      readyBy: Date.now() + RETRY_CODEX_READY_WAIT_MS,
+      ...(stillWanted ? { stillWanted } : {}),
+    })
   }
   submitLine(sessionId, text)
 }

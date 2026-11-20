@@ -639,7 +639,8 @@ describe('WatchdogManager — adapter wiring', () => {
     const wd = instances[0]
 
     wd.adapter.send('continue')
-    expect(send).toHaveBeenCalledWith('s1', 'continue')
+    // The third argument is the retry's incident check (PR #746 review).
+    expect(send).toHaveBeenCalledWith('s1', 'continue', expect.any(Function))
 
     wd.adapter.isSessionAlive()
     expect(isSessionAlive).toHaveBeenCalledWith('s1')
@@ -658,14 +659,14 @@ describe('WatchdogManager — adapter wiring', () => {
     const wd = instances[0]
 
     wd.adapter.send('continue')
-    expect(send).toHaveBeenCalledWith('c1', 'continue')
+    expect(send).toHaveBeenCalledWith('c1', 'continue', expect.any(Function))
     await vi.advanceTimersByTimeAsync(0)
     expect(logWarn).toHaveBeenCalledWith('[watchdog:c1] the retry was not delivered (busy-timeout)')
 
     vi.mocked(logWarn).mockClear()
     wd.adapter.send('go on')
     await vi.advanceTimersByTimeAsync(0)
-    expect(send).toHaveBeenLastCalledWith('c1', 'go on')
+    expect(send).toHaveBeenLastCalledWith('c1', 'go on', expect.any(Function))
     expect(logWarn).not.toHaveBeenCalled()
   })
 
