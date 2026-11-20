@@ -63,7 +63,7 @@ export function notNowText(folder: string, toolName: string): string {
   return `Your PATH was not changed, so ${toolName} cannot be used from this app yet. To use it, add ${folder} to your PATH yourself (${BY_HAND}), then press Check again. Or add it here.`
 }
 
-export function PathHintNotice({ hint, toolName, providerId, testIdPrefix: P, onAdded }: {
+export function PathHintNotice({ hint, toolName, providerId, testIdPrefix: P, onAdded, primaryAutofocus }: {
   hint: PathHintView
   toolName: string
   providerId: ProviderId
@@ -71,7 +71,12 @@ export function PathHintNotice({ hint, toolName, providerId, testIdPrefix: P, on
   /** The folder was added (or was there already) and main checked again:
    *  the hint that check left, if any. */
   onAdded?: (after: { pathHint?: PathHintView }) => void
+  /** The notice is the page's primary content (it shows in place of the
+   *  install commands): its action, Add it to PATH for me or the line's
+   *  Copy, is marked data-autofocus, the mark a page focuses by. */
+  primaryAutofocus?: boolean
 }) {
+  const mark = primaryAutofocus ? '' : undefined
   const [phase, setPhase] = useState<'offer' | 'adding' | 'declined'>('offer')
   const [error, setError] = useState<string | null>(null)
   const [copied, setCopied] = useState(false)
@@ -123,7 +128,7 @@ export function PathHintNotice({ hint, toolName, providerId, testIdPrefix: P, on
           >
             {hint.line}
           </code>
-          <DialogButton variant="secondary" className="shrink-0" onClick={copy} testId={`${P}-path-copy`}>
+          <DialogButton variant="secondary" className="shrink-0" onClick={copy} data-autofocus={mark} testId={`${P}-path-copy`}>
             {copied ? 'Copied' : 'Copy'}
           </DialogButton>
         </div>
@@ -133,7 +138,7 @@ export function PathHintNotice({ hint, toolName, providerId, testIdPrefix: P, on
 
   const adding = phase === 'adding'
   const addButton = (variant: 'primary' | 'secondary') => (
-    <DialogButton variant={variant} onClick={() => { void add() }} disabled={adding} testId={`${P}-path-add`}>
+    <DialogButton variant={variant} onClick={() => { void add() }} disabled={adding} data-autofocus={mark} testId={`${P}-path-add`}>
       {adding ? 'Adding…' : 'Add it to PATH for me'}
     </DialogButton>
   )

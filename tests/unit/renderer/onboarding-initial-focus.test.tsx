@@ -251,6 +251,24 @@ describe('Set up Codex: focus follows the page\'s primary control', () => {
     expect(focused()).toBe('codex-setup-check-again')
   })
 
+  // aicc_planning#288: the off-PATH notice takes the commands' place, and
+  // its Add it to PATH for me is the page's primary control then, whether
+  // the commands had focus a moment before (the entry check answers after
+  // they arrive) or not.
+  it('installed but off PATH: Add it to PATH for me, in place of the commands', async () => {
+    const folder = '%APPDATA%' + String.fromCharCode(92) + 'npm'
+    let answer: (v: unknown) => void = () => {}
+    pa.discover.mockImplementation(() => new Promise((r) => { answer = r }))
+    await show(snap({ discoveryState: 'missing', version: undefined }))
+    expect(focused()).toBe('codex-recipe-run-codex-script-install-ps1')
+    await act(async () => {
+      answer({ ok: true, installation: codex({ discoveryState: 'missing', version: undefined, lastCheckedAt: 2 }), pathHint: { kind: 'add-to-path', folder } })
+    })
+    for (let i = 0; i < 4; i++) await act(async () => { await Promise.resolve() })
+    expect(byTest('codex-recipes-install')).toBeNull()
+    expect(focused()).toBe('codex-path-add')
+  })
+
   it('too old: the update command\'s button', async () => {
     await show(snap({ discoveryState: 'found', version: '0.100.0', compatibility: 'too-old' }))
     expect(focused()).toBe('codex-recipe-run-codex-script-update-ps1')

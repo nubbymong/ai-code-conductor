@@ -10,7 +10,11 @@
 // commands once discovery says they are needed (6g: the retired Codex
 // settings tab's install hint lives here now), each with Run it for me and
 // Copy (owner decision D2, 2026-10-10; ADR-024): Run it for me opens a
-// visible terminal tab, shows it, and checks again when the tab ends.
+// visible terminal tab, shows it, and checks again when the tab ends. A CLI
+// that is installed in a folder PATH lacks (main's path hint) gets the notice
+// that says so in place of its not-found line and those commands; a row
+// first shown as not found looks again once by itself, so that notice shows
+// with nothing pressed (aicc_planning#288).
 import React, { useEffect, useState } from 'react'
 import type { InstallRecipeView, PathHintView, ProviderId, ProviderInstallationView } from '../../../../shared/providers'
 import { useProviderAccountsStore, providerAccountActions, providerStatus, providerNotSetUp } from '../../../stores/providerAccountsStore'
@@ -72,12 +76,16 @@ function notePathHint(providerId: ProviderId, r: { ok: boolean; pathHint?: PathH
   else pathHints.delete(providerId)
   for (const l of [...hintListeners]) l()
 }
+// The providers whose row has looked again by itself, on first view of its
+// CLI as not found: once each while the renderer runs (aicc_planning#288).
+const lookedOnView = new Set<ProviderId>()
 
-/** Test seam: forget every tab a row opened. */
+/** Test seam: forget every tab a row opened, and every look a row made. */
 export function _resetProviderInstallTabsForTest(): void {
   providerTabs.clear()
   endedInstalls.clear()
   pathHints.clear()
+  lookedOnView.clear()
 }
 
 /** The install or update commands main knows for the provider on this
@@ -188,15 +196,53 @@ function ProviderRow({ p, first }: { p: ProviderInstallationView; first: boolean
       if (pathHints.delete(p.providerId)) setHint(undefined)
     }
   }, [purpose, p.providerId])
+
+  // First view of a CLI shown as not found: the row looks again by itself,
+  // once per provider while the renderer runs, as the Set up Codex page does
+  // on entry. Main says what helps (its install folder is off PATH, or a
+  // restart) only in a check's answer, not in the snapshot, so without this
+  // the notice showed only after the row's own Check again
+  // (aicc_planning#288). Not once a hint is known, and not while the
+  // provider's install tab runs: its end checks again. Says nothing of its
+  // own: only the notice, if main has one, is new.
+  const shownMissing = purpose === 'install' && p.discoveryState === 'missing'
+  useEffect(() => {
+    const providerId = p.providerId
+    if (!shownMissing || lookedOnView.has(providerId) || pathHints.has(providerId)) return
+    if (installTabRunning(providerTabs.get(providerId), useSessionStore.getState().sessions)) return
+    lookedOnView.add(providerId)
+    setChecking(true)
+    void providerAccountActions.discover(providerId).then((r) => {
+      notePathHint(providerId, r)
+      setChecking(false)
+    })
+  }, [shownMissing, p.providerId])
+
   // Still not found after its install ended, or after the user's own Check
   // again. (A CLI found but too old says so in its status line.) When main
-  // said what helps (its install folder is off PATH, or a restart), that is
-  // shown instead. A restart that only may help (pathHintIsNote) is a note:
-  // this line stays, and the note follows it.
-  const shownHint = purpose === 'install' && !checking ? hint : undefined
-  const after = purpose !== 'install' || checking || (shownHint && !pathHintIsNote(shownHint)) ? null
+  // said what helps (its install folder is off PATH, or a restart), that
+  // takes the place of the not-found status line and the install commands,
+  // as on the Set up Codex page and the setup screen: the CLI is installed,
+  // and installing it again would not help. It stays while a check runs,
+  // and a Check again that still finds nothing says so under it. A restart
+  // that only may help (pathHintIsNote) is a note: the status line, the
+  // commands and this line stay, and the note follows them.
+  const shownHint = purpose === 'install' ? hint : undefined
+  const hintReplaces = !!shownHint && !pathHintIsNote(shownHint)
+  const after = purpose !== 'install' || checking || hintReplaces ? null
     : endedInstalls.has(p.providerId) && !running ? afterInstallMessage(p.displayName, { ended: true })
     : checked ? afterInstallMessage(p.displayName, { ended: false }) : null
+  const notice = shownHint && (
+    <div className="mt-1.5">
+      <PathHintNotice
+        hint={shownHint}
+        toolName={p.displayName}
+        providerId={p.providerId}
+        testIdPrefix={`provider-${p.providerId}`}
+        onAdded={(r) => notePathHint(p.providerId, { ok: true, ...r })}
+      />
+    </div>
+  )
 
   // Not set up: the switch shows off, and turning it on is the answer.
   const unset = notSetUp(p)
@@ -229,7 +275,7 @@ function ProviderRow({ p, first }: { p: ProviderInstallationView; first: boolean
           {/* Labelled with the provider's maturity (WP1.21), read from its descriptor. */}
           {tryGetRendererProvider(p.providerId)?.maturity === 'beta' && <Pill tone="beta" testId={`provider-beta-${p.providerId}`}>Beta</Pill>}
         </div>
-        <StatusText tone={status.tone} testId={`provider-status-${p.providerId}`}>{status.text}</StatusText>
+        {hintReplaces ? notice : <StatusText tone={status.tone} testId={`provider-status-${p.providerId}`}>{status.text}</StatusText>}
         {unset && (
           <MutedLine testId={`provider-not-set-up-${p.providerId}`}>
             Turn {p.displayName} on to set it up, then add a {p.displayName} account below.
@@ -242,21 +288,16 @@ function ProviderRow({ p, first }: { p: ProviderInstallationView; first: boolean
             </RowButton>
           </div>
         )}
+        {hintReplaces && checked && !checking && (
+          <MutedLine className="mt-1" testId={`provider-checked-again-${p.providerId}`}>
+            Checked again just now: {p.displayName} was still not found.
+          </MutedLine>
+        )}
         {/* Keyed on the purpose: a CLI that goes from missing to too old
             reads the commands again, for the update ones. */}
-        {purpose && <InstallCommands key={purpose} p={p} purpose={purpose} onRun={run} busyReason={busyReason} />}
+        {purpose && !hintReplaces && <InstallCommands key={purpose} p={p} purpose={purpose} onRun={run} busyReason={busyReason} />}
         {after && <MutedLine className="mt-1" testId={`provider-after-install-${p.providerId}`}>{after}</MutedLine>}
-        {shownHint && (
-          <div className="mt-1.5">
-            <PathHintNotice
-              hint={shownHint}
-              toolName={p.displayName}
-              providerId={p.providerId}
-              testIdPrefix={`provider-${p.providerId}`}
-              onAdded={(r) => notePathHint(p.providerId, { ok: true, ...r })}
-            />
-          </div>
-        )}
+        {!hintReplaces && notice}
         {/* The Codex introduction, replayed (WP2 commit 6f): offered only
             once Codex is set up, since its first page says the account is
             ready. A replay marks it seen only if it was still due. */}

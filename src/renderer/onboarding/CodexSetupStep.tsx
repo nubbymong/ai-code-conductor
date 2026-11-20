@@ -98,6 +98,10 @@ let openedTab: InstallTab | null = null
  *     ends the tab's shell when its command ends, and the page then checks
  *     again. "Check again" looks again; a check that still finds nothing
  *     says what to do.
+ *   - Installed, but in a folder PATH lacks (main's path hint): the notice
+ *     that says so (PathHintNotice: Add it to PATH for me on Windows, the
+ *     line to run once on macOS and Linux), in place of the not-found row
+ *     and the recipes.
  *   - Too old: the version found and the update recipe.
  *   - Ready: sign in to a new Codex account through the Accounts surface's
  *     own add-account dialog, started at the chosen method. That is the
@@ -221,27 +225,47 @@ export function CodexSetupStep({ onNext, onBack, stepAside, returns }: {
   } else if (install.kind === 'missing' || install.kind === 'update') {
     // Still not found after a command this page ran ended, or after the
     // user's own Check again: what to do, once that check has answered. (A
-    // Codex found but too old has its own line above.) A path hint that says
-    // what helps takes its place; a restart that only may help
-    // (pathHintIsNote) is a note, shown after it.
+    // Codex found but too old has its own line above.)
+    //
+    // A path hint that says what helps (Codex is in a folder PATH lacks, or a
+    // restart would help) takes the place of the not-found row and the
+    // install commands, as the setup screen's and the footer's do
+    // (SetupDialog, BottomBar): Codex is installed, and installing it again
+    // would not help (aicc_planning#288). It stays while a check runs, so
+    // Check again does not bring the not-found row back for a moment, and a
+    // Check again that still finds nothing says so under it. A restart that
+    // only may help (pathHintIsNote) is a note: the row, the commands and
+    // what a command ended with stay, and the note follows them.
     const ended = !!endedTab && endedTab === tab?.id
-    const hint = checking || install.kind !== 'missing' ? undefined : pathHint
-    const after = checking || install.kind !== 'missing' || (hint && !pathHintIsNote(hint)) ? null
+    const hint = install.kind === 'missing' ? pathHint : undefined
+    const hintReplaces = !!hint && !pathHintIsNote(hint)
+    if (hintReplaces) view = 'path-hint'
+    const after = checking || install.kind !== 'missing' || hintReplaces ? null
       : ended ? afterInstallMessage('Codex', { ended: true }) : userChecked ? afterInstallMessage('Codex', { ended: false }) : null
+    const notice = hint && (
+      <PathHintNotice hint={hint} toolName="Codex" providerId="codex" testIdPrefix="codex" primaryAutofocus={hintReplaces} onAdded={() => { void checkAgain() }} />
+    )
     body = (
       <div data-testid={install.kind === 'missing' ? 'codex-setup-missing' : 'codex-setup-update'}>
-        <CheckRow tone={install.kind === 'missing' ? 'pending' : 'warn'} testId="codex-setup-check">{install.text}</CheckRow>
-        <InstallRecipeList
-          purpose={install.kind === 'missing' ? 'install' : 'update'}
-          recipes={recipes}
-          toolName="Codex"
-          testIdPrefix="codex"
-          confirmWhere={CONFIRM_WHERE}
-          onRun={run}
-          busyReason={busyReason}
-        />
+        {hintReplaces ? notice : (
+          <>
+            <CheckRow tone={install.kind === 'missing' ? 'pending' : 'warn'} testId="codex-setup-check">{install.text}</CheckRow>
+            <InstallRecipeList
+              purpose={install.kind === 'missing' ? 'install' : 'update'}
+              recipes={recipes}
+              toolName="Codex"
+              testIdPrefix="codex"
+              confirmWhere={CONFIRM_WHERE}
+              onRun={run}
+              busyReason={busyReason}
+            />
+          </>
+        )}
+        {hintReplaces && userChecked && !checking && (
+          <p className="cx-muted" role="status" data-testid="codex-setup-checked-again">Checked again just now: Codex was still not found.</p>
+        )}
         {after && <p className="cx-muted" role="status" data-testid="codex-setup-after-install">{after}</p>}
-        {hint && <PathHintNotice hint={hint} toolName="Codex" providerId="codex" testIdPrefix="codex" onAdded={() => { void checkAgain() }} />}
+        {!hintReplaces && notice}
       </div>
     )
   } else {
@@ -296,8 +320,9 @@ export function CodexSetupStep({ onNext, onBack, stepAside, returns }: {
 
   // Focus goes to the page's primary control, the first enabled one marked
   // data-autofocus (an install or update command's button, else Check again;
-  // the first sign-in method; Next; Skip for now when the account list is not
-  // there), when the page opens, when its state
+  // Add it to PATH for me, or the PATH line's Copy, when the path hint takes
+  // the commands' place; the first sign-in method; Next; Skip for now when
+  // the account list is not there), when the page opens, when its state
   // moves on (a check finished, a sign-in landed), when the add-account dialog
   // closes and when the user comes back from the terminal. Only while nothing
   // has focus (the page body): a control the user is on keeps it, and nothing
@@ -307,8 +332,9 @@ export function CodexSetupStep({ onNext, onBack, stepAside, returns }: {
   useEffect(() => {
     if (dialog) return
     // Not found or too old: the commands are the primary, so wait for them
-    // rather than settle on Check again a moment before they arrive.
-    if (needsCli && !recipesLoaded) return
+    // rather than settle on Check again a moment before they arrive. Not
+    // when the path hint shows in their place.
+    if (needsCli && view !== 'path-hint' && !recipesLoaded) return
     const at = document.activeElement
     if (at && at !== document.body) return
     // The page's own section: this page's body and its footer.

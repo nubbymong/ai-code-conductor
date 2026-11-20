@@ -1,0 +1,35 @@
+## 2026-11-20 -- beta.10 smoke fixes: the off-PATH notice takes the not-found words' place, and What's New dates
+
+Found by the 2.1.3-beta.10 pre-publish VM smoke and fixed on the release PR before the cut
+(aicc_planning #288 and #366), so beta.10 does not ship either as a known issue.
+
+- **Set up Codex page (#288).** With Codex installed by npm in %APPDATA%\npm and that folder off
+  PATH, the page showed "Codex CLI not found" and both install commands ABOVE the notice saying
+  Codex is installed. A path hint that says what helps (Codex is in a folder PATH lacks, or a
+  restart would help) now takes the place of the not-found row and the install commands; a hint
+  that is only a note (a restart that may help) keeps the row and the commands and follows them,
+  as before. The same rule as the setup screen and the footer's CLI help (`pathHintIsNote`),
+  with one difference kept on purpose: those Claude Code surfaces still list the install
+  commands under their notice, while both Codex surfaces drop them, because installing again
+  does not help a tool that is installed. The notice stays while a check runs, so Check again
+  no longer brings the not-found row back for a moment, and a Check again that still finds the
+  folder off PATH says "Checked again just now: Codex was still not found." under it, as the
+  setup screen does (aicc_planning #194). Focus goes to Add it to PATH for me (or the line's
+  Copy on macOS and Linux) when the notice replaces the commands: PathHintNotice takes a
+  `primaryAutofocus` flag that marks it data-autofocus.
+- **Settings, Accounts (#288).** The same rule for a provider row's status line and its install
+  commands. A row first shown with its CLI not found now looks again once by itself (the same
+  discover its Check again runs, through notePathHint), once per provider while the renderer
+  runs, never while that provider's install tab runs, and never for a provider main found (too
+  old included) or has not looked for yet. Why in the renderer: main computes the hint only inside `checkAgain`
+  (accounts-service.ts), never in the snapshot, and putting it there would read the registry on
+  every snapshot and change the IPC shape. The look applies to the Claude Code row too.
+- **What's New dates (#366).** `new Date('YYYY-MM-DD')` is midnight UTC, the day before
+  anywhere west of UTC (the VM on Pacific time showed beta.10 as 19 Nov 2026). The changelog
+  date is now built from its parts and formatted in UTC (`formatChangelogDate`,
+  WhatsNewEntries.tsx), the only place a changelog date is shown. Build times and run
+  timestamps are real instants and stay local. The test sets `process.env.TZ` at run time,
+  which Node honours on Windows too; a sanity assertion proves the zone took effect.
+- Each new test was seen red against the old code or a named mutant (no look on first view, no
+  replacement, a look while the install tab runs, a look on every mount, a look for a found
+  provider, no focus mark, the old date formatter).

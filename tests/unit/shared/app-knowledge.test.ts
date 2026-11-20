@@ -2397,7 +2397,9 @@ describe('the 2.1.3-beta.10 sweep', () => {
   it('the providers section says a Codex that npm installed off PATH on Windows is offered Add it to PATH for me (#732)', () => {
     const p = body('providers')
     expect(p).toContain('On Windows it does the same for a Codex installed with npm, which npm, unless its prefix is set to another folder, puts in a folder of its own for each Windows account: the Node.js installer adds that folder to the PATH of the account that installed Node.js only')
-    expect(p).toContain('so on another account the Set up Codex page and the Codex row in Settings, Accounts say Codex is installed but its folder is not on PATH, and offer Add it to PATH for me. The app advises')
+    // In place of the not-found words and the commands, and on a row's first
+    // view with nothing pressed (aicc_planning#288, the beta.10 VM smoke).
+    expect(p).toContain('so on another account the Set up Codex page and the Codex row in Settings, Accounts say Codex is installed but its folder is not on PATH, in place of the not-found message and the install commands, and offer Add it to PATH for me. A row in Settings, Accounts that shows Claude Code or Codex as not found checks once by itself when you first see it, so this message shows there without pressing Check again. The app advises')
   })
 
   it('known issues: a Codex prompt button that starts with / is typed but not sent, with its workaround (#746)', () => {
