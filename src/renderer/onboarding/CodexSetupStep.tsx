@@ -138,7 +138,8 @@ export function CodexSetupStep({ onNext, onBack, stepAside, returns }: {
 
   // What main said helps when its check found nothing: Codex is in
   // OpenAI's install folder, which the login shell's PATH lacks (macOS and
-  // Linux), or a restart would help.
+  // Linux), or in npm's folder, which PATH lacks (Windows), or a restart
+  // would help.
   const [pathHint, setPathHint] = useState<PathHintView | undefined>(undefined)
   const checkAgain = async () => {
     setChecking(true)

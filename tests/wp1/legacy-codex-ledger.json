@@ -1253,8 +1253,8 @@
       ],
       "category": "OTHER",
       "disposition": "added",
-      "evidence": "new first-run install review fix (2026-10-10, ADR-024): a CLI its publisher's installer left in its own folder off PATH; Claude Code in %USERPROFILE%\\.local\\bin on Windows gets Add it to PATH for me (main computes the one folder), Claude Code and Codex in ~/.local/bin on macOS and Linux the shell line to copy; a restart advised only when it would help (WP1.18); tests/unit/main/install-folder-path.test.ts, tests/unit/main/setup-probe-cli-path.test.ts",
-      "note": "main only; names codex as a provider id with a POSIX install folder"
+      "evidence": "new first-run install review fix (2026-10-10, ADR-024): a CLI its publisher's installer left in its own folder off PATH; Claude Code in %USERPROFILE%\\.local\\bin on Windows gets Add it to PATH for me (main computes the one folder), Claude Code and Codex in ~/.local/bin on macOS and Linux the shell line to copy; a restart advised only when it would help (WP1.18); tests/unit/main/install-folder-path.test.ts, tests/unit/main/setup-probe-cli-path.test.ts; 2.1.3-beta.10 C2 (aicc_planning#288): Codex installed with npm on Windows, in %APPDATA%\\npm (APPDATA read from the environment, nothing started) off PATH, gets Add it to PATH for me too; discovery still looks on PATH only; the looks in an install folder wait no longer than a walk of PATH, one lstat outstanding per path (WP1.18); tests/unit/main/install-folder-path.test.ts, tests/unit/renderer/onboarding-codex-setup.test.tsx",
+      "note": "main only; names codex as a provider id with a POSIX install folder and npm's Windows folder"
     },
     {
       "path": "src/main/install-secret.ts",
@@ -6754,7 +6754,7 @@
       ],
       "category": "TEST",
       "disposition": "added",
-      "evidence": "new first-run install review fix (2026-10-10, ADR-024) test: the PATH hint per platform and provider (Codex has no Windows folder of its own; ~/.local/bin/codex on macOS and Linux gets the shell line), and Add it to PATH for me appends only the folder main computes (WP1.18); tests/unit/main/install-folder-path.test.ts",
+      "evidence": "new first-run install review fix (2026-10-10, ADR-024) test: the PATH hint per platform and provider (Codex has no Windows folder of its own; ~/.local/bin/codex on macOS and Linux gets the shell line), and Add it to PATH for me appends only the folder main computes (WP1.18); tests/unit/main/install-folder-path.test.ts; 2.1.3-beta.10 C2 (aicc_planning#288): Codex's Windows folder is now npm's %APPDATA%\\npm, from the environment's APPDATA only (unset or not a full path: no folder), codex.cmd or codex.exe a regular file there and neither a link (WP1.18); tests/unit/main/install-folder-path.test.ts",
       "note": "host-safe: the file system, registry and PATH write are stand-ins"
     },
     {
