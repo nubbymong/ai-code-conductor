@@ -796,6 +796,7 @@ export const trainingSteps: TrainingStep[] = [
       'General -- default working dir, machine name, update channel, security toggles, and the Tokenomics switch (the usage index can be switched off)',
       'General, under Terminal -- two previews, both off by default. **Plain terminals through the session helper** keeps local Terminal only tabs and local partner terminals running on Windows if the app crashes, or through an update when you choose **Save sessions**. **Claude Code and Codex sessions through the session helper** runs local Claude Code and Codex sessions inside the helper. The **Machines** page shows the helper and what it holds',
       'Accounts -- the Providers card (Claude Code and Codex on or off) and every Claude and Codex account',
+      'Custom Commands -- every command button across your configs, and what a prompt button does in every session: **Send the prompt** (the default) or **Type it only**, which leaves its text for you to send with Enter',
       'Status Line -- toggle each element of the in-terminal status bar + font + size',
       'Shortcuts -- rebind every keyboard shortcut',
       'GitHub -- sign in (OAuth / PAT / gh CLI) and configure per-session integration',

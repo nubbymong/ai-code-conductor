@@ -1558,4 +1558,21 @@ export const TIPS_LIBRARY: Tip[] = [
       },
     },
   },
+
+  {
+    id: 'tip.prompt-buttons-type-only',
+    category: 'commands',
+    complexity: 'simple',
+    priority: 21,
+    variants: {
+      primary: {
+        shortText: 'Prompt buttons can type their text and leave it to you',
+        title: 'Prompt Buttons: Send or Type Only',
+        body: 'A command bar **prompt button** sends its prompt to the session\'s Claude Code or Codex, on this computer and over SSH: the text goes in, and Enter follows by itself.\n\nWant to check or finish the text first? In **Settings > Custom Commands**, set **Prompt buttons** to **Type it only**. Every prompt button then puts its text in the prompt and waits for you to press **Enter**, in every session. **Shell line** buttons always run.',
+        actionLabel: 'Open Settings',
+        actionTarget: 'settings',
+        focusHint: 'Settings -- Custom Commands, the Commands card',
+      },
+    },
+  },
 ]
