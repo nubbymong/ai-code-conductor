@@ -1,8 +1,8 @@
 {
   "schema": "wp1-legacy-codex-manifest/3",
-  "generatedAt": "2026-11-20T13:44:30.397Z",
-  "head": "d6b5ba3e418f6a43b3662ccaa691a8cc61bbb527",
-  "tree": "ec64d557a5dfc0bff91423349ca888e2aa8b234e",
+  "generatedAt": "2026-11-20T14:02:53.014Z",
+  "head": "dfbe83262a3c06277777a518b3e7df9289550970",
+  "tree": "91617db7a08cf5c282b1aa9562a2cc1b22d195b4",
   "scannedWorkingTree": true,
   "predicateDigest": "100a1233edebdc39a5f9004d3fba980a89ebb15b25872e52076386bc84b03153",
   "predicates": [
@@ -116,8 +116,8 @@
     "\\.(png|jpg|jpeg|gif|ico|icns|webp|svg|woff2?|ttf|otf|mp4|zip|asar|node|exe|dll|dylib|so|pdf)$",
     "^package-lock\\.json$"
   ],
-  "trackedFileCount": 3567,
-  "excludedFileCount": 547,
+  "trackedFileCount": 3568,
+  "excludedFileCount": 548,
   "scannedFileCount": 3020,
   "unscopedFileCount": 15,
   "unscoped": [
@@ -7046,7 +7046,7 @@
         "P07",
         "P13"
       ],
-      "lineCount": 35
+      "lineCount": 36
     },
     {
       "path": "tests/unit/renderer/session-dialog-credentials.test.tsx",
