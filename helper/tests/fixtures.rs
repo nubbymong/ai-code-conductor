@@ -12,7 +12,7 @@ use aicc_helper::pty::Conpty;
 use aicc_helper::request::{self, Allowed, Request};
 use aicc_helper::ring::DEFAULT_RING_BYTES;
 use aicc_helper::store::{self, Listing, Record};
-use aicc_helper::{serve, transport};
+use aicc_helper::{relay, serve, transport};
 use std::fs;
 
 fn load(name: &str) -> Value {
@@ -32,6 +32,10 @@ fn text<'a>(v: &'a Value, key: &str) -> &'a str {
 
 fn items<'a>(v: &'a Value, key: &str) -> &'a Vec<Value> {
     v.get(key).and_then(Value::as_array).unwrap_or_else(|| panic!("missing array {key}"))
+}
+
+fn strings<'a>(v: &'a Value, key: &str) -> Vec<&'a str> {
+    items(v, key).iter().map(|s| s.as_str().expect("a string")).collect()
 }
 
 fn flow(v: &Value) -> Direction {
@@ -220,13 +224,17 @@ fn described(req: &Request) -> Value {
             m.push(("payload", payload.clone()));
             Value::obj(m)
         }
+        // Tool stream messages carry no id.
+        Request::McpOpen { stream } => Value::obj(vec![("type", Value::str("mcp.open")), ("stream", Value::uint(*stream))]),
+        Request::Mcp { stream, message, .. } => Value::obj(vec![("type", Value::str("mcp")), ("stream", Value::uint(*stream)), ("message", message.clone())]),
+        Request::McpClose { stream } => Value::obj(vec![("type", Value::str("mcp.close")), ("stream", Value::uint(*stream))]),
     }
 }
 
-/// A message read on a connection that acked `local` or not, and not
-/// `hooks`: the app's own ack.
+/// A message read on a connection that acked `local` or not, and neither
+/// `hooks` nor `mcp`: the app's own ack.
 fn local_only(v: &Value, local: bool) -> Result<Request, request::Refusal> {
-    request::parse_allowed(v, Allowed { local, hooks: false })
+    request::parse_allowed(v, Allowed { local, hooks: false, mcp: false })
 }
 
 // ── local.json `hooks`: hook events (capability `hooks`) ────────────────────
@@ -234,11 +242,17 @@ fn local_only(v: &Value, local: bool) -> Result<Request, request::Refusal> {
 /// What a vector's `acked` says the connection acked; by default core,
 /// local and hooks.
 fn acked(case: &Value) -> Allowed {
+    acked_or(case, Allowed { local: true, hooks: true, mcp: false })
+}
+
+/// What a vector's `acked` says the connection acked; `default` when it
+/// says nothing.
+fn acked_or(case: &Value, default: Allowed) -> Allowed {
     match case.get("acked").and_then(Value::as_array) {
-        None => Allowed { local: true, hooks: true },
+        None => default,
         Some(caps) => {
             let has = |cap: &str| caps.iter().any(|c| c.as_str() == Some(cap));
-            Allowed { local: has("local"), hooks: has(serve::HOOKS_CAP) }
+            Allowed { local: has("local"), hooks: has(serve::HOOKS_CAP), mcp: has(serve::MCP_CAP) }
         }
     }
 }
@@ -299,8 +313,9 @@ fn hook_messages_are_the_documented_bytes() {
 fn the_hook_limits_match_the_constants() {
     let doc = load("local.json");
     let hooks = doc.get("hooks").expect("hooks");
+    // What a connection that takes hook events acks: the hook mode's ack.
     let caps: Vec<&str> = items(hooks, "caps").iter().map(|c| c.as_str().expect("cap")).collect();
-    assert_eq!(caps, serve::HOLDER_CAPS.to_vec());
+    assert_eq!(caps, hook::ACK_CAPS.to_vec());
     // The app's own ack stays core and local.
     let local: Vec<&str> = items(&doc, "caps").iter().map(|c| c.as_str().expect("cap")).collect();
     assert_eq!(local, hello::LOCAL_CAPS.to_vec());
@@ -334,11 +349,84 @@ fn the_largest_hook_event_fits_a_frame_once_launched() {
     assert_eq!(event.len() as u64, n(largest, "event_bytes"));
     assert!(event.len() <= serve::MAX_JSON_AFTER_LAUNCH, "the largest event is {} bytes", event.len());
     // As a hook.event: the most is taken, one byte more is too large.
-    let both = Allowed { local: true, hooks: true };
+    let both = Allowed { local: true, hooks: true, mcp: false };
     let message = |p: &str| json::parse(format!("{{\"t\":\"hook.event\",\"id\":2,\"kind\":\"{kind}\",\"payload\":{p}}}").as_bytes()).expect("JSON");
     assert!(request::parse_allowed(&message(&payload), both).is_ok(), "the largest payload is refused");
     let refused = request::parse_allowed(&message(&payload_of(most + 1)), both).expect_err("a payload one byte larger");
     assert_eq!(refused.code, request::CODE_TOO_LARGE);
+}
+
+// ── local.json `mcp`: tool streams (capability `mcp`) ───────────────────────
+
+#[test]
+fn tool_stream_messages_read_as_the_fixtures_say() {
+    let doc = load("local.json");
+    let mcp = doc.get("mcp").expect("mcp");
+    let requests = mcp.get("requests").expect("requests");
+    let relay_ack = Allowed { local: true, hooks: false, mcp: true };
+    let mut ran = 0;
+    for case in items(requests, "valid") {
+        let name = text(case, "name");
+        let value = json::parse(text(case, "json").as_bytes()).unwrap_or_else(|e| panic!("{name}: not JSON: {e:?}"));
+        let req = request::parse_allowed(&value, acked_or(case, relay_ack)).unwrap_or_else(|r| panic!("{name}: refused with {}: {}", r.code, r.text));
+        assert_eq!(described(&req).to_json(), case.get("expect").expect("expect").to_json(), "{name}");
+        ran += 1;
+    }
+    let mut codes: Vec<&str> = Vec::new();
+    for case in items(requests, "invalid") {
+        let name = text(case, "name");
+        let value = json::parse(text(case, "json").as_bytes()).unwrap_or_else(|e| panic!("{name}: not JSON: {e:?}"));
+        let refusal = request::parse_allowed(&value, acked_or(case, relay_ack)).expect_err(name);
+        assert_eq!(refusal.code, text(case, "error"), "{name}: {}", refusal.text);
+        // A tool message has no id, so no refusal of one names it.
+        assert_eq!(refusal.re, None, "{name}");
+        codes.push(refusal.code);
+        ran += 1;
+    }
+    assert!(ran >= 20, "only {ran} tool stream vectors");
+    for code in [request::CODE_BAD_FIELD, request::CODE_UNKNOWN_TYPE] {
+        assert!(codes.contains(&code), "no vector refused with {code}");
+    }
+}
+
+#[test]
+fn tool_stream_messages_to_the_app_are_the_documented_bytes() {
+    let doc = load("local.json");
+    let mcp = doc.get("mcp").expect("mcp");
+    for case in items(mcp, "messages") {
+        let name = text(case, "name");
+        let stream = case.get("stream").and_then(Value::as_u64).expect("stream");
+        let message = match text(case, "type") {
+            "mcp.open" => serve::mcp_open(stream),
+            "mcp.close" => serve::mcp_close(stream),
+            "mcp" => serve::mcp_message(stream, case.get("message").expect("message").clone()),
+            other => panic!("{name}: unknown type {other}"),
+        };
+        assert_eq!(message.to_json(), text(case, "json"), "{name}");
+        assert!(frame::encode(&frame::Frame::json(0, message), Direction::HelperToApp).is_ok(), "{name}");
+    }
+}
+
+#[test]
+fn the_tool_stream_limits_match_the_constants() {
+    let doc = load("local.json");
+    let mcp = doc.get("mcp").expect("mcp");
+    assert_eq!(strings(mcp, "offered"), serve::HOLDER_CAPS.to_vec());
+    assert_eq!(strings(mcp, "relay_caps"), relay::ACK_CAPS.to_vec());
+    let l = mcp.get("limits").expect("limits");
+    let n = |k: &str| l.get(k).and_then(Value::as_u64).unwrap_or_else(|| panic!("missing number {k}"));
+    assert_eq!(n("message_to_app_bytes"), request::MAX_MCP_TO_APP as u64);
+    assert_eq!(n("message_to_helper_bytes"), request::MAX_MCP_TO_HELPER as u64);
+    assert_eq!(n("streams"), serve::MAX_TOOL_STREAMS as u64);
+    assert_eq!(n("ping_secs"), relay::PING_EVERY.as_secs());
+    assert_eq!(n("connect_secs"), relay::CONNECT.as_secs());
+    assert_eq!(n("line_bytes"), relay::MAX_LINE as u64);
+    assert_eq!(n("open_wait_secs"), relay::OPEN_WAIT.as_secs());
+    assert_eq!(n("out_queue_bytes"), relay::OUT_QUEUE_BYTES as u64);
+    assert_eq!(n("drain_secs"), relay::DRAIN.as_secs());
+    // Each limit leaves the 256 bytes the `mcp` around a message needs.
+    assert_eq!(request::MAX_MCP_TO_APP + 256, frame::MAX_JSON_HELPER_TO_APP);
+    assert_eq!(request::MAX_MCP_TO_HELPER + 256, frame::MAX_JSON_APP_TO_HELPER);
 }
 
 #[test]

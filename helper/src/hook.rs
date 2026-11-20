@@ -25,7 +25,7 @@ use crate::frame::Body;
 use crate::hello::{self, valid_sid};
 use crate::json::{self, Value};
 use crate::request::{repeats_a_name, HOOK_KINDS};
-use crate::serve::{HOLDER_CAPS, HOOKS_CAP};
+use crate::serve::HOOKS_CAP;
 use crate::store;
 use std::io::Read;
 use std::path::PathBuf;
@@ -48,6 +48,10 @@ pub const KEPT_FIELDS: [&str; 5] = ["hook_event_name", "session_id", "transcript
 const MAX_PAYLOAD_DEPTH: usize = json::MAX_DEPTH - 1;
 /// The id of the one `hook.event` (app ids are even).
 const EVENT_ID: u64 = 2;
+/// What the hook mode acks: the frozen core, `local` and `hooks`, and never
+/// more, whatever else a holder offers (`serve::HOLDER_CAPS`), so every
+/// holder from 2.1.3-beta.8 on takes it.
+pub const ACK_CAPS: [&str; 3] = ["core", "local", HOOKS_CAP];
 
 /// Run the hook mode on `args` (what follows `hook`). It returns by the
 /// deadline whatever the work is still waiting on (standard input that never
@@ -76,7 +80,7 @@ fn deliver(args: &[String], deadline: Instant) -> Option<()> {
     if !client.hello.caps.iter().any(|c| c.as_str() == HOOKS_CAP) {
         return None;
     }
-    client.send(hello::ack_message(1, &HOLDER_CAPS)).ok()?;
+    client.send(hello::ack_message(1, &ACK_CAPS)).ok()?;
     client.send(hook_event(&kind, payload)).ok()?;
     loop {
         match client.recv(left(deadline)?) {
@@ -99,8 +103,9 @@ fn left(deadline: Instant) -> Option<Duration> {
 }
 
 /// `--store <folder> --session <sid>`, each once, nothing else; the store
-/// not empty and the session id of its pattern.
-fn parse_args(args: &[String]) -> Option<(PathBuf, String)> {
+/// not empty and the session id of its pattern. The relay (`relay.rs`) takes
+/// the same command line.
+pub(crate) fn parse_args(args: &[String]) -> Option<(PathBuf, String)> {
     let mut store_dir: Option<&str> = None;
     let mut sid: Option<&str> = None;
     let mut i = 0;
@@ -630,7 +635,7 @@ mod tests {
             let message = hook_event(&kind, got);
             let bytes = frame::encode(&Frame::json(0, message.clone()), Direction::AppToHelper).expect("the message encodes");
             assert!(bytes.len() - 9 <= MAX_JSON_AFTER_LAUNCH, "message {n} is {} bytes", bytes.len() - 9);
-            let parsed = request::parse_allowed(&message, Allowed { local: true, hooks: true });
+            let parsed = request::parse_allowed(&message, Allowed { local: true, hooks: true, mcp: false });
             match parsed {
                 Ok(Request::HookEvent { payload, bytes, .. }) => {
                     assert_eq!(bytes, payload.to_json().len(), "payload {n}");

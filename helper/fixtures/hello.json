@@ -74,6 +74,27 @@
         "sid": "sess-0001",
         "state": "new"
       }
+    },
+    {
+      "name": "a holder that offers hook events and tool streams",
+      "line": "AICC-HELLO 0123456789abcdef0123456789abcdef {\"proto\":[1],\"helper\":{\"version\":\"0.1.0\"},\"os\":\"windows\",\"arch\":\"x86_64\",\"caps\":[\"core\",\"local\",\"hooks\",\"mcp\"],\"session\":{\"sid\":\"sess-0001\",\"state\":\"live\"}}",
+      "expect": {
+        "proto": [
+          1
+        ],
+        "helper_version": "0.1.0",
+        "sha256": null,
+        "os": "windows",
+        "arch": "x86_64",
+        "caps": [
+          "core",
+          "local",
+          "hooks",
+          "mcp"
+        ],
+        "sid": "sess-0001",
+        "state": "live"
+      }
     }
   ],
   "invalid": [
@@ -174,6 +195,18 @@
         "expect": {
           "proto": 1,
           "caps": []
+        }
+      },
+      {
+        "name": "the relay's ack, with tool streams",
+        "json": "{\"t\":\"hello.ack\",\"proto\":1,\"caps\":[\"core\",\"local\",\"mcp\"]}",
+        "expect": {
+          "proto": 1,
+          "caps": [
+            "core",
+            "local",
+            "mcp"
+          ]
         }
       }
     ],

@@ -18,6 +18,7 @@ pub mod json;
 pub mod pids;
 pub mod pty;
 pub mod random;
+pub mod relay;
 pub mod request;
 pub mod ring;
 pub mod selftest;

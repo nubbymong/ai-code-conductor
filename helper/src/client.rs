@@ -87,6 +87,13 @@ impl Client {
         Client::connect(&rec.endpoint, &rec.nonce, &rec.session, timeout)
     }
 
+    /// The connection itself, for a caller that reads it on one thread and
+    /// writes it on another (the relay, `relay.rs`). Taken before anything is
+    /// received, so no byte read is left behind.
+    pub fn into_stream(self) -> Stream {
+        self.stream
+    }
+
     /// Answer the hello as the app does: version 1, `core` and `local`.
     pub fn ack(&mut self) -> io::Result<()> {
         self.send(hello::ack_message(1, &LOCAL_CAPS))
