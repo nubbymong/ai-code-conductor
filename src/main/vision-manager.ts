@@ -1020,12 +1020,13 @@ type StartedRecord = { pid: number; created: string }
 
 /**
  * Where this instance keeps the record: the user data folder for an
- * installed app; an E2E or dev run's own data root otherwise
- * (session-helper/install.ts instanceRecordPath, the rule app-run.json
- * follows too). A dev run shares the user data folder with an installed app
- * on the same computer (docs/dev-alongside-prod.md), and must never end that
- * app's browser. A root that is not absolute gives no record at all. Null
- * when there is no folder to use.
+ * installed app; an E2E or dev run's own data root otherwise, by the rule in
+ * dev-data-root.ts devDataRoot (through session-helper/install.ts
+ * instanceRecordPath, as app-run.json is placed). A dev run shares the user
+ * data folder with an installed app on the same computer
+ * (docs/dev-alongside-prod.md), and must never end that app's browser. A root
+ * that is not absolute gives no record at all. Null when there is no folder
+ * to use.
  */
 function startedRecordPath(): string | null {
   try {

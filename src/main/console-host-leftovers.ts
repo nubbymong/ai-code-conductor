@@ -165,11 +165,12 @@ export async function endLeftoverConsoleHosts(ports: LeftoverPorts): Promise<voi
 
 /**
  * Where this run keeps its record: the user data folder for an installed app,
- * an E2E or dev run's own data root otherwise, by the rule vision-started.json
- * follows (session-helper/install.ts instanceRecordPath). A dev run shares the
- * user data folder with an installed app on the same computer, and must never
- * hand that app's run to the helper or write over its record. Null when there
- * is no folder to use (a data root that is not absolute).
+ * an E2E or dev run's own data root otherwise, by the rule in dev-data-root.ts
+ * devDataRoot (through session-helper/install.ts instanceRecordPath, as
+ * vision-started.json is placed). A dev run shares the user data folder with
+ * an installed app on the same computer, and must never hand that app's run
+ * to the helper or write over its record. Null when there is no folder to use
+ * (a data root that is not absolute).
  */
 function runRecordPath(): string | null {
   try {
