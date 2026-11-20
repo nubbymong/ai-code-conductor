@@ -783,9 +783,11 @@ the last column of section 8's table):
 | `term.exit` | none | `{code}`, from the holder to the attached connection, once: after the program's last output, and also when another connection ended the session, which then closes this one |
 | `hook.event` | `hook.taken` `{re, seq}` | `{id, kind, payload}`; only on a connection that acked `hooks`, attached or not; while the session is ending, `not-found` (hook events, below) |
 | `event` | none | `{seq, kind, payload, lost?}`, from the holder to the attached connection, only if that connection acked `hooks` (hook events, below) |
-| `mcp.open` | none | `{stream}`; from a relay that is not attached, for its one stream, and from the holder to the attached connection that acked `mcp`, on the holder's number for it; with no such connection, `not-connected` (tool streams, below) |
-| `mcp` | none | `{stream, message}`, one JSON-RPC message: from a relay on its stream, and from the attached connection on a stream it was sent `mcp.open` for; each passed to the other side on that side's number (tool streams, below) |
+| `mcp.open` | none | `{stream}`; from a relay that is not attached, for its one stream, and from the holder to the attached connection that acked `mcp`, on the holder's number for it, for a new stream or a kept one it is given; with no such connection, `not-connected`, or `mcp.away` for a relay that acked `away` while the program runs (tool streams, below) |
+| `mcp` | none | `{stream, message}`, one JSON-RPC message: from a relay on its stream, and from the attached connection on a stream it was sent `mcp.open` for; each passed to the other side on that side's number; from a relay while its stream is kept, `not-connected` (tool streams, below) |
 | `mcp.close` | none | `{stream}`; from a relay, and from the holder to whichever side is still there when the other ends (tool streams, below) |
+| `mcp.away` | none | `{stream}`, from the holder to a relay that acked `away`, on the relay's number: no connection takes its stream now, and the stream is kept (kept streams, below) |
+| `mcp.back` | none | `{stream}`, from the holder to a relay that acked `away`, on the relay's number: a connection takes its kept stream again (kept streams, below) |
 
 Ids are even, as in section 9, and at most 2^53 - 1. Every message has exactly
 its fields; `code` is present only once the program has exited. The tool
@@ -1006,7 +1008,9 @@ hello. No connection the app makes acks it yet, and nothing in the app starts
 the relay or names it: the step that wires a session's tools to it comes
 later, behind the agent sessions' setting. The holder only numbers a stream
 and passes its messages on: it reads no message, and runs, opens and writes
-nothing for one. Fixtures: the `mcp` part of `helper/fixtures/local.json`.
+nothing for one. Fixtures: the `mcp` part of `helper/fixtures/local.json`, and
+for kept streams (capability `away`, from 2.1.3-beta.12, the tool half of
+protocol change 9) its `away` part.
 
 - **The relay mode.** A CLI starts, as a tool server on its standard input
   and output,
@@ -1023,15 +1027,19 @@ nothing for one. Fixtures: the `mcp` part of `helper/fixtures/local.json`.
   `session`, with 2 s to connect and 2 s for the whole hello line. A holder
   whose hello does not offer `mcp` (one
   from before 2.1.3-beta.10) is sent nothing, not even the ack. Otherwise the
-  relay sends `hello.ack` with `caps` `["core","local","mcp"]`, `mcp.open`
+  relay sends `hello.ack` with `caps` `["core","local","mcp"]`, and
+  `["core","local","mcp","away"]` when the hello offers `away` (a holder
+  from before 2.1.3-beta.12 is sent nothing new), `mcp.open`
   for its one stream, number 1, and a `ping`: the holder answers a
   connection's messages in order, so the `pong` says the open was taken (a
   refusal comes before it), and the relay reads nothing on standard input
   until it comes, 10 s at most. Then it sends each line it reads as one
   `mcp`, and writes the message of each `mcp` the holder sends on that stream
   as one line on standard output, as compact JSON. It passes whatever method
-  comes, in the order it came, and waits for no `initialize`. It pings every
-  15 s, so the connection is not dropped as idle. Standard output is written
+  comes, in the order it came, and waits for no `initialize`. It pings when
+  it has sent nothing for 15 s, so the connection is not dropped as idle.
+  With `away` acked it holds and answers some calls while the app is away
+  (kept streams, below). Standard output is written
   by a thread of its own, so the relay sees the end of its stream even while
   the CLI is not reading; at most 64 MiB of lines wait for the CLI (one more
   and the relay exits 1), and once the holder ends the stream or the
@@ -1043,9 +1051,11 @@ nothing for one. Fixtures: the `mcp` part of `helper/fixtures/local.json`.
   next line read; a line over 1 MiB is read to its end and dropped the same
   way. It exits 0 when its standard input ends, after `mcp.close`. It exits 1
   as soon as its stream cannot be had or cannot go on: a command line it does
-  not take, no record or no holder, a holder without `mcp`, `not-connected`,
-  `busy`, no `pong` to the open in time, an `mcp.close` from the holder, any
-  other `error` but `too-large`, a CLI 64 MiB behind, or the connection lost.
+  not take, no record or no holder, a holder without `mcp`, `not-connected`
+  to its open, `busy`, no `pong` to the open in time, an `mcp.close` from the
+  holder, any other `error` but `too-large` (and, with `away` acked, but a
+  `not-connected` once the stream is had, which refused one message), a CLI
+  64 MiB behind, or the connection lost.
   An input that ends at once still exits 1 when the stream was never had.
   Standard output carries only the messages: it
   prints nothing else, writes nothing on standard error and writes no file.
@@ -1060,7 +1070,9 @@ nothing for one. Fixtures: the `mcp` part of `helper/fixtures/local.json`.
   The holder numbers each stream itself, from 1, never using a number twice
   in its life, and sends `mcp.open` with its number to the attached
   connection that acked `mcp`. With no such connection attached the answer
-  is `not-connected`; with 8 streams open, `busy`. Neither takes a number.
+  is `not-connected` (a relay that acked `away` has its stream kept instead,
+  below); with 8 streams open, kept ones among them, `busy`. Neither refusal
+  takes a number.
   Only an attach that carries live output takes tool streams: one that only
   replays a program that has exited takes none, and ends any its connection
   had.
@@ -1081,15 +1093,69 @@ nothing for one. Fixtures: the `mcp` part of `helper/fixtures/local.json`.
   not send it (`not-found`): its streams end with its attach. When it lets
   go (`term.detach`, a newer attach, `term.exit`, falling behind or no thread
   for its output, a dropped connection) every stream it carried ends and
-  each relay is told, on the relay's number; it is not told itself, and no
-  tool message follows its last word, as no hook event does. A holder that
-  ends tells no one: each relay reads the end of its connection.
-- **What is not here yet.** While no connection takes tool streams, as when
-  the app is away, a relay's `mcp.open` is `not-connected` and the relay
-  exits. Holding a call for about 30 seconds and the fixed updating answer
-  are protocol change 9 (ADR-030), a later step. The app's side, when it
-  sends `mcp`, must keep each message to what the holder reads: JSON with no
-  escaped lone surrogate and at most 31 levels deep, or the frame is
+  each relay is told, on the relay's number, except a stream whose relay
+  acked `away`, which is kept (below); it is not told itself, and no tool
+  message follows its last word, as no hook event does. A holder that ends
+  tells no one: each relay reads the end of its connection.
+- **Kept streams (capability `away`, from 2.1.3-beta.12).** A holder offers
+  `away`, and only a relay acks it, beside `mcp` (without `mcp` it keeps
+  nothing). For a stream whose relay acked it, while the session's program
+  runs: when the attached connection lets go, the stream is kept with no app
+  side and its relay is sent `mcp.away` on its number, in place of
+  `mcp.close`; and an `mcp.open` while no connection takes tool streams is
+  taken, numbered and kept the same way, and answered `mcp.away` in place of
+  `not-connected`. A kept stream counts toward the 8. An `mcp` from its relay
+  is `not-connected` and the stream goes on, as is one the holder reads after
+  the stream left the app it was with. The next attach that takes tool
+  streams (it acked `mcp` and carries live output) is given every kept
+  stream: `mcp.open` on the holder's number, as for a new one, in the order
+  they were opened, then `mcp.back` to each relay on its number. A relay that
+  did not ack `away` is served as before. A session keeps nothing past its
+  program: once the program has exited each kept stream ends, its relay told
+  `mcp.close` within a quarter of a second, and an `mcp.open` before the
+  launch or after the exit is `not-connected`, `away` or not. A kept stream
+  does not hold the session open: the away clock runs as it does without one.
+- **The relay while away.** With `away` acked, of each message it passes the
+  relay reads whether it is a call (an object with an `id`, a string or a
+  number, and a `method`, a string) and that call's `id` and `method`, and of
+  each message from the app whether it is an answer (an object with an `id`
+  and no `method`) and its `id`: nothing more, and every message goes on
+  exactly as it came. A call passed to the app and not yet answered is
+  remembered by its id, 64 at most (past that the oldest is forgotten and
+  falls to the CLI's own timeout), and the app's answer clears it; a batch
+  is no call, so the calls in one are not remembered. Only an id
+  that is a string, or a whole number written in plain digits, at most 15 of
+  them, is remembered, as only such an id comes back from the app as it went.
+  On `mcp.away` each remembered call is answered at once with the fixed
+  answer below: it reached an app that is gone, and it is never sent a second
+  time, as a tool call may not be safe to repeat; an answer the app sends to
+  one all the same is dropped. From then on a call read from the CLI is held,
+  not sent: at most 32 calls and 4 MiB of them (as compact JSON) wait, and a
+  call past either is answered at once. Each held call has 30 s, then gets the
+  fixed answer and is dropped (4 s in a build with debug assertions, the one
+  the helper's tests run; the installers carry the release build). Anything
+  else read meanwhile is dropped, except a cancel
+  (`notifications/cancelled`) of a held call, which drops that call with no
+  answer. A batch (an array) is answered at once, with one array of the fixed
+  answer to each call in it, and never held. On `mcp.back` the held calls go
+  to the holder in the order they came, and then everything is as before. The
+  fixed answer has ADR-030 D1's words. To `tools/call` it is a result the
+  model reads,
+  `{"jsonrpc":"2.0","id":<id>,"result":{"content":[{"type":"text","text":"AI Code Conductor is updating, try again shortly"}],"isError":true}}`;
+  to any other call, a JSON-RPC error,
+  `{"jsonrpc":"2.0","id":<id>,"error":{"code":-32603,"message":"AI Code Conductor is updating, try again shortly"}}`.
+  The relay's exits stay: 0 at the end of its input, 1 when its stream ends
+  from the holder's side or the connection is lost.
+- **What is not here yet.** A kept stream is given to the next attach of the
+  same holder, which within one run of the app is the app again: it attaches
+  by itself after a dropped link. It is not given to a new run of the app,
+  as after an update: an update ends every agent session today, and an
+  agent session is not shown again after the app restarts, so
+  a stream is given back inside one app run only, until the step that keeps
+  a session across an update (ADR-030 S16, its second half). Nothing tells a
+  CLI that its tool list changed after the app came back. The app's side,
+  when it sends `mcp`, must keep each message to what the holder reads: JSON
+  with no escaped lone surrogate and at most 31 levels deep, or the frame is
   `bad-frame` and its connection is closed.
 
 **Change.** The `hold` and `list` command lines and their exit codes, the
