@@ -274,6 +274,7 @@ describe('P19 recorder, second run: the console hosts after a program\'s end', (
     const v = P.consoleHostVerdict([run(1, 1, 1, 1, 1, 0), run(0, 0, 0, 0, 0, 0)])
     expect(v.verdict).toBe('IN BETWEEN')
     expect(v.line).toBe('IN BETWEEN (runs with one left, of 2: 1 s: 1, 2 s: 1, 5 s: 1, 10 s: 1, 30 s: 1, 60 s: 0)')
+    expect(P.consoleHostVerdict([run(1, 1, 1, 1, 0, 0)]).verdict).toBe('IN BETWEEN')
   })
   it('counts no run whose six readings were not all taken', () => {
     expect(P.consoleHostVerdict([{ consoleHosts: { counted: false, at: [] } }, { consoleHosts: null }]).verdict).toBe('NOT COUNTED')
