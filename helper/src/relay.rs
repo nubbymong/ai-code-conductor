@@ -914,6 +914,25 @@ mod tests {
     }
 
     #[test]
+    fn a_cancel_of_a_call_with_the_app_forgets_it_and_goes_on_as_it_came() {
+        let now = Instant::now();
+        let mut c = Calls::default();
+        c.from_cli(call(1), now);
+        c.from_cli(v(r#"{"jsonrpc":"2.0","id":"s","method":"tools/list"}"#), now);
+        // The CLI gave up on 1 (Esc, or its own timeout), and the app sends
+        // no answer to it: the cancel goes on as it came, and 1 is forgotten.
+        let cancel = v(r#"{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":1,"reason":"x"}}"#);
+        assert_eq!(c.from_cli(cancel.clone(), now), Act::Send(cancel));
+        // When the app goes, only the call the CLI still waits for is answered.
+        assert_eq!(c.away(), vec![updating_answer(&v("\"s\""), "tools/list")]);
+        // A cancel of the one call there is leaves nothing to answer.
+        let mut d = Calls::default();
+        d.from_cli(call(1), now);
+        d.from_cli(v(r#"{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":1}}"#), now);
+        assert!(d.away().is_empty(), "a call the CLI cancelled was answered");
+    }
+
+    #[test]
     fn at_most_64_calls_are_remembered_and_the_oldest_is_forgotten() {
         let now = Instant::now();
         let mut c = Calls::default();

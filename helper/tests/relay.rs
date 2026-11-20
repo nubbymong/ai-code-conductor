@@ -12,6 +12,14 @@
 //! calls its CLI makes meanwhile, and answers in the app's place what cannot
 //! wait. A test connection that acks as a relay from before `away` stands in
 //! for one, and is served as before.
+//!
+//! Not checked here, by reasoning only: an app connection that lets go (a
+//! detach or a dropped connection) just as a newer one attaches, when the
+//! newer one takes tool streams before the older one's streams are kept.
+//! Those streams are kept after the newer one was given the kept ones, and
+//! the holder's clock gives them to it on its next tick (serve.rs,
+//! `give_stranded`). No test can place an attach inside that window on
+//! purpose.
 
 use aicc_helper::client::Client;
 use aicc_helper::frame::{self, Body, Direction, Frame};
@@ -20,7 +28,7 @@ use aicc_helper::hook::ACK_CAPS as HOOK_ACK;
 use aicc_helper::json::{self, Value};
 use aicc_helper::pids;
 use aicc_helper::request::MAX_MCP_TO_APP;
-use aicc_helper::serve::{mcp_close, mcp_message, mcp_open, HOLDER_CAPS, MAX_TOOL_STREAMS};
+use aicc_helper::serve::{mcp_close, mcp_message, mcp_open, MAX_TOOL_STREAMS};
 use aicc_helper::store::{self, Record};
 use aicc_helper::transport::{self, Listener};
 use std::fs;
@@ -43,6 +51,8 @@ const BOUND: Duration = Duration::from_secs(5);
 const RELAY_ACK: [&str; 3] = ["core", "local", "mcp"];
 /// What a relay acks from a holder that offers `away` (from 2.1.3-beta.12).
 const KEEPING_ACK: [&str; 4] = ["core", "local", "mcp", "away"];
+/// What the app acks (protocol.ts helloAck): never `away`, which only a relay acks.
+const APP_ACK: [&str; 4] = ["core", "local", "hooks", "mcp"];
 /// How long the relay holds a call in the build `cargo test` runs
 /// (`relay::TEST_HOLD`, pinned in relay.rs's own tests). The build the
 /// installer ships holds 30 s.
@@ -378,10 +388,10 @@ fn launch_env() -> Vec<(String, String)> {
     env
 }
 
-/// The app: a connection that acks everything a holder offers, launches the
-/// fake CLI and attaches.
+/// The app: a connection that acks what the app acks (`APP_ACK`), launches
+/// the fake CLI and attaches.
 fn app_attached(rec: &Record, cwd: &Folder) -> Conn {
-    let mut app = Conn::connect(rec, &HOLDER_CAPS);
+    let mut app = Conn::connect(rec, &APP_ACK);
     assert!(app.client.hello.caps.iter().any(|c| c == "mcp"), "the holder does not offer mcp: {:?}", app.client.hello.caps);
     let id = app.id();
     let env = Value::Obj(launch_env().into_iter().map(|(k, v)| (k, Value::Str(v))).collect());
@@ -942,11 +952,11 @@ fn when_the_app_lets_go_every_stream_ends_and_each_relay_is_told() {
 
     // A newer attach takes the terminal and tool streams; the one it
     // replaced has its streams ended the same way.
-    let mut second = Conn::connect(&held.0, &HOLDER_CAPS);
+    let mut second = Conn::connect(&held.0, &APP_ACK);
     attach(&mut second);
     by_hand.client.send(mcp_open(3)).expect("send");
     second.expect(&mcp_open(3));
-    let mut third = Conn::connect(&held.0, &HOLDER_CAPS);
+    let mut third = Conn::connect(&held.0, &APP_ACK);
     attach(&mut third);
     by_hand.expect(&mcp_close(3));
     second.expect_error("replaced");
@@ -1050,7 +1060,7 @@ fn after_the_program_exits_no_attach_takes_tool_streams() {
     attach(&mut app);
     relay.client.send(mcp_open(1)).expect("send");
     relay.expect_error("not-connected");
-    let mut again = Conn::connect(&held.0, &HOLDER_CAPS);
+    let mut again = Conn::connect(&held.0, &APP_ACK);
     attach(&mut again);
     let mut late = Conn::relay(&held.0, 1);
     late.expect_error("not-connected");
@@ -1083,7 +1093,7 @@ fn when_the_app_lets_go_a_relay_that_acked_away_keeps_its_stream_for_the_next_at
 
     // The next attach that acked mcp is given the kept stream, on the
     // holder's number, and it carries calls again.
-    let mut second = Conn::connect(&held.0, &HOLDER_CAPS);
+    let mut second = Conn::connect(&held.0, &APP_ACK);
     attach(&mut second);
     second.expect(&mcp_open(1));
     let request = tool_call(4);
@@ -1098,7 +1108,7 @@ fn when_the_app_lets_go_a_relay_that_acked_away_keeps_its_stream_for_the_next_at
     // `mcp.away` on its own number, then given to the newer attach (which
     // gets `mcp.open` for each, in the order they were opened) and its relay
     // told `mcp.back`. The replaced connection gets no tool message.
-    let mut third = Conn::connect(&held.0, &HOLDER_CAPS);
+    let mut third = Conn::connect(&held.0, &APP_ACK);
     attach(&mut third);
     keeper.expect(&mcp_away(3));
     keeper.expect(&mcp_back(3));
@@ -1159,7 +1169,7 @@ fn a_call_made_while_the_app_is_away_waits_for_it_and_one_the_app_had_is_answere
 
     // The next attach that acked mcp gets the stream, then the held calls in
     // the order they came, and nothing more: not the call the app had.
-    let mut second = Conn::connect(&held.0, &HOLDER_CAPS);
+    let mut second = Conn::connect(&held.0, &APP_ACK);
     attach(&mut second);
     second.expect(&mcp_open(1));
     for c in &calls {
@@ -1215,7 +1225,7 @@ fn a_call_still_held_when_its_time_is_up_gets_the_fixed_answer_and_is_dropped() 
 
     // What was answered never reaches an app: the next attach is given the
     // stream and nothing more.
-    let mut second = Conn::connect(&held.0, &HOLDER_CAPS);
+    let mut second = Conn::connect(&held.0, &APP_ACK);
     attach(&mut second);
     second.expect(&mcp_open(1));
     second.quiet_for(Duration::from_secs(1));
