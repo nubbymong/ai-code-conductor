@@ -156,14 +156,28 @@ beforeEach(() => {
   _resetScriptDeployWarningForTest()
 })
 
-afterEach(() => {
+/** The first half of what follows each case: the stubs off and the user id put back. */
+function restoreStubs(): void {
   vi.restoreAllMocks()
   syncBuiltinESMExports()
   if (realGetuid) Object.defineProperty(process, 'getuid', realGetuid)
   else delete (process as { getuid?: unknown }).getuid
-  // A read-only copy a case made stays removable.
-  try { nodeFs.chmodSync(dest, 0o666) } catch { /* not there */ }
+}
+
+/**
+ * The second half: the case's folder removed. A read-only copy a case made is made
+ * writable first, but only when it is not a folder: mode 0666 takes a folder's search
+ * bit, and on macOS and Linux nothing in the case's folder, the folder, or the worker's
+ * temp root above it could then be removed (aicc_planning #332, measured in CI).
+ */
+function removeCaseFolder(): void {
+  try { if (!nodeFs.statSync(dest).isDirectory()) nodeFs.chmodSync(dest, 0o666) } catch { /* not there */ }
   try { nodeFs.rmSync(dir, { recursive: true, force: true }) } catch { /* temp */ }
+}
+
+afterEach(() => {
+  restoreStubs()
+  removeCaseFolder()
 })
 
 /** The paths writeFileSync was asked to write, with the options of each. */
@@ -787,5 +801,31 @@ describe.each(['linux', 'darwin'] as const)('on %s: the owner and who may write'
     destMode = 0o600
     expect(deployScriptFile(src, dest, platform)).toBe('unchanged')
     expect(writeCalls()).toEqual([])
+  })
+})
+
+// The cleanup after each case. It used to give the destination mode 0666 whatever it
+// was, so after a case that left a folder there the case's folder stayed in the
+// worker's temp root, and the root stayed in the machine temp folder, on macOS and
+// Linux (aicc_planning #332). Mutation to prove this can fail: chmod the destination
+// whatever it is.
+describe('the cleanup after each case', () => {
+  it('removes the case\'s folder when a folder holding a file is at the destination, and leaves that folder\'s mode alone', () => {
+    nodeFs.mkdirSync(dest)
+    nodeFs.writeFileSync(join(dest, 'index.js'), '// not the app\'s\n')
+    restoreStubs()
+    const chmod = vi.spyOn(nodeFs, 'chmodSync')
+    removeCaseFolder()
+    expect(chmod.mock.calls.filter((c) => String(c[0]) === dest)).toEqual([])
+    expect(nodeFs.existsSync(dir)).toBe(false)
+  })
+
+  it('still makes a copy at the destination writable before the folder goes', () => {
+    nodeFs.writeFileSync(dest, '// a copy\n')
+    restoreStubs()
+    const chmod = vi.spyOn(nodeFs, 'chmodSync')
+    removeCaseFolder()
+    expect(chmod.mock.calls.filter((c) => String(c[0]) === dest).map((c) => c[1])).toEqual([0o666])
+    expect(nodeFs.existsSync(dir)).toBe(false)
   })
 })
