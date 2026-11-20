@@ -10,9 +10,11 @@ once beta.11's A2 and #740 are on beta.
   run's console hosts 1, 2, 5, 10, 30 and 60 s after node-pty reports the exit, before anything of
   that run is stopped; the next run goes on meanwhile, and a run's processes are the probe's own
   children started between its start and its end, and their descendants. A launch can run fewer
-  times than `--runs`; the record-only screens run once. A reference row that runs only when
-  `--only` names it starts Codex without `--no-daemon`. `P19 SIZES` estimates each state's
-  screen corpus file against its 256 KiB cap. The stand-in has a second, short reply.
+  times than `--runs`: the queue, rebound-key, agents and warning launches and the background
+  server row run once; the short turn, whose mid-reply is record only, runs three times like the
+  rest. A reference row that runs only when `--only` names it starts Codex without
+  `--no-daemon`. `P19 SIZES` estimates each state's screen corpus file against its 256 KiB cap.
+  The stand-in has a second, short reply.
   `p19-scenarios.json` adds Codex launches: a short turn of its own (mid-reply record only,
   after-reply measured), a draft typed while it runs (the queue hint), a config that rebinds the
   shortcuts key to F6, and two attempts of up to 60 s: the agents form of the hint row and a
@@ -60,22 +62,24 @@ once beta.11's A2 and #740 are on beta.
   enough only on the ConPTY built into Windows. Claude Code 2.1.328 and Codex 0.157.1 read
   REPAINTS again everywhere.
 - **Result, the console host.** On the ConPTY built into Windows it STAYS: the pseudo console's
-  own conhost.exe was there at 1, 2, 5, 10, 30 and 60 s after the exit in every run whose
-  program ended on its exit keys (21 of 22 runs a dispatch on the runner; 22 of 23 and 13 of 14
-  on the test machine). The one run without is the only one node-pty killed (Codex does not quit
-  on two Ctrl+C while a turn runs); it had none at 1 s. The probe stopped each host after the 60 s
-  reading, its name and start time checked. On the bundled ConPTY it ENDS BY ITSELF: no
-  OpenConsole.exe left at any time; one Codex 0.170.0 run had a conhost.exe under another
-  process at 1 s (2 s on the runner), gone by 5 s. A ticket for beta.13's bug track carries the
-  counts (the app's kill is in pty-manager.ts, a radius file at its line cap).
-- **Result, Codex with its background server** (the test machine, elevated SSH session). Codex
-  0.157.1 FAILS on both ConPTYs: it printed "Error: start the Windows daemon from a non-elevated
-  terminal; shared clients must not inherit administrator privileges" and "To work without the
-  background server, rerun the same command with --no-daemon", and ended with code 1 before its
-  composer. Codex 0.170.0 RUNS A TURN on both, leaves no server process behind, and shows a
-  warning count on its hint row (1 at ready, 2 after the reply; the normal rows show none). The
-  0.157.1 failure goes on a ticket for beta.13: what a Codex tab does when the app itself runs
-  elevated.
+  own conhost.exe was there at 1, 2, 5, 10, 30 and 60 s after the exit in every run but the one
+  node-pty killed, node-pty's kill having run right after the exit, as the app's does (21 of 22
+  runs in each dispatch on the runner; 22 of 23 and 13 of 14 on the test machine, where Codex
+  0.157.1 with its background server ended by itself with code 1 and its host stayed too). The
+  one run without is the only one node-pty killed (Codex does not quit on two Ctrl+C while a turn
+  runs); it had none at 1 s. The probe stopped each host after the 60 s reading, its name and
+  start time checked. On the bundled ConPTY it ENDS BY ITSELF: no OpenConsole.exe left at any
+  time; one Codex 0.170.0 run had a conhost.exe under another process at 1 s (2 s on the
+  runner), gone by 5 s. The counts go on a ticket for beta.13's bug track, filed by the
+  orchestrator (the app's kill is in pty-manager.ts, a radius file at its line cap).
+- **Result, Codex with its background server** (the test machine, elevated, in session 0 as an
+  SSH session is, started detached from it). Codex 0.157.1 FAILS on both ConPTYs: it printed
+  "Error: start the Windows daemon from a non-elevated terminal; shared clients must not inherit
+  administrator privileges" and "To work without the background server, rerun the same command
+  with --no-daemon", and ended with code 1 before its composer. Codex 0.170.0 RUNS A TURN on
+  both, leaves no server process behind, and shows a warning count on its hint row (1 at ready,
+  2 after the reply; the normal rows show none). The 0.157.1 failure goes on a ticket for
+  beta.13: what a Codex tab does when the app itself runs elevated.
 - **Result, the hint rows** (every system). Codex 0.157.1: the queue hint (`tab to queue
   message`), the rebound key (`f6 for shortcuts`) and a warning count at the right of the hint
   row (`<warning sign> 1 warning . f2 to view`) are RECORDED; the agents form is NOT REACHED

@@ -265,15 +265,15 @@ describe('P19 recorder, second run: the console hosts after a program\'s end', (
 
   const run = (...n: number[]) => ({ consoleHosts: { counted: true, at: [1, 2, 5, 10, 30, 60].map((s, i) => ({ s, n: n[i] })) } })
   it('reads ENDS BY ITSELF when none is left 10 s after the exit in every run', () => {
-    expect(P.consoleHostVerdict([run(1, 1, 0, 0, 0, 0), run(0, 0, 0, 0, 0, 0)]).verdict).toBe('ENDS BY ITSELF')
+    expect(P.consoleHostVerdict([run(1, 1, 1, 0, 0, 0), run(0, 0, 0, 0, 0, 0)]).verdict).toBe('ENDS BY ITSELF')
   })
   it('reads STAYS when one is left at 60 s in any run', () => {
     expect(P.consoleHostVerdict([run(1, 1, 1, 0, 0, 0), run(1, 1, 1, 1, 1, 1)]).verdict).toBe('STAYS')
   })
   it('reads IN BETWEEN when one is left at 10 s but none at 60 s, with its times', () => {
-    const v = P.consoleHostVerdict([run(1, 1, 1, 1, 0, 0), run(0, 0, 0, 0, 0, 0)])
+    const v = P.consoleHostVerdict([run(1, 1, 1, 1, 1, 0), run(0, 0, 0, 0, 0, 0)])
     expect(v.verdict).toBe('IN BETWEEN')
-    expect(v.line).toBe('IN BETWEEN (runs with one left, of 2: 1 s: 1, 2 s: 1, 5 s: 1, 10 s: 1, 30 s: 0, 60 s: 0)')
+    expect(v.line).toBe('IN BETWEEN (runs with one left, of 2: 1 s: 1, 2 s: 1, 5 s: 1, 10 s: 1, 30 s: 1, 60 s: 0)')
   })
   it('counts no run whose six readings were not all taken', () => {
     expect(P.consoleHostVerdict([{ consoleHosts: { counted: false, at: [] } }, { consoleHosts: null }]).verdict).toBe('NOT COUNTED')
@@ -300,9 +300,11 @@ describe('P19 recorder, second run: the verdicts', () => {
     expect(v.map((m) => m.alreadyEqualBeforeAnyResize)).toEqual([['first-screen'], ['first-screen']])
   })
 
-  it('reads NO VERDICT when they differ in 1 of 3, and CHECK RUN for another number of runs', () => {
+  it('reads NO VERDICT when they differ in 1 of 3, LOST in 2 of 3, and CHECK RUN for another number of runs', () => {
     const mixed = [{ states: [lostPaste('ready')] }, { states: [kept('ready')] }, { states: [kept('ready')] }]
     expect(P.modeVerdicts({ verdict: true }, mixed, 3)!.find((m) => m.mode === 'bracketedPasteMode')!.verdict).toBe('NO VERDICT - ready: equal after the nudge in 2 of 3 reached')
+    const two = [{ states: [lostPaste('ready')] }, { states: [lostPaste('ready')] }, { states: [kept('ready')] }]
+    expect(P.modeVerdicts({ verdict: true }, two, 3)!.find((m) => m.mode === 'bracketedPasteMode')!.verdict).toBe('LOST - ready differs after the nudge in 2 of 3')
     expect(P.modeVerdicts({ verdict: true }, [{ states: [kept('ready')] }], 1)!.find((m) => m.mode === 'screen')!.verdict).toBe('CHECK RUN (1 runs; would read KEPT)')
     expect(P.modeVerdicts({ verdict: false }, mixed, 3)).toBeNull()
   })

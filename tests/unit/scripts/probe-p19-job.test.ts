@@ -20,8 +20,9 @@ import { TEST_JOB_RE } from '../../../scripts/release-gate.mjs'
  * measurement, not a test), the steps' order and options, whether the CLIs'
  * packages run install scripts (the job passes --ignore-scripts; that is read
  * in review), and whether a dispatched version is a plain semver (the
- * conformance job's rc leg on the same dispatch checks that; this job takes
- * it through env).
+ * conformance job's rc leg checks it on the same dispatch but does not gate
+ * this job, which installs the input as given, through env, as one quoted
+ * npm argument; only someone who can dispatch the workflow can set it).
  */
 
 const ROOT = resolve(__dirname, '../../..')

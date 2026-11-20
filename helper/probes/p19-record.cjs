@@ -80,7 +80,8 @@
  *     encoding and whether the cursor is shown are not in `modes`, so not here.
  *   States that are record only: the recording runs to the mark and 300 ms on,
  *     with no second pane and no resize step, so a Codex recording can end
- *     while a turn still runs. They take no part in any verdict.
+ *     while a turn still runs. They take no part in the rows or modes verdicts,
+ *     only in RECORDED / NOT REACHED and the background server row's verdict.
  *   The console hosts, on Windows: after each program's end, the console hosts
  *     of that run (conhost.exe, OpenConsole.exe) are counted 1, 2, 5, 10, 30
  *     and 60 s after node-pty reported the exit, before anything of that run is
@@ -88,7 +89,7 @@
  *     meanwhile; a run's processes are the probe's own children started between
  *     its start and its end, and their descendants.
  *   A launch may run fewer times than --runs (`runs` in the scenario): the
- *     record-only screens are kept from one run.
+ *     hint-row launches and the background server row run once.
  *   A reference row that runs only when --only names it: Codex without
  *     --no-daemon, so with its background server (the test machine only).
  *   Each state's recording size, as the screen corpus would write it, beside

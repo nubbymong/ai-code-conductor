@@ -193,11 +193,12 @@ script's header, written before measuring.
   new line, about 6 KB, so 40 lines were over the cap), recorded in the
   middle of the reply with no resize and measured after it; a draft typed
   while that turn runs (the queue hint); a config that rebinds the shortcuts
-  key to F6; and two
-  attempts of up to 60 s each: the agents form of the hint row (`← for
-  agents`, the default composer in Codex 0.170.0) and a warning count on the
-  hint row (a config with an MCP server that cannot start). A record-only
-  screen is recorded to its mark and 300 ms on; each of these runs once.
+  key to F6; and two attempts of up to 60 s each: the agents form of the
+  hint row (`← for agents`, the default composer in Codex 0.170.0) and a
+  warning count on the hint row (a config with an MCP server that cannot
+  start). A record-only screen is recorded to its mark and 300 ms on. The
+  queue, rebound-key, agents and warning launches run once each; the short
+  turn runs three times, like the first run's launches.
   `P19 SIZES` says which recordings would be over the screen corpus's cap of
   256 KiB.
 - **The console hosts, on Windows.** After each program's end its console
