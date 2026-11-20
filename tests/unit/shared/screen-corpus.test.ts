@@ -112,19 +112,12 @@ const LEFT_OUT: Record<string, string> = {
  *  reader, and the answer the reader gives on it now. Each stays listed until
  *  its reader is fixed; the test then fails until the line is removed, and
  *  fails too if the reader starts to give another wrong answer.
- *  Codex 0.157.1 at its ready composer draws "? for shortcuts" on the last
- *  row, under the footer, and Codex's reader takes a footer that is not the
- *  last row as unrecognised (codex-screen.ts, layout): the same on every
- *  system. The row stays for the whole session (P19's full recordings have it
- *  at the mid-reply and after-reply marks too; those states are not in the
- *  corpus). */
+ *  None is listed now. The four codex-*-ready recordings were, until Codex's
+ *  reader learned the "? for shortcuts" row Codex 0.157.1 draws under the
+ *  footer at its ready composer (aicc_planning#349, in 2.1.3-beta.10): each
+ *  read unrecognised before that fix and reads ready after it. */
 interface Misread { ticket: string; reads: string }
-const KNOWN_MISREADS: Record<string, Misread> = {
-  'codex-windows-bundled-ready': { ticket: 'TICKET-PENDING', reads: 'unrecognised' },
-  'codex-windows-system-ready': { ticket: 'TICKET-PENDING', reads: 'unrecognised' },
-  'codex-macos-ready': { ticket: 'TICKET-PENDING', reads: 'unrecognised' },
-  'codex-linux-ready': { ticket: 'TICKET-PENDING', reads: 'unrecognised' },
-}
+const KNOWN_MISREADS: Record<string, Misread> = {}
 
 const NAMES = PROGRAMS.flatMap((p) => SYSTEMS.flatMap((s) => STATES[p].map((st) => ({ name: `${p}-${s}-${st}`, program: p, system: s, state: st }))))
 const NAME_BY = new Map(NAMES.map((n) => [n.name, n]))

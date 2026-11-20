@@ -3,10 +3,10 @@
 //
 // The Codex rows are the list-visible models of the supported Codex CLI's own
 // catalogue (the models catalogue bundled in the 0.153.4 binary, read as bytes,
-// and in 0.155.1, 0.156.1, 0.157.1 and 0.170.0; resources/codex-model-catalogue.json),
+// and in 0.155.1, 0.156.1, 0.157.1, 0.170.0 and 0.171.0; resources/codex-model-catalogue.json),
 // with each model's supported reasoning levels. gpt-6-sol and gpt-6-luna come
-// from 0.156.1 on; 0.170.0, the newest Codex the app calls supported
-// (CODEX_MAX_TESTED_VERSION), lists four more, first. Claude's pickers never
+// from 0.156.1 on; 0.170.0 lists four more, first, and so does 0.171.0, the
+// newest Codex the app calls supported (CODEX_MAX_TESTED_VERSION). Claude's pickers never
 // show a Codex row, and Codex's never a Claude one.
 import { describe, it, expect } from 'vitest'
 import {
@@ -129,11 +129,13 @@ describe('Codex model catalogue from the registry (row 39)', () => {
   // aicc_planning#347 (2.1.3-beta.11): Codex 0.170.0 lists four models before
   // the seven of 0.157.1, with the labels its catalogue gives (rust-v0.170.0;
   // the real CLI listed the same ids in this order on Windows, macOS and
-  // Linux in CI run 44547276658).
+  // Linux in CI run 44547276658). 0.171.0 lists the same eleven ids in the
+  // same order (CI run 44688602365), so the four are listed from 0.170.0 on.
   it('names the four models 0.170.0 adds, first, with the labels Codex gives them', () => {
     const cat = catalogueJson as unknown as { cliVersions: string[]; models: Array<{ id: string; label: string; cliVersions?: string[] }> }
     expect(cat.cliVersions).toContain('0.170.0')
-    expect(cat.models.filter((m) => m.cliVersions?.length === 1 && m.cliVersions[0] === '0.170.0').map((m) => [m.id, m.label])).toEqual(NEW_IN_0170)
+    expect(cat.cliVersions).toContain('0.171.0')
+    expect(cat.models.filter((m) => m.cliVersions?.[0] === '0.170.0').map((m) => [m.id, m.label, m.cliVersions])).toEqual(NEW_IN_0170.map(([id, label]) => [id, label, ['0.170.0', '0.171.0']]))
     expect(cat.models.slice(0, 4).map((m) => [m.id, m.label])).toEqual(NEW_IN_0170)
     expect(buildModelPickerRows(reg, 'codex').slice(0, 4).map((r) => [r.value, r.label])).toEqual(NEW_IN_0170)
   })

@@ -18,7 +18,7 @@ const FIXTURE = join(__dirname, '../../../fixtures/codex/cli/0.153.4/debug-model
 const REAL_0153 = readFileSync(FIXTURE, 'utf8')
 // The shipped list is the union over the supported versions; a model's own
 // cliVersions names the versions that list it (gpt-6-sol and gpt-6-luna:
-// 0.156.1, 0.157.1 and 0.170.0; the four 0.170.0 adds: 0.170.0 only), so
+// 0.156.1, 0.157.1, 0.170.0 and 0.171.0; the four 0.170.0 adds: 0.170.0 and 0.171.0), so
 // 0.153.4's share is every model with none or with it.
 const SHIPPED_0153 = (shipped.models as Array<{ id: string; label: string; cliVersions?: string[] }>)
   .filter((m) => !m.cliVersions || m.cliVersions.includes('0.153.4'))
@@ -358,6 +358,6 @@ describe("the accounts service's model catalogue read: the launch rule, then the
 
   it('the Codex package states the range its managed flows support', async () => {
     const h = await harness()
-    expect(h.codex.setup?.supportedVersions).toEqual({ minimum: '0.153.4', maximumTested: '0.170.0' })
+    expect(h.codex.setup?.supportedVersions).toEqual({ minimum: '0.153.4', maximumTested: '0.171.0' })
   })
 })
