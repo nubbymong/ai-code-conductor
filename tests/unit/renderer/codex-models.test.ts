@@ -2,11 +2,38 @@
 // Replaces the hand-kept six-model list (gpt-5.4, gpt-5.4-mini, gpt-5.3-codex and
 // gpt-5.3-codex-spark are not offered by the supported Codex CLI's own catalogue).
 import { describe, it, expect } from 'vitest'
-import { codexModelOptions, codexEffortOptions, codexEffortSupported, CODEX_DEFAULT } from '../../../src/renderer/codex-models'
+import { codexModelOptions, codexEffortOptions, codexEffortSupported, codexNewConfigModel, CODEX_DEFAULT } from '../../../src/renderer/codex-models'
 import { mergeRegistry, type ModelRegistry } from '../../../src/shared/model-registry'
 import baselineJson from '../../../resources/model-registry.json'
+import catalogueJson from '../../../resources/codex-model-catalogue.json'
 
 const reg = baselineJson as unknown as ModelRegistry
+
+// A new config starts on the first model of the list that every supported
+// Codex lists (P3.8 round 1, J1, as a new Claude config starts on the first
+// row of Claude's). GPT-6.2-Sol heads the list but only Codex 0.170.0 and
+// 0.171.0 list it, so a new config on an older supported Codex would start on
+// a model that CLI does not offer.
+describe('codexNewConfigModel', () => {
+  it('starts on the first model every supported Codex lists, not one only the newest versions list', () => {
+    expect(codexModelOptions(reg)[1].value).toBe('gpt-6.2-sol')
+    expect(codexNewConfigModel(reg)).toBe('gpt-6-astra')
+  })
+
+  it('follows the catalogue: once every supported version lists the head of the list, a new config starts on it', () => {
+    const everyVersion = {
+      ...catalogueJson,
+      models: catalogueJson.models.map((m) => (m.id === 'gpt-6.2-sol' ? { label: m.label, id: m.id } : m)),
+    }
+    expect(codexNewConfigModel(reg, everyVersion)).toBe('gpt-6.2-sol')
+  })
+
+  it('starts on Default (Codex chooses) when no Codex model in the list is one every supported version lists', () => {
+    const onlyOld = { ...reg, models: (reg.models ?? []).filter((m) => !m.id.startsWith('gpt-') || m.id === 'gpt-5.2') }
+    expect(codexModelOptions(onlyOld).map((o) => o.value)).toEqual([CODEX_DEFAULT, 'gpt-5.2'])
+    expect(codexNewConfigModel(onlyOld)).toBe(CODEX_DEFAULT)
+  })
+})
 
 describe('codexModelOptions', () => {
   it("offers Default, then the registry's Codex models in the Codex CLI's order", () => {

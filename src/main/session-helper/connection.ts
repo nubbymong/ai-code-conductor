@@ -9,9 +9,9 @@
  * a connection that takes hook events, and `mcp`, for one that carries tool
  * streams, each when the holder offers it) and the connection carries
  * requests (even ids, one reply each), terminal output and the holder's
- * events. No connection the app makes asks for `mcp` yet (2.1.3-beta.10):
- * the manager does only when the app gives it the tool functions, and
- * app-wiring.ts gives none yet (2.1.3-beta.11, plan section B1).
+ * events. A connection asks for `mcp` only when the manager was given the
+ * tool functions for its session's CLI, which app-wiring.ts gives for the
+ * agent sessions (2.1.3-beta.11, plan sections B1 and B2).
  *
  * On a connection that acked `mcp`, the app sends a tool stream's messages
  * (sendMcp) only when the holder would read them, and ends its side of a
@@ -80,7 +80,7 @@ export interface ConnectionOptions {
   hooks?: boolean
   /** This connection carries the session's tool streams: `mcp` is acked when
    *  the holder offers it. The manager sets it only when the app gives it the
-   *  tool functions, and app-wiring.ts gives none yet. */
+   *  tool functions, which app-wiring.ts does for the agent sessions. */
   mcp?: boolean
   helloTimeoutMs?: number
   replyTimeoutMs?: number

@@ -2,7 +2,7 @@
   "schema": "wp1-legacy-codex-ledger/2",
   "predicateDigest": "100a1233edebdc39a5f9004d3fba980a89ebb15b25872e52076386bc84b03153",
   "manifestPathDigest": "fabfbed01579a8597a8a18f511f1a29819f5f586c49b71bc459e2d4faf76a39e",
-  "manifestHead": "dfbe83262a3c06277777a518b3e7df9289550970",
+  "manifestHead": "0c4c926d4004823170494510308808f159ef7fdc",
   "dispositions": {
     "retain": "unchanged observable behaviour, characterization proof",
     "move": "moved behind a package boundary and/or adapted at the call site, regression proof (newPath when relocated)",
@@ -2719,7 +2719,7 @@
       ],
       "category": "MODELS-PRICING",
       "disposition": "replace",
-      "evidence": "unchanged observable behaviour; baseline suite green at 6bafcc33 (docs/wp1/baseline-2026-09-19.md); runs unchanged in the merge-candidate suite (WP1.33); tests/unit/renderer/codex-models.test.ts; WP2 PR 3 P3.8 (rows 39, 40): the hand-kept model list is replaced by the registry's Codex models with Default, a saved model the list no longer offers kept and marked, and Codex's levels per model (WP1.68); tests/unit/renderer/codex-models.test.ts; WP2 PR 3 P3.8 round 1 (row 40): a new config starts on the list's first model at Default effort, as a new Claude config does (WP1.68); tests/unit/renderer/session-dialog-codex-model.test.tsx",
+      "evidence": "unchanged observable behaviour; baseline suite green at 6bafcc33 (docs/wp1/baseline-2026-09-19.md); runs unchanged in the merge-candidate suite (WP1.33); tests/unit/renderer/codex-models.test.ts; WP2 PR 3 P3.8 (rows 39, 40): the hand-kept model list is replaced by the registry's Codex models with Default, a saved model the list no longer offers kept and marked, and Codex's levels per model (WP1.68); tests/unit/renderer/codex-models.test.ts; WP2 PR 3 P3.8 round 1 (row 40): a new config starts on the list's first model at Default effort, as a new Claude config does (WP1.68); tests/unit/renderer/session-dialog-codex-model.test.tsx; 2.1.3-beta.11 aggregate: that first model counts only the models every supported version in resources/codex-model-catalogue.json lists, so a model only newer versions list is skipped, and Default when none qualifies (WP1.68); tests/unit/renderer/codex-models.test.ts",
       "note": "re-dispositioned in WP2 PR 3 P3.8 (was retain)"
     },
     {
@@ -9180,7 +9180,7 @@
       ],
       "category": "TEST",
       "disposition": "replace",
-      "evidence": "existing test retained unchanged; must stay green on the merge candidate (WP1.33); listed in docs/wp1/baseline-test-inventory.json; WP1.33 mapping: rewritten for WP2 PR 3 P3.8 (rows 39, 40): the pinned six-model list is replaced by cases on the registry-derived options (Default, the CLI's list, a kept saved model, levels per model); tests/unit/renderer/codex-models.test.ts",
+      "evidence": "existing test retained unchanged; must stay green on the merge candidate (WP1.33); listed in docs/wp1/baseline-test-inventory.json; WP1.33 mapping: rewritten for WP2 PR 3 P3.8 (rows 39, 40): the pinned six-model list is replaced by cases on the registry-derived options (Default, the CLI's list, a kept saved model, levels per model); tests/unit/renderer/codex-models.test.ts; 2.1.3-beta.11 aggregate (WP1.68): cases on the model a new config starts on (the first every supported version lists, following the catalogue, Default when none does); tests/unit/renderer/codex-models.test.ts",
       "note": "re-dispositioned in WP2 PR 3 P3.8 (was retain)"
     },
     {

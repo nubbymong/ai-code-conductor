@@ -1657,8 +1657,8 @@ export function getMcpPort(): number {
 // server (`aicc-helper mcp`, docs/remote/helper-protocol.md section 15, "Tool
 // streams"), which carries its JSON-RPC messages through the session's
 // holder to the app's connection. The session helper's manager hands each
-// such stream here as a link. Dormant: nothing gives the manager the
-// functions that call this yet (section B2).
+// such stream here as a link, for a held agent session whose CLI was pointed
+// at the relay (app-wiring.ts, section B2).
 
 /** One tool stream, as the tool host is handed it: the session's CLI is at
  *  the far end, through the session's holder. */

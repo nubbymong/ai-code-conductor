@@ -39,6 +39,17 @@ a signed-in account, and 0.171.0's app-server schema was not compared.
 reader reads the four Codex 0.157.1 ready recordings as ready, so the test
 reported each as reading right and all four entries were removed.
 
+**A new Codex config still starts on GPT-6-Astra.** C4 put the four models
+Codex 0.170.0 and 0.171.0 list first at the head of the picker, so a new
+config would have started on GPT-6.2-Sol, which no supported Codex from 0.153.4
+to 0.169.x lists (the pinned 0.155.1 and the test VM's 0.157.1 included). What
+such a CLI does with `-m gpt-6.2-sol` was not measured: this pass could not use
+the VM. So the rule now counts only the models every supported version in
+resources/codex-model-catalogue.json lists, and a new config starts on the first
+of those, GPT-6-Astra, as before C4. It moves to the head of the list by itself
+once every supported version lists that model; Default (Codex chooses) is the
+fallback when none does. GPT-6.2-Sol stays in the list to pick.
+
 **Owed text applied here.** B2's known issue: with Claude Code and Codex
 sessions through the session helper on, a dropped and restored connection to
 the helper ends a held session's tool server; the workaround is /mcp in Claude

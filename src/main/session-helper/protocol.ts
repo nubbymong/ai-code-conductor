@@ -24,7 +24,8 @@ export const LOCAL_CAPS: readonly string[] = ['core', 'local']
 export const HOOKS_CAP = 'hooks'
 /** Tool streams through the holder (section 15, from 2.1.3-beta.10): acked
  *  only by a connection that carries a session's tools, and only when the
- *  holder offers it. No connection the app makes asks for it yet. */
+ *  holder offers it. From 2.1.3-beta.11 a held agent session's connections
+ *  ask for it. */
 export const MCP_CAP = 'mcp'
 /** Terminal bytes travel on this channel both ways; control messages on 0. */
 export const TERMINAL_CHANNEL = 1
