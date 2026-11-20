@@ -1,0 +1,153 @@
+name: Upstream CLI watch
+
+# Once a day, look up the newest published Codex and Claude Code. When either is
+# newer than the newest version the app was tested with (and not already checked
+# green), run the real-CLI conformance jobs of ci.yml against it, on beta, and
+# fail this run, with the CLI, the version and each failing check in the job
+# summary, when anything fails. aicc_planning#368.
+#
+# THE DEFAULT-BRANCH RULE. GitHub runs a schedule, and a dispatch of a workflow
+# file, only from the DEFAULT branch's copy of the file (main). So this file does
+# nothing on beta alone: it starts the day it reaches main. It is written to be
+# the same, byte for byte, on both branches: it checks BETA out itself (the newest
+# app code and this script are there) and dispatches ci.yml on beta, ci.yml's
+# dispatch inputs being validated against beta's own copy of ci.yml. It can be run
+# by hand (workflow_dispatch) once it is on main.
+#
+# The logic (the version lookup, the comparison with the tested-up-to versions
+# read from beta's code, the de-duplication, the report) is in
+# scripts/ci/upstream-cli-watch.mjs, tested with no network
+# (tests/unit/scripts/upstream-cli-watch.test.ts). This file only calls it. The
+# record of versions already checked is a run artifact, read with gh (actions:
+# read); nothing is committed, pushed or written to a repository variable.
+#
+# Security posture (public repo): no pull_request_target, no workflow_run, nothing
+# checked out from a fork, and no event text anywhere (the only events are the
+# schedule and a manual dispatch with no inputs). No run line holds an expression:
+# every value reaches the script through env, and the version strings from npm
+# are checked against a strict semver pattern before use. Each job has its own
+# least permissions; the one that dispatches ci.yml is the only one that writes
+# (actions). Every action is pinned by commit, as ci.yml's other pinned jobs are
+# (the comment names the tag). Ticketing into the private aicc_planning
+# repository is optional and dormant: the default token cannot write there, so it
+# happens only if the secret AICC_PLANNING_ISSUES_TOKEN exists, and then only in
+# the last job.
+
+on:
+  schedule:
+    - cron: '41 5 * * *' # once a day, off the hour and half hour
+  workflow_dispatch:
+
+# No permission by default: each job below asks for its own.
+permissions: {}
+
+# Two watch runs never overlap, and one in progress is not cancelled: it may be
+# waiting for the ci.yml run it dispatched.
+concurrency:
+  group: upstream-cli-watch
+  cancel-in-progress: false
+
+jobs:
+  # Look up, compare, de-duplicate. Reads the record of earlier runs.
+  plan:
+    name: Look up the newest Codex and Claude Code
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      codex_version: ${{ steps.plan.outputs.codex_version }}
+      claude_version: ${{ steps.plan.outputs.claude_version }}
+      any: ${{ steps.plan.outputs.any }}
+      record: ${{ steps.plan.outputs.record }}
+    steps:
+      # Beta, not the default branch: the newest app code, its tested-up-to
+      # versions and this script are there. Only files are read.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: beta
+          persist-credentials: false
+
+      - name: Look up, compare, read the record
+        id: plan
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: node scripts/ci/upstream-cli-watch.mjs plan
+
+      # On a day nothing is checked, the record is carried on as it was, so it
+      # does not expire after the last run that changed it.
+      - name: Keep the record for tomorrow
+        if: steps.plan.outputs.any != 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: upstream-cli-watch-record
+          path: ${{ runner.temp }}/upstream-cli-watch/record.json
+          if-no-files-found: error
+          retention-days: 90
+
+  # Dispatch ci.yml on beta with the versions to check and wait for that run.
+  # The only job that writes (actions: write, to dispatch). It fails, and so
+  # does this run, when a check fails.
+  check:
+    name: Run the conformance jobs against the new versions
+    needs: plan
+    if: needs.plan.outputs.any == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      actions: write
+    outputs:
+      failures: ${{ steps.check.outputs.failures }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: beta
+          persist-credentials: false
+
+      - name: Dispatch ci.yml on beta and wait for it
+        id: check
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          CODEX_VERSION: ${{ needs.plan.outputs.codex_version }}
+          CLAUDE_VERSION: ${{ needs.plan.outputs.claude_version }}
+          PREVIOUS_RECORD: ${{ needs.plan.outputs.record }}
+          WATCH_REF: beta
+        run: node scripts/ci/upstream-cli-watch.mjs check
+
+      # Also when the check is red: the record says which versions were checked.
+      - name: Keep the record for tomorrow
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: upstream-cli-watch-record
+          path: ${{ runner.temp }}/upstream-cli-watch/record.json
+          if-no-files-found: warn
+          retention-days: 90
+
+  # Optional and dormant: one issue per failing CLI version in the private
+  # aicc_planning repository, only if the secret AICC_PLANNING_ISSUES_TOKEN is
+  # set. Without it the step says so in one line and ends green.
+  ticket:
+    name: Note the failure in aicc_planning (optional)
+    needs: [plan, check]
+    if: always() && needs.check.result == 'failure'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: beta
+          persist-credentials: false
+
+      - name: Open or update the one issue for each failing version
+        env:
+          FAILURES: ${{ needs.check.outputs.failures }}
+          WATCH_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          AICC_PLANNING_ISSUES_TOKEN: ${{ secrets.AICC_PLANNING_ISSUES_TOKEN }}
+        run: node scripts/ci/upstream-cli-watch.mjs ticket

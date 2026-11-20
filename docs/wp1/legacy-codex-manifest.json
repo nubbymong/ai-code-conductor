@@ -1,8 +1,8 @@
 {
   "schema": "wp1-legacy-codex-manifest/3",
-  "generatedAt": "2026-11-20T01:00:15.890Z",
-  "head": "8deccf6debaf72da2a0b16b3169e60be2cb99969",
-  "tree": "b5c8e4d5dc7f796a3762b6ace796641d1e77ac43",
+  "generatedAt": "2026-11-20T08:23:32.492Z",
+  "head": "77ebcbf6210c21b5da0436904eaea6bb37a605d1",
+  "tree": "5619e70ec08dfe6b1993138a7172bb5cf6cd77a0",
   "scannedWorkingTree": true,
   "predicateDigest": "100a1233edebdc39a5f9004d3fba980a89ebb15b25872e52076386bc84b03153",
   "predicates": [
@@ -116,9 +116,9 @@
     "\\.(png|jpg|jpeg|gif|ico|icns|webp|svg|woff2?|ttf|otf|mp4|zip|asar|node|exe|dll|dylib|so|pdf)$",
     "^package-lock\\.json$"
   ],
-  "trackedFileCount": 3475,
-  "excludedFileCount": 535,
-  "scannedFileCount": 2940,
+  "trackedFileCount": 3483,
+  "excludedFileCount": 533,
+  "scannedFileCount": 2950,
   "unscopedFileCount": 15,
   "unscoped": [
     ".claude/settings.json",
@@ -139,8 +139,8 @@
   ],
   "unscopedMentions": [],
   "unreadable": [],
-  "matchedPathCount": 930,
-  "pathDigest": "841585dd5f9d5f888d9f76f4094d8e0fb994e1a089c7c62660c54dc23ecff16b",
+  "matchedPathCount": 936,
+  "pathDigest": "ec8a9c86a351b8f19e0581ac311a2ce7a2ce29f412cc42c463877f3a6910eff9",
   "entries": [
     {
       "path": ".github/workflows/ci.yml",
@@ -148,7 +148,14 @@
         "P04",
         "P14"
       ],
-      "lineCount": 51
+      "lineCount": 53
+    },
+    {
+      "path": ".github/workflows/upstream-cli-watch.yml",
+      "predicates": [
+        "P14"
+      ],
+      "lineCount": 4
     },
     {
       "path": "AGENTS.md",
@@ -335,6 +342,14 @@
         "P14"
       ],
       "lineCount": 15
+    },
+    {
+      "path": "scripts/ci/upstream-cli-watch.mjs",
+      "predicates": [
+        "P10",
+        "P14"
+      ],
+      "lineCount": 20
     },
     {
       "path": "scripts/codex-resume-picker.js",
@@ -769,7 +784,7 @@
       "predicates": [
         "P14"
       ],
-      "lineCount": 49
+      "lineCount": 50
     },
     {
       "path": "src/main/insights-codex.ts",
@@ -1134,7 +1149,7 @@
         "P01",
         "P14"
       ],
-      "lineCount": 20
+      "lineCount": 25
     },
     {
       "path": "src/main/providers/codex/conductor-tools.ts",
@@ -1491,7 +1506,7 @@
       "predicates": [
         "P14"
       ],
-      "lineCount": 48
+      "lineCount": 57
     },
     {
       "path": "src/main/session-resume-enrich.ts",
@@ -1617,7 +1632,7 @@
         "P05",
         "P14"
       ],
-      "lineCount": 39
+      "lineCount": 20
     },
     {
       "path": "src/preload/index.ts",
@@ -2753,7 +2768,7 @@
         "P01",
         "P14"
       ],
-      "lineCount": 51
+      "lineCount": 54
     },
     {
       "path": "src/shared/container-command.ts",
@@ -3678,6 +3693,20 @@
       "lineCount": 15
     },
     {
+      "path": "tests/integration/claude-conformance-ci.mjs",
+      "predicates": [
+        "P13"
+      ],
+      "lineCount": 1
+    },
+    {
+      "path": "tests/integration/claude-conformance-lib.test.ts",
+      "predicates": [
+        "P13"
+      ],
+      "lineCount": 2
+    },
+    {
       "path": "tests/integration/codex-cli-compat-env.test.ts",
       "predicates": [
         "P01",
@@ -4242,7 +4271,7 @@
         "P01",
         "P13"
       ],
-      "lineCount": 40
+      "lineCount": 66
     },
     {
       "path": "tests/unit/main/codex-effort-allowlist.test.ts",
@@ -5074,7 +5103,7 @@
       "predicates": [
         "P13"
       ],
-      "lineCount": 65
+      "lineCount": 67
     },
     {
       "path": "tests/unit/main/session-input-prompt.test.ts",
@@ -5091,7 +5120,7 @@
         "P07",
         "P13"
       ],
-      "lineCount": 35
+      "lineCount": 47
     },
     {
       "path": "tests/unit/main/session-resume-enrich.test.ts",
@@ -5171,7 +5200,7 @@
         "P01",
         "P13"
       ],
-      "lineCount": 19
+      "lineCount": 43
     },
     {
       "path": "tests/unit/main/watchdog/codex-watchdog.test.ts",
@@ -5193,7 +5222,7 @@
       "predicates": [
         "P13"
       ],
-      "lineCount": 6
+      "lineCount": 10
     },
     {
       "path": "tests/unit/main/window-all-closed-r6.test.ts",
@@ -7300,6 +7329,21 @@
         "P13"
       ],
       "lineCount": 52
+    },
+    {
+      "path": "tests/unit/scripts/upstream-cli-watch-workflow.test.ts",
+      "predicates": [
+        "P13"
+      ],
+      "lineCount": 4
+    },
+    {
+      "path": "tests/unit/scripts/upstream-cli-watch.test.ts",
+      "predicates": [
+        "P04",
+        "P13"
+      ],
+      "lineCount": 133
     },
     {
       "path": "tests/unit/sentinel-account-message.test.ts",

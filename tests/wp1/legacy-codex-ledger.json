@@ -312,8 +312,18 @@
       ],
       "category": "OTHER",
       "disposition": "replace",
-      "evidence": "WP2 PR 4 P4.8 (rows 59, 60; OD20 D5, D7): ubuntu-latest in the test matrix; the codex-conformance job installs the minimum and pinned Codex CLI (a release candidate by dispatch) per OS and runs the no-sign-in checks, no secrets (WP1.30, WP1.71); tests/integration/codex-real-cli-conformance.test.ts; docs/wp1/evidence/ci-matrix.md; WP2 PR 4 P4.8 review (E-4, c75c3acb): every CLI run in the codex-conformance job gets a fresh CODEX_HOME, and the runner's own home is proven untouched (WP1.71); tests/integration/codex-conformance-ci.mjs; docs/wp1/evidence/ci-matrix.md; WP2 PR 4 P4.10 (60b39238, 2eb1b194): the Linux test job blocks after its first green run (CI run 37134624406), and the help captures are asserted on every OS once each OS was reviewed (WP1.30, WP1.71); docs/wp1/evidence/ci-matrix.md; 2.1.3-beta.1 process track (ADR-028): the codex-conformance job keeps its steps, its matrix and the versions it checks; only its start condition changed: on a PR it still needs ci-run, and another label change or an edit of the PR title or description no longer starts it again (a change of base branch does) (WP1.71); tests/unit/scripts/ci-cadence.test.ts; ADR-030 probe P19 (2.1.3-beta.11 section A1): the dispatch-only probe-p19 job installs Claude Code and Codex into prefixes of their own with scripts off and runs the probe, read-only, no secrets (WP1.67); tests/unit/scripts/probe-p19-job.test.ts",
+      "evidence": "WP2 PR 4 P4.8 (rows 59, 60; OD20 D5, D7): ubuntu-latest in the test matrix; the codex-conformance job installs the minimum and pinned Codex CLI (a release candidate by dispatch) per OS and runs the no-sign-in checks, no secrets (WP1.30, WP1.71); tests/integration/codex-real-cli-conformance.test.ts; docs/wp1/evidence/ci-matrix.md; WP2 PR 4 P4.8 review (E-4, c75c3acb): every CLI run in the codex-conformance job gets a fresh CODEX_HOME, and the runner's own home is proven untouched (WP1.71); tests/integration/codex-conformance-ci.mjs; docs/wp1/evidence/ci-matrix.md; WP2 PR 4 P4.10 (60b39238, 2eb1b194): the Linux test job blocks after its first green run (CI run 37134624406), and the help captures are asserted on every OS once each OS was reviewed (WP1.30, WP1.71); docs/wp1/evidence/ci-matrix.md; 2.1.3-beta.1 process track (ADR-028): the codex-conformance job keeps its steps, its matrix and the versions it checks; only its start condition changed: on a PR it still needs ci-run, and another label change or an edit of the PR title or description no longer starts it again (a change of base branch does) (WP1.71); tests/unit/scripts/ci-cadence.test.ts; ADR-030 probe P19 (2.1.3-beta.11 section A1): the dispatch-only probe-p19 job installs Claude Code and Codex into prefixes of their own with scripts off and runs the probe, read-only, no secrets (WP1.67); tests/unit/scripts/probe-p19-job.test.ts; 2.1.3-beta.11 (aicc_planning#368, WP1.71): the claude_rc_version input and the claude-conformance job added beside the Codex job, and a header comment that names the Codex rc job names the daily upstream CLI watch reads; no change to a Codex leg; tests/unit/scripts/upstream-cli-watch.test.ts, tests/integration/claude-conformance-lib.test.ts",
       "note": "the job's name, comments and test paths; no Codex code path; P04 (P4.8 review): CODEX_HOME set to fresh empty folders made by codex-conformance-ci.mjs homes for the PATH check and the flag-drift suite; no global home resolver"
+    },
+    {
+      "path": ".github/workflows/upstream-cli-watch.yml",
+      "predicates": [
+        "P14"
+      ],
+      "category": "OTHER",
+      "disposition": "added",
+      "evidence": "new 2.1.3-beta.11 CI work (aicc_planning#368): the daily upstream CLI watch workflow: it dispatches ci.yml on beta with the newest published Codex and Claude Code and fails on a red conformance job (WP1.71); tests/unit/scripts/upstream-cli-watch-workflow.test.ts, tests/unit/scripts/upstream-cli-watch.test.ts",
+      "note": "P14: the CLI name in comments and the ci.yml input it passes (codex_rc_version); no Codex code path, nothing here starts Codex"
     },
     {
       "path": "AGENTS.md",
@@ -781,6 +791,17 @@
       "disposition": "added",
       "evidence": "new WP2 PR 3 P3.10 module (scripts/ccc-codex-hook.js): the Codex hook forwarder: reads the event from stdin and posts it, at most 4 MiB, to the app's loopback Hooks gateway for the session named by the environment Codex passes down and the app's owner-only hook file (a plain file in an app-named folder, never a link, its session id the same, its port and token checked for shape), only to 127.0.0.1; prints nothing, always exits 0 within a few seconds (WP1.68); tests/unit/scripts/codex-hook-forwarder.test.ts; WP2 PR 3 P3.10 round 1 (ADR-009 pass 1, spec, quality and VM findings) (WP1.68): posts with no shared agent, so no environment proxy (A1); a hook file only at its real path below the app data folder (no link or junction the app made), one name, opened without following a link and still the file looked at (A5); tests/unit/scripts/codex-hook-forwarder.test.ts; WP2 PR 3 P3.10 round 2 (the round 1 re-review and the VM re-check) (WP1.68): file identities compared as bigints (R5); tests/unit/scripts/codex-hook-forwarder.test.ts",
       "note": "created by WP2 PR 3 P3.10"
+    },
+    {
+      "path": "scripts/ci/upstream-cli-watch.mjs",
+      "predicates": [
+        "P10",
+        "P14"
+      ],
+      "category": "SCRIPTS",
+      "disposition": "added",
+      "evidence": "new 2.1.3-beta.11 CI work (aicc_planning#368): the watch script: looks up the newest Codex and Claude Code with npm view, reads the tested-up-to versions from cli-contract.ts and managed-launch.ts, de-duplicates against the run record, dispatches ci.yml and reads the rc legs (WP1.71); tests/unit/scripts/upstream-cli-watch.test.ts",
+      "note": "P10 is a false hit: `id: 'codex'` is a key in the table of the two CLIs the watch looks up, not an onboarding step; P14: the Codex package name, the cli-contract.ts constant it reads and the names of ci.yml's Codex rc jobs; no Codex code path, nothing starts Codex"
     },
     {
       "path": "scripts/codex-resume-picker.js",
@@ -5619,6 +5640,26 @@
       "disposition": "added",
       "evidence": "new WP2 PR 4 lane ISO (2026-10-04) test helper (3c50f66f): the home guard every vitest run loads first; it names CODEX_HOME and .codex only to capture the real ones as protected roots and to point the variable at an isolated folder; tests never act on a real home (WP1.33); tests/unit/test-isolation/home-guard.test.ts",
       "note": "created by WP2 PR 4 (lane ISO): enforced test isolation"
+    },
+    {
+      "path": "tests/integration/claude-conformance-ci.mjs",
+      "predicates": [
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "new 2.1.3-beta.11 CI work (aicc_planning#368): the Claude Code CI job's version, package and binary steps, the floor read from managed-launch.ts (WP1.71); tests/integration/claude-conformance-lib.test.ts",
+      "note": "P13: one comment names codex-conformance-ci.mjs, the helper this mirrors; it runs and reads Claude Code only"
+    },
+    {
+      "path": "tests/integration/claude-conformance-lib.test.ts",
+      "predicates": [
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "new 2.1.3-beta.11 CI work (aicc_planning#368): the Claude Code conformance job's help reader and its ci.yml job, tried on help text with nothing started (WP1.71); tests/integration/claude-conformance-lib.test.ts",
+      "note": "P13: one case name says the prove-red input is honoured the way the Codex job does; no Codex behaviour is exercised"
     },
     {
       "path": "tests/integration/codex-cli-compat-env.test.ts",
@@ -10705,6 +10746,27 @@
       "disposition": "replace",
       "evidence": "existing test retained unchanged; must stay green on the merge candidate (WP1.33); listed in docs/wp1/baseline-test-inventory.json; WP1.33 mapping: WP2 PR 3 P3.8 round 1 (row 39) passes the Codex list to runGate and adds the Codex check's cases (missing refuses, extra warns, a missing or empty list fails closed, only the codex family counts); the existing cases are unchanged; tests/unit/scripts/release-gate.test.ts; WP1.33 mapping: WP2 PR 3 P3.8 round 2 added the duplicate and malformed-list cases; tests/unit/scripts/release-gate.test.ts; WP1.33 mapping: WP2 PR 4 fix pass 10 (eeb09462) passes the Electron version and the floors to runGate (an Electron with no floor for the existing cases, which are otherwise unchanged) and adds the macOS floor cases; tests/unit/scripts/release-gate.test.ts; WP1.33 mapping: WP2 PR 4 fix pass 11 (5789b728) adds the resolved-version, exact-version and unreadable-entry cases and reads codexResult null-safely; tests/unit/scripts/release-gate.test.ts",
       "note": "re-dispositioned in WP2 PR 3 P3.8 round 1 (was retain)"
+    },
+    {
+      "path": "tests/unit/scripts/upstream-cli-watch-workflow.test.ts",
+      "predicates": [
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "new 2.1.3-beta.11 CI work (aicc_planning#368): the watch workflow's safety rules read from the file: least privilege per job, actions pinned by commit, no expression in a shell line, the dispatch inputs ci.yml takes (WP1.71); tests/unit/scripts/upstream-cli-watch-workflow.test.ts",
+      "note": "P13: names the codex_rc_version input ci.yml takes; no Codex behaviour is exercised"
+    },
+    {
+      "path": "tests/unit/scripts/upstream-cli-watch.test.ts",
+      "predicates": [
+        "P04",
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "new 2.1.3-beta.11 CI work (aicc_planning#368): the watch script's version rules, the de-duplication, the dispatch and the reading of the rc legs, with npm, gh, the files and the clock injected (WP1.71); tests/unit/scripts/upstream-cli-watch.test.ts",
+      "note": "P04 is a false hit: `.codex` is the property of the table of CLIs, not a Codex home; P13: Codex is one of the two CLIs the watch checks, as a name and a version string; no Codex behaviour is exercised"
     },
     {
       "path": "tests/unit/sentinel-account-message.test.ts",
