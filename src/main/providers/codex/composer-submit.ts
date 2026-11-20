@@ -1,14 +1,16 @@
 // The submit primitive (WP2 PR 4, P4.1; completion plan 9.4 P4.1 and the PR 4
 // VM probes PB3 and PB9): the one way main types a text into a Codex session's
 // composer and submits it. The canvas marker queue uses it for a Codex
-// session, and Ask Conductor's carrier (P4.3) reuses it.
+// session, and Ask Conductor's carrier (P4.3) reuses it, as do a command bar
+// prompt button (#333) and, since 2.1.3-beta.10 section A2, the Watchdog's
+// retry (both through src/main/session-input).
 //
 // PURE: the rule only. The session's screen, its writer, its liveness and the
 // clock are injected (the driver is ./session-screen.ts, which keeps a
 // bounded headless pane fed by the session's own output). Built from the two
-// copies of this rule that already exist, which stay as they are: the
-// renderer's typeIntoCodexComposer (src/renderer/lib/codexComposer.ts) and the
-// Watchdog's submitCodex (src/main/watchdog/watchdog-manager.ts).
+// copies of this rule that existed: the renderer's typeIntoCodexComposer
+// (src/renderer/lib/codexComposer.ts), which stays as it is, and the
+// Watchdog's submitCodex, which section A2 removed.
 //
 // The rule, from the probes of the real 0.153.4 and 0.155.1 TUIs:
 //  - one write of a text and Enter never submits; the text in one write, then
@@ -25,7 +27,7 @@
 //  - characters outside the Basic Multilingual Plane are dropped by the
 //    composer itself (PB3), so a text holding one cannot be confirmed.
 import {
-  readCodexScreen, codexTextTyped, codexPastedContentShown, codexComposerRows,
+  readCodexScreen, codexTextTyped, codexPastedContentShown, codexComposerRows, codexComposerDraft,
   type ScreenLine,
 } from '../../../shared/codex-screen'
 import type { SubmitNotDeliveredReason, SubmitTextResult } from '../../../shared/types'
@@ -125,6 +127,21 @@ export interface ComposerSubmitOptions {
   /** How long to wait for Codex's ready, empty composer (a turn running, a
    *  prompt up): the caller's own bound. */
   readyWaitMs: number
+  /** 2.1.3-beta.10 section A2 (PR #746 review): when the ready wait ends at
+   *  the latest, on deps.now()'s clock, fixed by a caller as it asks. A
+   *  submission waits behind any other in flight for the run, so without it
+   *  its wait starts only once those are done. Past it at the start, nothing
+   *  is typed (`busy-timeout`). The Watchdog's retry sets it. */
+  readyBy?: number
+  /** 2.1.3-beta.10 section A2 (PR #746 review): whether the caller still
+   *  wants the text typed, asked before each poll of the ready wait and again
+   *  just before the text is written. False (or a throw): nothing is typed,
+   *  and the answer is `session-gone`, as a Claude Code marker whose markers
+   *  were cleared answers (canvas/claude-marker-typing.ts); the caller holds
+   *  the check, so it knows why. Never asked once the text is typed: what was
+   *  typed is always confirmed or taken back. The Watchdog's retry sets it to
+   *  "its incident is still the one it was sent for". */
+  stillWanted?: () => boolean
 }
 
 type Ready = 'ready' | 'blocked' | 'waiting'
@@ -137,17 +154,36 @@ function readyState(lines: ScreenLine[] | null, models: readonly string[] | null
 
 const notDelivered = (reason: SubmitNotDeliveredReason): SubmitTextResult => ({ delivered: false, reason })
 
+/** Codex's paste placeholder as codexComposerDraft reads it (spaces dropped). */
+const PASTED_DRAFT_RE = /^\[PastedContent\d{1,7}chars\]$/
+
+/** 2.1.3-beta.10 section A2 (PR #746 review): whether a composer holding
+ *  `draft` (codexComposerDraft's reading) holds nothing but what this
+ *  submission typed, so a take-back clears only the app's own text: nothing,
+ *  a contiguous part of the text (a draw still partial, or a composer at its
+ *  full height with its first rows hidden), or, for a folded text, Codex's
+ *  paste placeholder alone. Anything else is someone else's typing too (the
+ *  user typed beside it), and Ctrl+U would clear that as well. */
+function holdsOnlyOwnText(draft: string, text: string, folded: boolean): boolean {
+  if (draft === '') return true
+  if (folded && PASTED_DRAFT_RE.test(draft)) return true
+  return text.replace(/\s+/g, '').includes(draft)
+}
+
 /**
  * Type `text` into the session's composer and submit it, confirmed on screen.
  *
  * 1. Refuses an empty text, a control character or a character outside the
  *    BMP, before anything is typed.
- * 2. Waits, within `readyWaitMs`, for Codex's ready, EMPTY composer, ready on
- *    two reads SUBMIT_READY_SECOND_READ_MS apart; never while the trust
- *    prompt, the sandbox menu or the MCP approval form is on screen, and
- *    never while a composer is drawn with a prompt (the shared reading calls
- *    every such screen blocked). On time out: not delivered, `prompt-on-screen`
- *    when a prompt was up, else `busy-timeout`.
+ * 2. Waits, within `readyWaitMs` and never past `readyBy`, for Codex's ready,
+ *    EMPTY composer, ready on two reads SUBMIT_READY_SECOND_READ_MS apart;
+ *    never while the trust prompt, the sandbox menu or the MCP approval form
+ *    is on screen, and never while a composer is drawn with a prompt (the
+ *    shared reading calls every such screen blocked). On time out: not
+ *    delivered, `prompt-on-screen` when a prompt was up, else `busy-timeout`
+ *    (also when `readyBy` has passed before the first read). A caller's
+ *    `stillWanted` that says no, at any poll or just before the write: not
+ *    delivered, `session-gone`, nothing typed.
  * 3. A text up to 1,000 code points is typed only when it fits the composer
  *    (the pane's rows minus 4, by an upper-bound estimate); one that does not
  *    is refused untyped as `too-tall`.
@@ -163,7 +199,10 @@ const notDelivered = (reason: SubmitNotDeliveredReason): SubmitTextResult => ({ 
  * 6. Neither mode confirmed: it takes the text back with Ctrl+U, only after
  *    the ingestion window, only in the same run, only on a screen it can read
  *    and never while a prompt is up (an unreadable screen: nothing taken back,
- *    `not-drawn`), waits for the composer to read ready and empty, and reports not
+ *    `not-drawn`), and only while the composer holds nothing but what it
+ *    typed (holdsOnlyOwnText; the user typed beside it: nothing taken back,
+ *    so Ctrl+U never clears their text), waits for the composer to read ready
+ *    and empty, and reports not
  *    delivered (`too-tall` when the composer had grown to its full height,
  *    else `not-drawn`). Whether Ctrl+U clears Codex's rare held-text state
  *    (PB9, not reproduced) is unknown; the phase record carries it.
@@ -187,11 +226,29 @@ export async function submitToCodexComposer(text: string, deps: ComposerSubmitDe
     try { return deps.readScreen() } catch { return null }
   }
 
-  // 2. The ready, empty composer, on two reads.
-  const waitUntil = deps.now() + Math.max(0, opts.readyWaitMs)
+  // The caller's own say: still wanted (asked before each poll of the ready
+  // wait and before the write).
+  const wanted = (): boolean => {
+    if (!opts.stillWanted) return true
+    try { return opts.stillWanted() === true } catch { return false }
+  }
+  const withdrawn = (): SubmitTextResult => {
+    log('its caller no longer wants it; nothing typed')
+    return notDelivered('session-gone')
+  }
+
+  // 2. The ready, empty composer, on two reads, never past the caller's
+  // readyBy (time spent queued behind another submission counts against it).
+  const readyBy = typeof opts.readyBy === 'number' && Number.isFinite(opts.readyBy) ? opts.readyBy : Number.POSITIVE_INFINITY
+  if (deps.now() >= readyBy) {
+    log('its wait ran out before it began (queued behind another submission); nothing typed')
+    return notDelivered('busy-timeout')
+  }
+  const waitUntil = Math.min(deps.now() + Math.max(0, opts.readyWaitMs), readyBy)
   let last: Ready = 'waiting'
   for (;;) {
     if (!deps.live()) return notDelivered('session-gone')
+    if (!wanted()) return withdrawn()
     last = readyState(await read(), models)
     if (last === 'ready') {
       await deps.sleep(SUBMIT_READY_SECOND_READ_MS)
@@ -210,6 +267,7 @@ export async function submitToCodexComposer(text: string, deps: ComposerSubmitDe
   }
 
   // 4. One write, then one read before any further key.
+  if (!wanted()) return withdrawn()
   deps.write(text)
   const wroteAt = deps.now()
   if (!deps.live()) return notDelivered('session-gone')
@@ -255,6 +313,17 @@ export async function submitToCodexComposer(text: string, deps: ComposerSubmitDe
   if (readyState(before, models) === 'blocked') {
     log('the text was not confirmed and a prompt is up; nothing taken back')
     return notDelivered('prompt-on-screen')
+  }
+  // 2.1.3-beta.10 section A2 (PR #746 review): Ctrl+U clears the whole
+  // composer, so it is sent only while the composer holds nothing but this
+  // submission's own text. The user typed beside it, or what it holds cannot
+  // be read: nothing taken back, and their text stays as they left it.
+  const draft = codexComposerDraft(before, models)
+  if (draft === null || !holdsOnlyOwnText(draft, text, folded)) {
+    log(draft === null
+      ? 'the text was not confirmed and what the composer holds cannot be read; nothing taken back'
+      : 'the text was not confirmed and the composer holds more than it typed; nothing taken back')
+    return notDelivered(reason)
   }
   deps.write(TAKE_BACK_KEY)
   const clearUntil = deps.now() + SUBMIT_CLEAR_VERIFY_MS

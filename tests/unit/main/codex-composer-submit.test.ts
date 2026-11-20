@@ -8,12 +8,18 @@
 // into "[Pasted Content N chars]"; an Enter before the draw is swallowed;
 // Ctrl+U clears the composer; Ctrl+C would quit it. Time is a fake clock:
 // every wait the rule makes advances it.
+// PR #746 review (2.1.3-beta.10 section A2), the last three blocks: the
+// composer's content as the take-back reads it (codexComposerDraft), Ctrl+U
+// only into a composer holding nothing but the rule's own text, and a
+// caller's readyBy and stillWanted stopping a submission before it types.
+// Each case of the last two blocks was seen red on 8bbd33ad, but the two
+// marked "green on 8bbd33ad too"; 8bbd33ad has no codexComposerDraft.
 import { describe, it, expect } from 'vitest'
 import {
   submitToCodexComposer, submitIngestionWindowMs, submitTextRefusal, estimateComposerRows, TAKE_BACK_KEY,
   SUBMIT_EXACT_CONFIRM_MS, SUBMIT_FOLDED_CONFIRM_MS, type ComposerSubmitDeps,
 } from '../../../src/main/providers/codex/composer-submit'
-import type { ScreenLine } from '../../../src/shared/codex-screen'
+import { codexComposerDraft, type ScreenLine } from '../../../src/shared/codex-screen'
 
 const P = String.fromCharCode(0x203a)
 const DOT = String.fromCharCode(0xb7)
@@ -47,6 +53,8 @@ interface SimOptions {
   promptOnWrite?: Prompt
   /** How long that prompt stays up (default: for good). */
   promptOnWriteMs?: number
+  /** The user types this beside the first write, as it is drawn. */
+  drawnWith?: string
 }
 
 /** A simulated Codex composer, with the rule's deps over it. */
@@ -61,10 +69,12 @@ function sim(opts: SimOptions = {}) {
   const writes: Array<{ at: number; data: string }> = []
   const submitted: string[] = []
 
+  let userTyped = false
   const settle = (): void => {
     if (pending && !opts.held && t >= pending.drawAt) {
       composer += pending.text
       pending = null
+      if (opts.drawnWith && !userTyped) { composer += opts.drawnWith; userTyped = true }
     }
   }
   const promptNow = (): Prompt => (opts.prompt && t >= opts.prompt.from && t < opts.prompt.to ? opts.prompt.kind : null)
@@ -436,5 +446,143 @@ describe('the take-back key needs a reading of the screen (ADR-009 round 2)', ()
     const r = await submitToCodexComposer(text, deps, { readyWaitMs: 10_000 })
     expect(r).toEqual({ delivered: false, reason: 'not-drawn' })
     expect(s.writes.map((w) => w.data)).toEqual([text])
+  })
+})
+
+describe('codexComposerDraft: what the composer holds, as the take-back reads it (PR #746 review)', () => {
+  const head = plain('  Tip: New Build faster with Codex.')
+  const footer = plain(`  gpt-5.5 medium ${DOT} C:\\dev\\demo`)
+  const empty: ScreenLine = { text: `${P} Ask Codex to do anything`, typed: P }
+
+  it('nothing, or Codex\'s placeholder, reads empty; with the shortcuts hint under the footer too', () => {
+    expect(codexComposerDraft([head, empty, footer])).toBe('')
+    expect(codexComposerDraft([head, empty, footer, plain('  ? for shortcuts')])).toBe('')
+  })
+
+  it('a text wrapped onto indented rows reads whole, its spaces dropped', () => {
+    expect(codexComposerDraft([head, plain(`${P} alpha beta`), plain('  gamma delta'), footer])).toBe('alphabetagammadelta')
+  })
+
+  it('a prompt on screen, no composer, or no footer under it: cannot be read', () => {
+    expect(codexComposerDraft([head, plain('  Do you trust the contents of this directory?'), plain(`${P} 1. Yes, continue`), plain('  Press enter to continue')])).toBeNull()
+    expect(codexComposerDraft([head, footer])).toBeNull()
+    expect(codexComposerDraft([head, plain(`${P} alpha`)])).toBeNull()
+    expect(codexComposerDraft(null)).toBeNull()
+  })
+})
+
+describe('the take-back clears only what the rule typed (PR #746 review)', () => {
+  // Ctrl+U clears the whole composer. On 8bbd33ad it went into any readable
+  // screen with no prompt up, so the user's own typing beside the text was
+  // cleared with it; the Watchdog's own rule before A2 left such a composer
+  // alone. Ownership is read by codexComposerDraft (spaces dropped).
+  it('the user typed beside the text before it was confirmed: nothing taken back, their text stays', async () => {
+    const s = sim({ drawnWith: ' and mine' })
+    const logs: string[] = []
+    const r = await submitToCodexComposer(MARKER, { ...s.deps, log: (m) => { logs.push(m) } }, { readyWaitMs: 10_000 })
+    expect(r).toEqual({ delivered: false, reason: 'not-drawn' })
+    expect(s.writes.map((w) => w.data)).toEqual([MARKER])
+    expect(s.composer).toBe(`${MARKER} and mine`)
+    expect(s.submitted).toEqual([])
+    expect(logs).toContain('the text was not confirmed and the composer holds more than it typed; nothing taken back')
+    noCtrlC(s.writes)
+  })
+
+  it('a folded text with the user\'s typing after its placeholder: nothing taken back', async () => {
+    const text = ascii(2_000)
+    let t = 0
+    let written = false
+    const writes: string[] = []
+    const head = plain('  Tip: New Build faster with Codex.')
+    const footer = plain(`  gpt-5.5 medium ${DOT} C:\\dev\\demo`)
+    const deps: ComposerSubmitDeps = {
+      readScreen: () => [head, written ? plain(`${P} [Pasted Content 2000 chars] and mine`) : { text: `${P} Ask Codex to do anything`, typed: P }, footer],
+      size: () => ({ cols: 120, rows: 40 }),
+      write: (data) => { writes.push(data); written = true },
+      live: () => true,
+      now: () => t,
+      sleep: async (ms) => { t += Math.max(0, ms) },
+    }
+    const r = await submitToCodexComposer(text, deps, { readyWaitMs: 5_000 })
+    expect(r).toEqual({ delivered: false, reason: 'not-drawn' })
+    expect(writes).toEqual([text])
+  })
+})
+
+describe('a caller\'s bound from its call, and its say before typing (PR #746 review)', () => {
+  // The Watchdog's retry (session-input submitRetry) waits behind any other
+  // submission for the run. Its 5 s counts from when it asked (readyBy), and
+  // its incident must still be on when it is typed (stillWanted). 8bbd33ad
+  // took neither option.
+  it('readyBy already past when its turn comes (it waited behind another): nothing read, nothing typed, busy-timeout', async () => {
+    const s = sim()
+    s.advanceTo(8_000)
+    let reads = 0
+    const deps: ComposerSubmitDeps = { ...s.deps, readScreen: () => { reads++; return s.deps.readScreen() } }
+    const r = await submitToCodexComposer(MARKER, deps, { readyWaitMs: 5_000, readyBy: 7_000 })
+    expect(r).toEqual({ delivered: false, reason: 'busy-timeout' })
+    expect(s.writes).toEqual([])
+    expect(reads).toBe(0)
+  })
+
+  it('readyBy ends the wait before readyWaitMs would: a composer that comes free after it gets nothing', async () => {
+    const s = sim({ busyUntil: 3_000 })
+    const r = await submitToCodexComposer(MARKER, s.deps, { readyWaitMs: 10_000, readyBy: 2_000 })
+    expect(r).toEqual({ delivered: false, reason: 'busy-timeout' })
+    expect(s.writes).toEqual([])
+    expect(s.now).toBeLessThan(3_000)
+  })
+
+  it('green on 8bbd33ad too: without readyBy the same wait delivers (the bound is only a caller\'s that sets it)', async () => {
+    const s = sim({ busyUntil: 3_000 })
+    expect(await submitToCodexComposer(MARKER, s.deps, { readyWaitMs: 10_000 })).toEqual({ delivered: true })
+    expect(s.submitted).toEqual([MARKER])
+  })
+
+  it('stillWanted no at the start: nothing read, nothing typed, answered session-gone', async () => {
+    const s = sim()
+    let reads = 0
+    const logs: string[] = []
+    const deps: ComposerSubmitDeps = { ...s.deps, readScreen: () => { reads++; return s.deps.readScreen() }, log: (m) => { logs.push(m) } }
+    const r = await submitToCodexComposer(MARKER, deps, { readyWaitMs: 5_000, stillWanted: () => false })
+    expect(r).toEqual({ delivered: false, reason: 'session-gone' })
+    expect(s.writes).toEqual([])
+    expect(reads).toBe(0)
+    expect(logs).toContain('its caller no longer wants it; nothing typed')
+  })
+
+  it('stillWanted turning to no while it waits for a turn to end: nothing typed', async () => {
+    const s = sim({ busyUntil: 3_000 })
+    const r = await submitToCodexComposer(MARKER, s.deps, { readyWaitMs: 10_000, stillWanted: () => s.now < 1_000 })
+    expect(r).toEqual({ delivered: false, reason: 'session-gone' })
+    expect(s.writes).toEqual([])
+    expect(s.now).toBeLessThan(3_000)
+  })
+
+  it('stillWanted turning to no between the second ready read and the write: nothing typed', async () => {
+    const s = sim()
+    let asks = 0
+    // The first ask is before the first read; the second, just before the write.
+    const r = await submitToCodexComposer(MARKER, s.deps, { readyWaitMs: 5_000, stillWanted: () => ++asks < 2 })
+    expect(r).toEqual({ delivered: false, reason: 'session-gone' })
+    expect(asks).toBe(2)
+    expect(s.writes).toEqual([])
+  })
+
+  it('a stillWanted that throws is a no: nothing typed', async () => {
+    const s = sim()
+    const r = await submitToCodexComposer(MARKER, s.deps, { readyWaitMs: 5_000, stillWanted: () => { throw new Error('gone') } })
+    expect(r).toEqual({ delivered: false, reason: 'session-gone' })
+    expect(s.writes).toEqual([])
+  })
+
+  it('green on 8bbd33ad too: never asked once the text is typed, so what was typed is confirmed and submitted', async () => {
+    const s = sim()
+    let typed = false
+    const deps: ComposerSubmitDeps = { ...s.deps, write: (data) => { typed = true; s.deps.write(data) } }
+    const r = await submitToCodexComposer(MARKER, deps, { readyWaitMs: 5_000, stillWanted: () => !typed })
+    expect(r).toEqual({ delivered: true })
+    expect(s.writes.map((w) => w.data)).toEqual([MARKER, ENTER])
+    expect(s.submitted).toEqual([MARKER])
   })
 })

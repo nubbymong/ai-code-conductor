@@ -639,10 +639,48 @@ describe('WatchdogManager — adapter wiring', () => {
     const wd = instances[0]
 
     wd.adapter.send('continue')
-    expect(send).toHaveBeenCalledWith('s1', 'continue')
+    // The third argument is the retry's incident check (PR #746 review).
+    expect(send).toHaveBeenCalledWith('s1', 'continue', expect.any(Function))
 
     wd.adapter.isSessionAlive()
     expect(isSessionAlive).toHaveBeenCalledWith('s1')
+  })
+
+  // 2.1.3-beta.10 section A2: a Codex session's retry goes to the host's send
+  // too (session-input submitRetry, which types it by the Codex composer rule
+  // and answers); the manager has no raw writer of its own any more.
+  it('adapter.send delegates a Codex session\'s retry to the host as well, and logs an answer of not delivered with its reason', async () => {
+    const { logWarn } = await import('../../../../src/main/debug-logger')
+    vi.mocked(logWarn).mockClear()
+    const { host, send } = makeHost()
+    send.mockImplementation((_sid: string, text: string) => Promise.resolve(text === 'continue' ? { delivered: false, reason: 'busy-timeout' } : { delivered: true }))
+    const mgr = new WatchdogManager(host)
+    mgr.startWatchdog('c1', { provider: 'codex', ssh: false, shellOnly: false })
+    const wd = instances[0]
+
+    wd.adapter.send('continue')
+    expect(send).toHaveBeenCalledWith('c1', 'continue', expect.any(Function))
+    await vi.advanceTimersByTimeAsync(0)
+    expect(logWarn).toHaveBeenCalledWith('[watchdog:c1] the retry was not delivered (busy-timeout)')
+
+    vi.mocked(logWarn).mockClear()
+    wd.adapter.send('go on')
+    await vi.advanceTimersByTimeAsync(0)
+    expect(send).toHaveBeenLastCalledWith('c1', 'go on', expect.any(Function))
+    expect(logWarn).not.toHaveBeenCalled()
+  })
+
+  it('a host send that answers nothing (Claude Code), or whose answer fails, never throws out of adapter.send', async () => {
+    const { logWarn } = await import('../../../../src/main/debug-logger')
+    vi.mocked(logWarn).mockClear()
+    const { host, send } = makeHost()
+    const mgr = new WatchdogManager(host)
+    mgr.startWatchdog('s1', { provider: 'claude' })
+    expect(() => instances[0].adapter.send('continue')).not.toThrow()
+    send.mockImplementation(() => Promise.reject(new Error('gone')))
+    expect(() => instances[0].adapter.send('continue')).not.toThrow()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(logWarn).toHaveBeenCalledWith('[watchdog:s1] the retry was not delivered: gone')
   })
 
   it('adapter.onStateChange pushes IPC.WATCHDOG_STATE to the current window', () => {

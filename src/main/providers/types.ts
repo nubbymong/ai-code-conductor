@@ -326,8 +326,11 @@ export interface SessionRunScreen {
   has(sessionId: string): boolean
   /** Type `text` into the composer and submit it, confirmed on screen, after
    *  anything already in flight for the run; waits up to `readyWaitMs` for
-   *  the ready, empty composer. Never rejects. */
-  submit(sessionId: string, text: string, opts: { readyWaitMs: number }): Promise<SubmitTextResult>
+   *  the ready, empty composer. Never rejects. `readyBy` (Date.now()'s clock)
+   *  ends that wait at the latest, time spent queued included; `stillWanted`
+   *  says no and nothing is typed (2.1.3-beta.10 section A2: the Watchdog's
+   *  retry sets both). */
+  submit(sessionId: string, text: string, opts: { readyWaitMs: number; readyBy?: number; stillWanted?: () => boolean }): Promise<SubmitTextResult>
 }
 
 export interface SshCapableProvider extends SessionProvider {

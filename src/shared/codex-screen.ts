@@ -265,6 +265,25 @@ export function codexTextTyped(lines: ScreenLine[] | null | undefined, text: str
   return [composerContent(shown[i]), ...wrapped.map((l) => l.text)].join('').replace(/\s+/g, '') === want
 }
 
+/** 2.1.3-beta.10 section A2 (PR #746 review): what the composer holds now,
+ *  read as codexTextTyped reads it (the composer row and the rows Codex wraps
+ *  it onto, each indented under the text, together with every space dropped);
+ *  '' for nothing or Codex's placeholder. Null when what it holds cannot be
+ *  read: a prompt up, no composer, or anything but those rows between it and
+ *  the footer (a popup, say; the shortcuts hint under an empty one is read). */
+export function codexComposerDraft(lines: ScreenLine[] | null | undefined, models?: readonly string[] | null): string | null {
+  if (!lines || lines.length === 0 || blocked(lines)) return null
+  const shown = lines.filter(nonBlank)
+  const i = composerIndex(shown)
+  if (i < 0) return null
+  const below = shown.slice(i + 1)
+  const under = below.length === 2 && isShortcutsHint(below[1], below[0]) ? below.slice(0, 1) : below
+  if (under.length === 0 || !footerRe(models).test(under[under.length - 1].text)) return null
+  const wrapped = under.slice(0, -1)
+  if (!wrapped.every((l) => WRAPPED_ROW_RE.test(l.text))) return null
+  return [composerContent(shown[i]), ...wrapped.map((l) => l.text)].join('').replace(/\s+/g, '')
+}
+
 /** The placeholder Codex draws in its composer for a long paste: the count is
  *  the paste's length in code points (PB3, PB9). */
 const PASTED_CONTENT_RE = /^\[Pasted Content (\d{1,7}) chars\]$/

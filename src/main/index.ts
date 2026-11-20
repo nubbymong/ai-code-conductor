@@ -10,7 +10,7 @@ import { sweepAbandonedProfiles } from './account-web/sign-in'
 import { setSignInWindowsQuitting } from './account-web/in-app-sign-in'
 import { warnAboutOrphanedSharedPartitions } from './account-web/orphan-partitions'
 import { killAllPty, gracefulExitAllPty, isSessionWritable, routeHookTranscriptPath, noteCodexHookEvent, isCodexPtySession, codexRolloutForSessionContext, applyLoggingSwitches } from './pty-manager'
-import { submitLine, typeKeys, submitMarker } from './session-input'
+import { submitRetry, submitMarker } from './session-input'
 import { registerResumeHandlers } from './ipc/resume-handlers'
 import { registerCliHandlers } from './ipc/cli-handlers'
 import { registerClipboardHandlers } from './ipc/clipboard-handlers'
@@ -1066,9 +1066,10 @@ if (!gotTheLock) {
     startLoopStallMonitor()
     registerHooksHandlers(getGateway()!)   // B1: handlers get whatever gateway backs the singleton
     // Session Watchdog (#235): wired after the gateway singleton exists so its
-    // StopFailure subscription binds immediately. send() submits the retry the
-    // same way the command-button / launch paths do — writePty(text + '\r') —
-    // which is the proven way to submit into the Claude TUI. (The channel-bus
+    // StopFailure subscription binds immediately. send() submits a Claude Code
+    // session's retry the way the launch path does — writePty(text + '\r') —
+    // the proven way to submit into the Claude TUI, and a Codex session's by
+    // the Codex composer rule (session-input submitRetry). (The channel-bus
     // paste envelope does NOT submit: formatTier1 ends at the bracketed-paste
     // close with no trailing Enter, so it only drafts. A bracketed paste with a
     // fused Enter is also swallowed by the Ink/React TUI.) The retry text is
@@ -1077,12 +1078,10 @@ if (!gotTheLock) {
     initWatchdogManager({
       getWindow,
       isSessionAlive: isSessionWritable,
-      send: (sessionId, text) => {
-        submitLine(sessionId, text)
-      },
-      // P3.10: a Codex session's retry is typed, then submitted once the
-      // screen shows it (watchdog-manager submitCodex).
-      write: (sessionId, data) => typeKeys(sessionId, data),
+      // 2.1.3-beta.10 A2: a Claude Code session's retry is submitLine's; a
+      // Codex session's goes through the Codex composer rule, which answers,
+      // and is typed only while its incident is still on (stillWanted).
+      send: (sessionId, text, stillWanted) => submitRetry(sessionId, text, stillWanted),
       // Refresh the services view live when a watchdog state changes; routed
       // through the same merge so the push carries every source (#235).
       onHealthChange: () => pushDiagnostics(),
