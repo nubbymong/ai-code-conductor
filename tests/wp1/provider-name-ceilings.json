@@ -2,7 +2,7 @@
   "schema": "provider-name-ceilings/1",
   "note": "Per-file ceilings of the provider-name ratchet (tests/unit/architecture/provider-name-ratchet.test.ts, which says exactly what is counted): for each file in src/main outside src/main/providers, how many comparisons with a provider name it holds and how many ids it defaults to one, as they stand. Lower a number when its count drops and take a file out when both reach none; never raise a number and never add a file. `total` is the sum of `files`.",
   "total": {
-    "comparisons": 77,
+    "comparisons": 76,
     "rederivations": 33
   },
   "files": {
@@ -111,7 +111,7 @@
       "rederivations": 0
     },
     "src/main/watchdog/watchdog-manager.ts": {
-      "comparisons": 6,
+      "comparisons": 5,
       "rederivations": 1
     }
   }
