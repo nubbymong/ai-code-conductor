@@ -6,9 +6,10 @@
  * checked: its nonce must be the one in the holder's record and its session
  * the one asked for, so a process that took the endpoint's name first learns
  * nothing from the app. Then the app acks `core` and `local` (and `hooks`, for
- * a connection that takes hook events, when the holder offers it) and the
- * connection carries requests (even ids, one reply each), terminal output and
- * the holder's events.
+ * a connection that takes hook events, and `mcp`, for one that carries tool
+ * streams, each when the holder offers it) and the connection carries
+ * requests (even ids, one reply each), terminal output and the holder's
+ * events. No connection the app makes asks for `mcp` yet (2.1.3-beta.10).
  *
  * Typed input follows section 15 (Attach): a `ping` after every 16 frames or
  * 1 MiB, nothing more until its `pong`, and the frames the holder answered
@@ -27,6 +28,7 @@ import {
   HELLO_LINE_MAX,
   HOOKS_CAP,
   LOCAL_CAPS,
+  MCP_CAP,
   PROTO_VERSION,
   TERMINAL_CHANNEL,
   chooseProto,
@@ -37,8 +39,12 @@ import {
   helloAck,
   parseHelloLine,
   readEventFrame,
+  readMcp,
+  readMcpClose,
+  readMcpOpen,
   type Hello,
   type HookEventFrame,
+  type McpMessage,
   type HelperOs,
   type HolderRecord,
 } from './protocol'
@@ -62,6 +68,9 @@ export interface ConnectionOptions {
   /** This connection takes hook events (a Claude Code session whose hooks may
    *  go through its holder): `hooks` is acked when the holder offers it. */
   hooks?: boolean
+  /** This connection carries the session's tool streams: `mcp` is acked when
+   *  the holder offers it. No caller sets it yet. */
+  mcp?: boolean
   helloTimeoutMs?: number
   replyTimeoutMs?: number
   pingEveryMs?: number
@@ -134,6 +143,13 @@ export type HolderConnectionEvents = {
   notice: [code: string, text: string]
   /** A hook event the holder passed on; only on a connection that acked `hooks`. */
   event: [e: HookEventFrame]
+  /** A relay opened a tool stream (the holder's number for it); only on a
+   *  connection that acked `mcp`, as are the next two. */
+  mcpOpen: [stream: number]
+  /** One JSON-RPC message on a tool stream. Untrusted. */
+  mcp: [stream: number, message: McpMessage]
+  /** A tool stream ended. */
+  mcpClose: [stream: number]
   close: []
 }
 
@@ -142,6 +158,9 @@ export class HolderConnection extends EventEmitter<HolderConnectionEvents> {
   /** True when this connection acked `hooks`: the holder offered it and the
    *  connection wanted it. Only then are hook events reported. */
   readonly hooks: boolean
+  /** True when this connection acked `mcp`: the holder offered it and the
+   *  connection wanted it. Only then are tool stream messages reported. */
+  readonly mcp: boolean
   private readonly stream: Duplex
   private readonly reader = new FrameReader('helper_to_app')
   private nextId = 2
@@ -166,12 +185,13 @@ export class HolderConnection extends EventEmitter<HolderConnectionEvents> {
     this.stream = stream
     this.hello = hello
     this.hooks = opts.hooks === true && hello.caps.includes(HOOKS_CAP)
+    this.mcp = opts.mcp === true && hello.caps.includes(MCP_CAP)
     this.replyTimeoutMs = opts.replyTimeoutMs ?? REPLY_TIMEOUT_MS
     stream.on('data', (chunk: Buffer) => this.onBytes(chunk))
     stream.on('close', () => this.shut())
     stream.on('end', () => this.shut())
     stream.on('error', () => this.shut())
-    stream.write(encodeJsonFrame(helloAck(this.hooks)))
+    stream.write(encodeJsonFrame(helloAck(this.hooks, this.mcp)))
     if (rest.length > 0) this.onBytes(rest)
     stream.resume()
     const every = opts.pingEveryMs ?? PING_EVERY_MS
@@ -378,6 +398,13 @@ export class HolderConnection extends EventEmitter<HolderConnectionEvents> {
         if (e) this.emit('event', e)
         continue
       }
+      if (m.t === 'mcp.open' || m.t === 'mcp' || m.t === 'mcp.close') {
+        // A tool stream message, read as one before any reply lookup (they
+        // carry no `re`), strictly, and reported only on a connection that
+        // acked `mcp`. One that does not read is dropped (a holder sends none).
+        if (this.mcp) this.onMcp(m, f.size)
+        continue
+      }
       const re = typeof m.re === 'number' ? m.re : undefined
       if (re !== undefined && this.ping && re === this.ping.id) {
         this.onPong()
@@ -408,6 +435,20 @@ export class HolderConnection extends EventEmitter<HolderConnectionEvents> {
         }
         this.emit('notice', code, String(m.text ?? ''))
       }
+    }
+  }
+
+  /** A tool stream message, on a connection that acked `mcp`. */
+  private onMcp(m: Json, size: number): void {
+    if (m.t === 'mcp') {
+      const r = readMcp(m, size)
+      if (r) this.emit('mcp', r.stream, r.message)
+    } else if (m.t === 'mcp.open') {
+      const r = readMcpOpen(m)
+      if (r) this.emit('mcpOpen', r.stream)
+    } else {
+      const r = readMcpClose(m)
+      if (r) this.emit('mcpClose', r.stream)
     }
   }
 }

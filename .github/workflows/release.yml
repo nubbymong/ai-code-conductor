@@ -185,6 +185,14 @@ jobs:
       - name: Fetch the WP1 ledger's bound commit
         run: node scripts/wp1/fetch-ledger-commit.mjs
 
+      # The makensis probes (tests/unit/main/installer-nsis-behaviour.test.ts)
+      # need electron-builder's NSIS compiler in MAKENSIS, and their tripwire
+      # fails a Windows CI run that has none (same step as ci.yml's Windows
+      # parts). Not tied to the suite's condition: when the suite is skipped it
+      # only warms the cache the installer step reads.
+      - name: Fetch the NSIS compiler for the installer probes
+        run: node scripts/ci/fetch-makensis.mjs
+
       # A stable release runs the WP1 candidate check whatever the manifest
       # declares: its `phase` is a field a neutral commit could set back to
       # gate0, so the phase comes from here, and the environment can only

@@ -54,6 +54,8 @@ npx vitest --watch     # Watch mode
 npx tsc --noEmit       # Type-check only
 ```
 
+A test makes its folders under `os.tmpdir()`, never a fixed temp path: under the test config that is the worker's own temp folder, removed when the run ends, and a test that leaves `TEMP`, `TMP` or `TMPDIR` pointing elsewhere fails.
+
 ## Code Style
 
 - **TypeScript** everywhere - no `any` unless unavoidable

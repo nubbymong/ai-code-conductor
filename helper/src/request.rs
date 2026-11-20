@@ -11,6 +11,14 @@
 //! object of at most 65,280 bytes that names none of its members twice and
 //! whose `hook_event_name` is that kind. The holder only numbers it and
 //! passes it on.
+//!
+//! `mcp.open`, `mcp` and `mcp.close` are allowed only once `mcp` is acked
+//! (from 2.1.3-beta.10): a tool stream's messages, between a relay
+//! (`aicc-helper mcp`) and the app. They carry no `id` and get no reply:
+//! exactly their fields, `stream` a whole number from 1 to 2^53 - 1, and an
+//! `mcp`'s `message` a JSON object or array of at most `MAX_MCP_TO_HELPER`
+//! bytes as compact JSON. Who may send which, and the smaller limit toward
+//! the app, are `serve.rs`'s rules: they depend on the connection.
 
 use crate::json::Value;
 use crate::pty::{is_batch_file, is_renamed_by_windows, Conpty, PtySize};
@@ -38,6 +46,15 @@ pub const HOOK_KINDS: [&str; 9] = ["PreToolUse", "PostToolUse", "Notification", 
 /// 64 KiB a frame holds once launched, and a `hook.event` over the limit is
 /// `too-large`, not a frame over it, after a launch as before.
 pub const MAX_HOOK_PAYLOAD: usize = 65_280;
+/// The most a tool message's `message` may be on its way to the app, as
+/// compact JSON: 1 MiB less 256 bytes, the room the `mcp` around it needs
+/// (at most 48 bytes, with the longest `stream`). So every `mcp` the holder
+/// passes on fits the 1 MiB a frame to the app holds.
+pub const MAX_MCP_TO_APP: usize = 1_048_320;
+/// The most a tool message's `message` may be on its way from the app to a
+/// relay, as compact JSON: 16 MiB less 256 bytes (a tool result can carry a
+/// screenshot).
+pub const MAX_MCP_TO_HELPER: usize = 16_776_960;
 
 pub const CODE_UNKNOWN_TYPE: &str = "unknown-type";
 pub const CODE_BAD_FIELD: &str = "bad-field";
@@ -87,14 +104,22 @@ pub enum Request {
     /// One hook event: its kind, and its payload, a JSON object of `bytes`
     /// as compact JSON (measured once, here).
     HookEvent { id: u64, kind: String, payload: Value, bytes: usize },
+    /// A tool stream begins: the sender's number for it.
+    McpOpen { stream: u64 },
+    /// One JSON-RPC message on a tool stream, a JSON object or array of
+    /// `bytes` as compact JSON (measured once, here).
+    Mcp { stream: u64, message: Value, bytes: usize },
+    /// A tool stream ends.
+    McpClose { stream: u64 },
 }
 
 /// What a connection's `hello.ack` allowed beyond the core: `local`, the
-/// terminal messages; `hooks`, hook events.
+/// terminal messages; `hooks`, hook events; `mcp`, tool streams.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Allowed {
     pub local: bool,
     pub hooks: bool,
+    pub mcp: bool,
 }
 
 /// The fields of one type: those it must have, and those it may also have.
@@ -114,6 +139,10 @@ const CORE_TYPES: [(&str, Fields); 1] = [("ping", (&["t", "id"], &[]))];
 
 /// The types a connection may send once `hooks` is acked.
 const HOOK_TYPES: [(&str, Fields); 1] = [("hook.event", (&["t", "id", "kind", "payload"], &[]))];
+
+/// The tool stream messages a connection may send once `mcp` is acked, and
+/// their fields: no `id`, as none gets a reply.
+const TOOL_TYPES: [(&str, &[&str]); 3] = [("mcp.open", &["t", "stream"]), ("mcp", &["t", "stream", "message"]), ("mcp.close", &["t", "stream"])];
 
 /// A request id: an even integer (app ids are even, section 9) a JavaScript
 /// number holds exactly.
@@ -357,6 +386,35 @@ fn parse_hook_event(v: &Value, id: u64) -> Result<Request, Refusal> {
     Ok(Request::HookEvent { id, kind, payload: payload.clone(), bytes })
 }
 
+/// Check a tool stream message of type `t`: exactly `fields`, `stream` a
+/// whole number from 1 to 2^53 - 1, and for `mcp` a `message` that is a JSON
+/// object or array of at most `MAX_MCP_TO_HELPER` bytes as compact JSON. Its
+/// refusals carry no `re`: the message has no `id`.
+fn parse_tool(v: &Value, t: &str, fields: &[&str]) -> Result<Request, Refusal> {
+    if !exact_keys(v, fields) {
+        return refuse(CODE_BAD_FIELD, None, "a field is unknown, missing or given twice");
+    }
+    let stream = match v.get("stream").and_then(Value::as_u64) {
+        Some(s) if (1..=MAX_SAFE_INTEGER).contains(&s) => s,
+        _ => return refuse(CODE_BAD_FIELD, None, "stream must be a whole number from 1 to 2^53 - 1"),
+    };
+    match t {
+        "mcp.open" => Ok(Request::McpOpen { stream }),
+        "mcp.close" => Ok(Request::McpClose { stream }),
+        _ => {
+            let message = match v.get("message") {
+                Some(m) if matches!(m, Value::Obj(_) | Value::Arr(_)) => m,
+                _ => return refuse(CODE_BAD_FIELD, None, "message must be a JSON object or array"),
+            };
+            let bytes = message.to_json().len();
+            if bytes > MAX_MCP_TO_HELPER {
+                return refuse(CODE_TOO_LARGE, None, "message is over 16776960 bytes as JSON");
+            }
+            Ok(Request::Mcp { stream, message: message.clone(), bytes })
+        }
+    }
+}
+
 /// Check one control message, allowed what the connection's ack allowed.
 pub fn parse_allowed(v: &Value, allowed: Allowed) -> Result<Request, Refusal> {
     if v.keys().is_none() {
@@ -375,6 +433,11 @@ pub fn parse_allowed(v: &Value, allowed: Allowed) -> Result<Request, Refusal> {
     }
     if fields.is_none() && allowed.hooks {
         fields = HOOK_TYPES.iter().find(|(name, _)| *name == t).map(|(_, f)| *f);
+    }
+    if fields.is_none() && allowed.mcp {
+        if let Some((_, tool_fields)) = TOOL_TYPES.iter().find(|(name, _)| *name == t) {
+            return parse_tool(v, t, tool_fields);
+        }
     }
     let (required, optional) = match fields {
         Some(f) => f,
@@ -426,7 +489,7 @@ mod tests {
     /// A message read on a connection that acked `local` or not, and not
     /// `hooks`.
     fn parse(v: &Value, local: bool) -> Result<Request, Refusal> {
-        parse_allowed(v, Allowed { local, hooks: false })
+        parse_allowed(v, Allowed { local, hooks: false, mcp: false })
     }
 
     fn parsed(text: &str) -> Result<Request, Refusal> {
@@ -605,7 +668,7 @@ mod tests {
         assert_eq!(parse(&v, false).unwrap_err().code, CODE_UNKNOWN_TYPE);
     }
 
-    const HOOKS: Allowed = Allowed { local: true, hooks: true };
+    const HOOKS: Allowed = Allowed { local: true, hooks: true, mcp: false };
 
     fn hook(text: &str) -> Result<Request, Refusal> {
         parse_allowed(&json::parse(text.as_bytes()).unwrap(), HOOKS)
@@ -637,11 +700,11 @@ mod tests {
         // Not without hooks acked, whatever else was: the connection is closed.
         let v = json::parse(b"{\"t\":\"hook.event\",\"id\":2,\"kind\":\"Stop\",\"payload\":{\"hook_event_name\":\"Stop\"}}").unwrap();
         assert_eq!(parse(&v, true).unwrap_err().code, CODE_UNKNOWN_TYPE);
-        assert_eq!(parse_allowed(&v, Allowed { local: true, hooks: false }).unwrap_err().code, CODE_UNKNOWN_TYPE);
+        assert_eq!(parse_allowed(&v, Allowed { local: true, hooks: false, mcp: false }).unwrap_err().code, CODE_UNKNOWN_TYPE);
         // Hooks alone allow it, and the terminal messages still need local.
-        assert!(parse_allowed(&v, Allowed { local: false, hooks: true }).is_ok());
+        assert!(parse_allowed(&v, Allowed { local: false, hooks: true, mcp: false }).is_ok());
         let end = json::parse(b"{\"t\":\"term.end\",\"id\":10}").unwrap();
-        assert_eq!(parse_allowed(&end, Allowed { local: false, hooks: true }).unwrap_err().code, CODE_UNKNOWN_TYPE);
+        assert_eq!(parse_allowed(&end, Allowed { local: false, hooks: true, mcp: false }).unwrap_err().code, CODE_UNKNOWN_TYPE);
     }
 
     #[test]
@@ -684,5 +747,72 @@ mod tests {
         }
         // A name repeated further in is not the holder's to judge.
         assert!(hook("{\"t\":\"hook.event\",\"id\":2,\"kind\":\"Stop\",\"payload\":{\"hook_event_name\":\"Stop\",\"tool_input\":{\"a\":1,\"a\":2}}}").is_ok());
+    }
+
+    /// What the relay acks: core, local and mcp.
+    const TOOLS: Allowed = Allowed { local: true, hooks: false, mcp: true };
+
+    fn tool(text: &str) -> Result<Request, Refusal> {
+        parse_allowed(&json::parse(text.as_bytes()).unwrap(), TOOLS)
+    }
+
+    #[test]
+    fn tool_stream_messages_read_with_their_stream_once_mcp_is_acked() {
+        assert_eq!(tool("{\"t\":\"mcp.open\",\"stream\":1}").unwrap(), Request::McpOpen { stream: 1 });
+        assert_eq!(tool("{\"t\":\"mcp.close\",\"stream\":9007199254740991}").unwrap(), Request::McpClose { stream: MAX_SAFE_INTEGER });
+        let message = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/list\"}";
+        match tool(&format!("{{\"t\":\"mcp\",\"stream\":3,\"message\":{message}}}")).unwrap() {
+            Request::Mcp { stream, message: m, bytes } => {
+                assert_eq!((stream, m.to_json(), bytes), (3, message.to_string(), message.len()));
+            }
+            other => panic!("{other:?}"),
+        }
+        // A batch is an array.
+        assert!(matches!(tool("{\"t\":\"mcp\",\"stream\":3,\"message\":[{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{}}]}"), Ok(Request::Mcp { .. })));
+        // Not without mcp acked, whatever else was: the connection is closed.
+        for acked in [Allowed { local: true, hooks: true, mcp: false }, Allowed::default()] {
+            let v = json::parse(b"{\"t\":\"mcp.open\",\"stream\":1}").unwrap();
+            assert_eq!(parse_allowed(&v, acked).unwrap_err().code, CODE_UNKNOWN_TYPE, "{acked:?}");
+        }
+        // Mcp alone allows them, and the terminal messages still need local.
+        let mcp_only = Allowed { local: false, hooks: false, mcp: true };
+        assert!(parse_allowed(&json::parse(b"{\"t\":\"mcp.open\",\"stream\":1}").unwrap(), mcp_only).is_ok());
+        let end = json::parse(b"{\"t\":\"term.end\",\"id\":10}").unwrap();
+        assert_eq!(parse_allowed(&end, mcp_only).unwrap_err().code, CODE_UNKNOWN_TYPE);
+    }
+
+    #[test]
+    fn a_tool_stream_message_that_breaks_its_schema_is_bad_field_with_no_re() {
+        for bad in [
+            "{\"t\":\"mcp.open\",\"stream\":0}",
+            "{\"t\":\"mcp.open\",\"stream\":9007199254740992}",
+            "{\"t\":\"mcp.open\",\"stream\":-1}",
+            "{\"t\":\"mcp.open\",\"stream\":1.5}",
+            "{\"t\":\"mcp.open\",\"stream\":\"1\"}",
+            "{\"t\":\"mcp.open\"}",
+            "{\"t\":\"mcp.open\",\"stream\":1,\"id\":2}",
+            "{\"t\":\"mcp.open\",\"stream\":1,\"stream\":1}",
+            "{\"t\":\"mcp.close\",\"stream\":1,\"message\":{}}",
+            "{\"t\":\"mcp\",\"stream\":1}",
+            "{\"t\":\"mcp\",\"message\":{}}",
+            "{\"t\":\"mcp\",\"stream\":1,\"message\":\"text\"}",
+            "{\"t\":\"mcp\",\"stream\":1,\"message\":1}",
+            "{\"t\":\"mcp\",\"stream\":1,\"message\":null}",
+            "{\"t\":\"mcp\",\"stream\":1,\"message\":{},\"message\":{}}",
+            "{\"t\":\"mcp\",\"stream\":1,\"message\":{},\"seq\":1}",
+        ] {
+            let refused = tool(bad).unwrap_err();
+            assert_eq!((refused.code, refused.re), (CODE_BAD_FIELD, None), "{bad}");
+        }
+    }
+
+    #[test]
+    fn a_tool_message_over_16_mib_less_256_as_json_is_too_large() {
+        // A message of exactly the most, and one byte more.
+        let of_size = |bytes: usize| format!("{{\"t\":\"mcp\",\"stream\":1,\"message\":[\"{}\"]}}", "x".repeat(bytes - 4));
+        assert!(matches!(tool(&of_size(MAX_MCP_TO_HELPER)), Ok(Request::Mcp { bytes: MAX_MCP_TO_HELPER, .. })));
+        let refused = tool(&of_size(MAX_MCP_TO_HELPER + 1)).unwrap_err();
+        assert_eq!((refused.code, refused.re), (CODE_TOO_LARGE, None));
+        assert_eq!((MAX_MCP_TO_APP, MAX_MCP_TO_HELPER), (1024 * 1024 - 256, 16 * 1024 * 1024 - 256));
     }
 }

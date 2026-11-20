@@ -50,6 +50,23 @@ export function helperRootDir(opts: { platform?: NodeJS.Platform; env?: NodeJS.P
   return opts.isPackaged ? installed : join(installed, 'dev')
 }
 
+/**
+ * Where a run of the app keeps a small record of its own, such as the vision
+ * browser the helper started (vision-started.json) or the run's own pid and
+ * creation time (app-run.json): the user data folder for an installed app,
+ * and an E2E or dev run's own data root otherwise, by the rule helperRootDir
+ * follows. A dev run shares the user data folder with an installed app on the
+ * same computer (docs/dev-alongside-prod.md), and must never read or act on
+ * that app's records. A root that is not absolute gives no record at all
+ * (null). `userData` is asked only when it is the folder used.
+ */
+export function instanceRecordPath(name: string, opts: { isPackaged: boolean; userData: () => string; env?: NodeJS.ProcessEnv }): string | null {
+  const env = opts.env ?? process.env
+  const root = env.CCC_E2E_DATA_DIR || (opts.isPackaged ? undefined : env.CCC_DEV_DATA_DIR)
+  if (root) return path.isAbsolute(root) ? path.join(root, name) : null
+  return path.join(opts.userData(), name)
+}
+
 /** The codes Windows gives while another program (real-time scanning, an
  *  indexer) still has a just-written file open. */
 const BUSY_CODES = new Set(['EPERM', 'EACCES', 'EBUSY'])

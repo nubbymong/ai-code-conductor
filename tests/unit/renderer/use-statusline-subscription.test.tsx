@@ -2,7 +2,8 @@
 // tests/unit/renderer/use-statusline-subscription.test.tsx
 //
 // Covers the graceful-fail effort gate (effortLive) and the live Fast Mode flag
-// (fastMode) that the statusline subscription writes onto the session. Uses the
+// (fastMode) that the statusline subscription writes onto the session, and the
+// "no reading" mark that a later reading clears (aicc_planning#292). Uses the
 // same local renderHook shim as use-effort-subscription.test.tsx (this repo does
 // not depend on @testing-library/react).
 import React from 'react'
@@ -102,6 +103,45 @@ describe('useStatuslineSubscription -- account identity (Phase 3 harmonise-remot
     act(() => { cb!({ sessionId: 's1', contextUsedPercent: 30 }) })
     const s = useSessionStore.getState().sessions[0]
     expect(s.accountEmail).toBe('kept@x.com')
+  })
+})
+
+// aicc_planning#292: the "no reading" mark (D3) is sent once, and readings can
+// still arrive after it. A reading is what the strip's placeholder rule reads:
+// a non-empty bucket list or a current rate limit figure.
+describe('useStatuslineSubscription -- the "no reading" mark', () => {
+  const bucket = { key: 'k/300:', label: '5h', group: 'session', percent: 40, resetsAt: '', severity: 'normal' }
+  const mark = () => useSessionStore.getState().sessions[0].usageUnavailable
+
+  it('the mark first, then a late bucket list: the mark is cleared', () => {
+    renderHook(() => useStatuslineSubscription('s1'))
+    act(() => { cb!({ sessionId: 's1', usageUnavailable: 'no-reading' }) })
+    expect(mark()).toBe('no-reading')
+    act(() => { cb!({ sessionId: 's1', usageBuckets: [bucket] }) })
+    expect(mark()).toBeUndefined()
+    expect(useSessionStore.getState().sessions[0].usageBuckets).toEqual([bucket])
+  })
+
+  it('the mark first, then a late current rate limit figure: the mark is cleared', () => {
+    renderHook(() => useStatuslineSubscription('s1'))
+    act(() => { cb!({ sessionId: 's1', usageUnavailable: 'no-reading' }) })
+    act(() => { cb!({ sessionId: 's1', rateLimitCurrent: 0 }) })
+    expect(mark()).toBeUndefined()
+    expect(useSessionStore.getState().sessions[0].rateLimitCurrent).toBe(0)
+  })
+
+  it('the mark and no readings: it stays (an empty bucket list, a weekly figure alone, other fields)', () => {
+    renderHook(() => useStatuslineSubscription('s1'))
+    act(() => { cb!({ sessionId: 's1', usageUnavailable: 'no-reading' }) })
+    act(() => { cb!({ sessionId: 's1', usageBuckets: [] }) })
+    act(() => { cb!({ sessionId: 's1', rateLimitWeekly: 12, contextUsedPercent: 30 }) })
+    expect(mark()).toBe('no-reading')
+  })
+
+  it('one update carrying both the mark and a reading leaves no mark', () => {
+    renderHook(() => useStatuslineSubscription('s1'))
+    act(() => { cb!({ sessionId: 's1', usageUnavailable: 'no-reading', usageBuckets: [bucket] }) })
+    expect(mark()).toBeUndefined()
   })
 })
 

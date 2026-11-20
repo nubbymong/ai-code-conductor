@@ -11,10 +11,16 @@
 // installer adds its own folder to the user PATH on Windows (the refresh in
 // windows-path-refresh.ts then finds it), but on Linux it writes the PATH line
 // to a shell file a login shell does not read, so ~/.local/bin/codex can be
-// missed there too.
+// missed there too. And `npm install -g @openai/codex` on Windows puts
+// codex.cmd in npm's own default folder, %APPDATA%\npm, which the Node.js
+// installer adds to the PATH of the account that ran it only: on another
+// account the check finds nothing either (aicc_planning#288).
 //
 // So when a check finds nothing, main looks in the publisher's fixed folder,
-// computed here from the user's home folder and nothing else:
+// computed here from the user's home folder and nothing else; npm's folder
+// from %APPDATA% in this process's environment and nothing else, as npm
+// builds its own default (no program is started to ask npm, and a custom npm
+// prefix is not guessed):
 //   - Windows, the file there (a regular file: never a link, by lstat) and its
 //     folder on neither the system nor the user PATH in the registry: the
 //     surface says so and offers "Add it to PATH for me" (`add-to-path`).
@@ -49,11 +55,11 @@
 // what happened.
 //
 // What crosses to the renderer is display text only: the folder as
-// `%USERPROFILE%\.local\bin` or `~/.local/bin`, the shell file with the home
-// folder as `~`, and the command, one of a fixed set of constants (its target
-// written with $HOME, and zsh's $ZDOTDIR, for the user's own shell to
-// expand). Never the user's real path, never a value from this process's
-// environment.
+// `%USERPROFILE%\.local\bin`, `%APPDATA%\npm` or `~/.local/bin`, the shell
+// file with the home folder as `~`, and the command, one of a fixed set of
+// constants (its target written with $HOME, and zsh's $ZDOTDIR, for the
+// user's own shell to expand). Never the user's real path, never a value
+// from this process's environment.
 import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
@@ -63,7 +69,8 @@ import {
   type RegistryPaths, type UserPathAppendResult,
 } from './windows-registry-path'
 import { mergeWindowsPath, windowsPathKey } from './windows-path-refresh'
-import { findOnWindowsPathAsync, folderFileTest, pathWalkDeadline } from './windows-programs'
+import { findOnWindowsPathAsync, folderFileTest, pathWalkDeadline, windowsEnvValue, type PathWalkDeadline } from './windows-programs'
+import { windowsPathFolderIsFullyQualified } from './providers/windows-path-names'
 import { CLAUDE_WINDOWS_NAMES } from './claude-cli-probe'
 import { defaultLoginShell } from './login-shell'
 import { logInfo } from './debug-logger'
@@ -76,10 +83,27 @@ interface KnownFolder {
   display: string
 }
 
+/** A Windows install folder. `under` absent: below the user's home folder;
+ *  'APPDATA': below the folder %APPDATA% names in this process's environment.
+ *  `names`, when set: every name the tool is looked for by there (one must be
+ *  a regular file, and none may be a link); `file` alone otherwise. `file` is
+ *  the name a refusal gives. */
+interface WindowsKnownFolder extends KnownFolder {
+  under?: 'APPDATA'
+  names?: readonly string[]
+}
+
+/** The names Codex is looked for by on Windows: in npm's folder, and in the
+ *  registry's PATH folders (WINDOWS_NAMES). */
+const CODEX_WINDOWS_NAMES: readonly string[] = Object.freeze(['codex.exe', 'codex.cmd'])
+
 /** Windows: Anthropic's native installer (setup page and troubleshooting
- *  page). Codex has none: OpenAI's installer adds its own folder to PATH. */
-const WINDOWS_FOLDERS: Partial<Record<ProviderId, KnownFolder>> = Object.freeze({
+ *  page). For Codex, npm's own default global folder, where
+ *  `npm install -g @openai/codex` puts codex.cmd; OpenAI's own installer
+ *  adds its folder to PATH itself. */
+const WINDOWS_FOLDERS: Partial<Record<ProviderId, WindowsKnownFolder>> = Object.freeze({
   claude: Object.freeze({ steps: ['.local', 'bin'], file: 'claude.exe', display: '%USERPROFILE%\\.local\\bin' }),
+  codex: Object.freeze({ under: 'APPDATA', steps: ['npm'], file: 'codex.cmd', names: CODEX_WINDOWS_NAMES, display: '%APPDATA%\\npm' }),
 })
 
 /** macOS and Linux: both installers link the tool into ~/.local/bin. */
@@ -92,7 +116,7 @@ const POSIX_FOLDERS: Partial<Record<ProviderId, KnownFolder>> = Object.freeze({
  *  one list every check and start uses), read when asked. */
 const WINDOWS_NAMES: Partial<Record<ProviderId, () => readonly string[]>> = Object.freeze({
   claude: () => CLAUDE_WINDOWS_NAMES,
-  codex: () => ['codex.exe', 'codex.cmd'],
+  codex: () => CODEX_WINDOWS_NAMES,
 })
 
 /** The line every sh-family shell file gets, and fish's own. */
@@ -130,6 +154,10 @@ export interface InstallFolderDeps {
   env: Record<string, string | undefined>
   /** What `p` itself is (lstat: a link is a link, never followed). */
   entryKind: (p: string) => Promise<EntryKind>
+  /** The deadline of one check's looks in an install folder, which may be on
+   *  a share that does not answer (a redirected %APPDATA%). Default: the
+   *  wait a walk of PATH has (pathWalkDeadline). */
+  lookDeadline?: () => PathWalkDeadline
   /** Whether `p` is a file, following links (stat). */
   isFile: (p: string) => Promise<boolean>
   /** The system and user PATH values as stored. */
@@ -143,19 +171,33 @@ export interface InstallFolderDeps {
   log: (line: string) => void
 }
 
+async function lstatKind(p: string): Promise<EntryKind> {
+  try {
+    const s = await fs.promises.lstat(p)
+    return s.isSymbolicLink() ? 'link' : s.isDirectory() ? 'dir' : s.isFile() ? 'file' : 'other'
+  } catch {
+    return 'none'
+  }
+}
+
+/** The lstat each path has outstanding. A look at a path whose last look has
+ *  not ended (a share that does not answer holds one of the few threads file
+ *  tests share, for tens of seconds) gets that look's answer, so pressing
+ *  Check again over and over starts no more of them. */
+const pendingLooks = new Map<string, Promise<EntryKind>>()
+
 /** The real ones. */
 export function installFolderDeps(): InstallFolderDeps {
   return {
     platform: process.platform,
     home: os.homedir(),
     env: process.env,
-    entryKind: async (p) => {
-      try {
-        const s = await fs.promises.lstat(p)
-        return s.isSymbolicLink() ? 'link' : s.isDirectory() ? 'dir' : s.isFile() ? 'file' : 'other'
-      } catch {
-        return 'none'
-      }
+    entryKind: (p) => {
+      const pending = pendingLooks.get(p)
+      if (pending) return pending
+      const look = lstatKind(p).finally(() => { if (pendingLooks.get(p) === look) pendingLooks.delete(p) })
+      pendingLooks.set(p, look)
+      return look
     },
     // On Windows through the shared file test (windows-programs.ts
     // folderFileTest): this is the test the walk of the registry's PATH
@@ -184,18 +226,57 @@ export function installFolderDeps(): InstallFolderDeps {
   }
 }
 
-/** The Windows folder for `providerId` below `home`, when it is one the
- *  append may write. */
-function windowsFolder(providerId: ProviderId, home: string): { dir: string; known: KnownFolder } | null {
+/** %APPDATA% as this process's environment holds it (its name in any case),
+ *  when it is a full path (a drive or a share): what npm builds its default
+ *  global folder from. Never expanded, never taken from the home folder. */
+function appDataFolder(env: Record<string, string | undefined>): string | null {
+  const value = windowsEnvValue(env as NodeJS.ProcessEnv, 'APPDATA')
+  return typeof value === 'string' && windowsPathFolderIsFullyQualified(value) ? value : null
+}
+
+/** The Windows folder for `providerId`, below the home folder or %APPDATA%,
+ *  when it is one the append may write. */
+function windowsFolder(providerId: ProviderId, deps: Pick<InstallFolderDeps, 'home' | 'env'>): { dir: string; known: WindowsKnownFolder } | null {
   const known = WINDOWS_FOLDERS[providerId]
-  if (!known || typeof home !== 'string' || home === '') return null
-  const dir = path.win32.join(home, ...known.steps)
+  if (!known) return null
+  const base = known.under === 'APPDATA' ? appDataFolder(deps.env) : deps.home
+  if (typeof base !== 'string' || base === '') return null
+  const dir = path.win32.join(base, ...known.steps)
   return appendableFolder(dir) ? { dir, known } : null
 }
 
-/** The publisher's file is there, a regular file in a real folder. */
-async function installedThere(deps: InstallFolderDeps, dir: string, known: KnownFolder): Promise<boolean> {
-  return (await deps.entryKind(dir)) === 'dir' && (await deps.entryKind(path.win32.join(dir, known.file))) === 'file'
+/** What `p` is (deps.entryKind), or 'none' once `deadline` has passed with
+ *  no answer: the check is not held past it. A look that fails is 'none'. */
+function lookWithin(deps: InstallFolderDeps, p: string, deadline: PathWalkDeadline): Promise<EntryKind> {
+  if (deadline.passed) return Promise.resolve('none')
+  return new Promise<EntryKind>((answer) => {
+    const off = deadline.onPassed(() => answer('none'))
+    const settle = (kind: EntryKind) => { off(); answer(kind) }
+    Promise.resolve().then(() => deps.entryKind(p)).then(settle, () => settle('none'))
+  })
+}
+
+/** The tool's file is there, a regular file in a real folder, and no name the
+ *  lookup reads is a link, seen before the deadline of the looks. A folder
+ *  that does not answer in time holds nothing: no add-to-path hint for it and
+ *  no add (pathHintFor then walks the registry's PATH, as for an empty
+ *  folder). */
+async function installedThere(deps: InstallFolderDeps, dir: string, known: WindowsKnownFolder): Promise<boolean> {
+  const deadline = (deps.lookDeadline ?? pathWalkDeadline)()
+  try {
+    if ((await lookWithin(deps, dir, deadline)) !== 'dir') return false
+    let file = false
+    for (const name of known.names ?? [known.file]) {
+      const kind = await lookWithin(deps, path.win32.join(dir, name), deadline)
+      // A link at any name Codex's lookup reads may be what runs after the add.
+      if (kind === 'link') return false
+      if (kind === 'file') file = true
+    }
+    // A name whose look did not end in time may be a link.
+    return file && !deadline.passed
+  } finally {
+    deadline.clear()
+  }
 }
 
 async function registryOrNull(deps: InstallFolderDeps): Promise<RegistryPaths | null> {
@@ -261,7 +342,7 @@ export function shellProfileFor(
 export async function pathHintFor(providerId: ProviderId, deps: InstallFolderDeps = installFolderDeps()): Promise<PathHintView | undefined> {
   const env = deps.env as NodeJS.ProcessEnv
   if (deps.platform === 'win32') {
-    const at = windowsFolder(providerId, deps.home)
+    const at = windowsFolder(providerId, deps)
     if (at && await installedThere(deps, at.dir, at.known)) {
       const reg = await registryOrNull(deps)
       const key = windowsFolderKey(at.dir)
@@ -287,13 +368,14 @@ export type AddToPathOutcome =
   | { outcome: 'added' | 'already' }
   | { outcome: 'refused' | 'failed'; message: string }
 
-/** "Add it to PATH for me" (Windows only): the publisher's folder for
- *  `providerId`, computed here, appended to the user PATH in the registry
- *  when neither PATH has it, then to this process's PATH. Refused when that
- *  folder does not hold the tool as a regular file. */
+/** "Add it to PATH for me" (Windows only): the tool's install folder for
+ *  `providerId` (npm's, for Codex), computed here, appended to the user PATH
+ *  in the registry when neither PATH has it, then to this process's PATH.
+ *  Refused when that folder does not hold the tool as a regular file, or
+ *  when a name the tool is looked for by there is a link (installedThere). */
 export async function addToolFolderToPath(providerId: ProviderId, deps: InstallFolderDeps = installFolderDeps()): Promise<AddToPathOutcome> {
   if (deps.platform !== 'win32') return { outcome: 'refused', message: 'The app adds a folder to PATH only on Windows.' }
-  const at = windowsFolder(providerId, deps.home)
+  const at = windowsFolder(providerId, deps)
   if (!at) return { outcome: 'refused', message: 'There is no install folder the app adds to PATH for this tool.' }
   if (!(await installedThere(deps, at.dir, at.known))) {
     return { outcome: 'refused', message: `${at.known.file} is not in ${at.known.display}, so the folder was not added.` }

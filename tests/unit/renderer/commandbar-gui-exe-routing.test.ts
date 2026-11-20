@@ -4,7 +4,8 @@
  *
  * The bar's job is to decide, not to detect. These pin the decision table:
  *
- *   prompt button              -> type it, never probe (no program is started)
+ *   prompt button              -> main types it (pty.submitPrompt, #333), never
+ *                                 probe (no program is started)
  *   shell + console/unresolved -> type it, exactly as before
  *   shell + GUI, no policy     -> ask; type NOTHING until the user answers
  *   shell + GUI, policy capture-> run console-less, show the log
@@ -58,6 +59,7 @@ vi.mock('../../../src/renderer/components/terminal/repaintRegistry', () => ({
 }))
 
 const ptyWrite = vi.fn()
+const submitPrompt = vi.fn(async () => ({ outcome: 'sent' }))
 const probe = vi.fn()
 const runCaptured = vi.fn()
 const releaseRun = vi.fn(async () => true)
@@ -65,7 +67,7 @@ const cancelRun = vi.fn(async () => true)
 const exeApi = { probe, runCaptured, releaseRun, cancelRun, onRunData: () => () => {}, onRunExit: () => () => {} }
 ;(globalThis as any).window = (globalThis as any).window ?? {}
 ;(globalThis as any).window.electronAPI = {
-  pty: { write: ptyWrite },
+  pty: { write: ptyWrite, submitPrompt },
   credentials: { save: vi.fn(), delete: vi.fn() },
   exe: exeApi,
   // #86: an SSH partner is typed into only once main reports it at its shell.
@@ -104,7 +106,7 @@ const click = (label: string) => {
 const settle = async () => { await act(async () => { await Promise.resolve(); await Promise.resolve() }) }
 
 beforeEach(() => {
-  ptyWrite.mockClear(); probe.mockReset(); runCaptured.mockReset()
+  ptyWrite.mockClear(); submitPrompt.mockClear(); probe.mockReset(); runCaptured.mockReset()
   releaseRun.mockClear(); cancelRun.mockClear()
   updateCommand.mockClear(); scheduleBleedRepaints.mockClear()
   SESSION = {}
@@ -116,11 +118,33 @@ beforeEach(() => {
 afterEach(() => { act(() => { root.unmount() }); container.remove() })
 
 describe('a prompt button is never probed', () => {
-  it('types straight into the agent — no program is being started', async () => {
+  it('goes straight to the agent — no program is being started', async () => {
     mount([{ id: 'p1', label: 'Explain', prompt: 'explain this', scope: 'global', target: 'claude', kind: 'prompt' }])
     click('Explain')
-    expect(ptyWrite).toHaveBeenCalledTimes(1)
+    // #333: main types it, by one rule; the bar passes the text and no Enter.
+    expect(submitPrompt).toHaveBeenCalledTimes(1)
+    expect(submitPrompt).toHaveBeenCalledWith({ sessionId: 's-1', text: 'explain this' })
+    expect(ptyWrite).not.toHaveBeenCalled()
     expect(probe).not.toHaveBeenCalled()
+  })
+
+  it('a Terminal only tab\'s own shell line (aimed at the main pane, no agent) still writes its line and Enter through pty.write', async () => {
+    SESSION = { shellOnly: true }
+    probe.mockResolvedValue({ status: 'console', token: 'make', exePath: 'C:\\bin\\make.exe' })
+    mount([{ id: 'm1', label: 'Build', prompt: 'make', scope: 'global', target: 'claude', kind: 'shell' }])
+    click('Build')
+    await settle()
+    expect(ptyWrite.mock.calls).toEqual([['s-1', 'make\r']])
+    expect(submitPrompt).not.toHaveBeenCalled()
+  })
+
+  it('a shell line button still writes its line and Enter through pty.write (#333 leaves it alone)', async () => {
+    probe.mockResolvedValue({ status: 'console', token: 'git', exePath: 'C:\\bin\\git.exe' })
+    mount([shellCmd({ prompt: 'git', defaultArgs: ['status'] })])
+    click('Slice')
+    await settle()
+    expect(ptyWrite.mock.calls).toEqual([['s-1-partner', 'git status\r']])
+    expect(submitPrompt).not.toHaveBeenCalled()
   })
 })
 

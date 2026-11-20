@@ -1,8 +1,8 @@
 {
   "schema": "wp1-legacy-codex-ledger/2",
-  "predicateDigest": "53fe7e5238cde4df748b1908c567dfcc9f825c901c109678028d383ec4dfef35",
-  "manifestPathDigest": "73dddb229f850d891e5e63535d55b2511a034c99f09e40d608752f7e30fa0e02",
-  "manifestHead": "32fb8b36ea5d35bf35cf1c3ab97d9f2b24527436",
+  "predicateDigest": "100a1233edebdc39a5f9004d3fba980a89ebb15b25872e52076386bc84b03153",
+  "manifestPathDigest": "841585dd5f9d5f888d9f76f4094d8e0fb994e1a089c7c62660c54dc23ecff16b",
+  "manifestHead": "8deccf6debaf72da2a0b16b3169e60be2cb99969",
   "dispositions": {
     "retain": "unchanged observable behaviour, characterization proof",
     "move": "moved behind a package boundary and/or adapted at the call site, regression proof (newPath when relocated)",
@@ -444,6 +444,37 @@
       "disposition": "added",
       "evidence": "WP2 plan document: maps each planned Codex adapter test (tests/wp1/cli-discovery.test.ts and siblings) to its requirement; no Codex code path (WP1.70); WP2 P3 usage track MP8 (ADR-022): residuals (window focus, switch-off, status check) and the VM step owed (WP1.70); WP2 P3 usage track MP7 round-1 review fixes (ADR-022): the status-check residual restated for the sign-in lock, and the helper version owed to the VM step (WP1.70); WP2 P3 usage track MP9: the Codex re-read deviation and residuals (WP1.70); WP2 P3 usage track MP8 round 2 (VM walk and review fixes; ADR-022): the focus residual resolved, and a residual for the model catalogue the helper still refetches (WP1.70); WP2 P3 usage track MP10: the whole-session attribution residual (WP1.70); WP2 P3 usage track MP9 round 1 (review fixes: B-F1, B-F2, Q-1 to Q-5): the downgrade and linked-folder fixes, the downgrade residual, and the decisions owed to MP12 (WP1.70); WP2 P3 usage track MP11: the no-price and provider-split decision (WP1.70); WP2 P3 usage track MP8 round 3 and MP10 round 1: what a read contacts and why no flag is used, the privacy wording owed to MP13, and the path rule for Claude attribution (WP1.70); WP2 P3 usage track MP12: the decisions for the page resolved, and the VM screenshots owed (WP1.70); WP2 P3 usage track MP11 round 1 (review fixes) and the MP9 lens B nits: the unpriced list over the range, the folders named once the registry is read, and the residual for a build from before #307 (WP1.70); WP2 P3 usage track MP10 round 1 and MP12 round 1 (review fixes): the profile folder the attribution matches, and the account-sorting notice shortened for the owner screenshot review (WP1.70); WP2 P3 usage track MP9 (defect 4 follow-up): the counting state of the account-sorting notice (WP1.70); WP2 P3 usage track records: the usage screenshots done and approved, and the approved copy the mockup does not draw (WP1.70); WP2 PR 4 final review nits: the departures note says what NoDefaultCurrentDirectoryInExePath=1 sets (WP1.70); docs/wp1/evidence/ci-matrix.md",
       "note": "plan text, not a user-facing claim"
+    },
+    {
+      "path": "helper/probes/README.md",
+      "predicates": [
+        "P14"
+      ],
+      "category": "OTHER",
+      "disposition": "added",
+      "evidence": "ADR-030 probe P18 (2.1.3-beta.10 section B1): a Windows test-machine probe that measures how Claude Code and Codex start a tool server; never shipped and never run in CI; no legacy Codex code path; listed in the repository-wide legacy Codex manifest, zero unmatched at the merge gate (WP1.67), tests/wp1/legacy-codex-gate.test.ts",
+      "note": "how to run probe P18; names Codex as one of the two CLIs it measures"
+    },
+    {
+      "path": "helper/probes/p18-stand-in.cjs",
+      "predicates": [
+        "P14"
+      ],
+      "category": "OTHER",
+      "disposition": "added",
+      "evidence": "ADR-030 probe P18 (2.1.3-beta.10 section B1): a Windows test-machine probe that measures how Claude Code and Codex start a tool server; never shipped and never run in CI; no legacy Codex code path; listed in the repository-wide legacy Codex manifest, zero unmatched at the merge gate (WP1.67), tests/wp1/legacy-codex-gate.test.ts",
+      "note": "the stand-in tool server P18 registers; names Codex in its header comment only"
+    },
+    {
+      "path": "helper/probes/p18-windows-tool-server-start.ps1",
+      "predicates": [
+        "P04",
+        "P14"
+      ],
+      "category": "OTHER",
+      "disposition": "added",
+      "evidence": "ADR-030 probe P18 (2.1.3-beta.10 section B1): a Windows test-machine probe that measures how Claude Code and Codex start a tool server; never shipped and never run in CI; no legacy Codex code path; listed in the repository-wide legacy Codex manifest, zero unmatched at the merge gate (WP1.67), tests/wp1/legacy-codex-gate.test.ts",
+      "note": "the P18 probe script; runs a Codex CLI in a fresh environment whose CODEX_HOME is the probe's own temporary folder"
     },
     {
       "path": "package.json",
@@ -1222,8 +1253,8 @@
       ],
       "category": "OTHER",
       "disposition": "added",
-      "evidence": "new first-run install review fix (2026-10-10, ADR-024): a CLI its publisher's installer left in its own folder off PATH; Claude Code in %USERPROFILE%\\.local\\bin on Windows gets Add it to PATH for me (main computes the one folder), Claude Code and Codex in ~/.local/bin on macOS and Linux the shell line to copy; a restart advised only when it would help (WP1.18); tests/unit/main/install-folder-path.test.ts, tests/unit/main/setup-probe-cli-path.test.ts",
-      "note": "main only; names codex as a provider id with a POSIX install folder"
+      "evidence": "new first-run install review fix (2026-10-10, ADR-024): a CLI its publisher's installer left in its own folder off PATH; Claude Code in %USERPROFILE%\\.local\\bin on Windows gets Add it to PATH for me (main computes the one folder), Claude Code and Codex in ~/.local/bin on macOS and Linux the shell line to copy; a restart advised only when it would help (WP1.18); tests/unit/main/install-folder-path.test.ts, tests/unit/main/setup-probe-cli-path.test.ts; 2.1.3-beta.10 C2 (aicc_planning#288): Codex installed with npm on Windows, in %APPDATA%\\npm (APPDATA read from the environment, nothing started) off PATH, gets Add it to PATH for me too; discovery still looks on PATH only; the looks in an install folder wait no longer than a walk of PATH, one lstat outstanding per path (WP1.18); tests/unit/main/install-folder-path.test.ts, tests/unit/renderer/onboarding-codex-setup.test.tsx",
+      "note": "main only; names codex as a provider id with a POSIX install folder and npm's Windows folder"
     },
     {
       "path": "src/main/install-secret.ts",
@@ -6723,7 +6754,7 @@
       ],
       "category": "TEST",
       "disposition": "added",
-      "evidence": "new first-run install review fix (2026-10-10, ADR-024) test: the PATH hint per platform and provider (Codex has no Windows folder of its own; ~/.local/bin/codex on macOS and Linux gets the shell line), and Add it to PATH for me appends only the folder main computes (WP1.18); tests/unit/main/install-folder-path.test.ts",
+      "evidence": "new first-run install review fix (2026-10-10, ADR-024) test: the PATH hint per platform and provider (Codex has no Windows folder of its own; ~/.local/bin/codex on macOS and Linux gets the shell line), and Add it to PATH for me appends only the folder main computes (WP1.18); tests/unit/main/install-folder-path.test.ts; 2.1.3-beta.10 C2 (aicc_planning#288): Codex's Windows folder is now npm's %APPDATA%\\npm, from the environment's APPDATA only (unset or not a full path: no folder), codex.cmd or codex.exe a regular file there and neither a link (WP1.18); tests/unit/main/install-folder-path.test.ts",
       "note": "host-safe: the file system, registry and PATH write are stand-ins"
     },
     {
@@ -6805,6 +6836,16 @@
       "disposition": "retain",
       "evidence": "existing test retained unchanged; must stay green on the merge candidate (WP1.33); listed in docs/wp1/baseline-test-inventory.json",
       "note": ""
+    },
+    {
+      "path": "tests/unit/main/prompt-button-ipc.test.ts",
+      "predicates": [
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "new 2.1.3-beta.10 section A1 test (#333; tests/unit/main/prompt-button-ipc.test.ts): pty:submitPrompt answers the app window's top frame only, with a strict payload and a text cap, refuses a partner terminal's id, hands the text to the session input module's submitPrompt and reads the Send or Type it only setting itself, failing toward send (WP1.68)",
+      "note": "created by 2.1.3-beta.10 section A1; the Codex word is the mocked provider accounts and the session input door's Codex rule it names"
     },
     {
       "path": "tests/unit/main/provider-account-usage.test.ts",
@@ -7282,6 +7323,17 @@
       "disposition": "added",
       "evidence": "new 2.1.3-beta.9 section A1 test (tests/unit/main/session-input-ownership.test.ts): no main file outside src/main/session-input types into a session beyond a shrinking allow-list; the Codex run screen's submit and the Codex package's pane writer are among the shapes it finds (WP1.68)",
       "note": "created by 2.1.3-beta.9 section A1; reads source files only"
+    },
+    {
+      "path": "tests/unit/main/session-input-prompt.test.ts",
+      "predicates": [
+        "P05",
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "new 2.1.3-beta.10 section A1 test (#333; tests/unit/main/session-input-prompt.test.ts): a command bar prompt button through the session input module's submitPrompt, against fake ports and a fake clock: on a session that is not Codex the text, then its Enter as its own write 300 ms after the last slice, only into the terminal process the text went to; a Codex session's through the Codex run screen's submit with a 5 s ready wait, never raw, and a refused text typed with no Enter (WP1.68)",
+      "note": "created by 2.1.3-beta.10 section A1; fake ports and a fake run screen, nothing started"
     },
     {
       "path": "tests/unit/main/session-input.test.ts",
@@ -8928,6 +8980,16 @@
       "disposition": "replace",
       "evidence": "existing test retained unchanged; must stay green on the merge candidate (WP1.33); listed in docs/wp1/baseline-test-inventory.json; WP1.33 mapping: adapted in place for WP2 PR 3 P3.8 (row 39): the model dropdown case now asserts the registry's Codex list, and cases for a saved unlisted model, Default and the effort a model change drops were added; the other cases are unchanged; tests/unit/renderer/commandbar-codex-toolbar.test.ts; WP1.33 mapping: WP2 PR 3 P3.8 round 1 (rows 41, 69) added the live-session model pill cases and the hint and Plan mode cases; tests/unit/renderer/commandbar-codex-toolbar.test.ts; WP1.33 mapping: WP2 PR 3 P3.8 round 2 added the Plan mode pill case; tests/unit/renderer/commandbar-codex-toolbar.test.ts; WP1.33 mapping: WP2 PR 3 P3.8 round 3 added the launched-preset pill case; tests/unit/renderer/commandbar-codex-toolbar.test.ts",
       "note": "re-dispositioned in WP2 PR 3 P3.8 (was retain)"
+    },
+    {
+      "path": "tests/unit/renderer/commandbar-focus-handoff.test.tsx",
+      "predicates": [
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "replace",
+      "evidence": "existing test retained; must stay green on the merge candidate (WP1.33); listed in docs/wp1/baseline-test-inventory.json; WP1.33 mapping: 2.1.3-beta.10 section A1 (#333) adapted one case (a prompt button calls pty.submitPrompt with the text and no Enter) and added the prompt button cases, whose not-sent notes name Codex's submit rule reasons; the other cases are unchanged; tests/unit/renderer/commandbar-focus-handoff.test.tsx",
+      "note": "matched since 2.1.3-beta.10 section A1 (was not matched)"
     },
     {
       "path": "tests/unit/renderer/commandbar-one-row.test.tsx",

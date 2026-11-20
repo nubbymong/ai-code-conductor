@@ -52,9 +52,10 @@ export function runTempPrefix(kind = '', env = process.env) {
  * well-formed tag it removes nothing: it never falls back to every `ccc-vitest-*`.
  * @param {string} tmp
  * @param {string} tag
+ * @param {(name: string, err: unknown) => void} [onError] told of each name it could not remove
  * @returns {string[]} the names removed
  */
-export function removeRunTempFolders(tmp, tag) {
+export function removeRunTempFolders(tmp, tag, onError) {
   /** @type {string[]} */
   const removed = []
   if (!isRunTag(tag)) return removed
@@ -70,8 +71,8 @@ export function removeRunTempFolders(tmp, tag) {
     try {
       fs.rmSync(path.join(tmp, name), RM_OPTIONS)
       removed.push(name)
-    } catch {
-      /* best effort */
+    } catch (err) {
+      onError?.(name, err) // best effort; the CI temp line names what stayed
     }
   }
   return removed
@@ -144,13 +145,17 @@ export function readRunOwner(tmp, tag) {
   }
 }
 
-/** Remove the record of the run `tag`. @param {string} tmp @param {string} tag */
-export function removeRunOwner(tmp, tag) {
+/**
+ * Remove the record of the run `tag`.
+ * @param {string} tmp @param {string} tag
+ * @param {(name: string, err: unknown) => void} [onError] told when the record could not be removed
+ */
+export function removeRunOwner(tmp, tag, onError) {
   if (!isRunTag(tag)) return
   try {
     fs.rmSync(ownerPath(tmp, tag), RM_OPTIONS)
-  } catch {
-    /* best effort */
+  } catch (err) {
+    onError?.(path.basename(ownerPath(tmp, tag)), err) // best effort
   }
 }
 

@@ -1,10 +1,10 @@
 {
   "schema": "wp1-legacy-codex-manifest/3",
-  "generatedAt": "2026-11-19T16:33:49.836Z",
-  "head": "32fb8b36ea5d35bf35cf1c3ab97d9f2b24527436",
-  "tree": "d84ec544fe25a15988d753efe6755b9d321fd132",
+  "generatedAt": "2026-11-20T01:00:15.890Z",
+  "head": "8deccf6debaf72da2a0b16b3169e60be2cb99969",
+  "tree": "b5c8e4d5dc7f796a3762b6ace796641d1e77ac43",
   "scannedWorkingTree": true,
-  "predicateDigest": "53fe7e5238cde4df748b1908c567dfcc9f825c901c109678028d383ec4dfef35",
+  "predicateDigest": "100a1233edebdc39a5f9004d3fba980a89ebb15b25872e52076386bc84b03153",
   "predicates": [
     {
       "id": "P01",
@@ -116,10 +116,10 @@
     "\\.(png|jpg|jpeg|gif|ico|icns|webp|svg|woff2?|ttf|otf|mp4|zip|asar|node|exe|dll|dylib|so|pdf)$",
     "^package-lock\\.json$"
   ],
-  "trackedFileCount": 3448,
-  "excludedFileCount": 520,
-  "scannedFileCount": 2928,
-  "unscopedFileCount": 62,
+  "trackedFileCount": 3475,
+  "excludedFileCount": 535,
+  "scannedFileCount": 2940,
+  "unscopedFileCount": 15,
   "unscoped": [
     ".claude/settings.json",
     ".claude/skills/LoopReady/SKILL.md",
@@ -133,61 +133,14 @@
     ".vscode/settings.json",
     "LICENSE",
     "NOTICE",
-    "helper/.cargo/config.toml",
-    "helper/Cargo.lock",
-    "helper/Cargo.toml",
-    "helper/README.md",
-    "helper/fixtures/frames.json",
-    "helper/fixtures/hello.json",
-    "helper/fixtures/limits.json",
-    "helper/fixtures/local.json",
-    "helper/probes/README.md",
-    "helper/probes/p16-windows-hook-cost.ps1",
-    "helper/probes/p7-windows-survival.ps1",
-    "helper/rust-toolchain.toml",
-    "helper/src/bin/aicc-fake-cli.rs",
-    "helper/src/client.rs",
-    "helper/src/cmdline.rs",
-    "helper/src/consoles.rs",
-    "helper/src/detach.rs",
-    "helper/src/frame.rs",
-    "helper/src/hello.rs",
-    "helper/src/holder.rs",
-    "helper/src/hook.rs",
-    "helper/src/json.rs",
-    "helper/src/lib.rs",
-    "helper/src/main.rs",
-    "helper/src/pids.rs",
-    "helper/src/pty/mod.rs",
-    "helper/src/pty/unix.rs",
-    "helper/src/pty/windows.rs",
-    "helper/src/random.rs",
-    "helper/src/request.rs",
-    "helper/src/ring.rs",
-    "helper/src/selftest.rs",
-    "helper/src/serve.rs",
-    "helper/src/start.rs",
-    "helper/src/store.rs",
-    "helper/src/transport/mod.rs",
-    "helper/src/transport/unix.rs",
-    "helper/src/transport/windows.rs",
-    "helper/src/winproc.rs",
-    "helper/tests/console_hosts.rs",
-    "helper/tests/fixtures.rs",
-    "helper/tests/hold.rs",
-    "helper/tests/holder_wait.rs",
-    "helper/tests/hooks.rs",
-    "helper/tests/probe_transport.rs",
-    "helper/tests/start.rs",
-    "helper/tests/windows_orphans.rs",
     "test/minimal/index.html",
     "test/minimal/main.js",
     "test/minimal/preload.js"
   ],
   "unscopedMentions": [],
   "unreadable": [],
-  "matchedPathCount": 924,
-  "pathDigest": "73dddb229f850d891e5e63535d55b2511a034c99f09e40d608752f7e30fa0e02",
+  "matchedPathCount": 930,
+  "pathDigest": "841585dd5f9d5f888d9f76f4094d8e0fb994e1a089c7c62660c54dc23ecff16b",
   "entries": [
     {
       "path": ".github/workflows/ci.yml",
@@ -288,6 +241,28 @@
         "P12"
       ],
       "lineCount": 154
+    },
+    {
+      "path": "helper/probes/README.md",
+      "predicates": [
+        "P14"
+      ],
+      "lineCount": 5
+    },
+    {
+      "path": "helper/probes/p18-stand-in.cjs",
+      "predicates": [
+        "P14"
+      ],
+      "lineCount": 1
+    },
+    {
+      "path": "helper/probes/p18-windows-tool-server-start.ps1",
+      "predicates": [
+        "P04",
+        "P14"
+      ],
+      "lineCount": 35
     },
     {
       "path": "package.json",
@@ -824,7 +799,7 @@
       "predicates": [
         "P14"
       ],
-      "lineCount": 5
+      "lineCount": 13
     },
     {
       "path": "src/main/install-secret.ts",
@@ -1516,7 +1491,7 @@
       "predicates": [
         "P14"
       ],
-      "lineCount": 30
+      "lineCount": 48
     },
     {
       "path": "src/main/session-resume-enrich.ts",
@@ -1730,7 +1705,7 @@
         "P07",
         "P11"
       ],
-      "lineCount": 56
+      "lineCount": 65
     },
     {
       "path": "src/renderer/components/ConductorMcpPage.tsx",
@@ -2662,7 +2637,7 @@
       "predicates": [
         "P11"
       ],
-      "lineCount": 119
+      "lineCount": 120
     },
     {
       "path": "src/renderer/types/electron.d.ts",
@@ -2839,7 +2814,7 @@
         "P04",
         "P14"
       ],
-      "lineCount": 16
+      "lineCount": 17
     },
     {
       "path": "src/shared/providers/capabilities.ts",
@@ -2897,7 +2872,7 @@
         "P07",
         "P14"
       ],
-      "lineCount": 50
+      "lineCount": 54
     },
     {
       "path": "tests/e2e/cloud-agents.spec.ts",
@@ -4688,7 +4663,7 @@
       "predicates": [
         "P13"
       ],
-      "lineCount": 11
+      "lineCount": 71
     },
     {
       "path": "tests/unit/main/install-tab-command-secrets.test.ts",
@@ -4745,6 +4720,13 @@
         "P13"
       ],
       "lineCount": 2
+    },
+    {
+      "path": "tests/unit/main/prompt-button-ipc.test.ts",
+      "predicates": [
+        "P13"
+      ],
+      "lineCount": 3
     },
     {
       "path": "tests/unit/main/provider-account-usage.test.ts",
@@ -5093,6 +5075,14 @@
         "P13"
       ],
       "lineCount": 65
+    },
+    {
+      "path": "tests/unit/main/session-input-prompt.test.ts",
+      "predicates": [
+        "P05",
+        "P13"
+      ],
+      "lineCount": 26
     },
     {
       "path": "tests/unit/main/session-input.test.ts",
@@ -6280,6 +6270,13 @@
       "lineCount": 67
     },
     {
+      "path": "tests/unit/renderer/commandbar-focus-handoff.test.tsx",
+      "predicates": [
+        "P13"
+      ],
+      "lineCount": 4
+    },
+    {
       "path": "tests/unit/renderer/commandbar-one-row.test.tsx",
       "predicates": [
         "P07",
@@ -6567,7 +6564,7 @@
         "P04",
         "P13"
       ],
-      "lineCount": 203
+      "lineCount": 217
     },
     {
       "path": "tests/unit/renderer/onboarding-flow-stubs.tsx",
@@ -7363,7 +7360,7 @@
         "P04",
         "P13"
       ],
-      "lineCount": 360
+      "lineCount": 363
     },
     {
       "path": "tests/unit/shared/codex-screen-shortcuts-hint.test.ts",
@@ -7371,7 +7368,7 @@
         "P01",
         "P13"
       ],
-      "lineCount": 33
+      "lineCount": 36
     },
     {
       "path": "tests/unit/shared/extra-args.test.ts",

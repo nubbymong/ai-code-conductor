@@ -328,10 +328,11 @@ export interface InstallRecipeView {
 
 /** What a check that did not find a provider's CLI adds (main's
  *  install-folder-path.ts). Display text only, never a path the renderer
- *  could use: the folder as `%USERPROFILE%\.local\bin` or `~/.local/bin`,
- *  a shell file with the home folder as `~`.
- *  - `add-to-path` (Windows): the publisher's installer put the tool in
- *    `folder`, which is not on PATH; the app can add it (addToPath).
+ *  could use: the folder as `%USERPROFILE%\.local\bin`, `%APPDATA%\npm` or
+ *  `~/.local/bin`, a shell file with the home folder as `~`.
+ *  - `add-to-path` (Windows): the publisher's installer (or npm, for Codex)
+ *    put the tool in `folder`, which is not on PATH; the app can add it
+ *    (addToPath).
  *  - `shell-profile` (macOS, Linux): the tool is in `folder`, which the login
  *    shell's PATH lacks; `line` is a command to run once that adds it to
  *    `file`. The app never edits that file.

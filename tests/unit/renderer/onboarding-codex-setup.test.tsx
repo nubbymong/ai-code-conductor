@@ -68,6 +68,7 @@ const pa = {
   completeSetup: vi.fn(),
   issueSecretHandle: vi.fn(),
   sendSecret: vi.fn(),
+  addToPath: vi.fn(),
 }
 const writeText = vi.fn(async () => undefined)
 ;(globalThis as any).window.electronAPI = { ...(globalThis as any).window.electronAPI, providerAccounts: pa }
@@ -398,6 +399,35 @@ describe('Codex CLI not found', () => {
     } finally {
       pa.discover.mockReset()
     }
+  })
+
+  // aicc_planning#288: on Windows npm puts Codex in its own folder,
+  // %APPDATA%\npm, which the PATH of an account that did not install Node.js
+  // lacks. Main's hint for it is the add-to-path one Claude Code has: the
+  // page says Codex is installed but off PATH, in place of its
+  // still-not-found line, and Add it to PATH for me sends the provider id
+  // alone; the check that follows finds Codex.
+  it('Codex in %APPDATA%\\npm off PATH (Windows): the page says so, and Add it to PATH for me sends only "codex", then checks again', async () => {
+    const folder = '%APPDATA%' + String.fromCharCode(92) + 'npm'
+    const found = codex({ discoveryState: 'found', version: '0.155.1', compatibility: 'supported', lastCheckedAt: 2 })
+    let added = false
+    pa.discover.mockImplementation(async () => added
+      ? { ok: true, installation: found }
+      : { ok: true, installation: codex({ discoveryState: 'missing', version: undefined }), pathHint: { kind: 'add-to-path', folder } })
+    pa.addToPath.mockImplementation(async () => { added = true; return { ok: true, added: 'added', installation: found } })
+    await render(snap({ discoveryState: 'missing', version: undefined }))
+    await click('codex-setup-check-again')
+    expect(byTest('codex-path-hint-text')!.textContent).toBe(
+      'Codex is installed in ' + folder + ', but that folder is not on your PATH yet, so this app and your terminals cannot find it. Add it to PATH for me adds that one folder to the end of your PATH for your Windows account; nothing else in it changes.',
+    )
+    expect(byTest('codex-setup-after-install')).toBeNull()
+    const checks = pa.discover.mock.calls.length
+    await click('codex-path-add')
+    expect(pa.addToPath).toHaveBeenCalledTimes(1)
+    expect(pa.addToPath).toHaveBeenCalledWith('codex')
+    expect(pa.discover.mock.calls.length).toBeGreaterThan(checks)
+    expect(byTest('codex-path-hint')).toBeNull()
+    expect(byTest('codex-setup-missing')).toBeNull()
   })
 
   // A restart that only MAY help (Codex was not seen; pathHintIsNote) is a

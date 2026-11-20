@@ -131,6 +131,16 @@ export function writeSessionInput(sessionId: string, data: string): void {
   window.electronAPI.pty.write(sessionId, data)
 }
 
+/**
+ * #333: forget that the wheel opened tmux's scrollback view, and any wheel
+ * keys still queued, for input that main types itself and leaves copy-mode
+ * for (a command bar prompt button: main sends the leave key first for an SSH
+ * Persistent session). Safe to call for any session.
+ */
+export function dropTmuxCopyModeBelief(sessionId: string): void {
+  controllers.get(sessionId)?.reset()
+}
+
 export function createTmuxWheelScroll(write: (data: string) => void): TmuxWheelScroll {
   let enabled = false
   let inCopyMode = false

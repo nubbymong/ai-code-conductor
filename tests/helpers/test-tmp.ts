@@ -17,28 +17,57 @@ import * as fs from 'fs'
 import { runTempPrefix } from './vitest-run-tag.mjs'
 
 const KEY = 'CCC_TEST_TMP_ROOT'
-const existing = process.env[KEY]
+/** The variables os.tmpdir() reads, all pointed at the root. */
+export const TEMP_VARS = Object.freeze(['TMPDIR', 'TEMP', 'TMP'] as const)
 
-// Named `ccc-vitest-<run tag>-...`: the teardown removes only this run's roots.
-export const TEST_TMP_ROOT =
-  existing && fs.existsSync(existing) ? existing : fs.mkdtempSync(path.join(os.tmpdir(), runTempPrefix()))
+export interface TestTmpRootDeps {
+  /** The environment to read the marker from and redirect (process.env in a run). */
+  env: Record<string, string | undefined>
+  /** The folder a new root is made in (os.tmpdir() in a run). */
+  tmpdir: () => string
+  /** Registers a call for when the process exits (process.once('exit') in a run). */
+  onExit: (fn: () => void) => void
+}
 
-// First importer in this worker owns setup: pin the root in the env, redirect
-// the process temp dir, and register a single exit-time cleanup. Subsequent
-// files reuse it (no duplicate 'exit' listeners -> no MaxListeners warning).
-if (!existing) {
-  process.env[KEY] = TEST_TMP_ROOT
-  process.env.TMPDIR = TEST_TMP_ROOT
-  process.env.TEMP = TEST_TMP_ROOT
-  process.env.TMP = TEST_TMP_ROOT
-  process.once('exit', () => {
+/**
+ * The worker's temp root. A root the marker names that still exists is reused: an
+ * earlier file in this worker made it and set it up (no duplicate 'exit' listeners, so
+ * no MaxListeners warning). Otherwise this call owns setup: it makes a root, pins it in
+ * the environment, points the temp variables at it and registers one exit-time
+ * removal. That includes a marker naming a folder that is gone (#332), whose new root
+ * goes beside the gone one when the temp variables still name it.
+ */
+export function claimTestTmpRoot({ env, tmpdir, onExit }: TestTmpRootDeps): string {
+  const existing = env[KEY]
+  if (existing && fs.existsSync(existing)) return existing
+  let parent = tmpdir()
+  if (existing && !fs.existsSync(parent) && fs.existsSync(path.dirname(existing))) parent = path.dirname(existing)
+  // Named `ccc-vitest-<run tag>-...`: the teardown removes only this run's roots.
+  const root = fs.mkdtempSync(path.join(parent, runTempPrefix('', env)))
+  env[KEY] = root
+  for (const name of TEMP_VARS) env[name] = root
+  // tmux keeps its socket folder (tmux-<uid>) in TMUX_TMPDIR, else in /tmp, and never
+  // reads TMPDIR: a test that reaches a real tmux client (ssh-liveness-r8 runs the
+  // production probe, which tries /usr/bin/tmux) left /tmp/tmux-1001 on the Ubuntu
+  // runner (#332, measured in CI).
+  env.TMUX_TMPDIR = root
+  onExit(() => {
     try {
-      fs.rmSync(TEST_TMP_ROOT, { recursive: true, force: true })
+      fs.rmSync(root, { recursive: true, force: true })
     } catch {
       /* best-effort; global-setup teardown is the backstop */
     }
   })
+  return root
 }
+
+export const TEST_TMP_ROOT = claimTestTmpRoot({
+  env: process.env,
+  tmpdir: os.tmpdir,
+  onExit: (fn) => {
+    process.once('exit', fn)
+  },
+})
 
 export const MOCK_RESOURCES = path.join(TEST_TMP_ROOT, 'resources')
 export const MOCK_USERDATA = path.join(TEST_TMP_ROOT, 'userData')
