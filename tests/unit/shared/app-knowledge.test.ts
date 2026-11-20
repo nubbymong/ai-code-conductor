@@ -2356,3 +2356,94 @@ describe('the 2.1.3-beta.9 sweep', () => {
     }
   })
 })
+
+// 2.1.3-beta.10 user-facing sweep: a command bar prompt button sends on every
+// session by one rule, with the Type it only setting (#729); a Codex installed
+// with npm off PATH on Windows is offered Add it to PATH for me (#732); a Codex
+// prompt that starts with / is typed but not sent, a known issue with its
+// workaround (#746); a Codex retry is not typed once its limit has cleared
+// (#746); and the release notes, so a later edit cannot drop them silently.
+describe('the 2.1.3-beta.10 sweep', () => {
+  const body = (id: string) => APP_KNOWLEDGE_SECTIONS.find((x) => x.id === id)!.body
+  const step = (id: string) => trainingSteps.find((s) => s.id === id)!
+  const src = (...parts: string[]) => fs.readFileSync(path.resolve(__dirname, '..', '..', '..', 'src', ...parts), 'utf8')
+  const entry = changelog.find((e) => e.version === '2.1.3-beta.10')!
+  const notes = () => [entry.highlights ?? '', ...entry.warnings!, ...entry.changes.map((c) => c.description)]
+
+  it('the sessions section says how a prompt button sends, by one rule, and names the Type it only setting (#729)', () => {
+    const s = body('sessions')
+    expect(s).toContain("A prompt button sends its text to the session's Claude Code or Codex, by one rule on this computer and over SSH: the text goes in first, and Enter follows about a third of a second later as a key of its own.")
+    expect(s).toContain('On Codex the prompt goes in only once Codex waits at its empty prompt, and the app waits up to five seconds for that; if Codex is still working, or shows a question of its own, the command bar says so and nothing is typed')
+    expect(s).toContain("A prompt that holds a line break, or a character Codex's prompt cannot take such as an emoji, is typed and left in Codex's prompt for you to check and send with Enter, and the command bar says so.")
+    expect(src('renderer', 'components', 'CommandBar.tsx')).toContain("it holds characters Codex\\'s prompt cannot take, so it was left in the prompt. Check it, then press Enter.")
+    expect(s).toContain('Pressing a button twice quickly sends its prompt once.')
+    expect(s).toContain('choose Type it only beside Prompt buttons in Settings, Custom Commands; Send the prompt is the default.')
+    expect(s).toContain('That choice applies to every session, on this computer and over SSH, and shell line buttons always run.')
+    // The setting's own words, and the tab it is on.
+    const tab = src('renderer', 'components', 'settings', 'CustomCommandsTab.tsx')
+    for (const words of ['Prompt buttons:', "'Send the prompt'", "'Type it only'", 'Applies to every session, on this computer and over SSH. Shell line buttons always run.']) expect(tab, words).toContain(words)
+    expect(src('renderer', 'components', 'SettingsPage.tsx')).toContain("{ id: 'commands', label: 'Custom Commands' }")
+  })
+
+  it('one tip and the Settings card name the setting (#729)', () => {
+    const t = TIPS_LIBRARY.find((x) => x.id === 'tip.prompt-buttons-type-only')!
+    expect(t.provider).toBeUndefined()
+    expect(t.variants.primary.shortText.length).toBeLessThan(60)
+    expect(t.variants.primary.body).toContain('In **Settings > Custom Commands**, set **Prompt buttons** to **Type it only**.')
+    expect(t.variants.primary.body).toContain('**Shell line** buttons always run.')
+    expect(step('settings').highlights.join('\n')).toContain('Custom Commands -- every command button across your configs, and what a prompt button does in every session: **Send the prompt** (the default) or **Type it only**')
+  })
+
+  it('the providers section says a Codex that npm installed off PATH on Windows is offered Add it to PATH for me (#732)', () => {
+    const p = body('providers')
+    expect(p).toContain('On Windows it does the same for a Codex installed with npm, which npm, unless its prefix is set to another folder, puts in a folder of its own for each Windows account: the Node.js installer adds that folder to the PATH of the account that installed Node.js only')
+    // In place of the not-found words and the commands, and on a row's first
+    // view with nothing pressed (aicc_planning#288, the beta.10 VM smoke).
+    expect(p).toContain('so on another account the Set up Codex page and the Codex row in Settings, Accounts say Codex is installed but its folder is not on PATH, in place of the not-found message and the install commands, and offer Add it to PATH for me. A row in Settings, Accounts that shows Claude Code or Codex as not found checks once by itself when you first see it, so a message like this one shows there without pressing Check again. The app advises')
+  })
+
+  it('known issues: a Codex prompt button that starts with / is typed but not sent, with its workaround (#746)', () => {
+    const k = body('known-issues')
+    const para = k.split('\n\n').find((x) => x.startsWith('On a Codex session, a command bar prompt button whose text starts with / (for example /compact)'))!
+    expect(para).toContain("is typed into Codex's prompt but not sent.")
+    expect(para).toContain("A Watchdog retry message that starts with / is left in Codex's prompt the same way, with no note.")
+    expect(para).not.toContain('The same goes for a Watchdog retry message')
+    expect(para).toContain('Workaround: press Enter in the session to send it.')
+    // The command bar's own words for that case.
+    expect(src('renderer', 'components', 'CommandBar.tsx')).toContain("If it is still there, send it or clear it in the session.")
+  })
+
+  it('the Watchdog section says a Codex retry is not typed once its limit has cleared (#746)', () => {
+    expect(body('session-watchdog')).toContain('presses Enter only once the retry shows there. If the limit clears before the retry can be typed, it is not typed. The safeguard check does not apply to Codex')
+  })
+
+  it('the release notes carry the series warning, the two minutes, the way back and every change line', () => {
+    const w = entry.warnings!.join('\n')
+    expect(w).toContain("This beta series begins moving the app's background services")
+    expect(w).toContain('only if the new version opens within two minutes of the old one closing')
+    expect(w).toContain('To go back to 2.1.3-beta.9')
+    expect(entry.highlights).toContain('Command bar prompt buttons now send their prompt on every session')
+    const all = entry.changes.map((c) => c.description).join('\n')
+    for (const said of [
+      'A command bar prompt button now sends its prompt on every session, on this computer and over SSH, for Claude Code and for Codex.',
+      'Pressing a button twice quickly sends its prompt once. Shell line buttons run as before.',
+      'New setting in Settings, Custom Commands: Prompt buttons, Send the prompt (the default) or Type it only.',
+      'With Codex 0.157.1, canvas notes, Ask Conductor questions, Watchdog retries and the app\'s Codex commands',
+      'are typed into a Codex session again',
+      'Plan mode at launch, and the line Alt+V types for an image)',
+      'That Codex shows "? for shortcuts" on a line under its prompt',
+      'npm\'s own folder (%APPDATA%\\npm)',
+      'now say Codex is installed but its folder is not on PATH, and offer Add it to PATH for me',
+      'A Watchdog retry on a Codex session is now typed the way canvas notes and Ask Conductor questions are',
+      'so it no longer clears text you typed there meanwhile',
+      'A retry message that starts with /, such as /compact, is now typed but not sent: press Enter in the session. The default message, continue, is not affected.',
+      'Nothing uses it yet, and nothing changes in this release.',
+      "Release dates in What's New and in the Feature Guide's release history no longer show a day early on a computer whose time zone is behind UTC",
+      'a row that shows Codex or Claude Code as not found now checks once by itself when you first see it',
+    ]) expect(all).toContain(said)
+    for (const text of notes()) {
+      expect(text, text.slice(0, 40)).not.toMatch(/—/)
+      expect(text, text.slice(0, 40)).not.toMatch(/\bCodex tab\b/)
+    }
+  })
+})

@@ -799,6 +799,7 @@ export const trainingSteps: TrainingStep[] = [
       'Status Line -- toggle each element of the in-terminal status bar + font + size',
       'Shortcuts -- rebind every keyboard shortcut',
       'GitHub -- sign in (OAuth / PAT / gh CLI) and configure per-session integration',
+      'Custom Commands -- every command button across your configs, and what a prompt button does in every session: **Send the prompt** (the default) or **Type it only**, which leaves its text for you to send with Enter',
       'About -- version, build time, replay training, view What\'s New',
       'Services -- the **Services** pill in the title bar opens a card for each background service (hooks gateway, session logging, Tokenomics, Watchdog, MCP server, session helper) with its real state and a Restart where one makes sense',
     ],

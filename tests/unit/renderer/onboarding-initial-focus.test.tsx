@@ -251,6 +251,45 @@ describe('Set up Codex: focus follows the page\'s primary control', () => {
     expect(focused()).toBe('codex-setup-check-again')
   })
 
+  // aicc_planning#288: the off-PATH notice takes the commands' place, and
+  // its Add it to PATH for me is the page's primary control then. While the
+  // entry check is out the page says it is checking, so focus goes straight
+  // there, with no stop on an install command first.
+  it('installed but off PATH: Add it to PATH for me, in place of the commands', async () => {
+    const folder = '%APPDATA%' + String.fromCharCode(92) + 'npm'
+    const stops: string[] = []
+    const onFocus = (e: FocusEvent) => { stops.push((e.target as HTMLElement).getAttribute('data-testid') ?? '') }
+    document.addEventListener('focusin', onFocus)
+    try {
+      let answer: (v: unknown) => void = () => {}
+      pa.discover.mockImplementation(() => new Promise((r) => { answer = r }))
+      await show(snap({ discoveryState: 'missing', version: undefined }))
+      expect(byTest('codex-setup-checking')).not.toBeNull()
+      expect(byTest('codex-recipes-install')).toBeNull()
+      expect(focused()).toBe('BODY')
+      await act(async () => {
+        answer({ ok: true, installation: codex({ discoveryState: 'missing', version: undefined, lastCheckedAt: 2 }), pathHint: { kind: 'add-to-path', folder } })
+      })
+      for (let i = 0; i < 4; i++) await act(async () => { await Promise.resolve() })
+      expect(byTest('codex-recipes-install')).toBeNull()
+      expect(focused()).toBe('codex-path-add')
+      expect(stops, 'no stop on an install command first').toEqual(['codex-path-add'])
+    } finally {
+      document.removeEventListener('focusin', onFocus)
+    }
+  })
+
+  // The notice does not wait for the install commands, which it replaces:
+  // focus goes to it even while they have not arrived.
+  it('installed but off PATH, the commands not read yet: still Add it to PATH for me', async () => {
+    const folder = '%APPDATA%' + String.fromCharCode(92) + 'npm'
+    pa.installRecipes.mockImplementation(() => new Promise(() => {}))
+    pa.discover.mockResolvedValue({ ok: true, installation: codex({ discoveryState: 'missing', version: undefined, lastCheckedAt: 2 }), pathHint: { kind: 'add-to-path', folder } })
+    await show(snap({ discoveryState: 'missing', version: undefined }))
+    expect(byTest('codex-path-hint')).not.toBeNull()
+    expect(focused()).toBe('codex-path-add')
+  })
+
   it('too old: the update command\'s button', async () => {
     await show(snap({ discoveryState: 'found', version: '0.100.0', compatibility: 'too-old' }))
     expect(focused()).toBe('codex-recipe-run-codex-script-update-ps1')

@@ -17,9 +17,16 @@ const TYPE_LABELS: Record<string, string> = {
   improvement: 'Improved',
 }
 
-function formatDate(dateStr: string): string {
-  const d = new Date(dateStr)
-  return d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })
+/** A changelog date ('YYYY-MM-DD') names a calendar day, not an instant.
+ *  `new Date('2026-11-20')` reads it as midnight UTC, which is the day before
+ *  anywhere west of UTC, so the day is built from its parts and formatted in
+ *  UTC: the day the string names, in every time zone (aicc_planning#366). A
+ *  string of any other shape is shown as it is. */
+export function formatChangelogDate(dateStr: string): string {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dateStr)
+  if (!m) return dateStr
+  const day = new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3])))
+  return day.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' })
 }
 
 /**
@@ -60,7 +67,7 @@ export function VersionSection({ entry }: { entry: ChangelogEntry }) {
     <div className="mb-6 last:mb-0">
       <div className="flex items-center gap-3 mb-2">
         <span className="text-lg font-bold text-text">v{entry.version}</span>
-        <span className="text-xs text-overlay0">{formatDate(entry.date)}</span>
+        <span className="text-xs text-overlay0">{formatChangelogDate(entry.date)}</span>
       </div>
       <ReleaseWarnings entry={entry} />
       {entry.highlights && (

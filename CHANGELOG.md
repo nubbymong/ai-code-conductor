@@ -9,6 +9,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > `src/renderer/changelog.ts`. After editing that file, run `npm run changelog`
 > (CI enforces that this file is in sync via `npm run changelog:check`).
 
+## [2.1.3-beta.10] - 2026-11-20
+
+### Warnings
+- This beta series begins moving the app's background services, and over the next betas your sessions, onto one helper per machine. If you want a quiet build, stay on the stable release.
+- On Windows, choosing Save sessions at an update keeps the terminals the session helper holds running only if the new version opens within two minutes of the old one closing. The installer's pages count toward those two minutes, so finish the installer promptly.
+- To go back to 2.1.3-beta.9, download its installer from the GitHub releases page and run it over this version.
+
+> Command bar prompt buttons now send their prompt on every session, on this computer and over SSH, for Claude Code and for Codex, and a new setting makes them type only. With Codex 0.157.1, canvas notes, Ask Conductor questions, Watchdog retries and the app's Codex commands are typed into a Codex session again, and on Windows the app now sees a Codex that npm installed in a folder your PATH does not name, and offers to add that folder to your PATH.
+
+### Changed
+- New setting in Settings, Custom Commands: Prompt buttons, Send the prompt (the default) or Type it only. With Type it only, a prompt button puts its text in the session's prompt and leaves it for you to check and send with Enter, on every session. Shell line buttons always run.
+- A Watchdog retry on a Codex session is now typed the way canvas notes and Ask Conductor questions are: only while Codex waits at its empty prompt, with Enter once the retry shows there, and not at all once the limit has cleared. When the app cannot confirm a line it typed into Codex, it now takes the line back only while Codex's prompt holds nothing else, so it no longer clears text you typed there meanwhile. A retry message that starts with /, such as /compact, is now typed but not sent: press Enter in the session. The default message, continue, is not affected.
+- The session helper has a new part for a later release, which will carry a session's built-in tools through the helper. Nothing uses it yet, and nothing changes in this release.
+
+### Fixed
+- A command bar prompt button now sends its prompt on every session, on this computer and over SSH, for Claude Code and for Codex. Before, it could leave the text in the prompt unsent, on a Codex session and on some sessions on this computer. The text goes in first and Enter follows about a third of a second later. On Codex the prompt goes in only once Codex waits at its empty prompt: a press while Codex is working, or showing a question of its own, says so in the command bar and types nothing. Pressing a button twice quickly sends its prompt once. Shell line buttons run as before.
+- With Codex 0.157.1, canvas notes, Ask Conductor questions, Watchdog retries and the app's Codex commands (Compact on the status strip, the model pill, Plan mode at launch, and the line Alt+V types for an image) are typed into a Codex session again. That Codex shows "? for shortcuts" on a line under its prompt, and the app did not recognise the screen, so it typed nothing.
+- On Windows, a Codex that npm installed into npm's own folder (%APPDATA%\npm) is now seen when your PATH does not name that folder, as on a Windows account other than the one that installed Node.js. The Set up Codex page and the Codex row in Settings, Accounts now say Codex is installed but its folder is not on PATH, and offer Add it to PATH for me, in place of the install commands. Before, they said Codex was not found. In Settings, Accounts, a row that shows Codex or Claude Code as not found now checks once by itself when you first see it, so a notice like this one shows there without pressing Check again.
+- Release dates in What's New and in the Feature Guide's release history no longer show a day early on a computer whose time zone is behind UTC, as in the Americas.
+
 ## [2.1.3-beta.9] - 2026-11-19
 
 ### Warnings
@@ -2048,6 +2068,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Tab attention indicators for waiting prompts
 - Context usage tracking via statusline API
 
+[2.1.3-beta.10]: https://github.com/nubbymong/ai-code-conductor/releases/tag/v2.1.3-beta.10
 [2.1.3-beta.9]: https://github.com/nubbymong/ai-code-conductor/releases/tag/v2.1.3-beta.9
 [2.1.3-beta.8]: https://github.com/nubbymong/ai-code-conductor/releases/tag/v2.1.3-beta.8
 [2.1.3-beta.7]: https://github.com/nubbymong/ai-code-conductor/releases/tag/v2.1.3-beta.7

@@ -10,7 +10,11 @@
 // commands once discovery says they are needed (6g: the retired Codex
 // settings tab's install hint lives here now), each with Run it for me and
 // Copy (owner decision D2, 2026-10-10; ADR-024): Run it for me opens a
-// visible terminal tab, shows it, and checks again when the tab ends.
+// visible terminal tab, shows it, and checks again when the tab ends. A CLI
+// that is installed in a folder PATH lacks (main's path hint) gets the notice
+// that says so in place of its not-found line and those commands; a row
+// first shown as not found looks again once by itself, so that notice shows
+// with nothing pressed (aicc_planning#288).
 import React, { useEffect, useState } from 'react'
 import type { InstallRecipeView, PathHintView, ProviderId, ProviderInstallationView } from '../../../../shared/providers'
 import { useProviderAccountsStore, providerAccountActions, providerStatus, providerNotSetUp } from '../../../stores/providerAccountsStore'
@@ -72,12 +76,32 @@ function notePathHint(providerId: ProviderId, r: { ok: boolean; pathHint?: PathH
   else pathHints.delete(providerId)
   for (const l of [...hintListeners]) l()
 }
+// The providers whose row has checked: by itself, on first view of its CLI
+// as not found, or by its Check again or the check when its install tab
+// ends. A row looks by itself only once each while the renderer runs, and
+// never after a check of its own (aicc_planning#288), until the provider is
+// switched off or found: it then forgets the look (the "Found since" effect),
+// and looks once more the next time it shows the CLI as not found. The look
+// still out is held here too, with the rows told when it answers, so a row
+// shown again while it runs still says it is checking. A check of the row's own that
+// starts while the row does not show the CLI as not found is held here too
+// (startLook): main pushes the snapshot that says not found before the
+// hint it reads from the registry, so without it the row would show the
+// not-found line and live install commands until the notice replaced them.
+const lookedOnView = new Set<ProviderId>()
+const lookingNow = new Set<ProviderId>()
+function startLook(providerId: ProviderId): void {
+  lookingNow.add(providerId)
+  for (const l of [...hintListeners]) l()
+}
 
-/** Test seam: forget every tab a row opened. */
+/** Test seam: forget every tab a row opened, and every look a row made. */
 export function _resetProviderInstallTabsForTest(): void {
   providerTabs.clear()
   endedInstalls.clear()
   pathHints.clear()
+  lookedOnView.clear()
+  lookingNow.clear()
 }
 
 /** The install or update commands main knows for the provider on this
@@ -141,17 +165,29 @@ function ProviderRow({ p, first }: { p: ProviderInstallationView; first: boolean
   // main makes after bringing its PATH up to date (owner decision D4).
   const [checked, setChecked] = useState(false)
   const [hint, setHint] = useState<PathHintView | undefined>(() => pathHints.get(p.providerId))
+  const [looking, setLooking] = useState(() => lookingNow.has(p.providerId))
   useEffect(() => {
-    const sync = () => setHint(pathHints.get(p.providerId))
+    const sync = () => {
+      setHint(pathHints.get(p.providerId))
+      setLooking(lookingNow.has(p.providerId))
+    }
     hintListeners.add(sync)
     sync()
     return () => { hintListeners.delete(sync) }
   }, [p.providerId])
   const checkAgain = async () => {
+    lookedOnView.add(p.providerId)
+    // A check that starts from "not found" keeps the row as it is while it
+    // runs. From any other state (Check now, did not run, could not be
+    // checked, too old) the row says it is checking once the snapshot says
+    // not found, as it does for the look on first view.
+    const fromOther = p.discoveryState !== 'missing'
+    if (fromOther) startLook(p.providerId)
     setChecking(true)
     setError(null)
     setInUse(null)
     const r = await providerAccountActions.discover(p.providerId)
+    if (fromOther) lookingNow.delete(p.providerId)
     notePathHint(p.providerId, r)
     setChecking(false)
     setChecked(true)
@@ -170,33 +206,108 @@ function ProviderRow({ p, first }: { p: ProviderInstallationView; first: boolean
     if (installTabRunning(providerTabs.get(providerId), useSessionStore.getState().sessions)) return
     endedInstalls.delete(providerId)
     setChecked(false)
+    // The check when the tab ends is a check of the row's own: like Check
+    // again, it holds the look when the row did not show the CLI as not found.
+    const fromOther = p.discoveryState !== 'missing'
     const label = `${recipe.purpose === 'update' ? 'Update' : 'Install'} ${p.displayName}`
     const opened = openInstallTab({
       label, runLine: recipe.runLine, show: true,
       onEnded: () => {
         endedInstalls.add(providerId)
-        void providerAccountActions.discover(providerId).then((r) => notePathHint(providerId, r))
+        lookedOnView.add(providerId)
+        if (fromOther) startLook(providerId)
+        void providerAccountActions.discover(providerId).then((r) => {
+          if (fromOther) lookingNow.delete(providerId)
+          notePathHint(providerId, r)
+        })
       },
     })
     providerTabs.set(providerId, opened)
     setTab(opened)
   }
-  // Found since: what an ended install said, and what helped, no longer apply.
+  // Found since, or switched off: what an ended install said, and what
+  // helped, no longer apply (a hint kept across a switch-off could be stale:
+  // the CLI removed, or PATH changed, meanwhile). The row forgets that it
+  // looked too, so the next time it shows the CLI as not found it looks
+  // again, once, and the notice comes back with nothing pressed
+  // (aicc_planning#288). The look is kept while the row still offers a check
+  // although it shows no commands (main has not looked yet: Check now): a
+  // Check now of the row's own may still be out, and forgetting it then (a
+  // card shown again meanwhile) would let the snapshot that says not found
+  // start a second discover behind it. It is forgotten once main has looked
+  // and the row offers none (found and ready), so found, then not found
+  // again, looks again.
+  const offersCheck = offersCheckAgain(p)
   useEffect(() => {
     if (!purpose) {
       endedInstalls.delete(p.providerId)
+      if (!offersCheck) lookedOnView.delete(p.providerId)
       if (pathHints.delete(p.providerId)) setHint(undefined)
     }
-  }, [purpose, p.providerId])
+  }, [purpose, offersCheck, p.providerId])
+
+  // First view of a CLI shown as not found: the row looks again by itself,
+  // once per provider while the renderer runs, as the Set up Codex page does
+  // on entry. Main says what helps (its install folder is off PATH, or a
+  // restart) only in a check's answer, not in the snapshot, so without this
+  // the notice showed only after the row's own Check again
+  // (aicc_planning#288). Not once the row has checked by other means (its
+  // Check again, or the check when its install tab ends), and not while that
+  // tab runs: its end checks again. While it looks, the row says it is
+  // checking in place of its not-found line and the install commands, so
+  // they do not show for a moment before the notice takes their place.
+  // Says nothing of its own once main answers: only the notice, if main has
+  // one, is new.
+  const shownMissing = purpose === 'install' && p.discoveryState === 'missing'
+  useEffect(() => {
+    const providerId = p.providerId
+    if (!shownMissing || lookedOnView.has(providerId)) return
+    if (installTabRunning(providerTabs.get(providerId), useSessionStore.getState().sessions)) return
+    lookedOnView.add(providerId)
+    startLook(providerId)
+    void providerAccountActions.discover(providerId).then((r) => {
+      lookingNow.delete(providerId)
+      // Tells every row, this one included, that the look has answered.
+      notePathHint(providerId, r)
+    })
+  }, [shownMissing, p.providerId])
+  // From the row's first paint: a row about to look (the effect above runs
+  // after it) already says it is checking, and has not asked for the install
+  // commands it would hide a moment later. Every check that marks a provider
+  // looked also re-renders its row (a check's own state, or this look's), or
+  // runs before the render (an install tab's end, from the session store).
+  const aboutToLook = shownMissing && !lookedOnView.has(p.providerId) && !running
+  const busyChecking = checking || looking || aboutToLook
+  // Only while the snapshot still says not found: one that says found (main
+  // pushes it before the look's answer) is shown at once.
+  const lookingShown = shownMissing && (looking || aboutToLook)
+
   // Still not found after its install ended, or after the user's own Check
   // again. (A CLI found but too old says so in its status line.) When main
-  // said what helps (its install folder is off PATH, or a restart), that is
-  // shown instead. A restart that only may help (pathHintIsNote) is a note:
-  // this line stays, and the note follows it.
-  const shownHint = purpose === 'install' && !checking ? hint : undefined
-  const after = purpose !== 'install' || checking || (shownHint && !pathHintIsNote(shownHint)) ? null
+  // said what helps (its install folder is off PATH, or a restart), that
+  // takes the place of the not-found status line and the install commands,
+  // as on the Set up Codex page (the setup screen and the footer's CLI help
+  // replace only their not-found words): the CLI is installed,
+  // and installing it again would not help. It stays while a check runs,
+  // and a Check again that still finds nothing says so under it. A restart
+  // that only may help (pathHintIsNote) is a note: the status line, the
+  // commands and this line stay, and the note follows them.
+  const shownHint = purpose === 'install' ? hint : undefined
+  const hintReplaces = !!shownHint && !pathHintIsNote(shownHint)
+  const after = purpose !== 'install' || busyChecking || hintReplaces ? null
     : endedInstalls.has(p.providerId) && !running ? afterInstallMessage(p.displayName, { ended: true })
     : checked ? afterInstallMessage(p.displayName, { ended: false }) : null
+  const notice = shownHint && (
+    <div className="mt-1.5">
+      <PathHintNotice
+        hint={shownHint}
+        toolName={p.displayName}
+        providerId={p.providerId}
+        testIdPrefix={`provider-${p.providerId}`}
+        onAdded={(r) => notePathHint(p.providerId, { ok: true, ...r })}
+      />
+    </div>
+  )
 
   // Not set up: the switch shows off, and turning it on is the answer.
   const unset = notSetUp(p)
@@ -229,7 +340,9 @@ function ProviderRow({ p, first }: { p: ProviderInstallationView; first: boolean
           {/* Labelled with the provider's maturity (WP1.21), read from its descriptor. */}
           {tryGetRendererProvider(p.providerId)?.maturity === 'beta' && <Pill tone="beta" testId={`provider-beta-${p.providerId}`}>Beta</Pill>}
         </div>
-        <StatusText tone={status.tone} testId={`provider-status-${p.providerId}`}>{status.text}</StatusText>
+        {hintReplaces ? notice
+          : lookingShown ? <StatusText tone="muted" testId={`provider-status-${p.providerId}`}>{`Checking for ${p.displayName}...`}</StatusText>
+          : <StatusText tone={status.tone} testId={`provider-status-${p.providerId}`}>{status.text}</StatusText>}
         {unset && (
           <MutedLine testId={`provider-not-set-up-${p.providerId}`}>
             Turn {p.displayName} on to set it up, then add a {p.displayName} account below.
@@ -237,26 +350,22 @@ function ProviderRow({ p, first }: { p: ProviderInstallationView; first: boolean
         )}
         {offersCheckAgain(p) && (
           <div className="mt-1">
-            <RowButton onClick={() => { void checkAgain() }} disabled={checking} testId={`provider-check-again-${p.providerId}`}>
-              {checking ? 'Checking...' : p.discoveryState === 'unchecked' ? 'Check now' : 'Check again'}
+            <RowButton onClick={() => { void checkAgain() }} disabled={busyChecking} testId={`provider-check-again-${p.providerId}`}>
+              {busyChecking ? 'Checking...' : p.discoveryState === 'unchecked' ? 'Check now' : 'Check again'}
             </RowButton>
           </div>
         )}
-        {/* Keyed on the purpose: a CLI that goes from missing to too old
-            reads the commands again, for the update ones. */}
-        {purpose && <InstallCommands key={purpose} p={p} purpose={purpose} onRun={run} busyReason={busyReason} />}
-        {after && <MutedLine className="mt-1" testId={`provider-after-install-${p.providerId}`}>{after}</MutedLine>}
-        {shownHint && (
-          <div className="mt-1.5">
-            <PathHintNotice
-              hint={shownHint}
-              toolName={p.displayName}
-              providerId={p.providerId}
-              testIdPrefix={`provider-${p.providerId}`}
-              onAdded={(r) => notePathHint(p.providerId, { ok: true, ...r })}
-            />
-          </div>
+        {hintReplaces && checked && !busyChecking && (
+          <MutedLine className="mt-1" testId={`provider-checked-again-${p.providerId}`}>
+            Checked again just now: {p.displayName} was still not found.
+          </MutedLine>
         )}
+        {/* Keyed on the purpose: a CLI that goes from missing to too old
+            reads the commands again, for the update ones. Not while the row
+            looks on first view, nor when the notice takes their place. */}
+        {purpose && !hintReplaces && !lookingShown && <InstallCommands key={purpose} p={p} purpose={purpose} onRun={run} busyReason={busyReason} />}
+        {after && <MutedLine className="mt-1" testId={`provider-after-install-${p.providerId}`}>{after}</MutedLine>}
+        {!hintReplaces && notice}
         {/* The Codex introduction, replayed (WP2 commit 6f): offered only
             once Codex is set up, since its first page says the account is
             ready. A replay marks it seen only if it was still due. */}

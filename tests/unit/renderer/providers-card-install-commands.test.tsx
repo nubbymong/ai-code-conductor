@@ -213,12 +213,13 @@ describe('Providers card: install and update commands (the retired Codex tab ins
     expect(shown).toEqual([tabs[0].id])
     // While it runs, a second Run is off for that provider.
     expect((byTest(`provider-recipe-run-${CLAUDE_RECIPES[1].id}`) as HTMLButtonElement).disabled).toBe(true)
-    expect(pa.discover).not.toHaveBeenCalled()
+    // Only the row's own look on first view (aicc_planning#288) so far.
+    expect(pa.discover).toHaveBeenCalledTimes(1)
     // The line ends its shell when the command ends: the app checks again.
     act(() => { useSessionStore.getState().updateSession(tabs[0].id, { ptyExited: true }) })
     await act(async () => { await Promise.resolve() })
-    expect(pa.discover).toHaveBeenCalledWith('claude')
-    expect(pa.discover).toHaveBeenCalledTimes(1)
+    expect(pa.discover).toHaveBeenLastCalledWith('claude')
+    expect(pa.discover).toHaveBeenCalledTimes(2)
   })
 
   it('still not found after the command ended, or after Check again: the row says so, with what to do; not before', async () => {
@@ -316,11 +317,18 @@ describe('Providers card: a CLI in its publisher\'s folder, off PATH', () => {
   const HINT = { kind: 'add-to-path', folder: '%USERPROFILE%' + BSL + '.local' + BSL + 'bin' }
 
   it('after Check again: the row names the folder and offers Add it to PATH for me, for that provider only', async () => {
+    // The row's own look on first view finds nothing to say; Check again does.
+    pa.discover.mockResolvedValueOnce({ ok: true, installation: {} })
     pa.discover.mockResolvedValue({ ok: true, installation: {}, pathHint: HINT })
     await render(codex({}), claude({ discoveryState: 'missing', version: undefined }))
+    expect(byTest('provider-claude-path-hint')).toBeNull()
     await click('provider-check-again-claude')
     expect(byTest('provider-claude-path-hint-text')!.textContent).toContain('Claude Code is installed in %USERPROFILE%' + BSL + '.local' + BSL + 'bin, but that folder is not on your PATH yet')
     expect(byTest('provider-after-install-claude')).toBeNull()
+    // In place of the not-found line and the install commands (aicc_planning#288).
+    expect(byTest('provider-status-claude')).toBeNull()
+    expect(byTest('provider-install-commands-claude')).toBeNull()
+    expect(byTest('provider-checked-again-claude')!.textContent).toBe('Checked again just now: Claude Code was still not found.')
     expect(container.textContent).not.toContain('quit AI Code Conductor')
     await click('provider-claude-path-add')
     expect(pa.addToPath).toHaveBeenCalledTimes(1)
@@ -328,6 +336,8 @@ describe('Providers card: a CLI in its publisher\'s folder, off PATH', () => {
   })
 
   it('after an install tab ends, even with the card away: the check\'s hint is shown when the card comes back', async () => {
+    // The look on first view finds nothing to say; the check after the tab ends does.
+    pa.discover.mockResolvedValueOnce({ ok: true, installation: {} })
     pa.discover.mockResolvedValue({ ok: true, installation: {}, pathHint: HINT })
     await render(codex({}), claude({ discoveryState: 'missing', version: undefined }))
     await click(`provider-recipe-run-${CLAUDE_RECIPES[0].id}`)
@@ -366,6 +376,14 @@ describe('Providers card: a CLI in its publisher\'s folder, off PATH', () => {
     expect(note, 'the note shows too').not.toBeNull()
     expect(note!.textContent).toContain('If you installed Codex there, quit AI Code Conductor and start it again.')
     expect(line!.compareDocumentPosition(note!) & Node.DOCUMENT_POSITION_FOLLOWING, 'the note comes after the line').toBeTruthy()
+    // The not-found status line and the install commands stay too, before the note.
+    const status = byTest('provider-status-codex')
+    const commandList = byTest('provider-install-commands-codex')
+    expect(status!.textContent).toBe('Codex was not found on this computer')
+    expect(commands('install')).toHaveLength(2)
+    expect(status!.compareDocumentPosition(commandList!) & Node.DOCUMENT_POSITION_FOLLOWING, 'the commands follow the status line').toBeTruthy()
+    expect(commandList!.compareDocumentPosition(note!) & Node.DOCUMENT_POSITION_FOLLOWING, 'the note follows the commands').toBeTruthy()
+    expect(byTest('provider-checked-again-codex')).toBeNull()
     act(() => { root.unmount() })
     root = createRoot(container)
     pa.discover.mockResolvedValue({ ok: true, installation: {}, pathHint: { kind: 'restart' } })
@@ -373,5 +391,432 @@ describe('Providers card: a CLI in its publisher\'s folder, off PATH', () => {
     await click('provider-check-again-codex')
     expect(byTest('provider-codex-path-restart')).not.toBeNull()
     expect(byTest('provider-after-install-codex')).toBeNull()
+    expect(byTest('provider-status-codex')).toBeNull()
+    expect(byTest('provider-install-commands-codex')).toBeNull()
+  })
+})
+
+// The 2.1.3-beta.10 pre-publish VM smoke (aicc_planning#288): Settings,
+// Accounts read "Codex was not found on this computer", with the install
+// commands, and showed the off-PATH notice only after the row's own Check
+// again. Main says what helps only in a check's answer, so a row first shown
+// with its CLI not found looks again by itself, once per provider while the
+// renderer runs, and the notice then takes the place of that line and those
+// commands.
+describe('Providers card: the off-PATH notice on first view', () => {
+  const NPM_FOLDER = '%APPDATA%' + String.fromCharCode(92) + 'npm'
+  const OFF_PATH = { ok: true, installation: {}, pathHint: { kind: 'add-to-path', folder: NPM_FOLDER } }
+
+  it('first view of a not-found row looks once, then shows the notice in place of the status line and the commands', async () => {
+    pa.discover.mockResolvedValue(OFF_PATH)
+    await render(codex({ discoveryState: 'missing', version: undefined }))
+    expect(pa.discover).toHaveBeenCalledTimes(1)
+    expect(pa.discover).toHaveBeenCalledWith('codex')
+    expect(byTest('provider-codex-path-hint-text')!.textContent).toContain('Codex is installed in ' + NPM_FOLDER + ', but that folder is not on your PATH yet')
+    expect(byTest('provider-codex-path-add')!.textContent).toBe('Add it to PATH for me')
+    expect(byTest('provider-status-codex'), 'no not-found line').toBeNull()
+    expect(byTest('provider-install-commands-codex'), 'no install commands').toBeNull()
+    expect(container.textContent).not.toContain('Codex was not found on this computer')
+    // Nothing pressed: nothing says a check of the user's found nothing.
+    expect(byTest('provider-after-install-codex')).toBeNull()
+    expect(byTest('provider-checked-again-codex')).toBeNull()
+    // Check again stays, and keeps the notice while main looks.
+    let answer: (v: unknown) => void = () => {}
+    pa.discover.mockImplementationOnce(() => new Promise((r) => { answer = r }))
+    await click('provider-check-again-codex')
+    expect(byTest('provider-check-again-codex')!.textContent).toBe('Checking...')
+    expect(byTest('provider-codex-path-hint')).not.toBeNull()
+    expect(byTest('provider-status-codex')).toBeNull()
+    await act(async () => { answer(OFF_PATH) })
+    await act(async () => { await Promise.resolve() })
+    expect(byTest('provider-codex-path-hint')).not.toBeNull()
+    expect(byTest('provider-checked-again-codex')!.textContent).toBe('Checked again just now: Codex was still not found.')
+  })
+
+  it('looks once only: not again on a new snapshot, nor when the card is shown again, even when it found nothing to say', async () => {
+    await render(codex({ discoveryState: 'missing', version: undefined, lastCheckedAt: 1 }))
+    expect(pa.discover).toHaveBeenCalledTimes(1)
+    expect(byTest('provider-status-codex')!.textContent).toBe('Codex was not found on this computer')
+    await act(async () => {
+      useProviderAccountsStore.setState({ snapshot: snapshot({ providers: [claude(), codex({ discoveryState: 'missing', version: undefined, lastCheckedAt: 2 })] }), loaded: true })
+    })
+    await act(async () => { await Promise.resolve() })
+    expect(pa.discover).toHaveBeenCalledTimes(1)
+    act(() => { root.unmount() })
+    root = createRoot(container)
+    await render(codex({ discoveryState: 'missing', version: undefined, lastCheckedAt: 2 }))
+    expect(pa.discover).toHaveBeenCalledTimes(1)
+    expect(commands('install')).toHaveLength(2)
+  })
+
+  it('never for a provider that was found, or not looked for yet; the first time main says not found, it looks', async () => {
+    await render(codex({}), claude())
+    await render(codex({ compatibility: 'too-new' }), claude())
+    await render(codex({ version: '0.150.2', compatibility: 'too-old' }), claude())
+    await render(codex({ discoveryState: 'unchecked', version: undefined }), claude())
+    expect(pa.discover).not.toHaveBeenCalled()
+    // Main's start-up discovery pushes its answer: not found.
+    await act(async () => {
+      useProviderAccountsStore.setState({ snapshot: snapshot({ providers: [claude(), codex({ discoveryState: 'missing', version: undefined })] }), loaded: true })
+    })
+    await act(async () => { await Promise.resolve() })
+    expect(pa.discover).toHaveBeenCalledTimes(1)
+    expect(pa.discover).toHaveBeenCalledWith('codex')
+  })
+
+  it('not while the provider\'s install tab runs: the check when it ends is the only one', async () => {
+    await render(codex({ version: '0.150.2', compatibility: 'too-old' }))
+    const update = RECIPES.find((r) => r.id === 'codex-npm-update')!
+    await click(`provider-recipe-run-${update.id}`)
+    await click(`provider-recipe-confirm-run-${update.id}`)
+    const tab = useSessionStore.getState().sessions[0]
+    expect(tab.label).toBe('Update Codex')
+    // The update removed it: main now says not found, while the tab still runs.
+    await act(async () => {
+      useProviderAccountsStore.setState({ snapshot: snapshot({ providers: [claude(), codex({ discoveryState: 'missing', version: undefined, lastCheckedAt: 3 })] }), loaded: true })
+    })
+    await act(async () => { await Promise.resolve() })
+    expect(byTest('provider-status-codex')!.textContent).toBe('Codex was not found on this computer')
+    expect(pa.discover).not.toHaveBeenCalled()
+    act(() => { useSessionStore.getState().updateSession(tab.id, { ptyExited: true }) })
+    await act(async () => { await Promise.resolve() })
+    expect(pa.discover).toHaveBeenCalledTimes(1)
+    expect(pa.discover).toHaveBeenCalledWith('codex')
+  })
+
+  // Main pushes the snapshot of a check before it answers it. A row whose
+  // own check turns the provider into "not found" must not look again on
+  // that snapshot: a second discover, whose failure would also drop the
+  // notice the first one brought.
+  it('no second look behind a Check now of its own: the snapshot that says not found arrives before the answer', async () => {
+    await render(codex({ discoveryState: 'unchecked', version: undefined }))
+    expect(pa.discover).not.toHaveBeenCalled()
+    let answer: (v: unknown) => void = () => {}
+    pa.discover.mockImplementationOnce(() => new Promise((r) => { answer = r }))
+    await click('provider-check-again-codex')
+    await act(async () => {
+      useProviderAccountsStore.setState({ snapshot: snapshot({ providers: [claude(), codex({ discoveryState: 'missing', version: undefined })] }), loaded: true })
+    })
+    await act(async () => { await Promise.resolve() })
+    // The snapshot says not found, but the row's own check is still out: it
+    // says it is checking, with no not-found line and no live install commands.
+    expect(byTest('provider-status-codex')!.textContent).toBe('Checking for Codex...')
+    expect(byTest('provider-install-commands-codex')).toBeNull()
+    expect(pa.discover).toHaveBeenCalledTimes(1)
+    await act(async () => { answer(OFF_PATH) })
+    await act(async () => { await Promise.resolve() })
+    expect(byTest('provider-codex-path-hint')).not.toBeNull()
+    expect(pa.discover).toHaveBeenCalledTimes(1)
+  })
+
+  it('no second look behind the check when an install tab ends, whose snapshot says not found first', async () => {
+    await render(codex({ version: '0.150.2', compatibility: 'too-old' }))
+    const update = RECIPES.find((r) => r.id === 'codex-npm-update')!
+    await click(`provider-recipe-run-${update.id}`)
+    await click(`provider-recipe-confirm-run-${update.id}`)
+    const tab = useSessionStore.getState().sessions[0]
+    let answer: (v: unknown) => void = () => {}
+    pa.discover.mockImplementationOnce(() => new Promise((r) => { answer = r }))
+    act(() => { useSessionStore.getState().updateSession(tab.id, { ptyExited: true }) })
+    await act(async () => { await Promise.resolve() })
+    expect(pa.discover).toHaveBeenCalledTimes(1)
+    await act(async () => {
+      useProviderAccountsStore.setState({ snapshot: snapshot({ providers: [claude(), codex({ discoveryState: 'missing', version: undefined, lastCheckedAt: 4 })] }), loaded: true })
+    })
+    await act(async () => { await Promise.resolve() })
+    // The same for the row's check after an update tab: checking, not the not-found line.
+    expect(byTest('provider-status-codex')!.textContent).toBe('Checking for Codex...')
+    expect(byTest('provider-install-commands-codex')).toBeNull()
+    expect(pa.discover).toHaveBeenCalledTimes(1)
+    await act(async () => { answer(OFF_PATH) })
+    await act(async () => { await Promise.resolve() })
+    expect(byTest('provider-codex-path-hint')).not.toBeNull()
+    expect(pa.discover).toHaveBeenCalledTimes(1)
+  })
+
+  // Every row check that starts while the row does not show the CLI as not
+  // found says it is checking once the snapshot says not found, not only a
+  // Check now: main reads the registry for the hint after that snapshot.
+  it.each([
+    ['did not run', 'invalid', {}],
+    ['could not be checked', 'error', {}],
+    ['is too old', 'found', { version: '0.150.2', compatibility: 'too-old' as const }],
+  ] as const)('Check again from a CLI that %s: the snapshot that says not found shows checking, then the notice', async (_what, state, over) => {
+    await render(codex({ discoveryState: state, ...over }))
+    expect(pa.discover).not.toHaveBeenCalled()
+    let answer: (v: unknown) => void = () => {}
+    pa.discover.mockImplementationOnce(() => new Promise((r) => { answer = r }))
+    await click('provider-check-again-codex')
+    await act(async () => {
+      useProviderAccountsStore.setState({ snapshot: snapshot({ providers: [claude(), codex({ discoveryState: 'missing', version: undefined, lastCheckedAt: 6 })] }), loaded: true })
+    })
+    await act(async () => { await Promise.resolve() })
+    expect(byTest('provider-status-codex')!.textContent).toBe('Checking for Codex...')
+    expect(byTest('provider-install-commands-codex')).toBeNull()
+    expect(pa.discover).toHaveBeenCalledTimes(1)
+    await act(async () => { answer(OFF_PATH) })
+    await act(async () => { await Promise.resolve() })
+    expect(byTest('provider-codex-path-hint')).not.toBeNull()
+    expect(byTest('provider-status-codex')).toBeNull()
+    expect(pa.discover).toHaveBeenCalledTimes(1)
+  })
+
+  it('the check when an install tab ends from a CLI that did not run shows checking behind the snapshot that says not found', async () => {
+    await render(codex({ discoveryState: 'invalid' }))
+    const install = RECIPES.find((r) => r.id === 'codex-npm-install')!
+    await click(`provider-recipe-run-${install.id}`)
+    await click(`provider-recipe-confirm-run-${install.id}`)
+    const tab = useSessionStore.getState().sessions[0]
+    expect(tab.label).toBe('Install Codex')
+    let answer: (v: unknown) => void = () => {}
+    pa.discover.mockImplementationOnce(() => new Promise((r) => { answer = r }))
+    act(() => { useSessionStore.getState().updateSession(tab.id, { ptyExited: true }) })
+    await act(async () => { await Promise.resolve() })
+    await act(async () => {
+      useProviderAccountsStore.setState({ snapshot: snapshot({ providers: [claude(), codex({ discoveryState: 'missing', version: undefined, lastCheckedAt: 7 })] }), loaded: true })
+    })
+    await act(async () => { await Promise.resolve() })
+    expect(byTest('provider-status-codex')!.textContent).toBe('Checking for Codex...')
+    expect(byTest('provider-install-commands-codex')).toBeNull()
+    await act(async () => { answer(OFF_PATH) })
+    await act(async () => { await Promise.resolve() })
+    expect(byTest('provider-codex-path-hint')).not.toBeNull()
+    expect(pa.discover).toHaveBeenCalledTimes(1)
+  })
+
+  // The checking line ends with the answer: main found nothing and had
+  // nothing to say, so the row shows its not-found line and the commands.
+  it('a Check now that finds nothing, with nothing to say, ends with the not-found line and the commands', async () => {
+    await render(codex({ discoveryState: 'unchecked', version: undefined }))
+    let answer: (v: unknown) => void = () => {}
+    pa.discover.mockImplementationOnce(() => new Promise((r) => { answer = r }))
+    await click('provider-check-again-codex')
+    await act(async () => {
+      useProviderAccountsStore.setState({ snapshot: snapshot({ providers: [claude(), codex({ discoveryState: 'missing', version: undefined, lastCheckedAt: 8 })] }), loaded: true })
+    })
+    await act(async () => { await Promise.resolve() })
+    expect(byTest('provider-status-codex')!.textContent).toBe('Checking for Codex...')
+    await act(async () => { answer({ ok: true, installation: {} }) })
+    await act(async () => { await Promise.resolve() })
+    await act(async () => { await Promise.resolve() })
+    expect(byTest('provider-status-codex')!.textContent).toBe('Codex was not found on this computer')
+    expect(commands('install')).toHaveLength(2)
+    expect(byTest('provider-check-again-codex')!.textContent).toBe('Check again')
+  })
+
+  it('the check when an install tab ends from a CLI that did not run, finding nothing, ends the same way', async () => {
+    await render(codex({ discoveryState: 'invalid' }))
+    const install = RECIPES.find((r) => r.id === 'codex-npm-install')!
+    await click(`provider-recipe-run-${install.id}`)
+    await click(`provider-recipe-confirm-run-${install.id}`)
+    const tab = useSessionStore.getState().sessions[0]
+    let answer: (v: unknown) => void = () => {}
+    pa.discover.mockImplementationOnce(() => new Promise((r) => { answer = r }))
+    act(() => { useSessionStore.getState().updateSession(tab.id, { ptyExited: true }) })
+    await act(async () => { await Promise.resolve() })
+    await act(async () => {
+      useProviderAccountsStore.setState({ snapshot: snapshot({ providers: [claude(), codex({ discoveryState: 'missing', version: undefined, lastCheckedAt: 9 })] }), loaded: true })
+    })
+    await act(async () => { await Promise.resolve() })
+    expect(byTest('provider-status-codex')!.textContent).toBe('Checking for Codex...')
+    await act(async () => { answer({ ok: true, installation: {} }) })
+    await act(async () => { await Promise.resolve() })
+    await act(async () => { await Promise.resolve() })
+    expect(byTest('provider-status-codex')!.textContent).toBe('Codex was not found on this computer')
+    expect(commands('install')).toHaveLength(2)
+  })
+
+  // A check that starts from not found keeps today's layout while it runs:
+  // the row was already showing the line and the commands.
+  it('a check that starts from not found keeps its line and its install commands while it runs', async () => {
+    await render(codex({ discoveryState: 'missing', version: undefined }))
+    expect(pa.discover).toHaveBeenCalledTimes(1)
+    expect(byTest('provider-status-codex')!.textContent).toBe('Codex was not found on this computer')
+    let answer: (v: unknown) => void = () => {}
+    pa.discover.mockImplementationOnce(() => new Promise((r) => { answer = r }))
+    await click('provider-check-again-codex')
+    expect(pa.discover).toHaveBeenCalledTimes(2)
+    expect(byTest('provider-check-again-codex')!.textContent).toBe('Checking...')
+    expect(byTest('provider-status-codex')!.textContent).toBe('Codex was not found on this computer')
+    expect(commands('install')).toHaveLength(2)
+    await act(async () => { answer({ ok: true, installation: {} }) })
+    await act(async () => { await Promise.resolve() })
+    expect(byTest('provider-status-codex')!.textContent).toBe('Codex was not found on this computer')
+    expect(commands('install')).toHaveLength(2)
+  })
+
+  // The smoke's other half: while that first look was out, the row read
+  // "Codex was not found on this computer" with the install commands, and
+  // the notice swapped in when it answered. The row says it is checking.
+  it('while the look on first view is out, the row says it is checking, with no not-found line and no install commands', async () => {
+    let answer: (v: unknown) => void = () => {}
+    pa.discover.mockImplementationOnce(() => new Promise((r) => { answer = r }))
+    await render(codex({ discoveryState: 'missing', version: undefined }))
+    expect(pa.discover).toHaveBeenCalledTimes(1)
+    expect(byTest('provider-status-codex')!.textContent).toBe('Checking for Codex...')
+    expect(container.textContent).not.toContain('Codex was not found on this computer')
+    expect(byTest('provider-install-commands-codex')).toBeNull()
+    // Not even asked for, from the row's first paint: it would hide them a moment later.
+    expect(pa.installRecipes).not.toHaveBeenCalled()
+    const btn = byTest('provider-check-again-codex') as HTMLButtonElement
+    expect(btn.textContent).toBe('Checking...')
+    expect(btn.disabled).toBe(true)
+    // Main found nothing and had nothing to say: the line and the commands.
+    await act(async () => { answer({ ok: true, installation: {} }) })
+    await act(async () => { await Promise.resolve() })
+    await act(async () => { await Promise.resolve() })
+    expect(byTest('provider-status-codex')!.textContent).toBe('Codex was not found on this computer')
+    expect(commands('install')).toHaveLength(2)
+    expect(pa.installRecipes).toHaveBeenCalledTimes(1)
+    expect(byTest('provider-check-again-codex')!.textContent).toBe('Check again')
+    expect(byTest('provider-after-install-codex')).toBeNull()
+    expect(pa.discover).toHaveBeenCalledTimes(1)
+  })
+
+  it('a card shown again while that look is out still says it is checking, and looks no second time', async () => {
+    let answer: (v: unknown) => void = () => {}
+    pa.discover.mockImplementationOnce(() => new Promise((r) => { answer = r }))
+    await render(codex({ discoveryState: 'missing', version: undefined }))
+    act(() => { root.unmount() })
+    root = createRoot(container)
+    await render(codex({ discoveryState: 'missing', version: undefined }))
+    expect(byTest('provider-status-codex')!.textContent).toBe('Checking for Codex...')
+    expect(byTest('provider-install-commands-codex')).toBeNull()
+    expect(pa.discover).toHaveBeenCalledTimes(1)
+    await act(async () => { answer(OFF_PATH) })
+    await act(async () => { await Promise.resolve() })
+    expect(byTest('provider-codex-path-hint')).not.toBeNull()
+    expect(byTest('provider-status-codex')).toBeNull()
+  })
+
+  it('a snapshot that says found while the look is out is shown at once', async () => {
+    pa.discover.mockImplementationOnce(() => new Promise(() => {}))
+    await render(codex({ discoveryState: 'missing', version: undefined }))
+    expect(byTest('provider-status-codex')!.textContent).toBe('Checking for Codex...')
+    await act(async () => {
+      useProviderAccountsStore.setState({ snapshot: snapshot({ providers: [claude(), codex({ lastCheckedAt: 5 })] }), loaded: true })
+    })
+    await act(async () => { await Promise.resolve() })
+    expect(byTest('provider-status-codex')!.textContent).toBe('Codex 0.155.1 - ready')
+  })
+
+  // The final-head review of the release PR (aicc_planning#288): switching a
+  // provider off drops the notice it brought (a hint kept across it could be
+  // stale), while the once-only look still said the row had looked, so
+  // switched back on it showed the not-found line and live install commands
+  // until Check again. A row that drops its hint also forgets that it looked.
+  const push = async (view: ProviderInstallationView) => {
+    await act(async () => {
+      useProviderAccountsStore.setState({ snapshot: snapshot({ providers: [claude(), view] }), loaded: true })
+    })
+    await act(async () => { await Promise.resolve() })
+  }
+
+  it('switched off and on again: the row looks again, then shows the notice, not the not-found line and the commands', async () => {
+    pa.discover.mockResolvedValue(OFF_PATH)
+    await render(codex({ discoveryState: 'missing', version: undefined }))
+    expect(pa.discover).toHaveBeenCalledTimes(1)
+    expect(byTest('provider-codex-path-hint')).not.toBeNull()
+    // Switched off: nothing of the CLI is shown, and the notice is gone.
+    await push(codex({ enabled: false, discoveryState: 'missing', version: undefined, lastCheckedAt: 2 }))
+    expect(byTest('provider-codex-path-hint')).toBeNull()
+    expect(pa.discover).toHaveBeenCalledTimes(1)
+    // Switched on: main rediscovers with no hint, and the snapshot says not found.
+    let answer: (v: unknown) => void = () => {}
+    pa.discover.mockImplementationOnce(() => new Promise((r) => { answer = r }))
+    await push(codex({ enabled: true, discoveryState: 'missing', version: undefined, lastCheckedAt: 3 }))
+    expect(pa.discover).toHaveBeenCalledTimes(2)
+    expect(pa.discover).toHaveBeenLastCalledWith('codex')
+    expect(byTest('provider-status-codex')!.textContent).toBe('Checking for Codex...')
+    expect(byTest('provider-install-commands-codex')).toBeNull()
+    await act(async () => { answer(OFF_PATH) })
+    await act(async () => { await Promise.resolve() })
+    expect(byTest('provider-codex-path-hint')).not.toBeNull()
+    expect(byTest('provider-status-codex')).toBeNull()
+    expect(byTest('provider-install-commands-codex')).toBeNull()
+    expect(container.textContent).not.toContain('Codex was not found on this computer')
+    expect(pa.discover).toHaveBeenCalledTimes(2)
+  })
+
+  it('switched off and on again after a look that had nothing to say: it looks again, as the CLI may be installed since', async () => {
+    await render(codex({ discoveryState: 'missing', version: undefined }))
+    expect(pa.discover).toHaveBeenCalledTimes(1)
+    expect(byTest('provider-status-codex')!.textContent).toBe('Codex was not found on this computer')
+    await push(codex({ enabled: false, discoveryState: 'missing', version: undefined, lastCheckedAt: 2 }))
+    expect(pa.discover).toHaveBeenCalledTimes(1)
+    // Installed in a folder PATH lacks while it was off.
+    pa.discover.mockResolvedValue(OFF_PATH)
+    await push(codex({ enabled: true, discoveryState: 'missing', version: undefined, lastCheckedAt: 3 }))
+    expect(pa.discover).toHaveBeenCalledTimes(2)
+    expect(byTest('provider-codex-path-hint')).not.toBeNull()
+    expect(byTest('provider-status-codex')).toBeNull()
+    expect(byTest('provider-install-commands-codex')).toBeNull()
+  })
+
+  it('found since, and not found again: the row looks again, once, as it does for its first time', async () => {
+    pa.discover.mockResolvedValue(OFF_PATH)
+    await render(codex({ discoveryState: 'missing', version: undefined }))
+    expect(pa.discover).toHaveBeenCalledTimes(1)
+    await push(codex({ lastCheckedAt: 2 }))
+    expect(byTest('provider-codex-path-hint')).toBeNull()
+    expect(pa.discover).toHaveBeenCalledTimes(1)
+    await push(codex({ discoveryState: 'missing', version: undefined, lastCheckedAt: 3 }))
+    expect(pa.discover).toHaveBeenCalledTimes(2)
+    expect(byTest('provider-codex-path-hint')).not.toBeNull()
+    // Not again on the next snapshot.
+    await push(codex({ discoveryState: 'missing', version: undefined, lastCheckedAt: 4 }))
+    expect(pa.discover).toHaveBeenCalledTimes(2)
+  })
+
+  // The re-review of that fix (aicc_planning#288): the row forgets its look
+  // only when it offers no check. A Check now that main has not looked yet
+  // (unchecked) shows is a check of the row's own, still out, and must keep
+  // its look; and once main has looked and found, the look is forgotten even
+  // though the row showed no install or update commands before or after.
+  it('a card shown again while a Check now of its own is out: the snapshot that says not found starts no second look', async () => {
+    await render(codex({ discoveryState: 'unchecked', version: undefined }))
+    let answer: (v: unknown) => void = () => {}
+    pa.discover.mockImplementationOnce(() => new Promise((r) => { answer = r }))
+    await click('provider-check-again-codex')
+    expect(pa.discover).toHaveBeenCalledTimes(1)
+    act(() => { root.unmount() })
+    root = createRoot(container)
+    await render(codex({ discoveryState: 'unchecked', version: undefined }))
+    await push(codex({ discoveryState: 'missing', version: undefined, lastCheckedAt: 2 }))
+    expect(byTest('provider-status-codex')!.textContent).toBe('Checking for Codex...')
+    expect(byTest('provider-install-commands-codex')).toBeNull()
+    expect(pa.discover).toHaveBeenCalledTimes(1)
+    await act(async () => { answer(OFF_PATH) })
+    await act(async () => { await Promise.resolve() })
+    expect(byTest('provider-codex-path-hint')).not.toBeNull()
+    expect(byTest('provider-status-codex')).toBeNull()
+    expect(pa.discover).toHaveBeenCalledTimes(1)
+  })
+
+  it('a Check now that answers found, and then not found again: the row looks again', async () => {
+    await render(codex({ discoveryState: 'unchecked', version: undefined }))
+    await click('provider-check-again-codex')
+    expect(pa.discover).toHaveBeenCalledTimes(1)
+    await push(codex({ lastCheckedAt: 2 }))
+    expect(pa.discover).toHaveBeenCalledTimes(1)
+    await push(codex({ discoveryState: 'missing', version: undefined, lastCheckedAt: 3 }))
+    expect(pa.discover).toHaveBeenCalledTimes(2)
+    // Once, not again on the next snapshot.
+    await push(codex({ discoveryState: 'missing', version: undefined, lastCheckedAt: 4 }))
+    expect(pa.discover).toHaveBeenCalledTimes(2)
+  })
+
+  // Main says "unchecked" for any provider it holds no discovery record of,
+  // a switched-off one included: a switch-off must still forget the look.
+  it('switched off with main saying unchecked, and on again: the row still looks again', async () => {
+    pa.discover.mockResolvedValue(OFF_PATH)
+    await render(codex({ discoveryState: 'missing', version: undefined }))
+    expect(pa.discover).toHaveBeenCalledTimes(1)
+    await push(codex({ enabled: false, discoveryState: 'unchecked', version: undefined, lastCheckedAt: 2 }))
+    expect(byTest('provider-codex-path-hint')).toBeNull()
+    expect(pa.discover).toHaveBeenCalledTimes(1)
+    await push(codex({ enabled: true, discoveryState: 'missing', version: undefined, lastCheckedAt: 3 }))
+    expect(pa.discover).toHaveBeenCalledTimes(2)
+    expect(byTest('provider-codex-path-hint')).not.toBeNull()
   })
 })

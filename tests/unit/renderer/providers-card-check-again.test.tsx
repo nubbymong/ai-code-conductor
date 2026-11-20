@@ -8,7 +8,8 @@
  * pushes, and its proven executable is replaced by that check. A ready or
  * turned-off provider has no such button. WP2 commit 6g: a provider main
  * has not looked for yet ("not checked yet") gets the same button, reading
- * "Check now".
+ * "Check now". A row first shown with its CLI not found has already looked
+ * once by itself (aicc_planning#288): the counts below include that look.
  */
 import React from 'react'
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
@@ -25,7 +26,7 @@ const pa = {
 }
 ;(globalThis as any).window.electronAPI = { ...(globalThis as any).window.electronAPI, providerAccounts: pa }
 
-const { ProvidersCard, offersCheckAgain } = await import('../../../src/renderer/components/settings/accounts/ProvidersCard')
+const { ProvidersCard, offersCheckAgain, _resetProviderInstallTabsForTest } = await import('../../../src/renderer/components/settings/accounts/ProvidersCard')
 const { useProviderAccountsStore } = await import('../../../src/renderer/stores/providerAccountsStore')
 
 let container: HTMLDivElement
@@ -37,6 +38,8 @@ beforeEach(() => {
   root = createRoot(container)
   pa.discover.mockReset()
   pa.discover.mockResolvedValue({ ok: true, installation: {} })
+  // The looks a row made on first view outlive the card: forgotten between cases.
+  _resetProviderInstallTabsForTest()
 })
 afterEach(() => {
   act(() => { root.unmount() })
@@ -55,16 +58,19 @@ async function render(codexView: ProviderInstallationView, claudeView?: Provider
     loaded: true,
   })
   await act(async () => { root.render(<ProvidersCard />) })
+  await act(async () => { await Promise.resolve() })
 }
 
 describe('Providers card: Check again', () => {
   it('a missing CLI gets Check again, which asks main to look again', async () => {
     await render(codex({ discoveryState: 'missing', version: undefined }))
+    // The row's own look on first view.
+    expect(pa.discover).toHaveBeenCalledTimes(1)
     const btn = byTest('provider-check-again-codex')!
     expect(btn.textContent).toBe('Check again')
     await act(async () => { btn.click() })
-    expect(pa.discover).toHaveBeenCalledTimes(1)
-    expect(pa.discover).toHaveBeenCalledWith('codex')
+    expect(pa.discover).toHaveBeenCalledTimes(2)
+    expect(pa.discover).toHaveBeenLastCalledWith('codex')
   })
 
   it('a too-old CLI gets it too', async () => {
@@ -100,14 +106,16 @@ describe('Providers card: Check again', () => {
 
   it('works for Claude Code too', async () => {
     await render(codex({}), provider({ providerId: 'claude', displayName: 'Claude Code', discoveryState: 'missing', version: undefined }))
+    const looked = pa.discover.mock.calls.length
     await act(async () => { byTest('provider-check-again-claude')!.click() })
-    expect(pa.discover).toHaveBeenCalledWith('claude')
+    expect(pa.discover).toHaveBeenCalledTimes(looked + 1)
+    expect(pa.discover).toHaveBeenLastCalledWith('claude')
   })
 
   it('says it is checking while main looks, and shows a failure', async () => {
     let answer: (v: unknown) => void = () => {}
-    pa.discover.mockImplementationOnce(() => new Promise((r) => { answer = r }))
     await render(codex({ discoveryState: 'missing', version: undefined }))
+    pa.discover.mockImplementationOnce(() => new Promise((r) => { answer = r }))
     await act(async () => { byTest('provider-check-again-codex')!.click() })
     const btn = byTest('provider-check-again-codex') as HTMLButtonElement
     expect(btn.textContent).toBe('Checking...')

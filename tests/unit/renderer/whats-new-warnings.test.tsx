@@ -53,7 +53,7 @@ vi.mock('../../../src/renderer/stores/settingsStore', () => {
   return { useSettingsStore }
 })
 
-const { WhatsNewEntries } = await import('../../../src/renderer/components/WhatsNewEntries')
+const { WhatsNewEntries, formatChangelogDate } = await import('../../../src/renderer/components/WhatsNewEntries')
 const { default: WhatsNewModal } = await import('../../../src/renderer/components/WhatsNewModal')
 const { releaseWarnings } = await import('../../../src/renderer/onboarding/upgrade-flow')
 
@@ -181,5 +181,40 @@ describe("the What's New dialog", () => {
     expect(text.indexOf(SECOND_WARNING)).toBeLessThan(text.indexOf('A bigger release.'))
     // The older release, which has none, is still listed below it.
     expect(text.indexOf('A small release.')).toBeGreaterThan(text.indexOf('A bigger release.'))
+  })
+})
+
+// aicc_planning#366: a changelog date names a calendar day. Read as an
+// instant (new Date('2026-11-20') is midnight UTC), it showed the day before
+// on a computer west of UTC: the 2.1.3-beta.10 pre-publish VM, on Pacific
+// time, showed beta.10 (2026-11-20) as 19 Nov 2026.
+describe("What's New dates: the day the changelog names, in every time zone", () => {
+  let tz: string | undefined
+  beforeEach(() => { tz = process.env.TZ })
+  afterEach(() => {
+    if (tz === undefined) delete process.env.TZ
+    else process.env.TZ = tz
+  })
+
+  it('west of UTC (Pacific time): 2026-11-20 reads 20 Nov 2026', () => {
+    process.env.TZ = 'America/Los_Angeles'
+    // The zone is in effect: read as an instant, that string is the 19th here.
+    expect(new Date('2026-11-20').getDate(), 'the test zone did not take effect').toBe(19)
+    expect(formatChangelogDate('2026-11-20')).toBe('20 Nov 2026')
+    expect(formatChangelogDate('2026-01-01')).toBe('1 Jan 2026')
+  })
+
+  it("west of UTC: the release line What's New and the Feature Guide show reads 20 Nov 2026", () => {
+    process.env.TZ = 'America/Los_Angeles'
+    renderEntries([{ ...PLAIN, date: '2026-11-20' }])
+    expect(container.textContent).toContain('20 Nov 2026')
+    expect(container.textContent).not.toContain('19 Nov 2026')
+  })
+
+  it('east of UTC the same day; a string of another shape is shown as it is', () => {
+    process.env.TZ = 'Pacific/Kiritimati'
+    expect(new Date('2026-11-20').getHours(), 'the test zone did not take effect').toBe(14)
+    expect(formatChangelogDate('2026-11-20')).toBe('20 Nov 2026')
+    expect(formatChangelogDate('soon')).toBe('soon')
   })
 })
