@@ -449,10 +449,28 @@ fn kept_tool_stream_vectors_read_as_the_fixtures_say() {
         // Exactly `t` and `stream`, as `mcp.open` and `mcp.close` are.
         let message = Value::obj(vec![("t", Value::str(text(case, "type"))), ("stream", Value::uint(stream))]);
         assert_eq!(message.to_json(), text(case, "json"), "{name}");
+        // The holder sends these bytes.
+        let sent = if text(case, "type") == "mcp.away" { serve::mcp_away(stream) } else { serve::mcp_back(stream) };
+        assert_eq!(sent.to_json(), text(case, "json"), "{name}");
         // A relay reads them as section 6's app to helper allows.
         assert!(frame::encode(&frame::Frame::json(0, message), Direction::AppToHelper).is_ok(), "{name}");
     }
-    assert_eq!(items(away, "answers").len(), 2);
+    let answers = items(away, "answers");
+    assert_eq!(answers.len(), 2);
+    for case in answers {
+        let name = text(case, "name");
+        let call = case.get("call").expect("call");
+        let id = call.get("id").expect("an id");
+        let answer = relay::updating_answer(id, text(call, "method"));
+        assert_eq!(answer.to_json(), text(case, "json"), "{name}");
+    }
+    let l = away.get("limits").expect("limits");
+    let n = |k: &str| l.get(k).and_then(Value::as_u64).unwrap_or_else(|| panic!("missing number {k}"));
+    assert_eq!(n("hold_secs"), relay::HOLD.as_secs());
+    assert_eq!(n("test_hold_secs"), relay::TEST_HOLD.as_secs());
+    assert_eq!(n("held_calls"), relay::MAX_HELD as u64);
+    assert_eq!(n("held_bytes"), relay::MAX_HELD_BYTES as u64);
+    assert_eq!(n("remembered_calls"), relay::MAX_REMEMBERED as u64);
 }
 
 #[test]
