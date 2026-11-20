@@ -42,7 +42,8 @@ async function startRun(): Promise<void> {
   server?.stopMcpServer()
   vi.resetModules()
   server = await import('../../../src/main/conductor-mcp-server')
-  port = 33000 + Math.floor(Math.random() * 1000)
+  // Its own range, below 32768 where Linux's outgoing ports start: no other MCP test or outgoing socket takes it.
+  port = 26000 + Math.floor(Math.random() * 1000)
   await server.startMcpServer(port, () => null)
 }
 afterAll(() => { server?.stopMcpServer() })

@@ -197,6 +197,12 @@ function usableCodexLiveList(live: CodexLiveModelList | null | undefined): Codex
   return live && typeof live.version === 'string' && Array.isArray(live.models) && live.models.length > 0 ? live : null
 }
 
+/** Versions as a sentence names them: "a", "a and b", "a, b and c"
+ *  (aicc_planning#346). */
+function versionList(versions: readonly string[]): string {
+  return versions.length > 1 ? `${versions.slice(0, -1).join(', ')} and ${versions[versions.length - 1]}` : versions.join('')
+}
+
 /**
  * True when the shipped list names `id` only for Codex versions newer than
  * `version`: the model's own `cliVersions` are all later than it. That Codex
@@ -243,7 +249,7 @@ export function codexModelCoverageFindings(
     })
     return out
   }
-  const versions = Array.isArray(expected?.cliVersions) && expected!.cliVersions.length ? `Codex ${expected!.cliVersions.join(' and ')}, ` : ''
+  const versions = Array.isArray(expected?.cliVersions) && expected!.cliVersions.length ? `Codex ${versionList(expected!.cliVersions)}, ` : ''
   const shipped = liveList
     ? `the model list read from the installed Codex ${liveList.version} itself`
     : `the Codex model list shipped with this build (${versions}${expected?.fetchedAt ?? 'undated'})`

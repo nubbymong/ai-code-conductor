@@ -420,8 +420,8 @@ rollback returns to the earlier beta's rows, and every row has a negative test.
 - **Tool streams through a holder (capability `mcp`, from 2.1.3-beta.10).**
   The relay (`aicc-helper mcp`, protocol 15, "Tool streams") carries a
   session's tool calls between its CLI and the connection attached to the
-  session's terminal. Nothing in the app starts it or acks `mcp` yet, so in
-  this beta no tool call goes this way. What a relay may do: open one stream
+  session's terminal. From 2.1.3-beta.11 the app names it to a held
+  session's CLI, which starts it, behind a switch (the next item). What a relay may do: open one stream
   at a time, at most 8 in a session, and pass JSON-RPC messages on it to the
   attached connection that acked `mcp`, at most 1,048,320 bytes each, and get
   that connection's answers. What it may not: use the terminal (a launch,
@@ -456,6 +456,27 @@ rollback returns to the earlier beta's rows, and every row has a negative test.
   app connection that did not ack `mcp` is passed nothing) and
   `a_holder_from_before_tool_streams_is_sent_nothing`. An adversarial pass of
   it is owed to the security round before 2.1 stable (aicc_planning #320).
+- **A held session's Conductor tools through its holder (from 2.1.3-beta.11,
+  behind the agent sessions' setting, off by default).** With the setting on,
+  a held Claude Code session's per-session MCP config file, and the launch of
+  a held session whose CLI names its tool servers in its launch flags, name a
+  program to start as the session's `conductor` tool server: the helper copy,
+  by its path, with `mcp --store <folder> --session <sid>`, in place of the
+  loopback address and credential. Those two paths go only into that session's
+  own file, written owner-only by the writer that wrote the credential it
+  replaces, or into its own launch, and never into a log line. The app serves
+  a stream only for a session it switched, under the tab's id (the holder it
+  came through, as above), so the tool set is the one that session's record
+  gives. A session that cannot be switched keeps the loopback route, with one
+  log line saying why, and the loopback server and its credential stay for it,
+  for SSH sessions, for sessions that are not held, and for the status line. A
+  launch through cmd.exe takes the relay only when cmd.exe's quoting rule
+  carries its arguments unchanged; the rule is not widened, so a path with a
+  space (the installed app's folder) keeps such a launch on the loopback
+  route. An adversarial pass is owed to the same security round: the path
+  written into the file, an argument that changes what that CLI starts, a
+  session switched while its holder is another session's, and a fall-back that
+  leaves a session with no tools and no word.
 - **A program the helper starts for the app keeps none of the app's handles
   (from 2.1.3-beta.8, Windows).** `aicc-helper start` (protocol 15, "Starting
   a program") starts the program the app names, by the drive-absolute path it

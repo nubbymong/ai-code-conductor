@@ -16,8 +16,18 @@ on:
   # Release level (P4.8; OD20 D7, WP1.71): the release-candidate Codex CLI is
   # checked on its own, dispatched with its version, besides the minimum and
   # pinned ones every run checks. On a dispatch the codex-conformance job runs,
-  # with the always-on changelog check; every other job's condition skips it.
+  # with the always-on changelog check, probe-p19 when the dispatch names it
+  # (probe_p19), and the claude-conformance job when claude_rc_version is set;
+  # every other job's condition skips it.
   # The inputs reach a step through env, never a shell line.
+  #
+  # The daily upstream CLI watch (.github/workflows/upstream-cli-watch.yml,
+  # aicc_planning#368) dispatches this workflow on beta with the newest published
+  # Codex and Claude Code, when either is newer than the newest version the app
+  # was tested with. It reads the result from the jobs named below
+  # (`Codex CLI rc (<os>)`, `Claude Code CLI rc (<os>)`; scripts/ci/
+  # upstream-cli-watch.mjs, held to these names by a test), so a rename of
+  # either job or of an input here is a change to the watch as well.
   workflow_dispatch:
     inputs:
       codex_rc_version:
@@ -25,8 +35,18 @@ on:
         type: string
         required: false
         default: ''
+      claude_rc_version:
+        description: 'Claude Code version to check, on the app floor and on this one (a plain semver, for example 2.1.329); empty skips the Claude Code legs'
+        type: string
+        required: false
+        default: ''
       conformance_prove_red:
         description: 'Run every real-CLI conformance check against a deliberately wrong expectation: the job must go red, each check named'
+        type: boolean
+        required: false
+        default: false
+      probe_p19:
+        description: 'Run probe P19 (ADR-030) on Windows, macOS and Linux: does a resize make Claude Code and Codex redraw their screen after a re-attach that starts mid-stream; the recordings are uploaded'
         type: boolean
         required: false
         default: false
@@ -767,6 +787,211 @@ jobs:
           path: ${{ runner.temp }}/codex-conformance
           if-no-files-found: warn
           retention-days: 30
+
+  # Probe P19 (ADR-030; plan 2.1.3-beta.11, section A1): after a re-attach that
+  # starts mid-stream, does a resize make Claude Code and Codex redraw their
+  # screen? helper/probes/p19-record.cjs runs each CLI on a terminal of its own
+  # in a fresh environment, pointed at a stand-in model on a loopback port (no
+  # account, no key, no secret), and records every chunk; helper/probes/README.md
+  # says how it measures. The Windows test machine gives the main Windows
+  # reading; windows-2025 here is a second one, macOS and Linux the only ones.
+  #
+  # It runs ONLY on a dispatch that names it (`probe_p19`), never on a pull
+  # request or a push, and is not a required check. Built like the Codex
+  # conformance job above: npm ci with scripts off, the native rebuild off
+  # Windows, each CLI's published package into a prefix and a cache of its own
+  # with scripts off (Claude Code's own install script copies its native program
+  # into place; the probe runs that program from its platform package instead),
+  # read-only, and the recordings and the result uploaded as probe-p19-<os>.
+  # tests/unit/scripts/probe-p19-job.test.ts evaluates its condition.
+  probe-p19:
+    if: github.event_name == 'workflow_dispatch' && inputs.probe_p19 == true
+    name: Probe P19 (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2025, macos-latest, ubuntu-latest]
+    env:
+      # The versions the Windows test machine has (ADR-030, P18 and P19).
+      P19_CLAUDE_VERSION: '2.1.328'
+      P19_CODEX_VERSION: '0.157.1'
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      # Claude Code's package asks for node 22 or later.
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - uses: actions/setup-python@v7
+        if: runner.os != 'Windows'
+        with:
+          python-version: '3.12'
+
+      - name: Install Python setuptools
+        if: runner.os != 'Windows'
+        run: pip install setuptools
+
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Rebuild node-pty
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          node -e "
+          const { rebuild } = require('@electron/rebuild');
+          rebuild({
+            buildPath: process.cwd(),
+            electronVersion: require('./node_modules/electron/package.json').version,
+            onlyModules: ['node-pty']
+          }).then(() => console.log('rebuild done')).catch(e => { console.error(e); process.exit(1) })
+          "
+
+      - name: Install Claude Code ${{ env.P19_CLAUDE_VERSION }} into its own prefix
+        shell: bash
+        env:
+          PREFIX: ${{ runner.temp }}/p19-claude
+          NPM_CACHE: ${{ runner.temp }}/npm-p19-claude-cache
+        run: npm install --global --prefix "$PREFIX" --ignore-scripts --cache "$NPM_CACHE" --no-audit --no-fund "@anthropic-ai/claude-code@$P19_CLAUDE_VERSION"
+
+      - name: Install Codex ${{ env.P19_CODEX_VERSION }} into its own prefix
+        shell: bash
+        env:
+          PREFIX: ${{ runner.temp }}/p19-codex
+          NPM_CACHE: ${{ runner.temp }}/npm-p19-codex-cache
+        run: npm install --global --prefix "$PREFIX" --ignore-scripts --cache "$NPM_CACHE" --no-audit --no-fund "@openai/codex@$P19_CODEX_VERSION"
+
+      - name: Locate the two native programs
+        id: bin
+        run: node helper/probes/p19-record.cjs locate "${{ runner.temp }}/p19-claude" "${{ runner.temp }}/p19-codex"
+
+      - name: Run probe P19
+        shell: bash
+        env:
+          P19_CLAUDE: ${{ steps.bin.outputs.claude }}
+          P19_CODEX: ${{ steps.bin.outputs.codex }}
+          P19_OUT: ${{ runner.temp }}/probe-p19
+        run: node helper/probes/p19-record.cjs run --root . --out "$P19_OUT" --claude "$P19_CLAUDE" --codex "$P19_CODEX" --conpty both
+
+      - name: Upload the recordings and the result
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: probe-p19-${{ matrix.os }}
+          path: ${{ runner.temp }}/probe-p19
+          if-no-files-found: warn
+          retention-days: 30
+
+  # Real-CLI conformance for Claude Code (aicc_planning#368). It runs only when
+  # asked: a dispatch with `claude_rc_version`, which the daily upstream CLI watch
+  # (upstream-cli-watch.yml) does when a newer Claude Code is published. There is
+  # no PR or push leg: nothing a PR changes can change what the published CLI
+  # prints, and Claude Code ships almost daily.
+  #
+  # Two legs per OS: the app's own floor (CLAUDE_MIN_MANAGED_CLI_VERSION, read
+  # from the code), which shows the checks themselves hold on a version they
+  # were written against, and the dispatched version, the one being asked about.
+  # Each runs the CLI with no sign-in, no network request of ours and no secret,
+  # in a fresh, empty CLAUDE_CONFIG_DIR, and checks (tests/integration/
+  # claude-cli-conformance.test.ts, which reads the help through
+  # claude-conformance-lib.mjs):
+  #   1. the install answers `claude --version` with the version asked for, the
+  #      app's own reader (parseClaudeVersion) reads it, and the managed-launch
+  #      floor check (claudeManagedCliCompatibility) accepts it;
+  #   2. `claude --help` still lists every switch of the reviewer's constant
+  #      command line (CLAUDE_REVIEW_ARGS), and --output-format still offers json;
+  #   3. --permission-mode still offers every mode the launch picker writes;
+  #   4. `claude auth --help` lists login, logout and status, and `claude auth
+  #      login --help` lists the three sign-in methods and --email.
+  # Not driven here, because each needs a sign-in, a model call or a live
+  # session: the hooks run against a real Claude (tests/integration/hooks/
+  # real-claude.test.ts), the statusline and transcript shapes, and the
+  # authority census (scripts/gen-claude-authority-manifest.mjs), a maintainer
+  # tool that compares with one pinned Windows binary byte for byte.
+  #
+  # The CLI is installed from its PLATFORM package (`@anthropic-ai/claude-code-
+  # <os>-<arch>`: the native binary, no install script, no bin), with
+  # --ignore-scripts, into a prefix of its own: nothing of Anthropic's or
+  # anyone's runs at install time. The job holds no secrets, and every
+  # third-party action is pinned by commit.
+  claude-conformance:
+    if: github.event_name == 'workflow_dispatch' && inputs.claude_rc_version != ''
+    name: Claude Code CLI ${{ matrix.cli }} (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2025, macos-latest, ubuntu-latest]
+        cli: [minimum, rc]
+    env:
+      CCC_CLAUDE_CONFORMANCE_KIND: ${{ matrix.cli }}
+      CCC_CLAUDE_CONFORMANCE_PROVE_RED: ${{ inputs.conformance_prove_red && '1' || '0' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      # The suite imports only pure modules of the app (the reviewer's argv, the
+      # version floor, the sign-in methods, the permission modes), so there is no
+      # native rebuild and no Electron binary.
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Resolve this leg's Claude Code version
+        id: ver
+        env:
+          RC_VERSION: ${{ inputs.claude_rc_version }}
+        run: node tests/integration/claude-conformance-ci.mjs version ${{ matrix.cli }}
+
+      - name: Resolve this runner's Claude Code package
+        id: pkg
+        run: node tests/integration/claude-conformance-ci.mjs package
+
+      - name: Install Claude Code ${{ steps.ver.outputs.version }} into its own prefix
+        shell: bash
+        env:
+          CLAUDE_VERSION: ${{ steps.ver.outputs.version }}
+          CLAUDE_PACKAGE: ${{ steps.pkg.outputs.package }}
+          PREFIX: ${{ runner.temp }}/claude-${{ matrix.cli }}
+          NPM_CACHE: ${{ runner.temp }}/npm-claude-cache
+        run: npm install --global --prefix "$PREFIX" --ignore-scripts --cache "$NPM_CACHE" --no-audit --no-fund "$CLAUDE_PACKAGE@$CLAUDE_VERSION"
+
+      # bash on every OS: the default shell on Windows is PowerShell, where `$NAME`
+      # is not an environment variable.
+      - name: Locate the installed CLI
+        id: bin
+        shell: bash
+        env:
+          CLAUDE_PACKAGE: ${{ steps.pkg.outputs.package }}
+          PREFIX: ${{ runner.temp }}/claude-${{ matrix.cli }}
+        run: node tests/integration/claude-conformance-ci.mjs bin "$PREFIX" "$CLAUDE_PACKAGE"
+
+      - name: A fresh, empty Claude Code folder for every run of the CLI
+        id: home
+        run: node tests/integration/claude-conformance-ci.mjs config
+
+      - name: Real-CLI conformance (version, reviewer switches, permission modes, sign-in commands)
+        env:
+          CCC_CLAUDE_CONFORMANCE_BIN: ${{ steps.bin.outputs.bin }}
+          CCC_CLAUDE_CONFORMANCE_VERSION: ${{ steps.ver.outputs.version }}
+          CCC_CLAUDE_CONFORMANCE_CONFIG_DIR: ${{ steps.home.outputs.config }}
+        run: npx vitest run tests/integration/claude-cli-conformance.test.ts
 
   # SSH multi-session smoke (#24 regression gate; aicc_planning#28). Real `ssh`
   # against an EPHEMERAL localhost sshd — no external hosts or credentials, so

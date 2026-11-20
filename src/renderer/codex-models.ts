@@ -9,6 +9,7 @@
  */
 import { buildModelPickerRows, codexEffortRuns, type ModelRegistry } from '../shared/model-registry'
 import { effortsForModel } from './lib/claude-cli-options'
+import codexCatalogueJson from '../../resources/codex-model-catalogue.json'
 
 export interface CodexPickerOption {
   value: string
@@ -54,9 +55,29 @@ export function codexEffortSupported(registry: ModelRegistry, model: string | nu
   return codexEffortRuns(registry, model, effort)
 }
 
+/** The part of resources/codex-model-catalogue.json this file reads: the
+ *  supported versions the list was read from, and each model's own versions
+ *  when not every one of them lists it. */
+export interface CodexCatalogue {
+  cliVersions?: string[]
+  models?: { id: string; cliVersions?: string[] }[]
+}
+
+/** The ids every supported Codex version in the catalogue lists. */
+function idsEveryCodexLists(catalogue: CodexCatalogue): Set<string> {
+  const versions = catalogue.cliVersions ?? []
+  return new Set((catalogue.models ?? [])
+    .filter((m) => !m.cliVersions || versions.every((v) => m.cliVersions!.includes(v)))
+    .map((m) => m.id))
+}
+
 /** The model a new Codex config starts on (P3.8 round 1, J1): the first model
- *  of the Codex list, as a new Claude config starts on the first row of
- *  Claude's (its newest Opus); '' (Default) when the list is empty. */
-export function codexNewConfigModel(registry: ModelRegistry): string {
-  return buildModelPickerRows(registry, 'codex')[0]?.value ?? CODEX_DEFAULT
+ *  of the Codex list that every supported Codex version lists, as a new Claude
+ *  config starts on the first row of Claude's (its newest Opus). A model only
+ *  newer versions list (GPT-6.2-Sol, from 0.170.0) is skipped, so a new config
+ *  never starts on a model the installed CLI may not offer; '' (Default, Codex
+ *  chooses) when no model in the list qualifies. */
+export function codexNewConfigModel(registry: ModelRegistry, catalogue: CodexCatalogue = codexCatalogueJson): string {
+  const everywhere = idsEveryCodexLists(catalogue)
+  return buildModelPickerRows(registry, 'codex').find((r) => everywhere.has(r.value))?.value ?? CODEX_DEFAULT
 }

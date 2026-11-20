@@ -3,8 +3,10 @@ import path from 'node:path'
 import os from 'node:os'
 import { getConductorMcpPort, issueMcpSessionToken } from '../conductor-mcp-server'
 import { getProvider } from '../providers'
+import type { HeldToolRelay } from '../providers/types'
 import { atomicWriteSecure, mkdirSecure, hardenCredentialDir } from '../account-profiles'
 import { logWarn } from '../debug-logger'
+import { SID_RE } from '../session-helper/protocol'
 
 /**
  * Path to the local-session settings file. Mirrors the SSH remote layout
@@ -238,6 +240,94 @@ export function writeLocalSessionMcpConfig(sessionId: string, includeConductor =
   return atomicJsonWrite(cfgPath, cfg)
 }
 
+/** What switchMcpConfigToHelper did (2.1.3-beta.11, plan section B2). */
+export type HelperMcpConfigResult =
+  /** The file's `conductor` entry now starts the helper's relay. */
+  | 'switched'
+  /** The file holds no `conductor` entry in the loopback form
+   *  writeLocalSessionMcpConfig writes for this session (the built-in tools
+   *  are off, the server was not started at the spawn, or the file was not
+   *  written): nothing to switch. */
+  | 'no-conductor'
+  /** A path the relay needs cannot be written into the file exactly. */
+  | 'unsafe-path'
+  /** The file could not be written; it was left as it was. */
+  | 'not-written'
+
+/** Whether `entry` is the `conductor` entry writeLocalSessionMcpConfig writes
+ *  for `sessionId`: its two fields alone, the SSE type, and a loopback URL
+ *  naming this session and carrying a token. */
+function isLoopbackConductorEntry(entry: unknown, sessionId: string): boolean {
+  if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return false
+  const e = entry as Record<string, unknown>
+  const keys = Object.keys(e)
+  if (keys.length !== 2 || !keys.includes('type') || !keys.includes('url') || e.type !== 'sse' || typeof e.url !== 'string') return false
+  const head = 'http://localhost:'
+  let mid: string
+  try { mid = `/sse?cccSessionId=${encodeURIComponent(sessionId)}&token=` } catch { return false }
+  if (!e.url.startsWith(head)) return false
+  const at = e.url.indexOf(mid, head.length)
+  if (at < 0) return false
+  const token = e.url.slice(at + mid.length)
+  return /^[0-9]{1,5}$/.test(e.url.slice(head.length, at)) && token.length > 0 && !/[&\s]/.test(token)
+}
+
+/** A control character anywhere (C0, DEL, C1). */
+const RELAY_CONTROL_RE = /[\u0000-\u001f\u007f-\u009f]/
+/** Half of a surrogate pair on its own: not Unicode, so no program reads it back as written. */
+const RELAY_LONE_SURROGATE_RE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/
+
+/** Whether `p` can be the helper's path or its store's in a session's MCP
+ *  config exactly: absolute (on Windows from a drive's root, never a network
+ *  or device path), with no control character and no lone surrogate. */
+function relayPathWritable(p: unknown, win32: boolean): p is string {
+  if (typeof p !== 'string' || p.length === 0 || RELAY_CONTROL_RE.test(p) || RELAY_LONE_SURROGATE_RE.test(p)) return false
+  return win32 ? /^[A-Za-z]:\\/.test(p) : p.startsWith('/')
+}
+
+/** The `conductor` entry that starts the helper's relay mode as the
+ *  session's tool server. The name stays, so the tools a session is allowed
+ *  (CANVAS_TOOL_PERMISSIONS above) apply unchanged. */
+function relayConductorEntry(relay: HeldToolRelay): Record<string, unknown> {
+  return { type: 'stdio', command: relay.helperPath, args: ['mcp', '--store', relay.store, '--session', relay.sid] }
+}
+
+/**
+ * Point a Claude Code session's per-session MCP config at the session
+ * helper's relay, in place (2.1.3-beta.11, plan section B2). The file was
+ * written for the loopback server by writeLocalSessionMcpConfig in the same
+ * synchronous run as the spawn call (pty-manager.ts: spawnAgentPty, then
+ * writeLocalSessionMcpConfig), so always before the holder answers
+ * term.launched. Once the session's holder has launched it and before the
+ * launch line reaches it (Claude Code reads the file when it starts), this
+ * replaces the `conductor` entry's loopback address and credential with the
+ * relay (`<helper> mcp --store <store> --session <sid>`); every other key and
+ * entry stays as it was. Only a file that holds the app's own loopback entry
+ * for this session is switched (the tools are on). Written through the same
+ * owner-only writer. FAIL-SAFE: on anything but 'switched' the file is as it
+ * was, and the session keeps its loopback route. The paths go into this
+ * session's own file and nowhere else.
+ */
+export function switchMcpConfigToHelper(a: { configPath: string; sessionId: string; relay: HeldToolRelay; platform?: NodeJS.Platform }): HelperMcpConfigResult {
+  const cfgPath = a.configPath
+  let cfg: unknown
+  try {
+    cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf-8'))
+  } catch {
+    return 'no-conductor'
+  }
+  if (!cfg || typeof cfg !== 'object' || Array.isArray(cfg)) return 'no-conductor'
+  const servers = (cfg as Record<string, unknown>).mcpServers
+  if (!servers || typeof servers !== 'object' || Array.isArray(servers)) return 'no-conductor'
+  if (!Object.prototype.hasOwnProperty.call(servers, 'conductor') || !isLoopbackConductorEntry((servers as Record<string, unknown>).conductor, a.sessionId)) return 'no-conductor'
+  const win32 = (a.platform ?? process.platform) === 'win32'
+  if (!relayPathWritable(a.relay.helperPath, win32) || !relayPathWritable(a.relay.store, win32) || !SID_RE.test(a.relay.sid)) return 'unsafe-path'
+  // Each key keeps its place: an existing key set again in a literal stays
+  // where it was, so only the `conductor` entry's own text changes.
+  const next = { ...(cfg as Record<string, unknown>), mcpServers: { ...(servers as Record<string, unknown>), conductor: relayConductorEntry(a.relay) } }
+  return writeJsonSecurely(cfgPath, next) ? 'switched' : 'not-written'
+}
+
 /**
  * Write the per-session status-URL file, 0600, through the same
  * mkdirSecure + hardenCredentialDir + atomic-rename writer the token-bearing
@@ -302,13 +392,20 @@ export function removeLocalSessionMcpConfig(sessionId: string): void {
  * path).
  */
 function atomicJsonWrite(filePath: string, data: unknown): string {
+  writeJsonSecurely(filePath, data)
+  return filePath
+}
+
+/** atomicJsonWrite's write, answering whether it wrote. */
+function writeJsonSecurely(filePath: string, data: unknown): boolean {
   const dir = path.dirname(filePath)
   try {
     mkdirSecure(dir)
     hardenCredentialDir(dir)
     atomicWriteSecure(filePath, JSON.stringify(data, null, 2), 0o600)
+    return true
   } catch (err) {
     logWarn(`[per-session] secure write of ${path.basename(filePath)} failed (${String(err)}); left the previous file`)
+    return false
   }
-  return filePath
 }

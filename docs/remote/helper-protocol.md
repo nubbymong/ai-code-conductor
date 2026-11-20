@@ -1002,9 +1002,9 @@ server can be a relay that its CLI starts, carrying the session's tool calls
 through its holder to the app, so the Conductor tools no longer depend on a
 port of one app run. These are the three messages section 8 names for R8, on
 a holder's own endpoint. A holder from 2.1.3-beta.10 offers `mcp` in its
-hello. No connection the app makes acks it yet, and nothing in the app starts
-the relay or names it: the step that wires a session's tools to it comes
-later, behind the agent sessions' setting. The holder only numbers a stream
+hello. From 2.1.3-beta.11 the app acks it and names the relay to a held
+session's CLI, behind the agent sessions' setting ("What the app wires",
+below). The holder only numbers a stream
 and passes its messages on: it reads no message, and runs, opens and writes
 nothing for one. Fixtures: the `mcp` part of `helper/fixtures/local.json`.
 
@@ -1084,9 +1084,31 @@ nothing for one. Fixtures: the `mcp` part of `helper/fixtures/local.json`.
   each relay is told, on the relay's number; it is not told itself, and no
   tool message follows its last word, as no hook event does. A holder that
   ends tells no one: each relay reads the end of its connection.
+- **What the app wires (2.1.3-beta.11).** With the agent sessions' setting
+  on (it is off by default), each connection of a held agent session acks
+  `mcp`, and the session's CLI is given the relay as its `conductor` tool
+  server: the helper copy's path, then `mcp --store <folder> --session
+  <sid>`. A Claude Code session's per-session MCP config file is switched to
+  it once the holder launched the session and before its launch line is
+  typed; a CLI that names its tool servers in its launch flags gets it in the
+  launch the holder runs instead, in place of the loopback address, its
+  switch and its credential variable. The server keeps its name, so the
+  tools a session is allowed and their approvals apply unchanged. The app
+  serves a stream only for a session it switched, under the tab's id, and
+  only while its tool server is started. A session that cannot be switched
+  (no `mcp` in its holder's hello, the helper copy not known, the tool
+  server not started, no conductor entry of the app's in the file or the
+  launch, the file not written, a path that cannot be given exactly, a
+  launch through cmd.exe whose quoting rule cannot carry the relay's
+  arguments, or a relay form the helper would refuse) keeps the
+  loopback route, with one log line. A run of the app's own is never
+  switched.
 - **What is not here yet.** While no connection takes tool streams, as when
   the app is away, a relay's `mcp.open` is `not-connected` and the relay
-  exits. Holding a call for about 30 seconds and the fixed updating answer
+  exits. A relay whose stream ended stays ended: when the app's connection to
+  a session's holder drops and comes back, that session's CLI has no tool
+  server until it starts one again (in Claude Code, /mcp) or the session is
+  restarted. Holding a call for about 30 seconds and the fixed updating answer
   are protocol change 9 (ADR-030), a later step. The app's side, when it
   sends `mcp`, must keep each message to what the holder reads: JSON with no
   escaped lone surrogate and at most 31 levels deep, or the frame is

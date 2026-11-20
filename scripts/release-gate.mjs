@@ -663,6 +663,11 @@ export function evaluateCarryForward({ version, sha, declaration, ciRuns, ciJobs
   return { ok: problems.length === 0, applies: true, problems, pr, families, head, tag: base.tag, base: base.commit }
 }
 
+/** Versions as a sentence names them: "a", "a and b", "a, b and c" (aicc_planning#346). @param {string[]} versions */
+function versionList(versions) {
+  return versions.length > 1 ? `${versions.slice(0, -1).join(', ')} and ${versions[versions.length - 1]}` : versions.join('')
+}
+
 /**
  * Render the verdicts as the lines the gate prints; a verdict left out prints nothing.
  *
@@ -715,7 +720,7 @@ export function formatReport({ version, repo, milestoneResult, modelsResult, exp
   if (codexResult) {
     const r = codexResult
     const versions = codexMeta && Array.isArray(codexMeta.cliVersions) && codexMeta.cliVersions.length
-      ? ` Codex ${codexMeta.cliVersions.join(' and ')}` : ' the Codex CLI'
+      ? ` Codex ${versionList(codexMeta.cliVersions)}` : ' the Codex CLI'
     const at = codexMeta && codexMeta.fetchedAt ? ` (list read ${codexMeta.fetchedAt})` : ''
     if (r.ok) out.push(`  OK    Codex models: the registry covers all ${r.covered.length} models${versions} lists${at}`)
     else {

@@ -114,7 +114,7 @@ On-demand reports over your own usage, Claude Code's and Codex's, runnable acros
 | | |
 |---|---|
 | **Claude Code** | The [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code), installed and authenticated, unless you run Codex only |
-| **Codex** (optional) | OpenAI's Codex CLI, version 0.153.4 or newer, tested up to 0.156.1 (a newer one still runs, with a notice) (`npm install -g @openai/codex`; in PowerShell on Windows, `npm.cmd install -g @openai/codex`). Sign in to Codex accounts from Settings → Accounts. Codex runs on this computer only in this release |
+| **Codex** (optional) | OpenAI's Codex CLI, version 0.153.4 or newer, tested up to 0.171.0 (a newer one still runs, with a notice) (`npm install -g @openai/codex`; in PowerShell on Windows, `npm.cmd install -g @openai/codex`). Sign in to Codex accounts from Settings → Accounts. Codex runs on this computer only in this release |
 | **Node.js** (optional) | 22 or later. Without it the app still starts sessions, but these need it: the npm install of Claude Code or Codex (Anthropic's installer and OpenAI's need none), the resume list a new session opens, a Claude Code session's status line and, on macOS and Linux, the Codex hooks. Without Node.js a new session starts Claude Code or Codex directly; in a Claude Code session, /resume still lists earlier conversations |
 | **Resources folder** | On a drive that keeps file permissions (NTFS on Windows), not a FAT or exFAT drive or a network share that does not keep them; otherwise the app's status line, the resume list and the Codex hooks are not used |
 | **Windows** | 10 or 11, x64. Installers are code-signed (SSL.com, publisher "Nicholas Moger"); SmartScreen may still prompt on a brand-new release — More info → Run anyway |

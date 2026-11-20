@@ -45,8 +45,10 @@
 //   - worker_threads Workers: one whose script is in this project's node_modules (a
 //     toolchain worker such as esbuild's) starts guarded, without preloads in its
 //     execArgv (one the caller names is refused), every other one is refused;
-//     process.execve and process.binding('fs' | 'fs_dir' | 'spawn_sync' |
-//     'process_wrap') are refused.
+//   - process.execve: refused in a vitest worker; in a probe or node child it is
+//     checked as a spawn of that program (working folder, arguments, environment,
+//     the preload and marker added) and refused while a refusal is unreported;
+//     process.binding('fs' | 'fs_dir' | 'spawn_sync' | 'process_wrap') is refused.
 // Paths are compared after resolving `..` (on POSIX also physically, from a link's
 // target, as the kernel reads it; both readings are checked), separators, case
 // (win32, darwin), trailing dots and spaces, stream suffixes, `\\?\` `\\.\` `\??\` prefixes, file:
@@ -60,8 +62,9 @@
 // removes, moves or touches the link, never what it points at. Any other entry is
 // checked by its real path as well.
 //
-// NOT covered: native addons (better-sqlite3 and node-pty write natively); a child
-// that is not node beyond its environment, working folder and arguments (a native
+// NOT covered: native addons (better-sqlite3 and node-pty write natively); a child,
+// or a program a probe replaces itself with, that is not node beyond its
+// environment, working folder and arguments (a native
 // tool that finds the profile through the OS rather than the environment, e.g. to
 // expand `~`, reaches the real one); a process started without going through these
 // entry points; shell re-assembly of an argument: quotes or carets inside a word,
@@ -1772,12 +1775,29 @@ function patchChildProcess(state) {
   }
 }
 
-/** process.execve replaces this process with one the guard never sees: refuse it. @param {GuardState} state */
+/**
+ * process.execve replaces this process with another program. In a vitest worker it is
+ * refused: the worker would be replaced. In a probe or a node child (entry 'probe') it
+ * is checked as a spawn of the same program is (this process's working folder, the
+ * arguments and the environment, which gets the preload and the marker as a spawned
+ * child's does) and handed to Node: a launcher that replaces itself with its program,
+ * as the Codex CLI's npm launcher (bin/codex.js, 0.170.0) does on a Node that offers
+ * process.execve, runs in a probe as it runs for a user (aicc_planning#347). It is
+ * refused there too while a refusal is unreported, because the replaced process could
+ * not exit non-zero for it.
+ * @param {GuardState} state
+ */
 function patchExecve(state) {
   const p = /** @type {any} */ (process)
   if (typeof p.execve !== 'function') return
-  p.execve = function execve(/** @type {unknown} */ file) {
-    throw violation(state, 'process.execve', String(file), { root: '(process image)', form: String(file), reason: 'would replace this process with an unguarded one' })
+  const orig = p.execve
+  p.execve = function execve(/** @type {unknown} */ file, /** @type {unknown} */ args, /** @type {unknown} */ env) {
+    const hit = (/** @type {string} */ reason) => ({ root: '(process image)', form: String(file), reason })
+    if (state.entry !== 'probe') throw violation(state, 'process.execve', String(file), hit('would replace this test worker'))
+    if (state.violations.length > 0) throw violation(state, 'process.execve', String(file), hit('would replace this probe before its refused operations are reported'))
+    const argv = Array.isArray(args) ? args.slice(1) : []
+    const next = checkSpawn(state, 'process.execve', { exe: file, args: argv, options: { env: isOptionsObject(env) ? env : process.env } })
+    return orig.call(this, file, args, next.env)
   }
 }
 

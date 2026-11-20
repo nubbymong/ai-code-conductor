@@ -98,15 +98,17 @@ export interface AllowanceReading {
 }
 
 // ChatGPT plans as a ChatGPT sign-in reports them: the PlanType list of the
-// app-server schema, identical in CLI 0.153.4, 0.155.1 and 0.157.1. 'unknown'
-// is left out on purpose: an unknown plan shows no pill rather than the word
-// "Unknown".
+// app-server schema, identical in CLI 0.153.4, 0.155.1 and 0.157.1. CLI
+// 0.170.0 adds promax, sci and sci_plus, named here as that CLI's own
+// display names give them (aicc_planning#348). 'unknown' is left out on
+// purpose: an unknown plan shows no pill rather than the word "Unknown".
 const PLAN_LABELS: Readonly<Record<string, string>> = Object.freeze({
   free: 'Free',
   go: 'Go',
   plus: 'Plus',
   pro: 'Pro',
   prolite: 'Pro Lite',
+  promax: 'Pro (Max)',
   team: 'Team',
   self_serve_business_prolite: 'Business',
   self_serve_business_usage_based: 'Business',
@@ -118,6 +120,8 @@ const PLAN_LABELS: Readonly<Record<string, string>> = Object.freeze({
   edu: 'Edu',
   edu_plus: 'Edu Plus',
   edu_pro: 'Edu Pro',
+  sci: 'Academic Researchers',
+  sci_plus: 'Academic Researchers Plus',
 })
 
 /** The plan pill's text for a reported plan type, or null when the plan is

@@ -169,12 +169,12 @@ describe('Code review switches: live', () => {
   })
 
   it('names each switch by its title alone and describes it by its lines', () => {
-    setup({ snap: snapshot({}, { codex: { review: { ready: false } } }) })
+    setup({ snap: snapshot({ accounts: [claudeMain, claudeHome] }, { codex: { review: { ready: false } } }) })
     renderTools()
     expect(sw('codexReview').getAttribute('aria-label')).toBe('Codex review')
     expect(sw('claudeReview').getAttribute('aria-label')).toBe('Claude review')
     const described = (key: string) => (sw(key).getAttribute('aria-describedby') ?? '').split(' ').map((id) => document.getElementById(id)?.textContent)
-    expect(described('codexReview')).toContain('No Codex account can run reviews. Add a Codex account.')
+    expect(described('codexReview')).toContain("Codex's own sign-in on this computer (~/.codex) cannot run reviews. Add a Codex account in Accounts.")
     expect(described('claudeReview')).toContain('Reviews use: me@example.com (default). Change in Accounts.')
   })
 
@@ -281,12 +281,14 @@ describe('Code review switches: off and cannot run', () => {
   })
 
   it('says no Codex account exists, as a warning, when there is none', () => {
-    setup({ snap: snapshot({}, { codex: { review: { ready: false } } }) })
+    // No Codex account listed at all (the state the line is for).
+    setup({ snap: snapshot({ accounts: [claudeMain, claudeHome] }, { codex: { review: { ready: false } } }) })
     renderTools()
     expect(sw('codexReview').disabled).toBe(true)
-    // O5: with no account at all, nothing names the sign-in already on this
-    // computer, which is no longer offered.
-    expect(message('codexReview')).toBe('No Codex account can run reviews. Add a Codex account.')
+    // O5: the sign-in already on this computer is never taken in as an
+    // account, so with no account at all the row names it (by the folder main
+    // gives) and says it cannot review; the next block pins the variants.
+    expect(message('codexReview')).toBe("Codex's own sign-in on this computer (~/.codex) cannot run reviews. Add a Codex account in Accounts.")
     expect(q('review-tool-codexReview-message')!.getAttribute('data-tone')).toBe('warn')
     expect(q('review-tool-codexReview-message')!.style.color).toBe('var(--status-warning)')
   })
@@ -412,6 +414,105 @@ describe('Code review switches: this computer\'s sign-in by its folder', () => {
     setup({ snap: snapshot({ accounts: [local, claudeMain, claudeHome], externalDefaults: [{ providerId: 'codex' }] }, { codex: { review: { ready: false, accountId: local.id, source: 'provider-default' } } }) })
     renderTools()
     expect(message('codexReview')).toBe("No Codex account can run reviews. Add a Codex account (a sign-in from this computer's Codex folder cannot review).")
+  })
+})
+
+describe('Code review switches: no Codex account at all, with the link to Accounts', () => {
+  const noAccount = (over: Partial<AccountsSnapshot> = {}) => snapshot({ accounts: [claudeMain, claudeHome], ...over }, { codex: { review: { ready: false } } })
+  const codexLink = () => q('review-tool-codexReview-message-accounts-link') as HTMLButtonElement | null
+
+  it("names this computer's own Codex sign-in by the folder main gives, and says it cannot review", () => {
+    setup({ snap: noAccount() })
+    renderTools()
+    expect(message('codexReview')).toBe("Codex's own sign-in on this computer (~/.codex) cannot run reviews. Add a Codex account in Accounts.")
+    expect(q('review-tool-codexReview-message')!.getAttribute('data-tone')).toBe('warn')
+    expect(sw('codexReview').disabled).toBe(true)
+  })
+
+  it('uses the folder main names (CODEX_HOME, when set), never a fixed ~/.codex', () => {
+    setup({ snap: noAccount({ externalDefaults: [{ providerId: 'codex', home: '~/codex-alt' }] }) })
+    renderTools()
+    expect(message('codexReview')).toBe("Codex's own sign-in on this computer (~/codex-alt) cannot run reviews. Add a Codex account in Accounts.")
+  })
+
+  it('"Accounts" is a link that opens Settings, Accounts, as the Claude row\'s "Change in Accounts" does', async () => {
+    setup({ snap: noAccount() })
+    renderTools()
+    const link = codexLink()!
+    expect(link).toBeTruthy()
+    expect(link.tagName).toBe('BUTTON')
+    expect(link.getAttribute('type')).toBe('button')
+    expect(link.textContent).toBe('Accounts')
+    expect(q('review-tool-codexReview-message')!.contains(link)).toBe(true)
+    await act(async () => { link.click() })
+    expect(onOpenAccounts).toHaveBeenCalledTimes(1)
+    // Opening Accounts is all it does: the locked switch is never written.
+    expect(updateSettings).not.toHaveBeenCalled()
+  })
+
+  it('with no folder named by main, keeps the short line and adds the same link', async () => {
+    for (const externalDefaults of [[{ providerId: 'codex' as const }], []]) {
+      setup({ snap: noAccount({ externalDefaults }) })
+      renderTools()
+      expect(message('codexReview'), JSON.stringify(externalDefaults)).toBe('No Codex account can run reviews. Add a Codex account in Accounts.')
+      expect(q('review-tool-codexReview-message')!.getAttribute('data-tone')).toBe('warn')
+      const link = codexLink()!
+      expect(link.textContent).toBe('Accounts')
+      onOpenAccounts.mockClear()
+      await act(async () => { link.click() })
+      expect(onOpenAccounts).toHaveBeenCalledTimes(1)
+    }
+  })
+
+  it("does not blame this computer's own sign-in when the app holds a Codex account that is only inactive", async () => {
+    // An app-added account made inactive, never made the reviewer: main picks
+    // no reviewer (the default must be active), so it sends no account id. The
+    // cause is that account, not ~/.codex: keep the short line and its link.
+    const inactive = account({ id: 'acc-inactive', providerId: 'codex', identityId: 'id-work', lifecycle: 'inactive', isProviderDefault: false, isReviewerDefault: false })
+    setup({ snap: noAccount({ accounts: [inactive, claudeMain] }) })
+    renderTools()
+    expect(message('codexReview')).toBe('No Codex account can run reviews. Add a Codex account in Accounts.')
+    expect(q('review-tool-codexReview-message')!.getAttribute('data-tone')).toBe('warn')
+    expect(sw('codexReview').disabled).toBe(true)
+    const link = codexLink()!
+    expect(link).toBeTruthy()
+    expect(link.textContent).toBe('Accounts')
+    await act(async () => { link.click() })
+    expect(onOpenAccounts).toHaveBeenCalledTimes(1)
+    expect(reviewToolView(noAccount({ accounts: [inactive, claudeMain] }), 'codexReview', { masterOn: true, platform: 'win32', loaded: true, settings: {} }))
+      .toMatchObject({ message: 'No Codex account can run reviews. Add a Codex account in Accounts.' })
+  })
+
+  it('reads as one sentence to a screen reader: the switch is described by the whole line, link included', () => {
+    setup({ snap: noAccount() })
+    renderTools()
+    const ids = (sw('codexReview').getAttribute('aria-describedby') ?? '').split(' ')
+    expect(ids).toContain('review-tool-codexReview-message')
+    expect(document.getElementById('review-tool-codexReview-message')!.textContent)
+      .toBe("Codex's own sign-in on this computer (~/.codex) cannot run reviews. Add a Codex account in Accounts.")
+  })
+
+  it('reviewToolView still carries the whole line as plain text, for the Conductor MCP card', () => {
+    const ctx = { masterOn: true, platform: 'win32', loaded: true, settings: {} }
+    expect(reviewToolView(noAccount(), 'codexReview', ctx)).toMatchObject({
+      disabled: true, warn: true,
+      message: "Codex's own sign-in on this computer (~/.codex) cannot run reviews. Add a Codex account in Accounts.",
+    })
+    expect(reviewToolView(noAccount({ externalDefaults: [] }), 'codexReview', ctx))
+      .toMatchObject({ message: 'No Codex account can run reviews. Add a Codex account in Accounts.' })
+  })
+
+  it('leaves the Claude row alone: the same line as before, no link in it', () => {
+    setup({ snap: snapshot({}, { claude: { review: { ready: false } } }) })
+    renderTools()
+    expect(message('claudeReview')).toBe('No Claude account can run reviews right now.')
+    expect(q('review-tool-claudeReview-message')!.querySelector('button')).toBeNull()
+    // Nor does the Codex row's other states grow a link: this computer's own
+    // sign-in as a registered account keeps its own wording.
+    setup({ snap: snapshot({ accounts: [local, claudeMain] }, { codex: { review: { ready: false, accountId: local.id, source: 'provider-default' } } }) })
+    renderTools()
+    expect(message('codexReview')).toBe('No Codex account can run reviews. Add a Codex account (a sign-in from ~/.codex cannot review).')
+    expect(codexLink()).toBeNull()
   })
 })
 

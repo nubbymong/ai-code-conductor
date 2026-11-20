@@ -1857,9 +1857,13 @@ describe('2.1.1: the stable entry and its known issues', () => {
     expect(notice[0]).toMatch(/Claude Code version .* is no longer used/)
   })
 
+  // 2.1.3-beta.11 (aicc_planning#185) raised the newest tested Codex past
+  // 0.156.1. The 2.1.1 What's New row is history and keeps the version 2.1.1
+  // was tested with; the Feature Guide entry, which Ask Conductor reads today,
+  // follows the version the app checks.
   it('names the Codex version this release is tested with, as the app checks it', async () => {
     const { CODEX_MAX_TESTED_VERSION } = await import('../../../src/main/providers/codex/cli-contract')
-    expect(rows().some((d) => d.includes(`newer than ${CODEX_MAX_TESTED_VERSION},`))).toBe(true)
+    expect(rows().some((d) => d.includes('newer than 0.156.1,'))).toBe(true)
     expect(paraStarting(`This release is tested with Codex up to version ${CODEX_MAX_TESTED_VERSION}.`)).toBeDefined()
   })
 
@@ -1935,7 +1939,9 @@ describe('2.1.1: the stable entry and its known issues', () => {
     const k = knownIssues()
     expect(k.indexOf("If Codex cannot check a closed account's allowance")).toBeGreaterThan(k.indexOf('This release is tested with Codex up to version'))
     expect(row).toContain('such as GPT-6.1-Sol, and Sentinel then says it is not in the model picker: choose Default: follows Codex in the config')
-    expect(entry).toContain('such as GPT-6.1-Sol, and Sentinel then says that model is not in the picker; choose Default: follows Codex in the config')
+    // aicc_planning#347 put GPT-6.1-Sol in the picker, so the entry names no
+    // example any more; the 2.1.1 row above is history and keeps it.
+    expect(entry).toContain('A newer Codex can also offer a model the model picker does not list yet, and Sentinel then says that model is not in the picker; choose Default: follows Codex in the config')
     const models = fs.readFileSync(path.resolve(__dirname, '..', '..', '..', 'src', 'renderer', 'codex-models.ts'), 'utf8')
     expect(models).toContain("label: 'Default: follows Codex'")
     const vision = paraStarting('After an in-app update on Windows (from 2.1.0, or from 2.1.1-beta.1 to beta.3),')

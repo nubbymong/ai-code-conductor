@@ -1,8 +1,8 @@
 {
   "schema": "wp1-legacy-codex-ledger/2",
   "predicateDigest": "100a1233edebdc39a5f9004d3fba980a89ebb15b25872e52076386bc84b03153",
-  "manifestPathDigest": "841585dd5f9d5f888d9f76f4094d8e0fb994e1a089c7c62660c54dc23ecff16b",
-  "manifestHead": "8deccf6debaf72da2a0b16b3169e60be2cb99969",
+  "manifestPathDigest": "fabfbed01579a8597a8a18f511f1a29819f5f586c49b71bc459e2d4faf76a39e",
+  "manifestHead": "0c4c926d4004823170494510308808f159ef7fdc",
   "dispositions": {
     "retain": "unchanged observable behaviour, characterization proof",
     "move": "moved behind a package boundary and/or adapted at the call site, regression proof (newPath when relocated)",
@@ -312,8 +312,18 @@
       ],
       "category": "OTHER",
       "disposition": "replace",
-      "evidence": "WP2 PR 4 P4.8 (rows 59, 60; OD20 D5, D7): ubuntu-latest in the test matrix; the codex-conformance job installs the minimum and pinned Codex CLI (a release candidate by dispatch) per OS and runs the no-sign-in checks, no secrets (WP1.30, WP1.71); tests/integration/codex-real-cli-conformance.test.ts; docs/wp1/evidence/ci-matrix.md; WP2 PR 4 P4.8 review (E-4, c75c3acb): every CLI run in the codex-conformance job gets a fresh CODEX_HOME, and the runner's own home is proven untouched (WP1.71); tests/integration/codex-conformance-ci.mjs; docs/wp1/evidence/ci-matrix.md; WP2 PR 4 P4.10 (60b39238, 2eb1b194): the Linux test job blocks after its first green run (CI run 37134624406), and the help captures are asserted on every OS once each OS was reviewed (WP1.30, WP1.71); docs/wp1/evidence/ci-matrix.md; 2.1.3-beta.1 process track (ADR-028): the codex-conformance job keeps its steps, its matrix and the versions it checks; only its start condition changed: on a PR it still needs ci-run, and another label change or an edit of the PR title or description no longer starts it again (a change of base branch does) (WP1.71); tests/unit/scripts/ci-cadence.test.ts",
+      "evidence": "WP2 PR 4 P4.8 (rows 59, 60; OD20 D5, D7): ubuntu-latest in the test matrix; the codex-conformance job installs the minimum and pinned Codex CLI (a release candidate by dispatch) per OS and runs the no-sign-in checks, no secrets (WP1.30, WP1.71); tests/integration/codex-real-cli-conformance.test.ts; docs/wp1/evidence/ci-matrix.md; WP2 PR 4 P4.8 review (E-4, c75c3acb): every CLI run in the codex-conformance job gets a fresh CODEX_HOME, and the runner's own home is proven untouched (WP1.71); tests/integration/codex-conformance-ci.mjs; docs/wp1/evidence/ci-matrix.md; WP2 PR 4 P4.10 (60b39238, 2eb1b194): the Linux test job blocks after its first green run (CI run 37134624406), and the help captures are asserted on every OS once each OS was reviewed (WP1.30, WP1.71); docs/wp1/evidence/ci-matrix.md; 2.1.3-beta.1 process track (ADR-028): the codex-conformance job keeps its steps, its matrix and the versions it checks; only its start condition changed: on a PR it still needs ci-run, and another label change or an edit of the PR title or description no longer starts it again (a change of base branch does) (WP1.71); tests/unit/scripts/ci-cadence.test.ts; ADR-030 probe P19 (2.1.3-beta.11 section A1): the dispatch-only probe-p19 job installs Claude Code and Codex into prefixes of their own with scripts off and runs the probe, read-only, no secrets (WP1.67); tests/unit/scripts/probe-p19-job.test.ts; 2.1.3-beta.11 (aicc_planning#368, WP1.71): the claude_rc_version input and the claude-conformance job added beside the Codex job, and a header comment that names the Codex rc job names the daily upstream CLI watch reads; no change to a Codex leg; tests/unit/scripts/upstream-cli-watch.test.ts, tests/integration/claude-conformance-lib.test.ts",
       "note": "the job's name, comments and test paths; no Codex code path; P04 (P4.8 review): CODEX_HOME set to fresh empty folders made by codex-conformance-ci.mjs homes for the PATH check and the flag-drift suite; no global home resolver"
+    },
+    {
+      "path": ".github/workflows/upstream-cli-watch.yml",
+      "predicates": [
+        "P14"
+      ],
+      "category": "OTHER",
+      "disposition": "added",
+      "evidence": "new 2.1.3-beta.11 CI work (aicc_planning#368): the daily upstream CLI watch workflow: it dispatches ci.yml on beta with the newest published Codex and Claude Code and fails on a red conformance job (WP1.71); tests/unit/scripts/upstream-cli-watch-workflow.test.ts, tests/unit/scripts/upstream-cli-watch.test.ts",
+      "note": "P14: the CLI name in comments and the ci.yml input it passes (codex_rc_version); no Codex code path, nothing here starts Codex"
     },
     {
       "path": "AGENTS.md",
@@ -446,14 +456,190 @@
       "note": "plan text, not a user-facing claim"
     },
     {
+      "path": "helper/fixtures/screens/codex-linux-first-screen.json",
+      "predicates": [
+        "P01",
+        "P14"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "ADR-030 screen corpus (2.1.3-beta.11 section A2): a recording of Codex 0.157.1's real screen, taken by probe P19 with no account (a stand-in model on the same machine), or the rows @xterm/headless gives for it; fixture data read by tests only, never shipped; no legacy Codex code path; listed in the repository-wide legacy Codex manifest, zero unmatched at the merge gate (WP1.67), tests/unit/shared/screen-corpus.test.ts",
+      "note": "fixture data: the chunks Codex wrote, with the resize, state and key marks; no Codex code path"
+    },
+    {
+      "path": "helper/fixtures/screens/codex-linux-first-screen.rows.json",
+      "predicates": [
+        "P01",
+        "P14"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "ADR-030 screen corpus (2.1.3-beta.11 section A2): a recording of Codex 0.157.1's real screen, taken by probe P19 with no account (a stand-in model on the same machine), or the rows @xterm/headless gives for it; fixture data read by tests only, never shipped; no legacy Codex code path; listed in the repository-wide legacy Codex manifest, zero unmatched at the merge gate (WP1.67), tests/unit/shared/screen-corpus.test.ts",
+      "note": "written by the test with SCREEN_CORPUS_WRITE=1; fixture data, no Codex code path"
+    },
+    {
+      "path": "helper/fixtures/screens/codex-linux-ready.json",
+      "predicates": [
+        "P01",
+        "P14"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "ADR-030 screen corpus (2.1.3-beta.11 section A2): a recording of Codex 0.157.1's real screen, taken by probe P19 with no account (a stand-in model on the same machine), or the rows @xterm/headless gives for it; fixture data read by tests only, never shipped; no legacy Codex code path; listed in the repository-wide legacy Codex manifest, zero unmatched at the merge gate (WP1.67), tests/unit/shared/screen-corpus.test.ts",
+      "note": "fixture data: the chunks Codex wrote, with the resize, state and key marks; no Codex code path"
+    },
+    {
+      "path": "helper/fixtures/screens/codex-linux-ready.rows.json",
+      "predicates": [
+        "P01",
+        "P14"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "ADR-030 screen corpus (2.1.3-beta.11 section A2): a recording of Codex 0.157.1's real screen, taken by probe P19 with no account (a stand-in model on the same machine), or the rows @xterm/headless gives for it; fixture data read by tests only, never shipped; no legacy Codex code path; listed in the repository-wide legacy Codex manifest, zero unmatched at the merge gate (WP1.67), tests/unit/shared/screen-corpus.test.ts",
+      "note": "written by the test with SCREEN_CORPUS_WRITE=1; fixture data, no Codex code path"
+    },
+    {
+      "path": "helper/fixtures/screens/codex-macos-first-screen.json",
+      "predicates": [
+        "P01",
+        "P14"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "ADR-030 screen corpus (2.1.3-beta.11 section A2): a recording of Codex 0.157.1's real screen, taken by probe P19 with no account (a stand-in model on the same machine), or the rows @xterm/headless gives for it; fixture data read by tests only, never shipped; no legacy Codex code path; listed in the repository-wide legacy Codex manifest, zero unmatched at the merge gate (WP1.67), tests/unit/shared/screen-corpus.test.ts",
+      "note": "fixture data: the chunks Codex wrote, with the resize, state and key marks; no Codex code path"
+    },
+    {
+      "path": "helper/fixtures/screens/codex-macos-first-screen.rows.json",
+      "predicates": [
+        "P01",
+        "P14"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "ADR-030 screen corpus (2.1.3-beta.11 section A2): a recording of Codex 0.157.1's real screen, taken by probe P19 with no account (a stand-in model on the same machine), or the rows @xterm/headless gives for it; fixture data read by tests only, never shipped; no legacy Codex code path; listed in the repository-wide legacy Codex manifest, zero unmatched at the merge gate (WP1.67), tests/unit/shared/screen-corpus.test.ts",
+      "note": "written by the test with SCREEN_CORPUS_WRITE=1; fixture data, no Codex code path"
+    },
+    {
+      "path": "helper/fixtures/screens/codex-macos-ready.json",
+      "predicates": [
+        "P01",
+        "P14"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "ADR-030 screen corpus (2.1.3-beta.11 section A2): a recording of Codex 0.157.1's real screen, taken by probe P19 with no account (a stand-in model on the same machine), or the rows @xterm/headless gives for it; fixture data read by tests only, never shipped; no legacy Codex code path; listed in the repository-wide legacy Codex manifest, zero unmatched at the merge gate (WP1.67), tests/unit/shared/screen-corpus.test.ts",
+      "note": "fixture data: the chunks Codex wrote, with the resize, state and key marks; no Codex code path"
+    },
+    {
+      "path": "helper/fixtures/screens/codex-macos-ready.rows.json",
+      "predicates": [
+        "P01",
+        "P14"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "ADR-030 screen corpus (2.1.3-beta.11 section A2): a recording of Codex 0.157.1's real screen, taken by probe P19 with no account (a stand-in model on the same machine), or the rows @xterm/headless gives for it; fixture data read by tests only, never shipped; no legacy Codex code path; listed in the repository-wide legacy Codex manifest, zero unmatched at the merge gate (WP1.67), tests/unit/shared/screen-corpus.test.ts",
+      "note": "written by the test with SCREEN_CORPUS_WRITE=1; fixture data, no Codex code path"
+    },
+    {
+      "path": "helper/fixtures/screens/codex-windows-bundled-first-screen.json",
+      "predicates": [
+        "P01",
+        "P14"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "ADR-030 screen corpus (2.1.3-beta.11 section A2): a recording of Codex 0.157.1's real screen, taken by probe P19 with no account (a stand-in model on the same machine), or the rows @xterm/headless gives for it; fixture data read by tests only, never shipped; no legacy Codex code path; listed in the repository-wide legacy Codex manifest, zero unmatched at the merge gate (WP1.67), tests/unit/shared/screen-corpus.test.ts",
+      "note": "fixture data: the chunks Codex wrote, with the resize, state and key marks; no Codex code path"
+    },
+    {
+      "path": "helper/fixtures/screens/codex-windows-bundled-first-screen.rows.json",
+      "predicates": [
+        "P01",
+        "P14"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "ADR-030 screen corpus (2.1.3-beta.11 section A2): a recording of Codex 0.157.1's real screen, taken by probe P19 with no account (a stand-in model on the same machine), or the rows @xterm/headless gives for it; fixture data read by tests only, never shipped; no legacy Codex code path; listed in the repository-wide legacy Codex manifest, zero unmatched at the merge gate (WP1.67), tests/unit/shared/screen-corpus.test.ts",
+      "note": "written by the test with SCREEN_CORPUS_WRITE=1; fixture data, no Codex code path"
+    },
+    {
+      "path": "helper/fixtures/screens/codex-windows-bundled-ready.json",
+      "predicates": [
+        "P01",
+        "P14"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "ADR-030 screen corpus (2.1.3-beta.11 section A2): a recording of Codex 0.157.1's real screen, taken by probe P19 with no account (a stand-in model on the same machine), or the rows @xterm/headless gives for it; fixture data read by tests only, never shipped; no legacy Codex code path; listed in the repository-wide legacy Codex manifest, zero unmatched at the merge gate (WP1.67), tests/unit/shared/screen-corpus.test.ts",
+      "note": "fixture data: the chunks Codex wrote, with the resize, state and key marks; no Codex code path"
+    },
+    {
+      "path": "helper/fixtures/screens/codex-windows-bundled-ready.rows.json",
+      "predicates": [
+        "P01",
+        "P14"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "ADR-030 screen corpus (2.1.3-beta.11 section A2): a recording of Codex 0.157.1's real screen, taken by probe P19 with no account (a stand-in model on the same machine), or the rows @xterm/headless gives for it; fixture data read by tests only, never shipped; no legacy Codex code path; listed in the repository-wide legacy Codex manifest, zero unmatched at the merge gate (WP1.67), tests/unit/shared/screen-corpus.test.ts",
+      "note": "written by the test with SCREEN_CORPUS_WRITE=1; fixture data, no Codex code path"
+    },
+    {
+      "path": "helper/fixtures/screens/codex-windows-system-first-screen.json",
+      "predicates": [
+        "P01",
+        "P14"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "ADR-030 screen corpus (2.1.3-beta.11 section A2): a recording of Codex 0.157.1's real screen, taken by probe P19 with no account (a stand-in model on the same machine), or the rows @xterm/headless gives for it; fixture data read by tests only, never shipped; no legacy Codex code path; listed in the repository-wide legacy Codex manifest, zero unmatched at the merge gate (WP1.67), tests/unit/shared/screen-corpus.test.ts",
+      "note": "fixture data: the chunks Codex wrote, with the resize, state and key marks; no Codex code path"
+    },
+    {
+      "path": "helper/fixtures/screens/codex-windows-system-first-screen.rows.json",
+      "predicates": [
+        "P01",
+        "P14"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "ADR-030 screen corpus (2.1.3-beta.11 section A2): a recording of Codex 0.157.1's real screen, taken by probe P19 with no account (a stand-in model on the same machine), or the rows @xterm/headless gives for it; fixture data read by tests only, never shipped; no legacy Codex code path; listed in the repository-wide legacy Codex manifest, zero unmatched at the merge gate (WP1.67), tests/unit/shared/screen-corpus.test.ts",
+      "note": "written by the test with SCREEN_CORPUS_WRITE=1; fixture data, no Codex code path"
+    },
+    {
+      "path": "helper/fixtures/screens/codex-windows-system-ready.json",
+      "predicates": [
+        "P01",
+        "P14"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "ADR-030 screen corpus (2.1.3-beta.11 section A2): a recording of Codex 0.157.1's real screen, taken by probe P19 with no account (a stand-in model on the same machine), or the rows @xterm/headless gives for it; fixture data read by tests only, never shipped; no legacy Codex code path; listed in the repository-wide legacy Codex manifest, zero unmatched at the merge gate (WP1.67), tests/unit/shared/screen-corpus.test.ts",
+      "note": "fixture data: the chunks Codex wrote, with the resize, state and key marks; no Codex code path"
+    },
+    {
+      "path": "helper/fixtures/screens/codex-windows-system-ready.rows.json",
+      "predicates": [
+        "P01",
+        "P14"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "ADR-030 screen corpus (2.1.3-beta.11 section A2): a recording of Codex 0.157.1's real screen, taken by probe P19 with no account (a stand-in model on the same machine), or the rows @xterm/headless gives for it; fixture data read by tests only, never shipped; no legacy Codex code path; listed in the repository-wide legacy Codex manifest, zero unmatched at the merge gate (WP1.67), tests/unit/shared/screen-corpus.test.ts",
+      "note": "written by the test with SCREEN_CORPUS_WRITE=1; fixture data, no Codex code path"
+    },
+    {
       "path": "helper/probes/README.md",
       "predicates": [
         "P14"
       ],
       "category": "OTHER",
       "disposition": "added",
-      "evidence": "ADR-030 probe P18 (2.1.3-beta.10 section B1): a Windows test-machine probe that measures how Claude Code and Codex start a tool server; never shipped and never run in CI; no legacy Codex code path; listed in the repository-wide legacy Codex manifest, zero unmatched at the merge gate (WP1.67), tests/wp1/legacy-codex-gate.test.ts",
-      "note": "how to run probe P18; names Codex as one of the two CLIs it measures"
+      "evidence": "ADR-030 probes P18 (2.1.3-beta.10 section B1) and P19 (2.1.3-beta.11 section A1): P18, a Windows test-machine probe that measures how Claude Code and Codex start a tool server, never run in CI; P19, a measurement of whether Claude Code and Codex redraw their screen after a resize when a re-attach starts mid-stream, run on the Windows test machine and by a dispatch-only CI job; neither is shipped; no legacy Codex code path; listed in the repository-wide legacy Codex manifest, zero unmatched at the merge gate (WP1.67), tests/wp1/legacy-codex-gate.test.ts",
+      "note": "how to run probes P7, P16, P18 and P19; names Codex as one of the CLIs P18 and P19 measure"
     },
     {
       "path": "helper/probes/p18-stand-in.cjs",
@@ -475,6 +661,37 @@
       "disposition": "added",
       "evidence": "ADR-030 probe P18 (2.1.3-beta.10 section B1): a Windows test-machine probe that measures how Claude Code and Codex start a tool server; never shipped and never run in CI; no legacy Codex code path; listed in the repository-wide legacy Codex manifest, zero unmatched at the merge gate (WP1.67), tests/wp1/legacy-codex-gate.test.ts",
       "note": "the P18 probe script; runs a Codex CLI in a fresh environment whose CODEX_HOME is the probe's own temporary folder"
+    },
+    {
+      "path": "helper/probes/p19-model-stand-in.cjs",
+      "predicates": [
+        "P14"
+      ],
+      "category": "OTHER",
+      "disposition": "added",
+      "evidence": "ADR-030 probe P19 (2.1.3-beta.11 section A1): a measurement of whether Claude Code and Codex redraw their screen after a resize when a re-attach starts mid-stream; run on the Windows test machine and by a dispatch-only CI job, never shipped; no legacy Codex code path; listed in the repository-wide legacy Codex manifest, zero unmatched at the merge gate (WP1.67), tests/wp1/legacy-codex-gate.test.ts",
+      "note": "the stand-in model endpoint P19 points each CLI at; answers the Responses API request Codex sends"
+    },
+    {
+      "path": "helper/probes/p19-record.cjs",
+      "predicates": [
+        "P04",
+        "P14"
+      ],
+      "category": "OTHER",
+      "disposition": "added",
+      "evidence": "ADR-030 probe P19 (2.1.3-beta.11 section A1): a measurement of whether Claude Code and Codex redraw their screen after a resize when a re-attach starts mid-stream; run on the Windows test machine and by a dispatch-only CI job, never shipped; no legacy Codex code path; listed in the repository-wide legacy Codex manifest, zero unmatched at the merge gate (WP1.67), tests/wp1/legacy-codex-gate.test.ts",
+      "note": "the P19 recorder; runs a Codex CLI in a fresh environment whose CODEX_HOME is the probe's own temporary folder"
+    },
+    {
+      "path": "helper/probes/p19-scenarios.json",
+      "predicates": [
+        "P14"
+      ],
+      "category": "OTHER",
+      "disposition": "added",
+      "evidence": "ADR-030 probe P19 (2.1.3-beta.11 section A1): a measurement of whether Claude Code and Codex redraw their screen after a resize when a re-attach starts mid-stream; run on the Windows test machine and by a dispatch-only CI job, never shipped; no legacy Codex code path; listed in the repository-wide legacy Codex manifest, zero unmatched at the merge gate (WP1.67), tests/wp1/legacy-codex-gate.test.ts",
+      "note": "the keys, marks and reply P19 uses for each CLI, Codex among them"
     },
     {
       "path": "package.json",
@@ -574,6 +791,17 @@
       "disposition": "added",
       "evidence": "new WP2 PR 3 P3.10 module (scripts/ccc-codex-hook.js): the Codex hook forwarder: reads the event from stdin and posts it, at most 4 MiB, to the app's loopback Hooks gateway for the session named by the environment Codex passes down and the app's owner-only hook file (a plain file in an app-named folder, never a link, its session id the same, its port and token checked for shape), only to 127.0.0.1; prints nothing, always exits 0 within a few seconds (WP1.68); tests/unit/scripts/codex-hook-forwarder.test.ts; WP2 PR 3 P3.10 round 1 (ADR-009 pass 1, spec, quality and VM findings) (WP1.68): posts with no shared agent, so no environment proxy (A1); a hook file only at its real path below the app data folder (no link or junction the app made), one name, opened without following a link and still the file looked at (A5); tests/unit/scripts/codex-hook-forwarder.test.ts; WP2 PR 3 P3.10 round 2 (the round 1 re-review and the VM re-check) (WP1.68): file identities compared as bigints (R5); tests/unit/scripts/codex-hook-forwarder.test.ts",
       "note": "created by WP2 PR 3 P3.10"
+    },
+    {
+      "path": "scripts/ci/upstream-cli-watch.mjs",
+      "predicates": [
+        "P10",
+        "P14"
+      ],
+      "category": "SCRIPTS",
+      "disposition": "added",
+      "evidence": "new 2.1.3-beta.11 CI work (aicc_planning#368): the watch script: looks up the newest Codex and Claude Code with npm view, reads the tested-up-to versions from cli-contract.ts and managed-launch.ts, de-duplicates against the run record, dispatches ci.yml and reads the rc legs (WP1.71); tests/unit/scripts/upstream-cli-watch.test.ts",
+      "note": "P10 is a false hit: `id: 'codex'` is a key in the table of the two CLIs the watch looks up, not an onboarding step; P14: the Codex package name, the cli-contract.ts constant it reads and the names of ci.yml's Codex rc jobs; no Codex code path, nothing starts Codex"
     },
     {
       "path": "scripts/codex-resume-picker.js",
@@ -1795,6 +2023,18 @@
       "note": "created by WP2; the renderer codexEnabled gates are retired with the legacy Codex surfaces"
     },
     {
+      "path": "src/main/providers/codex/held-tool-launch.ts",
+      "predicates": [
+        "P01",
+        "P07",
+        "P14"
+      ],
+      "category": "LAUNCH",
+      "disposition": "added",
+      "evidence": "new 2.1.3-beta.11 section B2 module (src/main/providers/codex/held-tool-launch.ts): a held Codex session's launch with its conductor server started as the session helper's relay; the builder's three loopback entries replaced in place, the timeout and approvals kept, a cmd.exe line only when codexCmdExeTarget carries it unchanged, a launch with the tools off untouched (WP1.68); tests/unit/providers/codex/held-tool-launch.test.ts",
+      "note": "reached from the Codex package's entry point (heldToolLaunch); pure, reads and writes nothing"
+    },
+    {
       "path": "src/main/providers/codex/hooks.ts",
       "predicates": [
         "P01",
@@ -2240,6 +2480,27 @@
       "note": "the P14 hits are the OpenAI status source for Codex and its payload fields; no legacy Codex code path"
     },
     {
+      "path": "src/main/session-helper/app-wiring.ts",
+      "predicates": [
+        "P08",
+        "P14"
+      ],
+      "category": "OTHER",
+      "disposition": "added",
+      "evidence": "2.1.3-beta.11 section B2: the session helper is given tool functions for Claude Code and Codex (the tool host's serveToolStream, the Claude Code MCP config switch, and the Codex package's heldToolLaunch through the provider registry) (WP1.68); tests/unit/main/session-helper-app-wiring.test.ts",
+      "note": "the P08 hit is the codex key of the tool functions' map, not a preload or renderer surface"
+    },
+    {
+      "path": "src/main/session-helper/manager.ts",
+      "predicates": [
+        "P14"
+      ],
+      "category": "OTHER",
+      "disposition": "added",
+      "evidence": "2.1.3-beta.11 section B2: comments and log reasons for a held Codex session's launch in its relay form; the route asks the provider's own tool functions and compares no provider name (WP1.68); tests/unit/main/session-helper-manager.test.ts",
+      "note": "comment and log text only"
+    },
+    {
       "path": "src/main/session-input/index.ts",
       "predicates": [
         "P14"
@@ -2458,7 +2719,7 @@
       ],
       "category": "MODELS-PRICING",
       "disposition": "replace",
-      "evidence": "unchanged observable behaviour; baseline suite green at 6bafcc33 (docs/wp1/baseline-2026-09-19.md); runs unchanged in the merge-candidate suite (WP1.33); tests/unit/renderer/codex-models.test.ts; WP2 PR 3 P3.8 (rows 39, 40): the hand-kept model list is replaced by the registry's Codex models with Default, a saved model the list no longer offers kept and marked, and Codex's levels per model (WP1.68); tests/unit/renderer/codex-models.test.ts; WP2 PR 3 P3.8 round 1 (row 40): a new config starts on the list's first model at Default effort, as a new Claude config does (WP1.68); tests/unit/renderer/session-dialog-codex-model.test.tsx",
+      "evidence": "unchanged observable behaviour; baseline suite green at 6bafcc33 (docs/wp1/baseline-2026-09-19.md); runs unchanged in the merge-candidate suite (WP1.33); tests/unit/renderer/codex-models.test.ts; WP2 PR 3 P3.8 (rows 39, 40): the hand-kept model list is replaced by the registry's Codex models with Default, a saved model the list no longer offers kept and marked, and Codex's levels per model (WP1.68); tests/unit/renderer/codex-models.test.ts; WP2 PR 3 P3.8 round 1 (row 40): a new config starts on the list's first model at Default effort, as a new Claude config does (WP1.68); tests/unit/renderer/session-dialog-codex-model.test.tsx; 2.1.3-beta.11 aggregate: that first model counts only the models every supported version in resources/codex-model-catalogue.json lists, so a model only newer versions list is skipped, and Default when none qualifies (WP1.68); tests/unit/renderer/codex-models.test.ts",
       "note": "re-dispositioned in WP2 PR 3 P3.8 (was retain)"
     },
     {
@@ -5381,6 +5642,26 @@
       "note": "created by WP2 PR 4 (lane ISO): enforced test isolation"
     },
     {
+      "path": "tests/integration/claude-conformance-ci.mjs",
+      "predicates": [
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "new 2.1.3-beta.11 CI work (aicc_planning#368): the Claude Code CI job's version, package and binary steps, the floor read from managed-launch.ts (WP1.71); tests/integration/claude-conformance-lib.test.ts",
+      "note": "P13: one comment names codex-conformance-ci.mjs, the helper this mirrors; it runs and reads Claude Code only"
+    },
+    {
+      "path": "tests/integration/claude-conformance-lib.test.ts",
+      "predicates": [
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "new 2.1.3-beta.11 CI work (aicc_planning#368): the Claude Code conformance job's help reader and its ci.yml job, tried on help text with nothing started (WP1.71); tests/integration/claude-conformance-lib.test.ts",
+      "note": "P13: one case name says the prove-red input is honoured the way the Codex job does; no Codex behaviour is exercised"
+    },
+    {
       "path": "tests/integration/codex-cli-compat-env.test.ts",
       "predicates": [
         "P01",
@@ -6594,6 +6875,17 @@
       "note": ""
     },
     {
+      "path": "tests/unit/main/conductor-mcp-tool-stream.test.ts",
+      "predicates": [
+        "P05",
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "new 2.1.3-beta.11 section B1 test (tests/unit/main/conductor-mcp-tool-stream.test.ts): a tool stream through a session's holder is answered the tool set of the session's record, a Codex record's as its /mcp route gives it (CODEX_CONDUCTOR_TOOLS) and a Claude Code record's as its SSE route does; no record or no tool host refuses it; a call that names another session acts for the stream's session only; releasing the record closes it (WP1.68)",
+      "note": "created by 2.1.3-beta.11 section B1; a stand-in link and a stand-in listener, no port, no CLI started"
+    },
+    {
       "path": "tests/unit/main/container-entry-shell-compat.test.ts",
       "predicates": [
         "P13"
@@ -7295,6 +7587,17 @@
       "note": "created by the PR 4 owner answers review fix pass (FC, 9d606305); the P13 hits are the pty-manager stand-ins for main's Codex conversation records"
     },
     {
+      "path": "tests/unit/main/session-helper-app-wiring.test.ts",
+      "predicates": [
+        "P04",
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "2.1.3-beta.11 section B2 case in a 2.1.3-beta.6 test (tests/unit/main/session-helper-app-wiring.test.ts): the manager gets the tool functions for Claude Code and Codex, the Codex one asking the Codex package's heldToolLaunch and keeping the loopback route when none is offered (WP1.68)",
+      "note": "created by 2.1.3-beta.6 (plan section B); the P04 hits are the codex key of the tool functions' map; mocked modules only"
+    },
+    {
       "path": "tests/unit/main/session-helper-manager.test.ts",
       "predicates": [
         "P13"
@@ -7911,6 +8214,18 @@
       "note": "created for the 2.1.1-beta.3 Codex deploy steps; both deploys faked, nothing written"
     },
     {
+      "path": "tests/unit/providers/codex/discovery-node-launcher.test.ts",
+      "predicates": [
+        "P01",
+        "P04",
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "new 2.1.3-beta.11 aicc_planning#347 test: discovery, with the real runner, reads the version of an npm-installed Codex whose bin/codex.js launcher replaces itself with its program through process.execve (the shape of Codex 0.170.0), through the home guard; a replacement the guard refuses reads as no version, as CI run 44530368458 did (WP1.17, WP1.49, WP1.33); tests/unit/providers/codex/discovery-node-launcher.test.ts",
+      "note": ""
+    },
+    {
       "path": "tests/unit/providers/codex/failure-text-hides-credentials.test.ts",
       "predicates": [
         "P01",
@@ -7920,6 +8235,19 @@
       "disposition": "added",
       "evidence": "new 2.1.1-beta.2 batch test (tests/unit/providers/codex/failure-text-hides-credentials.test.ts): the failure text of a Codex Insights run (the stderr tail, Codex's own error event, a start that failed, the line given when the model cannot be reached), of a Codex cloud agent (the stderr tail) and of a Codex analysis (the line given when the model cannot be reached) hides a URL's password and a session value at each of those places (WP1.33)",
       "note": "fake spawn, no process; synthetic values"
+    },
+    {
+      "path": "tests/unit/providers/codex/held-tool-launch.test.ts",
+      "predicates": [
+        "P01",
+        "P04",
+        "P07",
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "new 2.1.3-beta.11 section B2 test (tests/unit/providers/codex/held-tool-launch.test.ts): the real builder's Codex launches in their relay form: the argument list for a path with a space, the cmd.exe line only when its quoting rule carries the relay, the resume list's flags, a launch with the tools off untouched, another session's entries and an Ask question's words not taken, unsafe paths refused (WP1.68)",
+      "note": "created by 2.1.3-beta.11 section B2; stand-in port, token and tools switch; no file, process or folder of the host"
     },
     {
       "path": "tests/unit/providers/codex/hook-wrapper-start-folder.test.ts",
@@ -8852,7 +9180,7 @@
       ],
       "category": "TEST",
       "disposition": "replace",
-      "evidence": "existing test retained unchanged; must stay green on the merge candidate (WP1.33); listed in docs/wp1/baseline-test-inventory.json; WP1.33 mapping: rewritten for WP2 PR 3 P3.8 (rows 39, 40): the pinned six-model list is replaced by cases on the registry-derived options (Default, the CLI's list, a kept saved model, levels per model); tests/unit/renderer/codex-models.test.ts",
+      "evidence": "existing test retained unchanged; must stay green on the merge candidate (WP1.33); listed in docs/wp1/baseline-test-inventory.json; WP1.33 mapping: rewritten for WP2 PR 3 P3.8 (rows 39, 40): the pinned six-model list is replaced by cases on the registry-derived options (Default, the CLI's list, a kept saved model, levels per model); tests/unit/renderer/codex-models.test.ts; 2.1.3-beta.11 aggregate (WP1.68): cases on the model a new config starts on (the first every supported version lists, following the catalogue, Default when none does); tests/unit/renderer/codex-models.test.ts",
       "note": "re-dispositioned in WP2 PR 3 P3.8 (was retain)"
     },
     {
@@ -10389,6 +10717,16 @@
       "note": "re-dispositioned in WP2 commit 4 (was retain)"
     },
     {
+      "path": "tests/unit/scripts/probe-p19-job.test.ts",
+      "predicates": [
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "new 2.1.3-beta.11 A1 test (ADR-030 probe P19): the probe-p19 job of ci.yml runs only on a dispatch that names it, never on a pull request or a push, and is no required check; it names the Codex conformance dispatch inputs only to show they do not start it (WP1.67); tests/unit/scripts/probe-p19-job.test.ts",
+      "note": "reads ci.yml only"
+    },
+    {
       "path": "tests/unit/scripts/readme-stage.test.ts",
       "predicates": [
         "P04",
@@ -10408,6 +10746,27 @@
       "disposition": "replace",
       "evidence": "existing test retained unchanged; must stay green on the merge candidate (WP1.33); listed in docs/wp1/baseline-test-inventory.json; WP1.33 mapping: WP2 PR 3 P3.8 round 1 (row 39) passes the Codex list to runGate and adds the Codex check's cases (missing refuses, extra warns, a missing or empty list fails closed, only the codex family counts); the existing cases are unchanged; tests/unit/scripts/release-gate.test.ts; WP1.33 mapping: WP2 PR 3 P3.8 round 2 added the duplicate and malformed-list cases; tests/unit/scripts/release-gate.test.ts; WP1.33 mapping: WP2 PR 4 fix pass 10 (eeb09462) passes the Electron version and the floors to runGate (an Electron with no floor for the existing cases, which are otherwise unchanged) and adds the macOS floor cases; tests/unit/scripts/release-gate.test.ts; WP1.33 mapping: WP2 PR 4 fix pass 11 (5789b728) adds the resolved-version, exact-version and unreadable-entry cases and reads codexResult null-safely; tests/unit/scripts/release-gate.test.ts",
       "note": "re-dispositioned in WP2 PR 3 P3.8 round 1 (was retain)"
+    },
+    {
+      "path": "tests/unit/scripts/upstream-cli-watch-workflow.test.ts",
+      "predicates": [
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "new 2.1.3-beta.11 CI work (aicc_planning#368): the watch workflow's safety rules read from the file: least privilege per job, actions pinned by commit, no expression in a shell line, the dispatch inputs ci.yml takes (WP1.71); tests/unit/scripts/upstream-cli-watch-workflow.test.ts",
+      "note": "P13: names the codex_rc_version input ci.yml takes; no Codex behaviour is exercised"
+    },
+    {
+      "path": "tests/unit/scripts/upstream-cli-watch.test.ts",
+      "predicates": [
+        "P04",
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "new 2.1.3-beta.11 CI work (aicc_planning#368): the watch script's version rules, the de-duplication, the dispatch and the reading of the rc legs, with npm, gh, the files and the clock injected (WP1.71); tests/unit/scripts/upstream-cli-watch.test.ts",
+      "note": "P04 is a false hit: `.codex` is the property of the table of CLIs, not a Codex home; P13: Codex is one of the two CLIs the watch checks, as a name and a version string; no Codex behaviour is exercised"
     },
     {
       "path": "tests/unit/sentinel-account-message.test.ts",
@@ -10549,6 +10908,17 @@
       "disposition": "added",
       "evidence": "new 2.1.1-beta.2 test (tests/unit/shared/safe-text-parity.test.ts): the shown-text rule's three copies (the shared helper and the Claude and Codex resume pickers) agree: they drop exactly the same code points, globally, and keep a whole surrogate pair while dropping a lone half (WP1.68); tests/unit/shared/safe-text-parity.test.ts",
       "note": ""
+    },
+    {
+      "path": "tests/unit/shared/screen-corpus.test.ts",
+      "predicates": [
+        "P08",
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "new 2.1.3-beta.11 A2 test (ADR-030 screen corpus): the rows xterm.js gives for each recording of Claude Code, Codex and the default shell equal the committed rows, each reader reads the state in the recording's name, and the files hold their names, sizes and no personal text; it reads Codex's screen with the shared reader and drives no Codex code path (WP1.67); tests/unit/shared/screen-corpus.test.ts",
+      "note": "reads helper/fixtures/screens only"
     },
     {
       "path": "tests/unit/status-ingest.test.ts",

@@ -18,7 +18,14 @@
  * Tool streams (section 15, capability `mcp`, 2.1.3-beta.10): a holder offers
  * `mcp` too, as a real one of this version does, so the manager's tests that
  * check what a connection acked also show that no connection the app makes
- * acks it. This fake passes no tool message.
+ * acks it. From 2.1.3-beta.11 (plan section B1) it stands in for a relay as
+ * well: `openToolStream` sends `mcp.open` to the attached connection when that
+ * one acked `mcp` (else nothing: `not-connected`), `relay` and
+ * `endToolStream` send that stream's `mcp` and `mcp.close`, and each `mcp`
+ * the app sends on a stream it was given is kept in `toolSent`. As a real
+ * holder does, it answers an `mcp.close` from the app `not-found`, and the
+ * streams the attached connection carried end when it lets go, the app not
+ * told.
  *
  * The away clock (section 15) runs only when a test gives the helper one
  * (`awayClock`): then a holder with no connection attached ends itself `away`
@@ -140,15 +147,47 @@ export class FakeHolder {
   forceEvents = false
   /** Each frame of typed input, as it reaches the program. */
   onTyped: ((bytes: Buffer) => void) | null = null
+  /** Tool streams open now, by the holder's number, with the connection that carries each. */
+  readonly toolStreams = new Map<number, FakeConn>()
+  /** The last number a tool stream took. */
+  private lastStream = 0
+  /** Each `mcp` the app sent on a stream it was given, in order. */
+  readonly toolSent: Array<{ stream: number; message: unknown }> = []
 
   constructor(readonly sid: string, readonly label: string, readonly store: string) {
     this.endpoint = `\\\\.\\pipe\\aicc-helper-${sid}-${hex(16)}`
   }
 
-  /** The attached connection let go: the away clock starts. */
+  /** The attached connection let go: the away clock starts, and the tool
+   *  streams it carried end (each relay is told; it is not). */
   detached(): void {
+    for (const [n, c] of [...this.toolStreams]) if (c === this.attached) this.toolStreams.delete(n)
     this.attached = null
     this.awaySince = this.awayClock ? this.awayClock() : null
+  }
+
+  /** A relay opens a tool stream: the holder numbers it and tells the attached
+   *  connection, if that one acked `mcp`. Its number, or null (`not-connected`). */
+  openToolStream(): number | null {
+    const to = this.attached
+    if (!to || !to.ackedCaps.includes('mcp')) return null
+    const n = ++this.lastStream
+    this.toolStreams.set(n, to)
+    to.sendJson({ t: 'mcp.open', stream: n })
+    return n
+  }
+
+  /** The relay sends one message on stream `n`. */
+  relay(n: number, message: unknown): void {
+    this.toolStreams.get(n)?.sendJson({ t: 'mcp', stream: n, message })
+  }
+
+  /** The relay ends stream `n`: the app is told. */
+  endToolStream(n: number): void {
+    const to = this.toolStreams.get(n)
+    if (!to) return
+    this.toolStreams.delete(n)
+    to.sendJson({ t: 'mcp.close', stream: n })
   }
 
   /** The away clock ran out with nothing attached: the holder ends its session, as term.end does. */
@@ -282,6 +321,15 @@ export class FakeHolder {
         else end()
         return
       }
+      case 'mcp':
+        if (!conn.ackedCaps.includes('mcp')) return err('unknown-type', 'mcp')
+        if (this.toolStreams.get(Number(m.stream)) !== conn) return conn.sendJson({ t: 'error', code: 'not-found', text: 'no such tool stream' })
+        this.toolSent.push({ stream: Number(m.stream), message: m.message })
+        return
+      case 'mcp.close':
+        // Only a relay ends a stream: the attached connection's end with its attach.
+        if (!conn.ackedCaps.includes('mcp')) return err('unknown-type', 'mcp.close')
+        return conn.sendJson({ t: 'error', code: 'not-found', text: 'no such tool stream' })
       default:
         err('unknown-type', String(m.t))
     }

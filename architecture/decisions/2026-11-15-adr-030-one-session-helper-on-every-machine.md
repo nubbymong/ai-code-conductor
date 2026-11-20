@@ -3,7 +3,7 @@
 - Status: Accepted (owner decisions D1 to D20 of 2026-11-15; plan approved on
   the Agent Canvas, 2026-11-15). Only the scope of 2.1.3-beta.4 is approved for
   building. Every later slice comes back one beta at a time, and each of the
-  eighteen probes below can still stop or reshape the slice it gates.
+  nineteen probes below can still stop or reshape the slice it gates.
 - Date: 2026-11-15
 - Builds on: ADR-029 (remote sessions run through a device helper),
   `docs/remote/helper-protocol.md` (protocol version 1),
@@ -346,7 +346,7 @@ otherwise carried from earlier measurement.
 - **Pace.** After each release the next beta is cut from the measured hours
   per slice, not from a calendar. Soak time (D15) is not in those hours.
 - **Honest cost.** Until the remote deletion the SDLC is heavier, not lighter:
-  a Rust toolchain and signing, eighteen probes on real machines, two session
+  a Rust toolchain and signing, nineteen probes on real machines, two session
   paths side by side, and five dedicated adversarial rounds that the decisions
   add (the token on This computer, the token on a remote machine, the remote
   conversation intake, Windows provisioning, the user's own pre-launch
@@ -390,6 +390,7 @@ their questions, gates and fallbacks are restated for the slice plan.
 | P16 | What does starting one helper process per hook event cost on Windows? | Hooks through the holder | Declared exception 11 |
 | P17 | On Windows and Linux, does binding a Standard login by config folder separate identity the way moving the home folder does? | Standard login by config folder there | Declared exception 1 |
 | P18 | On Windows, how do Claude Code and Codex start a tool server over standard input and output, and is it gone when the CLI ends? | Tools through the helper (S15) | The relay's start is planned again for that CLI, whose sessions keep today's loopback route to the tools until then |
+| P19 | After a re-attach that starts in the middle of a session's output, does a resize make Claude Code and Codex redraw their screen, on Windows, macOS and Linux? | What a mid-stream re-attach does, and what the holder's screen is for (S13) | On that system the holder repaints the terminal on attach from its own screen, with the holder screen's next step and before S16's second half and S25 there |
 
 P12 result (2026-11-15): a Token session runs and keeps its usage figures;
 Remote Control and extra-usage credits need a Standard login; which kind is
@@ -472,6 +473,48 @@ measured through its connection check (`claude mcp list`) and Codex through a `c
 whose turn a local model stand-in refused, not through an interactive session; one machine.
 The probe is `helper/probes/p18-windows-tool-server-start.ps1`. The check of a real tool
 call through the relay, with signed-in CLIs, is owed at the step that wires it.
+
+P19 result (2026-11-19, Claude Code 2.1.328 and Codex 0.157.1, each with no account and a
+made-up key, pointed at a stand-in model on a loopback port that streams one reply of 300
+lines, in a fresh environment, on a terminal of 120 by 40; the Windows test machine, build
+22621, on node-pty's bundled ConPTY and on the system's; GitHub's windows-2025 (build
+26100, both ConPTYs), macos-latest and ubuntu-latest runners in CI run 44533910780; 3 runs
+per state): REPAINTS for both CLIs on all three systems, on the line the beta 11 plan
+wrote before measuring. At every state each CLI reached (its first screen with no account,
+its ready prompt, the middle of its reply, after the reply), and every state was reached
+in 3 of 3 runs, a terminal fed only the last 64 KiB of the output (or its second half when
+there was less), cut at a byte, showed the same rows as one fed everything after a nudge:
+the PTY one row shorter, then back 300 ms later. In every run they were already equal at
+the first sample, 250 ms after the size was back. Before any resize the rows differed (1
+to 32 of the 40) at every state but these, where they were already equal and the nudge had
+nothing to put right: Claude Code after its reply (on every system), Codex's first screen
+on macOS and Linux, and Claude Code in the middle of its reply under the system ConPTY (in
+3 of 3 runs on the test machine, 2 of 3 on the runner). Claude Code's whole output stayed
+under 64 KiB at every state but after its reply on macOS and Linux, so its replays were the
+second half of the output. A same-size resize, what the app
+sends after an attach today, is not enough on the bundled ConPTY, macOS or Linux: at a
+still screen the CLI wrote nothing after it, and it matched only where nothing was needed.
+On the system ConPTY it is enough at every state, on both builds: the console host built
+into Windows draws the whole screen again on any resize. Both CLIs draw their session on
+the alternate screen (Claude Code from its prompt on, Codex from its first screen), and
+the switch comes before the cut, so the re-attached terminal stayed on the normal screen
+with the right rows, on every system but the test machine's system ConPTY, whose console
+host passes no alternate screen through (the runner's build 26100 does). The default
+shell, a row with no verdict, showed the same rows before any resize, but 30 to 49 of its
+last 200 lines differed: lines the cut lost stay lost. What it means, as the plan fixed
+before measuring: a mid-stream re-attach can rely on the CLI's own repaint after a nudge,
+on every system measured; the holder's screen is for the readers; the nudge and the
+"output is missing" notice are planned for beta 12 in `helper-pty.ts`, and no repaint
+message is added to the protocol. The step that plans the nudge also decides how the
+re-attached terminal gets back to the screen the CLI is on. Not measured: the holder's own
+PTY code (it makes the same system calls; on Windows a session's launch field picks the
+ConPTY), the app's real attach path, a signed-in account's screens, Codex with its
+background server on Windows and macOS (the counted runs gave it `--no-daemon`: 0.157.1
+refuses that server in an elevated session, which the test machine's SSH session and the
+Windows runner are, and on macOS the server's socket path under the runner's temporary
+folder is too long; the earlier dispatch on 0c49af32, run 44532520348, ran Codex with its
+server on ubuntu-latest and read REPAINTS there too, 3 of 3 at every state), and any size
+but 120 by 40. The probe is `helper/probes/p19-record.cjs`.
 
 ## Parked questions
 

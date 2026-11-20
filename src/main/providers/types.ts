@@ -137,6 +137,40 @@ export interface PickFolderIdentity {
   real: string
 }
 
+/** The session helper's relay mode for one held session's `conductor` tool
+ *  server (2.1.3-beta.11, plan section B2): `<helperPath> mcp --store <store>
+ *  --session <sid>`, which the CLI starts as its tool server and which
+ *  reaches the Conductor tools through the session's holder. */
+export interface HeldToolRelay {
+  /** The per-user helper copy's absolute path. */
+  helperPath: string
+  /** The helper's store folder. */
+  store: string
+  /** The holder's session id. */
+  sid: string
+}
+
+/** A held session's launch as the PTY manager handed it to the session
+ *  helper: the program, its arguments (one string: the cmd.exe line that goes
+ *  verbatim, ProviderSpawnCommand.commandLine) and its environment. */
+export interface HeldToolLaunch {
+  file: string
+  args: readonly string[] | string
+  env: Readonly<Record<string, string | undefined>>
+}
+
+/** What a provider's heldToolLaunch answers: the launch's arguments in their
+ *  relay form (the same shape it was given), or why the launch keeps its
+ *  loopback route. `no-tools`: the launch names none of the app's loopback
+ *  entries for this session (the built-in tools are off, or the server was not
+ *  started when it was built). `unsafe-path`: a path the relay needs cannot
+ *  ride the launch exactly. `cmd-line`: the launch is a cmd.exe line, or
+ *  hands its arguments to one, and the relay's cannot pass that line's
+ *  quoting rule. */
+export type HeldToolLaunchAnswer =
+  | { args: string[] | string }
+  | { refused: 'no-tools' | 'unsafe-path' | 'cmd-line' }
+
 /** How a session's telemetry finds its transcript. `cwd`: the resolved
  *  working directory the PTY runs in, which Codex uses to claim a new
  *  rollout. `spawnTimestamp`: Date.now() captured immediately before
@@ -244,6 +278,14 @@ export interface SessionProvider {
   /** Optional -- Codex: remove the conductor block an older build wrote into
    *  the user's own provider config; the MCP server asks at start and stop. */
   removeLegacyMcpServerConfig?(): void
+  /** Optional -- Codex (2.1.3-beta.11, plan section B2): the launch of a
+   *  session the session helper holds, with its `conductor` tool server
+   *  started as the helper's relay in place of the loopback address, its
+   *  switch and its credential variable, which the launch named before the
+   *  holder existed. Asked only for the launch a holder runs; the usual start
+   *  keeps the arguments the builder made. Pure: it reads nothing and writes
+   *  nothing. */
+  heldToolLaunch?(sessionId: string, launch: HeldToolLaunch, relay: HeldToolRelay): HeldToolLaunchAnswer
   /**
    * Optional -- copy the provider's resume-picker script into
    * `<resourcesDir>/scripts/`. Both providers implement this in P4. The

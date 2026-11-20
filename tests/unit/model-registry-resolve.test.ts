@@ -507,7 +507,7 @@ describe('resolveModelInfo: a dated id, and a version written with a dot', () =>
     expect(resolveModelInfo(reg, 'claude-3-opus-20240229')).toMatchObject({ id: 'claude-opus-5-5', matchKind: 'pattern' })
     // Every id in the bundled file that is written with a dot: itself, and its dated id.
     const dotted = reg.models.filter((m) => /\d\.\d/.test(m.id))
-    expect(dotted.map((m) => m.id)).toEqual(['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'gpt-5.2'])
+    expect(dotted.map((m) => m.id)).toEqual(['gpt-6.2-sol', 'gpt-6.2-astra', 'gpt-6.1-terra', 'gpt-6.1-sol', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'gpt-5.2'])
     for (const m of dotted) {
       expect(resolveModelInfo(reg, m.id), m.id).toMatchObject({ id: m.id, matchKind: 'exact' })
       expect(resolveModelInfo(reg, `${m.id}-20260101`), m.id).toMatchObject({ id: m.id, matchKind: 'prefix' })

@@ -23,7 +23,7 @@ const listOf = (ids: string[], fetchedAt = '2026-09-29'): ExpectedModelSet & { c
   source: 'the model catalogue bundled with the Codex CLI', cliVersions: ['0.153.4'], fetchedAt,
   models: ids.map((id) => ({ id, label: id.toUpperCase() })),
 })
-const CODEX_IDS = ['gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'gpt-5.2']
+const CODEX_IDS = ['gpt-6.2-sol', 'gpt-6.2-astra', 'gpt-6.1-terra', 'gpt-6.1-sol', 'gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'gpt-5.2']
 
 describe('Sentinel Codex model coverage (row 39)', () => {
   it('is silent when the shipped registry covers the shipped Codex list', () => {
@@ -37,6 +37,14 @@ describe('Sentinel Codex model coverage (row 39)', () => {
     expect(f[0]).toMatchObject({ id: 'models:codex-missing:gpt-6-nova', kind: 'compat', severity: 'warn', affectedFeature: 'sessions', status: 'open', createdAt: NOW })
     expect(f[0].title).toBe('Codex offers GPT-6-NOVA, but it is not in the model picker')
     expect(f[0].evidence).toContain('the Codex model list shipped with this build (Codex 0.153.4, 2026-09-29)')
+  })
+
+  // aicc_planning#346: the versions the shipped list was read from are named
+  // as a list, commas and "and" before the last, not "and" between each pair.
+  it('names the versions the shipped list was read from as a list', () => {
+    const four = { ...listOf([...CODEX_IDS, 'gpt-6-nova']), cliVersions: ['0.153.4', '0.155.1', '0.156.1', '0.157.1'] }
+    expect(codexModelCoverageFindings(reg, four, NOW)[0].evidence).toContain('the Codex model list shipped with this build (Codex 0.153.4, 0.155.1, 0.156.1 and 0.157.1, 2026-09-29)')
+    expect(codexModelCoverageFindings(reg, { ...four, cliVersions: ['0.153.4', '0.155.1'] }, NOW)[0].evidence).toContain('(Codex 0.153.4 and 0.155.1, 2026-09-29)')
   })
 
   it('reports a Codex model the picker still offers that the list no longer names', () => {

@@ -8,7 +8,7 @@ import React from 'react'
 import type { AccountsSnapshot, ProviderId, ReviewReadinessView } from '../../../shared/providers'
 import { providerOffMessage, providerNotSetUpMessage } from '../../../shared/providers'
 import { useSettingsStore, DEFAULT_CONDUCTOR_TOOLS } from '../../stores/settingsStore'
-import { useProviderAccountsStore, providerView, reviewerLine, reviewerNotice, accountDisplayName, savedOff, providerUnanswered, providerNotSetUp, externalHomeWhere, reviewerBlockKind } from '../../stores/providerAccountsStore'
+import { useProviderAccountsStore, providerView, reviewerLine, reviewerNotice, accountDisplayName, savedOff, providerUnanswered, providerNotSetUp, externalHomeFolder, externalHomeWhere, reviewerBlockKind } from '../../stores/providerAccountsStore'
 import ToggleSwitch from '../github/config/ToggleSwitch'
 import { ProviderMark } from '../sidebar/Badges'
 import { DialogCallout } from '../ui/Dialog'
@@ -22,6 +22,12 @@ export interface ReviewToolView {
   message: string | null
   /** A warning (no account can run it) rather than a plain state (off). */
   warn?: boolean
+  /** The message has the word "Accounts" in it as a link to Settings,
+   *  Accounts: the text before it and after it. `message` is always the whole
+   *  line (before + "Accounts" + after), for a surface with no link to draw
+   *  (the Conductor MCP card) and for a screen reader. Absent when the
+   *  message has no link. */
+  messageLink?: { before: string; after: string }
   /** "Reviews use: <text> (<suffix>)". Absent when nothing is known yet,
    *  or when the switch is disabled. */
   reviewer: { text: string; suffix: string | null; changeable: boolean } | null
@@ -43,21 +49,37 @@ export interface ReviewToolContext {
   settings: { claudeEnabled?: boolean; codexEnabled?: boolean }
 }
 
+/** A message whose word "Accounts" is the link: `message` is the whole line. */
+function accountsLinked(before: string, after: string): Pick<ReviewToolView, 'message' | 'messageLink'> {
+  return { message: `${before}Accounts${after}`, messageLink: { before, after } }
+}
+
 /** Why no review can run on this provider now, from which account the
  *  review would use and that account's own state. */
-function noReviewMessage(snapshot: AccountsSnapshot, id: ProviderId, review: ReviewReadinessView): string {
+function noReviewMessage(snapshot: AccountsSnapshot, id: ProviderId, review: ReviewReadinessView): Pick<ReviewToolView, 'message' | 'messageLink'> {
   const isCodex = id === 'codex'
   // This computer's own sign-in, by the folder main names (~/.codex, or the
   // folder CODEX_HOME named), else by no folder.
   const home = externalHomeWhere(snapshot, { providerId: 'codex', displayName: 'Codex' })
-  if (snapshot.registry.mode !== 'ready') return 'The account list is not available right now.'
+  if (snapshot.registry.mode !== 'ready') return { message: 'The account list is not available right now.' }
   const account = review.accountId ? snapshot.accounts.find((a) => a.id === review.accountId) : undefined
   if (!account) {
-    // No account at all: add one. The sign-in already on this computer is
-    // no longer offered (O5), so it is named only in the external-only and
-    // external-another cases below, where an account 2.1.1-beta.2
-    // registered for it is the one reviews would use.
-    return isCodex ? 'No Codex account can run reviews. Add a Codex account.' : 'No Claude account can run reviews right now.'
+    // No account at all: add one. Since O5 the sign-in already on this
+    // computer is never taken in as an account, so a user signed in to Codex
+    // outside the app always lands here, and a bare "no account" reads as a
+    // bug. When main names that sign-in's folder AND the app lists no Codex
+    // account that is not archived, say it cannot review. Main also sends no
+    // account id when the app holds an account that is only inactive (never
+    // made the reviewer): the cause is then that account, so the computer's
+    // own sign-in is not blamed. With no folder named, keep the short line.
+    // Either way "Accounts" is the link that opens Settings, Accounts, as the
+    // Claude row's link does.
+    if (!isCodex) return { message: 'No Claude account can run reviews right now.' }
+    const folder = externalHomeFolder(snapshot, 'codex')
+    const hasCodexAccount = snapshot.accounts.some((a) => a.providerId === 'codex' && a.lifecycle !== 'archived')
+    return folder && !hasCodexAccount
+      ? accountsLinked(`Codex's own sign-in on this computer (${folder}) cannot run reviews. Add a Codex account in `, '.')
+      : accountsLinked('No Codex account can run reviews. Add a Codex account in ', '.')
   }
   // Why, as the Accounts card also tells it (reviewerBlockKind). Only point at
   // making another account the reviewer when a row offers Make reviewer;
@@ -65,18 +87,22 @@ function noReviewMessage(snapshot: AccountsSnapshot, id: ProviderId, review: Rev
   switch (reviewerBlockKind(snapshot, account)) {
     case 'external-only':
     case 'unverified-only':
-      return isCodex
-        ? `No Codex account can run reviews. Add a Codex account (a sign-in from ${home} cannot review).`
-        : 'No Claude account can run reviews. Add a Claude account (an unverified sign-in cannot review).'
+      return {
+        message: isCodex
+          ? `No Codex account can run reviews. Add a Codex account (a sign-in from ${home} cannot review).`
+          : 'No Claude account can run reviews. Add a Claude account (an unverified sign-in cannot review).',
+      }
     case 'external-another':
     case 'unverified-another':
-      return isCodex
-        ? `Make a Codex account the reviewer in Accounts (a sign-in from ${home} cannot review).`
-        : 'Make another Claude account the reviewer in Accounts (an unverified sign-in cannot review).'
+      return {
+        message: isCodex
+          ? `Make a Codex account the reviewer in Accounts (a sign-in from ${home} cannot review).`
+          : 'Make another Claude account the reviewer in Accounts (an unverified sign-in cannot review).',
+      }
     default: {
       // Inactive, archived, blocked, signed out, signing in, or refused here.
       const name = !isCodex && account.providerLabel ? account.providerLabel : accountDisplayName(snapshot, account)
-      return `Reviews can't run on ${name} right now. Check it in Accounts.`
+      return { message: `Reviews can't run on ${name} right now. Check it in Accounts.` }
     }
   }
 }
@@ -117,7 +143,7 @@ export function reviewToolView(snapshot: AccountsSnapshot | null, tool: ReviewTo
   const notice = reviewerNotice(snapshot, id, ctx.platform)
   const review = p?.review
   if (!review) return { disabled: false, message: null, reviewer: null, notice, note }
-  if (!review.ready) return { disabled: true, message: noReviewMessage(snapshot, id, review), warn: true, reviewer: null, notice, note }
+  if (!review.ready) return { disabled: true, ...noReviewMessage(snapshot, id, review), warn: true, reviewer: null, notice, note }
   // On macOS, once a Claude reviewer was cleared, reviews use the normal
   // Claude sign-in: say so rather than naming a profile.
   if (!isCodex && ctx.platform === 'darwin' && snapshot.reviewerNotices.some((n) => n.providerId === 'claude')) {
@@ -191,7 +217,21 @@ export function CodeReviewTools({ onOpenAccounts }: { onOpenAccounts: () => void
                     data-tone={view.warn ? 'warn' : 'plain'}
                     data-testid={ids.message}
                   >
-                    {view.message}
+                    {view.messageLink ? (
+                      <>
+                        {view.messageLink.before}
+                        <button
+                          type="button"
+                          onClick={onOpenAccounts}
+                          className="underline underline-offset-2 focus-ring"
+                          style={{ color: 'var(--brand)' }}
+                          data-testid={`${ids.message}-accounts-link`}
+                        >
+                          Accounts
+                        </button>
+                        {view.messageLink.after}
+                      </>
+                    ) : view.message}
                   </div>
                 )}
                 {view.reviewer && (

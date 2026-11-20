@@ -45,6 +45,12 @@ export interface HelperPtyDriver {
    *  reached it yet (the tab's input waits for the attach that follows): the
    *  last moment what the launch line starts reads may change. */
   launched?(conn: HolderConnection): void
+  /** What the launch on `conn` starts, its hello read, when it is not the
+   *  spec's own: the same program with other arguments (2.1.3-beta.11, plan
+   *  section B2: an agent session whose launch names its tool server, which
+   *  then goes through its holder). Undefined: the spec's. Only for this
+   *  launch: the usual way keeps the spawn's own arguments. */
+  launchArgs?(conn: HolderConnection): Pick<LaunchSpec, 'argv' | 'line'> | undefined
   log(message: string): void
   /** The clock for the attach-again budget. */
   now?: () => number
@@ -286,17 +292,23 @@ export class HelperPty implements IPty {
     this.useConnection(conn)
     if (this.ending) { void this.endHolder(null); return }
     const sent = { ...this.size }
+    let start: Pick<LaunchSpec, 'argv' | 'line'> = this.spec
+    try {
+      start = this.driver.launchArgs?.(conn) ?? this.spec
+    } catch (err) {
+      this.driver.log(`[session-helper] ${this.sid}: before the launch: ${(err as Error).message}`)
+    }
     try {
       const launched = await conn.request({
         t: 'term.launch',
-        argv: this.spec.argv,
+        argv: start.argv,
         cwd: this.spec.cwd,
         env: this.spec.env,
         cols: sent.cols,
         rows: sent.rows,
         // The Windows fields, only when the spec gives them: a launch without
         // them is the same frame as before they existed.
-        ...(this.spec.line !== undefined ? { line: this.spec.line } : {}),
+        ...(start.line !== undefined ? { line: start.line } : {}),
         ...(this.spec.conpty !== undefined ? { conpty: this.spec.conpty } : {}),
       })
       if (typeof launched.pid === 'number') this.childPid = launched.pid

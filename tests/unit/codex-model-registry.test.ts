@@ -3,10 +3,11 @@
 //
 // The Codex rows are the list-visible models of the supported Codex CLI's own
 // catalogue (the models catalogue bundled in the 0.153.4 binary, read as bytes,
-// and in 0.155.1 and 0.156.1; resources/codex-model-catalogue.json), with each
-// model's supported reasoning levels. gpt-6-sol and gpt-6-luna come from 0.156.1,
-// the newest Codex the app calls supported (CODEX_MAX_TESTED_VERSION). Claude's
-// pickers never show a Codex row, and Codex's never a Claude one.
+// and in 0.155.1, 0.156.1, 0.157.1, 0.170.0 and 0.171.0; resources/codex-model-catalogue.json),
+// with each model's supported reasoning levels. gpt-6-sol and gpt-6-luna come
+// from 0.156.1 on; 0.170.0 lists four more, first, and so does 0.171.0, the
+// newest Codex the app calls supported (CODEX_MAX_TESTED_VERSION). Claude's pickers never
+// show a Codex row, and Codex's never a Claude one.
 import { describe, it, expect } from 'vitest'
 import {
   buildModelPickerRows,
@@ -30,7 +31,10 @@ import catalogueJson from '../../resources/codex-model-catalogue.json'
 const reg = baselineJson as unknown as ModelRegistry
 const catalogue = catalogueJson as unknown as ExpectedModelSet
 
-const CODEX_IDS = ['gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'gpt-5.2']
+const CODEX_IDS = ['gpt-6.2-sol', 'gpt-6.2-astra', 'gpt-6.1-terra', 'gpt-6.1-sol', 'gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'gpt-5.2']
+
+/** The four models Codex 0.170.0 adds, in its order, with its labels. */
+const NEW_IN_0170 = [['gpt-6.2-sol', 'GPT-6.2-Sol'], ['gpt-6.2-astra', 'GPT-6.2-Astra'], ['gpt-6.1-terra', 'GPT-6.1 Terra'], ['gpt-6.1-sol', 'GPT-6.1-Sol']]
 
 describe('Codex model catalogue from the registry (row 39)', () => {
   it('offers the list-visible models of the Codex CLI catalogue, in its order, under one Codex group', () => {
@@ -121,6 +125,20 @@ describe('Codex model catalogue from the registry (row 39)', () => {
     expect(rows.find((r) => r.value === 'gpt-6-sol')!.label).toBe('GPT-6-Sol')
     expect(rows.find((r) => r.value === 'gpt-6-luna')!.label).toBe('GPT-6-Luna')
   })
+
+  // aicc_planning#347 (2.1.3-beta.11): Codex 0.170.0 lists four models before
+  // the seven of 0.157.1, with the labels its catalogue gives (rust-v0.170.0;
+  // the real CLI listed the same ids in this order on Windows, macOS and
+  // Linux in CI run 44547276658). 0.171.0 lists the same eleven ids in the
+  // same order (CI run 44688602365), so the four are listed from 0.170.0 on.
+  it('names the four models 0.170.0 adds, first, with the labels Codex gives them', () => {
+    const cat = catalogueJson as unknown as { cliVersions: string[]; models: Array<{ id: string; label: string; cliVersions?: string[] }> }
+    expect(cat.cliVersions).toContain('0.170.0')
+    expect(cat.cliVersions).toContain('0.171.0')
+    expect(cat.models.filter((m) => m.cliVersions?.[0] === '0.170.0').map((m) => [m.id, m.label, m.cliVersions])).toEqual(NEW_IN_0170.map(([id, label]) => [id, label, ['0.170.0', '0.171.0']]))
+    expect(cat.models.slice(0, 4).map((m) => [m.id, m.label])).toEqual(NEW_IN_0170)
+    expect(buildModelPickerRows(reg, 'codex').slice(0, 4).map((r) => [r.value, r.label])).toEqual(NEW_IN_0170)
+  })
 })
 
 describe('Codex effort levels per model (row 40)', () => {
@@ -137,6 +155,7 @@ describe('Codex effort levels per model (row 40)', () => {
 
   it('marks the levels a model does not support, as the Codex CLI catalogue lists them', () => {
     const supported = (id: string) => buildEffortRows(reg, id, 'codex').filter((r) => r.supported).map((r) => r.value)
+    for (const [id] of NEW_IN_0170) expect(supported(id), id).toEqual(['low', 'medium', 'high', 'xhigh', 'max', 'ultra'])
     expect(supported('gpt-6-astra')).toEqual(['low', 'medium', 'high', 'xhigh', 'max', 'ultra'])
     expect(supported('gpt-6-sol')).toEqual(['low', 'medium', 'high', 'xhigh', 'max', 'ultra'])
     expect(supported('gpt-6-luna')).toEqual(['low', 'medium', 'high', 'xhigh', 'max'])

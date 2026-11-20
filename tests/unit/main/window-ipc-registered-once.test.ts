@@ -12,6 +12,7 @@
 import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
+import { escapeRegExp } from '../../helpers/escape-regexp'
 
 const src = readFileSync(resolve(__dirname, '../../../src/main/index.ts'), 'utf8').replace(/\r\n/g, '\n')
 const lines = src.split('\n')
@@ -221,7 +222,7 @@ describe('index.ts boot wiring -- mutants of the once-flag and the wipe slot', (
     // spaces, a whole line each), and the line before the first is not a try
     // opener.
     for (const call of ['registerResumeHandlers()', 'registerLogsWipeHandlers(getWindow)']) {
-      expect(src, call).toMatch(new RegExp(`\\n    ${call.replace(/[()]/g, '\\$&')}\\n`))
+      expect(src, call).toMatch(new RegExp(`\\n    ${escapeRegExp(call)}\\n`))
     }
     const resume = src.indexOf('\n    registerResumeHandlers()\n')
     const prevLine = src.slice(src.lastIndexOf('\n', resume - 1) + 1, resume)

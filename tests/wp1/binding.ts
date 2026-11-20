@@ -15,6 +15,7 @@ import {
   CARRY_FORWARD_PATH as GATE_CARRY_FORWARD_PATH, scanCommittedCarryForward,
   BINDING_NEUTRAL as GATE_BINDING_NEUTRAL, MANIFEST_PATH as GATE_MANIFEST_PATH, bindingBreaksOf, isCarryForwardNeutralFile as gateIsCarryForwardNeutralFile,
 } from '../../scripts/release-gate.mjs'
+import { escapeRegExp } from '../helpers/escape-regexp'
 
 export { ancestry, SHA_RE }
 
@@ -73,7 +74,7 @@ export function unavailableIds(items: ReadonlyArray<{ id: string; status?: strin
   return items.filter((i) => i.status === 'unavailable').map((i) => i.id)
 }
 
-const namesItem = (text: string, id: string) => new RegExp(`${id.replace(/\./g, '\\.')}(?![0-9])`).test(text)
+const namesItem = (text: string, id: string) => new RegExp(`${escapeRegExp(id)}(?![0-9])`).test(text)
 
 /** The repository files evidenceProblems reads, injected so its rules can be
  *  proven without touching the disk. */
@@ -180,7 +181,7 @@ export function unavailableProblems(
     // The reference whole: a record citing #D10, #D1_x or #D1.2 does not cite
     // #D1 (a full stop that ends the sentence does). Text inside an HTML
     // comment never counts.
-    const cites = new RegExp(`${decision.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![A-Za-z0-9_-]|\\.[A-Za-z0-9])`)
+    const cites = new RegExp(`${escapeRegExp(decision)}(?![A-Za-z0-9_-]|\\.[A-Za-z0-9])`)
     if (records.length === 0) out.push(`${i.id}: an unavailable item needs a docs/wp1/evidence/ record, which says what was not taken`)
     else if (!records.some((e) => cites.test(shownText(textOf(e) ?? '')))) {
       out.push(`${i.id}: none of its evidence records (${records.join(', ')}) cites ${decision}: say there what was not taken, and cite the decision`)
@@ -438,7 +439,7 @@ export function toolingPackagingProblems(build: Json, tooling: readonly string[]
     if (typeof at !== 'object' || at === null) continue
     for (const k of ['files', 'extraResources', 'extraFiles']) entries.push(...list(at[k]))
   }
-  const globRe = (g: string) => new RegExp(`^${g.split(/(\*\*\/|\*\*|\*|\?)/).map((s) => (s === '**/' ? '(?:.*/)?' : s === '**' ? '.*' : s === '*' ? '[^/]*' : s === '?' ? '[^/]' : escapeRe(s))).join('')}$`)
+  const globRe = (g: string) => new RegExp(`^${g.split(/(\*\*\/|\*\*|\*|\?)/).map((s) => (s === '**/' ? '(?:.*/)?' : s === '**' ? '.*' : s === '*' ? '[^/]*' : s === '?' ? '[^/]' : escapeRegExp(s))).join('')}$`)
   const patterns: Array<{ shown: string; re: RegExp }> = []
   for (const e of entries) {
     const shown = typeof e === 'string' ? e : JSON.stringify(e)
@@ -570,11 +571,10 @@ const VERSION_FREE: ReadonlyMap<string, (j: Json) => Json> = new Map([
   ['package-lock.json', (j: Json) => { const c = structuredClone(j); delete c.version; if (c.packages?.['']) delete c.packages[''].version; return c }],
 ])
 
-const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 /** The version whole (2.1.20 is not 2.1.2), with or without its v. */
-const namesVersion = (text: string, v: string) => new RegExp(`(?<![\\w.-])v?${escapeRe(v)}(?![\\w-]|\\.\\d)`).test(text)
+const namesVersion = (text: string, v: string) => new RegExp(`(?<![\\w.-])v?${escapeRegExp(v)}(?![\\w-]|\\.\\d)`).test(text)
 /** The path whole: not part of a longer path or name. */
-const namesPath = (text: string, p: string) => new RegExp(`(?<![\\w./-])${escapeRe(p)}(?![\\w/-]|\\.\\w)`).test(text)
+const namesPath = (text: string, p: string) => new RegExp(`(?<![\\w./-])${escapeRegExp(p)}(?![\\w/-]|\\.\\w)`).test(text)
 const parsedOrNull = (text: string | null): Json => {
   if (text === null) return null
   try { return JSON.parse(text) } catch { return null }

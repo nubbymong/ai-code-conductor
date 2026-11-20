@@ -5,9 +5,10 @@
 // provider's own sign-in there, completeSetup names it. Leaving before
 // completeSetup abandons the setup, so nothing half-made stays behind.
 //
-// Sign in again re-signs an existing managed account once the user says it
-// is the same account as before (main stages it when the account is signed
-// in: design 9.2). Not ticked ("different or unsure"), the sign-in is added
+// Sign in again first asks which account the user means, with neither answer
+// chosen, and offers no sign-in until one is (#289). "The same account as
+// before" re-signs the existing managed account (main stages it when the
+// account is signed in: design 9.2). "A different account" adds the sign-in
 // as a new account instead: the Add account dialog takes over.
 //
 // Both share one sign-in run (useSignInRun): leaving (Cancel, Escape, the
@@ -610,8 +611,8 @@ export interface SignInAgainDialogProps {
    *  case): used only in the dialog's title. */
   nameInSentence: string
   onClose: () => void
-  /** "Different or unsure" (the box not ticked): nothing runs here; the
-   *  sign-in is added as a new account (Add account, with this method). */
+  /** "A different account": nothing runs here; the sign-in is added as a
+   *  new account (Add account, with this method). */
   onNewAccount: (method: SignInMethod) => void
   /** Main found someone else signed in: that sign-in is a new account's,
    *  to be named (Add account, resumed at its name). */
@@ -620,13 +621,18 @@ export interface SignInAgainDialogProps {
 
 type AgainStep = 'method' | 'key' | 'signing-in' | 'failed' | 'left'
 
+/** The user's answer to "Which account are you signing in to?". */
+type AgainAnswer = 'same' | 'different'
+
 /**
  * "Sign in again" for an existing managed account: its recorded method family
- * only. Ticked ("the same account as before"), main signs it in again: in
- * place when it is not signed in, else in a new folder it moves the account
- * to only once that sign-in is verified (design 9.2). Not ticked, nothing
- * runs here and no key is taken: the sign-in is added as a new account
- * instead (onNewAccount), and this one stays as it is. On success the
+ * only. It first asks which account the user means; neither answer is chosen
+ * for them, and the sign-in button stays disabled until one is (#289). "The
+ * same account as before": main signs it in again, in place when it is not
+ * signed in, else in a new folder it moves the account to only once that
+ * sign-in is verified (design 9.2). "A different account": nothing runs here
+ * and no key is taken: the sign-in is added as a new account instead
+ * (onNewAccount), and this one stays as it is. On success the
  * dialog closes and the pushed snapshot updates the row; an answer that
  * blocked the account (a different sign-in) does not close as a success,
  * and one main found to be someone else hands over to naming that new
@@ -636,16 +642,17 @@ export function SignInAgainDialog({ provider, account, name, nameInSentence, onC
   const { methods, preselected } = signInAgainMethods(provider, account)
   const [step, setStep] = useState<AgainStep>('method')
   const [method, setMethod] = useState<SignInMethod | null>(preselected)
-  // The user's explicit yes that this is the same account as before. Not
-  // given, the sign-in becomes a new account and this one is untouched.
-  const [sameAccount, setSameAccount] = useState(false)
+  // Which account the user means: null until they choose. Never chosen for
+  // them: "same" is the explicit yes main requires, "different" makes the
+  // sign-in a new account and leaves this one untouched.
+  const [answer, setAnswer] = useState<AgainAnswer | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [hasKey, setHasKey] = useState(false)
   const keyRef = useRef<HTMLInputElement>(null)
 
-  // Every run carries the user's answer: it runs only once the box says
-  // "the same account as before" (main refuses a sign in again without it).
+  // Every run carries the user's answer: it runs only once they have chosen
+  // "The same account as before" (main refuses a sign in again without it).
   // Never for this computer's own sign-in: it is retired, its row does not
   // offer Sign in again, and main refuses it first (O5, #196).
   const runner = useSignInRun({
@@ -657,7 +664,7 @@ export function SignInAgainDialog({ provider, account, name, nameInSentence, onC
   useDialogEscape(() => { void runner.exit() }, !runner.leaving)
 
   const start = async (m: SignInMethod, secretHandle?: string) => {
-    if (!sameAccount) return
+    if (answer !== 'same') return
     setError(null)
     setStep('signing-in')
     const r = await runner.start(m, secretHandle)
@@ -683,15 +690,15 @@ export function SignInAgainDialog({ provider, account, name, nameInSentence, onC
   }
 
   const proceed = () => {
-    if (!method) return
-    // Different or unsure: a new account, through Add account.
-    if (!sameAccount) { onNewAccount(method); return }
+    if (!method || !answer) return
+    // A different account: a new account, through Add account.
+    if (answer === 'different') { onNewAccount(method); return }
     if (method === 'apiKey') { setError(null); setStep('key') }
     else void start(method)
   }
 
   const submitKey = async () => {
-    if (!sameAccount) return
+    if (answer !== 'same') return
     setHasKey(false)
     setBusy(true)
     setError(null)
@@ -716,24 +723,32 @@ export function SignInAgainDialog({ provider, account, name, nameInSentence, onC
                 <div className="rounded-[9px] border px-3 py-2.5 mb-1" style={{ borderColor: 'var(--border-strong)', background: 'var(--surface-base)' }} data-testid="sign-in-again-who">
                   <div className="text-[13px] font-semibold" style={{ color: 'var(--text-primary)' }}>{name}</div>
                   {account.providerLabel && <div className="font-mono text-[12px]" style={{ color: 'var(--text-secondary)' }}>{account.providerLabel}</div>}
-                  <label className="flex items-start gap-2 mt-2.5 text-[12.5px] cursor-pointer" style={{ color: 'var(--text-primary)' }}>
-                    <input
-                      type="checkbox"
-                      checked={sameAccount}
-                      onChange={(e) => setSameAccount(e.target.checked)}
-                      className="mt-0.5"
-                      data-autofocus=""
-                      data-testid="sign-in-again-confirm"
-                    />
-                    <span>
-                      <span data-testid="sign-in-again-confirm-label">{account.providerLabel ? `Sign in to the same account as before (${account.providerLabel}).` : 'Sign in to the same account as before.'}</span>
-                      <span className="block text-[11.5px] mt-0.5" style={{ color: 'var(--text-muted)' }} data-testid="sign-in-again-confirm-hint">
-                        {sameAccount
-                          ? 'If it is signed in a different way than before, the account waits until you confirm it in Accounts.'
-                          : 'Not ticked, the sign-in is added as a new account, and this one stays as it is.'}
+                </div>
+                {/* Neither answer is chosen for the user (#289): the sign-in
+                    button stays disabled until they pick one. */}
+                <div className="space-y-2 pb-1" role="radiogroup" aria-labelledby="sign-in-again-which-title" data-testid="sign-in-again-which">
+                  <div id="sign-in-again-which-title" className="text-[12.5px] font-semibold" style={{ color: 'var(--text-primary)' }}>Which account are you signing in to?</div>
+                  {([
+                    ['same', 'The same account as before', 'If it is signed in a different way than before, the account waits until you confirm it in Accounts.'],
+                    ['different', 'A different account (add it as a new account)', 'This account stays as it is.'],
+                  ] as const).map(([value, label, hint], i) => (
+                    <label key={value} className="flex items-start gap-2 text-[12.5px] cursor-pointer" style={{ color: 'var(--text-primary)' }}>
+                      <input
+                        type="radio"
+                        name="sign-in-again-which"
+                        value={value}
+                        checked={answer === value}
+                        onChange={() => setAnswer(value)}
+                        className="mt-0.5"
+                        data-autofocus={i === 0 ? '' : undefined}
+                        data-testid={`sign-in-again-${value}`}
+                      />
+                      <span>
+                        <span data-testid={`sign-in-again-${value}-label`}>{label}</span>
+                        <span className="block text-[11.5px] mt-0.5" style={{ color: 'var(--text-muted)' }} data-testid={`sign-in-again-${value}-hint`}>{hint}</span>
                       </span>
-                    </span>
-                  </label>
+                    </label>
+                  ))}
                 </div>
                 {methods.length === 0 && <DialogCallout tone="warning">No sign-in method for this account is available here.</DialogCallout>}
                 <div className="flex flex-col gap-2" role="radiogroup" aria-label="Sign-in method">
@@ -769,7 +784,7 @@ export function SignInAgainDialog({ provider, account, name, nameInSentence, onC
           <DialogButton variant="primary" onClick={runner.done} testId="sign-in-again-done" data-autofocus="">Close</DialogButton>
         )}
         {!runner.leaving && step === 'method' && (
-          <DialogButton variant="primary" onClick={proceed} disabled={!method} testId="sign-in-again-continue">{method === 'apiKey' ? 'Continue' : 'Sign in'}</DialogButton>
+          <DialogButton variant="primary" onClick={proceed} disabled={!method || !answer} testId="sign-in-again-continue">{method === 'apiKey' ? 'Continue' : 'Sign in'}</DialogButton>
         )}
         {!runner.leaving && step === 'key' && (
           <DialogButton variant="primary" onClick={() => { void submitKey() }} disabled={busy || !hasKey} testId="sign-in-again-key-continue">Continue</DialogButton>

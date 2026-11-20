@@ -24,7 +24,7 @@ import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
 import { findNodePtyLibDir, nodePtyConptyDir } from '../bundled-conpty'
-import { devDataRoot } from '../dev-data-root'
+import { devDataRoot, fullLocalAppData } from '../dev-data-root'
 import { HELPER_FOLDER_RE } from './protocol'
 
 export const HELPER_EXE_NAME = (platform: NodeJS.Platform = process.platform): string => (platform === 'win32' ? 'aicc-helper.exe' : 'aicc-helper')
@@ -48,7 +48,7 @@ export function helperRootDir(opts: { platform?: NodeJS.Platform; env?: NodeJS.P
   const root = devDataRoot(env, opts.isPackaged, platform)
   if (root) return join(root, 'helper')
   // A LOCALAPPDATA that is not a full path is ignored too, for the same reason.
-  const local = env.LOCALAPPDATA && path.win32.isAbsolute(env.LOCALAPPDATA) ? env.LOCALAPPDATA : join(home, 'AppData', 'Local')
+  const local = fullLocalAppData(env) ?? join(home, 'AppData', 'Local')
   const installed = platform === 'win32'
     ? join(local, 'AI Code Conductor', 'helper')
     : platform === 'darwin'

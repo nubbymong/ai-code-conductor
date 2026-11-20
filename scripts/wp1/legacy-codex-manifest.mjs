@@ -61,8 +61,8 @@ export const EXCLUDE_PATH = [
 
 // Scope buckets decide which predicates run on a file. A tracked file outside
 // every bucket is reported as `unscoped` and must not mention codex at all.
-// helper/ (the session helper, its fixtures and its Windows probes) is code:
-// probe P18 (ADR-030) names Codex as one of the CLIs it measures.
+// helper/ (the session helper, its fixtures and its probes) is code: probes
+// P18 and P19 (ADR-030) name Codex as one of the CLIs they measure.
 const isCode = (p) => /^(src|scripts|tests|resources|build|helper\/|\.github|electron\.vite\.config\.ts|electron-builder|package\.json|playwright\.config\.ts|vitest[\w.-]*\.config\.ts|tsconfig[\w.-]*\.json|commitlint\.config\.js)/.test(p)
 const isDoc = (p) => /^(README\.md|PRIVACY\.md|SECURITY\.md|CONTRIBUTING\.md|AGENTS\.md|CLAUDE\.md|CODE_OF_CONDUCT\.md|docs\/.*\.md|\.github\/.*\.md|src\/shared\/app-knowledge\.ts|src\/renderer\/tips-library\.ts)$/.test(p)
 const isTest = (p) => /^tests\//.test(p)

@@ -647,6 +647,7 @@ let McpServer: any = null
 let SSEServerTransport: any = null
 let StreamableHTTPServerTransport: any = null
 let CancelledNotificationSchema: any = null
+let JSONRPCMessageSchema: any = null
 let z: any = null
 
 /** One stateless /mcp exchange. The close listener goes on BEFORE the request
@@ -680,6 +681,7 @@ function loadMcpDeps(): void {
     // stream, which the new client mis-reads as "missing-content-type".
     StreamableHTTPServerTransport = require('@modelcontextprotocol/sdk/server/streamableHttp.js').StreamableHTTPServerTransport
     CancelledNotificationSchema = require('@modelcontextprotocol/sdk/types.js').CancelledNotificationSchema
+    JSONRPCMessageSchema = require('@modelcontextprotocol/sdk/types.js').JSONRPCMessageSchema
     z = require('zod')
   }
 }
@@ -700,6 +702,10 @@ const transports = new Map<string, any>()
 // GHSA-f3wv: which AUTHENTICATED session opened each transport, so a POST can be
 // bound to its owner (see authorizeMessagePost). Kept in lockstep with `transports`.
 const transportOwners = new Map<string, string>()
+
+/** What makes a tool stream's server (serveToolStream): startMcpServer's own
+ *  createServer, set when it starts and cleared when it stops. */
+let toolStreamServer: ((source: McpClientProvider, sessionId: string, launch: number) => any) | null = null
 
 // R-DEC-3: latch so an unauthenticated request logs at most ONE warning per
 // process lifetime per bound port. Without this a probing/misconfigured client
@@ -908,7 +914,8 @@ export async function startMcpServer(
   const createServer = (
     source: 'claude' | 'codex' | 'unknown' = 'unknown',
     boundSessionId: string | null = null,
-    transport: 'sse' | 'http' = 'sse',
+    /** `stream`: a tool stream through the session's holder (serveToolStream). */
+    transport: 'sse' | 'http' | 'stream' = 'sse',
     /** The launch the request was admitted under (sessionLaunchOf), for the
      *  /mcp route's check below. */
     admittedLaunch: number | null = null,
@@ -946,8 +953,9 @@ export async function startMcpServer(
     // tool's answer, value or failure: the session's record is checked again as
     // the call returns (sessionEndedFor), and must still be the launch the call
     // was admitted under, so a later launch of the same session id is not
-    // handed an earlier launch's answer. The stream routes need no such check:
-    // ending a session closes its streams (releaseMcpSessionProvider).
+    // handed an earlier launch's answer. The stream routes and the tool streams
+    // need no such check: ending a session closes its streams
+    // (releaseMcpSessionProvider).
     const sessionEndedFor = (): boolean =>
       transport === 'http' && (boundSessionId === null || mcpSessionProvider(boundSessionId) !== 'codex' ||
         admittedLaunch === null || sessionLaunchOf(boundSessionId) !== admittedLaunch)
@@ -1319,6 +1327,7 @@ export async function startMcpServer(
 
     return server
   }
+  toolStreamServer = (source, sessionId, launch) => createServer(source, sessionId, 'stream', launch)
 
   return new Promise((resolve, reject) => {
     httpServer = http.createServer(async (req, res) => {
@@ -1611,6 +1620,7 @@ export async function startMcpServer(
     httpServer.on('error', (err: any) => {
       logError('[vision-mcp] Server error:', err?.message)
       httpServer = null
+      toolStreamServer = null
       reject(err)
     })
   })
@@ -1627,6 +1637,7 @@ export function stopMcpServer(): void {
 
     httpServer.close()
     httpServer = null
+    toolStreamServer = null
     mcpPort = 0
     logInfo('[vision-mcp] MCP SSE server stopped')
   }
@@ -1638,6 +1649,171 @@ export function isMcpServerRunning(): boolean {
 
 export function getMcpPort(): number {
   return mcpPort
+}
+
+// === Tool streams through a session's holder (2.1.3-beta.11, plan section B1) ===
+//
+// A held session's CLI can reach these tools by a relay it starts as its tool
+// server (`aicc-helper mcp`, docs/remote/helper-protocol.md section 15, "Tool
+// streams"), which carries its JSON-RPC messages through the session's
+// holder to the app's connection. The session helper's manager hands each
+// such stream here as a link, for a held agent session whose CLI was pointed
+// at the relay (app-wiring.ts, section B2).
+
+/** One tool stream, as the tool host is handed it: the session's CLI is at
+ *  the far end, through the session's holder. */
+export interface ToolStreamLink {
+  /** Pass one JSON-RPC message to the CLI. */
+  send(message: Record<string, unknown>): void
+  /** Hand each message the CLI sends to `onMessage`, in order, and tell
+   *  `onClose` once when the stream ends from the far side. The tool host
+   *  calls it once, before serveToolStream returns. */
+  take(onMessage: (message: unknown) => void, onClose: () => void): void
+  /** End the stream from the tool host's side. */
+  close(): void
+}
+
+/** The most messages one batch on a tool stream may hold: what the /mcp route
+ *  takes in one body (the SDK's MAX_BATCH_SIZE, server/requestBody.js). */
+const TOOL_STREAM_BATCH_MAX = 100
+
+/**
+ * The transport a tool stream's server is connected to: a link in place of an
+ * HTTP response. It is kept with the session's other streams (transports,
+ * transportOwners), so releaseMcpSessionProvider and stopMcpServer close it as
+ * they close an SSE stream. A message is taken only while the session's record
+ * is still for the launch the stream was opened under; one that comes after
+ * ends the stream. It has no handlePostMessage: its key is never sent
+ * anywhere, and a POST to /messages that names it gets that route's own error
+ * answer, so nothing reaches a stream that way.
+ */
+class ToolStreamTransport {
+  /** Its key among the session's streams. */
+  readonly sessionId = `tool-stream-${crypto.randomUUID()}`
+  onmessage?: (message: unknown) => void
+  onclose?: () => void
+  onerror?: (error: Error) => void
+  private closed = false
+
+  constructor(private readonly link: ToolStreamLink, private readonly owner: string, private readonly launch: number) {
+    link.take((message) => this.receive(message), () => this.end(false))
+  }
+
+  async start(): Promise<void> {}
+
+  async send(message: unknown): Promise<void> {
+    if (this.closed) return
+    try {
+      this.link.send(message as Record<string, unknown>)
+    } catch {
+      this.end(true)
+    }
+  }
+
+  async close(): Promise<void> {
+    this.end(true)
+  }
+
+  private receive(message: unknown): void {
+    if (this.closed) return
+    // A backstop: a launch ends only through releaseMcpSessionProvider, which
+    // closes this stream first, so no test reaches this.
+    if (sessionLaunchOf(this.owner) !== this.launch) {
+      logWarn(`[vision-mcp] A tool stream of sid=${this.owner} outlived its launch; closed`)
+      this.end(true)
+      return
+    }
+    // A batch is taken as the /mcp route takes one, and one over its
+    // TOOL_STREAM_BATCH_MAX is refused whole. Unlike that route, which
+    // refuses a whole body when one message in it is bad, each message of a
+    // batch is read on its own: one that is not a JSON-RPC message is
+    // answered Invalid Request when it has an id, and dropped otherwise. An
+    // answer is never answered.
+    const items = Array.isArray(message) ? message : [message]
+    if (items.length > TOOL_STREAM_BATCH_MAX) {
+      logDebug(`[vision-mcp] A tool stream batch of sid=${this.owner} holds over ${TOOL_STREAM_BATCH_MAX} messages; refused`)
+      for (const item of items) this.answerInvalid(item, `Invalid Request: Batch must not exceed ${TOOL_STREAM_BATCH_MAX} messages`)
+      return
+    }
+    for (const item of items) {
+      if (this.closed) return
+      const parsed = JSONRPCMessageSchema.safeParse(item)
+      if (parsed.success) {
+        this.onmessage?.(parsed.data)
+        continue
+      }
+      logDebug(`[vision-mcp] A tool stream message of sid=${this.owner} is not a JSON-RPC message`)
+      this.onerror?.(parsed.error instanceof Error ? parsed.error : new Error(String(parsed.error)))
+      this.answerInvalid(item, 'Invalid Request')
+    }
+  }
+
+  /** Answer `item` with an Invalid Request error when it has an id and is
+   *  not itself an answer: an answer to an answer could answer the CLI's own
+   *  call of the same id. */
+  private answerInvalid(item: unknown, text: string): void {
+    if (item === null || typeof item !== 'object' || Array.isArray(item)) return
+    const r = item as Record<string, unknown>
+    if (typeof r.id !== 'string' && typeof r.id !== 'number') return
+    if (typeof r.method !== 'string' && ('result' in r || 'error' in r)) return
+    void this.send({ jsonrpc: '2.0', id: r.id, error: { code: -32600, message: text } })
+  }
+
+  /** The stream ends: from here (`fromHere`: the link is closed) or from the far side. */
+  private end(fromHere: boolean): void {
+    if (this.closed) return
+    this.closed = true
+    if (transports.get(this.sessionId) === this) {
+      transports.delete(this.sessionId)
+      transportOwners.delete(this.sessionId)
+    }
+    if (fromHere) {
+      try { this.link.close() } catch { /* already closed */ }
+    }
+    this.onclose?.()
+  }
+}
+
+/**
+ * Serve one tool stream for one session: a server made by the same
+ * createServer the /sse and /mcp routes use, connected to the link. The
+ * session is `sessionId`, which the session helper's manager gives (the tab
+ * the holder runs), never anything a message on the stream says; its CLI, and
+ * so its tool set, is the one its record says its credential went to, as on
+ * its route. A session with no record, or a tool host that is not started,
+ * is refused: the link is closed and the answer is false. No credential is
+ * made or checked here: the stream comes through the session's own holder.
+ * The stream ends with the session's record (releaseMcpSessionProvider), when
+ * the server stops, when the link closes, or when its launch is over.
+ */
+export function serveToolStream(sessionId: string, link: ToolStreamLink): boolean {
+  const refuse = (why: string): false => {
+    logWarn(`[vision-mcp] Refused a tool stream (sid=${sessionId}): ${why}`)
+    try { link.close() } catch { /* already closed */ }
+    return false
+  }
+  const make = toolStreamServer
+  if (!make || !httpServer) return refuse('the tool host is not started')
+  const source = mcpSessionProvider(sessionId)
+  const launch = sessionLaunchOf(sessionId)
+  if (!source || launch === null) return refuse('no credential is issued to this session now')
+  const transport = new ToolStreamTransport(link, sessionId, launch)
+  transports.set(transport.sessionId, transport)
+  transportOwners.set(transport.sessionId, sessionId)
+  let server: any
+  try {
+    server = make(source, sessionId, launch)
+  } catch (err: any) {
+    logError(`[vision-mcp] A tool stream's server could not be made (sid=${sessionId}): ${err?.message ?? err}`)
+    void transport.close()
+    return false
+  }
+  logInfo(`[vision-mcp] New tool stream (source=${source}, sid=${sessionId})`)
+  Promise.resolve(server.connect(transport)).catch((err: any) => {
+    logError(`[vision-mcp] Tool stream connect error (sid=${sessionId}): ${err?.message ?? err}`)
+    void transport.close()
+  })
+  return true
 }
 
 // === Global MCP server registration in ~/.claude.json ===

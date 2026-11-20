@@ -1,6 +1,6 @@
 // browser-paths.ts — where Chrome and Edge live, per platform.
 //
-// PURE, AND DELIBERATELY DEPENDENCY-FREE. This used to live in
+// PURE, AND DELIBERATELY DEPENDENCY-FREE (but one leaf, below). This used to live in
 // `vision-manager.ts`, which meant anything wanting one list of file paths
 // imported the whole vision stack behind it — and that stack reaches
 // `conductor-mcp-server` -> `update-watcher` -> `app.isPackaged`, so merely
@@ -13,7 +13,12 @@
 //
 // `vision-manager` re-exports this so existing importers are unaffected.
 //
+// Its one import is the leaf dev-data-root.ts, which imports only `path`: the
+// one check on LOCALAPPDATA (fullLocalAppData; aicc_planning#345).
+//
 // No default export (project convention).
+
+import { fullLocalAppData } from './dev-data-root'
 
 /** Browsers this app can drive over CDP. Same engine, same protocol. */
 export type CdpBrowser = 'chrome' | 'edge'
@@ -59,8 +64,9 @@ export function getBrowserPaths(
   // `resolveBrowserBinary('chrome')` fell back to Edge, `detectAuthBrowsers()`
   // reported one browser, and the SSO "Sign-in browser" picker hid itself by
   // design -- "we lost the Edge choice". The same list feeds the vision browser,
-  // so a per-user Chrome now drives vision too.
-  const local = env.LOCALAPPDATA
+  // so a per-user Chrome now drives vision too. A LOCALAPPDATA that is not a
+  // full path gives no per-user entry, never one under the working folder.
+  const local = fullLocalAppData(env)
   if (browser === 'edge') return [
     'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe',
     'C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe',

@@ -48,6 +48,7 @@ import { registerSetupHandlers, getResourcesDirectory, getDataDirectory, killCli
 // before app-ready, so it must not pull the IPC registration side of that module
 // in ahead of time.
 import { devSessionDataDir, onResourcesDirectoryChanged } from './data-paths'
+import { fullLocalAppData } from './dev-data-root'
 import { ensureHelpWorkspace } from './help-workspace'
 import { registerScreenshotHandlers } from './ipc/screenshot-handlers'
 import { registerDiagnosticsHandlers } from './ipc/diagnostics-handlers'
@@ -161,7 +162,7 @@ if (!app.isPackaged && !process.env.CCC_DEV_DATA_DIR) {
       ? join(homedir(), 'Library', 'Application Support', 'Claude Conductor')
       : process.platform === 'linux'
         ? join(homedir(), '.claude-conductor', 'data')
-        : join(process.env.LOCALAPPDATA || join(homedir(), 'AppData', 'Local'), 'Claude Command Center')
+        : join(fullLocalAppData(process.env) ?? join(homedir(), 'AppData', 'Local'), 'Claude Command Center')
   process.env.CCC_DEV_DATA_DIR = join(base, 'dev')
 }
 

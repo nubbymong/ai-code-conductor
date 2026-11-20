@@ -118,18 +118,25 @@ afterEach(() => {
   try { rmSync(tmpRoot, { recursive: true, force: true }) } catch { /* ignore */ }
 })
 
+// How long a run may take to reach a step. Before its warm-up a run scans the
+// project for real (gateManagedLaunch); on a busy Windows runner that took
+// longer than vi.waitFor's default of 1 s once (CI run 44747703272), and the
+// run left behind then failed the next case. Waiting longer asserts nothing
+// less: each wait still needs the exact step, and the checks after it are kept.
+const REACH = { timeout: 10_000 }
+
 describe('the /insights terminal (ADR-025)', () => {
   it('awaits the warm-up of the Claude Code main resolved, with Claude\'s --version environment, before node-pty starts it', async () => {
     process.env.CCC_FIRST_START_MARK = 'never reaches a CLI run'
     let release!: () => void
     h.gate = new Promise<void>((r) => { release = r })
     const run = runInsights(() => null, { profileId: 'a' })
-    await vi.waitFor(() => expect(h.warm).toHaveLength(1))
+    await vi.waitFor(() => expect(h.warm).toHaveLength(1), REACH)
     await new Promise((r) => setTimeout(r, 20))
     expect(h.order).toEqual([`warm ${RESOLVED}`])
     release()
     await run
-    await vi.waitFor(() => expect(h.order).toEqual([`warm ${RESOLVED}`, `pty ${RESOLVED}`]))
+    await vi.waitFor(() => expect(h.order).toEqual([`warm ${RESOLVED}`, `pty ${RESOLVED}`]), REACH)
     const env = (await (h.warm[0].env as () => Promise<{ env: Record<string, string> }> | { env: Record<string, string> })()).env
     expect(Object.keys(env).some((k) => k.toUpperCase().startsWith('CCC_'))).toBe(false)
   })
@@ -141,7 +148,7 @@ describe('the /insights terminal (ADR-025)', () => {
     let release!: () => void
     h.gate = new Promise<void>((r) => { release = r })
     const run = runInsights(() => null, { profileId: 'a' })
-    await vi.waitFor(() => expect(h.warm).toHaveLength(1))
+    await vi.waitFor(() => expect(h.warm).toHaveLength(1), REACH)
     h.refusal = { code: 'provider-off', providerId: 'claude', message: 'Claude Code is off. Turn it on in Settings, Accounts.' }
     release()
     const id = await run as string
@@ -157,13 +164,13 @@ describe('the /insights terminal (ADR-025)', () => {
     let release!: () => void
     h.walkGate = new Promise<void>((r) => { release = r })
     const run = runInsights(() => null, { profileId: 'a' })
-    await vi.waitFor(() => expect(h.steps).toEqual(['walk asked (resume list: false)']))
+    await vi.waitFor(() => expect(h.steps).toEqual(['walk asked (resume list: false)']), REACH)
     await new Promise((r) => setTimeout(r, 20))
     expect(h.steps).toEqual(['walk asked (resume list: false)'])
     expect(h.order).toEqual([])
     release()
     await run
-    await vi.waitFor(() => expect(h.order).toEqual([`warm ${RESOLVED}`, `pty ${RESOLVED}`]))
+    await vi.waitFor(() => expect(h.order).toEqual([`warm ${RESOLVED}`, `pty ${RESOLVED}`]), REACH)
     expect(h.steps).toEqual(['walk asked (resume list: false)', 'walk ended', 'resolved'])
   })
 
@@ -174,7 +181,7 @@ describe('the /insights terminal (ADR-025)', () => {
     let release!: () => void
     h.walkGate = new Promise<void>((r) => { release = r })
     const run = runInsights(() => null, { profileId: 'a' })
-    await vi.waitFor(() => expect(h.steps).toEqual(['walk asked (resume list: false)']))
+    await vi.waitFor(() => expect(h.steps).toEqual(['walk asked (resume list: false)']), REACH)
     h.refusal = { code: 'provider-off', providerId: 'claude', message: 'Claude Code is off. Turn it on in Settings, Accounts.' }
     release()
     const id = await run as string

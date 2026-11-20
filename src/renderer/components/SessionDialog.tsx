@@ -241,8 +241,8 @@ export default function SessionDialog({ onConfirm, onCancel, initial, liveSessio
   // Default, no flag) rather than rewriting it to the new-config values, and a
   // saved effort its model cannot run is dropped on load (and again on save).
   // A new config starts as a new Claude config does (P3.8 round 1, J1): on
-  // the first model of the list (Claude's starts on its newest Opus) at
-  // Default effort.
+  // the first model of the list (Claude's starts on its newest Opus) that
+  // every supported version lists, at Default effort.
   const initialCodexModel = initial ? (initial.codexOptions?.model ?? '') : codexNewConfigModel(registry)
   const [codexModel, setCodexModel] = useState(initialCodexModel)
   const [codexEffort, setCodexEffort] = useState<NonNullable<CodexOptions['reasoningEffort']> | ''>(() => {

@@ -211,20 +211,30 @@ describe('debug:openAccountLogFolder -- what a folder must be', () => {
     for (const p of ['C:\\a\\x.{g}', 'C:\\x.{g}\\a', 'C:\\a\\x.{g}.', 'C:\\a\\x.{g} . \\b', 'C:/a/x.{}/b', 'x.{g}']) expect(hasShellObjectName(p), p).toBe(true)
     for (const p of ['C:\\a\\x{g}', 'C:\\a\\{g}', 'C:\\a\\x.{g}y', 'C:\\a\\x.g}', 'C:\\a\\logs', 'C:\\a.{b\\c}']) expect(hasShellObjectName(p), p).toBe(false)
     // One pass: four times the path takes under eight times as long (growth,
-    // not wall-clock time, so a loaded machine does not fail it).
+    // not wall-clock time, above the floor below). The two sizes
+    // are timed in turn, after one warm-up run of each, and each keeps its best
+    // of seven, so a slow spell on the runner lands on both sizes, not on one.
+    // Under NOISE_FLOOR_MS the smaller time is mostly timer and scheduler
+    // noise, so no ratio is judged there: the larger time is held to eight
+    // times the floor instead.
+    const NOISE_FLOOR_MS = 5
     const longPath = (n: number) => `C:\\${'{x}\\'.repeat(n)}${'.{'.repeat(n)}y${' .'.repeat(n)}`
-    const time = (p: string): number => {
-      let best = Infinity
-      for (let i = 0; i < 3; i++) {
-        const t0 = performance.now()
-        expect(hasShellObjectName(p)).toBe(false)
-        best = Math.min(best, performance.now() - t0)
-      }
-      return best
+    const once = (p: string): number => {
+      const t0 = performance.now()
+      expect(hasShellObjectName(p)).toBe(false)
+      return performance.now() - t0
     }
-    const t1 = time(longPath(50_000))
-    const t4 = time(longPath(200_000))
-    expect(t4 / Math.max(t1, 1), `${t1.toFixed(2)} ms, then ${t4.toFixed(2)} ms`).toBeLessThan(8)
+    const small = longPath(100_000)
+    const large = longPath(400_000)
+    once(small)
+    once(large)
+    let t1 = Infinity
+    let t4 = Infinity
+    for (let i = 0; i < 7; i++) {
+      t1 = Math.min(t1, once(small))
+      t4 = Math.min(t4, once(large))
+    }
+    expect(t4 / Math.max(t1, NOISE_FLOOR_MS), `${t1.toFixed(2)} ms, then ${t4.toFixed(2)} ms (floor ${NOISE_FLOOR_MS} ms)`).toBeLessThan(8)
   })
 
   it('a log_dir with no way to reveal it, or whose reveal throws, is refused and never opened', async () => {

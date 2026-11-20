@@ -29,6 +29,9 @@ export function tempSessionSettings() {
     removeLocalSessionSettings: (sessionId: string) => remove(settingsPath(sessionId)),
     removeLocalSessionMcpConfig: (sessionId: string) => remove(mcpPath(sessionId)),
     removeLocalSessionStatusUrl: (sessionId: string) => remove(statusPath(sessionId)),
+    /** The MCP config this stand-in writes holds no `conductor` entry, so the
+     *  real switch to the session helper's relay would leave it as it is. */
+    switchMcpConfigToHelper: () => 'no-conductor' as const,
     /** Removes the folder and everything in it. */
     dispose: () => { fs.rmSync(dir, { recursive: true, force: true }) },
   }

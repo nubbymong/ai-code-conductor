@@ -56,9 +56,43 @@ describe('the tested range', () => {
   it('older is too-old (blocked), newer is too-new (warned), unparseable is unknown', () => {
     expect(classifyCodexVersion('0.153.3')).toBe('too-old')
     expect(classifyCodexVersion('0.153.4-alpha.1')).toBe('too-old')
-    expect(classifyCodexVersion('0.156.2')).toBe('too-new')
+    expect(classifyCodexVersion('0.171.1')).toBe('too-new')
     expect(classifyCodexVersion('1.0.0')).toBe('too-new')
     expect(classifyCodexVersion(null)).toBe('unknown')
+  })
+
+  // aicc_planning#185, #347 (2.1.3-beta.11): the newest tested version is the
+  // highest one run whose every real-CLI conformance check passed on Windows,
+  // macOS and Linux. 0.157.1 did in CI run 44530382595. 0.170.0, npm's latest
+  // that day, was red in CI run 44530368458 (four models the registry lacked;
+  // on macOS the test suite's home guard refused its launcher's
+  // process.execve, so discovery by PATH read no version) and green on all
+  // three in CI run 44547276658 once both were fixed. 0.171.0, npm's latest
+  // the next day, was green on all three in CI run 44688602365 on that same
+  // code. Nothing between these was run. The pin and the minimum do not move
+  // (docs/wp1/evidence/codex-tested-range-2026-11-19.md).
+  it('reaches 0.171.0, the newest version run that passed on all three systems, and no further; the pin and the minimum stay', () => {
+    expect(classifyCodexVersion('0.171.0')).toBe('supported')
+    expect(classifyCodexVersion('0.170.0')).toBe('supported')
+    expect(classifyCodexVersion('0.157.1')).toBe('supported')
+    expect(CODEX_MAX_TESTED_VERSION).toBe('0.171.0')
+    expect(classifyCodexVersion('0.171.1')).toBe('too-new')
+    expect(classifyCodexVersion('0.172.0')).toBe('too-new')
+    expect(CODEX_PINNED_CLI_VERSION).toBe('0.155.1')
+    expect(CODEX_MIN_SUPPORTED_VERSION).toBe('0.153.4')
+    expect(classifyCodexVersion('0.153.3')).toBe('too-old')
+  })
+
+  // Today's behaviour, pinned so that a change to it is made on purpose: two
+  // version texts read as supported without being the tested release. A
+  // pre-release of the top sorts below it (semver order, as 0.153.4-alpha.1
+  // sorts below the minimum), and a zero-padded number passes the parser and
+  // compares as 0.171.0. The ADR-009 pass owed before stable (aicc_planning
+  // #320 list) decides whether either should read otherwise.
+  it('today a pre-release of the top and a zero-padded top read as supported', () => {
+    expect(classifyCodexVersion(parseCodexVersion('codex-cli 0.171.0-alpha.1'))).toBe('supported')
+    expect(parseCodexVersion('codex-cli 0.171.00')).toBe('0.171.00')
+    expect(classifyCodexVersion(parseCodexVersion('codex-cli 0.171.00'))).toBe('supported')
   })
 })
 
