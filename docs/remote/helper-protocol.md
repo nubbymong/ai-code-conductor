@@ -734,12 +734,14 @@ for the Machines page.
 
 **A connection.** The holder first writes its hello line, then a line end:
 `caps` is `["core","local"]` in a holder from before hook events,
-`["core","local","hooks"]` from 2.1.3-beta.8 and
-`["core","local","hooks","mcp"]` from 2.1.3-beta.10, `session.state` is `new`
+`["core","local","hooks"]` from 2.1.3-beta.8,
+`["core","local","hooks","mcp"]` from 2.1.3-beta.10 and
+`["core","local","hooks","mcp","away"]` from 2.1.3-beta.12, `session.state` is `new`
 before a launch and `live` after. The app's first frame must be a `hello.ack` with
 exactly `t`, `proto` and `caps`: `proto` 1, `caps` holding `core` and nothing
 the holder did not offer; `local` allows the messages below, `hooks` the hook
-events and `mcp` the tool streams (both below). A first frame that is raw, or
+events, `mcp` the tool streams and `away`, beside `mcp`, kept tool streams (all
+below). A first frame that is raw, or
 JSON off channel 0, gets `bad-frame`; another type `unknown-type`, another
 version `proto-mismatch`, anything else `bad-field`; then the holder closes the
 connection. With no `hello.ack` in 10 s it sends `timeout` and
@@ -1109,8 +1111,10 @@ protocol change 9) its `away` part.
   the stream left the app it was with. The next attach that takes tool
   streams (it acked `mcp` and carries live output) is given every kept
   stream: `mcp.open` on the holder's number, as for a new one, in the order
-  they were opened, then `mcp.back` to each relay on its number. A relay that
-  did not ack `away` is served as before. A session keeps nothing past its
+  they were opened, then `mcp.back` to each relay on its number. A stream
+  kept just after such an attach took tool streams (the connection it was
+  with let go at that moment) is given to it the same way within a quarter
+  of a second. A relay that did not ack `away` is served as before. A session keeps nothing past its
   program: once the program has exited each kept stream ends, its relay told
   `mcp.close` within a quarter of a second, and an `mcp.open` before the
   launch or after the exit is `not-connected`, `away` or not. A kept stream
@@ -1122,7 +1126,8 @@ protocol change 9) its `away` part.
   and no `method`) and its `id`: nothing more, and every message goes on
   exactly as it came. A call passed to the app and not yet answered is
   remembered by its id, 64 at most (past that the oldest is forgotten and
-  falls to the CLI's own timeout), and the app's answer clears it; a batch
+  falls to the CLI's own timeout), and the app's answer clears it, as does a
+  cancel (`notifications/cancelled`) the CLI sends for it; a batch
   is no call, so the calls in one are not remembered. Only an id
   that is a string, or a whole number written in plain digits, at most 15 of
   them, is remembered, as only such an id comes back from the app as it went.

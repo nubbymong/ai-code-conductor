@@ -471,7 +471,7 @@ rollback returns to the earlier beta's rows, and every row has a negative test.
   bounds gets the fixed answer at once, and a CLI that does not read what it
   is sent is cut off at 64 MiB, as before. Of each message the relay reads
   only whether it is a call and that call's `id` and `method`, and of each
-  answer only its `id` (and of a cancel while away, the call it names): it
+  answer only its `id` (and of a cancel, the call it names): it
   never reads or changes a call's arguments or a result, and the only
   message it writes in the app's place is the fixed answer, with the id of
   the call it answers. It never sends a call a second time: one the app had

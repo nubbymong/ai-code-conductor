@@ -50,11 +50,14 @@
 //! counts toward `MAX_TOOL_STREAMS`, and an `mcp` from its relay is
 //! `not-connected` (the stream goes on). The next attach that takes tool
 //! streams is given every kept stream (`mcp.open`, on the holder's number, as
-//! a new one is), and each relay is then told `mcp.back`. A session keeps no
-//! stream once its program has exited: each kept one ends (`mcp.close`) on
-//! the clock's next tick. A stream changes its app side only under its
-//! relay's gate and the gate of the app connection it leaves or joins, so
-//! either gate held keeps it where it is.
+//! a new one is), and each relay is then told `mcp.back`. An app connection
+//! that lets go gives up the terminal before its streams, so a newer attach
+//! in between takes tool streams first and that connection's streams are
+//! kept after it; the clock gives any such stream to it on its next tick, the
+//! same way. A session keeps no stream once its program has exited: each
+//! kept one ends (`mcp.close`) on the clock's next tick. A stream changes its
+//! app side only under its relay's gate and the gate of the app connection it
+//! leaves or joins, so either gate held keeps it where it is.
 //!
 //! Locks: a connection's stream gate (`Conn::live`) first (the attached
 //! connection's before a relay's, which guards that relay's tool messages),
@@ -618,14 +621,24 @@ impl Serve {
     /// number. The caller holds `conn.live` and has sent the `term.attached`
     /// reply and its replay.
     fn take_tools(&self, conn: &Arc<Conn>, gen: u64) {
-        let kept: Vec<(Arc<Conn>, u64)> = {
+        {
             let mut tools = lock(&self.tools);
             if !self.is_current(conn, gen) {
                 return;
             }
             tools.to = Some(Arc::clone(conn));
-            tools.open.iter().filter(|s| s.app.is_none()).map(|s| (Arc::clone(&s.relay), s.num)).collect()
-        };
+        }
+        self.give_kept(conn);
+    }
+
+    /// Every kept stream goes to `conn`, the connection that takes tool
+    /// streams: `mcp.open` on the holder's number, as a new stream is, then
+    /// `mcp.back` to that stream's relay, on the relay's number. The caller
+    /// holds `conn.live`, under which `conn` started taking tool streams; a
+    /// stream is given only while it still does (`stop_tools` clears that
+    /// under the same gate).
+    fn give_kept(&self, conn: &Arc<Conn>) {
+        let kept: Vec<(Arc<Conn>, u64)> = lock(&self.tools).open.iter().filter(|s| s.app.is_none()).map(|s| (Arc::clone(&s.relay), s.num)).collect();
         for (relay, num) in kept {
             let _relay_gate = lock(&relay.live);
             let given = {
@@ -704,6 +717,27 @@ impl Serve {
             if let Some(ended) = ended {
                 let _ = relay.send_json(mcp_close(ended.relay_num));
             }
+        }
+    }
+
+    /// A stream kept while a connection takes tool streams goes to that
+    /// connection (`give_kept`). Only a race leaves one so: an app connection
+    /// that lets go (a detach, or a dropped connection) gives up the terminal
+    /// first and its streams after, so a newer attach in between takes tool
+    /// streams, and is given the kept ones, before that connection's streams
+    /// are kept. The clock calls this on each tick while the program runs.
+    fn give_stranded(&self) {
+        let to = {
+            let tools = lock(&self.tools);
+            match &tools.to {
+                Some(c) if tools.open.iter().any(|s| s.app.is_none()) => Arc::clone(c),
+                _ => return,
+            }
+        };
+        let _gate = lock(&to.live);
+        let still = lock(&self.tools).to.as_ref().map(|c| c.id) == Some(to.id);
+        if still {
+            self.give_kept(&to);
         }
     }
 
@@ -1063,9 +1097,13 @@ impl Serve {
                 }
             }
             // A session keeps no tool stream past its program: on every tick,
-            // so one kept while the program was ending ends too.
-            if self.holder().map_or(false, |h| h.exit_code().is_some()) {
-                self.end_kept();
+            // so one kept while the program was ending ends too. While it
+            // runs, a stream a race left kept beside a connection that takes
+            // tool streams goes to that connection.
+            match self.holder().map(|h| h.exit_code().is_some()) {
+                Some(true) => self.end_kept(),
+                Some(false) => self.give_stranded(),
+                None => {}
             }
             let expired = {
                 let mut st = lock(&self.state);

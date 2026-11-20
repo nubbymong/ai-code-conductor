@@ -42,7 +42,8 @@
 //! `id` and no `method`) and to which id. A message still goes on exactly as
 //! it came. A call passed to the app and not yet answered is remembered (64
 //! at most: past that the oldest is forgotten, and the CLI's own timeout
-//! answers it), and the app's answer clears it. On `mcp.away` each call
+//! answers it), and the app's answer clears it, as does a cancel
+//! (`notifications/cancelled`) the CLI sends for it. On `mcp.away` each call
 //! remembered is answered at once with the fixed answer: it reached an app
 //! that is gone, and it is never sent a second time, as a tool call may not
 //! be safe to repeat (an answer the app sends to one after all is dropped:
@@ -234,14 +235,19 @@ struct Calls {
 
 impl Calls {
     /// A message read from the CLI at `now`. As before `away`, it is sent,
-    /// and a call is remembered; while away, a call waits (`Keep`) or is
-    /// answered at once, a batch is answered at once, call by call, and
-    /// anything else is dropped, a cancel dropping the held call it names.
+    /// a call is remembered, and a cancel forgets the call with the app it
+    /// names (the app sends no answer to it); while away, a call waits
+    /// (`Keep`) or is answered at once, a batch is answered at once, call by
+    /// call, and anything else is dropped, a cancel dropping the held call it
+    /// names.
     fn from_cli(&mut self, message: Value, now: Instant) -> Act {
         if !self.away {
             if let Some((key, call)) = tracked_call(&message) {
                 self.answered.retain(|k| *k != key);
                 push_bounded(&mut self.with_app, (key, call));
+            }
+            if let Some(id) = cancelled(&message) {
+                self.with_app.retain(|(_, c)| c.id.to_json() != id);
             }
             return Act::Send(message);
         }
@@ -844,8 +850,6 @@ mod tests {
     fn the_hold_and_its_bounds_are_the_documented_ones() {
         assert_eq!(HOLD, Duration::from_secs(30));
         assert_eq!(TEST_HOLD, Duration::from_secs(4));
-        // The installer ships the release build, which holds 30 s.
-        assert_eq!(HELD_FOR, if cfg!(debug_assertions) { TEST_HOLD } else { HOLD });
         assert_eq!((MAX_HELD, MAX_HELD_BYTES, MAX_REMEMBERED), (32, 4 * 1024 * 1024, 64));
         assert_eq!((UPDATING, UPDATING_CODE), ("AI Code Conductor is updating, try again shortly", -32603));
         // Four of the largest messages wait together; a fifth does not.

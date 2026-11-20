@@ -15,15 +15,20 @@ off, nothing a user sees changes.
   nothing past its program: the clock ends every kept stream on the tick after the exit. A stream
   changes its app side only under its relay's gate and the gate of the app connection it leaves
   or joins, so either gate held keeps it in place; a message the holder read before the stream
-  left an app is refused, never passed to the next one.
+  left an app is refused, never passed to the next one. An app connection that lets go gives up
+  the terminal before its streams, so a newer attach in between can take tool streams first and
+  miss them; the clock gives any stream kept beside a connection that takes tool streams to it
+  on its next tick. No test can place an attach in that window, so it is checked by reasoning.
 - **The relay.** It acks `away` only when the hello offers it, so a holder from 2.1.3-beta.10 or
   11 is acked as before and sent nothing new. With it acked, it reads of each message only whether
   it is a call and that call's id and method, and of each answer its id. A call the app had when
   it went is answered at once with D1's words and never sent again (a tool call may not be safe
   to repeat); an answer the app sends to one all the same is dropped. Calls made while away wait,
   32 calls and 4 MiB at most, 30 s each in the release build and 4 s in the debug build the tests
-  run (`cfg!(debug_assertions)`, so a test can wait one out); then the fixed answer. A cancel
-  drops a held call, a batch is answered at once, and `mcp.back` sends the held calls in order.
+  run (`cfg!(debug_assertions)`, so a test can wait one out); then the fixed answer. Which hold a
+  build uses is checked only by the release smoke's VM line. A cancel drops a held call, and
+  forgets a call the app has (the app sends no answer to it), a batch is answered at once, and
+  `mcp.back` sends the held calls in order.
   It now pings when it has sent nothing for 15 s, so the pings go on while calls are held.
 - **Tests.** Seven new tests in helper/tests/relay.rs, a new fixtures test, unit tests of the
   relay's call book and the holder's ack, and the hello pinned with five capabilities in
