@@ -33,7 +33,9 @@ Found by the 2.1.3-beta.10 pre-publish VM smoke and fixed on the release PR befo
   turns the provider into not found starts no second discover behind it. While the look is
   out, the row reads "Checking for Codex..." (or Claude Code) in place of its not-found line
   and its install commands, also when the card is shown again meanwhile; a snapshot that says
-  found is shown at once.
+  found is shown at once. The same holds for a check of the row's own that starts while the row
+  does not show the CLI as not found (Check now, Check again from too old, and the check when an
+  update tab ends).
 - **What's New dates (#366).** `new Date('YYYY-MM-DD')` is midnight UTC, the day before
   anywhere west of UTC (the VM on Pacific time showed beta.10 as 19 Nov 2026). The changelog
   date is now built from its parts and formatted in UTC (`formatChangelogDate`,
@@ -45,4 +47,7 @@ Found by the 2.1.3-beta.10 pre-publish VM smoke and fixed on the release PR befo
   provider, no focus mark, the old date formatter; then, after review, a second look behind
   the row's own Check now and behind an install tab's end check, no checking line on the row
   or on the page, a look held only by the row and not the card, a checking line over a found
-  snapshot, and the focus rule's wait for the commands when the notice replaces them).
+  snapshot, and the focus rule's wait for the commands when the notice replaces them; then, after
+  the re-review, no checking line behind the row's own Check now, Check again from a CLI that
+  did not run, could not be checked or is too old, and the end check of an install tab, the
+  checking line kept after an answer, and the row's check from not found changing its layout).

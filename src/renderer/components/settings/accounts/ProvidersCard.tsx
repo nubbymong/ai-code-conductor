@@ -81,9 +81,17 @@ function notePathHint(providerId: ProviderId, r: { ok: boolean; pathHint?: PathH
 // ends. A row looks by itself only once each while the renderer runs, and
 // never after a check of its own (aicc_planning#288). The look still out is
 // held here too, with the rows told when it answers, so a row shown again
-// while it runs still says it is checking.
+// while it runs still says it is checking. A check of the row's own that
+// starts while the row does not show the CLI as not found is held here too
+// (startLook): main pushes the snapshot that says not found before the
+// hint it reads from the registry, so without it the row would show the
+// not-found line and live install commands until the notice replaced them.
 const lookedOnView = new Set<ProviderId>()
 const lookingNow = new Set<ProviderId>()
+function startLook(providerId: ProviderId): void {
+  lookingNow.add(providerId)
+  for (const l of [...hintListeners]) l()
+}
 
 /** Test seam: forget every tab a row opened, and every look a row made. */
 export function _resetProviderInstallTabsForTest(): void {
@@ -167,10 +175,17 @@ function ProviderRow({ p, first }: { p: ProviderInstallationView; first: boolean
   }, [p.providerId])
   const checkAgain = async () => {
     lookedOnView.add(p.providerId)
+    // A check that starts from "not found" keeps the row as it is while it
+    // runs. From any other state (Check now, did not run, could not be
+    // checked, too old) the row says it is checking once the snapshot says
+    // not found, as it does for the look on first view.
+    const fromOther = p.discoveryState !== 'missing'
+    if (fromOther) startLook(p.providerId)
     setChecking(true)
     setError(null)
     setInUse(null)
     const r = await providerAccountActions.discover(p.providerId)
+    if (fromOther) lookingNow.delete(p.providerId)
     notePathHint(p.providerId, r)
     setChecking(false)
     setChecked(true)
@@ -189,13 +204,20 @@ function ProviderRow({ p, first }: { p: ProviderInstallationView; first: boolean
     if (installTabRunning(providerTabs.get(providerId), useSessionStore.getState().sessions)) return
     endedInstalls.delete(providerId)
     setChecked(false)
+    // The check when the tab ends is a check of the row's own: like Check
+    // again, it holds the look when the row did not show the CLI as not found.
+    const fromOther = p.discoveryState !== 'missing'
     const label = `${recipe.purpose === 'update' ? 'Update' : 'Install'} ${p.displayName}`
     const opened = openInstallTab({
       label, runLine: recipe.runLine, show: true,
       onEnded: () => {
         endedInstalls.add(providerId)
         lookedOnView.add(providerId)
-        void providerAccountActions.discover(providerId).then((r) => notePathHint(providerId, r))
+        if (fromOther) startLook(providerId)
+        void providerAccountActions.discover(providerId).then((r) => {
+          if (fromOther) lookingNow.delete(providerId)
+          notePathHint(providerId, r)
+        })
       },
     })
     providerTabs.set(providerId, opened)
@@ -227,8 +249,7 @@ function ProviderRow({ p, first }: { p: ProviderInstallationView; first: boolean
     if (!shownMissing || lookedOnView.has(providerId)) return
     if (installTabRunning(providerTabs.get(providerId), useSessionStore.getState().sessions)) return
     lookedOnView.add(providerId)
-    lookingNow.add(providerId)
-    setLooking(true)
+    startLook(providerId)
     void providerAccountActions.discover(providerId).then((r) => {
       lookingNow.delete(providerId)
       // Tells every row, this one included, that the look has answered.
