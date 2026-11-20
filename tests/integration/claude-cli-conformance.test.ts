@@ -9,7 +9,9 @@
 // job's making and an environment of its own (no variable of the caller's that
 // names an account, a key or a Claude folder reaches it): nothing reads or writes
 // a user's ~/.claude, no sign-in, no network request of ours is needed (--version
-// and --help). The job holds no secrets.
+// and --help). The job holds no secrets. The CLI's output is captured in files of
+// the run's own, never pipes (see `run`: a pipe cut Claude Code 2.1.278's --help
+// short on macOS).
 //
 // What it checks (the checks themselves are in claude-conformance-lib.mjs, tried on
 // help text by claude-conformance-lib.test.ts):
@@ -26,6 +28,9 @@
 // with each check named.
 import { describe, it, expect, beforeAll } from 'vitest'
 import { spawnSync } from 'node:child_process'
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
 import { parseClaudeVersion } from '../../src/main/sentinel/sentinel-version'
 import { CLAUDE_REVIEW_ARGS } from '../../src/main/providers/claude/review'
 import { CLAUDE_MIN_MANAGED_CLI_VERSION, claudeManagedCliCompatibility } from '../../src/main/providers/claude/managed-launch'
@@ -64,11 +69,28 @@ function probeEnv(): Record<string, string> {
   return { ...env, CLAUDE_CONFIG_DIR: CONFIG_DIR, DISABLE_AUTOUPDATER: '1', CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1', NO_COLOR: '1', TERM: 'dumb' }
 }
 
-/** One no-sign-in run of the real CLI: no shell, a constant argv. */
+const OUT_PREFIX = 'ccc-claude-conformance-out-'
+
+/** One no-sign-in run of the real CLI: no shell, a constant argv. Its output goes to
+ *  FILES of the run's own, not pipes: Claude Code 2.1.278 on macOS ends the process
+ *  before a pipe is drained, and a long --help was cut short (231 of 303 lines, no
+ *  --tools), while a file is written in full. The folder is removed after the run. */
 function run(args: readonly string[]): { exit: number | null; stdout: string; stderr: string } {
-  const r = spawnSync(BIN, [...args], { encoding: 'utf8', timeout: RUN_MS, env: probeEnv(), windowsHide: true, shell: false, maxBuffer: 8 * 1024 * 1024 })
-  if (r.error) throw new Error(`could not run ${args.join(' ') || '(no arguments)'}: ${r.error.message}`)
-  return { exit: r.status, stdout: r.stdout ?? '', stderr: r.stderr ?? '' }
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), OUT_PREFIX))
+  const outFile = path.join(dir, 'stdout.txt')
+  const errFile = path.join(dir, 'stderr.txt')
+  const fdOut = fs.openSync(outFile, 'w')
+  const fdErr = fs.openSync(errFile, 'w')
+  try {
+    const r = spawnSync(BIN, [...args], { stdio: ['ignore', fdOut, fdErr], timeout: RUN_MS, env: probeEnv(), windowsHide: true, shell: false })
+    if (r.error) throw new Error(`could not run ${args.join(' ') || '(no arguments)'}: ${r.error.message}`)
+    fs.closeSync(fdOut)
+    fs.closeSync(fdErr)
+    return { exit: r.status, stdout: fs.readFileSync(outFile, 'utf8'), stderr: fs.readFileSync(errFile, 'utf8') }
+  } finally {
+    for (const fd of [fdOut, fdErr]) { try { fs.closeSync(fd) } catch { /* already closed */ } }
+    if (path.dirname(dir) === os.tmpdir() && path.basename(dir).startsWith(OUT_PREFIX)) { try { fs.rmSync(dir, { recursive: true, force: true }) } catch { /* a leftover temp folder is harmless */ } }
+  }
 }
 
 const maybe = LIVE ? describe : describe.skip
@@ -84,7 +106,7 @@ maybe('integration: the real Claude Code CLI, with no sign-in', () => {
     expect('problem' in want ? want.problem : '', 'the leg was started with no usable version').toBe('')
     for (const [key, args] of [['version', ['--version']], ['help', ['--help']], ['auth', ['auth', '--help']], ['login', ['auth', 'login', '--help']]] as const) {
       printed[key] = run(args)
-      console.log(`[claude-conformance] claude ${args.join(' ')}: exit ${printed[key].exit}, ${printed[key].stdout.split('\n').length} lines`)
+      console.log(`[claude-conformance] claude ${args.join(' ')}: exit ${printed[key].exit}, ${printed[key].stdout.split('\n').length} lines, ${Buffer.byteLength(printed[key].stdout)} bytes`)
     }
     help = printed.help.stdout
     authHelp = printed.auth.stdout
