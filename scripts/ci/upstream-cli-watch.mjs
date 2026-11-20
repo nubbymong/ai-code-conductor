@@ -49,8 +49,9 @@
 // a red run: it still says which versions were checked, and reading only green
 // runs would run an already-green Codex again every day while Claude Code stays
 // red). A version checked RED is run again the next day, so a fix shows up as
-// green with no one asking. Nothing here commits, pushes, writes a repository
-// variable or a secret.
+// green with no one asking. The record is read only from the watch's own
+// scheduled or manually started runs. Nothing here commits, pushes, writes a
+// repository variable or a secret.
 //
 // WHY ci.yml IS DISPATCHED ON BETA. GitHub runs a schedule, and a dispatch of a
 // workflow file, from the DEFAULT branch's copy of that file (main). The newest
@@ -210,16 +211,22 @@ export function mergeRecord(record, results, { at, ciRun }) {
   return { schema: 1, entries: [...kept, ...added].slice(-MAX_ENTRIES) }
 }
 
+/** What may start a watch run whose record is read: the schedule and a manual
+ *  start, the only two triggers the workflow file has. */
+const WATCH_EVENTS = new Set(['schedule', 'workflow_dispatch'])
+
 /** Reads the record the newest earlier watch run left (success or failure; a
- *  cancelled run left none worth reading). A run with no artifact, or one that
- *  does not parse, is passed over. */
+ *  cancelled run left none worth reading). Only runs the schedule or a manual
+ *  start began are read; a run of any other kind, one with no artifact, or one
+ *  that does not parse, is passed over. */
 export async function findPreviousRecord({ gh, readText, dir, log, tries = 10 }) {
-  const runs = JSON.parse(await gh(['run', 'list', '--workflow', WATCH_WORKFLOW, '--status', 'completed', '--limit', '20', '--json', 'databaseId,conclusion,createdAt']))
+  const runs = JSON.parse(await gh(['run', 'list', '--workflow', WATCH_WORKFLOW, '--status', 'completed', '--limit', '20', '--json', 'databaseId,conclusion,createdAt,event']))
   let tried = 0
   for (const r of runs) {
-    if (r.conclusion !== 'success' && r.conclusion !== 'failure') continue
     const id = String(r.databaseId)
     if (!/^\d+$/.test(id)) continue
+    if (!WATCH_EVENTS.has(r.event)) { log(`run ${id} was passed over: it was not started by the schedule or by hand`); continue }
+    if (r.conclusion !== 'success' && r.conclusion !== 'failure') continue
     if (tried >= tries) break
     tried += 1
     const target = `${dir}/${id}`
@@ -256,18 +263,31 @@ const INPUTS = new Set(Object.values(CLIS).map((c) => c.input))
 /** The names of the jobs that carry the result for a CLI's release candidate. */
 export const expectedLegNames = (cli) => RC_OSES.map((os) => `${CLIS[cli].legPrefix}${os})`)
 
+/** The step of an rc leg that installs the version it was dispatched with (ci.yml
+ *  names it with the version, so a leg is held to the version asked about). */
+export const installStepName = (cli, version) => `Install ${CLIS[cli].label} ${version} into its own prefix`
+
 function explainDispatchFailure(err, ref) {
   const msg = String(err && err.message ? err.message : err).trim()
   const hint = /workflow_dispatch|HTTP 422|HTTP 404/i.test(msg)
-    ? ` If it says the workflow has no workflow_dispatch trigger, or was not found: GitHub reads that trigger from the copy of ci.yml on the default branch (main), so this watch can only dispatch ci.yml on ${ref} once a ci.yml that has the dispatch inputs is on the default branch (it arrives with the next promotion to main).`
+    ? ` If it says the workflow has no workflow_dispatch trigger, or names an input it does not expect, look at ${CI_WORKFLOW} on ${ref} first: GitHub checks a dispatch against the copy on the ref it is dispatched on, not the default branch's copy.`
     : ''
   return `could not dispatch ${CI_WORKFLOW} on ${ref}: ${msg.slice(0, 600)}.${hint}`
 }
 
+/** How many reads in a row may fail while waiting before the check gives up. */
+const MAX_POLL_FAILURES = 5
+const shortText = (err) => String(err && err.message ? err.message : err).trim().slice(0, 300)
+
+/** An error that carries the ci.yml run the watch already knows about. */
+const errorWithRun = (message, runId, runUrl) => Object.assign(new Error(message), { runId, runUrl })
+
 /** Dispatches ci.yml on `ref` with the inputs, finds the one run that dispatch
  *  made (a run that was not there before and was created after the dispatch;
- *  the earliest if two appear), and waits for it. */
-export async function dispatchAndWait({ gh, sleep, now, ref, inputs, timing }) {
+ *  the earliest if two appear), and waits for it. One failed read while waiting
+ *  (a gateway error, say) is logged and tried again; five in a row give up, and
+ *  once the run is known the error carries its id and link. */
+export async function dispatchAndWait({ gh, sleep, now, ref, inputs, timing, log = () => {} }) {
   if (typeof ref !== 'string' || !REF.test(ref) || ref.includes('..')) throw new Error(`the ref ${JSON.stringify(String(ref).slice(0, 60))} is not a plain branch name`)
   for (const [name, value] of Object.entries(inputs)) {
     if (!INPUTS.has(name)) throw new Error(`unknown ${CI_WORKFLOW} input ${JSON.stringify(name)}`)
@@ -281,16 +301,39 @@ export async function dispatchAndWait({ gh, sleep, now, ref, inputs, timing }) {
   } catch (err) { throw new Error(explainDispatchFailure(err, ref)) }
 
   let found = null
+  let lookFailures = 0
   for (;;) {
-    const fresh = (await list()).filter((r) => !before.has(String(r.databaseId)) && Date.parse(r.createdAt) >= startedAt - 60_000)
+    let fresh
+    try {
+      fresh = (await list()).filter((r) => !before.has(String(r.databaseId)) && Date.parse(r.createdAt) >= startedAt - 60_000)
+    } catch (err) {
+      lookFailures += 1
+      log(`looking for the ${CI_WORKFLOW} run failed (${lookFailures} in a row of ${MAX_POLL_FAILURES} allowed): ${shortText(err)}`)
+      if (lookFailures >= MAX_POLL_FAILURES) throw new Error(`${CI_WORKFLOW} was dispatched on ${ref}, but its run could not be found after ${lookFailures} failed lookups in a row: ${shortText(err)}`)
+      await sleep(timing.newRunPollMs)
+      continue
+    }
+    lookFailures = 0
     if (fresh.length > 0) { found = fresh.sort((x, y) => Date.parse(x.createdAt) - Date.parse(y.createdAt))[0]; break }
     if (now().getTime() - startedAt >= timing.newRunWaitMs) throw new Error(`no new ${CI_WORKFLOW} run showed up on ${ref} after the dispatch`)
     await sleep(timing.newRunPollMs)
   }
   const runId = String(found.databaseId)
+  const foundUrl = typeof found.url === 'string' ? found.url : ''
   const waitFrom = now().getTime()
+  let readFailures = 0
   for (;;) {
-    const view = JSON.parse(await gh(['run', 'view', runId, '--json', 'status,conclusion,url,jobs']))
+    let view
+    try {
+      view = JSON.parse(await gh(['run', 'view', runId, '--json', 'status,conclusion,url,jobs']))
+    } catch (err) {
+      readFailures += 1
+      log(`reading ${CI_WORKFLOW} run ${runId} failed (${readFailures} in a row of ${MAX_POLL_FAILURES} allowed): ${shortText(err)}`)
+      if (readFailures >= MAX_POLL_FAILURES) throw errorWithRun(`${CI_WORKFLOW} run ${runId} could not be read after ${readFailures} failed reads in a row: ${shortText(err)}`, runId, foundUrl)
+      await sleep(timing.runPollMs)
+      continue
+    }
+    readFailures = 0
     const done = view.status === 'completed'
     if (done || now().getTime() - waitFrom >= timing.runWaitMs) {
       return {
@@ -299,7 +342,13 @@ export async function dispatchAndWait({ gh, sleep, now, ref, inputs, timing }) {
         status: String(view.status ?? ''),
         conclusion: String(view.conclusion ?? ''),
         timedOut: !done,
-        jobs: (Array.isArray(view.jobs) ? view.jobs : []).map((j) => ({ name: String(j.name ?? ''), conclusion: String(j.conclusion ?? ''), status: String(j.status ?? ''), url: String(j.url ?? '') })),
+        jobs: (Array.isArray(view.jobs) ? view.jobs : []).map((j) => ({
+          name: String(j.name ?? ''),
+          conclusion: String(j.conclusion ?? ''),
+          status: String(j.status ?? ''),
+          url: String(j.url ?? ''),
+          steps: (Array.isArray(j.steps) ? j.steps : []).map((s) => ({ name: String(s.name ?? ''), conclusion: String(s.conclusion ?? '') })),
+        })),
       }
     }
     await sleep(timing.runPollMs)
@@ -310,22 +359,27 @@ const BAD = new Set(['failure', 'cancelled', 'timed_out', 'action_required', 'st
 
 /** Which checks of the run failed, for which CLI version. A CLI is red when any
  *  of its rc legs did not pass (a leg that is missing, skipped or cancelled is
- *  not a pass). A failing check that is no rc leg (the minimum and pinned legs,
- *  the changelog check) is reported as an other check and blamed on no version. */
+ *  not a pass; neither is one that succeeded without installing the version
+ *  asked about, which says the run is not the one this watch dispatched). A run
+ *  that did not finish in time is red, and still names each leg that failed or
+ *  is still running. A failing check that is no rc leg (the minimum and pinned
+ *  legs, the changelog check) is reported as an other check and blamed on no
+ *  version. */
 export function classifyRun(runInfo, wanted) {
   const results = {}
   const legNames = new Set()
   const byName = new Map(runInfo.jobs.map((j) => [j.name, j]))
   for (const [cli, version] of Object.entries(wanted)) {
     const failing = []
+    const installed = installStepName(cli, version)
     for (const name of expectedLegNames(cli)) {
       legNames.add(name)
-      if (runInfo.timedOut) continue
       const job = byName.get(name)
-      if (!job) failing.push(`${name} (did not run)`)
+      if (!job) failing.push(`${name} (${runInfo.timedOut ? 'had not started' : 'did not run'})`)
       else if (job.conclusion !== 'success') failing.push(`${name} (${job.conclusion || job.status || 'unknown'})`)
+      else if (!(job.steps ?? []).some((s) => s.name === installed && s.conclusion === 'success')) failing.push(`${name} (did not install ${version})`)
     }
-    if (runInfo.timedOut) failing.push(`the ${CI_WORKFLOW} run did not finish in time`)
+    if (runInfo.timedOut) failing.unshift(`the ${CI_WORKFLOW} run did not finish in time`)
     results[cli] = { version, result: failing.length === 0 ? 'green' : 'red', failing }
   }
   const others = runInfo.jobs.filter((j) => !legNames.has(j.name) && BAD.has(j.conclusion)).map((j) => `${j.name} (${j.conclusion})`)
@@ -451,11 +505,13 @@ export async function runCheck({ env, deps }) {
 
   let runInfo
   try {
-    runInfo = await dispatchAndWait({ gh: deps.gh, sleep: deps.sleep, now: deps.now, ref, inputs, timing })
+    runInfo = await dispatchAndWait({ gh: deps.gh, sleep: deps.sleep, now: deps.now, ref, inputs, timing, log: deps.log })
   } catch (err) {
     keep(previous)
     writeOutputs(env, deps, { failures: '[]' })
-    writeSummary(env, deps, [`## Upstream CLI watch: ${label} could not be checked`, '', String(err.message), ''].join('\n'))
+    // The run that was dispatched goes on unobserved: its link is what the owner needs.
+    const runLine = err && err.runId ? [`The ${CI_WORKFLOW} run that was dispatched and could not be followed: ${RUN_URL.test(err.runUrl ?? '') ? err.runUrl : `run ${err.runId}`}`, ''] : []
+    writeSummary(env, deps, [`## Upstream CLI watch: ${label} could not be checked`, '', String(err.message), '', ...runLine].join('\n'))
     throw err
   }
   const { results, others } = classifyRun(runInfo, wanted)

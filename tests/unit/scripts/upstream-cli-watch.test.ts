@@ -11,7 +11,7 @@ import { evalValue } from '../../helpers/gha-expr'
 import {
   CLIS, CI_WORKFLOW, WATCH_WORKFLOW, RECORD_ARTIFACT, RC_OSES, PLANNING_REPO,
   isVersion, compareVersions, readTested, parseRecord, mergeRecord, recordedGreen, decide,
-  expectedLegNames, classifyRun, ticketTitle, findPreviousRecord, dispatchAndWait, main,
+  expectedLegNames, installStepName, classifyRun, ticketTitle, findPreviousRecord, dispatchAndWait, main,
 } from '../../../scripts/ci/upstream-cli-watch.mjs'
 
 /**
@@ -40,11 +40,15 @@ interface WorldOpts {
   claudeLatest?: string
   record?: unknown
   /** Jobs the dispatched ci.yml run ends with. */
-  jobs?: Array<{ name: string; conclusion: string; status?: string; url?: string }>
+  jobs?: Array<{ name: string; conclusion: string; status?: string; url?: string; steps?: Array<{ name: string; conclusion: string }> }>
   runConclusion?: string
   neverCompletes?: boolean
   env?: Record<string, string>
   planningIssues?: Array<{ number: number; title: string; state: string }>
+  /** What started the watch run that left the record (default: the schedule). */
+  recordEvent?: string | null
+  /** A newer, completed watch run started by a pull request, with a record that marks the newest versions green. */
+  plantedRun?: boolean
 }
 
 function world(o: WorldOpts = {}) {
@@ -103,11 +107,17 @@ function world(o: WorldOpts = {}) {
         const wf = args[args.indexOf('--workflow') + 1]
         if (wf === WATCH_WORKFLOW) {
           const rec = o.record
+          const ev = o.recordEvent === undefined ? 'schedule' : o.recordEvent
+          const withEvent = (r: Record<string, unknown>, event: string | null) => (event === null ? r : { ...r, event })
+          const planted = o.plantedRun ? [{ databaseId: 20, conclusion: 'success', createdAt: '2026-11-21T00:00:00Z', event: 'pull_request' }] : []
           return JSON.stringify([
-            { databaseId: 30, conclusion: 'cancelled', createdAt: '2026-11-20T05:41:00Z' },
-            { databaseId: 40, conclusion: 'failure', createdAt: '2026-11-19T05:41:00Z' },
-            { databaseId: 50, conclusion: 'success', createdAt: '2026-11-18T05:41:00Z' },
-          ].slice(0, rec === undefined ? 0 : 3))
+            ...planted,
+            ...(rec === undefined ? [] : [
+              withEvent({ databaseId: 30, conclusion: 'cancelled', createdAt: '2026-11-20T05:41:00Z' }, 'schedule'),
+              withEvent({ databaseId: 40, conclusion: 'failure', createdAt: '2026-11-19T05:41:00Z' }, 'workflow_dispatch'),
+              withEvent({ databaseId: 50, conclusion: 'success', createdAt: '2026-11-18T05:41:00Z' }, ev),
+            ]),
+          ])
         }
         // Two runs of an earlier dispatch are already there: an old one, and a manual one started
         // half a minute before the watch's own, which only its id (not its time) tells apart.
@@ -121,6 +131,7 @@ function world(o: WorldOpts = {}) {
         const id = args[2]
         const dir = args[args.indexOf('--dir') + 1]
         if (id === '40') throw new Error('no valid artifacts found to download')
+        if (id === '20') { files.set(`${dir}/record.json`, JSON.stringify({ schema: 1, entries: [{ cli: 'codex', version: '0.171.0', result: 'green', at: '2026-11-21T00:00:00.000Z', ciRun: null }, { cli: 'claude', version: '2.1.329', result: 'green', at: '2026-11-21T00:00:00.000Z', ciRun: null }] })); return '' }
         if (id === '50') { files.set(`${dir}/record.json`, typeof o.record === 'string' ? o.record : JSON.stringify(o.record)); return '' }
         throw new Error(`unexpected download ${id}`)
       }
@@ -147,8 +158,15 @@ function world(o: WorldOpts = {}) {
   return { deps, gh, npm, outputs, outputLines, get summary() { return summary }, log, files, dispatched, created, edited, clock, baseEnv, planningIssues }
 }
 
-const goodLegs = (cli: 'codex' | 'claude', conclusions: Record<string, string> = {}) =>
-  expectedLegNames(cli).map((name: string, i: number) => ({ name, conclusion: conclusions[RC_OSES[i]] ?? 'success' }))
+const NEWEST = { codex: '0.171.0', claude: '2.1.329' }
+const installSteps = (cli: 'codex' | 'claude', version: string) => [
+  { name: 'Set up job', conclusion: 'success' },
+  { name: 'Install dependencies', conclusion: 'success' },
+  { name: installStepName(cli, version), conclusion: 'success' },
+  { name: 'Post Run actions/checkout', conclusion: 'success' },
+]
+const goodLegs = (cli: 'codex' | 'claude', conclusions: Record<string, string> = {}, installed: string = NEWEST[cli]) =>
+  expectedLegNames(cli).map((name: string, i: number) => ({ name, conclusion: conclusions[RC_OSES[i]] ?? 'success', steps: installSteps(cli, installed) }))
 const otherJobs = [
   { name: 'Changelog in sync', conclusion: 'success' },
   { name: 'Codex CLI minimum (ubuntu-latest)', conclusion: 'success' },
@@ -287,6 +305,34 @@ describe('the previous record is read with gh, from the newest run that left one
     expect(w.log.join('\n')).toMatch(/no earlier record/i)
   })
 
+  it('reads the record only from scheduled or manually started runs of the watch', async () => {
+    const w = world({ record: good, plantedRun: true })
+    const rec = await findPreviousRecord({ gh: w.deps.gh, readText: w.deps.readText, dir: '/tmp/r/prev', log: w.deps.log })
+    expect(rec).toEqual(good)
+    const calls = w.gh.map((c) => c.args.join(' '))
+    expect(calls[0]).toMatch(/--json [^ ]*\bevent\b/)
+    expect(calls.some((c) => c.startsWith('run download 20 '))).toBe(false)
+    expect(w.log.join('\n')).toMatch(/run 20 was passed over/)
+  })
+
+  it('takes a record from a manual start, and passes over a run of any other kind or with none named', async () => {
+    const manual = world({ record: good, recordEvent: 'workflow_dispatch' })
+    expect(await findPreviousRecord({ gh: manual.deps.gh, readText: manual.deps.readText, dir: '/tmp/r/prev', log: manual.deps.log })).toEqual(good)
+    for (const ev of ['pull_request', 'push', 'workflow_run', 'pull_request_target', 'issues', null]) {
+      const w = world({ record: good, recordEvent: ev })
+      expect(await findPreviousRecord({ gh: w.deps.gh, readText: w.deps.readText, dir: '/tmp/r/prev', log: w.deps.log }), String(ev)).toEqual({ schema: 1, entries: [] })
+      expect(w.gh.some((c) => c.args[1] === 'download' && c.args[2] === '50'), String(ev)).toBe(false)
+    }
+  })
+
+  it('plans a version that only a passed-over run marks green: it is checked, not skipped', async () => {
+    const w = world({ record: { schema: 1, entries: [] }, plantedRun: true })
+    expect(await main(['plan'], w.baseEnv, w.deps)).toBe(0)
+    expect(w.outputs.codex_version).toBe('0.171.0')
+    expect(w.outputs.claude_version).toBe('2.1.329')
+    expect(JSON.parse(w.outputs.record)).toEqual({ schema: 1, entries: [] })
+  })
+
   it('passes over a record that does not parse instead of trusting it', async () => {
     const w = world({ record: '{"schema":1,"entries":[{"cli":"codex","version":"x","result":"green","at":"2026-11-20T05:50:00.000Z"}]}' })
     const rec = await findPreviousRecord({ gh: w.deps.gh, readText: w.deps.readText, dir: '/tmp/r/prev', log: w.deps.log })
@@ -342,6 +388,76 @@ describe('dispatchAndWait: one ci.yml run on beta, found by its id and waited fo
   })
 })
 
+describe('dispatchAndWait: a failed poll is tried again, and the run link is kept', () => {
+  const asked = { ref: 'beta', inputs: { codex_rc_version: '0.171.0' } }
+  const flaky = (w: ReturnType<typeof world>, fails: (args: string[], n: number) => boolean) => {
+    const seen = new Map<string, number>()
+    return async (args: string[], o?: { token?: string }) => {
+      const key = args.slice(0, 2).join(' ')
+      const n = (seen.get(key) ?? 0) + 1
+      seen.set(key, n)
+      if (fails(args, n)) throw new Error(`gh ${key} failed: HTTP 502: Bad Gateway`)
+      return w.deps.gh(args, o)
+    }
+  }
+
+  it('gives the same result when one read of the run fails and the next works', async () => {
+    const jobs = [...goodLegs('codex'), ...otherJobs]
+    const clean = world({ jobs })
+    const expected = await dispatchAndWait({ gh: clean.deps.gh, sleep: clean.deps.sleep, now: clean.deps.now, ...asked, timing: clean.deps.timing })
+    const w = world({ jobs })
+    const lines: string[] = []
+    const run = await dispatchAndWait({ gh: flaky(w, (a, n) => a[1] === 'view' && n === 2), sleep: w.deps.sleep, now: w.deps.now, ...asked, timing: w.deps.timing, log: (l: string) => lines.push(l) })
+    expect(run).toEqual(expected)
+    expect(lines.join('\n')).toMatch(/502/)
+  })
+
+  it('gives the same result when one look for the new run fails and the next works', async () => {
+    const jobs = [...goodLegs('codex'), ...otherJobs]
+    const clean = world({ jobs })
+    const expected = await dispatchAndWait({ gh: clean.deps.gh, sleep: clean.deps.sleep, now: clean.deps.now, ...asked, timing: clean.deps.timing })
+    const w = world({ jobs })
+    const run = await dispatchAndWait({ gh: flaky(w, (a, n) => a[1] === 'list' && n === 2), sleep: w.deps.sleep, now: w.deps.now, ...asked, timing: w.deps.timing })
+    expect(run).toEqual(expected)
+  })
+
+  it('gives up after five reads in a row fail, with the id and link of the run it dispatched on the error', async () => {
+    const w = world({ jobs: [...goodLegs('codex'), ...otherJobs] })
+    let views = 0
+    const inner = flaky(w, () => false)
+    const gh = async (args: string[], o?: { token?: string }) => { if (args[1] === 'view') { views += 1; throw new Error('gh run view failed: HTTP 502: Bad Gateway') } return inner(args, o) }
+    const err = await dispatchAndWait({ gh, sleep: w.deps.sleep, now: w.deps.now, ...asked, timing: w.deps.timing }).catch((e: unknown) => e) as Error & { runId?: string; runUrl?: string }
+    expect(err).toBeInstanceOf(Error)
+    expect(err.message).toMatch(/502/)
+    expect(err.runId).toBe('101')
+    expect(err.runUrl).toBe('https://github.com/o/r/actions/runs/101')
+    expect(views).toBe(5)
+  })
+
+  it('gives up after five looks for the new run in a row fail, with no run to name', async () => {
+    const w = world()
+    let lists = 0
+    const gh = async (args: string[], o?: { token?: string }) => {
+      if (args[1] === 'list') { lists += 1; if (lists > 1) throw new Error('gh run list failed: HTTP 502: Bad Gateway') }
+      return w.deps.gh(args, o)
+    }
+    const err = await dispatchAndWait({ gh, sleep: w.deps.sleep, now: w.deps.now, ...asked, timing: w.deps.timing }).catch((e: unknown) => e) as Error & { runId?: string }
+    expect(err.message).toMatch(/502/)
+    expect(err.runId).toBeUndefined()
+    expect(lists).toBe(6)
+  })
+
+  it('says where to look when the dispatch is refused for an input ci.yml does not take: at the ref, not at a promotion', async () => {
+    const w = world()
+    const gh = async (args: string[]) => { if (args[0] === 'workflow') throw new Error('HTTP 422: Unexpected inputs provided: ["claude_rc_version"]'); return '[]' }
+    const err = await dispatchAndWait({ gh, sleep: w.deps.sleep, now: w.deps.now, ref: 'beta', inputs: { claude_rc_version: '2.1.329' }, timing: w.deps.timing }).catch((e: unknown) => e) as Error
+    expect(err.message).toMatch(/Unexpected inputs provided/)
+    expect(err.message).toMatch(/look at ci\.yml on beta first/)
+    expect(err.message).toMatch(/not the default branch's copy/)
+    expect(err.message).not.toMatch(/promotion|arrives with|wait for/i)
+  })
+})
+
 describe('classifyRun: which check failed for which CLI version', () => {
   const run = (jobs: Array<{ name: string; conclusion: string }>, over: Record<string, unknown> = {}) => ({ runId: '101', url: 'https://github.com/o/r/actions/runs/101', status: 'completed', conclusion: 'success', timedOut: false, jobs: jobs.map((j) => ({ status: 'completed', url: 'u', ...j })), ...over })
   const wanted = { codex: '0.171.0', claude: '2.1.329' }
@@ -385,11 +501,55 @@ describe('classifyRun: which check failed for which CLI version', () => {
     expect(r.results.codex).toBeUndefined()
   })
 
-  it('a run that timed out makes every CLI asked for red, saying so', () => {
+  it('a run that timed out makes every CLI asked for red, saying so, and says which legs had not started', () => {
     const r = classifyRun(run([], { timedOut: true, status: 'in_progress', conclusion: '' }), wanted)
     expect(r.results.codex.result).toBe('red')
     expect(r.results.claude.result).toBe('red')
     expect(r.results.codex.failing[0]).toMatch(/did not finish/)
+    expect(r.results.codex.failing).toContain('Codex CLI rc (macos-latest) (had not started)')
+  })
+
+  it('a run that timed out still names the legs that already failed, and the ones still running with their status', () => {
+    const legs = goodLegs('codex')
+    const jobs = [
+      { ...legs[0], conclusion: 'failure' },
+      { ...legs[1], conclusion: '', status: 'in_progress' },
+      legs[2],
+      ...otherJobs,
+    ]
+    const r = classifyRun(run(jobs, { timedOut: true, status: 'in_progress', conclusion: '' }), { codex: '0.171.0' })
+    expect(r.results.codex.result).toBe('red')
+    expect(r.results.codex.failing).toEqual([
+      expect.stringMatching(/did not finish/),
+      'Codex CLI rc (windows-2025) (failure)',
+      'Codex CLI rc (macos-latest) (in_progress)',
+    ])
+  })
+
+  it('counts a leg as passed only when it installed the version asked for: a run someone else started for another version is red', () => {
+    const r = classifyRun(run([...goodLegs('codex', {}, '0.170.0'), ...goodLegs('claude', {}, '2.1.328'), ...otherJobs]), wanted)
+    expect(r.results.codex.result).toBe('red')
+    expect(r.results.codex.failing).toEqual(expectedLegNames('codex').map((n: string) => `${n} (did not install 0.171.0)`))
+    expect(r.results.claude.failing).toEqual(expectedLegNames('claude').map((n: string) => `${n} (did not install 2.1.329)`))
+  })
+
+  it('does not take an install step that failed, was skipped, or belongs to the other CLI, for the install', () => {
+    const legs = goodLegs('codex')
+    for (const steps of [
+      [{ name: installStepName('codex', '0.171.0'), conclusion: 'failure' }],
+      [{ name: installStepName('codex', '0.171.0'), conclusion: 'skipped' }],
+      [{ name: installStepName('claude', '0.171.0'), conclusion: 'success' }],
+      [{ name: `${installStepName('codex', '0.171.0')} twice`, conclusion: 'success' }],
+      [],
+    ]) {
+      const r = classifyRun(run([{ ...legs[0], steps }, legs[1], legs[2], ...otherJobs]), { codex: '0.171.0' })
+      expect(r.results.codex.failing, JSON.stringify(steps)).toEqual(['Codex CLI rc (windows-2025) (did not install 0.171.0)'])
+    }
+  })
+
+  it('names the install step the way ci.yml names it, for both CLIs', () => {
+    expect(installStepName('codex', '0.171.0')).toBe('Install Codex 0.171.0 into its own prefix')
+    expect(installStepName('claude', '2.1.329')).toBe('Install Claude Code 2.1.329 into its own prefix')
   })
 
   it('names a run that failed with no failing job, so a red run is never read as passed', () => {
@@ -398,7 +558,7 @@ describe('classifyRun: which check failed for which CLI version', () => {
   })
 
   it('matches the job names ci.yml really produces', () => {
-    const ci = yaml.load(readRepo('.github/workflows/ci.yml')) as { jobs: Record<string, { name: string; strategy: { matrix: { os: string[]; cli: unknown } } }> }
+    const ci = yaml.load(readRepo('.github/workflows/ci.yml')) as { jobs: Record<string, { name: string; steps: Array<{ name?: string }>; strategy: { matrix: { os: string[]; cli: unknown } } }> }
     for (const [id, cli] of [['codex-conformance', 'codex'], ['claude-conformance', 'claude']] as const) {
       const job = ci.jobs[id]
       expect(job, `ci.yml has no ${id} job`).toBeDefined()
@@ -410,6 +570,10 @@ describe('classifyRun: which check failed for which CLI version', () => {
       expect(cliAxis, `${id} matrix has no rc leg`).toContain('rc')
       const names = RC_OSES.map((os) => String(evalValue(job.name, { matrix: { os, cli: 'rc' } })))
       expect(names, id).toEqual(expectedLegNames(cli))
+      // The step the watch reads to know which version the leg installed.
+      const stepNames = job.steps.map((s) => String(s.name ?? '')).filter((n) => /into its own prefix/.test(n))
+      expect(stepNames, `${id} install step`).toHaveLength(1)
+      expect(String(evalValue(stepNames[0], { steps: { ver: { outputs: { version: '9.8.7' } } } })), id).toBe(installStepName(cli, '9.8.7'))
     }
   })
 
@@ -521,6 +685,40 @@ describe('check: dispatch, wait, record, and fail on red', () => {
     const w = world({ neverCompletes: true })
     expect(await main(['check'], env(w, { CODEX_VERSION: '0.171.0' }), w.deps)).toBe(1)
     expect(w.summary).toMatch(/did not finish/)
+  })
+
+  it('red when the run does not finish in time, still naming the leg that had already failed and the one still running', async () => {
+    const legs = goodLegs('codex')
+    const w = world({ neverCompletes: true, jobs: [{ ...legs[0], conclusion: 'failure' }, { ...legs[1], conclusion: '', status: 'in_progress' }, legs[2], ...otherJobs] })
+    expect(await main(['check'], env(w, { CODEX_VERSION: '0.171.0' }), w.deps)).toBe(1)
+    expect(w.summary).toMatch(/did not finish/)
+    expect(w.summary).toContain('Codex CLI rc (windows-2025) (failure)')
+    expect(w.summary).toContain('Codex CLI rc (macos-latest) (in_progress)')
+    expect(w.summary).not.toContain('Codex CLI rc (ubuntu-latest)')
+    expect(JSON.parse(w.outputs.failures)[0].failing).toHaveLength(3)
+  })
+
+  it('survives one failed read of the run while waiting', async () => {
+    const w = world({ jobs: [...goodLegs('codex'), ...otherJobs] })
+    let views = 0
+    const inner = w.deps.gh
+    w.deps.gh = async (args: string[], o: { token?: string } = {}) => { if (args[1] === 'view') { views += 1; if (views === 2) throw new Error('gh run view failed: HTTP 502: Bad Gateway') } return inner(args, o) }
+    expect(await main(['check'], env(w, { CODEX_VERSION: '0.171.0' }), w.deps)).toBe(0)
+    expect(w.summary).toMatch(/Codex 0\.171\.0.*green/is)
+    expect(w.log.join('\n')).toMatch(/502/)
+  })
+
+  it('when every read of the run fails, says so, links the ci.yml run that was dispatched, and keeps the old record', async () => {
+    const w = world({ jobs: [...goodLegs('codex'), ...otherJobs] })
+    const inner = w.deps.gh
+    w.deps.gh = async (args: string[], o: { token?: string } = {}) => { if (args[1] === 'view') throw new Error('gh run view failed: HTTP 502: Bad Gateway'); return inner(args, o) }
+    const previous = JSON.stringify({ schema: 1, entries: [{ cli: 'codex', version: '0.170.0', result: 'green', at: '2026-11-19T05:50:00.000Z', ciRun: null }] })
+    expect(await main(['check'], env(w, { CODEX_VERSION: '0.171.0', PREVIOUS_RECORD: previous }), w.deps)).toBe(1)
+    expect(w.summary).toMatch(/could not be checked/)
+    expect(w.summary).toMatch(/502/)
+    expect(w.summary).toContain('https://github.com/o/r/actions/runs/101')
+    expect(w.outputs.failures).toBe('[]')
+    expect(recordedGreen(parseRecord(w.files.get('/tmp/r/upstream-cli-watch/record.json') as string), 'codex', '0.170.0')).toBeTruthy()
   })
 
   it('refuses a version that is not a plain semver before it calls gh at all', async () => {
@@ -642,9 +840,22 @@ describe('main: modes', () => {
 
   it('never writes a secret, a token or a repository variable: it has no call that could', () => {
     const src = readRepo('scripts/ci/upstream-cli-watch.mjs')
-    // gh is only ever asked to list, download, dispatch the one workflow, view, search or write ONE issue.
-    expect(src).not.toMatch(/gh['"],\s*\[?\s*['"](secret|variable|api|auth)['"]/)
+    // The shape every call in the script has (gh([...]) and deps.gh([...])), and the shape of a call that names the file.
+    const calls = /\bgh\(\s*\[\s*'(secret|variable|api|auth)'/
+    const named = /gh['"],\s*\[?\s*['"](secret|variable|api|auth)['"]/
+    expect(src).not.toMatch(calls)
+    expect(src).not.toMatch(named)
     expect(src).not.toMatch(/git['"],\s*\[?\s*['"](push|commit)['"]/)
     expect(src).not.toMatch(/process\.env\.GITHUB_TOKEN/)
+    // The check can fail: each way of writing one, appended to the real text, is caught.
+    for (const mutant of ["await deps.gh(['secret', 'set', 'X'])", "await gh(['variable', 'set', 'X', '--body', 'y'])", "await deps.gh(['api', '-X', 'PATCH', 'repos/o/r'])", "await gh(['auth', 'token'])"]) expect(`${src}\n${mutant}`, mutant).toMatch(calls)
+    expect(`${src}\nawait exec('gh', ['secret', 'set', 'X'])`).toMatch(named)
+  })
+
+  it('asks gh for exactly these things: list and download runs, dispatch the one workflow, view a run, search, edit and create an issue', () => {
+    const src = readRepo('scripts/ci/upstream-cli-watch.mjs')
+    const verbs = [...src.matchAll(/\bgh\(\s*\[\s*'([a-z-]+)',\s*'([a-z-]+)'/g)].map((m) => `${m[1]} ${m[2]}`)
+    expect(verbs.length).toBeGreaterThan(0)
+    expect([...new Set(verbs)].sort()).toEqual(['issue create', 'issue edit', 'issue list', 'run download', 'run list', 'run view', 'workflow run'])
   })
 })

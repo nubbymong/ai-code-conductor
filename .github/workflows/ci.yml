@@ -16,7 +16,7 @@ on:
   # Release level (P4.8; OD20 D7, WP1.71): the release-candidate Codex CLI is
   # checked on its own, dispatched with its version, besides the minimum and
   # pinned ones every run checks. On a dispatch the codex-conformance job runs,
-  # with the always-on changelog check; every other job's condition skips it.
+  # with the always-on changelog check, and the claude-conformance job when claude_rc_version is set; every other job's condition skips it.
   # The inputs reach a step through env, never a shell line.
   #
   # The daily upstream CLI watch (.github/workflows/upstream-cli-watch.yml,

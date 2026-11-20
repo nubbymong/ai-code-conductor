@@ -18,8 +18,8 @@ Ticket aicc_planning #368 (premise reviewed when filed; one gap found since and 
   merged to beta does not fire until the file reaches main (the next promotion).
   So the workflow is the same file on both branches, checks beta out itself, and
   dispatches ci.yml with `--ref beta`. To start it sooner, the one file would have
-  to be landed on main on its own (the owner's call). If the dispatch is refused
-  because main's ci.yml has no `workflow_dispatch` trigger, the failure text says so.
+  to be landed on main on its own (the owner's call). If the dispatch is refused, the failure text says where to look: a dispatch is checked
+  against the copy of ci.yml on the ref it names (beta), not main's copy.
 - Where "tested up to" lives. Codex: CODEX_MAX_TESTED_VERSION in
   src/main/providers/codex/cli-contract.ts. Claude Code: the app declares none (the
   provider says "No tested CLI version range is declared yet"); the only version its
@@ -42,9 +42,16 @@ Ticket aicc_planning #368 (premise reviewed when filed; one gap found since and 
   with one pinned Windows binary byte for byte).
 - De-duplication and record. Each run leaves `record.json` as the artifact
   `upstream-cli-watch-record`; the next run reads the newest earlier run's record
-  (green or red runs alike, cancelled ones are skipped). A version recorded green is
+  (green or red runs alike, cancelled ones are skipped; the record is read only from
+  the watch's own scheduled or manually started runs). A version recorded green is
   not run again; a red one is run again the next day. Nothing is committed, pushed
   or written to a repository variable.
+- Reading the dispatched run. A leg counts as passed only when it also ran its install
+  step for the version asked about (`Install <CLI> <version> into its own prefix`), so a
+  ci.yml run someone else started for another version is never taken for the watch's own.
+  One failed read while waiting is tried again (five in a row give up, and the summary
+  then links the ci.yml run). A run that does not finish in time is red and still names
+  each leg that failed or is still running.
 - Ticketing into aicc_planning is optional and dormant. The default token cannot
   write to that private repository and no secret exists. If a secret named
   AICC_PLANNING_ISSUES_TOKEN is set, the last job opens or updates ONE issue per
