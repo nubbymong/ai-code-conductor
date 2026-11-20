@@ -37,7 +37,13 @@ Found by the 2.1.3-beta.10 pre-publish VM smoke and fixed on the release PR befo
   does not show the CLI as not found (Check now, Check again from too old, and the check when an
   update tab ends). A row that drops its notice, because the provider was switched off or its
   CLI was found, also forgets that it looked, so switched back on (or not found again) it looks
-  once more and the notice returns with nothing pressed (found by the final-head review).
+  once more and the notice returns with nothing pressed (found by the final-head review). The row
+  keeps its look while it still offers a check it shows no commands for (main has not looked yet:
+  Check now), so a card shown again while a Check now of its own is out starts no second discover
+  behind it; a Check now that answers found does forget it, so found, then not found again,
+  looks again. Main says "unchecked" for any provider it holds no discovery record of, a
+  switched-off one included, so the rule asks whether the row offers a check, not whether main
+  has looked.
 - **What's New dates (#366).** `new Date('YYYY-MM-DD')` is midnight UTC, the day before
   anywhere west of UTC (the VM on Pacific time showed beta.10 as 19 Nov 2026). The changelog
   date is now built from its parts and formatted in UTC (`formatChangelogDate`,
@@ -52,4 +58,8 @@ Found by the 2.1.3-beta.10 pre-publish VM smoke and fixed on the release PR befo
   snapshot, and the focus rule's wait for the commands when the notice replaces them; then, after
   the re-review, no checking line behind the row's own Check now, Check again from a CLI that
   did not run, could not be checked or is too old, and the end check of an install tab, the
-  checking line kept after an answer, and the row's check from not found changing its layout).
+  checking line kept after an answer, and the row's check from not found changing its layout;
+  then, after the final-head review, a forget on every pass that shows no commands (a second look
+  behind a Check now still out), no forget after a Check now that answered found, and a forget
+  keyed on main having looked, not on the row offering a check, which a switch-off that main
+  reports as unchecked slips through).

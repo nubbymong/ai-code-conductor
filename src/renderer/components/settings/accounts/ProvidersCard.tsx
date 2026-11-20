@@ -230,14 +230,21 @@ function ProviderRow({ p, first }: { p: ProviderInstallationView; first: boolean
   // the CLI removed, or PATH changed, meanwhile). The row forgets that it
   // looked too, so the next time it shows the CLI as not found it looks
   // again, once, and the notice comes back with nothing pressed
-  // (aicc_planning#288).
+  // (aicc_planning#288). The look is kept while the row still offers a check
+  // although it shows no commands (main has not looked yet: Check now): a
+  // Check now of the row's own may still be out, and forgetting it then (a
+  // card shown again meanwhile) would let the snapshot that says not found
+  // start a second discover behind it. It is forgotten once main has looked
+  // and the row offers none (found and ready), so found, then not found
+  // again, looks again.
+  const offersCheck = offersCheckAgain(p)
   useEffect(() => {
     if (!purpose) {
       endedInstalls.delete(p.providerId)
-      lookedOnView.delete(p.providerId)
+      if (!offersCheck) lookedOnView.delete(p.providerId)
       if (pathHints.delete(p.providerId)) setHint(undefined)
     }
-  }, [purpose, p.providerId])
+  }, [purpose, offersCheck, p.providerId])
 
   // First view of a CLI shown as not found: the row looks again by itself,
   // once per provider while the renderer runs, as the Set up Codex page does

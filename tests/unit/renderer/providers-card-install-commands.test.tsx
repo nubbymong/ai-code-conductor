@@ -767,4 +767,56 @@ describe('Providers card: the off-PATH notice on first view', () => {
     await push(codex({ discoveryState: 'missing', version: undefined, lastCheckedAt: 4 }))
     expect(pa.discover).toHaveBeenCalledTimes(2)
   })
+
+  // The re-review of that fix (aicc_planning#288): the row forgets its look
+  // only when it offers no check. A Check now that main has not looked yet
+  // (unchecked) shows is a check of the row's own, still out, and must keep
+  // its look; and once main has looked and found, the look is forgotten even
+  // though the row showed no install or update commands before or after.
+  it('a card shown again while a Check now of its own is out: the snapshot that says not found starts no second look', async () => {
+    await render(codex({ discoveryState: 'unchecked', version: undefined }))
+    let answer: (v: unknown) => void = () => {}
+    pa.discover.mockImplementationOnce(() => new Promise((r) => { answer = r }))
+    await click('provider-check-again-codex')
+    expect(pa.discover).toHaveBeenCalledTimes(1)
+    act(() => { root.unmount() })
+    root = createRoot(container)
+    await render(codex({ discoveryState: 'unchecked', version: undefined }))
+    await push(codex({ discoveryState: 'missing', version: undefined, lastCheckedAt: 2 }))
+    expect(byTest('provider-status-codex')!.textContent).toBe('Checking for Codex...')
+    expect(byTest('provider-install-commands-codex')).toBeNull()
+    expect(pa.discover).toHaveBeenCalledTimes(1)
+    await act(async () => { answer(OFF_PATH) })
+    await act(async () => { await Promise.resolve() })
+    expect(byTest('provider-codex-path-hint')).not.toBeNull()
+    expect(byTest('provider-status-codex')).toBeNull()
+    expect(pa.discover).toHaveBeenCalledTimes(1)
+  })
+
+  it('a Check now that answers found, and then not found again: the row looks again', async () => {
+    await render(codex({ discoveryState: 'unchecked', version: undefined }))
+    await click('provider-check-again-codex')
+    expect(pa.discover).toHaveBeenCalledTimes(1)
+    await push(codex({ lastCheckedAt: 2 }))
+    expect(pa.discover).toHaveBeenCalledTimes(1)
+    await push(codex({ discoveryState: 'missing', version: undefined, lastCheckedAt: 3 }))
+    expect(pa.discover).toHaveBeenCalledTimes(2)
+    // Once, not again on the next snapshot.
+    await push(codex({ discoveryState: 'missing', version: undefined, lastCheckedAt: 4 }))
+    expect(pa.discover).toHaveBeenCalledTimes(2)
+  })
+
+  // Main says "unchecked" for any provider it holds no discovery record of,
+  // a switched-off one included: a switch-off must still forget the look.
+  it('switched off with main saying unchecked, and on again: the row still looks again', async () => {
+    pa.discover.mockResolvedValue(OFF_PATH)
+    await render(codex({ discoveryState: 'missing', version: undefined }))
+    expect(pa.discover).toHaveBeenCalledTimes(1)
+    await push(codex({ enabled: false, discoveryState: 'unchecked', version: undefined, lastCheckedAt: 2 }))
+    expect(byTest('provider-codex-path-hint')).toBeNull()
+    expect(pa.discover).toHaveBeenCalledTimes(1)
+    await push(codex({ enabled: true, discoveryState: 'missing', version: undefined, lastCheckedAt: 3 }))
+    expect(pa.discover).toHaveBeenCalledTimes(2)
+    expect(byTest('provider-codex-path-hint')).not.toBeNull()
+  })
 })
