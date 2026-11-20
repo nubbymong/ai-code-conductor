@@ -2374,6 +2374,8 @@ describe('the 2.1.3-beta.10 sweep', () => {
     const s = body('sessions')
     expect(s).toContain("A prompt button sends its text to the session's Claude Code or Codex, by one rule on this computer and over SSH: the text goes in first, and Enter follows about a third of a second later as a key of its own.")
     expect(s).toContain('On Codex the prompt goes in only once Codex waits at its empty prompt, and the app waits up to five seconds for that; if Codex is still working, or shows a question of its own, the command bar says so and nothing is typed')
+    expect(s).toContain("A prompt that holds a line break, or a character Codex's prompt cannot take such as an emoji, is typed and left in Codex's prompt for you to check and send with Enter, and the command bar says so.")
+    expect(src('renderer', 'components', 'CommandBar.tsx')).toContain("it holds characters Codex\\'s prompt cannot take, so it was left in the prompt. Check it, then press Enter.")
     expect(s).toContain('Pressing a button twice quickly sends its prompt once.')
     expect(s).toContain('choose Type it only beside Prompt buttons in Settings, Custom Commands; Send the prompt is the default.')
     expect(s).toContain('That choice applies to every session, on this computer and over SSH, and shell line buttons always run.')
@@ -2394,7 +2396,7 @@ describe('the 2.1.3-beta.10 sweep', () => {
 
   it('the providers section says a Codex that npm installed off PATH on Windows is offered Add it to PATH for me (#732)', () => {
     const p = body('providers')
-    expect(p).toContain('On Windows it does the same for a Codex installed with npm, which npm puts in a folder of its own for each Windows account: the Node.js installer adds that folder to the PATH of the account that installed Node.js only')
+    expect(p).toContain('On Windows it does the same for a Codex installed with npm, which npm, unless its prefix is set to another folder, puts in a folder of its own for each Windows account: the Node.js installer adds that folder to the PATH of the account that installed Node.js only')
     expect(p).toContain('so on another account the Set up Codex page and the Codex row in Settings, Accounts say Codex is installed but its folder is not on PATH, and offer Add it to PATH for me. The app advises')
   })
 
@@ -2402,7 +2404,8 @@ describe('the 2.1.3-beta.10 sweep', () => {
     const k = body('known-issues')
     const para = k.split('\n\n').find((x) => x.startsWith('On a Codex session, a command bar prompt button whose text starts with / (for example /compact)'))!
     expect(para).toContain("is typed into Codex's prompt but not sent.")
-    expect(para).toContain('The same goes for a Watchdog retry message that starts with /.')
+    expect(para).toContain("A Watchdog retry message that starts with / is left in Codex's prompt the same way, with no note.")
+    expect(para).not.toContain('The same goes for a Watchdog retry message')
     expect(para).toContain('Workaround: press Enter in the session to send it.')
     // The command bar's own words for that case.
     expect(src('renderer', 'components', 'CommandBar.tsx')).toContain("If it is still there, send it or clear it in the session.")
@@ -2425,10 +2428,13 @@ describe('the 2.1.3-beta.10 sweep', () => {
       'New setting in Settings, Custom Commands: Prompt buttons, Send the prompt (the default) or Type it only.',
       'With Codex 0.157.1, canvas notes, Ask Conductor questions, Watchdog retries and the app\'s Codex commands',
       'are typed into a Codex session again',
+      'Plan mode at launch, and the line Alt+V types for an image)',
+      'That Codex shows "? for shortcuts" on a line under its prompt',
       'npm\'s own folder (%APPDATA%\\npm)',
       'now say Codex is installed but its folder is not on PATH, and offer Add it to PATH for me',
       'A Watchdog retry on a Codex session is now typed the way canvas notes and Ask Conductor questions are',
       'so it no longer clears text you typed there meanwhile',
+      'A retry message that starts with /, such as /compact, is now typed but not sent: press Enter in the session. The default message, continue, is not affected.',
       'Nothing uses it yet, and nothing changes in this release.',
     ]) expect(all).toContain(said)
     for (const text of notes()) {
