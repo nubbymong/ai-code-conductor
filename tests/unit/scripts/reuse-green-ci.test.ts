@@ -3,7 +3,7 @@ import { describe, it, expect } from 'vitest'
 // importing it runs nothing. GitHub is injected as `get`.
 import {
   REUSE_CHANNEL, CI_WORKFLOW_PATH, REUSE_EVENTS, REUSE_PR_BASES, MAX_RUNS, MAX_COMMITS, MAX_JOB_READS, MAX_JOB_LISTS, MAX_PULLS,
-  testedTreeStep, isReusableRun, prBaseProblem, ranNoTests, treeProofProblems, findReusableRun, decideReuse, formatDecision, readHeadTree, main,
+  testedTreeStep, isReusableRun, prBaseProblem, ranNoTests, treeProofProblems, findReusableRun, decideReuse, formatDecision, readHeadTree, readHeadCommit, main,
 } from '../../../scripts/ci/reuse-green-ci.mjs'
 
 const REPO = 'o/r'
@@ -11,6 +11,9 @@ const TREE = 'a'.repeat(40)
 const OTHER_TREE = 'b'.repeat(40)
 const sha = (n: number) => n.toString(16).padStart(40, '0')
 const HEAD = sha(1)
+/** The release commit on beta (the squash merge of the release PR), and the PR's head. */
+const RELEASE = sha(0xbeef)
+const PR_HEAD = sha(0xcafe)
 
 type Over = Record<string, unknown>
 const run = (over: Over = {}) => ({
@@ -37,7 +40,12 @@ function github({ runs = [run()], trees = { [HEAD]: TREE } as Record<string, str
   const asked: string[] = []
   const get = async (p: string) => {
     asked.push(p)
-    if (p.startsWith(`/repos/${REPO}/actions/workflows/ci.yml/runs?`)) return { total_count: runs.length, workflow_runs: runs }
+    if (p.startsWith(`/repos/${REPO}/actions/workflows/ci.yml/runs?`)) {
+      // As GitHub does: a head_sha in the query lists that commit's runs only.
+      const h = /[?&]head_sha=([0-9a-f]{40})(&|$)/.exec(p)
+      const list = h ? runs.filter((r) => r.head_sha === h[1]) : runs
+      return { total_count: list.length, workflow_runs: list }
+    }
     const c = /^\/repos\/o\/r\/git\/commits\/([0-9a-f]{40})$/.exec(p)
     if (c) { if (!(c[1] in trees)) throw new Error(`GitHub API 404 for ${p}`); return { sha: c[1], tree: { sha: trees[c[1]] } } }
     const pl = /^\/repos\/o\/r\/commits\/([0-9a-f]{40})\/pulls\?per_page=100$/.exec(p)
@@ -318,6 +326,209 @@ describe('reuse-green-ci: the search', () => {
   })
 })
 
+describe("reuse-green-ci: the release PR's own run, found directly before the window (aicc_planning#361)", () => {
+  // 2.1.3-beta.9 (release run 44624973440): the release PR's green run 44469921465
+  // on its head had the release tree, but some 26 other commits had green runs
+  // that day, so it sat outside the MAX_COMMITS window and the suite ran again.
+  const WINDOW = `/repos/${REPO}/actions/workflows/ci.yml/runs?status=success&per_page=${MAX_RUNS}`
+  const RELEASE_PULLS = `/repos/${REPO}/commits/${RELEASE}/pulls?per_page=${MAX_PULLS}`
+  const HEAD_RUNS = `/repos/${REPO}/actions/workflows/ci.yml/runs?head_sha=${PR_HEAD}&status=success&per_page=${MAX_RUNS}`
+  const windowNote = (why: string) => `Release PR's own run not reused: ${why}. Searching the last ${MAX_RUNS} green ci.yml runs.`
+  /** What GitHub lists for the release commit: open PRs whose branch already holds it (another merge commit), and the release PR merged as it. */
+  const releasePulls = (over: Over = {}) => [
+    pull({ number: 744, state: 'open', merge_commit_sha: sha(0x744), head: { sha: sha(0x7440) } }),
+    pull({ number: 728, merge_commit_sha: RELEASE, head: { sha: PR_HEAD }, ...over }),
+  ]
+  /** What GitHub lists for the PR's head: the release PR, into beta, with the head as its head. */
+  const headPulls = () => [pull({ number: 728, head: { sha: PR_HEAD } })]
+  const ownRun = (over: Over = {}) => run({ id: 1500, head_sha: PR_HEAD, html_url: 'https://github.com/o/r/actions/runs/1500', ...over })
+  /** 40 commits with green runs on other trees, newest first, then the release PR's head: past the window. */
+  const busyDay = () => {
+    const busy = Array.from({ length: 40 }, (_, i) => run({ id: 3000 - i, head_sha: sha(3000 - i) }))
+    return { runs: [...busy, ownRun()], trees: { ...Object.fromEntries(busy.map((r) => [r.head_sha as string, OTHER_TREE])), [PR_HEAD]: TREE } }
+  }
+  const findAt = async (g: { get: (p: string) => Promise<unknown> }) => {
+    const notes: string[] = []
+    const r = await find(g, { sha: RELEASE, note: (line: string) => notes.push(line) })
+    return { r, notes }
+  }
+
+  it("reuses the release PR's own green run 40 commits back, past MAX_COMMITS, where the window finds nothing", async () => {
+    const { runs, trees } = busyDay()
+    expect(runs.indexOf(runs[runs.length - 1])).toBeGreaterThan(MAX_COMMITS)
+    const pulls = { [RELEASE]: releasePulls(), [PR_HEAD]: headPulls() }
+    const jobs = { 1500: greenJobs(1500) }
+    // The window alone does not reach it.
+    const w = github({ runs, trees, pulls, jobs })
+    expect(await find(w)).toEqual({ reuse: false, runId: null, url: null, reason: `no green ci.yml run for a commit with tree ${TREE}` })
+    expect(w.asked.filter((p) => p.includes('/git/commits/'))).toHaveLength(MAX_COMMITS)
+    // From the release commit: found directly, and the window is never read.
+    const g = github({ runs, trees, pulls, jobs })
+    const { r, notes } = await findAt(g)
+    expect(r).toEqual({ reuse: true, runId: 1500, url: 'https://github.com/o/r/actions/runs/1500', reason: `run 1500 (the release PR's own run, PR 728) passed the suite on Windows, macOS and Linux for tree ${TREE}` })
+    expect(notes).toEqual([])
+    expect(g.asked).toEqual([
+      RELEASE_PULLS,
+      `/repos/${REPO}/git/commits/${PR_HEAD}`,
+      HEAD_RUNS,
+      `/repos/${REPO}/commits/${PR_HEAD}/pulls?per_page=${MAX_PULLS}`,
+      `/repos/${REPO}/actions/runs/1500/jobs?filter=latest&per_page=100`,
+    ])
+    // A newer label or edit run on the head (beta.9's run 44474363273) is passed over, as in the window.
+    const labelled = github({ runs: [ownRun({ id: 1501 }), ...runs], trees, pulls, jobs: { 1501: idleJobs(1501), ...jobs } })
+    expect((await findAt(labelled)).r).toMatchObject({ reuse: true, runId: 1500 })
+    // The decision and main say which path found it.
+    expect(await decideReuse({ channel: 'beta', repo: REPO, tree: TREE, sha: RELEASE, get: github({ runs, trees, pulls, jobs }).get })).toMatchObject({ reuse: true, runId: 1500 })
+    const lines: string[] = []
+    const files: Record<string, string> = {}
+    const io = { log: (l: string) => lines.push(l), write: (f: string, t: string) => { files[f] = (files[f] ?? '') + t }, get: github({ runs, trees, pulls, jobs }).get, readHeadTree: () => TREE, readHeadCommit: () => RELEASE }
+    expect(await main([], { CHANNEL: 'beta', GITHUB_REPOSITORY: REPO, GITHUB_OUTPUT: 'out' }, io)).toBe(0)
+    expect(lines).toEqual([`Reuse: run 1500 (the release PR's own run, PR 728) passed the suite on Windows, macOS and Linux for tree ${TREE}`])
+    expect(files.out).toBe('reuse=true\nrun_id=1500\n')
+  })
+
+  it('a release PR whose head has another tree is not reused directly: one line says so, then the window runs', async () => {
+    // Its jobs even name the release tree: the tree of its commit decides, as in the window.
+    const pulls = { [RELEASE]: releasePulls(), [PR_HEAD]: headPulls(), [HEAD]: [pull()] }
+    const trees = { [PR_HEAD]: OTHER_TREE, [HEAD]: TREE }
+    const why = windowNote(`the head of PR 728 (commit ${PR_HEAD.slice(0, 12)}) has tree ${OTHER_TREE}, not the release tree ${TREE}`)
+    // The window then finds a run on the tree, and says so in its own words.
+    const g = github({ runs: [ownRun(), run()], trees, pulls, jobs: { 1500: greenJobs(1500), 100: greenJobs() } })
+    const { r, notes } = await findAt(g)
+    expect(r).toEqual({ reuse: true, runId: 100, url: 'https://github.com/o/r/actions/runs/100', reason: `ci.yml run 100 (pull_request, commit ${HEAD.slice(0, 12)}) passed the suite on Windows, macOS and Linux for tree ${TREE}` })
+    expect(notes).toEqual([why])
+    expect(g.asked.slice(0, 3)).toEqual([RELEASE_PULLS, `/repos/${REPO}/git/commits/${PR_HEAD}`, WINDOW])
+    expect(g.asked).not.toContain(HEAD_RUNS)
+    expect(g.asked.filter((p) => p.includes('/jobs'))).toEqual([`/repos/${REPO}/actions/runs/100/jobs?filter=latest&per_page=100`])
+    // With nothing on the tree in the window: refused, with the window's reason.
+    const none = await findAt(github({ runs: [ownRun()], trees, pulls, jobs: { 1500: greenJobs(1500) } }))
+    expect(none.r).toEqual({ reuse: false, runId: null, url: null, reason: `no green ci.yml run for a commit with tree ${TREE}` })
+    expect(none.notes).toEqual([why])
+  })
+
+  it('a run of the release PR without a green "Tested tree" step in each Test job is not reused directly, nor any run the window would refuse', async () => {
+    const pulls = { [RELEASE]: releasePulls(), [PR_HEAD]: headPulls() }
+    const trees = { [PR_HEAD]: TREE }
+    const proof = `Tested tree ${TREE}`
+    // A label run and a docs-only run on the head: refused directly, then refused by the window too.
+    const g = github({ runs: [ownRun({ id: 1501 }), ownRun()], trees, pulls, jobs: { 1501: idleJobs(1501), 1500: docsOnlyJobs(1500) } })
+    const { r, notes } = await findAt(g)
+    const unproven = `run 1500: Test (windows-2025) has no green "${proof}" step; 1 more were label or edit runs that ran no tests`
+    expect(notes).toEqual([windowNote(`no green ci.yml run of PR 728 proves the suite ran on this tree (${unproven})`)])
+    expect(r).toEqual({ reuse: false, runId: null, url: null, reason: `a green ci.yml run has this tree but none proves the suite ran on it (${unproven})` })
+    expect(g.asked.indexOf(WINDOW)).toBeGreaterThan(g.asked.indexOf(HEAD_RUNS))
+    // Each shape the window refuses, on the release PR's head and nowhere else: never reused directly.
+    const wJob = (over: Over) => [job('windows-2025', over, 1500), job('macos-latest', {}, 1500), job('ubuntu-latest', {}, 1500)]
+    const refused: Array<[string, { runs?: unknown[], trees?: Record<string, string>, jobs?: Record<number, unknown[]>, total?: Record<number, number>, pulls?: Record<string, unknown> }, RegExp]> = [
+      ['the proof step names another tree', { jobs: { 1500: wJob({ steps: [step(`Tested tree ${OTHER_TREE}`)] }) } }, /has no green "Tested tree a{40}" step/],
+      ['the proof step failed', { jobs: { 1500: wJob({ steps: [step(proof, { conclusion: 'failure' })] }) } }, /has no green "Tested tree a{40}" step/],
+      ['a Test job failed', { jobs: { 1500: wJob({ conclusion: 'failure' }) } }, /Test \(windows-2025\) is failure, not green/],
+      ['an OS has no Test job', { jobs: { 1500: greenJobs(1500).filter((j) => j.name !== 'Test (macos-latest)') } }, /no "Test \(macos-\.\.\.\)" job/],
+      ['the job list is not whole', { total: { 1500: 9 } }, /run 1500: its job list is not complete/],
+      ['the head is also in a PR into another base', { pulls: { [RELEASE]: releasePulls(), [PR_HEAD]: [...headPulls(), pull({ number: 6, base: { ref: 'scratch', repo: { id: 7, full_name: REPO } }, head: { sha: PR_HEAD } })] } }, /run 1500: pull request #6 is into scratch, not beta or main/],
+      ['the run is from a fork', { runs: [ownRun({ head_repository: { id: 8, full_name: 'evil/r' } })] }, /PR 728 has no green ci\.yml run on its head/],
+      ['the run did not end green', { runs: [ownRun({ conclusion: 'failure' })] }, /PR 728 has no green ci\.yml run on its head/],
+      ['the run was a dispatch', { runs: [ownRun({ event: 'workflow_dispatch' })] }, /PR 728 has no green ci\.yml run on its head/],
+      ['the run is of another workflow', { runs: [ownRun({ path: '.github/workflows/release.yml' })] }, /PR 728 has no green ci\.yml run on its head/],
+      ['no run on the head at all', { runs: [run()], trees: { [PR_HEAD]: TREE, [HEAD]: OTHER_TREE } }, /PR 728 has no green ci\.yml run on its head \(commit 0{12}\)/],
+    ]
+    for (const [what, over, why] of refused) {
+      const x = await findAt(github({ runs: [ownRun()], trees, pulls, jobs: { 1500: greenJobs(1500) }, ...over } as never))
+      expect(x.r.reuse, what).toBe(false)
+      expect(x.notes, what).toHaveLength(1)
+      expect(x.notes[0], what).toMatch(why)
+    }
+    // The bounds hold here too: MAX_JOB_READS runs that prove nothing, then stop, although the next would prove it.
+    const burst = Array.from({ length: MAX_JOB_READS + 1 }, (_, i) => ownRun({ id: 1600 - i }))
+    const jobs = Object.fromEntries(burst.map((b, i) => [b.id, i === MAX_JOB_READS ? greenJobs(b.id as number) : docsOnlyJobs(b.id as number)]))
+    const b = await findAt(github({ runs: burst, trees, pulls, jobs }))
+    expect(b.notes[0]).toContain(`(stopped after ${MAX_JOB_READS} job lists on this tree without proof (run 1600: `)
+    expect(b.r.reuse).toBe(false)
+  })
+
+  it('a release commit with no merged PR, or one into another branch, falls back to the window', async () => {
+    const short = RELEASE.slice(0, 12)
+    const noPr = windowNote(`no pull request into beta or main was merged as commit ${short}`)
+    const into = (ref: string) => releasePulls({ base: { ref, repo: { id: 7, full_name: REPO } } })
+    const cases: Array<[string, unknown, string]> = [
+      ['no PR is listed', [], noPr],
+      ['only open PRs that hold the commit, merged as another commit', releasePulls().slice(0, 1), noPr],
+      ['the PR was merged into a release line', into('release/v2.1.3'), noPr],
+      ['the PR was merged into another branch', into('scratch'), noPr],
+      ['the PR has no number', releasePulls({ number: undefined }), noPr],
+      ['the PR has no readable head', releasePulls({ head: { sha: 'abc' } }), windowNote('PR 728 has no readable head commit')],
+    ]
+    for (const [what, list, note] of cases) {
+      // The window holds the default green PR run on the tree.
+      const g = github({ runs: [ownRun(), run()], trees: { [PR_HEAD]: TREE, [HEAD]: TREE }, pulls: { [RELEASE]: list, [PR_HEAD]: headPulls(), [HEAD]: [pull()] }, jobs: { 1500: greenJobs(1500), 100: greenJobs() } })
+      const { r, notes } = await findAt(g)
+      expect(notes, what).toEqual([note])
+      // Found by the window, newest first: the PR head's own run, in the window's words.
+      expect(r, what).toEqual({ reuse: true, runId: 1500, url: 'https://github.com/o/r/actions/runs/1500', reason: `ci.yml run 1500 (pull_request, commit ${PR_HEAD.slice(0, 12)}) passed the suite on Windows, macOS and Linux for tree ${TREE}` })
+      expect(g.asked.slice(0, 2), what).toEqual([RELEASE_PULLS, WINDOW])
+    }
+    // main is a protected line too: found directly.
+    const intoMain = github({ runs: [ownRun()], trees: { [PR_HEAD]: TREE }, pulls: { [RELEASE]: into('main'), [PR_HEAD]: [pull({ number: 728, base: { ref: 'main', repo: { id: 7, full_name: REPO } }, head: { sha: PR_HEAD } })] }, jobs: { 1500: greenJobs(1500) } })
+    expect((await findAt(intoMain)).r.reason).toMatch(/^run 1500 \(the release PR's own run, PR 728\)/)
+    // No release commit to start from (none given, or not a hash): nothing is asked for it.
+    for (const s of [undefined, '', 'abc', RELEASE.toUpperCase()]) {
+      const notes: string[] = []
+      const g = github()
+      expect(await find(g, { sha: s, note: (l: string) => notes.push(l) }), String(s)).toMatchObject({ reuse: true, runId: 100 })
+      expect(notes, String(s)).toEqual([windowNote('the release commit could not be read')])
+      expect(g.asked[0], String(s)).toBe(WINDOW)
+    }
+  })
+
+  it("when a read for the release PR fails, the window runs as before: the release is never refused for it", async () => {
+    // The release commit's PR list: GitHub answers non-200 (githubGet throws on it), the call throws, or the answer is not a list.
+    const failing = (answer: (p: string) => Promise<unknown>, at = RELEASE_PULLS) => {
+      const g = github()
+      const asked: string[] = []
+      return { asked, get: async (p: string) => { asked.push(p); return p === at ? answer(p) : g.get(p) } }
+    }
+    const cases: Array<[string, (p: string) => Promise<unknown>, string]> = [
+      ['a 502', async (p) => { throw new Error(`GitHub API 502 for ${p.replace(/[?&]per_page=.*$/, '')}`) }, `could not check it (GitHub API 502 for /repos/${REPO}/commits/${RELEASE}/pulls)`],
+      ['a network error', async () => { throw new TypeError('fetch failed') }, 'could not check it (fetch failed)'],
+      ['not a list', async () => ({ message: 'Not Found' }), `could not check it (GitHub returned no pull request list for commit ${RELEASE})`],
+      ['null', async () => null, `could not check it (GitHub returned no pull request list for commit ${RELEASE})`],
+    ]
+    const windowFound = { reuse: true, runId: 100, url: 'https://github.com/o/r/actions/runs/100', reason: `ci.yml run 100 (pull_request, commit ${HEAD.slice(0, 12)}) passed the suite on Windows, macOS and Linux for tree ${TREE}` }
+    for (const [what, answer, why] of cases) {
+      const g = failing(answer)
+      const { r, notes } = await findAt(g)
+      expect(notes, what).toEqual([windowNote(why)])
+      expect(r, what).toEqual(windowFound)
+      expect(g.asked.slice(0, 2), what).toEqual([RELEASE_PULLS, WINDOW])
+      expect((await decideReuse({ channel: 'beta', repo: REPO, tree: TREE, sha: RELEASE, get: failing(answer).get })).reuse, what).toBe(true)
+    }
+    // A later read of the release PR's search fails: the window still runs.
+    const later = { [RELEASE]: releasePulls(), [PR_HEAD]: headPulls(), [HEAD]: [pull()] }
+    for (const at of [`/repos/${REPO}/git/commits/${PR_HEAD}`, HEAD_RUNS, `/repos/${REPO}/commits/${PR_HEAD}/pulls?per_page=${MAX_PULLS}`, `/repos/${REPO}/actions/runs/1500/jobs?filter=latest&per_page=100`]) {
+      const base = github({ runs: [ownRun(), run()], trees: { [PR_HEAD]: TREE, [HEAD]: TREE }, pulls: later, jobs: { 1500: greenJobs(1500), 100: greenJobs() } })
+      let failed = false
+      const get = async (p: string) => { if (p === at && !failed) { failed = true; throw new Error('GitHub API 500 for x') } return base.get(p) }
+      const notes: string[] = []
+      expect(await find({ get }, { sha: RELEASE, note: (l: string) => notes.push(l) }), at).toMatchObject({ reuse: true })
+      expect(notes, at).toEqual([windowNote('could not check it (GitHub API 500 for x)')])
+    }
+    // End to end through main and githubGet: a 403 on the PR list, then the window's reuse.
+    const g = github()
+    const fetchImpl = async (url: string) => {
+      const p = url.replace('https://api.github.com', '')
+      if (p === RELEASE_PULLS) return { ok: false, status: 403, json: async () => ({}) }
+      const body = await g.get(p)
+      return { ok: true, status: 200, json: async () => body }
+    }
+    const lines: string[] = []
+    const files: Record<string, string> = {}
+    const io = { log: (l: string) => lines.push(l), write: (f: string, t: string) => { files[f] = (files[f] ?? '') + t }, fetchImpl, readHeadTree: () => TREE, readHeadCommit: () => RELEASE }
+    expect(await main([], { CHANNEL: 'beta', GITHUB_REPOSITORY: REPO, GITHUB_OUTPUT: 'out' }, io)).toBe(0)
+    expect(lines).toEqual([windowNote(`could not check it (GitHub API 403 for /repos/${REPO}/commits/${RELEASE}/pulls)`), `Reuse: ${windowFound.reason}`])
+    expect(files.out).toBe('reuse=true\nrun_id=100\n')
+  })
+})
+
 describe('reuse-green-ci: the decision the release reads', () => {
   it('only the beta channel may reuse: any other channel asks GitHub nothing and runs the suite', async () => {
     expect(REUSE_CHANNEL).toBe('beta')
@@ -350,7 +561,7 @@ describe('reuse-green-ci: the decision the release reads', () => {
 
   it('main writes the outputs and the summary, reads the tree from git on beta only, and exits 0 whatever happens', async () => {
     const files: Record<string, string> = {}
-    const io = (over: Over = {}) => ({ log: () => {}, write: (f: string, t: string) => { files[f] = (files[f] ?? '') + t }, get: github().get, readHeadTree: () => TREE, ...over })
+    const io = (over: Over = {}) => ({ log: () => {}, write: (f: string, t: string) => { files[f] = (files[f] ?? '') + t }, get: github().get, readHeadTree: () => TREE, readHeadCommit: () => RELEASE, ...over })
     const env = { CHANNEL: 'beta', GITHUB_REPOSITORY: REPO, GITHUB_OUTPUT: 'out', GITHUB_STEP_SUMMARY: 'sum' }
     expect(await main([], env, io())).toBe(0)
     expect(files.out).toBe('reuse=true\nrun_id=100\n')
@@ -359,7 +570,7 @@ describe('reuse-green-ci: the decision the release reads', () => {
     for (const k of Object.keys(files)) delete files[k]
     let read = 0
     const g = github()
-    expect(await main([], { ...env, CHANNEL: 'stable' }, io({ get: g.get, readHeadTree: () => { read++; return TREE } }))).toBe(0)
+    expect(await main([], { ...env, CHANNEL: 'stable' }, io({ get: g.get, readHeadTree: () => { read++; return TREE }, readHeadCommit: () => { read++; return RELEASE } }))).toBe(0)
     expect(files.out).toBe('reuse=false\nrun_id=\n')
     expect(read).toBe(0)
     expect(g.asked).toEqual([])
@@ -370,6 +581,11 @@ describe('reuse-green-ci: the decision the release reads', () => {
     for (const k of Object.keys(files)) delete files[k]
     expect(await main(['--channel', 'beta', '--repo', REPO, '--tree', OTHER_TREE], { GITHUB_OUTPUT: 'out' }, io({ readHeadTree: () => { throw new Error('not asked') } }))).toBe(0)
     expect(files.out).toBe('reuse=false\nrun_id=\n')
+    // --sha names the release commit instead of git.
+    const asked: string[] = []
+    const g2 = github()
+    expect(await main(['--sha', sha(0xfeed)], env, io({ get: async (p: string) => { asked.push(p); return g2.get(p) }, readHeadCommit: () => { throw new Error('not asked') } }))).toBe(0)
+    expect(asked[0]).toBe(`/repos/${REPO}/commits/${sha(0xfeed)}/pulls?per_page=${MAX_PULLS}`)
     // git cannot say, the tree reader throws, GitHub throws, the output file cannot be written: 0 each time, and no reuse.
     for (const over of [{ readHeadTree: () => '' }, { readHeadTree: () => { throw new Error('no git') } }, { get: async () => { throw new Error('down') } }]) {
       for (const k of Object.keys(files)) delete files[k]
@@ -388,5 +604,10 @@ describe('reuse-green-ci: the decision the release reads', () => {
     expect(readHeadTree((args: string[]) => { calls.push(args); return `${TREE}\n` })).toBe(TREE)
     expect(calls).toEqual([['rev-parse', '--verify', 'HEAD^{tree}']])
     expect(readHeadTree(() => { throw new Error('not a repository') })).toBe('')
+    // And the release commit itself, for the release PR's own run.
+    const commitCalls: string[][] = []
+    expect(readHeadCommit((args: string[]) => { commitCalls.push(args); return `${RELEASE}\n` })).toBe(RELEASE)
+    expect(commitCalls).toEqual([['rev-parse', '--verify', 'HEAD^{commit}']])
+    expect(readHeadCommit(() => { throw new Error('not a repository') })).toBe('')
   })
 })
