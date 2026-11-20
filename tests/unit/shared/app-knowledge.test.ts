@@ -1857,9 +1857,13 @@ describe('2.1.1: the stable entry and its known issues', () => {
     expect(notice[0]).toMatch(/Claude Code version .* is no longer used/)
   })
 
+  // 2.1.3-beta.11 (aicc_planning#185) raised the newest tested Codex past
+  // 0.156.1. The 2.1.1 What's New row is history and keeps the version 2.1.1
+  // was tested with; the Feature Guide entry, which Ask Conductor reads today,
+  // follows the version the app checks.
   it('names the Codex version this release is tested with, as the app checks it', async () => {
     const { CODEX_MAX_TESTED_VERSION } = await import('../../../src/main/providers/codex/cli-contract')
-    expect(rows().some((d) => d.includes(`newer than ${CODEX_MAX_TESTED_VERSION},`))).toBe(true)
+    expect(rows().some((d) => d.includes('newer than 0.156.1,'))).toBe(true)
     expect(paraStarting(`This release is tested with Codex up to version ${CODEX_MAX_TESTED_VERSION}.`)).toBeDefined()
   })
 

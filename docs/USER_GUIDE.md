@@ -376,7 +376,7 @@ Claude account can be to claude.ai:
 ### Installing or updating Codex
 
 CCC needs Codex 0.153.4 or newer. A version newer than CCC was tested with
-(0.156.1) still runs, with a note saying so. When the Providers card finds
+(0.157.1) still runs, with a note saying so. When the Providers card finds
 Codex missing or too old, its row shows the commands from OpenAI's own README,
 OpenAI's installer first, each with **Run it for me** and **Copy**:
 
