@@ -18,10 +18,23 @@ on:
   # pinned ones every run checks. On a dispatch the codex-conformance job runs,
   # with the always-on changelog check; every other job's condition skips it.
   # The inputs reach a step through env, never a shell line.
+  #
+  # The daily upstream CLI watch (.github/workflows/upstream-cli-watch.yml,
+  # aicc_planning#368) dispatches this workflow on beta with the newest published
+  # Codex and Claude Code, when either is newer than the newest version the app
+  # was tested with. It reads the result from the jobs named below
+  # (`Codex CLI rc (<os>)`, `Claude Code CLI rc (<os>)`; scripts/ci/
+  # upstream-cli-watch.mjs, held to these names by a test), so a rename of
+  # either job or of an input here is a change to the watch as well.
   workflow_dispatch:
     inputs:
       codex_rc_version:
         description: 'Release-candidate Codex CLI version to check as well (a plain semver, for example 0.160.0); empty checks the minimum and pinned only'
+        type: string
+        required: false
+        default: ''
+      claude_rc_version:
+        description: 'Claude Code version to check, on the app floor and on this one (a plain semver, for example 2.1.329); empty skips the Claude Code legs'
         type: string
         required: false
         default: ''
@@ -767,6 +780,105 @@ jobs:
           path: ${{ runner.temp }}/codex-conformance
           if-no-files-found: warn
           retention-days: 30
+
+  # Real-CLI conformance for Claude Code (aicc_planning#368). It runs only when
+  # asked: a dispatch with `claude_rc_version`, which the daily upstream CLI watch
+  # (upstream-cli-watch.yml) does when a newer Claude Code is published. There is
+  # no PR or push leg: nothing a PR changes can change what the published CLI
+  # prints, and Claude Code ships almost daily.
+  #
+  # Two legs per OS: the app's own floor (CLAUDE_MIN_MANAGED_CLI_VERSION, read
+  # from the code), which shows the checks themselves hold on a version they
+  # were written against, and the dispatched version, the one being asked about.
+  # Each runs the CLI with no sign-in, no network request of ours and no secret,
+  # in a fresh, empty CLAUDE_CONFIG_DIR, and checks (tests/integration/
+  # claude-cli-conformance.test.ts, which reads the help through
+  # claude-conformance-lib.mjs):
+  #   1. the install answers `claude --version` with the version asked for, the
+  #      app's own reader (parseClaudeVersion) reads it, and the managed-launch
+  #      floor check (claudeManagedCliCompatibility) accepts it;
+  #   2. `claude --help` still lists every switch of the reviewer's constant
+  #      command line (CLAUDE_REVIEW_ARGS), and --output-format still offers json;
+  #   3. --permission-mode still offers every mode the launch picker writes;
+  #   4. `claude auth --help` lists login, logout and status, and `claude auth
+  #      login --help` lists the three sign-in methods and --email.
+  # Not driven here, because each needs a sign-in, a model call or a live
+  # session: the hooks run against a real Claude (tests/integration/hooks/
+  # real-claude.test.ts), the statusline and transcript shapes, and the
+  # authority census (scripts/gen-claude-authority-manifest.mjs), a maintainer
+  # tool that compares with one pinned Windows binary byte for byte.
+  #
+  # The CLI is installed from its PLATFORM package (`@anthropic-ai/claude-code-
+  # <os>-<arch>`: the native binary, no install script, no bin), with
+  # --ignore-scripts, into a prefix of its own: nothing of Anthropic's or
+  # anyone's runs at install time. The job holds no secrets, and every
+  # third-party action is pinned by commit.
+  claude-conformance:
+    if: github.event_name == 'workflow_dispatch' && inputs.claude_rc_version != ''
+    name: Claude Code CLI ${{ matrix.cli }} (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2025, macos-latest, ubuntu-latest]
+        cli: [minimum, rc]
+    env:
+      CCC_CLAUDE_CONFORMANCE_KIND: ${{ matrix.cli }}
+      CCC_CLAUDE_CONFORMANCE_PROVE_RED: ${{ inputs.conformance_prove_red && '1' || '0' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      # The suite imports only pure modules of the app (the reviewer's argv, the
+      # version floor, the sign-in methods, the permission modes), so there is no
+      # native rebuild and no Electron binary.
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Resolve this leg's Claude Code version
+        id: ver
+        env:
+          RC_VERSION: ${{ inputs.claude_rc_version }}
+        run: node tests/integration/claude-conformance-ci.mjs version ${{ matrix.cli }}
+
+      - name: Resolve this runner's Claude Code package
+        id: pkg
+        run: node tests/integration/claude-conformance-ci.mjs package
+
+      - name: Install Claude Code ${{ steps.ver.outputs.version }} into its own prefix
+        shell: bash
+        env:
+          CLAUDE_VERSION: ${{ steps.ver.outputs.version }}
+          CLAUDE_PACKAGE: ${{ steps.pkg.outputs.package }}
+          PREFIX: ${{ runner.temp }}/claude-${{ matrix.cli }}
+          NPM_CACHE: ${{ runner.temp }}/npm-claude-cache
+        run: npm install --global --prefix "$PREFIX" --ignore-scripts --cache "$NPM_CACHE" --no-audit --no-fund "$CLAUDE_PACKAGE@$CLAUDE_VERSION"
+
+      - name: Locate the installed CLI
+        id: bin
+        env:
+          CLAUDE_PACKAGE: ${{ steps.pkg.outputs.package }}
+        run: node tests/integration/claude-conformance-ci.mjs bin "${{ runner.temp }}/claude-${{ matrix.cli }}" "$CLAUDE_PACKAGE"
+
+      - name: A fresh, empty Claude Code folder for every run of the CLI
+        id: home
+        run: node tests/integration/claude-conformance-ci.mjs config
+
+      - name: Real-CLI conformance (version, reviewer switches, permission modes, sign-in commands)
+        env:
+          CCC_CLAUDE_CONFORMANCE_BIN: ${{ steps.bin.outputs.bin }}
+          CCC_CLAUDE_CONFORMANCE_VERSION: ${{ steps.ver.outputs.version }}
+          CCC_CLAUDE_CONFORMANCE_CONFIG_DIR: ${{ steps.home.outputs.config }}
+        run: npx vitest run tests/integration/claude-cli-conformance.test.ts
 
   # SSH multi-session smoke (#24 regression gate; aicc_planning#28). Real `ssh`
   # against an EPHEMERAL localhost sshd — no external hosts or credentials, so
