@@ -699,4 +699,72 @@ describe('Providers card: the off-PATH notice on first view', () => {
     await act(async () => { await Promise.resolve() })
     expect(byTest('provider-status-codex')!.textContent).toBe('Codex 0.155.1 - ready')
   })
+
+  // The final-head review of the release PR (aicc_planning#288): switching a
+  // provider off drops the notice it brought (a hint kept across it could be
+  // stale), while the once-only look still said the row had looked, so
+  // switched back on it showed the not-found line and live install commands
+  // until Check again. A row that drops its hint also forgets that it looked.
+  const push = async (view: ProviderInstallationView) => {
+    await act(async () => {
+      useProviderAccountsStore.setState({ snapshot: snapshot({ providers: [claude(), view] }), loaded: true })
+    })
+    await act(async () => { await Promise.resolve() })
+  }
+
+  it('switched off and on again: the row looks again, then shows the notice, not the not-found line and the commands', async () => {
+    pa.discover.mockResolvedValue(OFF_PATH)
+    await render(codex({ discoveryState: 'missing', version: undefined }))
+    expect(pa.discover).toHaveBeenCalledTimes(1)
+    expect(byTest('provider-codex-path-hint')).not.toBeNull()
+    // Switched off: nothing of the CLI is shown, and the notice is gone.
+    await push(codex({ enabled: false, discoveryState: 'missing', version: undefined, lastCheckedAt: 2 }))
+    expect(byTest('provider-codex-path-hint')).toBeNull()
+    expect(pa.discover).toHaveBeenCalledTimes(1)
+    // Switched on: main rediscovers with no hint, and the snapshot says not found.
+    let answer: (v: unknown) => void = () => {}
+    pa.discover.mockImplementationOnce(() => new Promise((r) => { answer = r }))
+    await push(codex({ enabled: true, discoveryState: 'missing', version: undefined, lastCheckedAt: 3 }))
+    expect(pa.discover).toHaveBeenCalledTimes(2)
+    expect(pa.discover).toHaveBeenLastCalledWith('codex')
+    expect(byTest('provider-status-codex')!.textContent).toBe('Checking for Codex...')
+    expect(byTest('provider-install-commands-codex')).toBeNull()
+    await act(async () => { answer(OFF_PATH) })
+    await act(async () => { await Promise.resolve() })
+    expect(byTest('provider-codex-path-hint')).not.toBeNull()
+    expect(byTest('provider-status-codex')).toBeNull()
+    expect(byTest('provider-install-commands-codex')).toBeNull()
+    expect(container.textContent).not.toContain('Codex was not found on this computer')
+    expect(pa.discover).toHaveBeenCalledTimes(2)
+  })
+
+  it('switched off and on again after a look that had nothing to say: it looks again, as the CLI may be installed since', async () => {
+    await render(codex({ discoveryState: 'missing', version: undefined }))
+    expect(pa.discover).toHaveBeenCalledTimes(1)
+    expect(byTest('provider-status-codex')!.textContent).toBe('Codex was not found on this computer')
+    await push(codex({ enabled: false, discoveryState: 'missing', version: undefined, lastCheckedAt: 2 }))
+    expect(pa.discover).toHaveBeenCalledTimes(1)
+    // Installed in a folder PATH lacks while it was off.
+    pa.discover.mockResolvedValue(OFF_PATH)
+    await push(codex({ enabled: true, discoveryState: 'missing', version: undefined, lastCheckedAt: 3 }))
+    expect(pa.discover).toHaveBeenCalledTimes(2)
+    expect(byTest('provider-codex-path-hint')).not.toBeNull()
+    expect(byTest('provider-status-codex')).toBeNull()
+    expect(byTest('provider-install-commands-codex')).toBeNull()
+  })
+
+  it('found since, and not found again: the row looks again, once, as it does for its first time', async () => {
+    pa.discover.mockResolvedValue(OFF_PATH)
+    await render(codex({ discoveryState: 'missing', version: undefined }))
+    expect(pa.discover).toHaveBeenCalledTimes(1)
+    await push(codex({ lastCheckedAt: 2 }))
+    expect(byTest('provider-codex-path-hint')).toBeNull()
+    expect(pa.discover).toHaveBeenCalledTimes(1)
+    await push(codex({ discoveryState: 'missing', version: undefined, lastCheckedAt: 3 }))
+    expect(pa.discover).toHaveBeenCalledTimes(2)
+    expect(byTest('provider-codex-path-hint')).not.toBeNull()
+    // Not again on the next snapshot.
+    await push(codex({ discoveryState: 'missing', version: undefined, lastCheckedAt: 4 }))
+    expect(pa.discover).toHaveBeenCalledTimes(2)
+  })
 })

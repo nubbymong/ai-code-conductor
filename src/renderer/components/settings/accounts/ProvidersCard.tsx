@@ -79,9 +79,11 @@ function notePathHint(providerId: ProviderId, r: { ok: boolean; pathHint?: PathH
 // The providers whose row has checked: by itself, on first view of its CLI
 // as not found, or by its Check again or the check when its install tab
 // ends. A row looks by itself only once each while the renderer runs, and
-// never after a check of its own (aicc_planning#288). The look still out is
-// held here too, with the rows told when it answers, so a row shown again
-// while it runs still says it is checking. A check of the row's own that
+// never after a check of its own (aicc_planning#288), until the provider is
+// switched off or found: it then forgets the look (the "Found since" effect),
+// and looks once more the next time it shows the CLI as not found. The look
+// still out is held here too, with the rows told when it answers, so a row
+// shown again while it runs still says it is checking. A check of the row's own that
 // starts while the row does not show the CLI as not found is held here too
 // (startLook): main pushes the snapshot that says not found before the
 // hint it reads from the registry, so without it the row would show the
@@ -223,10 +225,16 @@ function ProviderRow({ p, first }: { p: ProviderInstallationView; first: boolean
     providerTabs.set(providerId, opened)
     setTab(opened)
   }
-  // Found since: what an ended install said, and what helped, no longer apply.
+  // Found since, or switched off: what an ended install said, and what
+  // helped, no longer apply (a hint kept across a switch-off could be stale:
+  // the CLI removed, or PATH changed, meanwhile). The row forgets that it
+  // looked too, so the next time it shows the CLI as not found it looks
+  // again, once, and the notice comes back with nothing pressed
+  // (aicc_planning#288).
   useEffect(() => {
     if (!purpose) {
       endedInstalls.delete(p.providerId)
+      lookedOnView.delete(p.providerId)
       if (pathHints.delete(p.providerId)) setHint(undefined)
     }
   }, [purpose, p.providerId])

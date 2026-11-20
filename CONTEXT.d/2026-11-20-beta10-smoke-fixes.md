@@ -35,7 +35,9 @@ Found by the 2.1.3-beta.10 pre-publish VM smoke and fixed on the release PR befo
   and its install commands, also when the card is shown again meanwhile; a snapshot that says
   found is shown at once. The same holds for a check of the row's own that starts while the row
   does not show the CLI as not found (Check now, Check again from too old, and the check when an
-  update tab ends).
+  update tab ends). A row that drops its notice, because the provider was switched off or its
+  CLI was found, also forgets that it looked, so switched back on (or not found again) it looks
+  once more and the notice returns with nothing pressed (found by the final-head review).
 - **What's New dates (#366).** `new Date('YYYY-MM-DD')` is midnight UTC, the day before
   anywhere west of UTC (the VM on Pacific time showed beta.10 as 19 Nov 2026). The changelog
   date is now built from its parts and formatted in UTC (`formatChangelogDate`,
