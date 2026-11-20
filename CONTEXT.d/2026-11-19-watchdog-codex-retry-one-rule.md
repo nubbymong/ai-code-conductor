@@ -43,7 +43,7 @@ belongs to the run). A retry message starting with / is no longer submitted
 while Codex shows its command list under it: the composer rule reads the
 list as part of the composer's text, so it neither submits it nor takes it
 back, and it stays there for the user (the old rule's check allowed the
-list). The default, continue, is not affected.
+list). The default, continue, is not affected. The same now holds for any caller's text that starts with / (a Codex prompt button such as /compact is the likely one): it is left in the composer and answered not delivered, where before the review fix it was taken back.
 
 **Tests.** codex-watchdog-submit.test.ts is rewritten: the real
 SessionWatchdog and the real session input module over fake ports, wired as
@@ -81,7 +81,7 @@ again (these two red the index.ts case).
   wait up to 2 and 5 minutes) could be typed after the session had
   recovered. Two options of the composer rule, set only by submitRetry:
   `readyBy`, the end of the 5 s fixed when the Watchdog sends; and
-  `stillWanted`, asked before each read and just before the text is typed,
+  `stillWanted`, asked before each poll of the ready wait and just before the text is typed,
   which the Watchdog manager answers from a per-session count of status
   changes (the same watcher, no status change since the send). A retry whose
   incident is over is answered session-gone, typed nothing, and the Watchdog

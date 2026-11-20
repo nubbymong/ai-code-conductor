@@ -134,7 +134,7 @@ export interface ComposerSubmitOptions {
    *  is typed (`busy-timeout`). The Watchdog's retry sets it. */
   readyBy?: number
   /** 2.1.3-beta.10 section A2 (PR #746 review): whether the caller still
-   *  wants the text typed, asked before each read of the ready wait and again
+   *  wants the text typed, asked before each poll of the ready wait and again
    *  just before the text is written. False (or a throw): nothing is typed,
    *  and the answer is `session-gone`, as a Claude Code marker whose markers
    *  were cleared answers (canvas/claude-marker-typing.ts); the caller holds
@@ -182,7 +182,7 @@ function holdsOnlyOwnText(draft: string, text: string, folded: boolean): boolean
  *    shared reading calls every such screen blocked). On time out: not
  *    delivered, `prompt-on-screen` when a prompt was up, else `busy-timeout`
  *    (also when `readyBy` has passed before the first read). A caller's
- *    `stillWanted` that says no, at any read or just before the write: not
+ *    `stillWanted` that says no, at any poll or just before the write: not
  *    delivered, `session-gone`, nothing typed.
  * 3. A text up to 1,000 code points is typed only when it fits the composer
  *    (the pane's rows minus 4, by an upper-bound estimate); one that does not
@@ -226,7 +226,8 @@ export async function submitToCodexComposer(text: string, deps: ComposerSubmitDe
     try { return deps.readScreen() } catch { return null }
   }
 
-  // The caller's own say: still wanted (asked before each read and the write).
+  // The caller's own say: still wanted (asked before each poll of the ready
+  // wait and before the write).
   const wanted = (): boolean => {
     if (!opts.stillWanted) return true
     try { return opts.stillWanted() === true } catch { return false }

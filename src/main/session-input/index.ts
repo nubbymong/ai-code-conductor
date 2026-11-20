@@ -141,7 +141,7 @@ export const RETRY_CODEX_READY_WAIT_MS = 5_000
  *   not. Its RETRY_CODEX_READY_WAIT_MS counts from this call (`readyBy`), so
  *   a retry queued behind another submission for the run is not typed later
  *   than that; and `stillWanted`, the Watchdog's "its incident is still the
- *   one it was sent for", is asked before each read and just before the text
+ *   one it was sent for", is asked before each poll and just before the text
  *   is typed: an incident that is over leaves the retry untyped (PR #746
  *   review).
  * - Every other session's (Claude Code's: on this computer, held by the
