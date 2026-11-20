@@ -74,8 +74,9 @@ export const REUSE_PR_BASES = ['beta', 'main']
  *  commit, newer than the run that ran the suite, and runs no test. They are
  *  passed over without using up the first bound. Past any bound: the full
  *  suite. The release PR's own run (a. above) is read first with its own
- *  count: one page of pull requests for the release commit, one page of green
- *  runs on the PR's head, and the same job-list bounds. */
+ *  count: one page of pull requests each for the release commit and the PR's
+ *  head, one page of green runs on the PR's head, and the same job-list
+ *  bounds. */
 export const MAX_RUNS = 100
 export const MAX_COMMITS = 30
 export const MAX_PULLS = 100
@@ -269,6 +270,7 @@ export async function findReleasePrRun({ repo, tree, sha, get }) {
  */
 export async function findReusableRun({ repo, tree, sha, get, note = () => {} }) {
   const no = (reason) => ({ reuse: false, runId: null, url: null, reason })
+  const yes = (run, reason) => ({ reuse: true, runId: run.id, url: typeof run.html_url === 'string' ? run.html_url : null, reason })
   if (typeof repo !== 'string' || !REPO_RE.test(repo)) return no('no repository name to search')
   if (typeof tree !== 'string' || !SHA_RE.test(tree)) return no('the release tree hash could not be read')
 
@@ -276,10 +278,7 @@ export async function findReusableRun({ repo, tree, sha, get, note = () => {} })
   let why
   try {
     const direct = await findReleasePrRun({ repo, tree, sha, get })
-    if (direct.run) {
-      const run = direct.run
-      return { reuse: true, runId: run.id, url: typeof run.html_url === 'string' ? run.html_url : null, reason: `run ${run.id} (the release PR's own run, PR ${direct.pr.number}) passed the suite on Windows, macOS and Linux for tree ${tree}` }
-    }
+    if (direct.run) return yes(direct.run, `run ${direct.run.id} (the release PR's own run, PR ${direct.pr.number}) passed the suite on Windows, macOS and Linux for tree ${tree}`)
     why = direct.why
   } catch (err) {
     why = `could not check it (${err && err.message ? err.message : err})`
@@ -299,10 +298,7 @@ export async function findReusableRun({ repo, tree, sha, get, note = () => {} })
     sameTree += 1
     const found = await proveCommitRuns({ repo, tree, sha: commit, runs: runs.filter((r) => r.head_sha === commit), get, tally })
     if (found.stop) return no(found.stop)
-    if (found.run) {
-      const run = found.run
-      return { reuse: true, runId: run.id, url: typeof run.html_url === 'string' ? run.html_url : null, reason: `${CI_WORKFLOW} run ${run.id} (${run.event}, commit ${commit.slice(0, 12)}) passed the suite on Windows, macOS and Linux for tree ${tree}` }
-    }
+    if (found.run) return yes(found.run, `${CI_WORKFLOW} run ${found.run.id} (${found.run.event}, commit ${commit.slice(0, 12)}) passed the suite on Windows, macOS and Linux for tree ${tree}`)
   }
   if (sameTree === 0) return no(`no green ${CI_WORKFLOW} run for a commit with tree ${tree}`)
   return no(`a green ${CI_WORKFLOW} run has this tree but none proves the suite ran on it (${unprovenNote(tally)})`)

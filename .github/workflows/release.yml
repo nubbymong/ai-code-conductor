@@ -105,8 +105,8 @@ jobs:
   #
   # Never give this job an `if:`: a skipped job skips the jobs that need it.
   # continue-on-error makes a failure here count as a pass for them, with no
-  # outputs, which they read as "run the suite". Read-only: contents and
-  # actions read. It holds no signing secret and feeds no signing, packaging,
+  # outputs, which they read as "run the suite". Read-only: contents,
+  # actions and pull-requests read. It holds no signing secret and feeds no signing, packaging,
   # upload or publish step (tests/unit/scripts/ci-cadence.test.ts pins all of
   # this).
   ci-reuse:

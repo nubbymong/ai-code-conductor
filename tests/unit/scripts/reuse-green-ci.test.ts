@@ -328,8 +328,8 @@ describe('reuse-green-ci: the search', () => {
 
 describe("reuse-green-ci: the release PR's own run, found directly before the window (aicc_planning#361)", () => {
   // 2.1.3-beta.9 (release run 44624973440): the release PR's green run 44469921465
-  // on its head had the release tree, but some 26 other commits had green runs
-  // that day, so it sat outside the MAX_COMMITS window and the suite ran again.
+  // on its head had the release tree, but 42 other commits had green runs after
+  // it that day, so it sat outside the MAX_COMMITS window and the suite ran again.
   const WINDOW = `/repos/${REPO}/actions/workflows/ci.yml/runs?status=success&per_page=${MAX_RUNS}`
   const RELEASE_PULLS = `/repos/${REPO}/commits/${RELEASE}/pulls?per_page=${MAX_PULLS}`
   const HEAD_RUNS = `/repos/${REPO}/actions/workflows/ci.yml/runs?head_sha=${PR_HEAD}&status=success&per_page=${MAX_RUNS}`
@@ -438,6 +438,12 @@ describe("reuse-green-ci: the release PR's own run, found directly before the wi
       expect(x.notes, what).toHaveLength(1)
       expect(x.notes[0], what).toMatch(why)
     }
+    // GitHub lists another commit's run under head_sha (it should not): it is dropped, so it never skips condition 4.
+    const stray = run({ id: 1700, head_sha: sha(0xdead) })
+    const sloppy = github({ runs: [ownRun(), stray], trees: { [PR_HEAD]: TREE, [sha(0xdead)]: OTHER_TREE }, pulls, jobs: { 1500: docsOnlyJobs(1500), 1700: greenJobs(1700) } })
+    const s = await findAt({ get: async (p: string) => (p === HEAD_RUNS ? { total_count: 2, workflow_runs: [ownRun(), stray] } : sloppy.get(p)) })
+    expect(s.r.reuse).toBe(false)
+    expect(sloppy.asked).not.toContain(`/repos/${REPO}/actions/runs/1700/jobs?filter=latest&per_page=100`)
     // The bounds hold here too: MAX_JOB_READS runs that prove nothing, then stop, although the next would prove it.
     const burst = Array.from({ length: MAX_JOB_READS + 1 }, (_, i) => ownRun({ id: 1600 - i }))
     const jobs = Object.fromEntries(burst.map((b, i) => [b.id, i === MAX_JOB_READS ? greenJobs(b.id as number) : docsOnlyJobs(b.id as number)]))
