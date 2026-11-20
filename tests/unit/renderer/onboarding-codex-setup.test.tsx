@@ -469,6 +469,49 @@ describe('Codex CLI not found', () => {
     expect(byTest('codex-setup-after-install')).toBeNull()
   })
 
+  // The same smoke, the moment before: while the entry check was out, the
+  // snapshot's "not found" showed the row and both install commands, with
+  // live Run it for me buttons, and the notice swapped in when the check
+  // answered. Until that check answers, the page says it is checking.
+  it('while the entry check is out, a snapshot that says not found shows Checking, not the not-found row and the commands', async () => {
+    const folder = '%APPDATA%' + String.fromCharCode(92) + 'npm'
+    let answer: (v: unknown) => void = () => {}
+    pa.discover.mockImplementation(() => new Promise((r) => { answer = r }))
+    await render(snap({ discoveryState: 'missing', version: undefined }))
+    expect(byTest('codex-setup-checking')!.textContent).toContain('Checking for the Codex CLI...')
+    expect(byTest('codex-setup-check'), 'no not-found row').toBeNull()
+    expect(byTest('codex-recipes-install'), 'no install commands').toBeNull()
+    expect(document.querySelector('[data-testid^="codex-recipe-run-"]')).toBeNull()
+    expect(document.body.textContent).not.toContain('Codex CLI not found')
+    expect(byTest('codex-setup-check-again')!.textContent).toBe('Checking...')
+    await act(async () => {
+      answer({ ok: true, installation: codex({ discoveryState: 'missing', version: undefined, lastCheckedAt: 2 }), pathHint: { kind: 'add-to-path', folder } })
+    })
+    await flush()
+    expect(byTest('codex-setup-checking')).toBeNull()
+    expect(byTest('codex-path-hint')).not.toBeNull()
+    expect(byTest('codex-setup-check')).toBeNull()
+  })
+
+  it('an entry check that finds nothing to say, or fails, shows the not-found row and the commands', async () => {
+    let answer: (v: unknown) => void = () => {}
+    pa.discover.mockImplementation(() => new Promise((r) => { answer = r }))
+    await render(snap({ discoveryState: 'missing', version: undefined }))
+    expect(byTest('codex-setup-checking')).not.toBeNull()
+    await act(async () => { answer({ ok: true, installation: codex({ discoveryState: 'missing', version: undefined, lastCheckedAt: 2 }) }) })
+    await flush()
+    expect(byTest('codex-setup-checking')).toBeNull()
+    expect(byTest('codex-setup-check')!.textContent).toBe('!Codex CLI not found')
+    expect(byTest(`codex-recipe-command-${NPM_INSTALL.id}`)!.textContent).toBe(NPM_INSTALL.displayCommand)
+    act(() => { root.unmount() })
+    root = createRoot(container)
+    pa.discover.mockResolvedValue({ ok: false, code: 'internal', message: 'That did not work; try again.' })
+    await render(snap({ discoveryState: 'missing', version: undefined }))
+    expect(byTest('codex-setup-checking')).toBeNull()
+    expect(byTest('codex-setup-check')!.textContent).toBe('!Codex CLI not found')
+    expect(byTest('codex-setup-error')!.textContent).toBe('That did not work; try again.')
+  })
+
   // A restart that only MAY help (Codex was not seen; pathHintIsNote) is a
   // note: the page keeps its own still-not-found line and shows the note
   // after it, as the setup screen does. A hint

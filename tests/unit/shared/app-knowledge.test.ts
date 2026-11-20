@@ -2399,7 +2399,7 @@ describe('the 2.1.3-beta.10 sweep', () => {
     expect(p).toContain('On Windows it does the same for a Codex installed with npm, which npm, unless its prefix is set to another folder, puts in a folder of its own for each Windows account: the Node.js installer adds that folder to the PATH of the account that installed Node.js only')
     // In place of the not-found words and the commands, and on a row's first
     // view with nothing pressed (aicc_planning#288, the beta.10 VM smoke).
-    expect(p).toContain('so on another account the Set up Codex page and the Codex row in Settings, Accounts say Codex is installed but its folder is not on PATH, in place of the not-found message and the install commands, and offer Add it to PATH for me. A row in Settings, Accounts that shows Claude Code or Codex as not found checks once by itself when you first see it, so this message shows there without pressing Check again. The app advises')
+    expect(p).toContain('so on another account the Set up Codex page and the Codex row in Settings, Accounts say Codex is installed but its folder is not on PATH, in place of the not-found message and the install commands, and offer Add it to PATH for me. A row in Settings, Accounts that shows Claude Code or Codex as not found checks once by itself when you first see it, so a message like this one shows there without pressing Check again. The app advises')
   })
 
   it('known issues: a Codex prompt button that starts with / is typed but not sent, with its workaround (#746)', () => {
@@ -2438,6 +2438,8 @@ describe('the 2.1.3-beta.10 sweep', () => {
       'so it no longer clears text you typed there meanwhile',
       'A retry message that starts with /, such as /compact, is now typed but not sent: press Enter in the session. The default message, continue, is not affected.',
       'Nothing uses it yet, and nothing changes in this release.',
+      "Release dates in What's New and in the Feature Guide's release history no longer show a day early on a computer whose time zone is behind UTC",
+      'a row that shows Codex or Claude Code as not found now checks once by itself when you first see it',
     ]) expect(all).toContain(said)
     for (const text of notes()) {
       expect(text, text.slice(0, 40)).not.toMatch(/—/)

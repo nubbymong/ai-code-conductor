@@ -204,7 +204,7 @@ describe("What's New dates: the day the changelog names, in every time zone", ()
     expect(formatChangelogDate('2026-01-01')).toBe('1 Jan 2026')
   })
 
-  it("west of UTC, in the release line What's New and the Feature Guide show", () => {
+  it("west of UTC: the release line What's New and the Feature Guide show reads 20 Nov 2026", () => {
     process.env.TZ = 'America/Los_Angeles'
     renderEntries([{ ...PLAIN, date: '2026-11-20' }])
     expect(container.textContent).toContain('20 Nov 2026')

@@ -145,6 +145,11 @@ export function CodexSetupStep({ onNext, onBack, stepAside, returns }: {
   // Linux), or in npm's folder, which PATH lacks (Windows), or a restart
   // would help.
   const [pathHint, setPathHint] = useState<PathHintView | undefined>(undefined)
+  // Whether a check this page made has answered yet. Until the entry check
+  // does, a snapshot that says not found shows "Checking" instead: that
+  // check may bring the path hint, which takes the not-found row's place
+  // (aicc_planning#288).
+  const [looked, setLooked] = useState(false)
   const checkAgain = async () => {
     setChecking(true)
     setError(null)
@@ -152,6 +157,7 @@ export function CodexSetupStep({ onNext, onBack, stepAside, returns }: {
     const r = await providerAccountActions.discover('codex')
     if (!mounted.current) return
     setChecking(false)
+    setLooked(true)
     setPathHint(r.ok ? r.pathHint : undefined)
     if (r.ok) setAnswer(r.installation)
     else setError({ code: r.code, message: r.message })
@@ -220,7 +226,12 @@ export function CodexSetupStep({ onNext, onBack, stepAside, returns }: {
   let view: string = install.kind
   if (install.kind === 'unavailable') {
     body = <p className="cx-muted" data-testid="codex-setup-unavailable">The account list is not available right now. You can set up Codex later in Settings, Accounts.</p>
-  } else if (install.kind === 'checking') {
+  } else if (install.kind === 'checking' || (install.kind === 'missing' && !looked)) {
+    // Not looked for yet, or not found by the snapshot while the page's entry
+    // check is out: so "Codex CLI not found" and the install commands do not
+    // show for a moment before the notice that Codex is installed takes
+    // their place.
+    view = 'checking'
     body = <CheckRow tone="pending" testId="codex-setup-checking">Checking for the Codex CLI...</CheckRow>
   } else if (install.kind === 'missing' || install.kind === 'update') {
     // Still not found after a command this page ran ended, or after the
@@ -228,9 +239,10 @@ export function CodexSetupStep({ onNext, onBack, stepAside, returns }: {
     // Codex found but too old has its own line above.)
     //
     // A path hint that says what helps (Codex is in a folder PATH lacks, or a
-    // restart would help) takes the place of the not-found row and the
-    // install commands, as the setup screen's and the footer's do
-    // (SetupDialog, BottomBar): Codex is installed, and installing it again
+    // restart would help) takes the place of the not-found row, as the setup
+    // screen's and the footer's take the place of their not-found words
+    // (SetupDialog, BottomBar), and of the install commands too, which those
+    // two keep: Codex is installed, and installing it again
     // would not help (aicc_planning#288). It stays while a check runs, so
     // Check again does not bring the not-found row back for a moment, and a
     // Check again that still finds nothing says so under it. A restart that
