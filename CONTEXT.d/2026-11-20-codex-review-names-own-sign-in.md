@@ -21,6 +21,11 @@ link; the Codex row had none.
   never a fixed string.
 - When main names no folder, the short line stays and gains the same link:
   "No Codex account can run reviews. Add a Codex account in Accounts."
+- The own-sign-in line is used only when the app lists no Codex account that
+  is not archived. Main also sends no account id when the app holds an
+  account that is only inactive (never made the reviewer, and an inactive
+  account cannot be the default), and then the cause is that account, not
+  the computer's own sign-in: that state keeps the short line and the link.
 - "Accounts" is a button that calls the row's existing onOpenAccounts, the
   same callback the Claude row's "Change in Accounts" uses (Settings opens
   its Accounts tab, which holds the Codex section). No second mechanism and
@@ -41,4 +46,6 @@ Conductor knows the row. The tips library and the Feature Guide cards need
 nothing: the review tip already says each row says why a review cannot run.
 Two existing assertions in tests/unit/renderer/code-review-tools.test.tsx
 pinned the old bare line for exactly this condition and were updated to the
-new line.
+new line; their fixtures now list no Codex account, which is the state the
+line is for (main sends an account id whenever a reviewer or an active
+default account exists).

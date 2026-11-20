@@ -67,12 +67,17 @@ function noReviewMessage(snapshot: AccountsSnapshot, id: ProviderId, review: Rev
     // No account at all: add one. Since O5 the sign-in already on this
     // computer is never taken in as an account, so a user signed in to Codex
     // outside the app always lands here, and a bare "no account" reads as a
-    // bug. When main names that sign-in's folder, say it cannot review; with
-    // no folder named, keep the short line. Either way "Accounts" is the link
-    // that opens Settings, Accounts, as the Claude row's link does.
+    // bug. When main names that sign-in's folder AND the app lists no Codex
+    // account that is not archived, say it cannot review. Main also sends no
+    // account id when the app holds an account that is only inactive (never
+    // made the reviewer): the cause is then that account, so the computer's
+    // own sign-in is not blamed. With no folder named, keep the short line.
+    // Either way "Accounts" is the link that opens Settings, Accounts, as the
+    // Claude row's link does.
     if (!isCodex) return { message: 'No Claude account can run reviews right now.' }
     const folder = externalHomeFolder(snapshot, 'codex')
-    return folder
+    const hasCodexAccount = snapshot.accounts.some((a) => a.providerId === 'codex' && a.lifecycle !== 'archived')
+    return folder && !hasCodexAccount
       ? accountsLinked(`Codex's own sign-in on this computer (${folder}) cannot run reviews. Add a Codex account in `, '.')
       : accountsLinked('No Codex account can run reviews. Add a Codex account in ', '.')
   }

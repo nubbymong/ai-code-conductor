@@ -169,7 +169,7 @@ describe('Code review switches: live', () => {
   })
 
   it('names each switch by its title alone and describes it by its lines', () => {
-    setup({ snap: snapshot({}, { codex: { review: { ready: false } } }) })
+    setup({ snap: snapshot({ accounts: [claudeMain, claudeHome] }, { codex: { review: { ready: false } } }) })
     renderTools()
     expect(sw('codexReview').getAttribute('aria-label')).toBe('Codex review')
     expect(sw('claudeReview').getAttribute('aria-label')).toBe('Claude review')
@@ -281,7 +281,8 @@ describe('Code review switches: off and cannot run', () => {
   })
 
   it('says no Codex account exists, as a warning, when there is none', () => {
-    setup({ snap: snapshot({}, { codex: { review: { ready: false } } }) })
+    // No Codex account listed at all (the state the line is for).
+    setup({ snap: snapshot({ accounts: [claudeMain, claudeHome] }, { codex: { review: { ready: false } } }) })
     renderTools()
     expect(sw('codexReview').disabled).toBe(true)
     // O5: the sign-in already on this computer is never taken in as an
@@ -461,6 +462,25 @@ describe('Code review switches: no Codex account at all, with the link to Accoun
       await act(async () => { link.click() })
       expect(onOpenAccounts).toHaveBeenCalledTimes(1)
     }
+  })
+
+  it("does not blame this computer's own sign-in when the app holds a Codex account that is only inactive", async () => {
+    // An app-added account made inactive, never made the reviewer: main picks
+    // no reviewer (the default must be active), so it sends no account id. The
+    // cause is that account, not ~/.codex: keep the short line and its link.
+    const inactive = account({ id: 'acc-inactive', providerId: 'codex', identityId: 'id-work', lifecycle: 'inactive', isProviderDefault: false, isReviewerDefault: false })
+    setup({ snap: noAccount({ accounts: [inactive, claudeMain] }) })
+    renderTools()
+    expect(message('codexReview')).toBe('No Codex account can run reviews. Add a Codex account in Accounts.')
+    expect(q('review-tool-codexReview-message')!.getAttribute('data-tone')).toBe('warn')
+    expect(sw('codexReview').disabled).toBe(true)
+    const link = codexLink()!
+    expect(link).toBeTruthy()
+    expect(link.textContent).toBe('Accounts')
+    await act(async () => { link.click() })
+    expect(onOpenAccounts).toHaveBeenCalledTimes(1)
+    expect(reviewToolView(noAccount({ accounts: [inactive, claudeMain] }), 'codexReview', { masterOn: true, platform: 'win32', loaded: true, settings: {} }))
+      .toMatchObject({ message: 'No Codex account can run reviews. Add a Codex account in Accounts.' })
   })
 
   it('reads as one sentence to a screen reader: the switch is described by the whole line, link included', () => {
