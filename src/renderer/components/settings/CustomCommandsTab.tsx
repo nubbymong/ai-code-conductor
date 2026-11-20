@@ -20,7 +20,8 @@ import CommandDialog from '../CommandDialog'
  *   1. Command bar  -- one row / two rows then fold; show the command bar
  *   2. Core tools   -- where hidden tools come back (Logs notes the privacy toggle)
  *   3. Snap         -- colour + auto-delete, moved here from Snap's right-click
- *   4. Commands     -- a plain searchable list: Edit / Delete, "Needs review" filter
+ *   4. Commands     -- a plain searchable list: Edit / Delete, "Needs review" filter;
+ *                      and what prompt buttons do: send, or type only (#333)
  * Explicitly NOT here: density, default-icon style, applies-to chips, bulk
  * operations, a sections panel, a secrets list, import/export.
  */
@@ -55,6 +56,9 @@ export function CustomCommandsTab() {
   const overflow = barState.overflow
   const hidden = barState.hiddenCoreTools
   const loggingEnabled = useSettingsStore((s) => s.settings.loggingEnabled)
+  // #333: what a prompt button does, in every session (main reads it at each press).
+  const promptButtons = useSettingsStore((s) => s.settings.commandPromptButtons) === 'type' ? 'type' : 'send'
+  const updateSettings = useSettingsStore((s) => s.updateSettings)
 
   // ---- 2. core tools ------------------------------------------------------------
   const sessions = useSessionStore((s) => s.sessions)
@@ -169,6 +173,18 @@ export function CustomCommandsTab() {
       </Card>
 
       <Card title="Commands" sub="Every button across every config. Right-click on the bar edits one; this is where you find many." testId="settings-commands">
+        <div className="mb-3" data-testid="settings-prompt-buttons">
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-1" role="radiogroup" aria-label="Prompt buttons">
+            <span className="text-sm text-text">Prompt buttons:</span>
+            {([['send', 'Send the prompt'], ['type', 'Type it only']] as const).map(([value, label]) => (
+              <label key={value} className="flex items-center gap-2 cursor-pointer select-none">
+                <input type="radio" name="command-prompt-buttons" checked={promptButtons === value} onChange={() => { void updateSettings({ commandPromptButtons: value }) }} className="accent-blue" data-testid={`settings-prompt-buttons-${value}`} />
+                <span className="text-sm text-text leading-tight">{label}</span>
+              </label>
+            ))}
+          </div>
+          <p className="text-[11px] text-overlay0 leading-tight mt-1">Applies to every session, on this computer and over SSH. Shell line buttons always run.</p>
+        </div>
         <div className="flex items-center gap-3 mb-3">
           <input
             type="text"

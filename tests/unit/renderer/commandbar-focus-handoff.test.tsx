@@ -7,6 +7,11 @@
  *  - a pty-typing command additionally dispatches `ccc:focus-terminal` with
  *    the target pty's session id, so the terminal takes the keyboard;
  *  - a page command dispatches nothing (no pty was written).
+ * Since 2.1.3-beta.10 (#333) a prompt button for the agent is typed by main:
+ * the bar calls pty.submitPrompt with the text and no Enter, after dropping
+ * the wheel's tmux scrollback belief (main leaves copy-mode itself); it says
+ * why in its note when the answer is not sent; and it writes the old line and
+ * Enter through pty.write only when the preload has no such bridge.
  */
 import React from 'react'
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
@@ -52,9 +57,17 @@ vi.mock('../../../src/renderer/components/ToolbarPopup', () => ({ default: () =>
 vi.mock('../../../src/renderer/components/PasteHint', () => ({ default: () => null }))
 
 const ptyWrite = vi.fn()
-;(globalThis as any).window.electronAPI = { ...(globalThis as any).window.electronAPI, pty: { write: ptyWrite } }
+let SUBMIT_ANSWER: unknown = { outcome: 'sent' }
+let SUBMIT_FAILS = false
+const submitPrompt = vi.fn(async () => {
+  if (SUBMIT_FAILS) throw new Error('no handler')
+  return SUBMIT_ANSWER
+})
+;(globalThis as any).window.electronAPI = { ...(globalThis as any).window.electronAPI, pty: { write: ptyWrite, submitPrompt } }
 
 const { default: CommandBar } = await import('../../../src/renderer/components/CommandBar')
+const { registerTmuxWheelScroll } = await import('../../../src/renderer/components/terminal/tmuxWheelScroll')
+const { usePasteHintStore } = await import('../../../src/renderer/stores/pasteHintStore')
 
 let container: HTMLDivElement
 let root: Root
@@ -66,6 +79,11 @@ const captureFocusEvent = (ev: Event) => {
 beforeEach(() => {
   COMMANDS = []
   ptyWrite.mockClear()
+  submitPrompt.mockClear()
+  SUBMIT_ANSWER = { outcome: 'sent' }
+  SUBMIT_FAILS = false
+  ;(globalThis as any).window.electronAPI.pty = { write: ptyWrite, submitPrompt }
+  usePasteHintStore.setState({ hints: {} })
   focusEvents = []
   window.addEventListener('ccc:focus-terminal', captureFocusEvent)
   container = document.createElement('div')
@@ -91,7 +109,10 @@ describe('focus hand-off after a chip runs', () => {
     chip.focus()
     expect(document.activeElement).toBe(chip)
     act(() => { chip.click() })
-    expect(ptyWrite).toHaveBeenCalledWith('pty-1', 'resume from the handoff\r')
+    // #333: main types a prompt button; the bar passes the text and no Enter.
+    expect(submitPrompt).toHaveBeenCalledTimes(1)
+    expect(submitPrompt).toHaveBeenCalledWith({ sessionId: 'pty-1', text: 'resume from the handoff' })
+    expect(ptyWrite).not.toHaveBeenCalled()
     // The whole bug: Enter must not find the chip focused any more.
     expect(document.activeElement).not.toBe(chip)
     expect(focusEvents).toEqual([{ sessionId: 'pty-1' }])
@@ -107,5 +128,72 @@ describe('focus hand-off after a chip runs', () => {
     expect(ptyWrite).not.toHaveBeenCalled()
     expect(document.activeElement).not.toBe(chip)
     expect(focusEvents).toEqual([])
+  })
+})
+
+describe('a prompt button is typed by main (#333)', () => {
+  const PROMPT = { id: 'c1', label: 'Resume Prompt', prompt: 'resume from the handoff', scope: 'global' }
+  const press = async () => {
+    render()
+    await act(async () => { buttonNamed('Resume Prompt')!.click(); await Promise.resolve(); await Promise.resolve() })
+  }
+  const note = () => usePasteHintStore.getState().hints['pty-1']
+
+  it('drops the wheel\'s tmux scrollback belief first: main sends the leave key itself', async () => {
+    const reset = vi.fn()
+    const off = registerTmuxWheelScroll('pty-1', { handleWheel: () => false, exitPrefixForInput: () => '', setEnabled: () => {}, reset })
+    COMMANDS = [PROMPT]
+    await press()
+    off()
+    expect(reset).toHaveBeenCalledTimes(1)
+    expect(submitPrompt).toHaveBeenCalledTimes(1)
+    expect(ptyWrite).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['sent', { outcome: 'sent' }],
+    ['typed only, as the setting says', { outcome: 'typed' }],
+    ['dropped as a repeat', { outcome: 'dropped' }],
+  ])('%s: no note', async (_name, answer) => {
+    SUBMIT_ANSWER = answer
+    COMMANDS = [PROMPT]
+    await press()
+    expect(note()).toBeUndefined()
+  })
+
+  it.each([
+    ['busy-timeout', 'The prompt was not sent: Codex was still working, and its prompt did not come free in time.'],
+    ['prompt-on-screen', 'The prompt was not sent: Codex was showing a question of its own (folder trust, sandbox setup or an approval). Answer it in the session first.'],
+    ['session-gone', 'The prompt was not sent: the session was not running, or it ended or restarted before it could be sent.'],
+    ['refused-text', 'The prompt was not sent: it is empty, or too long for the app to type in one press.'],
+  ])('not sent (%s): the bar\'s note says why', async (reason, words) => {
+    SUBMIT_ANSWER = { outcome: 'not-sent', reason }
+    COMMANDS = [PROMPT]
+    await press()
+    expect(note()).toBe(words)
+  })
+
+  it('typed but not sent on Codex: the note says it was left in the prompt', async () => {
+    SUBMIT_ANSWER = { outcome: 'typed', reason: 'refused-text' }
+    COMMANDS = [PROMPT]
+    await press()
+    expect(note()).toBe('The prompt was typed but not sent: it holds characters Codex\'s prompt cannot take, so it was left in the prompt. Check it, then press Enter.')
+  })
+
+  it('a bridge that fails: the note says not sent, and nothing is written raw', async () => {
+    SUBMIT_FAILS = true
+    COMMANDS = [PROMPT]
+    await press()
+    expect(note()).toBe('The prompt was not sent: the session was not running, or it ended or restarted before it could be sent.')
+    expect(ptyWrite).not.toHaveBeenCalled()
+  })
+
+  it('a preload with no bridge (an older one, a test harness): the line and its Enter through pty.write, as before', async () => {
+    ;(globalThis as any).window.electronAPI.pty = { write: ptyWrite }
+    COMMANDS = [PROMPT]
+    await press()
+    expect(ptyWrite).toHaveBeenCalledWith('pty-1', 'resume from the handoff\r')
+    expect(submitPrompt).not.toHaveBeenCalled()
+    expect(focusEvents).toEqual([{ sessionId: 'pty-1' }])
   })
 })

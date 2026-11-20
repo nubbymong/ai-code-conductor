@@ -41,9 +41,10 @@ import { useBandFolding, type FoldBand } from './command-bar/useBandFolding'
 import NotesTool, { type NotesToolHandle } from './command-bar/NotesTool'
 import { CommandIcon } from './command-icons'
 import { DEFAULT_COMMAND_COLOR } from '../lib/command-swatches'
-import { writeSessionInput } from './terminal/tmuxWheelScroll'
+import { writeSessionInput, dropTmuxCopyModeBelief } from './terminal/tmuxWheelScroll'
 import { usePasteHintStore } from '../stores/pasteHintStore'
 import { stripSpoofableText } from '../../shared/safe-text'
+import type { PromptButtonResult, SubmitNotDeliveredReason } from '../../shared/types'
 
 // User-picked section colours are Mocha pastels tuned for dark surfaces;
 // rendered as bare text on the light theme they wash out. Darken them toward
@@ -73,6 +74,36 @@ const CODEX_PILL_NOTE_MS = 6000
  *  partner (#86). Longer than a paste hint: the note asks the user to sign in
  *  first, and it is read before the next press. */
 const PARTNER_NOTE_MS = 6000
+
+/** #333: why a prompt button's prompt was not sent, after "The prompt was not
+ *  sent:". The four reasons from Codex's submit rule (busy-timeout,
+ *  prompt-on-screen, too-tall, not-drawn) keep Ask Conductor's words
+ *  (askConductor.ts), with "the session" where those name the Ask tab.
+ *  `refused-text` here is main refusing the message itself (empty, over the
+ *  channel's cap, or on Codex over PROMPT_CODEX_MAX_CODE_POINTS): the submit
+ *  primitive's own refused-text comes back as typed, not sent
+ *  (PROMPT_TYPED_REFUSED). `session-gone` is any session's. */
+const PROMPT_NOT_SENT: Record<SubmitNotDeliveredReason, string> = {
+  'busy-timeout': 'Codex was still working, and its prompt did not come free in time.',
+  'prompt-on-screen': 'Codex was showing a question of its own (folder trust, sandbox setup or an approval). Answer it in the session first.',
+  'too-tall': 'it is too long to check in Codex\'s prompt at this pane size. Make the pane taller, or the prompt shorter.',
+  'not-drawn': 'the app could not confirm it in Codex\'s prompt. If it is still there, send it or clear it in the session.',
+  'refused-text': 'it is empty, or too long for the app to type in one press.',
+  'session-gone': 'the session was not running, or it ended or restarted before it could be sent.',
+}
+/** A Codex text its prompt cannot take, typed for the user to check and send. */
+const PROMPT_TYPED_REFUSED = 'it holds characters Codex\'s prompt cannot take, so it was left in the prompt. Check it, then press Enter.'
+
+/** How long the bar says why a prompt button's prompt was not sent. */
+const PROMPT_NOTE_MS = 6000
+
+/** The bar's note for a prompt button's answer, or null when there is nothing to say. */
+function promptButtonNote(result: PromptButtonResult): string | null {
+  if (!result || typeof result !== 'object') return null
+  if (result.outcome === 'not-sent') return `The prompt was not sent: ${PROMPT_NOT_SENT[result.reason] ?? PROMPT_NOT_SENT['session-gone']}`
+  if (result.outcome === 'typed' && result.reason === 'refused-text') return `The prompt was typed but not sent: ${PROMPT_TYPED_REFUSED}`
+  return null
+}
 
 /** #86: the SSH partner connections that have reported their shell, as the
  *  partner's PTY id -> its session's createdAt (a Restart or Retry bumps it,
@@ -421,7 +452,8 @@ export default function CommandBar({ sessionId, configId, sessionType = 'local',
 
   /**
    * Type a command into the appropriate PTY. The original behaviour, unchanged,
-   * except for an SSH partner that is not at its shell yet (above).
+   * except for an SSH partner that is not at its shell yet (above) and a
+   * prompt button for the agent, which main types (#333, below).
    *
    * `expectBleed` is set when we know the line starts a Windows GUI-subsystem
    * program (#379): it will `AttachConsole` to this pty's console and write its
@@ -433,8 +465,26 @@ export default function CommandBar({ sessionId, configId, sessionType = 'local',
   const typeIntoPty = (cmd: CustomCommand, fullCommand: string, expectBleed = false) => {
     const target = cmd.target || 'claude'
     const webViewUrl = cmd.webView?.enabled ? cmd.webView.url : null
+    // #333: a prompt button for the agent in the main pane is typed by main,
+    // by one rule for every session (the text, then its Enter as its own
+    // write; Codex's submit rule on Codex; the text only when the setting
+    // says so). Shell line and partner buttons, and a preload with no bridge
+    // (an older one, or a test harness), keep the one write of line and Enter.
+    const promptForAgent = target === 'claude' && !!caps.agent && effectiveKind(cmd, caps) === 'prompt'
     const writeTo = (ptyId: string) => {
-      writeSessionInput(ptyId, fullCommand + '\r')
+      if (promptForAgent && ptyId === sessionId && typeof window.electronAPI?.pty?.submitPrompt === 'function') {
+        // Main sends the tmux leave key itself, so the wheel's belief that
+        // the scrollback view is open goes now.
+        dropTmuxCopyModeBelief(ptyId)
+        const say = (result: PromptButtonResult) => {
+          const note = promptButtonNote(result)
+          if (note) usePasteHintStore.getState().show(sessionId, note, PROMPT_NOTE_MS)
+        }
+        void window.electronAPI.pty.submitPrompt({ sessionId: ptyId, text: fullCommand })
+          .then(say, () => say({ outcome: 'not-sent', reason: 'session-gone' }))
+      } else {
+        writeSessionInput(ptyId, fullCommand + '\r')
+      }
       if (expectBleed) scheduleBleedRepaints(ptyId)
       if (webViewUrl) startWebviewPolling(webViewUrl)
       else if (webviewUrls.length > 0) void probeWebviewUrls(webviewKey, webviewUrls)

@@ -260,6 +260,11 @@ export const IPC = {
   // A), or a question not delivered and why.
   ASK_CONDUCTOR_HAND_OFF: 'askConductor:handOff', // renderer -> main: { sessionId, question } -> SubmitTextResult
   ASK_CONDUCTOR_NOTICE: 'askConductor:notice',    // push: main -> renderer: AskConductorNotice
+  // 2.1.3-beta.10 (#333): a command bar prompt button's text for the agent in
+  // a session's main pane. Main types it by one rule for every session
+  // (session-input submitPrompt) and reads the Send or Type it only setting
+  // itself; the renderer never sends the Enter.
+  PTY_SUBMIT_PROMPT: 'pty:submitPrompt', // renderer -> main: { sessionId, text } -> PromptButtonResult
 
   // Tokenomics v2 — SQLite-backed summary/sessions/detail + index push
   TOKENOMICS2_SUMMARY: 'tokenomics2:summary',

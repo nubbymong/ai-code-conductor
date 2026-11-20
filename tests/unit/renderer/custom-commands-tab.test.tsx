@@ -17,7 +17,9 @@
  *     still write the magicButton store; the days field is clamped 1..365;
  *   - Commands: a plain searchable list -- what kind, where it runs, where it
  *     shows -- with Edit (re-uses CommandDialog, the secret goes to the
- *     keychain) and Delete (a ConfirmCard that says what Global costs).
+ *     keychain) and Delete (a ConfirmCard that says what Global costs); and
+ *     (#333) what prompt buttons do, Send the prompt or Type it only, saved
+ *     to the settings main reads at each press.
  * Stores the page mutates (commandBarStore, magicButtonStore) are REAL; the
  * rest are mocked so the tab renders on its own without the whole app.
  */
@@ -66,10 +68,12 @@ vi.mock('../../../src/renderer/stores/configStore', () => ({
   }),
 }))
 
-// --- the General → "Index conversation logs" privacy toggle the Logs row points at.
+// --- the General → "Index conversation logs" privacy toggle the Logs row points at,
+// and (#333) what prompt buttons do; a choice saves through updateSettings.
 let SETTINGS: Record<string, unknown> = { loggingEnabled: true }
+const updateSettings = vi.fn(async (updates: Record<string, unknown>) => { SETTINGS = { ...SETTINGS, ...updates } })
 vi.mock('../../../src/renderer/stores/settingsStore', () => ({
-  useSettingsStore: (sel: any) => sel({ settings: SETTINGS }),
+  useSettingsStore: (sel: any) => sel({ settings: SETTINGS, updateSettings }),
 }))
 
 // --- the Snap card draws the SAME swatches the session dialog does; three is enough here.
@@ -143,6 +147,7 @@ const dialogProps = () => (globalThis as any).__cccDialogProps
 const cancelButton = (card: Element) => Array.from(card.querySelectorAll('button')).find((b) => b.textContent === 'Cancel')
 
 beforeEach(() => {
+  updateSettings.mockClear()
   COMMANDS = ALL
   SECTIONS = [{ id: 'sec-1', name: 'Release', scope: 'config', configId: 'cfg' }]
   SETTINGS = { loggingEnabled: true }
@@ -314,6 +319,35 @@ describe('Snap card -- colour and auto-delete, moved here from the right-click (
     typeInto(days(), '999')
     expect(useMagicButtonStore.getState().settings.autoDeleteDays).toBe(365)
     expect(days().value).toBe('365')
+  })
+})
+
+describe('Commands card -- what prompt buttons do (#333)', () => {
+  it('"Send the prompt" is the default; "Type it only" saves type, and back again saves send; the line says where it applies', () => {
+    render()
+    const card = must('settings-commands')
+    const choice = must('settings-prompt-buttons', card)
+    expect(choice.textContent).toContain('Prompt buttons:')
+    expect(choice.textContent).toContain('Applies to every session, on this computer and over SSH. Shell line buttons always run.')
+    const send = must('settings-prompt-buttons-send') as HTMLInputElement
+    const type = must('settings-prompt-buttons-type') as HTMLInputElement
+    expect(send.closest('label')?.textContent).toBe('Send the prompt')
+    expect(type.closest('label')?.textContent).toBe('Type it only')
+    expect(send.checked).toBe(true)
+    expect(type.checked).toBe(false)
+    click(type)
+    expect(updateSettings).toHaveBeenCalledTimes(1)
+    expect(updateSettings).toHaveBeenLastCalledWith({ commandPromptButtons: 'type' })
+    render()
+    expect((must('settings-prompt-buttons-type') as HTMLInputElement).checked).toBe(true)
+    click(must('settings-prompt-buttons-send'))
+    expect(updateSettings).toHaveBeenLastCalledWith({ commandPromptButtons: 'send' })
+  })
+
+  it('a saved value that is not exactly type shows Send the prompt', () => {
+    SETTINGS = { loggingEnabled: true, commandPromptButtons: 'Type' }
+    render()
+    expect((must('settings-prompt-buttons-send') as HTMLInputElement).checked).toBe(true)
   })
 })
 

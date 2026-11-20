@@ -2,7 +2,7 @@ import { ipcMain, BrowserWindow, app } from 'electron'
 import { z } from 'zod'
 import { spawnPty, writePty, resizePty, killPty, getSshFlow, endSshRemoteDetailed, probeTmuxLive, holdsCodexLaunchLease, codexLaunchLeaseTaken, beginSpawnPreparation, isSessionWritable, isSessionLiveOrStarting, SSHOptions, SshEndTarget, getKeptCodexConversation, getKeptCodexConversationSource, codexRunEnded, codexConversationHeldElsewhere, endAgentRunsInFolder } from '../pty-manager'
 import type { CodexLaunch } from '../pty-manager'
-import { handOffAskQuestion } from '../session-input'
+import { handOffAskQuestion, submitPrompt, type PromptButtonMode } from '../session-input'
 import { ensureHelpWorkspace, helpWorkspaceDir } from '../help-workspace'
 import { ASK_HELP_FOLDER_FAILED } from '../../shared/ask-conductor-provider'
 import { getResourcesDirectory } from './setup-handlers'
@@ -28,7 +28,7 @@ import { logWarn } from '../debug-logger'
 import { IPC } from '../../shared/ipc-channels'
 import { getPtyIntegrityMonitor } from '../services/pty-integrity-monitor'
 import type { PtyIntegrityReport } from '../../shared/service-health'
-import type { SshRuntime, DetachedRemoteLiveness, HostPingResult, DetachedRemote, SshEndRemoteResult, SubmitTextResult } from '../../shared/types'
+import type { SshRuntime, DetachedRemoteLiveness, HostPingResult, DetachedRemote, SshEndRemoteResult, SubmitTextResult, PromptButtonResult } from '../../shared/types'
 import { detachedDestinationAgrees, type SshDestinationSource } from '../../shared/detached-destination'
 import { readDetachedRemotesRegistry } from '../session-state'
 import { pingHost } from '../host-ping'
@@ -725,6 +725,34 @@ const askHandOffSchema = z.object({
   question: z.string().min(1).max(8000),
 }).strict()
 
+/** #333: the longest prompt button text main types in one press: far above
+ *  any prompt a button holds, and a bound on what one message can ask main to
+ *  write (about five seconds of writePty's 256-unit slices, 12 ms apart). */
+export const PROMPT_BUTTON_MAX_CHARS = 100_000
+
+/** #333: `pty:submitPrompt`'s payload: the session and a prompt button's
+ *  text, checked as askConductor:handOff checks its question. */
+const promptSubmitSchema = z.object({
+  sessionId: z.string().regex(/^[A-Za-z0-9_-]{1,128}$/),
+  text: z.string().min(1).max(PROMPT_BUTTON_MAX_CHARS),
+}).strict()
+
+/** #333: Settings, Custom Commands, "Prompt buttons": type only when the
+ *  saved settings say exactly 'type'; anything else sends (the default). */
+export function promptButtonModeIn(settings: unknown): PromptButtonMode {
+  return !!settings && typeof settings === 'object' && (settings as Record<string, unknown>).commandPromptButtons === 'type' ? 'type' : 'send'
+}
+
+/** The setting as saved now, read at each press; an unreadable settings file
+ *  sends. */
+function promptButtonMode(): PromptButtonMode {
+  try {
+    return promptButtonModeIn(readConfig<Record<string, unknown>>('settings'))
+  } catch {
+    return 'send'
+  }
+}
+
 export function registerPtyHandlers(getWindow: () => BrowserWindow | null): void {
   // 2.1.3-beta.9 (planning #310, item 5): on Windows, ssh.exe is looked for
   // off the event loop from here on: now, every SSH_PROGRAM_RECHECK_MS, after
@@ -755,6 +783,20 @@ export function registerPtyHandlers(getWindow: () => BrowserWindow | null): void
     const win = getWindow()
     if (!win || win.isDestroyed()) return { delivered: false, reason: 'session-gone' }
     return handOffAskQuestion(win, parsed.data.sessionId, parsed.data.question)
+  })
+
+  // 2.1.3-beta.10 (#333): a command bar prompt button's text for the agent in
+  // a session's main pane, typed by one rule for every session (session-input
+  // submitPrompt). Main reads the Send or Type it only setting itself; the
+  // renderer passes only the session and the text. A partner terminal's id is
+  // refused: its buttons are shell lines, which keep pty:write. The app's
+  // window only; the text is never logged.
+  ipcMain.handle(IPC.PTY_SUBMIT_PROMPT, async (e, args: unknown): Promise<PromptButtonResult> => {
+    if (!fromApp(e)) return { outcome: 'not-sent', reason: 'session-gone' }
+    const parsed = promptSubmitSchema.safeParse(args)
+    if (!parsed.success) return { outcome: 'not-sent', reason: 'refused-text' }
+    if (isPartnerPtyId(parsed.data.sessionId)) return { outcome: 'not-sent', reason: 'session-gone' }
+    return submitPrompt(parsed.data.sessionId, parsed.data.text, promptButtonMode())
   })
 
   // The body of pty:spawn. `claim` holds the one-at-a-time gate's ticket for this
