@@ -17,12 +17,13 @@
 import { describe, it, expect } from 'vitest'
 import * as fs from 'fs'
 import * as path from 'path'
+import { escapeRegExp } from '../../helpers/escape-regexp'
 
 const css = fs.readFileSync(path.resolve(__dirname, '../../../src/renderer/onboarding/onboarding.css'), 'utf-8')
 
 /** The declarations of the single `.ob-root <selector> { ... }` rule. */
 function rule(selector: string): string {
-  const m = css.match(new RegExp(`\\.ob-root ${selector.replace(/\./g, '\\.')} \\{([^}]*)\\}`))
+  const m = css.match(new RegExp(`\\.ob-root ${escapeRegExp(selector)} \\{([^}]*)\\}`))
   expect(m, `${selector} rule exists`).toBeTruthy()
   return m![1]
 }

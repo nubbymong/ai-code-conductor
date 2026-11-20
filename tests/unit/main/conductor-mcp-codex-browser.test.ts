@@ -51,7 +51,8 @@ const win = { isDestroyed: () => false, webContents: { send: (channel: string, p
 
 let port = 0
 beforeAll(async () => {
-  port = 32000 + Math.floor(Math.random() * 1000)
+  // Its own range, below 32768 where Linux's outgoing ports start: no other MCP test or outgoing socket takes it.
+  port = 27000 + Math.floor(Math.random() * 1000)
   await server.startMcpServer(port, () => vm as never, () => win as never)
 })
 afterAll(() => { server.stopMcpServer() })
