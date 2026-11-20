@@ -1,8 +1,8 @@
 {
   "schema": "wp1-legacy-codex-manifest/3",
-  "generatedAt": "2026-11-19T07:30:40.207Z",
-  "head": "12057d2cb77aa45a7b240e1c3f353f56857f466d",
-  "tree": "4258e5fbd5b197f3d570b306744f546126109bbc",
+  "generatedAt": "2026-11-20T00:44:56.381Z",
+  "head": "248d30589ba978e084d74c1b024eb8d953ebb6ea",
+  "tree": "aa4a708ef27f62e7f247644759ff9a14cc2c0bea",
   "scannedWorkingTree": true,
   "predicateDigest": "100a1233edebdc39a5f9004d3fba980a89ebb15b25872e52076386bc84b03153",
   "predicates": [
@@ -116,9 +116,9 @@
     "\\.(png|jpg|jpeg|gif|ico|icns|webp|svg|woff2?|ttf|otf|mp4|zip|asar|node|exe|dll|dylib|so|pdf)$",
     "^package-lock\\.json$"
   ],
-  "trackedFileCount": 3450,
-  "excludedFileCount": 521,
-  "scannedFileCount": 2929,
+  "trackedFileCount": 3469,
+  "excludedFileCount": 530,
+  "scannedFileCount": 2939,
   "unscopedFileCount": 15,
   "unscoped": [
     ".claude/settings.json",
@@ -139,8 +139,8 @@
   ],
   "unscopedMentions": [],
   "unreadable": [],
-  "matchedPathCount": 926,
-  "pathDigest": "520466672b149c328c76c5b3f1452b5074d53bcade30d998811fb2048c4ca3c2",
+  "matchedPathCount": 929,
+  "pathDigest": "d9399b7676352835718a1228c81b2fc277d560cb48d4dc18e95b2e6582c9de1c",
   "entries": [
     {
       "path": ".github/workflows/ci.yml",
@@ -247,7 +247,7 @@
       "predicates": [
         "P14"
       ],
-      "lineCount": 4
+      "lineCount": 5
     },
     {
       "path": "helper/probes/p18-stand-in.cjs",
@@ -262,7 +262,7 @@
         "P04",
         "P14"
       ],
-      "lineCount": 39
+      "lineCount": 35
     },
     {
       "path": "package.json",
@@ -799,7 +799,7 @@
       "predicates": [
         "P14"
       ],
-      "lineCount": 5
+      "lineCount": 13
     },
     {
       "path": "src/main/install-secret.ts",
@@ -1491,7 +1491,7 @@
       "predicates": [
         "P14"
       ],
-      "lineCount": 30
+      "lineCount": 48
     },
     {
       "path": "src/main/session-resume-enrich.ts",
@@ -1705,7 +1705,7 @@
         "P07",
         "P11"
       ],
-      "lineCount": 56
+      "lineCount": 65
     },
     {
       "path": "src/renderer/components/ConductorMcpPage.tsx",
@@ -2637,7 +2637,7 @@
       "predicates": [
         "P11"
       ],
-      "lineCount": 119
+      "lineCount": 120
     },
     {
       "path": "src/renderer/types/electron.d.ts",
@@ -2814,7 +2814,7 @@
         "P04",
         "P14"
       ],
-      "lineCount": 16
+      "lineCount": 17
     },
     {
       "path": "src/shared/providers/capabilities.ts",
@@ -2872,7 +2872,7 @@
         "P07",
         "P14"
       ],
-      "lineCount": 50
+      "lineCount": 54
     },
     {
       "path": "tests/e2e/cloud-agents.spec.ts",
@@ -4663,7 +4663,7 @@
       "predicates": [
         "P13"
       ],
-      "lineCount": 11
+      "lineCount": 71
     },
     {
       "path": "tests/unit/main/install-tab-command-secrets.test.ts",
@@ -4720,6 +4720,13 @@
         "P13"
       ],
       "lineCount": 2
+    },
+    {
+      "path": "tests/unit/main/prompt-button-ipc.test.ts",
+      "predicates": [
+        "P13"
+      ],
+      "lineCount": 3
     },
     {
       "path": "tests/unit/main/provider-account-usage.test.ts",
@@ -5068,6 +5075,14 @@
         "P13"
       ],
       "lineCount": 65
+    },
+    {
+      "path": "tests/unit/main/session-input-prompt.test.ts",
+      "predicates": [
+        "P05",
+        "P13"
+      ],
+      "lineCount": 26
     },
     {
       "path": "tests/unit/main/session-input.test.ts",
@@ -6255,6 +6270,13 @@
       "lineCount": 67
     },
     {
+      "path": "tests/unit/renderer/commandbar-focus-handoff.test.tsx",
+      "predicates": [
+        "P13"
+      ],
+      "lineCount": 4
+    },
+    {
       "path": "tests/unit/renderer/commandbar-one-row.test.tsx",
       "predicates": [
         "P07",
@@ -6542,7 +6564,7 @@
         "P04",
         "P13"
       ],
-      "lineCount": 203
+      "lineCount": 217
     },
     {
       "path": "tests/unit/renderer/onboarding-flow-stubs.tsx",
@@ -7338,7 +7360,7 @@
         "P04",
         "P13"
       ],
-      "lineCount": 360
+      "lineCount": 363
     },
     {
       "path": "tests/unit/shared/extra-args.test.ts",
