@@ -92,7 +92,8 @@ export function readXtermScreen(term: XtermLike): ScreenLine[] {
 export type CodexComposerState = 'ready' | 'busy' | 'not-ready'
 /** What the live screen shows, in more detail than the state (round 2, WW):
  *  'unrecognised' is a composer with a footer under it that is not the last
- *  row (a narrow window wraps it, or a row is drawn under it). */
+ *  row (a narrow window wraps it, or a row is drawn under it), Codex's one
+ *  shortcuts hint row aside (SHORTCUTS_HINT). */
 export type CodexScreenKind = 'ready' | 'busy' | 'blocked' | 'no-prompt' | 'unrecognised' | 'starting'
 
 /** Codex's prompt glyphs: the composer's, and the one it draws at ultra. */
@@ -155,6 +156,16 @@ const STARTING_RE = /\b(?:Booting MCP server|Starting MCP servers?)\b/i
 const PLACEHOLDERS = ['Ask Codex to do anything', 'Ask a follow-up question']
 /** A row of the slash-command popup under a typed command. */
 const POPUP_ROW_RE = /^ {1,8}\/[a-z][\w-]*(?: |$)/
+/** 2.1.3-beta.10 C5 (aicc_planning #349): the hint Codex draws on the row
+ *  under its footer while the composer is empty, at the footer's indent
+ *  (Codex's TUI at rust-v0.157.1, bottom_pane/footer.rs, left_side_line). It
+ *  is there when the footer has a row of its own, as 0.157.1's fullscreen
+ *  transcript gives it by default (tui.fullscreen_transcript; off by default
+ *  in 0.156.1). Only this exact row counts. */
+const SHORTCUTS_HINT = '? for shortcuts'
+/** Whether `row` is that hint, at the indent of the footer row above it. */
+const isShortcutsHint = (row: ScreenLine, footerRow: ScreenLine): boolean =>
+  row.text === (/^ */.exec(footerRow.text)?.[0] ?? '') + SHORTCUTS_HINT
 
 const nonBlank = (l: ScreenLine): boolean => l.text.trim() !== ''
 const blocked = (lines: ScreenLine[]): boolean => lines.some((l) => BLOCKING_RE.some((re) => re.test(l.text)))
@@ -176,7 +187,8 @@ function composerContent(row: ScreenLine): string {
 }
 
 /** The screen's structure: what it shows, the composer's content, and the
- *  footer row under the composer when that is the last row. `startup`
+ *  footer row under the composer when that is the last row (or has only
+ *  Codex's shortcuts hint row under it). `startup`
  *  (round 4, E3): whether the run is still starting, so that Codex's
  *  start-up row counts; it counts only in its own place, the status row
  *  directly above the composer. */
@@ -190,8 +202,9 @@ function layout(lines: ScreenLine[] | null | undefined, models?: readonly string
   if (i < 0) return { screen: 'no-prompt', text: '', footer: null }
   const footer = footerRe(models)
   const below = shown.slice(i + 1)
-  if (below.length === 1 && footer.test(below[0].text)) {
-    return { screen: shown.some((l) => BUSY_RE.test(l.text)) ? 'busy' : 'ready', text, footer: below[0] }
+  const under = below.length === 2 && isShortcutsHint(below[1], below[0]) ? below.slice(0, 1) : below
+  if (under.length === 1 && footer.test(under[0].text)) {
+    return { screen: shown.some((l) => BUSY_RE.test(l.text)) ? 'busy' : 'ready', text, footer: under[0] }
   }
   if (below.some((l) => footer.test(l.text))) return { screen: 'unrecognised', text, footer: null }
   return { screen: 'no-prompt', text, footer: null }
