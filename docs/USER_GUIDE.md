@@ -321,8 +321,10 @@ signed in a different way than before cannot be picked until you confirm it
 
 - **Check sign-in** asks Codex right now whether the account is signed in, and
   shows the answer on the row (for example *Checked just now: signed in.*).
-- **Sign in again** asks you to tick *Sign in to the same account as before*,
-  then signs in with the same kind of sign-in the account had before: ChatGPT
+- **Sign in again** first asks which account you are signing in to: *The same
+  account as before*, or *A different account (add it as a new account)*.
+  Nothing is chosen for you, and no sign-in starts until you pick one. The same
+  account signs in again with the same kind of sign-in it had before: ChatGPT
   again, or an API key again. Close the account's sessions first: an account
   in use cannot be signed in again.
   - A signed-out or expired account signs in again inside its own folder.
