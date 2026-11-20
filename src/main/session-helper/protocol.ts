@@ -22,6 +22,10 @@ export const LOCAL_CAPS: readonly string[] = ['core', 'local']
 /** Hook events through the holder (section 15, from 2.1.3-beta.8): acked only
  *  by a connection that wants them, and only when the holder offers it. */
 export const HOOKS_CAP = 'hooks'
+/** Tool streams through the holder (section 15, from 2.1.3-beta.10): acked
+ *  only by a connection that carries a session's tools, and only when the
+ *  holder offers it. No connection the app makes asks for it yet. */
+export const MCP_CAP = 'mcp'
 /** Terminal bytes travel on this channel both ways; control messages on 0. */
 export const TERMINAL_CHANNEL = 1
 /** Control messages (JSON) travel on this channel, both ways. */
@@ -291,10 +295,11 @@ export function chooseProto(app: readonly number[], helper: readonly number[]): 
   return both.length === 0 ? null : Math.max(...both)
 }
 
-/** The app's answer to a holder's hello: `core` and `local`, and `hooks`
- *  when this connection takes hook events (only ever when the hello offered it). */
-export function helloAck(hooks = false): { t: 'hello.ack'; proto: number; caps: string[] } {
-  return { t: 'hello.ack', proto: PROTO_VERSION, caps: hooks ? [...LOCAL_CAPS, HOOKS_CAP] : [...LOCAL_CAPS] }
+/** The app's answer to a holder's hello: `core` and `local`, `hooks` when this
+ *  connection takes hook events and `mcp` when it carries tool streams (each
+ *  only ever when the hello offered it). */
+export function helloAck(hooks = false, mcp = false): { t: 'hello.ack'; proto: number; caps: string[] } {
+  return { t: 'hello.ack', proto: PROTO_VERSION, caps: [...LOCAL_CAPS, ...(hooks ? [HOOKS_CAP] : []), ...(mcp ? [MCP_CAP] : [])] }
 }
 
 // ── hook events (section 15, capability `hooks`) ──────────────────────────────
@@ -342,6 +347,50 @@ export function readEventFrame(m: unknown, size: number): HookEventFrame | null 
   if (Buffer.byteLength(JSON.stringify(payload), 'utf8') > HOOK_PAYLOAD_MAX) return null
   if (m.lost !== undefined && !isWhole(m.lost)) return null
   return { seq: m.seq, kind: m.kind as HelperHookKind, payload, ...(m.lost !== undefined ? { lost: m.lost } : {}) }
+}
+
+// ── tool streams (section 15, capability `mcp`) ───────────────────────────────
+
+/** A tool message's `message`, as compact JSON, at most, on its way to the
+ *  app: 1 MiB less the room the `mcp` around it needs. */
+export const MCP_MESSAGE_TO_APP_MAX = 1_048_320
+
+/** One JSON-RPC message, or a batch of them. Untrusted: the holder passes it
+ *  on without reading it. */
+export type McpMessage = Record<string, unknown> | unknown[]
+
+const MCP_STREAM_FIELDS = new Set(['t', 'stream'])
+const MCP_MESSAGE_FIELDS = new Set(['t', 'stream', 'message'])
+const isStream = (v: unknown): v is number => isWhole(v) && v >= 1
+const exactly = (m: Record<string, unknown>, fields: Set<string>): boolean => {
+  const keys = Object.keys(m)
+  return keys.length === fields.size && keys.every((k) => fields.has(k))
+}
+
+/** An `mcp.open` from a holder, read strictly: exactly `t` and `stream`, a
+ *  whole number from 1 (the holder's number for the stream). Null otherwise. */
+export function readMcpOpen(m: unknown): { stream: number } | null {
+  if (!isObject(m) || m.t !== 'mcp.open' || !exactly(m, MCP_STREAM_FIELDS) || !isStream(m.stream)) return null
+  return { stream: m.stream }
+}
+
+/** An `mcp.close` from a holder, read as `mcp.open` is. */
+export function readMcpClose(m: unknown): { stream: number } | null {
+  if (!isObject(m) || m.t !== 'mcp.close' || !exactly(m, MCP_STREAM_FIELDS) || !isStream(m.stream)) return null
+  return { stream: m.stream }
+}
+
+/** An `mcp` from a holder, read strictly: exactly `t`, `stream` and `message`,
+ *  the message a JSON object or array of at most MCP_MESSAGE_TO_APP_MAX bytes
+ *  as compact JSON, and the whole message (`size` bytes as it came) within
+ *  what a frame from the holder holds. Null otherwise. */
+export function readMcp(m: unknown, size: number): { stream: number; message: McpMessage } | null {
+  if (!isObject(m) || m.t !== 'mcp' || !isWhole(size) || size > JSON_FROM_HELPER_MAX) return null
+  if (!exactly(m, MCP_MESSAGE_FIELDS) || !isStream(m.stream)) return null
+  const message = m.message
+  if (!isObject(message) && !Array.isArray(message)) return null
+  if (Buffer.byteLength(JSON.stringify(message), 'utf8') > MCP_MESSAGE_TO_APP_MAX) return null
+  return { stream: m.stream, message }
 }
 
 // ── endpoints, records and the listing ────────────────────────────────────────

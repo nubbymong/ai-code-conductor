@@ -10,6 +10,7 @@ import {
   parseLiveMatrixOutput,
   classifyCombo,
   summarizeGate,
+  keepDump,
   statuslinePacks,
   liveStatuslinePacks,
 } from '../../scripts/verify-release.mjs'
@@ -172,5 +173,24 @@ describe('summarizeGate', () => {
     const gate = summarizeGate(parseLiveMatrixOutput('random noise, no report lines'))
     expect(gate.ok).toBe(false)
     expect(gate.rows).toHaveLength(0)
+  })
+})
+
+describe('keepDump (the live run\'s dump folder in the temp folder, #332)', () => {
+  const pass = [
+    'T7 windows payload: account=user1@example.com buckets=Fable:93% 5h=0 wk=100',
+    'T7 windows: updates=1 sids=["x"] wrapped=false states=[] paneLen=1',
+    'Tests  1 passed (1)',
+  ]
+  const warn = ['T6 mac payload: account=user1@example.com buckets=- 5h=- wk=-', 'T6 mac: updates=1 sids=["z"] wrapped=false states=[] paneLen=1']
+
+  it('removes it after a clean pass, where there is nothing to read', () => {
+    expect(keepDump(summarizeGate(parseLiveMatrixOutput(pass.join('\n')), 0))).toBe(false)
+  })
+
+  it('keeps it when the gate failed or a host warned', () => {
+    expect(keepDump(summarizeGate(parseLiveMatrixOutput(SAMPLE)))).toBe(true)
+    expect(keepDump(summarizeGate(parseLiveMatrixOutput(pass.join('\n')), 1))).toBe(true)
+    expect(keepDump(summarizeGate(parseLiveMatrixOutput([...warn, ...pass].join('\n')), 0))).toBe(true)
   })
 })

@@ -3,7 +3,7 @@
 // to the job summary (ADR-030, SDLC table: "a check that prints these numbers
 // on every PR is its own slice"):
 //
-//   - does the PR touch any of the eight files of the live SSH blast radius
+//   - does the PR touch any of the nine files of the live SSH blast radius
 //     (the list in AGENTS.md, "SSH statusline changes need the live SSH matrix")?
 //   - how long is src/main/pty-manager.ts, against its cap?
 //   - is the live SSH matrix owed ("live SSH matrix: owed" / "check" / "not owed")?
@@ -44,7 +44,7 @@ import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { changedPaths } from './change-scope.mjs'
 
-/** The eight files of the live SSH blast radius (AGENTS.md). */
+/** The nine files of the live SSH blast radius (AGENTS.md). */
 export const RADIUS_FILES = [
   'src/main/pty-manager.ts',
   'src/main/providers/claude/ssh-shim.ts',
@@ -54,6 +54,7 @@ export const RADIUS_FILES = [
   'src/main/ssh-tmux-push.ts',
   'src/main/ansi-strip.ts',
   'src/main/statusline-watcher.ts',
+  'src/main/ssh-program.ts',
 ]
 export const PTY_MANAGER = 'src/main/pty-manager.ts'
 /**

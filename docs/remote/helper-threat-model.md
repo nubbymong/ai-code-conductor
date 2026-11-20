@@ -417,6 +417,45 @@ rollback returns to the earlier beta's rows, and every row has a negative test.
   slice S12). The hook mode reads untrusted input on its standard input, keeps
   at most 4 MiB of it, and never prints or exits other than 0, so nothing it
   reads reaches the CLI's conversation through it.
+- **Tool streams through a holder (capability `mcp`, from 2.1.3-beta.10).**
+  The relay (`aicc-helper mcp`, protocol 15, "Tool streams") carries a
+  session's tool calls between its CLI and the connection attached to the
+  session's terminal. Nothing in the app starts it or acks `mcp` yet, so in
+  this beta no tool call goes this way. What a relay may do: open one stream
+  at a time, at most 8 in a session, and pass JSON-RPC messages on it to the
+  attached connection that acked `mcp`, at most 1,048,320 bytes each, and get
+  that connection's answers. What it may not: use the terminal (a launch,
+  attach, resize, detach or end from a connection that opened a stream is
+  refused and the connection closed; typed bytes from it are refused too),
+  reach another session (a holder serves one session, and the app connection
+  is that holder's own), or name another relay's stream (each side sees only
+  its own number for a stream). The holder passes a message on and nothing
+  more: it runs, opens and writes nothing for it. Any process of the same user
+  can connect to the endpoint and open a stream, so it can reach whatever the
+  app answers on one; that is the boundary there is today, where any process
+  of the same user can read a session's settings or launch flags and reach the
+  Conductor server. So the step that wires a session's tools to a relay keeps
+  3.5's rule for a stream: the session a call acts for comes from the stream
+  (the holder it came through) alone, never from a message, a message that
+  names another session is refused, and the session's own allow-list and
+  switches apply. The relay trusts a holder only once its hello carries the
+  record's nonce and session, so a process that took the endpoint's name first
+  is sent nothing. A connection that acked `mcp` may send frames of up to 16
+  MiB, as any connection may before a launch: 16 connections at most. Two
+  limits for that step to settle: a tool message to a relay is written from
+  the attached connection's own thread, so a relay that does not read holds
+  that connection's other messages for up to 5 s (the write's limit, after
+  which the relay's connection is closed); and the app must send only JSON the
+  holder reads (no escaped lone surrogate, at most 31 levels inside the
+  message), or the frame is `bad-frame` and the app's connection is closed.
+  Tested in `helper/tests/relay.rs`:
+  `a_connection_that_opened_a_tool_stream_never_uses_the_terminal`,
+  `a_relays_message_over_what_the_app_takes_is_too_large_and_its_stream_goes_on`,
+  `a_session_has_at_most_its_bound_of_tool_streams_and_a_closed_one_makes_room`,
+  `with_no_stream_to_have_the_relay_exits_1_at_once_and_prints_nothing` (an
+  app connection that did not ack `mcp` is passed nothing) and
+  `a_holder_from_before_tool_streams_is_sent_nothing`. An adversarial pass of
+  it is owed to the security round before 2.1 stable (aicc_planning #320).
 - **A program the helper starts for the app keeps none of the app's handles
   (from 2.1.3-beta.8, Windows).** `aicc-helper start` (protocol 15, "Starting
   a program") starts the program the app names, by the drive-absolute path it
@@ -453,28 +492,29 @@ rollback returns to the earlier beta's rows, and every row has a negative test.
   left (from 2.1.3-beta.9, Windows).** `aicc-helper console-hosts` (protocol
   15, "Console hosts a run left") is given the pid and creation time the app
   recorded for its run before, both plain digits from a file in the user's own
-  data folder. It ends a process only when it is a console host by name and by
-  program file, runs as the helper's own user, is listed with that pid as its
-  parent, and was made after that creation time and before both the helper's
-  own and that of whatever process has the pid now; it holds each open from
-  its check to its end. It ends nothing while that pid still has that creation
-  time. It gives the app no new power: the app can already end any process of
-  its user. What it rests on is the identity of the run before, and two limits
-  of it are owed to the security round before 2.1 stable (aicc_planning #320):
-  only the process that has the pid now bounds what counts, so a process that
-  took the pid and has exited too is not seen; and the record is a file any
-  program of the same user can write, as that program could end the user's
-  processes itself. The first, as a case: the run before dies, a console
-  program of the same user gets its pid and starts its own `conhost.exe`, then
-  exits while a child keeps that console (a batch file that runs
-  `start /b server` and ends, say). Nothing has the pid now, so the bound is
-  the helper's own start, and that host (made after the record, before the
-  helper, by the same user, from Windows' own program file) is ended: the
-  child loses its console. Tested in `helper/tests/console_hosts.rs` by
-  `it_ends_the_console_host_a_run_ended_from_outside_left_and_nothing_else`
-  (a run that still runs, a record naming a pid another run has now, and a
-  record of another start end nothing; a run's own host is ended and another
-  run's is not),
+  data folder (a dev or test run's own data folder instead, as for
+  `vision-started.json`). It ends a process only when it is a console host by
+  name and by program file, runs as the helper's own user, is listed with that
+  pid as its parent, and was made after that creation time and before both the
+  helper's own and that of whatever process has the pid now; it holds each open
+  from its check to its end. It ends nothing while that pid still has that
+  creation time. It gives the app no new power: the app can already end any
+  process of its user. What it rests on is the identity of the run before, and
+  two limits of it are owed to the security round before 2.1 stable
+  (aicc_planning #320): only the process that has the pid now bounds what
+  counts, so a process that took the pid and has exited too is not seen; and
+  the record is a file any program of the same user can write, as that program
+  could end the user's processes itself. The first, as a case: the run before
+  dies, a console program of the same user gets its pid and starts its own
+  `conhost.exe`, then exits while a child keeps that console (a batch file that
+  runs `start /b server` and ends, say). Nothing has the pid now, so the bound
+  is the helper's own start, and that host (made after the record, before the
+  helper, by the same user, from Windows' own program file) is ended: the child
+  loses its console. Tested in `helper/tests/console_hosts.rs` by
+  `it_ends_the_console_host_a_run_ended_from_outside_left_and_nothing_else` (a
+  run that still runs, a record naming a pid another run has now, and a record
+  of another start end nothing; a run's own host is ended and another run's is
+  not),
   `a_record_whose_pid_another_process_took_after_its_run_had_gone_ends_nothing`
   and `a_record_from_before_windows_last_started_ends_nothing`, and the bounds
   by the unit tests in `helper/src/consoles.rs`.

@@ -26,7 +26,7 @@ import { getResourcesDirectory } from './ipc/setup-handlers'
 import { logInfo, logError } from './debug-logger'
 import { getConductorMcpPort } from './conductor-mcp-server'
 import { getBrowserPaths } from './browser-paths'
-import { bundledHelperPath, checkedHelperCopySync } from './session-helper/install'
+import { bundledHelperPath, checkedHelperCopySync, instanceRecordPath } from './session-helper/install'
 import { atomicWriteFileSync } from './atomic-write'
 import {
   VisionPortHeldError, scanAppVisionBrowsers, factsOfPid, endVerified, endOwnChild, endOwnChildSync,
@@ -1020,18 +1020,16 @@ type StartedRecord = { pid: number; created: string }
 
 /**
  * Where this instance keeps the record: the user data folder for an
- * installed app; an E2E or dev run's own data root otherwise, by the rule the
- * session helper's folder follows (session-helper/install.ts helperRootDir).
- * A dev run shares the user data folder with an installed app on the same
- * computer (docs/dev-alongside-prod.md), and must never end that app's
- * browser. A root that is not absolute gives no record at all. Null when
- * there is no folder to use.
+ * installed app; an E2E or dev run's own data root otherwise
+ * (session-helper/install.ts instanceRecordPath, the rule app-run.json
+ * follows too). A dev run shares the user data folder with an installed app
+ * on the same computer (docs/dev-alongside-prod.md), and must never end that
+ * app's browser. A root that is not absolute gives no record at all. Null
+ * when there is no folder to use.
  */
 function startedRecordPath(): string | null {
   try {
-    const root = process.env.CCC_E2E_DATA_DIR || (app.isPackaged ? undefined : process.env.CCC_DEV_DATA_DIR)
-    if (root) return path.isAbsolute(root) ? path.join(root, STARTED_RECORD) : null
-    return path.join(app.getPath('userData'), STARTED_RECORD)
+    return instanceRecordPath(STARTED_RECORD, { isPackaged: app.isPackaged, userData: () => app.getPath('userData') })
   } catch { return null }
 }
 

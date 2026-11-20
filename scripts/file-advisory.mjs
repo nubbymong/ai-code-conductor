@@ -31,7 +31,7 @@
 // a private advisory versus a PR verdict, where the fix is developed, and when the
 // public record is written.
 
-import { existsSync, readFileSync, writeFileSync, mkdtempSync } from 'fs'
+import { existsSync, readFileSync, writeFileSync, mkdtempSync, rmSync } from 'fs'
 import { resolve, relative, isAbsolute, join } from 'path'
 import { tmpdir } from 'os'
 import { execFileSync } from 'child_process'
@@ -195,7 +195,8 @@ function main() {
     return
   }
 
-  const file = join(mkdtempSync(join(tmpdir(), 'ccc-advisory-')), 'payload.json')
+  const dir = mkdtempSync(join(tmpdir(), 'ccc-advisory-'))
+  const file = join(dir, 'payload.json')
   writeFileSync(file, JSON.stringify(payload))
   console.log(`filing against ${REPO} …`)
   try {
@@ -213,6 +214,9 @@ function main() {
       console.log('\nDevelop the fix in that fork, based on and targeting `beta`. Never on a branch of the public repo.')
     }
     console.log('')
+    // Filed: the payload has done its job, so its folder goes rather than staying in
+    // the machine temp folder (#332). A failed POST keeps it for inspection (below).
+    try { rmSync(dir, { recursive: true, force: true }) } catch { /* best effort */ }
   } catch (err) {
     console.error('\n  the POST failed. Read this before assuming GitHub is down:')
     console.error('   - a 500 with an empty body from this endpoint means a MALFORMED PAYLOAD,')

@@ -1,10 +1,10 @@
 {
   "schema": "wp1-legacy-codex-manifest/3",
-  "generatedAt": "2026-11-19T05:33:58.574Z",
-  "head": "f24a75310706b67ed095750d0f4c6894379dafc6",
-  "tree": "832d1f9f428eda2ba24564422c8491a80502fcd3",
+  "generatedAt": "2026-11-19T07:30:40.207Z",
+  "head": "12057d2cb77aa45a7b240e1c3f353f56857f466d",
+  "tree": "4258e5fbd5b197f3d570b306744f546126109bbc",
   "scannedWorkingTree": true,
-  "predicateDigest": "53fe7e5238cde4df748b1908c567dfcc9f825c901c109678028d383ec4dfef35",
+  "predicateDigest": "100a1233edebdc39a5f9004d3fba980a89ebb15b25872e52076386bc84b03153",
   "predicates": [
     {
       "id": "P01",
@@ -119,7 +119,7 @@
   "trackedFileCount": 3450,
   "excludedFileCount": 521,
   "scannedFileCount": 2929,
-  "unscopedFileCount": 62,
+  "unscopedFileCount": 15,
   "unscoped": [
     ".claude/settings.json",
     ".claude/skills/LoopReady/SKILL.md",
@@ -133,53 +133,6 @@
     ".vscode/settings.json",
     "LICENSE",
     "NOTICE",
-    "helper/.cargo/config.toml",
-    "helper/Cargo.lock",
-    "helper/Cargo.toml",
-    "helper/README.md",
-    "helper/fixtures/frames.json",
-    "helper/fixtures/hello.json",
-    "helper/fixtures/limits.json",
-    "helper/fixtures/local.json",
-    "helper/probes/README.md",
-    "helper/probes/p16-windows-hook-cost.ps1",
-    "helper/probes/p7-windows-survival.ps1",
-    "helper/rust-toolchain.toml",
-    "helper/src/bin/aicc-fake-cli.rs",
-    "helper/src/client.rs",
-    "helper/src/cmdline.rs",
-    "helper/src/consoles.rs",
-    "helper/src/detach.rs",
-    "helper/src/frame.rs",
-    "helper/src/hello.rs",
-    "helper/src/holder.rs",
-    "helper/src/hook.rs",
-    "helper/src/json.rs",
-    "helper/src/lib.rs",
-    "helper/src/main.rs",
-    "helper/src/pids.rs",
-    "helper/src/pty/mod.rs",
-    "helper/src/pty/unix.rs",
-    "helper/src/pty/windows.rs",
-    "helper/src/random.rs",
-    "helper/src/request.rs",
-    "helper/src/ring.rs",
-    "helper/src/selftest.rs",
-    "helper/src/serve.rs",
-    "helper/src/start.rs",
-    "helper/src/store.rs",
-    "helper/src/transport/mod.rs",
-    "helper/src/transport/unix.rs",
-    "helper/src/transport/windows.rs",
-    "helper/src/winproc.rs",
-    "helper/tests/console_hosts.rs",
-    "helper/tests/fixtures.rs",
-    "helper/tests/hold.rs",
-    "helper/tests/holder_wait.rs",
-    "helper/tests/hooks.rs",
-    "helper/tests/probe_transport.rs",
-    "helper/tests/start.rs",
-    "helper/tests/windows_orphans.rs",
     "test/minimal/index.html",
     "test/minimal/main.js",
     "test/minimal/preload.js"
@@ -187,7 +140,7 @@
   "unscopedMentions": [],
   "unreadable": [],
   "matchedPathCount": 926,
-  "pathDigest": "25b2edf33acb7d7e9cc5a5f13e84d723bf20e1adf5a316b6fb3b1a3f1c530010",
+  "pathDigest": "520466672b149c328c76c5b3f1452b5074d53bcade30d998811fb2048c4ca3c2",
   "entries": [
     {
       "path": ".github/workflows/ci.yml",
@@ -288,6 +241,28 @@
         "P12"
       ],
       "lineCount": 154
+    },
+    {
+      "path": "helper/probes/README.md",
+      "predicates": [
+        "P14"
+      ],
+      "lineCount": 4
+    },
+    {
+      "path": "helper/probes/p18-stand-in.cjs",
+      "predicates": [
+        "P14"
+      ],
+      "lineCount": 1
+    },
+    {
+      "path": "helper/probes/p18-windows-tool-server-start.ps1",
+      "predicates": [
+        "P04",
+        "P14"
+      ],
+      "lineCount": 39
     },
     {
       "path": "package.json",
@@ -1516,7 +1491,7 @@
       "predicates": [
         "P14"
       ],
-      "lineCount": 44
+      "lineCount": 30
     },
     {
       "path": "src/main/session-resume-enrich.ts",
@@ -1730,7 +1705,7 @@
         "P07",
         "P11"
       ],
-      "lineCount": 64
+      "lineCount": 56
     },
     {
       "path": "src/renderer/components/ConductorMcpPage.tsx",
@@ -2897,7 +2872,7 @@
         "P07",
         "P14"
       ],
-      "lineCount": 53
+      "lineCount": 50
     },
     {
       "path": "tests/e2e/cloud-agents.spec.ts",
@@ -4747,13 +4722,6 @@
       "lineCount": 2
     },
     {
-      "path": "tests/unit/main/prompt-button-ipc.test.ts",
-      "predicates": [
-        "P13"
-      ],
-      "lineCount": 3
-    },
-    {
       "path": "tests/unit/main/provider-account-usage.test.ts",
       "predicates": [
         "P04",
@@ -5100,14 +5068,6 @@
         "P13"
       ],
       "lineCount": 65
-    },
-    {
-      "path": "tests/unit/main/session-input-prompt.test.ts",
-      "predicates": [
-        "P05",
-        "P13"
-      ],
-      "lineCount": 22
     },
     {
       "path": "tests/unit/main/session-input.test.ts",
@@ -6293,13 +6253,6 @@
         "P13"
       ],
       "lineCount": 67
-    },
-    {
-      "path": "tests/unit/renderer/commandbar-focus-handoff.test.tsx",
-      "predicates": [
-        "P13"
-      ],
-      "lineCount": 4
     },
     {
       "path": "tests/unit/renderer/commandbar-one-row.test.tsx",

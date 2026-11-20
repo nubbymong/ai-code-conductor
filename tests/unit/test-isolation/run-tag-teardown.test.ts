@@ -36,7 +36,7 @@ import {
   runTempPrefix,
   writeRunOwner,
 } from '../../helpers/vitest-run-tag.mjs'
-import globalSetup, { sweepAfterRun } from '../../global-setup'
+import globalSetup, { sweepAfterRun, tempExitLine, tempNamesAtStart, tempReportLine } from '../../global-setup'
 
 const SCRATCH = fs.mkdtempSync(path.join(os.tmpdir(), 'ccc-run-tag-'))
 
@@ -119,6 +119,27 @@ describe('removeRunTempFolders', () => {
   it('a temp folder that is not there is not an error', () => {
     expect(removeRunTempFolders(path.join(fresh(), 'missing'), newRunTag())).toEqual([])
   })
+
+  // POSIX only: a folder without write permission stops a removal there (on Windows,
+  // Node clears the read-only attribute and removes it anyway); root ignores the mode.
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
+    'tells onError of a folder it could not remove, with the error, and does not count it as removed',
+    () => {
+      const tmp = fresh()
+      const tag = newRunTag()
+      const stuck = plant(tmp, `ccc-vitest-${tag}-a`)
+      fs.chmodSync(path.join(stuck, 'sub'), 0o500) // its file cannot be unlinked
+      try {
+        const errors: string[] = []
+        const removed = removeRunTempFolders(tmp, tag, (name, err) => errors.push(`${name} ${String((err as { code?: string }).code)}`))
+        expect(removed).toEqual([])
+        expect(errors).toHaveLength(1)
+        expect(errors[0]).toMatch(new RegExp(`^ccc-vitest-${tag}-a (EACCES|EPERM)$`))
+      } finally {
+        fs.chmodSync(path.join(stuck, 'sub'), 0o700)
+      }
+    },
+  )
 })
 
 describe('removeStaleTempFolders', () => {
@@ -436,6 +457,16 @@ describe('sweepAfterRun (the teardown global setup returns)', () => {
 })
 
 describe('sweepAfterRun and the owner record', () => {
+  it('says which of this run\'s own it removed: its folders and its owner record', () => {
+    const scratch = fresh()
+    const tag = newRunTag()
+    plant(scratch, `ccc-vitest-${tag}-a`)
+    writeRunOwner(scratch, tag, { pid: 111, startedAt: Date.now() })
+    const sweep = sweepAfterRun(tag, scratch, [scratch], () => true)
+    expect(sweep.removed.sort()).toEqual([`ccc-vitest-${tag}-a`, `ccc-vitest-owner-${tag}.json`])
+    expect(sweep.failed.size).toBe(0)
+  })
+
   it('removes this run\'s own owner record, and leaves another run\'s', () => {
     const scratch = fresh()
     const mine = newRunTag()
@@ -510,5 +541,85 @@ describe('global setup', () => {
     const home = isolatedRoot()
     expect(home, 'no isolated home').toBeTruthy()
     expect(path.basename(home as string).startsWith(`ccc-vitest-${tag}-home-`), path.basename(home as string)).toBe(true)
+  })
+})
+
+describe('the teardown\'s temp line (#332)', () => {
+  it('lists the new names, sorted, and leaves out the names already there, this run\'s own and vitest\'s own folder', () => {
+    const tmp = fresh()
+    const tag = newRunTag()
+    let other = newRunTag()
+    while (other === tag) other = newRunTag()
+    plant(tmp, 'there-before')
+    const before = new Set(fs.readdirSync(tmp))
+    for (const name of ['z-left', `ccc-vitest-${tag}-abc`, `ccc-vitest-${other}-abc`, 'a-left', 'Xvitest21charsXXXXXXX']) plant(tmp, name)
+    fs.writeFileSync(path.join(tmp, `ccc-vitest-owner-${tag}.json`), '{}')
+    // The new names end at the `;` that starts the part about this run's own.
+    expect(tempReportLine(tmp, before, tag, path.join(tmp, 'Xvitest21charsXXXXXXX'))).toContain(
+      `since this run started (1 there at the start, 7 now): a-left, ccc-vitest-${other}-abc, z-left; `,
+    )
+    // Without vitest's folder, or with one somewhere else, its name is listed like any other.
+    expect(tempReportLine(tmp, before, tag)).toContain('Xvitest21charsXXXXXXX')
+    expect(tempReportLine(tmp, before, tag, path.join(tmp, 'sub', 'Xvitest21charsXXXXXXX'))).toContain('Xvitest21charsXXXXXXX')
+  })
+
+  it('names each of this run\'s own entries still there after the cleanup, with what the cleanup did to it and what it holds', () => {
+    const tmp = fresh()
+    const tag = newRunTag()
+    const before = new Set(fs.readdirSync(tmp))
+    plant(tmp, `ccc-vitest-${tag}-abc`)
+    expect(tempReportLine(tmp, before, tag)).toContain(`1 of this run's own still there after the cleanup: ccc-vitest-${tag}-abc`)
+    plant(tmp, `ccc-vitest-${tag}-home-def`)
+    fs.mkdirSync(path.join(tmp, `ccc-vitest-${tag}-ghi`))
+    fs.writeFileSync(path.join(tmp, `ccc-vitest-owner-${tag}.json`), '{}')
+    const sweep = {
+      removed: [`ccc-vitest-${tag}-home-def`, `ccc-vitest-owner-${tag}.json`],
+      failed: new Map([[`ccc-vitest-${tag}-abc`, 'EACCES']]),
+    }
+    expect(tempReportLine(tmp, before, tag, undefined, sweep)).toBe(
+      `[temp check] 0 new entries at the top of ${tmp} since this run started (0 there at the start, 4 now); ` +
+        `4 of this run's own still there after the cleanup: ` +
+        `ccc-vitest-${tag}-abc (removal failed: EACCES; holds sub/file.txt), ` +
+        `ccc-vitest-${tag}-ghi (made after the cleanup read the folder), ` +
+        `ccc-vitest-${tag}-home-def (removed, then made again; holds sub/file.txt), ` +
+        `ccc-vitest-owner-${tag}.json (removed, then made again)`,
+    )
+  })
+
+  it('the line at exit names this run\'s own entries still there then, or says there are none', () => {
+    const tmp = fresh()
+    const tag = newRunTag()
+    const before = new Set(fs.readdirSync(tmp))
+    plant(tmp, 'not-ours')
+    expect(tempExitLine(tmp, before, tag)).toBe(`[temp check] when this run's process exited: none of this run's own still there`)
+    plant(tmp, `ccc-vitest-${tag}-abc`)
+    expect(tempExitLine(tmp, before, tag, { removed: [`ccc-vitest-${tag}-abc`], failed: new Map() })).toBe(
+      `[temp check] when this run's process exited: 1 of this run's own still there then: ccc-vitest-${tag}-abc (removed, then made again; holds sub/file.txt)`,
+    )
+    const missing = path.join(tmp, 'missing')
+    expect(tempExitLine(missing, before, tag)).toBe(`[temp check] ${missing} could not be read when this run's process exited`)
+  })
+
+  it('reads the names at the start only in CI or with CCC_TEMP_REPORT set (a local run does not read the temp folder)', () => {
+    const tmp = fresh()
+    plant(tmp, 'a')
+    plant(tmp, 'b')
+    expect(tempNamesAtStart(tmp, {})).toBeUndefined()
+    expect(tempNamesAtStart(tmp, { CI: 'true' })).toEqual(new Set(['a', 'b']))
+    expect(tempNamesAtStart(tmp, { CCC_TEMP_REPORT: '1' })).toEqual(new Set(['a', 'b']))
+    expect(tempNamesAtStart(path.join(tmp, 'missing'), { CI: 'true' }), 'a folder that cannot be read').toBeNull()
+  })
+
+  it('the line gives the counts at the start and now, so an empty or unreadable folder does not read as a clean run', () => {
+    const tmp = fresh()
+    const tag = newRunTag()
+    plant(tmp, 'there-before')
+    const before = new Set(fs.readdirSync(tmp))
+    plant(tmp, 'left')
+    expect(tempReportLine(tmp, before, tag)).toBe(`[temp check] 1 new entry at the top of ${tmp} since this run started (1 there at the start, 2 now): left`)
+    expect(tempReportLine(tmp, new Set(fs.readdirSync(tmp)), tag)).toBe(`[temp check] 0 new entries at the top of ${tmp} since this run started (2 there at the start, 2 now)`)
+    const missing = path.join(tmp, 'missing')
+    expect(tempReportLine(missing, before, tag)).toBe(`[temp check] ${missing} could not be read at the end of this run, so nothing was compared`)
+    expect(tempReportLine(tmp, null, tag)).toBe(`[temp check] ${tmp} could not be read when this run started, so nothing was compared`)
   })
 })

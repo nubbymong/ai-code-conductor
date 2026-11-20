@@ -688,6 +688,29 @@ describe('release.yml: a beta release reuses green CI for the same tree; a stabl
     const partRun = part.steps.find((s) => s.name === 'Unit tests')!.run!
     expect(partRun.startsWith(`${suiteStepsOf('build-windows')[0].run} --shard=\${{ matrix.part }}/\${{ strategy.job-total }} --reporter=`), partRun).toBe(true)
   })
+
+  it('the Windows release job fetches the NSIS compiler before its suite, as the Windows parts do', () => {
+    // 2.1.3-beta.9's release (run 44624973440) found no green run to reuse and
+    // ran the suite itself; the job had no MAKENSIS, so the makensis tripwire in
+    // installer-nsis-behaviour.test.ts failed it. A stable release always runs
+    // the suite, so it would have failed the same way.
+    const FETCH = 'node scripts/ci/fetch-makensis.mjs'
+    const part = ci.jobs['test-windows-part'].steps
+    expect(part.findIndex((s) => s.run === FETCH), 'ci.yml Windows parts fetch the compiler').toBeGreaterThanOrEqual(0)
+    expect(part.findIndex((s) => s.run === FETCH)).toBeLessThan(part.findIndex((s) => s.name === 'Unit tests'))
+    const win = release.jobs['build-windows'].steps
+    const fetch = win.findIndex((s) => s.run === FETCH)
+    const suite = win.indexOf(suiteStepsOf('build-windows')[0])
+    expect(fetch, 'build-windows has no NSIS compiler fetch').toBeGreaterThanOrEqual(0)
+    expect(fetch, 'the fetch comes after the install').toBeGreaterThan(win.findIndex((s) => s.name === 'Install dependencies'))
+    expect(fetch, 'the fetch comes before the suite').toBeLessThan(suite)
+    // Unconditional: a stable or a not-reused beta release needs it, and when
+    // the suite is skipped it only warms the cache the installer step reads.
+    expect(win[fetch].if).toBeUndefined()
+    // Linux and macOS have no makensis probe to feed.
+    expect(release.jobs['build-linux'].steps.some((s) => s.run === FETCH)).toBe(false)
+    expect(release.jobs['build-macos'].steps.some((s) => s.run === FETCH)).toBe(false)
+  })
 })
 
 describe('the written rules match (AGENTS.md, CONTRIBUTING.md, the adversarial-review skill, ADR-028)', () => {
