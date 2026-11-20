@@ -863,11 +863,15 @@ jobs:
           NPM_CACHE: ${{ runner.temp }}/npm-claude-cache
         run: npm install --global --prefix "$PREFIX" --ignore-scripts --cache "$NPM_CACHE" --no-audit --no-fund "$CLAUDE_PACKAGE@$CLAUDE_VERSION"
 
+      # bash on every OS: the default shell on Windows is PowerShell, where `$NAME`
+      # is not an environment variable.
       - name: Locate the installed CLI
         id: bin
+        shell: bash
         env:
           CLAUDE_PACKAGE: ${{ steps.pkg.outputs.package }}
-        run: node tests/integration/claude-conformance-ci.mjs bin "${{ runner.temp }}/claude-${{ matrix.cli }}" "$CLAUDE_PACKAGE"
+          PREFIX: ${{ runner.temp }}/claude-${{ matrix.cli }}
+        run: node tests/integration/claude-conformance-ci.mjs bin "$PREFIX" "$CLAUDE_PACKAGE"
 
       - name: A fresh, empty Claude Code folder for every run of the CLI
         id: home

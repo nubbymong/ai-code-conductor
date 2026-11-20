@@ -32,7 +32,7 @@ import { CLAUDE_MIN_MANAGED_CLI_VERSION, claudeManagedCliCompatibility } from '.
 import { CLI_AUTH_METHODS } from '../../src/shared/account-web-session'
 import { PERMISSION_MODES } from '../../src/renderer/lib/claude-cli-options'
 import {
-  expectedVersion, reviewerFlagProblems, choiceProblems, authProblems, withProveRed,
+  expectedVersion, reviewerFlagProblems, choiceProblems, authProblems, withProveRed, declaredSwitches, linesNaming, flagListed, flagsOfArgs,
 } from './claude-conformance-lib.mjs'
 
 const BIN = process.env.CCC_CLAUDE_CONFORMANCE_BIN ?? ''
@@ -89,6 +89,7 @@ maybe('integration: the real Claude Code CLI, with no sign-in', () => {
     help = printed.help.stdout
     authHelp = printed.auth.stdout
     loginHelp = printed.login.stdout
+    console.log(`[claude-conformance] switches claude --help declares: ${declaredSwitches(help).join(' ')}`)
   }, CASE_MS)
 
   it('the install answers --version with the version asked for, which the app reads and accepts', () => {
@@ -101,7 +102,10 @@ maybe('integration: the real Claude Code CLI, with no sign-in', () => {
 
   it('--help lists every switch of the reviewer\'s command line, and --output-format still offers json', () => {
     expect(printed.help.exit).toBe(0)
-    expect(reviewerFlagProblems(help, expectations.flags)).toEqual([])
+    const problems = reviewerFlagProblems(help, expectations.flags)
+    // A red run says what the help did hold about each switch it could not find.
+    for (const flag of flagsOfArgs(expectations.flags)) if (!flagListed(help, flag)) console.log(`[claude-conformance] ${flag} is not declared; the help lines that name it: ${JSON.stringify(linesNaming(help, flag.replace(/^-+/, '')))}`)
+    expect(problems).toEqual([])
   }, CASE_MS)
 
   it('--permission-mode still offers every mode the launch picker writes', () => {

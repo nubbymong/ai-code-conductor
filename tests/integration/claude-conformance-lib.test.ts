@@ -8,7 +8,7 @@ import { CLAUDE_MIN_MANAGED_CLI_VERSION } from '../../src/main/providers/claude/
 import { CLI_AUTH_METHODS } from '../../src/shared/account-web-session'
 import { PERMISSION_MODES } from '../../src/renderer/lib/claude-cli-options'
 import {
-  isPlainSemver, platformPackage, packageBinPath, expectedVersion, flagListed, optionBlock, choicesOf, commandsOf,
+  isPlainSemver, platformPackage, packageBinPath, expectedVersion, flagListed, optionBlock, choicesOf, commandsOf, declaredSwitches, linesNaming,
   reviewerFlagProblems, choiceProblems, authProblems, flagsOfArgs, withProveRed, PROVE_RED_FLAG, PROVE_RED_WORD,
 } from './claude-conformance-lib.mjs'
 
@@ -122,6 +122,16 @@ describe('reading the help of claude', () => {
     expect(choicesOf(MAIN_HELP, '--ccc-no-such-flag')).toEqual([])
     expect(optionBlock(MAIN_HELP, '--model')).toBe('Model for the current session.')
     expect(optionBlock(MAIN_HELP, '--permission-mode')).not.toContain('Print response')
+  })
+
+  it('lists the switches a help declares, and the lines that name a word, for the log of a run that goes red', () => {
+    expect(declaredSwitches(MAIN_HELP)).toEqual(['--model', '--no-session-persistence', '--output-format', '--permission-mode', '-p', '--print', '--restricted', '--strict-mcp-config', '--tools', '-h', '--help'])
+    expect(declaredSwitches(LOGIN_HELP)).toEqual(['--claudeai', '--console', '--email', '-h', '--help', '--sso'])
+    expect(declaredSwitches('')).toEqual([])
+    // The lines that name a word, case aside, trimmed with runs of spaces made one, and bounded.
+    expect(linesNaming(MAIN_HELP, 'TOOLS')).toEqual(['tools that run commands; pair it with', '--tools <tools...> Built-in tools to make available: "" for'])
+    expect(linesNaming(MAIN_HELP, 'no-such-word')).toEqual([])
+    expect(linesNaming(MAIN_HELP, 'a', 2)).toHaveLength(2)
   })
 
   it('lists the commands under Commands, and not the words of a description', () => {
@@ -255,6 +265,12 @@ describe('ci.yml: the claude-conformance job', () => {
     }
     const env = job.steps.find((s) => s.id === 'ver')!.env!
     expect(env.RC_VERSION).toBe('${{ inputs.claude_rc_version }}')
+  })
+
+  it('runs every step that expands an environment variable under bash: on Windows the default shell is PowerShell, where $NAME is not one', () => {
+    const expanding = job.steps.filter((s) => s.run !== undefined && /\$[A-Za-z_]/.test(s.run))
+    expect(expanding.length, 'no step expands a variable: the check would be vacuous').toBeGreaterThan(0)
+    for (const s of expanding) expect(s.shell, s.name).toBe('bash')
   })
 
   it('installs the platform package with no install script, into its own prefix, and runs the one suite', () => {

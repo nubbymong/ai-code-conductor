@@ -87,6 +87,25 @@ export function choicesOf(help, flag) {
   return m ? [...m[1].matchAll(/"([^"]*)"/g)].map((x) => x[1]) : []
 }
 
+/** Every switch declared on a line of its own, short alias first, in the order
+ *  printed. For the log of a run, so a red one says what the CLI did list. */
+export function declaredSwitches(help) {
+  const out = []
+  for (const l of lines(help)) {
+    const m = /^ {1,6}(-[A-Za-z](?![\w-]))?(?:,\s+)?(--[A-Za-z][\w-]*)?/.exec(l)
+    if (m && (m[1] || m[2]) && l.trimStart().startsWith('-')) out.push(...[m[1], m[2]].filter(Boolean))
+  }
+  return out
+}
+
+/** The lines of the help that name a word (case aside), runs of spaces made
+ *  one, at most `max`: what to read when a switch is not declared. */
+export function linesNaming(help, word, max = 8) {
+  if (typeof word !== 'string' || word === '') return []
+  const w = word.toLowerCase()
+  return lines(help).map((l) => l.trim().replace(/\s+/g, ' ')).filter((l) => l.toLowerCase().includes(w)).slice(0, max)
+}
+
 /** The command names under `Commands:`, in the order printed. */
 export function commandsOf(help) {
   const all = lines(help)
