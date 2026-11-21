@@ -177,3 +177,51 @@ when something was left. The recordings (every chunk with its offset and time)
 and `p19-result.json` go to `--out`; the result writes personal paths as
 placeholders, and both name the probe code by the sha256 of its three files.
 The answer is in ADR-030 after the P18 result.
+
+## P19, second run (plan 2.1.3-beta.12, section A2)
+
+The same probe, asked three more things; the decision lines are in the
+script's header, written before measuring.
+
+- **The modes.** At each mark and after each step it also records, for both
+  terminals, what xterm.js says of the terminal's modes: the screen in use and
+  every field of its `modes` (bracketed paste, mouse reporting, application
+  cursor keys, the application keypad, focus reporting and the rest). Each
+  mode gets KEPT, LOST or NO VERDICT per CLI, per system and per ConPTY.
+- **Codex's other screens.** A short turn of its own (30 lines in 1.5 s, the
+  stand-in's second reply; once the screen is full Codex redraws it for each
+  new line, about 6 KB, so 40 lines were over the cap), recorded in the
+  middle of the reply with no resize and measured after it; a draft typed
+  while that turn runs (the queue hint); a config that rebinds the shortcuts
+  key to F6; and two attempts of up to 60 s each: the agents form of the
+  hint row (`← for agents`, the default composer in Codex 0.170.0) and a
+  warning count on the hint row (a config with an MCP server that cannot
+  start). A record-only screen is recorded to its mark and 300 ms on. The
+  queue, rebound-key, agents and warning launches run once each; the short
+  turn runs three times, like the first run's launches.
+  `P19 SIZES` says which recordings would be over the screen corpus's cap of
+  256 KiB.
+- **The console hosts, on Windows.** After each program's end its console
+  hosts are counted 1, 2, 5, 10, 30 and 60 s after node-pty reported the exit,
+  before anything of that run is stopped, while the next run goes on.
+  `P19 CONSOLE HOSTS` reads ENDS BY ITSELF, STAYS or IN BETWEEN per ConPTY.
+
+Codex 0.170.0 in CI is a dispatch that gives the version as well; the
+Codex conformance job then runs its extra leg for that version too:
+`gh workflow run ci.yml --ref <branch> -f probe_p19=true -f codex_rc_version=0.170.0`.
+
+One more row, on the test machine only: Codex without `--no-daemon`, so with
+its background server, in the same elevated SSH session (RUNS A TURN or
+FAILS with what the screen showed). It runs only when named:
+`--only claude,codex,shell,codex-daemon`.
+
+Thirty-three of this run's recordings are in the screen corpus
+(`helper/fixtures/screens/`, checked by `tests/unit/shared/screen-corpus.test.ts`,
+where the program `codex170` is Codex 0.170.0 and `codex` is 0.157.1). Each is
+run 1 of its launch up to its state's `mark-end` line: every line before it, in
+order, without the `exit` line and earlier `mark-end` lines, a mark keeping only
+its state; the chunks decoded as one UTF-8 stream (a character split across two
+reads joins the second) and each offset counted over that text. The Windows ones
+are the test machine's, the others GitHub's runners'. Which ones were kept is
+the plan's order of keeping, listed in the test with what was left out. The
+answer is in ADR-030 after the P19 result ("P19, second run").

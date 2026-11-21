@@ -8,13 +8,16 @@
 //   POST /v1/messages/count_tokens  Claude Code: one token
 //   POST /v1/responses              Codex (the OpenAI Responses API)
 //
-// The turn, and only the turn, gets the one fixed reply: about 300 lines of
-// text (the `reply` section of p19-scenarios.json), streamed one line every
-// `lineMs`. The turn is a request that carries tools and names the scenario's
-// prompt (for Claude Code, a streamed one); any other request a CLI makes on
-// its own (a check, a title; Codex 0.157.1 sends a second /v1/responses with
-// no tools after its turn) gets the one word "ok", streamed when it asked for
-// a stream. Anything else is a 404. No tool call, no thinking, only text.
+// The turn, and only the turn, gets one of two fixed replies, streamed one
+// line every `lineMs`: about 300 lines of text (the `reply` section of
+// p19-scenarios.json) for a turn that names its marker, and the short one
+// (`shortReply`, 30 lines in 1.5 s; the second probe run) for a turn
+// that names the short marker. The turn is a request that carries tools and
+// names one of the two markers (for Claude Code, a streamed one); any other
+// request a CLI makes on its own (a check, a title; Codex 0.157.1 sends a
+// second /v1/responses with no tools after its turn) gets the one word "ok",
+// streamed when it asked for a stream. Anything else is a 404. No tool call,
+// no thinking, only text.
 //
 //   node p19-model-stand-in.cjs <p19-scenarios.json>
 //
@@ -29,13 +32,17 @@ const http = require('http');
 
 const scenarioPath = process.argv[2];
 if (!scenarioPath) { process.stderr.write('usage: node p19-model-stand-in.cjs <p19-scenarios.json>\n'); process.exit(2); }
-const reply = JSON.parse(fs.readFileSync(scenarioPath, 'utf8')).reply;
-const total = reply.lines;
-const pad = String(total).length;
-const LINES = [];
+const scenario = JSON.parse(fs.readFileSync(scenarioPath, 'utf8'));
 // Each line is its own paragraph (`after`), so a CLI that draws its reply
 // block by block draws it as it streams.
-for (let n = 1; n <= total; n++) LINES.push(reply.line.replace(/\{n\}/g, String(n).padStart(pad, '0')).replace(/\{total\}/g, String(total)) + (reply.after ?? '\n'));
+const build = (r, kind) => {
+  const pad = String(r.lines).length;
+  const lines = [];
+  for (let n = 1; n <= r.lines; n++) lines.push(r.line.replace(/\{n\}/g, String(n).padStart(pad, '0')).replace(/\{total\}/g, String(r.lines)) + (r.after ?? '\n'));
+  return { kind, marker: r.marker, lineMs: r.lineMs, blockLines: r.blockLines, lines };
+};
+// The short reply first: its marker is checked before the long one's.
+const REPLIES = [scenario.shortReply ? build(scenario.shortReply, 'short') : null, build(scenario.reply, 'long')].filter(Boolean);
 const MAX_BODY = 16 * 1024 * 1024;
 
 const emit = (o) => process.stdout.write(JSON.stringify({ t: Date.now(), ...o }) + '\n');
@@ -68,7 +75,7 @@ function pace(res, id, parts, everyMs, each, done) {
 // until then), so the reply comes in blocks to be drawn while it streams.
 function anthropic(res, body, id, turn) {
   const model = typeof body.model === 'string' ? body.model : 'p19-probe';
-  const parts = turn ? LINES : ['ok'];
+  const parts = turn ? turn.lines : ['ok'];
   const text = parts.join('');
   if (body.stream !== true) {
     res.writeHead(200, { 'content-type': 'application/json', 'request-id': `req_p19_${id}` });
@@ -79,8 +86,8 @@ function anthropic(res, body, id, turn) {
   res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache', connection: 'keep-alive', 'request-id': `req_p19_${id}` });
   sse(res, 'message_start', { type: 'message_start', message: { id: `msg_p19_${id}`, type: 'message', role: 'assistant', model, content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: 10, output_tokens: 1 } } });
   sse(res, 'ping', { type: 'ping' });
-  const per = Math.max(1, reply.blockLines || parts.length);
-  pace(res, id, parts, turn ? reply.lineMs : 1,
+  const per = Math.max(1, (turn && turn.blockLines) || parts.length);
+  pace(res, id, parts, turn ? turn.lineMs : 1,
     (part, i) => {
       const index = Math.floor(i / per);
       if (i % per === 0) sse(res, 'content_block_start', { type: 'content_block_start', index, content_block: { type: 'text', text: '' } });
@@ -98,7 +105,7 @@ function anthropic(res, body, id, turn) {
 // stream that closes without it).
 function responses(res, body, id, turn) {
   const model = typeof body.model === 'string' ? body.model : 'p19-probe';
-  const lines = turn ? LINES : ['ok'];
+  const lines = turn ? turn.lines : ['ok'];
   const full = lines.join('');
   const rid = `resp_p19_${id}`;
   const mid = `msg_p19_${id}`;
@@ -112,7 +119,7 @@ function responses(res, body, id, turn) {
   ev('response.in_progress', { response: { id: rid, object: 'response', created_at: created, status: 'in_progress', model, output: [] } });
   ev('response.output_item.added', { output_index: 0, item: item('in_progress', null) });
   ev('response.content_part.added', { item_id: mid, output_index: 0, content_index: 0, part: { type: 'output_text', text: '', annotations: [] } });
-  pace(res, id, lines, turn ? reply.lineMs : 1,
+  pace(res, id, lines, turn ? turn.lineMs : 1,
     (part) => ev('response.output_text.delta', { item_id: mid, output_index: 0, content_index: 0, delta: part }),
     () => {
       ev('response.output_text.done', { item_id: mid, output_index: 0, content_index: 0, text: full });
@@ -132,19 +139,23 @@ const srv = http.createServer((req, res) => {
     let body = {};
     try { body = size > 0 && size <= MAX_BODY ? JSON.parse(Buffer.concat(chunks).toString('utf8')) : {}; } catch { body = {}; }
     const tools = Array.isArray(body.tools) ? body.tools.length : 0;
-    const names = JSON.stringify(body.messages || body.input || '').includes(reply.marker);
+    const text = JSON.stringify(body.messages || body.input || '');
+    const named = REPLIES.find((r) => text.includes(r.marker)) || null;
+    const names = !!named;
     const info = { event: 'request', id, method: req.method, path, model: typeof body.model === 'string' ? body.model : null, stream: body.stream === true, tools, namesPrompt: names, bytes: size };
+    // `kind` and `of` say which reply a turn gets and how many lines it has.
+    const turnInfo = (turn) => (turn ? { reply: 'turn', kind: named.kind, of: named.lines.length } : { reply: 'ok', of: 1 });
     if (req.method === 'POST' && path === '/v1/messages') {
-      const turn = body.stream === true && tools > 0 && names;
-      emit({ ...info, reply: turn ? 'turn' : 'ok' });
+      const turn = body.stream === true && tools > 0 && names ? named : null;
+      emit({ ...info, ...turnInfo(turn) });
       anthropic(res, body, id, turn);
     } else if (req.method === 'POST' && path === '/v1/messages/count_tokens') {
       emit({ ...info, reply: 'count' });
       res.writeHead(200, { 'content-type': 'application/json' });
       res.end(JSON.stringify({ input_tokens: 1 }));
     } else if (req.method === 'POST' && path === '/v1/responses') {
-      const turn = tools > 0 && names;
-      emit({ ...info, reply: turn ? 'turn' : 'ok' });
+      const turn = tools > 0 && names ? named : null;
+      emit({ ...info, ...turnInfo(turn) });
       responses(res, body, id, turn);
     } else {
       emit({ ...info, reply: 'not-found' });
@@ -153,7 +164,7 @@ const srv = http.createServer((req, res) => {
     }
   });
 });
-srv.listen(0, '127.0.0.1', () => emit({ event: 'listening', port: srv.address().port, lines: total, lineMs: reply.lineMs }));
+srv.listen(0, '127.0.0.1', () => emit({ event: 'listening', port: srv.address().port, replies: REPLIES.map((r) => ({ kind: r.kind, lines: r.lines.length, lineMs: r.lineMs })) }));
 process.stdin.resume();
 process.stdin.on('end', () => process.exit(0));
 for (const s of ['SIGINT', 'SIGTERM', 'SIGHUP', 'SIGBREAK']) process.on(s, () => process.exit(0));
