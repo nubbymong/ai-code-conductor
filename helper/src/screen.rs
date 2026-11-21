@@ -245,8 +245,7 @@ impl Screen {
     /// Feed the session's output, in the order it came; a chunk may end
     /// anywhere, inside a character or a sequence.
     pub fn feed(&mut self, bytes: &[u8]) {
-        let passed = self.clamp.pass(bytes);
-        self.parser.process(&passed);
+        self.parser.process(bytes);
     }
 
     /// The session's terminal changed size.
