@@ -18,6 +18,7 @@ import { changelog } from '../../../src/renderer/changelog'
 import { CODEX_CONDUCTOR_TOOLS } from '../../../src/main/providers/codex/conductor-tools'
 import { codexModelOptions, codexNewConfigModel } from '../../../src/renderer/codex-models'
 import type { ModelRegistry } from '../../../src/shared/model-registry'
+import { TERMINAL_SCROLLBACK_LINES } from '../../../src/shared/terminal-scrollback'
 import registryJson from '../../../resources/model-registry.json'
 import { escapeRegExp } from '../../helpers/escape-regexp'
 
@@ -2499,7 +2500,10 @@ describe('the 2.1.3-beta.11 sweep', () => {
     expect(k).not.toContain('type /mcp and reconnect the conductor server')
     // The Machines section still says the tools' route changed too, not only the hooks'.
     const m = body('machines')
-    expect(m).toContain("A Claude Code or Codex session the helper holds can also reach the Conductor's tools through the session helper. Such a session does not survive a crash yet.")
+    // From 2.1.3-beta.12 the sentence on a dropped connection sits between
+    // these two (the 2.1.3-beta.12 sweep pins it).
+    expect(m).toContain("A Claude Code or Codex session the helper holds can also reach the Conductor's tools through the session helper.")
+    expect(m).toContain('Such a session does not survive a crash yet.')
     expect(m).not.toContain("what to do when such a session's Conductor tools stop working")
   })
 
@@ -2533,26 +2537,101 @@ describe('the 2.1.3-beta.11 sweep', () => {
 })
 
 // 2.1.3-beta.12 known issues: a held terminal shown again once its earlier
-// output is no longer held (aicc_planning#352), and the three Codex screens
+// output is no longer held (aicc_planning#352), and the four Codex screens
 // the reader still refuses after it learned the hint rows (aicc_planning#357),
 // each with its workaround, so a later edit cannot drop one silently.
 describe('the 2.1.3-beta.12 known issues', () => {
   const body = (id: string) => APP_KNOWLEDGE_SECTIONS.find((x) => x.id === id)!.body
   const para = (start: string) => body('known-issues').split('\n\n').find((x) => x.startsWith(start))
   const src = (...parts: string[]) => fs.readFileSync(path.resolve(__dirname, '..', '..', '..', 'src', ...parts), 'utf8')
+  const held = 'With Plain terminals through the session helper on, a terminal the helper holds keeps only the last 2 MiB of what it printed.'
+  const twoRows = 'With Codex 0.170.0, the app types nothing into a Codex session after its first prompt while the line under Codex\'s prompt takes two rows.'
+  const warningCount = 'While Codex shows a warning count on the line under its prompt'
+  const movedKey = 'With Codex 0.157.1 or 0.170.0, when your Codex config moves the shortcuts key to a key other than F6, the app types nothing into a Codex session'
 
-  it('a held terminal shown again from the middle of its output quotes the notice the app writes, with its workaround (aicc_planning#352)', () => {
-    const p = para('With Plain terminals through the session helper on, a terminal the helper holds keeps only the last 2 MiB of what it printed.')!
+  it('a held terminal shown again from the middle of its output quotes the notice the app writes, then the last of the output the tab keeps, with its workaround (aicc_planning#352)', () => {
+    const p = para(held)!
     const notice = src('main', 'session-helper', 'helper-pty.ts').match(/const EARLIER_OUTPUT_NOT_SHOWN = '([^']+)'/)![1]
-    expect(p).toContain(`its tab first shows the line ${notice}, then the output the helper still holds`)
+    // The tab's scrollback is what helper-pty.ts shows of the replay after the notice.
+    expect(p).toContain(`its tab first shows the line ${notice}, then the last of the output the helper still holds that the tab can keep (a tab keeps ${TERMINAL_SCROLLBACK_LINES.toLocaleString('en-US')} lines), and the program in it, if it is still running, is asked to draw its screen again.`)
+    // A program started inside what is held keeps its screen and modes across the trim (replay-tail.ts), so only an earlier one is drawn on the normal screen.
+    expect(p).toContain('A full-screen program in it, such as an editor, that started before the output the helper still holds is then drawn on the terminal\'s normal screen instead of its own full screen until you start it again')
     expect(p).toContain('The line right after the notice can start part-way, with a few stray characters.')
     expect(p).toContain('Workaround: quit the full-screen program and start it again.')
     expect(body('machines')).toContain('what a held terminal shows when its earlier output is no longer held')
   })
 
-  it('the three Codex screens the reader still refuses each say what is not typed and give a workaround (aicc_planning#357)', () => {
-    expect(para('With Codex 0.170.0, the app types nothing into a Codex session after its first prompt while the line under Codex\'s prompt takes two rows.')).toContain('Workaround: widen the pane, or use a shorter working folder.')
+  it('Known issues says the notice also shows under either setting when the app falls behind (aicc_planning#352)', () => {
+    expect(para(held)).toContain('The same line shows in any terminal or session the helper holds, under either setting, when the app falls so far behind its output that the helper no longer holds what it missed.')
+  })
+
+  it('the four Codex screens the reader still refuses each say what is not typed and give a workaround (aicc_planning#357)', () => {
+    expect(para(twoRows)).toContain('Workaround: widen the pane, or use a shorter working folder.')
     expect(para('Text the app types into a Codex session while Codex writes a reply')).toContain('Workaround: send it again once the reply ends.')
-    expect(para('While Codex shows a warning count on the line under its prompt')).toContain('Workaround: type the note into the Codex session yourself.')
+    expect(para(warningCount)).toContain('Workaround: type the note into the Codex session yourself.')
+    expect(para(movedKey)).toContain('Workaround: move the shortcuts key back to ? or to F6, or type the note into the Codex session yourself.')
+  })
+
+  it('a command bar prompt button that sends its prompt is named where the reader types nothing, as the release line names it (aicc_planning#357)', () => {
+    for (const start of [twoRows, warningCount, movedKey]) {
+      expect(para(start), start).toContain('A command bar prompt button that sends its prompt types nothing either, and the command bar says the prompt was not sent.')
+    }
+  })
+})
+
+// 2.1.3-beta.12 user-facing sweep: the Machines section says what a held
+// terminal shows when its earlier output is no longer held (aicc_planning#352)
+// and that a held session's tools keep working through a dropped connection
+// to the helper, in the relay's own words (aicc_planning#354,
+// aicc_planning#355); and the release notes, so a later edit cannot drop them
+// silently.
+describe('the 2.1.3-beta.12 sweep', () => {
+  const body = (id: string) => APP_KNOWLEDGE_SECTIONS.find((x) => x.id === id)!.body
+  const root = (...parts: string[]) => fs.readFileSync(path.resolve(__dirname, '..', '..', '..', ...parts), 'utf8')
+  const entry = changelog.find((e) => e.version === '2.1.3-beta.12')!
+  const notes = () => [entry.highlights ?? '', ...entry.warnings!, ...entry.changes.map((c) => c.description)]
+  const updating = () => root('helper', 'src', 'relay.rs').match(/pub const UPDATING: &str = "([^"]+)";/)![1]
+  // How long the relay holds a call for the app, from the same file, so the
+  // Guide and the notes cannot keep saying 30 seconds after HOLD changes.
+  const holdSeconds = () => root('helper', 'src', 'relay.rs').match(/pub const HOLD: Duration = Duration::from_secs\((\d+)\);/)![1]
+
+  it('the Machines section says a held terminal shown again past the last 2 MiB shows one line, then the last of its output the tab keeps, and is asked to redraw (aicc_planning#352)', () => {
+    expect(body('machines')).toContain('nothing is typed into it again. When it printed more than the last 2 MiB the helper keeps, the tab first shows one line saying its earlier output is no longer held, then the last of its output that the tab can keep, and its program, if it is still running, is asked to draw its screen again.')
+  })
+
+  it('the Machines section says a held session keeps its tools through a dropped connection, with the relay\'s own answer (aicc_planning#354, aicc_planning#355)', () => {
+    const m = body('machines')
+    expect(m).toContain(`can also reach the Conductor's tools through the session helper. If the app's connection to the session helper drops and comes back, those tools keep working: a tool call made while the connection is down waits up to ${holdSeconds()} seconds for the app, and if the app is not back by then, it gets the answer "${updating()}".`)
+    expect(m).toContain('A call the app was already answering when the connection dropped gets that answer at once and is not sent again, because a tool may not be safe to run twice. Such a session does not survive a crash yet.')
+  })
+
+  it('the release notes carry the series warning, the two minutes, the way back and every change line', () => {
+    const w = entry.warnings!.join('\n')
+    expect(w).toContain("This beta series begins moving the app's background services")
+    expect(w).toContain('only if the new version opens within two minutes of the old one closing')
+    expect(w).toContain('To go back to 2.1.3-beta.11')
+    expect(entry.highlights).toContain('With Plain terminals through the session helper on, a terminal shown again after the helper no longer holds its earlier output now says so in one line')
+    expect(entry.highlights).toContain("keeps the Conductor's tools when the app's connection to the session helper drops and comes back")
+    expect(entry.highlights).toContain('With Codex 0.170.0, the app now types into a Codex session while Codex shows its usual hint line under the prompt.')
+    const all = entry.changes.map((c) => c.description).join('\n')
+    for (const said of [
+      'With Plain terminals through the session helper on (Settings, General, under Terminal; off by default)',
+      'It now first shows one line saying its earlier output is no longer held, and its program, if it is still running, is asked to draw its screen again.',
+      'A full-screen program that started before those last 2 MiB is then drawn on the normal screen until you start it again, and the line after the notice can start part-way (in Known issues).',
+      'With Claude Code and Codex sessions through the session helper on (Settings, General, under Terminal; off by default)',
+      `A tool call made while the connection is down waits up to ${holdSeconds()} seconds for the app, and if the app is not back by then, it gets the answer "${updating()}".`,
+      'Before, that session\'s tools stopped working until you typed /mcp in Claude Code or restarted the tab.',
+      'are now typed into a Codex session while Codex shows its usual hint line under the prompt.',
+      'with Codex 0.157.1 or 0.170.0, for that line when your Codex config moves the shortcuts key to F6.',
+      'canvas notes, Ask Conductor questions, command bar prompt buttons, the app\'s own Codex commands and a Watchdog retry are now typed',
+      'It still types nothing when the shortcuts key is moved to any other key. Known issues lists that and three more cases where it types nothing, or takes its text back.',
+    ]) expect(all).toContain(said)
+    expect(entry.highlights).toContain('asks its program, if it is still running, to draw its screen again.')
+    // Each switch is named with its default, so no line says more than shipped.
+    expect(entry.changes.filter((c) => c.description.includes('off by default'))).toHaveLength(2)
+    for (const text of notes()) {
+      expect(text, text.slice(0, 40)).not.toMatch(/—/)
+      expect(text, text.slice(0, 40)).not.toMatch(/\bCodex tab\b/)
+    }
   })
 })

@@ -63,6 +63,7 @@ import { noteActivityGrace } from '../stores/activeStore'
 import type { ProviderId, CodexOptions, TerminalOptions } from '../../shared/types'
 import { spawnRefusalOf, refusedTabText } from '../../shared/providers'
 import { parentOfPartnerPtyId } from '../../shared/multi-spawn-rule'
+import { TERMINAL_SCROLLBACK_LINES } from '../../shared/terminal-scrollback'
 import { reconcileRefusedMultiSpawn } from '../utils/refusedMultiSpawn'
 import { isConfigLaunchBlocked, useLaunchGateSettings, restartLaunchRefusal } from '../hooks/useLaunchConfig'
 import { useConfigStore } from '../stores/configStore'
@@ -726,7 +727,8 @@ export default function TerminalView({ sessionId, configId, cwd, shellOnly, elev
         // stays visible after focus shifts to the sidebar/config/input bar.
         // Claude/TUI sessions keep the caret fully hidden (they draw their own).
         cursorInactiveStyle: shellOnly ? 'outline' : 'none',
-        scrollback: 10000,
+        // One constant with the session helper's replay budget (helper-pty.ts).
+        scrollback: TERMINAL_SCROLLBACK_LINES,
         allowTransparency: true,
         // Light mode only: enforce a minimum contrast ratio so Claude's dim,
         // dark-theme-tuned greys (e.g. "Shell cwd was reset") stay readable on
