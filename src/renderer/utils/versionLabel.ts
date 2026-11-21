@@ -12,6 +12,17 @@ export function formatInstalledVersion(version: string, channel: UpdateChannel):
 }
 
 /**
+ * "Update available", with the offered version when main has said which:
+ * `2.1.3-beta.11` -> "Update available -- v2.1.3-beta.11". Main sends the
+ * offered version with its prerelease part (update:getVersion), so a beta or
+ * an rc offer never reads as the stable release (aicc_planning#369). Settings,
+ * General, Check for Updates and the footer's Update pill both use this.
+ */
+export function formatUpdateOffer(offered: string | null | undefined): string {
+  return offered ? `Update available -- v${offered}` : 'Update available'
+}
+
+/**
  * The release LINE a version belongs to: `2.1.0-beta.9` -> `2.1`.
  *
  * The upgrade-cohort onboarding page hard-coded "2.0", so every 2.1 beta

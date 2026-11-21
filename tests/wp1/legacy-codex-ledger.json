@@ -2,7 +2,7 @@
   "schema": "wp1-legacy-codex-ledger/2",
   "predicateDigest": "100a1233edebdc39a5f9004d3fba980a89ebb15b25872e52076386bc84b03153",
   "manifestPathDigest": "fabfbed01579a8597a8a18f511f1a29819f5f586c49b71bc459e2d4faf76a39e",
-  "manifestHead": "0c4c926d4004823170494510308808f159ef7fdc",
+  "manifestHead": "30bf18108897fb3d5f004797641dd162fc3b62d0",
   "dispositions": {
     "retain": "unchanged observable behaviour, characterization proof",
     "move": "moved behind a package boundary and/or adapted at the call site, regression proof (newPath when relocated)",
@@ -9180,7 +9180,7 @@
       ],
       "category": "TEST",
       "disposition": "replace",
-      "evidence": "existing test retained unchanged; must stay green on the merge candidate (WP1.33); listed in docs/wp1/baseline-test-inventory.json; WP1.33 mapping: rewritten for WP2 PR 3 P3.8 (rows 39, 40): the pinned six-model list is replaced by cases on the registry-derived options (Default, the CLI's list, a kept saved model, levels per model); tests/unit/renderer/codex-models.test.ts; 2.1.3-beta.11 aggregate (WP1.68): cases on the model a new config starts on (the first every supported version lists, following the catalogue, Default when none does); tests/unit/renderer/codex-models.test.ts",
+      "evidence": "existing test retained unchanged; must stay green on the merge candidate (WP1.33); listed in docs/wp1/baseline-test-inventory.json; WP1.33 mapping: rewritten for WP2 PR 3 P3.8 (rows 39, 40): the pinned six-model list is replaced by cases on the registry-derived options (Default, the CLI's list, a kept saved model, levels per model); tests/unit/renderer/codex-models.test.ts; 2.1.3-beta.11 aggregate (WP1.68): cases on the model a new config starts on (the first every supported version lists, following the catalogue, Default when none does); 2.1.3-beta.11 release PR (WP1.68): a model whose own versions name every supported version counts, so with only 0.170.0 and 0.171.0 supported a new config starts on the head of the list; tests/unit/renderer/codex-models.test.ts",
       "note": "re-dispositioned in WP2 PR 3 P3.8 (was retain)"
     },
     {

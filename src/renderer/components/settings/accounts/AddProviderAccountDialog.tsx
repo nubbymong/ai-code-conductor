@@ -6,7 +6,7 @@
 // completeSetup abandons the setup, so nothing half-made stays behind.
 //
 // Sign in again first asks which account the user means, with neither answer
-// chosen, and offers no sign-in until one is (#289). "The same account as
+// chosen, and offers no sign-in until one is (aicc_planning#289). "The same account as
 // before" re-signs the existing managed account (main stages it when the
 // account is signed in: design 9.2). "A different account" adds the sign-in
 // as a new account instead: the Add account dialog takes over.
@@ -627,7 +627,7 @@ type AgainAnswer = 'same' | 'different'
 /**
  * "Sign in again" for an existing managed account: its recorded method family
  * only. It first asks which account the user means; neither answer is chosen
- * for them, and the sign-in button stays disabled until one is (#289). "The
+ * for them, and the sign-in button stays disabled until one is (aicc_planning#289). "The
  * same account as before": main signs it in again, in place when it is not
  * signed in, else in a new folder it moves the account to only once that
  * sign-in is verified (design 9.2). "A different account": nothing runs here
@@ -724,7 +724,7 @@ export function SignInAgainDialog({ provider, account, name, nameInSentence, onC
                   <div className="text-[13px] font-semibold" style={{ color: 'var(--text-primary)' }}>{name}</div>
                   {account.providerLabel && <div className="font-mono text-[12px]" style={{ color: 'var(--text-secondary)' }}>{account.providerLabel}</div>}
                 </div>
-                {/* Neither answer is chosen for the user (#289): the sign-in
+                {/* Neither answer is chosen for the user (aicc_planning#289): the sign-in
                     button stays disabled until they pick one. */}
                 <div className="space-y-2 pb-1" role="radiogroup" aria-labelledby="sign-in-again-which-title" data-testid="sign-in-again-which">
                   <div id="sign-in-again-which-title" className="text-[12.5px] font-semibold" style={{ color: 'var(--text-primary)' }}>Which account are you signing in to?</div>

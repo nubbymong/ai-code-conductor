@@ -11,7 +11,7 @@ import { expandArtifactName } from '../artifact-name'
 import { logInfo, logError } from '../debug-logger'
 
 // Cache the latest release info from GitHub so installAndRestart can use it without a re-check
-let cachedRelease: { version: string; tagName: string; installerName: string | null; installerUrl: string | null } | null = null
+let cachedRelease: { version: string; displayVersion: string; tagName: string; installerName: string | null; installerUrl: string | null } | null = null
 
 /** Reentrancy latch for update:installAndRestart — see the handler. */
 let updateInProgress = false
@@ -46,8 +46,12 @@ export function registerUpdateHandlers(): void {
     return false
   })
 
+  // The offered version as the user reads it, prerelease part kept
+  // (2.1.3-beta.11, 2.1.3-rc.1, 2.1.3), for Settings and the footer's Update
+  // pill. It used to be the base version, so a beta offer read as the stable
+  // release (aicc_planning#369). Display only: nothing compares it.
   ipcMain.handle('update:getVersion', async () => {
-    return cachedRelease?.version || null
+    return cachedRelease?.displayVersion || cachedRelease?.version || null
   })
 
   ipcMain.handle('update:hasSourcePath', async () => {

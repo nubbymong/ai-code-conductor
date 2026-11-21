@@ -9,6 +9,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > `src/renderer/changelog.ts`. After editing that file, run `npm run changelog`
 > (CI enforces that this file is in sync via `npm run changelog:check`).
 
+## [2.1.3-beta.11] - 2026-11-21
+
+### Warnings
+- This beta series begins moving the app's background services, and over the next betas your sessions, onto one helper per machine. If you want a quiet build, stay on the stable release.
+- On Windows, choosing Save sessions at an update keeps the terminals the session helper holds running only if the new version opens within two minutes of the old one closing. The installer's pages count toward those two minutes, so finish the installer promptly.
+- To go back to 2.1.3-beta.10, download its installer from the GitHub releases page and run it over this version.
+
+> Codex up to version 0.171.0 now counts as tested, and the Codex model picker offers the four models Codex 0.170.0 and 0.171.0 list first. Sign in again on a Codex account now asks which account you are signing in to, the Code review row says that Codex's own sign-in on this computer cannot run reviews, and the update check names the version it offers in full. With Claude Code and Codex sessions through the session helper on, a session the helper holds now reaches the Conductor's tools through the helper.
+
+### Changed
+- With Claude Code and Codex sessions through the session helper on (Settings, General, under Terminal; off by default), a Claude Code or Codex session the helper holds now reaches the Conductor's tools through the session helper instead of the app's local port. If the app's connection to the helper drops and comes back, that session's tools stop working until you type /mcp in Claude Code or restart the tab (in Known issues).
+
+### Fixed
+- Codex up to version 0.171.0 now counts as tested. With such a Codex, the Set up Codex page, the Providers card and Sentinel no longer say it is newer than the versions this app was tested with, and a closed Codex account's usage card fetches a fresh reading instead of showing its last one. Before, any Codex newer than 0.156.1 got that notice.
+- The Codex model picker now offers GPT-6.2-Sol, GPT-6.2-Astra, GPT-6.1 Terra and GPT-6.1-Sol, the four models Codex 0.170.0 and 0.171.0 list first, and 0.171.0 is the newest tested Codex. A new Codex config still starts on GPT-6-Astra, the first model every supported Codex lists, because older supported versions do not list the four new ones; pick one of them in the Model list when your Codex is 0.170.0 or newer. Sentinel's note on the Codex versions its model list was read from now names them as a plain list.
+- A Codex account on one of the three plans Codex 0.170.0 added now shows its plan pill, with the name Codex gives it: Pro (Max), Academic Researchers or Academic Researchers Plus.
+- Sign in again on a Codex account (Settings, Accounts, the account's menu) now asks which account you are signing in to, the same account as before or a different one, with neither chosen, and its sign-in button stays off until you pick one. Before, a box that started unticked sent the sign-in as a new account, which left two rows for one account.
+- In Settings, General, Built-in Tools, Code review, when you have added no Codex account, the Codex row now says that Codex's own sign-in on this computer (~/.codex) cannot run reviews, and its Accounts link opens Settings, Accounts, where you add one. When no Codex account can review for another reason, the row keeps its short line and gains the same link. Before, it said only "No Codex account can run reviews. Add a Codex account." with no link, which looked like a bug for anyone already signed in to Codex outside the app.
+- On the beta channel, Settings, General, Check for Updates now names the version on offer in full, for example v2.1.3-beta.12 or v2.1.3-rc.1, and so does the tooltip of the footer's Update pill. Before, a beta on offer read as v2.1.3, which looked like the stable release.
+
 ## [2.1.3-beta.10] - 2026-11-20
 
 ### Warnings
@@ -2068,6 +2088,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Tab attention indicators for waiting prompts
 - Context usage tracking via statusline API
 
+[2.1.3-beta.11]: https://github.com/nubbymong/ai-code-conductor/releases/tag/v2.1.3-beta.11
 [2.1.3-beta.10]: https://github.com/nubbymong/ai-code-conductor/releases/tag/v2.1.3-beta.10
 [2.1.3-beta.9]: https://github.com/nubbymong/ai-code-conductor/releases/tag/v2.1.3-beta.9
 [2.1.3-beta.8]: https://github.com/nubbymong/ai-code-conductor/releases/tag/v2.1.3-beta.8

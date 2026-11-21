@@ -16,7 +16,7 @@ import { TIPS_LIBRARY } from '../../../src/renderer/tips-library'
 import { trainingSteps } from '../../../src/renderer/training-steps'
 import { changelog } from '../../../src/renderer/changelog'
 import { CODEX_CONDUCTOR_TOOLS } from '../../../src/main/providers/codex/conductor-tools'
-import { codexModelOptions } from '../../../src/renderer/codex-models'
+import { codexModelOptions, codexNewConfigModel } from '../../../src/renderer/codex-models'
 import type { ModelRegistry } from '../../../src/shared/model-registry'
 import registryJson from '../../../resources/model-registry.json'
 
@@ -2446,6 +2446,79 @@ describe('the 2.1.3-beta.10 sweep', () => {
       'Nothing uses it yet, and nothing changes in this release.',
       "Release dates in What's New and in the Feature Guide's release history no longer show a day early on a computer whose time zone is behind UTC",
       'a row that shows Codex or Claude Code as not found now checks once by itself when you first see it',
+    ]) expect(all).toContain(said)
+    for (const text of notes()) {
+      expect(text, text.slice(0, 40)).not.toMatch(/—/)
+      expect(text, text.slice(0, 40)).not.toMatch(/\bCodex tab\b/)
+    }
+  })
+})
+
+// 2.1.3-beta.11 user-facing sweep: Sign in again on a Codex account asks which
+// account you mean, with nothing chosen (aicc_planning#289); the four newest
+// Codex models are listed and a new config starts on one every supported Codex
+// lists (aicc_planning#347); the Code review row names Codex's own sign-in
+// (aicc_planning#367); a held session's tools go through the session helper,
+// with a known issue and its workaround (aicc_planning#344); and the release
+// notes, so a later edit cannot drop them silently.
+describe('the 2.1.3-beta.11 sweep', () => {
+  const body = (id: string) => APP_KNOWLEDGE_SECTIONS.find((x) => x.id === id)!.body
+  const src = (...parts: string[]) => fs.readFileSync(path.resolve(__dirname, '..', '..', '..', 'src', ...parts), 'utf8')
+  const entry = changelog.find((e) => e.version === '2.1.3-beta.11')!
+  const notes = () => [entry.highlights ?? '', ...entry.warnings!, ...entry.changes.map((c) => c.description)]
+
+  it('the Codex section and the tip say Sign in again asks which account, with nothing chosen, in the dialog\'s own words (aicc_planning#289)', () => {
+    const c = body('codex')
+    expect(c).toContain("Sign in again in a Codex account's menu first asks which account you are signing in to: The same account as before, or A different account (add it as a new account). Neither is chosen for you, and no sign-in starts until you pick one. A different account is added as a new account, and this one stays as it is.")
+    expect(c).not.toContain('after you confirm it is the same account as before')
+    const t = TIPS_LIBRARY.find((x) => x.id === 'tip.codex-check-sign-in')!
+    expect(t.variants.primary.body).toContain('**Sign in again** first asks which account you are signing in to, with nothing chosen: **The same account as before** signs it in again (close its sessions first), and **A different account** adds the sign-in as a new account.')
+    const dialog = src('renderer', 'components', 'settings', 'accounts', 'AddProviderAccountDialog.tsx')
+    for (const words of ['Which account are you signing in to?', "'The same account as before'", "'A different account (add it as a new account)'"]) expect(dialog, words).toContain(words)
+  })
+
+  it('the Codex section names the four newest models and the model a new config starts on, as the code picks it (aicc_planning#347)', () => {
+    expect(body('codex')).toContain('GPT-6.2-Sol, GPT-6.2-Astra, GPT-6.1 Terra and GPT-6.1-Sol head the list, but only Codex 0.170.0 and newer offer them, so a new Codex config starts on the first model every supported Codex offers (GPT-6-Astra); pick one of those four in the Model list when your Codex is 0.170.0 or newer.')
+    const reg = registryJson as unknown as ModelRegistry
+    expect(codexModelOptions(reg).slice(1, 5).map((o) => o.label)).toEqual(['GPT-6.2-Sol', 'GPT-6.2-Astra', 'GPT-6.1 Terra', 'GPT-6.1-Sol'])
+    expect(codexNewConfigModel(reg)).toBe('gpt-6-astra')
+  })
+
+  it('the Code review section names Codex\'s own sign-in and the Accounts link (aicc_planning#367)', () => {
+    expect(body('code-review')).toContain("If Codex is signed in on this computer outside the app but you have added no Codex account, the Codex review switch stays off: Codex's own sign-in on this computer cannot run reviews, so the row says to add a Codex account, and its Accounts link opens Settings, Accounts.")
+  })
+
+  it('known issues: a held session\'s tools after a dropped connection to the helper, with its workaround (aicc_planning#344)', () => {
+    const para = body('known-issues').split('\n\n').find((x) => x.startsWith('With Claude Code and Codex sessions through the session helper on, a Claude Code or Codex session the helper holds can reach the Conductor\'s tools through the session helper.'))!
+    expect(para).toContain("If the app's connection to the session helper drops while such a session runs and then comes back, that session's tool server has ended")
+    expect(para).toContain("Workaround: in Claude Code, type /mcp and reconnect the conductor server; in Codex, or if that does not help, restart the session's tab.")
+    // The Machines section says the tools' route changed too, not only the hooks', and points to Known issues for when they stop.
+    const m = body('machines')
+    expect(m).toContain("A Claude Code or Codex session the helper holds can also reach the Conductor's tools through the session helper. Such a session does not survive a crash yet.")
+    expect(m).toContain("what to do when such a session's Conductor tools stop working")
+  })
+
+  it('the release notes carry the series warning, the two minutes, the way back and every change line', () => {
+    const w = entry.warnings!.join('\n')
+    expect(w).toContain("This beta series begins moving the app's background services")
+    expect(w).toContain('only if the new version opens within two minutes of the old one closing')
+    expect(w).toContain('To go back to 2.1.3-beta.10')
+    expect(entry.highlights).toContain('Codex up to version 0.171.0 now counts as tested')
+    // The row gives no reason, so the highlights promise none: they say what the row says.
+    expect(entry.highlights).toContain("the Code review row says that Codex's own sign-in on this computer cannot run reviews")
+    expect(entry.highlights).not.toContain('says why')
+    const all = entry.changes.map((c) => c.description).join('\n')
+    for (const said of [
+      'Codex up to version 0.171.0 now counts as tested.',
+      'Before, any Codex newer than 0.156.1 got that notice.',
+      'The Codex model picker now offers GPT-6.2-Sol, GPT-6.2-Astra, GPT-6.1 Terra and GPT-6.1-Sol',
+      'A new Codex config still starts on GPT-6-Astra, the first model every supported Codex lists',
+      'Pro (Max), Academic Researchers or Academic Researchers Plus.',
+      'now asks which account you are signing in to, the same account as before or a different one, with neither chosen',
+      "the Codex row now says that Codex's own sign-in on this computer (~/.codex) cannot run reviews",
+      'Settings, General, Check for Updates now names the version on offer in full, for example v2.1.3-beta.12 or v2.1.3-rc.1',
+      "reaches the Conductor's tools through the session helper instead of the app's local port",
+      'until you type /mcp in Claude Code or restart the tab (in Known issues).',
     ]) expect(all).toContain(said)
     for (const text of notes()) {
       expect(text, text.slice(0, 40)).not.toMatch(/—/)

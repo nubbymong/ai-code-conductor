@@ -226,7 +226,16 @@ interface GitHubRelease {
 }
 
 interface ReleaseInfo {
+  /** The offered version without its prerelease part ('v2.1.3-beta.11' ->
+   *  '2.1.3'), as the logs have always named it. Nothing orders releases by
+   *  it: ordering reads the tag (compareTags). */
   version: string
+  /** The offered version as the user reads it, prerelease part kept
+   *  ('v2.1.3-beta.11' -> '2.1.3-beta.11', 'v2.1.3-rc.1' -> '2.1.3-rc.1',
+   *  'v2.1.3' -> '2.1.3'). Settings, General, Check for Updates and the footer's
+   *  Update pill show it, so a beta offer no longer reads as the stable release
+   *  (aicc_planning#369). */
+  displayVersion: string
   tagName: string
   channel: UpdateChannel
   installerUrl: string | null
@@ -256,11 +265,18 @@ function tagMatchesChannel(tag: string, channel: UpdateChannel): boolean {
 }
 
 /**
- * Parse the DISPLAY version from a tag (strips v prefix and any prerelease suffix).
- * This is what gets shown to the user — e.g. 'v1.2.3-beta.2' → '1.2.3'.
+ * The base version of a tag (strips v prefix and any prerelease suffix):
+ * 'v1.2.3-beta.2' → '1.2.3'. ReleaseInfo.version and the logs use it. It is not
+ * what the user is shown: that is displayVersionOf (aicc_planning#369).
  */
 function parseVersion(tag: string): string {
   return tag.replace(/^v/, '').replace(/-(?:beta|dev|rc)(?:\.\d+)?$/, '')
+}
+
+/** The version the user is shown for a tag: the tag without its leading v,
+ *  prerelease part kept ('v2.1.3-beta.11' → '2.1.3-beta.11'). */
+function displayVersionOf(tag: string): string {
+  return tag.replace(/^v/, '')
 }
 
 /**
@@ -830,6 +846,7 @@ export async function checkGitHubRelease(): Promise<ReleaseInfo | null> {
 
   return {
     version: best.version,
+    displayVersion: displayVersionOf(best.tag),
     tagName: best.tag,
     channel: best.channel,
     installerUrl: installer.browser_download_url || installer.url || null,
