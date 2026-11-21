@@ -189,6 +189,20 @@ thread_local! {
     /// message on (or the end of) the channel before it feeds that chunk to
     /// the screen, so a test can hold the screen back.
     static SCREEN_GATE: std::cell::RefCell<Option<(String, Receiver<()>)>> = const { std::cell::RefCell::new(None) };
+    /// Set by a test on the thread that resizes: once that resize has
+    /// resized the terminal, it says so on the first channel and waits for a
+    /// message on (or the end of) the second before it resizes the screen.
+    static RESIZE_GATE: std::cell::RefCell<Option<(mpsc::Sender<()>, Receiver<()>)>> = const { std::cell::RefCell::new(None) };
+}
+
+/// A test's gate (`RESIZE_GATE`): between a resize's two halves, say so and
+/// wait for the test, once.
+#[cfg(test)]
+fn hold_the_resize() {
+    if let Some((reached, release)) = RESIZE_GATE.with(|g| g.borrow_mut().take()) {
+        let _ = reached.send(());
+        let _ = release.recv();
+    }
 }
 
 pub(crate) fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -355,6 +369,8 @@ impl Holder {
     /// refused leaves the screen as it was, as the program's size is.
     pub fn resize(&self, size: PtySize) -> io::Result<()> {
         lock(&self.pty).resize(size)?;
+        #[cfg(test)]
+        hold_the_resize();
         let mut slot = lock(&self.shared.screen);
         if let Some(s) = slot.as_mut() {
             if panic::catch_unwind(AssertUnwindSafe(|| s.resize(size))).is_err() {
@@ -708,6 +724,43 @@ mod tests {
         h.resize(PtySize { cols: 100, rows: 30 }).expect("resize");
         assert_eq!(size(&h), Some((100, 30, 30)));
         assert_eq!(h.screen_tail(500).map(|t| t.len()), Some(30), "a tail of a screen with no scrollback is its rows");
+        let _ = h.end();
+    }
+
+    /// Two resizes that overlap leave the screen at the terminal's size. A
+    /// resize keeps the terminal's lock until it has resized the screen too,
+    /// so a second resize, made while the first is held between its two
+    /// halves, waits for the first and then resizes both. With the lock let
+    /// go between the halves, the second resizes the terminal and the screen
+    /// while the first is held, and the first then leaves the screen at the
+    /// older size.
+    #[test]
+    fn two_resizes_that_overlap_leave_the_screen_at_the_terminals_size() {
+        let h = Holder::start(&a_minute(), PtySize { cols: 90, rows: 20 }, 64 * 1024).expect("a program starts on a terminal");
+        let held = &h;
+        thread::scope(|s| {
+            // Made in the scope, so a failed wait below lets the first go.
+            let (reached_tx, reached) = mpsc::channel::<()>();
+            let (release, gate) = mpsc::channel::<()>();
+            let (done_tx, done) = mpsc::channel::<()>();
+            let first = s.spawn(move || {
+                RESIZE_GATE.with(|g| *g.borrow_mut() = Some((reached_tx, gate)));
+                held.resize(PtySize { cols: 100, rows: 30 })
+            });
+            reached.recv_timeout(Duration::from_secs(15)).expect("the first resize never resized the terminal");
+            let second = s.spawn(move || {
+                let resized = held.resize(PtySize { cols: 110, rows: 35 });
+                let _ = done_tx.send(());
+                resized
+            });
+            let went_through = done.recv_timeout(Duration::from_secs(1)).is_ok();
+            drop(release);
+            first.join().expect("the first resize panicked").expect("the first resize");
+            second.join().expect("the second resize panicked").expect("the second resize");
+            assert!(!went_through, "a second resize went through while the first had resized only the terminal");
+        });
+        let size = h.screen_read().map(|r| (r.cols, r.rows, r.lines.len()));
+        assert_eq!(size, Some((110, 35, 35)), "the screen was left at another size than the terminal's last resize");
         let _ = h.end();
     }
 }
