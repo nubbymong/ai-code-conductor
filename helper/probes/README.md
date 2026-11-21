@@ -225,3 +225,54 @@ reads joins the second) and each offset counted over that text. The Windows ones
 are the test machine's, the others GitHub's runners'. Which ones were kept is
 the plan's order of keeping, listed in the test with what was left out. The
 answer is in ADR-030 after the P19 result ("P19, second run").
+
+# Probes P3 and P6: does a holder outlive the ssh logout, and is an exec's PATH the login PATH?
+
+`p3-p6-linux.cjs` (ADR-030, probe table; P3 gates remote sessions through the
+helper, P6 one-shot commands only). It runs on the test PC against remote Linux
+hosts, and the only programs it starts are ssh and scp. It needs the static
+Linux helper: the `helper-linux-musl` artifact of the `Helper (ubuntu-latest)`
+CI job, which a dispatch with `helper` set builds on any pushed branch.
+
+```text
+node helper/probes/p3-p6-linux.cjs --hosts <hosts.local.json> --helper <folder>/aicc-helper --out <folder>
+```
+
+The hosts are the `linuxKey` and `linuxRockyKey` slots of
+`tests/live/hosts.local.json`, read by name inside the script. Of each slot only
+the host and the user are read; sign-in is by key only (BatchMode), and the
+console shows only the host and the user. A host that does not answer one 8 s
+connect is NOT RUN (host off). On each host the probe makes a temporary folder,
+copies the helper there and checks its SHA-256, then:
+
+- **P3.** Six ssh sessions, each starting a holder with `hold --detach` and
+  logging out as its command ends: three with a terminal (`ssh -tt`, the way a
+  session's terminal starts it) and three without (`ssh -T`, an exec). 10 s and
+  60 s after the last logout, a new connection checks each holder by its pid
+  and its own command line. It records each holder's cgroup, logind's
+  KillUserProcesses and KillExcludeUsers, and the user's Linger.
+- **P6.** One exec reads its own PATH, then the PATH of the user's login shell
+  started from it with `-l` (as D8 starts the CLI) and with `-il` (recorded
+  only), and what `command -v` finds for claude, codex and node in each.
+
+Then it ends each holder (only a process with its own command line), deletes
+what it made one name at a time (no recursive delete), and checks that nothing
+is left. It removes `/tmp/aicc-<uid>` only if that folder was not there before.
+
+Decision lines (written before measuring):
+
+- **P3 HOLDS** on a host when the holder is alive 60 s after the logout that
+  started it in 3 of 3 runs of each form. **DOES NOT HOLD** when a holder is
+  gone at 60 s in any run. **CANNOT MEASURE** when a form has fewer than 3
+  runs whose holder started, or a check could not be read. Fallback (ADR-030):
+  that host kind is labelled "no re-attach" and resumes by conversation id.
+- **P6 SAME** on a host when the exec's PATH and the login shell's PATH hold
+  the same entries in the same order once repeats are dropped, and claude,
+  codex and node each resolve to the same file (or to none) in both.
+  **DIFFERS** otherwise, with what differs. Fallback (ADR-030): CLI paths come
+  from a login-shell lookup in the probe report.
+
+The record is `p3-p6-result.json` in the output folder, with the home folder
+written as `~` and the user name as `<user>`. Exit 0: every host was measured
+or not run; 1: a host was not left as found; 2: the probe could not run. The
+answers are in ADR-030 after the P12 result.

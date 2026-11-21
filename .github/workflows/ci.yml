@@ -1075,7 +1075,9 @@ jobs:
   # setting is on. This job is NOT a required check and nothing waits on it.
   # It builds and tests the helper on the three OSes it runs on, and uploads
   # the Windows build. On Windows it also fails if the release build imports a
-  # C runtime DLL (scripts/check-pe-imports.mjs). Probe P7
+  # C runtime DLL (scripts/check-pe-imports.mjs). On Linux it also builds a
+  # static helper for the remote probes, checks it is static and uploads it
+  # (helper-linux-musl); nothing ships it. Probe P7
   # (helper/probes/p7-windows-survival.ps1) is answered (2026-11-15, ADR-030);
   # its script rides in the artifact as the record of how, and it drives
   # commands this build no longer has, so running it again needs a
@@ -1243,6 +1245,69 @@ jobs:
         with:
           name: helper-windows
           path: helper/target/helper-windows
+          if-no-files-found: error
+          retention-days: 14
+
+      # A static Linux helper (plan 2.1.3-beta.13 C2, aicc_planning#377): probes
+      # P3 and P6 (ADR-030) run the helper on remote Linux hosts, and the build
+      # above links this runner's glibc 2.39, newer than some hosts have. On Unix
+      # the helper needs only libc and vt100 (helper/Cargo.toml), both Rust
+      # crates, so the musl target links it with the C library that Rust's musl
+      # target carries itself: no package is installed. Nothing ships it; it is
+      # uploaded for the probes only.
+      - name: Build the static Linux helper
+        if: steps.scope.outputs.helper != 'false' && steps.lock.outputs.present == 'true' && runner.os == 'Linux'
+        shell: bash
+        working-directory: helper
+        run: |
+          rustup target add x86_64-unknown-linux-musl
+          cargo build --locked --release --target x86_64-unknown-linux-musl --bin aicc-helper
+          mkdir -p target/helper-linux-musl
+          cp target/x86_64-unknown-linux-musl/release/aicc-helper target/helper-linux-musl/
+
+      # Static means: an x86-64 ELF file that names no program interpreter
+      # (no INTERP header) and no shared library (no NEEDED entry). It only reads
+      # the files. The same check then runs on the debug build above, which links
+      # glibc, and must find it not static there, so every run shows the check
+      # can fail.
+      - name: Check the Linux helper is static
+        if: steps.scope.outputs.helper != 'false' && steps.lock.outputs.present == 'true' && runner.os == 'Linux'
+        shell: bash
+        working-directory: helper
+        run: |
+          # 0 static, 1 not static, 2 not an x86-64 ELF file or not read.
+          is_static() {
+            local hdr segs dyn
+            hdr=$(readelf --file-header --wide "$1") || return 2
+            grep -q 'Class:[[:space:]]*ELF64' <<<"$hdr" || return 2
+            grep -q 'Machine:[[:space:]]*Advanced Micro Devices X86-64' <<<"$hdr" || return 2
+            segs=$(readelf --program-headers --wide "$1") || return 2
+            dyn=$(readelf --dynamic --wide "$1") || return 2
+            grep -q 'INTERP' <<<"$segs" && return 1
+            grep -q '(NEEDED)' <<<"$dyn" && return 1
+            return 0
+          }
+          built=target/helper-linux-musl/aicc-helper
+          rc=0; is_static "$built" || rc=$?
+          file "$built"
+          echo "Static Linux helper: $(file -b "$built"), $(stat -c %s "$built") bytes." >> "$GITHUB_STEP_SUMMARY"
+          if [ "$rc" != 0 ]; then
+            echo "::error::$built is not a static x86-64 ELF program (check status $rc)"
+            exit 1
+          fi
+          rc=0; is_static target/debug/aicc-helper || rc=$?
+          if [ "$rc" != 1 ]; then
+            echo "::error::the check did not find the glibc debug build dynamic (check status $rc), so it proves nothing"
+            exit 1
+          fi
+          echo "static: $built; the check finds the glibc debug build dynamic, as it must"
+
+      - name: Upload the static Linux helper
+        if: steps.scope.outputs.helper != 'false' && steps.lock.outputs.present == 'true' && runner.os == 'Linux'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: helper-linux-musl
+          path: helper/target/helper-linux-musl
           if-no-files-found: error
           retention-days: 14
 

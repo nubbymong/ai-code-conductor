@@ -115,6 +115,12 @@ installer is packaged, and `release.yml` runs it before the Windows installer is
 signed and packaged. `npm run verify:helper`, which every package script and
 packaging job runs, applies the same rules to the packaged, signed copy.
 
+On Linux the Helper job also builds the release helper for
+`x86_64-unknown-linux-musl`, a static program that runs on any x86-64 Linux
+whatever its glibc, checks with `readelf` that it names no program interpreter
+and no shared library, and uploads it as the `helper-linux-musl` artifact. It
+is for the remote probes P3 and P6 (`probes/README.md`); nothing ships it.
+
 ## Dependencies
 
 Every one is pinned with an exact `=x.y.z`. `libc` on Unix, `windows-sys` on

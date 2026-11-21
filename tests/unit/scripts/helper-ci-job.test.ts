@@ -225,3 +225,90 @@ describe('ci.yml: Cargo.lock, --locked and the artifacts', () => {
     expect(toolchain).toMatch(/channel\s*=\s*"\d+\.\d+\.\d+"/)
   })
 })
+
+/**
+ * The static Linux helper (plan 2.1.3-beta.13 C2, aicc_planning#377): the
+ * Linux leg also builds the helper for musl, checks the file is static and
+ * uploads it as helper-linux-musl, for probes P3 and P6 on remote hosts.
+ * Nothing ships it.
+ *
+ * Not checked here: that the musl build links, and that readelf prints what
+ * the check looks for. Only CI builds Rust; the check step runs itself on the
+ * glibc debug build on every run and fails unless it finds that one dynamic.
+ */
+describe('ci.yml: the static Linux helper, on the Linux leg only', () => {
+  const STATIC = ['Build the static Linux helper', 'Check the Linux helper is static', 'Upload the static Linux helper']
+  const runs = (name: string, present: string | undefined, os: string) => evalIf(named(name).if, stepCtx('true', present, os))
+
+  it('builds, checks and uploads, in that order, after the build and test every OS runs', () => {
+    const at = (name: string) => job.steps.findIndex((s) => s.name === name)
+    const [build, check, upload] = STATIC.map(at)
+    expect(build, 'no static build step').toBeGreaterThan(at('Test'))
+    expect(at('Test')).toBeGreaterThan(at('Build'))
+    expect(check).toBe(build + 1)
+    expect(upload).toBe(check + 1)
+  })
+
+  it('runs on Linux only, and only once Cargo.lock is committed', () => {
+    for (const name of STATIC) {
+      expect(runs(name, 'true', 'ubuntu-latest'), name).toBe(true)
+      expect(runs(name, 'true', 'windows-2025'), name).toBe(false)
+      expect(runs(name, 'true', 'macos-latest'), name).toBe(false)
+      for (const os of OSES) expect(runs(name, 'false', os), `${name} on ${os} with no Cargo.lock`).toBe(false)
+    }
+  })
+
+  it('builds the release helper for x86_64-unknown-linux-musl with --locked, in helper/', () => {
+    const step = named('Build the static Linux helper')
+    expect(step['working-directory']).toBe('helper')
+    const lines = (step.run ?? '').split('\n').map((l) => l.trim()).filter(Boolean)
+    expect(lines).toEqual([
+      'rustup target add x86_64-unknown-linux-musl',
+      'cargo build --locked --release --target x86_64-unknown-linux-musl --bin aicc-helper',
+      'mkdir -p target/helper-linux-musl',
+      'cp target/x86_64-unknown-linux-musl/release/aicc-helper target/helper-linux-musl/',
+    ])
+  })
+
+  it('the check only reads: no secret, no expression, no action, nothing written but the step summary', () => {
+    const step = named('Check the Linux helper is static')
+    const run = step.run ?? ''
+    expect(step.uses).toBeUndefined()
+    expect(step.with).toBeUndefined()
+    expect((step as { env?: unknown }).env).toBeUndefined()
+    expect(run).not.toMatch(/\$\{\{/)
+    expect(run).not.toMatch(/secret|token|password|\bcurl\b|\bwget\b|\bssh\b/i)
+    expect(run).not.toMatch(/(^|[\s;&|])(rm|mv|cp|chmod|chown|ln|tee|dd|install|strip|patchelf)\s/m)
+    // Every redirection that writes goes to the step summary.
+    const writes = run.match(/>>?\s*\S+/g) ?? []
+    expect(writes.length).toBeGreaterThan(0)
+    for (const w of writes) expect(w).toMatch(/^>>\s*"\$GITHUB_STEP_SUMMARY"$/)
+  })
+
+  it('the check fails on a program interpreter, a shared library or a file that is not x86-64 ELF, and must find the glibc debug build dynamic', () => {
+    const run = named('Check the Linux helper is static').run ?? ''
+    expect(run).toContain('readelf --file-header --wide "$1") || return 2')
+    expect(run).toContain("grep -q 'Class:[[:space:]]*ELF64'")
+    expect(run).toContain("grep -q 'Machine:[[:space:]]*Advanced Micro Devices X86-64'")
+    expect(run).toContain("grep -q 'INTERP' <<<\"$segs\" && return 1")
+    expect(run).toContain("grep -q '(NEEDED)' <<<\"$dyn\" && return 1")
+    // The built file must be static: any status but 0 fails the step.
+    expect(run).toMatch(/built=target\/helper-linux-musl\/aicc-helper\n\s*rc=0; is_static "\$built" \|\| rc=\$\?/)
+    expect(run).toMatch(/if \[ "\$rc" != 0 \]; then\n[^\n]*\n\s*exit 1/)
+    // The glibc debug build must be found not static (1): 0 or 2 fails the step.
+    expect(run).toMatch(/rc=0; is_static target\/debug\/aicc-helper \|\| rc=\$\?\n\s*if \[ "\$rc" != 1 \]; then\n[^\n]*\n\s*exit 1/)
+    // The debug build it reads is the one the Build step makes on this runner.
+    expect(named('Build').run).toBe('cargo build --locked --all-targets')
+  })
+
+  it('uploads it as helper-linux-musl from the Linux job only, with an action pinned by commit', () => {
+    const upload = named('Upload the static Linux helper')
+    expect(upload.uses).toMatch(/^actions\/upload-artifact@[0-9a-f]{40}$/)
+    expect(upload.with).toEqual({ name: 'helper-linux-musl', path: 'helper/target/helper-linux-musl', 'if-no-files-found': 'error', 'retention-days': 14 })
+  })
+
+  it('no step of the job reads a secret or a token', () => {
+    const text = JSON.stringify(job.steps)
+    expect(text).not.toMatch(/secrets\.|github\.token|GITHUB_TOKEN/)
+  })
+})
