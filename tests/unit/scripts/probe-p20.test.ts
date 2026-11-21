@@ -37,7 +37,7 @@ const P = req('./p20-probe.cjs') as {
   CASES: Array<{ id: string; cli: string; q: string; mode?: string }>
   pickCases: (only: string[] | null) => Array<{ id: string }>
   verdictA: (r: Reading[], runs: number) => V & { hookSeen: number; summary: string; waits: number[] }
-  verdictACli: (byMode: Record<string, { verdict: string; hookSeen: number }>, runs: number) => { usable: boolean; line: string | null }
+  verdictACli: (byMode: Record<string, { outcomes: string[]; hookSeen: number }>) => { usable: boolean; line: string | null }
   verdictBSettings: (r: Reading[], runs: number) => V
   verdictBMcp: (r: Reading[], runs: number) => V & { startedOfItself: number }
   verdictC: (r: Reading[], runs: number) => V & { turnHalfMeasured: number }
@@ -77,10 +77,15 @@ describe('P20 (a): the endpoint behaviour verdicts', () => {
     expect(v.summary).toContain('given up by the CLI after 600.0 to 600.0 s')
     expect(v.summary).toContain('"PreToolUse hook error: timed out"')
   })
-  it('a CLI whose control did not reach its hook in 3 of 3 runs is CANNOT MEASURE as a whole', () => {
-    expect(P.verdictACli({ ok: { verdict: 'RUNS THE TOOL', hookSeen: 3 } }, 3)).toEqual({ usable: true, line: null })
-    expect(P.verdictACli({ ok: { verdict: 'RUNS THE TOOL', hookSeen: 2 } }, 3).line).toMatch(/^CANNOT MEASURE/)
-    expect(P.verdictACli({ ok: { verdict: 'NO VERDICT', hookSeen: 3 } }, 3).usable).toBe(false)
+  it('a CLI whose control did not run the tool with its hook seen in every run is CANNOT MEASURE as a whole', () => {
+    const ran = ['ran', 'ran', 'ran']
+    expect(P.verdictACli({ ok: { outcomes: ran, hookSeen: 3 } })).toEqual({ usable: true, line: null })
+    expect(P.verdictACli({ ok: { outcomes: ran, hookSeen: 2 } }).line).toBe('CANNOT MEASURE (the control: ran, ran, ran; PreToolUse seen in 2 of 3)')
+    expect(P.verdictACli({ ok: { outcomes: ['ran', 'ran', 'waiting'], hookSeen: 3 } }).usable).toBe(false)
+    expect(P.verdictACli({ ok: { outcomes: [], hookSeen: 0 } }).usable).toBe(false)
+    // A check run of one: the same rule over the runs it has.
+    expect(P.verdictACli({ ok: { outcomes: ['ran'], hookSeen: 1 } }).usable).toBe(true)
+    expect(P.verdictACli({})).toEqual({ usable: false, line: null })
   })
 })
 

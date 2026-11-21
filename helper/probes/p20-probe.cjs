@@ -509,10 +509,11 @@ const RULES = {
     { label: 'press Enter', re: /Press Enter to continue/i, keys: ['\r'] },
   ],
   codex: [
-    // Codex's review of the app's hooks at start-up ("Hooks need review ...
-    // Trust all and continue"): the option's number when the screen shows
-    // one, else the /hooks view's key.
-    { label: 'hooks review', re: /Hooks need review|Press t to trust/i, keys: (text) => { const m = /(\d)[.)]\s*Trust all/i.exec(text); return [m ? m[1] : 't']; } },
+    // Codex's review of the app's hooks at start-up ("Hooks need review", its
+    // options "1. Review hooks", "2. Trust all and continue", "3. Continue
+    // without trusting", "enter confirm"; 0.157.1 on the test machine): Enter
+    // when Trust all is the one marked, else the next option down.
+    { label: 'hooks review', re: /Hooks need review/i, max: 5, keys: (text) => (/^\s*[›>❯]\s*\d[.)]\s*Trust all/im.test(text) ? ['\r'] : ['\u001b[B']) },
     { label: 'folder trust', re: /trust the contents|allow Codex to work in this folder|Do you trust/i, keys: ['\r'] },
     { label: 'press Enter', re: /[Pp]ress [Ee]nter to continue/i, keys: ['\r'] },
   ],
@@ -538,7 +539,7 @@ async function untilScreen(run, re, label, timeoutMs, rules = []) {
     if (re.test(text) && !BUSY.test(text)) return null;
     for (const r of rules) {
       const u = used.get(r.label) || { n: 0, at: 0 };
-      if (r.re.test(text) && u.n < 3 && now() - u.at > 1500) {
+      if (r.re.test(text) && u.n < (r.max || 3) && now() - u.at > 1500) {
         used.set(r.label, { n: u.n + 1, at: now() });
         run.answered.push({ rule: r.label, t: now() - run.t0 });
         await typeKeys(run, typeof r.keys === 'function' ? r.keys(text) : r.keys);
@@ -753,11 +754,14 @@ function verdictA(readings, runs) {
   return { verdict, outcomes, waits, hookSeen, summary };
 }
 
-/** (a) one CLI: the control must run the tool with the hook seen. */
-function verdictACli(byMode, runs) {
+/** (a) one CLI: the control must run the tool with the hook seen, in every
+ *  run (3 of 3 for a plan verdict). */
+function verdictACli(byMode) {
   const ok = byMode.ok;
-  const usable = ok && ok.verdict === 'RUNS THE TOOL' && ok.hookSeen === 3;
-  return { usable, line: usable || !ok ? null : `CANNOT MEASURE (the control read ${ok.verdict}, PreToolUse seen in ${ok.hookSeen} of 3)` };
+  if (!ok) return { usable: false, line: null };
+  const n = ok.outcomes.length;
+  const usable = n > 0 && ok.outcomes.every((o) => o === 'ran') && ok.hookSeen === n;
+  return { usable, line: usable ? null : `CANNOT MEASURE (the control: ${ok.outcomes.join(', ')}; PreToolUse seen in ${ok.hookSeen} of ${n})` };
 }
 
 /** (b) --settings. */
@@ -912,7 +916,8 @@ async function main() {
       if (!Object.keys(modes).length) continue;
       const c = verdictACli(modes, runs);
       result.verdicts[`${cli}-a`] = { ...modes, cli: c };
-      lines.push(`P20 (a) ${cli === 'claude' ? 'Claude Code' : 'Codex'}${c.line ? `: ${c.line}` : ''}: ${Object.entries(modes).map(([m, v]) => `${m}: ${v.summary}`).join(' || ')}`);
+      // In the cases' order (an object lists '401' and '404' first).
+      lines.push(`P20 (a) ${cli === 'claude' ? 'Claude Code' : 'Codex'}${c.line ? `: ${c.line}` : ''}: ${A_MODES.filter((m) => modes[m]).map((m) => `${m}: ${modes[m].summary}`).join(' || ')}`);
     }
     if (byCase['claude-b-settings']) { const v = verdictBSettings(byCase['claude-b-settings'], runs); result.verdicts['claude-b-settings'] = v; lines.push(`P20 (b) Claude Code --settings: ${v.verdict} (${v.outcomes.join(', ')})`); }
     if (byCase['claude-b-mcp']) { const v = verdictBMcp(byCase['claude-b-mcp'], runs); result.verdicts['claude-b-mcp'] = v; lines.push(`P20 (b) Claude Code --mcp-config: ${v.verdict} (${v.outcomes.join(', ')}; a server started of itself before /mcp in ${v.startedOfItself} of ${byCase['claude-b-mcp'].length})`); }
@@ -922,7 +927,7 @@ async function main() {
       result.verdicts[`${cli}-c`] = v;
       lines.push(`P20 (c) ${cli === 'claude' ? 'Claude Code' : 'Codex'}: ${v.verdict} (${v.outcomes.join(', ')}; the turn half measured in ${v.turnHalfMeasured} of ${byCase[`${cli}-c`].length})`);
     }
-    line = `P20 RESULT (${ctx.system}; ${Object.entries(ctx.versions).map(([c, v]) => `${c} ${v}`).join(', ')}): ${Object.entries(result.verdicts).map(([k, v]) => `${k} ${v.verdict || Object.entries(v).filter(([m]) => m !== 'cli').map(([m, x]) => `${m}=${x.verdict}`).join(' ')}`).join('; ')}`;
+    line = `P20 RESULT (${ctx.system}; ${Object.entries(ctx.versions).map(([c, v]) => `${c} ${v}`).join(', ')}): ${Object.entries(result.verdicts).map(([k, v]) => `${k} ${v.verdict || (v.cli && v.cli.line) || A_MODES.filter((m) => v[m]).map((m) => `${m}=${v[m].verdict}`).join(' ')}`).join('; ')}`;
   } catch (e) {
     line = `P20 RESULT: COULD NOT RUN - ${e.message}`;
     if (!(e instanceof CouldNotRun)) console.error(e.stack);

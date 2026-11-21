@@ -225,3 +225,50 @@ reads joins the second) and each offset counted over that text. The Windows ones
 are the test machine's, the others GitHub's runners'. Which ones were kept is
 the plan's order of keeping, listed in the test with what was left out. The
 answer is in ADR-030 after the P19 result ("P19, second run").
+
+# Probe P20: what do Claude Code and Codex do once the app run that started them is gone?
+
+`p20-probe.cjs` (ADR-030, probe table; it gates S16's second half, steps 2, 4
+and 6). Three questions, each the CLI's own behaviour, not the app's:
+
+- **(a) A hook endpoint that is gone.** Claude Code's http PreToolUse hook (the
+  entry `buildHooksBlock` writes) and Codex's hook forwarder
+  (`scripts/ccc-codex-hook.cmd` and `.js`, given by `-c` as the app gives it)
+  against an endpoint that refuses the connection, answers 401, answers 404
+  (what the hooks gateway answers a session it does not know) or never
+  answers, beside a control that answers 200 `{}`.
+- **(b) Files read again.** Whether Claude Code reads its `--settings` hooks
+  again (the PreToolUse URL changed in the file between two turns) or its
+  `--mcp-config` again (its tool server ended, the file now names another,
+  then `/mcp` and Reconnect).
+- **(c) The tool list.** Whether each CLI sends `tools/list` again after
+  `notifications/tools/list_changed`, and names the added tool in its next
+  turn.
+
+Each CLI runs on node-pty (on Windows on node-pty's bundled ConPTY), in a fresh
+environment with every per-user folder in the probe's own temporary folder, no
+account and no key of anyone's. `p20-model-stand-in.cjs`, served from the probe
+on a loopback port, answers a turn with a tool call that reads a file in the
+run's folder (Claude Code's Read; Codex's shell tool, with approvals off in its
+own config), so a hook runs before a real tool. `p20-tool-server.cjs` is the
+stand-in `conductor` tool server; it declares `listChanged`, as the app's tool
+host does, and adds a tool when the probe asks. Run it on the Windows test
+machine from a checkout of the repository (its node_modules give node-pty and
+@xterm/headless at the versions package.json names; it refuses any other):
+
+```powershell
+node p20-probe.cjs run --root <checkout> --out <folder> --forwarder <checkout>\scripts --claude <path to claude.exe> --codex <path to codex.exe>
+```
+
+`--only` takes case names or prefixes (`claude-a`, `codex-c`, `claude-b-mcp`),
+`--runs` the runs per case (3 for a verdict) and `--cap-s` how long a turn may
+wait on an endpoint that never answers (720). The runs of one case run side by
+side; the cases one after the other. The decision lines are in the script's
+header and were fixed before measuring. It cleans up after each case and at
+its end: a process counts as its own only when it started after its parent,
+and each is stopped only after its name and start time are checked. The last
+lines are `P20 (a)`, `P20 (b)`, `P20 (c)` and `P20 RESULT: ...`, or
+`P20 RESULT: COULD NOT RUN - <reason>`, with `; clean-up incomplete: <what>`
+added (and exit 2) when something was left. The record is `p20-result.json`,
+with personal paths written as placeholders and the probe code named by the
+sha256 of its three files. The answer is in ADR-030 after the P19 results.

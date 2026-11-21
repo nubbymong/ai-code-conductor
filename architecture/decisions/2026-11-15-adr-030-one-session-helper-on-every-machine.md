@@ -3,7 +3,7 @@
 - Status: Accepted (owner decisions D1 to D20 of 2026-11-15; plan approved on
   the Agent Canvas, 2026-11-15). Only the scope of 2.1.3-beta.4 is approved for
   building. Every later slice comes back one beta at a time, and each of the
-  nineteen probes below can still stop or reshape the slice it gates.
+  twenty probes below can still stop or reshape the slice it gates.
 - Date: 2026-11-15
 - Builds on: ADR-029 (remote sessions run through a device helper),
   `docs/remote/helper-protocol.md` (protocol version 1),
@@ -88,7 +88,7 @@ Rows are numbered so that "does not own" can name the owner.
 | 10 | Data workers (session logging, usage index) | Two Electron utility processes, each under its own supervisor | `transcripts.db` and `tokenomics.db`; tailing local transcript files; whether the usage index runs at all and what it excludes; the bounded transcript walks; taking a Token session's conversation before its per-session folder is deleted; the intake of conversation content forwarded from a remote machine (size caps, content checks, its own store) | Session lifecycle; finding the local transcript path (row 13); carrying remote content (rows 3 and 4); deleting a session folder (row 4); storing the per-machine exclusion (row 5); prices and model data | Core over message ports |
 | 11 | App-wide services (Sentinel, Insights, cloud agents, reviewers, Ask Conductor, model registry, pull request integration, vendor status) | Modules in core, one service row each | Their own schedule, inputs and results. Each asks for a one-shot run by handing a launch spec to row 3 | Starting processes (helper run mode); account rules (row 6); reading a screen or deciding it is ready (rows 4 and 14); anything per session | Session client; row 13; Accounts; network |
 | 12 | App-bound views (canvas store, canvas marker queue, vision browser, browser pane, account web sessions, artifacts viewer) | Core and renderer, tied to Electron | Canvas versions, review notes and their serving; the canvas marker queue, held until the turn boundary; the headless browser and its targets; vision screenshot files, handed to the calling session through row 8's route; web views and their navigation rules | Reach into a session (rows 3 and 7); typing a marker or deciding the prompt is ready (rows 3 and 14); file transfer (row 8) | Tool host by direct call; session client; rows 8 and 13; renderer |
-| 13 | Session signals (status and hook consumers) | Module in core. Until the old path is deleted it also owns the hooks gateway utility process | What a status frame and a hook frame mean: statusline data, the attention indicator, the hook event stream and its per-session ring, redaction, permission cards and their answers (This computer only), turn boundaries. It hands the transcript path to row 10, StopFailure to row 9 and the turn boundary to row 12 | How frames arrive or are queued (rows 3 and 4); which fields a CLI's payload keeps (row 14); limit detection and retry (row 9); drawing (row 2) | Session client; rows 9, 10 and 12; renderer through core IPC |
+| 13 | Session signals (status and hook consumers) | Module in core. Until the old path is deleted it also owns the hooks gateway utility process | What a status frame and a hook frame mean: statusline data, the attention indicator, the hook event stream and its per-session ring, redaction, turn boundaries. It answers no permission: the app answers none today (the parity table's "Permission answers from the app"), and answering one, on This computer only, would need protocol change 3 first. It hands the transcript path to row 10, StopFailure to row 9 and the turn boundary to row 12 | How frames arrive or are queued (rows 3 and 4); which fields a CLI's payload keeps (row 14); limit detection and retry (row 9); drawing (row 2) | Session client; rows 9, 10 and 12; renderer through core IPC |
 | 14 | Provider packages (Claude, Codex) | Modules in core plus shared pure code | Everything that is knowledge about one CLI: launch arguments, environment variable names, provider files; the managed-launch project gate; which status and hook fields are kept; how to read that CLI's screen for the ready state and how to submit text; whether that CLI attaches an inserted image path like its own paste; the stricter check on a remote-drawn screen; the text of the status strip controls | Sessions, launching or writing (row 3); the screen (row 4); limit detectors and retry (row 9); which account or sign-in kind (row 6); the paste decision (row 8) | Called by rows 3, 6, 8, 9 and 13; no process, no transport |
 
 ## Owner decisions
@@ -221,7 +221,7 @@ cut over.
 | Saved session configs | Local, account binding and Codex shapes | SSH with a post-connect field and a persistent option; containers and sudo | Every saved shape maps to a launch spec, nothing re-entered (D14) |
 | Statusline | A Node bridge posts to a loopback port, with a file fallback | A Node shim over a reverse forward, with a terminal-marker fallback | The helper's statusline mode sends a status frame; row 13 owns what it means |
 | Hook event stream and attention indicator | The CLI makes an HTTP call per hook to a gateway in its own utility process | No hook event stream; attention by a marker a small remote hook writes to the terminal | Hook frames. Local keeps the full payload. Remote keeps hook name, tool name, notification text and a short error-kind label on StopFailure, and gets the stream for the first time (D6) |
-| Permission answers from the app | The gateway holds the response until the user answers | None | `hook.ask` and `hook.answer` on This computer; the CLI's own prompt while the app is away, and always on a remote machine |
+| Permission answers from the app | None: the CLI's own prompt decides. The gateway answers every PreToolUse at once, and its hold for an answer is dormant: nothing in src sets `gateActive` (hooks-gateway.ts:472-477, :491-496), `resolveResponder` (permission-responders.ts:28) has no caller, and the per-session settings register no `PermissionRequest` | None | None planned: the CLI's own prompt, local and remote, the app away or not. `hook.ask` and `hook.answer` (protocol change 3) only if the app answers permissions again |
 | Sleep indicator | Only when the Watchdog is on | The same | The holder reports the last-output time; core shows the state |
 | Watchdog: limit detection and automatic retry | Off by default; a headless terminal in main per watched session | A stricter send check for a remote-drawn screen; no StopFailure | Core detectors read the holder's screen; retry through `submit`; the stricter check stays for every remote machine; StopFailure on remote too (D6) |
 | Conductor tools | HTTP on a loopback port with a per-session token | The same server through the reverse forward | A stdio relay in the helper; remote calls pass the default-deny list; a call made while the app is away is held about 30 seconds, then answered "updating" (D1) |
@@ -258,6 +258,8 @@ slice's adversarial pass.
 2. **Capture mode.** A command-line mode on This computer only; display frames
    only.
 3. **Held-hook reply.** `hook.ask` and `hook.answer`, on This computer only.
+   Needed only if the app answers permissions again: it answers none today
+   (the parity table), and S16 does not need it (P20).
 4. **Local hook and status payloads.** The full payload on This computer; the
    remote keep-list is unchanged except for change 13.
 5. **Screen reads.** `screen.tail` and `screen.read`, both read-only.
@@ -346,7 +348,7 @@ otherwise carried from earlier measurement.
 - **Pace.** After each release the next beta is cut from the measured hours
   per slice, not from a calendar. Soak time (D15) is not in those hours.
 - **Honest cost.** Until the remote deletion the SDLC is heavier, not lighter:
-  a Rust toolchain and signing, nineteen probes on real machines, two session
+  a Rust toolchain and signing, twenty probes on real machines, two session
   paths side by side, and five dedicated adversarial rounds that the decisions
   add (the token on This computer, the token on a remote machine, the remote
   conversation intake, Windows provisioning, the user's own pre-launch
@@ -391,6 +393,7 @@ their questions, gates and fallbacks are restated for the slice plan.
 | P17 | On Windows and Linux, does binding a Standard login by config folder separate identity the way moving the home folder does? | Standard login by config folder there | Declared exception 1 |
 | P18 | On Windows, how do Claude Code and Codex start a tool server over standard input and output, and is it gone when the CLI ends? | Tools through the helper (S15) | The relay's start is planned again for that CLI, whose sessions keep today's loopback route to the tools until then |
 | P19 | After a re-attach that starts in the middle of a session's output, does a resize make Claude Code and Codex redraw their screen, on Windows, macOS and Linux? | What a mid-stream re-attach does, and what the holder's screen is for (S13) | On that system the holder repaints the terminal on attach from its own screen, with the holder screen's next step and before S16's second half and S25 there |
+| P20 | Once the app run that started a CLI is gone: what do Claude Code's http PreToolUse hook and Codex's hook forwarder do when the endpoint refuses, answers 401 or 404, or never answers; does Claude Code read its `--settings` hooks or its `--mcp-config` again while it runs; does each CLI list its tools again on `notifications/tools/list_changed`? | S16's second half: steps 2, 4 and 6 (CONTEXT.d/2026-11-19-what-a-held-agent-session-needs.md) | PreToolUse goes through the hook mode (step 2) before step 4 keeps that CLI's session; a take-over writes nothing into a file the CLI reads only once; step 6 is dropped for a CLI that does not list again, and its held session keeps the tool list it started with |
 
 P12 result (2026-11-15): a Token session runs and keeps its usage figures;
 Remote Control and extra-usage credits need a Standard login; which kind is
@@ -584,6 +587,49 @@ wrapped onto two rows (8) or a warning count at the right of the hint row (13), 
 unrecognised and are listed in the corpus test as known misreads. Not measured: a signed-in account's
 screens (whether a real model gives the warning, or a hint row A2 could not reach without an
 account), the holder's own PTY code, the app's real attach path, any size but 120 by 40.
+
+P20 result (2026-11-21, plan 2.1.3-beta.13 C1, the Windows test machine, build 22621, on
+node-pty's bundled ConPTY; Claude Code 2.1.328, Codex 0.157.1 and Codex 0.171.0, the newest
+tested release; each with no account and a made-up key, in a fresh environment, pointed at a
+stand-in model on a loopback port that answers a turn with a tool call reading a file in the
+run's folder; 3 runs per case, the runs of a case side by side). The decision lines were fixed
+before measuring and are in the probe's header. (a) Both CLIs RUN THE TOOL whatever the hook
+endpoint does. Claude Code's http PreToolUse, in the entry the app writes: a refused
+connection, a 401 and a 404 (what the gateway answers a session it does not know) each cost
+0.1 to 0.2 s, as the control's 200 `{}` does, and the session's terminal shows
+"PreToolUse:Read hook failed" with "HTTP 404 from <the hook URL>" ("HTTP 401", and "HTTP
+undefined" for the refused connection) at the tool call. An endpoint that never answers holds
+the tool call 600 s (599,994 to 599,997 ms in 3 of 3 runs: Claude Code's own limit, since the
+app gives the hook no timeout), then the tool runs, and no line names the hook. Codex, both
+versions, through the app's forwarder: the tool runs 0.3 to 0.4 s after the call in every
+case, as in the control, and nothing on screen says a hook failed; the forwarder delivered
+SessionStart, UserPromptSubmit, PreToolUse, PostToolUse and Stop with the session's token.
+Against an endpoint that never answers, every request was closed 15 to 473 ms after it came,
+all within 150 ms after the turn's Stop event and before the forwarder's own 2 s limit: Codex
+ends its asynchronous hook commands with the turn (which process ended them was not
+recorded). What it means, as fixed before measuring: after an update, a held Claude Code
+session's PreToolUse on the gateway loses only the event, so step 2 of S16's second half (the
+hook mode) is a default, not a gate on step 4; its cost until then is the "hook failed" lines,
+one per tool call; a gateway that hangs stalls each tool call 10 minutes (recorded, no gate);
+Codex is as S16's list expected (its hooks are asynchronous, item 4 there). (b) Claude Code READS ONCE, both files. With the
+PreToolUse URL changed in its `--settings` file (a temporary file renamed over it, as the app
+writes it), the next turn's hook reached the old URL in 3 of 3 runs, about 3.8 s after the
+change, and nothing was shown. With its tool server ended and its `--mcp-config` naming
+another, `/mcp` and Reconnect started the old one again in 3 of 3 runs ("Reconnected to
+conductor."), and nothing started a server before `/mcp` in the 5 s waited. So a take-over
+cannot move a running Claude Code to the new run's gateway through its settings file:
+PreToolUse reaches a new run only through the hook mode (step 2); and the relay command a
+session starts with must stay valid for the CLI's life, as S15 built it (it names the store and
+the session, not the app run). (c) Claude Code LISTS AGAIN: `tools/list` came 1 to 4 ms after
+the notification, and the next turn named the added tool, in 3 of 3 runs. Codex, both
+versions, DOES NOT LIST AGAIN: no `tools/list` after the notification, and the next turn named
+only the first tool, in 3 of 3 runs each. So step 6 sends `notifications/tools/list_changed`
+to Claude Code only; a held Codex session keeps the tool list it started with until it starts
+again. The app answers no permission today (the parity table), so S16 needs no protocol
+change 3. Not measured: a signed-in account and a real model, the app's own gateway and launch
+path (the probe writes the same entries), a settings file written in place, Claude Code's other
+hook events, macOS and Linux, Codex below 0.157.1 (the tested range starts at 0.153.4). The
+probe is `helper/probes/p20-probe.cjs`.
 
 ## Parked questions
 
