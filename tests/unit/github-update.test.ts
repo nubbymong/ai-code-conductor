@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 
 // ── Mock https.get ──────────────────────────────────────────────────────
 // Supports:
@@ -619,30 +619,67 @@ describe('github-update', () => {
   // aicc_planning#369: the screen showed a beta offer as "v2.1.3" (the base
   // version), which reads as the stable release. displayVersion keeps the
   // prerelease part; version, which the logs name, is unchanged.
+  //
+  // A 2.1.3 release needs macOS 13 (resources/macos-release-floors.json, from
+  // v2.1.1-beta.2 on), so a Mac is offered one only when its Mac download is
+  // named with that floor and the Mac's own macOS meets it
+  // (update-macos-floor.test.ts holds that rule). Each release here carries
+  // that download, the Mac reports macOS 15 (Node has no
+  // process.getSystemVersion; Electron adds it, and it is read only on a Mac),
+  // and each case asks twice: on this host, and as a Mac. Without the floored
+  // download the macOS CI leg was offered nothing at all.
   describe('the version the user is shown (aicc_planning#369)', () => {
-    it('a beta offer keeps its prerelease part', async () => {
+    const proc = process as unknown as { getSystemVersion?: () => string }
+    const realPlatform = process.platform
+    const realGetSystemVersion = proc.getSystemVersion
+    beforeEach(() => { proc.getSystemVersion = () => '15.0' })
+    afterEach(() => {
+      Object.defineProperty(process, 'platform', { value: realPlatform, configurable: true })
+      if (realGetSystemVersion) proc.getSystemVersion = realGetSystemVersion
+      else delete proc.getSystemVersion
+    })
+
+    /** A release as it is built now: every platform's installer, and the Mac download named with its macOS 13 floor. */
+    function offer(tagName: string, version: string, isPrerelease = false) {
+      const rel = releaseWithBothAssets(tagName, version, isPrerelease)
+      rel.assets.push({ name: `AICodeConductor-${version}-macos13.dmg`, browser_download_url: `https://x/${version}-macos13.dmg` })
+      return rel
+    }
+
+    /** What the update check answers for `rel`: on this host, then as a Mac. */
+    async function answers(rel: ReturnType<typeof offer>) {
       currentChannel = 'beta'
-      httpsState.nextResponse = { statusCode: 200, body: [releaseWithBothAssets('v2.1.3-beta.11', '2.1.3-beta.11', true)] }
-      const result = await checkGitHubRelease()
-      expect(result!.displayVersion).toBe('2.1.3-beta.11')
-      expect(result!.version).toBe('2.1.3')
-      expect(result!.tagName).toBe('v2.1.3-beta.11')
+      httpsState.nextResponse = { statusCode: 200, body: [rel] }
+      const here = await checkGitHubRelease()
+      Object.defineProperty(process, 'platform', { value: 'darwin', configurable: true })
+      const mac = await checkGitHubRelease()
+      expect(mac?.installerName).toBe(`AICodeConductor-${rel.tag_name.slice(1)}-macos13.dmg`)
+      return [['here', here], ['mac', mac]] as const
+    }
+
+    it('a beta offer keeps its prerelease part', async () => {
+      for (const [where, result] of await answers(offer('v2.1.3-beta.11', '2.1.3-beta.11', true))) {
+        expect(result, where).not.toBeNull()
+        expect(result!.displayVersion, where).toBe('2.1.3-beta.11')
+        expect(result!.version, where).toBe('2.1.3')
+        expect(result!.tagName, where).toBe('v2.1.3-beta.11')
+      }
     })
 
     it('an rc offer keeps its prerelease part', async () => {
-      currentChannel = 'beta'
-      httpsState.nextResponse = { statusCode: 200, body: [releaseWithBothAssets('v2.1.3-rc.1', '2.1.3-rc.1', true)] }
-      const result = await checkGitHubRelease()
-      expect(result!.displayVersion).toBe('2.1.3-rc.1')
-      expect(result!.version).toBe('2.1.3')
+      for (const [where, result] of await answers(offer('v2.1.3-rc.1', '2.1.3-rc.1', true))) {
+        expect(result, where).not.toBeNull()
+        expect(result!.displayVersion, where).toBe('2.1.3-rc.1')
+        expect(result!.version, where).toBe('2.1.3')
+      }
     })
 
     it('a stable offer is its version', async () => {
-      currentChannel = 'beta'
-      httpsState.nextResponse = { statusCode: 200, body: [releaseWithBothAssets('v2.1.3', '2.1.3')] }
-      const result = await checkGitHubRelease()
-      expect(result!.displayVersion).toBe('2.1.3')
-      expect(result!.version).toBe('2.1.3')
+      for (const [where, result] of await answers(offer('v2.1.3', '2.1.3'))) {
+        expect(result, where).not.toBeNull()
+        expect(result!.displayVersion, where).toBe('2.1.3')
+        expect(result!.version, where).toBe('2.1.3')
+      }
     })
   })
 
