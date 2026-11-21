@@ -19,12 +19,23 @@
 //! hook events of the session, numbered, waiting while no connection that
 //! takes them is attached. It belongs to the holder process, not to a
 //! launch: an event may come before anything is launched.
+//!
+//! The screen (`screen.rs`, from 2.1.3-beta.12) is the holder's too: every
+//! chunk of output goes to the ring and the attached client first, then to
+//! the screen, on the output thread, for the session's whole life; a resize
+//! resizes the terminal, then the screen. The screen has a lock of its own,
+//! taken after the state's is let go, so a read of it never holds up an
+//! attach or the ring. A panic in the screen's parser is caught: the screen
+//! is then not kept any more (a read of it says so), and the output, the
+//! ring and the attached client go on as before.
 
 use crate::json::Value;
 use crate::pty::{Conpty, Pty, PtySize, SpawnOptions};
 use crate::ring::{Replay, Ring, RingError};
+use crate::screen::{self, Screen};
 use std::collections::VecDeque;
 use std::io::{self, Read, Write};
+use std::panic::{self, AssertUnwindSafe};
 use std::sync::mpsc::{self, Receiver, SyncSender, TrySendError};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread;
@@ -134,6 +145,20 @@ struct State {
 
 struct Shared {
     state: Mutex<State>,
+    /// The session's screen; None once its parser panicked (it is not kept
+    /// any more). Locked after `state` is let go, never with it.
+    screen: Mutex<Option<Screen>>,
+}
+
+/// Feed one chunk of output to the screen. A panic in the parser is caught,
+/// and the screen is let go: it would no longer show the session.
+fn feed_screen(shared: &Shared, bytes: &[u8]) {
+    let mut slot = lock(&shared.screen);
+    if let Some(s) = slot.as_mut() {
+        if panic::catch_unwind(AssertUnwindSafe(|| s.feed(bytes))).is_err() {
+            *slot = None;
+        }
+    }
 }
 
 #[cfg(test)]
@@ -141,6 +166,10 @@ thread_local! {
     /// Set by a test, on its own thread, around a start: the holder started
     /// then gets an exit watch whose wait fails at once.
     static FAILING_WATCH: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// Set by a test, on its own thread, around a start: the output thread of
+    /// the holder started waits for one message on it before it feeds each
+    /// chunk to the screen, so a test can hold the screen back.
+    static SCREEN_GATE: std::cell::RefCell<Option<Receiver<()>>> = const { std::cell::RefCell::new(None) };
 }
 
 pub(crate) fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -186,6 +215,7 @@ impl Holder {
         let mut writer = pty.input_writer()?;
         let shared = Arc::new(Shared {
             state: Mutex::new(State { ring: Ring::new(ring_bytes), terminal: None, exit_code: None, output_ended: false }),
+            screen: Mutex::new(Some(Screen::new(opts.size))),
         });
         let pty = Arc::new(Mutex::new(pty));
         // The watch on the child's exit, made before any thread: one that
@@ -212,8 +242,11 @@ impl Holder {
 
         // Output: everything the child writes goes into the ring first, then to
         // the attached client, in one critical section so a replay and the live
-        // stream never overlap or leave a gap.
+        // stream never overlap or leave a gap; then, with that lock let go, to
+        // the screen.
         let out_shared = Arc::clone(&shared);
+        #[cfg(test)]
+        let gate = SCREEN_GATE.with(|g| g.borrow_mut().take());
         thread::Builder::new().spawn(move || {
             let mut buf = vec![0u8; 16 * 1024];
             loop {
@@ -221,14 +254,16 @@ impl Holder {
                     Ok(0) | Err(_) => break,
                     Ok(n) => n,
                 };
-                let mut st = lock(&out_shared.state);
-                st.ring.push(&buf[..n]);
-                let gone = match &st.terminal {
-                    Some(tx) => !offer(tx, buf[..n].to_vec()),
-                    None => false,
-                };
-                if gone {
-                    st.terminal = None;
+                {
+                    let mut st = lock(&out_shared.state);
+                    st.ring.push(&buf[..n]);
+                    let gone = match &st.terminal {
+                        Some(tx) => !offer(tx, buf[..n].to_vec()),
+                        None => false,
+                    };
+                    if gone {
+                        st.terminal = None;
+                    }
                 }
             }
             // The live channel stays open: it closes once the exit is known,
@@ -294,8 +329,21 @@ impl Holder {
         }
     }
 
+    /// Resize the terminal, then the screen with it. A resize the terminal
+    /// refused leaves the screen as it was, as the program's size is.
     pub fn resize(&self, size: PtySize) -> io::Result<()> {
         lock(&self.pty).resize(size)
+    }
+
+    /// The screen now (`screen.read`); None when it is not kept any more.
+    pub fn screen_read(&self) -> Option<screen::Read> {
+        lock(&self.shared.screen).as_ref().map(Screen::read)
+    }
+
+    /// The screen's last `count` lines, scrollback included (`screen.tail`);
+    /// None when it is not kept any more.
+    pub fn screen_tail(&self, count: usize) -> Option<Vec<screen::TailLine>> {
+        lock(&self.shared.screen).as_mut().map(|s| s.tail(count))
     }
 
     /// `(ring_start, ring_end)`: the offsets the ring holds.
@@ -578,5 +626,56 @@ mod tests {
         assert!(took < Duration::from_millis(500), "a resize while the child ran waited {took:?}");
         assert_eq!(h.exit_code(), None, "the program ended before the resize could show anything");
         assert_eq!(h.wait_exit(Duration::from_secs(30)), Some(0));
+    }
+
+    /// A program that prints a line at once and then runs for about 2 s, and
+    /// the text of that line.
+    fn says_a_line() -> (Vec<String>, &'static str) {
+        if cfg!(windows) {
+            // PING's first line names the address at once.
+            (two_seconds(), "127.0.0.1")
+        } else {
+            (vec!["/bin/sh".to_string(), "-c".to_string(), "echo the-screen-gate-line; sleep 2".to_string()], "the-screen-gate-line")
+        }
+    }
+
+    fn screen_shows(h: &Holder, text: &str) -> bool {
+        h.screen_read().map_or(false, |r| r.lines.iter().any(|l| l.text.contains(text)))
+    }
+
+    /// Each chunk of output reaches the ring (so an attach's replay) before
+    /// the screen: while the screen is held back the ring already holds the
+    /// line and the screen does not show it; let through, the screen does.
+    #[test]
+    fn the_output_reaches_the_ring_before_the_screen() {
+        let (argv, line) = says_a_line();
+        let (release, gate) = mpsc::channel::<()>();
+        SCREEN_GATE.with(|g| *g.borrow_mut() = Some(gate));
+        let started = Holder::start(&argv, PtySize { cols: 100, rows: 10 }, 64 * 1024);
+        SCREEN_GATE.with(|g| *g.borrow_mut() = None);
+        let h = started.expect("a program starts on a terminal");
+        assert!(h.wait_for_text(line, Duration::from_secs(15)), "the ring never held the line while the screen was held back: {:?}", String::from_utf8_lossy(&h.snapshot()));
+        assert!(!screen_shows(&h, line), "the screen showed the line before it was let through");
+        // The gate closed: every chunk goes through.
+        drop(release);
+        let deadline = Instant::now() + Duration::from_secs(15);
+        while !screen_shows(&h, line) && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(20));
+        }
+        assert!(screen_shows(&h, line), "the screen never showed the line: {:?}", h.screen_read().map(|r| r.lines));
+        let _ = h.end();
+    }
+
+    /// A resize resizes the screen with the terminal; the screen starts at
+    /// the launch's size.
+    #[test]
+    fn a_resize_resizes_the_screen_too() {
+        let h = Holder::start(&two_seconds(), PtySize { cols: 90, rows: 20 }, 64 * 1024).expect("a program starts on a terminal");
+        let size = |h: &Holder| h.screen_read().map(|r| (r.cols, r.rows, r.lines.len()));
+        assert_eq!(size(&h), Some((90, 20, 20)));
+        h.resize(PtySize { cols: 100, rows: 30 }).expect("resize");
+        assert_eq!(size(&h), Some((100, 30, 30)));
+        assert_eq!(h.screen_tail(500).map(|t| t.len()), Some(30), "a tail of a screen with no scrollback is its rows");
+        let _ = h.end();
     }
 }

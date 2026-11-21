@@ -117,6 +117,29 @@
         "sid": "sess-0001",
         "state": "live"
       }
+    },
+    {
+      "name": "a holder that offers screen reads",
+      "line": "AICC-HELLO 0123456789abcdef0123456789abcdef {\"proto\":[1],\"helper\":{\"version\":\"0.1.0\"},\"os\":\"linux\",\"arch\":\"aarch64\",\"caps\":[\"core\",\"local\",\"hooks\",\"mcp\",\"away\",\"screen\"],\"session\":{\"sid\":\"sess-0001\",\"state\":\"live\"}}",
+      "expect": {
+        "proto": [
+          1
+        ],
+        "helper_version": "0.1.0",
+        "sha256": null,
+        "os": "linux",
+        "arch": "aarch64",
+        "caps": [
+          "core",
+          "local",
+          "hooks",
+          "mcp",
+          "away",
+          "screen"
+        ],
+        "sid": "sess-0001",
+        "state": "live"
+      }
     }
   ],
   "invalid": [
@@ -241,6 +264,18 @@
             "local",
             "mcp",
             "away"
+          ]
+        }
+      },
+      {
+        "name": "an ack that reads the screen",
+        "json": "{\"t\":\"hello.ack\",\"proto\":1,\"caps\":[\"core\",\"local\",\"screen\"]}",
+        "expect": {
+          "proto": 1,
+          "caps": [
+            "core",
+            "local",
+            "screen"
           ]
         }
       }

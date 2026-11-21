@@ -59,12 +59,23 @@
 //! app side only under its relay's gate and the gate of the app connection it
 //! leaves or joins, so either gate held keeps it where it is.
 //!
+//! Screen reads (capability `screen`, from 2.1.3-beta.12): a connection that
+//! acked `screen` may ask for the session's screen (`screen.read`, answered
+//! `screen.rows`) and its last lines (`screen.tail`, answered
+//! `screen.lines`), from the holder's own screen (`screen.rs`), whether or not
+//! it is the attached connection. Both are read-only: neither attaches,
+//! types, resizes or ends, and neither moves an offset or changes which
+//! connection is attached. A relay asks for neither (`unknown-type`, as for
+//! the terminal messages). Each answer is one message within what a frame to
+//! the app holds: rows that do not fit are left out from the top, and the
+//! answer says so (`cut`). The holder decides nothing from a screen.
+//!
 //! Locks: a connection's stream gate (`Conn::live`) first (the attached
 //! connection's before a relay's, which guards that relay's tool messages),
 //! then the hook events (`Serve::hooks`), then the tool streams
 //! (`Serve::tools`), then the record, then the serve state, then the holder's
-//! own (never the other way), and nothing is written to a connection while
-//! the record or the serve state is held. Hook events are written to a
+//! own, its screen's last (never the other way), and nothing is written to a
+//! connection while the record, the serve state or the screen is held. Hook events are written to a
 //! connection under its gate and the hook lock, so they go out in `seq` order
 //! and never inside an attach's reply and replay or after its last word; the
 //! hook lock is held for at most `WRITE_TIMEOUT` of writing at a time. A tool
@@ -79,6 +90,7 @@ use crate::json::Value;
 use crate::pty::SpawnOptions;
 use crate::request::{self, Allowed, Launch, Refusal, Request, MAX_MCP_TO_APP};
 use crate::ring::RingError;
+use crate::screen;
 use crate::store::{self, Record};
 use crate::transport::{self, Listener, Stream};
 use std::collections::VecDeque;
@@ -96,13 +108,18 @@ pub const MCP_CAP: &str = "mcp";
 /// The capability that keeps a relay's tool stream while the app is away
 /// (from 2.1.3-beta.12). Only a relay acks it, with `mcp`.
 pub const AWAY_CAP: &str = "away";
+/// The capability that allows screen reads (from 2.1.3-beta.12).
+pub const SCREEN_CAP: &str = "screen";
 /// What a holder offers in its hello: the frozen core, `local` for the
 /// terminal messages, `hooks` for hook events (from 2.1.3-beta.8), `mcp` for
-/// tool streams (from 2.1.3-beta.10) and `away` for kept tool streams (from
-/// 2.1.3-beta.12). The app acks `core` and `local` (`hello::LOCAL_CAPS`), and
-/// `hooks` on a connection that takes hook events; the hook mode acks
-/// `hook::ACK_CAPS` and the relay `relay::ACK_CAPS`.
+/// tool streams (from 2.1.3-beta.10), `away` for kept tool streams and
+/// `screen` for screen reads (both from 2.1.3-beta.12). The app acks `core`
+/// and `local` (`hello::LOCAL_CAPS`), and `hooks` on a connection that takes
+/// hook events; the hook mode acks `hook::ACK_CAPS` and the relay
+/// `relay::ACK_CAPS`. Nothing acks `screen` yet.
 pub const HOLDER_CAPS: [&str; 5] = ["core", "local", HOOKS_CAP, MCP_CAP, AWAY_CAP];
+/// The most JSON a screen answer may be: what one frame to the app holds.
+pub const SCREEN_ANSWER_MAX: usize = frame::MAX_JSON_HELPER_TO_APP;
 /// Tool streams one session may have open at once; one more `mcp.open` gets
 /// `busy`.
 pub const MAX_TOOL_STREAMS: usize = 8;
@@ -470,6 +487,74 @@ pub fn mcp_back(stream: u64) -> Value {
     Value::obj(vec![("t", Value::str("mcp.back")), ("stream", Value::uint(stream))])
 }
 
+/// One row of `screen.rows`, as the app's readers take a row.
+fn row_value(l: &screen::Line) -> Value {
+    Value::obj(vec![("text", Value::str(&l.text)), ("typed", Value::str(&l.typed)), ("inverse", Value::str(&l.inverse)), ("width", Value::uint(u64::from(l.width))), ("end", Value::uint(u64::from(l.end)))])
+}
+
+/// The modes of `screen.rows`: fixed words and yes or no values.
+fn modes_value(m: &screen::Modes) -> Value {
+    Value::obj(vec![
+        ("screen", Value::str(m.screen_word())),
+        ("bracketed_paste", Value::Bool(m.bracketed_paste)),
+        ("application_cursor", Value::Bool(m.application_cursor)),
+        ("application_keypad", Value::Bool(m.application_keypad)),
+        ("mouse", Value::str(m.mouse)),
+        ("mouse_encoding", Value::str(m.mouse_encoding)),
+        ("cursor_hidden", Value::Bool(m.cursor_hidden)),
+    ])
+}
+
+/// The last of `items` whose JSON, a comma each, fits in `room` bytes, in
+/// order, and whether any were left out (from the start).
+fn the_last_that_fit(items: Vec<Value>, room: usize) -> (Vec<Value>, bool) {
+    let mut used = 0usize;
+    let mut first = items.len();
+    for (i, item) in items.iter().enumerate().rev() {
+        let size = item.to_json().len() + 1;
+        if used + size > room {
+            break;
+        }
+        used += size;
+        first = i;
+    }
+    let cut = first > 0;
+    (items.into_iter().skip(first).collect(), cut)
+}
+
+/// `screen.rows`: the reply to `screen.read` `re`. `lines` holds the rows
+/// from the top, all of them unless `cut`: then the bottom rows that fit in
+/// one message to the app, which the readers look at first.
+pub fn screen_rows_message(re: u64, r: &screen::Read) -> Value {
+    let message = |lines: Vec<Value>, cut: bool| {
+        reply(
+            "screen.rows",
+            re,
+            vec![
+                ("cols", Value::uint(u64::from(r.cols))),
+                ("rows", Value::uint(u64::from(r.rows))),
+                ("cursor", Value::obj(vec![("row", Value::uint(u64::from(r.cursor_row))), ("col", Value::uint(u64::from(r.cursor_col)))])),
+                ("modes", modes_value(&r.modes)),
+                ("cut", Value::Bool(cut)),
+                ("lines", Value::Arr(lines)),
+            ],
+        )
+    };
+    let room = SCREEN_ANSWER_MAX.saturating_sub(message(Vec::new(), false).to_json().len());
+    let (lines, cut) = the_last_that_fit(r.lines.iter().map(row_value).collect(), room);
+    message(lines, cut)
+}
+
+/// `screen.lines`: the reply to `screen.tail` `re`, the lines oldest first,
+/// all of them unless `cut`: then the newest that fit in one message.
+pub fn screen_lines_message(re: u64, lines: &[screen::TailLine]) -> Value {
+    let message = |lines: Vec<Value>, cut: bool| reply("screen.lines", re, vec![("cut", Value::Bool(cut)), ("lines", Value::Arr(lines))]);
+    let room = SCREEN_ANSWER_MAX.saturating_sub(message(Vec::new(), false).to_json().len());
+    let items = lines.iter().map(|l| Value::obj(vec![("text", Value::str(&l.text)), ("typed", Value::str(&l.typed))])).collect();
+    let (lines, cut) = the_last_that_fit(items, room);
+    message(lines, cut)
+}
+
 /// Send `conn` every hook event waiting, oldest first; each leaves the queue
 /// once it is sent. The whole queue goes within `WRITE_TIMEOUT`, however
 /// many events it holds, so the hook lock is never held longer: a connection
@@ -505,7 +590,7 @@ fn say_ended(conn: &Conn, re: u64, code: Option<i32>) {
 
 /// Check the first frame: a `hello.ack` with exactly `t`, `proto` and `caps`,
 /// a version this holder speaks, and capabilities it offered, `core` among
-/// them. Returns what the ack allowed (`local`, `hooks`, `mcp`), and whether
+/// them. Returns what the ack allowed (`local`, `hooks`, `mcp`, `screen`), and whether
 /// a stream the connection opens is kept while the app is away (`away`,
 /// which counts only beside `mcp`).
 fn check_ack(v: &Value) -> Result<(Allowed, bool), Refusal> {
@@ -536,7 +621,7 @@ fn check_ack(v: &Value) -> Result<(Allowed, bool), Refusal> {
     if !seen.contains(&"core") {
         return bad(request::CODE_BAD_FIELD, "caps must hold core");
     }
-    let allowed = Allowed { local: seen.contains(&"local"), hooks: seen.contains(&HOOKS_CAP), mcp: seen.contains(&MCP_CAP) };
+    let allowed = Allowed { local: seen.contains(&"local"), hooks: seen.contains(&HOOKS_CAP), mcp: seen.contains(&MCP_CAP), screen: seen.contains(&SCREEN_CAP) };
     Ok((allowed, allowed.mcp && seen.contains(&AWAY_CAP)))
 }
 
@@ -911,7 +996,8 @@ impl Serve {
 
     /// The rules a message must also keep that depend on the connection: one
     /// that opened a tool stream is a relay for the rest of its life and does
-    /// not use the terminal (`unknown-type`, and a close); one attached to the
+    /// not use the terminal or read its screen (`unknown-type`, and a close);
+    /// one attached to the
     /// terminal opens no tool stream, and a relay one at a time (`bad-field`);
     /// and a relay's message goes on to the app, whose frames hold 1 MiB
     /// (`too-large`). Only this connection's own thread opens its stream, so
@@ -922,6 +1008,7 @@ impl Serve {
             Request::Launch(_) | Request::Attach { .. } | Request::Resize { .. } | Request::Detach { .. } | Request::End { .. } if relay => {
                 Some((request::CODE_UNKNOWN_TYPE, "a connection that opened a tool stream does not use the terminal"))
             }
+            Request::ScreenRead { .. } | Request::ScreenTail { .. } if relay => Some((request::CODE_UNKNOWN_TYPE, "a connection that opened a tool stream does not read the screen")),
             Request::McpOpen { .. } if self.is_attached(conn) => Some((request::CODE_BAD_FIELD, "a connection attached to the terminal opens no tool stream")),
             Request::McpOpen { .. } if self.stream_of_relay(conn, None).is_some() => Some((request::CODE_BAD_FIELD, "this connection has a tool stream open already")),
             Request::Mcp { bytes, .. } if relay && *bytes > MAX_MCP_TO_APP => Some((request::CODE_TOO_LARGE, "message is over 1048320 bytes as JSON, the most the app takes")),
@@ -1373,6 +1460,49 @@ impl Serve {
                 Flow::Close
             }
             Request::End { id } => self.finish(conn, id),
+            Request::ScreenRead { id } => {
+                self.answer_screen(conn, id, None);
+                Flow::Continue
+            }
+            Request::ScreenTail { id, count } => {
+                self.answer_screen(conn, id, Some(count));
+                Flow::Continue
+            }
+        }
+    }
+
+    /// `screen.read` (`tail` None) or `screen.tail` `id` from `conn`, attached
+    /// or not, answered from the holder's screen. Nothing changes: no offset,
+    /// no attach, no size. Before a launch, and while the session is ending,
+    /// `not-found`; a screen the holder no longer keeps (its parser failed),
+    /// `io`.
+    fn answer_screen(&self, conn: &Conn, id: u64, tail: Option<usize>) {
+        let holder = {
+            let st = lock(&self.state);
+            if st.ending {
+                Err("the session is ending")
+            } else {
+                st.holder.clone().ok_or("nothing has been launched yet")
+            }
+        };
+        let holder = match holder {
+            Ok(h) => h,
+            Err(text) => {
+                let _ = conn.send_error(Some(id), request::CODE_NOT_FOUND, text);
+                return;
+            }
+        };
+        let answer = match tail {
+            None => holder.screen_read().map(|r| screen_rows_message(id, &r)),
+            Some(count) => holder.screen_tail(count).map(|lines| screen_lines_message(id, &lines)),
+        };
+        match answer {
+            Some(v) => {
+                let _ = conn.send_json(v);
+            }
+            None => {
+                let _ = conn.send_error(Some(id), frame::CODE_IO, "this session's screen is not kept: reading its output failed");
+            }
         }
     }
 
@@ -1705,12 +1835,12 @@ mod tests {
 
     #[test]
     fn hooks_is_offered_and_an_ack_of_it_allows_hook_events() {
-        assert_eq!(HOLDER_CAPS, ["core", "local", "hooks", "mcp", "away"]);
-        let both = Allowed { local: true, hooks: true, mcp: false };
+        assert_eq!(HOLDER_CAPS, ["core", "local", "hooks", "mcp", "away", "screen"]);
+        let both = Allowed { local: true, hooks: true, mcp: false, screen: false };
         assert_eq!(acked("{\"t\":\"hello.ack\",\"proto\":1,\"caps\":[\"core\",\"local\",\"hooks\"]}"), Ok(both));
-        assert_eq!(acked("{\"t\":\"hello.ack\",\"proto\":1,\"caps\":[\"core\",\"hooks\"]}"), Ok(Allowed { local: false, hooks: true, mcp: false }));
+        assert_eq!(acked("{\"t\":\"hello.ack\",\"proto\":1,\"caps\":[\"core\",\"hooks\"]}"), Ok(Allowed { local: false, hooks: true, mcp: false, screen: false }));
         // The app's own ack: no hook event will ever be sent to it.
-        assert_eq!(acked("{\"t\":\"hello.ack\",\"proto\":1,\"caps\":[\"core\",\"local\"]}"), Ok(Allowed { local: true, hooks: false, mcp: false }));
+        assert_eq!(acked("{\"t\":\"hello.ack\",\"proto\":1,\"caps\":[\"core\",\"local\"]}"), Ok(Allowed { local: true, hooks: false, mcp: false, screen: false }));
         assert_eq!(acked("{\"t\":\"hello.ack\",\"proto\":1,\"caps\":[\"hooks\"]}"), Err(request::CODE_BAD_FIELD));
         assert_eq!(acked("{\"t\":\"hello.ack\",\"proto\":1,\"caps\":[\"core\",\"hooks\",\"hooks\"]}"), Err(request::CODE_BAD_FIELD));
     }
@@ -1718,8 +1848,8 @@ mod tests {
     #[test]
     fn mcp_is_offered_and_an_ack_of_it_allows_tool_streams() {
         // The relay's ack, and everything a holder offers.
-        assert_eq!(acked("{\"t\":\"hello.ack\",\"proto\":1,\"caps\":[\"core\",\"local\",\"mcp\"]}"), Ok(Allowed { local: true, hooks: false, mcp: true }));
-        assert_eq!(acked("{\"t\":\"hello.ack\",\"proto\":1,\"caps\":[\"mcp\",\"hooks\",\"local\",\"core\"]}"), Ok(Allowed { local: true, hooks: true, mcp: true }));
+        assert_eq!(acked("{\"t\":\"hello.ack\",\"proto\":1,\"caps\":[\"core\",\"local\",\"mcp\"]}"), Ok(Allowed { local: true, hooks: false, mcp: true, screen: false }));
+        assert_eq!(acked("{\"t\":\"hello.ack\",\"proto\":1,\"caps\":[\"mcp\",\"hooks\",\"local\",\"core\"]}"), Ok(Allowed { local: true, hooks: true, mcp: true, screen: false }));
         assert_eq!(acked("{\"t\":\"hello.ack\",\"proto\":1,\"caps\":[\"mcp\"]}"), Err(request::CODE_BAD_FIELD));
         assert_eq!(acked("{\"t\":\"hello.ack\",\"proto\":1,\"caps\":[\"core\",\"mcp\",\"mcp\"]}"), Err(request::CODE_BAD_FIELD));
         assert_eq!(MAX_TOOL_STREAMS, 8);
@@ -1727,15 +1857,82 @@ mod tests {
 
     #[test]
     fn away_is_offered_and_counts_only_beside_mcp() {
-        let relay = Allowed { local: true, hooks: false, mcp: true };
+        let relay = Allowed { local: true, hooks: false, mcp: true, screen: false };
         // A relay of now; one from before `away`, served as before.
         assert_eq!(acked_away("{\"t\":\"hello.ack\",\"proto\":1,\"caps\":[\"core\",\"local\",\"mcp\",\"away\"]}"), Ok((relay, true)));
         assert_eq!(acked_away("{\"t\":\"hello.ack\",\"proto\":1,\"caps\":[\"core\",\"local\",\"mcp\"]}"), Ok((relay, false)));
         // Without `mcp` it keeps nothing, as no stream can be opened.
-        assert_eq!(acked_away("{\"t\":\"hello.ack\",\"proto\":1,\"caps\":[\"core\",\"local\",\"away\"]}"), Ok((Allowed { local: true, hooks: false, mcp: false }, false)));
-        // Everything a holder offers.
-        assert_eq!(acked_away("{\"t\":\"hello.ack\",\"proto\":1,\"caps\":[\"away\",\"mcp\",\"hooks\",\"local\",\"core\"]}"), Ok((Allowed { local: true, hooks: true, mcp: true }, true)));
+        assert_eq!(acked_away("{\"t\":\"hello.ack\",\"proto\":1,\"caps\":[\"core\",\"local\",\"away\"]}"), Ok((Allowed { local: true, hooks: false, mcp: false, screen: false }, false)));
+        // Everything a holder offered before screen reads.
+        assert_eq!(acked_away("{\"t\":\"hello.ack\",\"proto\":1,\"caps\":[\"away\",\"mcp\",\"hooks\",\"local\",\"core\"]}"), Ok((Allowed { local: true, hooks: true, mcp: true, screen: false }, true)));
         assert_eq!(acked_away("{\"t\":\"hello.ack\",\"proto\":1,\"caps\":[\"core\",\"mcp\",\"away\",\"away\"]}"), Err(request::CODE_BAD_FIELD));
+    }
+
+    #[test]
+    fn screen_is_offered_last_and_an_ack_of_it_allows_screen_reads_only() {
+        assert_eq!(HOLDER_CAPS.last(), Some(&SCREEN_CAP));
+        assert_eq!(acked("{\"t\":\"hello.ack\",\"proto\":1,\"caps\":[\"core\",\"screen\"]}"), Ok(Allowed { local: false, hooks: false, mcp: false, screen: true }));
+        // Everything a holder offers.
+        assert_eq!(
+            acked_away("{\"t\":\"hello.ack\",\"proto\":1,\"caps\":[\"core\",\"local\",\"hooks\",\"mcp\",\"away\",\"screen\"]}"),
+            Ok((Allowed { local: true, hooks: true, mcp: true, screen: true }, true))
+        );
+        // The app's own ack of now, and the relay's, allow no screen read.
+        assert_eq!(acked("{\"t\":\"hello.ack\",\"proto\":1,\"caps\":[\"core\",\"local\",\"hooks\"]}").map(|a| a.screen), Ok(false));
+        assert_eq!(acked("{\"t\":\"hello.ack\",\"proto\":1,\"caps\":[\"core\",\"local\",\"mcp\",\"away\"]}").map(|a| a.screen), Ok(false));
+        assert_eq!(acked("{\"t\":\"hello.ack\",\"proto\":1,\"caps\":[\"screen\"]}"), Err(request::CODE_BAD_FIELD));
+        assert_eq!(acked("{\"t\":\"hello.ack\",\"proto\":1,\"caps\":[\"core\",\"screen\",\"screen\"]}"), Err(request::CODE_BAD_FIELD));
+        assert!(!crate::relay::ACK_CAPS.contains(&SCREEN_CAP) && !crate::hook::ACK_CAPS.contains(&SCREEN_CAP));
+    }
+
+    /// A screen of `cols` by `rows` full of `ch` (a wide one fills each row
+    /// with half as many), every cell of it dim and inverse.
+    fn a_full_screen(cols: u16, rows: u16, ch: char) -> screen::Read {
+        let mut s = screen::Screen::new(crate::pty::PtySize { cols, rows });
+        let per_row = if unicode_wide(ch) { usize::from(cols) / 2 } else { usize::from(cols) };
+        let mut out = String::from("\x1b[2;7m");
+        for r in 0..rows {
+            out.push_str(&format!("\x1b[{};1H", r + 1));
+            out.extend(std::iter::repeat(ch).take(per_row));
+        }
+        s.feed(out.as_bytes());
+        s.read()
+    }
+
+    fn unicode_wide(ch: char) -> bool {
+        let mut s = screen::Screen::new(crate::pty::PtySize { cols: 4, rows: 1 });
+        s.feed(ch.to_string().as_bytes());
+        s.read().lines[0].end == 2
+    }
+
+    #[test]
+    fn a_screen_answer_is_one_message_to_the_app_and_says_when_rows_were_left_out() {
+        // A common size: whole.
+        let r = a_full_screen(120, 40, 'x');
+        let v = screen_rows_message(2, &r);
+        assert_eq!(v.get("cut"), Some(&Value::Bool(false)));
+        assert_eq!(v.get("lines").and_then(Value::as_array).map(Vec::len), Some(40));
+        // The largest screen, every cell a two-byte character: too much for
+        // one message, so the bottom rows that fit, and `cut`.
+        let r = a_full_screen(1000, 1000, '\u{e9}');
+        let v = screen_rows_message(request::MAX_SAFE_INTEGER - 1, &r);
+        let text = v.to_json();
+        assert!(text.len() <= SCREEN_ANSWER_MAX, "{} bytes", text.len());
+        assert!(frame::encode(&Frame::json(0, v.clone()), Direction::HelperToApp).is_ok());
+        assert_eq!(v.get("cut"), Some(&Value::Bool(true)));
+        let lines = v.get("lines").and_then(Value::as_array).expect("lines");
+        assert!(!lines.is_empty() && lines.len() < 1000, "{} rows", lines.len());
+        // The rows kept are the last ones, in order.
+        assert_eq!(lines.last(), Some(&row_value(&r.lines[999])));
+        assert_eq!(lines.first(), Some(&row_value(&r.lines[1000 - lines.len()])));
+        // A tail of 200 lines too long for one message, the same way: a
+        // cell can hold a character and its combining marks.
+        let tail: Vec<screen::TailLine> = (0..200).map(|_| screen::TailLine { text: "\u{e9}".repeat(3000), typed: "\u{e9}".repeat(3000) }).collect();
+        let v = screen_lines_message(2, &tail);
+        assert!(v.to_json().len() <= SCREEN_ANSWER_MAX);
+        assert_eq!(v.get("cut"), Some(&Value::Bool(true)));
+        let v = screen_lines_message(2, &tail[..10]);
+        assert_eq!((v.get("cut"), v.get("lines").and_then(Value::as_array).map(Vec::len)), (Some(&Value::Bool(false)), Some(10)));
     }
 
     #[test]
@@ -1786,7 +1983,7 @@ mod tests {
         let id = request::MAX_SAFE_INTEGER - 1;
         let message = format!("{{\"t\":\"hook.event\",\"id\":{id},\"kind\":\"{kind}\",\"payload\":{over}}}");
         assert!(message.len() <= MAX_JSON_AFTER_LAUNCH, "a hook.event one byte over is {} bytes", message.len());
-        let refused = request::parse_allowed(&json::parse(message.as_bytes()).unwrap(), Allowed { local: true, hooks: true, mcp: false }).unwrap_err();
+        let refused = request::parse_allowed(&json::parse(message.as_bytes()).unwrap(), Allowed { local: true, hooks: true, mcp: false, screen: false }).unwrap_err();
         assert_eq!(refused.code, request::CODE_TOO_LARGE);
     }
 

@@ -19,6 +19,11 @@
 //! `mcp`'s `message` a JSON object or array of at most `MAX_MCP_TO_HELPER`
 //! bytes as compact JSON. Who may send which, and the smaller limit toward
 //! the app, are `serve.rs`'s rules: they depend on the connection.
+//!
+//! `screen.read` and `screen.tail` are allowed only once `screen` is acked
+//! (from 2.1.3-beta.12): two read-only requests about the session's screen,
+//! `screen.tail` with a `count` of 1 to 200 lines. Whether the connection may
+//! ask (a relay may not) is `serve.rs`'s rule.
 
 use crate::json::Value;
 use crate::pty::{is_batch_file, is_renamed_by_windows, Conpty, PtySize};
@@ -55,6 +60,8 @@ pub const MAX_MCP_TO_APP: usize = 1_048_320;
 /// relay, as compact JSON: 16 MiB less 256 bytes (a tool result can carry a
 /// screenshot).
 pub const MAX_MCP_TO_HELPER: usize = 16_776_960;
+/// The most lines a `screen.tail` may ask for: the screen's scrollback.
+pub const MAX_TAIL_LINES: u64 = crate::screen::TAIL_MAX as u64;
 
 pub const CODE_UNKNOWN_TYPE: &str = "unknown-type";
 pub const CODE_BAD_FIELD: &str = "bad-field";
@@ -111,15 +118,21 @@ pub enum Request {
     Mcp { stream: u64, message: Value, bytes: usize },
     /// A tool stream ends.
     McpClose { stream: u64 },
+    /// The session's screen now.
+    ScreenRead { id: u64 },
+    /// The screen's last `count` lines, 1 to `MAX_TAIL_LINES`.
+    ScreenTail { id: u64, count: usize },
 }
 
 /// What a connection's `hello.ack` allowed beyond the core: `local`, the
-/// terminal messages; `hooks`, hook events; `mcp`, tool streams.
+/// terminal messages; `hooks`, hook events; `mcp`, tool streams; `screen`,
+/// screen reads.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Allowed {
     pub local: bool,
     pub hooks: bool,
     pub mcp: bool,
+    pub screen: bool,
 }
 
 /// The fields of one type: those it must have, and those it may also have.
@@ -139,6 +152,9 @@ const CORE_TYPES: [(&str, Fields); 1] = [("ping", (&["t", "id"], &[]))];
 
 /// The types a connection may send once `hooks` is acked.
 const HOOK_TYPES: [(&str, Fields); 1] = [("hook.event", (&["t", "id", "kind", "payload"], &[]))];
+
+/// The types a connection may send once `screen` is acked.
+const SCREEN_TYPES: [(&str, Fields); 2] = [("screen.read", (&["t", "id"], &[])), ("screen.tail", (&["t", "id", "count"], &[]))];
 
 /// The tool stream messages a connection may send once `mcp` is acked, and
 /// their fields: no `id`, as none gets a reply.
@@ -489,7 +505,7 @@ mod tests {
     /// A message read on a connection that acked `local` or not, and not
     /// `hooks`.
     fn parse(v: &Value, local: bool) -> Result<Request, Refusal> {
-        parse_allowed(v, Allowed { local, hooks: false, mcp: false })
+        parse_allowed(v, Allowed { local, hooks: false, mcp: false, screen: false })
     }
 
     fn parsed(text: &str) -> Result<Request, Refusal> {
@@ -668,7 +684,7 @@ mod tests {
         assert_eq!(parse(&v, false).unwrap_err().code, CODE_UNKNOWN_TYPE);
     }
 
-    const HOOKS: Allowed = Allowed { local: true, hooks: true, mcp: false };
+    const HOOKS: Allowed = Allowed { local: true, hooks: true, mcp: false, screen: false };
 
     fn hook(text: &str) -> Result<Request, Refusal> {
         parse_allowed(&json::parse(text.as_bytes()).unwrap(), HOOKS)
@@ -700,11 +716,11 @@ mod tests {
         // Not without hooks acked, whatever else was: the connection is closed.
         let v = json::parse(b"{\"t\":\"hook.event\",\"id\":2,\"kind\":\"Stop\",\"payload\":{\"hook_event_name\":\"Stop\"}}").unwrap();
         assert_eq!(parse(&v, true).unwrap_err().code, CODE_UNKNOWN_TYPE);
-        assert_eq!(parse_allowed(&v, Allowed { local: true, hooks: false, mcp: false }).unwrap_err().code, CODE_UNKNOWN_TYPE);
+        assert_eq!(parse_allowed(&v, Allowed { local: true, hooks: false, mcp: false, screen: false }).unwrap_err().code, CODE_UNKNOWN_TYPE);
         // Hooks alone allow it, and the terminal messages still need local.
-        assert!(parse_allowed(&v, Allowed { local: false, hooks: true, mcp: false }).is_ok());
+        assert!(parse_allowed(&v, Allowed { local: false, hooks: true, mcp: false, screen: false }).is_ok());
         let end = json::parse(b"{\"t\":\"term.end\",\"id\":10}").unwrap();
-        assert_eq!(parse_allowed(&end, Allowed { local: false, hooks: true, mcp: false }).unwrap_err().code, CODE_UNKNOWN_TYPE);
+        assert_eq!(parse_allowed(&end, Allowed { local: false, hooks: true, mcp: false, screen: false }).unwrap_err().code, CODE_UNKNOWN_TYPE);
     }
 
     #[test]
@@ -750,7 +766,7 @@ mod tests {
     }
 
     /// What the relay acks: core, local and mcp.
-    const TOOLS: Allowed = Allowed { local: true, hooks: false, mcp: true };
+    const TOOLS: Allowed = Allowed { local: true, hooks: false, mcp: true, screen: false };
 
     fn tool(text: &str) -> Result<Request, Refusal> {
         parse_allowed(&json::parse(text.as_bytes()).unwrap(), TOOLS)
@@ -770,12 +786,12 @@ mod tests {
         // A batch is an array.
         assert!(matches!(tool("{\"t\":\"mcp\",\"stream\":3,\"message\":[{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{}}]}"), Ok(Request::Mcp { .. })));
         // Not without mcp acked, whatever else was: the connection is closed.
-        for acked in [Allowed { local: true, hooks: true, mcp: false }, Allowed::default()] {
+        for acked in [Allowed { local: true, hooks: true, mcp: false, screen: false }, Allowed::default()] {
             let v = json::parse(b"{\"t\":\"mcp.open\",\"stream\":1}").unwrap();
             assert_eq!(parse_allowed(&v, acked).unwrap_err().code, CODE_UNKNOWN_TYPE, "{acked:?}");
         }
         // Mcp alone allows them, and the terminal messages still need local.
-        let mcp_only = Allowed { local: false, hooks: false, mcp: true };
+        let mcp_only = Allowed { local: false, hooks: false, mcp: true, screen: false };
         assert!(parse_allowed(&json::parse(b"{\"t\":\"mcp.open\",\"stream\":1}").unwrap(), mcp_only).is_ok());
         let end = json::parse(b"{\"t\":\"term.end\",\"id\":10}").unwrap();
         assert_eq!(parse_allowed(&end, mcp_only).unwrap_err().code, CODE_UNKNOWN_TYPE);
@@ -814,5 +830,48 @@ mod tests {
         let refused = tool(&of_size(MAX_MCP_TO_HELPER + 1)).unwrap_err();
         assert_eq!((refused.code, refused.re), (CODE_TOO_LARGE, None));
         assert_eq!((MAX_MCP_TO_APP, MAX_MCP_TO_HELPER), (1024 * 1024 - 256, 16 * 1024 * 1024 - 256));
+    }
+
+    const SCREEN: Allowed = Allowed { local: false, hooks: false, mcp: false, screen: true };
+
+    fn screen(text: &str, allowed: Allowed) -> Result<Request, Refusal> {
+        parse_allowed(&json::parse(text.as_bytes()).unwrap(), allowed)
+    }
+
+    #[test]
+    fn screen_reads_read_once_screen_is_acked() {
+        assert_eq!(screen("{\"t\":\"screen.read\",\"id\":2}", SCREEN), Ok(Request::ScreenRead { id: 2 }));
+        assert_eq!(screen("{\"t\":\"screen.tail\",\"id\":4,\"count\":200}", SCREEN), Ok(Request::ScreenTail { id: 4, count: 200 }));
+        assert_eq!(screen("{\"t\":\"screen.tail\",\"id\":6,\"count\":1}", SCREEN), Ok(Request::ScreenTail { id: 6, count: 1 }));
+        // Without `screen` acked a read is a type the connection does not
+        // allow, whatever else it acked.
+        let everything_else = Allowed { local: true, hooks: true, mcp: true, screen: false };
+        for text in ["{\"t\":\"screen.read\",\"id\":2}", "{\"t\":\"screen.tail\",\"id\":2,\"count\":5}"] {
+            for allowed in [everything_else, Allowed::default()] {
+                assert_eq!(screen(text, allowed).unwrap_err().code, CODE_UNKNOWN_TYPE, "{text} with {allowed:?}");
+            }
+        }
+        // `screen` alone allows no terminal message.
+        assert_eq!(screen("{\"t\":\"term.detach\",\"id\":2}", SCREEN).unwrap_err().code, CODE_UNKNOWN_TYPE);
+        assert_eq!(MAX_TAIL_LINES, 200);
+    }
+
+    #[test]
+    fn a_screen_read_that_breaks_its_schema_is_bad_field() {
+        for bad in [
+            "{\"t\":\"screen.read\",\"id\":3}",
+            "{\"t\":\"screen.read\"}",
+            "{\"t\":\"screen.read\",\"id\":2,\"count\":5}",
+            "{\"t\":\"screen.read\",\"id\":2,\"id\":2}",
+            "{\"t\":\"screen.tail\",\"id\":2}",
+            "{\"t\":\"screen.tail\",\"id\":2,\"count\":0}",
+            "{\"t\":\"screen.tail\",\"id\":2,\"count\":201}",
+            "{\"t\":\"screen.tail\",\"id\":2,\"count\":-1}",
+            "{\"t\":\"screen.tail\",\"id\":2,\"count\":1.5}",
+            "{\"t\":\"screen.tail\",\"id\":2,\"count\":\"5\"}",
+            "{\"t\":\"screen.tail\",\"id\":2,\"count\":5,\"from\":0}",
+        ] {
+            assert_eq!(screen(bad, SCREEN).unwrap_err().code, CODE_BAD_FIELD, "{bad}");
+        }
     }
 }

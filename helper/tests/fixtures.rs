@@ -8,9 +8,10 @@ use aicc_helper::hello;
 use aicc_helper::holder::{self, HookEvent};
 use aicc_helper::hook;
 use aicc_helper::json::{self, Value};
-use aicc_helper::pty::Conpty;
+use aicc_helper::pty::{Conpty, PtySize};
 use aicc_helper::request::{self, Allowed, Request};
 use aicc_helper::ring::DEFAULT_RING_BYTES;
+use aicc_helper::screen::{self, Screen};
 use aicc_helper::store::{self, Listing, Record};
 use aicc_helper::{relay, serve, transport};
 use std::fs;
@@ -228,13 +229,19 @@ fn described(req: &Request) -> Value {
         Request::McpOpen { stream } => Value::obj(vec![("type", Value::str("mcp.open")), ("stream", Value::uint(*stream))]),
         Request::Mcp { stream, message, .. } => Value::obj(vec![("type", Value::str("mcp")), ("stream", Value::uint(*stream)), ("message", message.clone())]),
         Request::McpClose { stream } => Value::obj(vec![("type", Value::str("mcp.close")), ("stream", Value::uint(*stream))]),
+        Request::ScreenRead { id } => Value::obj(head("screen.read", *id)),
+        Request::ScreenTail { id, count } => {
+            let mut m = head("screen.tail", *id);
+            m.push(("count", Value::uint(*count as u64)));
+            Value::obj(m)
+        }
     }
 }
 
 /// A message read on a connection that acked `local` or not, and neither
 /// `hooks` nor `mcp`: the app's own ack.
 fn local_only(v: &Value, local: bool) -> Result<Request, request::Refusal> {
-    request::parse_allowed(v, Allowed { local, hooks: false, mcp: false })
+    request::parse_allowed(v, Allowed { local, hooks: false, mcp: false, screen: false })
 }
 
 // ── local.json `hooks`: hook events (capability `hooks`) ────────────────────
@@ -242,7 +249,7 @@ fn local_only(v: &Value, local: bool) -> Result<Request, request::Refusal> {
 /// What a vector's `acked` says the connection acked; by default core,
 /// local and hooks.
 fn acked(case: &Value) -> Allowed {
-    acked_or(case, Allowed { local: true, hooks: true, mcp: false })
+    acked_or(case, Allowed { local: true, hooks: true, mcp: false, screen: false })
 }
 
 /// What a vector's `acked` says the connection acked; `default` when it
@@ -252,7 +259,7 @@ fn acked_or(case: &Value, default: Allowed) -> Allowed {
         None => default,
         Some(caps) => {
             let has = |cap: &str| caps.iter().any(|c| c.as_str() == Some(cap));
-            Allowed { local: has("local"), hooks: has(serve::HOOKS_CAP), mcp: has(serve::MCP_CAP) }
+            Allowed { local: has("local"), hooks: has(serve::HOOKS_CAP), mcp: has(serve::MCP_CAP), screen: has(serve::SCREEN_CAP) }
         }
     }
 }
@@ -349,7 +356,7 @@ fn the_largest_hook_event_fits_a_frame_once_launched() {
     assert_eq!(event.len() as u64, n(largest, "event_bytes"));
     assert!(event.len() <= serve::MAX_JSON_AFTER_LAUNCH, "the largest event is {} bytes", event.len());
     // As a hook.event: the most is taken, one byte more is too large.
-    let both = Allowed { local: true, hooks: true, mcp: false };
+    let both = Allowed { local: true, hooks: true, mcp: false, screen: false };
     let message = |p: &str| json::parse(format!("{{\"t\":\"hook.event\",\"id\":2,\"kind\":\"{kind}\",\"payload\":{p}}}").as_bytes()).expect("JSON");
     assert!(request::parse_allowed(&message(&payload), both).is_ok(), "the largest payload is refused");
     let refused = request::parse_allowed(&message(&payload_of(most + 1)), both).expect_err("a payload one byte larger");
@@ -363,7 +370,7 @@ fn tool_stream_messages_read_as_the_fixtures_say() {
     let doc = load("local.json");
     let mcp = doc.get("mcp").expect("mcp");
     let requests = mcp.get("requests").expect("requests");
-    let relay_ack = Allowed { local: true, hooks: false, mcp: true };
+    let relay_ack = Allowed { local: true, hooks: false, mcp: true, screen: false };
     let mut ran = 0;
     for case in items(requests, "valid") {
         let name = text(case, "name");
@@ -438,7 +445,9 @@ fn the_tool_stream_limits_match_the_constants() {
 fn kept_tool_stream_vectors_read_as_the_fixtures_say() {
     let doc = load("local.json");
     let away = doc.get("away").expect("away");
-    assert_eq!(strings(away, "offered"), serve::HOLDER_CAPS.to_vec());
+    // What a holder offered before screen reads; one of now is the `screen`
+    // part's.
+    assert_eq!(strings(away, "offered"), serve::HOLDER_CAPS[..5].to_vec());
     assert_eq!(strings(away, "relay_caps"), relay::ACK_CAPS.to_vec());
     let messages = items(away, "messages");
     let types: Vec<&str> = messages.iter().map(|m| text(m, "type")).collect();
@@ -471,6 +480,76 @@ fn kept_tool_stream_vectors_read_as_the_fixtures_say() {
     assert_eq!(n("held_calls"), relay::MAX_HELD as u64);
     assert_eq!(n("held_bytes"), relay::MAX_HELD_BYTES as u64);
     assert_eq!(n("remembered_calls"), relay::MAX_REMEMBERED as u64);
+}
+
+// ── local.json `screen`: screen reads (capability `screen`) ─────────────────
+
+#[test]
+fn screen_reads_read_as_the_fixtures_say() {
+    let doc = load("local.json");
+    let part = doc.get("screen").expect("screen");
+    assert_eq!(strings(part, "offered"), serve::HOLDER_CAPS.to_vec());
+    let l = part.get("limits").expect("limits");
+    let n = |k: &str| l.get(k).and_then(Value::as_u64).unwrap_or_else(|| panic!("missing number {k}"));
+    assert_eq!(n("tail_lines"), request::MAX_TAIL_LINES);
+    assert_eq!(n("tail_lines"), screen::TAIL_MAX as u64);
+    assert_eq!(n("scrollback_lines"), screen::SCROLLBACK_LINES as u64);
+    assert_eq!(n("param_ceiling"), u64::from(screen::PARAM_CEILING));
+    assert_eq!(n("answer_bytes"), serve::SCREEN_ANSWER_MAX as u64);
+    assert_eq!(serve::SCREEN_ANSWER_MAX, frame::MAX_JSON_HELPER_TO_APP);
+    let requests = part.get("requests").expect("requests");
+    let reader = Allowed { local: false, hooks: false, mcp: false, screen: true };
+    let mut ran = 0;
+    for case in items(requests, "valid") {
+        let name = text(case, "name");
+        let value = json::parse(text(case, "json").as_bytes()).unwrap_or_else(|e| panic!("{name}: not JSON: {e:?}"));
+        let req = request::parse_allowed(&value, acked_or(case, reader)).unwrap_or_else(|r| panic!("{name}: refused with {}: {}", r.code, r.text));
+        assert_eq!(described(&req).to_json(), case.get("expect").expect("expect").to_json(), "{name}");
+        ran += 1;
+    }
+    for case in items(requests, "invalid") {
+        let name = text(case, "name");
+        let value = json::parse(text(case, "json").as_bytes()).unwrap_or_else(|e| panic!("{name}: not JSON: {e:?}"));
+        let refusal = request::parse_allowed(&value, acked_or(case, reader)).expect_err(name);
+        assert_eq!(refusal.code, text(case, "error"), "{name}: {}", refusal.text);
+        ran += 1;
+    }
+    assert!(ran >= 10, "only {ran} screen read vectors");
+}
+
+#[test]
+fn screen_answers_are_the_documented_bytes() {
+    let doc = load("local.json");
+    let part = doc.get("screen").expect("screen");
+    let messages = items(part, "messages");
+    let mut types: Vec<&str> = messages.iter().map(|m| text(m, "type")).collect();
+    types.dedup();
+    assert_eq!(types, vec!["screen.rows", "screen.lines"]);
+    let n = |v: &Value, k: &str| v.get(k).and_then(Value::as_u64).unwrap_or_else(|| panic!("missing number {k}"));
+    for case in messages {
+        let name = text(case, "name");
+        // The session's output from its first byte, on a screen of the
+        // vector's size, in one piece and a byte at a time.
+        for dripped in [false, true] {
+            let mut s = Screen::new(PtySize { cols: n(case, "cols") as u16, rows: n(case, "rows") as u16 });
+            let feed = text(case, "feed").as_bytes();
+            if dripped {
+                for b in feed {
+                    s.feed(std::slice::from_ref(b));
+                }
+            } else {
+                s.feed(feed);
+            }
+            let re = n(case, "re");
+            let message = match text(case, "type") {
+                "screen.rows" => serve::screen_rows_message(re, &s.read()),
+                _ => serve::screen_lines_message(re, &s.tail(n(case, "count") as usize)),
+            };
+            assert_eq!(message.to_json(), text(case, "json"), "{name} (a byte at a time: {dripped})");
+            assert!(frame::encode(&frame::Frame::json(0, message), Direction::HelperToApp).is_ok(), "{name}");
+        }
+    }
+    assert!(items(part, "invalid_messages").len() >= 15);
 }
 
 #[test]

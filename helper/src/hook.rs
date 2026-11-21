@@ -635,7 +635,7 @@ mod tests {
             let message = hook_event(&kind, got);
             let bytes = frame::encode(&Frame::json(0, message.clone()), Direction::AppToHelper).expect("the message encodes");
             assert!(bytes.len() - 9 <= MAX_JSON_AFTER_LAUNCH, "message {n} is {} bytes", bytes.len() - 9);
-            let parsed = request::parse_allowed(&message, Allowed { local: true, hooks: true, mcp: false });
+            let parsed = request::parse_allowed(&message, Allowed { local: true, hooks: true, mcp: false, screen: false });
             match parsed {
                 Ok(Request::HookEvent { payload, bytes, .. }) => {
                     assert_eq!(bytes, payload.to_json().len(), "payload {n}");

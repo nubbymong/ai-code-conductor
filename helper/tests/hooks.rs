@@ -415,7 +415,7 @@ fn hook_runs_reach_the_attached_app_in_order_and_whole() {
     let sid = "hooks-order-01";
     let held = Held(hold(&store_dir, sid));
     let mut app = App::connect(&held.0, &ACK_CAPS);
-    assert_eq!(app.client.hello.caps, vec!["core".to_string(), "local".to_string(), "hooks".to_string(), "mcp".to_string(), "away".to_string()]);
+    assert_eq!(app.client.hello.caps, vec!["core".to_string(), "local".to_string(), "hooks".to_string(), "mcp".to_string(), "away".to_string(), "screen".to_string()]);
     launch(&mut app, &work);
     attach(&mut app);
 
