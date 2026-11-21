@@ -2492,6 +2492,10 @@ describe('the 2.1.3-beta.11 sweep', () => {
     const para = body('known-issues').split('\n\n').find((x) => x.startsWith('With Claude Code and Codex sessions through the session helper on, a Claude Code or Codex session the helper holds can reach the Conductor\'s tools through the session helper.'))!
     expect(para).toContain("If the app's connection to the session helper drops while such a session runs and then comes back, that session's tool server has ended")
     expect(para).toContain("Workaround: in Claude Code, type /mcp and reconnect the conductor server; in Codex, or if that does not help, restart the session's tab.")
+    // The Machines section says the tools' route changed too, not only the hooks', and points to Known issues for when they stop.
+    const m = body('machines')
+    expect(m).toContain("A Claude Code or Codex session the helper holds can also reach the Conductor's tools through the session helper. Such a session does not survive a crash yet.")
+    expect(m).toContain("what to do when such a session's Conductor tools stop working")
   })
 
   it('the release notes carry the series warning, the two minutes, the way back and every change line', () => {
@@ -2500,6 +2504,9 @@ describe('the 2.1.3-beta.11 sweep', () => {
     expect(w).toContain('only if the new version opens within two minutes of the old one closing')
     expect(w).toContain('To go back to 2.1.3-beta.10')
     expect(entry.highlights).toContain('Codex up to version 0.171.0 now counts as tested')
+    // The row gives no reason, so the highlights promise none: they say what the row says.
+    expect(entry.highlights).toContain("the Code review row says that Codex's own sign-in on this computer cannot run reviews")
+    expect(entry.highlights).not.toContain('says why')
     const all = entry.changes.map((c) => c.description).join('\n')
     for (const said of [
       'Codex up to version 0.171.0 now counts as tested.',

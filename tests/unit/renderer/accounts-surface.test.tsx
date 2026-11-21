@@ -22,7 +22,7 @@
  *     the cancel race while beginSetup is in flight; the unmount abandon;
  *     linking to an existing identity;
  *   - Sign in again: when it is offered, the same-account question (a
- *     required choice of two, neither chosen: #289), the method family, the
+ *     required choice of two, neither chosen: aicc_planning#289), the method family, the
  *     API key path and its cancel race, refusals;
  *   - registry-not-ready, conflicts, the external adoption states, pending
  *     setups.
@@ -1203,7 +1203,7 @@ describe('Sign in again', () => {
     for (const st of ['signed-in', 'signed-out', 'expired'] as const) expect(canOfferSignInAgain({ ...local, lastKnownAuthState: st }), st).toBe(false)
   })
 
-  it('asks which account you mean with neither answer chosen, and no sign-in button works until one is (#289)', async () => {
+  it('asks which account you mean with neither answer chosen, and no sign-in button works until one is (aicc_planning#289)', async () => {
     pa.beginSetup.mockResolvedValue({ ok: true, accountId: 'acc-new' })
     render(snapshot({ accounts: [work, expired, keyAccount] }))
     // One account per recorded method (ChatGPT in the browser, device code,
@@ -1237,7 +1237,7 @@ describe('Sign in again', () => {
     expect(pa.issueSecretHandle).not.toHaveBeenCalled()
   })
 
-  it('keeps no answer once the dialog closes: chosen, cancelled and opened again, neither answer is chosen (#289)', async () => {
+  it('keeps no answer once the dialog closes: chosen, cancelled and opened again, neither answer is chosen (aicc_planning#289)', async () => {
     render(snapshot({ accounts: [work, keyAccount] }))
     await openFor('acc-work', 'same')
     await click('sign-in-again-cancel')
@@ -1255,7 +1255,7 @@ describe('Sign in again', () => {
     expect(pa.signInAgain).not.toHaveBeenCalled()
   })
 
-  it('names both answers in full; the old box and its hint are gone (#289)', async () => {
+  it('names both answers in full; the old box and its hint are gone (aicc_planning#289)', async () => {
     render(snapshot({ accounts: [work, keyAccount] }))
     await openFor('acc-key', null)
     expect(q('sign-in-again-who')?.textContent).toContain('Personal')
@@ -1275,7 +1275,7 @@ describe('Sign in again', () => {
     expect(q('sign-in-again-different-hint')?.textContent).toBe('This account stays as it is.')
   })
 
-  it('"The same account as before" signs it in again with the explicit yes and takes the key here (#289, P3.3)', async () => {
+  it('"The same account as before" signs it in again with the explicit yes and takes the key here (aicc_planning#289, P3.3)', async () => {
     pa.issueSecretHandle.mockResolvedValue({ ok: true, handle: HANDLE })
     pa.signInAgain.mockResolvedValue({ ok: true, state: 'signed-in' })
     render(snapshot({ accounts: [work, keyAccount] }))
@@ -1296,7 +1296,7 @@ describe('Sign in again', () => {
     expect(q('add-account-dialog')).toBeNull()
   })
 
-  it('"A different account" starts a new account through Add account, and nothing runs or is taken here (#289, P3.3)', async () => {
+  it('"A different account" starts a new account through Add account, and nothing runs or is taken here (aicc_planning#289, P3.3)', async () => {
     pa.beginSetup.mockResolvedValue({ ok: true, accountId: 'acc-new' })
     pa.signIn.mockResolvedValue({ ok: false, code: 'cancelled', message: 'Cancelled.' })
     render(snapshot({ accounts: [work, keyAccount] }))

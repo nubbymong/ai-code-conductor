@@ -43,7 +43,7 @@ export const changelog: ChangelogEntry[] = [
   {
     version: '2.1.3-beta.11',
     date: '2026-11-21',
-    highlights: 'Codex up to version 0.171.0 now counts as tested, and the Codex model picker offers the four models Codex 0.170.0 and 0.171.0 list first. Sign in again on a Codex account now asks which account you are signing in to, the Code review row says why Codex\'s own sign-in on this computer cannot review, and the update check names the version it offers in full. With Claude Code and Codex sessions through the session helper on, a session the helper holds now reaches the Conductor\'s tools through the helper.',
+    highlights: 'Codex up to version 0.171.0 now counts as tested, and the Codex model picker offers the four models Codex 0.170.0 and 0.171.0 list first. Sign in again on a Codex account now asks which account you are signing in to, the Code review row says that Codex\'s own sign-in on this computer cannot run reviews, and the update check names the version it offers in full. With Claude Code and Codex sessions through the session helper on, a session the helper holds now reaches the Conductor\'s tools through the helper.',
     warnings: [
       'This beta series begins moving the app\'s background services, and over the next betas your sessions, onto one helper per machine. If you want a quiet build, stay on the stable release.',
       'On Windows, choosing Save sessions at an update keeps the terminals the session helper holds running only if the new version opens within two minutes of the old one closing. The installer\'s pages count toward those two minutes, so finish the installer promptly.',
