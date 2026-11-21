@@ -2553,6 +2553,6 @@ describe('the 2.1.3-beta.12 known issues', () => {
   it('the three Codex screens the reader still refuses each say what is not typed and give a workaround (aicc_planning#357)', () => {
     expect(para('With Codex 0.170.0, the app types nothing into a Codex session after its first prompt while the line under Codex\'s prompt takes two rows.')).toContain('Workaround: widen the pane, or use a shorter working folder.')
     expect(para('Text the app types into a Codex session while Codex writes a reply')).toContain('Workaround: send it again once the reply ends.')
-    expect(para('While Codex shows a warning count on the line under its prompt')).toContain('Workaround: type the note into the Codex tab yourself.')
+    expect(para('While Codex shows a warning count on the line under its prompt')).toContain('Workaround: type the note into the Codex session yourself.')
   })
 })
