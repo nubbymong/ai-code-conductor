@@ -284,9 +284,6 @@ impl Holder {
                         st.terminal = None;
                     }
                 }
-                #[cfg(test)]
-                hold_the_screen(&out_shared, &mut gate);
-                feed_screen(&out_shared, &buf[..n]);
             }
             // The live channel stays open: it closes once the exit is known,
             // so a client never sees it close before the code is set.
@@ -354,14 +351,7 @@ impl Holder {
     /// Resize the terminal, then the screen with it. A resize the terminal
     /// refused leaves the screen as it was, as the program's size is.
     pub fn resize(&self, size: PtySize) -> io::Result<()> {
-        lock(&self.pty).resize(size)?;
-        let mut slot = lock(&self.shared.screen);
-        if let Some(s) = slot.as_mut() {
-            if panic::catch_unwind(AssertUnwindSafe(|| s.resize(size))).is_err() {
-                *slot = None;
-            }
-        }
-        Ok(())
+        lock(&self.pty).resize(size)
     }
 
     /// The screen now (`screen.read`); None when it is not kept any more.
