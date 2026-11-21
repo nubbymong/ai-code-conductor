@@ -42,7 +42,7 @@ export interface ChangelogEntry {
 export const changelog: ChangelogEntry[] = [
   {
     version: '2.1.3-beta.12',
-    date: '2026-11-22',
+    date: '2026-11-21',
     highlights: 'With Plain terminals through the session helper on, a terminal shown again after the helper no longer holds its earlier output now says so in one line and asks its program, if it is still running, to draw its screen again. With Claude Code and Codex sessions through the session helper on, a session the helper holds keeps the Conductor\'s tools when the app\'s connection to the session helper drops and comes back. With Codex 0.170.0, the app now types into a Codex session while Codex shows its usual hint line under the prompt.',
     warnings: [
       'This beta series begins moving the app\'s background services, and over the next betas your sessions, onto one helper per machine. If you want a quiet build, stay on the stable release.',

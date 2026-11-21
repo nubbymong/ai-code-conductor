@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > `src/renderer/changelog.ts`. After editing that file, run `npm run changelog`
 > (CI enforces that this file is in sync via `npm run changelog:check`).
 
-## [2.1.3-beta.12] - 2026-11-22
+## [2.1.3-beta.12] - 2026-11-21
 
 ### Warnings
 - This beta series begins moving the app's background services, and over the next betas your sessions, onto one helper per machine. If you want a quiet build, stay on the stable release.
