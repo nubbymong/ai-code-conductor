@@ -603,9 +603,12 @@ export class HelperPty implements IPty {
    * shown first and a new one starts. A hold ends at the replay's end, when
    * the connection is replaced, when the terminal ends, starts the usual way
    * or is let go of for an update, or HOLD_MAX_MS after it started; whichever
-   * way, what was held is shown, the same way, once. Bytes at the replay's
-   * very start that continue a character cut in half are still dropped before
-   * decoding. Typed input and resizes go out during a hold as at any time. A
+   * way, what was held is shown, the same way, once. A take-over still
+   * waiting for its tab to reach the holder's size (startSizeWait) keeps a
+   * hold that is all in, or past HOLD_MAX_MS, until that wait ends, and sends
+   * no size meanwhile. Bytes at the replay's very start that continue a
+   * character cut in half are still dropped before decoding. Typed input goes
+   * out during a hold as at any time, and so do resizes outside that wait. A
    * program still running is asked to redraw once the replay is shown
    * (redrawOnce), after the held text. Nothing clears the view or resets the
    * terminal, and no mode is set but those the left-out part of the replay

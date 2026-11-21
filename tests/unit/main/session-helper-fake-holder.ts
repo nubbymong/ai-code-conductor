@@ -204,7 +204,7 @@ export class FakeHolder {
   readonly relayTold: Array<{ stream: number; t: 'mcp.away' | 'mcp.back' | 'mcp.close' }> = []
   /** How it answers screen.read: its rows, an error, a reply that does not read, or not at all. */
   screenAnswer: 'rows' | 'error' | 'bad' | 'none' = 'rows'
-  /** The screen reads it answered. */
+  /** The screen reads it was asked for, once launched, by a connection that acked `screen`, one it leaves unanswered (`screenAnswer` 'none') included. */
   screenReads = 0
 
   constructor(readonly sid: string, readonly label: string, readonly store: string) {
