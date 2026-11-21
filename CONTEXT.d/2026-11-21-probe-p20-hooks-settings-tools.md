@@ -46,9 +46,11 @@ d51689a7... (the committed files; LF line ends). Clean-up complete in both runs.
 
 **What it means for S16's second half** (as fixed before measuring).
 - Step 2 (PreToolUse through the hook mode) is a default, not a gate on step 4: a held Claude
-  Code session's tools still run against a gone gateway. It is still the only way PreToolUse
-  reaches a new run, since Claude Code does not read its settings file again, and it removes
-  the "hook failed" line each tool call shows until then.
+  Code session's tools still run against a gone gateway. Claude Code does not read its
+  settings file again, so a take-over cannot give it a new port or secret there. PreToolUse
+  then reaches a new run through the hook mode, or only while the new gateway has the old port
+  and takes the old secret again (item 3's second way). Step 2 also removes the "hook failed"
+  line each tool call shows until then.
 - Step 4 may keep a Claude Code session whose PreToolUse stays on the gateway. A gateway that
   hangs stalls each tool call 10 minutes; recorded, no gate.
 - Step 5 writes nothing into `settings-<sid>.json` or `mcp-<sid>.json` for a running Claude

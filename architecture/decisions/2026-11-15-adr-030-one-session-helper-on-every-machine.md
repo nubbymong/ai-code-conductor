@@ -617,8 +617,10 @@ writes it), the next turn's hook reached the old URL in 3 of 3 runs, about 3.8 s
 change, and nothing was shown. With its tool server ended and its `--mcp-config` naming
 another, `/mcp` and Reconnect started the old one again in 3 of 3 runs ("Reconnected to
 conductor."), and nothing started a server before `/mcp` in the 5 s waited. So a take-over
-cannot move a running Claude Code to the new run's gateway through its settings file:
-PreToolUse reaches a new run only through the hook mode (step 2); and the relay command a
+cannot give a running Claude Code a new gateway port or secret through its settings file:
+PreToolUse reaches a new run through the hook mode (step 2), or only while the new gateway has
+the old port and takes the session's old secret again (the second way in item 3 of S16's
+list); and the relay command a
 session starts with must stay valid for the CLI's life, as S15 built it (it names the store and
 the session, not the app run). (c) Claude Code LISTS AGAIN: `tools/list` came 1 to 4 ms after
 the notification, and the next turn named the added tool, in 3 of 3 runs. Codex, both
