@@ -32,7 +32,8 @@
  * than it holds is answered from the ring's start with `truncated` true, as a
  * real holder answers one once 2 MiB have gone past. A replay can be cut
  * short by a close (`cutReplay`), as a holder closes a connection that fell
- * behind in the middle of one.
+ * behind in the middle of one, or stop with its connection left open
+ * (`stallReplay`), a replay whose end never comes.
  *
  * The away clock (section 15) runs only when a test gives the helper one
  * (`awayClock`): then a holder with no connection attached ends itself `away`
@@ -151,6 +152,10 @@ export class FakeHolder {
    *  is closed there (`busy`), as one that fell behind is; `then` runs after
    *  the close. Once. */
   cutReplay: { at: number; then?: () => void } | null = null
+  /** Set: the next attach's replay stops after `at` bytes and the rest never
+   *  comes, while its connection stays open (a replay whose end never comes).
+   *  Once. */
+  stallReplay: { at: number } | null = null
   /** Answers ping; false leaves it unanswered. */
   answerPing = true
   /** How long a pong waits. */
@@ -405,6 +410,12 @@ export class FakeHolder {
           conn.sendJson({ t: 'error', code: 'busy', text: 'this connection fell 256 chunks behind the output' })
           conn.close()
           cut.then?.()
+          return
+        }
+        const stall = this.stallReplay
+        if (stall && stall.at < replay.length) {
+          this.stallReplay = null
+          conn.sendRaw(replay.subarray(0, stall.at))
           return
         }
         conn.sendRaw(replay)

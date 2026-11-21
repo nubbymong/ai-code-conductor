@@ -15,7 +15,10 @@
  *
  * 2.1.3-beta.12 (plan section A1): a terminal shown again from the middle of
  * its output (the holder no longer held the offset asked for) says so, and
- * its program is asked to redraw; vitest's clock counts the 300 ms.
+ * its program is asked to redraw; vitest's clock counts the 300 ms. Its
+ * replay is held until its end and shown in one piece, the notice first and
+ * then no more than the tab keeps, so the notice stays within reach (the VM
+ * smoke of the release PR found 2 MiB of plain text pushed it out).
  */
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { Terminal } from '@xterm/headless'
@@ -25,7 +28,8 @@ import { join } from 'path'
 import type { IPty } from 'node-pty'
 import { HolderConnection, HolderError, INPUT_FRAMES_PER_PING, unixEndpointFolderProblem } from '../../../src/main/session-helper/connection'
 import { EventEmitter } from 'events'
-import { HelperPty, LOST_EXIT_CODE, NothingStartedError, type HelperPtyDriver } from '../../../src/main/session-helper/helper-pty'
+import { HOLD_MAX_MS, HelperPty, LOST_EXIT_CODE, NothingStartedError, type HelperPtyDriver } from '../../../src/main/session-helper/helper-pty'
+import { TERMINAL_SCROLLBACK_LINES } from '../../../src/shared/terminal-scrollback'
 import { PTY_IO_FAILED_GRACE_MS, PTY_IO_FAILED_TEXT } from '../../../src/main/pty-input-guard'
 import { RAW_MAX, heldSessionId, type HolderRecord, type LaunchSpec } from '../../../src/main/session-helper/protocol'
 import { SessionHelperManager } from '../../../src/main/session-helper/manager'
@@ -834,8 +838,9 @@ describe('shown again from the middle of its output (2.1.3-beta.12, plan section
   /** A term.resize the app sent, with what the tab had been shown when it went. */
   type Sent = { cols: unknown; rows: unknown; shown: string }
   /** A rig whose connections note each term.resize the app sends; `onResize`
-   *  runs as each one goes, before it is sent (the rig, and how many went). */
-  function watched(o: Parameters<typeof rig>[0] = {}, onResize?: (r: Rig, n: number) => void): { r: Rig; sent: Sent[] } {
+   *  runs as each one goes, before it is sent (the rig, and how many went),
+   *  and `onEnd` as each term.end goes. */
+  function watched(o: Parameters<typeof rig>[0] = {}, onResize?: (r: Rig, n: number) => void, onEnd?: (r: Rig) => void): { r: Rig; sent: Sent[] } {
     const sent: Sent[] = []
     const box: { r?: Rig } = {}
     const r = rig({
@@ -848,6 +853,7 @@ describe('shown again from the middle of its output (2.1.3-beta.12, plan section
             sent.push({ cols: msg.cols, rows: msg.rows, shown: box.r?.text() ?? '' })
             if (box.r) onResize?.(box.r, sent.length)
           }
+          if (msg.t === 'term.end' && box.r) onEnd?.(box.r)
           return request(msg, onReply)
         }
         return c
@@ -1090,4 +1096,195 @@ describe('shown again from the middle of its output (2.1.3-beta.12, plan section
     expect(r.logs).toEqual([`[session-helper] ${r.h.sid}: 5000 bytes of earlier output are no longer held, so they are not shown; asked its program to redraw`])
     expect(r.logs.join('\n')).not.toContain('printed')
   }))
+
+  /*
+   * The replay after a gap is held until its end and shown in one piece: the
+   * notice first, then no more of it than the tab keeps (its scrollback,
+   * TERMINAL_SCROLLBACK_LINES, less a screen's rows), cut at a line start,
+   * so the notice is not pushed out of reach (the release smoke: 2 MiB of
+   * plain text is some 28,700 lines, a tab keeps 10,000). The text after the
+   * replay's last line break is a row too: the row the cursor is on.
+   */
+
+  /** `n` numbered lines, from `line <from>`, each ending CRLF. */
+  const numbered = (n: number, from = 1) => Array.from({ length: n }, (_, i) => `line ${from + i}\r\n`).join('')
+  /** How many whole lines of one row each the tab is shown after the notice, for a tab `rows` high. */
+  const fits = (rows: number) => TERMINAL_SCROLLBACK_LINES - rows - 1
+  /** What a hold shows: the cancel character, the attribute reset, the notice, then `tail`. */
+  const piece = (tail: string) => `${CANCEL}${ATTRIBUTE_RESET}${NOTICE}\r\n${tail}`
+  /** Real turns of the event loop, so the in-memory streams deliver what was sent. */
+  const turns = async (n = 50) => { for (let i = 0; i < n; i++) await new Promise<void>((res) => setImmediate(res)) }
+  /** Every row a terminal that keeps what a tab keeps holds after `stream`, scrollback first. On the real clock. */
+  async function rowsAfter(stream: string, cols: number, rows: number): Promise<string[]> {
+    const term = new Terminal({ cols, rows, scrollback: TERMINAL_SCROLLBACK_LINES, allowProposedApi: true })
+    try {
+      await new Promise<void>((res) => term.write(stream, res))
+      const b = term.buffer.active
+      return Array.from({ length: b.length }, (_, i) => b.getLine(i)?.translateToString(true) ?? '')
+    } finally {
+      term.dispose()
+    }
+  }
+
+  it('a replay of more rows than the tab keeps: in one piece, the notice first, then only its last lines, so the notice is the first line the tab keeps', onFakeClock(async () => {
+    const total = 12_000
+    const kept = fits(24)
+    const { r, sent } = watched({ adopt: true, cols: 80, rows: 24, before: heldFrom(5000, numbered(total)) })
+    await settle(() => sent.length > 0, 'the redraw')
+    expect(r.seen).toEqual([piece(numbered(kept, total - kept + 1))])
+    expect(r.text()).not.toContain(`line ${total - kept}\r\n`)
+    expect(sent[0].shown).toBe(r.text())
+    expect(r.logs).toContain(`[session-helper] ${r.h.sid}: the oldest ${total - kept} lines of its replay are not shown either, so the line saying so stays within the ${TERMINAL_SCROLLBACK_LINES} lines the tab keeps`)
+    // The redraw's log line keeps its start (the release smoke reads it).
+    expect(r.logs.filter((l) => l.includes('no longer held'))).toEqual([`[session-helper] ${r.h.sid}: 5000 bytes of earlier output are no longer held, so they are not shown; asked its program to redraw`])
+    vi.useRealTimers()
+    const rows = await rowsAfter(r.text(), 80, 24)
+    expect(rows[0]).toBe(NOTICE)
+    expect(rows[1]).toBe(`line ${total - kept + 1}`)
+    expect(rows).toContain(`line ${total}`)
+  }))
+
+  it('a short replay, and one of exactly what the tab keeps: the notice, then all of it, in one piece once its end is in', onFakeClock(async () => {
+    const short = watched({ adopt: true, cols: 80, rows: 24, before: heldFrom(5000, numbered(50)) })
+    await settle(() => short.sent.length > 0, 'the redraw')
+    expect(short.r.seen).toEqual([piece(numbered(50))])
+    const full = watched({ adopt: true, cols: 80, rows: 24, before: heldFrom(5000, numbered(fits(24))) })
+    await settle(() => full.sent.length > 0, 'the redraw')
+    expect(full.r.seen).toEqual([piece(numbered(fits(24)))])
+    expect([...short.r.logs, ...full.r.logs].filter((l) => l.includes('not shown either'))).toEqual([])
+  }))
+
+  it('a line three times the terminal\'s width counts as three rows', onFakeClock(async () => {
+    const cols = 40
+    const rows = 10
+    const wide = (i: number) => `${String(i).padStart(5, '0')}${'w'.repeat(3 * cols - 5)}\r\n`
+    const total = 4000
+    const { r, sent } = watched({ adopt: true, cols, rows, before: heldFrom(5000, Array.from({ length: total }, (_, i) => wide(i + 1)).join('')) })
+    await settle(() => sent.length > 0, 'the redraw')
+    // 10,000 less a screen (10) is 9,990 rows: the cursor's row, and 3,329 lines of three rows.
+    const kept = Math.floor(fits(rows) / 3)
+    expect(kept).toBe(3329)
+    expect(r.seen).toEqual([piece(Array.from({ length: kept }, (_, i) => wide(total - kept + 1 + i)).join(''))])
+    vi.useRealTimers()
+    const shown = await rowsAfter(r.text(), cols, rows)
+    // The notice, 72 characters, takes two rows at 40 columns.
+    expect(`${shown[0]}${shown[1]}`.replace(/ /g, '')).toBe(NOTICE.replace(/ /g, ''))
+    expect(shown[2]).toBe(wide(total - kept + 1).slice(0, cols))
+  }))
+
+  it('a wide character counts two columns, and a tab moves to the next multiple of 8', onFakeClock(async () => {
+    const cols = 40
+    const rows = 10
+    // 45 columns each: two rows at 40, where one column a character would make them one.
+    const wideChars = (i: number) => `${String(i).padStart(5, '0')}${String.fromCodePoint(0x4e2d).repeat(20)}\r\n`
+    const tabs = (i: number) => `${String(i).padStart(5, '0')}\t\t\t\t\tx\r\n`
+    const total = 6000
+    const kept = Math.floor(fits(rows) / 2)
+    for (const line of [wideChars, tabs]) {
+      const { r, sent } = watched({ adopt: true, cols, rows, before: heldFrom(5000, Array.from({ length: total }, (_, i) => line(i + 1)).join('')) })
+      await settle(() => sent.length > 0, 'the redraw')
+      expect(r.seen).toEqual([piece(Array.from({ length: kept }, (_, i) => line(total - kept + 1 + i)).join(''))])
+    }
+  }))
+
+  it('escape sequences take no width, and the cut never lands inside one: a title string holding a line break stays whole', onFakeClock(async () => {
+    const budget = TERMINAL_SCROLLBACK_LINES - 24
+    // 70 columns drawn in 85 characters: two rows each if its colour sequences counted.
+    const coloured = (i: number) => `\x1b[38;5;123m${String(i).padStart(5, '0')}${'c'.repeat(65)}\x1b[0m\r\n`
+    const title = '\x1b]0;title one\ntitle two\x07a line after a title\r\n'
+    const older = Array.from({ length: 3000 }, (_, i) => `older ${i + 1}\r\n`).join('')
+    // After the title's line, as many lines as fit with it and the cursor's row.
+    const after = Array.from({ length: budget - 2 }, (_, i) => coloured(i + 1)).join('')
+    const { r, sent } = watched({ adopt: true, cols: 80, rows: 24, before: heldFrom(5000, `${older}${title}${after}`) })
+    await settle(() => sent.length > 0, 'the redraw')
+    expect(r.seen).toEqual([piece(`${title}${after}`)])
+    vi.useRealTimers()
+    const rows = await rowsAfter(r.text(), 80, 24)
+    expect(rows.slice(0, 2)).toEqual([NOTICE, 'a line after a title'])
+  }))
+
+  it('the connection closes in the middle of a long replay: the notice and what was held, once, then the attach again shows the rest with no second notice', onFakeClock(async () => {
+    const total = 12_000
+    const kept = fits(50)
+    const { r, sent } = watched({ adopt: true, cols: 132, rows: 50, before: (h) => { heldFrom(5000, numbered(total))(h); h.cutReplay = { at: Buffer.byteLength(numbered(11_000)) } } })
+    await settle(() => r.h.attaches === 2 && sent.length > 0, 'the attach again and the first half')
+    expect(r.seen[0]).toBe(piece(numbered(kept, 11_000 - kept + 1)))
+    expect(r.text()).toBe(piece(`${numbered(kept, 11_000 - kept + 1)}${numbered(total - 11_000, 11_001)}`))
+    expect(r.text().split(NOTICE)).toHaveLength(2)
+    // The redraw waited for the attach again's replay to end.
+    expect(sent).toEqual([{ cols: 132, rows: 49, shown: r.text() }])
+    await vi.advanceTimersByTimeAsync(300)
+    expect(sizes(sent)).toEqual([{ cols: 132, rows: 49 }, { cols: 132, rows: 50 }])
+  }))
+
+  it('the program is over and its replay stops short: what was held is shown, notice first, before the holder is ended', onFakeClock(async () => {
+    const kept = fits(24)
+    const shownAtEnd: string[] = []
+    const { r, sent } = watched({ adopt: true, before: (h) => {
+      heldFrom(5000, numbered(12_000))(h)
+      h.child = 'exited'
+      h.code = 7
+      h.stallReplay = { at: Buffer.byteLength(numbered(11_000)) }
+    } }, undefined, (rr) => shownAtEnd.push(rr.text()))
+    await settle(() => r.p.isAttached, 'the attach')
+    await turns()
+    expect(r.text()).toBe('')
+    // The exit waits 500 ms for the rest of the replay, then ends the holder.
+    await vi.advanceTimersByTimeAsync(500)
+    await settle(() => r.exits.length === 1, 'the exit')
+    expect(r.seen).toEqual([piece(numbered(kept, 11_000 - kept + 1))])
+    expect(shownAtEnd).toEqual([r.text()])
+    expect(r.exits).toEqual([7])
+    expect(sent).toEqual([])
+  }))
+
+  it(`a replay whose end never comes: what came of it is shown ${HOLD_MAX_MS} ms after the hold began, notice first, and output after it as usual`, onFakeClock(async () => {
+    const kept = fits(24)
+    const { r } = watched({ adopt: true, before: (h) => { heldFrom(5000, numbered(12_000))(h); h.stallReplay = { at: Buffer.byteLength(numbered(11_000)) } } })
+    await settle(() => r.p.isAttached, 'the attach')
+    await turns()
+    await vi.advanceTimersByTimeAsync(HOLD_MAX_MS - 1)
+    expect(r.text()).toBe('')
+    await vi.advanceTimersByTimeAsync(1)
+    expect(r.seen).toEqual([piece(numbered(kept, 11_000 - kept + 1))])
+    expect(r.logs).toContain(`[session-helper] ${r.h.sid}: its replay did not end within ${HOLD_MAX_MS} ms, so what came of it is shown now`)
+    r.h.output('live\r\n')
+    await settle(() => r.seen.length === 2, 'the live output')
+    expect(r.seen[1]).toBe('live\r\n')
+    expect(r.exits).toEqual([])
+  }))
+
+  it('while a replay is held, typed input and a resize from the tab go out at once; the redraw goes only once the held text is shown', onFakeClock(async () => {
+    const total = 12_000
+    const { r, sent } = watched({ adopt: true, cols: 132, rows: 50, before: (h) => { heldFrom(5000, numbered(total))(h); h.stallReplay = { at: Buffer.byteLength(numbered(11_000)) } } })
+    await settle(() => r.p.isAttached, 'the attach')
+    await turns()
+    r.p.write('typed\r')
+    r.p.resize(100, 40)
+    await settle(() => r.typed() === 'typed\r' && resizes(r.h).length === 1, 'the input and the resize')
+    expect(r.text()).toBe('')
+    expect(sent).toEqual([{ cols: 100, rows: 40, shown: '' }])
+    // The connection drops: what was held is shown, at the tab's newest size,
+    // and the attach again brings the rest; the redraw waits for its end.
+    r.h.dropAll()
+    await settle(() => r.h.attaches === 2 && sent.length > 1, 'the attach again and the redraw')
+    const kept = fits(40)
+    expect(r.seen[0]).toBe(piece(numbered(kept, 11_000 - kept + 1)))
+    expect(sent.slice(1)).toEqual([{ cols: 100, rows: 39, shown: piece(`${numbered(kept, 11_000 - kept + 1)}${numbered(total - 11_000, 11_001)}`) }])
+    expect(r.text().split(NOTICE)).toHaveLength(2)
+  }))
+
+  for (const [what, stop] of stops) {
+    it(`${what} while its replay is held: what was held is shown, notice first, once`, onFakeClock(async () => {
+      const { r } = watched({ adopt: true, cols: 132, rows: 50, before: (h) => { heldFrom(5000, 'first half second half\r\n')(h); h.stallReplay = { at: 11 } } })
+      await settle(() => r.p.isAttached, 'the attach')
+      await turns()
+      expect(r.text()).toBe('')
+      await stop(r)
+      await settle(() => !r.p.isAttached, 'the terminal to let go')
+      await vi.advanceTimersByTimeAsync(HOLD_MAX_MS)
+      expect(r.seen[0]).toBe(piece('first half '))
+      expect(r.text().split(NOTICE)).toHaveLength(2)
+    }))
+  }
 })

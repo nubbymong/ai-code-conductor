@@ -354,10 +354,14 @@ has seen; a gap is logged, and noted on the session if a hook event was lost.
   that offset, the holder answers from `ring_start` with `truncated` true
   (section 15, Attach). What
   the app on This computer does then (2.1.3-beta.12): it does not clear the
-  view or reset the terminal. It writes the cancel character, the attribute
-  reset and one line of its own, "[Earlier output of this terminal is no
-  longer held, so it is not shown.]", then the replay. Once the replay is
-  shown and the program still runs, it resizes the terminal one row shorter
+  view or reset the terminal. It holds the replay until it reaches
+  `ring_end` (or the connection drops, the terminal ends, or 2 s pass), then
+  writes, in one piece, the cancel character, the attribute reset and one
+  line of its own, "[Earlier output of this terminal is no longer held, so
+  it is not shown.]", then only the last of the replay that the tab's
+  scrollback keeps (10,000 lines less a screen, cut at a line start), so
+  that line is not pushed out of reach. Once the replay is shown and the
+  program still runs, it resizes the terminal one row shorter
   and, 300 ms later, back to the tab's size, which makes the program redraw
   (probe P19). The screen in use and the input modes the program set before
   `ring_start` are not restored yet.
@@ -865,9 +869,10 @@ stream messages carry no id: a refusal of one has no `re`.
   helper. The app does not yet send either field or copy those files.
 - **Attach.** `from` is an offset in the output, as in section 11: past
   `ring_end` is `bad-field`; older than the ring holds is answered from
-  `ring_start` with `truncated` true. The app on This computer then shows a
-  line of its own saying earlier output is not shown, the replay after it,
-  and, while the program runs, asks it to redraw by a resize one row shorter
+  `ring_start` with `truncated` true. The app on This computer then holds the
+  replay to its end and shows a line of its own saying earlier output is not
+  shown, then the last of the replay that the tab keeps, and, while the
+  program runs, asks it to redraw by a resize one row shorter
   and back (section 11); it does not yet restore the screen in use or the
   input modes set before `ring_start`. Typed input goes to the holder as raw
   frames on channel 1, accepted only from the attached connection: raw bytes on
