@@ -8,26 +8,56 @@ code was fixed, not the wording.
 
 - **What the app does now** (session-helper/helper-pty.ts). After a gap the replay's text is held,
   not shown, until the offset reaches the reply's `ring_end`. Then, in one piece: the cancel
-  character, the attribute reset, the line break after output already shown, the notice, and only
-  the tail of the held text that the tab keeps. The budget is the tab's scrollback less a screen's
-  rows (at least a screen), so the notice stays in the scrollback through the redraw and a screen
-  more of output. Rows are counted, not lines: a line takes ceil(width / cols) rows, at least 1,
-  where the width leaves out escape sequences and carriage returns, a wide character counts two
-  columns and a tab moves to the next multiple of 8. The cut is only ever at a line start, and a
-  line break inside an escape sequence (an OSC string can hold one) is no line start. The last line
-  is kept even when it alone is over the budget.
+  character, the attribute reset, the alternate screen left when the part left out left it, the
+  line break after output already shown, the notice, the input modes the part left out set or
+  reset, and only the tail of the held text that the tab keeps. The budget is the tab's scrollback
+  less a screen's rows and the notice's own (at least a screen), so the notice stays in the
+  scrollback through the redraw and a screen more of output.
+- **How rows are counted** (session-helper/replay-tail.ts, new). The text is read as xterm.js 6
+  reads it, as far as rows go: its parser's states (CSI, OSC, DCS, SOS, PM and APC strings, the
+  8-bit forms, CAN and SUB), its Unicode 6 widths, its wrap (a wide character that does not fit
+  the last column wraps early) and its cursor (carriage return, backspace, tabs stopping at the
+  last column, the column moves, CSI b, a cursor saved and restored). A row is added by a line
+  feed, vertical tab, form feed, index or next line, 7-bit and 8-bit, and by a wrap; a bare line
+  feed keeps the column. What a program draws on the alternate screen takes no row and the cut
+  never lands there. Where it differs from the tab it counts more, never fewer, except after a
+  program sets its own tab stops. Vertical cursor moves add no scrollback row, so they are not
+  counted. Memory is bounded by the budget.
+- **Where the cut lands.** At a line start; inside a line only when that line alone takes more
+  rows than the budget (the last line, or one before a short prompt), at the start of one of its
+  rows, so the tab never shows the notice alone while there is output. Never inside an escape
+  sequence or a character.
+- **What goes across the cut.** Leaving the alternate screen (before the notice, so the notice is
+  on the normal screen) and the DEC private modes that are flags only, each at its last value, in
+  the order of their last change; ESC = and ESC > as the keypad mode; a full reset as the modes
+  it restores. Checked on @xterm/headless for a program started in the shown part (the tab ends on
+  its screen with its modes, the notice first on the normal screen) and one that ended in the part
+  left out (the tab leaves its screen and modes, the notice within reach).
 - **One constant.** The 10,000 moved to `src/shared/terminal-scrollback.ts`
-  (TERMINAL_SCROLLBACK_LINES), read by TerminalView.tsx and helper-pty.ts, so the two cannot drift.
-- **Every way out shows what was held**, notice first, trimmed the same way, once: the replay's end
-  (the redraw follows, after it); the connection closing or dropping (the attach again goes on from
-  the last byte seen, with no second notice); replaced; the program over (before its holder is
-  ended); ended or let go of for an update; and a safety cap, 2 s from the hold's start. A fixed cap,
-  not a wait reset by each chunk: a local replay of at most 2 MiB is in well within it, and a cap
-  bounds how long a tab can stay blank whatever pace the bytes come at. A frame that carries the
-  replay's end and live output after it is held whole. Typed input and resizes go out during the
-  hold as at any time.
+  (TERMINAL_SCROLLBACK_LINES), read by TerminalView.tsx and helper-pty.ts, so the two cannot drift;
+  a test pins the value and both readers.
+- **A hold outlives a dropped connection.** The holder closes a connection that falls behind, in
+  the middle of a replay too. The hold is kept and the attach again, with no new gap, holds its
+  replay to its own `ring_end`, so the whole replay is trimmed as one; with a new gap the old hold
+  is shown first, then a new one starts. Every other way out shows what was held, notice first,
+  once: the replay's end (the redraw follows, after it), replaced, the program over (before its
+  holder is ended), ended, started the usual way, let go of for an update, and the cap, 2 s from
+  the hold's start. A fixed cap, not a wait reset by each chunk: a local replay of at most 2 MiB is
+  in well within it, and a cap bounds how long a tab can stay blank. It is the one way the notice
+  can still go out of reach: a rest that comes after the cap and is longer than the tab keeps is
+  not trimmed. A frame that carries the replay's end and live output after it is held whole. Typed
+  input and resizes go out during the hold as at any time.
 - **Logs.** The redraw's line keeps its exact start. When lines are left out, one more line says how
-  many; when the cap fires, one says so. No output text in either.
-- **Tests.** tests/unit/main/session-helper-flow.test.ts, twelve new cases on the fake holder, which
-  gains `stallReplay` (a replay whose end never comes). Each failed on the old helper-pty.ts.
+  many (and when the start of a line is left out too); when the cap fires, one says so. No output
+  text in either.
+- **Known issues and notes.** A full-screen program now keeps its screen when it started inside the
+  last 2 MiB, so the Known issues paragraph and the release line say it is drawn on the normal
+  screen only when it started before them.
+- **Tests.** tests/unit/main/session-helper-replay-tail.test.ts (new, 24 cases, counted against
+  @xterm/headless) and tests/unit/main/session-helper-flow.test.ts (the hold over a drop, an empty
+  replay, no `ring_end`, a last line over the budget, the two screen and mode cases). Each new case
+  was run against the mutant it guards and went red. Two lines were removed as dead: an empty
+  replay's own show (the redraw or the exit's wait shows it at once) and the exit's own show before
+  `endHolder` (which shows it first). The hold's own end and the redraw's are the same offset, so
+  either alone shows a replay: kept both, so the redraw never goes first.
 - **Owed.** The A1 VM re-check at the release smoke (orchestrator). Nothing under helper/ changed.

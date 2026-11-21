@@ -2554,6 +2554,8 @@ describe('the 2.1.3-beta.12 known issues', () => {
     const notice = src('main', 'session-helper', 'helper-pty.ts').match(/const EARLIER_OUTPUT_NOT_SHOWN = '([^']+)'/)![1]
     // The tab's scrollback is what helper-pty.ts shows of the replay after the notice.
     expect(p).toContain(`its tab first shows the line ${notice}, then the last of the output the helper still holds that the tab can keep (a tab keeps ${TERMINAL_SCROLLBACK_LINES.toLocaleString('en-US')} lines), and the program in it, if it is still running, is asked to draw its screen again.`)
+    // A program started inside what is held keeps its screen and modes across the trim (replay-tail.ts), so only an earlier one is drawn on the normal screen.
+    expect(p).toContain('A full-screen program in it, such as an editor, that started before the output the helper still holds is then drawn on the terminal\'s normal screen instead of its own full screen until you start it again')
     expect(p).toContain('The line right after the notice can start part-way, with a few stray characters.')
     expect(p).toContain('Workaround: quit the full-screen program and start it again.')
     expect(body('machines')).toContain('what a held terminal shows when its earlier output is no longer held')
@@ -2615,7 +2617,7 @@ describe('the 2.1.3-beta.12 sweep', () => {
     for (const said of [
       'With Plain terminals through the session helper on (Settings, General, under Terminal; off by default)',
       'It now first shows one line saying its earlier output is no longer held, and its program, if it is still running, is asked to draw its screen again.',
-      'A full-screen program in it is then drawn on the normal screen until you start it again, and the line after the notice can start part-way (in Known issues).',
+      'A full-screen program that started before those last 2 MiB is then drawn on the normal screen until you start it again, and the line after the notice can start part-way (in Known issues).',
       'With Claude Code and Codex sessions through the session helper on (Settings, General, under Terminal; off by default)',
       `A tool call made while the connection is down waits up to ${holdSeconds()} seconds for the app, and if the app is not back by then, it gets the answer "${updating()}".`,
       'Before, that session\'s tools stopped working until you typed /mcp in Claude Code or restarted the tab.',
