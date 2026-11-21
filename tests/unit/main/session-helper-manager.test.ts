@@ -476,6 +476,36 @@ describe('a crash: held terminals come back', () => {
     await until(() => helper.holders.get(plain)!.attaches === 3, 'the tab to replace the keeper')
   })
 
+  it("with holders that offer the screen reads: a plain terminal's connections ack them, a take-over reads its holder's size once, before its attach, and an agent session's connection acks none (2.1.3-beta.13, plan section A1)", async () => {
+    helper.holderCaps = ['core', 'local', 'hooks', 'mcp', 'screen']
+    const first = await startedWith(makeManager(), ON_BOTH)
+    setSessionHelper(first)
+    const id = 'abcdef0123456789abcdef1a'
+    spawnPlainPty({ plain: true, sessionId: id }, SHELL, [], opts())
+    const sid = heldSessionId(id)
+    await until(() => !!helper.holders.get(sid)?.attached, 'the terminal to attach')
+    expect(helper.holders.get(sid)!.attached!.ackedCaps).toContain('screen')
+    // A new terminal has no replay to wait for: no read.
+    expect(helper.holders.get(sid)!.screenReads).toBe(0)
+    const agent = 'abcdef0123456789abcdef1b'
+    spawnAgentPty(claudeTab(agent), SHELL, [], agentOpts())
+    const asid = heldAgentSessionId(agent, 'claude')
+    await until(() => !!helper.holders.get(asid)?.attached, 'the agent session to attach')
+    expect(helper.holders.get(asid)!.attached!.ackedCaps).not.toContain('screen')
+    crash(first)
+
+    const second = makeManager()
+    setSessionHelper(second)
+    void second.start({ atStartup: true })
+    await until(() => helper.holders.get(sid)!.attaches === 2, 'the keeper')
+    const p = spawnPlainPty({ plain: true, sessionId: id }, SHELL, [], opts())
+    expect(await (p as HelperPty).adoption).toBe(true)
+    const h = helper.holders.get(sid)!
+    expect(h.attached!.ackedCaps).toContain('screen')
+    expect(h.screenReads).toBe(1)
+    expect(h.attached!.frames.map((f) => f.t).filter((t) => t === 'screen.read' || t === 'term.attach')).toEqual(['screen.read', 'term.attach'])
+  })
+
   it('the held terminals are kept from their records at once, even when the listing fails', async () => {
     const first = await started(makeManager())
     setSessionHelper(first)

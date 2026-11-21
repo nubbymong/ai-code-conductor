@@ -825,7 +825,7 @@ export class SessionHelperManager implements MachinesSource {
       this.adoptable.delete(sid)
       this.reclaimed.delete(sid)
       this.pinOwnId(ctx.sessionId, sid)
-      return this.track(new HelperPty({ sid, label: ctx.sessionId, spec: this.launchSpec(file, args, opts), adopt, driver: this.driver(direct, false) }), ctx.sessionId)
+      return this.track(new HelperPty({ sid, label: ctx.sessionId, spec: this.launchSpec(file, args, opts), adopt, driver: this.plainDriver(direct, false) }), ctx.sessionId)
     }
     if (!this.routesPlain()) return direct()
     this.retryInstallIfDue()
@@ -841,7 +841,7 @@ export class SessionHelperManager implements MachinesSource {
       return direct()
     }
     this.pinOwnId(ctx.sessionId, sid)
-    return this.track(new HelperPty({ sid, label: ctx.sessionId, spec, driver: this.driver(direct, true) }), ctx.sessionId)
+    return this.track(new HelperPty({ sid, label: ctx.sessionId, spec, driver: this.plainDriver(direct, true) }), ctx.sessionId)
   }
 
   /**
@@ -1213,14 +1213,15 @@ export class SessionHelperManager implements MachinesSource {
    *  session): what must settle before a holder starts, in place of the plain
    *  terminal's wait for an earlier holder's end; it throws to start none.
    *  `hooks`: a Claude Code session's hooks through its holder (hookRoute).
-   *  `tools`: a session's tool calls through its holder (toolRoute). */
-  private driver(direct: () => IPty, checkHash: boolean, bundled = false, cleared?: () => Promise<void>, hooks?: HookRoute, tools?: ToolRoute): HelperPtyDriver {
+   *  `tools`: a session's tool calls through its holder (toolRoute).
+   *  `screen`: its connections ask for the holder's screen reads (plainDriver). */
+  private driver(direct: () => IPty, checkHash: boolean, bundled = false, cleared?: () => Promise<void>, hooks?: HookRoute, tools?: ToolRoute, screen = false): HelperPtyDriver {
     // The hooks' switch and the tools' switch are each their own: one that
     // fails or throws leaves the other as it would be alone.
     const atLaunch = [hooks ? (conn: HolderConnection) => hooks.launched(conn) : null, tools?.launched ?? null].filter((f): f is (conn: HolderConnection) => void => f !== null)
     return {
       hold: (sid, label, abandoned) => this.hold(sid, label, abandoned, bundled, cleared),
-      connect: (record) => this.connectFor(record, checkHash, hooks, tools),
+      connect: (record) => this.connectFor(record, checkHash, hooks, tools, screen),
       ...(atLaunch.length > 0 ? {
         launched: (conn: HolderConnection) => {
           const errors: unknown[] = []
@@ -1245,7 +1246,14 @@ export class SessionHelperManager implements MachinesSource {
     }
   }
 
-  private async open(record: HolderRecord, sha256?: string, hooks?: HookRoute, tools?: ToolRoute): Promise<HolderConnection> {
+  /** A plain or partner terminal's driver: its connections ask for `screen`,
+   *  so a take-over reads the holder's size before its replay is shown
+   *  (helper-pty.ts; 2.1.3-beta.13, plan section A1). */
+  private plainDriver(direct: () => IPty, checkHash: boolean): HelperPtyDriver {
+    return this.driver(direct, checkHash, false, undefined, undefined, undefined, true)
+  }
+
+  private async open(record: HolderRecord, sha256?: string, hooks?: HookRoute, tools?: ToolRoute, screen = false): Promise<HolderConnection> {
     const conn = await HolderConnection.open({
       record,
       os: this.os,
@@ -1255,6 +1263,7 @@ export class SessionHelperManager implements MachinesSource {
       replyTimeoutMs: this.deps.replyTimeoutMs,
       ...(hooks ? { hooks: true } : {}),
       ...(tools ? { mcp: true } : {}),
+      ...(screen ? { screen: true } : {}),
     })
     // The connection reports an event only when it acked `hooks` (connection.ts;
     // tests/unit/main/session-helper-connection.test.ts): that is the one guard.
@@ -1318,11 +1327,11 @@ export class SessionHelperManager implements MachinesSource {
     return record
   }
 
-  private async connectFor(record: HolderRecord, checkHash: boolean, hooks?: HookRoute, tools?: ToolRoute): Promise<HolderConnection> {
+  private async connectFor(record: HolderRecord, checkHash: boolean, hooks?: HookRoute, tools?: ToolRoute, screen = false): Promise<HolderConnection> {
     // A keeper attaches first; the tab's attach then replaces it, never the other way.
     const keeper = this.keepers.get(record.session)
     if (keeper) await keeper.ready
-    return this.open(record, checkHash ? this.info?.sha256 : undefined, hooks, tools)
+    return this.open(record, checkHash ? this.info?.sha256 : undefined, hooks, tools, screen)
   }
 
   /** Keep a held terminal alive (attached, output dropped) until a tab takes it. */
