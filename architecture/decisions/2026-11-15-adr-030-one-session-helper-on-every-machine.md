@@ -396,6 +396,38 @@ P12 result (2026-11-15): a Token session runs and keeps its usage figures;
 Remote Control and extra-usage credits need a Standard login; which kind is
 the default is decided before the accounts slice.
 
+P3 and P6 result (2026-11-21, a Linux host with key sign-in: Ubuntu 24.04 with systemd,
+bash as its login shell; the static Linux helper, aicc-helper 0.1.0, the
+`helper-linux-musl` artifact of the Helper dispatch on f3080a34, run 44948601556; the
+probe runs on the test PC and starts nothing there but ssh and scp): P3 HOLDS and P6 SAME,
+on the lines `helper/probes/README.md` wrote before measuring. P3: six ssh sessions each
+started a holder with `hold --detach` and logged out as the command ended, three with a
+terminal (`ssh -tt`) and three without (`ssh -T`, an exec). A new connection found every
+holder alive, by its pid and its own command line, 10 to 11.4 s and 60 to 61.4 s after its
+own logout: 3 of 3 runs of each form. Each holder was still in the scope of the login that
+started it (`session-<n>.scope`); nothing moved it out. The host's logind has
+KillUserProcesses off and KillExcludeUsers empty, and the user has Linger on. So this host
+does not clean up at logout. Not measured: a host with user-process cleanup on, the case
+ADR-029's host role names, and anything past 60 s (ADR-029's go line says five minutes).
+Remote sessions through the helper are unblocked on a host with these settings; a host
+with cleanup on stays open until one is measured, and the "no re-attach" label is not
+needed for the kind measured. P6: the exec's PATH was
+`/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin`,
+and the login shell started from it with `-l` (how D8 starts the CLI) had the same entries in
+the same order;
+node was `/usr/bin/node` in both, and claude and codex were found in neither. The login
+shell started with `-il` (recorded only) had one more entry in front, `~/.npm-global/bin`,
+and found Claude Code there. So on this host the CLI sits on a path only an interactive
+shell sets, which neither an exec nor `-l` reads: a start by `-l` does not find it, and its
+path has to come from a lookup through `-il`, the route ADR-029's P6 fallback names. Why
+the entry shows only with `-i` was not looked into. Not measured: zsh, csh, tcsh or fish
+as the login shell, a `.bashrc` that returns early for a shell that is not interactive,
+macOS, a password host, a home mounted `noexec`. Rocky Linux 10: not run, host off (one 8 s
+connect got no answer); owed to beta.14, where the same probe runs on it unchanged. The
+host that answered was left as found: every holder ended, the probe's temporary folder
+deleted, and `/tmp/aicc-<uid>`, which was not there before, not there after; nothing was
+made on the other. The probe is `helper/probes/p3-p6-linux.cjs`.
+
 P7 result (2026-11-15, Windows test machine, the skeleton holder from #685 and a silent
 install of 2.1.3-beta.4): yes. A detached holder is not in a job object, and it and its
 console child survive the app process tree being ended and the installer running; a

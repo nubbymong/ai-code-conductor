@@ -274,5 +274,9 @@ Decision lines (written before measuring):
 
 The record is `p3-p6-result.json` in the output folder, with the home folder
 written as `~` and the user name as `<user>`. Exit 0: every host was measured
-or not run; 1: a host was not left as found; 2: the probe could not run. Each
-answer goes into ADR-030 after the P12 result once the probe has run.
+or not run; 1: a host was not left as found; 2: the probe could not run. The
+answers are in ADR-030 after the P12 result ("P3 and P6 result", 2026-11-21):
+P3 HOLDS and P6 SAME on the Linux host with key sign-in (a host with logind
+cleanup on was not measured, and `claude` was found only by `-il`, which the
+decision line records and does not count). The Rocky Linux 10 host was NOT RUN
+(host off); the same command runs on it in beta.14.
