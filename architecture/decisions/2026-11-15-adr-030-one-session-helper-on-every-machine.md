@@ -568,8 +568,10 @@ shortcuts`) and the warning were RECORDED and the agents form NOT REACHED (60 s 
 system; 0.157.1 draws no agents form). From the first prompt sent on, both versions also draw
 `<warning sign> 1 warning . f2 to view` at the right of the hint row, in every launch that
 sends one (what it warns of was not read), and Codex 0.170.0 adds the thread's title to its
-footer, which wraps to a second row on macOS and Windows. The screen corpus gains 33 recordings from these runs (each under 256 KiB, 2,972,596
-bytes of recordings in all, under 3 MiB; none cut): Codex 0.170.0's ready, mid-reply and
+footer, which wraps to a second row when its working folder and title do not fit in the 120
+columns (in these runs on macOS and Windows, whose temporary folders are longer than Linux's;
+not on Linux). The screen corpus gains 33 recordings from these runs (each under 256 KiB,
+2,972,596 bytes of recordings in all, under 3 MiB; none cut): Codex 0.170.0's ready, mid-reply and
 after-reply on all four systems; each hint row reached, of both versions, on the bundled
 ConPTY and macOS; Codex 0.157.1's mid-reply and after-reply on three systems and its mid-reply
 on Linux. The mid-reply and hint row recordings are record only (to 300 ms after the mark).

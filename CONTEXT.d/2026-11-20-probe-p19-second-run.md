@@ -127,7 +127,9 @@ on it, with step 1's commits picked onto it in order.
   draw that warning in every launch (with the stand-in model; what it warns of was not read), so
   no Codex 0.157.1 screen after a prompt reads ready or busy either, though #740's fix reads its
   ready screen. Codex 0.170.0 adds the thread's title to its footer once a prompt is sent, and
-  on macOS and Windows the footer then wraps to two rows. And no mid-reply or queue-hint screen
+  the footer then wraps to two rows when its working folder and title do not fit in the 120
+  columns (on macOS and Windows in these runs, whose temporary folders are longer than Linux's).
+  And no mid-reply or queue-hint screen
   holds an `esc to interrupt` row, the reader's only sign of busy (codex-screen.ts `BUSY_RE`):
   Codex drew `Working (0s . esc to interrupt)` once, right after Enter, and it was gone while
   the reply streamed, in both versions' turns, long and short. So taking the last row alone would

@@ -136,7 +136,7 @@ const HINT_ELSEWHERE = 'kept on one Windows system (the bundled ConPTY, which th
 const LEFT_OUT: LeftOut[] = [
   { program: 'codex', state: 'agents-hint', systems: SYSTEMS, why: 'not reached: Codex 0.157.1 does not draw the agents form of the hint row (P19\'s second run waited 60 s on every system; the screen showed the ready composer with "? for shortcuts")' },
   { program: 'codex', state: 'after-reply', systems: ['linux'], why: 'over the 3 MiB corpus cap: last in the order of keeping (243,915 bytes; 173,132 were left)' },
-  { program: 'codex170', state: 'first-screen', systems: SYSTEMS, why: 'not in the order of keeping: the cap\'s room went to the states it names (P19\'s second run recorded it: the sign-in choice, as Codex 0.157.1\'s)' },
+  { program: 'codex170', state: 'first-screen', systems: SYSTEMS, why: 'not in the plan\'s order of keeping, so not added (P19\'s second run recorded it: the sign-in choice, as Codex 0.157.1\'s; the four are 56,262 bytes, and 173,132 bytes of the 3 MiB cap were left)' },
   ...['queue-hint', 'rebound-hint', 'warning-hint'].map((state) => ({ program: 'codex', state, systems: ['windows-system', 'linux'], why: HINT_ELSEWHERE })),
   ...HINT_STATES.map((state) => ({ program: 'codex170', state, systems: ['windows-system', 'linux'], why: HINT_ELSEWHERE })),
 ]
@@ -155,9 +155,10 @@ const strayLeftOut = (rows: readonly LeftOut[]): string[] =>
  *  at its ready composer (aicc_planning#349, in 2.1.3-beta.10). Every
  *  recording P19's second run added reads unrecognised: the reader takes one
  *  row under the footer, exactly "? for shortcuts", and each of these ends
- *  in another row (aicc_planning#357). Where the thread title makes Codex
- *  0.170.0's footer wrap (its macOS and Windows screens after the prompt is
- *  sent), the footer is two rows as well. And no mid-reply or queue-hint
+ *  in another row (aicc_planning#357). Where the thread title and the working
+ *  folder do not fit in 120 columns and Codex 0.170.0's footer wraps (its macOS and
+ *  Windows screens after the prompt is sent; their temporary folders are longer
+ *  than Linux's), the footer is two rows as well. And no mid-reply or queue-hint
  *  screen holds an "esc to interrupt" row, the reader's only sign of busy:
  *  Codex drew its working row once, after Enter, and not while the reply
  *  streamed. */
@@ -168,7 +169,7 @@ const KNOWN_MISREADS: Record<string, Misread> = Object.fromEntries([
   'codex170-windows-bundled-ready', 'codex170-windows-system-ready', 'codex170-macos-ready', 'codex170-linux-ready',
   'codex170-windows-bundled-agents-hint', 'codex170-macos-agents-hint',
   // Codex 0.170.0, the same row with "⚠ 1 warning · f2 to view" at its right
-  // (the footer wraps on macOS and Windows after the prompt is sent).
+  // (after a prompt the footer also holds the thread title and wraps on macOS and Windows, not on Linux).
   'codex170-windows-bundled-mid-reply', 'codex170-windows-system-mid-reply', 'codex170-macos-mid-reply', 'codex170-linux-mid-reply',
   'codex170-windows-bundled-after-reply', 'codex170-windows-system-after-reply', 'codex170-macos-after-reply', 'codex170-linux-after-reply',
   'codex170-windows-bundled-warning-hint', 'codex170-macos-warning-hint',
