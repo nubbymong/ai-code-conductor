@@ -1407,7 +1407,7 @@ describe('shown again from the middle of its output (2.1.3-beta.12, plan section
     r.h.output(`${screens}\x1b[?1000l\x1b[?1l\x1b[?1049l${numbered(12_000)}`)
     r.h.forget(Buffer.byteLength(start) + Buffer.byteLength(screens))
     await settle(() => sent.length > 0, 'the redraw')
-    expect(r.text()).toContain(`${CANCEL}${ATTRIBUTE_RESET}\x1b[?1049l\r\n${NOTICE}\r\n\x1b[?1000l\x1b[?1l`)
+    expect(r.text()).toContain(`${CANCEL}\x1b[?1049l${ATTRIBUTE_RESET}\r\n${NOTICE}\r\n\x1b[?1000l\x1b[?1l`)
     vi.useRealTimers()
     const s = await stateAfter(r.text(), 80, 24)
     expect(s).toMatchObject({ type: 'normal', cursorKeys: false, mouse: 'none' })

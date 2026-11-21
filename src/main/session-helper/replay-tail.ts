@@ -6,9 +6,11 @@
  * TERMINAL_SCROLLBACK_LINES.
  *
  * The replay is read the way the tab's terminal (xterm.js 6) reads it, as far
- * as rows go: its parser's states (an escape sequence, an OSC or DCS string,
- * the 8-bit forms, CAN and SUB), its Unicode 6 widths (the tab loads no
- * Unicode 11 addon), and its cursor. A row is added by a line feed, vertical
+ * as rows go: its parser's states (an escape sequence, an OSC, DCS, SOS, PM or
+ * APC string, the 8-bit forms, CAN and SUB; a character past U+009F ends a
+ * SOS, PM or APC string, or a DCS one before its final byte, in error, and
+ * what follows is text), its Unicode 6 widths (the tab loads no Unicode 11
+ * addon), and its cursor. A row is added by a line feed, vertical
  * tab, form feed, index or next line (ESC D, ESC E, and the 8-bit forms), and
  * by a wrap: a character that does not fit the row, a wide one at the last
  * column too. A bare line feed keeps the column, as in the tab. The column
@@ -25,18 +27,21 @@
  *
  * The cut is at the start of a row the text took, never inside an escape
  * sequence or a character: at the start of a line, unless the line there alone
- * takes more rows than the budget, which is then cut inside, at the start of
- * one of its rows, so the tab is never shown only the notice while there is
- * output to show.
+ * takes as many rows as the budget or more, which is then cut inside, at the
+ * start of one of its rows, so the tab is never shown only the notice while
+ * there is output to show.
  *
  * What the left-out part changes in the terminal's state is carried across the
- * cut (`before` and `after`), as the whole replay would have left it: leaving
- * the alternate screen (before the notice, so the notice is on the normal
- * screen), and the DEC private modes that are flags only (cursor keys,
- * autowrap, cursor blink and visibility, reverse wrap, the keypad, mouse
- * reporting and its encoding, focus events, bracketed paste), each at its last
- * value, in the order of their last change. Colours are not carried (the notice
- * resets them), nor the character set or a scroll region.
+ * cut (`before` and `after`): leaving the alternate screen whenever that part
+ * switched it (before the notice, so the notice is on the normal screen; the
+ * cut is never on it, so the whole replay is on the normal screen there), and
+ * the DEC private modes that are flags only (cursor keys, autowrap, cursor
+ * blink and visibility, reverse wrap, the keypad, mouse reporting and its
+ * encoding, focus events, bracketed paste), each at its last value, in the
+ * order of their last change. That is as the whole replay would have left
+ * them, but for one thing: after a full reset the cursor is shown again
+ * (AFTER_RESET says why). Colours are not carried (the notice resets them),
+ * nor the character set or a scroll region.
  *
  * Memory is bounded by the budget, whatever the text: only the row starts that
  * can still be kept are remembered.
@@ -52,14 +57,17 @@ const CSI = 3
 const CSI_IGNORE = 4
 /** An OSC string: BEL, ST, CAN or SUB ends it. */
 const OSC = 5
-/** A DCS string, or an SOS, PM or APC one: ST, CAN or SUB ends it, and the C0 controls in it do nothing. */
+/**
+ * A DCS string, or an SOS, PM or APC one: ST, CAN or SUB ends it, and the C0 controls in it do nothing. As in
+ * xterm.js, a character past U+009F ends it in error, except in a DCS string past its final byte.
+ */
 const STRING = 6
 
 /** The DEC private modes carried across the cut: flags, with no effect on the cursor or on what the screen shows. */
 const CARRIED_MODES = new Set([1, 7, 12, 25, 45, 66, 9, 1000, 1002, 1003, 1004, 1006, 1016, 2004])
 /** The modes that switch to the alternate screen and back. */
 const ALTERNATE_SCREEN = new Set([47, 1047, 1049])
-/** What a full reset (ESC c) leaves the carried modes at. The cursor blink (12) is the tab's own setting and stays. */
+/** What a full reset (ESC c) leaves the carried modes at. The cursor blink (12) is the tab's own setting and stays. The cursor is shown again (25) on purpose: xterm.js 6.0.0 leaves a hidden cursor hidden after a full reset, and a shell should not be left without one. */
 const AFTER_RESET: ReadonlyArray<readonly [number, boolean]> = [
   [1, false], [7, true], [25, true], [45, false], [66, false], [1000, false], [1004, false], [1006, false], [2004, false],
 ]
@@ -120,11 +128,12 @@ class RowStarts {
     while (k < this.size - 1 && this.row[at(k)] < target) k++
     const e = at(k)
     if (this.row[e] === this.lineRow[e]) return { from: this.index[e], left: this.lineNo[e], part: false }
-    // Inside a line: from the next line's start, unless this line alone takes more rows than the budget.
+    // Inside a line: from the next line's start, unless this line alone takes as many rows as the budget or more
+    // (with the next line's own row it would not fit, and the tab would be shown that next line alone).
     for (let j = k + 1; j < this.size; j++) {
       const n = at(j)
       if (this.row[n] !== this.lineRow[n]) continue
-      if (this.row[n] - this.lineRow[e] > this.budget) break
+      if (this.row[n] - this.lineRow[e] >= this.budget) break
       return { from: this.index[n], left: this.lineNo[n], part: false }
     }
     return { from: this.index[e], left: this.lineNo[e], part: true }
@@ -153,6 +162,10 @@ class Reader {
   private any = false
   /** A CSI intermediate byte was read. */
   private more = false
+  /** The string read is a DCS one. */
+  private dcs = false
+  /** The DCS string's final byte was read: past it, a character past U+009F is its text, not an error. */
+  private hooked = false
   /** The carried modes at their last value, in the order of their last change. */
   private readonly modes = new Map<number, boolean>()
   private altFirst: { mode: number; on: boolean } | undefined
@@ -207,8 +220,11 @@ class Reader {
         case OSC:
           if (c === 0x07) this.state = GROUND
           break
-        default:
-          // A string's text, and the C0 controls in it: nothing.
+        case STRING:
+          // A string's text, and the C0 controls in it: nothing. A character past U+009F ends it in error, as in
+          // the tab, which reads what follows as text; in a DCS string past its final byte it is the string's text.
+          if (c >= 0xa0) { if (!this.hooked) this.state = GROUND }
+          else if (this.dcs && c >= 0x40 && c <= 0x7e) this.hooked = true
           break
       }
     }
@@ -218,7 +234,7 @@ class Reader {
     if (c < 0x20) this.execute(c, i, false)
     else if (c === 0x5b) this.startCsi()
     else if (c === 0x5d) this.state = OSC
-    else if (c === 0x50 || c === 0x58 || c === 0x5e || c === 0x5f) this.state = STRING
+    else if (c === 0x50 || c === 0x58 || c === 0x5e || c === 0x5f) { this.state = STRING; this.dcs = c === 0x50; this.hooked = false }
     else if (c <= 0x2f) this.state = ESC_MORE
     else {
       // A final byte; a character past 0x7e ends it in error.
@@ -263,8 +279,12 @@ class Reader {
 
   /** What the text read changed in the terminal's state, to carry across the cut. */
   carried(): { before: string; after: string } {
-    // Read up to a cut, which is never on the alternate screen: the text left it if it ever was on it.
-    const before = this.altFirst && !this.altFirst.on ? `\x1b[?${this.altFirst.mode}l` : ''
+    // Read up to a cut, which is never on the alternate screen, so the whole replay is on the normal screen there.
+    // Leave it whenever the text switched it: the tab can still be on it (the leave of the program it showed was
+    // in the bytes no longer held, or the enter is a repeat). The text's own leave when it left first; 47 when it
+    // entered first, which restores no cursor, so on a tab already on the normal screen it does nothing (1049
+    // would move the cursor to a stale saved place).
+    const before = this.altFirst ? `\x1b[?${this.altFirst.on ? 47 : this.altFirst.mode}l` : ''
     let after = ''
     for (const [m, on] of this.modes) after += `\x1b[?${m}${on ? 'h' : 'l'}`
     return { before, after }
@@ -274,7 +294,7 @@ class Reader {
     this.last = 0
     if (c === 0x9b) this.startCsi()
     else if (c === 0x9d) this.state = OSC
-    else if (c === 0x90 || c === 0x98 || c === 0x9e || c === 0x9f) this.state = STRING
+    else if (c === 0x90 || c === 0x98 || c === 0x9e || c === 0x9f) { this.state = STRING; this.dcs = c === 0x90; this.hooked = false }
     else {
       // ST (0x9c) only ends a string; the others are carried out.
       this.state = GROUND
@@ -435,7 +455,7 @@ export interface ReplayTail {
   left: number
   /** `from` is inside a line, whose start is left out too. */
   part: boolean
-  /** Written before the notice: the alternate screen left, when the left-out part left it. */
+  /** Written before the notice: the alternate screen left, whenever the left-out part switched it. */
   before: string
   /** Written after the notice, before the text from `from`: the carried modes the left-out part set or reset. */
   after: string

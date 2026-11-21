@@ -531,10 +531,12 @@ export class HelperPty implements IPty {
   /**
    * The end of a hold (fromTheMiddle), whichever way it ends, in one piece:
    * the cancel character (it ends a sequence the old stream left half read),
-   * the attribute reset (it drops a colour it left set), the alternate screen
-   * left when the left-out part left it (so the notice is on the normal
-   * screen), the notice on a line of its own (after output already shown,
-   * from the start of the next one), the input modes the left-out part set
+   * the alternate screen left whenever the left-out part switched it (so the
+   * notice is on the normal screen), the attribute reset (it drops a colour
+   * the old stream left set; after the leave, which can restore the colours
+   * saved when a program entered that screen), the notice on a line of its
+   * own (after output already shown, from the start of the next one), the
+   * input modes the left-out part set
    * or reset, then the last of the held text that the tab keeps:
    * TERMINAL_SCROLLBACK_LINES less a screen's rows and the notice's own, at
    * least a screen, so the notice stays in the scrollback through the redraw
@@ -552,7 +554,7 @@ export class HelperPty implements IPty {
     const budget = Math.max(rows, TERMINAL_SCROLLBACK_LINES - rows - rowsOf(EARLIER_OUTPUT_NOT_SHOWN, cols))
     const { from, left, part, before, after } = replayTail(text, cols, budget)
     if (from > 0) this.driver.log(`[session-helper] ${this.sid}: the oldest ${left} lines of its replay${part ? ', and the start of the line after them,' : ''} are not shown either, so the line saying so stays within the ${TERMINAL_SCROLLBACK_LINES} lines the tab keeps`)
-    this.show(`${CANCEL}${ATTRIBUTE_RESET}${before}${this.shownAny ? '\r\n' : ''}${EARLIER_OUTPUT_NOT_SHOWN}\r\n${after}${from > 0 ? text.slice(from) : text}`)
+    this.show(`${CANCEL}${before}${ATTRIBUTE_RESET}${this.shownAny ? '\r\n' : ''}${EARLIER_OUTPUT_NOT_SHOWN}\r\n${after}${from > 0 ? text.slice(from) : text}`)
   }
 
   /**

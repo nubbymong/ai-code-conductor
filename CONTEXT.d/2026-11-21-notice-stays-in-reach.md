@@ -8,31 +8,38 @@ code was fixed, not the wording.
 
 - **What the app does now** (session-helper/helper-pty.ts). After a gap the replay's text is held,
   not shown, until the offset reaches the reply's `ring_end`. Then, in one piece: the cancel
-  character, the attribute reset, the alternate screen left when the part left out left it, the
-  line break after output already shown, the notice, the input modes the part left out set or
-  reset, and only the tail of the held text that the tab keeps. The budget is the tab's scrollback
+  character, the alternate screen left whenever the part left out switched it, the attribute reset
+  (after the leave, which can restore colours saved when a program entered that screen), the line
+  break after output already shown, the notice, the input modes the part left out set or reset,
+  and only the tail of the held text that the tab keeps. The budget is the tab's scrollback
   less a screen's rows and the notice's own (at least a screen), so the notice stays in the
   scrollback through the redraw and a screen more of output.
 - **How rows are counted** (session-helper/replay-tail.ts, new). The text is read as xterm.js 6
   reads it, as far as rows go: its parser's states (CSI, OSC, DCS, SOS, PM and APC strings, the
-  8-bit forms, CAN and SUB), its Unicode 6 widths, its wrap (a wide character that does not fit
-  the last column wraps early) and its cursor (carriage return, backspace, tabs stopping at the
-  last column, the column moves, CSI b, a cursor saved and restored). A row is added by a line
-  feed, vertical tab, form feed, index or next line, 7-bit and 8-bit, and by a wrap; a bare line
-  feed keeps the column. What a program draws on the alternate screen takes no row and the cut
+  8-bit forms, CAN and SUB; a character past U+009F ends a SOS, PM or APC string, or a DCS one
+  before its final byte, and what follows is text), its Unicode 6 widths, its wrap (a wide
+  character that does not fit the last column wraps early) and its cursor (carriage return,
+  backspace, tabs stopping at the last column, the column moves, CSI b, a cursor saved and
+  restored). A row is added by a line feed, vertical tab, form feed, index or next line, 7-bit and
+  8-bit, and by a wrap; a bare line feed keeps the column. What a program draws on the alternate screen takes no row and the cut
   never lands there. Where it differs from the tab it counts more, never fewer, except after a
   program sets its own tab stops. Vertical cursor moves add no scrollback row, so they are not
   counted. Memory is bounded by the budget.
-- **Where the cut lands.** At a line start; inside a line only when that line alone takes more
-  rows than the budget (the last line, or one before a short prompt), at the start of one of its
-  rows, so the tab never shows the notice alone while there is output. Never inside an escape
+- **Where the cut lands.** At a line start; inside a line only when that line alone takes as many
+  rows as the budget or more (the last line, or one before a short prompt), at the start of one of
+  its rows, so the tab never shows the notice alone while there is output. Never inside an escape
   sequence or a character.
-- **What goes across the cut.** Leaving the alternate screen (before the notice, so the notice is
-  on the normal screen) and the DEC private modes that are flags only, each at its last value, in
-  the order of their last change; ESC = and ESC > as the keypad mode; a full reset as the modes
-  it restores. Checked on @xterm/headless for a program started in the shown part (the tab ends on
-  its screen with its modes, the notice first on the normal screen) and one that ended in the part
-  left out (the tab leaves its screen and modes, the notice within reach).
+- **What goes across the cut.** Leaving the alternate screen whenever the part left out switched
+  it (before the notice, so the notice is on the normal screen; with 47 when that part entered it
+  first, which restores no cursor, since the tab can still be on it from a program whose leave is
+  no longer held) and the DEC private modes that are flags only, each at its last value, in the
+  order of their last change; ESC = and ESC > as the keypad mode; a full reset as the modes it
+  restores, but for the cursor, which is shown again (the tab's xterm.js leaves a hidden one
+  hidden; a shell should not be left without one). Checked on @xterm/headless for a program
+  started in the shown part (the tab ends on its screen with its modes, the notice first on the
+  normal screen), one that ended in the part left out (the tab leaves its screen and modes, the
+  notice within reach), and a tab still on the alternate screen when the part left out entered and
+  left it again (the tab ends on the normal screen, the notice there).
 - **One constant.** The 10,000 moved to `src/shared/terminal-scrollback.ts`
   (TERMINAL_SCROLLBACK_LINES), read by TerminalView.tsx and helper-pty.ts, so the two cannot drift;
   a test pins the value and both readers.
@@ -53,7 +60,7 @@ code was fixed, not the wording.
 - **Known issues and notes.** A full-screen program now keeps its screen when it started inside the
   last 2 MiB, so the Known issues paragraph and the release line say it is drawn on the normal
   screen only when it started before them.
-- **Tests.** tests/unit/main/session-helper-replay-tail.test.ts (new, 24 cases, counted against
+- **Tests.** tests/unit/main/session-helper-replay-tail.test.ts (new, 26 cases, counted against
   @xterm/headless) and tests/unit/main/session-helper-flow.test.ts (the hold over a drop, an empty
   replay, no `ring_end`, a last line over the budget, the two screen and mode cases). Each new case
   was run against the mutant it guards and went red. Two lines were removed as dead: an empty

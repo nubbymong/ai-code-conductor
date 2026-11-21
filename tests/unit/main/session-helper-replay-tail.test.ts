@@ -3,9 +3,9 @@
  * not shown (2.1.3-beta.12, plan section A1; src/main/session-helper/replay-tail.ts),
  * checked against xterm.js itself (@xterm/headless, the tab's terminal): rows
  * are never counted fewer than the terminal takes, the cut never lands inside
- * an escape sequence, a line over the budget is cut inside, a wrapped line
- * under it is left out whole, and the left-out part's alternate screen and
- * input modes are carried across the cut.
+ * an escape sequence, a line of the budget's rows or more is cut inside, a
+ * wrapped line under it is left out whole, and the left-out part's alternate
+ * screen and input modes are carried across the cut.
  */
 import { describe, it, expect } from 'vitest'
 import { Terminal } from '@xterm/headless'
@@ -25,6 +25,26 @@ async function rowsTaken(text: string, cols: number): Promise<number> {
     term.dispose()
   }
 }
+
+/** The tab's terminal after `text`, 80 by 24: the screen in use, its normal screen's lines, and the cursor. */
+async function screenAfter(text: string): Promise<{ type: string; normal: string[]; x: number; y: number }> {
+  const term = new Terminal({ cols: 80, rows: 24, scrollback: 1000, allowProposedApi: true })
+  try {
+    await new Promise<void>((res) => term.write(text, res))
+    const b = term.buffer.normal
+    const normal: string[] = []
+    for (let i = 0; i < b.length; i++) normal.push(b.getLine(i)?.translateToString(true) ?? '')
+    return { type: term.buffer.active.type, normal, x: term.buffer.active.cursorX, y: term.buffer.active.cursorY }
+  } finally {
+    term.dispose()
+  }
+}
+
+/** `n` numbered lines, from 1. */
+const numbered = (n: number) => Array.from({ length: n }, (_, i) => `line ${i + 1}\r\n`).join('')
+
+/** A stand-in for the notice helper-pty.ts writes. */
+const NOTICE = '[the notice]'
 
 /** The column the tab's terminal is at after `text`. */
 async function cursorAfter(text: string, cols: number): Promise<number> {
@@ -87,7 +107,8 @@ describe('rows, counted as the tab counts them', () => {
     }
   })
 
-  it('a line feed inside an OSC, DCS, SOS, PM or APC string does nothing, and BEL, ST, CAN or SUB ends the string', async () => {
+  it('a line feed inside an OSC, DCS, SOS, PM or APC string does nothing, and BEL, ST, CAN or SUB ends the string; a character past U+009F ends a SOS, PM or APC string, or a DCS one before its final byte, and what follows is text', async () => {
+    const x = 'x'.repeat(200)
     for (const [text, rows] of [
       ['\x1b]0;a\nb\x07x', 1],
       ['\x1bPq\nab\x1b\\x', 1],
@@ -97,10 +118,28 @@ describe('rows, counted as the tab counts them', () => {
       ['\x1b]0;t\x18\r\nline', 2],
       ['\x1b]0;t\x1a\r\nline', 2],
       ['\x1bPq\x18\r\nline', 2],
+      // Ended in error by the character past U+009F: the 200 characters and the line feeds after it are text.
+      [`\x1b_abc\u00e9${x}\x1b\\end`, 3],
+      [`\x9fabc\u00e9${x}\x9cend`, 3],
+      [`\x1b^\u00e9${x}\x1b\\end`, 3],
+      [`\x1bX\u4e2d${x}\x1b\\end`, 3],
+      [`\x1b_${String.fromCodePoint(0x1f600)}${x}\x1b\\end`, 3],
+      ['\x1b_\u00e9a\r\nb\r\nc\x1b\\end', 3],
+      [`\x1bP\u00e9${x}\x1b\\end`, 3],
+      [`\x1bP1;2\u00e9${x}\x1b\\end`, 3],
+      [`\x1bP$\u00e9${x}\x1b\\end`, 3],
+      [`\x90\u00e9${x}\x9cend`, 3],
+      // Not ended: a string of ASCII only, a DCS string past its final byte, an OSC string.
+      [`\x1b_Gf=100;AAAA${x}\x1b\\end`, 1],
+      [`\x1bPq\u00e9${x}\x1b\\end`, 1],
+      [`\x1b]0;\u00e9${x}\x07end`, 1],
     ] as const) {
       expect(await rowsTaken(text, 80), JSON.stringify(text)).toBe(rows)
       expect(rowsOf(text, 80), JSON.stringify(text)).toBe(rows)
     }
+    // A DCS string the tab ignores (a prefix after a parameter) keeps that character as its text; here it ends it: more rows, the safe side.
+    const ignored = `\x1bP1?\u00e9${x}\x1b\\end`
+    expect(rowsOf(ignored, 80)).toBeGreaterThanOrEqual(await rowsTaken(ignored, 80))
   })
 
   it('the moves that set the column are followed: CSI C, G and H, a repeat, a cursor saved and restored', async () => {
@@ -165,6 +204,13 @@ describe('where the cut lands', () => {
     expect(replayTail(text, 10, 4)).toMatchObject({ from: 3 + 70, left: 1, part: true })
   })
 
+  it('a line that takes the budget\'s rows exactly, then a line break at the end: cut inside, so the tab is not shown the notice alone', () => {
+    const text = `${'x'.repeat(30)}\r\n`
+    const t = replayTail(text, 10, 3)
+    expect(t).toMatchObject({ from: 10, left: 0, part: true })
+    expect(rowsOf(text.slice(t.from), 10)).toBe(3)
+  })
+
   it('a wrapped line that takes fewer rows than the budget is left out whole, not cut', () => {
     const text = `${'y'.repeat(30)}\r\n`.repeat(4)
     expect(replayTail(text, 10, 8)).toMatchObject({ from: 64, left: 2, part: false })
@@ -209,8 +255,21 @@ describe('what the left-out part carries across the cut', () => {
     expect(replayTail(`\x1b[?47l${lines}`, 80, 5).before).toBe('\x1b[?47l')
   })
 
-  it('the alternate screen entered and left again in the left-out part: nothing to leave', () => {
-    expect(replayTail(`\x1b[?1049h${'x\r\n'.repeat(30)}\x1b[?1049l${lines}`, 80, 5)).toMatchObject({ before: '', after: '' })
+  it('the alternate screen entered and left again in the left-out part: left all the same, with 47, which restores no cursor', () => {
+    expect(replayTail(`\x1b[?1049h${'x\r\n'.repeat(30)}\x1b[?1049l${lines}`, 80, 5)).toMatchObject({ before: '\x1b[?47l', after: '' })
+  })
+
+  it('a tab still on the alternate screen (its leave no longer held), the left-out part entering and leaving it again: the tab ends on the normal screen with the notice there; on a tab already on the normal screen, the leave changes nothing', async () => {
+    const replay = `${'old\r\n'.repeat(20)}\x1b[?1049h${'\x1b[Hprogram B\r\n'.repeat(5)}\x1b[?1049l${numbered(100)}`
+    const t = replayTail(replay, 80, 40)
+    const piece = (before: string) => `\x18${before}\x1b[0m\r\n${NOTICE}\r\n${t.after}${replay.slice(t.from)}`
+    const onAlternate = await screenAfter(`shell\r\n\x1b[?1049h\x1b[Hprogram A\r\n${piece(t.before)}`)
+    expect(onAlternate.type).toBe('normal')
+    expect(onAlternate.normal).toContain(NOTICE)
+    expect(onAlternate.normal).toContain('line 100')
+    expect(t).toMatchObject({ before: '\x1b[?47l', after: '' })
+    const shell = numbered(40)
+    expect(await screenAfter(`${shell}${piece(t.before)}`)).toEqual(await screenAfter(`${shell}${piece('')}`))
   })
 
   it('a full reset: the normal screen and the modes as they start', () => {
