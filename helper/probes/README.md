@@ -274,5 +274,5 @@ Decision lines (written before measuring):
 
 The record is `p3-p6-result.json` in the output folder, with the home folder
 written as `~` and the user name as `<user>`. Exit 0: every host was measured
-or not run; 1: a host was not left as found; 2: the probe could not run. The
-answers are in ADR-030 after the P12 result.
+or not run; 1: a host was not left as found; 2: the probe could not run. Each
+answer goes into ADR-030 after the P12 result once the probe has run.
