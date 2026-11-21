@@ -73,4 +73,5 @@ code was fixed, not the wording.
   replay's own show (the redraw or the exit's wait shows it at once) and the exit's own show before
   `endHolder` (which shows it first). The hold's own end and the redraw's are the same offset, so
   either alone shows a replay: kept both, so the redraw never goes first.
-- **Owed.** The A1 VM re-check at the release smoke (orchestrator). Nothing under helper/ changed.
+- **Owed.** Nothing: the A1 VM re-check on the final code (3ccb6995) passed. Nothing under
+  helper/ changed.
