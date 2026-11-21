@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > `src/renderer/changelog.ts`. After editing that file, run `npm run changelog`
 > (CI enforces that this file is in sync via `npm run changelog:check`).
 
+## [2.1.3-beta.12] - 2026-11-22
+
+### Warnings
+- This beta series begins moving the app's background services, and over the next betas your sessions, onto one helper per machine. If you want a quiet build, stay on the stable release.
+- On Windows, choosing Save sessions at an update keeps the terminals the session helper holds running only if the new version opens within two minutes of the old one closing. The installer's pages count toward those two minutes, so finish the installer promptly.
+- To go back to 2.1.3-beta.11, download its installer from the GitHub releases page and run it over this version.
+
+> With Plain terminals through the session helper on, a terminal shown again after the helper no longer holds its earlier output now says so in one line and asks its program, if it is still running, to draw its screen again. With Claude Code and Codex sessions through the session helper on, a session the helper holds keeps the Conductor's tools when the app's connection to the session helper drops and comes back. With Codex 0.170.0, the app now types into a Codex session while Codex shows its usual hint line under the prompt.
+
+### Fixed
+- With Plain terminals through the session helper on (Settings, General, under Terminal; off by default), a terminal the helper holds can be shown again after it printed more than the last 2 MiB the helper keeps (after a crash, after an update on Windows, or with Re-attach). It now first shows one line saying its earlier output is no longer held, and its program, if it is still running, is asked to draw its screen again. Before, the tab went on from the middle of the output with no word of what was missing, and could start with a broken character. A full-screen program that started before those last 2 MiB is then drawn on the normal screen until you start it again, and the line after the notice can start part-way (in Known issues).
+- With Claude Code and Codex sessions through the session helper on (Settings, General, under Terminal; off by default), a session the helper holds now keeps the Conductor's tools when the app's connection to the session helper drops and comes back. A tool call made while the connection is down waits up to 30 seconds for the app, and if the app is not back by then, it gets the answer "AI Code Conductor is updating, try again shortly". Before, that session's tools stopped working until you typed /mcp in Claude Code or restarted the tab.
+- With Codex 0.170.0, canvas notes, Ask Conductor questions, command bar prompt buttons, the app's own Codex commands and a Watchdog retry are now typed into a Codex session while Codex shows its usual hint line under the prompt. The same goes, with Codex 0.157.1 or 0.170.0, for that line when your Codex config moves the shortcuts key to F6. Before, the app typed nothing while such a line showed. It still types nothing when the shortcuts key is moved to any other key. Known issues lists that and three more cases where it types nothing, or takes its text back.
+
 ## [2.1.3-beta.11] - 2026-11-21
 
 ### Warnings
@@ -2088,6 +2102,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Tab attention indicators for waiting prompts
 - Context usage tracking via statusline API
 
+[2.1.3-beta.12]: https://github.com/nubbymong/ai-code-conductor/releases/tag/v2.1.3-beta.12
 [2.1.3-beta.11]: https://github.com/nubbymong/ai-code-conductor/releases/tag/v2.1.3-beta.11
 [2.1.3-beta.10]: https://github.com/nubbymong/ai-code-conductor/releases/tag/v2.1.3-beta.10
 [2.1.3-beta.9]: https://github.com/nubbymong/ai-code-conductor/releases/tag/v2.1.3-beta.9

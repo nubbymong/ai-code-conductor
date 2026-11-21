@@ -54,7 +54,7 @@ function chunks(s: string): string[] {
 
 /** What xterm.js does with `s`: its screen, its answers, and the OSC 10/11 it dispatches, in order. */
 async function xterm(s: string) {
-  const t = new Terminal({ cols: 60, rows: 6, scrollback: 50, allowProposedApi: true })
+  const t = new Terminal({ cols: 60, rows: 6, scrollback: 50, allowProposedApi: true, logLevel: 'off' })
   const answers: string[] = []
   t.onData((d) => answers.push(d))
   const osc: Array<{ id: number; data: string }> = []

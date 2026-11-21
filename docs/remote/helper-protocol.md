@@ -354,13 +354,27 @@ has seen; a gap is logged, and noted on the session if a hook event was lost.
   that offset, the holder answers from `ring_start` with `truncated` true
   (section 15, Attach). What
   the app on This computer does then (2.1.3-beta.12): it does not clear the
-  view or reset the terminal. It writes the cancel character, the attribute
-  reset and one line of its own, "[Earlier output of this terminal is no
-  longer held, so it is not shown.]", then the replay. Once the replay is
-  shown and the program still runs, it resizes the terminal one row shorter
-  and, 300 ms later, back to the tab's size, which makes the program redraw
-  (probe P19). The screen in use and the input modes the program set before
-  `ring_start` are not restored yet.
+  view or reset the terminal. It holds the replay until it reaches
+  `ring_end`, over a dropped connection too (the attach again, with no new
+  gap, holds its own replay to its `ring_end`), and at most until the
+  terminal ends or 2 s pass. Then it writes, in one piece, the cancel
+  character, the attribute reset and one line of its own, "[Earlier output
+  of this terminal is no longer held, so it is not shown.]", then only the
+  last of the replay that the tab's scrollback keeps (10,000 lines less a
+  screen and that line's own rows, cut at the start of a line, or inside a
+  line that alone takes as many or more, or that only empty rows follow), so
+  that line is not pushed out of reach. What the part left out did to the
+  terminal goes across the cut: the alternate screen, left before that line
+  (and before the attribute reset) whenever that part switched to it or from
+  it, and the input modes it set.
+  Rows are counted as xterm.js counts them; what a program draws on the
+  alternate screen takes none, and the cut never lands there. Once the
+  replay is shown and the program still runs, it resizes the terminal one
+  row shorter and, 300 ms later, back to the tab's size, which makes the
+  program redraw (probe P19). A replay still coming in at the 2 s cap shows
+  what had arrived, and the rest follows untrimmed: the one case where that
+  line can still go out of reach. The screen in use and the input modes the
+  program set before `ring_start` are not restored yet.
 
 ## 12 Strict validation and budgets
 
@@ -865,9 +879,11 @@ stream messages carry no id: a refusal of one has no `re`.
   helper. The app does not yet send either field or copy those files.
 - **Attach.** `from` is an offset in the output, as in section 11: past
   `ring_end` is `bad-field`; older than the ring holds is answered from
-  `ring_start` with `truncated` true. The app on This computer then shows a
-  line of its own saying earlier output is not shown, the replay after it,
-  and, while the program runs, asks it to redraw by a resize one row shorter
+  `ring_start` with `truncated` true. The app on This computer then holds the
+  replay to its end and shows a line of its own saying earlier output is not
+  shown, then the last of the replay that the tab keeps, with the screen and
+  input modes the part it leaves out set, and, while the
+  program runs, asks it to redraw by a resize one row shorter
   and back (section 11); it does not yet restore the screen in use or the
   input modes set before `ring_start`. Typed input goes to the holder as raw
   frames on channel 1, accepted only from the attached connection: raw bytes on

@@ -673,7 +673,7 @@ export const trainingSteps: TrainingStep[] = [
       'Its version and its last **self-test**, with the time it ran; **Run self-test** runs it again',
       'Each held terminal: its name, whether it is a Terminal, a Partner terminal, or a Claude Code or Codex session, when it started, and whether the app is attached or it is **waiting for the app**',
       '**Re-attach** connects a waiting terminal again, and opens a Terminal only tab for one no tab shows; **End** stops one after you confirm',
-      'After a crash on Windows, open the app within two minutes and resume your sessions: each held terminal shows again in its tab, with what it printed meanwhile. Quitting normally ends them',
+      'After a crash on Windows, open the app within two minutes and resume your sessions: each held terminal shows again in its tab, with what it printed meanwhile, up to the last 2 MiB. Quitting normally ends them',
       'On Windows, choose **Save sessions** when you update the app and each held Terminal or Partner terminal keeps running. If the new version opens within two minutes, it shows them again. **Close sessions** ends them',
       'A Claude Code or Codex session has **End** only. An update ends it, and after a crash it is ended, reading **Being ended** until it is gone. Either way its tab resumes the conversation',
       'With **Claude Code and Codex sessions through the session helper** on, an Insights report for a Claude Code account runs inside the helper too, and is listed as **Insights report** while it runs, with **End** only',

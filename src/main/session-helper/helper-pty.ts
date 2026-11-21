@@ -22,17 +22,25 @@
  *
  * The holder keeps the last 2 MiB of output. An attach that asks for an
  * offset older than that is answered from the oldest byte it still holds
- * (`truncated`), and the tab is told so before the replay, in a line of the
- * app's own; once the replay is shown, a program still running is asked to
- * redraw by a resize one row shorter and back (2.1.3-beta.12, plan section
- * A1; probe P19). The view is not cleared and the terminal not reset: shown
- * again, the tab's terminal keeps the modes its program set.
+ * (`truncated`). The replay is then held until it is all in, over a dropped
+ * connection too, and shown in one piece: first a line of the app's own
+ * saying earlier output is not shown, then only the last of the replay that
+ * the tab's scrollback keeps (TERMINAL_SCROLLBACK_LINES less a screen and that
+ * line's own rows, replay-tail.ts), so that line stays within reach: 2 MiB of
+ * plain text is some 28,000 lines, and a tab keeps 10,000. What the left-out
+ * part changed in the terminal (the alternate screen left, the input modes) is
+ * carried across the cut. Once the replay is shown, a program still running is
+ * asked to redraw by a resize one row shorter and back (2.1.3-beta.12, plan
+ * section A1; probe P19). The view is not cleared and the terminal not reset:
+ * shown again, the tab's terminal keeps the modes its program set.
  */
 import type { IDisposable, IEvent, IPty } from 'node-pty'
 import { StringDecoder } from 'string_decoder'
 import type { HolderConnection } from './connection'
 import { LAUNCH_LIMITS, type HolderRecord, type LaunchSpec } from './protocol'
 import { stripSpoofableText } from '../../shared/safe-text'
+import { TERMINAL_SCROLLBACK_LINES } from '../../shared/terminal-scrollback'
+import { replayTail, rowsOf } from './replay-tail'
 import { PTY_IO_FAILED_GRACE_MS, PTY_IO_FAILED_TEXT, guardPtyIo } from '../pty-input-guard'
 
 export interface HelperPtyDriver {
@@ -116,6 +124,14 @@ const ATTRIBUTE_RESET = '\x1b[0m'
 const REDRAW_BACK_MS = 300
 /** At most this many bytes at the replay's start continue a character cut in half. */
 const CUT_CHARACTER_MAX = 3
+/** A replay after a gap is held at most this long from the hold's start, an
+ *  attach again included, then what came of it is shown and the rest follows
+ *  as it comes. A fixed cap, not a wait reset by each chunk: a replay of at
+ *  most 2 MiB from a holder on this computer is in well within it, and a cap
+ *  bounds how long a tab can stay blank whatever pace the bytes come at. It is
+ *  the one way the notice can still go out of reach: a rest that comes after
+ *  the cap and is longer than the tab keeps is not trimmed. */
+export const HOLD_MAX_MS = 2_000
 
 class Emitter<T> {
   private listeners: Array<(e: T) => void> = []
@@ -132,6 +148,15 @@ class Emitter<T> {
 }
 
 type AttachMode = 'launch' | 'adopt' | 'again'
+
+/** A replay held after a gap (fromTheMiddle): its text so far, the offset it
+ *  ends at (moved on by an attach again with no new gap), and the HOLD_MAX_MS
+ *  timer. */
+interface Hold {
+  end: number
+  parts: string[]
+  timer: ReturnType<typeof setTimeout> | undefined
+}
 
 export class HelperPty implements IPty {
   readonly sid: string
@@ -177,6 +202,9 @@ export class HelperPty implements IPty {
   private redrawOwed: number | undefined
   /** The redraw's second half (the tab's size again), while it waits. */
   private redrawTimer: ReturnType<typeof setTimeout> | undefined
+  /** Shown from the middle of its output: the replay's text, held until the
+   *  offset reaches `end` (the reply's ring_end), then shown by showHeld. */
+  private held: Hold | undefined
   /** Bytes at the replay's very start that continue a character cut in half
    *  are dropped: at most this many more. */
   private cutBytes = 0
@@ -299,6 +327,8 @@ export class HelperPty implements IPty {
     const conn = this.conn
     // Cleared first, so the connection's own close finds nothing to do here.
     this.conn = undefined
+    // A replay still held is shown before the holder is let go of.
+    this.showHeld()
     this.setDetached()
     this.stopRedraw()
     conn?.close()
@@ -389,13 +419,19 @@ export class HelperPty implements IPty {
         // Before the replay that follows the reply: the offset starts where
         // the holder starts, and a cut (the ring no longer holds `from`) ends
         // a character split there. With no new gap, a cut character still
-        // waiting for its bytes (cutBytes) still has them dropped.
+        // waiting for its bytes (cutBytes) still has them dropped, and a
+        // replay still held from before the drop goes on being held, to this
+        // reply's end.
         const start = typeof m.from === 'number' ? m.from : from
         const gap = m.truncated === true || start > from
         if (start !== from || gap) this.flushDecoder()
         this.offset = start
-        if (gap) this.fromTheMiddle(conn, Math.max(0, start - from), m)
-        else if (this.redrawOwed !== undefined) this.redrawStillOwed(conn, m)
+        if (gap) {
+          this.fromTheMiddle(conn, Math.max(0, start - from), m)
+          return
+        }
+        if (this.held) this.holdOn(m)
+        if (this.redrawOwed !== undefined) this.redrawStillOwed(conn, m)
       })
     } catch (err) {
       this.attaching = false
@@ -441,29 +477,91 @@ export class HelperPty implements IPty {
 
   /**
    * The holder no longer held the start this attach asked for, so the replay
-   * starts `lost` bytes later. Before its first byte the tab gets the cancel
-   * character, the attribute reset and one line saying so; bytes at the
-   * replay's very start that continue a character cut in half are dropped.
-   * A program still running is asked to redraw once the replay is shown
-   * (redrawOnce). Nothing clears the view or resets the terminal, and no mode
-   * is set: on an attach again the tab's terminal still has the modes its
+   * starts `lost` bytes later. Nothing of it is shown yet: its text is held
+   * until the offset reaches the reply's ring_end, then shown in one piece
+   * (showHeld): the cancel character, the attribute reset, one line saying
+   * earlier output is not shown, then only the last of the replay that the
+   * tab keeps, so that line is not pushed out of the scrollback by the
+   * replay after it. A connection that closes in the middle of a hold (the
+   * holder closes one that fell behind) leaves it held: the attach again goes
+   * on from the last byte seen and, with no new gap, holds its replay too, to
+   * that reply's ring_end (holdOn); with a new gap of its own the old hold is
+   * shown first and a new one starts. A hold ends at the replay's end, when
+   * the connection is replaced, when the terminal ends, starts the usual way
+   * or is let go of for an update, or HOLD_MAX_MS after it started; whichever
+   * way, what was held is shown, the same way, once. Bytes at the replay's
+   * very start that continue a character cut in half are still dropped before
+   * decoding. Typed input and resizes go out during a hold as at any time. A
+   * program still running is asked to redraw once the replay is shown
+   * (redrawOnce), after the held text. Nothing clears the view or resets the
+   * terminal, and no mode is set but those the left-out part of the replay
+   * set: on an attach again the tab's terminal still has the modes its
    * program set, and a reset would throw them away.
    */
   private fromTheMiddle(conn: HolderConnection, lost: number, reply: Record<string, unknown>): void {
+    // A replay still held from before this gap goes first, with its own notice.
+    this.showHeld()
     // A redraw still owed for an earlier gap: one redraw, and the log counts both.
     const all = lost + (this.redrawOwed ?? 0)
     this.redrawOwed = undefined
     this.cutBytes = CUT_CHARACTER_MAX
-    // Its own line: after output already shown, from the start of the next one.
-    this.show(`${CANCEL}${ATTRIBUTE_RESET}${this.shownAny ? '\r\n' : ''}${EARLIER_OUTPUT_NOT_SHOWN}\r\n`)
+    const start = this.offset
+    const end = typeof reply.ring_end === 'number' && reply.ring_end >= start ? reply.ring_end : start
+    const held: Hold = { end, parts: [], timer: undefined }
+    held.timer = setTimeout(() => {
+      if (this.held !== held) return
+      this.driver.log(`[session-helper] ${this.sid}: its replay did not end within ${HOLD_MAX_MS} ms, so what came of it is shown now`)
+      this.showHeld()
+    }, HOLD_MAX_MS)
+    // An empty replay needs nothing more here: what follows the attach shows
+    // it at once (redrawOnce for a program still running, exitAfterReplay for
+    // one that is over).
+    this.held = held
     this.awaitReplayEnd(conn, all, reply)
+  }
+
+  /** An attach again with no new gap while a replay is held: the hold goes on,
+   *  to this reply's ring_end. An empty replay is shown by what follows the
+   *  attach, as in fromTheMiddle. */
+  private holdOn(reply: Record<string, unknown>): void {
+    const held = this.held
+    if (held) held.end = typeof reply.ring_end === 'number' && reply.ring_end >= this.offset ? reply.ring_end : this.offset
+  }
+
+  /**
+   * The end of a hold (fromTheMiddle), whichever way it ends, in one piece:
+   * the cancel character (it ends a sequence the old stream left half read),
+   * the alternate screen left whenever the left-out part switched it (so the
+   * notice is on the normal screen), the attribute reset (it drops a colour
+   * the old stream left set; after the leave, which can restore the colours
+   * saved when a program entered that screen), the notice on a line of its
+   * own (after output already shown, from the start of the next one), the
+   * input modes the left-out part set
+   * or reset, then the last of the held text that the tab keeps:
+   * TERMINAL_SCROLLBACK_LINES less a screen's rows and the notice's own, at
+   * least a screen, so the notice stays in the scrollback through the redraw
+   * and a screen more of output (replay-tail.ts says how rows are counted and
+   * where the cut can land). Held text that is the start of live output (a
+   * frame that carries the replay's end and more) is part of the piece.
+   */
+  private showHeld(): void {
+    const held = this.held
+    if (!held) return
+    this.held = undefined
+    clearTimeout(held.timer)
+    const text = held.parts.join('')
+    const { cols, rows } = this.size
+    const budget = Math.max(rows, TERMINAL_SCROLLBACK_LINES - rows - rowsOf(EARLIER_OUTPUT_NOT_SHOWN, cols))
+    const { from, left, part, before, after } = replayTail(text, cols, budget)
+    if (from > 0) this.driver.log(`[session-helper] ${this.sid}: the oldest ${left} lines of its replay${part ? ', and the start of the line after them,' : ''} are not shown either, so the line saying so stays within the ${TERMINAL_SCROLLBACK_LINES} lines the tab keeps`)
+    this.show(`${CANCEL}${before}${ATTRIBUTE_RESET}${this.shownAny ? '\r\n' : ''}${EARLIER_OUTPUT_NOT_SHOWN}\r\n${after}${from > 0 ? text.slice(from) : text}`)
   }
 
   /**
    * An attach again with no new gap, after the terminal detached before the
    * replay of a gap was shown (a connection that fell behind is closed in the
-   * middle of one too): its notice is shown already, and the redraw now waits
-   * for this replay's end.
+   * middle of one too): the redraw now waits for this replay's end, as the
+   * replay still held does (holdOn), so the redraw goes after it.
    */
   private redrawStillOwed(conn: HolderConnection, reply: Record<string, unknown>): void {
     const lost = this.redrawOwed ?? 0
@@ -493,6 +591,9 @@ export class HelperPty implements IPty {
   private redrawOnce(conn: HolderConnection): void {
     const r = this.redraw
     if (!r || r.conn !== conn || this.conn !== conn || !this.attached || this.ending || this.exited || this.offset < r.end) return
+    // The held replay ends where this redraw waits, so it is shown already;
+    // were it not, it goes first all the same.
+    this.showHeld()
     this.redraw = undefined
     this.redrawOwed = undefined
     const { cols, rows } = this.size
@@ -534,7 +635,13 @@ export class HelperPty implements IPty {
       if (this.conn !== conn || this.exited) return
       this.offset += bytes.length
       const text = this.decoder.write(this.cutBytes > 0 ? this.dropCut(bytes) : bytes)
-      if (text) this.show(text)
+      const held = this.held
+      if (held) {
+        // A frame that carries the replay's end and live output after it is held whole.
+        if (text) held.parts.push(text)
+        if (this.offset >= held.end) this.showHeld()
+      } else if (text) this.show(text)
+      // After the held text, never before it.
       if (this.redraw) this.redrawOnce(conn)
     })
     conn.on('exit', (code: number | null) => {
@@ -546,6 +653,7 @@ export class HelperPty implements IPty {
       if (this.conn !== conn) return
       if (code === 'replaced') {
         this.replaced = true
+        this.showHeld()
         this.stopRedraw()
         this.driver.log(`[session-helper] ${this.sid}: another connection took this terminal`)
         return
@@ -613,6 +721,9 @@ export class HelperPty implements IPty {
   }
 
   private setDetached(): void {
+    // A replay still held stays held: the attach again goes on from the last
+    // byte seen and holds its replay too (holdOn). Each way the terminal ends
+    // or is let go of shows it first, and so does HOLD_MAX_MS.
     // A redraw that still waits for its replay's end is owed to the attach again.
     if (this.redraw) this.redrawOwed = this.redraw.lost
     this.pauseRedraw()
@@ -629,6 +740,7 @@ export class HelperPty implements IPty {
       done = true
       clearTimeout(timer)
       conn.off('output', check)
+      // endHolder shows a replay still held first (markEnding).
       void this.endHolder(code)
     }
     const timer = setTimeout(over, 500)
@@ -638,6 +750,8 @@ export class HelperPty implements IPty {
   }
 
   private markEnding(): void {
+    // Ending (closed, given up, or its program over): a replay still held is shown first.
+    this.showHeld()
     this.stopRedraw()
     if (this.ending) return
     this.ending = true
@@ -725,6 +839,8 @@ export class HelperPty implements IPty {
       this.driver.connect(record).then((c) => c.request({ t: 'term.end' }).finally(() => c.close())).catch(() => { /* gone */ })
     }
     this.conn = undefined
+    // A replay still held goes to the tab before the new shell's output.
+    this.showHeld()
     this.setDetached()
     // A new shell from here on: the tab's launch lines are for it.
     this.resolveAdoption(false)
@@ -779,9 +895,12 @@ export class HelperPty implements IPty {
     })
   }
 
+  /** The decoder's last half character, as its stream's own text: held with a replay still held. */
   private flushDecoder(): void {
     const rest = this.decoder.end()
-    if (rest) this.show(rest)
+    if (!rest) return
+    if (this.held) this.held.parts.push(rest)
+    else this.show(rest)
   }
 
   /** Output of the holder's terminal, or a line of the app's own, to the tab. */
@@ -807,6 +926,8 @@ export class HelperPty implements IPty {
     if (this.exited) return
     this.exited = true
     this.resolveAdoption(true)
+    // A replay still held goes to the tab before the exit.
+    this.showHeld()
     this.setDetached()
     this.stopRedraw()
     this.flushDecoder()

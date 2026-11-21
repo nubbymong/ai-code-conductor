@@ -1,8 +1,8 @@
 {
   "schema": "wp1-legacy-codex-manifest/3",
-  "generatedAt": "2026-11-21T05:41:49.561Z",
-  "head": "5cc9073b1eba1efe0b9f44e78f0edeb120f9e28b",
-  "tree": "5b442cce3e2ff745cbcf74f5b10c5d4e714c1cae",
+  "generatedAt": "2026-11-21T08:52:04.037Z",
+  "head": "d0746079fcc943d6caefc427e5e8fd7a88786a02",
+  "tree": "f28355e3ff5753486bc69f10c3b406bb48038be0",
   "scannedWorkingTree": true,
   "predicateDigest": "100a1233edebdc39a5f9004d3fba980a89ebb15b25872e52076386bc84b03153",
   "predicates": [
@@ -116,9 +116,9 @@
     "\\.(png|jpg|jpeg|gif|ico|icns|webp|svg|woff2?|ttf|otf|mp4|zip|asar|node|exe|dll|dylib|so|pdf)$",
     "^package-lock\\.json$"
   ],
-  "trackedFileCount": 3647,
-  "excludedFileCount": 558,
-  "scannedFileCount": 3089,
+  "trackedFileCount": 3649,
+  "excludedFileCount": 559,
+  "scannedFileCount": 3090,
   "unscopedFileCount": 15,
   "unscoped": [
     ".claude/settings.json",
@@ -3440,7 +3440,7 @@
         "P12",
         "P14"
       ],
-      "lineCount": 168
+      "lineCount": 170
     },
     {
       "path": "src/shared/ask-conductor-provider.ts",
@@ -8162,7 +8162,7 @@
         "P04",
         "P13"
       ],
-      "lineCount": 416,
+      "lineCount": 425,
       "truncated": true
     },
     {

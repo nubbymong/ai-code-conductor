@@ -575,11 +575,13 @@ not on Linux). The screen corpus gains 33 recordings from these runs (each under
 after-reply on all four systems; each hint row reached, of both versions, on the bundled
 ConPTY and macOS; Codex 0.157.1's mid-reply and after-reply on three systems and its mid-reply
 on Linux. The mid-reply and hint row recordings are record only (to 300 ms after the mark).
-Codex's screen reader reads all 33 unrecognised: it takes one row under the footer, exactly
-`? for shortcuts`, and each of them ends in another row. No mid-reply or queue-hint screen holds
-an `esc to interrupt` row, the reader's only sign of busy: Codex drew its working row once,
-right after Enter, and not while the reply streamed. They are listed in the corpus test as
-known misreads for the reader fix (aicc_planning#357). Not measured: a signed-in account's
+As these runs left the corpus, Codex's screen reader read all 33 unrecognised: it took one row
+under the footer, exactly `? for shortcuts`, and each of them ends in another row. No mid-reply
+or queue-hint screen holds an `esc to interrupt` row, the reader's only sign of busy: Codex drew
+its working row once, right after Enter, and not while the reply streamed. The reader fix in the
+same beta (aicc_planning#357, plan 2.1.3-beta.12 C3) reads 12 of the 33; the other 21, a footer
+wrapped onto two rows (8) or a warning count at the right of the hint row (13), still read
+unrecognised and are listed in the corpus test as known misreads. Not measured: a signed-in account's
 screens (whether a real model gives the warning, or a hint row A2 could not reach without an
 account), the holder's own PTY code, the app's real attach path, any size but 120 by 40.
 
