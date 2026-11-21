@@ -23,11 +23,14 @@ code was fixed, not the wording.
   moves, CSI b, a cursor saved and restored). A row is added by a line feed, vertical tab, form
   feed, index or next line, 7-bit and 8-bit, and by a wrap; a bare line feed keeps the column.
   What a program draws on the alternate screen takes no row and the cut never lands there. Where
-  it differs from the tab it counts more, never fewer, with two known exceptions: after a program
-  sets its own tab stops, and a repeat (CSI b) that follows a sequence the tab ignores or ends in
-  error, or an 8-bit CSI, string introducer or ST (the tab still repeats the character before it;
-  here it is forgotten). No program is known to write the second. Vertical cursor moves add no
-  scrollback row, so they are not counted. Memory is bounded by the budget.
+  it differs from the tab it counts more, never fewer, with three known exceptions: after a program
+  sets its own tab stops; a repeat (CSI b) that follows a sequence the tab ignores or ends in error,
+  or an 8-bit CSI, string introducer or ST (the tab still repeats the character before it; here it
+  is forgotten); and a column counted further than the tab's on the alternate screen (a combining
+  character, an emoji, an autowrap turned off), which can wrap there uncounted while the tab wraps
+  only after the program left that screen with mode 47 or 1047, at most a row each time. No program
+  is known to write the second or the third. Vertical cursor moves add no scrollback row, so they
+  are not counted. Memory is bounded by the budget.
 - **Where the cut lands.** At a line start; inside a line only when that line alone takes as many
   rows as the budget or more (the last line, or one before a short prompt), or when only empty
   rows follow it, at the start of one of its rows, so the tab never shows the notice alone while

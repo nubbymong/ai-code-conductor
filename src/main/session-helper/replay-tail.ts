@@ -21,14 +21,18 @@
  * counted. The alternate screen has no scrollback: what a program writes there
  * adds no row, and the cut never lands in it. Where this differs from the tab
  * it counts more rows, not fewer (combining characters and the emoji blocks
- * count a column or two, an autowrap turned off is ignored), with two known
+ * count a column or two, an autowrap turned off is ignored), with three known
  * exceptions. A program's own tab stops (HTS, TBC) are not followed, so a tab
- * after it cleared them may go further than counted, at most a row a line.
- * And a repeat (CSI b) that follows a sequence the tab ignores or ends in
- * error, or an 8-bit CSI, string introducer or ST, is not counted: the tab
- * still repeats the character printed before it, and here that character is
- * forgotten (or taken as narrower). No program is known to write such a
- * repeat.
+ * after it cleared them may go further than counted, at most a row a line. A
+ * repeat (CSI b) that follows a sequence the tab ignores or ends in error, or
+ * an 8-bit CSI, string introducer or ST, is not counted: the tab still repeats
+ * the character printed before it, and here that character is forgotten (or
+ * taken as narrower). And on the alternate screen, where no row is counted, a
+ * column counted further than the tab's (a combining character, an emoji, an
+ * autowrap turned off) can wrap there, while the tab wraps only after the
+ * program left that screen with mode 47 or 1047, which restore no cursor: at
+ * most a row each time. No program is known to write such a repeat, or to
+ * leave that screen so and write on without setting the column first.
  *
  * The cut is at the start of a row the text took, never inside an escape
  * sequence or a character: at the start of a line, unless the line there alone
