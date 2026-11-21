@@ -265,7 +265,7 @@ impl Screen {
     pub fn modes(&self) -> Modes {
         let s = self.parser.screen();
         Modes {
-            alternate: s.alternate_screen(),
+            alternate: !s.alternate_screen(),
             bracketed_paste: s.bracketed_paste(),
             application_cursor: s.application_cursor(),
             application_keypad: s.application_keypad(),
