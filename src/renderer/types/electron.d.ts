@@ -649,6 +649,8 @@ export interface ElectronAPI {
   }
   update: {
     check: () => Promise<boolean>
+    /** The version the last check offered, prerelease part kept
+     *  ('2.1.3-beta.11'); null before a check has found one. */
     getVersion: () => Promise<string | null>
     /** `discarded`: the user chose "Close sessions" on the update dialog. */
     installAndRestart: (choice?: { discarded?: boolean }) => Promise<boolean>

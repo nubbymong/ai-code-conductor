@@ -34,11 +34,13 @@ vi.mock('../../../src/renderer/stores/settingsStore', () => {
 
 // --- electronAPI surface the footer touches ---
 let updateAvailableResolved = false
+let offeredVersion: string | null = null
 const updateInstall = vi.fn()
 ;(globalThis as any).window.electronAPI = {
   cli: { check: () => Promise.resolve(true) },
   update: {
     check: () => Promise.resolve(updateAvailableResolved),
+    getVersion: () => Promise.resolve(offeredVersion),
     onAvailable: () => () => {},
     installAndRestart: updateInstall,
   },
@@ -55,6 +57,7 @@ beforeEach(() => {
   root = createRoot(container)
   updateInstall.mockReset()
   updateAvailableResolved = false
+  offeredVersion = null
 })
 
 afterEach(() => {
@@ -117,6 +120,24 @@ describe('BottomBar -- slim runtime footer', () => {
     expect(pill).toBeTruthy()
     // Pulse driven by the footer-update-pulse class (CSS handles reduced-motion).
     expect(pill!.classList.contains('footer-update-pulse')).toBe(true)
+  })
+
+  // aicc_planning#369: the pill's title names the version on offer, its
+  // prerelease part kept, before the installed one.
+  it("the Update pill's title names the offered beta, then the installed version", async () => {
+    updateAvailableResolved = true
+    offeredVersion = '2.1.3-beta.11'
+    await render()
+    await act(async () => { await new Promise((r) => setTimeout(r, 0)) })
+    expect(buttonByText('Update')!.getAttribute('title')).toBe("Update available -- v2.1.3-beta.11 -- you're on v9.9.9-test (beta) -- click to install and restart")
+  })
+
+  it('with no offered version named, the title says only that an update is available, as before', async () => {
+    updateAvailableResolved = true
+    offeredVersion = null
+    await render()
+    await act(async () => { await new Promise((r) => setTimeout(r, 0)) })
+    expect(buttonByText('Update')!.getAttribute('title')).toBe("Update available -- you're on v9.9.9-test (beta) -- click to install and restart")
   })
 
   it('Update pill defers to onUpdateRequested when provided (graceful close path)', async () => {

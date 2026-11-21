@@ -616,6 +616,36 @@ describe('github-update', () => {
     })
   })
 
+  // aicc_planning#369: the screen showed a beta offer as "v2.1.3" (the base
+  // version), which reads as the stable release. displayVersion keeps the
+  // prerelease part; version, which the logs name, is unchanged.
+  describe('the version the user is shown (aicc_planning#369)', () => {
+    it('a beta offer keeps its prerelease part', async () => {
+      currentChannel = 'beta'
+      httpsState.nextResponse = { statusCode: 200, body: [releaseWithBothAssets('v2.1.3-beta.11', '2.1.3-beta.11', true)] }
+      const result = await checkGitHubRelease()
+      expect(result!.displayVersion).toBe('2.1.3-beta.11')
+      expect(result!.version).toBe('2.1.3')
+      expect(result!.tagName).toBe('v2.1.3-beta.11')
+    })
+
+    it('an rc offer keeps its prerelease part', async () => {
+      currentChannel = 'beta'
+      httpsState.nextResponse = { statusCode: 200, body: [releaseWithBothAssets('v2.1.3-rc.1', '2.1.3-rc.1', true)] }
+      const result = await checkGitHubRelease()
+      expect(result!.displayVersion).toBe('2.1.3-rc.1')
+      expect(result!.version).toBe('2.1.3')
+    })
+
+    it('a stable offer is its version', async () => {
+      currentChannel = 'beta'
+      httpsState.nextResponse = { statusCode: 200, body: [releaseWithBothAssets('v2.1.3', '2.1.3')] }
+      const result = await checkGitHubRelease()
+      expect(result!.displayVersion).toBe('2.1.3')
+      expect(result!.version).toBe('2.1.3')
+    })
+  })
+
   describe('public API path', () => {
     it('uses public API and does not invoke gh CLI when API returns data', async () => {
       currentChannel = 'stable'

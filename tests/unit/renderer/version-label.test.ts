@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   formatInstalledVersion,
+  formatUpdateOffer,
   releaseLine,
   isPrereleaseVersion,
   defaultUpdateChannelForVersion,
@@ -17,6 +18,22 @@ describe('formatInstalledVersion', () => {
 
   it('preserves rc-style prerelease suffixes verbatim', () => {
     expect(formatInstalledVersion('2.2.0-rc.1', 'beta')).toBe('v2.2.0-rc.1 (beta)')
+  })
+})
+
+// aicc_planning#369: Settings and the footer's Update pill say which version is
+// on offer, its prerelease part kept, so a beta never reads as the stable one.
+describe('formatUpdateOffer', () => {
+  it('names a beta, an rc and a stable offer as main sends them', () => {
+    expect(formatUpdateOffer('2.1.3-beta.11')).toBe('Update available -- v2.1.3-beta.11')
+    expect(formatUpdateOffer('2.1.3-rc.1')).toBe('Update available -- v2.1.3-rc.1')
+    expect(formatUpdateOffer('2.1.3')).toBe('Update available -- v2.1.3')
+  })
+
+  it('says only "Update available" when no version is named', () => {
+    expect(formatUpdateOffer(null)).toBe('Update available')
+    expect(formatUpdateOffer(undefined)).toBe('Update available')
+    expect(formatUpdateOffer('')).toBe('Update available')
   })
 })
 

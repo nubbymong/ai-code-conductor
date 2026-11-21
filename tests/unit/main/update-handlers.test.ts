@@ -543,3 +543,36 @@ describe('update:installAndRestart — reentrancy', () => {
     await expect(invoke()).resolves.toBe(true)
   })
 })
+
+// aicc_planning#369: Settings, General, Check for Updates showed a beta offer
+// as "v2.1.3", because update:getVersion answered the base version. It answers
+// the offered version with its prerelease part; the release the install path
+// downloads (tagName, installerName) is unchanged.
+describe('update:getVersion names the offered version with its prerelease part (aicc_planning#369)', () => {
+  const offer = (tag: string, base: string) => ({
+    version: base, displayVersion: tag.replace(/^v/, ''), tagName: tag,
+    installerName: `AI-Code-Conductor-${tag.replace(/^v/, '')}.exe`, installerUrl: `https://h/${tag}.exe`, channel: tag.includes('-') ? 'beta' : 'stable',
+  })
+  const asked = async (release: unknown): Promise<unknown> => {
+    const before = gh.release
+    gh.release = release
+    try {
+      await expect(Promise.resolve(handlers.get('update:check')!())).resolves.toBe(true)
+      return await Promise.resolve(handlers.get('update:getVersion')!())
+    } finally {
+      gh.release = before
+    }
+  }
+
+  it('a beta offer', async () => {
+    expect(await asked(offer('v2.1.3-beta.11', '2.1.3'))).toBe('2.1.3-beta.11')
+  })
+
+  it('an rc offer', async () => {
+    expect(await asked(offer('v2.1.3-rc.1', '2.1.3'))).toBe('2.1.3-rc.1')
+  })
+
+  it('a stable offer', async () => {
+    expect(await asked(offer('v2.1.3', '2.1.3'))).toBe('2.1.3')
+  })
+})

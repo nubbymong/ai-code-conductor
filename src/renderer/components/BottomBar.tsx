@@ -6,7 +6,7 @@ import { retryFailedConfigSaves } from '../utils/config-saver'
 import { ViewType } from '../types/views'
 import MultiAccountStatusline from './MultiAccountStatusline'
 import { useRegionTypography } from '../hooks/useTypography'
-import { formatInstalledVersion } from '../utils/versionLabel'
+import { formatInstalledVersion, formatUpdateOffer } from '../utils/versionLabel'
 import { useClaudeOff } from '../lib/claudeOff'
 import { claudeCodeInstallCommand } from '../utils/claudeInstallCommand'
 import type { InstallRecipeView, PathHintView } from '../../shared/providers'
@@ -20,6 +20,13 @@ const CONFIRM_WHERE = 'Run this in a new terminal tab? It types the line below, 
 
 declare const __BUILD_TIME__: string
 declare const __APP_VERSION__: string
+
+/** The version main's last update check offered, prerelease part kept; null
+ *  when it names none or cannot be asked (the pill's title then says only
+ *  "Update available", as before). */
+async function readOfferedVersion(): Promise<string | null> {
+  try { return (await window.electronAPI.update.getVersion()) || null } catch { return null }
+}
 
 interface BottomBarProps {
   currentView: ViewType
@@ -52,6 +59,9 @@ export default function BottomBar({ currentView, onViewChange, onUpdateRequested
 
   const [cliAvailable, setCliAvailable] = useState<boolean | null>(null)
   const [updateAvailable, setUpdateAvailable] = useState(false)
+  // The version the update check offers, prerelease part kept, for the Update
+  // pill's title (aicc_planning#369); null until main names one.
+  const [offeredVersion, setOfferedVersion] = useState<string | null>(null)
   const [showCliHelp, setShowCliHelp] = useState(false)
 
   // Escape is the third way out of the CLI help modal (Close and Check again are
@@ -148,7 +158,11 @@ export default function BottomBar({ currentView, onViewChange, onUpdateRequested
     let lastCheckedAt = 0
     const runCheck = () => {
       lastCheckedAt = Date.now()
-      window.electronAPI.update.check().then(setUpdateAvailable)
+      window.electronAPI.update.check().then((available: boolean) => {
+        setUpdateAvailable(available)
+        if (!available) { setOfferedVersion(null); return }
+        void readOfferedVersion().then(setOfferedVersion)
+      })
     }
     runCheck()
     const interval = setInterval(runCheck, UPDATE_INTERVAL_MS)
@@ -158,6 +172,7 @@ export default function BottomBar({ currentView, onViewChange, onUpdateRequested
     window.addEventListener('focus', onFocus)
     const off = window.electronAPI.update.onAvailable((available: boolean) => {
       setUpdateAvailable(available)
+      if (!available) setOfferedVersion(null)
     })
     return () => {
       clearInterval(interval)
@@ -214,7 +229,7 @@ export default function BottomBar({ currentView, onViewChange, onUpdateRequested
             onClick={() => { if (onUpdateRequested) onUpdateRequested(); else void Promise.resolve(window.electronAPI.update.installAndRestart()).catch((e: unknown) => console.error('[update] install failed:', e)) }}
             className="footer-update-pulse px-1.5 py-px rounded-full text-[10px] font-medium focus-ring"
             style={{ color: 'var(--status-success)', background: 'color-mix(in srgb, var(--status-success) 15%, transparent)' }}
-            title={`Update available -- you're on ${formatInstalledVersion(__APP_VERSION__, channel)} -- click to install and restart`}
+            title={`${formatUpdateOffer(offeredVersion)} -- you're on ${formatInstalledVersion(__APP_VERSION__, channel)} -- click to install and restart`}
           >
             Update
           </button>

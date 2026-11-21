@@ -9,7 +9,7 @@ import { useSessionStore } from '../stores/sessionStore'
 import { useAppMetaStore } from '../stores/appMetaStore'
 import { useAccountProfilesStore } from '../stores/accountProfilesStore'
 import { eventToShortcutString, DEFAULT_SHORTCUTS, SHORTCUT_LABELS } from '../utils/shortcuts'
-import { formatInstalledVersion } from '../utils/versionLabel'
+import { formatInstalledVersion, formatUpdateOffer } from '../utils/versionLabel'
 import GitHubConfigTab from './github/config/GitHubConfigTab'
 import CopilotMeterSettings from './settings/CopilotMeterSettings'
 import { isSentinelEnabled } from '../../shared/sentinel-enabled'
@@ -1272,7 +1272,7 @@ export function CheckForUpdatesField({ onUpdateRequested }: { onUpdateRequested?
   const statusText =
     status === 'checking' ? 'Checking...' :
     status === 'up-to-date' ? 'Up to date' :
-    status === 'available' ? (foundVersion ? `Update available -- v${foundVersion}` : 'Update available') :
+    status === 'available' ? formatUpdateOffer(foundVersion) :
     null
 
   const statusColor =
