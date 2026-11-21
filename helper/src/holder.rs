@@ -273,6 +273,9 @@ impl Holder {
                     Ok(0) | Err(_) => break,
                     Ok(n) => n,
                 };
+                #[cfg(test)]
+                hold_the_screen(&out_shared, &mut gate);
+                feed_screen(&out_shared, &buf[..n]);
                 {
                     let mut st = lock(&out_shared.state);
                     st.ring.push(&buf[..n]);
@@ -284,9 +287,6 @@ impl Holder {
                         st.terminal = None;
                     }
                 }
-                #[cfg(test)]
-                hold_the_screen(&out_shared, &mut gate);
-                feed_screen(&out_shared, &buf[..n]);
             }
             // The live channel stays open: it closes once the exit is known,
             // so a client never sees it close before the code is set.
