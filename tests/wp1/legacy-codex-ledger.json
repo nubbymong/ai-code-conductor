@@ -1420,6 +1420,16 @@
       "note": "the keys, marks and reply P19 uses for each CLI, Codex among them"
     },
     {
+      "path": "helper/tests/screen.rs",
+      "predicates": [
+        "P14"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "ADR-030 slice S13, the holder keeps the session screen (2.1.3-beta.12 section A3): the helper test that feeds every recording of the screen corpus to the holder screen and compares the rows tests/unit/shared/screen-corpus.test.ts committed for xterm.js; it names one Codex recording in its list of rows that differ only by a character width; test code only, never shipped; no legacy Codex code path; listed in the repository-wide legacy Codex manifest, zero unmatched at the merge gate (WP1.67)",
+      "note": "test code: a corpus recording named by its file name; no Codex code path"
+    },
+    {
       "path": "package.json",
       "predicates": [
         "P14"

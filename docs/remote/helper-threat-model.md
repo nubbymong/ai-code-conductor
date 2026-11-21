@@ -322,6 +322,31 @@ rollback returns to the earlier beta's rows, and every row has a negative test.
   build scripts and procedural macros and limits features on socket-capable
   crates; `cargo-audit` runs in CI. Budget: under 25 crates, no async runtime,
   no TLS or HTTP crate; a new crate is its own ADR-009 item.
+- **The holder's screen (from 2.1.3-beta.12): six more packages, 18 of the
+  24.** `vt100` 0.18.1 (MIT, 5,111 lines of Rust in `src/`), the terminal
+  parser and screen, and what it brings: `vte` 0.15.0 (Apache-2.0 or MIT,
+  4,144), the escape sequence state machine; `unicode-width` 0.2.3 (MIT or
+  Apache-2.0, 23,234, nearly all of it width tables); `itoa` 1.0.19 (MIT or
+  Apache-2.0, 494); `arrayvec` 0.7.8 (MIT or Apache-2.0, 2,413); and
+  `memchr` 2.8.3 (Unlicense or MIT, 15,824). Each is pinned exactly in
+  `Cargo.lock` with its crates.io checksum. None has a build script or a
+  procedural macro, none opens a file, a socket or a process, and none
+  depends on anything outside the six. `vt100` is built without its default
+  `std` feature, which only adds a `std::io::Write` for the parser and turns
+  on `vte`'s own `std`: without it `vte` keeps an OSC string in a fixed
+  1 KiB buffer instead of a vector that grows with the string. Read for
+  2.1.3-beta.12 (plan section A3): all of `vt100`'s parser, screen, grid,
+  row, cell and callback code and the escape sequences it acts on; `vte`'s
+  state machine (where a sequence begins and ends, its parameter limits and
+  saturating values, the string states and their buffers, the UTF-8 decoding
+  across chunks); and, of the other four, the code those two call:
+  `memchr::memchr` and its runtime CPU dispatch, `ArrayVec`'s push,
+  capacity check and clear, `itoa::Buffer` (used only for vt100's formatted
+  output, which the helper does not call), and `unicode-width`'s character
+  lookup. `unsafe` is in `memchr` (vector search), `arrayvec`, `itoa` and
+  `vte` (UTF-8 it has already checked, read without a second check, and the
+  slices of an OSC string handed to the parser); `vt100` has none. The ADR-009 pass owed before stable reviews the six as a source
+  diff, as every `Cargo.lock` change is.
 - **Build and signing are apart.** The build job holds no secrets and has no
   network. A separate signing job takes only the finished artifact, checks it
   against the reproducible-build comparison and signs, so no build script or
@@ -477,6 +502,73 @@ rollback returns to the earlier beta's rows, and every row has a negative test.
   written into the file, an argument that changes what that CLI starts, a
   session switched while its holder is another session's, and a fall-back that
   leaves a session with no tools and no word.
+- **Kept tool streams (capability `away`, from 2.1.3-beta.12).** A stream
+  whose relay acked `away` is kept while no connection takes tool streams
+  (protocol 15, "Kept streams"), so a relay now outlives the app connection
+  it was with. What a kept stream holds open: the relay's connection to the
+  holder (one of its 16) and one of the session's 8 tool streams, until a
+  connection that takes tool streams attaches, the relay or its CLI goes, the
+  program exits (each kept stream then ends within a quarter of a second), or
+  the session ends. It does not hold the session open: the away clock runs as
+  it does without one, a holder that ends tells no one, and the relay reads
+  the end of its connection and exits 1. What the relay holds meanwhile: at
+  most 32 calls and 4 MiB of them, each for 30 s, and the ids of at most 64
+  calls with the app and 64 it answered in the app's place; a call past the
+  bounds gets the fixed answer at once, and a CLI that does not read what it
+  is sent is cut off at 64 MiB, as before. Of each message the relay reads
+  only whether it is a call and that call's `id` and `method`, and of each
+  answer only its `id` (and of a cancel, the call it names): it
+  never reads or changes a call's arguments or a result, and the only
+  message it writes in the app's place is the fixed answer, with the id of
+  the call it answers. It never sends a call a second time: one the app had
+  when it went is answered at once and dropped, and an answer the app sends
+  to it all the same is dropped. Held calls go, once the app is back, only to
+  the connection the holder gives the stream to, the next attach that takes
+  tool streams, which is the same session's (a holder serves one session).
+  A message the holder read before the stream left an app is refused
+  (`not-connected`), never passed to a later one; the relay has answered its
+  call. A relay that did not ack `away`, and a relay of a holder that does
+  not offer it, are as before. Tested in `helper/tests/relay.rs`:
+  `when_the_app_lets_go_a_relay_that_acked_away_keeps_its_stream_for_the_next_attach`,
+  `a_call_made_while_the_app_is_away_waits_for_it_and_one_the_app_had_is_answered_at_once`,
+  `a_call_still_held_when_its_time_is_up_gets_the_fixed_answer_and_is_dropped`,
+  `at_most_32_calls_and_4_mib_wait_and_a_cancel_drops_a_held_call`,
+  `an_open_while_nothing_takes_tool_streams_is_kept_counts_toward_the_bound_and_ends_with_the_program`,
+  `a_kept_stream_ends_with_its_session_when_the_away_clock_runs_out` and
+  `a_relay_acks_away_only_when_its_holder_offers_it`, and the bounds by the
+  unit tests in `helper/src/relay.rs`. An adversarial pass of it is owed to
+  the security round before 2.1 stable (aicc_planning #320): a CLI that makes
+  the relay hold without bound, an answer made for another call's id, a held
+  call that reaches a connection that should not get it, and a relay kept
+  alive after its session.
+- **The holder's screen and its two reads (capability `screen`, from
+  2.1.3-beta.12, dormant: nothing in the app asks).** The holder parses its
+  session's output into a screen (`helper/src/screen.rs`, the `vt100` crate,
+  3.10) on the thread that carries that output, after the ring and the
+  attached connection have the bytes. Output is untrusted, so the parse is
+  bounded: a CSI parameter above 9999 is cut to 9999 before the parser (a
+  repeat then writes at most 9999 cells, and every other sequence's work is
+  bounded by the screen's size, at most 1000 by 1000 cells); an OSC string is
+  kept to 1 KiB and other strings not at all; a screen holds at most its
+  cells, 200 lines of scrollback and an alternate screen (measured in the
+  Helper job: 1.04 MiB at 120 by 40 with all of them full, 67.21 MiB at 1000
+  by 1000, the largest size a launch may ask for). A panic in the parser is
+  caught, the screen is then not kept, and the output goes on. What a read
+  may return: the
+  screen's size, the cursor, its rows and its last 200 lines as text (so
+  anything the session printed, which the app's own terminal already holds
+  for the same session), and its modes as fixed words and yes or no values,
+  never bytes the app passes on. A read reaches only its own holder's screen
+  (a holder serves one session), may be made by any connection of the same
+  user that acked `screen` (the endpoint's boundary, above), never by a
+  relay, changes no offset, attach or size, and is one message of at most
+  1 MiB. Tested in `helper/tests/screen.rs` and the unit tests of
+  `src/screen.rs`, `src/holder.rs` and `src/serve.rs`. An adversarial pass of
+  it is owed to the security round before 2.1 stable (aicc_planning #320):
+  output made to stall or crash the parser, memory growth past the bound, a
+  read that reaches another session's screen, a read used to change state,
+  and reads made back to back to hold the screen's lock against the output
+  thread.
 - **A program the helper starts for the app keeps none of the app's handles
   (from 2.1.3-beta.8, Windows).** `aicc-helper start` (protocol 15, "Starting
   a program") starts the program the app names, by the drive-absolute path it

@@ -18,9 +18,15 @@
 //    (the holder takes none from the attached connection); each call the
 //    relay sent on a stream the app ends, and the app has not answered, is
 //    answered with an error then (at most MCP_OPEN_CALLS_MAX kept a stream);
-//    the size limit is the holder's, to the byte.
+//    the size limit is the holder's, to the byte;
+//  - `screen` the same way (2.1.3-beta.12, plan section A3): acked only when
+//    the connection is asked for it AND the hello offers it, which no caller
+//    asks yet; a read on a connection that acked it is a request like any
+//    other, and its answer passes the reader.
 import { describe, it, expect, afterEach } from 'vitest'
-import { FrameReader, encodeJsonFrame, type HolderRecord } from '../../../src/main/session-helper/protocol'
+import { readFileSync } from 'fs'
+import { resolve } from 'path'
+import { FrameReader, encodeJsonFrame, readScreenLines, readScreenRows, type HolderRecord } from '../../../src/main/session-helper/protocol'
 import { HolderConnection, MCP_MESSAGE_TO_HELPER_MAX, MCP_OPEN_CALLS_MAX, TOOL_STREAM_SENTENCES } from '../../../src/main/session-helper/connection'
 import { duplexPair } from './session-helper-fake-holder'
 
@@ -52,15 +58,16 @@ const open: HolderConnection[] = []
 afterEach(() => { for (const c of open.splice(0)) c.close() })
 
 /** A holder that says hello offering `caps`, and the app's connection to it
- *  (`hooks`: the connection wants hook events; `mcp`: it carries tool streams). */
-async function connected(caps: string[], hooks: boolean, mcp = false) {
+ *  (`hooks`: the connection wants hook events; `mcp`: it carries tool streams;
+ *  `screen`: it reads the screen). */
+async function connected(caps: string[], hooks: boolean, mcp = false, screen = false) {
   const [app, holder] = duplexPair()
   const fromApp: Json[] = []
   const reader = new FrameReader('app_to_helper')
   holder.on('data', (chunk: Buffer) => { for (const f of reader.push(chunk)) if (f.kind === 0) fromApp.push(f.json as Json) })
   const hello = { proto: [1], helper: { version: '0.1.0' }, os: 'windows', arch: 'x86_64', caps, session: { sid: SID, state: 'live' } }
   holder.write(`AICC-HELLO ${NONCE} ${JSON.stringify(hello)}\n`)
-  const conn = await HolderConnection.open({ record: RECORD, os: 'windows', openStream: async () => app, hooks, mcp, pingEveryMs: 600_000 })
+  const conn = await HolderConnection.open({ record: RECORD, os: 'windows', openStream: async () => app, hooks, mcp, screen, pingEveryMs: 600_000 })
   open.push(conn)
   const events: unknown[] = []
   conn.on('event', (e) => { events.push(e) })
@@ -358,5 +365,45 @@ describe('control messages travel on channel 0 only', () => {
     await tick(30)
     c.send({ t: 'term.resized', re: id })
     expect(await reply).toEqual({ t: 'term.resized', re: id })
+  })
+})
+
+describe('the connection acks screen only when asked for it and the holder offers it (2.1.3-beta.12, plan section A3)', () => {
+  /** What a holder of 2.1.3-beta.12 offers, and the answers it gives (helper/fixtures/local.json). */
+  const SCREEN = JSON.parse(readFileSync(resolve(__dirname, '../../../helper/fixtures/local.json'), 'utf8')).screen
+  const NOW_CAPS: string[] = SCREEN.offered
+
+  it('a hello that offers screen, to a connection not asked for it (as every connection the app makes): never acked', async () => {
+    for (const [hooks, mcp] of [[false, false], [true, false], [false, true], [true, true]]) {
+      const c = await connected(NOW_CAPS, hooks, mcp)
+      expect(c.fromApp[0], `hooks ${hooks}, mcp ${mcp}`).toEqual({ t: 'hello.ack', proto: 1, caps: ['core', 'local', ...(hooks ? ['hooks'] : []), ...(mcp ? ['mcp'] : [])] })
+      expect(c.conn.screen).toBe(false)
+    }
+  })
+
+  it('a connection asked for screen, to a hello from before it: not acked', async () => {
+    for (const caps of [ALL_CAPS, [...ALL_CAPS, 'away']]) {
+      const c = await connected(caps, false, false, true)
+      expect(c.fromApp[0]).toEqual({ t: 'hello.ack', proto: 1, caps: ['core', 'local'] })
+      expect(c.conn.screen).toBe(false)
+    }
+  })
+
+  it('both: screen is acked, last, and a read is answered as a request and read strictly', async () => {
+    const c = await connected(NOW_CAPS, true, true, true)
+    expect(c.fromApp[0]).toEqual({ t: 'hello.ack', proto: 1, caps: ['core', 'local', 'hooks', 'mcp', 'screen'] })
+    expect(c.conn.screen).toBe(true)
+    const only = await connected(NOW_CAPS, false, false, true)
+    expect(only.fromApp[0]).toEqual({ t: 'hello.ack', proto: 1, caps: ['core', 'local', 'screen'] })
+    for (const [t, type, read] of [['screen.read', 'screen.rows', readScreenRows], ['screen.tail', 'screen.lines', readScreenLines]] as const) {
+      const asked = c.conn.request(t === 'screen.read' ? { t } : { t, count: 5 })
+      await until(() => c.fromApp.some((m) => m.t === t), t)
+      const id = c.fromApp.find((m) => m.t === t)!.id
+      const vector = (SCREEN.messages as Array<{ type: string; json: string }>).find((v) => v.type === type)!
+      c.send({ ...JSON.parse(vector.json), re: id })
+      const reply = await asked
+      expect(read(reply, Buffer.byteLength(JSON.stringify(reply), 'utf8')), t).not.toBeNull()
+    }
+    expect(c.conn.isClosed).toBe(false)
   })
 })

@@ -33,6 +33,13 @@ import {
   readMcpClose,
   readMcpOpen,
   readRecord,
+  readScreenLines,
+  readScreenRows,
+  MOUSE_ENCODING_WORDS,
+  MOUSE_WORDS,
+  SCREEN_CAP,
+  SCREEN_TAIL_MAX,
+  SCREEN_WORDS,
   validEndpoint,
   type HelperOs,
 } from '../../../src/main/session-helper/protocol'
@@ -452,5 +459,83 @@ describe('session helper protocol: tool streams (capability mcp, section 15)', (
     expect(read(largest)).toEqual({ stream: Number.MAX_SAFE_INTEGER, message: largest.message })
     expect(read({ ...largest, message: ofSize(MCP_MESSAGE_TO_APP_MAX + 1) })).toBeNull()
     expect(readMcp(largest, JSON_FROM_HELPER_MAX + 1)).toBeNull()
+  })
+})
+
+// 2.1.3-beta.12, plan section A3: the `screen` part of helper/fixtures/local.json,
+// read from the app's side. No connection the app makes acks `screen` yet;
+// these are the readers the step that points a reader at the holder's screen
+// will use.
+describe('session helper protocol: screen reads (capability screen, section 15)', () => {
+  const S = local.screen
+  /** An answer as the app's reader gets it from a holder's frame. */
+  const read = (msg: unknown) => {
+    const f = decodeOneFrame(encodeJsonFrame(msg), 'helper_to_app')
+    if ('error' in f || f.kind !== 0) throw new Error('not one JSON frame')
+    return (f.json as { t?: unknown }).t === 'screen.lines' ? readScreenLines(f.json, f.size) : readScreenRows(f.json, f.size)
+  }
+  /** What a reader gives for a holder's answer: its fields but `t` and `re`. */
+  const fields = (v: Record<string, unknown>) => {
+    const { t: _t, re: _re, ...rest } = v
+    return rest
+  }
+
+  it("the cap, the caps a holder offers, the words and the limits are the helper's", () => {
+    expect(SCREEN_CAP).toBe('screen')
+    expect(S.offered).toEqual(['core', 'local', HOOKS_CAP, MCP_CAP, 'away', SCREEN_CAP])
+    expect(S.offered.slice(0, 5)).toEqual(local.away.offered)
+    expect(SCREEN_TAIL_MAX).toBe(S.limits.tail_lines)
+    expect(JSON_FROM_HELPER_MAX).toBe(S.limits.answer_bytes)
+    expect([SCREEN_WORDS, MOUSE_WORDS, MOUSE_ENCODING_WORDS]).toEqual([
+      ['normal', 'alternate'],
+      ['none', 'press', 'press-release', 'button-motion', 'any-motion'],
+      ['default', 'utf8', 'sgr'],
+    ])
+  })
+
+  it('the ack names screen only when asked to, after hooks and mcp', () => {
+    expect(helloAck(false, false, true)).toEqual({ t: 'hello.ack', proto: 1, caps: ['core', 'local', SCREEN_CAP] })
+    expect(helloAck(true, true, true)).toEqual({ t: 'hello.ack', proto: 1, caps: ['core', 'local', HOOKS_CAP, MCP_CAP, SCREEN_CAP] })
+    expect(helloAck(true, true)).toEqual({ t: 'hello.ack', proto: 1, caps: ['core', 'local', HOOKS_CAP, MCP_CAP] })
+    expect(helloAck(false, false, false)).toEqual(helloAck())
+  })
+
+  it('every answer vector reads as its fields say, exactly as the holder sends it', () => {
+    expect(S.messages.map((v: { type: string }) => v.type)).toEqual(expect.arrayContaining(['screen.rows', 'screen.lines']))
+    for (const v of S.messages) {
+      const sent = JSON.parse(v.json)
+      expect(sent.t, v.name).toBe(v.type)
+      expect(read(sent), v.name).toEqual(fields(sent))
+    }
+    // A row the reader gives has every field a row of the app's readers has.
+    const rows = read(JSON.parse(S.messages[0].json))
+    if (!rows || !('rows' in rows)) throw new Error('not a screen.rows')
+    expect(rows.lines[1]).toEqual({ text: 'dim cur', typed: '    cur', inverse: '    cur', width: 12, end: 7 })
+    expect(rows.modes).toEqual({ screen: 'alternate', bracketed_paste: true, application_cursor: true, application_keypad: true, mouse: 'press-release', mouse_encoding: 'sgr', cursor_hidden: true })
+  })
+
+  it('an answer that breaks its schema, names an unknown mode word or is over a frame is refused', () => {
+    expect(S.invalid_messages.length).toBeGreaterThanOrEqual(15)
+    for (const v of S.invalid_messages) expect(read(JSON.parse(v.json)), v.name).toBeNull()
+    const rows = JSON.parse(S.messages[0].json)
+    const lines = JSON.parse(S.messages.find((v: { type: string }) => v.type === 'screen.lines').json)
+    // Each reader reads its own type only, and an object only.
+    expect(readScreenRows(lines, 100)).toBeNull()
+    expect(readScreenLines(rows, 100)).toBeNull()
+    expect(readScreenRows(['screen.rows'], 20)).toBeNull()
+    expect(readScreenLines(null, 4)).toBeNull()
+    // Over what a frame from the holder holds.
+    expect(readScreenRows(rows, JSON_FROM_HELPER_MAX)).not.toBeNull()
+    expect(readScreenRows(rows, JSON_FROM_HELPER_MAX + 1)).toBeNull()
+    expect(readScreenLines(lines, JSON_FROM_HELPER_MAX + 1)).toBeNull()
+    // Cut: fewer rows than the screen has, never more nor as many.
+    expect(readScreenRows({ ...rows, cut: true, lines: rows.lines.slice(1) }, 100)).not.toBeNull()
+    expect(readScreenRows({ ...rows, cut: true }, 100)).toBeNull()
+    // The cursor's column may be the screen's width (a wrap is pending), not past it.
+    expect(readScreenRows({ ...rows, cursor: { row: 2, col: 12 } }, 100)).not.toBeNull()
+    // The most lines a tail holds, and one more.
+    const tail = (n: number) => ({ ...lines, lines: Array.from({ length: n }, () => ({ text: 'x', typed: 'x' })) })
+    expect(readScreenLines(tail(SCREEN_TAIL_MAX), 100)).not.toBeNull()
+    expect(readScreenLines(tail(SCREEN_TAIL_MAX + 1), 100)).toBeNull()
   })
 })

@@ -11,7 +11,9 @@
  * requests (even ids, one reply each), terminal output and the holder's
  * events. A connection asks for `mcp` only when the manager was given the
  * tool functions for its session's CLI, which app-wiring.ts gives for the
- * agent sessions (2.1.3-beta.11, plan sections B1 and B2).
+ * agent sessions (2.1.3-beta.11, plan sections B1 and B2). A connection asks
+ * for `screen` (the holder's screen reads, 2.1.3-beta.12, plan section A3)
+ * only when it is given the `screen` option, which no caller gives yet.
  *
  * On a connection that acked `mcp`, the app sends a tool stream's messages
  * (sendMcp) only when the holder would read them, and ends its side of a
@@ -39,6 +41,7 @@ import {
   LOCAL_CAPS,
   MCP_CAP,
   PROTO_VERSION,
+  SCREEN_CAP,
   TERMINAL_CHANNEL,
   chooseProto,
   RAW_MAX,
@@ -82,6 +85,10 @@ export interface ConnectionOptions {
    *  the holder offers it. The manager sets it only when the app gives it the
    *  tool functions, which app-wiring.ts does for the agent sessions. */
   mcp?: boolean
+  /** This connection reads the session's screen (`screen.read`,
+   *  `screen.tail`): `screen` is acked when the holder offers it. No caller
+   *  sets it yet. */
+  screen?: boolean
   helloTimeoutMs?: number
   replyTimeoutMs?: number
   pingEveryMs?: number
@@ -280,6 +287,9 @@ export class HolderConnection extends EventEmitter<HolderConnectionEvents> {
   /** True when this connection acked `mcp`: the holder offered it and the
    *  connection wanted it. Only then are tool stream messages reported. */
   readonly mcp: boolean
+  /** True when this connection acked `screen`: the holder offered it and the
+   *  connection asked for it. Only then may it ask for screen reads. */
+  readonly screen: boolean
   private readonly stream: Duplex
   private readonly reader = new FrameReader('helper_to_app')
   private nextId = 2
@@ -315,12 +325,13 @@ export class HolderConnection extends EventEmitter<HolderConnectionEvents> {
     this.hello = hello
     this.hooks = opts.hooks === true && hello.caps.includes(HOOKS_CAP)
     this.mcp = opts.mcp === true && hello.caps.includes(MCP_CAP)
+    this.screen = opts.screen === true && hello.caps.includes(SCREEN_CAP)
     this.replyTimeoutMs = opts.replyTimeoutMs ?? REPLY_TIMEOUT_MS
     stream.on('data', (chunk: Buffer) => this.onBytes(chunk))
     stream.on('close', () => this.shut())
     stream.on('end', () => this.shut())
     stream.on('error', () => this.shut())
-    stream.write(encodeJsonFrame(helloAck(this.hooks, this.mcp)))
+    stream.write(encodeJsonFrame(helloAck(this.hooks, this.mcp, this.screen)))
     if (rest.length > 0) this.onBytes(rest)
     stream.resume()
     const every = opts.pingEveryMs ?? PING_EVERY_MS

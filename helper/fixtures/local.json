@@ -1834,7 +1834,7 @@
     }
   },
   "mcp": {
-    "_doc": "Tool stream vectors for docs/remote/helper-protocol.md section 15 (capability mcp, from 2.1.3-beta.10). Read by helper/tests/fixtures.rs and tests/unit/main/session-helper-protocol.test.ts. A request is read as a connection that acked core, local and mcp (the relay's ack) reads it, unless the vector says what was acked (acked). messages are the exact bytes the holder sends the app, and the app reads each as its fields say; invalid_messages are ones the app refuses. The limits on a message are for its message as compact JSON.",
+    "_doc": "Tool stream vectors for docs/remote/helper-protocol.md section 15 (capability mcp, from 2.1.3-beta.10). Read by helper/tests/fixtures.rs and tests/unit/main/session-helper-protocol.test.ts. A request is read as a connection that acked core, local and mcp (the relay's ack) reads it, unless the vector says what was acked (acked). messages are the exact bytes the holder sends the app, and the app reads each as its fields say; invalid_messages are ones the app refuses. The limits on a message are for its message as compact JSON. offered and relay_caps are 2.1.3-beta.10's: what a holder offered then, and what a relay still acks a holder that does not offer away. A holder and a relay of 2.1.3-beta.12 are the away part's.",
     "offered": [
       "core",
       "local",
@@ -2143,6 +2143,294 @@
       {
         "name": "a message that is null",
         "json": "{\"t\":\"mcp\",\"stream\":1,\"message\":null}"
+      }
+    ]
+  },
+  "away": {
+    "_doc": "Kept tool stream vectors for docs/remote/helper-protocol.md section 15 (capability away, from 2.1.3-beta.12). Read by helper/tests/fixtures.rs. offered is what a holder offers, relay_caps what a relay acks a holder that offers away. messages are the exact bytes the holder sends a relay that acked away: mcp.away when no connection takes its stream, mcp.back when one takes it again. answers are the exact lines the relay writes for its CLI in the app's place, without the line end: to a tools/call, and to any other call. The limits are the relay's: hold_secs is how long a held call waits in the build the installer ships, test_hold_secs in the build cargo test runs; held_bytes counts each held call as compact JSON.",
+    "offered": [
+      "core",
+      "local",
+      "hooks",
+      "mcp",
+      "away"
+    ],
+    "relay_caps": [
+      "core",
+      "local",
+      "mcp",
+      "away"
+    ],
+    "limits": {
+      "hold_secs": 30,
+      "test_hold_secs": 4,
+      "held_calls": 32,
+      "held_bytes": 4194304,
+      "remembered_calls": 64
+    },
+    "messages": [
+      {
+        "name": "the app is away",
+        "type": "mcp.away",
+        "stream": 1,
+        "json": "{\"t\":\"mcp.away\",\"stream\":1}"
+      },
+      {
+        "name": "the app is back, on the longest number",
+        "type": "mcp.back",
+        "stream": 9007199254740991,
+        "json": "{\"t\":\"mcp.back\",\"stream\":9007199254740991}"
+      }
+    ],
+    "answers": [
+      {
+        "name": "to a tool call",
+        "call": {
+          "jsonrpc": "2.0",
+          "id": 7,
+          "method": "tools/call",
+          "params": {
+            "name": "echo",
+            "arguments": {
+              "text": "hi"
+            }
+          }
+        },
+        "json": "{\"jsonrpc\":\"2.0\",\"id\":7,\"result\":{\"content\":[{\"type\":\"text\",\"text\":\"AI Code Conductor is updating, try again shortly\"}],\"isError\":true}}"
+      },
+      {
+        "name": "to any other call, with a string id",
+        "call": {
+          "jsonrpc": "2.0",
+          "id": "a-1",
+          "method": "tools/list"
+        },
+        "json": "{\"jsonrpc\":\"2.0\",\"id\":\"a-1\",\"error\":{\"code\":-32603,\"message\":\"AI Code Conductor is updating, try again shortly\"}}"
+      }
+    ]
+  },
+  "screen": {
+    "_doc": "Screen read vectors for docs/remote/helper-protocol.md section 15 (capability screen, from 2.1.3-beta.12). Read by helper/tests/fixtures.rs and tests/unit/main/session-helper-protocol.test.ts. offered is what a holder offers. A request is read as a connection that acked core and screen reads it, unless the vector says what was acked (acked). Each of messages is the exact bytes a holder sends the app: its screen of cols by rows fed feed (the session's output from its first byte), then read (screen.rows, the answer to screen.read re) or its last count lines (screen.lines, the answer to screen.tail re); the app reads each as its json says. invalid_messages are ones the app refuses. The limits: tail_lines is the most a screen.tail asks for, scrollback_lines what the screen keeps, param_ceiling the largest CSI parameter that reaches its parser, answer_bytes the most JSON an answer is.",
+    "offered": [
+      "core",
+      "local",
+      "hooks",
+      "mcp",
+      "away",
+      "screen"
+    ],
+    "limits": {
+      "tail_lines": 200,
+      "scrollback_lines": 200,
+      "param_ceiling": 9999,
+      "answer_bytes": 1048576
+    },
+    "requests": {
+      "valid": [
+        {
+          "name": "a read",
+          "json": "{\"t\":\"screen.read\",\"id\":2}",
+          "expect": {
+            "type": "screen.read",
+            "id": 2
+          }
+        },
+        {
+          "name": "a tail of the most lines",
+          "json": "{\"t\":\"screen.tail\",\"id\":4,\"count\":200}",
+          "expect": {
+            "type": "screen.tail",
+            "id": 4,
+            "count": 200
+          }
+        },
+        {
+          "name": "a tail of one line, on a connection that acked everything a holder offers",
+          "acked": [
+            "core",
+            "local",
+            "hooks",
+            "mcp",
+            "away",
+            "screen"
+          ],
+          "json": "{\"t\":\"screen.tail\",\"id\":6,\"count\":1}",
+          "expect": {
+            "type": "screen.tail",
+            "id": 6,
+            "count": 1
+          }
+        }
+      ],
+      "invalid": [
+        {
+          "name": "a read on a connection that did not ack screen",
+          "acked": [
+            "core",
+            "local",
+            "hooks",
+            "mcp",
+            "away"
+          ],
+          "json": "{\"t\":\"screen.read\",\"id\":2}",
+          "error": "unknown-type"
+        },
+        {
+          "name": "a tail on a connection that did not ack screen",
+          "acked": [
+            "core",
+            "local"
+          ],
+          "json": "{\"t\":\"screen.tail\",\"id\":2,\"count\":1}",
+          "error": "unknown-type"
+        },
+        {
+          "name": "a tail of no lines",
+          "json": "{\"t\":\"screen.tail\",\"id\":2,\"count\":0}",
+          "error": "bad-field"
+        },
+        {
+          "name": "a tail of 201 lines",
+          "json": "{\"t\":\"screen.tail\",\"id\":2,\"count\":201}",
+          "error": "bad-field"
+        },
+        {
+          "name": "a tail with no count",
+          "json": "{\"t\":\"screen.tail\",\"id\":2}",
+          "error": "bad-field"
+        },
+        {
+          "name": "a read with a count",
+          "json": "{\"t\":\"screen.read\",\"id\":2,\"count\":5}",
+          "error": "bad-field"
+        },
+        {
+          "name": "a read with an odd id",
+          "json": "{\"t\":\"screen.read\",\"id\":3}",
+          "error": "bad-field"
+        }
+      ]
+    },
+    "messages": [
+      {
+        "name": "the alternate screen, every mode set, a dim word and an inverse one",
+        "type": "screen.rows",
+        "cols": 12,
+        "rows": 3,
+        "feed": "\u001b[?1049h\u001b[?2004h\u001b[?1000h\u001b[?1006h\u001b[?1h\u001b=\u001b[?25lfirst\r\n\u001b[2mdim\u001b[22m \u001b[7mcur\u001b[m",
+        "re": 2,
+        "json": "{\"t\":\"screen.rows\",\"re\":2,\"cols\":12,\"rows\":3,\"cursor\":{\"row\":1,\"col\":7},\"modes\":{\"screen\":\"alternate\",\"bracketed_paste\":true,\"application_cursor\":true,\"application_keypad\":true,\"mouse\":\"press-release\",\"mouse_encoding\":\"sgr\",\"cursor_hidden\":true},\"cut\":false,\"lines\":[{\"text\":\"first\",\"typed\":\"first\",\"inverse\":\"\",\"width\":12,\"end\":5},{\"text\":\"dim cur\",\"typed\":\"    cur\",\"inverse\":\"    cur\",\"width\":12,\"end\":7},{\"text\":\"\",\"typed\":\"\",\"inverse\":\"\",\"width\":12,\"end\":0}]}"
+      },
+      {
+        "name": "back on the normal screen, its rows kept, button motion in UTF-8",
+        "type": "screen.rows",
+        "cols": 4,
+        "rows": 2,
+        "feed": "ab\u001b[?1049h\u001b[?1049lc\u001b[?1002h\u001b[?1005h",
+        "re": 6,
+        "json": "{\"t\":\"screen.rows\",\"re\":6,\"cols\":4,\"rows\":2,\"cursor\":{\"row\":0,\"col\":3},\"modes\":{\"screen\":\"normal\",\"bracketed_paste\":false,\"application_cursor\":false,\"application_keypad\":false,\"mouse\":\"button-motion\",\"mouse_encoding\":\"utf8\",\"cursor_hidden\":false},\"cut\":false,\"lines\":[{\"text\":\"abc\",\"typed\":\"abc\",\"inverse\":\"\",\"width\":4,\"end\":3},{\"text\":\"\",\"typed\":\"\",\"inverse\":\"\",\"width\":4,\"end\":0}]}"
+      },
+      {
+        "name": "a tail of more lines than are held: every line, scrollback first, written spaces kept",
+        "type": "screen.lines",
+        "cols": 10,
+        "rows": 2,
+        "feed": "one\r\ntwo\r\nthree\r\n\u001b[2mfour\u001b[m  ",
+        "count": 5,
+        "re": 4,
+        "json": "{\"t\":\"screen.lines\",\"re\":4,\"cut\":false,\"lines\":[{\"text\":\"one\",\"typed\":\"one\"},{\"text\":\"two\",\"typed\":\"two\"},{\"text\":\"three\",\"typed\":\"three\"},{\"text\":\"four  \",\"typed\":\"\"}]}"
+      },
+      {
+        "name": "a tail of two lines",
+        "type": "screen.lines",
+        "cols": 10,
+        "rows": 2,
+        "feed": "one\r\ntwo\r\nthree\r\n\u001b[2mfour\u001b[m  ",
+        "count": 2,
+        "re": 8,
+        "json": "{\"t\":\"screen.lines\",\"re\":8,\"cut\":false,\"lines\":[{\"text\":\"three\",\"typed\":\"three\"},{\"text\":\"four  \",\"typed\":\"\"}]}"
+      }
+    ],
+    "invalid_messages": [
+      {
+        "name": "an unknown mouse word",
+        "json": "{\"t\":\"screen.rows\",\"re\":2,\"cols\":12,\"rows\":3,\"cursor\":{\"row\":1,\"col\":7},\"modes\":{\"screen\":\"alternate\",\"bracketed_paste\":true,\"application_cursor\":true,\"application_keypad\":true,\"mouse\":\"highlight\",\"mouse_encoding\":\"sgr\",\"cursor_hidden\":true},\"cut\":false,\"lines\":[{\"text\":\"first\",\"typed\":\"first\",\"inverse\":\"\",\"width\":12,\"end\":5},{\"text\":\"dim cur\",\"typed\":\"    cur\",\"inverse\":\"    cur\",\"width\":12,\"end\":7},{\"text\":\"\",\"typed\":\"\",\"inverse\":\"\",\"width\":12,\"end\":0}]}"
+      },
+      {
+        "name": "an unknown screen word",
+        "json": "{\"t\":\"screen.rows\",\"re\":2,\"cols\":12,\"rows\":3,\"cursor\":{\"row\":1,\"col\":7},\"modes\":{\"screen\":\"other\",\"bracketed_paste\":true,\"application_cursor\":true,\"application_keypad\":true,\"mouse\":\"press-release\",\"mouse_encoding\":\"sgr\",\"cursor_hidden\":true},\"cut\":false,\"lines\":[{\"text\":\"first\",\"typed\":\"first\",\"inverse\":\"\",\"width\":12,\"end\":5},{\"text\":\"dim cur\",\"typed\":\"    cur\",\"inverse\":\"    cur\",\"width\":12,\"end\":7},{\"text\":\"\",\"typed\":\"\",\"inverse\":\"\",\"width\":12,\"end\":0}]}"
+      },
+      {
+        "name": "a mode that is not yes or no",
+        "json": "{\"t\":\"screen.rows\",\"re\":2,\"cols\":12,\"rows\":3,\"cursor\":{\"row\":1,\"col\":7},\"modes\":{\"screen\":\"alternate\",\"bracketed_paste\":1,\"application_cursor\":true,\"application_keypad\":true,\"mouse\":\"press-release\",\"mouse_encoding\":\"sgr\",\"cursor_hidden\":true},\"cut\":false,\"lines\":[{\"text\":\"first\",\"typed\":\"first\",\"inverse\":\"\",\"width\":12,\"end\":5},{\"text\":\"dim cur\",\"typed\":\"    cur\",\"inverse\":\"    cur\",\"width\":12,\"end\":7},{\"text\":\"\",\"typed\":\"\",\"inverse\":\"\",\"width\":12,\"end\":0}]}"
+      },
+      {
+        "name": "a mode too many",
+        "json": "{\"t\":\"screen.rows\",\"re\":2,\"cols\":12,\"rows\":3,\"cursor\":{\"row\":1,\"col\":7},\"modes\":{\"screen\":\"alternate\",\"bracketed_paste\":true,\"application_cursor\":true,\"application_keypad\":true,\"mouse\":\"press-release\",\"mouse_encoding\":\"sgr\",\"cursor_hidden\":true,\"focus\":true},\"cut\":false,\"lines\":[{\"text\":\"first\",\"typed\":\"first\",\"inverse\":\"\",\"width\":12,\"end\":5},{\"text\":\"dim cur\",\"typed\":\"    cur\",\"inverse\":\"    cur\",\"width\":12,\"end\":7},{\"text\":\"\",\"typed\":\"\",\"inverse\":\"\",\"width\":12,\"end\":0}]}"
+      },
+      {
+        "name": "no modes",
+        "json": "{\"t\":\"screen.rows\",\"re\":2,\"cols\":12,\"rows\":3,\"cursor\":{\"row\":1,\"col\":7},\"cut\":false,\"lines\":[{\"text\":\"first\",\"typed\":\"first\",\"inverse\":\"\",\"width\":12,\"end\":5},{\"text\":\"dim cur\",\"typed\":\"    cur\",\"inverse\":\"    cur\",\"width\":12,\"end\":7},{\"text\":\"\",\"typed\":\"\",\"inverse\":\"\",\"width\":12,\"end\":0}]}"
+      },
+      {
+        "name": "a field too many",
+        "json": "{\"t\":\"screen.rows\",\"re\":2,\"cols\":12,\"rows\":3,\"cursor\":{\"row\":1,\"col\":7},\"modes\":{\"screen\":\"alternate\",\"bracketed_paste\":true,\"application_cursor\":true,\"application_keypad\":true,\"mouse\":\"press-release\",\"mouse_encoding\":\"sgr\",\"cursor_hidden\":true},\"cut\":false,\"lines\":[{\"text\":\"first\",\"typed\":\"first\",\"inverse\":\"\",\"width\":12,\"end\":5},{\"text\":\"dim cur\",\"typed\":\"    cur\",\"inverse\":\"    cur\",\"width\":12,\"end\":7},{\"text\":\"\",\"typed\":\"\",\"inverse\":\"\",\"width\":12,\"end\":0}],\"seq\":1}"
+      },
+      {
+        "name": "fewer rows than the screen has, and not cut",
+        "json": "{\"t\":\"screen.rows\",\"re\":2,\"cols\":12,\"rows\":3,\"cursor\":{\"row\":1,\"col\":7},\"modes\":{\"screen\":\"alternate\",\"bracketed_paste\":true,\"application_cursor\":true,\"application_keypad\":true,\"mouse\":\"press-release\",\"mouse_encoding\":\"sgr\",\"cursor_hidden\":true},\"cut\":false,\"lines\":[{\"text\":\"dim cur\",\"typed\":\"    cur\",\"inverse\":\"    cur\",\"width\":12,\"end\":7},{\"text\":\"\",\"typed\":\"\",\"inverse\":\"\",\"width\":12,\"end\":0}]}"
+      },
+      {
+        "name": "more rows than the screen has",
+        "json": "{\"t\":\"screen.rows\",\"re\":2,\"cols\":12,\"rows\":3,\"cursor\":{\"row\":1,\"col\":7},\"modes\":{\"screen\":\"alternate\",\"bracketed_paste\":true,\"application_cursor\":true,\"application_keypad\":true,\"mouse\":\"press-release\",\"mouse_encoding\":\"sgr\",\"cursor_hidden\":true},\"cut\":true,\"lines\":[{\"text\":\"first\",\"typed\":\"first\",\"inverse\":\"\",\"width\":12,\"end\":5},{\"text\":\"dim cur\",\"typed\":\"    cur\",\"inverse\":\"    cur\",\"width\":12,\"end\":7},{\"text\":\"\",\"typed\":\"\",\"inverse\":\"\",\"width\":12,\"end\":0},{\"text\":\"\",\"typed\":\"\",\"inverse\":\"\",\"width\":12,\"end\":0}]}"
+      },
+      {
+        "name": "a row whose width is not the screen's",
+        "json": "{\"t\":\"screen.rows\",\"re\":2,\"cols\":12,\"rows\":3,\"cursor\":{\"row\":1,\"col\":7},\"modes\":{\"screen\":\"alternate\",\"bracketed_paste\":true,\"application_cursor\":true,\"application_keypad\":true,\"mouse\":\"press-release\",\"mouse_encoding\":\"sgr\",\"cursor_hidden\":true},\"cut\":false,\"lines\":[{\"text\":\"first\",\"typed\":\"first\",\"inverse\":\"\",\"width\":12,\"end\":5},{\"text\":\"dim cur\",\"typed\":\"    cur\",\"inverse\":\"    cur\",\"width\":11,\"end\":7},{\"text\":\"\",\"typed\":\"\",\"inverse\":\"\",\"width\":12,\"end\":0}]}"
+      },
+      {
+        "name": "a row that ends past the screen",
+        "json": "{\"t\":\"screen.rows\",\"re\":2,\"cols\":12,\"rows\":3,\"cursor\":{\"row\":1,\"col\":7},\"modes\":{\"screen\":\"alternate\",\"bracketed_paste\":true,\"application_cursor\":true,\"application_keypad\":true,\"mouse\":\"press-release\",\"mouse_encoding\":\"sgr\",\"cursor_hidden\":true},\"cut\":false,\"lines\":[{\"text\":\"first\",\"typed\":\"first\",\"inverse\":\"\",\"width\":12,\"end\":5},{\"text\":\"dim cur\",\"typed\":\"    cur\",\"inverse\":\"    cur\",\"width\":12,\"end\":13},{\"text\":\"\",\"typed\":\"\",\"inverse\":\"\",\"width\":12,\"end\":0}]}"
+      },
+      {
+        "name": "a row with no inverse",
+        "json": "{\"t\":\"screen.rows\",\"re\":2,\"cols\":12,\"rows\":3,\"cursor\":{\"row\":1,\"col\":7},\"modes\":{\"screen\":\"alternate\",\"bracketed_paste\":true,\"application_cursor\":true,\"application_keypad\":true,\"mouse\":\"press-release\",\"mouse_encoding\":\"sgr\",\"cursor_hidden\":true},\"cut\":false,\"lines\":[{\"text\":\"first\",\"typed\":\"first\",\"width\":12,\"end\":5},{\"text\":\"dim cur\",\"typed\":\"    cur\",\"inverse\":\"    cur\",\"width\":12,\"end\":7},{\"text\":\"\",\"typed\":\"\",\"inverse\":\"\",\"width\":12,\"end\":0}]}"
+      },
+      {
+        "name": "a cursor below the screen",
+        "json": "{\"t\":\"screen.rows\",\"re\":2,\"cols\":12,\"rows\":3,\"cursor\":{\"row\":3,\"col\":0},\"modes\":{\"screen\":\"alternate\",\"bracketed_paste\":true,\"application_cursor\":true,\"application_keypad\":true,\"mouse\":\"press-release\",\"mouse_encoding\":\"sgr\",\"cursor_hidden\":true},\"cut\":false,\"lines\":[{\"text\":\"first\",\"typed\":\"first\",\"inverse\":\"\",\"width\":12,\"end\":5},{\"text\":\"dim cur\",\"typed\":\"    cur\",\"inverse\":\"    cur\",\"width\":12,\"end\":7},{\"text\":\"\",\"typed\":\"\",\"inverse\":\"\",\"width\":12,\"end\":0}]}"
+      },
+      {
+        "name": "a cursor past the wrap column",
+        "json": "{\"t\":\"screen.rows\",\"re\":2,\"cols\":12,\"rows\":3,\"cursor\":{\"row\":0,\"col\":13},\"modes\":{\"screen\":\"alternate\",\"bracketed_paste\":true,\"application_cursor\":true,\"application_keypad\":true,\"mouse\":\"press-release\",\"mouse_encoding\":\"sgr\",\"cursor_hidden\":true},\"cut\":false,\"lines\":[{\"text\":\"first\",\"typed\":\"first\",\"inverse\":\"\",\"width\":12,\"end\":5},{\"text\":\"dim cur\",\"typed\":\"    cur\",\"inverse\":\"    cur\",\"width\":12,\"end\":7},{\"text\":\"\",\"typed\":\"\",\"inverse\":\"\",\"width\":12,\"end\":0}]}"
+      },
+      {
+        "name": "a screen of 1001 columns",
+        "json": "{\"t\":\"screen.rows\",\"re\":2,\"cols\":1001,\"rows\":3,\"cursor\":{\"row\":1,\"col\":7},\"modes\":{\"screen\":\"alternate\",\"bracketed_paste\":true,\"application_cursor\":true,\"application_keypad\":true,\"mouse\":\"press-release\",\"mouse_encoding\":\"sgr\",\"cursor_hidden\":true},\"cut\":false,\"lines\":[{\"text\":\"first\",\"typed\":\"first\",\"inverse\":\"\",\"width\":1001,\"end\":5},{\"text\":\"dim cur\",\"typed\":\"    cur\",\"inverse\":\"    cur\",\"width\":1001,\"end\":7},{\"text\":\"\",\"typed\":\"\",\"inverse\":\"\",\"width\":1001,\"end\":0}]}"
+      },
+      {
+        "name": "cut that is not yes or no",
+        "json": "{\"t\":\"screen.rows\",\"re\":2,\"cols\":12,\"rows\":3,\"cursor\":{\"row\":1,\"col\":7},\"modes\":{\"screen\":\"alternate\",\"bracketed_paste\":true,\"application_cursor\":true,\"application_keypad\":true,\"mouse\":\"press-release\",\"mouse_encoding\":\"sgr\",\"cursor_hidden\":true},\"cut\":\"no\",\"lines\":[{\"text\":\"first\",\"typed\":\"first\",\"inverse\":\"\",\"width\":12,\"end\":5},{\"text\":\"dim cur\",\"typed\":\"    cur\",\"inverse\":\"    cur\",\"width\":12,\"end\":7},{\"text\":\"\",\"typed\":\"\",\"inverse\":\"\",\"width\":12,\"end\":0}]}"
+      },
+      {
+        "name": "a tail of 201 lines",
+        "json": "{\"t\":\"screen.lines\",\"re\":4,\"cut\":false,\"lines\":[{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"},{\"text\":\"x\",\"typed\":\"x\"}]}"
+      },
+      {
+        "name": "a tail line with no typed copy",
+        "json": "{\"t\":\"screen.lines\",\"re\":4,\"cut\":false,\"lines\":[{\"text\":\"one\"}]}"
+      },
+      {
+        "name": "a tail line with a field too many",
+        "json": "{\"t\":\"screen.lines\",\"re\":4,\"cut\":false,\"lines\":[{\"text\":\"one\",\"typed\":\"one\",\"end\":3}]}"
+      },
+      {
+        "name": "a tail whose cut is not yes or no",
+        "json": "{\"t\":\"screen.lines\",\"re\":4,\"cut\":0,\"lines\":[{\"text\":\"one\",\"typed\":\"one\"},{\"text\":\"two\",\"typed\":\"two\"},{\"text\":\"three\",\"typed\":\"three\"},{\"text\":\"four  \",\"typed\":\"\"}]}"
+      },
+      {
+        "name": "a tail with no re",
+        "json": "{\"t\":\"screen.lines\",\"cut\":false,\"lines\":[{\"text\":\"one\",\"typed\":\"one\"},{\"text\":\"two\",\"typed\":\"two\"},{\"text\":\"three\",\"typed\":\"three\"},{\"text\":\"four  \",\"typed\":\"\"}]}"
       }
     ]
   }

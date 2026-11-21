@@ -21,6 +21,7 @@ pub mod random;
 pub mod relay;
 pub mod request;
 pub mod ring;
+pub mod screen;
 pub mod selftest;
 pub mod serve;
 pub mod start;

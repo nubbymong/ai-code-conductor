@@ -950,6 +950,13 @@
       "lineCount": 22
     },
     {
+      "path": "helper/tests/screen.rs",
+      "predicates": [
+        "P14"
+      ],
+      "lineCount": 7
+    },
+    {
       "path": "package.json",
       "predicates": [
         "P14"
@@ -7977,7 +7984,7 @@
       "predicates": [
         "P13"
       ],
-      "lineCount": 3
+      "lineCount": 4
     },
     {
       "path": "tests/unit/scripts/codex-hook-forwarder.test.ts",
