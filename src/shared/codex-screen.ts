@@ -93,7 +93,7 @@ export type CodexComposerState = 'ready' | 'busy' | 'not-ready'
 /** What the live screen shows, in more detail than the state (round 2, WW):
  *  'unrecognised' is a composer with a footer under it that is not the last
  *  row (a narrow window wraps it, or a row is drawn under it), Codex's one
- *  shortcuts hint row aside (SHORTCUTS_HINT). */
+ *  hint row under the footer aside (HINT_ROWS). */
 export type CodexScreenKind = 'ready' | 'busy' | 'blocked' | 'no-prompt' | 'unrecognised' | 'starting'
 
 /** Codex's prompt glyphs: the composer's, and the one it draws at ultra. */
@@ -163,9 +163,49 @@ const POPUP_ROW_RE = /^ {1,8}\/[a-z][\w-]*(?: |$)/
  *  transcript gives it by default (tui.fullscreen_transcript; off by default
  *  in 0.156.1). Only this exact row counts. */
 const SHORTCUTS_HINT = '? for shortcuts'
-/** Whether `row` is that hint, at the indent of the footer row above it. */
-const isShortcutsHint = (row: ScreenLine, footerRow: ScreenLine): boolean =>
-  row.text === (/^ */.exec(footerRow.text)?.[0] ?? '') + SHORTCUTS_HINT
+/** 2.1.3-beta.12 C3 (aicc_planning #357): the other rows probe P19's second
+ *  run recorded there, each as recorded (helper/fixtures/screens/, Codex
+ *  0.157.1 and 0.170.0): 0.170.0's own ready row (laid out by
+ *  chat_composer/passive_hints.rs at the rust-v0.170.0 tag, which also puts
+ *  the warning count at the right; agents_navigation.rs says when the agents
+ *  label shows), the shortcuts key rebound to F6 in both versions, and the
+ *  queue hint. Not the warning count at the right of the row: once a text is
+ *  typed at an idle composer, Codex keeps the count alone under the footer
+ *  (its snapshot test warning_notice_styles, both versions), a row no
+ *  recording holds there and no reader that confirms a typed text takes. So
+ *  a screen with the count still reads unrecognised, and nothing is typed
+ *  while it shows. */
+const AGENTS = `${String.fromCharCode(0x2190)} for agents ${MIDDLE_DOT} `
+/** One row Codex draws under the footer, at the footer's indent. `busy`:
+ *  Codex draws it only while a turn runs (its queue hint, under a draft typed
+ *  then). */
+interface HintRow { text: string; busy?: true }
+const HINT_ROWS: readonly HintRow[] = [
+  { text: SHORTCUTS_HINT },
+  { text: 'f6 for shortcuts' },
+  { text: `${AGENTS}${SHORTCUTS_HINT}` },
+  { text: `${AGENTS}f6 for shortcuts` },
+  { text: 'tab to queue message', busy: true },
+]
+/** Which of HINT_ROWS `row` is, at the indent of the footer row above it. */
+function hintRowOf(row: ScreenLine, footerRow: ScreenLine): HintRow | null {
+  const indent = /^ */.exec(footerRow.text)?.[0] ?? ''
+  if (!row.text.startsWith(indent)) return null
+  const body = row.text.slice(indent.length)
+  return HINT_ROWS.find((h) => body === h.text) ?? null
+}
+/** The rows under the composer row `i` of `shown`, less one hint row when it
+ *  is the last row, at the indent of the row above it (that row's own reader
+ *  checks it is the footer), whatever the composer's height; and which hint
+ *  row it was. The draft and height readers so read a draft Codex wraps onto
+ *  more rows over the queue hint too, and composer-submit can take it back.
+ *  The screen's state (layout()) reads ready or busy only when one row is
+ *  left, the footer: the hint row under the footer of a one-row composer. */
+function rowsUnder(shown: ScreenLine[], i: number): { under: ScreenLine[]; hint: HintRow | null } {
+  const below = shown.slice(i + 1)
+  const hint = below.length >= 2 ? hintRowOf(below[below.length - 1], below[below.length - 2]) : null
+  return { under: hint ? below.slice(0, -1) : below, hint }
+}
 
 const nonBlank = (l: ScreenLine): boolean => l.text.trim() !== ''
 const blocked = (lines: ScreenLine[]): boolean => lines.some((l) => BLOCKING_RE.some((re) => re.test(l.text)))
@@ -187,8 +227,9 @@ function composerContent(row: ScreenLine): string {
 }
 
 /** The screen's structure: what it shows, the composer's content, and the
- *  footer row under the composer when that is the last row (or has only
- *  Codex's shortcuts hint row under it). `startup`
+ *  footer row under the composer when that is the last row (or has only one
+ *  of Codex's hint rows under it, HINT_ROWS; its queue hint reads busy).
+ *  `startup`
  *  (round 4, E3): whether the run is still starting, so that Codex's
  *  start-up row counts; it counts only in its own place, the status row
  *  directly above the composer. */
@@ -201,12 +242,11 @@ function layout(lines: ScreenLine[] | null | undefined, models?: readonly string
   if (startup && i > 0 && STARTING_RE.test(shown[i - 1].text)) return { screen: 'starting', text, footer: null }
   if (i < 0) return { screen: 'no-prompt', text: '', footer: null }
   const footer = footerRe(models)
-  const below = shown.slice(i + 1)
-  const under = below.length === 2 && isShortcutsHint(below[1], below[0]) ? below.slice(0, 1) : below
+  const { under, hint } = rowsUnder(shown, i)
   if (under.length === 1 && footer.test(under[0].text)) {
-    return { screen: shown.some((l) => BUSY_RE.test(l.text)) ? 'busy' : 'ready', text, footer: under[0] }
+    return { screen: hint?.busy || shown.some((l) => BUSY_RE.test(l.text)) ? 'busy' : 'ready', text, footer: under[0] }
   }
-  if (below.some((l) => footer.test(l.text))) return { screen: 'unrecognised', text, footer: null }
+  if (shown.slice(i + 1).some((l) => footer.test(l.text))) return { screen: 'unrecognised', text, footer: null }
   return { screen: 'no-prompt', text, footer: null }
 }
 
@@ -270,14 +310,15 @@ export function codexTextTyped(lines: ScreenLine[] | null | undefined, text: str
  *  it onto, each indented under the text, together with every space dropped);
  *  '' for nothing or Codex's placeholder. Null when what it holds cannot be
  *  read: a prompt up, no composer, or anything but those rows between it and
- *  the footer (a popup, say; the shortcuts hint under an empty one is read). */
+ *  the footer (a popup, say; one of Codex's hint rows under the footer, as
+ *  the last row, is read whatever the composer's height, HINT_ROWS, the
+ *  queue hint too). */
 export function codexComposerDraft(lines: ScreenLine[] | null | undefined, models?: readonly string[] | null): string | null {
   if (!lines || lines.length === 0 || blocked(lines)) return null
   const shown = lines.filter(nonBlank)
   const i = composerIndex(shown)
   if (i < 0) return null
-  const below = shown.slice(i + 1)
-  const under = below.length === 2 && isShortcutsHint(below[1], below[0]) ? below.slice(0, 1) : below
+  const { under } = rowsUnder(shown, i)
   if (under.length === 0 || !footerRe(models).test(under[under.length - 1].text)) return null
   const wrapped = under.slice(0, -1)
   if (!wrapped.every((l) => WRAPPED_ROW_RE.test(l.text))) return null
@@ -310,15 +351,17 @@ export function codexPastedContentShown(lines: ScreenLine[] | null | undefined, 
  *  Codex wraps a text onto included), or null when no composer stands on a
  *  footer. Codex's composer is at most the pane's rows minus 4 high, and a
  *  taller text scrolls inside it (its first rows hidden), so a composer this
- *  tall holds a text that cannot be confirmed on screen. */
+ *  tall holds a text that cannot be confirmed on screen. 2.1.3-beta.12 C3:
+ *  one of Codex's hint rows under the footer, as the last row, is not
+ *  counted, whatever the composer's height (HINT_ROWS). */
 export function codexComposerRows(lines: ScreenLine[] | null | undefined, models?: readonly string[] | null): number | null {
   if (!lines || lines.length === 0) return null
   const shown = lines.filter(nonBlank)
   const i = composerIndex(shown)
   if (i < 0) return null
-  const below = shown.slice(i + 1)
-  if (below.length === 0 || !footerRe(models).test(below[below.length - 1].text)) return null
-  return below.length
+  const { under } = rowsUnder(shown, i)
+  if (under.length === 0 || !footerRe(models).test(under[under.length - 1].text)) return null
+  return under.length
 }
 
 /** Codex's Plan mode label, right-aligned in its footer after the folder. */

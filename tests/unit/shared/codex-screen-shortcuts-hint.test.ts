@@ -81,10 +81,12 @@ describe("Codex 0.157.1's shortcuts hint under the footer (C5, #349)", () => {
     expect(codexComposerState(busy)).toBe('busy')
   })
 
+  // 2.1.3-beta.12 C3 (aicc_planning #357): the queue hint and Codex 0.170.0's
+  // "<left arrow> for agents . ? for shortcuts" were in this list until probe
+  // P19's second run recorded them; they are read now, and pinned with the
+  // other recorded rows in codex-screen-hint-rows.test.ts.
   it('any other row under the footer still reads unrecognised', () => {
     for (const text of [
-      '  tab to queue message',
-      `  ${String.fromCharCode(0x2190)} for agents ${DOT} ? for shortcuts`,
       '  ? for shortcuts                                                                                   100% context left',
       '  ? for shortcuts.',
       '  ? shortcuts',
