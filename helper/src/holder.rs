@@ -161,15 +161,34 @@ fn feed_screen(shared: &Shared, bytes: &[u8]) {
     }
 }
 
+/// A test's gate (`SCREEN_GATE`): once the ring holds its text, wait for the
+/// test before the chunk goes to the screen, once.
+#[cfg(test)]
+fn hold_the_screen(shared: &Shared, gate: &mut Option<(String, Receiver<()>)>) {
+    let held = match gate {
+        Some((text, _)) => {
+            let st = lock(&shared.state);
+            st.ring.replay_from(st.ring.ring_start()).map_or(false, |r| String::from_utf8_lossy(&r.bytes).contains(text.as_str()))
+        }
+        None => false,
+    };
+    if held {
+        if let Some((_, release)) = gate.take() {
+            let _ = release.recv();
+        }
+    }
+}
+
 #[cfg(test)]
 thread_local! {
     /// Set by a test, on its own thread, around a start: the holder started
     /// then gets an exit watch whose wait fails at once.
     static FAILING_WATCH: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-    /// Set by a test, on its own thread, around a start: the output thread of
-    /// the holder started waits for one message on it before it feeds each
-    /// chunk to the screen, so a test can hold the screen back.
-    static SCREEN_GATE: std::cell::RefCell<Option<Receiver<()>>> = const { std::cell::RefCell::new(None) };
+    /// Set by a test, on its own thread, around a start: once the ring of
+    /// the holder started holds the text, its output thread waits for a
+    /// message on (or the end of) the channel before it feeds that chunk to
+    /// the screen, so a test can hold the screen back.
+    static SCREEN_GATE: std::cell::RefCell<Option<(String, Receiver<()>)>> = const { std::cell::RefCell::new(None) };
 }
 
 pub(crate) fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -246,7 +265,7 @@ impl Holder {
         // the screen.
         let out_shared = Arc::clone(&shared);
         #[cfg(test)]
-        let gate = SCREEN_GATE.with(|g| g.borrow_mut().take());
+        let mut gate = SCREEN_GATE.with(|g| g.borrow_mut().take());
         thread::Builder::new().spawn(move || {
             let mut buf = vec![0u8; 16 * 1024];
             loop {
@@ -266,9 +285,7 @@ impl Holder {
                     }
                 }
                 #[cfg(test)]
-                if let Some(gate) = &gate {
-                    let _ = gate.recv();
-                }
+                hold_the_screen(&out_shared, &mut gate);
                 feed_screen(&out_shared, &buf[..n]);
             }
             // The live channel stays open: it closes once the exit is known,
@@ -656,13 +673,16 @@ mod tests {
     }
 
     /// Each chunk of output reaches the ring (so an attach's replay) before
-    /// the screen: while the screen is held back the ring already holds the
-    /// line and the screen does not show it; let through, the screen does.
+    /// the screen: the screen is held back from the chunk that brings the
+    /// line into the ring, and then the ring holds the line and the screen
+    /// does not show it; let through, the screen does. With the screen fed
+    /// first, the screen shows the line before the ring holds it, and is not
+    /// held back.
     #[test]
     fn the_output_reaches_the_ring_before_the_screen() {
         let (argv, line) = says_a_line();
         let (release, gate) = mpsc::channel::<()>();
-        SCREEN_GATE.with(|g| *g.borrow_mut() = Some(gate));
+        SCREEN_GATE.with(|g| *g.borrow_mut() = Some((line.to_string(), gate)));
         let started = Holder::start(&argv, PtySize { cols: 100, rows: 10 }, 64 * 1024);
         SCREEN_GATE.with(|g| *g.borrow_mut() = None);
         let h = started.expect("a program starts on a terminal");

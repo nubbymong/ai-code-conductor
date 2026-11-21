@@ -297,7 +297,19 @@ fn differences(made: &Made, want: &Committed) -> BTreeMap<String, (String, Strin
 /// section A3; Questions, 3: neither side gives way in this beta). Each entry
 /// must still differ, its character must be in the committed row, and the
 /// crate must count it two cells.
-const WIDTH_ROWS: &[(&str, &str, char)] = &[];
+///
+/// Codex 0.157.1's update notice on macOS starts "✨" (U+2728, SPARKLES, an
+/// emoji drawn wide by default since Unicode 9). Codex counts it two cells
+/// and writes the text after it two cells on; xterm.js 6.0.0 gives it one,
+/// so its row keeps a blank cell the crate's row has not (checked with
+/// @xterm/headless 6.0.0 when this list was written: one cell).
+const WIDTH_ROWS: &[(&str, &str, char)] = &[
+    ("codex-macos-ready", "screen 0 row 1", '\u{2728}'),
+    ("codex-macos-ready", "screen 1 row 1", '\u{2728}'),
+    ("codex-macos-ready", "screen 2 row 1", '\u{2728}'),
+    ("codex-macos-ready", "screen 3 row 1", '\u{2728}'),
+    ("codex-macos-ready", "tail line 1", '\u{2728}'),
+];
 
 #[test]
 fn every_recording_gives_the_committed_rows_after_each_resize_and_the_last_chunk() {
@@ -543,8 +555,12 @@ fn mib(bytes: isize) -> String {
 
 /// Lines for this run's summary, as the job shows it, and the test's output.
 fn report(lines: &[String]) {
+    // Straight to standard error, which the test harness does not hold back
+    // for a test that passes (it holds back only what the print macros
+    // write), so the job's log shows the figures too.
+    let mut err = std::io::stderr();
     for l in lines {
-        eprintln!("{l}");
+        let _ = writeln!(err, "screen cost ({}): {l}", std::env::consts::OS);
     }
     if let Ok(path) = std::env::var("GITHUB_STEP_SUMMARY") {
         if let Ok(mut f) = fs::OpenOptions::new().append(true).open(path) {
@@ -736,10 +752,11 @@ impl App {
     fn wait_text(&mut self, needle: &str) {
         let until = Instant::now() + WAIT;
         while !String::from_utf8_lossy(&self.shown).contains(needle) {
-            match self.read(until) {
-                Some(v) => self.got.push(v),
-                None if Instant::now() >= until => panic!("{needle:?} never appeared: {:?}", String::from_utf8_lossy(&self.shown)),
-                None => panic!("the connection ended before {needle:?} appeared"),
+            match self.client.recv(until.saturating_duration_since(Instant::now())) {
+                Ok(Some(Frame { channel: 1, body: Body::Raw(bytes) })) => self.shown.extend_from_slice(&bytes),
+                Ok(Some(Frame { body: Body::Json(v), .. })) => self.got.push(v),
+                Ok(Some(_)) => {}
+                Ok(None) | Err(_) => panic!("{needle:?} never appeared: {:?}", String::from_utf8_lossy(&self.shown)),
             }
         }
     }

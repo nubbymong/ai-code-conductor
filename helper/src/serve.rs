@@ -1835,7 +1835,7 @@ mod tests {
 
     #[test]
     fn hooks_is_offered_and_an_ack_of_it_allows_hook_events() {
-        assert_eq!(HOLDER_CAPS, ["core", "local", "hooks", "mcp", "away", "screen"]);
+        assert_eq!(HOLDER_CAPS.to_vec(), vec!["core", "local", "hooks", "mcp", "away", "screen"]);
         let both = Allowed { local: true, hooks: true, mcp: false, screen: false };
         assert_eq!(acked("{\"t\":\"hello.ack\",\"proto\":1,\"caps\":[\"core\",\"local\",\"hooks\"]}"), Ok(both));
         assert_eq!(acked("{\"t\":\"hello.ack\",\"proto\":1,\"caps\":[\"core\",\"hooks\"]}"), Ok(Allowed { local: false, hooks: true, mcp: false, screen: false }));
