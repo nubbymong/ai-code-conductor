@@ -224,6 +224,7 @@ vi.mock('../../src/main/debug-logger', () => ({
   logError: vi.fn(),
 }))
 
+import { logInfo } from '../../src/main/debug-logger'
 import { checkGitHubRelease, downloadGitHubRelease, downloadInstallerFile, InstallerIntegrityError, installerExtForPlatform, prepareLinuxAppImageUpdate, isPathOnNoexecMount } from '../../src/main/github-update'
 
 // Helper to build release fixtures with installers for ALL platforms.
@@ -681,6 +682,27 @@ describe('github-update', () => {
         expect(result!.version, where).toBe('2.1.3')
       }
     })
+
+    // aicc_planning#379: the log said "Update available: v2.1.3" for a beta, so
+    // a reader of the log could not tell which beta was offered. The line names
+    // the full label; version, which orders nothing, is still the base version.
+    it.each([
+      ['a beta', 'v2.1.3-beta.12', 'v2.1.3-beta.12'],
+      ['an rc', 'v2.1.3-rc.1', 'v2.1.3-rc.1'],
+      ['a stable release', 'v2.1.3', 'v2.1.3'],
+    ])('the log line for %s names the offer in full (aicc_planning#379)', async (_what, tag, label) => {
+      const isPrerelease = tag.includes('-')
+      for (const [where, result] of await answers(offer(tag, tag.slice(1), isPrerelease))) {
+        expect(result, where).not.toBeNull()
+        expect(result!.version, where).toBe('2.1.3')
+      }
+      const lines = vi.mocked(logInfo).mock.calls.map((c) => String(c[0])).filter((l) => l.includes('Update available'))
+      // One line for the check on this host, one for the check as a Mac.
+      expect(lines).toHaveLength(2)
+      for (const line of lines) {
+        expect(line).toContain(`[github-update] Update available: ${label} (tag: ${tag}, channel: `)
+      }
+    })
   })
 
   describe('public API path', () => {
@@ -811,6 +833,24 @@ describe('github-update', () => {
       }
       const result = await checkGitHubRelease()
       expect(result).toBeNull()
+    })
+
+    // aicc_planning#379: the skip line names the full label too, so a log that
+    // says why a beta was not offered says which beta it was.
+    it('names the skipped release in full in the log (aicc_planning#379)', async () => {
+      currentChannel = 'beta'
+      httpsState.nextResponse = {
+        statusCode: 200,
+        body: [
+          { tag_name: 'v1.2.125-beta.3', draft: false, prerelease: true, assets: [
+            { name: 'CHECKSUMS.txt', browser_download_url: 'https://x/c.txt' },
+          ] },
+        ],
+      }
+      expect(await checkGitHubRelease()).toBeNull()
+      const lines = vi.mocked(logInfo).mock.calls.map((c) => String(c[0])).filter((l) => l.includes('Skipping'))
+      expect(lines).toHaveLength(1)
+      expect(lines[0]).toContain('[github-update] Skipping v1.2.125-beta.3 (tag: v1.2.125-beta.3)')
     })
   })
 
