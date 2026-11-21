@@ -28,6 +28,11 @@ describe('codexNewConfigModel', () => {
     expect(codexNewConfigModel(reg, everyVersion)).toBe('gpt-6.2-sol')
   })
 
+  it('counts a model whose own versions name every supported version: with only 0.170.0 and 0.171.0 supported, a new config starts on the head of the list', () => {
+    const newestOnly = { ...catalogueJson, cliVersions: ['0.170.0', '0.171.0'] }
+    expect(codexNewConfigModel(reg, newestOnly)).toBe('gpt-6.2-sol')
+  })
+
   it('starts on Default (Codex chooses) when no Codex model in the list is one every supported version lists', () => {
     const onlyOld = { ...reg, models: (reg.models ?? []).filter((m) => !m.id.startsWith('gpt-') || m.id === 'gpt-5.2') }
     expect(codexModelOptions(onlyOld).map((o) => o.value)).toEqual([CODEX_DEFAULT, 'gpt-5.2'])
