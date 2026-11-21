@@ -1,8 +1,8 @@
 {
   "schema": "wp1-legacy-codex-manifest/3",
-  "generatedAt": "2026-11-21T04:45:38.051Z",
-  "head": "6abb571fd0e6147cf2c6f6821e8b7f50a3cb6dc2",
-  "tree": "27fbfd2fcbadfefebdae6b2457d41c638e97637e",
+  "generatedAt": "2026-11-21T05:12:50.698Z",
+  "head": "22d36619e5cbf40367a1991d92a0491c3150b48d",
+  "tree": "4aac25c91ee6f1b70e84bea37e5ff81ac73dcc9e",
   "scannedWorkingTree": true,
   "predicateDigest": "100a1233edebdc39a5f9004d3fba980a89ebb15b25872e52076386bc84b03153",
   "predicates": [
@@ -8164,7 +8164,7 @@
         "P01",
         "P13"
       ],
-      "lineCount": 84
+      "lineCount": 98
     },
     {
       "path": "tests/unit/shared/codex-screen-shortcuts-hint.test.ts",
@@ -8201,7 +8201,7 @@
       "predicates": [
         "P13"
       ],
-      "lineCount": 44
+      "lineCount": 47
     },
     {
       "path": "tests/unit/status-ingest.test.ts",

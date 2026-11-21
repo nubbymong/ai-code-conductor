@@ -11,48 +11,68 @@ Plan 2.1.3-beta.12, section C3 (aicc_planning #357), built on A2 step 2's review
   warning count `<warning sign> 1 warning . f2 to view` at the right of the ready row, one cell
   from the right edge (both versions); and the queue hint `tab to queue message` under a draft
   typed while a turn runs (both versions).
-- **What changed.** `HINT_ROWS` lists those rows as recorded, with #740's row first. A row counts
-  only as the one row under the footer of a one-row composer, at the footer row's own indent;
-  the warning count only after a gap of three spaces or more and ending one cell from the right
-  edge (held to the edge when the reader knows the row's width). The queue hint reads busy,
-  never ready. `codexComposerDraft` and `codexComposerRows` strip the same row, because the
-  recordings showed them wrong (no reading of an empty 0.170.0 composer, or of the queue hint's
-  draft). `codexTextTyped` and `codexPastedContentShown` are unchanged: the one recording with
-  typed text is the queue hint, where "not confirmed" is right (a turn runs), and none holds a
-  paste. composer-submit.ts, the Watchdog, the renderer's reader, cli-contract.ts and
+- **What changed.** `HINT_ROWS` lists the agents row, the two rebound rows and the queue hint as
+  recorded, with #740's row first. For the screen's state a row counts only as the one row under
+  the footer of a one-row composer, at the footer row's own indent. The queue hint reads busy,
+  never ready. `codexComposerDraft` and `codexComposerRows` strip the same row when it is the last
+  row, whatever the composer's height, because the recordings showed them wrong (no reading of an
+  empty 0.170.0 composer, or of the queue hint's draft). So composer-submit can take back a text
+  it typed, one row or wrapped onto more. `codexTextTyped` and `codexPastedContentShown` are
+  unchanged. composer-submit.ts, the Watchdog, the renderer's reader, cli-contract.ts and
   pty-manager.ts are untouched.
-- **Result.** 20 of the 33 now read their state: 0.170.0's ready (4 systems), agents form,
-  rebound key and warning count (macOS and the bundled ConPTY each), its Linux after-reply;
-  0.157.1's rebound key and warning count (2 each), its queue hint (2, busy) and three
-  after-replies. Left in KNOWN_MISREADS, both still on aicc_planning#357:
-  - **A wrapped footer (8, unrecognised).** Codex 0.170.0 adds the thread's title to its footer
-    once a prompt is sent; on macOS and Windows the probe's folder and title did not fit in 120
-    columns, and the footer took two rows (mid-reply, after-reply and the queue hint). The plan
-    keeps a wrapped footer unrecognised, so nothing is typed there. In use this shows wherever
-    folder and title do not fit the pane.
-  - **A reply streaming (5, ready, not busy).** The reader's only busy sign is the
-    `esc to interrupt` row, and Codex draws it once, right after Enter, and not while the reply
-    streams (A2's finding, both versions). With a footer of one row, the mid-reply screens end in
-    the same rows as their after-reply screens, so they read ready. Nothing in the rows can tell
-    them apart. The same holds for #740's row: since 2.1.3-beta.10 a 0.157.1 reply streaming with
-    no warning on screen ends in its ready screen's rows and reads ready. What follows when the
-    app types then: Codex swaps
-    its hint row for the queue hint, which no confirm reader accepts, so Enter is never pressed;
-    the renderer's typing erases what it typed, and composer-submit (the Watchdog's retry) now
-    reads the draft over the queue hint and takes it back with Ctrl+U. A busy sign that survives
-    a streamed reply needs another source than the rows (for example the spinner Codex puts in
-    the window title). It is not in this section.
-- **Not reached, so still refused.** Another rebound key, another warning count (`2 warnings`),
-  the warning beside the rebound or queue rows, 0.157.1's agents form (it has none), and text
-  typed into a 0.170.0 composer with no turn running (no recording, so whether
-  `codexTextTyped` confirms it there is unmeasured).
+- **The warning count is not taken (found at the final-head review).** Once a text is typed at an
+  idle composer, Codex hides the left hint and keeps the count alone under the footer: its own
+  snapshot test `warning_notice_styles` (chat_composer/warning_notice_tests.rs at rust-v0.157.1
+  and rust-v0.170.0), and P19's bytes (codex-macos-queue-hint event 83 blanks the left hint and
+  leaves the count). No reader that confirms a typed text takes that row. With the count
+  accepted, the app typed the text, never pressed Enter and could not take it back, where at
+  6abb571f the screen read unrecognised and nothing was typed. So the warning rows are not
+  accepted: such a screen reads unrecognised, as before C3.
+- **Result.** 12 of the 33 now read their state: 0.170.0's ready screen (4 systems), its agents
+  form and its rebound key (macOS and the bundled ConPTY each); 0.157.1's rebound key (2) and its
+  queue hint (2, busy). Left in KNOWN_MISREADS, all unrecognised, all on aicc_planning#357:
+  - **A wrapped footer (8).** Codex 0.170.0 adds the thread's title to its footer once a prompt
+    is sent. On macOS and Windows the probe's folder and title did not fit in 120 columns, and the
+    footer took two rows (mid-reply, after-reply and the queue hint). The plan keeps a wrapped
+    footer unrecognised, so nothing is typed there. In use this shows wherever the folder and the
+    title do not fit the pane.
+  - **A warning count (13).** The 8 screens that end in the count under a one-row footer, and the
+    5 mid-reply screens whose footer is one row, which end in it too.
+- **A reply streaming.** The reader's only busy sign is the `esc to interrupt` row, and Codex
+  draws it once, right after Enter, and not while the reply streams (A2's finding, both versions,
+  measured only against the probe's stand-in model; no real account was used). Every recorded
+  mid-reply screen shows the warning count, so each reads unrecognised. Without the count, a
+  streaming reply very likely ends in its ready screen's rows and reads ready: for 0.170.0's
+  agents and rebound rows from C3 on, and for #740's row since 2.1.3-beta.10 (inferred, not
+  recorded: every mid-reply and after-reply screen in the corpus shows the warning count, so none
+  shows a streaming reply without it). What follows when the app types then: Codex swaps its hint
+  row for the queue hint, which no confirm reader accepts, so Enter is not pressed while the turn
+  runs. The renderer erases a one-row command it typed, and composer-submit (the main process
+  typing, the Watchdog retry included) reads the draft over the queue hint, one row or wrapped
+  onto more, and takes it back with Ctrl+U. A busy sign that survives a streamed reply needs
+  another source than the rows (for example the spinner Codex puts in the window title). It is
+  not in this section.
+- **Not reached, so still refused.** A draft typed at an idle composer while the warning count
+  shows (the count alone under the footer; the reason the warning rows are refused), another
+  rebound key, another warning count (`2 warnings`), the warning beside the rebound or queue rows,
+  and 0.157.1's agents form (it has none). Text typed at a 0.170.0 composer with no turn running
+  is recorded with no warning (codex170-macos-queue-hint events 38 to 40: the hint row goes and
+  the footer takes the last row, which codexTextTyped confirms); what is not recorded is the same
+  with a warning count.
 - **Tests.** tests/unit/shared/codex-screen-hint-rows.test.ts copies the bottom six rows of each
-  recording it reads. Red on 6abb571f before the reader changed: 7 of its cases, and case 2 of
-  the corpus test for the 25 recordings whose line changed (the 20 fixed, now unlisted, and the 5
-  streaming ones, now listed as ready). #740's test lost two rows from its "any other row" list
-  (the queue hint and 0.170.0's agents row), which it refused only because nothing had recorded
-  them; its other eight cases are unchanged. Mutants, each planted and restored: any row under
-  the footer accepted, the row at any indent, the queue hint read ready, and the warning count
-  anywhere on the row; each turned a case red.
+  recording it reads. On 6abb571f, before the reader changed, 7 of its 16 cases were red, and
+  case 2 of the corpus test was red for the 12 recordings now read (now unlisted). The other 9
+  pass before and after by design: 8 refusals that pin what must stay unrecognised or unread, and
+  one check that the rows it builds equal the recorded ones. The review fixes were red first on
+  22d36619: the warning screens reading unrecognised, and a two-row draft read over the queue hint
+  (2 cases), and case 2 of the corpus test for the 13 warning recordings. #740's test lost two
+  rows from its "any other row" list (the queue hint and 0.170.0's agents row), which it refused
+  only because nothing had recorded them; its other cases are unchanged. Mutants, each planted
+  and restored, each turned a case red: any row under the footer accepted; the row at any indent;
+  the queue hint read ready; the recorded warning rows accepted again; any last row stripped under
+  a taller composer; the draft read over the queue hint only under a one-row composer. One planted
+  change is equivalent and survived: the state reader taking the row under a composer of any
+  height. It reads ready or busy only when the footer alone is left, so the three readers share
+  one rule.
 - **WP1.** The new test is an added row in the ledger; the reader's, the corpus test's and
   #740's test's rows say what C3 changed; the manifest regenerated.
