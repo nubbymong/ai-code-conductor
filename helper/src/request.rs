@@ -450,7 +450,7 @@ pub fn parse_allowed(v: &Value, allowed: Allowed) -> Result<Request, Refusal> {
     if fields.is_none() && allowed.hooks {
         fields = HOOK_TYPES.iter().find(|(name, _)| *name == t).map(|(_, f)| *f);
     }
-    if fields.is_none() {
+    if fields.is_none() && allowed.screen {
         fields = SCREEN_TYPES.iter().find(|(name, _)| *name == t).map(|(_, f)| *f);
     }
     if fields.is_none() && allowed.mcp {
