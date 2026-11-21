@@ -23,11 +23,12 @@
 //! The screen (`screen.rs`, from 2.1.3-beta.12) is the holder's too: every
 //! chunk of output goes to the ring and the attached client first, then to
 //! the screen, on the output thread, for the session's whole life; a resize
-//! resizes the terminal, then the screen. The screen has a lock of its own,
-//! taken after the state's is let go, so a read of it never holds up an
-//! attach or the ring. A panic in the screen's parser is caught: the screen
-//! is then not kept any more (a read of it says so), and the output, the
-//! ring and the attached client go on as before.
+//! resizes the terminal, then the screen, as one step under the terminal's
+//! lock, so two resizes never leave them at two sizes. The screen has a
+//! lock of its own, taken after the state's is let go, so a read of it
+//! never holds up an attach or the ring. A panic in the screen's parser is
+//! caught: the screen is then not kept any more (a read of it says so), and
+//! the output, the ring and the attached client go on as before.
 
 use crate::json::Value;
 use crate::pty::{Conpty, Pty, PtySize, SpawnOptions};
@@ -146,7 +147,9 @@ struct State {
 struct Shared {
     state: Mutex<State>,
     /// The session's screen; None once its parser panicked (it is not kept
-    /// any more). Locked after `state` is let go, never with it.
+    /// any more). Locked after `state` is let go, never with it, and last:
+    /// a resize takes it with the terminal's lock held, and nothing takes
+    /// the terminal's lock while it holds this one.
     screen: Mutex<Option<Screen>>,
 }
 
@@ -367,8 +370,17 @@ impl Holder {
 
     /// Resize the terminal, then the screen with it. A resize the terminal
     /// refused leaves the screen as it was, as the program's size is.
+    ///
+    /// The terminal's lock is kept until the screen is resized too, so the
+    /// two are one step: a second resize (a connection that was replaced a
+    /// moment ago can still be in one) waits for this one, and two resizes
+    /// that overlap never leave the terminal at one size and the screen at
+    /// the other. The screen's lock is taken last, as everywhere: nothing
+    /// takes the terminal's lock while it holds the screen's, so this cannot
+    /// deadlock with the output thread or a read.
     pub fn resize(&self, size: PtySize) -> io::Result<()> {
-        lock(&self.pty).resize(size)?;
+        let pty = lock(&self.pty);
+        pty.resize(size)?;
         #[cfg(test)]
         hold_the_resize();
         let mut slot = lock(&self.shared.screen);
@@ -377,6 +389,8 @@ impl Holder {
                 *slot = None;
             }
         }
+        drop(slot);
+        drop(pty);
         Ok(())
     }
 
