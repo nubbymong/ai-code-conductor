@@ -1,4 +1,6 @@
-// Fetches Anthropic usage for EVERY account profile without opening a session.
+// Fetches Anthropic usage for every account profile no running Claude Code session uses, without opening a session. An account a session uses is never fetched: it shows that session's own figure (inSessionUsage).
+// A session launched without the app's status line reports no figure, so its
+// account is fetched as one no session uses (setLiveUsageSessionReports).
 //
 // Each account profile has its own OAuth credentials file (its isolated home),
 // so we can read that account's access token and call the same usage endpoint
@@ -347,11 +349,16 @@ function hydrateSnapshots(): void {
 // Accounts with no running session are fetched as before, one at a time.
 //
 // "A running session" is a Claude Code session on the profile now
-// (sessionsOnProfile). The other things that hold a profile (the sign-in
-// probe, headless and Insights runs, cloud agents, a plain shell under the
-// account) report no status line, so an account only they hold is fetched as
-// before; the token refresh still waits for every one of them
-// (isProfileInUseByLiveSession, at the refresh in fetchAccountUsage).
+// (sessionsOnProfile) that was launched with the app's status line
+// (setLiveUsageSessionReports). The other things that hold a profile (the
+// sign-in probe, headless and Insights runs, cloud agents, a plain shell under
+// the account) report no status line, so an account only they hold is fetched
+// as before; the token refresh still waits for every one of them
+// (isProfileInUseByLiveSession, at the refresh in fetchAccountUsage). With the
+// status line switched off, an account is fetched whether or not a session
+// uses it: a session launched without the app's status line (the switch off,
+// or its script not set up) reports nothing, so its account is fetched as one
+// no session uses.
 
 /** How old a figure may be and still be shown as current. A session's status
  *  line updates while it works; past this (a session idle for a while) its
@@ -409,10 +416,22 @@ export function recordLiveUsageForSession(sessionId: string, buckets: unknown, h
   liveUsageByProfile.set(profileId, { buckets: clean, fetchedAt: now })
 }
 
-/** Whether a Claude Code session runs on the profile now: the page then
- *  shows the account without a request (inSessionUsage). */
+/** Whether a session reports usage on the app's status line: false for one
+ *  launched without it (per-session-settings.ts
+ *  sessionLaunchedWithoutAppStatusLine), set by main. Unset, or for a session
+ *  it does not know, every session counts as reporting. */
+let sessionReports: (sessionId: string) => boolean = () => true
+export function setLiveUsageSessionReports(fn: ((sessionId: string) => boolean) | null): void {
+  sessionReports = fn ?? (() => true)
+}
+
+/** Whether a Claude Code session that reports usage on the app's status line
+ *  runs on the profile now: the page then shows the account without a request
+ *  (inSessionUsage). An account whose sessions all report nothing is fetched. */
 function hasRunningSession(profileId: string): boolean {
-  return sessionsOnProfile(profileId).length > 0
+  return sessionsOnProfile(profileId).some((sid) => {
+    try { return sessionReports(sid) !== false } catch { return true }
+  })
 }
 
 interface ShownFigure {

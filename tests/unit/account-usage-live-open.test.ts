@@ -12,6 +12,9 @@
 // with nothing at all the card waits for the session. Accounts with no
 // running session (closed, or held only by a plain shell, a probe or a
 // background run, none of which report a status line) are fetched as before.
+// So is an account whose sessions were all launched without the app's status
+// line (the Status line switch off, or its script not set up): they report
+// nothing either.
 //
 // The observable is the network: an account a session uses issues no request
 // at all; a closed account issues a GET to api.anthropic.com and, with a
@@ -32,6 +35,9 @@ const inUse = new Set<string>()
 /** profileIds held only by something that reports no status line: a plain
  *  shell under the account, the sign-in probe, a background run. */
 const heldOnly = new Set<string>()
+/** The session ids on a profile, where a case needs more than the one an
+ *  in-use profile has by default (`session-on-<id>`). */
+const sessionsOf = new Map<string, string[]>()
 /** Seeded last-good snapshots (a prior real fetch), by profileId. */
 let seededSnapshots: Record<string, { buckets: UsageBucket[]; credits?: unknown; fetchedAt: number }> = {}
 
@@ -47,7 +53,7 @@ vi.mock('../../src/main/account-profiles', () => ({
 vi.mock('../../src/main/claude-account-identity', () => ({
   // As the real module: a session on the profile, or any other consumer.
   isProfileInUseByLiveSession: (id: string) => inUse.has(id) || heldOnly.has(id),
-  sessionsOnProfile: (id: string) => (inUse.has(id) ? [`session-on-${id}`] : []),
+  sessionsOnProfile: (id: string) => (inUse.has(id) ? sessionsOf.get(id) ?? [`session-on-${id}`] : []),
   getClaudeProfileId: (sessionId: string) => profileBySession.get(sessionId),
 }))
 vi.mock('../../src/main/usage/usage-snapshots', () => ({
@@ -77,7 +83,7 @@ vi.mock('https', () => {
   return { default: { request }, request }
 })
 
-const { fetchAccountUsage, fetchAllAccountsUsage, fetchAllAccountsUsageStreaming, recordLiveUsageForSession, setLiveUsageTranscriptProfile, _resetLiveUsageForTest, _resetSnapshotsForTest, LIVE_USAGE_MAX_AGE_MS } =
+const { fetchAccountUsage, fetchAllAccountsUsage, fetchAllAccountsUsageStreaming, recordLiveUsageForSession, setLiveUsageTranscriptProfile, setLiveUsageSessionReports, _resetLiveUsageForTest, _resetSnapshotsForTest, LIVE_USAGE_MAX_AGE_MS } =
   await import('../../src/main/usage/account-usage')
 
 // P3.2: the recorder files a figure under a profile only when the session's
@@ -118,11 +124,13 @@ function sessionDelivered(profileId: string, buckets: unknown[], opts: { hasCred
 
 beforeEach(() => {
   setLiveUsageTranscriptProfile(fakeFolderRule)
+  setLiveUsageSessionReports(null) // every session reports, as main wires it for one launched with the status line
   tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'ccc-live-open-'))
   profiles = [profile({ id: 'profile-x-1' })]
   profileBySession.clear()
   inUse.clear()
   heldOnly.clear()
+  sessionsOf.clear()
   seededSnapshots = {}
   requestedHosts.length = 0
   _resetLiveUsageForTest()
@@ -309,6 +317,71 @@ describe('fetchAccountUsage: an account a running session uses is never fetched 
     expect(r.status).toBe('waiting')
     expect(r.buckets).toEqual([])
     expect(r.credits).toBeUndefined()
+  })
+})
+
+describe('a session launched without the app\'s status line reports nothing, so its account is fetched (aicc_planning#378)', () => {
+  // As main wires it: false for a session per-session-settings recorded as
+  // launched without the app's status line (the Status line switch off, or
+  // its script not set up). The default session id here is `session-on-<id>`.
+  const quiet = (...ids: string[]) => setLiveUsageSessionReports((sid) => !ids.includes(sid))
+
+  it('an account whose only session reports nothing is fetched with a GET, as one no session uses', async () => {
+    inUse.add('profile-x-1')
+    quiet('session-on-profile-x-1')
+
+    const r = await fetchAccountUsage('profile-x-1')
+    expect(requestedHosts).toEqual([USAGE_HOST])
+    expect(r.status).toBe('ok')
+    expect(r.stale).toBe(false)
+    expect(r.inSession).toBeUndefined()
+  })
+
+  it('with a lapsed token it is not refreshed while the session holds the account', async () => {
+    writeCreds(Date.now() - 60_000)
+    inUse.add('profile-x-1')
+    quiet('session-on-profile-x-1')
+
+    const r = await fetchAccountUsage('profile-x-1')
+    // No refresh (the guard still counts the session), and no GET with a lapsed token.
+    expect(requestedHosts).toEqual([])
+    expect(r.inSession).toBeUndefined()
+    expect(r.status).not.toBe('waiting')
+  })
+
+  it('it takes a stagger slot like any account that is fetched', async () => {
+    profiles = [profile({ id: 'profile-quiet' }), profile({ id: 'profile-closed' })]
+    inUse.add('profile-quiet')
+    quiet('session-on-profile-quiet')
+    const timeoutSpy = vi.spyOn(global, 'setTimeout')
+    try {
+      const rows = await fetchAllAccountsUsage()
+      expect(requestedHosts).toEqual([USAGE_HOST, USAGE_HOST])
+      expect(timeoutSpy.mock.calls.filter((c) => c[1] === 300)).toHaveLength(1)
+      expect(rows.map((x) => x.inSession === true)).toEqual([false, false])
+    } finally {
+      timeoutSpy.mockRestore()
+    }
+  })
+
+  it('an account with one reporting and one non-reporting session makes no request', async () => {
+    inUse.add('profile-x-1')
+    sessionsOf.set('profile-x-1', ['sess-quiet', 'sess-reporting'])
+    quiet('sess-quiet')
+
+    const r = await fetchAccountUsage('profile-x-1')
+    expect(requestedHosts).toEqual([])
+    expect(r.inSession).toBe(true)
+    expect(r.status).toBe('waiting')
+  })
+
+  it('a session the check cannot answer for counts as reporting', async () => {
+    inUse.add('profile-x-1')
+    setLiveUsageSessionReports(() => { throw new Error('boom') })
+
+    const r = await fetchAccountUsage('profile-x-1')
+    expect(requestedHosts).toEqual([])
+    expect(r.inSession).toBe(true)
   })
 })
 
