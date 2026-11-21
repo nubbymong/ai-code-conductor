@@ -152,40 +152,36 @@ const strayLeftOut = (rows: readonly LeftOut[]): string[] =>
  *  fails too if the reader starts to give another wrong answer.
  *  The four codex-*-ready recordings of Codex 0.157.1 were listed until
  *  Codex's reader learned the "? for shortcuts" row drawn under the footer
- *  at its ready composer (aicc_planning#349, in 2.1.3-beta.10). Every
- *  recording P19's second run added reads unrecognised: the reader takes one
- *  row under the footer, exactly "? for shortcuts", and each of these ends
- *  in another row (aicc_planning#357). Where the thread title and the working
- *  folder do not fit in 120 columns and Codex 0.170.0's footer wraps (its macOS and
- *  Windows screens after the prompt is sent; their temporary folders are longer
- *  than Linux's), the footer is two rows as well. And no mid-reply or queue-hint
- *  screen holds an "esc to interrupt" row, the reader's only sign of busy:
- *  Codex drew its working row once, after Enter, and not while the reply
- *  streamed. */
+ *  at its ready composer (aicc_planning#349, in 2.1.3-beta.10). The 33
+ *  recordings P19's second run added all read unrecognised until the reader
+ *  learned each other row recorded there (aicc_planning#357, in
+ *  2.1.3-beta.12, tests/unit/shared/codex-screen-hint-rows.test.ts); these
+ *  are left:
+ *  - where the thread title and the working folder do not fit in 120 columns,
+ *    Codex 0.170.0's footer wraps onto a second row (its macOS and Windows
+ *    screens after the prompt is sent; their temporary folders are longer than
+ *    Linux's), and a wrapped footer still reads unrecognised, whatever row is
+ *    under it;
+ *  - no mid-reply screen holds an "esc to interrupt" row, the reader's only
+ *    sign of busy: Codex drew its working row once, after Enter, and not while
+ *    the reply streamed. Each ends in the same rows as its after-reply screen,
+ *    so it reads ready. */
 interface Misread { ticket: string; reads: string }
-const UNRECOGNISED: Misread = { ticket: 'aicc_planning#357', reads: 'unrecognised' }
+const WRAPPED_FOOTER: Misread = { ticket: 'aicc_planning#357', reads: 'unrecognised' }
+const STREAMING: Misread = { ticket: 'aicc_planning#357', reads: 'ready' }
 const KNOWN_MISREADS: Record<string, Misread> = Object.fromEntries([
-  // Codex 0.170.0, "← for agents · ? for shortcuts" (its default hint row).
-  'codex170-windows-bundled-ready', 'codex170-windows-system-ready', 'codex170-macos-ready', 'codex170-linux-ready',
-  'codex170-windows-bundled-agents-hint', 'codex170-macos-agents-hint',
-  // Codex 0.170.0, the same row with "⚠ 1 warning · f2 to view" at its right
-  // (after a prompt the footer also holds the thread title and wraps on macOS and Windows, not on Linux).
-  'codex170-windows-bundled-mid-reply', 'codex170-windows-system-mid-reply', 'codex170-macos-mid-reply', 'codex170-linux-mid-reply',
-  'codex170-windows-bundled-after-reply', 'codex170-windows-system-after-reply', 'codex170-macos-after-reply', 'codex170-linux-after-reply',
-  'codex170-windows-bundled-warning-hint', 'codex170-macos-warning-hint',
-  // Codex 0.170.0, "← for agents · f6 for shortcuts" (the shortcuts key rebound).
-  'codex170-windows-bundled-rebound-hint', 'codex170-macos-rebound-hint',
-  // "tab to queue message" (a draft typed while a turn runs; Codex 0.170.0's
-  // footer wraps there on both systems).
-  'codex170-windows-bundled-queue-hint', 'codex170-macos-queue-hint',
-  'codex-windows-bundled-queue-hint', 'codex-macos-queue-hint',
-  // Codex 0.157.1, "f6 for shortcuts" (the shortcuts key rebound).
-  'codex-windows-bundled-rebound-hint', 'codex-macos-rebound-hint',
-  // Codex 0.157.1, "? for shortcuts" with "⚠ 1 warning · f2 to view" at its right.
-  'codex-windows-bundled-warning-hint', 'codex-macos-warning-hint',
-  'codex-windows-bundled-mid-reply', 'codex-windows-system-mid-reply', 'codex-macos-mid-reply', 'codex-linux-mid-reply',
-  'codex-windows-bundled-after-reply', 'codex-windows-system-after-reply', 'codex-macos-after-reply',
-].map((name) => [name, UNRECOGNISED]))
+  // Codex 0.170.0 after a prompt on macOS and Windows: the footer wraps.
+  ...[
+    'codex170-windows-bundled-mid-reply', 'codex170-windows-system-mid-reply', 'codex170-macos-mid-reply',
+    'codex170-windows-bundled-after-reply', 'codex170-windows-system-after-reply', 'codex170-macos-after-reply',
+    'codex170-windows-bundled-queue-hint', 'codex170-macos-queue-hint',
+  ].map((name) => [name, WRAPPED_FOOTER]),
+  // A reply streaming, with a footer of one row: nothing on screen says busy.
+  ...[
+    'codex170-linux-mid-reply',
+    'codex-windows-bundled-mid-reply', 'codex-windows-system-mid-reply', 'codex-macos-mid-reply', 'codex-linux-mid-reply',
+  ].map((name) => [name, STREAMING]),
+])
 
 const NAMES = PROGRAMS.flatMap((p) => SYSTEMS.flatMap((s) => STATES[p].map((st) => ({ name: `${p}-${s}-${st}`, program: p, system: s, state: st }))))
 const NAME_BY = new Map(NAMES.map((n) => [n.name, n]))
