@@ -263,8 +263,11 @@ node p20-probe.cjs run --root <checkout> --out <folder> --forwarder <checkout>\s
 `--only` takes case names or prefixes (`claude-a`, `codex-c`, `claude-b-mcp`),
 `--runs` the runs per case (3 for a verdict) and `--cap-s` how long a turn may
 wait on an endpoint that never answers (720). The runs of one case run side by
-side; the cases one after the other. The decision lines are in the script's
-header and were fixed before measuring. It cleans up after each case and at
+side; the cases one after the other. A CLI's (a) lines are checked against its
+control only when `<cli>-a-ok` is among the cases run: `--only` without it
+prints them with no control, and they are then not plan verdicts. The decision
+lines are in the script's header and were fixed before measuring. It cleans
+up after each case and at
 its end: a process counts as its own only when it started after its parent,
 and each is stopped only after its name and start time are checked. The last
 lines are `P20 (a)`, `P20 (b)`, `P20 (c)` and `P20 RESULT: ...`, or

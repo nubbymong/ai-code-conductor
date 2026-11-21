@@ -33,8 +33,10 @@ d51689a7... (the committed files; LF line ends). Clean-up complete in both runs.
   - Codex 0.157.1 and 0.171.0 (the app's forwarder, by `-c` as the app gives it): 0.3 to
     0.4 s in every case, as the control. The forwarder delivered SessionStart,
     UserPromptSubmit, PreToolUse, PostToolUse and Stop with the session's token. Never
-    answering: each request closed 15 to 473 ms after it came, all within 150 ms after the
-    turn's Stop, before the forwarder's own 2 s limit. Nothing on screen said a hook failed.
+    answering: each request closed 15 to 473 ms after it came, before the forwarder's own 2 s
+    limit, but at the probe's own Ctrl+C that ends the run (all five within 12 ms of each
+    other, 546 to 565 ms before the CLI's exit), so how long one is held while the session
+    goes on was not measured. Nothing on screen said a hook failed.
 - (b) Claude Code READS ONCE, both files. `--settings`: the PreToolUse URL changed by a
   rename over the file; the next turn's hook went to the old URL about 3.8 s later, 3 of 3,
   nothing shown. `--mcp-config`: the server ended and the file named another; `/mcp`,
@@ -77,6 +79,17 @@ app answers permissions again. The code half (delete the dormant path, or keep i
 - The plan's "decision lines in the PR before measuring": no builder opens a PR (rule 11), so
   the lines are in the probe's header in the commit before the run, and in the aggregate's
   notes.
+- The header's STILL WAITING line gives one cap, 12 minutes from the tool call. The probe uses
+  that cap only for the endpoint that never answers; every other case waits 120 s for the
+  result (p20-probe.cjs:646). No case came near either: outside never answers the longest
+  wait was 0.4 s.
+- The header's meaning line for (b) `--settings` is wrong in one place and is left as it ran
+  (the result files name the probe by its digest). It calls writing the new run's port and
+  secret into the file item 3's second way, and says READS ONCE leaves only the hook mode.
+  Item 3's second way is the take-over registering the session's old secret again, which the
+  CLI reads nothing for and which works only while the gateway keeps its port; the result
+  above and ADR-030 say that. The verdict rule itself (READS AGAIN, READS ONCE, HOOK DROPPED)
+  is as written before the run.
 
 **Seen beside the questions.** In the first Codex 0.171.0 case, the clean-up after the case
 stopped git.exe and git-remote-https.exe processes, with their console hosts (15 in all, 7

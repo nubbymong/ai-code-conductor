@@ -299,8 +299,9 @@ slice's adversarial pass.
 2. Codex over SSH stays in the feature queue.
 3. Canvas rendering of a remote machine's project files waits for a canvas
    source seam. Remote canvas content is inline only.
-4. The remote hook payload is cut down, so permission answers from the app are
-   for This computer only. A remote session asks in its own terminal.
+4. The remote hook payload is cut down, so a permission answer from the app
+   could only be for This computer; the app gives none today (the parity
+   table). A remote session asks in its own terminal.
 5. A truly unsupported host (for example FreeBSD), or a host that refuses the
    upload, opens as a labelled plain terminal with no features.
 6. Paste covers images and text only. If probe P11 fails for one CLI, that CLI
@@ -605,9 +606,13 @@ versions, through the app's forwarder: the tool runs 0.3 to 0.4 s after the call
 case, as in the control, and nothing on screen says a hook failed; the forwarder delivered
 SessionStart, UserPromptSubmit, PreToolUse, PostToolUse and Stop with the session's token.
 Against an endpoint that never answers, every request was closed 15 to 473 ms after it came,
-all within 150 ms after the turn's Stop event and before the forwarder's own 2 s limit: Codex
-ends its asynchronous hook commands with the turn (which process ended them was not
-recorded). What it means, as fixed before measuring: after an update, a held Claude Code
+before the forwarder's own 2 s limit. That is the probe ending the run, not Codex: in every
+run the five requests closed within 12 ms of each other and 546 to 565 ms before the CLI's
+exit, whatever the time since the turn's Stop event (15 to 148 ms), and the probe ends a run
+with two Ctrl+C 500 ms apart (the time of the first was not recorded). How long a request that
+is never answered is held while the session goes on was not measured; the forwarder's own
+limit is 2 s and the hook's timeout 10 s. What it means, as fixed before measuring: after an
+update, a held Claude Code
 session's PreToolUse on the gateway loses only the event, so step 2 of S16's second half (the
 hook mode) is a default, not a gate on step 4; its cost until then is the "hook failed" lines,
 one per tool call; a gateway that hangs stalls each tool call 10 minutes (recorded, no gate);

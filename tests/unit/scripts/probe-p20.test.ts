@@ -59,6 +59,8 @@ describe('P20 (a): the endpoint behaviour verdicts', () => {
     expect(v.verdict).toBe('RUNS THE TOOL')
     expect(v.hookSeen).toBe(3)
     expect(v.summary).toContain('wait 0.2 to 0.9 s')
+    // Another event of the session's is not the hook the control needs.
+    expect(P.verdictA(three({ ...ranTurn(200), hooks: [{ path: 'session', t: 900, event: 'SessionStart' }] }), 3).hookSeen).toBe(0)
   })
   it('a result without the marker is BLOCKS THE TOOL; no result is STILL WAITING; no call is CANNOT MEASURE', () => {
     expect(P.verdictA(three({ turns: { 1: { callAt: 1, resultAt: 5, ran: false } } }), 3).verdict).toBe('BLOCKS THE TOOL')
@@ -139,6 +141,12 @@ describe('P20 (c): tools/list_changed', () => {
     expect(v.outcomes).toEqual(['listed, not in the turn', 'listed, not in the turn', 'listed, not in the turn'])
     expect(v.verdict).toBe('NO VERDICT')
   })
+  it('the added tool in the next turn with no tools/list in the window is its own outcome, so the case is NO VERDICT', () => {
+    const v = P.verdictC(three(run(null, true, true)), 3)
+    expect(v.outcomes).toEqual(['in the turn, not listed', 'in the turn, not listed', 'in the turn, not listed'])
+    expect(v.verdict).toBe('NO VERDICT')
+    expect(P.verdictC(three(run(20001, true, true)), 3).verdict).toBe('NO VERDICT')
+  })
   it('a first turn that never named the first tool leaves the outcome on tools/list alone', () => {
     const v = P.verdictC(three(run(10400, false, false)), 3)
     expect(v.verdict).toBe('LISTS AGAIN')
@@ -175,6 +183,7 @@ describe('P20 stand-in model: what a request asks for', () => {
     expect(S.classifyResponses({ tools: t, input: [prompt] })).toMatchObject({ kind: 'list', run: 'p20codexc1', turn: '2' })
     expect(S.classifyResponses({ tools: t, input: [prompt, { type: 'message', role: 'assistant', content: [] }] }).kind).toBe('ok')
     expect(S.classifyResponses({ tools: t, input: [prompt, { type: 'function_call_output', call_id: 'call_p20_3', output: S.FILE_MARKER }] })).toMatchObject({ kind: 'result', ran: true })
+    expect(S.classifyResponses({ tools: t, input: [prompt, { type: 'function_call_output', call_id: 'call_p20_4', output: 'blocked by a hook' }] })).toMatchObject({ kind: 'result', callId: 'call_p20_4', ran: false })
     expect(S.classifyResponses({ tools: [], input: [prompt] }).kind).toBe('ok')
   })
   it('Codex: the shell tool it offers, with the arguments that read the file', () => {
