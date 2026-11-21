@@ -2572,14 +2572,28 @@ describe('the 2.1.3-beta.12 sweep', () => {
   const entry = changelog.find((e) => e.version === '2.1.3-beta.12')!
   const notes = () => [entry.highlights ?? '', ...entry.warnings!, ...entry.changes.map((c) => c.description)]
   const updating = () => root('helper', 'src', 'relay.rs').match(/pub const UPDATING: &str = "([^"]+)";/)![1]
+  // How long the relay holds a call for the app, from the same file, so the
+  // Guide and the notes cannot keep saying 30 seconds after HOLD changes.
+  const holdSeconds = () => root('helper', 'src', 'relay.rs').match(/pub const HOLD: Duration = Duration::from_secs\((\d+)\);/)![1]
+  const known = (start: string) => body('known-issues').split('\n\n').find((x) => x.startsWith(start))
 
   it('the Machines section says a held terminal shown again past the last 2 MiB shows one line and is asked to redraw (aicc_planning#352)', () => {
-    expect(body('machines')).toContain('nothing is typed into it again. When it printed more than the last 2 MiB the helper keeps, the tab first shows one line saying its earlier output is no longer held, and its program is asked to draw its screen again.')
+    expect(body('machines')).toContain('nothing is typed into it again. When it printed more than the last 2 MiB the helper keeps, the tab first shows one line saying its earlier output is no longer held, and its program, if it is still running, is asked to draw its screen again.')
+  })
+
+  it('Known issues says the notice also shows under either setting when the app falls behind, and that a program that is over is not asked to redraw (aicc_planning#352)', () => {
+    const p = known('With Plain terminals through the session helper on, a terminal the helper holds keeps only the last 2 MiB of what it printed.')!
+    expect(p).toContain('then the output the helper still holds, and the program in it, if it is still running, is asked to draw its screen again.')
+    expect(p).toContain('The same line shows in any terminal or session the helper holds, under either setting, when the app falls so far behind its output that the helper no longer holds what it missed.')
+  })
+
+  it('Known issues says a shortcuts key moved to a key other than F6 still types nothing, with its workaround (aicc_planning#357)', () => {
+    expect(known('With Codex 0.157.1 or 0.170.0, when your Codex config moves the shortcuts key to a key other than F6, the app types nothing into a Codex session')).toContain('Workaround: move the shortcuts key back to ? or to F6, or type the note into the Codex session yourself.')
   })
 
   it('the Machines section says a held session keeps its tools through a dropped connection, with the relay\'s own answer (aicc_planning#354, aicc_planning#355)', () => {
     const m = body('machines')
-    expect(m).toContain(`can also reach the Conductor's tools through the session helper. If the app's connection to the session helper drops and comes back, those tools keep working: a tool call made while the connection is down waits up to 30 seconds for the app, and if the app is not back by then, it gets the answer ${updating()}.`)
+    expect(m).toContain(`can also reach the Conductor's tools through the session helper. If the app's connection to the session helper drops and comes back, those tools keep working: a tool call made while the connection is down waits up to ${holdSeconds()} seconds for the app, and if the app is not back by then, it gets the answer "${updating()}".`)
     expect(m).toContain('A call the app was already answering when the connection dropped gets that answer at once and is not sent again, because a tool may not be safe to run twice. Such a session does not survive a crash yet.')
   })
 
@@ -2594,15 +2608,17 @@ describe('the 2.1.3-beta.12 sweep', () => {
     const all = entry.changes.map((c) => c.description).join('\n')
     for (const said of [
       'With Plain terminals through the session helper on (Settings, General, under Terminal; off by default)',
-      'now first shows one line saying its earlier output is no longer held, and its program is asked to draw its screen again.',
+      'It now first shows one line saying its earlier output is no longer held, and its program, if it is still running, is asked to draw its screen again.',
       'A full-screen program in it is then drawn on the normal screen until you start it again, and the line after the notice can start part-way (in Known issues).',
       'With Claude Code and Codex sessions through the session helper on (Settings, General, under Terminal; off by default)',
-      `A tool call made while the connection is down waits up to 30 seconds for the app, and if the app is not back by then, it gets the answer ${updating()}.`,
+      `A tool call made while the connection is down waits up to ${holdSeconds()} seconds for the app, and if the app is not back by then, it gets the answer "${updating()}".`,
       'Before, that session\'s tools stopped working until you typed /mcp in Claude Code or restarted the tab.',
       'are now typed into a Codex session while Codex shows its usual hint line under the prompt.',
       'with Codex 0.157.1 or 0.170.0, for that line when your Codex config moves the shortcuts key to F6.',
-      'Known issues lists the three cases where it still types nothing, or takes its text back.',
+      'canvas notes, Ask Conductor questions, command bar prompt buttons, the app\'s own Codex commands and a Watchdog retry are now typed',
+      'It still types nothing when the shortcuts key is moved to any other key. Known issues lists that and three more cases where it types nothing, or takes its text back.',
     ]) expect(all).toContain(said)
+    expect(entry.highlights).toContain('asks its program, if it is still running, to draw its screen again.')
     // Each switch is named with its default, so no line says more than shipped.
     expect(entry.changes.filter((c) => c.description.includes('off by default'))).toHaveLength(2)
     for (const text of notes()) {
