@@ -619,7 +619,9 @@ describe('github-update', () => {
 
   // aicc_planning#369: the screen showed a beta offer as "v2.1.3" (the base
   // version), which reads as the stable release. displayVersion keeps the
-  // prerelease part; version, which the logs name, is unchanged.
+  // prerelease part; version is unchanged. The logs named version then; since
+  // aicc_planning#379 they name the full label (the offer-line cases at the end
+  // of this block, and the skip-line case under 'asset matching').
   //
   // A 2.1.3 release needs macOS 13 (resources/macos-release-floors.json, from
   // v2.1.1-beta.2 on), so a Mac is offered one only when its Mac download is
