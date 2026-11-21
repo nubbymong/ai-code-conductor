@@ -31,7 +31,7 @@ build are in `docs/remote/helper-threat-model.md` 3.10.
 | Holder process | `src/serve.rs`, `src/request.rs`, `src/detach.rs` | `hold`: the hello, the `term.*` messages, the away clock; started detached so it outlives the app |
 | Records and list | `src/store.rs`, `src/client.rs`, `src/pids.rs` | Each holder's record in the store folder; `list` finds every session and removes stale records |
 | Start and end mode | `src/start.rs`, `src/winproc.rs` | Windows only. `start`: one program, by a drive-absolute path (never searched for, never a batch file), with no inherited handles, created suspended until its creation time is read; prints its pid and creation time and exits. `end`: ends that program and the processes under it, only while its pid still has that creation time, holding it open from the check to the end; prints `ended` or `left`. The app starts and ends the vision browser this way |
-| Tool relay | `src/relay.rs` | `mcp`: a session's tool server as its CLI starts one. It carries one JSON-RPC message a line between its standard input and output and the session's holder, which passes them to the attached connection that acked `mcp` (from 2.1.3-beta.10; nothing in the app starts it yet) |
+| Tool relay | `src/relay.rs` | `mcp`: a session's tool server as its CLI starts one. It carries one JSON-RPC message a line between its standard input and output and the session's holder, which passes them to the attached connection that acked `mcp` (from 2.1.3-beta.10; nothing in the app starts it yet). With a holder that offers `away` (from 2.1.3-beta.12) its stream is kept while the app is away: a call made meanwhile waits up to 30 s, then gets the fixed "updating" answer, and a call the app had when it went is answered at once and never sent again |
 | Self-test | `src/selftest.rs` | Codec, hello, ring, a terminal round trip and a round trip over the local transport, one `AICC-RESULT` line; it closes its terminal before it moves on, and on Windows it runs in a job object when one can be made, so nothing it starts (its terminal's `conhost.exe` included) outlives it |
 | Fake CLI | `src/bin/aicc-fake-cli.rs` | A stand-in provider CLI for tests and probes |
 | Fixtures | `fixtures/*.json` | Frame, hello, limit and local transport vectors read by the Rust tests and by `tests/unit/scripts/helper-fixtures.test.ts` |
@@ -64,8 +64,10 @@ in the store, as protocol section 15 describes. `hook` is a Claude Code command
 hook: it passes the event on its standard input to the session's holder,
 always exits 0 and prints nothing (nothing in the app uses it yet). `mcp` is a
 tool server a CLI starts: standard output carries only the messages its stream
-brings, and it exits 0 only when its standard input ends (nothing in the app
-uses it yet). `start` prints
+brings and the answers it gives in the app's place while the app is away, and
+it exits 0 only when its standard input ends (nothing in the app uses it yet).
+In the debug build `cargo test` runs, a held call waits 4 s instead of 30 s,
+so the tests can wait one out. `start` prints
 `{"pid":<n>,"created":"<t>"}` and exits without waiting for the program; `end`
 prints `ended` or `left` (protocol section 15, "Starting a program" and "Ending
 a program it started").
@@ -83,6 +85,12 @@ cargo test --locked
 `Cargo.lock` is committed and every build uses `--locked`. If it is missing, the
 CI job generates one, uploads it as the `helper-cargo-lock` artifact and fails
 with a message to commit it.
+
+A helper/ change that waits on another one not yet merged is built on a pushed
+branch cut from the other change's reviewed head: `gh workflow run ci.yml --ref
+<branch> -f helper=true` runs the three Helper jobs there (and, as every
+dispatch does, the CLI conformance checks). Its pull request opens once, after
+the other change has merged and the branch has been moved onto beta.
 
 On Windows the helper carries its own C runtime (since 2.1.3-beta.8), so it
 starts on a PC without Microsoft's Visual C++ runtime. `.cargo/config.toml` in

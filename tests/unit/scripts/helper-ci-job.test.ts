@@ -17,7 +17,8 @@ const ROOT = resolve(__dirname, '../../..')
 const read = (p: string) => readFileSync(resolve(ROOT, p), 'utf-8').replace(/\r\n/g, '\n')
 type Step = { name?: string; id?: string; if?: unknown; uses?: string; run?: string; with?: Record<string, unknown>; shell?: string; 'working-directory'?: string; 'continue-on-error'?: unknown }
 type Job = { name?: string; if?: unknown; needs?: unknown; steps: Step[]; strategy?: { matrix: Record<string, unknown> }; permissions?: Record<string, string>; 'timeout-minutes'?: number; 'continue-on-error'?: unknown }
-const ci = yaml.load(read('.github/workflows/ci.yml')) as { jobs: Record<string, Job> }
+type Input = { description?: string; type?: string; required?: boolean; default?: unknown }
+const ci = yaml.load(read('.github/workflows/ci.yml')) as { on: { workflow_dispatch: { inputs: Record<string, Input> } }; jobs: Record<string, Job> }
 const job = ci.jobs.helper
 
 /** The checks the branch rulesets require; the helper job is none of them. */
@@ -31,6 +32,22 @@ const stepCtx = (helper: string | undefined, present: string | undefined, os: st
   matrix: { os },
   steps: { scope: { outputs: helper === undefined ? {} : { helper } }, lock: { outputs: present === undefined ? {} : { present } } },
 })
+/**
+ * A dispatch as GitHub gives it: `github.event.inputs` holds every declared
+ * input as a string (a boolean one as 'true' or 'false', its default when the
+ * dispatch leaves it out), and the `inputs` context holds the same values with
+ * their declared types.
+ */
+const dispatch = (given: Record<string, string>): GhaContext => {
+  const strings: Record<string, string> = {}
+  const typed: Record<string, unknown> = {}
+  for (const [name, input] of Object.entries(ci.on.workflow_dispatch.inputs)) {
+    const value = name in given ? given[name] : String(input.default ?? '')
+    strings[name] = value
+    typed[name] = input.type === 'boolean' ? value === 'true' : value
+  }
+  return { github: { event_name: 'workflow_dispatch', event: { inputs: strings } }, inputs: typed }
+}
 const named = (name: string) => {
   const s = job.steps.find((x) => x.name === name)
   if (!s) throw new Error(`no step named "${name}"`)
@@ -59,12 +76,13 @@ describe('ci.yml: the Helper job exists, on the three OSes, and is not a require
     expect(ci.jobs['test-windows'].strategy?.matrix.os).toEqual(['windows-2025'])
   })
 
-  it('the job starts on a pull request or a push; its only conditions are the event and the Test jobs label and edit rule, never the paths', () => {
-    const on = (event: string, action = 'opened', extra: Record<string, unknown> = {}) => evalIf(job.if, { github: { event_name: event, event: { action, pull_request: { labels: [] }, ...extra } } })
+  it('the job starts on a pull request, a push or a dispatch that names it; its only conditions are the event, that input and the Test jobs label and edit rule, never the paths', () => {
+    const on = (event: string, action = 'opened', extra: Record<string, unknown> = {}) => evalIf(job.if, { github: { event_name: event, event: { action, pull_request: { labels: [] }, ...extra } }, inputs: {} })
     expect(on('pull_request', 'opened')).toBe(true)
     expect(on('pull_request', 'synchronize')).toBe(true)
     expect(on('pull_request', 'reopened')).toBe(true)
     expect(on('push', '')).toBe(true)
+    // A dispatch whose payload names no input at all.
     expect(on('workflow_dispatch', '')).toBe(false)
     expect(String(job.if)).not.toMatch(/scope|paths|needs\.|labels|helper\//)
     expect(job.needs).toBeUndefined()
@@ -73,7 +91,7 @@ describe('ci.yml: the Helper job exists, on the three OSes, and is not a require
   })
 
   it('a label change other than ci-run and an edit that is not a base change do not start three runners; ci-run and a base change do', () => {
-    const on = (action: string, extra: Record<string, unknown>) => evalIf(job.if, { github: { event_name: 'pull_request', event: { action, pull_request: { labels: [] }, ...extra } } })
+    const on = (action: string, extra: Record<string, unknown>) => evalIf(job.if, { github: { event_name: 'pull_request', event: { action, pull_request: { labels: [] }, ...extra } }, inputs: {} })
     expect(on('labeled', { label: { name: 'desktop-tested' } })).toBe(false)
     expect(on('unlabeled', { label: { name: 'ci-run' } })).toBe(false)
     expect(on('edited', { changes: { title: { from: 'old' } } })).toBe(false)
@@ -81,6 +99,23 @@ describe('ci.yml: the Helper job exists, on the three OSes, and is not a require
     // `ci-run` added replaces the in-flight run of the same group, so it must still build.
     expect(on('labeled', { label: { name: 'ci-run' } })).toBe(true)
     expect(on('edited', { changes: { base: { ref: { from: 'main' } } } })).toBe(true)
+  })
+
+  it('a dispatch runs it only when it names the helper input (a yes or no, default no), given as GitHub gives it', () => {
+    expect(ci.on.workflow_dispatch.inputs.helper, 'ci.yml has no `helper` dispatch input').toMatchObject({ type: 'boolean', required: false, default: false })
+    expect(ci.on.workflow_dispatch.inputs.helper.description).toMatch(/\S/)
+    expect(evalIf(job.if, dispatch({ helper: 'true' }))).toBe(true)
+    // Left out, the input is its default, 'false'; a string 'false' is not a yes.
+    expect(evalIf(job.if, dispatch({}))).toBe(false)
+    expect(evalIf(job.if, dispatch({ helper: 'false' }))).toBe(false)
+    // Every other input, set, neither starts it alone nor stops it beside a yes.
+    const others = Object.keys(ci.on.workflow_dispatch.inputs).filter((name) => name !== 'helper')
+    expect(others.length).toBeGreaterThan(0)
+    for (const name of others) {
+      const value = ci.on.workflow_dispatch.inputs[name].type === 'boolean' ? 'true' : 'set'
+      expect(evalIf(job.if, dispatch({ [name]: value })), name).toBe(false)
+      expect(evalIf(job.if, dispatch({ helper: 'true', [name]: value })), name).toBe(true)
+    }
   })
 })
 

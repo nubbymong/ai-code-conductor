@@ -1834,7 +1834,7 @@
     }
   },
   "mcp": {
-    "_doc": "Tool stream vectors for docs/remote/helper-protocol.md section 15 (capability mcp, from 2.1.3-beta.10). Read by helper/tests/fixtures.rs and tests/unit/main/session-helper-protocol.test.ts. A request is read as a connection that acked core, local and mcp (the relay's ack) reads it, unless the vector says what was acked (acked). messages are the exact bytes the holder sends the app, and the app reads each as its fields say; invalid_messages are ones the app refuses. The limits on a message are for its message as compact JSON.",
+    "_doc": "Tool stream vectors for docs/remote/helper-protocol.md section 15 (capability mcp, from 2.1.3-beta.10). Read by helper/tests/fixtures.rs and tests/unit/main/session-helper-protocol.test.ts. A request is read as a connection that acked core, local and mcp (the relay's ack) reads it, unless the vector says what was acked (acked). messages are the exact bytes the holder sends the app, and the app reads each as its fields say; invalid_messages are ones the app refuses. The limits on a message are for its message as compact JSON. offered and relay_caps are 2.1.3-beta.10's: what a holder offered then, and what a relay still acks a holder that does not offer away. A holder and a relay of 2.1.3-beta.12 are the away part's.",
     "offered": [
       "core",
       "local",
@@ -2143,6 +2143,69 @@
       {
         "name": "a message that is null",
         "json": "{\"t\":\"mcp\",\"stream\":1,\"message\":null}"
+      }
+    ]
+  },
+  "away": {
+    "_doc": "Kept tool stream vectors for docs/remote/helper-protocol.md section 15 (capability away, from 2.1.3-beta.12). Read by helper/tests/fixtures.rs. offered is what a holder offers, relay_caps what a relay acks a holder that offers away. messages are the exact bytes the holder sends a relay that acked away: mcp.away when no connection takes its stream, mcp.back when one takes it again. answers are the exact lines the relay writes for its CLI in the app's place, without the line end: to a tools/call, and to any other call. The limits are the relay's: hold_secs is how long a held call waits in the build the installer ships, test_hold_secs in the build cargo test runs; held_bytes counts each held call as compact JSON.",
+    "offered": [
+      "core",
+      "local",
+      "hooks",
+      "mcp",
+      "away"
+    ],
+    "relay_caps": [
+      "core",
+      "local",
+      "mcp",
+      "away"
+    ],
+    "limits": {
+      "hold_secs": 30,
+      "test_hold_secs": 4,
+      "held_calls": 32,
+      "held_bytes": 4194304,
+      "remembered_calls": 64
+    },
+    "messages": [
+      {
+        "name": "the app is away",
+        "type": "mcp.away",
+        "stream": 1,
+        "json": "{\"t\":\"mcp.away\",\"stream\":1}"
+      },
+      {
+        "name": "the app is back, on the longest number",
+        "type": "mcp.back",
+        "stream": 9007199254740991,
+        "json": "{\"t\":\"mcp.back\",\"stream\":9007199254740991}"
+      }
+    ],
+    "answers": [
+      {
+        "name": "to a tool call",
+        "call": {
+          "jsonrpc": "2.0",
+          "id": 7,
+          "method": "tools/call",
+          "params": {
+            "name": "echo",
+            "arguments": {
+              "text": "hi"
+            }
+          }
+        },
+        "json": "{\"jsonrpc\":\"2.0\",\"id\":7,\"result\":{\"content\":[{\"type\":\"text\",\"text\":\"AI Code Conductor is updating, try again shortly\"}],\"isError\":true}}"
+      },
+      {
+        "name": "to any other call, with a string id",
+        "call": {
+          "jsonrpc": "2.0",
+          "id": "a-1",
+          "method": "tools/list"
+        },
+        "json": "{\"jsonrpc\":\"2.0\",\"id\":\"a-1\",\"error\":{\"code\":-32603,\"message\":\"AI Code Conductor is updating, try again shortly\"}}"
       }
     ]
   }

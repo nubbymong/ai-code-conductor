@@ -30,6 +30,14 @@ on:
   # either job or of an input here is a change to the watch as well.
   workflow_dispatch:
     inputs:
+      # A dispatch that names `helper` also runs the Helper job (see its
+      # condition), so a helper/ branch is built and tested on all three systems
+      # before its pull request opens.
+      helper:
+        description: 'Also build and test the session helper (the Helper job) on Windows, macOS and Linux at this ref'
+        type: boolean
+        required: false
+        default: false
       codex_rc_version:
         description: 'Release-candidate Codex CLI version to check as well (a plain semver, for example 0.160.0); empty checks the minimum and pinned only'
         type: string
@@ -1070,12 +1078,15 @@ jobs:
   # commands this build no longer has, so running it again needs a
   # 2.1.3-beta.5 helper-windows artifact.
   #
-  # Its job condition is the Test jobs' event rule and nothing else: it starts on
-  # a push, and on a pull request except for a label change other than `ci-run`
+  # Its job condition is the Test jobs' event rule and one dispatch case, nothing
+  # else: it starts on a push, on a dispatch that names it (the `helper` input;
+  # github.event.inputs gives each input as a string, so it is compared with
+  # 'true'), and on a pull request except for a label change other than `ci-run`
   # and an edit that is not a base change, which change no code and would only
   # rebuild three runners (the `ci-run` label is kept so the run that replaces
   # an in-flight one in the same group still builds). The paths are never part
-  # of it.
+  # of it. The dispatch case lets a helper/ section be built and tested on its
+  # pushed branch before its pull request opens (plan 2.1.3-beta.12, C1).
   #
   # It decides INSIDE the job, exactly as the Test jobs do (change-scope.mjs):
   # on the events that start it, the job starts on all three runners, scripts/ci/helper-scope.mjs says
@@ -1095,6 +1106,7 @@ jobs:
     name: Helper (${{ matrix.os }})
     if: |
       github.event_name == 'push' ||
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.helper == 'true') ||
       (github.event_name == 'pull_request' &&
        github.event.action != 'unlabeled' &&
        (github.event.action != 'labeled' || github.event.label.name == 'ci-run') &&

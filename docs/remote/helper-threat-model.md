@@ -477,6 +477,45 @@ rollback returns to the earlier beta's rows, and every row has a negative test.
   written into the file, an argument that changes what that CLI starts, a
   session switched while its holder is another session's, and a fall-back that
   leaves a session with no tools and no word.
+- **Kept tool streams (capability `away`, from 2.1.3-beta.12).** A stream
+  whose relay acked `away` is kept while no connection takes tool streams
+  (protocol 15, "Kept streams"), so a relay now outlives the app connection
+  it was with. What a kept stream holds open: the relay's connection to the
+  holder (one of its 16) and one of the session's 8 tool streams, until a
+  connection that takes tool streams attaches, the relay or its CLI goes, the
+  program exits (each kept stream then ends within a quarter of a second), or
+  the session ends. It does not hold the session open: the away clock runs as
+  it does without one, a holder that ends tells no one, and the relay reads
+  the end of its connection and exits 1. What the relay holds meanwhile: at
+  most 32 calls and 4 MiB of them, each for 30 s, and the ids of at most 64
+  calls with the app and 64 it answered in the app's place; a call past the
+  bounds gets the fixed answer at once, and a CLI that does not read what it
+  is sent is cut off at 64 MiB, as before. Of each message the relay reads
+  only whether it is a call and that call's `id` and `method`, and of each
+  answer only its `id` (and of a cancel, the call it names): it
+  never reads or changes a call's arguments or a result, and the only
+  message it writes in the app's place is the fixed answer, with the id of
+  the call it answers. It never sends a call a second time: one the app had
+  when it went is answered at once and dropped, and an answer the app sends
+  to it all the same is dropped. Held calls go, once the app is back, only to
+  the connection the holder gives the stream to, the next attach that takes
+  tool streams, which is the same session's (a holder serves one session).
+  A message the holder read before the stream left an app is refused
+  (`not-connected`), never passed to a later one; the relay has answered its
+  call. A relay that did not ack `away`, and a relay of a holder that does
+  not offer it, are as before. Tested in `helper/tests/relay.rs`:
+  `when_the_app_lets_go_a_relay_that_acked_away_keeps_its_stream_for_the_next_attach`,
+  `a_call_made_while_the_app_is_away_waits_for_it_and_one_the_app_had_is_answered_at_once`,
+  `a_call_still_held_when_its_time_is_up_gets_the_fixed_answer_and_is_dropped`,
+  `at_most_32_calls_and_4_mib_wait_and_a_cancel_drops_a_held_call`,
+  `an_open_while_nothing_takes_tool_streams_is_kept_counts_toward_the_bound_and_ends_with_the_program`,
+  `a_kept_stream_ends_with_its_session_when_the_away_clock_runs_out` and
+  `a_relay_acks_away_only_when_its_holder_offers_it`, and the bounds by the
+  unit tests in `helper/src/relay.rs`. An adversarial pass of it is owed to
+  the security round before 2.1 stable (aicc_planning #320): a CLI that makes
+  the relay hold without bound, an answer made for another call's id, a held
+  call that reaches a connection that should not get it, and a relay kept
+  alive after its session.
 - **A program the helper starts for the app keeps none of the app's handles
   (from 2.1.3-beta.8, Windows).** `aicc-helper start` (protocol 15, "Starting
   a program") starts the program the app names, by the drive-absolute path it

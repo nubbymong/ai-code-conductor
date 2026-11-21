@@ -411,8 +411,11 @@ fn tool_stream_messages_to_the_app_are_the_documented_bytes() {
 fn the_tool_stream_limits_match_the_constants() {
     let doc = load("local.json");
     let mcp = doc.get("mcp").expect("mcp");
-    assert_eq!(strings(mcp, "offered"), serve::HOLDER_CAPS.to_vec());
-    assert_eq!(strings(mcp, "relay_caps"), relay::ACK_CAPS.to_vec());
+    // The `mcp` part is 2.1.3-beta.10's: what a holder offered then, and what
+    // a relay still acks a holder that does not offer `away`. A holder and a
+    // relay of now are the `away` part's.
+    assert_eq!(strings(mcp, "offered"), serve::HOLDER_CAPS[..4].to_vec());
+    assert_eq!(strings(mcp, "relay_caps"), relay::ACK_CAPS[..3].to_vec());
     let l = mcp.get("limits").expect("limits");
     let n = |k: &str| l.get(k).and_then(Value::as_u64).unwrap_or_else(|| panic!("missing number {k}"));
     assert_eq!(n("message_to_app_bytes"), request::MAX_MCP_TO_APP as u64);
@@ -427,6 +430,47 @@ fn the_tool_stream_limits_match_the_constants() {
     // Each limit leaves the 256 bytes the `mcp` around a message needs.
     assert_eq!(request::MAX_MCP_TO_APP + 256, frame::MAX_JSON_HELPER_TO_APP);
     assert_eq!(request::MAX_MCP_TO_HELPER + 256, frame::MAX_JSON_APP_TO_HELPER);
+}
+
+// ── local.json `away`: kept tool streams (capability `away`) ────────────────
+
+#[test]
+fn kept_tool_stream_vectors_read_as_the_fixtures_say() {
+    let doc = load("local.json");
+    let away = doc.get("away").expect("away");
+    assert_eq!(strings(away, "offered"), serve::HOLDER_CAPS.to_vec());
+    assert_eq!(strings(away, "relay_caps"), relay::ACK_CAPS.to_vec());
+    let messages = items(away, "messages");
+    let types: Vec<&str> = messages.iter().map(|m| text(m, "type")).collect();
+    assert_eq!(types, vec!["mcp.away", "mcp.back"]);
+    for case in messages {
+        let name = text(case, "name");
+        let stream = case.get("stream").and_then(Value::as_u64).expect("stream");
+        // Exactly `t` and `stream`, as `mcp.open` and `mcp.close` are.
+        let message = Value::obj(vec![("t", Value::str(text(case, "type"))), ("stream", Value::uint(stream))]);
+        assert_eq!(message.to_json(), text(case, "json"), "{name}");
+        // The holder sends these bytes.
+        let sent = if text(case, "type") == "mcp.away" { serve::mcp_away(stream) } else { serve::mcp_back(stream) };
+        assert_eq!(sent.to_json(), text(case, "json"), "{name}");
+        // A relay reads them as section 6's app to helper allows.
+        assert!(frame::encode(&frame::Frame::json(0, message), Direction::AppToHelper).is_ok(), "{name}");
+    }
+    let answers = items(away, "answers");
+    assert_eq!(answers.len(), 2);
+    for case in answers {
+        let name = text(case, "name");
+        let call = case.get("call").expect("call");
+        let id = call.get("id").expect("an id");
+        let answer = relay::updating_answer(id, text(call, "method"));
+        assert_eq!(answer.to_json(), text(case, "json"), "{name}");
+    }
+    let l = away.get("limits").expect("limits");
+    let n = |k: &str| l.get(k).and_then(Value::as_u64).unwrap_or_else(|| panic!("missing number {k}"));
+    assert_eq!(n("hold_secs"), relay::HOLD.as_secs());
+    assert_eq!(n("test_hold_secs"), relay::TEST_HOLD.as_secs());
+    assert_eq!(n("held_calls"), relay::MAX_HELD as u64);
+    assert_eq!(n("held_bytes"), relay::MAX_HELD_BYTES as u64);
+    assert_eq!(n("remembered_calls"), relay::MAX_REMEMBERED as u64);
 }
 
 #[test]
