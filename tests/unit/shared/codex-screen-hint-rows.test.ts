@@ -17,7 +17,8 @@
 // while a reply streamed (codexComposerDraft, codexComposerRows).
 // Still refused, on purpose: a warning count at the right of the row,
 // "<warning sign> 1 warning . f2 to view" (both versions; P19 drew it with a
-// config whose MCP server program does not exist). Once a text is typed at an
+// config whose MCP server program does not exist, and with the stand-in model
+// both versions drew it from the first prompt on). Once a text is typed at an
 // idle composer, Codex keeps the count alone under the footer (its own
 // snapshot test warning_notice_styles, chat_composer/warning_notice_tests.rs
 // at both tags; P19's bytes, codex-macos-queue-hint event 83). No recording
@@ -45,7 +46,9 @@
 //    goes and the footer takes the last row, which codexTextTyped confirms),
 //    and none holds it with a warning count;
 //  - a draft wrapped onto more rows over the queue hint is built here, not
-//    recorded (every recorded draft is one row).
+//    recorded (every recorded draft is one row); under such a draft the hint
+//    row's indent is checked against the footer row's only where the wrapped
+//    rows share it (two spaces, as in every recording).
 import { describe, it, expect } from 'vitest'
 import {
   readCodexScreen, codexComposerState, codexComposerDraft, codexComposerRows, codexTextTyped, type ScreenLine,

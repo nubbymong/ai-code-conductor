@@ -164,7 +164,9 @@ const strayLeftOut = (rows: readonly LeftOut[]): string[] =>
  *    under it;
  *  - the others end in a warning count at the right of the hint row (both
  *    versions; P19 drew it with a config whose MCP server program does not
- *    exist), a row the reader does not take: once a text is typed at an idle
+ *    exist, and the screens after a prompt show it too: with the stand-in
+ *    model both versions drew it from the first prompt on), a row the reader
+ *    does not take: once a text is typed at an idle
  *    composer Codex keeps the count alone under the footer, which no reader
  *    that confirms a typed text takes. The five mid-reply screens whose
  *    footer is one row are among them: no mid-reply screen holds an "esc to

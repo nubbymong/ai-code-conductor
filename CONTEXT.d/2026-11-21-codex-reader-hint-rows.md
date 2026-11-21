@@ -17,8 +17,9 @@ Plan 2.1.3-beta.12, section C3 (aicc_planning #357), built on A2 step 2's review
   never ready. `codexComposerDraft` and `codexComposerRows` strip the same row when it is the last
   row, whatever the composer's height, because the recordings showed them wrong (no reading of an
   empty 0.170.0 composer, or of the queue hint's draft). So composer-submit can take back a text
-  it typed, one row or wrapped onto more. `codexTextTyped` and `codexPastedContentShown` are
-  unchanged. composer-submit.ts, the Watchdog, the renderer's reader, cli-contract.ts and
+  it typed, one row or wrapped onto more. The wrapped case is not recorded (every recorded draft
+  is one row): the test builds it from the recorded queue hint, after the final-head review's dry
+  run. `codexTextTyped` and `codexPastedContentShown` are unchanged. composer-submit.ts, the Watchdog, the renderer's reader, cli-contract.ts and
   pty-manager.ts are untouched.
 - **The warning count is not taken (found at the final-head review).** Once a text is typed at an
   idle composer, Codex hides the left hint and keeps the count alone under the footer: its own
@@ -27,7 +28,10 @@ Plan 2.1.3-beta.12, section C3 (aicc_planning #357), built on A2 step 2's review
   leaves the count). No reader that confirms a typed text takes that row. With the count
   accepted, the app typed the text, never pressed Enter and could not take it back, where at
   6abb571f the screen read unrecognised and nothing was typed. So the warning rows are not
-  accepted: such a screen reads unrecognised, as before C3.
+  accepted: such a screen reads unrecognised, as before C3. In P19's runs both versions showed
+  the count in every launch from the first prompt on (with the stand-in model; what it warns of
+  was not read), so in those runs no screen after the first prompt reads ready. Whether a
+  signed-in Codex shows the count in normal use is not measured.
 - **Result.** 12 of the 33 now read their state: 0.170.0's ready screen (4 systems), its agents
   form and its rebound key (macOS and the bundled ConPTY each); 0.157.1's rebound key (2) and its
   queue hint (2, busy). Left in KNOWN_MISREADS, all unrecognised, all on aicc_planning#357:

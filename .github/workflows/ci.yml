@@ -17,8 +17,9 @@ on:
   # checked on its own, dispatched with its version, besides the minimum and
   # pinned ones every run checks. On a dispatch the codex-conformance job runs,
   # with the always-on changelog check, probe-p19 when the dispatch names it
-  # (probe_p19), and the claude-conformance job when claude_rc_version is set;
-  # every other job's condition skips it.
+  # (probe_p19), the claude-conformance job when claude_rc_version is set, and
+  # the Helper job too when the `helper` input is set; every other job's
+  # condition skips it.
   # The inputs reach a step through env, never a shell line.
   #
   # The daily upstream CLI watch (.github/workflows/upstream-cli-watch.yml,

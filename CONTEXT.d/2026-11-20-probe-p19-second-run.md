@@ -87,8 +87,8 @@ on it, with step 1's commits picked onto it in order.
   row (`<warning sign> 1 warning . f2 to view`) are RECORDED; the agents form is NOT REACHED
   (waited 60 s; the screen showed the ready composer with `? for shortcuts`: 0.157.1 does not
   draw it). Codex 0.170.0: all four RECORDED; its default ready row is `<left arrow> for agents .
-  ? for shortcuts` (`bottom_pane/footer.rs`, `left_side_line`, set by
-  `chat_composer/agents_navigation.rs` for the normal start, read at the rust-v0.170.0 tag), so
+  ? for shortcuts` (laid out by `bottom_pane/chat_composer/passive_hints.rs`;
+  `chat_composer/agents_navigation.rs` says when the agents label shows; read at the rust-v0.170.0 tag), so
   every 0.170.0 composer screen recorded has a hint row other than the exact `? for shortcuts`
   #740's reader accepts.
 - **Runs.** The probe jobs ended green on ca7aa8c5 (runs 44636688885 for Codex 0.157.1 and

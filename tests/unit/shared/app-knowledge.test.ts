@@ -2489,14 +2489,18 @@ describe('the 2.1.3-beta.11 sweep', () => {
     expect(body('code-review')).toContain("If Codex is signed in on this computer outside the app but you have added no Codex account, the Codex review switch stays off: Codex's own sign-in on this computer cannot run reviews, so the row says to add a Codex account, and its Accounts link opens Settings, Accounts.")
   })
 
-  it('known issues: a held session\'s tools after a dropped connection to the helper, with its workaround (aicc_planning#344)', () => {
-    const para = body('known-issues').split('\n\n').find((x) => x.startsWith('With Claude Code and Codex sessions through the session helper on, a Claude Code or Codex session the helper holds can reach the Conductor\'s tools through the session helper.'))!
-    expect(para).toContain("If the app's connection to the session helper drops while such a session runs and then comes back, that session's tool server has ended")
-    expect(para).toContain("Workaround: in Claude Code, type /mcp and reconnect the conductor server; in Codex, or if that does not help, restart the session's tab.")
-    // The Machines section says the tools' route changed too, not only the hooks', and points to Known issues for when they stop.
+  // beta.11 shipped a known issue for a held session's tools after a dropped
+  // connection to the helper (aicc_planning#344). From 2.1.3-beta.12 a tool
+  // stream waits for the app (aicc_planning#354, aicc_planning#355), so the
+  // entry is gone, and the Machines section no longer points to it.
+  it('known issues: the entry for a held session\'s tools after a dropped connection to the helper is gone once a tool stream waits for the app (aicc_planning#344)', () => {
+    const k = body('known-issues')
+    expect(k).not.toContain("that session's tool server has ended")
+    expect(k).not.toContain('type /mcp and reconnect the conductor server')
+    // The Machines section still says the tools' route changed too, not only the hooks'.
     const m = body('machines')
     expect(m).toContain("A Claude Code or Codex session the helper holds can also reach the Conductor's tools through the session helper. Such a session does not survive a crash yet.")
-    expect(m).toContain("what to do when such a session's Conductor tools stop working")
+    expect(m).not.toContain("what to do when such a session's Conductor tools stop working")
   })
 
   it('the release notes carry the series warning, the two minutes, the way back and every change line', () => {
@@ -2525,5 +2529,30 @@ describe('the 2.1.3-beta.11 sweep', () => {
       expect(text, text.slice(0, 40)).not.toMatch(/—/)
       expect(text, text.slice(0, 40)).not.toMatch(/\bCodex tab\b/)
     }
+  })
+})
+
+// 2.1.3-beta.12 known issues: a held terminal shown again once its earlier
+// output is no longer held (aicc_planning#352), and the three Codex screens
+// the reader still refuses after it learned the hint rows (aicc_planning#357),
+// each with its workaround, so a later edit cannot drop one silently.
+describe('the 2.1.3-beta.12 known issues', () => {
+  const body = (id: string) => APP_KNOWLEDGE_SECTIONS.find((x) => x.id === id)!.body
+  const para = (start: string) => body('known-issues').split('\n\n').find((x) => x.startsWith(start))
+  const src = (...parts: string[]) => fs.readFileSync(path.resolve(__dirname, '..', '..', '..', 'src', ...parts), 'utf8')
+
+  it('a held terminal shown again from the middle of its output quotes the notice the app writes, with its workaround (aicc_planning#352)', () => {
+    const p = para('With Plain terminals through the session helper on, a terminal the helper holds keeps only the last 2 MiB of what it printed.')!
+    const notice = src('main', 'session-helper', 'helper-pty.ts').match(/const EARLIER_OUTPUT_NOT_SHOWN = '([^']+)'/)![1]
+    expect(p).toContain(`its tab first shows the line ${notice}, then the output the helper still holds`)
+    expect(p).toContain('The line right after the notice can start part-way, with a few stray characters.')
+    expect(p).toContain('Workaround: quit the full-screen program and start it again.')
+    expect(body('machines')).toContain('what a held terminal shows when its earlier output is no longer held')
+  })
+
+  it('the three Codex screens the reader still refuses each say what is not typed and give a workaround (aicc_planning#357)', () => {
+    expect(para('With Codex 0.170.0, the app types nothing into a Codex session after its first prompt while the line under Codex\'s prompt takes two rows.')).toContain('Workaround: widen the pane, or use a shorter working folder.')
+    expect(para('Text the app types into a Codex session while Codex writes a reply')).toContain('Workaround: send it again once the reply ends.')
+    expect(para('While Codex shows a warning count on the line under its prompt')).toContain('Workaround: type the note into the Codex tab yourself.')
   })
 })
