@@ -16,10 +16,12 @@ are 1,024-based.
    sign-in, and everything Claude Code keeps for that account).
 2. The sharing rule already works for folders. It fails for single files: a file link needs one
    drive, and on this PC the app made 0 file links and 7 to 13 copies per account.
-3. A skill can live in seven places, and one of them is dead: the Setup dialog says the resources
-   folder holds "skills", the app makes `<resources>/skills`, and nothing reads it.
-4. The two rebuilt files are rebuilt when their account launches, not when the app starts, so an
-   account that has not launched for a while keeps an old copy (4 of 12 settings copies here).
+3. A skill can live in seven places, and one of them is dead: the Setup dialog and the Windows
+   installer say the resources folder holds "skills", both make `<resources>/skills`, and nothing
+   reads it.
+4. The two rebuilt files are rebuilt when their account launches, not when the app starts, so a
+   copy that differs from its source stays that way until that account next launches (4 of 12
+   settings copies here differ).
 5. "Old accounts nobody uses" is only partly true on this PC: none is idle for 30 days, two for 14
    days or more. What is missing is a way to see it, not a pile of dead folders.
 6. S22 stops moving the home folder. Then the home mirror (55 to 57 links and 7 to 13 copies per
@@ -35,7 +37,8 @@ are 1,024-based.
   there into the shared one and keeps the larger file on a clash (:2705, `mergeTreeInto` :2264).
   Made or re-made: when an account is created (:2128); at every launch of that account
   (`setupProfileLinks` :2775 calls `buildHomeLinks` :2709, which links at :2733); at app start,
-  only fixing a missing or wrong link (`repairSharedProjectJunctions` :2804, called at
+  only fixing a wrong link or a real folder found in a link's place, while an absent link is left
+  for the next launch (`repairSharedProjectJunctions` :2804, absent skipped at :2816, called at
   index.ts:823); after a Windows owner-only remake (`relinkAfterRemake` :1821); in the retired
   per-session homes (`cleanupSessionHomes` :3055). The user manages these only in `~/.claude`.
 - **A rebuilt copy of settings.json.** `<home>/.claude/settings.json` is `~/.claude/settings.json`
@@ -46,18 +49,30 @@ are 1,024-based.
   must stay a copy: a link would hand the user's settings to the CLI unsanitised.
 - **A rebuilt copy of CLAUDE.md.** `<home>/.claude/CLAUDE.md` is a header, then
   `~/.claude/CLAUDE.md`, then an optional `CLAUDE.overlay.md` kept in the same folder
-  (`writeUserScopeClaudeMd` :2452, overlay read :2464). Written at every launch (:2763), only when the text differs (:2484); a file
-  it made is removed when both sources are gone (:2469). Nothing creates or documents the overlay.
+  (`writeUserScopeClaudeMd` :2452, overlay read :2464). Written at every launch (:2763), only
+  when the text differs (:2484); a file it made is removed when both sources are gone (:2469).
+  Nothing creates the overlay; it is named only in one What's New entry
+  (src/renderer/changelog.ts:915) and in the generated copy's own header (:2430-2431), and the
+  Feature Guide, README and user guide do not mention it.
 - **The mirror of the real home.** Every dot-entry of the real home except `.claude` and
   `.claude.json` (`HOME_PRIVATE` :2254) is brought into `<home>` at every launch
   (`mirrorRealHome` :2388): folders as junctions, files as a hard link or, when that fails, a
   copy that is removed and written again each launch (`ensureHardLink` :2366-2379). It exists so
   git, ssh and npm find the user's config while the home is moved (:2765).
-- **Empty store folder.** `<home>/.claude/anthropic` is made empty at every launch (:2730,
-  `profileRealmConfigRoot` :3659).
+- **The CLI's store folder.** `<home>/.claude/anthropic` is created if missing at every launch on
+  Windows and Linux (:2730-2731, `profileRealmConfigRoot` :3659; not on macOS, :3660); the app
+  puts nothing in it and never clears it.
 - **The account's own, never linked.** The sign-in files: `<home>/.claude.json` and
-  `<home>/.claude/.credentials.json`, written by the CLI (the second at sign-in and refresh). The
-  app keeps a second copy of both in `<home>/identity/` (`writeCanonicalIdentity` :3071),
+  `<home>/.claude/.credentials.json`, written by the CLI (the second at sign-in and refresh).
+  The app writes them too, in three cases: when it makes an account from a sign-in it found
+  (`captureGlobalLogin` :3101 from the user's own login, `captureDetectedAccount` :3487 from a
+  /login inside a session); for the primary account only, `.credentials.json` is copied to or
+  from the user's own `~/.claude/.credentials.json`, the fresher one winning
+  (`syncPrimaryCredentialsWithGlobal` :3445, at app start index.ts:844, before a local Claude
+  launch pty-manager.ts:6622 and at each session's exit :7557); and after a captured /login the
+  source account's `.claude.json` is put back from `identity/` without its tokens and its
+  `.credentials.json` is removed (`restoreProfileIdentityFromCanonical` :3291,
+  account-profiles-handlers.ts:356). The app keeps a second copy of both in `<home>/identity/` (`writeCanonicalIdentity` :3071),
   refreshed at an identity refresh (account-profiles-handlers.ts:319), after a credential
   rotation (claude-account-identity.ts:357) and at each session's exit (pty-manager.ts:7552).
   Everything else in `<home>/.claude` (history, `file-history`, `jobs`, `backups`, `cache`,
@@ -82,8 +97,11 @@ account folder built there.
 ### 2. What the user manages, and where
 
 - Skills, agents, commands and plugins are managed by hand in `~/.claude/...` or with the CLI's
-  own plugin commands in any session; the shared link sends both to one place. No page in the app
-  lists or edits them (searched the renderer).
+  own plugin commands in any session; the shared link sends the files of both to one place. What
+  the CLI records in its user settings file instead (which plugins are switched on, for one) goes
+  into that account's settings copy when the session runs under an account, and is replaced at
+  the next launch (not checked here: Claude Code was not run). No page in the app lists or edits
+  them (searched the renderer).
 - Seven homes for a skill. (1) `~/.claude/skills`, shared. (2) Skills inside plugins, under
   `~/.claude/plugins`, shared. (3) A repository's own `.claude/skills`, the CLI's project scope.
   (4) The app's three canvas skills, written to `<resources>/canvas-plugin/skills`
@@ -92,9 +110,11 @@ account folder built there.
   approval to `~/.claude/skills/ask-conductor` (help-workspace.ts:52), so it lands in home 1.
   (6) Codex's own: the three canvas skills copied into `~/.codex/skills` or a managed account's
   `<home>/skills` (codex-user-skills.ts:4, codex-realm-skills.ts:17); a separate realm. (7)
-  `<resources>/skills`: made empty by `setResourcesDirectory` (data-paths.ts:277), named twice in
-  the Setup dialog (SetupDialog.tsx:936 and :974), read by nothing. Here it holds 21 folders
-  dated January and February 2026 that no launch uses.
+  `<resources>/skills`: made empty by `setResourcesDirectory` (data-paths.ts:277) and by the
+  Windows installer (build/installer.nsh:1659), named twice in the Setup dialog
+  (SetupDialog.tsx:936 and :974) and twice on the installer's Resources page
+  (build/installer.nsh:1608 and :1612), read by nothing. Here it holds 21 folders dated January
+  and February 2026 that no launch uses.
 - The Accounts page adds, renames, switches off (account-profiles-handlers.ts:188) and deletes
   (:224). A delete refuses while a session is open (:232), clears the claude.ai session first,
   then removes the folder and only the links inside it (`safeTeardown` :2893). The account record
@@ -103,10 +123,11 @@ account folder built there.
   by Ask Conductor and the Feature Guide) says the settings file is copied into each account at a
   session start, that an edit of the copy is overwritten, and that memory, projects, agents,
   skills, commands and plugins are shared; it never mentions the CLAUDE.md copy or its overlay.
-  README.md:144 and docs/USER_GUIDE.md:74-77 say "isolated home" and list what is separate, not
-  what is shared. The Setup dialog and app-knowledge.ts:108 name "skills" as resources-folder
-  content, and its "Resources contains" list leaves out the account folders, the biggest thing in
-  it here.
+  README.md:144 says "isolated home" and docs/USER_GUIDE.md:74-77 says each account "has its own
+  home folder"; both list what is separate, not what is shared. The Setup dialog, the installer's
+  Resources page (build/installer.nsh:1608 and :1612) and app-knowledge.ts:108, which describes
+  that page, name "skills" as resources-folder content, and the Setup dialog's "Resources
+  contains" list leaves out the account folders (1,049 MB here).
 
 ### 3. Measured on this PC
 
@@ -143,11 +164,13 @@ the shared source is 1,046 bytes.
   the 139 bytes of header and a blank line, so every copy is current. Their dates, 20 to 25 Oct, are
   when each was first written: the source last changed on 20 Oct, and an account made or launched
   after that wrote its copy then. No account has an overlay.
-- **settings.json**: 8 copies equal the source's 1,046 bytes and were written at a launch on 20 or
-  21 Nov. 4 are 1,079 to 1,126 bytes, written at a launch between 30 Oct and 10 Nov. Those four
-  are a02, a05, a06 and a09, the four accounts not prompted for 11 to 19 days. I did not open
-  them, so why their text differs is not established; only that nothing refreshes an idle
-  account's copy.
+- **settings.json**: the source is 1,046 bytes, dated 12 Oct. 8 copies equal its 1,046 bytes and
+  were written at a launch on 20 or 21 Nov. 4 are 1,079 to 1,126 bytes, dated 30 Oct to 10 Nov:
+  after the source last changed, larger than it, and two written on the same day differ in size,
+  so they are not older snapshots of the source. Those four are a02, a05, a06 and a09, the four
+  accounts not prompted for 11 to 19 days. I did not open them, so what changed them is not
+  established (the CLI writing into its copy during a session fits the dates); only that nothing
+  rebuilds an idle account's copy.
 - **Idle accounts**, by last prompt against 21 Nov: 0 idle 30 days or more; 2 idle 14 days or more
   (a05, a09); 4 idle 10 days or more (a02, a05, a06, a09); the other 8 prompted in the last 7 days.
 - **Litter**: `AppData` is real in all 12 (0.0 to 136.3 MB); in the two largest I listed it holds
@@ -163,8 +186,8 @@ the shared source is 1,046 bytes.
 Held: 12 account folders; each with its own generated CLAUDE.md. Corrected: the ticket says each
 start re-links and regenerates. At app start only the links are checked (index.ts:823); the two
 copies are rebuilt when that account launches. Not supported: unused old accounts, in the sense of
-dead folders (above). New: `<resources>/skills` is dead while the Setup dialog advertises it; file
-links are copies across drives.
+dead folders (above). New: `<resources>/skills` is dead while the Setup dialog and the Windows installer
+advertise it; file links are copies across drives.
 
 ### 5. The rule, proposed
 
@@ -180,8 +203,9 @@ folder.**
 2. **One list.** The six folder names and the two rebuilt files are one definition that every pass
    reads (today the six names are looped in four places and the two files are special cases in
    `buildHomeLinks`), so a seventh name or a third file is one edit.
-3. **The sign-in is the only thing copied out of the account folder** (to `identity/`). Nothing
-   else the CLI keeps is read, moved or linked by the app.
+3. **The sign-in is the only thing copied out of the account folder** (to `identity/`, and for
+   the primary account to the user's own `~/.claude/.credentials.json`, as today). Nothing else
+   the CLI keeps is read, moved or linked by the app.
 4. **One place for the user to manage skills: `~/.claude`.** The app shows where it is, opens it
    and repairs the links; it has no second library. `<resources>/skills` goes. Chosen over making
    `<resources>/skills` the library because the terminal's own Claude Code keeps seeing the same
@@ -192,17 +216,18 @@ folder.**
 
 | Step | What | Size | Pairs with S22 |
 |---|---|---|---|
-| S41.1 | Retire the dead folder: drop "skills" from the Setup dialog (:936, :974), stop making `<resources>/skills` (data-paths.ts:277), never delete one that exists; one Feature Guide line and one tip on where skills live. Test by name: no text names it. | 1 h, light | None; any beta |
+| S41.1 | Retire the dead folder: drop "skills" from the Setup dialog (:936, :974), the installer's Resources page (build/installer.nsh:1608, :1612) and app-knowledge.ts:108; stop making `<resources>/skills` (data-paths.ts:277, build/installer.nsh:1659); never delete one that exists; one Feature Guide line and one tip on where skills live. Test by name: no text names it, the installer script included. | 1.5 h, light | None; any beta |
 | S41.2 | One list, one pass: a function that makes the folder's links and two copies from one definition, called from the seven places `setupProfileLinks` is called today and by the start-up pass; the start-up pass also rebuilds the two copies for every account when they differ, and settings.json skips an identical write as CLAUDE.md does (:2484). Contract test over a temp folder: exactly these entries, nothing else the app made, sign-in untouched, an idle account's copy equal to its source after start. | 4 h, light | Takes the folder as its argument: S22 changes the argument, not the content. Land before S22 is built |
-| S41.3 | A card in Settings, Accounts: the shared folder's path, a count for each of the six names, each account's six links read as fine, missing or wrong, "Open folder" and "Fix links" (the start-up pass). Reads only; never edits a skill. | 3 h, light | None |
+| S41.3 | A card in Settings, Accounts: the shared folder's path, a count for each of the six names, each account's six links read as fine, missing or wrong, "Open folder" and "Fix links" (S41.2's pass; today's start-up pass leaves an absent link alone, :2816, so this card lands after S41.2 or its button also makes an absent link). Reads only; never edits a skill. | 3 h, light | None |
 | S41.4 | "Last prompt" on each account row, from the date of its history file (stat only), so an idle account is visible; delete stays the existing one. Sweep the app's own strays by exact name: the per-session files older than a week with no open session, the legacy statusline file. | 2.5 h, light | None |
 | S41.5 | Migration with S22: when a launch is bound by config folder, move `.claude.json` in beside the sign-in only after a copy reads back equal, then remove the home mirror's links and copies (links by link, copies by their name in the real home's list), never a target. `AppData` is left. One VM line per sign-in kind. | 3 h, heavy | Is S22's migration. Waits for probe P17: if the CLI does not keep its identity in the config folder, S22 is not built and S41.1 to S41.4 stand as written |
 | S41.6 | ADR (extends ADR-030 D7) for the rule; app-knowledge.ts:62 gains the CLAUDE.md copy and its overlay; a tip and a README line say what an account folder holds and what is shared. | 1 h, light | With S41.2 |
 
-About 14.5 h. S41.1, S41.3 and S41.4 can ride any beta before S22. S41.2 is the one S22 depends
+About 15 h. S41.1, S41.3 and S41.4 can ride any beta before S22. S41.2 is the one S22 depends
 on. ADR-009 by path (fail closed): S41.2 and S41.5 edit account-profiles.ts, which holds the
 sign-in and credential code, and S41.3 and S41.4 add IPC; each of the four carries "ADR-009 pass
-owed before stable (aicc_planning #320 list)". S41.1 and S41.6 are text.
+owed before stable (aicc_planning #320 list)". S41.1 (text, and one line removed in each of
+data-paths.ts and build/installer.nsh, neither an ADR-009 path) and S41.6 (text) owe none.
 
 ### 7. Not in S41
 
