@@ -1,8 +1,8 @@
 {
   "schema": "wp1-legacy-codex-manifest/3",
-  "generatedAt": "2026-11-21T08:52:04.037Z",
-  "head": "d0746079fcc943d6caefc427e5e8fd7a88786a02",
-  "tree": "f28355e3ff5753486bc69f10c3b406bb48038be0",
+  "generatedAt": "2026-11-21T21:10:35.660Z",
+  "head": "9aa4b704688d149a8f1e5b4effd75a76d054e7ec",
+  "tree": "20bdac8911984d13adaa94abe169ddac1d4185eb",
   "scannedWorkingTree": true,
   "predicateDigest": "100a1233edebdc39a5f9004d3fba980a89ebb15b25872e52076386bc84b03153",
   "predicates": [
@@ -116,9 +116,9 @@
     "\\.(png|jpg|jpeg|gif|ico|icns|webp|svg|woff2?|ttf|otf|mp4|zip|asar|node|exe|dll|dylib|so|pdf)$",
     "^package-lock\\.json$"
   ],
-  "trackedFileCount": 3649,
+  "trackedFileCount": 3654,
   "excludedFileCount": 559,
-  "scannedFileCount": 3090,
+  "scannedFileCount": 3095,
   "unscopedFileCount": 15,
   "unscoped": [
     ".claude/settings.json",
@@ -139,8 +139,8 @@
   ],
   "unscopedMentions": [],
   "unreadable": [],
-  "matchedPathCount": 1033,
-  "pathDigest": "106ac00d648f37d99309a913857423e52cb07ece1933f92b46af07baa0ef5e40",
+  "matchedPathCount": 1036,
+  "pathDigest": "28abf8fcd81a9b3aaa3e06a5a042cad3520e317cd346a1345f1bb5d9af05e573",
   "entries": [
     {
       "path": ".github/workflows/ci.yml",
@@ -2117,8 +2117,7 @@
         "P07",
         "P14"
       ],
-      "lineCount": 429,
-      "truncated": true
+      "lineCount": 358
     },
     {
       "path": "src/main/sanitize-restored-spawn-options.ts",
@@ -2224,6 +2223,14 @@
         "P14"
       ],
       "lineCount": 7
+    },
+    {
+      "path": "src/main/sessions/launch-bindings.ts",
+      "predicates": [
+        "P04",
+        "P14"
+      ],
+      "lineCount": 165
     },
     {
       "path": "src/main/stale-folder-sweep.ts",
@@ -5417,6 +5424,24 @@
         "P13"
       ],
       "lineCount": 6
+    },
+    {
+      "path": "tests/unit/main/launch-bindings-launch.test.ts",
+      "predicates": [
+        "P04",
+        "P05",
+        "P07",
+        "P13"
+      ],
+      "lineCount": 22
+    },
+    {
+      "path": "tests/unit/main/launch-bindings.test.ts",
+      "predicates": [
+        "P10",
+        "P13"
+      ],
+      "lineCount": 99
     },
     {
       "path": "tests/unit/main/launch-lookups-off-main-thread.test.ts",
