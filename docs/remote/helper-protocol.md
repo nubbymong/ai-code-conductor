@@ -736,12 +736,12 @@ for the Machines page.
 `caps` is `["core","local"]` in a holder from before hook events,
 `["core","local","hooks"]` from 2.1.3-beta.8,
 `["core","local","hooks","mcp"]` from 2.1.3-beta.10 and
-`["core","local","hooks","mcp","away"]` from 2.1.3-beta.12, `session.state` is `new`
+`["core","local","hooks","mcp","away","screen"]` from 2.1.3-beta.12, `session.state` is `new`
 before a launch and `live` after. The app's first frame must be a `hello.ack` with
 exactly `t`, `proto` and `caps`: `proto` 1, `caps` holding `core` and nothing
 the holder did not offer; `local` allows the messages below, `hooks` the hook
-events, `mcp` the tool streams and `away`, beside `mcp`, kept tool streams (all
-below). A first frame that is raw, or
+events, `mcp` the tool streams, `away`, beside `mcp`, kept tool streams and
+`screen` the screen reads (all below). A first frame that is raw, or
 JSON off channel 0, gets `bad-frame`; another type `unknown-type`, another
 version `proto-mismatch`, anything else `bad-field`; then the holder closes the
 connection. With no `hello.ack` in 10 s it sends `timeout` and
@@ -790,6 +790,8 @@ the last column of section 8's table):
 | `mcp.close` | none | `{stream}`; from a relay, and from the holder to whichever side is still there when the other ends (tool streams, below) |
 | `mcp.away` | none | `{stream}`, from the holder to a relay that acked `away`, on the relay's number: no connection takes its stream now, and the stream is kept (kept streams, below) |
 | `mcp.back` | none | `{stream}`, from the holder to a relay that acked `away`, on the relay's number: a connection takes its kept stream again (kept streams, below) |
+| `screen.read` | `screen.rows` `{re, cols, rows, cursor, modes, cut, lines}` | `{id}`; only on a connection that acked `screen`, attached or not, and never from a relay (`unknown-type`); before a launch, or while the session is ending, `not-found` (screen reads, below) |
+| `screen.tail` | `screen.lines` `{re, cut, lines}` | `{id, count}`, `count` from 1 to 200; as `screen.read` (screen reads, below) |
 
 Ids are even, as in section 9, and at most 2^53 - 1. Every message has exactly
 its fields; `code` is present only once the program has exited. The tool
@@ -1184,6 +1186,65 @@ protocol change 9) its `away` part.
   when it sends `mcp`, must keep each message to what the holder reads: JSON
   with no escaped lone surrogate and at most 31 levels deep, or the frame is
   `bad-frame` and its connection is closed.
+
+**Screen reads (capability `screen`, from 2.1.3-beta.12).** Protocol change 5
+(ADR-030), written by the slice that first uses it. The holder keeps the
+session's screen: every byte of output goes to the ring first, and then to a
+screen of the session's size with 200 lines of scrollback, for the session's
+whole life, attached or not; a resize resizes both. A connection that acked
+`screen` asks about it with two read-only requests, answered from that
+screen whether or not the connection is the attached one. Neither attaches,
+types, resizes or ends; neither moves an offset, replays anything or changes
+which connection is attached; and the holder decides nothing from what a
+screen shows (ADR-030 row 4). A relay (a connection that opened a tool
+stream) asks for neither: `unknown-type` and a close, as for the terminal
+messages. Nothing in the app asks yet: no connection the app makes acks
+`screen`.
+
+- **`screen.read`** `{id}` is answered `screen.rows`: `cols` and `rows`, the
+  screen's size; `cursor` `{row, col}`, the cursor's cell from 0 (its column
+  is `cols` while a wrap is pending after the last cell was written);
+  `modes`; `cut`; and `lines`, the rows of the screen in use from its top,
+  below any scrollback. Each row is what the app's readers take from a row
+  of xterm.js (`readXtermScreen`): `text`, the row's characters (an empty
+  cell a space); `typed`, the same with every dim cell blanked; `inverse`,
+  the same with every cell that is not inverse blanked (a blanked cell is as
+  many spaces as its character has UTF-16 units), each with its trailing
+  white space trimmed; `width`, the screen's columns; and `end`, the cell
+  just past the last one that is not blank. The modes are fixed words and
+  yes or no values, never bytes to pass on: `screen` (`normal` or
+  `alternate`), `bracketed_paste`, `application_cursor` (application cursor
+  keys), `application_keypad`, `mouse` (`none`, `press`, `press-release`,
+  `button-motion` or `any-motion`), `mouse_encoding` (`default`, `utf8` or
+  `sgr`) and `cursor_hidden`. No other mode is answered: the screen does not
+  keep focus reporting, synchronized output, the keyboard protocols, wrap
+  (it always wraps) or insert mode, and keeps origin mode without a way to
+  read it.
+- **`screen.tail`** `{id, count}`, `count` 1 to 200, is answered
+  `screen.lines`: `cut`, and `lines`, the last `count` lines of scrollback
+  and screen together, oldest first (fewer when fewer are held; the
+  alternate screen has no scrollback). Each line is `text`, its cells up to
+  the last one that holds a character (an erased cell holds none, a written
+  space does), as the Watchdog's pane gives a line
+  (`translateToString(true)`), and `typed`, the line's cells with every dim
+  one blanked, its trailing white space trimmed.
+- **One message.** Each answer is one message within what a frame to the app
+  holds (1 MiB of JSON). Rows that do not fit are left out from the top of
+  `screen.rows` and from the oldest end of `screen.lines`, and the answer
+  says so with `cut` true; `lines` then holds the bottom rows (the first is
+  row `rows` less their number) or the newest lines. A screen of a common
+  size is never cut; one of 1000 by 1000 wide characters is.
+- **Widths.** The screen counts a character's cells by current Unicode, and
+  xterm.js 6.0.0 by Unicode 6, so a row holding a character the two count
+  differently can differ from the app's own terminal. The rows of the screen
+  corpus where they do are named in `helper/tests/screen.rs`.
+- **The bound.** A CSI parameter above 9999 reaches the screen's parser as
+  9999, as main cuts it for its own panes, so a repeat (`CSI n b`) writes at
+  most 9999 cells and no other sequence's work grows with its parameter; an
+  OSC string is kept to its first 1 KiB, and DCS, SOS, PM and APC strings are
+  not kept. A screen whose parser fails is no longer kept: a read then gets
+  `io`, and the output, the ring and the attached connection go on.
+- Vectors: the `screen` part of `helper/fixtures/local.json`.
 
 **Change.** The `hold` and `list` command lines and their exit codes, the
 record and the listing are frozen within version 1; new fields need a new

@@ -322,6 +322,31 @@ rollback returns to the earlier beta's rows, and every row has a negative test.
   build scripts and procedural macros and limits features on socket-capable
   crates; `cargo-audit` runs in CI. Budget: under 25 crates, no async runtime,
   no TLS or HTTP crate; a new crate is its own ADR-009 item.
+- **The holder's screen (from 2.1.3-beta.12): six more packages, 18 of the
+  24.** `vt100` 0.18.1 (MIT, 5,111 lines of Rust in `src/`), the terminal
+  parser and screen, and what it brings: `vte` 0.15.0 (Apache-2.0 or MIT,
+  4,144), the escape sequence state machine; `unicode-width` 0.2.3 (MIT or
+  Apache-2.0, 23,234, nearly all of it width tables); `itoa` 1.0.19 (MIT or
+  Apache-2.0, 494); `arrayvec` 0.7.8 (MIT or Apache-2.0, 2,413); and
+  `memchr` 2.8.3 (Unlicense or MIT, 15,824). Each is pinned exactly in
+  `Cargo.lock` with its crates.io checksum. None has a build script or a
+  procedural macro, none opens a file, a socket or a process, and none
+  depends on anything outside the six. `vt100` is built without its default
+  `std` feature, which only adds a `std::io::Write` for the parser and turns
+  on `vte`'s own `std`: without it `vte` keeps an OSC string in a fixed
+  1 KiB buffer instead of a vector that grows with the string. Read for
+  2.1.3-beta.12 (plan section A3): all of `vt100`'s parser, screen, grid,
+  row, cell and callback code and the escape sequences it acts on; `vte`'s
+  state machine (where a sequence begins and ends, its parameter limits and
+  saturating values, the string states and their buffers, the UTF-8 decoding
+  across chunks); and, of the other four, the code those two call:
+  `memchr::memchr` and its runtime CPU dispatch, `ArrayVec`'s push,
+  capacity check and clear, `itoa::Buffer` (used only for vt100's formatted
+  output, which the helper does not call), and `unicode-width`'s character
+  lookup. `unsafe` is in `memchr` (vector search), `arrayvec`, `itoa` and
+  `vte` (UTF-8 it has already checked, read without a second check, and the
+  slices of an OSC string handed to the parser); `vt100` has none. The ADR-009 pass owed before stable reviews the six as a source
+  diff, as every `Cargo.lock` change is.
 - **Build and signing are apart.** The build job holds no secrets and has no
   network. A separate signing job takes only the finished artifact, checks it
   against the reproducible-build comparison and signs, so no build script or
@@ -516,6 +541,31 @@ rollback returns to the earlier beta's rows, and every row has a negative test.
   the relay hold without bound, an answer made for another call's id, a held
   call that reaches a connection that should not get it, and a relay kept
   alive after its session.
+- **The holder's screen and its two reads (capability `screen`, from
+  2.1.3-beta.12, dormant: nothing in the app asks).** The holder parses its
+  session's output into a screen (`helper/src/screen.rs`, the `vt100` crate,
+  3.10) on the thread that carries that output, after the ring and the
+  attached connection have the bytes. Output is untrusted, so the parse is
+  bounded: a CSI parameter above 9999 is cut to 9999 before the parser (a
+  repeat then writes at most 9999 cells, and every other sequence's work is
+  bounded by the screen's size, at most 1000 by 1000 cells); an OSC string is
+  kept to 1 KiB and other strings not at all; a screen holds at most its
+  cells, 200 lines of scrollback and an alternate screen (MEASURED). A panic in the parser is caught, the screen is
+  then not kept, and the output goes on. What a read may return: the
+  screen's size, the cursor, its rows and its last 200 lines as text (so
+  anything the session printed, which the app's own terminal already holds
+  for the same session), and its modes as fixed words and yes or no values,
+  never bytes the app passes on. A read reaches only its own holder's screen
+  (a holder serves one session), may be made by any connection of the same
+  user that acked `screen` (the endpoint's boundary, above), never by a
+  relay, changes no offset, attach or size, and is one message of at most
+  1 MiB. Tested in `helper/tests/screen.rs` and the unit tests of
+  `src/screen.rs`, `src/holder.rs` and `src/serve.rs`. An adversarial pass of
+  it is owed to the security round before 2.1 stable (aicc_planning #320):
+  output made to stall or crash the parser, memory growth past the bound, a
+  read that reaches another session's screen, a read used to change state,
+  and reads made back to back to hold the screen's lock against the output
+  thread.
 - **A program the helper starts for the app keeps none of the app's handles
   (from 2.1.3-beta.8, Windows).** `aicc-helper start` (protocol 15, "Starting
   a program") starts the program the app names, by the drive-absolute path it

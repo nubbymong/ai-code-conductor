@@ -27,6 +27,7 @@ build are in `docs/remote/helper-threat-model.md` 3.10.
 | Output ring | `src/ring.rs` | Bytes at fixed offsets, a 2 MiB window, replay from an offset, "too short" reported |
 | Terminal | `src/pty/` | openpty on Unix, ConPTY on Windows (Windows' own, or the bundled one from a `conpty` folder beside the helper when a launch asks); the program's folder and whole environment, and on Windows an exact command line when a launch gives one; a job object on Windows; on Unix an end reaches every process in the child's session |
 | Holder | `src/holder.rs` | Holds one terminal and child; attach, detach, re-attach with replay; the newest attach replaces the older; ends the whole process tree |
+| Screen | `src/screen.rs` | The session's screen (from 2.1.3-beta.12): every byte of output after the ring, at the session's size with 200 lines of scrollback, through the `vt100` crate with a CSI parameter cut to 9999 first; read as the app's readers read xterm.js. `screen.read` and `screen.tail` answer from it, read-only, to a connection that acked `screen` (nothing in the app asks yet) |
 | Local transport | `src/transport/` | One endpoint per holder that only this user can reach: a named pipe on Windows, a Unix socket in a private folder elsewhere |
 | Holder process | `src/serve.rs`, `src/request.rs`, `src/detach.rs` | `hold`: the hello, the `term.*` messages, the away clock; started detached so it outlives the app |
 | Records and list | `src/store.rs`, `src/client.rs`, `src/pids.rs` | Each holder's record in the store folder; `list` finds every session and removes stale records |
@@ -115,8 +116,11 @@ packaging job runs, applies the same rules to the packaged, signed copy.
 ## Dependencies
 
 Every one is pinned with an exact `=x.y.z`. `libc` on Unix, `windows-sys` on
-Windows, nothing else: no async runtime, no JSON crate, no TLS or HTTP crate.
-The lock file is expected to hold 12 packages: the helper, `libc`, `windows-sys`,
-`windows-targets` and its eight per-target crates. The first CI run prints the
-real number; CI fails above 24 (under 25, the helper included). A new crate is
-its own security review item.
+Windows, and on every system `vt100` for the holder's screen (from
+2.1.3-beta.12, without its default `std` feature), nothing else: no async
+runtime, no JSON crate, no TLS or HTTP crate. The lock file holds 18 packages:
+the helper, `libc`, `windows-sys`, `windows-targets` and its eight per-target
+crates, and `vt100` with the five it brings (`vte`, `unicode-width`, `itoa`,
+`arrayvec`, `memchr`; threat model 3.10 lists each, its licence and what was
+read). CI prints the number and fails above 24 (under 25, the helper
+included). A new crate is its own security review item.
