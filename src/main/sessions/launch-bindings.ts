@@ -269,8 +269,8 @@ export function bindCodexPane(binding: CodexPaneBinding): ColorQueryResponder {
   // it a second time (terminal-query-responder.ts). Codex waits 100 ms for
   // the answer and reads a later one as typed text in its composer; the
   // renderer's answer can be later than that while it is busy drawing.
-  // Only this branch: Claude sessions, plain terminals and SSH sessions keep
-  // xterm.js's own answers.
+  // Only for the run bound here: Claude sessions, plain terminals and SSH
+  // sessions keep xterm.js's own answers.
   const colorQueries = createColorQueryResponder({
     colors: () => terminalReplyColors(readConfig('settings'), nativeTheme.shouldUseDarkColors),
     reply: (bytes) => {
@@ -427,7 +427,7 @@ export function bindClaudeLaunch(binding: ClaudeLaunchBinding): void {
   // codex_review switch (Settings, General, Built-in tools) must be on,
   // Codex must be enabled, and a Codex review must be preparable now (the
   // accounts service's reviewReady: the provider on and a reviewer account
-  // ready). SSH sessions never reach this branch, so the tool only ever
+  // ready). SSH sessions never reach this call, so the tool only ever
   // runs against paths that exist on this machine. The per-config
   // enableCodexReview flag is retired (ignored).
   //
@@ -700,7 +700,7 @@ export function unbindLaunchRegistrations(sessionId: string): void {
   revokeCanvasUatRoots(sessionId)
   // SECURITY (adversarial review, 2026-09-01 — HIGH): drop this session's
   // canvas markers here, for the same per-spawn isolation invariant as the
-  // watchdog below.
+  // watchdog teardown that follows this call in cleanupSessionResources.
   //
   // `forgetCanvasMarkers` was wired ONLY to the `pty:kill` IPC listener
   // (pty-handlers.ts). That listener fires when the RENDERER closes a tab — it
