@@ -450,6 +450,9 @@ pub fn parse_allowed(v: &Value, allowed: Allowed) -> Result<Request, Refusal> {
     if fields.is_none() && allowed.hooks {
         fields = HOOK_TYPES.iter().find(|(name, _)| *name == t).map(|(_, f)| *f);
     }
+    if fields.is_none() && allowed.screen {
+        fields = SCREEN_TYPES.iter().find(|(name, _)| *name == t).map(|(_, f)| *f);
+    }
     if fields.is_none() && allowed.mcp {
         if let Some((_, tool_fields)) = TOOL_TYPES.iter().find(|(name, _)| *name == t) {
             return parse_tool(v, t, tool_fields);
@@ -478,6 +481,11 @@ pub fn parse_allowed(v: &Value, allowed: Allowed) -> Result<Request, Refusal> {
         "term.detach" => Ok(Request::Detach { id }),
         "term.end" => Ok(Request::End { id }),
         "hook.event" => parse_hook_event(v, id),
+        "screen.read" => Ok(Request::ScreenRead { id }),
+        "screen.tail" => match v.get("count").and_then(Value::as_u64) {
+            Some(count) if (1..=MAX_TAIL_LINES).contains(&count) => Ok(Request::ScreenTail { id, count: count as usize }),
+            _ => refuse(CODE_BAD_FIELD, re, "count must be a whole number from 1 to 200"),
+        },
         _ => refuse(CODE_UNKNOWN_TYPE, None, "a type this connection does not allow"),
     }
 }

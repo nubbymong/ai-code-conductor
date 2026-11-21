@@ -27,6 +27,10 @@ export const HOOKS_CAP = 'hooks'
  *  holder offers it. From 2.1.3-beta.11 a held agent session's connections
  *  ask for it. */
 export const MCP_CAP = 'mcp'
+/** Screen reads through the holder (section 15, from 2.1.3-beta.12): acked
+ *  only by a connection that reads the session's screen, and only when the
+ *  holder offers it. No connection the app makes asks for it yet. */
+export const SCREEN_CAP = 'screen'
 /** Terminal bytes travel on this channel both ways; control messages on 0. */
 export const TERMINAL_CHANNEL = 1
 /** Control messages (JSON) travel on this channel, both ways. */
@@ -297,10 +301,11 @@ export function chooseProto(app: readonly number[], helper: readonly number[]): 
 }
 
 /** The app's answer to a holder's hello: `core` and `local`, `hooks` when this
- *  connection takes hook events and `mcp` when it carries tool streams (each
- *  only ever when the hello offered it). */
-export function helloAck(hooks = false, mcp = false): { t: 'hello.ack'; proto: number; caps: string[] } {
-  return { t: 'hello.ack', proto: PROTO_VERSION, caps: [...LOCAL_CAPS, ...(hooks ? [HOOKS_CAP] : []), ...(mcp ? [MCP_CAP] : [])] }
+ *  connection takes hook events, `mcp` when it carries tool streams and
+ *  `screen` when it reads the screen (each only ever when the hello offered
+ *  it). */
+export function helloAck(hooks = false, mcp = false, screen = false): { t: 'hello.ack'; proto: number; caps: string[] } {
+  return { t: 'hello.ack', proto: PROTO_VERSION, caps: [...LOCAL_CAPS, ...(hooks ? [HOOKS_CAP] : []), ...(mcp ? [MCP_CAP] : []), ...(screen ? [SCREEN_CAP] : [])] }
 }
 
 // ── hook events (section 15, capability `hooks`) ──────────────────────────────
@@ -392,6 +397,131 @@ export function readMcp(m: unknown, size: number): { stream: number; message: Mc
   if (!isObject(message) && !Array.isArray(message)) return null
   if (Buffer.byteLength(JSON.stringify(message), 'utf8') > MCP_MESSAGE_TO_APP_MAX) return null
   return { stream: m.stream, message }
+}
+
+// ── screen reads (section 15, capability `screen`) ────────────────────────────
+
+/** The most lines a `screen.tail` asks for, and gets: the holder's scrollback. */
+export const SCREEN_TAIL_MAX = 200
+/** The words a holder names the screen in use and the mouse modes with. */
+export const SCREEN_WORDS = ['normal', 'alternate'] as const
+export const MOUSE_WORDS = ['none', 'press', 'press-release', 'button-motion', 'any-motion'] as const
+export const MOUSE_ENCODING_WORDS = ['default', 'utf8', 'sgr'] as const
+
+/** One row of the holder's screen, as the app's readers take a row
+ *  (`ScreenLine` in src/shared, every field given). Untrusted
+ *  text. */
+export interface ScreenRow {
+  text: string
+  typed: string
+  inverse: string
+  width: number
+  end: number
+}
+
+/** The program's terminal modes as the holder's screen keeps them: fixed
+ *  words and yes or no values, never bytes to pass on. */
+export interface ScreenModes {
+  screen: (typeof SCREEN_WORDS)[number]
+  bracketed_paste: boolean
+  application_cursor: boolean
+  application_keypad: boolean
+  mouse: (typeof MOUSE_WORDS)[number]
+  mouse_encoding: (typeof MOUSE_ENCODING_WORDS)[number]
+  cursor_hidden: boolean
+}
+
+/** A `screen.rows`: the holder's screen now. `lines` are the rows from the
+ *  top, all of them unless `cut`, then the bottom ones that fit one message
+ *  (the first of them is row `rows - lines.length`). The cursor's column is
+ *  `cols` while a wrap is pending. */
+export interface ScreenRows {
+  cols: number
+  rows: number
+  cursor: { row: number; col: number }
+  modes: ScreenModes
+  cut: boolean
+  lines: ScreenRow[]
+}
+
+/** A `screen.lines`: the screen's last lines, oldest first, scrollback
+ *  included; all of those asked for that the screen holds, unless `cut`,
+ *  then the newest that fit one message. */
+export interface ScreenTail {
+  cut: boolean
+  lines: Array<{ text: string; typed: string }>
+}
+
+const SCREEN_ROWS_FIELDS = new Set(['t', 're', 'cols', 'rows', 'cursor', 'modes', 'cut', 'lines'])
+const SCREEN_ROW_FIELDS = new Set(['text', 'typed', 'inverse', 'width', 'end'])
+const SCREEN_CURSOR_FIELDS = new Set(['row', 'col'])
+const SCREEN_MODE_FIELDS = new Set(['screen', 'bracketed_paste', 'application_cursor', 'application_keypad', 'mouse', 'mouse_encoding', 'cursor_hidden'])
+const SCREEN_LINES_FIELDS = new Set(['t', 're', 'cut', 'lines'])
+const SCREEN_TAIL_LINE_FIELDS = new Set(['text', 'typed'])
+const isScreenSize = (v: unknown): v is number => isWhole(v) && v >= 1 && v <= LAUNCH_LIMITS.termCells
+const oneOf = <T extends string>(words: readonly T[], v: unknown): v is T => typeof v === 'string' && (words as readonly string[]).includes(v)
+
+function readScreenModes(m: unknown): ScreenModes | null {
+  if (!isObject(m) || !exactly(m, SCREEN_MODE_FIELDS)) return null
+  if (!oneOf(SCREEN_WORDS, m.screen) || !oneOf(MOUSE_WORDS, m.mouse) || !oneOf(MOUSE_ENCODING_WORDS, m.mouse_encoding)) return null
+  const flags = [m.bracketed_paste, m.application_cursor, m.application_keypad, m.cursor_hidden]
+  if (!flags.every((f) => typeof f === 'boolean')) return null
+  return {
+    screen: m.screen,
+    bracketed_paste: m.bracketed_paste as boolean,
+    application_cursor: m.application_cursor as boolean,
+    application_keypad: m.application_keypad as boolean,
+    mouse: m.mouse,
+    mouse_encoding: m.mouse_encoding,
+    cursor_hidden: m.cursor_hidden as boolean,
+  }
+}
+
+/**
+ * A `screen.rows` from a holder (the answer to `screen.read`), read strictly:
+ * exactly its fields, a size of 1 to 1000 each way, the cursor on the screen
+ * (its column at most `cols`), a known word for each mode and a yes or no for
+ * the rest, and the rows: each exactly its five fields, `width` the screen's
+ * columns and `end` at most that; all of the screen's rows, or fewer with
+ * `cut`. The whole message (`size` bytes as it came) within what a frame from
+ * the holder holds. Null otherwise.
+ */
+export function readScreenRows(m: unknown, size: number): ScreenRows | null {
+  if (!isObject(m) || m.t !== 'screen.rows' || !isWhole(size) || size > JSON_FROM_HELPER_MAX) return null
+  if (!exactly(m, SCREEN_ROWS_FIELDS) || !isWhole(m.re) || !isScreenSize(m.cols) || !isScreenSize(m.rows) || typeof m.cut !== 'boolean') return null
+  const cols: number = m.cols
+  const rows: number = m.rows
+  const cut: boolean = m.cut
+  const cursor = m.cursor
+  if (!isObject(cursor) || !exactly(cursor, SCREEN_CURSOR_FIELDS) || !isWhole(cursor.row) || !isWhole(cursor.col) || cursor.row >= rows || cursor.col > cols) return null
+  const modes = readScreenModes(m.modes)
+  if (!modes || !Array.isArray(m.lines)) return null
+  if (cut ? m.lines.length >= rows : m.lines.length !== rows) return null
+  const lines: ScreenRow[] = []
+  for (const l of m.lines) {
+    if (!isObject(l) || !exactly(l, SCREEN_ROW_FIELDS)) return null
+    if (typeof l.text !== 'string' || typeof l.typed !== 'string' || typeof l.inverse !== 'string') return null
+    if (l.width !== cols || !isWhole(l.end) || l.end > cols) return null
+    lines.push({ text: l.text, typed: l.typed, inverse: l.inverse, width: cols, end: l.end })
+  }
+  return { cols, rows, cursor: { row: cursor.row, col: cursor.col }, modes, cut, lines }
+}
+
+/**
+ * A `screen.lines` from a holder (the answer to `screen.tail`), read strictly:
+ * exactly its fields, at most SCREEN_TAIL_MAX lines, each exactly its text and
+ * its typed copy, and the whole message (`size` bytes as it came) within what
+ * a frame from the holder holds. Null otherwise.
+ */
+export function readScreenLines(m: unknown, size: number): ScreenTail | null {
+  if (!isObject(m) || m.t !== 'screen.lines' || !isWhole(size) || size > JSON_FROM_HELPER_MAX) return null
+  if (!exactly(m, SCREEN_LINES_FIELDS) || !isWhole(m.re) || typeof m.cut !== 'boolean' || !Array.isArray(m.lines) || m.lines.length > SCREEN_TAIL_MAX) return null
+  const lines: ScreenTail['lines'] = []
+  for (const l of m.lines) {
+    if (!isObject(l) || !exactly(l, SCREEN_TAIL_LINE_FIELDS) || typeof l.text !== 'string' || typeof l.typed !== 'string') return null
+    lines.push({ text: l.text, typed: l.typed })
+  }
+  return { cut: m.cut, lines }
 }
 
 // ── endpoints, records and the listing ────────────────────────────────────────
