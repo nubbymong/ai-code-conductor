@@ -1238,6 +1238,14 @@ messages. Nothing in the app asks yet: no connection the app makes acks
   xterm.js 6.0.0 by Unicode 6, so a row holding a character the two count
   differently can differ from the app's own terminal. The rows of the screen
   corpus where they do are named in `helper/tests/screen.rs`.
+- **Other differences from xterm.js.** Three more, none of them in the
+  screen corpus, so no test compares them. The screen does not draw the
+  replacement character (U+FFFD, which is also what a byte that is not UTF-8
+  is in the app's terminal), where xterm.js draws it in one cell, so the
+  rest of that run of text sits one cell to the left. It has no line drawing
+  character set (`ESC ( 0`), so those characters stay the letters they were
+  sent as. And a change of width cuts or pads each row, where xterm.js can
+  wrap the lines of its normal screen again.
 - **The bound.** A CSI parameter above 9999 reaches the screen's parser as
   9999, as main cuts it for its own panes, so a repeat (`CSI n b`) writes at
   most 9999 cells and no other sequence's work grows with its parameter; an

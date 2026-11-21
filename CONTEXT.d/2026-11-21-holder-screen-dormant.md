@@ -38,11 +38,11 @@ screen in this beta, and no connection the app makes acks `screen`.
   0.89 MiB for a 120 by 40 screen with its 200 lines of scrollback full, 1.04 MiB with the
   alternate screen full too; 36.66 MiB and 67.21 MiB at 1000 by 1000, the largest a launch may
   ask for. Parse rate on the corpus (28 recordings, 663,908 bytes of output), best of 3, in the
-  unoptimised test build: 4.10 MB/s on Windows, 4.73 MB/s on macOS, 5.13 MB/s on Linux, about
-  ninety times the 44 KiB a second Codex writes while a turn runs; the release build that
-  ships was not timed. The Windows release
-  helper grows by 102,912 bytes (925,696 to 1,028,608, the helper-windows artifact of B1's head
-  against this branch's).
+  unoptimised test build: 4.10 MB/s on Windows, 4.73 MB/s on macOS, 5.13 MB/s on Linux (run
+  44853211158; run 44854718394 gave 7.21, 3.85 and 5.13 MB/s, as runners vary), at least
+  eighty-five times the 44 KiB a second Codex writes while a turn runs; the release build that
+  ships was not timed. The Windows release helper grows by 102,912 bytes (925,696 to
+  1,028,608, the helper-windows artifact of B1's head against this branch's).
 - **Widths.** The crate counts a character's cells by current Unicode, xterm.js 6.0.0 by
   Unicode 6. The corpus rows where that alone makes them differ are named in
   helper/tests/screen.rs (WIDTH_ROWS), the one "Not checked" list of the comparison.
