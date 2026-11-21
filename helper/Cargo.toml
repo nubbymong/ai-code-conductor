@@ -45,7 +45,7 @@ path = "src/bin/aicc-fake-cli.rs"
 # output can make the screen grow past its cells (threat model 3.10 and 3.13).
 # The feature adds nothing else the helper uses.
 [dependencies]
-vt100 = { version = "=0.18.1" }
+vt100 = { version = "=0.18.1", default-features = false }
 
 [target.'cfg(unix)'.dependencies]
 libc = "=0.2.172"
