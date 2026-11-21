@@ -2499,7 +2499,10 @@ describe('the 2.1.3-beta.11 sweep', () => {
     expect(k).not.toContain('type /mcp and reconnect the conductor server')
     // The Machines section still says the tools' route changed too, not only the hooks'.
     const m = body('machines')
-    expect(m).toContain("A Claude Code or Codex session the helper holds can also reach the Conductor's tools through the session helper. Such a session does not survive a crash yet.")
+    // From 2.1.3-beta.12 the sentence on a dropped connection sits between
+    // these two (the 2.1.3-beta.12 sweep pins it).
+    expect(m).toContain("A Claude Code or Codex session the helper holds can also reach the Conductor's tools through the session helper.")
+    expect(m).toContain('Such a session does not survive a crash yet.')
     expect(m).not.toContain("what to do when such a session's Conductor tools stop working")
   })
 
@@ -2554,5 +2557,57 @@ describe('the 2.1.3-beta.12 known issues', () => {
     expect(para('With Codex 0.170.0, the app types nothing into a Codex session after its first prompt while the line under Codex\'s prompt takes two rows.')).toContain('Workaround: widen the pane, or use a shorter working folder.')
     expect(para('Text the app types into a Codex session while Codex writes a reply')).toContain('Workaround: send it again once the reply ends.')
     expect(para('While Codex shows a warning count on the line under its prompt')).toContain('Workaround: type the note into the Codex session yourself.')
+  })
+})
+
+// 2.1.3-beta.12 user-facing sweep: the Machines section says what a held
+// terminal shows when its earlier output is no longer held (aicc_planning#352)
+// and that a held session's tools keep working through a dropped connection
+// to the helper, in the relay's own words (aicc_planning#354,
+// aicc_planning#355); and the release notes, so a later edit cannot drop them
+// silently.
+describe('the 2.1.3-beta.12 sweep', () => {
+  const body = (id: string) => APP_KNOWLEDGE_SECTIONS.find((x) => x.id === id)!.body
+  const root = (...parts: string[]) => fs.readFileSync(path.resolve(__dirname, '..', '..', '..', ...parts), 'utf8')
+  const entry = changelog.find((e) => e.version === '2.1.3-beta.12')!
+  const notes = () => [entry.highlights ?? '', ...entry.warnings!, ...entry.changes.map((c) => c.description)]
+  const updating = () => root('helper', 'src', 'relay.rs').match(/pub const UPDATING: &str = "([^"]+)";/)![1]
+
+  it('the Machines section says a held terminal shown again past the last 2 MiB shows one line and is asked to redraw (aicc_planning#352)', () => {
+    expect(body('machines')).toContain('nothing is typed into it again. When it printed more than the last 2 MiB the helper keeps, the tab first shows one line saying its earlier output is no longer held, and its program is asked to draw its screen again.')
+  })
+
+  it('the Machines section says a held session keeps its tools through a dropped connection, with the relay\'s own answer (aicc_planning#354, aicc_planning#355)', () => {
+    const m = body('machines')
+    expect(m).toContain(`can also reach the Conductor's tools through the session helper. If the app's connection to the session helper drops and comes back, those tools keep working: a tool call made while the connection is down waits up to 30 seconds for the app, and if the app is not back by then, it gets the answer ${updating()}.`)
+    expect(m).toContain('A call the app was already answering when the connection dropped gets that answer at once and is not sent again, because a tool may not be safe to run twice. Such a session does not survive a crash yet.')
+  })
+
+  it('the release notes carry the series warning, the two minutes, the way back and every change line', () => {
+    const w = entry.warnings!.join('\n')
+    expect(w).toContain("This beta series begins moving the app's background services")
+    expect(w).toContain('only if the new version opens within two minutes of the old one closing')
+    expect(w).toContain('To go back to 2.1.3-beta.11')
+    expect(entry.highlights).toContain('With Plain terminals through the session helper on, a terminal shown again after the helper no longer holds its earlier output now says so in one line')
+    expect(entry.highlights).toContain("keeps the Conductor's tools when the app's connection to the session helper drops and comes back")
+    expect(entry.highlights).toContain('With Codex 0.170.0, the app now types into a Codex session while Codex shows its usual hint line under the prompt.')
+    const all = entry.changes.map((c) => c.description).join('\n')
+    for (const said of [
+      'With Plain terminals through the session helper on (Settings, General, under Terminal; off by default)',
+      'now first shows one line saying its earlier output is no longer held, and its program is asked to draw its screen again.',
+      'A full-screen program in it is then drawn on the normal screen until you start it again, and the line after the notice can start part-way (in Known issues).',
+      'With Claude Code and Codex sessions through the session helper on (Settings, General, under Terminal; off by default)',
+      `A tool call made while the connection is down waits up to 30 seconds for the app, and if the app is not back by then, it gets the answer ${updating()}.`,
+      'Before, that session\'s tools stopped working until you typed /mcp in Claude Code or restarted the tab.',
+      'are now typed into a Codex session while Codex shows its usual hint line under the prompt.',
+      'with Codex 0.157.1 or 0.170.0, for that line when your Codex config moves the shortcuts key to F6.',
+      'Known issues lists the three cases where it still types nothing, or takes its text back.',
+    ]) expect(all).toContain(said)
+    // Each switch is named with its default, so no line says more than shipped.
+    expect(entry.changes.filter((c) => c.description.includes('off by default'))).toHaveLength(2)
+    for (const text of notes()) {
+      expect(text, text.slice(0, 40)).not.toMatch(/—/)
+      expect(text, text.slice(0, 40)).not.toMatch(/\bCodex tab\b/)
+    }
   })
 })
