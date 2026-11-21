@@ -117,7 +117,7 @@ pub const SCREEN_CAP: &str = "screen";
 /// and `local` (`hello::LOCAL_CAPS`), and `hooks` on a connection that takes
 /// hook events; the hook mode acks `hook::ACK_CAPS` and the relay
 /// `relay::ACK_CAPS`. Nothing acks `screen` yet.
-pub const HOLDER_CAPS: [&str; 5] = ["core", "local", HOOKS_CAP, MCP_CAP, AWAY_CAP];
+pub const HOLDER_CAPS: [&str; 6] = ["core", "local", HOOKS_CAP, MCP_CAP, AWAY_CAP, SCREEN_CAP];
 /// The most JSON a screen answer may be: what one frame to the app holds.
 pub const SCREEN_ANSWER_MAX: usize = frame::MAX_JSON_HELPER_TO_APP;
 /// Tool streams one session may have open at once; one more `mcp.open` gets
