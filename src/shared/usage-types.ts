@@ -137,7 +137,10 @@ export function planLabelFor(planType: unknown): string | null {
 // 'off' = the provider is switched off, or its setting could not be read
 // (D5 of the usage UX): nothing was read for the account, no credential, no
 // refresh and no request.
-export type AccountUsageStatus = 'ok' | 'needs-login' | 'error' | 'inactive' | 'off'
+// 'waiting' = a running session uses the account and has not reported a figure
+// yet, and none was fetched before: the account is not fetched while a session
+// uses it (aicc_planning#378), so the card waits for the session.
+export type AccountUsageStatus = 'ok' | 'needs-login' | 'error' | 'inactive' | 'off' | 'waiting'
 
 export interface AccountUsage {
   profileId: string
@@ -152,8 +155,18 @@ export interface AccountUsage {
   /** short reason for a non-ok status (for the UI hint). */
   detail?: string
   /** True when `status: 'ok'` figures are served from cache — a live refresh
-   *  couldn't complete but the account is still signed in. */
+   *  couldn't complete but the account is still signed in. With `inSession`,
+   *  the figure is older than the page shows as current and was not updated
+   *  since: nothing was tried, so it is not a refresh that failed. */
   stale?: boolean
+  /** True when a running session uses the account: the page never fetches it
+   *  then (aicc_planning#378) and shows that session's figure, or the last one
+   *  fetched before it, whichever is newer. */
+  inSession?: boolean
+  /** When `credits` were fetched, set only when that is not `fetchedAt`: a
+   *  session's figure carries no credits, so its card shows the last fetched
+   *  ones, with their own time. */
+  creditsFetchedAt?: number
   /** Whether the account is active (selectable). False = parked: the page greys
    *  it and offers no sign-in, and it is not polled/refreshed. Undefined is
    *  treated as active by the renderer, so a main process that predates this

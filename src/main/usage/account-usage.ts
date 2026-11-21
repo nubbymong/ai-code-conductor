@@ -17,7 +17,7 @@ import * as path from 'path'
 import { listProfiles, getProfileConfigDir, readProfileAccountEmail, atomicWriteSecure, hardenCredentialFile, credentialFoldersVerdict } from '../account-profiles'
 import { isAccountActive } from '../../shared/account-types'
 import type { AccountProfile } from '../../shared/account-types'
-import { isProfileInUseByLiveSession, getClaudeProfileId } from '../claude-account-identity'
+import { isProfileInUseByLiveSession, getClaudeProfileId, sessionsOnProfile } from '../claude-account-identity'
 import { noteProfileRefreshInFlight } from '../profile-consumers'
 import { parseUsage } from './usage-buckets'
 import { loadSnapshots, saveSnapshots, type UsageSnapshot } from './usage-snapshots'
@@ -324,38 +324,42 @@ function hydrateSnapshots(): void {
   for (const [id, snap] of loadSnapshots()) lastGoodUsage.set(id, snap)
 }
 
-// -- Live per-account usage harvested from open sessions (plan P2) -----------
+// -- An account a running session uses is never fetched (plan P2; aicc_planning#378) --
 //
-// An OPEN account -- one with a live session -- already has its usage on screen:
-// that session's statusline bridge fetched api.anthropic.com/api/oauth/usage
-// seconds ago and the watcher fanned the buckets out. Making the account-usage
-// page fetch the same thing AGAIN is a redundant call against an endpoint that
-// rate-limits by IP, and Phase 1 already forbids the only DANGEROUS call for an
-// in-use account -- the single-use token rotation. So an open account reuses the
-// delivered figure and makes NO network call; only CLOSED accounts call, one at
-// a time. `recordLiveUsageForSession` is wired to the statusline fan-out
-// (setStatuslineUsageSink, main/index).
+// An account with a running Claude Code session already has its usage on
+// screen: that session's status line read it seconds ago and the watcher
+// fanned the buckets out (`recordLiveUsageForSession`, wired to the status
+// line's fan-out through setStatuslineUsageSink in main/index). The page uses
+// that and makes no request of its own for the account: no GET and no token
+// refresh, for the primary account as for any other (the owner, 2026-11-21:
+// asking again is where the page's problems came from). The page shows the
+// newest figure it has for the account, the session's or the last one fetched
+// while the account had no session, with its time (inSessionUsage):
+//  - a figure older than LIVE_USAGE_MAX_AGE_MS is shown as not updated since
+//    then (`stale`, with `inSession`, so the card does not call it a refresh
+//    that failed);
+//  - the status line carries no credits figure (its `rateLimitExtra` has no
+//    currency), so the credits row shows the last fetched credits with the
+//    time of that fetch, or no row;
+//  - with no figure yet, the card waits for the session (`waiting`), or says
+//    Not signed in when the account has no sign-in at all (read from its
+//    credentials file; nothing goes on the network).
+// Accounts with no running session are fetched as before, one at a time.
 //
-// The delivered figure carries buckets but NOT the page's full CreditsInfo (the
-// statusline has only the dollar `rateLimitExtra` shape -- no currency). So when
-// the page would show a credits row the buckets-only figure cannot express (the
-// delivered payload had extra usage, or a prior real fetch cached credits for
-// this profile), the open account falls back to ONE GET with its live token --
-// never a rotation; the refresh guard forbids that while in use. This is the
-// agreed Q1b behaviour.
+// "A running session" is a Claude Code session on the profile now
+// (sessionsOnProfile). The other things that hold a profile (the sign-in
+// probe, headless and Insights runs, cloud agents, a plain shell under the
+// account) report no status line, so an account only they hold is fetched as
+// before; the token refresh still waits for every one of them
+// (isProfileInUseByLiveSession, at the refresh in fetchAccountUsage).
 
-/** How stale a delivered figure may be and still count as "live". A session
- *  writes its statusline 1-3x/s, so a healthy open account is always well inside
- *  this; the bound only stops a wedged or paused session's minutes-old figure
- *  from being served as current -- past it, the open account takes the GET path. */
+/** How old a figure may be and still be shown as current. A session's status
+ *  line updates while it works; past this (a session idle for a while) its
+ *  figure is shown as not updated since then. It is never fetched instead. */
 export const LIVE_USAGE_MAX_AGE_MS = 90_000
 
 interface LiveUsageEntry {
   buckets: UsageBucket[]
-  /** The delivered payload indicated paid credit (statusline sets rateLimitExtra
-   *  only when extra usage is enabled). The page would then show a credits row
-   *  the buckets-only figure cannot, so the open account fills it with one GET. */
-  hasCredits: boolean
   fetchedAt: number
 }
 
@@ -381,10 +385,12 @@ export function setLiveUsageTranscriptProfile(resolve: ((transcriptPath: string)
 
 /**
  * Record the usage a live session just delivered, keyed by the PROFILE it runs
- * under, and only when the session's transcript lies in that profile's folder
- * (profileOfTranscript). An empty or all-malformed set is ignored (nothing to
- * serve), and an SSH or default-home session has no local profile id so it
- * stores nothing -- both leave the account on the GET path, which is correct.
+ * under (the primary's as any other's), and only when the session's
+ * transcript lies in that profile's folder (profileOfTranscript). An empty or
+ * all-malformed set is ignored (nothing to show), and an SSH or default-home
+ * session has no local profile id so it stores nothing. `hasCredits` is not
+ * kept: the status line has no credits figure to show, so the credits row
+ * comes from the last fetch (see newestFigure).
  */
 export function recordLiveUsageForSession(sessionId: string, buckets: unknown, hasCredits: boolean, transcriptPath?: unknown, now: number = Date.now()): void {
   const profileId = getClaudeProfileId(sessionId)
@@ -400,40 +406,69 @@ export function recordLiveUsageForSession(sessionId: string, buckets: unknown, h
   if (!Array.isArray(buckets)) return
   const clean = buckets.filter(isLiveBucket)
   if (clean.length === 0) return
-  liveUsageByProfile.set(profileId, { buckets: clean, hasCredits: !!hasCredits, fetchedAt: now })
+  liveUsageByProfile.set(profileId, { buckets: clean, fetchedAt: now })
 }
 
-/** The delivered figure for a profile if one is recorded and still fresh. */
-function freshLiveUsage(profileId: string, now: number): LiveUsageEntry | undefined {
-  const e = liveUsageByProfile.get(profileId)
-  if (!e || now - e.fetchedAt > LIVE_USAGE_MAX_AGE_MS) return undefined
-  return e
+/** Whether a Claude Code session runs on the profile now: the page then
+ *  shows the account without a request (inSessionUsage). */
+function hasRunningSession(profileId: string): boolean {
+  return sessionsOnProfile(profileId).length > 0
+}
+
+interface ShownFigure {
+  buckets: UsageBucket[]
+  fetchedAt: number
+  credits?: CreditsInfo
+  /** When the credits were fetched, set only when that is not `fetchedAt`. */
+  creditsFetchedAt?: number
+}
+
+/** The newest figure the page has for a profile: the one its sessions last
+ *  delivered, or the last one fetched (usage-snapshots.json), whichever is
+ *  newer, or undefined for none. A delivered figure has no credits, so it
+ *  takes the last fetched credits, with the time of that fetch. */
+function newestFigure(profileId: string): ShownFigure | undefined {
+  const live = liveUsageByProfile.get(profileId)
+  const last = lastGoodUsage.get(profileId)
+  if (live && (!last || live.fetchedAt >= last.fetchedAt)) {
+    const shown: ShownFigure = { buckets: live.buckets, fetchedAt: live.fetchedAt }
+    if (last?.credits) { shown.credits = last.credits; shown.creditsFetchedAt = last.fetchedAt }
+    return shown
+  }
+  if (!last) return undefined
+  const shown: ShownFigure = { buckets: last.buckets, fetchedAt: last.fetchedAt }
+  if (last.credits) shown.credits = last.credits
+  return shown
 }
 
 /**
- * The delivered figure to SERVE for an open account without any network call, or
- * null when the account must take the GET path. Null when: no fresh figure yet
- * (a session just spawned), the delivered payload had credits (Q1b -> GET), or a
- * prior fetch cached credits the buckets-only figure cannot carry (Q1b -> GET).
- * The ONE decision, shared by fetchAccountUsage and the fetchAll stagger so the
- * two never disagree about which accounts hit the network.
+ * What the page shows for an account a running session uses, with no request
+ * of any kind (see the block comment above): the newest figure, current when
+ * it is at most LIVE_USAGE_MAX_AGE_MS old and otherwise not updated since
+ * then; with no current figure, Not signed in when the account has no sign-in
+ * at all (its credentials file is read, nothing is refreshed), else the older
+ * figure, else `waiting`.
  */
-function servableLiveUsage(profileId: string, now: number = Date.now()): LiveUsageEntry | null {
-  const live = freshLiveUsage(profileId, now)
-  if (!live || live.hasCredits) return null
-  if (lastGoodUsage.get(profileId)?.credits) return null
-  return live
+async function inSessionUsage(base: AccountUsage, profileId: string, isPrimary: boolean, now: number = Date.now()): Promise<AccountUsage> {
+  const figure = newestFigure(profileId)
+  const show = (f: ShownFigure, stale: boolean): AccountUsage => {
+    const out: AccountUsage = { ...base, status: 'ok', inSession: true, stale, buckets: f.buckets, fetchedAt: f.fetchedAt }
+    if (f.credits) out.credits = f.credits
+    if (f.creditsFetchedAt !== undefined) out.creditsFetchedAt = f.creditsFetchedAt
+    return out
+  }
+  if (figure && now - figure.fetchedAt <= LIVE_USAGE_MAX_AGE_MS) return show(figure, false)
+  const creds = await readProfileToken(profileId, isPrimary)
+  if (!creds.signedIn) return { ...base, status: 'needs-login', detail: 'not signed in' }
+  if (figure) return show(figure, true)
+  return { ...base, status: 'waiting', inSession: true, detail: "waiting for this account's session" }
 }
 
-/** Whether fetchAllAccountsUsage should count a profile toward the network
- *  stagger: active, and either primary/closed or an open account that cannot be
- *  served from its delivered figure. Primary keeps the network path (its creds
- *  are shared with the global CLI), exactly as the refresh guard excludes it. */
+/** Whether fetchAllAccountsUsageStreaming should count a profile toward the
+ *  network stagger: active, with no running session (fetchAccountUsage's own
+ *  rule: an account a session uses is shown without a request). */
 function accountUsageWillNetwork(profile: AccountProfile): boolean {
-  if (!isAccountActive(profile)) return false
-  if (profile.isPrimary) return true
-  if (!isProfileInUseByLiveSession(profile.id)) return true
-  return servableLiveUsage(profile.id) === null
+  return isAccountActive(profile) && !hasRunningSession(profile.id)
 }
 
 /** Test seam: the live cache is module state and outlives a test file otherwise. */
@@ -537,6 +572,8 @@ export function knownUsageLabels(): string[] {
  * Fetch usage for one profile. Signed-out -> needs-login; signed-in but not
  * fetchable -> last-known (stale) or a soft refresh hint; success -> fresh.
  * Auto-refreshes a lapsed token (guarded) so idle accounts still show live usage.
+ * An account a running session uses is not fetched at all: it shows that
+ * session's figure (inSessionUsage).
  *
  * `noRefresh` suppresses the single-use refresh-token rotation entirely (#447):
  * the account-switch snapshot fires this the instant BEFORE the session
@@ -574,18 +611,11 @@ export async function fetchAccountUsage(profileId: string, opts?: { noRefresh?: 
   // before readProfileToken/refresh/fetch so none of that runs.
   if (!active) return { ...base, status: 'inactive' }
 
-  // OPEN account (plan P2): a live session is using this profile, so its usage
-  // was just delivered by that session's statusline -- reuse it and make no call.
-  // Primary is excluded (its creds are shared with the global CLI; it keeps the
-  // network path). `servableLiveUsage` returns null when there is nothing fresh
-  // to serve or the page would show a credits row the delivered figure cannot
-  // carry (Q1b), in which case we fall through to the GET below. The refresh
-  // guard there already forbids a rotation while in use, so any fall-through is a
-  // read with the live token, never a token rotation.
-  if (!isPrimary && isProfileInUseByLiveSession(profileId)) {
-    const live = servableLiveUsage(profileId)
-    if (live) return { ...base, status: 'ok', stale: false, buckets: live.buckets, fetchedAt: live.fetchedAt }
-  }
+  // An account a running session uses (plan P2; aicc_planning#378): its usage
+  // is that session's own status line figure, so it is never fetched, the
+  // primary as any other: no GET and no refresh, whatever the figure's age,
+  // its credits or whether one has arrived yet (inSessionUsage).
+  if (hasRunningSession(profileId)) return inSessionUsage(base, profileId, isPrimary)
 
   const creds = await readProfileToken(profileId, isPrimary)
   let token = creds.token
@@ -676,18 +706,17 @@ export async function fetchAllAccountsUsageStreaming(
   onResult: (usage: AccountUsage) => void,
   opts: { shouldContinue?: () => boolean } = {},
 ): Promise<void> {
-  // Hydrate BEFORE the stagger decision: accountUsageWillNetwork reads lastGoodUsage
-  // (a prior fetch's cached credits force an open account onto the GET path, Q1b),
-  // and fetchAccountUsage only hydrates on its first call -- so without this the
-  // first page-open of the process would mis-pace a cached-credits account.
+  // Hydrate once, before the first account (fetchAccountUsage would on its
+  // first call): an account a running session uses shows the last fetched
+  // figure and credits from it.
   hydrateSnapshots()
   const profiles = listProfiles()
   const wanted = () => !opts.shouldContinue || opts.shouldContinue()
   let networkedCount = 0
   for (const p of profiles) {
     if (!wanted()) return
-    // An OPEN account served from its delivered figure (plan P2) makes no request,
-    // so -- like a parked account -- it must not consume a stagger slot, or N open
+    // An account a running session uses (plan P2) makes no request, so --
+    // like a parked account -- it must not consume a stagger slot, or N open
     // accounts would add N*STAGGER_MS of dead wait before a closed one loads.
     // D5: with Claude Code switched off an account makes none either (it
     // comes back `off` from fetchAccountUsage, which asks the rule itself, so

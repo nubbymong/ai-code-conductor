@@ -622,12 +622,18 @@ export function AccountCard({
       {row.status === 'ok' && row.buckets.length > 0 && (
         <div className="flex flex-col gap-2">
           {row.buckets.map((b) => <UsageBar key={b.key} bucket={b} now={now} />)}
-          {row.credits && <CreditsRow value={creditsText(row.credits)} muted={!row.credits.enabled} />}
+          {row.credits && <CreditsRow value={creditsText(row.credits) + (typeof row.creditsFetchedAt === 'number' ? ` \u00b7 as of ${relAgo(row.creditsFetchedAt, now)}` : '')} muted={!row.credits.enabled} />}
         </div>
       )}
 
       {row.status === 'ok' && row.buckets.length === 0 && (
         <p className="text-[0.8125rem] text-overlay0">No usage limits reported.</p>
+      )}
+
+      {/* A running session uses the account and has not reported yet: the
+          account is never fetched while a session uses it (aicc_planning#378). */}
+      {!quiet && row.status === 'waiting' && (
+        <p className="text-[0.8125rem] text-overlay0">Waiting for this account&apos;s session.</p>
       )}
 
       {!isInactive && row.status === 'needs-login' && (
@@ -654,7 +660,9 @@ export function AccountCard({
         <div className="flex items-center justify-between gap-2 mt-2">
           {row.status === 'ok' ? (
             <p className="text-[0.6875rem] text-overlay0">
-              {row.stale ? `Last updated ${relAgo(row.fetchedAt, now)} \u00b7 couldn't refresh` : `Updated ${relAgo(row.fetchedAt, now)}`}
+              {/* An account a session uses is not fetched, so an old figure
+                  was not updated since; nothing failed to refresh. */}
+              {row.stale ? (row.inSession ? `Last updated ${relAgo(row.fetchedAt, now)}` : `Last updated ${relAgo(row.fetchedAt, now)} \u00b7 couldn't refresh`) : `Updated ${relAgo(row.fetchedAt, now)}`}
             </p>
           ) : (
             <span />
