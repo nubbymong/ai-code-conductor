@@ -516,6 +516,71 @@ folder is too long; the earlier dispatch on 0c49af32, run 44532520348, ran Codex
 server on ubuntu-latest and read REPAINTS there too, 3 of 3 at every state), and any size
 but 120 by 40. The probe is `helper/probes/p19-record.cjs`.
 
+P19, second run (2026-11-19 to 20, plan 2.1.3-beta.12 A2; the question is P19's own, so it has
+no number of its own). Claude Code 2.1.328, Codex 0.157.1 and Codex 0.170.0, with no account
+and the same stand-in model, at 120 by 40; CI runs 44636688885 (Codex 0.157.1) and 44636706580
+(Codex 0.170.0) on windows-2025 (both ConPTYs), macos-latest and ubuntu-latest, and one reading
+per version on the Windows test machine, build 22621, on both ConPTYs; 3 runs per state. The
+decision lines were fixed before measuring and are in the probe's header. The modes, as
+xterm.js reports them for each pane, two seconds after the nudge (KEPT when the panes agree in
+3 of 3 runs at every state reached, LOST when they differ in 2 of 3 or more at some state). On
+Linux, macOS, the Windows runner (both ConPTYs) and the test machine's bundled ConPTY: Claude
+Code LOSES the screen in use, bracketed paste and focus reporting, and KEEPS mouse reporting
+(it sets it again when it redraws) and the rest; Codex, both versions, LOSES the screen in use,
+bracketed paste, mouse reporting and focus reporting, and KEEPS the rest. The rest is
+application cursor keys, application keypad, insert, origin, reverse wraparound and
+synchronized output (off throughout) and wraparound (on). On the test machine's system
+ConPTY, which passes no alternate screen through, the screen in use reads KEPT for both CLIs
+and Codex's focus reporting reads KEPT (pane 1 never has either on there); bracketed paste is
+LOST for both, focus reporting LOST for Claude Code, mouse reporting LOST for Codex and KEPT
+for Claude Code. Not in xterm.js's
+modes, so not measured: the mouse encoding and whether the cursor is shown. What it means, as
+fixed before measuring: the screen in use and bracketed paste (both CLIs) and mouse reporting
+(Codex) are LOST and the app's terminal acts on them, so they are restored from the holder's
+screen in the step that first shows an agent session again from the middle (S16's second
+half), and `screen.read` carries them from the holder screen's step on; focus reporting is
+LOST and not in that step's list of modes, so that step decides it; nothing changes in the
+re-attach fix. Codex 0.170.0's rows: REPAINTS on Linux, macOS and both Windows ConPTYs, on the
+runner and on the test machine, 3 of 3 at its first screen, its ready prompt, the middle and
+the end of the long reply and the end of a short one; a same-size resize was enough at every
+state on the system ConPTY and at none elsewhere; Codex 0.157.1 and Claude Code read REPAINTS
+again. Console hosts, counted 1, 2, 5, 10, 30 and 60 s after node-pty reported the program's
+exit, before anything was stopped: on the system ConPTY, STAYS. The pseudo console's
+conhost.exe, a child of the process that opened the PTY, was still running at 60 s in 21 of 22
+runs in each runner dispatch and in 22 of 23 and 13 of 14 runs on the test machine, though
+node-pty's kill ran right after each exit; the one run without one in each was the only run
+whose program the kill ended. On the bundled ConPTY, ENDS BY ITSELF (no host of the probe's at
+any time). The app gives the system ConPTY to Claude Code sessions and plain terminals, so a
+session that ends there leaves its console host running; that is on beta 13's bug track
+(aicc_planning#363; the kill is in `pty-manager.ts`). Codex started with its background server
+(no `--no-daemon`) in the test machine's elevated SSH session: 0.157.1 FAILS on both ConPTYs,
+printing "Error: start the Windows daemon from a non-elevated terminal; shared clients must
+not inherit administrator privileges" and exiting with code 1 before its composer; 0.170.0
+RUNS A TURN on both and leaves no server process. What a Codex tab does when the app itself
+runs elevated is aicc_planning#364, sized for beta 13. The hint rows (the row under Codex's
+footer; a left arrow, a warning sign and a middle dot are written here as `<left arrow>`,
+`<warning sign>` and `.`): for 0.170.0 all four RECORDED: its ready row is `<left arrow> for
+agents . ? for shortcuts` (the agents form is drawn by default), the queue hint `tab to queue
+message` while a draft waits during a turn, `<left arrow> for agents . f6 for shortcuts` with
+the shortcuts key rebound, and `<warning sign> 1 warning . f2 to view` at the right of the row
+with a tool server that cannot start. For 0.157.1 the queue hint, the rebound row (`f6 for
+shortcuts`) and the warning were RECORDED and the agents form NOT REACHED (60 s waited on every
+system; 0.157.1 draws no agents form). From the first prompt sent on, both versions also draw
+`<warning sign> 1 warning . f2 to view` at the right of the hint row, in every launch that
+sends one (what it warns of was not read), and Codex 0.170.0 adds the thread's title to its
+footer, which wraps to a second row on macOS and Windows. The screen corpus gains 33 recordings from these runs (each under 256 KiB, 2,972,596
+bytes of recordings in all, under 3 MiB; none cut): Codex 0.170.0's ready, mid-reply and
+after-reply on all four systems; each hint row reached, of both versions, on the bundled
+ConPTY and macOS; Codex 0.157.1's mid-reply and after-reply on three systems and its mid-reply
+on Linux. The mid-reply and hint row recordings are record only (to 300 ms after the mark).
+Codex's screen reader reads all 33 unrecognised: it takes one row under the footer, exactly
+`? for shortcuts`, and each of them ends in another row. No mid-reply or queue-hint screen holds
+an `esc to interrupt` row, the reader's only sign of busy: Codex drew its working row once,
+right after Enter, and not while the reply streamed. They are listed in the corpus test as
+known misreads for the reader fix (aicc_planning#357). Not measured: a signed-in account's
+screens (whether a real model gives the warning, or a hint row A2 could not reach without an
+account), the holder's own PTY code, the app's real attach path, any size but 120 by 40.
+
 ## Parked questions
 
 None blocks beta 4. Each default stands until the owner is asked, before the

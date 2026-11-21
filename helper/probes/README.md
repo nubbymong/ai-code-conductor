@@ -214,3 +214,14 @@ One more row, on the test machine only: Codex without `--no-daemon`, so with
 its background server, in the same elevated SSH session (RUNS A TURN or
 FAILS with what the screen showed). It runs only when named:
 `--only claude,codex,shell,codex-daemon`.
+
+Thirty-three of this run's recordings are in the screen corpus
+(`helper/fixtures/screens/`, checked by `tests/unit/shared/screen-corpus.test.ts`,
+where the program `codex170` is Codex 0.170.0 and `codex` is 0.157.1). Each is
+run 1 of its launch up to its state's `mark-end` line: every line before it, in
+order, without the `exit` line and earlier `mark-end` lines, a mark keeping only
+its state; the chunks decoded as one UTF-8 stream (a character split across two
+reads joins the second) and each offset counted over that text. The Windows ones
+are the test machine's, the others GitHub's runners'. Which ones were kept is
+the plan's order of keeping, listed in the test with what was left out. The
+answer is in ADR-030 after the P19 result ("P19, second run").

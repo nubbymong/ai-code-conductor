@@ -1,8 +1,8 @@
 {
   "schema": "wp1-legacy-codex-manifest/3",
-  "generatedAt": "2026-11-21T03:39:52.163Z",
-  "head": "bf572ee7be00e2a91d513202f78d603dcdfcdab7",
-  "tree": "72aa361f4a14ea6a36f799268c0b44f7f4a7734e",
+  "generatedAt": "2026-11-21T03:55:45.072Z",
+  "head": "ce659e5f1f95ee4564d1b35a1b69fbd17e0bd3fd",
+  "tree": "97359f1066a784f2e468eb29dc91f61f1d0fa62f",
   "scannedWorkingTree": true,
   "predicateDigest": "100a1233edebdc39a5f9004d3fba980a89ebb15b25872e52076386bc84b03153",
   "predicates": [
@@ -116,9 +116,9 @@
     "\\.(png|jpg|jpeg|gif|ico|icns|webp|svg|woff2?|ttf|otf|mp4|zip|asar|node|exe|dll|dylib|so|pdf)$",
     "^package-lock\\.json$"
   ],
-  "trackedFileCount": 3573,
-  "excludedFileCount": 553,
-  "scannedFileCount": 3020,
+  "trackedFileCount": 3636,
+  "excludedFileCount": 550,
+  "scannedFileCount": 3086,
   "unscopedFileCount": 15,
   "unscoped": [
     ".claude/settings.json",
@@ -139,8 +139,8 @@
   ],
   "unscopedMentions": [],
   "unreadable": [],
-  "matchedPathCount": 965,
-  "pathDigest": "5c241d36b358681bdb8df951abb2ee87fb3d3162fd0630e9b4ae64977f6d1ad1",
+  "matchedPathCount": 1031,
+  "pathDigest": "93cb23a2dea5b15583ec0b46397972dbb42ad4038b21726e340654a6532d4c41",
   "entries": [
     {
       "path": ".github/workflows/ci.yml",
@@ -266,6 +266,22 @@
       "lineCount": 11
     },
     {
+      "path": "helper/fixtures/screens/codex-linux-mid-reply.json",
+      "predicates": [
+        "P01",
+        "P14"
+      ],
+      "lineCount": 23
+    },
+    {
+      "path": "helper/fixtures/screens/codex-linux-mid-reply.rows.json",
+      "predicates": [
+        "P01",
+        "P14"
+      ],
+      "lineCount": 5
+    },
+    {
       "path": "helper/fixtures/screens/codex-linux-ready.json",
       "predicates": [
         "P01",
@@ -280,6 +296,22 @@
         "P14"
       ],
       "lineCount": 21
+    },
+    {
+      "path": "helper/fixtures/screens/codex-macos-after-reply.json",
+      "predicates": [
+        "P01",
+        "P14"
+      ],
+      "lineCount": 14
+    },
+    {
+      "path": "helper/fixtures/screens/codex-macos-after-reply.rows.json",
+      "predicates": [
+        "P01",
+        "P14"
+      ],
+      "lineCount": 11
     },
     {
       "path": "helper/fixtures/screens/codex-macos-first-screen.json",
@@ -298,6 +330,38 @@
       "lineCount": 11
     },
     {
+      "path": "helper/fixtures/screens/codex-macos-mid-reply.json",
+      "predicates": [
+        "P01",
+        "P14"
+      ],
+      "lineCount": 11
+    },
+    {
+      "path": "helper/fixtures/screens/codex-macos-mid-reply.rows.json",
+      "predicates": [
+        "P01",
+        "P14"
+      ],
+      "lineCount": 5
+    },
+    {
+      "path": "helper/fixtures/screens/codex-macos-queue-hint.json",
+      "predicates": [
+        "P01",
+        "P14"
+      ],
+      "lineCount": 7
+    },
+    {
+      "path": "helper/fixtures/screens/codex-macos-queue-hint.rows.json",
+      "predicates": [
+        "P01",
+        "P14"
+      ],
+      "lineCount": 7
+    },
+    {
       "path": "helper/fixtures/screens/codex-macos-ready.json",
       "predicates": [
         "P01",
@@ -312,6 +376,54 @@
         "P14"
       ],
       "lineCount": 31
+    },
+    {
+      "path": "helper/fixtures/screens/codex-macos-rebound-hint.json",
+      "predicates": [
+        "P01",
+        "P14"
+      ],
+      "lineCount": 6
+    },
+    {
+      "path": "helper/fixtures/screens/codex-macos-rebound-hint.rows.json",
+      "predicates": [
+        "P01",
+        "P14"
+      ],
+      "lineCount": 9
+    },
+    {
+      "path": "helper/fixtures/screens/codex-macos-warning-hint.json",
+      "predicates": [
+        "P01",
+        "P14"
+      ],
+      "lineCount": 6
+    },
+    {
+      "path": "helper/fixtures/screens/codex-macos-warning-hint.rows.json",
+      "predicates": [
+        "P01",
+        "P14"
+      ],
+      "lineCount": 9
+    },
+    {
+      "path": "helper/fixtures/screens/codex-windows-bundled-after-reply.json",
+      "predicates": [
+        "P01",
+        "P14"
+      ],
+      "lineCount": 13
+    },
+    {
+      "path": "helper/fixtures/screens/codex-windows-bundled-after-reply.rows.json",
+      "predicates": [
+        "P01",
+        "P14"
+      ],
+      "lineCount": 11
     },
     {
       "path": "helper/fixtures/screens/codex-windows-bundled-first-screen.json",
@@ -330,6 +442,38 @@
       "lineCount": 11
     },
     {
+      "path": "helper/fixtures/screens/codex-windows-bundled-mid-reply.json",
+      "predicates": [
+        "P01",
+        "P14"
+      ],
+      "lineCount": 11
+    },
+    {
+      "path": "helper/fixtures/screens/codex-windows-bundled-mid-reply.rows.json",
+      "predicates": [
+        "P01",
+        "P14"
+      ],
+      "lineCount": 5
+    },
+    {
+      "path": "helper/fixtures/screens/codex-windows-bundled-queue-hint.json",
+      "predicates": [
+        "P01",
+        "P14"
+      ],
+      "lineCount": 7
+    },
+    {
+      "path": "helper/fixtures/screens/codex-windows-bundled-queue-hint.rows.json",
+      "predicates": [
+        "P01",
+        "P14"
+      ],
+      "lineCount": 7
+    },
+    {
       "path": "helper/fixtures/screens/codex-windows-bundled-ready.json",
       "predicates": [
         "P01",
@@ -344,6 +488,54 @@
         "P14"
       ],
       "lineCount": 21
+    },
+    {
+      "path": "helper/fixtures/screens/codex-windows-bundled-rebound-hint.json",
+      "predicates": [
+        "P01",
+        "P14"
+      ],
+      "lineCount": 6
+    },
+    {
+      "path": "helper/fixtures/screens/codex-windows-bundled-rebound-hint.rows.json",
+      "predicates": [
+        "P01",
+        "P14"
+      ],
+      "lineCount": 9
+    },
+    {
+      "path": "helper/fixtures/screens/codex-windows-bundled-warning-hint.json",
+      "predicates": [
+        "P01",
+        "P14"
+      ],
+      "lineCount": 6
+    },
+    {
+      "path": "helper/fixtures/screens/codex-windows-bundled-warning-hint.rows.json",
+      "predicates": [
+        "P01",
+        "P14"
+      ],
+      "lineCount": 9
+    },
+    {
+      "path": "helper/fixtures/screens/codex-windows-system-after-reply.json",
+      "predicates": [
+        "P01",
+        "P14"
+      ],
+      "lineCount": 12
+    },
+    {
+      "path": "helper/fixtures/screens/codex-windows-system-after-reply.rows.json",
+      "predicates": [
+        "P01",
+        "P14"
+      ],
+      "lineCount": 11
     },
     {
       "path": "helper/fixtures/screens/codex-windows-system-first-screen.json",
@@ -362,6 +554,22 @@
       "lineCount": 11
     },
     {
+      "path": "helper/fixtures/screens/codex-windows-system-mid-reply.json",
+      "predicates": [
+        "P01",
+        "P14"
+      ],
+      "lineCount": 9
+    },
+    {
+      "path": "helper/fixtures/screens/codex-windows-system-mid-reply.rows.json",
+      "predicates": [
+        "P01",
+        "P14"
+      ],
+      "lineCount": 5
+    },
+    {
       "path": "helper/fixtures/screens/codex-windows-system-ready.json",
       "predicates": [
         "P01",
@@ -378,11 +586,331 @@
       "lineCount": 26
     },
     {
+      "path": "helper/fixtures/screens/codex170-linux-after-reply.json",
+      "predicates": [
+        "P01",
+        "P14"
+      ],
+      "lineCount": 16
+    },
+    {
+      "path": "helper/fixtures/screens/codex170-linux-after-reply.rows.json",
+      "predicates": [
+        "P01",
+        "P14"
+      ],
+      "lineCount": 11
+    },
+    {
+      "path": "helper/fixtures/screens/codex170-linux-mid-reply.json",
+      "predicates": [
+        "P01",
+        "P14"
+      ],
+      "lineCount": 13
+    },
+    {
+      "path": "helper/fixtures/screens/codex170-linux-mid-reply.rows.json",
+      "predicates": [
+        "P01",
+        "P14"
+      ],
+      "lineCount": 5
+    },
+    {
+      "path": "helper/fixtures/screens/codex170-linux-ready.json",
+      "predicates": [
+        "P01",
+        "P14"
+      ],
+      "lineCount": 10
+    },
+    {
+      "path": "helper/fixtures/screens/codex170-linux-ready.rows.json",
+      "predicates": [
+        "P01",
+        "P14"
+      ],
+      "lineCount": 21
+    },
+    {
+      "path": "helper/fixtures/screens/codex170-macos-after-reply.json",
+      "predicates": [
+        "P01",
+        "P14"
+      ],
+      "lineCount": 17
+    },
+    {
+      "path": "helper/fixtures/screens/codex170-macos-after-reply.rows.json",
+      "predicates": [
+        "P01",
+        "P14"
+      ],
+      "lineCount": 11
+    },
+    {
+      "path": "helper/fixtures/screens/codex170-macos-agents-hint.json",
+      "predicates": [
+        "P01",
+        "P14"
+      ],
+      "lineCount": 7
+    },
+    {
+      "path": "helper/fixtures/screens/codex170-macos-agents-hint.rows.json",
+      "predicates": [
+        "P01",
+        "P14"
+      ],
+      "lineCount": 9
+    },
+    {
+      "path": "helper/fixtures/screens/codex170-macos-mid-reply.json",
+      "predicates": [
+        "P01",
+        "P14"
+      ],
+      "lineCount": 14
+    },
+    {
+      "path": "helper/fixtures/screens/codex170-macos-mid-reply.rows.json",
+      "predicates": [
+        "P01",
+        "P14"
+      ],
+      "lineCount": 5
+    },
+    {
+      "path": "helper/fixtures/screens/codex170-macos-queue-hint.json",
+      "predicates": [
+        "P01",
+        "P14"
+      ],
+      "lineCount": 12
+    },
+    {
+      "path": "helper/fixtures/screens/codex170-macos-queue-hint.rows.json",
+      "predicates": [
+        "P01",
+        "P14"
+      ],
+      "lineCount": 7
+    },
+    {
+      "path": "helper/fixtures/screens/codex170-macos-ready.json",
+      "predicates": [
+        "P01",
+        "P14"
+      ],
+      "lineCount": 14
+    },
+    {
+      "path": "helper/fixtures/screens/codex170-macos-ready.rows.json",
+      "predicates": [
+        "P01",
+        "P14"
+      ],
+      "lineCount": 21
+    },
+    {
+      "path": "helper/fixtures/screens/codex170-macos-rebound-hint.json",
+      "predicates": [
+        "P01",
+        "P14"
+      ],
+      "lineCount": 8
+    },
+    {
+      "path": "helper/fixtures/screens/codex170-macos-rebound-hint.rows.json",
+      "predicates": [
+        "P01",
+        "P14"
+      ],
+      "lineCount": 9
+    },
+    {
+      "path": "helper/fixtures/screens/codex170-macos-warning-hint.json",
+      "predicates": [
+        "P01",
+        "P14"
+      ],
+      "lineCount": 8
+    },
+    {
+      "path": "helper/fixtures/screens/codex170-macos-warning-hint.rows.json",
+      "predicates": [
+        "P01",
+        "P14"
+      ],
+      "lineCount": 9
+    },
+    {
+      "path": "helper/fixtures/screens/codex170-windows-bundled-after-reply.json",
+      "predicates": [
+        "P01",
+        "P14"
+      ],
+      "lineCount": 17
+    },
+    {
+      "path": "helper/fixtures/screens/codex170-windows-bundled-after-reply.rows.json",
+      "predicates": [
+        "P01",
+        "P14"
+      ],
+      "lineCount": 11
+    },
+    {
+      "path": "helper/fixtures/screens/codex170-windows-bundled-agents-hint.json",
+      "predicates": [
+        "P01",
+        "P14"
+      ],
+      "lineCount": 8
+    },
+    {
+      "path": "helper/fixtures/screens/codex170-windows-bundled-agents-hint.rows.json",
+      "predicates": [
+        "P01",
+        "P14"
+      ],
+      "lineCount": 9
+    },
+    {
+      "path": "helper/fixtures/screens/codex170-windows-bundled-mid-reply.json",
+      "predicates": [
+        "P01",
+        "P14"
+      ],
+      "lineCount": 14
+    },
+    {
+      "path": "helper/fixtures/screens/codex170-windows-bundled-mid-reply.rows.json",
+      "predicates": [
+        "P01",
+        "P14"
+      ],
+      "lineCount": 5
+    },
+    {
+      "path": "helper/fixtures/screens/codex170-windows-bundled-queue-hint.json",
+      "predicates": [
+        "P01",
+        "P14"
+      ],
+      "lineCount": 13
+    },
+    {
+      "path": "helper/fixtures/screens/codex170-windows-bundled-queue-hint.rows.json",
+      "predicates": [
+        "P01",
+        "P14"
+      ],
+      "lineCount": 7
+    },
+    {
+      "path": "helper/fixtures/screens/codex170-windows-bundled-ready.json",
+      "predicates": [
+        "P01",
+        "P14"
+      ],
+      "lineCount": 12
+    },
+    {
+      "path": "helper/fixtures/screens/codex170-windows-bundled-ready.rows.json",
+      "predicates": [
+        "P01",
+        "P14"
+      ],
+      "lineCount": 21
+    },
+    {
+      "path": "helper/fixtures/screens/codex170-windows-bundled-rebound-hint.json",
+      "predicates": [
+        "P01",
+        "P14"
+      ],
+      "lineCount": 8
+    },
+    {
+      "path": "helper/fixtures/screens/codex170-windows-bundled-rebound-hint.rows.json",
+      "predicates": [
+        "P01",
+        "P14"
+      ],
+      "lineCount": 9
+    },
+    {
+      "path": "helper/fixtures/screens/codex170-windows-bundled-warning-hint.json",
+      "predicates": [
+        "P01",
+        "P14"
+      ],
+      "lineCount": 8
+    },
+    {
+      "path": "helper/fixtures/screens/codex170-windows-bundled-warning-hint.rows.json",
+      "predicates": [
+        "P01",
+        "P14"
+      ],
+      "lineCount": 9
+    },
+    {
+      "path": "helper/fixtures/screens/codex170-windows-system-after-reply.json",
+      "predicates": [
+        "P01",
+        "P14"
+      ],
+      "lineCount": 17
+    },
+    {
+      "path": "helper/fixtures/screens/codex170-windows-system-after-reply.rows.json",
+      "predicates": [
+        "P01",
+        "P14"
+      ],
+      "lineCount": 11
+    },
+    {
+      "path": "helper/fixtures/screens/codex170-windows-system-mid-reply.json",
+      "predicates": [
+        "P01",
+        "P14"
+      ],
+      "lineCount": 13
+    },
+    {
+      "path": "helper/fixtures/screens/codex170-windows-system-mid-reply.rows.json",
+      "predicates": [
+        "P01",
+        "P14"
+      ],
+      "lineCount": 5
+    },
+    {
+      "path": "helper/fixtures/screens/codex170-windows-system-ready.json",
+      "predicates": [
+        "P01",
+        "P14"
+      ],
+      "lineCount": 10
+    },
+    {
+      "path": "helper/fixtures/screens/codex170-windows-system-ready.rows.json",
+      "predicates": [
+        "P01",
+        "P14"
+      ],
+      "lineCount": 21
+    },
+    {
       "path": "helper/probes/README.md",
       "predicates": [
         "P14"
       ],
-      "lineCount": 14
+      "lineCount": 16
     },
     {
       "path": "helper/probes/p18-stand-in.cjs",
@@ -7663,10 +8191,9 @@
     {
       "path": "tests/unit/shared/screen-corpus.test.ts",
       "predicates": [
-        "P08",
         "P13"
       ],
-      "lineCount": 18
+      "lineCount": 54
     },
     {
       "path": "tests/unit/status-ingest.test.ts",
