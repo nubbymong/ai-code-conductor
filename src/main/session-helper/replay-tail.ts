@@ -9,27 +9,32 @@
  * as rows go: its parser's states (an escape sequence, an OSC, DCS, SOS, PM or
  * APC string, the 8-bit forms, CAN and SUB; a character past U+009F ends a
  * SOS, PM or APC string, or a DCS one before its final byte, in error, and
- * what follows is text), its Unicode 6 widths (the tab loads no Unicode 11
- * addon), and its cursor. A row is added by a line feed, vertical
- * tab, form feed, index or next line (ESC D, ESC E, and the 8-bit forms), and
- * by a wrap: a character that does not fit the row, a wide one at the last
- * column too. A bare line feed keeps the column, as in the tab. The column
- * follows the carriage return, backspace, tab, the cursor moves that set it
- * (CSI C, D, E, F, G, H, f, `, a, I, Z), the repeat (CSI b) and a cursor saved
- * and restored. A cursor moved up or down only moves on the screen and adds no
- * row to the scrollback, so it is not counted. The alternate screen has no
- * scrollback: what a program writes there adds no row, and the cut never lands
- * in it. Where this differs from the tab it counts more rows, not fewer
- * (combining characters and the emoji blocks count a column or two, an
- * autowrap turned off is ignored), with one known exception: a program's own
- * tab stops (HTS, TBC) are not followed, so a tab after it cleared them may go
- * further than counted, at most a row a line.
+ * what follows is text, but not a DCS string the tab ignores to its end), its
+ * Unicode 6 widths (the tab loads no Unicode 11 addon), and its cursor. A row
+ * is added by a line feed, vertical tab, form feed, index or next line (ESC D,
+ * ESC E, and the 8-bit forms), and by a wrap: a character that does not fit
+ * the row, a wide one at the last column too. A bare line feed keeps the
+ * column, as in the tab. The column follows the carriage return, backspace,
+ * tab, the cursor moves that set it (CSI C, D, E, F, G, H, f, `, a, I, Z), the
+ * repeat (CSI b) and a cursor saved and restored. A cursor moved up or down
+ * only moves on the screen and adds no row to the scrollback, so it is not
+ * counted. The alternate screen has no scrollback: what a program writes there
+ * adds no row, and the cut never lands in it. Where this differs from the tab
+ * it counts more rows, not fewer (combining characters and the emoji blocks
+ * count a column or two, an autowrap turned off is ignored), with two known
+ * exceptions. A program's own tab stops (HTS, TBC) are not followed, so a tab
+ * after it cleared them may go further than counted, at most a row a line.
+ * And a repeat (CSI b) that follows a sequence the tab ignores or ends in
+ * error, or an 8-bit CSI, string introducer or ST, is not counted: the tab
+ * still repeats the character printed before it, and here that character is
+ * forgotten (or taken as narrower). No program is known to write such a
+ * repeat.
  *
  * The cut is at the start of a row the text took, never inside an escape
  * sequence or a character: at the start of a line, unless the line there alone
- * takes as many rows as the budget or more, which is then cut inside, at the
- * start of one of its rows, so the tab is never shown only the notice while
- * there is output to show.
+ * takes as many rows as the budget or more, or only empty rows follow it, which
+ * is then cut inside, at the start of one of its rows, so the tab is never
+ * shown only the notice while there is output to show.
  *
  * What the left-out part changes in the terminal's state is carried across the
  * cut (`before` and `after`): leaving the alternate screen whenever that part
@@ -59,7 +64,8 @@ const CSI_IGNORE = 4
 const OSC = 5
 /**
  * A DCS string, or an SOS, PM or APC one: ST, CAN or SUB ends it, and the C0 controls in it do nothing. As in
- * xterm.js, a character past U+009F ends it in error, except in a DCS string past its final byte.
+ * xterm.js, a character past U+009F ends it in error, except in a DCS string past its final byte, or one the tab
+ * ignores to its end.
  */
 const STRING = 6
 
@@ -120,8 +126,8 @@ class RowStarts {
     this.size++
   }
 
-  /** Where to cut, with the text's last row `last`. */
-  cut(last: number): { from: number; left: number; part: boolean } {
+  /** Where to cut, with the text's last row `last` and the row of its last character printed `text`. */
+  cut(last: number, text: number): { from: number; left: number; part: boolean } {
     const target = last + 1 - this.budget
     const at = (k: number) => (this.head + k) % this.cap
     let k = 0
@@ -129,11 +135,12 @@ class RowStarts {
     const e = at(k)
     if (this.row[e] === this.lineRow[e]) return { from: this.index[e], left: this.lineNo[e], part: false }
     // Inside a line: from the next line's start, unless this line alone takes as many rows as the budget or more
-    // (with the next line's own row it would not fit, and the tab would be shown that next line alone).
+    // (with the next line's own row it would not fit, and the tab would be shown that next line alone), or nothing
+    // is printed from the next line's start on (the tab would be shown only empty rows).
     for (let j = k + 1; j < this.size; j++) {
       const n = at(j)
       if (this.row[n] !== this.lineRow[n]) continue
-      if (this.row[n] - this.lineRow[e] >= this.budget) break
+      if (this.row[n] - this.lineRow[e] >= this.budget || this.row[n] > text) break
       return { from: this.index[n], left: this.lineNo[n], part: false }
     }
     return { from: this.index[e], left: this.lineNo[e], part: true }
@@ -154,17 +161,22 @@ class Reader {
   private last = 0
   private lineRow = 0
   private lines = 0
+  /** The row of the last character printed on the normal screen; -1 before any. */
+  private textRow = -1
   private state = GROUND
   private prefix = 0
   private params: number[] = []
   private param = 0
-  /** A CSI parameter, prefix or separator byte was read. */
+  /** A CSI or DCS parameter, prefix or separator byte was read. */
   private any = false
-  /** A CSI intermediate byte was read. */
+  /** A CSI or DCS intermediate byte was read. */
   private more = false
   /** The string read is a DCS one. */
   private dcs = false
-  /** The DCS string's final byte was read: past it, a character past U+009F is its text, not an error. */
+  /**
+   * The DCS string's final byte was read, or a byte the tab ignores the string from (a prefix after a parameter, a
+   * parameter after an intermediate): past it, a character past U+009F is its text, not an error.
+   */
   private hooked = false
   /** The carried modes at their last value, in the order of their last change. */
   private readonly modes = new Map<number, boolean>()
@@ -222,9 +234,14 @@ class Reader {
           break
         case STRING:
           // A string's text, and the C0 controls in it: nothing. A character past U+009F ends it in error, as in
-          // the tab, which reads what follows as text; in a DCS string past its final byte it is the string's text.
+          // the tab, which reads what follows as text; in a DCS string past its final byte, or one the tab ignores to
+          // its end, it is the string's text.
           if (c >= 0xa0) { if (!this.hooked) this.state = GROUND }
-          else if (this.dcs && c >= 0x40 && c <= 0x7e) this.hooked = true
+          else if (this.dcs && !this.hooked && c >= 0x20) {
+            if (c >= 0x40 || (c >= 0x30 && (this.more || (c >= 0x3c && this.any)))) this.hooked = true
+            else if (c >= 0x30) this.any = true
+            else this.more = true
+          }
           break
       }
     }
@@ -234,7 +251,7 @@ class Reader {
     if (c < 0x20) this.execute(c, i, false)
     else if (c === 0x5b) this.startCsi()
     else if (c === 0x5d) this.state = OSC
-    else if (c === 0x50 || c === 0x58 || c === 0x5e || c === 0x5f) { this.state = STRING; this.dcs = c === 0x50; this.hooked = false }
+    else if (c === 0x50 || c === 0x58 || c === 0x5e || c === 0x5f) { this.state = STRING; this.dcs = c === 0x50; this.hooked = false; this.any = false; this.more = false }
     else if (c <= 0x2f) this.state = ESC_MORE
     else {
       // A final byte; a character past 0x7e ends it in error.
@@ -274,7 +291,7 @@ class Reader {
 
   /** Where to cut (with a budget given). */
   cut(): { from: number; left: number; part: boolean } {
-    return this.starts ? this.starts.cut(this.row) : { from: 0, left: 0, part: false }
+    return this.starts ? this.starts.cut(this.row, this.textRow) : { from: 0, left: 0, part: false }
   }
 
   /** What the text read changed in the terminal's state, to carry across the cut. */
@@ -294,7 +311,7 @@ class Reader {
     this.last = 0
     if (c === 0x9b) this.startCsi()
     else if (c === 0x9d) this.state = OSC
-    else if (c === 0x90 || c === 0x98 || c === 0x9e || c === 0x9f) { this.state = STRING; this.dcs = c === 0x90; this.hooked = false }
+    else if (c === 0x90 || c === 0x98 || c === 0x9e || c === 0x9f) { this.state = STRING; this.dcs = c === 0x90; this.hooked = false; this.any = false; this.more = false }
     else {
       // ST (0x9c) only ends a string; the others are carried out.
       this.state = GROUND
@@ -333,6 +350,7 @@ class Reader {
     }
     this.col += w
     this.last = w
+    if (!this.alt) this.textRow = this.row
   }
 
   /** A line feed (and the others that move down a row); `next`: the line that starts after it. */
@@ -372,11 +390,11 @@ class Reader {
       if (!this.alt) this.row++
     }
     const room = Math.floor((this.width - this.col) / w)
-    if (n <= room) { this.col += n * w; return }
+    if (n <= room) { this.col += n * w; if (!this.alt) this.textRow = this.row; return }
     const perRow = Math.floor(this.width / w)
     const rest = n - room
     const rows = Math.ceil(rest / perRow)
-    if (!this.alt) this.row += rows
+    if (!this.alt) { this.row += rows; this.textRow = this.row }
     this.col = (rest - (rows - 1) * perRow) * w
   }
 

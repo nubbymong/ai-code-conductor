@@ -3,9 +3,10 @@
  * not shown (2.1.3-beta.12, plan section A1; src/main/session-helper/replay-tail.ts),
  * checked against xterm.js itself (@xterm/headless, the tab's terminal): rows
  * are never counted fewer than the terminal takes, the cut never lands inside
- * an escape sequence, a line of the budget's rows or more is cut inside, a
- * wrapped line under it is left out whole, and the left-out part's alternate
- * screen and input modes are carried across the cut.
+ * an escape sequence, a line of the budget's rows or more (or one followed only
+ * by empty rows) is cut inside, a wrapped line under it is otherwise left out
+ * whole, and the left-out part's alternate screen and input modes are carried
+ * across the cut.
  */
 import { describe, it, expect } from 'vitest'
 import { Terminal } from '@xterm/headless'
@@ -16,7 +17,8 @@ import { TERMINAL_SCROLLBACK_LINES } from '../../../src/shared/terminal-scrollba
 
 /** The rows the tab's terminal takes for `text`, written to a new one: its normal screen's lines down to the cursor. */
 async function rowsTaken(text: string, cols: number): Promise<number> {
-  const term = new Terminal({ cols, rows: 24, scrollback: 100_000, allowProposedApi: true })
+  // The log off: a string the tab ends in error would print xterm.js's parse error to stderr, for nothing.
+  const term = new Terminal({ cols, rows: 24, scrollback: 100_000, allowProposedApi: true, logLevel: 'off' })
   try {
     await new Promise<void>((res) => term.write(text, res))
     const b = term.buffer.normal
@@ -107,7 +109,7 @@ describe('rows, counted as the tab counts them', () => {
     }
   })
 
-  it('a line feed inside an OSC, DCS, SOS, PM or APC string does nothing, and BEL, ST, CAN or SUB ends the string; a character past U+009F ends a SOS, PM or APC string, or a DCS one before its final byte, and what follows is text', async () => {
+  it('a line feed inside an OSC, DCS, SOS, PM or APC string does nothing, and BEL, ST, CAN or SUB ends the string; a character past U+009F ends a SOS, PM or APC string, or a DCS one before its final byte, and what follows is text, but not a DCS string the tab ignores to its end', async () => {
     const x = 'x'.repeat(200)
     for (const [text, rows] of [
       ['\x1b]0;a\nb\x07x', 1],
@@ -129,17 +131,19 @@ describe('rows, counted as the tab counts them', () => {
       [`\x1bP1;2\u00e9${x}\x1b\\end`, 3],
       [`\x1bP$\u00e9${x}\x1b\\end`, 3],
       [`\x90\u00e9${x}\x9cend`, 3],
-      // Not ended: a string of ASCII only, a DCS string past its final byte, an OSC string.
+      // Not ended: a string of ASCII only, a DCS string past its final byte, an OSC string, and a DCS string the tab
+      // ignores to its end (a prefix after a parameter, a parameter after an intermediate), whose carriage return
+      // does not move the column either.
       [`\x1b_Gf=100;AAAA${x}\x1b\\end`, 1],
       [`\x1bPq\u00e9${x}\x1b\\end`, 1],
       [`\x1b]0;\u00e9${x}\x07end`, 1],
+      [`\x1bP1?\u00e9${x}\x1b\\end`, 1],
+      [`\x1bP$1\u00e9${x}\x1b\\end`, 1],
+      [`${'x'.repeat(70)}\x1bP1?\u00e9\r\x1b\\${'y'.repeat(20)}`, 2],
     ] as const) {
       expect(await rowsTaken(text, 80), JSON.stringify(text)).toBe(rows)
       expect(rowsOf(text, 80), JSON.stringify(text)).toBe(rows)
     }
-    // A DCS string the tab ignores (a prefix after a parameter) keeps that character as its text; here it ends it: more rows, the safe side.
-    const ignored = `\x1bP1?\u00e9${x}\x1b\\end`
-    expect(rowsOf(ignored, 80)).toBeGreaterThanOrEqual(await rowsTaken(ignored, 80))
   })
 
   it('the moves that set the column are followed: CSI C, G and H, a repeat, a cursor saved and restored', async () => {
@@ -206,6 +210,13 @@ describe('where the cut lands', () => {
 
   it('a line that takes the budget\'s rows exactly, then a line break at the end: cut inside, so the tab is not shown the notice alone', () => {
     const text = `${'x'.repeat(30)}\r\n`
+    const t = replayTail(text, 10, 3)
+    expect(t).toMatchObject({ from: 10, left: 0, part: true })
+    expect(rowsOf(text.slice(t.from), 10)).toBe(3)
+  })
+
+  it('a line under the budget followed only by empty rows at the end: cut inside, so the tab is not shown only empty rows', () => {
+    const text = `${'x'.repeat(20)}\r\n\r\n`
     const t = replayTail(text, 10, 3)
     expect(t).toMatchObject({ from: 10, left: 0, part: true })
     expect(rowsOf(text.slice(t.from), 10)).toBe(3)

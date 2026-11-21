@@ -17,18 +17,21 @@ code was fixed, not the wording.
 - **How rows are counted** (session-helper/replay-tail.ts, new). The text is read as xterm.js 6
   reads it, as far as rows go: its parser's states (CSI, OSC, DCS, SOS, PM and APC strings, the
   8-bit forms, CAN and SUB; a character past U+009F ends a SOS, PM or APC string, or a DCS one
-  before its final byte, and what follows is text), its Unicode 6 widths, its wrap (a wide
-  character that does not fit the last column wraps early) and its cursor (carriage return,
-  backspace, tabs stopping at the last column, the column moves, CSI b, a cursor saved and
-  restored). A row is added by a line feed, vertical tab, form feed, index or next line, 7-bit and
-  8-bit, and by a wrap; a bare line feed keeps the column. What a program draws on the alternate screen takes no row and the cut
-  never lands there. Where it differs from the tab it counts more, never fewer, except after a
-  program sets its own tab stops. Vertical cursor moves add no scrollback row, so they are not
-  counted. Memory is bounded by the budget.
+  before its final byte, and what follows is text, but not a DCS string the tab ignores to its
+  end), its Unicode 6 widths, its wrap (a wide character that does not fit the last column wraps
+  early) and its cursor (carriage return, backspace, tabs stopping at the last column, the column
+  moves, CSI b, a cursor saved and restored). A row is added by a line feed, vertical tab, form
+  feed, index or next line, 7-bit and 8-bit, and by a wrap; a bare line feed keeps the column.
+  What a program draws on the alternate screen takes no row and the cut never lands there. Where
+  it differs from the tab it counts more, never fewer, with two known exceptions: after a program
+  sets its own tab stops, and a repeat (CSI b) that follows a sequence the tab ignores or ends in
+  error, or an 8-bit CSI, string introducer or ST (the tab still repeats the character before it;
+  here it is forgotten). No program is known to write the second. Vertical cursor moves add no
+  scrollback row, so they are not counted. Memory is bounded by the budget.
 - **Where the cut lands.** At a line start; inside a line only when that line alone takes as many
-  rows as the budget or more (the last line, or one before a short prompt), at the start of one of
-  its rows, so the tab never shows the notice alone while there is output. Never inside an escape
-  sequence or a character.
+  rows as the budget or more (the last line, or one before a short prompt), or when only empty
+  rows follow it, at the start of one of its rows, so the tab never shows the notice alone while
+  there is output. Never inside an escape sequence or a character.
 - **What goes across the cut.** Leaving the alternate screen whenever the part left out switched
   it (before the notice, so the notice is on the normal screen; with 47 when that part entered it
   first, which restores no cursor, since the tab can still be on it from a program whose leave is
@@ -60,7 +63,7 @@ code was fixed, not the wording.
 - **Known issues and notes.** A full-screen program now keeps its screen when it started inside the
   last 2 MiB, so the Known issues paragraph and the release line say it is drawn on the normal
   screen only when it started before them.
-- **Tests.** tests/unit/main/session-helper-replay-tail.test.ts (new, 26 cases, counted against
+- **Tests.** tests/unit/main/session-helper-replay-tail.test.ts (new, 27 cases, counted against
   @xterm/headless) and tests/unit/main/session-helper-flow.test.ts (the hold over a drop, an empty
   replay, no `ring_end`, a last line over the budget, the two screen and mode cases). Each new case
   was run against the mutant it guards and went red. Two lines were removed as dead: an empty

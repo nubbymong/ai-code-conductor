@@ -362,10 +362,11 @@ has seen; a gap is logged, and noted on the session if a hook event was lost.
   of this terminal is no longer held, so it is not shown.]", then only the
   last of the replay that the tab's scrollback keeps (10,000 lines less a
   screen and that line's own rows, cut at the start of a line, or inside a
-  line that alone takes as many or more), so that line is not pushed out of
-  reach. What the part left out did to the terminal goes across the cut: the
-  alternate screen, left before that line (and before the attribute reset)
-  whenever that part switched to it or from it, and the input modes it set.
+  line that alone takes as many or more, or that only empty rows follow), so
+  that line is not pushed out of reach. What the part left out did to the
+  terminal goes across the cut: the alternate screen, left before that line
+  (and before the attribute reset) whenever that part switched to it or from
+  it, and the input modes it set.
   Rows are counted as xterm.js counts them; what a program draws on the
   alternate screen takes none, and the cut never lands there. Once the
   replay is shown and the program still runs, it resizes the terminal one
