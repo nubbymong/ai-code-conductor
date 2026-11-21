@@ -1,4 +1,5 @@
-// The screen corpus (plan 2.1.3-beta.11, section A2; aicc_planning #341).
+// The screen corpus (plan 2.1.3-beta.11, section A2, aicc_planning #341; and
+// plan 2.1.3-beta.12, section A2, aicc_planning #353).
 //
 // helper/fixtures/screens/ holds recordings of Claude Code's and Codex's real
 // output, and of the system's default shell, on Windows (node-pty's bundled
@@ -6,8 +7,12 @@
 // P19's runs (ADR-030; helper/probes/p19-record.cjs). One recording per
 // program, system and state: <program>-<system>-<state>.json, each from the
 // session's first byte to the end of that state's own measurement by the
-// probe (its same-size resize and its nudge, one row shorter and back). Each
-// recording names the CLI and its version, the system, the size, and holds the
+// probe (its same-size resize and its nudge, one row shorter and back). A
+// state P19's second run records only (Codex's mid-reply of its short turn,
+// and the hint rows) ends 300 ms after its mark, with no resize. The program
+// is the CLI at one version: codex is Codex 0.157.1, codex170 is Codex
+// 0.170.0 (VERSION below). Each recording names the CLI and its version, the
+// system, the size, and holds the
 // chunks as node-pty handed them over (on macOS and Linux a character split
 // across two reads joins the second, as node-pty's own decoder does), with
 // the resize marks, the state marks and the keys the probe typed, in order.
@@ -32,10 +37,11 @@
 //     fails here until the rows files are written again);
 //  2. the reader of each recording's program reads the state in its name
 //     (readClaudeScreen, readCodexScreen; for the shell both read no prompt);
-//  3. the names come from the fixed sets, each recording has its rows file,
-//     each runs on from its first byte with no gap, each known misread is a
-//     recording, and the size caps hold (256 KiB a recording, 3 MiB for all
-//     of them: a longer one needs a shorter scenario, never a cut);
+//  3. the names come from the fixed sets, each recording has its rows file and
+//     its program's version, each runs on from its first byte with no gap,
+//     each known misread is a recording, each LEFT_OUT row names the fixed
+//     sets, and the size caps hold (256 KiB a recording, 3 MiB for all of
+//     them: a longer one needs a shorter scenario, never a cut);
 //  4. no recording or rows file holds a path under a home folder other than
 //     the generic ones (the test machine's own test user, GitHub's runner
 //     accounts), an e-mail shape, or anything shaped like a key.
@@ -83,41 +89,103 @@ const XTERM_VERSION = (JSON.parse(readFileSync(resolve(ROOT, 'node_modules/@xter
 
 // ── the fixed sets ──────────────────────────────────────────────────────────
 const CLI_STATES = ['first-screen', 'ready', 'mid-reply', 'after-reply'] as const
-const STATES: Record<string, readonly string[]> = { claude: CLI_STATES, codex: CLI_STATES, shell: ['after-output'] }
+/** Codex's hint rows (P19's second run, each from a launch of its own, record
+ *  only): a draft typed while a turn runs (the queue hint), the shortcuts key
+ *  rebound, the agents form of the hint row, and a warning drawn on it. */
+const HINT_STATES = ['queue-hint', 'rebound-hint', 'agents-hint', 'warning-hint'] as const
+const CODEX_STATES = [...CLI_STATES, ...HINT_STATES] as const
+const STATES: Record<string, readonly string[]> = { claude: CLI_STATES, codex: CODEX_STATES, codex170: CODEX_STATES, shell: ['after-output'] }
 const PROGRAMS = Object.keys(STATES)
 const SYSTEMS = ['windows-bundled', 'windows-system', 'macos', 'linux'] as const
 /** The ConPTY each system's recordings ran under (null: not Windows). */
 const CONPTY: Record<string, string | null> = { 'windows-bundled': 'bundled', 'windows-system': 'system', macos: null, linux: null }
-const CLI_NAME: Record<string, string> = { claude: 'Claude Code', codex: 'Codex', shell: 'default shell' }
+const CLI_NAME: Record<string, string> = { claude: 'Claude Code', codex: 'Codex', codex170: 'Codex', shell: 'default shell' }
+/** The version every recording of a program is of (null: the shell). */
+const VERSION: Record<string, string | null> = { claude: '2.1.328', codex: '0.157.1', codex170: '0.170.0', shell: null }
 
 /** What each reader must read for a state. "working" is the readers' busy.
  *  Claude Code's first screen with no account is its theme picker, drawn
  *  where the prompt box would be, so its reader reads no prompt (a picker
  *  takes the prompt's place: claude-screen.ts); Codex's is its sign-in
- *  choice, which its reader knows by "Press enter to continue". */
+ *  choice, which its reader knows by "Press enter to continue". The queue
+ *  hint shows while a turn runs, with a draft in the composer: busy. The
+ *  other hint rows are on an empty ready composer. */
+const CODEX_EXPECTED: Record<string, string> = {
+  'first-screen': 'blocked', ready: 'ready', 'mid-reply': 'busy', 'after-reply': 'ready',
+  'queue-hint': 'busy', 'rebound-hint': 'ready', 'agents-hint': 'ready', 'warning-hint': 'ready',
+}
 const EXPECTED: Record<string, Record<string, string>> = {
   claude: { 'first-screen': 'no-prompt', ready: 'ready', 'mid-reply': 'busy', 'after-reply': 'ready' },
-  codex: { 'first-screen': 'blocked', ready: 'ready', 'mid-reply': 'busy', 'after-reply': 'ready' },
+  codex: CODEX_EXPECTED,
+  codex170: CODEX_EXPECTED,
   shell: { 'after-output': 'no-prompt' },
 }
+/** The states whose prompt holds nothing when they are read. */
+const EMPTY_PROMPT = ['ready', 'after-reply', 'rebound-hint', 'agents-hint', 'warning-hint']
 
-/** States the corpus does not hold, on every system, and why. The fragment
- *  CONTEXT.d/2026-11-19-screen-corpus.md says what would bring them in. */
-const LEFT_OUT: Record<string, string> = {
-  'codex mid-reply': 'over 256 KiB: Codex wrote 434 KB to 877 KB before the end of this measurement in P19 (a shorter scenario is needed, not a cut)',
-  'codex after-reply': 'over 256 KiB: Codex wrote 0.9 MB to 1.7 MB before the end of this measurement in P19 (a shorter scenario is needed, not a cut)',
-}
+/** What the corpus does not hold, and why: a program's state on the systems
+ *  named. The fragments CONTEXT.d/2026-11-19-screen-corpus.md and
+ *  CONTEXT.d/2026-11-20-probe-p19-second-run.md say what would bring them in.
+ *  Where P19's second run recorded more than the 3 MiB cap holds, the plan's
+ *  order of keeping (2.1.3-beta.12, A2) chose: Codex 0.170.0's ready,
+ *  mid-reply and after-reply on every system; then each hint row reached, on
+ *  one Windows system and one other; then Codex 0.157.1's mid-reply and
+ *  after-reply on as many systems as fit. */
+interface LeftOut { program: string; state: string; systems: readonly string[]; why: string }
+const HINT_ELSEWHERE = 'kept on one Windows system (the bundled ConPTY, which the app gives Codex sessions) and one other (macOS) by the order of keeping; P19\'s second run recorded the same row here too'
+const LEFT_OUT: LeftOut[] = [
+  { program: 'codex', state: 'agents-hint', systems: SYSTEMS, why: 'not reached: Codex 0.157.1 does not draw the agents form of the hint row (P19\'s second run waited 60 s on every system; the screen showed the ready composer with "? for shortcuts")' },
+  { program: 'codex', state: 'after-reply', systems: ['linux'], why: 'over the 3 MiB corpus cap: last in the order of keeping (243,915 bytes; 173,132 were left)' },
+  { program: 'codex170', state: 'first-screen', systems: SYSTEMS, why: 'not in the plan\'s order of keeping, so not added (P19\'s second run recorded it: the sign-in choice, as Codex 0.157.1\'s; the four are 56,262 bytes, and 173,132 bytes of the 3 MiB cap were left)' },
+  ...['queue-hint', 'rebound-hint', 'warning-hint'].map((state) => ({ program: 'codex', state, systems: ['windows-system', 'linux'], why: HINT_ELSEWHERE })),
+  ...HINT_STATES.map((state) => ({ program: 'codex170', state, systems: ['windows-system', 'linux'], why: HINT_ELSEWHERE })),
+]
+const leftOutFor = (n: { program: string; system: string; state: string }, rows: readonly LeftOut[] = LEFT_OUT): LeftOut | undefined =>
+  rows.find((l) => l.program === n.program && l.state === n.state && l.systems.includes(n.system))
+/** The LEFT_OUT rows that name a program, a state or a system outside the fixed sets. */
+const strayLeftOut = (rows: readonly LeftOut[]): string[] =>
+  rows.filter((l) => !STATES[l.program]?.includes(l.state) || l.systems.length === 0 || l.systems.some((s) => !(SYSTEMS as readonly string[]).includes(s))).map((l) => `${l.program} ${l.state} on ${l.systems.join(', ')}`)
 
 /** A recording a reader misreads: its name, the ticket that fixes the
  *  reader, and the answer the reader gives on it now. Each stays listed until
  *  its reader is fixed; the test then fails until the line is removed, and
  *  fails too if the reader starts to give another wrong answer.
- *  None is listed now. The four codex-*-ready recordings were, until Codex's
- *  reader learned the "? for shortcuts" row Codex 0.157.1 draws under the
- *  footer at its ready composer (aicc_planning#349, in 2.1.3-beta.10): each
- *  read unrecognised before that fix and reads ready after it. */
+ *  The four codex-*-ready recordings of Codex 0.157.1 were listed until
+ *  Codex's reader learned the "? for shortcuts" row drawn under the footer
+ *  at its ready composer (aicc_planning#349, in 2.1.3-beta.10). The 33
+ *  recordings P19's second run added all read unrecognised until the reader
+ *  learned the other rows recorded there (aicc_planning#357, in
+ *  2.1.3-beta.12, tests/unit/shared/codex-screen-hint-rows.test.ts); these
+ *  are left, all still unrecognised:
+ *  - where the thread title and the working folder do not fit in 120 columns,
+ *    Codex 0.170.0's footer wraps onto a second row (its macOS and Windows
+ *    screens after the prompt is sent; their temporary folders are longer than
+ *    Linux's), and a wrapped footer still reads unrecognised, whatever row is
+ *    under it;
+ *  - the others end in a warning count at the right of the hint row (both
+ *    versions; P19 drew it with a config whose MCP server program does not
+ *    exist, and the screens after a prompt show it too: with the stand-in
+ *    model both versions drew it from the first prompt on), a row the reader
+ *    does not take: once a text is typed at an idle
+ *    composer Codex keeps the count alone under the footer, which no reader
+ *    that confirms a typed text takes. The five mid-reply screens whose
+ *    footer is one row are among them: no mid-reply screen holds an "esc to
+ *    interrupt" row, the reader's only sign of busy (Codex drew its working
+ *    row once, after Enter, and not while the reply streamed), and each ends
+ *    in the same rows as its after-reply screen. */
 interface Misread { ticket: string; reads: string }
-const KNOWN_MISREADS: Record<string, Misread> = {}
+const UNRECOGNISED: Misread = { ticket: 'aicc_planning#357', reads: 'unrecognised' }
+const KNOWN_MISREADS: Record<string, Misread> = Object.fromEntries([
+  // Codex 0.170.0 after a prompt on macOS and Windows: the footer wraps.
+  'codex170-windows-bundled-mid-reply', 'codex170-windows-system-mid-reply', 'codex170-macos-mid-reply',
+  'codex170-windows-bundled-after-reply', 'codex170-windows-system-after-reply', 'codex170-macos-after-reply',
+  'codex170-windows-bundled-queue-hint', 'codex170-macos-queue-hint',
+  // A warning count at the right of the hint row, under a footer of one row.
+  'codex170-windows-bundled-warning-hint', 'codex170-macos-warning-hint', 'codex170-linux-after-reply', 'codex170-linux-mid-reply',
+  'codex-windows-bundled-warning-hint', 'codex-macos-warning-hint',
+  'codex-windows-bundled-after-reply', 'codex-windows-system-after-reply', 'codex-macos-after-reply',
+  'codex-windows-bundled-mid-reply', 'codex-windows-system-mid-reply', 'codex-macos-mid-reply', 'codex-linux-mid-reply',
+].map((name) => [name, UNRECOGNISED]))
 
 const NAMES = PROGRAMS.flatMap((p) => SYSTEMS.flatMap((s) => STATES[p].map((st) => ({ name: `${p}-${s}-${st}`, program: p, system: s, state: st }))))
 const NAME_BY = new Map(NAMES.map((n) => [n.name, n]))
@@ -245,7 +313,7 @@ function xtermProblem(name: string, committed: unknown, loaded: string = XTERM_V
 /** What the program's reader reads on a screen; for the shell, both readers. */
 function readerAnswer(program: string, lines: ScreenLine[]): { screen: string; text: string } {
   if (program === 'claude') return readClaudeScreen(lines)
-  if (program === 'codex') return readCodexScreen(lines)
+  if (program === 'codex' || program === 'codex170') return readCodexScreen(lines)
   const claude = readClaudeScreen(lines)
   const codex = readCodexScreen(lines)
   return claude.screen === codex.screen ? claude : { screen: `${claude.screen} (Claude Code's reader), ${codex.screen} (Codex's)`, text: '' }
@@ -258,7 +326,7 @@ function readsAsNamed(name: string, lines: ScreenLine[]): string | null {
   const want = EXPECTED[n.program][n.state]
   const got = readerAnswer(n.program, lines)
   if (got.screen !== want) return `${name}: read ${got.screen}, its name says ${n.state} (${want})`
-  if ((n.state === 'ready' || n.state === 'after-reply') && got.text !== '') return `${name}: the prompt holds ${JSON.stringify(got.text)}, not nothing`
+  if (EMPTY_PROMPT.includes(n.state) && got.text !== '') return `${name}: the prompt holds ${JSON.stringify(got.text)}, not nothing`
   return null
 }
 
@@ -321,7 +389,7 @@ function structureProblems(name: string, rec: Recording): string[] {
   const want = { program: n.program, system: n.system, state: n.state, cli: CLI_NAME[n.program], conpty: CONPTY[n.system] }
   const fields = rec as unknown as Record<string, unknown>
   for (const [k, v] of Object.entries(want)) if (fields[k] !== v) out.push(`${k} is ${JSON.stringify(fields[k])}, its name says ${JSON.stringify(v)}`)
-  if (n.program === 'shell' ? rec.version !== null : !/^\d+\.\d+\.\d+$/.test(String(rec.version))) out.push(`version ${JSON.stringify(rec.version)}`)
+  if (rec.version !== VERSION[n.program]) out.push(`version ${JSON.stringify(rec.version)}, its program's is ${JSON.stringify(VERSION[n.program])}`)
   if (!Number.isInteger(rec.cols) || !Number.isInteger(rec.rows) || rec.cols < 2 || rec.rows < 2) out.push(`size ${rec.cols}x${rec.rows}`)
   if (!Array.isArray(rec.events) || rec.events.length === 0) return [...out, 'no events']
   // From the session's first byte, nothing cut: each event's offset is the
@@ -371,10 +439,10 @@ describe('the screen corpus (helper/fixtures/screens)', () => {
       expect(files.filter((f) => f.endsWith('.rows.json')).map((f) => f.slice(0, -'.rows.json'.length))).toEqual(RECORDINGS)
     })
 
-    it('every program, system and state is in the corpus or in LEFT_OUT, never both', () => {
-      const missing = NAMES.filter((n) => !RECORDINGS.includes(n.name) && !LEFT_OUT[`${n.program} ${n.state}`]).map((n) => n.name)
-      const both = NAMES.filter((n) => RECORDINGS.includes(n.name) && LEFT_OUT[`${n.program} ${n.state}`]).map((n) => n.name)
-      expect({ missing, both }).toEqual({ missing: [], both: [] })
+    it('every program, system and state is in the corpus or in LEFT_OUT, never both, and LEFT_OUT names the fixed sets', () => {
+      const missing = NAMES.filter((n) => !RECORDINGS.includes(n.name) && !leftOutFor(n)).map((n) => n.name)
+      const both = NAMES.filter((n) => RECORDINGS.includes(n.name) && leftOutFor(n)).map((n) => n.name)
+      expect({ missing, both, stray: strayLeftOut(LEFT_OUT) }).toEqual({ missing: [], both: [], stray: [] })
     })
 
     it('every known misread is a recording', () => {
@@ -446,6 +514,24 @@ describe('the screen corpus (helper/fixtures/screens)', () => {
       const listed = (name: string): Record<string, Misread> => ({ [name]: { ticket: 'T', reads: 'unrecognised' } })
       expect(unlistedMisreads(listed(RECORDINGS[0]), RECORDINGS)).toEqual([])
       expect(unlistedMisreads(listed('codex-linux-gone'), RECORDINGS)).toEqual(['codex-linux-gone'])
+    })
+
+    it('case 3: a recording of another version than its program\'s is caught', () => {
+      const name = RECORDINGS.find((n) => n.startsWith('codex170-')) as string
+      const rec = readRecording(name)
+      expect(structureProblems(name, rec)).toEqual([])
+      expect(structureProblems(name, { ...rec, version: '0.157.1' })).toEqual(['version "0.157.1", its program\'s is "0.170.0"'])
+    })
+
+    it('case 3: a LEFT_OUT row holds only on its systems, and one outside the fixed sets is caught', () => {
+      const row: LeftOut = { program: 'codex', state: 'after-reply', systems: ['linux'], why: 'x' }
+      expect(leftOutFor({ program: 'codex', system: 'linux', state: 'after-reply' }, [row])).toBe(row)
+      expect(leftOutFor({ program: 'codex', system: 'macos', state: 'after-reply' }, [row])).toBeUndefined()
+      expect(strayLeftOut([row])).toEqual([])
+      expect(strayLeftOut([{ ...row, state: 'gone' }])).toHaveLength(1)
+      expect(strayLeftOut([{ ...row, program: 'codex171' }])).toHaveLength(1)
+      expect(strayLeftOut([{ ...row, systems: ['windows'] }])).toHaveLength(1)
+      expect(strayLeftOut([{ ...row, systems: [] }])).toHaveLength(1)
     })
 
     it('case 4: a home folder, an e-mail shape and a key shape are found; the generic homes are not', () => {

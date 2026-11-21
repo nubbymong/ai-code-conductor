@@ -64,6 +64,13 @@
  * its holder launched it and before its launch line is typed, and a Codex
  * session's launch is given the relay form (toolRoute). One that cannot be
  * switched keeps the loopback route, with one log line.
+ *
+ * 2.1.3-beta.12 (plan section B2): when the link to a switched session's
+ * holder drops and the terminal attaches again, the holder gives back the
+ * streams it kept (plan section B1). Each is served as a new one is: under
+ * the tab's id, for the launch that was switched, and only while the tool
+ * host still has the session's record. A stream served on a connection that
+ * attached again has one log line.
  */
 import { execFile } from 'child_process'
 import * as fs from 'fs'
@@ -1019,6 +1026,11 @@ export class SessionHelperManager implements MachinesSource {
    * that was not switched, is not served. Each `mcp` goes to its stream's
    * link, and the stream's `mcp.close`, or the connection's close, ends it.
    * None for a run of the app's own (spawnRun).
+   *
+   * The switch is kept per launch, not per connection: a stream the holder
+   * gives back on the connection that attached again (one it kept while the
+   * link was down) is served as any other, by a link of that connection, with
+   * one log line for each such stream.
    */
   private toolRoute(ctx: AgentSpawnContext, sid: string, launch: { file: string; args: SpawnArgs; opts: SpawnOptions }): ToolRoute | undefined {
     if (ctx.run) return undefined
@@ -1040,8 +1052,11 @@ export class SessionHelperManager implements MachinesSource {
       if (!deps.serving()) { stays('the tool host is not serving'); return null }
       return { helperPath: exe, store: this.store, sid }
     }
+    /** The connections opened to this launch's holder: the first is the launch's. */
+    let connections = 0
     const route: ToolRoute = {
       connected: (conn) => {
+        const again = connections++ > 0
         const links = new Map<number, StreamLink>()
         // The connection reports these only when it acked `mcp`, and only for
         // a stream the holder opened on it (connection.ts): that is the guard.
@@ -1062,6 +1077,8 @@ export class SessionHelperManager implements MachinesSource {
           if (!served) {
             link.close()
             this.deps.log(`[session-helper] ${appId}: a tool stream its holder opened was not served`)
+          } else if (again) {
+            this.deps.log(`[session-helper] ${appId}: a tool stream is served on the connection that attached again (one its holder kept while the link was down, or a new one)`)
           }
         })
         conn.on('mcp', (stream, m) => links.get(stream)?.deliver(m))

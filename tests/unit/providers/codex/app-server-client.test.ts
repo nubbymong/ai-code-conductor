@@ -161,7 +161,7 @@ describe('the answer (ADR-022 bounds 3, 5, 8)', () => {
   it('reads a line split across chunks, with CRLF, and ignores notifications', () => {
     const { c } = client()
     c.begin()
-    const text = line({ method: 'account/updated', params: {} }) + initAnswer().replace('\n', '\r\n') + readAnswer()
+    const text = line({ method: 'account/updated', params: {} }) + initAnswer().replace(/\n/g, '\r\n') + readAnswer()
     for (let i = 0; i < text.length; i += 7) c.receive(text.slice(i, i + 7))
     expect(c.verdict?.ok).toBe(true)
   })

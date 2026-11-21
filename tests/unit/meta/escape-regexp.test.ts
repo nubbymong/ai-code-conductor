@@ -8,7 +8,7 @@ const SPECIAL = '.*+?^${}()|[]\\'
 
 describe('escapeRegExp', () => {
   it('matches each special character, and a text of all of them, as itself', () => {
-    for (const text of [...SPECIAL, SPECIAL, 'registerLogsWipeHandlers(getWindow)', '.mark', 'WP1.11']) {
+    for (const text of [...SPECIAL, SPECIAL, 'registerLogsWipeHandlers(getWindow)', '.mark', 'WP1.11', '.p2-inner', 'shot-tokenomics.png', 'ccc-probe-legacy-1.exe', 'ssh-credentials.json', '.claude.json']) {
       for (const flags of ['', 'u']) {
         const re = new RegExp(`^${escapeRegExp(text)}$`, flags)
         expect(re.test(text), `${text} /${flags}`).toBe(true)

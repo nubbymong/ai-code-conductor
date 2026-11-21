@@ -395,7 +395,7 @@ fn a_detached_holder_is_listed_launched_attached_again_and_ended() {
 
     let mut first = App::connect(&rec, true);
     assert_eq!(first.client.hello.state, "new");
-    assert_eq!(first.client.hello.caps, vec!["core".to_string(), "local".to_string(), "hooks".to_string(), "mcp".to_string()]);
+    assert_eq!(first.client.hello.caps, vec!["core".to_string(), "local".to_string(), "hooks".to_string(), "mcp".to_string(), "away".to_string(), "screen".to_string()]);
     let id = first.id();
     expect_t(&first.call(msg("ping", id, vec![])), "pong");
     let id = first.id();

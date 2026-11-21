@@ -27,11 +27,35 @@
  * streams the attached connection carried end when it lets go, the app not
  * told.
  *
+ * The ring (2.1.3-beta.12, plan section A1) may no longer hold the start of
+ * the output (`ringStart`, `forget`): an attach that asks for an offset older
+ * than it holds is answered from the ring's start with `truncated` true, as a
+ * real holder answers one once 2 MiB have gone past. A replay can be cut
+ * short by a close (`cutReplay`), as a holder closes a connection that fell
+ * behind in the middle of one.
+ *
  * The away clock (section 15) runs only when a test gives the helper one
  * (`awayClock`): then a holder with no connection attached ends itself `away`
  * seconds after its start or after the last attached connection let go,
  * checked at each list, each connection and each tick(), as the holder's own
  * timer would. Without one, no holder ends by itself.
+ *
+ * Kept tool streams (2.1.3-beta.12, plan sections B1 and B2): a stream opened
+ * with `openToolStream({ away: true })` stands for a relay that acked `away`.
+ * When the attached connection lets go, that stream is kept with no app side
+ * (`keptStreams`) and its relay is told `mcp.away`; one opened while no
+ * connection takes tool streams is kept the same way. While a stream is kept,
+ * what `relay` is given is held, as that relay holds a call. When a
+ * connection that acked `mcp` attaches and the program runs, each kept
+ * stream is given to it with `mcp.open` on its own number, its relay is told
+ * `mcp.back`, and the held messages go in the order they came. A session
+ * that ended keeps nothing; one whose program has exited gives nothing back
+ * (its kept streams end at the next attach here, at the exit in a real
+ * holder). Each thing a relay was told is in `relayTold`. Not modelled: the
+ * relay's 30 s hold, its bounds and its fixed answer, the notifications it
+ * drops while away (here every message `relay` is given while a stream is
+ * kept is held and sent after `mcp.back`), and the 8 streams a session may
+ * have (B1's Rust tests own those).
  */
 import { randomBytes } from 'crypto'
 import * as fs from 'fs'
@@ -99,6 +123,9 @@ export class FakeHolder {
   child: 'waiting' | 'running' | 'exited' = 'waiting'
   code: number | null = null
   ring = Buffer.alloc(0)
+  /** The output offset of the ring's first byte: what came before it is no
+   *  longer held (a real ring keeps the last 2 MiB). Raised by forget(). */
+  ringStart = 0
   attached: FakeConn | null = null
   attaches = 0
   ended = false
@@ -120,6 +147,10 @@ export class FakeHolder {
   busies = 0
   /** Answers term.attach; false leaves it unanswered. */
   answerAttach = true
+  /** Set: the next attach's replay stops after `at` bytes and its connection
+   *  is closed there (`busy`), as one that fell behind is; `then` runs after
+   *  the close. Once. */
+  cutReplay: { at: number; then?: () => void } | null = null
   /** Answers ping; false leaves it unanswered. */
   answerPing = true
   /** How long a pong waits. */
@@ -153,41 +184,100 @@ export class FakeHolder {
   private lastStream = 0
   /** Each `mcp` the app sent on a stream it was given, in order. */
   readonly toolSent: Array<{ stream: number; message: unknown }> = []
+  /** Tool streams whose relay acked `away`. */
+  private readonly awayStreams = new Set<number>()
+  /** Tool streams kept with no app side, by number, each with what its relay holds meanwhile, in order. */
+  readonly keptStreams = new Map<number, unknown[]>()
+  /** What each relay was told, in order. */
+  readonly relayTold: Array<{ stream: number; t: 'mcp.away' | 'mcp.back' | 'mcp.close' }> = []
 
   constructor(readonly sid: string, readonly label: string, readonly store: string) {
     this.endpoint = `\\\\.\\pipe\\aicc-helper-${sid}-${hex(16)}`
   }
 
   /** The attached connection let go: the away clock starts, and the tool
-   *  streams it carried end (each relay is told; it is not). */
+   *  streams it carried end (each relay is told `mcp.close`; the app is not),
+   *  except one whose relay acked `away` while the program runs, which is
+   *  kept. */
   detached(): void {
-    for (const [n, c] of [...this.toolStreams]) if (c === this.attached) this.toolStreams.delete(n)
+    for (const [n, c] of [...this.toolStreams]) {
+      if (c !== this.attached) continue
+      this.toolStreams.delete(n)
+      if (this.awayStreams.has(n) && this.child !== 'exited') this.keep(n)
+      else { this.awayStreams.delete(n); this.relayTold.push({ stream: n, t: 'mcp.close' }) }
+    }
     this.attached = null
     this.awaySince = this.awayClock ? this.awayClock() : null
   }
 
   /** A relay opens a tool stream: the holder numbers it and tells the attached
-   *  connection, if that one acked `mcp`. Its number, or null (`not-connected`). */
-  openToolStream(): number | null {
+   *  connection, if that one acked `mcp`. Its number, or null (`not-connected`).
+   *  `away`: the relay acked `away`, so with no such connection the stream is
+   *  kept (its relay told `mcp.away`) in place of `not-connected`. */
+  openToolStream(opts: { away?: boolean } = {}): number | null {
     const to = this.attached
-    if (!to || !to.ackedCaps.includes('mcp')) return null
+    const taking = !!to && to.ackedCaps.includes('mcp')
+    if (!taking && !opts.away) return null
     const n = ++this.lastStream
-    this.toolStreams.set(n, to)
-    to.sendJson({ t: 'mcp.open', stream: n })
+    if (opts.away) this.awayStreams.add(n)
+    if (!taking) {
+      this.keep(n)
+      return n
+    }
+    this.toolStreams.set(n, to!)
+    to!.sendJson({ t: 'mcp.open', stream: n })
     return n
   }
 
-  /** The relay sends one message on stream `n`. */
+  /** The relay sends one message on stream `n`; on a kept stream it holds it. */
   relay(n: number, message: unknown): void {
+    const held = this.keptStreams.get(n)
+    if (held) {
+      held.push(message)
+      return
+    }
     this.toolStreams.get(n)?.sendJson({ t: 'mcp', stream: n, message })
   }
 
-  /** The relay ends stream `n`: the app is told. */
+  /** The relay ends stream `n`: the app is told, if a connection carries it. */
   endToolStream(n: number): void {
+    this.awayStreams.delete(n)
+    if (this.keptStreams.delete(n)) return
     const to = this.toolStreams.get(n)
     if (!to) return
     this.toolStreams.delete(n)
     to.sendJson({ t: 'mcp.close', stream: n })
+  }
+
+  /** Stream `n` is kept with no app side, and its relay told `mcp.away`. */
+  private keep(n: number): void {
+    this.keptStreams.set(n, [])
+    this.relayTold.push({ stream: n, t: 'mcp.away' })
+  }
+
+  /** The kept streams end (the program exited, or the session ended): each relay is told. */
+  private endKept(): void {
+    for (const n of [...this.keptStreams.keys()]) {
+      this.keptStreams.delete(n)
+      this.awayStreams.delete(n)
+      this.relayTold.push({ stream: n, t: 'mcp.close' })
+    }
+  }
+
+  /** `conn` attached: when it acked `mcp` and the program runs, each kept
+   *  stream is given to it with `mcp.open`, its relay is told `mcp.back`,
+   *  and what that relay held goes, in the order it came. */
+  private giveBack(conn: FakeConn): void {
+    if (this.keptStreams.size === 0) return
+    if (this.child === 'exited') return this.endKept()
+    if (!conn.ackedCaps.includes('mcp')) return
+    for (const [n, held] of [...this.keptStreams]) {
+      this.keptStreams.delete(n)
+      this.toolStreams.set(n, conn)
+      conn.sendJson({ t: 'mcp.open', stream: n })
+      this.relayTold.push({ stream: n, t: 'mcp.back' })
+      for (const message of held) this.relay(n, message)
+    }
   }
 
   /** The away clock ran out with nothing attached: the holder ends its session, as term.end does. */
@@ -201,6 +291,7 @@ export class FakeHolder {
   private endSelf(): void {
     this.ended = true
     this.child = 'exited'
+    this.endKept()
     try { fs.rmSync(path.join(this.store, `${this.sid}.json`), { force: true }) } catch { /* gone */ }
   }
 
@@ -241,7 +332,10 @@ export class FakeHolder {
           continue
         }
         this.requests.push(m)
+        const attaches = this.attaches
         this.answer(conn, m)
+        // The kept tool streams go to a connection that attached (after its reply and replay).
+        if (this.attaches > attaches && this.attached === conn) this.giveBack(conn)
       }
     })
     mine.on('end', () => conn.close())
@@ -290,7 +384,10 @@ export class FakeHolder {
         if (!this.launch) return err('not-found', 'nothing launched')
         if (!this.answerAttach) return
         const from = Number(m.from)
-        if (from > this.ring.length) return err('bad-field', 'from is past the ring')
+        const ringEnd = this.ringStart + this.ring.length
+        if (from > ringEnd) return err('bad-field', 'from is past the ring')
+        // Older than the ring holds: answered from the ring's start, `truncated` true.
+        const start = Math.max(from, this.ringStart)
         if (this.attached && this.attached !== conn) {
           const old = this.attached
           old.sendJson({ t: 'error', code: 'replaced', text: 'a newer connection attached to this terminal' })
@@ -299,8 +396,18 @@ export class FakeHolder {
         this.attached = conn
         this.awaySince = null
         this.attaches++
-        conn.sendJson({ t: 'term.attached', re, from, ring_start: 0, ring_end: this.ring.length, truncated: false, running: this.child !== 'exited', ...(this.child === 'exited' ? { code: this.code } : {}) })
-        conn.sendRaw(this.ring.subarray(from))
+        conn.sendJson({ t: 'term.attached', re, from: start, ring_start: this.ringStart, ring_end: ringEnd, truncated: start > from, running: this.child !== 'exited', ...(this.child === 'exited' ? { code: this.code } : {}) })
+        const replay = this.ring.subarray(start - this.ringStart)
+        const cut = this.cutReplay
+        if (cut && cut.at < replay.length) {
+          this.cutReplay = null
+          conn.sendRaw(replay.subarray(0, cut.at))
+          conn.sendJson({ t: 'error', code: 'busy', text: 'this connection fell 256 chunks behind the output' })
+          conn.close()
+          cut.then?.()
+          return
+        }
+        conn.sendRaw(replay)
         // Waiting hook events go after the reply and its replay.
         if (conn.ackedCaps.includes('hooks')) for (const e of this.waitingEvents.splice(0)) conn.sendJson(e)
         return
@@ -361,6 +468,13 @@ export class FakeHolder {
   outputBytes(b: Buffer): void {
     this.ring = Buffer.concat([this.ring, b])
     this.attached?.sendRaw(b)
+  }
+
+  /** The ring forgets its first `n` bytes, as a full one does. */
+  forget(n: number): void {
+    const k = Math.min(n, this.ring.length)
+    this.ring = this.ring.subarray(k)
+    this.ringStart += k
   }
 
   /** The program ends by itself. */

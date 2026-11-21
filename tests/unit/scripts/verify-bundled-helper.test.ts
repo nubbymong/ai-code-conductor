@@ -5,6 +5,7 @@ import { join, resolve } from 'path'
 // Plain ESM with main() behind an entry-point check: importing it runs nothing.
 import { bundledHelperProblems, cargoVersion, findResourcesDirs, helperExeName } from '../../../scripts/verify-bundled-helper.mjs'
 import { buildPe, STATIC_HELPER, TODAYS_HELPER } from './pe-image'
+import { escapeRegExp } from '../../helpers/escape-regexp'
 
 // The packaging check that the installer carries the session helper
 // (2.1.3-beta.6, plan section B), and on Windows that the packaged copy
@@ -88,7 +89,7 @@ describe('verify-bundled-helper: the installer carries the session helper', () =
   it('a packaged Windows helper that imports a C runtime DLL fails before it is run (the signed copy that ships is checked)', () => {
     const { problems, version } = check('win32', { [exe('win32')]: WIN_TODAY })
     expect(problems).toHaveLength(1)
-    expect(problems[0]).toMatch(new RegExp(`^${exe('win32').replace(/[\\.]/g, '\\$&')} does not carry its own C runtime: it imports VCRUNTIME140\\.dll, api-ms-win-crt-runtime-l1-1-0\\.dll, `))
+    expect(problems[0]).toMatch(new RegExp(`^${escapeRegExp(exe('win32'))} does not carry its own C runtime: it imports VCRUNTIME140\\.dll, api-ms-win-crt-runtime-l1-1-0\\.dll, `))
     expect(problems[0]).toContain("Windows cannot start it on a PC without Microsoft's Visual C++ runtime.")
     expect(version).not.toHaveBeenCalled()
     const one = check('win32', { [exe('win32')]: Buffer.from(buildPe({ imports: ['kernel32.dll', 'VCRUNTIME140.dll'] }).bytes) })

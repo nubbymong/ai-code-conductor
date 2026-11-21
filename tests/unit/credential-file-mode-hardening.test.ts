@@ -3,6 +3,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { mkdtempSync, rmSync, readFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
+import { escapeRegExp } from '../helpers/escape-regexp'
 
 // Regression suite for the credential/token file-mode hardening: several writers
 // wrote token-bearing files with a bare writeFileSync — non-atomic and at the
@@ -54,7 +55,7 @@ const isPosix = process.platform !== 'win32'
 const UUID = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
 
 function stagingWrite(base: string): { path: string; opts: { flag?: string; mode?: number } } | undefined {
-  const re = new RegExp(base.replace(/\./g, '\\.') + '\\.' + UUID + '\\.tmp$')
+  const re = new RegExp(escapeRegExp(base) + '\\.' + UUID + '\\.tmp$')
   return rec.writes.find((w) => re.test(w.path)) as never
 }
 function directWrite(base: string): boolean {

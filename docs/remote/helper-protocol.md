@@ -348,9 +348,19 @@ has seen; a gap is logged, and noted on the session if a hook event was lost.
   not answer (section 3), a host-key question or change, `hash-mismatch`,
   `proto-mismatch`, `replaced`, `bad-frame`, `unknown-type` or malformed
   input, nor for a one-time-code device. It is never a user-started launch.
-- **Terminal reattach (R9).** From a 2 MiB output ring the app clears the view
-  and runs `attach --from <ring_start>`: reset, replay at the recorded size,
-  then live; the resize makes the CLI redraw. A too-short ring is reported.
+- **Terminal reattach (R9).** From a 2 MiB output ring the holder replays
+  what follows the offset the app attaches from: the byte after the last one
+  it showed, or 0 for a terminal it takes over. When the ring no longer holds
+  that offset, the holder answers from `ring_start` with `truncated` true
+  (section 15, Attach). What
+  the app on This computer does then (2.1.3-beta.12): it does not clear the
+  view or reset the terminal. It writes the cancel character, the attribute
+  reset and one line of its own, "[Earlier output of this terminal is no
+  longer held, so it is not shown.]", then the replay. Once the replay is
+  shown and the program still runs, it resizes the terminal one row shorter
+  and, 300 ms later, back to the tab's size, which makes the program redraw
+  (probe P19). The screen in use and the input modes the program set before
+  `ring_start` are not restored yet.
 
 ## 12 Strict validation and budgets
 
@@ -734,12 +744,14 @@ for the Machines page.
 
 **A connection.** The holder first writes its hello line, then a line end:
 `caps` is `["core","local"]` in a holder from before hook events,
-`["core","local","hooks"]` from 2.1.3-beta.8 and
-`["core","local","hooks","mcp"]` from 2.1.3-beta.10, `session.state` is `new`
+`["core","local","hooks"]` from 2.1.3-beta.8,
+`["core","local","hooks","mcp"]` from 2.1.3-beta.10 and
+`["core","local","hooks","mcp","away","screen"]` from 2.1.3-beta.12, `session.state` is `new`
 before a launch and `live` after. The app's first frame must be a `hello.ack` with
 exactly `t`, `proto` and `caps`: `proto` 1, `caps` holding `core` and nothing
 the holder did not offer; `local` allows the messages below, `hooks` the hook
-events and `mcp` the tool streams (both below). A first frame that is raw, or
+events, `mcp` the tool streams, `away`, beside `mcp`, kept tool streams and
+`screen` the screen reads (all below). A first frame that is raw, or
 JSON off channel 0, gets `bad-frame`; another type `unknown-type`, another
 version `proto-mismatch`, anything else `bad-field`; then the holder closes the
 connection. With no `hello.ack` in 10 s it sends `timeout` and
@@ -783,9 +795,13 @@ the last column of section 8's table):
 | `term.exit` | none | `{code}`, from the holder to the attached connection, once: after the program's last output, and also when another connection ended the session, which then closes this one |
 | `hook.event` | `hook.taken` `{re, seq}` | `{id, kind, payload}`; only on a connection that acked `hooks`, attached or not; while the session is ending, `not-found` (hook events, below) |
 | `event` | none | `{seq, kind, payload, lost?}`, from the holder to the attached connection, only if that connection acked `hooks` (hook events, below) |
-| `mcp.open` | none | `{stream}`; from a relay that is not attached, for its one stream, and from the holder to the attached connection that acked `mcp`, on the holder's number for it; with no such connection, `not-connected` (tool streams, below) |
-| `mcp` | none | `{stream, message}`, one JSON-RPC message: from a relay on its stream, and from the attached connection on a stream it was sent `mcp.open` for; each passed to the other side on that side's number (tool streams, below) |
+| `mcp.open` | none | `{stream}`; from a relay that is not attached, for its one stream, and from the holder to the attached connection that acked `mcp`, on the holder's number for it, for a new stream or a kept one it is given; with no such connection, `not-connected`, or `mcp.away` for a relay that acked `away` while the program runs (tool streams, below) |
+| `mcp` | none | `{stream, message}`, one JSON-RPC message: from a relay on its stream, and from the attached connection on a stream it was sent `mcp.open` for; each passed to the other side on that side's number; from a relay while its stream is kept, `not-connected` (tool streams, below) |
 | `mcp.close` | none | `{stream}`; from a relay, and from the holder to whichever side is still there when the other ends (tool streams, below) |
+| `mcp.away` | none | `{stream}`, from the holder to a relay that acked `away`, on the relay's number: no connection takes its stream now, and the stream is kept (kept streams, below) |
+| `mcp.back` | none | `{stream}`, from the holder to a relay that acked `away`, on the relay's number: a connection takes its kept stream again (kept streams, below) |
+| `screen.read` | `screen.rows` `{re, cols, rows, cursor, modes, cut, lines}` | `{id}`; only on a connection that acked `screen`, attached or not, and never from a relay (`unknown-type`); before a launch, or while the session is ending, `not-found` (screen reads, below) |
+| `screen.tail` | `screen.lines` `{re, cut, lines}` | `{id, count}`, `count` from 1 to 200; as `screen.read` (screen reads, below) |
 
 Ids are even, as in section 9, and at most 2^53 - 1. Every message has exactly
 its fields; `code` is present only once the program has exited. The tool
@@ -849,7 +865,11 @@ stream messages carry no id: a refusal of one has no `re`.
   helper. The app does not yet send either field or copy those files.
 - **Attach.** `from` is an offset in the output, as in section 11: past
   `ring_end` is `bad-field`; older than the ring holds is answered from
-  `ring_start` with `truncated` true. Typed input goes to the holder as raw
+  `ring_start` with `truncated` true. The app on This computer then shows a
+  line of its own saying earlier output is not shown, the replay after it,
+  and, while the program runs, asks it to redraw by a resize one row shorter
+  and back (section 11); it does not yet restore the screen in use or the
+  input modes set before `ring_start`. Typed input goes to the holder as raw
   frames on channel 1, accepted only from the attached connection: raw bytes on
   any other connection or channel are `bad-frame` and a close. Typed input is
   queued for the program and never waited on: while at most 64 frames of typed
@@ -1006,7 +1026,9 @@ hello. From 2.1.3-beta.11 the app acks it and names the relay to a held
 session's CLI, behind the agent sessions' setting ("What the app wires",
 below). The holder only numbers a stream
 and passes its messages on: it reads no message, and runs, opens and writes
-nothing for one. Fixtures: the `mcp` part of `helper/fixtures/local.json`.
+nothing for one. Fixtures: the `mcp` part of `helper/fixtures/local.json`, and
+for kept streams (capability `away`, from 2.1.3-beta.12, the tool half of
+protocol change 9) its `away` part.
 
 - **The relay mode.** A CLI starts, as a tool server on its standard input
   and output,
@@ -1023,15 +1045,19 @@ nothing for one. Fixtures: the `mcp` part of `helper/fixtures/local.json`.
   `session`, with 2 s to connect and 2 s for the whole hello line. A holder
   whose hello does not offer `mcp` (one
   from before 2.1.3-beta.10) is sent nothing, not even the ack. Otherwise the
-  relay sends `hello.ack` with `caps` `["core","local","mcp"]`, `mcp.open`
+  relay sends `hello.ack` with `caps` `["core","local","mcp"]`, and
+  `["core","local","mcp","away"]` when the hello offers `away` (a holder
+  from before 2.1.3-beta.12 is sent nothing new), `mcp.open`
   for its one stream, number 1, and a `ping`: the holder answers a
   connection's messages in order, so the `pong` says the open was taken (a
   refusal comes before it), and the relay reads nothing on standard input
   until it comes, 10 s at most. Then it sends each line it reads as one
   `mcp`, and writes the message of each `mcp` the holder sends on that stream
   as one line on standard output, as compact JSON. It passes whatever method
-  comes, in the order it came, and waits for no `initialize`. It pings every
-  15 s, so the connection is not dropped as idle. Standard output is written
+  comes, in the order it came, and waits for no `initialize`. It pings when
+  it has sent nothing for 15 s, so the connection is not dropped as idle.
+  With `away` acked it holds and answers some calls while the app is away
+  (kept streams, below). Standard output is written
   by a thread of its own, so the relay sees the end of its stream even while
   the CLI is not reading; at most 64 MiB of lines wait for the CLI (one more
   and the relay exits 1), and once the holder ends the stream or the
@@ -1043,9 +1069,11 @@ nothing for one. Fixtures: the `mcp` part of `helper/fixtures/local.json`.
   next line read; a line over 1 MiB is read to its end and dropped the same
   way. It exits 0 when its standard input ends, after `mcp.close`. It exits 1
   as soon as its stream cannot be had or cannot go on: a command line it does
-  not take, no record or no holder, a holder without `mcp`, `not-connected`,
-  `busy`, no `pong` to the open in time, an `mcp.close` from the holder, any
-  other `error` but `too-large`, a CLI 64 MiB behind, or the connection lost.
+  not take, no record or no holder, a holder without `mcp`, `not-connected`
+  to its open, `busy`, no `pong` to the open in time, an `mcp.close` from the
+  holder, any other `error` but `too-large` (and, with `away` acked, but a
+  `not-connected` once the stream is had, which refused one message), a CLI
+  64 MiB behind, or the connection lost.
   An input that ends at once still exits 1 when the stream was never had.
   Standard output carries only the messages: it
   prints nothing else, writes nothing on standard error and writes no file.
@@ -1060,7 +1088,9 @@ nothing for one. Fixtures: the `mcp` part of `helper/fixtures/local.json`.
   The holder numbers each stream itself, from 1, never using a number twice
   in its life, and sends `mcp.open` with its number to the attached
   connection that acked `mcp`. With no such connection attached the answer
-  is `not-connected`; with 8 streams open, `busy`. Neither takes a number.
+  is `not-connected` (a relay that acked `away` has its stream kept instead,
+  below); with 8 streams open, kept ones among them, `busy`. Neither refusal
+  takes a number.
   Only an attach that carries live output takes tool streams: one that only
   replays a program that has exited takes none, and ends any its connection
   had.
@@ -1081,9 +1111,10 @@ nothing for one. Fixtures: the `mcp` part of `helper/fixtures/local.json`.
   not send it (`not-found`): its streams end with its attach. When it lets
   go (`term.detach`, a newer attach, `term.exit`, falling behind or no thread
   for its output, a dropped connection) every stream it carried ends and
-  each relay is told, on the relay's number; it is not told itself, and no
-  tool message follows its last word, as no hook event does. A holder that
-  ends tells no one: each relay reads the end of its connection.
+  each relay is told, on the relay's number, except a stream whose relay
+  acked `away`, which is kept (below); it is not told itself, and no tool
+  message follows its last word, as no hook event does. A holder that ends
+  tells no one: each relay reads the end of its connection.
 - **What the app wires (2.1.3-beta.11).** With the agent sessions' setting
   on (it is off by default), each connection of a held agent session acks
   `mcp`, and the session's CLI is given the relay as its `conductor` tool
@@ -1103,16 +1134,139 @@ nothing for one. Fixtures: the `mcp` part of `helper/fixtures/local.json`.
   arguments, or a relay form the helper would refuse) keeps the
   loopback route, with one log line. A run of the app's own is never
   switched.
-- **What is not here yet.** While no connection takes tool streams, as when
-  the app is away, a relay's `mcp.open` is `not-connected` and the relay
-  exits. A relay whose stream ended stays ended: when the app's connection to
-  a session's holder drops and comes back, that session's CLI has no tool
-  server until it starts one again (in Claude Code, /mcp) or the session is
-  restarted. Holding a call for about 30 seconds and the fixed updating answer
-  are protocol change 9 (ADR-030), a later step. The app's side, when it
-  sends `mcp`, must keep each message to what the holder reads: JSON with no
-  escaped lone surrogate and at most 31 levels deep, or the frame is
+- **Kept streams (capability `away`, from 2.1.3-beta.12).** A holder offers
+  `away`, and only a relay acks it, beside `mcp` (without `mcp` it keeps
+  nothing). For a stream whose relay acked it, while the session's program
+  runs: when the attached connection lets go, the stream is kept with no app
+  side and its relay is sent `mcp.away` on its number, in place of
+  `mcp.close`; and an `mcp.open` while no connection takes tool streams is
+  taken, numbered and kept the same way, and answered `mcp.away` in place of
+  `not-connected`. A kept stream counts toward the 8. An `mcp` from its relay
+  is `not-connected` and the stream goes on, as is one the holder reads after
+  the stream left the app it was with. The next attach that takes tool
+  streams (it acked `mcp` and carries live output) is given every kept
+  stream: `mcp.open` on the holder's number, as for a new one, in the order
+  they were opened, then `mcp.back` to each relay on its number. A stream
+  kept just after such an attach took tool streams (the connection it was
+  with let go at that moment) is given to it the same way within a quarter
+  of a second. A relay that did not ack `away` is served as before. A session keeps nothing past its
+  program: once the program has exited each kept stream ends, its relay told
+  `mcp.close` within a quarter of a second, and an `mcp.open` before the
+  launch or after the exit is `not-connected`, `away` or not. A kept stream
+  does not hold the session open: the away clock runs as it does without one.
+- **The relay while away.** With `away` acked, of each message it passes the
+  relay reads whether it is a call (an object with an `id`, a string or a
+  number, and a `method`, a string) and that call's `id` and `method`, and of
+  each message from the app whether it is an answer (an object with an `id`
+  and no `method`) and its `id`: nothing more, and every message goes on
+  exactly as it came. A call passed to the app and not yet answered is
+  remembered by its id, 64 at most (past that the oldest is forgotten and
+  falls to the CLI's own timeout), and the app's answer clears it, as does a
+  cancel (`notifications/cancelled`) the CLI sends for it; a batch
+  is no call, so the calls in one are not remembered. Only an id
+  that is a string, or a whole number written in plain digits, at most 15 of
+  them, is remembered, as only such an id comes back from the app as it went.
+  On `mcp.away` each remembered call is answered at once with the fixed
+  answer below: it reached an app that is gone, and it is never sent a second
+  time, as a tool call may not be safe to repeat; an answer the app sends to
+  one all the same is dropped. From then on a call read from the CLI is held,
+  not sent: at most 32 calls and 4 MiB of them (as compact JSON) wait, and a
+  call past either is answered at once. Each held call has 30 s, then gets the
+  fixed answer and is dropped (4 s in a build with debug assertions, the one
+  the helper's tests run; the installers carry the release build). Anything
+  else read meanwhile is dropped, except a cancel
+  (`notifications/cancelled`) of a held call, which drops that call with no
+  answer. A batch (an array) is answered at once, with one array of the fixed
+  answer to each call in it, and never held. On `mcp.back` the held calls go
+  to the holder in the order they came, and then everything is as before. The
+  fixed answer has ADR-030 D1's words. To `tools/call` it is a result the
+  model reads,
+  `{"jsonrpc":"2.0","id":<id>,"result":{"content":[{"type":"text","text":"AI Code Conductor is updating, try again shortly"}],"isError":true}}`;
+  to any other call, a JSON-RPC error,
+  `{"jsonrpc":"2.0","id":<id>,"error":{"code":-32603,"message":"AI Code Conductor is updating, try again shortly"}}`.
+  The relay's exits stay: 0 at the end of its input, 1 when its stream ends
+  from the holder's side or the connection is lost.
+- **What is not here yet.** A kept stream is given to the next attach of the
+  same holder, which within one run of the app is the app again: it attaches
+  by itself after a dropped link. It is not given to a new run of the app,
+  as after an update: an update ends every agent session today, and an
+  agent session is not shown again after the app restarts, so
+  a stream is given back inside one app run only, until the step that keeps
+  a session across an update (ADR-030 S16, its second half). A relay that did not ack `away` (its holder does not offer it) whose
+  stream ended stays ended: when the app's connection to a session's holder
+  drops and comes back, that session's CLI has no tool server until it
+  starts one again (in Claude Code, /mcp) or the session is restarted. Nothing tells a
+  CLI that its tool list changed after the app came back. The app's side,
+  when it sends `mcp`, must keep each message to what the holder reads: JSON
+  with no escaped lone surrogate and at most 31 levels deep, or the frame is
   `bad-frame` and its connection is closed.
+
+**Screen reads (capability `screen`, from 2.1.3-beta.12).** Protocol change 5
+(ADR-030), written by the slice that first uses it. The holder keeps the
+session's screen: every byte of output goes to the ring first, and then to a
+screen of the session's size with 200 lines of scrollback, for the session's
+whole life, attached or not; a resize resizes both. A connection that acked
+`screen` asks about it with two read-only requests, answered from that
+screen whether or not the connection is the attached one. Neither attaches,
+types, resizes or ends; neither moves an offset, replays anything or changes
+which connection is attached; and the holder decides nothing from what a
+screen shows (ADR-030 row 4). A relay (a connection that opened a tool
+stream) asks for neither: `unknown-type` and a close, as for the terminal
+messages. Nothing in the app asks yet: no connection the app makes acks
+`screen`.
+
+- **`screen.read`** `{id}` is answered `screen.rows`: `cols` and `rows`, the
+  screen's size; `cursor` `{row, col}`, the cursor's cell from 0 (its column
+  is `cols` while a wrap is pending after the last cell was written);
+  `modes`; `cut`; and `lines`, the rows of the screen in use from its top,
+  below any scrollback. Each row is what the app's readers take from a row
+  of xterm.js (`readXtermScreen`): `text`, the row's characters (an empty
+  cell a space); `typed`, the same with every dim cell blanked; `inverse`,
+  the same with every cell that is not inverse blanked (a blanked cell is as
+  many spaces as its character has UTF-16 units), each with its trailing
+  white space trimmed; `width`, the screen's columns; and `end`, the cell
+  just past the last one that is not blank. The modes are fixed words and
+  yes or no values, never bytes to pass on: `screen` (`normal` or
+  `alternate`), `bracketed_paste`, `application_cursor` (application cursor
+  keys), `application_keypad`, `mouse` (`none`, `press`, `press-release`,
+  `button-motion` or `any-motion`), `mouse_encoding` (`default`, `utf8` or
+  `sgr`) and `cursor_hidden`. No other mode is answered: the screen does not
+  keep focus reporting, synchronized output, the keyboard protocols, wrap
+  (it always wraps) or insert mode, and keeps origin mode without a way to
+  read it.
+- **`screen.tail`** `{id, count}`, `count` 1 to 200, is answered
+  `screen.lines`: `cut`, and `lines`, the last `count` lines of scrollback
+  and screen together, oldest first (fewer when fewer are held; the
+  alternate screen has no scrollback). Each line is `text`, its cells up to
+  the last one that holds a character (an erased cell holds none, a written
+  space does), as the Watchdog's pane gives a line
+  (`translateToString(true)`), and `typed`, the line's cells with every dim
+  one blanked, its trailing white space trimmed.
+- **One message.** Each answer is one message within what a frame to the app
+  holds (1 MiB of JSON). Rows that do not fit are left out from the top of
+  `screen.rows` and from the oldest end of `screen.lines`, and the answer
+  says so with `cut` true; `lines` then holds the bottom rows (the first is
+  row `rows` less their number) or the newest lines. A screen of a common
+  size is never cut; one of 1000 by 1000 wide characters is.
+- **Widths.** The screen counts a character's cells by current Unicode, and
+  xterm.js 6.0.0 by Unicode 6, so a row holding a character the two count
+  differently can differ from the app's own terminal. The rows of the screen
+  corpus where they do are named in `helper/tests/screen.rs`.
+- **Other differences from xterm.js.** Three more, none of them in the
+  screen corpus, so no test compares them. The screen does not draw the
+  replacement character (U+FFFD, which is also what a byte that is not UTF-8
+  is in the app's terminal), where xterm.js draws it in one cell, so the
+  rest of that run of text sits one cell to the left. It has no line drawing
+  character set (`ESC ( 0`), so those characters stay the letters they were
+  sent as. And a change of width cuts or pads each row, where xterm.js can
+  wrap the lines of its normal screen again.
+- **The bound.** A CSI parameter above 9999 reaches the screen's parser as
+  9999, as main cuts it for its own panes, so a repeat (`CSI n b`) writes at
+  most 9999 cells and no other sequence's work grows with its parameter; an
+  OSC string is kept to its first 1 KiB, and DCS, SOS, PM and APC strings are
+  not kept. A screen whose parser fails is no longer kept: a read then gets
+  `io`, and the output, the ring and the attached connection go on.
+- Vectors: the `screen` part of `helper/fixtures/local.json`.
 
 **Change.** The `hold` and `list` command lines and their exit codes, the
 record and the listing are frozen within version 1; new fields need a new

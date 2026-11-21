@@ -17,7 +17,14 @@
 //    refused whole, but each message of a batch is read on its own (that
 //    route refuses a whole body with one bad message): one that is not a
 //    JSON-RPC message is answered Invalid Request when it has an id (an
-//    answer never is), dropped otherwise.
+//    answer never is), dropped otherwise;
+//  - 2.1.3-beta.12, plan section B2 (the decision line): a stream its holder
+//    gives back after an attach again starts with a call, not `initialize`
+//    (the relay passed the CLI's handshake on the stream that went). A fresh
+//    stream whose first message is a tool list, or a tool call, is answered
+//    for the stream's session with no handshake, so serveToolStream is not
+//    changed for it. If a bump of the MCP library starts to ask for the
+//    handshake first, these cases go red before any held session's tools stop.
 // Not checked here: what each tool does once called (the route tests own
 // that); a holder or a relay (the session helper's tests own those).
 
@@ -307,6 +314,45 @@ describe('a stream ends with its session', () => {
     link.fromCli({ jsonrpc: '2.0', id: 9, method: 'tools/list', params: {} })
     await tick(30)
     expect(link.sent).toHaveLength(before)
+  })
+})
+
+describe('a stream given back after an attach again: its first message is a call, with no initialize (2.1.3-beta.12, plan section B2)', () => {
+  /** Only answers went to the CLI: no message the tool host started itself. */
+  const onlyAnswers = (link: FakeLink, ids: number[]) => expect(link.sent.map((m) => m.id)).toEqual(ids)
+
+  it('a tool list first: the tool set of the session\'s record, for a Claude Code record and a Codex record', async () => {
+    server.issueMcpSessionToken('ts-back-claude', 'claude')
+    server.issueMcpSessionToken('ts-back-codex', 'codex')
+    const claude = newLink()
+    const codex = newLink()
+    expect(server.serveToolStream('ts-back-claude', claude)).toBe(true)
+    expect(server.serveToolStream('ts-back-codex', codex)).toBe(true)
+    expect(await claude.toolNames()).toEqual(CLAUDE_NAMES)
+    expect(await codex.toolNames()).toEqual(CODEX_NAMES)
+    onlyAnswers(claude, [2])
+    onlyAnswers(codex, [2])
+    expect(claude.closed).toBe(false)
+    expect(codex.closed).toBe(false)
+  })
+
+  it('a tool call first: it acts for the stream\'s session; one whose arguments name another session is refused, as on the routes', async () => {
+    server.issueMcpSessionToken('ts-back-own', 'claude')
+    server.issueMcpSessionToken('ts-back-other', 'claude')
+    const link = newLink()
+    expect(server.serveToolStream('ts-back-own', link)).toBe(true)
+    const nav = await link.call(7, 'tools/call', { name: 'vision_navigate', arguments: { url: 'https://example.com/' } })
+    expect(JSON.parse(nav.result.content[0].text)).toEqual({ ok: true, data: { for: 'ts-back-own' } })
+    expect(vision.executeCommand.mock.calls.map(([cmd]) => cmd.sessionId)).toEqual(['ts-back-own'])
+    // Another stream, given back, whose first call claims the other session.
+    const claims = newLink()
+    expect(server.serveToolStream('ts-back-own', claims)).toBe(true)
+    const refused = await claims.call(8, 'tools/call', { name: 'open_in_app_browser', arguments: { url: 'https://example.com/', sessionId: 'ts-back-other' } })
+    expect(refused.result.isError).toBe(true)
+    expect(JSON.parse(refused.result.content[0].text)).toEqual({ ok: false, error: 'sessionId does not match this session; the in-app browser push acts only on the authenticated session.' })
+    expect(pushed).not.toHaveBeenCalled()
+    onlyAnswers(link, [7])
+    onlyAnswers(claims, [8])
   })
 })
 
