@@ -223,11 +223,32 @@ export function providerView(snapshot: AccountsSnapshot | null, providerId: Prov
   return snapshot?.providers.find((p) => p.providerId === providerId)
 }
 
-/** A provider's accounts as a surface lists them: active ones first, then
- *  inactive ones, each in the snapshot's order. Archived accounts are hidden. */
+/** A provider's accounts with the usable ones first, as the switch-account
+ *  menu and the Account usage page list them: active ones, then inactive
+ *  ones, each in the snapshot's order. Archived accounts are hidden.
+ *  Settings, Accounts uses selectAccountsInAddedOrder instead, so that making
+ *  an account active or inactive never moves its row there. */
 export function selectProviderAccounts(snapshot: AccountsSnapshot | null, providerId: ProviderId): AccountView[] {
   const mine = (snapshot?.accounts ?? []).filter((a) => a.providerId === providerId && a.lifecycle !== 'archived')
   return [...mine.filter((a) => a.lifecycle === 'active'), ...mine.filter((a) => a.lifecycle === 'inactive')]
+}
+
+/** A provider's accounts as Settings, Accounts lists them (aicc_planning#381):
+ *  every account that is not archived, in the snapshot's order. That is the
+ *  order they were added: the registry adds an account at the end and changes
+ *  one in place. Active and inactive accounts stay mixed, so a row keeps its
+ *  place when its account is made active or inactive. */
+export function selectAccountsInAddedOrder(snapshot: AccountsSnapshot | null, providerId: ProviderId): AccountView[] {
+  return (snapshot?.accounts ?? []).filter((a) => a.providerId === providerId && a.lifecycle !== 'archived')
+}
+
+/** The providers whose own account list Settings, Accounts shows below
+ *  Claude's: each one whose accounts this app manages, once the account
+ *  registry is ready. Claude's list is its profiles (AccountsPanel). The
+ *  page and its filter counts both read this, so they list the same accounts. */
+export function managedListProviders(snapshot: AccountsSnapshot | null): ProviderInstallationView[] {
+  if (snapshot?.registry.mode !== 'ready') return []
+  return snapshot.providers.filter((p) => p.managedAccounts && p.providerId !== 'claude')
 }
 
 /** A provider's archived accounts ("Archived (N)", design 5.3), in the
