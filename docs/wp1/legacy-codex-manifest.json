@@ -1,9 +1,9 @@
 {
   "schema": "wp1-legacy-codex-manifest/3",
-  "generatedAt": "2026-11-22T13:16:41.923Z",
-  "head": "5a85fd9e51330814444d17b8f10198dc27b8887c",
-  "tree": "ad8d6c73b8eb16acac1b826ee5a07ff5f86285af",
-  "scannedWorkingTree": true,
+  "generatedAt": "2026-11-22T13:18:46.470Z",
+  "head": "f52add8b6504e571a41ab9494d084fceacefcc14",
+  "tree": "4eeff072f6bb1b2a05532e3e354a3309d5f9bd31",
+  "scannedWorkingTree": false,
   "predicateDigest": "100a1233edebdc39a5f9004d3fba980a89ebb15b25872e52076386bc84b03153",
   "predicates": [
     {
@@ -116,8 +116,8 @@
     "\\.(png|jpg|jpeg|gif|ico|icns|webp|svg|woff2?|ttf|otf|mp4|zip|asar|node|exe|dll|dylib|so|pdf)$",
     "^package-lock\\.json$"
   ],
-  "trackedFileCount": 3683,
-  "excludedFileCount": 569,
+  "trackedFileCount": 3684,
+  "excludedFileCount": 570,
   "scannedFileCount": 3114,
   "unscopedFileCount": 15,
   "unscoped": [
