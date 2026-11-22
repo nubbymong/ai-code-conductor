@@ -17,9 +17,19 @@
 //! so its pid cannot pass to another process while the test looks at it; the
 //! run's own handle is held to the end, so its pid stays the run's, as it does
 //! when a process still has a handle to an app that was ended.
+//!
+//! aicc_planning #363: while the app runs, a terminal on Windows' own ConPTY
+//! whose program ended by itself keeps its console host, because node-pty
+//! forgets the pseudoconsole, unclosed, when the program exits. The app times
+//! the terminal's start and, after the program's exit, runs `aicc-helper
+//! end-console-host` with that time. Here this test process is the app: it
+//! opens terminals itself (the helper's own `Pty`, whose pseudoconsole stays
+//! open until it is dropped, as node-pty's stays), so their hosts are its
+//! children, and the mode it runs names it as the process that started it.
 #![cfg(windows)]
 
-use std::io::{BufRead, BufReader};
+use aicc_helper::pty::{Pty, PtySize};
+use std::io::{BufRead, BufReader, Read};
 use std::os::windows::io::AsRawHandle;
 use std::os::windows::process::CommandExt;
 use std::process::{Child, Command, Stdio};
@@ -363,4 +373,151 @@ fn with_no_record_it_only_says_which_process_started_it() {
     assert!(out.status.success(), "{text}{}", String::from_utf8_lossy(&out.stderr));
     let me = made_at(unsafe { windows_sys::Win32::System::Threading::GetCurrentProcess() }).expect("this test's start time") / 10 * 10;
     assert_eq!(text.trim(), format!("{{\"pid\":{},\"created\":\"{me}\",\"ended\":0}}", std::process::id()));
+}
+
+/// The system time now, in steps of 100 ns since 1601 (UTC), as the app
+/// passes a terminal's start time.
+fn filetime_now() -> u64 {
+    let since = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).expect("after 1970");
+    since.as_secs() * 10_000_000 + u64::from(since.subsec_nanos()) / 100 + 116_444_736_000_000_000
+}
+
+/// A terminal of this process on Windows' own ConPTY, kept open until it is
+/// dropped, and the time its start took: from just before the pseudoconsole
+/// was made to just after (`to` not included).
+struct Terminal {
+    pty: Pty,
+    from: u64,
+    to: u64,
+}
+
+/// Open a terminal running `argv`, its output read and dropped.
+fn terminal(argv: &[String]) -> Terminal {
+    let from = filetime_now();
+    let (pty, mut out) = Pty::spawn(argv, PtySize::default()).expect("open a terminal");
+    let to = filetime_now() + 1;
+    std::thread::spawn(move || {
+        let mut buf = [0u8; 4096];
+        while matches!(out.read(&mut buf), Ok(n) if n > 0) {}
+    });
+    Terminal { pty, from, to }
+}
+
+/// A program that ends at once: cmd.exe from the system folder, told to exit.
+fn ends_at_once() -> Vec<String> {
+    let root = std::env::var("SystemRoot").unwrap_or_else(|_| r"C:\Windows".to_string());
+    vec![format!(r"{root}\System32\cmd.exe"), "/c".to_string(), "exit".to_string()]
+}
+
+/// A program that keeps running while its terminal is open.
+fn keeps_running() -> Vec<String> {
+    vec![HELPER.to_string(), "__echo".to_string()]
+}
+
+/// Wait until the terminal's program has exited.
+fn wait_ended(t: &mut Terminal) {
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while !matches!(t.pty.try_wait(), Ok(Some(_))) {
+        assert!(Instant::now() < deadline, "the terminal's program did not end");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+/// The console host this process made in `[from, to)`, held: its one
+/// `conhost.exe` child made then.
+fn host_made_in(from: u64, to: u64) -> Held {
+    let me = std::process::id();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        for id in children(me, HOST) {
+            if let Some(h) = Held::open(id) {
+                if made_at(h.handle).is_some_and(|t| t >= from && t < to) && children(me, HOST).contains(&id) {
+                    return h;
+                }
+            }
+        }
+        assert!(Instant::now() < deadline, "no console host made by this process in that time was seen");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+/// `aicc-helper end-console-host --made-from <from> --made-to <to>`: whether
+/// it exited 0, its standard output and its standard error.
+fn end_console_host(from: u64, to: u64) -> (bool, String, String) {
+    let out = Command::new(HELPER)
+        .args(["end-console-host", "--made-from", &from.to_string(), "--made-to", &to.to_string()])
+        .stdin(Stdio::null())
+        .output()
+        .expect("run aicc-helper end-console-host");
+    (out.status.success(), String::from_utf8_lossy(&out.stdout).into_owned(), String::from_utf8_lossy(&out.stderr).into_owned())
+}
+
+#[test]
+fn a_terminal_whose_program_ended_has_its_console_host_ended_once_and_no_other() {
+    let _serial = one_at_a_time();
+    // A terminal whose program still runs, started first: its host is never ended.
+    let live = terminal(&keeps_running());
+    let live_host = host_made_in(live.from, live.to);
+    let mut ended = terminal(&ends_at_once());
+    let host = host_made_in(ended.from, ended.to);
+    wait_ended(&mut ended);
+    // As node-pty leaves it: the program has ended, the pseudoconsole is open.
+    std::thread::sleep(Duration::from_millis(500));
+    assert!(host.running(), "the host of a terminal whose program ended (process {}) ended by itself", host.pid);
+
+    let (ok, out, err) = end_console_host(ended.from, ended.to);
+    assert!(ok, "{out}{err}");
+    assert!(out.starts_with(&format!("{{\"pid\":{},\"created\":\"", std::process::id())), "it names the process that started it: {out}");
+    assert_eq!(ended_in(&out), Some(1), "{out}{err}");
+    assert!(host.gone_within(Duration::from_secs(5)), "the host of the terminal whose program ended (process {}) still ran", host.pid);
+    assert!(live_host.running(), "the host of a terminal still running was ended");
+
+    // Once: asked again for the same start, nothing more is ended.
+    let (ok, out, err) = end_console_host(ended.from, ended.to);
+    assert!(ok, "{out}{err}");
+    assert_eq!(ended_in(&out), Some(0), "{out}{err}");
+    assert!(live_host.running(), "the host of a terminal still running was ended");
+}
+
+#[test]
+fn two_terminals_started_in_one_time_have_neither_host_ended_by_it() {
+    let _serial = one_at_a_time();
+    let from = filetime_now();
+    let mut a = terminal(&ends_at_once());
+    let mut b = terminal(&ends_at_once());
+    let to = filetime_now() + 1;
+    let host_a = host_made_in(a.from, a.to);
+    let host_b = host_made_in(b.from, b.to);
+    wait_ended(&mut a);
+    wait_ended(&mut b);
+    std::thread::sleep(Duration::from_millis(500));
+    assert!(host_a.running() && host_b.running(), "a host of a terminal whose program ended ended by itself");
+
+    // A time that holds both starts cannot say which terminal ended: neither host is ended.
+    let (ok, out, err) = end_console_host(from, to);
+    assert!(ok, "{out}{err}");
+    assert_eq!(ended_in(&out), Some(0), "{out}{err}");
+    assert!(err.contains("2 console hosts were made in that time"), "no note for two hosts: {err}");
+    assert!(host_a.running() && host_b.running(), "a host was ended for a time that holds two starts");
+
+    // Each start's own time ends its own host, and only that one.
+    let (ok, out, err) = end_console_host(a.from, a.to);
+    assert!(ok, "{out}{err}");
+    assert_eq!(ended_in(&out), Some(1), "{out}{err}");
+    assert!(host_a.gone_within(Duration::from_secs(5)), "the first terminal's host (process {}) still ran", host_a.pid);
+    assert!(host_b.running(), "the second terminal's host was ended for the first one's start");
+}
+
+#[test]
+fn a_start_time_it_cannot_take_is_refused() {
+    // More than ten seconds is not one start; nothing is read or ended.
+    let out = Command::new(HELPER)
+        .args(["end-console-host", "--made-from", "1", "--made-to", "100000002"])
+        .stdin(Stdio::null())
+        .output()
+        .expect("run aicc-helper end-console-host");
+    let err = String::from_utf8_lossy(&out.stderr).into_owned();
+    assert_eq!(out.status.code(), Some(2), "{err}");
+    assert!(err.contains("by ten seconds at most"), "not refused for its length: {err}");
+    assert!(out.stdout.is_empty(), "it answered: {}", String::from_utf8_lossy(&out.stdout));
 }
