@@ -44,10 +44,6 @@ export class HooksGatewayProxy implements HooksGatewayLike {
   // and every consumer method delegates to it so the proxy stays a faithful drop-in.
   private inProcess: HooksGateway | null = null
   private inProcessReady: Promise<unknown> | null = null
-  // Permission bridge: ids of child-opened requests awaiting a main-side decision.
-  // Presence-tracking only — the actual held-open responder lives in the child;
-  // resolvePermission routes the decision back over the transport.
-  private openPermissionRequests = new Set<string>()
   // start() (utility mode) returns only once the child announces `bound`, so the
   // hooks toggle persists the REAL listening status (not a premature listening:false).
   // An UNREF'd timeout fallback guarantees a bind failure can't hang the toggle.
@@ -147,11 +143,6 @@ export class HooksGatewayProxy implements HooksGatewayLike {
         // so we receive at most one 'dropped' per session and don't need a local latch.
         try { this.emit(IPC.HOOKS_DROPPED, { sessionId: m.sessionId }) } catch { /* destroyed */ }
         break
-      case 'permission-open':
-        // Record the open request so a later resolvePermission(requestId, ...)
-        // is meaningful (we route the decision back to the child).
-        this.openPermissionRequests.add(m.requestId)
-        break
       case 'transcript-path':
         // Logs v2 (Task 8): only reached on the self-subscribe path. In production
         // the supervisor owns the subscription and routes this itself; this keeps
@@ -199,11 +190,6 @@ export class HooksGatewayProxy implements HooksGatewayLike {
     this.resolveBoundWaiters()   // a start()->stop() race must not wait out the 4s bound fallback
   }
 
-  setPermissionGateActive(active: boolean): void {
-    if (this.inProcess) { this.inProcess.setPermissionGateActive(active); return }
-    this.transport.post({ type: 'setGate', active })
-  }
-
   isInProcessFallback(): boolean { return this.inProcess !== null }
 
   /** Tear down the child path and run the gateway in-process (today's exact code).
@@ -226,14 +212,6 @@ export class HooksGatewayProxy implements HooksGatewayLike {
     // the fail-open transition resolve with the real listening status (via
     // status()->inProcess) instead of waiting out the 4s bound fallback.
     this.inProcessReady = gw.start().then((s) => { this.resolveBoundWaiters(); return s })
-  }
-
-  /** Renderer Allow/Deny path. In-process: the module responder registry already
-   *  handles it (no-op here). Utility-process: route the decision back to the child. */
-  resolvePermission(requestId: string, decision: string): void {
-    this.openPermissionRequests.delete(requestId)   // clear regardless of host
-    if (this.inProcess) return   // in-process: the module responder registry already resolved it
-    this.transport.post({ type: 'permission-respond', requestId, decision })
   }
 
   // Supervisor helpers (used in Task 10):

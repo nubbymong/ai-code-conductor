@@ -98,7 +98,7 @@ export class ServiceSupervisor {
 
   // The supervisor owns the SINGLE transport subscription (ChildTransport.onMessage
   // is last-writer-wins). It consumes bound/health/log itself and forwards the
-  // proxy-relevant messages (event/dropped/permission-open) via handleChildMessage.
+  // proxy-relevant messages (bound/event/dropped) via handleChildMessage.
   private onChildMessage(m: FromChildMessage, from: ForkedChild): void {
     // Once we've failed open (or are shutting down) the child is dead; ignore any
     // messages still draining out of the pipe so a stale `bound`/`health` can't
@@ -183,7 +183,7 @@ export class ServiceSupervisor {
     // Forward `bound` to the proxy too so its status/HOOKS_STATUS broadcast and
     // start()-await-bound resolve in the production (supervisor-driven) path, not
     // just when the proxy self-subscribes.
-    if (m.type === 'bound' || m.type === 'event' || m.type === 'dropped' || m.type === 'permission-open') {
+    if (m.type === 'bound' || m.type === 'event' || m.type === 'dropped') {
       this.proxy?.handleChildMessage(m)
     }
   }

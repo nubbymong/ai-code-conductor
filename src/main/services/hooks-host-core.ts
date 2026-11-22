@@ -11,7 +11,6 @@ export interface HooksHost {
   /** Drive a single ingest through the real gateway. `body` defaults to a minimal
    *  PostToolUse; pass a custom body to exercise e.g. transcript_path forwarding. */
   _ingestForTest(sid: string, secret: string, body?: Record<string, unknown>): Promise<void>
-  _registerResponderForTest(id: string, cb: (decision: string) => void): void
 }
 
 /** The minimal gateway surface `createHooksHost` depends on. The default
@@ -23,11 +22,9 @@ export interface HooksGatewayHostFace {
   unregisterSession(sid: string): void
   start(portOverride?: number): Promise<HooksGatewayStatus>
   stop(): Promise<void>
-  setPermissionGateActive(active: boolean): void
   metrics(): { inFlight: number; eventsTotal: number; dropsTotal: number }
   hasSecret(sid: string): boolean
   _handleRequestForTest(args: Parameters<HooksGateway['_handleRequestForTest']>[0]): Promise<{ status: number; body: string }>
-  permissionRegister(id: string, cb: (decision: string) => void): void
 }
 
 export interface CreateHooksHostOptions {
@@ -39,14 +36,12 @@ export interface CreateHooksHostOptions {
 /**
  * Run the HooksGateway inside a child process, bridged to `transport`.
  * - gateway emit (HOOKS_EVENT/HOOKS_DROPPED) -> post digested message to parent
- * - held-open responders live HERE (the socket is here) but their existence is
- *   announced to MAIN (permission-open) and MAIN's decision is routed back
- *   (permission-respond) -- B2: the gateway must NOT import permission-responders.
- * - control messages from parent drive register/unregister/start/stop/setGate.
+ * - control messages from parent drive register/unregister/start/stop.
+ * The gateway answers every hook request at once; nothing is held open here
+ * for a decision (2.1.3-beta.14 deleted the dormant permission hold and its
+ * two messages, aicc_planning#358).
  */
 export function createHooksHost(transport: HostTransport, opts?: CreateHooksHostOptions): HooksHost {
-  const localResponders = new Map<string, (decision: string) => void>()
-
   const createGateway = opts?.createGateway ?? ((o: HooksGatewayOptions) => new HooksGateway(o))
   const gateway = createGateway({
     emit: (channel, payload) => {
@@ -55,13 +50,6 @@ export function createHooksHost(transport: HostTransport, opts?: CreateHooksHost
       } else if (channel === IPC.HOOKS_DROPPED) {
         transport.post({ type: 'dropped', sessionId: (payload as { sessionId: string }).sessionId })
       }
-    },
-    permissionResponders: {
-      register: (id, cb) => {
-        localResponders.set(id, cb)
-        transport.post({ type: 'permission-open', requestId: id, sid: '' })
-      },
-      deregister: (id) => { localResponders.delete(id) },
     },
     // Logs v2 (Task 8): forward the lifted transcript path to main's binder. The
     // gateway lives in this child process, so the path travels over the transport
@@ -129,8 +117,6 @@ export function createHooksHost(transport: HostTransport, opts?: CreateHooksHost
         if (beat) { clearInterval(beat); beat = null }
         void gateway.stop()
         break
-      case 'setGate': gateway.setPermissionGateActive(msg.active); break
-      case 'permission-respond': localResponders.get(msg.requestId)?.(msg.decision); break
       default: break
     }
   })
@@ -145,6 +131,5 @@ export function createHooksHost(transport: HostTransport, opts?: CreateHooksHost
       headers: { 'x-ccc-hook-token': secret },
       body: JSON.stringify(body ?? { hook_event_name: 'PostToolUse', tool_name: 'Glob' }),
     }).then(() => undefined),
-    _registerResponderForTest: (id, cb) => gateway.permissionRegister(id, cb),
   }
 }

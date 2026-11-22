@@ -1,19 +1,14 @@
 import { describe, it, expect, afterEach } from 'vitest'
 import http from 'node:http'
 import { HooksGateway } from '../../../src/main/hooks/hooks-gateway'
-import { resolveResponder, _resetResponders, _responderCount } from '../../../src/main/permission-responders'
 
-// Poll until the held-open path has registered its responder, instead of a fixed
-// sleep (deterministic under CI load). Falls through after 2s as a safety net.
-async function waitForResponder(): Promise<void> {
-  const deadline = Date.now() + 2000
-  while (_responderCount() === 0 && Date.now() < deadline) await new Promise((r) => setTimeout(r, 5))
-  // Fail loudly instead of silently falling through: otherwise a real
-  // "responder never registered" bug turns into a 120s held-open hang.
-  if (_responderCount() === 0) throw new Error('responder was never registered within 2s')
-}
+// The gateway answers every hook request at once with an empty {} (no
+// decision). Its permission hold, dormant since v1.5.17 (nothing set its flag
+// and nothing answered a held request), was deleted in 2.1.3-beta.14
+// (aicc_planning#358), and its tests with it: the permission wire value, the
+// defer outcome, the hold while the flag was on, and the requestId it added.
 
-function post(port: number, sid: string, token: string, body: object, signal?: AbortSignal): Promise<{ status: number; body: string }> {
+function post(port: number, sid: string, token: string, body: object): Promise<{ status: number; body: string }> {
   return new Promise((resolve, reject) => {
     const data = JSON.stringify(body)
     const req = http.request(
@@ -22,51 +17,13 @@ function post(port: number, sid: string, token: string, body: object, signal?: A
       (res) => { let b = ''; res.on('data', (c) => (b += c)); res.on('end', () => resolve({ status: res.statusCode ?? 0, body: b })) },
     )
     req.on('error', reject)
-    if (signal) signal.addEventListener('abort', () => req.destroy())
     req.end(data)
   })
 }
 
-describe('hooks gateway permission wire value', () => {
-  let gw: HooksGateway
-  afterEach(async () => { await gw?.stop(); _resetResponders() })
-
-  it('writes permissionDecision "allow" (not "approved") when a Bash request is approved', async () => {
-    gw = new HooksGateway({ emit: () => {}, defaultPort: 0 })
-    gw.setPermissionGateActive(true)
-    const { port } = await gw.start()
-    const secret = gw.registerSession('sess-1')
-    const respPromise = post(port!, 'sess-1', secret, {
-      event: 'PreToolUse', tool_name: 'Bash',
-      payload: { requestId: 'req-1', tool_input: { command: 'rm -rf build' } },
-    })
-    await waitForResponder()
-    resolveResponder('req-1', 'approved')
-    const res = await respPromise
-    expect(res.status).toBe(200)
-    expect(JSON.parse(res.body)).toEqual({ hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'allow' } })
-  })
-
-  it('writes an empty {} (no decision) on a defer outcome so Claude falls back to its own prompt', async () => {
-    gw = new HooksGateway({ emit: () => {}, defaultPort: 0 })
-    gw.setPermissionGateActive(true)
-    const { port } = await gw.start()
-    const secret = gw.registerSession('s-defer')
-    const respPromise = post(port!, 's-defer', secret, {
-      event: 'PreToolUse', tool_name: 'Bash',
-      payload: { requestId: 'req-defer', tool_input: { command: 'rm -rf build' } },
-    })
-    await waitForResponder()
-    resolveResponder('req-defer', 'defer')
-    const res = await respPromise
-    expect(res.status).toBe(200)
-    expect(res.body).toBe('{}')
-  })
-})
-
 describe('pre-buffer auth', () => {
   let gw: HooksGateway
-  afterEach(async () => { await gw?.stop(); _resetResponders() })
+  afterEach(async () => { await gw?.stop() })
 
   // The token rides in a header, so auth is verified BEFORE the body is buffered:
   // a wrong token returns 404 and the (large) body is never ingested.
@@ -88,11 +45,11 @@ describe('pre-buffer auth', () => {
   })
 })
 
-describe('hold-open gating', () => {
+describe('every request answered at once', () => {
   let gw: HooksGateway
-  afterEach(async () => { await gw?.stop(); _resetResponders() })
+  afterEach(async () => { await gw?.stop() })
 
-  it('flag OFF: a non-Bash PreToolUse is fire-and-forget (returns promptly)', async () => {
+  it('a non-Bash PreToolUse is fire-and-forget (returns promptly)', async () => {
     gw = new HooksGateway({ emit: () => {}, defaultPort: 0 })
     const { port } = await gw.start()
     const secret = gw.registerSession('s2')
@@ -102,53 +59,18 @@ describe('hold-open gating', () => {
   })
 
   // Regression lock for the v1.5.16 flood: Bash PreToolUse used to be held open
-  // UNCONDITIONALLY (the old `isPreToolUseBash` path). With the genuine-only
-  // un-gate, Bash must be fire-and-forget too while the flag is OFF -- otherwise
-  // CCC is back to being the gate and the flood/stall returns. If someone
-  // re-adds an unconditional Bash hold, this test fails (the post would hang).
-  it('flag OFF: a Bash PreToolUse is ALSO fire-and-forget (no unconditional hold)', async () => {
+  // UNCONDITIONALLY (the old `isPreToolUseBash` path). Bash must be
+  // fire-and-forget too -- otherwise CCC is back to being the gate and the
+  // flood/stall returns. If someone re-adds a Bash hold, this test fails (the
+  // post would hang).
+  it('a Bash PreToolUse is ALSO fire-and-forget (no hold)', async () => {
     gw = new HooksGateway({ emit: () => {}, defaultPort: 0 })
     const { port } = await gw.start()
     const secret = gw.registerSession('s2b')
     const res = await post(port!, 's2b', secret, { event: 'PreToolUse', tool_name: 'Bash', payload: { requestId: 'b1', tool_input: { command: 'git status' } } })
     expect(res.status).toBe(200)
     expect(res.body).toBe('{}')
-    expect(_responderCount()).toBe(0)   // nothing registered -> nothing held
-  })
-
-  it('flag ON: a non-Bash PreToolUse is held open until resolved', async () => {
-    gw = new HooksGateway({ emit: () => {}, defaultPort: 0 })
-    gw.setPermissionGateActive(true)
-    const { port } = await gw.start()
-    const secret = gw.registerSession('s3')
-    const ac = new AbortController()
-    const respPromise = post(port!, 's3', secret, { event: 'PreToolUse', tool_name: 'Edit', payload: { requestId: 'e2' } }, ac.signal)
-      .then(() => 'resolved').catch(() => 'aborted')
-    const held = await Promise.race([respPromise, new Promise((r) => setTimeout(() => r('held'), 150))])
-    expect(held).toBe('held')   // still open after 150ms
-    ac.abort()                  // clean up; req.on('close') deregisters the responder
-    await respPromise
-  })
-
-  // Claude Code's real PreToolUse hook carries no requestId. The gateway must
-  // inject the SAME synthetic id it keyed the responder under into the ingested
-  // payload, so the downstream tray card resolves to that exact responder (else
-  // Allow/Deny no-ops and the call stalls 120s).
-  it('injects a synthetic requestId into the ingested payload when CC sends none', async () => {
-    gw = new HooksGateway({ emit: () => {}, defaultPort: 0 })
-    gw.setPermissionGateActive(true)
-    const { port } = await gw.start()
-    const secret = gw.registerSession('s4')
-    const ac = new AbortController()
-    // high-risk Bash is held open (no response); ingest still runs first
-    void post(port!, 's4', secret, { event: 'PreToolUse', sessionId: 's4', tool_name: 'Bash', payload: { tool_input: { command: 'rm -rf build' } } }, ac.signal).catch(() => {})
-    const deadline = Date.now() + 2000
-    while (gw.getBuffer('s4').length === 0 && Date.now() < deadline) await new Promise((r) => setTimeout(r, 5))
-    const entry = gw.getBuffer('s4')[0]
-    expect(entry).toBeDefined()
-    expect(typeof (entry.payload as { requestId?: unknown }).requestId).toBe('string')
-    expect((entry.payload as { requestId: string }).requestId).toMatch(/^s4-\d+$/)
-    ac.abort()
+    expect(gw.getBuffer('s2b')).toHaveLength(1)   // ingested, and answered at once
   })
 
   // Claude Code's real hook POST uses `hook_event_name` (not `event`) and
@@ -163,7 +85,7 @@ describe('hold-open gating', () => {
       session_id: 's5', hook_event_name: 'PostToolUse', tool_name: 'Read',
       tool_input: { file_path: 'F:/x/package.json' }, tool_use_id: 'toolu_abc',
     })
-    expect(res.status).toBe(200)   // PostToolUse is fire-and-forget (not held open)
+    expect(res.status).toBe(200)   // PostToolUse is fire-and-forget
     const buf = gw.getBuffer('s5')
     expect(buf).toHaveLength(1)
     expect(buf[0].event).toBe('PostToolUse')
@@ -177,7 +99,7 @@ describe('hold-open gating', () => {
 // an injectable onTranscriptPath callback so the binder can tail the file.
 describe('hooks gateway transcript discovery', () => {
   let gw: HooksGateway
-  afterEach(async () => { await gw?.stop(); _resetResponders() })
+  afterEach(async () => { await gw?.stop() })
 
   it('fires onTranscriptPath with the session id + transcript_path on a real-shape POST', async () => {
     const calls: Array<{ sid: string; path: string }> = []

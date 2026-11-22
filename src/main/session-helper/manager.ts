@@ -40,10 +40,10 @@
  *
  * 2.1.3-beta.8 (plan section A4): a Claude Code session the helper holds sends
  * its hook events through its holder when the holder offers `hooks` (hookRoute):
- * its per-session settings file is switched to the helper's hook mode for all
- * but PreToolUse once the holder launched it and before its launch line is
- * typed, and each event the holder passes on reaches the session signals
- * module under the tab's id.
+ * its per-session settings file is switched to the helper's hook mode once the
+ * holder launched it and before its launch line is typed, and each event the
+ * holder passes on reaches the session signals module under the tab's id.
+ * From 2.1.3-beta.14 (S16 step 2) PreToolUse goes that way too.
  *
  * 2.1.3-beta.9 (plan section B1): with the agent sessions' setting on,
  * Insights' Claude Code report runs through the helper too (spawnRunPty): a
@@ -298,8 +298,8 @@ export interface HelperHookDeps {
    *  listening (session-signals/hooks.ts helperHooksTaken). A session is
    *  switched to the helper only then. */
   taking(): boolean
-  /** Point the tab's per-session settings file at the helper's hook mode, all
-   *  but PreToolUse (session-hooks-writer.ts switchHooksToHelper). */
+  /** Point the tab's per-session settings file at the helper's hook mode, for
+   *  every injected event (session-hooks-writer.ts switchHooksToHelper). */
   useHelperHooks(appPtyId: string, target: HelperHookTarget): HelperHooksResult
   /** One hook event the tab's holder passed on (the session signals module). */
   event(appPtyId: string, e: HookEventFrame): void
@@ -964,13 +964,13 @@ export class SessionHelperManager implements MachinesSource {
    * writeLocalSessionSettings and injectHooks), so always before the holder
    * answers term.launched. Once the holder launched it, and before the
    * attach sends its launch line, that file is switched to the helper's hook
-   * mode for all but PreToolUse, if the gateway is taking hook events then; a
-   * holder without `hooks`, a gateway that is off or not listening, or a file
-   * that cannot be switched, leaves the session on the gateway, with one log
-   * line. Then each event the holder passes on reaches the signals module
-   * under the tab's id, once (a `seq` seen already is dropped, section 15,
-   * on this connection or an earlier one), and never a PreToolUse: that one
-   * is the gateway's. Nothing a holder sends is taken before the switch.
+   * mode for every injected event, PreToolUse included (2.1.3-beta.14, S16
+   * step 2), if the gateway is taking hook events then; a holder without
+   * `hooks`, a gateway that is off or not listening, or a file that cannot be
+   * switched, leaves the session on the gateway, with one log line. Then each
+   * event the holder passes on reaches the signals module under the tab's
+   * id, once (a `seq` seen already is dropped, section 15, on this connection
+   * or an earlier one). Nothing a holder sends is taken before the switch.
    * None for a run of the app's own (spawnRun): it has no such file.
    */
   private hookRoute(ctx: AgentSpawnContext, sid: string): HookRoute | undefined {
@@ -999,12 +999,11 @@ export class SessionHelperManager implements MachinesSource {
           return
         }
         on = true
-        this.deps.log(`[session-helper] ${appId}: its hook events go through its holder; PreToolUse stays on the hooks gateway`)
+        this.deps.log(`[session-helper] ${appId}: its hook events go through its holder, PreToolUse included`)
       },
       event: (e) => {
         if (!on || e.seq <= lastSeq) return
         lastSeq = e.seq
-        if (e.kind === 'PreToolUse') return
         deps.event(appId, e)
       },
       ended: () => {

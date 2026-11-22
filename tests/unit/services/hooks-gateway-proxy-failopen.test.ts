@@ -81,14 +81,6 @@ describe('HooksGatewayProxy fail-open + permission bridge', () => {
     expect(sent).toContainEqual({ type: 'stop' })
   })
 
-  it('setPermissionGateActive posts setGate (utility-process mode)', () => {
-    const t = new FakeChildTransport(); const sent: unknown[] = []
-    t.onChild((m) => sent.push(m))
-    p = new HooksGatewayProxy({ transport: t, defaultPort: 19430 })
-    p.setPermissionGateActive(true)
-    expect(sent).toContainEqual({ type: 'setGate', active: true })
-  })
-
   it('failOpen() swaps to an in-process gateway; isInProcessFallback() true; registerSession still sync', () => {
     const t = new FakeChildTransport()
     p = new HooksGatewayProxy({ transport: t, defaultPort: 0 })
@@ -207,14 +199,5 @@ describe('HooksGatewayProxy fail-open + permission bridge', () => {
     unsubscribe()
     p.dispatchForTest(STOP)
     expect(seen).toEqual(['Stop'])
-  })
-
-  it('a child permission-open lets resolvePermission route the decision back to the child', () => {
-    const t = new FakeChildTransport(); const sent: unknown[] = []
-    t.onChild((m) => sent.push(m))
-    p = new HooksGatewayProxy({ transport: t, defaultPort: 19430 })
-    t.emitToParent({ type: 'permission-open', requestId: 'r1', sid: 's1' })
-    p.resolvePermission('r1', 'approved')
-    expect(sent).toContainEqual({ type: 'permission-respond', requestId: 'r1', decision: 'approved' })
   })
 })

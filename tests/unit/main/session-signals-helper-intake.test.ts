@@ -1,7 +1,10 @@
 // Hook events through the session helper (2.1.3-beta.8, plan section A4): a
-// Claude Code session the helper holds sends its hook events (all but
-// PreToolUse) through its holder, and the session helper manager hands each to
-// the session signals module (helperHookEvent). Such an event must get what
+// Claude Code session the helper holds sends its hook events (PreToolUse too,
+// from 2.1.3-beta.14) through its holder, and the session helper manager hands
+// each to the session signals module (helperHookEvent). Some cases below still
+// give one session events through both transports (a PreToolUse through the
+// gateway, as before 2.1.3-beta.14), so the history read's merge of the two
+// rings is checked whatever kind each ring holds. Such an event must get what
 // the hooks gateway gives its own, then the same fan-out:
 //  - the same recorded payloads, fed through the gateway (HooksGateway's own
 //    ingest, the code the utility process runs) and through the helper path,
@@ -304,7 +307,7 @@ describe('the transcript path, the lost count, and the master switch', () => {
     for (let i = 0; i < 1000; i++) helperHookEvent(SID, { kind: 'Stop', payload: { hook_event_name: 'Stop', n: i } })
     expect(droppedSays()).toBe(1)
     await toggle(null, { enabled: false })
-    // The gateway's ring is gone, so the helper's is: not eight kinds without their PreToolUse.
+    // The gateway's ring is gone, so the helper's is: no history split in two.
     expect(gw.getBuffer(SID)).toEqual([])
     expect(await read(null, { sessionId: SID })).toEqual([])
     // The overflow mark went with the ring, as the gateway's latch does: a ring

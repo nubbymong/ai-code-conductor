@@ -104,7 +104,7 @@ export type { CodexRealmFsPort, CodexRealmFsAsync, CodexFsEntry, CodexRealmLocks
 export {
   writeCodexHookFile, removeCodexHookFile, sweepStaleCodexHookFolders, codexHookCommand, codexHookConfigArgs, deployCodexHookScripts,
   prepareCodexHookFolders, preparedCodexHookRoot, codexPlainWrapperDir, verifyPlainCodexHookWrapper,
-  CODEX_HOOK_EVENTS, CODEX_HOOK_CLIENT_HEADER, CODEX_HOOK_CLIENT, CODEX_HOOK_FILE_ENV, CODEX_HOOK_DIR_PREFIX, CODEX_HOOK_STALE_MS, CODEX_HOOK_ROOT_NAME, CODEX_HOOK_PLAIN_BASE,
+  CODEX_HOOK_EVENTS, CODEX_HOOK_FILE_ENV, CODEX_HOOK_DIR_PREFIX, CODEX_HOOK_STALE_MS, CODEX_HOOK_ROOT_NAME, CODEX_HOOK_PLAIN_BASE,
 } from './hooks'
 export type { CodexHookFile, CodexHookEvent, SecureHookFolders, CodexHookFolderPlan, CodexHookFolderOutcome } from './hooks'
 // P3.6: a switched session's conversation carried into the new account's folder.
