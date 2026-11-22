@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron'
-import { IPC, ptyDataChannel, ptyExitChannel } from '../shared/ipc-channels'
+import { IPC, ptyDataChannel, ptyExitChannel, ptyReplayAtHolderSizeChannel } from '../shared/ipc-channels'
 import { randomId } from '../shared/id'
 import { isIpcStreamEnd, IPC_STREAM_END_WAIT_MS } from '../shared/ipc-stream'
 import type { HookEvent, HooksGatewayStatus } from '../shared/hook-types'
@@ -257,6 +257,10 @@ export interface ElectronAPI {
     kill: (sessionId: string, reason?: 'restart') => void
     onData: (sessionId: string, callback: (data: string) => void) => () => void
     onExit: (sessionId: string, callback: (exitCode: number) => void) => () => void
+    /** aicc_planning#392: the tab's next output chunk is its restored replay,
+     *  made at its holder's size (shared/replay-at-holder-size.ts; the tab
+     *  reads the notice with readReplayAtHolderSize). */
+    onReplayAtHolderSize: (sessionId: string, callback: (notice: unknown) => void) => () => void
   }
   ptyIntegrity: {
     report: (report: import('../shared/service-health').PtyIntegrityReport) => void
@@ -1061,7 +1065,8 @@ const electronAPI: ElectronAPI = {
       ipcRenderer.send(IPC.PTY_RESIZE, sessionId, cols, rows),
     kill: (sessionId, reason) => (reason === 'restart' ? ipcRenderer.send(IPC.PTY_KILL, sessionId, 'restart') : ipcRenderer.send(IPC.PTY_KILL, sessionId)),
     onData: (sessionId, callback) => onChannel(ptyDataChannel(sessionId), callback),
-    onExit: (sessionId, callback) => onChannel(ptyExitChannel(sessionId), callback)
+    onExit: (sessionId, callback) => onChannel(ptyExitChannel(sessionId), callback),
+    onReplayAtHolderSize: (sessionId, callback) => onChannel(ptyReplayAtHolderSizeChannel(sessionId), callback)
   },
   ptyIntegrity: {
     report: (report: import('../shared/service-health').PtyIntegrityReport) =>

@@ -64,6 +64,7 @@ import type { ProviderId, CodexOptions, TerminalOptions } from '../../shared/typ
 import { spawnRefusalOf, refusedTabText } from '../../shared/providers'
 import { parentOfPartnerPtyId } from '../../shared/multi-spawn-rule'
 import { TERMINAL_SCROLLBACK_LINES } from '../../shared/terminal-scrollback'
+import { readReplayAtHolderSize, type ReplayAtHolderSize } from '../../shared/replay-at-holder-size'
 import { reconcileRefusedMultiSpawn } from '../utils/refusedMultiSpawn'
 import { isConfigLaunchBlocked, useLaunchGateSettings, restartLaunchRefusal } from '../hooks/useLaunchConfig'
 import { useConfigStore } from '../stores/configStore'
@@ -584,6 +585,15 @@ export default function TerminalView({ sessionId, configId, cwd, shellOnly, elev
     const integrityGeneration = generateId()
     let bytesReceived = 0, bytesWritten = 0, strippedBytes = 0, ptyResizeCount = 0
     let lastSentCols: number | null = null, lastSentRows: number | null = null
+    // 2.1.3-beta.14, plan section C8 (aicc_planning#392): a restored terminal
+    // whose tab did not reach its holder's size is told that size and the
+    // length of its next chunk, its replay (replayAt). That chunk is written
+    // with the terminal at the holder's size, and the terminal is fitted to
+    // the tab once xterm has parsed it (replayFitOwed until then: no other
+    // fit runs, and no size goes to main).
+    let replayAt: ReplayAtHolderSize | null = null
+    let replayFitOwed = false
+    let unsubReplayAt: (() => void) | null = null
     let reportTimer: ReturnType<typeof setTimeout> | null = null
     let resizeDebounce: ReturnType<typeof setTimeout> | null = null
     // Post-resume settle nudge (resume terminal corruption). A `claude --resume`
@@ -1645,13 +1655,60 @@ export default function TerminalView({ sessionId, configId, cwd, shellOnly, elev
       })
       hiddenOutputRef.current = hiddenOutput
 
+      // aicc_planning#392: once the replay is parsed, the terminal is fitted
+      // to the tab and the tab's size goes to main, even when it is the size
+      // last sent: main sends the holder nothing until it hears it.
+      const fitAfterReplay = (): void => {
+        if (disposed || !fitAddon || !term) return
+        try { fitAddon.fit() } catch { /* ignore */ }
+        const cols = term.cols, rows = term.rows
+        if (cols > 0 && rows > 0) {
+          lastSentCols = cols
+          lastSentRows = rows
+          ptyResizeCount += 1
+          noteActivityGrace(sessionId)
+          window.electronAPI.pty.resize(sessionId, cols, rows)
+          reportIntegrity()
+        }
+        hideClaudeCursorLayer()
+      }
+      // The replay, written with the terminal at its holder's size, the size
+      // its console's output was made for; xterm rewraps it to the tab's size
+      // at the fit. Anything queued goes first, and output after it is
+      // written after it, so it is parsed after the fit.
+      const writeAtHolderSize = (filtered: string, at: ReplayAtHolderSize): void => {
+        hiddenOutput?.flush()
+        replayFitOwed = true
+        let fitted = false
+        const fit = (): void => {
+          if (fitted) return
+          fitted = true
+          replayFitOwed = false
+          fitAfterReplay()
+        }
+        try {
+          term?.resize(at.cols, at.rows)
+          writeOutput(filtered, fit)
+        } catch (err) {
+          // xterm refused it (about 50 MB waiting to be parsed): the fit and
+          // the tab's size still follow.
+          console.warn('[TerminalView] xterm refused the replay at its holder\'s size', err)
+          fit()
+        }
+      }
+      unsubReplayAt = window.electronAPI.pty.onReplayAtHolderSize?.(sessionId, (notice) => { replayAt = readReplayAtHolderSize(notice) }) ?? null
+
       unsubData = window.electronAPI.pty.onData(sessionId, (data) => {
         const filtered = shellOnly ? data : stripCursorSequences(data)
         bytesReceived += data.length
         strippedBytes += data.length - filtered.length
         bytesWritten += filtered.length
 
-        hiddenOutput?.push(filtered)
+        // The notice names this chunk only: the next one, of its length.
+        const at = replayAt
+        replayAt = null
+        if (at && at.length === data.length) writeAtHolderSize(filtered, at)
+        else hiddenOutput?.push(filtered)
 
         // Post-resume settle nudge: every chunk re-arms the timer; it fires only
         // once a burst has gone quiet for 600ms, and only while shots remain.
@@ -1730,6 +1787,9 @@ export default function TerminalView({ sessionId, configId, cwd, shellOnly, elev
         resizeDebounce = setTimeout(() => {
           resizeDebounce = null
           if (disposed || !fitAddon || !term) return
+          // A replay is being written at its holder's size: its own fit
+          // follows it, at the tab's size then (aicc_planning#392).
+          if (replayFitOwed) return
           try {
             fitAddon.fit()
             const cols = term.cols, rows = term.rows
@@ -1916,6 +1976,7 @@ export default function TerminalView({ sessionId, configId, cwd, shellOnly, elev
       if (repainterRef.current === repainter) repainterRef.current = null
       resizeObserver?.disconnect()
       unsubData?.()
+      unsubReplayAt?.()
       // aicc_planning#303: its queued output goes with the terminal.
       hiddenOutput?.dispose()
       if (hiddenOutputRef.current === hiddenOutput) hiddenOutputRef.current = null
