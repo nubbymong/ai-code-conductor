@@ -223,8 +223,9 @@ export function providerView(snapshot: AccountsSnapshot | null, providerId: Prov
   return snapshot?.providers.find((p) => p.providerId === providerId)
 }
 
-/** A provider's accounts as a chooser lists them: active ones first, then
- *  inactive ones, each in the snapshot's order. Archived accounts are hidden.
+/** A provider's accounts with the usable ones first, as the switch-account
+ *  menu and the Account usage page list them: active ones, then inactive
+ *  ones, each in the snapshot's order. Archived accounts are hidden.
  *  Settings, Accounts uses selectAccountsInAddedOrder instead, so that making
  *  an account active or inactive never moves its row there. */
 export function selectProviderAccounts(snapshot: AccountsSnapshot | null, providerId: ProviderId): AccountView[] {

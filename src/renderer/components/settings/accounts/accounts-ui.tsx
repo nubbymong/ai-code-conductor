@@ -87,10 +87,11 @@ export function ErrorLine({ children, testId }: { children: React.ReactNode; tes
  *  its cell rather than run past it on a narrow card ("This is still my
  *  account" on a blocked row; #181). `pressed` makes it a toggle (the
  *  page's All / Active / Inactive filter, aicc_planning#381): aria-pressed,
- *  and the chosen one tinted as the Default pill is. Left out, the button is
- *  as it always was. Keyboard focus draws the strong ring, as every other
- *  Settings control does (settings-select-focus.test.ts): the standard
- *  .focus-ring is too faint on the light cards. */
+ *  and the chosen one tinted as the Default pill is. Left out, it is a plain
+ *  button with no aria-pressed. Every RowButton draws the strong ring on
+ *  keyboard focus, as the other Settings controls do
+ *  (settings-select-focus.test.ts): the standard .focus-ring is too faint
+ *  on the light cards. */
 export function RowButton({ children, onClick, disabled, testId, title, pressed }: { children: React.ReactNode; onClick: () => void; disabled?: boolean; testId?: string; title?: string; pressed?: boolean }) {
   const t = PILL_TOKEN.default
   return (
