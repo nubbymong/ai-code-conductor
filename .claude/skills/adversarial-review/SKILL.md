@@ -100,17 +100,9 @@ A change is **security-sensitive (adversarial review REQUIRED)** if it touches a
 Docs-only, changelog-only, or pure-styling changes -> **tell the caller no adversarial pass is
 needed and stop.** Unsure -> treat as required (fail closed).
 
-**Sibling path-triggered gate -- the SSH statusline live matrix.** A second, *non-adversarial* gate
-lives on these paths: `src/main/pty-manager.ts` (SSH branch / sentinel parsers / statusline
-routing), `src/main/providers/claude/ssh-shim.ts`, `src/main/providers/claude/ui-detection.ts`,
-`src/main/ssh-tmux.ts`, `src/main/ssh-tmux-stage.ts`, `src/main/ssh-tmux-push.ts`,
-`src/main/ansi-strip.ts`, `src/main/statusline-watcher.ts`, `src/main/ssh-program.ts` (which ssh.exe
-an SSH session runs). A change touching any of them must run `npm run test:live:ssh` against real
-hosts and report the matrix in the PR before merge (see AGENTS.md "Release Process"). It is manual
-by construction (real hosts + credentials -- never CI) and independent of this skill's verdict: a
-Phase 0 match on `src/main/pty*` can require BOTH the adversarial pass and the live matrix. When
-your scoped target touches these paths, say so in the Phase 4 verdict so the caller does not treat
-an adversarial PASS alone as merge-ready.
+The live SSH matrix (tests/live/ssh-statusline-*) is retired (owner, 2026-11-22). A check that the
+session helper works across devices (the test VMs, the Mac, Linux hosts) replaces it when the remote
+helper needs one.
 
 Then identify the **boundary** under attack and its **claimed guarantees** -- read the code, the
 relevant ADR under `architecture/decisions/`, and the "Scope" / "Security Design" sections of

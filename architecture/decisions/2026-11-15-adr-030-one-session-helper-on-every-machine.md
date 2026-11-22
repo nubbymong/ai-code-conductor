@@ -433,9 +433,10 @@ as the login shell, a `.bashrc` that returns early for a shell that is not inter
 macOS, a password host, a home mounted `noexec`. Rocky Linux 10: not run. Its one connect,
 limited to 8 s, failed at the address on file and the probe recorded "host off", a label it
 also gave a refused connection and a name that does not resolve, so whether the host was
-off is not known; owed to beta.14, where the same probe runs on it, changed only in that a
-refused connection and an unknown name now have labels of their own. The
-host that answered was left as found: every holder ended, the probe's temporary folder
+off is not known; owed to beta.14, where the same probe runs on it. Three things in it
+changed after this run, none in what it measures: a refused connection and an unknown name
+have labels of their own, a host name with a colon is not run, and a host without pgrep is
+reported as not left as found. The host that answered was left as found: every holder ended, the probe's temporary folder
 deleted, and `/tmp/aicc-<uid>`, which was not there before, not there after; nothing was
 made on the other. The probe is `helper/probes/p3-p6-linux.cjs`.
 

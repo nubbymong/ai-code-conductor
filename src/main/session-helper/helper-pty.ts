@@ -190,10 +190,13 @@ const CUT_CHARACTER_MAX = 3
 export const HOLD_MAX_MS = 2_000
 /** A take-over's replay waits at most this long for the tab to reach the
  *  holder's size, from when that size is known; then it is shown at the
- *  tab's size, as before, and the log says both sizes. Each restore logs
- *  how long its tab took (from the spawn), so the VM's restores can set it
- *  from the longest with a margin. */
-export const SIZE_WAIT_MAX_MS = 2_000
+ *  tab's size, as before, and the log says both sizes. Set from the longest
+ *  wait the VM's restores saw, with margin (2.1.3-beta.13, plan sections A2
+ *  and A4): counted from the spawn, 1,417 ms in A2's line and 1,334 ms in
+ *  A4's, where 3 of 14 restores took over 1.3 s. 2,000 ms left too little
+ *  room for a slower PC. Each restore logs how long its tab took (from the
+ *  spawn), so a later line can set it again. */
+export const SIZE_WAIT_MAX_MS = 3_000
 
 class Emitter<T> {
   private listeners: Array<(e: T) => void> = []

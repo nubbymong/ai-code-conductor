@@ -246,7 +246,8 @@ level on beta, and pre-release on stable — not per PR.**
   beta/rc build on a real desktop. Apply it once you (or the tester) have actually
   driven the release in the running app, not just watched CI go green.
 - **`runtime-validated`** — **automated** runtime validation passed: VM Playwright
-  E2E and/or the live SSH statusline matrix. This is the automation route (so it
+  E2E (the live SSH statusline matrix, which also counted, is retired: owner,
+  2026-11-22). This is the automation route (so it
   no longer borrows `desktop-tested`), and it is strong enough to open the gate on
   its own — a separate human pass is then optional. See the Master Test Process
   (aicc_planning discussion #20) for what each automated pack covers.
