@@ -11,8 +11,10 @@
 // the spawn), then bindCodexPane and bindCodexLaunch (after it). A Claude Code
 // launch: bindClaudeLaunch, right after its spawn. Every launch: bindLoggingRun,
 // once the session is registered. The end of a session: unbindLaunchFiles at
-// its own exit, and in the teardown every kill and every exit runs
-// (cleanupSessionResources) unbindCodexLease, unbindLaunchTelemetry and
+// its own exit, or at once at a quit's kill (killAllPty and gracefulExitPty's
+// forced kill: the app may be gone before the exit is reported; a Codex
+// launch's waits for its exit), and in the teardown every kill and every exit
+// runs (cleanupSessionResources) unbindCodexLease, unbindLaunchTelemetry and
 // unbindLaunchRegistrations, each at its own place in that teardown.
 //
 // What stays in pty-manager.ts, and why:
@@ -608,7 +610,9 @@ export function bindLoggingRun(binding: LoggingRunBinding): LoggingRun {
 }
 
 /** The session's own end (its exit, when no newer process has taken the
- *  session over): its gateway token and its per-session files go. */
+ *  session over, or a quit's kill: killAllPty and gracefulExitPty's forced
+ *  kill, aicc_planning#385; a Codex launch's waits for its exit): its gateway
+ *  token and its per-session files go. */
 export function unbindLaunchFiles(sessionId: string): void {
   const { dropGatewayToken } = ports()
   // (P3.10 round 1, B1: with the record that a Codex launch minted it.)
