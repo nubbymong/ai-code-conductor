@@ -178,14 +178,9 @@ function crash(m: SessionHelperManager): void {
   for (const h of helper.holders.values()) h.dropAll()
 }
 
-// The ready wait is 10 s, not until's 3 s: a start here runs on the fake
-// helper with no timer on its path, but a loaded Windows runner once took
-// longer than 3 s for it (part 4 of run 45045301407, which ran 958 s of test
-// time in 491 s), while the same code was green on the runs before. The bound
-// only decides how long a start that never gets ready waits before it fails.
 async function started(m: SessionHelperManager, atStartup = true): Promise<SessionHelperManager> {
   await m.start({ atStartup })
-  await until(() => m.serviceState().state === 'ready', 'the helper to be ready', 10_000)
+  await until(() => m.serviceState().state === 'ready', 'the helper to be ready')
   return m
 }
 
@@ -530,12 +525,19 @@ describe('a crash: held terminals come back', () => {
 
     const second = makeManager()
     setSessionHelper(second)
-    void second.start({ atStartup: true })
+    const secondUp = second.start({ atStartup: true })
     await until(() => helper.holders.get(sid)!.attaches === 2, 'the keeper')
     const p = spawnPlainPty({ plain: true, sessionId: id }, SHELL, [], opts())
     expect(await (p as HelperPty).adoption).toBe(true)
     expect((p as HelperPty).redrawWay).toBe('same-size')
 
+    // The managers below share this root, and their copy of the helper is
+    // `aicc-helper`, not `aicc-helper.exe`, so the first of them makes one,
+    // through a `.new-` staging folder. second's start ends with its sweep of
+    // old folders (removeOldVersionFolders), which removes every staging
+    // folder it finds: they start once that sweep is done, or the sweep can
+    // take the staging folder mid-copy and that manager never gets ready.
+    await secondUp
     for (const platform of ['linux', 'darwin'] as const) {
       const m = await started(makeManager({ platform, checkEndpointFolder: () => null }))
       const q = m.spawn({ plain: true, sessionId: 'abcdef0123456789abcdef1f' }, '/bin/bash', ['-l'], { name: 'xterm-256color', cols: 80, rows: 24, cwd: '/home/u', env: { PATH: '/bin' } })
