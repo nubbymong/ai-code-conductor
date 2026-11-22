@@ -2,7 +2,7 @@ import { describe, it, expect, afterEach, vi } from 'vitest'
 import { FakeChildTransport } from '../../../src/main/services/service-transport'
 import { HooksGatewayProxy } from '../../../src/main/services/hooks-gateway-proxy'
 
-describe('HooksGatewayProxy fail-open + permission bridge', () => {
+describe('HooksGatewayProxy fail-open', () => {
   let p: HooksGatewayProxy
   afterEach(async () => { await p?.stop() })
 

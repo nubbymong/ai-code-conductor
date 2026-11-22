@@ -19,12 +19,12 @@
 // 2.1.3-beta.8, section A4: a second transport. A Claude Code session the
 // session helper holds sends its hook events (PreToolUse too, from
 // 2.1.3-beta.14) through its holder, and the session helper manager hands
-// each one here (helperHookEvent). Such an event gets what the gateway gives its own before
-// the same fan-out: the transcript path through the same shape filter, the
-// feed entry from the gateway's own builder (feedEntryOf: the redaction and
-// the bounding), a ring of its own per session, and HOOKS_EVENT to the
-// renderer in the same shape. It is taken only while the gateway would take
-// its own, read from the gateway at each event.
+// each one here (helperHookEvent). Such an event gets what the gateway gives
+// its own before the same fan-out: the transcript path through the same
+// shape filter, the feed entry from the gateway's own builder (feedEntryOf:
+// the redaction and the bounding), a ring of its own per session, and
+// HOOKS_EVENT to the renderer in the same shape. It is taken only while the
+// gateway would take its own, read from the gateway at each event.
 import type { HookEvent } from '../../shared/hook-types'
 import { IPC } from '../../shared/ipc-channels'
 import { onGateway, type HooksGatewayLike } from '../hooks/index'

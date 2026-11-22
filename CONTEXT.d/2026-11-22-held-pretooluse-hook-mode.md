@@ -39,4 +39,6 @@ mode's shape.
 
 **Docs owed in the aggregate's commit** (plan line 27): ADR-030's parity row
 "Permission answers from the app" and the protocol doc's hook-events
-paragraph; the lines are in the section's result.
+paragraph, and the Machines text in src/shared/app-knowledge.ts:167 with its
+pinned test (tests/unit/shared/app-knowledge.test.ts:2189-2192); the lines
+are in the section's result.
