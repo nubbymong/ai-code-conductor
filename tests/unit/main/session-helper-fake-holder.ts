@@ -64,6 +64,10 @@
  * makes it answer an error, a reply that does not read, or nothing. Each read is
  * counted in `screenReads`. Not modelled: what the rows hold, and
  * `screen.tail`.
+ *
+ * Output frames (2.1.3-beta.13, plan section A3): `frameBytes` sets the most
+ * bytes one raw frame carries, so a replay can be cut anywhere, inside an
+ * escape sequence too.
  */
 import { randomBytes } from 'crypto'
 import * as fs from 'fs'
@@ -107,7 +111,8 @@ export class FakeConn {
   sendJson(v: Json): void { if (!this.closed) this.end.write(encodeJsonFrame(v)) }
   sendRaw(b: Buffer): void {
     if (this.closed) return
-    for (let i = 0; i < b.length; i += 65536) this.end.write(encodeRawFrame(b.subarray(i, i + 65536)))
+    const size = this.holder.frameBytes
+    for (let i = 0; i < b.length; i += size) this.end.write(encodeRawFrame(b.subarray(i, i + size)))
   }
   close(): void {
     if (this.closed) return
@@ -131,6 +136,9 @@ export class FakeHolder {
   child: 'waiting' | 'running' | 'exited' = 'waiting'
   code: number | null = null
   ring = Buffer.alloc(0)
+  /** The most bytes one raw frame of output carries (a real holder's chunks
+   *  are at most 64 KiB); smaller cuts a replay at every this many bytes. */
+  frameBytes = 65536
   /** The output offset of the ring's first byte: what came before it is no
    *  longer held (a real ring keeps the last 2 MiB). Raised by forget(). */
   ringStart = 0

@@ -51,6 +51,16 @@
  * console's wrapped line counts the 3 rows the tab gives it, not 5, so the
  * tab is shown about as much of it as it keeps, and what is shown starts on
  * the tab's last row, where the count has the console's cursor.
+ *
+ * A take-over's replay was shown once already, by the app that ran before,
+ * and its tab answered the terminal queries in it then (a program asking the
+ * terminal where its cursor is, what it is, or its colours). So the replay,
+ * up to the attach's ring_end, loses each of them (replay-queries.ts), and
+ * neither the tab nor main's colour answer answers them again into a program
+ * that asked nothing (2.1.3-beta.13, plan section A3, aicc_planning#360). A
+ * query cut by ring_end is finished by the live output after it, and answered
+ * once. A launch's output and an attach again's replay were never shown, and
+ * a program may still wait for those answers: they go to the tab untouched.
  */
 import type { IDisposable, IEvent, IPty } from 'node-pty'
 import { StringDecoder } from 'string_decoder'
@@ -59,6 +69,7 @@ import { LAUNCH_LIMITS, type HolderRecord, type LaunchSpec } from './protocol'
 import { stripSpoofableText } from '../../shared/safe-text'
 import { TERMINAL_SCROLLBACK_LINES } from '../../shared/terminal-scrollback'
 import { replayTail, rowsOf } from './replay-tail'
+import { ReplayQueryFilter } from './replay-queries'
 import { PTY_IO_FAILED_GRACE_MS, PTY_IO_FAILED_TEXT, guardPtyIo } from '../pty-input-guard'
 
 export interface HelperPtyDriver {
@@ -257,6 +268,10 @@ export class HelperPty implements IPty {
   /** Bytes at the replay's very start that continue a character cut in half
    *  are dropped: at most this many more. */
   private cutBytes = 0
+  /** A take-over's replay goes through this until the offset reaches `end`,
+   *  the attach's ring_end: its terminal queries are taken out. An attach
+   *  again with no gap goes on with it, to that end. */
+  private queries: { filter: ReplayQueryFilter; end: number } | undefined
   /** Some of this terminal's output was shown to the tab already. */
   private shownAny = false
   private reattachTimes: number[] = []
@@ -545,6 +560,10 @@ export class HelperPty implements IPty {
         const gap = m.truncated === true || start > from
         if (start !== from || gap) this.flushDecoder()
         this.offset = start
+        // A take-over's replay loses its queries, to this reply's ring_end; a
+        // gap that starts past that end ends the filter.
+        if (mode === 'adopt') this.startQueries(m)
+        else if (this.queries && start >= this.queries.end) this.endQueries()
         // A program that is over: its replay is shown with no wait for the
         // size (counted with the cursor's row followed only when the tab
         // started at its holder's size, showHeld), and its tab reads it as
@@ -803,8 +822,15 @@ export class HelperPty implements IPty {
     this.conn = conn
     conn.on('output', (bytes: Buffer) => {
       if (this.conn !== conn || this.exited) return
+      const at = this.offset
       this.offset += bytes.length
-      const text = this.decoder.write(this.cutBytes > 0 ? this.dropCut(bytes) : bytes)
+      // A take-over's replay, to its ring_end, goes through the query filter;
+      // the live output after it does not.
+      const q = this.queries
+      const cut = q ? Math.max(0, Math.min(bytes.length, q.end - at)) : 0
+      let text = q && cut > 0 ? q.filter.write(this.decode(bytes.subarray(0, cut))) : ''
+      if (q && this.offset >= q.end) text += this.endQueries()
+      text += this.decode(cut > 0 ? bytes.subarray(cut) : bytes)
       const held = this.held
       if (held) {
         // A frame that carries the replay's end and live output after it is
@@ -1078,12 +1104,37 @@ export class HelperPty implements IPty {
     })
   }
 
-  /** The decoder's last half character, as its stream's own text: held with a replay still held. */
+  /** The decoder's last half character, as its stream's own text: held with a
+   *  replay still held. Before it, a sequence the query filter holds, as it
+   *  is: the stream goes on after a gap, or not at all. */
   private flushDecoder(): void {
-    const rest = this.decoder.end()
+    const rest = (this.queries?.filter.flush() ?? '') + this.decoder.end()
     if (!rest) return
     if (this.held) this.held.parts.push(rest)
     else this.show(rest)
+  }
+
+  /** A take-over's replay is in up to `reply`'s ring_end: its queries are taken out to there. */
+  private startQueries(reply: Record<string, unknown>): void {
+    const end = typeof reply.ring_end === 'number' ? reply.ring_end : this.offset
+    this.queries = end > this.offset ? { filter: new ReplayQueryFilter(), end } : undefined
+  }
+
+  /** The query filter's end: what it holds goes on as it is, and one log
+   *  line counts what it took out. */
+  private endQueries(): string {
+    const q = this.queries
+    if (!q) return ''
+    this.queries = undefined
+    const rest = q.filter.flush()
+    const n = q.filter.dropped
+    if (n > 0) this.driver.log(`[session-helper] ${this.sid}: ${n} terminal ${n === 1 ? 'query' : 'queries'} in its replay ${n === 1 ? 'was' : 'were'} not passed on, so ${n === 1 ? 'it is' : 'they are'} not answered a second time`)
+    return rest
+  }
+
+  /** Output bytes to text, the bytes of a cut character at the replay's very start dropped first. */
+  private decode(bytes: Buffer): string {
+    return this.decoder.write(this.cutBytes > 0 ? this.dropCut(bytes) : bytes)
   }
 
   /** Output of the holder's terminal, or a line of the app's own, to the tab. */
@@ -1115,6 +1166,7 @@ export class HelperPty implements IPty {
     this.setDetached()
     this.stopRedraw()
     this.flushDecoder()
+    this.endQueries()
     this.exitEmitter.fire(signal === undefined ? { exitCode } : { exitCode, signal })
   }
 }
