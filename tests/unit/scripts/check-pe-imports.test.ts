@@ -6,8 +6,8 @@ import { pathToFileURL } from 'url'
 // overrides; nothing is installed for this test.
 import yaml from 'js-yaml'
 // Plain ESM with main() behind an entry-point check: importing it runs nothing.
-import { CRT_DLL, isCrtDll, isVcRuntimeDll, readImports, importProblems, isEntryPoint, machineName, main } from '../../../scripts/check-pe-imports.mjs'
-import { buildPe, SECTION_RVA, TODAYS_HELPER, STATIC_HELPER } from './pe-image'
+import { CRT_DLL, WINDOW_MANAGER_DLL, isCrtDll, isVcRuntimeDll, isWindowManagerDll, readImports, importProblems, isEntryPoint, machineName, main } from '../../../scripts/check-pe-imports.mjs'
+import { buildPe, SECTION_RVA, TODAYS_HELPER, STATIC_HELPER, WINDOW_MANAGER_DLLS, CAPTURE_HELPER_LOAD_TIME } from './pe-image'
 
 /**
  * The session helper carries its own C runtime on Windows (2.1.3-beta.8
@@ -65,6 +65,25 @@ describe('isCrtDll: the Visual C++ runtime and the Universal C runtime, nothing 
   it('tells the Visual C++ runtime (missing on a fresh Windows) from the Universal C runtime (part of Windows 10 and later)', () => {
     for (const n of ['VCRUNTIME140.dll', 'vcruntime140_1d.dll', 'MSVCP140.dll', 'msvcp140d_atomic_wait.dll', 'concrt140.dll', 'VCRUNTIME140']) expect(isVcRuntimeDll(n), n).toBe(true)
     for (const n of ['ucrtbase.dll', 'ucrtbased.dll', 'api-ms-win-crt-heap-l1-1-0.dll', 'kernel32.dll', 'msvcrt.dll', '']) expect(isVcRuntimeDll(n), n).toBe(false)
+  })
+})
+
+describe('isWindowManagerDll: user32, gdi32 and shcore, by name or API set, nothing else', () => {
+  it('names each, in any letter case, with or without .dll, and the API set names that lead to them', () => {
+    for (const n of [
+      ...WINDOW_MANAGER_DLLS, 'USER32.dll', 'user32', 'GDI32.DLL', 'gdi32', 'shcore.dll', 'SHCORE',
+      'api-ms-win-shcore-scaling-l1-1-1.dll', 'API-MS-WIN-SHCORE-SCALING-L1-1-1.DLL', 'api-ms-win-shcore-scaling-l1-1-0',
+      'ext-ms-win-ntuser-window-l1-1-0.dll', 'api-ms-win-ntuser-sysparams-l1-1-0.dll', 'ext-ms-win-gdi-dc-l1-2-0.dll',
+    ]) expect(isWindowManagerDll(n), n).toBe(true)
+  })
+
+  it("leaves the base helper's DLLs alone, and names that only look like one", () => {
+    for (const n of [
+      ...STATIC_HELPER, 'msvcrt.dll', 'ws2_32.dll', 'user32.dll.bak', 'myuser32.dll', 'user.dll', 'gdi32full.dll', 'shcore32.dll',
+      'api-ms-win-shcore-.dll', 'api-ms-win-core-libraryloader-l1-2-0.dll', '',
+    ]) expect(isWindowManagerDll(n), n).toBe(false)
+    expect(isWindowManagerDll(undefined as unknown as string)).toBe(false)
+    expect(WINDOW_MANAGER_DLL.flags).toContain('i')
   })
 })
 
@@ -247,6 +266,20 @@ describe('importProblems: an x64 program that names its DLLs and no C runtime DL
     ])
   })
 
+  it('fails a window-manager DLL in the import table, and passes the same DLLs delay-loaded (2.1.3-beta.14 C6)', () => {
+    // As CI built the capture mode at first: every mode loaded the three at start.
+    expect(importProblems(readImports(buildPe({ imports: CAPTURE_HELPER_LOAD_TIME }).bytes))).toEqual([
+      `loads ${WINDOW_MANAGER_DLLS.join(', ')} before main, in every mode: only the capture mode calls the window-manager DLLs, so they must be delay-loaded (helper/.cargo/config.toml, /DELAYLOAD) and load only when that mode runs. All its imports: ${CAPTURE_HELPER_LOAD_TIME.join(', ')}.`,
+    ])
+    // Delay-loaded, as helper/.cargo/config.toml now links them: the fix.
+    expect(importProblems(readImports(buildPe({ imports: STATIC_HELPER, delay: WINDOW_MANAGER_DLLS }).bytes))).toEqual([])
+    // Each one alone in the import table is enough, and only the import table counts.
+    for (const dll of WINDOW_MANAGER_DLLS) {
+      expect(importProblems(readImports(buildPe({ imports: [...STATIC_HELPER, dll] }).bytes)), dll).toHaveLength(1)
+      expect(importProblems(readImports(buildPe({ imports: STATIC_HELPER, delay: [dll] }).bytes)), `${dll} delay-loaded`).toEqual([])
+    }
+  })
+
   it('x64 is what the Windows installer is built for, and nothing else', () => {
     const win = (JSON.parse(read('package.json')) as { build: { win: { target: Array<{ arch: string[] }> } } }).build.win
     expect(win.target.flatMap((t) => t.arch)).toEqual(['x64'])
@@ -277,7 +310,18 @@ describe('main: the exit code CI acts on', () => {
     const r = run({ 'aicc-helper.exe': buildPe({ imports: STATIC_HELPER }).bytes })
     expect(r.code).toBe(0)
     expect(r.err).toBe('')
-    expect(r.out).toBe(`[check-pe-imports] aicc-helper.exe (PE32+, x64): OK, no C runtime DLL. It imports: ${STATIC_HELPER.join(', ')}.`)
+    expect(r.out).toBe(`[check-pe-imports] aicc-helper.exe (PE32+, x64): OK, no C runtime DLL and no window-manager DLL loaded at start. It imports: ${STATIC_HELPER.join(', ')}.`)
+  })
+
+  it('the helper with the capture mode fails while every mode loads the window-manager DLLs, and passes with them delay-loaded, each marked', () => {
+    const loaded = run({ 'aicc-helper.exe': buildPe({ imports: CAPTURE_HELPER_LOAD_TIME }).bytes })
+    expect(loaded.code).toBe(1)
+    expect(loaded.out).toBe('')
+    expect(loaded.err).toBe(`[check-pe-imports] FAIL: aicc-helper.exe (PE32+, x64) loads ${WINDOW_MANAGER_DLLS.join(', ')} before main, in every mode: only the capture mode calls the window-manager DLLs, so they must be delay-loaded (helper/.cargo/config.toml, /DELAYLOAD) and load only when that mode runs. All its imports: ${CAPTURE_HELPER_LOAD_TIME.join(', ')}.`)
+    const delayed = run({ 'aicc-helper.exe': buildPe({ imports: STATIC_HELPER, delay: WINDOW_MANAGER_DLLS }).bytes })
+    expect(delayed.code).toBe(0)
+    expect(delayed.err).toBe('')
+    expect(delayed.out).toBe(`[check-pe-imports] aicc-helper.exe (PE32+, x64): OK, no C runtime DLL and no window-manager DLL loaded at start. It imports: ${[...STATIC_HELPER, ...WINDOW_MANAGER_DLLS.map((d) => `${d} (delay-load)`)].join(', ')}.`)
   })
 
   it('each C runtime DLL alone is enough to fail, in the import table or the delay-load table', () => {
@@ -449,14 +493,30 @@ describe('every Windows build of the shipped helper is checked right after it is
   })
 })
 
-describe('helper/.cargo/config.toml links the C runtime in, for Windows MSVC builds only', () => {
+describe('helper/.cargo/config.toml links the C runtime in and delay-loads the window-manager DLLs, for Windows MSVC builds only', () => {
+  const config = () => read('helper/.cargo/config.toml')
   // CI reads the committed tree, so a file that was never committed fails here too.
   it('says exactly that and nothing else', () => {
-    const settings = read('helper/.cargo/config.toml')
+    const settings = config()
       .split('\n')
       .map((l) => l.trim())
       .filter((l) => l !== '' && !l.startsWith('#'))
-    expect(settings).toEqual([`[target.'cfg(all(windows, target_env = "msvc"))']`, 'rustflags = ["-C", "target-feature=+crt-static"]'])
+    expect(settings).toEqual([
+      `[target.'cfg(all(windows, target_env = "msvc"))']`,
+      'rustflags = [',
+      '"-C", "target-feature=+crt-static",',
+      '"-C", "link-arg=/DELAYLOAD:user32.dll",',
+      '"-C", "link-arg=/DELAYLOAD:gdi32.dll",',
+      '"-C", "link-arg=/DELAYLOAD:api-ms-win-shcore-scaling-l1-1-1.dll",',
+      '"-C", "link-arg=delayimp.lib",',
+      ']',
+    ])
+  })
+
+  it('delay-loads exactly the window-manager DLLs the capture mode imports, each one the check names', () => {
+    const delayed = [...config().matchAll(/^\s*"-C", "link-arg=\/DELAYLOAD:([^"]+)",$/gm)].map((m) => m[1])
+    expect(delayed).toEqual(WINDOW_MANAGER_DLLS)
+    for (const dll of delayed) expect(isWindowManagerDll(dll), dll).toBe(true)
   })
 })
 

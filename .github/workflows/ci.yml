@@ -1232,8 +1232,10 @@ jobs:
       # The helper must start on a PC without Microsoft's Visual C++ runtime, so
       # it carries its own C runtime (helper/.cargo/config.toml, +crt-static).
       # This reads the built program's import table and fails if it still
-      # imports a C runtime DLL (VCRUNTIME140.dll, api-ms-win-crt-*, ...). It
-      # only reads the file. release.yml runs the same check before packaging.
+      # imports a C runtime DLL (VCRUNTIME140.dll, api-ms-win-crt-*, ...), or
+      # imports a window-manager DLL (user32, gdi32, shcore) at load time rather
+      # than delay-loading it for the capture mode alone. It only reads the
+      # file. release.yml runs the same check before packaging.
       - name: Check the Windows helper carries its own C runtime
         if: steps.scope.outputs.helper != 'false' && steps.lock.outputs.present == 'true' && runner.os == 'Windows'
         run: node scripts/check-pe-imports.mjs helper/target/release/aicc-helper.exe

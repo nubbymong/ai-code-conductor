@@ -3,7 +3,7 @@
 - Status: Accepted (owner decisions D1 to D20 of 2026-11-15; plan approved on
   the Agent Canvas, 2026-11-15). Only the scope of 2.1.3-beta.4 is approved for
   building. Every later slice comes back one beta at a time, and each of the
-  twenty probes below can still stop or reshape the slice it gates.
+  twenty-one probes below can still stop or reshape the slice it gates.
 - Date: 2026-11-15
 - Builds on: ADR-029 (remote sessions run through a device helper),
   `docs/remote/helper-protocol.md` (protocol version 1),
@@ -349,7 +349,7 @@ otherwise carried from earlier measurement.
 - **Pace.** After each release the next beta is cut from the measured hours
   per slice, not from a calendar. Soak time (D15) is not in those hours.
 - **Honest cost.** Until the remote deletion the SDLC is heavier, not lighter:
-  a Rust toolchain and signing, twenty probes on real machines, two session
+  a Rust toolchain and signing, twenty-one probes on real machines, two session
   paths side by side, and five dedicated adversarial rounds that the decisions
   add (the token on This computer, the token on a remote machine, the remote
   conversation intake, Windows provisioning, the user's own pre-launch
@@ -397,6 +397,7 @@ their questions, gates and fallbacks are restated for the slice plan.
 | P18 | On Windows, how do Claude Code and Codex start a tool server over standard input and output, and is it gone when the CLI ends? | Tools through the helper (S15) | The relay's start is planned again for that CLI, whose sessions keep today's loopback route to the tools until then |
 | P19 | After a re-attach that starts in the middle of a session's output, does a resize make Claude Code and Codex redraw their screen, on Windows, macOS and Linux? | What a mid-stream re-attach does, and what the holder's screen is for (S13) | On that system the holder repaints the terminal on attach from its own screen, with the holder screen's next step and before S16's second half and S25 there |
 | P20 | Once the app run that started a CLI is gone: what do Claude Code's http PreToolUse hook and Codex's hook forwarder do when the endpoint refuses, answers 401 or 404, or never answers; does Claude Code read its `--settings` hooks or its `--mcp-config` again while it runs; does each CLI list its tools again on `notifications/tools/list_changed`? | S16's second half: steps 2, 4 and 6 (CONTEXT.d/2026-11-19-what-a-held-agent-session-needs.md) | PreToolUse goes through the hook mode (step 2) before step 4 keeps that CLI's session; a take-over writes nothing into a file the CLI reads only once; step 6 is dropped for a CLI that does not list again, and its held session keeps the tool list it started with |
+| P21 | On Windows, can the helper's capture mode, started from the signed-in user's own session, capture each display in physical pixels at that display's scale within 2 seconds, and does a run from a session with no desktop fail cleanly? | Snap replaced on Windows (S8, D3) | Electron's `desktopCapturer` behind our overlay on Windows, and the capture mode's Windows path is planned again |
 
 P12 result (2026-11-15): a Token session runs and keeps its usage figures;
 Remote Control and extra-usage credits need a Standard login; which kind is
@@ -683,6 +684,29 @@ change 3. Not measured: a signed-in account and a real model, the app's own gate
 path (the probe writes the same entries), a settings file written in place, Claude Code's other
 hook events, macOS and Linux, Codex below 0.157.1 (the tested range starts at 0.153.4). The
 probe is `helper/probes/p20-probe.cjs`.
+
+P21 result (2026-11-22, plan 2.1.3-beta.14 C6, the Windows test machine, build 22621, with the
+`helper-windows` artifact of Helper run 45032133403 on 0e2d6f98, whose `aicc-helper.exe` has
+SHA-256 51a33a39f8d4d046445081e3f4c93736a82e65048ef10ec0565e6c1529fb5b36). The decision lines
+were fixed before measuring and are in the probe's header. From the SSH session (session 0,
+elevated): FAILS CLEANLY. In 3 of 3 runs the mode exited 3 in 13 to 61 ms with "no desktop to
+capture: this process runs on a window station no display shows (`Service-0x0-...$`): a service
+or an SSH session", printed nothing on stdout and left no file. In that session Windows lists no
+attached display mode (EnumDisplaySettings), yet still gives one display of 1024 by 768 at 96 DPI
+(EnumDisplayMonitors and GetDpiForMonitor), so the window station check is what stops the run, not
+the display list. From the console session: CANNOT MEASURE. Nobody was signed in on the test
+machine's console: `quser` listed no user and LogonUI ran in session 1. Its auto sign-in is set
+(AutoAdminLogon 1, user User) with no DefaultPassword value under the Winlogon key (a password
+kept as an LSA secret was not read, so why it did not sign in is not known), and Winlogon's last
+sign-in notice is from 2026-10-30, so the start of 2026-11-18 signed nobody in. The probe's scheduled task,
+which runs only while its user is signed in, was registered and started and did not run (0x00041303,
+"the task has not run"); it was removed, and nobody was signed in by hand. So the console runs'
+time, sizes, DPI and pixels and the second scale were not measured, and mixed scaling was not
+measured (the machine has one display). What it means, as fixed before measuring: no verdict for
+the console session, so P21 runs again from a signed-in console session before S8 builds Snap's
+Windows overlay on the mode; the SSH half needs nothing. The machine was left as found (no task,
+no file, its scale and name lookups as they were). The probe is `helper/probes/p21-capture.cjs`
+with `p21-windows.ps1`.
 
 ## Parked questions
 

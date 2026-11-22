@@ -32,6 +32,8 @@ build are in `docs/remote/helper-threat-model.md` 3.10.
 | Holder process | `src/serve.rs`, `src/request.rs`, `src/detach.rs` | `hold`: the hello, the `term.*` messages, the away clock; started detached so it outlives the app |
 | Records and list | `src/store.rs`, `src/client.rs`, `src/pids.rs` | Each holder's record in the store folder; `list` finds every session and removes stale records |
 | Start and end mode | `src/start.rs`, `src/winproc.rs` | Windows only. `start`: one program, by a drive-absolute path (never searched for, never a batch file), with no inherited handles, created suspended until its creation time is read; prints its pid and creation time and exits. `end`: ends that program and the processes under it, only while its pid still has that creation time, holding it open from the check to the end; prints `ended` or `left`. The app starts and ends the vision browser this way |
+| Console hosts | `src/consoles.rs` | Windows only. `console-hosts`: at the app's start, ends the console hosts the run before left when it was ended from outside (only that run's, by parent, creation time, user and program file), and names the process that started it for the app to record |
+| Capture mode | `src/capture.rs` | Windows only (from 2.1.3-beta.14; macOS and Linux exit 4, not supported). `capture --out <folder>`: one 32-bit BMP of each whole display in physical pixels, each file made new, and one JSON line of each display's bounds and scale; exit 3 when it cannot see the screen (an SSH session, a locked screen). For Snap (ADR-030 D3, D4); nothing in the app runs it yet, and probe P21 measures it first |
 | Tool relay | `src/relay.rs` | `mcp`: a session's tool server as its CLI starts one. It carries one JSON-RPC message a line between its standard input and output and the session's holder, which passes them to the attached connection that acked `mcp` (from 2.1.3-beta.10; from 2.1.3-beta.11 a held session's CLI starts it, behind the agent sessions' switch). With a holder that offers `away` (from 2.1.3-beta.12) its stream is kept while the app is away: a call made meanwhile waits up to 30 s, then gets the fixed "updating" answer, and a call the app had when it went is answered at once and never sent again |
 | Self-test | `src/selftest.rs` | Codec, hello, ring, a terminal round trip and a round trip over the local transport, one `AICC-RESULT` line; it closes its terminal before it moves on, and on Windows it runs in a job object when one can be made, so nothing it starts (its terminal's `conhost.exe` included) outlives it |
 | Fake CLI | `src/bin/aicc-fake-cli.rs` | A stand-in provider CLI for tests and probes |
@@ -56,6 +58,8 @@ aicc-helper hook --store <folder> --session <sid>
 aicc-helper mcp --store <folder> --session <sid>
 aicc-helper start [--hide] --cwd <folder> -- <program> [args...]   (Windows only)
 aicc-helper end --pid <n> --created <t>                            (Windows only)
+aicc-helper console-hosts [--pid <n> --created <t>]                (Windows only)
+aicc-helper capture --out <folder>                                 (Windows only)
 ```
 
 `hold --detach` prints the holder's record as one JSON line once the holder
@@ -73,7 +77,11 @@ session's CLI starts it, behind the agent sessions' switch). In the debug build
 one out. `start` prints
 `{"pid":<n>,"created":"<t>"}` and exits without waiting for the program; `end`
 prints `ended` or `left` (protocol section 15, "Starting a program" and "Ending
-a program it started").
+a program it started"). `console-hosts` prints
+`{"pid":<n>,"created":"<t>","ended":<k>}` ("Console hosts a run left").
+`capture` writes `display-<n>.bmp` into the folder and prints
+`{"displays":[...]}`; it exits 3 when there is no desktop to capture and 4 off
+Windows ("Capturing the displays").
 
 ## Building and testing
 
@@ -98,6 +106,9 @@ the other change has merged and the branch has been moved onto beta.
 On Windows the helper carries its own C runtime (since 2.1.3-beta.8), so it
 starts on a PC without Microsoft's Visual C++ runtime. `.cargo/config.toml` in
 this folder adds `-C target-feature=+crt-static` to Windows MSVC builds only.
+It also delay-loads the window-manager DLLs (user32, gdi32 and shcore's API set,
+since 2.1.3-beta.14): only the capture mode calls them, so they load when that
+mode runs and no other mode loads them at its start.
 cargo reads that file only when it runs in this folder or below, so run every
 cargo command from `helper/`, as CI and the release workflow do. A `RUSTFLAGS`
 or `CARGO_ENCODED_RUSTFLAGS` variable replaces the setting, so do not set one.
@@ -109,7 +120,8 @@ node scripts/check-pe-imports.mjs helper/target/release/aicc-helper.exe
 ```
 
 It fails if the program imports a C runtime DLL (`VCRUNTIME140.dll`,
-`api-ms-win-crt-*` and the like), names no DLL at all, or is not x64. CI runs it
+`api-ms-win-crt-*` and the like), imports a window-manager DLL at load time
+rather than delay-loading it, names no DLL at all, or is not x64. CI runs it
 after the Windows release build in the Helper job, before the release/* test
 installer is packaged, and `release.yml` runs it before the Windows installer is
 signed and packaged. `npm run verify:helper`, which every package script and

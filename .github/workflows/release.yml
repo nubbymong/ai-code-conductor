@@ -253,7 +253,9 @@ jobs:
       # it carries its own C runtime (helper/.cargo/config.toml, +crt-static;
       # cargo reads it because the build above runs in helper/). This reads the
       # built program's import table and fails, before anything is signed or
-      # packaged, if it still imports a C runtime DLL. It only reads the file.
+      # packaged, if it still imports a C runtime DLL, or imports a
+      # window-manager DLL (user32, gdi32, shcore) at load time rather than
+      # delay-loading it for the capture mode alone. It only reads the file.
       - name: Check the session helper carries its own C runtime
         run: node scripts/check-pe-imports.mjs helper/target/release/aicc-helper.exe
 

@@ -663,6 +663,43 @@ command line it cannot read. No PowerShell and no WMI. On macOS and Linux the
 mode exits 1. The app runs it from the install folder, as it runs `start` and
 `end`.
 
+**Capturing the displays (Windows only, from 2.1.3-beta.14).** Protocol change
+2 (ADR-030): a command-line mode on This computer only, display pictures only,
+for Snap (D3, D4). Nothing in the app runs it yet; probe P21 measures it first
+(ADR-030, Probes), and the command line may still change until the app runs it.
+
+```
+aicc-helper capture --out <folder>
+```
+
+`<folder>` is an absolute path to a folder that is there already; `--out` is
+given once and nothing else is taken. The mode makes itself aware of each
+display's own scale (per-monitor DPI awareness, version 2), so every size is in
+physical pixels. It first checks that it can see the screen: its window station
+is the one a display shows (a service or an SSH session has none), and the
+desktop on the screen is its own (not the sign-in screen, a locked screen or an
+elevation prompt). Then it lists the displays, the primary one first and the
+rest from the top left, grabs each whole display from the screen and writes it
+to `display-<n>.bmp` in the folder, `<n>` from 1: a 32-bit BMP whose rows run
+from the bottom, every fourth byte 255. Whole displays only, never a window or
+a part of one (the rectangle of D4 is cut by the overlay); at most 16 displays,
+each at most 16384 pixels on a side. Each file is made new: a file already
+there is never written over, and the run then fails. A run that fails removes
+every file it wrote, so it leaves all of them or none. It prints one line,
+
+```
+{"displays":[{"file":"display-1.bmp","left":0,"top":0,"width":1920,"height":1080,"dpi":144,"scale":150,"primary":true}]}
+```
+
+with each display's bounds on the virtual screen in physical pixels, its
+effective DPI and that as a percentage of 96, rounded, and exits 0. It exits 1
+with a message on stderr when a grab or a write fails, or `<folder>` is not a
+folder that is there; 2 on a command line it does not take; 3 when there is no desktop to
+capture (it cannot see the screen, or Windows lists no display), with the
+reason on stderr; and 4 on macOS and Linux, where it is not supported yet. It
+makes no window, and uses no PowerShell and no WMI. Its window-manager DLLs
+(user32, gdi32, shcore) load only when the mode runs; no other mode loads them.
+
 **Endpoint: only this user can connect.** No network socket is opened.
 
 - **Windows:** the named pipe `\\.\pipe\aicc-helper-<sid>-<32 hex>`. Its
@@ -1334,4 +1371,5 @@ it refuses the field with `bad-field`. The `hook` command line (2.1.3-beta.8)
 is frozen with them: its options, its exit status (always 0) and its silence.
 So is the `mcp` command line (2.1.3-beta.10): its options, its exit status (0
 at the end of its input, 1 otherwise) and a standard output that carries only
-messages.
+messages. The `capture` command line (2.1.3-beta.14) is not frozen yet: nothing
+in the app runs it.

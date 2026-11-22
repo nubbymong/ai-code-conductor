@@ -650,6 +650,26 @@ rollback returns to the earlier beta's rows, and every row has a negative test.
   which it could already end itself. When the helper in the install folder is
   gone, the app runs the session helper's per-user copy only after reading its
   SHA-256 again (3.1). Tested in `tests/unit/main/vision-manager-start-mode.test.ts`.
+- **The capture mode reads only the screen its own session shows, and writes
+  only new files in the folder it is given (from 2.1.3-beta.14, Windows;
+  nothing in the app runs it yet).** `aicc-helper capture` (protocol 15,
+  "Capturing the displays") is a command line, not a message: no connection,
+  holder or remote host can ask for it, and it opens no endpoint. It grabs the
+  whole displays of the desktop its own process sees, as any program of the
+  user can, and refuses (exit 3) when that desktop is not the one on the
+  screen or its window station is shown on no display. It writes
+  `display-<n>.bmp` files into the absolute folder it is given, each made new
+  (never over a file that is there, so it cannot be pointed at a file to
+  replace it), and removes what it wrote when a run fails. Each display is at
+  most 16384 pixels on a side and a run at most 16 displays, so one run writes
+  at most 16 files, each at most 1 GiB of pixels after a 54-byte header.
+  Its window-manager DLLs (user32, gdi32, shcore) load only when the mode
+  runs; no other mode loads them (they are delay-loaded, and
+  `scripts/check-pe-imports.mjs` fails a build that imports one at load
+  time). Tested in `helper/tests/capture.rs`
+  and the unit tests of `helper/src/capture.rs`; probe P21 measures it on the
+  test machine. An adversarial pass of it is owed to the security round
+  before 2.1 stable (aicc_planning #320), before the app runs it.
 
 ## 4 Review
 
