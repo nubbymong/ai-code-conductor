@@ -7667,16 +7667,16 @@ export function killAllPty(): void {
   // the union. Snapshot the keys first: killPty mutates both maps.
   const ids = new Set<string>([...ptySessions.keys(), ...refreshWaitSpawns.keys()])
   logInfo(`[pty] Killing all PTYs (${ptySessions.size} active, ${refreshWaitSpawns.size} parked on a refresh wait)`)
-  for (const id of ids) {
-    killPty(id)
-  }
+  // The app often exits before node-pty reports these ends, so each session's
+  // own files go now, not at its exit (aicc_planning#385; the exit's removal finds none).
+  for (const id of ids) { killPty(id); unbindLaunchFiles(id) }
 }
 
 /**
  * End a session when the app quits: /exit for a CLI the app started, a plain
  * close for every other terminal, a detach for a tmux-persistent remote.
  * Returns a promise that resolves when the PTY exits, or after the timeout's
- * forced kill.
+ * forced kill, which removes the session's own files at once.
  */
 export function gracefulExitPty(sessionId: string, timeoutMs = 5000): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -7694,9 +7694,9 @@ export function gracefulExitPty(sessionId: string, timeoutMs = 5000): Promise<vo
     })
 
     const timeout = setTimeout(() => {
-      // Timeout - force kill
+      // Timeout: a forced kill. The quit goes on before node-pty reports this end, so the files go now (aicc_planning#385).
       logInfo(`[pty-manager] Graceful exit timeout for ${sessionId}, force killing`)
-      killPty(sessionId)
+      killPty(sessionId); unbindLaunchFiles(sessionId)
       resolve()
     }, timeoutMs)
 
