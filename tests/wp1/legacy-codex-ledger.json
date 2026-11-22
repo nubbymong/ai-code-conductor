@@ -3271,7 +3271,7 @@
       ],
       "category": "OTHER",
       "disposition": "added",
-      "evidence": "2.1.3-beta.11 section B2: the session helper is given tool functions for Claude Code and Codex (the tool host's serveToolStream, the Claude Code MCP config switch, and the Codex package's heldToolLaunch through the provider registry) (WP1.68); tests/unit/main/session-helper-app-wiring.test.ts",
+      "evidence": "2.1.3-beta.11 section B2: the session helper is given tool functions for Claude Code and Codex (the tool host's serveToolStream, the Claude Code MCP config switch, and the Codex package's heldToolLaunch through the provider registry); 2.1.3-beta.14 section B2 (aicc_planning #388): it is given the screen reads, with the title, for Codex sessions only (screens: { codex: true }) (WP1.68); tests/unit/main/session-helper-app-wiring.test.ts",
       "note": "the P08 hit is the codex key of the tool functions' map, not a preload or renderer surface"
     },
     {
@@ -7310,6 +7310,17 @@
       "note": ""
     },
     {
+      "path": "tests/unit/main/codex-held-screen.test.ts",
+      "predicates": [
+        "P01",
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "new 2.1.3-beta.14 section B2 test (tests/unit/main/codex-held-screen.test.ts, aicc_planning #388): every Codex recording in helper/fixtures/screens, as the holder answers it, gives the composer rule the same state as main's pane; a held run opens no pane and its reads are the holder's; with no holder read at its first byte the pane opens then and holds that byte; a failed or cut read is no reading and nothing is typed; a submission through the holder is confirmed on its screen, and its log line names where the rule read (WP1.68)",
+      "note": "created by 2.1.3-beta.14 section B2; headless terminals and fakes, nothing started"
+    },
+    {
       "path": "tests/unit/main/codex-history-copy-not-link.test.ts",
       "predicates": [
         "P01",
@@ -7875,6 +7886,16 @@
       "note": "created by WP2 (main refuses every launch of a provider that is off)"
     },
     {
+      "path": "tests/unit/main/launch-bindings-held-screen.test.ts",
+      "predicates": [
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "new 2.1.3-beta.14 section B2 test (tests/unit/main/launch-bindings-held-screen.test.ts, aicc_planning #388): bindCodexPane with the real HelperPty, connection and Codex run screen against the fake holder: a node-pty run keeps its pane at once; a held run whose connection acked screen and title opens no pane and reads the holder's screen.read; a holder with no screen reads, and a launch that falls back to a direct terminal, get the pane at the first byte; the colour answers stay main's (WP1.68)",
+      "note": "created by 2.1.3-beta.14 section B2; the fake holder in memory, nothing started"
+    },
+    {
       "path": "tests/unit/main/launch-bindings-kept.test.ts",
       "predicates": [
         "P13"
@@ -8436,6 +8457,16 @@
       "note": "created by the PR 4 owner answers review fix pass (FC, 9d606305); the P13 hits are the pty-manager stand-ins for main's Codex conversation records"
     },
     {
+      "path": "tests/unit/main/session-helper-agent-screen.test.ts",
+      "predicates": [
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "new 2.1.3-beta.14 section B2 test (tests/unit/main/session-helper-agent-screen.test.ts, aicc_planning #388): through the real manager against the fake helper, a held agent session of a provider in deps.screens acks screen and title and its terminal's screenRead is the holder's screen.read, on the connection in use after an attach again too; a Claude Code session, and a Codex one without deps.screens, ask for neither; a launch its holder refused has no read (WP1.68)",
+      "note": "created by 2.1.3-beta.14 section B2; the fake helper in memory, nothing started"
+    },
+    {
       "path": "tests/unit/main/session-helper-app-wiring.test.ts",
       "predicates": [
         "P04",
@@ -8443,7 +8474,7 @@
       ],
       "category": "TEST",
       "disposition": "added",
-      "evidence": "2.1.3-beta.11 section B2 case in a 2.1.3-beta.6 test (tests/unit/main/session-helper-app-wiring.test.ts): the manager gets the tool functions for Claude Code and Codex, the Codex one asking the Codex package's heldToolLaunch and keeping the loopback route when none is offered (WP1.68)",
+      "evidence": "2.1.3-beta.11 section B2 case in a 2.1.3-beta.6 test (tests/unit/main/session-helper-app-wiring.test.ts): the manager gets the tool functions for Claude Code and Codex, the Codex one asking the Codex package's heldToolLaunch and keeping the loopback route when none is offered; 2.1.3-beta.14 section B2 case (aicc_planning #388): the manager gets the screen reads, with the title, for Codex sessions only (deps.screens is { codex: true }) (WP1.68)",
       "note": "created by 2.1.3-beta.6 (plan section B); the P04 hits are the codex key of the tool functions' map; mocked modules only"
     },
     {

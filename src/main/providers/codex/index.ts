@@ -124,9 +124,10 @@ export type { CodexUsageFsPort, CodexUsageEntry, CodexUsageFsApi, CodexLiveUsage
  *  accounts service's prepared launch), never one looked up on PATH here. */
 const CODEX_MANAGED_LAUNCH_ONLY = 'not used for Codex: launches go through the managed launch'
 
-/** WP2 PR 4, P4.1: main's pane of each Codex run and the submit primitive
- *  (session-screen.ts drives composer-submit.ts), offered through the
- *  registered provider: the PTY manager reaches this package only that way. */
+/** WP2 PR 4, P4.1: main's reading of each Codex run's screen (its pane, or
+ *  since 2.1.3-beta.14 B2 a held run's holder's screen) and the submit
+ *  primitive (session-screen.ts drives composer-submit.ts), offered through
+ *  the registered provider: the PTY manager reaches this package only that way. */
 const CODEX_RUN_SCREEN: SessionRunScreen = {
   open: (sessionId, opts) => openCodexScreen(sessionId, opts),
   feed: (sessionId, data) => feedCodexScreen(sessionId, data),

@@ -92,12 +92,13 @@ function port(): SessionInputPorts {
   return ports
 }
 
-/** WP2 PR 4, P4.1: the Codex package's pane of each run and its submit
+/** WP2 PR 4, P4.1: the Codex package's reading of each run's screen (its pane,
+ *  or since 2.1.3-beta.14 B2 a held run's holder's screen) and its submit
  *  primitive (providers/codex/session-screen.ts), from the registered
  *  provider: main reaches a provider package only through the registry,
  *  never by importing it. Undefined when none is registered. The PTY manager
- *  resizes and closes each run's pane through this one copy (it opens and
- *  feeds the pane through its provider's runScreen at the launch). Only the
+ *  resizes and closes each run's reading through this one copy (it opens and
+ *  feeds it through its provider's runScreen at the launch). Only the
  *  PTY manager imports it, and session-input-ownership.test.ts counts a
  *  submit on what it returns as typing, outside this module. */
 export function codexRunScreen(): SessionRunScreen | undefined {
@@ -137,7 +138,7 @@ export const RETRY_CODEX_READY_WAIT_MS = 5_000
  *   ready, empty composer (ready on two reads 300 ms apart), its Enter only
  *   once the text is confirmed on screen, a text not confirmed taken back with
  *   Ctrl+U (only while the composer holds nothing but it), and only into the
- *   run whose pane it read. The answer says whether it was delivered, and why
+ *   run whose screen it read. The answer says whether it was delivered, and why
  *   not. Its RETRY_CODEX_READY_WAIT_MS counts from this call (`readyBy`), so
  *   a retry queued behind another submission for the run is not typed later
  *   than that; and `stillWanted`, the Watchdog's "its incident is still the
@@ -153,7 +154,7 @@ export const RETRY_CODEX_READY_WAIT_MS = 5_000
  */
 export function submitRetry(sessionId: string, text: string, stillWanted?: () => boolean): void | Promise<SubmitTextResult> {
   if (port().isCodexSession(sessionId)) {
-    // The primitive answers a session with no pane itself.
+    // The primitive answers a session whose screen it does not read itself.
     const screen = codexRunScreen()
     if (!screen) return Promise.resolve({ delivered: false, reason: 'session-gone' })
     return screen.submit(sessionId, text, {
@@ -228,7 +229,7 @@ async function typePrompt(sessionId: string, text: string, mode: PromptButtonMod
     const data = `${leave}${text}`
     if (mode === 'send' && p.isCodexSession(sessionId)) {
       if ([...text].length > PROMPT_CODEX_MAX_CODE_POINTS) return { outcome: 'not-sent', reason: 'refused-text' }
-      // The primitive answers a session with no pane itself.
+      // The primitive answers a session whose screen it does not read itself.
       const screen = codexRunScreen()
       const result: SubmitTextResult = screen
         ? await screen.submit(sessionId, text, { readyWaitMs: PROMPT_CODEX_READY_WAIT_MS })
@@ -346,15 +347,15 @@ export function submitPrompt(sessionId: string, text: string, mode: PromptButton
  * session's terminal process (a restart is a new run; a Claude Code started
  * again by hand in the same terminal is not); a session with no run takes
  * nothing and answers not delivered (the session gone), as the branch above
- * does for a session with no pane, so its canvas is told. Otherwise it answers
- * nothing: a marker the chain drops untyped (held past its bound, its run
+ * does for a session whose screen it does not read, so its canvas is told.
+ * Otherwise it answers nothing: a marker the chain drops untyped (held past its bound, its run
  * ended) is told to its canvas by the chain itself. `canvasId`, the canvas
  * the marker was filed on when the caller named one, goes with the line, so
  * the same words filed on two canvases stay two markers.
  */
 export function submitMarker(sessionId: string, line: string, canvasId?: string): void | Promise<SubmitTextResult> {
   if (port().isCodexSession(sessionId)) {
-    // The primitive answers a session with no pane itself (review A-8).
+    // The primitive answers a session whose screen it does not read itself (review A-8).
     const screen = codexRunScreen()
     if (!screen) return Promise.resolve({ delivered: false, reason: 'session-gone' })
     return screen.submit(sessionId, line, { readyWaitMs: MARKER_FALLBACK_FLUSH_MS })
@@ -381,8 +382,8 @@ function sendAskNotice(win: BrowserWindow, notice: AskConductorNotice): void {
 
 /**
  * WP2 PR 4, P4.3 (row 53): type an Ask question into a Codex session through
- * the run's pane and its submit primitive, never as the raw question and
- * Enter (Codex submits no such write, PB3). The characters Codex's prompt
+ * the run's screen (its pane, or its holder's) and its submit primitive,
+ * never as the raw question and Enter (Codex submits no such write, PB3). The characters Codex's prompt
  * would drop are removed first and the dock told how many (section 10
  * question 6, default A); a question that is not sent is said, with why, and
  * the dock keeps it. The log names the question by its length only. Never

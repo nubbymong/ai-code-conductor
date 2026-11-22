@@ -16,8 +16,9 @@
 //     not ack it does not read (the read rejects, the connection stays up).
 // Not checked here: the holder's side (helper/src/screen.rs,
 // helper/src/serve.rs, helper/tests/screen.rs and helper/tests/fixtures.rs,
-// run by the Helper job), and a caller that asks for the title (nothing in the
-// app asks for it yet).
+// run by the Helper job), and a caller that asks for the title (a held agent
+// session's connections, 2.1.3-beta.14 B2:
+// tests/unit/main/session-helper-agent-screen.test.ts).
 import { describe, it, expect, afterEach } from 'vitest'
 import { readFileSync } from 'fs'
 import { resolve } from 'path'

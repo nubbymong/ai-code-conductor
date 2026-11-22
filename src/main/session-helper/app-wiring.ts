@@ -92,6 +92,9 @@ function ensureManager(): SessionHelperManager {
     // Claude Code's sessions only: another provider's session keeps its hooks as they are.
     hooks: { claude: helperHookDeps },
     tools: helperToolDeps,
+    // 2.1.3-beta.14 B2: Codex's composer rule reads a held session's screen
+    // and title from its holder (providers/codex/session-screen.ts).
+    screens: { codex: true },
   })
   m.onChange(() => notify?.())
   setSessionHelper(m)

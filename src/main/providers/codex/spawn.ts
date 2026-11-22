@@ -610,10 +610,10 @@ const ASK_QUESTION_MAX = 8_000
 /** WP2 PR 4, P4.3: whether an Ask question may ride argv. Argv keeps every
  *  character (PB4); a control character never rides it (the renderer's
  *  normaliseQuestion removes them; one that reaches main is typed through the
- *  pane instead, whose rule refuses it visibly). Nor does a lone surrogate
+ *  run screen instead, whose rule refuses it visibly). Nor does a lone surrogate
  *  (half of an emoji's pair, review RASK-3): argv on Windows would hand Codex
- *  text that is not Unicode, which it refuses as an argument; through the pane
- *  it is removed with the characters the prompt drops, and the dock told. */
+ *  text that is not Unicode, which it refuses as an argument; through the run
+ *  screen it is removed with the characters the prompt drops, and the dock told. */
 const LONE_SURROGATE_RE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/
 function askQuestionForArgv(q: unknown): q is string {
   return typeof q === 'string' && q.trim().length > 0 && q.length <= ASK_QUESTION_MAX && !/[\u0000-\u001f\u007f-\u009f]/.test(q) && !LONE_SURROGATE_RE.test(q)
@@ -715,7 +715,7 @@ const WIN_BATCH_NAME_RE = /\.(bat|cmd)[. ]*$/i
  *  so there the question rides argv only when it holds no double quote, the
  *  executable is started directly (never a batch file, which Windows hands to
  *  cmd.exe to read the line again), and the line splits back into exactly
- *  these arguments. A question that does not is typed through the pane
+ *  these arguments. A question that does not is typed through the run screen
  *  instead, as one holding a control character is. */
 function askArgvSurvives(executable: string, args: readonly string[], win32: boolean): boolean {
   if (!win32) return true
@@ -1071,7 +1071,7 @@ function buildCodexSpawnCommand(opts: SpawnOptions): ProviderSpawnCommand {
   if (viaCmdExe) {
     // node-pty / ConPTY cannot directly invoke .cmd shims; route through cmd.exe.
     // P4.3: an Ask question never rides this line (it refuses whitespace and
-    // every character cmd.exe interprets); main types it through the pane.
+    // every character cmd.exe interprets); main types it through the run screen.
     // Never in a folder cmd.exe cannot start in (it would start elsewhere).
     refuseCmdExeNetworkFolder(viaCmdExe, opts.cwd)
     const target = codexCmdExeTarget(executable, fitCmdLine([]), env)
@@ -1081,7 +1081,7 @@ function buildCodexSpawnCommand(opts: SpawnOptions): ProviderSpawnCommand {
   // prompt, after `--`, so a question that starts with "-" is never read as a
   // flag, and as ONE argument, whole (8,000 characters, an emoji included,
   // arrived intact on both versions). Only on this fresh launch, the form PB4
-  // ran: an exact resume or the picker gets it through the pane instead, and
+  // ran: an exact resume or the picker gets it through the run screen instead, and
   // so does a question the Windows command line would not keep as one
   // argument (askArgvSurvives).
   if (askQuestionForArgv(opts.askPrompt)) {

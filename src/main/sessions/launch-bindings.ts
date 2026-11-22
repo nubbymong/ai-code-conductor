@@ -67,6 +67,7 @@ import { registerCodexCanvasRoots } from '../canvas/codex-canvas-roots'
 import { noteCodexSessionGuidance, forgetCodexSessionGuidance } from '../canvas/codex-guidance'
 import { tryGetProvider } from '../providers'
 import { launchKeptForUpdate, setKeptLaunchBindings, type KeptLaunch, type KeptLaunchFacts } from './kept-launches'
+import { HelperPty } from '../session-helper/helper-pty'
 
 /** A Codex launch's hook file: the file that hands its gateway token to the
  *  hook, with the way to remove it. */
@@ -109,8 +110,8 @@ export interface LaunchBindingPorts {
   noteClaudeFolder(sessionId: string, launchCwd: string): void
   noteClaudeTranscript(sessionId: string, transcriptPath: string): void
   markSessionNotIndexed(sessionId: string, provider: ProviderId, since: number, now?: number): void
-  /** Closes the session's pane of the Codex run screen, which only
-   *  pty-manager.ts reaches. */
+  /** Closes the session's reading of the Codex run screen (its pane, or a
+   *  held run's holder's screen), which only pty-manager.ts reaches. */
   closeCodexRunScreen(sessionId: string): void
 }
 
@@ -126,16 +127,16 @@ function ports(): LaunchBindingPorts {
   return registered
 }
 
-/** A Codex run's pane, from the launch that started it. */
+/** A Codex run's reading of its screen (its pane, or B2 its holder's screen), from the launch that started it. */
 export interface CodexPaneBinding {
   sessionId: string
-  /** The run's process: the pane is current while the session's PTY is this one. */
+  /** The run's process: the reading is current while the session's PTY is this one. */
   codexRun: pty.IPty
   /** The provider's own reading of a run's screen, when it has one. */
   runScreen: SessionRunScreen | undefined
   cols: number
   rows: number
-  /** The raw writer the pane types through: pty-manager.ts's, into codexRun. */
+  /** The raw writer the run screen types through: pty-manager.ts's, into codexRun. */
   write: (data: string) => void
   /** Writes one colour answer into codexRun: pty-manager.ts's. */
   writeColourAnswer: (bytes: string) => void
@@ -271,11 +272,19 @@ export function bindCodexLease(sessionId: string, lease: AccountLease): void {
  * own reading of the run's screen for the submit primitive, current while the
  * session's PTY is this run, and Codex's colour answers. Answers the colour
  * responder, whose filter the run's data handler reads each chunk through.
+ *
+ * 2.1.3-beta.14 B2 (aicc_planning#388): a run the session helper may hold
+ * (its terminal is a HelperPty) is read from its holder's screen when, at its
+ * first byte, that terminal is on a holder whose connection reads the screen
+ * (HelperPty.screenRead); then no pane is opened for it. Otherwise, and for a
+ * run node-pty started, the pane, as before: one opened at the first byte
+ * still has every byte of the run's output.
  */
 export function bindCodexPane(binding: CodexPaneBinding): ColorQueryResponder {
   const { ptySessions } = ports()
   const { sessionId, codexRun, runScreen, cols, rows, write, writeColourAnswer } = binding
-  if (codexRun && runScreen) runScreen.open(sessionId, { cols, rows, write, current: () => ptySessions.get(sessionId)?.ptyProcess === codexRun, clamp: clampAnsiChunk })
+  const held = codexRun instanceof HelperPty ? { held: () => codexRun.screenRead } : {}
+  if (codexRun && runScreen) runScreen.open(sessionId, { cols, rows, write, current: () => ptySessions.get(sessionId)?.ptyProcess === codexRun, clamp: clampAnsiChunk, ...held })
   // Codex's colour query (OSC 10/11 `?`), answered here in main the moment
   // the PTY emits it and kept from the renderer, so xterm.js does not answer
   // it a second time (terminal-query-responder.ts). Codex waits 100 ms for
@@ -695,7 +704,7 @@ export function unbindLaunchTelemetry(sessionId: string): void {
 
 /** Teardown, third part: the registrations each launch makes again (the
  *  review tools, the MCP credential's assistant, the canvas roots and
- *  markers), the Codex pane, the Ask mark and the launch's guidance record.
+ *  markers), the Codex run screen, the Ask mark and the launch's guidance record.
  *  Each step does nothing when there is nothing to drop. */
 export function unbindLaunchRegistrations(sessionId: string): void {
   const { codexAskSessions, closeCodexRunScreen } = ports()
@@ -743,9 +752,10 @@ export function unbindLaunchRegistrations(sessionId: string): void {
   // no static import of pty-manager (its PTY end is injected at boot from
   // index.ts), so importing it here introduces no cycle.
   forgetCanvasMarkers(sessionId)
-  // WP2 PR 4, P4.1: the submit primitive's pane of a Codex run goes with it
-  // (a submission still waiting on it reports the session gone, and types
-  // nothing into the next run), and so does the launch's guidance record.
+  // WP2 PR 4, P4.1: the submit primitive's reading of a Codex run (its pane,
+  // or B2 its holder's screen) goes with it (a submission still waiting on it
+  // reports the session gone, and types nothing into the next run), and so
+  // does the launch's guidance record.
   closeCodexRunScreen(sessionId)
   codexAskSessions.delete(sessionId)
   forgetCodexSessionGuidance(sessionId)

@@ -17,8 +17,10 @@
  * terminal's connections: a take-over reads the holder's size with it
  * (readScreen; 2.1.3-beta.13, plan section A1). Beside `screen` it asks for
  * `title` (the screen's title in readScreen's answer, 2.1.3-beta.14, plan
- * section B1, aicc_planning#384) only when it is given the `title` option,
- * which nothing in the app gives yet.
+ * section B1, aicc_planning#384) only when it is given the `title` option.
+ * The manager gives both to a held agent session's connections when its
+ * provider's composer rule reads the holder's screen (deps.screens;
+ * 2.1.3-beta.14, plan section B2, aicc_planning#388).
  *
  * On a connection that acked `mcp`, the app sends a tool stream's messages
  * (sendMcp) only when the holder would read them, and ends its side of a
@@ -95,10 +97,13 @@ export interface ConnectionOptions {
   mcp?: boolean
   /** This connection reads the session's screen (`screen.read`,
    *  `screen.tail`): `screen` is acked when the holder offers it. The manager
-   *  sets it for a plain terminal's connections. */
+   *  sets it for a plain terminal's connections, and (2.1.3-beta.14 B2) for a
+   *  held agent session's of a provider in its deps.screens. */
   screen?: boolean
   /** This connection's screen reads take the screen's title too: `title` is
-   *  acked, beside `screen`, when the holder offers both. Nothing sets it yet. */
+   *  acked, beside `screen`, when the holder offers both. The manager sets it
+   *  beside `screen` for a held agent session's of a provider in its
+   *  deps.screens (2.1.3-beta.14 B2). */
   title?: boolean
   helloTimeoutMs?: number
   replyTimeoutMs?: number

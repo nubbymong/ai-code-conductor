@@ -83,6 +83,12 @@
  * record and those files, and ends the session as before (endKeptAtStart), so
  * nothing a user sees changes. An update that does not start ends it at once
  * (reclaim).
+ *
+ * 2.1.3-beta.14 (plan section B2, aicc_planning#388): an agent session of a
+ * provider in deps.screens (app-wiring.ts gives Codex's) asks on its
+ * connections for the holder's screen reads with the screen's title, and its
+ * terminal hands out the read (HelperPty.screenRead): its composer rule reads
+ * the holder's screen, and main opens no pane of its own for it.
  */
 import { execFile } from 'child_process'
 import * as fs from 'fs'
@@ -196,6 +202,12 @@ export interface SessionHelperDeps {
    *  Code's and Codex's. A provider with none keeps its tools on the loopback
    *  route, and its connections ask for no `mcp`. */
   tools?: Partial<Record<ProviderId, HelperToolDeps>>
+  /** Agent sessions whose connections ask for the holder's screen reads with
+   *  the screen's title, by provider (2.1.3-beta.14, plan section B2,
+   *  aicc_planning#388). app-wiring.ts gives Codex's: its composer rule
+   *  reads a held session's screen from the holder (HelperPty.screenRead). A
+   *  provider with none asks for neither, as before. */
+  screens?: Partial<Record<ProviderId, true>>
 }
 
 /** What a session's tool calls through its holder need of the app
@@ -1047,7 +1059,10 @@ export class SessionHelperManager implements MachinesSource {
     if (refused) return usualWay(`the helper would refuse ${refused.why}`, true)
     const hooks = this.hookRoute(ctx, sid)
     const tools = this.toolRoute(ctx, sid, { file, args, opts })
-    const driver: HelperPtyDriver = { ...this.driver(direct, true, spec.conpty === 'bundled', cleared, hooks, tools), ...own }
+    // B2: a provider whose composer rule reads its held session's screen from
+    // the holder asks for the screen reads and their title.
+    const screen = this.deps.screens?.[ctx.kind] === true
+    const driver: HelperPtyDriver = { ...this.driver(direct, true, spec.conpty === 'bundled', cleared, hooks, tools, screen, screen), ...own }
     const wrapper = this.track(new HelperPty({ sid, label: ctx.sessionId, spec, driver, redraw: this.redrawFor(spec) }), ctx.sessionId)
     if (hooks) void wrapper.ended.then(() => hooks.ended())
     if (tools) this.agentRoutes.set(wrapper, { kind: ctx.kind, tools, ...(hooks ? { hooks } : {}) })
@@ -1347,14 +1362,16 @@ export class SessionHelperManager implements MachinesSource {
    *  terminal's wait for an earlier holder's end; it throws to start none.
    *  `hooks`: a Claude Code session's hooks through its holder (hookRoute).
    *  `tools`: a session's tool calls through its holder (toolRoute).
-   *  `screen`: its connections ask for the holder's screen reads (plainDriver). */
-  private driver(direct: () => IPty, checkHash: boolean, bundled = false, cleared?: () => Promise<void>, hooks?: HookRoute, tools?: ToolRoute, screen = false): HelperPtyDriver {
+   *  `screen`: its connections ask for the holder's screen reads (plainDriver;
+   *  B2, an agent session of a provider in deps.screens). `title`: beside
+   *  `screen`, they ask for the screen's title too (B2). */
+  private driver(direct: () => IPty, checkHash: boolean, bundled = false, cleared?: () => Promise<void>, hooks?: HookRoute, tools?: ToolRoute, screen = false, title = false): HelperPtyDriver {
     // The hooks' switch and the tools' switch are each their own: one that
     // fails or throws leaves the other as it would be alone.
     const atLaunch = [hooks ? (conn: HolderConnection) => hooks.launched(conn) : null, tools?.launched ?? null].filter((f): f is (conn: HolderConnection) => void => f !== null)
     return {
       hold: (sid, label, abandoned) => this.hold(sid, label, abandoned, bundled, cleared),
-      connect: (record) => this.connectFor(record, checkHash, hooks, tools, screen),
+      connect: (record) => this.connectFor(record, checkHash, hooks, tools, screen, title),
       ...(atLaunch.length > 0 ? {
         launched: (conn: HolderConnection) => {
           const errors: unknown[] = []
@@ -1386,7 +1403,7 @@ export class SessionHelperManager implements MachinesSource {
     return this.driver(direct, checkHash, false, undefined, undefined, undefined, true)
   }
 
-  private async open(record: HolderRecord, sha256?: string, hooks?: HookRoute, tools?: ToolRoute, screen = false): Promise<HolderConnection> {
+  private async open(record: HolderRecord, sha256?: string, hooks?: HookRoute, tools?: ToolRoute, screen = false, title = false): Promise<HolderConnection> {
     const conn = await HolderConnection.open({
       record,
       os: this.os,
@@ -1397,6 +1414,7 @@ export class SessionHelperManager implements MachinesSource {
       ...(hooks ? { hooks: true } : {}),
       ...(tools ? { mcp: true } : {}),
       ...(screen ? { screen: true } : {}),
+      ...(screen && title ? { title: true } : {}),
     })
     // The connection reports an event only when it acked `hooks` (connection.ts;
     // tests/unit/main/session-helper-connection.test.ts): that is the one guard.
@@ -1460,11 +1478,11 @@ export class SessionHelperManager implements MachinesSource {
     return record
   }
 
-  private async connectFor(record: HolderRecord, checkHash: boolean, hooks?: HookRoute, tools?: ToolRoute, screen = false): Promise<HolderConnection> {
+  private async connectFor(record: HolderRecord, checkHash: boolean, hooks?: HookRoute, tools?: ToolRoute, screen = false, title = false): Promise<HolderConnection> {
     // A keeper attaches first; the tab's attach then replaces it, never the other way.
     const keeper = this.keepers.get(record.session)
     if (keeper) await keeper.ready
-    return this.open(record, checkHash ? this.info?.sha256 : undefined, hooks, tools, screen)
+    return this.open(record, checkHash ? this.info?.sha256 : undefined, hooks, tools, screen, title)
   }
 
   /** Keep a held terminal alive (attached, output dropped) until a tab takes it. */

@@ -476,7 +476,7 @@ describe('a crash: held terminals come back', () => {
     await until(() => helper.holders.get(plain)!.attaches === 3, 'the tab to replace the keeper')
   })
 
-  it("with holders that offer the screen reads: a plain terminal's connections ack them, a take-over reads its holder's size once, before its attach, and an agent session's connection acks none (2.1.3-beta.13, plan section A1)", async () => {
+  it("with holders that offer the screen reads: a plain terminal's connections ack them, a take-over reads its holder's size once, before its attach, and an agent session's connection acks none when its provider is not in deps.screens (2.1.3-beta.13, plan section A1; 2.1.3-beta.14 B2)", async () => {
     helper.holderCaps = ['core', 'local', 'hooks', 'mcp', 'screen']
     const first = await startedWith(makeManager(), ON_BOTH)
     setSessionHelper(first)
