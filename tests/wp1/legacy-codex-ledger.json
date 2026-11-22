@@ -1,8 +1,8 @@
 {
   "schema": "wp1-legacy-codex-ledger/2",
   "predicateDigest": "100a1233edebdc39a5f9004d3fba980a89ebb15b25872e52076386bc84b03153",
-  "manifestPathDigest": "c26cb7e6b67564e5f346feb53ac5269f703dde17fad61b656d8e17234dead2ca",
-  "manifestHead": "2f568a738bab7f8d56b59d6a8c8548dad4feaf8f",
+  "manifestPathDigest": "30b70548ec49c503aa363457d84f4f6e137d3fd25f725310a1cd1d138b429d78",
+  "manifestHead": "18dd949fa8f51a6b6c38cfc62bd5cd3de65fb5dd",
   "dispositions": {
     "retain": "unchanged observable behaviour, characterization proof",
     "move": "moved behind a package boundary and/or adapted at the call site, regression proof (newPath when relocated)",
@@ -4116,13 +4116,12 @@
     {
       "path": "src/renderer/components/settings/accounts/AccountsSurface.tsx",
       "predicates": [
-        "P05",
         "P11"
       ],
       "category": "OTHER",
       "disposition": "added",
-      "evidence": "WP2 commit 6b Accounts surface, one provider-neutral surface (WP1.39); tests/unit/renderer/accounts-surface.test.tsx; WP2 PR 3 P3.4 (parity row 14): with Claude Code off the registry callout no longer says the Claude accounts still work (WP1.2); tests/unit/renderer/accounts-surface.test.tsx",
-      "note": "a provider-name comparison chooses which section a provider gets; no Codex code path"
+      "evidence": "WP2 commit 6b Accounts surface, one provider-neutral surface (WP1.39); tests/unit/renderer/accounts-surface.test.tsx; WP2 PR 3 P3.4 (parity row 14): with Claude Code off the registry callout no longer says the Claude accounts still work (WP1.2); tests/unit/renderer/accounts-surface.test.tsx; beta.13 C6 (aicc_planning#381): the provider-name comparison that picks the managed sections moved into managedListProviders (providerAccountsStore.ts), which the page and its All / Active / Inactive counts both read (WP1.39); tests/unit/renderer/accounts-steady-order-filter.test.tsx",
+      "note": "imports the Claude Code on check from onboarding/hello-codex; no Codex code path"
     },
     {
       "path": "src/renderer/components/settings/accounts/AddProviderAccountDialog.tsx",
@@ -9725,6 +9724,17 @@
       "disposition": "added",
       "evidence": "WP2 commit 6c account binding at launch: the session names its account and an unverified sign-in is acknowledged per launch (WP1.42, WP1.45); tests/unit/renderer/launch-account.test.ts; WP2 PR 4 P4.7 fix pass 6 (d4c9fcb2): the provider fixture carries the in-use count every snapshot carries (WP1.60); tests/unit/renderer/launch-account.test.ts",
       "note": "fixture snapshots name Codex accounts"
+    },
+    {
+      "path": "tests/unit/renderer/accounts-steady-order-filter.test.tsx",
+      "predicates": [
+        "P05",
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "beta.13 C6 (aicc_planning#381): Settings, Accounts keeps each list in the order its accounts were added and filters every list by All / Active / Inactive (WP1.39); tests/unit/renderer/accounts-steady-order-filter.test.tsx",
+      "note": "fixture snapshots name Codex accounts; the provider fixture marks Codex as managed"
     },
     {
       "path": "tests/unit/renderer/accounts-surface.test.tsx",

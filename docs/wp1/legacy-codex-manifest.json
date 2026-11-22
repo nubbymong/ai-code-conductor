@@ -1,8 +1,8 @@
 {
   "schema": "wp1-legacy-codex-manifest/3",
-  "generatedAt": "2026-11-22T06:13:41.891Z",
-  "head": "2f568a738bab7f8d56b59d6a8c8548dad4feaf8f",
-  "tree": "9686063fa55d511d49fd39bcb9d5ca787bae26b4",
+  "generatedAt": "2026-11-22T08:19:11.904Z",
+  "head": "18dd949fa8f51a6b6c38cfc62bd5cd3de65fb5dd",
+  "tree": "b3852a79d96aae001c9871f0612a1fdbd3668455",
   "scannedWorkingTree": false,
   "predicateDigest": "100a1233edebdc39a5f9004d3fba980a89ebb15b25872e52076386bc84b03153",
   "predicates": [
@@ -116,9 +116,9 @@
     "\\.(png|jpg|jpeg|gif|ico|icns|webp|svg|woff2?|ttf|otf|mp4|zip|asar|node|exe|dll|dylib|so|pdf)$",
     "^package-lock\\.json$"
   ],
-  "trackedFileCount": 3666,
-  "excludedFileCount": 564,
-  "scannedFileCount": 3102,
+  "trackedFileCount": 3677,
+  "excludedFileCount": 566,
+  "scannedFileCount": 3111,
   "unscopedFileCount": 15,
   "unscoped": [
     ".claude/settings.json",
@@ -139,8 +139,8 @@
   ],
   "unscopedMentions": [],
   "unreadable": [],
-  "matchedPathCount": 1042,
-  "pathDigest": "c26cb7e6b67564e5f346feb53ac5269f703dde17fad61b656d8e17234dead2ca",
+  "matchedPathCount": 1046,
+  "pathDigest": "30b70548ec49c503aa363457d84f4f6e137d3fd25f725310a1cd1d138b429d78",
   "entries": [
     {
       "path": ".github/workflows/ci.yml",
@@ -1863,7 +1863,7 @@
         "P01",
         "P14"
       ],
-      "lineCount": 25
+      "lineCount": 28
     },
     {
       "path": "src/main/providers/codex/conductor-tools.ts",
@@ -2045,7 +2045,7 @@
         "P01",
         "P14"
       ],
-      "lineCount": 24
+      "lineCount": 26
     },
     {
       "path": "src/main/providers/codex/spawn.ts",
@@ -2362,14 +2362,14 @@
       "predicates": [
         "P14"
       ],
-      "lineCount": 26
+      "lineCount": 27
     },
     {
       "path": "src/main/watchdog/session-watchdog.ts",
       "predicates": [
         "P14"
       ],
-      "lineCount": 5
+      "lineCount": 6
     },
     {
       "path": "src/main/watchdog/watchdog-manager.ts",
@@ -2377,7 +2377,7 @@
         "P05",
         "P14"
       ],
-      "lineCount": 20
+      "lineCount": 21
     },
     {
       "path": "src/preload/index.ts",
@@ -2638,7 +2638,7 @@
         "P07",
         "P11"
       ],
-      "lineCount": 51
+      "lineCount": 53
     },
     {
       "path": "src/renderer/components/TitleBar.tsx",
@@ -2808,10 +2808,9 @@
     {
       "path": "src/renderer/components/settings/accounts/AccountsSurface.tsx",
       "predicates": [
-        "P05",
         "P11"
       ],
-      "lineCount": 2
+      "lineCount": 1
     },
     {
       "path": "src/renderer/components/settings/accounts/AddProviderAccountDialog.tsx",
@@ -2926,7 +2925,7 @@
       "predicates": [
         "P11"
       ],
-      "lineCount": 4
+      "lineCount": 6
     },
     {
       "path": "src/renderer/components/tokenomics/KpiRow.tsx",
@@ -3024,7 +3023,7 @@
         "P07",
         "P11"
       ],
-      "lineCount": 97
+      "lineCount": 103
     },
     {
       "path": "src/renderer/lib/command-upgrade.ts",
@@ -3343,7 +3342,7 @@
         "P05",
         "P11"
       ],
-      "lineCount": 32
+      "lineCount": 33
     },
     {
       "path": "src/renderer/stores/sessionStore.ts",
@@ -3513,7 +3512,7 @@
         "P01",
         "P14"
       ],
-      "lineCount": 61
+      "lineCount": 69
     },
     {
       "path": "src/shared/container-command.ts",
@@ -5180,6 +5179,14 @@
       "lineCount": 61
     },
     {
+      "path": "tests/unit/main/codex-title-busy.test.ts",
+      "predicates": [
+        "P01",
+        "P13"
+      ],
+      "lineCount": 46
+    },
+    {
       "path": "tests/unit/main/codex-unanswered-service.test.ts",
       "predicates": [
         "P01",
@@ -6001,7 +6008,7 @@
       "predicates": [
         "P13"
       ],
-      "lineCount": 10
+      "lineCount": 16
     },
     {
       "path": "tests/unit/main/window-all-closed-r6.test.ts",
@@ -6799,6 +6806,14 @@
       "lineCount": 11
     },
     {
+      "path": "tests/unit/renderer/accounts-steady-order-filter.test.tsx",
+      "predicates": [
+        "P05",
+        "P13"
+      ],
+      "lineCount": 36
+    },
+    {
       "path": "tests/unit/renderer/accounts-surface.test.tsx",
       "predicates": [
         "P04",
@@ -7063,6 +7078,14 @@
         "P13"
       ],
       "lineCount": 29
+    },
+    {
+      "path": "tests/unit/renderer/codex-title-busy.test.ts",
+      "predicates": [
+        "P01",
+        "P13"
+      ],
+      "lineCount": 28
     },
     {
       "path": "tests/unit/renderer/codex-web-account-row.test.tsx",
@@ -8250,6 +8273,14 @@
       "lineCount": 38
     },
     {
+      "path": "tests/unit/shared/codex-screen-title.test.ts",
+      "predicates": [
+        "P01",
+        "P13"
+      ],
+      "lineCount": 33
+    },
+    {
       "path": "tests/unit/shared/extra-args.test.ts",
       "predicates": [
         "P13"
@@ -8276,7 +8307,7 @@
       "predicates": [
         "P13"
       ],
-      "lineCount": 47
+      "lineCount": 67
     },
     {
       "path": "tests/unit/status-ingest.test.ts",
