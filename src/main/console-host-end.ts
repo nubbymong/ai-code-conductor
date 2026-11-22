@@ -21,17 +21,30 @@
  * mode, with what it notes at the terminal's start: the time node-pty's spawn
  * took (Date.now() just before it and just after it). node-pty makes the
  * pseudoconsole, and Windows its host, inside that call, and spawns run one at
- * a time on this thread. Once node-pty reports the program's exit, the helper
- * ends the one console host that is a child of this process, Windows' own
- * System32\conhost.exe, this user's, made in that time and still running; when
- * none is, or more than one, it ends nothing (docs/remote/helper-protocol.md
- * section 15). After a kill while the program still ran, node-pty has closed
- * the pseudoconsole, so the helper finds no running host made then and ends
- * nothing: one short run on every end, so node-pty's own state at the kill is
- * never read. A terminal whose program still runs is never asked for. Two
- * starts in the same millisecond cannot be told apart by their time, so
- * neither is asked for. Only the PTY's own exit asks, so it is asked once, and
- * whichever session the PTY was for by then (a Restart's stale exit too).
+ * a time on this thread. Date.now() is not quite the clock Windows stamps a
+ * process's creation time with: in Electron's main process it can run up to
+ * one Windows clock tick (15.6 ms by default) behind it, so the time the
+ * helper is given is widened by CLOCK_SLACK_MS on each side. That wider time
+ * can hold the host of another terminal started just before or after, an SSH
+ * tab's among them. What keeps a running terminal's host is the helper's own
+ * check on its program, not the time: the helper ends a host only when no
+ * running process still has it as its console host, and only once it is 6 s
+ * old (NEW_HOST_WAIT_MS: node-pty gives a program 5 s to start in its
+ * pseudoconsole, and until then a running terminal's host has no program).
+ * So the helper is asked no sooner than NEW_HOST_WAIT_MS and the slack after
+ * the start. Once node-pty reports the program's exit, the helper ends the
+ * one console host that is a child of this process, Windows' own
+ * System32\conhost.exe, this user's, made in that time, still running, 6 s
+ * old or more and with no program left; when none is, or more than one, it
+ * ends nothing (docs/remote/helper-protocol.md section 15). After a kill
+ * while the program still ran, node-pty has closed the pseudoconsole, so the
+ * helper finds no running host made then and ends nothing: one short run on
+ * every end, so node-pty's own state at the kill is never read. A terminal
+ * whose program still runs is never asked for. Two starts in the same
+ * millisecond, or with the clock set back between them, are not asked for:
+ * their times do not order their hosts. Only the PTY's own exit asks, so it is
+ * asked once, and whichever session the PTY was for by then (a Restart's
+ * stale exit too).
  */
 import type { IPty } from 'node-pty'
 import { logInfo } from './debug-logger'
@@ -41,9 +54,25 @@ import { installedHelperPath, parseConsoleHostsAnswer, runHelperFile, type Helpe
  *  FILETIME counts steps of 100 ns from the first. */
 export const FILETIME_EPOCH_MS = 11_644_473_600_000
 
-/** The longest a start may take and still be asked for: the helper's bound
- *  (consoles.rs MAX_START_SPAN, ten seconds). */
+/** The helper's bound on the time it is given (consoles.rs MAX_START_SPAN,
+ *  ten seconds): a start is asked for only when its time, widened by
+ *  CLOCK_SLACK_MS on each side, fits in it. */
 export const MAX_START_MS = 10_000
+
+/** How far, in milliseconds, the time given to the helper is widened on each
+ *  side. Date.now() in Electron's main process is V8's clock: Windows' coarse
+ *  system time, read once a minute, plus the ticks since. It runs behind the
+ *  clock Windows stamps creation times with by up to one Windows clock tick,
+ *  15.625 ms at the default tick, and a terminal's host is made only a few ms
+ *  before the spawn returns, so a time not widened can end before its own
+ *  host was made. 50 ms on each side covers the tick with room. */
+export const CLOCK_SLACK_MS = 50
+
+/** How old a terminal's console host must be before the helper ends it
+ *  (consoles.rs NEW_HOST_WAIT): node-pty gives a program 5 s to start in its
+ *  pseudoconsole (CONNECTION_TIMEOUT in its windowsPtyAgent.js), and until it
+ *  has, a running terminal's host has no program; a second more is slack. */
+export const NEW_HOST_WAIT_MS = 6_000
 
 /** A Date.now() time as the helper takes one: steps of 100 ns since 1601
  *  (UTC), in digits. Exact: a whole number of milliseconds times 10,000. */
@@ -60,6 +89,8 @@ export interface ConsoleHostEndPorts {
   /** The helper beside the app, or null when this install has none. */
   helperPath(): string | null
   runHelper(helper: string, args: string[]): Promise<HelperRun>
+  /** Run `fn` after `ms` milliseconds, on a timer that does not keep the app running. */
+  later(ms: number, fn: () => void): void
   log(line: string): void
 }
 
@@ -70,6 +101,10 @@ function appPorts(): ConsoleHostEndPorts {
     now: () => Date.now(),
     helperPath: installedHelperPath,
     runHelper: runHelperFile,
+    later: (ms, fn) => {
+      const timer = setTimeout(fn, ms)
+      if (typeof (timer as { unref?: () => void }).unref === 'function') (timer as { unref: () => void }).unref()
+    },
     log: (line) => logInfo(line),
   }
 }
@@ -85,7 +120,8 @@ function ports(): ConsoleHostEndPorts {
 interface Start {
   from: number
   to: number
-  /** Not asked for: its time cannot single out its host. */
+  /** Not asked for: its time, widened, does not fit the helper's bound, or
+   *  does not order it against the start before it (spawnEndingConsoleHost). */
   untimed: boolean
 }
 
@@ -116,9 +152,11 @@ export function spawnEndingConsoleHost(opts: object | undefined, start: () => IP
   const proc = start()
   const to = p.now()
   if (!isWindowsNodePty(proc)) return proc
-  const timed: Start = { from, to, untimed: !(Number.isSafeInteger(from) && Number.isSafeInteger(to) && to >= from && to - from < MAX_START_MS) }
-  // In the same millisecond as the start before it (or a clock set back):
-  // which host is whose cannot be told by time.
+  // Its time, widened by the slack on each side (endConsoleHost), must fit
+  // the helper's ten seconds.
+  const timed: Start = { from, to, untimed: !(Number.isSafeInteger(from) && Number.isSafeInteger(to) && to >= from && to - from < MAX_START_MS - 2 * CLOCK_SLACK_MS) }
+  // In the same millisecond as the start before it, or with the clock set
+  // back: the two times do not order the two hosts, so neither is asked for.
   if (lastStart && from <= lastStart.to) {
     lastStart.untimed = true
     timed.untimed = true
@@ -129,10 +167,28 @@ export function spawnEndingConsoleHost(opts: object | undefined, start: () => IP
     proc.onExit(() => {
       if (asked || timed.untimed) return
       asked = true
-      void endConsoleHost(timed, proc)
+      askOnceOldEnough(timed, proc)
     })
   } catch { /* a PTY that cannot report its exit: nothing is asked for it */ }
   return proc
+}
+
+/** Ask the helper to end the host `start` made once that host is old enough
+ *  for it (NEW_HOST_WAIT_MS after the start, and the clock's slack): at once,
+ *  or on a timer that does not keep the app running. Never throws. */
+function askOnceOldEnough(start: Start, proc: IPty): void {
+  const p = ports()
+  try {
+    const wait = start.to + NEW_HOST_WAIT_MS + CLOCK_SLACK_MS - p.now()
+    if (wait > 0) {
+      p.later(wait, () => { void endConsoleHost(start, proc) })
+      return
+    }
+  } catch (err) {
+    p.log(`[console-hosts] The end of the console host of a terminal whose program ended${pidTag(proc)} could not be timed: ${err instanceof Error ? err.message : String(err)}`)
+    return
+  }
+  void endConsoleHost(start, proc)
 }
 
 /** The terminal's program for the log, " (process <pid>)", when its pid can be read. */
@@ -157,7 +213,8 @@ async function endConsoleHost(start: Start, proc: IPty): Promise<void> {
       }
       return
     }
-    const run = await p.runHelper(helper, ['end-console-host', '--made-from', filetimeOf(start.from), '--made-to', filetimeOf(start.to + 1)])
+    // Widened by the slack on each side; --made-to is not included.
+    const run = await p.runHelper(helper, ['end-console-host', '--made-from', filetimeOf(start.from - CLOCK_SLACK_MS), '--made-to', filetimeOf(start.to + 1 + CLOCK_SLACK_MS)])
     const notes = run.stderr.trim().slice(0, 1000)
     if (!run.ok) {
       p.log(`[console-hosts] The session helper could not end the console host of ${which}: ${(run.why || notes || 'no reason given').slice(0, 300)}`)

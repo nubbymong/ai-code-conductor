@@ -638,19 +638,32 @@ rollback returns to the earlier beta's rows, and every row has a negative test.
   end-console-host` (protocol 15, "A terminal's console host after its program
   has ended") is given two times of digits the app took itself, just before
   and just after node-pty made one terminal's pseudoconsole on Windows' own
-  ConPTY, and the app runs it only once node-pty has reported that terminal's
-  program's exit (`src/main/console-host-end.ts`); nothing from a file, the
-  renderer or another process reaches its command line. It ends a process only
-  when it is `conhost.exe` by name and by program file (Windows' own
-  `System32\conhost.exe`), still runs, runs as the helper's own user, is
-  listed with the process that started the helper as its parent, and was made
-  in that time, after that process and before the helper; when more than one
-  is, it ends none. It holds the one it ends open from its check to its end. A
-  time longer than ten seconds is refused. It gives the app no new power: the
-  app can already end any process of its user. Tested in
-  `helper/tests/console_hosts.rs` by
+  ConPTY, each widened by 50 ms (the app's clock, Date.now(), runs up to one
+  Windows clock tick behind the creation times Windows stamps), and the app
+  runs it only once node-pty has reported that terminal's program's exit, and
+  no sooner than 6 s and that 50 ms after the start
+  (`src/main/console-host-end.ts`); nothing from a file, the renderer or
+  another process reaches its command line. The time is not what keeps a
+  running terminal's host: a widened time can hold the host of another
+  terminal started just before or after (a restore's other tab, a partner
+  terminal, an SSH tab). It ends a process only when it is `conhost.exe` by
+  name and by program file (Windows' own `System32\conhost.exe`), still runs,
+  runs as the helper's own user, is listed with the process that started the
+  helper as its parent, was made in that time, after that process and before
+  the helper, was made at least 6 s before the helper (node-pty gives a
+  program 5 s to start in its pseudoconsole, and until then a running
+  terminal's host has no program), and is the console host of no process that
+  still runs (each listed process's `ProcessConsoleHostProcess`; a process the
+  helper cannot open is not read, and one that runs but cannot be read stops
+  the mode from ending anything). When more than one is, it ends none. It holds
+  the one it ends open from its check to its end. A time longer than ten
+  seconds is refused. It gives the app no new power: the app can already end
+  any process of its user. Tested in `helper/tests/console_hosts.rs` by
   `a_terminal_whose_program_ended_has_its_console_host_ended_once_and_no_other`
-  (a running terminal's host is not ended),
+  (a host less than 6 s old is not ended, nor a running terminal's host
+  outside the time),
+  `a_terminal_whose_program_still_runs_keeps_its_host_when_asked_for_with_its_own_start`,
+  `a_time_that_holds_a_running_terminal_and_an_ended_one_ends_only_the_ended_ones_host`,
   `two_terminals_started_in_one_time_have_neither_host_ended_by_it` and
   `a_start_time_it_cannot_take_is_refused`, the bounds by the unit tests in
   `helper/src/consoles.rs`, and the app's side in

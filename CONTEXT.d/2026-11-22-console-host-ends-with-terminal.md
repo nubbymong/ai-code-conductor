@@ -31,32 +31,66 @@ that time (`helper/src/consoles.rs`). The helper ends the one `conhost.exe`
 (Windows' own program file) that is a child of the app, this user's, made in
 that time and still running, holding it open from the check to the end; none,
 or more than one, and it ends nothing. Two starts in one millisecond are not
-asked for. The wrapper sits on the one place the app starts a terminal the
+asked for.
+
+**Review fix: the time does not keep a running terminal's host.** Date.now()
+in Electron's main process is not the clock Windows stamps creation times
+with: it runs behind it by up to one Windows clock tick (15.625 ms at the
+default tick), and a host is made only a few ms before the spawn returns. So
+the time as first passed could end before the terminal's own host was made,
+and instead hold the host of a terminal started a few ms earlier, which the
+helper would then end while its program ran. The reviewer's measurements on
+the dev PC: CreateProcess returned 1.6 to 3.3 ms after the new process's
+creation time (27 runs); that PC's tick was 0.35 to 1 ms at the time (171
+distinct system time readings in 500 ms), so the default tick was not
+reproduced there. Now the app widens the time by 50 ms on each side and asks
+no sooner than 6 s and that 50 ms after the start, and the helper never ends
+a host that still has a program (the console host of a listed process that
+still runs, `ProcessConsoleHostProcess`; a running process it can open but not
+read stops it from ending anything) nor one made less than 6 s before it runs
+(node-pty gives a program 5 s to start in its pseudoconsole,
+`CONNECTION_TIMEOUT` in its `windowsPtyAgent.js`, and until then a running
+terminal's host has no program). The helper's program check, not the time, is
+what keeps a running terminal's host.
+
+The wrapper sits on the one place the app starts a terminal the
 usual way (`spawnWithNodePty`, `src/main/session-helper/manager.ts`: Terminal
 only and partner tabs, Claude Code and Codex sessions, Insights' run, and the
 helper's own fallback start), so pty-manager.ts and the launch bindings are
 unchanged (no line).
 
-**Tests.** `tests/unit/main/console-host-end.test.ts` (11): asked once after
-the exit with the start's time; never while the program runs; same
-millisecond, a start of ten seconds or more and a clock set back not asked
-for; no helper said once; an answer naming another process not taken; the
-bundled ConPTY, another system and a terminal node-pty did not make left as
-they were; the manager's three usual-way spawns go through it with their
-arguments unchanged; and a pin on node-pty's two behaviours above, which fails
-when an update fixes it. Red against the old code (the wiring reverted, and
-seven mutants). Rust: `helper/tests/console_hosts.rs` (3, Windows) and two unit
-tests in `consoles.rs`; the three were committed before the mode and failed in
-the Helper job with "unknown command end-console-host". They suspend each host
-before its program ends, as the console-hosts tests do, so they check the
-mode and not what Windows does with an idle host. (The red runs 45032572689,
-45033409949 and 45034021302 also showed a host gone before the mode ran; the
-test had ended it itself: its host search dropped each other terminal's host
-it looked at, and the test's process handle ends what it holds when dropped.)
+**Tests.** `tests/unit/main/console-host-end.test.ts` (14): asked once after
+the exit with the start's time, widened by 50 ms on each side; an exit within
+6 s of the start asked for only after the wait (a timer); never while the
+program runs; same millisecond, a start too long for the helper's ten seconds
+once widened, and a clock set back not asked for; no helper said once; an
+answer naming another process not taken; the bundled ConPTY, another system
+and a terminal node-pty did not make left as they were; the manager's three
+usual-way spawns go through it with their arguments unchanged; and a pin on
+node-pty's behaviours above (and its 5 s CONNECTION_TIMEOUT, beside the
+helper's 6 s), which fails when an update changes them. Red against the old
+code (the wiring reverted, and seven mutants; after the review fix, 7 of the
+14 red against the first fix's module, and the slack, the wait and the
+widened bound each dropped as a mutant). Rust: `helper/tests/console_hosts.rs`
+(5 for this mode, Windows) and four unit tests in `consoles.rs`; the first
+three were committed before the mode and failed in the Helper job with
+"unknown command end-console-host", and the review fix's two new tests and the
+6 s check failed in run 45039534666 against the first fix's mode (a running
+terminal's host ended; a time holding a running and an ended terminal ended
+neither; a host asked for within 5 s of its start ended). They suspend each host before its program
+ends, as the console-hosts tests do, so they check the mode and not what
+Windows does with an idle host, and they wait until each host is 6 s old.
+(The red runs 45032572689, 45033409949 and 45034021302 also showed a host gone
+before the mode ran; the test had ended it itself: its host search dropped
+each other terminal's host it looked at, and the test's process handle ends
+what it holds when dropped.)
 
 **Not covered here.** Three other places start node-pty themselves and leave a
 host the same way when their program ends by itself: an SSH session's terminal
 and the SSH End and liveness execs (pty-manager.ts's SSH code, which takes no
 hunk this beta) and the first-run setup terminal (ipc/setup-handlers.ts).
-Handed to the orchestrator for a ticket. The VM line (C1.3's three counts on
-this head) is owed.
+Handed to the orchestrator for a ticket. The VM line is owed: first the
+VM's clock tick (distinct system time readings in 500 ms; about 32 at the
+default 15.6 ms tick), then C1.3's three counts on this head at the default
+tick, and two tabs started together, the second closed, the first still
+working.

@@ -63,24 +63,37 @@
 //! program. So the app times each terminal it starts on Windows' own ConPTY,
 //! just before and just after node-pty makes the pseudoconsole (and with it
 //! the host), and runs this mode with that time once node-pty has reported
-//! the program's exit. `<t>` is in steps of 100 ns since 1601 (UTC);
-//! `--made-to` is not included, and it is after `--made-from` by at most
-//! `MAX_START_SPAN`. The mode reads its own creation time, then the process
-//! list once, and ends the one process that is:
+//! the program's exit. The app's clock (Date.now() in Electron's main
+//! process) can run up to one Windows clock tick (15.6 ms by default) behind
+//! the clock Windows stamps creation times with, so the app widens the time
+//! by 50 ms on each side, and the time can then hold the host of a terminal
+//! started just before or after. The time does not keep a running terminal's
+//! host: the last two rules below do. `<t>` is in steps of 100 ns since 1601
+//! (UTC); `--made-to` is not included, and it is after `--made-from` by at
+//! most `MAX_START_SPAN`. The mode reads its own creation time, then the
+//! process list once, and ends the one process that is:
 //!   - named `conhost.exe`, and its program file is Windows' own
 //!     `System32\conhost.exe`;
 //!   - listed with the process that started this mode as its parent;
 //!   - made in that time, after that process was made and before this mode
 //!     was (`made_by_start`);
-//!   - still running, and of the user this mode runs as.
+//!   - still running, and of the user this mode runs as;
+//!   - made at least `NEW_HOST_WAIT` (6 s) before this mode (`old_enough`):
+//!     node-pty gives a terminal's program 5 s to start in its pseudoconsole,
+//!     and until it has, a running terminal's host has no program;
+//!   - the console host of no process that still runs (`host_pid_of`): a
+//!     host that still has a program is never ended.
 //! It is held open from its check to its end, so its pid cannot pass to
 //! another process in between. When no process is all of that, or more than
-//! one is (two terminals started in that time), nothing is ended. It prints
-//! the same line as `console-hosts`, naming the process that started it, with
-//! `ended` 0 or 1, and exits 0; a note goes to stderr. It exits 1, ending
-//! nothing, when it cannot read its own creation time or its own user, the
-//! process list, the process that started it, or the system folder, and 2 on
-//! a command line it cannot read.
+//! one is (two terminals started in that time whose programs have both
+//! ended), nothing is ended. Nothing is ended either when a process that
+//! still runs, and could be opened, cannot be read for its console host: a
+//! process that cannot be opened is not read (a terminal's program is this
+//! user's, and can be). It prints the same line as `console-hosts`, naming
+//! the process that started it, with `ended` 0 or 1, and exits 0; a note goes
+//! to stderr. It exits 1, ending nothing, when it cannot read its own creation
+//! time or its own user, the process list, the process that started it, or
+//! the system folder, and 2 on a command line it cannot read.
 #![allow(unsafe_code)]
 
 use crate::start::{app_created, Refusal};
@@ -297,6 +310,29 @@ pub fn made_by_start(made: u64, when: &StartTime, parent_made: u64, self_made: u
     made >= when.from && made < when.to && made > parent_made && made < self_made
 }
 
+/// How old a console host must be before `end-console-host` ends it: six
+/// seconds, in steps of 100 ns. node-pty gives a terminal's program 5 s to
+/// start in its pseudoconsole (`CONNECTION_TIMEOUT`, its
+/// `windowsPtyAgent.js`), and until it has, a running terminal's host has no
+/// program; a second more is slack. The app asks no sooner than this after a
+/// terminal's start (`src/main/console-host-end.ts`, `NEW_HOST_WAIT_MS`).
+pub const NEW_HOST_WAIT: u64 = 6 * 10_000_000;
+
+/// Whether a console host made at `made` is old enough for `end-console-host`
+/// to end: made at least `NEW_HOST_WAIT` before this mode was (`self_made`).
+/// Both in steps of 100 ns since 1601 (UTC).
+pub fn old_enough(made: u64, self_made: u64) -> bool {
+    made.saturating_add(NEW_HOST_WAIT) <= self_made
+}
+
+/// The pid of a process's console host in what Windows answers for its
+/// `ProcessConsoleHostProcess` (NtQueryInformationProcess, class 49): the
+/// value with its two low bits, which are flags, cleared. 0: it has none (a
+/// value too big for a pid names no process either).
+pub fn host_pid_of(value: usize) -> u32 {
+    u32::try_from(value & !3).unwrap_or(0)
+}
+
 /// A mode's answer, or why it has none, as its output and exit status.
 fn answer_out(mode: &str, result: std::io::Result<(Answer, Vec<String>)>) -> ExitCode {
     match result {
@@ -375,7 +411,10 @@ pub use self::win::{console_parent, end_one, run};
 
 #[cfg(windows)]
 mod win {
-    use super::{before_boot, bound_from_pid_owner, host_image_ok, is_host_name, left_by_old_run, made_by_start, Answer, ConsoleHostsRequest, PidOwner, StartTime, HOST_NAMES};
+    use super::{
+        before_boot, bound_from_pid_owner, host_image_ok, host_pid_of, is_host_name, left_by_old_run, made_by_start, old_enough, Answer, ConsoleHostsRequest, PidOwner, StartTime,
+        HOST_NAMES,
+    };
     use crate::start::{app_created, list_step, ListStep};
     use crate::winproc::{close, creation_time, exit_code, exit_code_within, os_error};
     use std::ffi::c_void;
@@ -387,8 +426,8 @@ mod win {
     use windows_sys::Win32::System::Diagnostics::ToolHelp::{CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W, TH32CS_SNAPPROCESS};
     use windows_sys::Win32::System::SystemInformation::{GetSystemDirectoryW, GetSystemTimePreciseAsFileTime, GetTickCount64};
     use windows_sys::Win32::System::Threading::{
-        GetCurrentProcess, OpenProcess, OpenProcessToken, QueryFullProcessImageNameW, TerminateProcess, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
-        PROCESS_SYNCHRONIZE, PROCESS_TERMINATE,
+        GetCurrentProcess, OpenProcess, OpenProcessToken, QueryFullProcessImageNameW, TerminateProcess, PROCESS_NAME_WIN32, PROCESS_QUERY_INFORMATION,
+        PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE, PROCESS_TERMINATE,
     };
 
     /// What a process is opened with to read its times and user, and wait on it.
@@ -398,6 +437,14 @@ mod win {
     /// How long the mode waits, in all, for hosts whose end failed to finish
     /// exiting, as `end` does (`start.rs`).
     const FAILED_END_WAIT: Duration = Duration::from_secs(1);
+    /// `ProcessConsoleHostProcess`: the information class NtQueryInformationProcess
+    /// answers a process's console host for (`host_pid_of`).
+    const PROCESS_CONSOLE_HOST_PROCESS: u32 = 49;
+
+    #[link(name = "ntdll", kind = "raw-dylib")]
+    unsafe extern "system" {
+        fn NtQueryInformationProcess(process: HANDLE, class: u32, info: *mut c_void, length: u32, returned: *mut u32) -> i32;
+    }
 
     /// An open handle, closed when dropped.
     struct Owned(usize);
@@ -539,6 +586,55 @@ mod win {
         Ok((parent, parent_made))
     }
 
+    /// The pid of the console host of the process behind `process`
+    /// (`host_pid_of`; 0 when it has none), or the status Windows gave when
+    /// it cannot be read.
+    fn console_host_of(process: usize) -> Result<u32, i32> {
+        let mut value: usize = 0;
+        let size = std::mem::size_of::<usize>() as u32;
+        let status = unsafe { NtQueryInformationProcess(process as HANDLE, PROCESS_CONSOLE_HOST_PROCESS, (&mut value as *mut usize).cast(), size, std::ptr::null_mut()) };
+        if status < 0 {
+            return Err(status);
+        }
+        Ok(host_pid_of(value))
+    }
+
+    /// The console hosts that still have a program: the console host of each
+    /// process in `list` that still runs. A process that cannot be opened is
+    /// not read (a terminal's program is this user's, and can be). One that
+    /// has exited, still listed while a handle to it is open, has left its
+    /// host. Err, saying why, when a process that still runs, and could be
+    /// opened, cannot be read: then no host can be said to have no program.
+    fn hosts_with_a_program(list: &[(u32, u32, String)]) -> Result<Vec<u32>, String> {
+        let mut hosts: Vec<u32> = Vec::new();
+        for (pid, _, _) in list {
+            if *pid == 0 {
+                continue;
+            }
+            let Ok(p) = open(*pid, READ_RIGHTS) else { continue };
+            match exit_code(p.0) {
+                Ok(None) => {}
+                Ok(Some(_)) => continue,
+                Err(e) => return Err(format!("whether process {pid} still runs could not be read ({e})")),
+            }
+            let host = match console_host_of(p.0) {
+                Ok(host) => host,
+                // Read again with the full right to read a process, for a
+                // Windows that asks for it; one that cannot be opened with it
+                // is not read.
+                Err(_) => match open(*pid, PROCESS_QUERY_INFORMATION) {
+                    Ok(full) => console_host_of(full.0).map_err(|status| format!("the console host of process {pid} could not be read (status {status:#x})"))?,
+                    Err(_) => continue,
+                },
+            };
+            // No console host, or one that names itself.
+            if host != 0 && host != *pid {
+                hosts.push(host);
+            }
+        }
+        Ok(hosts)
+    }
+
     /// See `end-console-host` in the module comment.
     pub fn end_one(when: &StartTime) -> io::Result<(Answer, Vec<String>)> {
         let mut notes: Vec<String> = Vec::new();
@@ -575,8 +671,34 @@ mod win {
                 Ok(image) if host_image_ok(name, &image, &conhost) => {}
                 _ => continue,
             }
+            // Too new to tell: a running terminal's program may not have
+            // started in it yet.
+            if !old_enough(made, self_made) {
+                notes.push(format!("the console host made in that time (process {pid}) was made less than 6 s ago, so it was not ended"));
+                continue;
+            }
             found.push((*pid, host));
         }
+        if found.is_empty() {
+            return Ok((answer(0), notes));
+        }
+        // The time can hold the host of a terminal that still runs (the app's
+        // clock is not quite Windows' one): a host that still has a program is
+        // never ended.
+        let in_use = match hosts_with_a_program(&list) {
+            Ok(hosts) => hosts,
+            Err(why) => {
+                notes.push(format!("{why}, so no console host was ended"));
+                return Ok((answer(0), notes));
+            }
+        };
+        found.retain(|(pid, _)| {
+            let has_program = in_use.contains(pid);
+            if has_program {
+                notes.push(format!("the console host made in that time (process {pid}) still has a program, so it was not ended"));
+            }
+            !has_program
+        });
         if found.len() > 1 {
             notes.push(format!("{} console hosts were made in that time, so none was ended", found.len()));
             return Ok((answer(0), notes));
@@ -844,6 +966,35 @@ mod tests {
         // Made after this mode: not one the start made.
         assert!(!made_by_start(150, &when, app, 150));
         assert!(!made_by_start(150, &when, app, 140));
+    }
+
+    #[test]
+    fn a_host_is_ended_only_once_it_is_six_seconds_old() {
+        // node-pty gives a program 5 s to start in its pseudoconsole, and a
+        // second more is slack.
+        assert_eq!(NEW_HOST_WAIT, 60_000_000);
+        let mode: u64 = 100 * 10_000_000;
+        assert!(old_enough(mode - NEW_HOST_WAIT, mode));
+        assert!(old_enough(mode - NEW_HOST_WAIT - 1, mode));
+        assert!(old_enough(0, mode));
+        assert!(!old_enough(mode - NEW_HOST_WAIT + 1, mode));
+        assert!(!old_enough(mode, mode));
+        assert!(!old_enough(mode + 1, mode));
+        // A time near the end of the range does not wrap into "old".
+        assert!(!old_enough(u64::MAX - 5, mode));
+    }
+
+    #[test]
+    fn a_console_host_pid_is_read_without_its_two_flag_bits() {
+        // Windows pids are multiples of 4; the two bits below are flags.
+        assert_eq!(host_pid_of(0), 0);
+        assert_eq!(host_pid_of(1), 0);
+        assert_eq!(host_pid_of(3), 0);
+        assert_eq!(host_pid_of(4244), 4244);
+        assert_eq!(host_pid_of(4244 | 1), 4244);
+        assert_eq!(host_pid_of(4244 | 2), 4244);
+        assert_eq!(host_pid_of(4244 | 3), 4244);
+        assert_eq!(host_pid_of(u32::MAX as usize), u32::MAX - 3);
     }
 
     #[test]

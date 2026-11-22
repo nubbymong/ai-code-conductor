@@ -9,18 +9,22 @@ import type { IPty } from 'node-pty'
  * node-pty forgets the pseudoconsole, unclosed, when the program exits. The
  * app now times each such terminal's start and, after node-pty reports the
  * program's exit, has the session helper's end-console-host mode end the host
- * made in that time. The helper's own rules (which host it ends, and that it
- * ends none of two) are tested in helper/tests/console_hosts.rs and
- * helper/src/consoles.rs; this is the app's side: which terminals are timed,
- * when the helper is asked, with what, and the answer. Everything runs on
- * in-memory ports and fake terminals: no process is started.
+ * made in that time. The helper's own rules (which host it ends: never one
+ * that still has a program or is less than 6 s old, and none of two) are
+ * tested in helper/tests/console_hosts.rs and helper/src/consoles.rs; this is
+ * the app's side: which terminals are timed, when the helper is asked (no
+ * sooner than 6 s and the clock's slack after the start), with what (the time
+ * widened by the slack on each side, as Date.now() runs up to one Windows
+ * clock tick behind creation times), and the answer. Everything runs on
+ * in-memory ports, a fake clock, fake timers and fake terminals: no process is
+ * started.
  */
 
 vi.mock('../../../src/main/debug-logger', () => ({ logInfo: vi.fn(), logError: vi.fn(), logWarn: vi.fn(), logDebug: vi.fn() }))
 const ptySpawn = vi.hoisted(() => vi.fn())
 vi.mock('node-pty', () => ({ spawn: ptySpawn }))
 
-import { spawnEndingConsoleHost, filetimeOf, _setConsoleHostEndPortsForTest, type ConsoleHostEndPorts } from '../../../src/main/console-host-end'
+import { spawnEndingConsoleHost, filetimeOf, CLOCK_SLACK_MS, NEW_HOST_WAIT_MS, _setConsoleHostEndPortsForTest, type ConsoleHostEndPorts } from '../../../src/main/console-host-end'
 import type { HelperRun } from '../../../src/main/console-host-leftovers'
 import { spawnAgentPty, spawnPlainPty, spawnRunPty } from '../../../src/main/session-helper/manager'
 
@@ -28,9 +32,13 @@ const HELPER = 'C:\\Program Files\\AI Code Conductor\\resources\\helper\\aicc-he
 const OWN_PID = 4242
 const ENDED_ONE: HelperRun = { ok: true, stdout: `{"pid":${OWN_PID},"created":"133000000000000000","ended":1}\n`, stderr: '' }
 
+/** The clock is read twice at each timed start (just before and just after
+ *  the spawn) and once at each exit that asks (for the wait); `times` gives
+ *  each reading in turn. A timer is kept in `timers` until the test runs it. */
 function fakePorts(opts: { times?: number[]; platform?: NodeJS.Platform; helper?: string | null } = {}) {
   const runs: string[][] = []
   const logs: string[] = []
+  const timers: Array<{ ms: number; fn: () => void }> = []
   const times = [...(opts.times ?? [])]
   const state = { answer: ENDED_ONE }
   const ports: Partial<ConsoleHostEndPorts> = {
@@ -46,10 +54,11 @@ function fakePorts(opts: { times?: number[]; platform?: NodeJS.Platform; helper?
       runs.push([helper, ...args])
       return state.answer
     },
+    later: (ms, fn) => { timers.push({ ms, fn }) },
     log: (line) => { logs.push(line) },
   }
   _setConsoleHostEndPortsForTest(ports)
-  return { runs, logs, times, state }
+  return { runs, logs, times, state, timers }
 }
 
 /** A terminal as node-pty makes one on Windows (it has node-pty's agent), or
@@ -68,14 +77,17 @@ function fakeTerminal(opts: { agent?: boolean; pid?: number } = {}) {
 }
 
 const settle = () => new Promise<void>((r) => setTimeout(r, 0))
-const endArgs = (from: number, toIncluded: number) => [HELPER, 'end-console-host', '--made-from', filetimeOf(from), '--made-to', filetimeOf(toIncluded + 1)]
+/** The helper's command line for a start timed `from` to `toIncluded`: widened by 50 ms each side. */
+const endArgs = (from: number, toIncluded: number) => [HELPER, 'end-console-host', '--made-from', filetimeOf(from - 50), '--made-to', filetimeOf(toIncluded + 1 + 50)]
+/** A clock reading at an exit late enough to ask at once for a start that ended at `to`. */
+const lateExit = (to: number) => to + 6_050
 
 beforeEach(() => { ptySpawn.mockReset() })
 afterEach(() => { _setConsoleHostEndPortsForTest(null) })
 
 describe('a terminal on the ConPTY built into Windows', () => {
   it('has its console host ended once its program has ended, once, for the time its start took', async () => {
-    const { runs, logs } = fakePorts({ times: [1_000, 1_003] })
+    const { runs, logs, timers } = fakePorts({ times: [1_000, 1_003, lateExit(1_003)] })
     const t = fakeTerminal()
     expect(spawnEndingConsoleHost({ useConpty: true }, () => t.proc)).toBe(t.proc)
     await settle()
@@ -83,11 +95,52 @@ describe('a terminal on the ConPTY built into Windows', () => {
     t.exit()
     await settle()
     expect(runs).toEqual([endArgs(1_000, 1_003)])
+    expect(timers).toEqual([])
     expect(logs).toContain('[console-hosts] Ended the console host of a terminal whose program ended (process 5150)')
     // node-pty reports an exit once; asked again, nothing more runs.
     t.exit()
     await settle()
     expect(runs).toHaveLength(1)
+  })
+
+  it('gives the helper its start time widened by 50 ms on each side, for a clock that runs up to one Windows clock tick behind creation times', async () => {
+    expect(CLOCK_SLACK_MS).toBe(50)
+    const { runs } = fakePorts({ times: [1_000, 1_003, 9_000] })
+    const t = fakeTerminal()
+    spawnEndingConsoleHost({}, () => t.proc)
+    t.exit()
+    await settle()
+    // 950 ms and 1,054 ms after 1970 began, in steps of 100 ns since 1601 (--made-to not included).
+    expect(runs).toEqual([[HELPER, 'end-console-host', '--made-from', '116444736009500000', '--made-to', '116444736010540000']])
+  })
+
+  it('whose program ends within 6 s of its start is asked for only once its host is old enough for the helper', async () => {
+    expect(NEW_HOST_WAIT_MS).toBe(6_000)
+    // An exit 1 s after the start: a timer for the rest of 6 s and the slack.
+    const { runs, timers } = fakePorts({ times: [1_000, 1_003, 2_000, 3_000, 3_001, lateExit(3_001) - 1, 10_000, 10_001, lateExit(10_001)] })
+    const soon = fakeTerminal()
+    spawnEndingConsoleHost({}, () => soon.proc)
+    soon.exit()
+    await settle()
+    expect(runs).toEqual([])
+    expect(timers.map((x) => x.ms)).toEqual([1_003 + 6_000 + 50 - 2_000])
+    timers[0].fn()
+    await settle()
+    expect(runs).toEqual([endArgs(1_000, 1_003)])
+
+    // One millisecond short of the wait: a timer of 1 ms. At the wait: at once.
+    const almost = fakeTerminal()
+    spawnEndingConsoleHost({}, () => almost.proc)
+    almost.exit()
+    const atWait = fakeTerminal()
+    spawnEndingConsoleHost({}, () => atWait.proc)
+    atWait.exit()
+    await settle()
+    expect(timers.map((x) => x.ms)).toEqual([5_053, 1])
+    expect(runs).toEqual([endArgs(1_000, 1_003), endArgs(10_000, 10_001)])
+    timers[1].fn()
+    await settle()
+    expect(runs).toEqual([endArgs(1_000, 1_003), endArgs(10_000, 10_001), endArgs(3_000, 3_001)])
   })
 
   it('whose program still runs is never asked for', async () => {
@@ -100,7 +153,7 @@ describe('a terminal on the ConPTY built into Windows', () => {
   })
 
   it('started in the same millisecond as another: neither is asked for, a later one is', async () => {
-    const { runs } = fakePorts({ times: [5, 7, 7, 9, 12, 13] })
+    const { runs } = fakePorts({ times: [5, 7, 7, 9, 12, 13, lateExit(13)] })
     const a = fakeTerminal()
     const b = fakeTerminal()
     const c = fakeTerminal()
@@ -114,8 +167,9 @@ describe('a terminal on the ConPTY built into Windows', () => {
     expect(runs).toEqual([endArgs(12, 13)])
   })
 
-  it('whose start took ten seconds or more, or whose clock was set back, is not asked for', async () => {
-    const { runs } = fakePorts({ times: [0, 10_000, 20_000, 19_000, 30_000, 39_999] })
+  it('whose start, widened by the slack, does not fit the helper\'s ten seconds, or whose clock was set back, is not asked for', async () => {
+    // 9,900 ms and the 2 x 50 ms slack: over ten seconds. 9,899 ms: exactly ten.
+    const { runs } = fakePorts({ times: [0, 9_900, 20_000, 19_000, 30_000, 39_899, lateExit(39_899)] })
     const slow = fakeTerminal()
     const back = fakeTerminal()
     const almost = fakeTerminal()
@@ -126,11 +180,14 @@ describe('a terminal on the ConPTY built into Windows', () => {
     back.exit()
     almost.exit()
     await settle()
-    expect(runs).toEqual([endArgs(30_000, 39_999)])
+    expect(runs).toEqual([endArgs(30_000, 39_899)])
+    // What the helper takes: --made-to after --made-from by ten seconds at most.
+    const [, , , from, , to] = runs[0]
+    expect(BigInt(to) - BigInt(from)).toBe(100_000_000n)
   })
 
   it('in an install with no session helper: nothing runs, said once', async () => {
-    const { runs, logs } = fakePorts({ times: [1, 2, 10, 11], helper: null })
+    const { runs, logs } = fakePorts({ times: [1, 2, 10, 11, lateExit(11), lateExit(11) + 1], helper: null })
     const a = fakeTerminal()
     const b = fakeTerminal()
     spawnEndingConsoleHost({}, () => a.proc)
@@ -143,7 +200,8 @@ describe('a terminal on the ConPTY built into Windows', () => {
   })
 
   it('takes only an answer that names this process, and says when the helper failed', async () => {
-    const { runs, logs, state } = fakePorts({ times: [1, 2, 10, 11, 20, 21] })
+    // Each start, then its exit, late enough to ask at once.
+    const { runs, logs, state } = fakePorts({ times: [1, 2, lateExit(2), 7_000, 7_001, lateExit(7_001), 14_000, 14_001, lateExit(14_001)] })
     state.answer = { ok: true, stdout: '{"pid":99,"created":"1","ended":1}', stderr: '' }
     const other = fakeTerminal()
     spawnEndingConsoleHost({}, () => other.proc)
@@ -205,7 +263,7 @@ describe('the time the helper is given', () => {
 
 describe('the PTY manager\'s terminals started the usual way (session-helper/manager.ts)', () => {
   it('go through it: a Terminal only tab, a local agent session and a run of the app\'s own, with their arguments as given', async () => {
-    const { runs } = fakePorts({ times: [100, 101, 200, 201, 300, 301] })
+    const { runs } = fakePorts({ times: [100, 101, 200, 201, 300, 301, lateExit(301), lateExit(301) + 1, lateExit(301) + 2] })
     const plain = fakeTerminal()
     const agent = fakeTerminal()
     const run = fakeTerminal()
@@ -244,5 +302,17 @@ describe('node-pty, as this works around it (1.2.0-beta.15)', () => {
   it('keeps its ConPTY agent where this looks for it', () => {
     const js = readFileSync(resolve(root, 'lib', 'windowsTerminal.js'), 'utf8')
     expect(js).toContain('_this._agent = new windowsPtyAgent_1.WindowsPtyAgent(')
+  })
+  // Until node-pty has started the program in its pseudoconsole (up to its
+  // connection timeout), a running terminal's host has no program, so the
+  // helper ends no host younger than that and a second more, and the app asks
+  // no sooner. A longer timeout here fails this, to say both must grow.
+  it('gives a program 5 s to start in its pseudoconsole, which the helper\'s 6 s wait covers', () => {
+    const js = readFileSync(resolve(root, 'lib', 'windowsPtyAgent.js'), 'utf8')
+    expect(js).toMatch(/\bvar CONNECTION_TIMEOUT = 5000;/)
+    expect(js).toContain('connectionTimeout: CONNECTION_TIMEOUT,')
+    expect(NEW_HOST_WAIT_MS).toBe(5_000 + 1_000)
+    const rs = readFileSync(resolve(__dirname, '..', '..', '..', 'helper', 'src', 'consoles.rs'), 'utf8')
+    expect(rs).toContain('pub const NEW_HOST_WAIT: u64 = 6 * 10_000_000;')
   })
 })
