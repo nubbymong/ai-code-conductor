@@ -488,7 +488,7 @@ export class Reader {
   /**
    * Read for the clear: the rows above the cut's row could change now, so no clear after this. On the normal screen
    * only, unless `either`: the cursor, or the place saved for it, went where the count does not follow it, and a
-   * switch back with 47 or 1047 brings it to the normal screen.
+   * switch back with 47 or 1047 (after a restore, for the saved place) brings the cursor to the normal screen.
    */
   private unsettled(either = false): void {
     if (this.watch !== undefined && (either || !this.alt)) this.watch.stop = true
