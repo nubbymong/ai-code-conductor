@@ -174,7 +174,9 @@ hours of real-host time across R1 to R12; local tests and CI do not replace it.
   for every step that touches its blast radius. From R6 the new remote files
   join that radius. The gate shrinks only at R12, to about 8 rows per helper
   release, and only once the new path has passed the full existing matrix once
-  (by the end of R11).
+  (by the end of R11). Superseded: the owner retired the live matrix on
+  2026-11-22 (`AGENTS.md`, Release Process); a check that the session helper
+  works across devices replaces it when the remote helper needs one.
 
 ## Alternatives considered
 

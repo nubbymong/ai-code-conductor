@@ -43,7 +43,7 @@ const PR_RE = /^[1-9][0-9]*$/
 
 const OPENED_BY = {
   'desktop-tested': 'a human exercised the packaged app on a real desktop',
-  'runtime-validated': 'automated runtime validation passed (VM Playwright e2e and/or the live SSH statusline matrix)',
+  'runtime-validated': 'automated runtime validation passed (VM Playwright e2e)',
   'skip-desktop-test': 'no runtime test required (docs/deps/CI/changelog-only)',
 }
 
@@ -77,7 +77,7 @@ export function decideGate(pull, number) {
   const names = pull.labels.map((l) => l.name.toLowerCase())
   const has = GATE_LABELS.find((l) => names.includes(l))
   if (has) return { pass: true, message: `PR into ${STABLE_BASE} carries '${has}' - ${OPENED_BY[has]}. Gate open.` }
-  return { pass: false, message: `::error::Desktop test gate: a PR into ${STABLE_BASE} (the stable promotion) must carry 'desktop-tested' (a human launched and exercised the packaged app), 'runtime-validated' (automated VM e2e and/or the live SSH statusline matrix passed), or 'skip-desktop-test' (docs/deps/CI/changelog-only) before it can merge. See CONTRIBUTING.md > Desktop-test gate.` }
+  return { pass: false, message: `::error::Desktop test gate: a PR into ${STABLE_BASE} (the stable promotion) must carry 'desktop-tested' (a human launched and exercised the packaged app), 'runtime-validated' (automated VM e2e passed), or 'skip-desktop-test' (docs/deps/CI/changelog-only) before it can merge. See CONTRIBUTING.md > Desktop-test gate.` }
 }
 
 /**

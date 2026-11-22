@@ -2560,6 +2560,8 @@ describe('the 2.1.3-beta.12 known issues', () => {
     expect(p).toContain('On Windows, when the tab comes back at the size the terminal had (it waits up to about 3 seconds for that), the first kept line starts at the start of a line, right under the notice.')
     expect(p).toContain('When it does not (the window\'s size changed between the two runs, or the tab did not get there in time), a Windows console\'s long lines can come back broken, and the line right after the notice can start part-way, with a few stray characters')
     expect(p).not.toContain('The line right after the notice can start part-way')
+    // 2.1.3-beta.13 fix round: the cases where the first line starts part-way at any size, on any system.
+    expect(p).toContain('that line can also start part-way on any system: when the output the helper still holds takes fewer rows than the tab keeps (nothing is cut then, and it is shown from the first character still held), when a single line is longer than the tab keeps, or when the notice shows in a terminal that was already showing output because the app fell behind.')
     expect(p).toContain('Workaround: quit the full-screen program and start it again.')
     expect(body('machines')).toContain('what a held terminal shows when its earlier output is no longer held')
   })
@@ -2581,6 +2583,10 @@ describe('the 2.1.3-beta.12 known issues', () => {
     for (const start of [twoRows, warningCount, movedKey]) {
       expect(para(start), start).toContain('A command bar prompt button that sends its prompt types nothing either, and the command bar says the prompt was not sent.')
     }
+  })
+
+  it('the Resources folder skills folder that nothing reads is a known issue with its workaround (2.1.3-beta.13, S41)', () => {
+    expect(body('known-issues')).toContain('The Resources folder the installer and the Setup dialog offer is created with a skills folder inside it, but the app reads no skills from it, so a skill put there is never loaded. Workaround: put the skill in the skills folder of your Claude folder (~/.claude/skills).')
   })
 })
 

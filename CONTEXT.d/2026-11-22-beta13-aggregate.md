@@ -53,3 +53,33 @@ known issue is narrowed to a tab that does not come back at the terminal's size
 (A1, A2, A4); the Codex known issue about text taken back keeps only macOS (B2,
 aicc_planning#370 stays open for macOS). tips-library.ts: the Usage tip follows
 C3. The Feature Guide cards and README.md needed nothing.
+
+**Sections with no fragment of their own.**
+- A3 (aicc_planning#360): only a take-over's replay, up to its attach's
+  `ring_end`, goes through `replay-queries.ts`. Each complete terminal query is
+  replaced by a stand-in that draws nothing; a colour query that also sets
+  colours keeps its sets. A launch's attach and an attach again pass untouched.
+  One log line gives the count.
+- B2 (aicc_planning#370): on Windows and Linux a braille-spinner window title
+  is a busy sign inside the one Codex reader (`codex-screen.ts`), kept per pane
+  (`session-screen.ts`) and per tab (`screenRegistry.ts`). macOS recordings show
+  no spinner at the mark, so macOS is unchanged and #370 stays open. A title
+  field on `screen.read` is owed with the step that moves the Codex reader onto
+  the holder's screen.
+- C2 (aicc_planning#377): the Helper job's Linux leg also builds
+  `x86_64-unknown-linux-musl` release `--locked`, checks it is static and
+  uploads `helper-linux-musl`, which nothing ships. The P3 and P6 results are in
+  ADR-030; the second host is owed to beta.14.
+- C6 (aicc_planning#381): Settings, Accounts lists in added order
+  (`selectAccountsInAddedOrder`), with an All / Active / Inactive filter
+  (`accountsFilterStore`) at the top. `selectProviderAccounts` keeps
+  active-first for the switch-account menu, Account usage, the sidebar count,
+  onboarding and the Sentinel select.
+
+**Fix round on #755.** Wording only. The Desktop test gate's messages, their
+test pins and two ci.yml comments no longer offer the retired matrix as a way
+to earn `runtime-validated`. ADR-021, ADR-029 and ADR-030 say the matrix is
+retired where they listed it as a gate. helper-protocol.md section 11 names the
+take-over's size wait and its 3 s bound. Known issues gains the Resources
+folder's unread skills folder (C5) and the other cases where the first kept
+line starts part-way; the changelog's line count is tied to the tab's size.

@@ -74,7 +74,9 @@ by CI.
 4. **Evidence required before merge.** An adversarial pass per boundary touched
    (ADR-009), a spec-compliance review that diffs every moved body against its
    origin, a code-quality review, and the live SSH statusline matrix for the
-   `pty-manager.ts` extraction (AGENTS.md, path-triggered gate).
+   `pty-manager.ts` extraction (AGENTS.md, path-triggered gate). The owner
+   retired the live matrix on 2026-11-22 (`AGENTS.md`, Release Process), so
+   an extraction now needs the other three.
 
 ## Consequences
 

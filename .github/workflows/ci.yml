@@ -120,8 +120,7 @@ jobs:
   #   - A PR into `main` (the stable promotion, release/vX.Y.Z -> main) must
   #     carry one of the labels, as every PR did before:
   #       `desktop-tested`    a HUMAN opened and exercised the packaged app
-  #       `runtime-validated` AUTOMATED runtime validation passed (VM Playwright
-  #                           e2e and/or the live SSH statusline matrix)
+  #       `runtime-validated` AUTOMATED runtime validation passed (VM Playwright e2e)
   #       `skip-desktop-test` nothing to exercise (docs/deps/CI/changelog-only)
   # Direct pushes to `main` have no PR and are exempt by the event guard.
   #
@@ -1006,7 +1005,7 @@ jobs:
 
   # SSH multi-session smoke (#24 regression gate; aicc_planning#28). Real `ssh`
   # against an EPHEMERAL localhost sshd — no external hosts or credentials, so
-  # unlike the manual live matrix (AGENTS.md) this CAN run in CI. It proves the
+  # unlike the retired manual live matrix this CAN run in CI. It proves the
   # per-session MCP reverse-tunnel ports coexist (two sessions to one host) and
   # that the old single-fixed-port shape collides. It exercises only the SSH
   # connection / `-R` / argv layer (child_process ssh + the pure argv builder) —

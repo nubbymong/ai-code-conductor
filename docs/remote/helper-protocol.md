@@ -359,7 +359,10 @@ has seen; a gap is logged, and noted on the session if a hook event was lost.
   view or reset the terminal. It holds the replay until it reaches
   `ring_end`, over a dropped connection too (the attach again, with no new
   gap, holds its own replay to its `ring_end`), and at most until the
-  terminal ends or 2 s pass. Then it writes, in one piece, the cancel
+  terminal ends or 2 s pass. A take-over on a holder that offers the screen
+  reads (section 15) also keeps the replay, cut or whole, until the tab is at
+  the holder's size, at most 3 s after it read that size, and sends the holder
+  no size meanwhile (2.1.3-beta.13). Then it writes, in one piece, the cancel
   character, the attribute reset and one line of its own, "[Earlier output
   of this terminal is no longer held, so it is not shown.]", then only the
   last of the replay that the tab's scrollback keeps (10,000 lines less a

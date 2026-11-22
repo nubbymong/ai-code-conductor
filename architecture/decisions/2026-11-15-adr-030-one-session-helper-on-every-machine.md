@@ -364,8 +364,10 @@ otherwise carried from earlier measurement.
   fails closed. For beta releases the owner decided on 2026-11-15 that the
   pass may be owed at merge: every owed pass runs in one security round
   before the stable release, and nothing reaches stable with a pass owed.
-  The SSH statusline live matrix in `AGENTS.md` stays in force
-  for its radius until the remote deletion. A security finding follows the
+  The SSH statusline live matrix stayed in force for its radius until the
+  owner retired it on 2026-11-22 (`AGENTS.md`, Release Process); a check that
+  the session helper works across devices replaces it when the remote helper
+  needs one. A security finding follows the
   embargo rule in `SECURITY.md`; none is described here.
 
 ## Probes
