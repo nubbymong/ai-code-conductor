@@ -403,20 +403,6 @@ fn terminal(argv: &[String]) -> Terminal {
     Terminal { pty, from, to }
 }
 
-/// A program that ends by itself about a second after it starts: cmd.exe
-/// from the system folder, pinging this computer twice, a second apart.
-/// Not at once: on the CI runner, with `cmd /c exit` (a program that ends a
-/// few milliseconds after its start), at least one host of two had ended by
-/// itself half a second later (Helper job, run 45032572689), where the hosts
-/// of programs that ran a while stay (probe P19, and the published beta.13's
-/// five on the test VM).
-fn ends_soon() -> Vec<String> {
-    let root = std::env::var("SystemRoot").unwrap_or_else(|_| r"C:\Windows".to_string());
-    let mut argv = vec![format!(r"{root}\System32\cmd.exe")];
-    argv.extend(["/c", "ping", "-n", "2", "127.0.0.1"].iter().map(|a| a.to_string()));
-    argv
-}
-
 /// A program that keeps running while its terminal is open.
 fn keeps_running() -> Vec<String> {
     vec![HELPER.to_string(), "__echo".to_string()]
@@ -429,6 +415,28 @@ fn wait_ended(t: &mut Terminal) {
         assert!(Instant::now() < deadline, "the terminal's program did not end");
         std::thread::sleep(Duration::from_millis(50));
     }
+}
+
+/// The terminal's program ends while its pseudoconsole stays open, as
+/// node-pty leaves one; to its host that is the program's own end (its one
+/// client leaves). Whether a host then stays by itself varies: in the Helper
+/// job on windows-2025 (runs 45032572689 and 45033409949), with programs that
+/// ended by themselves within a second of their start, one host stayed, and
+/// of two others at least one had ended half a second later, where the hosts
+/// of Claude Code, Codex and the shells in the app's tabs stayed (probe P19,
+/// and the published beta.13 on the test VM). So the test does not wait for
+/// chance: as the
+/// console-hosts tests above do, it suspends the host first, so it cannot end
+/// by itself, then ends the program; from then on only an end from outside
+/// can end that host.
+fn end_program_keeping_host(t: &mut Terminal, host: &Held) {
+    // A moment for the host to finish starting, as the tests above give it.
+    std::thread::sleep(Duration::from_millis(300));
+    assert!(host.running(), "the terminal's host (process {}) ended while its program ran", host.pid);
+    assert!(host.freeze(), "the terminal's host (process {}) could not be suspended", host.pid);
+    t.pty.kill();
+    wait_ended(t);
+    assert!(host.running(), "the suspended host ended with its program");
 }
 
 /// The console host this process made in `[from, to)`, held: its one
@@ -466,12 +474,9 @@ fn a_terminal_whose_program_ended_has_its_console_host_ended_once_and_no_other()
     // A terminal whose program still runs, started first: its host is never ended.
     let live = terminal(&keeps_running());
     let live_host = host_made_in(live.from, live.to);
-    let mut ended = terminal(&ends_soon());
+    let mut ended = terminal(&keeps_running());
     let host = host_made_in(ended.from, ended.to);
-    wait_ended(&mut ended);
-    // As node-pty leaves it: the program has ended, the pseudoconsole is open.
-    std::thread::sleep(Duration::from_millis(500));
-    assert!(host.running(), "the host of a terminal whose program ended (process {}) ended by itself", host.pid);
+    end_program_keeping_host(&mut ended, &host);
 
     let (ok, out, err) = end_console_host(ended.from, ended.to);
     assert!(ok, "{out}{err}");
@@ -491,15 +496,13 @@ fn a_terminal_whose_program_ended_has_its_console_host_ended_once_and_no_other()
 fn two_terminals_started_in_one_time_have_neither_host_ended_by_it() {
     let _serial = one_at_a_time();
     let from = filetime_now();
-    let mut a = terminal(&ends_soon());
-    let mut b = terminal(&ends_soon());
+    let mut a = terminal(&keeps_running());
+    let mut b = terminal(&keeps_running());
     let to = filetime_now() + 1;
     let host_a = host_made_in(a.from, a.to);
     let host_b = host_made_in(b.from, b.to);
-    wait_ended(&mut a);
-    wait_ended(&mut b);
-    std::thread::sleep(Duration::from_millis(500));
-    assert!(host_a.running() && host_b.running(), "a host of a terminal whose program ended ended by itself");
+    end_program_keeping_host(&mut a, &host_a);
+    end_program_keeping_host(&mut b, &host_b);
 
     // A time that holds both starts cannot say which terminal ended: neither host is ended.
     let (ok, out, err) = end_console_host(from, to);
