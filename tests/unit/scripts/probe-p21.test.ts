@@ -31,7 +31,7 @@ const P = req('./p21-capture.cjs') as {
   judgeSshRun: (r: Run) => { ok: boolean; failures: string[] }
   verdictSsh: (r: Run[]) => V
   mixedLine: (readings: Array<{ label: string; facts: Facts }>) => string
-  verdictLines: (c: Array<{ label: string; facts: Facts; runs: Run[] }>, s: { label: string; facts: Facts; runs: Run[] } | null, why?: string) => string[]
+  verdictLines: (c: Array<{ label: string; facts: Facts; runs: Run[] }>, s: { label: string; facts: Facts; runs: Run[] } | null, why?: string, consoleWhy?: string) => string[]
   checkLabel: (l: unknown) => string
   BOUND_MS: number
 }
@@ -200,6 +200,19 @@ describe('P21: the lines it prints', () => {
       null,
     )
     expect(two[two.length - 1]).toMatch(/^P21 RESULT: DOES NOT CAPTURE at 100% and 125%/)
+  })
+
+  it('with no console reading, says why and reads CANNOT MEASURE for the console session, the SSH half still judged', () => {
+    const lines = P.verdictLines(
+      [],
+      { label: 'ssh', facts: { modes: [], dpis: [] }, runs: [cleanSsh(), cleanSsh(), cleanSsh()] },
+      'no console session to set it in',
+      'nobody is signed in on the console',
+    )
+    expect(lines[0]).toBe('P21 CONSOLE: CANNOT MEASURE - nobody is signed in on the console')
+    expect(lines[lines.length - 1]).toBe(
+      'P21 RESULT: CANNOT MEASURE from the console session; FAILS CLEANLY from the SSH session; second scale: not measured (no console session to set it in); mixed scaling: not measured (no display listed)',
+    )
   })
 
   it('counts mixed scaling only with two displays at different scales', () => {

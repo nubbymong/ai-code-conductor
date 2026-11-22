@@ -1,7 +1,7 @@
 # Probe P21's Windows side (p21-capture.cjs runs it; ADR-030, plan 2.1.3-beta.14 C6).
 # It prints one JSON line. It reads only, except `scale -Set`, which changes the primary
 # display's scale in the session it runs in (p21-capture.cjs puts the scale found back),
-# and the two task modes, which add and remove one scheduled task of this user's.
+# and the task modes, which add, read and remove one scheduled task of this user's.
 #   -Mode facts       : the session id, whether LogonUI runs in it, whether this process is
 #                       elevated, each attached display's mode (EnumDisplaySettings, physical
 #                       pixels) and each display's effective DPI (GetDpiForMonitor, in a thread
@@ -13,9 +13,10 @@
 #   -Mode task-run -Name <n> -Exe <program> -Arguments <text> -Dir <folder> : register and start a
 #                       task that runs the program in this user's signed-in session only, not
 #                       elevated.
+#   -Mode task-info -Name <n> : that task's state and last result (0x00041303: it has not run).
 #   -Mode task-remove -Name <n> : stop and remove that task, if it is there.
 param(
-  [ValidateSet('facts', 'scale', 'task-run', 'task-remove')][string]$Mode = 'facts',
+  [ValidateSet('facts', 'scale', 'task-run', 'task-info', 'task-remove')][string]$Mode = 'facts',
   [int]$Set = 0,
   [string]$Name = '',
   [string]$Exe = '',
@@ -230,13 +231,20 @@ switch ($Mode) {
   }
   'task-run' {
     if ($Name -notmatch '^aicc-p21-[A-Za-z0-9-]{1,40}$') { throw "the task name $Name is not one of P21's" }
-    $user = "$env:USERDOMAIN\$env:USERNAME"
+    # The token's own name: an SSH session's USERDOMAIN does not name the computer.
+    $user = [Security.Principal.WindowsIdentity]::GetCurrent().Name
     $action = New-ScheduledTaskAction -Execute $Exe -Argument $Arguments -WorkingDirectory $Dir
     $principal = New-ScheduledTaskPrincipal -UserId $user -LogonType Interactive -RunLevel Limited
     $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 5)
     Register-ScheduledTask -TaskName $Name -Action $action -Principal $principal -Settings $settings -Force | Out-Null
     Start-ScheduledTask -TaskName $Name
     Write-Line ([ordered]@{ task = $Name; user = $user; started = $true })
+  }
+  'task-info' {
+    if ($Name -notmatch '^aicc-p21-[A-Za-z0-9-]{1,40}$') { throw "the task name $Name is not one of P21's" }
+    $task = Get-ScheduledTask -TaskName $Name
+    $info = Get-ScheduledTaskInfo -TaskName $Name
+    Write-Line ([ordered]@{ task = $Name; state = [string]$task.State; lastResult = ('0x{0:X8}' -f $info.LastTaskResult) })
   }
   'task-remove' {
     if ($Name -notmatch '^aicc-p21-[A-Za-z0-9-]{1,40}$') { throw "the task name $Name is not one of P21's" }

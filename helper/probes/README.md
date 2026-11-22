@@ -312,7 +312,14 @@ leave no file. When no second scale can be set, the line says why; mixed
 scaling is measured only with two displays. The last lines are `P21 CONSOLE
 <label>`, `P21 SSH`, `P21 SCALES`, `P21 MIXED SCALING` and `P21 RESULT: ...`,
 or `P21 RESULT: COULD NOT RUN - <reason>`; each reading is `p21-<label>.json`
-in the output folder.
+in the output folder. `console` stops with COULD NOT RUN when its task has not
+started 15 s after it was started, as when nobody is signed in on the console.
+
+The answer is in ADR-030 after the P20 result (2026-11-22): from the SSH
+session, FAILS CLEANLY (3 of 3 runs exited 3 in 13 to 61 ms, no file left); from
+the console session, CANNOT MEASURE, since nobody was signed in on the test
+machine's console and the probe signs nobody in. P21 runs again from a
+signed-in console session before Snap's Windows overlay is built on the mode.
 
 # Probes P3 and P6: does a holder outlive the ssh logout, and is an exec's PATH the login PATH?
 

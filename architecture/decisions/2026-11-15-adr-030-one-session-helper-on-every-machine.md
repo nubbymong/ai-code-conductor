@@ -685,6 +685,28 @@ path (the probe writes the same entries), a settings file written in place, Clau
 hook events, macOS and Linux, Codex below 0.157.1 (the tested range starts at 0.153.4). The
 probe is `helper/probes/p20-probe.cjs`.
 
+P21 result (2026-11-22, plan 2.1.3-beta.14 C6, the Windows test machine, build 22621, with the
+`helper-windows` artifact of Helper run 45032133403 on 0e2d6f98, whose `aicc-helper.exe` has
+SHA-256 51a33a39f8d4d046445081e3f4c93736a82e65048ef10ec0565e6c1529fb5b36). The decision lines
+were fixed before measuring and are in the probe's header. From the SSH session (session 0,
+elevated): FAILS CLEANLY. In 3 of 3 runs the mode exited 3 in 13 to 61 ms with "no desktop to
+capture: this process runs on a window station no display shows (`Service-0x0-...$`): a service
+or an SSH session", printed nothing on stdout and left no file. In that session Windows lists no
+attached display mode (EnumDisplaySettings), yet still gives one display of 1024 by 768 at 96 DPI
+(EnumDisplayMonitors and GetDpiForMonitor), so the window station check is what stops the run, not
+the display list. From the console session: CANNOT MEASURE. Nobody was signed in on the test
+machine's console: `quser` listed no user and LogonUI ran in session 1. Its auto sign-in is set
+(AutoAdminLogon 1, user User) but keeps no password in the registry, and Winlogon's last sign-in
+notice is from 2026-10-30, so the start of 2026-11-18 signed nobody in. The probe's scheduled task,
+which runs only while its user is signed in, was registered and started and did not run (0x00041303,
+"the task has not run"); it was removed, and nobody was signed in by hand. So the console runs'
+time, sizes, DPI and pixels and the second scale were not measured, and mixed scaling was not
+measured (the machine has one display). What it means, as fixed before measuring: no verdict for
+the console session, so P21 runs again from a signed-in console session before S8 builds Snap's
+Windows overlay on the mode; the SSH half needs nothing. The machine was left as found (no task,
+no file, its scale and name lookups as they were). The probe is `helper/probes/p21-capture.cjs`
+with `p21-windows.ps1`.
+
 ## Parked questions
 
 None blocks beta 4. Each default stands until the owner is asked, before the

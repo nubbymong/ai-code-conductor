@@ -19,8 +19,19 @@ helper (ADR-030 D3, D4, protocol change 2), measured before anything is built on
   console runs start through a scheduled task in the signed-in console session (not elevated); a
   second scale is set with the display configuration call the Settings page makes. The verdict
   lines have a unit test (`tests/unit/scripts/probe-p21.test.ts`), red under three mutants (the
-  black-picture check, the time bound and the SSH exit check each dropped).
+  black-picture check, the time bound and the SSH exit check each dropped) and under a fourth (the
+  line for a console session that was not measured dropped).
+- **Measured** (2026-11-22, the Windows test machine, the `helper-windows` artifact of Helper run
+  45032133403). From the SSH session: FAILS CLEANLY, 3 of 3 runs exit 3 in 13 to 61 ms, no file.
+  Session 0 still reports one 1024 by 768 display to EnumDisplayMonitors, so the window station
+  check is what stops a run there. From the console session: CANNOT MEASURE. Nobody is signed in
+  on that console: its auto sign-in (AutoAdminLogon 1) keeps no password, Winlogon's last sign-in
+  is from 2026-10-30, and the probe's task did not start (0x00041303). The plan read "auto sign-in
+  is on"; it is set, but it has signed nobody in since that date. P21 runs again from a signed-in
+  console session before S8 builds on the mode. Two probe fixes from the run: the task's user is
+  the token's own name (an SSH session's USERDOMAIN did not resolve), and `console` stops when
+  its task has not started 15 s after it was started.
 - **Docs.** Protocol section 15 gains "Capturing the displays" (change 2; its command line is not
-  frozen while nothing runs it); ADR-030 gains the P21 row and reads twenty-one probes; the helper
+  frozen while nothing runs it); ADR-030 gains the P21 row and result and reads twenty-one probes; the helper
   README lists the mode (and `console-hosts`, which it had left out); threat model 3.13 gains the
   mode's bullet, its adversarial pass owed before stable.

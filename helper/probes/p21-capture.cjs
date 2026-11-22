@@ -21,8 +21,9 @@
  * pictures are read, then deleted one file at a time; none is kept or sent.
  * `console` starts `measure` in the signed-in console session of the user this
  * runs as, through a scheduled task that runs only while that user is signed
- * in, not elevated; it waits for the reading (3 min at most) and removes the
- * task in every case. `scale` reads, or with --set sets, the scale of the
+ * in, not elevated; it waits for the reading (3 min at most; it stops sooner
+ * when the task has not started 15 s after it was started, as when nobody is
+ * signed in there) and removes the task in every case. `scale` reads, or with --set sets, the scale of the
  * primary display in the session it runs in, with the display configuration
  * call the Settings page makes (DisplayConfigSetDeviceInfo, the source's DPI
  * scale); `console-scale` runs `scale` in the console session the same way.
@@ -69,7 +70,7 @@
  *   node p21-capture.cjs console --helper <aicc-helper.exe> --out <folder> --label <name> [--runs 3]
  *   node p21-capture.cjs scale --out <folder> --label <name> [--set <percent>]
  *   node p21-capture.cjs console-scale --out <folder> --label <name> [--set <percent>]
- *   node p21-capture.cjs verdict --out <folder> --console <label>[,<label>] --ssh <label> [--second-scale <why not>]
+ *   node p21-capture.cjs verdict --out <folder> --console <label>[,<label>]|none --ssh <label> [--second-scale <why not>] [--console-not-run <why>]
  * --out must be a folder that is there; readings are p21-<label>.json and
  * p21-scale-<label>.json in it. The last lines of `verdict` are "P21 CONSOLE
  * <label>: ...", "P21 SSH: ...", "P21 SCALES: ...", "P21 MIXED SCALING: ..."
@@ -86,6 +87,8 @@ const RUNS = 3;
 const BOUND_MS = 2000;
 const HANG_MS = 10000;
 const TASK_WAIT_MS = 180000;
+const TASK_START_MS = 15000;
+const TASK_HAS_NOT_RUN = '0x00041303';
 const EXIT_NO_DESKTOP = 3;
 const BMP_HEADER = 54;
 const MAX_OUTPUT = 64 * 1024;
@@ -244,9 +247,10 @@ function mixedLine(readings) {
 }
 
 /** The verdict lines for the console readings (one a scale) and the SSH reading. */
-function verdictLines(consoleReadings, sshReading, secondScaleWhy) {
+function verdictLines(consoleReadings, sshReading, secondScaleWhy, consoleWhy) {
   const lines = [];
   const byScale = consoleReadings.map((r) => ({ label: r.label, scale: scaleOf(r.facts), v: verdictConsole(r.runs, r.facts) }));
+  if (byScale.length === 0) lines.push(`P21 CONSOLE: CANNOT MEASURE - ${consoleWhy || 'no console reading'}`);
   for (const c of byScale) {
     lines.push(`P21 CONSOLE ${c.label} (${c.scale === null ? 'scale not read' : `${c.scale}%`}): ${c.v.verdict} - ${c.v.why}`);
     for (const f of c.v.failures) lines.push(`  ${f}`);
@@ -391,6 +395,12 @@ async function inConsole(sub, a, wantFile) {
     while (!fs.existsSync(target)) {
       if (Date.now() - started > TASK_WAIT_MS) throw new CouldNotRun(`the console session's ${sub} did not finish within ${TASK_WAIT_MS / 1000} s (is ${process.env.USERNAME} signed in there, and the screen shown?)`);
       await sleep(1000);
+      // A task that runs only while its user is signed in never starts when
+      // nobody is: Windows keeps "has not run" (0x00041303) as its result.
+      if (Date.now() - started > TASK_START_MS && !fs.existsSync(target)) {
+        const info = powershell(['-Mode', 'task-info', '-Name', name]);
+        if (info.lastResult === TASK_HAS_NOT_RUN) throw new CouldNotRun(`the console session's task did not start in ${TASK_START_MS / 1000} s (${info.state}, ${info.lastResult}: the task has not run): nobody is signed in on the console`);
+      }
     }
   } finally {
     try { powershell(['-Mode', 'task-remove', '-Name', name]); } catch (e) { console.log(`P21 note: the task ${name} was not removed: ${e.message}`); }
@@ -401,9 +411,9 @@ async function inConsole(sub, a, wantFile) {
 function verdict(a) {
   const out = a.out;
   const read = (label) => JSON.parse(fs.readFileSync(path.join(out, `p21-${checkLabel(label)}.json`), 'utf8'));
-  const consoleReadings = String(a.console || '').split(',').filter(Boolean).map(read);
+  const consoleReadings = String(a.console === 'none' ? '' : a.console || '').split(',').filter(Boolean).map(read);
   const sshReading = a.ssh ? read(a.ssh) : null;
-  const lines = verdictLines(consoleReadings, sshReading, a['second-scale']);
+  const lines = verdictLines(consoleReadings, sshReading, a['second-scale'], a['console-not-run']);
   for (const l of lines) console.log(l);
   writeReading(out, 'p21-verdict.json', { probe: 'P21', at: new Date().toISOString(), lines });
   return lines;
