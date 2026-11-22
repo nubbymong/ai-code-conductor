@@ -1368,7 +1368,7 @@ fn a_kept_stream_ends_with_its_session_when_the_away_clock_runs_out() {
 fn a_relay_acks_away_only_when_its_holder_offers_it() {
     let _serial = one_at_a_time();
     let before: &[&str] = &["core", "local", "hooks", "mcp"];
-    let now: &[&str] = &["core", "local", "hooks", "mcp", "away", "screen"];
+    let now: &[&str] = &["core", "local", "hooks", "mcp", "away", "screen", "title"];
     for (n, offered, acked) in [(1, before, &RELAY_ACK[..]), (2, now, &KEEPING_ACK[..])] {
         let store_dir = Folder::new(&format!("store-ack-{n}"));
         let sid = format!("relay-ack-0{n}");

@@ -13,6 +13,8 @@
 //!                         and deaf to hangups, as a shell job can be
 //! flood <n>           ->  line 000001 .. line <n>, in one write, then
 //!                         flood done
+//! title <text>        ->  the window title set to <text> (OSC 0), then
+//!                         title set
 //! quit                ->  FAKE-CLI BYE, exit 0
 //! exit <n>            ->  exit with code n
 //! ```
@@ -81,6 +83,10 @@ fn main() {
                     let _ = writeln!(out, "env {} unset", name.trim());
                 }
             }
+        } else if let Some(title) = text.strip_prefix("title ") {
+            // The window title, set as a CLI sets it: OSC 0, ended by BEL.
+            let _ = write!(out, "\x1b]0;{title}\x07");
+            let _ = writeln!(out, "title set");
         } else if let Some(n) = text.strip_prefix("flood ") {
             let n: u32 = n.trim().parse().unwrap_or(0);
             let mut all = String::with_capacity(n as usize * 13 + 16);

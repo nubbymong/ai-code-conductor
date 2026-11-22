@@ -39,7 +39,9 @@ import {
   MOUSE_WORDS,
   SCREEN_CAP,
   SCREEN_TAIL_MAX,
+  SCREEN_TITLE_MAX,
   SCREEN_WORDS,
+  TITLE_CAP,
   validEndpoint,
   type HelperOs,
 } from '../../../src/main/session-helper/protocol'
@@ -463,26 +465,32 @@ describe('session helper protocol: tool streams (capability mcp, section 15)', (
 })
 
 // 2.1.3-beta.12, plan section A3: the `screen` part of helper/fixtures/local.json,
-// read from the app's side. No connection the app makes acks `screen` yet;
-// these are the readers the step that points a reader at the holder's screen
-// will use.
+// read from the app's side. From 2.1.3-beta.13 a plain terminal's connections
+// ack `screen` (a take-over reads the holder's size); the title vectors
+// (2.1.3-beta.14, plan section B1) are read as a connection that acked
+// `title` reads them when the vector's `acked` names it.
 describe('session helper protocol: screen reads (capability screen, section 15)', () => {
   const S = local.screen
+  /** True when a vector is read as a connection that acked `screen` and `title`. */
+  const titled = (v: { acked?: string[] }) => !!v.acked?.includes(SCREEN_CAP) && v.acked.includes(TITLE_CAP)
   /** An answer as the app's reader gets it from a holder's frame. */
-  const read = (msg: unknown) => {
+  const read = (msg: unknown, title = false) => {
     const f = decodeOneFrame(encodeJsonFrame(msg), 'helper_to_app')
     if ('error' in f || f.kind !== 0) throw new Error('not one JSON frame')
-    return (f.json as { t?: unknown }).t === 'screen.lines' ? readScreenLines(f.json, f.size) : readScreenRows(f.json, f.size)
+    return (f.json as { t?: unknown }).t === 'screen.lines' ? readScreenLines(f.json, f.size) : readScreenRows(f.json, f.size, title)
   }
-  /** What a reader gives for a holder's answer: its fields but `t` and `re`. */
+  /** What a reader gives for a holder's answer: its fields but `t` and `re`,
+   *  and for `screen.rows` its title (null when the answer carries none). */
   const fields = (v: Record<string, unknown>) => {
     const { t: _t, re: _re, ...rest } = v
-    return rest
+    return v.t === 'screen.rows' ? { ...rest, title: rest.title ?? null } : rest
   }
 
   it("the cap, the caps a holder offers, the words and the limits are the helper's", () => {
     expect(SCREEN_CAP).toBe('screen')
-    expect(S.offered).toEqual(['core', 'local', HOOKS_CAP, MCP_CAP, 'away', SCREEN_CAP])
+    expect(TITLE_CAP).toBe('title')
+    expect(S.offered).toEqual(['core', 'local', HOOKS_CAP, MCP_CAP, 'away', SCREEN_CAP, TITLE_CAP])
+    expect(SCREEN_TITLE_MAX).toBe(S.limits.title_chars)
     expect(S.offered.slice(0, 5)).toEqual(local.away.offered)
     expect(SCREEN_TAIL_MAX).toBe(S.limits.tail_lines)
     expect(JSON_FROM_HELPER_MAX).toBe(S.limits.answer_bytes)
@@ -505,7 +513,7 @@ describe('session helper protocol: screen reads (capability screen, section 15)'
     for (const v of S.messages) {
       const sent = JSON.parse(v.json)
       expect(sent.t, v.name).toBe(v.type)
-      expect(read(sent), v.name).toEqual(fields(sent))
+      expect(read(sent, titled(v)), v.name).toEqual(fields(sent))
     }
     // A row the reader gives has every field a row of the app's readers has.
     const rows = read(JSON.parse(S.messages[0].json))
@@ -516,7 +524,7 @@ describe('session helper protocol: screen reads (capability screen, section 15)'
 
   it('an answer that breaks its schema, names an unknown mode word or is over a frame is refused', () => {
     expect(S.invalid_messages.length).toBeGreaterThanOrEqual(15)
-    for (const v of S.invalid_messages) expect(read(JSON.parse(v.json)), v.name).toBeNull()
+    for (const v of S.invalid_messages) expect(read(JSON.parse(v.json), titled(v)), v.name).toBeNull()
     const rows = JSON.parse(S.messages[0].json)
     const lines = JSON.parse(S.messages.find((v: { type: string }) => v.type === 'screen.lines').json)
     // Each reader reads its own type only, and an object only.

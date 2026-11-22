@@ -495,6 +495,7 @@ fn screen_reads_read_as_the_fixtures_say() {
     assert_eq!(n("tail_lines"), screen::TAIL_MAX as u64);
     assert_eq!(n("scrollback_lines"), screen::SCROLLBACK_LINES as u64);
     assert_eq!(n("param_ceiling"), u64::from(screen::PARAM_CEILING));
+    assert_eq!(n("title_chars"), screen::TITLE_MAX as u64);
     assert_eq!(n("answer_bytes"), serve::SCREEN_ANSWER_MAX as u64);
     assert_eq!(serve::SCREEN_ANSWER_MAX, frame::MAX_JSON_HELPER_TO_APP);
     let requests = part.get("requests").expect("requests");
@@ -526,8 +527,13 @@ fn screen_answers_are_the_documented_bytes() {
     types.dedup();
     assert_eq!(types, vec!["screen.rows", "screen.lines"]);
     let n = |v: &Value, k: &str| v.get(k).and_then(Value::as_u64).unwrap_or_else(|| panic!("missing number {k}"));
+    let mut titled = 0;
     for case in messages {
         let name = text(case, "name");
+        // A vector whose `acked` names `screen` and `title` is the answer to
+        // a connection that asked for the title; any other, to one that did not.
+        let title = acked_asks_title(case);
+        titled += usize::from(title);
         // The session's output from its first byte, on a screen of the
         // vector's size, in one piece and a byte at a time.
         for dripped in [false, true] {
@@ -542,14 +548,22 @@ fn screen_answers_are_the_documented_bytes() {
             }
             let re = n(case, "re");
             let message = match text(case, "type") {
-                "screen.rows" => serve::screen_rows_message(re, &s.read()),
+                "screen.rows" => serve::screen_rows_message(re, &s.read(), title),
                 _ => serve::screen_lines_message(re, &s.tail(n(case, "count") as usize)),
             };
             assert_eq!(message.to_json(), text(case, "json"), "{name} (a byte at a time: {dripped})");
             assert!(frame::encode(&frame::Frame::json(0, message), Direction::HelperToApp).is_ok(), "{name}");
         }
     }
+    assert!(titled >= 2, "only {titled} answers to a connection that asked for the title");
     assert!(items(part, "invalid_messages").len() >= 15);
+}
+
+/// True when a vector's `acked` names `screen` and `title`.
+fn acked_asks_title(case: &Value) -> bool {
+    let caps = case.get("acked").and_then(Value::as_array);
+    let has = |cap: &str| caps.map_or(false, |cs| cs.iter().any(|c| c.as_str() == Some(cap)));
+    has(serve::SCREEN_CAP) && has(serve::TITLE_CAP)
 }
 
 #[test]

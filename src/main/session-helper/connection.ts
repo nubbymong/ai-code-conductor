@@ -15,7 +15,10 @@
  * for `screen` (the holder's screen reads, 2.1.3-beta.12, plan section A3)
  * only when it is given the `screen` option, which the manager gives a plain
  * terminal's connections: a take-over reads the holder's size with it
- * (readScreen; 2.1.3-beta.13, plan section A1).
+ * (readScreen; 2.1.3-beta.13, plan section A1). Beside `screen` it asks for
+ * `title` (the screen's title in readScreen's answer, 2.1.3-beta.14, plan
+ * section B1, aicc_planning#384) only when it is given the `title` option,
+ * which nothing in the app gives yet.
  *
  * On a connection that acked `mcp`, the app sends a tool stream's messages
  * (sendMcp) only when the holder would read them, and ends its side of a
@@ -45,6 +48,7 @@ import {
   PROTO_VERSION,
   SCREEN_CAP,
   TERMINAL_CHANNEL,
+  TITLE_CAP,
   chooseProto,
   RAW_MAX,
   encodeJsonFrame,
@@ -93,6 +97,9 @@ export interface ConnectionOptions {
    *  `screen.tail`): `screen` is acked when the holder offers it. The manager
    *  sets it for a plain terminal's connections. */
   screen?: boolean
+  /** This connection's screen reads take the screen's title too: `title` is
+   *  acked, beside `screen`, when the holder offers both. Nothing sets it yet. */
+  title?: boolean
   helloTimeoutMs?: number
   replyTimeoutMs?: number
   pingEveryMs?: number
@@ -294,6 +301,10 @@ export class HolderConnection extends EventEmitter<HolderConnectionEvents> {
   /** True when this connection acked `screen`: the holder offered it and the
    *  connection asked for it. Only then may it ask for screen reads. */
   readonly screen: boolean
+  /** True when this connection acked `title` beside `screen`: the holder
+   *  offered both and the connection asked for both. Only then does
+   *  readScreen's answer carry the title. */
+  readonly title: boolean
   private readonly stream: Duplex
   private readonly reader = new FrameReader('helper_to_app')
   private nextId = 2
@@ -330,12 +341,13 @@ export class HolderConnection extends EventEmitter<HolderConnectionEvents> {
     this.hooks = opts.hooks === true && hello.caps.includes(HOOKS_CAP)
     this.mcp = opts.mcp === true && hello.caps.includes(MCP_CAP)
     this.screen = opts.screen === true && hello.caps.includes(SCREEN_CAP)
+    this.title = this.screen && opts.title === true && hello.caps.includes(TITLE_CAP)
     this.replyTimeoutMs = opts.replyTimeoutMs ?? REPLY_TIMEOUT_MS
     stream.on('data', (chunk: Buffer) => this.onBytes(chunk))
     stream.on('close', () => this.shut())
     stream.on('end', () => this.shut())
     stream.on('error', () => this.shut())
-    stream.write(encodeJsonFrame(helloAck(this.hooks, this.mcp, this.screen)))
+    stream.write(encodeJsonFrame(helloAck(this.hooks, this.mcp, this.screen, this.title)))
     if (rest.length > 0) this.onBytes(rest)
     stream.resume()
     const every = opts.pingEveryMs ?? PING_EVERY_MS
@@ -411,14 +423,16 @@ export class HolderConnection extends EventEmitter<HolderConnectionEvents> {
 
   /**
    * The holder's screen now (`screen.read`), read strictly (readScreenRows):
-   * only on a connection that acked `screen`. Rejects when this one did not,
-   * when the holder answers an error, and when its answer does not read.
+   * only on a connection that acked `screen`, with its title on one that
+   * acked `title` too (null on any other). Rejects when this one did not ack
+   * `screen`, when the holder answers an error, and when its answer does not
+   * read (a title on a connection that did not ack it included).
    */
   async readScreen(): Promise<ScreenRows> {
     if (!this.screen) throw new HolderError('unknown-type', 'this connection did not ack screen')
     // Set by the reply callback, which sees the frame's size.
     let screen = null as ScreenRows | null
-    await this.request({ t: 'screen.read' }, (m, size) => { screen = readScreenRows(m, size) })
+    await this.request({ t: 'screen.read' }, (m, size) => { screen = readScreenRows(m, size, this.title) })
     if (!screen) throw new HolderError('bad-frame', 'the holder answered screen.read with a reply that does not read')
     return screen
   }

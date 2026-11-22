@@ -552,15 +552,19 @@ rollback returns to the earlier beta's rows, and every row has a negative test.
   repeat then writes at most 9999 cells, and every other sequence's work is
   bounded by the screen's size, at most 1000 by 1000 cells); an OSC string is
   kept to 1 KiB and other strings not at all; a screen holds at most its
-  cells, 200 lines of scrollback and an alternate screen (measured in the
+  cells, 200 lines of scrollback, an alternate screen and, from
+  2.1.3-beta.14, the last title of at most 1024 characters (measured in the
   Helper job: 1.04 MiB at 120 by 40 with all of them full, 67.21 MiB at 1000
   by 1000, the largest size a launch may ask for). A panic in the parser is
   caught, the screen is then not kept, and the output goes on. What a read
   may return: the
   screen's size, the cursor, its rows and its last 200 lines as text (so
   anything the session printed, which the app's own terminal already holds
-  for the same session), and its modes as fixed words and yes or no values,
-  never bytes the app passes on. A read reaches only its own holder's screen
+  for the same session), its modes as fixed words and yes or no values,
+  never bytes the app passes on, and (from 2.1.3-beta.14, only to a
+  connection that acked `title` beside `screen`) the window title the
+  output last set, its control characters dropped, at most 1024 characters
+  and never more than the first 1 KiB of its OSC string. A read reaches only its own holder's screen
   (a holder serves one session), may be made by any connection of the same
   user that acked `screen` (the endpoint's boundary, above), never by a
   relay, changes no offset, attach or size, and is one message of at most

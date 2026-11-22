@@ -773,13 +773,15 @@ for the Machines page.
 **A connection.** The holder first writes its hello line, then a line end:
 `caps` is `["core","local"]` in a holder from before hook events,
 `["core","local","hooks"]` from 2.1.3-beta.8,
-`["core","local","hooks","mcp"]` from 2.1.3-beta.10 and
-`["core","local","hooks","mcp","away","screen"]` from 2.1.3-beta.12, `session.state` is `new`
+`["core","local","hooks","mcp"]` from 2.1.3-beta.10,
+`["core","local","hooks","mcp","away","screen"]` from 2.1.3-beta.12 and
+`["core","local","hooks","mcp","away","screen","title"]` from 2.1.3-beta.14, `session.state` is `new`
 before a launch and `live` after. The app's first frame must be a `hello.ack` with
 exactly `t`, `proto` and `caps`: `proto` 1, `caps` holding `core` and nothing
 the holder did not offer; `local` allows the messages below, `hooks` the hook
-events, `mcp` the tool streams, `away`, beside `mcp`, kept tool streams and
-`screen` the screen reads (all below). A first frame that is raw, or
+events, `mcp` the tool streams, `away`, beside `mcp`, kept tool streams,
+`screen` the screen reads and `title`, beside `screen`, the title in them (all
+below). A first frame that is raw, or
 JSON off channel 0, gets `bad-frame`; another type `unknown-type`, another
 version `proto-mismatch`, anything else `bad-field`; then the holder closes the
 connection. With no `hello.ack` in 10 s it sends `timeout` and
@@ -828,7 +830,7 @@ the last column of section 8's table):
 | `mcp.close` | none | `{stream}`; from a relay, and from the holder to whichever side is still there when the other ends (tool streams, below) |
 | `mcp.away` | none | `{stream}`, from the holder to a relay that acked `away`, on the relay's number: no connection takes its stream now, and the stream is kept (kept streams, below) |
 | `mcp.back` | none | `{stream}`, from the holder to a relay that acked `away`, on the relay's number: a connection takes its kept stream again (kept streams, below) |
-| `screen.read` | `screen.rows` `{re, cols, rows, cursor, modes, cut, lines}` | `{id}`; only on a connection that acked `screen`, attached or not, and never from a relay (`unknown-type`); before a launch, or while the session is ending, `not-found` (screen reads, below) |
+| `screen.read` | `screen.rows` `{re, cols, rows, cursor, modes, title?, cut, lines}` | `{id}`; only on a connection that acked `screen`, attached or not, and never from a relay (`unknown-type`); `title` only on a connection that acked `title` too; before a launch, or while the session is ending, `not-found` (screen reads, below) |
 | `screen.tail` | `screen.lines` `{re, cut, lines}` | `{id, count}`, `count` from 1 to 200; as `screen.read` (screen reads, below) |
 
 Ids are even, as in section 9, and at most 2^53 - 1. Every message has exactly
@@ -1251,7 +1253,8 @@ holder's size: its replay waits for the tab to be at that size
 - **`screen.read`** `{id}` is answered `screen.rows`: `cols` and `rows`, the
   screen's size; `cursor` `{row, col}`, the cursor's cell from 0 (its column
   is `cols` while a wrap is pending after the last cell was written);
-  `modes`; `cut`; and `lines`, the rows of the screen in use from its top,
+  `modes`; `title`, only on a connection that acked `title` (below); `cut`;
+  and `lines`, the rows of the screen in use from its top,
   below any scrollback. Each row is what the app's readers take from a row
   of xterm.js (`readXtermScreen`): `text`, the row's characters (an empty
   cell a space); `typed`, the same with every dim cell blanked; `inverse`,
@@ -1275,6 +1278,21 @@ holder's size: its replay waits for the tab to be at that size
   space does), as the Watchdog's pane gives a line
   (`translateToString(true)`), and `typed`, the line's cells with every dim
   one blanked, its trailing white space trimmed.
+- **The title (capability `title`, from 2.1.3-beta.14).** A holder offers
+  `title` after `screen`, and it counts only beside `screen`. On a connection
+  that acked both, `screen.rows` carries `title`: the window title the
+  session's output last set with OSC 0 or OSC 2, as xterm.js takes it
+  (everything after the first `;`, a later one replacing it; OSC 1, the icon
+  name alone, leaves it), and empty when the output set none. Control
+  characters are dropped, and it is bounded: the screen keeps the first 1 KiB
+  of an OSC string and its first 16 parts between `;`s, so a title is cut at
+  its fifteenth `;`, and at most 1024 characters of it are kept. It is counted
+  before the rows in the one message, so it is never left out. A connection
+  that did not ack `title`, and every connection to a holder from before it
+  (which does not offer it), get `screen.rows` as before, with no `title`.
+  The app refuses a `title` on such a connection, and one that is not text,
+  holds a control character or is over 1024 characters. Nothing in the app
+  asks for it yet.
 - **One message.** Each answer is one message within what a frame to the app
   holds (1 MiB of JSON). Rows that do not fit are left out from the top of
   `screen.rows` and from the oldest end of `screen.lines`, and the answer
@@ -1285,14 +1303,21 @@ holder's size: its replay waits for the tab to be at that size
   xterm.js 6.0.0 by Unicode 6, so a row holding a character the two count
   differently can differ from the app's own terminal. The rows of the screen
   corpus where they do are named in `helper/tests/screen.rs`.
-- **Other differences from xterm.js.** Three more, none of them in the
+- **Other differences from xterm.js.** Four more, none of them in the
   screen corpus, so no test compares them. The screen does not draw the
   replacement character (U+FFFD, which is also what a byte that is not UTF-8
   is in the app's terminal), where xterm.js draws it in one cell, so the
   rest of that run of text sits one cell to the left. It has no line drawing
   character set (`ESC ( 0`), so those characters stay the letters they were
-  sent as. And a change of width cuts or pads each row, where xterm.js can
-  wrap the lines of its normal screen again.
+  sent as. A change of width cuts or pads each row, where xterm.js can
+  wrap the lines of its normal screen again. And the title differs in four
+  cases: an OSC 0 or 2 cut short by CAN or SUB still sets the title, where
+  xterm.js drops it; a control character from U+0080 to U+009F inside one is
+  dropped and the title still set, where xterm.js ends the title at U+009C
+  and drops the whole string at any other; a kind of more than 9 digits (ten
+  zeros, say) sets no title, where xterm.js reads it as a number; and U+009D
+  begins no string, so it sets no title, where xterm.js reads it as the start
+  of an OSC.
 - **The bound.** A CSI parameter above 9999 reaches the screen's parser as
   9999, as main cuts it for its own panes, so a repeat (`CSI n b`) writes at
   most 9999 cells and no other sequence's work grows with its parameter; an
