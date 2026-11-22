@@ -696,8 +696,9 @@ attached display mode (EnumDisplaySettings), yet still gives one display of 1024
 (EnumDisplayMonitors and GetDpiForMonitor), so the window station check is what stops the run, not
 the display list. From the console session: CANNOT MEASURE. Nobody was signed in on the test
 machine's console: `quser` listed no user and LogonUI ran in session 1. Its auto sign-in is set
-(AutoAdminLogon 1, user User) but keeps no password in the registry, and Winlogon's last sign-in
-notice is from 2026-10-30, so the start of 2026-11-18 signed nobody in. The probe's scheduled task,
+(AutoAdminLogon 1, user User) with no DefaultPassword value under the Winlogon key (a password
+kept as an LSA secret was not read, so why it did not sign in is not known), and Winlogon's last
+sign-in notice is from 2026-10-30, so the start of 2026-11-18 signed nobody in. The probe's scheduled task,
 which runs only while its user is signed in, was registered and started and did not run (0x00041303,
 "the task has not run"); it was removed, and nobody was signed in by hand. So the console runs'
 time, sizes, DPI and pixels and the second scale were not measured, and mixed scaling was not

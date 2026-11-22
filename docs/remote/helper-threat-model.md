@@ -658,7 +658,11 @@ rollback returns to the earlier beta's rows, and every row has a negative test.
   (never over a file that is there, so it cannot be pointed at a file to
   replace it), and removes what it wrote when a run fails. Each display is at
   most 16384 pixels on a side and a run at most 16 displays, so one run writes
-  at most 16 files, each at most 1 GiB of pixels after a 54-byte header. Tested in `helper/tests/capture.rs`
+  at most 16 files, each at most 1 GiB of pixels after a 54-byte header.
+  Its window-manager DLLs (user32, gdi32, shcore) load only when the mode
+  runs; no other mode loads them (they are delay-loaded, and
+  `scripts/check-pe-imports.mjs` fails a build that imports one at load
+  time). Tested in `helper/tests/capture.rs`
   and the unit tests of `helper/src/capture.rs`; probe P21 measures it on the
   test machine. An adversarial pass of it is owed to the security round
   before 2.1 stable (aicc_planning #320), before the app runs it.

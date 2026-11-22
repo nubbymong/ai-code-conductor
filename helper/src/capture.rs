@@ -31,6 +31,11 @@
 //! 3 no desktop to capture (this process cannot see the screen, or Windows
 //! lists no display); 4 not supported on this system. No PowerShell, no WMI
 //! and nothing on the screen: no window is made.
+//!
+//! The window-manager DLLs this mode calls (user32, gdi32, shcore) are
+//! delay-loaded (helper/.cargo/config.toml): they load only when the mode
+//! runs, and no other mode loads them. scripts/check-pe-imports.mjs fails a
+//! build that imports one at load time.
 #![allow(unsafe_code)]
 
 use std::fs::OpenOptions;
@@ -219,6 +224,33 @@ pub fn in_order(displays: &mut [Display]) {
     displays.sort_by_key(|d| (!d.primary, d.top, d.left));
 }
 
+/// Grab each of `displays` with `grab` and write it into `out` as
+/// `display-<n>.bmp`, in order. Nothing or everything: when a grab or a write
+/// fails, every file this call wrote is removed and the failure answered. A
+/// file that was there before is never written over (`write_bmp`), so it is
+/// never one this call removes. The Windows run calls it with the screen's
+/// grab; the tests call it on every system with their own.
+pub fn write_all_or_none(out: &Path, displays: &[Display], mut grab: impl FnMut(&Display) -> Result<Vec<u8>, Failure>) -> Result<(), Failure> {
+    let mut written: Vec<PathBuf> = Vec::new();
+    let result: Result<(), Failure> = (|| {
+        for (i, d) in displays.iter().enumerate() {
+            let pixels = grab(d)?;
+            let path = out.join(file_name(i));
+            write_bmp(&path, d.width, d.height, d.dpi, &pixels).map_err(|e| Failure::Failed(format!("could not write {}: {e}", path.display())))?;
+            written.push(path);
+        }
+        Ok(())
+    })();
+    if let Err(e) = result {
+        // Nothing or everything: remove what this run wrote.
+        for path in &written {
+            let _ = std::fs::remove_file(path);
+        }
+        return Err(e);
+    }
+    Ok(())
+}
+
 /// `aicc-helper capture ...`: the command, with its output and exit status.
 pub fn command(args: &[String]) -> ExitCode {
     if cfg!(not(windows)) {
@@ -264,9 +296,8 @@ pub use self::win::run;
 
 #[cfg(windows)]
 mod win {
-    use super::{file_name, in_order, make_opaque, pixel_bytes, size_ok, write_bmp, CaptureRequest, Display, Failure, MAX_DISPLAYS};
+    use super::{in_order, make_opaque, pixel_bytes, size_ok, write_all_or_none, CaptureRequest, Display, Failure, MAX_DISPLAYS};
     use std::ffi::c_void;
-    use std::path::PathBuf;
     use windows_sys::Win32::Foundation::{BOOL, HANDLE, LPARAM, RECT};
     use windows_sys::Win32::Graphics::Gdi::{
         BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, DeleteDC, DeleteObject, EnumDisplayMonitors, GetDC, GetDIBits, GetMonitorInfoW, ReleaseDC, SelectObject, BITMAPINFO,
@@ -475,23 +506,7 @@ mod win {
             return Err(Failure::Failed(last_error("CreateCompatibleDC")));
         }
         let memory = MemoryDc(memory);
-        let mut written: Vec<PathBuf> = Vec::new();
-        let result: Result<(), Failure> = (|| {
-            for (i, d) in list.iter().enumerate() {
-                let pixels = grab(&screen, &memory, d)?;
-                let path = req.out.join(file_name(i));
-                write_bmp(&path, d.width, d.height, d.dpi, &pixels).map_err(|e| Failure::Failed(format!("could not write {}: {e}", path.display())))?;
-                written.push(path);
-            }
-            Ok(())
-        })();
-        if let Err(e) = result {
-            // Nothing or everything: remove what this run wrote.
-            for path in &written {
-                let _ = std::fs::remove_file(path);
-            }
-            return Err(e);
-        }
+        write_all_or_none(&req.out, &list, |d| grab(&screen, &memory, d))?;
         Ok(list)
     }
 }
@@ -646,6 +661,65 @@ mod tests {
         let e = write_bmp(&path, 0, 2, 96, &[]).expect_err("refused");
         assert_eq!(e.kind(), io::ErrorKind::InvalidInput);
         assert!(!path.exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A display of 2 by 1 pixels, `left` pixels from the primary one.
+    fn tiny(left: i32) -> Display {
+        Display { left, top: 0, width: 2, height: 1, dpi: 96, primary: left == 0 }
+    }
+
+    #[test]
+    fn a_run_that_grabs_every_display_writes_each_in_order() {
+        let dir = folder("all-written");
+        let mut n = 0u8;
+        let run = write_all_or_none(&dir, &[tiny(0), tiny(2)], |_| {
+            n += 1;
+            Ok(vec![n; pixel_bytes(2, 1)])
+        });
+        assert_eq!(run, Ok(()));
+        for (i, fill) in [1u8, 2].into_iter().enumerate() {
+            let bytes = std::fs::read(dir.join(file_name(i))).expect("a display's file");
+            assert_eq!(&bytes[..BMP_HEADER_BYTES], &bmp_header(2, 1, 96).expect("a header")[..]);
+            assert_eq!(&bytes[BMP_HEADER_BYTES..], &vec![fill; pixel_bytes(2, 1)][..], "display {}", i + 1);
+        }
+        assert_eq!(std::fs::read_dir(&dir).expect("the folder").count(), 2);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_run_whose_second_grab_fails_removes_the_first_file_and_leaves_the_folder_empty() {
+        let dir = folder("all-or-none-grab");
+        let first = dir.join(file_name(0));
+        let mut grabs = 0;
+        let mut first_was_written = false;
+        let run = write_all_or_none(&dir, &[tiny(0), tiny(2)], |_| {
+            grabs += 1;
+            if grabs == 1 {
+                return Ok(vec![7u8; pixel_bytes(2, 1)]);
+            }
+            // The first file is there when the second grab fails, so the
+            // run has one of its own to remove.
+            first_was_written = first.exists();
+            Err(Failure::Failed("the second grab failed".to_string()))
+        });
+        assert_eq!(run, Err(Failure::Failed("the second grab failed".to_string())));
+        assert_eq!(grabs, 2, "both displays were grabbed");
+        assert!(first_was_written, "display-1.bmp was not written before the second grab");
+        assert_eq!(std::fs::read_dir(&dir).expect("the folder").count(), 0, "a failed run left a file");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_run_that_meets_a_file_already_there_removes_its_own_and_leaves_that_one_as_it_was() {
+        let dir = folder("all-or-none-there");
+        let earlier = b"an earlier display-2.bmp".to_vec();
+        std::fs::write(dir.join(file_name(1)), &earlier).expect("an earlier file");
+        let run = write_all_or_none(&dir, &[tiny(0), tiny(2)], |_| Ok(vec![7u8; pixel_bytes(2, 1)]));
+        assert!(matches!(run, Err(Failure::Failed(ref why)) if why.contains("display-2.bmp")), "{run:?}");
+        assert!(!dir.join(file_name(0)).exists(), "display-1.bmp was left");
+        assert_eq!(std::fs::read(dir.join(file_name(1))).expect("the earlier file"), earlier, "the earlier display-2.bmp changed");
+        assert_eq!(std::fs::read_dir(&dir).expect("the folder").count(), 1);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

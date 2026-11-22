@@ -284,8 +284,10 @@ on Windows, S8). It runs on the Windows test machine with the helper of a green
 `aicc-helper capture` (protocol section 15, "Capturing the displays") from two
 places: the signed-in user's console session, where Snap would run it, and an
 SSH session, which has no desktop. A console run is started by a scheduled task
-that runs only while that user is signed in, not elevated (auto sign-in is on;
-nobody is asked to sign in); the task is removed in every case. For each run it
+that runs only while that user is signed in, not elevated; the probe signs
+nobody in, so the console session must be signed in already (on 2026-11-22 the
+test machine's auto sign-in had signed nobody in); the task is removed in every
+case. For each run it
 records the exit code, the time from the start of the process to its exit, the
 message, the line and, for each display the line names, the picture's header,
 length and whether every pixel is black, against what Windows lists itself
@@ -303,7 +305,9 @@ node p21-capture.cjs verdict --out <folder> --console console-100,console-125 --
 
 `console-scale` sets the primary display's scale in the console session with
 the display configuration call the Settings page makes, so no sign-out is
-needed; the scale found is put back at the end. The decision lines are in the
+needed; the last `console-scale` above puts the scale found back (nothing puts
+it back by itself, so a run that stops before that step leaves the new scale).
+The decision lines are in the
 script's header and were fixed before measuring: per scale, CAPTURES when 3 of
 3 console runs exit 0 within 2 s and write every display Windows lists, at its
 size and DPI, as a picture that is not all black; from the SSH session, FAILS

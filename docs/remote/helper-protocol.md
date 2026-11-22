@@ -697,7 +697,8 @@ with a message on stderr when a grab or a write fails, or `<folder>` is not a
 folder that is there; 2 on a command line it does not take; 3 when there is no desktop to
 capture (it cannot see the screen, or Windows lists no display), with the
 reason on stderr; and 4 on macOS and Linux, where it is not supported yet. It
-makes no window, and uses no PowerShell and no WMI.
+makes no window, and uses no PowerShell and no WMI. Its window-manager DLLs
+(user32, gdi32, shcore) load only when the mode runs; no other mode loads them.
 
 **Endpoint: only this user can connect.** No network socket is opened.
 

@@ -106,6 +106,9 @@ the other change has merged and the branch has been moved onto beta.
 On Windows the helper carries its own C runtime (since 2.1.3-beta.8), so it
 starts on a PC without Microsoft's Visual C++ runtime. `.cargo/config.toml` in
 this folder adds `-C target-feature=+crt-static` to Windows MSVC builds only.
+It also delay-loads the window-manager DLLs (user32, gdi32 and shcore's API set,
+since 2.1.3-beta.14): only the capture mode calls them, so they load when that
+mode runs and no other mode loads them at its start.
 cargo reads that file only when it runs in this folder or below, so run every
 cargo command from `helper/`, as CI and the release workflow do. A `RUSTFLAGS`
 or `CARGO_ENCODED_RUSTFLAGS` variable replaces the setting, so do not set one.
@@ -117,7 +120,8 @@ node scripts/check-pe-imports.mjs helper/target/release/aicc-helper.exe
 ```
 
 It fails if the program imports a C runtime DLL (`VCRUNTIME140.dll`,
-`api-ms-win-crt-*` and the like), names no DLL at all, or is not x64. CI runs it
+`api-ms-win-crt-*` and the like), imports a window-manager DLL at load time
+rather than delay-loading it, names no DLL at all, or is not x64. CI runs it
 after the Windows release build in the Helper job, before the release/* test
 installer is packaged, and `release.yml` runs it before the Windows installer is
 signed and packaged. `npm run verify:helper`, which every package script and

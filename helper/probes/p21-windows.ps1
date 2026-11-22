@@ -1,7 +1,8 @@
 # Probe P21's Windows side (p21-capture.cjs runs it; ADR-030, plan 2.1.3-beta.14 C6).
 # It prints one JSON line. It reads only, except `scale -Set`, which changes the primary
-# display's scale in the session it runs in (p21-capture.cjs puts the scale found back),
-# and the task modes, which add, read and remove one scheduled task of this user's.
+# display's scale in the session it runs in (nothing here puts it back: whoever runs the
+# probe sets the scale found again with a second `console-scale --set`), and the task
+# modes, which add, read and remove one scheduled task of this user's.
 #   -Mode facts       : the session id, whether LogonUI runs in it, whether this process is
 #                       elevated, each attached display's mode (EnumDisplaySettings, physical
 #                       pixels) and each display's effective DPI (GetDpiForMonitor, in a thread

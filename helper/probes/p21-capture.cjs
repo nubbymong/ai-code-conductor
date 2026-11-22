@@ -28,8 +28,9 @@
  * call the Settings page makes (DisplayConfigSetDeviceInfo, the source's DPI
  * scale); `console-scale` runs `scale` in the console session the same way.
  * `verdict` reads the readings and prints the verdict lines. On WINDOWS_1 the
- * console runs come from user's console session (auto sign-in is on; nobody
- * signs in), the SSH runs from the SSH session itself.
+ * console runs come from user's console session, which must be signed in
+ * already (the probe signs nobody in; on 2026-11-22 its auto sign-in had
+ * signed nobody in), the SSH runs from the SSH session itself.
  *
  * Decision lines (written before measuring):
  *   Console session, per scale, over 3 runs:

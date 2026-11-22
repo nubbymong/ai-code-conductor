@@ -48,6 +48,7 @@ mod windows {
     use super::{files_in, folder, helper};
     use aicc_helper::capture::{bmp_header, pixel_bytes, BMP_HEADER_BYTES};
     use aicc_helper::json;
+    use std::io::Write;
 
     #[test]
     fn a_command_line_it_does_not_take_exits_2_and_writes_nothing() {
@@ -84,15 +85,20 @@ mod windows {
     fn written_or_no_desktop(dir: &std::path::Path) -> Option<Vec<String>> {
         let out = helper(&["capture", "--out", &dir.to_string_lossy()]);
         let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
-        match out.status.code() {
-            Some(0) => {}
-            Some(3) => {
-                assert!(stderr.contains("no desktop to capture"), "{stderr}");
-                assert!(out.stdout.is_empty());
-                assert!(files_in(dir).is_empty(), "a run with no desktop left files");
-                return None;
-            }
+        let wrote = match out.status.code() {
+            Some(0) => true,
+            Some(3) => false,
             other => panic!("capture exited {other:?}: {stderr}"),
+        };
+        // Which branch this runner took, in the job log: written straight to
+        // stderr, which the test harness does not capture, so a pass shows
+        // whether the grab and the write ran at all.
+        let _ = writeln!(std::io::stderr(), "capture test: exit {:?} ({})", out.status.code(), if wrote { "displays written" } else { "no desktop on this runner" });
+        if !wrote {
+            assert!(stderr.contains("no desktop to capture"), "{stderr}");
+            assert!(out.stdout.is_empty());
+            assert!(files_in(dir).is_empty(), "a run with no desktop left files");
+            return None;
         }
         let text = String::from_utf8(out.stdout).expect("UTF-8");
         assert_eq!(text.matches('\n').count(), 1, "one line: {text}");
