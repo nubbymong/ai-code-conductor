@@ -645,8 +645,8 @@ rollback returns to the earlier beta's rows, and every row has a negative test.
   (`src/main/console-host-end.ts`); nothing from a file, the renderer or
   another process reaches its command line. The time is not what keeps a
   running terminal's host: a widened time can hold the host of another
-  terminal started just before or after (a restore's other tab, a partner
-  terminal, an SSH tab). It ends a process only when it is `conhost.exe` by
+  terminal started within about 50 ms of it (for example tabs switched
+  through quickly). It ends a process only when it is `conhost.exe` by
   name and by program file (Windows' own `System32\conhost.exe`), still runs,
   runs as the helper's own user, is listed with the process that started the
   helper as its parent, was made in that time, after that process and before
@@ -657,8 +657,8 @@ rollback returns to the earlier beta's rows, and every row has a negative test.
   process with no console can answer its maker's pid, which only ever keeps a
   host; a process the helper cannot open is not read, and one that runs but
   cannot be read stops the mode from ending anything). It ends each one that
-  is, so two terminals started together whose programs have both ended have
-  both hosts ended, and holds each open from its check to its end. A time
+  is, so two terminals started within about 50 ms of each other whose
+  programs have both ended have both hosts ended, and holds each open from its check to its end. A time
   longer than ten seconds is refused. It gives the app no new power: the app
   can already end any process of its user. Tested in
   `helper/tests/console_hosts.rs` by
@@ -667,7 +667,8 @@ rollback returns to the earlier beta's rows, and every row has a negative test.
   outside the time),
   `a_terminal_whose_program_still_runs_keeps_its_host_when_asked_for_with_its_own_start`,
   `a_time_that_holds_a_running_terminal_and_an_ended_one_ends_only_the_ended_ones_host`,
-  `two_ended_terminals_in_one_time_have_both_hosts_ended_by_one_ask_and_a_running_one_keeps_its_host` and
+  `two_ended_terminals_in_one_time_have_both_hosts_ended_by_one_ask_and_a_running_one_keeps_its_host`
+  (an ended terminal's host made before the time is kept) and
   `a_start_time_it_cannot_take_is_refused`, the bounds by the unit tests in
   `helper/src/consoles.rs`, and the app's side in
   `tests/unit/main/console-host-end.test.ts`. Its adversarial pass is owed to

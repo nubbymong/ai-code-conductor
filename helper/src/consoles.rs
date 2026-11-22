@@ -55,8 +55,9 @@
 //! aicc-helper end-console-host --made-from <t> --made-to <t>
 //! ```
 //!
-//! While the app runs: end the console host of one of its terminals whose
-//! program has ended (aicc_planning #363). On Windows' own ConPTY that host
+//! While the app runs: end the console host of each of its terminals whose
+//! program has ended, among those started in the time it is given
+//! (aicc_planning #363). On Windows' own ConPTY a terminal's host
 //! ends only when the pseudoconsole is closed, and node-pty (1.2.0-beta.15,
 //! its `conpty.cc`) forgets the pseudoconsole, unclosed, as soon as its
 //! program exits, so the kill that follows closes nothing and the host runs

@@ -535,12 +535,18 @@ fn a_terminal_whose_program_ended_has_its_console_host_ended_once_and_no_other()
 #[test]
 fn two_ended_terminals_in_one_time_have_both_hosts_ended_by_one_ask_and_a_running_one_keeps_its_host() {
     // The app widens each start's time by 50 ms on each side, so terminals
-    // started together (a restore's tabs, a tab and its partner terminal) lie
-    // in each other's time. When their programs end within a second or so of
-    // each other, the first ask finds both hosts with no program: each has
-    // passed every rule by itself, so both are ended, and a terminal still
-    // running in that time keeps its host.
+    // started within about 50 ms of each other (for example tabs switched
+    // through quickly) lie in each other's time. When their programs end
+    // within a second or so of each other, the first ask finds both hosts with
+    // no program: each has passed every rule by itself, so both are ended, and
+    // a terminal still running in that time keeps its host. The time still
+    // picks among ended hosts: one made before it is kept until its own ask.
     let _serial = one_at_a_time();
+    // An ended terminal started before the time of the ask: its host has no
+    // program and is old enough, so only the time keeps it.
+    let mut early = terminal(&keeps_running());
+    let early_host = host_made_in(early.from, early.to);
+    std::thread::sleep(Duration::from_millis(50));
     let from = filetime_now();
     let mut a = terminal(&keeps_running());
     let mut b = terminal(&keeps_running());
@@ -549,14 +555,16 @@ fn two_ended_terminals_in_one_time_have_both_hosts_ended_by_one_ask_and_a_runnin
     let host_a = host_made_in(a.from, a.to);
     let host_b = host_made_in(b.from, b.to);
     let live_host = host_made_in(live.from, live.to);
+    end_program_keeping_host(&mut early, &early_host);
     end_program_keeping_host(&mut a, &host_a);
     end_program_keeping_host(&mut b, &host_b);
     wait_until_old(to);
     assert!(host_a.running() && host_b.running(), "a suspended host ended before the mode ran");
+    assert!(early_host.running(), "the suspended host of the terminal started before that time (process {}) ended before the mode ran", early_host.pid);
     assert!(live_host.running(), "the host of the terminal still running (process {}) ended before the mode ran", live_host.pid);
 
-    // One ask, with a time that holds all three starts: both hosts whose
-    // programs ended are ended, and only those.
+    // One ask, with a time that holds the three starts after the early one:
+    // both hosts whose programs ended are ended, and only those.
     let (ok, out, err) = end_console_host(from, to);
     assert!(ok, "{out}{err}");
     assert!(out.starts_with(&format!("{{\"pid\":{},\"created\":\"", std::process::id())), "it names the process that started it: {out}");
@@ -565,11 +573,23 @@ fn two_ended_terminals_in_one_time_have_both_hosts_ended_by_one_ask_and_a_runnin
     assert!(host_b.gone_within(Duration::from_secs(5)), "the second ended terminal's host (process {}) still ran", host_b.pid);
     assert!(live_host.running(), "the host of a terminal whose program still runs (process {}) was ended", live_host.pid);
     assert!(err.contains(&format!("(process {}) still has a program", live_host.pid)), "no note for the host that still has a program: {err}");
+    // The host of an ended terminal started before that time is kept: its
+    // program has ended and it is old enough, so only the time keeps it.
+    assert!(early_host.running(), "the host of an ended terminal started before that time (process {}) was ended", early_host.pid);
 
-    // The other terminal's own ask, after: nothing is left to end.
+    // The other terminal's own ask, after: nothing is left in its time to end.
     let (ok, out, err) = end_console_host(b.from, b.to);
     assert!(ok, "{out}{err}");
     assert_eq!(ended_in(&out), Some(0), "{out}{err}");
+    assert!(early_host.running(), "the host of an ended terminal started before that time (process {}) was ended by another's ask", early_host.pid);
+    assert!(live_host.running(), "the host of a terminal whose program still runs (process {}) was ended", live_host.pid);
+
+    // Its own ask, after: the time it is given holds it, so it is ended, and
+    // only it.
+    let (ok, out, err) = end_console_host(early.from, early.to);
+    assert!(ok, "{out}{err}");
+    assert_eq!(ended_in(&out), Some(1), "{out}{err}");
+    assert!(early_host.gone_within(Duration::from_secs(5)), "the host of the ended terminal started before that time (process {}) still ran after its own ask", early_host.pid);
     assert!(live_host.running(), "the host of a terminal whose program still runs (process {}) was ended", live_host.pid);
 }
 

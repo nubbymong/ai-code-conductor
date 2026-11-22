@@ -147,8 +147,9 @@ fn main() -> ExitCode {
         // At the app's start, end the console hosts the run before left when
         // it was ended from outside (Windows, consoles.rs).
         "console-hosts" => aicc_helper::consoles::command(rest),
-        // While the app runs, end the console host of one of its terminals
-        // whose program has ended (Windows, consoles.rs).
+        // While the app runs, end the console host of each of its terminals
+        // whose program has ended, among those started in the time it is given
+        // (Windows, consoles.rs).
         "end-console-host" => aicc_helper::consoles::end_command(rest),
         // A run with one terminal, as the app has for a tab, for the tests of
         // console-hosts (Windows); not a public command.
