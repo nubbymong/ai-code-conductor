@@ -25,6 +25,7 @@ vi.mock('node:child_process', async (importOriginal) => fakeChildProcess(await i
 vi.mock('child_process', async (importOriginal) => fakeChildProcess(await importOriginal()))
 vi.mock('../../src/main/claude-account-identity', () => ({
   isProfileInUseByLiveSession: () => false,
+  sessionsOnProfile: () => [], // no Claude Code session runs on any profile here
   getClaudeProfileId: () => undefined,
   getDefaultAccountEmail: () => null,
 }))

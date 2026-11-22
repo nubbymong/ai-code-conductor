@@ -23,6 +23,7 @@ vi.mock('../../src/main/account-profiles', () => ({
 }))
 vi.mock('../../src/main/claude-account-identity', () => ({
   isProfileInUseByLiveSession: () => false,
+  sessionsOnProfile: () => [], // no Claude Code session runs on any profile here
 }))
 vi.mock('../../src/main/debug-logger', () => ({ logWarn: vi.fn(), logInfo: vi.fn() }))
 
