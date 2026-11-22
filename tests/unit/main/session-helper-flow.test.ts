@@ -1443,7 +1443,7 @@ describe('shown again from the middle of its output (2.1.3-beta.12, plan section
     const sizeLines = (r: Rig) => r.logs.filter((l) => l.includes("holder's size"))
 
     for (const [what, cols, rows] of [['93 columns (the DOM renderer\'s cell)', 93, 27], ['26 rows', 103, 26]] as const) {
-      it(`spawned at ${what}, its holder at 103x27, the start of its output gone: nothing reaches the tab and no size the holder until the tab is at 103x27; then one piece, notice first, counted at 103x27, and the redraw after it`, onFakeClock(async () => {
+      it(`spawned at ${what}, its holder at 103x27, the start of its output gone: nothing reaches the tab and no size the holder until the tab is at 103x27; then one piece, notice first, counted at 103x27 with the cursor's row followed and started on the last row (plan section A2), and the redraw after it`, onFakeClock(async () => {
         const total = 12_000
         const { r, sent } = watched({ adopt: true, screen: true, cols, rows, before: at(103, 27, heldFrom(5000, numbered(total))) })
         await settle(() => r.p.isAttached, 'the attach')
@@ -1458,19 +1458,21 @@ describe('shown again from the middle of its output (2.1.3-beta.12, plan section
         r.clock.now += 120
         r.p.resize(103, 27)
         await settle(() => sent.length > 0, 'the redraw')
-        const kept = fits(27, 103)
-        expect(r.seen).toEqual([piece(numbered(kept, total - kept + 1))])
+        // The rows less one come off for the empty rows between the notice and the last row.
+        const kept = fits(27, 103) - 26
+        expect(r.seen).toEqual([piece(`\x1b[27;1H${numbered(kept, total - kept + 1)}`)])
         // The redraw's first half is the first size the holder is sent, after the replay.
         expect(sent).toEqual([{ cols: 103, rows: 26, shown: r.text() }])
         await vi.advanceTimersByTimeAsync(300)
         await settle(() => resizes(r.h).length === 2, 'the holder to get both')
         expect(resizes(r.h)).toEqual([{ cols: 103, rows: 26 }, { cols: 103, rows: 27 }])
         expect(sizeLines(r)).toEqual([`[session-helper] ${r.h.sid}: the tab is at its holder's size 103x27, 120 ms after it started`])
-        expect(r.logs).toContain(`[session-helper] ${r.h.sid}: the oldest ${total - kept} lines of its replay are not shown either, so the line saying so stays within the ${TERMINAL_SCROLLBACK_LINES} lines the tab keeps (rows counted at 103x27)`)
+        expect(r.logs).toContain(`[session-helper] ${r.h.sid}: the oldest ${total - kept} lines of its replay are not shown either, so the line saying so stays within the ${TERMINAL_SCROLLBACK_LINES} lines the tab keeps (rows counted at 103x27, the cursor's row followed)`)
         expect(r.exits).toEqual([])
         vi.useRealTimers()
         const shown = await rowsAfter(r.text(), 103, 27)
         expect(shown[0]).toBe(NOTICE)
+        expect(shown.slice(1, 27)).toEqual([...Array(25).fill(''), `line ${total - kept + 1}`])
       }))
     }
 
@@ -1533,7 +1535,8 @@ describe('shown again from the middle of its output (2.1.3-beta.12, plan section
       await turns()
       expect(r.text()).toBe('')
       await vi.advanceTimersByTimeAsync(HOLD_MAX_MS)
-      expect(r.seen).toEqual([piece('first half ')])
+      // At the holder's size, so from the last row (plan section A2).
+      expect(r.seen).toEqual([piece('\x1b[27;1Hfirst half ')])
       expect(r.logs).toContain(`[session-helper] ${r.h.sid}: its replay did not end within ${HOLD_MAX_MS} ms, so what came of it is shown now`)
     }))
 
@@ -1564,5 +1567,113 @@ describe('shown again from the middle of its output (2.1.3-beta.12, plan section
         expect(r.logs.filter((l) => l.includes('did not'))).toEqual([])
       }))
     }
+
+    /*
+     * 2.1.3-beta.13, plan section A2 (aicc_planning#374): with the tab at its
+     * holder's size and nothing shown before, a replay's rows are counted
+     * with the cursor's row followed, so a Windows console's wrapped lines
+     * count the 3 rows the tab gives them, not 5; what is shown starts on the
+     * tab's last row, and the rows less one come off the budget. A tab that
+     * did not reach that size, one whose size changed since, and a replay
+     * after output already shown keep today's count. A program that is over
+     * gets it too when its tab started at that size: the wait ended before
+     * the attach.
+     */
+    describe("counted with the cursor's row followed, the tab at its holder's size (2.1.3-beta.13, plan section A2)", () => {
+      /** One line as a Windows console writes it at 103 by 27, 2.5 rows long (the recorded shape, tests/fixtures/replay/). */
+      const consoleLine = (n: number) => {
+        const text = `long ${n} ${'y'.repeat(250)}`
+        const [a, b, c] = [text.slice(0, 103), text.slice(103, 206), text.slice(206)]
+        return `${a}\r\n\x1b[26;103H${a.slice(-1)}${b}\r\n\x1b[26;103H${b.slice(-1)}${c}\r\n`
+      }
+      const consoleLines = (from: number, to: number) => Array.from({ length: to - from + 1 }, (_, i) => consoleLine(from + i)).join('')
+      /** The rows a console line takes in the tab: its number and 93 y, then 103 y, then 54 y. */
+      const lineRows = (n: number) => [`long ${n} ${'y'.repeat(93)}`, 'y'.repeat(103), 'y'.repeat(54)]
+      const PROMPT = 'PS C:\\Users\\user\\work>\x1b[1C'
+      /** About 2 MiB, as a full ring holds: lines 2667 to 9999, then the prompt. */
+      const replay = `${consoleLines(2667, 9999)}${PROMPT}`
+      const notShown = (r: Rig) => r.logs.filter((l) => l.includes('not shown either'))
+
+      it("a 2 MiB replay at 103x27: about 3,320 whole lines of 3 rows from the last row, the notice at row 0, and still there after a screen of redraw and a screen more of output; the log counts the console's lines", onFakeClock(async () => {
+        expect(Buffer.byteLength(replay)).toBeGreaterThan(2 * 1024 * 1024)
+        const { r, sent } = watched({ adopt: true, screen: true, cols: 93, rows: 27, before: at(103, 27, heldFrom(5000, replay)) })
+        await settle(() => r.p.isAttached, 'the attach')
+        await turns()
+        r.p.resize(103, 27)
+        await settle(() => sent.length > 0, 'the redraw')
+        // 10,000 less a screen, the notice's row and the 26 empty rows above the last is 9,946 rows: the prompt's, and 3,315 lines of 3.
+        const kept = 3315
+        expect(notShown(r)).toEqual([`[session-helper] ${r.h.sid}: the oldest ${10000 - kept - 2667} lines of its replay are not shown either, so the line saying so stays within the ${TERMINAL_SCROLLBACK_LINES} lines the tab keeps (rows counted at 103x27, the cursor's row followed)`])
+        expect(r.seen).toHaveLength(1)
+        expect(r.text() === piece(`\x1b[27;1H${consoleLines(10000 - kept, 9999)}${PROMPT}`)).toBe(true)
+        vi.useRealTimers()
+        const rows = await rowsAfter(r.text(), 103, 27)
+        expect(rows.slice(0, 26)).toEqual([NOTICE, ...Array(25).fill('')])
+        expect(rows.slice(26, 26 + 3 * kept)).toEqual(Array.from({ length: kept }, (_, i) => lineRows(10000 - kept + i)).flat())
+        expect(rows.slice(26 + 3 * kept)).toEqual(['PS C:\\Users\\user\\work>'])
+        // The redraw's screen and a screen more: 54 rows on, the notice is still the first row the tab keeps.
+        expect((await rowsAfter(`${r.text()}${'more\r\n'.repeat(54)}`, 103, 27))[0]).toBe(NOTICE)
+      }))
+
+      it("a tab that never reaches its holder's size (103x28, the holder 103x27): today's count at the tab's size, 5 rows a console line and each line break a line, and what is shown follows the notice, not moved to the last row", onFakeClock(async () => {
+        const { r, sent } = watched({ adopt: true, screen: true, cols: 103, rows: 28, before: at(103, 27, heldFrom(5000, replay)) })
+        await settle(() => r.p.isAttached, 'the attach')
+        // All of the replay in before the wait's cap (the replay's own cap, at the same moment, would show only a part).
+        await turns(500)
+        await vi.advanceTimersByTimeAsync(SIZE_WAIT_MAX_MS)
+        await settle(() => sent.length > 0, 'the redraw')
+        expect(r.logs.filter((l) => l.includes('did not end within'))).toEqual([])
+        // 10,000 less a screen (28) and the notice's row is 9,971 rows: the prompt's, and 1,994 lines of 5.
+        const kept = 1994
+        expect(notShown(r)).toEqual([`[session-helper] ${r.h.sid}: the oldest ${3 * (10000 - kept - 2667)} lines of its replay are not shown either, so the line saying so stays within the ${TERMINAL_SCROLLBACK_LINES} lines the tab keeps (rows counted at 103x28)`])
+        expect(r.seen).toHaveLength(1)
+        expect(r.text() === piece(`${consoleLines(10000 - kept, 9999)}${PROMPT}`)).toBe(true)
+      }))
+
+      it("a tab that reached its holder's size, then left it and came back before the replay was all in: today's count, its size having changed since", onFakeClock(async () => {
+        const { r, sent } = watched({ adopt: true, screen: true, cols: 93, rows: 27, before: at(103, 27, (h) => { heldFrom(5000, replay)(h); h.stallReplay = { at: Buffer.byteLength(consoleLines(2667, 8666)) } }) })
+        await settle(() => r.p.isAttached, 'the attach')
+        await turns()
+        r.p.resize(103, 27)
+        r.p.resize(120, 30)
+        r.p.resize(103, 27)
+        await settle(() => sent.length === 2, 'the two sizes after the wait')
+        expect(r.text()).toBe('')
+        await vi.advanceTimersByTimeAsync(HOLD_MAX_MS)
+        // 10,000 less a screen and the notice's row is 9,972 rows: the cursor's empty row, the last row of the line before,
+        // and 1,994 lines of 5.
+        const kept = 1994
+        expect(notShown(r)).toEqual([`[session-helper] ${r.h.sid}: the oldest ${3 * (8667 - kept - 2667)} lines of its replay are not shown either, so the line saying so stays within the ${TERMINAL_SCROLLBACK_LINES} lines the tab keeps (rows counted at 103x27)`])
+        expect(r.seen).toHaveLength(1)
+        expect(r.text() === piece(consoleLines(8667 - kept, 8666))).toBe(true)
+      }))
+
+      it('a replay after output already shown (attached again with a gap of its own): today\'s count, after a line break, not moved to the last row', onFakeClock(async () => {
+        const { r, sent } = watched({ adopt: true, screen: true, cols: 103, rows: 27, before: at(103, 27, running('kept\r\n')) })
+        await settle(() => sent.length > 0 && r.text() === 'kept\r\n', 'the replay and the resize')
+        r.h.fallBehind()
+        // Nobody attached: 12,000 lines, and the ring forgets what was shown and the first of them.
+        r.h.output(numbered(12_000))
+        r.h.forget(Buffer.byteLength('kept\r\n') + Buffer.byteLength(numbered(1)))
+        await settle(() => r.h.attaches === 2 && sent.length > 1, 'the attach again and the redraw')
+        const kept = fits(27, 103)
+        expect(r.seen).toEqual(['kept\r\n', `${CANCEL}${ATTRIBUTE_RESET}\r\n${NOTICE}\r\n${numbered(kept, 12_000 - kept + 1)}`])
+        expect(notShown(r)).toEqual([`[session-helper] ${r.h.sid}: the oldest ${12_000 - kept - 1} lines of its replay are not shown either, so the line saying so stays within the ${TERMINAL_SCROLLBACK_LINES} lines the tab keeps (rows counted at 103x27)`])
+      }))
+
+      it("a program that is over, its tab at its holder's size from its start: the wait ended before the attach, so its replay is counted with the cursor's row followed too and started on the last row; then its exit, and no redraw", onFakeClock(async () => {
+        const total = 12_000
+        const { r, sent } = watched({ adopt: true, screen: true, cols: 103, rows: 27, before: at(103, 27, (h) => { heldFrom(5000, numbered(total))(h); h.child = 'exited'; h.code = 7 }) })
+        await settle(() => r.exits.length === 1, 'the exit')
+        await vi.advanceTimersByTimeAsync(SIZE_WAIT_MAX_MS + HOLD_MAX_MS)
+        // The rows less one come off for the empty rows between the notice and the last row.
+        const kept = fits(27, 103) - 26
+        expect(r.seen).toEqual([piece(`\x1b[27;1H${numbered(kept, total - kept + 1)}`)])
+        expect(notShown(r)).toEqual([`[session-helper] ${r.h.sid}: the oldest ${total - kept} lines of its replay are not shown either, so the line saying so stays within the ${TERMINAL_SCROLLBACK_LINES} lines the tab keeps (rows counted at 103x27, the cursor's row followed)`])
+        expect(sizeLines(r)).toEqual([`[session-helper] ${r.h.sid}: the tab is at its holder's size 103x27, 0 ms after it started`])
+        expect(r.exits).toEqual([7])
+        expect(sent).toEqual([])
+      }))
+    })
   })
 })

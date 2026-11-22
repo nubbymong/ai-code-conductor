@@ -44,7 +44,13 @@
  * so the holder never redraws for a size the tab only passes through. A
  * whole replay is shown as it is, with no notice. A holder without the
  * screen reads, a read that fails and a program that is over are shown as
- * before.
+ * before, with no wait for the size. A replay after a gap shown with the tab
+ * at its holder's size (that of a program that is over too, when the tab
+ * started at that size), and nothing shown before it, has its rows counted
+ * with the cursor's row followed (2.1.3-beta.13, plan section A2): a
+ * console's wrapped line counts the 3 rows the tab gives it, not 5, so the
+ * tab is shown about as much of it as it keeps, and what is shown starts on
+ * the tab's last row, where the count has the console's cursor.
  */
 import type { IDisposable, IEvent, IPty } from 'node-pty'
 import { StringDecoder } from 'string_decoder'
@@ -238,6 +244,11 @@ export class HelperPty implements IPty {
   private held: Hold | undefined
   /** A take-over whose tab is not at its holder's size yet (startSizeWait). */
   private sizeWait: SizeWait | undefined
+  /** The size wait saw the tab reach its holder's size, and the tab's size
+   *  has not changed since: a replay shown before anything else is then
+   *  counted with the cursor's row followed (showHeld). A wait its cap ended,
+   *  or none, leaves it false. */
+  private atHolderSize = false
   /** When this terminal was spawned, and when the tab last gave its size
    *  (the spawn's, until a resize), on the driver's clock: the log says how
    *  long a take-over's tab took to reach its holder's size. */
@@ -323,6 +334,7 @@ export class HelperPty implements IPty {
     const c = Math.max(1, Math.min(LAUNCH_LIMITS.termCells, Math.floor(cols)))
     const r = Math.max(1, Math.min(LAUNCH_LIMITS.termCells, Math.floor(rows)))
     if (!Number.isFinite(c) || !Number.isFinite(r)) return
+    if (c !== this.size.cols || r !== this.size.rows) this.atHolderSize = false
     this.size = { cols: c, rows: r }
     this.sizeAt = this.now()
     // A take-over waiting for its holder's size: a size on the way there is
@@ -500,6 +512,7 @@ export class HelperPty implements IPty {
     if (!w) return
     this.stopSizeWait()
     const { cols, rows } = this.size
+    this.atHolderSize = reached
     this.driver.log(reached
       ? `[session-helper] ${this.sid}: the tab is at its holder's size ${cols}x${rows}, ${Math.max(0, this.sizeAt - this.bornAt)} ms after it started`
       : `[session-helper] ${this.sid}: the tab did not reach its holder's size ${w.cols}x${w.rows} within ${SIZE_WAIT_MAX_MS} ms (it is ${cols}x${rows}), so its replay is shown at the tab's size`)
@@ -532,8 +545,10 @@ export class HelperPty implements IPty {
         const gap = m.truncated === true || start > from
         if (start !== from || gap) this.flushDecoder()
         this.offset = start
-        // A program that is over: its replay is shown as before, and its tab
-        // reads it as ended next.
+        // A program that is over: its replay is shown with no wait for the
+        // size (counted with the cursor's row followed only when the tab
+        // started at its holder's size, showHeld), and its tab reads it as
+        // ended next.
         if (m.running === false) this.stopSizeWait()
         if (gap) {
           this.fromTheMiddle(conn, Math.max(0, start - from), m)
@@ -676,7 +691,12 @@ export class HelperPty implements IPty {
    * least a screen, so the notice stays in the scrollback through the redraw
    * and a screen more of output (replay-tail.ts says how rows are counted and
    * where the cut can land). Held text that is the start of live output (a
-   * frame that carries the replay's end and more) is part of the piece.
+   * frame that carries the replay's end and more) is part of the piece. A tab
+   * the size wait saw reach its holder's size, still at it and shown nothing
+   * yet, has the held text's rows counted with the cursor's row followed
+   * (2.1.3-beta.13, plan section A2); what is shown then starts on the tab's
+   * last row, and the rows less one come off the budget for the empty rows
+   * that leaves under the notice.
    */
   private showHeld(): void {
     const held = this.held
@@ -690,10 +710,18 @@ export class HelperPty implements IPty {
       return
     }
     const { cols, rows } = this.size
-    const budget = Math.max(rows, TERMINAL_SCROLLBACK_LINES - rows - rowsOf(EARLIER_OUTPUT_NOT_SHOWN, cols))
-    const { from, left, part, before, after } = replayTail(text, cols, budget)
-    if (from > 0) this.driver.log(`[session-helper] ${this.sid}: the oldest ${left} lines of its replay${part ? ', and the start of the line after them,' : ''} are not shown either, so the line saying so stays within the ${TERMINAL_SCROLLBACK_LINES} lines the tab keeps (rows counted at ${cols}x${rows})`)
-    this.show(`${CANCEL}${before}${ATTRIBUTE_RESET}${this.shownAny ? '\r\n' : ''}${EARLIER_OUTPUT_NOT_SHOWN}\r\n${after}${from > 0 ? text.slice(from) : text}`)
+    // At the size its holder's output was made for, and shown nothing yet: the
+    // cursor's row is followed, so a console's wrapped line counts the rows
+    // the tab gives it. The count has the console's cursor on the last row
+    // wherever it can cut, so what is shown starts there: a console's jump to
+    // the row above then lands where it did in the console, not on the
+    // notice's row or an empty one. The rows less one come off the budget for
+    // the empty rows between the notice and that start.
+    const exact = this.atHolderSize && !this.shownAny
+    const budget = Math.max(rows, TERMINAL_SCROLLBACK_LINES - rows - rowsOf(EARLIER_OUTPUT_NOT_SHOWN, cols) - (exact ? rows - 1 : 0))
+    const { from, left, part, before, after } = replayTail(text, cols, budget, exact ? rows : undefined)
+    if (from > 0) this.driver.log(`[session-helper] ${this.sid}: the oldest ${left} lines of its replay${part ? ', and the start of the line after them,' : ''} are not shown either, so the line saying so stays within the ${TERMINAL_SCROLLBACK_LINES} lines the tab keeps (rows counted at ${cols}x${rows}${exact ? ", the cursor's row followed" : ''})`)
+    this.show(`${CANCEL}${before}${ATTRIBUTE_RESET}${this.shownAny ? '\r\n' : ''}${EARLIER_OUTPUT_NOT_SHOWN}\r\n${exact ? `\x1b[${rows};1H` : ''}${after}${from > 0 ? text.slice(from) : text}`)
   }
 
   /**

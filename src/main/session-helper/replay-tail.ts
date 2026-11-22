@@ -16,23 +16,61 @@
  * the row, a wide one at the last column too. A bare line feed keeps the
  * column, as in the tab. The column follows the carriage return, backspace,
  * tab, the cursor moves that set it (CSI C, D, E, F, G, H, f, `, a, I, Z), the
- * repeat (CSI b) and a cursor saved and restored. A cursor moved up or down
- * only moves on the screen and adds no row to the scrollback, so it is not
- * counted. The alternate screen has no scrollback: what a program writes there
- * adds no row, and the cut never lands in it. Where this differs from the tab
+ * repeat (CSI b) and a cursor saved and restored. A parameter's sub-parameters
+ * (after a colon) belong to it, as in the tab. A cursor moved up or down only
+ * moves on the screen and adds no row to the scrollback, so it is not counted.
+ * The alternate screen has no scrollback: what a program writes there
+ * adds no row, and the cut never lands in it.
+ *
+ * Given the tab's rows as well (2.1.3-beta.13, plan section A2,
+ * aicc_planning#374; helper-pty.ts gives them only when the tab is at the size
+ * its holder's output was made for), the cursor's row is followed too: how
+ * many rows it is above the screen's last row, from 0 to the rows less one,
+ * and never more than it really is (it starts at 0). A line feed or a wrap
+ * then adds a row only at the last row. A Windows console writes a wrapped
+ * line with a jump back to the row above, so without its row followed such a
+ * line counts 5 rows where the tab shows 3. A cursor moved up (CSI A and F,
+ * ESC M) raises it, one moved down (CSI B, E and e) lowers it, one put on a row
+ * (CSI H, f and d) sets it, and a cursor saved and restored (on each screen)
+ * carries it (the tab puts it back on the row it was saved on, or higher once
+ * the screen scrolled); a full reset puts it, and its saved place, at the top
+ * row. A scroll region that is not the whole screen, on the screen in use,
+ * stops the row being followed: there every line feed and wrap adds a row, as
+ * with no rows given, and the cursor is taken to be at the last row. The 8-bit
+ * reverse index (0x8d) is not followed: xterm.js 6.0.0 ignores it. A line feed
+ * that adds no row still starts a line, on no new row. A line feed that adds a
+ * row and is followed by a cursor moved up before anything is printed starts
+ * no line: the console went back to the line before (the wrapped line above),
+ * and the row is that line's. So a row the cut can land at always has the
+ * cursor at the last row, and a cut at a line's start does not land in the
+ * middle of a console's wrapped line (helper-pty.ts starts what it shows on
+ * the last row).
+ *
+ * Where this differs from the tab
  * it counts more rows, not fewer (combining characters and the emoji blocks
- * count a column or two, an autowrap turned off is ignored), with three known
+ * count a column or two, an autowrap turned off is ignored), with five known
  * exceptions. A program's own tab stops (HTS, TBC) are not followed, so a tab
- * after it cleared them may go further than counted, at most a row a line. A
- * repeat (CSI b) that follows a sequence the tab ignores or ends in error, or
- * an 8-bit CSI, string introducer or ST, is not counted: the tab still repeats
- * the character printed before it, and here that character is forgotten (or
- * taken as narrower). And on the alternate screen, where no row is counted, a
- * column counted further than the tab's (a combining character, an emoji, an
+ * after it cleared them may go further than counted, at most a row a line.
+ * With reverse wraparound set (mode 45), a backspace at a row's end leaves the
+ * tab on the last column while the count goes one further back, so the tab
+ * wraps a character sooner: at most a row each time. A repeat (CSI b) that
+ * follows a sequence the tab ignores or ends in error, or an 8-bit CSI, string
+ * introducer or ST, is not counted: the tab still repeats the character
+ * printed before it, and here that character is forgotten (or taken as
+ * narrower). On the alternate screen, where no row is counted, a column
+ * counted further than the tab's (a combining character, an emoji, an
  * autowrap turned off) can wrap there, while the tab wraps only after the
  * program left that screen with mode 47 or 1047, which restore no cursor: at
- * most a row each time. No program is known to write such a repeat, or to
- * leave that screen so and write on without setting the column first.
+ * most a row each time. And with the rows given, a column counted further
+ * than the tab's (those three, or a line inserted or deleted, which puts the
+ * tab at the row's start) can wrap above the last row, where a wrap adds no
+ * row, before the tab does; a cursor then put on a row, or held at the top or
+ * the last row, with its column kept (CSI d; CSI A, B, e or ESC M at the
+ * edge) is counted on the tab's row again, and the tab's own wrap after it is
+ * missed: at most a row each time. No program is known to write such a
+ * repeat, to leave that screen so and write on without setting the column
+ * first, or to keep the column across such a move and write on past the
+ * row's end.
  *
  * The cut is at the start of a row the text took, never inside an escape
  * sequence or a character: at the start of a line, unless the line there alone
@@ -130,6 +168,14 @@ class RowStarts {
     this.size++
   }
 
+  /** The newest row's line, told again: it started no line after all (Reader.demote). */
+  relabel(lineRow: number, lineNo: number): void {
+    if (this.size === 0) return
+    const at = (this.head + this.size - 1) % this.cap
+    this.lineRow[at] = lineRow
+    this.lineNo[at] = lineNo
+  }
+
   /** Where to cut, with the text's last row `last` and the row of its last character printed `text`. */
   cut(last: number, text: number): { from: number; left: number; part: boolean } {
     const target = last + 1 - this.budget
@@ -153,7 +199,7 @@ class RowStarts {
 
 /** A terminal `cols` wide reading text, rows and modes only. */
 class Reader {
-  /** Rows the text moved down on the normal screen, by line feeds and wraps. */
+  /** Rows the text moved down on the normal screen, by line feeds and wraps (with the rows given, at the last row). */
   row = 0
   private readonly width: number
   private readonly starts: RowStarts | undefined
@@ -165,8 +211,23 @@ class Reader {
   private last = 0
   private lineRow = 0
   private lines = 0
+  /** The row the line before the newest one started on: what `lineRow` goes back to when a line start is taken back (demote). */
+  private prevLineRow = 0
   /** The row of the last character printed on the normal screen; -1 before any. */
   private textRow = -1
+  /** The tab's rows, when given: then the cursor's row is followed too. */
+  private readonly height: number | undefined
+  /** How many rows the cursor is above the screen's last row: never more than it really is, so never a row too few. */
+  private up = 0
+  /** The same, as saved with the cursor: on the normal screen, and on the alternate one. */
+  private savedUp = [0, 0]
+  /** A scroll region that is not the whole screen is set (on the normal screen, on the alternate one): every line feed and wrap then counts a row, as with no rows given, and `up` stays 0. */
+  private region = [false, false]
+  /**
+   * With the rows given: the newest row was added by a line feed that started a line, and nothing was printed or
+   * added since. A cursor moved up now takes that line start back (demote).
+   */
+  private fresh = false
   private state = GROUND
   private prefix = 0
   private params: number[] = []
@@ -175,6 +236,8 @@ class Reader {
   private any = false
   /** A CSI or DCS intermediate byte was read. */
   private more = false
+  /** The CSI's digits go to a sub-parameter (after a colon), until the next semicolon. */
+  private sub = false
   /** The string read is a DCS one. */
   private dcs = false
   /**
@@ -186,9 +249,10 @@ class Reader {
   private readonly modes = new Map<number, boolean>()
   private altFirst: { mode: number; on: boolean } | undefined
 
-  constructor(cols: number, budget?: number) {
+  constructor(cols: number, budget?: number, rows?: number) {
     // As xterm.js: a terminal is at least two columns wide.
     this.width = Math.max(2, Math.floor(cols) || 0)
+    this.height = rows === undefined ? undefined : Math.max(1, Math.floor(rows) || 1)
     if (budget !== undefined) {
       this.starts = new RowStarts(Math.max(1, Math.floor(budget)))
       this.starts.add(0, 0, 0, 0)
@@ -268,11 +332,16 @@ class Reader {
     if (c < 0x20) this.execute(c, i, false)
     else if (this.more && c >= 0x30 && c <= 0x3f) this.state = CSI_IGNORE
     else if (c >= 0x30 && c <= 0x39) {
-      this.param = Math.min(PARAM_MAX, this.param * 10 + c - 0x30)
+      if (!this.sub) this.param = Math.min(PARAM_MAX, this.param * 10 + c - 0x30)
       this.any = true
-    } else if (c === 0x3a || c === 0x3b) {
+    } else if (c === 0x3b) {
       if (this.params.length < PARAMS_MAX) this.params.push(this.param)
       this.param = 0
+      this.sub = false
+      this.any = true
+    } else if (c === 0x3a) {
+      // A sub-parameter, as in xterm.js: it belongs to the parameter before it, and is no parameter of its own.
+      this.sub = true
       this.any = true
     } else if (c >= 0x3c && c <= 0x3f) {
       // A prefix (? > < =) only as the first byte.
@@ -331,6 +400,7 @@ class Reader {
     this.param = 0
     this.any = false
     this.more = false
+    this.sub = false
   }
 
   /** A C0 control carried out; `ground`: read as text, so what follows it can start a line. */
@@ -350,28 +420,82 @@ class Reader {
   private print(i: number, w: number): void {
     if (this.col + w > this.width) {
       this.col = 0
-      if (!this.alt) this.rowAt(i, false)
+      if (this.down(1) > 0 && !this.alt) this.rowAt(i, false)
     }
     this.col += w
     this.last = w
+    this.fresh = false
     if (!this.alt) this.textRow = this.row
   }
 
   /** A line feed (and the others that move down a row); `next`: the line that starts after it. */
   private lineFeed(next: number | undefined): void {
     this.col = this.held()
+    const added = this.down(1)
     if (this.alt) return
-    if (next === undefined) this.row++
-    else this.rowAt(next, true)
+    if (next === undefined) {
+      this.row += added
+      if (added > 0) this.fresh = false
+    } else if (added > 0) this.rowAt(next, true)
+    else {
+      // Above the last row: a line starts, on no new row.
+      this.lineRow = this.row
+      this.lines++
+      this.fresh = false
+    }
+  }
+
+  /** The cursor moves down `n` rows by line feeds or wraps: how many of them add a row (with the rows given, only those at the screen's last row). */
+  private down(n: number): number {
+    const free = Math.min(this.up, n)
+    this.up -= free
+    return n - free
+  }
+
+  /** A scroll region that is not the whole screen is set on the screen in use. */
+  private inRegion(): boolean {
+    return this.region[this.alt ? 1 : 0]
+  }
+
+  /** The cursor's row (as `up`) set by a cursor move: one moved up before anything is printed on a new line's row takes that line start back. */
+  private setUp(up: number): void {
+    if (up > this.up && this.fresh) this.demote()
+    this.up = up
+  }
+
+  /**
+   * The newest row's line feed started no line after all: the cursor went back up before anything was printed, as a
+   * Windows console does for a wrapped line, so the row belongs to the line before. The cut then treats it as inside
+   * that line.
+   */
+  private demote(): void {
+    this.fresh = false
+    this.lineRow = this.prevLineRow
+    this.lines--
+    this.starts?.relabel(this.lineRow, this.lines)
+  }
+
+  /** The cursor moves up (`n` > 0) or down the screen, adding no row. Not followed in a scroll region. */
+  private move(n: number): void {
+    if (this.height === undefined || this.inRegion()) return
+    this.setUp(Math.max(0, Math.min(this.height - 1, this.up + n)))
+  }
+
+  /** The cursor is put on screen row `r` (from 1). Not followed in a scroll region (origin mode puts it elsewhere). */
+  private toRow(r: number): void {
+    if (this.height === undefined || this.inRegion()) return
+    this.setUp(this.height - Math.max(1, Math.min(this.height, r || 1)))
   }
 
   /** A new row on the normal screen, starting at `index`. */
   private rowAt(index: number, lineStart: boolean): void {
     this.row++
     if (lineStart) {
+      this.prevLineRow = this.lineRow
       this.lineRow = this.row
       this.lines++
     }
+    this.fresh = lineStart && this.height !== undefined
     this.starts?.add(index, this.row, this.lineRow, this.lines)
   }
 
@@ -389,25 +513,31 @@ class Reader {
   private repeat(n: number): void {
     const w = this.last
     if (w === 0) return
+    this.fresh = false
     if (this.col + w > this.width) {
       this.col = 0
-      if (!this.alt) this.row++
+      const added = this.down(1)
+      if (!this.alt) this.row += added
     }
     const room = Math.floor((this.width - this.col) / w)
     if (n <= room) { this.col += n * w; if (!this.alt) this.textRow = this.row; return }
     const perRow = Math.floor(this.width / w)
     const rest = n - room
     const rows = Math.ceil(rest / perRow)
-    if (!this.alt) { this.row += rows; this.textRow = this.row }
+    const added = this.down(rows)
+    if (!this.alt) { this.row += added; this.textRow = this.row }
     this.col = (rest - (rows - 1) * perRow) * w
   }
 
   private save(): void {
     this.saved[this.alt ? 1 : 0] = this.col
+    this.savedUp[this.alt ? 1 : 0] = this.up
   }
 
   private restore(): void {
     this.col = Math.min(this.saved[this.alt ? 1 : 0], this.width - 1)
+    // The tab puts the cursor back on the row it was saved on, or higher (the screen scrolled since).
+    this.setUp(this.inRegion() ? 0 : this.savedUp[this.alt ? 1 : 0])
   }
 
   private csi(final: number): void {
@@ -420,24 +550,40 @@ class Reader {
     }
     if (this.prefix !== 0) return
     switch (final) {
-      case 0x41: case 0x42: case 0x64: case 0x65: this.col = this.held(); break // A B d e
+      case 0x41: this.col = this.held(); this.move(count); break // A
+      case 0x42: case 0x65: this.col = this.held(); this.move(-count); break // B e
+      case 0x64: this.col = this.held(); this.toRow(ps[0]); break // d
       case 0x43: case 0x61: this.col = Math.min(this.width - 1, this.held() + count); break // C a
       case 0x44: this.col = Math.max(0, this.held() - count); break // D
-      case 0x45: case 0x46: this.col = 0; break // E F
+      case 0x45: this.col = 0; this.move(-count); break // E
+      case 0x46: this.col = 0; this.move(count); break // F
       case 0x47: case 0x60: this.col = column(0); break // G `
-      case 0x48: case 0x66: this.col = column(1); break // H f
+      case 0x48: case 0x66: this.col = column(1); this.toRow(ps[0]); break // H f
       case 0x49: this.tab(count); break // I
       case 0x5a: this.backTab(count); break // Z
       case 0x62: this.repeat(count); break // b
+      case 0x72: this.margins(ps[0] || 1, ps.length < 2 ? 0 : ps[1]); break // r
       case 0x73: this.save(); break // s
       case 0x75: this.restore(); break // u
     }
+  }
+
+  /** DECSTBM, as xterm.js: a region that is not the whole screen stops the row being followed; either way the cursor goes home. */
+  private margins(top: number, bottom: number): void {
+    if (this.height === undefined) return
+    if (bottom > this.height || bottom === 0) bottom = this.height
+    if (bottom <= top) return
+    const part = !(top === 1 && bottom === this.height)
+    this.region[this.alt ? 1 : 0] = part
+    this.col = 0
+    this.setUp(part ? 0 : this.height - 1)
   }
 
   private escape(final: number, i: number): void {
     this.last = 0
     if (final === 0x44) this.lineFeed(i + 1) // D: index
     else if (final === 0x45) { this.col = 0; this.lineFeed(i + 1) } // E: next line
+    else if (final === 0x4d) this.move(1) // M: reverse index
     else if (final === 0x37) this.save()
     else if (final === 0x38) this.restore()
     // The keypad: ESC = and ESC > set the flag mode 66 sets.
@@ -448,16 +594,27 @@ class Reader {
       this.mode(47, false)
       this.col = 0
       this.saved = [0, 0]
+      // As xterm.js: the cursor at the top, and its saved place on each screen too; no scroll region.
+      const top = this.height === undefined ? 0 : this.height - 1
+      this.up = top
+      this.savedUp = [top, top]
+      this.region = [false, false]
+      this.fresh = false
       for (const [m, on] of AFTER_RESET) this.mode(m, on)
     }
   }
 
   private mode(m: number, on: boolean): void {
     if (ALTERNATE_SCREEN.has(m)) {
-      // As xterm.js: 1049 saves the cursor on the screen it leaves, and restores it on the normal one.
+      // As xterm.js: 1049 saves the cursor on the screen it leaves, and restores it on the normal one. The cursor
+      // keeps its place across a switch, and the alternate screen's scroll region goes once it is left. A line start
+      // is not taken back by what a switch does to the cursor.
+      this.fresh = false
       if (on && m === 1049) this.save()
       this.alt = on
+      if (!on) this.region[1] = false
       if (!on && m === 1049) this.restore()
+      if (this.inRegion()) this.up = 0
       if (!this.altFirst) this.altFirst = { mode: m, on }
     } else if (m === 1048) {
       if (on) this.save()
@@ -483,9 +640,12 @@ export interface ReplayTail {
   after: string
 }
 
-/** Where to cut `text` so that what follows takes at most `budget` rows of a terminal `cols` wide, and what the left-out part carries. */
-export function replayTail(text: string, cols: number, budget: number): ReplayTail {
-  const rows = new Reader(cols, budget)
+/**
+ * Where to cut `text` so that what follows takes at most `budget` rows of a terminal `cols` wide, and what the
+ * left-out part carries. With `height` (the terminal's rows), the cursor's row is followed too.
+ */
+export function replayTail(text: string, cols: number, budget: number, height?: number): ReplayTail {
+  const rows = new Reader(cols, budget, height)
   rows.read(text, text.length)
   const { from, left, part } = rows.cut()
   if (from === 0) return { from, left, part, before: '', after: '' }
@@ -494,9 +654,9 @@ export function replayTail(text: string, cols: number, budget: number): ReplayTa
   return { from, left, part, ...state.carried() }
 }
 
-/** The rows `text` takes in a terminal `cols` wide, written from a row's start. */
-export function rowsOf(text: string, cols: number): number {
-  const r = new Reader(cols)
+/** The rows `text` takes in a terminal `cols` wide, written from a row's start; with `height`, its cursor's row followed. */
+export function rowsOf(text: string, cols: number, height?: number): number {
+  const r = new Reader(cols, undefined, height)
   r.read(text, text.length)
   return r.row + 1
 }
