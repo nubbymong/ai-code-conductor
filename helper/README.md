@@ -27,12 +27,12 @@ build are in `docs/remote/helper-threat-model.md` 3.10.
 | Output ring | `src/ring.rs` | Bytes at fixed offsets, a 2 MiB window, replay from an offset, "too short" reported |
 | Terminal | `src/pty/` | openpty on Unix, ConPTY on Windows (Windows' own, or the bundled one from a `conpty` folder beside the helper when a launch asks); the program's folder and whole environment, and on Windows an exact command line when a launch gives one; a job object on Windows; on Unix an end reaches every process in the child's session |
 | Holder | `src/holder.rs` | Holds one terminal and child; attach, detach, re-attach with replay; the newest attach replaces the older; ends the whole process tree |
-| Screen | `src/screen.rs` | The session's screen (from 2.1.3-beta.12): every byte of output after the ring, at the session's size with 200 lines of scrollback, through the `vt100` crate with a CSI parameter cut to 9999 first; read as the app's readers read xterm.js. `screen.read` and `screen.tail` answer from it, read-only, to a connection that acked `screen` (from 2.1.3-beta.13 a plain terminal's take-over asks `screen.read` once, for the holder's size; nothing else in the app asks yet). It keeps the window title the output last set (OSC 0 or 2, control characters dropped, bounded), which `screen.read` answers only to a connection that acked `title` too (from 2.1.3-beta.14; nothing in the app asks for it yet) |
+| Screen | `src/screen.rs` | The session's screen (from 2.1.3-beta.12): every byte of output after the ring, at the session's size with 200 lines of scrollback, through the `vt100` crate with a CSI parameter cut to 9999 first; read as the app's readers read xterm.js. `screen.read` and `screen.tail` answer from it, read-only, to a connection that acked `screen` (from 2.1.3-beta.13 a plain terminal's take-over asks `screen.read` once, for the holder's size; from 2.1.3-beta.14 a held Codex session's composer rule reads `screen.read`; nothing else in the app asks yet). It keeps the window title the output last set (OSC 0 or 2, control characters dropped, bounded), which `screen.read` answers only to a connection that acked `title` too (from 2.1.3-beta.14; a held Codex session's connections ask for it) |
 | Local transport | `src/transport/` | One endpoint per holder that only this user can reach: a named pipe on Windows, a Unix socket in a private folder elsewhere |
 | Holder process | `src/serve.rs`, `src/request.rs`, `src/detach.rs` | `hold`: the hello, the `term.*` messages, the away clock; started detached so it outlives the app |
 | Records and list | `src/store.rs`, `src/client.rs`, `src/pids.rs` | Each holder's record in the store folder; `list` finds every session and removes stale records |
 | Start and end mode | `src/start.rs`, `src/winproc.rs` | Windows only. `start`: one program, by a drive-absolute path (never searched for, never a batch file), with no inherited handles, created suspended until its creation time is read; prints its pid and creation time and exits. `end`: ends that program and the processes under it, only while its pid still has that creation time, holding it open from the check to the end; prints `ended` or `left`. The app starts and ends the vision browser this way |
-| Console hosts | `src/consoles.rs` | Windows only. `console-hosts`: at the app's start, ends the console hosts the run before left when it was ended from outside (only that run's, by parent, creation time, user and program file), and names the process that started it for the app to record |
+| Console hosts | `src/consoles.rs` | Windows only. `console-hosts`: at the app's start, ends the console hosts the run before left when it was ended from outside (only that run's, by parent, creation time, user and program file), and names the process that started it for the app to record. `end-console-host` (from 2.1.3-beta.14): while the app runs, ends each console host of its terminals on Windows' own ConPTY that was made in the time it is given, is 6 s old or more, and is the console host of no running process. Each holds a host open from its check to its end |
 | Capture mode | `src/capture.rs` | Windows only (from 2.1.3-beta.14; macOS and Linux exit 4, not supported). `capture --out <folder>`: one 32-bit BMP of each whole display in physical pixels, each file made new, and one JSON line of each display's bounds and scale; exit 3 when it cannot see the screen (an SSH session, a locked screen). For Snap (ADR-030 D3, D4); nothing in the app runs it yet, and probe P21 measures it first |
 | Tool relay | `src/relay.rs` | `mcp`: a session's tool server as its CLI starts one. It carries one JSON-RPC message a line between its standard input and output and the session's holder, which passes them to the attached connection that acked `mcp` (from 2.1.3-beta.10; from 2.1.3-beta.11 a held session's CLI starts it, behind the agent sessions' switch). With a holder that offers `away` (from 2.1.3-beta.12) its stream is kept while the app is away: a call made meanwhile waits up to 30 s, then gets the fixed "updating" answer, and a call the app had when it went is answered at once and never sent again |
 | Self-test | `src/selftest.rs` | Codec, hello, ring, a terminal round trip and a round trip over the local transport, one `AICC-RESULT` line; it closes its terminal before it moves on, and on Windows it runs in a job object when one can be made, so nothing it starts (its terminal's `conhost.exe` included) outlives it |
@@ -59,6 +59,7 @@ aicc-helper mcp --store <folder> --session <sid>
 aicc-helper start [--hide] --cwd <folder> -- <program> [args...]   (Windows only)
 aicc-helper end --pid <n> --created <t>                            (Windows only)
 aicc-helper console-hosts [--pid <n> --created <t>]                (Windows only)
+aicc-helper end-console-host --made-from <t> --made-to <t>         (Windows only)
 aicc-helper capture --out <folder>                                 (Windows only)
 ```
 
@@ -77,8 +78,10 @@ session's CLI starts it, behind the agent sessions' switch). In the debug build
 one out. `start` prints
 `{"pid":<n>,"created":"<t>"}` and exits without waiting for the program; `end`
 prints `ended` or `left` (protocol section 15, "Starting a program" and "Ending
-a program it started"). `console-hosts` prints
-`{"pid":<n>,"created":"<t>","ended":<k>}` ("Console hosts a run left").
+a program it started"). `console-hosts` and `end-console-host` print
+`{"pid":<n>,"created":"<t>","ended":<k>}`, naming the process that started
+them, with `ended` how many console hosts they ended ("Console hosts a run
+left" and "A terminal's console host after its program has ended").
 `capture` writes `display-<n>.bmp` into the folder and prints
 `{"displays":[...]}`; it exits 3 when there is no desktop to capture and 4 off
 Windows ("Capturing the displays").

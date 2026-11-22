@@ -122,8 +122,9 @@ pub const TITLE_CAP: &str = "title";
 /// title in a screen read (from 2.1.3-beta.14). The app acks `core` and
 /// `local` (`hello::LOCAL_CAPS`), `hooks` on a connection that takes hook
 /// events, `mcp` on one that carries tool streams and `screen` on one that
-/// reads the screen (a plain terminal's, from 2.1.3-beta.13); nothing in the
-/// app acks `title` yet. The hook mode acks `hook::ACK_CAPS` and the relay
+/// reads the screen (a plain terminal's, from 2.1.3-beta.13; a held Codex
+/// session's, from 2.1.3-beta.14), and `title` beside it on the latter. The
+/// hook mode acks `hook::ACK_CAPS` and the relay
 /// `relay::ACK_CAPS`.
 pub const HOLDER_CAPS: [&str; 7] = ["core", "local", HOOKS_CAP, MCP_CAP, AWAY_CAP, SCREEN_CAP, TITLE_CAP];
 /// The most JSON a screen answer may be: what one frame to the app holds.

@@ -6144,7 +6144,7 @@ function spawnPtyResolved(
         ...(options?.useResumePicker ? { codexOpenElsewhere: codexConversationsOpenElsewhere(sessionId, launch.lease.accountId) } : {}),
         // WP2 PR 4, P4.3 (row 53): Ask Conductor's opening question (argv
         // after `--` on the direct route's fresh launch; otherwise typed
-        // through the pane below), and on every Ask launch the scope of the
+        // through the run screen below), and on every Ask launch the scope of the
         // help folder's AGENTS.md (its byte bound, no parent folder's).
         ...(askQuestion ? { askPrompt: askQuestion } : {}),
         ...(options?.isAsk === true ? { askProjectDocMaxBytes: askConductorProjectDocMaxBytes() } : {}),
@@ -6248,7 +6248,7 @@ function spawnPtyResolved(
         win.webContents.send(`pty:data:${sessionId}`, data)
       })
       // WP2 PR 4, P4.3 (row 53): an Ask session takes later questions through
-      // the pane (handOffAskQuestion). A question this launch did not carry
+      // its run screen (handOffAskQuestion). A question this launch did not carry
       // on argv (the npm .cmd route, an exact resume, the picker, a question
       // argv may not hold) is typed there at Codex's first ready, empty
       // composer, never into its trust or sandbox screens; scheduled for once
@@ -7408,7 +7408,7 @@ export function resizePty(sessionId: string, cols: number, rows: number): void {
     getPtyIntegrityMonitor()?.recordResizeApplied(sessionId, cols, rows)
     // Keep the watchdog's rendered pane wrapping like the real one (#266).
     getWatchdogManager()?.noteResize(sessionId, cols, rows)
-    // WP2 PR 4, P4.1: and the submit primitive's pane of a Codex session.
+    // WP2 PR 4, P4.1: and the submit primitive's reading of a Codex session.
     codexRunScreen()?.resize(sessionId, cols, rows)
   } catch (err: unknown) {
     const code = (err as NodeJS.ErrnoException)?.code

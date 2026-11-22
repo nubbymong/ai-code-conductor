@@ -1101,8 +1101,9 @@ if (!gotTheLock) {
     if (hooksEnabled) {
       cleanupStaleHookEntries(sessionHelperKeptIds())   // supervisor.start() already fired proxy.start()
     }
-    // U4: sweep leaked per-session mcp-<sid>.json sidecars (removed on normal
-    // dispose; a crash leaves them). Independent of hooks.
+    // U4: sweep leaked per-session mcp-<sid>.json and ccc-status-<sid>.url sidecars
+    // (removed on normal dispose; a crash leaves them), and a settings-<sid>.json a
+    // local launch of this install left (aicc_planning#385). Independent of hooks.
     cleanupStaleMcpConfigs(sessionHelperKeptIds())
     // #330: end the console hosts the run before left when it was ended from
     // outside, and record this run for the next start (Windows, background).

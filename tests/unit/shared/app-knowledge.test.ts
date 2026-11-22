@@ -2189,10 +2189,11 @@ describe('the 2.1.3-beta.8 sweep', () => {
     expect(m).toContain('why a held terminal can still end during an update')
   })
 
-  it('the Machines section says a held Claude Code session sends its hooks through the helper, PreToolUse still to the gateway, off by default', () => {
+  it('the Machines section says a held Claude Code session sends its hooks through the helper, PreToolUse included, off by default', () => {
     const m = body('machines')
     expect(m).toContain('a Claude Code session the helper holds sends its hook events to the app through the session helper')
-    expect(m).toContain('Only the check before each tool runs (PreToolUse) still goes to the HTTP Hooks Gateway')
+    expect(m).toContain('through the session helper, the check before each tool runs (PreToolUse) included')
+    expect(m).not.toContain('still goes to the HTTP Hooks Gateway')
     expect(m).toContain('a Codex session sends its hooks as it did')
     // It names its own setting: the HTTP Hooks Gateway just before it is on by default.
     expect(m).toContain('With Claude Code and Codex sessions through the session helper off, which is the default, every session sends its hooks to the gateway as before')
@@ -2337,6 +2338,11 @@ describe('the 2.1.3-beta.9 sweep', () => {
     const t = body('troubleshooting')
     expect(t).toContain('On Windows, when the app was ended from outside (in Task Manager, for example) or crashed, a console host of one of its terminals (Console Window Host in Task Manager) can stay behind.')
     expect(t).toContain("The next start of the app ends the console hosts that run left, once, soon after it opens; it ends nothing of another user's or of a run that is still going.")
+  })
+
+  it('troubleshooting says a terminal whose program ended by itself has its console host ended while the app runs (aicc_planning#363)', () => {
+    const t = body('troubleshooting')
+    expect(t).toContain("While the app runs, when a terminal's program ends by itself and its tab stays open (exit typed in a Terminal only tab, or Claude Code quit from inside), the app ends that terminal's console host too, once the program has ended and no sooner than about 6 seconds after the terminal started; a terminal whose program still runs keeps its console host.")
   })
 
   it('the release notes carry the series warning, the two minutes, the way back and every change line', () => {

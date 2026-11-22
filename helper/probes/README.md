@@ -382,5 +382,6 @@ P3 HOLDS on the Linux host with key sign-in (a host with logind
 cleanup on was not measured). P6 is SAME there on the line above, which compares the
 exec with `-l`; `claude` was found only by `-il`, so against the user's interactive
 login shell, the comparison ADR-029's P6 names, that host differs and the P6 fallback
-applies on it. The Rocky Linux 10 host was NOT RUN (its one connect failed; recorded as
-host off); the same command runs on it in beta.14.
+applies on it. The Rocky Linux 10 host was NOT RUN on 2026-11-21 (its one connect failed;
+recorded as host off). Rocky Linux 10: not run; its one 8 s connect failed on 2026-11-22 (the
+probe's label); owed to beta.15.

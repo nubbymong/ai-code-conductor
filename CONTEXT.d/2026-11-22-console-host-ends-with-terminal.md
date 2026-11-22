@@ -55,19 +55,19 @@ terminal's host has no program). The helper's program check, not the time, is
 what keeps a running terminal's host.
 
 **Second review fix: every host left is ended.** With every time widened by
-50 ms on each side, two terminals started within about 50 ms of each other
-(for example tabs switched through quickly: the app starts a tab's terminal
-only when the tab is first on screen, so tabs made together do not start their
-terminals together) each lie in the other's time, and the helper still ended nothing when more than one host passed its rules.
-So when both programs had ended by the first ask (both ended within about
-1.2 s of each other, as node-pty reports an exit 1 s after it, or both in
-their first 6 s), neither host was ended, each terminal asks only once, and
-both ran until the app quit, as on beta.13. A host never ended earlier (a
-same-millisecond start, a helper error) blocked its neighbour for good the
-same way. After the program check that rule kept nothing safe: every host
-left has passed every rule by itself. Now the helper ends each host left, and
-`ended` says how many. The app's code is unchanged: it logs any `ended` above
-0.
+50 ms on each side, two terminals started within about 50 ms of each other (for
+example tabs switched through quickly: the app starts a tab's terminal only
+when the tab is first on screen, so tabs made together do not start their
+terminals together) each lie in the other's time, and the helper still ended
+nothing when more than one host passed its rules. So when both programs had
+ended by the first ask (both ended within about 1.2 s of each other, as
+node-pty reports an exit 1 s after it, or both in their first 6 s), neither
+host was ended, each terminal asks only once, and both ran until the app quit,
+as on beta.13. A host never ended earlier (a same-millisecond start, a helper
+error) blocked its neighbour for good the same way. After the program check
+that rule kept nothing safe: every host left has passed every rule by itself.
+Now the helper ends each host left, and `ended` says how many. The app's code
+is unchanged: it logs any `ended` above 0.
 
 **Wording: what a process with no console answers.** The reviewer read
 `ProcessConsoleHostProcess` read-only on the dev PC (Windows 11 build 26320,
@@ -118,8 +118,8 @@ old enough, is kept (only the time keeps it), and the early terminal's own
 ask then ends it (1), the running one's host kept throughout. With the time
 check dropped in a throwaway commit on a temporary branch (since deleted) it
 fails in run 45051425080 (Helper, windows-2025): ended 3, not 2, at the first
-ask; it is green on the real code. They suspend each host before
-its program ends, as the console-hosts tests do, so they check the mode and not what
+ask; it is green on the real code. They suspend each host before its program
+ends, as the console-hosts tests do, so they check the mode and not what
 Windows does with an idle host, and they wait until each host is 6 s old.
 (The red runs 45032572689, 45033409949 and 45034021302 also showed a host gone
 before the mode ran; the test had ended it itself: its host search dropped
@@ -131,13 +131,17 @@ host the same way when their program ends by itself: an SSH session's terminal
 and the SSH End and liveness execs (pty-manager.ts's SSH code, which takes no
 hunk this beta) and the first-run setup terminal (ipc/setup-handlers.ts).
 Handed to the orchestrator for a ticket. The VM line: C1.3's three counts
-passed on the first review fix's head (f86e2efa) with tabs started 12 s
-apart. On the second review fix's head (9d544893) the VM re-check passed: a
-burst of three terminals started within 42 ms of each other, two with their
-programs ended and one still running, had both ended terminals' hosts gone by
-one ask and the running one's host kept (case 1; then the app quit). That
-check also showed that tabs made together do not start their terminals
-together: the app starts a tab's terminal only when the tab is first on
-screen, so a burst is terminals started within about 50 ms of each other (for
-example tabs switched through quickly), not a restore's tabs. The third round
-changes only a test and wording, so no VM run follows it.
+passed on the first review fix's head (f86e2efa) with tabs started 12 s apart.
+On the second review fix's head (9d544893) the VM re-check passed: a burst of
+three terminals started within 42 ms of each other, two with their programs
+ended and one still running, had both ended terminals' hosts gone by one ask
+and the running one's host kept; two tabs started 12 s apart whose programs
+each ended had both hosts gone in about 1 s; and the app was then quit with
+Close sessions and left nothing at 3, 10 and 30 s. Not run again on 9d544893:
+the VM's clock tick and C1.3's three counts (they passed on f86e2efa, before
+the second review fix). The burst check also showed that tabs made together do
+not start their terminals together: the app starts a tab's terminal only when
+the tab is first on screen, so a burst is terminals started within about 50 ms
+of each other (for example tabs switched through quickly), not a restore's
+tabs. The third round changes only a test and wording, so no VM run follows
+it.

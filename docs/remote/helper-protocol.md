@@ -167,7 +167,8 @@ The CLI or sudo starts `emit` (statusline and hook command, R6, R7), `mcp`
   installs its filter before it reads any socket (threat model 3.10).
   Outliving logout: probe P3 held for 60 s on a Linux host that does not clean up at
   logout (ADR-030); **pending probe P3** for a host that does and for ADR-029's other P3
-  host roles (macOS, a container host). Rocky Linux 10 is owed to beta.14.
+  host roles (macOS, a container host). Rocky Linux 10 is owed to beta.15 (its one
+  8 s connect failed on 2026-11-22).
 - Only the holder outlives a connection; `mcp` lives as long as the CLI, the
   rest for one call. The holder exits when the session ends, a non-detachable
   terminal closes, or a detached session reaches its maximum lifetime.
@@ -663,6 +664,49 @@ command line it cannot read. No PowerShell and no WMI. On macOS and Linux the
 mode exits 1. The app runs it from the install folder, as it runs `start` and
 `end`.
 
+**A terminal's console host after its program has ended (Windows only, from
+2.1.3-beta.14).** On Windows' own ConPTY a terminal's console host ends only
+when its pseudoconsole is closed. node-pty (1.2.0-beta.15) drops the
+pseudoconsole, unclosed, as soon as the program exits, so the host would run
+until the app quits. node-pty's bundled ConPTY ends its host with the program
+and is left alone. So the app times each terminal it starts on Windows' own
+ConPTY: Date.now() just before and just after node-pty's spawn, widened by
+50 ms on each side, because that clock can run up to one Windows clock tick
+behind the clock Windows stamps creation times with
+(`src/main/console-host-end.ts`). Once node-pty reports the program's exit, and
+no sooner than 6 s plus that 50 ms after the start, the app runs, once,
+
+```
+aicc-helper end-console-host --made-from <t> --made-to <t>
+```
+
+with `<t>` in steps of 100 ns since 1601 (UTC). `--made-to` is not included,
+and it is at most ten seconds after `--made-from`. The helper reads its own
+creation time, then the process list once, and ends each process that meets all
+of these: it is named `conhost.exe` and its program file is Windows' own
+`System32\conhost.exe`; it is listed with the process that started the helper
+as its parent; it was made in that time, after that process and before the
+helper; it still runs, as the helper's own user; it was made at least 6 s
+before the helper (node-pty gives a program 5 s to start in its pseudoconsole,
+and until then a running terminal's host has no program); and it is the console
+host of no process that still runs (each listed process's
+`ProcessConsoleHostProcess`; a process with no console can answer its maker's
+pid, which only ever keeps a host). The widened time can hold the host of a
+terminal started just before or after. What keeps a running terminal's host is
+those last two rules, not the time. Two terminals started within about 50 ms of
+each other whose programs have both ended get both hosts ended. Each host is
+held open from its check to its end. It ends nothing when no process meets all
+of that, or when a process that still runs, and could be opened, cannot be read
+for its console host (a process that cannot be opened is not read). It prints
+the line `console-hosts` prints, naming the process that started it, with
+`ended` how many it ended, and exits 0. It writes a note on stderr when it kept
+a host for one of those reasons or could not end one. It exits 1, ending
+nothing, when it cannot read its own creation time or its own user, the process
+list, the process that started it, or the system folder. It exits 2 on a
+command line it cannot read, a time longer than ten seconds included. No
+PowerShell and no WMI. On macOS and Linux the mode exits 1. The app runs it from
+the install folder, as it runs `console-hosts`.
+
 **Capturing the displays (Windows only, from 2.1.3-beta.14).** Protocol change
 2 (ADR-030): a command-line mode on This computer only, display pictures only,
 for Snap (D3, D4). Nothing in the app runs it yet; probe P21 measures it first
@@ -997,14 +1041,15 @@ of a Claude Code session it started through the holder (the agent sessions'
 setting, off by default), and only when the hello offers `hooks`; every other
 connection acks `["core","local"]` and is never sent a hook event. For such a
 session, while the hooks gateway is on and listening, the app switches the
-session's settings file to the hook mode for every injected event but
-`PreToolUse`, which stays on the hooks gateway, once the holder answers
-`term.launched` and before the attach sends the launch line; a holder without
-`hooks` leaves the session on the gateway. The app reads each `event`
-strictly (on channel 0 only, its fields only, `seq` from 1, `kind` one of the
-nine and the payload's `hook_event_name`, the payload at most 65,280 bytes
-and the message at most 64 KiB), drops a `seq` it has seen and a
-`PreToolUse`, takes none while the hooks gateway is off or not listening, and
+session's settings file to the hook mode for every injected event,
+`PreToolUse` included (from 2.1.3-beta.14; before it `PreToolUse` stayed on
+the hooks gateway), once the holder answers `term.launched` and before the
+attach sends the launch line; a holder without `hooks` leaves the session on
+the gateway. The app reads each `event` strictly (on channel 0 only, its fields
+only, `seq` from 1, `kind` one of the nine and the payload's
+`hook_event_name`, the payload at most 65,280 bytes and the message at most
+64 KiB), drops a `seq` it has seen (an app before 2.1.3-beta.14 also dropped a
+`PreToolUse`), takes none while the hooks gateway is off or not listening, and
 treats the payload as untrusted text. Fixtures: the `hooks` part of
 `helper/fixtures/local.json`.
 
@@ -1259,10 +1304,12 @@ protocol change 9) its `away` part.
 - **What is not here yet.** A kept stream is given to the next attach of the
   same holder, which within one run of the app is the app again: it attaches
   by itself after a dropped link. It is not given to a new run of the app,
-  as after an update: an update ends every agent session today, and an
-  agent session is not shown again after the app restarts, so
-  a stream is given back inside one app run only, until the step that keeps
-  a session across an update (ADR-030 S16, its second half). A relay that did not ack `away` (its holder does not offer it) whose
+  as after an update: on Windows an update lets a held agent session's CLI
+  run on and records it (S16 step 4), but the next start still ends it, and
+  elsewhere an update ends every agent session; an agent session is not
+  shown again after the app restarts, so a stream is given back inside one
+  app run only, until the step that takes a kept session over in its tab
+  (ADR-030 S16, step 5). A relay that did not ack `away` (its holder does not offer it) whose
   stream ended stays ended: when the app's connection to a session's holder
   drops and comes back, that session's CLI has no tool server until it
   starts one again (in Claude Code, /mcp) or the session is restarted. Nothing tells a
@@ -1285,7 +1332,11 @@ stream) asks for neither: `unknown-type` and a close, as for the terminal
 messages. From 2.1.3-beta.13 a plain terminal's connections ack `screen`,
 and a take-over asks `screen.read` once, before its attach, for the
 holder's size: its replay waits for the tab to be at that size
-(src/main/session-helper/helper-pty.ts). Nothing else in the app asks yet.
+(src/main/session-helper/helper-pty.ts). From 2.1.3-beta.14 a held Codex
+session's connections ack `screen` and `title`, and the app's composer rule
+for that session reads `screen.read` each time it looks, in place of a pane of
+its own (src/main/providers/codex/session-screen.ts). Nothing else in the app
+asks yet.
 
 - **`screen.read`** `{id}` is answered `screen.rows`: `cols` and `rows`, the
   screen's size; `cursor` `{row, col}`, the cursor's cell from 0 (its column
@@ -1328,8 +1379,9 @@ holder's size: its replay waits for the tab to be at that size
   that did not ack `title`, and every connection to a holder from before it
   (which does not offer it), get `screen.rows` as before, with no `title`.
   The app refuses a `title` on such a connection, and one that is not text,
-  holds a control character or is over 1024 characters. Nothing in the app
-  asks for it yet.
+  holds a control character or is over 1024 characters. From 2.1.3-beta.14 a
+  held Codex session's connections ask for it (its composer rule reads the
+  spinner in it); nothing else in the app does.
 - **One message.** Each answer is one message within what a frame to the app
   holds (1 MiB of JSON). Rows that do not fit are left out from the top of
   `screen.rows` and from the oldest end of `screen.lines`, and the answer

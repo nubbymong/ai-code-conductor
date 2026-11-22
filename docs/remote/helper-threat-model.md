@@ -543,7 +543,9 @@ rollback returns to the earlier beta's rows, and every row has a negative test.
   alive after its session.
 - **The holder's screen and its two reads (capability `screen`, from
   2.1.3-beta.12; from 2.1.3-beta.13 a plain terminal's connections ack it,
-  and a take-over asks `screen.read` once, for the holder's size).** The
+  and a take-over asks `screen.read` once, for the holder's size; from
+  2.1.3-beta.14 a held Codex session's connections ack it and `title`, and
+  its composer rule reads it to decide when main types into Codex).** The
   holder parses its
   session's output into a screen (`helper/src/screen.rs`, the `vt100` crate,
   3.10) on the thread that carries that output, after the ring and the
@@ -573,8 +575,8 @@ rollback returns to the earlier beta's rows, and every row has a negative test.
   it is owed to the security round before 2.1 stable (aicc_planning #320):
   output made to stall or crash the parser, memory growth past the bound, a
   read that reaches another session's screen, a read used to change state,
-  and reads made back to back to hold the screen's lock against the output
-  thread.
+  reads made back to back to hold the screen's lock against the output
+  thread, and an answer that reads ready while Codex shows a prompt.
 - **A program the helper starts for the app keeps none of the app's handles
   (from 2.1.3-beta.8, Windows).** `aicc-helper start` (protocol 15, "Starting
   a program") starts the program the app names, by the drive-absolute path it
