@@ -52,15 +52,17 @@
  * tab is shown about as much of it as it keeps, and what is shown starts on
  * the tab's last row, where the count has the console's cursor.
  *
- * A take-over's replay was shown once already, by the app that ran before,
- * and its tab answered the terminal queries in it then (a program asking the
- * terminal where its cursor is, what it is, or its colours). So the replay,
- * up to the attach's ring_end, loses each of them (replay-queries.ts), and
- * neither the tab nor main's colour answer answers them again into a program
- * that asked nothing (2.1.3-beta.13, plan section A3, aicc_planning#360). A
- * query cut by ring_end is finished by the live output after it, and answered
- * once. A launch's output and an attach again's replay were never shown, and
- * a program may still wait for those answers: they go to the tab untouched.
+ * A take-over's replay was shown already, by the app that ran before, up to
+ * where that app stopped, and its tab answered the terminal queries in it
+ * then (a program asking the terminal where its cursor is, what it is, or its
+ * colours); a query written after that app stopped had no terminal to answer
+ * it, and its program's wait for one is long over. So the replay, up to the
+ * attach's ring_end, loses each of them (replay-queries.ts), and neither the
+ * tab nor main's colour answer answers them into a program that no longer
+ * waits (2.1.3-beta.13, plan section A3, aicc_planning#360). A query cut by
+ * ring_end is finished by the live output after it, and answered once. A
+ * launch's output and an attach again's replay were never shown, and a
+ * program may still wait for those answers: they go to the tab untouched.
  */
 import type { IDisposable, IEvent, IPty } from 'node-pty'
 import { StringDecoder } from 'string_decoder'
@@ -270,7 +272,9 @@ export class HelperPty implements IPty {
   private cutBytes = 0
   /** A take-over's replay goes through this until the offset reaches `end`,
    *  the attach's ring_end: its terminal queries are taken out. An attach
-   *  again with no gap goes on with it, to that end. */
+   *  again goes on with it, to that end; after a gap of its own it first
+   *  gives back what it held (flushDecoder), and a gap that starts past
+   *  that end ends it. */
   private queries: { filter: ReplayQueryFilter; end: number } | undefined
   /** Some of this terminal's output was shown to the tab already. */
   private shownAny = false
@@ -1128,7 +1132,7 @@ export class HelperPty implements IPty {
     this.queries = undefined
     const rest = q.filter.flush()
     const n = q.filter.dropped
-    if (n > 0) this.driver.log(`[session-helper] ${this.sid}: ${n} terminal ${n === 1 ? 'query' : 'queries'} in its replay ${n === 1 ? 'was' : 'were'} not passed on, so ${n === 1 ? 'it is' : 'they are'} not answered a second time`)
+    if (n > 0) this.driver.log(`[session-helper] ${this.sid}: ${n} terminal ${n === 1 ? 'query' : 'queries'} in its replay ${n === 1 ? 'was' : 'were'} not passed on, so ${n === 1 ? 'it is' : 'they are'} not answered again or late`)
     return rest
   }
 

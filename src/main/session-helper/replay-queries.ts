@@ -8,12 +8,14 @@
  * (CSI ? u), a colour (OSC 4, 10, 11 and 12 with `?`), a setting (DECRQSS),
  * the window's size (CSI 14, 16 and 18 t), or its answerback (ENQ). The
  * terminal answers into the program's input. A take-over's replay was shown
- * once already, by the app that ran before, and its tab answered those
- * queries then. Shown again, the tab would answer them again, and so would
- * main's own colour answer (terminal-query-responder.ts), to a program that
- * asked nothing: it reads the answer as typed text. So each complete query in
- * the replay is taken out, and nothing else changes: the screen, the modes and
- * the colours are as the whole replay leaves them.
+ * already, by the app that ran before, up to where that app stopped, and its
+ * tab answered those queries then; one written after that had no terminal to
+ * answer it, and its program's wait is long over. Shown now, the tab would
+ * answer them, and so would main's own colour answer
+ * (terminal-query-responder.ts), to a program that no longer waits: it reads
+ * the answer as typed text. So each complete query in the replay is taken
+ * out, and nothing else changes: the screen, the modes and the colours are as
+ * the whole replay leaves them.
  *
  * A query is what the tab's terminal (xterm.js 6.0.0) reads as one, read with
  * replay-tail.ts's parser (its states, and the hooks it tells), wherever it

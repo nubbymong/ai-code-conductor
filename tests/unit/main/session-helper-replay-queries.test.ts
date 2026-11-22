@@ -34,6 +34,10 @@
  *  - a take-over whose filter is still on when its terminal starts the usual
  *    way or is let go of for an update (a sequence it holds goes then, as the
  *    decoder's half character does);
+ *  - an attach again with a gap of its own while the filter is still on (it
+ *    gives back what it holds and goes on to the take-over's ring_end, or
+ *    ends when the gap starts past that end), and a terminal given up with
+ *    the filter still on (what it holds is given back, then the log line);
  *  - a replay through main's own stream (pty-manager.ts): the colour answer
  *    is fed what HelperPty gives, as main feeds it.
  */
@@ -388,7 +392,7 @@ describe('around the replay', () => {
     expect(r.t.notes).toEqual([])
     expect(r.shown()).toBe(`start ${REQUESTS.map(([, , put]) => `${put}|`).join('')} end\r\n${AFTER}`)
     expect(r.logs.filter((l) => l.includes('terminal quer'))).toEqual([
-      `[session-helper] ${r.h.sid}: ${REQUESTS.length} terminal queries in its replay were not passed on, so they are not answered a second time`,
+      `[session-helper] ${r.h.sid}: ${REQUESTS.length} terminal queries in its replay were not passed on, so they are not answered again or late`,
     ])
   })
 
