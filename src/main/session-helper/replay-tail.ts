@@ -92,24 +92,29 @@
  *
  * Memory is bounded by the budget, whatever the text: only the row starts that
  * can still be kept are remembered.
+ *
+ * The same parser reads a take-over's terminal queries (2.1.3-beta.13, plan
+ * section A3, aicc_planning#360; replay-queries.ts): a reader of the sequences
+ * themselves is told where each starts, where a CSI ends and with what, where
+ * a DCS string hooks and where a string ends. Here those hooks do nothing.
  */
 
-/** The parser's states, as far as they matter here. */
+/** The parser's states, as far as they matter here (and in replay-queries.ts). */
 const GROUND = 0
-const ESC = 1
+export const ESC = 1
 /** After ESC and one or more intermediate bytes (0x20-0x2f). */
 const ESC_MORE = 2
-const CSI = 3
+export const CSI = 3
 /** A CSI that went wrong (a prefix byte after a parameter): read to its end, then nothing done. */
 const CSI_IGNORE = 4
 /** An OSC string: BEL, ST, CAN or SUB ends it. */
-const OSC = 5
+export const OSC = 5
 /**
  * A DCS string, or an SOS, PM or APC one: ST, CAN or SUB ends it, and the C0 controls in it do nothing. As in
  * xterm.js, a character past U+009F ends it in error, except in a DCS string past its final byte, or one the tab
  * ignores to its end.
  */
-const STRING = 6
+export const STRING = 6
 
 /** The DEC private modes carried across the cut: flags, with no effect on the cursor or on what the screen shows. */
 const CARRIED_MODES = new Set([1, 7, 12, 25, 45, 66, 9, 1000, 1002, 1003, 1004, 1006, 1016, 2004])
@@ -198,7 +203,7 @@ class RowStarts {
 }
 
 /** A terminal `cols` wide reading text, rows and modes only. */
-class Reader {
+export class Reader {
   /** Rows the text moved down on the normal screen, by line feeds and wraps (with the rows given, at the last row). */
   row = 0
   private readonly width: number
@@ -228,23 +233,26 @@ class Reader {
    * added since. A cursor moved up now takes that line start back (demote).
    */
   private fresh = false
-  private state = GROUND
-  private prefix = 0
-  private params: number[] = []
+  protected state = GROUND
+  /** The CSI's or DCS string's prefix byte (? > < =), or 0. */
+  protected prefix = 0
+  protected params: number[] = []
   private param = 0
   /** A CSI or DCS parameter, prefix or separator byte was read. */
   private any = false
   /** A CSI or DCS intermediate byte was read. */
   private more = false
+  /** The CSI's or DCS string's intermediate bytes, as the tab collects them (`$` for DECRQM and DECRQSS). */
+  protected inter = ''
   /** The CSI's digits go to a sub-parameter (after a colon), until the next semicolon. */
   private sub = false
   /** The string read is a DCS one. */
-  private dcs = false
+  protected dcs = false
   /**
    * The DCS string's final byte was read, or a byte the tab ignores the string from (a prefix after a parameter, a
    * parameter after an intermediate): past it, a character past U+009F is its text, not an error.
    */
-  private hooked = false
+  protected hooked = false
   /** The carried modes at their last value, in the order of their last change. */
   private readonly modes = new Map<number, boolean>()
   private altFirst: { mode: number; on: boolean } | undefined
@@ -259,12 +267,14 @@ class Reader {
     }
   }
 
-  read(text: string, end: number): void {
-    for (let i = 0; i < end; i++) {
+  /** Reads `text` from `from` to `end`: what came before `from` was read already, in this state. */
+  read(text: string, end: number, from = 0): void {
+    for (let i = from; i < end; i++) {
       const c = text.charCodeAt(i)
-      // In any state: ESC starts a sequence, CAN and SUB end one, and the 8-bit controls act as in the tab.
-      if (c === 0x1b) { this.state = ESC; continue }
-      if (c === 0x18 || c === 0x1a) { this.state = GROUND; this.last = 0; continue }
+      // In any state: ESC starts a sequence, CAN and SUB end one, and the 8-bit controls act as in the tab. ESC
+      // ends a string as its end does (the tab acts on it); CAN and SUB cancel it.
+      if (c === 0x1b) { this.leave(i, true); this.state = ESC; this.began(i); continue }
+      if (c === 0x18 || c === 0x1a) { this.leave(i, false); this.state = GROUND; this.last = 0; continue }
       if (c >= 0x80 && c <= 0x9f) { this.c1(c, i); continue }
       if (c === 0x7f) continue // DEL: nothing, in any state
       switch (this.state) {
@@ -298,17 +308,25 @@ class Reader {
           }
           break
         case OSC:
-          if (c === 0x07) this.state = GROUND
+          if (c === 0x07) { this.leave(i, true); this.state = GROUND }
           break
         case STRING:
           // A string's text, and the C0 controls in it: nothing. A character past U+009F ends it in error, as in
           // the tab, which reads what follows as text; in a DCS string past its final byte, or one the tab ignores to
           // its end, it is the string's text.
-          if (c >= 0xa0) { if (!this.hooked) this.state = GROUND }
+          if (c >= 0xa0) { if (!this.hooked) { this.leave(i, false); this.state = GROUND } }
           else if (this.dcs && !this.hooked && c >= 0x20) {
-            if (c >= 0x40 || (c >= 0x30 && (this.more || (c >= 0x3c && this.any)))) this.hooked = true
-            else if (c >= 0x30) this.any = true
-            else this.more = true
+            if (c >= 0x40 || (c >= 0x30 && (this.more || (c >= 0x3c && this.any)))) {
+              this.hooked = true
+              if (c >= 0x40) this.hook(c)
+            } else if (c >= 0x30) {
+              // A prefix only as the first byte: one after a parameter is the ignore above.
+              if (c >= 0x3c) this.prefix = c
+              this.any = true
+            } else {
+              this.more = true
+              this.inter += String.fromCharCode(c)
+            }
           }
           break
       }
@@ -319,7 +337,7 @@ class Reader {
     if (c < 0x20) this.execute(c, i, false)
     else if (c === 0x5b) this.startCsi()
     else if (c === 0x5d) this.state = OSC
-    else if (c === 0x50 || c === 0x58 || c === 0x5e || c === 0x5f) { this.state = STRING; this.dcs = c === 0x50; this.hooked = false; this.any = false; this.more = false }
+    else if (c === 0x50 || c === 0x58 || c === 0x5e || c === 0x5f) this.startString(c === 0x50)
     else if (c <= 0x2f) this.state = ESC_MORE
     else {
       // A final byte; a character past 0x7e ends it in error.
@@ -350,16 +368,45 @@ class Reader {
         this.prefix = c
         this.any = true
       }
-    } else if (c <= 0x2f) this.more = true
-    else {
+    } else if (c <= 0x2f) {
+      this.more = true
+      this.inter += String.fromCharCode(c)
+    } else {
       // A final byte; a character past 0x7e ends it in error. One with intermediates does nothing here.
       this.state = GROUND
-      if (c <= 0x7e && !this.more) {
+      if (c <= 0x7e) {
         if (this.params.length < PARAMS_MAX) this.params.push(this.param)
-        this.csi(c)
+        if (!this.more) this.csi(c)
+        this.csiEnd(c, i)
       }
       this.last = 0
     }
+  }
+
+  // ── what a reader of the sequences themselves is told (replay-queries.ts); nothing here ──
+
+  /** A sequence starts at `i`: an ESC, or an 8-bit CSI, OSC, DCS, SOS, PM or APC introducer. */
+  protected began(_i: number): void { /* nothing here */ }
+  /** The CSI read ends with its final byte, `final`, at `i`, intermediates or not; its prefix, intermediates and parameters are read. */
+  protected csiEnd(_final: number, _i: number): void { /* nothing here */ }
+  /** The DCS string read reaches its final byte, `final`, where the tab hooks it; its prefix and intermediates are read. Not told for one the tab ignores. */
+  protected hook(_final: number): void { /* nothing here */ }
+  /** The string read (OSC, DCS, SOS, PM or APC) ends at `i`: `done` when the tab acts on it there (ESC, ST, and BEL for an OSC), not when CAN, SUB, another 8-bit control or an error cuts it short. */
+  protected stringEnd(_i: number, _done: boolean): void { /* nothing here */ }
+
+  /** Whatever ends at `i` ends a string being read. */
+  private leave(i: number, done: boolean): void {
+    if (this.state === OSC || this.state === STRING) this.stringEnd(i, done)
+  }
+
+  private startString(dcs: boolean): void {
+    this.state = STRING
+    this.dcs = dcs
+    this.hooked = false
+    this.any = false
+    this.more = false
+    this.prefix = 0
+    this.inter = ''
   }
 
   /** Where to cut (with a budget given). */
@@ -382,9 +429,11 @@ class Reader {
 
   private c1(c: number, i: number): void {
     this.last = 0
-    if (c === 0x9b) this.startCsi()
-    else if (c === 0x9d) this.state = OSC
-    else if (c === 0x90 || c === 0x98 || c === 0x9e || c === 0x9f) { this.state = STRING; this.dcs = c === 0x90; this.hooked = false; this.any = false; this.more = false }
+    // ST ends a string as its end does; any other 8-bit control cuts it short.
+    this.leave(i, c === 0x9c)
+    if (c === 0x9b) { this.startCsi(); this.began(i) }
+    else if (c === 0x9d) { this.state = OSC; this.began(i) }
+    else if (c === 0x90 || c === 0x98 || c === 0x9e || c === 0x9f) { this.startString(c === 0x90); this.began(i) }
     else {
       // ST (0x9c) only ends a string; the others are carried out.
       this.state = GROUND
@@ -400,11 +449,12 @@ class Reader {
     this.param = 0
     this.any = false
     this.more = false
+    this.inter = ''
     this.sub = false
   }
 
   /** A C0 control carried out; `ground`: read as text, so what follows it can start a line. */
-  private execute(c: number, i: number, ground: boolean): void {
+  protected execute(c: number, i: number, ground: boolean): void {
     this.last = 0
     if (c === 0x0a || c === 0x0b || c === 0x0c) this.lineFeed(ground ? i + 1 : undefined)
     else if (c === 0x0d) this.col = 0
@@ -579,7 +629,7 @@ class Reader {
     this.setUp(part ? 0 : this.height - 1)
   }
 
-  private escape(final: number, i: number): void {
+  protected escape(final: number, i: number): void {
     this.last = 0
     if (final === 0x44) this.lineFeed(i + 1) // D: index
     else if (final === 0x45) { this.col = 0; this.lineFeed(i + 1) } // E: next line
