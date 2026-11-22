@@ -17,6 +17,13 @@
 // runs (cleanupSessionResources) unbindCodexLease, unbindLaunchTelemetry and
 // unbindLaunchRegistrations, each at its own place in that teardown.
 //
+// S16 step 4 (aicc_planning#387, #359): a session an app update keeps running
+// (kept-launches.ts launchKeptForUpdate) keeps what its launch put on disk
+// through its kill: unbindLaunchFiles leaves its three per-session files, and
+// unbindLaunchTelemetry its Codex hook folder. What the unbinds drop from this
+// run's memory still goes. describeLaunch says what the release records of
+// it, and removeKeptLaunchFiles removes what it left once it is no longer kept.
+//
 // What stays in pty-manager.ts, and why:
 //  - the per-session records and the helpers that keep them, which much of
 //    pty-manager.ts reads: it hands them over once, when it loads
@@ -32,6 +39,7 @@
 //    launch holds (mintCodexHooks and keepCodexHooks hand them back);
 //  - every comparison with a provider name: pty-manager.ts works each one out
 //    and hands the answer in (tests/unit/architecture/provider-name-ratchet.test.ts).
+import * as path from 'path'
 import { nativeTheme, type BrowserWindow } from 'electron'
 import type * as pty from 'node-pty'
 import type { ProviderId } from '../../shared/providers'
@@ -50,13 +58,15 @@ import { openNotIndexedWindow } from '../logging/indexing-gaps'
 import { getLogSupervisor } from '../logging/logging-service'
 import { getCodexLogBinder } from '../logging/codex-log-binder'
 import { buildResumeTranscriptPath } from '../spawn-claude-command'
-import { captureClaudeAccount, getAccountIdentity, pushAccountIdentity, startWatchingAccountIdentity } from '../claude-account-identity'
+import { captureClaudeAccount, getAccountIdentity, getClaudeProfileId, pushAccountIdentity, startWatchingAccountIdentity } from '../claude-account-identity'
 import { registerCodexReviewSession, registerClaudeReviewSession, unregisterCodexReviewSession, releaseMcpSessionProvider } from '../conductor-mcp-server'
 import { registerCanvasUatRoot, revokeCanvasUatRoots, designateCanvasWorktreeRoot, canvasRootRefusalReason, describeCanvasRootRefusal, setCanvasRootRefusal } from '../canvas/canvas-store'
 import { forgetCanvasMarkers } from '../canvas/canvas-marker-delivery'
 import type { CodexCanvasLaunch } from '../canvas/codex-canvas-launch'
 import { registerCodexCanvasRoots } from '../canvas/codex-canvas-roots'
 import { noteCodexSessionGuidance, forgetCodexSessionGuidance } from '../canvas/codex-guidance'
+import { tryGetProvider } from '../providers'
+import { launchKeptForUpdate, setKeptLaunchBindings, type KeptLaunch, type KeptLaunchFacts } from './kept-launches'
 
 /** A Codex launch's hook file: the file that hands its gateway token to the
  *  hook, with the way to remove it. */
@@ -81,9 +91,9 @@ export interface LaunchBindingPorts {
   indexedRuns: Map<string, { configId?: string; provider: ProviderId }>
   notIndexedSessions: Map<string, { since: number; provider: ProviderId }>
   codexContextRollouts: Map<string, { path: string; sessionsDir: string }>
-  keptCodexConversations: Pick<Map<string, unknown>, 'delete'>
+  keptCodexConversations: Pick<Map<string, { uuid: string }>, 'delete' | 'get'>
   lastCodexHookRollout: Pick<Map<string, unknown>, 'delete'>
-  claudeTranscripts: Pick<Map<string, unknown>, 'delete'>
+  claudeTranscripts: Pick<Map<string, string>, 'delete' | 'get'>
   claudeFolders: Pick<Map<string, unknown>, 'delete'>
   codexFolders: Pick<Map<string, unknown>, 'delete'>
   noteGatewayToken(sessionId: string, codex: boolean): void
@@ -612,11 +622,14 @@ export function bindLoggingRun(binding: LoggingRunBinding): LoggingRun {
 /** The session's own end (its exit, when no newer process has taken the
  *  session over, or a quit's kill: killAllPty and gracefulExitPty's forced
  *  kill, aicc_planning#385; a Codex launch's waits for its exit): its gateway
- *  token and its per-session files go. */
+ *  token and its per-session files go. A session an app update keeps running
+ *  keeps its files (S16 step 4): its CLI still reads them, and
+ *  removeKeptLaunchFiles removes them once it is not kept. */
 export function unbindLaunchFiles(sessionId: string): void {
   const { dropGatewayToken } = ports()
   // (P3.10 round 1, B1: with the record that a Codex launch minted it.)
   dropGatewayToken(sessionId)
+  if (launchKeptForUpdate(sessionId)) return
   removeLocalSessionSettings(sessionId)
   removeLocalSessionMcpConfig(sessionId)
   // ADR-009 token custody: the status-URL sidecar carries this session's MCP
@@ -638,9 +651,14 @@ export function unbindCodexLease(sessionId: string): void {
 
 /** Teardown, second part: the run's telemetry and conversation records, the
  *  Codex log binder's claim and the Codex launch's hooks. Each step does
- *  nothing when there is nothing to drop. */
+ *  nothing when there is nothing to drop. A session an app update keeps
+ *  running keeps its hook folder (S16 step 4): its CLI's hook reads the file
+ *  in it at every event, and removeKeptLaunchFiles removes it once it is not
+ *  kept. */
 export function unbindLaunchTelemetry(sessionId: string): void {
-  const { codexTelemetrySources, notIndexedSessions, claudeTranscripts, claudeFolders, codexFolders, endSessionNotIndexed, forgetCodexHooks } = ports()
+  const { codexTelemetrySources, codexHookFiles, notIndexedSessions, claudeTranscripts, claudeFolders, codexFolders, endSessionNotIndexed, forgetCodexHooks } = ports()
+  // Let go of here, so forgetCodexHooks below finds no file to remove.
+  if (launchKeptForUpdate(sessionId)) codexHookFiles.delete(sessionId)
   // Stop Codex telemetry source if one was registered for this session. On a
   // natural Codex exit (user typed exit/quit, Ctrl+D, crash) this is the ONLY
   // place that stops the 500ms full-file-read tail poller — killPty isn't hit
@@ -732,3 +750,44 @@ export function unbindLaunchRegistrations(sessionId: string): void {
   codexAskSessions.delete(sessionId)
   forgetCodexSessionGuidance(sessionId)
 }
+
+/** A conversation id as Claude Code and Codex make one (a UUID). */
+const CONVERSATION_ID_RE = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/
+
+/**
+ * What the release of a session an app update keeps running records of it
+ * (S16 step 4), read before its kill from what this run bound for it: the
+ * conversation it is on (a Codex session's claim, else the transcript a
+ * Claude Code session named, by its file name), the account (a Codex
+ * session's lease, else the profile a Claude Code session started under;
+ * null for the default account) and its Codex hook folder. Each is null when
+ * not known: a session that has not started a conversation yet has none.
+ */
+export function describeLaunch(sessionId: string): KeptLaunchFacts {
+  const { codexLaunchLeases, codexHookFiles, keptCodexConversations, claudeTranscripts } = ports()
+  const claim = keptCodexConversations.get(sessionId)?.uuid
+  const named = claudeTranscripts.get(sessionId)
+  const fromName = named ? /([^\\/]+)\.jsonl$/.exec(named)?.[1] : undefined
+  const conversation = [claim, fromName].find((id): id is string => typeof id === 'string' && CONVERSATION_ID_RE.test(id)) ?? null
+  const account = codexLaunchLeases.get(sessionId)?.accountId ?? getClaudeProfileId(sessionId) ?? null
+  const hookFile = codexHookFiles.get(sessionId)?.hookFile
+  return { conversation, account, hookFolder: hookFile ? path.dirname(hookFile) : null }
+}
+
+/**
+ * What a kept session left on disk, removed once it is no longer kept (S16
+ * step 4): the next start ended it, the update did not start, or a quit or a
+ * new start of its tab came first. Its three per-session files, as its exit
+ * would have removed them, and its hook folder, which its provider removes
+ * only from its own hook root.
+ */
+export function removeKeptLaunchFiles(kept: KeptLaunch): void {
+  removeLocalSessionSettings(kept.sessionId)
+  removeLocalSessionMcpConfig(kept.sessionId)
+  removeLocalSessionStatusUrl(kept.sessionId)
+  if (kept.hookFolder) {
+    try { tryGetProvider(kept.provider)?.removeSessionHookFolder?.(kept.hookFolder) } catch (err) { logWarn(`[pty] ${kept.sessionId}: the hook folder an update kept could not be removed: ${(err as Error)?.message ?? err}`) }
+  }
+}
+
+setKeptLaunchBindings({ describe: describeLaunch, remove: removeKeptLaunchFiles })

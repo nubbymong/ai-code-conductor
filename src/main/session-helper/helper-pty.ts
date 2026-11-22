@@ -432,10 +432,11 @@ export class HelperPty implements IPty {
    * An app update (Windows, plan section B2): let go of the holder without
    * ending it. The connection closes with no term.end, so the holder's away
    * clock starts (two minutes), and the new version's start shows the
-   * terminal again, as it does after a crash. Only a terminal through a
-   * holder that has been attached is let go of; any other (still starting,
-   * ending, over, or the usual way) answers false and is left to kill() as
-   * before.
+   * terminal again, as it does after a crash. An agent session's is let go
+   * of the same way (2.1.3-beta.14, S16 step 4), and the new version's start
+   * ends it, until a take-over exists. Only a terminal through a holder that
+   * has been attached is let go of; any other (still starting, ending, over,
+   * or the usual way) answers false and is left to kill() as before.
    */
   release(): boolean {
     if (this.inner || this.exited || this.ending || this.released || !this.record || !this.everAttached) return false

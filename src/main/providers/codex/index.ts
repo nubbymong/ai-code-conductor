@@ -13,7 +13,7 @@ import { detectCodexUi } from './ui-detection'
 import { watchAndClaimRollout } from './telemetry'
 import { warmCodexResume } from './rollout-lookup'
 import { deployCodexResumePickerScript } from './resume-picker'
-import { deployCodexHookScripts, writeCodexHookFile, removeCodexHookFile, prepareCodexHookFolders, preparedCodexHookRoot, codexPlainWrapperDir, codexLocalAppData, codexHookCommand } from './hooks'
+import { deployCodexHookScripts, writeCodexHookFile, removeCodexHookFile, removeKeptCodexHookFolder, prepareCodexHookFolders, preparedCodexHookRoot, codexPlainWrapperDir, codexLocalAppData, codexHookCommand } from './hooks'
 import type { SecureHookFolders } from './hooks'
 import { CODEX_PINNED_CLI_VERSION, CODEX_MIN_SUPPORTED_VERSION, CODEX_MAX_TESTED_VERSION } from './cli-contract'
 import { codexInstallRecipes } from './install-recipes'
@@ -267,8 +267,9 @@ export class CodexProvider implements SessionProvider {
    *  `secureFolders` (on Windows one PowerShell call). A no-op while they are
    *  still ready. Resolves whether the hook root is ready; says in the log
    *  when a preparation leaves Codex sessions, or the shim route, without
-   *  hooks. Never throws. */
-  async prepareHookFolders(resourcesDir: string, secureFolders: SecureHookFolders): Promise<boolean> {
+   *  hooks. Never throws. The sweep of left-behind hook folders passes by the
+   *  ones `kept` names (2.1.3-beta.14, S16 step 4). */
+  async prepareHookFolders(resourcesDir: string, secureFolders: SecureHookFolders, kept?: () => readonly string[]): Promise<boolean> {
     try {
       const dataDir = codexHookDataDir()
       if (!dataDir) {
@@ -282,7 +283,7 @@ export class CodexProvider implements SessionProvider {
         plainDir = codexPlainWrapperDir(codexLocalAppData(), resourcesDir)
         plainWordMissing = plainDir === null
       }
-      const out = await prepareCodexHookFolders({ dataDir, scriptsDir, plainDir }, secureFolders)
+      const out = await prepareCodexHookFolders({ dataDir, scriptsDir, plainDir }, secureFolders, kept)
       if (out.ran) {
         const why = out.detail.length ? ` (${out.detail.join('; ')})` : ''
         // Round 3 (F3): said, never silent, when Codex sessions will have no hooks.
@@ -337,6 +338,13 @@ export class CodexProvider implements SessionProvider {
         removeCodexHookFile(written)
       },
     }
+  }
+
+  /** 2.1.3-beta.14 (S16 step 4): the hook folder of a session an app update
+   *  kept running, removed once it is no longer kept, from this install's own
+   *  hook root only (hooks.ts removeKeptCodexHookFolder). */
+  removeSessionHookFolder(dir: string): void {
+    try { removeKeptCodexHookFolder(dir, codexHookDataDir()) } catch { /* best-effort; the sweep remains */ }
   }
 }
 
