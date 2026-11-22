@@ -346,25 +346,47 @@ export interface SessionProvider {
   configureMcpServer(serverConfig: { name: string; url: string }): Promise<void>
 }
 
+/** 2.1.3-beta.14 B2 (aicc_planning#388): one read of the screen a session
+ *  helper's holder keeps for a session (its `screen.read`): the size, the rows
+ *  from the top (every row, unless `cut`: then only the bottom ones), and the
+ *  window title the session's output last set ('' when it set none; null when
+ *  the connection did not ask for it). Untrusted text, read strictly by the
+ *  session helper's protocol reader before it gets here. */
+export interface HeldScreenRows {
+  cols: number
+  rows: number
+  cut: boolean
+  title: string | null
+  lines: ReadonlyArray<{ text: string; typed: string; inverse?: string; width?: number; end?: number }>
+}
+
 /** WP2 PR 4, P4.1: main's own pane of a session's run (bounded, headless, fed
  *  the run's output from its first byte) and the submit primitive, the one
  *  door through which main types a text into the session's composer. Every
- *  method is keyed by the app's session id; a respawn opens a new pane. */
+ *  method is keyed by the app's session id; a respawn opens a new pane.
+ *  2.1.3-beta.14 B2: a run its session helper holds is read from the
+ *  holder's screen instead, and has no pane (`held`). */
 export interface SessionRunScreen {
   /** Open the pane for a session's new run, replacing any earlier one.
    *  `write`: one raw write into that run's process. `current`: whether that
    *  process is still the session's. `clamp`: what every chunk goes through
    *  before the pane parses it (the Watchdog's CSI clamp), with the pane's
-   *  own state across chunks. */
-  open(sessionId: string, opts: { cols: number; rows: number; write: (data: string) => void; current: () => boolean; clamp: (data: string, state: { residual: string }) => string }): void
+   *  own state across chunks. `held` (B2): the run is a terminal a session
+   *  helper may hold, which is known only once its first byte comes. Asked
+   *  then: a read of the holder's screen, and no pane is opened; none (the
+   *  terminal started the usual way, or its holder reads no screen), the pane
+   *  is opened then, before that byte is fed. */
+  open(sessionId: string, opts: { cols: number; rows: number; write: (data: string) => void; current: () => boolean; clamp: (data: string, state: { residual: string }) => string; held?: () => (() => Promise<HeldScreenRows>) | undefined }): void
   /** The run's output, as its terminal receives it. */
   feed(sessionId: string, data: string): void
-  /** Keep the pane at the real pane's size. */
+  /** Keep the pane at the real pane's size (a holder keeps its own). */
   resize(sessionId: string, cols: number, rows: number): void
   /** The run ended or the session went: a submission still waiting reports
    *  the session gone and types nothing more. */
   close(sessionId: string): void
-  /** Whether main reads this session's screen now. */
+  /** Whether main reads this session's screen now: through its pane, through
+   *  its holder, or (a held run before its first byte) through whichever its
+   *  first byte decides. */
   has(sessionId: string): boolean
   /** Type `text` into the composer and submit it, confirmed on screen, after
    *  anything already in flight for the run; waits up to `readyWaitMs` for

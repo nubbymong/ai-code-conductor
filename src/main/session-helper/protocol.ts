@@ -35,7 +35,9 @@ export const SCREEN_CAP = 'screen'
 /** The screen's title in a screen read (section 15, from 2.1.3-beta.14): acked
  *  only beside `screen`, by a connection asked for it, and only when the
  *  holder offers it. A holder that does not know it does not offer it, and
- *  answers `screen.read` as before. Nothing in the app asks for it yet. */
+ *  answers `screen.read` as before. From 2.1.3-beta.14 (plan section B2) a
+ *  held agent session's connections ask for it beside `screen` when its
+ *  provider's composer rule reads the holder's screen. */
 export const TITLE_CAP = 'title'
 /** Terminal bytes travel on this channel both ways; control messages on 0. */
 export const TERMINAL_CHANNEL = 1

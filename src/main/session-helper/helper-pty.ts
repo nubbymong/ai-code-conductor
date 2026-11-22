@@ -77,7 +77,7 @@
 import type { IDisposable, IEvent, IPty } from 'node-pty'
 import { StringDecoder } from 'string_decoder'
 import type { HolderConnection } from './connection'
-import { LAUNCH_LIMITS, type HolderRecord, type LaunchSpec } from './protocol'
+import { LAUNCH_LIMITS, type HolderRecord, type LaunchSpec, type ScreenRows } from './protocol'
 import { stripSpoofableText } from '../../shared/safe-text'
 import { TERMINAL_SCROLLBACK_LINES } from '../../shared/terminal-scrollback'
 import { replayTail, rowsOf } from './replay-tail'
@@ -370,6 +370,23 @@ export class HelperPty implements IPty {
   get heldRecord(): HolderRecord | undefined { return this.inner ? undefined : this.record }
   /** True once release() let go of the holder for an app update. */
   get isReleased(): boolean { return this.released }
+  /**
+   * 2.1.3-beta.14 B2 (aicc_planning#388): the holder's screen read, while
+   * this terminal goes through a holder whose connection acked `screen`; each
+   * call reads on the connection in use then (an attach again's too), and
+   * rejects while there is none. Undefined on the usual way (fallBack) and on
+   * a holder without screen reads. A held agent session whose provider's
+   * composer rule reads the holder's screen is read through it, asked at
+   * its first byte (sessions/launch-bindings.ts).
+   */
+  get screenRead(): (() => Promise<ScreenRows>) | undefined {
+    if (this.inner || !this.conn?.screen) return undefined
+    return () => {
+      const conn = this.conn
+      if (this.inner || this.exited || !conn || conn.isClosed || !conn.screen) return Promise.reject(new Error('no connection reads its holder\'s screen now'))
+      return conn.readScreen()
+    }
+  }
 
   write(data: string | Buffer): void {
     if (this.exited) return

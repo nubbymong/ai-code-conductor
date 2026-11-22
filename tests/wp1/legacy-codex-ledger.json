@@ -1,8 +1,8 @@
 {
   "schema": "wp1-legacy-codex-ledger/2",
   "predicateDigest": "100a1233edebdc39a5f9004d3fba980a89ebb15b25872e52076386bc84b03153",
-  "manifestPathDigest": "30b70548ec49c503aa363457d84f4f6e137d3fd25f725310a1cd1d138b429d78",
-  "manifestHead": "18dd949fa8f51a6b6c38cfc62bd5cd3de65fb5dd",
+  "manifestPathDigest": "7faa975affabaa4260e2bd444da89d02673ca457726bd0770660393b96a8b794",
+  "manifestHead": "7c1d72b615cc4d3bcfcaa1a2181776cf39729258",
   "dispositions": {
     "retain": "unchanged observable behaviour, characterization proof",
     "move": "moved behind a package boundary and/or adapted at the call site, regression proof (newPath when relocated)",
@@ -7293,6 +7293,17 @@
       "note": ""
     },
     {
+      "path": "tests/unit/main/codex-held-screen.test.ts",
+      "predicates": [
+        "P01",
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "new 2.1.3-beta.14 section B2 test (tests/unit/main/codex-held-screen.test.ts, aicc_planning #388): every Codex recording in helper/fixtures/screens, as the holder answers it, gives the composer rule the same state as main's pane; a held run opens no pane and its reads are the holder's; with no holder read at its first byte the pane opens then and holds that byte; a failed or cut read is no reading and nothing is typed; a submission through the holder is confirmed on its screen, and its log line names where the rule read (WP1.68)",
+      "note": "created by 2.1.3-beta.14 section B2; headless terminals and fakes, nothing started"
+    },
+    {
       "path": "tests/unit/main/codex-history-copy-not-link.test.ts",
       "predicates": [
         "P01",
@@ -7858,6 +7869,16 @@
       "note": "created by WP2 (main refuses every launch of a provider that is off)"
     },
     {
+      "path": "tests/unit/main/launch-bindings-held-screen.test.ts",
+      "predicates": [
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "new 2.1.3-beta.14 section B2 test (tests/unit/main/launch-bindings-held-screen.test.ts, aicc_planning #388): bindCodexPane with the real HelperPty, connection and Codex run screen against the fake holder: a node-pty run keeps its pane at once; a held run whose connection acked screen and title opens no pane and reads the holder's screen.read; a holder with no screen reads, and a launch that falls back to a direct terminal, get the pane at the first byte; the colour answers stay main's (WP1.68)",
+      "note": "created by 2.1.3-beta.14 section B2; the fake holder in memory, nothing started"
+    },
+    {
       "path": "tests/unit/main/launch-bindings-launch.test.ts",
       "predicates": [
         "P04",
@@ -8407,6 +8428,16 @@
       "disposition": "added",
       "evidence": "new WP2 PR 4 owner answers review test (C-S1, C-Q1, C-Q2; row 36's clear): a Close sessions clear that cannot remove the saved file is kept across a restart in a marker beside the file, so the next start offers nothing and retries; a later save, or every copy removed, ends it; a marker that cannot be read counts as owed; a clear the read-failure latch refused is not retried and the next load still reads the file; the GitHub sidebar's reads answer nothing while a clear is owed and leave the latch alone (WP1.68); tests/unit/main/session-clear-owed-restart.test.ts; WP2 PR 4 follow-up (0683b134): the GitHub sidebar's session reads are pure reads for the save guard (never set or reset the read-failure latch; a failed read gives nothing and a sidebar save whose read fails writes nothing) (WP1.68); tests/unit/main/session-clear-owed-restart.test.ts; WP2 PR 4 re-review (5dc19c55, R-1, R-2): the marker keeps the time of the user's clear, and nothing that may hold a later save is removed (marker mtime fallback; when the marker or the file cannot be read, nothing removed and saves held) (WP1.68); tests/unit/main/session-clear-owed-restart.test.ts; WP2 PR 4 ADR-009 L4 (9a3a38ff): a marker dated in the future is dropped with nothing removed; a damaged file is moved aside while a clear is owed (WP1.68); tests/unit/main/session-clear-owed-restart.test.ts",
       "note": "created by the PR 4 owner answers review fix pass (FC, 9d606305); the P13 hits are the pty-manager stand-ins for main's Codex conversation records"
+    },
+    {
+      "path": "tests/unit/main/session-helper-agent-screen.test.ts",
+      "predicates": [
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "new 2.1.3-beta.14 section B2 test (tests/unit/main/session-helper-agent-screen.test.ts, aicc_planning #388): through the real manager against the fake helper, a held agent session of a provider in deps.screens acks screen and title and its terminal's screenRead is the holder's screen.read, on the connection in use after an attach again too; a Claude Code session, and a Codex one without deps.screens, ask for neither; a launch its holder refused has no read (WP1.68)",
+      "note": "created by 2.1.3-beta.14 section B2; the fake helper in memory, nothing started"
     },
     {
       "path": "tests/unit/main/session-helper-app-wiring.test.ts",
