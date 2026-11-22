@@ -85,16 +85,25 @@ export function ErrorLine({ children, testId }: { children: React.ReactNode; tes
 
 /** A small secondary button for row-level actions. Its label wraps inside
  *  its cell rather than run past it on a narrow card ("This is still my
- *  account" on a blocked row; #181). */
-export function RowButton({ children, onClick, disabled, testId, title }: { children: React.ReactNode; onClick: () => void; disabled?: boolean; testId?: string; title?: string }) {
+ *  account" on a blocked row; #181). `pressed` makes it a toggle (the
+ *  page's All / Active / Inactive filter, aicc_planning#381): aria-pressed,
+ *  and the chosen one tinted as the Default pill is. Left out, the button is
+ *  as it always was. Keyboard focus draws the strong ring, as every other
+ *  Settings control does (settings-select-focus.test.ts): the standard
+ *  .focus-ring is too faint on the light cards. */
+export function RowButton({ children, onClick, disabled, testId, title, pressed }: { children: React.ReactNode; onClick: () => void; disabled?: boolean; testId?: string; title?: string; pressed?: boolean }) {
+  const t = PILL_TOKEN.default
   return (
     <button
       type="button"
       onClick={onClick}
       disabled={disabled}
       title={title}
-      className="inline-flex items-center max-w-full rounded-[6px] border px-2 py-0.5 text-[11.5px] font-medium text-left focus-ring transition-colors disabled:opacity-40 disabled:cursor-not-allowed hover:bg-[var(--surface-overlay)]"
-      style={{ borderColor: 'var(--border-strong)', color: 'var(--text-secondary)' }}
+      aria-pressed={pressed}
+      className="inline-flex items-center max-w-full rounded-[6px] border px-2 py-0.5 text-[11.5px] font-medium text-left focus-ring-strong transition-colors disabled:opacity-40 disabled:cursor-not-allowed hover:bg-[var(--surface-overlay)]"
+      style={pressed
+        ? { borderColor: `color-mix(in srgb, ${t} 50%, transparent)`, color: t, background: `color-mix(in srgb, ${t} 10%, transparent)` }
+        : { borderColor: 'var(--border-strong)', color: 'var(--text-secondary)' }}
       data-testid={testId}
     >
       {children}

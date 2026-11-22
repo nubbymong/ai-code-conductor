@@ -8,9 +8,12 @@
 // holds the name and colour fields this row used to show inline; "N
 // running" counts its Claude sessions; a removal refused while sessions run
 // on it names them with Go to. With Claude Code off the accounts are listed
-// but not managed, as every provider's are.
+// but not managed, as every provider's are. aicc_planning#381: the rows keep
+// the order the accounts were added in (making one active or inactive never
+// moves it), and the page's All / Active / Inactive filter applies here too.
 import React, { useState, useEffect, useRef } from 'react'
-import { useAccountProfilesStore } from '../stores/accountProfilesStore'
+import { useAccountProfilesStore, profilesInAddedOrder } from '../stores/accountProfilesStore'
+import { useAccountsFilterStore, filterShows, filterEmptyText } from '../stores/accountsFilterStore'
 import { useSettingsStore } from '../stores/settingsStore'
 import { useSessionStore } from '../stores/sessionStore'
 import { middleTruncateEmail, canonicaliseEmail, resolveAccountColourKey } from '../../shared/account-chip-color'
@@ -294,6 +297,9 @@ export default function AccountsPanel({ onAdd }: AccountsPanelProps) {
   const snapshot = useProviderAccountsStore((s) => s.snapshot)
   const claudeOn = claudeCodeOn({ claudeEnabled }, snapshot)
   const primaryId = profiles.find((p) => p.isPrimary)?.id
+  const filter = useAccountsFilterStore((s) => s.filter)
+  const shown = profilesInAddedOrder(profiles).filter((p) => filterShows(filter, isAccountActive(p)))
+  const emptyText = shown.length === 0 ? filterEmptyText(filter) : null
 
   // On open, reconcile any "setup incomplete" account: the user's /login may have
   // finished after the live add-account poll's window, so re-read each empty
@@ -329,9 +335,10 @@ export default function AccountsPanel({ onAdd }: AccountsPanelProps) {
         <MutedLine testId="provider-off-note-claude">Turn Claude Code on to manage its accounts.</MutedLine>
       )}
       <div>
-        {profiles.map((profile) => (
+        {shown.map((profile) => (
           <ProfileRow key={profile.id} profile={profile} primaryId={primaryId} claudeOn={claudeOn} />
         ))}
+        {emptyText && <MutedLine testId="accounts-filter-empty-claude">{emptyText}</MutedLine>}
       </div>
 
       {/* Add an account. Windows-only: on macOS Claude Code keeps its

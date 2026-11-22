@@ -1,13 +1,17 @@
-// WP2 commit 6: Settings, Accounts (F4/F5). The Providers card, then each
-// provider's accounts: Claude's own profile list (AccountsPanel, with its
-// registry state added per row), then every provider whose accounts this
-// app manages. When the account registry is not ready, one callout says so
-// and everything that does not need it stays usable.
+// WP2 commit 6: Settings, Accounts (F4/F5). The All / Active / Inactive
+// filter (aicc_planning#381), the Providers card, then each provider's
+// accounts: Claude's own profile list (AccountsPanel, with its registry
+// state added per row), then every provider whose accounts this app
+// manages. Each list keeps the order its accounts were added in, and the
+// filter applies to all of them. When the account registry is not ready,
+// one callout says so and everything that does not need it stays usable.
 import React, { useState } from 'react'
 import type { AccountsSnapshot, IdentityConflictView } from '../../../../shared/providers'
 import type { IdentityColorKey } from '../../../../shared/identity-colors'
 import { resolveIdentityColor } from '../../../../shared/identity-colors'
-import { useProviderAccountsStore, providerAccountActions, providerView } from '../../../stores/providerAccountsStore'
+import { useProviderAccountsStore, providerAccountActions, providerView, managedListProviders } from '../../../stores/providerAccountsStore'
+import { useAccountProfilesStore } from '../../../stores/accountProfilesStore'
+import { useAccountsFilterStore, accountsFilterCounts, ACCOUNTS_FILTERS, ACCOUNTS_FILTER_LABEL } from '../../../stores/accountsFilterStore'
 import { useResolvedTheme } from '../../../hooks/useThemeController'
 import { DialogCallout } from '../../ui/Dialog'
 import AccountsPanel from '../../AccountsPanel'
@@ -55,17 +59,38 @@ function ConflictBanner({ conflict, snapshot }: { conflict: IdentityConflictView
   )
 }
 
+/** The page's quick filter: All, Active, Inactive, each with its count over
+ *  every list on the page. A group of toggle buttons (aria-pressed), each a
+ *  plain button, so Tab reaches them and Enter or Space picks one. */
+function AccountsFilterBar({ snapshot }: { snapshot: AccountsSnapshot | null }) {
+  const filter = useAccountsFilterStore((s) => s.filter)
+  const setFilter = useAccountsFilterStore((s) => s.setFilter)
+  const profiles = useAccountProfilesStore((s) => s.profiles)
+  const counts = accountsFilterCounts(profiles, snapshot)
+  return (
+    <div className="flex flex-wrap items-center gap-1.5" role="group" aria-labelledby="accounts-filter-label" data-testid="accounts-filter">
+      <span id="accounts-filter-label" className="text-[11.5px] mr-1" style={{ color: 'var(--text-muted)' }}>Show accounts</span>
+      {ACCOUNTS_FILTERS.map((f) => (
+        <RowButton key={f} pressed={filter === f} onClick={() => setFilter(f)} testId={`accounts-filter-${f}`}>
+          {`${ACCOUNTS_FILTER_LABEL[f]} (${counts[f]})`}
+        </RowButton>
+      ))}
+    </div>
+  )
+}
+
 export function AccountsSurface({ onAddClaudeAccount, children }: { onAddClaudeAccount: () => void | Promise<void>; children?: React.ReactNode }) {
   const snapshot = useProviderAccountsStore((s) => s.snapshot)
   const loaded = useProviderAccountsStore((s) => s.loaded)
   const ready = snapshot?.registry.mode === 'ready'
-  const managed = ready ? snapshot.providers.filter((p) => p.managedAccounts && p.providerId !== 'claude') : []
+  const managed = managedListProviders(snapshot)
   // P3.4 (row 14): while Claude Code is off its accounts do not work, so the
   // callout does not say they do.
   const claudeEnabled = useSettingsStore((s) => s.settings.claudeEnabled)
   const claudeOn = claudeCodeOn({ claudeEnabled }, snapshot)
   return (
     <>
+      <AccountsFilterBar snapshot={snapshot} />
       <ProvidersCard />
       {loaded && !ready && (
         <DialogCallout tone="warning" testId="accounts-registry-callout" role="status">
