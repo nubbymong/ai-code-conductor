@@ -33,8 +33,9 @@
  * held plain or partner terminal whose tab was saved, instead of ending it
  * (releaseForUpdate). Its holder's away clock starts, the running mark stays
  * (saying "update"), and the new version's start takes the crash path: the
- * restored tab shows the terminal again. Agent sessions still end at an
- * update, and macOS and Linux keep ending every one. A terminal kept for a
+ * restored tab shows the terminal again. Agent sessions still ended at an
+ * update then (see 2.1.3-beta.14 below), and macOS and Linux keep ending
+ * every one. A terminal kept for a
  * tab that no tab took over runs on through the update and is kept again,
  * unless the user discarded the saved sessions (section B3).
  *
@@ -71,6 +72,17 @@
  * the tab's id, for the launch that was switched, and only while the tool
  * host still has the session's record. A stream served on a connection that
  * attached again has one log line.
+ *
+ * 2.1.3-beta.14 (plan section A1, S16 step 4, aicc_planning#387 with #359):
+ * an app update on Windows, with the agent sessions' setting on, lets go of
+ * a held agent session of a saved tab too, with its CLI running, when its
+ * tool calls (and a Claude Code session's hook events) go through its holder,
+ * and records it for the next start; its kill keeps the files its launch
+ * wrote (releaseForUpdate). Until the take-over is built (step 5), the next
+ * start reads each record, logs what a take-over would bind, removes the
+ * record and those files, and ends the session as before (endKeptAtStart), so
+ * nothing a user sees changes. An update that does not start ends it at once
+ * (reclaim).
  */
 import { execFile } from 'child_process'
 import * as fs from 'fs'
@@ -107,6 +119,7 @@ import {
 import type { HelperHookTarget, HelperHooksResult } from '../hooks/session-hooks-writer'
 import type { HelperMcpConfigResult } from '../hooks/per-session-settings'
 import type { HeldToolLaunch, HeldToolLaunchAnswer, HeldToolRelay } from '../providers/types'
+import { describeKeptLaunch, removeKeptLaunch, setKeptLaunchCheck } from '../sessions/kept-launches'
 import { InstallError, bundledConptySource, checkedConpty, copyMatches, installHelperCopy, removeOldVersionFolders, sha256File, type InstalledHelper } from './install'
 
 export interface ExecResult {
@@ -221,6 +234,8 @@ export interface HelperToolLink {
 
 /** One tab's tool streams through its holder (toolRoute). */
 interface ToolRoute {
+  /** The CLI was pointed at its holder: its tool calls go through it. */
+  isOn(): boolean
   connected(conn: HolderConnection): void
   /** Its holder took the launch; its launch line is not typed yet. Claude
    *  Code: its config file is switched. Codex: a relay form sent counts. */
@@ -309,6 +324,8 @@ export interface HelperHookDeps {
 
 /** One Claude Code session's hooks through its holder (hookRoute). */
 interface HookRoute {
+  /** Its settings file was switched: its hook events go through its holder. */
+  isOn(): boolean
   launched(conn: HolderConnection): void
   event(e: HookEventFrame): void
   ended(): void
@@ -394,6 +411,83 @@ const INSTALL_RETRY_AFTER_MS = 60_000
 const EXIT_ALREADY_RUNNING = 3
 const MARKER = 'app-running.json'
 const BINDINGS = 'bindings.json'
+/** The folder of the records of agent sessions an update kept running (S16 step 4). */
+const KEPT = 'kept'
+
+/**
+ * What an app update's release records of an agent session it keeps running
+ * (2.1.3-beta.14, plan section A1, S16 step 4), for the next start: the
+ * holder's session id, the tab's app id and the provider (the three bound
+ * together: the provider's agent id for the tab is the session id), the
+ * conversation the session is on, the account it runs on (an opaque id; null
+ * for the provider's default account, or not known) and its Codex hook
+ * folder. A session with no conversation yet is recorded with none.
+ */
+export interface KeptRecord {
+  session: string
+  label: string
+  provider: ProviderId
+  conversation: string | null
+  account: string | null
+  hookFolder: string | null
+  at: number
+}
+
+const CONVERSATION_RE = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/
+const ACCOUNT_RE = /^[A-Za-z0-9._:@-]{1,128}$/
+const HOOK_FOLDER_MAX = 1024
+
+/** A kept record read strictly, from its file under the name `sid`: null
+ *  when its id, tab and provider are not one agent session of this app's. A
+ *  conversation, an account or a hook folder that does not read is none. */
+function keptRecordOf(v: unknown, sid: string): KeptRecord | null {
+  if (!v || typeof v !== 'object') return null
+  const r = v as Record<string, unknown>
+  if (r.v !== 1 || r.session !== sid || heldIdKind(sid) !== 'agent') return null
+  const label = r.label
+  if (typeof label !== 'string' || !APP_PTY_ID_RE.test(label)) return null
+  const provider = PROVIDER_IDS.find((p) => heldAgentSessionId(label, p) === sid)
+  if (provider === undefined || r.provider !== provider) return null
+  const text = (x: unknown, re: RegExp): string | null => (typeof x === 'string' && re.test(x) ? x : null)
+  const folder = r.hookFolder
+  const hookFolder = typeof folder === 'string' && folder.length <= HOOK_FOLDER_MAX && path.isAbsolute(folder) && !/[\x00-\x1f\x7f]/.test(folder) ? folder : null
+  return {
+    session: sid,
+    label,
+    provider,
+    conversation: text(r.conversation, CONVERSATION_RE),
+    account: text(r.account, ACCOUNT_RE),
+    hookFolder,
+    at: typeof r.at === 'number' && Number.isFinite(r.at) ? r.at : 0,
+  }
+}
+
+/** The kept records in the helper's folder, by session id; null for one that
+ *  does not read. No holder is asked. */
+function readKeptStore(root: string): Array<{ sid: string; record: KeptRecord | null }> {
+  const dir = path.join(root, KEPT)
+  let names: string[]
+  try {
+    names = fs.readdirSync(dir)
+  } catch {
+    return []
+  }
+  const out: Array<{ sid: string; record: KeptRecord | null }> = []
+  for (const name of names.sort()) {
+    const m = /^(.+)\.json$/.exec(name)
+    if (!m || !SID_RE.test(m[1])) continue
+    let record: KeptRecord | null = null
+    try { record = keptRecordOf(JSON.parse(fs.readFileSync(path.join(dir, name), 'utf8')), m[1]) } catch { /* below */ }
+    out.push({ sid: m[1], record })
+  }
+  return out
+}
+
+/** What a take-over would bind of a kept session, for its log lines: the
+ *  hook folder by its name alone. */
+function keptBindsText(r: KeptRecord): string {
+  return `conversation ${r.conversation ?? 'none'}, account ${r.account ?? 'default'}, hook folder ${r.hookFolder ? path.basename(r.hookFolder) : 'none'}`
+}
 
 /** The variables a helper command gets: what the system itself needs to run
  *  a program, nothing of the app's own. A launched terminal gets its full
@@ -445,8 +539,12 @@ export class SessionHelperManager implements MachinesSource {
   /** An app update let go of the held terminals (releaseForUpdate): nothing
    *  new is held until reclaim() says the update did not go ahead. */
   private updating = false
-  /** The terminals releaseForUpdate let go of, by session id. */
-  private readonly released = new Map<string, { record: HolderRecord; pty: HelperPty }>()
+  /** The terminals releaseForUpdate let go of, by session id. `kept`: an
+   *  agent session's, with what its release recorded (S16 step 4). */
+  private readonly released = new Map<string, { record: HolderRecord; pty: HelperPty; kept?: KeptRecord }>()
+  /** An agent session's routes, by its terminal: what an update asks before
+   *  it keeps one running (releaseForUpdate). */
+  private readonly agentRoutes = new WeakMap<HelperPty, { kind: ProviderId; tools: ToolRoute; hooks?: HookRoute }>()
   /** What reclaim() kept after an update that did not start, while no tab
    *  has taken it over again: its tab's terminal read as ended. */
   private readonly reclaimed = new Map<string, HolderRecord>()
@@ -536,12 +634,14 @@ export class SessionHelperManager implements MachinesSource {
   }
 
   /** True while a holder this agent session had may still run (one a crash
-   *  left, or this run's own, being ended or not ended): its next start waits
-   *  for that end, and starts nothing while it is not confirmed. */
+   *  left, this run's own, being ended or not ended, or one an update keeps
+   *  running): its next start waits for that end, and starts nothing while it
+   *  is not confirmed. */
   endingFor(ctx: AgentSpawnContext): boolean {
     if (!APP_PTY_ID_RE.test(ctx.sessionId)) return false
     const sid = heldAgentSessionId(ctx.sessionId, ctx.kind)
-    return this.endings.has(sid) || this.agentClears.has(sid) || this.agentsNotCleared.has(sid)
+    // One an update keeps running (S16 step 4) still runs its CLI too.
+    return this.endings.has(sid) || this.agentClears.has(sid) || this.agentsNotCleared.has(sid) || this.released.get(sid)?.kept !== undefined
   }
 
   /**
@@ -596,12 +696,18 @@ export class SessionHelperManager implements MachinesSource {
       this.deps.log(`[session-helper] the helper folder could not be prepared: ${message(err)}`)
     }
     this.afterCrash = crashed
+    // What the last run's update kept running (S16 step 4): read, logged and
+    // its files removed now, before any tab starts; the session is ended
+    // below with every other agent session in the store.
+    this.endKeptAtStart()
     if (crashed) {
       this.loadBindings()
       // Kept at once, before the copy and the listing: each record's own hello
       // proves its holder, and a slow listing cannot use up the two minutes.
       // An agent session is ended at once instead (plan s11, Q1): its hooks
       // and tools were this run's alone, so its tab resumes the conversation.
+      // One an update kept running is ended too, until a take-over exists
+      // (S16 step 5).
       let agents = 0
       for (const r of this.readStoreRecords()) {
         if (heldIdKind(r.session) === 'agent') { agents++; void this.clearAgent(r.session, r); continue }
@@ -886,6 +992,17 @@ export class SessionHelperManager implements MachinesSource {
   spawnAgent(ctx: AgentSpawnContext, file: string, args: SpawnArgs, opts: SpawnOptions): IPty {
     if (!APP_PTY_ID_RE.test(ctx.sessionId)) return this.deps.spawnDirect(file, args, opts)
     const sid = heldAgentSessionId(ctx.sessionId, ctx.kind)
+    // Its tab started again while an update keeps its session running (S16
+    // step 4): that session is no longer kept. Its record and what it left on
+    // disk go now, before this launch writes its own, and it is ended before
+    // this one starts (clearAgent): never two CLIs on one conversation.
+    const keptNow = this.released.get(sid)
+    if (keptNow?.kept) {
+      this.released.delete(sid)
+      this.forgetKept(keptNow.kept)
+      this.deps.log(`[session-helper] ${sid}: its tab started again during the update, so the session the update kept running is ended first`)
+      void this.clearAgent(sid, keptNow.record)
+    }
     const spec = this.agentSpec(file, args, opts)
     const usual = this.usualStart(file, args, opts, ctx.sessionId)
     // Set when the earlier holder could not be ended: then the usual way
@@ -933,6 +1050,7 @@ export class SessionHelperManager implements MachinesSource {
     const driver: HelperPtyDriver = { ...this.driver(direct, true, spec.conpty === 'bundled', cleared, hooks, tools), ...own }
     const wrapper = this.track(new HelperPty({ sid, label: ctx.sessionId, spec, driver, redraw: this.redrawFor(spec) }), ctx.sessionId)
     if (hooks) void wrapper.ended.then(() => hooks.ended())
+    if (tools) this.agentRoutes.set(wrapper, { kind: ctx.kind, tools, ...(hooks ? { hooks } : {}) })
     return wrapper
   }
 
@@ -981,6 +1099,7 @@ export class SessionHelperManager implements MachinesSource {
     let on = false
     let lastSeq = 0
     return {
+      isOn: () => on,
       launched: (conn) => {
         // Relies on the PTY manager having written the file already: it does,
         // with no await between the spawn call and the write (see above).
@@ -1069,6 +1188,7 @@ export class SessionHelperManager implements MachinesSource {
     /** The connections opened to this launch's holder: the first is the launch's. */
     let connections = 0
     const route: ToolRoute = {
+      isOn: () => on,
       connected: (conn) => {
         const again = connections++ > 0
         const links = new Map<number, StreamLink>()
@@ -1519,8 +1639,22 @@ export class SessionHelperManager implements MachinesSource {
    * update dialog (the renderer says so with the install call; app-wiring
    * passes it on), so then none is. Its holder's away clock starts (two
    * minutes) and the next start, finding the running mark, shows it again in
-   * its tab. An agent session, a terminal still starting and one whose tab was
-   * not saved are left to the kill that follows, which ends them as before.
+   * its tab. A terminal still starting and one whose tab was not saved are
+   * left to the kill that follows, which ends them as before.
+   *
+   * An agent session (2.1.3-beta.14, plan section A1, S16 step 4): with the
+   * agent sessions' setting on, one whose tab is saved the same way is let go
+   * of too, with its CLI running, when its tool calls go through its holder
+   * and, for a provider whose hook events can go through one (deps.hooks:
+   * Claude Code), its hook events too. Its release is recorded first, in the
+   * helper's folder (`kept/<session id>.json`): the provider, the conversation
+   * it is on, the account and its Codex hook folder (describeKeptLaunch), and
+   * its kill keeps what its launch put on disk (keepsLaunchOf). Until a
+   * take-over exists (S16 step 5) the next start reads the record, logs what a
+   * take-over would bind, removes the record and those files, and ends the
+   * session as before (endKeptAtStart). Any other agent session (one on the
+   * loopback route, a run of the app's own) is left to the kill.
+   *
    * A held terminal kept for a tab that no tab took over (one a crash left,
    * one Re-attach opened a tab for, one an earlier reclaim() kept) is not
    * reached by that kill. When `restorable` is a set (Save, even with no tab
@@ -1538,12 +1672,23 @@ export class SessionHelperManager implements MachinesSource {
     const saved = (tab: string) => restorable !== null && this.savedTabs.has(tab) && restorable.has(tab)
     let n = 0
     for (const [sid, w] of this.live) {
-      if (heldIdKind(sid) !== 'plain' || !w.throughHelper) continue
+      if (!w.throughHelper || w.isReleased) continue
+      const kind = heldIdKind(sid)
+      const keeps = kind === 'agent' ? this.keepable(w) : null
+      if (kind !== 'plain' && !keeps) continue
       const record = w.heldRecord
       const tab = parentOfPartnerPtyId(w.label) ?? w.label
       if (!record || !saved(tab)) continue
-      if (!w.release()) continue
-      this.released.set(sid, { record, pty: w })
+      // An agent session's record is written before it is let go of: one
+      // that cannot be recorded is left to the kill, which ends it.
+      const kept = keeps ? this.recordKept(sid, w.label, keeps.kind) : undefined
+      if (keeps && !kept) continue
+      if (!w.release()) {
+        if (kept) this.removeKeptRecord(sid)
+        continue
+      }
+      this.released.set(sid, kept ? { record, pty: w, kept } : { record, pty: w })
+      if (kept) this.deps.log(`[session-helper] ${sid}: an app update lets go of this ${kept.provider} session of tab ${kept.label} with its CLI running, and records it for the next start (${keptBindsText(kept)})`)
       n++
     }
     // Kept and no tab took it over (a crash's, Re-attach's or reclaim()'s):
@@ -1582,22 +1727,118 @@ export class SessionHelperManager implements MachinesSource {
     return this.updateEnds
   }
 
+  /** True while an app update keeps this tab's agent session running (S16
+   *  step 4): what its launch put on disk stays at its kill (kept-launches.ts,
+   *  read by launch-bindings.ts). */
+  keepsLaunchOf(appPtyId: string): boolean {
+    if (!this.updating) return false
+    for (const e of this.released.values()) if (e.kept?.label === appPtyId) return true
+    return false
+  }
+
+  /** The routes of an agent session an update may keep running: the agent
+   *  sessions' setting on, its tool calls through its holder, and its hook
+   *  events too when its provider's can go through one. Null otherwise. */
+  private keepable(w: HelperPty): { kind: ProviderId } | null {
+    if (!this.agentsOn) return null
+    const routes = this.agentRoutes.get(w)
+    if (!routes || !routes.tools.isOn()) return null
+    if (routes.hooks && !routes.hooks.isOn()) return null
+    return { kind: routes.kind }
+  }
+
+  /** Record the release of an agent session an update keeps running, in the
+   *  helper's folder. Undefined, with one log line, when it cannot be written. */
+  private recordKept(sid: string, label: string, provider: ProviderId): KeptRecord | undefined {
+    const record = keptRecordOf({ v: 1, session: sid, label, provider, ...describeKeptLaunch(label), at: this.deps.now() }, sid)
+    if (!record) {
+      this.deps.log(`[session-helper] ${sid}: the agent session could not be recorded, so it is ended at the update as before`)
+      return undefined
+    }
+    try {
+      const dir = path.join(this.root, KEPT)
+      fs.mkdirSync(dir, { recursive: true, mode: 0o700 })
+      fs.writeFileSync(path.join(dir, `${sid}.json`), JSON.stringify({ v: 1, ...record }), { mode: 0o600 })
+      return record
+    } catch (err) {
+      this.deps.log(`[session-helper] ${sid}: the agent session could not be recorded (${message(err)}), so it is ended at the update as before`)
+      this.removeKeptRecord(sid)
+      return undefined
+    }
+  }
+
+  private removeKeptRecord(sid: string): void {
+    try { fs.rmSync(path.join(this.root, KEPT, `${sid}.json`), { force: true }) } catch { /* the next start removes it */ }
+  }
+
+  /** An agent session an update kept running that is kept no longer: its
+   *  record, and what its launch left on disk (kept-launches.ts). */
+  private forgetKept(k: KeptRecord): void {
+    removeKeptLaunch({ sessionId: k.label, provider: k.provider, hookFolder: k.hookFolder })
+    this.removeKeptRecord(k.session)
+  }
+
+  /**
+   * At start (S16 step 4): the agent sessions the last run's update kept
+   * running, as its records name them. Until a take-over exists (S16 step
+   * 5), each is ended at this start as before, and its tab resumes its
+   * conversation in a new CLI: never two on one conversation. Each record is
+   * read and logged with what a take-over would bind; then the record and
+   * what the session left on disk go, now, before any tab can start its CLI
+   * again and write its own, whether or not its tab is restored. The session
+   * itself is ended with every other agent session the store holds
+   * (clearAgent, in start), which a tab of it waits for. A record that does
+   * not read is removed alone. Synchronous.
+   */
+  private endKeptAtStart(): void {
+    for (const { sid, record } of readKeptStore(this.root)) {
+      if (!record) {
+        this.deps.log(`[session-helper] ${sid}: a record of an agent session an update kept running did not read, and is removed`)
+        this.removeKeptRecord(sid)
+        continue
+      }
+      this.deps.log(`[session-helper] ${sid}: the last run's update kept this ${record.provider} session of tab ${record.label} running; a take-over would bind ${keptBindsText(record)}. Until the take-over exists it is ended, and its tab resumes the conversation as before`)
+      this.forgetKept(record)
+    }
+  }
+
+  /** Ends the holder of an agent session an update kept running, now (the
+   *  update did not start). A start of its tab meanwhile waits for it. */
+  private endKeptHolder(record: HolderRecord): void {
+    const sid = record.session
+    const done = this.endRecord(record).catch((err) => this.deps.log(`[session-helper] ${sid}: the agent session the update let go of could not be ended (${message(err)}); its tab's next start waits until it is gone`))
+    this.endings.set(sid, done)
+    void done.finally(() => { if (this.endings.get(sid) === done) this.endings.delete(sid) })
+  }
+
   /**
    * The update did not go ahead (its installer could not be started): what
    * releaseForUpdate let go of is kept for its tab, as after a crash, and
    * listed on the Machines page, where Re-attach opens a new Terminal only
    * tab on it (its own tab's terminal read as ended); its tab started again
    * takes it over too. A terminal of it not yet killed is ended here in this
-   * app alone; its holder runs on. The running mark is the usual one again,
-   * and new terminals go through the helper again. Answers how many are kept.
+   * app alone; its holder runs on. An agent session it let go of (S16 step 4)
+   * is never kept for a tab, nor listed: it is ended now, as the kill would
+   * have done, and its record and what its launch left on disk go. The
+   * running mark is the usual one again, and new terminals go through the
+   * helper again. Answers how many are kept.
    */
   reclaim(): number {
     if (!this.updating) return 0
     this.updating = false
-    const kept = [...this.released.values()]
+    const released = [...this.released.values()]
     this.released.clear()
-    for (const { record, pty: w } of kept) {
+    let kept = 0
+    let ended = 0
+    for (const { record, pty: w, kept: agent } of released) {
       try { w.kill() } catch { /* over already */ }
+      if (agent) {
+        this.forgetKept(agent)
+        this.endKeptHolder(record)
+        ended++
+        continue
+      }
+      kept++
       if (this.quitting) continue
       this.adoptable.set(record.session, record)
       this.reclaimed.set(record.session, record)
@@ -1608,9 +1849,9 @@ export class SessionHelperManager implements MachinesSource {
     } catch (err) {
       this.deps.log(`[session-helper] the running mark could not be written again: ${message(err)}`)
     }
-    this.deps.log(`[session-helper] the update did not start; ${kept.length} held terminal(s) are kept for their tabs`)
+    this.deps.log(`[session-helper] the update did not start; ${kept} held terminal(s) are kept for their tabs${ended > 0 ? `, and ${ended} agent session(s) it let go of are ended` : ''}`)
     this.changed()
-    return kept.length
+    return kept
   }
 
   /** The app's running mark: there while the app runs, gone after a normal quit. */
@@ -1648,7 +1889,11 @@ export class SessionHelperManager implements MachinesSource {
     }
     // Let go of for an update that this quit overtook: ended too (one that
     // does not answer ends by its away clock, and the next start ends it).
-    for (const { record } of this.released.values()) waits.push(this.endRecord(record).catch(() => { /* above */ }))
+    // An agent session's record and what its launch left on disk go with it.
+    for (const { record, kept } of this.released.values()) {
+      waits.push(this.endRecord(record).catch(() => { /* above */ }))
+      if (kept) this.forgetKept(kept)
+    }
     this.released.clear()
     this.reclaimed.clear()
     this.adoptable.clear()
@@ -1890,6 +2135,10 @@ export function setSessionHelper(manager: SessionHelperManager | null): void {
   current = manager
 }
 
+// A launch's bindings ask this run's manager whether an update keeps a tab's
+// session running (S16 step 4), through the seam that imports neither.
+setKeptLaunchCheck((appPtyId) => current?.keepsLaunchOf(appPtyId) === true)
+
 export function getSessionHelper(): SessionHelperManager | null {
   return current
 }
@@ -1959,9 +2208,33 @@ function markReason(marker: string): 'update' | null {
  * crashed). The next start makes the manager for it whatever the settings
  * say, so the tab, restored, waits for that holder's end before it starts its
  * CLI again. Read strictly, as the manager reads its store; no holder is asked.
+ * A record of one an update kept running (S16 step 4) counts too, read or
+ * not, so the start that ends it also removes what it left.
  */
 export function agentRecordsIn(root: string, platform?: NodeJS.Platform): boolean {
-  return readStore(path.join(root, 'store'), helperOs(platform)).some((r) => heldIdKind(r.session) === 'agent')
+  return readStore(path.join(root, 'store'), helperOs(platform)).some((r) => heldIdKind(r.session) === 'agent') || readKeptStore(root).length > 0
+}
+
+/**
+ * The tabs whose agent sessions the helper keeps for the next run (S16 step
+ * 4, aicc_planning#359): the app ids its records of sessions an update kept
+ * running name. The start-up sweeps of per-session files pass these by
+ * (index.ts). Until a take-over exists (step 5) the start that reads a record
+ * ends its session and removes the record with the session's files, before
+ * the sweeps run, so then none is left.
+ */
+export function keptSessionIdsIn(root: string): Set<string> {
+  const ids = new Set<string>()
+  for (const { record } of readKeptStore(root)) if (record) ids.add(record.label)
+  return ids
+}
+
+/** The Codex hook folders the same records name: the sweep of left-behind
+ *  hook folders passes these by, whatever their age (#359). */
+export function keptHookFoldersIn(root: string): string[] {
+  const out: string[] = []
+  for (const { record } of readKeptStore(root)) if (record?.hookFolder) out.push(record.hookFolder)
+  return out
 }
 
 /** The records in a store folder as written, read strictly; no holder is asked. */

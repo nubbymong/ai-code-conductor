@@ -277,7 +277,8 @@ describe('only the account sign-in folders have what is inside them read', () =>
       if (path.basename(f) !== 'account-profiles.ts') expect(src, f).not.toMatch(/secureSignInFoldersWindows/)
       expect(src, f).not.toMatch(/secureFoldersWindows\s*\(|secureFoldersNative\s*\(/)
     }
-    // The hook folders get the folders' own rule.
-    expect(code('src/main/index.ts')).toContain('getResourcesDirectory(), secureOwnerOnlyFolders)')
+    // The hook folders get the folders' own rule (and, from 2.1.3-beta.14, the
+    // folders the session helper keeps for a kept session, passed by its sweep).
+    expect(code('src/main/index.ts')).toContain('getResourcesDirectory(), secureOwnerOnlyFolders, sessionHelperKeptHookFolders)')
   })
 })

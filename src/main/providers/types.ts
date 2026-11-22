@@ -298,8 +298,19 @@ export interface SessionProvider {
    *  `secureFolders`, the app's owner-only folder rule (given folders in
    *  order, it makes each this user's alone and reads it back; on Windows in
    *  one PowerShell call). A no-op while they are still ready. Resolves
-   *  whether the launch's hook folder is ready. Never throws. */
-  prepareHookFolders?(resourcesDir: string, secureFolders: (dirs: readonly string[]) => Promise<ReadonlyArray<{ dir: string; ok: boolean; detail?: string }>>): Promise<boolean>
+   *  whether the launch's hook folder is ready. Never throws. `kept`
+   *  (2.1.3-beta.14, S16 step 4, aicc_planning#359): the per-launch hook
+   *  folders the session helper's records of the sessions an app update kept
+   *  running name, asked when left-behind folders are swept; the sweep passes
+   *  those by, whatever their age. */
+  prepareHookFolders?(resourcesDir: string, secureFolders: (dirs: readonly string[]) => Promise<ReadonlyArray<{ dir: string; ok: boolean; detail?: string }>>, kept?: () => readonly string[]): Promise<boolean>
+  /** Optional -- Codex (2.1.3-beta.14, S16 step 4): remove the per-launch
+   *  hook folder of a session an app update kept running, once that session
+   *  is no longer kept. Only a per-launch folder of this install's own hook
+   *  root, emptied of what the app put there and removed as the sweep of
+   *  left-behind folders removes one; any other path is left as it is. Never
+   *  throws. */
+  removeSessionHookFolder?(dir: string): void
   /** Optional -- Codex (2.1.3-beta.5): on macOS and Linux a launch that opens
    *  the resume list runs it on the node the user's login shell names. This
    *  asks that shell once, off the event loop, and keeps the answer for the

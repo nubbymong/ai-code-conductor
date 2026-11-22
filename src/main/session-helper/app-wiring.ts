@@ -17,7 +17,7 @@ import { getConductorMcpPort, serveToolStream } from '../conductor-mcp-server'
 import { tryGetProvider } from '../providers'
 import type { ProviderId } from '../../shared/providers/ids'
 import { bundledHelperPath, helperRootDir } from './install'
-import { SessionHelperManager, agentRecordsIn, crashMarkIn, getSessionHelper, setSessionHelper, type HelperHookDeps, type HelperRouting, type HelperToolDeps, type SessionHelperServiceState } from './manager'
+import { SessionHelperManager, agentRecordsIn, crashMarkIn, getSessionHelper, keptHookFoldersIn, keptSessionIdsIn, setSessionHelper, type HelperHookDeps, type HelperRouting, type HelperToolDeps, type SessionHelperServiceState } from './manager'
 
 /** The settings (Settings, General, Terminal): each off unless saved as true. */
 export const PLAIN_TERMINALS_SETTING = 'plainTerminalsThroughHelper'
@@ -138,7 +138,10 @@ export function noteSessionHelperTabs(state: { sessions?: ReadonlyArray<{ id: st
 /**
  * An app update on Windows, just before every PTY is killed (update-handlers.ts):
  * the held plain and partner terminals whose tabs the next start restores are
- * let go of instead of ended, for the new version to show again. Those tabs
+ * let go of instead of ended, for the new version to show again, and so is a
+ * held agent session whose tools go through its holder, recorded for the next
+ * start, which still ends it until a take-over exists (2.1.3-beta.14, S16
+ * step 4: the manager's releaseForUpdate). Those tabs
  * are read from the saved file itself, because "Close without saving" clears
  * it without a save the manager hears of; a cleared file, or one that cannot
  * be read, lets go of nothing (those tabs end as before).
@@ -184,9 +187,35 @@ function savedTabIds(): Set<string> {
 export const UPDATE_END_WAIT_MS = 1500
 
 /** The update's installer could not be started: what was let go of is kept
- *  for its tab, and listed on the Machines page. */
+ *  for its tab, and listed on the Machines page; an agent session let go of
+ *  is ended, and what it left goes. */
 export function reclaimReleasedTerminals(): void {
   getSessionHelper()?.reclaim()
+}
+
+/**
+ * The tabs whose per-session files the start-up sweeps leave (index.ts;
+ * 2.1.3-beta.14, S16 step 4, aicc_planning#359): those of the agent sessions
+ * the helper keeps for the next run, by its records of sessions an update
+ * kept running. Read from the helper's folder, so it answers with the helper
+ * off too.
+ */
+export function sessionHelperKeptIds(): Set<string> {
+  try {
+    return keptSessionIdsIn(rootDir())
+  } catch {
+    return new Set()
+  }
+}
+
+/** The Codex hook folders the same records name, for the sweep of left-behind
+ *  hook folders to pass by (index.ts, the Codex hook preparation). */
+export function sessionHelperKeptHookFolders(): string[] {
+  try {
+    return keptHookFoldersIn(rootDir())
+  } catch {
+    return []
+  }
 }
 
 /** How long a quit waits for the holders to say they ended. */
