@@ -2342,7 +2342,8 @@ describe('the 2.1.3-beta.9 sweep', () => {
 
   it('troubleshooting says a terminal whose program ended by itself has its console host ended while the app runs (aicc_planning#363)', () => {
     const t = body('troubleshooting')
-    expect(t).toContain("While the app runs, when a terminal's program ends by itself and its tab stays open (exit typed in a Terminal only tab, or Claude Code quit from inside), the app ends that terminal's console host too, once the program has ended and no sooner than about 6 seconds after the terminal started; a terminal whose program still runs keeps its console host.")
+    expect(t).toContain("While the app runs, when the program of a terminal on this computer ends by itself and its tab stays open (exit typed in a Terminal only tab, or Claude Code quit from inside), the app ends that terminal's console host too, once the program has ended and no sooner than about 6 seconds after the terminal started; a terminal whose program still runs keeps its console host.")
+    expect(t).toContain("This does not yet cover an SSH tab's terminal or the first-run setup terminal: their console host stays until you quit the app.")
   })
 
   it('the release notes carry the series warning, the two minutes, the way back and every change line', () => {

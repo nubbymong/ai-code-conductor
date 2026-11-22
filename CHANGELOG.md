@@ -16,7 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - On Windows, choosing Save sessions at an update keeps the terminals the session helper holds running only if the new version opens within two minutes of the old one closing. The installer's pages count toward those two minutes, so finish the installer promptly.
 - To go back to 2.1.3-beta.13, download its installer from the GitHub releases page and run it over this version.
 
-> On Windows, a terminal whose program ends by itself no longer leaves its console host running until you quit, and quitting with Close sessions no longer leaves a settings-<id>.json file in your .claude folder. The Codex model picker now lists the models your installed Codex offers. With Claude Code and Codex sessions through the session helper on, a held Claude Code session sends every hook event through the helper, and the app reads a held Codex session's screen from the helper before it types into Codex.
+> On Windows, a terminal on this computer whose program ends by itself no longer leaves its console host running until you quit, and quitting with Close sessions no longer leaves a settings-<id>.json file in your .claude folder. The Codex model picker now lists the models your installed Codex offers. With Claude Code and Codex sessions through the session helper on, a held Claude Code session sends every hook event through the helper, and the app reads a held Codex session's screen from the helper before it types into Codex.
 
 ### Changed
 - The Codex model picker now lists the models your installed Codex offers, each with its own effort levels, so a model a new Codex adds shows up without an app update.
@@ -24,7 +24,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - With Claude Code and Codex sessions through the session helper on, the app now reads a held Codex session's screen from the session helper before it types into Codex (canvas notes, Ask Conductor questions, prompt buttons and the Watchdog's retry). It no longer keeps a second copy of that screen.
 
 ### Fixed
-- On Windows, when a terminal's program ends by itself, the app now ends that terminal's leftover console host instead of leaving it running until you quit, including when several terminals end close together.
+- On Windows, when the program of a terminal on this computer ends by itself (not a tab over SSH), the app now ends that terminal's leftover console host instead of leaving it running until you quit, including when several terminals end close together.
 - Quitting with Close sessions no longer leaves a settings-<id>.json file in your .claude folder. The next start also removes the ones earlier versions left, where the file runs the app's status line for that session; any other file is left in place.
 
 ## [2.1.3-beta.13] - 2026-11-22

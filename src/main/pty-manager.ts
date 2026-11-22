@@ -7668,7 +7668,7 @@ export function killAllPty(): void {
   const ids = new Set<string>([...ptySessions.keys(), ...refreshWaitSpawns.keys()])
   logInfo(`[pty] Killing all PTYs (${ptySessions.size} active, ${refreshWaitSpawns.size} parked on a refresh wait)`)
   // The app often exits before node-pty reports these ends, so each session's own files go now, not at its exit
-  // (aicc_planning#385; the exit's removal finds none). A Codex launch's record stays until its exit (P3.10 B1, R8).
+  // (aicc_planning#385), bar a session an update keeps (S16 step 4). A Codex launch's record stays until its exit (P3.10 B1, R8).
   for (const id of ids) { killPty(id); if (!codexGatewayTokens.has(id)) unbindLaunchFiles(id) }
 }
 

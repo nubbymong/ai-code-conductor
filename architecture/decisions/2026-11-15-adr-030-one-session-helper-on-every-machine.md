@@ -437,7 +437,7 @@ macOS, a password host, a home mounted `noexec`. Rocky Linux 10: not run. Its on
 limited to 8 s, failed at the address on file and the probe recorded "host off", a label it
 also gave a refused connection and a name that does not resolve, so whether the host was
 off is not known; owed to beta.14, where the same probe runs on it. Rocky Linux 10: not
-run; its one 8 s connect failed on 2026-11-22 (the probe's label); owed to beta.15. Three
+run; its one 8 s connect failed on 2026-11-22 (host off); owed to beta.15. Three
 things in the probe changed after the 2026-11-21 run, none in what it measures: a refused
 connection and an unknown name have labels of their own, a host name with a colon is not run, and a host without pgrep is
 reported as not left as found. The host that answered was left as found: every holder ended, the probe's temporary folder

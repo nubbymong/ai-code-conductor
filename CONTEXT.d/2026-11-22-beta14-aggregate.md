@@ -2,10 +2,10 @@
 
 **One PR for the beta.** The reviewed sections of 2.1.3-beta.14 were merged at
 their frozen heads with real merge commits onto one branch from beta (#756),
-one push per join, in the order C2, C3, C4, B1, A1, C6, B2, C9, C5. The
-version bump, the changelog entry and the release surface sweep are the
-branch's last commit, so no second release PR is opened (plan rule 11). C8 is
-held out (below).
+in the order C2, C3, C4, B1, A1 (the opening push), C6 and B2 (one push),
+then C9 and C5 (one push each). The version bump, the changelog entry and
+the release surface sweep are the branch's last commit, so no second release
+PR is opened (plan rule 11). C8 is held out (below).
 
 **Conflicts, each resolved by keeping both sides.**
 - `src/main/sessions/launch-bindings.ts` (A1 after C3): the comment above
