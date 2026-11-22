@@ -225,3 +225,113 @@ reads joins the second) and each offset counted over that text. The Windows ones
 are the test machine's, the others GitHub's runners'. Which ones were kept is
 the plan's order of keeping, listed in the test with what was left out. The
 answer is in ADR-030 after the P19 result ("P19, second run").
+
+# Probe P20: what do Claude Code and Codex do once the app run that started them is gone?
+
+`p20-probe.cjs` (ADR-030, probe table; it gates S16's second half, steps 2, 4
+and 6). Three questions, each the CLI's own behaviour, not the app's:
+
+- **(a) A hook endpoint that is gone.** Claude Code's http PreToolUse hook (the
+  entry `buildHooksBlock` writes) and Codex's hook forwarder
+  (`scripts/ccc-codex-hook.cmd` and `.js`, given by `-c` as the app gives it)
+  against an endpoint that refuses the connection, answers 401, answers 404
+  (what the hooks gateway answers a session it does not know) or never
+  answers, beside a control that answers 200 `{}`.
+- **(b) Files read again.** Whether Claude Code reads its `--settings` hooks
+  again (the PreToolUse URL changed in the file between two turns) or its
+  `--mcp-config` again (its tool server ended, the file now names another,
+  then `/mcp` and Reconnect).
+- **(c) The tool list.** Whether each CLI sends `tools/list` again after
+  `notifications/tools/list_changed`, and names the added tool in its next
+  turn.
+
+Each CLI runs on node-pty (on Windows on node-pty's bundled ConPTY), in a fresh
+environment with every per-user folder in the probe's own temporary folder, no
+account and no key of anyone's. `p20-model-stand-in.cjs`, served from the probe
+on a loopback port, answers a turn with a tool call that reads a file in the
+run's folder (Claude Code's Read; Codex's shell tool, with approvals off in its
+own config), so a hook runs before a real tool. `p20-tool-server.cjs` is the
+stand-in `conductor` tool server; it declares `listChanged`, as the app's tool
+host does, and adds a tool when the probe asks. Run it on the Windows test
+machine from a checkout of the repository (its node_modules give node-pty and
+@xterm/headless at the versions package.json names; it refuses any other):
+
+```powershell
+node p20-probe.cjs run --root <checkout> --out <folder> --forwarder <checkout>\scripts --claude <path to claude.exe> --codex <path to codex.exe>
+```
+
+`--only` takes case names or prefixes (`claude-a`, `codex-c`, `claude-b-mcp`),
+`--runs` the runs per case (3 for a verdict) and `--cap-s` how long a turn may
+wait on an endpoint that never answers (720). The runs of one case run side by
+side; the cases one after the other. A CLI's (a) lines are checked against its
+control only when `<cli>-a-ok` is among the cases run: `--only` without it
+prints them with no control, and they are then not plan verdicts. The decision
+lines are in the script's header and were fixed before measuring. It cleans
+up after each case and at
+its end: a process counts as its own only when it started after its parent,
+and each is stopped only after its name and start time are checked. The last
+lines are `P20 (a)`, `P20 (b)`, `P20 (c)` and `P20 RESULT: ...`, or
+`P20 RESULT: COULD NOT RUN - <reason>`, with `; clean-up incomplete: <what>`
+added (and exit 2) when something was left. The record is `p20-result.json`,
+with personal paths written as placeholders and the probe code named by the
+sha256 of its three files. The answer is in ADR-030 after the P19 results.
+
+# Probes P3 and P6: does a holder outlive the ssh logout, and is an exec's PATH the login PATH?
+
+`p3-p6-linux.cjs` (ADR-030, probe table; P3 gates remote sessions through the
+helper, P6 one-shot commands only). It runs on the test PC against remote Linux
+hosts, and the only programs it starts are ssh and scp. It needs the static
+Linux helper: the `helper-linux-musl` artifact of the `Helper (ubuntu-latest)`
+CI job, which a dispatch with `helper` set builds on any pushed branch.
+
+```text
+node helper/probes/p3-p6-linux.cjs --hosts <hosts.local.json> --helper <folder>/aicc-helper --out <folder>
+```
+
+The hosts are the `linuxKey` and `linuxRockyKey` slots of
+`tests/live/hosts.local.json`, read by name inside the script. Of each slot only
+the host and the user are read; sign-in is by key only (BatchMode), and the
+console shows only the host and the user. A host that does not answer one 8 s
+connect is NOT RUN (host off). A refused connection or a name that does not
+resolve: NOT RUN, with which. On each host the probe makes a temporary folder,
+copies the helper there and checks its SHA-256, then:
+
+- **P3.** Six ssh sessions, each starting a holder with `hold --detach` and
+  logging out as its command ends: three with a terminal (`ssh -tt`, the way a
+  session's terminal starts it) and three without (`ssh -T`, an exec). 10 s and
+  60 s after the last logout, a new connection checks each holder by its pid
+  and its own command line. It records each holder's cgroup, logind's
+  KillUserProcesses and KillExcludeUsers, and the user's Linger.
+- **P6.** One exec reads its own PATH, then the PATH of the user's login shell
+  started from it with `-l` (the probe's reading of D8's "through the host's
+  login shell"; D8 does not say whether that shell is interactive) and with
+  `-il` (recorded only), and what `command -v` finds for claude, codex and
+  node in each.
+
+Then it ends each holder (only a process with its own command line), deletes
+what it made one name at a time (no recursive delete), and checks that nothing
+is left. It removes `/tmp/aicc-<uid>` only if that folder was not there before.
+
+Decision lines (written before measuring):
+
+- **P3 HOLDS** on a host when the holder is alive 60 s after the logout that
+  started it in 3 of 3 runs of each form. **DOES NOT HOLD** when a holder is
+  gone at 60 s in any run. **CANNOT MEASURE** when a form has fewer than 3
+  runs whose holder started, or a check could not be read. Fallback (ADR-030):
+  that host kind is labelled "no re-attach" and resumes by conversation id.
+- **P6 SAME** on a host when the exec's PATH and the login shell's PATH hold
+  the same entries in the same order once repeats are dropped, and claude,
+  codex and node each resolve to the same file (or to none) in both.
+  **DIFFERS** otherwise, with what differs. Fallback (ADR-030): CLI paths come
+  from a login-shell lookup in the probe report.
+
+The record is `p3-p6-result.json` in the output folder, with the home folder
+written as `~` and the user name as `<user>`. Exit 0: every host was measured
+or not run; 1: a host was not left as found; 2: the probe could not run. The
+answers are in ADR-030 after the P12 result ("P3 and P6 result", 2026-11-21):
+P3 HOLDS on the Linux host with key sign-in (a host with logind
+cleanup on was not measured). P6 is SAME there on the line above, which compares the
+exec with `-l`; `claude` was found only by `-il`, so against the user's interactive
+login shell, the comparison ADR-029's P6 names, that host differs and the P6 fallback
+applies on it. The Rocky Linux 10 host was NOT RUN (its one connect failed; recorded as
+host off); the same command runs on it in beta.14.

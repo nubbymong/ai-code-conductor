@@ -103,7 +103,7 @@ const ceilings = JSON.parse(readFileSync(resolve(ROOT, ...CEILINGS_FILE.split('/
 const CEILING: Readonly<Record<string, Counts>> = ceilings.files
 /** The sums as they stand, stated here as well so that a change to the
  *  ceilings file is a change to this test too. */
-const TOTAL: Counts = { comparisons: 76, rederivations: 33 }
+const TOTAL: Counts = { comparisons: 74, rederivations: 32 }
 
 const NAMES = PROVIDER_IDS.join('|')
 const IDENT = `[A-Za-z_$][\\w$]*`

@@ -6,7 +6,8 @@ import { resolve } from 'path'
 import yaml from 'js-yaml'
 import { evalIf } from '../../helpers/gha-expr'
 // Plain ESM with main() behind an argv[1] check: importing it runs nothing.
-import { RADIUS_FILES, PTY_MANAGER, PTY_MANAGER_LINE_CAP, OVERRIDE_LABEL, countLines, buildReport, renderSummary, main } from '../../../scripts/ci/pr-numbers.mjs'
+import * as prNumbers from '../../../scripts/ci/pr-numbers.mjs'
+import { PTY_MANAGER, PTY_MANAGER_LINE_CAP, OVERRIDE_LABEL, countLines, buildReport, renderSummary, main } from '../../../scripts/ci/pr-numbers.mjs'
 
 const ROOT = resolve(__dirname, '../../..')
 const read = (p: string) => readFileSync(resolve(ROOT, p), 'utf-8').replace(/\r\n/g, '\n')
@@ -15,30 +16,26 @@ const CAP = PTY_MANAGER_LINE_CAP
 const report = (over: Partial<Parameters<typeof buildReport>[0]> = {}) =>
   buildReport({ paths: ['src/renderer/App.tsx'], ptyLines: CAP, baseLines: CAP, labels: [], ...over })
 
-describe('pr-numbers: the radius list is the one in AGENTS.md', () => {
-  /** The backtick paths of the "Touching any of the blast radius" sentence. */
-  function agentsRadius(): string[] {
-    const para = read('AGENTS.md')
-      .split('\n')
-      .find((l) => l.startsWith('- **SSH statusline changes need the live SSH matrix before merge**'))
-    if (!para) throw new Error('the SSH live-matrix paragraph is gone from AGENTS.md')
-    const from = para.indexOf('Touching any of the blast radius')
-    const to = para.indexOf('? Run ', from)
-    if (from < 0 || to < 0) throw new Error('the blast-radius sentence changed shape in AGENTS.md')
-    return [...para.slice(from, to).matchAll(/`([^`]+)`/g)].map((m) => m[1])
-  }
-
-  it('is the same nine files, in no particular order', () => {
-    const doc = agentsRadius()
-    expect(doc.length).toBe(9)
-    expect([...RADIUS_FILES].sort()).toEqual([...doc].sort())
+// The live SSH matrix is retired (owner, 2026-11-22). AGENTS.md says so in one
+// line, and the job no longer reports a blast radius or a matrix owed.
+// Not checked: the other docs that once named the matrix (the adversarial
+// review skill, CONTRIBUTING.md), and the tests/live files, which stay.
+describe('pr-numbers: the live SSH matrix is retired', () => {
+  it('AGENTS.md carries the retirement line and no longer the gate', () => {
+    const agents = read('AGENTS.md')
+    expect(agents).toContain('The live SSH matrix (tests/live/ssh-statusline-*) is retired (owner, 2026-11-22).')
+    expect(agents).not.toContain('SSH statusline changes need the live SSH matrix before merge')
+    expect(agents).not.toContain('npm run test:live:ssh')
   })
 
-  it('every file in it exists, and pty-manager is the one with a cap', () => {
-    for (const f of RADIUS_FILES) expect(() => readFileSync(resolve(ROOT, f)), f).not.toThrow()
+  it('the job reports no blast radius and no matrix, and pty-manager.ts is the one file with a cap', () => {
+    expect('RADIUS_FILES' in prNumbers).toBe(false)
     expect(PTY_MANAGER).toBe('src/main/pty-manager.ts')
-    expect(RADIUS_FILES).toContain(PTY_MANAGER)
-    expect(new Set(RADIUS_FILES).size).toBe(RADIUS_FILES.length)
+    expect(() => readFileSync(resolve(ROOT, PTY_MANAGER))).not.toThrow()
+    for (const paths of [['src/main/ssh-tmux.ts'], [PTY_MANAGER, 'src/main/ansi-strip.ts'], null]) {
+      const text = renderSummary(report({ paths }))
+      expect(text, String(paths)).not.toMatch(/blast radius|SSH matrix|test:live/i)
+    }
   })
 })
 
@@ -73,73 +70,21 @@ describe('pr-numbers: countLines counts as wc -l does, plus an unterminated last
 })
 
 describe('pr-numbers: the table over fixed path lists', () => {
-  it('a renderer-only PR: radius not touched, matrix not owed, no failure', () => {
+  it('a renderer-only PR: the length and the cap, no failure', () => {
     const r = report({ paths: ['src/renderer/components/Foo.tsx', 'tests/unit/foo.test.ts'] })
-    expect(r.touchesRadius).toBe(false)
-    expect(r.hits).toEqual([])
-    expect(r.matrixOwed).toBe(false)
+    expect(r.ptyTouched).toBe(false)
     expect(r.failed).toBe(false)
     const text = renderSummary(r)
-    expect(text).toContain('| Touches the SSH blast radius | no (0 of 9) |')
-    expect(text).toContain('| Live SSH matrix | not owed |')
-    expect(text).toContain('**live SSH matrix: not owed**')
-    expect(text).not.toContain('live SSH matrix: owed')
     expect(text).toContain(`| \`src/main/pty-manager.ts\` length | ${CAP} lines, cap ${CAP}, +0 against the base (${CAP}) |`)
     expect(text).toContain('| Cap | at the cap |')
+    expect(text).not.toContain('Could not read the changed paths')
   })
 
-  it('a PR that adds one line to ssh-tmux.ts: radius touched (1 of 9), matrix owed, still no failure', () => {
+  it('a PR that touches an SSH file but not pty-manager.ts: no failure, and the same two rows', () => {
     const r = report({ paths: ['src/main/ssh-tmux.ts', 'tests/unit/ssh-tmux.test.ts'] })
-    expect(r.touchesRadius).toBe(true)
-    expect(r.hits).toEqual(['src/main/ssh-tmux.ts'])
-    expect(r.matrixOwed).toBe(true)
+    expect(r.ptyTouched).toBe(false)
     expect(r.failed).toBe(false)
-    const text = renderSummary(r)
-    expect(text).toContain('| Touches the SSH blast radius | yes, 1 of 9: `src/main/ssh-tmux.ts` |')
-    expect(text).toContain('| Live SSH matrix | owed |')
-    expect(text).toContain('**live SSH matrix: owed**')
-    expect(text).toContain('npm run test:live:ssh')
-  })
-
-  it('each of the seven other files, on its own, makes the matrix owed; pty-manager.ts alone makes it "check"; a look-alike path does not', () => {
-    for (const f of RADIUS_FILES) {
-      const r = report({ paths: [f] })
-      expect(r.hits, f).toEqual([f])
-      if (f === PTY_MANAGER) {
-        expect(r.matrixState, f).toBe('check')
-        expect(r.matrixOwed, f).toBe(false)
-      } else {
-        expect(r.matrixState, f).toBe('owed')
-        expect(r.matrixOwed, f).toBe(true)
-      }
-    }
-    for (const p of ['src/main/ssh-tmux.ts.orig', 'src/main/ssh-tmux-other.ts', 'src/renderer/ssh-tmux.ts', 'src/main/providers/other/ui-detection.ts', 'docs/src/main/ansi-strip.ts', 'src/main/ansi-strip.test.ts']) {
-      expect(report({ paths: [p] }).matrixOwed, p).toBe(false)
-    }
-  })
-
-  it('pty-manager.ts alone says check, with the scoped wording, and no instruction to run the matrix outright', () => {
-    const r = report({ paths: [PTY_MANAGER, 'tests/unit/pty-manager.test.ts'] })
-    expect(r.matrixState).toBe('check')
-    const text = renderSummary(r)
-    expect(text).toContain('**live SSH matrix: check (pty-manager.ts only)**')
-    expect(text).toContain('| Live SSH matrix | owed only if this PR changes the SSH branch, the sentinel parsers or the statusline routing of `src/main/pty-manager.ts` (AGENTS.md); not owed for its local branch or the line cap. Unsure: run it (fail closed). |')
-    expect(text).toContain('if the SSH branch, the sentinel parsers or the statusline routing of `src/main/pty-manager.ts` changed')
-    expect(text).not.toContain('**live SSH matrix: owed**')
-    expect(text).not.toContain('before merge (AGENTS.md')
-  })
-
-  it('pty-manager.ts with any other radius file, or with unreadable paths, is owed', () => {
-    expect(report({ paths: [PTY_MANAGER, 'src/main/ansi-strip.ts'] }).matrixState).toBe('owed')
-    expect(report({ paths: [PTY_MANAGER, 'src/main/ansi-strip.ts'] }).matrixOwed).toBe(true)
-    expect(report({ paths: null }).matrixState).toBe('owed')
-    expect(renderSummary(report({ paths: [PTY_MANAGER, 'src/main/ssh-tmux.ts'] }))).toContain('**live SSH matrix: owed**')
-  })
-
-  it('lists several hits in the order the radius lists them', () => {
-    const r = report({ paths: ['src/main/statusline-watcher.ts', 'src/main/ssh-tmux.ts', 'README.md'] })
-    expect(r.hits).toEqual(['src/main/ssh-tmux.ts', 'src/main/statusline-watcher.ts'])
-    expect(renderSummary(r)).toContain('yes, 2 of 9: `src/main/ssh-tmux.ts`, `src/main/statusline-watcher.ts`')
+    expect(renderSummary(r).split('\n').filter((l) => l.startsWith('| ') && !l.startsWith('| Check') && !l.startsWith('| ---'))).toHaveLength(2)
   })
 })
 
@@ -149,7 +94,7 @@ describe('pr-numbers: the cap on pty-manager.ts', () => {
     expect(r.exceeds).toBe(true)
     expect(r.failed).toBe(true)
     expect(r.overBy).toBe(1)
-    expect(r.matrixState).toBe('check')
+    expect(r.ptyTouched).toBe(true)
     const text = renderSummary(r)
     expect(text).toContain('FAIL: over the cap by 1')
     expect(text).toContain(OVERRIDE_LABEL)
@@ -218,11 +163,11 @@ describe('pr-numbers: the cap on pty-manager.ts', () => {
     expect(report({ paths: [PTY_MANAGER], ptyLines: 0, baseLines: CAP }).failed).toBe(false)
   })
 
-  it('fails closed on what it cannot read: paths unknown means touched and owed; an unreadable file fails', () => {
+  it('fails closed on what it cannot read: paths unknown means touched; an unreadable file fails', () => {
     const unknownPaths = report({ paths: null })
-    expect(unknownPaths.matrixOwed).toBe(true)
+    expect(unknownPaths.ptyTouched).toBe(true)
     expect(unknownPaths.failed).toBe(false)
-    expect(renderSummary(unknownPaths)).toContain('could not read the changed paths: treated as yes')
+    expect(renderSummary(unknownPaths)).toContain('Could not read the changed paths, so `src/main/pty-manager.ts` counts as touched.')
     // Paths unknown and over the cap with no base to compare: it fails.
     expect(report({ paths: null, ptyLines: CAP + 1, baseLines: null }).failed).toBe(true)
     // Paths unknown, over the cap, but not longer than a known base: it passes.
@@ -274,20 +219,19 @@ describe('pr-numbers: main() in a job', () => {
     return { code, writes, logs, calls }
   }
 
-  it('a renderer-only PR: exit 0, summary says radius not touched and matrix not owed', () => {
+  it('a renderer-only PR: exit 0, and the summary gives the length and the cap', () => {
     const r = run({ paths: ['src/renderer/App.tsx'], lines: CAP })
     expect(r.code).toBe(0)
     expect(r.writes.length).toBe(1)
     expect(r.writes[0][0]).toBe('summary.md')
-    expect(r.writes[0][1]).toContain('| Touches the SSH blast radius | no (0 of 9) |')
-    expect(r.writes[0][1]).toContain('**live SSH matrix: not owed**')
+    expect(r.writes[0][1]).toContain(`| \`src/main/pty-manager.ts\` length | ${CAP} lines, cap ${CAP}, +0 against the base (${CAP}) |`)
+    expect(r.writes[0][1]).toContain('| Cap | at the cap |')
   })
 
-  it('a PR that adds a line to src/main/ssh-tmux.ts: exit 0, summary says touched and owed', () => {
+  it('a PR that adds a line to src/main/ssh-tmux.ts: exit 0, and no matrix is asked for', () => {
     const r = run({ paths: ['src/main/ssh-tmux.ts'], lines: CAP })
     expect(r.code).toBe(0)
-    expect(r.writes[0][1]).toContain('yes, 1 of 9: `src/main/ssh-tmux.ts`')
-    expect(r.writes[0][1]).toContain('**live SSH matrix: owed**')
+    expect(r.writes[0][1]).not.toMatch(/SSH matrix|test:live/i)
   })
 
   it('a PR that grows pty-manager.ts: exit 1, an error line names the cap, and the table still prints', () => {
@@ -318,11 +262,10 @@ describe('pr-numbers: main() in a job', () => {
     expect(r.calls).toEqual([])
   })
 
-  it('fails closed when git cannot answer: matrix owed; a file over the cap with no base to compare fails', () => {
+  it('fails closed when git cannot answer: pty-manager.ts counts as touched; a file over the cap with no base to compare fails', () => {
     const ok = run({ paths: [], lines: CAP, gitFails: true })
     expect(ok.code).toBe(0)
-    expect(ok.writes[0][1]).toContain('could not read the changed paths: treated as yes')
-    expect(ok.writes[0][1]).toContain('**live SSH matrix: owed**')
+    expect(ok.writes[0][1]).toContain('Could not read the changed paths, so `src/main/pty-manager.ts` counts as touched.')
     const over = run({ paths: [], lines: CAP + 1, gitFails: true })
     expect(over.code).toBe(1)
     // Not a merge commit: no base either.

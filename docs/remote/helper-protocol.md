@@ -165,7 +165,9 @@ The CLI or sudo starts `emit` (statusline and hook command, R6, R7), `mcp`
   identity, boot id, pid, start time), reads only its spec and start size,
   starts the CLI, records the CLI's pid and start time in the spec, and
   installs its filter before it reads any socket (threat model 3.10).
-  Outliving logout: **pending probe P3**.
+  Outliving logout: probe P3 held for 60 s on a Linux host that does not clean up at
+  logout (ADR-030); **pending probe P3** for a host that does and for ADR-029's other P3
+  host roles (macOS, a container host). Rocky Linux 10 is owed to beta.14.
 - Only the holder outlives a connection; `mcp` lives as long as the CLI, the
   rest for one call. The holder exits when the session ends, a non-detachable
   terminal closes, or a detached session reaches its maximum lifetime.
@@ -357,21 +359,33 @@ has seen; a gap is logged, and noted on the session if a hook event was lost.
   view or reset the terminal. It holds the replay until it reaches
   `ring_end`, over a dropped connection too (the attach again, with no new
   gap, holds its own replay to its `ring_end`), and at most until the
-  terminal ends or 2 s pass. Then it writes, in one piece, the cancel
+  terminal ends or 2 s pass. A take-over on a holder that offers the screen
+  reads (section 15) also keeps the replay, cut or whole, until the tab is at
+  the holder's size, at most 3 s after it read that size, and sends the holder
+  no size meanwhile (2.1.3-beta.13). Then it writes, in one piece, the cancel
   character, the attribute reset and one line of its own, "[Earlier output
   of this terminal is no longer held, so it is not shown.]", then only the
   last of the replay that the tab's scrollback keeps (10,000 lines less a
   screen and that line's own rows, cut at the start of a line, or inside a
   line that alone takes as many or more, or that only empty rows follow), so
-  that line is not pushed out of reach. What the part left out did to the
+  that line is not pushed out of reach. With the tab at the holder's size and
+  nothing shown before (2.1.3-beta.13), that line is written on the row above
+  the tab's last row and the kept text starts on the last row, where the
+  console's cursor was; one clear of the scrollback (CSI 3 J), put in at the
+  start of a row a line feed made, then drops the empty rows that were above
+  that line once they have left the screen, so that line is the tab's first
+  row. What the part left out did to the
   terminal goes across the cut: the alternate screen, left before that line
   (and before the attribute reset) whenever that part switched to it or from
   it, and the input modes it set.
   Rows are counted as xterm.js counts them; what a program draws on the
   alternate screen takes none, and the cut never lands there. Once the
-  replay is shown and the program still runs, it resizes the terminal one
-  row shorter and, 300 ms later, back to the tab's size, which makes the
-  program redraw (probe P19). A replay still coming in at the 2 s cap shows
+  replay is shown and the program still runs, it asks the program to redraw
+  (probe P19): on the console built into Windows by one resize at the tab's
+  own size (that console draws its whole screen again on any resize, and at
+  the same size moves no row under a shell at its prompt); on node-pty's
+  bundled ConPTY, macOS and Linux by a resize one row shorter and, 300 ms
+  later, back to the tab's size. A replay still coming in at the 2 s cap shows
   what had arrived, and the rest follows untrimmed: the one case where that
   line can still go out of reach. The screen in use and the input modes the
   program set before `ring_start` are not restored yet.
@@ -883,8 +897,9 @@ stream messages carry no id: a refusal of one has no `re`.
   replay to its end and shows a line of its own saying earlier output is not
   shown, then the last of the replay that the tab keeps, with the screen and
   input modes the part it leaves out set, and, while the
-  program runs, asks it to redraw by a resize one row shorter
-  and back (section 11); it does not yet restore the screen in use or the
+  program runs, asks it to redraw by a resize at the tab's size on the
+  console built into Windows, else one row shorter and back (section 11);
+  it does not yet restore the screen in use or the
   input modes set before `ring_start`. Typed input goes to the holder as raw
   frames on channel 1, accepted only from the attached connection: raw bytes on
   any other connection or channel are `bad-frame` and a close. Typed input is
@@ -1228,8 +1243,10 @@ types, resizes or ends; neither moves an offset, replays anything or changes
 which connection is attached; and the holder decides nothing from what a
 screen shows (ADR-030 row 4). A relay (a connection that opened a tool
 stream) asks for neither: `unknown-type` and a close, as for the terminal
-messages. Nothing in the app asks yet: no connection the app makes acks
-`screen`.
+messages. From 2.1.3-beta.13 a plain terminal's connections ack `screen`,
+and a take-over asks `screen.read` once, before its attach, for the
+holder's size: its replay waits for the tab to be at that size
+(src/main/session-helper/helper-pty.ts). Nothing else in the app asks yet.
 
 - **`screen.read`** `{id}` is answered `screen.rows`: `cols` and `rows`, the
   screen's size; `cursor` `{row, col}`, the cursor's cell from 0 (its column

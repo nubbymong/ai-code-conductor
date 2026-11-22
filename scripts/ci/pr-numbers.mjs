@@ -1,38 +1,31 @@
 #!/usr/bin/env node
 // "PR numbers": the few numbers a reviewer needs on every pull request, printed
 // to the job summary (ADR-030, SDLC table: "a check that prints these numbers
-// on every PR is its own slice"):
+// on every PR is its own slice"): how long src/main/pty-manager.ts is, against
+// its cap.
 //
-//   - does the PR touch any of the nine files of the live SSH blast radius
-//     (the list in AGENTS.md, "SSH statusline changes need the live SSH matrix")?
-//   - how long is src/main/pty-manager.ts, against its cap?
-//   - is the live SSH matrix owed ("live SSH matrix: owed" / "check" / "not owed")?
-//     pty-manager.ts is in the radius only for its SSH branch, its sentinel
-//     parsers and its statusline routing (AGENTS.md), so a PR whose only radius
-//     hit is that file gets "check", not "owed": the author decides, and an
-//     unsure author runs it. Any of the other seven files, or paths that could
-//     not be read, is "owed".
+// Until 2.1.3-beta.13 it also said whether a PR touched the files of the live
+// SSH blast radius and whether the live SSH matrix was owed. That matrix is
+// retired (owner, 2026-11-22; AGENTS.md, Release Process), so it says neither.
 //
 // The job FAILS only when pty-manager.ts grows past the cap. A PR that has to
-// (an SSH fix that cannot be smaller) carries the `cap-override` label and the
-// summary says so. Touching the radius never fails the job: it says the matrix
-// is owed, and the matrix itself is a manual gate (it needs real SSH hosts).
+// (a fix that cannot be smaller) carries the `cap-override` label and the
+// summary says so.
 //
 // Like the Desktop test gate and the Test jobs' scope step, the job ALWAYS
 // runs on a pull request and decides inside: a job-level path filter would
 // leave a check that never reports. The changed paths are the difference
 // between the PR's base (the merge commit's first parent) and the merge commit
 // CI checked out, as in scripts/ci/change-scope.mjs. Anything this cannot read
-// for certain is treated as touched (fail closed): matrix owed, cap checked.
+// for certain is treated as touched (fail closed): the cap is checked.
 //
-// The cap is the length of pty-manager.ts on beta when this check was added
-// (ADR-030 gives the number once). PTY_MANAGER_LINE_CAP below is the ONE source
+// The cap started at the length of pty-manager.ts on beta when this check was
+// added (ADR-030 gives that starting number once), and has been lowered since by
+// each PR that shortened the file. PTY_MANAGER_LINE_CAP below is the ONE source
 // of truth for it; nothing else in the repo restates the number. It may only go
 // down: a PR that shortens pty-manager.ts should lower the constant with it.
 // That is a reminder (a summary line and a warning annotation), not enforced:
 // the job fails only for growing past the cap.
-// The radius list is held in tests/unit/scripts/pr-numbers.test.ts against the
-// list in AGENTS.md, so the two cannot drift.
 //
 // Zero dependencies (plain node), like change-scope.mjs.
 //
@@ -44,25 +37,15 @@ import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { changedPaths } from './change-scope.mjs'
 
-/** The nine files of the live SSH blast radius (AGENTS.md). */
-export const RADIUS_FILES = [
-  'src/main/pty-manager.ts',
-  'src/main/providers/claude/ssh-shim.ts',
-  'src/main/providers/claude/ui-detection.ts',
-  'src/main/ssh-tmux.ts',
-  'src/main/ssh-tmux-stage.ts',
-  'src/main/ssh-tmux-push.ts',
-  'src/main/ansi-strip.ts',
-  'src/main/statusline-watcher.ts',
-  'src/main/ssh-program.ts',
-]
 export const PTY_MANAGER = 'src/main/pty-manager.ts'
 /**
- * The most lines pty-manager.ts may have: its length on beta when this check
- * was added (ADR-030 states the starting value). Lower it, never raise it,
- * whenever a PR shortens the file.
+ * The most lines pty-manager.ts may have. It started at the file's length on
+ * beta when this check was added (ADR-030 states that starting value) and was
+ * last lowered by S16 step 3 (aicc_planning#375), which moved a launch's
+ * bindings into src/main/sessions/launch-bindings.ts. Lower it, never raise
+ * it, whenever a PR shortens the file.
  */
-export const PTY_MANAGER_LINE_CAP = 8187
+export const PTY_MANAGER_LINE_CAP = 7773
 /** The PR label that lets pty-manager.ts grow past the cap. */
 export const OVERRIDE_LABEL = 'cap-override'
 
@@ -84,12 +67,7 @@ export function countLines(text) {
  */
 export function buildReport({ paths, ptyLines, baseLines, labels }) {
   const known = Array.isArray(paths)
-  const hits = known ? RADIUS_FILES.filter((f) => paths.includes(f)) : []
-  // Unreadable paths fail closed: the matrix is owed and pty-manager.ts counts as touched.
-  const touchesRadius = known ? hits.length > 0 : true
-  // pty-manager.ts alone is "check": the radius covers only part of that file (AGENTS.md).
-  const ptyOnly = known && hits.length === 1 && hits[0] === PTY_MANAGER
-  const matrixState = !touchesRadius ? 'not owed' : ptyOnly ? 'check' : 'owed'
+  // Unreadable paths fail closed: pty-manager.ts counts as touched.
   const ptyTouched = known ? paths.includes(PTY_MANAGER) : true
   const override = Array.isArray(labels) && labels.includes(OVERRIDE_LABEL)
 
@@ -109,8 +87,6 @@ export function buildReport({ paths, ptyLines, baseLines, labels }) {
 
   return {
     known,
-    hits,
-    touchesRadius,
     ptyTouched,
     ptyLines,
     baseLines,
@@ -123,8 +99,6 @@ export function buildReport({ paths, ptyLines, baseLines, labels }) {
     // The cap is today's length and only goes down: a PR that shortens the file lowers it.
     // A PR that grows the file (but stays under the cap) is not told to give headroom away.
     lowerTheCap: !unreadable && overBy < 0 && ptyTouched && ptyLines > 0 && baseLines !== null && ptyLines < baseLines,
-    matrixState,
-    matrixOwed: matrixState === 'owed',
   }
 }
 
@@ -132,34 +106,19 @@ const code = (s) => '`' + s + '`'
 
 /** The Markdown the job summary shows. */
 export function renderSummary(r) {
-  const radiusCell = !r.known
-    ? 'could not read the changed paths: treated as yes'
-    : r.touchesRadius
-      ? `yes, ${r.hits.length} of ${RADIUS_FILES.length}: ${r.hits.map(code).join(', ')}`
-      : `no (0 of ${RADIUS_FILES.length})`
   const lengthCell =
     r.ptyLines === null
       ? 'unreadable'
       : `${r.ptyLines} lines, cap ${r.cap}` + (r.baseLines === null ? '' : `, ${r.ptyLines - r.baseLines >= 0 ? '+' : ''}${r.ptyLines - r.baseLines} against the base (${r.baseLines})`)
-  const matrix = r.matrixState === 'check' ? 'live SSH matrix: check (pty-manager.ts only)' : `live SSH matrix: ${r.matrixState}`
-  const matrixCell =
-    r.matrixState === 'check'
-      ? `owed only if this PR changes the SSH branch, the sentinel parsers or the statusline routing of ${code(PTY_MANAGER)} (AGENTS.md); not owed for its local branch or the line cap. Unsure: run it (fail closed).`
-      : r.matrixState
   const rows = [
     '### PR numbers',
     '',
     '| Check | Result |',
     '| --- | --- |',
-    `| Touches the SSH blast radius | ${radiusCell} |`,
     `| ${code(PTY_MANAGER)} length | ${lengthCell} |`,
     `| Cap | ${r.capVerdict} |`,
-    `| Live SSH matrix | ${matrixCell} |`,
-    '',
-    `**${matrix}**`,
   ]
-  if (r.matrixState === 'check') rows.push('', `Run \`npm run test:live:ssh\` (one combo at a time, and report the matrix in the PR) if the SSH branch, the sentinel parsers or the statusline routing of ${code(PTY_MANAGER)} changed. A change to its local branch or its length does not owe it (AGENTS.md, "SSH statusline changes need the live SSH matrix").`)
-  if (r.matrixOwed) rows.push('', 'Run `npm run test:live:ssh` one combo at a time and report the matrix in the PR before merge (AGENTS.md, "SSH statusline changes need the live SSH matrix").')
+  if (!r.known) rows.push('', `Could not read the changed paths, so ${code(PTY_MANAGER)} counts as touched.`)
   if (r.override && r.exceeds) rows.push('', `The ${code(OVERRIDE_LABEL)} label is on this PR, so growing ${code(PTY_MANAGER)} past ${r.cap} lines does not fail the job. Say in the PR why the file could not be smaller.`)
   // When the file could not be read the label is the only reason the job passes, so it is never called unneeded then.
   else if (r.override && r.ptyLines !== null) rows.push('', `The ${code(OVERRIDE_LABEL)} label is on this PR; it is not needed here.`)

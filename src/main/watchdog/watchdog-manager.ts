@@ -299,6 +299,9 @@ interface Entry {
    *  if the same status comes back for a new incident. */
   status: WatchdogStatus
   incident: number
+  /** 2.1.3-beta.13 B2 (aicc_planning#370): the last window title the pane's
+   *  output set (null: none yet), for Codex's send gate (codex-patterns.ts). */
+  title: string | null
 }
 
 /** Serialize the pane's last `maxLines` rendered lines (screen + genuinely
@@ -564,6 +567,7 @@ export class WatchdogManager {
         const e = this.entries.get(sessionId)
         try { return e ? readXtermScreen(e.term) : null } catch { return null }
       },
+      getTitle: () => this.entries.get(sessionId)?.title ?? null,
       send: (text: string) => this.sendRetry(sessionId, text),
       now: () => this.now(),
       log: (level, msg) => {
@@ -585,7 +589,9 @@ export class WatchdogManager {
       scrollback: HEADLESS_SCROLLBACK,
       allowProposedApi: true,
     })
-    this.entries.set(sessionId, { wd, provider, term, ansiClamp: { residual: '' }, feedTimer: null, lastDataAt: this.now(), silent: false, graceUntil: 0, status: wd.getState().status, incident: 0 })
+    const entry: Entry = { wd, provider, term, ansiClamp: { residual: '' }, feedTimer: null, lastDataAt: this.now(), silent: false, graceUntil: 0, status: wd.getState().status, incident: 0, title: null }
+    term.onTitleChange((title) => { entry.title = title })
+    this.entries.set(sessionId, entry)
     if (this.startedAt === null) this.startedAt = this.now()
     this.ensureTickTimer()
     this.ensureHookSubscription()

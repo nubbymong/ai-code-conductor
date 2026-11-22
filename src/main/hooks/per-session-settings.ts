@@ -97,9 +97,30 @@ export interface WriteSessionSettingsOptions {
  */
 const CANVAS_TOOL_PERMISSIONS = ['mcp__conductor__canvas_snapshot', 'mcp__conductor__canvas_review']
 
+/**
+ * The sessions whose latest launch got no status line from the app: the
+ * Status line switch was off (no resourcesDir), the command could not be set
+ * up, the deployed script failed its launch check, or the settings file was
+ * not written. Such a session reports no usage figure, so the Usage page
+ * fetches its account as it does an account no session uses (account-usage.ts,
+ * setLiveUsageSessionReports; aicc_planning#378). Set at each launch's settings
+ * write, cleared when the session's settings are removed at its end.
+ */
+const launchedWithoutAppStatusLine = new Set<string>()
+
+/** Whether the session's latest launch got no status line from the app. False
+ *  for a session not launched in this run. */
+export function sessionLaunchedWithoutAppStatusLine(sessionId: string): boolean {
+  return launchedWithoutAppStatusLine.has(sessionId)
+}
+
 export function writeLocalSessionSettings(sessionId: string, opts: WriteSessionSettingsOptions = {}): string {
+  // Without the app's status line until this launch's file is written with it
+  // (below), so a throw on the way leaves the session counted as reporting nothing.
+  launchedWithoutAppStatusLine.add(sessionId)
+  let appStatusLine = false
   const claudeDir = path.join(os.homedir(), '.claude')
-  // ~/.claude is created securely inside atomicJsonWrite (mkdirSecure + 0700) at
+  // ~/.claude is created securely inside writeJsonSecurely (mkdirSecure + 0700) at
   // write time -- no plain mkdir here, which would silently accept a pre-planted
   // junction. The settings.json read below fails closed if the dir is absent.
 
@@ -163,6 +184,7 @@ export function writeLocalSessionSettings(sessionId: string, opts: WriteSessionS
     const statusLine = claude.statuslineSetting?.(opts.resourcesDir, sessionId, urlFile || undefined)
     if (statusLine) {
       sesCfg.statusLine = statusLine
+      appStatusLine = true
     } else if (statusLine === null) {
       // The command would carry a folder path the shell reads as more than a
       // path: the app's status line is not set up (statusline-command.ts).
@@ -192,7 +214,11 @@ export function writeLocalSessionSettings(sessionId: string, opts: WriteSessionS
   }
 
   const sesPath = getLocalSessionSettingsPath(sessionId)
-  return atomicJsonWrite(sesPath, sesCfg)
+  // The launch reports usage only when the app's status line is set AND the
+  // file that carries it was written: a failed write launches without
+  // --settings (pty-manager), so without the status line.
+  if (writeJsonSecurely(sesPath, sesCfg) && appStatusLine) launchedWithoutAppStatusLine.delete(sessionId)
+  return sesPath
 }
 
 /**
@@ -362,6 +388,8 @@ export function removeLocalSessionStatusUrl(sessionId: string): void {
 }
 
 export function removeLocalSessionSettings(sessionId: string): void {
+  // The session has ended (or its spawn failed): forget how it was launched.
+  launchedWithoutAppStatusLine.delete(sessionId)
   try {
     fs.unlinkSync(getLocalSessionSettingsPath(sessionId))
   } catch {

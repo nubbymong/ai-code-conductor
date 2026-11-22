@@ -29,7 +29,8 @@ export const HOOKS_CAP = 'hooks'
 export const MCP_CAP = 'mcp'
 /** Screen reads through the holder (section 15, from 2.1.3-beta.12): acked
  *  only by a connection that reads the session's screen, and only when the
- *  holder offers it. No connection the app makes asks for it yet. */
+ *  holder offers it. From 2.1.3-beta.13 a plain terminal's connections ask
+ *  for it (a take-over reads its holder's size). */
 export const SCREEN_CAP = 'screen'
 /** Terminal bytes travel on this channel both ways; control messages on 0. */
 export const TERMINAL_CHANNEL = 1

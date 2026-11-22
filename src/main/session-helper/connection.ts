@@ -13,7 +13,9 @@
  * tool functions for its session's CLI, which app-wiring.ts gives for the
  * agent sessions (2.1.3-beta.11, plan sections B1 and B2). A connection asks
  * for `screen` (the holder's screen reads, 2.1.3-beta.12, plan section A3)
- * only when it is given the `screen` option, which no caller gives yet.
+ * only when it is given the `screen` option, which the manager gives a plain
+ * terminal's connections: a take-over reads the holder's size with it
+ * (readScreen; 2.1.3-beta.13, plan section A1).
  *
  * On a connection that acked `mcp`, the app sends a tool stream's messages
  * (sendMcp) only when the holder would read them, and ends its side of a
@@ -55,11 +57,13 @@ import {
   readMcp,
   readMcpClose,
   readMcpOpen,
+  readScreenRows,
   type Hello,
   type HookEventFrame,
   type McpMessage,
   type HelperOs,
   type HolderRecord,
+  type ScreenRows,
 } from './protocol'
 
 /** A refusal or failure, with the protocol's code when the holder named one. */
@@ -86,8 +90,8 @@ export interface ConnectionOptions {
    *  tool functions, which app-wiring.ts does for the agent sessions. */
   mcp?: boolean
   /** This connection reads the session's screen (`screen.read`,
-   *  `screen.tail`): `screen` is acked when the holder offers it. No caller
-   *  sets it yet. */
+   *  `screen.tail`): `screen` is acked when the holder offers it. The manager
+   *  sets it for a plain terminal's connections. */
   screen?: boolean
   helloTimeoutMs?: number
   replyTimeoutMs?: number
@@ -293,7 +297,7 @@ export class HolderConnection extends EventEmitter<HolderConnectionEvents> {
   private readonly stream: Duplex
   private readonly reader = new FrameReader('helper_to_app')
   private nextId = 2
-  private readonly waiting = new Map<number, { resolve: (v: Json) => void; reject: (e: Error) => void; timer: ReturnType<typeof setTimeout>; onReply?: (m: Json) => void }>()
+  private readonly waiting = new Map<number, { resolve: (v: Json) => void; reject: (e: Error) => void; timer: ReturnType<typeof setTimeout>; onReply?: (m: Json, size: number) => void }>()
   private pinger: ReturnType<typeof setInterval> | undefined
   private closed = false
   private readonly replyTimeoutMs: number
@@ -382,9 +386,10 @@ export class HolderConnection extends EventEmitter<HolderConnectionEvents> {
   /**
    * Send one request and wait for its reply. An `error` reply rejects.
    * `onReply` sees a reply that is not an error at once, before any frame
-   * that follows it (an attach's replay) is reported.
+   * that follows it (an attach's replay) is reported, with its size in bytes
+   * as it came.
    */
-  request(msg: Json & { t: string }, onReply?: (m: Json) => void): Promise<Json> {
+  request(msg: Json & { t: string }, onReply?: (m: Json, size: number) => void): Promise<Json> {
     if (this.closed) return Promise.reject(new HolderError('io', 'the connection is closed'))
     const id = this.takeId()
     return new Promise<Json>((resolve, reject) => {
@@ -402,6 +407,20 @@ export class HolderConnection extends EventEmitter<HolderConnectionEvents> {
         reject(new HolderError('io', (err as Error).message))
       }
     })
+  }
+
+  /**
+   * The holder's screen now (`screen.read`), read strictly (readScreenRows):
+   * only on a connection that acked `screen`. Rejects when this one did not,
+   * when the holder answers an error, and when its answer does not read.
+   */
+  async readScreen(): Promise<ScreenRows> {
+    if (!this.screen) throw new HolderError('unknown-type', 'this connection did not ack screen')
+    // Set by the reply callback, which sees the frame's size.
+    let screen = null as ScreenRows | null
+    await this.request({ t: 'screen.read' }, (m, size) => { screen = readScreenRows(m, size) })
+    if (!screen) throw new HolderError('bad-frame', 'the holder answered screen.read with a reply that does not read')
+    return screen
   }
 
   private takeId(): number {
@@ -647,7 +666,7 @@ export class HolderConnection extends EventEmitter<HolderConnectionEvents> {
         if (m.t === 'error') {
           w.reject(new HolderError(String(m.code ?? 'internal'), String(m.text ?? '')))
         } else {
-          try { w.onReply?.(m) } catch { /* the caller's own */ }
+          try { w.onReply?.(m, f.size) } catch { /* the caller's own */ }
           w.resolve(m)
         }
         continue

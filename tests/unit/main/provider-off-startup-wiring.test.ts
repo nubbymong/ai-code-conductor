@@ -35,8 +35,9 @@ describe('provider-off start-up wiring', () => {
   // while it is off. The rule is handed to the usage module before the usage
   // handlers are registered, so no request can be served on the default.
   it('the Claude usage gate is handed the launch rule, before the usage handlers register', () => {
-    // P3.2: with the folder rule the recorder checks a figure against.
-    expect(code).toMatch(/import \{ recordLiveUsageForSession, setClaudeAccountDataAllowed, setLiveUsageTranscriptProfile \} from '\.\/usage\/account-usage'/)
+    // P3.2: with the folder rule the recorder checks a figure against, and
+    // (aicc_planning#378) the rule that says whether a session reports a figure.
+    expect(code).toMatch(/import \{ recordLiveUsageForSession, setClaudeAccountDataAllowed, setLiveUsageTranscriptProfile, setLiveUsageSessionReports \} from '\.\/usage\/account-usage'/)
     const wired = code.indexOf("setClaudeAccountDataAllowed(() => providerProbeRefusal('claude') === null)")
     const registered = code.indexOf('registerAccountProfilesHandlers(getWindow)')
     expect(wired).toBeGreaterThan(-1)

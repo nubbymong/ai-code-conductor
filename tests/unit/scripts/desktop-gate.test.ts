@@ -16,7 +16,7 @@ type Over = Record<string, unknown>
 const pull = (base: unknown, labels: string[] = [], over: Over = {}) => ({ number: 12, state: 'open', base: { ref: base }, labels: labels.map((name) => ({ name })), ...over })
 
 const OPEN = "This PR targets 'beta', not main. Desktop testing happens on the released beta build, not per PR, and no label is needed. Gate open."
-const NEEDS = "::error::Desktop test gate: a PR into main (the stable promotion) must carry 'desktop-tested' (a human launched and exercised the packaged app), 'runtime-validated' (automated VM e2e and/or the live SSH statusline matrix passed), or 'skip-desktop-test' (docs/deps/CI/changelog-only) before it can merge. See CONTRIBUTING.md > Desktop-test gate."
+const NEEDS = "::error::Desktop test gate: a PR into main (the stable promotion) must carry 'desktop-tested' (a human launched and exercised the packaged app), 'runtime-validated' (automated VM e2e passed), or 'skip-desktop-test' (docs/deps/CI/changelog-only) before it can merge. See CONTRIBUTING.md > Desktop-test gate."
 
 describe('desktop-gate: the decision', () => {
   it('a PR into beta, a release line or any base but main passes with no label, and says where desktop testing happens', () => {
@@ -34,7 +34,7 @@ describe('desktop-gate: the decision', () => {
     expect(decideGate(pull('main'), 12)).toEqual({ pass: false, message: NEEDS })
     expect(decideGate(pull('main', ['ci-run', 'in-beta', 'desktop-test', 'desktop-tested-not', 'not-desktop-tested']), 12)).toEqual({ pass: false, message: NEEDS })
     expect(decideGate(pull('main', ['ci-run', 'desktop-tested']), 12)).toEqual({ pass: true, message: "PR into main carries 'desktop-tested' - a human exercised the packaged app on a real desktop. Gate open." })
-    expect(decideGate(pull('main', ['runtime-validated']), 12)).toEqual({ pass: true, message: "PR into main carries 'runtime-validated' - automated runtime validation passed (VM Playwright e2e and/or the live SSH statusline matrix). Gate open." })
+    expect(decideGate(pull('main', ['runtime-validated']), 12)).toEqual({ pass: true, message: "PR into main carries 'runtime-validated' - automated runtime validation passed (VM Playwright e2e). Gate open." })
     expect(decideGate(pull('main', ['skip-desktop-test', 'x']), 12)).toEqual({ pass: true, message: "PR into main carries 'skip-desktop-test' - no runtime test required (docs/deps/CI/changelog-only). Gate open." })
     // The first of the three that is present is the one named.
     expect(decideGate(pull('main', ['skip-desktop-test', 'runtime-validated', 'desktop-tested']), 12).message).toMatch(/^PR into main carries 'desktop-tested' /)

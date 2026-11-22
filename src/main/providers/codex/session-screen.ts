@@ -48,6 +48,9 @@ interface Pane {
   current: () => boolean
   /** The submissions in flight for this run, one at a time, in order. */
   chain: Promise<unknown>
+  /** 2.1.3-beta.13 B2 (aicc_planning#370): the last window title this run's
+   *  output set (null: none yet), read with the screen (codexTitleBusy). */
+  title: string | null
 }
 
 const panes = new Map<string, Pane>()
@@ -64,7 +67,9 @@ export function openCodexScreen(sessionId: string, opts: { cols: number; rows: n
   const cols = sane(opts.cols, opts.rows) ? opts.cols : 120
   const rows = sane(opts.cols, opts.rows) ? opts.rows : 40
   const term = new Terminal({ cols, rows, scrollback: 0, allowProposedApi: true })
-  panes.set(sessionId, { term, clamp: opts.clamp, clampState: { residual: '' }, write: opts.write, current: opts.current, chain: Promise.resolve() })
+  const pane: Pane = { term, clamp: opts.clamp, clampState: { residual: '' }, write: opts.write, current: opts.current, chain: Promise.resolve(), title: null }
+  term.onTitleChange((title) => { pane.title = title })
+  panes.set(sessionId, pane)
 }
 
 /** The session's output, as its terminal receives it. */
@@ -101,6 +106,12 @@ export function readCodexSessionScreen(sessionId: string): ScreenLine[] | null {
   const pane = panes.get(sessionId)
   if (!pane) return null
   try { return readXtermScreen(pane.term) } catch { return null }
+}
+
+/** B2: the window title the session's run has set, beside its screen; null
+ *  when it has set none, or the session has no pane. */
+export function readCodexSessionTitle(sessionId: string): string | null {
+  return panes.get(sessionId)?.title ?? null
 }
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => {
@@ -149,6 +160,7 @@ export function submitCodexText(sessionId: string, text: string, opts: ComposerS
     try {
       const result = await submitToCodexComposer(text, {
         readScreen: () => (live() ? readXtermScreen(pane.term) : null),
+        readTitle: () => (live() ? pane.title : null),
         settle: () => (live() ? paneDrawn(pane) : Promise.resolve(false)),
         size: () => ({ cols: pane.term.cols, rows: pane.term.rows }),
         write: (data) => { if (live()) pane.write(data) },

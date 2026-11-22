@@ -26,7 +26,8 @@ import {
 } from './canvas/ccc-ux-protocol'
 
 import { startStatuslineWatcher, setTranscriptPathSink, setStatuslineUsageSink, healGlobalStatusline } from './statusline-watcher'
-import { recordLiveUsageForSession, setClaudeAccountDataAllowed, setLiveUsageTranscriptProfile } from './usage/account-usage'
+import { recordLiveUsageForSession, setClaudeAccountDataAllowed, setLiveUsageTranscriptProfile, setLiveUsageSessionReports } from './usage/account-usage'
+import { sessionLaunchedWithoutAppStatusLine } from './hooks/per-session-settings'
 import { getProvider } from './providers'
 import { composeProviders, flushPendingProviderCliKills } from './providers/compose'
 import { initAccountRegistry, reconcileLegacyAccountStores, getConsumerLeases } from './provider-account-registry'
@@ -1183,6 +1184,9 @@ if (!gotTheLock) {
     // Plan P2: harvest each live session's delivered usage so the account-usage
     // page can reuse an OPEN account's figure rather than making a redundant call.
     setStatuslineUsageSink(recordLiveUsageForSession)
+    // aicc_planning#378: a session launched without the app's status line
+    // reports no figure, so the page fetches its account as before.
+    setLiveUsageSessionReports((sid) => !sessionLaunchedWithoutAppStatusLine(sid))
     startStatuslineWatcher(getWindow)
 
     // Start polling each provider's public status page, only while it is on;

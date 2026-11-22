@@ -41,6 +41,27 @@ export interface ChangelogEntry {
 // a backtick in a comment opens a phantom string and the parse fails.
 export const changelog: ChangelogEntry[] = [
   {
+    version: '2.1.3-beta.13',
+    date: '2026-11-22',
+    highlights: 'With Plain terminals through the session helper on, a terminal restored after the app was ended now brings its long lines back whole, and on Windows it comes back right under the earlier-output notice and takes your next command on the prompt\'s own row. With Codex on Windows and Linux, a canvas note sent while Codex replies now waits for the reply to end. The Usage page no longer asks Anthropic for an account a Claude Code session is using, and in Settings, Accounts an account keeps its place when you make it active or inactive, with a new All / Active / Inactive filter.',
+    warnings: [
+      'This beta series begins moving the app\'s background services, and over the next betas your sessions, onto one helper per machine. If you want a quiet build, stay on the stable release.',
+      'On Windows, choosing Save sessions at an update keeps the terminals the session helper holds running only if the new version opens within two minutes of the old one closing. The installer\'s pages count toward those two minutes, so finish the installer promptly.',
+      'To go back to 2.1.3-beta.12, download its installer from the GitHub releases page and run it over this version.',
+    ],
+    changes: [
+      { type: 'fix', description: 'With Plain terminals through the session helper on (Settings, General, under Terminal; off by default), a terminal restored after the app was ended now brings its long lines back whole: its earlier output waits, for up to about 3 seconds, until the tab is at the size the terminal had. Before, a tab that opened at another size for a moment could show every long line broken. When the window\'s size changed between the two runs, the earlier output is still shown at the tab\'s new size (in Known issues).' },
+      { type: 'fix', description: 'On Windows, such a restored terminal now keeps as many of a console\'s long lines as the tab holds (about 3,300 lines of three rows each, where it kept about 2,000), and its first kept line comes back whole, right under the line that says earlier output is not shown. The restore no longer loses a row, or draws your next command a line low after a second prompt.' },
+      { type: 'fix', description: 'With Plain terminals through the session helper on, a terminal restored after the app was ended no longer answers the terminal queries in its earlier output a second time, which could put stray characters at its prompt.' },
+      { type: 'fix', description: 'Codex on Windows and Linux: a canvas note, an Ask Conductor question or a Watchdog retry sent while Codex is replying now waits for the reply to end instead of being taken back, and Compact or the model picker says Codex is busy instead of typing into the reply.' },
+      { type: 'fix', description: 'The Usage page no longer asks Anthropic for an account a Claude Code session is using, the primary account included. It shows the figure that session reported on its status line. An older figure reads "Last updated", never "couldn\'t refresh". Credits show as of their last fetch. Until a new session reports, its account shows its last figure, or says it is waiting for the session. With the status line switched off, accounts are fetched as before.' },
+      { type: 'fix', description: 'In Settings, Accounts, making an account active or inactive no longer moves its row: each list keeps the order the accounts were added.' },
+      { type: 'fix', description: 'Editing a Claude account (making it inactive or active, renaming it, refreshing its sign-in) no longer moves it to the end of the saved list, so the switch-account menu, Account usage and the launch chooser keep their order.' },
+      { type: 'feature', description: 'Settings, Accounts has a new All / Active / Inactive filter at the top of the page. It narrows every account list on the page, and each choice shows how many accounts it holds; archived accounts are not counted.' },
+      { type: 'fix', description: 'The update log now names the full version being offered (for example v2.1.3-beta.14), so a beta can be told apart from the stable release.' },
+    ],
+  },
+  {
     version: '2.1.3-beta.12',
     date: '2026-11-21',
     highlights: 'With Plain terminals through the session helper on, a terminal shown again after the helper no longer holds its earlier output now says so in one line and asks its program, if it is still running, to draw its screen again. With Claude Code and Codex sessions through the session helper on, a session the helper holds keeps the Conductor\'s tools when the app\'s connection to the session helper drops and comes back. With Codex 0.170.0, the app now types into a Codex session while Codex shows its usual hint line under the prompt.',

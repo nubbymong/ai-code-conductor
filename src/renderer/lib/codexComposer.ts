@@ -28,7 +28,7 @@ import { useSessionStore } from '../stores/sessionStore'
 import { useRegistryStore } from '../stores/registryStore'
 import { buildModelPickerRows } from '../../shared/model-registry'
 import { currentSpawnToken } from '../ptyTracker'
-import { readSessionScreen, type ScreenLine } from '../components/terminal/screenRegistry'
+import { readSessionScreen, readSessionTitle, type ScreenLine } from '../components/terminal/screenRegistry'
 import { writeSessionInput } from '../components/terminal/tmuxWheelScroll'
 
 export type { ScreenLine }
@@ -45,6 +45,7 @@ export const CODEX_PLAN_MODE_WAIT_MS = 120_000
 // with the Watchdog's Codex send gate in main; re-exported here unchanged.
 import {
   readCodexScreen, codexComposerState, codexComposerText, codexCommandTyped, codexTextTyped, codexPlanModeOnScreen,
+  codexTitleBusy, type CodexScreenKind,
 } from '../../shared/codex-screen'
 export { readCodexScreen, codexComposerState, codexComposerText, codexCommandTyped, codexTextTyped, codexPlanModeOnScreen }
 export type { CodexComposerState, CodexScreenKind } from '../../shared/codex-screen'
@@ -67,6 +68,10 @@ export interface CodexRun { createdAt: number; spawnToken: number }
 
 export interface CodexComposerDeps {
   readScreen: (sessionId: string) => ScreenLine[] | null
+  /** 2.1.3-beta.13 B2 (aicc_planning#370): the session's window title, read
+   *  with each screen (while a turn runs Codex puts a braille spinner at the
+   *  start of it: codexTitleBusy). Absent or null: the screen alone is read. */
+  readTitle?: (sessionId: string) => string | null
   currentRun: (sessionId: string) => CodexRun | null
   write: (sessionId: string, data: string) => void
   setTimeout: (fn: () => void, ms: number) => unknown
@@ -140,6 +145,7 @@ const startupDoneRuns = new StartupDoneRuns()
 
 export const defaultCodexComposerDeps: CodexComposerDeps = {
   readScreen: readSessionScreen,
+  readTitle: readSessionTitle,
   currentRun: liveRun,
   write: writeSessionInput,
   setTimeout: (fn, ms) => setTimeout(fn, ms),
@@ -151,6 +157,21 @@ export const defaultCodexComposerDeps: CodexComposerDeps = {
 
 const sameRun = (a: CodexRun | null, b: CodexRun | null): boolean =>
   !!a && !!b && a.createdAt === b.createdAt && a.spawnToken === b.spawnToken
+
+/** B2 (aicc_planning#370): the session's screen now, read with its window
+ *  title. `turn`: busy by the screen itself (a status row, the queue hint),
+ *  not by the title alone. Codex spins the title while a turn runs, and also
+ *  for a moment as it starts (1 to 27 ms in the corpus), so the title alone
+ *  never marks a run past its start-up, and the Plan mode wait waits through
+ *  it as through Codex's start-up row. */
+function readRun(sessionId: string, deps: CodexComposerDeps, models: readonly string[] | null, startup: boolean): { screen: CodexScreenKind; text: string; lines: ScreenLine[] | null; title: string | null; turn: boolean } {
+  const lines = deps.readScreen(sessionId)
+  let title: string | null = null
+  try { title = deps.readTitle?.(sessionId) ?? null } catch { title = null }
+  const read = readCodexScreen(lines, models, { startup, title })
+  const turn = read.screen === 'busy' && (!codexTitleBusy(title) || readCodexScreen(lines, models, { startup }).screen === 'busy')
+  return { ...read, lines, title, turn }
+}
 
 export interface CodexTyping {
   /** Whether the command was typed. */
@@ -211,8 +232,8 @@ export function typeIntoCodexComposer(
     return none(NOT_AT_PROMPT)
   }
   const key = runKey(sessionId, run)
-  const read = readCodexScreen(deps.readScreen(sessionId), deps.footerModels?.(sessionId) ?? null, { startup: !startupDone.has(sessionId, key) })
-  if (read.screen === 'busy') startupDone.add(sessionId, key)
+  const read = readRun(sessionId, deps, deps.footerModels?.(sessionId) ?? null, !startupDone.has(sessionId, key))
+  if (read.turn) startupDone.add(sessionId, key)
   if (read.screen === 'starting') return none(STARTING_NOW)
   if (read.screen === 'busy') return none(BUSY_NOW)
   if (read.screen === 'unrecognised') return none(UNREADABLE_PROMPT)
@@ -236,9 +257,9 @@ export function typeIntoCodexComposer(
       let how: CodexSettled = { reason: 'run-changed', erased: false }
       try {
         if (!sameRun(run, deps.currentRun(sessionId))) return
-        const again = deps.readScreen(sessionId)
-        const now = readCodexScreen(again, models, { startup: !startupDone.has(sessionId, key) }).screen
-        if (now !== 'blocked' && codexComposerText(again) === command) {
+        const again = readRun(sessionId, deps, models, !startupDone.has(sessionId, key))
+        const now = again.screen
+        if (now !== 'blocked' && codexComposerText(again.lines) === command) {
           deps.write(sessionId, BACKSPACE.repeat(command.length))
           how = { reason, erased: true }
         } else {
@@ -257,16 +278,17 @@ export function typeIntoCodexComposer(
     try {
       if (!sameRun(run, deps.currentRun(sessionId))) return
       const models = deps.footerModels?.(sessionId) ?? null
-      const screen = deps.readScreen(sessionId)
-      if (opts.wrapped ? codexTextTyped(screen, command, models) : codexCommandTyped(screen, command, models)) {
+      const read = readRun(sessionId, deps, models, !startupDone.has(sessionId, key))
+      const screen = read.lines
+      if (opts.wrapped ? codexTextTyped(screen, command, models, read.title) : codexCommandTyped(screen, command, models, read.title)) {
         deps.write(sessionId, '\r')
         startupDone.add(sessionId, key)
         sent = true
         how = { erased: false }
         return
       }
-      const now = readCodexScreen(screen, models, { startup: !startupDone.has(sessionId, key) }).screen
-      if (now === 'busy') startupDone.add(sessionId, key)
+      const now = read.screen
+      if (read.turn) startupDone.add(sessionId, key)
       const own = codexComposerText(screen) === command
       const reason: CodexWithheld = now === 'blocked' ? 'blocked'
         : !own ? 'text'
@@ -358,10 +380,13 @@ export function planModeNote(why: CodexWaitEnd): string {
  * after the command was typed, its Enter is withheld and what was typed is
  * erased, and the wait goes on (at most CODEX_PLAN_MODE_TRIES tries). Gives
  * up (`onGiveUp` told the real reason; nothing left typed) when that first
- * ready screen already holds text, a turn is seen running, a prompt or the
- * user's text stops the Enter, or `timeoutMs` passes. Stops silently when the
- * run it started with ends or is replaced, and on cancel(). Never types into
- * the trust prompt or a picker: they are not the ready composer.
+ * ready screen already holds text, a turn is seen running on screen (its
+ * status row or the queue hint), a prompt or the user's text stops the Enter,
+ * or `timeoutMs` passes. A turn shown only by the window title's spinner
+ * (2.1.3-beta.13 B2) is waited out instead: Codex also spins it for a moment
+ * as it starts (readRun). Stops silently when the run it started with ends or
+ * is replaced, and on cancel(). Never types into the trust prompt or a picker:
+ * they are not the ready composer.
  */
 export function typeWhenCodexComposerReady(
   sessionId: string,
@@ -403,9 +428,10 @@ export function typeWhenCodexComposerReady(
       return
     }
     const key = runKey(sessionId, run!)
-    const read = readCodexScreen(deps.readScreen(sessionId), deps.footerModels?.(sessionId) ?? null, { startup: !startupDone.has(sessionId, key) })
-    if (read.screen === 'busy') startupDone.add(sessionId, key)
-    if (read.screen === 'busy' || (read.screen === 'ready' && read.text !== '')) {
+    const read = readRun(sessionId, deps, deps.footerModels?.(sessionId) ?? null, !startupDone.has(sessionId, key))
+    if (read.turn) startupDone.add(sessionId, key)
+    // B2: busy by the title alone waits (readRun), as Codex's start-up does.
+    if (read.turn || (read.screen === 'ready' && read.text !== '')) {
       done = true
       giveUp('interrupted')
       return

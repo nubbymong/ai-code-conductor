@@ -8,13 +8,17 @@
 // opens the identity editor; "N running"; a refused inactivate or archive
 // names the sessions holding the account, with Go to), and archived accounts
 // are listed under "Archived (N)" with Restore (design 5.3), all but the
-// one for this computer's own sign-in, which is retired.
+// one for this computer's own sign-in, which is retired. aicc_planning#381:
+// the rows keep the order the accounts were added in
+// (selectAccountsInAddedOrder: making one active or inactive never moves
+// it), and the page's All / Active / Inactive filter applies to them.
+// Archived accounts and unfinished setups show under every filter.
 import React, { useEffect, useRef, useState } from 'react'
 import type { AccountView, AccountsResult, AccountsSnapshot, KnownAuthState, PendingSetupView, ProviderId, ProviderInstallationView, SignInMethod } from '../../../../shared/providers'
 import type { IdentityColorKey } from '../../../../shared/identity-colors'
 import { resolveIdentityColor } from '../../../../shared/identity-colors'
 import {
-  useProviderAccountsStore, providerAccountActions, providerView, selectProviderAccounts, accountDisplayName, canOfferMakeReviewer,
+  useProviderAccountsStore, providerAccountActions, providerView, selectAccountsInAddedOrder, accountDisplayName, canOfferMakeReviewer,
   showsReviewerBadge, accountFailureText, accountState, signInMethodLabel, externalHomeFolder, canOfferSignInAgain,
   externalHomeLabelInSentence, accountNameInSentence,
   canOfferMakeInactive, canOfferMakeActive, canOfferArchive, canOfferCheckSignIn, signInCheckText, externalSignInHint, externalSignInRetiring,
@@ -32,6 +36,7 @@ import { IdentityEditor } from './IdentityEditor'
 import { RowMenu, type MenuItem } from '../../ui/RowMenu'
 import { AddProviderAccountDialog, SignInAgainDialog } from './AddProviderAccountDialog'
 import { useCodexWebStore } from '../../../stores/codexWebStore'
+import { useAccountsFilterStore, filterShows, filterEmptyText } from '../../../stores/accountsFilterStore'
 import { isWebSessionAccountId } from '../../../../shared/account-web-session'
 
 type ExternalAck = 'logout' | 'archive'
@@ -473,6 +478,7 @@ function PendingSetupRow({ setup, manageable, onResume, replacesName }: { setup:
 
 export function ManagedAccountsSection({ providerId }: { providerId: ProviderId }) {
   const snapshot = useProviderAccountsStore((s) => s.snapshot)
+  const filter = useAccountsFilterStore((s) => s.filter)
   const [dialog, setDialog] = useState<AddAccountDialogState | null>(null)
   // P4.6: a chatgpt.com sign-in main is running (this page reopened, or the
   // window reloaded) shows on its row again, with its Cancel.
@@ -482,7 +488,8 @@ export function ManagedAccountsSection({ providerId }: { providerId: ProviderId 
   const provider = providerView(snapshot, providerId)
   if (!snapshot || !provider || !provider.managedAccounts) return null
 
-  const accounts = selectProviderAccounts(snapshot, providerId)
+  const accounts = selectAccountsInAddedOrder(snapshot, providerId).filter((a) => filterShows(filter, a.lifecycle === 'active'))
+  const emptyText = accounts.length === 0 ? filterEmptyText(filter) : null
   const archived = selectArchivedAccounts(snapshot, providerId)
   // A sign in again being run by its own dialog is that dialog's to show.
   // So is a setup its Add account dialog is naming or resuming now.
@@ -497,6 +504,7 @@ export function ManagedAccountsSection({ providerId }: { providerId: ProviderId 
       )}
       <div>
         {accounts.map((a) => <ManagedAccountRow key={a.id} account={a} provider={provider} snapshot={snapshot} onAddAccount={setDialog} />)}
+        {emptyText && <MutedLine testId={`accounts-filter-empty-${providerId}`}>{emptyText}</MutedLine>}
       </div>
       {archived.length > 0 && (
         <div className="pt-2.5" style={{ borderTop: '1px solid var(--border-subtle)' }} data-testid={`archived-accounts-${providerId}`}>

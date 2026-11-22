@@ -30,9 +30,49 @@
  * plain text is some 28,000 lines, and a tab keeps 10,000. What the left-out
  * part changed in the terminal (the alternate screen left, the input modes) is
  * carried across the cut. Once the replay is shown, a program still running is
- * asked to redraw by a resize one row shorter and back (2.1.3-beta.12, plan
- * section A1; probe P19). The view is not cleared and the terminal not reset:
- * shown again, the tab's terminal keeps the modes its program set.
+ * asked to redraw (probe P19): on the console built into Windows by one resize
+ * at the tab's own size, which makes that console draw its whole screen again
+ * with nothing moved (2.1.3-beta.13, plan section A4); elsewhere, where a
+ * resize to the same size redraws nothing, by a resize one row shorter and
+ * back (2.1.3-beta.12, plan section A1). That console, made one row shorter,
+ * drops its top row and moves the rest up, so a shell at its prompt would
+ * write its next line a row below where the tab shows the prompt. The view is
+ * not cleared and the terminal not reset: shown again, the tab's terminal
+ * keeps the modes its program set.
+ *
+ * A Windows console's output is right only at the size it was made for, and a
+ * restored tab's first size can differ for a moment from the one it settles
+ * at (2.1.3-beta.13, plan section A1, aicc_planning#374). So a take-over
+ * whose holder offers the screen reads asks the holder's size first
+ * (`screen.read`), and while the program runs its replay, cut or whole, is
+ * held until it is all in and the tab is at that size, or until the size
+ * wait's own cap (SIZE_WAIT_MAX_MS); meanwhile the tab's size is not sent,
+ * so the holder never redraws for a size the tab only passes through. A
+ * whole replay is shown as it is, with no notice. A holder without the
+ * screen reads and a read that fails are shown as before, with no wait for
+ * the size. A program that is over waits as one still running does, and its
+ * exit follows its replay (2.1.3-beta.13, plan section A4). A replay after a
+ * gap shown with the tab at its holder's size, and nothing shown before it,
+ * has its rows counted with the cursor's row followed (2.1.3-beta.13, plan
+ * section A2): a console's wrapped line counts the 3 rows the tab gives it,
+ * not 5, so the tab is shown about as much of it as it keeps. What is shown
+ * then starts on the tab's last row, where the count has the console's
+ * cursor, with the notice on the row above it, and the empty rows above the
+ * notice are dropped from the scrollback once they have left the screen
+ * (plan section A4): the notice is the tab's first row, the first kept line
+ * its second.
+ *
+ * A take-over's replay was shown already, by the app that ran before, up to
+ * where that app stopped, and its tab answered the terminal queries in it
+ * then (a program asking the terminal where its cursor is, what it is, or its
+ * colours); a query written after that app stopped had no terminal to answer
+ * it, and its program's wait for one is long over. So the replay, up to the
+ * attach's ring_end, loses each of them (replay-queries.ts), and neither the
+ * tab nor main's colour answer answers them into a program that no longer
+ * waits (2.1.3-beta.13, plan section A3, aicc_planning#360). A query cut by
+ * ring_end is finished by the live output after it, and answered once. A
+ * launch's output and an attach again's replay were never shown, and a
+ * program may still wait for those answers: they go to the tab untouched.
  */
 import type { IDisposable, IEvent, IPty } from 'node-pty'
 import { StringDecoder } from 'string_decoder'
@@ -41,6 +81,7 @@ import { LAUNCH_LIMITS, type HolderRecord, type LaunchSpec } from './protocol'
 import { stripSpoofableText } from '../../shared/safe-text'
 import { TERMINAL_SCROLLBACK_LINES } from '../../shared/terminal-scrollback'
 import { replayTail, rowsOf } from './replay-tail'
+import { ReplayQueryFilter } from './replay-queries'
 import { PTY_IO_FAILED_GRACE_MS, PTY_IO_FAILED_TEXT, guardPtyIo } from '../pty-input-guard'
 
 export interface HelperPtyDriver {
@@ -68,7 +109,8 @@ export interface HelperPtyDriver {
    *  launch: the usual way keeps the spawn's own arguments. */
   launchArgs?(conn: HolderConnection): Pick<LaunchSpec, 'argv' | 'line'> | undefined
   log(message: string): void
-  /** The clock for the attach-again budget. */
+  /** The clock for the attach-again budget, and for the time a take-over's
+   *  tab took to reach its holder's size (logged). */
   now?: () => number
   /** False: a failed input or output of the usual-way terminal (fallBack) is
    *  logged and nothing more, and the terminal is not ended PTY_IO_FAILED_GRACE_MS
@@ -93,6 +135,16 @@ export class NothingStartedError extends Error {
   }
 }
 
+/**
+ * How a program still running is asked to redraw after a replay from the
+ * middle of its output (redrawOnce). 'same-size': one resize at the tab's own
+ * size, for the console built into Windows, which draws its whole screen
+ * again on any resize (probe P19) and, at the same size, moves no row.
+ * 'nudge': one row shorter and back, for node-pty's bundled ConPTY, macOS and
+ * Linux, where a resize to the same size redraws nothing.
+ */
+export type RedrawWay = 'same-size' | 'nudge'
+
 export interface HelperPtyOptions {
   sid: string
   label: string
@@ -100,6 +152,10 @@ export interface HelperPtyOptions {
   /** Set to adopt this holder instead of starting one. */
   adopt?: HolderRecord
   driver: HelperPtyDriver
+  /** The redraw after a replay from the middle; 'nudge' when absent. The
+   *  session-helper manager gives 'same-size' to a launch on the console
+   *  built into Windows (2.1.3-beta.13, plan section A4). */
+  redraw?: RedrawWay
 }
 
 /** An exit code for a terminal whose holder could no longer be reached. */
@@ -132,6 +188,15 @@ const CUT_CHARACTER_MAX = 3
  *  the one way the notice can still go out of reach: a rest that comes after
  *  the cap and is longer than the tab keeps is not trimmed. */
 export const HOLD_MAX_MS = 2_000
+/** A take-over's replay waits at most this long for the tab to reach the
+ *  holder's size, from when that size is known; then it is shown at the
+ *  tab's size, as before, and the log says both sizes. Set from the longest
+ *  wait the VM's restores saw, with margin (2.1.3-beta.13, plan sections A2
+ *  and A4): counted from the spawn, 1,417 ms in A2's line and 1,334 ms in
+ *  A4's, where 3 of 14 restores took over 1.3 s. 2,000 ms left too little
+ *  room for a slower PC. Each restore logs how long its tab took (from the
+ *  spawn), so a later line can set it again. */
+export const SIZE_WAIT_MAX_MS = 3_000
 
 class Emitter<T> {
   private listeners: Array<(e: T) => void> = []
@@ -149,18 +214,32 @@ class Emitter<T> {
 
 type AttachMode = 'launch' | 'adopt' | 'again'
 
-/** A replay held after a gap (fromTheMiddle): its text so far, the offset it
+/** A replay held after a gap (fromTheMiddle), or a take-over's whole replay
+ *  held for the holder's size (holdWhole): its text so far, the offset it
  *  ends at (moved on by an attach again with no new gap), and the HOLD_MAX_MS
- *  timer. */
+ *  timer. `due` once it is all in or that cap passed: it is shown then,
+ *  unless the size wait still holds it. */
 interface Hold {
   end: number
   parts: string[]
   timer: ReturnType<typeof setTimeout> | undefined
+  /** From the holder's first byte: nothing was left out, so no notice and no cut. */
+  whole: boolean
+  due: boolean
+}
+
+/** A take-over waiting for its tab to reach the holder's size, and its cap. */
+interface SizeWait {
+  cols: number
+  rows: number
+  timer: ReturnType<typeof setTimeout>
 }
 
 export class HelperPty implements IPty {
   readonly sid: string
   readonly label: string
+  /** How its program is asked to redraw after a replay from the middle. */
+  readonly redrawWay: RedrawWay
   handleFlowControl = false
 
   private readonly spec: LaunchSpec
@@ -205,9 +284,32 @@ export class HelperPty implements IPty {
   /** Shown from the middle of its output: the replay's text, held until the
    *  offset reaches `end` (the reply's ring_end), then shown by showHeld. */
   private held: Hold | undefined
+  /** A take-over whose tab is not at its holder's size yet (startSizeWait). */
+  private sizeWait: SizeWait | undefined
+  /** The size wait saw the tab reach its holder's size, and the tab's size
+   *  has not changed since: a replay shown before anything else is then
+   *  counted with the cursor's row followed (showHeld). A wait its cap ended,
+   *  or none, leaves it false. */
+  private atHolderSize = false
+  /** When this terminal was spawned, and when the tab last gave its size
+   *  (the spawn's, until a resize), on the driver's clock: the log says how
+   *  long a take-over's tab took to reach its holder's size. */
+  private readonly bornAt: number
+  private sizeAt: number
+  /** The size the tab started at (the spawn's): the size wait's log line names it. */
+  private readonly bornSize: { cols: number; rows: number }
+  /** A program over before its attach waits for the size wait's end to end
+   *  its holder (exitAfterReplay): what the wait's end runs then. */
+  private afterSizeWait: (() => void) | undefined
   /** Bytes at the replay's very start that continue a character cut in half
    *  are dropped: at most this many more. */
   private cutBytes = 0
+  /** A take-over's replay goes through this until the offset reaches `end`,
+   *  the attach's ring_end: its terminal queries are taken out. An attach
+   *  again goes on with it, to that end; after a gap of its own it first
+   *  gives back what it held (flushDecoder), and a gap that starts past
+   *  that end ends it. */
+  private queries: { filter: ReplayQueryFilter; end: number } | undefined
   /** Some of this terminal's output was shown to the tab already. */
   private shownAny = false
   private reattachTimes: number[] = []
@@ -232,7 +334,11 @@ export class HelperPty implements IPty {
     this.spec = opts.spec
     this.driver = opts.driver
     this.record = opts.adopt
+    this.redrawWay = opts.redraw ?? 'nudge'
     this.size = { cols: opts.spec.cols, rows: opts.spec.rows }
+    this.bornSize = { ...this.size }
+    this.bornAt = this.now()
+    this.sizeAt = this.bornAt
     this.ended = new Promise<void>((r) => { this.resolveEnded = r })
     this.adoption = new Promise<boolean>((r) => {
       this.resolveAdoption = (held) => {
@@ -283,7 +389,17 @@ export class HelperPty implements IPty {
     const c = Math.max(1, Math.min(LAUNCH_LIMITS.termCells, Math.floor(cols)))
     const r = Math.max(1, Math.min(LAUNCH_LIMITS.termCells, Math.floor(rows)))
     if (!Number.isFinite(c) || !Number.isFinite(r)) return
+    if (c !== this.size.cols || r !== this.size.rows) this.atHolderSize = false
     this.size = { cols: c, rows: r }
+    this.sizeAt = this.now()
+    // A take-over waiting for its holder's size: a size on the way there is
+    // not sent, and the holder's own ends the wait.
+    const w = this.sizeWait
+    if (w) {
+      this.sizeChanged = true
+      if (c === w.cols && r === w.rows) this.endSizeWait(true)
+      return
+    }
     if (this.attached && this.conn) this.sendResize()
     else this.sizeChanged = true
   }
@@ -328,6 +444,7 @@ export class HelperPty implements IPty {
     // Cleared first, so the connection's own close finds nothing to do here.
     this.conn = undefined
     // A replay still held is shown before the holder is let go of.
+    this.stopSizeWait()
     this.showHeld()
     this.setDetached()
     this.stopRedraw()
@@ -404,11 +521,73 @@ export class HelperPty implements IPty {
     }
     this.useConnection(conn)
     if (this.ending) { void this.endHolder(null); return }
+    // The holder's size, before the attach, so its replay can wait for the
+    // tab to be at it. A kill meanwhile sent the end already.
+    const holder = await this.holderSizeOf(conn)
+    if (this.ending || this.exited) return
+    if (holder) this.startSizeWait(holder)
     // Typed before the terminal came back: meant for a new shell, not this one.
     this.queued = []
     this.queuedBytes = 0
     this.sizeChanged = true
     await this.attach(conn, 0, 'adopt')
+  }
+
+  /** The holder's size, by `screen.read` on `conn`. None when the holder
+   *  offers no screen reads or the read fails: the replay is then shown as it
+   *  comes, at the tab's size, as before. */
+  private async holderSizeOf(conn: HolderConnection): Promise<{ cols: number; rows: number } | undefined> {
+    if (!conn.screen) return undefined
+    try {
+      const { cols, rows } = await conn.readScreen()
+      return { cols, rows }
+    } catch (err) {
+      // Ended meanwhile (its connection closed under the read): nothing to say.
+      if (!this.ending && !this.exited) this.driver.log(`[session-helper] ${this.sid}: its holder's size could not be read (${stripSpoofableText((err as Error).message, 120)}), so its replay is shown at the tab's size`)
+      return undefined
+    }
+  }
+
+  /** The take-over waits for its tab to reach the holder's size, at most
+   *  SIZE_WAIT_MAX_MS: none when the tab is at it already. */
+  private startSizeWait(holder: { cols: number; rows: number }): void {
+    const timer = setTimeout(() => this.endSizeWait(false), SIZE_WAIT_MAX_MS)
+    this.sizeWait = { ...holder, timer }
+    if (this.size.cols === holder.cols && this.size.rows === holder.rows) this.endSizeWait(true)
+  }
+
+  /**
+   * The size wait ends: the tab reached the holder's size (`reached`), or the
+   * cap passed. One log line either way, naming the tab and the size it
+   * started at. A held replay that is all in is shown now, then what the wait
+   * put off goes out: the redraw after a gap, else the tab's size; for a
+   * program that is over, nothing, and its end follows (exitAfterReplay).
+   */
+  private endSizeWait(reached: boolean): void {
+    const w = this.sizeWait
+    if (!w) return
+    this.stopSizeWait()
+    const { cols, rows } = this.size
+    const born = this.bornSize
+    this.atHolderSize = reached
+    this.driver.log(reached
+      ? `[session-helper] ${this.sid} (tab ${this.label}): the tab is at its holder's size ${cols}x${rows}, ${Math.max(0, this.sizeAt - this.bornAt)} ms after it started at ${born.cols}x${born.rows}`
+      : `[session-helper] ${this.sid} (tab ${this.label}): the tab did not reach its holder's size ${w.cols}x${w.rows} within ${SIZE_WAIT_MAX_MS} ms (it is ${cols}x${rows}, and started at ${born.cols}x${born.rows}), so its replay is shown at the tab's size`)
+    if (this.held?.due) this.showHeld()
+    const after = this.afterSizeWait
+    this.afterSizeWait = undefined
+    if (after) { after(); return }
+    const conn = this.conn
+    if (!conn || !this.attached || this.ending || this.exited) return
+    if (this.redraw) this.redrawOnce(conn)
+    else if (this.sizeChanged) this.sendResize()
+  }
+
+  /** No size wait from here on, and nothing it put off is sent from it. */
+  private stopSizeWait(): void {
+    if (!this.sizeWait) return
+    clearTimeout(this.sizeWait.timer)
+    this.sizeWait = undefined
   }
 
   private async attach(conn: HolderConnection, from: number, mode: AttachMode): Promise<void> {
@@ -426,11 +605,19 @@ export class HelperPty implements IPty {
         const gap = m.truncated === true || start > from
         if (start !== from || gap) this.flushDecoder()
         this.offset = start
+        // A take-over's replay loses its queries, to this reply's ring_end; a
+        // gap that starts past that end ends the filter.
+        if (mode === 'adopt') this.startQueries(m)
+        else if (this.queries && start >= this.queries.end) this.endQueries()
+        // A program that is over waits for the size as one still running
+        // does (its exit follows its replay, exitAfterReplay), so its replay
+        // too is shown at the size its output was made for.
         if (gap) {
           this.fromTheMiddle(conn, Math.max(0, start - from), m)
           return
         }
         if (this.held) this.holdOn(m)
+        else if (this.sizeWait) this.holdWhole(m)
         if (this.redrawOwed !== undefined) this.redrawStillOwed(conn, m)
       })
     } catch (err) {
@@ -465,13 +652,17 @@ export class HelperPty implements IPty {
       this.exitAfterReplay(conn, end, code)
       return
     }
-    // After a gap the redraw ends at the tab's size, so this one is not sent as well.
-    if (this.sizeChanged && !this.redraw) this.sendResize()
+    // After a gap the redraw ends at the tab's size, so this one is not sent
+    // as well; while the size wait is on, the wait's end sends it.
+    if (this.sizeChanged && !this.redraw && !this.sizeWait) this.sendResize()
     const queued = this.queued
     this.queued = []
     this.queuedBytes = 0
     for (const b of queued) conn.sendInput(b)
     // The replay may have been shown already, before this attach was settled.
+    // One held to its end that nothing else shows now (it is empty, and no
+    // redraw or size wait follows) goes here.
+    if (this.held?.due && !this.sizeWait) this.showHeld()
     this.redrawOnce(conn)
   }
 
@@ -489,9 +680,12 @@ export class HelperPty implements IPty {
    * shown first and a new one starts. A hold ends at the replay's end, when
    * the connection is replaced, when the terminal ends, starts the usual way
    * or is let go of for an update, or HOLD_MAX_MS after it started; whichever
-   * way, what was held is shown, the same way, once. Bytes at the replay's
-   * very start that continue a character cut in half are still dropped before
-   * decoding. Typed input and resizes go out during a hold as at any time. A
+   * way, what was held is shown, the same way, once. A take-over still
+   * waiting for its tab to reach the holder's size (startSizeWait) keeps a
+   * hold that is all in, or past HOLD_MAX_MS, until that wait ends, and sends
+   * no size meanwhile. Bytes at the replay's very start that continue a
+   * character cut in half are still dropped before decoding. Typed input goes
+   * out during a hold as at any time, and so do resizes outside that wait. A
    * program still running is asked to redraw once the replay is shown
    * (redrawOnce), after the held text. Nothing clears the view or resets the
    * terminal, and no mode is set but those the left-out part of the replay
@@ -505,19 +699,34 @@ export class HelperPty implements IPty {
     const all = lost + (this.redrawOwed ?? 0)
     this.redrawOwed = undefined
     this.cutBytes = CUT_CHARACTER_MAX
-    const start = this.offset
-    const end = typeof reply.ring_end === 'number' && reply.ring_end >= start ? reply.ring_end : start
-    const held: Hold = { end, parts: [], timer: undefined }
-    held.timer = setTimeout(() => {
-      if (this.held !== held) return
-      this.driver.log(`[session-helper] ${this.sid}: its replay did not end within ${HOLD_MAX_MS} ms, so what came of it is shown now`)
-      this.showHeld()
-    }, HOLD_MAX_MS)
     // An empty replay needs nothing more here: what follows the attach shows
     // it at once (redrawOnce for a program still running, exitAfterReplay for
-    // one that is over).
-    this.held = held
+    // one that is over), or the size wait's end does.
+    this.held = this.newHold(reply, false)
     this.awaitReplayEnd(conn, all, reply)
+  }
+
+  /** A take-over's whole replay (no gap), held while the tab is not at its
+   *  holder's size: shown as it is once it is all in and the tab is at that
+   *  size, or at either cap, with no notice. */
+  private holdWhole(reply: Record<string, unknown>): void {
+    this.held = this.newHold(reply, true)
+  }
+
+  /** A hold of the replay that follows `reply`, to its ring_end, with its
+   *  HOLD_MAX_MS cap: due at once when that replay is empty. */
+  private newHold(reply: Record<string, unknown>, whole: boolean): Hold {
+    const start = this.offset
+    const end = typeof reply.ring_end === 'number' && reply.ring_end >= start ? reply.ring_end : start
+    const held: Hold = { end, parts: [], timer: undefined, whole, due: end <= start }
+    held.timer = setTimeout(() => {
+      // All in already and held only for the holder's size: that wait's cap governs.
+      if (this.held !== held || held.due) return
+      held.due = true
+      this.driver.log(`[session-helper] ${this.sid}: its replay did not end within ${HOLD_MAX_MS} ms, so what came of it is shown ${this.sizeWait ? "once the tab is at its holder's size" : 'now'}`)
+      if (!this.sizeWait) this.showHeld()
+    }, HOLD_MAX_MS)
+    return held
   }
 
   /** An attach again with no new gap while a replay is held: the hold goes on,
@@ -525,7 +734,9 @@ export class HelperPty implements IPty {
    *  attach, as in fromTheMiddle. */
   private holdOn(reply: Record<string, unknown>): void {
     const held = this.held
-    if (held) held.end = typeof reply.ring_end === 'number' && reply.ring_end >= this.offset ? reply.ring_end : this.offset
+    if (!held) return
+    held.end = typeof reply.ring_end === 'number' && reply.ring_end >= this.offset ? reply.ring_end : this.offset
+    if (held.end <= this.offset) held.due = true
   }
 
   /**
@@ -542,7 +753,15 @@ export class HelperPty implements IPty {
    * least a screen, so the notice stays in the scrollback through the redraw
    * and a screen more of output (replay-tail.ts says how rows are counted and
    * where the cut can land). Held text that is the start of live output (a
-   * frame that carries the replay's end and more) is part of the piece.
+   * frame that carries the replay's end and more) is part of the piece. A tab
+   * the size wait saw reach its holder's size, still at it and shown nothing
+   * yet, has the held text's rows counted with the cursor's row followed
+   * (2.1.3-beta.13, plan section A2); what is shown then starts on the tab's
+   * last row, with the notice on the row above it, and the scrollback is
+   * cleared where the empty rows above the notice have just left the screen
+   * (plan section A4; replay-tail.ts, `clear`). A tab too short for the notice
+   * and a row under it gets the notice from the start of a row, what is shown
+   * moved to the last row, and the rows less one off the budget.
    */
   private showHeld(): void {
     const held = this.held
@@ -550,11 +769,40 @@ export class HelperPty implements IPty {
     this.held = undefined
     clearTimeout(held.timer)
     const text = held.parts.join('')
+    // A whole replay left nothing out: shown as it is.
+    if (held.whole) {
+      if (text) this.show(text)
+      return
+    }
     const { cols, rows } = this.size
-    const budget = Math.max(rows, TERMINAL_SCROLLBACK_LINES - rows - rowsOf(EARLIER_OUTPUT_NOT_SHOWN, cols))
-    const { from, left, part, before, after } = replayTail(text, cols, budget)
-    if (from > 0) this.driver.log(`[session-helper] ${this.sid}: the oldest ${left} lines of its replay${part ? ', and the start of the line after them,' : ''} are not shown either, so the line saying so stays within the ${TERMINAL_SCROLLBACK_LINES} lines the tab keeps`)
-    this.show(`${CANCEL}${before}${ATTRIBUTE_RESET}${this.shownAny ? '\r\n' : ''}${EARLIER_OUTPUT_NOT_SHOWN}\r\n${after}${from > 0 ? text.slice(from) : text}`)
+    // At the size its holder's output was made for, and shown nothing yet: the
+    // cursor's row is followed, so a console's wrapped line counts the rows
+    // the tab gives it. The count has the console's cursor on the last row
+    // wherever it can cut, so what is shown starts there: a console's jump to
+    // the row above then lands where it did in the console, not on the
+    // notice's row or an empty one.
+    const exact = this.atHolderSize && !this.shownAny
+    const noticeRows = rowsOf(EARLIER_OUTPUT_NOT_SHOWN, cols)
+    // The notice on the row above that start, so no row lies between them.
+    // The `gap` empty rows above the notice leave the screen first, and once
+    // they have (`clear`) the scrollback holds only them: a clear there drops
+    // them and leaves the notice the tab's first row. Only when nothing was
+    // shown, so the scrollback holds nothing else.
+    const above = exact && noticeRows < rows
+    const gap = rows - 1 - noticeRows
+    // A tab too short for that: the notice from a row's start, then what is
+    // shown on the last row, with the rows less one off the budget for the
+    // empty rows between them.
+    const budget = Math.max(rows, TERMINAL_SCROLLBACK_LINES - rows - noticeRows - (exact && !above ? rows - 1 : 0))
+    const { from, left, part, before, after, clear } = replayTail(text, cols, budget, exact ? rows : undefined, above ? gap : undefined)
+    if (from > 0) this.driver.log(`[session-helper] ${this.sid}: the oldest ${left} lines of its replay${part ? ', and the start of the line after them,' : ''} are not shown either, so the line saying so stays within the ${TERMINAL_SCROLLBACK_LINES} lines the tab keeps (rows counted at ${cols}x${rows}${exact ? ", the cursor's row followed" : ''})`)
+    const shown = from > 0 ? text.slice(from) : text
+    if (above) {
+      const body = clear === undefined ? shown : `${shown.slice(0, clear - from)}\x1b[3J${shown.slice(clear - from)}`
+      this.show(`${CANCEL}${before}${ATTRIBUTE_RESET}\x1b[${rows - noticeRows};1H${EARLIER_OUTPUT_NOT_SHOWN}\r\n${after}${body}`)
+      return
+    }
+    this.show(`${CANCEL}${before}${ATTRIBUTE_RESET}${this.shownAny ? '\r\n' : ''}${EARLIER_OUTPUT_NOT_SHOWN}\r\n${exact ? `\x1b[${rows};1H` : ''}${after}${shown}`)
   }
 
   /**
@@ -581,27 +829,42 @@ export class HelperPty implements IPty {
   }
 
   /**
-   * Once the replay after a gap is shown and the program still runs: one
-   * resize one row shorter than the tab (one taller for a tab one row high),
-   * then, REDRAW_BACK_MS later, one at the tab's size as it is then. Probe
-   * P19: a resize to the size the terminal already has makes a program redraw
-   * only on the ConPTY built into Windows. To the holder only: no pane is
-   * resized, and a resize the tab asks for meanwhile goes out as usual.
+   * Once the replay after a gap is shown and the program still runs, the
+   * program is asked to redraw (`redrawWay`). 'same-size': one resize at the
+   * tab's size. Probe P19: on the console built into Windows that is enough,
+   * at every state measured, for that console draws its whole screen again on
+   * any resize; and at the same size it moves no row, so a shell at its
+   * prompt still writes on the prompt's row (2.1.3-beta.13, plan section A4).
+   * 'nudge': one resize one row shorter than the tab (one taller for a tab
+   * one row high), then, REDRAW_BACK_MS later, one at the tab's size as it is
+   * then, for a terminal where a resize to its own size redraws nothing. To
+   * the holder only: no pane is resized, and a resize the tab asks for
+   * meanwhile goes out as usual.
    */
   private redrawOnce(conn: HolderConnection): void {
     const r = this.redraw
     if (!r || r.conn !== conn || this.conn !== conn || !this.attached || this.ending || this.exited || this.offset < r.end) return
+    // Not while the tab is on its way to the holder's size: the wait's end
+    // runs this.
+    if (this.sizeWait) return
     // The held replay ends where this redraw waits, so it is shown already;
     // were it not, it goes first all the same.
     this.showHeld()
     this.redraw = undefined
     this.redrawOwed = undefined
     const { cols, rows } = this.size
+    this.driver.log(`[session-helper] ${this.sid}: ${r.lost} bytes of earlier output are no longer held, so they are not shown; asked its program to redraw`)
+    if (this.redrawWay === 'same-size') {
+      // As sendResize, but a connection that closes with this frame unread
+      // leaves the holder's size unknown, so the attach again sends the tab's.
+      this.sizeChanged = false
+      conn.request({ t: 'term.resize', cols, rows }).catch(() => { if (conn.isClosed) this.sizeChanged = true })
+      return
+    }
     // The holder's size differs from the tab's until the second half: an
     // attach again before it sends the tab's.
     this.sizeChanged = true
     conn.request({ t: 'term.resize', cols, rows: rows > 1 ? rows - 1 : rows + 1 }).catch(() => { /* gone or refused: the second half still sends the tab's size */ })
-    this.driver.log(`[session-helper] ${this.sid}: ${r.lost} bytes of earlier output are no longer held, so they are not shown; asked its program to redraw`)
     this.redrawTimer = setTimeout(() => {
       this.redrawTimer = undefined
       if (this.conn !== conn || conn.isClosed || !this.attached || this.ending || this.exited || this.replaced) return
@@ -633,13 +896,24 @@ export class HelperPty implements IPty {
     this.conn = conn
     conn.on('output', (bytes: Buffer) => {
       if (this.conn !== conn || this.exited) return
+      const at = this.offset
       this.offset += bytes.length
-      const text = this.decoder.write(this.cutBytes > 0 ? this.dropCut(bytes) : bytes)
+      // A take-over's replay, to its ring_end, goes through the query filter;
+      // the live output after it does not.
+      const q = this.queries
+      const cut = q ? Math.max(0, Math.min(bytes.length, q.end - at)) : 0
+      let text = q && cut > 0 ? q.filter.write(this.decode(bytes.subarray(0, cut))) : ''
+      if (q && this.offset >= q.end) text += this.endQueries()
+      text += this.decode(cut > 0 ? bytes.subarray(cut) : bytes)
       const held = this.held
       if (held) {
-        // A frame that carries the replay's end and live output after it is held whole.
+        // A frame that carries the replay's end and live output after it is
+        // held whole, and so is output while the size wait goes on.
         if (text) held.parts.push(text)
-        if (this.offset >= held.end) this.showHeld()
+        if (this.offset >= held.end) {
+          held.due = true
+          if (!this.sizeWait) this.showHeld()
+        }
       } else if (text) this.show(text)
       // After the held text, never before it.
       if (this.redraw) this.redrawOnce(conn)
@@ -653,6 +927,7 @@ export class HelperPty implements IPty {
       if (this.conn !== conn) return
       if (code === 'replaced') {
         this.replaced = true
+        this.stopSizeWait()
         this.showHeld()
         this.stopRedraw()
         this.driver.log(`[session-helper] ${this.sid}: another connection took this terminal`)
@@ -680,7 +955,7 @@ export class HelperPty implements IPty {
   private async reconnect(why: string): Promise<void> {
     const record = this.record
     const old = this.conn
-    const now = this.driver.now?.() ?? Date.now()
+    const now = this.now()
     this.reattachTimes = this.reattachTimes.filter((t) => now - t < REATTACH_WINDOW_MS)
     if (!record || this.reattachTimes.length >= REATTACH_TRIES) {
       this.giveUp(`${why}, and it was attached again ${REATTACH_TRIES} times within a minute`)
@@ -713,6 +988,11 @@ export class HelperPty implements IPty {
     await this.attach(conn, this.offset, 'again')
   }
 
+  /** The driver's clock. */
+  private now(): number {
+    return this.driver.now?.() ?? Date.now()
+  }
+
   private sendResize(): void {
     this.sizeChanged = false
     const conn = this.conn
@@ -732,25 +1012,36 @@ export class HelperPty implements IPty {
     this.driver.attachedChanged(this.sid, false)
   }
 
-  /** The program ended while no tab showed it: show what it wrote, then end its holder. */
+  /**
+   * The program ended while no tab showed it: show what it wrote, then end
+   * its holder. The end waits for the replay's last byte (at most 500 ms) and
+   * for a size wait still on (its own cap bounds it, SIZE_WAIT_MAX_MS), so
+   * the replay is shown at its holder's size as a running program's is
+   * (2.1.3-beta.13, plan section A4).
+   */
   private exitAfterReplay(conn: HolderConnection, end: number, code: number): void {
     let done = false
+    let late = false
     const over = () => {
       if (done) return
       done = true
       clearTimeout(timer)
       conn.off('output', check)
+      if (this.afterSizeWait === check) this.afterSizeWait = undefined
       // endHolder shows a replay still held first (markEnding).
       void this.endHolder(code)
     }
-    const timer = setTimeout(over, 500)
-    const check = () => { if (this.offset >= end) over() }
+    const timer = setTimeout(() => { late = true; check() }, 500)
+    const check = () => { if ((late || this.offset >= end) && !this.sizeWait) over() }
+    if (this.sizeWait) this.afterSizeWait = check
     conn.on('output', check)
     check()
   }
 
   private markEnding(): void {
-    // Ending (closed, given up, or its program over): a replay still held is shown first.
+    // Ending (closed, given up, or its program over): a replay still held is
+    // shown first, whatever the tab's size.
+    this.stopSizeWait()
     this.showHeld()
     this.stopRedraw()
     if (this.ending) return
@@ -840,6 +1131,7 @@ export class HelperPty implements IPty {
     }
     this.conn = undefined
     // A replay still held goes to the tab before the new shell's output.
+    this.stopSizeWait()
     this.showHeld()
     this.setDetached()
     // A new shell from here on: the tab's launch lines are for it.
@@ -895,12 +1187,37 @@ export class HelperPty implements IPty {
     })
   }
 
-  /** The decoder's last half character, as its stream's own text: held with a replay still held. */
+  /** The decoder's last half character, as its stream's own text: held with a
+   *  replay still held. Before it, a sequence the query filter holds, as it
+   *  is: the stream goes on after a gap, or not at all. */
   private flushDecoder(): void {
-    const rest = this.decoder.end()
+    const rest = (this.queries?.filter.flush() ?? '') + this.decoder.end()
     if (!rest) return
     if (this.held) this.held.parts.push(rest)
     else this.show(rest)
+  }
+
+  /** A take-over's replay is in up to `reply`'s ring_end: its queries are taken out to there. */
+  private startQueries(reply: Record<string, unknown>): void {
+    const end = typeof reply.ring_end === 'number' ? reply.ring_end : this.offset
+    this.queries = end > this.offset ? { filter: new ReplayQueryFilter(), end } : undefined
+  }
+
+  /** The query filter's end: what it holds goes on as it is, and one log
+   *  line counts what it took out. */
+  private endQueries(): string {
+    const q = this.queries
+    if (!q) return ''
+    this.queries = undefined
+    const rest = q.filter.flush()
+    const n = q.filter.dropped
+    if (n > 0) this.driver.log(`[session-helper] ${this.sid}: ${n} terminal ${n === 1 ? 'query' : 'queries'} in its replay ${n === 1 ? 'was' : 'were'} not passed on, so ${n === 1 ? 'it is' : 'they are'} not answered again or late`)
+    return rest
+  }
+
+  /** Output bytes to text, the bytes of a cut character at the replay's very start dropped first. */
+  private decode(bytes: Buffer): string {
+    return this.decoder.write(this.cutBytes > 0 ? this.dropCut(bytes) : bytes)
   }
 
   /** Output of the holder's terminal, or a line of the app's own, to the tab. */
@@ -927,10 +1244,12 @@ export class HelperPty implements IPty {
     this.exited = true
     this.resolveAdoption(true)
     // A replay still held goes to the tab before the exit.
+    this.stopSizeWait()
     this.showHeld()
     this.setDetached()
     this.stopRedraw()
     this.flushDecoder()
+    this.endQueries()
     this.exitEmitter.fire(signal === undefined ? { exitCode } : { exitCode, signal })
   }
 }

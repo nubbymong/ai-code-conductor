@@ -404,6 +404,26 @@ describe('WatchdogManager — feedData debounce', () => {
     expect(tail).not.toContain('esc to interrupt')
   })
 
+  // 2.1.3-beta.13 B2 (aicc_planning#370): Codex's busy sign while a reply
+  // streams is a braille spinner at the start of its window title. The pane
+  // keeps the last title its output set, for Codex's send gate; a restart's
+  // new pane starts with none.
+  it('the pane keeps the window title its output sets, for the send gate; a restart starts with none', () => {
+    const { host } = makeHost()
+    const mgr = new WatchdogManager(host)
+    mgr.startWatchdog('codex1', { provider: 'codex', ssh: false, shellOnly: false })
+    expect(instances[0].adapter.getTitle()).toBeNull()
+    const spin = `${String.fromCharCode(0x280b)} work`
+    mgr.feedData('codex1', `\x1b]0;${spin}\x07`)
+    vi.advanceTimersByTime(50)
+    expect(instances[0].adapter.getTitle()).toBe(spin)
+    mgr.feedData('codex1', '\x1b]0;work\x07')
+    vi.advanceTimersByTime(50)
+    expect(instances[0].adapter.getTitle()).toBe('work')
+    mgr.startWatchdog('codex1', { provider: 'codex', ssh: false, shellOnly: false })
+    expect(instances[1].adapter.getTitle()).toBeNull()
+  })
+
   // #418: the styled read. The placeholder in an empty input arrives as SGR
   // dim (\x1b[2m); getTailNonDim() blanks those cells so the send gate can
   // tell the empty prompt wearing a hint from a real draft.

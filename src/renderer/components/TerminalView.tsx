@@ -44,7 +44,7 @@ import { decideFollow } from '../utils/terminalScroll'
 import { getTerminalTheme } from './terminal/terminalTheme'
 import { installTerminalKeybindings } from './terminal/terminalKeybindings'
 import { registerRepainter, requestResync } from './terminal/repaintRegistry'
-import { registerScreenReader, readXtermScreen } from './terminal/screenRegistry'
+import { registerScreenReader, readXtermScreen, keepTerminalTitle } from './terminal/screenRegistry'
 import { readContextPercent, stripTerminalControls } from './terminal/contextPercent'
 import { typeWhenCodexComposerReady, planModeNote, CODEX_PLAN_MODE_WAIT_MS } from '../lib/codexComposer'
 import { createGeometryResync, type GeometryResync } from './terminal/geometryResync'
@@ -71,6 +71,12 @@ import { generateId } from '../utils/id'
 
 // Re-export for consumers
 export { killSessionPty } from '../ptyTracker'
+
+/** aicc_planning#374 (P1.1): how many frames a pane's first fit waits for its
+ *  WebGL renderer (fitAndSpawn). The effect that attaches it runs within a
+ *  frame or two; the cap bounds a pane whose effect never runs, which then
+ *  fits as before. */
+const FIT_WAIT_FOR_RENDERER_FRAMES = 30
 
 // Main-process clipboard read first (focus-independent, retried for Windows
 // delayed-render), renderer API as a fallback if IPC is unavailable. Shared by
@@ -903,10 +909,14 @@ export default function TerminalView({ sessionId, configId, cwd, shellOnly, elev
       // task). A read writes the queue, and answers no screen while a batch is
       // unparsed: the screen would be up to a second old (the gates that read
       // fail closed on no screen and read again).
+      // 2.1.3-beta.13 B2 (aicc_planning#370): the window title beside it,
+      // kept for the run that set it (Codex's spinner there is its busy sign
+      // while a reply streams), read the same way.
+      const readTitle = keepTerminalTitle(sessionId, term)
       unregisterScreen = registerScreenReader(sessionId, () => {
         if (hiddenOutput?.prepareScreenRead().behind) return null
         return term ? readXtermScreen(term) : null
-      })
+      }, () => (hiddenOutput?.prepareScreenRead().behind ? null : readTitle()))
 
       // #119: cursor options passed to the Terminal constructor do NOT reliably
       // initialize the WebGL renderer's cursor layer — the caret stays absent
@@ -973,8 +983,23 @@ export default function TerminalView({ sessionId, configId, cwd, shellOnly, elev
       // a fallback font with different metrics -- result: Claude Code's TUI
       // thinks it has N cols but xterm displays fewer, causing line wrap
       // artifacts and text fragments on the right edge.
+      // aicc_planning#374 (P1.1): and for the pane's renderer. An active pane
+      // with GPU rendering on gets its WebGL renderer from the effect above,
+      // which runs after setTerminalReady; until its handle is there the fit
+      // measures the DOM renderer's wider cell (93 columns where WebGL fits
+      // 103), and the PTY would start at that size. The fit is put off a frame
+      // at a time, at most FIT_WAIT_FOR_RENDERER_FRAMES. A WebGL that failed
+      // to load still leaves a handle: that pane draws on the DOM renderer and
+      // fits at once.
+      let fitFramesLeft = FIT_WAIT_FOR_RENDERER_FRAMES
       const fitAndSpawn = () => {
         if (disposed || !fitAddon || !term) return
+        if (fitFramesLeft > 0 && isActiveRef.current && webglHandleRef.current === null
+          && gpuRenderingEnabled(useSettingsStore.getState().settings.terminal || DEFAULT_TERMINAL_SETTINGS)) {
+          fitFramesLeft--
+          requestAnimationFrame(fitAndSpawn)
+          return
+        }
         try { fitAddon.fit() } catch { /* ignore */ }
         // Seed the integrity geometry from the initial (font-aware) fit so the
         // first throttled report carries the real cols/rows instead of 0 — and
@@ -1254,9 +1279,11 @@ export default function TerminalView({ sessionId, configId, cwd, shellOnly, elev
                 // Codex has no launch flag for it: the session starts read-only
                 // (main), and its own /plan is typed into its FIRST ready
                 // prompt only (never the folder-trust prompt, a picker, the
-                // user's typing or after a turn), within a bounded wait; a note
-                // above the terminal says so when it is not, and that the
-                // session is read-only.
+                // user's typing or after a turn seen on screen; 2.1.3-beta.13
+                // B2: a spinner in the window title alone is waited out, as
+                // Codex's start-up is), within a bounded wait; a note above the
+                // terminal says so when it is not, and that the session is
+                // read-only.
                 if (!nothingStarted && provider === 'codex' && !shellOnly && (launchedPreset ?? codexOptions?.permissionsPreset) === 'plan') {
                   planModeWait?.cancel()
                   planModeWait = typeWhenCodexComposerReady(sessionId, '/plan', {

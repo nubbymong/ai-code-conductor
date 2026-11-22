@@ -1,8 +1,8 @@
 {
   "schema": "wp1-legacy-codex-ledger/2",
   "predicateDigest": "100a1233edebdc39a5f9004d3fba980a89ebb15b25872e52076386bc84b03153",
-  "manifestPathDigest": "106ac00d648f37d99309a913857423e52cb07ece1933f92b46af07baa0ef5e40",
-  "manifestHead": "d0746079fcc943d6caefc427e5e8fd7a88786a02",
+  "manifestPathDigest": "30b70548ec49c503aa363457d84f4f6e137d3fd25f725310a1cd1d138b429d78",
+  "manifestHead": "18dd949fa8f51a6b6c38cfc62bd5cd3de65fb5dd",
   "dispositions": {
     "retain": "unchanged observable behaviour, characterization proof",
     "move": "moved behind a package boundary and/or adapted at the call site, regression proof (newPath when relocated)",
@@ -1418,6 +1418,47 @@
       "disposition": "added",
       "evidence": "ADR-030 probe P19 (2.1.3-beta.11 section A1): a measurement of whether Claude Code and Codex redraw their screen after a resize when a re-attach starts mid-stream; run on the Windows test machine and by a dispatch-only CI job, never shipped; no legacy Codex code path; listed in the repository-wide legacy Codex manifest, zero unmatched at the merge gate (WP1.67), tests/wp1/legacy-codex-gate.test.ts",
       "note": "the keys, marks and reply P19 uses for each CLI, Codex among them"
+    },
+    {
+      "path": "helper/probes/p20-model-stand-in.cjs",
+      "predicates": [
+        "P14"
+      ],
+      "category": "OTHER",
+      "disposition": "added",
+      "evidence": "ADR-030 probe P20 (2.1.3-beta.13 section C1, aicc_planning #376): a measurement, on the Windows test machine, of what Claude Code and Codex do when their hook endpoint is gone, whether Claude Code reads its settings and MCP config again, and whether each CLI lists its tools again on tools/list_changed; never shipped and never run in CI; no legacy Codex code path; listed in the repository-wide legacy Codex manifest, zero unmatched at the merge gate (WP1.67), tests/wp1/legacy-codex-gate.test.ts",
+      "note": "the stand-in model endpoint P20 points each CLI at; answers the Responses API request Codex sends, a turn with a call to Codex's shell tool"
+    },
+    {
+      "path": "helper/probes/p20-probe.cjs",
+      "predicates": [
+        "P04",
+        "P14"
+      ],
+      "category": "OTHER",
+      "disposition": "added",
+      "evidence": "ADR-030 probe P20 (2.1.3-beta.13 section C1, aicc_planning #376): a measurement, on the Windows test machine, of what Claude Code and Codex do when their hook endpoint is gone, whether Claude Code reads its settings and MCP config again, and whether each CLI lists its tools again on tools/list_changed; never shipped and never run in CI; no legacy Codex code path; listed in the repository-wide legacy Codex manifest, zero unmatched at the merge gate (WP1.67), tests/wp1/legacy-codex-gate.test.ts",
+      "note": "the P20 driver; runs a Codex CLI in a fresh environment whose CODEX_HOME is the probe's own temporary folder, with the app's hook forwarder given by -c as the app gives it"
+    },
+    {
+      "path": "helper/probes/p20-tool-server.cjs",
+      "predicates": [
+        "P14"
+      ],
+      "category": "OTHER",
+      "disposition": "added",
+      "evidence": "ADR-030 probe P20 (2.1.3-beta.13 section C1, aicc_planning #376): a measurement, on the Windows test machine, of what Claude Code and Codex do when their hook endpoint is gone, whether Claude Code reads its settings and MCP config again, and whether each CLI lists its tools again on tools/list_changed; never shipped and never run in CI; no legacy Codex code path; listed in the repository-wide legacy Codex manifest, zero unmatched at the merge gate (WP1.67), tests/wp1/legacy-codex-gate.test.ts",
+      "note": "the stand-in tool server P20 gives Claude Code and Codex as their conductor server; names Codex only as one of the CLIs that start it"
+    },
+    {
+      "path": "helper/probes/p3-p6-linux.cjs",
+      "predicates": [
+        "P14"
+      ],
+      "category": "OTHER",
+      "disposition": "added",
+      "evidence": "ADR-030 probes P3 and P6 (2.1.3-beta.13 section C2, aicc_planning#377): a test-PC script that runs only ssh and scp against a remote Linux host to measure whether a holder outlives the ssh logout that started it and whether an ssh exec has the login PATH; it names Codex only as one of three programs (claude, codex, node) whose location it looks up; never shipped and never run in CI; no legacy Codex code path; listed in the repository-wide legacy Codex manifest, zero unmatched at the merge gate (WP1.67), tests/unit/scripts/helper-probe-p3-p6.test.ts",
+      "note": "the P3 and P6 Linux probe; names Codex only in the list of programs P6 looks up"
     },
     {
       "path": "helper/tests/screen.rs",
@@ -3258,6 +3299,17 @@
       "note": "P3.5 rebuilt it for non-Claude sessions (replace)"
     },
     {
+      "path": "src/main/sessions/launch-bindings.ts",
+      "predicates": [
+        "P04",
+        "P14"
+      ],
+      "category": "OTHER",
+      "disposition": "added",
+      "evidence": "new 2.1.3-beta.13 section B1 module (S16 step 3, aicc_planning#375): a launch's bindings, their bodies moved unchanged from pty-manager.ts and called where they were: a Codex launch's hook token and file, its account lease, its pane and colour answers, its rollout telemetry, log binder and registrations; a Claude Code launch's account capture and registrations; the logging run; and their part of the session's exit and teardown (WP1.68); tests/unit/main/launch-bindings.test.ts, tests/unit/main/launch-bindings-launch.test.ts, tests/unit/main/pty-codex-hooks.test.ts, tests/unit/main/pty-codex-color-replies.test.ts",
+      "note": "created by 2.1.3-beta.13 section B1; the P14 hits are the Codex launch's bindings moved from pty-manager.ts, and the one P04 hit is a moved comment saying a managed account never writes to ~/.codex; no Codex home is resolved here"
+    },
+    {
       "path": "src/main/stale-folder-sweep.ts",
       "predicates": [
         "P14"
@@ -4064,13 +4116,12 @@
     {
       "path": "src/renderer/components/settings/accounts/AccountsSurface.tsx",
       "predicates": [
-        "P05",
         "P11"
       ],
       "category": "OTHER",
       "disposition": "added",
-      "evidence": "WP2 commit 6b Accounts surface, one provider-neutral surface (WP1.39); tests/unit/renderer/accounts-surface.test.tsx; WP2 PR 3 P3.4 (parity row 14): with Claude Code off the registry callout no longer says the Claude accounts still work (WP1.2); tests/unit/renderer/accounts-surface.test.tsx",
-      "note": "a provider-name comparison chooses which section a provider gets; no Codex code path"
+      "evidence": "WP2 commit 6b Accounts surface, one provider-neutral surface (WP1.39); tests/unit/renderer/accounts-surface.test.tsx; WP2 PR 3 P3.4 (parity row 14): with Claude Code off the registry callout no longer says the Claude accounts still work (WP1.2); tests/unit/renderer/accounts-surface.test.tsx; beta.13 C6 (aicc_planning#381): the provider-name comparison that picks the managed sections moved into managedListProviders (providerAccountsStore.ts), which the page and its All / Active / Inactive counts both read (WP1.39); tests/unit/renderer/accounts-steady-order-filter.test.tsx",
+      "note": "imports the Claude Code on check from onboarding/hello-codex; no Codex code path"
     },
     {
       "path": "src/renderer/components/settings/accounts/AddProviderAccountDialog.tsx",
@@ -7419,6 +7470,17 @@
       "note": ""
     },
     {
+      "path": "tests/unit/main/codex-title-busy.test.ts",
+      "predicates": [
+        "P01",
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "new 2.1.3-beta.13 section B2 test (tests/unit/main/codex-title-busy.test.ts, aicc_planning #370): main's submit primitive types nothing while the window title spins (a reply streaming) and submits the note once it stops, so nothing is taken back; main's Codex pane keeps the title its run sets and a new run starts with none; the Watchdog's Codex send gate defers while the title spins, with no attempt spent (WP1.68)",
+      "note": "created by 2.1.3-beta.13 section B2; a headless pane and fakes, nothing started"
+    },
+    {
       "path": "tests/unit/main/codex-unanswered-service.test.ts",
       "predicates": [
         "P01",
@@ -7794,6 +7856,30 @@
       "disposition": "added",
       "evidence": "WP2 the transient Install/Update Codex tab's shell gets none of the command-button secrets while an ordinary shell still does (WP1.2); tests/unit/main/install-tab-command-secrets.test.ts; WP2 provider-off enforcement (main refuses every launch of a provider that is off; WP1.60 enable/disable): the comment on what the isolation is (not a boundary against a script running as the same user) is pinned by the same tests; tests/unit/main/install-tab-command-secrets.test.ts",
       "note": "created by WP2 (main refuses every launch of a provider that is off)"
+    },
+    {
+      "path": "tests/unit/main/launch-bindings-launch.test.ts",
+      "predicates": [
+        "P04",
+        "P05",
+        "P07",
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "new 2.1.3-beta.13 section B1 test (tests/unit/main/launch-bindings-launch.test.ts): through the real spawnPty, pty-manager.ts calls each launch binding once per launch at its place (a Codex launch's hooks before its command, its lease before the spawn, its pane and conversation after it; a Claude Code launch's account capture after its spawn) and a session's own exit removes its files once before the teardown's three parts, in order (WP1.68)",
+      "note": "created by 2.1.3-beta.13 section B1; a stand-in Codex launch with a made-up realm path, nothing started"
+    },
+    {
+      "path": "tests/unit/main/launch-bindings.test.ts",
+      "predicates": [
+        "P10",
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "new 2.1.3-beta.13 section B1 test (tests/unit/main/launch-bindings.test.ts): the launch bindings module called directly: a Codex launch's hooks, lease, pane, colour answers, telemetry and registrations, a Claude Code launch's account capture and registrations, the logging run and the session's end each make their calls once, in pty-manager.ts's order, with the same log lines (WP1.68)",
+      "note": "created by 2.1.3-beta.13 section B1; every collaborator mocked, nothing started"
     },
     {
       "path": "tests/unit/main/launch-lookups-off-main-thread.test.ts",
@@ -9640,6 +9726,17 @@
       "note": "fixture snapshots name Codex accounts"
     },
     {
+      "path": "tests/unit/renderer/accounts-steady-order-filter.test.tsx",
+      "predicates": [
+        "P05",
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "beta.13 C6 (aicc_planning#381): Settings, Accounts keeps each list in the order its accounts were added and filters every list by All / Active / Inactive (WP1.39); tests/unit/renderer/accounts-steady-order-filter.test.tsx",
+      "note": "fixture snapshots name Codex accounts; the provider fixture marks Codex as managed"
+    },
+    {
       "path": "tests/unit/renderer/accounts-surface.test.tsx",
       "predicates": [
         "P04",
@@ -10000,6 +10097,17 @@
       "disposition": "added",
       "evidence": "new WP2 PR 3 P3.6 (row 22) test (tests/unit/renderer/codex-switch-account.test.tsx): the Switch account list and gate for a Codex session, the switch (pin and save, the carry, then Restart), the section 5 fallback note, refusals, the right-click menu (WP1.68)",
       "note": ""
+    },
+    {
+      "path": "tests/unit/renderer/codex-title-busy.test.ts",
+      "predicates": [
+        "P01",
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "new 2.1.3-beta.13 section B2 test (tests/unit/renderer/codex-title-busy.test.ts, aicc_planning #370): the screen registry keeps a terminal's title reader beside its screen reader, the title is kept for the run that set it only, a Codex command under a spinner title answers busy and types nothing, and the Plan mode wait waits through a title-only spin but still ends on a busy row (WP1.68)",
+      "note": "created by 2.1.3-beta.13 section B2; a headless terminal and fakes, nothing started"
     },
     {
       "path": "tests/unit/renderer/codex-web-account-row.test.tsx",
@@ -11453,6 +11561,16 @@
       "note": "re-dispositioned in WP2 commit 4 (was retain)"
     },
     {
+      "path": "tests/unit/scripts/helper-probe-p3-p6.test.ts",
+      "predicates": [
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "new 2.1.3-beta.13 C2 test (ADR-030 probes P3 and P6, aicc_planning#377): the verdicts follow the decision lines written before measuring, only the two key slots' host and user are read, only ssh and scp are started, and the host is left as found; it names Codex only as one of the programs P6 looks up (WP1.67); tests/unit/scripts/helper-probe-p3-p6.test.ts",
+      "note": "loads helper/probes/p3-p6-linux.cjs without connecting to a host"
+    },
+    {
       "path": "tests/unit/scripts/probe-p19-job.test.ts",
       "predicates": [
         "P13"
@@ -11471,6 +11589,16 @@
       "disposition": "added",
       "evidence": "new 2.1.3-beta.11 A1 test (ADR-030 probe P19), extended by 2.1.3-beta.12 A2 (P19's second run): the probe's clean-up ownership, its verdict lines, the modes comparison, a record-only state, the console host counts and the Codex background server row; it names Codex only as the CLI a probe row runs (WP1.67); tests/unit/scripts/probe-p19-record.test.ts",
       "note": "loads helper/probes/p19-record.cjs without running a CLI"
+    },
+    {
+      "path": "tests/unit/scripts/probe-p20.test.ts",
+      "predicates": [
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "new 2.1.3-beta.13 C1 test (ADR-030 probe P20): the probe's verdict lines per question and how its stand-in model reads a Claude Code or Codex request; it names Codex only as the CLI a probe case runs (WP1.67); tests/unit/scripts/probe-p20.test.ts",
+      "note": "loads helper/probes/p20-probe.cjs and p20-model-stand-in.cjs without running a CLI"
     },
     {
       "path": "tests/unit/scripts/readme-stage.test.ts",
@@ -11634,6 +11762,17 @@
       "disposition": "added",
       "evidence": "new 2.1.3-beta.10 section C5 test (tests/unit/shared/codex-screen-shortcuts-hint.test.ts): the four recorded Codex 0.157.1 ready screens (probe P19) read ready with the shortcuts hint row under the footer, a turn running reads busy, Plan mode is still read from the footer, and any other row under the footer, two hint rows or a wrapped footer read unrecognised (WP1.68); 2.1.3-beta.12 section C3 (aicc_planning #357): the queue hint and Codex 0.170.0's agents row leave its list of refused rows, read now and pinned in tests/unit/shared/codex-screen-hint-rows.test.ts (WP1.68)",
       "note": "created by 2.1.3-beta.10 section C5; pure rows, nothing started"
+    },
+    {
+      "path": "tests/unit/shared/codex-screen-title.test.ts",
+      "predicates": [
+        "P01",
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "new 2.1.3-beta.13 section B2 test (tests/unit/shared/codex-screen-title.test.ts, aicc_planning #370): a title starting with a braille spinner (U+2800 to U+28FF) and a space reads busy and nothing else does; the reader reads a ready or warning-count screen busy under it, keeps a draft's text, and a prompt, Codex starting or no composer read as before; the typed-text readers refuse under it (WP1.68)",
+      "note": "created by 2.1.3-beta.13 section B2; pure rows, nothing started"
     },
     {
       "path": "tests/unit/shared/extra-args.test.ts",

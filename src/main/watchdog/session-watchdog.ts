@@ -93,6 +93,9 @@ export interface WatchdogAdapter {
   /** P3.10: the pane's live screen as rows (text, and with dim cells blanked),
    *  for a CLI whose send gate reads its screen's structure (Codex). */
   getScreen?(): ScreenLine[] | null
+  /** 2.1.3-beta.13 B2 (aicc_planning#370): the pane's window title, read with
+   *  its screen by a CLI whose send gate reads it too (Codex). */
+  getTitle?(): string | null
   /** P3.10: the CLI's own detectors; Claude Code's when absent. */
   detectors?: WatchdogDetectors
   now(): number
@@ -797,12 +800,12 @@ export class SessionWatchdog {
     // flip a real draft to sendable, so it is dropped (fail closed on any caret
     // text). A LOCAL session keeps the exact prior behaviour.
     if (this.adapter.requireClaudeChrome) {
-      if (!this.d.hasInputChrome(tail, this.adapter.getScreen?.())) {
+      if (!this.d.hasInputChrome(tail, this.adapter.getScreen?.(), this.adapter.getTitle?.())) {
         this.waitUntil = now + deferMs
         this.adapter.log('info', 'Retry deferred: the remote pane is not showing Claude — no automated line will be typed into it.')
         return false
       }
-      const sshGate = this.d.canSendNow(tail, undefined, this.adapter.getScreen?.())
+      const sshGate = this.d.canSendNow(tail, undefined, this.adapter.getScreen?.(), this.adapter.getTitle?.())
       if (sshGate.ok) return true
       this.waitUntil = now + deferMs
       this.adapter.log(
@@ -813,7 +816,7 @@ export class SessionWatchdog {
       )
       return false
     }
-    const gate = this.d.canSendNow(tail, this.adapter.getTailNonDim?.(), this.adapter.getScreen?.())
+    const gate = this.d.canSendNow(tail, this.adapter.getTailNonDim?.(), this.adapter.getScreen?.(), this.adapter.getTitle?.())
     if (gate.ok) return true
     this.waitUntil = now + deferMs
     this.adapter.log(

@@ -227,8 +227,8 @@ interface GitHubRelease {
 
 interface ReleaseInfo {
   /** The offered version without its prerelease part ('v2.1.3-beta.11' ->
-   *  '2.1.3'), as the logs have always named it. Nothing orders releases by
-   *  it: ordering reads the tag (compareTags). */
+   *  '2.1.3'). The logs name displayVersion, not this (aicc_planning#379).
+   *  Nothing orders releases by it: ordering reads the tag (compareTags). */
   version: string
   /** The offered version as the user reads it, prerelease part kept
    *  ('v2.1.3-beta.11' -> '2.1.3-beta.11', 'v2.1.3-rc.1' -> '2.1.3-rc.1',
@@ -266,8 +266,9 @@ function tagMatchesChannel(tag: string, channel: UpdateChannel): boolean {
 
 /**
  * The base version of a tag (strips v prefix and any prerelease suffix):
- * 'v1.2.3-beta.2' → '1.2.3'. ReleaseInfo.version and the logs use it. It is not
- * what the user is shown: that is displayVersionOf (aicc_planning#369).
+ * 'v1.2.3-beta.2' → '1.2.3'. ReleaseInfo.version uses it. It is not what the
+ * user is shown, nor what the logs name: that is displayVersionOf
+ * (aicc_planning#369, #379).
  */
 function parseVersion(tag: string): string {
   return tag.replace(/^v/, '').replace(/-(?:beta|dev|rc)(?:\.\d+)?$/, '')
@@ -838,11 +839,11 @@ export async function checkGitHubRelease(): Promise<ReleaseInfo | null> {
   // If there's no installer for the current platform, don't offer the update.
   // Otherwise the user would see "update available" but clicking Install fails.
   if (!installer) {
-    logInfo(`[github-update] Skipping v${best.version} (tag: ${best.tag}) — no ${INSTALLER_EXT} asset for current platform`)
+    logInfo(`[github-update] Skipping v${displayVersionOf(best.tag)} (tag: ${best.tag}) — no ${INSTALLER_EXT} asset for current platform`)
     return null
   }
 
-  logInfo(`[github-update] Update available: v${best.version} (tag: ${best.tag}, channel: ${best.channel}, installer: ${installer.name})`)
+  logInfo(`[github-update] Update available: v${displayVersionOf(best.tag)} (tag: ${best.tag}, channel: ${best.channel}, installer: ${installer.name})`)
 
   return {
     version: best.version,

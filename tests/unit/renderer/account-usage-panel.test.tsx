@@ -168,6 +168,50 @@ describe('AccountCard: identity, D2 and ages (usage track MP4)', () => {
   })
 })
 
+// aicc_planning#378: an account a running session uses is never fetched, so
+// its card shows that session's figure and never says a refresh failed.
+describe('AccountCard: an account a running session uses', () => {
+  it('an old figure reads "Last updated <age>" and never "couldn\'t refresh"', () => {
+    const r = render(<AccountCard row={row({ buckets: [bucket('Weekly', 5, at(9, 0, 30))], stale: true, inSession: true, fetchedAt: NOW - 5 * 60_000 })} theme="dark" onSignIn={vi.fn()} now={NOW} />)
+    expect(r.container.textContent).toContain('Last updated 5 min ago')
+    expect(r.container.textContent).not.toMatch(/couldn't refresh/i)
+    r.unmount()
+  })
+
+  it('a current figure reads "Updated <age>", as any other', () => {
+    const r = render(<AccountCard row={row({ buckets: [bucket('Weekly', 5, at(9, 0, 30))], stale: false, inSession: true, fetchedAt: NOW - 10_000 })} theme="dark" onSignIn={vi.fn()} now={NOW} />)
+    expect(r.container.textContent).toContain('Updated just now')
+    r.unmount()
+  })
+
+  it('with no figure yet it waits for the session, and says nothing failed', () => {
+    const r = render(<AccountCard row={row({ status: 'waiting', inSession: true, detail: "waiting for this account's session" })} theme="dark" onSignIn={vi.fn()} now={NOW} />)
+    expect(r.container.textContent).toContain("Waiting for this account's session.")
+    expect(r.container.textContent).not.toMatch(/Couldn't load|No usage limits|open a session/)
+    expect(r.container.querySelectorAll('[role="progressbar"]')).toHaveLength(0)
+    expect(buttonTexts(r.container)).toEqual(['Refresh sign-in'])
+    r.unmount()
+  })
+
+  it('a parked account never shows the waiting line', () => {
+    const r = render(<AccountCard row={row({ status: 'waiting', active: false })} theme="dark" onSignIn={vi.fn()} now={NOW} />)
+    expect(r.container.textContent).not.toContain('Waiting for')
+    r.unmount()
+  })
+
+  it('credits fetched earlier than the bars carry their own time; credits of the same reading do not', () => {
+    const money = (n: number) => new Intl.NumberFormat(undefined, { style: 'currency', currency: 'USD' }).format(n)
+    const credits = { currency: 'USD', used: 0, limit: null, remaining: 12, enabled: true }
+    const r = render(<AccountCard row={row({ buckets: [bucket('5h', 20, at(15, 0))], credits, creditsFetchedAt: NOW - 3 * 3_600_000, inSession: true, fetchedAt: NOW - 5_000 })} theme="dark" onSignIn={vi.fn()} now={NOW} />)
+    expect(r.container.textContent).toContain(`${money(12)} left \u00b7 as of 3 h ago`)
+    r.unmount()
+    const same = render(<AccountCard row={row({ buckets: [bucket('5h', 20, at(15, 0))], credits, fetchedAt: NOW - 5_000 })} theme="dark" onSignIn={vi.fn()} now={NOW} />)
+    expect(same.container.textContent).toContain(`${money(12)} left`)
+    expect(same.container.textContent).not.toContain('as of')
+    same.unmount()
+  })
+})
+
 const cxAccount = (over: Partial<AccountView> = {}): AccountView => ({
   id: 'acct-1', providerId: 'codex', identityId: 'identity-1', lifecycle: 'active', isProviderDefault: false, isReviewerDefault: false,
   authMethod: 'browser', lastKnownAuthState: 'signed-in', operationalState: 'ready', identityAssurance: 'user-asserted',
