@@ -1,6 +1,7 @@
-//! `aicc-helper`: the session helper's command line. Nothing in the app starts
-//! it yet (that is the next slice); the commands exist for the self-test, the
-//! tests and the app's coming session client.
+//! `aicc-helper`: the session helper's command line. The app runs it
+//! (`src/main/session-helper/`, and on Windows its `start`, `end`,
+//! `console-hosts` and `end-console-host` modes), a held session's CLI runs
+//! `hook` and `mcp`, and the tests run every command.
 //!
 //! ```text
 //! aicc-helper version
