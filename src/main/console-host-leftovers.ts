@@ -4,10 +4,12 @@
  *
  * Each terminal tab is a pseudoconsole, and Windows starts its console host
  * (conhost.exe, or node-pty's bundled OpenConsole.exe) as a child of this
- * main process. Only closing the pseudoconsole ends that host on purpose.
- * When the app is ended from outside (Task Manager, a crash), nothing closes
- * it, and on some Windows builds the host keeps running, idle, until sign-out
- * (measured on the test VM: the Claude Code tab's host, 4 of 11 kills).
+ * main process. Only closing the pseudoconsole ends that host on purpose (and,
+ * while the app runs, the app itself once a terminal's program has ended on
+ * the ConPTY built into Windows: console-host-end.ts). When the app is ended
+ * from outside (Task Manager, a crash), nothing closes it, and on some
+ * Windows builds the host keeps running, idle, until sign-out (measured on
+ * the test VM: the Claude Code tab's host, 4 of 11 kills).
  *
  * So, once at start-up, the app runs the session helper's console-hosts mode
  * with the record of the run before (its main process's pid and creation
@@ -178,18 +180,39 @@ function runRecordPath(): string | null {
   } catch { return null }
 }
 
+/** The session helper the installer put beside the app, or null when this
+ *  install has none (or it cannot be found). Never throws. */
+export function installedHelperPath(): string | null {
+  try {
+    const p = bundledHelperPath({ isPackaged: app.isPackaged, resourcesPath: process.resourcesPath, appPath: app.getAppPath(), platform: 'win32' })
+    return fs.existsSync(p) ? p : null
+  } catch { return null }
+}
+
+/** One run of the helper at `helper` with `args`: by its full path, the
+ *  arguments as a list, no shell, a 10 s bound, at most 64 KiB of its answer
+ *  read. Never throws. Its console-hosts mode runs this way at start-up, and
+ *  its end-console-host mode as a terminal's program ends (console-host-end.ts). */
+export function runHelperFile(helper: string, args: string[]): Promise<HelperRun> {
+  return new Promise<HelperRun>((resolve) => {
+    try {
+      execFile(helper, args, { windowsHide: true, timeout: HELPER_TIMEOUT_MS, maxBuffer: HELPER_MAX_OUTPUT, encoding: 'utf8' }, (err, stdout, stderr) => {
+        const why = err ? ((err as { killed?: unknown }).killed === true ? `no answer within ${HELPER_TIMEOUT_MS / 1000} s` : (err instanceof Error ? err.message : String(err))) : undefined
+        resolve({ ok: !err, stdout: String(stdout ?? ''), stderr: String(stderr ?? ''), why })
+      })
+    } catch (err) {
+      resolve({ ok: false, stdout: '', stderr: '', why: err instanceof Error ? err.message : String(err) })
+    }
+  })
+}
+
 /** The ports of the running app, with its record at `recordFile`. */
 function appPorts(recordFile: string): LeftoverPorts {
   return {
     platform: process.platform,
     ownPid: process.pid,
     recordFile,
-    helperPath: () => {
-      try {
-        const p = bundledHelperPath({ isPackaged: app.isPackaged, resourcesPath: process.resourcesPath, appPath: app.getAppPath(), platform: 'win32' })
-        return fs.existsSync(p) ? p : null
-      } catch { return null }
-    },
+    helperPath: installedHelperPath,
     readFile: (file, max) => {
       let size: number
       try { size = fs.statSync(file).size } catch { return null }
@@ -198,16 +221,7 @@ function appPorts(recordFile: string): LeftoverPorts {
     },
     writeFile: (file, text) => atomicWriteFileSync(file, text, { mode: 0o600 }),
     removeFile: (file) => fs.rmSync(file, { force: true }),
-    runHelper: (helper, args) => new Promise<HelperRun>((resolve) => {
-      try {
-        execFile(helper, args, { windowsHide: true, timeout: HELPER_TIMEOUT_MS, maxBuffer: HELPER_MAX_OUTPUT, encoding: 'utf8' }, (err, stdout, stderr) => {
-          const why = err ? ((err as { killed?: unknown }).killed === true ? `no answer within ${HELPER_TIMEOUT_MS / 1000} s` : (err instanceof Error ? err.message : String(err))) : undefined
-          resolve({ ok: !err, stdout: String(stdout ?? ''), stderr: String(stderr ?? ''), why })
-        })
-      } catch (err) {
-        resolve({ ok: false, stdout: '', stderr: '', why: err instanceof Error ? err.message : String(err) })
-      }
-    }),
+    runHelper: runHelperFile,
     onQuit: (fn) => { app.once('will-quit', () => { try { fn() } catch { /* best effort */ } }) },
     log: (line) => logInfo(line),
     logError: (line) => logError(line),

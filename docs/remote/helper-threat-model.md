@@ -633,6 +633,29 @@ rollback returns to the earlier beta's rows, and every row has a negative test.
   `a_record_whose_pid_another_process_took_after_its_run_had_gone_ends_nothing`
   and `a_record_from_before_windows_last_started_ends_nothing`, and the bounds
   by the unit tests in `helper/src/consoles.rs`.
+- **While the app runs, the helper ends only the console host of a terminal
+  whose program has ended (from 2.1.3-beta.14, Windows).** `aicc-helper
+  end-console-host` (protocol 15, "A terminal's console host after its program
+  has ended") is given two times of digits the app took itself, just before
+  and just after node-pty made one terminal's pseudoconsole on Windows' own
+  ConPTY, and the app runs it only once node-pty has reported that terminal's
+  program's exit (`src/main/console-host-end.ts`); nothing from a file, the
+  renderer or another process reaches its command line. It ends a process only
+  when it is `conhost.exe` by name and by program file (Windows' own
+  `System32\conhost.exe`), still runs, runs as the helper's own user, is
+  listed with the process that started the helper as its parent, and was made
+  in that time, after that process and before the helper; when more than one
+  is, it ends none. It holds the one it ends open from its check to its end. A
+  time longer than ten seconds is refused. It gives the app no new power: the
+  app can already end any process of its user. Tested in
+  `helper/tests/console_hosts.rs` by
+  `a_terminal_whose_program_ended_has_its_console_host_ended_once_and_no_other`
+  (a running terminal's host is not ended),
+  `two_terminals_started_in_one_time_have_neither_host_ended_by_it` and
+  `a_start_time_it_cannot_take_is_refused`, the bounds by the unit tests in
+  `helper/src/consoles.rs`, and the app's side in
+  `tests/unit/main/console-host-end.test.ts`. Its adversarial pass is owed to
+  the security round before 2.1 stable (aicc_planning #320).
 - **A record names the program the next start ends (from 2.1.3-beta.9,
   Windows).** The app writes the pid and creation time `start` printed to
   `vision-started.json` in its user data folder (a dev or test run's own data

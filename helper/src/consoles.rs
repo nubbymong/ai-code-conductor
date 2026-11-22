@@ -1,7 +1,8 @@
 //! `aicc-helper console-hosts`: at the app's start, end the console hosts the
 //! run before it left running when it was ended from outside. Windows only; on
 //! macOS and Linux the mode refuses (protocol section 15, "Console hosts a run
-//! left").
+//! left"). `aicc-helper end-console-host`, below, ends the host of one
+//! terminal of the running app whose program has ended (Windows only too).
 //!
 //! ```text
 //! aicc-helper console-hosts [--pid <n> --created <t>]
@@ -10,7 +11,8 @@
 //! Each terminal tab of the app is a pseudoconsole, and Windows starts its
 //! console host (`conhost.exe`, or node-pty's bundled `OpenConsole.exe` for a
 //! tab that asks for it) as a child of the process that made it: the app's
-//! main process. Only closing the pseudoconsole ends that host on purpose. When
+//! main process. Only closing the pseudoconsole ends that host on purpose
+//! (and, once a terminal's program has ended, `end-console-host` below). When
 //! the app is ended from outside (Task Manager, a crash), nothing closes it,
 //! and on some Windows builds the host keeps running, idle, until sign-out
 //! (measured on the test VM, aicc_planning #330).
@@ -47,12 +49,58 @@
 //! `conhost.exe` is); the app then does not record this run. It exits 2 on a
 //! command line it cannot read. No PowerShell and no WMI: it answers in
 //! milliseconds, a second more at most when an end fails.
+//!
+//! ```text
+//! aicc-helper end-console-host --made-from <t> --made-to <t>
+//! ```
+//!
+//! While the app runs: end the console host of one of its terminals whose
+//! program has ended (aicc_planning #363). On Windows' own ConPTY that host
+//! ends only when the pseudoconsole is closed, and node-pty (1.2.0-beta.15,
+//! its `conpty.cc`) forgets the pseudoconsole, unclosed, as soon as its
+//! program exits, so the kill that follows closes nothing and the host runs
+//! until the app quits. node-pty's bundled ConPTY ends its host with the
+//! program. So the app times each terminal it starts on Windows' own ConPTY,
+//! just before and just after node-pty makes the pseudoconsole (and with it
+//! the host), and runs this mode with that time once node-pty has reported
+//! the program's exit. `<t>` is in steps of 100 ns since 1601 (UTC);
+//! `--made-to` is not included, and it is after `--made-from` by at most
+//! `MAX_START_SPAN`. The mode reads its own creation time, then the process
+//! list once, and ends the one process that is:
+//!   - named `conhost.exe`, and its program file is Windows' own
+//!     `System32\conhost.exe`;
+//!   - listed with the process that started this mode as its parent;
+//!   - made in that time, after that process was made and before this mode
+//!     was (`made_by_start`);
+//!   - still running, and of the user this mode runs as.
+//! It is held open from its check to its end, so its pid cannot pass to
+//! another process in between. When no process is all of that, or more than
+//! one is (two terminals started in that time), nothing is ended. It prints
+//! the same line as `console-hosts`, naming the process that started it, with
+//! `ended` 0 or 1, and exits 0; a note goes to stderr. It exits 1, ending
+//! nothing, when it cannot read its own creation time or its own user, the
+//! process list, the process that started it, or the system folder, and 2 on
+//! a command line it cannot read.
 #![allow(unsafe_code)]
 
 use crate::start::{app_created, Refusal};
 use std::process::ExitCode;
 
 const USAGE: &str = "usage: aicc-helper console-hosts [--pid <n> --created <t>]";
+const END_USAGE: &str = "usage: aicc-helper end-console-host --made-from <t> --made-to <t>";
+
+/// The longest one terminal's start may take for `end-console-host`: ten
+/// seconds, in steps of 100 ns. node-pty makes a pseudoconsole in
+/// milliseconds; a longer time is not one start's.
+pub const MAX_START_SPAN: u64 = 10 * 10_000_000;
+
+/// When the app started one terminal: from `from`, included, to `to`, not
+/// included, in steps of 100 ns since 1601 (UTC).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StartTime {
+    pub from: u64,
+    pub to: u64,
+}
 
 /// The run before, as the app recorded it: its main process's pid and
 /// creation time, in the form `start` prints.
@@ -205,6 +253,67 @@ pub fn parse(args: &[String]) -> Result<ConsoleHostsRequest, Refusal> {
     }
 }
 
+/// Read an `end-console-host` command line (what follows `end-console-host`):
+/// `--made-from` and `--made-to`, each once, as plain digits, `--made-to`
+/// after `--made-from` by at most `MAX_START_SPAN`.
+pub fn parse_end(args: &[String]) -> Result<StartTime, Refusal> {
+    let mut from: Option<u64> = None;
+    let mut to: Option<u64> = None;
+    let mut i = 0;
+    while let Some(option) = args.get(i) {
+        let value = match args.get(i + 1) {
+            Some(v) => v.as_str(),
+            None => return usage(format!("{option} needs a value").as_str()),
+        };
+        let slot = match option.as_str() {
+            "--made-from" => &mut from,
+            "--made-to" => &mut to,
+            other => return usage(format!("unknown option {other}").as_str()),
+        };
+        if slot.is_some() {
+            return usage(format!("{option} is given twice").as_str());
+        }
+        match digits(value, 20) {
+            Some(n) => *slot = Some(n),
+            None => return usage(format!("{option} must be a time: 1 to 20 digits").as_str()),
+        }
+        i += 2;
+    }
+    let (Some(from), Some(to)) = (from, to) else {
+        return usage("end-console-host needs --made-from and --made-to");
+    };
+    if to <= from || to - from > MAX_START_SPAN {
+        return usage("--made-to must be after --made-from, by ten seconds at most");
+    }
+    Ok(StartTime { from, to })
+}
+
+/// Whether a console host made at `made` is one the start `when` made: in
+/// that time, after the process that started this mode was made
+/// (`parent_made`; a host made earlier names a parent pid that has since
+/// passed on) and before this mode was (`self_made`). All in steps of 100 ns
+/// since 1601 (UTC).
+pub fn made_by_start(made: u64, when: &StartTime, parent_made: u64, self_made: u64) -> bool {
+    made >= when.from && made < when.to && made > parent_made && made < self_made
+}
+
+/// A mode's answer, or why it has none, as its output and exit status.
+fn answer_out(mode: &str, result: std::io::Result<(Answer, Vec<String>)>) -> ExitCode {
+    match result {
+        Ok((answer, notes)) => {
+            for note in notes {
+                eprintln!("aicc-helper: note: {note}");
+            }
+            println!("{}", answer.to_json());
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("aicc-helper: {mode}: {e}");
+            ExitCode::from(1)
+        }
+    }
+}
+
 /// `aicc-helper console-hosts ...`: the command, with its output and exit status.
 pub fn command(args: &[String]) -> ExitCode {
     if cfg!(not(windows)) {
@@ -219,19 +328,24 @@ pub fn command(args: &[String]) -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    match run(&req) {
-        Ok((answer, notes)) => {
-            for note in notes {
-                eprintln!("aicc-helper: note: {note}");
-            }
-            println!("{}", answer.to_json());
-            ExitCode::SUCCESS
-        }
-        Err(e) => {
-            eprintln!("aicc-helper: console-hosts: {e}");
-            ExitCode::from(1)
-        }
+    answer_out("console-hosts", run(&req))
+}
+
+/// `aicc-helper end-console-host ...`: the command, with its output and exit status.
+pub fn end_command(args: &[String]) -> ExitCode {
+    if cfg!(not(windows)) {
+        eprintln!("aicc-helper: end-console-host is for Windows only");
+        return ExitCode::from(1);
     }
+    let when = match parse_end(args) {
+        Ok(w) => w,
+        Err(Refusal::Usage(why)) | Err(Refusal::Refused(why)) => {
+            eprintln!("aicc-helper: {why}");
+            eprintln!("{END_USAGE}");
+            return ExitCode::from(2);
+        }
+    };
+    answer_out("end-console-host", end_one(&when))
 }
 
 /// Do what `req` asks (see the module comment): the answer and the notes for
@@ -239,6 +353,13 @@ pub fn command(args: &[String]) -> ExitCode {
 #[cfg(not(windows))]
 pub fn run(_req: &ConsoleHostsRequest) -> std::io::Result<(Answer, Vec<String>)> {
     Err(std::io::Error::new(std::io::ErrorKind::Unsupported, "console-hosts is for Windows only"))
+}
+
+/// End the console host the start `when` made (see the module comment): the
+/// answer and the notes for the app's log. Windows only.
+#[cfg(not(windows))]
+pub fn end_one(_when: &StartTime) -> std::io::Result<(Answer, Vec<String>)> {
+    Err(std::io::Error::new(std::io::ErrorKind::Unsupported, "end-console-host is for Windows only"))
 }
 
 /// `aicc-helper __console-parent`, for the tests: a run with one terminal, as
@@ -250,11 +371,11 @@ pub fn console_parent() -> ExitCode {
 }
 
 #[cfg(windows)]
-pub use self::win::{console_parent, run};
+pub use self::win::{console_parent, end_one, run};
 
 #[cfg(windows)]
 mod win {
-    use super::{before_boot, bound_from_pid_owner, host_image_ok, is_host_name, left_by_old_run, Answer, ConsoleHostsRequest, PidOwner};
+    use super::{before_boot, bound_from_pid_owner, host_image_ok, is_host_name, left_by_old_run, made_by_start, Answer, ConsoleHostsRequest, PidOwner, StartTime, HOST_NAMES};
     use crate::start::{app_created, list_step, ListStep};
     use crate::winproc::{close, creation_time, exit_code, exit_code_within, os_error};
     use std::ffi::c_void;
@@ -401,6 +522,79 @@ mod win {
         u32::try_from(left).unwrap_or(u32::MAX - 1).min(u32::MAX - 1)
     }
 
+    /// The process that started this mode: its parent in `list`, by pid and
+    /// creation time, made before this mode was (`self_made`).
+    fn started_by(list: &[(u32, u32, String)], me_pid: u32, self_made: u64) -> io::Result<(u32, u64)> {
+        let parent = match list.iter().find(|(pid, _, _)| *pid == me_pid) {
+            Some((_, parent, _)) => *parent,
+            None => return Err(io::Error::other("this process is not in the process list")),
+        };
+        let parent_made = match open(parent, READ_RIGHTS) {
+            Ok(p) => creation_time(p.0)?,
+            Err(e) => return Err(io::Error::other(format!("the process that started this one ({parent}) cannot be read: {}", io::Error::from_raw_os_error(e as i32)))),
+        };
+        if parent_made > self_made {
+            return Err(io::Error::other(format!("process {parent} was made after this one, so it did not start it")));
+        }
+        Ok((parent, parent_made))
+    }
+
+    /// See `end-console-host` in the module comment.
+    pub fn end_one(when: &StartTime) -> io::Result<(Answer, Vec<String>)> {
+        let mut notes: Vec<String> = Vec::new();
+        // GetCurrentProcess is a pseudo handle, never closed.
+        let me = unsafe { GetCurrentProcess() } as usize;
+        let self_made = creation_time(me)?;
+        let own_user = user_of(me)?;
+        let list = process_list()?;
+        let me_pid = std::process::id();
+        let (parent, parent_made) = started_by(&list, me_pid, self_made)?;
+        let answer = |ended: u32| Answer { pid: parent, created: app_created(parent_made), ended };
+        let conhost = system_conhost()?;
+
+        // Each one held open from its check to its end, so its pid cannot pass on.
+        let mut found: Vec<(u32, Owned)> = Vec::new();
+        for (pid, its_parent, name) in &list {
+            if *its_parent != parent || *pid == me_pid || *pid == 0 || !name.eq_ignore_ascii_case(HOST_NAMES[0]) {
+                continue;
+            }
+            let Ok(host) = open(*pid, HOST_RIGHTS) else { continue };
+            let Ok(made) = creation_time(host.0) else { continue };
+            if !made_by_start(made, when, parent_made, self_made) {
+                continue;
+            }
+            // One that has exited, still listed while a handle to it is open, is not running.
+            if !matches!(exit_code(host.0), Ok(None)) {
+                continue;
+            }
+            match user_of(host.0) {
+                Ok(user) if same_user(&user, &own_user) => {}
+                _ => continue,
+            }
+            match image_of(host.0) {
+                Ok(image) if host_image_ok(name, &image, &conhost) => {}
+                _ => continue,
+            }
+            found.push((*pid, host));
+        }
+        if found.len() > 1 {
+            notes.push(format!("{} console hosts were made in that time, so none was ended", found.len()));
+            return Ok((answer(0), notes));
+        }
+        let Some((pid, host)) = found.pop() else {
+            return Ok((answer(0), notes));
+        };
+        if unsafe { TerminateProcess(host.0 as HANDLE, 1) } != 0 {
+            return Ok((answer(1), notes));
+        }
+        // Windows refuses to end a process whose own exit is under way; one
+        // that has not exited within the wait still runs.
+        if !matches!(exit_code_within(host.0, ms_until(Instant::now() + FAILED_END_WAIT)), Ok(Some(_))) {
+            notes.push(format!("the console host made in that time (process {pid}) could not be ended"));
+        }
+        Ok((answer(0), notes))
+    }
+
     /// See the module comment.
     pub fn run(req: &ConsoleHostsRequest) -> io::Result<(Answer, Vec<String>)> {
         let mut notes: Vec<String> = Vec::new();
@@ -413,17 +607,7 @@ mod win {
 
         // The process that started this mode: its parent in the list, made
         // before this mode was.
-        let parent = match list.iter().find(|(pid, _, _)| *pid == me_pid) {
-            Some((_, parent, _)) => *parent,
-            None => return Err(io::Error::other("this process is not in the process list")),
-        };
-        let parent_made = match open(parent, READ_RIGHTS) {
-            Ok(p) => creation_time(p.0)?,
-            Err(e) => return Err(io::Error::other(format!("the process that started this one ({parent}) cannot be read: {}", io::Error::from_raw_os_error(e as i32)))),
-        };
-        if parent_made > self_made {
-            return Err(io::Error::other(format!("process {parent} was made after this one, so it did not start it")));
-        }
+        let (parent, parent_made) = started_by(&list, me_pid, self_made)?;
         let answer = |ended: u32| Answer { pid: parent, created: app_created(parent_made), ended };
 
         let Some((old_pid, old_created)) = req.old else {
@@ -618,6 +802,48 @@ mod tests {
         // unrecorded.
         let unread = bound_from_pid_owner(&PidOwner::Unreadable("Access is denied.".into()), 42, this_mode).expect_err("nothing is ended");
         assert!(unread.contains("(42) cannot be read (Access is denied.)"), "{unread}");
+    }
+
+    #[test]
+    fn end_console_host_takes_a_start_time_of_ten_seconds_at_most() {
+        let t: u64 = 133_000_000_000_000_000;
+        assert_eq!(parse_end(&args(&["--made-from", &t.to_string(), "--made-to", &(t + 30_000).to_string()])), Ok(StartTime { from: t, to: t + 30_000 }));
+        assert_eq!(parse_end(&args(&["--made-to", "9", "--made-from", "8"])), Ok(StartTime { from: 8, to: 9 }));
+        assert_eq!(parse_end(&args(&["--made-from", "1", "--made-to", &(1 + MAX_START_SPAN).to_string()])), Ok(StartTime { from: 1, to: 1 + MAX_START_SPAN }));
+        let over = (2 + MAX_START_SPAN).to_string();
+        for bad in [
+            &["--made-from", "8"][..],
+            &[],
+            &["--made-to", "9"],
+            &["--made-from"],
+            &["--made-from", "9", "--made-to", "9"],
+            &["--made-from", "9", "--made-to", "8"],
+            &["--made-from", "1", "--made-to", over.as_str()],
+            &["--made-from", "x", "--made-to", "9"],
+            &["--made-from", "-1", "--made-to", "9"],
+            &["--made-from", "1", "--made-to", "123456789012345678901"],
+            &["--made-from", "1", "--made-from", "2", "--made-to", "9"],
+            &["--made-from", "1", "--made-to", "9", "--pid", "4"],
+        ] {
+            assert!(matches!(parse_end(&args(bad)), Err(Refusal::Usage(_))), "{bad:?} was taken");
+        }
+    }
+
+    #[test]
+    fn a_host_is_the_starts_only_when_made_in_its_time_after_the_app_and_before_this_mode() {
+        let when = StartTime { from: 100, to: 200 };
+        let (app, mode) = (50, 1_000);
+        assert!(made_by_start(100, &when, app, mode));
+        assert!(made_by_start(199, &when, app, mode));
+        // Before the start, or at its end (not included): another start's.
+        assert!(!made_by_start(99, &when, app, mode));
+        assert!(!made_by_start(200, &when, app, mode));
+        // Made before the process listed as its parent: that pid has passed on.
+        assert!(!made_by_start(150, &when, 150, mode));
+        assert!(!made_by_start(150, &when, 160, mode));
+        // Made after this mode: not one the start made.
+        assert!(!made_by_start(150, &when, app, 150));
+        assert!(!made_by_start(150, &when, app, 140));
     }
 
     #[test]

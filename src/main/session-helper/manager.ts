@@ -83,6 +83,7 @@ import { isPartnerPtyId, parentOfPartnerPtyId } from '../../shared/multi-spawn-r
 import { randomId } from '../../shared/id'
 import { PROVIDER_IDS, type ProviderId } from '../../shared/providers/ids'
 import { bundledConptyFailed } from '../bundled-conpty'
+import { spawnEndingConsoleHost } from '../console-host-end'
 import { processGone } from '../process-alive'
 import { HolderConnection, type ConnectionOptions } from './connection'
 import { HelperPty, NothingStartedError, type HelperPtyDriver, type RedrawWay } from './helper-pty'
@@ -419,8 +420,11 @@ function execHelper(file: string, args: string[], timeoutMs: number): Promise<Ex
   })
 }
 
+/** node-pty's spawn, the one place this module starts a terminal the usual
+ *  way: on the ConPTY built into Windows its console host is ended once its
+ *  program has ended (aicc_planning #363, console-host-end.ts). */
 function spawnWithNodePty(file: string, args: SpawnArgs, opts: SpawnOptions): IPty {
-  return pty.spawn(file, args, opts)
+  return spawnEndingConsoleHost(opts, () => pty.spawn(file, args, opts))
 }
 
 const lastLine = (s: string): string => s.split(/\r?\n/).map((l) => l.trim()).filter(Boolean).pop() ?? ''
@@ -1896,38 +1900,39 @@ export function getSessionHelper(): SessionHelperManager | null {
 
 /**
  * The PTY manager's spawn for a shell-only terminal. Exactly node-pty's spawn
- * with these arguments unless it is a plain terminal (`ctx.plain`) and the
- * plain terminals' setting is on, or the helper holds a terminal this tab
- * comes back to.
+ * with these arguments (spawnWithNodePty) unless it is a plain terminal
+ * (`ctx.plain`) and the plain terminals' setting is on, or the helper holds a
+ * terminal this tab comes back to.
  */
 export function spawnPlainPty(ctx: PlainSpawnContext, file: string, args: SpawnArgs, opts: SpawnOptions): IPty {
   const m = current
-  if (!m || ctx.plain !== true || (!m.routesPlain() && !m.holdsFor(ctx.sessionId))) return pty.spawn(file, args, opts)
+  if (!m || ctx.plain !== true || (!m.routesPlain() && !m.holdsFor(ctx.sessionId))) return spawnWithNodePty(file, args, opts)
   return m.spawn(ctx, file, args, opts)
 }
 
 /**
  * The PTY manager's spawn for a local agent session (2.1.3-beta.7). Exactly
- * node-pty's spawn with these arguments unless the agent sessions' setting is
- * on, or this tab's earlier holder is still being ended (then it starts after
- * that end).
+ * node-pty's spawn with these arguments (spawnWithNodePty) unless the agent
+ * sessions' setting is on, or this tab's earlier holder is still being ended
+ * (then it starts after that end).
  */
 export function spawnAgentPty(ctx: AgentSpawnContext, file: string, args: SpawnArgs, opts: SpawnOptions): IPty {
   const m = current
-  if (!m || (!m.routesAgents() && !m.endingFor(ctx))) return pty.spawn(file, args, opts)
+  if (!m || (!m.routesAgents() && !m.endingFor(ctx))) return spawnWithNodePty(file, args, opts)
   return m.spawnAgent(ctx, file, args, opts)
 }
 
 /**
  * The spawn for a terminal of a run of the app's own (2.1.3-beta.9, plan
  * section B1): Insights' Claude Code report. Exactly node-pty's spawn with
- * these arguments unless the agent sessions' setting is on, or an earlier
- * holder of the same run is still being ended (then it starts after that
- * end); otherwise the agent sessions' path under the run's id (spawnRun).
+ * these arguments (spawnWithNodePty) unless the agent sessions' setting is
+ * on, or an earlier holder of the same run is still being ended (then it
+ * starts after that end); otherwise the agent sessions' path under the run's
+ * id (spawnRun).
  */
 export function spawnRunPty(ctx: RunSpawnContext, file: string, args: SpawnArgs, opts: SpawnOptions): IPty {
   const m = current
-  if (!m || (!m.routesAgents() && !m.endingFor({ sessionId: ctx.runId, kind: ctx.kind }))) return pty.spawn(file, args, opts)
+  if (!m || (!m.routesAgents() && !m.endingFor({ sessionId: ctx.runId, kind: ctx.kind }))) return spawnWithNodePty(file, args, opts)
   return m.spawnRun(ctx, file, args, opts)
 }
 
