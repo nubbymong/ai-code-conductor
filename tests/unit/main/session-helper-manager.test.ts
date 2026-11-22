@@ -178,9 +178,14 @@ function crash(m: SessionHelperManager): void {
   for (const h of helper.holders.values()) h.dropAll()
 }
 
+// The ready wait is 10 s, not until's 3 s: a start here runs on the fake
+// helper with no timer on its path, but a loaded Windows runner once took
+// longer than 3 s for it (part 4 of run 45045301407, which ran 958 s of test
+// time in 491 s), while the same code was green on the runs before. The bound
+// only decides how long a start that never gets ready waits before it fails.
 async function started(m: SessionHelperManager, atStartup = true): Promise<SessionHelperManager> {
   await m.start({ atStartup })
-  await until(() => m.serviceState().state === 'ready', 'the helper to be ready')
+  await until(() => m.serviceState().state === 'ready', 'the helper to be ready', 10_000)
   return m
 }
 
