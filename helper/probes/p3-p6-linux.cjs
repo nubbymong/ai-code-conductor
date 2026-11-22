@@ -18,6 +18,7 @@
  * What it does on each host:
  *   1. One connect with an 8 s limit. No answer: NOT RUN (host off), and the
  *      next host. A refused key or an unknown host key: NOT RUN, with which.
+ *      A refused connection or a name that does not resolve: NOT RUN, with which.
  *   2. Records the system, logind's KillUserProcesses and KillExcludeUsers, the
  *      user's Linger, and whether /tmp/aicc-<uid> (the helper's socket folder)
  *      is there; makes a temporary folder (mktemp -d, mode 700).
@@ -32,9 +33,10 @@
  *      holder in the login's session scope is ended on logout by a logind
  *      with KillUserProcesses=yes.
  *   5. P6, one exec: the exec's PATH, then the PATH of the user's login shell
- *      started from that exec with -l (as D8 starts the CLI: through the
- *      host's login shell), and of an interactive login shell (-il, recorded
- *      only), each with what `command -v` finds for claude, codex and node.
+ *      started from that exec with -l (the probe's reading of D8's "through the
+ *      host's login shell"; D8 does not say whether that shell is interactive),
+ *      and of an interactive login shell (-il, recorded only), each with what
+ *      `command -v` finds for claude, codex and node.
  *   6. Leaves the host as found: ends each holder (only a process with its own
  *      command line), runs `list` (it removes the records and sockets of
  *      holders that are gone), removes the sockets, the copied helper, the
@@ -81,8 +83,8 @@ const PROGRAMS = ['claude', 'codex', 'node'];
 const SSH_TIMEOUT_MS = 30000;
 const SSH_OPTS = ['-o', 'BatchMode=yes', '-o', 'ConnectTimeout=8', '-o', 'ControlMaster=no', '-o', 'ControlPath=none', '-o', 'ServerAliveInterval=5', '-o', 'ServerAliveCountMax=3'];
 
-/** A host name or address, and a user name, as ssh takes them on its own. */
-const HOST_RE = /^[A-Za-z0-9][A-Za-z0-9.:-]{0,252}$/;
+/** A host name or IPv4 address (no colon: scp reads the first colon of user@host:path as the end of the host), and a user name, as ssh takes them on its own. */
+const HOST_RE = /^[A-Za-z0-9][A-Za-z0-9.-]{0,252}$/;
 const USER_RE = /^[a-z_][a-z0-9_.-]{0,31}$/;
 /** A remote folder this probe made, or a file in it: no space, no quote, no `..`. */
 const SAFE_PATH_RE = /^\/[A-Za-z0-9._/-]+$/;
@@ -122,7 +124,9 @@ function readSlots(json) {
 function classifyFailure(r) {
   const text = `${r.stderr || ''}`;
   if (r.timedOut) return 'host off (no answer in time)';
-  if (/Connection timed out|Operation timed out|No route to host|Network is unreachable|Connection refused|Could not resolve|Name or service not known|timed out/i.test(text)) return 'host off';
+  if (/Connection refused/i.test(text)) return 'ssh port refused (the host answered)';
+  if (/Could not resolve|Name or service not known|No such host is known/i.test(text)) return 'host name not found';
+  if (/Connection timed out|Operation timed out|No route to host|Network is unreachable|timed out/i.test(text)) return 'host off';
   if (/Host key verification failed|REMOTE HOST IDENTIFICATION HAS CHANGED/i.test(text)) return 'host key not known or changed';
   if (/Permission denied/i.test(text)) return 'key sign-in refused';
   return `failed (exit ${r.status})`;
@@ -288,7 +292,7 @@ rm -f -- "\${d:?}/aicc-helper" "\${d:?}/store/.lock" "\${d:?}/store/"*.json
 [ -d "\${d:?}/store" ] && rmdir -- "\${d:?}/store"
 rmdir -- "\${d:?}"
 ${rundirBefore === 'absent' ? `rmdir -- /tmp/aicc-${uid} 2>/dev/null` : ':'}
-echo "@@left $(pgrep -f -- "$d/" | wc -l)"
+if command -v pgrep >/dev/null 2>&1; then echo "@@left $(pgrep -f -- "$d/" | wc -l)"; else echo "@@left unknown"; fi
 if [ -e "$d" ]; then echo "@@dir present $(ls -A "$d" "$d/store" 2>/dev/null | tr '\\n' ' ')"; else echo "@@dir gone"; fi
 if [ -e "/tmp/aicc-${uid}" ]; then echo "@@rundir present"; else echo "@@rundir absent"; fi
 echo @@end

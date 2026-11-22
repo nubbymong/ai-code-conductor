@@ -242,7 +242,8 @@ The hosts are the `linuxKey` and `linuxRockyKey` slots of
 `tests/live/hosts.local.json`, read by name inside the script. Of each slot only
 the host and the user are read; sign-in is by key only (BatchMode), and the
 console shows only the host and the user. A host that does not answer one 8 s
-connect is NOT RUN (host off). On each host the probe makes a temporary folder,
+connect is NOT RUN (host off). A refused connection or a name that does not
+resolve: NOT RUN, with which. On each host the probe makes a temporary folder,
 copies the helper there and checks its SHA-256, then:
 
 - **P3.** Six ssh sessions, each starting a holder with `hold --detach` and
@@ -252,8 +253,10 @@ copies the helper there and checks its SHA-256, then:
   and its own command line. It records each holder's cgroup, logind's
   KillUserProcesses and KillExcludeUsers, and the user's Linger.
 - **P6.** One exec reads its own PATH, then the PATH of the user's login shell
-  started from it with `-l` (as D8 starts the CLI) and with `-il` (recorded
-  only), and what `command -v` finds for claude, codex and node in each.
+  started from it with `-l` (the probe's reading of D8's "through the host's
+  login shell"; D8 does not say whether that shell is interactive) and with
+  `-il` (recorded only), and what `command -v` finds for claude, codex and
+  node in each.
 
 Then it ends each holder (only a process with its own command line), deletes
 what it made one name at a time (no recursive delete), and checks that nothing
@@ -276,7 +279,9 @@ The record is `p3-p6-result.json` in the output folder, with the home folder
 written as `~` and the user name as `<user>`. Exit 0: every host was measured
 or not run; 1: a host was not left as found; 2: the probe could not run. The
 answers are in ADR-030 after the P12 result ("P3 and P6 result", 2026-11-21):
-P3 HOLDS and P6 SAME on the Linux host with key sign-in (a host with logind
-cleanup on was not measured, and `claude` was found only by `-il`, which the
-decision line records and does not count). The Rocky Linux 10 host was NOT RUN
-(host off); the same command runs on it in beta.14.
+P3 HOLDS on the Linux host with key sign-in (a host with logind
+cleanup on was not measured). P6 is SAME there on the line above, which compares the
+exec with `-l`; `claude` was found only by `-il`, so against the user's interactive
+login shell, the comparison ADR-029's P6 names, that host differs and the P6 fallback
+applies on it. The Rocky Linux 10 host was NOT RUN (its one connect failed; recorded as
+host off); the same command runs on it in beta.14.

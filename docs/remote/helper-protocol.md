@@ -165,8 +165,9 @@ The CLI or sudo starts `emit` (statusline and hook command, R6, R7), `mcp`
   identity, boot id, pid, start time), reads only its spec and start size,
   starts the CLI, records the CLI's pid and start time in the spec, and
   installs its filter before it reads any socket (threat model 3.10).
-  Outliving logout: probe P3 held on a Linux host that does not clean up at logout
-  (ADR-030); a host that does, and Rocky Linux 10, are not measured yet.
+  Outliving logout: probe P3 held for 60 s on a Linux host that does not clean up at
+  logout (ADR-030); **pending probe P3** for a host that does and for ADR-029's other P3
+  host roles (macOS, a container host). Rocky Linux 10 is owed to beta.14.
 - Only the holder outlives a connection; `mcp` lives as long as the CLI, the
   rest for one call. The holder exits when the session ends, a non-detachable
   terminal closes, or a detached session reaches its maximum lifetime.

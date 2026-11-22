@@ -63,6 +63,8 @@ describe('probe P3/P6: the hosts file', () => {
     expect(key.missing).toMatch(/host/)
     expect(rocky.missing).toMatch(/no such slot/)
     expect(probe.readSlots({ linuxKey: { host: 'a b', username: 'you' } })[0].missing).toBeDefined()
+    // An IPv6 literal would be cut at its first colon by scp (user@host:path), so the copy would go to the wrong host.
+    expect(probe.readSlots({ linuxKey: { host: '2001:db8::1', username: 'you' } })[0].missing).toMatch(/host/)
     expect(probe.readSlots({ linuxKey: { host: '192.0.2.10', username: '-l' } })[0].missing).toMatch(/username/)
     expect(probe.readSlots(null).every((s) => s.missing)).toBe(true)
   })
@@ -137,9 +139,12 @@ describe('probe P3/P6: reading and recording', () => {
     expect(probe.redact('spi pi.local pi-2', '/home/pi', 'pi')).toBe('spi pi.local pi-2')
   })
 
-  it('names why a connection failed: host off, a refused key, or an unknown host key', () => {
+  it('names why a connection failed: host off, a refused port, an unknown name, a refused key, or an unknown host key', () => {
     expect(probe.classifyFailure({ status: null, timedOut: true })).toMatch(/^host off/)
     expect(probe.classifyFailure({ status: 255, stderr: 'ssh: connect to host 192.0.2.10 port 22: Connection timed out' })).toBe('host off')
+    // A refused connection (the host answered) and a name that does not resolve are not "host off".
+    expect(probe.classifyFailure({ status: 255, stderr: 'ssh: connect to host 192.0.2.10 port 22: Connection refused' })).toBe('ssh port refused (the host answered)')
+    expect(probe.classifyFailure({ status: 255, stderr: 'ssh: Could not resolve hostname rocky.example: Name or service not known' })).toBe('host name not found')
     expect(probe.classifyFailure({ status: 255, stderr: 'you@192.0.2.10: Permission denied (publickey,password).' })).toBe('key sign-in refused')
     expect(probe.classifyFailure({ status: 255, stderr: 'Host key verification failed.' })).toMatch(/host key/)
     expect(probe.classifyFailure({ status: 1, stderr: '' })).toBe('failed (exit 1)')
@@ -170,6 +175,8 @@ describe('probe P3/P6: the host is left as found', () => {
     expect(clean).toContain('rm -f -- "${d:?}/aicc-helper" "${d:?}/store/.lock" "${d:?}/store/"*.json')
     expect(clean).toContain('rmdir -- /tmp/aicc-1000 2>/dev/null')
     expect(probe.cleanScript(dir, [], [], '1000', 'present')).not.toMatch(/rmdir -- \/tmp\/aicc-1000/)
-    expect(clean).toMatch(/@@left \$\(pgrep -f -- "\$d\/" \| wc -l\)/)
+    // A host with no pgrep must not pass the check without having looked: it answers "unknown", which is not "0".
+    expect(clean).toMatch(/command -v pgrep >\/dev\/null 2>&1; then echo "@@left \$\(pgrep -f -- "\$d\/" \| wc -l\)"; else echo "@@left unknown"; fi/)
+    expect(src).toMatch(/c\.left === '0'/)
   })
 })
