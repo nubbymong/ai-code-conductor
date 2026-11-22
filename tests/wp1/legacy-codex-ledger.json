@@ -1451,6 +1451,16 @@
       "note": "the stand-in tool server P20 gives Claude Code and Codex as their conductor server; names Codex only as one of the CLIs that start it"
     },
     {
+      "path": "helper/probes/p3-p6-linux.cjs",
+      "predicates": [
+        "P14"
+      ],
+      "category": "OTHER",
+      "disposition": "added",
+      "evidence": "ADR-030 probes P3 and P6 (2.1.3-beta.13 section C2, aicc_planning#377): a test-PC script that runs only ssh and scp against a remote Linux host to measure whether a holder outlives the ssh logout that started it and whether an ssh exec has the login PATH; it names Codex only as one of three programs (claude, codex, node) whose location it looks up; never shipped and never run in CI; no legacy Codex code path; listed in the repository-wide legacy Codex manifest, zero unmatched at the merge gate (WP1.67), tests/unit/scripts/helper-probe-p3-p6.test.ts",
+      "note": "the P3 and P6 Linux probe; names Codex only in the list of programs P6 looks up"
+    },
+    {
       "path": "helper/tests/screen.rs",
       "predicates": [
         "P14"
@@ -11482,6 +11492,16 @@
       "disposition": "replace",
       "evidence": "WP2 commit 4: existing cases retained (buildResumeArgs now given a UUID), launchTarget and isResumeId cases added; tests/unit/scripts/codex-resume-picker.test.ts (WP1.68)",
       "note": "re-dispositioned in WP2 commit 4 (was retain)"
+    },
+    {
+      "path": "tests/unit/scripts/helper-probe-p3-p6.test.ts",
+      "predicates": [
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "new 2.1.3-beta.13 C2 test (ADR-030 probes P3 and P6, aicc_planning#377): the verdicts follow the decision lines written before measuring, only the two key slots' host and user are read, only ssh and scp are started, and the host is left as found; it names Codex only as one of the programs P6 looks up (WP1.67); tests/unit/scripts/helper-probe-p3-p6.test.ts",
+      "note": "loads helper/probes/p3-p6-linux.cjs without connecting to a host"
     },
     {
       "path": "tests/unit/scripts/probe-p19-job.test.ts",
