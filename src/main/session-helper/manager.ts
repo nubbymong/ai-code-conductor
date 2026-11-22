@@ -85,7 +85,7 @@ import { PROVIDER_IDS, type ProviderId } from '../../shared/providers/ids'
 import { bundledConptyFailed } from '../bundled-conpty'
 import { processGone } from '../process-alive'
 import { HolderConnection, type ConnectionOptions } from './connection'
-import { HelperPty, NothingStartedError, type HelperPtyDriver } from './helper-pty'
+import { HelperPty, NothingStartedError, type HelperPtyDriver, type RedrawWay } from './helper-pty'
 import {
   APP_PTY_ID_RE,
   SID_RE,
@@ -825,7 +825,8 @@ export class SessionHelperManager implements MachinesSource {
       this.adoptable.delete(sid)
       this.reclaimed.delete(sid)
       this.pinOwnId(ctx.sessionId, sid)
-      return this.track(new HelperPty({ sid, label: ctx.sessionId, spec: this.launchSpec(file, args, opts), adopt, driver: this.plainDriver(direct, false) }), ctx.sessionId)
+      const held = this.launchSpec(file, args, opts)
+      return this.track(new HelperPty({ sid, label: ctx.sessionId, spec: held, adopt, driver: this.plainDriver(direct, false), redraw: this.redrawFor(held) }), ctx.sessionId)
     }
     if (!this.routesPlain()) return direct()
     this.retryInstallIfDue()
@@ -841,7 +842,20 @@ export class SessionHelperManager implements MachinesSource {
       return direct()
     }
     this.pinOwnId(ctx.sessionId, sid)
-    return this.track(new HelperPty({ sid, label: ctx.sessionId, spec, driver: this.plainDriver(direct, true) }), ctx.sessionId)
+    return this.track(new HelperPty({ sid, label: ctx.sessionId, spec, driver: this.plainDriver(direct, true), redraw: this.redrawFor(spec) }), ctx.sessionId)
+  }
+
+  /**
+   * How a terminal's program is asked to redraw after a replay from the
+   * middle of its output (helper-pty.ts, redrawOnce): one resize at the tab's
+   * own size on the console built into Windows, which draws its whole screen
+   * again on any resize (probe P19) and so moves no row under a shell at its
+   * prompt; one row shorter and back on node-pty's bundled ConPTY, macOS and
+   * Linux, where a resize to the same size redraws nothing (2.1.3-beta.13,
+   * plan section A4).
+   */
+  private redrawFor(spec: LaunchSpec): RedrawWay {
+    return this.os === 'windows' && spec.conpty !== 'bundled' ? 'same-size' : 'nudge'
   }
 
   /**
@@ -906,7 +920,7 @@ export class SessionHelperManager implements MachinesSource {
           throw new Error(`${why}; it waited for the end of ${whose}'s earlier holder first`)
         },
       }
-      return new HelperPty({ sid, label: ctx.sessionId, spec, driver })
+      return new HelperPty({ sid, label: ctx.sessionId, spec, driver, redraw: this.redrawFor(spec) })
     }
     if (!this.routesAgents()) return usualWay('agent sessions do not go through the session helper now', false)
     this.retryInstallIfDue()
@@ -917,7 +931,7 @@ export class SessionHelperManager implements MachinesSource {
     const hooks = this.hookRoute(ctx, sid)
     const tools = this.toolRoute(ctx, sid, { file, args, opts })
     const driver: HelperPtyDriver = { ...this.driver(direct, true, spec.conpty === 'bundled', cleared, hooks, tools), ...own }
-    const wrapper = this.track(new HelperPty({ sid, label: ctx.sessionId, spec, driver }), ctx.sessionId)
+    const wrapper = this.track(new HelperPty({ sid, label: ctx.sessionId, spec, driver, redraw: this.redrawFor(spec) }), ctx.sessionId)
     if (hooks) void wrapper.ended.then(() => hooks.ended())
     return wrapper
   }

@@ -16,6 +16,14 @@
  * regions and origin mode (fixed seeds) never count fewer rows than the tab
  * adds, the whole stream and what follows a cut alike.
  *
+ * 2.1.3-beta.13, plan section A4 (aicc_planning#382): given a gap too, the
+ * answer says where the tab's scrollback may be cleared (the start of the
+ * newest row a line feed added at most the gap after the cut); written as
+ * helper-pty.ts writes it (the notice on the row above the last), the notice
+ * is the first row the tab keeps, a wrap's row leaves the rest above the
+ * notice, the alternate screen gets no clear, and on the random streams the
+ * rows from the notice on are the same with the clear and without.
+ *
  * Not checked here: a program's own tab stops, a backspace at a row's end
  * with reverse wraparound set, and a repeat after a sequence the tab ignores
  * (the exceptions replay-tail.ts names); combining characters, emoji and an
@@ -24,7 +32,10 @@
  * of the screen above the cursor (CSI 1 J, left out of the random streams; no
  * erase moves the cursor or adds a row in the tab); a terminal resized while
  * it reads; where the cut lands in random streams (only that what follows it
- * never takes more rows than counted).
+ * never takes more rows than counted); a clear after a count that falls short
+ * of the tab's (the exceptions replay-tail.ts names: it would drop the
+ * notice); a tab that showed anything before the notice (helper-pty.ts gives
+ * no gap then).
  */
 import { describe, it, expect } from 'vitest'
 import { Terminal } from '@xterm/headless'
@@ -484,22 +495,27 @@ describe("the cursor's row followed, with the tab's rows given (2.1.3-beta.13, p
     expect(recorded.text).toBe(Array.from({ length: 27 }, (_, i) => consoleLine(first + i)).join(''))
   })
 
-  it('a cut lands at a console line\'s first row, whatever rows the end takes, and counts the console\'s lines left out; the tab, its cursor on the last row, shows each kept line on its 3 rows and no row before them but empty ones', async () => {
+  it('a cut lands at a console line\'s first row, whatever rows the end takes, and counts the console\'s lines left out; the tab, its cursor on the last row and the notice on the row above (plan section A4), shows the notice, then each kept line on its 3 rows, once the scrollback is cleared where the 25 empty rows above the notice left the screen', async () => {
     const lines = Array.from({ length: 400 }, (_, i) => consoleLine(1000 + i)).join('')
     for (const [end, budget] of [['$ ', 100], ['done\r\n$ ', 100], ['done\r\nmore\r\n$ ', 100], ['$ ', 101], ['$ ', 102]] as const) {
       const text = `${lines}${end}`
-      const t = replayTail(text, 103, budget, 27)
+      const t = replayTail(text, 103, budget, 27, 25)
       const shown = text.slice(t.from)
       expect(shown, `${JSON.stringify(end)}, ${budget}`).toMatch(/^long \d+ y/)
       expect(t, `${JSON.stringify(end)}, ${budget}`).toMatchObject({ part: false, left: Number(/^long (\d+) /.exec(shown)![1]) - 1000 })
       expect(rowsOf(shown, 103, 27)).toBeLessThanOrEqual(budget)
+      // Each console line's 3 rows are each made by a line feed: the 25th row after the cut starts after the 25th line
+      // break (the ninth line's first, before its jump back up).
+      let at = 0
+      for (let k = 0; k < 25; k++) at = shown.indexOf('\r\n', at) + 2
+      expect(t.clear, `${JSON.stringify(end)}, ${budget}`).toBe(t.from + at)
       const term = new Terminal({ cols: 103, rows: 27, scrollback: 1000, allowProposedApi: true })
       try {
-        await new Promise<void>((res) => term.write(`${NOTICE}\r\n\x1b[27;1H${shown}`, res))
+        await new Promise<void>((res) => term.write(`\x1b[26;1H${NOTICE}\r\n${shown.slice(0, at)}\x1b[3J${shown.slice(at)}`, res))
         const b = term.buffer.normal
         const rows = Array.from({ length: b.length }, (_, i) => b.getLine(i)?.translateToString(true) ?? '')
         expect(rows[0]).toBe(NOTICE)
-        const first = rows.findIndex((r, i) => i > 0 && r !== '')
+        const first = 1
         expect(rows[first], `${JSON.stringify(end)}, ${budget}`).toMatch(/^long \d+ y{93}$/)
         // Each kept line: its number and 93 y, then 103 y, then 54 y.
         const kept = (shown.match(/long \d+ /g) ?? []).length
@@ -571,8 +587,11 @@ describe("the cursor's row followed, with the tab's rows given (2.1.3-beta.13, p
       for (let j = int(5, 160); j > 0; j--) text += token(cols, rows)
       const start = int(0, rows - 1)
       const total = rowsOf(text, cols, rows)
-      const t = replayTail(text, cols, int(1, total + 2), rows)
-      return { cols, rows, text, start, counted: total - 1, plain: rowsOf(text, cols) - 1, t, tail: total - rowsOf(text.slice(0, t.from), cols, rows) }
+      // The empty rows above the notice when helper-pty.ts writes it on the row above the last (plan section A4).
+      const notice = rowsOf(NOTICE, cols)
+      const gap = notice < rows ? rows - 1 - notice : undefined
+      const t = replayTail(text, cols, int(1, total + 2), rows, gap)
+      return { cols, rows, text, start, counted: total - 1, plain: rowsOf(text, cols) - 1, t, tail: total - rowsOf(text.slice(0, t.from), cols, rows), notice, gap }
     })
   }
 
@@ -616,6 +635,154 @@ describe("the cursor's row followed, with the tab's rows given (2.1.3-beta.13, p
       expect(all.filter((s) => s.counted < s.plain).length).toBeGreaterThan(300)
     })
   }
+
+  /*
+   * 2.1.3-beta.13, plan section A4 (aicc_planning#382): helper-pty.ts writes
+   * the notice on the row above the tab's last row, so `gap` empty rows lie
+   * above it; given that gap, the answer says where the tab's scrollback may
+   * be cleared: the start of the newest row a line feed added at most `gap`
+   * rows after the cut. There only those empty rows have left the screen.
+   */
+  describe('where the scrollback may be cleared (2.1.3-beta.13, plan section A4)', () => {
+    /** What helper-pty.ts shows for `t` at the holder's size, a tab `rows` high: the notice above the last row, the clear put in, or left out. */
+    const pieceFor = (text: string, t: ReturnType<typeof replayTail>, rows: number, cols: number, withClear = true) => {
+      const shown = text.slice(t.from)
+      const at = withClear && t.clear !== undefined ? t.clear - t.from : -1
+      return `\x18${t.before}\x1b[0m\x1b[${rows - rowsOf(NOTICE, cols)};1H${NOTICE}\r\n${t.after}${at < 0 ? shown : `${shown.slice(0, at)}\x1b[3J${shown.slice(at)}`}`
+    }
+    /** Every row of the normal screen's buffer after `stream`, in a new terminal `cols` by `rows`. */
+    async function bufferAfter(stream: string, cols: number, rows: number): Promise<{ normal: string[]; type: string }> {
+      const term = new Terminal({ cols, rows, scrollback: 1000, allowProposedApi: true, logLevel: 'off' })
+      try {
+        await new Promise<void>((res) => term.write(stream, res))
+        const b = term.buffer.normal
+        return { normal: Array.from({ length: b.length }, (_, i) => b.getLine(i)?.translateToString(true) ?? ''), type: term.buffer.active.type }
+      } finally {
+        term.dispose()
+      }
+    }
+
+    it('exactly the gap after the cut when a line feed made that row: in the tab the empty rows above the notice go, and nothing else', async () => {
+      const text = numbered(60)
+      // 61 rows, 30 kept: the cut at line 32; 10 rows less the notice's and the last is a gap of 8, so line 40.
+      const t = replayTail(text, 80, 30, 10, 8)
+      expect(t).toMatchObject({ from: text.indexOf('line 32\r\n'), left: 31, part: false, clear: text.indexOf('line 40\r\n') })
+      expect((await bufferAfter(pieceFor(text, t, 10, 80), 80, 10)).normal.slice(0, 3)).toEqual([NOTICE, 'line 32', 'line 33'])
+      expect((await bufferAfter(pieceFor(text, t, 10, 80, false), 80, 10)).normal.slice(0, 10)).toEqual([...Array(8).fill(''), NOTICE, 'line 32'])
+      // One row start later and the notice is cleared with them.
+      const late = { ...t, clear: text.indexOf('line 41\r\n') }
+      expect((await bufferAfter(pieceFor(text, late, 10, 80), 80, 10)).normal[0]).toBe('line 32')
+      // The same from the text's start, nothing cut.
+      expect(replayTail(text, 80, 100, 10, 8)).toMatchObject({ from: 0, clear: text.indexOf('line 9\r\n') })
+    })
+
+    it('an earlier one when that row is a wrap\'s: the rest of the empty rows stay above the notice, never under it', async () => {
+      const text = `${'a\r\n'.repeat(7)}${'w'.repeat(100)}\r\n${numbered(5)}`
+      const t = replayTail(text, 80, 100, 10, 8)
+      // Rows 1 to 7 are the line feeds' (the 7th starts the long line); row 8 is its wrap.
+      expect(t).toMatchObject({ from: 0, clear: text.indexOf('w') })
+      expect((await bufferAfter(pieceFor(text, t, 10, 80), 80, 10)).normal.slice(0, 4)).toEqual(['', NOTICE, 'a', 'a'])
+    })
+
+    it('none with no row a line feed made in reach, with no gap, with a gap of 0, or without the rows', () => {
+      const long = 'w'.repeat(2000)
+      expect(replayTail(long, 80, 100, 10, 8).clear).toBeUndefined()
+      expect(replayTail(numbered(60), 80, 30, 10).clear).toBeUndefined()
+      expect(replayTail(numbered(60), 80, 30, 10, 0).clear).toBeUndefined()
+      expect(replayTail(numbered(60), 80, 30, undefined, 8).clear).toBeUndefined()
+      expect('clear' in replayTail(numbered(60), 80, 30, 10)).toBe(false)
+    })
+
+    it('never on the alternate screen: line feeds there make no row, so the clear is before the switch, or after the switch back', async () => {
+      const stay = `x\r\n\x1b[?1047h${'y\r\n'.repeat(20)}`
+      const t = replayTail(stay, 80, 100, 10, 8)
+      expect(t.clear).toBe(3)
+      const after = await bufferAfter(pieceFor(stay, t, 10, 80), 80, 10)
+      expect(after.type).toBe('alternate')
+      expect(after.normal.slice(after.normal.indexOf(NOTICE))).toEqual([NOTICE, 'x', ''])
+      const back = `x\r\n\x1b[?1047h${'y\r\n'.repeat(20)}\x1b[?1047l${numbered(20)}`
+      const u = replayTail(back, 80, 100, 10, 8)
+      expect(u.clear).toBe(back.indexOf('line 8\r\n'))
+      expect((await bufferAfter(pieceFor(back, u, 10, 80), 80, 10)).normal.slice(0, 3)).toEqual([NOTICE, 'x', 'line 1'])
+    })
+
+    it('not after anything that could leave a character above the row the cut starts, or move those rows: the cursor on such a row, a cursor saved (1049 too), a scroll region, the screen moved up or down, filled or reset; a cursor moved within the rows shown is no such thing', async () => {
+      for (const what of ['\x1b[H', '\x1b[5;1H', '\x1b[6A', '\x1bM\x1bM\x1bM\x1bM', '\x1b7', '\x1b[s', '\x1b[?1048h', '\x1b[?1049h\x1b[?1049l', '\x1b[1;10r', '\x1b[2;5r', '\x1b[S', '\x1b[2T', '\x1b#8', '\x1bc']) {
+        const text = `${numbered(3)}${what}${numbered(20)}`
+        // Three rows on, the cursor on the last row: the clear goes where the third line feed left it, and no further.
+        expect(replayTail(text, 80, 100, 10, 8).clear, JSON.stringify(what)).toBe(numbered(3).length)
+      }
+      // On the alternate screen the cursor anywhere, a cursor saved and the screen moved touch none of the normal
+      // screen's rows, so long as the cursor is back within the rows shown when 1047 brings it to the normal screen.
+      const onAlt = `${numbered(3)}\x1b[?1047h\x1b[H\x1b7\x1b[S\x1b[2T\x1b[10;1H\x1b[?1047l${numbered(20)}`
+      expect(replayTail(onAlt, 80, 100, 10, 8).clear).toBe(onAlt.indexOf('line 6\r\n', onAlt.indexOf('\x1b[?1047l')))
+      // There a scroll region or a fill puts the cursor where the count does not follow it, and a cursor left high is
+      // high on the normal screen too.
+      for (const what of ['\x1b[2;5r\x1b[10;1H', '\x1b#8\x1b[10;1H', '\x1b[H']) {
+        const text = `${numbered(3)}\x1b[?1047h${what}\x1b[?1047l${numbered(20)}`
+        expect(replayTail(text, 80, 100, 10, 8).clear, JSON.stringify(what)).toBe(numbered(3).length)
+      }
+      // Three rows on, row 8 of 10 is the cut's own (the rows shown are the last four): nothing stops, and in the tab
+      // the notice is the first row, as without the clear but for the empty rows.
+      const within = `${numbered(3)}\x1b[8;1Hw${numbered(20)}`
+      const t = replayTail(within, 80, 100, 10, 8)
+      expect(t.clear).toBeGreaterThan(numbered(3).length)
+      const a = (await bufferAfter(pieceFor(within, t, 10, 80), 80, 10)).normal
+      const b = (await bufferAfter(pieceFor(within, t, 10, 80, false), 80, 10)).normal
+      expect(a[0]).toBe(NOTICE)
+      expect(a).toEqual(b.slice(b.indexOf(NOTICE)))
+    })
+
+    /** For each item, the normal screen's rows after a full reset and `stream`, in one terminal `cols` by `rows`. */
+    function normalEach(cols: number, rows: number, streams: string[]): Promise<string[][]> {
+      return new Promise((res) => {
+        const term = new Terminal({ cols, rows, scrollback: 100_000, allowProposedApi: true, logLevel: 'off' })
+        const got: string[][] = []
+        if (streams.length === 0) { term.dispose(); res(got); return }
+        streams.forEach((s, i) => {
+          term.write(`\x18\x1bc${s}`, () => {
+            const b = term.buffer.normal
+            got.push(Array.from({ length: b.length }, (_, k) => b.getLine(k)?.translateToString(true) ?? ''))
+            if (i === streams.length - 1) { term.dispose(); res(got) }
+          })
+        })
+      })
+    }
+
+    for (const [what, seed, o] of [
+      ['text, line feeds and cursor moves', 7, {}],
+      ['the alternate screen too', 11, { alt: true }],
+      ['scroll regions and origin mode too', 13, { alt: true, region: true }],
+      ['full resets too', 17, { alt: true, region: true, reset: true }],
+    ] as const) {
+      it(`random streams of ${what} (the same as above): from the notice's row on, the tab's rows are the same with the clear and without, and the notice is there in both or neither`, async () => {
+        const all = streams(seed, 600, o).filter((s) => s.gap !== undefined)
+        const differ: string[] = []
+        let cleared = 0
+        for (const [cols, rows] of SIZES) {
+          const mine = all.filter((s) => s.cols === cols && s.rows === rows)
+          const withClear = await normalEach(cols, rows, mine.map((s) => pieceFor(s.text, s.t, rows, cols)))
+          const without = await normalEach(cols, rows, mine.map((s) => pieceFor(s.text, s.t, rows, cols, false)))
+          mine.forEach((s, i) => {
+            if (s.t.clear !== undefined) cleared++
+            const a = withClear[i].indexOf(NOTICE)
+            const b = without[i].indexOf(NOTICE)
+            // From the notice on; when the stream's own erase or reset took the notice in both, from the first row
+            // that is not empty (all the clear may drop is empty rows at the top).
+            const from = (rows: string[], k: number) => {
+              const at = k >= 0 ? k : rows.findIndex((r) => r !== '')
+              return at < 0 ? [] : rows.slice(at)
+            }
+            const same = (a < 0) === (b < 0) && JSON.stringify(from(withClear[i], a)) === JSON.stringify(from(without[i], b))
+            if (!same) differ.push(`${cols}x${rows}, cut at ${s.t.from}, clear at ${s.t.clear}: ${JSON.stringify(s.text)}`)
+          })
+        }
+        expect(differ.slice(0, 3)).toEqual([])
+        // 82 to 157 of them have a clear, by seed.
+        expect(cleared).toBeGreaterThan(60)
+      })
+    }
+  })
 })
 
 describe('one scrollback, for the tab and the trim', () => {

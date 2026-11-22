@@ -369,9 +369,12 @@ has seen; a gap is logged, and noted on the session if a hook event was lost.
   it, and the input modes it set.
   Rows are counted as xterm.js counts them; what a program draws on the
   alternate screen takes none, and the cut never lands there. Once the
-  replay is shown and the program still runs, it resizes the terminal one
-  row shorter and, 300 ms later, back to the tab's size, which makes the
-  program redraw (probe P19). A replay still coming in at the 2 s cap shows
+  replay is shown and the program still runs, it asks the program to redraw
+  (probe P19): on the console built into Windows by one resize at the tab's
+  own size (that console draws its whole screen again on any resize, and at
+  the same size moves no row under a shell at its prompt); on node-pty's
+  bundled ConPTY, macOS and Linux by a resize one row shorter and, 300 ms
+  later, back to the tab's size. A replay still coming in at the 2 s cap shows
   what had arrived, and the rest follows untrimmed: the one case where that
   line can still go out of reach. The screen in use and the input modes the
   program set before `ring_start` are not restored yet.
@@ -883,8 +886,9 @@ stream messages carry no id: a refusal of one has no `re`.
   replay to its end and shows a line of its own saying earlier output is not
   shown, then the last of the replay that the tab keeps, with the screen and
   input modes the part it leaves out set, and, while the
-  program runs, asks it to redraw by a resize one row shorter
-  and back (section 11); it does not yet restore the screen in use or the
+  program runs, asks it to redraw by a resize at the tab's size on the
+  console built into Windows, else one row shorter and back (section 11);
+  it does not yet restore the screen in use or the
   input modes set before `ring_start`. Typed input goes to the holder as raw
   frames on channel 1, accepted only from the attached connection: raw bytes on
   any other connection or channel are `bad-frame` and a close. Typed input is
