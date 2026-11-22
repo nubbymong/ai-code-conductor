@@ -66,6 +66,11 @@ export interface ModelRegistry {
    *  file's order, which is the pickers', and matchEntry places a name by this
    *  order instead, so a fetched file cannot change it. */
   shippedOrder?: string[]
+  /** Set in memory by withInstalledCodexModels when the Codex models are the
+   *  installed Codex's own list (aicc_planning#362): the version that printed
+   *  it. Never part of a file: withInstalledCodexModels sets or clears it on
+   *  every registry the app's readers get. */
+  installedCodex?: { version: string }
 }
 
 export interface RegistryOverlay {
@@ -897,6 +902,78 @@ export function codexEffortRuns(registry: ModelRegistry, model: string | null | 
   return buildEffortRows(registry, model || null, 'codex').some((e) => e.value === effort && e.supported)
 }
 
+// ── The Codex models from the installed Codex's own list (aicc_planning#362) ──
+
+/** The models the installed Codex lists in its own picker, read from it
+ *  (`codex debug models --bundled`, main), each with the reasoning levels it
+ *  lists for it, and the version that printed the list. */
+export interface InstalledCodexModels {
+  version: string
+  models: ReadonlyArray<{ id: string; label: string; efforts?: readonly string[] }>
+}
+
+/**
+ * The registry as the Codex pickers and the Codex launch see it once the
+ * installed Codex's own list has been read: the Codex models are that list's,
+ * in its order, each with the levels it lists. A registry row of the same id
+ * only adds what the list does not carry (its price, its colour) or corrects
+ * it (its label); a list-only model gets a row of its own. A Codex row the
+ * list does not name stays, not offered (`pickable: false`), so a session
+ * already on it is still placed and priced. A listed id that a Claude model
+ * of the registry has as its id or an alias is never offered (the Claude
+ * entry keeps it), nor is one a launch would refuse (isCodexModelId).
+ *
+ * No list, or a list with no model it can offer: the registry alone, as
+ * before. Pure; the same list applied twice gives the same registry.
+ */
+export function withInstalledCodexModels(registry: ModelRegistry, list: InstalledCodexModels | null | undefined): ModelRegistry {
+  const { installedCodex: _was, ...alone } = registry
+  void _was
+  const listed = Array.isArray(list?.models) && typeof list?.version === 'string' ? list!.models : []
+  const models: ModelEntry[] = Array.isArray(registry?.models) ? registry.models : []
+  const isCodexRow = (m: ModelEntry | null | undefined): boolean =>
+    !!m && typeof m.id === 'string' && familyProvider(m.family) === 'codex'
+  // The names Claude's entries answer to: never a Codex row's.
+  const claudeNames = new Set<string>()
+  for (const m of models) {
+    if (!m || typeof m.id !== 'string' || isCodexRow(m)) continue
+    claudeNames.add(m.id)
+    if (Array.isArray(m.aliases)) for (const a of m.aliases) if (typeof a === 'string') claudeNames.add(a)
+  }
+  const picked: Array<{ id: string; label: string; efforts?: readonly string[] }> = []
+  const ids = new Set<string>()
+  for (const m of listed) {
+    if (!m || !isCodexModelId(m.id) || ids.has(m.id) || claudeNames.has(m.id)) continue
+    ids.add(m.id)
+    picked.push(m)
+  }
+  if (picked.length === 0) return alone
+  const ownRow = new Map<string, ModelEntry>()
+  for (const m of models) if (isCodexRow(m) && ids.has(m.id) && !ownRow.has(m.id)) ownRow.set(m.id, m)
+  const listedRows: ModelEntry[] = picked.map((m) => {
+    const row = ownRow.get(m.id)
+    const efforts = Array.isArray(m.efforts) ? m.efforts.filter((e): e is string => typeof e === 'string') : row?.efforts
+    if (!row) {
+      const label = typeof m.label === 'string' && m.label ? m.label : m.id
+      return { id: m.id, patterns: [], family: CODEX_FAMILY, label, ...(efforts ? { efforts } : {}) }
+    }
+    const { pickable: _p, ...kept } = row
+    void _p
+    return { ...kept, ...(efforts ? { efforts } : {}) }
+  })
+  // The listed rows stand together where the first Codex row stood; every
+  // other Codex row stays in place, not offered.
+  const out: ModelEntry[] = []
+  let placed = false
+  for (const m of models) {
+    if (isCodexRow(m) && !placed) { out.push(...listedRows); placed = true }
+    if (isCodexRow(m) && ids.has(m.id)) continue
+    out.push(isCodexRow(m) && m.pickable !== false ? { ...m, pickable: false } : m)
+  }
+  if (!placed) out.push(...listedRows)
+  return { ...alone, models: out, installedCodex: { version: list!.version } }
+}
+
 // ── Model coverage vs. the published Claude Code model configuration (#385) ──
 //
 // Anthropic's Claude Code model configuration support article is the reference
@@ -926,6 +1003,10 @@ export interface ModelCoverageResult {
   /** The Codex half (P3.8 round 2, GS): Codex ids the registry lists more
    *  than once; they cover nothing and fail the check. */
   duplicates?: string[]
+  /** The Codex half (aicc_planning#362): listed ids a Claude model of the
+   *  registry has as its id or an alias; the Codex picker never offers them,
+   *  and they fail the check. */
+  taken?: string[]
 }
 
 /** True for an entry that came from the overlay (Sentinel- or user-added). */
@@ -989,15 +1070,22 @@ export function evaluateModelCoverage(
 
 /**
  * The Codex half (P3.8, row 39): the registry's Codex models against the
- * models the supported Codex CLI lists in its own model picker
- * (`resources/codex-model-catalogue.json`). The same rules as Claude's half,
- * over the codex family only: an id is covered by a registry entry of that
- * family with the same id (Codex ids carry no date suffix); `extra` is a
- * launchable Codex model the list no longer names, never an overlay entry;
- * an empty or missing list fails closed. Round 2 (GS): only an id the Codex
- * picker offers (isCodexModelId) covers one; an id the registry lists more
- * than once covers nothing and fails the check (the pickers would disagree
- * about it); a file whose `models` is not a list reads as empty.
+ * models a Codex CLI lists in its own model picker (the list shipped with
+ * this build, `resources/codex-model-catalogue.json`, or one read from the
+ * installed Codex). An id is covered by a registry entry of the codex family
+ * with the same id (Codex ids carry no date suffix); `extra` is a launchable
+ * Codex model the list no longer names, never an overlay entry; an empty or
+ * missing list fails closed. Round 2 (GS): only an id the Codex picker offers
+ * (isCodexModelId) covers one; an id the registry lists more than once covers
+ * nothing and fails the check (the pickers would disagree about it); a file
+ * whose `models` is not a list reads as empty.
+ *
+ * aicc_planning#362: a listed id the registry lacks (`missing`) no longer
+ * fails it. The Codex picker offers the installed Codex's own list, so a model
+ * Codex adds needs no registry row (withInstalledCodexModels). What still
+ * fails, besides an empty list and a duplicate, is a listed id that a Claude
+ * model of the registry has as its id or an alias (`taken`): the Codex picker
+ * never offers such an id.
  */
 export function evaluateCodexModelCoverage(
   registry: ModelRegistry,
@@ -1020,20 +1108,28 @@ export function evaluateCodexModelCoverage(
       missing: [], extra: [], covered: [],
     }
   }
+  const claudeNames = new Set<string>()
+  for (const m of entries) {
+    if (familyProvider(m.family) === 'codex') continue
+    claudeNames.add(m.id)
+    if (Array.isArray(m.aliases)) for (const a of m.aliases) if (typeof a === 'string') claudeNames.add(a)
+  }
   const missing: ExpectedModelSpec[] = []
   const covered: { id: string; by: string }[] = []
+  const taken: string[] = []
   for (const exp of expectedModels) {
     const hit = codexModels.find((m) => m.id === exp.id)
     if (hit) covered.push({ id: exp.id, by: hit.id })
     else missing.push({ id: exp.id, label: exp.label })
+    if (claudeNames.has(exp.id) && !duplicates.includes(exp.id)) taken.push(exp.id)
   }
   const extra = codexModels
     .filter((m) => !listedIds.has(m.id) && !isOverlaySourced(m))
     .map((m) => ({ id: m.id, label: m.label }))
   return {
-    ok: missing.length === 0 && duplicates.length === 0,
-    reason: missing.length > 0 ? `${missing.length} model(s) the Codex CLI lists are not in the registry`
-      : duplicates.length > 0 ? `${duplicates.length} Codex model id(s) are listed more than once in the registry` : null,
-    missing, extra, covered, duplicates,
+    ok: duplicates.length === 0 && taken.length === 0,
+    reason: duplicates.length > 0 ? `${duplicates.length} Codex model id(s) are listed more than once in the registry`
+      : taken.length > 0 ? `${taken.length} model(s) the Codex CLI lists have the id or alias of a Claude model in the registry` : null,
+    missing, extra, covered, duplicates, taken,
   }
 }

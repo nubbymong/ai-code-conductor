@@ -649,7 +649,8 @@ jobs:
   # Codex CLI version is installed into a prefix of its own on each OS and run
   # with no sign-in, each run in a fresh, empty Codex home: the app's discovery
   # (row 2's detection evidence per OS), the help of every command line the
-  # app runs, the model list against the registry, the feature list, and the
+  # app runs, the model list read and offered by the Codex picker as read
+  # (aicc_planning#362), the feature list, and the
   # flag-drift suite. P3.1's help captures are made again, uploaded, and
   # asserted against the normalised fixtures as each OS reads them: the
   # captures of each OS were reviewed (CI run 37134624406) and only the

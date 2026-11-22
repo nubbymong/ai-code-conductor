@@ -336,15 +336,18 @@ describe('release-gate runGate', () => {
 describe('release-gate Codex models', () => {
   const clean = () => fakeGitHub([{ number: 7, title: '2.1.0-beta.17' }], { 7: [] })
 
-  it('a Codex model the list names but the registry lacks -> exit 1, with a diff, even when everything else is clean', async () => {
+  // aicc_planning#362: the Codex picker offers the installed Codex's own list,
+  // so a model Codex adds needs no registry row, and no release line.
+  it('a Codex model the list names but the registry lacks passes (exit 0): the report says the picker offers it from the installed Codex', async () => {
     const codexExpected = { ...CODEX_EXPECTED, models: [...CODEX_EXPECTED.models, { label: 'GPT-6-Astra', id: 'gpt-6-astra' }] }
     const r = await runGate({ version: '2.1.0-beta.17', repo: 'o/r', listAll: clean().listAll, registry: REGISTRY_OK, expected: EXPECTED, codexExpected, ...MAC_OK, log: silent })
-    expect(r.exitCode).toBe(EXIT_REFUSED)
+    expect(r.exitCode).toBe(EXIT_OK)
     const text = r.lines.join('\n')
     expect(text).toMatch(/OK\s+milestone/)
     expect(text).toMatch(/OK\s+model registry covers all 3/)
-    expect(text).toMatch(/FAIL\s+Codex models: 1 model\(s\) the Codex CLI lists are not in the registry/)
-    expect(text).toMatch(/- gpt-6-astra\s+\(GPT-6-Astra\)/)
+    expect(text).toContain("OK    Codex models: 2 model(s) Codex 0.155.1 lists (list read 2026-09-29); the registry has a row for 1, and the picker offers each model from the installed Codex's own list")
+    expect(text).toContain("INFO  gpt-6-astra (GPT-6-Astra) has no registry row: the picker offers it from the installed Codex's own list, with no price")
+    expect(text).not.toMatch(/FAIL\s+Codex/)
     expect(r.codexResult?.missing.map((m: { id: string }) => m.id)).toEqual(['gpt-6-astra'])
   })
 
@@ -355,10 +358,11 @@ describe('release-gate Codex models', () => {
     expect(r.lines.join('\n')).toMatch(/WARN\s+gpt-5\.2 \(GPT-5\.2\) is a Codex model in the registry but the Codex list no longer names it/)
   })
 
-  it('the OK line says how many Codex models are covered and from which CLI versions', async () => {
+  it('the OK line says how many models the list names, from which CLI versions, and how many have a registry row', async () => {
     const r = await runGate({ version: '2.1.0-beta.17', repo: 'o/r', listAll: clean().listAll, registry: REGISTRY_OK, expected: EXPECTED, codexExpected: CODEX_EXPECTED, ...MAC_OK, log: silent })
     expect(r.exitCode).toBe(EXIT_OK)
-    expect(r.lines.join('\n')).toMatch(/OK\s+Codex models: the registry covers all 1 models Codex 0\.155\.1 lists \(list read 2026-09-29\)/)
+    expect(r.lines.join('\n')).toContain("OK    Codex models: 1 model(s) Codex 0.155.1 lists (list read 2026-09-29); the registry has a row for 1, and the picker offers each model from the installed Codex's own list")
+    expect(r.lines.join('\n')).not.toContain('INFO')
   })
 
   // aicc_planning#346: several versions are named as a list, commas and "and"
@@ -370,7 +374,7 @@ describe('release-gate Codex models', () => {
     ] as const) {
       const r = await runGate({ version: '2.1.0-beta.17', repo: 'o/r', listAll: clean().listAll, registry: REGISTRY_OK, expected: EXPECTED, codexExpected: { ...CODEX_EXPECTED, cliVersions: [...cliVersions] }, ...MAC_OK, log: silent })
       expect(r.exitCode).toBe(EXIT_OK)
-      expect(r.lines.join('\n')).toContain(`OK    Codex models: the registry covers all 1 models ${named} (list read 2026-09-29)`)
+      expect(r.lines.join('\n')).toContain(`OK    Codex models: 1 model(s) ${named} (list read 2026-09-29); the registry has a row for 1`)
     }
   })
 
@@ -396,11 +400,18 @@ describe('release-gate Codex models', () => {
     }
   })
 
-  it('only the codex family counts: a Claude-family entry with a Codex id does not cover it', () => {
+  it('only the codex family counts: a Claude-family entry with a Codex id does not cover it, and refuses (the Codex picker never offers it)', async () => {
     const registry = { models: [{ id: 'gpt-5.5', family: 'opus', label: 'x' }] }
     const r = evaluateCodexModels({ registry, expected: CODEX_EXPECTED })
     expect(r.ok).toBe(false)
     expect(r.missing.map((m: { id: string }) => m.id)).toEqual(['gpt-5.5'])
+    expect(r.taken).toEqual(['gpt-5.5'])
+    // A Claude alias counts as well.
+    expect(evaluateCodexModels({ registry: { models: [{ id: 'claude-opus-4-8', family: 'opus', aliases: ['gpt-5.5'] }] }, expected: CODEX_EXPECTED }).taken).toEqual(['gpt-5.5'])
+    const gate = await runGate({ version: '2.1.0-beta.17', repo: 'o/r', listAll: clean().listAll, registry: { models: [...REGISTRY_OK.models.filter((m) => m.id !== 'gpt-5.5'), { id: 'gpt-5.5', family: 'opus', label: 'x' }] }, expected: EXPECTED, codexExpected: CODEX_EXPECTED, ...MAC_OK, log: silent })
+    expect(gate.exitCode).toBe(EXIT_REFUSED)
+    expect(gate.lines.join('\n')).toMatch(/FAIL\s+Codex models: 1 model\(s\) the Codex CLI lists have the id or alias of a Claude model in the registry/)
+    expect(gate.lines.join('\n')).toMatch(/- gpt-5\.5\s+a Claude model in resources\/model-registry\.json has this id or alias/)
   })
 
   it('main reads the Codex list from the shipped catalogue by default', () => {

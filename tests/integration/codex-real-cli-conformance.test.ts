@@ -20,8 +20,11 @@
 //      the real help of the subcommand it names, and that help is the
 //      subcommand's own (its Usage line names it);
 //   3. the model list (`codex debug models --bundled`) through the app's own
-//      reader, covered by the model registry, and equal to the recorded list
-//      for the minimum and pinned versions (its own case, two soft checks);
+//      reader, read whole (each model with its reasoning levels) and offered
+//      by the Codex picker as read (aicc_planning#362: the picker offers the
+//      installed Codex's own list, so no registry row per listed id is asked
+//      for), and equal to the recorded list for the minimum and pinned
+//      versions (its own case, two soft checks);
 //   4. `codex features list` names every feature the analysis run turns off;
 //   5. help: every P3.1 capture made again and written to the run's artifacts,
 //      compared with the normalised fixture as this OS reads it: the
@@ -56,7 +59,7 @@ import {
   CODEX_MIN_SUPPORTED_VERSION, CODEX_PINNED_CLI_VERSION,
 } from '../../src/main/providers/codex'
 import type { CodexCliOperation, CodexRunResult, CodexFileStat } from '../../src/main/providers/codex'
-import { evaluateCodexModelCoverage, type ModelRegistry } from '../../src/shared/model-registry'
+import { withInstalledCodexModels, buildModelPickerRows, buildEffortRows, type ModelRegistry } from '../../src/shared/model-registry'
 import registryJson from '../../resources/model-registry.json'
 import {
   HELP_CAPTURES, formatCapture, compareCapture, parseFeaturesList, argvShape, flagsMissingFromHelp,
@@ -188,9 +191,12 @@ describe.skipIf(!LIVE)(`the real Codex CLI, no sign-in (${OS_TAG}, ${KIND || '?'
   }, CASE_MS)
 
   // Its own case, so a red detection never hides it and the prove-red run
-  // names it: coverage and the recorded list are two soft checks, both
-  // reported in one run.
-  it('the model list (`codex debug models --bundled`) through the app reader: covered by the registry, and the recorded list', async () => {
+  // names it: the picker's list and the recorded list are two soft checks,
+  // both reported in one run. aicc_planning#362: the Codex picker offers the
+  // list this reader reads, so the check is that the list is read whole (each
+  // model with its levels) and offered as read, not that the registry has a
+  // row for each listed id: a Codex that adds a model passes here.
+  it('the model list (`codex debug models --bundled`) through the app reader: read with its levels and offered by the picker as read, and the recorded list', async () => {
     // The CLI found as the app finds it (PATH); a prerequisite here, never
     // flipped by prove-red, which the detection cases above own.
     const pkg = createCodexPackage({})
@@ -198,16 +204,21 @@ describe.skipIf(!LIVE)(`the real Codex CLI, no sign-in (${OS_TAG}, ${KIND || '?'
     expect(found, `discovery by PATH, for the model list: ${JSON.stringify(found)}`).toMatchObject({ state: 'found', version: VERSION })
     // The app's reader runs it in a fresh empty home of its own.
     const cat = await pkg.setup!.modelCatalogue!()
-    note(`model list: ${cat.ok ? cat.models.map((m) => m.id).join(', ') : `${cat.code}: ${cat.detail}`}`)
+    note(`model list: ${cat.ok ? cat.models.map((m) => `${m.id} [${(m.efforts ?? []).join(' ')}]`).join(', ') : `${cat.code}: ${cat.detail}`}`)
     expect(cat, `model list: ${JSON.stringify(cat)}`).toMatchObject({ ok: true, version: VERSION })
     if (!cat.ok) return
     const registry = registryJson as unknown as ModelRegistry
-    const tested = PROVE_RED
-      ? { ...registry, models: registry.models.filter((m) => m.id !== cat.models[0].id) }
-      : registry
-    const coverage = evaluateCodexModelCoverage(tested, { source: `Codex ${VERSION}`, models: cat.models.map((m) => ({ id: m.id, label: m.label })) })
-    note(`registry coverage: ${coverage.ok ? 'ok' : coverage.reason}; missing ${coverage.missing.map((m) => m.id).join(', ') || 'none'}; not listed by this CLI ${coverage.extra.map((m) => m.id).join(', ') || 'none'}`)
-    expect.soft(coverage.ok, `model list, registry coverage: ${PROVE_RED ? WRONG : `${coverage.reason}: ${coverage.missing.map((m) => m.id).join(', ')}`}`).toBe(true)
+    const picker = withInstalledCodexModels(registry, { version: cat.version, models: cat.models })
+    const offered = buildModelPickerRows(picker, 'codex').map((r) => r.value)
+    const levelsOffered = cat.models.filter((m) => {
+      const supported = buildEffortRows(picker, m.id, 'codex').filter((e) => e.supported).map((e) => e.value)
+      const known = new Set(buildEffortRows(picker, null, 'codex').map((e) => e.value))
+      return (m.efforts ?? []).length > 0 && JSON.stringify(supported) === JSON.stringify((m.efforts ?? []).filter((e) => known.has(e)))
+    }).map((m) => m.id)
+    const unknownIds = cat.models.map((m) => m.id).filter((id) => !registry.models.some((r) => r.id === id))
+    note(`picker: ${offered.join(', ')}; with their own levels: ${levelsOffered.length} of ${cat.models.length}; listed with no registry row: ${unknownIds.join(', ') || 'none'}`)
+    const want = PROVE_RED ? [...cat.models.map((m) => m.id), 'gpt-wrong'] : cat.models.map((m) => m.id)
+    expect.soft({ offered, levelsOffered }, `model list, offered by the picker as read${PROVE_RED ? `: ${WRONG}` : ''}`).toEqual({ offered: want, levelsOffered: cat.models.map((m) => m.id) })
     const recorded = recordedModelIds(VERSION)
     note(`recorded list: ${recorded ? (recorded.join(',') === cat.models.map((m) => m.id).join(',') ? 'equal' : 'differs') : `none recorded for ${VERSION}`}`)
     if (recorded) expect.soft(cat.models.map((m) => m.id), `model list, the recorded list for ${VERSION}${PROVE_RED ? `: ${WRONG}` : ''}`).toEqual(PROVE_RED ? [...recorded, 'gpt-wrong'] : recorded)

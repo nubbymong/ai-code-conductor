@@ -1,9 +1,12 @@
 // P3.8 (row 39): Sentinel's model coverage check covers Codex's catalogue too,
 // as it covers Claude's (#385). Its reference is the list of models the
 // supported Codex CLI itself offers (resources/codex-model-catalogue.json),
-// shipped with the build: a model that list names and the registry lacks, a
-// Codex model the registry still offers that the list dropped, an unreadable
-// list and a stale one are each reported, and nothing else.
+// shipped with the build: a Codex model the registry still offers that the
+// list dropped, a Codex id the registry lists twice, an unreadable list and a
+// stale one are each reported, and nothing else. aicc_planning#362: a listed
+// model the registry lacks is no longer reported (the picker offers the
+// installed Codex's own list), and with that list read, the picker is that
+// list, so no model notice is raised at all.
 import { describe, it, expect } from 'vitest'
 import {
   codexModelCoverageFindings,
@@ -31,18 +34,16 @@ describe('Sentinel Codex model coverage (row 39)', () => {
     expect(CODEX_EXPECTED_MODEL_SET.models.map((m) => m.id)).toEqual(CODEX_IDS)
   })
 
-  it('reports a model the Codex CLI lists that the picker does not offer', () => {
-    const f = codexModelCoverageFindings(reg, listOf([...CODEX_IDS, 'gpt-6-nova']), NOW)
-    expect(f).toHaveLength(1)
-    expect(f[0]).toMatchObject({ id: 'models:codex-missing:gpt-6-nova', kind: 'compat', severity: 'warn', affectedFeature: 'sessions', status: 'open', createdAt: NOW })
-    expect(f[0].title).toBe('Codex offers GPT-6-NOVA, but it is not in the model picker')
-    expect(f[0].evidence).toContain('the Codex model list shipped with this build (Codex 0.153.4, 2026-09-29)')
+  // aicc_planning#362: the Codex picker takes its models from the installed
+  // Codex, so a listed model with no registry row is nothing to report.
+  it('never reports a model the Codex CLI lists that the registry has no row for', () => {
+    expect(codexModelCoverageFindings(reg, listOf([...CODEX_IDS, 'gpt-6-nova']), NOW)).toEqual([])
   })
 
   // aicc_planning#346: the versions the shipped list was read from are named
   // as a list, commas and "and" before the last, not "and" between each pair.
   it('names the versions the shipped list was read from as a list', () => {
-    const four = { ...listOf([...CODEX_IDS, 'gpt-6-nova']), cliVersions: ['0.153.4', '0.155.1', '0.156.1', '0.157.1'] }
+    const four = { ...listOf(CODEX_IDS.filter((id) => id !== 'gpt-5.2')), cliVersions: ['0.153.4', '0.155.1', '0.156.1', '0.157.1'] }
     expect(codexModelCoverageFindings(reg, four, NOW)[0].evidence).toContain('the Codex model list shipped with this build (Codex 0.153.4, 0.155.1, 0.156.1 and 0.157.1, 2026-09-29)')
     expect(codexModelCoverageFindings(reg, { ...four, cliVersions: ['0.153.4', '0.155.1'] }, NOW)[0].evidence).toContain('(Codex 0.153.4 and 0.155.1, 2026-09-29)')
   })
@@ -95,30 +96,31 @@ describe('Sentinel Codex model coverage (row 39)', () => {
 })
 
 // P3.9 (row 39): the live read. The installed CLI's own list, read from it
-// (`codex debug models --bundled`), is the reference when there is one, for
-// both arms, so the check follows the version actually installed.
+// (`codex debug models --bundled`), is the reference when there is one, so
+// the check follows the version actually installed. aicc_planning#362: the
+// Codex picker then offers exactly that list (withInstalledCodexModels), so
+// no model can be missing from it and none it drops is still offered.
 describe('Sentinel Codex model coverage against the installed CLI (row 39, P3.9)', () => {
   const live = (version: string, ids: string[]) => ({ version, models: ids.map((id) => ({ id, label: id.toUpperCase() })) })
   const V155 = CODEX_IDS.filter((id) => id !== 'gpt-5.2')
 
-  it("0.155.1 installed: gpt-5.2, which it no longer lists, is said for that version (the owner's gpt-5.2 notice, resolved per version)", () => {
-    const f = codexModelCoverageFindings(reg, CODEX_EXPECTED_MODEL_SET, NOW, live('0.155.1', V155))
-    expect(f).toHaveLength(1)
-    expect(f[0]).toMatchObject({ id: 'models:codex-retired:gpt-5.2', kind: 'compat', severity: 'warn', provider: 'codex', affectedFeature: 'sessions' })
-    expect(f[0].title).toBe('GPT-5.2 is still selectable but Codex 0.155.1 no longer lists it')
-    expect(f[0].evidence).toContain('the model list read from the installed Codex 0.155.1 itself')
-    expect(f[0].evidence).not.toContain('just now')
+  it('0.155.1 installed: the picker offers its own list, which leaves gpt-5.2 out, so nothing is said (the owner\'s gpt-5.2 notice, resolved by the picker)', () => {
+    expect(codexModelCoverageFindings(reg, CODEX_EXPECTED_MODEL_SET, NOW, live('0.155.1', V155))).toEqual([])
   })
 
   it('0.153.4 installed: the registry covers its list, so nothing is said', () => {
     expect(codexModelCoverageFindings(reg, CODEX_EXPECTED_MODEL_SET, NOW, live('0.153.4', CODEX_IDS))).toEqual([])
   })
 
-  it('a model the installed CLI offers that the picker does not is said, from the live list, even when the shipped list lacks it too', () => {
-    const f = codexModelCoverageFindings(reg, CODEX_EXPECTED_MODEL_SET, NOW, live('0.157.1', [...CODEX_IDS, 'gpt-6-nova']))
-    expect(f.map((x) => x.id)).toEqual(['models:codex-missing:gpt-6-nova'])
-    expect(f[0].evidence).toContain('the installed Codex 0.157.1')
-    expect(f[0].provider).toBe('codex')
+  it('a model the installed CLI offers that the registry has no row for is offered by the picker, so nothing is said', () => {
+    expect(codexModelCoverageFindings(reg, CODEX_EXPECTED_MODEL_SET, NOW, live('0.157.1', [...CODEX_IDS, 'gpt-6-nova']))).toEqual([])
+  })
+
+  it('a live list with no model the picker can offer leaves the registry as the picker, and what it offers that the list does not name is said, for that version', () => {
+    const f = codexModelCoverageFindings(reg, CODEX_EXPECTED_MODEL_SET, NOW, live('0.155.1', ['-bad']))
+    expect(f.map((x) => x.id)).toEqual(CODEX_IDS.map((id) => `models:codex-retired:${id}`))
+    expect(f[0].title).toBe('GPT-6.2-Sol is still selectable but Codex 0.155.1 no longer lists it')
+    expect(f[0].evidence).toContain('the model list read from the installed Codex 0.155.1 itself')
   })
 
   it('a live read has just answered first-hand: a stale shipped list is not said', () => {
@@ -151,26 +153,14 @@ describe('closing Codex model findings the check no longer stands behind (O8)', 
   const open = (id: string, status: FindingStatus = 'open') => ({ id, status })
   const stale = staleCodexModelFindingIds
 
-  it('codex-missing closes once the registry has one pickable Codex entry for it; one it does not cover stays offline', () => {
+  // aicc_planning#362: no build raises codex-missing any more, so one an
+  // earlier build raised closes at the first completed check, live or not.
+  it('codex-missing, raised by an earlier build, closes at the first completed check', () => {
     const findings = [open('models:codex-missing:gpt-5.5'), open('models:codex-missing:gpt-6-nova')]
-    expect(stale(findings, reg, [], CODEX_EXPECTED_MODEL_SET, null)).toEqual(['models:codex-missing:gpt-5.5'])
+    expect(stale(findings, reg, [], CODEX_EXPECTED_MODEL_SET, null)).toEqual(['models:codex-missing:gpt-5.5', 'models:codex-missing:gpt-6-nova'])
+    expect(stale(findings, reg, [], CODEX_EXPECTED_MODEL_SET, live('0.155.1', V155))).toEqual(['models:codex-missing:gpt-5.5', 'models:codex-missing:gpt-6-nova'])
     const unpickable: ModelRegistry = { ...reg, models: reg.models.map((m) => m.id === 'gpt-5.5' ? { ...m, pickable: false } : m) }
-    expect(stale([findings[0]], unpickable, [], CODEX_EXPECTED_MODEL_SET, null)).toEqual([])
-  })
-
-  it('codex-missing for a model the installed CLI no longer lists closes on a live read only', () => {
-    const findings = [open('models:codex-missing:gpt-6-nova')]
-    expect(stale(findings, reg, [], CODEX_EXPECTED_MODEL_SET, live('0.155.1', V155))).toEqual(['models:codex-missing:gpt-6-nova'])
-    expect(stale(findings, reg, [], CODEX_EXPECTED_MODEL_SET, null)).toEqual([])
-    // The live list still offers it: raised again, and stays.
-    const l = live('0.157.1', [...CODEX_IDS, 'gpt-6-nova'])
-    const current = codexModelCoverageFindings(reg, CODEX_EXPECTED_MODEL_SET, NOW, l)
-    expect(current.map((f) => f.id)).toEqual(['models:codex-missing:gpt-6-nova'])
-    expect(stale(findings, reg, current, CODEX_EXPECTED_MODEL_SET, l)).toEqual([])
-    // Never closed by a live list that names it, even when the caller passes no findings for the run.
-    expect(stale(findings, reg, [], CODEX_EXPECTED_MODEL_SET, l)).toEqual([])
-    // A model the shipped list names is not closed by the live read alone.
-    expect(stale(findings, reg, [], listOf([...CODEX_IDS, 'gpt-6-nova']), live('0.155.1', V155))).toEqual([])
+    expect(stale([findings[0]], unpickable, [], CODEX_EXPECTED_MODEL_SET, null)).toEqual(['models:codex-missing:gpt-5.5'])
   })
 
   it('codex-duplicate closes once the registry lists the id only once', () => {
@@ -183,13 +173,13 @@ describe('closing Codex model findings the check no longer stands behind (O8)', 
     expect(stale(findings, twice, [], CODEX_EXPECTED_MODEL_SET, null)).toEqual([])
   })
 
-  it("codex-retired: the gpt-5.2 notice stays while 0.155.1 or the shipped list answers, and closes when the installed CLI lists gpt-5.2 again or the registry drops it", () => {
+  it("codex-retired: the gpt-5.2 notice closes on a live read (0.155.1's picker leaves gpt-5.2 out; 0.153.4 lists it) and when the registry drops it, not offline", () => {
     const findings = [open('models:codex-retired:gpt-5.2')]
     const l155 = live('0.155.1', V155)
     const raised155 = codexModelCoverageFindings(reg, CODEX_EXPECTED_MODEL_SET, NOW, l155)
-    expect(raised155.map((f) => f.id)).toEqual(['models:codex-retired:gpt-5.2'])
-    expect(stale(findings, reg, raised155, CODEX_EXPECTED_MODEL_SET, l155)).toEqual([])
-    // Offline (the shipped list keeps gpt-5.2): not closed, so it does not flap.
+    expect(raised155).toEqual([])
+    expect(stale(findings, reg, raised155, CODEX_EXPECTED_MODEL_SET, l155)).toEqual(['models:codex-retired:gpt-5.2'])
+    // Offline, the registry alone still offers it and the shipped list keeps it: not closed, so it does not flap.
     expect(stale(findings, reg, codexModelCoverageFindings(reg, CODEX_EXPECTED_MODEL_SET, NOW), CODEX_EXPECTED_MODEL_SET, null)).toEqual([])
     // 0.153.4 installed and read: it lists gpt-5.2, so the notice is false now.
     const l153 = live('0.153.4', CODEX_IDS)
@@ -199,10 +189,10 @@ describe('closing Codex model findings the check no longer stands behind (O8)', 
     expect(stale(findings, dropped, [], CODEX_EXPECTED_MODEL_SET, null)).toEqual(['models:codex-retired:gpt-5.2'])
   })
 
-  it('a run that found the list unreadable closes nothing by comparison', () => {
+  it('a run that found the list unreadable closes nothing by comparison (only codex-missing, which no build raises now)', () => {
     const findings = [open('models:codex-retired:gpt-5.2'), open('models:codex-missing:gpt-6-nova')]
     const unreadable = [open('models:codex-list-unreadable')]
-    expect(stale(findings, reg, unreadable, CODEX_EXPECTED_MODEL_SET, live('0.153.4', CODEX_IDS))).toEqual([])
+    expect(stale(findings, reg, unreadable, CODEX_EXPECTED_MODEL_SET, live('0.153.4', CODEX_IDS))).toEqual(['models:codex-missing:gpt-6-nova'])
   })
 
   it('codex-list-unreadable and codex-check-failed close once a check completes without them', () => {
@@ -229,16 +219,17 @@ describe('closing Codex model findings the check no longer stands behind (O8)', 
   })
 })
 
-// S18 review (2026-10-12): the shipped list is the union over the supported
-// Codex versions, and a model's own cliVersions names the ones that list it.
-// A live read of a Codex OLDER than every version that lists a model has not
-// listed it yet: the model is new, not retired, so the retired arm says nothing
-// about it, and a notice that said so closes on such a read. A model an equal
-// or older version listed, that the installed one no longer lists, is still
-// said (gpt-5.2 on 0.155.1). Before this, GPT-6-Sol and GPT-6-Luna (listed from
-// 0.156.1) were called "possibly retired" on every supported Codex from 0.153.4
-// to 0.156.0. Synthetic models, so this holds whatever the shipped list holds.
-describe('a Codex model the shipped list names only from a later Codex is not called retired by an older one (S18)', () => {
+// S18 review (2026-10-12) asked that a Codex OLDER than every version that
+// lists a model not call that model "possibly retired" (GPT-6-Sol and
+// GPT-6-Luna, listed from 0.156.1, were so called on every supported Codex
+// from 0.153.4 to 0.156.0). aicc_planning#362 settles it for every version:
+// with a live list the picker is that version's own list, so a model it does
+// not list is not offered, new or retired, and nothing is said about it,
+// whatever versions the shipped list names; a notice an earlier build raised
+// closes on such a read. Offline, the registry alone is the picker and the
+// shipped list (the union over the supported versions) answers, as before.
+// Synthetic models, so this holds whatever the shipped list holds.
+describe('a live read says nothing a model\'s versions would decide (S18, aicc_planning#362)', () => {
   const live = (version: string, ids: string[]) => ({ version, models: ids.map((id) => ({ id, label: id.toUpperCase() })) })
   const codex = (id: string) => ({ id, patterns: [], family: 'codex', label: id.toUpperCase(), efforts: ['low', 'medium', 'high'] })
   const registry = { ...reg, models: [codex('gpt-x-base'), codex('gpt-x-new'), codex('gpt-x-gone')] } as unknown as ModelRegistry
@@ -254,37 +245,19 @@ describe('a Codex model the shipped list names only from a later Codex is not ca
   const GONE = 'models:codex-retired:gpt-x-gone'
   const ids = (expected: ExpectedModelSet, l: ReturnType<typeof live> | null) => codexModelCoverageFindings(registry, expected, NOW, l).map((f) => f.id)
 
-  it('a Codex older than every version that lists a model does not call it retired; one that dropped a model it listed still does', () => {
-    expect(ids(shipped, live('0.155.1', ['gpt-x-base']))).toEqual([GONE])
-    expect(ids(shipped, live('0.156.0', ['gpt-x-base']))).toEqual([GONE])
-    expect(ids(shipped, live('0.153.4', ['gpt-x-base', 'gpt-x-gone']))).toEqual([])
-    // A prerelease of the first version that lists it is older than that version.
-    expect(ids(shipped, live('0.156.1-alpha.2', ['gpt-x-base']))).toEqual([GONE])
-    expect(ids(shipped, live('0.156.1', ['gpt-x-base', 'gpt-x-new']))).toEqual([GONE])
-    // A later Codex that does not list it: said, for that version.
-    const later = codexModelCoverageFindings(registry, shipped, NOW, live('0.157.0', ['gpt-x-base']))
-    expect(later.map((f) => f.id)).toEqual([NEW, GONE])
-    expect(later[0].title).toBe('GPT-X-NEW is still selectable but Codex 0.157.0 no longer lists it')
-    // No live list: the shipped list answers, and it names all three.
+  it('no live read calls a model retired, older or newer than the versions that list it; offline the shipped list names all three', () => {
+    for (const version of ['0.153.4', '0.155.1', '0.156.0', '0.156.1-alpha.2', '0.156.1', '0.157.0', 'dev-build']) {
+      expect(ids(shipped, live(version, ['gpt-x-base'])), version).toEqual([])
+    }
     expect(ids(shipped, null)).toEqual([])
   })
 
-  it('says it as before when it cannot tell: no versions of its own, a listing version not later than the installed one, or a version that does not parse', () => {
-    const variant = (cliVersions: unknown) => ({ ...shipped, models: shipped.models.map((m) => m.id === 'gpt-x-new' ? { ...m, cliVersions } : m) }) as ExpectedModelSet
-    for (const cv of [undefined, [], ['0.153.4', '0.156.1'], ['0.155.1'], ['not-a-version'], [156]]) {
-      expect(ids(variant(cv), live('0.155.1', ['gpt-x-base'])), JSON.stringify(cv) ?? 'undefined').toContain(NEW)
-    }
-    expect(ids(shipped, live('dev-build', ['gpt-x-base']))).toContain(NEW)
-  })
-
-  it('a notice that called it retired closes on a live read of a Codex that has not listed it yet, and only then', () => {
+  it('a notice that called a model retired closes on any live read that leaves it out, and is kept offline', () => {
     const findings = [NEW, GONE].map((id) => ({ id, status: 'open' as FindingStatus }))
-    const l155 = live('0.155.1', ['gpt-x-base'])
-    expect(staleCodexModelFindingIds(findings, registry, codexModelCoverageFindings(registry, shipped, NOW, l155), shipped, l155)).toEqual([NEW])
-    // Offline (the shipped list answers): kept, so it does not come and go with the network.
+    for (const version of ['0.155.1', '0.157.0']) {
+      const l = live(version, ['gpt-x-base'])
+      expect(staleCodexModelFindingIds(findings, registry, codexModelCoverageFindings(registry, shipped, NOW, l), shipped, l), version).toEqual([NEW, GONE])
+    }
     expect(staleCodexModelFindingIds(findings, registry, codexModelCoverageFindings(registry, shipped, NOW), shipped, null)).toEqual([])
-    // A later Codex that dropped it: raised again, and kept.
-    const l157 = live('0.157.0', ['gpt-x-base'])
-    expect(staleCodexModelFindingIds(findings, registry, codexModelCoverageFindings(registry, shipped, NOW, l157), shipped, l157)).toEqual([])
   })
 })

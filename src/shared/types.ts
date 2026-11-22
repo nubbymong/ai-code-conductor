@@ -168,8 +168,10 @@ export interface TerminalOptions {
 }
 
 export interface CodexOptions {
-  /** A Codex model id: the registry's Codex models (resources/model-registry.json,
-   *  family codex), or one saved before them. Absent or '' = Codex's own default. */
+  /** A Codex model id: one the Codex picker offers (the installed Codex's own
+   *  list once main has read it, aicc_planning#362; else the registry's Codex
+   *  models, resources/model-registry.json, family codex), or one saved before
+   *  them. Absent or '' = Codex's own default. */
   model?: string
   /** Absent (or 'none') = the model's own default; the spawn allowlist is
    *  CODEX_EFFORTS (sanitize-restored-spawn-options.ts). */

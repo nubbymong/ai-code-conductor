@@ -32,17 +32,21 @@
 //      to the undated entry by prefix; the CLI accepts both). Missing = FAIL,
 //      printed as a diff. A registry Claude model the article no longer lists
 //      is a WARNING (flagged, not fatal): the owner decides whether it retired.
-//   3. CODEX MODELS  (P3.8, row 39) Every id in the list the supported Codex
-//      CLI offers in its own model picker (resources/codex-model-catalogue.json,
-//      read from the CLI's bundled catalogue; the file says how) must be a
-//      pickable model of the registry's codex family, by exact id (Codex ids
-//      carry no date suffix). The Sentinel Codex model check runs the same
-//      comparison over the same file (evaluateCodexModelCoverage in
+//   3. CODEX MODELS  (P3.8, row 39; aicc_planning#362) The list the supported
+//      Codex CLI offers in its own model picker (resources/codex-model-catalogue.json,
+//      read from the CLI's bundled catalogue; the file says how) must be read:
+//      an empty or missing list fails closed. The app's Codex picker offers
+//      the installed Codex's own list (src/main/installed-codex-models.ts), so
+//      a listed id with no registry row is not a failure (printed as INFO);
+//      the real-CLI conformance job checks that the app reads that list
+//      (tests/integration/codex-real-cli-conformance.test.ts). A listed id
+//      that a Claude model of the registry has as its id or alias FAILs (the
+//      Codex picker never offers it), and so does an id the registry lists
+//      twice; a pickable Codex model the list no longer names = WARNING.
+//      Codex ids are matched exactly (no date suffix). The Sentinel Codex
+//      model check uses the same rules (evaluateCodexModelCoverage in
 //      src/shared/model-registry.ts); tests/unit/model-coverage-parity.test.ts
-//      holds the two to identical verdicts. Missing = FAIL, printed as a diff;
-//      a pickable Codex model the list no longer names = WARNING; an empty or
-//      missing list fails closed. Only an id the Codex picker offers covers
-//      one, and an id the registry lists twice covers nothing and FAILs.
+//      holds the two to identical verdicts.
 //   4. MACOS FLOOR  The Electron the build installs (the exact version
 //      package-lock.json resolves, never package.json's range) decides the
 //      oldest macOS the build opens on (Electron 44 needs macOS 13). The tag
@@ -168,7 +172,7 @@ function labelNames(labels) {
 }
 
 /** @typedef {{ ok: boolean, reason: string|null, milestone: {number:number,title:string,state?:string}|null, blocking: Array<{number:number,title:string,labels:string[]}>, excluded: Array<{number:number,title:string}>, shipped: Array<{number:number,title:string}> }} MilestoneVerdict */
-/** @typedef {{ ok: boolean, reason: string|null, missing: Array<{id:string,label?:string}>, extra: Array<{id:string,label?:string}>, covered: Array<{id:string,by:string}>, duplicates?: string[] }} ModelsVerdict */
+/** @typedef {{ ok: boolean, reason: string|null, missing: Array<{id:string,label?:string}>, extra: Array<{id:string,label?:string}>, covered: Array<{id:string,by:string}>, duplicates?: string[], taken?: string[] }} ModelsVerdict */
 /** @typedef {{ ok: boolean, reason: string|null, tag: string, offered: boolean, electronMajor: number|null, needed: number|null, floor: number|null }} MacosVerdict */
 
 /**
@@ -275,8 +279,9 @@ export function evaluateModels({ registry, expected }) {
 }
 
 /**
- * The Codex half's verdict (P3.8, row 39): the registry's pickable codex-family
- * models against the list the supported Codex CLI offers. A copy of
+ * The Codex half's verdict (P3.8, row 39; aicc_planning#362): the list the
+ * supported Codex CLI offers against the registry's codex-family models; a
+ * listed id with no registry row is reported, not fatal. A copy of
  * evaluateCodexModelCoverage in src/shared/model-registry.ts (this script runs
  * before `npm ci` and cannot import it); tests/unit/model-coverage-parity.test.ts
  * holds the two to identical verdicts.
@@ -308,12 +313,22 @@ export function evaluateCodexModels({ registry, expected }) {
       missing: [], extra: [], covered: [],
     }
   }
+  // aicc_planning#362: the names a Claude model answers to (its id and its
+  // aliases); a listed id among them is one the Codex picker never offers.
+  const claudeNames = new Set()
+  for (const m of entries) {
+    if (m.family === CODEX_FAMILY) continue
+    claudeNames.add(m.id)
+    if (Array.isArray(m.aliases)) for (const a of m.aliases) if (typeof a === 'string') claudeNames.add(a)
+  }
   const missing = []
   const covered = []
+  const taken = []
   for (const exp of expectedModels) {
     const hit = codexModels.find((m) => m.id === exp.id)
     if (hit) covered.push({ id: exp.id, by: hit.id })
     else missing.push({ id: exp.id, label: exp.label })
+    if (claudeNames.has(exp.id) && !duplicates.includes(exp.id)) taken.push(exp.id)
   }
   // A pickable Codex model the list no longer names -- flagged, not fatal.
   // Overlay entries (they carry `provenance`) are never flagged: a model the
@@ -321,11 +336,13 @@ export function evaluateCodexModels({ registry, expected }) {
   const extra = codexModels
     .filter((m) => !listed.has(m.id) && !m.provenance)
     .map((m) => ({ id: m.id, label: m.label }))
+  // A listed model with no registry row (`missing`) is not fatal: the Codex
+  // picker offers the installed Codex's own list (aicc_planning#362).
   return {
-    ok: missing.length === 0 && duplicates.length === 0,
-    reason: missing.length > 0 ? `${missing.length} model(s) the Codex CLI lists are not in the registry`
-      : duplicates.length > 0 ? `${duplicates.length} Codex model id(s) are listed more than once in the registry` : null,
-    missing, extra, covered, duplicates,
+    ok: duplicates.length === 0 && taken.length === 0,
+    reason: duplicates.length > 0 ? `${duplicates.length} Codex model id(s) are listed more than once in the registry`
+      : taken.length > 0 ? `${taken.length} model(s) the Codex CLI lists have the id or alias of a Claude model in the registry` : null,
+    missing, extra, covered, duplicates, taken,
   }
 }
 
@@ -722,15 +739,12 @@ export function formatReport({ version, repo, milestoneResult, modelsResult, exp
     const versions = codexMeta && Array.isArray(codexMeta.cliVersions) && codexMeta.cliVersions.length
       ? ` Codex ${versionList(codexMeta.cliVersions)}` : ' the Codex CLI'
     const at = codexMeta && codexMeta.fetchedAt ? ` (list read ${codexMeta.fetchedAt})` : ''
-    if (r.ok) out.push(`  OK    Codex models: the registry covers all ${r.covered.length} models${versions} lists${at}`)
-    else {
-      out.push(`  FAIL  Codex models: ${r.reason}${at}`)
-      for (const m of r.missing) out.push(`          - ${m.id}${m.label ? `  (${m.label})` : ''}   the Codex list names it, resources/model-registry.json has no pickable codex-family entry for it`)
-      out.push('          Add the missing entries to resources/model-registry.json `models` (family "codex", with the model\'s')
-      out.push('          reasoning levels as `efforts`) or refresh resources/codex-model-catalogue.json if the CLI changed;')
-      out.push('          that file says how.')
-    }
+    const listedCount = r.covered.length + r.missing.length
+    if (r.ok) out.push(`  OK    Codex models: ${listedCount} model(s)${versions} lists${at}; the registry has a row for ${r.covered.length}, and the picker offers each model from the installed Codex's own list`)
+    else out.push(`  FAIL  Codex models: ${r.reason}${at}`)
+    for (const id of r.taken || []) out.push(`          - ${id}   a Claude model in resources/model-registry.json has this id or alias, so the Codex picker cannot offer it: rename or remove that entry`)
     for (const id of r.duplicates || []) out.push(`          ${id} is listed more than once in resources/model-registry.json: keep one entry, in the codex family`)
+    if (r.ok) for (const m of r.missing) out.push(`  INFO  ${m.id}${m.label ? ` (${m.label})` : ''} has no registry row: the picker offers it from the installed Codex's own list, with no price`)
     for (const m of r.extra) out.push(`  WARN  ${m.id}${m.label ? ` (${m.label})` : ''} is a Codex model in the registry but the Codex list no longer names it: retired? (not fatal)`)
   }
   // -- the macOS floor (check 4)

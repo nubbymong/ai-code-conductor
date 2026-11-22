@@ -2,9 +2,10 @@
 // CLI itself (P3.9, row 39): `codex debug models --bundled`, which prints the
 // catalogue shipped in the binary as JSON (each model's slug, display name,
 // visibility, reasoning levels and priority) with no sign-in and no network
-// (P3.1 evidence, addenda 12 and 13). Sentinel compares the model registry
-// with this list, so its Codex check follows the version actually installed
-// rather than the list shipped with this build.
+// (P3.1 evidence, addenda 12 and 13). The app's Codex model picker offers
+// this list, each model with its own reasoning levels (aicc_planning#362,
+// src/main/installed-codex-models.ts), so a Codex release that adds a model
+// needs no app release; Sentinel's Codex check reads it too.
 //
 // The read runs the executable discovery last proved, re-verified just before
 // and after the run (a file replaced meanwhile gives no list), and only for a
@@ -16,7 +17,9 @@
 // working folder the executable's own (the runner's rule). The output is
 // capped, and read strictly: one JSON object with a `models` list, each model
 // an object; only the models the picker lists (`visibility: "list"`), each
-// with a slug the app accepts as a Codex model id; anything else is no list.
+// with a slug the app accepts as a Codex model id and, when it has
+// `supported_reasoning_levels`, a list of objects each naming its `effort`
+// as a level name; anything else is no list.
 import type { ModelCatalogueEntry, ModelCatalogueResult, ModelCatalogueFailureCode } from '../core'
 import { isCodexModelId } from '../../../shared/model-registry'
 import { stripSpoofableText } from '../../../shared/safe-text'
@@ -35,6 +38,10 @@ export const CODEX_CATALOGUE_MAX_CHARS = 4 * 1024 * 1024
 export const CODEX_CATALOGUE_MAX_MODELS = 256
 /** A display name longer than this is cut. */
 export const CODEX_CATALOGUE_LABEL_MAX = 64
+/** The most reasoning levels read for one model; more is no list. */
+export const CODEX_CATALOGUE_MAX_LEVELS = 16
+/** A reasoning level's name as the list may give it (`low`, `xhigh`). */
+const LEVEL_NAME_RE = /^[a-z][a-z0-9_-]{0,31}$/
 
 export interface CodexCatalogueDeps {
   /** The CLI discovery last proved: the package's own record, never a caller's. */
@@ -76,12 +83,29 @@ export function parseCodexModelCatalogue(stdout: string): ModelCatalogueEntry[] 
     seen.add(id)
     const name = own(m, 'display_name')
     const label = typeof name === 'string' ? stripSpoofableText(name, CODEX_CATALOGUE_LABEL_MAX).trim() : ''
+    const efforts = reasoningLevels(own(m, 'supported_reasoning_levels'))
+    if (efforts === null) return null
     const p = own(m, 'priority')
-    listed.push({ id, label: label || id, priority: typeof p === 'number' && Number.isFinite(p) ? p : Number.POSITIVE_INFINITY, index })
+    listed.push({ id, label: label || id, ...(efforts ? { efforts } : {}), priority: typeof p === 'number' && Number.isFinite(p) ? p : Number.POSITIVE_INFINITY, index })
   }
   if (listed.length === 0) return null
   listed.sort((a, b) => (a.priority === b.priority ? a.index - b.index : a.priority < b.priority ? -1 : 1))
-  return listed.map(({ id, label }) => ({ id, label }))
+  return listed.map(({ id, label, efforts }) => ({ id, label, ...(efforts ? { efforts } : {}) }))
+}
+
+/** A model's reasoning levels, in the list's order with any repeat dropped;
+ *  undefined when the model gives none (the field is absent); null when the
+ *  field is not a list this app reads (fail closed: the whole list goes). */
+function reasoningLevels(levels: unknown): string[] | undefined | null {
+  if (levels === undefined) return undefined
+  if (!Array.isArray(levels) || levels.length > CODEX_CATALOGUE_MAX_LEVELS) return null
+  const out: string[] = []
+  for (const l of levels) {
+    const effort = isRecord(l) ? own(l, 'effort') : undefined
+    if (typeof effort !== 'string' || !LEVEL_NAME_RE.test(effort)) return null
+    if (!out.includes(effort)) out.push(effort)
+  }
+  return out
 }
 
 const fail = (code: ModelCatalogueFailureCode, detail: string): ModelCatalogueResult => ({ ok: false, code, detail })
