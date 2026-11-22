@@ -217,17 +217,20 @@ export function parseCodexResetTime(message: string, now: Date = new Date()): Pa
  * app's own Codex commands use). A prompt or picker up is a 'menu' (Enter
  * would choose in it), text in the composer a 'draft'; a turn running, the
  * start-up, or a screen that cannot be read defer as a 'menu' too. Fails
- * closed: no screen, no send.
+ * closed: no screen, no send. `title` (2.1.3-beta.13 B2, aicc_planning#370):
+ * the pane's window title, read with the screen, so a turn shown only by the
+ * title's spinner defers too.
  */
-export function codexCanSendNow(_text: string, _nonDim?: string, screen?: ScreenLine[] | null): SendGateResult {
+export function codexCanSendNow(_text: string, _nonDim?: string, screen?: ScreenLine[] | null, title?: string | null): SendGateResult {
   if (!screen || screen.length === 0) return { ok: false, reason: 'menu' }
-  const read = readCodexScreen(screen)
+  const read = readCodexScreen(screen, null, { title })
   if (read.screen === 'ready') return read.text === '' ? { ok: true } : { ok: false, reason: 'draft' }
   if (read.screen === 'busy' && read.text !== '') return { ok: false, reason: 'draft' }
   return { ok: false, reason: 'menu' }
 }
 
-/** Codex's own composer is on screen and ready (the pane is Codex's). */
-export function codexHasInputChrome(_text: string, screen?: ScreenLine[] | null): boolean {
-  return !!screen && readCodexScreen(screen).screen === 'ready'
+/** Codex's own composer is on screen and ready (the pane is Codex's); B2:
+ *  with no turn shown by the window title either. */
+export function codexHasInputChrome(_text: string, screen?: ScreenLine[] | null, title?: string | null): boolean {
+  return !!screen && readCodexScreen(screen, null, { title }).screen === 'ready'
 }

@@ -44,7 +44,12 @@
 //     them: a longer one needs a shorter scenario, never a cut);
 //  4. no recording or rows file holds a path under a home folder other than
 //     the generic ones (the test machine's own test user, GitHub's runner
-//     accounts), an e-mail shape, or anything shaped like a key.
+//     accounts), an e-mail shape, or anything shaped like a key;
+//  5. (2.1.3-beta.13 B2, aicc_planning#370) the window title each Codex
+//     recording's output last set: a braille spinner exactly on the Windows
+//     and Linux screens of a reply streaming and of the queue hint, and the
+//     title changes no other recording's reading. Case 2 reads each recording
+//     with its title, as the app's Codex readers do.
 // A recording a reader misreads is a finding, not a fixture to bend: it is
 // listed in KNOWN_MISREADS with its ticket and the wrong answer the reader
 // gives, so a change in that answer fails case 2 too, and the reader is fixed.
@@ -62,12 +67,15 @@
 //    the rows, and the readers' answers in case 2, are the Watchdog pane's (200 lines);
 //  - a home path with an escape sequence inside it that is gone from the screen before a
 //    snapshot (the chunks are matched as written, the rows only at the snapshots);
-//  - the rows files' size (only the recordings have caps).
+//  - the rows files' size (only the recordings have caps);
+//  - the window title in the rows files: it is read from the replay (cases 2
+//    and 5), never written there, and only the title after the last chunk;
+//  - Claude Code's reader with a title (it takes none).
 import { describe, it, expect, vi } from 'vitest'
 import { existsSync, readdirSync, readFileSync, writeFileSync } from 'fs'
 import { resolve } from 'path'
 import { Terminal } from '@xterm/headless'
-import { readXtermScreen, readCodexScreen, type ScreenLine } from '../../../src/shared/codex-screen'
+import { readXtermScreen, readCodexScreen, codexTitleBusy, type ScreenLine } from '../../../src/shared/codex-screen'
 import { readClaudeScreen } from '../../../src/shared/claude-screen'
 
 // The clamp lives in the Watchdog's manager; these keep its imports inert.
@@ -168,24 +176,33 @@ const strayLeftOut = (rows: readonly LeftOut[]): string[] =>
  *    model both versions drew it from the first prompt on), a row the reader
  *    does not take: once a text is typed at an idle
  *    composer Codex keeps the count alone under the footer, which no reader
- *    that confirms a typed text takes. The five mid-reply screens whose
- *    footer is one row are among them: no mid-reply screen holds an "esc to
- *    interrupt" row, the reader's only sign of busy (Codex drew its working
- *    row once, after Enter, and not while the reply streamed), and each ends
- *    in the same rows as its after-reply screen. */
+ *    that confirms a typed text takes. No mid-reply screen holds an "esc to
+ *    interrupt" row (Codex drew its working row once, after Enter, and not
+ *    while the reply streamed), and each ends in the same rows as its
+ *    after-reply screen.
+ *  Since 2.1.3-beta.13 B2 (aicc_planning#370) the reader takes the window
+ *  title too, and the Windows and Linux mid-reply and queue-hint screens read
+ *  busy by its spinner (case 5), whatever their rows; the macOS ones end with
+ *  no spinner, and are still listed. */
 interface Misread { ticket: string; reads: string }
 const UNRECOGNISED: Misread = { ticket: 'aicc_planning#357', reads: 'unrecognised' }
 const KNOWN_MISREADS: Record<string, Misread> = Object.fromEntries([
   // Codex 0.170.0 after a prompt on macOS and Windows: the footer wraps.
-  'codex170-windows-bundled-mid-reply', 'codex170-windows-system-mid-reply', 'codex170-macos-mid-reply',
+  'codex170-macos-mid-reply',
   'codex170-windows-bundled-after-reply', 'codex170-windows-system-after-reply', 'codex170-macos-after-reply',
-  'codex170-windows-bundled-queue-hint', 'codex170-macos-queue-hint',
+  'codex170-macos-queue-hint',
   // A warning count at the right of the hint row, under a footer of one row.
-  'codex170-windows-bundled-warning-hint', 'codex170-macos-warning-hint', 'codex170-linux-after-reply', 'codex170-linux-mid-reply',
+  'codex170-windows-bundled-warning-hint', 'codex170-macos-warning-hint', 'codex170-linux-after-reply',
   'codex-windows-bundled-warning-hint', 'codex-macos-warning-hint',
   'codex-windows-bundled-after-reply', 'codex-windows-system-after-reply', 'codex-macos-after-reply',
-  'codex-windows-bundled-mid-reply', 'codex-windows-system-mid-reply', 'codex-macos-mid-reply', 'codex-linux-mid-reply',
+  'codex-macos-mid-reply',
 ].map((name) => [name, UNRECOGNISED]))
+
+/** B2 (case 5): the recordings whose output last set a title with Codex's
+ *  braille spinner (probe P19's second run: a reply streaming, and the queue
+ *  hint under a draft typed then, on Windows and Linux). */
+const TITLE_SPINS = ['windows-bundled', 'windows-system', 'linux'].flatMap((s) => ['mid-reply', 'queue-hint'].map((st) => `-${s}-${st}`))
+const spinsByName = (name: string): boolean => /^codex(170)?-/.test(name) && TITLE_SPINS.some((end) => name.endsWith(end))
 
 const NAMES = PROGRAMS.flatMap((p) => SYSTEMS.flatMap((s) => STATES[p].map((st) => ({ name: `${p}-${s}-${st}`, program: p, system: s, state: st }))))
 const NAME_BY = new Map(NAMES.map((n) => [n.name, n]))
@@ -199,7 +216,9 @@ interface Recording {
   state: string; cols: number; rows: number; source: string; events: RecEvent[]
 }
 interface Screen { after: 'resize' | 'last chunk'; event: number; cols: number; rows: number; buffer: string; lines: ScreenLine[] }
-interface Made { screens: Screen[]; tail: string[] }
+/** `title` (B2): the window title the output last set (null: none); made by
+ *  the replay only, never in a rows file. */
+interface Made { screens: Screen[]; tail: string[]; title?: string | null }
 
 const listDir = (): string[] => (existsSync(DIR) ? readdirSync(DIR).sort() : [])
 const RECORDINGS = listDir().filter((f) => f.endsWith('.json') && !f.endsWith('.rows.json')).map((f) => f.slice(0, -'.json'.length))
@@ -230,6 +249,8 @@ async function replay(rec: Recording): Promise<Made> {
   const clamp = { residual: '' }
   const flush = (): Promise<void> => new Promise((done) => term.write('', done))
   const screens: Screen[] = []
+  let title: string | null = null
+  term.onTitleChange((t) => { title = t })
   try {
     for (const [i, e] of rec.events.entries()) {
       if (isChunk(e)) {
@@ -242,7 +263,7 @@ async function replay(rec: Recording): Promise<Made> {
     }
     await flush()
     screens.push(screenOf(term, 'last chunk', rec.events.length - 1))
-    return { screens, tail: tailOf(term) }
+    return { screens, tail: tailOf(term), title }
   } finally {
     term.dispose()
   }
@@ -310,21 +331,22 @@ function xtermProblem(name: string, committed: unknown, loaded: string = XTERM_V
   return committed === loaded ? null : `${name}.rows.json was made by @xterm/headless ${JSON.stringify(committed)}, ${loaded} is loaded: rewrite it with SCREEN_CORPUS_WRITE=1`
 }
 
-/** What the program's reader reads on a screen; for the shell, both readers. */
-function readerAnswer(program: string, lines: ScreenLine[]): { screen: string; text: string } {
+/** What the program's reader reads on a screen, Codex's with the window
+ *  title (B2); for the shell, both readers. */
+function readerAnswer(program: string, lines: ScreenLine[], title: string | null = null): { screen: string; text: string } {
   if (program === 'claude') return readClaudeScreen(lines)
-  if (program === 'codex' || program === 'codex170') return readCodexScreen(lines)
+  if (program === 'codex' || program === 'codex170') return readCodexScreen(lines, null, { title })
   const claude = readClaudeScreen(lines)
-  const codex = readCodexScreen(lines)
+  const codex = readCodexScreen(lines, null, { title })
   return claude.screen === codex.screen ? claude : { screen: `${claude.screen} (Claude Code's reader), ${codex.screen} (Codex's)`, text: '' }
 }
 
 /** Whether the reader's answer is the state in the recording's name. */
-function readsAsNamed(name: string, lines: ScreenLine[]): string | null {
+function readsAsNamed(name: string, lines: ScreenLine[], title: string | null = null): string | null {
   const n = NAME_BY.get(name)
   if (!n) return `${name} is not a corpus name`
   const want = EXPECTED[n.program][n.state]
-  const got = readerAnswer(n.program, lines)
+  const got = readerAnswer(n.program, lines, title)
   if (got.screen !== want) return `${name}: read ${got.screen}, its name says ${n.state} (${want})`
   if (EMPTY_PROMPT.includes(n.state) && got.text !== '') return `${name}: the prompt holds ${JSON.stringify(got.text)}, not nothing`
   return null
@@ -423,8 +445,8 @@ describe('the screen corpus (helper/fixtures/screens)', () => {
 
   describe('2. each reader reads the state in the recording\'s name', () => {
     it.each(RECORDINGS)('%s', async (name) => {
-      const { screens } = await rowsOf(name)
-      expect(misreadProblem(name, readsAsNamed(name, screens[screens.length - 1].lines))).toBeNull()
+      const { screens, title } = await rowsOf(name)
+      expect(misreadProblem(name, readsAsNamed(name, screens[screens.length - 1].lines, title ?? null))).toBeNull()
     }, 30_000)
   })
 
@@ -470,7 +492,37 @@ describe('the screen corpus (helper/fixtures/screens)', () => {
     })
   })
 
+  describe('5. the window title Codex\'s output sets (B2, aicc_planning#370)', () => {
+    const CODEX = RECORDINGS.filter((n) => /^codex(170)?-/.test(n))
+    it('holds Codex recordings that end with a spinner title and that do not (a vacuous pass is no pass)', () => {
+      expect(CODEX.filter(spinsByName).length).toBeGreaterThan(0)
+      expect(CODEX.filter((n) => !spinsByName(n)).length).toBeGreaterThan(0)
+    })
+
+    it.each(CODEX)('%s: a spinner title exactly where Codex draws one; it reads busy, and every other title changes nothing', async (name) => {
+      const { screens, title } = await rowsOf(name)
+      const lines = screens[screens.length - 1].lines
+      const program = (NAME_BY.get(name) as { program: string }).program
+      expect({ spins: codexTitleBusy(title) }).toEqual({ spins: spinsByName(name) })
+      if (spinsByName(name)) expect(readerAnswer(program, lines, title ?? null).screen).toBe('busy')
+      else expect(readerAnswer(program, lines, title ?? null)).toEqual(readerAnswer(program, lines))
+    }, 30_000)
+  })
+
   describe('the checks catch what they are for (planted)', () => {
+    it('case 5: the title moves the reading: a ready screen given a spinner title reads busy, a mid-reply one read without its title reads its rows', async () => {
+      const ready = await rowsOf('codex-windows-bundled-ready')
+      const mid = await rowsOf('codex-windows-bundled-mid-reply')
+      const readyLines = ready.screens[ready.screens.length - 1].lines
+      const midLines = mid.screens[mid.screens.length - 1].lines
+      expect(readerAnswer('codex', readyLines, ready.title ?? null).screen).toBe('ready')
+      expect(readerAnswer('codex', readyLines, `${String.fromCharCode(0x280b)} work`).screen).toBe('busy')
+      expect(codexTitleBusy(mid.title)).toBe(true)
+      expect(readerAnswer('codex', midLines).screen).toBe('unrecognised')
+      expect(readsAsNamed('codex-windows-bundled-mid-reply', midLines)).not.toBeNull()
+      expect(readsAsNamed('codex-windows-bundled-mid-reply', midLines, mid.title ?? null)).toBeNull()
+    }, 30_000)
+
     it('case 1: one cell changed in a committed screen is a difference', async () => {
       const name = RECORDINGS[0]
       const got = await rowsOf(name)

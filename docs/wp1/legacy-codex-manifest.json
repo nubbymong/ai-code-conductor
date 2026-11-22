@@ -1,8 +1,8 @@
 {
   "schema": "wp1-legacy-codex-manifest/3",
-  "generatedAt": "2026-11-21T08:52:04.037Z",
-  "head": "d0746079fcc943d6caefc427e5e8fd7a88786a02",
-  "tree": "f28355e3ff5753486bc69f10c3b406bb48038be0",
+  "generatedAt": "2026-11-22T06:23:31.815Z",
+  "head": "9aa4b704688d149a8f1e5b4effd75a76d054e7ec",
+  "tree": "20bdac8911984d13adaa94abe169ddac1d4185eb",
   "scannedWorkingTree": true,
   "predicateDigest": "100a1233edebdc39a5f9004d3fba980a89ebb15b25872e52076386bc84b03153",
   "predicates": [
@@ -116,9 +116,9 @@
     "\\.(png|jpg|jpeg|gif|ico|icns|webp|svg|woff2?|ttf|otf|mp4|zip|asar|node|exe|dll|dylib|so|pdf)$",
     "^package-lock\\.json$"
   ],
-  "trackedFileCount": 3649,
+  "trackedFileCount": 3654,
   "excludedFileCount": 559,
-  "scannedFileCount": 3090,
+  "scannedFileCount": 3095,
   "unscopedFileCount": 15,
   "unscoped": [
     ".claude/settings.json",
@@ -139,8 +139,8 @@
   ],
   "unscopedMentions": [],
   "unreadable": [],
-  "matchedPathCount": 1033,
-  "pathDigest": "106ac00d648f37d99309a913857423e52cb07ece1933f92b46af07baa0ef5e40",
+  "matchedPathCount": 1036,
+  "pathDigest": "1120059f6132bf3ed4697cba63725b31d026b07217f5865a65979c1b1470a2ac",
   "entries": [
     {
       "path": ".github/workflows/ci.yml",
@@ -1834,7 +1834,7 @@
         "P01",
         "P14"
       ],
-      "lineCount": 25
+      "lineCount": 28
     },
     {
       "path": "src/main/providers/codex/conductor-tools.ts",
@@ -2016,7 +2016,7 @@
         "P01",
         "P14"
       ],
-      "lineCount": 24
+      "lineCount": 26
     },
     {
       "path": "src/main/providers/codex/spawn.ts",
@@ -2326,14 +2326,14 @@
       "predicates": [
         "P14"
       ],
-      "lineCount": 26
+      "lineCount": 27
     },
     {
       "path": "src/main/watchdog/session-watchdog.ts",
       "predicates": [
         "P14"
       ],
-      "lineCount": 5
+      "lineCount": 6
     },
     {
       "path": "src/main/watchdog/watchdog-manager.ts",
@@ -2341,7 +2341,7 @@
         "P05",
         "P14"
       ],
-      "lineCount": 20
+      "lineCount": 21
     },
     {
       "path": "src/preload/index.ts",
@@ -2602,7 +2602,7 @@
         "P07",
         "P11"
       ],
-      "lineCount": 51
+      "lineCount": 52
     },
     {
       "path": "src/renderer/components/TitleBar.tsx",
@@ -2890,7 +2890,7 @@
       "predicates": [
         "P11"
       ],
-      "lineCount": 4
+      "lineCount": 6
     },
     {
       "path": "src/renderer/components/tokenomics/KpiRow.tsx",
@@ -2988,7 +2988,7 @@
         "P07",
         "P11"
       ],
-      "lineCount": 97
+      "lineCount": 103
     },
     {
       "path": "src/renderer/lib/command-upgrade.ts",
@@ -3477,7 +3477,7 @@
         "P01",
         "P14"
       ],
-      "lineCount": 61
+      "lineCount": 69
     },
     {
       "path": "src/shared/container-command.ts",
@@ -5144,6 +5144,14 @@
       "lineCount": 61
     },
     {
+      "path": "tests/unit/main/codex-title-busy.test.ts",
+      "predicates": [
+        "P01",
+        "P13"
+      ],
+      "lineCount": 45
+    },
+    {
       "path": "tests/unit/main/codex-unanswered-service.test.ts",
       "predicates": [
         "P01",
@@ -5947,7 +5955,7 @@
       "predicates": [
         "P13"
       ],
-      "lineCount": 10
+      "lineCount": 16
     },
     {
       "path": "tests/unit/main/window-all-closed-r6.test.ts",
@@ -7009,6 +7017,14 @@
         "P13"
       ],
       "lineCount": 29
+    },
+    {
+      "path": "tests/unit/renderer/codex-title-busy.test.ts",
+      "predicates": [
+        "P01",
+        "P13"
+      ],
+      "lineCount": 26
     },
     {
       "path": "tests/unit/renderer/codex-web-account-row.test.tsx",
@@ -8182,6 +8198,14 @@
       "lineCount": 38
     },
     {
+      "path": "tests/unit/shared/codex-screen-title.test.ts",
+      "predicates": [
+        "P01",
+        "P13"
+      ],
+      "lineCount": 33
+    },
+    {
       "path": "tests/unit/shared/extra-args.test.ts",
       "predicates": [
         "P13"
@@ -8208,7 +8232,7 @@
       "predicates": [
         "P13"
       ],
-      "lineCount": 47
+      "lineCount": 67
     },
     {
       "path": "tests/unit/status-ingest.test.ts",

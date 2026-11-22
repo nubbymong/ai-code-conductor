@@ -106,6 +106,11 @@ export function estimateComposerRows(text: string, cols: number): number {
 export interface ComposerSubmitDeps {
   /** The session's live screen now; null when it cannot be read. */
   readScreen: () => ScreenLine[] | null
+  /** 2.1.3-beta.13 B2 (aicc_planning#370): the session's window title now,
+   *  read with each screen. While a turn runs Codex puts a braille spinner at
+   *  the start of it, its one busy sign while a reply streams (codexTitleBusy).
+   *  Absent or null: not known, and the screen alone is read. */
+  readTitle?: () => string | null
   /** Resolves once the screen has drawn everything the session has sent so
    *  far (a pane parses its input a moment after it arrives), false when it
    *  did not in time. Awaited before every read (ADR-009 round 1). */
@@ -146,8 +151,11 @@ export interface ComposerSubmitOptions {
 
 type Ready = 'ready' | 'blocked' | 'waiting'
 
-function readyState(lines: ScreenLine[] | null, models: readonly string[] | null): Ready {
-  const read = readCodexScreen(lines, models)
+/** One read: the screen, and the window title taken with it (B2). */
+interface Shot { lines: ScreenLine[] | null; title: string | null }
+
+function readyState({ lines, title }: Shot, models: readonly string[] | null): Ready {
+  const read = readCodexScreen(lines, models, { title })
   if (read.screen === 'blocked') return 'blocked'
   return read.screen === 'ready' && read.text === '' ? 'ready' : 'waiting'
 }
@@ -178,8 +186,11 @@ function holdsOnlyOwnText(draft: string, text: string, folded: boolean): boolean
  * 2. Waits, within `readyWaitMs` and never past `readyBy`, for Codex's ready,
  *    EMPTY composer, ready on two reads SUBMIT_READY_SECOND_READ_MS apart;
  *    never while the trust prompt, the sandbox menu or the MCP approval form
- *    is on screen, and never while a composer is drawn with a prompt (the
- *    shared reading calls every such screen blocked). On time out: not
+ *    is on screen, never while a composer is drawn with a prompt (the shared
+ *    reading calls every such screen blocked), and never while a turn runs,
+ *    by its row or (B2) by the window title's spinner, so a note sent while a
+ *    reply streams waits for the reply to end and is not typed into Codex's
+ *    queue and taken back. On time out: not
  *    delivered, `prompt-on-screen` when a prompt was up, else `busy-timeout`
  *    (also when `readyBy` has passed before the first read). A caller's
  *    `stillWanted` that says no, at any poll or just before the write: not
@@ -194,7 +205,8 @@ function holdsOnlyOwnText(draft: string, text: string, folded: boolean): boolean
  *    exact mode (up to 1,000 code points) when codexTextTyped reads the whole
  *    text at the composer, polled within SUBMIT_EXACT_CONFIRM_MS; the folded
  *    mode (from 1,001) when the placeholder names exactly the text's code
- *    points, within SUBMIT_FOLDED_CONFIRM_MS. A prompt appearing meanwhile
+ *    points, within SUBMIT_FOLDED_CONFIRM_MS. Neither confirms while a turn
+ *    runs (its row, or B2 the title's spinner). A prompt appearing meanwhile
  *    stops it with no further key.
  * 6. Neither mode confirmed: it takes the text back with Ctrl+U, only after
  *    the ingestion window, only in the same run, only on a screen it can read
@@ -216,14 +228,17 @@ export async function submitToCodexComposer(text: string, deps: ComposerSubmitDe
   const folded = codePoints > SUBMIT_EXACT_MAX_CODE_POINTS
   // Every read waits for the screen to draw what the session has already
   // sent: a prompt that arrived just before a read is on it (ADR-009 round 1).
-  // A screen not drawn in time gives no reading.
-  const read = async (): Promise<ScreenLine[] | null> => {
+  // A screen not drawn in time gives no reading. B2: each read takes the
+  // window title with the screen.
+  const read = async (): Promise<Shot> => {
     if (deps.settle) {
       let drawn = false
       try { drawn = (await deps.settle()) === true } catch { drawn = false }
-      if (!drawn) return null
+      if (!drawn) return { lines: null, title: null }
     }
-    try { return deps.readScreen() } catch { return null }
+    let title: string | null = null
+    try { title = deps.readTitle?.() ?? null } catch { title = null }
+    try { return { lines: deps.readScreen(), title } } catch { return { lines: null, title } }
   }
 
   // The caller's own say: still wanted (asked before each poll of the ready
@@ -287,8 +302,8 @@ export async function submitToCodexComposer(text: string, deps: ComposerSubmitDe
       log('a prompt came up before the text was confirmed; no further key sent')
       return notDelivered('prompt-on-screen')
     }
-    tallest = Math.max(tallest, codexComposerRows(screen, models) ?? 0)
-    const confirmed = folded ? codexPastedContentShown(screen, codePoints, models) : codexTextTyped(screen, text, models)
+    tallest = Math.max(tallest, codexComposerRows(screen.lines, models) ?? 0)
+    const confirmed = folded ? codexPastedContentShown(screen.lines, codePoints, models, screen.title) : codexTextTyped(screen.lines, text, models, screen.title)
     if (confirmed) {
       deps.write(ENTER)
       return { delivered: true }
@@ -306,7 +321,7 @@ export async function submitToCodexComposer(text: string, deps: ComposerSubmitDe
   const before = await read()
   // ADR-009 round 2: no reading is no proof that no prompt is up; nothing is
   // taken back, and the text is reported not drawn.
-  if (before === null) {
+  if (before.lines === null) {
     log('the text was not confirmed and the screen cannot be read; nothing taken back')
     return notDelivered('not-drawn')
   }
@@ -318,7 +333,7 @@ export async function submitToCodexComposer(text: string, deps: ComposerSubmitDe
   // composer, so it is sent only while the composer holds nothing but this
   // submission's own text. The user typed beside it, or what it holds cannot
   // be read: nothing taken back, and their text stays as they left it.
-  const draft = codexComposerDraft(before, models)
+  const draft = codexComposerDraft(before.lines, models)
   if (draft === null || !holdsOnlyOwnText(draft, text, folded)) {
     log(draft === null
       ? 'the text was not confirmed and what the composer holds cannot be read; nothing taken back'

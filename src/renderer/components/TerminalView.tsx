@@ -44,7 +44,7 @@ import { decideFollow } from '../utils/terminalScroll'
 import { getTerminalTheme } from './terminal/terminalTheme'
 import { installTerminalKeybindings } from './terminal/terminalKeybindings'
 import { registerRepainter, requestResync } from './terminal/repaintRegistry'
-import { registerScreenReader, readXtermScreen } from './terminal/screenRegistry'
+import { registerScreenReader, readXtermScreen, keepTerminalTitle } from './terminal/screenRegistry'
 import { readContextPercent, stripTerminalControls } from './terminal/contextPercent'
 import { typeWhenCodexComposerReady, planModeNote, CODEX_PLAN_MODE_WAIT_MS } from '../lib/codexComposer'
 import { createGeometryResync, type GeometryResync } from './terminal/geometryResync'
@@ -903,10 +903,14 @@ export default function TerminalView({ sessionId, configId, cwd, shellOnly, elev
       // task). A read writes the queue, and answers no screen while a batch is
       // unparsed: the screen would be up to a second old (the gates that read
       // fail closed on no screen and read again).
+      // 2.1.3-beta.13 B2 (aicc_planning#370): the window title beside it,
+      // kept for the run that set it (Codex's spinner there is its busy sign
+      // while a reply streams), read the same way.
+      const readTitle = keepTerminalTitle(sessionId, term)
       unregisterScreen = registerScreenReader(sessionId, () => {
         if (hiddenOutput?.prepareScreenRead().behind) return null
         return term ? readXtermScreen(term) : null
-      })
+      }, () => (hiddenOutput?.prepareScreenRead().behind ? null : readTitle()))
 
       // #119: cursor options passed to the Terminal constructor do NOT reliably
       // initialize the WebGL renderer's cursor layer — the caret stays absent

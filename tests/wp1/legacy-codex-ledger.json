@@ -1,8 +1,8 @@
 {
   "schema": "wp1-legacy-codex-ledger/2",
   "predicateDigest": "100a1233edebdc39a5f9004d3fba980a89ebb15b25872e52076386bc84b03153",
-  "manifestPathDigest": "106ac00d648f37d99309a913857423e52cb07ece1933f92b46af07baa0ef5e40",
-  "manifestHead": "d0746079fcc943d6caefc427e5e8fd7a88786a02",
+  "manifestPathDigest": "1120059f6132bf3ed4697cba63725b31d026b07217f5865a65979c1b1470a2ac",
+  "manifestHead": "9aa4b704688d149a8f1e5b4effd75a76d054e7ec",
   "dispositions": {
     "retain": "unchanged observable behaviour, characterization proof",
     "move": "moved behind a package boundary and/or adapted at the call site, regression proof (newPath when relocated)",
@@ -7419,6 +7419,17 @@
       "note": ""
     },
     {
+      "path": "tests/unit/main/codex-title-busy.test.ts",
+      "predicates": [
+        "P01",
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "new 2.1.3-beta.13 section B2 test (tests/unit/main/codex-title-busy.test.ts, aicc_planning #370): main's submit primitive types nothing while the window title spins (a reply streaming) and submits the note once it stops, so nothing is taken back; main's Codex pane keeps the title its run sets and a new run starts with none; the Watchdog's Codex send gate defers while the title spins, with no attempt spent (WP1.68)",
+      "note": "created by 2.1.3-beta.13 section B2; a headless pane and fakes, nothing started"
+    },
+    {
       "path": "tests/unit/main/codex-unanswered-service.test.ts",
       "predicates": [
         "P01",
@@ -10002,6 +10013,17 @@
       "note": ""
     },
     {
+      "path": "tests/unit/renderer/codex-title-busy.test.ts",
+      "predicates": [
+        "P01",
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "new 2.1.3-beta.13 section B2 test (tests/unit/renderer/codex-title-busy.test.ts, aicc_planning #370): the screen registry keeps a terminal's title reader beside its screen reader, the title is kept for the run that set it only, a Codex command under a spinner title answers busy and types nothing, and the Plan mode wait waits through a title-only spin but still ends on a busy row (WP1.68)",
+      "note": "created by 2.1.3-beta.13 section B2; a headless terminal and fakes, nothing started"
+    },
+    {
       "path": "tests/unit/renderer/codex-web-account-row.test.tsx",
       "predicates": [
         "P01",
@@ -11634,6 +11656,17 @@
       "disposition": "added",
       "evidence": "new 2.1.3-beta.10 section C5 test (tests/unit/shared/codex-screen-shortcuts-hint.test.ts): the four recorded Codex 0.157.1 ready screens (probe P19) read ready with the shortcuts hint row under the footer, a turn running reads busy, Plan mode is still read from the footer, and any other row under the footer, two hint rows or a wrapped footer read unrecognised (WP1.68); 2.1.3-beta.12 section C3 (aicc_planning #357): the queue hint and Codex 0.170.0's agents row leave its list of refused rows, read now and pinned in tests/unit/shared/codex-screen-hint-rows.test.ts (WP1.68)",
       "note": "created by 2.1.3-beta.10 section C5; pure rows, nothing started"
+    },
+    {
+      "path": "tests/unit/shared/codex-screen-title.test.ts",
+      "predicates": [
+        "P01",
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "new 2.1.3-beta.13 section B2 test (tests/unit/shared/codex-screen-title.test.ts, aicc_planning #370): a title starting with a braille spinner (U+2800 to U+28FF) and a space reads busy and nothing else does; the reader reads a ready or warning-count screen busy under it, keeps a draft's text, and a prompt, Codex starting or no composer read as before; the typed-text readers refuse under it (WP1.68)",
+      "note": "created by 2.1.3-beta.13 section B2; pure rows, nothing started"
     },
     {
       "path": "tests/unit/shared/extra-args.test.ts",
