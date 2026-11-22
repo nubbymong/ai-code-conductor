@@ -257,9 +257,13 @@ describe("the size wait's cap passed: the replay is written at the holder's size
     expect(r.events).toEqual([{ told: { cols: 103, rows: 27, length: r.seen()[0].length } }, { shown: numberedAbove(total, kept, 27, 103) }])
     expect(r.logs).toContain(capLine(r, '103x27', '93x27'))
     expect(r.logs).toContain(`[session-helper] ${r.h.sid}: the oldest ${total - kept} lines of its replay are not shown either, so the line saying so stays within the ${TERMINAL_SCROLLBACK_LINES} lines the tab keeps (rows counted at 103x27, the cursor's row followed)`)
-    // The tab writes it and fits itself meanwhile: nothing goes to the holder, however long that takes within the cap.
+    // The tab writes it and fits itself meanwhile: nothing goes to the holder, however long that takes within the cap,
+    // and output after the replay asks for no redraw either.
     await vi.advanceTimersByTimeAsync(FIT_WAIT_MAX_MS - 1)
+    r.h.output('PS> ')
+    await settle(() => r.seen().length === 2, 'the output after the replay')
     await turns()
+    expect(r.seen()[1]).toBe('PS> ')
     expect(r.sent).toEqual([])
     expect(r.h.size).toEqual({ cols: 103, rows: 27 })
     // The tab's size after its fit: the redraw, one row shorter, then 300 ms later the tab's size.
@@ -274,7 +278,7 @@ describe("the size wait's cap passed: the replay is written at the holder's size
     expect(r.logs.filter((l) => l.includes('gave no size'))).toEqual([])
     expect(r.exits).toEqual([])
     vi.useRealTimers()
-    const { rows } = await shownAfterFit(r.text(), { cols: 103, rows: 27 }, { cols: 93, rows: 27 })
+    const { rows } = await shownAfterFit(r.seen()[0], { cols: 103, rows: 27 }, { cols: 93, rows: 27 })
     expect(rows.slice(0, 3)).toEqual([NOTICE, `line ${total - kept + 1}`, `line ${total - kept + 2}`])
     expect(rows.filter((row) => row !== '').at(-1)).toBe(`line ${total}`)
   }))
