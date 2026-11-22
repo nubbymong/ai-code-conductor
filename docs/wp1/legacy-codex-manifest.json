@@ -1,9 +1,9 @@
 {
   "schema": "wp1-legacy-codex-manifest/3",
-  "generatedAt": "2026-11-22T16:28:59.545Z",
-  "head": "23d254d2c9ddf0aeb9cc215ba2ec0e7a2eece1df",
-  "tree": "29c2b6868a1288eda8ba3d52021f8fa3c3687d87",
-  "scannedWorkingTree": true,
+  "generatedAt": "2026-11-22T18:25:37.712Z",
+  "head": "5737dcde7df3a70e422ac8ded941590ed9ffe335",
+  "tree": "8b8575d6efd05aee824947ac9b2bf178ded30d0b",
+  "scannedWorkingTree": false,
   "predicateDigest": "100a1233edebdc39a5f9004d3fba980a89ebb15b25872e52076386bc84b03153",
   "predicates": [
     {
@@ -116,9 +116,9 @@
     "\\.(png|jpg|jpeg|gif|ico|icns|webp|svg|woff2?|ttf|otf|mp4|zip|asar|node|exe|dll|dylib|so|pdf)$",
     "^package-lock\\.json$"
   ],
-  "trackedFileCount": 3709,
-  "excludedFileCount": 575,
-  "scannedFileCount": 3134,
+  "trackedFileCount": 3713,
+  "excludedFileCount": 577,
+  "scannedFileCount": 3136,
   "unscopedFileCount": 15,
   "unscoped": [
     ".claude/settings.json",
@@ -139,8 +139,8 @@
   ],
   "unscopedMentions": [],
   "unreadable": [],
-  "matchedPathCount": 1057,
-  "pathDigest": "298059bcefb9079052df8c18cd08536b1f55dba0dda242d3b899599696ff4ef5",
+  "matchedPathCount": 1062,
+  "pathDigest": "53a8b1bd7cf940baad9c10d2dc6a4b5af68939267dfdd5c872f500a74ca36ded",
   "entries": [
     {
       "path": ".github/workflows/ci.yml",
@@ -207,6 +207,20 @@
       "lineCount": 2
     },
     {
+      "path": "docs/remote/helper-protocol.md",
+      "predicates": [
+        "P12"
+      ],
+      "lineCount": 3
+    },
+    {
+      "path": "docs/remote/helper-threat-model.md",
+      "predicates": [
+        "P12"
+      ],
+      "lineCount": 3
+    },
+    {
       "path": "docs/wp2/completion-plan.md",
       "predicates": [
         "P12"
@@ -248,6 +262,13 @@
         "P12"
       ],
       "lineCount": 154
+    },
+    {
+      "path": "helper/README.md",
+      "predicates": [
+        "P14"
+      ],
+      "lineCount": 1
     },
     {
       "path": "helper/fixtures/screens/codex-linux-first-screen.json",
@@ -977,6 +998,13 @@
         "P14"
       ],
       "lineCount": 3
+    },
+    {
+      "path": "helper/src/serve.rs",
+      "predicates": [
+        "P14"
+      ],
+      "lineCount": 1
     },
     {
       "path": "helper/tests/screen.rs",
@@ -5936,6 +5964,13 @@
         "P13"
       ],
       "lineCount": 17
+    },
+    {
+      "path": "tests/unit/main/session-helper-connection.test.ts",
+      "predicates": [
+        "P13"
+      ],
+      "lineCount": 1
     },
     {
       "path": "tests/unit/main/session-helper-manager.test.ts",

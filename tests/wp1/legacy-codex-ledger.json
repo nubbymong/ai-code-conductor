@@ -1,8 +1,8 @@
 {
   "schema": "wp1-legacy-codex-ledger/2",
   "predicateDigest": "100a1233edebdc39a5f9004d3fba980a89ebb15b25872e52076386bc84b03153",
-  "manifestPathDigest": "298059bcefb9079052df8c18cd08536b1f55dba0dda242d3b899599696ff4ef5",
-  "manifestHead": "23d254d2c9ddf0aeb9cc215ba2ec0e7a2eece1df",
+  "manifestPathDigest": "53a8b1bd7cf940baad9c10d2dc6a4b5af68939267dfdd5c872f500a74ca36ded",
+  "manifestHead": "5737dcde7df3a70e422ac8ded941590ed9ffe335",
   "dispositions": {
     "retain": "unchanged observable behaviour, characterization proof",
     "move": "moved behind a package boundary and/or adapted at the call site, regression proof (newPath when relocated)",
@@ -401,6 +401,26 @@
       "note": "operator doc, not a user-facing claim"
     },
     {
+      "path": "docs/remote/helper-protocol.md",
+      "predicates": [
+        "P12"
+      ],
+      "category": "DOCS",
+      "disposition": "retain",
+      "evidence": "2.1.3-beta.14 release commit (plan section B2, aicc_planning#388): the screen reads section and the title bullet say a held Codex session's connections ack `screen` and `title` and its composer rule reads `screen.read` in place of a pane of its own; documentation of the session helper's protocol, no Codex code path and no account or history claim (WP1.35)",
+      "note": "protocol doc; names Codex as the session whose composer rule reads the holder's screen"
+    },
+    {
+      "path": "docs/remote/helper-threat-model.md",
+      "predicates": [
+        "P12"
+      ],
+      "category": "DOCS",
+      "disposition": "retain",
+      "evidence": "2.1.3-beta.14 release commit (plan section B2, aicc_planning#388): the holder's screen entry says a held Codex session's connections ack `screen` and `title` and its composer rule reads them to decide when main types into Codex, and its owed pass names an answer that reads ready while Codex shows a prompt; threat model text, no Codex code path (WP1.35)",
+      "note": "threat model; names Codex as the session that reads the holder's screen"
+    },
+    {
       "path": "docs/wp2/completion-plan.md",
       "predicates": [
         "P12"
@@ -459,6 +479,16 @@
       "disposition": "added",
       "evidence": "WP2 plan document: maps each planned Codex adapter test (tests/wp1/cli-discovery.test.ts and siblings) to its requirement; no Codex code path (WP1.70); WP2 P3 usage track MP8 (ADR-022): residuals (window focus, switch-off, status check) and the VM step owed (WP1.70); WP2 P3 usage track MP7 round-1 review fixes (ADR-022): the status-check residual restated for the sign-in lock, and the helper version owed to the VM step (WP1.70); WP2 P3 usage track MP9: the Codex re-read deviation and residuals (WP1.70); WP2 P3 usage track MP8 round 2 (VM walk and review fixes; ADR-022): the focus residual resolved, and a residual for the model catalogue the helper still refetches (WP1.70); WP2 P3 usage track MP10: the whole-session attribution residual (WP1.70); WP2 P3 usage track MP9 round 1 (review fixes: B-F1, B-F2, Q-1 to Q-5): the downgrade and linked-folder fixes, the downgrade residual, and the decisions owed to MP12 (WP1.70); WP2 P3 usage track MP11: the no-price and provider-split decision (WP1.70); WP2 P3 usage track MP8 round 3 and MP10 round 1: what a read contacts and why no flag is used, the privacy wording owed to MP13, and the path rule for Claude attribution (WP1.70); WP2 P3 usage track MP12: the decisions for the page resolved, and the VM screenshots owed (WP1.70); WP2 P3 usage track MP11 round 1 (review fixes) and the MP9 lens B nits: the unpriced list over the range, the folders named once the registry is read, and the residual for a build from before #307 (WP1.70); WP2 P3 usage track MP10 round 1 and MP12 round 1 (review fixes): the profile folder the attribution matches, and the account-sorting notice shortened for the owner screenshot review (WP1.70); WP2 P3 usage track MP9 (defect 4 follow-up): the counting state of the account-sorting notice (WP1.70); WP2 P3 usage track records: the usage screenshots done and approved, and the approved copy the mockup does not draw (WP1.70); WP2 PR 4 final review nits: the departures note says what NoDefaultCurrentDirectoryInExePath=1 sets (WP1.70); docs/wp1/evidence/ci-matrix.md",
       "note": "plan text, not a user-facing claim"
+    },
+    {
+      "path": "helper/README.md",
+      "predicates": [
+        "P14"
+      ],
+      "category": "OTHER",
+      "disposition": "retain",
+      "evidence": "comment-level mention only, no Codex code path: 2.1.3-beta.14 release commit (plan section B2, aicc_planning#388): the Screen row says a held Codex session's composer rule reads `screen.read` and its connections ask for `title` (WP1.67)",
+      "note": "the helper's README; names Codex in its Screen row"
     },
     {
       "path": "helper/fixtures/screens/codex-linux-first-screen.json",
@@ -1464,6 +1494,16 @@
       "disposition": "added",
       "evidence": "ADR-030 probes P3 and P6 (2.1.3-beta.13 section C2, aicc_planning#377): a test-PC script that runs only ssh and scp against a remote Linux host to measure whether a holder outlives the ssh logout that started it and whether an ssh exec has the login PATH; it names Codex only as one of three programs (claude, codex, node) whose location it looks up; never shipped and never run in CI; no legacy Codex code path; listed in the repository-wide legacy Codex manifest, zero unmatched at the merge gate (WP1.67), tests/unit/scripts/helper-probe-p3-p6.test.ts",
       "note": "the P3 and P6 Linux probe; names Codex only in the list of programs P6 looks up"
+    },
+    {
+      "path": "helper/src/serve.rs",
+      "predicates": [
+        "P14"
+      ],
+      "category": "OTHER",
+      "disposition": "retain",
+      "evidence": "comment-level mention only, no Codex code path: 2.1.3-beta.14 release commit (plan section B2, aicc_planning#388): the HOLDER_CAPS doc comment says a held Codex session's connections ack `screen` and `title`; the holder treats every connection alike and names no CLI (WP1.67)",
+      "note": "the holder's capabilities comment"
     },
     {
       "path": "helper/tests/screen.rs",
@@ -8530,6 +8570,16 @@
       "disposition": "added",
       "evidence": "2.1.3-beta.11 section B2 case in a 2.1.3-beta.6 test (tests/unit/main/session-helper-app-wiring.test.ts): the manager gets the tool functions for Claude Code and Codex, the Codex one asking the Codex package's heldToolLaunch and keeping the loopback route when none is offered; 2.1.3-beta.14 section B2 case (aicc_planning #388): the manager gets the screen reads, with the title, for Codex sessions only (deps.screens is { codex: true }) (WP1.68)",
       "note": "created by 2.1.3-beta.6 (plan section B); the P04 hits are the codex key of the tool functions' map; mocked modules only"
+    },
+    {
+      "path": "tests/unit/main/session-helper-connection.test.ts",
+      "predicates": [
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "retain",
+      "evidence": "existing test retained, header comment only: 2.1.3-beta.14 release commit (plan section B1's owed line) says a held Codex session's connections ask for `screen` from 2.1.3-beta.14; no test changed, must stay green on the merge candidate (WP1.33)",
+      "note": "names Codex only in its header comment"
     },
     {
       "path": "tests/unit/main/session-helper-manager.test.ts",
