@@ -1,8 +1,8 @@
 {
   "schema": "wp1-legacy-codex-ledger/2",
   "predicateDigest": "100a1233edebdc39a5f9004d3fba980a89ebb15b25872e52076386bc84b03153",
-  "manifestPathDigest": "6b401d150e514c96210477b9b885ab465208dba326a91ef7ee956d9bb228fdc9",
-  "manifestHead": "a4d3fe6adc35f0c87d4d013dc6d689cb78918e45",
+  "manifestPathDigest": "298059bcefb9079052df8c18cd08536b1f55dba0dda242d3b899599696ff4ef5",
+  "manifestHead": "23d254d2c9ddf0aeb9cc215ba2ec0e7a2eece1df",
   "dispositions": {
     "retain": "unchanged observable behaviour, characterization proof",
     "move": "moved behind a package boundary and/or adapted at the call site, regression proof (newPath when relocated)",
@@ -2573,10 +2573,10 @@
       "predicates": [
         "P14"
       ],
-      "category": "OTHER",
-      "disposition": "retain",
-      "evidence": "comment-level mention only, no Codex code path; baseline suite green at 6bafcc33 (docs/wp1/baseline-2026-09-19.md) (WP1.33)",
-      "note": ""
+      "category": "MODELS-PRICING",
+      "disposition": "replace",
+      "evidence": "2.1.3-beta.14 section C9 (aicc_planning#362): a fourth layer, the installed Codex's own model list in memory (setInstalledCodexModels), merged last (withInstalledCodexModels), reloaded and pushed only on change (WP1.68); tests/unit/main/installed-codex-models.test.ts",
+      "note": "re-dispositioned in 2.1.3-beta.14 section C9 (was retain: comment-level mention only, no Codex code path)"
     },
     {
       "path": "src/main/path-utils.ts",
@@ -2605,7 +2605,7 @@
       ],
       "category": "LAUNCH",
       "disposition": "added",
-      "evidence": "WP2 provider-off enforcement (main refuses every launch of a provider that is off; WP1.60 enable/disable): what runs a provider's CLI without an account lease (Claude Code's sessions, cloud agents, Insights, Sentinel, an accepted SSH Launch Claude), composed for the switch-off rule; tests/unit/main/provider-in-use.test.ts; WP2 PR 3 P3.9 (rows 39, 42): Sentinel's Codex runs count as Codex in use (WP1.60); tests/unit/main/provider-in-use.test.ts; WP2 PR 4 P4.5 (row 57): Codex cloud agents counted as Codex in use (WP1.60); tests/unit/main/provider-in-use.test.ts; WP2 PR 4 P4.5 review C-4 (integration round 2): the header says a Codex agent is counted here until its lease is held and through that lease after, so once (WP1.60); tests/unit/main/cloud-agent-codex.test.ts",
+      "evidence": "WP2 provider-off enforcement (main refuses every launch of a provider that is off; WP1.60 enable/disable): what runs a provider's CLI without an account lease (Claude Code's sessions, cloud agents, Insights, Sentinel, an accepted SSH Launch Claude), composed for the switch-off rule; tests/unit/main/provider-in-use.test.ts; WP2 PR 3 P3.9 (rows 39, 42): Sentinel's Codex runs count as Codex in use (WP1.60); tests/unit/main/provider-in-use.test.ts; WP2 PR 4 P4.5 (row 57): Codex cloud agents counted as Codex in use (WP1.60); tests/unit/main/provider-in-use.test.ts; WP2 PR 4 P4.5 review C-4 (integration round 2): the header says a Codex agent is counted here until its lease is held and through that lease after, so once (WP1.60); tests/unit/main/cloud-agent-codex.test.ts; 2.1.3-beta.14 section C9 (aicc_planning#362): the read of the installed Codex's model list for the Codex model picker counts as Codex in use from the step that starts it (installedCodexModelReadsInFlight) (WP1.60); tests/unit/main/provider-in-use.test.ts",
       "note": "created by WP2 (main refuses every launch of a provider that is off)"
     },
     {
@@ -2907,7 +2907,7 @@
       ],
       "category": "MODELS-PRICING",
       "disposition": "added",
-      "evidence": "new WP2 PR 3 P3.9 (rows 39, 42) module (src/main/providers/codex/model-catalogue.ts): the live read of the model list the installed Codex CLI offers in its own picker, `codex debug models --bundled` (a constant argv), run only on the executable discovery proved, re-verified before and after the run, never for a version the managed flows may not use, in a fresh empty Codex home made for the read and removed after it (never an account's folder or ~/.codex), under the allowlisted environment, 15 s deadline, 4 Mi output cap, parsed strictly (only visibility \"list\" models with a valid Codex model id) (WP1.17, WP1.49, WP1.62, WP1.68); tests/unit/providers/codex/model-catalogue.test.ts, tests/wp1/fake-cli.test.ts",
+      "evidence": "new WP2 PR 3 P3.9 (rows 39, 42) module (src/main/providers/codex/model-catalogue.ts): the live read of the model list the installed Codex CLI offers in its own picker, `codex debug models --bundled` (a constant argv), run only on the executable discovery proved, re-verified before and after the run, never for a version the managed flows may not use, in a fresh empty Codex home made for the read and removed after it (never an account's folder or ~/.codex), under the allowlisted environment, 15 s deadline, 4 Mi output cap, parsed strictly (only visibility \"list\" models with a valid Codex model id) (WP1.17, WP1.49, WP1.62, WP1.68); tests/unit/providers/codex/model-catalogue.test.ts, tests/wp1/fake-cli.test.ts; 2.1.3-beta.14 section C9 (aicc_planning#362): each listed model's supported_reasoning_levels are read as strictly as the other fields (at most 16, each a level name; anything else is no list), and the list now feeds the Codex model picker (WP1.68); tests/unit/providers/codex/model-catalogue.test.ts",
       "note": "created by WP2 PR 3 P3.9; reached from the package entry point (setup.modelCatalogue)"
     },
     {
@@ -3251,7 +3251,7 @@
       ],
       "category": "MODELS-PRICING",
       "disposition": "replace",
-      "evidence": "WP2 PR 3 P3.8 (row 39, parity): beside the Claude model coverage check, a Codex one against the list the supported Codex CLI offers, shipped with the build (resources/codex-model-catalogue.json), snapshot mode, with stable models:codex- finding ids (WP1.68); tests/unit/sentinel-codex-models.test.ts; WP2 PR 3 P3.8 round 1 (row 39): comment only, the Codex check stays snapshot-only until P3.9's live read (WP1.68); tests/unit/sentinel-codex-models.test.ts; WP2 PR 3 P3.8 round 2 (row 39): a Codex id the registry lists twice is its own finding (WP1.68); tests/unit/sentinel-codex-models.test.ts; WP2 PR 3 P3.9 (rows 39, 42): the Codex check compares both arms with the installed CLI's own list when it was read just now (live mode), naming that version, and falls back to the shipped list otherwise; a stale shipped list is said only when relied on (WP1.68); tests/unit/sentinel-codex-models.test.ts",
+      "evidence": "WP2 PR 3 P3.8 (row 39, parity): beside the Claude model coverage check, a Codex one against the list the supported Codex CLI offers, shipped with the build (resources/codex-model-catalogue.json), snapshot mode, with stable models:codex- finding ids (WP1.68); tests/unit/sentinel-codex-models.test.ts; WP2 PR 3 P3.8 round 1 (row 39): comment only, the Codex check stays snapshot-only until P3.9's live read (WP1.68); tests/unit/sentinel-codex-models.test.ts; WP2 PR 3 P3.8 round 2 (row 39): a Codex id the registry lists twice is its own finding (WP1.68); tests/unit/sentinel-codex-models.test.ts; WP2 PR 3 P3.9 (rows 39, 42): the Codex check compares both arms with the installed CLI's own list when it was read just now (live mode), naming that version, and falls back to the shipped list otherwise; a stale shipped list is said only when relied on (WP1.68); tests/unit/sentinel-codex-models.test.ts; 2.1.3-beta.14 section C9 (aicc_planning#362): while the installed Codex's own list is read, the Codex check raises no model notice (the picker offers that list, so a listed model the registry lacks and one the list dropped are no finding) and the S18 listed-only rule goes; with no list read it compares the registry with the shipped list as before (WP1.68); tests/unit/sentinel-codex-models.test.ts",
       "note": "the Claude check is unchanged"
     },
     {
@@ -5249,7 +5249,7 @@
       ],
       "category": "MODELS-PRICING",
       "disposition": "replace",
-      "evidence": "comment-level mention only, no Codex code path; baseline suite green at 6bafcc33 (docs/wp1/baseline-2026-09-19.md) (WP1.33); WP2 PR 3 P3.8 (rows 39, 40): picker rows and effort rows per provider (familyProvider: the codex family is Codex's, fixed in code), Codex's levels, and the Codex coverage evaluation; every existing caller gets Claude's rows as before (WP1.68); tests/unit/codex-model-registry.test.ts, tests/unit/model-picker-rows.test.ts; WP2 PR 3 P3.8 round 1 (rows 39, 40): the Codex picker offers only ids a launch takes; an overlay cannot move a shipped model to the other provider; codexEffortRuns, shared by the dialog, the pill and the launch (WP1.68); tests/unit/codex-model-registry.test.ts; WP2 PR 3 P3.8 round 2 (row 39): the Codex coverage check refuses duplicate ids and counts only picker ids, as the release gate does (WP1.68); tests/unit/model-coverage-parity.test.ts",
+      "evidence": "comment-level mention only, no Codex code path; baseline suite green at 6bafcc33 (docs/wp1/baseline-2026-09-19.md) (WP1.33); WP2 PR 3 P3.8 (rows 39, 40): picker rows and effort rows per provider (familyProvider: the codex family is Codex's, fixed in code), Codex's levels, and the Codex coverage evaluation; every existing caller gets Claude's rows as before (WP1.68); tests/unit/codex-model-registry.test.ts, tests/unit/model-picker-rows.test.ts; WP2 PR 3 P3.8 round 1 (rows 39, 40): the Codex picker offers only ids a launch takes; an overlay cannot move a shipped model to the other provider; codexEffortRuns, shared by the dialog, the pill and the launch (WP1.68); tests/unit/codex-model-registry.test.ts; WP2 PR 3 P3.8 round 2 (row 39): the Codex coverage check refuses duplicate ids and counts only picker ids, as the release gate does (WP1.68); tests/unit/model-coverage-parity.test.ts; 2.1.3-beta.14 section C9 (aicc_planning#362): withInstalledCodexModels makes the installed Codex's list the Codex models, in its order, each with its own levels, a registry row of the same id only adding a price or correcting a label; the coverage check no longer fails a listed id the registry lacks and fails one a Claude model has as its id or alias (taken) (WP1.68); tests/unit/codex-models-from-installed-list.test.ts; tests/unit/model-coverage-parity.test.ts",
       "note": "re-dispositioned in WP2 PR 3 P3.8 (was retain)"
     },
     {
