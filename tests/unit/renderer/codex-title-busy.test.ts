@@ -9,8 +9,8 @@
 // past its start-up, and the Plan mode wait waits through it.
 //
 // Not checked here:
-//  - TerminalView's own hunk, which only hands keepTerminalTitle's reader to
-//    the registry (its tests' stand-in terminals have no title events);
+//  - TerminalView's own hunk, which hands keepTerminalTitle's reader to the
+//    registry (tests/unit/renderer/terminalview-hidden-output.test.tsx);
 //  - main's readers (tests/unit/main/codex-title-busy.test.ts) and the rule
 //    itself (tests/unit/shared/codex-screen-title.test.ts).
 import { describe, it, expect, vi } from 'vitest'
@@ -19,7 +19,7 @@ import { registerScreenReader, readSessionScreen, readSessionTitle, keepTerminal
 import { markSpawned, clearSpawned } from '../../../src/renderer/ptyTracker'
 import {
   typeIntoCodexComposer, typeWhenCodexComposerReady, codexComposerText, BUSY_NOW, CODEX_SUBMIT_DELAY_MS, CODEX_READY_POLL_MS,
-  StartupDoneRuns, type CodexComposerDeps, type ScreenLine,
+  StartupDoneRuns, defaultCodexComposerDeps, type CodexComposerDeps, type ScreenLine,
 } from '../../../src/renderer/lib/codexComposer'
 import * as S from './codex-composer-screens'
 
@@ -126,6 +126,25 @@ describe('a Codex command while the title spins', () => {
     expect(h.deps.startupDone?.size).toBe(0)
     h.state.title = 'work'
     expect(typeIntoCodexComposer('s1', '/compact', h.deps).typed).toBe(true)
+  })
+
+  it('the app\'s own deps read the registered title: busy, nothing typed', () => {
+    const off = registerScreenReader('tb5', () => S.READY, () => SPIN)
+    const writes: string[] = []
+    try {
+      const r = typeIntoCodexComposer('tb5', '/compact', {
+        ...defaultCodexComposerDeps,
+        currentRun: () => ({ createdAt: 1, spawnToken: 1 }),
+        write: (_id, d) => { writes.push(d) },
+        footerModels: () => null,
+        pending: new Set<string>(),
+        startupDone: new StartupDoneRuns(),
+      })
+      expect(r.reason).toBe(BUSY_NOW)
+      expect(writes).toEqual([])
+    } finally {
+      off()
+    }
   })
 
   it('a busy row as well: busy, and the run is past its start-up', () => {

@@ -1258,9 +1258,11 @@ export default function TerminalView({ sessionId, configId, cwd, shellOnly, elev
                 // Codex has no launch flag for it: the session starts read-only
                 // (main), and its own /plan is typed into its FIRST ready
                 // prompt only (never the folder-trust prompt, a picker, the
-                // user's typing or after a turn), within a bounded wait; a note
-                // above the terminal says so when it is not, and that the
-                // session is read-only.
+                // user's typing or after a turn seen on screen; 2.1.3-beta.13
+                // B2: a spinner in the window title alone is waited out, as
+                // Codex's start-up is), within a bounded wait; a note above the
+                // terminal says so when it is not, and that the session is
+                // read-only.
                 if (!nothingStarted && provider === 'codex' && !shellOnly && (launchedPreset ?? codexOptions?.permissionsPreset) === 'plan') {
                   planModeWait?.cancel()
                   planModeWait = typeWhenCodexComposerReady(sessionId, '/plan', {

@@ -800,12 +800,12 @@ export class SessionWatchdog {
     // flip a real draft to sendable, so it is dropped (fail closed on any caret
     // text). A LOCAL session keeps the exact prior behaviour.
     if (this.adapter.requireClaudeChrome) {
-      if (!this.d.hasInputChrome(tail, this.adapter.getScreen?.())) {
+      if (!this.d.hasInputChrome(tail, this.adapter.getScreen?.(), this.adapter.getTitle?.())) {
         this.waitUntil = now + deferMs
         this.adapter.log('info', 'Retry deferred: the remote pane is not showing Claude — no automated line will be typed into it.')
         return false
       }
-      const sshGate = this.d.canSendNow(tail, undefined, this.adapter.getScreen?.())
+      const sshGate = this.d.canSendNow(tail, undefined, this.adapter.getScreen?.(), this.adapter.getTitle?.())
       if (sshGate.ok) return true
       this.waitUntil = now + deferMs
       this.adapter.log(

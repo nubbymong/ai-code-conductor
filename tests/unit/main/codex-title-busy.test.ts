@@ -90,6 +90,26 @@ describe('the submit primitive while a reply streams (the title spins, no busy r
     expect(r).toEqual({ delivered: false, reason: 'busy-timeout' })
     expect(s.writes).toEqual([])
   })
+
+  it('the confirm step reads the title too: a title that spins once the text is in, with no hint row, is not confirmed and the text is taken back', async () => {
+    let t = 0
+    let composer = ''
+    const writes: string[] = []
+    const deps: ComposerSubmitDeps = {
+      readScreen: () => [...HEAD, composer === '' ? EMPTY : plain(`${P} ${composer}`), plain(''), plain(FOOTER_TEXT)],
+      readTitle: () => (composer === '' ? 'work' : SPIN),
+      size: () => ({ cols: 100, rows: 30 }),
+      write: (d) => { writes.push(d); if (d === TAKE_BACK_KEY) composer = ''; else if (d !== ENTER) composer += d },
+      live: () => true,
+      now: () => t,
+      sleep: async (ms) => { t += Math.max(0, ms) },
+    }
+    const r = await submitToCodexComposer(NOTE, deps, { readyWaitMs: 5_000 })
+    // With the title not read at the confirm step: [NOTE, ENTER], delivered
+    // into a reply.
+    expect(writes).toEqual([NOTE, TAKE_BACK_KEY])
+    expect(r).toEqual({ delivered: false, reason: 'not-drawn' })
+  })
 })
 
 describe('main\'s Codex pane keeps the title its run sets', () => {
@@ -155,7 +175,9 @@ describe('the Watchdog\'s send gate for a Codex pane reads the title too', () =>
     expect(CODEX_DETECTORS.hasInputChrome('', ready, SPIN)).toBe(false)
   })
 
-  it('a retry due while the title spins is deferred with no attempt spent, then typed once the reply ends', () => {
+  // requireClaudeChrome true: the gate's other branch (an SSH pane), which
+  // reads input chrome first; it hands the title to both checks as well.
+  it.each([false, true])('a retry due while the title spins is deferred with no attempt spent, then typed once the reply ends (requireClaudeChrome %s)', (requireClaudeChrome) => {
     const limit = [
       `${String.fromCharCode(0x25a0)} You've hit your usage limit. Upgrade to Pro, visit the usage page to`,
       '  purchase more credits or try again at 3:05 PM.',
@@ -175,6 +197,7 @@ describe('the Watchdog\'s send gate for a Codex pane reads the title too', () =>
       log: () => {},
       onStateChange: () => {},
       detectors: CODEX_DETECTORS,
+      requireClaudeChrome,
     }
     const wd = new SessionWatchdog('cx', adapter, { rateLimitEnabled: true, retryMessage: 'continue', marginSeconds: 60 })
     wd.feed()

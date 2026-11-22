@@ -7,7 +7,8 @@
  * terminalview-account-launch.test.tsx) and pins the wiring: the visible
  * terminal, the batch, the flush when the tab is shown, the order before the
  * lines the app writes itself (exit, spawn end, launch failure), the flush
- * before the resume nudge, a screen read, and the unmount.
+ * before the resume nudge, a screen read (and, 2.1.3-beta.13 B2, the window
+ * title read beside it), and the unmount.
  */
 import React from 'react'
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
@@ -37,7 +38,10 @@ const H = vi.hoisted(() => {
     disposed = false
     buffer = { active: { type: 'normal', viewportY: 0, baseY: 0, length: 0, cursorY: 0, getLine: (_y: number) => undefined } }
     focus = () => {}
+    /** The view's window-title listener (2.1.3-beta.13 B2): the test fires it. */
+    titleListener: ((t: string) => void) | null = null
     constructor(opts?: any) { this.options = { ...(opts ?? {}) }; MockTerminal.last = this }
+    onTitleChange(cb: (t: string) => void) { this.titleListener = cb; return { dispose() {} } }
     open(el: HTMLElement) { this.element = el }
     loadAddon() {}
     onData() { return { dispose() {} } }
@@ -124,6 +128,7 @@ vi.mock('../../../src/renderer/ptyTracker', () => ({
   markSpawned: (id: string) => { H.spawned.add(id); const t = ++H.counter.last; H.tokens.set(id, t); return t },
   isCurrentSpawn: (id: string, t: number | undefined) => H.spawned.has(id) && t !== undefined && H.tokens.get(id) === t,
   clearSpawned: (id: string) => { H.spawned.delete(id); H.tokens.delete(id) },
+  currentSpawnToken: (id: string) => H.tokens.get(id),
   killSessionPty: () => {},
 }))
 vi.mock('../../../src/renderer/components/SshFlowOverlay', () => ({ default: () => null }))
@@ -194,7 +199,7 @@ const flushRaf = () => { const q = rafQueue; rafQueue = []; q.forEach((cb) => cb
 const { default: TerminalView } = await import('../../../src/renderer/components/TerminalView')
 // The flush interval (HIDDEN_OUTPUT_FLUSH_MS, pinned in hidden-output-queue.test.ts).
 const HIDDEN_OUTPUT_FLUSH_MS = 1000
-const { readSessionScreen } = await import('../../../src/renderer/components/terminal/screenRegistry')
+const { readSessionScreen, readSessionTitle } = await import('../../../src/renderer/components/terminal/screenRegistry')
 const { reportSpawnEnd, forgetSpawnEnd } = await import('../../../src/renderer/utils/spawnEndNotice')
 const { useProviderAccountsStore } = await import('../../../src/renderer/stores/providerAccountsStore')
 const { useLaunchAckStore } = await import('../../../src/renderer/stores/launchAckStore')
@@ -409,6 +414,21 @@ describe('a screen read and the unmount (aicc_planning#303)', () => {
     send('a')
     expect(writes()).toEqual(['a'])
     expect(readSessionScreen('s-1')).not.toBeNull()
+  })
+
+  it('the window title is read beside the screen (2.1.3-beta.13 B2): the run\'s last title, and none while a batch is unparsed', async () => {
+    await mount({ isActive: false })
+    H.tokens.set('s-1', 7)
+    const SPIN = String.fromCharCode(0x280b) + ' work'
+    act(() => { H.MockTerminal.last.titleListener(SPIN) })
+    // Queued before any read (a read starts the live window, in which each
+    // chunk is written at once and not waited for): the read writes the batch
+    // and answers no title until xterm has parsed it.
+    send('busy')
+    expect(readSessionTitle('s-1')).toBeNull()
+    expect(writes()).toEqual(['busy'])
+    parseWrites()
+    expect(readSessionTitle('s-1')).toBe(SPIN)
   })
 
   it('unmounted while hidden: the queued output goes with the terminal, and no timer writes later', async () => {
