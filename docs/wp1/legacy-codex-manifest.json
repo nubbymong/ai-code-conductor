@@ -1,9 +1,9 @@
 {
   "schema": "wp1-legacy-codex-manifest/3",
-  "generatedAt": "2026-11-21T21:18:45.592Z",
-  "head": "e53c95c6b3df00e0722ebebe10762af227d4860d",
-  "tree": "52ddfb3a077b2440e0debf927d0ca278bdfd3fc7",
-  "scannedWorkingTree": true,
+  "generatedAt": "2026-11-22T06:13:41.891Z",
+  "head": "2f568a738bab7f8d56b59d6a8c8548dad4feaf8f",
+  "tree": "9686063fa55d511d49fd39bcb9d5ca787bae26b4",
+  "scannedWorkingTree": false,
   "predicateDigest": "100a1233edebdc39a5f9004d3fba980a89ebb15b25872e52076386bc84b03153",
   "predicates": [
     {
@@ -116,9 +116,9 @@
     "\\.(png|jpg|jpeg|gif|ico|icns|webp|svg|woff2?|ttf|otf|mp4|zip|asar|node|exe|dll|dylib|so|pdf)$",
     "^package-lock\\.json$"
   ],
-  "trackedFileCount": 3656,
-  "excludedFileCount": 560,
-  "scannedFileCount": 3096,
+  "trackedFileCount": 3666,
+  "excludedFileCount": 564,
+  "scannedFileCount": 3102,
   "unscopedFileCount": 15,
   "unscoped": [
     ".claude/settings.json",
@@ -139,8 +139,8 @@
   ],
   "unscopedMentions": [],
   "unreadable": [],
-  "matchedPathCount": 1037,
-  "pathDigest": "cf99631589bd912e3247c31050f65a59a2cbd4eae1a175645e40c4131c976d19",
+  "matchedPathCount": 1042,
+  "pathDigest": "c26cb7e6b67564e5f346feb53ac5269f703dde17fad61b656d8e17234dead2ca",
   "entries": [
     {
       "path": ".github/workflows/ci.yml",
@@ -910,7 +910,7 @@
       "predicates": [
         "P14"
       ],
-      "lineCount": 22
+      "lineCount": 24
     },
     {
       "path": "helper/probes/p18-stand-in.cjs",
@@ -970,6 +970,13 @@
         "P14"
       ],
       "lineCount": 1
+    },
+    {
+      "path": "helper/probes/p3-p6-linux.cjs",
+      "predicates": [
+        "P14"
+      ],
+      "lineCount": 3
     },
     {
       "path": "helper/tests/screen.rs",
@@ -2139,8 +2146,7 @@
         "P07",
         "P14"
       ],
-      "lineCount": 429,
-      "truncated": true
+      "lineCount": 358
     },
     {
       "path": "src/main/sanitize-restored-spawn-options.ts",
@@ -2246,6 +2252,14 @@
         "P14"
       ],
       "lineCount": 7
+    },
+    {
+      "path": "src/main/sessions/launch-bindings.ts",
+      "predicates": [
+        "P04",
+        "P14"
+      ],
+      "lineCount": 165
     },
     {
       "path": "src/main/stale-folder-sweep.ts",
@@ -5441,6 +5455,24 @@
       "lineCount": 6
     },
     {
+      "path": "tests/unit/main/launch-bindings-launch.test.ts",
+      "predicates": [
+        "P04",
+        "P05",
+        "P07",
+        "P13"
+      ],
+      "lineCount": 22
+    },
+    {
+      "path": "tests/unit/main/launch-bindings.test.ts",
+      "predicates": [
+        "P10",
+        "P13"
+      ],
+      "lineCount": 99
+    },
+    {
       "path": "tests/unit/main/launch-lookups-off-main-thread.test.ts",
       "predicates": [
         "P13"
@@ -8080,6 +8112,13 @@
         "P13"
       ],
       "lineCount": 41
+    },
+    {
+      "path": "tests/unit/scripts/helper-probe-p3-p6.test.ts",
+      "predicates": [
+        "P13"
+      ],
+      "lineCount": 1
     },
     {
       "path": "tests/unit/scripts/probe-p19-job.test.ts",
