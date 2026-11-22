@@ -93,13 +93,16 @@
  * them); at a scroll region set, the screen filled (ESC # 8), or origin mode
  * set or reset, on either screen (the cursor goes home, where the count does
  * not follow it, and 47 and 1047 bring it back); at the screen moved up or
- * down (CSI S, T) or reset; and at a cursor saved on the normal screen, or a
- * soft reset there (CSI ! p, which saves the screen's top row as the cursor's place):
- * xterm.js counts a saved row from the scrollback's top, so a clear between
- * that and the restore would move the cursor down. A row a line feed added
- * before the reading stops is the answer. A row a wrap starts
- * is not taken: it starts at the character that wraps,
- * before the screen moves, so a clear there would leave one empty row above
+ * down (CSI S, T) or reset; at a cursor saved on the normal screen (xterm.js
+ * counts a saved row from the scrollback's top, so a clear between the save and
+ * the restore would move the cursor down); and at a soft reset (CSI ! p) on
+ * either screen: it saves the top row of the screen in use as the cursor's
+ * place, which on the normal screen is counted the same way, and on the
+ * alternate screen is where the count's saved place does not follow it, so a
+ * restore there and then 47 or 1047 would bring the cursor back above the cut's
+ * row. A row a line feed added before the reading stops is the answer. A row a
+ * wrap starts is not taken: it starts at the character that wraps, before the
+ * screen moves, so a clear there would leave one empty row above
  * the notice. Such a row start is never inside an escape sequence or a
  * character, and never on the alternate screen. Where the count falls short of
  * the tab's (the exceptions above), the screen has moved further, and a clear
@@ -484,8 +487,8 @@ export class Reader {
 
   /**
    * Read for the clear: the rows above the cut's row could change now, so no clear after this. On the normal screen
-   * only, unless `either`: the cursor went where the count does not follow it, and a switch back with 47 or 1047
-   * brings it to the normal screen.
+   * only, unless `either`: the cursor, or the place saved for it, went where the count does not follow it, and a
+   * switch back with 47 or 1047 brings it to the normal screen.
    */
   private unsettled(either = false): void {
     if (this.watch !== undefined && (either || !this.alt)) this.watch.stop = true
@@ -668,11 +671,13 @@ export class Reader {
   }
 
   /**
-   * CSI ! p, as xterm.js: the carried modes as it sets them (AFTER_SOFT_RESET), and the tab's saved cursor put on the
-   * screen's top row, counted from the scrollback's top, so a clear after it moves where a restore lands.
+   * CSI ! p, as xterm.js: the carried modes as it sets them (AFTER_SOFT_RESET), and the saved cursor of the screen in
+   * use put on that screen's top row. On the normal screen that row is counted from the scrollback's top, so a clear
+   * after it moves where a restore lands; on the alternate screen the count's own saved place does not follow it, and
+   * a restore there, then 47 or 1047, brings the cursor to the normal screen above the rows shown.
    */
   private softReset(): void {
-    this.unsettled()
+    this.unsettled(true)
     for (const [m, on] of AFTER_SOFT_RESET) this.mode(m, on)
   }
 
