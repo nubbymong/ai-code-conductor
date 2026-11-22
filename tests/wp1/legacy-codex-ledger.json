@@ -3299,6 +3299,17 @@
       "note": "P3.5 rebuilt it for non-Claude sessions (replace)"
     },
     {
+      "path": "src/main/sessions/launch-bindings.ts",
+      "predicates": [
+        "P04",
+        "P14"
+      ],
+      "category": "OTHER",
+      "disposition": "added",
+      "evidence": "new 2.1.3-beta.13 section B1 module (S16 step 3, aicc_planning#375): a launch's bindings, their bodies moved unchanged from pty-manager.ts and called where they were: a Codex launch's hook token and file, its account lease, its pane and colour answers, its rollout telemetry, log binder and registrations; a Claude Code launch's account capture and registrations; the logging run; and their part of the session's exit and teardown (WP1.68); tests/unit/main/launch-bindings.test.ts, tests/unit/main/launch-bindings-launch.test.ts, tests/unit/main/pty-codex-hooks.test.ts, tests/unit/main/pty-codex-color-replies.test.ts",
+      "note": "created by 2.1.3-beta.13 section B1; the P14 hits are the Codex launch's bindings moved from pty-manager.ts, and the one P04 hit is a moved comment saying a managed account never writes to ~/.codex; no Codex home is resolved here"
+    },
+    {
       "path": "src/main/stale-folder-sweep.ts",
       "predicates": [
         "P14"
@@ -7835,6 +7846,30 @@
       "disposition": "added",
       "evidence": "WP2 the transient Install/Update Codex tab's shell gets none of the command-button secrets while an ordinary shell still does (WP1.2); tests/unit/main/install-tab-command-secrets.test.ts; WP2 provider-off enforcement (main refuses every launch of a provider that is off; WP1.60 enable/disable): the comment on what the isolation is (not a boundary against a script running as the same user) is pinned by the same tests; tests/unit/main/install-tab-command-secrets.test.ts",
       "note": "created by WP2 (main refuses every launch of a provider that is off)"
+    },
+    {
+      "path": "tests/unit/main/launch-bindings-launch.test.ts",
+      "predicates": [
+        "P04",
+        "P05",
+        "P07",
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "new 2.1.3-beta.13 section B1 test (tests/unit/main/launch-bindings-launch.test.ts): through the real spawnPty, pty-manager.ts calls each launch binding once per launch at its place (a Codex launch's hooks before its command, its lease before the spawn, its pane and conversation after it; a Claude Code launch's account capture after its spawn) and a session's own exit removes its files once before the teardown's three parts, in order (WP1.68)",
+      "note": "created by 2.1.3-beta.13 section B1; a stand-in Codex launch with a made-up realm path, nothing started"
+    },
+    {
+      "path": "tests/unit/main/launch-bindings.test.ts",
+      "predicates": [
+        "P10",
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "new 2.1.3-beta.13 section B1 test (tests/unit/main/launch-bindings.test.ts): the launch bindings module called directly: a Codex launch's hooks, lease, pane, colour answers, telemetry and registrations, a Claude Code launch's account capture and registrations, the logging run and the session's end each make their calls once, in pty-manager.ts's order, with the same log lines (WP1.68)",
+      "note": "created by 2.1.3-beta.13 section B1; every collaborator mocked, nothing started"
     },
     {
       "path": "tests/unit/main/launch-lookups-off-main-thread.test.ts",

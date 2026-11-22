@@ -30,7 +30,6 @@ import { buildTmuxPushCommand, buildArchProbeCommandBracketed, parseArchProbeSen
 import * as os from 'os'
 import { execSync, execFile } from 'child_process'
 import { logPtyOutput, isDebugModeEnabled } from './debug-capture'
-import { shouldRegisterRun } from './logging/should-register-run'
 import { openNotIndexedWindow, closeNotIndexedWindow, releaseNotIndexedWindow, keepNotIndexedWindow, closeHeldNotIndexedWindow, conversationKey } from './logging/indexing-gaps'
 import { claudeFolderKey, claudeProjectsRootKey, normaliseClaudeFolder } from './logging/claude-folder-key'
 import { codexFolderKey } from './logging/codex-folder-key'
@@ -64,7 +63,6 @@ import { windowsPathFolderIsFullyQualified } from './providers/windows-path-name
 import { isShFamilyShell, localSessionShell } from './login-shell'
 import { dispatchSSHStatuslineUpdate, cleanupStatusFile } from './statusline-watcher'
 import { forgetSession } from './background-context'
-import { decorateStatuslineWithColour } from './account-color'
 import { getGateway, isExactBindSourceActive } from './hooks'
 import { injectHooks } from './hooks/session-hooks-writer'
 import {
@@ -74,33 +72,29 @@ import {
   removeLocalSessionMcpConfig,
   removeLocalSessionStatusUrl,
 } from './hooks/per-session-settings'
-import { registerCodexReviewSession, registerClaudeReviewSession, unregisterCodexReviewSession, releaseMcpSessionProvider } from './conductor-mcp-server'
+import { unregisterCodexReviewSession, releaseMcpSessionProvider } from './conductor-mcp-server'
 import { ensureCanvasPlugin } from './canvas/canvas-plugin'
-import { registerCanvasUatRoot, revokeCanvasUatRoots, designateCanvasWorktreeRoot, canvasRootRefusalReason, describeCanvasRootRefusal, setCanvasRootRefusal } from './canvas/canvas-store'
 import { designatedWorktreeDir } from './canvas/canvas-worktree'
 import { forgetSessionForCanvas, setCanvasCodexConversationLookup } from './canvas/canvas-session-link'
-import { forgetCanvasMarkers } from './canvas/canvas-marker-delivery'
 import { prepareCodexCanvasLaunch } from './canvas/codex-canvas-launch'
-import { registerCodexCanvasRoots } from './canvas/codex-canvas-roots'
-import { noteCodexSessionGuidance, forgetCodexSessionGuidance } from './canvas/codex-guidance'
 import { disposeSession as disposeCodexReviewUsage } from './codex-review-usage'
 import { getProfileConfigDir, setupProfileLinks, getPrimaryProfileId, isValidProfileId, backupProfileHomeToCanonical, syncPrimaryCredentialsWithGlobal, withProfileHome, checkProfileCredentialFolders, assertAccountActive, MANAGED_LAUNCH_REFUSAL, refusalSentenceOrMessage } from './account-profiles'
 export { withProfileHome } from './account-profiles'
 import { gateManagedLaunchDirs, gatePickerSiblingDirs, recordManagedLaunchPreflight, displayPath } from './managed-launch-diagnostics'
 import { stripSpoofableText } from '../shared/safe-text'
 import type { ProjectGateResult } from '../shared/providers'
-import { captureClaudeAccount, clearClaudeAccount, getAccountIdentity, pushAccountIdentity, startWatchingAccountIdentity, stopWatchingAccountIdentity, getWatchedProfileId } from './claude-account-identity'
+import { clearClaudeAccount, stopWatchingAccountIdentity, getWatchedProfileId } from './claude-account-identity'
 import { acquireProfileConsumer, pendingProfileRefresh } from './profile-consumers'
 import { providerLaunchRefusal } from './provider-launch-gate'
 import { getAccountsService } from './provider-accounts'
 import { updateSessionMeta, clearSessionMeta, markPtySessionAlive, markPtySessionGone, isPtySessionLive } from './session-registry'
 import { readConfig, getConfigDir } from './config-manager'
 import { getPtyIntegrityMonitor } from './services/pty-integrity-monitor'
-import { getWatchdogManager, clampAnsiChunk } from './watchdog/watchdog-manager'
+import { getWatchdogManager } from './watchdog/watchdog-manager'
 import { clearCodexIdleAttention } from './codex-idle-attention'
 import { SSH_ATTENTION_OSC_PREFIX, SSH_ATTENTION_MAX_PAYLOAD, parseSshAttentionPayload, deliverRemoteAttention } from './ssh-attention'
 import type { HookEvent } from '../shared/hook-types'
-import { createColorQueryResponder, terminalReplyColors } from './terminal-query-responder'
+import { setLaunchBindingPorts, mintCodexHooks, keepCodexHooks, bindCodexLease, bindCodexPane, bindCodexLaunch, bindClaudeLaunch, bindLoggingRun, unbindLaunchFiles, unbindCodexLease, unbindLaunchTelemetry, unbindLaunchRegistrations } from './sessions/launch-bindings'
 
 import * as path from 'path'
 import * as fs from 'fs'
@@ -6090,22 +6084,7 @@ function spawnPtyResolved(
     let tokenMinted = false
     try {
       const provider = localLaunch.provider
-      const gw = getGateway()
-      const gwStatus = gw?.status()
-      if (gw && gwStatus?.listening && gwStatus.port && provider.prepareSessionHooks) {
-        try {
-          const secret = gw.registerSession(sessionId)
-          tokenMinted = true
-          noteGatewayToken(sessionId, true)
-          // Round 1 (A5): in the app's own data folder; round 4 (P1): in the
-          // hook folder prepared beforehand (owner-only, checked here without
-          // starting anything), else no hooks.
-          hookFile = provider.prepareSessionHooks(sessionId, gwStatus.port, secret)
-        } catch (err) {
-          logError(`[pty] Failed to prepare Codex hooks for ${sessionId}: ${(err as Error)?.message ?? err}`)
-          hookFile = null
-        }
-      }
+      ;({ hookFile, tokenMinted } = mintCodexHooks(sessionId, provider))
       // P3.5 (rows 34, 35): the conversation to resume exactly, as the Claude
       // branch does -- a restored tab's persisted one (options.resume), else,
       // on a Restart, the one the tab is on (kept across the kill). "Restart
@@ -6172,21 +6151,8 @@ function spawnPtyResolved(
       }
       const built = provider.buildSpawnCommand(codexSpawnOptions)
       const { cmd: spawnCmd, args: spawnArgs, env: spawnEnv, commandLine } = built
-      // P3.10: a hook file the launch did not use goes at once; one it uses
-      // goes with the session's resources. Round 1 (B2): a token nothing will
-      // use (no hook file, or hooks the launch could not carry) goes too.
       const hooked = built.hooksInstalled === true && !!hookFile
-      if (hookFile && hooked) {
-        codexHookFiles.set(sessionId, hookFile)
-        codexHookedLaunches.add(sessionId)
-      } else if (hookFile) {
-        try { hookFile.dispose() } catch { /* best-effort */ }
-      }
-      hookFile = null
-      if (tokenMinted && !hooked) {
-        dropGatewayToken(sessionId)
-        tokenMinted = false
-      }
+      ;({ hookFile, tokenMinted } = keepCodexHooks(sessionId, { hookFile, tokenMinted }, hooked))
       // Round 1 (S4): the conversation this launch resumed by id keeps its doubt.
       if (built.resumeId) codexResumedById.set(sessionId, built.resumeId.toLowerCase())
       logInfo(`[pty-manager] Codex hooks for ${sessionId}: ${hooked ? 'on' : 'off (the Hooks gateway is off or not listening, or the hook could not be given on this launch)'}`)
@@ -6228,8 +6194,7 @@ function spawnPtyResolved(
       codexLaunchedAt = codexSpawnTimestamp
       // The lease is this session's from here: the killPty above has already
       // released the previous spawn's (or will, once its process has ended).
-      codexLaunchLeases.set(sessionId, launch.lease)
-      takenCodexLeases.add(launch.lease)
+      bindCodexLease(sessionId, launch.lease)
       // A cmd.exe line goes verbatim (see buildSpawnCommand's `commandLine`).
       // The ConPTY options are the choice's own; nothing else differs between
       // the bundled and the system ConPTY.
@@ -6269,20 +6234,7 @@ function spawnPtyResolved(
       // Watchdog's CSI clamp.
       const codexRun = started
       const runScreen = provider.runScreen
-      if (codexRun && runScreen) runScreen.open(sessionId, { cols, rows, write: (data) => codexRun.write(data), current: () => ptySessions.get(sessionId)?.ptyProcess === codexRun, clamp: clampAnsiChunk })
-      // Codex's colour query (OSC 10/11 `?`), answered here in main the moment
-      // the PTY emits it and kept from the renderer, so xterm.js does not answer
-      // it a second time (terminal-query-responder.ts). Codex waits 100 ms for
-      // the answer and reads a later one as typed text in its composer; the
-      // renderer's answer can be later than that while it is busy drawing.
-      // Only this branch: Claude sessions, plain terminals and SSH sessions keep
-      // xterm.js's own answers.
-      const colorQueries = createColorQueryResponder({
-        colors: () => terminalReplyColors(readConfig('settings'), nativeTheme.shouldUseDarkColors),
-        reply: (bytes) => {
-          try { codexRun.write(bytes) } catch (err) { logWarn(`[pty-manager] Codex ${sessionId}: the terminal colour answer could not be written: ${(err as Error)?.message ?? err}`) }
-        },
-      })
+      const colorQueries = bindCodexPane({ sessionId, codexRun, runScreen, cols, rows, write: (data) => codexRun.write(data), writeColourAnswer: (bytes) => codexRun.write(bytes) })
       ptyProcess.onData((rawData) => {
         if (win.isDestroyed()) return
         if (ptySessions.get(sessionId)?.ptyProcess !== ptyProcess) return // rc.15 review R9
@@ -6304,114 +6256,7 @@ function spawnPtyResolved(
       if (options?.isAsk === true) codexAskSessions.add(sessionId)
       else codexAskSessions.delete(sessionId)
       if (askQuestion && !built.askPromptOnArgv) setImmediate(() => { void typeAskQuestion(win, sessionId, askQuestion) })
-      // P3.12 (row 31): whatever an earlier launch of this session claimed is
-      // not this run's; this launch's claims are held until its run is
-      // recorded (a resume claims at once, inside ingestSessionTelemetry).
-      getCodexLogBinder()?.beginLaunch(sessionId)
-      // P3.12 (X1): this launch is not yet known as not indexed (its own run
-      // block says, below); a claim it makes before that is not marked.
-      notIndexedSessions.delete(sessionId)
-      // PR-level ADR-009 round 1 (C1): the folder this launch runs in (its
-      // watcher matches a new rollout by it), for its folder window when it is
-      // not indexed.
-      noteCodexFolder(sessionId, codexCwd)
-      // P3.12 round 1 (B2): a launch on another account (Switch Account) is on
-      // another account's folder: the rollout recorded for the Session
-      // Context goes until this launch claims one.
-      const contextBefore = codexContextRollouts.get(sessionId)
-      if (contextBefore && contextBefore.sessionsDir !== launch.sessionsDir) codexContextRollouts.delete(sessionId)
-      // Start rollout watch-and-claim telemetry. Updates are dispatched to the
-      // renderer (statusline:update) identically to how Claude statusline
-      // updates flow through statusline-watcher.ts. (Tokenomics is no longer fed
-      // from telemetry ticks — the indexing worker reads raw transcripts.)
-      const codexTelSrc = provider.ingestSessionTelemetry(
-        sessionId,
-        // The realm's own transcripts: a managed account never writes to ~/.codex.
-        // P3.5: the resumed conversation is claimed wherever it is, the
-        // picker's pick through its file, and the tab keeps what is claimed.
-        {
-          cwd: codexCwd,
-          spawnTimestamp: codexSpawnTimestamp,
-          sessionsDir: launch.sessionsDir,
-          ...(built.resumeId ? { resumeId: built.resumeId } : {}),
-          ...(built.resumeId && built.resumePath ? { resumePath: built.resumePath } : {}),
-          ...(built.pickFile ? { pickFile: built.pickFile, pickFolder: built.pickFolder } : {}),
-          onClaim: (claimed) => {
-            keepCodexConversation(sessionId, { uuid: claimed.id, cwd: claimed.cwd }, launch.lease.accountId, { inferred: claimed.exact !== true })
-            // P3.6: a claim that could have been another session's.
-            if (claimed.certain !== true) markCodexConversationUncertain(claimed.id)
-            // P3.10: the session's own hook named it: this session is on it,
-            // as Codex says, which clears P3.6's doubt -- unless a live launch
-            // resumed it by id (clearCodexDoubtFromHook).
-            else if (claimed.fromHook === true) clearCodexDoubtFromHook(claimed.id)
-          },
-          // The picker decided again after a claim: the session is no longer
-          // on it. Round 1 (Q3): nor is the path its hook last named taken
-          // as read (the same path again is handed to the watch).
-          onRelease: () => {
-            keptCodexConversations.delete(sessionId)
-            lastCodexHookRollout.delete(sessionId)
-          },
-          // P3.6 (VM finding V2): on a conversation another session holds
-          // (picked, resumed by id, or named by its hook): recorded as this
-          // session's too, so a Switch refuses it as in use and says so.
-          onShared: (shared) => {
-            keepCodexConversation(sessionId, { uuid: shared.id, cwd: shared.cwd }, launch.lease.accountId, { inferred: shared.exact !== true })
-            if (shared.fromHook === true) clearCodexDoubtFromHook(shared.id)
-          },
-          // P3.12 (rows 31, 32, 65): the rollout claimed, as the watcher
-          // checked it (its realm, a plain rollout file), or null when let
-          // go: the session's logs and name file (the Codex log binder) and
-          // its GitHub Session Context read the conversation from this alone.
-          onRollout: (rollout) => {
-            noteCodexContextRollout(sessionId, rollout)
-            // P3.12 (X1, Z1): a conversation a session not indexed is on: its
-            // window opens when the session became not indexed, not now.
-            // PR-level ADR-009 round 1 (C1): a claim let go closes the
-            // conversation's window only; the folder's stays open.
-            const notIndexed = notIndexedSessions.get(sessionId)
-            if (notIndexed?.provider === 'codex') {
-              if (rollout) { try { openNotIndexedWindow(sessionId, rollout.path, notIndexed.since, Date.now()) } catch { /* best-effort */ } }
-              else endSessionNotIndexed(sessionId, Date.now(), { coversStay: true })
-            }
-            getCodexLogBinder()?.noteRollout(sessionId, rollout)
-          },
-        },
-        (data) => {
-          // Copilot review on PR #31 (p9.17): decorate at the send site so
-          // the renderer receives accountColour. decorateStatuslineWithColour
-          // is a no-op when the payload carries no accountEmail (Codex
-          // telemetry currently does not), so this is safe + future-proof.
-          // Tokenomics no longer ingests from telemetry ticks (the worker
-          // indexes raw transcripts on its own timer); only the renderer send
-          // remains.
-          const decorated = decorateStatuslineWithColour(data)
-          if (!win.isDestroyed()) win.webContents.send('statusline:update', decorated)
-        },
-      )
-      codexTelemetrySources.set(sessionId, codexTelSrc)
-      // WP2 commit 5b: a local Codex session may ask for a Claude review of
-      // its configured project directory, never home or above it (the
-      // codex_review rule, #188) -- and never the directory a resumed
-      // conversation's rollout names (P3.5), which is transcript content, the
-      // same line the Agent Canvas root holds in the Claude branch. Whether the tool is
-      // offered is decided per MCP connection; killPty's unregister (run
-      // before every spawn) clears this, so a respawn re-decides.
-      if (isHomeOrAncestor(resolvedCwd)) {
-        logWarn(`[pty] claude_review NOT registered for ${sessionId}: the project directory resolves to (or above) the home directory. Set a real project directory to enable review.`)
-      } else {
-        registerClaudeReviewSession(sessionId, resolvedCwd)
-      }
-      // WP2 PR 4, P4.1 (row 51): the Agent Canvas serving roots, by the
-      // Claude branch's rule (canvas/codex-canvas-roots.ts): the configured
-      // project directory and the designated worktree, never `codexCwd` or any
-      // folder a rollout recorded. killPty's revoke (run before every spawn)
-      // and the session's cleanup clear them. And what this launch carried of
-      // the skills, for the canvas page's line (whatever route the builder
-      // took: every route lists the account's own skills folder).
-      registerCodexCanvasRoots(sessionId, resolvedCwd, codexCanvas.designatedWorktree)
-      if (codexCanvas.guidance) noteCodexSessionGuidance(sessionId, codexCanvas.guidance)
-      else forgetCodexSessionGuidance(sessionId)
+      bindCodexLaunch({ win, sessionId, provider, launch, codexCwd, codexSpawnTimestamp, built, resolvedCwd, codexCanvas, runProvider: 'codex' })
     } catch (err) {
       // P3.10: a launch that failed keeps no hook file or hooked mark, and
       // (round 1, B2) no gateway token it minted.
@@ -6923,110 +6768,7 @@ function spawnPtyResolved(
       // ADR-009 round 1 (PR 4): where this run works, until it has ended.
       noteAgentRunFolder(ptyProcess, sessionId, claudeCwd)
 
-      // B3: capture identity ONLY after the spawn succeeds — if pty.spawn throws,
-      // no map entry is created (no leak), and shell-only sessions never reach
-      // here. resolvedProfileId is undefined when no explicit or primary profile
-      // resolved, so identity comes from the default account in that case.
-      captureClaudeAccount(sessionId, resolvedProfileId)
-      pushAccountIdentity(sessionId)
-      // Watch for a mid-session account change (user runs /login in the terminal
-      // without a respawn), so the strip/card/statusline follow the new account.
-      startWatchingAccountIdentity(sessionId, resolvedProfileId)
-
-      // Every LOCAL Claude session with a real project folder REGISTERS for
-      // codex_review here; registering does not offer the tool. Whether it is
-      // offered is decided per MCP connection (offeredReviewTool, called from
-      // conductor-mcp-server createServer): the Conductor tools master and the
-      // codex_review switch (Settings, General, Built-in tools) must be on,
-      // Codex must be enabled, and a Codex review must be preparable now (the
-      // accounts service's reviewReady: the provider on and a reviewer account
-      // ready). SSH sessions never reach this branch, so the tool only ever
-      // runs against paths that exist on this machine. The per-config
-      // enableCodexReview flag is retired (ignored).
-      //
-      // SECURITY (adversarial review, #188): register the ACTUAL launch cwd
-      // (`claudeCwd`, post-resume-override) — not the pre-override `resolvedCwd`
-      // — and REFUSE to register when that cwd is the bare home directory. A
-      // config whose workingDirectory is '.', empty, or a stale/deleted path
-      // makes resolveCwd() silently fall back to os.homedir(); registering that
-      // would let a prompt-injected session review ~/.ssh, ~/.claude, ~/.aws via
-      // mode:'paths' (containment holds, but the ROOT is wrong). Since universal
-      // opt-in removed the per-config gate that used to bound this, block it at
-      // the source: no legitimate review targets the bare home dir.
-      if (isHomeOrAncestor(claudeCwd)) {
-        logWarn(`[pty] codex_review NOT registered for ${sessionId}: launch cwd resolves to (or above) the home directory (workingDirectory is '.', empty, a stale path, or points at home). Set a real project directory to enable review.`)
-      } else {
-        registerCodexReviewSession(sessionId, claudeCwd)
-      }
-
-      // The Agent Canvas serving allowlist rides the same decision, for the same
-      // reason — but NOT against the same directory (adversarial review,
-      // 2026-08-15, second pass).
-      //
-      // `claudeCwd` is TRANSCRIPT-DERIVED whenever an exact-resume applies. It
-      // starts as `resolvedCwd` and is then overwritten with
-      // `resolveResumeLaunch(effectiveTarget).claudeCwd`, which is
-      // `target.cwd` — and `target` is either the persisted `options.resume` or
-      // the self-captured `resolveResumeTargetFromTranscript()`, whose cwd is
-      // THE FIRST `cwd` STRING IN THE TRANSCRIPT JSONL, verbatim. That file is
-      // one the agent can write. So an agent that rewrites its own transcript's
-      // first line to `"cwd":"C:\\Users\\<u>\\.claude"` and creates the matching
-      // mangled projects directory names its own served root the next time the
-      // user hits Restart or Switch-account. `isHomeOrAncestor` does not catch
-      // it: `~/.claude` is a CHILD of home, not an ancestor. From there
-      // `canvas_render { htmlPath: '…/.claude/.credentials.json' }` reads the
-      // OAuth token and the pre-allowed `canvas_snapshot` reads it back out of
-      // the DOM. The previous fix moved the registration to this file and
-      // claimed "no served root is derived from transcript content any more";
-      // moving the CALL did not change where the VALUE came from.
-      //
-      // So the canvas root is `resolvedCwd` — `resolveCwd(options.cwd)`, the
-      // session's CONFIGURED project directory, which no transcript can reach —
-      // and never the resume override. The cost is bounded and known: a session
-      // that exact-resumes a conversation from OUTSIDE its configured project
-      // directory can serve nothing (renders are refused, not misdirected).
-      //
-      // codex_review above deliberately keeps `claudeCwd`: changing what it
-      // reviews is a separate behavioural decision, and its exposure is
-      // different in kind (it reads for a review the user reads, with no
-      // pre-allowed tool reading the bytes back). It is flagged, not changed.
-      if (isHomeOrAncestor(resolvedCwd)) {
-        logWarn(`[pty] canvas serving root NOT registered for ${sessionId}: the configured project directory resolves to (or above) the home directory (workingDirectory is '.', empty, a stale path, or points at home).`)
-        setCanvasRootRefusal(sessionId, describeCanvasRootRefusal('home-or-ancestor', resolvedCwd))
-      } else if (!registerCanvasUatRoot(sessionId, resolvedCwd)) {
-        // Floor-checked again inside the store (absolute, real, a directory, not
-        // home, not a volume root, not a dot-dir under home, not the resources
-        // directory) — two independent refusals rather than one, because this is
-        // the only thing standing between a prompt-injected agent and a file
-        // read with the app's privileges.
-        //
-        // NAME the floor that refused (#371). "Refused by the canvas store" in a
-        // log file, with the agent told to write where it already wrote, is an
-        // undiagnosable dead end for the one configuration the resources-dir
-        // floor exists for.
-        const reason = canvasRootRefusalReason(sessionId, resolvedCwd)
-        const explanation = reason ? describeCanvasRootRefusal(reason, resolvedCwd) : 'the canvas store refused it.'
-        logWarn(`[pty] canvas serving root NOT registered for ${sessionId} (${reason ?? 'unknown'}): ${explanation}`)
-        setCanvasRootRefusal(sessionId, explanation)
-      }
-
-      // The worktree designation is INDEPENDENT of the project root (#371). It
-      // used to sit in the same else-if chain, so a project directory refused
-      // by any floor also cost the session its worktree root — even though
-      // `<parent>/ccc-wt/<sid>` neither contains nor sits under the resources
-      // directory and would have been accepted. One refusal, not two.
-      //
-      // PENDING: the store consults it only once it exists as a real, un-linked
-      // directory (canvas-store.designateCanvasWorktreeRoot). The path is CCC's,
-      // the contents are the agent's own; nothing an agent can write moves it
-      // (ADR-016).
-      if (designatedWorktree) {
-        if (designateCanvasWorktreeRoot(sessionId, designatedWorktree)) {
-          logInfo(`[pty] canvas: designated session worktree ${designatedWorktree} for ${sessionId} (served once it exists)`)
-        } else {
-          logWarn(`[pty] canvas: designated session worktree ${designatedWorktree} for ${sessionId} was refused by the canvas store floor.`)
-        }
-      }
+      bindClaudeLaunch({ sessionId, resolvedProfileId, claudeCwd, resolvedCwd, designatedWorktree })
 
       // Explicitly cd to the project directory, then launch Claude.
       // The cd is critical — it ensures Claude sees the correct project directory
@@ -7316,85 +7058,13 @@ function spawnPtyResolved(
   // in the process the user meant, not in the shell that is about to be replaced.
   if (!launchWriteScheduled) releaseLaunchHold()
 
-  // Record the run via the transcripts worker pipeline (Logs v2). Gated on the
-  // live `loggingEnabled` setting (default-true) and never for shell-only
-  // sessions (full gating refinement = Task 9). The captured account (set at
-  // line ~950 for non-shell Claude sessions) + configId/profileId are stamped
-  // so runs can be filtered by config/account.
-  const configLabel = options?.configLabel || 'default'
-  // Reading settings here (rather than relying solely on the supervisor's
-  // existence) gives a LIVE disable: if logging was enabled at boot (so the
-  // supervisor is running) but the user later turns it off in Settings, new
-  // runs are skipped immediately — the worker keeps running idle. Asymmetry: if
-  // logging was DISABLED at boot there is no supervisor, so a mid-run enable
-  // needs a restart.
-  const settings = readConfig<{ loggingEnabled?: boolean; loggingConsentSeen?: boolean; loggingConsentVersion?: number }>('settings') ?? {}
-  // P3.12 round 2 (W3): the config's own switch as saved now (a Restart, a
-  // Switch Account or a restore carries the value it was launched with).
-  const runProvider = (options?.provider ?? 'claude') === 'codex' ? 'codex' : 'claude'
-  const savedOff = savedConfigLoggingOff(readConfig<unknown>('configs'), options?.configId, runProvider)
-  const registerOptions = savedOff === undefined ? (options ?? {}) : { ...(options ?? {}), loggingEnabled: !savedOff }
-  // Single source of truth for the run-registration decision (Task 9):
-  // local Claude or (P3.12) local Codex, not shell-only, not SSH, per-config
-  // loggingEnabled !== false, global loggingEnabled !== false. The matching
-  // runEnd/endRun on exit are gated on this same `logSup` being non-null, so a
-  // run is only ended if it was registered.
-  const registersRun = shouldRegisterRun(registerOptions, settings)
-  const logSup = registersRun ? getLogSupervisor() : null
-  // P3.12 round 1 (V1): a spawn that is not indexed (logging off, a shell, SSH)
-  // ends whatever run this session id still had open (a Restart's old process
-  // exits after this spawn, so its own exit does not), so nothing is added to
-  // it; one that is indexed is recorded for the logging switches.
-  const codexRunProvider = !options?.ssh && !options?.shellOnly && (options?.provider ?? 'claude') === 'codex'
-  // P3.16 (M1): a local Claude session's projects folder (round 1, N1) and,
-  // when it resumes one exactly, its conversation are known at launch; its
-  // hooks and status line name the transcript after.
-  const claudeRunProvider = !options?.ssh && !options?.shellOnly && (options?.provider ?? 'claude') === 'claude'
-  if (claudeRunProvider && effectiveLaunchCwd) noteClaudeFolder(sessionId, effectiveLaunchCwd)
-  if (claudeRunProvider && resumeUuidForBind && effectiveLaunchCwd) {
-    const resumed = buildResumeTranscriptPath(effectiveLaunchCwd, resumeUuidForBind)
-    if (resumed) noteClaudeTranscript(sessionId, resumed)
-  }
-  if (logSup) {
-    // A run is registered only for a local launch that starts a provider
-    // (shouldRegisterRun leaves out SSH sessions and terminal tabs), so it is
-    // indexed under the provider this launch looked up in the registry.
-    indexedRuns.set(sessionId, { ...(options?.configId ? { configId: options.configId } : {}), provider: localLaunch?.id ?? runProvider })
-  } else {
-    indexedRuns.delete(sessionId)
-    try { getLogSupervisor()?.runEnd(sessionId, Date.now(), 'exited') } catch { /* best-effort */ }
-    // P3.12 (X1, X3): a local session running not indexed marks the
-    // conversations it is on (P3.16 M1: a Claude session as a Codex one).
-    // Round 1 (N3): only a run the switches and rules leave out; one they
-    // index whose log service is missing this time marks nothing.
-    if (!registersRun) {
-      if (codexRunProvider) markSessionNotIndexed(sessionId, 'codex', codexLaunchedAt ?? Date.now(), Date.now())
-      else if (claudeRunProvider) markSessionNotIndexed(sessionId, 'claude', claudeLaunchedAt ?? Date.now(), Date.now())
-    }
-  }
-  logSup?.runStart({
-    sessionId,
-    configId: options?.configId,
-    configLabel,
-    // FIX 4: the effective launch cwd (resume override when active, else the
-    // configured resolvedCwd) — not the bare resolvedCwd.
-    projectCwd: effectiveLaunchCwd,
-    // accountEmail is typically undefined here: identity is captured asynchronously
-    // AFTER spawn (recheckSessionIdentity / startWatchingAccountIdentity wired in
-    // pty-manager). The run row therefore stamps a null email; configId and
-    // profileId ARE stamped correctly at spawn. runAccount() back-fills the email
-    // once the identity poll resolves (wired in a later task).
-    accountEmail: getAccountIdentity(sessionId)?.email,
-    profileId: resolvedProfileId,
+  const { logSup, codexLocalRun } = bindLoggingRun({
+    sessionId, options, localLaunch, effectiveLaunchCwd, resumeUuidForBind, resolvedProfileId, codexLaunchedAt, claudeLaunchedAt,
+    runProvider: (options?.provider ?? 'claude') === 'codex' ? 'codex' : 'claude',
+    codexRunProvider: !options?.ssh && !options?.shellOnly && (options?.provider ?? 'claude') === 'codex',
+    claudeRunProvider: !options?.ssh && !options?.shellOnly && (options?.provider ?? 'claude') === 'claude',
     provider: options?.provider ?? 'claude',
-    startedAt: Date.now(),
   })
-  // P3.12 (row 31): a local Codex run's transcript is the rollout its own
-  // watcher claims (the Codex log binder, told by onRollout above), bound
-  // from here on; Claude's discovery below (its heuristic scan of
-  // ~/.claude/projects, its resume-bind) is Claude's alone.
-  const codexLocalRun = !options?.ssh && !options?.shellOnly && (options?.provider ?? 'claude') === 'codex'
-  if (codexLocalRun) getCodexLogBinder()?.startRun(sessionId, !!logSup)
   // Logs v2 (Task 8): arm the heuristic transcript-discovery fallback for this run.
   // The exact sources (hooks + statusline) bind first; if neither has bound ~20s
   // later, the binder scans ~/.claude/projects for the newest matching JSONL.
@@ -7523,13 +7193,7 @@ function spawnPtyResolved(
       else getPtyIntegrityMonitor()?.endSession(sessionId)
       // (watchdog teardown now lives UNCONDITIONALLY in cleanupSessionResources
       //  below — see FINDING 1 — so the restart-race stale exit tears it down too)
-      // (P3.10 round 1, B1: with the record that a Codex launch minted it.)
-      dropGatewayToken(sessionId)
-      removeLocalSessionSettings(sessionId)
-      removeLocalSessionMcpConfig(sessionId)
-      // ADR-009 token custody: the status-URL sidecar carries this session's MCP
-      // token, so it is swept on the SAME teardown as the other two.
-      removeLocalSessionStatusUrl(sessionId)
+      unbindLaunchFiles(sessionId)
       // P6: clear opt-in registration and per-session usage record.
       unregisterCodexReviewSession(sessionId)
       disposeCodexReviewUsage(sessionId)
@@ -7651,6 +7315,13 @@ setSessionInputPorts({
   isCodexSession: isCodexPtySession,
   isCodexAskSession: (sessionId) => codexAskSessions.has(sessionId),
 })
+setLaunchBindingPorts({
+  ptySessions, codexHookFiles, codexHookedLaunches, codexLaunchLeases, takenCodexLeases, codexAskSessions, codexTelemetrySources, indexedRuns,
+  notIndexedSessions, codexContextRollouts, keptCodexConversations, lastCodexHookRollout, claudeTranscripts, claudeFolders, codexFolders,
+  noteGatewayToken, dropGatewayToken, forgetCodexHooks, keepCodexConversation, markCodexConversationUncertain, clearCodexDoubtFromHook,
+  noteCodexContextRollout, endSessionNotIndexed, noteCodexFolder, savedConfigLoggingOff, noteClaudeFolder, noteClaudeTranscript, markSessionNotIndexed,
+  closeCodexRunScreen: (sessionId) => codexRunScreen()?.close(sessionId),
+})
 
 export function writePty(sessionId: string, data: string): void {
   // Focus-report chunks (RC8): xterm emits the DECSET-1004 focus events
@@ -7765,12 +7436,7 @@ function cleanupSessionResources(sessionId: string): void {
     shellOnlyProfileHolds.delete(sessionId)
     profileHold()
   }
-  // WP2: the Codex session's account lease (see codexLaunchLeases).
-  const codexLease = codexLaunchLeases.get(sessionId)
-  if (codexLease) {
-    codexLaunchLeases.delete(sessionId)
-    codexLease.release()
-  }
+  unbindCodexLease(sessionId)
   // P3.16 (M5): the integrity monitor's count of the PTY this ends starts again
   // (round 1, N8: quietly, with no "session ended" event; the session's own
   // exit ends the record). A Restart (and every respawn: spawnPty runs killPty
@@ -7809,38 +7475,7 @@ function cleanupSessionResources(sessionId: string): void {
   // unrelated spawn of the same sessionId. The respawn path captures fresh
   // BEFORE calling killPty, so the just-captured target survives this clear.
   clearLastResumeTarget(sessionId)
-  // Stop Codex telemetry source if one was registered for this session. On a
-  // natural Codex exit (user typed exit/quit, Ctrl+D, crash) this is the ONLY
-  // place that stops the 500ms full-file-read tail poller — killPty isn't hit
-  // until the tab is closed, so without this the poller ran for the dead tab.
-  const codexTel = codexTelemetrySources.get(sessionId)
-  // P3.12 (Y1): a session ending holds no conversation while not indexed
-  // (P3.16 M1: and the Claude transcript and folder it was on are not the next
-  // launch's).
-  notIndexedSessions.delete(sessionId)
-  claudeTranscripts.delete(sessionId)
-  claudeFolders.delete(sessionId)
-  codexFolders.delete(sessionId)
-  endSessionNotIndexed(sessionId, Date.now())
-  if (codexTel) {
-    try { codexTel.stop() } catch { /* noop */ }
-    codexTelemetrySources.delete(sessionId)
-    // P3.12 round 2 (Q3): a session reading this one's conversation beside
-    // it holds it now (its watcher says so, and its logs bind it).
-    for (const [other, source] of codexTelemetrySources) {
-      if (other === sessionId) continue
-      try { source.recheckShared?.() } catch { /* one session's watch never breaks another's */ }
-    }
-  }
-  // P3.12 round 1 (Q1): the Codex log binder's claim goes with the session's
-  // resources (killPty runs this before every spawn, a Claude one too), so a
-  // tab respawned as another assistant keeps nothing of it; a Codex launch
-  // begins its own afterwards.
-  try { getCodexLogBinder()?.endRun(sessionId) } catch { /* best-effort */ }
-  // P3.10: the launch's hook file (its token) and its hooked mark go with
-  // the session's resources; the gateway's token for it goes on exit, as a
-  // Claude session's does, and a respawn mints a new one.
-  forgetCodexHooks(sessionId)
+  unbindLaunchTelemetry(sessionId)
   // P3.10 round 1 (Q1): a Codex turn's pending idle mark goes with the run it
   // was for (an exit, a Restart, a Switch), so a fresh run is never marked
   // for its predecessor's turn.
@@ -7853,56 +7488,7 @@ function cleanupSessionResources(sessionId: string): void {
     try { flow.destroy() } catch { /* noop */ }
     sshFlows.delete(sessionId)
   }
-  // SECURITY (adversarial review, #188): deregister codex_review here so
-  // registration is strictly RE-ESTABLISHED per spawn. spawnPty calls killPty
-  // (→ this) before it re-registers, so a session that restarts into a
-  // home-rooted, SSH, shell-only or Codex state cannot INHERIT the stale
-  // registration (and stale cwd) from a prior local-Claude spawn — which would
-  // otherwise defeat the home-dir refusal and the "SSH never registers"
-  // invariant. Idempotent: a no-op when the session was never registered.
-  unregisterCodexReviewSession(sessionId)
-  // #628 review: the record of which assistant this session's MCP credential
-  // went to is per launch too, so a session id relaunched on another assistant
-  // (an Ask tab revived on Claude after Codex) is served that assistant's tools.
-  releaseMcpSessionProvider(sessionId)
-  // SECURITY (adversarial review, 2026-08-15 — BLOCKER 1): the canvas serving
-  // allowlist dies with the session, for the identical reason. The first cut
-  // had NO production revocation at all — a root registered by any local spawn
-  // stayed servable for the life of the app process, so a session that exited
-  // hours ago still contributed a readable project to whichever agent was
-  // running now. Re-established per spawn (spawnPty calls killPty → here before
-  // it re-registers), so a session that restarts into a home-rooted, SSH,
-  // shell-only or Codex state inherits nothing.
-  revokeCanvasUatRoots(sessionId)
-  // SECURITY (adversarial review, 2026-09-01 — HIGH): drop this session's
-  // canvas markers here, for the same per-spawn isolation invariant as the
-  // watchdog below.
-  //
-  // `forgetCanvasMarkers` was wired ONLY to the `pty:kill` IPC listener
-  // (pty-handlers.ts). That listener fires when the RENDERER closes a tab — it
-  // does not fire for the two paths that respawn a session UNDER THE SAME ID:
-  // Restart, and switch-account. So a marker queued against the old
-  // conversation ("Approved v7 on the canvas · canvas_version_verdict
-  // recorded") survived the teardown with `turnOpen` still true, and the NEW
-  // process's first `SessionStart` hook — an event this queue treats as a
-  // boundary and flushes on — wrote it straight into the fresh conversation.
-  // The agent is then told a verdict was filed on work it has never seen, in a
-  // line whose whole purpose is to trigger the canvas skill. A natural PTY exit
-  // reached neither the listener nor any other clear, so the marker simply sat
-  // there until something flushed it.
-  //
-  // Here it is covered by BOTH callers (killPty and the natural-exit block), and
-  // spawnPty calls killPty → here before a respawn, so the new session inherits
-  // nothing. Idempotent: a no-op for a session with no queue. The module holds
-  // no static import of pty-manager (its PTY end is injected at boot from
-  // index.ts), so importing it here introduces no cycle.
-  forgetCanvasMarkers(sessionId)
-  // WP2 PR 4, P4.1: the submit primitive's pane of a Codex run goes with it
-  // (a submission still waiting on it reports the session gone, and types
-  // nothing into the next run), and so does the launch's guidance record.
-  codexRunScreen()?.close(sessionId)
-  codexAskSessions.delete(sessionId)
-  forgetCodexSessionGuidance(sessionId)
+  unbindLaunchRegistrations(sessionId)
   // SECURITY (adversarial review, FINDING 1): tear the session watchdog down
   // here too, for the identical per-spawn isolation invariant. This runs from
   // BOTH killPty (restart / deliberate close) and the natural-exit cleanup, and
