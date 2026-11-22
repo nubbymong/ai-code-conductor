@@ -406,4 +406,25 @@ describe('the connection acks screen only when asked for it and the holder offer
     }
     expect(c.conn.isClosed).toBe(false)
   })
+
+  it('readScreen (2.1.3-beta.13, plan section A1): the holder\'s screen.rows, read strictly; refused with nothing sent on a connection that did not ack screen; an answer that does not read rejects, and the connection stays up', async () => {
+    const vector = (SCREEN.messages as Array<{ type: string; json: string }>).find((v) => v.type === 'screen.rows')!
+    const rows = JSON.parse(vector.json)
+    const c = await connected(NOW_CAPS, false, false, true)
+    const asked = c.conn.readScreen()
+    await until(() => c.fromApp.some((m) => m.t === 'screen.read'), 'the read')
+    const id = c.fromApp.find((m) => m.t === 'screen.read')!.id
+    c.send({ ...rows, re: id })
+    expect(await asked).toMatchObject({ cols: rows.cols, rows: rows.rows })
+    // One row short of the screen, `cut` false: no reader takes it.
+    const bad = c.conn.readScreen()
+    await until(() => c.fromApp.filter((m) => m.t === 'screen.read').length === 2, 'the second read')
+    const id2 = c.fromApp.filter((m) => m.t === 'screen.read')[1].id
+    c.send({ ...rows, re: id2, cut: false, lines: rows.lines.slice(1) })
+    await expect(bad).rejects.toMatchObject({ code: 'bad-frame' })
+    expect(c.conn.isClosed).toBe(false)
+    const not = await connected(NOW_CAPS, false, false, false)
+    await expect(not.conn.readScreen()).rejects.toMatchObject({ code: 'unknown-type' })
+    expect(not.fromApp.filter((m) => m.t === 'screen.read')).toEqual([])
+  })
 })

@@ -542,7 +542,9 @@ rollback returns to the earlier beta's rows, and every row has a negative test.
   call that reaches a connection that should not get it, and a relay kept
   alive after its session.
 - **The holder's screen and its two reads (capability `screen`, from
-  2.1.3-beta.12, dormant: nothing in the app asks).** The holder parses its
+  2.1.3-beta.12; from 2.1.3-beta.13 a plain terminal's connections ack it,
+  and a take-over asks `screen.read` once, for the holder's size).** The
+  holder parses its
   session's output into a screen (`helper/src/screen.rs`, the `vt100` crate,
   3.10) on the thread that carries that output, after the ring and the
   attached connection have the bytes. Output is untrusted, so the parse is

@@ -19,6 +19,11 @@
  * replay is held until its end and shown in one piece, the notice first and
  * then no more than the tab keeps, so the notice stays within reach (the VM
  * smoke of the release PR found 2 MiB of plain text pushed it out).
+ *
+ * 2.1.3-beta.13 (plan section A1, aicc_planning#374): a take-over whose
+ * holder offers the screen reads shows its replay only once its tab is at
+ * the holder's size (or at the wait's cap), and sends the holder no size
+ * meanwhile.
  */
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { Terminal } from '@xterm/headless'
@@ -28,7 +33,7 @@ import { join } from 'path'
 import type { IPty } from 'node-pty'
 import { HolderConnection, HolderError, INPUT_FRAMES_PER_PING, unixEndpointFolderProblem } from '../../../src/main/session-helper/connection'
 import { EventEmitter } from 'events'
-import { HOLD_MAX_MS, HelperPty, LOST_EXIT_CODE, NothingStartedError, type HelperPtyDriver } from '../../../src/main/session-helper/helper-pty'
+import { HOLD_MAX_MS, HelperPty, LOST_EXIT_CODE, NothingStartedError, SIZE_WAIT_MAX_MS, type HelperPtyDriver } from '../../../src/main/session-helper/helper-pty'
 import { TERMINAL_SCROLLBACK_LINES } from '../../../src/shared/terminal-scrollback'
 import { PTY_IO_FAILED_GRACE_MS, PTY_IO_FAILED_TEXT } from '../../../src/main/pty-input-guard'
 import { RAW_MAX, heldSessionId, type HolderRecord, type LaunchSpec } from '../../../src/main/session-helper/protocol'
@@ -89,6 +94,8 @@ function rig(o: {
   cols?: number
   rows?: number
   replyTimeoutMs?: number
+  /** Its connections ask for the screen reads, as the manager's do for a plain terminal. */
+  screen?: boolean
   /** Launch fields besides argv, cwd, env and the size (the Windows `line` and `conpty`). */
   spec?: Partial<LaunchSpec>
   before?: (h: FakeHolder) => void
@@ -112,6 +119,7 @@ function rig(o: {
     },
     replyTimeoutMs: o.replyTimeoutMs ?? 2000,
     pingEveryMs: 0,
+    ...(o.screen ? { screen: true } : {}),
   })
   const driver: HelperPtyDriver = {
     hold: async () => {
@@ -1139,7 +1147,7 @@ describe('shown again from the middle of its output (2.1.3-beta.12, plan section
     expect(r.seen).toEqual([piece(numbered(kept, total - kept + 1))])
     expect(r.text()).not.toContain(`line ${total - kept}\r\n`)
     expect(sent[0].shown).toBe(r.text())
-    expect(r.logs).toContain(`[session-helper] ${r.h.sid}: the oldest ${total - kept} lines of its replay are not shown either, so the line saying so stays within the ${TERMINAL_SCROLLBACK_LINES} lines the tab keeps`)
+    expect(r.logs).toContain(`[session-helper] ${r.h.sid}: the oldest ${total - kept} lines of its replay are not shown either, so the line saying so stays within the ${TERMINAL_SCROLLBACK_LINES} lines the tab keeps (rows counted at 80x24)`)
     // The redraw's log line keeps its start (the release smoke reads it).
     expect(r.logs.filter((l) => l.includes('no longer held'))).toEqual([`[session-helper] ${r.h.sid}: 5000 bytes of earlier output are no longer held, so they are not shown; asked its program to redraw`])
     vi.useRealTimers()
@@ -1414,4 +1422,147 @@ describe('shown again from the middle of its output (2.1.3-beta.12, plan section
     expect(s.normal).toContain(NOTICE)
     expect(s.normal).toContain('line 12000')
   }))
+  /*
+   * 2.1.3-beta.13, plan section A1 (aicc_planning#374): a Windows console's
+   * output is right only at the size it was made for, and a restored tab's
+   * first size can differ for a moment from the one it settles at (93 columns
+   * before its WebGL renderer, or a row short). So a take-over whose holder
+   * offers the screen reads asks the holder's size first, and its replay,
+   * cut or whole, waits for the tab to be at it; meanwhile no size goes to
+   * the holder. The rig's connections ask for `screen` here, as the
+   * manager's do for a plain terminal.
+   */
+  describe("a take-over waits for its tab to be at the holder's size (2.1.3-beta.13, plan section A1)", () => {
+    /** The holder offers the screen reads, and its terminal is `cols` by `rows`. */
+    const at = (cols: number, rows: number, setUp: (h: FakeHolder) => void) => (h: FakeHolder) => {
+      setUp(h)
+      h.caps = [...h.caps, 'screen']
+      h.size = { cols, rows }
+    }
+    /** The lines about the size wait. */
+    const sizeLines = (r: Rig) => r.logs.filter((l) => l.includes("holder's size"))
+
+    for (const [what, cols, rows] of [['93 columns (the DOM renderer\'s cell)', 93, 27], ['26 rows', 103, 26]] as const) {
+      it(`spawned at ${what}, its holder at 103x27, the start of its output gone: nothing reaches the tab and no size the holder until the tab is at 103x27; then one piece, notice first, counted at 103x27, and the redraw after it`, onFakeClock(async () => {
+        const total = 12_000
+        const { r, sent } = watched({ adopt: true, screen: true, cols, rows, before: at(103, 27, heldFrom(5000, numbered(total))) })
+        await settle(() => r.p.isAttached, 'the attach')
+        await turns()
+        await vi.advanceTimersByTimeAsync(SIZE_WAIT_MAX_MS - 100)
+        // The tab passes through its first size again on its way.
+        r.p.resize(cols, rows)
+        await turns()
+        expect(r.text()).toBe('')
+        expect(sent).toEqual([])
+        expect(r.h.screenReads).toBe(1)
+        r.clock.now += 120
+        r.p.resize(103, 27)
+        await settle(() => sent.length > 0, 'the redraw')
+        const kept = fits(27, 103)
+        expect(r.seen).toEqual([piece(numbered(kept, total - kept + 1))])
+        // The redraw's first half is the first size the holder is sent, after the replay.
+        expect(sent).toEqual([{ cols: 103, rows: 26, shown: r.text() }])
+        await vi.advanceTimersByTimeAsync(300)
+        await settle(() => resizes(r.h).length === 2, 'the holder to get both')
+        expect(resizes(r.h)).toEqual([{ cols: 103, rows: 26 }, { cols: 103, rows: 27 }])
+        expect(sizeLines(r)).toEqual([`[session-helper] ${r.h.sid}: the tab is at its holder's size 103x27, 120 ms after it started`])
+        expect(r.logs).toContain(`[session-helper] ${r.h.sid}: the oldest ${total - kept} lines of its replay are not shown either, so the line saying so stays within the ${TERMINAL_SCROLLBACK_LINES} lines the tab keeps (rows counted at 103x27)`)
+        expect(r.exits).toEqual([])
+        vi.useRealTimers()
+        const shown = await rowsAfter(r.text(), 103, 27)
+        expect(shown[0]).toBe(NOTICE)
+      }))
+    }
+
+    it("a whole replay (nothing lost): held too, and shown as it is, with no notice, once the tab is at the holder's size; then the take-over's one resize, at that size", onFakeClock(async () => {
+      const { r, sent } = watched({ adopt: true, screen: true, cols: 93, rows: 27, before: at(103, 27, running('kept\r\n')) })
+      await settle(() => r.p.isAttached, 'the attach')
+      await turns()
+      expect(r.text()).toBe('')
+      expect(sent).toEqual([])
+      r.p.resize(103, 27)
+      await settle(() => sent.length > 0, 'the resize')
+      expect(r.seen).toEqual(['kept\r\n'])
+      expect(sent).toEqual([{ cols: 103, rows: 27, shown: 'kept\r\n' }])
+      await vi.advanceTimersByTimeAsync(SIZE_WAIT_MAX_MS + HOLD_MAX_MS)
+      expect(sent).toHaveLength(1)
+      expect(r.logs.filter((l) => l.includes('did not'))).toEqual([])
+    }))
+
+    it("a tab at the holder's size from its start: no wait, the replay and the take-over's one resize as before, and the log says so", onFakeClock(async () => {
+      const { r, sent } = watched({ adopt: true, screen: true, cols: 103, rows: 27, before: at(103, 27, running('kept\r\n')) })
+      await settle(() => sent.length > 0 && r.text() === 'kept\r\n', 'the replay and the resize')
+      expect(sizes(sent)).toEqual([{ cols: 103, rows: 27 }])
+      expect(sizeLines(r)).toEqual([`[session-helper] ${r.h.sid}: the tab is at its holder's size 103x27, 0 ms after it started`])
+    }))
+
+    for (const [what, setUp, line] of [
+      ['a holder that offers no screen reads', (h: FakeHolder) => { h.size = { cols: 103, rows: 27 } }, null],
+      ['a screen read the holder answers with an error', (h: FakeHolder) => { at(103, 27, () => {})(h); h.screenAnswer = 'error' }, 'the screen is no longer kept'],
+      ['a screen read whose answer does not read', (h: FakeHolder) => { at(103, 27, () => {})(h); h.screenAnswer = 'bad' }, 'the holder answered screen.read with a reply that does not read'],
+    ] as const) {
+      it(`${what}: shown as before, at once and at the tab's size, with the take-over's one resize`, onFakeClock(async () => {
+        const { r, sent } = watched({ adopt: true, screen: true, cols: 93, rows: 27, before: (h) => { running('kept\r\n')(h); setUp(h) } })
+        await settle(() => sent.length > 0 && r.text() === 'kept\r\n', 'the replay and the resize')
+        expect(sizes(sent)).toEqual([{ cols: 93, rows: 27 }])
+        expect(sizeLines(r)).toEqual(line === null ? [] : [`[session-helper] ${r.h.sid}: its holder's size could not be read (${line}), so its replay is shown at the tab's size`])
+        expect(r.h.screenReads).toBe(line === null ? 0 : 1)
+      }))
+    }
+
+    it(`a tab that never reaches the holder's size: ${SIZE_WAIT_MAX_MS} ms after the size was read, the replay is shown at the tab's size, one log line gives both sizes, and the redraw follows at the tab's size`, onFakeClock(async () => {
+      const { r, sent } = watched({ adopt: true, screen: true, cols: 93, rows: 27, before: at(103, 27, heldFrom(5000, 'the last screen\r\n')) })
+      await settle(() => r.p.isAttached, 'the attach')
+      await turns()
+      await vi.advanceTimersByTimeAsync(SIZE_WAIT_MAX_MS - 1)
+      expect(r.text()).toBe('')
+      expect(sent).toEqual([])
+      await vi.advanceTimersByTimeAsync(1)
+      await settle(() => sent.length > 0, 'the redraw')
+      expect(r.seen).toEqual([piece('the last screen\r\n')])
+      expect(sent).toEqual([{ cols: 93, rows: 26, shown: r.text() }])
+      expect(sizeLines(r)).toEqual([`[session-helper] ${r.h.sid}: the tab did not reach its holder's size 103x27 within ${SIZE_WAIT_MAX_MS} ms (it is 93x27), so its replay is shown at the tab's size`])
+      expect(r.logs.filter((l) => l.includes('did not end within'))).toEqual([])
+    }))
+
+    it("a replay whose end never comes: the tab reaching the holder's size shows nothing early, and what came of it is shown at the replay's own cap, as before", onFakeClock(async () => {
+      const { r } = watched({ adopt: true, screen: true, cols: 93, rows: 27, before: at(103, 27, (h) => { heldFrom(5000, 'first half second half\r\n')(h); h.stallReplay = { at: 11 } }) })
+      await settle(() => r.p.isAttached, 'the attach')
+      await turns()
+      r.p.resize(103, 27)
+      await turns()
+      expect(r.text()).toBe('')
+      await vi.advanceTimersByTimeAsync(HOLD_MAX_MS)
+      expect(r.seen).toEqual([piece('first half ')])
+      expect(r.logs).toContain(`[session-helper] ${r.h.sid}: its replay did not end within ${HOLD_MAX_MS} ms, so what came of it is shown now`)
+    }))
+
+    it("ended while its holder's size is being read: no attach, the holder is ended, the tab gets its exit, and no line about the size", onFakeClock(async () => {
+      const { r, sent } = watched({ adopt: true, screen: true, cols: 93, rows: 27, before: at(103, 27, (h) => { heldFrom(5000, 'the last screen\r\n')(h); h.screenAnswer = 'none' }) })
+      await settle(() => r.h.screenReads === 1, 'the read')
+      r.p.kill()
+      await settle(() => r.h.ended && r.exits.length === 1, 'the end')
+      await vi.advanceTimersByTimeAsync(SIZE_WAIT_MAX_MS + HOLD_MAX_MS)
+      expect(r.h.attaches).toBe(0)
+      expect(r.text()).toBe('')
+      expect(sent).toEqual([])
+      expect(sizeLines(r)).toEqual([])
+    }))
+
+    for (const [what, stop] of [...stops, ['its program exits', async (r: Rig) => { r.h.exitChild(3) }]] as Array<[string, (r: Rig) => Promise<void>]>) {
+      it(`${what} while it waits for the holder's size: what was held is shown once, notice first, no size goes to the holder, and the wait's cap logs nothing later`, onFakeClock(async () => {
+        const { r, sent } = watched({ adopt: true, screen: true, cols: 93, rows: 27, before: at(103, 27, heldFrom(5000, 'the last screen\r\n')) })
+        await settle(() => r.p.isAttached, 'the attach')
+        await turns()
+        expect(r.text()).toBe('')
+        await stop(r)
+        await settle(() => !r.p.isAttached, 'the terminal to let go')
+        await vi.advanceTimersByTimeAsync(SIZE_WAIT_MAX_MS + HOLD_MAX_MS)
+        expect(r.seen[0]).toBe(piece('the last screen\r\n'))
+        expect(r.text().split(NOTICE)).toHaveLength(2)
+        expect(sent).toEqual([])
+        expect(r.logs.filter((l) => l.includes('did not'))).toEqual([])
+      }))
+    }
+  })
 })

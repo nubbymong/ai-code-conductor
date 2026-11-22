@@ -1230,8 +1230,10 @@ types, resizes or ends; neither moves an offset, replays anything or changes
 which connection is attached; and the holder decides nothing from what a
 screen shows (ADR-030 row 4). A relay (a connection that opened a tool
 stream) asks for neither: `unknown-type` and a close, as for the terminal
-messages. Nothing in the app asks yet: no connection the app makes acks
-`screen`.
+messages. From 2.1.3-beta.13 a plain terminal's connections ack `screen`,
+and a take-over asks `screen.read` once, before its attach, for the
+holder's size: its replay waits for the tab to be at that size
+(src/main/session-helper/helper-pty.ts). Nothing else in the app asks yet.
 
 - **`screen.read`** `{id}` is answered `screen.rows`: `cols` and `rows`, the
   screen's size; `cursor` `{row, col}`, the cursor's cell from 0 (its column

@@ -57,6 +57,13 @@
  * drops while away (here every message `relay` is given while a stream is
  * kept is held and sent after `mcp.back`), and the 8 streams a session may
  * have (B1's Rust tests own those).
+ *
+ * Screen reads (2.1.3-beta.13, plan section A1): a holder whose `caps` name
+ * `screen` answers `screen.read` from a connection that acked it with its
+ * size (its last resize, else its launch's) and blank rows; `screenAnswer`
+ * makes it answer an error, a reply that does not read, or nothing. Each read is
+ * counted in `screenReads`. Not modelled: what the rows hold, and
+ * `screen.tail`.
  */
 import { randomBytes } from 'crypto'
 import * as fs from 'fs'
@@ -195,6 +202,10 @@ export class FakeHolder {
   readonly keptStreams = new Map<number, unknown[]>()
   /** What each relay was told, in order. */
   readonly relayTold: Array<{ stream: number; t: 'mcp.away' | 'mcp.back' | 'mcp.close' }> = []
+  /** How it answers screen.read: its rows, an error, a reply that does not read, or not at all. */
+  screenAnswer: 'rows' | 'error' | 'bad' | 'none' = 'rows'
+  /** The screen reads it was asked for, once launched, by a connection that acked `screen`, one it leaves unanswered (`screenAnswer` 'none') included. */
+  screenReads = 0
 
   constructor(readonly sid: string, readonly label: string, readonly store: string) {
     this.endpoint = `\\\\.\\pipe\\aicc-helper-${sid}-${hex(16)}`
@@ -439,6 +450,20 @@ export class FakeHolder {
         else end()
         return
       }
+      case 'screen.read': {
+        if (!conn.ackedCaps.includes('screen')) return err('unknown-type', 'screen.read')
+        if (!this.launch) return err('not-found', 'nothing launched')
+        this.screenReads++
+        if (this.screenAnswer === 'none') return
+        if (this.screenAnswer === 'error') return err('io', 'the screen is no longer kept')
+        const { cols, rows } = this.screenSize()
+        const row = { text: '', typed: '', inverse: '', width: cols, end: 0 }
+        const modes = { screen: 'normal', bracketed_paste: false, application_cursor: false, application_keypad: false, mouse: 'none', mouse_encoding: 'default', cursor_hidden: false }
+        // 'bad': one row short of the screen with `cut` false, which no reader takes.
+        const lines = Array.from({ length: this.screenAnswer === 'bad' ? rows - 1 : rows }, () => ({ ...row }))
+        conn.sendJson({ t: 'screen.rows', re, cols, rows, cursor: { row: 0, col: 0 }, modes, cut: false, lines })
+        return
+      }
       case 'mcp':
         if (!conn.ackedCaps.includes('mcp')) return err('unknown-type', 'mcp')
         if (this.toolStreams.get(Number(m.stream)) !== conn) return conn.sendJson({ t: 'error', code: 'not-found', text: 'no such tool stream' })
@@ -469,6 +494,14 @@ export class FakeHolder {
     const to = this.attached
     if (to && (this.forceEvents || to.ackedCaps.includes('hooks'))) to.sendJson(e)
     else this.waitingEvents.push(e)
+  }
+
+  /** Its terminal's size: its last resize, else its launch's, else 80x24. */
+  screenSize(): { cols: number; rows: number } {
+    if (this.size) return this.size
+    const l = this.launch
+    if (l && typeof l.cols === 'number' && typeof l.rows === 'number') return { cols: l.cols, rows: l.rows }
+    return { cols: 80, rows: 24 }
   }
 
   /** The program writes. */
