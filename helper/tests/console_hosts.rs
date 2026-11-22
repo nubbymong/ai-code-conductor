@@ -403,10 +403,18 @@ fn terminal(argv: &[String]) -> Terminal {
     Terminal { pty, from, to }
 }
 
-/// A program that ends at once: cmd.exe from the system folder, told to exit.
-fn ends_at_once() -> Vec<String> {
+/// A program that ends by itself about a second after it starts: cmd.exe
+/// from the system folder, pinging this computer twice, a second apart.
+/// Not at once: on the CI runner, with `cmd /c exit` (a program that ends a
+/// few milliseconds after its start), at least one host of two had ended by
+/// itself half a second later (Helper job, run 45032572689), where the hosts
+/// of programs that ran a while stay (probe P19, and the published beta.13's
+/// five on the test VM).
+fn ends_soon() -> Vec<String> {
     let root = std::env::var("SystemRoot").unwrap_or_else(|_| r"C:\Windows".to_string());
-    vec![format!(r"{root}\System32\cmd.exe"), "/c".to_string(), "exit".to_string()]
+    let mut argv = vec![format!(r"{root}\System32\cmd.exe")];
+    argv.extend(["/c", "ping", "-n", "2", "127.0.0.1"].iter().map(|a| a.to_string()));
+    argv
 }
 
 /// A program that keeps running while its terminal is open.
@@ -458,7 +466,7 @@ fn a_terminal_whose_program_ended_has_its_console_host_ended_once_and_no_other()
     // A terminal whose program still runs, started first: its host is never ended.
     let live = terminal(&keeps_running());
     let live_host = host_made_in(live.from, live.to);
-    let mut ended = terminal(&ends_at_once());
+    let mut ended = terminal(&ends_soon());
     let host = host_made_in(ended.from, ended.to);
     wait_ended(&mut ended);
     // As node-pty leaves it: the program has ended, the pseudoconsole is open.
@@ -483,8 +491,8 @@ fn a_terminal_whose_program_ended_has_its_console_host_ended_once_and_no_other()
 fn two_terminals_started_in_one_time_have_neither_host_ended_by_it() {
     let _serial = one_at_a_time();
     let from = filetime_now();
-    let mut a = terminal(&ends_at_once());
-    let mut b = terminal(&ends_at_once());
+    let mut a = terminal(&ends_soon());
+    let mut b = terminal(&ends_soon());
     let to = filetime_now() + 1;
     let host_a = host_made_in(a.from, a.to);
     let host_b = host_made_in(b.from, b.to);
