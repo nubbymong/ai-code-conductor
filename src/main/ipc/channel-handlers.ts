@@ -49,9 +49,10 @@ export function registerChannelHandlers(): void {
   ipcMain.handle(IPC.CHANNELS_KILL_SWITCH, (_e, p) => { setKillSwitch(!!p.disabled); return getFeatureState() })
   ipcMain.handle(IPC.CHANNELS_RENDERER_READY, () => {
     // Genuine-only (v1.5.17): the renderer mounts its pending-permissions +
-    // attention listeners here, but CCC no longer gates permissions, so we do
-    // NOT activate the hold-open path. Kept as a handshake the renderer still
-    // calls; returning ok keeps the contract stable.
+    // attention listeners here, but CCC no longer gates permissions, and the
+    // gateway's hold-open path was deleted in 2.1.3-beta.14
+    // (aicc_planning#358). Kept as a handshake the renderer still calls;
+    // returning ok keeps the contract stable.
     return { ok: true }
   })
 }

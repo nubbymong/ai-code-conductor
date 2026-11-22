@@ -49,10 +49,10 @@ export function registerHooksHandlers(gateway: HooksGatewayLike): void {
       await gateway.stop()
       // The gateway cleared its own per-session rings at its stop (the
       // in-process HooksGateway always does, and so does the proxy running
-      // one after its fail-open): the helper's go with them, so the history
-      // read does not return a held session's helper events without the
-      // PreToolUse entries that went. The proxy with its child out of
-      // process keeps its rings at a stop, so the helper's stay with them.
+      // one after its fail-open): the helper's go with them, so a held
+      // session's feed history does not outlive the stop that cleared every
+      // other session's. The proxy with its child out of process keeps its
+      // rings at a stop, so the helper's stay with them.
       // Read after the stop: it is the state the history read will see.
       if (gatewayClearsRingsAtStop(gateway)) dropHelperRings()
       status = gateway.status()

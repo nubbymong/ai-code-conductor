@@ -12,7 +12,6 @@ export interface HooksGatewayLike {
   status(): HooksGatewayStatus
   start(): Promise<HooksGatewayStatus>
   stop(): Promise<void>
-  setPermissionGateActive(active: boolean): void
   subscribe(cb: (e: HookEvent) => void): () => void
 }
 

@@ -65,12 +65,6 @@ export const CODEX_HOOK_FILE_NAME = 'hook.json'
  *  a project folder). The forwarder
  *  checks the same layout (scripts/ccc-codex-hook.js ROOT_NAME). */
 export const CODEX_HOOK_ROOT_NAME = 'codex-hooks'
-/** The header the forwarder sends so the gateway never holds a Codex
- *  request open (a Claude PermissionRequest is held for a decision; Codex's
- *  hook is async and its answer is never read). Lowers what a request may
- *  do; it grants nothing. */
-export const CODEX_HOOK_CLIENT_HEADER = 'x-ccc-hook-client'
-export const CODEX_HOOK_CLIENT = 'codex'
 
 /** A session id as the gateway routes it (its URL pattern). */
 const SESSION_ID_RE = /^[A-Za-z0-9_-]{1,128}$/

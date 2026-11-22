@@ -2182,7 +2182,7 @@ describe('Claude Code sessions: hooks through the holder (2.1.3-beta.8, plan sec
   /** The helper form the session's file should hold. */
   function helperForm(id: string): Record<string, unknown[]> {
     const target: HelperHookTarget = { helperPath: helperCopy(), store: join(root, 'store'), sid: heldAgentSessionId(id, 'claude'), launcher: 'git-bash' }
-    return buildHelperHooksBlock(id, PORT, SECRET, onThisHost(target))!
+    return buildHelperHooksBlock(onThisHost(target))!
   }
 
   beforeEach(() => {
@@ -2318,15 +2318,15 @@ describe('Claude Code sessions: hooks through the holder (2.1.3-beta.8, plan sec
     expect(atFirstByte).not.toBeNull()
     const seen = JSON.parse(atFirstByte!)
     expect(seen.hooks).toEqual(helperForm(id))
-    expect(seen.hooks.PreToolUse).toEqual(buildHooksBlock(id, PORT, SECRET).PreToolUse)
+    expect(seen.hooks.PreToolUse).toEqual(helperForm(id).PreToolUse)
     expect(seen.statusLine).toEqual({ type: 'command', command: 'statusline.js' })
     // The manager named the per-user copy, its store and the holder's session, for Git Bash.
     expect(targets).toEqual([[id, { helperPath: helperCopy(), store: join(root, 'store'), sid, launcher: 'git-bash' }]])
     expect(helper.holders.get(sid)!.attached!.ackedCaps).toEqual(['core', 'local', 'hooks'])
-    expect(logs.filter((l) => l.includes(id) && l.includes('hook'))).toEqual([`[session-helper] ${id}: its hook events go through its holder; PreToolUse stays on the hooks gateway`])
+    expect(logs.filter((l) => l.includes(id) && l.includes('hook'))).toEqual([`[session-helper] ${id}: its hook events go through its holder, PreToolUse included`])
   })
 
-  it("an event frame reaches the signals module under the app's session id, once each, never a PreToolUse; the end is told", async () => {
+  it("an event frame reaches the signals module under the app's session id, once each, PreToolUse too (2.1.3-beta.14); the end is told", async () => {
     const m = await startedWith(hooksManager(), ON_AGENTS)
     setSessionHelper(m)
     const id = 'abcdef0123456789abcdef71'
@@ -2339,13 +2339,13 @@ describe('Claude Code sessions: hooks through the holder (2.1.3-beta.8, plan sec
     await until(() => events.length === 1, 'the event')
     expect(events[0]).toEqual([id, { seq: 1, kind: 'Stop', payload: stop.payload }])
     h.sendEvent(stop) // the same seq again (section 15: dropped)
-    h.hookEvent('PreToolUse', { hook_event_name: 'PreToolUse', tool_name: 'Bash' }) // never the helper's
+    h.hookEvent('PreToolUse', { hook_event_name: 'PreToolUse', tool_name: 'Bash' })
     h.sendEvent({ t: 'event', seq: 3, kind: 'Notification', payload: { hook_event_name: 'Notification', message: 'Claude needs your permission to use Bash' }, lost: 2 })
     h.sendEvent({ t: 'event', seq: 4, kind: 'Stop', payload: { hook_event_name: 'Notification' } }) // does not read: dropped
     h.seq = 4
     h.hookEvent('SubagentStop', { hook_event_name: 'SubagentStop' })
-    await until(() => events.length === 3, 'the next two events')
-    expect(events.map(([who, e]) => [who, e.seq, e.kind, e.lost])).toEqual([[id, 1, 'Stop', undefined], [id, 3, 'Notification', 2], [id, 5, 'SubagentStop', undefined]])
+    await until(() => events.length === 4, 'the next three events')
+    expect(events.map(([who, e]) => [who, e.seq, e.kind, e.lost])).toEqual([[id, 1, 'Stop', undefined], [id, 2, 'PreToolUse', undefined], [id, 3, 'Notification', 2], [id, 5, 'SubagentStop', undefined]])
     expect(ended).toEqual([])
     p.kill()
     await until(() => ended.length === 1, 'the end')

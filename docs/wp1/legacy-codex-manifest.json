@@ -1,8 +1,8 @@
 {
   "schema": "wp1-legacy-codex-manifest/3",
-  "generatedAt": "2026-11-22T08:19:11.904Z",
-  "head": "18dd949fa8f51a6b6c38cfc62bd5cd3de65fb5dd",
-  "tree": "b3852a79d96aae001c9871f0612a1fdbd3668455",
+  "generatedAt": "2026-11-22T13:18:46.470Z",
+  "head": "f52add8b6504e571a41ab9494d084fceacefcc14",
+  "tree": "4eeff072f6bb1b2a05532e3e354a3309d5f9bd31",
   "scannedWorkingTree": false,
   "predicateDigest": "100a1233edebdc39a5f9004d3fba980a89ebb15b25872e52076386bc84b03153",
   "predicates": [
@@ -116,9 +116,9 @@
     "\\.(png|jpg|jpeg|gif|ico|icns|webp|svg|woff2?|ttf|otf|mp4|zip|asar|node|exe|dll|dylib|so|pdf)$",
     "^package-lock\\.json$"
   ],
-  "trackedFileCount": 3677,
-  "excludedFileCount": 566,
-  "scannedFileCount": 3111,
+  "trackedFileCount": 3684,
+  "excludedFileCount": 570,
+  "scannedFileCount": 3114,
   "unscopedFileCount": 15,
   "unscoped": [
     ".claude/settings.json",
@@ -140,7 +140,7 @@
   "unscopedMentions": [],
   "unreadable": [],
   "matchedPathCount": 1046,
-  "pathDigest": "30b70548ec49c503aa363457d84f4f6e137d3fd25f725310a1cd1d138b429d78",
+  "pathDigest": "a65d5093278cd24ee463a0e7d642a188b8896acb44f1fa2f614424b87f3e855f",
   "entries": [
     {
       "path": ".github/workflows/ci.yml",
@@ -1055,7 +1055,7 @@
         "P01",
         "P14"
       ],
-      "lineCount": 15
+      "lineCount": 14
     },
     {
       "path": "scripts/ci/upstream-cli-watch.mjs",
@@ -1477,14 +1477,6 @@
         "P14"
       ],
       "lineCount": 39
-    },
-    {
-      "path": "src/main/hooks/hooks-gateway.ts",
-      "predicates": [
-        "P05",
-        "P14"
-      ],
-      "lineCount": 5
     },
     {
       "path": "src/main/hooks/per-session-settings.ts",
@@ -1914,7 +1906,7 @@
         "P01",
         "P14"
       ],
-      "lineCount": 97
+      "lineCount": 93
     },
     {
       "path": "src/main/providers/codex/index.ts",
@@ -4711,7 +4703,14 @@
         "P01",
         "P13"
       ],
-      "lineCount": 18
+      "lineCount": 19
+    },
+    {
+      "path": "tests/unit/hooks/permission-hold-gone.test.ts",
+      "predicates": [
+        "P13"
+      ],
+      "lineCount": 5
     },
     {
       "path": "tests/unit/internal-emit-sites.test.ts",
@@ -5875,7 +5874,7 @@
       "predicates": [
         "P13"
       ],
-      "lineCount": 101
+      "lineCount": 104
     },
     {
       "path": "tests/unit/main/session-helper-pty-site.test.ts",
@@ -8069,7 +8068,7 @@
         "P01",
         "P13"
       ],
-      "lineCount": 37
+      "lineCount": 35
     },
     {
       "path": "tests/unit/scripts/codex-resume-picker-flags.test.ts",
@@ -8253,7 +8252,7 @@
         "P04",
         "P13"
       ],
-      "lineCount": 425,
+      "lineCount": 426,
       "truncated": true
     },
     {

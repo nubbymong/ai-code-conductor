@@ -125,7 +125,6 @@ function requestOptions(cfg, body) {
       'content-type': 'application/json',
       'content-length': body.length,
       'x-ccc-hook-token': cfg.token,
-      'x-ccc-hook-client': 'codex',
       connection: 'close',
     },
     timeout: POST_TIMEOUT_MS,

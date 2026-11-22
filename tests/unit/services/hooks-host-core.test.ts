@@ -13,11 +13,9 @@ function stubGateway(start: HooksGatewayHostFace['start']): HooksGatewayHostFace
     unregisterSession: () => {},
     start,
     stop: async () => {},
-    setPermissionGateActive: () => {},
     metrics: () => ({ inFlight: 0, eventsTotal: 0, dropsTotal: 0 }),
     hasSecret: () => false,
     _handleRequestForTest: async () => ({ status: 200, body: '' }),
-    permissionRegister: () => {},
   }
 }
 
@@ -48,22 +46,6 @@ describe('createHooksHost', () => {
     expect(t.parentMessages).toContainEqual({
       type: 'transcript-path', sid: 's1', path: 'C:/Users/me/.claude/projects/F--proj/conv.jsonl',
     })
-  })
-
-  it('routes a held-open permission registration to the parent (B2)', () => {
-    const t = new FakeChildTransport()
-    const host = createHooksHost(t.asHostTransport(), { healthBeat: false })
-    host._registerResponderForTest('req-1', () => {})
-    expect(t.parentMessages).toContainEqual({ type: 'permission-open', requestId: 'req-1', sid: '' })
-  })
-
-  it('a permission-respond control message invokes the local responder (B2 round-trip)', () => {
-    const t = new FakeChildTransport()
-    const host = createHooksHost(t.asHostTransport(), { healthBeat: false })
-    let got: string | undefined
-    host._registerResponderForTest('req-1', (d) => { got = d })
-    t.post({ type: 'permission-respond', requestId: 'req-1', decision: 'approved' })
-    expect(got).toBe('approved')
   })
 
   it('a start control message binds the requested port and announces bound to the parent', async () => {
