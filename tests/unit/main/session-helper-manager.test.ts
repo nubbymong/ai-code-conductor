@@ -506,6 +506,39 @@ describe('a crash: held terminals come back', () => {
     expect(h.attached!.frames.map((f) => f.t).filter((t) => t === 'screen.read' || t === 'term.attach')).toEqual(['screen.read', 'term.attach'])
   })
 
+  it("the redraw after a replay from the middle: one resize at the tab's size on the console built into Windows (a plain terminal, launched or taken over, and a Claude Code session), one row shorter and back on node-pty's bundled ConPTY and off Windows (2.1.3-beta.13, plan section A4)", async () => {
+    const first = await startedWith(makeManager(), ON_BOTH)
+    setSessionHelper(first)
+    const id = 'abcdef0123456789abcdef1c'
+    const plain = spawnPlainPty({ plain: true, sessionId: id }, SHELL, [], opts())
+    expect(plain).toBeInstanceOf(HelperPty)
+    expect((plain as HelperPty).redrawWay).toBe('same-size')
+    const claude = spawnAgentPty(claudeTab('abcdef0123456789abcdef1d'), SHELL, [], agentOpts())
+    expect(claude).toBeInstanceOf(HelperPty)
+    expect((claude as HelperPty).redrawWay).toBe('same-size')
+    const codex = spawnAgentPty(codexTab('abcdef0123456789abcdef1e'), CMD, NPM_LINE, agentOpts({ useConptyDll: true }))
+    expect(codex).toBeInstanceOf(HelperPty)
+    expect((codex as HelperPty).redrawWay).toBe('nudge')
+    const sid = heldSessionId(id)
+    await until(() => !!helper.holders.get(sid)?.attached, 'the terminal to attach')
+    crash(first)
+
+    const second = makeManager()
+    setSessionHelper(second)
+    void second.start({ atStartup: true })
+    await until(() => helper.holders.get(sid)!.attaches === 2, 'the keeper')
+    const p = spawnPlainPty({ plain: true, sessionId: id }, SHELL, [], opts())
+    expect(await (p as HelperPty).adoption).toBe(true)
+    expect((p as HelperPty).redrawWay).toBe('same-size')
+
+    for (const platform of ['linux', 'darwin'] as const) {
+      const m = await started(makeManager({ platform, checkEndpointFolder: () => null }))
+      const q = m.spawn({ plain: true, sessionId: 'abcdef0123456789abcdef1f' }, '/bin/bash', ['-l'], { name: 'xterm-256color', cols: 80, rows: 24, cwd: '/home/u', env: { PATH: '/bin' } })
+      expect(q, platform).toBeInstanceOf(HelperPty)
+      expect((q as HelperPty).redrawWay, platform).toBe('nudge')
+    }
+  })
+
   it('the held terminals are kept from their records at once, even when the listing fails', async () => {
     const first = await started(makeManager())
     setSessionHelper(first)

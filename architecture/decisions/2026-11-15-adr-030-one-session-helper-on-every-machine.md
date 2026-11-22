@@ -558,6 +558,10 @@ Windows runner are, and on macOS the server's socket path under the runner's tem
 folder is too long; the earlier dispatch on 0c49af32, run 44532520348, ran Codex with its
 server on ubuntu-latest and read REPAINTS there too, 3 of 3 at every state), and any size
 but 120 by 40. The probe is `helper/probes/p19-record.cjs`.
+A shell at its prompt, which P19 gave no verdict, is what the nudge moves (2.1.3-beta.13, plan
+section A4, aicc_planning#382): the console built into Windows, one row shorter, drops its top
+row, so the tab loses a row and the shell writes a row low; on that console the redraw is now one
+resize at the tab's own size, which P19 found enough there.
 
 P19, second run (2026-11-19 to 20, plan 2.1.3-beta.12 A2; the question is P19's own, so it has
 no number of its own). Claude Code 2.1.328, Codex 0.157.1 and Codex 0.170.0, with no account
