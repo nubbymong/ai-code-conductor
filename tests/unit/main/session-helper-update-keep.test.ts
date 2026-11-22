@@ -185,6 +185,7 @@ describe('an app update keeps a held agent session running (S16 step 4)', () => 
     const m = await startedWith(makeManager())
     const { claude, other, hc, ho } = await twoHeld(m)
     expect(m.releaseForUpdate(SAVED)).toBe(2)
+    expect(logs).toContain('[session-helper] an app update: 0 held terminal(s) are let go of, for the new version to show again, and 2 agent session(s) are let go of with their CLIs running, for the next start to end; 0 kept terminal(s) are left running')
     // Recorded before the kill: provider, conversation, account and hook folder.
     expect(keptOnDisk()).toEqual([`${claudeSid}.json`, `${otherSid}.json`].sort())
     expect(readKept(claudeSid)).toEqual({ v: 1, session: claudeSid, label: CLAUDE_TAB, provider: 'claude', conversation: CONV, account: 'profile-mt4okz66-147e4a', hookFolder: null, at: expect.any(Number) })

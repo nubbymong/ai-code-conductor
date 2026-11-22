@@ -104,7 +104,8 @@ function ensureManager(): SessionHelperManager {
  * a crash left held is kept for its tab, and an agent session is ended (its
  * tab resumes the conversation). Both off: nothing is made, unless the last
  * run with the helper on did not quit normally, or left an agent session
- * held (a quit that could not wait for its end). Then the helper comes up
+ * held (a quit that could not wait for its end) or a record of one an
+ * update kept running (S16 step 4). Then the helper comes up
  * all the same, carrying nothing new, to end those agent sessions before
  * their tabs start their CLIs again (and keep a crash's plain terminals for
  * their tabs).

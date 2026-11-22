@@ -379,7 +379,8 @@ export function registerUpdateHandlers(): void {
     } catch (err) {
       logError('[update] Failed:', err)
       // The app stays: what was let go of is kept for its tab, and listed on
-      // the Machines page with Re-attach.
+      // the Machines page with Re-attach; an agent session let go of is ended
+      // at once, and what it left goes (2.1.3-beta.14, S16 step 4).
       if (releasing) {
         try { reclaimReleasedTerminals() } catch (e) { logError('[update] The held terminals could not be kept:', e) }
       }

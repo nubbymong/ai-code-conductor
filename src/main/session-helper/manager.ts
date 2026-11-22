@@ -1671,6 +1671,7 @@ export class SessionHelperManager implements MachinesSource {
     this.updating = true
     const saved = (tab: string) => restorable !== null && this.savedTabs.has(tab) && restorable.has(tab)
     let n = 0
+    let agents = 0
     for (const [sid, w] of this.live) {
       if (!w.throughHelper || w.isReleased) continue
       const kind = heldIdKind(sid)
@@ -1688,7 +1689,10 @@ export class SessionHelperManager implements MachinesSource {
         continue
       }
       this.released.set(sid, kept ? { record, pty: w, kept } : { record, pty: w })
-      if (kept) this.deps.log(`[session-helper] ${sid}: an app update lets go of this ${kept.provider} session of tab ${kept.label} with its CLI running, and records it for the next start (${keptBindsText(kept)})`)
+      if (kept) {
+        agents++
+        this.deps.log(`[session-helper] ${sid}: an app update lets go of this ${kept.provider} session of tab ${kept.label} with its CLI running, and records it for the next start (${keptBindsText(kept)})`)
+      }
       n++
     }
     // Kept and no tab took it over (a crash's, Re-attach's or reclaim()'s):
@@ -1715,7 +1719,7 @@ export class SessionHelperManager implements MachinesSource {
     const tail = restorable === null
       ? `the sessions were discarded, so ${ends.length} kept terminal(s) are ended`
       : `${leftRunning} kept terminal(s) are left running`
-    this.deps.log(`[session-helper] an app update: ${n} held terminal(s) are let go of, for the new version to show again; ${tail}`)
+    this.deps.log(`[session-helper] an app update: ${n - agents} held terminal(s) are let go of, for the new version to show again${agents > 0 ? `, and ${agents} agent session(s) are let go of with their CLIs running, for the next start to end` : ''}; ${tail}`)
     this.changed()
     return n
   }

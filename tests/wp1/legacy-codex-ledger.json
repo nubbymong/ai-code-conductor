@@ -1,8 +1,8 @@
 {
   "schema": "wp1-legacy-codex-ledger/2",
   "predicateDigest": "100a1233edebdc39a5f9004d3fba980a89ebb15b25872e52076386bc84b03153",
-  "manifestPathDigest": "30b70548ec49c503aa363457d84f4f6e137d3fd25f725310a1cd1d138b429d78",
-  "manifestHead": "18dd949fa8f51a6b6c38cfc62bd5cd3de65fb5dd",
+  "manifestPathDigest": "8ddeb27e25e089176c64eae158cafb82ec7a0c410791e88836afee6e88ec208f",
+  "manifestHead": "09b2150463275103c5b803d8e6fc14cd9cb72019",
   "dispositions": {
     "retain": "unchanged observable behaviour, characterization proof",
     "move": "moved behind a package boundary and/or adapted at the call site, regression proof (newPath when relocated)",
@@ -7858,6 +7858,16 @@
       "note": "created by WP2 (main refuses every launch of a provider that is off)"
     },
     {
+      "path": "tests/unit/main/launch-bindings-kept.test.ts",
+      "predicates": [
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "new 2.1.3-beta.14 section A1 test (tests/unit/main/launch-bindings-kept.test.ts, S16 step 4, aicc_planning#387 with #359): a session an app update keeps running keeps its three per-session files and its hook folder through its kill while its gateway token, telemetry and registrations go; describeLaunch gives a Codex session its claim, its lease's account and its hook folder, a Claude Code session its conversation and profile; removeKeptLaunchFiles removes what it left, the hook folder by its provider (WP1.68)",
+      "note": "created by 2.1.3-beta.14 section A1; the P13 hits are the mocked Codex collaborators, the launch maps and a made-up hook folder path; nothing started"
+    },
+    {
       "path": "tests/unit/main/launch-bindings-launch.test.ts",
       "predicates": [
         "P04",
@@ -8438,6 +8448,16 @@
       "disposition": "added",
       "evidence": "2.1.3-beta.7 case in a 2.1.3-beta.6 test (tests/unit/main/session-helper-pty-site.test.ts): the two local agent spawns in pty-manager.ts, the Codex one included, go through spawnAgentPty with the arguments they had, and the SSH start stays node-pty's own (WP1.68)",
       "note": "created by 2.1.3-beta.6 (plan section B); reads source files only"
+    },
+    {
+      "path": "tests/unit/main/session-helper-update-keep.test.ts",
+      "predicates": [
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "new 2.1.3-beta.14 section A1 test (tests/unit/main/session-helper-update-keep.test.ts, S16 step 4, aicc_planning#387 with #359): an app update on Windows lets go of a held Claude Code or Codex session of a saved tab whose tools go through its holder, records it (provider, conversation, account, Codex hook folder), and the next start logs it, removes the record and its files and ends it before its tab starts a new CLI; an update that does not start ends it at once (WP1.68)",
+      "note": "created by 2.1.3-beta.14 section A1; the P13 hits are the second provider's tab (kind codex) and its hook folder; a fake helper in memory and a mocked node-pty, no process starts"
     },
     {
       "path": "tests/unit/main/session-input-ownership.test.ts",
@@ -9081,6 +9101,17 @@
       "disposition": "added",
       "evidence": "new WP2 PR 3 P3.10 round 3b test (tests/unit/providers/codex/hook-wrapper-start-folder.test.ts): the Codex hook wrapper resolves node from the PATH the same way from any start folder, and runs the forwarder beside it; HOST QUARANTINE, CI and VM only (WP1.68); WP2 PR 3 P3.10 round 5 (any folder name; names ending in a dot or a space; a failed preparation waits; the launch wait) (WP1.68): its header says what it asserts; tests/unit/providers/codex/hook-wrapper-start-folder.test.ts",
       "note": "created by WP2 PR 3 P3.10 round 3b"
+    },
+    {
+      "path": "tests/unit/providers/codex/hooks-kept.test.ts",
+      "predicates": [
+        "P01",
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "new 2.1.3-beta.14 section A1 test (tests/unit/providers/codex/hooks-kept.test.ts, S16 step 4, aicc_planning#359): the sweep of left-behind Codex hook folders passes by a folder the session helper's records name, whatever its age, and removeKeptCodexHookFolder removes only a per-launch folder directly inside this install's hook root, emptied of the hook file, leaving any other path as it is (WP1.68)",
+      "note": "created by 2.1.3-beta.14 section A1; real temp folders only, no link planted (host-safe; the link cases stay in hooks-links.test.ts)"
     },
     {
       "path": "tests/unit/providers/codex/hooks-links.test.ts",
