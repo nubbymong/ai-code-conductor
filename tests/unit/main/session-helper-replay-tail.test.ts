@@ -16,9 +16,11 @@
  * regions and origin mode (fixed seeds) never count fewer rows than the tab
  * adds, the whole stream and what follows a cut alike.
  *
- * Not checked here: a program's own tab stops, and a repeat after a sequence
- * the tab ignores (the exceptions replay-tail.ts names); combining characters,
- * emoji and an autowrap turned off (counted wider, so more rows); the erase
+ * Not checked here: a program's own tab stops, a backspace at a row's end
+ * with reverse wraparound set, and a repeat after a sequence the tab ignores
+ * (the exceptions replay-tail.ts names); combining characters, emoji and an
+ * autowrap turned off (counted wider: more rows, but for the exception
+ * replay-tail.ts names for the rows given); the erase
  * of the screen above the cursor (CSI 1 J, left out of the random streams; no
  * erase moves the cursor or adds a row in the tab); a terminal resized while
  * it reads; where the cut lands in random streams (only that what follows it

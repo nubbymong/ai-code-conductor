@@ -44,12 +44,13 @@
  * so the holder never redraws for a size the tab only passes through. A
  * whole replay is shown as it is, with no notice. A holder without the
  * screen reads, a read that fails and a program that is over are shown as
- * before. A replay after a gap shown with the tab at its holder's size, and
- * nothing shown before it, has its rows counted with the cursor's row
- * followed (2.1.3-beta.13, plan section A2): a console's wrapped line counts
- * the 3 rows the tab gives it, not 5, so the tab is shown about as much of it
- * as it keeps, and what is shown starts on the tab's last row, where the
- * count has the console's cursor.
+ * before, with no wait for the size. A replay after a gap shown with the tab
+ * at its holder's size (that of a program that is over too, when the tab
+ * started at that size), and nothing shown before it, has its rows counted
+ * with the cursor's row followed (2.1.3-beta.13, plan section A2): a
+ * console's wrapped line counts the 3 rows the tab gives it, not 5, so the
+ * tab is shown about as much of it as it keeps, and what is shown starts on
+ * the tab's last row, where the count has the console's cursor.
  */
 import type { IDisposable, IEvent, IPty } from 'node-pty'
 import { StringDecoder } from 'string_decoder'
@@ -544,8 +545,10 @@ export class HelperPty implements IPty {
         const gap = m.truncated === true || start > from
         if (start !== from || gap) this.flushDecoder()
         this.offset = start
-        // A program that is over: its replay is shown as before, and its tab
-        // reads it as ended next.
+        // A program that is over: its replay is shown with no wait for the
+        // size (counted with the cursor's row followed only when the tab
+        // started at its holder's size, showHeld), and its tab reads it as
+        // ended next.
         if (m.running === false) this.stopSizeWait()
         if (gap) {
           this.fromTheMiddle(conn, Math.max(0, start - from), m)

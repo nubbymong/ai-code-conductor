@@ -1575,7 +1575,9 @@ describe('shown again from the middle of its output (2.1.3-beta.12, plan section
      * count the 3 rows the tab gives them, not 5; what is shown starts on the
      * tab's last row, and the rows less one come off the budget. A tab that
      * did not reach that size, one whose size changed since, and a replay
-     * after output already shown keep today's count.
+     * after output already shown keep today's count. A program that is over
+     * gets it too when its tab started at that size: the wait ended before
+     * the attach.
      */
     describe("counted with the cursor's row followed, the tab at its holder's size (2.1.3-beta.13, plan section A2)", () => {
       /** One line as a Windows console writes it at 103 by 27, 2.5 rows long (the recorded shape, tests/fixtures/replay/). */
@@ -1657,6 +1659,20 @@ describe('shown again from the middle of its output (2.1.3-beta.12, plan section
         const kept = fits(27, 103)
         expect(r.seen).toEqual(['kept\r\n', `${CANCEL}${ATTRIBUTE_RESET}\r\n${NOTICE}\r\n${numbered(kept, 12_000 - kept + 1)}`])
         expect(notShown(r)).toEqual([`[session-helper] ${r.h.sid}: the oldest ${12_000 - kept - 1} lines of its replay are not shown either, so the line saying so stays within the ${TERMINAL_SCROLLBACK_LINES} lines the tab keeps (rows counted at 103x27)`])
+      }))
+
+      it("a program that is over, its tab at its holder's size from its start: the wait ended before the attach, so its replay is counted with the cursor's row followed too and started on the last row; then its exit, and no redraw", onFakeClock(async () => {
+        const total = 12_000
+        const { r, sent } = watched({ adopt: true, screen: true, cols: 103, rows: 27, before: at(103, 27, (h) => { heldFrom(5000, numbered(total))(h); h.child = 'exited'; h.code = 7 }) })
+        await settle(() => r.exits.length === 1, 'the exit')
+        await vi.advanceTimersByTimeAsync(SIZE_WAIT_MAX_MS + HOLD_MAX_MS)
+        // The rows less one come off for the empty rows between the notice and the last row.
+        const kept = fits(27, 103) - 26
+        expect(r.seen).toEqual([piece(`\x1b[27;1H${numbered(kept, total - kept + 1)}`)])
+        expect(notShown(r)).toEqual([`[session-helper] ${r.h.sid}: the oldest ${total - kept} lines of its replay are not shown either, so the line saying so stays within the ${TERMINAL_SCROLLBACK_LINES} lines the tab keeps (rows counted at 103x27, the cursor's row followed)`])
+        expect(sizeLines(r)).toEqual([`[session-helper] ${r.h.sid}: the tab is at its holder's size 103x27, 0 ms after it started`])
+        expect(r.exits).toEqual([7])
+        expect(sent).toEqual([])
       }))
     })
   })
