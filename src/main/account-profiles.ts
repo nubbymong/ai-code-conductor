@@ -2035,7 +2035,22 @@ function rewriteProfiles(edit: (entries: unknown[]) => unknown[], top: ProfilesF
   return next
 }
 
-const withProfile = (p: AccountProfile) => (all: unknown[]): unknown[] => [...all.filter((x) => !(isProfileRecord(x) && x.id === p.id)), p]
+/** The list with `p` in it. An account that is listed already is replaced
+ *  where it stands, so an edit (made inactive or active, renamed, a sign-in
+ *  refreshed) never moves it; one that is not listed goes on the end. A second
+ *  record with the same id (a hand-edited file) is dropped, so one is left,
+ *  at the first one's place. Entries that are not profile objects stay where
+ *  they were. */
+const withProfile = (p: AccountProfile) => (all: unknown[]): unknown[] => {
+  const next: unknown[] = []
+  let placed = false
+  for (const x of all) {
+    if (!(isProfileRecord(x) && x.id === p.id)) next.push(x)
+    else if (!placed) { next.push(p); placed = true }
+  }
+  if (!placed) next.push(p)
+  return next
+}
 const withoutProfile = (id: string) => (all: unknown[]): unknown[] => all.filter((x) => !(isProfileRecord(x) && x.id === id))
 
 export function upsertProfile(p: AccountProfile): void { rewriteProfiles(withProfile(p)) }
