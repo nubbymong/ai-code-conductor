@@ -177,11 +177,12 @@ describe('the three writers on a file that reads', () => {
     upsertProfile(C)
     expect(listProfiles().map((p) => p.id)).toEqual([A.id, B.id, C.id])
     upsertProfile({ ...A, name: 'Renamed' })
-    expect(listProfiles().map((p) => `${p.id}:${p.name}`)).toEqual([`${B.id}:Work`, `${C.id}:New`, `${A.id}:Renamed`])
+    // Replaced where it stood, not moved to the end (aicc_planning#383).
+    expect(listProfiles().map((p) => `${p.id}:${p.name}`)).toEqual([`${A.id}:Renamed`, `${B.id}:Work`, `${C.id}:New`])
     setPrimaryProfile(B.id)
     expect(listProfiles().filter((p) => p.isPrimary).map((p) => p.id)).toEqual([B.id])
     deleteProfileMeta(B.id)
-    expect(listProfiles().map((p) => p.id)).toEqual([C.id, A.id])
+    expect(listProfiles().map((p) => p.id)).toEqual([A.id, C.id])
   })
 
   it('a top-level key the app does not know survives all three, in its place', () => {
@@ -280,7 +281,8 @@ describe('callers of the writers, with a list that cannot be read', () => {
   it('healPlaceholderNames still heals when the list reads, and an error that is not this one is still the caller\'s', () => {
     seed(JSON.stringify({ profiles: [{ ...A, name: 'New account' }, B] }))
     healPlaceholderNames()
-    expect(listProfiles().map((p) => p.name)).toEqual(['Work', ''])
+    // The healed account stays first (aicc_planning#383).
+    expect(listProfiles().map((p) => p.name)).toEqual(['', 'Work'])
     expect(logs.warn).toEqual([])
     // Any other failure of the write goes on to the caller, as it always did.
     seed(JSON.stringify({ profiles: [{ ...A, name: 'New account' }] }))
