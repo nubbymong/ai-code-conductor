@@ -17,16 +17,26 @@ export function tempSessionSettings() {
   const statusPath = (sessionId: string) => path.join(dir, `ccc-status-${safe(sessionId)}.url`)
   const write = (p: string, text: string) => { fs.writeFileSync(p, text); return p }
   const remove = (p: string) => { fs.rmSync(p, { force: true }) }
+  // The settings this stand-in writes carry no status line, so a session it
+  // wrote them for counts as launched without the app's, until they are removed.
+  const withoutStatusLine = new Set<string>()
   return {
     /** The folder every file goes to. */
     dir,
     getLocalSessionSettingsPath: settingsPath,
     getLocalSessionMcpConfigPath: mcpPath,
     getLocalSessionStatusUrlPath: statusPath,
-    writeLocalSessionSettings: (sessionId: string) => write(settingsPath(sessionId), '{}\n'),
+    writeLocalSessionSettings: (sessionId: string) => {
+      withoutStatusLine.add(sessionId)
+      return write(settingsPath(sessionId), '{}\n')
+    },
+    sessionLaunchedWithoutAppStatusLine: (sessionId: string) => withoutStatusLine.has(sessionId),
     writeLocalSessionMcpConfig: (sessionId: string) => write(mcpPath(sessionId), '{"mcpServers":{}}\n'),
     writeLocalSessionStatusUrl: (sessionId: string) => write(statusPath(sessionId), 'http://127.0.0.1/status\n'),
-    removeLocalSessionSettings: (sessionId: string) => remove(settingsPath(sessionId)),
+    removeLocalSessionSettings: (sessionId: string) => {
+      withoutStatusLine.delete(sessionId)
+      remove(settingsPath(sessionId))
+    },
     removeLocalSessionMcpConfig: (sessionId: string) => remove(mcpPath(sessionId)),
     removeLocalSessionStatusUrl: (sessionId: string) => remove(statusPath(sessionId)),
     /** The MCP config this stand-in writes holds no `conductor` entry, so the
