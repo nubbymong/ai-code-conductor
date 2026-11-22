@@ -22,7 +22,11 @@
  * helper-pty.ts writes it (the notice on the row above the last), the notice
  * is the first row the tab keeps, a wrap's row leaves the rest above the
  * notice, the alternate screen gets no clear, and on the random streams the
- * rows from the notice on are the same with the clear and without.
+ * rows from the notice on are the same with the clear and without; on
+ * hand-built streams that write where the count does not follow the cursor
+ * (origin mode set or reset, a restore after a soft reset), every row that is
+ * not empty is kept. A soft reset in the left-out part leaves the carried
+ * modes as it leaves the tab's.
  *
  * Not checked here: a program's own tab stops, a backspace at a row's end
  * with reverse wraparound set, and a repeat after a sequence the tab ignores
@@ -34,8 +38,8 @@
  * it reads; where the cut lands in random streams (only that what follows it
  * never takes more rows than counted); a clear after a count that falls short
  * of the tab's (the exceptions replay-tail.ts names: it would drop the
- * notice); a tab that showed anything before the notice (helper-pty.ts gives
- * no gap then).
+ * notice, and a kept row more for each further row short); a tab that showed
+ * anything before the notice (helper-pty.ts gives no gap then).
  */
 import { describe, it, expect } from 'vitest'
 import { Terminal } from '@xterm/headless'
@@ -76,6 +80,17 @@ const numbered = (n: number) => Array.from({ length: n }, (_, i) => `line ${i + 
 
 /** A stand-in for the notice helper-pty.ts writes. */
 const NOTICE = '[the notice]'
+
+/** The tab's input modes after `text`, in a new terminal 80 by 24. */
+async function modesAfter(text: string): Promise<Record<string, unknown>> {
+  const term = new Terminal({ cols: 80, rows: 24, allowProposedApi: true, logLevel: 'off' })
+  try {
+    await new Promise<void>((res) => term.write(text, res))
+    return { ...term.modes }
+  } finally {
+    term.dispose()
+  }
+}
 
 /** The column the tab's terminal is at after `text`. */
 async function cursorAfter(text: string, cols: number): Promise<number> {
@@ -324,6 +339,16 @@ describe('what the left-out part carries across the cut', () => {
       before: '\x1b[?47l',
       after: '\x1b[?1l\x1b[?7h\x1b[?25h\x1b[?45l\x1b[?66l\x1b[?1000l\x1b[?1004l\x1b[?1006l\x1b[?2004l',
     })
+  })
+
+  it('a soft reset (CSI ! p, with parameters or none): the input modes as it leaves them, the mouse modes kept, as in the tab; with another intermediate or a prefix it is no soft reset', async () => {
+    const replay = `\x1b[?1000h\x1b[?1006h\x1b[?1h\x1b[?2004h\x1b[?25l\x1b[?45h\x1b=\x1b[?1004h\x1b[?7l\x1b[!p${lines}`
+    const t = replayTail(replay, 80, 5)
+    expect(t).toMatchObject({ before: '', after: '\x1b[?1000h\x1b[?1006h\x1b[?1l\x1b[?7h\x1b[?25h\x1b[?45l\x1b[?66l\x1b[?1004l\x1b[?2004l' })
+    // The tab left as the whole replay leaves it: the notice, what is carried, then what follows the cut.
+    expect(await modesAfter(`\x18\x1b[0m\r\n${NOTICE}\r\n${t.after}${replay.slice(t.from)}`)).toEqual(await modesAfter(replay))
+    expect(replayTail(`\x1b[?1h\x1b[5!p${lines}`, 80, 5).after).toBe('\x1b[?1l\x1b[?7h\x1b[?25h\x1b[?45l\x1b[?66l\x1b[?1004l\x1b[?2004l')
+    for (const not of ['\x1b[!!p', '\x1b[?!p', '\x1b[!"p']) expect(replayTail(`\x1b[?1h${not}${lines}`, 80, 5).after, JSON.stringify(not)).toBe('\x1b[?1h')
   })
 
   it('only what comes before the cut: a mode set in the part that is shown is not carried', () => {
@@ -706,19 +731,20 @@ describe("the cursor's row followed, with the tab's rows given (2.1.3-beta.13, p
       expect((await bufferAfter(pieceFor(back, u, 10, 80), 80, 10)).normal.slice(0, 3)).toEqual([NOTICE, 'x', 'line 1'])
     })
 
-    it('not after anything that could leave a character above the row the cut starts, or move those rows: the cursor on such a row, a cursor saved (1049 too), a scroll region, the screen moved up or down, filled or reset; a cursor moved within the rows shown is no such thing', async () => {
-      for (const what of ['\x1b[H', '\x1b[5;1H', '\x1b[6A', '\x1bM\x1bM\x1bM\x1bM', '\x1b7', '\x1b[s', '\x1b[?1048h', '\x1b[?1049h\x1b[?1049l', '\x1b[1;10r', '\x1b[2;5r', '\x1b[S', '\x1b[2T', '\x1b#8', '\x1bc']) {
+    it('not after anything that could leave a character above the row the cut starts, or move those rows: the cursor on such a row, a cursor saved (1049 too) or a soft reset, a scroll region, origin mode set or reset, the screen moved up or down, filled or reset; a cursor moved within the rows shown is no such thing', async () => {
+      for (const what of ['\x1b[H', '\x1b[5;1H', '\x1b[6A', '\x1bM\x1bM\x1bM\x1bM', '\x1b7', '\x1b[s', '\x1b[?1048h', '\x1b[?1049h\x1b[?1049l', '\x1b[1;10r', '\x1b[2;5r', '\x1b[?6h', '\x1b[?6l', '\x1b[S', '\x1b[2T', '\x1b#8', '\x1bc', '\x1b[!p', '\x1b[5!p']) {
         const text = `${numbered(3)}${what}${numbered(20)}`
         // Three rows on, the cursor on the last row: the clear goes where the third line feed left it, and no further.
         expect(replayTail(text, 80, 100, 10, 8).clear, JSON.stringify(what)).toBe(numbered(3).length)
       }
-      // On the alternate screen the cursor anywhere, a cursor saved and the screen moved touch none of the normal
-      // screen's rows, so long as the cursor is back within the rows shown when 1047 brings it to the normal screen.
-      const onAlt = `${numbered(3)}\x1b[?1047h\x1b[H\x1b7\x1b[S\x1b[2T\x1b[10;1H\x1b[?1047l${numbered(20)}`
+      // On the alternate screen the cursor anywhere, a cursor saved, a soft reset and the screen moved touch none of
+      // the normal screen's rows, so long as the cursor is back within the rows shown when 1047 brings it to the
+      // normal screen.
+      const onAlt = `${numbered(3)}\x1b[?1047h\x1b[H\x1b7\x1b[!p\x1b[S\x1b[2T\x1b[10;1H\x1b[?1047l${numbered(20)}`
       expect(replayTail(onAlt, 80, 100, 10, 8).clear).toBe(onAlt.indexOf('line 6\r\n', onAlt.indexOf('\x1b[?1047l')))
-      // There a scroll region or a fill puts the cursor where the count does not follow it, and a cursor left high is
-      // high on the normal screen too.
-      for (const what of ['\x1b[2;5r\x1b[10;1H', '\x1b#8\x1b[10;1H', '\x1b[H']) {
+      // There a scroll region, a fill or origin mode set or reset puts the cursor where the count does not follow
+      // it, and a cursor left high is high on the normal screen too.
+      for (const what of ['\x1b[2;5r\x1b[10;1H', '\x1b#8\x1b[10;1H', '\x1b[?6h', '\x1b[?6l', '\x1b[H']) {
         const text = `${numbered(3)}\x1b[?1047h${what}\x1b[?1047l${numbered(20)}`
         expect(replayTail(text, 80, 100, 10, 8).clear, JSON.stringify(what)).toBe(numbered(3).length)
       }
@@ -731,6 +757,20 @@ describe("the cursor's row followed, with the tab's rows given (2.1.3-beta.13, p
       const b = (await bufferAfter(pieceFor(within, t, 10, 80, false), 80, 10)).normal
       expect(a[0]).toBe(NOTICE)
       expect(a).toEqual(b.slice(b.indexOf(NOTICE)))
+    })
+
+    it('in the tab, text written at home after origin mode is set or reset, or at a restore with no save after a soft reset, stays where it was written: the clear drops only empty rows', async () => {
+      const kept = (rows: string[]) => rows.slice(rows.findIndex((r) => r !== ''))
+      for (const text of [
+        `${numbered(3)}\x1b[?6hTOP\x1b[10;1H${numbered(20)}`,
+        `${numbered(3)}\x1b[?6lTOP\x1b[10;1H${numbered(20)}`,
+        `${numbered(3)}\x1b[!p${numbered(3)}\x1b8X\x1b[10;1H${numbered(20)}`,
+      ]) {
+        const t = replayTail(text, 80, 100, 10, 8)
+        const a = (await bufferAfter(pieceFor(text, t, 10, 80), 80, 10)).normal
+        const b = (await bufferAfter(pieceFor(text, t, 10, 80, false), 80, 10)).normal
+        expect(kept(a), JSON.stringify(text)).toEqual(kept(b))
+      }
     })
 
     /** For each item, the normal screen's rows after a full reset and `stream`, in one terminal `cols` by `rows`. */

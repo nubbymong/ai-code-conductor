@@ -26,12 +26,17 @@ probe settled both causes from recorded bytes and @xterm/headless runs.
   short for the notice and a row: byte for byte as A2.
 - **Where the clear may go (replay-tail.ts `clearAfter`).** The probe's prototype took the
   newest line-feed row start within reach. A random-stream check showed that is not enough: a
-  kept text that puts its cursor above its own start row (an absolute move, a scroll region),
-  moves the screen (CSI S, T), fills it or resets it can leave output in the rows the clear
-  drops; and xterm.js keeps a saved cursor row counted from the scrollback's top, so a clear
-  between a save and a restore moves the cursor down. So the kept text is read again from the
+  kept text that puts its cursor above its own start row (an absolute move, a scroll region,
+  origin mode set or reset), moves the screen (CSI S, T), fills it or resets it can leave
+  output in the rows the clear drops; and xterm.js keeps a saved cursor row counted from the
+  scrollback's top, so a clear between a save (or a soft reset, CSI ! p, which saves the
+  screen's top row) and a restore moves the cursor down. So the kept text is read again from the
   cut as a new tab reads it, and the clear goes at the newest line-feed row start before the
   first of those. With none in reach the empty rows stay above the notice, never under it.
+- **A soft reset in the part left out** (CSI ! p) now sets the carried input modes as it sets
+  the tab's (cursor keys, keypad, autowrap, reverse wrap, focus events and bracketed paste back
+  to their start, the cursor shown, the mouse modes kept); before, the modes set ahead of it
+  were carried as if it had not come.
 - **A program that is over** now gets the same size wait as one still running: its exit waits
   for its replay to be shown, at most the size wait's cap, and its holder is sent no size.
 - **Log.** The size wait's lines name the tab's id and the size the tab started at.
@@ -43,5 +48,6 @@ probe settled both causes from recorded bytes and @xterm/headless runs.
   recorded. On A2's random streams (four seeds, 36 sizes) the tab's rows from the notice on are
   the same with the clear and without.
 - **Supersedes** the line of 2026-11-22-replay-row-count-follows-cursor.md that says the notice
-  is followed by up to a screen of empty rows at the holder's size: there are none now, unless
-  the kept text moves its cursor above its own start within its first screen.
+  is followed by up to a screen of empty rows at the holder's size: none follow it now; up to a
+  screen of them can stay above it when the kept text, within its first screen, moves its cursor
+  above its own start or wraps onto the gap's last row.

@@ -90,18 +90,21 @@
  * and nothing else. Only while those rows stay empty and in place: the reading
  * stops at the cursor on a row above the cut's on the normal screen (a
  * character there, or a line inserted or deleted there, would leave with
- * them), a scroll region set or the screen filled (ESC # 8) on either screen
- * (the cursor goes home, where the count does not follow it, and 47 and 1047
- * bring it back), the screen moved up or down (CSI S, T) or reset, and a
- * cursor saved on it (xterm.js counts a saved row from the scrollback's top,
- * so a clear between the save and the restore would move the cursor down),
- * and a row a line feed added before that is the answer. A row a wrap starts
+ * them); at a scroll region set, the screen filled (ESC # 8), or origin mode
+ * set or reset, on either screen (the cursor goes home, where the count does
+ * not follow it, and 47 and 1047 bring it back); at the screen moved up or
+ * down (CSI S, T) or reset; and at a cursor saved on the normal screen, or a
+ * soft reset there (CSI ! p, which saves the screen's top row as the cursor's place):
+ * xterm.js counts a saved row from the scrollback's top, so a clear between
+ * that and the restore would move the cursor down. A row a line feed added
+ * before the reading stops is the answer. A row a wrap starts
  * is not taken: it starts at the character that wraps,
  * before the screen moves, so a clear there would leave one empty row above
  * the notice. Such a row start is never inside an escape sequence or a
  * character, and never on the alternate screen. Where the count falls short of
  * the tab's (the exceptions above), the screen has moved further, and a clear
- * there drops the notice's row too.
+ * there drops the notice's row too, and one kept row more for each further row
+ * the count is short.
  *
  * What the left-out part changes in the terminal's state is carried across the
  * cut (`before` and `after`): leaving the alternate screen whenever that part
@@ -110,7 +113,8 @@
  * the DEC private modes that are flags only (cursor keys, autowrap, cursor
  * blink and visibility, reverse wrap, the keypad, mouse reporting and its
  * encoding, focus events, bracketed paste), each at its last value, in the
- * order of their last change. That is as the whole replay would have left
+ * order of their last change, a full reset and a soft reset (CSI ! p) setting
+ * them as they set the tab's. That is as the whole replay would have left
  * them, but for one thing: after a full reset the cursor is shown again
  * (AFTER_RESET says why). Colours are not carried (the notice resets them),
  * nor the character set or a scroll region.
@@ -143,6 +147,10 @@ const ALTERNATE_SCREEN = new Set([47, 1047, 1049])
 /** What a full reset (ESC c) leaves the carried modes at. The cursor blink (12) is the tab's own setting and stays. The cursor is shown again (25) on purpose: xterm.js 6.0.0 leaves a hidden cursor hidden after a full reset, and a shell should not be left without one. */
 const AFTER_RESET: ReadonlyArray<readonly [number, boolean]> = [
   [1, false], [7, true], [25, true], [45, false], [66, false], [1000, false], [1004, false], [1006, false], [2004, false],
+]
+/** What a soft reset (CSI ! p) leaves the carried modes at, as xterm.js 6.0.0 does: a full reset's, but the mouse modes stay. Here xterm.js itself shows the cursor again. */
+const AFTER_SOFT_RESET: ReadonlyArray<readonly [number, boolean]> = [
+  [1, false], [7, true], [25, true], [45, false], [66, false], [1004, false], [2004, false],
 ]
 /** As xterm.js: at most 32 parameters, each at most 2^31 - 1. */
 const PARAMS_MAX = 32
@@ -266,7 +274,7 @@ class Reader {
   private fresh = false
   /** A reading from the cut for replayTail's `clear` (clearAfter): what it found so far. */
   private readonly watch: ClearWatch | undefined
-  /** The first intermediate byte of the escape sequence being read. */
+  /** The first intermediate byte of the escape sequence being read; in a CSI, only while it is the only one (0 after a second). */
   private inter = 0
   private state = GROUND
   private prefix = 0
@@ -402,14 +410,18 @@ class Reader {
         this.prefix = c
         this.any = true
       }
-    } else if (c <= 0x2f) this.more = true
-    else {
-      // A final byte; a character past 0x7e ends it in error. One with intermediates does nothing here.
+    } else if (c <= 0x2f) {
+      // An intermediate: kept while it is the only one, as only CSI ! p (a soft reset) is told by one here.
+      this.inter = this.more ? 0 : c
+      this.more = true
+    } else {
+      // A final byte; a character past 0x7e ends it in error. One with intermediates does nothing here, but a soft
+      // reset (CSI ! p, with parameters or none, as in xterm.js).
       this.state = GROUND
       if (c <= 0x7e && !this.more) {
         if (this.params.length < PARAMS_MAX) this.params.push(this.param)
         this.csi(c)
-      }
+      } else if (c === 0x70 && this.inter === 0x21 && this.prefix === 0) this.softReset()
       this.last = 0
     }
   }
@@ -606,6 +618,15 @@ class Reader {
     this.unsettled()
   }
 
+  /**
+   * CSI ! p, as xterm.js: the carried modes as it sets them (AFTER_SOFT_RESET), and the tab's saved cursor put on the
+   * screen's top row, counted from the scrollback's top, so a clear after it moves where a restore lands.
+   */
+  private softReset(): void {
+    this.unsettled()
+    for (const [m, on] of AFTER_SOFT_RESET) this.mode(m, on)
+  }
+
   private restore(): void {
     this.col = Math.min(this.saved[this.alt ? 1 : 0], this.width - 1)
     // The tab puts the cursor back on the row it was saved on, or higher (the screen scrolled since).
@@ -695,6 +716,9 @@ class Reader {
     } else if (m === 1048) {
       if (on) this.save()
       else this.restore()
+    } else if (m === 6) {
+      // Origin mode set or reset puts the tab's cursor home, where the count does not follow it, and 47 and 1047 bring it back.
+      this.unsettled(true)
     } else if (CARRIED_MODES.has(m)) {
       this.modes.delete(m)
       this.modes.set(m, on)
@@ -740,7 +764,8 @@ export function replayTail(text: string, cols: number, budget: number, height?: 
  * from `from` as a new tab `rows` high reads it (the cursor on the last row, nothing saved, no scroll region), the
  * cursor's row followed. Only rows that stayed empty may go, so it stops at the first sign that a row above the one
  * `from` starts on could hold anything but that (the cursor on such a row of the normal screen, a scroll region set,
- * the screen moved up or down, filled or reset, a cursor saved) and answers the newest row a line feed added before it.
+ * origin mode set or reset, the screen moved up or down, filled or reset, a cursor saved, a soft reset) and answers the
+ * newest row a line feed added before it.
  */
 function clearAfter(text: string, from: number, cols: number, rows: number, gap: number): number | undefined {
   if (gap < 1) return undefined

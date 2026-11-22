@@ -363,7 +363,13 @@ has seen; a gap is logged, and noted on the session if a hook event was lost.
   last of the replay that the tab's scrollback keeps (10,000 lines less a
   screen and that line's own rows, cut at the start of a line, or inside a
   line that alone takes as many or more, or that only empty rows follow), so
-  that line is not pushed out of reach. What the part left out did to the
+  that line is not pushed out of reach. With the tab at the holder's size and
+  nothing shown before (2.1.3-beta.13), that line is written on the row above
+  the tab's last row and the kept text starts on the last row, where the
+  console's cursor was; one clear of the scrollback (CSI 3 J), put in at the
+  start of a row a line feed made, then drops the empty rows that were above
+  that line once they have left the screen, so that line is the tab's first
+  row. What the part left out did to the
   terminal goes across the cut: the alternate screen, left before that line
   (and before the attribute reset) whenever that part switched to it or from
   it, and the input modes it set.
