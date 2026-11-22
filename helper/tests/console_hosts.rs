@@ -127,6 +127,13 @@ impl Held {
         }
     }
 
+    /// Close the handle without ending the process: for one that was only
+    /// looked at.
+    fn let_go(self) {
+        unsafe { CloseHandle(self.handle) };
+        std::mem::forget(self);
+    }
+
     fn running(&self) -> bool {
         unsafe { WaitForSingleObject(self.handle, 0) == WAIT_TIMEOUT }
     }
@@ -419,16 +426,12 @@ fn wait_ended(t: &mut Terminal) {
 
 /// The terminal's program ends while its pseudoconsole stays open, as
 /// node-pty leaves one; to its host that is the program's own end (its one
-/// client leaves). Whether a host then stays by itself varies: in the Helper
-/// job on windows-2025 (runs 45032572689 and 45033409949), with programs that
-/// ended by themselves within a second of their start, one host stayed, and
-/// of two others at least one had ended half a second later, where the hosts
-/// of Claude Code, Codex and the shells in the app's tabs stayed (probe P19,
-/// and the published beta.13 on the test VM). So the test does not wait for
-/// chance: as the
-/// console-hosts tests above do, it suspends the host first, so it cannot end
-/// by itself, then ends the program; from then on only an end from outside
-/// can end that host.
+/// client leaves). Whether a host then stays by itself is Windows' doing,
+/// not the mode's (it stayed on windows-2025 and on the test VM's build in
+/// probe P19, and on the published beta.13), so the test does not rest on it:
+/// as the console-hosts tests above do, it suspends the host first, so it
+/// cannot end by itself, then ends the program; from then on only an end from
+/// outside can end that host.
 fn end_program_keeping_host(t: &mut Terminal, host: &Held) {
     // A moment for the host to finish starting, as the tests above give it.
     std::thread::sleep(Duration::from_millis(300));
@@ -446,11 +449,13 @@ fn host_made_in(from: u64, to: u64) -> Held {
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
         for id in children(me, HOST) {
-            if let Some(h) = Held::open(id) {
-                if made_at(h.handle).is_some_and(|t| t >= from && t < to) && children(me, HOST).contains(&id) {
-                    return h;
-                }
+            let Some(h) = Held::open(id) else { continue };
+            if made_at(h.handle).is_some_and(|t| t >= from && t < to) && children(me, HOST).contains(&id) {
+                return h;
             }
+            // Another terminal's host, only looked at: a Held ends what it
+            // holds when it is dropped, so this one is let go instead.
+            h.let_go();
         }
         assert!(Instant::now() < deadline, "no console host made by this process in that time was seen");
         std::thread::sleep(Duration::from_millis(50));
@@ -477,6 +482,7 @@ fn a_terminal_whose_program_ended_has_its_console_host_ended_once_and_no_other()
     let mut ended = terminal(&keeps_running());
     let host = host_made_in(ended.from, ended.to);
     end_program_keeping_host(&mut ended, &host);
+    assert!(live_host.running(), "the host of the terminal still running (process {}) ended before the mode ran", live_host.pid);
 
     let (ok, out, err) = end_console_host(ended.from, ended.to);
     assert!(ok, "{out}{err}");
@@ -503,6 +509,7 @@ fn two_terminals_started_in_one_time_have_neither_host_ended_by_it() {
     let host_b = host_made_in(b.from, b.to);
     end_program_keeping_host(&mut a, &host_a);
     end_program_keeping_host(&mut b, &host_b);
+    assert!(host_a.running() && host_b.running(), "a suspended host ended before the mode ran");
 
     // A time that holds both starts cannot say which terminal ended: neither host is ended.
     let (ok, out, err) = end_console_host(from, to);
