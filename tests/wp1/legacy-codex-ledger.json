@@ -7897,7 +7897,7 @@
       ],
       "category": "TEST",
       "disposition": "added",
-      "evidence": "new 2.1.3-beta.14 section C9 test (aicc_planning#362) (tests/unit/main/installed-codex-models.test.ts): Codex found is one read and the picker offers its list; a failed read, Codex off or not found leave the registry alone; a switch-off drops the list and an overtaken read is not used; a read counts as Codex in use; Sentinel's start-up read joins the follower's, and a start-up read that began before Codex was found is taken as the follower's (one run either way), while one for another version is read again (WP1.68); tests/unit/main/installed-codex-models.test.ts",
+      "evidence": "new 2.1.3-beta.14 section C9 test (aicc_planning#362) (tests/unit/main/installed-codex-models.test.ts): Codex found is one read and the picker offers its list; a failed read, Codex off or not found leave the registry alone; a switch-off drops the list and an overtaken read is not used; a read counts as Codex in use; Sentinel's start-up read joins the follower's, and a start-up read that began before Codex was found is taken as the follower's (one run either way), while one for another version is read again, and one overtaken by Codex no longer found is dropped (WP1.68); tests/unit/main/installed-codex-models.test.ts",
       "note": "created by 2.1.3-beta.14 section C9; the accounts service is faked: no process, no folder, no network"
     },
     {

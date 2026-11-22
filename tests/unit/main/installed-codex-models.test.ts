@@ -187,6 +187,29 @@ describe('the installed Codex\'s model list reaches the registry (aicc_planning#
     expect(codexRows()).not.toContain('gpt-7-terra')
   })
 
+  it('a read taken for a found Codex is dropped when Codex is no longer found before it answers', async () => {
+    const svc = fakeService({ enabled: true, discoveryState: 'unchecked', compatibility: 'unknown' })
+    const before = codexRows()
+    followInstalledCodexModels(svc as never)
+    await tick()
+    let release!: () => void
+    svc.hold = new Promise<void>((r) => { release = r })
+    const asked = readInstalledCodexModels(svc as never, { fresh: false })
+    svc.found = FOUND
+    svc.changed()
+    await tick()
+    // Check again no longer finds Codex while that read still runs.
+    svc.found = { enabled: true, discoveryState: 'missing', compatibility: 'unknown' }
+    svc.changed()
+    await tick()
+    release()
+    expect(await asked).toEqual(svc.answer)
+    await tick()
+    expect(svc.reads).toBe(1)
+    expect(codexRows()).toEqual(before)
+    expect(getRegistry().installedCodex).toBeUndefined()
+  })
+
   it('the registry is reloaded (and pushed) only when the list changes', () => {
     const pushed: number[] = []
     const off = onRegistryReload(() => pushed.push(1))
