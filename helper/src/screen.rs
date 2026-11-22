@@ -33,7 +33,8 @@
 //!  - the crate is built without its `std` feature (helper/Cargo.toml), so its
 //!    parser keeps an OSC string in a 1 KiB buffer and drops the rest, where
 //!    with `std` it keeps the whole string; DCS, SOS, PM and APC strings are
-//!    not kept at all. So no output makes the screen hold more than its cells.
+//!    not kept at all. So no output makes the screen hold more than its cells
+//!    and one title of at most `TITLE_MAX` characters.
 //!
 //! Widths: the crate counts a character's cells by current Unicode, and
 //! xterm.js 6.0.0 by Unicode 6, so a row with a character the two count
@@ -161,7 +162,8 @@ pub struct Screen {
 struct Title(String);
 
 /// The kind of an OSC string, as xterm.js reads it: its first part, all
-/// digits, as a number (so `00` is 0). None for anything else.
+/// digits, as a number (so `00` is 0). None for anything else, and for a
+/// part of more than 9 digits, which xterm.js still reads as a number.
 fn osc_kind(part: &[u8]) -> Option<u32> {
     if part.is_empty() || part.len() > 9 || !part.iter().all(u8::is_ascii_digit) {
         return None;

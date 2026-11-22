@@ -552,7 +552,8 @@ rollback returns to the earlier beta's rows, and every row has a negative test.
   repeat then writes at most 9999 cells, and every other sequence's work is
   bounded by the screen's size, at most 1000 by 1000 cells); an OSC string is
   kept to 1 KiB and other strings not at all; a screen holds at most its
-  cells, 200 lines of scrollback and an alternate screen (measured in the
+  cells, 200 lines of scrollback, an alternate screen and, from
+  2.1.3-beta.14, the last title of at most 1024 characters (measured in the
   Helper job: 1.04 MiB at 120 by 40 with all of them full, 67.21 MiB at 1000
   by 1000, the largest size a launch may ask for). A panic in the parser is
   caught, the screen is then not kept, and the output goes on. What a read

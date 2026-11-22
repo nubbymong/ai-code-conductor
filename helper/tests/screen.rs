@@ -461,8 +461,8 @@ fn a_huge_parameter_and_a_16_mib_string_return_within_a_bound_and_leave_the_scre
     assert_eq!(split.read(), r);
 
     // A 16 MiB OSC string, never ended but by BEL: the parser keeps at most
-    // 1 KiB of it, so the screen holds no more than before, and the text after
-    // it shows.
+    // 1 KiB of it, so the screen holds no more than before but a title of
+    // under 1 KiB, and the text after it shows.
     let mut osc = Vec::with_capacity((16 << 20) + 16);
     osc.extend_from_slice(b"\x1b]0;");
     osc.resize(4 + (16 << 20), b'a');

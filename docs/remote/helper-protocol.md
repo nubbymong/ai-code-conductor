@@ -1310,9 +1310,14 @@ holder's size: its replay waits for the tab to be at that size
   rest of that run of text sits one cell to the left. It has no line drawing
   character set (`ESC ( 0`), so those characters stay the letters they were
   sent as. A change of width cuts or pads each row, where xterm.js can
-  wrap the lines of its normal screen again. And an OSC 0 or 2 cut short by
-  CAN or SUB still sets the title, where xterm.js drops it, and U+009C inside
-  one does not end it, where xterm.js ends it there.
+  wrap the lines of its normal screen again. And the title differs in four
+  cases: an OSC 0 or 2 cut short by CAN or SUB still sets the title, where
+  xterm.js drops it; a control character from U+0080 to U+009F inside one is
+  dropped and the title still set, where xterm.js ends the title at U+009C
+  and drops the whole string at any other; a kind of more than 9 digits (ten
+  zeros, say) sets no title, where xterm.js reads it as a number; and U+009D
+  begins no string, so it sets no title, where xterm.js reads it as the start
+  of an OSC.
 - **The bound.** A CSI parameter above 9999 reaches the screen's parser as
   9999, as main cuts it for its own panes, so a repeat (`CSI n b`) writes at
   most 9999 cells and no other sequence's work grows with its parameter; an

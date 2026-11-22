@@ -42,7 +42,8 @@ path = "src/bin/aicc-fake-cli.rs"
 # (vte 0.15.0, itoa 1.0.19, unicode-width 0.2.3, arrayvec 0.7.8, memchr 2.8.3).
 # Without its default `std` feature: then vte keeps an OSC string in a 1 KiB
 # buffer and drops the rest, where with `std` it keeps the whole string, so no
-# output can make the screen grow past its cells (threat model 3.10 and 3.13).
+# output can make the screen grow past its cells and one title of at most
+# 1024 characters (threat model 3.10 and 3.13).
 # The feature adds nothing else the helper uses.
 [dependencies]
 vt100 = { version = "=0.18.1", default-features = false }
