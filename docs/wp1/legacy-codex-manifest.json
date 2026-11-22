@@ -1,8 +1,8 @@
 {
   "schema": "wp1-legacy-codex-manifest/3",
-  "generatedAt": "2026-11-22T14:42:01.162Z",
-  "head": "1254d6347ab2c35daea74da89d94e4243b8ace2f",
-  "tree": "fb9558c0c0eea259f3d2c0035aaac4cd81c57204",
+  "generatedAt": "2026-11-22T15:40:02.809Z",
+  "head": "a4d3fe6adc35f0c87d4d013dc6d689cb78918e45",
+  "tree": "1698a35d9271521f7dfdf385de5496eed8f28c03",
   "scannedWorkingTree": false,
   "predicateDigest": "100a1233edebdc39a5f9004d3fba980a89ebb15b25872e52076386bc84b03153",
   "predicates": [
@@ -116,9 +116,9 @@
     "\\.(png|jpg|jpeg|gif|ico|icns|webp|svg|woff2?|ttf|otf|mp4|zip|asar|node|exe|dll|dylib|so|pdf)$",
     "^package-lock\\.json$"
   ],
-  "trackedFileCount": 3694,
-  "excludedFileCount": 572,
-  "scannedFileCount": 3122,
+  "trackedFileCount": 3704,
+  "excludedFileCount": 574,
+  "scannedFileCount": 3130,
   "unscopedFileCount": 15,
   "unscoped": [
     ".claude/settings.json",
@@ -139,8 +139,8 @@
   ],
   "unscopedMentions": [],
   "unreadable": [],
-  "matchedPathCount": 1049,
-  "pathDigest": "ba3b2d1305508b00a0259cee353d863e4dac2dff55898d55edb04a0fd6b38a3f",
+  "matchedPathCount": 1052,
+  "pathDigest": "6b401d150e514c96210477b9b885ab465208dba326a91ef7ee956d9bb228fdc9",
   "entries": [
     {
       "path": ".github/workflows/ci.yml",
@@ -2037,7 +2037,7 @@
         "P01",
         "P14"
       ],
-      "lineCount": 26
+      "lineCount": 31
     },
     {
       "path": "src/main/providers/codex/spawn.ts",
@@ -2221,14 +2221,14 @@
         "P08",
         "P14"
       ],
-      "lineCount": 6
+      "lineCount": 9
     },
     {
       "path": "src/main/session-helper/manager.ts",
       "predicates": [
         "P14"
       ],
-      "lineCount": 13
+      "lineCount": 15
     },
     {
       "path": "src/main/session-input/index.ts",
@@ -2251,7 +2251,7 @@
         "P04",
         "P14"
       ],
-      "lineCount": 178
+      "lineCount": 179
     },
     {
       "path": "src/main/stale-folder-sweep.ts",
@@ -5055,6 +5055,14 @@
       "lineCount": 46
     },
     {
+      "path": "tests/unit/main/codex-held-screen.test.ts",
+      "predicates": [
+        "P01",
+        "P13"
+      ],
+      "lineCount": 96
+    },
+    {
       "path": "tests/unit/main/codex-history-copy-not-link.test.ts",
       "predicates": [
         "P01",
@@ -5459,6 +5467,13 @@
         "P13"
       ],
       "lineCount": 6
+    },
+    {
+      "path": "tests/unit/main/launch-bindings-held-screen.test.ts",
+      "predicates": [
+        "P13"
+      ],
+      "lineCount": 33
     },
     {
       "path": "tests/unit/main/launch-bindings-kept.test.ts",
@@ -5869,12 +5884,19 @@
       "lineCount": 3
     },
     {
+      "path": "tests/unit/main/session-helper-agent-screen.test.ts",
+      "predicates": [
+        "P13"
+      ],
+      "lineCount": 20
+    },
+    {
       "path": "tests/unit/main/session-helper-app-wiring.test.ts",
       "predicates": [
         "P04",
         "P13"
       ],
-      "lineCount": 14
+      "lineCount": 17
     },
     {
       "path": "tests/unit/main/session-helper-manager.test.ts",
