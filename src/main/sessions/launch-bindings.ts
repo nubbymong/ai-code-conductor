@@ -98,8 +98,8 @@ export interface LaunchBindingPorts {
   noteClaudeFolder(sessionId: string, launchCwd: string): void
   noteClaudeTranscript(sessionId: string, transcriptPath: string): void
   markSessionNotIndexed(sessionId: string, provider: ProviderId, since: number, now?: number): void
-  /** Closes the session's pane of the Codex run screen, which only
-   *  pty-manager.ts reaches. */
+  /** Closes the session's reading of the Codex run screen (its pane, or a
+   *  held run's holder's screen), which only pty-manager.ts reaches. */
   closeCodexRunScreen(sessionId: string): void
 }
 
@@ -115,16 +115,16 @@ function ports(): LaunchBindingPorts {
   return registered
 }
 
-/** A Codex run's pane, from the launch that started it. */
+/** A Codex run's reading of its screen (its pane, or B2 its holder's screen), from the launch that started it. */
 export interface CodexPaneBinding {
   sessionId: string
-  /** The run's process: the pane is current while the session's PTY is this one. */
+  /** The run's process: the reading is current while the session's PTY is this one. */
   codexRun: pty.IPty
   /** The provider's own reading of a run's screen, when it has one. */
   runScreen: SessionRunScreen | undefined
   cols: number
   rows: number
-  /** The raw writer the pane types through: pty-manager.ts's, into codexRun. */
+  /** The raw writer the run screen types through: pty-manager.ts's, into codexRun. */
   write: (data: string) => void
   /** Writes one colour answer into codexRun: pty-manager.ts's. */
   writeColourAnswer: (bytes: string) => void

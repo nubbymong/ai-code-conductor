@@ -21,7 +21,10 @@
 //     screen, then Enter; a spinner title in the holder's answer holds it
 //     back; each submission's log line names where the rule read the screen.
 //
-// Not checked here: whether a session's terminal is held and asks for the
+// Not checked here: the one corpus row the holder's screen shows apart from
+// the committed rows (helper/tests/screen.rs WIDTH_ROWS: codex-macos-ready
+// row 1, the update notice's sparkle counted two cells), read here as
+// xterm.js gives it; whether a session's terminal is held and asks for the
 // screen (tests/unit/main/session-helper-agent-screen.test.ts), the binding
 // that hands `held` in (tests/unit/main/launch-bindings-held-screen.test.ts),
 // the holder's own screen (helper/tests/screen.rs, run by the Helper job),

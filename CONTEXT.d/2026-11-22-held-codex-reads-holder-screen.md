@@ -35,6 +35,10 @@ already has a screen of record in its holder, so it was parsed twice.
   session helper, so its composer rule reads the holder's screen and no pane
   is opened", or the pane's line), and one line per submission naming what
   came of it and where the rule read the screen.
-- pty-manager.ts is not touched. Its comments at the Codex launch that say an
-  Ask question is typed "through the pane" are left for the aggregate, which
-  owns that file's edits this beta.
+- pty-manager.ts is not touched. Its comments that say an Ask question is
+  typed "through the pane" (:6146, :6250) and that name the submit
+  primitive's pane of a Codex session (:7411) are left for the aggregate,
+  which owns that file's edits this beta. The lines in docs/remote/helper-protocol.md (:1251, :1294),
+  helper/README.md (:30) and helper/src/serve.rs (:125) that say nothing in
+  the app asks for the screen reads or the title yet are left for the
+  aggregate too.

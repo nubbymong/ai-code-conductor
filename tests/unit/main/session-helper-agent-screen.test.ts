@@ -120,6 +120,7 @@ describe('a held agent session\'s screen read', () => {
     const read = p.screenRead!
     const rows = await read()
     expect(h.screenReads).toBe(1)
+    // title null: the fake holder answers none (not modelled). A title in the answer is checked at the connection (session-helper-screen-title.test.ts) and at the rule (codex-held-screen.test.ts).
     expect({ cols: rows.cols, rows: rows.rows, lines: rows.lines.length, cut: rows.cut, title: rows.title }).toEqual({ cols: 120, rows: 30, lines: 30, cut: false, title: null })
 
     const cid = 'abcdef0123456789abcdefb2'

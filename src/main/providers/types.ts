@@ -124,8 +124,8 @@ export interface ProviderSpawnCommand {
   logLine?: string
   /** Codex (WP2 PR 4, P4.3): the launch carries `askPrompt` as its prompt on
    *  argv, after `--` (the direct route's fresh launch, PB4). Otherwise main
-   *  holds the question and types it through the run's pane at the first
-   *  ready, empty composer. */
+   *  holds the question and types it through the run's screen (its pane, or a
+   *  held run's holder's screen) at the first ready, empty composer. */
   askPromptOnArgv?: boolean
 }
 

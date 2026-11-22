@@ -179,7 +179,7 @@ describe('the run screen bindCodexPane opens', () => {
     expect(screen.readCodexSessionScreen(SID)).toBeNull()
     const shot = await screen.readCodexScreenOnce(SID)
     expect(holder.screenReads).toBe(1)
-    // The fake holder's rows are blank, at the launch's size, and it sets no title.
+    // The fake holder's rows are blank, at the launch's size. It answers no title at all, even to a connection that acked it (not modelled: a real holder answers '' for none), so the title reads null.
     expect(shot!.lines).toHaveLength(30)
     expect(shot!.title).toBeNull()
     expect(h.infos).not.toContain(PANE_LINE)

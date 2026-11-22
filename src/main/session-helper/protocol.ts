@@ -30,7 +30,9 @@ export const MCP_CAP = 'mcp'
 /** Screen reads through the holder (section 15, from 2.1.3-beta.12): acked
  *  only by a connection that reads the session's screen, and only when the
  *  holder offers it. From 2.1.3-beta.13 a plain terminal's connections ask
- *  for it (a take-over reads its holder's size). */
+ *  for it (a take-over reads its holder's size), and from 2.1.3-beta.14
+ *  (plan section B2) a held agent session's do too, when its provider's
+ *  composer rule reads the holder's screen. */
 export const SCREEN_CAP = 'screen'
 /** The screen's title in a screen read (section 15, from 2.1.3-beta.14): acked
  *  only beside `screen`, by a connection asked for it, and only when the

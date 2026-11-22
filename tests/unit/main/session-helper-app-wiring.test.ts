@@ -437,3 +437,11 @@ describe('the Conductor tools through the holder (2.1.3-beta.11, plan section B2
     h.providers = {}
   })
 })
+
+describe("a held Codex session's screen reads (2.1.3-beta.14, plan section B2)", () => {
+  it('the manager gets the screen reads, with the title, for Codex sessions only', () => {
+    h.settings = { agentSessionsThroughHelper: true }
+    initSessionHelper(() => {})
+    expect(h.made[0].deps.screens).toEqual({ codex: true })
+  })
+})

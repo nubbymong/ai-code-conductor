@@ -3264,7 +3264,7 @@
       ],
       "category": "OTHER",
       "disposition": "added",
-      "evidence": "2.1.3-beta.11 section B2: the session helper is given tool functions for Claude Code and Codex (the tool host's serveToolStream, the Claude Code MCP config switch, and the Codex package's heldToolLaunch through the provider registry) (WP1.68); tests/unit/main/session-helper-app-wiring.test.ts",
+      "evidence": "2.1.3-beta.11 section B2: the session helper is given tool functions for Claude Code and Codex (the tool host's serveToolStream, the Claude Code MCP config switch, and the Codex package's heldToolLaunch through the provider registry); 2.1.3-beta.14 section B2 (aicc_planning #388): it is given the screen reads, with the title, for Codex sessions only (screens: { codex: true }) (WP1.68); tests/unit/main/session-helper-app-wiring.test.ts",
       "note": "the P08 hit is the codex key of the tool functions' map, not a preload or renderer surface"
     },
     {
@@ -8447,7 +8447,7 @@
       ],
       "category": "TEST",
       "disposition": "added",
-      "evidence": "2.1.3-beta.11 section B2 case in a 2.1.3-beta.6 test (tests/unit/main/session-helper-app-wiring.test.ts): the manager gets the tool functions for Claude Code and Codex, the Codex one asking the Codex package's heldToolLaunch and keeping the loopback route when none is offered (WP1.68)",
+      "evidence": "2.1.3-beta.11 section B2 case in a 2.1.3-beta.6 test (tests/unit/main/session-helper-app-wiring.test.ts): the manager gets the tool functions for Claude Code and Codex, the Codex one asking the Codex package's heldToolLaunch and keeping the loopback route when none is offered; 2.1.3-beta.14 section B2 case (aicc_planning #388): the manager gets the screen reads, with the title, for Codex sessions only (deps.screens is { codex: true }) (WP1.68)",
       "note": "created by 2.1.3-beta.6 (plan section B); the P04 hits are the codex key of the tool functions' map; mocked modules only"
     },
     {

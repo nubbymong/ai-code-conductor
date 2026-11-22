@@ -13,7 +13,7 @@
 // own checks (a CLI the app started, no tmux-persistent remote), is the PTY
 // manager's quit's only (beta.9 A2); askQuestion, which skips the Ask check, is the PTY
 // manager's Ask launch's only, and codexRunScreen, the Codex run screen
-// itself, is the PTY manager's only (it resizes and closes each pane through
+// itself, is the PTY manager's only (it resizes and closes each run's reading through
 // it).
 //
 // This reads every src/main/**/*.ts file and finds, in each file outside the
@@ -56,7 +56,7 @@
 //    any name, constructor parameter property or `this` field set from those,
 //    through casts, `!`, `?.`, `??`, aliases and destructuring; and, as a
 //    backstop, by name: `.write` read from anything named ptyProcess,
-//    cliSetupPty, codexRun or pane (the Codex run screen's pane, which holds
+//    cliSetupPty, codexRun or pane (the Codex run screen's record of a run, still named pane, which holds
 //    the raw writer the PTY manager hands it), or destructured under another
 //    name from a property of one of those names.
 // Each site is grouped by the named function it is in (a function
@@ -159,10 +159,10 @@ const ALLOWED: Record<string, Record<string, Allowed>> = {
     spawnClaudeInsights: { count: 1, why: "Insights' own report terminal: /exit", until: 'S18' },
   },
   'src/main/providers/codex/session-screen.ts': {
-    run: { count: 1, why: 'the pane writer: the raw writer the Codex run screen types through, reached only through runScreen.submit, which only this module calls', until: 'stays' },
+    run: { count: 1, why: "the run screen's writer: the raw writer the Codex run screen types through, reached only through runScreen.submit, which only this module calls", until: 'stays' },
   },
   'src/main/providers/codex/index.ts': {
-    '(top level)': { count: 1, why: "the Codex package's runScreen.submit itself, handing a submission to its pane (submitCodexText)", until: 'stays' },
+    '(top level)': { count: 1, why: "the Codex package's runScreen.submit itself, handing a submission to its run (submitCodexText)", until: 'stays' },
   },
   'src/main/session-helper/helper-pty.ts': {
     write: { count: 1, why: "the session helper's transport: a held terminal's input, as raw input frames, or into the direct terminal", until: 'stays' },
@@ -769,7 +769,7 @@ describe('the session input module is the one door for the app\'s own typing int
     expect(where.map((w) => w.split(':')[0]), where.join('\n')).toEqual(['src/main/pty-manager.ts'])
   })
 
-  it('codexRunScreen, the Codex run screen itself, is reached from the PTY manager only (it resizes and closes each pane through it)', () => {
+  it("codexRunScreen, the Codex run screen itself, is reached from the PTY manager only (it resizes and closes each run's reading through it)", () => {
     const where: string[] = []
     for (const p of sources) {
       if (p.startsWith(MODULE_DIR)) continue
