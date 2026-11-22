@@ -8,7 +8,7 @@
 // describe one and how to remove what one left on disk.
 //
 // A kept session's files stay through its kill: its per-session settings
-// file, MCP config and status URL file, and a Codex session's hook folder.
+// file, MCP config and status URL file, and its launch's hook folder.
 // What the launch bound in this run's memory still goes at the kill, as
 // before: this run is ending, and a take-over (S16 step 5) makes it again.
 import type { ProviderId } from '../../shared/providers/ids'
@@ -16,7 +16,7 @@ import type { ProviderId } from '../../shared/providers/ids'
 /** What the release records of a session it keeps, as this run knows it:
  *  the conversation it is on, the account it runs on (an opaque id; null for
  *  the provider's default account, or not known), and the folder of its
- *  launch's hook file (a Codex session's; null when it has none). */
+ *  launch's hook file (null when its launch has none). */
 export interface KeptLaunchFacts {
   conversation: string | null
   account: string | null
