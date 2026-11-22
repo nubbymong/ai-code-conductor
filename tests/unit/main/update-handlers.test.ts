@@ -142,6 +142,7 @@ vi.mock('../../../src/main/data-paths', () => ({ getDataDirectory: () => '/mock/
 // section C2), as a step. hard-exit.ts itself is the real one.
 vi.mock('../../../src/main/vision-manager', () => ({ killSpawnedBrowser: vi.fn(() => { steps.order.push('end the vision browser') }) }))
 
+import { logInfo } from '../../../src/main/debug-logger'
 import { registerUpdateHandlers } from '../../../src/main/ipc/update-handlers'
 
 const INSTALLER = '/mock/dataDir/updates/ccc-upd-XYZ/CCC-2.1.1.exe'
@@ -574,5 +575,46 @@ describe('update:getVersion names the offered version with its prerelease part (
 
   it('a stable offer', async () => {
     expect(await asked(offer('v2.1.3', '2.1.3'))).toBe('2.1.3')
+  })
+})
+
+// aicc_planning#379: the install path's re-check logged the base version
+// ("v2.1.3") for a beta. It names the display version, and the base version when
+// the release has none; the download still reads tagName and installerName.
+describe('update:installAndRestart logs the release it re-checked in full (aicc_planning#379)', () => {
+  const recheckLine = async (release: unknown): Promise<string[]> => {
+    const before = gh.release
+    gh.release = release
+    vi.mocked(logInfo).mockClear()
+    try {
+      await expect(invoke()).resolves.toBe(true)
+    } finally {
+      gh.release = before
+    }
+    return vi.mocked(logInfo).mock.calls.map((c) => String(c[0])).filter((l) => l.includes('Latest GitHub release'))
+  }
+  const release = (tag: string, base: string, displayVersion?: string) => ({
+    version: base, ...(displayVersion === undefined ? {} : { displayVersion }), tagName: tag,
+    installerName: `AI-Code-Conductor-${tag.replace(/^v/, '')}.exe`, installerUrl: `https://h/${tag}.exe`, channel: tag.includes('-') ? 'beta' : 'stable',
+  })
+
+  it('a beta names its prerelease part', async () => {
+    expect(await recheckLine(release('v2.1.3-beta.12', '2.1.3', '2.1.3-beta.12')))
+      .toEqual(['[update] Latest GitHub release: v2.1.3-beta.12 (channel: beta)'])
+  })
+
+  it('an rc names its prerelease part', async () => {
+    expect(await recheckLine(release('v2.1.3-rc.1', '2.1.3', '2.1.3-rc.1')))
+      .toEqual(['[update] Latest GitHub release: v2.1.3-rc.1 (channel: beta)'])
+  })
+
+  it('a stable release names its version', async () => {
+    expect(await recheckLine(release('v2.1.3', '2.1.3', '2.1.3')))
+      .toEqual(['[update] Latest GitHub release: v2.1.3 (channel: stable)'])
+  })
+
+  it('a release with no display version names its base version', async () => {
+    expect(await recheckLine(release('v2.1.3-beta.12', '2.1.3')))
+      .toEqual(['[update] Latest GitHub release: v2.1.3 (channel: beta)'])
   })
 })

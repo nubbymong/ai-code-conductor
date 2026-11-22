@@ -127,7 +127,7 @@ export function registerUpdateHandlers(): void {
       const latestRelease = await checkGitHubRelease()
       if (latestRelease) {
         cachedRelease = latestRelease
-        logInfo(`[update] Latest GitHub release: v${latestRelease.version} (channel: ${latestRelease.channel})`)
+        logInfo(`[update] Latest GitHub release: v${latestRelease.displayVersion || latestRelease.version} (channel: ${latestRelease.channel})`)
       }
     } catch (err) {
       logInfo(`[update] GitHub re-check failed, using cached info: ${err}`)
