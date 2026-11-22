@@ -55,9 +55,10 @@ terminal's host has no program). The helper's program check, not the time, is
 what keeps a running terminal's host.
 
 **Second review fix: every host left is ended.** With every time widened by
-50 ms on each side, two terminals started within about 50 ms of each other (a
-restore's tabs, a tab and its partner terminal) each lie in the other's time,
-and the helper still ended nothing when more than one host passed its rules.
+50 ms on each side, two terminals started within about 50 ms of each other
+(for example tabs switched through quickly: the app starts a tab's terminal
+only when the tab is first on screen, so tabs made together do not start their
+terminals together) each lie in the other's time, and the helper still ended nothing when more than one host passed its rules.
 So when both programs had ended by the first ask (both ended within about
 1.2 s of each other, as node-pty reports an exit 1 s after it, or both in
 their first 6 s), neither host was ended, each terminal asks only once, and
@@ -108,7 +109,16 @@ ended, and a third still running, asked once with a time that holds all
 three: ended 2, the running one's host kept with its note) replaces the one
 that pinned "neither host ended", and failed in run 45046117494 (Helper,
 windows-2025) against the first review fix's mode: ended 0, "2 console hosts
-were made in that time, so none was ended". They suspend each host before
+were made in that time, so none was ended". The third review round found that
+the replacement had dropped the only check that the time picks among ended
+hosts (nothing failed if the mode stopped applying it), so the test now also
+has an ended terminal started before the time of the first ask: that ask ends
+the two hosts in its time (2), the early terminal's host, with no program and
+old enough, is kept (only the time keeps it), and the early terminal's own
+ask then ends it (1), the running one's host kept throughout. With the time
+check dropped in a throwaway commit on a temporary branch (since deleted) it
+fails in run 45051425080 (Helper, windows-2025): ended 3, not 2, at the first
+ask; it is green on the real code. They suspend each host before
 its program ends, as the console-hosts tests do, so they check the mode and not what
 Windows does with an idle host, and they wait until each host is 6 s old.
 (The red runs 45032572689, 45033409949 and 45034021302 also showed a host gone
@@ -122,9 +132,12 @@ and the SSH End and liveness execs (pty-manager.ts's SSH code, which takes no
 hunk this beta) and the first-run setup terminal (ipc/setup-handlers.ts).
 Handed to the orchestrator for a ticket. The VM line: C1.3's three counts
 passed on the first review fix's head (f86e2efa) with tabs started 12 s
-apart. Owed on this head, from its Helper artifact: the VM's clock tick
-(distinct system time readings in 500 ms; about 32 at the default 15.6 ms
-tick), C1.3's three counts again, two tabs started together with the second
-closed and the first still working, and the burst: two or more tabs started
-together (a restore) whose programs end within about a second of each other,
-every one of their hosts gone within 30 s.
+apart. On the second review fix's head (9d544893) the VM re-check passed: a
+burst of three terminals started within 42 ms of each other, two with their
+programs ended and one still running, had both ended terminals' hosts gone by
+one ask and the running one's host kept (case 1; then the app quit). That
+check also showed that tabs made together do not start their terminals
+together: the app starts a tab's terminal only when the tab is first on
+screen, so a burst is terminals started within about 50 ms of each other (for
+example tabs switched through quickly), not a restore's tabs. The third round
+changes only a test and wording, so no VM run follows it.
