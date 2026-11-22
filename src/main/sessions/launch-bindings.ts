@@ -11,11 +11,12 @@
 // the spawn), then bindCodexPane and bindCodexLaunch (after it). A Claude Code
 // launch: bindClaudeLaunch, right after its spawn. Every launch: bindLoggingRun,
 // once the session is registered. The end of a session: unbindLaunchFiles at
-// its own exit, or at once at a quit's kill (killAllPty and gracefulExitPty's
-// forced kill: the app may be gone before the exit is reported; a Codex
-// launch's waits for its exit), and in the teardown every kill and every exit
-// runs (cleanupSessionResources) unbindCodexLease, unbindLaunchTelemetry and
-// unbindLaunchRegistrations, each at its own place in that teardown.
+// its own exit, or at once at a quit's or an update's kill (killAllPty and
+// gracefulExitPty's forced kill: the app may be gone before the exit is
+// reported, aicc_planning#385; a Codex launch's waits for its exit), and in
+// the teardown every kill and every exit runs (cleanupSessionResources)
+// unbindCodexLease, unbindLaunchTelemetry and unbindLaunchRegistrations, each
+// at its own place in that teardown.
 //
 // S16 step 4 (aicc_planning#387, #359): a session an app update keeps running
 // (kept-launches.ts launchKeptForUpdate) keeps what its launch put on disk
@@ -629,8 +630,9 @@ export function bindLoggingRun(binding: LoggingRunBinding): LoggingRun {
 }
 
 /** The session's own end (its exit, when no newer process has taken the
- *  session over, or a quit's kill: killAllPty and gracefulExitPty's forced
- *  kill, aicc_planning#385; a Codex launch's waits for its exit): its gateway
+ *  session over, or a quit's or an update's kill: killAllPty and
+ *  gracefulExitPty's forced kill, which the app does not outlive,
+ *  aicc_planning#385; a Codex launch's waits for its exit): its gateway
  *  token and its per-session files go. A session an app update keeps running
  *  keeps its files (S16 step 4): its CLI still reads them, and
  *  removeKeptLaunchFiles removes them once it is not kept. */

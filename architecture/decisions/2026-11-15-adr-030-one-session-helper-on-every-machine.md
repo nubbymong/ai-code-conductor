@@ -603,8 +603,12 @@ runs in each runner dispatch and in 22 of 23 and 13 of 14 runs on the test machi
 node-pty's kill ran right after each exit; the one run without one in each was the only run
 whose program the kill ended. On the bundled ConPTY, ENDS BY ITSELF (no host of the probe's at
 any time). The app gives the system ConPTY to Claude Code sessions and plain terminals, so a
-session that ends there leaves its console host running; that is on beta 13's bug track
-(aicc_planning#363; the kill is in `pty-manager.ts`). Codex started with its background server
+session that ended there by itself left its console host running until the app quit (5 of 5
+on the published beta.13). The cause is in node-pty 1.2.0-beta.15 (`src/win/conpty.cc`): its
+exit thread drops the pseudoconsole, unclosed, when the program exits, so the kill after it
+closes nothing. From 2.1.3-beta.14 the app ends that host through the helper's
+`end-console-host` mode once node-pty reports the exit (aicc_planning#363; protocol 15, "A
+terminal's console host after its program has ended"). Codex started with its background server
 (no `--no-daemon`) in the test machine's elevated SSH session: 0.157.1 FAILS on both ConPTYs,
 printing "Error: start the Windows daemon from a non-elevated terminal; shared clients must
 not inherit administrator privileges" and exiting with code 1 before its composer; 0.170.0
