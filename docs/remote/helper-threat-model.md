@@ -653,18 +653,21 @@ rollback returns to the earlier beta's rows, and every row has a negative test.
   the helper, was made at least 6 s before the helper (node-pty gives a
   program 5 s to start in its pseudoconsole, and until then a running
   terminal's host has no program), and is the console host of no process that
-  still runs (each listed process's `ProcessConsoleHostProcess`; a process the
-  helper cannot open is not read, and one that runs but cannot be read stops
-  the mode from ending anything). When more than one is, it ends none. It holds
-  the one it ends open from its check to its end. A time longer than ten
-  seconds is refused. It gives the app no new power: the app can already end
-  any process of its user. Tested in `helper/tests/console_hosts.rs` by
+  still runs (each listed process's `ProcessConsoleHostProcess`, where a
+  process with no console can answer its maker's pid, which only ever keeps a
+  host; a process the helper cannot open is not read, and one that runs but
+  cannot be read stops the mode from ending anything). It ends each one that
+  is, so two terminals started together whose programs have both ended have
+  both hosts ended, and holds each open from its check to its end. A time
+  longer than ten seconds is refused. It gives the app no new power: the app
+  can already end any process of its user. Tested in
+  `helper/tests/console_hosts.rs` by
   `a_terminal_whose_program_ended_has_its_console_host_ended_once_and_no_other`
   (a host less than 6 s old is not ended, nor a running terminal's host
   outside the time),
   `a_terminal_whose_program_still_runs_keeps_its_host_when_asked_for_with_its_own_start`,
   `a_time_that_holds_a_running_terminal_and_an_ended_one_ends_only_the_ended_ones_host`,
-  `two_terminals_started_in_one_time_have_neither_host_ended_by_it` and
+  `two_ended_terminals_in_one_time_have_both_hosts_ended_by_one_ask_and_a_running_one_keeps_its_host` and
   `a_start_time_it_cannot_take_is_refused`, the bounds by the unit tests in
   `helper/src/consoles.rs`, and the app's side in
   `tests/unit/main/console-host-end.test.ts`. Its adversarial pass is owed to

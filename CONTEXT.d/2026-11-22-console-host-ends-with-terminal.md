@@ -27,11 +27,12 @@ each terminal node-pty makes on Windows' own ConPTY (Date.now() just before
 and after the spawn, inside which the pseudoconsole and its host are made;
 spawns run one at a time on the main thread) and, once node-pty reports the
 program's exit, runs the session helper's new `end-console-host` mode with
-that time (`helper/src/consoles.rs`). The helper ends the one `conhost.exe`
+that time (`helper/src/consoles.rs`). The helper ends each `conhost.exe`
 (Windows' own program file) that is a child of the app, this user's, made in
-that time and still running, holding it open from the check to the end; none,
-or more than one, and it ends nothing. Two starts in one millisecond are not
-asked for.
+that time and still running, holding each open from the check to the end
+(the first fix ended one, and none when more than one passed; the second
+review fix below ends each). Two starts in one millisecond are not asked
+for.
 
 **Review fix: the time does not keep a running terminal's host.** Date.now()
 in Electron's main process is not the clock Windows stamps creation times
@@ -52,6 +53,30 @@ read stops it from ending anything) nor one made less than 6 s before it runs
 `CONNECTION_TIMEOUT` in its `windowsPtyAgent.js`, and until then a running
 terminal's host has no program). The helper's program check, not the time, is
 what keeps a running terminal's host.
+
+**Second review fix: every host left is ended.** With every time widened by
+50 ms on each side, two terminals started within about 50 ms of each other (a
+restore's tabs, a tab and its partner terminal) each lie in the other's time,
+and the helper still ended nothing when more than one host passed its rules.
+So when both programs had ended by the first ask (both ended within about
+1.2 s of each other, as node-pty reports an exit 1 s after it, or both in
+their first 6 s), neither host was ended, each terminal asks only once, and
+both ran until the app quit, as on beta.13. A host never ended earlier (a
+same-millisecond start, a helper error) blocked its neighbour for good the
+same way. After the program check that rule kept nothing safe: every host
+left has passed every rule by itself. Now the helper ends each host left, and
+`ended` says how many. The app's code is unchanged: it logs any `ended` above
+0.
+
+**Wording: what a process with no console answers.** The reviewer read
+`ProcessConsoleHostProcess` read-only on the dev PC (Windows 11 build 26320,
+347 processes readable): 228 with no console answered the pid of the process
+that made them, flag bit 0 clear; the 63 attached to a console answered their
+host's pid, bit 0 set. The comments said such a process answers 0. The code
+counts those makers' pids as hosts with a program, which can only keep a host,
+never end one, so the code stays as it is (not narrowed to bit 0 until
+Windows 10 and Server are measured); `host_pid_of`, `hosts_with_a_program`
+and the threat model now say so.
 
 The wrapper sits on the one place the app starts a terminal the
 usual way (`spawnWithNodePty`, `src/main/session-helper/manager.ts`: Terminal
@@ -77,8 +102,14 @@ three were committed before the mode and failed in the Helper job with
 "unknown command end-console-host", and the review fix's two new tests and the
 6 s check failed in run 45039534666 against the first fix's mode (a running
 terminal's host ended; a time holding a running and an ended terminal ended
-neither; a host asked for within 5 s of its start ended). They suspend each host before its program
-ends, as the console-hosts tests do, so they check the mode and not what
+neither; a host asked for within 5 s of its start ended). The second review
+fix's test (two terminals started back to back whose programs have both
+ended, and a third still running, asked once with a time that holds all
+three: ended 2, the running one's host kept with its note) replaces the one
+that pinned "neither host ended", and failed in run 45046117494 (Helper,
+windows-2025) against the first review fix's mode: ended 0, "2 console hosts
+were made in that time, so none was ended". They suspend each host before
+its program ends, as the console-hosts tests do, so they check the mode and not what
 Windows does with an idle host, and they wait until each host is 6 s old.
 (The red runs 45032572689, 45033409949 and 45034021302 also showed a host gone
 before the mode ran; the test had ended it itself: its host search dropped
@@ -89,8 +120,11 @@ what it holds when dropped.)
 host the same way when their program ends by itself: an SSH session's terminal
 and the SSH End and liveness execs (pty-manager.ts's SSH code, which takes no
 hunk this beta) and the first-run setup terminal (ipc/setup-handlers.ts).
-Handed to the orchestrator for a ticket. The VM line is owed: first the
-VM's clock tick (distinct system time readings in 500 ms; about 32 at the
-default 15.6 ms tick), then C1.3's three counts on this head at the default
-tick, and two tabs started together, the second closed, the first still
-working.
+Handed to the orchestrator for a ticket. The VM line: C1.3's three counts
+passed on the first review fix's head (f86e2efa) with tabs started 12 s
+apart. Owed on this head, from its Helper artifact: the VM's clock tick
+(distinct system time readings in 500 ms; about 32 at the default 15.6 ms
+tick), C1.3's three counts again, two tabs started together with the second
+closed and the first still working, and the burst: two or more tabs started
+together (a restore) whose programs end within about a second of each other,
+every one of their hosts gone within 30 s.

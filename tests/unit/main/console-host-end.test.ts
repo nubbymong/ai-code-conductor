@@ -9,8 +9,8 @@ import type { IPty } from 'node-pty'
  * node-pty forgets the pseudoconsole, unclosed, when the program exits. The
  * app now times each such terminal's start and, after node-pty reports the
  * program's exit, has the session helper's end-console-host mode end the host
- * made in that time. The helper's own rules (which host it ends: never one
- * that still has a program or is less than 6 s old, and none of two) are
+ * made in that time. The helper's own rules (which hosts it ends: never one
+ * that still has a program or is less than 6 s old) are
  * tested in helper/tests/console_hosts.rs and helper/src/consoles.rs; this is
  * the app's side: which terminals are timed, when the helper is asked (no
  * sooner than 6 s and the clock's slack after the start), with what (the time
@@ -218,13 +218,13 @@ describe('a terminal on the ConPTY built into Windows', () => {
     expect(logs).toContain('[console-hosts] The session helper could not end the console host of a terminal whose program ended (process 77): no answer within 10 s')
 
     // Nothing ended, with the helper's note: the note is logged, no "Ended" line.
-    state.answer = { ok: true, stdout: `{"pid":${OWN_PID},"created":"1","ended":0}`, stderr: 'aicc-helper: note: 2 console hosts were made in that time, so none was ended\n' }
-    const two = fakeTerminal({ pid: 78 })
-    spawnEndingConsoleHost({}, () => two.proc)
-    two.exit()
+    state.answer = { ok: true, stdout: `{"pid":${OWN_PID},"created":"1","ended":0}`, stderr: 'aicc-helper: note: the console host made in that time (process 5150) still has a program, so it was not ended\n' }
+    const kept = fakeTerminal({ pid: 78 })
+    spawnEndingConsoleHost({}, () => kept.proc)
+    kept.exit()
     await settle()
     expect(runs).toHaveLength(3)
-    expect(logs).toContain('[console-hosts] About a terminal whose program ended (process 78): aicc-helper: note: 2 console hosts were made in that time, so none was ended')
+    expect(logs).toContain('[console-hosts] About a terminal whose program ended (process 78): aicc-helper: note: the console host made in that time (process 5150) still has a program, so it was not ended')
     expect(logs.filter((l) => l.startsWith('[console-hosts] Ended'))).toHaveLength(0)
   })
 })

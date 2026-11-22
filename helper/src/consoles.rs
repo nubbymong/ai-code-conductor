@@ -1,8 +1,9 @@
 //! `aicc-helper console-hosts`: at the app's start, end the console hosts the
 //! run before it left running when it was ended from outside. Windows only; on
 //! macOS and Linux the mode refuses (protocol section 15, "Console hosts a run
-//! left"). `aicc-helper end-console-host`, below, ends the host of one
-//! terminal of the running app whose program has ended (Windows only too).
+//! left"). `aicc-helper end-console-host`, below, ends the hosts of the
+//! running app's terminals whose programs have ended, among those started in
+//! the time it is given (Windows only too).
 //!
 //! ```text
 //! aicc-helper console-hosts [--pid <n> --created <t>]
@@ -71,7 +72,7 @@
 //! host: the last two rules below do. `<t>` is in steps of 100 ns since 1601
 //! (UTC); `--made-to` is not included, and it is after `--made-from` by at
 //! most `MAX_START_SPAN`. The mode reads its own creation time, then the
-//! process list once, and ends the one process that is:
+//! process list once, and ends each process that is:
 //!   - named `conhost.exe`, and its program file is Windows' own
 //!     `System32\conhost.exe`;
 //!   - listed with the process that started this mode as its parent;
@@ -83,17 +84,18 @@
 //!     and until it has, a running terminal's host has no program;
 //!   - the console host of no process that still runs (`host_pid_of`): a
 //!     host that still has a program is never ended.
-//! It is held open from its check to its end, so its pid cannot pass to
-//! another process in between. When no process is all of that, or more than
-//! one is (two terminals started in that time whose programs have both
-//! ended), nothing is ended. Nothing is ended either when a process that
-//! still runs, and could be opened, cannot be read for its console host: a
-//! process that cannot be opened is not read (a terminal's program is this
-//! user's, and can be). It prints the same line as `console-hosts`, naming
-//! the process that started it, with `ended` 0 or 1, and exits 0; a note goes
-//! to stderr. It exits 1, ending nothing, when it cannot read its own creation
-//! time or its own user, the process list, the process that started it, or
-//! the system folder, and 2 on a command line it cannot read.
+//! Each is held open from its check to its end, so its pid cannot pass to
+//! another process in between. Each one passes every rule by itself, so two
+//! terminals started in that time whose programs have both ended have both
+//! hosts ended. When no process is all of that, nothing is ended. Nothing is
+//! ended either when a process that still runs, and could be opened, cannot
+//! be read for its console host: a process that cannot be opened is not read
+//! (a terminal's program is this user's, and can be). It prints the same line
+//! as `console-hosts`, naming the process that started it, with `ended` how
+//! many it ended, and exits 0; a note goes to stderr. It exits 1, ending
+//! nothing, when it cannot read its own creation time or its own user, the
+//! process list, the process that started it, or the system folder, and 2 on
+//! a command line it cannot read.
 #![allow(unsafe_code)]
 
 use crate::start::{app_created, Refusal};
@@ -325,10 +327,14 @@ pub fn old_enough(made: u64, self_made: u64) -> bool {
     made.saturating_add(NEW_HOST_WAIT) <= self_made
 }
 
-/// The pid of a process's console host in what Windows answers for its
-/// `ProcessConsoleHostProcess` (NtQueryInformationProcess, class 49): the
-/// value with its two low bits, which are flags, cleared. 0: it has none (a
-/// value too big for a pid names no process either).
+/// The pid in what Windows answers for a process's `ProcessConsoleHostProcess`
+/// (NtQueryInformationProcess, class 49): the value with its two low bits,
+/// which are flags, cleared. For a program attached to a console it is its
+/// console host's pid. A process with no console does not always answer 0: on
+/// Windows 11 build 26320 it answers the pid of the process that made it, with
+/// flag bit 0 clear. `end-console-host` counts that pid too: it can only keep a
+/// host, never end one. 0: it names no process (a value too big for a pid
+/// names none either).
 pub fn host_pid_of(value: usize) -> u32 {
     u32::try_from(value & !3).unwrap_or(0)
 }
@@ -391,8 +397,9 @@ pub fn run(_req: &ConsoleHostsRequest) -> std::io::Result<(Answer, Vec<String>)>
     Err(std::io::Error::new(std::io::ErrorKind::Unsupported, "console-hosts is for Windows only"))
 }
 
-/// End the console host the start `when` made (see the module comment): the
-/// answer and the notes for the app's log. Windows only.
+/// End the console hosts the start `when` made whose programs have ended (see
+/// the module comment): the answer and the notes for the app's log. Windows
+/// only.
 #[cfg(not(windows))]
 pub fn end_one(_when: &StartTime) -> std::io::Result<(Answer, Vec<String>)> {
     Err(std::io::Error::new(std::io::ErrorKind::Unsupported, "end-console-host is for Windows only"))
@@ -586,9 +593,9 @@ mod win {
         Ok((parent, parent_made))
     }
 
-    /// The pid of the console host of the process behind `process`
-    /// (`host_pid_of`; 0 when it has none), or the status Windows gave when
-    /// it cannot be read.
+    /// The pid the process behind `process` names as its console host
+    /// (`host_pid_of`, which says what a process with no console answers), or
+    /// the status Windows gave when it cannot be read.
     fn console_host_of(process: usize) -> Result<u32, i32> {
         let mut value: usize = 0;
         let size = std::mem::size_of::<usize>() as u32;
@@ -599,12 +606,14 @@ mod win {
         Ok(host_pid_of(value))
     }
 
-    /// The console hosts that still have a program: the console host of each
-    /// process in `list` that still runs. A process that cannot be opened is
-    /// not read (a terminal's program is this user's, and can be). One that
-    /// has exited, still listed while a handle to it is open, has left its
-    /// host. Err, saying why, when a process that still runs, and could be
-    /// opened, cannot be read: then no host can be said to have no program.
+    /// The pids that running processes name as their console host
+    /// (`host_pid_of`): the console host of each process in `list` that still
+    /// runs, and for a process with no console whatever pid Windows answers in
+    /// its place. A process that cannot be opened is not read (a terminal's
+    /// program is this user's, and can be). One that has exited, still listed
+    /// while a handle to it is open, has left its host. Err, saying why, when
+    /// a process that still runs, and could be opened, cannot be read: then no
+    /// host can be said to have no program.
     fn hosts_with_a_program(list: &[(u32, u32, String)]) -> Result<Vec<u32>, String> {
         let mut hosts: Vec<u32> = Vec::new();
         for (pid, _, _) in list {
@@ -699,22 +708,20 @@ mod win {
             }
             !has_program
         });
-        if found.len() > 1 {
-            notes.push(format!("{} console hosts were made in that time, so none was ended", found.len()));
-            return Ok((answer(0), notes));
+        // Each one left has passed every rule by itself: two terminals started
+        // together whose programs have both ended have both hosts ended.
+        let until = Instant::now() + FAILED_END_WAIT;
+        let mut ended: u32 = 0;
+        for (pid, host) in &found {
+            if unsafe { TerminateProcess(host.0 as HANDLE, 1) } != 0 {
+                ended += 1;
+            } else if !matches!(exit_code_within(host.0, ms_until(until)), Ok(Some(_))) {
+                // Windows refuses to end a process whose own exit is under
+                // way; one that has not exited within the wait still runs.
+                notes.push(format!("the console host made in that time (process {pid}) could not be ended"));
+            }
         }
-        let Some((pid, host)) = found.pop() else {
-            return Ok((answer(0), notes));
-        };
-        if unsafe { TerminateProcess(host.0 as HANDLE, 1) } != 0 {
-            return Ok((answer(1), notes));
-        }
-        // Windows refuses to end a process whose own exit is under way; one
-        // that has not exited within the wait still runs.
-        if !matches!(exit_code_within(host.0, ms_until(Instant::now() + FAILED_END_WAIT)), Ok(Some(_))) {
-            notes.push(format!("the console host made in that time (process {pid}) could not be ended"));
-        }
-        Ok((answer(0), notes))
+        Ok((answer(ended), notes))
     }
 
     /// See the module comment.

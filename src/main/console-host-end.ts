@@ -32,11 +32,12 @@
  * old (NEW_HOST_WAIT_MS: node-pty gives a program 5 s to start in its
  * pseudoconsole, and until then a running terminal's host has no program).
  * So the helper is asked no sooner than NEW_HOST_WAIT_MS and the slack after
- * the start. Once node-pty reports the program's exit, the helper ends the
- * one console host that is a child of this process, Windows' own
+ * the start. Once node-pty reports the program's exit, the helper ends each
+ * console host that is a child of this process, Windows' own
  * System32\conhost.exe, this user's, made in that time, still running, 6 s
- * old or more and with no program left; when none is, or more than one, it
- * ends nothing (docs/remote/helper-protocol.md section 15). After a kill
+ * old or more and with no program left, so terminals started together whose
+ * programs ended together have every host ended by the first ask; when none
+ * is, it ends nothing (docs/remote/helper-protocol.md section 15). After a kill
  * while the program still ran, node-pty has closed the pseudoconsole, so the
  * helper finds no running host made then and ends nothing: one short run on
  * every end, so node-pty's own state at the kill is never read. A terminal
