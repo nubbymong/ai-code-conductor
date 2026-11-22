@@ -625,10 +625,22 @@ mod tests {
     }
 
     /// A new, empty folder of this test's own.
+    ///
+    /// Its mode is set outright on Unix. The umask is the process's, and the
+    /// transport tests that run beside these bind their sockets under a umask
+    /// of 0177 (transport/unix.rs, `bind_private`): a folder made in that
+    /// moment would be 0600, with no search bit, so no file could be made in
+    /// it (seen once on the Linux runner as "Permission denied"). A mode set
+    /// with `set_permissions` is not touched by the umask.
     fn folder(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("aicc-capture-{}-{name}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("a test folder");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).expect("the test folder's mode");
+        }
         dir
     }
 
