@@ -1,6 +1,7 @@
-//! `aicc-helper`: the session helper's command line. Nothing in the app starts
-//! it yet (that is the next slice); the commands exist for the self-test, the
-//! tests and the app's coming session client.
+//! `aicc-helper`: the session helper's command line. The app runs its modes
+//! (from `src/main/session-helper/` and `src/main/console-host-leftovers.ts`,
+//! among others), and a held session's CLI runs `hook` and `mcp`. Nothing runs
+//! `capture` yet: probe P21 measures it first.
 //!
 //! ```text
 //! aicc-helper version
@@ -13,6 +14,7 @@
 //! aicc-helper start [--hide] --cwd <folder> -- <program> [args...]   (Windows only)
 //! aicc-helper end --pid <n> --created <t>                            (Windows only)
 //! aicc-helper console-hosts [--pid <n> --created <t>]                (Windows only)
+//! aicc-helper capture --out <folder>                                 (Windows only)
 //! ```
 //!
 //! `hold` runs one holder (protocol section 15). With `--detach` it starts the
@@ -39,7 +41,7 @@ use std::process::ExitCode;
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
-const USAGE: &str = "usage: aicc-helper <version | hello | selftest | hold | list | hook | mcp | start | end | console-hosts> [options]";
+const USAGE: &str = "usage: aicc-helper <version | hello | selftest | hold | list | hook | mcp | start | end | console-hosts | capture> [options]";
 /// The ring is 1 KiB to 64 MiB; the protocol's default is 2 MiB.
 const MIN_RING_BYTES: usize = 1024;
 const MAX_RING_BYTES: usize = 64 * 1024 * 1024;
@@ -145,6 +147,9 @@ fn main() -> ExitCode {
         // At the app's start, end the console hosts the run before left when
         // it was ended from outside (Windows, consoles.rs).
         "console-hosts" => aicc_helper::consoles::command(rest),
+        // One picture of each display, for Snap (Windows; capture.rs). The
+        // app does not run it yet.
+        "capture" => aicc_helper::capture::command(rest),
         // A run with one terminal, as the app has for a tab, for the tests of
         // console-hosts (Windows); not a public command.
         "__console-parent" => aicc_helper::consoles::console_parent(),

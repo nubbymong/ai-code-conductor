@@ -1,0 +1,26 @@
+## 2026-11-22 -- The helper's capture mode on Windows (dormant), and probe P21
+
+Plan 2.1.3-beta.14, section C6 (S8 step 1, aicc_planning#391). Snap's own engine starts in the
+helper (ADR-030 D3, D4, protocol change 2), measured before anything is built on it.
+
+- **The mode** (`helper/src/capture.rs`). `aicc-helper capture --out <folder>`: aware of each
+  display's scale (per-monitor DPI awareness, version 2), it checks it can see the screen (its
+  window station is shown on a display, and the desktop on the screen is its own), lists the
+  displays (primary first), grabs each whole display with BitBlt and writes it as a new
+  `display-<n>.bmp` (32 bits a pixel, rows from the bottom), then prints one JSON line of each
+  display's bounds, DPI and scale. Exit 0 written, 1 failed (it then removes what it wrote), 2 a
+  command line it does not take, 3 no desktop to capture, 4 not supported (macOS and Linux). Three
+  more windows-sys features (Graphics_Gdi, UI_HiDpi, System_StationsAndDesktops), no package.
+  Nothing in the app runs it.
+- **Probe P21** (`helper/probes/p21-capture.cjs`, `p21-windows.ps1`). The decision lines are in
+  the script's header, written before the run: CAPTURES per scale when 3 of 3 console-session runs
+  exit 0 within 2 s and write every display Windows lists at its size and DPI, not all black;
+  FAILS CLEANLY when 3 of 3 SSH-session runs exit 3 within 10 s with a message and no file. The
+  console runs start through a scheduled task in the signed-in console session (not elevated); a
+  second scale is set with the display configuration call the Settings page makes. The verdict
+  lines have a unit test (`tests/unit/scripts/probe-p21.test.ts`), red under three mutants (the
+  black-picture check, the time bound and the SSH exit check each dropped).
+- **Docs.** Protocol section 15 gains "Capturing the displays" (change 2; its command line is not
+  frozen while nothing runs it); ADR-030 gains the P21 row and reads twenty-one probes; the helper
+  README lists the mode (and `console-hosts`, which it had left out); threat model 3.13 gains the
+  mode's bullet, its adversarial pass owed before stable.

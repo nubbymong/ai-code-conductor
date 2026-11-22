@@ -3,7 +3,7 @@
 - Status: Accepted (owner decisions D1 to D20 of 2026-11-15; plan approved on
   the Agent Canvas, 2026-11-15). Only the scope of 2.1.3-beta.4 is approved for
   building. Every later slice comes back one beta at a time, and each of the
-  twenty probes below can still stop or reshape the slice it gates.
+  twenty-one probes below can still stop or reshape the slice it gates.
 - Date: 2026-11-15
 - Builds on: ADR-029 (remote sessions run through a device helper),
   `docs/remote/helper-protocol.md` (protocol version 1),
@@ -349,7 +349,7 @@ otherwise carried from earlier measurement.
 - **Pace.** After each release the next beta is cut from the measured hours
   per slice, not from a calendar. Soak time (D15) is not in those hours.
 - **Honest cost.** Until the remote deletion the SDLC is heavier, not lighter:
-  a Rust toolchain and signing, twenty probes on real machines, two session
+  a Rust toolchain and signing, twenty-one probes on real machines, two session
   paths side by side, and five dedicated adversarial rounds that the decisions
   add (the token on This computer, the token on a remote machine, the remote
   conversation intake, Windows provisioning, the user's own pre-launch
@@ -397,6 +397,7 @@ their questions, gates and fallbacks are restated for the slice plan.
 | P18 | On Windows, how do Claude Code and Codex start a tool server over standard input and output, and is it gone when the CLI ends? | Tools through the helper (S15) | The relay's start is planned again for that CLI, whose sessions keep today's loopback route to the tools until then |
 | P19 | After a re-attach that starts in the middle of a session's output, does a resize make Claude Code and Codex redraw their screen, on Windows, macOS and Linux? | What a mid-stream re-attach does, and what the holder's screen is for (S13) | On that system the holder repaints the terminal on attach from its own screen, with the holder screen's next step and before S16's second half and S25 there |
 | P20 | Once the app run that started a CLI is gone: what do Claude Code's http PreToolUse hook and Codex's hook forwarder do when the endpoint refuses, answers 401 or 404, or never answers; does Claude Code read its `--settings` hooks or its `--mcp-config` again while it runs; does each CLI list its tools again on `notifications/tools/list_changed`? | S16's second half: steps 2, 4 and 6 (CONTEXT.d/2026-11-19-what-a-held-agent-session-needs.md) | PreToolUse goes through the hook mode (step 2) before step 4 keeps that CLI's session; a take-over writes nothing into a file the CLI reads only once; step 6 is dropped for a CLI that does not list again, and its held session keeps the tool list it started with |
+| P21 | On Windows, can the helper's capture mode, started from the signed-in user's own session, capture each display in physical pixels at that display's scale within 2 seconds, and does a run from a session with no desktop fail cleanly? | Snap replaced on Windows (S8, D3) | Electron's `desktopCapturer` behind our overlay on Windows, and the capture mode's Windows path is planned again |
 
 P12 result (2026-11-15): a Token session runs and keeps its usage figures;
 Remote Control and extra-usage credits need a Standard login; which kind is
