@@ -1,8 +1,8 @@
 {
   "schema": "wp1-legacy-codex-manifest/3",
-  "generatedAt": "2026-11-22T13:18:46.470Z",
-  "head": "f52add8b6504e571a41ab9494d084fceacefcc14",
-  "tree": "4eeff072f6bb1b2a05532e3e354a3309d5f9bd31",
+  "generatedAt": "2026-11-22T14:42:01.162Z",
+  "head": "1254d6347ab2c35daea74da89d94e4243b8ace2f",
+  "tree": "fb9558c0c0eea259f3d2c0035aaac4cd81c57204",
   "scannedWorkingTree": false,
   "predicateDigest": "100a1233edebdc39a5f9004d3fba980a89ebb15b25872e52076386bc84b03153",
   "predicates": [
@@ -116,9 +116,9 @@
     "\\.(png|jpg|jpeg|gif|ico|icns|webp|svg|woff2?|ttf|otf|mp4|zip|asar|node|exe|dll|dylib|so|pdf)$",
     "^package-lock\\.json$"
   ],
-  "trackedFileCount": 3684,
-  "excludedFileCount": 570,
-  "scannedFileCount": 3114,
+  "trackedFileCount": 3694,
+  "excludedFileCount": 572,
+  "scannedFileCount": 3122,
   "unscopedFileCount": 15,
   "unscoped": [
     ".claude/settings.json",
@@ -139,8 +139,8 @@
   ],
   "unscopedMentions": [],
   "unreadable": [],
-  "matchedPathCount": 1046,
-  "pathDigest": "a65d5093278cd24ee463a0e7d642a188b8896acb44f1fa2f614424b87f3e855f",
+  "matchedPathCount": 1049,
+  "pathDigest": "ba3b2d1305508b00a0259cee353d863e4dac2dff55898d55edb04a0fd6b38a3f",
   "entries": [
     {
       "path": ".github/workflows/ci.yml",
@@ -551,7 +551,7 @@
         "P01",
         "P14"
       ],
-      "lineCount": 11
+      "lineCount": 12
     },
     {
       "path": "helper/fixtures/screens/codex-windows-system-mid-reply.json",
@@ -1906,7 +1906,7 @@
         "P01",
         "P14"
       ],
-      "lineCount": 93
+      "lineCount": 97
     },
     {
       "path": "src/main/providers/codex/index.ts",
@@ -1917,7 +1917,7 @@
         "P09",
         "P14"
       ],
-      "lineCount": 293
+      "lineCount": 295
     },
     {
       "path": "src/main/providers/codex/insights-exec.ts",
@@ -2121,7 +2121,7 @@
         "P07",
         "P14"
       ],
-      "lineCount": 40
+      "lineCount": 41
     },
     {
       "path": "src/main/pty-input-guard.ts",
@@ -2138,7 +2138,7 @@
         "P07",
         "P14"
       ],
-      "lineCount": 358
+      "lineCount": 361
     },
     {
       "path": "src/main/sanitize-restored-spawn-options.ts",
@@ -2221,14 +2221,14 @@
         "P08",
         "P14"
       ],
-      "lineCount": 4
+      "lineCount": 6
     },
     {
       "path": "src/main/session-helper/manager.ts",
       "predicates": [
         "P14"
       ],
-      "lineCount": 10
+      "lineCount": 13
     },
     {
       "path": "src/main/session-input/index.ts",
@@ -2251,7 +2251,7 @@
         "P04",
         "P14"
       ],
-      "lineCount": 165
+      "lineCount": 178
     },
     {
       "path": "src/main/stale-folder-sweep.ts",
@@ -5461,6 +5461,13 @@
       "lineCount": 6
     },
     {
+      "path": "tests/unit/main/launch-bindings-kept.test.ts",
+      "predicates": [
+        "P13"
+      ],
+      "lineCount": 50
+    },
+    {
       "path": "tests/unit/main/launch-bindings-launch.test.ts",
       "predicates": [
         "P04",
@@ -5596,7 +5603,7 @@
         "P07",
         "P13"
       ],
-      "lineCount": 93
+      "lineCount": 99
     },
     {
       "path": "tests/unit/main/pty-codex-logs.test.ts",
@@ -5882,6 +5889,13 @@
         "P13"
       ],
       "lineCount": 4
+    },
+    {
+      "path": "tests/unit/main/session-helper-update-keep.test.ts",
+      "predicates": [
+        "P13"
+      ],
+      "lineCount": 9
     },
     {
       "path": "tests/unit/main/session-input-ownership.test.ts",
@@ -6325,6 +6339,14 @@
         "P13"
       ],
       "lineCount": 6
+    },
+    {
+      "path": "tests/unit/providers/codex/hooks-kept.test.ts",
+      "predicates": [
+        "P01",
+        "P13"
+      ],
+      "lineCount": 35
     },
     {
       "path": "tests/unit/providers/codex/hooks-links.test.ts",
@@ -8306,7 +8328,7 @@
       "predicates": [
         "P13"
       ],
-      "lineCount": 67
+      "lineCount": 68
     },
     {
       "path": "tests/unit/status-ingest.test.ts",
