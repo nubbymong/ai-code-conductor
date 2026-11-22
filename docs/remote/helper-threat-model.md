@@ -637,6 +637,46 @@ rollback returns to the earlier beta's rows, and every row has a negative test.
   `a_record_whose_pid_another_process_took_after_its_run_had_gone_ends_nothing`
   and `a_record_from_before_windows_last_started_ends_nothing`, and the bounds
   by the unit tests in `helper/src/consoles.rs`.
+- **While the app runs, the helper ends only the console host of a terminal
+  whose program has ended (from 2.1.3-beta.14, Windows).** `aicc-helper
+  end-console-host` (protocol 15, "A terminal's console host after its program
+  has ended") is given two times of digits the app took itself, just before
+  and just after node-pty made one terminal's pseudoconsole on Windows' own
+  ConPTY, each widened by 50 ms (the app's clock, Date.now(), runs up to one
+  Windows clock tick behind the creation times Windows stamps), and the app
+  runs it only once node-pty has reported that terminal's program's exit, and
+  no sooner than 6 s and that 50 ms after the start
+  (`src/main/console-host-end.ts`); nothing from a file, the renderer or
+  another process reaches its command line. The time is not what keeps a
+  running terminal's host: a widened time can hold the host of another
+  terminal started within about 50 ms of it (for example tabs switched
+  through quickly). It ends a process only when it is `conhost.exe` by
+  name and by program file (Windows' own `System32\conhost.exe`), still runs,
+  runs as the helper's own user, is listed with the process that started the
+  helper as its parent, was made in that time, after that process and before
+  the helper, was made at least 6 s before the helper (node-pty gives a
+  program 5 s to start in its pseudoconsole, and until then a running
+  terminal's host has no program), and is the console host of no process that
+  still runs (each listed process's `ProcessConsoleHostProcess`, where a
+  process with no console can answer its maker's pid, which only ever keeps a
+  host; a process the helper cannot open is not read, and one that runs but
+  cannot be read stops the mode from ending anything). It ends each one that
+  is, so two terminals started within about 50 ms of each other whose
+  programs have both ended have both hosts ended, and holds each open from its check to its end. A time
+  longer than ten seconds is refused. It gives the app no new power: the app
+  can already end any process of its user. Tested in
+  `helper/tests/console_hosts.rs` by
+  `a_terminal_whose_program_ended_has_its_console_host_ended_once_and_no_other`
+  (a host less than 6 s old is not ended, nor a running terminal's host
+  outside the time),
+  `a_terminal_whose_program_still_runs_keeps_its_host_when_asked_for_with_its_own_start`,
+  `a_time_that_holds_a_running_terminal_and_an_ended_one_ends_only_the_ended_ones_host`,
+  `two_ended_terminals_in_one_time_have_both_hosts_ended_by_one_ask_and_a_running_one_keeps_its_host`
+  (an ended terminal's host made before the time is kept) and
+  `a_start_time_it_cannot_take_is_refused`, the bounds by the unit tests in
+  `helper/src/consoles.rs`, and the app's side in
+  `tests/unit/main/console-host-end.test.ts`. Its adversarial pass is owed to
+  the security round before 2.1 stable (aicc_planning #320).
 - **A record names the program the next start ends (from 2.1.3-beta.9,
   Windows).** The app writes the pid and creation time `start` printed to
   `vision-started.json` in its user data folder (a dev or test run's own data
