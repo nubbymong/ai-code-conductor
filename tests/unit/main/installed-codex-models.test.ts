@@ -25,14 +25,14 @@ const listed = (version: string, ids: string[]): CodexModelListAnswer => ({
 })
 
 /** A fake accounts service: what it found of Codex, and the reads it answered. */
-function fakeService(codex: Record<string, unknown> | null) {
+function fakeService(found: Record<string, unknown> | null) {
   const listeners = new Set<() => void>()
   const svc = {
-    codex,
+    found,
     answer: listed('0.180.0', ['gpt-7-nova', 'gpt-5.5']) as CodexModelListAnswer,
     hold: null as Promise<void> | null,
     reads: 0,
-    snapshot: () => ({ providers: svc.codex ? [{ providerId: 'claude', enabled: true, discoveryState: 'found' }, { providerId: 'codex', ...svc.codex }] : [] }),
+    snapshot: () => ({ providers: svc.found ? [{ providerId: 'claude', enabled: true, discoveryState: 'found' }, { providerId: 'codex', ...svc.found }] : [] }),
     subscribe: (l: () => void) => { listeners.add(l); return () => listeners.delete(l) },
     readModelCatalogue: async () => { svc.reads++; if (svc.hold) await svc.hold; return svc.answer },
     changed: () => { for (const l of listeners) l() },
@@ -88,11 +88,11 @@ describe('the installed Codex\'s model list reaches the registry (aicc_planning#
     followInstalledCodexModels(svc as never)
     await tick()
     expect(codexRows()).toEqual(['gpt-7-nova', 'gpt-5.5'])
-    svc.codex = { ...FOUND, enabled: false }
+    svc.found = { ...FOUND, enabled: false }
     svc.changed()
     await tick()
     expect(codexRows()).toEqual(before)
-    svc.codex = FOUND
+    svc.found = FOUND
     svc.changed()
     await tick()
     expect(svc.reads).toBe(2)
@@ -106,12 +106,12 @@ describe('the installed Codex\'s model list reaches the registry (aicc_planning#
     let release!: () => void
     svc.hold = new Promise<void>((r) => { release = r })
     svc.answer = listed('0.181.0', ['gpt-7-terra'])
-    svc.codex = { ...FOUND, version: '0.181.0' }
+    svc.found = { ...FOUND, version: '0.181.0' }
     svc.changed()
     await tick()
     expect(svc.reads).toBe(2)
     // Switched off while that read runs: its answer is dropped.
-    svc.codex = { ...FOUND, version: '0.181.0', enabled: false }
+    svc.found = { ...FOUND, version: '0.181.0', enabled: false }
     svc.changed()
     await tick()
     release()
