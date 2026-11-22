@@ -559,8 +559,11 @@ rollback returns to the earlier beta's rows, and every row has a negative test.
   may return: the
   screen's size, the cursor, its rows and its last 200 lines as text (so
   anything the session printed, which the app's own terminal already holds
-  for the same session), and its modes as fixed words and yes or no values,
-  never bytes the app passes on. A read reaches only its own holder's screen
+  for the same session), its modes as fixed words and yes or no values,
+  never bytes the app passes on, and (from 2.1.3-beta.14, only to a
+  connection that acked `title` beside `screen`) the window title the
+  output last set, its control characters dropped, at most 1024 characters
+  and never more than the first 1 KiB of its OSC string. A read reaches only its own holder's screen
   (a holder serves one session), may be made by any connection of the same
   user that acked `screen` (the endpoint's boundary, above), never by a
   relay, changes no offset, attach or size, and is one message of at most

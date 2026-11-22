@@ -17,10 +17,19 @@
 //!     and a relay; a resize resizes its screen.
 //!  7. What the screen costs: its memory and its parse rate on the corpus,
 //!     written to the job's summary.
+//!  8. The title (2.1.3-beta.14, aicc_planning#384): every recording leaves
+//!     the screen with the window title xterm.js 6.0.0 has after its last
+//!     chunk (the corpus commits it in each rows file); a holder offers
+//!     `title` and puts the title in `screen.rows` only for a connection that
+//!     acked it beside `screen`, and a connection that did not gets
+//!     `screen.rows` as before.
 //!
 //! Not checked here: the rows named in WIDTH_ROWS, and nothing else, which
 //! the crate and xterm.js 6.0.0 show apart only because they count a
-//! character's cells by different Unicode versions.
+//! character's cells by different Unicode versions; and, on Windows, which
+//! title the holder reads through ConPTY (the fake CLI writes its title
+//! sequence with no console mode set, and the console may show it as text):
+//! there case 8 checks only that the field is there and is text.
 
 use aicc_helper::client::Client;
 use aicc_helper::frame::{Body, Frame};
@@ -164,10 +173,17 @@ struct Snap {
 struct Committed {
     snaps: Vec<Snap>,
     tail: Vec<String>,
+    /// The window title after the last chunk; None when the output set none.
+    title: Option<String>,
 }
 
 fn read_committed(name: &str) -> Committed {
     let v = load(&screens_dir().join(format!("{name}.rows.json")));
+    let title = match v.get("title") {
+        Some(Value::Null) => None,
+        Some(Value::Str(t)) => Some(t.clone()),
+        other => panic!("{name}.rows.json: its title is {other:?}, not text or null (write it again with SCREEN_CORPUS_WRITE=1)"),
+    };
     let snaps = v
         .get("screens")
         .and_then(Value::as_array)
@@ -179,7 +195,7 @@ fn read_committed(name: &str) -> Committed {
         })
         .collect();
     let tail = v.get("tail").and_then(Value::as_array).unwrap_or_else(|| panic!("{name}: no tail")).iter().map(|l| l.as_str().expect("a tail line").to_string()).collect();
-    Committed { snaps, tail }
+    Committed { snaps, tail, title }
 }
 
 /// How a replay hands the chunks to the screen.
@@ -372,6 +388,30 @@ fn the_same_bytes_in_one_piece_and_a_byte_at_a_time_give_the_same_rows() {
             assert_eq!(made.tail, recorded.tail, "{name} {how:?}: the tail differs from the chunks as recorded");
         }
     }
+}
+
+#[test]
+fn every_recording_leaves_the_title_the_corpus_committed() {
+    let names = recording_names();
+    let (mut titled, mut untitled) = (0usize, 0usize);
+    let mut wrong: Vec<String> = Vec::new();
+    for name in &names {
+        let want = read_committed(name).title;
+        let made = replay(&read_recording(name), How::AsRecorded);
+        let ours = made.snaps.last().map(|(_, _, r)| r.title.clone()).unwrap_or_default();
+        // The holder's screen keeps an empty title for none.
+        if ours != want.clone().unwrap_or_default() {
+            wrong.push(format!("{name}: ours {ours:?}, xterm {want:?}"));
+        }
+        if want.is_some() {
+            titled += 1;
+        } else {
+            untitled += 1;
+        }
+    }
+    // A vacuous pass is no pass: recordings that set a title and ones that do not.
+    assert!(titled > 0 && untitled > 0, "{titled} recordings with a title, {untitled} without");
+    assert!(wrong.is_empty(), "{} of {} recordings leave another title than xterm.js 6.0.0's:\n{}", wrong.len(), names.len(), wrong.join("\n"));
 }
 
 #[test]
@@ -942,6 +982,76 @@ fn a_read_from_a_connection_that_did_not_ack_screen_or_from_a_relay_is_refused()
     let answer = relay.read(Instant::now() + WAIT).expect("an answer");
     assert_eq!(answer.get("code").and_then(Value::as_str), Some("unknown-type"), "{}", answer.to_json());
     assert!(relay.closed(), "a relay stayed open after a screen read");
+}
+
+/// `screen.read` until the answer's title is `want` (the screen is fed after
+/// the attached connection's output); the last answer.
+fn read_until_titled(app: &mut App, want: &str) -> Value {
+    let until = Instant::now() + WAIT;
+    loop {
+        let id = app.id();
+        let answer = app.call(msg("screen.read", id, vec![]));
+        assert_eq!(t_of(&answer), "screen.rows", "{}", answer.to_json());
+        if answer.get("title").and_then(Value::as_str) == Some(want) {
+            return answer;
+        }
+        assert!(Instant::now() < until, "the title never read {want:?}: {}", answer.to_json());
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+#[test]
+fn a_holder_puts_the_title_in_screen_rows_only_for_a_connection_that_acked_it() {
+    let _serial = one_at_a_time();
+    let store_dir = Folder::new("store-title");
+    let work = Folder::new("work-title");
+    let sid = "screen-title-01";
+    let held = Held(hold(&store_dir, sid));
+    // The attached app asks for the screen and its title; the holder offers it.
+    let mut app = App::connect(&held.0, &["core", "local", "screen", "title"]);
+    assert!(app.client.hello.caps.iter().any(|c| c == "title"), "{:?}", app.client.hello.caps);
+    launch_and_attach(&mut app, &work, 80, 10);
+    app.client.send_raw(1, b"title held title\r").expect("type");
+    app.wait_text("title set");
+    let titled = if cfg!(windows) {
+        // Through ConPTY the title the holder reads is the console's: text.
+        let id = app.id();
+        app.call(msg("screen.read", id, vec![]))
+    } else {
+        read_until_titled(&mut app, "held title")
+    };
+    assert_eq!(t_of(&titled), "screen.rows", "{}", titled.to_json());
+    assert!(matches!(titled.get("title"), Some(Value::Str(_))), "{}", titled.to_json());
+    assert_eq!(titled.keys().map(|k| k.len()), Some(9), "{}", titled.to_json());
+
+    // A connection that is not attached and asked for the title gets it too
+    // (on Windows, text: ConPTY may still be drawing).
+    let mut reader = App::connect(&held.0, &["core", "screen", "title"]);
+    let read = if cfg!(windows) {
+        let id = reader.id();
+        reader.call(msg("screen.read", id, vec![]))
+    } else {
+        read_until_titled(&mut reader, "held title")
+    };
+    assert!(matches!(read.get("title"), Some(Value::Str(_))), "{}", read.to_json());
+
+    // One that asked for the screen alone gets `screen.rows` as before: no
+    // title, and (where the screen has settled) the same rows.
+    let mut plain = App::connect(&held.0, &["core", "local", "screen"]);
+    let id = plain.id();
+    let rows = plain.call(msg("screen.read", id, vec![]));
+    assert_eq!(t_of(&rows), "screen.rows", "{}", rows.to_json());
+    assert!(rows.get("title").is_none(), "{}", rows.to_json());
+    assert_eq!(rows.keys().map(|k| k.len()), Some(8), "{}", rows.to_json());
+    if !cfg!(windows) {
+        assert_eq!(rows.get("lines"), read.get("lines"));
+    }
+
+    // The title alone, without the screen, reads nothing.
+    let mut alone = App::connect(&held.0, &["core", "title"]);
+    alone.client.send(msg("screen.read", 2, vec![])).expect("send");
+    let answer = alone.read(Instant::now() + WAIT).expect("an answer");
+    assert_eq!(answer.get("code").and_then(Value::as_str), Some("unknown-type"), "{}", answer.to_json());
 }
 
 #[test]
