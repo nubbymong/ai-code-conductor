@@ -29,7 +29,7 @@ pub const CAPS: [&str; 1] = ["core"];
 /// helper's own client acks it too (`client::Client::ack`), and the
 /// self-test's stand-in holder offers it, as a holder from before
 /// 2.1.3-beta.8 did. A holder now offers `serve::HOLDER_CAPS`, which adds
-/// `hooks`, `mcp`, `away` and `screen`.
+/// `hooks`, `mcp`, `away`, `screen` and `title`.
 pub const LOCAL_CAPS: [&str; 2] = ["core", "local"];
 
 /// What a session can be when the helper answers (section 7).

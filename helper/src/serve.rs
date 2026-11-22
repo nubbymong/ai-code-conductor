@@ -68,7 +68,9 @@
 //! connection is attached. A relay asks for neither (`unknown-type`, as for
 //! the terminal messages). Each answer is one message within what a frame to
 //! the app holds: rows that do not fit are left out from the top, and the
-//! answer says so (`cut`). The holder decides nothing from a screen.
+//! answer says so (`cut`). The holder decides nothing from a screen. A
+//! connection that acked `title` beside `screen` (from 2.1.3-beta.14) gets the
+//! screen's title in `screen.rows` too; any other gets `screen.rows` as before.
 //!
 //! Locks: a connection's stream gate (`Conn::live`) first (the attached
 //! connection's before a relay's, which guards that relay's tool messages),
@@ -110,14 +112,21 @@ pub const MCP_CAP: &str = "mcp";
 pub const AWAY_CAP: &str = "away";
 /// The capability that allows screen reads (from 2.1.3-beta.12).
 pub const SCREEN_CAP: &str = "screen";
+/// The capability that adds the screen's title to `screen.rows` (from
+/// 2.1.3-beta.14). It counts only beside `screen`.
+pub const TITLE_CAP: &str = "title";
 /// What a holder offers in its hello: the frozen core, `local` for the
 /// terminal messages, `hooks` for hook events (from 2.1.3-beta.8), `mcp` for
 /// tool streams (from 2.1.3-beta.10), `away` for kept tool streams and
-/// `screen` for screen reads (both from 2.1.3-beta.12). The app acks `core`
-/// and `local` (`hello::LOCAL_CAPS`), and `hooks` on a connection that takes
-/// hook events; the hook mode acks `hook::ACK_CAPS` and the relay
-/// `relay::ACK_CAPS`. Nothing acks `screen` yet.
-pub const HOLDER_CAPS: [&str; 6] = ["core", "local", HOOKS_CAP, MCP_CAP, AWAY_CAP, SCREEN_CAP];
+/// `screen` for screen reads (both from 2.1.3-beta.12), and `title` for the
+/// title in a screen read (from 2.1.3-beta.14). The app acks `core` and
+/// `local` (`hello::LOCAL_CAPS`), `hooks` on a connection that takes hook
+/// events, `mcp` on one that carries tool streams and `screen` on one that
+/// reads the screen (a plain terminal's, from 2.1.3-beta.13; a held Codex
+/// session's, from 2.1.3-beta.14), and `title` beside it on the latter. The
+/// hook mode acks `hook::ACK_CAPS` and the relay
+/// `relay::ACK_CAPS`.
+pub const HOLDER_CAPS: [&str; 7] = ["core", "local", HOOKS_CAP, MCP_CAP, AWAY_CAP, SCREEN_CAP, TITLE_CAP];
 /// The most JSON a screen answer may be: what one frame to the app holds.
 pub const SCREEN_ANSWER_MAX: usize = frame::MAX_JSON_HELPER_TO_APP;
 /// Tool streams one session may have open at once; one more `mcp.open` gets
@@ -195,6 +204,9 @@ struct Conn {
     /// Set once its `hello.ack` named `mcp` and `away`: a stream it opens is
     /// kept while the app is away.
     away: AtomicBool,
+    /// Set once its `hello.ack` named `screen` and `title`: its `screen.rows`
+    /// carry the screen's title.
+    title: AtomicBool,
 }
 
 impl Conn {
@@ -249,6 +261,11 @@ impl Conn {
     /// True when a stream this connection opens is kept while the app is away.
     fn keeps(&self) -> bool {
         self.away.load(Ordering::SeqCst)
+    }
+
+    /// True when this connection's `screen.rows` carry the screen's title.
+    fn titled(&self) -> bool {
+        self.title.load(Ordering::SeqCst)
     }
 
     fn send_error(&self, re: Option<u64>, code: &str, text: &str) -> io::Result<()> {
@@ -524,21 +541,23 @@ fn the_last_that_fit(items: Vec<Value>, room: usize) -> (Vec<Value>, bool) {
 
 /// `screen.rows`: the reply to `screen.read` `re`. `lines` holds the rows
 /// from the top, all of them unless `cut`: then the bottom rows that fit in
-/// one message to the app, which the readers look at first.
-pub fn screen_rows_message(re: u64, r: &screen::Read) -> Value {
+/// one message to the app, which the readers look at first. With `title`
+/// (the connection acked it) the screen's title comes too, empty when the
+/// output set none; it is counted before the rows, so it is never cut.
+pub fn screen_rows_message(re: u64, r: &screen::Read, title: bool) -> Value {
     let message = |lines: Vec<Value>, cut: bool| {
-        reply(
-            "screen.rows",
-            re,
-            vec![
-                ("cols", Value::uint(u64::from(r.cols))),
-                ("rows", Value::uint(u64::from(r.rows))),
-                ("cursor", Value::obj(vec![("row", Value::uint(u64::from(r.cursor_row))), ("col", Value::uint(u64::from(r.cursor_col)))])),
-                ("modes", modes_value(&r.modes)),
-                ("cut", Value::Bool(cut)),
-                ("lines", Value::Arr(lines)),
-            ],
-        )
+        let mut fields = vec![
+            ("cols", Value::uint(u64::from(r.cols))),
+            ("rows", Value::uint(u64::from(r.rows))),
+            ("cursor", Value::obj(vec![("row", Value::uint(u64::from(r.cursor_row))), ("col", Value::uint(u64::from(r.cursor_col)))])),
+            ("modes", modes_value(&r.modes)),
+        ];
+        if title {
+            fields.push(("title", Value::str(&r.title)));
+        }
+        fields.push(("cut", Value::Bool(cut)));
+        fields.push(("lines", Value::Arr(lines)));
+        reply("screen.rows", re, fields)
     };
     let room = SCREEN_ANSWER_MAX.saturating_sub(message(Vec::new(), false).to_json().len());
     let (lines, cut) = the_last_that_fit(r.lines.iter().map(row_value).collect(), room);
@@ -588,12 +607,21 @@ fn say_ended(conn: &Conn, re: u64, code: Option<i32>) {
     drop(live);
 }
 
+/// What an ack asked for besides the types it allows: a stream the
+/// connection opens kept while the app is away (`away`, which counts only
+/// beside `mcp`), and the title in its screen reads (`title`, which counts
+/// only beside `screen`).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct Asked {
+    away: bool,
+    title: bool,
+}
+
 /// Check the first frame: a `hello.ack` with exactly `t`, `proto` and `caps`,
 /// a version this holder speaks, and capabilities it offered, `core` among
-/// them. Returns what the ack allowed (`local`, `hooks`, `mcp`, `screen`), and whether
-/// a stream the connection opens is kept while the app is away (`away`,
-/// which counts only beside `mcp`).
-fn check_ack(v: &Value) -> Result<(Allowed, bool), Refusal> {
+/// them. Returns what the ack allowed (`local`, `hooks`, `mcp`, `screen`), and
+/// what else it asked for (`Asked`).
+fn check_ack(v: &Value) -> Result<(Allowed, Asked), Refusal> {
     let bad = |code: &'static str, text: &str| Err(Refusal { code, re: None, text: text.to_string() });
     match v.get("t").and_then(Value::as_str) {
         Some("hello.ack") => {}
@@ -622,7 +650,7 @@ fn check_ack(v: &Value) -> Result<(Allowed, bool), Refusal> {
         return bad(request::CODE_BAD_FIELD, "caps must hold core");
     }
     let allowed = Allowed { local: seen.contains(&"local"), hooks: seen.contains(&HOOKS_CAP), mcp: seen.contains(&MCP_CAP), screen: seen.contains(&SCREEN_CAP) };
-    Ok((allowed, allowed.mcp && seen.contains(&AWAY_CAP)))
+    Ok((allowed, Asked { away: allowed.mcp && seen.contains(&AWAY_CAP), title: allowed.screen && seen.contains(&TITLE_CAP) }))
 }
 
 impl Serve {
@@ -1222,6 +1250,7 @@ impl Serve {
             told_exit: AtomicBool::new(false),
             relay: AtomicBool::new(false),
             away: AtomicBool::new(false),
+            title: AtomicBool::new(false),
         });
         let admitted = {
             let mut st = lock(&self.state);
@@ -1293,8 +1322,9 @@ impl Serve {
         };
         let allowed = match &first.body {
             Body::Json(v) if first.channel == 0 => match check_ack(v) {
-                Ok((allowed, away)) => {
-                    conn.away.store(away, Ordering::SeqCst);
+                Ok((allowed, asked)) => {
+                    conn.away.store(asked.away, Ordering::SeqCst);
+                    conn.title.store(asked.title, Ordering::SeqCst);
                     allowed
                 }
                 Err(r) => {
@@ -1472,10 +1502,10 @@ impl Serve {
     }
 
     /// `screen.read` (`tail` None) or `screen.tail` `id` from `conn`, attached
-    /// or not, answered from the holder's screen. Nothing changes: no offset,
-    /// no attach, no size. Before a launch, and while the session is ending,
-    /// `not-found`; a screen the holder no longer keeps (its parser failed),
-    /// `io`.
+    /// or not, answered from the holder's screen, with the title for a
+    /// connection that acked it. Nothing changes: no offset, no attach, no
+    /// size. Before a launch, and while the session is ending, `not-found`; a
+    /// screen the holder no longer keeps (its parser failed), `io`.
     fn answer_screen(&self, conn: &Conn, id: u64, tail: Option<usize>) {
         let holder = {
             let st = lock(&self.state);
@@ -1493,7 +1523,7 @@ impl Serve {
             }
         };
         let answer = match tail {
-            None => holder.screen_read().map(|r| screen_rows_message(id, &r)),
+            None => holder.screen_read().map(|r| screen_rows_message(id, &r, conn.titled())),
             Some(count) => holder.screen_tail(count).map(|lines| screen_lines_message(id, &lines)),
         };
         match answer {
@@ -1821,8 +1851,16 @@ mod tests {
     use super::*;
     use crate::json;
 
-    fn acked_away(text: &str) -> Result<(Allowed, bool), &'static str> {
+    fn acked_asked(text: &str) -> Result<(Allowed, Asked), &'static str> {
         check_ack(&json::parse(text.as_bytes()).unwrap()).map_err(|r| r.code)
+    }
+
+    fn acked_away(text: &str) -> Result<(Allowed, bool), &'static str> {
+        acked_asked(text).map(|(a, asked)| (a, asked.away))
+    }
+
+    fn acked_title(text: &str) -> Result<(Allowed, bool), &'static str> {
+        acked_asked(text).map(|(a, asked)| (a, asked.title))
     }
 
     fn acked(text: &str) -> Result<Allowed, &'static str> {
@@ -1835,7 +1873,7 @@ mod tests {
 
     #[test]
     fn hooks_is_offered_and_an_ack_of_it_allows_hook_events() {
-        assert_eq!(HOLDER_CAPS.to_vec(), vec!["core", "local", "hooks", "mcp", "away", "screen"]);
+        assert_eq!(HOLDER_CAPS.to_vec(), vec!["core", "local", "hooks", "mcp", "away", "screen", "title"]);
         let both = Allowed { local: true, hooks: true, mcp: false, screen: false };
         assert_eq!(acked("{\"t\":\"hello.ack\",\"proto\":1,\"caps\":[\"core\",\"local\",\"hooks\"]}"), Ok(both));
         assert_eq!(acked("{\"t\":\"hello.ack\",\"proto\":1,\"caps\":[\"core\",\"hooks\"]}"), Ok(Allowed { local: false, hooks: true, mcp: false, screen: false }));
@@ -1869,10 +1907,10 @@ mod tests {
     }
 
     #[test]
-    fn screen_is_offered_last_and_an_ack_of_it_allows_screen_reads_only() {
-        assert_eq!(HOLDER_CAPS.last(), Some(&SCREEN_CAP));
+    fn screen_is_offered_and_an_ack_of_it_allows_screen_reads_only() {
+        assert_eq!(HOLDER_CAPS[5], SCREEN_CAP);
         assert_eq!(acked("{\"t\":\"hello.ack\",\"proto\":1,\"caps\":[\"core\",\"screen\"]}"), Ok(Allowed { local: false, hooks: false, mcp: false, screen: true }));
-        // Everything a holder offers.
+        // Everything a holder offered before the title.
         assert_eq!(
             acked_away("{\"t\":\"hello.ack\",\"proto\":1,\"caps\":[\"core\",\"local\",\"hooks\",\"mcp\",\"away\",\"screen\"]}"),
             Ok((Allowed { local: true, hooks: true, mcp: true, screen: true }, true))
@@ -1883,6 +1921,52 @@ mod tests {
         assert_eq!(acked("{\"t\":\"hello.ack\",\"proto\":1,\"caps\":[\"screen\"]}"), Err(request::CODE_BAD_FIELD));
         assert_eq!(acked("{\"t\":\"hello.ack\",\"proto\":1,\"caps\":[\"core\",\"screen\",\"screen\"]}"), Err(request::CODE_BAD_FIELD));
         assert!(!crate::relay::ACK_CAPS.contains(&SCREEN_CAP) && !crate::hook::ACK_CAPS.contains(&SCREEN_CAP));
+    }
+
+    #[test]
+    fn title_is_offered_last_and_counts_only_beside_screen() {
+        assert_eq!(HOLDER_CAPS.last(), Some(&TITLE_CAP));
+        let reader = Allowed { local: false, hooks: false, mcp: false, screen: true };
+        // A reader that asked for the title, and one that did not: the same
+        // types allowed, the title only for the first.
+        assert_eq!(acked_title("{\"t\":\"hello.ack\",\"proto\":1,\"caps\":[\"core\",\"screen\",\"title\"]}"), Ok((reader, true)));
+        assert_eq!(acked_title("{\"t\":\"hello.ack\",\"proto\":1,\"caps\":[\"core\",\"screen\"]}"), Ok((reader, false)));
+        // Everything a holder offers.
+        assert_eq!(
+            acked_asked("{\"t\":\"hello.ack\",\"proto\":1,\"caps\":[\"core\",\"local\",\"hooks\",\"mcp\",\"away\",\"screen\",\"title\"]}"),
+            Ok((Allowed { local: true, hooks: true, mcp: true, screen: true }, Asked { away: true, title: true }))
+        );
+        // Without `screen` the title is not asked for: no read can be made.
+        assert_eq!(acked_title("{\"t\":\"hello.ack\",\"proto\":1,\"caps\":[\"core\",\"local\",\"title\"]}"), Ok((Allowed { local: true, hooks: false, mcp: false, screen: false }, false)));
+        assert_eq!(acked_title("{\"t\":\"hello.ack\",\"proto\":1,\"caps\":[\"core\",\"screen\",\"title\",\"title\"]}"), Err(request::CODE_BAD_FIELD));
+        assert_eq!(acked_title("{\"t\":\"hello.ack\",\"proto\":1,\"caps\":[\"title\"]}"), Err(request::CODE_BAD_FIELD));
+        assert!(!crate::relay::ACK_CAPS.contains(&TITLE_CAP) && !crate::hook::ACK_CAPS.contains(&TITLE_CAP));
+    }
+
+    #[test]
+    fn the_title_comes_in_screen_rows_only_when_asked_and_is_never_cut() {
+        let mut s = screen::Screen::new(crate::pty::PtySize { cols: 4, rows: 1 });
+        s.feed(b"\x1b]0;a \"t\"\x07ab");
+        let r = s.read();
+        let without = screen_rows_message(2, &r, false);
+        assert!(without.get("title").is_none(), "{}", without.to_json());
+        assert_eq!(without.keys().map(|k| k.len()), Some(8), "{}", without.to_json());
+        let with = screen_rows_message(2, &r, true);
+        assert_eq!(
+            with.to_json(),
+            "{\"t\":\"screen.rows\",\"re\":2,\"cols\":4,\"rows\":1,\"cursor\":{\"row\":0,\"col\":2},\"modes\":{\"screen\":\"normal\",\"bracketed_paste\":false,\"application_cursor\":false,\"application_keypad\":false,\"mouse\":\"none\",\"mouse_encoding\":\"default\",\"cursor_hidden\":false},\"title\":\"a \\\"t\\\"\",\"cut\":false,\"lines\":[{\"text\":\"ab\",\"typed\":\"ab\",\"inverse\":\"\",\"width\":4,\"end\":2}]}"
+        );
+        // No title set: an empty one, still there.
+        let blank = screen::Screen::new(crate::pty::PtySize { cols: 4, rows: 1 }).read();
+        assert_eq!(screen_rows_message(4, &blank, true).get("title"), Some(&Value::str("")));
+        // The largest screen with the longest title: the title whole, the
+        // rows cut to what is left of one message.
+        let mut r = a_full_screen(1000, 1000, '\u{e9}');
+        r.title = "\u{e9}".repeat(screen::TITLE_MAX);
+        let v = screen_rows_message(6, &r, true);
+        assert!(v.to_json().len() <= SCREEN_ANSWER_MAX, "{} bytes", v.to_json().len());
+        assert_eq!(v.get("title").and_then(Value::as_str), Some(r.title.as_str()));
+        assert_eq!(v.get("cut"), Some(&Value::Bool(true)));
     }
 
     /// A screen of `cols` by `rows` full of `ch` (a wide one fills each row
@@ -1909,13 +1993,13 @@ mod tests {
     fn a_screen_answer_is_one_message_to_the_app_and_says_when_rows_were_left_out() {
         // A common size: whole.
         let r = a_full_screen(120, 40, 'x');
-        let v = screen_rows_message(2, &r);
+        let v = screen_rows_message(2, &r, false);
         assert_eq!(v.get("cut"), Some(&Value::Bool(false)));
         assert_eq!(v.get("lines").and_then(Value::as_array).map(Vec::len), Some(40));
         // The largest screen, every cell a two-byte character: too much for
         // one message, so the bottom rows that fit, and `cut`.
         let r = a_full_screen(1000, 1000, '\u{e9}');
-        let v = screen_rows_message(request::MAX_SAFE_INTEGER - 1, &r);
+        let v = screen_rows_message(request::MAX_SAFE_INTEGER - 1, &r, false);
         let text = v.to_json();
         assert!(text.len() <= SCREEN_ANSWER_MAX, "{} bytes", text.len());
         assert!(frame::encode(&Frame::json(0, v.clone()), Direction::HelperToApp).is_ok());

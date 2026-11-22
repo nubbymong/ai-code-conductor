@@ -8,10 +8,11 @@
 // must be a small plain file with one name, still the file looked at when
 // opened; its session id must be the same, its port and token the right
 // shape. It posts the event, as read, only to 127.0.0.1, with the session's
-// token and the Codex marker, never through a proxy the environment names,
-// and is done once whatever happens. Nothing is started: the request function
-// is a fake, or (the proxy case) a real loopback request to listeners in this
-// process.
+// token, never through a proxy the environment names, and is done once
+// whatever happens. (Its Codex marker header went in 2.1.3-beta.14 with the
+// gateway's permission hold, the one thing that read it.) Nothing is
+// started: the request function is a fake, or (the proxy case) a real
+// loopback request to listeners in this process.
 import { describe, it, expect, afterEach, vi } from 'vitest'
 import { mkdtempSync, writeFileSync, rmSync, mkdirSync, symlinkSync, realpathSync, linkSync, unlinkSync, rmdirSync, lstatSync } from 'fs'
 import { join, basename, dirname } from 'path'
@@ -237,7 +238,7 @@ function fakeRequest(behaviour: 'ok' | 'error' | 'timeout', captured: Captured[]
 describe('forward', () => {
   const cfg = { port: 51234, sid: 'sess-1', token: TOKEN }
 
-  it('posts the body as read to 127.0.0.1 only, with the token and the Codex marker, and no shared agent', async () => {
+  it('posts the body as read to 127.0.0.1 only, with the token, and no shared agent', async () => {
     const captured: Captured[] = []
     let done = 0
     const body = Buffer.from('{"hook_event_name":"SessionStart"}')
@@ -250,7 +251,6 @@ describe('forward', () => {
     expect(o.method).toBe('POST')
     expect(o.agent).toBe(false)
     expect(o.headers['x-ccc-hook-token']).toBe(TOKEN)
-    expect(o.headers['x-ccc-hook-client']).toBe('codex')
     expect(o.headers['content-length']).toBe(body.length)
     expect(typeof o.timeout).toBe('number')
     expect(o.timeout).toBeLessThanOrEqual(2000)

@@ -9,6 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > `src/renderer/changelog.ts`. After editing that file, run `npm run changelog`
 > (CI enforces that this file is in sync via `npm run changelog:check`).
 
+## [2.1.3-beta.14] - 2026-11-22
+
+### Warnings
+- This beta series begins moving the app's background services, and over the next betas your sessions, onto one helper per machine. If you want a quiet build, stay on the stable release.
+- On Windows, choosing Save sessions at an update keeps the terminals the session helper holds running only if the new version opens within two minutes of the old one closing. The installer's pages count toward those two minutes, so finish the installer promptly.
+- To go back to 2.1.3-beta.13, download its installer from the GitHub releases page and run it over this version.
+
+> On Windows, a terminal on this computer whose program ends by itself no longer leaves its console host running until you quit, and quitting with Close sessions no longer leaves a settings-<id>.json file in your .claude folder. The Codex model picker now lists the models your installed Codex offers. With Claude Code and Codex sessions through the session helper on, a held Claude Code session sends every hook event through the helper, and the app reads a held Codex session's screen from the helper before it types into Codex.
+
+### Changed
+- The Codex model picker now lists the models your installed Codex offers, each with its own effort levels, so a model a new Codex adds shows up without an app update.
+- With Claude Code and Codex sessions through the session helper on (a preview, off by default) and the HTTP Hooks Gateway on, a Claude Code session the helper holds now sends its check before each tool runs (PreToolUse) through the session helper too, so every hook event of that session goes through it.
+- With Claude Code and Codex sessions through the session helper on, the app now reads a held Codex session's screen from the session helper before it types into Codex (canvas notes, Ask Conductor questions, prompt buttons and the Watchdog's retry). It no longer keeps a second copy of that screen.
+
+### Fixed
+- On Windows, when the program of a terminal on this computer ends by itself (not a tab over SSH), the app now ends that terminal's leftover console host instead of leaving it running until you quit, including when several terminals end close together.
+- Quitting with Close sessions no longer leaves a settings-<id>.json file in your .claude folder. The next start also removes the ones earlier versions left, where the file runs the app's status line for that session; any other file is left in place.
+
 ## [2.1.3-beta.13] - 2026-11-22
 
 ### Warnings
@@ -2124,6 +2142,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Tab attention indicators for waiting prompts
 - Context usage tracking via statusline API
 
+[2.1.3-beta.14]: https://github.com/nubbymong/ai-code-conductor/releases/tag/v2.1.3-beta.14
 [2.1.3-beta.13]: https://github.com/nubbymong/ai-code-conductor/releases/tag/v2.1.3-beta.13
 [2.1.3-beta.12]: https://github.com/nubbymong/ai-code-conductor/releases/tag/v2.1.3-beta.12
 [2.1.3-beta.11]: https://github.com/nubbymong/ai-code-conductor/releases/tag/v2.1.3-beta.11

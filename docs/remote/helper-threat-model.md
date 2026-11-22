@@ -543,7 +543,9 @@ rollback returns to the earlier beta's rows, and every row has a negative test.
   alive after its session.
 - **The holder's screen and its two reads (capability `screen`, from
   2.1.3-beta.12; from 2.1.3-beta.13 a plain terminal's connections ack it,
-  and a take-over asks `screen.read` once, for the holder's size).** The
+  and a take-over asks `screen.read` once, for the holder's size; from
+  2.1.3-beta.14 a held Codex session's connections ack it and `title`, and
+  its composer rule reads it to decide when main types into Codex).** The
   holder parses its
   session's output into a screen (`helper/src/screen.rs`, the `vt100` crate,
   3.10) on the thread that carries that output, after the ring and the
@@ -552,15 +554,19 @@ rollback returns to the earlier beta's rows, and every row has a negative test.
   repeat then writes at most 9999 cells, and every other sequence's work is
   bounded by the screen's size, at most 1000 by 1000 cells); an OSC string is
   kept to 1 KiB and other strings not at all; a screen holds at most its
-  cells, 200 lines of scrollback and an alternate screen (measured in the
+  cells, 200 lines of scrollback, an alternate screen and, from
+  2.1.3-beta.14, the last title of at most 1024 characters (measured in the
   Helper job: 1.04 MiB at 120 by 40 with all of them full, 67.21 MiB at 1000
   by 1000, the largest size a launch may ask for). A panic in the parser is
   caught, the screen is then not kept, and the output goes on. What a read
   may return: the
   screen's size, the cursor, its rows and its last 200 lines as text (so
   anything the session printed, which the app's own terminal already holds
-  for the same session), and its modes as fixed words and yes or no values,
-  never bytes the app passes on. A read reaches only its own holder's screen
+  for the same session), its modes as fixed words and yes or no values,
+  never bytes the app passes on, and (from 2.1.3-beta.14, only to a
+  connection that acked `title` beside `screen`) the window title the
+  output last set, its control characters dropped, at most 1024 characters
+  and never more than the first 1 KiB of its OSC string. A read reaches only its own holder's screen
   (a holder serves one session), may be made by any connection of the same
   user that acked `screen` (the endpoint's boundary, above), never by a
   relay, changes no offset, attach or size, and is one message of at most
@@ -569,8 +575,8 @@ rollback returns to the earlier beta's rows, and every row has a negative test.
   it is owed to the security round before 2.1 stable (aicc_planning #320):
   output made to stall or crash the parser, memory growth past the bound, a
   read that reaches another session's screen, a read used to change state,
-  and reads made back to back to hold the screen's lock against the output
-  thread.
+  reads made back to back to hold the screen's lock against the output
+  thread, and an answer that reads ready while Codex shows a prompt.
 - **A program the helper starts for the app keeps none of the app's handles
   (from 2.1.3-beta.8, Windows).** `aicc-helper start` (protocol 15, "Starting
   a program") starts the program the app names, by the drive-absolute path it
@@ -633,6 +639,46 @@ rollback returns to the earlier beta's rows, and every row has a negative test.
   `a_record_whose_pid_another_process_took_after_its_run_had_gone_ends_nothing`
   and `a_record_from_before_windows_last_started_ends_nothing`, and the bounds
   by the unit tests in `helper/src/consoles.rs`.
+- **While the app runs, the helper ends only the console host of a terminal
+  whose program has ended (from 2.1.3-beta.14, Windows).** `aicc-helper
+  end-console-host` (protocol 15, "A terminal's console host after its program
+  has ended") is given two times of digits the app took itself, just before
+  and just after node-pty made one terminal's pseudoconsole on Windows' own
+  ConPTY, each widened by 50 ms (the app's clock, Date.now(), runs up to one
+  Windows clock tick behind the creation times Windows stamps), and the app
+  runs it only once node-pty has reported that terminal's program's exit, and
+  no sooner than 6 s and that 50 ms after the start
+  (`src/main/console-host-end.ts`); nothing from a file, the renderer or
+  another process reaches its command line. The time is not what keeps a
+  running terminal's host: a widened time can hold the host of another
+  terminal started within about 50 ms of it (for example tabs switched
+  through quickly). It ends a process only when it is `conhost.exe` by
+  name and by program file (Windows' own `System32\conhost.exe`), still runs,
+  runs as the helper's own user, is listed with the process that started the
+  helper as its parent, was made in that time, after that process and before
+  the helper, was made at least 6 s before the helper (node-pty gives a
+  program 5 s to start in its pseudoconsole, and until then a running
+  terminal's host has no program), and is the console host of no process that
+  still runs (each listed process's `ProcessConsoleHostProcess`, where a
+  process with no console can answer its maker's pid, which only ever keeps a
+  host; a process the helper cannot open is not read, and one that runs but
+  cannot be read stops the mode from ending anything). It ends each one that
+  is, so two terminals started within about 50 ms of each other whose
+  programs have both ended have both hosts ended, and holds each open from its check to its end. A time
+  longer than ten seconds is refused. It gives the app no new power: the app
+  can already end any process of its user. Tested in
+  `helper/tests/console_hosts.rs` by
+  `a_terminal_whose_program_ended_has_its_console_host_ended_once_and_no_other`
+  (a host less than 6 s old is not ended, nor a running terminal's host
+  outside the time),
+  `a_terminal_whose_program_still_runs_keeps_its_host_when_asked_for_with_its_own_start`,
+  `a_time_that_holds_a_running_terminal_and_an_ended_one_ends_only_the_ended_ones_host`,
+  `two_ended_terminals_in_one_time_have_both_hosts_ended_by_one_ask_and_a_running_one_keeps_its_host`
+  (an ended terminal's host made before the time is kept) and
+  `a_start_time_it_cannot_take_is_refused`, the bounds by the unit tests in
+  `helper/src/consoles.rs`, and the app's side in
+  `tests/unit/main/console-host-end.test.ts`. Its adversarial pass is owed to
+  the security round before 2.1 stable (aicc_planning #320).
 - **A record names the program the next start ends (from 2.1.3-beta.9,
   Windows).** The app writes the pid and creation time `start` printed to
   `vision-started.json` in its user data folder (a dev or test run's own data
@@ -646,6 +692,26 @@ rollback returns to the earlier beta's rows, and every row has a negative test.
   which it could already end itself. When the helper in the install folder is
   gone, the app runs the session helper's per-user copy only after reading its
   SHA-256 again (3.1). Tested in `tests/unit/main/vision-manager-start-mode.test.ts`.
+- **The capture mode reads only the screen its own session shows, and writes
+  only new files in the folder it is given (from 2.1.3-beta.14, Windows;
+  nothing in the app runs it yet).** `aicc-helper capture` (protocol 15,
+  "Capturing the displays") is a command line, not a message: no connection,
+  holder or remote host can ask for it, and it opens no endpoint. It grabs the
+  whole displays of the desktop its own process sees, as any program of the
+  user can, and refuses (exit 3) when that desktop is not the one on the
+  screen or its window station is shown on no display. It writes
+  `display-<n>.bmp` files into the absolute folder it is given, each made new
+  (never over a file that is there, so it cannot be pointed at a file to
+  replace it), and removes what it wrote when a run fails. Each display is at
+  most 16384 pixels on a side and a run at most 16 displays, so one run writes
+  at most 16 files, each at most 1 GiB of pixels after a 54-byte header.
+  Its window-manager DLLs (user32, gdi32, shcore) load only when the mode
+  runs; no other mode loads them (they are delay-loaded, and
+  `scripts/check-pe-imports.mjs` fails a build that imports one at load
+  time). Tested in `helper/tests/capture.rs`
+  and the unit tests of `helper/src/capture.rs`; probe P21 measures it on the
+  test machine. An adversarial pass of it is owed to the security round
+  before 2.1 stable (aicc_planning #320), before the app runs it.
 
 ## 4 Review
 

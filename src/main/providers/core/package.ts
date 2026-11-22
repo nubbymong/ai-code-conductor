@@ -126,10 +126,13 @@ export interface InstalledCli {
   executable?: string
 }
 
-/** One model the installed CLI offers in its own model picker (P3.9, row 39). */
+/** One model the installed CLI offers in its own model picker (P3.9, row 39),
+ *  with the reasoning levels the CLI lists for it (aicc_planning#362: the
+ *  Codex picker's effort list). `efforts` is absent when the CLI gives none. */
 export interface ModelCatalogueEntry {
   id: string
   label: string
+  efforts?: string[]
 }
 
 /** Why a model catalogue read gave no list (P3.9). */
@@ -156,8 +159,9 @@ export interface ProviderSetupOperations {
    *  range in a version finding). Absent: the package states no range. */
   readonly supportedVersions?: { minimum: string; maximumTested: string }
   /** Present when the CLI can list the models its own picker offers without
-   *  a sign-in or the network (P3.9: Sentinel's live model check). It runs
-   *  only the executable discovery last proved, in no account's folder. */
+   *  a sign-in or the network (P3.9; aicc_planning#362: the Codex model
+   *  picker's list, and Sentinel's). It runs only the executable discovery
+   *  last proved, in no account's folder. */
   modelCatalogue?(opts?: { signal?: AbortSignal }): Promise<ModelCatalogueResult>
 }
 

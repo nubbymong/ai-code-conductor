@@ -649,7 +649,8 @@ jobs:
   # Codex CLI version is installed into a prefix of its own on each OS and run
   # with no sign-in, each run in a fresh, empty Codex home: the app's discovery
   # (row 2's detection evidence per OS), the help of every command line the
-  # app runs, the model list against the registry, the feature list, and the
+  # app runs, the model list read and offered by the Codex picker as read
+  # (aicc_planning#362), the feature list, and the
   # flag-drift suite. P3.1's help captures are made again, uploaded, and
   # asserted against the normalised fixtures as each OS reads them: the
   # captures of each OS were reviewed (CI run 37134624406) and only the
@@ -1232,8 +1233,10 @@ jobs:
       # The helper must start on a PC without Microsoft's Visual C++ runtime, so
       # it carries its own C runtime (helper/.cargo/config.toml, +crt-static).
       # This reads the built program's import table and fails if it still
-      # imports a C runtime DLL (VCRUNTIME140.dll, api-ms-win-crt-*, ...). It
-      # only reads the file. release.yml runs the same check before packaging.
+      # imports a C runtime DLL (VCRUNTIME140.dll, api-ms-win-crt-*, ...), or
+      # imports a window-manager DLL (user32, gdi32, shcore) at load time rather
+      # than delay-loading it for the capture mode alone. It only reads the
+      # file. release.yml runs the same check before packaging.
       - name: Check the Windows helper carries its own C runtime
         if: steps.scope.outputs.helper != 'false' && steps.lock.outputs.present == 'true' && runner.os == 'Windows'
         run: node scripts/check-pe-imports.mjs helper/target/release/aicc-helper.exe

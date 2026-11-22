@@ -30,8 +30,17 @@ export const MCP_CAP = 'mcp'
 /** Screen reads through the holder (section 15, from 2.1.3-beta.12): acked
  *  only by a connection that reads the session's screen, and only when the
  *  holder offers it. From 2.1.3-beta.13 a plain terminal's connections ask
- *  for it (a take-over reads its holder's size). */
+ *  for it (a take-over reads its holder's size), and from 2.1.3-beta.14
+ *  (plan section B2) a held agent session's do too, when its provider's
+ *  composer rule reads the holder's screen. */
 export const SCREEN_CAP = 'screen'
+/** The screen's title in a screen read (section 15, from 2.1.3-beta.14): acked
+ *  only beside `screen`, by a connection asked for it, and only when the
+ *  holder offers it. A holder that does not know it does not offer it, and
+ *  answers `screen.read` as before. From 2.1.3-beta.14 (plan section B2) a
+ *  held agent session's connections ask for it beside `screen` when its
+ *  provider's composer rule reads the holder's screen. */
+export const TITLE_CAP = 'title'
 /** Terminal bytes travel on this channel both ways; control messages on 0. */
 export const TERMINAL_CHANNEL = 1
 /** Control messages (JSON) travel on this channel, both ways. */
@@ -302,11 +311,16 @@ export function chooseProto(app: readonly number[], helper: readonly number[]): 
 }
 
 /** The app's answer to a holder's hello: `core` and `local`, `hooks` when this
- *  connection takes hook events, `mcp` when it carries tool streams and
- *  `screen` when it reads the screen (each only ever when the hello offered
+ *  connection takes hook events, `mcp` when it carries tool streams,
+ *  `screen` when it reads the screen and `title`, beside `screen` only, when
+ *  its screen reads take the title (each only ever when the hello offered
  *  it). */
-export function helloAck(hooks = false, mcp = false, screen = false): { t: 'hello.ack'; proto: number; caps: string[] } {
-  return { t: 'hello.ack', proto: PROTO_VERSION, caps: [...LOCAL_CAPS, ...(hooks ? [HOOKS_CAP] : []), ...(mcp ? [MCP_CAP] : []), ...(screen ? [SCREEN_CAP] : [])] }
+export function helloAck(hooks = false, mcp = false, screen = false, title = false): { t: 'hello.ack'; proto: number; caps: string[] } {
+  return {
+    t: 'hello.ack',
+    proto: PROTO_VERSION,
+    caps: [...LOCAL_CAPS, ...(hooks ? [HOOKS_CAP] : []), ...(mcp ? [MCP_CAP] : []), ...(screen ? [SCREEN_CAP] : []), ...(screen && title ? [TITLE_CAP] : [])],
+  }
 }
 
 // ── hook events (section 15, capability `hooks`) ──────────────────────────────
@@ -404,6 +418,8 @@ export function readMcp(m: unknown, size: number): { stream: number; message: Mc
 
 /** The most lines a `screen.tail` asks for, and gets: the holder's scrollback. */
 export const SCREEN_TAIL_MAX = 200
+/** The most characters a screen's title holds (helper/src/screen.rs TITLE_MAX). */
+export const SCREEN_TITLE_MAX = 1024
 /** The words a holder names the screen in use and the mouse modes with. */
 export const SCREEN_WORDS = ['normal', 'alternate'] as const
 export const MOUSE_WORDS = ['none', 'press', 'press-release', 'button-motion', 'any-motion'] as const
@@ -435,12 +451,16 @@ export interface ScreenModes {
 /** A `screen.rows`: the holder's screen now. `lines` are the rows from the
  *  top, all of them unless `cut`, then the bottom ones that fit one message
  *  (the first of them is row `rows - lines.length`). The cursor's column is
- *  `cols` while a wrap is pending. */
+ *  `cols` while a wrap is pending. `title`: the window title the session's
+ *  output last set (empty when it set none), on a connection that acked
+ *  `title`; null on any other, and when the answer carries none. Untrusted
+ *  text. */
 export interface ScreenRows {
   cols: number
   rows: number
   cursor: { row: number; col: number }
   modes: ScreenModes
+  title: string | null
   cut: boolean
   lines: ScreenRow[]
 }
@@ -454,6 +474,7 @@ export interface ScreenTail {
 }
 
 const SCREEN_ROWS_FIELDS = new Set(['t', 're', 'cols', 'rows', 'cursor', 'modes', 'cut', 'lines'])
+const SCREEN_ROWS_TITLED_FIELDS = new Set([...SCREEN_ROWS_FIELDS, 'title'])
 const SCREEN_ROW_FIELDS = new Set(['text', 'typed', 'inverse', 'width', 'end'])
 const SCREEN_CURSOR_FIELDS = new Set(['row', 'col'])
 const SCREEN_MODE_FIELDS = new Set(['screen', 'bracketed_paste', 'application_cursor', 'application_keypad', 'mouse', 'mouse_encoding', 'cursor_hidden'])
@@ -484,12 +505,17 @@ function readScreenModes(m: unknown): ScreenModes | null {
  * (its column at most `cols`), a known word for each mode and a yes or no for
  * the rest, and the rows: each exactly its five fields, `width` the screen's
  * columns and `end` at most that; all of the screen's rows, or fewer with
- * `cut`. The whole message (`size` bytes as it came) within what a frame from
- * the holder holds. Null otherwise.
+ * `cut`. On a connection that acked `title` (`title` true) it may carry
+ * `title` too: text of at most SCREEN_TITLE_MAX characters with no control
+ * character (absent, it reads null); on any other it may not. The whole
+ * message (`size` bytes as it came) within what a frame from the holder
+ * holds. Null otherwise.
  */
-export function readScreenRows(m: unknown, size: number): ScreenRows | null {
+export function readScreenRows(m: unknown, size: number, title = false): ScreenRows | null {
   if (!isObject(m) || m.t !== 'screen.rows' || !isWhole(size) || size > JSON_FROM_HELPER_MAX) return null
-  if (!exactly(m, SCREEN_ROWS_FIELDS) || !isWhole(m.re) || !isScreenSize(m.cols) || !isScreenSize(m.rows) || typeof m.cut !== 'boolean') return null
+  const fields = title && m.title !== undefined ? SCREEN_ROWS_TITLED_FIELDS : SCREEN_ROWS_FIELDS
+  if (!exactly(m, fields) || !isWhole(m.re) || !isScreenSize(m.cols) || !isScreenSize(m.rows) || typeof m.cut !== 'boolean') return null
+  if (m.title !== undefined && (typeof m.title !== 'string' || chars(m.title) > SCREEN_TITLE_MAX || CONTROL.test(m.title))) return null
   const cols: number = m.cols
   const rows: number = m.rows
   const cut: boolean = m.cut
@@ -505,7 +531,7 @@ export function readScreenRows(m: unknown, size: number): ScreenRows | null {
     if (l.width !== cols || !isWhole(l.end) || l.end > cols) return null
     lines.push({ text: l.text, typed: l.typed, inverse: l.inverse, width: cols, end: l.end })
   }
-  return { cols, rows, cursor: { row: cursor.row, col: cursor.col }, modes, cut, lines }
+  return { cols, rows, cursor: { row: cursor.row, col: cursor.col }, modes, title: typeof m.title === 'string' ? m.title : null, cut, lines }
 }
 
 /**

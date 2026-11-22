@@ -1,20 +1,9 @@
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect } from 'vitest'
 import { HooksGateway } from '../../../src/main/hooks/hooks-gateway'
 
+// The responder registry seam went with the gateway's permission hold
+// (2.1.3-beta.14, aicc_planning#358): the gateway holds no request open.
 describe('HooksGateway seams', () => {
-  it('uses an injected responder registry instead of the module import', () => {
-    const register = vi.fn(); const deregister = vi.fn()
-    const gw = new HooksGateway({ emit: () => {}, permissionResponders: { register, deregister } })
-    expect(gw.permissionRegister).toBe(register)
-    expect(gw.permissionDeregister).toBe(deregister)
-  })
-
-  it('defaults the responder registry to the module functions (in-process behavior unchanged)', () => {
-    const gw = new HooksGateway({ emit: () => {} })
-    expect(typeof gw.permissionRegister).toBe('function')
-    expect(typeof gw.permissionDeregister).toBe('function')
-  })
-
   it('registerSessionWithSecret stores a caller-supplied secret; hasSecret reflects it', () => {
     const gw = new HooksGateway({ emit: () => {} })
     expect(gw.hasSecret('s1')).toBe(false)

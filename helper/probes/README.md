@@ -276,6 +276,55 @@ added (and exit 2) when something was left. The record is `p20-result.json`,
 with personal paths written as placeholders and the probe code named by the
 sha256 of its three files. The answer is in ADR-030 after the P19 results.
 
+# Probe P21: can the helper's capture mode capture each display on Windows?
+
+`p21-capture.cjs` with `p21-windows.ps1` (ADR-030, probe table; it gates Snap
+on Windows, S8). It runs on the Windows test machine with the helper of a green
+`Helper (windows-2025)` job (the `helper-windows` artifact) and measures
+`aicc-helper capture` (protocol section 15, "Capturing the displays") from two
+places: the signed-in user's console session, where Snap would run it, and an
+SSH session, which has no desktop. A console run is started by a scheduled task
+that runs only while that user is signed in, not elevated; the probe signs
+nobody in, so the console session must be signed in already (on 2026-11-22 the
+test machine's auto sign-in had signed nobody in); the task is removed in every
+case. For each run it
+records the exit code, the time from the start of the process to its exit, the
+message, the line and, for each display the line names, the picture's header,
+length and whether every pixel is black, against what Windows lists itself
+(each display's mode and DPI, read by PowerShell). The pictures are read and
+deleted at once; none is kept.
+
+```powershell
+node p21-capture.cjs console --helper <aicc-helper.exe> --out <folder> --label console-100
+node p21-capture.cjs console-scale --out <folder> --label set-125 --set 125
+node p21-capture.cjs console --helper <aicc-helper.exe> --out <folder> --label console-125
+node p21-capture.cjs console-scale --out <folder> --label set-back --set 100
+node p21-capture.cjs measure --helper <aicc-helper.exe> --out <folder> --label ssh --session ssh
+node p21-capture.cjs verdict --out <folder> --console console-100,console-125 --ssh ssh
+```
+
+`console-scale` sets the primary display's scale in the console session with
+the display configuration call the Settings page makes, so no sign-out is
+needed; the last `console-scale` above puts the scale found back (nothing puts
+it back by itself, so a run that stops before that step leaves the new scale).
+The decision lines are in the
+script's header and were fixed before measuring: per scale, CAPTURES when 3 of
+3 console runs exit 0 within 2 s and write every display Windows lists, at its
+size and DPI, as a picture that is not all black; from the SSH session, FAILS
+CLEANLY when 3 of 3 runs exit 3 ("no desktop") within 10 s with a message and
+leave no file. When no second scale can be set, the line says why; mixed
+scaling is measured only with two displays. The last lines are `P21 CONSOLE
+<label>`, `P21 SSH`, `P21 SCALES`, `P21 MIXED SCALING` and `P21 RESULT: ...`,
+or `P21 RESULT: COULD NOT RUN - <reason>`; each reading is `p21-<label>.json`
+in the output folder. `console` stops with COULD NOT RUN when its task has not
+started 15 s after it was started, as when nobody is signed in on the console.
+
+The answer is in ADR-030 after the P20 result (2026-11-22): from the SSH
+session, FAILS CLEANLY (3 of 3 runs exited 3 in 13 to 61 ms, no file left); from
+the console session, CANNOT MEASURE, since nobody was signed in on the test
+machine's console and the probe signs nobody in. P21 runs again from a
+signed-in console session before Snap's Windows overlay is built on the mode.
+
 # Probes P3 and P6: does a holder outlive the ssh logout, and is an exec's PATH the login PATH?
 
 `p3-p6-linux.cjs` (ADR-030, probe table; P3 gates remote sessions through the
@@ -333,5 +382,6 @@ P3 HOLDS on the Linux host with key sign-in (a host with logind
 cleanup on was not measured). P6 is SAME there on the line above, which compares the
 exec with `-l`; `claude` was found only by `-il`, so against the user's interactive
 login shell, the comparison ADR-029's P6 names, that host differs and the P6 fallback
-applies on it. The Rocky Linux 10 host was NOT RUN (its one connect failed; recorded as
-host off); the same command runs on it in beta.14.
+applies on it. The Rocky Linux 10 host was NOT RUN on 2026-11-21 (its one connect failed;
+recorded as host off). Rocky Linux 10: not run; its one 8 s connect failed on 2026-11-22
+(host off); owed to beta.15.

@@ -284,9 +284,12 @@ listed first, an account you confirm at each launch says so, and an account
 signed in a different way than before cannot be picked until you confirm it
 (see *Sign-in recovery* below).
 
-- **Model and effort.** The model list is the one the supported Codex versions
-  offer in their own picker; each model offers only the effort levels it runs,
-  and a saved effort its model cannot run is dropped.
+- **Model and effort.** The model list is the one your installed Codex offers
+  in its own picker, read from it when the app finds it, so a model a new
+  Codex adds shows up without an app update. Each model offers only the effort
+  levels Codex lists for it, and a saved effort its model cannot run is
+  dropped. If the app cannot read the list (Codex not found, or the read
+  failed), it offers the models it shipped with.
 - **Permissions.** *Read-only*, *Standard*, *Plan mode*, *Auto* and
   *Unrestricted*. *Plan mode* starts the session read-only and turns on
   Codex's own Plan mode once Codex is ready; if it cannot, a note says so

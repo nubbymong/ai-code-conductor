@@ -117,3 +117,11 @@ export const TODAYS_HELPER = [
 
 /** The same program with the C runtime linked in (CI run 44287817207). */
 export const STATIC_HELPER = TODAYS_HELPER.filter((n) => !/^(vcruntime|api-ms-win-crt-)/i.test(n))
+
+/** The window-manager DLLs the capture mode (2.1.3-beta.14 C6) calls, as the
+ *  import table of Helper run 45034284744 (windows-2025) named them. */
+export const WINDOW_MANAGER_DLLS = ['user32.dll', 'gdi32.dll', 'api-ms-win-shcore-scaling-l1-1-1.dll']
+
+/** The helper with the capture mode, before its window-manager DLLs were
+ *  delay-loaded: every mode loaded them at start (Helper run 45034284744). */
+export const CAPTURE_HELPER_LOAD_TIME = [...STATIC_HELPER, ...WINDOW_MANAGER_DLLS]

@@ -737,14 +737,13 @@ describe("the cursor's row followed, with the tab's rows given (2.1.3-beta.13, p
         // Three rows on, the cursor on the last row: the clear goes where the third line feed left it, and no further.
         expect(replayTail(text, 80, 100, 10, 8).clear, JSON.stringify(what)).toBe(numbered(3).length)
       }
-      // On the alternate screen the cursor anywhere, a cursor saved, a soft reset and the screen moved touch none of
-      // the normal screen's rows, so long as the cursor is back within the rows shown when 1047 brings it to the
-      // normal screen.
-      const onAlt = `${numbered(3)}\x1b[?1047h\x1b[H\x1b7\x1b[!p\x1b[S\x1b[2T\x1b[10;1H\x1b[?1047l${numbered(20)}`
+      // On the alternate screen the cursor anywhere, a cursor saved and the screen moved touch none of the normal
+      // screen's rows, so long as the cursor is back within the rows shown when 1047 brings it to the normal screen.
+      const onAlt = `${numbered(3)}\x1b[?1047h\x1b[H\x1b7\x1b[S\x1b[2T\x1b[10;1H\x1b[?1047l${numbered(20)}`
       expect(replayTail(onAlt, 80, 100, 10, 8).clear).toBe(onAlt.indexOf('line 6\r\n', onAlt.indexOf('\x1b[?1047l')))
-      // There a scroll region, a fill or origin mode set or reset puts the cursor where the count does not follow
-      // it, and a cursor left high is high on the normal screen too.
-      for (const what of ['\x1b[2;5r\x1b[10;1H', '\x1b#8\x1b[10;1H', '\x1b[?6h', '\x1b[?6l', '\x1b[H']) {
+      // There a scroll region, a fill, origin mode set or reset or a soft reset puts the cursor, or the place saved
+      // for it, where the count does not follow it, and a cursor left high is high on the normal screen too.
+      for (const what of ['\x1b[2;5r\x1b[10;1H', '\x1b#8\x1b[10;1H', '\x1b[?6h', '\x1b[?6l', '\x1b[H', '\x1b[!p']) {
         const text = `${numbered(3)}\x1b[?1047h${what}\x1b[?1047l${numbered(20)}`
         expect(replayTail(text, 80, 100, 10, 8).clear, JSON.stringify(what)).toBe(numbered(3).length)
       }
@@ -759,12 +758,13 @@ describe("the cursor's row followed, with the tab's rows given (2.1.3-beta.13, p
       expect(a).toEqual(b.slice(b.indexOf(NOTICE)))
     })
 
-    it('in the tab, text written at home after origin mode is set or reset, or at a restore with no save after a soft reset, stays where it was written: the clear drops only empty rows', async () => {
+    it('in the tab, text written at home after origin mode is set or reset, or at a restore after a soft reset (with no save, or a save on the alternate screen), stays where it was written: the clear drops only empty rows', async () => {
       const kept = (rows: string[]) => rows.slice(rows.findIndex((r) => r !== ''))
       for (const text of [
         `${numbered(3)}\x1b[?6hTOP\x1b[10;1H${numbered(20)}`,
         `${numbered(3)}\x1b[?6lTOP\x1b[10;1H${numbered(20)}`,
         `${numbered(3)}\x1b[!p${numbered(3)}\x1b8X\x1b[10;1H${numbered(20)}`,
+        `${numbered(3)}\x1b[?1047h\x1b7\x1b[!p\x1b8\x1b[?1047lTOP\x1b[10;1H${numbered(20)}`,
       ]) {
         const t = replayTail(text, 80, 100, 10, 8)
         const a = (await bufferAfter(pieceFor(text, t, 10, 80), 80, 10)).normal

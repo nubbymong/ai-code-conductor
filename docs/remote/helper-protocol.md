@@ -167,7 +167,8 @@ The CLI or sudo starts `emit` (statusline and hook command, R6, R7), `mcp`
   installs its filter before it reads any socket (threat model 3.10).
   Outliving logout: probe P3 held for 60 s on a Linux host that does not clean up at
   logout (ADR-030); **pending probe P3** for a host that does and for ADR-029's other P3
-  host roles (macOS, a container host). Rocky Linux 10 is owed to beta.14.
+  host roles (macOS, a container host). Rocky Linux 10 is owed to beta.15 (its one
+  8 s connect failed on 2026-11-22).
 - Only the holder outlives a connection; `mcp` lives as long as the CLI, the
   rest for one call. The holder exits when the session ends, a non-detachable
   terminal closes, or a detached session reaches its maximum lifetime.
@@ -663,6 +664,86 @@ command line it cannot read. No PowerShell and no WMI. On macOS and Linux the
 mode exits 1. The app runs it from the install folder, as it runs `start` and
 `end`.
 
+**A terminal's console host after its program has ended (Windows only, from
+2.1.3-beta.14).** On Windows' own ConPTY a terminal's console host ends only
+when its pseudoconsole is closed. node-pty (1.2.0-beta.15) drops the
+pseudoconsole, unclosed, as soon as the program exits, so the host would run
+until the app quits. node-pty's bundled ConPTY ends its host with the program
+and is left alone. So the app times each terminal it starts on Windows' own
+ConPTY: Date.now() just before and just after node-pty's spawn, widened by
+50 ms on each side, because that clock can run up to one Windows clock tick
+behind the clock Windows stamps creation times with
+(`src/main/console-host-end.ts`). Once node-pty reports the program's exit, and
+no sooner than 6 s plus that 50 ms after the start, the app runs, once,
+
+```
+aicc-helper end-console-host --made-from <t> --made-to <t>
+```
+
+with `<t>` in steps of 100 ns since 1601 (UTC). `--made-to` is not included,
+and it is at most ten seconds after `--made-from`. The helper reads its own
+creation time, then the process list once, and ends each process that meets all
+of these: it is named `conhost.exe` and its program file is Windows' own
+`System32\conhost.exe`; it is listed with the process that started the helper
+as its parent; it was made in that time, after that process and before the
+helper; it still runs, as the helper's own user; it was made at least 6 s
+before the helper (node-pty gives a program 5 s to start in its pseudoconsole,
+and until then a running terminal's host has no program); and it is the console
+host of no process that still runs (each listed process's
+`ProcessConsoleHostProcess`; a process with no console can answer its maker's
+pid, which only ever keeps a host). The widened time can hold the host of a
+terminal started just before or after. What keeps a running terminal's host is
+those last two rules, not the time. Two terminals started within about 50 ms of
+each other whose programs have both ended get both hosts ended. Each host is
+held open from its check to its end. It ends nothing when no process meets all
+of that, or when a process that still runs, and could be opened, cannot be read
+for its console host (a process that cannot be opened is not read). It prints
+the line `console-hosts` prints, naming the process that started it, with
+`ended` how many it ended, and exits 0. It writes a note on stderr when it kept
+a host for one of those reasons or could not end one. It exits 1, ending
+nothing, when it cannot read its own creation time or its own user, the process
+list, the process that started it, or the system folder. It exits 2 on a
+command line it cannot read, a time longer than ten seconds included. No
+PowerShell and no WMI. On macOS and Linux the mode exits 1. The app runs it from
+the install folder, as it runs `console-hosts`.
+
+**Capturing the displays (Windows only, from 2.1.3-beta.14).** Protocol change
+2 (ADR-030): a command-line mode on This computer only, display pictures only,
+for Snap (D3, D4). Nothing in the app runs it yet; probe P21 measures it first
+(ADR-030, Probes), and the command line may still change until the app runs it.
+
+```
+aicc-helper capture --out <folder>
+```
+
+`<folder>` is an absolute path to a folder that is there already; `--out` is
+given once and nothing else is taken. The mode makes itself aware of each
+display's own scale (per-monitor DPI awareness, version 2), so every size is in
+physical pixels. It first checks that it can see the screen: its window station
+is the one a display shows (a service or an SSH session has none), and the
+desktop on the screen is its own (not the sign-in screen, a locked screen or an
+elevation prompt). Then it lists the displays, the primary one first and the
+rest from the top left, grabs each whole display from the screen and writes it
+to `display-<n>.bmp` in the folder, `<n>` from 1: a 32-bit BMP whose rows run
+from the bottom, every fourth byte 255. Whole displays only, never a window or
+a part of one (the rectangle of D4 is cut by the overlay); at most 16 displays,
+each at most 16384 pixels on a side. Each file is made new: a file already
+there is never written over, and the run then fails. A run that fails removes
+every file it wrote, so it leaves all of them or none. It prints one line,
+
+```
+{"displays":[{"file":"display-1.bmp","left":0,"top":0,"width":1920,"height":1080,"dpi":144,"scale":150,"primary":true}]}
+```
+
+with each display's bounds on the virtual screen in physical pixels, its
+effective DPI and that as a percentage of 96, rounded, and exits 0. It exits 1
+with a message on stderr when a grab or a write fails, or `<folder>` is not a
+folder that is there; 2 on a command line it does not take; 3 when there is no desktop to
+capture (it cannot see the screen, or Windows lists no display), with the
+reason on stderr; and 4 on macOS and Linux, where it is not supported yet. It
+makes no window, and uses no PowerShell and no WMI. Its window-manager DLLs
+(user32, gdi32, shcore) load only when the mode runs; no other mode loads them.
+
 **Endpoint: only this user can connect.** No network socket is opened.
 
 - **Windows:** the named pipe `\\.\pipe\aicc-helper-<sid>-<32 hex>`. Its
@@ -773,13 +854,15 @@ for the Machines page.
 **A connection.** The holder first writes its hello line, then a line end:
 `caps` is `["core","local"]` in a holder from before hook events,
 `["core","local","hooks"]` from 2.1.3-beta.8,
-`["core","local","hooks","mcp"]` from 2.1.3-beta.10 and
-`["core","local","hooks","mcp","away","screen"]` from 2.1.3-beta.12, `session.state` is `new`
+`["core","local","hooks","mcp"]` from 2.1.3-beta.10,
+`["core","local","hooks","mcp","away","screen"]` from 2.1.3-beta.12 and
+`["core","local","hooks","mcp","away","screen","title"]` from 2.1.3-beta.14, `session.state` is `new`
 before a launch and `live` after. The app's first frame must be a `hello.ack` with
 exactly `t`, `proto` and `caps`: `proto` 1, `caps` holding `core` and nothing
 the holder did not offer; `local` allows the messages below, `hooks` the hook
-events, `mcp` the tool streams, `away`, beside `mcp`, kept tool streams and
-`screen` the screen reads (all below). A first frame that is raw, or
+events, `mcp` the tool streams, `away`, beside `mcp`, kept tool streams,
+`screen` the screen reads and `title`, beside `screen`, the title in them (all
+below). A first frame that is raw, or
 JSON off channel 0, gets `bad-frame`; another type `unknown-type`, another
 version `proto-mismatch`, anything else `bad-field`; then the holder closes the
 connection. With no `hello.ack` in 10 s it sends `timeout` and
@@ -828,7 +911,7 @@ the last column of section 8's table):
 | `mcp.close` | none | `{stream}`; from a relay, and from the holder to whichever side is still there when the other ends (tool streams, below) |
 | `mcp.away` | none | `{stream}`, from the holder to a relay that acked `away`, on the relay's number: no connection takes its stream now, and the stream is kept (kept streams, below) |
 | `mcp.back` | none | `{stream}`, from the holder to a relay that acked `away`, on the relay's number: a connection takes its kept stream again (kept streams, below) |
-| `screen.read` | `screen.rows` `{re, cols, rows, cursor, modes, cut, lines}` | `{id}`; only on a connection that acked `screen`, attached or not, and never from a relay (`unknown-type`); before a launch, or while the session is ending, `not-found` (screen reads, below) |
+| `screen.read` | `screen.rows` `{re, cols, rows, cursor, modes, title?, cut, lines}` | `{id}`; only on a connection that acked `screen`, attached or not, and never from a relay (`unknown-type`); `title` only on a connection that acked `title` too; before a launch, or while the session is ending, `not-found` (screen reads, below) |
 | `screen.tail` | `screen.lines` `{re, cut, lines}` | `{id, count}`, `count` from 1 to 200; as `screen.read` (screen reads, below) |
 
 Ids are even, as in section 9, and at most 2^53 - 1. Every message has exactly
@@ -958,14 +1041,15 @@ of a Claude Code session it started through the holder (the agent sessions'
 setting, off by default), and only when the hello offers `hooks`; every other
 connection acks `["core","local"]` and is never sent a hook event. For such a
 session, while the hooks gateway is on and listening, the app switches the
-session's settings file to the hook mode for every injected event but
-`PreToolUse`, which stays on the hooks gateway, once the holder answers
-`term.launched` and before the attach sends the launch line; a holder without
-`hooks` leaves the session on the gateway. The app reads each `event`
-strictly (on channel 0 only, its fields only, `seq` from 1, `kind` one of the
-nine and the payload's `hook_event_name`, the payload at most 65,280 bytes
-and the message at most 64 KiB), drops a `seq` it has seen and a
-`PreToolUse`, takes none while the hooks gateway is off or not listening, and
+session's settings file to the hook mode for every injected event,
+`PreToolUse` included (from 2.1.3-beta.14; before it `PreToolUse` stayed on
+the hooks gateway), once the holder answers `term.launched` and before the
+attach sends the launch line; a holder without `hooks` leaves the session on
+the gateway. The app reads each `event` strictly (on channel 0 only, its fields
+only, `seq` from 1, `kind` one of the nine and the payload's
+`hook_event_name`, the payload at most 65,280 bytes and the message at most
+64 KiB), drops a `seq` it has seen (an app before 2.1.3-beta.14 also dropped a
+`PreToolUse`), takes none while the hooks gateway is off or not listening, and
 treats the payload as untrusted text. Fixtures: the `hooks` part of
 `helper/fixtures/local.json`.
 
@@ -1220,10 +1304,12 @@ protocol change 9) its `away` part.
 - **What is not here yet.** A kept stream is given to the next attach of the
   same holder, which within one run of the app is the app again: it attaches
   by itself after a dropped link. It is not given to a new run of the app,
-  as after an update: an update ends every agent session today, and an
-  agent session is not shown again after the app restarts, so
-  a stream is given back inside one app run only, until the step that keeps
-  a session across an update (ADR-030 S16, its second half). A relay that did not ack `away` (its holder does not offer it) whose
+  as after an update: on Windows an update lets a held agent session's CLI
+  run on and records it (S16 step 4), but the next start still ends it, and
+  elsewhere an update ends every agent session; an agent session is not
+  shown again after the app restarts, so a stream is given back inside one
+  app run only, until the step that takes a kept session over in its tab
+  (ADR-030 S16, step 5). A relay that did not ack `away` (its holder does not offer it) whose
   stream ended stays ended: when the app's connection to a session's holder
   drops and comes back, that session's CLI has no tool server until it
   starts one again (in Claude Code, /mcp) or the session is restarted. Nothing tells a
@@ -1246,12 +1332,17 @@ stream) asks for neither: `unknown-type` and a close, as for the terminal
 messages. From 2.1.3-beta.13 a plain terminal's connections ack `screen`,
 and a take-over asks `screen.read` once, before its attach, for the
 holder's size: its replay waits for the tab to be at that size
-(src/main/session-helper/helper-pty.ts). Nothing else in the app asks yet.
+(src/main/session-helper/helper-pty.ts). From 2.1.3-beta.14 a held Codex
+session's connections ack `screen` and `title`, and the app's composer rule
+for that session reads `screen.read` each time it looks, in place of a pane of
+its own (src/main/providers/codex/session-screen.ts). Nothing else in the app
+asks yet.
 
 - **`screen.read`** `{id}` is answered `screen.rows`: `cols` and `rows`, the
   screen's size; `cursor` `{row, col}`, the cursor's cell from 0 (its column
   is `cols` while a wrap is pending after the last cell was written);
-  `modes`; `cut`; and `lines`, the rows of the screen in use from its top,
+  `modes`; `title`, only on a connection that acked `title` (below); `cut`;
+  and `lines`, the rows of the screen in use from its top,
   below any scrollback. Each row is what the app's readers take from a row
   of xterm.js (`readXtermScreen`): `text`, the row's characters (an empty
   cell a space); `typed`, the same with every dim cell blanked; `inverse`,
@@ -1275,6 +1366,22 @@ holder's size: its replay waits for the tab to be at that size
   space does), as the Watchdog's pane gives a line
   (`translateToString(true)`), and `typed`, the line's cells with every dim
   one blanked, its trailing white space trimmed.
+- **The title (capability `title`, from 2.1.3-beta.14).** A holder offers
+  `title` after `screen`, and it counts only beside `screen`. On a connection
+  that acked both, `screen.rows` carries `title`: the window title the
+  session's output last set with OSC 0 or OSC 2, as xterm.js takes it
+  (everything after the first `;`, a later one replacing it; OSC 1, the icon
+  name alone, leaves it), and empty when the output set none. Control
+  characters are dropped, and it is bounded: the screen keeps the first 1 KiB
+  of an OSC string and its first 16 parts between `;`s, so a title is cut at
+  its fifteenth `;`, and at most 1024 characters of it are kept. It is counted
+  before the rows in the one message, so it is never left out. A connection
+  that did not ack `title`, and every connection to a holder from before it
+  (which does not offer it), get `screen.rows` as before, with no `title`.
+  The app refuses a `title` on such a connection, and one that is not text,
+  holds a control character or is over 1024 characters. From 2.1.3-beta.14 a
+  held Codex session's connections ask for it (its composer rule reads the
+  spinner in it); nothing else in the app does.
 - **One message.** Each answer is one message within what a frame to the app
   holds (1 MiB of JSON). Rows that do not fit are left out from the top of
   `screen.rows` and from the oldest end of `screen.lines`, and the answer
@@ -1285,14 +1392,21 @@ holder's size: its replay waits for the tab to be at that size
   xterm.js 6.0.0 by Unicode 6, so a row holding a character the two count
   differently can differ from the app's own terminal. The rows of the screen
   corpus where they do are named in `helper/tests/screen.rs`.
-- **Other differences from xterm.js.** Three more, none of them in the
+- **Other differences from xterm.js.** Four more, none of them in the
   screen corpus, so no test compares them. The screen does not draw the
   replacement character (U+FFFD, which is also what a byte that is not UTF-8
   is in the app's terminal), where xterm.js draws it in one cell, so the
   rest of that run of text sits one cell to the left. It has no line drawing
   character set (`ESC ( 0`), so those characters stay the letters they were
-  sent as. And a change of width cuts or pads each row, where xterm.js can
-  wrap the lines of its normal screen again.
+  sent as. A change of width cuts or pads each row, where xterm.js can
+  wrap the lines of its normal screen again. And the title differs in four
+  cases: an OSC 0 or 2 cut short by CAN or SUB still sets the title, where
+  xterm.js drops it; a control character from U+0080 to U+009F inside one is
+  dropped and the title still set, where xterm.js ends the title at U+009C
+  and drops the whole string at any other; a kind of more than 9 digits (ten
+  zeros, say) sets no title, where xterm.js reads it as a number; and U+009D
+  begins no string, so it sets no title, where xterm.js reads it as the start
+  of an OSC.
 - **The bound.** A CSI parameter above 9999 reaches the screen's parser as
   9999, as main cuts it for its own panes, so a repeat (`CSI n b`) writes at
   most 9999 cells and no other sequence's work grows with its parameter; an
@@ -1309,4 +1423,5 @@ it refuses the field with `bad-field`. The `hook` command line (2.1.3-beta.8)
 is frozen with them: its options, its exit status (always 0) and its silence.
 So is the `mcp` command line (2.1.3-beta.10): its options, its exit status (0
 at the end of its input, 1 otherwise) and a standard output that carries only
-messages.
+messages. The `capture` command line (2.1.3-beta.14) is not frozen yet: nothing
+in the app runs it.

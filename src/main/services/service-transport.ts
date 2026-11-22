@@ -7,8 +7,6 @@ export type ToChildMessage =
   | { type: 'unregister'; sid: string }
   | { type: 'start'; port: number }
   | { type: 'stop' }
-  | { type: 'setGate'; active: boolean }
-  | { type: 'permission-respond'; requestId: string; decision: string }
 
 /** child -> main */
 export type FromChildMessage =
@@ -16,7 +14,6 @@ export type FromChildMessage =
   | { type: 'bind-failed'; error: string }
   | { type: 'event'; entry: HookEvent }
   | { type: 'dropped'; sessionId: string }
-  | { type: 'permission-open'; requestId: string; sid: string }
   | { type: 'health'; inFlight: number; eventsTotal: number; dropsTotal: number; stallsLastMin: number }
   | { type: 'log'; entry: ServiceLogEntry }
   // Logs v2 (Task 8): the child gateway lifts Claude Code's `transcript_path`

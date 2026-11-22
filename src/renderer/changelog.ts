@@ -41,6 +41,23 @@ export interface ChangelogEntry {
 // a backtick in a comment opens a phantom string and the parse fails.
 export const changelog: ChangelogEntry[] = [
   {
+    version: '2.1.3-beta.14',
+    date: '2026-11-22',
+    highlights: 'On Windows, a terminal on this computer whose program ends by itself no longer leaves its console host running until you quit, and quitting with Close sessions no longer leaves a settings-<id>.json file in your .claude folder. The Codex model picker now lists the models your installed Codex offers. With Claude Code and Codex sessions through the session helper on, a held Claude Code session sends every hook event through the helper, and the app reads a held Codex session\'s screen from the helper before it types into Codex.',
+    warnings: [
+      'This beta series begins moving the app\'s background services, and over the next betas your sessions, onto one helper per machine. If you want a quiet build, stay on the stable release.',
+      'On Windows, choosing Save sessions at an update keeps the terminals the session helper holds running only if the new version opens within two minutes of the old one closing. The installer\'s pages count toward those two minutes, so finish the installer promptly.',
+      'To go back to 2.1.3-beta.13, download its installer from the GitHub releases page and run it over this version.',
+    ],
+    changes: [
+      { type: 'fix', description: 'On Windows, when the program of a terminal on this computer ends by itself (not a tab over SSH), the app now ends that terminal\'s leftover console host instead of leaving it running until you quit, including when several terminals end close together.' },
+      { type: 'fix', description: 'Quitting with Close sessions no longer leaves a settings-<id>.json file in your .claude folder. The next start also removes the ones earlier versions left, where the file runs the app\'s status line for that session; any other file is left in place.' },
+      { type: 'improvement', description: 'The Codex model picker now lists the models your installed Codex offers, each with its own effort levels, so a model a new Codex adds shows up without an app update.' },
+      { type: 'improvement', description: 'With Claude Code and Codex sessions through the session helper on (a preview, off by default) and the HTTP Hooks Gateway on, a Claude Code session the helper holds now sends its check before each tool runs (PreToolUse) through the session helper too, so every hook event of that session goes through it.' },
+      { type: 'improvement', description: 'With Claude Code and Codex sessions through the session helper on, the app now reads a held Codex session\'s screen from the session helper before it types into Codex (canvas notes, Ask Conductor questions, prompt buttons and the Watchdog\'s retry). It no longer keeps a second copy of that screen.' },
+    ],
+  },
+  {
     version: '2.1.3-beta.13',
     date: '2026-11-22',
     highlights: 'With Plain terminals through the session helper on, a terminal restored after the app was ended now brings its long lines back whole, and on Windows it comes back right under the earlier-output notice and takes your next command on the prompt\'s own row. With Codex on Windows and Linux, a canvas note sent while Codex replies now waits for the reply to end. The Usage page no longer asks Anthropic for an account a Claude Code session is using, and in Settings, Accounts an account keeps its place when you make it active or inactive, with a new All / Active / Inactive filter.',

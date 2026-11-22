@@ -147,33 +147,29 @@ export const HELPER_HOOK_TIMEOUT_SECS = 10
 
 /**
  * The `hooks` block of a Claude Code session whose hooks go through the
- * session helper (2.1.3-beta.8, plan section A4): PreToolUse stays on the
- * hooks gateway, exactly as buildHooksBlock writes it (the gateway can hold it
- * open while the permission gate decides), and the other eight injected
- * events run the helper's hook mode, which passes each one to the session's
- * holder. Null when the command cannot be given safely (helperHookCommand).
+ * session helper (2.1.3-beta.8, plan section A4): every injected event runs
+ * the helper's hook mode, which passes each one to the session's holder.
+ * From 2.1.3-beta.14 (S16 step 2) that includes PreToolUse, so no entry names
+ * the hooks gateway's port or token: Claude Code reads its settings file once
+ * (ADR-030 probe P20), and an entry that named this app run's gateway would
+ * fail at every tool call once that run is gone. The hook mode answers no
+ * permission: it always exits 0 and prints nothing, as the gateway answered
+ * every PreToolUse `{}` at once. Null when the command cannot be given safely
+ * (helperHookCommand).
  */
-export function buildHelperHooksBlock(
-  sessionId: string,
-  port: number,
-  secret: string,
-  target: HelperHookTarget,
-): Record<string, unknown[]> | null {
+export function buildHelperHooksBlock(target: HelperHookTarget): Record<string, unknown[]> | null {
   const command = helperHookCommand(target)
   if (command === null) return null
-  const gateway = buildHooksBlock(sessionId, port, secret)
   const hooks: Record<string, unknown[]> = {}
   for (const kind of MVP_EVENTS) {
-    hooks[kind] = kind === 'PreToolUse'
-      ? gateway[kind]
-      : [{ matcher: '', hooks: [{ type: 'command', command, timeout: HELPER_HOOK_TIMEOUT_SECS }] }]
+    hooks[kind] = [{ matcher: '', hooks: [{ type: 'command', command, timeout: HELPER_HOOK_TIMEOUT_SECS }] }]
   }
   return hooks
 }
 
 /** What switchHooksToHelper did. */
 export type HelperHooksResult =
-  /** The settings file now sends all but PreToolUse through the helper. */
+  /** The settings file now sends every injected event through the helper. */
   | 'switched'
   /** The file holds no gateway hooks of this session (the gateway was down
    *  or switched off at the spawn, or the file was not written): nothing to
@@ -209,17 +205,19 @@ function gatewayHooksIn(hooks: Record<string, unknown[]>, sessionId: string): { 
  * call (pty-manager.ts: spawnAgentPty, then writeLocalSessionSettings and
  * injectHooks), so always before the holder answers term.launched. Once the
  * session's holder has launched it and before the launch line reaches it,
- * this swaps the app's own entries of the eight events for the hook mode and
- * keeps PreToolUse, and every hook the session inherited, as they were. The
- * gateway token stays (PreToolUse uses it). FAIL-SAFE: on anything but
- * 'switched' the file is as it was, and the session keeps its gateway hooks.
+ * this swaps the app's own entries of the nine events, PreToolUse included
+ * (2.1.3-beta.14), for the hook mode and keeps every hook the session
+ * inherited as it was. No gateway URL or token is left in the file. A file
+ * switched already holds no gateway hooks, so a second switch leaves it as it
+ * is ('no-gateway-hooks'). FAIL-SAFE: on anything but 'switched' the file is
+ * as it was, and the session keeps its gateway hooks.
  */
 export function switchHooksToHelper(a: { settingsPath: string; sessionId: string; target: HelperHookTarget }): HelperHooksResult {
   const settings = readJsonSafe(a.settingsPath)
   const hooks = hooksOf(settings)
   const gw = gatewayHooksIn(hooks, a.sessionId)
   if (!gw) return 'no-gateway-hooks'
-  const helper = buildHelperHooksBlock(a.sessionId, gw.port, gw.secret, a.target)
+  const helper = buildHelperHooksBlock(a.target)
   if (!helper) return 'unsafe-path'
   const own = buildHooksBlock(a.sessionId, gw.port, gw.secret)
   const kept: Record<string, unknown[]> = {}

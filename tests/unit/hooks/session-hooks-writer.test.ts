@@ -176,15 +176,19 @@ describe('session-hooks-writer', () => {
   // 2.1.3-beta.8, plan section A4: a session held by the session helper. The
   // quoting and the cases that leave the file alone are in
   // session-hooks-helper-block.test.ts; this is the real secure write.
-  it('switches a spawned file to the helper hook mode in place: eight command hooks, PreToolUse on the gateway, inherited hooks kept', () => {
+  it('switches a spawned file to the helper hook mode in place: nine command hooks, PreToolUse included (2.1.3-beta.14), inherited hooks kept, no gateway URL or token left', () => {
     writeSettings(path.join(home, '.claude'), { Stop: [cmdHook('user.sh')] })
     injectHooks(base())
     const target = { helperPath: '/opt/aicc/helper/aicc-helper', store: '/opt/aicc/helper/store', sid: 'ag0123456789abcdef0123456789abcd', launcher: 'sh' as const }
     expect(switchHooksToHelper({ settingsPath: file, sessionId: 'sid-a', target })).toBe('switched')
-    const settings = JSON.parse(fs.readFileSync(file, 'utf-8'))
-    const block = buildHelperHooksBlock('sid-a', 19334, 'abc123', target)!
+    const text = fs.readFileSync(file, 'utf-8')
+    const settings = JSON.parse(text)
+    const block = buildHelperHooksBlock(target)!
     expect(settings.hooks.Stop).toEqual([cmdHook('user.sh'), ...block.Stop])
-    expect(settings.hooks.PreToolUse).toEqual(buildHooksBlock('sid-a', 19334, 'abc123').PreToolUse)
+    expect(settings.hooks.PreToolUse).toEqual(block.PreToolUse)
+    expect(settings.hooks.PreToolUse).not.toEqual(buildHooksBlock('sid-a', 19334, 'abc123').PreToolUse)
     for (const kind of MVP_EVENTS) if (kind !== 'Stop') expect(settings.hooks[kind], kind).toEqual(block[kind])
+    expect(text).not.toContain('/hook/')
+    expect(text).not.toContain('abc123')
   })
 })

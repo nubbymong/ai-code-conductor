@@ -12,8 +12,9 @@
  * CONFIRMED by the VM run at f2b1cf65: keys typed after the program had
  * ended. The console host lets go of the pipe as the program ends (node-pty
  * releases the bundled pseudo console when it starts the program, so
- * OpenConsole.exe ends with it, where the system host keeps the pipe until
- * the PTY is killed), so a key typed in that moment lands on a pipe being
+ * OpenConsole.exe ends with it, where the system host keeps the pipe after
+ * the program has ended until the app ends it after node-pty reports the exit:
+ * console-host-end.ts), so a key typed in that moment lands on a pipe being
  * closed. In all 38 tries whose write failed (Codex, under the bundled
  * ConPTY), Codex's exit text had reached the tab 9 to 70 ms before the failure
  * was logged; fast typing into a live Codex with no Ctrl+C failed in none of

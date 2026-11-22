@@ -13,7 +13,7 @@ import { detectCodexUi } from './ui-detection'
 import { watchAndClaimRollout } from './telemetry'
 import { warmCodexResume } from './rollout-lookup'
 import { deployCodexResumePickerScript } from './resume-picker'
-import { deployCodexHookScripts, writeCodexHookFile, removeCodexHookFile, prepareCodexHookFolders, preparedCodexHookRoot, codexPlainWrapperDir, codexLocalAppData, codexHookCommand } from './hooks'
+import { deployCodexHookScripts, writeCodexHookFile, removeCodexHookFile, removeKeptCodexHookFolder, prepareCodexHookFolders, preparedCodexHookRoot, codexPlainWrapperDir, codexLocalAppData, codexHookCommand } from './hooks'
 import type { SecureHookFolders } from './hooks'
 import { CODEX_PINNED_CLI_VERSION, CODEX_MIN_SUPPORTED_VERSION, CODEX_MAX_TESTED_VERSION } from './cli-contract'
 import { codexInstallRecipes } from './install-recipes'
@@ -59,9 +59,11 @@ export {
 } from './cli-runner'
 export type { CodexCliOperation, CodexCommand, CodexRunResult, CodexRunOptions, CodexRunDeps, CodexProcessEntry, CodexKillTree, CodexKillScope, CodexObserveReason, CodexRunWindow, CodexRunMember, CodexStdinWriter } from './cli-runner'
 export { discoverCodex, verifyCodexExecutable, codexCompatibilityAllowsUse } from './discovery'
-// P3.9 (row 39): the installed CLI's own model list, for Sentinel.
+// P3.9 (row 39): the installed CLI's own model list, for the Codex model
+// picker (aicc_planning#362) and Sentinel.
 export {
   readCodexModelCatalogue, parseCodexModelCatalogue, CODEX_CATALOGUE_TIMEOUT_MS, CODEX_CATALOGUE_MAX_CHARS, CODEX_CATALOGUE_MAX_MODELS, CODEX_CATALOGUE_LABEL_MAX,
+  CODEX_CATALOGUE_MAX_LEVELS,
 } from './model-catalogue'
 export type { CodexCatalogueDeps } from './model-catalogue'
 export { createCodexReviewOperations, createCodexExecEventReader, parseCodexExecEvents, REVIEW_MAX_TEXT, CODEX_EXEC_EXIT_SETTLE_MS } from './review'
@@ -104,7 +106,7 @@ export type { CodexRealmFsPort, CodexRealmFsAsync, CodexFsEntry, CodexRealmLocks
 export {
   writeCodexHookFile, removeCodexHookFile, sweepStaleCodexHookFolders, codexHookCommand, codexHookConfigArgs, deployCodexHookScripts,
   prepareCodexHookFolders, preparedCodexHookRoot, codexPlainWrapperDir, verifyPlainCodexHookWrapper,
-  CODEX_HOOK_EVENTS, CODEX_HOOK_CLIENT_HEADER, CODEX_HOOK_CLIENT, CODEX_HOOK_FILE_ENV, CODEX_HOOK_DIR_PREFIX, CODEX_HOOK_STALE_MS, CODEX_HOOK_ROOT_NAME, CODEX_HOOK_PLAIN_BASE,
+  CODEX_HOOK_EVENTS, CODEX_HOOK_FILE_ENV, CODEX_HOOK_DIR_PREFIX, CODEX_HOOK_STALE_MS, CODEX_HOOK_ROOT_NAME, CODEX_HOOK_PLAIN_BASE,
 } from './hooks'
 export type { CodexHookFile, CodexHookEvent, SecureHookFolders, CodexHookFolderPlan, CodexHookFolderOutcome } from './hooks'
 // P3.6: a switched session's conversation carried into the new account's folder.
@@ -124,9 +126,10 @@ export type { CodexUsageFsPort, CodexUsageEntry, CodexUsageFsApi, CodexLiveUsage
  *  accounts service's prepared launch), never one looked up on PATH here. */
 const CODEX_MANAGED_LAUNCH_ONLY = 'not used for Codex: launches go through the managed launch'
 
-/** WP2 PR 4, P4.1: main's pane of each Codex run and the submit primitive
- *  (session-screen.ts drives composer-submit.ts), offered through the
- *  registered provider: the PTY manager reaches this package only that way. */
+/** WP2 PR 4, P4.1: main's reading of each Codex run's screen (its pane, or
+ *  since 2.1.3-beta.14 B2 a held run's holder's screen) and the submit
+ *  primitive (session-screen.ts drives composer-submit.ts), offered through
+ *  the registered provider: the PTY manager reaches this package only that way. */
 const CODEX_RUN_SCREEN: SessionRunScreen = {
   open: (sessionId, opts) => openCodexScreen(sessionId, opts),
   feed: (sessionId, data) => feedCodexScreen(sessionId, data),
@@ -267,8 +270,9 @@ export class CodexProvider implements SessionProvider {
    *  `secureFolders` (on Windows one PowerShell call). A no-op while they are
    *  still ready. Resolves whether the hook root is ready; says in the log
    *  when a preparation leaves Codex sessions, or the shim route, without
-   *  hooks. Never throws. */
-  async prepareHookFolders(resourcesDir: string, secureFolders: SecureHookFolders): Promise<boolean> {
+   *  hooks. Never throws. The sweep of left-behind hook folders passes by the
+   *  ones `kept` names (2.1.3-beta.14, S16 step 4). */
+  async prepareHookFolders(resourcesDir: string, secureFolders: SecureHookFolders, kept?: () => readonly string[]): Promise<boolean> {
     try {
       const dataDir = codexHookDataDir()
       if (!dataDir) {
@@ -282,7 +286,7 @@ export class CodexProvider implements SessionProvider {
         plainDir = codexPlainWrapperDir(codexLocalAppData(), resourcesDir)
         plainWordMissing = plainDir === null
       }
-      const out = await prepareCodexHookFolders({ dataDir, scriptsDir, plainDir }, secureFolders)
+      const out = await prepareCodexHookFolders({ dataDir, scriptsDir, plainDir }, secureFolders, kept)
       if (out.ran) {
         const why = out.detail.length ? ` (${out.detail.join('; ')})` : ''
         // Round 3 (F3): said, never silent, when Codex sessions will have no hooks.
@@ -337,6 +341,13 @@ export class CodexProvider implements SessionProvider {
         removeCodexHookFile(written)
       },
     }
+  }
+
+  /** 2.1.3-beta.14 (S16 step 4): the hook folder of a session an app update
+   *  kept running, removed once it is no longer kept, from this install's own
+   *  hook root only (hooks.ts removeKeptCodexHookFolder). */
+  removeSessionHookFolder(dir: string): void {
+    try { removeKeptCodexHookFolder(dir, codexHookDataDir()) } catch { /* best-effort; the sweep remains */ }
   }
 }
 

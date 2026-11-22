@@ -65,12 +65,6 @@ export const CODEX_HOOK_FILE_NAME = 'hook.json'
  *  a project folder). The forwarder
  *  checks the same layout (scripts/ccc-codex-hook.js ROOT_NAME). */
 export const CODEX_HOOK_ROOT_NAME = 'codex-hooks'
-/** The header the forwarder sends so the gateway never holds a Codex
- *  request open (a Claude PermissionRequest is held for a decision; Codex's
- *  hook is async and its answer is never read). Lowers what a request may
- *  do; it grants nothing. */
-export const CODEX_HOOK_CLIENT_HEADER = 'x-ccc-hook-client'
-export const CODEX_HOOK_CLIENT = 'codex'
 
 /** A session id as the gateway routes it (its URL pattern). */
 const SESSION_ID_RE = /^[A-Za-z0-9_-]{1,128}$/
@@ -312,9 +306,10 @@ function quickAnswer(plan: CodexHookFolderPlan, key: string): CodexHookFolderOut
  * so nothing is made or written through a link), and only then are the two
  * files written into the plain-copy folder; verifyPlainCodexHookWrapper
  * checks them before each use. Left-behind hook folders are swept once the
- * root is ready. Never throws.
+ * root is ready, all but the ones `kept` names then (2.1.3-beta.14, S16 step
+ * 4: the folders of sessions an app update kept running). Never throws.
  */
-export function prepareCodexHookFolders(plan: CodexHookFolderPlan, secure: SecureHookFolders): Promise<CodexHookFolderOutcome> {
+export function prepareCodexHookFolders(plan: CodexHookFolderPlan, secure: SecureHookFolders, kept?: () => readonly string[]): Promise<CodexHookFolderOutcome> {
   const key = planKey(plan)
   if (inFlight && inFlight.key === key) return inFlight.promise
   const quick = inFlight ? null : quickAnswer(plan, key)
@@ -325,7 +320,7 @@ export function prepareCodexHookFolders(plan: CodexHookFolderPlan, secure: Secur
     const answer = quickAnswer(plan, key)
     if (answer) return answer
     try {
-      return await runPreparation(plan, secure, key)
+      return await runPreparation(plan, secure, key, kept)
     } catch (err) {
       prepared = { key, root: null, rootId: null, plainDir: plan.plainDir, plainOk: plan.plainDir === null ? null : false, failedAt: Date.now() }
       return { root: false, plain: plan.plainDir === null ? null : false, ran: true, detail: [String((err as Error)?.message ?? err)] }
@@ -337,7 +332,7 @@ export function prepareCodexHookFolders(plan: CodexHookFolderPlan, secure: Secur
   return promise
 }
 
-async function runPreparation(plan: CodexHookFolderPlan, secure: SecureHookFolders, key: string): Promise<CodexHookFolderOutcome> {
+async function runPreparation(plan: CodexHookFolderPlan, secure: SecureHookFolders, key: string, kept?: () => readonly string[]): Promise<CodexHookFolderOutcome> {
   const { dataDir, scriptsDir, plainDir } = plan
   prepared = null
   if (plainDir) stagedPlainDirs.delete(plainDir)
@@ -381,7 +376,7 @@ async function runPreparation(plan: CodexHookFolderPlan, secure: SecureHookFolde
   }
   prepared = { key, root: rootOk ? root : null, rootId: rootOk ? folderIdentity(root) : null, plainDir, plainOk, failedAt: rootOk ? null : Date.now() }
   if (rootOk) {
-    try { sweepStaleCodexHookFolders(root) } catch { /* best-effort */ }
+    try { sweepStaleCodexHookFolders(root, Date.now(), CODEX_HOOK_STALE_MS, kept?.() ?? []) } catch { /* best-effort */ }
   }
   return { root: rootOk, plain: plainOk, ran: true, detail }
 }
@@ -458,16 +453,21 @@ export const CODEX_HOOK_STALE_MS = 24 * 3600 * 1000
 /** Remove hook folders a crash or a quit left behind in `root` (this install's
  *  own hook root, preparedCodexHookRoot, and nowhere else): its own prefix,
  *  real folders only (never a link or junction), older than
- *  CODEX_HOOK_STALE_MS, emptied as removeCodexHookFile does. Returns how
- *  many were removed. */
-export function sweepStaleCodexHookFolders(root: string, now: number = Date.now(), maxAgeMs: number = CODEX_HOOK_STALE_MS): number {
+ *  CODEX_HOOK_STALE_MS, emptied as removeCodexHookFile does. A folder `kept`
+ *  names (2.1.3-beta.14, S16 step 4, aicc_planning#359: a session an app
+ *  update kept running still reads its hook file) stays, whatever its age.
+ *  Returns how many were removed. */
+export function sweepStaleCodexHookFolders(root: string, now: number = Date.now(), maxAgeMs: number = CODEX_HOOK_STALE_MS, kept: Iterable<string> = []): number {
   let removed = 0
   if (typeof root !== 'string' || !root || path.basename(root) !== CODEX_HOOK_ROOT_NAME) return 0
   let entries: fs.Dirent[]
   try { entries = fs.readdirSync(root, { withFileTypes: true }) } catch { return 0 }
+  const keep = new Set<string>()
+  for (const k of kept) if (typeof k === 'string' && k) keep.add(foldedPath(k))
   for (const e of entries) {
     if (!e.isDirectory() || !e.name.startsWith(CODEX_HOOK_DIR_PREFIX)) continue
     const dir = path.join(root, e.name)
+    if (keep.has(foldedPath(dir))) continue
     let st: fs.Stats
     try { st = fs.lstatSync(dir) } catch { continue }
     if (!st.isDirectory() || st.isSymbolicLink()) continue
@@ -476,6 +476,33 @@ export function sweepStaleCodexHookFolders(root: string, now: number = Date.now(
     try { fs.rmdirSync(dir); removed++ } catch { /* not empty, or gone */ }
   }
   return removed
+}
+
+/** A path as the platform's file system compares it, made absolute. */
+function foldedPath(p: string): string {
+  const abs = path.resolve(p)
+  return FOLD_CASE ? abs.toLowerCase() : abs
+}
+
+/**
+ * Remove the hook folder of a session an app update kept running, once that
+ * session is no longer kept (2.1.3-beta.14, S16 step 4): `dir` is the folder
+ * the session helper's record names. Only a per-launch folder directly inside
+ * this install's own hook root (`<dataDir>/codex-hooks`, its own prefix), a
+ * real folder in its chain (never a link or junction), emptied of the hook
+ * file and its staging leftovers alone and removed only when nothing else is
+ * left in it, as the sweep removes a left-behind one. Any other path is left
+ * as it is. True when it was removed.
+ */
+export function removeKeptCodexHookFolder(dir: string, dataDir: string | null): boolean {
+  if (typeof dir !== 'string' || !dir || !path.isAbsolute(dir) || CONTROL_RE.test(dir)) return false
+  if (typeof dataDir !== 'string' || !dataDir || !path.isAbsolute(dataDir)) return false
+  const root = path.join(dataDir, CODEX_HOOK_ROOT_NAME)
+  if (foldedPath(path.dirname(dir)) !== foldedPath(root)) return false
+  if (!path.basename(dir).startsWith(CODEX_HOOK_DIR_PREFIX)) return false
+  if (!realFolderChainBelow(dataDir, dir)) return false
+  emptyHookFolder(dir)
+  try { fs.rmdirSync(dir); return true } catch { return false }
 }
 
 /** Put the forwarder and its Windows wrapper in `<resourcesDir>/scripts/`
