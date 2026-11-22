@@ -100,10 +100,10 @@ function removeIfWrittenByLocalLaunch(full: string, sid: string, parsed: unknown
  * Scan ~/.claude/settings-*.json at start-up for files of sessions not in the
  * active set. A file a local launch of this install wrote for its session
  * (writtenByLocalLaunch) is removed: that session is over, and its file is
- * passed to nothing again (aicc_planning#385). Any other file keeps its place,
- * and has the hooks that name a /hook/ address taken out, so a crashed
- * previous run can't leave stale hook entries pointing at our (possibly new)
- * port. Called at gateway startup.
+ * passed to nothing again (aicc_planning#385). Any other file keeps its place;
+ * when its hooks name a /hook/ address its whole `hooks` block is taken out
+ * (removeHooks), so a crashed previous run can't leave stale hook entries
+ * pointing at our (possibly new) port. Called at gateway startup.
  *
  * Returns the number of files removed or cleaned.
  */

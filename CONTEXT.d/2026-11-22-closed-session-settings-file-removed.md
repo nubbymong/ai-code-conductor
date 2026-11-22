@@ -17,7 +17,11 @@ before node-pty reports that end, so the handler never ran. The start-up sweep
 
 Fix: the forced kill and killAllPty remove the session's files at once
 (unbindLaunchFiles; the exit's own removal later finds none), with no net line
-in pty-manager.ts (7,773). The start-up sweeps remove a stale
+in pty-manager.ts (7,773). A Codex launch is left to its exit, as killPty
+leaves it: it writes none of the three files, and the record that its hooks
+are Codex's must outlive the kill (P3.10 round 1 B1, round 2 R8), so a hook
+already on its way never reaches Claude's account attribution or transcript
+binder. The start-up sweeps remove a stale
 settings-<sid>.json only when a local launch of this install wrote it: the id
 has the app's shape (24 hex characters) and the file runs this install's
 status line bridge for that id, or the session helper's hook mode for that

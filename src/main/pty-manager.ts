@@ -875,7 +875,7 @@ function noteGatewayToken(sessionId: string, codex: boolean): void {
 }
 
 /** P3.10 round 1 (B1, B2): the session's gateway token goes -- its process
- *  exited, its spawn failed, or its launch sends no hook at all. */
+ *  exited, a quit's kill ended it, its spawn failed, or its launch sends no hook. */
 function dropGatewayToken(sessionId: string): void {
   try { getGateway()?.unregisterSession(sessionId) } catch { /* the gateway may have stopped */ }
   codexGatewayTokens.delete(sessionId)
@@ -7667,9 +7667,9 @@ export function killAllPty(): void {
   // the union. Snapshot the keys first: killPty mutates both maps.
   const ids = new Set<string>([...ptySessions.keys(), ...refreshWaitSpawns.keys()])
   logInfo(`[pty] Killing all PTYs (${ptySessions.size} active, ${refreshWaitSpawns.size} parked on a refresh wait)`)
-  // The app often exits before node-pty reports these ends, so each session's
-  // own files go now, not at its exit (aicc_planning#385; the exit's removal finds none).
-  for (const id of ids) { killPty(id); unbindLaunchFiles(id) }
+  // The app often exits before node-pty reports these ends, so each session's own files go now, not at its exit
+  // (aicc_planning#385; the exit's removal finds none). A Codex launch's record stays until its exit (P3.10 B1, R8).
+  for (const id of ids) { killPty(id); if (!codexGatewayTokens.has(id)) unbindLaunchFiles(id) }
 }
 
 /**
@@ -7696,7 +7696,7 @@ export function gracefulExitPty(sessionId: string, timeoutMs = 5000): Promise<vo
     const timeout = setTimeout(() => {
       // Timeout: a forced kill. The quit goes on before node-pty reports this end, so the files go now (aicc_planning#385).
       logInfo(`[pty-manager] Graceful exit timeout for ${sessionId}, force killing`)
-      killPty(sessionId); unbindLaunchFiles(sessionId)
+      killPty(sessionId); if (!codexGatewayTokens.has(sessionId)) unbindLaunchFiles(sessionId)
       resolve()
     }, timeoutMs)
 
