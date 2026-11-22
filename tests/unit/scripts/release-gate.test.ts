@@ -346,7 +346,10 @@ describe('release-gate Codex models', () => {
     expect(text).toMatch(/OK\s+milestone/)
     expect(text).toMatch(/OK\s+model registry covers all 3/)
     expect(text).toContain("OK    Codex models: 2 model(s) Codex 0.155.1 lists (list read 2026-09-29); the registry has a row for 1, and the picker offers each model from the installed Codex's own list")
-    expect(text).toContain("INFO  gpt-6-astra (GPT-6-Astra) has no registry row: the picker offers it from the installed Codex's own list, with no price")
+    expect(text).toContain("INFO  gpt-6-astra (GPT-6-Astra) has no registry row: the picker offers it from the installed Codex's own list")
+    // A Codex price comes from the live price list (codex-pricing.json the
+    // fallback), never from a registry row, so a missing row is not unpriced.
+    expect(text).not.toContain('with no price')
     expect(text).not.toMatch(/FAIL\s+Codex/)
     expect(r.codexResult?.missing.map((m: { id: string }) => m.id)).toEqual(['gpt-6-astra'])
   })

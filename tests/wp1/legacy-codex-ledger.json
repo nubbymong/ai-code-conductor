@@ -1,8 +1,8 @@
 {
   "schema": "wp1-legacy-codex-ledger/2",
   "predicateDigest": "100a1233edebdc39a5f9004d3fba980a89ebb15b25872e52076386bc84b03153",
-  "manifestPathDigest": "30b70548ec49c503aa363457d84f4f6e137d3fd25f725310a1cd1d138b429d78",
-  "manifestHead": "18dd949fa8f51a6b6c38cfc62bd5cd3de65fb5dd",
+  "manifestPathDigest": "f8ead88ecdb3a2a34383f38df3fa23f5fca86161fcb9f7b183452f3164a6a17d",
+  "manifestHead": "d98f8c523a61e0668999c3eb7475ed6e42e9dc55",
   "dispositions": {
     "retain": "unchanged observable behaviour, characterization proof",
     "move": "moved behind a package boundary and/or adapted at the call site, regression proof (newPath when relocated)",
@@ -2272,6 +2272,17 @@
       "note": ""
     },
     {
+      "path": "src/main/installed-codex-models.ts",
+      "predicates": [
+        "P01",
+        "P14"
+      ],
+      "category": "MODELS-PRICING",
+      "disposition": "added",
+      "evidence": "new 2.1.3-beta.14 section C9 module (aicc_planning#362) (src/main/installed-codex-models.ts): reads the installed Codex's own model list through the accounts service's readModelCatalogue (the launch rule, then only the executable discovery proved, in no account's folder) when what the app finds of Codex changes and when Sentinel's Codex check asks, joins a read in flight so a start runs one read whichever asks first, drops an answer a later decision overtook, counts a read as Codex in use, and hands the list to the model registry as its last layer (WP1.68); tests/unit/main/installed-codex-models.test.ts; tests/unit/main/registry-handlers-codex-list.test.ts",
+      "note": "created by 2.1.3-beta.14 section C9; main process only; starts no process itself (the read is model-catalogue.ts through the accounts service)"
+    },
+    {
       "path": "src/main/internal-events.ts",
       "predicates": [
         "P14"
@@ -2384,6 +2395,16 @@
       "disposition": "replace",
       "evidence": "tests/wp1/launch-handoff.test.ts asserts the binding fields at the IPC boundary (WP1.38, WP1.42); existing codexOptions superRefine cases retained; WP2 provider-off enforcement (main refuses every launch of a provider that is off; WP1.60 enable/disable): pty:spawn and the SSH Launch Claude refuse a provider that is off, the legacy CLI installs for a Claude launch only, and the install tab gets no command-button secrets; tests/unit/main/pty-spawn-provider-off.test.ts; WP2 PR 3 P3.8 (row 40): the Codex effort is held to CODEX_EFFORTS (the CLI's values, max and ultra added), shared with the fail-open sanitizer (WP1.42, WP1.68); tests/unit/main/codex-effort-allowlist.test.ts; WP2 PR 3 P3.8 round 1 (rows 40, 69): the permissions preset takes plan (CODEX_PRESETS); a Codex launch drops a saved effort its model does not run, never widening it (WP1.42, WP1.68); tests/unit/main/codex-effort-allowlist.test.ts, tests/unit/main/pty-spawn-provider-off.test.ts; WP2 PR 3 P3.8 round 3 (row 69): a started Codex spawn reports the preset it launched with (WP1.68); tests/unit/main/pty-spawn-provider-off.test.ts; WP2 PR 3 P3.10: a Switch does not carry a conversation only inferred by a launch whose account's hooks are heard from (the session sent no message; it starts a new one and says why) (WP1.38); tests/wp1/launch-handoff-pty.test.ts; WP2 PR 3 P3.10 round 1 (ADR-009 pass 1, spec, quality and VM findings) (WP1.68): the Switch notice for a conversation Codex did not confirm, true whatever other tabs chose (S4); tests/wp1/launch-handoff-pty.test.ts; WP2 PR 3 P3.10 rounds 3b and 4 (the hook wrapper and the picker resolve their helpers from fixed locations; the hook folders prepared asynchronously and read back; approval pairing; the Watchdog episode) (WP1.68): a local Codex launch waits, bounded, for the hook folders; tests/unit/main/pty-spawn-provider-off.test.ts; WP2 PR 3 P3.10 round 5 (any folder name; names ending in a dot or a space; a failed preparation waits; the launch wait) (WP1.68): the launch waits for the hook folders only while the Hooks gateway listens; tests/unit/main/pty-spawn-provider-off.test.ts; WP2 PR 3 P3.11 (row 62, extra CLI arguments; parity) (WP1.42): codexOptions.extraArgs is checked by the shared rule at the IPC boundary; tests/unit/main/codex-extra-args-guard.test.ts; WP2 PR 3 P3.11 round 1 (ADR-009 pass 1, spec and quality findings) (WP1.42): comments name where the rule lives; the schema unchanged; tests/unit/main/codex-extra-args-guard.test.ts; WP2 PR 3 P3.13 (row 72, the one-at-a-time rule in main; parity) (WP1.60): pty:spawn asks and claims the one-at-a-time rule straight after the provider rule, refusing a second copy of a config that is not Multi Spawn before anything is prepared, leased or spawned; tests/unit/main/pty-spawn-one-at-a-time.test.ts, tests/unit/main/codex-multi-spawn-leases.test.ts; WP2 PR 3 P3.13 round 1 (ADR-009 pass, spec and quality findings) (WP1.60): pty:spawn settles the one-at-a-time gate once pty-manager took the spawn, and answers the refusal with its own SpawnRefusal type; tests/unit/main/pty-spawn-one-at-a-time-rights.test.ts; WP2 PR 3 P3.13 round 2 (ADR-009 pass 2) (WP1.60): pty:spawn settles the ticket the one-at-a-time gate handed out for this spawn, so a forged same-id spawn that throws after the gate cannot overwrite a pending one; tests/unit/main/pty-spawn-one-at-a-time-rights.test.ts; WP2 PR 3 P3.16a main track round 2 (WP1.68): pty:kill takes an optional reason, and only the exact string 'restart' makes it a Restart's kill, anything else a close (Q5); no Codex-specific change; tests/unit/main/pty-spawn-provider-off.test.ts; WP2 PR 3 PR-level ADR-009 round 1 (WP1.60): a spawn that prepares hands the one-at-a-time rule its preparation's current state with its ticket, so one cancelled or superseded stops counting (B1); no Codex-specific change; tests/unit/main/pty-spawn-restart-pending.test.ts; WP2 PR 4 P4.1: canvas:sessionGuidance, the Codex launch's home and version (WP1.68); tests/unit/main/canvas-session-guidance-ipc.test.ts; WP2 PR 4 P4.3 re-review (RASK-1, RASK-2, 56200cd5): the Ask launch folder is the one just rebuilt, and a failed rebuild is said in one fixed sentence; P4.1 re-review RA-4 (WP1.68); tests/unit/main/ask-conductor-handoff-ipc.test.ts; WP2 PR 4 P4.3 carrier (row 53, fc460f8f): askConductor:handOff answers the app window's top frame only, with a strict payload, for a Codex session launched as Ask; the help folder is rebuilt right before every Ask spawn of either assistant, and a failed rebuild starts nothing (WP1.68); tests/unit/main/ask-conductor-handoff-ipc.test.ts; WP2 PR 4 ADR-009 round 1 (63968ba0): changed by the pass's fixes (WP1.68); tests/unit/main/ask-conductor-handoff-ipc.test.ts, tests/unit/main/ask-help-folder-runs.test.ts; WP2 PR 4 review fixes (758cb407): changed by those fixes (WP1.68); tests/unit/main/ask-conductor-handoff-ipc.test.ts; WP2 PR 4 owner answers (2026-10-04) (integration round 3): codexDiscoveredVersion removed; the Codex launch carries the account's folder and ownership only (WP1.68); tests/unit/main/pty-handlers-command-secrets.test.ts",
       "note": "WP2 commit 4: pty:spawn takes the Codex account as providerAccountId (+ a per-launch acknowledgeRealmOnly), Codex only; the Codex model is bounded; codexLaunch is main-internal; a Codex SSH spawn is refused first; the launch is prepared by the accounts service and handed to pty-manager with its lease, the wait registered with pty-manager (beginSpawnPreparation). authRealmId/identityId are resolved by the service, never sent"
+    },
+    {
+      "path": "src/main/ipc/registry-handlers.ts",
+      "predicates": [
+        "P14"
+      ],
+      "category": "MODELS-PRICING",
+      "disposition": "replace",
+      "evidence": "2.1.3-beta.14 section C9 (aicc_planning#362): registering the registry handlers now also follows the installed Codex (followInstalledCodexModels), the one production call that reads the Codex model list with Sentinel off; replacement coverage: dropping that call fails the test (WP1.68); tests/unit/main/registry-handlers-codex-list.test.ts",
+      "note": "P14: the import, the call and its comment; the read itself is installed-codex-models.ts"
     },
     {
       "path": "src/main/ipc/tokenomics2-handlers.ts",
@@ -6629,6 +6650,17 @@
       "note": "created by WP2 PR 3 P3.8; pure"
     },
     {
+      "path": "tests/unit/codex-models-from-installed-list.test.ts",
+      "predicates": [
+        "P01",
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "new 2.1.3-beta.14 section C9 test (aicc_planning#362) (tests/unit/codex-models-from-installed-list.test.ts): a listed model the registry lacks is offered with its own levels, the registry alone without a list, a registry row only adds a price or corrects a label, an unlisted registry row still places a running session, a listed id a Claude model holds is never offered, a new config starts on the list's first model, and the release gate passes new ids (WP1.68); tests/unit/codex-models-from-installed-list.test.ts",
+      "note": "created by 2.1.3-beta.14 section C9; pure: no process, no folder, no network"
+    },
+    {
       "path": "tests/unit/codex-web-boundary.test.ts",
       "predicates": [
         "P01",
@@ -7858,6 +7890,17 @@
       "note": "created by WP2 (main refuses every launch of a provider that is off)"
     },
     {
+      "path": "tests/unit/main/installed-codex-models.test.ts",
+      "predicates": [
+        "P01",
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "new 2.1.3-beta.14 section C9 test (aicc_planning#362) (tests/unit/main/installed-codex-models.test.ts): Codex found is one read and the picker offers its list; a failed read, Codex off or not found leave the registry alone; a switch-off drops the list and an overtaken read is not used; a read counts as Codex in use; Sentinel's start-up read joins the follower's, and a start-up read that began before Codex was found is taken as the follower's (one run either way), while one for another version is read again (WP1.68); tests/unit/main/installed-codex-models.test.ts",
+      "note": "created by 2.1.3-beta.14 section C9; the accounts service is faked: no process, no folder, no network"
+    },
+    {
       "path": "tests/unit/main/launch-bindings-launch.test.ts",
       "predicates": [
         "P04",
@@ -8290,6 +8333,17 @@
       "disposition": "added",
       "evidence": "new test for the WP2 PR 4 Electron 44 colour-reply fix (lane COLOUR): main answers a local Codex session's OSC 10/11 colour query the moment the PTY emits it, in xterm.js's bytes, and keeps it from the renderer, so a late answer never reaches the composer as typed text (WP1.68); tests/unit/main/terminal-query-responder.test.ts, tests/unit/main/pty-codex-color-replies.test.ts, tests/unit/main/pty-ssh-color-query-passthrough.test.ts",
       "note": "created by the lane COLOUR fix; node-pty mocked, nothing spawned"
+    },
+    {
+      "path": "tests/unit/main/registry-handlers-codex-list.test.ts",
+      "predicates": [
+        "P01",
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "new 2.1.3-beta.14 section C9 fixer test (aicc_planning#362) (tests/unit/main/registry-handlers-codex-list.test.ts): registering the registry handlers follows the installed Codex, so with no Sentinel run its list is the Codex picker after one read; red with the follower call removed from registry-handlers.ts (WP1.68); tests/unit/main/registry-handlers-codex-list.test.ts",
+      "note": "created by the 2.1.3-beta.14 section C9 fixer; electron and the accounts service are faked: no process, no folder, no network"
     },
     {
       "path": "tests/unit/main/review-provider-off.test.ts",

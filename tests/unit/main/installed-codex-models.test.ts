@@ -147,6 +147,46 @@ describe('the installed Codex\'s model list reaches the registry (aicc_planning#
     expect(svc.reads).toBe(2)
   })
 
+  it("a start-up read that began before Codex was found is the picker's list: still one run of Codex", async () => {
+    const svc = fakeService({ enabled: true, discoveryState: 'unchecked', compatibility: 'unknown' })
+    followInstalledCodexModels(svc as never)
+    await tick()
+    let release!: () => void
+    svc.hold = new Promise<void>((r) => { release = r })
+    const asked = readInstalledCodexModels(svc as never, { fresh: false })
+    svc.found = FOUND
+    svc.changed()
+    await tick()
+    release()
+    expect(await asked).toEqual(svc.answer)
+    await tick()
+    expect(svc.reads).toBe(1)
+    expect(codexRows()).toEqual(['gpt-7-nova', 'gpt-5.5'])
+    expect(await readInstalledCodexModels(svc as never, { fresh: false })).toEqual(svc.answer)
+    expect(svc.reads).toBe(1)
+  })
+
+  it('a read in flight that answers for another version than the one now found is read again', async () => {
+    const svc = fakeService({ enabled: true, discoveryState: 'unchecked', compatibility: 'unknown' })
+    // Each read's answer is fixed when it starts: the first is another version's.
+    const answers: CodexModelListAnswer[] = [listed('0.179.0', ['gpt-7-terra']), listed('0.180.0', ['gpt-7-nova', 'gpt-5.5'])]
+    svc.readModelCatalogue = async () => { const a = answers[svc.reads++]; if (svc.hold) await svc.hold; return a }
+    followInstalledCodexModels(svc as never)
+    await tick()
+    let release!: () => void
+    svc.hold = new Promise<void>((r) => { release = r })
+    const asked = readInstalledCodexModels(svc as never, { fresh: false })
+    svc.found = FOUND
+    svc.changed()
+    await tick()
+    release()
+    expect(await asked).toEqual(answers[0])
+    await tick()
+    expect(svc.reads).toBe(2)
+    expect(codexRows()).toEqual(['gpt-7-nova', 'gpt-5.5'])
+    expect(codexRows()).not.toContain('gpt-7-terra')
+  })
+
   it('the registry is reloaded (and pushed) only when the list changes', () => {
     const pushed: number[] = []
     const off = onRegistryReload(() => pushed.push(1))

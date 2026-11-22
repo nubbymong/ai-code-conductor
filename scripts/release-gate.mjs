@@ -744,7 +744,7 @@ export function formatReport({ version, repo, milestoneResult, modelsResult, exp
     else out.push(`  FAIL  Codex models: ${r.reason}${at}`)
     for (const id of r.taken || []) out.push(`          - ${id}   a Claude model in resources/model-registry.json has this id or alias, so the Codex picker cannot offer it: rename or remove that entry`)
     for (const id of r.duplicates || []) out.push(`          ${id} is listed more than once in resources/model-registry.json: keep one entry, in the codex family`)
-    if (r.ok) for (const m of r.missing) out.push(`  INFO  ${m.id}${m.label ? ` (${m.label})` : ''} has no registry row: the picker offers it from the installed Codex's own list, with no price`)
+    if (r.ok) for (const m of r.missing) out.push(`  INFO  ${m.id}${m.label ? ` (${m.label})` : ''} has no registry row: the picker offers it from the installed Codex's own list`)
     for (const m of r.extra) out.push(`  WARN  ${m.id}${m.label ? ` (${m.label})` : ''} is a Codex model in the registry but the Codex list no longer names it: retired? (not fatal)`)
   }
   // -- the macOS floor (check 4)

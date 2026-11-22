@@ -139,8 +139,20 @@ export function followInstalledCodexModels(svc: Followed | null): () => void {
     st.last = null
     if (codex && codex.enabled && codex.discoveryState === 'found') {
       const pending = st.inFlight
-      if (pending) void pending.then(() => readInstalledCodexModels(svc, { fresh: true }))
-      else void readInstalledCodexModels(svc, { fresh: true })
+      if (!pending) { void readInstalledCodexModels(svc, { fresh: true }); return }
+      // A read in flight began before this decision (Sentinel's start-up
+      // check can ask before the look for Codex ends; its read then waits
+      // for that look). An answer for the version now found is this Codex's
+      // list and is taken as this decision's read, so a start runs one read;
+      // any other answer is read again.
+      const mine = st.decision
+      const version = codex.version
+      void pending.then((answer) => {
+        if (st.decision !== mine) return
+        const list = installedCodexModelsOf(answer)
+        if (list && list.version === version) { st.last = answer; publish(list, 'ok') }
+        else void readInstalledCodexModels(svc, { fresh: true })
+      })
       return
     }
     publish(null, codex && !codex.enabled ? 'Codex is off' : 'Codex was not found')

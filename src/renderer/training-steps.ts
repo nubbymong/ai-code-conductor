@@ -259,13 +259,13 @@ export const trainingSteps: TrainingStep[] = [
     sinceVersion: '1.5.0',
     section: 'integrations',
     summary:
-      "OpenAI's Codex CLI runs beside Claude, or on its own. A saved config picks Codex and the Codex account it runs under; the models the supported Codex versions offer, permission presets with Plan mode, the resume picker, Logs, Switch Account and Tokenomics by account are all wired in.",
+      "OpenAI's Codex CLI runs beside Claude, or on its own. A saved config picks Codex and the Codex account it runs under; the models your installed Codex offers, permission presets with Plan mode, the resume picker, Logs, Switch Account and Tokenomics by account are all wired in.",
     highlights: [
       'In this release, Codex sessions and Codex reviews run on this computer only, not over SSH -- the SSH options are off for Codex, and the dialog says why',
       'Each Codex account has its **own sign-in folder**. New sessions use the default account. Code reviews use the reviewer default, or the default if none is set',
       'Sign in with ChatGPT or an API key -- the key goes to Codex, and this app never stores it',
       'The session header has a **Restart** menu: Restart carries on with the same conversation, or **Restart and pick a conversation** to resume a recent one; a session open when the app closed reopens in its conversation',
-      'The model dropdown lists the models the supported Codex versions offer in their own picker, each with only the effort levels it runs; permission presets (Plan mode among them), model and reasoning effort are set on the Codex config',
+      'The model dropdown lists the models your installed Codex offers in its own picker, each with only the effort levels it runs; permission presets (Plan mode among them), model and reasoning effort are set on the Codex config',
       'With two or more Codex accounts, the **account pill** on a Codex session\'s status line, or **Switch Account** in its right-click menu, moves it to another account and keeps the conversation',
       'On a running session, **Compact** and the **model pill** type Codex\'s own /compact and /model, only while Codex waits at an empty prompt',
       '**Tokenomics** shows Codex spend beside Claude, per account (the Provider and Account filters), per day and per model; each Codex account\'s allowance is on the **Usage page**; the Logs page indexes Codex conversations as it does Claude\'s',
@@ -283,7 +283,7 @@ export const trainingSteps: TrainingStep[] = [
     bullets: [
       '**Provider per config** -- Claude Code, Codex or Terminal only, with the Codex account it runs under',
       '**Several Codex accounts**, each with its own sign-in, a default and a reviewer',
-      'The supported Codex versions\' **model list** plus **permission presets**, Plan mode included, on the Codex config',
+      'Your installed Codex\'s own **model list** plus **permission presets**, Plan mode included, on the Codex config',
       '**Restart and pick a conversation** to resume a recent Codex conversation',
       '**Tokenomics** shows Codex spend by account beside Claude, and the **Usage page** each account\'s allowance',
     ],

@@ -21,7 +21,10 @@ What changed:
 - A new config starts on the installed list's first model.
 - The read counts as Codex in use (provider-in-use.ts), so a switch-off
   either sees it or refuses it. Sentinel's start-up check takes the read the
-  app made when it found Codex, so a start runs one read.
+  app made when it found Codex, so a start runs one read. When Sentinel asks
+  first (its read then waits for the look for Codex), the app takes that
+  read's answer as its own when it is for the version found, so the order
+  does not matter.
 - Release gate check 3 and the shared rule no longer fail on a listed id
   with no registry row (reported as INFO); they fail on an empty list, a
   Codex id listed twice, or a listed id a Claude model holds as its id or

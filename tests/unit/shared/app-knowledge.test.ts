@@ -380,7 +380,7 @@ describe('the PR 3 user-facing sweep (P3.16)', () => {
 
   it('Codex sessions (P3.5 to P3.8, P3.13): models, Plan mode, Compact, the model pill, the status line and Multi Spawn', () => {
     const c = body('codex')
-    expect(c).toMatch(/The model list is the one the supported Codex versions offer/)
+    expect(c).toMatch(/The model list is the one your installed Codex offers in its own picker/)
     expect(c).toMatch(/only the effort levels it runs/)
     expect(c).toMatch(/Read-only, Standard, Plan mode, Auto and Unrestricted/)
     expect(c).toMatch(/Compact on the status line types Codex's own \/compact/)
@@ -477,13 +477,13 @@ describe('the PR 3 user-facing sweep (P3.16)', () => {
     expect(codex).toMatch(/the Logs page indexes Codex conversations as it does Claude/)
     expect(codex).toMatch(/Switch Account/)
     expect(codex).toMatch(/Plan mode/)
-    // The model list is built into the app (the supported versions' list), not
-    // read from the Codex that is installed.
-    expect(codex).toMatch(/the models the supported Codex versions offer, permission presets/)
-    expect(codex).toMatch(/The supported Codex versions' \*\*model list\*\*/)
-    expect(codex).not.toMatch(/installed Codex offers|Codex's own \*\*model list\*\*/)
-    expect(readme).toMatch(/the models the supported Codex versions offer in the model dropdown/)
-    expect(readme).not.toMatch(/installed Codex offers/)
+    // aicc_planning#362: the model list is read from the Codex that is
+    // installed; the list shipped with the app is offered only without it.
+    expect(codex).toMatch(/the models your installed Codex offers, permission presets/)
+    expect(codex).toMatch(/Your installed Codex's own \*\*model list\*\*/)
+    expect(codex).not.toMatch(/the supported Codex versions offer|The supported Codex versions' \*\*model list\*\*/)
+    expect(readme).toMatch(/the models your installed Codex offers in the model dropdown/)
+    expect(readme).not.toMatch(/the supported Codex versions offer/)
     expect(stepText('logs')).toMatch(/a local Codex session's conversation \(from its Codex account's sessions folder\)/)
     expect(stepText('logs')).not.toMatch(/tool calls, and thinking/)
     expect(stepText('multi-account')).toMatch(/every account of each assistant that is on, in a section per assistant when both are/)
@@ -1942,8 +1942,11 @@ describe('2.1.1: the stable entry and its known issues', () => {
     expect(k.indexOf("If Codex cannot check a closed account's allowance")).toBeGreaterThan(k.indexOf('This release is tested with Codex up to version'))
     expect(row).toContain('such as GPT-6.1-Sol, and Sentinel then says it is not in the model picker: choose Default: follows Codex in the config')
     // aicc_planning#347 put GPT-6.1-Sol in the picker, so the entry names no
-    // example any more; the 2.1.1 row above is history and keeps it.
-    expect(entry).toContain('A newer Codex can also offer a model the model picker does not list yet, and Sentinel then says that model is not in the picker; choose Default: follows Codex in the config')
+    // example any more; the 2.1.1 row above is history and keeps it. From
+    // aicc_planning#362 the picker lists the installed Codex's own models, so
+    // a newer Codex's model is no longer missing from it.
+    expect(entry).toContain("A model a newer Codex adds shows up in the model picker by itself: the picker lists the installed Codex's own models.")
+    expect(entry).not.toContain('Sentinel then says that model is not in the picker')
     const models = fs.readFileSync(path.resolve(__dirname, '..', '..', '..', 'src', 'renderer', 'codex-models.ts'), 'utf8')
     expect(models).toContain("label: 'Default: follows Codex'")
     const vision = paraStarting('After an in-app update on Windows (from 2.1.0, or from 2.1.1-beta.1 to beta.3),')
@@ -2479,8 +2482,8 @@ describe('the 2.1.3-beta.11 sweep', () => {
     for (const words of ['Which account are you signing in to?', "'The same account as before'", "'A different account (add it as a new account)'"]) expect(dialog, words).toContain(words)
   })
 
-  it('the Codex section names the four newest models and the model a new config starts on, as the code picks it (aicc_planning#347)', () => {
-    expect(body('codex')).toContain('GPT-6.2-Sol, GPT-6.2-Astra, GPT-6.1 Terra and GPT-6.1-Sol head the list, but only Codex 0.170.0 and newer offer them, so a new Codex config starts on the first model every supported Codex offers (GPT-6-Astra); pick one of those four in the Model list when your Codex is 0.170.0 or newer.')
+  it('the Codex section names the model a new config starts on, with and without the installed list, as the code picks it (aicc_planning#347, aicc_planning#362)', () => {
+    expect(body('codex')).toContain('A new Codex config starts on the first model of that list. If the app cannot read the list (Codex not found, or the read failed), it offers the models it shipped with, and a new config then starts on the first of them that every supported Codex offers (GPT-6-Astra).')
     const reg = registryJson as unknown as ModelRegistry
     expect(codexModelOptions(reg).slice(1, 5).map((o) => o.label)).toEqual(['GPT-6.2-Sol', 'GPT-6.2-Astra', 'GPT-6.1 Terra', 'GPT-6.1-Sol'])
     expect(codexNewConfigModel(reg)).toBe('gpt-6-astra')

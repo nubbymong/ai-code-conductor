@@ -240,9 +240,10 @@ export default function SessionDialog({ onConfirm, onCancel, initial, liveSessio
   // P3.8 (rows 39, 40), as Claude's above: an edit reopens what is stored ('' =
   // Default, no flag) rather than rewriting it to the new-config values, and a
   // saved effort its model cannot run is dropped on load (and again on save).
-  // A new config starts as a new Claude config does (P3.8 round 1, J1): on
-  // the first model of the list (Claude's starts on its newest Opus) that
-  // every supported version lists, at Default effort.
+  // A new config starts as a new Claude config does (P3.8 round 1, J1), at
+  // Default effort: on the first model of the installed Codex's own list once
+  // main has read it (aicc_planning#362), else on the first registry model
+  // every supported version lists (codexNewConfigModel).
   const initialCodexModel = initial ? (initial.codexOptions?.model ?? '') : codexNewConfigModel(registry)
   const [codexModel, setCodexModel] = useState(initialCodexModel)
   const [codexEffort, setCodexEffort] = useState<NonNullable<CodexOptions['reasoningEffort']> | ''>(() => {
