@@ -224,9 +224,9 @@ export const FIT_WAIT_MAX_MS = 3_000
 export type ReplayAtHolderSizeNotice = (sessionId: string, notice: ReplayAtHolderSize) => boolean
 let replayAtHolderSizeNotice: ReplayAtHolderSizeNotice | undefined
 
-/** Set once by the PTY handlers, with the app's window. Unset (a run of the
- *  app's own, a test), a tab that did not reach its holder's size is shown
- *  its replay at its own size, as before. */
+/** Set once by the PTY handlers, with the app's window, for every terminal
+ *  of the process. Unset (a test), a tab that did not reach its holder's
+ *  size is shown its replay at its own size, as before. */
 export function setReplayAtHolderSizeNotice(notice: ReplayAtHolderSizeNotice | undefined): void {
   replayAtHolderSizeNotice = notice
 }
