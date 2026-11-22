@@ -244,10 +244,13 @@ describe('the Codex checks at start (rows 39, 42)', () => {
     // uses (or, when there is none, makes) the app's own look.
     expect(svc.discovers).toBe(0)
     expect(svc.catalogueReads).toBe(1)
-    // 0.155.1 no longer lists gpt-5.2: said, for that version.
-    expect(ids(s)).toContain('models:codex-retired:gpt-5.2')
-    const f = s.getSentinelState()!.snapshot().findings.find((x) => x.id === 'models:codex-retired:gpt-5.2')!
-    expect(f.title).toBe('GPT-5.2 is still selectable but Codex 0.155.1 no longer lists it')
+    // aicc_planning#362: the read is the Codex picker's list too. 0.155.1 no
+    // longer lists gpt-5.2, so the picker no longer offers it, and nothing is
+    // said about it.
+    const { getRegistry } = await import('../../../src/main/model-registry-service')
+    const { buildModelPickerRows } = await import('../../../src/shared/model-registry')
+    expect(buildModelPickerRows(getRegistry(), 'codex').map((r) => r.value)).toEqual(V0153.filter((id) => id !== 'gpt-5.2'))
+    expect(ids(s).some((i) => i.startsWith('models:codex-'))).toBe(false)
     expect(s.getSentinelState()!.snapshot().lastSeenCodexVersion).toBe('0.155.1')
     expect(fetchCodexReleaseNotes).not.toHaveBeenCalled()
   })
@@ -1047,23 +1050,26 @@ describe('stale Codex model findings close (O8)', () => {
   const modelFinding = (id: string) => ({ id, kind: 'compat', severity: 'warn', title: id, evidence: 'e', provider: 'codex', status: 'open', createdAt: 1 })
   const openModelIds = (s: Awaited<ReturnType<typeof sentinel>>) => s.getSentinelState()!.snapshot().findings.filter((f) => f.status === 'open' && f.id.startsWith('models:')).map((f) => f.id)
 
-  it('a start closes a codex-missing notice the registry covers and a failed check that now completes; a notice still true is raised', async () => {
+  it('a start closes a codex-missing notice (no build raises it now) and a failed check that now completes', async () => {
     const s = await sentinel({ findings: [modelFinding('models:codex-missing:gpt-5.5'), modelFinding('models:codex-check-failed')] })
     await s.sentinelStartupCheck()
-    expect(openModelIds(s)).toEqual(['models:codex-retired:gpt-5.2'])
+    expect(openModelIds(s)).toEqual([])
   })
 
-  it('the gpt-5.2 notice stays while the read fails, and a Re-run with a Codex that lists gpt-5.2 again closes it', async () => {
-    const s = await sentinel()
+  // aicc_planning#362: with the installed Codex's list read, the picker is
+  // that list, so the gpt-5.2 notice a 0.155.1 read raised before is closed;
+  // offline the registry alone answers, against the shipped list, which keeps
+  // gpt-5.2, so it is not raised again either.
+  it('the gpt-5.2 notice an earlier build raised closes on a live read, and nothing is raised while the read fails or on 0.153.4', async () => {
+    const s = await sentinel({ findings: [modelFinding('models:codex-retired:gpt-5.2')] })
     await s.sentinelStartupCheck()
-    expect(openModelIds(s)).toEqual(['models:codex-retired:gpt-5.2'])
+    expect(openModelIds(s)).toEqual([])
     svc.catalogue = { ok: false, code: 'failed', detail: 'exit 2' }
     await s.sentinelRerun()
-    expect(openModelIds(s)).toEqual(['models:codex-retired:gpt-5.2'])
+    expect(openModelIds(s)).toEqual([])
     svc.installation = { discoveryState: 'found', version: '0.153.4', compatibility: 'supported' }
     svc.catalogue = liveList('0.153.4', V0153)
     await s.sentinelRerun()
-    // 0.153.4 lists gpt-5.2, and has not listed either gpt-6 model yet: nothing is said.
     expect(openModelIds(s)).toEqual([])
   })
 
@@ -1071,16 +1077,17 @@ describe('stale Codex model findings close (O8)', () => {
   // which Codex lists from 0.156.1. A supported Codex before that has not
   // listed them yet, so they are new there, not retired: no "possibly retired"
   // notice is raised for either, and one an earlier check raised closes at the
-  // next start. A Re-run on 0.156.1 lists both; the gpt-5.2 notice, true on
-  // 0.155.1 and on 0.156.1, stays throughout.
+  // next start. A Re-run on 0.156.1 lists both. Since aicc_planning#362 the
+  // picker offers each version's own list, so no live read raises such a
+  // notice at all.
   it('on a supported Codex before 0.156.1, GPT-6-Sol and GPT-6-Luna are not called retired, and a notice that called them so closes', async () => {
     const s = await sentinel({ findings: GPT6_NOT_LISTED.map(modelFinding) })
     await s.sentinelStartupCheck()
-    expect(openModelIds(s)).toEqual(['models:codex-retired:gpt-5.2'])
+    expect(openModelIds(s)).toEqual([])
     svc.installation = { discoveryState: 'found', version: '0.156.1', compatibility: 'supported' }
     svc.catalogue = liveList('0.156.1', V0156)
     await s.sentinelRerun()
-    expect(openModelIds(s)).toEqual(['models:codex-retired:gpt-5.2'])
+    expect(openModelIds(s)).toEqual([])
   })
 
   // Only the Codex check closes a Codex finding, and it runs only while Codex

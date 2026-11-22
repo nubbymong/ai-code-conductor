@@ -59,9 +59,11 @@ export {
 } from './cli-runner'
 export type { CodexCliOperation, CodexCommand, CodexRunResult, CodexRunOptions, CodexRunDeps, CodexProcessEntry, CodexKillTree, CodexKillScope, CodexObserveReason, CodexRunWindow, CodexRunMember, CodexStdinWriter } from './cli-runner'
 export { discoverCodex, verifyCodexExecutable, codexCompatibilityAllowsUse } from './discovery'
-// P3.9 (row 39): the installed CLI's own model list, for Sentinel.
+// P3.9 (row 39): the installed CLI's own model list, for the Codex model
+// picker (aicc_planning#362) and Sentinel.
 export {
   readCodexModelCatalogue, parseCodexModelCatalogue, CODEX_CATALOGUE_TIMEOUT_MS, CODEX_CATALOGUE_MAX_CHARS, CODEX_CATALOGUE_MAX_MODELS, CODEX_CATALOGUE_LABEL_MAX,
+  CODEX_CATALOGUE_MAX_LEVELS,
 } from './model-catalogue'
 export type { CodexCatalogueDeps } from './model-catalogue'
 export { createCodexReviewOperations, createCodexExecEventReader, parseCodexExecEvents, REVIEW_MAX_TEXT, CODEX_EXEC_EXIT_SETTLE_MS } from './review'

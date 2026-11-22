@@ -1,6 +1,7 @@
 // P3.9 (row 39): the model list the installed Codex CLI offers in its own
-// picker, read from the CLI (`codex debug models --bundled`) for Sentinel's
-// live model check. PURE: every port is faked; no process is started, no
+// picker, read from the CLI (`codex debug models --bundled`) for the Codex
+// model picker (aicc_planning#362) and Sentinel's live check. PURE:
+// every port is faked; no process is started, no
 // folder is made and no network is touched. The real-process run through an
 // npm-style shim is tests/wp1/fake-cli.test.ts (CI and the VM).
 import { describe, it, expect } from 'vitest'
@@ -8,11 +9,12 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import {
   parseCodexModelCatalogue, readCodexModelCatalogue, codexCommandLine, codexShellEnv,
-  CODEX_CATALOGUE_TIMEOUT_MS, CODEX_CATALOGUE_MAX_CHARS, CODEX_CATALOGUE_MAX_MODELS, CODEX_CATALOGUE_LABEL_MAX,
+  CODEX_CATALOGUE_TIMEOUT_MS, CODEX_CATALOGUE_MAX_CHARS, CODEX_CATALOGUE_MAX_MODELS, CODEX_CATALOGUE_LABEL_MAX, CODEX_CATALOGUE_MAX_LEVELS,
 } from '../../../../src/main/providers/codex'
 import type { CodexCatalogueDeps, CodexDiscovery, CodexCommand, CodexRunOptions, CodexRunResult, CodexFileStat } from '../../../../src/main/providers/codex'
 import { harness, EXE } from '../../../wp1/accounts-harness'
 import shipped from '../../../../resources/codex-model-catalogue.json'
+import registryJson from '../../../../resources/model-registry.json'
 
 const FIXTURE = join(__dirname, '../../../fixtures/codex/cli/0.153.4/debug-models-bundled.trimmed.json')
 const REAL_0153 = readFileSync(FIXTURE, 'utf8')
@@ -105,6 +107,37 @@ describe('parseCodexModelCatalogue: what the picker lists, in its order', () => 
   it('exactly the maximum number of entries is still read', () => {
     const doc = JSON.stringify({ models: Array.from({ length: CODEX_CATALOGUE_MAX_MODELS }, (_, i) => ({ slug: `m${i}`, visibility: 'list', priority: i })) })
     expect(parseCodexModelCatalogue(doc)).toHaveLength(CODEX_CATALOGUE_MAX_MODELS)
+  })
+})
+
+// aicc_planning#362: the Codex picker's effort list comes from this list too,
+// so each model's reasoning levels are read, as strictly as the rest.
+describe('parseCodexModelCatalogue: each model\'s reasoning levels', () => {
+  it('reads the 0.153.4 levels, which are the ones the registry gives those models', () => {
+    const models = parseCodexModelCatalogue(REAL_0153)!
+    const registryLevels = new Map((registryJson as unknown as { models: Array<{ id: string; efforts?: string[] }> }).models.map((m) => [m.id, m.efforts]))
+    for (const m of models) expect(m.efforts, m.id).toEqual(registryLevels.get(m.id))
+    expect(models.find((m) => m.id === 'gpt-5.6-luna')!.efforts).toEqual(['low', 'medium', 'high', 'xhigh', 'max'])
+  })
+
+  it('a model with no levels has none; a repeated level is read once, in the list\'s order', () => {
+    const out = parseCodexModelCatalogue(JSON.stringify({ models: [
+      { slug: 'a', visibility: 'list' },
+      { slug: 'b', visibility: 'list', supported_reasoning_levels: [{ effort: 'high', description: 'x' }, { effort: 'low' }, { effort: 'high' }] },
+      { slug: 'c', visibility: 'list', supported_reasoning_levels: [] },
+    ] }))!
+    expect(out).toEqual([{ id: 'a', label: 'a' }, { id: 'b', label: 'b', efforts: ['high', 'low'] }, { id: 'c', label: 'c', efforts: [] }])
+  })
+
+  it('levels that are not a list this app reads make the whole list unreadable (fail closed); a hidden model\'s are not read', () => {
+    const listedWith = (levels: unknown) => JSON.stringify({ models: [{ slug: 'a', visibility: 'list', supported_reasoning_levels: levels }] })
+    for (const levels of [null, 'high', {}, [null], ['high'], [{}], [{ effort: 7 }], [{ effort: 'High' }], [{ effort: 'a b' }], [{ effort: 'x'.repeat(33) }],
+      Array.from({ length: CODEX_CATALOGUE_MAX_LEVELS + 1 }, (_, i) => ({ effort: `l${i}` }))]) {
+      expect(parseCodexModelCatalogue(listedWith(levels)), JSON.stringify(levels)).toBeNull()
+    }
+    expect(parseCodexModelCatalogue(listedWith(Array.from({ length: CODEX_CATALOGUE_MAX_LEVELS }, (_, i) => ({ effort: `l${i}` }))))![0].efforts).toHaveLength(CODEX_CATALOGUE_MAX_LEVELS)
+    const hidden = JSON.stringify({ models: [{ slug: 'h', visibility: 'hide', supported_reasoning_levels: 'broken' }, { slug: 'a', visibility: 'list' }] })
+    expect(parseCodexModelCatalogue(hidden)).toEqual([{ id: 'a', label: 'a' }])
   })
 })
 

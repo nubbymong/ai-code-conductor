@@ -82,8 +82,9 @@ describe('release gate and shared model-coverage agree (#385)', () => {
 // P3.8 round 1 (G1): the Codex half. The gate carries its own copy of
 // evaluateCodexModelCoverage (the registry's pickable codex-family models
 // against resources/codex-model-catalogue.json, exact ids, overlay entries
-// never "extra", fail closed on an empty list); the same rule: identical
-// verdicts over the same inputs.
+// never "extra", fail closed on an empty list; since aicc_planning#362 a
+// listed id with no registry row is reported but not fatal, and one a Claude
+// model holds is); the same rule: identical verdicts over the same inputs.
 const shippedCodexList = codexCatalogueJson as unknown as ExpectedModelSet
 const cx = (ids: string[], over: Record<string, unknown> = {}) =>
   ids.map((id) => ({ id, patterns: [id], family: 'codex', label: id.toUpperCase(), ...over }))
@@ -126,6 +127,7 @@ describe('release gate and shared Codex model coverage agree (P3.8 G1)', () => {
         .toEqual(gate.covered.map((m: { id: string; by: string }) => `${m.id}<-${m.by}`))
       expect(shared.reason).toBe(gate.reason)
       expect(shared.duplicates ?? []).toEqual(gate.duplicates ?? [])
+      expect(shared.taken ?? []).toEqual(gate.taken ?? [])
     })
   }
 
@@ -133,10 +135,15 @@ describe('release gate and shared Codex model coverage agree (P3.8 G1)', () => {
     const v = (c: string) => gateEvaluateCodex(CODEX_CASES.find((x) => x.name === c)!)
     expect(v('exact cover').ok).toBe(true)
     expect(v('a missing model').missing.map((m: { id: string }) => m.id)).toEqual(['gpt-6-astra'])
+    // aicc_planning#362: not fatal, the picker offers it from the installed Codex.
+    expect(v('a missing model').ok).toBe(true)
+    expect(v('everything missing').ok).toBe(true)
     expect(v('an extra model').extra.map((m: { id: string }) => m.id)).toEqual(['gpt-5.2'])
     expect(v('an extra model').ok).toBe(true)
-    expect(v('no date-suffix cover for Codex ids').ok).toBe(false)
+    expect(v('no date-suffix cover for Codex ids').missing.map((m: { id: string }) => m.id)).toEqual(['gpt-5.5-20260101'])
+    expect(v('no date-suffix cover for Codex ids').covered).toEqual([])
     expect(v('a Claude-family entry with the id does not cover it').ok).toBe(false)
+    expect(v('a Claude-family entry with the id does not cover it').taken).toEqual(['gpt-5.5'])
     expect(v('a non-pickable Codex entry neither covers nor is extra').missing.map((m: { id: string }) => m.id)).toEqual(['codex-family'])
     expect(v('an overlay Codex entry covers but is never extra').extra).toEqual([])
     expect(v('unusable list entries are skipped').ok).toBe(true)

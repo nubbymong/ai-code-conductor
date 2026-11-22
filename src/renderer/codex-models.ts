@@ -2,10 +2,13 @@
  * The Codex model and effort pickers' rows (P3.8, rows 39 and 40), for the
  * session dialog's Codex fields and the command bar's Codex model pill.
  *
- * The catalogue is the model registry's, as Claude's is: the codex family's
- * models in resources/model-registry.json, which are the models the supported
- * Codex CLI lists in its own model picker (resources/codex-model-catalogue.json,
- * checked by Sentinel), in its order. A hand-kept list lived here until P3.8.
+ * The rows are the codex family's models of the registry main hands the
+ * renderer. Once main has read the installed Codex's own list (`codex debug
+ * models --bundled`, aicc_planning#362), those are that list's models, in its
+ * order, each with the reasoning levels it lists; a registry row only adds a
+ * price or corrects a label (withInstalledCodexModels). Without a list (Codex
+ * not found, or the read failed) they are the codex family's rows in
+ * resources/model-registry.json alone. A hand-kept list lived here until P3.8.
  */
 import { buildModelPickerRows, codexEffortRuns, type ModelRegistry } from '../shared/model-registry'
 import { effortsForModel } from './lib/claude-cli-options'
@@ -22,10 +25,11 @@ export interface CodexPickerOption {
 export const CODEX_DEFAULT = ''
 
 /**
- * The Codex models to offer: Default, then the registry's Codex models, then
- * `current` when it is a model the list no longer offers (a config saved with
- * one), so the picker shows what the config or session actually holds rather
- * than silently displaying another row.
+ * The Codex models to offer: Default, then the registry's Codex models (the
+ * installed Codex's own list when main has read it), then `current` when it
+ * is a model the list no longer offers (a config saved with one), so the
+ * picker shows what the config or session actually holds rather than
+ * silently displaying another row.
  */
 export function codexModelOptions(registry: ModelRegistry, current?: string | null): CodexPickerOption[] {
   const rows = buildModelPickerRows(registry, 'codex')
@@ -71,13 +75,17 @@ function idsEveryCodexLists(catalogue: CodexCatalogue): Set<string> {
     .map((m) => m.id))
 }
 
-/** The model a new Codex config starts on (P3.8 round 1, J1): the first model
- *  of the Codex list that every supported Codex version lists, as a new Claude
- *  config starts on the first row of Claude's (its newest Opus). A model only
- *  newer versions list (GPT-6.2-Sol, from 0.170.0) is skipped, so a new config
- *  never starts on a model the installed CLI may not offer; '' (Default, Codex
- *  chooses) when no model in the list qualifies. */
+/** The model a new Codex config starts on (P3.8 round 1, J1), as a new Claude
+ *  config starts on the first row of Claude's (its newest Opus). With the
+ *  installed Codex's own list read (aicc_planning#362), its first model: that
+ *  Codex offers every model in it. Without one, the first model of the Codex
+ *  list that every supported Codex version lists: a model only newer versions
+ *  list (GPT-6.2-Sol, from 0.170.0) is skipped, so a new config never starts
+ *  on a model the installed CLI may not offer. '' (Default, Codex chooses)
+ *  when no model qualifies. */
 export function codexNewConfigModel(registry: ModelRegistry, catalogue: CodexCatalogue = codexCatalogueJson): string {
+  const rows = buildModelPickerRows(registry, 'codex')
+  if (registry.installedCodex) return rows[0]?.value ?? CODEX_DEFAULT
   const everywhere = idsEveryCodexLists(catalogue)
-  return buildModelPickerRows(registry, 'codex').find((r) => everywhere.has(r.value))?.value ?? CODEX_DEFAULT
+  return rows.find((r) => everywhere.has(r.value))?.value ?? CODEX_DEFAULT
 }

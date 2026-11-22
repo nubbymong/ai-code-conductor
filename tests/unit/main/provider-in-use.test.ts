@@ -36,7 +36,7 @@ vi.mock('../../../src/main/provider-account-registry', async () => {
     initAccountRegistry: vi.fn(), reconcileLegacyAccountStore: vi.fn(async () => {}), reconcileLegacyAccountStores: vi.fn(async () => {}), sameDirectory: () => false,
   }
 })
-const n = vi.hoisted(() => ({ sessions: { claude: 0, codex: 0 } as Record<string, number>, agents: 0, codexAgents: 0, insights: 0, codexInsights: 0, sentinel: 0, sentinelCodex: 0, ssh: 0, setup: 0, throws: false, codexThrows: false, codexInsightsThrows: false }))
+const n = vi.hoisted(() => ({ sessions: { claude: 0, codex: 0 } as Record<string, number>, agents: 0, codexAgents: 0, insights: 0, codexInsights: 0, sentinel: 0, sentinelCodex: 0, codexModelList: 0, ssh: 0, setup: 0, throws: false, codexThrows: false, codexInsightsThrows: false }))
 vi.mock('../../../src/main/pty-manager', () => ({ countUnleasedAgentSessions: (id: string) => n.sessions[id] ?? 0 }))
 vi.mock('../../../src/main/cloud-agent-manager', () => ({
   countClaudeAgentsInUse: () => { if (n.throws) throw new Error('boom'); return n.agents },
@@ -49,13 +49,14 @@ vi.mock('../../../src/main/insights-runner', () => ({
 vi.mock('../../../src/main/sentinel/index', () => ({ sentinelClaudeRunsInFlight: () => n.sentinel, sentinelCodexRunsInFlight: () => n.sentinelCodex }))
 vi.mock('../../../src/main/ipc/pty-handlers', () => ({ countSshClaudeLaunches: () => n.ssh }))
 vi.mock('../../../src/main/ipc/setup-handlers', () => ({ countCliSetupInUse: () => n.setup }))
+vi.mock('../../../src/main/installed-codex-models', () => ({ installedCodexModelReadsInFlight: () => n.codexModelList }))
 
 const { providerUseWithoutLease } = await import('../../../src/main/provider-in-use')
 const { initProviderAccounts, _resetProviderAccountsForTest } = await import('../../../src/main/provider-accounts')
 
 beforeEach(() => {
   _resetProviderAccountsForTest()
-  Object.assign(n, { sessions: { claude: 0, codex: 0 }, agents: 0, codexAgents: 0, insights: 0, codexInsights: 0, sentinel: 0, sentinelCodex: 0, ssh: 0, setup: 0, throws: false, codexThrows: false, codexInsightsThrows: false })
+  Object.assign(n, { sessions: { claude: 0, codex: 0 }, agents: 0, codexAgents: 0, insights: 0, codexInsights: 0, sentinel: 0, sentinelCodex: 0, codexModelList: 0, ssh: 0, setup: 0, throws: false, codexThrows: false, codexInsightsThrows: false })
 })
 
 // What main composes at start (index.ts).
@@ -114,6 +115,15 @@ describe('Codex in use, for the switch-off rule (P3.9)', () => {
     n.sentinelCodex = 2
     expect(providerUseWithoutLease('claude')).toBe(0)
     expect(await service().setProviderEnabled('claude', false)).toEqual({ ok: true })
+  })
+
+  // aicc_planning#362: the read of the installed Codex's model list, for the
+  // Codex model picker, runs Codex too (installed-codex-models.ts).
+  it("the Codex model picker's read of Codex's own list in flight: switching Codex off is refused, as in use; it does not hold Claude Code", async () => {
+    n.codexModelList = 1
+    expect(providerUseWithoutLease('codex')).toBe(1)
+    expect(await service().setProviderEnabled('codex', false)).toMatchObject({ ok: false, code: 'consumers', consumers: 1 })
+    expect(providerUseWithoutLease('claude')).toBe(0)
   })
 })
 

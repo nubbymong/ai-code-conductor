@@ -25,9 +25,8 @@
 // The RETIRED arm always uses the snapshot: it is human-verified, whereas a
 // thin HTML parse that silently stops matching would otherwise accuse every
 // model we ship of having been retired.
-import { evaluateModelCoverage, evaluateCodexModelCoverage, isOverlaySourced, type ModelRegistry, type ExpectedModelSet } from '../../shared/model-registry'
+import { evaluateModelCoverage, evaluateCodexModelCoverage, isOverlaySourced, withInstalledCodexModels, type ModelRegistry, type ExpectedModelSet } from '../../shared/model-registry'
 import type { SentinelFinding } from '../../shared/sentinel-types'
-import { compareVersions, finalRelease } from '../../shared/version-order'
 import expectedJson from '../../../resources/claude-code-model-configuration.json'
 import codexExpectedJson from '../../../resources/codex-model-catalogue.json'
 
@@ -163,28 +162,29 @@ export function modelCoverageFindings(
 
 /**
  * The Codex half (P3.8, row 39): the registry's Codex models against the list
- * the supported Codex CLI offers, shipped with this build. Pure, as
- * modelCoverageFindings; finding ids are stable and prefixed `models:codex-`.
+ * the supported Codex CLI offers. Pure, as modelCoverageFindings; finding ids
+ * are stable and prefixed `models:codex-`.
  *
  * Two modes, as the Claude half (P3.9, row 39):
  *
- *   live      the installed CLI's own list, read from it just now
+ *   live      the installed CLI's own list, read from it
  *             (`codex debug models --bundled`, see the Codex package's
- *             model-catalogue.ts): both arms compare against it, since it is
- *             the CLI's own strict JSON rather than a page parse, so a model
- *             the installed version dropped (gpt-5.2 on 0.155.1) or added is
- *             said, for that version; a model the shipped list names only
- *             from a later version (gpt-6-sol on 0.155.1) is not said to be
- *             retired, since that version has not listed it yet;
+ *             model-catalogue.ts). The Codex picker offers exactly that list
+ *             (aicc_planning#362, withInstalledCodexModels), so no model can
+ *             be missing from the picker and none the list drops is still
+ *             offered: no model notice is raised, only a registry that lists
+ *             a Codex id twice;
  *   snapshot  no live list (Codex not proven, a version this app cannot use,
- *             or a read that failed): the list shipped with this build, whose
+ *             or a read that failed): the registry alone is the picker, and
+ *             it is compared with the list shipped with this build, whose
  *             every finding names it and its date, and which says when it is
- *             older than FIXTURE_STALE_DAYS.
+ *             older than FIXTURE_STALE_DAYS. A Codex model the registry still
+ *             offers that the list no longer names is said.
  *
- * In snapshot mode both inputs ship with the build, so at runtime it reports
- * only what an overlay changes and a stale list; a registry that disagrees
- * with the shipped list is refused earlier, by the release gate
- * (scripts/release-gate.mjs, check 3).
+ * Neither mode says that a listed model is missing from the registry: since
+ * aicc_planning#362 the picker takes Codex's models from the installed Codex
+ * itself, and the release gate (scripts/release-gate.mjs, check 3) no longer
+ * asks for a registry row per listed model either.
  */
 export interface CodexLiveModelList {
   /** The version that printed the list. */
@@ -203,22 +203,10 @@ function versionList(versions: readonly string[]): string {
   return versions.length > 1 ? `${versions.slice(0, -1).join(', ')} and ${versions[versions.length - 1]}` : versions.join('')
 }
 
-/**
- * True when the shipped list names `id` only for Codex versions newer than
- * `version`: the model's own `cliVersions` are all later than it. That Codex
- * has not listed the model yet, so its absence from that version's own list
- * says nothing about the model being retired (S18 review, 2026-10-12:
- * GPT-6-Sol and GPT-6-Luna, listed from 0.156.1, on 0.155.1). A model an equal
- * or older version listed (gpt-5.2, listed by 0.153.4, on 0.155.1) is not this
- * case, and neither is a model with no versions of its own or a version that
- * does not parse: the notice is said, as before.
- */
-function listedOnlyAfter(expected: ExpectedModelSet | null | undefined, id: string, version: string): boolean {
-  if (finalRelease(version) === null) return false
-  const entry = (Array.isArray(expected?.models) ? expected!.models : []).find((m) => m?.id === id) as { cliVersions?: unknown } | undefined
-  const listedBy: unknown[] = Array.isArray(entry?.cliVersions) ? entry!.cliVersions : []
-  return listedBy.length > 0
-    && listedBy.every((v) => typeof v === 'string' && finalRelease(v) !== null && compareVersions(v, version) > 0)
+/** The registry as the Codex picker sees it: with a live list, the installed
+ *  Codex's own models (aicc_planning#362); without one, the registry alone. */
+function pickerRegistry(registry: ModelRegistry, liveList: CodexLiveModelList | null): ModelRegistry {
+  return liveList ? withInstalledCodexModels(registry, liveList) : registry
 }
 
 export function codexModelCoverageFindings(
@@ -233,9 +221,12 @@ export function codexModelCoverageFindings(
   const reference: ExpectedModelSet | null | undefined = liveList
     ? { source: `the installed Codex ${liveList.version}`, models: liveList.models.map((m) => ({ id: m.id, label: m.label })) }
     : expected
-  const result = evaluateCodexModelCoverage(registry, reference)
+  const result = evaluateCodexModelCoverage(pickerRegistry(registry, liveList), reference)
   const duplicated = new Set(result.duplicates ?? [])
-  if (!result.ok && result.missing.length === 0 && duplicated.size === 0) {
+  // Only an empty or missing list gives no verdict at all: a list whose ids
+  // a Claude model has (`taken`) is the release gate's to refuse, not a
+  // notice (the Codex picker leaves such an id out).
+  if (!result.ok && duplicated.size === 0 && (result.taken ?? []).length === 0) {
     out.push({
       id: 'models:codex-list-unreadable',
       kind: 'compat',
@@ -269,26 +260,10 @@ export function codexModelCoverageFindings(
       createdAt: now,
     })
   }
-  for (const m of result.missing) {
-    if (duplicated.has(m.id)) continue
-    const name = m.label ?? m.id
-    out.push({
-      id: `models:codex-missing:${m.id}`,
-      kind: 'compat',
-      severity: 'warn',
-      title: `Codex offers ${name}, but it is not in the model picker`,
-      evidence: `${m.id} is in ${shipped}; resources/model-registry.json has no Codex entry for it.`,
-      affectedFeature: 'sessions',
-      badgeText: `New Codex model: ${name}`,
-      provider: 'codex',
-      status: 'open',
-      createdAt: now,
-    })
-  }
+  // A Codex model the picker still offers that the list no longer names. With
+  // a live list the picker is that list, so there is none, unless the list
+  // held no model the picker can offer (then the registry alone is offered).
   for (const m of result.extra) {
-    // Not listed YET by the installed Codex (the shipped list has it only from
-    // a later version): new, not retired, so nothing is said.
-    if (liveList && listedOnlyAfter(expected, m.id, liveList.version)) continue
     const name = m.label ?? m.id
     out.push({
       id: `models:codex-retired:${m.id}`,
@@ -347,13 +322,15 @@ export function modelCheckFailedFinding(message: string, now: number = Date.now(
 // keeps a muted or dismissed one (the user's choice holds). Nothing here closes
 // a finding the run in hand has just raised.
 //
-// A notice a live read can raise ("not in the model picker", a Codex model
-// "no longer listed") closes only on evidence that its claim is now false (the
-// registry covers it, or a live read says otherwise), never because an offline
-// run did not repeat it, so it does not come and go with the network. A
-// finding that comes from the list shipped with this build alone (unreadable,
-// stale, and the Claude half's retired arm) closes once a completed check no
-// longer raises it: that list is fixed for a build, so it cannot flap.
+// A notice a live read can raise (Claude's "not in the model picker", a Codex
+// model "no longer listed") closes only on evidence that its claim is now
+// false (the registry covers it, the picker no longer offers it, or a live
+// read says otherwise), never because an offline run did not repeat it, so it
+// does not come and go with the network. A finding that comes from the list
+// shipped with this build alone (unreadable, stale, and the Claude half's
+// retired arm) closes once a completed check no longer raises it: that list
+// is fixed for a build, so it cannot flap. Codex's "not in the model picker"
+// is raised by no build since aicc_planning#362, and closes at once.
 
 const MISSING = 'models:missing:'
 const RETIRED = 'models:retired:'
@@ -430,17 +407,16 @@ export function staleModelFindingIds(
  * The Codex half, by the same rule, after a COMPLETED check. `live` is the
  * installed CLI's own list read this run (null: the shipped list answered).
  *
- *  - models:codex-missing:<id>    the registry now has exactly one pickable
- *                                 Codex entry with <id>; or a live list was
- *                                 read and neither it nor the shipped list
- *                                 names <id>.
+ *  - models:codex-missing:<id>    always: no build since aicc_planning#362
+ *                                 raises it (the picker offers the installed
+ *                                 Codex's own list), so one an earlier build
+ *                                 raised closes at the first completed check.
  *  - models:codex-duplicate:<id>  the registry no longer lists <id> twice.
- *  - models:codex-retired:<id>    the registry no longer carries <id> as a
- *                                 Codex model of its own; or a live list was
- *                                 read and names <id> (that version offers it),
- *                                 or comes from a version older than every one
- *                                 the shipped list names <id> for (it has not
- *                                 listed <id> yet, so <id> is new, not retired).
+ *  - models:codex-retired:<id>    the picker no longer offers <id> as a Codex
+ *                                 model of the registry's own (with a live
+ *                                 list, the picker is that list); or a live
+ *                                 list was read and names <id> (that version
+ *                                 offers it).
  *  - models:codex-list-unreadable, models:codex-check-failed  not raised again.
  *  - models:codex-list-stale:<date>  the shipped list now has another date.
  */
@@ -455,25 +431,22 @@ export function staleCodexModelFindingIds(
   const compared = !raised.has(CODEX_LIST_UNREADABLE)
   const liveList = compared ? usableCodexLiveList(live) : null
   const liveIds = liveList ? new Set(liveList.models.map((m) => m?.id)) : null
-  const shipped = new Set((Array.isArray(expected?.models) ? expected!.models : []).map((m) => m?.id))
-  // The registry's own answer for every model these findings name, by the
-  // check's rule (evaluateCodexModelCoverage): covered by one pickable Codex
-  // entry, or listed more than once.
-  const named = [...new Set([CODEX_MISSING, CODEX_DUPLICATE, CODEX_RETIRED].flatMap((p) => openModelIds(findings, p)))]
-  const answer = named.length ? evaluateCodexModelCoverage(registry, { models: named.map((id) => ({ id })) }) : null
+  // The picker's own answer for every model these findings name, by the
+  // check's rule (evaluateCodexModelCoverage): offered by one pickable Codex
+  // entry, or listed more than once. With a live list the picker is that
+  // list (aicc_planning#362).
+  const picker = pickerRegistry(registry, liveList)
+  const named = [...new Set([CODEX_DUPLICATE, CODEX_RETIRED].flatMap((p) => openModelIds(findings, p)))]
+  const answer = named.length ? evaluateCodexModelCoverage(picker, { models: named.map((id) => ({ id })) }) : null
   const covered = new Set(answer?.covered.map((c) => c.id) ?? [])
   const duplicated = new Set(answer?.duplicates ?? [])
   const overlay = new Set((Array.isArray(registry?.models) ? registry.models : []).filter((m) => !!m && isOverlaySourced(m)).map((m) => m.id))
   const stale = (id: string): boolean => {
-    if (id.startsWith(CODEX_MISSING)) {
-      const model = id.slice(CODEX_MISSING.length)
-      return covered.has(model) || (liveIds !== null && !liveIds.has(model) && !shipped.has(model))
-    }
+    if (id.startsWith(CODEX_MISSING)) return true
     if (id.startsWith(CODEX_DUPLICATE)) return !duplicated.has(id.slice(CODEX_DUPLICATE.length))
     if (id.startsWith(CODEX_RETIRED)) {
       const model = id.slice(CODEX_RETIRED.length)
-      return !covered.has(model) || overlay.has(model)
-        || (liveList !== null && (liveIds!.has(model) || listedOnlyAfter(expected, model, liveList.version)))
+      return !covered.has(model) || overlay.has(model) || (liveIds !== null && liveIds.has(model))
     }
     if (id === CODEX_LIST_UNREADABLE || id === CODEX_MODEL_CHECK_FAILED_ID) return true
     if (id.startsWith(CODEX_LIST_STALE)) return id.slice(CODEX_LIST_STALE.length) !== String(expected?.fetchedAt)
