@@ -147,6 +147,30 @@ const BLOCKING_RE = [
 ]
 /** A turn running (its status row). */
 const BUSY_RE = /esc to interrupt/i
+/** 2.1.3-beta.13 B2 (aicc_planning#370): a turn running, by the window title.
+ *  Probe P19's second run (helper/fixtures/screens/, Codex 0.157.1 and
+ *  0.170.0): on Windows (both ConPTYs) and Linux, each screen of a reply
+ *  streaming, and of the queue hint under a draft typed then, ends with an
+ *  OSC 0 title that starts with a braille spinner (U+2800 to U+28FF) and a
+ *  space; each screen after the reply, and each ready one, ends without it.
+ *  While a reply streams it is the only busy sign: Codex draws its "esc to
+ *  interrupt" row once, after Enter, and not while the reply streams. On
+ *  macOS no mid-reply or queue-hint recording ends with it (0.157.1 spun it
+ *  for under 100 ms after Enter, 0.170.0 not at all), so there a reply still
+ *  reads as before. Codex also spins it for a moment as it starts (1 to 27
+ *  ms in the corpus, mostly before its footer is drawn): a caller that waits
+ *  for the first ready screen waits through it
+ *  (src/renderer/lib/codexComposer.ts). 0.170.0's title at rest is the
+ *  thread's title, taken from the first prompt: a prompt that itself starts
+ *  with a braille character and a space reads busy at rest, so the app types
+ *  nothing into that session while that title stands (the safe side). */
+export function codexTitleBusy(title: string | null | undefined): boolean {
+  if (typeof title !== 'string' || title.length < 2) return false
+  const first = title.charCodeAt(0)
+  return first >= 0x2800 && first <= 0x28ff && title.charCodeAt(1) === 0x20
+}
+/** The screen shows a turn running: its status row, or the title (above). */
+const turnShown = (lines: ScreenLine[], title?: string | null): boolean => codexTitleBusy(title) || lines.some((l) => BUSY_RE.test(l.text))
 /** Codex still starting (round 3, V1): 0.153.4 boots its MCP servers after
  *  drawing its prompt, under a status row that reads like a turn ("Booting
  *  MCP server: conductor (0s . esc to interrupt)"); the binaries also say
@@ -232,8 +256,10 @@ function composerContent(row: ScreenLine): string {
  *  `startup`
  *  (round 4, E3): whether the run is still starting, so that Codex's
  *  start-up row counts; it counts only in its own place, the status row
- *  directly above the composer. */
-function layout(lines: ScreenLine[] | null | undefined, models?: readonly string[] | null, startup = true): { screen: CodexScreenKind; text: string; footer: ScreenLine | null } {
+ *  directly above the composer. `title` (B2): the terminal's window title; a
+ *  spinner there reads busy where the footer is under the composer, last or
+ *  not (codexTitleBusy). */
+function layout(lines: ScreenLine[] | null | undefined, models?: readonly string[] | null, startup = true, title?: string | null): { screen: CodexScreenKind; text: string; footer: ScreenLine | null } {
   if (!lines || lines.length === 0) return { screen: 'no-prompt', text: '', footer: null }
   if (blocked(lines)) return { screen: 'blocked', text: '', footer: null }
   const shown = lines.filter(nonBlank)
@@ -244,17 +270,19 @@ function layout(lines: ScreenLine[] | null | undefined, models?: readonly string
   const footer = footerRe(models)
   const { under, hint } = rowsUnder(shown, i)
   if (under.length === 1 && footer.test(under[0].text)) {
-    return { screen: hint?.busy || shown.some((l) => BUSY_RE.test(l.text)) ? 'busy' : 'ready', text, footer: under[0] }
+    return { screen: hint?.busy || turnShown(shown, title) ? 'busy' : 'ready', text, footer: under[0] }
   }
-  if (shown.slice(i + 1).some((l) => footer.test(l.text))) return { screen: 'unrecognised', text, footer: null }
+  if (shown.slice(i + 1).some((l) => footer.test(l.text))) return { screen: codexTitleBusy(title) ? 'busy' : 'unrecognised', text, footer: null }
   return { screen: 'no-prompt', text, footer: null }
 }
 
 /** What the live screen shows, and the composer's content when there is one.
  *  `startup` false: the run has had its first turn (or a command sent), so a
- *  row that looks like Codex's start-up row reads as what it says. */
-export function readCodexScreen(lines: ScreenLine[] | null | undefined, models?: readonly string[] | null, opts: { startup?: boolean } = {}): { screen: CodexScreenKind; text: string } {
-  const { screen, text } = layout(lines, models, opts.startup ?? true)
+ *  row that looks like Codex's start-up row reads as what it says. `title`
+ *  (B2): the terminal's window title now; absent or null, the screen alone is
+ *  read. */
+export function readCodexScreen(lines: ScreenLine[] | null | undefined, models?: readonly string[] | null, opts: { startup?: boolean; title?: string | null } = {}): { screen: CodexScreenKind; text: string } {
+  const { screen, text } = layout(lines, models, opts.startup ?? true, opts.title)
   return { screen, text }
 }
 
@@ -272,10 +300,11 @@ export function codexComposerText(lines: ScreenLine[] | null | undefined): strin
 }
 
 /** Whether the screen shows `command` typed at the composer with nothing in
- *  the way (round 2, G5): no blocking prompt, no turn running, the composer
- *  holding exactly the command, and under it only its popup or the footer. */
-export function codexCommandTyped(lines: ScreenLine[] | null | undefined, command: string, models?: readonly string[] | null): boolean {
-  if (!lines || lines.length === 0 || blocked(lines) || lines.some((l) => BUSY_RE.test(l.text))) return false
+ *  the way (round 2, G5): no blocking prompt, no turn running (by its row,
+ *  or by `title`, B2), the composer holding exactly the command, and under it
+ *  only its popup or the footer. */
+export function codexCommandTyped(lines: ScreenLine[] | null | undefined, command: string, models?: readonly string[] | null, title?: string | null): boolean {
+  if (!lines || lines.length === 0 || blocked(lines) || turnShown(lines, title)) return false
   const shown = lines.filter(nonBlank)
   const i = composerIndex(shown)
   if (i < 0 || composerContent(shown[i]) !== command) return false
@@ -289,12 +318,13 @@ const WRAPPED_ROW_RE = /^ {2,}\S/
 /** P3.15 round 1 (F8): whether the screen shows `text` typed at the composer,
  *  over the composer row and the rows Codex wraps it onto in a narrow pane
  *  (each indented under the text), with nothing in the way: no blocking
- *  prompt, no turn running, and under it only those rows and then the footer.
+ *  prompt, no turn running (by its row, or by `title`, B2), and under it only
+ *  those rows and then the footer.
  *  The rows are read together with their spaces dropped, because a wrap may
  *  fall at a space (which the wrap takes) or inside a word. */
-export function codexTextTyped(lines: ScreenLine[] | null | undefined, text: string, models?: readonly string[] | null): boolean {
+export function codexTextTyped(lines: ScreenLine[] | null | undefined, text: string, models?: readonly string[] | null, title?: string | null): boolean {
   const want = text.replace(/\s+/g, '')
-  if (want === '' || !lines || lines.length === 0 || blocked(lines) || lines.some((l) => BUSY_RE.test(l.text))) return false
+  if (want === '' || !lines || lines.length === 0 || blocked(lines) || turnShown(lines, title)) return false
   const shown = lines.filter(nonBlank)
   const i = composerIndex(shown)
   if (i < 0) return false
@@ -331,12 +361,13 @@ const PASTED_CONTENT_RE = /^\[Pasted Content (\d{1,7}) chars\]$/
 
 /** WP2 PR 4, P4.1 (PB9): whether the screen shows Codex's paste placeholder
  *  for exactly `codePoints` at the composer, with nothing in the way: no
- *  blocking prompt, no turn running, the composer holding only the
- *  placeholder, and under it only the footer. Codex folds a text into it from
- *  1,001 code points on, both supported versions, every width probed. */
-export function codexPastedContentShown(lines: ScreenLine[] | null | undefined, codePoints: number, models?: readonly string[] | null): boolean {
+ *  blocking prompt, no turn running (by its row, or by `title`, B2), the
+ *  composer holding only the placeholder, and under it only the footer. Codex
+ *  folds a text into it from 1,001 code points on, both supported versions,
+ *  every width probed. */
+export function codexPastedContentShown(lines: ScreenLine[] | null | undefined, codePoints: number, models?: readonly string[] | null, title?: string | null): boolean {
   if (!Number.isInteger(codePoints) || codePoints < 1) return false
-  if (!lines || lines.length === 0 || blocked(lines) || lines.some((l) => BUSY_RE.test(l.text))) return false
+  if (!lines || lines.length === 0 || blocked(lines) || turnShown(lines, title)) return false
   const shown = lines.filter(nonBlank)
   const i = composerIndex(shown)
   if (i < 0) return false

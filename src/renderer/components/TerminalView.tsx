@@ -44,7 +44,7 @@ import { decideFollow } from '../utils/terminalScroll'
 import { getTerminalTheme } from './terminal/terminalTheme'
 import { installTerminalKeybindings } from './terminal/terminalKeybindings'
 import { registerRepainter, requestResync } from './terminal/repaintRegistry'
-import { registerScreenReader, readXtermScreen } from './terminal/screenRegistry'
+import { registerScreenReader, readXtermScreen, keepTerminalTitle } from './terminal/screenRegistry'
 import { readContextPercent, stripTerminalControls } from './terminal/contextPercent'
 import { typeWhenCodexComposerReady, planModeNote, CODEX_PLAN_MODE_WAIT_MS } from '../lib/codexComposer'
 import { createGeometryResync, type GeometryResync } from './terminal/geometryResync'
@@ -903,10 +903,14 @@ export default function TerminalView({ sessionId, configId, cwd, shellOnly, elev
       // task). A read writes the queue, and answers no screen while a batch is
       // unparsed: the screen would be up to a second old (the gates that read
       // fail closed on no screen and read again).
+      // 2.1.3-beta.13 B2 (aicc_planning#370): the window title beside it,
+      // kept for the run that set it (Codex's spinner there is its busy sign
+      // while a reply streams), read the same way.
+      const readTitle = keepTerminalTitle(sessionId, term)
       unregisterScreen = registerScreenReader(sessionId, () => {
         if (hiddenOutput?.prepareScreenRead().behind) return null
         return term ? readXtermScreen(term) : null
-      })
+      }, () => (hiddenOutput?.prepareScreenRead().behind ? null : readTitle()))
 
       // #119: cursor options passed to the Terminal constructor do NOT reliably
       // initialize the WebGL renderer's cursor layer — the caret stays absent
@@ -1254,9 +1258,11 @@ export default function TerminalView({ sessionId, configId, cwd, shellOnly, elev
                 // Codex has no launch flag for it: the session starts read-only
                 // (main), and its own /plan is typed into its FIRST ready
                 // prompt only (never the folder-trust prompt, a picker, the
-                // user's typing or after a turn), within a bounded wait; a note
-                // above the terminal says so when it is not, and that the
-                // session is read-only.
+                // user's typing or after a turn seen on screen; 2.1.3-beta.13
+                // B2: a spinner in the window title alone is waited out, as
+                // Codex's start-up is), within a bounded wait; a note above the
+                // terminal says so when it is not, and that the session is
+                // read-only.
                 if (!nothingStarted && provider === 'codex' && !shellOnly && (launchedPreset ?? codexOptions?.permissionsPreset) === 'plan') {
                   planModeWait?.cancel()
                   planModeWait = typeWhenCodexComposerReady(sessionId, '/plan', {

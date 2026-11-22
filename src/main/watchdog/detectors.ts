@@ -49,8 +49,10 @@ export interface WatchdogDetectors {
   isWorking(tail: string): boolean
   isInternalRetry(tail: string): boolean
   resumedAfterLimit(tail: string, tailLines: number): boolean
-  canSendNow(tail: string, nonDim?: string, screen?: ScreenLine[] | null): SendGateResult
-  hasInputChrome(tail: string, screen?: ScreenLine[] | null): boolean
+  /** `title` (2.1.3-beta.13 B2): the pane's window title, for a CLI whose
+   *  send gate reads it too (Codex: codex-patterns.ts). */
+  canSendNow(tail: string, nonDim?: string, screen?: ScreenLine[] | null, title?: string | null): SendGateResult
+  hasInputChrome(tail: string, screen?: ScreenLine[] | null, title?: string | null): boolean
   available: DetectorChecks
 }
 
@@ -79,7 +81,7 @@ export const CODEX_DETECTORS: WatchdogDetectors = {
   isWorking: (tail) => codexIsWorking(tail),
   isInternalRetry: (tail) => codexIsInternalRetry(tail),
   resumedAfterLimit: (tail, tailLines) => codexResumedAfterLimit(tail, tailLines),
-  canSendNow: (tail, nonDim, screen) => codexCanSendNow(tail, nonDim, screen),
-  hasInputChrome: (tail, screen) => codexHasInputChrome(tail, screen),
+  canSendNow: (tail, nonDim, screen, title) => codexCanSendNow(tail, nonDim, screen, title),
+  hasInputChrome: (tail, screen, title) => codexHasInputChrome(tail, screen, title),
   available: { rateLimit: true, overload: true, safeguard: false },
 }
