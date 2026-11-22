@@ -7,9 +7,10 @@
  *
  * Verifies:
  *   - a flip to inactive and back keeps every row's place: in the Claude list
- *     (main writes a changed profile back at the end of profiles.json, so the
- *     list the store hydrates moves it) and in Codex's (the pushed snapshot
- *     carries the new lifecycle);
+ *     (up to 2.1.3-beta.12 main wrote a changed profile back at the end of
+ *     profiles.json; the list hydrated here comes back in that order, and the
+ *     rows do not follow it) and in Codex's (the pushed snapshot carries the
+ *     new lifecycle);
  *   - the Claude list is in the order the accounts were added, not the file's;
  *   - the control is a labelled group of plain buttons with aria-pressed and
  *     the strong focus ring, first on the page;
@@ -220,8 +221,9 @@ describe('a flip never moves a row', () => {
     render(snapshot())
     expect(claudeRows()).toEqual(['profile-primary', 'profile-home', 'profile-spare'])
 
-    // Main writes the changed profile back at the end of profiles.json, and
-    // the row hydrates the list from it.
+    // The list comes back with the changed profile at the end, as main wrote
+    // it up to 2.1.3-beta.12 (an edit keeps its place since aicc_planning#383),
+    // and the row hydrates the list from it.
     profilesApi.list.mockResolvedValue([primary, spare, { ...home, active: false }])
     await click('profile-menu-btn-profile-home')
     await click('profile-menu-make-inactive-profile-home')
@@ -239,7 +241,7 @@ describe('a flip never moves a row', () => {
   })
 
   it('Claude: the rows are in the order the accounts were added, whatever order the file has them in', () => {
-    // An earlier rename or flip moved Home to the end of the file.
+    // A rename or flip in an earlier build moved Home to the end of the file.
     useAccountProfilesStore.setState({ profiles: [spare, primary, home] })
     render(snapshot())
     expect(claudeRows()).toEqual(['profile-primary', 'profile-home', 'profile-spare'])

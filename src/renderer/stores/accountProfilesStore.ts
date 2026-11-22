@@ -16,13 +16,14 @@ interface AccountProfilesState {
 }
 
 /** The Claude profiles in the order they were added, as Settings, Accounts
- *  lists them (aicc_planning#381). Not the file's order: main writes a changed
- *  profile back at the end of profiles.json (withProfile in
- *  account-profiles.ts), so in that order an account moves each time it is
- *  made active or inactive, or renamed. createdAt is set once, when the
- *  profile is made, and every later write keeps it. A profile without a
- *  usable createdAt (a hand-edited file) comes after the dated ones; the id
- *  settles ties, so the order never depends on the file's. */
+ *  lists them (aicc_planning#381). Not the file's order: up to 2.1.3-beta.12
+ *  main wrote a changed profile back at the end of profiles.json, so a file
+ *  an earlier build edited holds the accounts in the order they were last
+ *  changed, and main leaves that order as it is (since aicc_planning#383 an
+ *  edit keeps its place). createdAt is set once, when the profile is made,
+ *  and every later write keeps it. A profile without a usable createdAt (a
+ *  hand-edited file) comes after the dated ones; the id settles ties, so the
+ *  order never depends on the file's. */
 export function profilesInAddedOrder<T extends Pick<AccountProfile, 'id' | 'createdAt'>>(profiles: readonly T[]): T[] {
   const added = (p: T) => (typeof p.createdAt === 'number' && Number.isFinite(p.createdAt) ? p.createdAt : Number.POSITIVE_INFINITY)
   return [...profiles].sort((a, b) => {
