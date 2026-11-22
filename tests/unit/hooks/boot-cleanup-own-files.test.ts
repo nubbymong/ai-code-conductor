@@ -69,7 +69,7 @@ function appStatusLine(sid: string, withUrlFile: boolean, resources = h.resource
 
 /** The hooks of a held Claude Code session: the helper's hook mode for its holder. */
 function heldHooks(sid: string, holderOf = sid): Record<string, unknown[]> {
-  const hooks = buildHelperHooksBlock(sid, 19334, 'token', { helperPath: HELPER, store: STORE, sid: heldAgentSessionId(holderOf, 'claude'), launcher: 'git-bash' })
+  const hooks = buildHelperHooksBlock({ helperPath: HELPER, store: STORE, sid: heldAgentSessionId(holderOf, 'claude'), launcher: 'git-bash' })
   expect(hooks).not.toBeNull()
   return hooks as Record<string, unknown[]>
 }
@@ -170,10 +170,18 @@ describe('the start-up sweep keeps every other settings file', () => {
   })
 
   it('the hook mode for another session\'s holder is not this file\'s: its app hooks are taken out, the file kept', () => {
-    const f = put(SID, { hooks: heldHooks(SID, OTHER) })
+    // A held session's file as a build before 2.1.3-beta.14 wrote it, with
+    // PreToolUse still on the gateway: that /hook/ entry is what is taken out.
+    const f = put(SID, { hooks: { ...heldHooks(SID, OTHER), PreToolUse: buildHooksBlock(SID, 19334, 'token').PreToolUse } })
     expect(cleanupStaleHookEntries(new Set())).toBe(1)
     expect(fs.existsSync(f)).toBe(true)
     expect(read(f).hooks).toBeUndefined()
+    // From 2.1.3-beta.14 every entry runs the hook mode and none names a
+    // /hook/ address, so there is nothing to take out: the file stays as it is.
+    const body = { hooks: heldHooks(SID, OTHER) }
+    put(SID, body)
+    expect(cleanupStaleHookEntries(new Set())).toBe(0)
+    expect(read(f)).toEqual(body)
   })
 
   it('a file an SSH session from another computer wrote here: its hooks are taken out, the file kept', () => {
