@@ -1,8 +1,8 @@
 {
   "schema": "wp1-legacy-codex-ledger/2",
   "predicateDigest": "100a1233edebdc39a5f9004d3fba980a89ebb15b25872e52076386bc84b03153",
-  "manifestPathDigest": "f5f9aac694736574badba0470f1296de5bee206546fd74d409b9e7084c8c3e86",
-  "manifestHead": "12713dd508600811bd1b63e02de617aefb1e9d56",
+  "manifestPathDigest": "4cff23b1cc87fd0ef1a6e3cd0f4e983d7e3c576797dac225c6f6b4f5ba473213",
+  "manifestHead": "1217de2e702493b9e3e6f11423411dcb6fcb5326",
   "dispositions": {
     "retain": "unchanged observable behaviour, characterization proof",
     "move": "moved behind a package boundary and/or adapted at the call site, regression proof (newPath when relocated)",
@@ -9533,6 +9533,19 @@
       "disposition": "added",
       "evidence": "new WP2 PR 4 P4.1 (row 51) test: the approval keys per preset, developer instructions on the direct route only, the cmd.exe line bound (WP1.33); tests/unit/providers/codex/spawn-canvas.test.ts; WP2 PR 4 lane A round 2 (9e200c0a, the provider port; no behaviour change): logLine on both routes, and the CodexProvider members (WP1.33); tests/unit/providers/codex/spawn-canvas.test.ts; WP2 PR 4 VM checkpoint fixes (5e5d0478), review fixes (758cb407): changed by those fixes (WP1.33); tests/unit/providers/codex/spawn-canvas.test.ts; WP2 PR 4 owner answers (2026-10-04) (785b886e, integration round 3): never developer instructions on any route, the log line is the launch line; the route each build took is read from its cmd.exe line, and the package offers no launch route (WP1.33); tests/unit/providers/codex/spawn-canvas.test.ts",
       "note": ""
+    },
+    {
+      "path": "tests/unit/providers/codex/spawn-daemon-auto-start.test.ts",
+      "predicates": [
+        "P01",
+        "P04",
+        "P07",
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "new 2.1.3-beta.16 section B1F test (tests/unit/providers/codex/spawn-daemon-auto-start.test.ts, aicc_planning #371): a launch whose own -c keys run Codex embedded carries -c features.daemon_auto_start=false once, last of the app's flags and before the user's, on every route (direct, the npm launcher's cmd.exe line, Ask Conductor, an exact resume, the resume list, a launch the session helper holds); a launch with no app -c, or only keys Codex allows, is unchanged; none when the user's extra arguments name --strict-config (WP1.68); tests/unit/providers/codex/spawn-daemon-auto-start.test.ts",
+      "note": "created by 2.1.3-beta.16 section B1F; argv only, nothing started; the exact-resume and picker cases make one folder each in the run's temp folder and remove it"
     },
     {
       "path": "tests/unit/providers/codex/spawn-extra-args.test.ts",
