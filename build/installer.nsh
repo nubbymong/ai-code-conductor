@@ -1227,6 +1227,13 @@
   WriteRegStr HKCU "Software\AI Code Conductor" "InstallPath" "$INSTDIR"
   WriteRegStr HKCU "Software\AI Code Conductor" "SourcePath" ""
 
+  ; The uninstall record names the install folder too, for whatever reads
+  ; the installed programs list for it (winget, Get-Package, a script).
+  ; electron-builder writes InstallLocation only under its own key. Same
+  ; hive as the record (SHELL_CONTEXT), so the uninstaller's removal of the
+  ; record takes this value with it.
+  WriteRegStr SHELL_CONTEXT "${UNINSTALL_REGISTRY_KEY}" "InstallLocation" "$INSTDIR"
+
   ; --- Remove a legacy install folder sitting beside this one ---
   ; Only application binaries live there; user data lives in the data and
   ; resources directories, which RemoveLegacyInstall refuses to touch. appId is
@@ -1992,14 +1999,39 @@ FunctionEnd
   ${Loop}
 !macroend
 
+; ${OUT} = 1 when $R1, a list like ",12:345,67:890,", has an entry for process
+; ${ITEM}: the number before an entry's colon. ${ITEM} and ${OUT} must not be
+; scratch. Scratch: $0 $1 $2 $R7 $R8.
+!macro CccInPairList ITEM OUT
+  StrCpy ${OUT} 0
+  StrCpy $2 ",${ITEM}:"
+  StrLen $1 "$2"
+  StrLen $R8 "$R1"
+  StrCpy $0 0
+  ${Do}
+    ${If} $0 >= $R8
+      ${ExitDo}
+    ${EndIf}
+    StrCpy $R7 "$R1" $1 $0
+    ${If} $R7 == $2
+      StrCpy ${OUT} 1
+      ${ExitDo}
+    ${EndIf}
+    IntOp $0 $0 + 1
+  ${Loop}
+!macroend
+
 ; One pass over every running process (a Toolhelp snapshot, so no WMI: over
 ; a non-interactive sign-in tasklist and taskkill answer "Access denied",
-; measured on the VM). MODE 0 adds to $R1 each aicc-helper.exe of this
-; copy's user. MODE 1 adds each process of this user whose parent is in $R1
-; and that started after its parent, so a parent id Windows has since given
-; to a new process is not taken for its parent. $R2 is the snapshot, $R3 a
-; PROCESSENTRY32W (556 bytes, 32-bit). Scratch: $3 $4 $5 $6 $7, and
-; CccInList's, CccProcessIsMine's and CccProcessStart's.
+; measured on the VM). Each process it lists goes into $R1 as "pid:start,",
+; its start as CccProcessStart reads it ("" when that cannot be read), so
+; CccEndListed can tell it from a process Windows gives its pid later. MODE 0
+; adds each aicc-helper.exe of this copy's user. MODE 1 adds each process of
+; this user whose parent is in $R1 and that started after its parent, so a
+; parent id Windows has since given to a new process is not taken for its
+; parent. $R2 is the snapshot, $R3 a PROCESSENTRY32W (556 bytes, 32-bit).
+; Scratch: $3 $4 $5 $6 $7, and CccInPairList's, CccProcessIsMine's and
+; CccProcessStart's.
 !macro CccScanProcesses MODE
   System::Call 'kernel32::CreateToolhelp32Snapshot(i 2, i 0) p .R2'
   ${If} $R2 != 0
@@ -2013,14 +2045,15 @@ FunctionEnd
         ${If} $5 == "aicc-helper.exe"
           !insertmacro CccProcessIsMine "$3" $6
           ${If} $6 == 1
-            StrCpy $R1 "$R1$3,"
+            !insertmacro CccProcessStart "$3" $R7
+            StrCpy $R1 "$R1$3:$R7,"
           ${EndIf}
         ${EndIf}
       !else
         ${If} $4 != 0
-          !insertmacro CccInList "$4" $6
+          !insertmacro CccInPairList "$4" $6
           ${If} $6 == 1
-            !insertmacro CccInList "$3" $6
+            !insertmacro CccInPairList "$3" $6
             ${If} $6 == 0
               !insertmacro CccProcessIsMine "$3" $6
               ${If} $6 == 1
@@ -2031,7 +2064,7 @@ FunctionEnd
                   System::Int64Op $R7 < $R8
                   Pop $6
                   ${If} $6 == 0
-                    StrCpy $R1 "$R1$3,"
+                    StrCpy $R1 "$R1$3:$R7,"
                   ${EndIf}
                 ${EndIf}
               ${EndIf}
@@ -2045,32 +2078,33 @@ FunctionEnd
   ${EndIf}
 !macroend
 
-; Ends every process in $R1 that is still this user's when its turn comes.
-; Scratch: $3 $4 $6 $R7, and CccProcessIsMine's.
+; Ends each process in $R1, the "pid:start," list CccScanProcesses made, that
+; when its turn comes is still this user's and still the process it listed:
+; its start, read through a handle held open from before its user is checked
+; until it is ended, is the one listed. Windows gives a freed pid to a new
+; process within seconds, and that process has a later start, so it is left
+; running, as is one whose start could not be read, then or now. Scratch: $3
+; $4 $5 $6 $7, and CccNextPair's and CccProcessIsMine's ($0 $1 $2 as well).
 !macro CccEndListed
   StrCpy $4 1
   ${Do}
-    StrCpy $3 ""
-    ${Do}
-      StrCpy $R7 "$R1" 1 $4
-      IntOp $4 $4 + 1
-      ${If} $R7 == ","
-      ${OrIf} $R7 == ""
-        ${ExitDo}
-      ${EndIf}
-      StrCpy $3 "$3$R7"
-    ${Loop}
+    !insertmacro CccNextPair "$R1" $4 $3 $5
     ${If} $3 == ""
       ${ExitDo}
     ${EndIf}
-    !insertmacro CccProcessIsMine "$3" $6
-    ${If} $6 == 1
-      ; PROCESS_TERMINATE
-      System::Call 'kernel32::OpenProcess(i 1, i 0, i $3) p .r0'
-      ${If} $0 != 0
-        System::Call 'kernel32::TerminateProcess(p r0, i 1)'
-        System::Call 'kernel32::CloseHandle(p r0)'
+    ; PROCESS_TERMINATE and PROCESS_QUERY_LIMITED_INFORMATION.
+    System::Call 'kernel32::OpenProcess(i 0x1001, i 0, i $3) p .r7'
+    ${If} $7 != 0
+      !insertmacro CccProcessIsMine "$3" $6
+      ${If} $6 == 1
+        System::Call 'kernel32::GetProcessTimes(p r7, *l .r1, *l, *l, *l) i .r2'
+        ${If} $2 != 0
+        ${AndIf} $5 != ""
+        ${AndIf} $1 == $5
+          System::Call 'kernel32::TerminateProcess(p r7, i 1)'
+        ${EndIf}
       ${EndIf}
+      System::Call 'kernel32::CloseHandle(p r7)'
     ${EndIf}
   ${Loop}
 !macroend
@@ -2564,7 +2598,8 @@ FunctionEnd
 ; them, and once the app is gone nothing can reach it; a holder has no window
 ; or console to close. Only this user's, never another user's, even when this
 ; copy is elevated: the user is the one in this copy's own token, and every
-; process is checked against it, again just before it is ended. A
+; process is checked against it, again just before it is ended, when it must
+; also still be the process listed (its start, CccEndListed). A
 ; development run's holders end too. Saves and restores every register but
 ; $9, where it adds its note.
 !macro CccEndUserHelpers

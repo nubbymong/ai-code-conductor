@@ -360,8 +360,10 @@ function probeScript(mode: 'sweep' | 'e2e' | 'apps', out: string, cfg: string, l
 
   ReadRegStr $5 HKCU "\${UNINSTALL_REGISTRY_KEY}" "UninstallString"
   ReadRegStr $6 HKCU "\${INSTALL_REGISTRY_KEY}" "InstallLocation"
+  ReadRegStr $7 HKCU "\${UNINSTALL_REGISTRY_KEY}" "InstallLocation"
   FileWrite $cccProbeLog "arpUninstallString=$5$\\r$\\n"
   FileWrite $cccProbeLog "arpInstallLocation=$6$\\r$\\n"
+  FileWrite $cccProbeLog "recordInstallLocation=$7$\\r$\\n"
   FileWrite $cccProbeLog "final=$INSTDIR$\\r$\\n"
   cccProbeFinished:
 `
@@ -724,6 +726,8 @@ describe.skipIf(!MAKENSIS)('installer.nsh behavioural probe', () => {
       // ...and the ARP record points at the new install
       expect(log.arpInstallLocation).toBe(f.expected)
       expect(log.arpUninstallString).toContain(f.expected)
+      // ...and names it, for what reads the installed programs list (aicc_planning #403)
+      expect(log.recordInstallLocation).toBe(f.expected)
       expect(existsSync(join(f.expected, 'AI Code Conductor.exe'))).toBe(true)
       // user data untouched
       expect(existsSync(join(f.root, 'data', 'CONFIG', 'settings.json'))).toBe(true)
@@ -819,6 +823,25 @@ describe.skipIf(!MAKENSIS)('installer.nsh behavioural probe', () => {
     regClear()
 
     expect(log.afterInit).toBe(f.leaf)
+    expect(log.recordInstallLocation).toBe(f.leaf)
+  }, 60_000)
+
+  it('a first install writes the install folder into the uninstall record as InstallLocation (aicc_planning #403)', () => {
+    // electron-builder writes InstallLocation only under its own key, so the
+    // installed programs list (winget, Get-Package, a script) found no folder.
+    const s = scenario('e2e-record-location')
+    const instdir = join(s.programs, 'AI Code Conductor')
+    dir(join(s.root, 'data'))
+    dir(join(s.root, 'res'))
+    regClear()
+    regSet('AI Code Conductor', 'DataDirectory', join(s.root, 'data'))
+    regSet('AI Code Conductor', 'ResourcesDirectory', join(s.root, 'res'))
+
+    const log = run('e2e', { instdir, parent: s.programs, linkRoot: s.links, seedFromRegistry: false })
+    regClear()
+
+    expect(log.final).toBe(instdir)
+    expect(log.recordInstallLocation).toBe(instdir)
   }, 60_000)
 
   it('never sweeps the siblings of an explicit /D= directory', () => {
@@ -876,8 +899,9 @@ const UNINSTALL_PROBE_MACROS = [
   'CccPrintHelperNotes',
   'CccProcessIsMine',
   'CccProcessStart',
-  'CccInList',
+  'CccInPairList',
   'CccScanProcesses',
+  'CccNextPair',
   'CccEndListed',
   'CccEndUserHelpers',
   'CccRemoveHelperOwnFolder',
@@ -886,7 +910,7 @@ const UNINSTALL_PROBE_MACROS = [
   'customUnInstall',
 ]
 
-/** What the probe's taskkill ends in place of aicc-helper.exe. */
+/** The name the probe's clean-up finds and ends in place of aicc-helper.exe. */
 const PROBE_HELPER_EXE = 'ccc-probe-helper.exe'
 /** A child a stand-in starts from its conpty folder, under the name a holder's child has there. */
 const PROBE_CHILD_EXE = 'OpenConsole.exe'
@@ -1002,6 +1026,80 @@ ${readCfg('$cccProbeOuterGone', 'outerGone')}
   ClearErrors
   FileOpen $cccProbeLog "${log}" w
   !insertmacro customUnInstall
+  FileWrite $cccProbeLog "done=1$\\r$\\n"
+  FileClose $cccProbeLog
+SectionEnd
+`
+}
+
+/**
+ * CccEndListed alone (aicc_planning #400), over a list of one entry, as
+ * CccScanProcesses writes it: a stand-in's pid, with the start this probe
+ * reads for it (`start=read`); with that start one 100 ns tick later
+ * (`other`), as a process Windows has given that pid since the scan would
+ * have it; or with none (`none`), a start the scan could not read. This
+ * copy's own user is read as CccEndUserHelpers reads it. The probe ends only
+ * the pid its ini names, a stand-in the case started.
+ */
+function endListedProbeScript(out: string, cfg: string, log: string): string {
+  const text = liftMacros(['CccEndListed', 'CccProcessStart'])
+  for (const [what, re] of [
+    ['the real helper', /aicc-helper/i],
+    ['a registry key', /Software\\/],
+    ['a detail line', /\bDetailPrint\b/],
+  ] as const) {
+    if (re.test(text)) throw new Error(`the end-listed probe would reach ${what}: ${text.match(re)?.[0]}`)
+  }
+  return `Unicode true
+SetCompress off
+RequestExecutionLevel user
+SilentInstall silent
+Name "CccEndListedProbe"
+OutFile "${out}"
+InstallDir "$TEMP\\ccc-nsis-probe-unused"
+
+!include "LogicLib.nsh"
+
+Var cccProbeLog
+
+${text}
+
+Page instfiles
+
+Section "probe"
+  ReadINIStr $8 "${cfg}" "probe" "pid"
+  ReadINIStr $9 "${cfg}" "probe" "start"
+  ClearErrors
+  FileOpen $cccProbeLog "${log}" w
+  ; This copy's own user: TOKEN_USER in $R0, its SID at $R6.
+  System::Alloc 256
+  Pop $R0
+  System::Alloc 256
+  Pop $R5
+  StrCpy $R6 0
+  System::Call 'kernel32::GetCurrentProcess() p .r0'
+  System::Call 'advapi32::OpenProcessToken(p r0, i 8, *p .r1) i .r2'
+  \${If} $2 != 0
+    System::Call 'advapi32::GetTokenInformation(p r1, i 1, p R0, i 256, *i .r2) i .r2'
+    \${If} $2 != 0
+      System::Call '*$R0(p .R6)'
+    \${EndIf}
+    System::Call 'kernel32::CloseHandle(p r1)'
+  \${EndIf}
+  FileWrite $cccProbeLog "sid=$R6$\\r$\\n"
+  !insertmacro CccProcessStart "$8" $R9
+  FileWrite $cccProbeLog "start=$R9$\\r$\\n"
+  \${If} $9 == "other"
+    System::Int64Op $R9 + 1
+    Pop $R9
+  \${ElseIf} $9 == "none"
+    StrCpy $R9 ""
+  \${EndIf}
+  StrCpy $R1 ",$8:$R9,"
+  FileWrite $cccProbeLog "list=$R1$\\r$\\n"
+  !insertmacro CccEndListed
+  System::Free $R5
+  System::Free $R0
   FileWrite $cccProbeLog "done=1$\\r$\\n"
   FileClose $cccProbeLog
 SectionEnd
@@ -1578,6 +1676,99 @@ describe.skipIf(!MAKENSIS)('installer.nsh behavioural probe: uninstall removes t
       expect(details).toEqual([`Left the session helper folder as it is, because it or its parent is a link: ${join(lad, 'AI Code Conductor', 'helper')}`])
     }, 60_000)
   }
+})
+
+// ------------------------- the helper clean-up's end of a listed pid (#400) ---
+
+/**
+ * A probe of its own, so this case compiles against any installer.nsh that
+ * has CccEndListed, the one before aicc_planning #400 included: run against
+ * that one, it fails on what the macro does, not on a macro the uninstall
+ * probe above names and that file lacks.
+ */
+describe.skipIf(!MAKENSIS)('installer.nsh behavioural probe: the helper clean-up ends a listed process only while it is still that process', () => {
+  let lwork = ''
+  const lexe = () => join(lwork, 'probe-endlisted.exe')
+  const lcfg = () => join(lwork, 'probe-endlisted.ini')
+  const llog = () => join(lwork, 'probe-endlisted.log')
+  const started: number[] = []
+
+  beforeAll(() => {
+    lwork = mkdtempSync(join(tmpdir(), 'ccc-nsis-listprobe-'))
+    const nsi = join(lwork, 'probe-endlisted.nsi')
+    writeFileSync(nsi, endListedProbeScript(lexe(), lcfg(), llog()))
+    try {
+      execFileSync(MAKENSIS as string, ['/V2', '/WX', nsi], { encoding: 'utf-8', stdio: 'pipe' })
+    } catch (e) {
+      const err = e as { stdout?: string; stderr?: string }
+      throw new Error(`makensis failed for the end-listed probe:\n${err.stdout ?? ''}${err.stderr ?? ''}`)
+    }
+  }, 120_000)
+
+  afterAll(async () => {
+    for (const pid of started) await endOurs(pid)
+    if (lwork) rmSync(lwork, { recursive: true, force: true, maxRetries: 5 })
+  }, 60_000)
+
+  /** A running stand-in: a copy of this Node idling in a folder of its own, with an environment of its own. */
+  async function startIdle(name: string): Promise<number> {
+    const folder = join(lwork, name)
+    dir(folder)
+    const exe = join(folder, PROBE_HELPER_EXE)
+    copyFileSync(process.execPath, exe)
+    const proc = spawn(exe, ['-e', IDLE], {
+      detached: true,
+      stdio: 'ignore',
+      windowsHide: true,
+      env: { SystemRoot: process.env.SystemRoot ?? 'C:\\Windows' },
+    })
+    proc.unref()
+    expect(proc.pid, 'the stand-in started').toBeDefined()
+    started.push(proc.pid!)
+    own(proc.pid!, { spawned: proc })
+    await pause(500)
+    expect(isAlive(proc.pid!), 'the stand-in is running').toBe(true)
+    return proc.pid!
+  }
+
+  /** One run of the probe over `pid`; its log as name=value. */
+  function runEndListed(pid: number, start: 'read' | 'other' | 'none'): Record<string, string> {
+    writeFileSync(lcfg(), ['[probe]', `pid=${pid}`, `start=${start}`, ''].join('\r\n'))
+    rmSync(llog(), { force: true })
+    execFileSync(lexe(), [], { encoding: 'utf-8', stdio: 'pipe', timeout: 30_000 })
+    const out: Record<string, string> = {}
+    for (const line of readFileSync(llog(), 'utf-8').split(/\r?\n/)) {
+      const i = line.indexOf('=')
+      if (i > 0) out[line.slice(0, i)] = line.slice(i + 1)
+    }
+    expect(out.done, JSON.stringify(out)).toBe('1')
+    return out
+  }
+
+  it('another start, or none, ends nothing; the start it was listed with ends it (aicc_planning #400)', async () => {
+    // A listed process that ends between the scan and its turn frees its pid,
+    // and Windows gives a freed pid to a new process within seconds (measured
+    // on the CI runner, tests/helpers/started-processes.ts). That process has
+    // a later start than the one listed, so it is left running. One stand-in
+    // stands for both: listed with another start, then with none, then with
+    // its own.
+    const pid = await startIdle('listed')
+
+    const other = runEndListed(pid, 'other')
+    expect(other.sid, 'the probe read its own user').not.toBe('0')
+    expect(other.start, 'the probe read the stand-in\'s start').toMatch(/^\d+$/)
+    expect(other.list).toBe(`,${pid}:${BigInt(other.start) + BigInt(1)},`)
+    expect(await waitGone(pid, 2000), 'a pid whose start is not the listed one is not ended').toBe(false)
+
+    const none = runEndListed(pid, 'none')
+    expect(none.list).toBe(`,${pid}:,`)
+    expect(await waitGone(pid, 2000), 'a pid listed with no start is not ended').toBe(false)
+
+    const read = runEndListed(pid, 'read')
+    expect(read.start, 'the same process as before').toBe(other.start)
+    expect(read.list).toBe(`,${pid}:${read.start},`)
+    expect(await waitGone(pid), 'the process listed, with its own start, is ended').toBe(true)
+  }, 60_000)
 })
 
 // ------------------------------------------- the app-running check (#319) ---
