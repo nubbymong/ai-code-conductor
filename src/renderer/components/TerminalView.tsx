@@ -9,6 +9,7 @@ import { installWebglWithRecovery, createAtlasResync, type WebglHandle } from '.
 import { onFontsReady, terminalFontOptions, terminalFontReady, terminalFontSpecs, waitForTerminalFont, type CancelFontWait } from './terminal/terminalFont'
 import { atlasCoordinator } from './terminal/atlasCoordinator'
 import { createHiddenOutputQueue, type HiddenOutputQueue } from './terminal/hiddenOutputQueue'
+import { consoleRepaintApplies, createConsoleRepaintAligner, type ConsoleRepaintAligner } from './terminal/consoleRepaint'
 import {
   createStaleGlyphRepainter,
   shouldRepaintOnOutput,
@@ -64,6 +65,7 @@ import type { ProviderId, CodexOptions, TerminalOptions } from '../../shared/typ
 import { spawnRefusalOf, refusedTabText } from '../../shared/providers'
 import { parentOfPartnerPtyId } from '../../shared/multi-spawn-rule'
 import { TERMINAL_SCROLLBACK_LINES } from '../../shared/terminal-scrollback'
+import { readReplayAtHolderSize, type ReplayAtHolderSize } from '../../shared/replay-at-holder-size'
 import { reconcileRefusedMultiSpawn } from '../utils/refusedMultiSpawn'
 import { isConfigLaunchBlocked, useLaunchGateSettings, restartLaunchRefusal } from '../hooks/useLaunchConfig'
 import { useConfigStore } from '../stores/configStore'
@@ -568,6 +570,11 @@ export default function TerminalView({ sessionId, configId, cwd, shellOnly, elev
     /** aicc_planning#303: this run's output queue (hiddenOutputQueue), made
      *  with the terminal in initTerminal. */
     let hiddenOutput: HiddenOutputQueue | null = null
+    /** aicc_planning#394: on Windows, the console's paint after a size this
+     *  view sends, when it matches the terminal's lines, is written where they
+     *  are (terminal/consoleRepaint.ts). Null where it does not apply. Every
+     *  write to the terminal goes through it, so output stays in order. */
+    let consoleRepaint: ConsoleRepaintAligner | null = null
     /** P3.8 round 1 (L2): a Plan mode launch's wait for the ready composer. */
     let planModeWait: { cancel: () => void } | null = null
     /** #313: the pending font wait (before the terminal is built, then before
@@ -584,6 +591,15 @@ export default function TerminalView({ sessionId, configId, cwd, shellOnly, elev
     const integrityGeneration = generateId()
     let bytesReceived = 0, bytesWritten = 0, strippedBytes = 0, ptyResizeCount = 0
     let lastSentCols: number | null = null, lastSentRows: number | null = null
+    // 2.1.3-beta.14, plan section C8 (aicc_planning#392): a restored terminal
+    // whose tab did not reach its holder's size is told that size and the
+    // length of its next chunk, its replay (replayAt). That chunk is written
+    // with the terminal at the holder's size, and the terminal is fitted to
+    // the tab once xterm has parsed it (replayFitOwed until then: no other
+    // fit runs, and no size goes to main).
+    let replayAt: ReplayAtHolderSize | null = null
+    let replayFitOwed = false
+    let unsubReplayAt: (() => void) | null = null
     let reportTimer: ReturnType<typeof setTimeout> | null = null
     let resizeDebounce: ReturnType<typeof setTimeout> | null = null
     // Post-resume settle nudge (resume terminal corruption). A `claude --resume`
@@ -626,7 +642,10 @@ export default function TerminalView({ sessionId, configId, cwd, shellOnly, elev
     // after the line (the session marked ended or never started) must still
     // run, so the line is lost instead.
     const writeAppLine = (line: string) => {
-      try { term?.writeln(line) } catch (err) { console.warn('[TerminalView] xterm refused a line', err) }
+      try {
+        if (consoleRepaint) consoleRepaint.write(`${line}\r\n`)
+        else term?.writeln(line)
+      } catch (err) { console.warn('[TerminalView] xterm refused a line', err) }
     }
 
     // The session's PTY is gone (or never started). `line` is what the
@@ -744,6 +763,11 @@ export default function TerminalView({ sessionId, configId, cwd, shellOnly, elev
         // dark rendering is unchanged. Kept in lockstep on theme flips below.
         minimumContrastRatio: document.documentElement.getAttribute('data-theme') === 'light' ? 4.5 : 1,
       })
+      // aicc_planning#394: a local Codex session runs on the console host the
+      // app ships (main's bundled-conpty.ts), not the one built into Windows.
+      consoleRepaint = consoleRepaintApplies({ platform: window.electronPlatform, shipsOwnConsole: provider === 'codex' && !shellOnly })
+        ? createConsoleRepaintAligner(term, { now: () => performance.now() })
+        : null
 
       fitAddon = new FitAddon()
       term.loadAddon(fitAddon)
@@ -891,6 +915,7 @@ export default function TerminalView({ sessionId, configId, cwd, shellOnly, elev
         getGeometry: () => ({ cols: term?.cols ?? 0, rows: term?.rows ?? 0 }),
         resizePty: (c, r) => {
           ptyResizeCount += 1
+          consoleRepaint?.noteResize()
           try { window.electronAPI.pty.resize(sessionId, c, r) } catch { /* main gone */ }
         },
         refresh: () => { try { term?.refresh(0, (term?.rows ?? 1) - 1) } catch { /* disposed */ } },
@@ -1584,8 +1609,9 @@ export default function TerminalView({ sessionId, configId, cwd, shellOnly, elev
       // visible terminal calls it for every chunk; a hidden one once per batch
       // (hiddenOutputQueue), passing `parsed` for xterm's write callback.
       // Byte counts, the resume nudge's timing and the output parse below
-      // still see every chunk as it arrives.
-      const writeOutput = (filtered: string, parsed?: () => void): void => {
+      // still see every chunk as it arrives. `asIs`: a held terminal's
+      // replay, never the console's answer to a size (consoleRepaint).
+      const writeOutput = (filtered: string, parsed?: () => void, asIs = false): void => {
         // Sticky-bottom follow (issue #73): sample the LIVE viewport position
         // BEFORE this chunk lays out and decide from THAT — not from the
         // wheel-set latch, which scrollbar-thumb drags and keyboard scrolling
@@ -1599,7 +1625,8 @@ export default function TerminalView({ sessionId, configId, cwd, shellOnly, elev
           baseY: preWriteBuf?.baseY ?? 0,
         })
 
-        if (term) term.write(filtered, parsed)
+        if (consoleRepaint) consoleRepaint.write(filtered, parsed, asIs)
+        else if (term) term.write(filtered, parsed)
         else parsed?.()
 
         if (follow.scrollToBottom) term?.scrollToBottom()
@@ -1660,13 +1687,62 @@ export default function TerminalView({ sessionId, configId, cwd, shellOnly, elev
       })
       hiddenOutputRef.current = hiddenOutput
 
+      // aicc_planning#392: once the replay is parsed, the terminal is fitted
+      // to the tab and the tab's size goes to main, even when it is the size
+      // last sent: main sends the holder nothing until it hears it.
+      const fitAfterReplay = (): void => {
+        if (disposed || !fitAddon || !term) return
+        try { fitAddon.fit() } catch { /* ignore */ }
+        const cols = term.cols, rows = term.rows
+        if (cols > 0 && rows > 0) {
+          lastSentCols = cols
+          lastSentRows = rows
+          ptyResizeCount += 1
+          noteActivityGrace(sessionId)
+          // aicc_planning#394: the console's paint at the tab's size follows.
+          consoleRepaint?.noteResize()
+          window.electronAPI.pty.resize(sessionId, cols, rows)
+          reportIntegrity()
+        }
+        hideClaudeCursorLayer()
+      }
+      // The replay, written with the terminal at its holder's size, the size
+      // its console's output was made for; xterm rewraps it to the tab's size
+      // at the fit. Anything queued goes first, and output after it is
+      // written after it, so it is parsed after the fit.
+      const writeAtHolderSize = (filtered: string, at: ReplayAtHolderSize): void => {
+        hiddenOutput?.flush()
+        replayFitOwed = true
+        let fitted = false
+        const fit = (): void => {
+          if (fitted) return
+          fitted = true
+          replayFitOwed = false
+          fitAfterReplay()
+        }
+        try {
+          term?.resize(at.cols, at.rows)
+          writeOutput(filtered, fit, true)
+        } catch (err) {
+          // xterm refused it (about 50 MB waiting to be parsed): the fit and
+          // the tab's size still follow.
+          console.warn('[TerminalView] xterm refused the replay at its holder\'s size', err)
+          fit()
+        }
+      }
+      unsubReplayAt = window.electronAPI.pty.onReplayAtHolderSize?.(sessionId, (notice) => { replayAt = readReplayAtHolderSize(notice) }) ?? null
+
       unsubData = window.electronAPI.pty.onData(sessionId, (data) => {
         const filtered = shellOnly ? data : stripCursorSequences(data)
         bytesReceived += data.length
         strippedBytes += data.length - filtered.length
         bytesWritten += filtered.length
 
-        hiddenOutput?.push(filtered)
+        // The notice names this chunk only: the next one, of its length.
+        const at = replayAt
+        replayAt = null
+        if (at && at.length === data.length) writeAtHolderSize(filtered, at)
+        else hiddenOutput?.push(filtered)
 
         // Post-resume settle nudge: every chunk re-arms the timer; it fires only
         // once a burst has gone quiet for 600ms, and only while shots remain.
@@ -1695,6 +1771,7 @@ export default function TerminalView({ sessionId, configId, cwd, shellOnly, elev
             if (c > 0 && r > 2) {
               ptyResizeCount += 2
               resumeNudgeShrunk = true
+              consoleRepaint?.noteResize()
               window.electronAPI.pty.resize(sessionId, c, r - 1)
               resumeNudgeRestoreTimer = setTimeout(() => {
                 resumeNudgeRestoreTimer = null
@@ -1704,6 +1781,7 @@ export default function TerminalView({ sessionId, configId, cwd, shellOnly, elev
                 // the 60ms shrink window, and restoring the stale capture would
                 // stomp it — PTY and xterm would disagree until the next resize.
                 const c2 = term.cols, r2 = term.rows
+                consoleRepaint?.noteResize()
                 window.electronAPI.pty.resize(sessionId, c2, r2)
                 lastSentCols = c2
                 lastSentRows = r2
@@ -1749,6 +1827,9 @@ export default function TerminalView({ sessionId, configId, cwd, shellOnly, elev
           // is fitted when it is shown (fitAndSpawn, and this observer again).
           if (!paneHasSize()) return
           if (disposed || !fitAddon || !term) return
+          // A replay is being written at its holder's size: its own fit
+          // follows it, at the tab's size then (aicc_planning#392).
+          if (replayFitOwed) return
           try {
             fitAddon.fit()
             const cols = term.cols, rows = term.rows
@@ -1764,6 +1845,7 @@ export default function TerminalView({ sessionId, configId, cwd, shellOnly, elev
               // this: they fire in already-streaming flows where the pill is
               // lit anyway, while the main-side grace still covers the moon.)
               noteActivityGrace(sessionId)
+              consoleRepaint?.noteResize()
               window.electronAPI.pty.resize(sessionId, cols, rows)
               reportIntegrity()
             }
@@ -1935,6 +2017,7 @@ export default function TerminalView({ sessionId, configId, cwd, shellOnly, elev
       if (repainterRef.current === repainter) repainterRef.current = null
       resizeObserver?.disconnect()
       unsubData?.()
+      unsubReplayAt?.()
       // aicc_planning#303: its queued output goes with the terminal.
       hiddenOutput?.dispose()
       if (hiddenOutputRef.current === hiddenOutput) hiddenOutputRef.current = null

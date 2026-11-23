@@ -25,7 +25,8 @@ import { readConfig } from '../config-manager'
 import { collectCommandSecrets } from '../command-secrets'
 import { bindSshToSavedConfig, argSecretAllowed, findSavedConfig } from '../spawn-credential-binding'
 import { logWarn } from '../debug-logger'
-import { IPC } from '../../shared/ipc-channels'
+import { IPC, ptyReplayAtHolderSizeChannel } from '../../shared/ipc-channels'
+import { setReplayAtHolderSizeNotice } from '../session-helper/helper-pty'
 import { getPtyIntegrityMonitor } from '../services/pty-integrity-monitor'
 import type { PtyIntegrityReport } from '../../shared/service-health'
 import type { SshRuntime, DetachedRemoteLiveness, HostPingResult, DetachedRemote, SshEndRemoteResult, SubmitTextResult, PromptButtonResult } from '../../shared/types'
@@ -760,6 +761,18 @@ export function registerPtyHandlers(getWindow: () => BrowserWindow | null): void
   // runs that answer while it is under SSH_PROGRAM_KEEP_MS old, and walks
   // PATH in place as before otherwise (ssh-program.ts).
   startSshProgramLookup()
+
+  // 2.1.3-beta.14, plan section C8 (aicc_planning#392): a restored terminal
+  // whose tab did not reach its holder's size is told that size and its
+  // replay's length just before the replay, on the window its output goes to
+  // (the one its spawn was given), so the tab writes the replay at that size
+  // and is fitted after it.
+  setReplayAtHolderSizeNotice((sessionId, notice) => {
+    const win = getWindow()
+    if (!win || win.isDestroyed()) return false
+    win.webContents.send(ptyReplayAtHolderSizeChannel(sessionId), notice)
+    return true
+  })
 
   // WP2 PR 4, P4.1 (row 51): whether a Codex session's launch carried the
   // canvas and vision skills' guidance with the tools, for the canvas page's

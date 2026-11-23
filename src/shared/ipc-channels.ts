@@ -48,6 +48,7 @@ export const IPC = {
   PTY_KILL: 'pty:kill',
   PTY_DATA: 'pty:data',   // Suffixed with :sessionId at runtime
   PTY_EXIT: 'pty:exit',   // Suffixed with :sessionId at runtime
+  PTY_REPLAY_AT_HOLDER_SIZE: 'pty:replayAtHolderSize',   // main -> renderer, suffixed with :sessionId at runtime: ReplayAtHolderSize, just before that replay on pty:data (aicc_planning#392)
   PTY_INTEGRITY_REPORT: 'pty:integrityReport',   // renderer -> main per-session byte/resize report
 
   // SSH connection-flow controller (manual mode user-gated stages).
@@ -574,4 +575,10 @@ export function ptyDataChannel(sessionId: string): string {
 /** Helper to build per-session PTY exit channels */
 export function ptyExitChannel(sessionId: string): string {
   return `${IPC.PTY_EXIT}:${sessionId}`
+}
+
+/** The per-session channel a restored tab hears on that its next output is
+ *  its replay at the holder's size (shared/replay-at-holder-size.ts). */
+export function ptyReplayAtHolderSizeChannel(sessionId: string): string {
+  return `${IPC.PTY_REPLAY_AT_HOLDER_SIZE}:${sessionId}`
 }
