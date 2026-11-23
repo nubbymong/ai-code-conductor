@@ -7,6 +7,7 @@
 import type { CustomCommand, CommandSection } from '../../stores/commandStore'
 import { bandMembers, type CommandBand } from '../../lib/command-bands'
 import { describeTarget, type SessionCapabilities, type CommandTarget } from '../../lib/session-capabilities'
+import { isBroadcastButton } from '../../lib/commandBroadcast'
 
 /** Where a button's text goes. 'agent' = the agent in the main pane; 'main-shell' =
  *  the main pane when it IS a shell; 'partner' = the partner shell; 'page' = the browser. */
@@ -169,6 +170,8 @@ export function chipTitle(cmd: CustomCommand, caps: SessionCapabilities, section
     : `runs in ${describeTarget(caps, cmd.target === 'partner' ? 'partner' : 'claude')}`
   const scope = cmd.scope === 'global' ? 'Global — every config' : 'Session — this config only'
   const parts = [`${cmd.label} — ${kindWord}`, where, scope]
+  // #399: a broadcast press goes to every open session, not only this one.
+  if (isBroadcastButton(cmd)) parts.push('sends to every open session')
   if (sectionName) parts.push(`section ${sectionName}`)
   if (cmd.kind !== 'page' && cmd.defaultArgs?.length) parts.push(`args: ${cmd.defaultArgs.join(' ')} (Ctrl+click to change for one run)`)
   return parts.join(' · ')

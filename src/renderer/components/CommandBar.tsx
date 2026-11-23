@@ -45,6 +45,7 @@ import { writeSessionInput, dropTmuxCopyModeBelief } from './terminal/tmuxWheelS
 import { usePasteHintStore } from '../stores/pasteHintStore'
 import { stripSpoofableText } from '../../shared/safe-text'
 import type { PromptButtonResult, SubmitNotDeliveredReason } from '../../shared/types'
+import { broadcastTargets, broadcastPrompt, broadcastNote, broadcastBlocker, isBroadcastButton } from '../lib/commandBroadcast'
 
 // User-picked section colours are Mocha pastels tuned for dark surfaces;
 // rendered as bare text on the light theme they wash out. Darken them toward
@@ -275,6 +276,9 @@ type ConfirmState =
   | { kind: 'delete'; commandId: string }
   | { kind: 'hide'; tool: CoreToolId }
   | { kind: 'section-band'; sectionId: string; band: CommandBand }
+  /** #399: a Shift+click asks before one press goes to every open session.
+   *  `count`: the open agent sessions when it asked. */
+  | { kind: 'broadcast'; commandId: string; count: number }
 
 export default function CommandBar({ sessionId, configId, sessionType = 'local', partnerEnabled, isPartnerActive, onTogglePartner, partnerSessionId, parentSessionId, mainPaneIsShell = false, configCount }: Props) {
   const webviewKey = parentSessionId ?? sessionId
@@ -629,7 +633,64 @@ export default function CommandBar({ sessionId, configId, sessionType = 'local',
       .finally(() => { pendingSends.current -= 1 })
   }
 
-  const runCommand = (cmd: CustomCommand, withArgsAt?: DOMRect) => {
+  /**
+   * #399: whether a press of this button can go to every open session from
+   * this bar: a simple Global prompt (broadcastBlocker: no arguments, no
+   * secret), pressed on an agent session, with main's prompt path in the
+   * preload (an older preload or a test harness without it presses as a
+   * single button).
+   */
+  const canBroadcast = (cmd: CustomCommand): boolean =>
+    !!caps.agent && !caps.isAsk && broadcastBlocker(cmd) === null && typeof window.electronAPI?.pty?.submitPrompt === 'function'
+
+  /**
+   * #399: send this button's prompt to every open agent session, each through
+   * its own prompt path in main (lib/commandBroadcast: which sessions, the
+   * sends, the count), and show one note on this tab with the count. This tab
+   * gets what a single press gives it besides: its agent pane is shown, its
+   * page watch starts, and its terminal takes the keyboard. Read from the
+   * session store at the press, so the bar does not redraw on every session
+   * change to keep a count nobody is looking at.
+   */
+  const broadcastCommand = (cmd: CustomCommand) => {
+    const text = buildFullCommand(cmd)
+    const targets = broadcastTargets(useSessionStore.getState().sessions)
+    trackUsage('commands.broadcast')
+    if (isPartnerActive && onTogglePartner) onTogglePartner()
+    void broadcastPrompt(text, targets, (args) => window.electronAPI.pty.submitPrompt(args), dropTmuxCopyModeBelief)
+      .then((tally) => {
+        const note = broadcastNote(tally)
+        if (note) usePasteHintStore.getState().show(sessionId, note, PROMPT_NOTE_MS)
+      })
+    const webViewUrl = cmd.webView?.enabled ? cmd.webView.url : null
+    if (webViewUrl) startWebviewPolling(webViewUrl)
+    else if (webviewUrls.length > 0) void probeWebviewUrls(webviewKey, webviewUrls)
+    window.dispatchEvent(new CustomEvent('ccc:focus-terminal', { detail: { sessionId } }))
+  }
+
+  /** #399: the button a Shift+click asked about, until Send or Cancel answers
+   *  it. Read and cleared by the first answer, so a second Enter or a second
+   *  click on Send cannot send it twice. A held Enter's repeats never answer
+   *  it at all: the card's keydown handler below swallows them. */
+  const askedBroadcast = useRef<string | null>(null)
+  const askBroadcast = (cmd: CustomCommand) => {
+    askedBroadcast.current = cmd.id
+    setConfirm({ kind: 'broadcast', commandId: cmd.id, count: broadcastTargets(useSessionStore.getState().sessions).length })
+  }
+  const answerBroadcast = (send: boolean) => {
+    const id = askedBroadcast.current
+    askedBroadcast.current = null
+    setConfirm(null)
+    if (!send || !id) return
+    // Read again: the button may have been edited while the card was up.
+    const cmd = commands.find((c) => c.id === id)
+    if (cmd && canBroadcast(cmd)) broadcastCommand(cmd)
+  }
+
+  /** `shift`: a Shift+click (#399). On a simple Global prompt it asks, then
+   *  sends that one press to every open session; on any other button it is a
+   *  plain press. */
+  const runCommand = (cmd: CustomCommand, withArgsAt?: DOMRect, shift = false) => {
     if (cmd.kind === 'page') {
       if (!isAllowedBrowserUrl(cmd.pageUrl)) { console.warn('[CommandBar] page command has no usable URL:', cmd.label); return }
       trackUsage('webview.opened')
@@ -640,6 +701,15 @@ export default function CommandBar({ sessionId, configId, sessionType = 'local',
       trackUsage('commands.ctrl-click-args')
       setArgsPopover({ cmd, rect: withArgsAt })
       return
+    }
+    // #399: a button set to "Send to every open session" goes to every open
+    // agent session on a plain press (or a Shift+click), with no
+    // confirmation: the option is the user's own standing choice. Without
+    // it, a Shift+click asks first ("a warning in case accidetnal for shift
+    // click", the owner), so a slip sends nothing.
+    if (canBroadcast(cmd)) {
+      if (isBroadcastButton(cmd)) { broadcastCommand(cmd); return }
+      if (shift) { askBroadcast(cmd); return }
     }
     sendCommand(cmd, buildFullCommand(cmd))
   }
@@ -652,7 +722,7 @@ export default function CommandBar({ sessionId, configId, sessionType = 'local',
     // moves focus into the terminal via ccc:focus-terminal; Alt+Enter's
     // keyboard-run path (roving tabindex) is untouched.
     ;(e.currentTarget as HTMLElement)?.blur?.()
-    runCommand(cmd, e.ctrlKey && rect ? rect : undefined)
+    runCommand(cmd, e.ctrlKey && rect ? rect : undefined, e.shiftKey)
   }
 
   // A keychain write that fails (no keyring on this Linux, a torn credentials
@@ -831,6 +901,31 @@ export default function CommandBar({ sessionId, configId, sessionType = 'local',
   })), [plans, collapsedSectionIds])
   const { folded } = useBandFolding(rowRef, foldBands, overflowMode, !!dragId)
 
+  // #399: Enter sends from the Shift+click confirmation (its card answers
+  // Escape and Cancel itself). Taken wherever focus is, so it never reaches
+  // the terminal underneath, except on a button in the card: a focused
+  // Cancel or Send answers its own Enter. Only while the card is drawn: it
+  // is not when its button has gone. A held key's repeat is swallowed and
+  // never sends: holding Shift+Enter on a chip opens the card on the first
+  // keydown, and its repeats must not answer the card before it is read.
+  const answerBroadcastRef = useRef(answerBroadcast)
+  answerBroadcastRef.current = answerBroadcast
+  const askingBroadcast = confirm?.kind === 'broadcast' && commands.some((c) => c.id === confirm.commandId)
+  useEffect(() => {
+    if (!askingBroadcast) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Enter' || e.isComposing) return
+      const t = e.target
+      if (t instanceof Element && t.closest('[data-testid="confirm-broadcast"] button')) return
+      e.preventDefault()
+      e.stopPropagation()
+      if (e.repeat) return
+      answerBroadcastRef.current(true)
+    }
+    window.addEventListener('keydown', onKey, true)
+    return () => window.removeEventListener('keydown', onKey, true)
+  }, [askingBroadcast])
+
   const configName = useMemo(() => session?.label, [session])
 
   // ---- render helpers -----------------------------------------------------------
@@ -982,7 +1077,7 @@ export default function CommandBar({ sessionId, configId, sessionType = 'local',
 
   const menuCmd = menu?.kind === 'command' ? commands.find((c) => c.id === menu.id) : undefined
   const menuSection = menu?.kind === 'section' ? sections.find((s) => s.id === menu.id) : undefined
-  const confirmCmd = confirm && (confirm.kind === 'scope' || confirm.kind === 'delete') ? commands.find((c) => c.id === confirm.commandId) : undefined
+  const confirmCmd = confirm && (confirm.kind === 'scope' || confirm.kind === 'delete' || confirm.kind === 'broadcast') ? commands.find((c) => c.id === confirm.commandId) : undefined
   const overflowPlan = overflowOpen ? plans.find((p) => p.band === overflowOpen.band) : undefined
 
   return (
@@ -1354,7 +1449,7 @@ export default function CommandBar({ sessionId, configId, sessionType = 'local',
           folded={overflowPlan.chips.filter((c) => (folded[overflowPlan.band] ?? new Set()).has(c.id))}
           caps={caps}
           anchor={overflowOpen.anchor}
-          onRun={(cmd, e) => runCommand(cmd, e.ctrlKey ? overflowOpen.anchor : undefined)}
+          onRun={(cmd, e) => runCommand(cmd, e.ctrlKey ? overflowOpen.anchor : undefined, e.shiftKey)}
           onContextMenu={(cmd, e) => { setOverflowOpen(null); setMenu({ kind: 'command', id: cmd.id, x: e.clientX, y: e.clientY }) }}
           onManage={() => openSettingsTab('commands')}
           onClose={() => setOverflowOpen(null)}
@@ -1367,7 +1462,7 @@ export default function CommandBar({ sessionId, configId, sessionType = 'local',
           title={confirm.band === 'global' ? `Show "${confirmCmd.label}" in every config?` : `Keep "${confirmCmd.label}" only in this config?`}
           body={confirm.band === 'global'
             ? <>It becomes <b>Global</b>: it appears in every config, and editing or deleting it reaches all of them.{confirmCmd.hasSecretArg ? <> Its secret then rides the environment of every shell you open on this PC, not only this config's.</> : null}</>
-            : <>It becomes <b>Session</b>-only: it leaves your other {configCount && configCount > 1 ? `${configCount - 1} config${configCount - 1 === 1 ? '' : 's'}` : 'configs'} and shows only here{configName ? ` (${configName})` : ''}.</>}
+            : <>It becomes <b>Session</b>-only: it leaves your other {configCount && configCount > 1 ? `${configCount - 1} config${configCount - 1 === 1 ? '' : 's'}` : 'configs'} and shows only here{configName ? ` (${configName})` : ''}.{confirmCmd.broadcast ? ' It also stops sending to every open session.' : null}</>}
           actions={[{ label: confirm.band === 'global' ? 'Make Global' : 'Keep it here only', primary: true, testId: 'confirm-scope-ok', onClick: () => {
             store.moveCommand(confirm.commandId, confirm.beforeId, confirm.band, configId)
             // A drop onto a section of the other band files it there only now (D7).
@@ -1375,6 +1470,15 @@ export default function CommandBar({ sessionId, configId, sessionType = 'local',
             setConfirm(null)
           } }]}
           onCancel={() => setConfirm(null)}
+        />
+      )}
+      {confirm?.kind === 'broadcast' && confirmCmd && (
+        <ConfirmCard
+          testId="confirm-broadcast"
+          title={`Send to ${confirm.count} open session${confirm.count === 1 ? '' : 's'}?`}
+          body={<>Shift+click sends "{confirmCmd.label}" once to every open Claude Code and Codex session, SSH and background tabs included. Terminal-only tabs and Ask Conductor get nothing.</>}
+          actions={[{ label: 'Send', primary: true, testId: 'confirm-broadcast-ok', onClick: () => answerBroadcast(true) }]}
+          onCancel={() => answerBroadcast(false)}
         />
       )}
       {confirm?.kind === 'delete' && confirmCmd && (
@@ -1410,7 +1514,7 @@ export default function CommandBar({ sessionId, configId, sessionType = 'local',
           <ConfirmCard
             testId="confirm-section-band"
             title={`Move "${sec.name}" and its ${members.length} button${members.length === 1 ? '' : 's'} to ${confirm.band === 'global' ? 'Global' : 'Session'}?`}
-            body={confirm.band === 'global' ? <>They will show in every config.</> : <>They will show only in this config{configName ? ` (${configName})` : ''}.</>}
+            body={confirm.band === 'global' ? <>They will show in every config.</> : <>They will show only in this config{configName ? ` (${configName})` : ''}.{members.some((m) => m.broadcast) ? ' Any that send to every open session stop doing so.' : null}</>}
             actions={[{ label: 'Move', primary: true, testId: 'confirm-section-band-ok', onClick: () => {
               updateSection(sec.id, { scope: confirm.band === 'global' ? 'global' : 'config', configId: confirm.band === 'global' ? undefined : configId })
               for (const m of members) store.moveCommand(m.id, null, confirm.band, configId)

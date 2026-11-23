@@ -84,6 +84,20 @@ describe('moveCommand -- across bands is the confirmed scope change', () => {
     expect(byId('o1').order).toBe(0)
     expect(byId('o1').configId).toBe('other')
   })
+
+  it('#399: Global → Session ends "Send to every open session", so a move back to Global does not bring it back unasked', () => {
+    useCommandStore.getState().updateCommand('g2', { broadcast: true })
+    useCommandStore.getState().moveCommand('g2', null, 'config', 'cfg')
+    expect(byId('g2').broadcast).toBeUndefined()
+    useCommandStore.getState().moveCommand('g2', null, 'global')
+    expect(byId('g2').broadcast).toBeUndefined()
+  })
+
+  it('#399: a move within the Global band keeps it', () => {
+    useCommandStore.getState().updateCommand('g2', { broadcast: true })
+    useCommandStore.getState().moveCommand('g2', 'g1', 'global')
+    expect(byId('g2').broadcast).toBe(true)
+  })
 })
 
 describe('setCommandSection', () => {
