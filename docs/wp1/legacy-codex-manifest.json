@@ -1,8 +1,8 @@
 {
   "schema": "wp1-legacy-codex-manifest/3",
-  "generatedAt": "2026-11-22T18:25:37.712Z",
-  "head": "5737dcde7df3a70e422ac8ded941590ed9ffe335",
-  "tree": "8b8575d6efd05aee824947ac9b2bf178ded30d0b",
+  "generatedAt": "2026-11-23T04:39:16.698Z",
+  "head": "12713dd508600811bd1b63e02de617aefb1e9d56",
+  "tree": "1c94879862e87e86bb1100923b98b1d5729d8a53",
   "scannedWorkingTree": false,
   "predicateDigest": "100a1233edebdc39a5f9004d3fba980a89ebb15b25872e52076386bc84b03153",
   "predicates": [
@@ -116,9 +116,9 @@
     "\\.(png|jpg|jpeg|gif|ico|icns|webp|svg|woff2?|ttf|otf|mp4|zip|asar|node|exe|dll|dylib|so|pdf)$",
     "^package-lock\\.json$"
   ],
-  "trackedFileCount": 3713,
-  "excludedFileCount": 577,
-  "scannedFileCount": 3136,
+  "trackedFileCount": 3728,
+  "excludedFileCount": 581,
+  "scannedFileCount": 3147,
   "unscopedFileCount": 15,
   "unscoped": [
     ".claude/settings.json",
@@ -139,8 +139,8 @@
   ],
   "unscopedMentions": [],
   "unreadable": [],
-  "matchedPathCount": 1062,
-  "pathDigest": "53a8b1bd7cf940baad9c10d2dc6a4b5af68939267dfdd5c872f500a74ca36ded",
+  "matchedPathCount": 1063,
+  "pathDigest": "f5f9aac694736574badba0470f1296de5bee206546fd74d409b9e7084c8c3e86",
   "entries": [
     {
       "path": ".github/workflows/ci.yml",
@@ -2673,7 +2673,7 @@
         "P07",
         "P11"
       ],
-      "lineCount": 53
+      "lineCount": 56
     },
     {
       "path": "src/renderer/components/TitleBar.tsx",
@@ -5955,7 +5955,7 @@
       "predicates": [
         "P13"
       ],
-      "lineCount": 20
+      "lineCount": 23
     },
     {
       "path": "tests/unit/main/session-helper-app-wiring.test.ts",
@@ -8020,6 +8020,13 @@
         "P13"
       ],
       "lineCount": 154
+    },
+    {
+      "path": "tests/unit/renderer/terminalview-console-repaint.test.tsx",
+      "predicates": [
+        "P13"
+      ],
+      "lineCount": 7
     },
     {
       "path": "tests/unit/renderer/tip-card-e5.test.tsx",

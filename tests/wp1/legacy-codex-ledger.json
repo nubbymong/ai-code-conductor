@@ -1,8 +1,8 @@
 {
   "schema": "wp1-legacy-codex-ledger/2",
   "predicateDigest": "100a1233edebdc39a5f9004d3fba980a89ebb15b25872e52076386bc84b03153",
-  "manifestPathDigest": "53a8b1bd7cf940baad9c10d2dc6a4b5af68939267dfdd5c872f500a74ca36ded",
-  "manifestHead": "5737dcde7df3a70e422ac8ded941590ed9ffe335",
+  "manifestPathDigest": "f5f9aac694736574badba0470f1296de5bee206546fd74d409b9e7084c8c3e86",
+  "manifestHead": "12713dd508600811bd1b63e02de617aefb1e9d56",
   "dispositions": {
     "retain": "unchanged observable behaviour, characterization proof",
     "move": "moved behind a package boundary and/or adapted at the call site, regression proof (newPath when relocated)",
@@ -11420,6 +11420,16 @@
       "disposition": "added",
       "evidence": "WP2 commit 6c launch path and restart menu (WP1.42); tests/unit/renderer/terminalview-account-launch.test.tsx; WP2 provider-off enforcement (main refuses every launch of a provider that is off; WP1.60 enable/disable): a refused restore or Restart says why in the tab and keeps the session; no sign-in question, account picker or Connecting card while the provider is off; tests/unit/renderer/terminalview-account-launch.test.tsx; WP2 PR 3 P3.6 (row 22): the Switch account note is said once, dimmed, without control characters (WP1.68); WP2 PR 3 P3.8 round 1 (rows 61, 69) added the Plan mode wait and screen registration cases (WP1.68); WP2 PR 3 P3.8 round 2: the Plan mode note case (WP1.68); WP2 PR 3 P3.8 round 3 added the launched-preset and context-left cases (WP1.68); WP2 PR 3 P3.15 round 1 (the spec, code-quality and ADR-009 lens findings, and the VM re-check) (WP1.68): an exit with no known code reads \"[Process exited]\"; tests/unit/renderer/terminalview-account-launch.test.tsx",
       "note": "drives the real TerminalView launch path"
+    },
+    {
+      "path": "tests/unit/renderer/terminalview-console-repaint.test.tsx",
+      "predicates": [
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "new 2.1.3-beta.15 section A1 test (aicc_planning#394) (tests/unit/renderer/terminalview-console-repaint.test.tsx): on Windows a plain terminal's output goes through the console repaint aligner and each size the view sends tells it first; a held terminal's replay at the holder's size is written as it came and the fit after it tells the aligner; a local Codex session (the console host the app ships) and macOS and Linux write straight into the terminal (WP1.68)",
+      "note": "created by 2.1.3-beta.15 section A1; the real TerminalView with a stand-in aligner, nothing started"
     },
     {
       "path": "tests/unit/renderer/tip-card-e5.test.tsx",
