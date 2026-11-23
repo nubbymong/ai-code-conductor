@@ -20,9 +20,11 @@ aicc_planning#397 (beta.15 scope item 6) and #388's hand-built item.
   line names what went.
 - **No overlap with a switch turned on.** The clean-up's promise is kept in
   app-wiring.ts; a manager made later in the run gets it as `copyAfter`, and
-  its install waits for it before it copies. The clean-up removes nothing once
-  a manager exists (its `stop`). Either alone keeps the copy; the tests break
-  each one alone.
+  its install waits for it before it copies: that wait alone keeps the copy
+  in every order. The clean-up also begins no removal once a manager exists
+  (its `stop`, asked before the listing and once after it), which alone keeps
+  the copy only when the manager was made before the listing came back. The
+  tests break each one alone.
 - **An unreadable settings file removes nothing.** routing() reads it as both
   off, so the clean-up reads the file again with readConfigChecked (never
   moving it aside): only `ok` or `absent` with both off lets it remove.

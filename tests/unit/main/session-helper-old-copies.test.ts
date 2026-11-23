@@ -18,7 +18,9 @@
 //     stays;
 //  5. the manager's copy waits for the clean-up (deps.copyAfter), so a
 //     clean-up that removes this build's folder never removes the copy made
-//     in the same run.
+//     in the same run;
+//  6. a staging folder alone (a failed copy, then both switches off) is
+//     enough to start the clean-up, and it goes.
 //
 // Not checked here: the manager's clean-up with a switch on (bringUp), which
 // is as before (session-helper-manager.test.ts, session-helper-install.test.ts).
@@ -196,5 +198,12 @@ describe('the start-up clean-up of old helper copies with both switches off', ()
     await until(() => m.serviceState().state === 'ready', 'the helper to be ready')
     expect(existsSync(join(root, THIS_BUILD, 'aicc-helper.exe'))).toBe(true)
     expect(names()).toContain(THIS_BUILD)
+  })
+
+  it('6. a staging folder alone is enough: the holders are listed once, and the folder goes', async () => {
+    folder('.new-0123456789ab')
+    expect(await cleanUp()).toEqual(['.new-0123456789ab'])
+    expect(listCalls()).toHaveLength(1)
+    expect(names()).toEqual([])
   })
 })

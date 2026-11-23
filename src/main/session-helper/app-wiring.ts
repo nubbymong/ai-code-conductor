@@ -70,8 +70,9 @@ const bundledPath = (): string => bundledHelperPath({ isPackaged: app.isPackaged
  * The start-up clean-up of old helper copies (2.1.3-beta.15, plan section B1,
  * aicc_planning#397), begun by a start with both settings off: null when
  * none began. A manager made later in the same run (a setting turned on)
- * makes its copy only once this has ended (its copyAfter), and the clean-up
- * removes nothing once a manager exists. Never rejects.
+ * makes its copy only once this has ended (its copyAfter), which alone keeps
+ * that copy in every order; the clean-up also begins no removal once a
+ * manager exists (asked before its listing and once after). Never rejects.
  */
 let oldCopiesCleanUp: Promise<void> | null = null
 

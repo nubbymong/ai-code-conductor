@@ -277,9 +277,10 @@ export function bindCodexLease(sessionId: string, lease: AccountLease): void {
  * 2.1.3-beta.14 B2 (aicc_planning#388): a run the session helper may hold
  * (its terminal is a HelperPty) is read from its holder's screen when, at its
  * first byte, that terminal is on a holder whose connection reads the screen
- * (HelperPty.screenRead); then no pane is opened for it. Otherwise, and for a
- * run node-pty started, the pane, as before: one opened at the first byte
- * still has every byte of the run's output.
+ * and its title (HelperPty.screenRead; the title from 2.1.3-beta.15); then no
+ * pane is opened for it. Otherwise, and for a run node-pty started, the pane,
+ * as before: one opened at the first byte still has every byte of the run's
+ * output.
  */
 export function bindCodexPane(binding: CodexPaneBinding): ColorQueryResponder {
   const { ptySessions } = ports()

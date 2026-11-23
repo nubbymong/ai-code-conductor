@@ -10,8 +10,10 @@
  * first. A held terminal no tab shows is listed on the Machines page, where
  * Re-attach opens a tab on it and End ends it. A normal quit ends every one.
  *
- * Off (the default), nothing here runs and every terminal starts exactly as
- * before: spawnPlainPty is then node-pty's own spawn with the same arguments.
+ * Off (the default), every terminal starts exactly as before: spawnPlainPty
+ * is then node-pty's own spawn with the same arguments. Nothing else here
+ * runs then, but for a start's clean-up of old helper copies (2.1.3-beta.15,
+ * below).
  * Only a terminal the renderer marks plain (a Terminal only tab, a partner
  * terminal) comes here: SSH sessions and the app's own shell tabs (a sign-in,
  * an install or update command, the first-run install terminal) never do.
@@ -89,6 +91,13 @@
  * connections for the holder's screen reads with the screen's title, and its
  * terminal hands out the read (HelperPty.screenRead): its composer rule reads
  * the holder's screen, and main opens no pane of its own for it.
+ *
+ * 2.1.3-beta.15 (plan section B1, aicc_planning#397): a start with both
+ * settings off, no running mark and no agent record makes no manager; it
+ * removes the old helper copies instead (removeOldCopiesWithHelperOff): the
+ * installed helper lists the holders once, and every version or staging
+ * folder no listed holder's version needs goes. A manager made later in that
+ * run copies only once that has ended (deps.copyAfter).
  */
 import { execFile } from 'child_process'
 import * as fs from 'fs'
