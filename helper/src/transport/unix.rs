@@ -123,11 +123,40 @@ pub struct Stream {
     inner: UnixStream,
 }
 
+/// A timeout set on a connection that has already ended both ways counts as
+/// set. macOS refuses to set any socket option on such a socket, with EINVAL
+/// (the peer closed it, or both halves were shut), where Linux sets the option.
+/// That socket never waits: a read gives what is still buffered, then the
+/// end of the stream, and a write fails at once. So the refusal is no error
+/// here, and the read or write that follows says how the connection ended,
+/// as it does on Linux (aicc_planning#396). It counts only when a read on
+/// the socket would not wait now; any other refusal is the error it was.
+#[cfg(target_vendor = "apple")]
+fn set_unless_ended(fd: RawFd, set: io::Result<()>) -> io::Result<()> {
+    match set {
+        Err(e) if e.raw_os_error() == Some(libc::EINVAL) && read_would_not_wait(fd) => Ok(()),
+        other => other,
+    }
+}
+
+#[cfg(not(target_vendor = "apple"))]
+fn set_unless_ended(_fd: RawFd, set: io::Result<()>) -> io::Result<()> {
+    set
+}
+
+/// True when a read on `fd` would return at once: bytes, the end of the
+/// stream, or an error.
+#[cfg(target_vendor = "apple")]
+fn read_would_not_wait(fd: RawFd) -> bool {
+    let mut p = libc::pollfd { fd, events: libc::POLLIN, revents: 0 };
+    unsafe { libc::poll(&mut p, 1, 0) > 0 }
+}
+
 impl Stream {
     fn new(inner: UnixStream) -> io::Result<Stream> {
         // For a plain `write` (a client's). The holder writes with
         // `write_all_within`, whose limit is for the whole message.
-        inner.set_write_timeout(Some(WRITE_TIMEOUT))?;
+        set_unless_ended(inner.as_raw_fd(), inner.set_write_timeout(Some(WRITE_TIMEOUT)))?;
         Ok(Stream { inner })
     }
 
@@ -137,8 +166,10 @@ impl Stream {
     }
 
     /// None waits for ever. A read that waited this long fails with a timeout.
+    /// On a connection that has ended both ways, where a read never waits,
+    /// this succeeds on every system (`set_unless_ended`).
     pub fn set_read_timeout(&mut self, timeout: Option<Duration>) -> io::Result<()> {
-        self.inner.set_read_timeout(timeout)
+        set_unless_ended(self.inner.as_raw_fd(), self.inner.set_read_timeout(timeout))
     }
 
     /// Write all of `buf` within `limit` in all, however slowly the peer
@@ -663,6 +694,52 @@ mod tests {
         served.join().unwrap();
     }
 
+    static REFUSED_FIRST_OF_TWO: AtomicBool = AtomicBool::new(false);
+
+    /// As `refuse_the_first`, with a flag of its own for the test below.
+    fn refuse_the_first_of_two(_uid: u32) -> bool {
+        REFUSED_FIRST_OF_TWO.swap(true, Ordering::SeqCst)
+    }
+
+    /// Wait until a read on `fd` would not wait, at most 10 seconds.
+    fn wait_until_readable(fd: RawFd) {
+        let mut p = libc::pollfd { fd, events: libc::POLLIN, revents: 0 };
+        let n = unsafe { libc::poll(&mut p, 1, 10_000) };
+        assert_eq!(n, 1, "the listener did not close the refused peer in 10 seconds");
+    }
+
+    /// The test above in the order that raced on macOS (aicc_planning#396):
+    /// the listener has already closed the refused peer when that peer sets
+    /// its timeouts. macOS refuses to set any socket option on a connection that
+    /// has ended both ways (EINVAL); the peer still becomes a stream, takes
+    /// its read timeout and reads the end, as it does on Linux.
+    #[test]
+    fn a_peer_closed_before_it_sets_its_timeouts_still_reads_the_end() {
+        let mut l = Listener::bind("transport-peer-02").unwrap();
+        l.peer_ok = refuse_the_first_of_two;
+        let l = Arc::new(l);
+        let server = Arc::clone(&l);
+        let served = std::thread::spawn(move || {
+            let mut s = server.accept().expect("the second peer is served");
+            s.write_all_within(b"served", Duration::from_secs(5)).expect("write");
+            s.close_after_writes();
+        });
+        // The first peer's socket as `connect` opens it (`connect_within`; the
+        // check of the peer's user id that `connect` makes next is left out),
+        // held back before its first timeout until the listener has closed it.
+        let raw = connect_within(Path::new(l.endpoint()), Duration::from_secs(5)).expect("connect");
+        wait_until_readable(raw.as_raw_fd());
+        let mut first = Stream::new(raw).expect("a connection the listener closed is still a stream");
+        first.set_read_timeout(Some(Duration::from_secs(10))).expect("a connection the listener closed takes a read timeout");
+        let mut buf = [0u8; 16];
+        assert_eq!(first.read(&mut buf).expect("read"), 0, "a refused peer was written to");
+        let mut second = connect(l.endpoint(), Duration::from_secs(5)).expect("connect");
+        second.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+        let n = second.read(&mut buf).expect("read");
+        assert_eq!(&buf[..n], b"served");
+        served.join().unwrap();
+    }
+
     #[test]
     fn a_run_folder_is_made_0700_and_a_loose_one_is_tightened() {
         let dir = scratch("dir");
@@ -679,6 +756,9 @@ mod tests {
     fn a_link_or_a_file_in_place_of_the_run_folder_is_refused() {
         let target = scratch("target");
         fs::create_dir(&target).unwrap();
+        // Its mode set outright: the lib tests share one umask, which a bind
+        // beside this test sets to 0177 for a moment (`bind_private`).
+        fs::set_permissions(&target, fs::Permissions::from_mode(0o700)).unwrap();
         let link = scratch("link");
         std::os::unix::fs::symlink(&target, &link).unwrap();
         assert!(prepare_run_dir(&link).is_err(), "a link to a folder");
