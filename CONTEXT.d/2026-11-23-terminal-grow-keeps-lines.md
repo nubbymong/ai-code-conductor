@@ -1,0 +1,33 @@
+## 2026-11-23 -- A Windows terminal that grows keeps its last lines
+
+Plan 2.1.3-beta.15, section A1.1 (aicc_planning#394). beta.15 M1 measured the loss on the
+published beta.14 (WINDOWS_1, Windows 11 build 22621, 10,000 lines of `long N ` and 250 `y` in a
+plain terminal): every grow lost lines (103x27 to 140x27 to 140x28: line 9993 follows line 9987,
+4 of 4 with both helper switches off, 3 of 3 held), going narrower lost none. xterm.js's
+`windowsPty` option did not cure it: with a build number of 21376 or more it changes nothing, and
+below that (xterm.js stops re-wrapping) the grow was whole but a narrowed window cut every old long
+line and lost three lines (M1 hold 2).
+
+- **The cause, read from M1's recorded streams.** The console built into Windows keeps only the
+  rows on its screen. After a resize it re-wraps them and paints its whole screen again, from its
+  own top row down (`ESC[?25l ESC[H`, the rows, the cursor, `ESC[?25h`). On a grow xterm.js keeps
+  its cursor row and pulls older rows down from its scrollback, while the console's lines move up
+  and leave blank rows below, so the paint lands 8 rows too high on xterm.js's older lines. The
+  console's top row is also often the end of a line whose start has left its screen; it paints that
+  end as a line of its own, over the whole line xterm.js holds there.
+- **The fix** (`src/renderer/components/terminal/consoleRepaint.ts`, wired in TerminalView.tsx). On
+  Windows, for a terminal on the console built into Windows (a local Codex session runs on the
+  console host the app ships and is left as it was), the console's paint that comes within 2 s of a
+  size the view sends is written where its lines are: every line but its top one is matched against
+  xterm.js's rows first, then the rows are scrolled up until the paint's second line lands where
+  xterm.js holds it, and the top line is not written over the whole line it is the end of. A paint
+  that does not match is written as it came. Every write to the terminal goes through it, so output
+  keeps its order.
+- **Tests.** `tests/unit/renderer/console-repaint-after-resize.test.ts` writes M1's recorded streams
+  (`console-repaint-streams.ts`: the tail of each run, the resizes, the console's paints) into
+  @xterm/headless 6.0.0 with the renderer's options: today's path gives M1's VM readings line for
+  line (three grows lose lines, the narrowing keeps them), the aligner keeps every line on all four.
+  `terminalview-console-repaint.test.tsx` checks the wiring: Windows only, not a local Codex
+  session.
+- **Not measured:** any Windows build other than 22621, and the console host the app ships. The VM
+  line on A1's head reads the live grow, a Claude Code tab and a Codex tab.

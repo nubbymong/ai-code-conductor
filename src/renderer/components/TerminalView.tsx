@@ -9,6 +9,7 @@ import { installWebglWithRecovery, createAtlasResync, type WebglHandle } from '.
 import { onFontsReady, terminalFontOptions, terminalFontReady, terminalFontSpecs, waitForTerminalFont, type CancelFontWait } from './terminal/terminalFont'
 import { atlasCoordinator } from './terminal/atlasCoordinator'
 import { createHiddenOutputQueue, type HiddenOutputQueue } from './terminal/hiddenOutputQueue'
+import { consoleRepaintApplies, createConsoleRepaintAligner, type ConsoleRepaintAligner } from './terminal/consoleRepaint'
 import {
   createStaleGlyphRepainter,
   shouldRepaintOnOutput,
@@ -568,6 +569,11 @@ export default function TerminalView({ sessionId, configId, cwd, shellOnly, elev
     /** aicc_planning#303: this run's output queue (hiddenOutputQueue), made
      *  with the terminal in initTerminal. */
     let hiddenOutput: HiddenOutputQueue | null = null
+    /** aicc_planning#394: on Windows, the console's paint after a size this
+     *  view sends is written where the terminal holds its lines
+     *  (terminal/consoleRepaint.ts). Null where it does not apply. Every write
+     *  to the terminal goes through it, so output stays in order. */
+    let consoleRepaint: ConsoleRepaintAligner | null = null
     /** P3.8 round 1 (L2): a Plan mode launch's wait for the ready composer. */
     let planModeWait: { cancel: () => void } | null = null
     /** #313: the pending font wait (before the terminal is built, then before
@@ -626,7 +632,10 @@ export default function TerminalView({ sessionId, configId, cwd, shellOnly, elev
     // after the line (the session marked ended or never started) must still
     // run, so the line is lost instead.
     const writeAppLine = (line: string) => {
-      try { term?.writeln(line) } catch (err) { console.warn('[TerminalView] xterm refused a line', err) }
+      try {
+        if (consoleRepaint) consoleRepaint.write(`${line}\r\n`)
+        else term?.writeln(line)
+      } catch (err) { console.warn('[TerminalView] xterm refused a line', err) }
     }
 
     // The session's PTY is gone (or never started). `line` is what the
@@ -744,6 +753,11 @@ export default function TerminalView({ sessionId, configId, cwd, shellOnly, elev
         // dark rendering is unchanged. Kept in lockstep on theme flips below.
         minimumContrastRatio: document.documentElement.getAttribute('data-theme') === 'light' ? 4.5 : 1,
       })
+      // aicc_planning#394: a local Codex session runs on the console host the
+      // app ships (main's bundled-conpty.ts), not the one built into Windows.
+      consoleRepaint = consoleRepaintApplies({ platform: window.electronPlatform, shipsOwnConsole: provider === 'codex' && !shellOnly })
+        ? createConsoleRepaintAligner(term, { now: () => performance.now() })
+        : null
 
       fitAddon = new FitAddon()
       term.loadAddon(fitAddon)
@@ -891,6 +905,7 @@ export default function TerminalView({ sessionId, configId, cwd, shellOnly, elev
         getGeometry: () => ({ cols: term?.cols ?? 0, rows: term?.rows ?? 0 }),
         resizePty: (c, r) => {
           ptyResizeCount += 1
+          consoleRepaint?.noteResize()
           try { window.electronAPI.pty.resize(sessionId, c, r) } catch { /* main gone */ }
         },
         refresh: () => { try { term?.refresh(0, (term?.rows ?? 1) - 1) } catch { /* disposed */ } },
@@ -1584,7 +1599,8 @@ export default function TerminalView({ sessionId, configId, cwd, shellOnly, elev
           baseY: preWriteBuf?.baseY ?? 0,
         })
 
-        if (term) term.write(filtered, parsed)
+        if (consoleRepaint) consoleRepaint.write(filtered, parsed)
+        else if (term) term.write(filtered, parsed)
         else parsed?.()
 
         if (follow.scrollToBottom) term?.scrollToBottom()
@@ -1680,6 +1696,7 @@ export default function TerminalView({ sessionId, configId, cwd, shellOnly, elev
             if (c > 0 && r > 2) {
               ptyResizeCount += 2
               resumeNudgeShrunk = true
+              consoleRepaint?.noteResize()
               window.electronAPI.pty.resize(sessionId, c, r - 1)
               resumeNudgeRestoreTimer = setTimeout(() => {
                 resumeNudgeRestoreTimer = null
@@ -1689,6 +1706,7 @@ export default function TerminalView({ sessionId, configId, cwd, shellOnly, elev
                 // the 60ms shrink window, and restoring the stale capture would
                 // stomp it — PTY and xterm would disagree until the next resize.
                 const c2 = term.cols, r2 = term.rows
+                consoleRepaint?.noteResize()
                 window.electronAPI.pty.resize(sessionId, c2, r2)
                 lastSentCols = c2
                 lastSentRows = r2
@@ -1745,6 +1763,7 @@ export default function TerminalView({ sessionId, configId, cwd, shellOnly, elev
               // this: they fire in already-streaming flows where the pill is
               // lit anyway, while the main-side grace still covers the moon.)
               noteActivityGrace(sessionId)
+              consoleRepaint?.noteResize()
               window.electronAPI.pty.resize(sessionId, cols, rows)
               reportIntegrity()
             }
