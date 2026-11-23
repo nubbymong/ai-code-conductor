@@ -63,8 +63,10 @@ describe('snapEngineFor: Windows takes the saved choice or the default; macOS an
     expect(snapEngineFor('win32', 'something else')).toBe(SNAP_ENGINE_DEFAULT_WINDOWS)
   })
 
-  it('in this step the default is the previous Snap (the new one is a choice until the cutover)', () => {
-    expect(SNAP_ENGINE_DEFAULT_WINDOWS).toBe('previous')
+  it('the default on Windows is the new Snap (S8 step 3), and a saved Previous is kept', () => {
+    expect(SNAP_ENGINE_DEFAULT_WINDOWS).toBe('new')
+    expect(snapEngineFor('win32', undefined)).toBe('new')
+    expect(snapEngineFor('win32', 'previous')).toBe('previous')
   })
 
   it('on macOS and Linux: the previous Snap, whatever is saved', () => {
@@ -84,10 +86,15 @@ describe('the Snap handler: the new engine reaches captureRectangle only on Wind
     expect(await press('win32')).toBe(true)
   })
 
-  it('Windows, Previous saved or nothing saved: the package, as today', async () => {
-    SAVED = 'previous'
-    expect(await press('win32')).toBe(false)
+  it('Windows, nothing saved (or something that is not a choice): the new engine, the default', async () => {
     SAVED = undefined
+    expect(await press('win32')).toBe(true)
+    SAVED = 'New'
+    expect(await press('win32')).toBe(true)
+  })
+
+  it('Windows, Previous saved: the package, and the saved choice is kept over the default', async () => {
+    SAVED = 'previous'
     expect(await press('win32')).toBe(false)
   })
 

@@ -30,8 +30,9 @@ export function registerScreenshotHandlers(getWindow: () => BrowserWindow | null
   ipcMain.handle('screenshot:captureRectangle', async () => {
     const win = getWindow()
     if (!win) return null
-    // On Windows with the new Snap chosen, it runs first and hands any press it
-    // cannot do to the previous one (ADR-030 S8 step 2); elsewhere the previous.
+    // On Windows the new Snap, unless Previous is chosen: it runs first and
+    // hands any press it cannot do to the previous one (ADR-030 S8 steps 2
+    // and 3); elsewhere the previous.
     const useNew = snapEngineFor(platform, savedSnapChoice()) === 'new'
     return captureRectangle(win, undefined, useNew ? () => snapOnWindows(saveSnapPicture) : undefined)
   })

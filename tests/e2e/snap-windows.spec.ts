@@ -33,19 +33,31 @@
  *      path is typed into the tab; one line names the whole screen.
  *   D4 ESCAPE, 3 runs: Escape gives no file and types nothing; one line says
  *      cancelled; no overlay page is left and the button is usable again.
- *   D5 FORCED FAILURE, 3 runs: the test-only helper path names a helper that
+ *   D5 DEFAULT (S8 step 3): with no choice saved (magic-buttons.json without
+ *      snapEngineWindows), Snap, Rectangle opens the new Snap's overlay;
+ *      Escape; one line says cancelled.
+ *   D6 NOT LOADED BY THE NEW SNAP: neither main at start (R1) nor main after
+ *      D2 to D5's presses holds a file of the previous Snap's package
+ *      (electron-screenshots) or its native add-on (node-screenshots).
+ *   D7 FORCED FAILURE, 3 runs: the test-only helper path names a helper that
  *      is not there: the line says the helper could not start (ENOENT), the
  *      previous Snap opens and is cancelled.
- *   D6 PREVIOUS CHOSEN: no new-engine line; the previous Snap opens and is
+ *   D8 PREVIOUS CHOSEN: no new-engine line; the previous Snap opens and is
  *      cancelled.
- *   D7 HELPER DIRECT: the built helper's capture, run once from the test, has
+ *   D9 LOADED BY ITS FIRST PRESS: after D7 and D8, main holds the package's
+ *      files and its native add-on (R2).
+ *   D10 HELPER DIRECT: the built helper's capture, run once from the test, has
  *      each picture's size equal its header and the line, each matched to one
  *      of Electron's displays by physical bounds and scale.
- * READINGS (recorded, not decided): R1, what main has loaded once the app has
- *   started (before any press of the previous Snap): the native add-ons (.node
- *   files, from main's module cache and from the process report) and the files
- *   of the previous Snap's package; R2, the same after the previous Snap's
- *   first press (D5). The basic-user capture is the job's step before this one
+ * READINGS (recorded): R1, what main has loaded once the app has started and
+ *   its tab runs (before any press): the native add-ons (.node files, from
+ *   main's module cache and from the process report) and the files of the
+ *   previous Snap's package; R2, the same after the previous Snap's presses
+ *   (D7, D8). Before the cutover, with the package imported at main's start
+ *   (run 45271463233 on 3e690893): R1 held 36 files of the package and one
+ *   native add-on (node-pty's conpty.node); R2 held the same 36 and a second
+ *   add-on, node-screenshots, which the package loads at its first capture.
+ *   The basic-user capture is the job's step before this one
  *   (scripts/ci/snap-basic-user.mjs).
  *
  * TIMEOUTS, set once from the readings and never raised to answer a red run
@@ -53,9 +65,12 @@
  * 2600 ms, tab 822 ms, the previous Snap's window 783 ms after the press,
  * cancelled in 157 ms, helper 58 ms; A1.1's head (run 45264100584): press to
  * the previous Snap's window 761 to 1050 ms, the helper in the app 66 to
- * 432 ms. Each bound is about ten times its reading. The save and the typing of
- * the path had no reading before this run: their bound is the press's own
- * (OVERLAY_MS), and this run reads them (enterToFileMs, fileToTypedMs).
+ * 432 ms. Each bound is about ten times its reading. Run 45271463233: the
+ * overlay on screen 218 to 378 ms after the press, Enter to the file 32 to
+ * 71 ms, the file to its path typed 13 to 63 ms (OVERLAY_MS bounds each), and
+ * the stand-in started on the tab's terminal 11.2 s after the tab's Snap
+ * button showed (PowerShell's cold start, then the launch line), within
+ * TAB_MS.
  * The readings go to the log and to $SNAP_E2E_OUT/readings.json.
  */
 import { test, expect, type ElectronApplication, type Page } from '@playwright/test'
@@ -501,8 +516,37 @@ test.describe('Snap on Windows', () => {
     })
   }
 
+  test('D5 DEFAULT: with no choice saved, a press uses the new Snap', async () => {
+    test.setTimeout(PRESS_TEST_MS)
+    const { dataDir } = ctx!
+    fs.writeFileSync(magicButtons(dataDir), JSON.stringify({ screenshotColor: '#00FFFF', autoDeleteDays: null }, null, 2))
+    try {
+      const before = jpegs()
+      const { overlay, from } = await pressNew()
+      await answer(overlay, () => overlay.keyboard.press('Escape'))
+      await expectOverlayGone()
+      await expect.poll(() => snapLines(from).length, { timeout: CANCEL_MS }).toBe(1)
+      expect(snapLines(from)[0]).toMatch(/^\[snap\] new engine: cancelled; the helper took \d+ ms; /)
+      expect(jpegs()).toEqual(before)
+    } finally {
+      chooseSnap(dataDir, 'new')
+    }
+  })
+
+  test('D6 NOT LOADED BY THE NEW SNAP: no file of the previous Snap\'s package, and not its add-on, at start or after the new Snap\'s presses', async () => {
+    const now = await loadedModules(ctx!.app)
+    readings.loadedAfterNew = now
+    const atStart = readings.loadedAtStart as Awaited<ReturnType<typeof loadedModules>>
+    for (const [when, r] of [['at start (R1)', atStart], ['after D2 to D5', now]] as const) {
+      expect(r.cacheRead, `${when}: main's module cache read`).toBe(true)
+      expect(r.packageFilesInCache, `${when}: files of electron-screenshots`).toEqual([])
+      expect(r.nativeInCache.filter((f) => /node-screenshots/i.test(f)), `${when}: node-screenshots in the cache`).toEqual([])
+      expect(r.nativeInReport.filter((f) => /node-screenshots/i.test(f)), `${when}: node-screenshots in the report`).toEqual([])
+    }
+  })
+
   for (let run = 1; run <= RUNS; run++) {
-    test(`D5 FORCED FAILURE run ${run}: a helper that is not there, and the previous Snap takes the press`, async () => {
+    test(`D7 FORCED FAILURE run ${run}: a helper that is not there, and the previous Snap takes the press`, async () => {
       test.setTimeout(PRESS_TEST_MS)
       const { app, dataDir } = ctx!
       const missing = path.join(dataDir, 'no-helper', 'aicc-helper.exe')
@@ -518,7 +562,7 @@ test.describe('Snap on Windows', () => {
     })
   }
 
-  test('D6 PREVIOUS CHOSEN: no new-engine line, and the previous Snap opens', async () => {
+  test('D8 PREVIOUS CHOSEN: no new-engine line, and the previous Snap opens', async () => {
     test.setTimeout(PRESS_TEST_MS)
     const { dataDir } = ctx!
     chooseSnap(dataDir, 'previous')
@@ -536,7 +580,14 @@ test.describe('Snap on Windows', () => {
     console.log(`[snap-e2e] R2 loaded after the previous Snap ${JSON.stringify(readings.loadedAfterPrevious)}`)
   })
 
-  test('D7 HELPER DIRECT: each picture at its physical size, matched to one of Electron\'s displays by bounds and scale', async () => {
+  test('D9 LOADED BY ITS FIRST PRESS: after the previous Snap\'s presses, main holds the package and its add-on', async () => {
+    const r = readings.loadedAfterPrevious as Awaited<ReturnType<typeof loadedModules>>
+    expect(r.cacheRead, 'main\'s module cache read').toBe(true)
+    expect(r.packageFilesInCache.length, 'files of electron-screenshots').toBeGreaterThan(0)
+    expect(r.nativeInCache.filter((f) => /node-screenshots/i.test(f)).length, 'node-screenshots in the cache').toBe(1)
+  })
+
+  test('D10 HELPER DIRECT: each picture at its physical size, matched to one of Electron\'s displays by bounds and scale', async () => {
     test.setTimeout(PRESS_TEST_MS)
     const folder = fs.mkdtempSync(path.join(OUT, 'capture-'))
     try {

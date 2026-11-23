@@ -61,13 +61,13 @@ afterEach(() => {
 })
 
 describe('Snap on Windows: New / Previous', () => {
-  it('is in the Snap card on Windows, with nothing saved showing the default (Previous in this step)', () => {
+  it('is in the Snap card on Windows, with nothing saved showing the default, New (S8 step 3)', () => {
     setPlatform('win32')
     render()
     const group = container.querySelector('[data-testid="settings-snap"] [role="radiogroup"][aria-label="Snap on Windows"]')
     expect(group).not.toBeNull()
-    expect(q('settings-snap-engine-new')!.checked).toBe(false)
-    expect(q('settings-snap-engine-previous')!.checked).toBe(true)
+    expect(q('settings-snap-engine-new')!.checked).toBe(true)
+    expect(q('settings-snap-engine-previous')!.checked).toBe(false)
     expect(container.querySelector('[data-testid="settings-snap-engine"]')!.textContent).toContain('If the new one cannot take a picture, the previous one opens instead.')
   })
 
@@ -75,19 +75,20 @@ describe('Snap on Windows: New / Previous', () => {
     setPlatform('win32')
     render()
     expect(saveConfigNow).not.toHaveBeenCalled()
-    act(() => { q('settings-snap-engine-new')!.click() })
-    expect(useMagicButtonStore.getState().settings.snapEngineWindows).toBe('new')
-    expect(saveConfigNow).toHaveBeenLastCalledWith('magicButtons', expect.objectContaining({ snapEngineWindows: 'new', screenshotColor: '#00FFFF' }))
-    expect(q('settings-snap-engine-new')!.checked).toBe(true)
     act(() => { q('settings-snap-engine-previous')!.click() })
     expect(useMagicButtonStore.getState().settings.snapEngineWindows).toBe('previous')
+    expect(saveConfigNow).toHaveBeenLastCalledWith('magicButtons', expect.objectContaining({ snapEngineWindows: 'previous', screenshotColor: '#00FFFF' }))
+    expect(q('settings-snap-engine-previous')!.checked).toBe(true)
+    act(() => { q('settings-snap-engine-new')!.click() })
+    expect(useMagicButtonStore.getState().settings.snapEngineWindows).toBe('new')
   })
 
-  it('a saved choice is shown as saved', () => {
+  it('a saved Previous is shown as saved, over the default', () => {
     setPlatform('win32')
-    useMagicButtonStore.setState({ settings: { screenshotColor: '#00FFFF', autoDeleteDays: null, snapEngineWindows: 'new' }, isLoaded: true })
+    useMagicButtonStore.setState({ settings: { screenshotColor: '#00FFFF', autoDeleteDays: null, snapEngineWindows: 'previous' }, isLoaded: true })
     render()
-    expect(q('settings-snap-engine-new')!.checked).toBe(true)
+    expect(q('settings-snap-engine-previous')!.checked).toBe(true)
+    expect(q('settings-snap-engine-new')!.checked).toBe(false)
   })
 
   it('is not shown on macOS or Linux, where Snap is the previous one only', () => {

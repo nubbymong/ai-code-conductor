@@ -2,7 +2,9 @@ import { BrowserWindow, desktopCapturer, dialog, nativeImage, shell, systemPrefe
 import { join } from 'path'
 import { mkdirSync, existsSync, readdirSync, statSync, unlinkSync, writeFileSync } from 'fs'
 import { randomBytes } from 'crypto'
-import Screenshots from 'electron-screenshots'
+// A type only: the package itself is loaded by the first press that uses it
+// (loadPreviousSnap below), never at main's start (ADR-030 S8 step 3).
+import type Screenshots from 'electron-screenshots'
 
 import { getResourcesDirectory } from './ipc/setup-handlers'
 import { isReapableImageFile } from './clipboard-file'
@@ -56,7 +58,9 @@ const SCREENSHOT_MAX_DIM = 1920
 const SCREENSHOT_JPEG_QUALITY = 85
 
 /**
- * Capture a rectangle region of the screen.
+ * The previous Snap's capture of a rectangle region of the screen: Snap on
+ * macOS and Linux; on Windows a setting away (the new Snap is the default)
+ * and the one that takes any press the new Snap cannot do.
  *
  * Backed by `electron-screenshots` — a maintained library that handles
  * the platform-specific stuff (multi-monitor, taskbar coverage, focus
@@ -71,9 +75,22 @@ const SCREENSHOT_JPEG_QUALITY = 85
 let captureInProgress = false
 let screenshotsInstance: Screenshots | null = null
 
-function getScreenshotsInstance(): Screenshots {
+/**
+ * The previous Snap's package, loaded the first time a press uses it: on
+ * Windows, where the new Snap is the default, only a press with Previous
+ * chosen or one the new Snap hands on; on macOS and Linux, the first press.
+ * So main does not load it, or what it loads, at start (ADR-030 S8 step 3).
+ * A load that fails rejects, and the press answers nothing (captureRectangle).
+ */
+async function loadPreviousSnap(): Promise<typeof Screenshots> {
+  const loaded = await import('electron-screenshots')
+  return ((loaded as { default?: typeof Screenshots }).default ?? loaded) as typeof Screenshots
+}
+
+async function getScreenshotsInstance(): Promise<Screenshots> {
   if (!screenshotsInstance) {
-    screenshotsInstance = new Screenshots({
+    const PreviousSnap = await loadPreviousSnap()
+    screenshotsInstance = new PreviousSnap({
       // singleWindow=false (default) gives a separate overlay per
       // display, so a 3-monitor setup doesn't end up with the live
       // taskbars of monitors 2/3 showing under the overlay on
@@ -157,11 +174,11 @@ export type NewSnapOutcome =
  * in its start) answers null, so it never reaches the uncaught-exception
  * handler. `permission` is a parameter for tests; the app passes none.
  *
- * `newEngine` is the new Snap (ADR-030 S8 step 2), given by the IPC handler
- * on Windows when it is the chosen one (src/shared/snap-engine.ts): it runs
- * first, and when it answers `previous` (anything it could not do, or a throw)
- * the previous Snap takes the press. Cancelled, or no desktop to capture
- * (exit 3): nothing.
+ * `newEngine` is the new Snap (ADR-030 S8 steps 2 and 3), given by the IPC
+ * handler on Windows unless Previous is chosen (src/shared/snap-engine.ts: the
+ * default is the new one): it runs first, and when it answers `previous`
+ * (anything it could not do, or a throw) the previous Snap takes the press.
+ * Cancelled, or no desktop to capture (exit 3): nothing.
  */
 export async function captureRectangle(mainWindow: BrowserWindow, permission?: ScreenPermissionDeps, newEngine?: () => Promise<NewSnapOutcome>): Promise<string | null> {
   if (captureInProgress) return null
@@ -188,30 +205,28 @@ export async function captureRectangle(mainWindow: BrowserWindow, permission?: S
   }
 }
 
-function runRectangleCapture(): Promise<string | null> {
+async function runRectangleCapture(): Promise<string | null> {
+  let library: Screenshots
+  try {
+    library = await getScreenshotsInstance()
+  } catch (err) {
+    // The package failed to load (its first press) or to start.
+    console.error('[screenshot] the capture library could not start:', err)
+    return null
+  }
   return new Promise<string | null>((resolve) => {
-    let screenshots: Screenshots | null = null
     let settled = false
 
     const finish = (result: string | null) => {
       if (settled) return
       settled = true
       try {
-        screenshots?.removeAllListeners('ok')
-        screenshots?.removeAllListeners('cancel')
-        screenshots?.removeAllListeners('save')
+        library.removeAllListeners('ok')
+        library.removeAllListeners('cancel')
+        library.removeAllListeners('save')
       } catch { /* a listener that cannot be removed leaves nothing to answer */ }
       resolve(result)
     }
-
-    try {
-      screenshots = getScreenshotsInstance()
-    } catch (err) {
-      console.error('[screenshot] the capture library could not start:', err)
-      finish(null)
-      return
-    }
-    const library = screenshots
 
     const handleBuffer = (buffer: Buffer) => {
       try {
