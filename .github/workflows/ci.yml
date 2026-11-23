@@ -912,7 +912,8 @@ jobs:
   # capture mode write each display's picture, at its size and scale, in time?
   # The Windows test machine could not measure it (nobody is signed in on its
   # console), so the GitHub Windows runner, whose session has a display, takes
-  # the reading: the helper is built here (release, --locked), then
+  # the reading: the helper is built here (release, --locked) and its imports
+  # checked as the Helper job checks them, then
   # helper/probes/p21-capture.cjs `measure --session console` runs it three times
   # and `verdict` prints the lines. The SSH half is not run here (the runner has
   # no SSH session); WINDOWS_1's reading of it stands, and `verdict` is told so
@@ -922,7 +923,8 @@ jobs:
   # It runs ONLY on a dispatch that names it (`probe_p21`), never on a pull
   # request or a push, and is not a required check. It is a measurement: it is
   # green whenever the probe ran to its end, whatever the verdict says; it is red
-  # only when the probe could not run (the lines say why). It only reads: no
+  # only when the probe could not run (the lines say why) or the program it built
+  # fails the import check. It only reads: no
   # secret, read-only permissions, no npm package installed (the probe uses
   # node's own modules), the actions pinned by commit like the Helper job's.
   # Each run's pictures are read and deleted at once by the probe; what is uploaded as
@@ -959,6 +961,12 @@ jobs:
         shell: bash
         working-directory: helper
         run: cargo build --locked --release --bin aicc-helper
+
+      # The same import check as the Helper job's (scripts/check-pe-imports.mjs):
+      # the program measured here carries its own C runtime and delay-loads the
+      # window-manager DLLs the capture mode uses, as the shipped one does.
+      - name: Check the helper carries its own C runtime
+        run: node scripts/check-pe-imports.mjs helper/target/release/aicc-helper.exe
 
       # `measure` exits 0 when it ran to its end and 2 when it could not run; the
       # verdict is read from the readings after it. The lines go to the log and to
