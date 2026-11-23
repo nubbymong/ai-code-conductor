@@ -2113,6 +2113,7 @@ FunctionEnd
 ; The app-running check's own macros (customCheckAppRunning, both passes).
 ; They use the process macros above, and declare no Var and no Function, so
 ; neither pass has anything new for -WX to warn about.
+; CccNextPair is shared: CccEndListed (the helper clean-up, above) reads its pid:start list through it too.
 ; ------------------------------------------------------------
 
 ; Reads the next "a:b," entry of ${LIST}, a list like ",12:34,56:78,", from
