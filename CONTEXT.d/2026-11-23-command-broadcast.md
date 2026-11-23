@@ -35,8 +35,8 @@ count; and "Broadcasty should onlly be for simple prompts".
   SVG broadcast mark, in the bar's muted surface and text tones, labelled "Sends to every open
   session" for a tooltip and a screen reader; on the bar, the overflow row and the dialog's
   preview, only while the option is on and the button is a simple prompt. The chip's own
-  tooltip and its right-click menu header (one string, `layout.ts` `chipTitle`) end "sends to
-  every open session" on the same buttons, so hovering anywhere on the chip says it.
+  tooltip and its right-click menu header (one string, `layout.ts` `chipTitle`) carry "sends
+  to every open session" on the same buttons, so hovering anywhere on the chip says it.
 - **Usage id** `commands.broadcast` (tipsStore's DIRECT_FEATURE_IDS), recorded by a broadcast
   press, for the Shift+click tip to key on.
 - **Tests.** `tests/unit/renderer/command-broadcast.test.ts` (the rules),

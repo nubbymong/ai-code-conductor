@@ -14,10 +14,11 @@
  *    arguments) presses as a single button;
  *  - Shift+click on a simple Global prompt asks first ("Send to N open
  *    sessions?"): Cancel and Escape send nothing, Send and Enter reach every
- *    open agent session once, a held Enter's repeat answers nothing (the
- *    overflow list's rows: commandbar-broadcast-overflow.test.tsx); a
- *    Shift+click on any other button (arguments,
- *    a shell line, a Session button) is a plain press of its own tab;
+ *    open agent session once, and a held Enter's repeat answers nothing; a
+ *    Shift+click on a button folded into its band's overflow list asks the
+ *    same way (commandbar-broadcast-overflow.test.tsx); a Shift+click on any
+ *    other button (arguments, a shell line, a Session button) is a plain
+ *    press of its own tab;
  *  - a broadcast button carries a subtle "all" pill, on the bar and in its
  *    band's overflow list, only while its option is on and it is a simple
  *    prompt, labelled "Sends to every open session".
