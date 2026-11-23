@@ -124,8 +124,8 @@ pub struct Stream {
 }
 
 /// A timeout set on a connection that has already ended both ways counts as
-/// set. macOS refuses every socket option on such a socket with EINVAL (the
-/// peer closed it, or both halves were shut), where Linux sets the option.
+/// set. macOS refuses to set any socket option on such a socket, with EINVAL
+/// (the peer closed it, or both halves were shut), where Linux sets the option.
 /// That socket never waits: a read gives what is still buffered, then the
 /// end of the stream, and a write fails at once. So the refusal is no error
 /// here, and the read or write that follows says how the connection ended,
@@ -710,7 +710,7 @@ mod tests {
 
     /// The test above in the order that raced on macOS (aicc_planning#396):
     /// the listener has already closed the refused peer when that peer sets
-    /// its timeouts. macOS refuses every socket option on a connection that
+    /// its timeouts. macOS refuses to set any socket option on a connection that
     /// has ended both ways (EINVAL); the peer still becomes a stream, takes
     /// its read timeout and reads the end, as it does on Linux.
     #[test]
@@ -724,8 +724,9 @@ mod tests {
             s.write_all_within(b"served", Duration::from_secs(5)).expect("write");
             s.close_after_writes();
         });
-        // The first peer as `connect` makes it, held back before its first
-        // timeout until the listener has closed it.
+        // The first peer's socket as `connect` opens it (`connect_within`; the
+        // check of the peer's user id that `connect` makes next is left out),
+        // held back before its first timeout until the listener has closed it.
         let raw = connect_within(Path::new(l.endpoint()), Duration::from_secs(5)).expect("connect");
         wait_until_readable(raw.as_raw_fd());
         let mut first = Stream::new(raw).expect("a connection the listener closed is still a stream");
