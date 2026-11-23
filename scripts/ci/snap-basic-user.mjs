@@ -2,11 +2,13 @@
 /**
  * One run of the helper's capture mode from a basic-user token, on the GitHub
  * Windows runner (plan 2.1.3-beta.16, section A1; aicc_planning#401). Probe
- * P21 read the mode in the runner's own session, which runs elevated; this is
- * the first reading from a token that is not: `runas /trustlevel:0x20000`
- * (Basic User: the Administrators group kept for deny only, a medium
- * mandatory level), and `runas /machine:amd64 /trustlevel:0x20000` when the
- * first is refused.
+ * P21 read the mode in the runner's own session, which runs elevated; this
+ * asks for a token that is not: `runas /trustlevel:0x20000` (Basic User: the
+ * Administrators group kept for deny only, a medium mandatory level), and
+ * `runas /machine:amd64 /trustlevel:0x20000` when the first is refused. On
+ * the GitHub runner the token it gave had the Administrators group for deny
+ * only but a High mandatory level (run 45273010875), which the verdict says:
+ * "CAPTURES, but the token was not read as a basic user's".
  *
  *   node scripts/ci/snap-basic-user.mjs --helper <aicc-helper.exe> --out <folder>
  *

@@ -42,8 +42,8 @@
  *   D7 FORCED FAILURE, 3 runs: the test-only helper path names a helper that
  *      is not there: the line says the helper could not start (ENOENT), the
  *      previous Snap opens and is cancelled.
- *   D8 PREVIOUS CHOSEN: no new-engine line; the previous Snap opens and is
- *      cancelled.
+ *   D8 PREVIOUS CHOSEN: no new-engine line; one line says the previous engine
+ *      loaded and takes the press; the previous Snap opens and is cancelled.
  *   D9 LOADED BY ITS FIRST PRESS: after D7 and D8, main holds the package's
  *      files and its native add-on (R2).
  *   D10 HELPER DIRECT: the built helper's capture, run once from the test, has
@@ -70,7 +70,7 @@
  * 71 ms, the file to its path typed 13 to 63 ms (OVERLAY_MS bounds each), and
  * the stand-in started on the tab's terminal 11.2 s after the tab's Snap
  * button showed (PowerShell's cold start, then the launch line), within
- * TAB_MS.
+ * TAB_MS: under three times that reading, not ten, and not raised.
  * The readings go to the log and to $SNAP_E2E_OUT/readings.json.
  */
 import { test, expect, type ElectronApplication, type Page } from '@playwright/test'
@@ -563,7 +563,7 @@ test.describe('Snap on Windows', () => {
     })
   }
 
-  test('D8 PREVIOUS CHOSEN: no new-engine line, and the previous Snap opens', async () => {
+  test('D8 PREVIOUS CHOSEN: no new-engine line, one line says the previous engine takes the press, and the previous Snap opens', async () => {
     test.setTimeout(PRESS_TEST_MS)
     const { dataDir } = ctx!
     chooseSnap(dataDir, 'previous')
@@ -571,6 +571,7 @@ test.describe('Snap on Windows', () => {
       const from = mark()
       push('pressMs', await pressAndCancelPrevious())
       expect(snapLines(from)).toEqual([])
+      expect(linesSince(from, '[snap] previous engine:')).toEqual(['[snap] previous engine: loaded; it takes this press'])
     } finally {
       chooseSnap(dataDir, 'new')
     }

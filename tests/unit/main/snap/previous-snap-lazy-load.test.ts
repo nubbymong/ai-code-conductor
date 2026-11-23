@@ -6,14 +6,18 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
  * 2.1.3-beta.16 A1, aicc_planning#401): on Windows, where the new Snap is the
  * default, only a press with Previous chosen or one the new Snap hands on; on
  * macOS and Linux, the first press. A package that fails to load fails that
- * press only. Each test imports screenshot-capture.ts afresh, with a stand-in
- * package that counts its loads.
+ * press only. Each press the previous Snap takes writes one line to app.log:
+ * that its package loaded and takes the press, or that it could not be loaded
+ * (the error's name and code only, never its message, which can hold a path).
+ * Each test imports screenshot-capture.ts afresh, with a stand-in package that
+ * counts its loads, and a stand-in logger that keeps every line.
  * Not checked here: which Snap a press uses (snap-engine-choice.test.ts), the
  * new Snap's steps (engine.test.ts), what main loads in the built app
- * (snap-e2e's readings R1 and R2, tests/e2e/snap-windows.spec.ts).
+ * (snap-e2e's readings R1 and R2, tests/e2e/snap-windows.spec.ts), the line in
+ * the built app (snap-e2e's D8).
  */
 
-const lib = vi.hoisted(() => ({ loads: 0, constructed: 0, startCalls: 0 }))
+const lib = vi.hoisted(() => ({ loads: 0, constructed: 0, startCalls: 0, lines: [] as string[], startError: null as Error | null }))
 
 vi.mock('electron', () => ({
   BrowserWindow: class {},
@@ -25,12 +29,20 @@ vi.mock('electron', () => ({
 }))
 vi.mock('../../../../src/main/ipc/setup-handlers', () => ({ getResourcesDirectory: () => '/mock/resources' }))
 vi.mock('../../../../src/main/clipboard-file', () => ({ isReapableImageFile: () => false }))
-vi.mock('../../../../src/main/debug-logger', () => ({ logInfo: vi.fn(), logWarn: vi.fn(), logError: vi.fn() }))
+// The logger as a stand-in that keeps each line app.log would get.
+vi.mock('../../../../src/main/debug-logger', () => {
+  const keep = (...args: unknown[]) => { lib.lines.push(args.map(String).join(' ')) }
+  return { logInfo: keep, logWarn: keep, logError: keep }
+})
 
-/** The package as a stand-in: each start answers Cancel. */
+/** The package as a stand-in: each start answers Cancel; with `startError`
+ *  set, making one throws it (the package loaded but could not start). */
 class FakeScreenshots {
   private handlers = new Map<string, () => void>()
-  constructor() { lib.constructed++ }
+  constructor() {
+    if (lib.startError) throw lib.startError
+    lib.constructed++
+  }
   on(event: string, fn: () => void) { this.handlers.set(event, fn); return this }
   removeAllListeners() { this.handlers.clear(); return this }
   startCapture(): Promise<void> {
@@ -45,7 +57,10 @@ async function fresh(opts: { failLoad?: boolean } = {}) {
   vi.resetModules()
   vi.doMock('electron-screenshots', () => {
     lib.loads++
-    if (opts.failLoad) throw new Error('the package failed to load')
+    // A message that holds a path, as a real failed load's does. vitest hands
+    // the import its own Error in place of this one, so the test that gives
+    // the code a message with a path is the start failure (`startError`).
+    if (opts.failLoad) throw new Error('Cannot find module C:\\app\\resources\\app.asar\\node_modules\\electron-screenshots\\lib\\index.js')
     return { default: FakeScreenshots }
   })
   return import('../../../../src/main/screenshot-capture')
@@ -59,7 +74,15 @@ beforeEach(() => {
   lib.loads = 0
   lib.constructed = 0
   lib.startCalls = 0
+  lib.lines = []
+  lib.startError = null
 })
+
+const LOADED = '[snap] previous engine: loaded; it takes this press'
+/** The lines app.log got about the previous Snap. */
+const previousLines = () => lib.lines.filter((l) => l.startsWith('[snap] previous engine'))
+/** A Windows path or the package folder in a line. */
+const PATH_IN_LINE = /[A-Z]:\\|node_modules/
 
 describe('the previous Snap\'s package is loaded by the first press that uses it', () => {
   it('main\'s import of screenshot-capture loads nothing of it', async () => {
@@ -98,6 +121,52 @@ describe('the previous Snap\'s package is loaded by the first press that uses it
       expect(lib.loads).toBe(0)
       await expect(captureRectangle(win, windows)).resolves.toBeNull()
       expect(lib.loads).toBe(1)
+      expect(lib.startCalls).toBe(0)
+    } finally {
+      quiet.mockRestore()
+    }
+  })
+})
+
+describe('each press the previous Snap takes writes one line to app.log', () => {
+  it('each press with no new Snap (Previous chosen, macOS, Linux) logs that the previous engine loaded and takes it: two presses, two lines', async () => {
+    const { captureRectangle } = await fresh()
+    expect(await captureRectangle(win, windows)).toBeNull()
+    expect(previousLines()).toEqual([LOADED])
+    expect(await captureRectangle(win, windows)).toBeNull()
+    expect(previousLines()).toEqual([LOADED, LOADED])
+  })
+
+  it('a press the new Snap answers (saved, cancelled, no desktop) logs no previous-engine line; one it hands on logs exactly one', async () => {
+    const { captureRectangle } = await fresh()
+    await captureRectangle(win, windows, async () => ({ kind: 'saved', file: '/mock/resources/screenshots/s.jpg' }))
+    await captureRectangle(win, windows, async () => ({ kind: 'cancelled' }))
+    await captureRectangle(win, windows, async () => ({ kind: 'no-desktop' }))
+    expect(previousLines()).toEqual([])
+    await captureRectangle(win, windows, async () => ({ kind: 'previous', why: 'the overlay failed' }))
+    expect(previousLines()).toEqual([LOADED])
+  })
+
+  it('a package that fails to load logs one line with the error\'s name, no path, and no loaded line', async () => {
+    const quiet = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      const { captureRectangle } = await fresh({ failLoad: true })
+      await expect(captureRectangle(win, windows)).resolves.toBeNull()
+      expect(previousLines()).toEqual(['[snap] previous engine: its package could not be loaded (Error); nothing captured'])
+      expect(lib.lines.filter((l) => PATH_IN_LINE.test(l))).toEqual([])
+    } finally {
+      quiet.mockRestore()
+    }
+  })
+
+  it('a package that loads but cannot start logs the error\'s name and code, never its message', async () => {
+    const quiet = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      const { captureRectangle } = await fresh()
+      lib.startError = Object.assign(new TypeError('C:\\Users\\someone\\AppData\\Local\\app\\node_modules\\node-screenshots\\index.node'), { code: 'ERR_DLOPEN_FAILED' })
+      await expect(captureRectangle(win, windows)).resolves.toBeNull()
+      expect(previousLines()).toEqual(['[snap] previous engine: its package could not be loaded (TypeError ERR_DLOPEN_FAILED); nothing captured'])
+      expect(lib.lines.filter((l) => PATH_IN_LINE.test(l))).toEqual([])
       expect(lib.startCalls).toBe(0)
     } finally {
       quiet.mockRestore()

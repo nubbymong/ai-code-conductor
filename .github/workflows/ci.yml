@@ -1016,9 +1016,11 @@ jobs:
   # helper built here and handed to the app through its test-only helper path
   # (the app runs from out/main, where the path beside a packaged app is not):
   # tests/e2e/snap-windows.spec.ts presses Snap and reads what it does. Before
-  # it, one run of the helper's capture mode from a basic-user token
-  # (scripts/ci/snap-basic-user.mjs): the first capture this project reads from
-  # a session that is not elevated.
+  # it, one run of the helper's capture mode from a `runas /trustlevel:0x20000`
+  # token (scripts/ci/snap-basic-user.mjs). On this runner that token has the
+  # Administrators group for deny only but keeps a High mandatory level (run
+  # 45273010875: "CAPTURES, but the token was not read as a basic user's"), so
+  # a capture from a session that is not elevated is still unread here.
   #
   # Playwright runs with --retries=0 (playwright.config.ts sets one retry for
   # the VM's full run; it must not apply here), and the step after it fails the

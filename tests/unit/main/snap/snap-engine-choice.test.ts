@@ -5,7 +5,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
  * Windows the choice saved in Settings, Custom Commands, Snap, else the
  * default; on macOS and Linux always the previous Snap (the capture mode exits
  * 4 there). The IPC handler reads the saved choice at each press and hands
- * captureRectangle the new engine only when it is the one chosen.
+ * captureRectangle the new engine on Windows unless Previous is saved.
  * Not checked here: the press itself (engine.test.ts, capture-rectangle-engine.test.ts).
  */
 
@@ -80,7 +80,7 @@ describe('snapEngineFor: Windows takes the saved choice or the default; macOS an
   })
 })
 
-describe('the Snap handler: the new engine reaches captureRectangle only on Windows with New chosen', () => {
+describe('the Snap handler: the new engine reaches captureRectangle on Windows unless Previous is saved, and never on macOS or Linux', () => {
   it('Windows, New saved: the press runs the new engine first', async () => {
     SAVED = 'new'
     expect(await press('win32')).toBe(true)

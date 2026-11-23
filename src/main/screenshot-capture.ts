@@ -8,7 +8,7 @@ import type Screenshots from 'electron-screenshots'
 
 import { getResourcesDirectory } from './ipc/setup-handlers'
 import { isReapableImageFile } from './clipboard-file'
-import { logWarn } from './debug-logger'
+import { logInfo, logWarn } from './debug-logger'
 import { screenCaptureAllowed, type ScreenPermissionDeps } from './screenshot-permission'
 
 function getScreenshotsDir(): string { return join(getResourcesDirectory(), 'screenshots') }
@@ -80,7 +80,8 @@ let screenshotsInstance: Screenshots | null = null
  * Windows, where the new Snap is the default, only a press with Previous
  * chosen or one the new Snap hands on; on macOS and Linux, the first press.
  * So main does not load it, or what it loads, at start (ADR-030 S8 step 3).
- * A load that fails rejects, and the press answers nothing (captureRectangle).
+ * A load that fails rejects: the press answers nothing and writes one line to
+ * app.log, as a press it takes does (runRectangleCapture).
  */
 async function loadPreviousSnap(): Promise<typeof Screenshots> {
   const loaded = await import('electron-screenshots')
@@ -210,10 +211,14 @@ async function runRectangleCapture(): Promise<string | null> {
   try {
     library = await getScreenshotsInstance()
   } catch (err) {
-    // The package failed to load (its first press) or to start.
+    // The package failed to load (its first press) or to start. The log line
+    // holds the error's name and code only: its message can hold a path.
+    const code = (err as { code?: unknown } | null)?.code
+    logWarn(`[snap] previous engine: its package could not be loaded (${err instanceof Error ? err.name : 'error'}${typeof code === 'string' ? ` ${code}` : ''}); nothing captured`)
     console.error('[screenshot] the capture library could not start:', err)
     return null
   }
+  logInfo('[snap] previous engine: loaded; it takes this press')
   return new Promise<string | null>((resolve) => {
     let settled = false
 
