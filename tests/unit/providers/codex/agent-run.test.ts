@@ -217,6 +217,13 @@ describe('the run', () => {
   // loaded machine does not fail it: four times the line takes under eight
   // times as long (linear: about four; a search whose time grows with the
   // square: about sixteen).
+  // Each time is the best of several runs, and a best can only be at or above
+  // the search's own cost, so a search that grows with the square fails
+  // however many runs there are. The long line gets up to ten runs, spread out
+  // in time: three back to back were not enough on a loaded macOS runner,
+  // where all three took 28.3 ms after a best of 2.8 ms for the short line
+  // (CI run 45123495761). Each round also runs the short line again, which can
+  // only lower its best and so only make the check stricter.
   it('a long unterminated stderr line is handed on in time linear in its length, whatever it holds, and nothing is lost', async () => {
     // Every line is past WINDOW (64 KiB), so the cut is looked for.
     const shapes: Array<(n: number) => string> = [
@@ -237,6 +244,8 @@ describe('the run', () => {
     }
     const FLOOR_MS = 2
     const FACTOR = 8
+    const BIG_RUNS = 10
+    const pause = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
     for (const make of shapes) {
       const small = make(72_000)
       const big = make(288_000)
@@ -245,10 +254,15 @@ describe('the run', () => {
       // A ceiling far above any machine's time for 72 KB, only so that a
       // search that is not linear fails here at once rather than run on.
       expect(t1, small.slice(0, 12)).toBeLessThan(1_500)
-      // Best of three as for the small size (no need to go on once one is
-      // under the bound: the best can only fall).
+      // Best of up to BIG_RUNS (no need to go on once one is under the bound:
+      // the best can only fall), each after a short wait and followed by one
+      // more run of the small size.
       let t4 = Infinity
-      for (let i = 0; i < 3 && t4 >= FACTOR * Math.max(t1, FLOOR_MS); i++) t4 = Math.min(t4, pushTime(big))
+      for (let i = 0; i < BIG_RUNS && t4 >= FACTOR * Math.max(t1, FLOOR_MS); i++) {
+        if (i > 0) await pause(25)
+        t4 = Math.min(t4, pushTime(big))
+        t1 = Math.min(t1, pushTime(small))
+      }
       expect(t4 / Math.max(t1, FLOOR_MS), `${small.slice(0, 12)}: ${t1.toFixed(1)} ms, then ${t4.toFixed(1)} ms`).toBeLessThan(FACTOR)
       const { deps, spawned } = fakeDeps()
       const said: string[] = []
