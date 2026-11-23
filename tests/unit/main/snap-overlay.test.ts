@@ -167,6 +167,19 @@ describe('the window each display gets', () => {
     await expect(p).resolves.toBeNull()
   })
 
+  it('in dev, each page is loaded from the dev server', async () => {
+    vi.stubEnv('ELECTRON_RENDERER_URL', 'http://localhost:5173')
+    try {
+      const p = openSnapOverlays([PRIMARY])
+      expect(windows()[0].loadURL).toHaveBeenCalledWith('http://localhost:5173/snap-overlay.html')
+      expect(windows()[0].loadFile).not.toHaveBeenCalled()
+      answer(windows()[0], { kind: 'cancel' })
+      await expect(p).resolves.toBeNull()
+    } finally {
+      vi.unstubAllEnvs()
+    }
+  })
+
   it('refuses navigation and new windows', async () => {
     const p = openSnapOverlays([PRIMARY])
     const wc = windows()[0].webContents
@@ -189,6 +202,28 @@ describe('ready', () => {
     expect(windows()[0].show).not.toHaveBeenCalled()
     answer(windows()[1], { kind: 'cancel' })
     await p
+  })
+
+  it('a picture with no 1x representation goes as a PNG at its own scale (Electron 44 toJPEG gives it nothing)', async () => {
+    // As A1's engine makes it on a display above 100%: createFromBitmap with a scaleFactor of 1.5.
+    const toPNG = vi.fn(() => Buffer.from('png-left'))
+    const scaled = { isEmpty: () => false, toJPEG: vi.fn(() => Buffer.alloc(0)), toPNG } as unknown as SnapOverlayDisplay['picture']
+    const p = openSnapOverlays([{ ...LEFT, picture: scaled }])
+    expect(ready(windows()[0])).toEqual({ picture: `data:image/png;base64,${Buffer.from('png-left').toString('base64')}`, width: 1280, height: 720, scale: 1.5 })
+    expect(toPNG).toHaveBeenCalledWith({ scaleFactor: 1.5 })
+    answer(windows()[0], { kind: 'cancel' })
+    await expect(p).resolves.toBeNull()
+  })
+
+  it('a picture that encodes to nothing shows no overlay: every window closed, failed as bad-display', async () => {
+    const blank = { isEmpty: () => false, toJPEG: () => Buffer.alloc(0), toPNG: () => Buffer.alloc(0) } as unknown as SnapOverlayDisplay['picture']
+    const p = openSnapOverlays([PRIMARY, { ...LEFT, picture: blank }])
+    // Settled at once, not left open with a page that would show the live desktop.
+    expect(windows()).toHaveLength(2)
+    expect(allDestroyed()).toBe(true)
+    expect(h.handlers.has(IPC.SNAP_OVERLAY_READY)).toBe(false)
+    expect(h.listeners.get(IPC.SNAP_OVERLAY_ANSWER)?.size ?? 0).toBe(0)
+    expect(await failureOf(p)).toBe('bad-display')
   })
 
   it('answers only an overlay page', async () => {
@@ -387,11 +422,15 @@ describe('one overlay at a time, and bad input', () => {
     await expect(q).resolves.toEqual({ id: 1, whole: true })
   })
 
-  it('no display, or a display with no size or no picture, opens nothing', async () => {
+  it('no display, a display with no size or no picture, or an id given twice, opens nothing', async () => {
     expect(await failureOf(openSnapOverlays([]))).toBe('no-displays')
     expect(await failureOf(openSnapOverlays([{ ...PRIMARY, dipBounds: { x: 0, y: 0, width: 0, height: 1080 } }]))).toBe('bad-display')
     const empty = { isEmpty: () => true, toJPEG: () => Buffer.alloc(0) } as unknown as SnapOverlayDisplay['picture']
     expect(await failureOf(openSnapOverlays([{ ...PRIMARY, picture: empty }]))).toBe('bad-display')
+    // Checked before the wait: an open that went ahead would leave the promise pending.
+    const twice = openSnapOverlays([PRIMARY, { ...LEFT, id: PRIMARY.id }])
+    expect(windows()).toHaveLength(0)
+    expect(await failureOf(twice)).toBe('bad-display')
     expect(windows()).toHaveLength(0)
   })
 })

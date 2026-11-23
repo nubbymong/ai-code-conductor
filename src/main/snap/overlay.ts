@@ -36,7 +36,10 @@ export interface SnapOverlayDisplay {
   dipBounds: Rect
   /** Physical pixels per DIP on this display. */
   scale: number
-  /** The display's picture, in its physical pixels. */
+  /**
+   * The display's picture, in its physical pixels, in any representation; a 1x
+   * image takes the quick JPEG path (see `pictureDataUrl`).
+   */
   picture: NativeImage
 }
 
@@ -45,7 +48,7 @@ export type SnapOverlayAnswer = { id: number; rect: Rect } | { id: number; whole
 export type SnapOverlayFailReason =
   | 'busy' //          an overlay is already open
   | 'no-displays' //   nothing to show
-  | 'bad-display' //   a display with no size, no picture, or an id given twice
+  | 'bad-display' //   a display with no size, no picture, a picture that cannot be encoded, or an id given twice
   | 'window-failed' // a window could not be made
   | 'load-failed' //   a page failed to load
   | 'renderer-gone' // a page's renderer went away
@@ -78,9 +81,10 @@ export interface SnapOverlayOptions {
 }
 
 /**
- * The picture goes to the page as a JPEG: it is only shown there (the answer
- * is cut from the original picture by the caller), and a JPEG of a 4K display
- * is encoded in a fraction of a PNG's time on main's thread.
+ * A picture with a 1x representation goes to the page as a JPEG: it is only
+ * shown there (the answer is cut from the original picture by the caller), and
+ * a JPEG of a 4K display is encoded in a fraction of a PNG's time on main's
+ * thread. One without (made at another scale) goes as a PNG: see `pictureDataUrl`.
  */
 const PICTURE_JPEG_QUALITY = 92
 
@@ -136,8 +140,19 @@ function loadOverlayPage(win: BrowserWindow): Promise<void> {
   return win.loadFile(join(__dirname, '../renderer/snap-overlay.html'))
 }
 
-function pictureDataUrl(picture: NativeImage): string {
-  return `data:image/jpeg;base64,${picture.toJPEG(PICTURE_JPEG_QUALITY).toString('base64')}`
+/**
+ * The picture as a data URL for the page. Electron 44's toJPEG encodes only a
+ * 1x representation and gives an empty buffer for an image that has none (one
+ * made with a scaleFactor other than 1), so such a picture goes as a PNG of its
+ * own representation. A picture that encodes to nothing throws: the open fails
+ * as 'bad-display' instead of showing an overlay with no picture.
+ */
+function pictureDataUrl(display: SnapOverlayDisplay): string {
+  const jpeg = display.picture.toJPEG(PICTURE_JPEG_QUALITY)
+  if (jpeg.length > 0) return `data:image/jpeg;base64,${jpeg.toString('base64')}`
+  const png = display.picture.toPNG({ scaleFactor: display.scale })
+  if (png.length === 0) throw new Error('the picture cannot be encoded')
+  return `data:image/png;base64,${png.toString('base64')}`
 }
 
 function usable(display: SnapOverlayDisplay): boolean {
@@ -302,7 +317,7 @@ export function openSnapOverlays(displays: SnapOverlayDisplay[], options: SnapOv
         loadOverlayPage(win).catch(() => { /* did-fail-load names the failure; an aborted load is the ready bound's */ })
       }
       stage = 'bad-display'
-      for (const page of pages) page.picture = pictureDataUrl(page.display.picture)
+      for (const page of pages) page.picture = pictureDataUrl(page.display)
       readyTimer = setTimeout(() => finish({ failure: 'no-ready' }), readyMs)
     } catch {
       finish({ failure: stage })

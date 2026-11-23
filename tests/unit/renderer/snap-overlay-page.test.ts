@@ -3,7 +3,7 @@
 // on the page's own markup, src/renderer/snap-overlay.html): the picture shown
 // at the display's DIP size, a drag drawn with its size in the picture's pixels,
 // Enter takes it, a press on the bar is no drag, a focused button keeps its own
-// Enter, Escape and the two buttons answer. The selection rules themselves are
+// Enter until a drag takes focus off it, Escape and the two buttons answer. The selection rules themselves are
 // tests/unit/renderer/snap-overlay-selection.test.ts.
 // Every test ends with an answer: a page that has answered ignores all input,
 // so the listeners an earlier test left on this document stay inert.
@@ -88,5 +88,15 @@ describe("Snap's overlay page", () => {
     $('cancel').click()
     expect(answer).toHaveBeenCalledTimes(1)
     expect(answer).toHaveBeenCalledWith({ kind: 'cancel' })
+  })
+
+  it('a drag after Tab focused a button takes focus off it, so Enter takes the rectangle', async () => {
+    const answer = await open()
+    $<HTMLButtonElement>('whole').focus()
+    drag([100, 100], [400, 300])
+    expect(document.activeElement).toBe(document.body)
+    key(window, 'Enter')
+    expect(answer).toHaveBeenCalledTimes(1)
+    expect(answer).toHaveBeenCalledWith({ kind: 'rect', rect: { x: 100, y: 100, width: 300, height: 200 } })
   })
 })

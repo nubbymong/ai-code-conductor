@@ -66,6 +66,9 @@ export async function startOverlayPage(bridge: SnapOverlayBridge | undefined = w
 
   document.addEventListener('pointerdown', (e: PointerEvent) => {
     if (e.button !== 0 || bar.contains(e.target as Node)) return
+    // A drag is a new choice: a button focused by Tab lets go, or Enter would press it
+    // instead of taking the rectangle (preventDefault below stops the browser doing this).
+    if (document.activeElement instanceof HTMLElement && document.activeElement !== body) document.activeElement.blur()
     e.preventDefault()
     // Keep the drag when the pointer leaves the window (onto another display).
     try { body.setPointerCapture(e.pointerId) } catch { /* no capture: the drag ends at the edge */ }
@@ -75,7 +78,7 @@ export async function startOverlayPage(bridge: SnapOverlayBridge | undefined = w
   document.addEventListener('pointerup', (e: PointerEvent) => controller.pointerUp(at(e)))
   document.addEventListener('pointercancel', () => controller.pointerUp(last))
   window.addEventListener('keydown', (e: KeyboardEvent) => {
-    // A focused button takes its own Enter (Whole screen, Cancel).
+    // A button focused since the last drag takes its own Enter (Whole screen, Cancel).
     if (e.key === 'Enter' && document.activeElement instanceof HTMLButtonElement) return
     if (controller.key(e.key)) e.preventDefault()
   })
