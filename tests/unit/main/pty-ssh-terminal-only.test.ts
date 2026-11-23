@@ -14,11 +14,13 @@
 //    The phase has an end: a deadline after the command is typed, or a CLI
 //    screen showing. After it the app types nothing more into the tab.
 //
-// 2. Quitting the app types the exit keys (Escape, Ctrl-C, /exit) only into a
-//    terminal the app itself started a CLI in. A Terminal only tab, and an SSH
-//    tab where the app never typed the launch line, is just closed: whatever
-//    runs on the far side (a tmux session the user attached to, say) is left
-//    as a dropped connection leaves it.
+// 2. Quitting the app types Claude Code's exit keys (Escape, Ctrl-C, /exit)
+//    only into a terminal the app itself started a CLI in. A Terminal only tab
+//    or an SSH tab where the app never typed the launch line is just closed:
+//    whatever runs on the far side (a tmux session the user attached to, say)
+//    is left as a dropped connection leaves it. A Terminal only tab whose
+//    launch line the app did type gets Claude Code's exit keys, as any SSH
+//    session does.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('os', async (importOriginal) => ({ ...(await importOriginal<typeof import('os')>()), platform: () => 'linux' }))
@@ -651,6 +653,24 @@ describe('quitting the app', () => {
 
   it('an SSH session whose launch line the app typed still gets Escape, Ctrl-C and /exit', () => {
     openClaude({ detachable: false })
+    feed(PROMPT)
+    getSshFlow(SID)!.launchClaude()
+    vi.advanceTimersByTime(300)
+    feed(`setup ok ${_getSshNonceForTest(SID)} tmux=none\r\n`)
+    vi.advanceTimersByTime(1500)
+    vi.advanceTimersByTime(300)
+    expect(h.writes.some((w) => /(^|\s)claude(\s|\r)/.test(w)), 'the app typed the launch line').toBe(true)
+    h.writes = []
+    quit()
+    expect(typedExitKeys()).toEqual(EXIT_KEYS)
+    expect(h.kills).toBe(0)
+    ptyEnds()
+  })
+
+  // Mutation to prove this can fail: hand sendExitKeys the session's own agent
+  // (null for a Terminal only tab), as 2.1.3-beta.15 B3's first head did.
+  it('a Terminal only SSH tab whose launch line the app typed still gets Escape, Ctrl-C and /exit', () => {
+    openTerminal({ detachable: false })
     feed(PROMPT)
     getSshFlow(SID)!.launchClaude()
     vi.advanceTimersByTime(300)

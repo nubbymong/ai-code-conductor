@@ -7716,7 +7716,7 @@ export function gracefulExitPty(sessionId: string, timeoutMs = 5000): Promise<vo
     // local session of an assistant, or an SSH session whose launch line the
     // app typed). Anything else is a terminal the user drives: a Terminal only
     // tab, a partner terminal, an SSH tab still waiting at its prompt or taken
-    // over with Skip. Escape, Ctrl-C and /exit typed there land in whatever
+    // over with Skip. Exit keys typed there land in whatever
     // the user is running (a tmux session they attached to gets its CLI
     // ended). Closing the PTY drops the connection instead, which leaves
     // whatever runs on the far side as a closed terminal leaves it.
@@ -7726,8 +7726,8 @@ export function gracefulExitPty(sessionId: string, timeoutMs = 5000): Promise<vo
       return
     }
 
-    // The keys its provider package names, typed by the session input module (B3)
-    sendExitKeys(sessionId, entry.ptyProcess, entry.agent)
+    // The keys its provider package names (B3); with no agent it is a Terminal only SSH tab whose launch line the app typed: the SSH surface's
+    sendExitKeys(sessionId, entry.ptyProcess, entry.agent ?? claudeSshSurface().id)
   })
 }
 
@@ -7737,7 +7737,7 @@ export function gracefulExitPty(sessionId: string, timeoutMs = 5000): Promise<vo
  */
 export async function gracefulExitAllPty(timeoutMs = 5000): Promise<void> {
   // ADR-009 adversarial review (Lens C, R3 BLOCKER U13): cancel any spawn parked
-  // on a refresh wait first -- it has no PTY to /exit, but left armed its
+  // on a refresh wait first -- it has no PTY to end, but left armed its
   // deferred spawn would start a PTY after this graceful shutdown returns. A
   // cancel releases the hold and ends the session its predecessor's exit was
   // told to leave alone.

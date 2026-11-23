@@ -21,16 +21,25 @@ Ctrl-C: two, 200 ms apart, ended Codex at its composer with Windows' Ctrl-C
 exit status, not 0. `sendExitKeys` (session-input) now takes the session's
 agent, reads that provider's keys through the registry and types them as it
 typed its fixed list: only while the terminal is still the session's, a failed
-write dropped. A session with no agent, or a provider with no keys, gets none.
-pty-manager.ts: the one call and its two comments, no net line, no hunk in the
+write dropped. A session with no agent, or a provider with no keys, gets none
+(gracefulExitPty hands a Terminal only SSH tab whose launch line the app typed
+the SSH surface's provider, so that one keeps Claude Code's keys).
+pty-manager.ts: the one call and four comments, no net line, no hunk in the
 SSH branch. A tmux-persistent or not app-started terminal still gets none.
 
 **Tests.** pty-quit-exit-keys-local.test.ts (the real packages): Claude Code's
-keys at 0, 100 and 300 ms; Codex's at 0 and 100 ms and nothing more up to the
+keys at 0, 100 and 300 ms; a local Codex session's keys (the existing test,
+its expectation changed); Codex's at 0 and 100 ms and nothing more up to the
 timeout. session-input.test.ts: a Codex session through gracefulExitPty gets
-its provider's keys; a session with no agent gets none. All four new tests
-were red on 4252cbfc (it typed /exit into the Codex session, and the three
-keys into the session with no agent) and are green now.
+its provider's keys; a session with no agent gets none. The four that name
+Codex's keys or the session with no agent were red on 4252cbfc (it typed /exit
+into the Codex session, and the three keys into the session with no agent) and
+are green now. The Claude Code timing test pins behaviour that did not change:
+it is green on 4252cbfc too, and goes red if a time in the Claude Code
+package's list is changed (not run). pty-ssh-terminal-only.test.ts: a Terminal
+only SSH tab whose launch line the app typed still gets Escape, Ctrl-C and
+/exit; red on B3's first head (d6ab9776, which typed none into it: 1 failed, 48
+passed of 49), green on 4252cbfc and now (49 of 49).
 
 **Not measured.** A Codex quit while its composer holds a draft, or while a
 turn runs: neither the keys before nor these were tried there. An unended

@@ -496,7 +496,9 @@ function exitKeysOf(agent: ProviderId | null | undefined): readonly ExitKey[] {
  * anything) at 100 ms, then /exit and Enter at 300 ms, as before; Codex's are
  * Escape and Ctrl-C at the same times, and no /exit. A session with no agent,
  * or whose provider names none, gets none: its quit ends at gracefulExitPty's
- * timeout. Each key only while `proc` is still the session's terminal
+ * timeout (gracefulExitPty hands a Terminal only SSH tab whose launch line the
+ * app typed the SSH surface's provider, so that one keeps Claude Code's keys).
+ * Each key only while `proc` is still the session's terminal
  * process: one that ended, or was replaced by a new run, gets none of the
  * rest. (The PTY manager asked only whether the session still had a terminal,
  * so a replaced one got the rest.)
