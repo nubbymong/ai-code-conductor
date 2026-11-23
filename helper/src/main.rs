@@ -1,8 +1,8 @@
 //! `aicc-helper`: the session helper's command line. The app runs it
 //! (`src/main/session-helper/`, and on Windows its `start`, `end`,
 //! `console-hosts` and `end-console-host` modes), a held session's CLI runs
-//! `hook` and `mcp`, and the tests run every command. Nothing in the app runs
-//! `capture` yet: probe P21 measures it first.
+//! `hook` and `mcp`, and the tests run every command. On Windows the app
+//! also runs `capture` for Snap (`src/main/snap/`).
 //!
 //! ```text
 //! aicc-helper version
