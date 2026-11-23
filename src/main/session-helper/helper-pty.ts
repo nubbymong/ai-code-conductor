@@ -881,6 +881,13 @@ export class HelperPty implements IPty {
     // A whole replay left nothing out: shown as it is.
     if (held.whole) {
       if (text) this.showReplay(text, at)
+      // Nothing to write at the holder's size, so the tab is told nothing and
+      // no fit follows: the size the wait put off goes now, as at the cap
+      // (aicc_planning#392's hand-built item).
+      else if (at && this.sizeChanged && this.conn && this.attached && !this.ending && !this.exited && !this.replaced && !this.released) {
+        this.driver.log(`[session-helper] ${this.sid} (tab ${this.label}): its replay had nothing to show, so nothing was written at its holder's size and the tab's size ${this.size.cols}x${this.size.rows} goes to the holder now`)
+        this.sendResize()
+      }
       return
     }
     const tab = this.size

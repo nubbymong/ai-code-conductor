@@ -360,6 +360,27 @@ describe("the size wait's cap passed: the replay is written at the holder's size
     expect(sizes(r)).toEqual([{ cols: 93, rows: 27 }])
   }))
 
+  it("a whole replay not yet in at the cap that turns out to have no text: the tab is told nothing, and the size the wait put off goes to the holder when the replay comes due (2.1.3-beta.15 A1, aicc_planning#392's hand-built item)", onFakeClock(async () => {
+    // The attach goes 1.5 s after the size was read and its replay stalls before its first byte, so at the size
+    // wait's cap the replay is still to come; HOLD_MAX_MS from the attach it is due, with nothing in it.
+    let open!: () => void
+    const gate = new Promise<void>((res) => { open = res })
+    const r = rig({ cols: 93, rows: 27, before: (h) => { running('kept\r\n', 103, 27)(h); h.stallReplay = { at: 0 } }, attachGate: gate })
+    await settle(() => r.h.screenReads === 1, 'the size read')
+    await vi.advanceTimersByTimeAsync(1500)
+    open()
+    await settle(() => r.p.isAttached, 'the attach')
+    await turns()
+    await vi.advanceTimersByTimeAsync(SIZE_WAIT_MAX_MS - 1500)
+    expect(r.sent).toEqual([])
+    await vi.advanceTimersByTimeAsync(HOLD_MAX_MS)
+    await settle(() => r.sent.length === 1, "the tab's size")
+    expect(r.events).toEqual([])
+    expect(sizes(r)).toEqual([{ cols: 93, rows: 27 }])
+    // The cap's line said the replay would be written at the holder's size; the log says it was not.
+    expect(r.logs).toContain(`[session-helper] ${r.h.sid} (tab ${r.h.label}): its replay had nothing to show, so nothing was written at its holder's size and the tab's size 93x27 goes to the holder now`)
+  }))
+
   it('a program that is over at the cap: told and shown at the holder\'s size, then its exit; no size goes to the holder, and nothing waits after the end', onFakeClock(async () => {
     const total = 12_000
     const r = rig({ cols: 93, rows: 27, before: (h) => { heldFrom(5000, numbered(total), 103, 27)(h); h.child = 'exited'; h.code = 7 } })
