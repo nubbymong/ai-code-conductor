@@ -300,6 +300,12 @@ export interface ElectronAPI {
      *  and reads the Send or Type it only setting itself; never pass the Enter.
      *  Shell line buttons keep `write`. */
     submitPrompt: (args: { sessionId: string; text: string }) => Promise<PromptButtonResult>
+    /** 2.1.3-beta.16 X1.2: a saved image into a Claude Code session on this
+     *  computer, as the CLI's own paste: main types the path as a bracketed
+     *  paste, then the sentence, then Enter. `not-taken`: a session main does
+     *  not type an image into (Codex, an SSH Persistent session); the caller
+     *  sends it its own way. */
+    submitImage: (args: { sessionId: string; path: string; sentence: string }) => Promise<{ outcome: 'sent' } | { outcome: 'not-taken' } | { outcome: 'not-sent'; reason: 'session-gone' | 'refused-text' }>
     resize: (sessionId: string, cols: number, rows: number) => void
     /** P3.16a round 2 (Q5): `'restart'` when a Restart ends the process (its
      *  next one follows), so its exit is not the session's end. */

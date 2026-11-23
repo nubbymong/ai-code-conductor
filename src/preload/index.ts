@@ -251,6 +251,10 @@ export interface ElectronAPI {
      *  pane; main types it by one rule and reads the Send or Type it only
      *  setting itself (never pass the Enter). */
     submitPrompt: (args: { sessionId: string; text: string }) => Promise<PromptButtonResult>
+    /** 2.1.3-beta.16 X1.2: a saved image into a Claude Code session on this
+     *  computer, as the CLI's own paste: main types the path as a bracketed
+     *  paste, then the sentence, then Enter (pty:submitPrompt with the path). */
+    submitImage: (args: { sessionId: string; path: string; sentence: string }) => Promise<{ outcome: 'sent' } | { outcome: 'not-taken' } | { outcome: 'not-sent'; reason: 'session-gone' | 'refused-text' }>
     resize: (sessionId: string, cols: number, rows: number) => void
     /** P3.16a round 2 (Q5): `'restart'` when a Restart ends the process (its
      *  next one follows), so its exit is not the session's end. */
@@ -1061,6 +1065,8 @@ const electronAPI: ElectronAPI = {
     write: (sessionId, data) =>
       ipcRenderer.send(IPC.PTY_WRITE, sessionId, data),
     submitPrompt: (args: { sessionId: string; text: string }) => ipcRenderer.invoke(IPC.PTY_SUBMIT_PROMPT, args),
+    submitImage: (args: { sessionId: string; path: string; sentence: string }) =>
+      ipcRenderer.invoke(IPC.PTY_SUBMIT_PROMPT, { sessionId: args.sessionId, text: args.sentence, image: args.path }),
     resize: (sessionId, cols, rows) =>
       ipcRenderer.send(IPC.PTY_RESIZE, sessionId, cols, rows),
     kill: (sessionId, reason) => (reason === 'restart' ? ipcRenderer.send(IPC.PTY_KILL, sessionId, 'restart') : ipcRenderer.send(IPC.PTY_KILL, sessionId)),

@@ -124,7 +124,8 @@ export function useKeyboardShortcuts(
       // tab. Tab double-click / right-click still edit the tab inline.
       // Paste clipboard image: saves to host screenshots dir, then routes it by
       // the pane on screen. A Claude session: a local one gets the absolute path
-      // written into the prompt (Claude's Read tool ingests it directly), an SSH
+      // as a bracketed paste, which Claude Code attaches as its own pasted image,
+      // then the sentence and Enter (imageTransfer.ts, 2.1.3-beta.16 X1.2), an SSH
       // one, which can't reach the host filesystem, the Conductor MCP fetch over
       // the reverse tunnel. A Codex session: its line through the Codex typing
       // rule. A plain terminal: only the quoted path, with no Enter; over SSH
