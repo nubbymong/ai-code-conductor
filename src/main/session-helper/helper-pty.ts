@@ -631,8 +631,9 @@ export class HelperPty implements IPty {
    * is all in is shown now, then what the wait put off goes out: the redraw
    * after a gap, else the tab's size; for a replay shown at the holder's
    * size, or still to be, it goes once the tab gives its size after the fit
-   * (endFitWait); for a program that is over, nothing, and its end follows
-   * (exitAfterReplay).
+   * (endFitWait), or, for one still to be that turns out to have nothing to
+   * show, when it comes due (showHeld); for a program that is over, nothing,
+   * and its end follows (exitAfterReplay).
    */
   private endSizeWait(reached: boolean): void {
     const w = this.sizeWait
