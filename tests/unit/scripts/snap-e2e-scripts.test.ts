@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { judgeReport } from '../../../scripts/ci/playwright-no-retry.mjs'
-import { readGroups, readBmpHeader, readCaptureLine, verdict, RUNAS_FORMS, BMP_HEADER_BYTES } from '../../../scripts/ci/snap-basic-user.mjs'
+import { readGroups, readBmpHeader, readCaptureLine, verdict, decodeText, cmdFileText, RUNAS_FORMS, BMP_HEADER_BYTES } from '../../../scripts/ci/snap-basic-user.mjs'
 
 /**
  * The two scripts of ci.yml's snap-e2e job (plan 2.1.3-beta.16, section A1;
@@ -68,6 +68,25 @@ describe('snap-basic-user: the reader of one capture from a basic-user token', (
     expect(readGroups('')).toEqual({ administrators: 'absent', level: null })
   })
 
+  it('writes the exit status with the echo in brackets: `echo 0> file` would redirect handle 0 and write nothing', () => {
+    const text = cmdFileText('C:\\w', 'C:\\h\\aicc-helper.exe', 'C:\\w\\cap')
+    const lines = text.split('\r\n')
+    const status = lines.find((l) => l.includes('ERRORLEVEL'))
+    expect(status).toBe('(echo %ERRORLEVEL%)> "C:\\w\\exit.tmp"')
+    // No line puts an expansion (which can be a digit) straight before a redirect.
+    for (const l of lines) expect(l, l).not.toMatch(/%\s*>/)
+    // The status is written last and moved into place.
+    expect(lines.indexOf(status!)).toBeGreaterThan(lines.findIndex((l) => l.includes(' capture --out ')))
+    expect(lines[lines.indexOf(status!) + 1]).toBe('move /y "C:\\w\\exit.tmp" "C:\\w\\exit.txt" > nul')
+  })
+
+  it('reads what a console program wrote, in UTF-8 or in UTF-16 with or without its mark', () => {
+    expect(decodeText(Buffer.from('0 \r\n', 'latin1'))).toBe('0 \r\n')
+    expect(decodeText(Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from('BUILTIN', 'utf16le')]))).toBe('BUILTIN')
+    expect(decodeText(Buffer.from('S-1-16-8192', 'utf16le'))).toBe('S-1-16-8192')
+    expect(decodeText(Buffer.alloc(0))).toBe('')
+  })
+
   it('reads a BMP header (width, height, bits) and refuses what is not a BMP', () => {
     const buf = Buffer.alloc(BMP_HEADER_BYTES)
     buf.write('BM', 0, 'latin1')
@@ -88,6 +107,8 @@ describe('snap-basic-user: the reader of one capture from a basic-user token', (
   it('says CAPTURES only for exit 0 with every picture matching, and names what was not measured', () => {
     const good = { exit: 0, displays: [{}], pictures: [{ ok: true }], token: { administrators: 'deny-only', level: 'Medium' } }
     expect(verdict(good)).toBe('CAPTURES')
+    // A capture whose token was not read as a basic user's is not called a basic-user capture.
+    expect(verdict({ ...good, token: { administrators: 'absent', level: null } })).toBe("CAPTURES, but the token was not read as a basic user's (Administrators absent, no mandatory level)")
     expect(verdict({ ...good, pictures: [{ ok: false }] })).toBe('FAILS (exit 0)')
     expect(verdict({ ...good, exit: 3, stderr: 'no desktop', displays: null, pictures: [] })).toBe('FAILS (exit 3: no desktop)')
     expect(verdict({ refused: 'RUNAS ERROR: x', pictures: [] })).toMatch(/^not measured: the runner refused both forms/)

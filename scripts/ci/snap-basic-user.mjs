@@ -56,6 +56,30 @@ export function readBmpHeader(buf) {
   return { width: buf.readInt32LE(18), height: buf.readInt32LE(22), bits: buf.readUInt16LE(28) }
 }
 
+/** The cmd file the restricted token runs, in `work`: the token's groups,
+ *  the capture into `cap`, then its exit status, written last and moved into
+ *  place so it is never read half written. */
+export function cmdFileText(work, helper, cap) {
+  return [
+    '@echo off',
+    `whoami /groups > "${join(work, 'groups.txt')}" 2>&1`,
+    `"${helper}" capture --out "${cap}" > "${join(work, 'line.txt')}" 2> "${join(work, 'err.txt')}"`,
+    // In brackets: a bare `echo 0> file` is read by cmd as a redirect of
+    // handle 0, which writes an empty file (the first dispatch's NaN).
+    `(echo %ERRORLEVEL%)> "${join(work, 'exit.tmp')}"`,
+    `move /y "${join(work, 'exit.tmp')}" "${join(work, 'exit.txt')}" > nul`,
+    '',
+  ].join('\r\n')
+}
+
+/** A file a console program wrote: UTF-16 when it starts with a UTF-16 byte
+ *  order mark or holds NUL bytes, else UTF-8. */
+export function decodeText(buf) {
+  if (!buf || buf.length === 0) return ''
+  if ((buf[0] === 0xff && buf[1] === 0xfe) || buf.includes(0)) return buf.toString('utf16le').replace(/^﻿/, '')
+  return buf.toString('utf8')
+}
+
 /** The capture line's displays, read strictly enough to report: null when the
  *  line is not the mode's answer. */
 export function readCaptureLine(text) {
@@ -74,7 +98,10 @@ export function verdict(r) {
   if (r.refused) return `not measured: the runner refused both forms of runas (${r.refused})`
   if (r.noStatus) return `not measured: the restricted run wrote no status within ${WAIT_MS / 1000} s`
   if (r.token && r.token.administrators === 'enabled') return 'not measured: the token runas gave still has the Administrators group enabled'
-  if (r.exit === 0 && r.displays && r.displays.length > 0 && r.pictures.every((p) => p.ok)) return 'CAPTURES'
+  if (r.exit === 0 && r.displays && r.displays.length > 0 && r.pictures.every((p) => p.ok)) {
+    const basic = r.token && r.token.administrators === 'deny-only' && r.token.level === 'Medium'
+    return basic ? 'CAPTURES' : `CAPTURES, but the token was not read as a basic user's (Administrators ${r.token?.administrators ?? 'not read'}, ${r.token?.level ?? 'no'} mandatory level)`
+  }
   return `FAILS (exit ${r.exit}${r.stderr ? `: ${r.stderr}` : ''})`
 }
 
@@ -101,14 +128,7 @@ async function measure(helper) {
     const cap = join(work, 'cap')
     mkdirSync(cap)
     const cmdFile = join(work, 'run.cmd')
-    writeFileSync(cmdFile, [
-      '@echo off',
-      `whoami /groups > "${join(work, 'groups.txt')}" 2>&1`,
-      `"${helper}" capture --out "${cap}" > "${join(work, 'line.txt')}" 2> "${join(work, 'err.txt')}"`,
-      `echo %ERRORLEVEL%> "${join(work, 'exit.tmp')}"`,
-      `move /y "${join(work, 'exit.tmp')}" "${join(work, 'exit.txt')}" > nul`,
-      '',
-    ].join('\r\n'))
+    writeFileSync(cmdFile, cmdFileText(work, helper, cap))
     const refusals = []
     for (const form of RUNAS_FORMS) {
       const started = Date.now()
@@ -134,9 +154,14 @@ async function measure(helper) {
       r.refused = refusals.join('; ')
       return r
     }
-    const read = (name) => { try { return readFileSync(join(work, name), 'utf8') } catch { return '' } }
-    r.token = readGroups(read('groups.txt'))
-    r.exit = Number.parseInt(read('exit.txt').trim(), 10)
+    const read = (name) => { try { return decodeText(readFileSync(join(work, name))) } catch { return '' } }
+    const groups = read('groups.txt')
+    r.token = readGroups(groups)
+    // What whoami wrote, kept when it named no group this script reads, so a
+    // reading it cannot make is shown, not guessed at.
+    if (r.token.administrators === 'absent' || r.token.level === null) r.groupsText = groups.slice(0, 2000)
+    r.exitText = read('exit.txt').slice(0, 40)
+    r.exit = Number.parseInt(r.exitText.trim(), 10)
     r.stderr = read('err.txt').trim().split(/\r?\n/)[0] ?? ''
     r.displays = readCaptureLine(read('line.txt'))
     for (const d of r.displays ?? []) {
@@ -176,6 +201,8 @@ async function main(argv) {
     `basic-user: runas ${r.form ?? '(none)'}${r.ms !== null && r.ms !== undefined ? `, the run's status in ${r.ms} ms (runas, cmd, whoami and the capture)` : ''}`,
     `basic-user: token: Administrators ${r.token?.administrators ?? 'not read'}, ${r.token?.level ?? 'no'} mandatory level`,
     ...(r.pictures ?? []).map((p) => `basic-user: ${p.file} ${p.width}x${p.height} at ${p.scale}%${p.primary ? ' (primary)' : ''}: ${p.ok ? 'size and header match the line' : `does not match (${p.bytes ?? 'no'} bytes, header ${JSON.stringify(p.header)})`}`),
+    ...(r.groupsText !== undefined ? [`basic-user: whoami /groups wrote: ${JSON.stringify(r.groupsText.slice(0, 600))}`] : []),
+    ...(r.exitText !== undefined && Number.isNaN(r.exit) ? [`basic-user: the status file held: ${JSON.stringify(r.exitText)}`] : []),
     `basic-user: verdict: ${verdict(r)}`,
   ]
   for (const line of lines) console.log(line)
