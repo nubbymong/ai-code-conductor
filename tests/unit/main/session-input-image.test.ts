@@ -131,10 +131,10 @@ describe('submitImage: a saved image as Claude Code\'s own paste', () => {
     expect(await answer).toEqual({ outcome: 'sent' })
   })
 
-  it.each([['a Codex session', 'codex'], ['an SSH Persistent session', 'tmux']] as const)('%s is not this door\'s: not-taken, nothing written', async (_name, kind) => {
-    const id = fresh(kind)
+  it.each([['a Codex session', codex], ['an SSH Persistent session', tmux]] as const)('%s is not this door\'s: not-taken, nothing written', async (_name, kindSet) => {
+    const id = fresh('other')
     const run = startRun(id)
-    ;(kind === 'codex' ? codex : tmux).add(id)
+    kindSet.add(id)
     expect(await input.submitImage(id, PATH, SENTENCE)).toEqual({ outcome: 'not-taken' })
     await vi.advanceTimersByTimeAsync(5_000)
     expect(run.writes).toEqual([])

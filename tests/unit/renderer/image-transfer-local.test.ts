@@ -3,8 +3,8 @@
  * saved image (Snap's picture, Alt+V's) to a session.
  *  - On this computer: main is asked to paste the path into the session
  *    (pty.submitImage, with the caller's sentence, or the default one), and
- *    nothing is typed from here. Main's answer `not-taken` (a Codex tab's
- *    Snap) gets the line it always got: the sentence and the path typed, then
+ *    nothing is typed from here. Main's answer `not-taken` (Snap in the other
+ *    assistant's tab) gets the line it always got: the sentence and the path typed, then
  *    Enter. So does an ask that fails. A session that is gone, or a path main
  *    refuses, gets nothing.
  *  - Over SSH, or with no session type: the host fetch line, as before, and

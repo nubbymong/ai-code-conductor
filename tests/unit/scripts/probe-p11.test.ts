@@ -189,7 +189,7 @@ describe('P11: each run and each form (the decision lines)', () => {
 describe('P11: the screens a CLI shows before its prompt', () => {
   const offer = (marked: 1 | 2) => `  Meet GPT-6 Sol\n${marked === 1 ? '›' : ' '} 1. Try new model\n${marked === 2 ? '›' : ' '} 2. Use existing model\n  enter/esc confirm · ctrl+c quit`
   it("Codex's new model offer is answered by keeping the model the run started with", () => {
-    const rule = P.RULES.codex.find((r) => r.label === 'new model offer')!
+    const rule = P.RULES['codex'].find((r) => r.label === 'new model offer')!
     expect(rule.re.test(offer(1))).toBe(true)
     expect((rule.keys as (t: string) => string[])(offer(1))).toEqual(['\u001b[B'])
     expect((rule.keys as (t: string) => string[])(offer(2))).toEqual(['\r'])
@@ -197,9 +197,10 @@ describe('P11: the screens a CLI shows before its prompt', () => {
   it("Codex is ready at its composer with the model's name in the footer, written in capitals as 0.157.1 writes it", () => {
     // The test machine's screen in the P11 run of 2026-11-23 (the folder shortened).
     const screen = ['› Ask Codex to do anything', '  GPT-5.5 default · ~\\AppData\\Local\\Temp\\p11-x\\codex-paste-1\\work', '  ? for shortcuts'].join('\n')
-    expect(P.READY.codex.test(screen)).toBe(true)
+    const ready = P.READY['codex']
+    expect(ready.test(screen)).toBe(true)
     // The composer alone (the session not yet ready) is not enough.
-    expect(P.READY.codex.test('› Ask Codex to do anything\n  ? for shortcuts')).toBe(false)
+    expect(ready.test('› Ask Codex to do anything\n  ? for shortcuts')).toBe(false)
   })
 })
 
