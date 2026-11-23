@@ -454,7 +454,7 @@ had the same PATH, and all three found claude at `/usr/local/bin/claude` and nod
 host was left as found. Three
 things in the probe changed after the 2026-11-21 run, none in what it measures: a refused
 connection and an unknown name have labels of their own, a host name with a colon is not run, and a host without pgrep is
-reported as not left as found. The host that answered was left as found: every holder ended, the probe's temporary folder
+reported as not left as found. On 2026-11-21 the host that answered was left as found: every holder ended, the probe's temporary folder
 deleted, and `/tmp/aicc-<uid>`, which was not there before, not there after; nothing was
 made on the other. The probe is `helper/probes/p3-p6-linux.cjs`.
 

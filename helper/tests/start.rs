@@ -45,6 +45,12 @@ mod windows {
 
     const HELPER: &str = env!("CARGO_BIN_EXE_aicc-helper");
     const FAKE: &str = env!("CARGO_BIN_EXE_aicc-fake-cli");
+    /// How long a fake CLI these tests start stays alive, in seconds. Each one is
+    /// ended by its guard (`Started`, `Running`) when its test is done, so this only
+    /// has to outlast the slowest step on a loaded runner: a Windows CI run once
+    /// took longer than the old 10 s between a start and its `Win32_Process` read,
+    /// which then found no process.
+    const LIFE: &str = "120";
 
     static ONE_AT_A_TIME: Mutex<()> = Mutex::new(());
 
@@ -147,7 +153,7 @@ mod windows {
         );
         let out = Command::new(ps).args(["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script.as_str()]).stdin(Stdio::null()).output().expect("run PowerShell");
         let text = String::from_utf8_lossy(&out.stdout).into_owned();
-        assert!(out.status.success(), "PowerShell failed: {}", String::from_utf8_lossy(&out.stderr));
+        assert!(out.status.success(), "PowerShell failed (process {pid} still running: {}): {}", pids::alive(pid), String::from_utf8_lossy(&out.stderr));
         let mut lines = text.lines().map(str::trim).filter(|l| !l.is_empty());
         let exe = lines.next().unwrap_or_default().to_string();
         let created = lines.next().unwrap_or_default().to_string();
@@ -162,11 +168,11 @@ mod windows {
         let ended = end_of_file(read_end);
         // The helper is given the pipe end, as the app's every inheritable
         // handle reaches it, and has exited when this returns.
-        let ran = start(FAKE, &["--sleep", "10"]);
+        let ran = start(FAKE, &["--sleep", LIFE]);
         let (pid, _) = started(&ran);
         let _child = Started(pid);
         // The control: the same program, started the plain way, given the same end.
-        let control = Running(Command::new(FAKE).args(["--sleep", "10"]).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn().expect("start the fake CLI"));
+        let control = Running(Command::new(FAKE).args(["--sleep", LIFE]).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn().expect("start the fake CLI"));
         drop(write_end);
         let early = ended.recv_timeout(Duration::from_millis(500));
         drop(control);
@@ -188,7 +194,7 @@ mod windows {
         // (rounded rather than cut to the microsecond) would differ for about
         // half of them, so eight starts all agreeing by chance is 1 in 256.
         for _ in 0..8 {
-            let ran = start(FAKE, &["--sleep", "10"]);
+            let ran = start(FAKE, &["--sleep", LIFE]);
             let (pid, created) = started(&ran);
             let _child = Started(pid);
             let (exe, app_created) = as_the_app_reads_it(pid);
@@ -258,7 +264,7 @@ mod windows {
     #[test]
     fn it_ends_what_it_started_only_while_the_pid_has_that_start_time() {
         let _serial = one_at_a_time();
-        let (pid, created) = started(&start(FAKE, &["--sleep", "10"]));
+        let (pid, created) = started(&start(FAKE, &["--sleep", LIFE]));
         let _child = Started(pid);
         // Another start time (a microsecond later): the process is left running.
         let other = (created.parse::<u64>().expect("digits") + 10).to_string();
@@ -277,7 +283,7 @@ mod windows {
     #[test]
     fn it_ends_the_processes_under_it_too() {
         let _serial = one_at_a_time();
-        let (pid, created) = started(&start(FAKE, &["--sleep", "10", "--child"]));
+        let (pid, created) = started(&start(FAKE, &["--sleep", LIFE, "--child"]));
         let _root = Started(pid);
         let under = fake_under(pid);
         let _under = Started(under);
@@ -301,7 +307,7 @@ mod windows {
     fn it_does_not_wait_for_the_program() {
         let _serial = one_at_a_time();
         let begun = Instant::now();
-        let ran = start(FAKE, &["--sleep", "10"]);
+        let ran = start(FAKE, &["--sleep", LIFE]);
         let (pid, _) = started(&ran);
         let _child = Started(pid);
         assert!(begun.elapsed() < Duration::from_secs(5), "start took {:?}", begun.elapsed());

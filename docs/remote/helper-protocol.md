@@ -168,7 +168,7 @@ The CLI or sudo starts `emit` (statusline and hook command, R6, R7), `mcp`
   Outliving logout: probe P3 held for 60 s on a Linux host that does not clean up at
   logout (ADR-030); **pending probe P3** for a host that does and for ADR-029's other P3
   host roles (macOS, a container host). Rocky Linux 10 (2026-11-23): P3 held for
-  60 s in 3 of 3 runs of each form, also on a host that does not clean up at logout
+  60 s in 3 of 3 runs of each form, on a second host that does not clean up at logout
   (KillUserProcesses no, Linger yes).
 - Only the holder outlives a connection; `mcp` lives as long as the CLI, the
   rest for one call. The holder exits when the session ends, a non-detachable

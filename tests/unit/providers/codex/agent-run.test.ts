@@ -221,7 +221,7 @@ describe('the run', () => {
   // the search's own cost, so a search that grows with the square fails
   // however many runs there are. The long line gets up to ten runs, spread out
   // in time: three back to back were not enough on a loaded macOS runner,
-  // where all three took 28.3 ms after a best of 2.8 ms for the short line
+  // where the best of three took 28.3 ms after a best of 2.8 ms for the short line
   // (CI run 45123495761). Each round also runs the short line again, which can
   // only lower its best and so only make the check stricter.
   it('a long unterminated stderr line is handed on in time linear in its length, whatever it holds, and nothing is lost', async () => {
