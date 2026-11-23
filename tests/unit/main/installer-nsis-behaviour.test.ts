@@ -360,8 +360,10 @@ function probeScript(mode: 'sweep' | 'e2e' | 'apps', out: string, cfg: string, l
 
   ReadRegStr $5 HKCU "\${UNINSTALL_REGISTRY_KEY}" "UninstallString"
   ReadRegStr $6 HKCU "\${INSTALL_REGISTRY_KEY}" "InstallLocation"
+  ReadRegStr $7 HKCU "\${UNINSTALL_REGISTRY_KEY}" "InstallLocation"
   FileWrite $cccProbeLog "arpUninstallString=$5$\\r$\\n"
   FileWrite $cccProbeLog "arpInstallLocation=$6$\\r$\\n"
+  FileWrite $cccProbeLog "recordInstallLocation=$7$\\r$\\n"
   FileWrite $cccProbeLog "final=$INSTDIR$\\r$\\n"
   cccProbeFinished:
 `
@@ -724,6 +726,8 @@ describe.skipIf(!MAKENSIS)('installer.nsh behavioural probe', () => {
       // ...and the ARP record points at the new install
       expect(log.arpInstallLocation).toBe(f.expected)
       expect(log.arpUninstallString).toContain(f.expected)
+      // ...and names it, for what reads the installed programs list (aicc_planning #403)
+      expect(log.recordInstallLocation).toBe(f.expected)
       expect(existsSync(join(f.expected, 'AI Code Conductor.exe'))).toBe(true)
       // user data untouched
       expect(existsSync(join(f.root, 'data', 'CONFIG', 'settings.json'))).toBe(true)
@@ -819,6 +823,25 @@ describe.skipIf(!MAKENSIS)('installer.nsh behavioural probe', () => {
     regClear()
 
     expect(log.afterInit).toBe(f.leaf)
+    expect(log.recordInstallLocation).toBe(f.leaf)
+  }, 60_000)
+
+  it('a first install writes the install folder into the uninstall record as InstallLocation (aicc_planning #403)', () => {
+    // electron-builder writes InstallLocation only under its own key, so the
+    // installed programs list (winget, Get-Package, a script) found no folder.
+    const s = scenario('e2e-record-location')
+    const instdir = join(s.programs, 'AI Code Conductor')
+    dir(join(s.root, 'data'))
+    dir(join(s.root, 'res'))
+    regClear()
+    regSet('AI Code Conductor', 'DataDirectory', join(s.root, 'data'))
+    regSet('AI Code Conductor', 'ResourcesDirectory', join(s.root, 'res'))
+
+    const log = run('e2e', { instdir, parent: s.programs, linkRoot: s.links, seedFromRegistry: false })
+    regClear()
+
+    expect(log.final).toBe(instdir)
+    expect(log.recordInstallLocation).toBe(instdir)
   }, 60_000)
 
   it('never sweeps the siblings of an explicit /D= directory', () => {

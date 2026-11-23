@@ -1400,6 +1400,19 @@ describe('installer: the uninstaller removes the session helper folder, and noth
   })
 })
 
+describe('installer: the uninstall record names the install folder (static, aicc_planning #403)', () => {
+  // electron-builder writes InstallLocation only under its own key, so the
+  // installed programs list (winget, Get-Package) had no folder for the app.
+  // installer-nsis-behaviour.test.ts reads the value the real macro writes.
+  it('customInstall writes InstallLocation = $INSTDIR into the uninstall record, in the hive the record is in, and nothing else writes it', () => {
+    const lines = analyse(readNsh())
+    const writes = lines.filter((l) => /^WriteReg\w+ .*"\$\{UNINSTALL_REGISTRY_KEY\}" "?InstallLocation\b/.test(l.code))
+    expect(writes.map((l) => [l.macro, l.code])).toEqual([
+      ['customInstall', 'WriteRegStr SHELL_CONTEXT "${UNINSTALL_REGISTRY_KEY}" "InstallLocation" "$INSTDIR"'],
+    ])
+  })
+})
+
 // ---------------------------------------------------------------------------
 // The app-running check (aicc_planning #319)
 // ---------------------------------------------------------------------------

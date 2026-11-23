@@ -1227,6 +1227,13 @@
   WriteRegStr HKCU "Software\AI Code Conductor" "InstallPath" "$INSTDIR"
   WriteRegStr HKCU "Software\AI Code Conductor" "SourcePath" ""
 
+  ; The uninstall record names the install folder too, for whatever reads
+  ; the installed programs list for it (winget, Get-Package, a script).
+  ; electron-builder writes InstallLocation only under its own key. Same
+  ; hive as the record (SHELL_CONTEXT), so the uninstaller's removal of the
+  ; record takes this value with it.
+  WriteRegStr SHELL_CONTEXT "${UNINSTALL_REGISTRY_KEY}" "InstallLocation" "$INSTDIR"
+
   ; --- Remove a legacy install folder sitting beside this one ---
   ; Only application binaries live there; user data lives in the data and
   ; resources directories, which RemoveLegacyInstall refuses to touch. appId is
