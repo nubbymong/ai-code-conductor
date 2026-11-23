@@ -319,3 +319,17 @@ describe('the pill on a broadcast button (#399: "somehting subtle")', () => {
     expect(pillOn(row('p1'))).toBeNull()
   })
 })
+
+describe('making a broadcast button Session-only says the option ends (#399)', () => {
+  it('the scope confirmation names it for a button with the option, and not for one without', async () => {
+    for (const [cmd, says] of [[BROADCAST, true], [PLAIN, false]] as const) {
+      COMMANDS = [cmd]
+      render()
+      // Alt+Shift+Arrow moves a chip to the other band, through the same confirmation as a drop.
+      await act(async () => { chip(cmd.label).dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', altKey: true, shiftKey: true, bubbles: true, cancelable: true })); await settle() })
+      const body = container.querySelector('[data-testid="confirm-scope-body"]')!.textContent
+      expect(body.includes('It also stops sending to every open session.')).toBe(says)
+      await act(async () => { container.querySelector<HTMLElement>('[data-testid="confirm-scope-cancel"]')!.click(); await settle() })
+    }
+  })
+})

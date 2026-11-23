@@ -903,10 +903,11 @@ export default function CommandBar({ sessionId, configId, sessionType = 'local',
   // #399: Enter sends from the Shift+click confirmation (its card answers
   // Escape and Cancel itself). Taken wherever focus is, so it never reaches
   // the terminal underneath, except on a button in the card: a focused
-  // Cancel or Send answers its own Enter.
+  // Cancel or Send answers its own Enter. Only while the card is drawn: it
+  // is not when its button has gone.
   const answerBroadcastRef = useRef(answerBroadcast)
   answerBroadcastRef.current = answerBroadcast
-  const askingBroadcast = confirm?.kind === 'broadcast'
+  const askingBroadcast = confirm?.kind === 'broadcast' && commands.some((c) => c.id === confirm.commandId)
   useEffect(() => {
     if (!askingBroadcast) return
     const onKey = (e: KeyboardEvent) => {
@@ -1509,7 +1510,7 @@ export default function CommandBar({ sessionId, configId, sessionType = 'local',
           <ConfirmCard
             testId="confirm-section-band"
             title={`Move "${sec.name}" and its ${members.length} button${members.length === 1 ? '' : 's'} to ${confirm.band === 'global' ? 'Global' : 'Session'}?`}
-            body={confirm.band === 'global' ? <>They will show in every config.</> : <>They will show only in this config{configName ? ` (${configName})` : ''}.</>}
+            body={confirm.band === 'global' ? <>They will show in every config.</> : <>They will show only in this config{configName ? ` (${configName})` : ''}.{members.some((m) => m.broadcast) ? ' Any that send to every open session stop doing so.' : null}</>}
             actions={[{ label: 'Move', primary: true, testId: 'confirm-section-band-ok', onClick: () => {
               updateSection(sec.id, { scope: confirm.band === 'global' ? 'global' : 'config', configId: confirm.band === 'global' ? undefined : configId })
               for (const m of members) store.moveCommand(m.id, null, confirm.band, configId)
