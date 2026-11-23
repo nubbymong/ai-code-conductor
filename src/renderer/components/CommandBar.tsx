@@ -276,6 +276,9 @@ type ConfirmState =
   | { kind: 'delete'; commandId: string }
   | { kind: 'hide'; tool: CoreToolId }
   | { kind: 'section-band'; sectionId: string; band: CommandBand }
+  /** #399: a Shift+click asks before one press goes to every open session.
+   *  `count`: the open agent sessions when it asked. */
+  | { kind: 'broadcast'; commandId: string; count: number }
 
 export default function CommandBar({ sessionId, configId, sessionType = 'local', partnerEnabled, isPartnerActive, onTogglePartner, partnerSessionId, parentSessionId, mainPaneIsShell = false, configCount }: Props) {
   const webviewKey = parentSessionId ?? sessionId
@@ -665,7 +668,28 @@ export default function CommandBar({ sessionId, configId, sessionType = 'local',
     window.dispatchEvent(new CustomEvent('ccc:focus-terminal', { detail: { sessionId } }))
   }
 
-  const runCommand = (cmd: CustomCommand, withArgsAt?: DOMRect) => {
+  /** #399: the button a Shift+click asked about, until Send or Cancel answers
+   *  it. Read and cleared by the first answer, so a held Enter or a second
+   *  click on Send cannot send it twice. */
+  const askedBroadcast = useRef<string | null>(null)
+  const askBroadcast = (cmd: CustomCommand) => {
+    askedBroadcast.current = cmd.id
+    setConfirm({ kind: 'broadcast', commandId: cmd.id, count: broadcastTargets(useSessionStore.getState().sessions).length })
+  }
+  const answerBroadcast = (send: boolean) => {
+    const id = askedBroadcast.current
+    askedBroadcast.current = null
+    setConfirm(null)
+    if (!send || !id) return
+    // Read again: the button may have been edited while the card was up.
+    const cmd = commands.find((c) => c.id === id)
+    if (cmd && canBroadcast(cmd)) broadcastCommand(cmd)
+  }
+
+  /** `shift`: a Shift+click (#399). On a simple Global prompt it asks, then
+   *  sends that one press to every open session; on any other button it is a
+   *  plain press. */
+  const runCommand = (cmd: CustomCommand, withArgsAt?: DOMRect, shift = false) => {
     if (cmd.kind === 'page') {
       if (!isAllowedBrowserUrl(cmd.pageUrl)) { console.warn('[CommandBar] page command has no usable URL:', cmd.label); return }
       trackUsage('webview.opened')
@@ -678,9 +702,14 @@ export default function CommandBar({ sessionId, configId, sessionType = 'local',
       return
     }
     // #399: a button set to "Send to every open session" goes to every open
-    // agent session on a plain press, with no confirmation (the owner: the
-    // option is the user's own standing choice).
-    if (canBroadcast(cmd) && isBroadcastButton(cmd)) { broadcastCommand(cmd); return }
+    // agent session on a plain press (or a Shift+click), with no
+    // confirmation: the option is the user's own standing choice. Without
+    // it, a Shift+click asks first ("a warning in case accidetnal for shift
+    // click", the owner), so a slip sends nothing.
+    if (canBroadcast(cmd)) {
+      if (isBroadcastButton(cmd)) { broadcastCommand(cmd); return }
+      if (shift) { askBroadcast(cmd); return }
+    }
     sendCommand(cmd, buildFullCommand(cmd))
   }
 
@@ -692,7 +721,7 @@ export default function CommandBar({ sessionId, configId, sessionType = 'local',
     // moves focus into the terminal via ccc:focus-terminal; Alt+Enter's
     // keyboard-run path (roving tabindex) is untouched.
     ;(e.currentTarget as HTMLElement)?.blur?.()
-    runCommand(cmd, e.ctrlKey && rect ? rect : undefined)
+    runCommand(cmd, e.ctrlKey && rect ? rect : undefined, e.shiftKey)
   }
 
   // A keychain write that fails (no keyring on this Linux, a torn credentials
@@ -871,6 +900,27 @@ export default function CommandBar({ sessionId, configId, sessionType = 'local',
   })), [plans, collapsedSectionIds])
   const { folded } = useBandFolding(rowRef, foldBands, overflowMode, !!dragId)
 
+  // #399: Enter sends from the Shift+click confirmation (its card answers
+  // Escape and Cancel itself). Taken wherever focus is, so it never reaches
+  // the terminal underneath, except on a button in the card: a focused
+  // Cancel or Send answers its own Enter.
+  const answerBroadcastRef = useRef(answerBroadcast)
+  answerBroadcastRef.current = answerBroadcast
+  const askingBroadcast = confirm?.kind === 'broadcast'
+  useEffect(() => {
+    if (!askingBroadcast) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Enter' || e.isComposing) return
+      const t = e.target
+      if (t instanceof Element && t.closest('[data-testid="confirm-broadcast"] button')) return
+      e.preventDefault()
+      e.stopPropagation()
+      answerBroadcastRef.current(true)
+    }
+    window.addEventListener('keydown', onKey, true)
+    return () => window.removeEventListener('keydown', onKey, true)
+  }, [askingBroadcast])
+
   const configName = useMemo(() => session?.label, [session])
 
   // ---- render helpers -----------------------------------------------------------
@@ -1022,7 +1072,7 @@ export default function CommandBar({ sessionId, configId, sessionType = 'local',
 
   const menuCmd = menu?.kind === 'command' ? commands.find((c) => c.id === menu.id) : undefined
   const menuSection = menu?.kind === 'section' ? sections.find((s) => s.id === menu.id) : undefined
-  const confirmCmd = confirm && (confirm.kind === 'scope' || confirm.kind === 'delete') ? commands.find((c) => c.id === confirm.commandId) : undefined
+  const confirmCmd = confirm && (confirm.kind === 'scope' || confirm.kind === 'delete' || confirm.kind === 'broadcast') ? commands.find((c) => c.id === confirm.commandId) : undefined
   const overflowPlan = overflowOpen ? plans.find((p) => p.band === overflowOpen.band) : undefined
 
   return (
@@ -1394,7 +1444,7 @@ export default function CommandBar({ sessionId, configId, sessionType = 'local',
           folded={overflowPlan.chips.filter((c) => (folded[overflowPlan.band] ?? new Set()).has(c.id))}
           caps={caps}
           anchor={overflowOpen.anchor}
-          onRun={(cmd, e) => runCommand(cmd, e.ctrlKey ? overflowOpen.anchor : undefined)}
+          onRun={(cmd, e) => runCommand(cmd, e.ctrlKey ? overflowOpen.anchor : undefined, e.shiftKey)}
           onContextMenu={(cmd, e) => { setOverflowOpen(null); setMenu({ kind: 'command', id: cmd.id, x: e.clientX, y: e.clientY }) }}
           onManage={() => openSettingsTab('commands')}
           onClose={() => setOverflowOpen(null)}
@@ -1415,6 +1465,15 @@ export default function CommandBar({ sessionId, configId, sessionType = 'local',
             setConfirm(null)
           } }]}
           onCancel={() => setConfirm(null)}
+        />
+      )}
+      {confirm?.kind === 'broadcast' && confirmCmd && (
+        <ConfirmCard
+          testId="confirm-broadcast"
+          title={`Send to ${confirm.count} open session${confirm.count === 1 ? '' : 's'}?`}
+          body={<>Shift+click sends "{confirmCmd.label}" once to every open Claude Code and Codex tab, SSH and background tabs included. Terminal-only tabs and Ask Conductor get nothing.</>}
+          actions={[{ label: 'Send', primary: true, testId: 'confirm-broadcast-ok', onClick: () => answerBroadcast(true) }]}
+          onCancel={() => answerBroadcast(false)}
         />
       )}
       {confirm?.kind === 'delete' && confirmCmd && (

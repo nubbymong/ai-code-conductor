@@ -774,7 +774,7 @@ export default function CommandDialog({ onConfirm, onCancel, initial, configId, 
                     {BROADCAST_OPTION_LABEL}
                   </label>
                   <p id="command-broadcast-hint" className={HINT_CLASS} style={HINT_STYLE} data-testid="command-broadcast-hint">
-                    {broadcastWhyNot ?? 'One press sends it once to every open agent session, SSH and background tabs included. Terminal-only tabs and Ask Conductor get nothing.'}
+                    {broadcastWhyNot ?? 'One press sends it once to every open agent session, SSH and background tabs included. Terminal-only tabs and Ask Conductor get nothing. Without it, Shift+click sends one press to every open session, after asking.'}
                   </p>
                 </div>
 

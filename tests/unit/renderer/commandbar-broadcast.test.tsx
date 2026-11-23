@@ -11,7 +11,11 @@
  *    an ended session; the pressed tab shows one note with the count;
  *  - a button without it still reaches only its own tab;
  *  - a record that has the option but is not a simple prompt (it has
- *    arguments) presses as a single button.
+ *    arguments) presses as a single button;
+ *  - Shift+click on a simple Global prompt asks first ("Send to N open
+ *    sessions?"): Cancel and Escape send nothing, Send and Enter reach every
+ *    open agent session once; a Shift+click on any other button (arguments,
+ *    a shell line, a Session button) is a plain press of its own tab.
  */
 import React from 'react'
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
@@ -101,7 +105,7 @@ afterEach(() => {
 })
 
 const render = () => {
-  act(() => { root.render(React.createElement(CommandBar, { sessionId: 's-1', parentSessionId: 's-1', configId: 'cfg' } as never)) })
+  act(() => { root.render(React.createElement(CommandBar, { sessionId: 's-1', parentSessionId: 's-1', partnerSessionId: 's-1-partner', configId: 'cfg' } as never)) })
 }
 const chip = (label: string) =>
   Array.from(container.querySelectorAll<HTMLButtonElement>('[data-testid="command-chip"]')).find((b) => b.textContent?.includes(label))!
@@ -163,5 +167,109 @@ describe('a Global button without the option (#399)', () => {
     await press('Resume')
     expect(sentTo()).toEqual([{ sessionId: 's-1', text: 'resume from the handoff' }])
     expect(note()).toBeUndefined()
+  })
+})
+
+describe('Shift+click on a Global prompt button asks first (#399)', () => {
+  const card = () => container.querySelector('[data-testid="confirm-broadcast"]')
+  const byTest = (id: string) => container.querySelector<HTMLElement>(`[data-testid="${id}"]`)!
+  const key = async (k: string, target: EventTarget = document.body) => {
+    await act(async () => { target.dispatchEvent(new KeyboardEvent('keydown', { key: k, bubbles: true, cancelable: true })); await settle() })
+  }
+  const askFor = async (label = 'Resume') => {
+    render()
+    await press(label, { shiftKey: true })
+  }
+
+  it('asks "Send to N open sessions?", counting the open agent tabs, and sends nothing yet', async () => {
+    COMMANDS = [PLAIN]
+    await askFor()
+    expect(card()).not.toBeNull()
+    expect(byTest('confirm-broadcast-title').textContent).toBe('Send to 2 open sessions?')
+    expect(byTest('confirm-broadcast-body').textContent).toContain('"Resume"')
+    expect(submitPrompt).not.toHaveBeenCalled()
+    expect(ptyWrite).not.toHaveBeenCalled()
+  })
+
+  it('Cancel sends nothing', async () => {
+    COMMANDS = [PLAIN]
+    await askFor()
+    await act(async () => { byTest('confirm-broadcast-cancel').click(); await settle() })
+    expect(card()).toBeNull()
+    expect(submitPrompt).not.toHaveBeenCalled()
+    expect(ptyWrite).not.toHaveBeenCalled()
+  })
+
+  it('Escape sends nothing', async () => {
+    COMMANDS = [PLAIN]
+    await askFor()
+    await key('Escape')
+    expect(card()).toBeNull()
+    expect(submitPrompt).not.toHaveBeenCalled()
+    // And an Enter after it sends nothing either: the card is gone.
+    await key('Enter')
+    expect(submitPrompt).not.toHaveBeenCalled()
+  })
+
+  it('Send reaches every open agent tab once, and the pressed tab counts them', async () => {
+    COMMANDS = [PLAIN]
+    await askFor()
+    await act(async () => { byTest('confirm-broadcast-ok').click(); await settle() })
+    expect(card()).toBeNull()
+    expect(sentTo()).toEqual([
+      { sessionId: 's-1', text: 'resume from the handoff' },
+      { sessionId: 's-2', text: 'resume from the handoff' },
+    ])
+    expect(ptyWrite).not.toHaveBeenCalled()
+    expect(note()).toBe('Sent to 2 of 2 sessions.')
+  })
+
+  it('Enter sends, once, even when a second Enter comes before the card has gone', async () => {
+    COMMANDS = [PLAIN]
+    await askFor()
+    await act(async () => {
+      for (let i = 0; i < 2; i++) document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
+      await settle()
+    })
+    await key('Enter')
+    expect(sentTo()).toEqual([
+      { sessionId: 's-1', text: 'resume from the handoff' },
+      { sessionId: 's-2', text: 'resume from the handoff' },
+    ])
+  })
+
+  it('an Enter on the card\'s own focused Cancel is left to that button: it does not send', async () => {
+    COMMANDS = [PLAIN]
+    await askFor()
+    const cancel = byTest('confirm-broadcast-cancel')
+    cancel.focus()
+    await key('Enter', cancel)
+    expect(submitPrompt).not.toHaveBeenCalled()
+  })
+
+  it('a button with the option on does not ask: a Shift+click sends at once', async () => {
+    COMMANDS = [BROADCAST]
+    await askFor('Review all')
+    expect(card()).toBeNull()
+    expect(submitPrompt).toHaveBeenCalledTimes(2)
+  })
+
+  it.each([
+    ['a prompt with arguments', { ...PLAIN, defaultArgs: ['--verbose'] }, [{ sessionId: 's-1', text: 'resume from the handoff --verbose' }]],
+    ['a Session prompt', { ...PLAIN, scope: 'config', configId: 'cfg' }, [{ sessionId: 's-1', text: 'resume from the handoff' }]],
+  ])('Shift+click on %s is a plain press of its own tab', async (_name, cmd, sent) => {
+    COMMANDS = [cmd]
+    await askFor()
+    expect(card()).toBeNull()
+    expect(sentTo()).toEqual(sent)
+  })
+
+  it('Shift+click on a shell-line button types into its own tab\'s shell only', async () => {
+    COMMANDS = [{ id: 'sh1', label: 'Run tests', prompt: 'npm test', scope: 'global', kind: 'shell', target: 'partner' }]
+    render()
+    await press('Run tests', { shiftKey: true })
+    expect(card()).toBeNull()
+    expect(submitPrompt).not.toHaveBeenCalled()
+    expect(ptyWrite.mock.calls).toEqual([['s-1-partner', 'npm test\r']])
   })
 })
