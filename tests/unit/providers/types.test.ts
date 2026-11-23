@@ -14,6 +14,7 @@ describe('provider types', () => {
     expectTypeOf<SessionProvider>().toHaveProperty('resolveBinary')
     expectTypeOf<SessionProvider>().toHaveProperty('buildSpawnCommand')
     expectTypeOf<SessionProvider>().toHaveProperty('detectUiRunning')
+    expectTypeOf<SessionProvider>().toHaveProperty('exitKeys')
     expectTypeOf<SessionProvider>().toHaveProperty('ingestSessionTelemetry')
     expectTypeOf<SessionProvider>().toHaveProperty('listHistorySessions')
     expectTypeOf<SessionProvider>().toHaveProperty('resumeCommand')

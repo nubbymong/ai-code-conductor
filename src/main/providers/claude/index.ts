@@ -1,7 +1,7 @@
 // Claude provider package: public entry point (WP1, design 7.1). Everything
 // outside this directory imports from here; the dependency-boundary test
 // holds the deep imports at zero.
-import type { SshCapableProvider, SpawnOptions, TelemetrySource, HistorySession } from '../types'
+import type { SshCapableProvider, SpawnOptions, TelemetrySource, HistorySession, ExitKey } from '../types'
 import type { LegacyVersion, SshRuntime, StatuslineData } from '../../../shared/types'
 import type { ProviderCapabilities } from '../../../shared/providers'
 import type { ProviderPackage } from '../core'
@@ -71,9 +71,20 @@ export interface ClaudePackageDeps {
   auth?: ClaudeAuthPorts
 }
 
+/** 2.1.3-beta.15 B3 (aicc_planning#393): the keys a quit types into a Claude
+ *  Code the app started, as they were before they moved here from the session
+ *  input module: Escape (cancel any pending input) at once, Ctrl-C (interrupt
+ *  anything) at 100 ms, then /exit and Enter at 300 ms. */
+const CLAUDE_EXIT_KEYS: readonly ExitKey[] = [
+  { data: '\x1b', atMs: 0 },
+  { data: '\x03', atMs: 100 },
+  { data: '/exit\r', atMs: 300 },
+]
+
 export class ClaudeProvider implements SshCapableProvider {
   readonly id = 'claude' as const
   readonly displayName = 'Claude Code'
+  readonly exitKeys = CLAUDE_EXIT_KEYS
 
   resolveBinary(legacyVersion?: LegacyVersion): { cmd: string; args: string[] } | null {
     return resolveClaudeBinary(legacyVersion)

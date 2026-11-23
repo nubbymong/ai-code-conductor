@@ -357,7 +357,7 @@ describe('a hook\'s transcript path: the exact claim (P3.5, P3.6 limits)', () =>
     } finally {
       vi.useRealTimers()
     }
-    // The wait for /exit ran out: a forced kill, its end not reported yet.
+    // The wait for its exit after the quit keys ran out: a forced kill, its end not reported yet.
     expect(h.ptys.at(-1)!.kill).toHaveBeenCalled()
     expect(noteCodexHookTranscript(SID2, rollout('a', ID_B))).toBe(true)
     exitAll()
