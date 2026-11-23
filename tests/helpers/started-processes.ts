@@ -28,7 +28,7 @@
  */
 import { spawnSync } from 'node:child_process'
 import { writeFileSync } from 'node:fs'
-import { basename, join } from 'node:path'
+import { basename, win32 } from 'node:path'
 
 /** What a test keeps of a process it spawned: a ChildProcess fits. */
 export interface SpawnedProcess {
@@ -50,7 +50,7 @@ export interface StoppableProcess {
 export interface EndDeps {
   /** Whether a process with this pid runs (any process). */
   pidAnswers: (pid: number) => boolean
-  /** The image name of the process with this pid now, or undefined when none has it. */
+  /** The image name of the process with this pid now, or undefined when none has it. Throws when it cannot read. */
   imageOf: (pid: number) => string | undefined
   /** Ends the process with this pid. Only endIfImage calls it, after reading the image. */
   killPid: (pid: number) => void
@@ -59,15 +59,45 @@ export interface EndDeps {
   pause: (ms: number) => Promise<void>
 }
 
-/** The image name of process `pid` now (tasklist on Windows, ps elsewhere), or undefined when no process has that pid. */
-export function imageOf(pid: number): string | undefined {
+/** One run of a program, as imageOf reads it (what spawnSync gives back). */
+export interface ProgramRun {
+  status: number | null
+  stdout?: string | null
+  error?: Error
+}
+export type RunProgram = (file: string, args: string[]) => ProgramRun
+
+const runProgram: RunProgram = (file, args) => spawnSync(file, args, { encoding: 'utf-8', windowsHide: true, timeout: 30_000 })
+
+const ran = (r: ProgramRun) => !r.error && r.status === 0
+const why = (r: ProgramRun) => (r.error ? r.error.message : `exit code ${r.status}`)
+
+/**
+ * The image name of process `pid` now, or undefined when no process has that
+ * pid. Throws when it cannot read, so a failed read is never taken for "gone".
+ * On Windows it reads with tasklist. Over a non-interactive sign-in (SSH, a
+ * scheduled task) tasklist answers "Access denied" (measured on the VM; see
+ * build/installer.nsh), so a tasklist run that did not succeed is read again
+ * through Windows PowerShell's Get-Process, which does not use WMI. Elsewhere
+ * it reads with ps.
+ */
+export function imageOf(pid: number, run: RunProgram = runProgram, platform: NodeJS.Platform = process.platform): string | undefined {
   if (!Number.isInteger(pid) || pid <= 0) return undefined
-  if (process.platform === 'win32') {
-    const exe = join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'tasklist.exe')
-    const r = spawnSync(exe, ['/FI', `PID eq ${pid}`, '/FO', 'CSV', '/NH'], { encoding: 'utf-8', windowsHide: true, timeout: 30_000 })
-    return parseTasklistImage(r.stdout ?? '', pid)
+  if (platform === 'win32') {
+    const root = process.env.SystemRoot || 'C:\\Windows'
+    const list = run(win32.join(root, 'System32', 'tasklist.exe'), ['/FI', `PID eq ${pid}`, '/FO', 'CSV', '/NH'])
+    if (ran(list)) return parseTasklistImage(list.stdout ?? '', pid)
+    const ps = run(win32.join(root, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'), [
+      '-NoProfile', '-NonInteractive', '-Command',
+      `$p = Get-Process -Id ${pid} -ErrorAction SilentlyContinue; if ($p) { 'image:' + $p.ProcessName + '.exe' } else { 'image:' }`,
+    ])
+    const m = ran(ps) ? (ps.stdout ?? '').match(/^image:(.*)$/m) : null
+    if (m) return m[1].trim() === '' ? undefined : m[1].trim()
+    throw new Error(`could not read the image of pid ${pid}: tasklist ${why(list)}; Get-Process ${m === null && ran(ps) ? 'printed no answer' : why(ps)}`)
   }
-  const r = spawnSync('ps', ['-o', 'comm=', '-p', String(pid)], { encoding: 'utf-8', timeout: 30_000 })
+  // ps exits 1 with nothing printed when no process has the pid.
+  const r = run('ps', ['-o', 'comm=', '-p', String(pid)])
+  if (r.error) throw new Error(`could not read the image of pid ${pid}: ps ${why(r)}`)
   const name = (r.stdout ?? '').trim()
   return name === '' ? undefined : basename(name)
 }

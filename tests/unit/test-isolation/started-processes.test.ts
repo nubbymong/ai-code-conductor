@@ -14,8 +14,8 @@ import { join, relative, sep } from 'node:path'
 import { runInNewContext } from 'node:vm'
 import { describe, expect, it } from 'vitest'
 import {
-  askToStop, endIfImage, endSpawned, parseTasklistImage, runs, runsImage, stopWhen,
-  type EndDeps, type SpawnedProcess,
+  askToStop, endIfImage, endSpawned, imageOf, parseTasklistImage, runs, runsImage, stopWhen,
+  type EndDeps, type ProgramRun, type RunProgram, type SpawnedProcess,
 } from '../../helpers/started-processes'
 
 /** A spawned process as a ChildProcess shows it; `kill` ends it at once. */
@@ -193,6 +193,60 @@ describe('reading the image name tasklist gives', () => {
     expect(parseTasklistImage('INFO: No tasks are running which match the specified criteria.\r\n', 4242)).toBeUndefined()
     expect(parseTasklistImage('"PING.EXE","42420","Console","1","4,512 K"\r\n', 4242)).toBeUndefined()
     expect(parseTasklistImage('', 4242)).toBeUndefined()
+  })
+})
+
+// Over a non-interactive sign-in (SSH to the VM, a scheduled task) tasklist
+// answers "Access denied" (build/installer.nsh), and these files run on the VM
+// over SSH. A read that fails must never be taken for "no such process".
+describe('reading the image of a pid', () => {
+  /** Answers each program by its file name; records what ran. */
+  function programs(answers: Record<string, ProgramRun>) {
+    const ran: string[] = []
+    const run: RunProgram = (file) => {
+      const name = file.split(/[\\/]/).pop()!.toLowerCase()
+      ran.push(name)
+      const a = answers[name]
+      if (!a) throw new Error(`unexpected program ${name}`)
+      return a
+    }
+    return { run, ran }
+  }
+  const denied: ProgramRun = { status: 1, stdout: '' }
+
+  it('on Windows reads tasklist, and asks nothing else when tasklist answers', () => {
+    const p = programs({ 'tasklist.exe': { status: 0, stdout: '"PING.EXE","4242","Console","1","4,512 K"\r\n' } })
+    expect(imageOf(4242, p.run, 'win32')).toBe('PING.EXE')
+    const q = programs({ 'tasklist.exe': { status: 0, stdout: 'INFO: No tasks are running which match the specified criteria.\r\n' } })
+    expect(imageOf(4242, q.run, 'win32')).toBeUndefined()
+    expect([...p.ran, ...q.ran]).toEqual(['tasklist.exe', 'tasklist.exe'])
+  })
+
+  it('reads through Get-Process when tasklist is denied or cannot start', () => {
+    const p = programs({ 'tasklist.exe': denied, 'powershell.exe': { status: 0, stdout: 'image:PING.exe\r\n' } })
+    expect(imageOf(4242, p.run, 'win32')).toBe('PING.exe')
+    expect(p.ran).toEqual(['tasklist.exe', 'powershell.exe'])
+    const q = programs({ 'tasklist.exe': { status: null, error: new Error('spawn ENOENT') }, 'powershell.exe': { status: 0, stdout: 'image:\r\n' } })
+    expect(imageOf(4242, q.run, 'win32')).toBeUndefined()
+  })
+
+  it('throws when neither can read, so a failed read is never "gone"', () => {
+    const p = programs({ 'tasklist.exe': denied, 'powershell.exe': { status: 1, stdout: '' } })
+    expect(() => imageOf(4242, p.run, 'win32')).toThrow(/could not read the image of pid 4242/)
+    const q = programs({ 'tasklist.exe': denied, 'powershell.exe': { status: 0, stdout: 'WARNING: something else\r\n' } })
+    expect(() => imageOf(4242, q.run, 'win32')).toThrow(/printed no answer/)
+  })
+
+  it('elsewhere reads ps: a name, none when ps finds no such pid, and throws when ps cannot run', () => {
+    expect(imageOf(4242, programs({ ps: { status: 0, stdout: '/bin/sleep\n' } }).run, 'linux')).toBe('sleep')
+    expect(imageOf(4242, programs({ ps: { status: 1, stdout: '' } }).run, 'linux')).toBeUndefined()
+    expect(() => imageOf(4242, programs({ ps: { status: null, error: new Error('spawn ENOENT') } }).run, 'linux')).toThrow(/could not read the image of pid 4242/)
+  })
+
+  it('a stop request whose read fails says so, and does not report the process gone', async () => {
+    const s = system({ 4242: 'node.exe' })
+    const deps: Partial<EndDeps> = { ...s.deps, imageOf: () => { throw new Error('could not read the image of pid 4242') } }
+    await expect(askToStop({ pid: 4242, stopFile: 'C:/t/stop', image: 'node.exe' }, 5000, deps)).rejects.toThrow(/could not read/)
   })
 })
 

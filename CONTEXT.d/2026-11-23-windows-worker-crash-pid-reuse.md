@@ -22,9 +22,10 @@ step ran).
   - Run 45144695065 (18 more, the freed pids watched every 100 ms): five times a pid freed by a
     probe stand-in (ccc-probe-helper.exe, aicc-helper.exe, ccc-probe-app.exe) was held 7 to 63 s
     later by a live vitest worker while the installer file still ran (once more for a short-lived
-    node process the file started). Ending each such pid as the old code did gave "Worker exited
-    unexpectedly" 7 to 19 ms later, all six times: exit code 1, no signal, the worker's file
-    unreported. The old kill sites ended a WmiPrvSE.exe that held a freed pid.
+    node process the file started). The diag harness then ended each such pid itself, with the old
+    code's call (`process.kill(pid)`): "Worker exited unexpectedly" followed 7 to 19 ms later, all
+    six times, exit code 1, no signal, the worker's file unreported. Left alone, the old kill sites
+    ended a WmiPrvSE.exe that held a freed pid.
   - Every other worker exit in the 36 runs (14,934) was vitest's own stop (SIGTERM, or code 0).
 - **The two CI failures fit it.** Both were in part 2, the only part with the installer file. The
   crashed worker had started seconds before (reauth-staging at 06:23:40.6, home-guard at 17:00:27.1,
@@ -32,6 +33,10 @@ step ran).
   slot, 31 to 44 s into the installer file, where its uninstall afterAll ends every pid it started.
   reauth-staging.test.ts starts no process; neither log has an out-of-memory or fatal error line.
   The CI logs carry no pid, so which pid was ended in those two runs is inferred from this timing.
+- **Not reproduced unaided.** In the 36 diag runs the old kill sites made 2,700 kill checks and
+  ended two processes that held a freed pid (a conhost.exe, a WmiPrvSE.exe), never a vitest worker;
+  all six crashes there followed the harness's own kill. Each link is measured; the whole chain was
+  not seen to happen by itself.
 - **The fix** (tests and a test helper only). `tests/helpers/started-processes.ts`: a process a test
   spawned is ended through its ChildProcess (Node ends it through its handle, and Windows gives no
   other process the pid while the handle is open) and read as running through it; a process a test
@@ -40,7 +45,10 @@ step ran).
   5bb0889e had moved the installer file to handles for spawned processes (kept) and to a
   program-path check for pid-only ones, which cannot tell a node.exe from a vitest worker; those now
   use stop files. The same class is fixed in fake-cli.test.ts (a node.exe helper and a ping.exe
-  "browser") and claude-cli-version.test.ts (a hung node.exe CLI).
+  "browser") and claude-cli-version.test.ts (a hung node.exe CLI). An image is read with tasklist,
+  and through Get-Process when tasklist does not succeed (it answers "Access denied" over a
+  non-interactive sign-in such as SSH to the VM, see build/installer.nsh); a read that fails both
+  ways throws, so it is never taken for "gone".
 - **Kept from recurring.** started-processes.test.ts checks that no file under tests/unit, tests/wp1,
   tests/integration or tests/helpers calls `process.kill` with a signal other than 0 outside the
-  helper (red before the fix on the three sites; five helper mutants each red).
+  helper (red before the fix on the three sites; eight helper mutants each red, two of them on the image read).
