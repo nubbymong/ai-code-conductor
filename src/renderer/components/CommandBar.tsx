@@ -45,6 +45,7 @@ import { writeSessionInput, dropTmuxCopyModeBelief } from './terminal/tmuxWheelS
 import { usePasteHintStore } from '../stores/pasteHintStore'
 import { stripSpoofableText } from '../../shared/safe-text'
 import type { PromptButtonResult, SubmitNotDeliveredReason } from '../../shared/types'
+import { broadcastTargets, broadcastPrompt, broadcastNote, broadcastBlocker, isBroadcastButton } from '../lib/commandBroadcast'
 
 // User-picked section colours are Mocha pastels tuned for dark surfaces;
 // rendered as bare text on the light theme they wash out. Darken them toward
@@ -629,6 +630,41 @@ export default function CommandBar({ sessionId, configId, sessionType = 'local',
       .finally(() => { pendingSends.current -= 1 })
   }
 
+  /**
+   * #399: whether a press of this button can go to every open session from
+   * this bar: a simple Global prompt (broadcastBlocker: no arguments, no
+   * secret), pressed on an agent session, with main's prompt path in the
+   * preload (an older preload or a test harness without it presses as a
+   * single button).
+   */
+  const canBroadcast = (cmd: CustomCommand): boolean =>
+    !!caps.agent && !caps.isAsk && broadcastBlocker(cmd) === null && typeof window.electronAPI?.pty?.submitPrompt === 'function'
+
+  /**
+   * #399: send this button's prompt to every open agent session, each through
+   * its own prompt path in main (lib/commandBroadcast: which sessions, the
+   * sends, the count), and show one note on this tab with the count. This tab
+   * gets what a single press gives it besides: its agent pane is shown, its
+   * page watch starts, and its terminal takes the keyboard. Read from the
+   * session store at the press, so the bar does not redraw on every session
+   * change to keep a count nobody is looking at.
+   */
+  const broadcastCommand = (cmd: CustomCommand) => {
+    const text = buildFullCommand(cmd)
+    const targets = broadcastTargets(useSessionStore.getState().sessions)
+    trackUsage('commands.broadcast')
+    if (isPartnerActive && onTogglePartner) onTogglePartner()
+    void broadcastPrompt(text, targets, (args) => window.electronAPI.pty.submitPrompt(args), dropTmuxCopyModeBelief)
+      .then((tally) => {
+        const note = broadcastNote(tally)
+        if (note) usePasteHintStore.getState().show(sessionId, note, PROMPT_NOTE_MS)
+      })
+    const webViewUrl = cmd.webView?.enabled ? cmd.webView.url : null
+    if (webViewUrl) startWebviewPolling(webViewUrl)
+    else if (webviewUrls.length > 0) void probeWebviewUrls(webviewKey, webviewUrls)
+    window.dispatchEvent(new CustomEvent('ccc:focus-terminal', { detail: { sessionId } }))
+  }
+
   const runCommand = (cmd: CustomCommand, withArgsAt?: DOMRect) => {
     if (cmd.kind === 'page') {
       if (!isAllowedBrowserUrl(cmd.pageUrl)) { console.warn('[CommandBar] page command has no usable URL:', cmd.label); return }
@@ -641,6 +677,10 @@ export default function CommandBar({ sessionId, configId, sessionType = 'local',
       setArgsPopover({ cmd, rect: withArgsAt })
       return
     }
+    // #399: a button set to "Send to every open session" goes to every open
+    // agent session on a plain press, with no confirmation (the owner: the
+    // option is the user's own standing choice).
+    if (canBroadcast(cmd) && isBroadcastButton(cmd)) { broadcastCommand(cmd); return }
     sendCommand(cmd, buildFullCommand(cmd))
   }
 
@@ -1367,7 +1407,7 @@ export default function CommandBar({ sessionId, configId, sessionType = 'local',
           title={confirm.band === 'global' ? `Show "${confirmCmd.label}" in every config?` : `Keep "${confirmCmd.label}" only in this config?`}
           body={confirm.band === 'global'
             ? <>It becomes <b>Global</b>: it appears in every config, and editing or deleting it reaches all of them.{confirmCmd.hasSecretArg ? <> Its secret then rides the environment of every shell you open on this PC, not only this config's.</> : null}</>
-            : <>It becomes <b>Session</b>-only: it leaves your other {configCount && configCount > 1 ? `${configCount - 1} config${configCount - 1 === 1 ? '' : 's'}` : 'configs'} and shows only here{configName ? ` (${configName})` : ''}.</>}
+            : <>It becomes <b>Session</b>-only: it leaves your other {configCount && configCount > 1 ? `${configCount - 1} config${configCount - 1 === 1 ? '' : 's'}` : 'configs'} and shows only here{configName ? ` (${configName})` : ''}.{confirmCmd.broadcast ? ' It also stops sending to every open session.' : null}</>}
           actions={[{ label: confirm.band === 'global' ? 'Make Global' : 'Keep it here only', primary: true, testId: 'confirm-scope-ok', onClick: () => {
             store.moveCommand(confirm.commandId, confirm.beforeId, confirm.band, configId)
             // A drop onto a section of the other band files it there only now (D7).

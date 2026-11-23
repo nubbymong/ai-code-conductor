@@ -13,6 +13,7 @@ import { IconColourPicker } from './command-bar/menus'
 import { CommandIcon } from './command-icons'
 import { ON_BRAND } from './ui/Dialog'
 import { ASK_CLAUDE_OFF, useAskConductorBlocked } from '../lib/askConductorGate'
+import { broadcastBlocker, BROADCAST_OPTION_LABEL } from '../lib/commandBroadcast'
 
 /**
  * What a command button DOES. This is the first question the dialog asks,
@@ -175,6 +176,8 @@ export default function CommandDialog({ onConfirm, onCancel, initial, configId, 
   const storedSecret = !!initial?.hasSecretArg
   const [hasSecret, setHasSecret] = useState<boolean>(storedSecret)
   const [secretValue, setSecretValue] = useState('')
+  // #399: send to every open session on a plain press (a simple prompt only).
+  const [broadcast, setBroadcast] = useState<boolean>(!!initial?.broadcast)
   // The upgrade review banner (D13): reasons fixed here, or the whole thing dismissed.
   const [fixedReasons, setFixedReasons] = useState<CommandReviewReason[]>([])
   const [reviewDismissed, setReviewDismissed] = useState(false)
@@ -263,6 +266,15 @@ export default function CommandDialog({ onConfirm, onCancel, initial, configId, 
   // (not whitespace), and a typed value must be one the shell can carry.
   const typedSecret = secretValue.trim().length > 0
   const secretReady = !secretOn || ((storedSecret || typedSecret) && !secretProblem && !placementProblem)
+  // #399: "Send to every open session", for a simple prompt only (the owner:
+  // "Broadcasty should onlly be for simple prompts"). Read off the button as
+  // it will be saved; its remembered Ctrl+click arguments are forgotten on a
+  // save with the option on, so they do not count against it here. Shown on
+  // a prompt; any other button says why it cannot take it.
+  const broadcastWhyNot = kind
+    ? broadcastBlocker({ kind, target, scope, defaultArgs, hasSecretArg: secretOn || undefined })
+    : null
+  const broadcastOn = kind === 'prompt' && broadcast && broadcastWhyNot === null
   const canSubmit = !!kind && !!label.trim() && secretReady && (kind === 'page' ? !!pageUrl.trim() : !!prompt.trim())
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -285,7 +297,7 @@ export default function CommandDialog({ onConfirm, onCancel, initial, configId, 
       const result = normaliseBrowserInput(pageUrl)
       if (!result.ok) { setPageUrlError(result.error); return }
       setPageUrlError(null)
-      onConfirm({ ...base, prompt: '', target: 'claude', kind: 'page', pageUrl: result.url, defaultArgs: undefined, lastCustomArgs: undefined, hasSecretArg: undefined, webView: undefined })
+      onConfirm({ ...base, prompt: '', target: 'claude', kind: 'page', pageUrl: result.url, defaultArgs: undefined, lastCustomArgs: undefined, hasSecretArg: undefined, webView: undefined, broadcast: undefined })
       return
     }
     if (webViewEnabled) {
@@ -301,10 +313,15 @@ export default function CommandDialog({ onConfirm, onCancel, initial, configId, 
       defaultArgs: defaultArgs.length > 0 ? defaultArgs : undefined,
       // The REMEMBERED (Ctrl+click) arguments are typed too. Once a secret is
       // on, or a value was just moved to the keychain, they may hold that value
-      // in plain text -- they are forgotten rather than re-typed.
-      lastCustomArgs: secretOn || movedValue !== null ? undefined : initial?.lastCustomArgs,
+      // in plain text -- they are forgotten rather than re-typed. A button that
+      // goes to every open session has no arguments at all (#399 Q4), so it
+      // forgets them too.
+      lastCustomArgs: secretOn || movedValue !== null || broadcastOn ? undefined : initial?.lastCustomArgs,
       hasSecretArg: secretOn ? true : undefined,
       webView: webViewEnabled ? { enabled: true, url: webViewUrl.trim() } : undefined,
+      // Written either way: the store merges, so an option turned off (or a
+      // button no longer able to take it) must be cleared explicitly.
+      broadcast: broadcastOn ? true : undefined,
     }, secretOn && typedSecret ? secretValue : undefined)
   }
 
@@ -340,6 +357,7 @@ export default function CommandDialog({ onConfirm, onCancel, initial, configId, 
     webView: webViewEnabled && webViewUrl.trim() ? { enabled: true, url: webViewUrl.trim() } : undefined,
     pinned: initial?.pinned,
     sectionId,
+    broadcast: broadcastOn || undefined,
   }
 
   // The one decoration the preview may draw beside the chip, and only because
@@ -739,6 +757,26 @@ export default function CommandDialog({ onConfirm, onCancel, initial, configId, 
                     <button type="button" role="radio" aria-checked={scope === 'config'} aria-disabled={!configId || undefined} disabled={!configId} onClick={() => changeScope('config')} className={SEG_CHIP} style={segStyle(scope === 'config', !configId)} title={!configId ? 'This session has no saved config' : undefined} data-testid="command-scope-config">Session — this config only</button>
                   </div>
                 </Field>
+
+                {/* #399: one press to every open session. Offered on a simple
+                    Global prompt; any other button shows it off, with why. */}
+                <div className="mb-3" data-testid="command-field-broadcast">
+                  <label className={`flex items-center gap-2 text-[12.5px] font-medium select-none ${broadcastWhyNot ? 'cursor-not-allowed' : 'cursor-pointer'}`} style={{ ...LABEL_STYLE, opacity: broadcastWhyNot ? 0.55 : 1 }}>
+                    <input
+                      type="checkbox"
+                      checked={broadcastOn}
+                      disabled={broadcastWhyNot !== null}
+                      onChange={(e) => setBroadcast(e.target.checked)}
+                      className="accent-[var(--brand)]"
+                      aria-describedby="command-broadcast-hint"
+                      data-testid="command-broadcast-toggle"
+                    />
+                    {BROADCAST_OPTION_LABEL}
+                  </label>
+                  <p id="command-broadcast-hint" className={HINT_CLASS} style={HINT_STYLE} data-testid="command-broadcast-hint">
+                    {broadcastWhyNot ?? 'One press sends it once to every open agent session, SSH and background tabs included. Terminal-only tabs and Ask Conductor get nothing.'}
+                  </p>
+                </div>
 
                 <Field label="Section" hint={`…or "New section…" — created in the ${scope === 'global' ? 'Global' : 'Session'} band.`} testId="command-field-section">
                   {!showNewSection ? (

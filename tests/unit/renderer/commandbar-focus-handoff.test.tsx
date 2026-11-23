@@ -12,6 +12,9 @@
  * the wheel's tmux scrollback belief (main leaves copy-mode itself); it says
  * why in its note when the answer is not sent; and it writes the old line and
  * Enter through pty.write only when the preload has no such bridge.
+ * Since 2.1.3-beta.16 (aicc_planning#399) a broadcast press sends through that
+ * same path to every open agent tab, a Codex tab as well as a Claude Code tab
+ * (the rest of the broadcast wiring: commandbar-broadcast.test.tsx).
  */
 import React from 'react'
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
@@ -21,15 +24,13 @@ import { act } from 'react'
 ;(globalThis as any).IS_REACT_ACT_ENVIRONMENT = true
 
 let COMMANDS: Array<Record<string, unknown>> = []
+const ONE_SESSION = [{ id: 's-1', label: 't', workingDirectory: '/', color: '#89b4fa', sessionType: 'local', provider: 'claude', model: 'sonnet' }]
+let SESSIONS: Array<Record<string, unknown>> = ONE_SESSION
 
-vi.mock('../../../src/renderer/stores/sessionStore', () => ({
-  useSessionStore: (sel: any) =>
-    sel({
-      sessions: [{ id: 's-1', label: 't', workingDirectory: '/', color: '#89b4fa', sessionType: 'local', provider: 'claude', model: 'sonnet' }],
-      activeSessionId: 's-1',
-      updateSession: vi.fn(),
-    }),
-}))
+vi.mock('../../../src/renderer/stores/sessionStore', () => {
+  const state = () => ({ sessions: SESSIONS, activeSessionId: 's-1', updateSession: () => {} })
+  return { useSessionStore: Object.assign((sel: any) => sel(state()), { getState: state }) }
+})
 vi.mock('../../../src/renderer/stores/commandStore', () => ({
   useCommandStore: () => ({
     commands: COMMANDS, sections: [],
@@ -78,6 +79,7 @@ const captureFocusEvent = (ev: Event) => {
 
 beforeEach(() => {
   COMMANDS = []
+  SESSIONS = ONE_SESSION
   ptyWrite.mockClear()
   submitPrompt.mockClear()
   SUBMIT_ANSWER = { outcome: 'sent' }
@@ -195,5 +197,22 @@ describe('a prompt button is typed by main (#333)', () => {
     expect(ptyWrite).toHaveBeenCalledWith('pty-1', 'resume from the handoff\r')
     expect(submitPrompt).not.toHaveBeenCalled()
     expect(focusEvents).toEqual([{ sessionId: 'pty-1' }])
+  })
+})
+
+describe('#399: a broadcast press goes through the same prompt path to every open agent tab', () => {
+  const tab = (id: string, over: Record<string, unknown> = {}) => ({ id, label: id, workingDirectory: '/', color: '#89b4fa', sessionType: 'local', model: '', ...over })
+
+  it('a Claude Code tab and a Codex tab get the text once each, a terminal-only tab nothing', async () => {
+    SESSIONS = [tab('s-1', { provider: 'claude' }), tab('cx', { provider: 'codex' }), tab('sh', { provider: 'claude', shellOnly: true })]
+    COMMANDS = [{ id: 'b1', label: 'Review all', prompt: 'review the open diff', scope: 'global', kind: 'prompt', target: 'claude', broadcast: true }]
+    act(() => { root.render(React.createElement(CommandBar, { sessionId: 's-1', parentSessionId: 's-1', configId: 'cfg' } as never)) })
+    await act(async () => { buttonNamed('Review all')!.click(); await new Promise((r) => setTimeout(r, 0)) })
+    expect(submitPrompt.mock.calls.map((c) => (c as unknown[])[0])).toEqual([
+      { sessionId: 's-1', text: 'review the open diff' },
+      { sessionId: 'cx', text: 'review the open diff' },
+    ])
+    expect(ptyWrite).not.toHaveBeenCalled()
+    expect(usePasteHintStore.getState().hints['s-1']).toBe('Sent to 2 of 2 sessions.')
   })
 })

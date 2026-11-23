@@ -127,8 +127,8 @@ interface CommandState {
    * the end of the band. Rewrites ONLY that band's ordinals. When the command
    * comes from the OTHER band this is a scope change -- the caller has already
    * confirmed it -- and the command is re-scoped to the band (a move into the
-   * config band takes `configId`). Persists immediately: a drag is a deliberate
-   * one-shot act, not collapse spam.
+   * config band takes `configId` and clears `broadcast`). Persists
+   * immediately: a drag is a deliberate one-shot act, not collapse spam.
    */
   moveCommand: (movedId: string, beforeId: string | null, band: CommandBand, configId?: string) => void
   /** The only path the bar uses to change a section: a drop onto a section group. */
@@ -191,9 +191,12 @@ export const useCommandStore = create<CommandState>((set, get) => ({
     set((state) => {
       const moved = state.commands.find((c) => c.id === movedId)
       if (!moved) return state
+      // A Session button never goes to every open session (#399), so a move
+      // into the config band ends that too, rather than leave it to come back
+      // unasked on a move back to Global.
       const rescoped: CustomCommand = band === 'global'
         ? { ...moved, scope: 'global', configId: undefined }
-        : { ...moved, scope: 'config', configId }
+        : { ...moved, scope: 'config', configId, broadcast: undefined }
       const others = bandMembers(state.commands, band, configId).filter((c) => c.id !== movedId)
       const at = beforeId ? others.findIndex((c) => c.id === beforeId) : -1
       const ordered = at === -1 ? [...others, rescoped] : [...others.slice(0, at), rescoped, ...others.slice(at)]
