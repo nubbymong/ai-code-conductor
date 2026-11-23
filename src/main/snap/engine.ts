@@ -28,14 +28,11 @@
 import { join } from 'path'
 import { cropPicture, decodeBmp32, pixelRectFor, PictureError, type Picture } from './bmp'
 import { CAPTURE_EXIT, parseCaptureLine, type HelperCaptureRun, type HelperDisplay } from './helper-capture'
+import type { Rect } from '../../shared/snap-overlay'
 
-/** A rectangle; in DIP for the overlay (ADR-030 D4's contract). */
-export interface Rect {
-  x: number
-  y: number
-  width: number
-  height: number
-}
+/** A rectangle; in DIP for the overlay (ADR-030 D4's contract), the one the
+ *  overlay itself uses (src/shared/snap-overlay.ts). */
+export type { Rect }
 
 /** One of Electron's displays: its DIP bounds, its scale and its bounds in
  *  physical pixels (screen.dipToScreenRect). */
@@ -171,7 +168,9 @@ export async function snapWithHelper<Img>(p: SnapPorts<Img>): Promise<SnapOutcom
         picture: p.toImage(picture, pair.app.scale),
       })))
     } catch (err) {
-      return previous(`the overlay failed (${err instanceof Error ? firstLine(err.message) : 'error'})`)
+      // The overlay's own reason when it names one (overlay.ts, SnapOverlayError).
+      const reason = (err as { reason?: unknown } | null)?.reason
+      return previous(`the overlay failed (${typeof reason === 'string' ? firstLine(reason) : err instanceof Error ? firstLine(err.message) : 'error'})`)
     }
     if (answer === null) {
       p.log(`[snap] new engine: cancelled${ran}`)

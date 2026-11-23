@@ -68,6 +68,8 @@ interface Opts {
   appDisplays?: AppDisplay[]
   answer?: OverlayAnswer | ((shown: OverlayDisplay<Img>[]) => OverlayAnswer)
   overlayThrows?: string
+  /** The overlay rejects as overlay.ts does: a SnapOverlayError with its reason. */
+  overlayReason?: string
   helper?: string | null
   makeFolderThrows?: boolean
   saveThrows?: boolean
@@ -103,6 +105,7 @@ function press(o: Opts = {}) {
       calls.removedBeforeOverlay = calls.removed.includes(FOLDER)
       calls.shown = shown
       if (o.overlayThrows) throw new Error(o.overlayThrows)
+      if (o.overlayReason) throw Object.assign(new Error(`the Snap overlay failed: ${o.overlayReason}`), { name: 'SnapOverlayError', reason: o.overlayReason })
       const a = o.answer === undefined ? null : o.answer
       return typeof a === 'function' ? a(shown) : a
     },
@@ -211,6 +214,7 @@ describe('every other failure hands the press to the previous Snap, with one lin
     ['an unmatched display', { appDisplays: [{ ...PRIMARY.app, physical: { x: 0, y: 0, width: 1024, height: 768 } }] }, /a display it cannot match/],
     ['a display Electron does not list', { appDisplays: [] }, /a display it cannot match/],
     ['an overlay that fails', { overlayThrows: 'the page did not load\nstack' }, /the overlay failed \(the page did not load\)/],
+    ['an overlay that fails with its own reason', { overlayReason: 'no-ready' }, /the overlay failed \(no-ready\);/],
     ['an answer for a display not shown', { answer: { id: 999, whole: true } }, /a display it was not shown/],
     ['a save that fails', { answer: { id: 101, whole: true }, saveThrows: true }, /the picture could not be saved/],
     ['no helper', { helper: null }, /no session helper to run/],

@@ -31,7 +31,6 @@ vi.mock('../../../../src/main/config-manager', () => ({
 }))
 vi.mock('../../../../src/main/snap/windows-engine', () => ({
   snapOnWindows: (...args: unknown[]) => snapOnWindows(...(args as [])),
-  overlayNotInThisBuild: async () => { throw new Error('the overlay is not in this build') },
 }))
 
 const { registerScreenshotHandlers } = await import('../../../../src/main/ipc/screenshot-handlers')

@@ -10,15 +10,16 @@ import fs from 'fs'
 import path from 'path'
 import { bundledHelperPath } from '../session-helper/install'
 import { logInfo } from '../debug-logger'
-import { snapWithHelper, type OpenOverlays, type SnapOutcome } from './engine'
+import { snapWithHelper, type SnapOutcome } from './engine'
 import { runHelperCapture, HELPER_CAPTURE_BOUND_MS, type CaptureChild } from './helper-capture'
 import { CAPTURE_PARENT, makePressFolder, removePressFolder } from './capture-folder'
 import { snapHelperPath } from './helper-path'
+import { openSnapOverlays } from './overlay'
 import type { Picture } from './bmp'
 
-/** One press of the new Snap. `openOverlays` is the overlay (ADR-030 D4);
- *  `save` is today's cap and JPEG into the screenshots folder. */
-export function snapOnWindows(openOverlays: OpenOverlays<NativeImage>, save: (picture: Picture) => string): Promise<SnapOutcome> {
+/** One press of the new Snap, with the app's own overlay (overlay.ts, ADR-030
+ *  D4). `save` is today's cap and JPEG into the screenshots folder. */
+export function snapOnWindows(save: (picture: Picture) => string): Promise<SnapOutcome> {
   const parent = () => path.join(app.getPath('userData'), CAPTURE_PARENT)
   return snapWithHelper<NativeImage>({
     helperPath: () => snapHelperPath({
@@ -46,15 +47,8 @@ export function snapOnWindows(openOverlays: OpenOverlays<NativeImage>, save: (pi
       physical: screen.dipToScreenRect(null, d.bounds),
     })),
     toImage: (picture, scale) => nativeImage.createFromBitmap(picture.bgra, { width: picture.width, height: picture.height, scaleFactor: scale }),
-    openOverlays,
+    openOverlays: (displays) => openSnapOverlays(displays),
     save,
     log: (line) => logInfo(line),
   })
-}
-
-/** Until the overlay (src/main/snap/overlay.ts, section A2) is merged: an
- *  overlay that fails, so a press with the new engine captures, logs its
- *  reading, and the previous Snap takes it. */
-export const overlayNotInThisBuild: OpenOverlays<NativeImage> = async () => {
-  throw new Error('the overlay is not in this build')
 }
