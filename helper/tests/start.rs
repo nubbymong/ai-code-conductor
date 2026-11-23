@@ -46,7 +46,8 @@ mod windows {
     const HELPER: &str = env!("CARGO_BIN_EXE_aicc-helper");
     const FAKE: &str = env!("CARGO_BIN_EXE_aicc-fake-cli");
     /// How long a fake CLI these tests start stays alive, in seconds. Each one is
-    /// ended by its guard (`Started`, `Running`) when its test is done, so this only
+    /// ended by its guard (`Started`, `Running`, `Tree`) when its test is done or
+    /// fails, so this only
     /// has to outlast the slowest step on a loaded runner: a Windows CI run once
     /// took longer than the old 10 s between a start and its `Win32_Process` read,
     /// which then found no process.
@@ -89,6 +90,9 @@ mod windows {
     /// a creation time of digits.
     fn started(ran: &Ran) -> (u32, String) {
         assert_eq!(ran.code, Some(0), "start failed: {}", ran.stderr);
+        // The program runs from here on: if a check below fails, this ends it.
+        // Once they pass, the caller's own guard takes over.
+        let early = json::parse(ran.stdout.trim_end().as_bytes()).ok().and_then(|v| v.get("pid").and_then(Value::as_u64)).and_then(|p| u32::try_from(p).ok()).map(Started);
         let line = ran.stdout.trim_end();
         assert!(!line.contains('\n'), "start printed more than one line: {:?}", ran.stdout);
         let v: Value = json::parse(line.as_bytes()).unwrap_or_else(|e| panic!("{line:?} is not JSON: {e:?}"));
@@ -96,7 +100,11 @@ mod windows {
         let pid = v.get("pid").and_then(Value::as_u64).expect("a pid");
         let created = v.get("created").and_then(Value::as_str).expect("a creation time").to_string();
         assert!(!created.is_empty() && created.len() <= 20 && created.bytes().all(|b| b.is_ascii_digit()), "{line}");
-        (u32::try_from(pid).expect("a 32-bit pid"), created)
+        let pid = u32::try_from(pid).expect("a 32-bit pid");
+        if let Some(guard) = early {
+            std::mem::forget(guard);
+        }
+        (pid, created)
     }
 
     /// A process this test started through `start`, ended when dropped.
@@ -151,9 +159,10 @@ mod windows {
         let script = format!(
             "$ErrorActionPreference = 'Stop'; $p = Get-CimInstance -ClassName Win32_Process -Filter 'ProcessId={pid}'; [string]$p.ExecutablePath; [string]$p.CreationDate.ToFileTimeUtc()"
         );
+        let t0 = Instant::now();
         let out = Command::new(ps).args(["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script.as_str()]).stdin(Stdio::null()).output().expect("run PowerShell");
         let text = String::from_utf8_lossy(&out.stdout).into_owned();
-        assert!(out.status.success(), "PowerShell failed (process {pid} still running: {}): {}", pids::alive(pid), String::from_utf8_lossy(&out.stderr));
+        assert!(out.status.success(), "PowerShell failed after {:?} (process {pid} still running: {}): {}", t0.elapsed(), pids::alive(pid), String::from_utf8_lossy(&out.stderr));
         let mut lines = text.lines().map(str::trim).filter(|l| !l.is_empty());
         let exe = lines.next().unwrap_or_default().to_string();
         let created = lines.next().unwrap_or_default().to_string();
@@ -226,6 +235,18 @@ mod windows {
         true
     }
 
+    /// A program `start` started and the processes under it, ended when dropped
+    /// through the helper's own `end`, which checks the creation time, so a
+    /// pid used again by another process is never touched.
+    struct Tree(u32, String);
+
+    impl Drop for Tree {
+        fn drop(&mut self) {
+            let pid = self.0.to_string();
+            let _ = Command::new(HELPER).args(["end", "--pid", pid.as_str(), "--created", self.1.as_str()]).stdin(Stdio::null()).output();
+        }
+    }
+
     /// The pid of the fake CLI that `parent` started, once it is there (at most 5 s).
     fn fake_under(parent: u32) -> u32 {
         let until = Instant::now() + Duration::from_secs(5);
@@ -285,6 +306,9 @@ mod windows {
         let _serial = one_at_a_time();
         let (pid, created) = started(&start(FAKE, &["--sleep", LIFE, "--child"]));
         let _root = Started(pid);
+        // The copy under it runs before `_under` exists: if `fake_under` gives
+        // up, this ends the whole tree.
+        let _tree = Tree(pid, created.clone());
         let under = fake_under(pid);
         let _under = Started(under);
         let ran = end(pid, &created);
