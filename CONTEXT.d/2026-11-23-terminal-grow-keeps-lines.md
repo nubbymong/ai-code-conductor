@@ -2,15 +2,17 @@
 
 Plan 2.1.3-beta.15, section A1.1 (aicc_planning#394). beta.15 M1 measured the loss on the
 published beta.14 (WINDOWS_1, Windows 11 build 22621, 10,000 lines of `long N ` and 250 `y` in a
-plain terminal): every grow lost lines (103x27 to 140x27 to 140x28: line 9993 follows line 9987,
-4 of 4 with both helper switches off, 3 of 3 held), going narrower lost none. xterm.js's
+plain terminal): every grow lost lines, 4 of 4 with both helper switches off and 3 of 3 held (by
+way of 140x27, one run of each: line 9993 follows line 9987; by way of 140x24, the other five: line
+9993 follows line 9988), going narrower from a freshly printed screen lost none. xterm.js's
 `windowsPty` option did not cure it: with a build number of 21376 or more it changes nothing, and
 below that (xterm.js stops re-wrapping) the grow was whole but a narrowed window cut every old long
 line and lost three lines (M1 hold 2).
 
 - **The cause, read from M1's recorded streams.** The console built into Windows keeps only the
   rows on its screen. After a resize it re-wraps them and paints its whole screen again, from its
-  own top row down (`ESC[?25l ESC[H`, the rows, the cursor, `ESC[?25h`). On a grow xterm.js keeps
+  own top row down (`ESC[?25l`, the first cell's colour when it is not the one last sent, `ESC[H`,
+  the rows, the cursor, `ESC[?25h`). On a grow xterm.js keeps
   its cursor row and pulls older rows down from its scrollback, while the console's lines move up
   and leave blank rows below, so the paint lands 8 rows too high on xterm.js's older lines. The
   console's top row is also often the end of a line whose start has left its screen; it paints that
@@ -42,5 +44,10 @@ line and lost three lines (M1 hold 2).
   left the holder at its old size until the tab's next resize. `showHeld` now sends the size the
   wait put off in that case, and logs that nothing was written at the holder's size (the cap's line
   had said it would be). No real holder or program is known to do this.
-- **Not measured:** any Windows build other than 22621, and the console host the app ships. The VM
-  line on A1's head reads the live grow, a Claude Code tab and a Codex tab.
+- **Left as before:** a paint made while the program has the cursor hidden (the console sends no
+  `ESC[?25l` or `ESC[?25h` around it), a cursor on a wrapped line (xterm.js does not re-wrap the
+  line its cursor is on, so a long command typed at the prompt or Claude Code's input row never
+  matches), and a program that draws its screen again before the console paints. **Not
+  measured:** any Windows build other than 22621, the console host the app ships, and a narrowing
+  right after a grow with no output between. The VM line on A1's head reads the live grow, a Claude
+  Code tab and a Codex tab.

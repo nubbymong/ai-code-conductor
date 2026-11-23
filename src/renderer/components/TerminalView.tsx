@@ -571,9 +571,9 @@ export default function TerminalView({ sessionId, configId, cwd, shellOnly, elev
      *  with the terminal in initTerminal. */
     let hiddenOutput: HiddenOutputQueue | null = null
     /** aicc_planning#394: on Windows, the console's paint after a size this
-     *  view sends is written where the terminal holds its lines
-     *  (terminal/consoleRepaint.ts). Null where it does not apply. Every write
-     *  to the terminal goes through it, so output stays in order. */
+     *  view sends, when it matches the terminal's lines, is written where they
+     *  are (terminal/consoleRepaint.ts). Null where it does not apply. Every
+     *  write to the terminal goes through it, so output stays in order. */
     let consoleRepaint: ConsoleRepaintAligner | null = null
     /** P3.8 round 1 (L2): a Plan mode launch's wait for the ready composer. */
     let planModeWait: { cancel: () => void } | null = null

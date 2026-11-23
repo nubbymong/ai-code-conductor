@@ -16,10 +16,11 @@
 // (src/renderer/components/terminal/consoleRepaint.ts). Today's path gives
 // M1's VM readings line for line; the aligner keeps every line, on every path.
 //
+// TerminalView's source is read here for the options it gives its terminal,
+// the sizes it tells the aligner before it sends them and its own lines; its
+// hunk runs in tests/unit/renderer/terminalview-console-repaint.test.tsx.
+//
 // Not checked here:
-//  - TerminalView's own hunk, which puts a terminal's output through the
-//    aligner and tells it each size it sends
-//    (tests/unit/renderer/terminalview-console-repaint.test.tsx);
 //  - another Windows build, a tab on the console host the app ships, and a
 //    Claude Code tab's screen: the VM line on A1's head reads them.
 import { describe, it, expect } from 'vitest'
@@ -35,6 +36,10 @@ import { RECORDED_RESIZES, RECORDED_RESTORES, expandRuns, restoreReplay, type Re
 const PROMPT = 'PS C:\\fixture\\long-lines\\work\\resizes>'
 const Y = 'y'.repeat(250)
 const PAINT_START = '\x1b[?25l\x1b[H'
+/** The start of a paint whose first cell is in a colour the console did not
+ *  last send: the colour comes before the cursor home (M1's Claude Code tab
+ *  recordings begin `ESC[?25l ESC[38;2;215;119;87m ESC[H`). */
+const PAINT_START_COLOURED = '\x1b[?25l\x1b[33m\x1b[H'
 const PAINT_END = '\x1b[?25h'
 
 const size = (s: string): [number, number] => s.split('x').map(Number) as [number, number]
@@ -127,11 +132,23 @@ const TODAY: Record<string, string> = {
   'off1-max': 'ALL-OK',
 }
 
-describe('the renderer\'s terminal options are the ones replayed here', () => {
+describe('TerminalView writes to and sizes its terminal as this file replays it', () => {
   it('TerminalView sets no option that changes how xterm re-wraps or moves its rows', () => {
     const src = readFileSync(resolve(__dirname, '../../../src/renderer/components/TerminalView.tsx'), 'utf8')
     expect(src, 'an option here changes the replay: re-run it with that option').not.toMatch(/windowsPty|windowsMode|reflowCursorLine|convertEol/)
     expect(src).toMatch(/scrollback: TERMINAL_SCROLLBACK_LINES/)
+  })
+
+  it('TerminalView tells the aligner every size it sends to the PTY, the unmount restore apart, and writes its own lines through it', () => {
+    const src = readFileSync(resolve(__dirname, '../../../src/renderer/components/TerminalView.tsx'), 'utf8').split(/\r?\n/)
+    const sends = src
+      .map((l, i) => ({ l: l.trim(), told: src[i - 1]?.includes('consoleRepaint?.noteResize()') === true }))
+      .filter((s) => s.l.includes('window.electronAPI.pty.resize('))
+    expect(sends).toHaveLength(6)
+    expect(sends.filter((s) => !s.told).map((s) => s.l)).toEqual([
+      'try { window.electronAPI.pty.resize(sessionId, lastSentCols, lastSentRows) } catch { /* main gone */ }',
+    ])
+    expect(src.join('\n')).toContain('if (consoleRepaint) consoleRepaint.write(`${line}\\r\\n`)')
   })
 })
 
@@ -261,18 +278,37 @@ describe('a paint that is not this terminal\'s screen is written as it came', ()
     expect(b.getLine(b.baseY - 1)?.translateToString(true)).toBe('L7 ' + 'y'.repeat(17))
     expect([b.cursorY, b.cursorX]).toEqual([3, 2])
   })
+
+  it('the same paint with the first cell\'s colour before its cursor home (the console sends it when the colour is not the one it last sent) is moved too, the colour kept', async () => {
+    const term = await smallTerminal()
+    const paint = `${PAINT_START_COLOURED}${'y'.repeat(10)}\x1b[K\r\nL8 ${'y'.repeat(30)}\x1b[K\r\n$\x1b[K\r\n\x1b[K\r\n\x1b[K\x1b[4;3H${PAINT_END}`
+    const out = alignConsoleRepaint(paint, term)
+    expect(out).not.toBeNull()
+    expect(out).toContain('\x1b[33m')
+    await new Promise<void>((done) => term.write(out!, done))
+    const b = term.buffer.active
+    const screen = Array.from({ length: term.rows }, (_, i) => b.getLine(b.baseY + i)?.translateToString(true) ?? '')
+    expect(screen).toEqual(['y'.repeat(13), 'L8 ' + 'y'.repeat(17), 'y'.repeat(13), '$', '', ''])
+    expect(b.getLine(b.baseY - 1)?.translateToString(true)).toBe('L7 ' + 'y'.repeat(17))
+    expect([b.cursorY, b.cursorX]).toEqual([3, 2])
+  })
 })
 
 /** A terminal that records what is written to it and parses on a later task,
- *  as xterm does. */
-function recordingTerminal() {
+ *  as xterm does. `refuses`: the writes it throws on, as xterm does once about
+ *  50 MB waits to be parsed (a refused write is not recorded). */
+function recordingTerminal(refuses: (data: string) => boolean = () => false) {
   const writes: string[] = []
   const pending: Array<() => void> = []
   const term: RepaintTerminal = {
     cols: 20,
     rows: 6,
     buffer: { active: { type: 'normal', baseY: 0, getLine: () => undefined } },
-    write(data, cb) { writes.push(data); pending.push(() => cb?.()) },
+    write(data, cb) {
+      if (refuses(data)) throw new Error('xterm refused the write')
+      writes.push(data)
+      pending.push(() => cb?.())
+    },
   }
   const parse = () => { while (pending.length) pending.shift()!() }
   return { term, writes, parse }
@@ -327,6 +363,46 @@ describe('the aligner writes in order, and only a paint after a size is looked a
     // The recording terminal holds no rows, so the paint is written as it came.
     expect(t.writes).toEqual(['a', PAINT, 'b', 'c'])
     expect(parsed).toBe(1)
+  })
+
+  it('a paint that begins with its first cell\'s colour before the cursor home is looked at too: it waits for what came before it', () => {
+    const coloured = `${PAINT_START_COLOURED}x\x1b[K\x1b[1;2H${PAINT_END}`
+    const t = recordingTerminal()
+    const a = createConsoleRepaintAligner(t.term, { now: () => 0 })
+    a.noteResize()
+    a.write(`a${coloured}b`)
+    expect(t.writes, 'the paint waits for what came before it').toEqual(['a'])
+    t.parse()
+    expect(t.writes).toEqual(['a', coloured, 'b'])
+  })
+
+  it('xterm refuses the output before a paint: its caller is told, as before, and later output still reaches the terminal', () => {
+    const t = recordingTerminal((d) => d === 'a')
+    const a = createConsoleRepaintAligner(t.term, { now: () => 0 })
+    let parsed = 0
+    a.noteResize()
+    expect(() => a.write(`a${PAINT}b`)).toThrow('xterm refused the write')
+    a.write('later', () => { parsed++ })
+    expect(t.writes).toEqual(['later'])
+    t.parse()
+    expect(parsed).toBe(1)
+  })
+
+  it('xterm refuses the output after a paint and a write queued behind it: each caller is told it is done, nothing is thrown into xterm\'s write loop', () => {
+    const t = recordingTerminal((d) => d === 'after' || d === 'queued')
+    const a = createConsoleRepaintAligner(t.term, { now: () => 0 })
+    let afterParsed = 0
+    let queuedParsed = 0
+    a.noteResize()
+    a.write(`a${PAINT}after`, () => { afterParsed++ })
+    a.write('queued', () => { queuedParsed++ })
+    expect(t.writes).toEqual(['a'])
+    expect(() => t.parse()).not.toThrow()
+    expect([afterParsed, queuedParsed]).toEqual([1, 1])
+    expect(t.writes).toEqual(['a', PAINT])
+    // The aligner goes on.
+    a.write('later')
+    expect(t.writes).toEqual(['a', PAINT, 'later'])
   })
 })
 

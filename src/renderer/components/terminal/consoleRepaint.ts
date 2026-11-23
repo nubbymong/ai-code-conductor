@@ -3,8 +3,9 @@
  *
  * The console built into Windows (ConPTY) keeps only the rows on its screen.
  * When it is given a new size it re-wraps those rows itself and paints its
- * whole screen again from its top row down, in one piece: `ESC[?25l ESC[H`,
- * each row, the cursor, `ESC[?25h`. xterm re-wraps its own rows on the same
+ * whole screen again from its top row down, in one piece: `ESC[?25l`, the
+ * first cell's colour when it is not the one last sent, `ESC[H`, each row, the
+ * cursor, `ESC[?25h`. xterm re-wraps its own rows on the same
  * resize, its scrollback too. The two agree on every whole line; they differ
  * in where the screen starts:
  *  - on a grow, xterm pulls rows down from its scrollback and keeps its cursor
@@ -12,7 +13,8 @@
  *    with blank rows below. The console's paint then lands on rows where xterm
  *    holds older lines, and those lines are lost. beta.15 M1 measured this on
  *    the published beta.14 (Windows 11 build 22621, 10,000 lines of `long N `
- *    and 250 `y`): 103x27 to 140x27 lost lines 9988 to 9992 on every run;
+ *    and 250 `y`): 103x27 to 140x27 lost lines 9988 to 9992 on both runs
+ *    that went that way; by way of 140x24 the other five lost 9989 to 9992;
  *  - the console's top row can be the end of a line whose start has left the
  *    console's screen. The console paints that end as a line of its own,
  *    starting at the left edge, over the whole line xterm holds there.
@@ -28,6 +30,21 @@
  * a size that changed again, a shape not seen) is written as it came, as
  * before.
  *
+ * Not handled, written as it came, as before (a grow can then still lose
+ * lines):
+ *  - a paint made while the program has the cursor hidden: the console sends
+ *    neither `ESC[?25l` nor `ESC[?25h` around it (M1's g-cctrust-* streams);
+ *  - a cursor on a wrapped line (a command longer than a row typed at the
+ *    prompt, Claude Code's input row under its full-width rule): xterm does
+ *    not re-wrap the line its cursor is on, the console does, so that line
+ *    does not match;
+ *  - a program that draws its screen again at the new size before the
+ *    console paints (M1's g-ccmain-* streams, 8 ms after the size).
+ * Not measured: a narrowing right after a grow with no output between. xterm
+ * then keeps the blank rows under its cursor and moves its rows up into its
+ * scrollback; a console that fills its blank rows sends a paint that would
+ * need xterm's rows moved down, and it is written as it came.
+ *
  * Not checked here: whether a console host other than the one built into
  * Windows paints the same way. A session main starts on the console host the
  * app ships (src/main/bundled-conpty.ts) saw no line lost on a grow in M1's
@@ -40,8 +57,9 @@
  *  console, and the session helper's). */
 export const REPAINT_WINDOW_MS = 2000
 
-/** How the console's paint of its whole screen begins and ends. */
-const PAINT_START = '\x1b[?25l\x1b[H'
+/** How the console's paint of its whole screen begins and ends. The colour of
+ *  the first cell, when the console sets one, comes before its cursor home. */
+const PAINT_START = /\x1b\[\?25l((?:\x1b\[[0-9;]*m)*)\x1b\[H/
 const PAINT_END = '\x1b[?25h'
 
 /** A line longer than this many rows is not followed: a paint around it is
@@ -100,9 +118,11 @@ function readPaint(paint: string): Paint | null {
   const lines: string[] = []
   let text = ''
   let topEnd = -1
-  let topKeep = ''
+  const head = PAINT_START.exec(paint)
+  if (!head || head.index !== 0) return null
+  let topKeep = head[1]
   let placesCursor = false
-  let i = PAINT_START.length
+  let i = head[0].length
   while (i < body) {
     const c = paint.charCodeAt(i)
     if (c === 0x1b) {
@@ -262,8 +282,10 @@ export function alignConsoleRepaint(paint: string, term: RepaintTerminal): strin
   else topRows = above.text.endsWith(first) ? rowsOfEnd(term, above, first.length) : null
   if (topRows === null) return null
   // Scroll xterm's rows up until the paint's second line lands where xterm
-  // holds it. A paint that would need them down, or more rows than the
-  // screen has, is not this terminal's screen.
+  // holds it. A paint that would need them down cannot be placed (rows do not
+  // come back down out of xterm's scrollback), and one that needs more rows
+  // than the screen has is not this terminal's screen: both are written as
+  // they came.
   const secondRow = above.end + 1
   const scroll = secondRow - topRows - top
   if (scroll < 0 || scroll > term.rows) return null
@@ -296,13 +318,14 @@ export function createConsoleRepaintAligner(term: RepaintTerminal, opts: { now: 
   const drain = (): void => {
     while (!waiting && queue.length > 0) {
       const next = queue.shift()!
-      put(next.data, next.parsed, next.asIs)
+      try { put(next.data, next.parsed, next.asIs) } catch { next.parsed?.() }
     }
   }
 
   const put = (data: string, parsed?: () => void, asIs?: boolean): void => {
-    const at = !asIs && opts.now() <= lookUntil ? data.indexOf(PAINT_START) : -1
-    const end = at < 0 ? -1 : data.indexOf(PAINT_END, at + PAINT_START.length)
+    const start = !asIs && opts.now() <= lookUntil ? PAINT_START.exec(data) : null
+    const at = start ? start.index : -1
+    const end = start ? data.indexOf(PAINT_END, at + start[0].length) : -1
     if (end < 0) {
       term.write(data, parsed)
       return
@@ -312,15 +335,25 @@ export function createConsoleRepaintAligner(term: RepaintTerminal, opts: { now: 
     const rest = data.slice(stop)
     waiting = true
     // The paint is read against the terminal once what came before it is on
-    // the screen: xterm parses a write on a later task.
-    term.write(data.slice(0, at), () => {
-      let out: string | null = null
-      try { out = alignConsoleRepaint(paint, term) } catch { out = null }
+    // the screen: xterm parses a write on a later task. xterm refuses a write
+    // once about 50 MB waits to be parsed: a refused piece is lost, as before
+    // the aligner; nothing is thrown into xterm's write loop and no caller is
+    // left waiting.
+    try {
+      term.write(data.slice(0, at), () => {
+        let out: string | null = null
+        try { out = alignConsoleRepaint(paint, term) } catch { out = null }
+        waiting = false
+        try { term.write(out ?? paint) } catch { /* xterm refused it: lost either way */ }
+        try { put(rest, parsed) } catch { parsed?.() }
+        drain()
+      })
+    } catch (err) {
+      // The output before the paint was refused: later output is not held
+      // behind it, and this write's caller is told, as before the aligner.
       waiting = false
-      try { term.write(out ?? paint) } catch { /* xterm refused it: lost either way */ }
-      put(rest, parsed)
-      drain()
-    })
+      throw err
+    }
   }
 
   return {

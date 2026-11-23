@@ -2,7 +2,9 @@
 /**
  * aicc_planning#394: on Windows, TerminalView puts a terminal's output through
  * the console repaint aligner (terminal/consoleRepaint.ts) and tells it each
- * size it sends to the PTY, so the console's paint after a resize is written
+ * size it sends to the PTY (the unmount's restore apart: its terminal is gone;
+ * console-repaint-after-resize.test.ts reads every send in TerminalView's
+ * source), so the console's paint after a resize is written
  * where the terminal holds its lines. Only for a terminal on the console built
  * into Windows: a local Codex session runs on the console host the app ships,
  * and macOS and Linux have no console at all; their output is written straight
