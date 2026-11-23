@@ -8,7 +8,8 @@ import { join, resolve } from 'path'
  * a picture the capture mode wrote is read, each run's outcome against what
  * Windows lists, and the verdicts over the runs (the decision lines in the
  * probe's header). The probe itself is a measurement, run on the Windows test
- * machine, not here.
+ * machine and, for the console half, on the GitHub Windows runner (ci.yml's
+ * dispatch-only probe-p21 job, read by probe-p21-job.test.ts), not here.
  *
  * Not checked here: the helper's capture mode (helper/src/capture.rs and
  * helper/tests/capture.rs, in the Helper job), the PowerShell side
