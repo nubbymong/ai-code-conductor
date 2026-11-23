@@ -24,6 +24,7 @@ import { codexCommandLine, cliCommandLine, codexShellEnv, runCodexCli, discoverC
 import { createClaudeReviewLaunch, createClaudeReviewOperations, CLAUDE_REVIEW_ARGS } from '../../src/main/providers/claude'
 import { produceReviewDiff, defaultReviewDiffDeps, findGit } from '../../src/main/review-diff'
 import type { CodexCliOperation, CodexDiscovery, CodexAuthDeps } from '../../src/main/providers/codex'
+import { endIfImage, stopWhen } from '../helpers/started-processes'
 
 const IS_WIN = process.platform === 'win32'
 let dir: string
@@ -97,9 +98,13 @@ if (a.startsWith('exec --json --ephemeral --skip-git-repo-check --ignore-user-co
   // a request that fails at once, as the VM saw -- the error event, then an
   // exit -- after starting a helper that inherits the output pipes and
   // outlives it (on Windows detached, as the real CLI's helper is not in
-  // Node's job). Otherwise the argv it was given, as a reply.
+  // Node's job). Otherwise the argv it was given, as a reply. The helper is a
+  // node.exe the test knows only by number, so it ends itself once helper.stop
+  // exists (stopWhen(1) of tests/helpers/started-processes.ts, written out:
+  // fake-cli-oracle.test.ts reads this constant as plain text), and the test
+  // never ends it by its pid (a vitest worker may have that pid by then).
   if (process.env.FAKE_ANALYSIS === 'early') {
-    const g = require('child_process').spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: ['ignore', 'inherit', 'inherit'], detached: process.platform === 'win32' })
+    const g = require('child_process').spawn(process.execPath, ['-e', "setInterval(() => { if (require('fs').existsSync(process.argv[1])) process.exit(0) }, 100)", path.join(__dirname, 'helper.stop')], { stdio: ['ignore', 'inherit', 'inherit'], detached: process.platform === 'win32' })
     fs.writeFileSync(path.join(__dirname, 'helper.pid'), String(g.pid))
     g.unref()
     process.stdout.write(JSON.stringify({ type: 'turn.failed', error: { message: 'unexpected status 400 Bad Request: fake' } }) + '\\n')
@@ -397,11 +402,17 @@ describe('the text-only analysis against the fake Codex CLI (real processes; P3.
     expect(fs.realpathSync.native(seen.cwd)).toBe(fs.realpathSync.native(folder))
   }, 60_000)
 
+  it('the helper the fake starts ends itself on its stop file, with the stop line the helper module gives', () => {
+    expect(FAKE).toContain(`['-e', ${JSON.stringify(stopWhen(1))}, path.join(__dirname, 'helper.stop')]`)
+  })
+
   it('codex failing at once: settled soon after its exit, with the real error (not a timeout), and its helper ended', async () => {
     const folder = path.join(dir, 'analysis-b')
     fs.mkdirSync(folder, { recursive: true })
     const helperPid = path.join(dir, 'helper.pid')
+    const helperStop = path.join(dir, 'helper.stop')
     try { fs.unlinkSync(helperPid) } catch { /* none yet */ }
+    try { fs.unlinkSync(helperStop) } catch { /* none yet */ }
     // Round 3: codex exits within a second. On POSIX the read at its first
     // output (the helper already started) proves the helper the run's. On
     // Windows the process table is read through PowerShell, which takes
@@ -418,10 +429,15 @@ describe('the text-only analysis against the fake Codex CLI (real processes; P3.
     expect(took).toBeLessThan(exitMs + 25_000)
     const pid = Number(fs.readFileSync(helperPid, 'utf8'))
     let alive = true
-    for (const until = Date.now() + GONE_MS; alive && Date.now() < until;) {
-      try { process.kill(pid, 0); await new Promise((res) => setTimeout(res, 200)) } catch { alive = false }
+    try {
+      for (const until = Date.now() + GONE_MS; alive && Date.now() < until;) {
+        try { process.kill(pid, 0); await new Promise((res) => setTimeout(res, 200)) } catch { alive = false }
+      }
+    } finally {
+      // A helper the run left running ends itself on its stop file; it is
+      // never ended by its pid, which may be another process's by now.
+      fs.writeFileSync(helperStop, '')
     }
-    if (alive) { try { process.kill(pid, 'SIGKILL') } catch { /* gone */ } }
     expect(alive).toBe(false)
   }, 90_000)
 })
@@ -520,9 +536,10 @@ describe('the auth operations against the fake Codex CLI (real processes)', () =
       // so it is never refused as busy (pinned in codex-auth-adapter.test.ts).
       expect(await ops.status({ authRealmId: id })).toEqual({ ok: true, state: 'signed-out' })
     } finally {
-      try { process.kill(browserPid) } catch { /* already gone */ }
-      const gone = Date.now() + 5000
-      while (alive(browserPid) && Date.now() < gone) await new Promise((res) => setTimeout(res, 50))
+      // The "browser" is ping (sleep on POSIX), which the test did not write
+      // and knows only by number: ended only while that number still runs it,
+      // never a pid that another process has by then.
+      await endIfImage(browserPid, IS_WIN ? 'PING.EXE' : 'sleep')
     }
   }, 45_000 + CODEX_KILL_WORST_MS)
 
