@@ -991,9 +991,24 @@ export default function TerminalView({ sessionId, configId, cwd, shellOnly, elev
       // at a time, at most FIT_WAIT_FOR_RENDERER_FRAMES. A WebGL that failed
       // to load still leaves a handle: that pane draws on the DOM renderer and
       // fits at once.
+      // aicc_planning#398: and for the pane's size. initTerminal waited for
+      // one, but the tab can be hidden since (on screen for a frame, then
+      // display: none in App.tsx). A hidden pane has nothing to fit, so the
+      // terminal keeps xterm.js's default 80x24 and the PTY would start at it.
+      // A pane with no size waits a frame at a time, as initTerminal does, and
+      // fits and spawns once it is shown; this wait spends none of the
+      // renderer's frames. A pane on screen goes on at once.
+      const paneHasSize = (): boolean => {
+        const rect = container.getBoundingClientRect()
+        return rect.width !== 0 && rect.height !== 0
+      }
       let fitFramesLeft = FIT_WAIT_FOR_RENDERER_FRAMES
       const fitAndSpawn = () => {
         if (disposed || !fitAddon || !term) return
+        if (!paneHasSize()) {
+          requestAnimationFrame(fitAndSpawn)
+          return
+        }
         if (fitFramesLeft > 0 && isActiveRef.current && webglHandleRef.current === null
           && gpuRenderingEnabled(useSettingsStore.getState().settings.terminal || DEFAULT_TERMINAL_SETTINGS)) {
           fitFramesLeft--
@@ -1729,6 +1744,10 @@ export default function TerminalView({ sessionId, configId, cwd, shellOnly, elev
         if (resizeDebounce) clearTimeout(resizeDebounce)
         resizeDebounce = setTimeout(() => {
           resizeDebounce = null
+          // aicc_planning#398: a hidden pane has nothing to fit, and one still
+          // waiting for its first fit would send xterm.js's 80x24 to main. It
+          // is fitted when it is shown (fitAndSpawn, and this observer again).
+          if (!paneHasSize()) return
           if (disposed || !fitAddon || !term) return
           try {
             fitAddon.fit()
