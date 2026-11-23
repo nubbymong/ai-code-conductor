@@ -223,8 +223,8 @@ describe('the run', () => {
   // long. The check once timed the short reads first and the long reads after,
   // so it compared two stretches of time, and it failed when a slow stretch
   // began between them (2.8 ms, then 28.3 ms). Now each long read is timed
-  // next to four short reads timed together, which first alternating, and the
-  // check is on the median of nine such pairs. A slow stretch longer than a
+  // next to four short reads timed together, the two taking turns to go
+  // first, and the check is on the median of nine such pairs. A slow stretch longer than a
   // pair slows both sides of it alike; the two sides are the same amount of
   // text, so an interruption is as likely to reach either; and the pairs one
   // did reach, if fewer than half, cannot move the median.

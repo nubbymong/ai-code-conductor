@@ -29,7 +29,7 @@ the long line up to ten runs. The owner rejected that as not a root cause. This 
 - **Also found.** The failure message named a shape by its first 12 characters, and three of the
   four shapes start with 12 `z`. So the run that failed does not say which shape it was.
 - **The fix** (test only). Each long read is timed next to four short reads timed together (the
-  same amount of text), which goes first alternating, and the check is on the median of nine
+  same amount of text), the two taking turns to go first, and the check is on the median of nine
   pairs. Per character the long line must cost under twice what the short one does: the old
   bound (four times the line in under eight times the time), unchanged. Each shape has a name in
   the messages. 5a70436e's retry loop is gone.
