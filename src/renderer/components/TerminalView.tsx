@@ -1594,8 +1594,9 @@ export default function TerminalView({ sessionId, configId, cwd, shellOnly, elev
       // visible terminal calls it for every chunk; a hidden one once per batch
       // (hiddenOutputQueue), passing `parsed` for xterm's write callback.
       // Byte counts, the resume nudge's timing and the output parse below
-      // still see every chunk as it arrives.
-      const writeOutput = (filtered: string, parsed?: () => void): void => {
+      // still see every chunk as it arrives. `asIs`: a held terminal's
+      // replay, never the console's answer to a size (consoleRepaint).
+      const writeOutput = (filtered: string, parsed?: () => void, asIs = false): void => {
         // Sticky-bottom follow (issue #73): sample the LIVE viewport position
         // BEFORE this chunk lays out and decide from THAT — not from the
         // wheel-set latch, which scrollbar-thumb drags and keyboard scrolling
@@ -1609,7 +1610,7 @@ export default function TerminalView({ sessionId, configId, cwd, shellOnly, elev
           baseY: preWriteBuf?.baseY ?? 0,
         })
 
-        if (consoleRepaint) consoleRepaint.write(filtered, parsed)
+        if (consoleRepaint) consoleRepaint.write(filtered, parsed, asIs)
         else if (term) term.write(filtered, parsed)
         else parsed?.()
 
@@ -1683,6 +1684,8 @@ export default function TerminalView({ sessionId, configId, cwd, shellOnly, elev
           lastSentRows = rows
           ptyResizeCount += 1
           noteActivityGrace(sessionId)
+          // aicc_planning#394: the console's paint at the tab's size follows.
+          consoleRepaint?.noteResize()
           window.electronAPI.pty.resize(sessionId, cols, rows)
           reportIntegrity()
         }
@@ -1704,7 +1707,7 @@ export default function TerminalView({ sessionId, configId, cwd, shellOnly, elev
         }
         try {
           term?.resize(at.cols, at.rows)
-          writeOutput(filtered, fit)
+          writeOutput(filtered, fit, true)
         } catch (err) {
           // xterm refused it (about 50 MB waiting to be parsed): the fit and
           // the tab's size still follow.

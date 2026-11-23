@@ -30,7 +30,7 @@ import { TERMINAL_SCROLLBACK_LINES } from '../../../src/shared/terminal-scrollba
 import {
   alignConsoleRepaint, createConsoleRepaintAligner, consoleRepaintApplies, REPAINT_WINDOW_MS, type RepaintTerminal,
 } from '../../../src/renderer/components/terminal/consoleRepaint'
-import { RECORDED_RESIZES, expandRuns, type RecordedResize } from './console-repaint-streams'
+import { RECORDED_RESIZES, RECORDED_RESTORES, expandRuns, restoreReplay, type RecordedResize, type RecordedRestore } from './console-repaint-streams'
 
 const PROMPT = 'PS C:\\fixture\\long-lines\\work\\resizes>'
 const Y = 'y'.repeat(250)
@@ -177,6 +177,44 @@ describe('the same resizes through the aligner keep every line (aicc_planning#39
   }, 20_000)
 })
 
+/** C8's restore as the renderer writes it (TerminalView's writeAtHolderSize
+ *  and fitAfterReplay): the tab's terminal at its own size, then at the
+ *  holder's for the replay, written as it came; fitted back to its own size
+ *  and that size sent; then the console's paint at it. */
+async function restore(r: RecordedRestore, aligned: boolean): Promise<Terminal> {
+  const term = makeTerminal(r.tab)
+  const aligner = aligned ? createConsoleRepaintAligner(term, { now: () => 0 }) : null
+  const write = (s: string, asIs = false) => new Promise<void>((done) => { if (aligner) aligner.write(s, done, asIs); else term.write(s, done) })
+  // The tab's own fits sent a size just before: the replay is still not looked into.
+  aligner?.noteResize()
+  term.resize(...size(r.holder))
+  await write(restoreReplay(r), true)
+  term.resize(...size(r.tab))
+  aligner?.noteResize()
+  await write(expandRuns(r.paint))
+  return term
+}
+
+/** beta.14 C8's VM readings on 441823db (3 of 3 each way). */
+const RESTORED_TODAY: Record<string, string> = {
+  'u1-keep': 'FIRST GAP: at row 6622 line 9993 follows line 9986; first piece: row 6619 (3 row(s), 297 chars)',
+  'd1-09': 'ALL-OK',
+}
+
+describe('a held terminal restored after its window changed size, its replay at the holder\'s size (C8, aicc_planning#392)', () => {
+  for (const r of RECORDED_RESTORES) {
+    it(`${r.name} (holder ${r.holder}, tab ${r.tab}): today's path gives the VM's reading; the aligner keeps every line, the notice on row 0`, async () => {
+      expect(restoreReplay(r), 'the replay is the recorded one').toHaveLength(r.length)
+      expect(scan(await restore(r, false)).verdict).toBe(RESTORED_TODAY[r.name])
+      const term = await restore(r, true)
+      const s = scan(term)
+      expect(s.verdict).toBe('ALL-OK')
+      expect([s.whole, s.first, s.last]).toEqual([10000 - r.firstLine + 1, r.firstLine, 10000])
+      expect(term.buffer.active.getLine(0)?.translateToString(true)).toBe('[Earlier output of this terminal is no longer held, so it is not shown.]')
+    }, 30_000)
+  }
+})
+
 /** A small terminal with a few long lines on it, for the cases below. */
 async function smallTerminal(cols = 20, rows = 6, count = 8): Promise<Terminal> {
   const term = new Terminal({ cols, rows, scrollback: 100, allowProposedApi: true })
@@ -258,6 +296,14 @@ describe('the aligner writes in order, and only a paint after a size is looked a
     now = REPAINT_WINDOW_MS + 1
     a.write(PAINT)
     expect(t.writes).toEqual([PAINT])
+  })
+
+  it('output written as it came (a held terminal\'s replay) is not looked into, even right after a size', () => {
+    const t = recordingTerminal()
+    const a = createConsoleRepaintAligner(t.term, { now: () => 0 })
+    a.noteResize()
+    a.write(`a${PAINT}b`, undefined, true)
+    expect(t.writes).toEqual([`a${PAINT}b`])
   })
 
   it('a paint split across two writes is written as it came', () => {

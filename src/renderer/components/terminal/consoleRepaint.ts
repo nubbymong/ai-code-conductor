@@ -280,8 +280,10 @@ export interface ConsoleRepaintAligner {
   /** A size was just sent to the console: its paint may follow. */
   noteResize(): void
   /** Writes output to the terminal in order; the console's paint after a size
-   *  where its lines are. `parsed` runs once all of `data` is parsed. */
-  write(data: string, parsed?: () => void): void
+   *  where its lines are. `parsed` runs once all of `data` is parsed. `asIs`:
+   *  output that is not the console's answer to a size (a held terminal's
+   *  replay of what it printed before), written in order and as it came. */
+  write(data: string, parsed?: () => void, asIs?: boolean): void
 }
 
 export function createConsoleRepaintAligner(term: RepaintTerminal, opts: { now: () => number }): ConsoleRepaintAligner {
@@ -289,17 +291,17 @@ export function createConsoleRepaintAligner(term: RepaintTerminal, opts: { now: 
   /** A paint waits for the output before it to be parsed: later output
    *  waits behind it, in order. */
   let waiting = false
-  const queue: Array<{ data: string; parsed?: () => void }> = []
+  const queue: Array<{ data: string; parsed?: () => void; asIs?: boolean }> = []
 
   const drain = (): void => {
     while (!waiting && queue.length > 0) {
       const next = queue.shift()!
-      put(next.data, next.parsed)
+      put(next.data, next.parsed, next.asIs)
     }
   }
 
-  const put = (data: string, parsed?: () => void): void => {
-    const at = opts.now() <= lookUntil ? data.indexOf(PAINT_START) : -1
+  const put = (data: string, parsed?: () => void, asIs?: boolean): void => {
+    const at = !asIs && opts.now() <= lookUntil ? data.indexOf(PAINT_START) : -1
     const end = at < 0 ? -1 : data.indexOf(PAINT_END, at + PAINT_START.length)
     if (end < 0) {
       term.write(data, parsed)
@@ -323,9 +325,9 @@ export function createConsoleRepaintAligner(term: RepaintTerminal, opts: { now: 
 
   return {
     noteResize() { lookUntil = opts.now() + REPAINT_WINDOW_MS },
-    write(data, parsed) {
-      if (waiting) queue.push({ data, parsed })
-      else put(data, parsed)
+    write(data, parsed, asIs) {
+      if (waiting) queue.push({ data, parsed, asIs })
+      else put(data, parsed, asIs)
     },
   }
 }

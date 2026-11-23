@@ -43,6 +43,7 @@ const H = vi.hoisted(() => {
     paste() {}
     clearSelection() {}
     getSelection() { return '' }
+    resize(cols: number, rows: number) { this.cols = cols; this.rows = rows }
     write(data: string, cb?: () => void) { this.written.push(data); cb?.() }
     writeln(data: string) { this.written.push(`${data}\r\n`) }
     dispose() {}
@@ -50,7 +51,7 @@ const H = vi.hoisted(() => {
   const sessionState: any = { sessions: [] as any[], activeSessionId: 's-1', updateSession: () => {} }
   /** What happened, in order: the aligner's calls and the PTY resizes. */
   const log: string[] = []
-  const aligners: Array<{ term: unknown; written: string[] }> = []
+  const aligners: Array<{ term: unknown; written: string[]; asIs: boolean[] }> = []
   const fit = { cols: 103, rows: 27 }
   return { MockTerminal, sessionState, log, aligners, fit, spawned: new Set<string>(), tokens: new Map<string, number>(), counter: { last: 0 } }
 })
@@ -60,11 +61,11 @@ vi.mock('../../../src/renderer/components/terminal/consoleRepaint', async (impor
   return {
     ...real,
     createConsoleRepaintAligner: (term: unknown) => {
-      const a = { term, written: [] as string[] }
+      const a = { term, written: [] as string[], asIs: [] as boolean[] }
       H.aligners.push(a)
       return {
         noteResize: () => { H.log.push('noteResize') },
-        write: (data: string, parsed?: () => void) => { a.written.push(data); parsed?.() },
+        write: (data: string, parsed?: () => void, asIs?: boolean) => { a.written.push(data); a.asIs.push(!!asIs); parsed?.() },
       }
     },
   }
@@ -149,8 +150,10 @@ vi.mock('../../../src/renderer/hooks/useAccountIdentitySubscription', () => ({ u
 vi.mock('../../../src/renderer/hooks/useActiveTabEffect', () => ({ useActiveTabEffect: () => {} }))
 vi.mock('../../../src/renderer/hooks/useCursorLayerVisibility', () => ({ useCursorLayerVisibility: () => {} }))
 
-/** The PTY output listener TerminalView registers, per session. */
+/** The PTY output listener TerminalView registers, per session, and its
+ *  listener for a replay at the holder's size (C8). */
 const dataListeners = new Map<string, (data: string) => void>()
+const replayListeners = new Map<string, (notice: unknown) => void>()
 const spawn = vi.fn((_id: string, _opts: Record<string, unknown>) => Promise.resolve({ started: true }))
 ;(globalThis as any).window.electronAPI = {
   ...(globalThis as any).window.electronAPI,
@@ -159,6 +162,7 @@ const spawn = vi.fn((_id: string, _opts: Record<string, unknown>) => Promise.res
     resize: vi.fn((_id: string, c: number, r: number) => { H.log.push(`resize ${c}x${r}`) }),
     spawn,
     onData: vi.fn((id: string, cb: (data: string) => void) => { dataListeners.set(id, cb); return () => { dataListeners.delete(id) } }),
+    onReplayAtHolderSize: vi.fn((id: string, cb: (notice: unknown) => void) => { replayListeners.set(id, cb); return () => { replayListeners.delete(id) } }),
     onExit: vi.fn(() => () => {}),
   },
   ptyIntegrity: { report: vi.fn() },
@@ -235,6 +239,7 @@ beforeEach(() => {
   H.MockTerminal.last = null
   observers.length = 0
   dataListeners.clear()
+  replayListeners.clear()
   container = document.createElement('div')
   document.body.appendChild(container)
   root = createRoot(container)
@@ -255,6 +260,22 @@ describe('TerminalView puts output through the console repaint aligner on Window
     output(PAINT)
     expect(H.aligners[0].written).toContain(PAINT)
     expect(H.MockTerminal.last.written).not.toContain(PAINT)
+  })
+
+  it('Windows, a held terminal\'s replay at the holder\'s size (C8): the replay is written as it came, and the fit after it tells the aligner before its size goes', async () => {
+    ;(window as any).electronPlatform = 'win32'
+    await mountShell()
+    const replay = 'kept output\r\n'
+    H.fit.cols = 140
+    H.fit.rows = 28
+    H.log.length = 0
+    act(() => { replayListeners.get('s-1')!({ cols: 103, rows: 27, length: replay.length }) })
+    output(replay)
+    output(PAINT)
+    const a = H.aligners[0]
+    expect(a.written.slice(-2)).toEqual([replay, PAINT])
+    expect(a.asIs.slice(-2), 'the replay as it came; the paint after the fit looked at').toEqual([true, false])
+    expect(H.log).toEqual(['noteResize', 'resize 140x28'])
   })
 
   it('Windows, a Codex session (the console host the app ships): no aligner, output written straight in', async () => {

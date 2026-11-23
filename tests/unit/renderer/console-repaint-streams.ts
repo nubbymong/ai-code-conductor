@@ -10,6 +10,8 @@
 // -stream.stream.json and -sizes.sizes.json; off2-grow kept only its paints, so
 // its print is off1-grow's (the same command at the same size).
 //
+// The held terminal restores (RECORDED_RESTORES) are beta.14 C8's VM line, below.
+//
 // Not a test file: tests/unit/renderer/console-repaint-after-resize.test.ts reads it.
 export interface RecordedResizeEvent { write?: string; resize?: string }
 export interface RecordedResize {
@@ -78,3 +80,79 @@ export const RECORDED_RESIZES: RecordedResize[] = [
     ],
   },
 ]
+
+/**
+ * How the console built into Windows wrote one `long N ` line of 250 `y` at
+ * `cols` by `rows` in these recordings: the first row, then each later row as
+ * CR LF, a cursor position on the last column of the row above, that column's
+ * character again and the row, so the terminal wraps on to it. `clear` is the
+ * console's ESC[3J in the two restores below, at the line's start or after its
+ * first row.
+ */
+export function consoleLine(n: number, cols: number, rows: number, clear?: 'start' | 'second row'): string {
+  const text = `long ${n} ${'y'.repeat(250)}`
+  let s = (clear === 'start' ? '\x1b[3J' : '') + text.slice(0, cols)
+  for (let at = cols; at < text.length; at += cols) {
+    s += '\r\n' + (clear === 'second row' && at === cols ? '\x1b[3J' : '') + `\x1b[${rows - 1};${cols}H` + text[at - 1] + text.slice(at, at + cols)
+  }
+  return s + '\r\n'
+}
+
+/**
+ * beta.14 C8's VM line (aicc_planning#392, an unsigned build of 441823db,
+ * plain terminals through the session helper on, 22 Nov): a held terminal
+ * restored after the window changed size. Its replay, written at the holder's
+ * size, is the app's notice and the console's own output of the lines the
+ * helper still held; consoleLine writes it again byte for byte (the test
+ * checks its length against the recording's). Then the tab is fitted to its
+ * own size and the console paints its screen at it: `paint`, as recorded.
+ * Source: beta.14's vmC8/out/vmout/u1-keep.stream.* (up, 1 of 3, the other two
+ * the same bytes) and d1-09-stream.stream.* (down).
+ */
+export interface RecordedRestore {
+  name: string
+  /** The holder's size (the replay's) and the tab's. */
+  holder: string
+  tab: string
+  /** The replay: `head`, lines `firstLine` to 10000, `tail`. */
+  head: string
+  firstLine: number
+  clear: { line: number; at: 'start' | 'second row' }
+  tail: string
+  /** The replay's length in the recording. */
+  length: number
+  paint: string
+}
+
+export const RECORDED_RESTORES: RecordedRestore[] = [
+  {
+    name: 'u1-keep',
+    holder: '103x27',
+    tab: '140x28',
+    head: '\u0018\u001b[0m\u001b[26;1H[Earlier output of this terminal is no longer held, so it is not shown.]\r\n',
+    firstLine: 6678,
+    clear: { line: 6686, at: 'second row' },
+    tail: 'PS C:\\fixture\\long-lines\\work\\resizes>\u001b[1C',
+    length: 950511,
+    paint: "\u001b[?25l\u001b[H<y157>\u001b[K\r\nlong 9993 <y250>\u001b[K\r\nlong 9994 <y250>\u001b[K\r\nlong 9995 <y250>\u001b[K\r\nlong 9996 <y250>\u001b[K\r\nlong 9997 <y250>\u001b[K\r\nlong 9998 <y250>\u001b[K\r\nlong 9999 <y250>\u001b[K\r\nlong 10000 <y250>\u001b[K\r\nPS C:\\fixture\\long-lines\\work\\resizes>\u001b[K\r\n\u001b[K\r\n\u001b[K\r\n\u001b[K\r\n\u001b[K\r\n\u001b[K\r\n\u001b[K\r\n\u001b[K\r\n\u001b[K\r\n\u001b[K\u001b[19;40H\u001b[?25h",
+  },
+  {
+    name: 'd1-09',
+    holder: '140x28',
+    tab: '103x27',
+    head: '\u0018\u001b[0m\u001b[27;1H[Earlier output of this terminal is no longer held, so it is not shown.]\r\n',
+    firstLine: 7509,
+    clear: { line: 7522, at: 'start' },
+    tail: 'PS C:\\fixture\\long-lines\\work\\resizes>\u001b[1C',
+    length: 682941,
+    paint: "\u001b[?25l\u001b[H<y157>\u001b[K\r\nlong 9993 <y250>\u001b[K\r\nlong 9994 <y250>\u001b[K\r\nlong 9995 <y250>\u001b[K\r\nlong 9996 <y250>\u001b[K\r\nlong 9997 <y250>\u001b[K\r\nlong 9998 <y250>\u001b[K\r\nlong 9999 <y250>\u001b[K\r\nlong 10000 <y250>\u001b[K\r\nPS C:\\fixture\\long-lines\\work\\resizes>\u001b[K\u001b[1C\u001b[?25h",
+  },
+]
+
+/** A restore's replay, as the holder sent it. */
+export function restoreReplay(r: RecordedRestore): string {
+  const [cols, rows] = r.holder.split('x').map(Number)
+  let s = r.head
+  for (let n = r.firstLine; n <= 10000; n++) s += consoleLine(n, cols, rows, n === r.clear.line ? r.clear.at : undefined)
+  return s + r.tail
+}
