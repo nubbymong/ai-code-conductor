@@ -47,10 +47,9 @@ mod windows {
     const FAKE: &str = env!("CARGO_BIN_EXE_aicc-fake-cli");
     /// How long a fake CLI these tests start stays alive, in seconds. Each one is
     /// ended by its guard (`Started`, `Running`, `Tree`) when its test is done or
-    /// fails, so this only
-    /// has to outlast the slowest step on a loaded runner: a Windows CI run once
-    /// took longer than the old 10 s between a start and its `Win32_Process` read,
-    /// which then found no process.
+    /// fails, so this only has to outlast the slowest step on a loaded runner: a
+    /// Windows CI run once took longer than the old 10 s between a start and its
+    /// `Win32_Process` read, which then found no process.
     const LIFE: &str = "120";
 
     static ONE_AT_A_TIME: Mutex<()> = Mutex::new(());
@@ -90,9 +89,15 @@ mod windows {
     /// a creation time of digits.
     fn started(ran: &Ran) -> (u32, String) {
         assert_eq!(ran.code, Some(0), "start failed: {}", ran.stderr);
-        // The program runs from here on: if a check below fails, this ends it.
-        // Once they pass, the caller's own guard takes over.
-        let early = json::parse(ran.stdout.trim_end().as_bytes()).ok().and_then(|v| v.get("pid").and_then(Value::as_u64)).and_then(|p| u32::try_from(p).ok()).map(Started);
+        // The program runs from here on: if a check below fails, these end it
+        // (with the processes under it, when its creation time reads), read from
+        // the first line even when there are more. Once the checks pass, the
+        // caller's own guards take over.
+        let first = json::parse(ran.stdout.lines().next().unwrap_or_default().trim_end().as_bytes()).ok();
+        let early_pid = first.as_ref().and_then(|v| v.get("pid").and_then(Value::as_u64)).and_then(|p| u32::try_from(p).ok());
+        let early_created = first.as_ref().and_then(|v| v.get("created").and_then(Value::as_str)).filter(|c| !c.is_empty() && c.bytes().all(|b| b.is_ascii_digit())).map(str::to_string);
+        let early_tree = early_pid.zip(early_created).map(|(pid, created)| Tree(pid, created));
+        let early_started = if early_tree.is_none() { early_pid.map(Started) } else { None };
         let line = ran.stdout.trim_end();
         assert!(!line.contains('\n'), "start printed more than one line: {:?}", ran.stdout);
         let v: Value = json::parse(line.as_bytes()).unwrap_or_else(|e| panic!("{line:?} is not JSON: {e:?}"));
@@ -101,9 +106,8 @@ mod windows {
         let created = v.get("created").and_then(Value::as_str).expect("a creation time").to_string();
         assert!(!created.is_empty() && created.len() <= 20 && created.bytes().all(|b| b.is_ascii_digit()), "{line}");
         let pid = u32::try_from(pid).expect("a 32-bit pid");
-        if let Some(guard) = early {
-            std::mem::forget(guard);
-        }
+        std::mem::forget(early_tree);
+        std::mem::forget(early_started);
         (pid, created)
     }
 
