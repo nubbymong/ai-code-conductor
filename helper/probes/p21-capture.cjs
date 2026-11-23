@@ -31,6 +31,14 @@
  * console runs come from user's console session, which must be signed in
  * already (the probe signs nobody in; on 2026-11-22 its auto sign-in had
  * signed nobody in), the SSH runs from the SSH session itself.
+ * On the GitHub Windows runner (ci.yml, the dispatch-only job probe-p21) the
+ * console reading is taken by `measure --session console` in the runner's own
+ * session, which has a desktop, and `verdict` is told with --ssh-not-run that
+ * the SSH half was not run there: the line reads NOT RUN with that reason,
+ * never FAILS CLEANLY and never a missing reading, and WINDOWS_1's SSH reading
+ * stands as its own result. After the runs a direct `measure` prints one line
+ * of what Windows said about the session it ran in (its id, whether it is
+ * elevated, whether LogonUI runs, each display's size and the scale).
  *
  * Decision lines (written before measuring):
  *   Console session, per scale, over 3 runs:
@@ -71,12 +79,12 @@
  *   node p21-capture.cjs console --helper <aicc-helper.exe> --out <folder> --label <name> [--runs 3]
  *   node p21-capture.cjs scale --out <folder> --label <name> [--set <percent>]
  *   node p21-capture.cjs console-scale --out <folder> --label <name> [--set <percent>]
- *   node p21-capture.cjs verdict --out <folder> --console <label>[,<label>]|none --ssh <label> [--second-scale <why not>] [--console-not-run <why>]
+ *   node p21-capture.cjs verdict --out <folder> --console <label>[,<label>]|none (--ssh <label> | --ssh-not-run <why>) [--second-scale <why not>] [--console-not-run <why>]
  * --out must be a folder that is there; readings are p21-<label>.json and
- * p21-scale-<label>.json in it. The last lines of `verdict` are "P21 CONSOLE
- * <label>: ...", "P21 SSH: ...", "P21 SCALES: ...", "P21 MIXED SCALING: ..."
- * and "P21 RESULT: ...". Exit 0 when a step ran to its end, 2 when it could not
- * run.
+ * p21-scale-<label>.json in it. --ssh and --ssh-not-run name the same half:
+ * give one. The last lines of `verdict` are "P21 CONSOLE <label>: ...",
+ * "P21 SSH: ...", "P21 SCALES: ...", "P21 MIXED SCALING: ..." and "P21 RESULT:
+ * ...". Exit 0 when a step ran to its end, 2 when it could not run.
  */
 const fs = require('fs');
 const path = require('path');
@@ -247,8 +255,24 @@ function mixedLine(readings) {
   return mixed ? `mixed scaling: measured in ${mixed.label}` : `mixed scaling: not measured (${most} displays, all at one scale)`;
 }
 
-/** The verdict lines for the console readings (one a scale) and the SSH reading. */
-function verdictLines(consoleReadings, sshReading, secondScaleWhy, consoleWhy) {
+/** One line of what Windows said about the session a reading was taken in. */
+function factsLine(reading) {
+  const f = (reading && reading.facts) || {};
+  const modes = f.modes || [];
+  const sizes = modes.map((m) => `${m.width}x${m.height}`).join(', ');
+  const scale = scaleOf(f);
+  const elevated = f.elevated === undefined ? 'elevation not read' : f.elevated ? 'elevated' : 'not elevated';
+  return `P21 ${reading && reading.label}: session ${f.sessionId}, ${elevated}, LogonUI ${f.logonUi}, ${modes.length} display${modes.length === 1 ? '' : 's'}${sizes ? ` (${sizes})` : ''}, scale ${scale === null ? 'not read' : `${scale}%`}`;
+}
+
+/**
+ * The verdict lines for the console readings (one a scale) and the SSH reading.
+ * `sshNotRunWhy` says the SSH half was not run in this place (the CI runner has
+ * no SSH session): the line reads NOT RUN with that reason, which is no verdict
+ * about SSH, and it is never given with a reading of the half.
+ */
+function verdictLines(consoleReadings, sshReading, secondScaleWhy, consoleWhy, sshNotRunWhy) {
+  if (sshReading && sshNotRunWhy) throw new CouldNotRun('--ssh and --ssh-not-run name the same half: give one');
   const lines = [];
   const byScale = consoleReadings.map((r) => ({ label: r.label, scale: scaleOf(r.facts), v: verdictConsole(r.runs, r.facts) }));
   if (byScale.length === 0) lines.push(`P21 CONSOLE: CANNOT MEASURE - ${consoleWhy || 'no console reading'}`);
@@ -256,7 +280,8 @@ function verdictLines(consoleReadings, sshReading, secondScaleWhy, consoleWhy) {
     lines.push(`P21 CONSOLE ${c.label} (${c.scale === null ? 'scale not read' : `${c.scale}%`}): ${c.v.verdict} - ${c.v.why}`);
     for (const f of c.v.failures) lines.push(`  ${f}`);
   }
-  const ssh = verdictSsh(sshReading ? sshReading.runs : []);
+  const notRun = !sshReading && Boolean(sshNotRunWhy);
+  const ssh = notRun ? { verdict: 'NOT RUN', why: sshNotRunWhy, failures: [] } : verdictSsh(sshReading ? sshReading.runs : []);
   lines.push(`P21 SSH: ${ssh.verdict} - ${ssh.why}`);
   for (const f of ssh.failures) lines.push(`  ${f}`);
   const scales = [...new Set(byScale.map((c) => c.scale).filter((s) => s !== null))];
@@ -270,7 +295,8 @@ function verdictLines(consoleReadings, sshReading, secondScaleWhy, consoleWhy) {
   else if (byScale.some((c) => c.v.verdict === 'CANNOT MEASURE')) overall = 'CANNOT MEASURE';
   else overall = 'CAPTURES';
   const at = scales.length ? ` at ${scales.map((s) => `${s}%`).join(' and ')}` : '';
-  lines.push(`P21 RESULT: ${overall}${at} from the console session; ${ssh.verdict} from the SSH session; ${second}; ${mixed}`);
+  const sshPart = notRun ? `SSH session: not run (${ssh.why})` : `${ssh.verdict} from the SSH session`;
+  lines.push(`P21 RESULT: ${overall}${at} from the console session; ${sshPart}; ${second}; ${mixed}`);
   return lines;
 }
 
@@ -414,7 +440,7 @@ function verdict(a) {
   const read = (label) => JSON.parse(fs.readFileSync(path.join(out, `p21-${checkLabel(label)}.json`), 'utf8'));
   const consoleReadings = String(a.console === 'none' ? '' : a.console || '').split(',').filter(Boolean).map(read);
   const sshReading = a.ssh ? read(a.ssh) : null;
-  const lines = verdictLines(consoleReadings, sshReading, a['second-scale'], a['console-not-run']);
+  const lines = verdictLines(consoleReadings, sshReading, a['second-scale'], a['console-not-run'], a['ssh-not-run']);
   for (const l of lines) console.log(l);
   writeReading(out, 'p21-verdict.json', { probe: 'P21', at: new Date().toISOString(), lines });
   return lines;
@@ -424,11 +450,15 @@ async function main(argv) {
   const a = parseArgs(argv);
   const sub = a._[0];
   if (process.platform !== 'win32' && sub !== 'verdict') throw new CouldNotRun('P21 runs on Windows');
-  if (sub === 'measure') return measure(a);
+  if (sub === 'measure') {
+    const r = await measure(a);
+    console.log(factsLine(r));
+    return r;
+  }
   if (sub === 'console') {
     const r = await inConsole('measure', a, `p21-${checkLabel(a.label)}.json`);
     for (const [i, run] of r.runs.entries()) console.log(`P21 ${r.label} run ${i + 1}: exit ${run.code}${run.hung ? ' (hung)' : ''} in ${run.ms} ms; ${firstLine(run.stderr) || `${(run.displays || []).length} displays`}`);
-    console.log(`P21 ${r.label}: session ${r.facts.sessionId}, LogonUI ${r.facts.logonUi}, ${r.facts.modes.length} displays, scale ${scaleOf(r.facts)}%`);
+    console.log(factsLine(r));
     return r;
   }
   if (sub === 'scale') { const r = scale(a); console.log(JSON.stringify(r)); return r; }
@@ -444,4 +474,4 @@ if (require.main === module) {
   );
 }
 
-module.exports = { parseBmpHeader, allBlack, readPicture, judgeConsoleRun, verdictConsole, judgeSshRun, verdictSsh, scaleOf, mixedLine, verdictLines, checkLabel, BOUND_MS, HANG_MS, RUNS };
+module.exports = { parseBmpHeader, allBlack, readPicture, judgeConsoleRun, verdictConsole, judgeSshRun, verdictSsh, scaleOf, mixedLine, factsLine, verdictLines, checkLabel, BOUND_MS, HANG_MS, RUNS };

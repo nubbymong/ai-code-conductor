@@ -31,7 +31,8 @@ const P = req('./p21-capture.cjs') as {
   judgeSshRun: (r: Run) => { ok: boolean; failures: string[] }
   verdictSsh: (r: Run[]) => V
   mixedLine: (readings: Array<{ label: string; facts: Facts }>) => string
-  verdictLines: (c: Array<{ label: string; facts: Facts; runs: Run[] }>, s: { label: string; facts: Facts; runs: Run[] } | null, why?: string, consoleWhy?: string) => string[]
+  verdictLines: (c: Array<{ label: string; facts: Facts; runs: Run[] }>, s: { label: string; facts: Facts; runs: Run[] } | null, why?: string, consoleWhy?: string, sshNotRunWhy?: string) => string[]
+  factsLine: (r: { label: string; facts: Facts & { sessionId?: number; elevated?: boolean } }) => string
   checkLabel: (l: unknown) => string
   BOUND_MS: number
 }
@@ -213,6 +214,45 @@ describe('P21: the lines it prints', () => {
     expect(lines[lines.length - 1]).toBe(
       'P21 RESULT: CANNOT MEASURE from the console session; FAILS CLEANLY from the SSH session; second scale: not measured (no console session to set it in); mixed scaling: not measured (no display listed)',
     )
+  })
+
+  // The CI runner takes the console reading and has no SSH session (ci.yml, the Probe P21 job, B5).
+  const NOT_RUN = 'not run on the runner, which has no SSH session; WINDOWS_1\'s reading stands (FAILS CLEANLY, ADR-030)'
+
+  it('says the SSH half was not run, with the reason, and never reads it as a verdict or a missing reading', () => {
+    const lines = P.verdictLines([{ label: 'ci-console', facts: at(96), runs: runsAt(96) }], null, 'the job does not change the runner\'s display scale', undefined, NOT_RUN)
+    expect(lines).toContain(`P21 SSH: NOT RUN - ${NOT_RUN}`)
+    expect(lines).toContain('P21 CONSOLE ci-console (100%): CAPTURES - 3 of 3 runs, 180 to 180 ms')
+    expect(lines[lines.length - 1]).toBe(
+      `P21 RESULT: CAPTURES at 100% from the console session; SSH session: not run (${NOT_RUN}); second scale: not measured (the job does not change the runner's display scale); mixed scaling: not measured (one display)`,
+    )
+    // Not a verdict about SSH, and not the "0 of 3 runs read" of a missing reading.
+    expect(lines.join('\n')).not.toMatch(/FAILS CLEANLY from the SSH|CANNOT MEASURE - 0 of 3|DOES NOT FAIL CLEANLY/)
+  })
+
+  it('does not hide a console failure behind the SSH half being not run', () => {
+    const bad = runsAt(96)
+    bad[1].displays![0].picture = picture(8, 6, () => [0, 0, 0, 255])
+    const lines = P.verdictLines([{ label: 'ci-console', facts: at(96), runs: bad }], null, undefined, undefined, NOT_RUN)
+    expect(lines[lines.length - 1]).toMatch(/^P21 RESULT: DOES NOT CAPTURE at 100% from the console session; SSH session: not run \(/)
+    expect(lines.join('\n')).toContain('run 2: display-1.bmp: every pixel is black')
+  })
+
+  it('reads a missing SSH reading as CANNOT MEASURE as before when no reason is given, and refuses a reading and a reason together', () => {
+    const none = P.verdictLines([{ label: 'ci-console', facts: at(96), runs: runsAt(96) }], null)
+    expect(none).toContain('P21 SSH: CANNOT MEASURE - 0 of 3 runs read')
+    const ssh = { label: 'ssh', facts: { modes: [], dpis: [] }, runs: [cleanSsh(), cleanSsh(), cleanSsh()] }
+    expect(() => P.verdictLines([], ssh, undefined, undefined, NOT_RUN)).toThrow(/same half: give one/)
+    // A reading still gives its verdict when no reason is given.
+    expect(P.verdictLines([], ssh)).toContain(`P21 SSH: FAILS CLEANLY - 3 of 3 runs exited 3 with "aicc-helper: capture: no desktop to capture: this process runs on a window station no display shows", 40 to 40 ms`)
+  })
+
+  it('prints one line of what Windows said about the session: its id, elevation, LogonUI, each display\'s size and the scale', () => {
+    const facts = { ...at(120), sessionId: 1, elevated: true, modes: [{ left: 0, top: 0, width: 1024, height: 768, primary: true }] }
+    expect(P.factsLine({ label: 'ci-console', facts })).toBe('P21 ci-console: session 1, elevated, LogonUI false, 1 display (1024x768), scale 125%')
+    expect(P.factsLine({ label: 'console-a', facts: { ...facts, elevated: false, logonUi: true } })).toBe('P21 console-a: session 1, not elevated, LogonUI true, 1 display (1024x768), scale 125%')
+    // An older reading with no elevation field, and a session with no display listed.
+    expect(P.factsLine({ label: 'old', facts: { logonUi: false, modes: [], dpis: [], sessionId: 0 } })).toBe('P21 old: session 0, elevation not read, LogonUI false, 0 displays, scale not read')
   })
 
   it('counts mixed scaling only with two displays at different scales', () => {
