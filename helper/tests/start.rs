@@ -95,7 +95,7 @@ mod windows {
         // caller's own guards take over.
         let first = json::parse(ran.stdout.lines().next().unwrap_or_default().trim_end().as_bytes()).ok();
         let early_pid = first.as_ref().and_then(|v| v.get("pid").and_then(Value::as_u64)).and_then(|p| u32::try_from(p).ok());
-        let early_created = first.as_ref().and_then(|v| v.get("created").and_then(Value::as_str)).filter(|c| !c.is_empty() && c.bytes().all(|b| b.is_ascii_digit())).map(str::to_string);
+        let early_created = first.as_ref().and_then(|v| v.get("created").and_then(Value::as_str)).filter(|c| !c.is_empty() && c.len() <= 20 && c.bytes().all(|b| b.is_ascii_digit()) && c.parse::<u64>().is_ok()).map(str::to_string);
         let early_tree = early_pid.zip(early_created).map(|(pid, created)| Tree(pid, created));
         let early_started = if early_tree.is_none() { early_pid.map(Started) } else { None };
         let line = ran.stdout.trim_end();
