@@ -21,9 +21,12 @@
  * fit records the tab's size without sending it).
  *
  * Guards that pass on the old view by design: a pane on screen spawns on its
- * first fit frame (GPU rendering on and off), and a view that takes over a
- * running PTY never resizes it to 80x24 (the old view fitted the hidden pane
- * at once and recorded 80x24, so its observer sent the tab's size when shown).
+ * first fit frame (GPU rendering on and off); a view that takes over a running
+ * PTY never resizes it to 80x24 (the old view fitted the hidden pane at once
+ * and recorded 80x24, so its observer sent the tab's size when shown); and a
+ * started pane hidden and shown at another size gets nothing from its
+ * observer while hidden and the new size once shown (the observer holds back
+ * only a pane with no size).
  * Harness: terminalview-renderer-wait.test.tsx's mocks.
  */
 import React from 'react'
@@ -316,6 +319,19 @@ describe('a tab hidden before its first fit starts its terminal at its own size 
     await fireObservers() // the pane has its size again
     expect(spawnedSizes()).toEqual([[103, 27]])
     expect(resize.mock.calls, 'the observer finds the size the spawn carried').toEqual([])
+  })
+
+  it('a started pane hidden and shown at another size: its observer sends main nothing while hidden, and the new size once shown', async () => {
+    mount()
+    await setUp()
+    await act(async () => { frame() })
+    expect(spawnedSizes()).toEqual([[103, 27]])
+    hide()
+    await fireObservers() // the pane lost its size
+    expect(resize.mock.calls, 'nothing from a hidden pane').toEqual([])
+    show(960, 600)
+    await fireObservers() // shown, at the window's new size
+    expect(resize.mock.calls).toEqual([['s-1', 120, 30]])
   })
 
   it('a view that takes over a running PTY, hidden before its first fit: no 80x24 reaches that PTY, and nothing spawns', async () => {

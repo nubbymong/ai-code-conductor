@@ -16,9 +16,13 @@ keeps xterm.js's default 80x24, and the PTY started at it.
   running PTY would leave that PTY at 80x24 once shown (the first fit records the tab's size
   without sending it). A hidden pane's fit never changed anything, so a tab hidden after its start
   behaves as before.
-- **Tests.** tests/unit/renderer/terminalview-hidden-before-fit.test.tsx, 8 tests: 5 red on the
-  old view, 3 guards that pass on it by design (a pane on screen spawns on its first fit frame,
-  GPU rendering on and off; a view that takes over a running PTY never resizes it to 80x24). The
-  observer check removed: 2 tests red. The size check moved after the renderer wait: 1 test red.
-- **VM** (the section's frozen head): three new tabs switched fast by CDP, and a key switch right
-  after a new tab, each console host at its tab's size; 12 new tabs still 103x27.
+- **Tests.** tests/unit/renderer/terminalview-hidden-before-fit.test.tsx, 9 tests: 5 red on the
+  old view, 4 guards that pass on it by design (a pane on screen spawns on its first fit frame,
+  GPU rendering on and off; a view that takes over a running PTY never resizes it to 80x24; a
+  started pane hidden and shown at another size gets nothing from its observer while hidden and
+  the new size once shown). The observer check removed: 2 tests red. The size check moved after
+  the renderer wait: 1 test red. The observer check made to return for every pane: 1 test red.
+- **VM line** (owed on the section's frozen head, not run when this was written): three new tabs
+  switched fast by CDP, and a key switch right after a new tab: each console host is to read its
+  tab's size, and 12 new tabs are still to start at 103x27.
+(The aggregate's fragment records the result once the line has run.)
