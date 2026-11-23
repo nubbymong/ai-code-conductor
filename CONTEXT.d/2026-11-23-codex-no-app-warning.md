@@ -12,10 +12,11 @@ hold. In `src/main/providers/codex/spawn.ts`.
   paste or broadcast reached the tab. With `daemon_auto_start = false` in the tab's Codex config,
   the count went and every press was sent.
 - **The cause, read in Codex's source (rust-v0.153.4 to rust-v0.171.0, all 30 releases).** From
-  0.156.0 Codex starts a shared background server by itself (the `daemon_auto_start` feature, on by
-  default). Any `-c` key other than a few it allows (`codex-rs/tui/src/daemon_startup.rs`,
-  `config_exclusion`) makes it run without the server (embedded), and every key the app sets is
-  such a key. While the feature is on, Codex then also shows that exclusion as a startup warning
+  0.156.0 Codex can start a shared background server by itself (the `daemon_auto_start` feature:
+  experimental and off by default in 0.156.0 and 0.156.1, on by default from 0.157.0). Any `-c`
+  key other than a few it allows (`codex-rs/tui/src/daemon_startup.rs`, `config_exclusion`) makes
+  it run without the server (embedded), and every key the app sets is such a key. While the
+  feature is on, Codex then also shows that exclusion as a startup warning
   (`codex-rs/tui/src/startup_orchestration.rs`, `daemon_exclusion.filter(|_| auto_start_daemon)`).
 - **The fix.** A launch whose own `-c` keys already run Codex embedded now also carries
   `-c features.daemon_auto_start=false` (`codexDaemonAutoStartOffArgs`), last of the app's flags

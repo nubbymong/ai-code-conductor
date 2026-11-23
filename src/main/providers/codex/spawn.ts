@@ -557,7 +557,8 @@ function codexOverrideKeepsServer(entry: string): boolean {
  *  as before; nothing for any other launch, which keeps whatever Codex does
  *  with its server. Nothing either when the user's own arguments name
  *  `--strict-config`: a Codex before 0.156.0 refuses the key under it, and
- *  from 0.156.0 that flag alone makes Codex run embedded and warn. */
+ *  from 0.156.0 that flag alone makes Codex run embedded (and warn while its
+ *  automatic server start is on, the default from 0.157.0). */
 export function codexDaemonAutoStartOffArgs(appFlags: readonly string[], extraArgs: unknown): string[] {
   const embedded = appFlags.some((a, i) => i > 0 && appFlags[i - 1] === '-c' && !codexOverrideKeepsServer(a))
   if (!embedded) return []
