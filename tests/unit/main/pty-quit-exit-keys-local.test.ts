@@ -4,10 +4,11 @@
 // in, and since 2.1.3-beta.15 B3 (aicc_planning#393) they are the keys that
 // CLI's provider package names. A local Claude Code session gets Escape at
 // once, Ctrl-C at 100 ms and /exit at 300 ms, as it always did; a local Codex
-// session gets Escape at once, Ctrl-C at 30 ms and Ctrl-C again at 1,100 ms,
-// and no /exit (red on 4252cbfc, which typed Claude Code's keys into it, and
-// the times red on 3d447f1d, which typed one Ctrl-C at 100 ms), and none of
-// the rest once its terminal has ended. A terminal tab (and a session's partner
+// session gets Escape at once, Ctrl-C at 30 ms and Ctrl-C again at 1,500 ms,
+// and no /exit (red on 4252cbfc, which typed Claude Code's keys into it, the
+// times red on 3d447f1d, which typed one Ctrl-C at 100 ms, and on 1251d798,
+// whose second Ctrl-C came at 1,100 ms), and none of the rest once its
+// terminal has ended. A terminal tab (and a session's partner
 // terminal, which is one too) runs whatever the user started in it: it is
 // closed, and nothing is typed into it. The SSH side of the same rule is in
 // pty-ssh-terminal-only.test.ts.
@@ -227,7 +228,7 @@ describe('quitting the app with local sessions open', () => {
 
   // Mutation to prove these can fail: type Claude Code's keys into every
   // session, as 4252cbfc did; or Codex's as 3d447f1d named them (one Ctrl-C,
-  // at 100 ms).
+  // at 100 ms), or as 1251d798 did (the second Ctrl-C at 1,100 ms).
   it('a local Codex session gets the Codex package\'s keys: Escape, Ctrl-C and Ctrl-C again, and no /exit', () => {
     registerCodex()
     spawnPty(win, 'quit-codex', { cwd: project, provider: 'codex', codexOptions: { permissionsPreset: 'standard' }, codexLaunch: preparedLaunch() } as never)
@@ -238,11 +239,11 @@ describe('quitting the app with local sessions open', () => {
     expect(kills).toBe(0)
   })
 
-  it('the Codex package\'s keys at their times: Escape at once, Ctrl-C at 30 ms, Ctrl-C again at 1,100 ms, then nothing up to the timeout', () => {
+  it('the Codex package\'s keys at their times: Escape at once, Ctrl-C at 30 ms, Ctrl-C again at 1,500 ms, then nothing up to the timeout', () => {
     registerCodex()
     spawnPty(win, 'quit-codex', { cwd: project, provider: 'codex', codexOptions: { permissionsPreset: 'standard' }, codexLaunch: preparedLaunch() } as never)
     vi.advanceTimersByTime(1000)
-    expect(typedAt('quit-codex', [0, 29, 30, 1099, 1100, 4999])).toEqual([
+    expect(typedAt('quit-codex', [0, 29, 30, 1499, 1500, 4999])).toEqual([
       ['\x1b'], ['\x1b'], ['\x1b', '\x03'], ['\x1b', '\x03'], CODEX_EXIT_KEYS, CODEX_EXIT_KEYS,
     ])
   })
@@ -250,7 +251,7 @@ describe('quitting the app with local sessions open', () => {
   // Mutation to prove this can fail: drop sendExitKeys' check that the
   // terminal is still the session's (the second Ctrl-C then goes into a run
   // that has ended).
-  it('a local Codex session that ended before 1,100 ms gets no second Ctrl-C, and its quit ends without a kill', () => {
+  it('a local Codex session that ended before 1,500 ms gets no second Ctrl-C, and its quit ends without a kill', () => {
     registerCodex()
     spawnPty(win, 'quit-codex', { cwd: project, provider: 'codex', codexOptions: { permissionsPreset: 'standard' }, codexLaunch: preparedLaunch() } as never)
     vi.advanceTimersByTime(1000)
@@ -264,6 +265,26 @@ describe('quitting the app with local sessions open', () => {
     vi.advanceTimersByTime(230)
     for (const cb of pty.exits.slice()) cb({ exitCode: 0 })
     vi.advanceTimersByTime(4740)
+    expect(pty.writes).toEqual(['\x1b', '\x03'])
+    expect(pty.kills).toBe(0)
+  })
+
+  // Mutation to prove this can fail: the backstop at 1,100 ms, as 1251d798
+  // had it (it lands in a Codex that is still shutting down, and Windows then
+  // reports Codex's end as a Ctrl-C exit, which the run log records as crashed).
+  it('a local Codex session still shutting down at 1,162 ms gets no second Ctrl-C (at Hooks review an early Ctrl-C ended Codex up to 1,163 ms after the Escape)', () => {
+    registerCodex()
+    spawnPty(win, 'quit-codex', { cwd: project, provider: 'codex', codexOptions: { permissionsPreset: 'standard' }, codexLaunch: preparedLaunch() } as never)
+    vi.advanceTimersByTime(1000)
+    const pty = h.ptys[h.ptys.length - 1]
+    pty.writes.length = 0
+    void gracefulExitPty('quit-codex', 5000)
+    vi.advanceTimersByTime(1162)
+    expect(pty.writes).toEqual(['\x1b', '\x03'])
+    // The slowest end measured after an early Ctrl-C: the PTY reports it.
+    vi.advanceTimersByTime(1)
+    for (const cb of pty.exits.slice()) cb({ exitCode: 0 })
+    vi.advanceTimersByTime(3837)
     expect(pty.writes).toEqual(['\x1b', '\x03'])
     expect(pty.kills).toBe(0)
   })

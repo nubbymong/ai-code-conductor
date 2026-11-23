@@ -16,7 +16,7 @@
 // this module's: each provider package names its own (SessionProvider.exitKeys),
 // reached through the registry, and sendExitKeys types the session's. Claude
 // Code's are the ones this module typed before; Codex's are Escape, Ctrl-C at
-// 30 ms and Ctrl-C again at 1,100 ms, with no /exit. That changes what a Codex
+// 30 ms and Ctrl-C again at 1,500 ms, with no /exit. That changes what a Codex
 // session's quit types, written at sendExitKeys, and nothing else said below.
 //
 // Since 2.1.3-beta.10 section A1 (#333) it also types a command bar prompt
@@ -494,7 +494,7 @@ function exitKeysOf(agent: ProviderId | null | undefined): readonly ExitKey[] {
  * at once, written to `proc` itself, as the PTY manager wrote them. Claude
  * Code's are Escape (cancel any pending input) at once, Ctrl-C (interrupt
  * anything) at 100 ms, then /exit and Enter at 300 ms, as before; Codex's are
- * Escape at once, Ctrl-C at 30 ms and Ctrl-C again at 1,100 ms, and no /exit
+ * Escape at once, Ctrl-C at 30 ms and Ctrl-C again at 1,500 ms, and no /exit
  * (providers/codex/index.ts says why). A session with no agent,
  * or whose provider names none, gets none: its quit ends at gracefulExitPty's
  * timeout (gracefulExitPty hands a Terminal only SSH tab whose launch line the
