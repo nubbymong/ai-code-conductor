@@ -1,7 +1,7 @@
 // Codex provider package: public entry point (WP1, design 7.1). Everything
 // outside this directory imports from here; the dependency-boundary test
 // holds the deep imports at zero.
-import type { SessionProvider, SessionRunScreen, SpawnOptions, TelemetrySource, HistorySession, ProviderSpawnCommand, TelemetryOptions, HeldToolLaunch, HeldToolLaunchAnswer, HeldToolRelay } from '../types'
+import type { SessionProvider, SessionRunScreen, SpawnOptions, TelemetrySource, HistorySession, ProviderSpawnCommand, TelemetryOptions, HeldToolLaunch, HeldToolLaunchAnswer, HeldToolRelay, ExitKey } from '../types'
 import type { LegacyVersion, StatuslineData } from '../../../shared/types'
 import type { AllowanceReading } from '../../../shared/usage-types'
 import type { ProviderCapabilities, AuthRealm, RealmUse } from '../../../shared/providers'
@@ -151,9 +151,24 @@ const CODEX_PRICING: ProviderPricingOperations = {
   setLive: (map) => setLiveCodexPricing(map),
 }
 
+/** 2.1.3-beta.15 B3 (aicc_planning#393): the keys a quit types into a Codex
+ *  the app started: Escape at once, then Ctrl-C at 100 ms. Measured on Codex
+ *  CLI 0.157.1 (the test VM, a direct tab, 23 Nov): at its "Hooks need review"
+ *  screen Escape goes to the composer and Ctrl-C there ends Codex (Escape,
+ *  Ctrl-C or Ctrl-D alone do not end it there); at the composer Ctrl-C alone
+ *  ends it, and Escape alone does not. No /exit: it ended Codex at neither
+ *  screen, and Codex takes one write of a line and its Enter as a paste and
+ *  does not submit it (PB3). One Ctrl-C only: two, 200 ms apart, ended Codex
+ *  at its composer with Windows' Ctrl-C exit status, not 0. */
+const CODEX_EXIT_KEYS: readonly ExitKey[] = [
+  { data: '\x1b', atMs: 0 },
+  { data: '\x03', atMs: 100 },
+]
+
 export class CodexProvider implements SessionProvider {
   readonly id = 'codex' as const
   readonly displayName = 'Codex'
+  readonly exitKeys = CODEX_EXIT_KEYS
 
   /** `liveUsage` (usage track MP3): where each session's allowance is
    *  recorded, by its realm's sessions folder, for the Account usage page. */

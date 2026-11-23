@@ -7673,7 +7673,7 @@ export function killAllPty(): void {
 }
 
 /**
- * End a session when the app quits: /exit for a CLI the app started, a plain
+ * End a session when the app quits: its exit keys for a CLI the app started, a plain
  * close for every other terminal, a detach for a tmux-persistent remote.
  * Returns a promise that resolves when the PTY exits, or after the timeout's
  * forced kill, which removes the session's own files at once.
@@ -7726,8 +7726,8 @@ export function gracefulExitPty(sessionId: string, timeoutMs = 5000): Promise<vo
       return
     }
 
-    // Escape, Ctrl-C, then /exit (the session input module, A2)
-    sendExitKeys(sessionId, entry.ptyProcess)
+    // The keys its provider package names, typed by the session input module (B3)
+    sendExitKeys(sessionId, entry.ptyProcess, entry.agent)
   })
 }
 

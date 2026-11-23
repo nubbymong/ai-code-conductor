@@ -12,6 +12,13 @@
 // the quit keys into a CLI the app started (sendExitKeys, for the PTY
 // manager's gracefulExitPty only, which decides which sessions get them).
 //
+// Since 2.1.3-beta.15 section B3 (aicc_planning#393) the quit keys are not
+// this module's: each provider package names its own (SessionProvider.exitKeys),
+// reached through the registry, and sendExitKeys types the session's. Claude
+// Code's are the ones this module typed before; Codex's are Escape and Ctrl-C,
+// with no /exit. That changes what a Codex session's quit types, written at
+// sendExitKeys, and nothing else said below.
+//
 // Since 2.1.3-beta.10 section A1 (#333) it also types a command bar prompt
 // button's text (submitPrompt), asked by the renderer over pty:submitPrompt.
 // That door is new, not moved: it has its own rule, order and delay, written
@@ -50,7 +57,8 @@
 import type { BrowserWindow } from 'electron'
 import type { IPty } from 'node-pty'
 import { getProvider } from '../providers'
-import type { SessionRunScreen } from '../providers/types'
+import type { ExitKey, SessionRunScreen } from '../providers/types'
+import type { ProviderId } from '../../shared/types'
 import { IPC } from '../../shared/ipc-channels'
 import { codexPromptKeeps } from '../../shared/codex-screen'
 import { TMUX_WHEEL_EXIT_KEY } from '../../shared/tmux-wheel'
@@ -469,28 +477,44 @@ export function cancelPastes(sessionId: string): void {
   pasteQueues.delete(sessionId)
 }
 
+/** 2.1.3-beta.15 B3: the quit keys `agent`'s provider package names, or none
+ *  (no agent, or a provider not registered, or registered without keys). */
+function exitKeysOf(agent: ProviderId | null | undefined): readonly ExitKey[] {
+  if (!agent) return []
+  try { return getProvider(agent).exitKeys ?? [] } catch { return [] }
+}
+
 /**
  * The quit keys into a CLI the app started, for the PTY manager's
  * gracefulExitPty only, which decides which sessions get them (a
  * tmux-persistent remote is detached and a terminal whose CLI the app did not
- * start is closed, both without them). Escape (cancel any pending input) at
- * once, Ctrl-C (interrupt anything) at 100 ms, then /exit and Enter at 300 ms,
- * written to `proc` itself, as the PTY manager wrote them. Each only while
- * `proc` is still the session's terminal process: one that ended, or was
- * replaced by a new run, gets none of the rest. (The PTY manager asked only
- * whether the session still had a terminal, so a replaced one got the rest.)
+ * start is closed, both without them). Since 2.1.3-beta.15 B3 they are the
+ * keys the session's provider package names (`agent`, the CLI the session
+ * runs; SessionProvider.exitKeys), each at its time from this call, the first
+ * at once, written to `proc` itself, as the PTY manager wrote them. Claude
+ * Code's are Escape (cancel any pending input) at once, Ctrl-C (interrupt
+ * anything) at 100 ms, then /exit and Enter at 300 ms, as before; Codex's are
+ * Escape and Ctrl-C at the same times, and no /exit. A session with no agent,
+ * or whose provider names none, gets none: its quit ends at gracefulExitPty's
+ * timeout. Each key only while `proc` is still the session's terminal
+ * process: one that ended, or was replaced by a new run, gets none of the
+ * rest. (The PTY manager asked only whether the session still had a terminal,
+ * so a replaced one got the rest.)
  * A key whose write fails (a process that has died, its exit not yet told) is
  * dropped, as the envelope writer's slices are (R-010): it never throws out
  * of a timer or out of gracefulExitPty, whose exit listener or timeout then
- * ends the quit. The next key is still tried, at its time.
+ * ends the quit. The next key is still tried, at its time. Throws before the
+ * PTY manager registers its ports, as every door does, and types nothing.
  */
-export function sendExitKeys(sessionId: string, proc: IPty): void {
-  const live = (): boolean => port().run(sessionId) === proc
+export function sendExitKeys(sessionId: string, proc: IPty, agent: ProviderId | null | undefined): void {
+  const p = port()
+  const live = (): boolean => p.run(sessionId) === proc
   const key = (data: string): void => {
     if (!live()) return
     try { proc.write(data) } catch { /* already gone */ }
   }
-  key('\x1b') // Escape
-  setTimeout(() => key('\x03'), 100) // Ctrl+C to interrupt anything
-  setTimeout(() => key('/exit\r'), 300)
+  for (const { data, atMs } of exitKeysOf(agent)) {
+    if (atMs > 0) setTimeout(() => key(data), atMs)
+    else key(data)
+  }
 }

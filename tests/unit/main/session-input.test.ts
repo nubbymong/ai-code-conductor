@@ -40,8 +40,13 @@
 //    the oldest waiting and counts it; a terminal replaced mid-envelope gets
 //    none of the rest, nor does the new one; with no terminal nothing is kept.
 //  - sendExitKeys (the quit keys, beta.9 section A2), directly and through
-//    gracefulExitPty: Escape at once, Ctrl-C at 100 ms, /exit and Enter at
-//    300 ms, also through the session helper's terminal; nothing more once the
+//    gracefulExitPty: since beta.15 section B3 (aicc_planning#393) the keys
+//    the session's provider names, at their times. A Claude Code session's:
+//    Escape at once, Ctrl-C at 100 ms, /exit and Enter at
+//    300 ms, also through the session helper's terminal. A Codex session's:
+//    Escape at once, Ctrl-C at 100 ms, and no /exit; a session with no agent
+//    gets none (both new in B3: red on 4252cbfc, which typed Escape, Ctrl-C
+//    and /exit into every session it was handed). Nothing more once the
 //    terminal ended or was replaced, and nothing into a terminal that is not
 //    the session's. A key whose write fails (a process that died before its
 //    exit was told) is dropped, never thrown out of its timer or the quit; the
@@ -61,7 +66,8 @@
 // an Ask question written raw with Enter; a second registration taking over
 // the doors; a door that types nothing, silently, before the registration;
 // an envelope deduped; the paste queue's bound changed; an envelope's tail
-// written after its terminal was replaced; a quit key's failed write thrown.
+// written after its terminal was replaced; a quit key's failed write thrown;
+// the quit keys typed from one fixed list, not the session's provider's.
 import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from 'vitest'
 import * as fs from 'fs'
 import * as os from 'os'
@@ -185,20 +191,26 @@ vi.mock('../../../src/main/account-profiles', async (importOriginal) => ({
   setupProfileLinks: () => {}, syncPrimaryCredentialsWithGlobal: () => {}, backupProfileHomeToCanonical: () => {},
 }))
 
-/** The registered Claude Code provider: a launch with nothing to run. */
+/** The registered Claude Code provider: a launch with nothing to run, and
+ *  the quit keys as the Claude Code package names them (the package's own
+ *  are held to these in pty-quit-exit-keys-local.test.ts). */
 function claudeProvider(): Record<string, unknown> {
   return {
     resolveBinary: () => ({ cmd: 'claude', source: 'system' }),
     buildSpawnCommand: () => ({ cmd: 'pwsh', args: [], env: {} }),
     ingestSessionTelemetry: () => ({ stop: () => {} }),
+    exitKeys: [{ data: '\x1b', atMs: 0 }, { data: '\x03', atMs: 100 }, { data: '/exit\r', atMs: 300 }],
   }
 }
-/** The registered Codex provider, with the run screen's submit recorded. */
+/** The registered Codex provider, with the run screen's submit recorded, and
+ *  the quit keys as the Codex package names them (held to the package's own
+ *  in pty-quit-exit-keys-local.test.ts). */
 function codexProvider(): Record<string, unknown> {
   return {
     resolveBinary: () => ({ cmd: 'claude', source: 'system' }),
     buildSpawnCommand: () => ({ cmd: '/proven/codex', args: [], env: {}, logLine: '--sandbox workspace-write' }),
     ingestSessionTelemetry: () => ({ stop: () => {} }),
+    exitKeys: [{ data: '\x1b', atMs: 0 }, { data: '\x03', atMs: 100 }],
     ...(h.withRunScreen ? {
       runScreen: {
         open: () => {}, feed: () => {}, resize: () => {}, close: () => {},
@@ -637,7 +649,7 @@ describe('the quit keys into a CLI the app started', () => {
   it('sendExitKeys: Escape at once, Ctrl-C at 100 ms, then /exit and Enter at 300 ms, into the terminal it is handed', async () => {
     const term = await claudeSession()
     vi.useFakeTimers()
-    sendExitKeys(SID, term.proc as Run)
+    sendExitKeys(SID, term.proc as Run, 'claude')
     expect(term.writes).toEqual(['\x1b'])
     vi.advanceTimersByTime(99)
     expect(term.writes).toEqual(['\x1b'])
@@ -649,17 +661,40 @@ describe('the quit keys into a CLI the app started', () => {
     expect(term.writes).toEqual(EXIT_KEYS)
   })
 
+  // Mutation to prove this can fail: type one fixed list (with /exit) into
+  // every session, as 4252cbfc did.
+  it('through gracefulExitPty: a Codex session gets the keys its provider names, Escape at once and Ctrl-C at 100 ms, and no /exit', async () => {
+    const term = await codexSession()
+    vi.useFakeTimers()
+    void gracefulExitPty(SID, 5000)
+    expect(term.writes).toEqual(['\x1b'])
+    vi.advanceTimersByTime(99)
+    expect(term.writes).toEqual(['\x1b'])
+    vi.advanceTimersByTime(1)
+    expect(term.writes).toEqual(['\x1b', '\x03'])
+    vi.advanceTimersByTime(4899)
+    expect(term.writes).toEqual(['\x1b', '\x03'])
+  })
+
+  it('sendExitKeys: a session with no agent gets no key', async () => {
+    const term = await claudeSession()
+    vi.useFakeTimers()
+    sendExitKeys(SID, term.proc as Run, null)
+    vi.advanceTimersByTime(1000)
+    expect(term.writes).toEqual([])
+  })
+
   it('sendExitKeys: nothing into a terminal that is not the session\'s, and nothing more once the session\'s ended', async () => {
     const a = await claudeSession()
     const A = SID
     const b = await claudeSession()
     const B = SID
     vi.useFakeTimers()
-    sendExitKeys(A, b.proc as Run)
+    sendExitKeys(A, b.proc as Run, 'claude')
     vi.advanceTimersByTime(1000)
     expect(a.writes).toEqual([])
     expect(b.writes).toEqual([])
-    sendExitKeys(B, b.proc as Run)
+    sendExitKeys(B, b.proc as Run, 'claude')
     expect(b.writes).toEqual(['\x1b'])
     killPty(B)
     vi.advanceTimersByTime(1000)
@@ -677,7 +712,7 @@ describe('the quit keys into a CLI the app started', () => {
     // is still the session's terminal.
     proc.write = (d: string) => { tried.push(d); if (tried.length > 1) throw pipeGone() }
     vi.useFakeTimers()
-    expect(() => sendExitKeys(SID, proc as unknown as Run)).not.toThrow()
+    expect(() => sendExitKeys(SID, proc as unknown as Run, 'claude')).not.toThrow()
     expect(() => vi.advanceTimersByTime(100)).not.toThrow()
     expect(tried).toEqual(['\x1b', '\x03'])
     expect(() => vi.advanceTimersByTime(200)).not.toThrow()
@@ -729,7 +764,7 @@ describe('the ports: registered once, by the PTY manager, when it loads', () => 
     // on the clock moved on below.
     vi.useFakeTimers()
     const stub = { write: vi.fn() }
-    expect(() => fresh.sendExitKeys(SID, stub as unknown as Run)).toThrow(/has not registered its ports/)
+    expect(() => fresh.sendExitKeys(SID, stub as unknown as Run, 'claude')).toThrow(/has not registered its ports/)
     vi.advanceTimersByTime(1000)
     expect(stub.write).not.toHaveBeenCalled()
     expect(allWrites()).toBe(before)
