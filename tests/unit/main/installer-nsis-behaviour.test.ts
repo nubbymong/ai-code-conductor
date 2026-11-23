@@ -7,6 +7,7 @@ import { dirname, join } from 'node:path'
 import { originalHomeEnv } from '../../helpers/home-guard-core.mjs'
 import { makensisIn, nsisCacheFolders, nsisCachePresent } from '../../helpers/nsis-cache'
 import { escapeRegExp } from '../../helpers/escape-regexp'
+import { endIfStillOurs, type StartedProcess } from '../../helpers/started-processes'
 
 /**
  * BEHAVIOURAL tests for the destructive half of build/installer.nsh.
@@ -1034,6 +1035,20 @@ async function waitFor(check: () => boolean, ms = 5000): Promise<boolean> {
 }
 
 /**
+ * Every process the probes below started, by pid: its ChildProcess, or for one
+ * known only by a pid read from a file, that pid and its program file. The
+ * probes end most of these processes themselves, and Windows soon gives a
+ * freed pid to another process (in CI, a vitest worker running another file),
+ * so a process is ended only through endOurs, which leaves alone a pid that is
+ * no longer one of these (tests/helpers/started-processes.ts).
+ */
+const ours = new Map<number, StartedProcess>()
+async function endOurs(pid: number): Promise<void> {
+  const p = ours.get(pid)
+  if (p) await endIfStillOurs(p)
+}
+
+/**
  * The idle script a stand-in runs; with a child exe and a pid file, it first
  * starts that child. Detached: Node otherwise puts a child in a job that ends
  * it with its parent (measured on the VM: the no-/T mutant stayed green).
@@ -1072,16 +1087,7 @@ describe.skipIf(!MAKENSIS)('installer.nsh behavioural probe: uninstall removes t
   }, 120_000)
 
   afterAll(async () => {
-    for (const pid of started) {
-      if (isAlive(pid)) {
-        try {
-          process.kill(pid)
-        } catch {
-          // already gone
-        }
-        await waitGone(pid)
-      }
-    }
+    for (const pid of started) await endOurs(pid)
     regClear()
     if (uwork) rmSync(uwork, { recursive: true, force: true, maxRetries: 5 })
   }, 60_000)
@@ -1154,11 +1160,13 @@ describe.skipIf(!MAKENSIS)('installer.nsh behavioural probe: uninstall removes t
     proc.unref()
     expect(proc.pid, 'the stand-in started').toBeDefined()
     started.push(proc.pid!)
+    ours.set(proc.pid!, proc)
     let childPid: number | undefined
     if (pidFile) {
       expect(await waitFor(() => existsSync(pidFile!) && readFileSync(pidFile!, 'utf-8') !== ''), 'the stand-in started its child').toBe(true)
       childPid = Number(readFileSync(pidFile, 'utf-8'))
       started.push(childPid)
+      ours.set(childPid, { pid: childPid, exe: child! })
       expect(isAlive(childPid), 'the child is running before the uninstall').toBe(true)
     } else {
       await pause(500)
@@ -1281,8 +1289,7 @@ describe.skipIf(!MAKENSIS)('installer.nsh behavioural probe: uninstall removes t
     expect(details).toContain('Kept 2.1.3-beta.7-0123456789ab, because a file in it is still in use or was not made by the app.')
     // No holder ran, and the other program is not one.
     expect(details.some((d) => /^No session helper of .+ was running\.$/.test(d)), details.join('\n')).toBe(true)
-    process.kill(pid)
-    await waitGone(pid)
+    await endOurs(pid)
   }, 60_000)
 
   it('leaves every name that only looks like one of the helper folder\'s own', () => {
@@ -1402,8 +1409,7 @@ describe.skipIf(!MAKENSIS)('installer.nsh behavioural probe: uninstall removes t
       for (const [k, p] of Object.entries({ ...t.own, ...t.keep })) expect(existsSync(p), `${k} stays`).toBe(true)
       expect(log).not.toContain('asuser=1')
       expect(details).toEqual([])
-      process.kill(pid)
-      await waitGone(pid)
+      await endOurs(pid)
     }, 60_000)
   }
 
@@ -1514,8 +1520,7 @@ describe.skipIf(!MAKENSIS)('installer.nsh behavioural probe: uninstall removes t
     expect(details).toContain('Kept the session helper folder, because something in it is still in use or was not made by the app.')
     expect(details.some((d) => /did not make is still in it/.test(d)), details.join('\n')).toBe(false)
     expect(existsSync(t.parent), 'the helper folder is still in it').toBe(true)
-    process.kill(pid)
-    await waitGone(pid)
+    await endOurs(pid)
   }, 60_000)
 
   it('never follows a version folder that is a link', () => {
@@ -1762,16 +1767,7 @@ describe.skipIf(!MAKENSIS)('installer.nsh behavioural probe: the app check close
   }, 120_000)
 
   afterAll(async () => {
-    for (const pid of started) {
-      if (isAlive(pid)) {
-        try {
-          process.kill(pid)
-        } catch {
-          // already gone
-        }
-        await waitGone(pid)
-      }
-    }
+    for (const pid of started) await endOurs(pid)
     regClear()
     // A stand-in's program file stays locked for a moment after it ends.
     if (awork) rmSync(awork, { recursive: true, force: true, maxRetries: 10, retryDelay: 250 })
@@ -1794,6 +1790,7 @@ describe.skipIf(!MAKENSIS)('installer.nsh behavioural probe: the app check close
     proc.unref()
     expect(proc.pid, `${name} started`).toBeDefined()
     started.push(proc.pid!)
+    ours.set(proc.pid!, proc)
     if (window !== false && window !== 'exit-soon') expect(await waitFor(() => existsSync(`${exe}-ready`), 10_000), `${name}'s window is up`).toBe(true)
     else await pause(500)
     expect(isAlive(proc.pid!), `${name} is running before the check`).toBe(true)
@@ -1802,12 +1799,7 @@ describe.skipIf(!MAKENSIS)('installer.nsh behavioural probe: the app check close
 
   /** Ends the stand-ins a case left running. */
   async function endAll(pids: number[]) {
-    for (const pid of pids) {
-      if (isAlive(pid)) {
-        process.kill(pid)
-        await waitGone(pid)
-      }
-    }
+    for (const pid of pids) await endOurs(pid)
   }
 
   /**
@@ -1977,6 +1969,7 @@ describe.skipIf(!MAKENSIS)('installer.nsh behavioural probe: the app check close
     const again = Number(readFileSync(pidFile, 'utf-8').trim())
     expect(again, 'its pid').toBeGreaterThan(0)
     started.push(again)
+    ours.set(again, { pid: again, exe: respawner.exe })
     expect(await waitGone(respawner.pid), 'the first copy closed itself').toBe(true)
     expect(existsSync(`${respawner.exe}-closed`)).toBe(true)
     expect(isAlive(again), 'the fresh copy is still running').toBe(true)
@@ -2406,16 +2399,7 @@ describe.skipIf(!MAKENSIS)('installer.nsh behavioural probe: the uninstaller nam
   }, 120_000)
 
   afterAll(async () => {
-    for (const pid of started) {
-      if (isAlive(pid)) {
-        try {
-          process.kill(pid)
-        } catch {
-          // already gone
-        }
-        await waitGone(pid)
-      }
-    }
+    for (const pid of started) await endOurs(pid)
     // A stand-in's program file stays locked for a moment after it ends.
     if (rwork) rmSync(rwork, { recursive: true, force: true, maxRetries: 10, retryDelay: 250 })
   }, 60_000)
@@ -2447,6 +2431,7 @@ describe.skipIf(!MAKENSIS)('installer.nsh behavioural probe: the uninstaller nam
       expect(proc.pid, 'the held program started').toBeDefined()
       pid = proc.pid!
       started.push(pid)
+      ours.set(pid, proc)
       await pause(500)
       expect(isAlive(pid), 'the held program runs').toBe(true)
     }
@@ -2489,10 +2474,7 @@ describe.skipIf(!MAKENSIS)('installer.nsh behavioural probe: the uninstaller nam
   }
 
   async function endHeld(pid: number) {
-    if (isAlive(pid)) {
-      process.kill(pid)
-      await waitGone(pid)
-    }
+    await endOurs(pid)
   }
 
   it('per-user: names the file a running program holds, removes the rest, and sets nothing for the next restart', async () => {
@@ -2589,6 +2571,7 @@ describe.skipIf(!MAKENSIS)('installer.nsh behavioural probe: the uninstaller nam
       proc.unref()
       expect(proc.pid, `the program in ${sub} started`).toBeDefined()
       started.push(proc.pid!)
+      ours.set(proc.pid!, proc)
       held.push(exe)
     }
     await pause(500)
