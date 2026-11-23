@@ -1018,16 +1018,20 @@ SectionEnd
  * bare pid (tests/helpers/started-processes.ts). A pid can be ours more than
  * once (one stand-in's, then a later one's), so each pid keeps every record.
  */
-type Ours = { spawned: SpawnedProcess } | { stoppable: StoppableProcess }
+type Ours = ({ spawned: SpawnedProcess } | { stoppable: StoppableProcess }) & { ended?: boolean }
 const ours = new Map<number, Ours[]>()
 function own(pid: number, p: Ours): void {
   ours.set(pid, [...(ours.get(pid) ?? []), p])
 }
-/** Ends every process of ours that had this pid: a spawned one through its handle, the others through their stop files. */
+/**
+ * Ends every process of ours that had this pid and is not ended yet: a spawned
+ * one through its handle, the others through their stop files. One ended once
+ * is left alone after (an earlier describe's, whose folder is gone by now).
+ */
 async function endOurs(pid: number): Promise<void> {
   for (const p of ours.get(pid) ?? []) {
-    if ('spawned' in p) await endSpawned(p.spawned)
-    else await askToStop(p.stoppable)
+    if (p.ended) continue
+    p.ended = 'spawned' in p ? await endSpawned(p.spawned) : await askToStop(p.stoppable)
   }
 }
 /**

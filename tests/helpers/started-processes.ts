@@ -150,11 +150,17 @@ export function stopWhen(argIndex: number): string {
 /**
  * Asks a process the test knows only by number to end itself, by creating its
  * stop file, and waits up to `ms` for its pid to stop running its program.
- * Nothing is ended by number. Returns whether it has gone.
+ * Nothing is ended by number. A stop file that cannot be made (its folder is
+ * gone) asks nothing; the wait still says whether it has gone. Returns whether
+ * it has gone.
  */
 export async function askToStop(p: StoppableProcess, ms = 5000, deps: Partial<EndDeps> = {}): Promise<boolean> {
   const d: EndDeps = { ...realDeps, ...deps }
-  d.touch(p.stopFile)
+  try {
+    d.touch(p.stopFile)
+  } catch {
+    // its folder is gone: nothing to ask through
+  }
   return waitUntil(() => !runsImage(p.pid, p.image, d), ms, d.pause)
 }
 

@@ -118,6 +118,13 @@ describe('a process the test wrote and knows only by a pid read from a file', ()
     expect(s.ended).toEqual([])
   })
 
+  it('a stop file that cannot be made (its folder is gone) is not an error, and nothing is ended by number', async () => {
+    const s = system({ 4242: 'node.exe' })
+    const deps = { ...s.deps, touch: () => { throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' }) } }
+    expect(await askToStop(child, 5000, deps)).toBe(true)
+    expect(s.ended).toEqual([])
+  })
+
   it('runs only while its pid runs its program, in any case', () => {
     expect(runsImage(4242, 'OpenConsole.exe', system({ 4242: 'OPENCONSOLE.EXE' }).deps)).toBe(true)
     expect(runsImage(4242, 'OpenConsole.exe', system({ 4242: 'node.exe' }).deps)).toBe(false)
