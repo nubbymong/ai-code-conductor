@@ -16,7 +16,9 @@
  * merged). "The display" is the one holding the app's window; the rectangle is
  * drawn over the app's window there, so its picture is the app, never a black
  * wallpaper.
- *   D1 START: the app starts and one Claude Code tab shows the Snap button.
+ *   D1 START: the app starts and one Claude Code tab shows the Snap button;
+ *      the tab runs the stand-in on a terminal (its start recorded with a
+ *      terminal for input, its ready line on screen).
  *   D2 RECTANGLE, 3 runs: Snap, Rectangle opens one overlay page per Electron
  *      display, each with its picture; a 200 by 120 DIP drag shows its size in
  *      the display's pixels, and Enter gives one new JPEG of that size (200 and
@@ -93,19 +95,24 @@ let ctx: IsolatedApp | undefined
 /** Every line main writes to its console (logInfo writes there too). */
 const mainLines: string[] = []
 
-/** A stand-in `claude`: answers `--version` with the app's floor; on a
- *  terminal it says it is ready, keeps what it is typed in typed.txt beside
- *  itself and echoes it, until its input ends; any other call ends at once. */
+/** A stand-in `claude`: every start is recorded in launches.jsonl beside it
+ *  (its arguments, whether its input and output are a terminal, its pid);
+ *  `--version` answers the app's floor; on a terminal it says it is ready,
+ *  keeps what it is typed in typed.txt beside itself and echoes it, until its
+ *  input ends; any other call ends at once. */
 function installStandInClaude(dir: string): string {
   fs.mkdirSync(dir, { recursive: true })
   fs.writeFileSync(path.join(dir, 'stand-in-claude.js'), [
+    "const fs = require('fs'), path = require('path')",
+    "const record = (o) => fs.appendFileSync(path.join(__dirname, 'launches.jsonl'), JSON.stringify(o) + String.fromCharCode(10))",
+    'record({ argv: process.argv.slice(2), stdinTty: !!process.stdin.isTTY, stdoutTty: !!process.stdout.isTTY, pid: process.pid, at: Date.now() })',
     `if (process.argv[2] === '--version') { process.stdout.write('${CLAUDE_MIN_MANAGED_CLI_VERSION} (Claude Code)' + String.fromCharCode(10)); process.exit(0) }`,
     'if (!process.stdin.isTTY) process.exit(0)',
-    "const typed = require('path').join(__dirname, 'typed.txt')",
-    'process.stdin.setRawMode(true)',
+    "const typed = path.join(__dirname, 'typed.txt')",
+    "try { process.stdin.setRawMode(true) } catch (e) { record({ rawMode: String(e && e.message) }) }",
     "process.stdout.write('stand-in Claude Code ready' + String.fromCharCode(13, 10))",
-    "process.stdin.on('data', (d) => { require('fs').appendFileSync(typed, d); process.stdout.write(d) })",
-    "process.stdin.on('end', () => process.exit(0))",
+    "process.stdin.on('data', (d) => { fs.appendFileSync(typed, d); process.stdout.write(d) })",
+    "process.stdin.on('end', () => { record({ end: process.pid, at: Date.now() }); process.exit(0) })",
     '',
   ].join('\n'))
   fs.writeFileSync(path.join(dir, 'claude.cmd'), ['@ECHO off', `"${process.execPath}" "%~dp0stand-in-claude.js" %*`, ''].join('\r\n'))
@@ -115,6 +122,24 @@ const standInDir = (dataDir: string) => path.join(dataDir, 'stand-in-claude')
 const typedText = (): string => {
   try { return fs.readFileSync(path.join(standInDir(ctx!.dataDir), 'typed.txt'), 'utf8') } catch { return '' }
 }
+const launches = (): Array<Record<string, unknown>> => {
+  try {
+    return fs.readFileSync(path.join(standInDir(ctx!.dataDir), 'launches.jsonl'), 'utf8').split(/\r?\n/).filter(Boolean).map((l) => JSON.parse(l))
+  } catch { return [] }
+}
+
+/** Terminals drawn by xterm's DOM renderer (GPU rendering off, as
+ *  helpers/codex-mode.ts's domTerminal seeds it), so the tab's text can be
+ *  read; gpuDefaultOnMigrated keeps the saved false (settingsStore.ts). */
+function seedDomTerminal(dataDir: string): void {
+  const file = path.join(dataDir, 'resources', 'CONFIG', 'settings.json')
+  const settings = JSON.parse(fs.readFileSync(file, 'utf8'))
+  fs.writeFileSync(file, JSON.stringify({ ...settings, terminal: { ...(settings.terminal ?? {}), gpuRendering: false }, gpuDefaultOnMigrated: true }, null, 2))
+}
+/** What the terminal on screen shows (the DOM renderer's rows). */
+const terminalText = (page: Page): Promise<string> => page.evaluate(() =>
+  Array.from(document.querySelectorAll('[data-terminal-active] .xterm-rows > div'))
+    .map((row) => (row.textContent ?? '').replace(new RegExp(String.fromCharCode(0xa0), 'g'), ' ').trimEnd()).join('\n'))
 
 /** PATH without any folder holding a Claude, the given folder first. */
 function pathWith(first: string): string {
@@ -293,7 +318,13 @@ async function expectSaved(before: string[], answeredAt: number, width: number, 
   expect(info.empty, name).toBe(false)
   expect({ width: info.width, height: info.height }, name).toEqual({ width, height })
   expect(info.lit, `${name}: pixels not near black, of ${info.pixels}`).toBeGreaterThan(info.pixels / 100)
-  await expect.poll(typedText, { timeout: OVERLAY_MS, intervals: [50] }).toContain(`${path.sep}screenshots${path.sep}${name}`)
+  try {
+    await expect.poll(typedText, { timeout: OVERLAY_MS, intervals: [50] }).toContain(`${path.sep}screenshots${path.sep}${name}`)
+  } catch (err) {
+    // What the tab showed and what the stand-in recorded, for the cause.
+    readings.atTypedFailure = { terminal: await terminalText(ctx!.page).catch(() => 'unread'), launches: launches(), typed: typedText() }
+    throw err
+  }
   push('fileToTypedMs', Math.round(performance.now() - savedAt))
 }
 
@@ -332,7 +363,7 @@ test.describe('Snap on Windows', () => {
     expect(fs.existsSync(HELPER), `no helper at ${HELPER}`).toBe(true)
     const started = performance.now()
     ctx = await launchIsolatedApp({
-      seedExtra: (dataDir) => chooseSnap(dataDir, 'new'),
+      seedExtra: (dataDir) => { chooseSnap(dataDir, 'new'); seedDomTerminal(dataDir) },
       env: (dataDir) => ({
         PATH: pathWith(installStandInClaude(standInDir(dataDir))),
         CCC_E2E_SNAP_HELPER: HELPER,
@@ -375,6 +406,14 @@ test.describe('Snap on Windows', () => {
     await expect(page.locator('text=New saved config')).toHaveCount(0, { timeout: TAB_MS })
     await expect(snapButton()).toBeVisible({ timeout: TAB_MS })
     readings.tabMs = Math.round(performance.now() - started)
+    // The tab runs the stand-in on a terminal: a Snap's path is typed into it.
+    try {
+      await expect.poll(() => launches().some((l) => l.stdinTty === true), { timeout: TAB_MS, intervals: [100] }).toBe(true)
+      await expect.poll(() => terminalText(page), { timeout: TAB_MS, intervals: [100] }).toContain('stand-in Claude Code ready')
+    } finally {
+      readings.launches = launches()
+      readings.terminalAtStart = await terminalText(page).catch((e: Error) => `unread: ${e.message}`)
+    }
   })
 
   test('R1 ADD-ONS AT START: what main has loaded before any press of the previous Snap', async () => {
