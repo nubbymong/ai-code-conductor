@@ -100,10 +100,11 @@ if (a.startsWith('exec --json --ephemeral --skip-git-repo-check --ignore-user-co
   // outlives it (on Windows detached, as the real CLI's helper is not in
   // Node's job). Otherwise the argv it was given, as a reply. The helper is a
   // node.exe the test knows only by number, so it ends itself once helper.stop
-  // exists, and the test never ends it by its pid (a vitest worker may have
-  // that pid by then; tests/helpers/started-processes.ts).
+  // exists (stopWhen(1) of tests/helpers/started-processes.ts, written out:
+  // fake-cli-oracle.test.ts reads this constant as plain text), and the test
+  // never ends it by its pid (a vitest worker may have that pid by then).
   if (process.env.FAKE_ANALYSIS === 'early') {
-    const g = require('child_process').spawn(process.execPath, ['-e', ${JSON.stringify(stopWhen(1))}, path.join(__dirname, 'helper.stop')], { stdio: ['ignore', 'inherit', 'inherit'], detached: process.platform === 'win32' })
+    const g = require('child_process').spawn(process.execPath, ['-e', "setInterval(() => { if (require('fs').existsSync(process.argv[1])) process.exit(0) }, 100)", path.join(__dirname, 'helper.stop')], { stdio: ['ignore', 'inherit', 'inherit'], detached: process.platform === 'win32' })
     fs.writeFileSync(path.join(__dirname, 'helper.pid'), String(g.pid))
     g.unref()
     process.stdout.write(JSON.stringify({ type: 'turn.failed', error: { message: 'unexpected status 400 Bad Request: fake' } }) + '\\n')
@@ -400,6 +401,10 @@ describe('the text-only analysis against the fake Codex CLI (real processes; P3.
     expect(seen.argv).toContain('project_root_markers=[]')
     expect(fs.realpathSync.native(seen.cwd)).toBe(fs.realpathSync.native(folder))
   }, 60_000)
+
+  it('the helper the fake starts ends itself on its stop file, with the stop line the helper module gives', () => {
+    expect(FAKE).toContain(`['-e', ${JSON.stringify(stopWhen(1))}, path.join(__dirname, 'helper.stop')]`)
+  })
 
   it('codex failing at once: settled soon after its exit, with the real error (not a timeout), and its helper ended', async () => {
     const folder = path.join(dir, 'analysis-b')
