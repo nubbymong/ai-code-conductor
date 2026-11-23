@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <!--
+      Snap's own overlay, one page per display (src/main/snap/overlay.ts). It
+      loads its own script and stylesheet and shows one data: picture, nothing
+      else. A header never reaches a file:// document, so in a packaged build
+      this <meta> is the whole policy. 'unsafe-inline' styles: the dev server
+      injects the stylesheet as an inline style.
+    -->
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src data:; base-uri 'none'; form-action 'none'; object-src 'none'; frame-src 'none'" />
+    <title>Snap</title>
+  </head>
+  <body>
+    <img id="picture" alt="" draggable="false" />
+    <div id="dim"></div>
+    <div id="selection"><span id="size"></span></div>
+    <div id="bar" role="toolbar" aria-label="Snap">
+      <span>Drag an area, then press Enter. Esc cancels.</span>
+      <button id="whole" type="button">Whole screen</button>
+      <button id="cancel" type="button">Cancel</button>
+    </div>
+    <script type="module" src="./snap-overlay/overlay-page.ts"></script>
+  </body>
+</html>
