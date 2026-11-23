@@ -1132,20 +1132,39 @@ describe('installer: the uninstaller removes the session helper folder, and noth
     // "Access denied" (WMI), measured on the VM. No other program is run at all.
     expect(all.filter((l) => /taskkill|tasklist|tskill|wmic|Stop-Process|KillProc|nsExec::|ExecWait|ExecShell|\bExec\b/i.test(l.code))).toEqual([])
     // TerminateProcess appears twice in the file: here, in CccEndListed, only
-    // for a process checked to be this copy's own user's just before; and in
-    // the app-running check's CccCloseAppCopies (its own tests, below), which
-    // the clean-up never reaches.
+    // for a process checked to be this copy's own user's just before, and to
+    // be still the process the scan listed; and in the app-running check's
+    // CccCloseAppCopies (its own tests, below), which the clean-up never
+    // reaches.
     const kills = lines.filter((l) => /TerminateProcess/.test(l.code))
     expect(kills.map((l) => l.macro)).toEqual(['CccEndListed', 'CccCloseAppCopies'])
     expect(all.filter((l) => /TerminateProcess/.test(l.code)).map((l) => l.macro)).toEqual(['CccEndListed'])
-    const listed = bodyCode(lines, 'CccEndListed')
-    const mine = listed.indexOf('!insertmacro CccProcessIsMine "$3" $6')
-    expect(listed.slice(mine, mine + 5)).toEqual([
+    // aicc_planning #400: each listed "pid:start" is held open (PROCESS_TERMINATE
+    // and PROCESS_QUERY_LIMITED_INFORMATION) from before its user is checked
+    // until it is ended, and ended only when its start, read through that
+    // handle, is the listed one: a pid Windows has given to a new process
+    // since the scan, or a start that cannot be read, ends nothing.
+    expect(bodyCode(lines, 'CccEndListed')).toEqual([
+      'StrCpy $4 1',
+      '${Do}',
+      '!insertmacro CccNextPair "$R1" $4 $3 $5',
+      '${If} $3 == ""',
+      '${ExitDo}',
+      '${EndIf}',
+      'System::Call \'kernel32::OpenProcess(i 0x1001, i 0, i $3) p .r7\'',
+      '${If} $7 != 0',
       '!insertmacro CccProcessIsMine "$3" $6',
       '${If} $6 == 1',
-      'System::Call \'kernel32::OpenProcess(i 1, i 0, i $3) p .r0\'',
-      '${If} $0 != 0',
-      'System::Call \'kernel32::TerminateProcess(p r0, i 1)\'',
+      'System::Call \'kernel32::GetProcessTimes(p r7, *l .r1, *l, *l, *l) i .r2\'',
+      '${If} $2 != 0',
+      '${AndIf} $5 != ""',
+      '${AndIf} $1 == $5',
+      'System::Call \'kernel32::TerminateProcess(p r7, i 1)\'',
+      '${EndIf}',
+      '${EndIf}',
+      'System::Call \'kernel32::CloseHandle(p r7)\'',
+      '${EndIf}',
+      '${Loop}',
     ])
     // "Mine" is the SID in the process's token against this copy's own.
     expect(bodyCode(lines, 'CccProcessIsMine').filter((c) => /System::Call/.test(c))).toEqual([
@@ -1172,15 +1191,17 @@ describe('installer: the uninstaller removes the session helper folder, and noth
     expect(none).toBeGreaterThan(own)
     expect(end.slice(none, none + 3).map(quietNote)).toEqual(['${If} $R6 == 0', '!insertmacro CccHelperNote "..."', '${Else}'])
     expect(end.findIndex((c) => /^!insertmacro CccScanProcesses\b/.test(c))).toBeGreaterThan(none)
-    // Helpers by name and owner; what they started by parent, owner and start time.
+    // Helpers by name and owner; what they started by parent, owner and start
+    // time. Each goes into the list with its start ("pid:start"), which
+    // CccEndListed compares before it ends anything.
     const scan = bodyCode(lines, 'CccScanProcesses')
     const byName = scan.indexOf('${If} $5 == "aicc-helper.exe"')
-    expect(scan.slice(byName, byName + 4)).toEqual(['${If} $5 == "aicc-helper.exe"', '!insertmacro CccProcessIsMine "$3" $6', '${If} $6 == 1', 'StrCpy $R1 "$R1$3,"'])
-    const byParent = scan.indexOf('!insertmacro CccInList "$4" $6')
+    expect(scan.slice(byName, byName + 5)).toEqual(['${If} $5 == "aicc-helper.exe"', '!insertmacro CccProcessIsMine "$3" $6', '${If} $6 == 1', '!insertmacro CccProcessStart "$3" $R7', 'StrCpy $R1 "$R1$3:$R7,"'])
+    const byParent = scan.indexOf('!insertmacro CccInPairList "$4" $6')
     expect(scan.slice(byParent, byParent + 14)).toEqual([
-      '!insertmacro CccInList "$4" $6',
+      '!insertmacro CccInPairList "$4" $6',
       '${If} $6 == 1',
-      '!insertmacro CccInList "$3" $6',
+      '!insertmacro CccInPairList "$3" $6',
       '${If} $6 == 0',
       '!insertmacro CccProcessIsMine "$3" $6',
       '${If} $6 == 1',
@@ -1191,8 +1212,11 @@ describe('installer: the uninstaller removes the session helper folder, and noth
       'System::Int64Op $R7 < $R8',
       'Pop $6',
       '${If} $6 == 0',
-      'StrCpy $R1 "$R1$3,"',
+      'StrCpy $R1 "$R1$3:$R7,"',
     ])
+    expect(scan.filter((c) => /^StrCpy \$R1\b/.test(c))).toEqual(['StrCpy $R1 "$R1$3:$R7,"', 'StrCpy $R1 "$R1$3:$R7,"'])
+    // A pid is in the list when an entry's number before its colon is that pid.
+    expect(bodyCode(lines, 'CccInPairList').slice(0, 2)).toEqual(['StrCpy ${OUT} 0', 'StrCpy $2 ",${ITEM}:"'])
     // Every loop is bounded: 8 passes, 10 looks after the end.
     expect(end.filter((c) => /^\$\{OrIf\} \$R4 >= /.test(c))).toEqual(['${OrIf} $R4 >= 8', '${OrIf} $R4 >= 10'])
     // The buffers it takes are given back.
