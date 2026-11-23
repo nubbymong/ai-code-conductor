@@ -44,9 +44,10 @@
 //    the session's provider names, at their times. A Claude Code session's:
 //    Escape at once, Ctrl-C at 100 ms, /exit and Enter at
 //    300 ms, also through the session helper's terminal. A Codex session's:
-//    Escape at once, Ctrl-C at 100 ms, and no /exit; a session with no agent
-//    gets none (both new in B3: red on 4252cbfc, which typed Escape, Ctrl-C
-//    and /exit into every session it was handed). Nothing more once the
+//    Escape at once, Ctrl-C at 30 ms, Ctrl-C again at 1,100 ms, and no /exit
+//    (its times red on 3d447f1d, one Ctrl-C at 100 ms); a session with no
+//    agent gets none (both new in B3: red on 4252cbfc, which typed Escape,
+//    Ctrl-C and /exit into every session it was handed). Nothing more once the
 //    terminal ended or was replaced, and nothing into a terminal that is not
 //    the session's. A key whose write fails (a process that died before its
 //    exit was told) is dropped, never thrown out of its timer or the quit; the
@@ -210,7 +211,7 @@ function codexProvider(): Record<string, unknown> {
     resolveBinary: () => ({ cmd: 'claude', source: 'system' }),
     buildSpawnCommand: () => ({ cmd: '/proven/codex', args: [], env: {}, logLine: '--sandbox workspace-write' }),
     ingestSessionTelemetry: () => ({ stop: () => {} }),
-    exitKeys: [{ data: '\x1b', atMs: 0 }, { data: '\x03', atMs: 100 }],
+    exitKeys: [{ data: '\x1b', atMs: 0 }, { data: '\x03', atMs: 30 }, { data: '\x03', atMs: 1_100 }],
     ...(h.withRunScreen ? {
       runScreen: {
         open: () => {}, feed: () => {}, resize: () => {}, close: () => {},
@@ -663,17 +664,21 @@ describe('the quit keys into a CLI the app started', () => {
 
   // Mutation to prove this can fail: type one fixed list (with /exit) into
   // every session, as 4252cbfc did.
-  it('through gracefulExitPty: a Codex session gets the keys its provider names, Escape at once and Ctrl-C at 100 ms, and no /exit', async () => {
+  it('through gracefulExitPty: a Codex session gets the keys its provider names, Escape at once, Ctrl-C at 30 ms and again at 1,100 ms, and no /exit', async () => {
     const term = await codexSession()
     vi.useFakeTimers()
     void gracefulExitPty(SID, 5000)
     expect(term.writes).toEqual(['\x1b'])
-    vi.advanceTimersByTime(99)
+    vi.advanceTimersByTime(29)
     expect(term.writes).toEqual(['\x1b'])
     vi.advanceTimersByTime(1)
     expect(term.writes).toEqual(['\x1b', '\x03'])
-    vi.advanceTimersByTime(4899)
+    vi.advanceTimersByTime(1069)
     expect(term.writes).toEqual(['\x1b', '\x03'])
+    vi.advanceTimersByTime(1)
+    expect(term.writes).toEqual(['\x1b', '\x03', '\x03'])
+    vi.advanceTimersByTime(3899)
+    expect(term.writes).toEqual(['\x1b', '\x03', '\x03'])
   })
 
   it('sendExitKeys: a session with no agent gets no key', async () => {

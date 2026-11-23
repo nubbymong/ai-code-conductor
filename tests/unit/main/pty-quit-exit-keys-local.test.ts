@@ -4,8 +4,10 @@
 // in, and since 2.1.3-beta.15 B3 (aicc_planning#393) they are the keys that
 // CLI's provider package names. A local Claude Code session gets Escape at
 // once, Ctrl-C at 100 ms and /exit at 300 ms, as it always did; a local Codex
-// session gets Escape at once and Ctrl-C at 100 ms, and no /exit (red on
-// 4252cbfc, which typed Claude Code's keys into it). A terminal tab (and a session's partner
+// session gets Escape at once, Ctrl-C at 30 ms and Ctrl-C again at 1,100 ms,
+// and no /exit (red on 4252cbfc, which typed Claude Code's keys into it, and
+// the times red on 3d447f1d, which typed one Ctrl-C at 100 ms), and none of
+// the rest once its terminal has ended. A terminal tab (and a session's partner
 // terminal, which is one too) runs whatever the user started in it: it is
 // closed, and nothing is typed into it. The SSH side of the same rule is in
 // pty-ssh-terminal-only.test.ts.
@@ -117,7 +119,7 @@ const { createCodexPackage } = await import('../../../src/main/providers/codex')
 
 const win = { webContents: { send: () => {} }, isDestroyed: () => false } as never
 const CLAUDE_EXIT_KEYS = ['\x1b', '\x03', '/exit\r']
-const CODEX_EXIT_KEYS = ['\x1b', '\x03']
+const CODEX_EXIT_KEYS = ['\x1b', '\x03', '\x03']
 const ids = ['quit-claude', 'quit-codex', 'quit-tab', 'quit-tab-command']
 let project = ''
 
@@ -169,13 +171,14 @@ function typedAt(id: string, marks: number[]): string[][] {
   return seen
 }
 
-/** Ask for the quit-time exit of `id`, let its timers run, and report what
- *  was typed into its terminal and how often it was told to end. */
+/** Ask for the quit-time exit of `id`, let its keys' timers run (2 s, past
+ *  the last key and before the 5 s timeout), and report what was typed into
+ *  its terminal and how often it was told to end. */
 function quit(id: string): { typed: string[]; kills: number } {
   const pty = h.ptys[h.ptys.length - 1]
   pty.writes.length = 0
   void gracefulExitPty(id, 5000)
-  vi.advanceTimersByTime(500)
+  vi.advanceTimersByTime(2000)
   const seen = { typed: [...pty.writes], kills: pty.kills }
   // The PTY reports its end, which is what settles the quit.
   for (const cb of pty.exits.slice()) cb({ exitCode: 0 })
@@ -223,8 +226,9 @@ describe('quitting the app with local sessions open', () => {
   })
 
   // Mutation to prove these can fail: type Claude Code's keys into every
-  // session, as 4252cbfc did.
-  it('a local Codex session gets the Codex package\'s keys: Escape and Ctrl-C, and no /exit', () => {
+  // session, as 4252cbfc did; or Codex's as 3d447f1d named them (one Ctrl-C,
+  // at 100 ms).
+  it('a local Codex session gets the Codex package\'s keys: Escape, Ctrl-C and Ctrl-C again, and no /exit', () => {
     registerCodex()
     spawnPty(win, 'quit-codex', { cwd: project, provider: 'codex', codexOptions: { permissionsPreset: 'standard' }, codexLaunch: preparedLaunch() } as never)
     vi.advanceTimersByTime(1000)
@@ -234,13 +238,34 @@ describe('quitting the app with local sessions open', () => {
     expect(kills).toBe(0)
   })
 
-  it('the Codex package\'s keys at their times: Escape at once, Ctrl-C at 100 ms, then nothing up to the timeout', () => {
+  it('the Codex package\'s keys at their times: Escape at once, Ctrl-C at 30 ms, Ctrl-C again at 1,100 ms, then nothing up to the timeout', () => {
     registerCodex()
     spawnPty(win, 'quit-codex', { cwd: project, provider: 'codex', codexOptions: { permissionsPreset: 'standard' }, codexLaunch: preparedLaunch() } as never)
     vi.advanceTimersByTime(1000)
-    expect(typedAt('quit-codex', [0, 99, 100, 300, 4999])).toEqual([
-      ['\x1b'], ['\x1b'], CODEX_EXIT_KEYS, CODEX_EXIT_KEYS, CODEX_EXIT_KEYS,
+    expect(typedAt('quit-codex', [0, 29, 30, 1099, 1100, 4999])).toEqual([
+      ['\x1b'], ['\x1b'], ['\x1b', '\x03'], ['\x1b', '\x03'], CODEX_EXIT_KEYS, CODEX_EXIT_KEYS,
     ])
+  })
+
+  // Mutation to prove this can fail: drop sendExitKeys' check that the
+  // terminal is still the session's (the second Ctrl-C then goes into a run
+  // that has ended).
+  it('a local Codex session that ended before 1,100 ms gets no second Ctrl-C, and its quit ends without a kill', () => {
+    registerCodex()
+    spawnPty(win, 'quit-codex', { cwd: project, provider: 'codex', codexOptions: { permissionsPreset: 'standard' }, codexLaunch: preparedLaunch() } as never)
+    vi.advanceTimersByTime(1000)
+    const pty = h.ptys[h.ptys.length - 1]
+    pty.writes.length = 0
+    void gracefulExitPty('quit-codex', 5000)
+    vi.advanceTimersByTime(30)
+    expect(pty.writes).toEqual(['\x1b', '\x03'])
+    // Codex at its composer ends about 230 ms after a Ctrl-C (measured), and
+    // the PTY reports its end.
+    vi.advanceTimersByTime(230)
+    for (const cb of pty.exits.slice()) cb({ exitCode: 0 })
+    vi.advanceTimersByTime(4740)
+    expect(pty.writes).toEqual(['\x1b', '\x03'])
+    expect(pty.kills).toBe(0)
   })
 
   // Mutation to prove these can fail: type the exit keys into every session,

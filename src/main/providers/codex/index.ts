@@ -152,17 +152,30 @@ const CODEX_PRICING: ProviderPricingOperations = {
 }
 
 /** 2.1.3-beta.15 B3 (aicc_planning#393): the keys a quit types into a Codex
- *  the app started: Escape at once, then Ctrl-C at 100 ms. Measured on Codex
- *  CLI 0.157.1 (the test VM, a direct tab, 23 Nov): at its "Hooks need review"
- *  screen Escape goes to the composer and Ctrl-C there ends Codex (Escape,
- *  Ctrl-C or Ctrl-D alone do not end it there); at the composer Ctrl-C alone
- *  ends it, and Escape alone does not. No /exit: it ended Codex at neither
- *  screen, and Codex takes one write of a line and its Enter as a paste and
- *  does not submit it (PB3). One Ctrl-C only: two, 200 ms apart, ended Codex
- *  at its composer with Windows' Ctrl-C exit status, not 0. */
+ *  the app started: Escape at once, Ctrl-C at 30 ms, and Ctrl-C again at
+ *  1,100 ms. Measured on Codex CLI 0.157.1, Windows 11 build 22621 (the test
+ *  VM, 23 Nov, direct and held tabs). At its "Hooks need review" screen
+ *  Escape goes to the composer, and one Ctrl-C after it ends Codex only if it
+ *  lands early or late: at 20 to 105 ms after the Escape it ended Codex every
+ *  time (7 of 7), at 121 to 502 ms it did nothing (11 of 11; Codex stays at
+ *  its composer), and at 1,002 and 1,006 ms it ended Codex again. So the
+ *  first Ctrl-C comes well inside the early stretch, and the second is a
+ *  backstop once the dead stretch has closed, for a first one a late timer
+ *  pushed into it (one try: Ctrl-C at 153 ms lost, at 1,003 ms ended, exit
+ *  code 0). Escape, Ctrl-C or Ctrl-D alone do not end Codex there. At the
+ *  composer Ctrl-C alone ends it in about 230 ms, and Escape then Ctrl-C at
+ *  100 or 110 ms in 361 to 397 ms (30 ms not measured there). A key is typed
+ *  only while the run is still the session's (sendExitKeys), so a Codex that
+ *  has ended gets no backstop. One still shutting down at 1,100 ms would get
+ *  it: the slowest end measured after an early Ctrl-C came 1,083 ms after it,
+ *  and at the composer a second Ctrl-C 200 ms after the first (while Codex
+ *  was shutting down) gave Windows' Ctrl-C exit status, not 0. No /exit: it
+ *  ended Codex at neither screen, and Codex takes one write of a line and its
+ *  Enter as a paste and does not submit it (PB3). */
 const CODEX_EXIT_KEYS: readonly ExitKey[] = [
   { data: '\x1b', atMs: 0 },
-  { data: '\x03', atMs: 100 },
+  { data: '\x03', atMs: 30 },
+  { data: '\x03', atMs: 1_100 },
 ]
 
 export class CodexProvider implements SessionProvider {
