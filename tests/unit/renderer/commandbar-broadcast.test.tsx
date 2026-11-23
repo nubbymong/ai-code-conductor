@@ -14,7 +14,9 @@
  *    arguments) presses as a single button;
  *  - Shift+click on a simple Global prompt asks first ("Send to N open
  *    sessions?"): Cancel and Escape send nothing, Send and Enter reach every
- *    open agent session once; a Shift+click on any other button (arguments,
+ *    open agent session once, a held Enter's repeat answers nothing (the
+ *    overflow list's rows: commandbar-broadcast-overflow.test.tsx); a
+ *    Shift+click on any other button (arguments,
  *    a shell line, a Session button) is a plain press of its own tab;
  *  - a broadcast button carries a subtle "all" pill, on the bar and in its
  *    band's overflow list, only while its option is on and it is a simple
@@ -238,6 +240,25 @@ describe('Shift+click on a Global prompt button asks first (#399)', () => {
       await settle()
     })
     await key('Enter')
+    expect(sentTo()).toEqual([
+      { sessionId: 's-1', text: 'resume from the handoff' },
+      { sessionId: 's-2', text: 'resume from the handoff' },
+    ])
+  })
+
+  it('a held Enter\'s repeat does not answer the card; the next fresh Enter sends once to each tab', async () => {
+    // Holding Shift+Enter on a chip opens the card on the first keydown; the
+    // key's auto-repeats reach the card before the user has read it.
+    COMMANDS = [PLAIN]
+    await askFor()
+    await act(async () => {
+      document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', repeat: true, bubbles: true, cancelable: true }))
+      await settle()
+    })
+    expect(submitPrompt).not.toHaveBeenCalled()
+    expect(card()).not.toBeNull()
+    await key('Enter')
+    expect(card()).toBeNull()
     expect(sentTo()).toEqual([
       { sessionId: 's-1', text: 'resume from the handoff' },
       { sessionId: 's-2', text: 'resume from the handoff' },

@@ -27,20 +27,27 @@ count; and "Broadcasty should onlly be for simple prompts".
 - **Shift+click** (`CommandBar.tsx`): on a simple Global prompt it asks "Send to N open
   sessions?" (Send, Cancel; Enter sends, Escape cancels). The first answer clears the question,
   so a second Enter before the card goes cannot send twice; an Enter on the card's own focused
-  button is left to that button. On any other button, Shift+click is a plain press. The overflow
-  list passes Shift on the same way.
+  button is left to that button. A held key's repeats are swallowed and never send: holding
+  Shift+Enter on a chip opens the card on the first keydown, and its auto-repeats must not
+  answer the card before it is read. On any other button, Shift+click is a plain press. The
+  overflow list passes Shift on the same way.
 - **The pill** (`command-bar/chips.tsx`, `BandOverflow.tsx`): a small rounded "all" tag with an
   SVG broadcast mark, in the bar's muted surface and text tones, labelled "Sends to every open
   session" for a tooltip and a screen reader; on the bar, the overflow row and the dialog's
-  preview, only while the option is on and the button is a simple prompt.
+  preview, only while the option is on and the button is a simple prompt. The chip's own
+  tooltip and its right-click menu header (one string, `layout.ts` `chipTitle`) end "sends to
+  every open session" on the same buttons, so hovering anywhere on the chip says it.
 - **Usage id** `commands.broadcast` (tipsStore's DIRECT_FEATURE_IDS), recorded by a broadcast
   press, for the Shift+click tip to key on.
 - **Tests.** `tests/unit/renderer/command-broadcast.test.ts` (the rules),
-  `commandbar-broadcast.test.tsx` (the bar: option, Shift+click, pill, overflow pill, the scope
-  confirmation), `command-dialog-broadcast.test.tsx` (the option and the preview pill),
-  `commandbar-focus-handoff.test.tsx` (a Claude Code tab and a Codex tab once each through the
-  prompt path), `tests/unit/stores/commandStore-bands.test.ts` (a Session move clears it). Each
-  new case was run red against the code before its commit; mutants run: the Enter guard dropped,
-  the scope sentence dropped.
+  `commandbar-broadcast.test.tsx` (the bar: option, Shift+click, a held Enter's repeat, pill,
+  overflow pill, the scope confirmation), `commandbar-broadcast-overflow.test.tsx` (Shift+click
+  on a folded button's overflow row asks, then Send reaches each tab once),
+  `command-bar-layout.test.ts` (the chip title), `command-dialog-broadcast.test.tsx` (the option
+  and the preview pill), `commandbar-focus-handoff.test.tsx` (a Claude Code tab and a Codex tab
+  once each through the prompt path), `tests/unit/stores/commandStore-bands.test.ts` (a Session
+  move clears it). Each new case was run red against the code before its commit; mutants run:
+  the Enter guard dropped, the scope sentence dropped, the repeat guard dropped, the overflow
+  row's Shift dropped, the chip title's broadcast part dropped.
 - **Owed.** ADR-009 pass before stable (aicc_planning #320 list): one press types into many
   PTYs. VM line on the frozen head: three tabs (Claude Code, Codex, a shell).

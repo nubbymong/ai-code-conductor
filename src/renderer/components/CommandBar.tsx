@@ -669,8 +669,9 @@ export default function CommandBar({ sessionId, configId, sessionType = 'local',
   }
 
   /** #399: the button a Shift+click asked about, until Send or Cancel answers
-   *  it. Read and cleared by the first answer, so a held Enter or a second
-   *  click on Send cannot send it twice. */
+   *  it. Read and cleared by the first answer, so a second Enter or a second
+   *  click on Send cannot send it twice. A held Enter's repeats never answer
+   *  it at all: the card's keydown handler below swallows them. */
   const askedBroadcast = useRef<string | null>(null)
   const askBroadcast = (cmd: CustomCommand) => {
     askedBroadcast.current = cmd.id
@@ -904,7 +905,9 @@ export default function CommandBar({ sessionId, configId, sessionType = 'local',
   // Escape and Cancel itself). Taken wherever focus is, so it never reaches
   // the terminal underneath, except on a button in the card: a focused
   // Cancel or Send answers its own Enter. Only while the card is drawn: it
-  // is not when its button has gone.
+  // is not when its button has gone. A held key's repeat is swallowed and
+  // never sends: holding Shift+Enter on a chip opens the card on the first
+  // keydown, and its repeats must not answer the card before it is read.
   const answerBroadcastRef = useRef(answerBroadcast)
   answerBroadcastRef.current = answerBroadcast
   const askingBroadcast = confirm?.kind === 'broadcast' && commands.some((c) => c.id === confirm.commandId)
@@ -916,6 +919,7 @@ export default function CommandBar({ sessionId, configId, sessionType = 'local',
       if (t instanceof Element && t.closest('[data-testid="confirm-broadcast"] button')) return
       e.preventDefault()
       e.stopPropagation()
+      if (e.repeat) return
       answerBroadcastRef.current(true)
     }
     window.addEventListener('keydown', onKey, true)
