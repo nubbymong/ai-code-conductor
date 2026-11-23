@@ -16,8 +16,9 @@ on:
   # Release level (P4.8; OD20 D7, WP1.71): the release-candidate Codex CLI is
   # checked on its own, dispatched with its version, besides the minimum and
   # pinned ones every run checks. On a dispatch the codex-conformance job runs,
-  # with the always-on changelog check, probe-p19 and probe-p21 when the
-  # dispatch names them (probe_p19, probe_p21), the claude-conformance job when
+  # with the always-on changelog check, probe-p19, probe-p21 and snap-e2e when
+  # the dispatch names them (probe_p19, probe_p21, snap_e2e), the
+  # claude-conformance job when
   # claude_rc_version is set, and
   # the Helper job too when the `helper` input is set; every other job's
   # condition skips it.
@@ -62,6 +63,11 @@ on:
         default: false
       probe_p21:
         description: 'Run probe P21 (ADR-030) on the Windows runner: does the helper''s capture mode capture each display from the runner''s own session; the readings are uploaded'
+        type: boolean
+        required: false
+        default: false
+      snap_e2e:
+        description: 'Run the Snap end-to-end check (snap-e2e) on the Windows runner: the built app, its Snap button and the helper''s capture mode on the runner''s own desktop, plus one capture from a basic-user token; the readings are uploaded'
         type: boolean
         required: false
         default: false
@@ -1001,6 +1007,117 @@ jobs:
         with:
           name: probe-p21-${{ matrix.os }}
           path: ${{ runner.temp }}/probe-p21
+          if-no-files-found: warn
+          retention-days: 30
+
+  # Snap on Windows, end to end (plan 2.1.3-beta.16, section A1;
+  # aicc_planning#401). The built app runs on the GitHub Windows runner's own
+  # desktop (the test machine has nobody signed in, so it cannot), with the
+  # helper built here and handed to the app through its test-only helper path
+  # (the app runs from out/main, where the path beside a packaged app is not):
+  # tests/e2e/snap-windows.spec.ts presses Snap and reads what it does. Before
+  # it, one run of the helper's capture mode from a basic-user token
+  # (scripts/ci/snap-basic-user.mjs): the first capture this project reads from
+  # a session that is not elevated.
+  #
+  # Playwright runs with --retries=0 (playwright.config.ts sets one retry for
+  # the VM's full run; it must not apply here), and the step after it fails the
+  # job when the report shows a test that was retried or reported flaky
+  # (scripts/ci/playwright-no-retry.mjs). A red run is answered by its cause,
+  # never by a retry, a longer timer or a looser bound.
+  #
+  # It runs ONLY on a dispatch that names it (`snap_e2e`), never on a pull
+  # request or a push. It is section evidence, like a test-machine line: it is
+  # not one of the checks a PR waits for, not in release.yml and not read by
+  # scripts/release-gate.mjs. It only reads: no secret, read-only permissions,
+  # the actions pinned by commit. What is uploaded as snap-e2e-<os> is the
+  # readings, Playwright's report and its pictures of the app's own windows.
+  # tests/unit/scripts/snap-e2e-job.test.ts evaluates its condition.
+  snap-e2e:
+    if: github.event_name == 'workflow_dispatch' && inputs.snap_e2e == true
+    name: Snap e2e (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2025]
+    env:
+      CARGO_TERM_COLOR: never
+      CARGO_INCREMENTAL: '0'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install the pinned Rust toolchain
+        shell: bash
+        working-directory: helper
+        run: |
+          rustup show active-toolchain || rustup toolchain install
+          rustc --version
+          cargo --version
+
+      - name: Build the helper (release)
+        shell: bash
+        working-directory: helper
+        run: cargo build --locked --release --bin aicc-helper
+
+      # The same import check as the Helper job's: the program the app runs here
+      # carries its own C runtime and delay-loads the window-manager DLLs.
+      - name: Check the helper carries its own C runtime
+        run: node scripts/check-pe-imports.mjs helper/target/release/aicc-helper.exe
+
+      # As the Windows test jobs install (no native rebuild on Windows: the
+      # prebuilt node-pty and better-sqlite3 load under Electron as they are).
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Install Electron binary
+        run: node node_modules/electron/install.js
+
+      - name: Build the app
+        run: npm run build
+
+      # A measurement: it prints what the run read and is red only when the
+      # script itself could not run. "not measured" (the runner refused the
+      # token) is a reading.
+      - name: Capture from a basic-user token
+        shell: bash
+        env:
+          SNAP_OUT: ${{ runner.temp }}/snap-e2e
+        run: node scripts/ci/snap-basic-user.mjs --helper helper/target/release/aicc-helper.exe --out "$SNAP_OUT/basic-user"
+
+      - name: Run the Snap end-to-end check
+        shell: bash
+        env:
+          SNAP_E2E_OUT: ${{ runner.temp }}/snap-e2e
+          SNAP_E2E_HELPER: ${{ github.workspace }}\helper\target\release\aicc-helper.exe
+          PLAYWRIGHT_JSON_OUTPUT_NAME: ${{ runner.temp }}/snap-e2e/playwright-report.json
+        run: npx playwright test tests/e2e/snap-windows.spec.ts --retries=0 --workers=1 --reporter=list,json
+
+      - name: Fail a run Playwright retried or reported flaky
+        if: ${{ !cancelled() }}
+        shell: bash
+        env:
+          REPORT: ${{ runner.temp }}/snap-e2e/playwright-report.json
+        run: node scripts/ci/playwright-no-retry.mjs "$REPORT"
+
+      - name: Upload the readings and the report
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: snap-e2e-${{ matrix.os }}
+          path: |
+            ${{ runner.temp }}/snap-e2e
+            test-results
           if-no-files-found: warn
           retention-days: 30
 
