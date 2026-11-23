@@ -340,6 +340,15 @@ test.describe('Snap on Windows', () => {
     })
     readings.launchMs = Math.round(performance.now() - started)
     ctx.app.on('console', (m) => { mainLines.push(m.text()) })
+    // E2E_HEADLESS shows the app's window at -10000,-10000, off every display
+    // (src/main/index.ts, ready-to-show). Snap pictures the screen, so the
+    // window goes where a user has it: on the primary display, within its work
+    // area. (Run 45269811648 read the window's right and bottom edges at
+    // -8720 and -9280: -10000 plus 1280 by 720.)
+    const area = await ctx.app.evaluate(({ screen }) => screen.getPrimaryDisplay().workArea)
+    const placed = { x: area.x, y: area.y, width: Math.min(1280, area.width), height: Math.min(720, area.height) }
+    await (await ctx.app.browserWindow(ctx.page)).evaluate((w, b) => w.setBounds(b), placed)
+    readings.appWindow = await (await ctx.app.browserWindow(ctx.page)).evaluate((w) => w.getBounds())
   })
 
   test.afterAll(async () => {
