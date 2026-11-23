@@ -4,7 +4,7 @@ start.rs's `it_says_which_process_it_started_in_the_form_the_app_checks` failed 
 (windows-2025) job with "You cannot call a method on a null-valued expression": Get-CimInstance
 Win32_Process found no process for the pid the helper had just started. Run 45128948476 (2026-11-23,
 PR #757) and run 44747703272 (2026-11-20). In the last 300 CI runs (2026-11-19 to 23) start.rs ran
-in 71 Helper windows jobs, and these two are its only failures. Commit c598a224 answered the first
+in 68 Helper windows job runs, and these two are its only failures. Commit c598a224 answered the first
 by giving each fake 120 s of life instead of 10 s, without measuring what slowed the read.
 
 - **The cause.** Each fake CLI slept a fixed 10 s, and the test's first read can take longer. That
@@ -20,8 +20,8 @@ by giving each fake 120 s of life instead of 10 s, without measuring what slowed
   - On 8 more runners the first PowerShell took 2.35 to 2.67 s of wall time against 0.63 to 0.95 s
     of its own CPU. Later runs took 0.26 to 0.36 s. Most of the first start is waiting, not
     PowerShell's own work. What it waits for (disk reads or another process) was not measured.
-  - The two failures spent 12.4 s and 18.3 s in the test before failing. The median of 70 runs is
-    5.4 s. Eight reads take that long only when one is far slower than the rest, and the slow one
+  - The two failures spent 12.4 s and 18.3 s in the test before failing. The median of the 66 passes is
+    5.4 s; the slowest pass took 8.8 s. Eight reads take that long only when one is far slower than the rest, and the slow one
     is the first.
   - A fake that has exited is not in Win32_Process, even while a handle to it is held. On 14 of 14
     runners, a fake that expired by itself (exit code 0, about 2,005 ms after it was made) and one
@@ -46,9 +46,10 @@ by giving each fake 120 s of life instead of 10 s, without measuring what slowed
     FILE_FLAG_DELETE_ON_CLOSE. Windows deletes the file when the test process ends, whether or not
     any guard ran.
   - Every fake start.rs starts runs on that file. LIFE (120 s) is gone.
-  - The Started guard holds the process from when the test takes it, only while the process has the
-    creation time `start` printed. It ends the process through that handle, never by a bare pid
-    (the class of a21b99da).
+  - `Started::checked` holds the process only while it has the creation time `start` printed.
+    `Started::open` (the early guard for a line with no readable creation time, and the copy found
+    under a started program) holds the process its pid names when the test takes it. Both end it
+    through the held handle, never by a bare pid at the end (the class of a21b99da).
   - A failed read says how long it took, how long after the process was made it began, and whether
     the process still ran or exited, when, and with what code.
 - **Checked** (run 45167229173):
@@ -62,5 +63,6 @@ by giving each fake 120 s of life instead of 10 s, without measuring what slowed
   - A read begun 130 s after the start passes.
   - CI run 45166826515 (a dispatch with the Helper job) is green on windows-2025, macos-latest and
     ubuntu-latest.
-- **The same pattern elsewhere, not changed.** probe_transport.rs gives its control fake `--sleep
-  20`, but uses it for 0.5 s with no PowerShell in between.
+- **Not the same hazard.** probe_transport.rs's control fake keeps `--sleep 20` as a leak cap: it is
+  used for a 0.5 s wait with no other program started in between, and its guard ends it (a comment
+  now says so beside it).

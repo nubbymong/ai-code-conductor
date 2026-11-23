@@ -42,7 +42,7 @@ mod windows {
     use windows_sys::Win32::Foundation::{CloseHandle, SetHandleInformation, FILETIME, HANDLE, HANDLE_FLAG_INHERIT, INVALID_HANDLE_VALUE};
     use windows_sys::Win32::System::Diagnostics::ToolHelp::{CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W, TH32CS_SNAPPROCESS};
     use windows_sys::Win32::System::Threading::{
-        GetExitCodeProcess, GetProcessTimes, OpenProcess, TerminateProcess, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE, PROCESS_TERMINATE,
+        GetExitCodeProcess, GetProcessTimes, OpenProcess, TerminateProcess, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_TERMINATE,
     };
 
     const HELPER: &str = env!("CARGO_BIN_EXE_aicc-helper");
@@ -54,9 +54,11 @@ mod windows {
     /// guard runs. So a fake runs until its guard (`Started`, `Running`,
     /// `Tree`) ends it or this process ends, with no time limit of its own,
     /// and no step of a test can outlast it. A fake that slept a fixed 10 s
-    /// was gone before the first Windows PowerShell of two CI runs read it
-    /// (2.1.3-beta.15): that first start took 2 to 7 s on 14 runners and
-    /// longer than 10 s in 2 of 71 CI runs (CONTEXT.d, 2026-11-23).
+    /// was gone before the first Windows PowerShell of two CI runs read it.
+    /// Two CI runs failed with a fixed 10 s fake (2.1.3-beta.15): they spent
+    /// 12.4 s and 18.3 s in the test before the read found no process (the
+    /// reads themselves were not timed). The job's first Windows PowerShell
+    /// read took 2 to 7 s on 14 measured runners (CONTEXT.d, 2026-11-23).
     fn lease() -> &'static str {
         static LEASE: OnceLock<(String, std::fs::File)> = OnceLock::new();
         let (path, _) = LEASE.get_or_init(|| {
@@ -171,7 +173,7 @@ mod windows {
         /// Process `pid` as it is now: for one found under a program this
         /// test started, while that program runs.
         fn open(pid: u32) -> Started {
-            let handle = unsafe { OpenProcess(PROCESS_TERMINATE | PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_SYNCHRONIZE, 0, pid) } as usize;
+            let handle = unsafe { OpenProcess(PROCESS_TERMINATE | PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) } as usize;
             Started { pid, handle }
         }
 

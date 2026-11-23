@@ -904,6 +904,9 @@ fn given_a_pipe<R>(start: impl FnOnce() -> R) -> (R, Passed) {
     let started = start();
     // Started once `hold --detach` has exited. It is still given the end,
     // because this test holds it until the next line.
+    // The control only has to run through the 500 ms wait two lines down; its
+    // `Running` guard ends it there, and no other program starts in between.
+    // The 20 s is a cap for a control whose guard never ran.
     let control = Running(Command::new(FAKE).args(["--sleep", "20"]).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn().expect("start the fake CLI"));
     drop(write_end);
     let early = ended.recv_timeout(Duration::from_millis(500));
