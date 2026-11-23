@@ -154,7 +154,7 @@ fn main() -> ExitCode {
         // (Windows, consoles.rs).
         "end-console-host" => aicc_helper::consoles::end_command(rest),
         // One picture of each display, for Snap (Windows; capture.rs). The
-        // app does not run it yet.
+        // app runs it when the new Snap is chosen (src/main/snap/).
         "capture" => aicc_helper::capture::command(rest),
         // A run with one terminal, as the app has for a tab, for the tests of
         // console-hosts (Windows); not a public command.

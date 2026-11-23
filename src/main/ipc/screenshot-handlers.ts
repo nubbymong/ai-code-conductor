@@ -6,16 +6,34 @@ import {
   listWindows,
   listRecentScreenshots,
   cleanupOldScreenshots,
+  saveSnapPicture,
 } from '../screenshot-capture'
+import { readConfig } from '../config-manager'
+import { snapEngineFor } from '../../shared/snap-engine'
+import { snapOnWindows, overlayNotInThisBuild } from '../snap/windows-engine'
 
 const sourceIdSchema = z.string().min(1).max(500)
 const maxAgeDaysSchema = z.number().int().positive().max(3650)
 
-export function registerScreenshotHandlers(getWindow: () => BrowserWindow | null): void {
+/** The Snap choice the user saved (Settings, Custom Commands, Snap), read at
+ *  each press so a change needs no restart. Undefined when none is saved. */
+function savedSnapChoice(): unknown {
+  try {
+    return readConfig<{ snapEngineWindows?: unknown }>('magicButtons')?.snapEngineWindows
+  } catch {
+    return undefined
+  }
+}
+
+/** `platform` is a parameter for tests; the app passes none. */
+export function registerScreenshotHandlers(getWindow: () => BrowserWindow | null, platform: string = process.platform): void {
   ipcMain.handle('screenshot:captureRectangle', async () => {
     const win = getWindow()
     if (!win) return null
-    return captureRectangle(win)
+    // On Windows with the new Snap chosen, it runs first and hands any press it
+    // cannot do to the previous one (ADR-030 S8 step 2); elsewhere the previous.
+    const useNew = snapEngineFor(platform, savedSnapChoice()) === 'new'
+    return captureRectangle(win, undefined, useNew ? () => snapOnWindows(overlayNotInThisBuild, saveSnapPicture) : undefined)
   })
 
   ipcMain.handle('screenshot:captureWindow', async (_event, sourceId: string) => {

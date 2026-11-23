@@ -129,18 +129,56 @@ function systemScreenPermission(mainWindow: BrowserWindow | null): ScreenPermiss
 }
 
 /**
+ * Save a picture the new Snap cut (src/main/snap/engine.ts): rows from the
+ * top, four bytes a pixel, in physical pixels. The same 1920 cap and JPEG as
+ * every other Snap, into the screenshots folder; returns the file.
+ */
+export function saveSnapPicture(picture: { width: number; height: number; bgra: Buffer }): string {
+  ensureDir()
+  const filePath = uniquePath(generateFilename())
+  const img = nativeImage.createFromBitmap(picture.bgra, { width: picture.width, height: picture.height })
+  if (img.isEmpty()) throw new Error('an empty picture')
+  writeFileSync(filePath, constrainToMaxDim(img, SCREENSHOT_MAX_DIM).toJPEG(SCREENSHOT_JPEG_QUALITY))
+  return filePath
+}
+
+/** What a press of the new Snap came to (src/main/snap/engine.ts SnapOutcome). */
+export type NewSnapOutcome =
+  | { kind: 'saved'; file: string }
+  | { kind: 'cancelled' }
+  | { kind: 'no-desktop' }
+  | { kind: 'previous'; why: string }
+
+/**
  * Snap's capture of a region. On macOS the Screen Recording permission is
  * checked first (screenshot-permission.ts): when it is not granted the user is
  * told and offered System Settings, and nothing is captured. Whatever goes
  * wrong after that (the capture library failing to load or to start, a throw
  * in its start) answers null, so it never reaches the uncaught-exception
  * handler. `permission` is a parameter for tests; the app passes none.
+ *
+ * `newEngine` is the new Snap (ADR-030 S8 step 2), given by the IPC handler
+ * on Windows when it is the chosen one (src/shared/snap-engine.ts): it runs
+ * first, and when it answers `previous` (anything it could not do, or a throw)
+ * the previous Snap takes the press. Cancelled, or no desktop to capture
+ * (exit 3): nothing.
  */
-export async function captureRectangle(mainWindow: BrowserWindow, permission?: ScreenPermissionDeps): Promise<string | null> {
+export async function captureRectangle(mainWindow: BrowserWindow, permission?: ScreenPermissionDeps, newEngine?: () => Promise<NewSnapOutcome>): Promise<string | null> {
   if (captureInProgress) return null
   captureInProgress = true
   try {
     if (!(await screenCaptureAllowed(permission ?? systemScreenPermission(mainWindow)))) return null
+    if (newEngine) {
+      let outcome: NewSnapOutcome
+      try {
+        outcome = await newEngine()
+      } catch (err) {
+        logWarn(`[snap] new engine: an error (${err instanceof Error ? err.name : 'error'}); the previous Snap takes this press`)
+        outcome = { kind: 'previous', why: 'an error' }
+      }
+      if (outcome.kind === 'saved') return outcome.file
+      if (outcome.kind !== 'previous') return null
+    }
     return await runRectangleCapture()
   } catch (err) {
     logWarn(`[screenshot] capture failed (${err instanceof Error ? err.name : 'error'}); nothing captured`)

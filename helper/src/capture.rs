@@ -1,8 +1,9 @@
 //! `aicc-helper capture --out <folder>`: one picture of each display, for
 //! Snap (ADR-030 D3 and D4, protocol change 2; protocol section 15,
 //! "Capturing the displays"). Windows only for now: on macOS and Linux the
-//! mode exits 4, "not supported". The app does not run it yet; probe P21
-//! measures it on Windows before Snap is built on it.
+//! mode exits 4, "not supported". The app runs it for Snap on Windows when
+//! the new Snap is chosen (src/main/snap/), with a 2 s bound; probe P21
+//! measured it on Windows first.
 //!
 //! ```text
 //! aicc-helper capture --out <folder>

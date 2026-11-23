@@ -303,6 +303,16 @@
    "how": "full-path",
    "reason": "The terminal the usual way, with the very program, arguments and options pty-manager handed it, when the session helper is off or cannot carry it. Through spawnPlainPty, a Terminal only tab or a partner terminal (on Windows PowerShell by its full path in the system folder, gsudo by the full path found in PATH's folders for an elevated tab, and the install or update tab's program lookup kept to PATH's fully qualified folders). Through spawnAgentPty (2.1.3-beta.7), a local agent session as its provider builds it: on Windows PowerShell by its full path in the system folder for a Claude session, Codex or its cmd.exe line by full paths, and the Codex resume list's node by the full path found in PATH's fully qualified folders (none found: nothing starts). Through spawnRunPty (2.1.3-beta.9), Insights' report terminal as insights-runner.ts builds it: Claude Code for /insights by the full path resolveClaudeForPty finds (PATH's fully qualified folders on Windows), with an environment that keeps the lookup of what it starts to PATH's folders. The agent sessions' usual start after a failed hold (usualStart) calls the same injected spawn, spawnDirect, whose default is this site."
   },
+  "src/main/snap/helper-capture.ts :: deps.spawn(helper": {
+   "count": 1,
+   "how": "not-a-process",
+   "reason": "The new Snap's run of the helper's capture mode through its injected port: the app's port is spawn(file in windows-engine.ts (the app-path site below); no program is named here."
+  },
+  "src/main/snap/windows-engine.ts :: spawn(file": {
+   "count": 1,
+   "how": "app-path",
+   "reason": "Windows only, when the new Snap is the one chosen: the session helper the installer put beside the app (resources/helper, bundledHelperPath), by its full path and only when that file exists, with `capture --out` and a folder the app made under its own user data folder, arguments as a list, no shell, no window, a 2 s bound after which it is ended through its own handle (helper-capture.ts). In an app that is not packaged, the test-only helper path CCC_E2E_SNAP_HELPER when it is set, used only when it is an absolute path (helper-path.ts); a packaged app never reads it. The helper writes the display pictures and exits."
+  },
   "src/main/tokenomics/fork-tokenomics-worker.ts :: utilityProcess.fork(entry": {
    "count": 1,
    "how": "app-path",
