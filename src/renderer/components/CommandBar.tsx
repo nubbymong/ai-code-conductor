@@ -1472,7 +1472,7 @@ export default function CommandBar({ sessionId, configId, sessionType = 'local',
         <ConfirmCard
           testId="confirm-broadcast"
           title={`Send to ${confirm.count} open session${confirm.count === 1 ? '' : 's'}?`}
-          body={<>Shift+click sends "{confirmCmd.label}" once to every open Claude Code and Codex tab, SSH and background tabs included. Terminal-only tabs and Ask Conductor get nothing.</>}
+          body={<>Shift+click sends "{confirmCmd.label}" once to every open Claude Code and Codex session, SSH and background tabs included. Terminal-only tabs and Ask Conductor get nothing.</>}
           actions={[{ label: 'Send', primary: true, testId: 'confirm-broadcast-ok', onClick: () => answerBroadcast(true) }]}
           onCancel={() => answerBroadcast(false)}
         />
