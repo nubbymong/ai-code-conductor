@@ -397,6 +397,7 @@ exec with `-l`; `claude` was found only by `-il`, so against the user's interact
 login shell, the comparison ADR-029's P6 names, that host differs and the P6 fallback
 applies on it. The Rocky Linux 10 host was NOT RUN on 2026-11-21 (its one connect failed;
 recorded as host off). Rocky Linux 10: not run; its one 8 s connect failed on 2026-11-22
-(host off); owed to beta.15. Rocky Linux 10: not run; its one 8 s connect got no answer
-on 2026-11-23 (the probe printed "P3 NOT RUN: host off" and "P6 NOT RUN: host off");
-owed to beta.16.
+(host off); owed to beta.15. Rocky Linux 10 was measured on 2026-11-23
+(plan 2.1.3-beta.15 C7): P3 HOLDS, alive at 60 s in 3 of 3 runs of each form
+(KillUserProcesses no, Linger yes, so a host with cleanup on is still not measured), and
+P6 SAME, with the exec, `-l` and `-il` alike and claude found by all three.

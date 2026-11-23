@@ -167,9 +167,9 @@ The CLI or sudo starts `emit` (statusline and hook command, R6, R7), `mcp`
   installs its filter before it reads any socket (threat model 3.10).
   Outliving logout: probe P3 held for 60 s on a Linux host that does not clean up at
   logout (ADR-030); **pending probe P3** for a host that does and for ADR-029's other P3
-  host roles (macOS, a container host). Rocky Linux 10: not run; its one 8 s connect
-  got no answer on 2026-11-23 (the probe printed "P3 NOT RUN: host off" and "P6 NOT
-  RUN: host off"); owed to beta.16.
+  host roles (macOS, a container host). Rocky Linux 10 (2026-11-23): P3 held for
+  60 s in 3 of 3 runs of each form, also on a host that does not clean up at logout
+  (KillUserProcesses no, Linger yes).
 - Only the holder outlives a connection; `mcp` lives as long as the CLI, the
   rest for one call. The holder exits when the session ends, a non-detachable
   terminal closes, or a detached session reaches its maximum lifetime.
@@ -371,7 +371,7 @@ has seen; a gap is logged, and noted on the session if a hook event was lost.
   size and is then fitted to its own, and the holder hears the tab's size
   only after that fit, or 3 s after the replay if the tab gives none. A
   replay that turns out to have nothing to show sends the tab's size when it
-  comes due. Then it writes, in one piece, the cancel
+  comes due. The replay is shown in one piece: the cancel
   character, the attribute reset and one line of its own, "[Earlier output
   of this terminal is no longer held, so it is not shown.]", then only the
   last of the replay that the tab's scrollback keeps (10,000 lines less a

@@ -441,8 +441,17 @@ limited to 8 s, failed at the address on file and the probe recorded "host off",
 also gave a refused connection and a name that does not resolve, so whether the host was
 off is not known; owed to beta.14, where the same probe runs on it. Rocky Linux 10: not
 run; its one 8 s connect failed on 2026-11-22 (host off); owed to beta.15. Rocky Linux
-10: not run; its one 8 s connect got no answer on 2026-11-23 (the probe printed "P3 NOT
-RUN: host off" and "P6 NOT RUN: host off"); owed to beta.16. Three
+10 result (2026-11-23, plan 2.1.3-beta.15 C7, aicc_planning#377; Rocky Linux 10.2, kernel
+6.12, key sign-in, bash as the login shell; the `helper-linux-musl` artifact of CI run
+45113319953, SHA-256 5c0cba8ec27548c2d61037bb8891cc921ab1397a34300060995dd1e3f72912af; the probe at the
+beta.15 aggregate): the probe printed "P3 HOLDS - alive at 60 s in 3 of 3 runs of each form"
+and "P6 SAME - the same PATH entries in order, and the same file (or none) for each program".
+logind's KillUserProcesses was no and the user's Linger was yes, so this is a second host
+that does not clean up at logout; each holder was still in its login's session scope at
+10 s and 60 s. A host with cleanup on is still not measured. P6: the exec, `-l` and `-il`
+had the same PATH, and all three found claude at `/usr/local/bin/claude` and node at
+`/usr/bin/node` (codex in none), so on this host no lookup through `-il` is needed. The
+host was left as found. Three
 things in the probe changed after the 2026-11-21 run, none in what it measures: a refused
 connection and an unknown name have labels of their own, a host name with a colon is not run, and a host without pgrep is
 reported as not left as found. The host that answered was left as found: every holder ended, the probe's temporary folder

@@ -90,9 +90,11 @@ head, the machine left on the published signed beta.14):
   reading is CAPTURES at 100% on one 1024x768 display, 3 of 3 runs in 50 to
   62 ms, session 2 elevated (CI run 45091643024). A second scale, mixed
   scaling and a session that is not elevated are not measured.
-- C7 (aicc_planning#377, run by the orchestrator): Rocky Linux 10 not run; its
-  one 8 s connect got no answer on 2026-11-23 (the probe printed "P3 NOT RUN:
-  host off" and "P6 NOT RUN: host off"); owed to beta.16.
+- C7 (aicc_planning#377, run by the orchestrator once the owner powered the
+  host on): Rocky Linux 10.2, "P3 HOLDS - alive at 60 s in 3 of 3 runs of each
+  form" and "P6 SAME" (exec, `-l` and `-il` alike); KillUserProcesses no,
+  Linger yes, so a host with logind cleanup on is still not measured; left as
+  found.
 
 **Process.** Measurements on the published beta ran first and gated only the
 sections that needed them (rule 25). Rule 21's join tests (the provider-name
