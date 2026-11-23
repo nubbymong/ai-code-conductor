@@ -1,5 +1,5 @@
 /**
- * 2.1.3-beta.14, plan section C8 (aicc_planning#392): the PTY handlers give
+ * 2.1.3-beta.15, plan section C8 (planned for beta.14) (aicc_planning#392): the PTY handlers give
  * the session helper's terminals the way a restored tab is told its replay is
  * at its holder's size: on the tab's own channel, to the app's window (the one
  * every spawn is given), answering whether it went. No window, or one already

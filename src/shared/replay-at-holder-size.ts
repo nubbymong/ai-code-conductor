@@ -1,6 +1,6 @@
 /**
- * A restored terminal's replay written at its holder's size (2.1.3-beta.14,
- * plan section C8, aicc_planning#392).
+ * A restored terminal's replay written at its holder's size (2.1.3-beta.15,
+ * plan section C8 (planned for beta.14), aicc_planning#392).
  *
  * A Windows console's output is right only at the size it was made for. A
  * restored tab that does not reach its holder's size within the size wait's

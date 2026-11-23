@@ -1,5 +1,5 @@
 /**
- * 2.1.3-beta.14, plan section C8 (aicc_planning#392, from #374 P3.1): a
+ * 2.1.3-beta.15, plan section C8 (planned for beta.14) (aicc_planning#392, from #374 P3.1): a
  * take-over whose tab did not reach its holder's size within the size wait's
  * cap (its window changed size between the two runs) has its replay written
  * at the holder's size. The tab is told that size and the replay's length
@@ -241,7 +241,7 @@ async function shownAfterFit(stream: string, holder: { cols: number; rows: numbe
 /** The cap's line, for a tab told the holder's size. */
 const capLine = (r: Rig, holder: string, tab: string) => `[session-helper] ${r.h.sid} (tab ${r.h.label}): the tab did not reach its holder's size ${holder} within ${SIZE_WAIT_MAX_MS} ms (it is ${tab}, and started at ${tab}), so its replay is written at the holder's size, then the tab is fitted to its own`
 
-describe("the size wait's cap passed: the replay is written at the holder's size and the tab fitted after it (2.1.3-beta.14, plan section C8)", () => {
+describe("the size wait's cap passed: the replay is written at the holder's size and the tab fitted after it (2.1.3-beta.15, plan section C8, planned for beta.14)", () => {
   it("a tab at 93x27, its holder at 103x27, the start of its output gone: at the cap the tab is told 103x27 and the replay's length just before the replay, which is counted at 103x27 with the cursor's row followed and the notice above the last row; no size goes to the holder until the tab gives its own; then the redraw at the tab's size", onFakeClock(async () => {
     const total = 12_000
     const r = rig({ cols: 93, rows: 27, before: heldFrom(5000, numbered(total), 103, 27) })

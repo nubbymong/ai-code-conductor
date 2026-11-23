@@ -52,7 +52,7 @@
  * the holder's size with the replay, so its terminal writes the replay at
  * that size and is fitted to the tab after it; the holder hears the tab's
  * size only once the tab gives it after that fit, or FIT_WAIT_MAX_MS later
- * (2.1.3-beta.14, plan section C8, aicc_planning#392). With no tab to tell
+ * (2.1.3-beta.15, plan section C8 (planned for beta.14), aicc_planning#392). With no tab to tell
  * (setReplayAtHolderSizeNotice unset) the replay is shown at the tab's size,
  * as before. A whole replay is shown as it is, with no notice. A holder
  * without the screen reads and a read that fails are shown as before, with no
@@ -212,7 +212,7 @@ export const SIZE_WAIT_MAX_MS = 3_000
  *  it is shown, for the tab's size, which the tab gives once it has written
  *  the replay and fitted itself; then what the size wait put off goes out at
  *  the tab's last size, and the log says so (a tab torn down meanwhile gives
- *  none). 2.1.3-beta.14, plan section C8. */
+ *  none). 2.1.3-beta.15, plan section C8 (planned for beta.14). */
 export const FIT_WAIT_MAX_MS = 3_000
 
 /**

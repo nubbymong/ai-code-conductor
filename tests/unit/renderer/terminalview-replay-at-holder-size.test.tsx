@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 /**
- * 2.1.3-beta.14, plan section C8 (aicc_planning#392): a restored terminal
+ * 2.1.3-beta.15, plan section C8 (planned for beta.14) (aicc_planning#392): a restored terminal
  * whose tab did not reach its holder's size is told, on its own channel, the
  * holder's size and the length of its next chunk, its replay. The view writes
  * that chunk with its terminal at the holder's size, and once xterm has parsed

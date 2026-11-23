@@ -591,7 +591,7 @@ export default function TerminalView({ sessionId, configId, cwd, shellOnly, elev
     const integrityGeneration = generateId()
     let bytesReceived = 0, bytesWritten = 0, strippedBytes = 0, ptyResizeCount = 0
     let lastSentCols: number | null = null, lastSentRows: number | null = null
-    // 2.1.3-beta.14, plan section C8 (aicc_planning#392): a restored terminal
+    // 2.1.3-beta.15, plan section C8 (planned for beta.14) (aicc_planning#392): a restored terminal
     // whose tab did not reach its holder's size is told that size and the
     // length of its next chunk, its replay (replayAt). That chunk is written
     // with the terminal at the holder's size, and the terminal is fitted to
