@@ -16,8 +16,9 @@ on:
   # Release level (P4.8; OD20 D7, WP1.71): the release-candidate Codex CLI is
   # checked on its own, dispatched with its version, besides the minimum and
   # pinned ones every run checks. On a dispatch the codex-conformance job runs,
-  # with the always-on changelog check, probe-p19 when the dispatch names it
-  # (probe_p19), the claude-conformance job when claude_rc_version is set, and
+  # with the always-on changelog check, probe-p19 and probe-p21 when the
+  # dispatch names them (probe_p19, probe_p21), the claude-conformance job when
+  # claude_rc_version is set, and
   # the Helper job too when the `helper` input is set; every other job's
   # condition skips it.
   # The inputs reach a step through env, never a shell line.
@@ -56,6 +57,11 @@ on:
         default: false
       probe_p19:
         description: 'Run probe P19 (ADR-030) on Windows, macOS and Linux: does a resize make Claude Code and Codex redraw their screen after a re-attach that starts mid-stream; the recordings are uploaded'
+        type: boolean
+        required: false
+        default: false
+      probe_p21:
+        description: 'Run probe P21 (ADR-030) on the Windows runner: does the helper''s capture mode capture each display from the runner''s own session; the readings are uploaded'
         type: boolean
         required: false
         default: false
@@ -898,6 +904,95 @@ jobs:
         with:
           name: probe-p19-${{ matrix.os }}
           path: ${{ runner.temp }}/probe-p19
+          if-no-files-found: warn
+          retention-days: 30
+
+  # Probe P21, the console half (ADR-030; plan 2.1.3-beta.15, section B5,
+  # aicc_planning#391): from a session that has a desktop, does the helper's
+  # capture mode write each display's picture, at its size and scale, in time?
+  # The Windows test machine could not measure it (nobody is signed in on its
+  # console), so the GitHub Windows runner, whose session has a display, takes
+  # the reading: the helper is built here (release, --locked), then
+  # helper/probes/p21-capture.cjs `measure --session console` runs it three times
+  # and `verdict` prints the lines. The SSH half is not run here (the runner has
+  # no SSH session); WINDOWS_1's reading of it stands, and `verdict` is told so
+  # with --ssh-not-run. One display at the runner's own scale: "mixed scaling:
+  # not measured (one display)" and "second scale: not measured" are the lines.
+  #
+  # It runs ONLY on a dispatch that names it (`probe_p21`), never on a pull
+  # request or a push, and is not a required check. It is a measurement: it is
+  # green whenever the probe ran to its end, whatever the verdict says; it is red
+  # only when the probe could not run (the lines say why). It only reads: no
+  # secret, read-only permissions, no npm package installed (the probe uses
+  # node's own modules), the actions pinned by commit like the Helper job's.
+  # Each run's pictures are read and deleted at once by the probe; what is uploaded as
+  # probe-p21-<os> is the readings and the verdict, no picture.
+  # tests/unit/scripts/probe-p21-job.test.ts evaluates its condition.
+  probe-p21:
+    if: github.event_name == 'workflow_dispatch' && inputs.probe_p21 == true
+    name: Probe P21 (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2025]
+    env:
+      CARGO_TERM_COLOR: never
+      CARGO_INCREMENTAL: '0'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Install the pinned Rust toolchain
+        shell: bash
+        working-directory: helper
+        run: |
+          rustup show active-toolchain || rustup toolchain install
+          rustc --version
+          cargo --version
+
+      - name: Build the helper (release)
+        shell: bash
+        working-directory: helper
+        run: cargo build --locked --release --bin aicc-helper
+
+      # `measure` exits 0 when it ran to its end and 2 when it could not run; the
+      # verdict is read from the readings after it. The lines go to the log and to
+      # the job summary.
+      - name: Run probe P21
+        shell: bash
+        env:
+          P21_OUT: ${{ runner.temp }}/probe-p21
+        run: |
+          mkdir -p -- "$P21_OUT"
+          rc=0
+          verdict=''
+          log=$(node helper/probes/p21-capture.cjs measure --helper helper/target/release/aicc-helper.exe --out "$P21_OUT" --label ci-console --session console) || rc=$?
+          echo "$log"
+          if [ "$rc" = 0 ]; then
+            verdict=$(node helper/probes/p21-capture.cjs verdict --out "$P21_OUT" --console ci-console --ssh-not-run "the runner has no SSH session; WINDOWS_1's reading stands (FAILS CLEANLY, ADR-030)" --second-scale "the job does not change the runner's display scale") || rc=$?
+            echo "$verdict"
+          fi
+          {
+            echo '### Probe P21: the console reading on the runner'
+            echo
+            echo '```text'
+            echo "$log"
+            echo "$verdict"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit "$rc"
+
+      - name: Upload the readings and the verdict
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: probe-p21-${{ matrix.os }}
+          path: ${{ runner.temp }}/probe-p21
           if-no-files-found: warn
           retention-days: 30
 
