@@ -18,20 +18,26 @@ above Claude Code's banner: after the grow they were neither on screen nor in th
   hidden, no `ESC[?25l` or `ESC[?25h`): the shell's rows with text are kept, and one blank row under
   them takes the console's blank top row.
 - **The fix** (consoleRepaint.ts, `keepRowsAboveTop`). When the bottom-up placement does not apply,
-  the paint's top lines are looked for top down on xterm's screen, from its second row to the row
+  the paint's top lines are looked for top down on xterm's screen, from its top row to the row
   above its cursor: the first row where they begin, with at least 2 lines with text in common
-  before the first line that differs. xterm's rows above that row go to its scrollback, then the
-  paint is written as it came. Rows above the first such row are not on the console's screen, so
-  none is painted again. pg-pcc: the 11 rows (9 at 140 columns) are the scrollback, the banner is
+  before the first line that differs. A match on the top row is a paint already in place, written
+  as it came (the review found the search started on the second row: a block shown twice, the
+  upper copy on the top row, moved 4 rows that the paint drew again). Otherwise xterm's rows above
+  that row go to its scrollback, then the paint is written as it came. Rows above the first such
+  row are not on the console's screen, so none is painted again. pg-pcc: the 11 rows (9 at 140 columns) are the scrollback, the banner is
   xterm's top row, and the screen and cursor are as the paint left them. Every other paint is
   written as before.
-- **Tests.** `tests/unit/renderer/console-repaint-claude-code.test.ts` (19 tests, fixture
+- **Tests.** `tests/unit/renderer/console-repaint-claude-code.test.ts` (20 tests, fixture
   `console-repaint-cc-streams.ts`): each recording whole and the VM's reading on both paths;
   pg-pcc's shell lines lost today and kept once each through the aligner; small terminals for the
-  new branch and for paints still written as they came. Red against the aligner at 9bfcf0b6: 5 of
-  19. Mutants: the branch dropped (5 red), 1 line with text instead of 2 (1 red), the cursor bound
-  dropped (1 red), bottom up instead of top down (1 red). M1's plain-terminal recordings
-  (`console-repaint-after-resize.test.ts`) stay ALL-OK.
+  new branch and for paints still written as they came, among them a block shown twice with the
+  upper copy on xterm's top row, and the alternate screen holding the program's rows (so only its
+  type stops the branch). Red against the aligner at 9bfcf0b6: 5 of 20. Mutants measured at the
+  first head (19 tests): the branch dropped (5 red), 1 line with text instead of 2 (1 red), the
+  cursor bound dropped (1 red), bottom up instead of top down (1 red). Mutants measured on the
+  review fix (20 tests): the search from the second row (the first head's code, 1 red), the
+  top-row null dropped (2 red), the alternate screen's type check dropped (1 red). M1's
+  plain-terminal recordings (`console-repaint-after-resize.test.ts`) stay ALL-OK.
 - **Recorded, no code.** The two-step plain-terminal grow (off2-grow, 103x27 to 140x24 to 140x28)
   loses its 1 oldest line (6660, 3 rows at 103 columns) on both paths, as it came and through the
   aligner: 27 to 24 rows with the cursor on the bottom row moves 3 rows into a scrollback already at

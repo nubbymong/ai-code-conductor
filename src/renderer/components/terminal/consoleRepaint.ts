@@ -349,13 +349,14 @@ function lineFrom(term: RepaintTerminal, start: number): HeldLine | null {
  * its screen again at the new size, such as Claude Code: the console's paint
  * starts at its banner while xterm holds the shell's rows above it): xterm's
  * rows above those lines go to its scrollback, and the paint is written as it
- * came. The lines are found top down, from xterm's second row to the row above
- * its cursor: the first row where the paint's top line starts and the lines
- * after it are xterm's lines after it, at least MIN_TOP_LINES_WITH_TEXT of
- * them with text, before the first line that differs (a line the program drew
- * again at the new width) or the cursor's row (xterm does not re-wrap it).
- * Rows above the first such row are not on the console's screen, so none of
- * them is painted again. Null when there is no such row.
+ * came. The lines are found top down, from xterm's top row (a match there is a
+ * paint already in place: null) to the row above its cursor: the first row
+ * where the paint's top line starts and the lines after it are xterm's lines
+ * after it, at least MIN_TOP_LINES_WITH_TEXT of them with text, before the
+ * first line that differs (a line the program drew again at the new width) or
+ * the cursor's row (xterm does not re-wrap it). Rows above the first such row
+ * are not on the console's screen, so none of them is painted again. Null when
+ * there is no such row.
  */
 function keepRowsAboveTop(read: Paint, paint: string, term: RepaintTerminal): string | null {
   const buf = term.buffer.active
@@ -363,7 +364,7 @@ function keepRowsAboveTop(read: Paint, paint: string, term: RepaintTerminal): st
   if (lines.length > term.rows || !Number.isInteger(buf.cursorY)) return null
   const top = buf.baseY
   const cursorRow = top + buf.cursorY
-  for (let start = top + 1; start < cursorRow; start++) {
+  for (let start = top; start < cursorRow; start++) {
     let row = start
     let withText = 0
     for (const line of lines) {
@@ -373,6 +374,7 @@ function keepRowsAboveTop(read: Paint, paint: string, term: RepaintTerminal): st
       row = held.end + 1
     }
     if (withText < MIN_TOP_LINES_WITH_TEXT) continue
+    if (start === top) return null
     return '\x1b[?25l' + `\x1b[${term.rows};1H` + '\n'.repeat(start - top) + paint
   }
   return null

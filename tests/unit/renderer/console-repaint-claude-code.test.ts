@@ -261,13 +261,26 @@ describe('another program\'s paint is written as it came, as before', () => {
     expect(alignConsoleRepaint(programPaint(['HEADER A', 'HEADER B']), term)).toBeNull()
   })
 
+  it('top lines already on xterm\'s top row, and the same two lines again lower on the screen: the paint is in place, no row lands twice', async () => {
+    // A block shown twice (the same banner after a program ran twice): the
+    // lower copy is not where the paint starts.
+    const term = await programTerminal({ head: ['HEADER A', 'HEADER B', 'x', 'y'] })
+    const paint = programPaint(['HEADER A', 'HEADER B', 'x', 'y', 'HEADER A', 'HEADER B'])
+    const out = alignConsoleRepaint(paint, term)
+    expect(out).toBeNull()
+    await write(term, out ?? paint)
+    expect([term.buffer.active.baseY, count(term, 'x'), count(term, 'y')]).toEqual([0, 1, 1])
+  })
+
   it('a paint with more lines than the screen has', async () => {
     expect(alignConsoleRepaint(programPaint(['HEADER A', 'HEADER B'], 12), await programTerminal())).toBeNull()
   })
 
-  it('the alternate screen', async () => {
-    const term = await programTerminal()
-    await write(term, '\x1b[?1049h')
+  it('the alternate screen, holding the shell\'s rows and the program\'s screen', async () => {
+    // The rows are drawn on the alternate screen, so only its type stops the
+    // branch: line breaks on its bottom row would drop its top rows, not keep them.
+    const term = new Terminal({ cols: 30, rows: 10, scrollback: 100, allowProposedApi: true })
+    await write(term, '\x1b[?1049h\x1b[H' + ['$ shell 1', 'shell 2', '$ start program', 'HEADER A', 'HEADER B', '', '-'.repeat(20), '> input'].join('\r\n'))
     expect(alignConsoleRepaint(programPaint(['HEADER A', 'HEADER B']), term)).toBeNull()
   })
 })
