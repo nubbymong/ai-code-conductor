@@ -46,6 +46,7 @@ const P = req('./p11-probe.cjs') as {
   forX12: (claude: Record<string, { verdict: string }> | undefined) => string
   sanitizer: (pairs: Array<[string, string]>) => (v: unknown) => unknown
   RULES: Record<string, Array<{ label: string; re: RegExp; keys: string[] | ((text: string) => string[]) }>>
+  READY: Record<string, RegExp>
 }
 const S = req('./p11-model-stand-in.cjs') as {
   classify: (path: string, body: unknown) => { api: string; kind: string; run: string | null; images: Img[]; text: string | null } | null
@@ -192,6 +193,13 @@ describe('P11: the screens a CLI shows before its prompt', () => {
     expect(rule.re.test(offer(1))).toBe(true)
     expect((rule.keys as (t: string) => string[])(offer(1))).toEqual(['\u001b[B'])
     expect((rule.keys as (t: string) => string[])(offer(2))).toEqual(['\r'])
+  })
+  it("Codex is ready at its composer with the model's name in the footer, written in capitals as 0.157.1 writes it", () => {
+    // The test machine's screen in the P11 run of 2026-11-23 (the folder shortened).
+    const screen = ['› Ask Codex to do anything', '  GPT-5.5 default · ~\\AppData\\Local\\Temp\\p11-x\\codex-paste-1\\work', '  ? for shortcuts'].join('\n')
+    expect(P.READY.codex.test(screen)).toBe(true)
+    // The composer alone (the session not yet ready) is not enough.
+    expect(P.READY.codex.test('› Ask Codex to do anything\n  ? for shortcuts')).toBe(false)
   })
 })
 

@@ -437,8 +437,10 @@ function prepare(ctx, cli, dirs) {
 const READY = {
   claude: /(?:^|\n) {0,2}\u2500{8,} *\n {0,2}[\u276f>](?:[ \u00a0][^\n]*)?\n {0,2}\u2500{8,}/u,
   // The composer, and the model's name in the footer under it (the session
-  // ready; the composer alone shows before it, P19).
-  codex: new RegExp(`(?:^|\\n) ?\\u203a(?:[ \\n]|$)[\\s\\S]*\\n {1,4}${CODEX_MODEL.replace(/\./g, '\\.')} [^\\n]*\\u00b7`, 'u'),
+  // ready; the composer alone shows before it, P19). Codex 0.157.1 writes the
+  // name in capitals there ("GPT-5.5 default ·"), so the name is matched in
+  // any case.
+  codex: new RegExp(`(?:^|\\n) ?\\u203a(?:[ \\n]|$)[\\s\\S]*\\n {1,4}${CODEX_MODEL.replace(/\./g, '\\.')} [^\\n]*\\u00b7`, 'iu'),
 };
 const BUSY = /esc to interrupt/i;
 /** Screens each CLI may show before its prompt, and what answers each. */
@@ -769,5 +771,5 @@ if (require.main === module) {
 // For tests/unit/scripts/probe-p11.test.ts, which loads this file without
 // running it.
 module.exports = {
-  FORMS, CLIS, RULES, PICTURE, PICTURE_INFO, appPictureName, writesFor, samePicture, outcomeOf, overall, formVerdict, forX12, ownedProcesses, sanitizer, codeDigests,
+  FORMS, CLIS, READY, RULES, PICTURE, PICTURE_INFO, appPictureName, writesFor, samePicture, outcomeOf, overall, formVerdict, forX12, ownedProcesses, sanitizer, codeDigests,
 };
