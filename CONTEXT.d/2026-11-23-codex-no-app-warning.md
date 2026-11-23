@@ -34,3 +34,6 @@ hold. In `src/main/providers/codex/spawn.ts`.
 - **Tests.** `tests/unit/providers/codex/spawn-daemon-auto-start.test.ts`: the key on each route,
   once, in place; unchanged launches; the `--strict-config` case. Red on the old code, and under
   three mutants (the wiring, the embedded check, the strict check).
+  `tests/unit/providers/codex/spawn-hooks.test.ts` pins the key once, as the last two arguments,
+  on a launch whose only app `-c` entries are its hooks: red on the old code and under a fourth
+  mutant (the key's push moved above the hooks block).
