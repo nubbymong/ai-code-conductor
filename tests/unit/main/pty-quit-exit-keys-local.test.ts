@@ -228,7 +228,8 @@ describe('quitting the app with local sessions open', () => {
 
   // Mutation to prove these can fail: type Claude Code's keys into every
   // session, as 4252cbfc did; or Codex's as 3d447f1d named them (one Ctrl-C,
-  // at 100 ms), or as 1251d798 did (the second Ctrl-C at 1,100 ms).
+  // at 100 ms). The timing test alone also goes red with the second Ctrl-C at
+  // 1,100 ms, as 1251d798 had it (the first test reads no times).
   it('a local Codex session gets the Codex package\'s keys: Escape, Ctrl-C and Ctrl-C again, and no /exit', () => {
     registerCodex()
     spawnPty(win, 'quit-codex', { cwd: project, provider: 'codex', codexOptions: { permissionsPreset: 'standard' }, codexLaunch: preparedLaunch() } as never)

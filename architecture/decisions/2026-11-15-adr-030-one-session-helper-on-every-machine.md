@@ -196,10 +196,13 @@ Rows are numbered so that "does not own" can name the owner.
   is a service like any other: off means nothing runs, on catches up from
   where it stopped, and a manual Rescan reads everything again. A walk depth
   changes only if the measurement shows it helps.
-- **D19 Quit.** Quitting types `/exit` only into a session where the app
-  started the CLI. Every other tab is closed, which detaches. A session the
-  app wrapped in its own tmux session (SSH Persistent) is detached on quit,
-  never sent `/exit`, whoever started the CLI in it: D13 and Q9 keep it
+- **D19 Quit.** Quitting types a session's exit keys only into a session
+  where the app started the CLI. Since 2.1.3-beta.15 each provider package
+  names its own: Claude Code's are Escape, Ctrl-C and `/exit`; Codex's are
+  Escape at once, Ctrl-C at 30 ms and a backstop Ctrl-C at 1,500 ms, with no
+  `/exit`. Every other tab is closed, which detaches. A session the app
+  wrapped in its own tmux session (SSH Persistent) is detached on quit, never
+  sent its exit keys, whoever started the CLI in it: D13 and Q9 keep it
   running.
 - **D20 Sessions the app did not start.** No new option. Attaching to a tmux
   session started elsewhere already works as a Terminal only SSH config whose
@@ -437,7 +440,9 @@ macOS, a password host, a home mounted `noexec`. Rocky Linux 10: not run. Its on
 limited to 8 s, failed at the address on file and the probe recorded "host off", a label it
 also gave a refused connection and a name that does not resolve, so whether the host was
 off is not known; owed to beta.14, where the same probe runs on it. Rocky Linux 10: not
-run; its one 8 s connect failed on 2026-11-22 (host off); owed to beta.15. Three
+run; its one 8 s connect failed on 2026-11-22 (host off); owed to beta.15. Rocky Linux
+10: not run; its one 8 s connect got no answer on 2026-11-23 (the probe printed "P3 NOT
+RUN: host off" and "P6 NOT RUN: host off"); owed to beta.16. Three
 things in the probe changed after the 2026-11-21 run, none in what it measures: a refused
 connection and an unknown name have labels of their own, a host name with a colon is not run, and a host without pgrep is
 reported as not left as found. The host that answered was left as found: every holder ended, the probe's temporary folder
@@ -708,10 +713,23 @@ which runs only while its user is signed in, was registered and started and did 
 "the task has not run"); it was removed, and nobody was signed in by hand. So the console runs'
 time, sizes, DPI and pixels and the second scale were not measured, and mixed scaling was not
 measured (the machine has one display). What it means, as fixed before measuring: no verdict for
-the console session, so P21 runs again from a signed-in console session before S8 builds Snap's
-Windows overlay on the mode; the SSH half needs nothing. The machine was left as found (no task,
+the console session, so the console half was taken again, on the GitHub Windows runner (next
+paragraph); the SSH half needs nothing. The machine was left as found (no task,
 no file, its scale and name lookups as they were). The probe is `helper/probes/p21-capture.cjs`
 with `p21-windows.ps1`.
+
+P21 console result (2026-11-23, plan 2.1.3-beta.15 B5, the `probe-p21` job of ci.yml on the
+GitHub Windows runner, CI run 45091643024, with the helper that job built in release from the
+same commit). The decision lines are the probe's header's. The runner is Windows Server 2025
+(10.0.26100, image windows-2025-vs2026 20261116.315.1); the reading is from the runner's own
+session (session 2, elevated; whether it is the machine's console session was not read).
+CAPTURES: in 3 of 3 runs the mode exited 0 in 50 to 62 ms and wrote the one display Windows
+listed, 1024 by 768 at 100%, as a picture that is not all black; LogonUI did not run in the
+session. The SSH half was not run there (`P21 SSH: NOT RUN`); the test machine's FAILS CLEANLY
+of 2026-11-22 stands. Not measured: a signed-in user's session that is not elevated (the case
+Snap runs in), Windows 11, a second scale, mixed scaling, more than one display, any size but
+1024 by 768. The probe is `helper/probes/p21-capture.cjs` with `p21-windows.ps1`; the job is
+`probe-p21` in `.github/workflows/ci.yml`.
 
 ## Parked questions
 

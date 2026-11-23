@@ -1442,7 +1442,10 @@ describe('shown again from the middle of its output (2.1.3-beta.12, plan section
    * offers the screen reads asks the holder's size first, and its replay,
    * cut or whole, waits for the tab to be at it; meanwhile no size goes to
    * the holder. The rig's connections ask for `screen` here, as the
-   * manager's do for a plain terminal.
+   * manager's do for a plain terminal. With a tab to tell, the cap's replay
+   * is written at the holder's size (2.1.3-beta.15):
+   * tests/unit/main/session-helper-replay-at-holder-size.test.ts. This
+   * describe keeps the shape with no tab to tell (the notice unset).
    */
   describe("a take-over waits for its tab to be at the holder's size (2.1.3-beta.13, plan section A1)", () => {
     /** The holder offers the screen reads, and its terminal is `cols` by `rows`. */

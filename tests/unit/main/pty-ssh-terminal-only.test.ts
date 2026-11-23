@@ -19,8 +19,8 @@
 //    or an SSH tab where the app never typed the launch line is just closed:
 //    whatever runs on the far side (a tmux session the user attached to, say)
 //    is left as a dropped connection leaves it. A Terminal only tab whose
-//    launch line the app did type gets Claude Code's exit keys, as any SSH
-//    session does.
+//    launch line the app did type gets Claude Code's exit keys too. A
+//    tmux-persistent session is detached, with no keys.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('os', async (importOriginal) => ({ ...(await importOriginal<typeof import('os')>()), platform: () => 'linux' }))

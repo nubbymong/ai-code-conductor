@@ -37,8 +37,9 @@ const PROMPT = 'PS C:\\fixture\\long-lines\\work\\resizes>'
 const Y = 'y'.repeat(250)
 const PAINT_START = '\x1b[?25l\x1b[H'
 /** The start of a paint whose first cell is in a colour the console did not
- *  last send: the colour comes before the cursor home (M1's Claude Code tab
- *  recordings begin `ESC[?25l ESC[38;2;215;119;87m ESC[H`). */
+ *  last send: the colour comes before the cursor home (5 of the 9 paints in
+ *  M1's Claude Code tab recordings begin
+ *  `ESC[?25l ESC[38;2;215;119;87m ESC[H`). */
 const PAINT_START_COLOURED = '\x1b[?25l\x1b[33m\x1b[H'
 const PAINT_END = '\x1b[?25h'
 

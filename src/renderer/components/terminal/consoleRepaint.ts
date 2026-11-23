@@ -103,7 +103,8 @@ interface Paint {
   /** Where the top line's text ends in the paint: at the first line break, or
    *  at the paint's own cursor position when it has one line only. */
   topEnd: number
-  /** The colour and title sequences inside the top line: written when its
+  /** The colour the console sent before its cursor home, when it sent one,
+   *  and the colour and title sequences inside the top line: written when its
    *  text is not, so what follows it draws in the colours the console meant. */
   topKeep: string
   /** The paint ends by placing its cursor at a row and column. */

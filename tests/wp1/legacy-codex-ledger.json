@@ -8288,7 +8288,7 @@
       ],
       "category": "TEST",
       "disposition": "added",
-      "evidence": "new test for 2.1.3-beta.4 (a quit types the exit keys only into a terminal the app started a CLI in): with the real spawnPty and gracefulExitPty over the real registry, a local Codex session, like a local Claude Code session, still gets Escape, Ctrl-C and /exit on quit, and a terminal tab gets none (WP1.68); tests/unit/main/pty-quit-exit-keys-local.test.ts",
+      "evidence": "new test for 2.1.3-beta.4 (a quit types the exit keys only into a terminal the app started a CLI in), changed in 2.1.3-beta.15 B3 (the keys are the ones the session's provider package names): with the real spawnPty and gracefulExitPty over the real registry, a local Claude Code session gets Escape, Ctrl-C and /exit on quit, a local Codex session gets Escape, Ctrl-C at 30 ms and Ctrl-C again at 1,500 ms and no /exit, and none once its terminal has ended (at 260 ms, or still shutting down at 1,162 ms), and a terminal tab gets none (WP1.68); tests/unit/main/pty-quit-exit-keys-local.test.ts",
       "note": "the Codex package registered as the app ships it with a stand-in session and a stand-in prepared launch; node-pty faked, nothing started"
     },
     {
