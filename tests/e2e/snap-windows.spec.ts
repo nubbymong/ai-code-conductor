@@ -143,9 +143,10 @@ const launches = (): Array<Record<string, unknown>> => {
   } catch { return [] }
 }
 
-/** Terminals drawn by xterm's DOM renderer (GPU rendering off, as
- *  helpers/codex-mode.ts's domTerminal seeds it), so the tab's text can be
- *  read; gpuDefaultOnMigrated keeps the saved false (settingsStore.ts). */
+/** Terminals drawn by xterm's DOM renderer (GPU rendering off, the same two
+ *  settings the other e2e helpers seed for a readable terminal), so the tab's
+ *  text can be read; gpuDefaultOnMigrated keeps the saved false
+ *  (settingsStore.ts). */
 function seedDomTerminal(dataDir: string): void {
   const file = path.join(dataDir, 'resources', 'CONFIG', 'settings.json')
   const settings = JSON.parse(fs.readFileSync(file, 'utf8'))

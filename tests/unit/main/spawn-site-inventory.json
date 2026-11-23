@@ -311,7 +311,7 @@
   "src/main/snap/windows-engine.ts :: spawn(file": {
    "count": 1,
    "how": "app-path",
-   "reason": "Windows only, when the new Snap is the one chosen: the session helper the installer put beside the app (resources/helper, bundledHelperPath), by its full path and only when that file exists, with `capture --out` and a folder the app made under its own user data folder, arguments as a list, no shell, no window, a 2 s bound after which it is ended through its own handle (helper-capture.ts). In an app that is not packaged, the test-only helper path CCC_E2E_SNAP_HELPER when it is set, used only when it is an absolute path (helper-path.ts); a packaged app never reads it. The helper writes the display pictures and exits."
+   "reason": "Windows only, for the new Snap (the default; Previous is a setting away): the session helper the installer put beside the app (resources/helper, bundledHelperPath), by its full path and only when that file exists, with `capture --out` and a folder the app made under its own user data folder, arguments as a list, no shell, no window, a 2 s bound after which it is ended through its own handle (helper-capture.ts). In an app that is not packaged, the test-only helper path CCC_E2E_SNAP_HELPER when it is set, used only when it is an absolute path (helper-path.ts); a packaged app never reads it. The helper writes the display pictures and exits."
   },
   "src/main/tokenomics/fork-tokenomics-worker.ts :: utilityProcess.fork(entry": {
    "count": 1,
