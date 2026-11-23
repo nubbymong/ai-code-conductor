@@ -167,8 +167,9 @@ The CLI or sudo starts `emit` (statusline and hook command, R6, R7), `mcp`
   installs its filter before it reads any socket (threat model 3.10).
   Outliving logout: probe P3 held for 60 s on a Linux host that does not clean up at
   logout (ADR-030); **pending probe P3** for a host that does and for ADR-029's other P3
-  host roles (macOS, a container host). Rocky Linux 10 is owed to beta.15 (its one
-  8 s connect failed on 2026-11-22).
+  host roles (macOS, a container host). Rocky Linux 10 (2026-11-23): P3 held for
+  60 s in 3 of 3 runs of each form, on a second host that does not clean up at logout
+  (KillUserProcesses no, Linger yes).
 - Only the holder outlives a connection; `mcp` lives as long as the CLI, the
   rest for one call. The holder exits when the session ends, a non-detachable
   terminal closes, or a detached session reaches its maximum lifetime.
@@ -363,13 +364,23 @@ has seen; a gap is logged, and noted on the session if a hook event was lost.
   terminal ends or 2 s pass. A take-over on a holder that offers the screen
   reads (section 15) also keeps the replay, cut or whole, until the tab is at
   the holder's size, at most 3 s after it read that size, and sends the holder
-  no size meanwhile (2.1.3-beta.13). Then it writes, in one piece, the cancel
+  no size meanwhile (2.1.3-beta.13). When the tab does not get there within
+  those 3 s (its window changed size between the two runs), from
+  2.1.3-beta.15 the app tells the tab the holder's size and the replay's
+  length just before the replay. The tab writes the replay at the holder's
+  size and is then fitted to its own, and the holder hears the tab's size
+  only after that fit, or 3 s after the replay if the tab gives none. A
+  replay that turns out to have nothing to show sends the tab's size when it
+  comes due. The replay is shown in one piece: the cancel
   character, the attribute reset and one line of its own, "[Earlier output
   of this terminal is no longer held, so it is not shown.]", then only the
   last of the replay that the tab's scrollback keeps (10,000 lines less a
   screen and that line's own rows, cut at the start of a line, or inside a
-  line that alone takes as many or more, or that only empty rows follow), so
-  that line is not pushed out of reach. With the tab at the holder's size and
+  line that alone takes as many or more, or that only empty rows follow; for
+  a replay written at the holder's size into a narrower tab, fewer, since each
+  row rewraps into up to ceil(holder columns / (tab columns less 1)) rows at
+  the fit), so that line is not pushed out of reach. With the tab at the
+  holder's size, or the replay written at that size (2.1.3-beta.15), and
   nothing shown before (2.1.3-beta.13), that line is written on the row above
   the tab's last row and the kept text starts on the last row, where the
   console's cursor was; one clear of the scrollback (CSI 3 J), put in at the
@@ -383,8 +394,11 @@ has seen; a gap is logged, and noted on the session if a hook event was lost.
   alternate screen takes none, and the cut never lands there. Once the
   replay is shown and the program still runs, it asks the program to redraw
   (probe P19): on the console built into Windows by one resize at the tab's
-  own size (that console draws its whole screen again on any resize, and at
-  the same size moves no row under a shell at its prompt); on node-pty's
+  own size (that console draws its whole screen again on any resize, from its
+  own top row, and at the same size moves no row under a shell at its prompt;
+  from 2.1.3-beta.15 the tab writes the paint after a size it sent where it
+  holds the lines, when they match:
+  src/renderer/components/terminal/consoleRepaint.ts); on node-pty's
   bundled ConPTY, macOS and Linux by a resize one row shorter and, 300 ms
   later, back to the tab's size. A replay still coming in at the 2 s cap shows
   what had arrived, and the rest follows untrimmed: the one case where that
@@ -849,7 +863,12 @@ live holder could read as started after its own record. It does not need the
 rule either: a crashed holder's socket there is refused or missing, and both
 are stale. A missing store lists nothing and is not made.
 The app uses list mode at start-up, to attach every held terminal again, and
-for the Machines page.
+for the Machines page. From 2.1.3-beta.15 it also runs it once at a start with
+both helper settings off, no running mark and no agent record, when the
+helper's per-user folder holds a version or staging folder: from the install
+folder (a one-shot run, so no copy is made), and every version folder no
+listed record's `helper` names goes, with the staging folders; a listing that
+fails or does not read removes nothing.
 
 **A connection.** The holder first writes its hello line, then a line end:
 `caps` is `["core","local"]` in a holder from before hook events,
@@ -1331,12 +1350,15 @@ screen shows (ADR-030 row 4). A relay (a connection that opened a tool
 stream) asks for neither: `unknown-type` and a close, as for the terminal
 messages. From 2.1.3-beta.13 a plain terminal's connections ack `screen`,
 and a take-over asks `screen.read` once, before its attach, for the
-holder's size: its replay waits for the tab to be at that size
+holder's size: its replay waits for the tab to be at that size, and from
+2.1.3-beta.15 is written at that size when the tab does not get there
 (src/main/session-helper/helper-pty.ts). From 2.1.3-beta.14 a held Codex
 session's connections ack `screen` and `title`, and the app's composer rule
 for that session reads `screen.read` each time it looks, in place of a pane of
-its own (src/main/providers/codex/session-screen.ts). Nothing else in the app
-asks yet.
+its own (src/main/providers/codex/session-screen.ts). From 2.1.3-beta.15 only
+a connection that acked both reads it: one that acked `screen` alone (a holder
+that offers no `title`) gets main's own pane, since the title's spinner is the
+rule's only busy sign while a reply streams. Nothing else in the app asks yet.
 
 - **`screen.read`** `{id}` is answered `screen.rows`: `cols` and `rows`, the
   screen's size; `cursor` `{row, col}`, the cursor's cell from 0 (its column
@@ -1371,8 +1393,12 @@ asks yet.
   that acked both, `screen.rows` carries `title`: the window title the
   session's output last set with OSC 0 or OSC 2, as xterm.js takes it
   (everything after the first `;`, a later one replacing it; OSC 1, the icon
-  name alone, leaves it), and empty when the output set none. Control
-  characters are dropped, and it is bounded: the screen keeps the first 1 KiB
+  name alone, leaves it), and empty when the output set none. The first C1
+  control (U+0080 to U+009F) in the string ends it at ST (U+009C) and drops
+  it at any other, keeping the earlier title, as xterm.js does (from
+  2.1.3-beta.15); the other control characters are dropped (DEL too, which
+  xterm.js keeps, as no title on the wire holds a control character), and it
+  is bounded: the screen keeps the first 1 KiB
   of an OSC string and its first 16 parts between `;`s, so a title is cut at
   its fifteenth `;`, and at most 1024 characters of it are kept. It is counted
   before the rows in the one message, so it is never left out. A connection
@@ -1399,14 +1425,17 @@ asks yet.
   rest of that run of text sits one cell to the left. It has no line drawing
   character set (`ESC ( 0`), so those characters stay the letters they were
   sent as. A change of width cuts or pads each row, where xterm.js can
-  wrap the lines of its normal screen again. And the title differs in four
-  cases: an OSC 0 or 2 cut short by CAN or SUB still sets the title, where
-  xterm.js drops it; a control character from U+0080 to U+009F inside one is
-  dropped and the title still set, where xterm.js ends the title at U+009C
-  and drops the whole string at any other; a kind of more than 9 digits (ten
-  zeros, say) sets no title, where xterm.js reads it as a number; and U+009D
-  begins no string, so it sets no title, where xterm.js reads it as the start
-  of an OSC.
+  wrap the lines of its normal screen again. And the title differs where the
+  screen's parser (vte 0.15.0) reads a string otherwise than xterm.js, limits
+  of that parser: an OSC 0 or 2 cut short by CAN or SUB still sets the
+  title, where xterm.js drops it (the parser tells only whether BEL ended a
+  string); U+009D begins no string, outside a string or inside one, where
+  xterm.js begins an OSC there; and a string that a C1 control ends in
+  xterm.js (ST, U+009C, which sets its title; any other, which drops it)
+  ends for the screen only at the next BEL, ESC, CAN or SUB, so the rows can
+  differ from that control on (what xterm.js prints or carries out after it
+  is not on the screen's rows), and the title U+009C sets comes then. DEL in
+  a title is dropped, where xterm.js keeps it (above).
 - **The bound.** A CSI parameter above 9999 reaches the screen's parser as
   9999, as main cuts it for its own panes, so a repeat (`CSI n b`) writes at
   most 9999 cells and no other sequence's work grows with its parameter; an

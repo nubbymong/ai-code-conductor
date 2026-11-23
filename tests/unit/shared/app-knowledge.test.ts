@@ -2567,11 +2567,14 @@ describe('the 2.1.3-beta.12 known issues', () => {
     // A program started inside what is held keeps its screen and modes across the trim (replay-tail.ts), so only an earlier one is drawn on the normal screen.
     expect(p).toContain('A full-screen program in it, such as an editor, that started before the output the helper still holds is then drawn on the terminal\'s normal screen instead of its own full screen until you start it again')
     // Narrowed in 2.1.3-beta.13 (aicc_planning#374, #382): at the terminal's size the first kept line is whole.
-    expect(p).toContain('On Windows, when the tab comes back at the size the terminal had (it waits up to about 3 seconds for that), the first kept line starts at the start of a line, right under the notice.')
-    expect(p).toContain('When it does not (the window\'s size changed between the two runs, or the tab did not get there in time), a Windows console\'s long lines can come back broken, and the line right after the notice can start part-way, with a few stray characters')
+    // 2.1.3-beta.15 (aicc_planning#392, #394): a tab that does not get to that size has the kept output
+    // written at it, then is fitted to its own; the shapes the console repaint aligner leaves as before are named.
+    expect(p).toContain('On Windows, the tab first takes the size the terminal had (it waits up to about 3 seconds for that); when it does not get there (the window\'s size changed between the two runs), the kept output is written at that size and the tab is then fitted to its own.')
+    expect(p).toContain('Either way the first kept line starts at the start of a line, right under the notice, and a Windows console\'s long lines come back whole, unless the program in it has the cursor hidden or draws its own screen, or a command longer than one row is typed at its prompt (measured on Windows 11 build 22621).')
+    expect(p).not.toContain('can come back broken')
     expect(p).not.toContain('The line right after the notice can start part-way')
     // 2.1.3-beta.13 fix round: the cases where the first line starts part-way at any size, on any system.
-    expect(p).toContain('that line can also start part-way on any system: when the output the helper still holds takes fewer rows than the tab keeps (nothing is cut then, and it is shown from the first character still held), when a single line is longer than the tab keeps, or when the notice shows in a terminal that was already showing output because the app fell behind.')
+    expect(p).toContain('The line right after the notice can still start part-way, with a few stray characters, on any system: when the output the helper still holds takes fewer rows than the tab keeps (nothing is cut then, and it is shown from the first character still held), when a single line is longer than the tab keeps, or when the notice shows in a terminal that was already showing output because the app fell behind.')
     expect(p).toContain('Workaround: quit the full-screen program and start it again.')
     expect(body('machines')).toContain('what a held terminal shows when its earlier output is no longer held')
   })
@@ -2650,6 +2653,47 @@ describe('the 2.1.3-beta.12 sweep', () => {
     expect(entry.highlights).toContain('asks its program, if it is still running, to draw its screen again.')
     // Each switch is named with its default, so no line says more than shipped.
     expect(entry.changes.filter((c) => c.description.includes('off by default'))).toHaveLength(2)
+    for (const text of notes()) {
+      expect(text, text.slice(0, 40)).not.toMatch(/—/)
+      expect(text, text.slice(0, 40)).not.toMatch(/\bCodex tab\b/)
+    }
+  })
+})
+
+// 2.1.3-beta.15 sweep (aicc_planning#393, ADR-030 S14): a quit's exit keys
+// come from each provider package, so the Guide and the Terminal only SSH tip
+// say whose keys go where; and the release notes, so a later edit cannot drop
+// them silently.
+describe('the 2.1.3-beta.15 sweep', () => {
+  const body = (id: string) => APP_KNOWLEDGE_SECTIONS.find((x) => x.id === id)!.body
+  const entry = changelog.find((e) => e.version === '2.1.3-beta.15')!
+  const notes = () => [entry.highlights ?? '', ...entry.warnings!, ...entry.changes.map((c) => c.description)]
+
+  it('the quit paragraph names each assistant\'s exit keys, and no longer says every session gets /exit (aicc_planning#393)', () => {
+    const quit = body('sessions').split('\n\n').find((x) => x.startsWith('Quitting the app.'))!
+    expect(quit).toContain('by typing that assistant\'s exit keys into it (Escape, Ctrl-C and /exit for Claude Code; Escape, Ctrl-C and a second Ctrl-C a moment later for Codex)')
+    expect(quit).not.toContain('by typing Escape, Ctrl-C and /exit into it')
+    const tip = TIPS_LIBRARY.find((t) => t.id === 'tip.terminal-only-ssh')!.variants.primary
+    expect(tip.body).toContain('The app types **the assistant\'s exit keys** only into sessions where it started the assistant itself.')
+    expect(tip.body).not.toContain('Escape, Ctrl-C and /exit')
+  })
+
+  it('the release notes carry the series warning, the two minutes, the way back and every change line', () => {
+    const w = entry.warnings!.join('\n')
+    expect(w).toContain("This beta series begins moving the app's background services")
+    expect(w).toContain('only if the new version opens within two minutes of the old one closing')
+    expect(w).toContain('To go back to 2.1.3-beta.14')
+    const all = entry.changes.map((c) => c.description).join('\n')
+    for (const said of [
+      'On Windows, a terminal at its prompt that you make larger now keeps its last lines.',
+      'Not changed: a resize while a program has the cursor hidden or draws its own screen, such as Claude Code, or while a command longer than one row is typed at the prompt. (Measured on Windows 11 build 22621; other Windows builds were not measured.)',
+      'at the tab\'s own size, not in the background at 80 columns',
+      'With both session helper switches off, a start now removes the helper copies that earlier updates left behind.',
+      'Quitting the app with a Codex session open could wait five seconds and then force-close Codex; it no longer does.',
+      '(measured with Codex CLI 0.157.1 on Windows 11 build 22621)',
+      'On macOS, the session helper no longer fails when a connection has already closed before it is set up.',
+    ]) expect(all).toContain(said)
+    expect(entry.changes).toHaveLength(5)
     for (const text of notes()) {
       expect(text, text.slice(0, 40)).not.toMatch(/—/)
       expect(text, text.slice(0, 40)).not.toMatch(/\bCodex tab\b/)

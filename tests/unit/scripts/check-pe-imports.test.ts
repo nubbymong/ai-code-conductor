@@ -488,8 +488,20 @@ describe('every Windows build of the shipped helper is checked right after it is
         })
       }
     }
-    // The two files that build the shipped helper, and no other.
-    expect(builds).toEqual({ '.github/workflows/ci.yml': 2, '.github/workflows/release.yml': 1 })
+    // The two files that build the shipped helper, and no other. ci.yml builds it
+    // three times on Windows: the Helper job, the release/* test installer and
+    // the dispatch-only Probe P21 job, which measures the program it builds.
+    expect(builds).toEqual({ '.github/workflows/ci.yml': 3, '.github/workflows/release.yml': 1 })
+  })
+
+  it('ci.yml Probe P21: after the release build, before the probe measures it', () => {
+    const steps = stepsOf(wf['.github/workflows/ci.yml'].jobs['probe-p21'])
+    const build = steps.findIndex((s) => s.name === 'Build the helper (release)')
+    expect(build).toBeGreaterThan(0)
+    const check = steps[build + 1]
+    expect(isCheck(check), JSON.stringify(check)).toBe(true)
+    expect(check.if).toBe(steps[build].if)
+    expect(steps.findIndex((s) => s.name === 'Run probe P21')).toBeGreaterThan(build + 1)
   })
 })
 

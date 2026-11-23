@@ -231,6 +231,13 @@ export interface TelemetrySource {
   recheckShared?(): boolean
 }
 
+/** 2.1.3-beta.15 B3 (aicc_planning#393): one key a quit types into a
+ *  session's CLI: `data`, written `atMs` after the quit began. */
+export interface ExitKey {
+  readonly data: string
+  readonly atMs: number
+}
+
 export interface HistorySession {
   provider: ProviderId
   sessionId: string
@@ -251,6 +258,11 @@ export interface SessionProvider {
    *  the launch command has been written yet (Claude reads more of the screen
    *  as its UI once it has; absent = it has). */
   detectUiRunning(data: string, commandSent?: boolean): boolean
+  /** 2.1.3-beta.15 B3 (aicc_planning#393): the keys a quit types into this
+   *  provider's CLI when the app started it, in order, each at its time from
+   *  the quit's start. Only the session input module types them
+   *  (sendExitKeys, for the PTY manager's gracefulExitPty). */
+  readonly exitKeys: readonly ExitKey[]
 
   /** Optional -- Claude only; Codex has no statusline shim. */
   deployStatuslineScript?(resourcesDir: string): Promise<void>

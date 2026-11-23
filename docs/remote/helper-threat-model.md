@@ -87,7 +87,13 @@ rollback returns to the earlier beta's rows, and every row has a negative test.
   `hold`, `list` and `selftest`) the app hashes the copy and compares it with
   the installed file's SHA-256, taken at start; a mismatch is copied again
   once, and a second mismatch marks the helper failed and starts nothing
-  through it. A holder's hello must name the nonce from its record, and the
+  through it. A start with both helper settings off, no running mark and no
+  agent record makes no copy; when the per-user folder holds a version or
+  staging folder, the app runs the installed file itself once, for `list` (as
+  it runs `version`), and removes every version folder whose version no
+  listed holder names, with the staging folders. A listing that fails or does
+  not read, or a settings file that cannot be read, removes nothing (from
+  2.1.3-beta.15). A holder's hello must name the nonce from its record, and the
   app writes nothing to the endpoint before that hello has been read. This
   catches a corrupted or swapped copy; like the remote case it does not stop
   the same user, who can already run any program as themselves.
@@ -565,7 +571,9 @@ rollback returns to the earlier beta's rows, and every row has a negative test.
   for the same session), its modes as fixed words and yes or no values,
   never bytes the app passes on, and (from 2.1.3-beta.14, only to a
   connection that acked `title` beside `screen`) the window title the
-  output last set, its control characters dropped, at most 1024 characters
+  output last set, with no control character in it (from 2.1.3-beta.15 the
+  first C1 control ends its string at U+009C and drops it at any other, as
+  xterm.js does; the others are dropped), at most 1024 characters
   and never more than the first 1 KiB of its OSC string. A read reaches only its own holder's screen
   (a holder serves one session), may be made by any connection of the same
   user that acked `screen` (the endpoint's boundary, above), never by a
@@ -710,7 +718,8 @@ rollback returns to the earlier beta's rows, and every row has a negative test.
   `scripts/check-pe-imports.mjs` fails a build that imports one at load
   time). Tested in `helper/tests/capture.rs`
   and the unit tests of `helper/src/capture.rs`; probe P21 measures it on the
-  test machine. An adversarial pass of it is owed to the security round
+  test machine and, for the console half, on the GitHub Windows runner. An
+  adversarial pass of it is owed to the security round
   before 2.1 stable (aicc_planning #320), before the app runs it.
 
 ## 4 Review

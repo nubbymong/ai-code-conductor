@@ -110,7 +110,8 @@ export function openCodexScreen(sessionId: string, opts: { cols: number; rows: n
 }
 
 /** B2: a held run's first byte. The holder's read when its terminal is on a
- *  holder whose connection reads the screen, else the pane, opened now. */
+ *  holder whose connection reads the screen and its title, else the pane,
+ *  opened now. */
 function decideAtFirstByte(sessionId: string, run: RunScreen, held: () => HeldScreenRead | undefined): void {
   let read: HeldScreenRead | undefined
   try { read = held() } catch { read = undefined }

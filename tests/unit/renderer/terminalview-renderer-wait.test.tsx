@@ -16,6 +16,8 @@
  *
  * Guards that pass on the old view by design: GPU rendering off, and an
  * inactive pane, spawn on the first fit frame (no WebGL is attached there).
+ * Every pane here has a size; one hidden before its fit waits for its size
+ * first (aicc_planning#398, terminalview-hidden-before-fit.test.tsx).
  * Harness: terminalview-account-launch.test.tsx's mocks.
  */
 import React from 'react'
@@ -256,7 +258,7 @@ describe('the first fit waits for the pane\'s renderer (aicc_planning#374, P1.1)
     expect(spawnedCols()).toEqual([[93, 27]])
   })
 
-  it('an inactive pane: no WebGL is attached to it, so it spawns on the first fit frame', async () => {
+  it('an inactive pane with a size: no WebGL is attached to it, so it spawns on the first fit frame', async () => {
     mount(false)
     await buildAndFitBeforeEffects()
     expect(H.MockWebgl.built).toBe(0)

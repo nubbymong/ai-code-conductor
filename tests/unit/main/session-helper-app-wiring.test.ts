@@ -32,10 +32,19 @@ const h = vi.hoisted(() => ({
   serveStream: vi.fn((_id: string, _link: unknown) => true),
   switchMcp: vi.fn((_a: unknown) => 'switched'),
   providers: {} as Record<string, unknown>,
+  /** 2.1.3-beta.15 (B1): what readConfigChecked says of a settings file that gives nothing (settings null). */
+  settingsOutcome: 'failed' as 'absent' | 'unparseable' | 'failed',
+  /** Each start-up clean-up of old copies begun, with what it was given. */
+  cleanUps: [] as Array<{ root: string; bundled: string; stop: () => boolean }>,
+  /** Set: a clean-up ends only once this settles (a slow listing). */
+  cleanUpGate: null as Promise<void> | null,
 }))
 
 vi.mock('electron', () => ({ app: { isPackaged: false, getAppPath: () => 'C:\\app' } }))
-vi.mock('../../../src/main/config-manager', () => ({ readConfig: () => { if (h.settings === null) throw new Error('unreadable'); return h.settings } }))
+vi.mock('../../../src/main/config-manager', () => ({
+  readConfig: () => { if (h.settings === null) throw new Error('unreadable'); return h.settings },
+  readConfigChecked: () => (h.settings === null ? { value: null, outcome: h.settingsOutcome } : { value: h.settings, outcome: 'ok' }),
+}))
 vi.mock('../../../src/main/debug-logger', () => ({ logInfo: () => {} }))
 vi.mock('../../../src/main/ipc/machines-handlers', () => ({ setMachinesSource: h.machinesSource }))
 vi.mock('../../../src/main/hooks/per-session-settings', () => ({
@@ -77,6 +86,11 @@ vi.mock('../../../src/main/session-helper/manager', () => {
     crashMarkIn: (root: string) => { h.crashMarkAsked.push(root); return h.crashMark },
     agentRecordsIn: (root: string) => { h.agentRecordsAsked.push(root); return h.agentRecords },
     setSessionHelper: (m: unknown) => { h.current = m },
+    removeOldCopiesWithHelperOff: async (opts: { root: string; bundled: string; stop: () => boolean }) => {
+      h.cleanUps.push(opts)
+      if (h.cleanUpGate) await h.cleanUpGate
+      return []
+    },
   }
 })
 
@@ -98,6 +112,9 @@ beforeEach(() => {
   h.savedState = null
   h.savedStateReads = 0
   h.updateEnds = Promise.resolve()
+  h.settingsOutcome = 'failed'
+  h.cleanUps.length = 0
+  h.cleanUpGate = null
 })
 
 describe('session helper wiring', () => {
@@ -204,6 +221,73 @@ describe('session helper wiring', () => {
     expect(h.made[0].noteSavedTabs).toHaveBeenLastCalledWith([])
     shutdownSessionHelper()
     expect(h.made[0].shutdown).toHaveBeenCalledTimes(1)
+  })
+})
+
+// 2.1.3-beta.15 (plan section B1, aicc_planning#397): a start with both
+// switches off and nothing to end removes the old helper copies an earlier
+// run left. The clean-up itself (manager.ts removeOldCopiesWithHelperOff) is
+// a fake here; it is checked in session-helper-old-copies.test.ts.
+describe('the start-up clean-up of old helper copies (B1)', () => {
+  it('both off with nothing to end: one clean-up, in the helper\'s folder, with the installed helper, and no manager; a settings file that is not there counts as off', () => {
+    initSessionHelper(() => {})
+    expect(h.cleanUps).toHaveLength(1)
+    expect(h.cleanUps[0]).toMatchObject({ root: 'C:\\user\\helper', bundled: 'C:\\app\\helper\\aicc-helper.exe' })
+    expect(h.cleanUps[0].stop()).toBe(false)
+    h.settings = null
+    h.settingsOutcome = 'absent'
+    initSessionHelper(() => {})
+    expect(h.cleanUps).toHaveLength(2)
+    expect(h.made).toHaveLength(0)
+  })
+
+  it('a settings file that is there and cannot be read, or does not parse (both off to routing()), begins no clean-up', () => {
+    for (const outcome of ['failed', 'unparseable'] as const) {
+      h.settings = null
+      h.settingsOutcome = outcome
+      initSessionHelper(() => {})
+    }
+    expect(h.cleanUps).toHaveLength(0)
+    expect(h.made).toHaveLength(0)
+  })
+
+  it('a switch on, a crash mark or an agent record at start-up: no clean-up, and the manager comes up as before', () => {
+    h.settings = { plainTerminalsThroughHelper: true }
+    initSessionHelper(() => {})
+    h.settings = {}
+    h.crashMark = true
+    initSessionHelper(() => {})
+    h.crashMark = false
+    h.agentRecords = true
+    initSessionHelper(() => {})
+    expect(h.cleanUps).toHaveLength(0)
+    expect(h.made).toHaveLength(1)
+    expect(h.made[0].start.mock.calls).toEqual([
+      [{ atStartup: true, plain: true, agents: false }],
+      [{ atStartup: true, plain: false, agents: false }],
+      [{ atStartup: true, plain: false, agents: false }],
+    ])
+  })
+
+  it('a switch turned on while the clean-up runs: the clean-up stops once the manager exists, and the manager copies only once the clean-up has ended', async () => {
+    let release!: () => void
+    h.cleanUpGate = new Promise<void>((r) => { release = r })
+    initSessionHelper(() => {})
+    const { stop } = h.cleanUps[0]
+    expect(stop()).toBe(false)
+    h.settings = { agentSessionsThroughHelper: true }
+    applySessionHelperSettings()
+    expect(h.made).toHaveLength(1)
+    expect(stop()).toBe(true)
+    const copyAfter = h.made[0].deps.copyAfter as Promise<void>
+    expect(copyAfter).toBeInstanceOf(Promise)
+    let ended = false
+    void copyAfter.then(() => { ended = true })
+    await new Promise((r) => setTimeout(r, 10))
+    expect(ended).toBe(false)
+    release()
+    await copyAfter
+    expect(ended).toBe(true)
   })
 })
 

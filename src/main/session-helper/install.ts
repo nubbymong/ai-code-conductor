@@ -399,9 +399,12 @@ async function removeFolder(folder: string): Promise<void> {
  * its folder, so every folder of such a version is kept, the current
  * version's other builds (another hash) included: a holder an update kept may
  * run from one of them. A spare folder of a kept version goes at a later
- * start, once no holder reports that version. Answers the folders removed.
+ * start, once no holder reports that version. `current` is null for a start
+ * with both settings off (manager.ts removeOldCopiesWithHelperOff): no copy
+ * is current then, so this build's own copy goes too unless a listed holder's
+ * version keeps it. Answers the folders removed.
  */
-export async function removeOldVersionFolders(root: string, current: string, keepVersions: ReadonlySet<string>): Promise<string[]> {
+export async function removeOldVersionFolders(root: string, current: string | null, keepVersions: ReadonlySet<string>): Promise<string[]> {
   let names: string[]
   try {
     names = await fs.promises.readdir(root)

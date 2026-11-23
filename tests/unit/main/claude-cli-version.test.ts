@@ -462,7 +462,12 @@ describe.runIf(process.platform === 'win32')('probeClaudeCliVersion on Windows',
     const cliDir = pathMod.join(dir, 'node_modules', '@anthropic-ai', 'claude-code')
     fsMod.mkdirSync(cliDir, { recursive: true })
     const pidFile = pathMod.join(root, 'grandchild.pid')
-    fsMod.writeFileSync(pathMod.join(cliDir, 'cli.js'), `require('fs').writeFileSync(${JSON.stringify(pidFile)}, String(process.pid)); setTimeout(() => {}, 120000)\n`)
+    // The hung CLI is a node.exe the test knows only by number, so it ends
+    // itself once stopFile exists (or after 120 s): the test never ends it by
+    // its pid, which may be another process's by now, a vitest worker say
+    // (tests/helpers/started-processes.ts).
+    const stopFile = pathMod.join(root, 'grandchild.stop')
+    fsMod.writeFileSync(pathMod.join(cliDir, 'cli.js'), `const fs = require('fs'); fs.writeFileSync(${JSON.stringify(pidFile)}, String(process.pid)); setInterval(() => { if (fs.existsSync(${JSON.stringify(stopFile)})) process.exit(0) }, 100); setTimeout(() => process.exit(0), 120000)\n`)
     fsMod.writeFileSync(pathMod.join(dir, 'claude.cmd'), NODE_SHIM)
     process.env.PATH = `${dir};${nodeDir}`
 
@@ -495,8 +500,9 @@ describe.runIf(process.platform === 'win32')('probeClaudeCliVersion on Windows',
       clearTimeout(raceTimer)
       expect(cmdGone, 'cmd.exe outlived its timed-out probe').toBe(true)
     } finally {
-      // Only a pid last seen ALIVE is ours to kill: a dead one may be reused.
-      if (pid > 0 && alive) { try { process.kill(pid) } catch { /* already gone */ } }
+      // A CLI the probe left running ends itself on its stop file. Not by its
+      // pid: a pid that still answers may be another process's by now.
+      fsMod.writeFileSync(stopFile, '')
       await answer.catch(() => null)
     }
   }, 60_000)

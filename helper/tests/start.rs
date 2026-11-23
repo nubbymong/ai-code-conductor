@@ -45,6 +45,12 @@ mod windows {
 
     const HELPER: &str = env!("CARGO_BIN_EXE_aicc-helper");
     const FAKE: &str = env!("CARGO_BIN_EXE_aicc-fake-cli");
+    /// How long a fake CLI these tests start stays alive, in seconds. Each one is
+    /// ended by its guard (`Started`, `Running`, `Tree`) when its test is done or
+    /// fails, so this only has to outlast the slowest step on a loaded runner: a
+    /// Windows CI run once took longer than the old 10 s between a start and its
+    /// `Win32_Process` read, which then found no process.
+    const LIFE: &str = "120";
 
     static ONE_AT_A_TIME: Mutex<()> = Mutex::new(());
 
@@ -83,6 +89,15 @@ mod windows {
     /// a creation time of digits.
     fn started(ran: &Ran) -> (u32, String) {
         assert_eq!(ran.code, Some(0), "start failed: {}", ran.stderr);
+        // The program runs from here on: if a check below fails, these end it
+        // (with the processes under it, when its creation time reads), read from
+        // the first line even when there are more. Once the checks pass, the
+        // caller's own guards take over.
+        let first = json::parse(ran.stdout.lines().next().unwrap_or_default().trim_end().as_bytes()).ok();
+        let early_pid = first.as_ref().and_then(|v| v.get("pid").and_then(Value::as_u64)).and_then(|p| u32::try_from(p).ok());
+        let early_created = first.as_ref().and_then(|v| v.get("created").and_then(Value::as_str)).filter(|c| !c.is_empty() && c.len() <= 20 && c.bytes().all(|b| b.is_ascii_digit()) && c.parse::<u64>().is_ok()).map(str::to_string);
+        let early_tree = early_pid.zip(early_created).map(|(pid, created)| Tree(pid, created));
+        let early_started = if early_tree.is_none() { early_pid.map(Started) } else { None };
         let line = ran.stdout.trim_end();
         assert!(!line.contains('\n'), "start printed more than one line: {:?}", ran.stdout);
         let v: Value = json::parse(line.as_bytes()).unwrap_or_else(|e| panic!("{line:?} is not JSON: {e:?}"));
@@ -90,7 +105,10 @@ mod windows {
         let pid = v.get("pid").and_then(Value::as_u64).expect("a pid");
         let created = v.get("created").and_then(Value::as_str).expect("a creation time").to_string();
         assert!(!created.is_empty() && created.len() <= 20 && created.bytes().all(|b| b.is_ascii_digit()), "{line}");
-        (u32::try_from(pid).expect("a 32-bit pid"), created)
+        let pid = u32::try_from(pid).expect("a 32-bit pid");
+        std::mem::forget(early_tree);
+        std::mem::forget(early_started);
+        (pid, created)
     }
 
     /// A process this test started through `start`, ended when dropped.
@@ -145,9 +163,10 @@ mod windows {
         let script = format!(
             "$ErrorActionPreference = 'Stop'; $p = Get-CimInstance -ClassName Win32_Process -Filter 'ProcessId={pid}'; [string]$p.ExecutablePath; [string]$p.CreationDate.ToFileTimeUtc()"
         );
+        let t0 = Instant::now();
         let out = Command::new(ps).args(["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script.as_str()]).stdin(Stdio::null()).output().expect("run PowerShell");
         let text = String::from_utf8_lossy(&out.stdout).into_owned();
-        assert!(out.status.success(), "PowerShell failed: {}", String::from_utf8_lossy(&out.stderr));
+        assert!(out.status.success(), "PowerShell failed after {:?} (process {pid} still running: {}): {}", t0.elapsed(), pids::alive(pid), String::from_utf8_lossy(&out.stderr));
         let mut lines = text.lines().map(str::trim).filter(|l| !l.is_empty());
         let exe = lines.next().unwrap_or_default().to_string();
         let created = lines.next().unwrap_or_default().to_string();
@@ -162,11 +181,11 @@ mod windows {
         let ended = end_of_file(read_end);
         // The helper is given the pipe end, as the app's every inheritable
         // handle reaches it, and has exited when this returns.
-        let ran = start(FAKE, &["--sleep", "10"]);
+        let ran = start(FAKE, &["--sleep", LIFE]);
         let (pid, _) = started(&ran);
         let _child = Started(pid);
         // The control: the same program, started the plain way, given the same end.
-        let control = Running(Command::new(FAKE).args(["--sleep", "10"]).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn().expect("start the fake CLI"));
+        let control = Running(Command::new(FAKE).args(["--sleep", LIFE]).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn().expect("start the fake CLI"));
         drop(write_end);
         let early = ended.recv_timeout(Duration::from_millis(500));
         drop(control);
@@ -188,7 +207,7 @@ mod windows {
         // (rounded rather than cut to the microsecond) would differ for about
         // half of them, so eight starts all agreeing by chance is 1 in 256.
         for _ in 0..8 {
-            let ran = start(FAKE, &["--sleep", "10"]);
+            let ran = start(FAKE, &["--sleep", LIFE]);
             let (pid, created) = started(&ran);
             let _child = Started(pid);
             let (exe, app_created) = as_the_app_reads_it(pid);
@@ -218,6 +237,18 @@ mod windows {
             std::thread::sleep(Duration::from_millis(50));
         }
         true
+    }
+
+    /// A program `start` started and the processes under it, ended when dropped
+    /// through the helper's own `end`, which checks the creation time, so a
+    /// pid used again by another process is never touched.
+    struct Tree(u32, String);
+
+    impl Drop for Tree {
+        fn drop(&mut self) {
+            let pid = self.0.to_string();
+            let _ = Command::new(HELPER).args(["end", "--pid", pid.as_str(), "--created", self.1.as_str()]).stdin(Stdio::null()).output();
+        }
     }
 
     /// The pid of the fake CLI that `parent` started, once it is there (at most 5 s).
@@ -258,7 +289,7 @@ mod windows {
     #[test]
     fn it_ends_what_it_started_only_while_the_pid_has_that_start_time() {
         let _serial = one_at_a_time();
-        let (pid, created) = started(&start(FAKE, &["--sleep", "10"]));
+        let (pid, created) = started(&start(FAKE, &["--sleep", LIFE]));
         let _child = Started(pid);
         // Another start time (a microsecond later): the process is left running.
         let other = (created.parse::<u64>().expect("digits") + 10).to_string();
@@ -277,8 +308,11 @@ mod windows {
     #[test]
     fn it_ends_the_processes_under_it_too() {
         let _serial = one_at_a_time();
-        let (pid, created) = started(&start(FAKE, &["--sleep", "10", "--child"]));
+        let (pid, created) = started(&start(FAKE, &["--sleep", LIFE, "--child"]));
         let _root = Started(pid);
+        // The copy under it runs before `_under` exists: if `fake_under` gives
+        // up, this ends the whole tree.
+        let _tree = Tree(pid, created.clone());
         let under = fake_under(pid);
         let _under = Started(under);
         let ran = end(pid, &created);
@@ -301,7 +335,7 @@ mod windows {
     fn it_does_not_wait_for_the_program() {
         let _serial = one_at_a_time();
         let begun = Instant::now();
-        let ran = start(FAKE, &["--sleep", "10"]);
+        let ran = start(FAKE, &["--sleep", LIFE]);
         let (pid, _) = started(&ran);
         let _child = Started(pid);
         assert!(begun.elapsed() < Duration::from_secs(5), "start took {:?}", begun.elapsed());

@@ -3,10 +3,11 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest'
 import { execFileSync, spawn, spawnSync, type ChildProcess } from 'node:child_process'
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { dirname, join } from 'node:path'
+import { basename, dirname, join } from 'node:path'
 import { originalHomeEnv } from '../../helpers/home-guard-core.mjs'
 import { makensisIn, nsisCacheFolders, nsisCachePresent } from '../../helpers/nsis-cache'
 import { escapeRegExp } from '../../helpers/escape-regexp'
+import { askToStop, endSpawned, runs, runsImage, stopWhen, type SpawnedProcess, type StoppableProcess } from '../../helpers/started-processes'
 
 /**
  * BEHAVIOURAL tests for the destructive half of build/installer.nsh.
@@ -1007,13 +1008,43 @@ SectionEnd
 `
 }
 
-const isAlive = (pid: number) => {
-  try {
-    process.kill(pid, 0)
-    return true
-  } catch {
-    return false
+/**
+ * Every process the probes below started, by pid: its ChildProcess, or for one
+ * known only by a pid read from a file (a stand-in's child, the respawned
+ * copy), that pid, its image name and the stop file it ends itself on. The
+ * probes end most of these processes themselves, and Windows gives a freed pid
+ * to another process within seconds (in CI, a vitest worker running another
+ * file: "Worker exited unexpectedly"), so none of them is ever ended by its
+ * bare pid (tests/helpers/started-processes.ts). A pid can be ours more than
+ * once (one stand-in's, then a later one's), so each pid keeps every record.
+ */
+type Ours = ({ spawned: SpawnedProcess } | { stoppable: StoppableProcess }) & { ended?: boolean }
+const ours = new Map<number, Ours[]>()
+function own(pid: number, p: Ours): void {
+  ours.set(pid, [...(ours.get(pid) ?? []), p])
+}
+/**
+ * Ends every process of ours that had this pid and is not ended yet: a spawned
+ * one through its handle, the others through their stop files. One ended once
+ * is left alone after (an earlier describe's, whose folder is gone by now).
+ */
+async function endOurs(pid: number): Promise<void> {
+  for (const p of ours.get(pid) ?? []) {
+    if (p.ended) continue
+    p.ended = 'spawned' in p ? await endSpawned(p.spawned) : await askToStop(p.stoppable)
   }
+}
+/**
+ * Whether the process of ours with this pid still runs: the latest one with
+ * it, as a case asks only about the processes it started itself, and no case
+ * starts one after its probe has run. A spawned one through its ChildProcess,
+ * one known only by number through its image name, never by the bare pid.
+ */
+const isAlive = (pid: number) => {
+  const list = ours.get(pid)
+  if (!list?.length) throw new Error(`process ${pid} is not one this file started`)
+  const p = list[list.length - 1]
+  return 'spawned' in p ? runs(p.spawned) : runsImage(p.stoppable.pid, p.stoppable.image)
 }
 const pause = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
 async function waitGone(pid: number, ms = 5000): Promise<boolean> {
@@ -1034,17 +1065,18 @@ async function waitFor(check: () => boolean, ms = 5000): Promise<boolean> {
 }
 
 /**
- * The idle script a stand-in runs; with a child exe and a pid file, it first
- * starts that child. Detached: Node otherwise puts a child in a job that ends
- * it with its parent (measured on the VM: the no-/T mutant stayed green).
- * Nothing promises that for a holder's OpenConsole.exe, and #317 records a
- * console process outliving a forced end, so the child here has to be able
- * to outlive a stand-in ended alone.
+ * The idle script a stand-in runs; with a child exe, a pid file and a stop
+ * file, it first starts that child. Detached: Node otherwise puts a child in a
+ * job that ends it with its parent (measured on the VM: the no-/T mutant
+ * stayed green). Nothing promises that for a holder's OpenConsole.exe, and
+ * #317 records a console process outliving a forced end, so the child here has
+ * to be able to outlive a stand-in ended alone. The test knows the child only
+ * by number, so the child ends itself once its stop file exists (askToStop).
  */
 const IDLE = 'setInterval(() => {}, 1000)'
 const STARTS_CHILD = [
   "const { spawn } = require('child_process')",
-  "const c = spawn(process.argv[1], ['-e', 'setInterval(() => {}, 1000)'], { detached: true, stdio: 'ignore', windowsHide: true, env: { SystemRoot: process.env.SystemRoot } })",
+  `const c = spawn(process.argv[1], ['-e', ${JSON.stringify(stopWhen(1))}, process.argv[3]], { detached: true, stdio: 'ignore', windowsHide: true, env: { SystemRoot: process.env.SystemRoot } })`,
   'c.unref()',
   "require('fs').writeFileSync(process.argv[2], String(c.pid))",
   IDLE,
@@ -1072,16 +1104,7 @@ describe.skipIf(!MAKENSIS)('installer.nsh behavioural probe: uninstall removes t
   }, 120_000)
 
   afterAll(async () => {
-    for (const pid of started) {
-      if (isAlive(pid)) {
-        try {
-          process.kill(pid)
-        } catch {
-          // already gone
-        }
-        await waitGone(pid)
-      }
-    }
+    for (const pid of started) await endOurs(pid)
     regClear()
     if (uwork) rmSync(uwork, { recursive: true, force: true, maxRetries: 5 })
   }, 60_000)
@@ -1139,13 +1162,16 @@ describe.skipIf(!MAKENSIS)('installer.nsh behavioural probe: uninstall removes t
     const exe = join(folder, name)
     copyFileSync(process.execPath, exe)
     let pidFile: string | undefined
+    let stopFile: string | undefined
     if (child) {
       dir(dirname(child))
       copyFileSync(process.execPath, child)
       pidFile = join(uwork, `child-${started.length}.pid`)
+      stopFile = join(uwork, `child-${started.length}.stop`)
       rmSync(pidFile, { force: true })
+      rmSync(stopFile, { force: true })
     }
-    const proc = spawn(exe, child ? ['-e', STARTS_CHILD, child, pidFile!] : ['-e', IDLE], {
+    const proc = spawn(exe, child ? ['-e', STARTS_CHILD, child, pidFile!, stopFile!] : ['-e', IDLE], {
       detached: true,
       stdio: 'ignore',
       windowsHide: true,
@@ -1154,11 +1180,13 @@ describe.skipIf(!MAKENSIS)('installer.nsh behavioural probe: uninstall removes t
     proc.unref()
     expect(proc.pid, 'the stand-in started').toBeDefined()
     started.push(proc.pid!)
+    own(proc.pid!, { spawned: proc })
     let childPid: number | undefined
     if (pidFile) {
       expect(await waitFor(() => existsSync(pidFile!) && readFileSync(pidFile!, 'utf-8') !== ''), 'the stand-in started its child').toBe(true)
       childPid = Number(readFileSync(pidFile, 'utf-8'))
       started.push(childPid)
+      own(childPid, { stoppable: { pid: childPid, stopFile: stopFile!, image: basename(child!) } })
       expect(isAlive(childPid), 'the child is running before the uninstall').toBe(true)
     } else {
       await pause(500)
@@ -1281,8 +1309,7 @@ describe.skipIf(!MAKENSIS)('installer.nsh behavioural probe: uninstall removes t
     expect(details).toContain('Kept 2.1.3-beta.7-0123456789ab, because a file in it is still in use or was not made by the app.')
     // No holder ran, and the other program is not one.
     expect(details.some((d) => /^No session helper of .+ was running\.$/.test(d)), details.join('\n')).toBe(true)
-    process.kill(pid)
-    await waitGone(pid)
+    await endOurs(pid)
   }, 60_000)
 
   it('leaves every name that only looks like one of the helper folder\'s own', () => {
@@ -1402,8 +1429,7 @@ describe.skipIf(!MAKENSIS)('installer.nsh behavioural probe: uninstall removes t
       for (const [k, p] of Object.entries({ ...t.own, ...t.keep })) expect(existsSync(p), `${k} stays`).toBe(true)
       expect(log).not.toContain('asuser=1')
       expect(details).toEqual([])
-      process.kill(pid)
-      await waitGone(pid)
+      await endOurs(pid)
     }, 60_000)
   }
 
@@ -1514,8 +1540,7 @@ describe.skipIf(!MAKENSIS)('installer.nsh behavioural probe: uninstall removes t
     expect(details).toContain('Kept the session helper folder, because something in it is still in use or was not made by the app.')
     expect(details.some((d) => /did not make is still in it/.test(d)), details.join('\n')).toBe(false)
     expect(existsSync(t.parent), 'the helper folder is still in it').toBe(true)
-    process.kill(pid)
-    await waitGone(pid)
+    await endOurs(pid)
   }, 60_000)
 
   it('never follows a version folder that is a link', () => {
@@ -1656,7 +1681,9 @@ SectionEnd
  *   then closes: a pid the check's first look never saw.
  * - /exit-soon: no window; it exits by itself about 3 seconds after it starts.
  * - anything else: no window at all; it idles for up to 5 minutes, so only
- *   TerminateProcess ends it sooner.
+ *   TerminateProcess ends it sooner, or "<exe>-stop": the respawned copy is
+ *   known to the test only by its pid, so the test ends it with that file and
+ *   never by its pid (tests/helpers/started-processes.ts, askToStop).
  */
 function standInScript(out: string): string {
   return `Unicode true
@@ -1713,6 +1740,9 @@ Section "stand-in"
   \${Else}
     StrCpy $1 0
     \${Do}
+      \${If} \${FileExists} "$EXEPATH-stop"
+        \${ExitDo}
+      \${EndIf}
       Sleep 1000
       IntOp $1 $1 + 1
     \${LoopUntil} $1 >= 300
@@ -1762,16 +1792,7 @@ describe.skipIf(!MAKENSIS)('installer.nsh behavioural probe: the app check close
   }, 120_000)
 
   afterAll(async () => {
-    for (const pid of started) {
-      if (isAlive(pid)) {
-        try {
-          process.kill(pid)
-        } catch {
-          // already gone
-        }
-        await waitGone(pid)
-      }
-    }
+    for (const pid of started) await endOurs(pid)
     regClear()
     // A stand-in's program file stays locked for a moment after it ends.
     if (awork) rmSync(awork, { recursive: true, force: true, maxRetries: 10, retryDelay: 250 })
@@ -1794,6 +1815,7 @@ describe.skipIf(!MAKENSIS)('installer.nsh behavioural probe: the app check close
     proc.unref()
     expect(proc.pid, `${name} started`).toBeDefined()
     started.push(proc.pid!)
+    own(proc.pid!, { spawned: proc })
     if (window !== false && window !== 'exit-soon') expect(await waitFor(() => existsSync(`${exe}-ready`), 10_000), `${name}'s window is up`).toBe(true)
     else await pause(500)
     expect(isAlive(proc.pid!), `${name} is running before the check`).toBe(true)
@@ -1802,12 +1824,7 @@ describe.skipIf(!MAKENSIS)('installer.nsh behavioural probe: the app check close
 
   /** Ends the stand-ins a case left running. */
   async function endAll(pids: number[]) {
-    for (const pid of pids) {
-      if (isAlive(pid)) {
-        process.kill(pid)
-        await waitGone(pid)
-      }
-    }
+    for (const pid of pids) await endOurs(pid)
   }
 
   /**
@@ -1977,6 +1994,8 @@ describe.skipIf(!MAKENSIS)('installer.nsh behavioural probe: the app check close
     const again = Number(readFileSync(pidFile, 'utf-8').trim())
     expect(again, 'its pid').toBeGreaterThan(0)
     started.push(again)
+    // Known only by number: it ends itself on "<exe>-stop" (the stand-in's idle loop).
+    own(again, { stoppable: { pid: again, stopFile: `${respawner.exe}-stop`, image: PROBE_APP_EXE } })
     expect(await waitGone(respawner.pid), 'the first copy closed itself').toBe(true)
     expect(existsSync(`${respawner.exe}-closed`)).toBe(true)
     expect(isAlive(again), 'the fresh copy is still running').toBe(true)
@@ -2406,16 +2425,7 @@ describe.skipIf(!MAKENSIS)('installer.nsh behavioural probe: the uninstaller nam
   }, 120_000)
 
   afterAll(async () => {
-    for (const pid of started) {
-      if (isAlive(pid)) {
-        try {
-          process.kill(pid)
-        } catch {
-          // already gone
-        }
-        await waitGone(pid)
-      }
-    }
+    for (const pid of started) await endOurs(pid)
     // A stand-in's program file stays locked for a moment after it ends.
     if (rwork) rmSync(rwork, { recursive: true, force: true, maxRetries: 10, retryDelay: 250 })
   }, 60_000)
@@ -2447,6 +2457,7 @@ describe.skipIf(!MAKENSIS)('installer.nsh behavioural probe: the uninstaller nam
       expect(proc.pid, 'the held program started').toBeDefined()
       pid = proc.pid!
       started.push(pid)
+      own(pid, { spawned: proc })
       await pause(500)
       expect(isAlive(pid), 'the held program runs').toBe(true)
     }
@@ -2489,10 +2500,7 @@ describe.skipIf(!MAKENSIS)('installer.nsh behavioural probe: the uninstaller nam
   }
 
   async function endHeld(pid: number) {
-    if (isAlive(pid)) {
-      process.kill(pid)
-      await waitGone(pid)
-    }
+    await endOurs(pid)
   }
 
   it('per-user: names the file a running program holds, removes the rest, and sets nothing for the next restart', async () => {
@@ -2589,6 +2597,7 @@ describe.skipIf(!MAKENSIS)('installer.nsh behavioural probe: the uninstaller nam
       proc.unref()
       expect(proc.pid, `the program in ${sub} started`).toBeDefined()
       started.push(proc.pid!)
+      own(proc.pid!, { spawned: proc })
       held.push(exe)
     }
     await pause(500)

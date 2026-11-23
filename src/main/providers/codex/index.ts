@@ -1,7 +1,7 @@
 // Codex provider package: public entry point (WP1, design 7.1). Everything
 // outside this directory imports from here; the dependency-boundary test
 // holds the deep imports at zero.
-import type { SessionProvider, SessionRunScreen, SpawnOptions, TelemetrySource, HistorySession, ProviderSpawnCommand, TelemetryOptions, HeldToolLaunch, HeldToolLaunchAnswer, HeldToolRelay } from '../types'
+import type { SessionProvider, SessionRunScreen, SpawnOptions, TelemetrySource, HistorySession, ProviderSpawnCommand, TelemetryOptions, HeldToolLaunch, HeldToolLaunchAnswer, HeldToolRelay, ExitKey } from '../types'
 import type { LegacyVersion, StatuslineData } from '../../../shared/types'
 import type { AllowanceReading } from '../../../shared/usage-types'
 import type { ProviderCapabilities, AuthRealm, RealmUse } from '../../../shared/providers'
@@ -151,9 +151,39 @@ const CODEX_PRICING: ProviderPricingOperations = {
   setLive: (map) => setLiveCodexPricing(map),
 }
 
+/** 2.1.3-beta.15 B3 (aicc_planning#393): the keys a quit types into a Codex
+ *  the app started: Escape at once, Ctrl-C at 30 ms, and Ctrl-C again at
+ *  1,500 ms. Measured on Codex CLI 0.157.1, Windows 11 build 22621 (the test
+ *  VM, 23 Nov, direct and held tabs). At its "Hooks need review" screen
+ *  Escape goes to the composer, and one Ctrl-C after it ends Codex only if it
+ *  lands early or late: at 20 to 105 ms after the Escape it ended Codex every
+ *  time (7 of 7), at 121 to 502 ms it did nothing (11 of 11; Codex stays at
+ *  its composer), and at 1,002, 1,003, 1,006 and 1,509 ms it ended Codex
+ *  again (exit code 0). So the first Ctrl-C comes well inside the early
+ *  stretch, and the second is a backstop for a first one a late timer pushed
+ *  into the dead stretch (one try: Ctrl-C at 153 ms lost, at 1,003 ms ended).
+ *  The backstop comes after every end on record: an early Ctrl-C ended Codex
+ *  562 to 1,163 ms after the Escape, and the slowest quit took about 1.2 s.
+ *  A Ctrl-C into a Codex that is shutting down gives Windows' Ctrl-C exit
+ *  status, not 0, which the run log records as crashed (at the composer a
+ *  second Ctrl-C 210 ms after the first did). Escape, Ctrl-C or Ctrl-D alone
+ *  do not end Codex at Hooks review. At the composer Ctrl-C alone ends it in
+ *  about 230 ms, and Escape then Ctrl-C at 100 or 110 ms in 320 to 397 ms
+ *  (30 ms not measured there). A key is typed only while the
+ *  run is still the session's (sendExitKeys), so a Codex that has ended gets
+ *  no backstop. No /exit: it ended Codex at neither screen, and Codex takes
+ *  one write of a line and its Enter as a paste and does not submit it
+ *  (PB3). */
+const CODEX_EXIT_KEYS: readonly ExitKey[] = [
+  { data: '\x1b', atMs: 0 },
+  { data: '\x03', atMs: 30 },
+  { data: '\x03', atMs: 1_500 },
+]
+
 export class CodexProvider implements SessionProvider {
   readonly id = 'codex' as const
   readonly displayName = 'Codex'
+  readonly exitKeys = CODEX_EXIT_KEYS
 
   /** `liveUsage` (usage track MP3): where each session's allowance is
    *  recorded, by its realm's sessions folder, for the Account usage page. */

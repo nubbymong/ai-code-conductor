@@ -15,8 +15,10 @@
 //! output last set with OSC 0 or OSC 2, as xterm.js takes it (`onTitleChange`):
 //! everything after the first `;`, a later one replacing it, and OSC 1 (the
 //! icon name alone) leaving it. The crate keeps no title: it hands each OSC
-//! string to its callbacks (`Title`, below), which keep it. Control
-//! characters are dropped, and the title is bounded twice: the parser keeps
+//! string to its callbacks (`Title`, below), which keep it. The first C1
+//! control in a string ends it at ST (U+009C) and drops it at any other, as
+//! xterm.js does (from 2.1.3-beta.15); the other control characters are
+//! dropped, and the title is bounded twice: the parser keeps
 //! the first 1 KiB of an OSC string and its first 16 parts between `;`s, so a
 //! title is cut at its fifteenth `;`, and `TITLE_MAX` characters are kept
 //! however the crate is built. `screen.read` answers it only to a connection
@@ -162,38 +164,63 @@ pub struct Screen {
 struct Title(String);
 
 /// The kind of an OSC string, as xterm.js reads it: its first part, all
-/// digits, as a number (so `00` is 0). None for anything else, and for a
-/// part of more than 9 digits, which xterm.js still reads as a number.
+/// digits, as a number of any length (so `00` is 0, and so are ten zeros).
+/// A number past u32::MAX reads as u32::MAX, which is no title's kind. None
+/// for anything else.
 fn osc_kind(part: &[u8]) -> Option<u32> {
-    if part.is_empty() || part.len() > 9 || !part.iter().all(u8::is_ascii_digit) {
+    if part.is_empty() || !part.iter().all(u8::is_ascii_digit) {
         return None;
     }
-    Some(part.iter().fold(0u32, |n, d| n * 10 + u32::from(d - b'0')))
+    Some(part.iter().fold(0u32, |n, d| n.saturating_mul(10).saturating_add(u32::from(d - b'0'))))
 }
 
-/// A title as the screen keeps it: the bytes as UTF-8 (a byte that is not
-/// one shows as U+FFFD), every control character dropped, at most
+/// A title as the screen keeps it: every control character dropped (the
+/// parser has dropped the C0 ones already; DEL, which xterm.js keeps, goes
+/// here, as no title the app takes holds a control character), at most
 /// `TITLE_MAX` characters.
-fn clean_title(bytes: &[u8]) -> String {
-    String::from_utf8_lossy(bytes).chars().filter(|c| !c.is_control()).take(TITLE_MAX).collect()
+fn clean_title(title: &str) -> String {
+    title.chars().filter(|c| !c.is_control()).take(TITLE_MAX).collect()
+}
+
+/// The title a whole OSC string sets (its parts joined again by `;`), or
+/// None when it sets none and the earlier title stays. Read as xterm.js
+/// 6.0.0 reads it: as UTF-8 (a byte that is not UTF-8 shows as U+FFFD), the first
+/// C1 control in it (U+0080 to U+009F) ends the string there when it is ST
+/// (U+009C) and drops the whole string when it is any other; then a kind of
+/// 0 or 2 (`osc_kind`, the part before the first `;`) sets the title to
+/// everything after that `;`, empty when there is none.
+fn osc_title(raw: &[u8]) -> Option<String> {
+    let text = String::from_utf8_lossy(raw);
+    let end = match text.char_indices().find(|&(_, c)| matches!(c, '\u{80}'..='\u{9f}')) {
+        Some((at, '\u{9c}')) => at,
+        Some(_) => return None,
+        None => text.len(),
+    };
+    let string = &text[..end];
+    let (kind, title) = string.split_once(';').unwrap_or((string, ""));
+    matches!(osc_kind(kind.as_bytes()), Some(0 | 2)).then(|| clean_title(title))
+}
+
+impl Title {
+    fn set_from(&mut self, raw: &[u8]) {
+        if let Some(title) = osc_title(raw) {
+            self.0 = title;
+        }
+    }
 }
 
 impl vt100::Callbacks for Title {
     /// OSC 0 or OSC 2 with no `;` in its title (the crate calls this for
-    /// exactly two parts, `0` or `2` and the title).
+    /// exactly two parts, `0` or `2` and the title; both are title kinds).
     fn set_window_title(&mut self, _: &mut vt100::Screen, title: &[u8]) {
-        self.0 = clean_title(title);
+        self.set_from(&[&b"0"[..], title].join(&b';'));
     }
 
     /// Every other OSC string. A title with a `;` in it comes here in more
     /// than two parts, joined again as xterm.js keeps it whole; so do OSC 0
     /// with no `;` at all (an empty title) and a kind such as `02`.
     fn unhandled_osc(&mut self, _: &mut vt100::Screen, params: &[&[u8]]) {
-        if let [kind, parts @ ..] = params {
-            if matches!(osc_kind(kind), Some(0 | 2)) {
-                self.0 = clean_title(&parts.join(&b';'));
-            }
-        }
+        self.set_from(&params.join(&b';'));
     }
 }
 
@@ -627,12 +654,46 @@ mod tests {
         assert_eq!(s.title(), "half \u{2838}");
     }
 
+    /// The first C1 control (U+0080 to U+009F) in an OSC string decides it,
+    /// as in xterm.js 6.0.0 (aicc_planning#384, case 2): ST (U+009C) ends the
+    /// string there, and any other leaves the earlier title. Each title here
+    /// is the one @xterm/headless 6.0.0 takes from the same stream.
+    #[test]
+    fn the_first_c1_control_in_a_title_ends_it_at_st_and_drops_it_at_any_other() {
+        assert_eq!(title_after("\x1b]0;ab\u{9c}cd\x07".as_bytes()), "ab");
+        assert_eq!(title_after("\x1b]0;set\x07\x1b]0\u{9c}x\x07".as_bytes()), "");
+        assert_eq!(title_after("\x1b]0;set\x07\x1b]0;ab\u{85}cd\x07".as_bytes()), "set");
+        assert_eq!(title_after("\x1b]0;set\x07\x1b]0;a\u{9b}d\x07".as_bytes()), "set");
+        assert_eq!(title_after("\x1b]0;set\x07\x1b]0;a\u{85}b\u{9c}c\x07".as_bytes()), "set");
+        assert_eq!(title_after("\x1b]0;set\x07\x1b]0;a\u{9c}b\u{85}c\x07".as_bytes()), "a");
+        assert_eq!(title_after("\x1b]0;a\u{85}b\x07".as_bytes()), "");
+        // A title with a `;` in it, which reaches the crate's other callback.
+        assert_eq!(title_after("\x1b]2;a;b\u{9c};c\x07".as_bytes()), "a;b");
+        assert_eq!(title_after("\x1b]2;set\x07\x1b]2;a;b\u{90}c\x07".as_bytes()), "set");
+    }
+
+    /// A kind is read as a number of any length, as xterm.js 6.0.0 reads it
+    /// (aicc_planning#384, case 3): ten zeros are 0, and a kind past
+    /// u32::MAX is no title's kind, never one that wraps round to 0 or 2.
+    /// Each title here is the one @xterm/headless 6.0.0 takes.
+    #[test]
+    fn a_kind_of_any_length_is_read_as_its_number() {
+        assert_eq!(title_after(b"\x1b]000000002;nine\x07"), "nine");
+        assert_eq!(title_after(b"\x1b]0000000000;ten\x07"), "ten");
+        assert_eq!(title_after(b"\x1b]0000000002;two\x07"), "two");
+        assert_eq!(title_after(format!("\x1b]{};thirty\x07", "0".repeat(30)).as_bytes()), "thirty");
+        assert_eq!(title_after(format!("\x1b]{}2;two30\x07", "0".repeat(29)).as_bytes()), "two30");
+        assert_eq!(title_after(b"\x1b]0;set\x07\x1b]10000000000;no\x07"), "set");
+        assert_eq!(title_after(b"\x1b]0;set\x07\x1b]4294967298;no\x07"), "set");
+    }
+
     #[test]
     fn a_title_keeps_no_control_character_and_holds_its_bound() {
-        // The parser drops C0 controls in an OSC string itself; DEL and the
-        // C1 controls, which it keeps, are dropped here.
-        assert_eq!(title_after(b"\x1b]0;a\x01b\x7fc\xc2\x9bd\x07"), "abcd");
-        assert_eq!(clean_title("x\u{85}y\u{9f}z\u{7f}".as_bytes()), "xyz");
+        // The parser drops C0 controls in an OSC string itself; DEL, which it
+        // keeps, is dropped here (a C1 control decides the whole string:
+        // the test above). Whatever reaches it, no control character stays.
+        assert_eq!(title_after(b"\x1b]0;a\x01b\x7fc\x07"), "abc");
+        assert_eq!(clean_title("x\u{85}y\u{9f}z\u{7f}"), "xyz");
         // A byte that is not UTF-8 shows as U+FFFD.
         assert_eq!(title_after(b"\x1b]0;a\xffb\x07"), "a\u{fffd}b");
         // A 16 MiB title: the parser keeps the first 1 KiB of the string.
@@ -649,7 +710,7 @@ mod tests {
         assert_eq!(title_after(many.as_bytes()), parts[..15].join(";"));
         // However the bytes came, never more than TITLE_MAX characters.
         let wide: String = std::iter::repeat('\u{e9}').take(TITLE_MAX + 50).collect();
-        assert_eq!(clean_title(wide.as_bytes()).chars().count(), TITLE_MAX);
+        assert_eq!(clean_title(&wide).chars().count(), TITLE_MAX);
     }
 
     #[test]

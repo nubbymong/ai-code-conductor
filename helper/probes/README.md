@@ -279,7 +279,8 @@ sha256 of its three files. The answer is in ADR-030 after the P19 results.
 # Probe P21: can the helper's capture mode capture each display on Windows?
 
 `p21-capture.cjs` with `p21-windows.ps1` (ADR-030, probe table; it gates Snap
-on Windows, S8). It runs on the Windows test machine with the helper of a green
+on Windows, S8). It runs on the Windows test machine, and its console half also
+in CI (see below), with the helper of a green
 `Helper (windows-2025)` job (the `helper-windows` artifact) and measures
 `aicc-helper capture` (protocol section 15, "Capturing the displays") from two
 places: the signed-in user's console session, where Snap would run it, and an
@@ -319,11 +320,23 @@ or `P21 RESULT: COULD NOT RUN - <reason>`; each reading is `p21-<label>.json`
 in the output folder. `console` stops with COULD NOT RUN when its task has not
 started 15 s after it was started, as when nobody is signed in on the console.
 
-The answer is in ADR-030 after the P20 result (2026-11-22): from the SSH
-session, FAILS CLEANLY (3 of 3 runs exited 3 in 13 to 61 ms, no file left); from
-the console session, CANNOT MEASURE, since nobody was signed in on the test
-machine's console and the probe signs nobody in. P21 runs again from a
-signed-in console session before Snap's Windows overlay is built on the mode.
+In CI the `probe-p21` job of ci.yml takes the console reading on windows-2025,
+in the runner's own session, with a helper it builds there and checks its
+imports, only on a dispatch that names it:
+`gh workflow run ci.yml --ref <branch> -f probe_p21=true`. It runs
+`measure --session console`, then `verdict --ssh-not-run <why>`, so its SSH
+line reads `P21 SSH: NOT RUN - <why>`; the readings are uploaded as
+`probe-p21-windows-2025`. It is green whenever the probe ran to its end,
+whatever the verdict says, and red only when it could not run or the program
+it built fails the import check.
+
+The answer is in ADR-030 after the P20 result. From the SSH session (the
+Windows test machine, 2026-11-22): FAILS CLEANLY (3 of 3 runs exited 3 in 13 to
+61 ms, no file left). From a session with a desktop (the GitHub Windows runner,
+2026-11-23, CI run 45091643024): CAPTURES (3 of 3 runs, 50 to 62 ms, one
+display of 1024 by 768 at 100%). Not measured: the test machine's own console
+(nobody was signed in there), a session that is not elevated, Windows 11, a
+second scale, mixed scaling.
 
 # Probes P3 and P6: does a holder outlive the ssh logout, and is an exec's PATH the login PATH?
 
@@ -384,4 +397,7 @@ exec with `-l`; `claude` was found only by `-il`, so against the user's interact
 login shell, the comparison ADR-029's P6 names, that host differs and the P6 fallback
 applies on it. The Rocky Linux 10 host was NOT RUN on 2026-11-21 (its one connect failed;
 recorded as host off). Rocky Linux 10: not run; its one 8 s connect failed on 2026-11-22
-(host off); owed to beta.15.
+(host off); owed to beta.15. Rocky Linux 10 was measured on 2026-11-23
+(plan 2.1.3-beta.15 C7): P3 HOLDS, alive at 60 s in 3 of 3 runs of each form
+(KillUserProcesses no, Linger yes, so a host with cleanup on is still not measured), and
+P6 SAME, with the exec, `-l` and `-il` alike and claude found by all three.
