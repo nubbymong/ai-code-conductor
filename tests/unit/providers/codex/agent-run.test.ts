@@ -215,8 +215,9 @@ describe('the run', () => {
   // large stderr read never holds the main process.
   // PR 4 review (R-ADRFIX-4): asserted as growth, not wall-clock time: per
   // character, the long line (four times as long) costs under twice what the
-  // short one does (linear: about one, or less, as each read also has a fixed
-  // cost; a search whose time grows with the square: about four).
+  // short one does (linear: about one, up to about 1.3 when a read's fixed
+  // cost is small, since the cut leaves the last 20 KiB of a line aside; a
+  // search whose time grows with the square: about four).
   // How it is timed (beta.15; CI run 45123495761 and diag run 45139414585, both
   // macos-latest): the runner's speed changes in stretches longer than one
   // read, and while a slow stretch lasts a read can take two or three times as
@@ -224,10 +225,10 @@ describe('the run', () => {
   // so it compared two stretches of time, and it failed when a slow stretch
   // began between them (2.8 ms, then 28.3 ms). Now each long read is timed
   // next to four short reads timed together, the two taking turns to go
-  // first, and the check is on the median of nine such pairs. A slow stretch longer than a
-  // pair slows both sides of it alike; the two sides are the same amount of
-  // text, so an interruption is as likely to reach either; and the pairs one
-  // did reach, if fewer than half, cannot move the median.
+  // first, and the check is on the median of nine such pairs. A slow stretch
+  // longer than a pair slows both sides of it alike; the two sides are the
+  // same amount of text, so an interruption is as likely to reach either; and
+  // the pairs one did reach, if fewer than half, cannot move the median.
   it('a long unterminated stderr line is handed on in time linear in its length, whatever it holds, and nothing is lost', async () => {
     // Every line is past WINDOW (64 KiB), so the cut is looked for. Each shape
     // has a name, as three of them start with the same letters.
