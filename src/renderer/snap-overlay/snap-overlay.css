@@ -1,0 +1,113 @@
+/* Snap's own overlay page (src/renderer/snap-overlay.html). A page of its own,
+   so it carries its own few rules instead of the app's Tailwind build; the
+   colours are the app's default dark tokens (src/renderer/styles.css @theme). */
+:root {
+  --color-base: #1a1a1a;
+  --color-surface1: #2a2a2a;
+  --color-surface2: #333333;
+  --color-subtext1: #cccccc;
+  --color-text: #e8e8e8;
+  --color-blue: #6ea8fe;
+}
+
+html,
+body {
+  margin: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  /* Transparent until the picture is in: the screen itself shows meanwhile. */
+  background: transparent;
+  cursor: crosshair;
+  user-select: none;
+  font: 13px/1.3 system-ui, 'Segoe UI', sans-serif;
+}
+
+#picture {
+  position: fixed;
+  left: 0;
+  top: 0;
+  visibility: hidden;
+  pointer-events: none;
+}
+.pictured #picture {
+  visibility: visible;
+}
+
+#dim {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.25);
+  pointer-events: none;
+}
+.has-rect #dim {
+  display: none;
+}
+
+#selection {
+  position: fixed;
+  display: none;
+  box-sizing: border-box;
+  border: 1px solid var(--color-blue);
+  /* Everything outside the rectangle is shaded. */
+  box-shadow: 0 0 0 100vmax rgba(0, 0, 0, 0.45);
+  pointer-events: none;
+}
+.has-rect #selection {
+  display: block;
+}
+
+#size {
+  position: absolute;
+  left: -1px;
+  top: -24px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: var(--color-base);
+  color: var(--color-text);
+  font-size: 12px;
+  white-space: nowrap;
+}
+#size.inside {
+  left: 4px;
+  top: 4px;
+}
+
+#bar {
+  position: fixed;
+  top: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px 6px 12px;
+  border: 1px solid var(--color-surface2);
+  border-radius: 8px;
+  background: var(--color-base);
+  color: var(--color-subtext1);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+  cursor: default;
+  white-space: nowrap;
+}
+.dragging #bar {
+  opacity: 0.35;
+  pointer-events: none;
+}
+
+#bar button {
+  padding: 5px 12px;
+  border: 1px solid var(--color-surface2);
+  border-radius: 6px;
+  background: var(--color-surface1);
+  color: var(--color-text);
+  font: inherit;
+  cursor: pointer;
+}
+#bar button:hover {
+  background: var(--color-surface2);
+}
+#bar button:focus-visible {
+  outline: 2px solid var(--color-blue);
+  outline-offset: 1px;
+}

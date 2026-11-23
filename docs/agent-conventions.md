@@ -37,7 +37,10 @@ npm run test:e2e     # Playwright
   utilityProcess). No `electron` imports; there's a unit test guarding this.
 - **IPC channels** are declared once in `src/shared/ipc-channels.ts` and typed in
   both the preload `ElectronAPI` interface and `src/renderer/types/electron.d.ts`.
-  Add a channel in all three places.
+  Add a channel in all three places. The one exception is the Snap overlay's own
+  page: its two channels are declared in `ipc-channels.ts` and spelled out again in
+  its own sandboxed preload, `src/preload/snap-overlay.ts`, which must build to one
+  file (`tests/unit/main/snap-overlay.test.ts` holds the two equal).
 - **No default exports** except a React component that is the sole export of its
   file.
 - **Terminal perf:** xterm scrollback ≤ 10000; only chunk PTY writes > 256B; never
