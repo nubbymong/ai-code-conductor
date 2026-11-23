@@ -372,18 +372,21 @@ export class HelperPty implements IPty {
   get isReleased(): boolean { return this.released }
   /**
    * 2.1.3-beta.14 B2 (aicc_planning#388): the holder's screen read, while
-   * this terminal goes through a holder whose connection acked `screen`; each
-   * call reads on the connection in use then (an attach again's too), and
-   * rejects while there is none. Undefined on the usual way (fallBack) and on
-   * a holder without screen reads. A held agent session whose provider's
-   * composer rule reads the holder's screen is read through it, asked at
-   * its first byte (sessions/launch-bindings.ts).
+   * this terminal goes through a holder whose connection acked `screen` and
+   * `title`; each call reads on the connection in use then (an attach
+   * again's too), and rejects while there is none. Undefined on the usual way
+   * (fallBack) and on a holder without screen reads or without the title
+   * (2.1.3-beta.15): the composer rule then reads main's own pane, title
+   * included (the title's spinner is its only busy sign while a reply
+   * streams). A held agent session whose provider's composer rule reads the
+   * holder's screen is read through it, asked at its first byte
+   * (sessions/launch-bindings.ts).
    */
   get screenRead(): (() => Promise<ScreenRows>) | undefined {
-    if (this.inner || !this.conn?.screen) return undefined
+    if (this.inner || !this.conn?.screen || !this.conn.title) return undefined
     return () => {
       const conn = this.conn
-      if (this.inner || this.exited || !conn || conn.isClosed || !conn.screen) return Promise.reject(new Error('no connection reads its holder\'s screen now'))
+      if (this.inner || this.exited || !conn || conn.isClosed || !conn.screen || !conn.title) return Promise.reject(new Error('no connection reads its holder\'s screen now'))
       return conn.readScreen()
     }
   }

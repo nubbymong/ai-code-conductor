@@ -107,6 +107,7 @@ import { HolderConnection, type ConnectionOptions } from './connection'
 import { HelperPty, NothingStartedError, type HelperPtyDriver, type RedrawWay } from './helper-pty'
 import {
   APP_PTY_ID_RE,
+  HELPER_FOLDER_RE,
   SID_RE,
   checkLaunch,
   heldAgentSessionId,
@@ -209,6 +210,11 @@ export interface SessionHelperDeps {
    *  reads a held session's screen from the holder (HelperPty.screenRead). A
    *  provider with none asks for neither, as before. */
   screens?: Partial<Record<ProviderId, true>>
+  /** The start-up clean-up of old helper copies a start with both settings
+   *  off began (2.1.3-beta.15, plan section B1, aicc_planning#397;
+   *  app-wiring.ts, removeOldCopiesWithHelperOff): the copy is made only once
+   *  it has ended, so it never removes the copy made now. */
+  copyAfter?: Promise<unknown>
 }
 
 /** What a session's tool calls through its holder need of the app
@@ -821,6 +827,8 @@ export class SessionHelperManager implements MachinesSource {
 
   private async install(): Promise<InstalledHelper | null> {
     const { bundled } = this.deps
+    // A start-up clean-up of old copies still running (deps.copyAfter) ends first.
+    if (this.deps.copyAfter) await this.deps.copyAfter.catch(() => undefined)
     try {
       if (!fs.statSync(bundled).isFile()) throw new Error('not a file')
     } catch {
@@ -2211,6 +2219,52 @@ export function spawnRunPty(ctx: RunSpawnContext, file: string, args: SpawnArgs,
 export function crashMarkIn(root: string): boolean {
   try {
     return fs.existsSync(path.join(root, MARKER))
+  } catch {
+    return false
+  }
+}
+
+/**
+ * 2.1.3-beta.15 (plan section B1, aicc_planning#397): a start with both
+ * settings off, no running mark and no agent record makes no manager, so the
+ * manager's clean-up of old version folders (bringUp) never runs and every
+ * update would leave its copy behind. This one runs instead (app-wiring.ts),
+ * only when the helper's folder holds a version or staging folder (one folder
+ * read, so a user who never used the helper starts nothing): the installed
+ * helper lists the holders (no copy is made and no holder is started), and
+ * every version folder no listed holder's version needs goes, with the
+ * staging folders a failed copy left (removeOldVersionFolders, with no current
+ * folder). A listing that fails removes nothing, and so does `stop()`
+ * answering true once the listing is back (a setting turned on meanwhile: the
+ * manager owns the folder from then, and waits for this to end before it
+ * copies, deps.copyAfter). One log line names what went. Answers the folders
+ * removed.
+ */
+export async function removeOldCopiesWithHelperOff(opts: { root: string; bundled: string; stop: () => boolean; log: (message: string) => void; platform?: NodeJS.Platform; exec?: SessionHelperDeps['exec'] }): Promise<string[]> {
+  if (!oldCopiesIn(opts.root) || opts.stop()) return []
+  let versions: Set<string>
+  try {
+    if (!fs.statSync(opts.bundled).isFile()) throw new Error('the installed helper is not a file')
+    const r = await (opts.exec ?? execHelper)(opts.bundled, ['list', '--store', path.join(opts.root, 'store')], LIST_TIMEOUT_MS)
+    if (r.code !== 0) throw new Error(firstLine(r.stderr) || `the helper exited with ${r.code}`)
+    const listing = readListing(lastLine(r.stdout), helperOs(opts.platform))
+    if (!listing) throw new Error('the helper answered a listing that does not read')
+    versions = new Set(listing.sessions.map((s) => s.helper))
+  } catch (err) {
+    opts.log(`[session-helper] with both settings off, the held terminals could not be listed, so no old helper folder is removed: ${message(err)}`)
+    return []
+  }
+  if (opts.stop()) return []
+  const removed = await removeOldVersionFolders(opts.root, null, versions)
+  if (removed.length > 0) opts.log(`[session-helper] with both settings off, removed old helper folder(s): ${removed.join(', ')}`)
+  return removed
+}
+
+/** True when the helper's folder holds a version folder or a staging folder
+ *  a failed copy left (one folder read). */
+function oldCopiesIn(root: string): boolean {
+  try {
+    return fs.readdirSync(root, { withFileTypes: true }).some((d) => d.isDirectory() && (d.name.startsWith('.new-') || HELPER_FOLDER_RE.test(d.name)))
   } catch {
     return false
   }
