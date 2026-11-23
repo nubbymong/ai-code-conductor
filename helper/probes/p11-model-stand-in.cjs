@@ -26,8 +26,9 @@
 //
 // Events go to the `onEvent` callback with the time: the request's path,
 // kind, the run it names, its tool count, its images, and the first 400
-// characters of the user text that names the run (the probe writes personal
-// paths in it as placeholders). A request's body is never kept.
+// characters of the text part that names the run, never the message's other
+// parts (the probe writes personal paths in it as placeholders). A request's
+// body is never kept.
 const http = require('http');
 const crypto = require('crypto');
 
@@ -80,8 +81,17 @@ function urlPicture(url) {
   return { ...inlinePicture(url.slice(m[0].length), m[1] || null), way: 'data url' };
 }
 
-const textOf = (parts) => parts.map((p) => (p && typeof p.text === 'string' ? p.text : '')).filter(Boolean).join('\n');
 const partsOf = (content) => (typeof content === 'string' ? [{ type: 'text', text: content }] : Array.isArray(content) ? content : []);
+/** The text part that names a run, and the run: only that part, since a CLI
+ *  may put text of its own in other parts of the same message (Claude Code
+ *  2.1.330 puts a reminder block first). */
+function namedPart(parts) {
+  for (const p of parts) {
+    const m = p && typeof p.text === 'string' ? MARKER_RE.exec(p.text) : null;
+    if (m) return { run: m[1], text: p.text };
+  }
+  return null;
+}
 
 /** The images in an Anthropic Messages request's user messages (a
  *  tool_result's content included), and the user text that names a run. */
@@ -98,9 +108,7 @@ function readAnthropic(body) {
       const s = p.source || {};
       images.push(s.type === 'base64' ? inlinePicture(s.data, s.media_type) : { way: typeof s.type === 'string' ? s.type : 'unknown' });
     }
-    const text = textOf(parts);
-    const m = MARKER_RE.exec(text);
-    if (m) named = { run: m[1], text };
+    named = namedPart(parts) || named;
   }
   return { images, run: named ? named.run : null, text: named ? named.text : null };
 }
@@ -118,9 +126,7 @@ function readResponses(body) {
       if (!p || p.type !== 'input_image') continue;
       images.push(typeof p.image_url === 'string' ? urlPicture(p.image_url) : { way: p.file_id ? 'file id' : 'unknown' });
     }
-    const text = textOf(parts);
-    const m = MARKER_RE.exec(text);
-    if (m) named = { run: m[1], text };
+    named = namedPart(parts) || named;
   }
   return { images, run: named ? named.run : null, text: named ? named.text : null };
 }

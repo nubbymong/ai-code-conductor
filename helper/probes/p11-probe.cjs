@@ -48,7 +48,8 @@
  * P19 and P20 ran it: 0.157.1 refuses its background server in an elevated
  * session) and with the model the app's Codex tab on the test machine starts
  * with (gpt-5.5), so Codex applies that model's own rule for images; its
- * update check is off. The runs go one after the other.
+ * update check is off, and when it offers a newer model first the probe
+ * picks "Use existing model". The runs go one after the other.
  *
  * Per run it records: whether the CLI asked for bracketed paste (the pane's
  * bracketedPasteMode when the path is sent, as the app's terminal would
@@ -449,6 +450,11 @@ const RULES = {
     { label: 'press Enter', re: /Press Enter to continue/i, keys: ['\r'] },
   ],
   codex: [
+    // Codex 0.157.1 with gpt-5.5 offers a newer model first ("Try new model",
+    // "Use existing model", "enter/esc confirm"; the test machine, the P11
+    // check run): Enter when Use existing model is the one marked, else the
+    // next option down, so the run keeps the model it was started with.
+    { label: 'new model offer', re: /Use existing model/i, keys: (text) => (/^\s*[›>❯]\s*\d[.)]\s*Use existing model/im.test(text) ? ['\r'] : ['\u001b[B']) },
     { label: 'folder trust', re: /trust the contents|allow Codex to work in this folder|Do you trust/i, keys: ['\r'] },
     { label: 'press Enter', re: /[Pp]ress [Ee]nter to continue/i, keys: ['\r'] },
   ],
@@ -481,7 +487,7 @@ async function untilScreen(run, re, label, timeoutMs, rules = []) {
       if (r.re.test(text) && u.n < 3 && now() - u.at > 1500) {
         used.set(r.label, { n: u.n + 1, at: now() });
         run.answered.push({ rule: r.label, t: now() - run.t0 });
-        await typeKeys(run, r.keys);
+        await typeKeys(run, typeof r.keys === 'function' ? r.keys(text) : r.keys);
         break;
       }
     }
@@ -763,5 +769,5 @@ if (require.main === module) {
 // For tests/unit/scripts/probe-p11.test.ts, which loads this file without
 // running it.
 module.exports = {
-  FORMS, CLIS, PICTURE, PICTURE_INFO, appPictureName, writesFor, samePicture, outcomeOf, overall, formVerdict, forX12, ownedProcesses, sanitizer, codeDigests,
+  FORMS, CLIS, RULES, PICTURE, PICTURE_INFO, appPictureName, writesFor, samePicture, outcomeOf, overall, formVerdict, forX12, ownedProcesses, sanitizer, codeDigests,
 };

@@ -45,6 +45,7 @@ const P = req('./p11-probe.cjs') as {
   formVerdict: (form: Form, readings: Reading[], runs: number) => { verdict: string; outcomes: string[]; summary: string }
   forX12: (claude: Record<string, { verdict: string }> | undefined) => string
   sanitizer: (pairs: Array<[string, string]>) => (v: unknown) => unknown
+  RULES: Record<string, Array<{ label: string; re: RegExp; keys: string[] | ((text: string) => string[]) }>>
 }
 const S = req('./p11-model-stand-in.cjs') as {
   classify: (path: string, body: unknown) => { api: string; kind: string; run: string | null; images: Img[]; text: string | null } | null
@@ -103,6 +104,13 @@ describe('P11: which request is the turn, and the images it carries', () => {
     expect(c).toMatchObject({ api: 'responses', kind: 'turn', run: 'codex-typed-1' })
     expect(c!.images[0]).toMatchObject({ way: 'data url', sha256: P.PICTURE_INFO.sha256 })
     expect(S.classify('/v1/responses', { tools: [], input: [{ role: 'user', content: 'p11 probe codex-typed-1: x' }] })!.kind).toBe('ok')
+  })
+  it('records only the text part that names the run, not a block of the CLI\'s own before it (Claude Code 2.1.330)', () => {
+    const typed = `${text} C:\\T\\p11-x\\shot.jpg`
+    const c = S.classify('/v1/messages', anthropic({ messages: [{ role: 'user', content: [{ type: 'text', text: `<system-reminder>\n${'x'.repeat(500)}\n</system-reminder>` }, { type: 'text', text: typed }] }] }))
+    expect(c).toMatchObject({ kind: 'turn', run: 'claude-paste-2', text: typed })
+    const r = S.classify('/v1/responses', { tools: [{}], input: [{ role: 'user', content: [{ type: 'input_text', text: '<environment_context/>' }, { type: 'input_text', text: typed }] }] })
+    expect(r!.text).toBe(typed)
   })
   it('an assistant message is not read for images or the run', () => {
     const c = S.classify('/v1/messages', anthropic({ messages: [{ role: 'assistant', content: [{ type: 'image', source: { type: 'base64', data: b64 } }, { type: 'text', text }] }] }))
@@ -174,6 +182,16 @@ describe('P11: each run and each form (the decision lines)', () => {
     expect(s).toContain("the file name in the turn's text in 1 of 3")
     expect(s).toContain('matched by the same bytes')
     expect(s).toContain('a second Enter in 1')
+  })
+})
+
+describe('P11: the screens a CLI shows before its prompt', () => {
+  const offer = (marked: 1 | 2) => `  Meet GPT-6 Sol\n${marked === 1 ? '›' : ' '} 1. Try new model\n${marked === 2 ? '›' : ' '} 2. Use existing model\n  enter/esc confirm · ctrl+c quit`
+  it("Codex's new model offer is answered by keeping the model the run started with", () => {
+    const rule = P.RULES.codex.find((r) => r.label === 'new model offer')!
+    expect(rule.re.test(offer(1))).toBe(true)
+    expect((rule.keys as (t: string) => string[])(offer(1))).toEqual(['\u001b[B'])
+    expect((rule.keys as (t: string) => string[])(offer(2))).toEqual(['\r'])
   })
 })
 
