@@ -15,7 +15,10 @@
  *  - Shift+click on a simple Global prompt asks first ("Send to N open
  *    sessions?"): Cancel and Escape send nothing, Send and Enter reach every
  *    open agent session once; a Shift+click on any other button (arguments,
- *    a shell line, a Session button) is a plain press of its own tab.
+ *    a shell line, a Session button) is a plain press of its own tab;
+ *  - a broadcast button carries a subtle "all" pill, on the bar and in its
+ *    band's overflow list, only while its option is on and it is a simple
+ *    prompt, labelled "Sends to every open session".
  */
 import React from 'react'
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
@@ -64,6 +67,9 @@ const submitPrompt = vi.fn(async ({ sessionId }: { sessionId: string; text: stri
 ;(globalThis as any).window.electronAPI = { ...(globalThis as any).window.electronAPI, pty: { write: ptyWrite, submitPrompt } }
 
 const { default: CommandBar } = await import('../../../src/renderer/components/CommandBar')
+const { default: BandOverflow } = await import('../../../src/renderer/components/command-bar/BandOverflow')
+const { planBand } = await import('../../../src/renderer/components/command-bar/layout')
+const { sessionCapabilities } = await import('../../../src/renderer/lib/session-capabilities')
 const { usePasteHintStore } = await import('../../../src/renderer/stores/pasteHintStore')
 
 /** The pressed tab (local, shown), an SSH tab in the background, and the
@@ -271,5 +277,45 @@ describe('Shift+click on a Global prompt button asks first (#399)', () => {
     expect(card()).toBeNull()
     expect(submitPrompt).not.toHaveBeenCalled()
     expect(ptyWrite.mock.calls).toEqual([['s-1-partner', 'npm test\r']])
+  })
+})
+
+describe('the pill on a broadcast button (#399: "somehting subtle")', () => {
+  const pillOn = (el: Element) => el.querySelector('[data-testid="command-broadcast-pill"]')
+
+  it('shows on a button with the option on, saying what it means to a tooltip and a screen reader', () => {
+    COMMANDS = [BROADCAST]
+    render()
+    const pill = pillOn(chip('Review all'))!
+    expect(pill).not.toBeNull()
+    expect(pill.getAttribute('aria-label')).toBe('Sends to every open session')
+    expect(pill.getAttribute('title')).toBe('Sends to every open session')
+    expect(pill.getAttribute('role')).toBe('img')
+    // Drawn, not typed: an SVG mark and a tiny word.
+    expect(pill.querySelector('svg')).not.toBeNull()
+    expect(pill.textContent).toBe('all')
+  })
+
+  it.each([
+    ['without the option', PLAIN, 'Resume'],
+    ['with the option but not a simple prompt (it has arguments)', { ...BROADCAST, defaultArgs: ['--strict'] }, 'Review all'],
+  ])('does not show %s', (_name, cmd, label) => {
+    COMMANDS = [cmd]
+    render()
+    expect(pillOn(chip(label))).toBeNull()
+  })
+
+  it('shows on the button\'s row in its band\'s overflow list too, and only there', () => {
+    const caps = sessionCapabilities(OPEN[0] as never)
+    const cmds = [BROADCAST, PLAIN] as never[]
+    act(() => {
+      root.render(React.createElement(BandOverflow, {
+        plan: planBand('global', cmds, [], caps), folded: cmds, caps, anchor: new DOMRect(0, 0, 1, 1),
+        onRun: vi.fn(), onContextMenu: vi.fn(), onManage: vi.fn(), onClose: vi.fn(),
+      }))
+    })
+    const row = (id: string) => container.querySelector(`[data-testid="command-overflow-item"][data-command-id="${id}"]`)!
+    expect(pillOn(row('b1'))).not.toBeNull()
+    expect(pillOn(row('p1'))).toBeNull()
   })
 })

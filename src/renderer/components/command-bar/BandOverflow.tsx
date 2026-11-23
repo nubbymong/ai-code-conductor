@@ -3,7 +3,8 @@ import type { CustomCommand, CommandSection } from '../../stores/commandStore'
 import type { SessionCapabilities } from '../../lib/session-capabilities'
 import { CommandIcon } from '../command-icons'
 import { DEFAULT_COMMAND_COLOR } from '../../lib/command-swatches'
-import { TargetMark } from './chips'
+import { TargetMark, BroadcastPill } from './chips'
+import { isBroadcastButton } from '../../lib/commandBroadcast'
 import { clusterOf, type BandPlan } from './layout'
 import { isContextMenuGesture } from '../../lib/pointer'
 
@@ -140,6 +141,9 @@ export default function BandOverflow({ plan, folded, caps, anchor, onRun, onCont
                     <TargetMark kind={clusterOf(cmd, caps)} caps={caps} />
                     <CommandIcon icon={cmd.icon} color={color} label={cmd.label} size={14} />
                     <span className="truncate">{cmd.label}</span>
+                    {/* #399: the same pill as on the bar, so a folded broadcast
+                        button is not mistaken for a single one. */}
+                    {!reason && isBroadcastButton(cmd) && <BroadcastPill />}
                     <span className="ml-auto text-[10.5px] shrink-0" style={{ color: 'var(--text-muted)' }}>
                       {reason ? "can't run here" : [cmd.hasSecretArg ? 'secret' : null, cmd.defaultArgs?.length ? 'args' : null, cmd.pinned ? 'pinned' : null].filter(Boolean).join(' · ')}
                     </span>

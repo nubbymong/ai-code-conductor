@@ -4,6 +4,7 @@ import type { SessionCapabilities } from '../../lib/session-capabilities'
 import { CommandIcon } from '../command-icons'
 import { DEFAULT_COMMAND_COLOR } from '../../lib/command-swatches'
 import { chipTitle, clusterTitle, effectiveKind, type ClusterKind } from './layout'
+import { isBroadcastButton, BROADCAST_PILL_LABEL } from '../../lib/commandBroadcast'
 
 /** The neutral chip every Core tool and user button shares (D1, D4). */
 export const CHIP_CLASS = 'flex items-center gap-1.5 px-2 h-7 text-xs rounded-md border whitespace-nowrap shrink-0 transition-colors duration-150 focus-ring'
@@ -64,6 +65,8 @@ const Paths = {
   lock: 'M4 11h16v10H4zM8 11V7a4 4 0 0 1 8 0v4',
   pin: 'M12 17v5M5 8l7-5 7 5v9H5z',
   browser: 'M2 4h20v16H2zM2 8h20',
+  // A point with a wave either side: one press, many sessions (#399).
+  broadcast: 'M12 12h.01M8.5 8.5a5 5 0 0 0 0 7M15.5 8.5a5 5 0 0 1 0 7M5 5a10 10 0 0 0 0 14M19 5a10 10 0 0 1 0 14',
 } as const
 
 function Mark({ d, size = 11, className, style }: { d: string; size?: number; className?: string; style?: React.CSSProperties }) {
@@ -83,6 +86,29 @@ export function MachineBadge({ text, className }: { text: string; className?: st
       data-testid="command-machine-badge"
     >
       {text}
+    </span>
+  )
+}
+
+/**
+ * #399: the pill on a button that sends to every open session. The owner
+ * asked for "a pill on the button to differenttae ... somehting subtle": a
+ * small rounded tag in the bar's muted surface and text tones (the tones
+ * MachineBadge uses, a step quieter), a broadcast mark and a tiny "all". The
+ * tooltip and the screen reader say what it means.
+ */
+export function BroadcastPill({ className }: { className?: string }) {
+  return (
+    <span
+      role="img"
+      aria-label={BROADCAST_PILL_LABEL}
+      title={BROADCAST_PILL_LABEL}
+      className={`inline-flex items-center gap-[2px] rounded-full px-1 h-3 text-[8px] font-semibold leading-none border shrink-0 ${className ?? ''}`}
+      style={{ background: 'var(--surface-overlay)', borderColor: 'var(--border-subtle)', color: 'var(--text-muted)' }}
+      data-testid="command-broadcast-pill"
+    >
+      <Mark d={Paths.broadcast} size={8} />
+      all
     </span>
   )
 }
@@ -170,8 +196,9 @@ export interface CommandChipProps {
 /**
  * A user button: icon + label like the Core tools, the colour in the ICON
  * (glyph or monogram tile) never on the surface, and right-edge marks only
- * -- lock (carries a secret), browser (watches a page), chevron (has args),
- * pin (pinned), and an amber dot when the upgrade review wants a look (D13).
+ * -- the "all" pill (sends to every open session, #399), lock (carries a
+ * secret), browser (watches a page), chevron (has args), pin (pinned), and an
+ * amber dot when the upgrade review wants a look (D13).
  */
 export function CommandChip(p: CommandChipProps) {
   const { cmd, caps } = p
@@ -218,6 +245,7 @@ export function CommandChip(p: CommandChipProps) {
         <CommandIcon icon={cmd.icon} color={color} label={cmd.label} size={13} />
       )}
       <span className="truncate max-w-[160px]" data-testid="command-chip-label">{cmd.label}</span>
+      {isBroadcastButton(cmd) && <BroadcastPill />}
       {cmd.hasSecretArg && <Mark d={Paths.lock} size={9} style={{ color: 'var(--color-yellow)' }} />}
       {cmd.webView?.enabled && <Mark d={Paths.browser} size={9} style={{ color: 'var(--color-blue)' }} />}
       {hasArgs && (

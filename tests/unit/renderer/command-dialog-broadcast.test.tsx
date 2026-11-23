@@ -135,3 +135,22 @@ describe('"Send to every open session" in the button dialog (#399)', () => {
     expect(onConfirm.mock.calls[0][0].broadcast).toBeUndefined()
   })
 })
+
+describe('the dialog\'s preview draws the pill the bar will show (#399)', () => {
+  const previewPill = () => byTest('command-preview')!.querySelector('[data-testid="command-broadcast-pill"]')
+
+  it('only while the option is on', () => {
+    newPrompt()
+    expect(previewPill()).toBeNull()
+    act(() => { toggle().click() })
+    expect(previewPill()).not.toBeNull()
+    expect(previewPill()!.getAttribute('aria-label')).toBe('Sends to every open session')
+    act(() => { toggle().click() })
+    expect(previewPill()).toBeNull()
+  })
+
+  it('not on a button that cannot take it, whatever its record says', () => {
+    render({ initial: { ...PROMPT, broadcast: true, scope: 'config', configId: 'cfg' }, configId: 'cfg' })
+    expect(previewPill()).toBeNull()
+  })
+})
