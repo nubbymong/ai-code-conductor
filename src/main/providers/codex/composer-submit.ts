@@ -6,8 +6,9 @@
 // retry (both through src/main/session-input).
 //
 // PURE: the rule only. The session's screen, its writer, its liveness and the
-// clock are injected (the driver is ./session-screen.ts, which keeps a
-// bounded headless pane fed by the session's own output). Built from the two
+// clock are injected (the driver is ./session-screen.ts, which reads a bounded
+// headless pane fed by the session's own output, or, from 2.1.3-beta.14 B2,
+// the screen of the session helper's holder for a session it holds). Built from the two
 // copies of this rule that existed: the renderer's typeIntoCodexComposer
 // (src/renderer/lib/codexComposer.ts), which stays as it is, and the
 // Watchdog's submitCodex, which section A2 removed.

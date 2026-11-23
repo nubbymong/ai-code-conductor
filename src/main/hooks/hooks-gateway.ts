@@ -15,10 +15,6 @@ import type {
   HookEventKind,
   HooksGatewayStatus,
 } from '../../shared/hook-types'
-// Responder registry lives in its own module so we can import it directly --
-// the old lazy-require workaround for the channel-permissions circular
-// dependency is no longer needed (#483).
-import { registerResponder as defaultRegister, deregisterResponder as defaultDeregister } from '../permission-responders'
 import { logTrace, logWarn, logError } from '../debug-logger'
 // ONE shape filter for the transcript path, shared with the SSH sentinel source.
 // Re-exported so the existing gateway tests keep importing it from here.
@@ -108,10 +104,6 @@ const MAX_CONCURRENT_BUFFERING = 32
 export interface HooksGatewayOptions {
   defaultPort?: number
   emit: (channel: string, payload: unknown) => void
-  permissionResponders?: {
-    register: (id: string, cb: (decision: string) => void) => void
-    deregister: (id: string) => void
-  }
   /**
    * Logs v2 (Task 8): the earliest + exact transcript discovery source. Claude
    * Code's hook POSTs carry `transcript_path` on every event (incl. SessionStart).
@@ -149,8 +141,6 @@ export class HooksGateway {
   private defaultPort: number
   private emit: HooksGatewayOptions['emit']
 
-  public readonly permissionRegister: (id: string, cb: (decision: string) => void) => void
-  public readonly permissionDeregister: (id: string) => void
   private onTranscriptPath?: (sessionId: string, path: string) => void
   private _eventsTotal = 0
   private _dropsTotal = 0
@@ -164,7 +154,6 @@ export class HooksGateway {
   // unregister + stop like the other latches, so a reused sid re-logs.
   private oversizeLoggedSessions = new Set<string>()
   private subscribers = new Set<(e: HookEvent) => void>()
-  private gateActive = false
   // Count of request bodies currently being buffered (post-auth). Enforces
   // MAX_CONCURRENT_BUFFERING so concurrent uploads can't exhaust memory.
   private bufferingCount = 0
@@ -172,8 +161,6 @@ export class HooksGateway {
   constructor(opts: HooksGatewayOptions) {
     this.defaultPort = opts.defaultPort ?? DEFAULT_HOOKS_PORT
     this.emit = opts.emit
-    this.permissionRegister = opts.permissionResponders?.register ?? defaultRegister
-    this.permissionDeregister = opts.permissionResponders?.deregister ?? defaultDeregister
     this.onTranscriptPath = opts.onTranscriptPath
   }
 
@@ -181,11 +168,6 @@ export class HooksGateway {
     this.subscribers.add(cb)
     return () => { this.subscribers.delete(cb) }
   }
-
-  // When true, the held-open + responder path applies to EVERY PreToolUse (so the
-  // tray can Allow/Deny any tool), not just Bash. Default false so a live gateway
-  // with no renderer mounted to answer does not hold tool calls open for 120s.
-  setPermissionGateActive(active: boolean): void { this.gateActive = active }
 
   // Test seam: runs the post-redaction dispatch path without HTTP.
   dispatchForTest(event: HookEvent): void { this.fanOut(event) }
@@ -365,11 +347,12 @@ export class HooksGateway {
     const reqPath = redactHookPath(req.url)
     const reqLen = headerValue(req.headers as Record<string, string | string[] | undefined>, 'content-length') ?? '?'
     logTrace(`[hooks] req method=${reqMethod} path=${reqPath} len=${reqLen} inflight=${hooksInFlight}`)
-    // The response may be written synchronously here OR held open (the
-    // PermissionRequest / gateActive path) and closed later by the responder
-    // or the 120s timeout. Hook the response lifecycle event so the in-flight
-    // decrement + response log fire EXACTLY ONCE on every exit path without
-    // restructuring the control flow below (zero behavior change).
+    // Every request is answered as soon as it is read and ingested: the
+    // gateway holds none open (2.1.3-beta.14 deleted the dormant permission
+    // hold, aicc_planning#358). Hook the response lifecycle event so the
+    // in-flight decrement + response log fire EXACTLY ONCE on every exit path
+    // (a client that goes away early included) without restructuring the
+    // control flow below.
     let settled = false
     const onSettled = () => {
       if (settled) return
@@ -392,8 +375,8 @@ export class HooksGateway {
     // `x-ccc-hook-token` header (not the body), so loopback origin + enabled +
     // known sid + token can all be verified up front. A non-loopback or
     // unauthenticated caller is rejected here and never makes the gateway buffer
-    // up to 4 MiB. (The held-open responder + ingest run only for authed
-    // requests below, after the body is read.)
+    // up to 4 MiB. (Ingest runs only for authed requests below, after the body
+    // is read.)
     const authFail = this.preBufferAuth({
       remoteAddress: req.socket.remoteAddress,
       url: req.url,
@@ -461,113 +444,17 @@ export class HooksGateway {
     }
     const body = Buffer.concat(chunks).toString('utf-8')
 
-    // Parse the body ONCE here and thread the result through the peek logic, the
-    // requestId injection, and ingest. Every tool call in every session funnels
-    // through this single main-thread server, and the body used to be JSON.parsed
-    // up to three times per request (peek + requestId inject + ingest) -- pure
-    // waste on the hot path. `null` => invalid JSON; ingest returns 400 for it.
+    // Parse the body ONCE here and hand the result to ingest. Every tool call in
+    // every session funnels through this single main-thread server, so the body
+    // is never JSON.parsed twice on the hot path. `null` => invalid JSON; ingest
+    // returns 400 for it.
     let parsedBody: Record<string, unknown> | null = null
     try { parsedBody = JSON.parse(body) as Record<string, unknown> } catch { /* ingest path returns 400 */ }
 
-    // For held-open events (PermissionRequest, or PreToolUse while gateActive),
-    // hold the HTTP response open and register a responder so a resolver can
-    // write the hook decision back to the Claude Code process. gateActive is
-    // never set in production (v1.5.17 genuine-only), so this path is dormant.
-    // The responder is registered BEFORE ingest runs (via _handleRequestForTest)
-    // to avoid a race on the auto-allow path.
-    let isPermissionRequest = false
-    let permissionRequestId: string | undefined
-    // cleanup is defined here so the auth-fail branch (after _handleRequestForTest)
-    // can call it even though it is set inside the try block below.
-    let cleanup: (() => void) = () => { /* no-op until PermissionRequest block runs */ }
-    if (parsedBody) {
-      const peeked = parsedBody
-      // Claude Code's real hook POST uses `hook_event_name` (not `event`) and
-      // snake_case fields; accept both so the gateway works with the live CLI as
-      // well as the spec'd PermissionRequest shape used by tests.
-      const peekedEvent = typeof peeked.hook_event_name === 'string'
-        ? (peeked.hook_event_name as string)
-        : typeof peeked.event === 'string' ? (peeked.event as string) : undefined
-      // Genuine-only (v1.5.17): CCC is no longer the permission gate. Hold a
-      // PreToolUse open ONLY when gateActive is explicitly set (a dormant path
-      // reserved for a possible future inline-for-high-risk feature). gateActive
-      // is never flipped in production now, so every PreToolUse is fire-and-
-      // forget and Claude's own settings fully decide -> no flood, no stalls.
-      const isHeldOpenTool = this.gateActive && peekedEvent === 'PreToolUse'
-      // P3.10: a Codex hook (its forwarder says so) is never held open.
-      // Codex runs the app's hooks asynchronously and reads no answer, so a
-      // held request could only tie up a forwarder and register a responder
-      // no decision can reach. The header only takes a capability away (the
-      // token authenticated the request above); the event is ingested as
-      // any other.
-      const isCodexClient = headerValue(req.headers as Record<string, string | string[] | undefined>, 'x-ccc-hook-client') === 'codex'
-      if (!isCodexClient && (peekedEvent === 'PermissionRequest' || isHeldOpenTool)) {
-        isPermissionRequest = true
-        const payload = peeked.payload && typeof peeked.payload === 'object'
-          ? (peeked.payload as Record<string, unknown>)
-          : peeked
-        // Prefer Claude's real per-call id `tool_use_id`; fall back to the spec'd
-        // `requestId`, then a synthetic id. Using the same field the pending card
-        // derives its id from keeps the responder key and the card key in lockstep.
-        const rid = typeof payload.tool_use_id === 'string'
-          ? (payload.tool_use_id as string)
-          : typeof payload.requestId === 'string' ? (payload.requestId as string) : undefined
-        permissionRequestId = rid ?? `${String(peeked.session_id ?? peeked.sessionId ?? 'unknown')}-${Date.now()}`
-        const capturedRes = res
-        const capturedId = permissionRequestId
-        let done = false
-        cleanup = () => {
-          if (done) return
-          done = true
-          clearTimeout(timeout)
-          this.permissionDeregister(capturedId)
-        }
-        const timeout = setTimeout(() => {
-          if (done) return
-          done = true
-          try {
-            capturedRes.writeHead(200, { 'Content-Type': 'application/json', 'Connection': 'close' })
-            capturedRes.end('{}')
-          } catch { /* response already closed */ }
-          this.permissionDeregister(capturedId)
-        }, 120_000)
-        timeout.unref?.()
-        req.on('close', () => cleanup())
-        this.permissionRegister(capturedId, (decision) => {
-          if (done) return  // timeout already fired or client aborted
-          done = true
-          clearTimeout(timeout)
-          try {
-            capturedRes.writeHead(200, { 'Content-Type': 'application/json', 'Connection': 'close' })
-            // 'defer' -> empty 2xx body = no decision, Claude proceeds with its own
-            // permission flow (used on tray overflow so the call is NOT stalled for
-            // the full 120s timeout). Otherwise emit the allow/deny decision.
-            capturedRes.end(decision === 'defer'
-              ? '{}'
-              : JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: decision === 'approved' ? 'allow' : 'deny' } }))
-          } catch { /* response already closed; CC falls back to its own UI */ }
-          // The responder entry is removed by cleanup() (on req close / 120s
-          // timeout). This whole hold-open branch is dormant in prod (gateActive
-          // is never set true post-v1.5.17); it remains for a possible future
-          // inline-for-high-risk path.
-        })
-      }
-    }
-
-    // The held-open responder is keyed by `permissionRequestId`. Claude Code's
-    // real PreToolUse hook sends NO requestId, so without this the responder
-    // registration and any downstream consumer would invent DIFFERENT synthetic
-    // ids (two separate Date.now() reads) and Allow/Deny would target a responder
-    // that does not exist -> the request silently stalls until the 120s timeout.
-    // Inject the resolved id into the already-parsed body so both sides key on
-    // the SAME value we registered the responder under.
-    if (isPermissionRequest && permissionRequestId && parsedBody) {
-      const pl = (parsedBody.payload && typeof parsedBody.payload === 'object')
-        ? (parsedBody.payload as Record<string, unknown>)
-        : parsedBody
-      if (pl.requestId == null) pl.requestId = permissionRequestId
-    }
-
+    // Every event, PreToolUse and PermissionRequest included, is ingested and
+    // answered at once with an empty `{}` (no decision): the CLI's own prompt
+    // decides every permission, and the app answers none (ADR-030's parity
+    // row "Permission answers from the app").
     const result = await this._handleRequestForTest({
       remoteAddress: req.socket.remoteAddress,
       url: req.url,
@@ -586,14 +473,6 @@ export class HooksGateway {
     } else {
       logTrace(`[hooks] matched sid=${sid ?? 'none'} status=${result.status}`)
     }
-
-    // For PermissionRequest events that passed auth, the response is held open
-    // and will be closed by the responder or the 120s timeout above.
-    if (isPermissionRequest && result.status === 200) return
-
-    // Auth/dispatch failed for a PermissionRequest — clean up the dangling
-    // responder and timeout so the Map and event loop don't leak.
-    if (isPermissionRequest && result.status !== 200) cleanup()
 
     res.statusCode = result.status
     res.setHeader('content-type', 'application/json')
@@ -651,7 +530,7 @@ export class HooksGateway {
     // BEFORE the strict `event` check below drops anything. This reveals exactly
     // what Claude Code sends (e.g. `event` vs `hook_event_name`), which the unit
     // tests cannot, and is the fastest way to confirm the gateway parses CC's
-    // real PreToolUse during the dev-demo permission round-trip.
+    // real hook POSTs.
     logTrace(`[hooks] ingest sid=${sid} keys=[${Object.keys(parsed).join(',')}] event=${String(parsed.event)} hook_event_name=${String((parsed as Record<string, unknown>).hook_event_name)} tool_name=${String(parsed.tool_name)}`)
     // Logs v2 (Task 8): lift the transcript path BEFORE redaction. Claude Code
     // sends `transcript_path` on every hook POST (incl. SessionStart) — the

@@ -326,7 +326,10 @@ export function registerUpdateHandlers(): void {
 
     // Windows only (plan section B2): the held plain and partner terminals
     // whose tabs were saved are let go of first, so the kill below does not
-    // end them; the new version shows them again. macOS and Linux end them.
+    // end them; the new version shows them again. So is a held agent session
+    // whose tools go through its holder (2.1.3-beta.14, S16 step 4): its CLI
+    // runs on and it is recorded, and the new version still ends it until a
+    // take-over exists. macOS and Linux end them.
     // A release that fails stops nothing: what it did not let go of ends.
     const releasing = process.platform === 'win32'
     try {
@@ -376,7 +379,8 @@ export function registerUpdateHandlers(): void {
     } catch (err) {
       logError('[update] Failed:', err)
       // The app stays: what was let go of is kept for its tab, and listed on
-      // the Machines page with Re-attach.
+      // the Machines page with Re-attach; an agent session let go of is ended
+      // at once, and what it left goes (2.1.3-beta.14, S16 step 4).
       if (releasing) {
         try { reclaimReleasedTerminals() } catch (e) { logError('[update] The held terminals could not be kept:', e) }
       }

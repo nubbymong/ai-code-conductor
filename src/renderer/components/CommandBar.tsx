@@ -150,7 +150,8 @@ function CodexModelPill({ sessionId, label }: { sessionId: string; label: string
   )
 }
 
-/** P3.8 (row 39): the registry's Codex models, as the session dialog offers
+/** P3.8 (row 39): the registry's Codex models (the installed Codex's own list
+ *  once main has read it, aicc_planning#362), as the session dialog offers
  *  them ('' = Default: Codex's own choice). For a session with no live run:
  *  the choice applies at its next start. */
 function CodexModelDropdown({ value, onChange }: { value: string; onChange: (next: string) => void }) {

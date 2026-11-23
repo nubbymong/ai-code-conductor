@@ -4,9 +4,11 @@
 // helper/. This fails the package when the helper is missing, is not a
 // program for this OS, says another version than helper/Cargo.toml, or has
 // other files beside it. On Windows it also fails when the packaged helper
-// does not carry its own C runtime, is not x64, or names no imported DLL
-// (2.1.3-beta.8 section C4, the rules of scripts/check-pe-imports.mjs): this is
-// the packaged, signed copy that ships, whatever built it.
+// does not carry its own C runtime, is not x64, names no imported DLL
+// (2.1.3-beta.8 section C4), or imports a window-manager DLL at load time
+// rather than delay-loading it (2.1.3-beta.14 C6): the rules of
+// scripts/check-pe-imports.mjs. This is the packaged, signed copy that ships,
+// whatever built it.
 //
 // Run after `npm run verify:package` in every release packaging job, and at
 // the end of every package script (`npm run verify:helper`). The check itself

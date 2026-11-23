@@ -2210,19 +2210,21 @@
     ]
   },
   "screen": {
-    "_doc": "Screen read vectors for docs/remote/helper-protocol.md section 15 (capability screen, from 2.1.3-beta.12). Read by helper/tests/fixtures.rs and tests/unit/main/session-helper-protocol.test.ts. offered is what a holder offers. A request is read as a connection that acked core and screen reads it, unless the vector says what was acked (acked). Each of messages is the exact bytes a holder sends the app: its screen of cols by rows fed feed (the session's output from its first byte), then read (screen.rows, the answer to screen.read re) or its last count lines (screen.lines, the answer to screen.tail re); the app reads each as its json says. invalid_messages are ones the app refuses. The limits: tail_lines is the most a screen.tail asks for, scrollback_lines what the screen keeps, param_ceiling the largest CSI parameter that reaches its parser, answer_bytes the most JSON an answer is.",
+    "_doc": "Screen read vectors for docs/remote/helper-protocol.md section 15 (capability screen, from 2.1.3-beta.12). Read by helper/tests/fixtures.rs and tests/unit/main/session-helper-protocol.test.ts. offered is what a holder offers. A request is read as a connection that acked core and screen reads it, unless the vector says what was acked (acked). Each of messages is the exact bytes a holder sends the app: its screen of cols by rows fed feed (the session's output from its first byte), then read (screen.rows, the answer to screen.read re) or its last count lines (screen.lines, the answer to screen.tail re); the app reads each as its json says. A message vector whose acked names screen and title is the answer to a connection that asked for the title (title in screen.rows, the title the feed last set, empty when it set none); any other is the answer to one that did not (no title). An invalid message is read the same way. invalid_messages are ones the app refuses. The limits: tail_lines is the most a screen.tail asks for, scrollback_lines what the screen keeps, param_ceiling the largest CSI parameter that reaches its parser, title_chars the most characters a title holds, answer_bytes the most JSON an answer is.",
     "offered": [
       "core",
       "local",
       "hooks",
       "mcp",
       "away",
-      "screen"
+      "screen",
+      "title"
     ],
     "limits": {
       "tail_lines": 200,
       "scrollback_lines": 200,
       "param_ceiling": 9999,
+      "title_chars": 1024,
       "answer_bytes": 1048576
     },
     "requests": {
@@ -2252,7 +2254,8 @@
             "hooks",
             "mcp",
             "away",
-            "screen"
+            "screen",
+            "title"
           ],
           "json": "{\"t\":\"screen.tail\",\"id\":6,\"count\":1}",
           "expect": {
@@ -2329,6 +2332,43 @@
         "feed": "ab\u001b[?1049h\u001b[?1049lc\u001b[?1002h\u001b[?1005h",
         "re": 6,
         "json": "{\"t\":\"screen.rows\",\"re\":6,\"cols\":4,\"rows\":2,\"cursor\":{\"row\":0,\"col\":3},\"modes\":{\"screen\":\"normal\",\"bracketed_paste\":false,\"application_cursor\":false,\"application_keypad\":false,\"mouse\":\"button-motion\",\"mouse_encoding\":\"utf8\",\"cursor_hidden\":false},\"cut\":false,\"lines\":[{\"text\":\"abc\",\"typed\":\"abc\",\"inverse\":\"\",\"width\":4,\"end\":3},{\"text\":\"\",\"typed\":\"\",\"inverse\":\"\",\"width\":4,\"end\":0}]}"
+      },
+      {
+        "name": "the title the output last set, to a connection that asked for it: OSC 2 after OSC 0, a semicolon kept and DEL dropped",
+        "type": "screen.rows",
+        "acked": [
+          "core",
+          "screen",
+          "title"
+        ],
+        "cols": 6,
+        "rows": 1,
+        "feed": "\u001b]0;first\u0007\u001b]2;a;b\u007f é\u001b\\ok",
+        "re": 10,
+        "json": "{\"t\":\"screen.rows\",\"re\":10,\"cols\":6,\"rows\":1,\"cursor\":{\"row\":0,\"col\":2},\"modes\":{\"screen\":\"normal\",\"bracketed_paste\":false,\"application_cursor\":false,\"application_keypad\":false,\"mouse\":\"none\",\"mouse_encoding\":\"default\",\"cursor_hidden\":false},\"title\":\"a;b é\",\"cut\":false,\"lines\":[{\"text\":\"ok\",\"typed\":\"ok\",\"inverse\":\"\",\"width\":6,\"end\":2}]}"
+      },
+      {
+        "name": "no title set, to a connection that asked for it: an empty title",
+        "type": "screen.rows",
+        "acked": [
+          "core",
+          "screen",
+          "title"
+        ],
+        "cols": 4,
+        "rows": 1,
+        "feed": "ok",
+        "re": 12,
+        "json": "{\"t\":\"screen.rows\",\"re\":12,\"cols\":4,\"rows\":1,\"cursor\":{\"row\":0,\"col\":2},\"modes\":{\"screen\":\"normal\",\"bracketed_paste\":false,\"application_cursor\":false,\"application_keypad\":false,\"mouse\":\"none\",\"mouse_encoding\":\"default\",\"cursor_hidden\":false},\"title\":\"\",\"cut\":false,\"lines\":[{\"text\":\"ok\",\"typed\":\"ok\",\"inverse\":\"\",\"width\":4,\"end\":2}]}"
+      },
+      {
+        "name": "the same output to a connection that did not ask for the title: no title",
+        "type": "screen.rows",
+        "cols": 6,
+        "rows": 1,
+        "feed": "\u001b]0;first\u0007\u001b]2;a;b\u007f é\u001b\\ok",
+        "re": 14,
+        "json": "{\"t\":\"screen.rows\",\"re\":14,\"cols\":6,\"rows\":1,\"cursor\":{\"row\":0,\"col\":2},\"modes\":{\"screen\":\"normal\",\"bracketed_paste\":false,\"application_cursor\":false,\"application_keypad\":false,\"mouse\":\"none\",\"mouse_encoding\":\"default\",\"cursor_hidden\":false},\"cut\":false,\"lines\":[{\"text\":\"ok\",\"typed\":\"ok\",\"inverse\":\"\",\"width\":6,\"end\":2}]}"
       },
       {
         "name": "a tail of more lines than are held: every line, scrollback first, written spaces kept",
@@ -2431,6 +2471,46 @@
       {
         "name": "a tail with no re",
         "json": "{\"t\":\"screen.lines\",\"cut\":false,\"lines\":[{\"text\":\"one\",\"typed\":\"one\"},{\"text\":\"two\",\"typed\":\"two\"},{\"text\":\"three\",\"typed\":\"three\"},{\"text\":\"four  \",\"typed\":\"\"}]}"
+      },
+      {
+        "name": "a title that is not text",
+        "acked": [
+          "core",
+          "screen",
+          "title"
+        ],
+        "json": "{\"t\":\"screen.rows\",\"re\":10,\"cols\":6,\"rows\":1,\"cursor\":{\"row\":0,\"col\":2},\"modes\":{\"screen\":\"normal\",\"bracketed_paste\":false,\"application_cursor\":false,\"application_keypad\":false,\"mouse\":\"none\",\"mouse_encoding\":\"default\",\"cursor_hidden\":false},\"title\":5,\"cut\":false,\"lines\":[{\"text\":\"ok\",\"typed\":\"ok\",\"inverse\":\"\",\"width\":6,\"end\":2}]}"
+      },
+      {
+        "name": "a title of null",
+        "acked": [
+          "core",
+          "screen",
+          "title"
+        ],
+        "json": "{\"t\":\"screen.rows\",\"re\":10,\"cols\":6,\"rows\":1,\"cursor\":{\"row\":0,\"col\":2},\"modes\":{\"screen\":\"normal\",\"bracketed_paste\":false,\"application_cursor\":false,\"application_keypad\":false,\"mouse\":\"none\",\"mouse_encoding\":\"default\",\"cursor_hidden\":false},\"title\":null,\"cut\":false,\"lines\":[{\"text\":\"ok\",\"typed\":\"ok\",\"inverse\":\"\",\"width\":6,\"end\":2}]}"
+      },
+      {
+        "name": "a title with a control character",
+        "acked": [
+          "core",
+          "screen",
+          "title"
+        ],
+        "json": "{\"t\":\"screen.rows\",\"re\":10,\"cols\":6,\"rows\":1,\"cursor\":{\"row\":0,\"col\":2},\"modes\":{\"screen\":\"normal\",\"bracketed_paste\":false,\"application_cursor\":false,\"application_keypad\":false,\"mouse\":\"none\",\"mouse_encoding\":\"default\",\"cursor_hidden\":false},\"title\":\"a\\u0007b\",\"cut\":false,\"lines\":[{\"text\":\"ok\",\"typed\":\"ok\",\"inverse\":\"\",\"width\":6,\"end\":2}]}"
+      },
+      {
+        "name": "a title of 1025 characters",
+        "acked": [
+          "core",
+          "screen",
+          "title"
+        ],
+        "json": "{\"t\":\"screen.rows\",\"re\":10,\"cols\":6,\"rows\":1,\"cursor\":{\"row\":0,\"col\":2},\"modes\":{\"screen\":\"normal\",\"bracketed_paste\":false,\"application_cursor\":false,\"application_keypad\":false,\"mouse\":\"none\",\"mouse_encoding\":\"default\",\"cursor_hidden\":false},\"title\":\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\",\"cut\":false,\"lines\":[{\"text\":\"ok\",\"typed\":\"ok\",\"inverse\":\"\",\"width\":6,\"end\":2}]}"
+      },
+      {
+        "name": "a title to a connection that did not ask for it",
+        "json": "{\"t\":\"screen.rows\",\"re\":10,\"cols\":6,\"rows\":1,\"cursor\":{\"row\":0,\"col\":2},\"modes\":{\"screen\":\"normal\",\"bracketed_paste\":false,\"application_cursor\":false,\"application_keypad\":false,\"mouse\":\"none\",\"mouse_encoding\":\"default\",\"cursor_hidden\":false},\"title\":\"a;b é\",\"cut\":false,\"lines\":[{\"text\":\"ok\",\"typed\":\"ok\",\"inverse\":\"\",\"width\":6,\"end\":2}]}"
       }
     ]
   }

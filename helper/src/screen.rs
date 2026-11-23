@@ -11,6 +11,17 @@
 //! requests answer from it (`serve.rs`, capability `screen`). Nothing here
 //! decides anything from what a screen shows (ADR-030 row 4).
 //!
+//! The title (from 2.1.3-beta.14, aicc_planning#384): the window title the
+//! output last set with OSC 0 or OSC 2, as xterm.js takes it (`onTitleChange`):
+//! everything after the first `;`, a later one replacing it, and OSC 1 (the
+//! icon name alone) leaving it. The crate keeps no title: it hands each OSC
+//! string to its callbacks (`Title`, below), which keep it. Control
+//! characters are dropped, and the title is bounded twice: the parser keeps
+//! the first 1 KiB of an OSC string and its first 16 parts between `;`s, so a
+//! title is cut at its fifteenth `;`, and `TITLE_MAX` characters are kept
+//! however the crate is built. `screen.read` answers it only to a connection
+//! that acked `title` (`serve.rs`).
+//!
 //! The bound. The parse runs on the thread that carries the session's
 //! output, so no output may make it slow or large:
 //!  - a CSI parameter above 9999 reaches the parser as 9999, as main cuts it
@@ -22,7 +33,8 @@
 //!  - the crate is built without its `std` feature (helper/Cargo.toml), so its
 //!    parser keeps an OSC string in a 1 KiB buffer and drops the rest, where
 //!    with `std` it keeps the whole string; DCS, SOS, PM and APC strings are
-//!    not kept at all. So no output makes the screen hold more than its cells.
+//!    not kept at all. So no output makes the screen hold more than its cells
+//!    and one title of at most `TITLE_MAX` characters.
 //!
 //! Widths: the crate counts a character's cells by current Unicode, and
 //! xterm.js 6.0.0 by Unicode 6, so a row with a character the two count
@@ -38,6 +50,10 @@ pub const SCROLLBACK_LINES: usize = 200;
 pub const TAIL_MAX: usize = 200;
 /// The largest CSI parameter that reaches the parser: main's ceiling.
 pub const PARAM_CEILING: u32 = 9999;
+/// The most characters of a title the screen keeps. The parser's 1 KiB bound
+/// on an OSC string already keeps a title shorter; this holds even if the
+/// crate were built with `std`, which keeps the whole string.
+pub const TITLE_MAX: usize = 1024;
 
 /// One row as the app's readers take it (`ScreenLine`): its text, the same
 /// with every dim cell a space, the same with every cell that is not inverse a
@@ -123,7 +139,7 @@ pub fn encoding_word(encoding: vt100::MouseProtocolEncoding) -> &'static str {
 
 /// What `screen.read` answers: the size, the cursor's cell (its column is
 /// `cols` while a wrap is pending after the last cell was written), every row
-/// from the top, and the modes.
+/// from the top, the modes, and the title (empty when the output set none).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Read {
     pub cols: u16,
@@ -132,12 +148,53 @@ pub struct Read {
     pub cursor_col: u16,
     pub lines: Vec<Line>,
     pub modes: Modes,
+    pub title: String,
 }
 
 /// A session's screen.
 pub struct Screen {
-    parser: vt100::Parser,
+    parser: vt100::Parser<Title>,
     clamp: Clamp,
+}
+
+/// The title the output last set: the crate's callbacks for OSC strings.
+#[derive(Debug, Default)]
+struct Title(String);
+
+/// The kind of an OSC string, as xterm.js reads it: its first part, all
+/// digits, as a number (so `00` is 0). None for anything else, and for a
+/// part of more than 9 digits, which xterm.js still reads as a number.
+fn osc_kind(part: &[u8]) -> Option<u32> {
+    if part.is_empty() || part.len() > 9 || !part.iter().all(u8::is_ascii_digit) {
+        return None;
+    }
+    Some(part.iter().fold(0u32, |n, d| n * 10 + u32::from(d - b'0')))
+}
+
+/// A title as the screen keeps it: the bytes as UTF-8 (a byte that is not
+/// one shows as U+FFFD), every control character dropped, at most
+/// `TITLE_MAX` characters.
+fn clean_title(bytes: &[u8]) -> String {
+    String::from_utf8_lossy(bytes).chars().filter(|c| !c.is_control()).take(TITLE_MAX).collect()
+}
+
+impl vt100::Callbacks for Title {
+    /// OSC 0 or OSC 2 with no `;` in its title (the crate calls this for
+    /// exactly two parts, `0` or `2` and the title).
+    fn set_window_title(&mut self, _: &mut vt100::Screen, title: &[u8]) {
+        self.0 = clean_title(title);
+    }
+
+    /// Every other OSC string. A title with a `;` in it comes here in more
+    /// than two parts, joined again as xterm.js keeps it whole; so do OSC 0
+    /// with no `;` at all (an empty title) and a kind such as `02`.
+    fn unhandled_osc(&mut self, _: &mut vt100::Screen, params: &[&[u8]]) {
+        if let [kind, parts @ ..] = params {
+            if matches!(osc_kind(kind), Some(0 | 2)) {
+                self.0 = clean_title(&parts.join(&b';'));
+            }
+        }
+    }
 }
 
 /// A size as the crate takes it: rows, then columns, neither 0.
@@ -239,7 +296,7 @@ impl Screen {
     /// A blank screen of `size` with `SCROLLBACK_LINES` of scrollback.
     pub fn new(size: PtySize) -> Screen {
         let (rows, cols) = dims(size);
-        Screen { parser: vt100::Parser::new(rows, cols, SCROLLBACK_LINES), clamp: Clamp::default() }
+        Screen { parser: vt100::Parser::new_with_callbacks(rows, cols, SCROLLBACK_LINES, Title::default()), clamp: Clamp::default() }
     }
 
     /// Feed the session's output, in the order it came; a chunk may end
@@ -275,14 +332,19 @@ impl Screen {
         }
     }
 
+    /// The title the output last set (empty when it set none).
+    pub fn title(&self) -> &str {
+        &self.parser.callbacks().0
+    }
+
     /// The screen now: its size, the cursor, every row from the top of the
-    /// screen in use (below any scrollback), and the modes.
+    /// screen in use (below any scrollback), the modes and the title.
     pub fn read(&self) -> Read {
         let s = self.parser.screen();
         let PtySize { cols, rows } = self.size();
         let (cursor_row, cursor_col) = s.cursor_position();
         let lines = (0..rows).map(|r| row_line(s, r, cols)).collect();
-        Read { cols, rows, cursor_row, cursor_col, lines, modes: self.modes() }
+        Read { cols, rows, cursor_row, cursor_col, lines, modes: self.modes(), title: self.title().to_string() }
     }
 
     /// The last `count` lines, oldest first: scrollback, then the screen in
@@ -527,6 +589,67 @@ mod tests {
         let tail = s.tail(2);
         assert_eq!(tail[0], TailLine { text: "a\u{1f600}bc d   ".to_string(), typed: "a   c d".to_string() });
         assert_eq!(tail[1], TailLine { text: String::new(), typed: String::new() });
+    }
+
+    /// The title after `bytes`, fed in one piece, and the same a byte at a time.
+    fn title_after(bytes: &[u8]) -> String {
+        let mut s = Screen::new(PtySize { cols: 20, rows: 2 });
+        s.feed(bytes);
+        let mut dripped = Screen::new(PtySize { cols: 20, rows: 2 });
+        for b in bytes {
+            dripped.feed(std::slice::from_ref(b));
+        }
+        assert_eq!(s.title(), dripped.title(), "a byte at a time: {:?}", String::from_utf8_lossy(bytes));
+        assert_eq!(s.read().title, s.title());
+        s.title().to_string()
+    }
+
+    #[test]
+    fn osc_0_and_2_set_the_title_and_a_later_one_replaces_it() {
+        assert_eq!(title_after(b"no title here"), "");
+        assert_eq!(title_after(b"\x1b]0;first\x07"), "first");
+        assert_eq!(title_after(b"\x1b]2;second\x1b\\"), "second");
+        assert_eq!(title_after(b"\x1b]0;first\x07text\x1b]2;\xe2\xa0\xb8 work\x07"), "\u{2838} work");
+        // OSC 1 names the icon only; other kinds are not titles.
+        assert_eq!(title_after(b"\x1b]2;kept\x07\x1b]1;icon\x07\x1b]8;;https://x\x07\x1b]7;file://h/p\x07"), "kept");
+        // As xterm.js keeps it: everything after the first `;`, a kind of
+        // digits read as a number, and OSC 0 with nothing after it empty.
+        assert_eq!(title_after(b"\x1b]0;a;b;;c\x07"), "a;b;;c");
+        assert_eq!(title_after(b"\x1b]02;two\x07"), "two");
+        assert_eq!(title_after(b"\x1b]0;set\x07\x1b]0;\x07"), "");
+        assert_eq!(title_after(b"\x1b]0;set\x07\x1b]0\x07"), "");
+        assert_eq!(title_after(b"\x1b]0;set\x07\x1b]x;not\x07\x1b];not\x07"), "set");
+        // Split anywhere across chunks: the same title.
+        let mut s = Screen::new(PtySize { cols: 20, rows: 2 });
+        for part in [&b"\x1b]"[..], &b"0;ha"[..], &b"lf "[..], &b"\xe2\xa0"[..], &b"\xb8\x07"[..]] {
+            s.feed(part);
+        }
+        assert_eq!(s.title(), "half \u{2838}");
+    }
+
+    #[test]
+    fn a_title_keeps_no_control_character_and_holds_its_bound() {
+        // The parser drops C0 controls in an OSC string itself; DEL and the
+        // C1 controls, which it keeps, are dropped here.
+        assert_eq!(title_after(b"\x1b]0;a\x01b\x7fc\xc2\x9bd\x07"), "abcd");
+        assert_eq!(clean_title("x\u{85}y\u{9f}z\u{7f}".as_bytes()), "xyz");
+        // A byte that is not UTF-8 shows as U+FFFD.
+        assert_eq!(title_after(b"\x1b]0;a\xffb\x07"), "a\u{fffd}b");
+        // A 16 MiB title: the parser keeps the first 1 KiB of the string.
+        let mut long = b"\x1b]0;".to_vec();
+        long.resize(4 + (16 << 20), b'a');
+        long.push(0x07);
+        let mut s = Screen::new(PtySize { cols: 20, rows: 2 });
+        s.feed(&long);
+        let t = s.title();
+        assert!(!t.is_empty() && t.len() < 1024 && t.bytes().all(|b| b == b'a'), "{} bytes", t.len());
+        // More parts than the parser keeps: cut at the fifteenth `;`.
+        let parts: Vec<String> = (1..=20).map(|n| n.to_string()).collect();
+        let many = format!("\x1b]0;{}\x07", parts.join(";"));
+        assert_eq!(title_after(many.as_bytes()), parts[..15].join(";"));
+        // However the bytes came, never more than TITLE_MAX characters.
+        let wide: String = std::iter::repeat('\u{e9}').take(TITLE_MAX + 50).collect();
+        assert_eq!(clean_title(wide.as_bytes()).chars().count(), TITLE_MAX);
     }
 
     #[test]

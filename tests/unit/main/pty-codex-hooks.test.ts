@@ -178,7 +178,7 @@ vi.mock('../../../src/main/credential-store', () => ({ loadCredential: () => nul
 vi.mock('../../../src/main/provider-accounts', () => ({ getAccountsService: () => null }))
 
 const pm = await import('../../../src/main/pty-manager')
-const { spawnPty, killPty, noteCodexHookTranscript, noteCodexHookEvent, routeHookTranscriptPath, getKeptCodexConversationSource, rememberUncertainCodexConversationsFrom, isCodexPtySession } = pm
+const { spawnPty, killPty, killAllPty, gracefulExitPty, noteCodexHookTranscript, noteCodexHookEvent, routeHookTranscriptPath, getKeptCodexConversationSource, rememberUncertainCodexConversationsFrom, isCodexPtySession } = pm
 const { codexIdleMarks } = await import('../../../src/main/codex-idle-attention')
 
 const SID = 'cx0000000000000000000001'
@@ -336,6 +336,32 @@ describe('a hook\'s transcript path: the exact claim (P3.5, P3.6 limits)', () =>
     exitAll()
     expect(h.unregistered).toContain(SID)
     expect(noteCodexHookTranscript(SID, rollout('a', ID_A))).toBe(false)
+  })
+
+  // Mutation to prove this can fail: drop the Codex guard before unbindLaunchFiles in killAllPty or after gracefulExitPty's forced kill.
+  it('aicc_planning#385: a quit\'s kill (killAllPty, and gracefulExitPty\'s forced kill) keeps that record too, until the process exits (round 1 B1, round 2 R8)', async () => {
+    start(SID)
+    killAllPty()
+    // The gateway refuses its late hooks (the token went at the kill)...
+    expect(h.unregistered).toContain(SID)
+    // ...and a hook already on its way is still Codex's, never a Claude sink.
+    expect(noteCodexHookTranscript(SID, rollout('a', ID_A))).toBe(true)
+    exitAll()
+    expect(noteCodexHookTranscript(SID, rollout('a', ID_A))).toBe(false)
+    start(SID2)
+    vi.useFakeTimers()
+    try {
+      const quit = gracefulExitPty(SID2, 5000)
+      vi.advanceTimersByTime(5001)
+      await quit
+    } finally {
+      vi.useRealTimers()
+    }
+    // The wait for /exit ran out: a forced kill, its end not reported yet.
+    expect(h.ptys.at(-1)!.kill).toHaveBeenCalled()
+    expect(noteCodexHookTranscript(SID2, rollout('a', ID_B))).toBe(true)
+    exitAll()
+    expect(noteCodexHookTranscript(SID2, rollout('a', ID_B))).toBe(false)
   })
 
   it('round 2 (R8): a Claude session\'s token is not dropped at its kill (it goes with its exit, as before)', () => {

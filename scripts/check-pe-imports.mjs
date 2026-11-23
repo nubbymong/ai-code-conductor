@@ -20,20 +20,40 @@
 // build.win.target). It only reads the file; it never runs it, so it is safe
 // on any OS and on any copy.
 //
+// It also fails a program whose import table (not its delay-load table) names
+// a window-manager DLL (user32, gdi32, shcore; WINDOW_MANAGER_DLL): only the
+// helper's capture mode calls them, and helper/.cargo/config.toml delay-loads
+// them so that no other mode loads them at its start (2.1.3-beta.14 C6).
+//
 // scripts/verify-bundled-helper.mjs applies the same rules (importProblems) to
 // the packaged, signed copy of the helper.
 //
 //   node scripts/check-pe-imports.mjs <program.exe> [<program.exe> ...]
 //
-// Exit 0: every file is an x64 PE image that names at least one imported DLL
-//         and no C runtime DLL.
-// Exit 1: a file imports a C runtime DLL, names no DLL at all (the check would
-//         prove nothing), is not x64, or cannot be read as a PE image.
+// Exit 0: every file is an x64 PE image that names at least one imported DLL,
+//         no C runtime DLL, and no window-manager DLL in its import table.
+// Exit 1: a file imports a C runtime DLL, imports a window-manager DLL at load
+//         time, names no DLL at all (the check would prove nothing), is not
+//         x64, or cannot be read as a PE image.
 // Exit 2: no file was given.
 
 import { readFileSync, realpathSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+
+/**
+ * A window-manager DLL: user32, gdi32 or shcore, by its own name or an API set
+ * name that leads to it (api-ms-win-shcore-*, and the ntuser and gdi sets that
+ * lead to user32 and gdi32). Only the helper's capture mode calls them, so
+ * helper/.cargo/config.toml delay-loads them: imported at load time, they would
+ * load before main in every mode and make each helper process a
+ * window-manager client at its start (2.1.3-beta.14 section C6).
+ */
+export const WINDOW_MANAGER_DLL = /^(?:user32|gdi32|shcore|(?:api|ext)-ms-win-(?:shcore|ntuser|gdi)-[\w-]+)(?:\.dll)?$/i
+
+export function isWindowManagerDll(name) {
+  return typeof name === 'string' && WINDOW_MANAGER_DLL.test(name)
+}
 
 /** A C runtime DLL: shipped by the Visual C++ runtime, or the Universal C runtime. */
 export const CRT_DLL = /^(?:(?:vcruntime|msvcp|msvcr|concrt|vccorlib|vcomp)\d+\w*|ucrtbased?|api-ms-win-crt-[\w-]+)(?:\.dll)?$/i
@@ -171,7 +191,8 @@ const allImports = (found) => [...found.imports, ...found.delayImports.map((d) =
 /**
  * What is wrong with one program's imports, as sentences that follow its name;
  * an empty list when it passes: an x64 program that names at least one
- * imported DLL and no C runtime DLL.
+ * imported DLL, no C runtime DLL, and no window-manager DLL in its import
+ * table (delay-loaded is right).
  * @param {{ machine: number, imports: string[], delayImports: string[] }} found what readImports returned
  * @returns {string[]}
  */
@@ -185,6 +206,11 @@ export function importProblems(found) {
       ? "Windows cannot start it on a PC without Microsoft's Visual C++ runtime."
       : 'Those are the Universal C runtime, part of Windows 10 and later, but a program that carries its own C runtime imports none of them.'
     problems.push(`does not carry its own C runtime: it imports ${crt.join(', ')}. ${why} All its imports: ${all.join(', ')}.`)
+  }
+  // The import table only: a delay-loaded window-manager DLL is the fix.
+  const windowManager = found.imports.filter(isWindowManagerDll)
+  if (windowManager.length > 0) {
+    problems.push(`loads ${windowManager.join(', ')} before main, in every mode: only the capture mode calls the window-manager DLLs, so they must be delay-loaded (helper/.cargo/config.toml, /DELAYLOAD) and load only when that mode runs. All its imports: ${all.join(', ')}.`)
   }
   if (names.length === 0) problems.push('names no imported DLL, so this check would prove nothing about it.')
   if (found.machine !== X64) problems.push(`is built for ${machineName(found.machine)}, not x64: the Windows installer ships an x64 helper only (package.json build.win.target).`)
@@ -222,7 +248,7 @@ export function main(argv = process.argv.slice(2), io = {}) {
       failed++
       continue
     }
-    log(`[check-pe-imports] ${named}: OK, no C runtime DLL. It imports: ${allImports(found).join(', ')}.`)
+    log(`[check-pe-imports] ${named}: OK, no C runtime DLL and no window-manager DLL loaded at start. It imports: ${allImports(found).join(', ')}.`)
   }
   return failed > 0 ? 1 : 0
 }

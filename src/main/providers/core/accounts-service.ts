@@ -895,7 +895,8 @@ export class AccountsService {
   }
 
   /** The models the provider's installed CLI offers in its own picker, read
-   *  from the CLI (P3.9, row 39: Sentinel's live model check). Like every
+   *  from the CLI (P3.9, row 39; aicc_planning#362: the Codex model picker's
+   *  list, installed-codex-models.ts, and Sentinel's live check). Like every
    *  CLI a provider runs, the launch rule decides first, and again after the
    *  wait for its proof (a discovery in flight is joined); the package runs
    *  only the executable discovery proved, in no account's folder. A package

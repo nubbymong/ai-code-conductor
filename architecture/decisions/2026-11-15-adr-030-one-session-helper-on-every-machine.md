@@ -3,7 +3,7 @@
 - Status: Accepted (owner decisions D1 to D20 of 2026-11-15; plan approved on
   the Agent Canvas, 2026-11-15). Only the scope of 2.1.3-beta.4 is approved for
   building. Every later slice comes back one beta at a time, and each of the
-  twenty probes below can still stop or reshape the slice it gates.
+  twenty-one probes below can still stop or reshape the slice it gates.
 - Date: 2026-11-15
 - Builds on: ADR-029 (remote sessions run through a device helper),
   `docs/remote/helper-protocol.md` (protocol version 1),
@@ -221,13 +221,13 @@ cut over.
 | Saved session configs | Local, account binding and Codex shapes | SSH with a post-connect field and a persistent option; containers and sudo | Every saved shape maps to a launch spec, nothing re-entered (D14) |
 | Statusline | A Node bridge posts to a loopback port, with a file fallback | A Node shim over a reverse forward, with a terminal-marker fallback | The helper's statusline mode sends a status frame; row 13 owns what it means |
 | Hook event stream and attention indicator | The CLI makes an HTTP call per hook to a gateway in its own utility process | No hook event stream; attention by a marker a small remote hook writes to the terminal | Hook frames. Local keeps the full payload. Remote keeps hook name, tool name, notification text and a short error-kind label on StopFailure, and gets the stream for the first time (D6) |
-| Permission answers from the app | None: the CLI's own prompt decides. The gateway answers every PreToolUse at once, and its hold for an answer is dormant: nothing in src sets `gateActive` (hooks-gateway.ts:472-477, :491-496), `resolveResponder` (permission-responders.ts:28) has no caller, and the per-session settings register no `PermissionRequest` | None | None planned: the CLI's own prompt, local and remote, the app away or not. `hook.ask` and `hook.answer` (protocol change 3) only if the app answers permissions again |
+| Permission answers from the app | None: the CLI's own prompt decides. The gateway answers every request at once, PreToolUse and PermissionRequest included, and has no hold for an answer (the dormant one was deleted in 2.1.3-beta.14, aicc_planning#358); the per-session settings register no `PermissionRequest`, and a held Claude Code session's PreToolUse runs the helper's hook mode, which answers nothing | None | None planned: the CLI's own prompt, local and remote, the app away or not. `hook.ask` and `hook.answer` (protocol change 3) only if the app answers permissions again |
 | Sleep indicator | Only when the Watchdog is on | The same | The holder reports the last-output time; core shows the state |
 | Watchdog: limit detection and automatic retry | Off by default; a headless terminal in main per watched session | A stricter send check for a remote-drawn screen; no StopFailure | Core detectors read the holder's screen; retry through `submit`; the stricter check stays for every remote machine; StopFailure on remote too (D6) |
 | Conductor tools | HTTP on a loopback port with a per-session token | The same server through the reverse forward | A stdio relay in the helper; remote calls pass the default-deny list; a call made while the app is away is held about 30 seconds, then answered "updating" (D1) |
 | Vision screenshots | The tool writes a file into the shared screenshots folder | The same file, fetched by the host transfer tool | Handed to the calling session's paste folder: same cap, deleted with the session |
-| Canvas review markers | Claude: the renderer's terminal reads the prompt and types. Codex: a second headless pane in main | Claude: the same renderer typing, with no turn boundary | The marker queue calls `submit`; it works with no window attached; the turn boundary comes from hook frames on both (D6) |
-| Codex composer submit | A headless pane in main for every local Codex session | Not applicable | The composer rule reads the holder's screen; the pane is deleted |
+| Canvas review markers | Claude: the renderer's terminal reads the prompt and types. Codex: a second headless pane in main (from 2.1.3-beta.14, the holder's screen for a held session) | Claude: the same renderer typing, with no turn boundary | The marker queue calls `submit`; it works with no window attached; the turn boundary comes from hook frames on both (D6) |
+| Codex composer submit | A headless pane in main for every local Codex session; from 2.1.3-beta.14 a held one (agent sessions' setting on) is read from the holder's screen and has no pane | Not applicable | The composer rule reads the holder's screen; the pane is deleted |
 | Status strip controls (Compact, model, effort) | Typed by the renderer after it reads its own terminal | The same (not checked separately for SSH) | The control calls `submit` against the holder's screen |
 | Canvas rendering of project files | The project folder and the session worktree | None; inline content only | Unchanged (declared exception 3) |
 | Image paste | Focus outside the terminal: the app saves the image and types the path. Focus in the terminal: the CLI pastes it itself | Claude: a prompt asking the agent to call a tool. Plain and partner terminals: a hint only | D5: the app takes the key wherever the focus is; identical local and remote, for every session kind |
@@ -342,14 +342,14 @@ otherwise carried from earlier measurement.
 | Supervisors | 3 (shown through one registry from beta 4) | 2 once the hooks gateway is gone |
 | PTY owners in the app | 3 files | 0 or 1 after the remote deletion |
 | Native add-ons loaded in main | 2 | 1 once the old Snap package is deleted; 0 or 1 after the remote deletion |
-| Headless terminals in main (the Watchdog and the Codex session screen) | 2 | 1 after the local deletion; 0 after the remote deletion |
+| Headless terminals in main (the Watchdog and the Codex session screen) | 2 (from 2.1.3-beta.14, 1 for a held Codex session) | 1 after the local deletion; 0 after the remote deletion |
 | Readers of one session's screen | Up to 3 | 1 |
 | Installer size | Not printed | Printed from the first build that carries the helper, and again when the Linux and macOS host builds and the Windows host builds are added |
 
 - **Pace.** After each release the next beta is cut from the measured hours
   per slice, not from a calendar. Soak time (D15) is not in those hours.
 - **Honest cost.** Until the remote deletion the SDLC is heavier, not lighter:
-  a Rust toolchain and signing, twenty probes on real machines, two session
+  a Rust toolchain and signing, twenty-one probes on real machines, two session
   paths side by side, and five dedicated adversarial rounds that the decisions
   add (the token on This computer, the token on a remote machine, the remote
   conversation intake, Windows provisioning, the user's own pre-launch
@@ -397,6 +397,7 @@ their questions, gates and fallbacks are restated for the slice plan.
 | P18 | On Windows, how do Claude Code and Codex start a tool server over standard input and output, and is it gone when the CLI ends? | Tools through the helper (S15) | The relay's start is planned again for that CLI, whose sessions keep today's loopback route to the tools until then |
 | P19 | After a re-attach that starts in the middle of a session's output, does a resize make Claude Code and Codex redraw their screen, on Windows, macOS and Linux? | What a mid-stream re-attach does, and what the holder's screen is for (S13) | On that system the holder repaints the terminal on attach from its own screen, with the holder screen's next step and before S16's second half and S25 there |
 | P20 | Once the app run that started a CLI is gone: what do Claude Code's http PreToolUse hook and Codex's hook forwarder do when the endpoint refuses, answers 401 or 404, or never answers; does Claude Code read its `--settings` hooks or its `--mcp-config` again while it runs; does each CLI list its tools again on `notifications/tools/list_changed`? | S16's second half: steps 2, 4 and 6 (CONTEXT.d/2026-11-19-what-a-held-agent-session-needs.md) | PreToolUse goes through the hook mode (step 2) before step 4 keeps that CLI's session; a take-over writes nothing into a file the CLI reads only once; step 6 is dropped for a CLI that does not list again, and its held session keeps the tool list it started with |
+| P21 | On Windows, can the helper's capture mode, started from the signed-in user's own session, capture each display in physical pixels at that display's scale within 2 seconds, and does a run from a session with no desktop fail cleanly? | Snap replaced on Windows (S8, D3) | Electron's `desktopCapturer` behind our overlay on Windows, and the capture mode's Windows path is planned again |
 
 P12 result (2026-11-15): a Token session runs and keeps its usage figures;
 Remote Control and extra-usage credits need a Standard login; which kind is
@@ -435,9 +436,10 @@ as the login shell, a `.bashrc` that returns early for a shell that is not inter
 macOS, a password host, a home mounted `noexec`. Rocky Linux 10: not run. Its one connect,
 limited to 8 s, failed at the address on file and the probe recorded "host off", a label it
 also gave a refused connection and a name that does not resolve, so whether the host was
-off is not known; owed to beta.14, where the same probe runs on it. Three things in it
-changed after this run, none in what it measures: a refused connection and an unknown name
-have labels of their own, a host name with a colon is not run, and a host without pgrep is
+off is not known; owed to beta.14, where the same probe runs on it. Rocky Linux 10: not
+run; its one 8 s connect failed on 2026-11-22 (host off); owed to beta.15. Three
+things in the probe changed after the 2026-11-21 run, none in what it measures: a refused
+connection and an unknown name have labels of their own, a host name with a colon is not run, and a host without pgrep is
 reported as not left as found. The host that answered was left as found: every holder ended, the probe's temporary folder
 deleted, and `/tmp/aicc-<uid>`, which was not there before, not there after; nothing was
 made on the other. The probe is `helper/probes/p3-p6-linux.cjs`.
@@ -601,8 +603,12 @@ runs in each runner dispatch and in 22 of 23 and 13 of 14 runs on the test machi
 node-pty's kill ran right after each exit; the one run without one in each was the only run
 whose program the kill ended. On the bundled ConPTY, ENDS BY ITSELF (no host of the probe's at
 any time). The app gives the system ConPTY to Claude Code sessions and plain terminals, so a
-session that ends there leaves its console host running; that is on beta 13's bug track
-(aicc_planning#363; the kill is in `pty-manager.ts`). Codex started with its background server
+session that ended there by itself left its console host running until the app quit (5 of 5
+on the published beta.13). The cause is in node-pty 1.2.0-beta.15 (`src/win/conpty.cc`): its
+exit thread drops the pseudoconsole, unclosed, when the program exits, so the kill after it
+closes nothing. From 2.1.3-beta.14 the app ends that host through the helper's
+`end-console-host` mode once node-pty reports the exit (aicc_planning#363; protocol 15, "A
+terminal's console host after its program has ended"). Codex started with its background server
 (no `--no-daemon`) in the test machine's elevated SSH session: 0.157.1 FAILS on both ConPTYs,
 printing "Error: start the Windows daemon from a non-elevated terminal; shared clients must
 not inherit administrator privileges" and exiting with code 1 before its composer; 0.170.0
@@ -683,6 +689,29 @@ change 3. Not measured: a signed-in account and a real model, the app's own gate
 path (the probe writes the same entries), a settings file written in place, Claude Code's other
 hook events, macOS and Linux, Codex below 0.157.1 (the tested range starts at 0.153.4). The
 probe is `helper/probes/p20-probe.cjs`.
+
+P21 result (2026-11-22, plan 2.1.3-beta.14 C6, the Windows test machine, build 22621, with the
+`helper-windows` artifact of Helper run 45032133403 on 0e2d6f98, whose `aicc-helper.exe` has
+SHA-256 51a33a39f8d4d046445081e3f4c93736a82e65048ef10ec0565e6c1529fb5b36). The decision lines
+were fixed before measuring and are in the probe's header. From the SSH session (session 0,
+elevated): FAILS CLEANLY. In 3 of 3 runs the mode exited 3 in 13 to 61 ms with "no desktop to
+capture: this process runs on a window station no display shows (`Service-0x0-...$`): a service
+or an SSH session", printed nothing on stdout and left no file. In that session Windows lists no
+attached display mode (EnumDisplaySettings), yet still gives one display of 1024 by 768 at 96 DPI
+(EnumDisplayMonitors and GetDpiForMonitor), so the window station check is what stops the run, not
+the display list. From the console session: CANNOT MEASURE. Nobody was signed in on the test
+machine's console: `quser` listed no user and LogonUI ran in session 1. Its auto sign-in is set
+(AutoAdminLogon 1, user User) with no DefaultPassword value under the Winlogon key (a password
+kept as an LSA secret was not read, so why it did not sign in is not known), and Winlogon's last
+sign-in notice is from 2026-10-30, so the start of 2026-11-18 signed nobody in. The probe's scheduled task,
+which runs only while its user is signed in, was registered and started and did not run (0x00041303,
+"the task has not run"); it was removed, and nobody was signed in by hand. So the console runs'
+time, sizes, DPI and pixels and the second scale were not measured, and mixed scaling was not
+measured (the machine has one display). What it means, as fixed before measuring: no verdict for
+the console session, so P21 runs again from a signed-in console session before S8 builds Snap's
+Windows overlay on the mode; the SSH half needs nothing. The machine was left as found (no task,
+no file, its scale and name lookups as they were). The probe is `helper/probes/p21-capture.cjs`
+with `p21-windows.ps1`.
 
 ## Parked questions
 

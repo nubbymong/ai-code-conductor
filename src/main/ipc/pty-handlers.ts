@@ -786,7 +786,7 @@ export function registerPtyHandlers(getWindow: () => BrowserWindow | null): void
   })
 
   // WP2 PR 4, P4.3 (row 53): a question for a LIVE Ask session on Codex,
-  // typed through the run's pane and its submit primitive (session-input
+  // typed through the run screen and its submit primitive (session-input
   // handOffAskQuestion), never the raw question and Enter. Only a running
   // Codex session that launched as Ask takes one; the app's window only.
   ipcMain.handle(IPC.ASK_CONDUCTOR_HAND_OFF, async (e, args: unknown): Promise<SubmitTextResult> => {

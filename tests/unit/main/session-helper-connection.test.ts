@@ -20,9 +20,10 @@
 //    answered with an error then (at most MCP_OPEN_CALLS_MAX kept a stream);
 //    the size limit is the holder's, to the byte;
 //  - `screen` the same way (2.1.3-beta.12, plan section A3): acked only when
-//    the connection is asked for it AND the hello offers it, which no caller
-//    asks yet; a read on a connection that acked it is a request like any
-//    other, and its answer passes the reader.
+//    the connection is asked for it AND the hello offers it (a plain
+//    terminal's take-over asks from 2.1.3-beta.13, a held Codex session's
+//    connections from 2.1.3-beta.14); a read on a connection that acked it is
+//    a request like any other, and its answer passes the reader.
 import { describe, it, expect, afterEach } from 'vitest'
 import { readFileSync } from 'fs'
 import { resolve } from 'path'

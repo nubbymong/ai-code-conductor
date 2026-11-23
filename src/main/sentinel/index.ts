@@ -29,6 +29,7 @@ import {
 import { codexVersionFindings, type SupportedVersions } from './sentinel-codex'
 import { fetchArticleModelIds } from './sentinel-model-article'
 import { getRegistry, getBundledRegistry, applyOverlayEntry, removeOverlayEntry, loadOverlay, setOverlay } from '../model-registry-service'
+import { readInstalledCodexModels } from '../installed-codex-models'
 import { reconcileOverlay } from '../../shared/model-registry'
 import { sentinelAnalysisProvider } from '../../shared/ask-conductor-provider'
 import { stripSpoofableText } from '../../shared/safe-text'
@@ -237,8 +238,9 @@ async function runModelCoverageCheck(): Promise<void> {
 /**
  * The Codex half of the model coverage check (P3.8, row 39): the registry's
  * Codex models against the list the installed Codex CLI offers when it could
- * be read just now (P3.9), else the list shipped with this build. A throw is a
- * finding of its own, as the Claude half's is.
+ * be read (P3.9; the Codex picker then offers that list, aicc_planning#362,
+ * so no model notice is raised), else the list shipped with this build. A
+ * throw is a finding of its own, as the Claude half's is.
  */
 function runCodexModelCoverageCheck(live: CodexLiveModelList | null): void {
   if (!state) return
@@ -297,7 +299,10 @@ function codexInstallationNow(svc: Awaited<ReturnType<typeof accountsService>>):
  * P3.9 (rows 39, 42): the Codex checks, while Codex is on. Its version
  * against the supported range, then the model registry against the list the
  * installed CLI offers, read from it (no sign-in, no network, in no account's
- * folder), else the shipped list. The version is the accounts service's
+ * folder; through installed-codex-models.ts, which hands it to the Codex
+ * picker too: a Re-run reads it again, the start-up check takes the read the
+ * app made when it found Codex, aicc_planning#362), else the shipped list.
+ * The version is the accounts service's
  * discovery (a `codex --version` in an empty folder): `fresh`, a new check,
  * as Claude's Re-run runs `claude --version` again; else (the start-up check,
  * round 1) the look the app already took at start, joined while it runs and
@@ -322,7 +327,7 @@ async function runCodexChecks(opts: { probe: boolean; fresh: boolean }): Promise
     if (svc && typeof svc.readModelCatalogue === 'function') {
       try {
         // Runs nothing for a CLI not found or of a version the app cannot use.
-        const r = await svc.readModelCatalogue('codex')
+        const r = await readInstalledCodexModels(svc, { fresh: opts.fresh })
         if (r && r.ok && r.catalogue.ok) live = { version: r.catalogue.version, models: r.catalogue.models }
         else logInfo(`[sentinel] the installed Codex's model list was not read (${r && r.ok ? (r.catalogue.ok ? 'ok' : r.catalogue.code) : r?.code ?? 'no answer'}); the list shipped with this build is used`)
       } catch { /* the shipped list answers */ }

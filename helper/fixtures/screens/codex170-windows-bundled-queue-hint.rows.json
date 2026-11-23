@@ -1,9 +1,10 @@
 {
-  "_doc": "The rows @xterm/headless gives for the recording beside it, fed through main's CSI clamp at the Watchdog pane's settings. Written by tests/unit/shared/screen-corpus.test.ts with SCREEN_CORPUS_WRITE=1, and compared by it otherwise.",
+  "_doc": "The rows @xterm/headless gives for the recording beside it, fed through main's CSI clamp at the Watchdog pane's settings, and the window title its output last set (null: none). Written by tests/unit/shared/screen-corpus.test.ts with SCREEN_CORPUS_WRITE=1, and compared by it otherwise.",
   "recording": "codex170-windows-bundled-queue-hint.json",
   "xterm": "6.0.0",
   "scrollback": 200,
   "tailLines": 200,
+  "title": "⠸ p19 short: print the probe's short reply | work",
   "screens": [
     {"after": "last chunk", "event": 198, "cols": 120, "rows": 40, "buffer": "alternate", "lines": [
       {"text":"","typed":"","inverse":"","width":120,"end":0},

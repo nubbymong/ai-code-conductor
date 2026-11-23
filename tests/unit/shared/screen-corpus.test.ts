@@ -24,17 +24,21 @@
 // Watchdog's pane and the Codex pane use), at the Watchdog pane's settings
 // (200 lines of scrollback): the screen as readXtermScreen returns it (text,
 // typed, inverse, width, end per row) after each resize mark and after the
-// last chunk, and the last 200 lines as text after the last chunk (the text
-// half of the Watchdog's tail). At a resize mark the pane is resized, as the
-// Watchdog's pane and the holder's screen are when the session is. The rows
-// files are written by this test: run it with SCREEN_CORPUS_WRITE=1 to write
-// them, and without it to compare. There is no other script.
+// last chunk, the last 200 lines as text after the last chunk (the text half
+// of the Watchdog's tail), and the window title the output last set by then
+// (null: none; 2.1.3-beta.14 B1, aicc_planning#384, so the holder's screen,
+// helper/tests/screen.rs, is held to the same title). At a resize mark the
+// pane is resized, as the Watchdog's pane and the holder's screen are when
+// the session is. The rows files are written by this test: run it with
+// SCREEN_CORPUS_WRITE=1 to write them, and without it to compare. There is no
+// other script.
 //
 // The cases:
-//  1. the rows made now equal the committed rows, for every recording, so an
-//     xterm.js bump that moves a row shows here first, and each rows file
-//     names the @xterm/headless loaded now (a bump that moves no row still
-//     fails here until the rows files are written again);
+//  1. the rows and the title made now equal the committed ones, for every
+//     recording, so an xterm.js bump that moves a row or a title shows here
+//     first, and each rows file names the @xterm/headless loaded now (a bump
+//     that moves nothing still fails here until the rows files are written
+//     again);
 //  2. the reader of each recording's program reads the state in its name
 //     (readClaudeScreen, readCodexScreen; for the shell both read no prompt);
 //  3. the names come from the fixed sets, each recording has its rows file and
@@ -68,8 +72,8 @@
 //  - a home path with an escape sequence inside it that is gone from the screen before a
 //    snapshot (the chunks are matched as written, the rows only at the snapshots);
 //  - the rows files' size (only the recordings have caps);
-//  - the window title in the rows files: it is read from the replay (cases 2
-//    and 5), never written there, and only the title after the last chunk;
+//  - the window title at a resize mark: only the title after the last chunk
+//    is made and committed;
 //  - Claude Code's reader with a title (it takes none).
 import { describe, it, expect, vi } from 'vitest'
 import { existsSync, readdirSync, readFileSync, writeFileSync } from 'fs'
@@ -216,8 +220,8 @@ interface Recording {
   state: string; cols: number; rows: number; source: string; events: RecEvent[]
 }
 interface Screen { after: 'resize' | 'last chunk'; event: number; cols: number; rows: number; buffer: string; lines: ScreenLine[] }
-/** `title` (B2): the window title the output last set (null: none); made by
- *  the replay only, never in a rows file. */
+/** `title` (2.1.3-beta.13 B2): the window title the output last set by the
+ *  last chunk (null: none); in each rows file since 2.1.3-beta.14 B1. */
 interface Made { screens: Screen[]; tail: string[]; title?: string | null }
 
 const listDir = (): string[] => (existsSync(DIR) ? readdirSync(DIR).sort() : [])
@@ -279,11 +283,12 @@ const rowsOf = (name: string): Promise<Made> => {
 function rowsFileText(name: string, m: Made): string {
   const j = JSON.stringify
   const out = ['{']
-  out.push(`  "_doc": ${j('The rows @xterm/headless gives for the recording beside it, fed through main\'s CSI clamp at the Watchdog pane\'s settings. Written by tests/unit/shared/screen-corpus.test.ts with SCREEN_CORPUS_WRITE=1, and compared by it otherwise.')},`)
+  out.push(`  "_doc": ${j('The rows @xterm/headless gives for the recording beside it, fed through main\'s CSI clamp at the Watchdog pane\'s settings, and the window title its output last set (null: none). Written by tests/unit/shared/screen-corpus.test.ts with SCREEN_CORPUS_WRITE=1, and compared by it otherwise.')},`)
   out.push(`  "recording": ${j(`${name}.json`)},`)
   out.push(`  "xterm": ${j(XTERM_VERSION)},`)
   out.push(`  "scrollback": ${SCROLLBACK},`)
   out.push(`  "tailLines": ${TAIL_LINES},`)
+  out.push(`  "title": ${j(m.title ?? null)},`)
   out.push('  "screens": [')
   m.screens.forEach((s, i) => {
     const { lines, ...head } = s
@@ -299,11 +304,13 @@ function rowsFileText(name: string, m: Made): string {
   return `${out.join('\n')}\n`
 }
 
-/** A committed rows file: the rows, and the @xterm/headless that made them. */
+/** A committed rows file: the rows, the title, and the @xterm/headless that
+ *  made them. A file with no title field reads undefined, which no replay
+ *  makes, so case 1 fails until it is written again. */
 interface RowsFile extends Made { xterm: unknown }
 const readRows = (name: string): RowsFile => {
   const r = JSON.parse(readFileSync(resolve(DIR, `${name}.rows.json`), 'utf-8')) as RowsFile
-  return { xterm: r.xterm, screens: r.screens, tail: r.tail }
+  return { xterm: r.xterm, screens: r.screens, tail: r.tail, title: r.title }
 }
 
 // ── the checks, as functions, so the planted cases below run the same code ──
@@ -322,6 +329,7 @@ function rowDifferences(want: Made, got: Made): string[] {
     }
   }
   if (JSON.stringify(want.tail) !== JSON.stringify(got.tail)) out.push(`the tail differs (${got.tail.length} lines, ${want.tail.length} committed)`)
+  if (want.title !== got.title) out.push(`the title: ${JSON.stringify(got.title)}, committed ${JSON.stringify(want.title)}`)
   return out
 }
 
@@ -433,7 +441,7 @@ describe('the screen corpus (helper/fixtures/screens)', () => {
     expect(RECORDINGS.length).toBeGreaterThan(0)
   })
 
-  describe('1. the rows xterm.js gives now are the committed rows', () => {
+  describe('1. the rows and the title xterm.js gives now are the committed ones', () => {
     it.each(RECORDINGS)('%s', async (name) => {
       const got = await rowsOf(name)
       if (WRITE) writeFileSync(resolve(DIR, `${name}.rows.json`), rowsFileText(name, got))
@@ -531,6 +539,16 @@ describe('the screen corpus (helper/fixtures/screens)', () => {
       line.text = `${line.text}x`
       expect(rowDifferences(planted, got)).toHaveLength(1)
       expect(rowDifferences(got, got)).toEqual([])
+    })
+
+    it('case 1: a changed title, and a rows file with no title, are a difference', async () => {
+      const name = RECORDINGS.find((n) => n.startsWith('codex-') && n.endsWith('-mid-reply')) as string
+      const got = await rowsOf(name)
+      expect(typeof got.title).toBe('string')
+      expect(rowDifferences({ ...got, title: `${got.title}x` }, got)).toEqual([`the title: ${JSON.stringify(got.title)}, committed ${JSON.stringify(`${got.title}x`)}`])
+      expect(rowDifferences({ ...got, title: null }, got)).toHaveLength(1)
+      expect(rowDifferences({ ...got, title: undefined }, { ...got, title: null })).toHaveLength(1)
+      expect(rowDifferences({ ...got }, got)).toEqual([])
     })
 
     it('case 2: a recording under another state\'s name is caught', async () => {

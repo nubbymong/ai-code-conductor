@@ -24,7 +24,6 @@ function fakeGateway(status: HooksGatewayStatus): HooksGatewayLike {
     status: () => status,
     start: async () => status,
     stop: async () => {},
-    setPermissionGateActive: () => {},
     subscribe: () => () => {},
   } as unknown as HooksGatewayLike
 }

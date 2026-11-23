@@ -6,6 +6,7 @@
 //! used anywhere in `src/` (threat model 3.10).
 #![deny(unsafe_code)]
 
+pub mod capture;
 pub mod client;
 pub mod cmdline;
 pub mod consoles;

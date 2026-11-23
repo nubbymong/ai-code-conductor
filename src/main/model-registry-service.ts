@@ -12,17 +12,24 @@
 //     used: an older copy would put back the aliases, labels and prices a
 //     newer build has since corrected;
 //  3. the overlay, <resourcesDir>/sentinel/registry-overlay.json (the user's
-//     and Sentinel's own additions; it wins per id).
+//     and Sentinel's own additions; it wins per id);
+//  4. the installed Codex's own model list (aicc_planning#362), read from it
+//     in memory (installed-codex-models.ts) and never kept: once it is read,
+//     the Codex models are that list's, each with its own levels, and a row
+//     of layers 1 to 3 only adds a price or corrects a label
+//     (withInstalledCodexModels). No list: layers 1 to 3 alone.
 //
-// Layers 1 and 2 make the baseline (getBaseline); the overlay is merged onto
-// it (getRegistry). A change to either is pushed to the renderer and to
-// every subscriber as a hot reload, as before.
+// Layers 1 and 2 make the baseline (getBaseline); the overlay, then the
+// installed Codex's list, are merged onto it (getRegistry). A change to any
+// of them is pushed to the renderer and to every subscriber as a hot reload,
+// as before.
 import * as fs from 'fs'
 import * as path from 'path'
 import { atomicWriteFileSync } from './atomic-write'
 import baselineJson from '../../resources/model-registry.json'
 import {
-  mergeRegistry, type ModelRegistry, type RegistryOverlay, type OverlayModelEntry,
+  mergeRegistry, withInstalledCodexModels,
+  type ModelRegistry, type RegistryOverlay, type OverlayModelEntry, type InstalledCodexModels,
 } from '../shared/model-registry'
 import { mergeModelData, modelDataText, parseModelData } from './model-registry-data'
 import { fetchModelDataText, MODEL_DATA_MAX_BYTES, type ModelDataRead } from './model-registry-remote'
@@ -43,6 +50,8 @@ let overlayDir: string | null = null         // <resourcesDir> root; sentinel/ c
 let modelData: string | null = null
 let baseline: ModelRegistry = bundled
 let merged: ModelRegistry = mergeRegistry(baseline, null)
+/** Layer 4: the installed Codex's own model list, or null for none. */
+let installedCodex: InstalledCodexModels | null = null
 /** The one read of a start (refreshModelRegistry). */
 let refresh: Promise<boolean> | null = null
 const reloadSubs = new Set<(reg: ModelRegistry) => void>()
@@ -76,8 +85,25 @@ function writeOverlay(overlay: RegistryOverlay): void {
 }
 
 export function reloadRegistry(): void {
-  merged = mergeRegistry(baseline, loadOverlay())
+  merged = withInstalledCodexModels(mergeRegistry(baseline, loadOverlay()), installedCodex)
   for (const fn of reloadSubs) { try { fn(merged) } catch { /* subscriber error must not break reload */ } }
+}
+
+/** A list as the text it is compared by: the same list read again is no change. */
+const listText = (list: InstalledCodexModels | null): string =>
+  list ? JSON.stringify({ version: list.version, models: list.models.map((m) => [m.id, m.label, m.efforts ?? null]) }) : ''
+
+/**
+ * Layer 4 (aicc_planning#362): the installed Codex's own model list, or null
+ * when there is none (Codex off or not found, a version the app cannot use,
+ * a read that failed). A change is a reload, pushed to the renderer and every
+ * subscriber; the same list again changes nothing. True when it changed.
+ */
+export function setInstalledCodexModels(list: InstalledCodexModels | null): boolean {
+  if (listText(list) === listText(installedCodex)) return false
+  installedCodex = list
+  reloadRegistry()
+  return true
 }
 
 export function getRegistry(): ModelRegistry { return merged }
@@ -206,10 +232,12 @@ export function refreshModelRegistry(deps: { fetchText?: () => Promise<ModelData
 
 /** Production init: call once at bootstrap with the resources directory.
  *  Synchronous and offline: the bundled file, the last good model data when
- *  there is one, and the overlay. The read itself is refreshModelRegistry. */
+ *  there is one, and the overlay. The read itself is refreshModelRegistry;
+ *  the installed Codex's list (layer 4) comes later, from its own read. */
 export function initModelRegistry(resourcesDir: string): void {
   overlayDir = resourcesDir
   refresh = null
+  installedCodex = null
   useModelData(readLastGood())
   reloadRegistry()
 }

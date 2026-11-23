@@ -2,7 +2,7 @@ import { describe, it, expect, afterEach, vi } from 'vitest'
 import { FakeChildTransport } from '../../../src/main/services/service-transport'
 import { HooksGatewayProxy } from '../../../src/main/services/hooks-gateway-proxy'
 
-describe('HooksGatewayProxy fail-open + permission bridge', () => {
+describe('HooksGatewayProxy fail-open', () => {
   let p: HooksGatewayProxy
   afterEach(async () => { await p?.stop() })
 
@@ -79,14 +79,6 @@ describe('HooksGatewayProxy fail-open + permission bridge', () => {
     p = new HooksGatewayProxy({ transport: t, defaultPort: 19430 })
     await p.stop()
     expect(sent).toContainEqual({ type: 'stop' })
-  })
-
-  it('setPermissionGateActive posts setGate (utility-process mode)', () => {
-    const t = new FakeChildTransport(); const sent: unknown[] = []
-    t.onChild((m) => sent.push(m))
-    p = new HooksGatewayProxy({ transport: t, defaultPort: 19430 })
-    p.setPermissionGateActive(true)
-    expect(sent).toContainEqual({ type: 'setGate', active: true })
   })
 
   it('failOpen() swaps to an in-process gateway; isInProcessFallback() true; registerSession still sync', () => {
@@ -207,14 +199,5 @@ describe('HooksGatewayProxy fail-open + permission bridge', () => {
     unsubscribe()
     p.dispatchForTest(STOP)
     expect(seen).toEqual(['Stop'])
-  })
-
-  it('a child permission-open lets resolvePermission route the decision back to the child', () => {
-    const t = new FakeChildTransport(); const sent: unknown[] = []
-    t.onChild((m) => sent.push(m))
-    p = new HooksGatewayProxy({ transport: t, defaultPort: 19430 })
-    t.emitToParent({ type: 'permission-open', requestId: 'r1', sid: 's1' })
-    p.resolvePermission('r1', 'approved')
-    expect(sent).toContainEqual({ type: 'permission-respond', requestId: 'r1', decision: 'approved' })
   })
 })

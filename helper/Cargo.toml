@@ -42,7 +42,8 @@ path = "src/bin/aicc-fake-cli.rs"
 # (vte 0.15.0, itoa 1.0.19, unicode-width 0.2.3, arrayvec 0.7.8, memchr 2.8.3).
 # Without its default `std` feature: then vte keeps an OSC string in a 1 KiB
 # buffer and drops the rest, where with `std` it keeps the whole string, so no
-# output can make the screen grow past its cells (threat model 3.10 and 3.13).
+# output can make the screen grow past its cells and one title of at most
+# 1024 characters (threat model 3.10 and 3.13).
 # The feature adds nothing else the helper uses.
 [dependencies]
 vt100 = { version = "=0.18.1", default-features = false }
@@ -57,10 +58,15 @@ libc = "=0.2.172"
 # LibraryLoader loads the bundled conpty.dll, Diagnostics_Debug keeps a
 # load that fails from showing a dialog, Diagnostics_ToolHelp lists the
 # processes under one that `end` ends (start.rs), and SystemInformation
-# reads the time just before that list is read (start.rs).
+# reads the time just before that list is read (start.rs). From
+# 2.1.3-beta.14 the capture mode (capture.rs): Graphics_Gdi lists the
+# displays and copies each one's pixels, UI_HiDpi reads each display's scale
+# and makes the mode aware of it, and System_StationsAndDesktops checks the
+# mode can see the screen.
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "=0.59.0", default-features = false, features = [
   "Win32_Foundation",
+  "Win32_Graphics_Gdi",
   "Win32_Security",
   "Win32_Security_Authorization",
   "Win32_Security_Cryptography",
@@ -72,8 +78,10 @@ windows-sys = { version = "=0.59.0", default-features = false, features = [
   "Win32_System_JobObjects",
   "Win32_System_LibraryLoader",
   "Win32_System_Pipes",
+  "Win32_System_StationsAndDesktops",
   "Win32_System_SystemInformation",
   "Win32_System_Threading",
+  "Win32_UI_HiDpi",
 ] }
 
 # The tests: the same pinned crate and feature. Diagnostics_ToolHelp lists

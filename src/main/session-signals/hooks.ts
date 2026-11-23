@@ -17,14 +17,14 @@
 // does.
 //
 // 2.1.3-beta.8, section A4: a second transport. A Claude Code session the
-// session helper holds sends its hook events (all but PreToolUse) through its
-// holder, and the session helper manager hands each one here
-// (helperHookEvent). Such an event gets what the gateway gives its own before
-// the same fan-out: the transcript path through the same shape filter, the
-// feed entry from the gateway's own builder (feedEntryOf: the redaction and
-// the bounding), a ring of its own per session, and HOOKS_EVENT to the
-// renderer in the same shape. It is taken only while the gateway would take
-// its own, read from the gateway at each event.
+// session helper holds sends its hook events (PreToolUse too, from
+// 2.1.3-beta.14) through its holder, and the session helper manager hands
+// each one here (helperHookEvent). Such an event gets what the gateway gives
+// its own before the same fan-out: the transcript path through the same
+// shape filter, the feed entry from the gateway's own builder (feedEntryOf:
+// the redaction and the bounding), a ring of its own per session, and
+// HOOKS_EVENT to the renderer in the same shape. It is taken only while the
+// gateway would take its own, read from the gateway at each event.
 import type { HookEvent } from '../../shared/hook-types'
 import { IPC } from '../../shared/ipc-channels'
 import { onGateway, type HooksGatewayLike } from '../hooks/index'
@@ -191,18 +191,18 @@ export function endHelperHooks(sessionId: string): void {
  * The hooks switch went off and the gateway the app runs cleared its own
  * rings at its stop: every session's helper ring goes with them, and so do
  * the overflow marks (the gateway clears its latches there too). Without
- * this the history read would return a held session's helper events without
- * the PreToolUse entries that went. The history read keeps both rings or
- * neither, so this is called for exactly the gateways that clear theirs at a
- * stop: the in-process HooksGateway (a boot with the switch saved off and
- * then turned on in Settings), and the proxy after its fail-open, whose stop
- * stops that one. The proxy with its child out of process keeps its rings at
- * a stop, so it does not call this (ipc/hooks-handlers.ts HOOKS_TOGGLE). The
- * fail-open itself keeps both as well: the proxy hands its mirror of the
- * child's rings to the in-process gateway it starts (hooks-gateway-proxy.ts
- * failOpen, HooksGateway.seedBuffers), so after it the gateway's ring still
- * holds the PreToolUse entries from before it, next to the helper's ring. The
- * lost-event marks stay: they belong to a session's run, not to a ring.
+ * this a held session's feed history would outlive the stop that cleared
+ * every other session's. The history read keeps both rings or neither, so
+ * this is called for exactly the gateways that clear theirs at a stop: the
+ * in-process HooksGateway (a boot with the switch saved off and then turned
+ * on in Settings), and the proxy after its fail-open, whose stop stops that
+ * one. The proxy with its child out of process keeps its rings at a stop, so
+ * it does not call this (ipc/hooks-handlers.ts HOOKS_TOGGLE). The fail-open
+ * itself keeps both as well: the proxy hands its mirror of the child's rings
+ * to the in-process gateway it starts (hooks-gateway-proxy.ts failOpen,
+ * HooksGateway.seedBuffers), so after it the gateway's ring still holds the
+ * events it took before it, next to the helper's ring. The lost-event marks
+ * stay: they belong to a session's run, not to a ring.
  */
 export function dropHelperRings(): void {
   helperRings.clear()
@@ -212,10 +212,10 @@ export function dropHelperRings(): void {
 /**
  * The feed history of a session (ipc/hooks-handlers.ts HOOKS_GET_BUFFER):
  * the gateway's ring as it is, unless some of the session's events came
- * through the helper; then both rings in the order the events reached main
- * (the gateway still takes the session's PreToolUse), whatever their clocks
- * say, the newest RING_BUFFER_CAP. An event this module never saw (none, as
- * the module hears every gateway event from the start) goes first, by time.
+ * through the helper; then both rings in the order the events reached main,
+ * whatever their clocks say, the newest RING_BUFFER_CAP. An event this module
+ * never saw (none, as the module hears every gateway event from the start)
+ * goes first, by time.
  */
 export function hookFeedBuffer(sessionId: string, gatewayRing: RingBufferEntry[]): RingBufferEntry[] {
   const mine = helperRings.get(sessionId)

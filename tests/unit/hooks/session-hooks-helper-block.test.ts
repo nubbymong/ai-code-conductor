@@ -1,9 +1,10 @@
 // A Claude Code session held by the session helper sends its hooks through it
-// (2.1.3-beta.8, plan section A4): the per-session settings file keeps
-// PreToolUse on the hooks gateway and points the other eight events at the
-// helper's hook mode, quoted for the launcher Claude Code starts a command
-// hook with (Git for Windows' bash on Windows, ADR-030 probe P16 step 0;
-// /bin/sh elsewhere).
+// (2.1.3-beta.8, plan section A4): the per-session settings file points the
+// injected events at the helper's hook mode, quoted for the launcher Claude
+// Code starts a command hook with (Git for Windows' bash on Windows, ADR-030
+// probe P16 step 0; /bin/sh elsewhere). From 2.1.3-beta.14 (S16 step 2) that
+// is all nine, PreToolUse included, so nothing of the hooks gateway's (its
+// URL, its token) is left in the file: Claude Code reads it once (probe P20).
 //
 // The writer's own secure write (owner-only folder and file) is swapped here
 // for a plain write, so this file touches no folder's permissions; the
@@ -87,26 +88,28 @@ describe('the hook mode command, quoted for the launcher', () => {
     ]
     for (const [what, t] of bad) {
       expect(helperHookCommand(t), what).toBeNull()
-      expect(buildHelperHooksBlock(APP_ID, PORT, SECRET, t), what).toBeNull()
+      expect(buildHelperHooksBlock(t), what).toBeNull()
     }
   })
 })
 
 describe('buildHelperHooksBlock', () => {
-  it('eight command entries and one PreToolUse, which stays the gateway\'s exactly', () => {
-    const block = buildHelperHooksBlock(APP_ID, PORT, SECRET, win)!
+  it('nine command entries, PreToolUse one of them (2.1.3-beta.14), and nothing of the gateway\'s', () => {
+    const block = buildHelperHooksBlock(win)!
     expect(Object.keys(block)).toEqual(MVP_EVENTS)
     expect(MVP_EVENTS).toHaveLength(9)
-    expect(block.PreToolUse).toEqual(buildHooksBlock(APP_ID, PORT, SECRET).PreToolUse)
-    expect(block.PreToolUse).toEqual([{ matcher: '', hooks: [{ type: 'http', url: `http://localhost:${PORT}/hook/${APP_ID}`, headers: { 'X-CCC-Hook-Token': SECRET } }] }])
+    expect(MVP_EVENTS).toContain('PreToolUse')
     const command = helperHookCommand(win)
-    const commands = MVP_EVENTS.filter((k) => k !== 'PreToolUse')
-    expect(commands).toHaveLength(8)
-    for (const kind of commands) {
+    for (const kind of MVP_EVENTS) {
       expect(block[kind], kind).toEqual([{ matcher: '', hooks: [{ type: 'command', command, timeout: 10 }] }])
     }
-    // Nothing of the gateway's in the eight: no URL, no token.
-    expect(JSON.stringify(commands.map((k) => block[k]))).not.toContain(SECRET)
+    // The PreToolUse entry runs the hook mode, not an http hook.
+    expect(block.PreToolUse).toEqual([{ matcher: '', hooks: [{ type: 'command', command, timeout: 10 }] }])
+    expect(block.PreToolUse).not.toEqual(buildHooksBlock(APP_ID, PORT, SECRET).PreToolUse)
+    // Nothing of the gateway's anywhere: no URL, no token.
+    expect(JSON.stringify(block)).not.toContain('/hook/')
+    expect(JSON.stringify(block)).not.toContain(SECRET)
+    expect(JSON.stringify(block)).not.toContain('X-CCC-Hook-Token')
   })
 })
 
@@ -136,13 +139,20 @@ describe('switchHooksToHelper: the per-session settings file, in place', () => {
   })
   afterEach(() => { fs.rmSync(dir, { recursive: true, force: true }) })
 
-  it('the eight go to the hook mode, PreToolUse and every inherited hook stay as they were, and so does the rest of the file', () => {
+  it('all nine go to the hook mode, PreToolUse included; every inherited hook stays as it was, and so does the rest of the file', () => {
     writeAsSpawned()
     expect(switchHooksToHelper({ settingsPath: file, sessionId: APP_ID, target: win })).toBe('switched')
-    const after = JSON.parse(fs.readFileSync(file, 'utf8'))
+    const text = fs.readFileSync(file, 'utf8')
+    const after = JSON.parse(text)
+    // The inherited PreToolUse first; then the app's own, the hook mode.
+    expect(after.hooks.PreToolUse).toEqual([...inherited.PreToolUse, { matcher: '', hooks: [{ type: 'command', command: helperHookCommand(win), timeout: 10 }] }])
+    // No gateway URL or token is left anywhere in the file.
+    expect(text).not.toContain('/hook/')
+    expect(text).not.toContain(SECRET)
+    expect(text).not.toContain('X-CCC-Hook-Token')
     expect(after.statusLine).toEqual({ type: 'command', command: 'statusline.js' })
     expect(after.permissions).toEqual({ allow: ['mcp__conductor__canvas_render'] })
-    const block = buildHelperHooksBlock(APP_ID, PORT, SECRET, win)!
+    const block = buildHelperHooksBlock(win)!
     // Inherited first, in their order; the app's own last.
     expect(after.hooks.PreToolUse).toEqual([...inherited.PreToolUse, ...block.PreToolUse])
     expect(after.hooks.Stop).toEqual([...inherited.Stop, ...block.Stop])
@@ -151,15 +161,13 @@ describe('switchHooksToHelper: the per-session settings file, in place', () => {
       if (kind === 'PreToolUse' || kind === 'Stop') continue
       expect(after.hooks[kind], kind).toEqual(block[kind])
     }
-    // No gateway URL is left on any of the eight.
-    for (const kind of MVP_EVENTS.filter((k) => k !== 'PreToolUse')) expect(JSON.stringify(after.hooks[kind]), kind).not.toContain('/hook/')
   })
 
-  it('switching twice changes nothing more', () => {
+  it('switching twice changes nothing more: the switched file holds no gateway hooks, so the second finds none and leaves it as it is', () => {
     writeAsSpawned()
     expect(switchHooksToHelper({ settingsPath: file, sessionId: APP_ID, target: win })).toBe('switched')
     const once = fs.readFileSync(file, 'utf8')
-    expect(switchHooksToHelper({ settingsPath: file, sessionId: APP_ID, target: win })).toBe('switched')
+    expect(switchHooksToHelper({ settingsPath: file, sessionId: APP_ID, target: win })).toBe('no-gateway-hooks')
     expect(fs.readFileSync(file, 'utf8')).toBe(once)
   })
 
