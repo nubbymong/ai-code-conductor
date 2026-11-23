@@ -213,64 +213,78 @@ describe('the run', () => {
   // past the redaction window; finding that space is one pass whatever the
   // line holds (no space at all, a Bearer before a long run of spaces), so a
   // large stderr read never holds the main process.
-  // PR 4 review (R-ADRFIX-4): asserted as growth, not wall-clock time, so a
-  // loaded machine does not fail it: four times the line takes under eight
-  // times as long (linear: about four; a search whose time grows with the
-  // square: about sixteen).
-  // Each time is the best of several runs, and a best can only be at or above
-  // the search's own cost, so a search that grows with the square fails
-  // however many runs there are. The long line gets up to ten runs, spread out
-  // in time: three back to back were not enough on a loaded macOS runner,
-  // where the best of three took 28.3 ms after a best of 2.8 ms for the short line
-  // (CI run 45123495761). Each round also runs the short line again, which can
-  // only lower its best and so only make the check stricter.
+  // PR 4 review (R-ADRFIX-4): asserted as growth, not wall-clock time: per
+  // character, the long line (four times as long) costs under twice what the
+  // short one does (linear: about one, or less, as each read also has a fixed
+  // cost; a search whose time grows with the square: about four).
+  // How it is timed (beta.15; CI run 45123495761 and diag run 45139414585, both
+  // macos-latest): the runner's speed changes in stretches longer than one
+  // read, and while a slow stretch lasts a read can take two or three times as
+  // long. The check once timed the short reads first and the long reads after,
+  // so it compared two stretches of time, and it failed when a slow stretch
+  // began between them (2.8 ms, then 28.3 ms). Now each long read is timed
+  // next to four short reads timed together, which first alternating, and the
+  // check is on the median of nine such pairs. A slow stretch longer than a
+  // pair slows both sides of it alike; the two sides are the same amount of
+  // text, so an interruption is as likely to reach either; and the pairs one
+  // did reach, if fewer than half, cannot move the median.
   it('a long unterminated stderr line is handed on in time linear in its length, whatever it holds, and nothing is lost', async () => {
-    // Every line is past WINDOW (64 KiB), so the cut is looked for.
-    const shapes: Array<(n: number) => string> = [
-      (n) => 'z'.repeat(n),
-      (n) => 'z'.repeat(n / 10) + ' Basic' + ' '.repeat(n) + 'end',
-      (n) => ('x Bearer' + ' '.repeat(8000)).repeat(n / 8000),
-      (n) => ('z'.repeat(990) + ' Bearer  !').repeat(n / 1000),
+    // Every line is past WINDOW (64 KiB), so the cut is looked for. Each shape
+    // has a name, as three of them start with the same letters.
+    const shapes: Array<[string, (n: number) => string]> = [
+      ['no space', (n) => 'z'.repeat(n)],
+      ['a Basic, then spaces', (n) => 'z'.repeat(n / 10) + ' Basic' + ' '.repeat(n) + 'end'],
+      ['a Bearer every 8,000 spaces', (n) => ('x Bearer' + ' '.repeat(8000)).repeat(n / 8000)],
+      ['a Bearer every 1,000 characters', (n) => ('z'.repeat(990) + ' Bearer  !').repeat(n / 1000)],
     ]
-    /** How long one read of `line` takes to be handed on (milliseconds). */
-    const pushTime = (line: string): number => {
-      const { deps, spawned } = fakeDeps()
-      void createCodexBackgroundOperations({ platform: 'win32', runDeps: () => deps }).run(input())
+    /** How long `lines` take to be handed on, each as one read of a run of
+     *  its own, timed together (milliseconds). */
+    const readTime = (lines: string[]): number => {
+      const children = lines.map(() => {
+        const { deps, spawned } = fakeDeps()
+        void createCodexBackgroundOperations({ platform: 'win32', runDeps: () => deps }).run(input())
+        return spawned[0].child
+      })
       const t0 = performance.now()
-      spawned[0].child.stderr.emit('data', line)
+      for (let i = 0; i < lines.length; i++) children[i].stderr.emit('data', lines[i])
       const ms = performance.now() - t0
-      spawned[0].child.emit('close', 0)
+      for (const child of children) child.emit('close', 0)
       return ms
     }
+    // A short read faster than FLOOR_MS counts as FLOOR_MS: on a fast machine
+    // the fixed cost of a read is most of it.
     const FLOOR_MS = 2
-    const FACTOR = 8
-    const BIG_RUNS = 10
-    const pause = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
-    for (const make of shapes) {
+    const PER_CHARACTER = 2
+    const PAIRS = 9
+    for (const [name, make] of shapes) {
       const small = make(72_000)
       const big = make(288_000)
-      let t1 = Infinity
-      for (let i = 0; i < 3; i++) t1 = Math.min(t1, pushTime(small))
-      // A ceiling far above any machine's time for 72 KB, only so that a
-      // search that is not linear fails here at once rather than run on.
-      expect(t1, small.slice(0, 12)).toBeLessThan(1_500)
-      // Best of up to BIG_RUNS (no need to go on once one is under the bound:
-      // the best can only fall), each after a short wait and followed by one
-      // more run of the small size.
-      let t4 = Infinity
-      for (let i = 0; i < BIG_RUNS && t4 >= FACTOR * Math.max(t1, FLOOR_MS); i++) {
-        if (i > 0) await pause(25)
-        t4 = Math.min(t4, pushTime(big))
-        t1 = Math.min(t1, pushTime(small))
+      const fourSmall = [small, small, small, small]
+      const ratios: number[] = []
+      for (let i = 0; i < PAIRS; i++) {
+        let four: number
+        let one: number
+        if (i % 2 === 0) {
+          four = readTime(fourSmall)
+          // A ceiling far above any machine's time for 72 KB, only so that a
+          // search that is not linear fails here at once rather than run on.
+          if (i === 0) expect(four / 4, name).toBeLessThan(1_500)
+          one = readTime([big])
+        } else {
+          one = readTime([big])
+          four = readTime(fourSmall)
+        }
+        ratios.push(one / Math.max(four, 4 * FLOOR_MS))
       }
-      expect(t4 / Math.max(t1, FLOOR_MS), `${small.slice(0, 12)}: ${t1.toFixed(1)} ms, then ${t4.toFixed(1)} ms`).toBeLessThan(FACTOR)
+      const median = [...ratios].sort((a, b) => a - b)[(PAIRS - 1) / 2]
+      expect(median, `${name}: ${ratios.map((r) => r.toFixed(2)).join(' ')}`).toBeLessThan(PER_CHARACTER)
       const { deps, spawned } = fakeDeps()
       const said: string[] = []
       const p = createCodexBackgroundOperations({ platform: 'win32', runDeps: () => deps }).run(input({ onDiagnostic: (t: string) => said.push(t) }))
       spawned[0].child.stderr.emit('data', big)
       spawned[0].child.emit('close', 0)
       expect(await p).toEqual({ ok: true })
-      expect(said.join('') === big, big.slice(0, 12)).toBe(true)
+      expect(said.join('') === big, name).toBe(true)
     }
     // The cut never falls between a Bearer and its token.
     const { deps, spawned } = fakeDeps()
