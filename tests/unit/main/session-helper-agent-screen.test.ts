@@ -9,10 +9,15 @@
 //  1. such a session's connection acks `screen` and `title`, and its read is
 //     the holder's `screen.read`; a Claude Code session asks for neither;
 //  2. without deps.screens a Codex session asks for neither, as before;
-//  3. a holder that offers `screen` but not `title`: the read, with no title;
+//  3. a holder that offers `screen` but not `title`: no read, so the pane
+//     (2.1.3-beta.15: the title's spinner is the composer rule's only busy
+//     sign while a reply streams);
 //  4. after the connection drops and the terminal attaches again, the read
 //     goes on the new connection;
-//  5. a launch its holder refused starts the usual way, and has no read.
+//  5. a launch its holder refused starts the usual way, and has no read;
+//  6. a read handed out earlier rejects once the terminal attaches again on a
+//     connection without the title, and none is handed out after
+//     (2.1.3-beta.15).
 //
 // Not checked here: what the composer rule makes of the read
 // (tests/unit/main/codex-held-screen.test.ts) and the binding that asks for it
@@ -139,14 +144,15 @@ describe('a held agent session\'s screen read', () => {
     expect(p.screenRead).toBeUndefined()
   })
 
-  it('3. a holder that offers screen but not title: the read, with no title', async () => {
+  it('3. a holder that offers screen but not title: no read, so the pane', async () => {
     helper.holderCaps = ['core', 'local', 'hooks', 'mcp', 'screen']
     await startedWith(makeManager({ screens: { codex: true } }))
     const id = 'abcdef0123456789abcdefb4'
     const p = spawnAgentPty(codexTab(id), CODEX, [], agentOpts()) as HelperPty
     const h = await attachedHolder(heldAgentSessionId(id, 'codex'), p)
     expect(h.attached!.ackedCaps).toEqual(['core', 'local', 'screen'])
-    expect((await p.screenRead!()).title).toBeNull()
+    expect(p.screenRead).toBeUndefined()
+    expect(h.screenReads).toBe(0)
   })
 
   it('4. after the connection drops and the terminal attaches again, the read goes on the new connection', async () => {
@@ -172,6 +178,22 @@ describe('a held agent session\'s screen read', () => {
     await until(() => ptySpawn.mock.calls.length === 1, 'the usual start')
     expect(p.throughHelper).toBe(false)
     expect(p.screenRead).toBeUndefined()
+  })
+
+  it('6. a read handed out earlier rejects once the terminal attaches again on a connection without the title, and none is handed out after', async () => {
+    await startedWith(makeManager({ screens: { codex: true } }))
+    const id = 'abcdef0123456789abcdefb7'
+    const p = spawnAgentPty(codexTab(id), CODEX, [], agentOpts()) as HelperPty
+    const h = await attachedHolder(heldAgentSessionId(id, 'codex'), p)
+    const read = p.screenRead!
+    // The holder's next hello offers the screen but not the title.
+    h.caps = ['core', 'local', 'hooks', 'mcp', 'screen']
+    h.fallBehind()
+    await until(() => h.attaches === 2 && p.isAttached, 'the attach again')
+    expect(h.attached!.ackedCaps).toEqual(['core', 'local', 'screen'])
+    await expect(read()).rejects.toThrow(/no connection reads its holder's screen now/)
+    expect(p.screenRead).toBeUndefined()
+    expect(h.screenReads).toBe(0)
   })
 })
 

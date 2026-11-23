@@ -6,7 +6,7 @@
  * update on Windows.
  */
 import { app } from 'electron'
-import { readConfig } from '../config-manager'
+import { readConfig, readConfigChecked } from '../config-manager'
 import { logInfo } from '../debug-logger'
 import { setMachinesSource } from '../ipc/machines-handlers'
 import { peekSessionState } from '../session-state'
@@ -17,7 +17,7 @@ import { getConductorMcpPort, serveToolStream } from '../conductor-mcp-server'
 import { tryGetProvider } from '../providers'
 import type { ProviderId } from '../../shared/providers/ids'
 import { bundledHelperPath, helperRootDir } from './install'
-import { SessionHelperManager, agentRecordsIn, crashMarkIn, getSessionHelper, keptHookFoldersIn, keptSessionIdsIn, setSessionHelper, type HelperHookDeps, type HelperRouting, type HelperToolDeps, type SessionHelperServiceState } from './manager'
+import { SessionHelperManager, agentRecordsIn, crashMarkIn, getSessionHelper, keptHookFoldersIn, keptSessionIdsIn, removeOldCopiesWithHelperOff, setSessionHelper, type HelperHookDeps, type HelperRouting, type HelperToolDeps, type SessionHelperServiceState } from './manager'
 
 /** The settings (Settings, General, Terminal): each off unless saved as true. */
 export const PLAIN_TERMINALS_SETTING = 'plainTerminalsThroughHelper'
@@ -45,9 +45,43 @@ function routing(): HelperRouting {
   }
 }
 
+/**
+ * True only when the settings file reads, or is not there, with both settings
+ * off: the start-up clean-up of old copies asks this, not routing(), which
+ * reads a file that is there and cannot be read (or does not parse) as both
+ * off. Such a file removes nothing. The file is never moved aside here.
+ */
+function settingsReadAsBothOff(): boolean {
+  try {
+    const { value, outcome } = readConfigChecked<Record<string, unknown>>('settings', { quarantineUnparseable: false })
+    if (outcome !== 'ok' && outcome !== 'absent') return false
+    return !plainTerminalsThroughHelperIn(value) && !agentSessionsThroughHelperIn(value)
+  } catch {
+    return false
+  }
+}
+
 let notify: (() => void) | null = null
 
 const rootDir = (): string => helperRootDir({ isPackaged: app.isPackaged })
+const bundledPath = (): string => bundledHelperPath({ isPackaged: app.isPackaged, resourcesPath: process.resourcesPath, appPath: app.getAppPath() })
+
+/**
+ * The start-up clean-up of old helper copies (2.1.3-beta.15, plan section B1,
+ * aicc_planning#397), begun by a start with both settings off: null when
+ * none began. A manager made later in the same run (a setting turned on)
+ * makes its copy only once this has ended (its copyAfter), which alone keeps
+ * that copy in every order; the clean-up also begins no removal once a
+ * manager exists (asked before its listing and once after). Never rejects.
+ */
+let oldCopiesCleanUp: Promise<void> | null = null
+
+async function cleanUpOldCopies(): Promise<void> {
+  try {
+    if (!settingsReadAsBothOff()) return
+    await removeOldCopiesWithHelperOff({ root: rootDir(), bundled: bundledPath(), log: (message) => logInfo(message), stop: () => getSessionHelper() !== null })
+  } catch { /* nothing more is removed; the next start tries again */ }
+}
 
 /**
  * A Claude Code session's hooks through its holder (2.1.3-beta.8, plan
@@ -87,7 +121,7 @@ function ensureManager(): SessionHelperManager {
   if (existing) return existing
   const m = new SessionHelperManager({
     root: rootDir(),
-    bundled: bundledHelperPath({ isPackaged: app.isPackaged, resourcesPath: process.resourcesPath, appPath: app.getAppPath() }),
+    bundled: bundledPath(),
     log: (message) => logInfo(message),
     // Claude Code's sessions only: another provider's session keeps its hooks as they are.
     hooks: { claude: helperHookDeps },
@@ -95,6 +129,7 @@ function ensureManager(): SessionHelperManager {
     // 2.1.3-beta.14 B2: Codex's composer rule reads a held session's screen
     // and title from its holder (providers/codex/session-screen.ts).
     screens: { codex: true },
+    ...(oldCopiesCleanUp ? { copyAfter: oldCopiesCleanUp } : {}),
   })
   m.onChange(() => notify?.())
   setSessionHelper(m)
@@ -111,12 +146,16 @@ function ensureManager(): SessionHelperManager {
  * update kept running (S16 step 4). Then the helper comes up
  * all the same, carrying nothing new, to end those agent sessions before
  * their tabs start their CLIs again (and keep a crash's plain terminals for
- * their tabs).
+ * their tabs). Both off with none of those: the old helper copies an earlier
+ * run left are removed (2.1.3-beta.15, cleanUpOldCopies).
  */
 export function initSessionHelper(onChange: () => void): void {
   notify = onChange
   const { plain, agents } = routing()
-  if (!plain && !agents && !crashMarkIn(rootDir()) && !agentRecordsIn(rootDir())) return
+  if (!plain && !agents && !crashMarkIn(rootDir()) && !agentRecordsIn(rootDir())) {
+    oldCopiesCleanUp = cleanUpOldCopies()
+    return
+  }
   void ensureManager().start({ atStartup: true, plain, agents })
 }
 
