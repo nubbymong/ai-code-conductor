@@ -20,9 +20,13 @@
 //! ```
 //!
 //! Run as `aicc-fake-cli --sleep <seconds>` it prints nothing and sleeps: the
-//! grandchild, so a test can show that ending a session ends it too. With
-//! `--child` after the seconds it first starts a sleeping copy of itself, so a
-//! test can show that `aicc-helper end` ends the processes under a program.
+//! grandchild, so a test can show that ending a session ends it too. Run as
+//! `aicc-fake-cli --while <file>` it prints nothing and runs for as long as
+//! that file is there, looking every 100 ms, with no time limit of its own: a
+//! test that holds the file keeps it running however long any step of the
+//! test takes. With `--child` after the seconds or the file it first starts a
+//! copy of itself in the same mode, so a test can show that `aicc-helper end`
+//! ends the processes under a program.
 //!
 //! It is plain `std`, so the same binary builds on every OS. It never talks to
 //! a network or a real provider.
@@ -38,9 +42,22 @@ fn main() {
         let secs = args.get(1).and_then(|s| s.parse::<u64>().ok()).unwrap_or(600);
         if args.get(2).map(String::as_str) == Some("--child") {
             // Not waited for: it is meant to run under this one.
-            let _ = sleeping_copy(secs);
+            let _ = quiet_copy(&["--sleep", secs.to_string().as_str()]);
         }
         std::thread::sleep(Duration::from_secs(secs));
+        return;
+    }
+    if args.first().map(String::as_str) == Some("--while") {
+        let Some(file) = args.get(1) else { return };
+        if args.get(2).map(String::as_str) == Some("--child") {
+            // Not waited for: it is meant to run under this one.
+            let _ = quiet_copy(&["--while", file.as_str()]);
+        }
+        // Only a look that finds no file ends it: one that fails says
+        // nothing about the file.
+        while !matches!(std::path::Path::new(file).try_exists(), Ok(false)) {
+            std::thread::sleep(Duration::from_millis(100));
+        }
         return;
     }
     let stdin = io::stdin();
@@ -124,12 +141,12 @@ fn main() {
     }
 }
 
-/// A copy of this program that sleeps for `secs`, with no console of its own on
-/// Windows (a program started with none would otherwise be given a new one).
-fn sleeping_copy(secs: u64) -> io::Result<std::process::Child> {
-    let secs = secs.to_string();
+/// A copy of this program run with `args` and no standard handles, with no
+/// console of its own on Windows (a program started with none would otherwise
+/// be given a new one).
+fn quiet_copy(args: &[&str]) -> io::Result<std::process::Child> {
     let mut copy = Command::new(std::env::current_exe()?);
-    copy.args(["--sleep", secs.as_str()]).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+    copy.args(args).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
