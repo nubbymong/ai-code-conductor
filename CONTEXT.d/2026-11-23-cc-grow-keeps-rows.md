@@ -24,7 +24,8 @@ above Claude Code's banner: after the grow they were neither on screen nor in th
   as it came (the review found the search started on the second row: a block shown twice, the
   upper copy on the top row, moved 4 rows that the paint drew again). Otherwise xterm's rows above
   that row go to its scrollback, then the paint is written as it came. Rows above the first such
-  row are not on the console's screen, so none is painted again. pg-pcc: the 11 rows (9 at 140 columns) are the scrollback, the banner is
+  row are not on the console's screen, so none is painted again.
+  pg-pcc: the 11 rows (9 at 140 columns) are the scrollback, the banner is
   xterm's top row, and the screen and cursor are as the paint left them. Every other paint is
   written as before.
 - **Tests.** `tests/unit/renderer/console-repaint-claude-code.test.ts` (20 tests, fixture
