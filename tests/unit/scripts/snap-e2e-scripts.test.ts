@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { judgeReport } from '../../../scripts/ci/playwright-no-retry.mjs'
-import { readGroups, readBmpHeader, readCaptureLine, verdict, decodeText, cmdFileText, RUNAS_FORMS, BMP_HEADER_BYTES } from '../../../scripts/ci/snap-basic-user.mjs'
+import { readGroups, readBmpHeader, readCaptureLine, verdict, decodeText, cmdFileText, systemTools, RUNAS_FORMS, BMP_HEADER_BYTES } from '../../../scripts/ci/snap-basic-user.mjs'
 
 /**
  * The two scripts of ci.yml's snap-e2e job (plan 2.1.3-beta.16, section A1;
@@ -68,8 +68,21 @@ describe('snap-basic-user: the reader of one capture from a basic-user token', (
     expect(readGroups('')).toEqual({ administrators: 'absent', level: null })
   })
 
+  it('names Windows\' own whoami, runas and cmd by their full path in the system folder, never by a bare name PATH could answer', () => {
+    const tools = systemTools({ SystemRoot: 'C:\\Windows' })!
+    // Windows paths on every system the suite runs on (the script itself runs on Windows only).
+    expect(tools).toEqual({ whoami: 'C:\\Windows\\System32\\whoami.exe', runas: 'C:\\Windows\\System32\\runas.exe', cmd: 'C:\\Windows\\System32\\cmd.exe' })
+    expect(systemTools({})).toBeNull()
+    expect(systemTools({ SystemRoot: 'Windows' })).toBeNull()
+    // The second dispatch's cause: a bare `whoami` in the cmd file found Git for Windows' GNU whoami first on PATH.
+    const lines = cmdFileText('C:\\w', 'C:\\h\\aicc-helper.exe', 'C:\\w\\cap', 'C:\\Windows\\System32\\whoami.exe').split('\r\n')
+    const who = lines.find((l) => /whoami/i.test(l))!
+    expect(who.startsWith('"C:\\Windows\\System32\\whoami.exe" /groups > ')).toBe(true)
+    for (const l of lines) expect(l, l).not.toMatch(/^\s*whoami\b/i)
+  })
+
   it('writes the exit status with the echo in brackets: `echo 0> file` would redirect handle 0 and write nothing', () => {
-    const text = cmdFileText('C:\\w', 'C:\\h\\aicc-helper.exe', 'C:\\w\\cap')
+    const text = cmdFileText('C:\\w', 'C:\\h\\aicc-helper.exe', 'C:\\w\\cap', 'C:\\Windows\\System32\\whoami.exe')
     const lines = text.split('\r\n')
     const status = lines.find((l) => l.includes('ERRORLEVEL'))
     expect(status).toBe('(echo %ERRORLEVEL%)> "C:\\w\\exit.tmp"')

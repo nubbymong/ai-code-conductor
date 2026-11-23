@@ -25,7 +25,7 @@
 import { spawnSync } from 'node:child_process'
 import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { isAbsolute, join, resolve } from 'node:path'
+import { isAbsolute, join, resolve, win32 } from 'node:path'
 import { pathToFileURL } from 'node:url'
 
 /** How long the restricted run may take to write its status. runas starts it
@@ -56,18 +56,30 @@ export function readBmpHeader(buf) {
   return { width: buf.readInt32LE(18), height: buf.readInt32LE(22), bits: buf.readUInt16LE(28) }
 }
 
-/** The cmd file the restricted token runs, in `work`: the token's groups,
- *  the capture into `cap`, then its exit status, written last and moved into
- *  place so it is never read half written. */
-export function cmdFileText(work, helper, cap) {
+/** Windows' own tools this script runs, by their full path in the system
+ *  folder: a bare name is looked up on PATH, and the job's bash step puts Git
+ *  for Windows' usr/bin first there, whose whoami is GNU's (the second
+ *  dispatch: "whoami: extra operand '/groups'"). Null without an absolute
+ *  SystemRoot. */
+export function systemTools(env = process.env) {
+  const root = env.SystemRoot ?? env.SYSTEMROOT ?? ''
+  if (!root || !win32.isAbsolute(root) || /\s/.test(root)) return null
+  return { whoami: win32.join(root, 'System32', 'whoami.exe'), runas: win32.join(root, 'System32', 'runas.exe'), cmd: win32.join(root, 'System32', 'cmd.exe') }
+}
+
+/** The cmd file the restricted token runs, in `work`: the token's groups
+ *  (Windows' whoami at `whoami`, a full path), the capture into `cap`, then
+ *  its exit status, written last and moved into place so it is never read
+ *  half written. */
+export function cmdFileText(work, helper, cap, whoami) {
   return [
     '@echo off',
-    `whoami /groups > "${join(work, 'groups.txt')}" 2>&1`,
-    `"${helper}" capture --out "${cap}" > "${join(work, 'line.txt')}" 2> "${join(work, 'err.txt')}"`,
+    `"${whoami}" /groups > "${win32.join(work, 'groups.txt')}" 2>&1`,
+    `"${helper}" capture --out "${cap}" > "${win32.join(work, 'line.txt')}" 2> "${win32.join(work, 'err.txt')}"`,
     // In brackets: a bare `echo 0> file` is read by cmd as a redirect of
     // handle 0, which writes an empty file (the first dispatch's NaN).
-    `(echo %ERRORLEVEL%)> "${join(work, 'exit.tmp')}"`,
-    `move /y "${join(work, 'exit.tmp')}" "${join(work, 'exit.txt')}" > nul`,
+    `(echo %ERRORLEVEL%)> "${win32.join(work, 'exit.tmp')}"`,
+    `move /y "${win32.join(work, 'exit.tmp')}" "${win32.join(work, 'exit.txt')}" > nul`,
     '',
   ].join('\r\n')
 }
@@ -121,6 +133,11 @@ async function measure(helper) {
   const r = { form: null, refused: null, noStatus: false, token: null, exit: null, stderr: '', ms: null, displays: null, pictures: [] }
   const work = mkdtempSync(join(tmpdir(), 'snap-basic-'))
   try {
+    const tools = systemTools()
+    if (!tools) {
+      r.refused = 'no absolute SystemRoot to name runas, cmd and whoami from'
+      return r
+    }
     if (/\s/.test(work) || /\s/.test(helper)) {
       r.refused = 'a path with a space, which this script does not quote for runas'
       return r
@@ -128,11 +145,11 @@ async function measure(helper) {
     const cap = join(work, 'cap')
     mkdirSync(cap)
     const cmdFile = join(work, 'run.cmd')
-    writeFileSync(cmdFile, cmdFileText(work, helper, cap))
+    writeFileSync(cmdFile, cmdFileText(work, helper, cap, tools.whoami))
     const refusals = []
     for (const form of RUNAS_FORMS) {
       const started = Date.now()
-      const run = spawnSync('runas.exe', [...form, `cmd /c ${cmdFile}`], { encoding: 'utf8', windowsHide: true, timeout: WAIT_MS })
+      const run = spawnSync(tools.runas, [...form, `${tools.cmd} /c ${cmdFile}`], { encoding: 'utf8', windowsHide: true, timeout: WAIT_MS })
       const said = `${run.stdout ?? ''}${run.stderr ?? ''}`.trim().split(/\r?\n/).filter(Boolean).pop() ?? ''
       // runas says RUNAS ERROR when it starts nothing; its exit status alone is
       // not read as a refusal, so a form that did start is never run twice.
