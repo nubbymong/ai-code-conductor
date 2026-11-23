@@ -217,7 +217,7 @@ describe('P21: the lines it prints', () => {
   })
 
   // The CI runner takes the console reading and has no SSH session (ci.yml, the Probe P21 job, B5).
-  const NOT_RUN = 'not run on the runner, which has no SSH session; WINDOWS_1\'s reading stands (FAILS CLEANLY, ADR-030)'
+  const NOT_RUN = 'the runner has no SSH session; WINDOWS_1\'s reading stands (FAILS CLEANLY, ADR-030)'
 
   it('says the SSH half was not run, with the reason, and never reads it as a verdict or a missing reading', () => {
     const lines = P.verdictLines([{ label: 'ci-console', facts: at(96), runs: runsAt(96) }], null, 'the job does not change the runner\'s display scale', undefined, NOT_RUN)

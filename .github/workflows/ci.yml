@@ -974,7 +974,7 @@ jobs:
           log=$(node helper/probes/p21-capture.cjs measure --helper helper/target/release/aicc-helper.exe --out "$P21_OUT" --label ci-console --session console) || rc=$?
           echo "$log"
           if [ "$rc" = 0 ]; then
-            verdict=$(node helper/probes/p21-capture.cjs verdict --out "$P21_OUT" --console ci-console --ssh-not-run "not run on the runner, which has no SSH session; WINDOWS_1's reading stands (FAILS CLEANLY, ADR-030)" --second-scale "the job does not change the runner's display scale") || rc=$?
+            verdict=$(node helper/probes/p21-capture.cjs verdict --out "$P21_OUT" --console ci-console --ssh-not-run "the runner has no SSH session; WINDOWS_1's reading stands (FAILS CLEANLY, ADR-030)" --second-scale "the job does not change the runner's display scale") || rc=$?
             echo "$verdict"
           fi
           {
