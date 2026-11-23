@@ -306,6 +306,10 @@ export interface ElectronAPI {
     kill: (sessionId: string, reason?: 'restart') => void
     onData: (sessionId: string, callback: (data: string) => void) => () => void
     onExit: (sessionId: string, callback: (exitCode: number) => void) => () => void
+    /** aicc_planning#392: the tab's next output chunk is its restored replay,
+     *  made at its holder's size (shared/replay-at-holder-size.ts; read the
+     *  notice with readReplayAtHolderSize). */
+    onReplayAtHolderSize: (sessionId: string, callback: (notice: unknown) => void) => () => void
   }
   ptyIntegrity: {
     report: (report: import('../../shared/service-health').PtyIntegrityReport) => void
