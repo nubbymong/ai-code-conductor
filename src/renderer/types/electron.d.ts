@@ -312,8 +312,10 @@ export interface ElectronAPI {
     kill: (sessionId: string, reason?: 'restart') => void
     /** aicc_planning#423: the tabs Resume restored, and a tab shown and
      *  starting now: a session an update kept for a restored tab not on
-     *  screen waits for that tab until it is shown. */
-    tabsRestored: (sessionIds: string[]) => void
+     *  screen waits for that tab until it is shown (B1d: each restored tab
+     *  with a local agent tab's configured folder, for the canvas roots its
+     *  kept session is served with meanwhile). */
+    tabsRestored: (tabs: Array<{ id: string; cwd?: string }>) => void
     tabShown: (sessionId: string) => void
     onData: (sessionId: string, callback: (data: string) => void) => () => void
     onExit: (sessionId: string, callback: (exitCode: number) => void) => () => void

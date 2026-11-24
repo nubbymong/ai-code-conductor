@@ -102,7 +102,10 @@
  * (aicc_planning#423): a restored tab not on screen starts, and takes its
  * session over, only once it is shown, so the limit stops from Resume
  * (restoredTabs) until its tab is shown (tabShown); a closed tab ends its
- * session at once (tabClosed).
+ * session at once (tabClosed). B1d: such a session's Conductor tool calls are
+ * served while its tab stays unseen, from UNSEEN_SERVE_AFTER_MS after Resume
+ * (a keeper that acks `mcp`, keep), and one whose CLI ends by itself before
+ * its tab is shown is ended with its record, so its tab resumes by itself.
  *
  * 2.1.3-beta.14 (plan section B2, aicc_planning#388): an agent session of a
  * provider in deps.screens (app-wiring.ts gives Codex's) asks on its
@@ -155,7 +158,7 @@ import {
 import type { HelperHookTarget, HelperHooksResult } from '../hooks/session-hooks-writer'
 import type { HelperMcpConfigResult } from '../hooks/per-session-settings'
 import type { HeldToolLaunch, HeldToolLaunchAnswer, HeldToolRelay, ResumePick } from '../providers/types'
-import { describeKeptLaunch, holdKeptLaunch, removeKeptLaunch, setKeptLaunchCheck, setKeptTabSignals, setKeptTakeOver } from '../sessions/kept-launches'
+import { describeKeptLaunch, holdKeptLaunch, removeKeptLaunch, serveKeptLaunch, setKeptLaunchCheck, setKeptTabSignals, setKeptTakeOver, unserveKeptLaunch, type RestoredTab } from '../sessions/kept-launches'
 import { InstallError, bundledConptySource, checkedConpty, copyMatches, installHelperCopy, removeOldVersionFolders, sha256File, type InstalledHelper } from './install'
 
 export interface ExecResult {
@@ -250,6 +253,9 @@ export interface SessionHelperDeps {
   savedTabs?: () => ReadonlySet<string>
   /** How long a kept session waits for its tab to take it over (tests shorten it). */
   keptTakeOverWaitMs?: number
+  /** How long after Resume a session kept for a restored tab not shown yet is
+   *  served its Conductor tool calls (UNSEEN_SERVE_AFTER_MS; tests shorten it). */
+  unseenServeAfterMs?: number
   /** The start-up clean-up of old helper copies a start with both settings
    *  off began (2.1.3-beta.15, plan section B1, aicc_planning#397;
    *  app-wiring.ts, removeOldCopiesWithHelperOff): the copy is made only once
@@ -492,6 +498,11 @@ const KEPT = 'kept'
  *  session is kept with no limit (restoredTabs, aicc_planning#423): until the
  *  tab is shown and takes it over, or is closed. */
 const KEPT_TAKE_OVER_WAIT_MS = 5 * 60_000
+/** aicc_planning#423 (B1d): how long after Resume restored its tab a session
+ *  kept for a tab not shown yet waits before its Conductor tool calls are
+ *  served (restoredTabs): a tab shown within it (the one on screen at Resume)
+ *  is taken over, which serves them, without being served and cut first. */
+const UNSEEN_SERVE_AFTER_MS = 3_000
 
 /**
  * What an app update's release records of an agent session it keeps running
@@ -642,6 +653,15 @@ const lastLine = (s: string): string => s.split(/\r?\n/).map((l) => l.trim()).fi
 const firstLine = (s: string): string => s.split(/\r?\n/).map((l) => l.trim()).find(Boolean) ?? ''
 const message = (err: unknown): string => (err instanceof Error ? err.message : String(err))
 
+/** A session kept for its restored tab (SessionHelperManager keptForTabs). */
+interface KeptForTab {
+  kept: KeptRecord
+  record: HolderRecord
+  timer: ReturnType<typeof setTimeout> | null
+  shown?: true
+  serve?: ReturnType<typeof setTimeout>
+}
+
 export class SessionHelperManager implements MachinesSource {
   private readonly os: HelperOs
   private readonly root: string
@@ -667,8 +687,9 @@ export class SessionHelperManager implements MachinesSource {
    *  for their restored tabs to take over (S16 step 5), by session id: what
    *  the release recorded, the holder's record, and the time limit (null
    *  while its tab is restored and not yet shown, aicc_planning#423).
-   *  `shown`: its tab was shown. */
-  private readonly keptForTabs = new Map<string, { kept: KeptRecord; record: HolderRecord; timer: ReturnType<typeof setTimeout> | null; shown?: true }>()
+   *  `shown`: its tab was shown. `serve` (B1d): the wait before its tool
+   *  calls are served while its tab is not shown (restoredTabs). */
+  private readonly keptForTabs = new Map<string, KeptForTab>()
   /** An agent session's routes, by its terminal: what an update asks before
    *  it keeps one running (releaseForUpdate). */
   private readonly agentRoutes = new WeakMap<HelperPty, { kind: ProviderId; tools: ToolRoute; hooks?: HookRoute }>()
@@ -1264,6 +1285,7 @@ export class SessionHelperManager implements MachinesSource {
     }
     this.keptForTabs.delete(sid)
     if (entry.timer) clearTimeout(entry.timer)
+    if (entry.serve) clearTimeout(entry.serve)
     this.removeKeptRecord(sid)
     const { kept, record } = entry
     const hooks = this.hookRoute(ctx, sid, true)
@@ -1389,15 +1411,18 @@ export class SessionHelperManager implements MachinesSource {
    * on being told (listsAgain): the ones kept while no app took them, since
    * this run's tool list may not be the one that CLI read, and any the CLI
    * opens on that connection later, which lists from this run anyway.
+   * `unseen` (aicc_planning#423, B1d): the same, before the take-over, for a
+   * session kept for its restored tab while that tab is not shown: its
+   * first connection is its keeper's (restoredTabs, keep).
    */
-  private toolRoute(ctx: AgentSpawnContext, sid: string, launch: { file: string; args: SpawnArgs; opts: SpawnOptions } | undefined, takenOver = false): ToolRoute | undefined {
+  private toolRoute(ctx: AgentSpawnContext, sid: string, launch: { file: string; args: SpawnArgs; opts: SpawnOptions } | undefined, takenOver = false, unseen = false): ToolRoute | undefined {
     if (ctx.run) return undefined
     const deps = this.deps.tools?.[ctx.kind]
     if (!deps) return undefined
     const appId = ctx.sessionId
     /** The CLI was pointed at the relay: its holder's streams are served. */
     let on = takenOver
-    if (takenOver) this.deps.log(`[session-helper] ${appId}: its Conductor tools go through its holder from the take-over`)
+    if (takenOver) this.deps.log(`[session-helper] ${appId}: its Conductor tools go through its holder ${unseen ? 'while its tab is not shown' : 'from the take-over'}`)
     const stays = (why: string): void => this.deps.log(`[session-helper] ${appId}: its Conductor tools stay on the loopback route, because ${why}`)
     const switched = (): void => {
       on = true
@@ -1417,8 +1442,10 @@ export class SessionHelperManager implements MachinesSource {
       isOn: () => on,
       connected: (conn) => {
         const again = connections++ > 0
-        // S16 step 6: the take-over's first connection is given the streams
-        // the holder kept; their CLI is told its tool list may have changed.
+        // S16 step 6: the take-over's first connection (B1d: or the keeper's,
+        // for a session served while its tab is not shown) is given the
+        // streams the holder kept; their CLI is told its tool list may have
+        // changed.
         const toolsChanged = takenOver && !again && deps.listsAgain === true
         const links = new Map<number, StreamLink>()
         // The connection reports these only when it acked `mcp`, and only for
@@ -1443,7 +1470,7 @@ export class SessionHelperManager implements MachinesSource {
           } else if (again) {
             this.deps.log(`[session-helper] ${appId}: a tool stream is served on the connection that attached again (one its holder kept while the link was down, or a new one)`)
           } else if (toolsChanged) {
-            this.deps.log(`[session-helper] ${appId}: a tool stream is served on the take-over's connection, and its CLI is told its tool list may have changed`)
+            this.deps.log(`[session-helper] ${appId}: a tool stream is served on ${unseen ? 'its keeper\'s connection while its tab is not shown' : 'the take-over\'s connection'}, and its CLI is told its tool list may have changed`)
           }
         })
         conn.on('mcp', (stream, m) => links.get(stream)?.deliver(m))
@@ -1704,21 +1731,36 @@ export class SessionHelperManager implements MachinesSource {
     return this.open(record, checkHash ? this.info?.sha256 : undefined, hooks, tools, screen, title)
   }
 
-  /** Keep a held terminal alive (attached, output dropped) until a tab takes it. */
-  private keep(record: HolderRecord): void {
+  /** Keep a held terminal alive (attached, output dropped) until a tab takes it.
+   *  `tools` (aicc_planning#423, B1d): an agent session kept for its restored
+   *  tab, served its tool calls while that tab is not shown (restoredTabs):
+   *  this keeper acks `mcp`, so its holder gives it the kept tool streams, and
+   *  replaces the one holding it once that one is up (a tab's attach waits
+   *  for this one in turn, connectFor). A session kept for its tab whose CLI
+   *  has ended, at the attach or after it, is ended with its record. */
+  private keep(record: HolderRecord, tools?: ToolRoute): void {
     const sid = record.session
-    if (this.quitting || this.keepers.has(sid)) return
+    const earlier = this.keepers.get(sid)
+    if (this.quitting || (earlier && !tools)) return
     const entry: { record: HolderRecord; conn?: HolderConnection; ready: Promise<void> } = { record, ready: Promise.resolve() }
     entry.ready = (async () => {
       try {
-        const conn = await this.open(record)
+        if (earlier) {
+          await earlier.ready
+          // Until this one is up, an end (a quit's, the Machines page's) goes through that one.
+          entry.conn = earlier.conn
+          if (this.quitting || this.keepers.get(sid) !== entry) return
+        }
+        const conn = await this.open(record, undefined, undefined, tools)
         entry.conn = conn
         conn.on('close', () => {
           if (this.keepers.get(sid) === entry) this.keepers.delete(sid)
           this.changed()
         })
         conn.on('notice', (code: string) => { if (code === 'replaced') conn.close() })
-        await conn.request({ t: 'term.attach', from: 0 })
+        conn.on('exit', () => this.keptCliEnded(sid, record))
+        const reply = await conn.request({ t: 'term.attach', from: 0 })
+        if (reply.running === false) this.keptCliEnded(sid, record)
       } catch (err) {
         this.deps.log(`[session-helper] ${sid}: the held terminal could not be kept: ${message(err)}`)
         if (this.keepers.get(sid) === entry) {
@@ -2095,6 +2137,14 @@ export class SessionHelperManager implements MachinesSource {
     }, waitMs)
   }
 
+  /** aicc_planning#423 (B1d): the CLI of a session kept for its tab ended
+   *  before the tab took it over (its keeper read the exit, or attached to a
+   *  program that was over). It is ended with its record and what it left on
+   *  disk, so the tab, shown, resumes its conversation in a new CLI. */
+  private keptCliEnded(sid: string, record: HolderRecord): void {
+    if (this.keptForTabs.get(sid)?.record === record) this.endKeptForTab(sid, 'its CLI ended before its tab took it over')
+  }
+
   /**
    * aicc_planning#423: Resume restored these tabs (the renderer says so as it
    * restores them, session-persistence.ts). A session kept for one of them
@@ -2103,15 +2153,49 @@ export class SessionHelperManager implements MachinesSource {
    * The limit runs again from when the tab is shown (tabShown); a closed tab
    * ends it at once (tabClosed). One kept for a tab not among them keeps its
    * limit.
+   *
+   * B1d: each such session is served its Conductor tool calls if its tab is
+   * still not shown UNSEEN_SERVE_AFTER_MS from now (serveUnseen), under the
+   * tab's id, with the tab's configured folder (`cwd`) for its canvas roots.
    */
-  restoredTabs(ids: ReadonlyArray<string>): void {
-    const open = new Set(ids)
+  restoredTabs(tabs: ReadonlyArray<RestoredTab>): void {
+    const open = new Map(tabs.map((t) => [t.id, t.cwd]))
     for (const [sid, e] of this.keptForTabs) {
       if (e.shown || !e.timer || !open.has(e.kept.label)) continue
       clearTimeout(e.timer)
       e.timer = null
       this.deps.log(`[session-helper] ${sid}: tab ${e.kept.label} was restored, so the session is kept for it until the tab is shown and takes it over, or is closed`)
+      const cwd = open.get(e.kept.label)
+      e.serve = setTimeout(() => this.serveUnseen(sid, e, cwd), this.deps.unseenServeAfterMs ?? UNSEEN_SERVE_AFTER_MS)
     }
+  }
+
+  /**
+   * aicc_planning#423 (B1d): a session kept for its restored tab, whose tab is
+   * still not shown: its CLI's Conductor tool calls are served now, as its
+   * take-over would serve them, rather than held by its relay and answered
+   * that the app is updating. The launch bindings make the tool host's record
+   * and the review and canvas registrations under the tab's id (and a Codex
+   * session's hook file is written again: serveKeptLaunch); then a keeper that
+   * acks `mcp` takes the tool streams its holder kept, each served with
+   * `toolsChanged` where its CLI lists its tools again. Not when the bindings
+   * answer no (the tool host is not serving): its calls wait for the
+   * take-over, as before. The take-over (its spawn's killPty first) clears
+   * these and makes them again; an end of the session unbinds them
+   * (forgetKeptForTab).
+   */
+  private serveUnseen(sid: string, e: KeptForTab, cwd: string | undefined): void {
+    e.serve = undefined
+    if (this.keptForTabs.get(sid) !== e || e.shown || this.quitting || this.updating) return
+    const { kept, record } = e
+    const why = !this.deps.tools?.[kept.provider] ? 'its provider\'s tools do not go through a holder'
+      : !serveKeptLaunch({ sessionId: kept.label, provider: kept.provider, hookFolder: kept.hookFolder, folder: kept.folder }, cwd) ? 'the tool host is not serving, or its bindings could not be made'
+        : null
+    if (why !== null) {
+      this.deps.log(`[session-helper] ${sid}: tab ${kept.label} is not shown, and its Conductor tool calls wait for its take-over, because ${why}`)
+      return
+    }
+    this.keep(record, this.toolRoute({ sessionId: kept.label, kind: kept.provider }, sid, undefined, true, true))
   }
 
   /** aicc_planning#423: this tab is shown and starts now (TerminalView's first
@@ -2136,13 +2220,17 @@ export class SessionHelperManager implements MachinesSource {
   }
 
   /** An agent session kept for its tab (S16 step 5) is kept no longer: its
-   *  time limit stops, and its record and what it left on disk go. Nothing
-   *  is ended here (see endKeptForTab). */
+   *  time limit stops, what was bound to serve its tool calls while its tab
+   *  was not shown goes (B1d: unserveKeptLaunch, which leaves alone what a
+   *  launch of its tab has bound since), and its record and what it left on
+   *  disk go. Nothing is ended here (see endKeptForTab). */
   private forgetKeptForTab(sid: string): void {
     const entry = this.keptForTabs.get(sid)
     if (!entry) return
     this.keptForTabs.delete(sid)
     if (entry.timer) clearTimeout(entry.timer)
+    if (entry.serve) clearTimeout(entry.serve)
+    unserveKeptLaunch(entry.kept.label)
     this.forgetKept(entry.kept)
   }
 
@@ -2505,7 +2593,7 @@ setKeptTakeOver((appPtyId, provider, size, account) => current?.takeOverKept({ s
 // And what the renderer says of its restored tabs (aicc_planning#423: the
 // tabs Resume restored, one shown, one closed) reaches it the same way.
 setKeptTabSignals({
-  restored: (ids) => current?.restoredTabs(ids),
+  restored: (tabs) => current?.restoredTabs(tabs),
   shown: (appPtyId) => current?.tabShown(appPtyId),
   closed: (appPtyId) => current?.tabClosed(appPtyId),
 })

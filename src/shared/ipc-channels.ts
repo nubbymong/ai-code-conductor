@@ -50,7 +50,7 @@ export const IPC = {
   PTY_EXIT: 'pty:exit',   // Suffixed with :sessionId at runtime
   PTY_REPLAY_AT_HOLDER_SIZE: 'pty:replayAtHolderSize',   // main -> renderer, suffixed with :sessionId at runtime: ReplayAtHolderSize, just before that replay on pty:data (aicc_planning#392)
   PTY_INTEGRITY_REPORT: 'pty:integrityReport',   // renderer -> main per-session byte/resize report
-  PTY_TABS_RESTORED: 'pty:tabsRestored',   // renderer -> main: string[], the tabs Resume restored (aicc_planning#423)
+  PTY_TABS_RESTORED: 'pty:tabsRestored',   // renderer -> main: { id, cwd? }[], the tabs Resume restored, a local agent tab with its folder (aicc_planning#423)
   PTY_TAB_SHOWN: 'pty:tabShown',   // renderer -> main: string, a tab shown and starting now (aicc_planning#423)
 
   // SSH connection-flow controller (manual mode user-gated stages).

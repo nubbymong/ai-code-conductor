@@ -722,8 +722,11 @@ function codexAccountOwnership(service: AccountsService, accountId: string): 'co
 /** WP2 PR 4, P4.1: `canvas:sessionGuidance`'s payload: one session id. */
 const sessionGuidanceSchema = z.object({ sessionId: z.string().regex(/^[A-Za-z0-9_-]{1,128}$/) }).strict()
 
-/** aicc_planning#423: `pty:tabsRestored`'s payload: the tab ids Resume restored. */
-const tabsRestoredSchema = z.array(sessionIdSchema).max(1000)
+/** aicc_planning#423: `pty:tabsRestored`'s payload: the tabs Resume restored,
+ *  each its id and (B1d) a local agent tab's configured folder, a bounded
+ *  string as pty:spawn's resume folder is (main resolves it as a launch's
+ *  folder: resolveCwd, then the canvas store's own floors). */
+const tabsRestoredSchema = z.array(z.object({ id: sessionIdSchema, cwd: z.string().min(1).max(4096).optional() }).strict()).max(1000)
 
 /** WP2 PR 4, P4.3: `askConductor:handOff`'s payload: the Ask session and the
  *  question, bounded as the pty:spawn schema bounds askPrompt. */
@@ -1430,10 +1433,12 @@ export function registerPtyHandlers(getWindow: () => BrowserWindow | null): void
   // starts now (the renderer's session-persistence.ts and TerminalView). A
   // session an update kept for a restored tab not on screen waits for that
   // tab with no time limit until it is shown (session-helper/manager.ts
-  // restoredTabs and tabShown, through kept-launches.ts). The app's window only.
-  ipcMain.on(IPC.PTY_TABS_RESTORED, (e, ids: unknown) => {
+  // restoredTabs and tabShown, through kept-launches.ts), and (B1d) is served
+  // its Conductor tool calls meanwhile, with its tab's folder for its canvas
+  // roots. The app's window only.
+  ipcMain.on(IPC.PTY_TABS_RESTORED, (e, tabs: unknown) => {
     if (!fromApp(e)) return
-    const parsed = tabsRestoredSchema.safeParse(ids)
+    const parsed = tabsRestoredSchema.safeParse(tabs)
     if (parsed.success) keptTabsRestored(parsed.data)
   })
   ipcMain.on(IPC.PTY_TAB_SHOWN, (e, id: unknown) => {

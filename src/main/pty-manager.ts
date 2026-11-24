@@ -7284,10 +7284,10 @@ setSessionInputPorts({
   isCodexAskSession: (sessionId) => codexAskSessions.has(sessionId),
 })
 setLaunchBindingPorts({
-  ptySessions, codexHookFiles, codexHookedLaunches, codexLaunchLeases, takenCodexLeases, codexAskSessions, codexTelemetrySources, indexedRuns,
+  ptySessions, codexHookFiles, codexHookedLaunches, codexLaunchLeases, takenCodexLeases, codexAskSessions, codexTelemetrySources, indexedRuns, codexGatewayTokens,
   notIndexedSessions, codexContextRollouts, keptCodexConversations, lastCodexHookRollout, claudeTranscripts, claudeFolders, codexFolders,
   noteGatewayToken, dropGatewayToken, forgetCodexHooks, keepCodexConversation, markCodexConversationUncertain, clearCodexDoubtFromHook,
-  noteCodexContextRollout, endSessionNotIndexed, noteCodexFolder, savedConfigLoggingOff, noteClaudeFolder, noteClaudeTranscript, markSessionNotIndexed, noteAgentRunFolder, codexRunWriters,
+  noteCodexContextRollout, endSessionNotIndexed, noteCodexFolder, savedConfigLoggingOff, noteClaudeFolder, noteClaudeTranscript, markSessionNotIndexed, noteAgentRunFolder, codexRunWriters, launchStyleOf,
   closeCodexRunScreen: (sessionId) => codexRunScreen()?.close(sessionId),
 })
 
