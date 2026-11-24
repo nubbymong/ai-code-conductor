@@ -1050,4 +1050,17 @@ export function removeKeptLaunchFiles(kept: KeptLaunch): void {
   }
 }
 
-setKeptLaunchBindings({ describe: describeLaunch, remove: removeKeptLaunchFiles })
+/**
+ * aicc_planning#423: a session the next start keeps for its tab, until the
+ * take-over. Its status line's address file, where its launch wrote one,
+ * names the last run's address and credential, which this run's Conductor
+ * server refuses: each status its CLI sent meanwhile was a refused request
+ * before its status line wrote its status file instead. Emptied, its status
+ * line writes that file with no request (statusline.ts); the file stays, so
+ * the take-over still writes this run's address into it (claudeTakeOver).
+ */
+export function holdKeptLaunchFiles(kept: KeptLaunch): void {
+  if (fs.existsSync(getLocalSessionStatusUrlPath(kept.sessionId))) writeLocalSessionStatusUrl(kept.sessionId, '')
+}
+
+setKeptLaunchBindings({ describe: describeLaunch, remove: removeKeptLaunchFiles, hold: holdKeptLaunchFiles })

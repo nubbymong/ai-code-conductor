@@ -1047,6 +1047,10 @@ export default function TerminalView({ sessionId, configId, cwd, shellOnly, elev
         if (term.cols > 0 && term.rows > 0) { lastSentCols = term.cols; lastSentRows = term.rows }
 
         if (!hasSpawned(sessionId) && !adoptedStartEnded) {
+          // aicc_planning#423: shown and starting now (or asking which account
+          // first): a session an update kept for this tab waits from here
+          // within main's time limit.
+          try { window.electronAPI.pty.tabShown?.(sessionId) } catch { /* main keeps no limit for it then */ }
           const gate = useAccountGateStore.getState()
           // Re-entry guard: a gate modal is already up for this session, so a
           // re-run of this effect must not open a second one or double-spawn.

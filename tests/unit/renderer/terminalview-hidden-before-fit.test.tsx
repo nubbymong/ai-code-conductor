@@ -167,12 +167,15 @@ vi.mock('../../../src/renderer/hooks/useCursorLayerVisibility', () => ({ useCurs
 
 const spawn = vi.fn((_id: string, _opts: Record<string, unknown>) => Promise.resolve({ started: true }))
 const resize = vi.fn((_id: string, _cols: number, _rows: number) => {})
+/** aicc_planning#423: each tab main was told is shown, with the spawns made by then. */
+const shownTold: Array<{ id: string; spawnsBefore: number }> = []
 ;(globalThis as any).window.electronAPI = {
   ...(globalThis as any).window.electronAPI,
   pty: {
     write: vi.fn(),
     resize,
     spawn,
+    tabShown: (id: string) => { shownTold.push({ id, spawnsBefore: spawn.mock.calls.length }) },
     onData: vi.fn(() => () => {}),
     onExit: vi.fn(() => () => {}),
   },
@@ -249,6 +252,7 @@ beforeEach(() => {
   installRaf()
   spawn.mockClear()
   resize.mockClear()
+  shownTold.length = 0
   H.spawned.clear()
   H.tokens.clear()
   H.settings.gpu = true
@@ -366,6 +370,30 @@ describe('a tab hidden before its first fit starts its terminal at its own size 
     expect(H.MockWebgl.built).toBe(1)
     await act(async () => { frame() })
     expect(spawnedSizes()).toEqual([[103, 27]])
+  })
+
+  it('aicc_planning#423: main is told the tab is shown only once it is, once, just before it starts; never while it waits hidden', async () => {
+    mount()
+    await setUp()
+    hide()
+    for (let i = 0; i < 20; i++) await act(async () => { frame() })
+    expect(shownTold, 'nothing while the pane has no size').toEqual([])
+    show()
+    await act(async () => { frame() })
+    expect(shownTold).toEqual([{ id: 's-1', spawnsBefore: 0 }])
+    expect(spawnedSizes()).toEqual([[103, 27]])
+    hide()
+    show()
+    for (let i = 0; i < 3; i++) await act(async () => { frame() })
+    expect(shownTold, 'not again for a tab that started').toHaveLength(1)
+  })
+
+  it('aicc_planning#423: a view that takes over a running PTY (a remount) tells main nothing', async () => {
+    H.spawned.add('s-1')
+    mount()
+    await setUp()
+    await act(async () => { frame() })
+    expect(shownTold).toEqual([])
   })
 
   it('a view torn down while it waits for a size leaves no frame behind and spawns nothing', async () => {

@@ -527,6 +527,10 @@ export async function restoreSavedSessions(
     }
 
     useSessionStore.getState().restoreSessions(restoredSessions, savedState.activeSessionId)
+    // aicc_planning#423: main is told which tabs came back. A tab not on
+    // screen starts (and takes over a session an update kept for it) only once
+    // it is shown, so that session waits for it with no time limit till then.
+    try { window.electronAPI.pty?.tabsRestored?.(restoredIds) } catch { /* each kept session keeps its time limit */ }
     // SSH Persistent (Phase 1): rehydrate the left-running registry from the
     // same persisted file BEFORE the save below (which folds it back in via
     // buildSessionState). App-restart restore is otherwise UNCHANGED — the

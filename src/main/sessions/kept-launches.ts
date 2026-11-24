@@ -49,6 +49,10 @@ export interface KeptLaunchBindings {
    *  its hook folder and its pick folder. Only once the session is no longer
    *  kept: it ended, or it is being ended. */
   remove(kept: KeptLaunch): void
+  /** aicc_planning#423: the next start keeps the session for its tab. What
+   *  its launch left that names the last run's address and credential, which
+   *  this run refuses, is emptied until the take-over writes it again. */
+  hold?(kept: KeptLaunch): void
 }
 
 const NOTHING_KNOWN: KeptLaunchFacts = { conversation: null, account: null, hookFolder: null }
@@ -96,6 +100,16 @@ export function removeKeptLaunch(k: KeptLaunch): void {
   }
 }
 
+/** A session the next start keeps for its tab (aicc_planning#423): what its
+ *  launch left naming the last run's address is emptied. Never throws. */
+export function holdKeptLaunch(k: KeptLaunch): void {
+  try {
+    bindings?.hold?.(k)
+  } catch {
+    /* best-effort: its status line falls back to its status file */
+  }
+}
+
 /** What the last run's update recorded of a session a tab takes over: what
  *  its release knew (KeptLaunchFacts), the folder its CLI was launched in
  *  (null when the record does not say: one an earlier version wrote), and
@@ -132,4 +146,30 @@ export function takeKeptSession(sessionId: string, provider: ProviderId, size: {
   } catch {
     return null
   }
+}
+
+/** What the renderer says of its tabs that a session kept for a restored tab
+ *  waits on (aicc_planning#423): the tabs Resume restored, a tab shown and
+ *  starting now, and a tab closed. */
+export interface KeptTabSignals {
+  restored(sessionIds: ReadonlyArray<string>): void
+  shown(sessionId: string): void
+  closed(sessionId: string): void
+}
+let tabSignals: KeptTabSignals | null = null
+
+/** session-helper/manager.ts, when it loads. */
+export function setKeptTabSignals(s: KeptTabSignals | null): void {
+  tabSignals = s
+}
+
+/** The IPC handlers (pty-handlers.ts) pass each one on. Never throw. */
+export function keptTabsRestored(sessionIds: ReadonlyArray<string>): void {
+  try { tabSignals?.restored(sessionIds) } catch { /* each kept session keeps its time limit */ }
+}
+export function keptTabShown(sessionId: string): void {
+  try { tabSignals?.shown(sessionId) } catch { /* its kept session keeps no limit then; a close or a quit ends it */ }
+}
+export function keptTabClosed(sessionId: string): void {
+  try { tabSignals?.closed(sessionId) } catch { /* a quit ends it */ }
 }
