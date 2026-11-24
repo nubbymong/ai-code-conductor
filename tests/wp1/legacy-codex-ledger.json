@@ -1,8 +1,8 @@
 {
   "schema": "wp1-legacy-codex-ledger/2",
   "predicateDigest": "100a1233edebdc39a5f9004d3fba980a89ebb15b25872e52076386bc84b03153",
-  "manifestPathDigest": "4cff23b1cc87fd0ef1a6e3cd0f4e983d7e3c576797dac225c6f6b4f5ba473213",
-  "manifestHead": "1217de2e702493b9e3e6f11423411dcb6fcb5326",
+  "manifestPathDigest": "d12233ca633f6065be83ecba424cad5244d8c17f41031320f16e6745d39cb4ed",
+  "manifestHead": "42bc27386466f342f613cbda633efbd2b4dd208c",
   "dispositions": {
     "retain": "unchanged observable behaviour, characterization proof",
     "move": "moved behind a package boundary and/or adapted at the call site, regression proof (newPath when relocated)",
@@ -1401,6 +1401,27 @@
       "disposition": "added",
       "evidence": "ADR-030 probes P18 (2.1.3-beta.10 section B1) and P19 (2.1.3-beta.11 section A1): P18, a Windows test-machine probe that measures how Claude Code and Codex start a tool server, never run in CI; P19, a measurement of whether Claude Code and Codex redraw their screen after a resize when a re-attach starts mid-stream, run on the Windows test machine and by a dispatch-only CI job; neither is shipped; no legacy Codex code path; listed in the repository-wide legacy Codex manifest, zero unmatched at the merge gate (WP1.67), tests/wp1/legacy-codex-gate.test.ts",
       "note": "how to run probes P7, P16, P18 and P19; names Codex as one of the CLIs P18 and P19 measure"
+    },
+    {
+      "path": "helper/probes/p11-model-stand-in.cjs",
+      "predicates": [
+        "P14"
+      ],
+      "category": "OTHER",
+      "disposition": "added",
+      "evidence": "ADR-030 probe P11 (2.1.3-beta.16 section X1): the stand-in model that records whether a Claude Code or Codex turn carries an image; never shipped; no legacy Codex code path (WP1.67), tests/wp1/legacy-codex-gate.test.ts",
+      "note": "names Codex only as the CLI whose Responses API requests it reads"
+    },
+    {
+      "path": "helper/probes/p11-probe.cjs",
+      "predicates": [
+        "P04",
+        "P14"
+      ],
+      "category": "OTHER",
+      "disposition": "added",
+      "evidence": "ADR-030 probe P11 (2.1.3-beta.16 section X1, aicc_planning #405): a measurement, on the Windows test machine, of whether Claude Code and Codex attach an image from an inserted path as a bracketed paste and as typed text; never shipped and never run in CI; no legacy Codex code path; listed in the repository-wide legacy Codex manifest, zero unmatched at the merge gate (WP1.67), tests/wp1/legacy-codex-gate.test.ts",
+      "note": "the P11 driver; runs a Codex CLI in a fresh environment whose CODEX_HOME is the probe's own temporary folder"
     },
     {
       "path": "helper/probes/p18-stand-in.cjs",
@@ -7871,6 +7892,16 @@
       "note": ""
     },
     {
+      "path": "tests/unit/main/image-paste-ipc.test.ts",
+      "predicates": [
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "new 2.1.3-beta.16 X1.2 test: pty:submitPrompt with an image path goes to main's image door; it names Codex only in the PTY manager mock's export names (WP1.67); tests/unit/main/image-paste-ipc.test.ts",
+      "note": "the PTY manager mock copied from prompt-button-ipc.test.ts"
+    },
+    {
       "path": "tests/unit/main/insights-codex-fs-guards.test.ts",
       "predicates": [
         "P01",
@@ -8610,6 +8641,16 @@
       "disposition": "added",
       "evidence": "new 2.1.3-beta.14 section A1 test (tests/unit/main/session-helper-update-keep.test.ts, S16 step 4, aicc_planning#387 with #359): an app update on Windows lets go of a held Claude Code or Codex session of a saved tab whose tools go through its holder, records it (provider, conversation, account, Codex hook folder), and the next start logs it, removes the record and its files and ends it before its tab starts a new CLI; an update that does not start ends it at once (WP1.68)",
       "note": "created by 2.1.3-beta.14 section A1; the P13 hits are the second provider's tab (kind codex) and its hook folder; a fake helper in memory and a mocked node-pty, no process starts"
+    },
+    {
+      "path": "tests/unit/main/session-input-image.test.ts",
+      "predicates": [
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "new 2.1.3-beta.16 X1.2 test: session-input submitImage pastes a saved image's path into a Claude Code session on this computer; a Codex session is not this door's and keeps its own way (WP1.67); tests/unit/main/session-input-image.test.ts",
+      "note": "a fake Codex session only to show the door does not take it"
     },
     {
       "path": "tests/unit/main/session-input-ownership.test.ts",
@@ -11775,6 +11816,16 @@
       "disposition": "added",
       "evidence": "new 2.1.3-beta.13 C2 test (ADR-030 probes P3 and P6, aicc_planning#377): the verdicts follow the decision lines written before measuring, only the two key slots' host and user are read, only ssh and scp are started, and the host is left as found; it names Codex only as one of the programs P6 looks up (WP1.67); tests/unit/scripts/helper-probe-p3-p6.test.ts",
       "note": "loads helper/probes/p3-p6-linux.cjs without connecting to a host"
+    },
+    {
+      "path": "tests/unit/scripts/probe-p11.test.ts",
+      "predicates": [
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "new 2.1.3-beta.16 X1 test (ADR-030 probe P11): the probe's verdict lines, how its stand-in reads a Claude Code or Codex request for an image, and the screens it answers on Codex's way to its composer; it names Codex only as the CLI a probe row runs (WP1.67); tests/unit/scripts/probe-p11.test.ts",
+      "note": "loads helper/probes/p11-probe.cjs and p11-model-stand-in.cjs without running a CLI"
     },
     {
       "path": "tests/unit/scripts/probe-p19-job.test.ts",
