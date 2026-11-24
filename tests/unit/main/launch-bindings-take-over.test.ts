@@ -40,6 +40,7 @@ const h = vi.hoisted(() => ({
   bound: [] as Array<[string, string]>,
   rewrites: [] as Array<[string, string, number, string]>,
   disposed: [] as string[],
+  captureThrows: false,
   telemetry: [] as Array<Record<string, unknown>>,
 }))
 
@@ -139,7 +140,7 @@ vi.mock('../../../src/main/hooks/per-session-settings', () => ({
   noteKeptLaunchStatusLine: () => { h.journal.push('noteKeptLaunchStatusLine') },
 }))
 vi.mock('../../../src/main/claude-account-identity', () => ({
-  captureClaudeAccount: (sid: string, profile: string | undefined) => { h.journal.push(`captureClaudeAccount:${profile ?? 'default'}`) },
+  captureClaudeAccount: (sid: string, profile: string | undefined) => { if (h.captureThrows) throw new Error('the stand-in capture failed'); h.journal.push(`captureClaudeAccount:${profile ?? 'default'}`) },
   clearClaudeAccount: () => {},
   getAccountIdentity: () => null,
   getClaudeProfileId: () => null,
@@ -199,7 +200,7 @@ const seen = (): string[] => h.journal.filter((n) => WATCHED.has(n) || n.startsW
 const tick = (ms = 0) => new Promise((r) => setTimeout(r, ms))
 
 /** The terminal of the kept session the stand-in helper hands over, and what reached it. */
-interface KeptPty { pid: number; writes: string[]; data: Array<(d: string) => void>; exit: Array<(e: { exitCode: number }) => void> }
+interface KeptPty { pid: number; kills: number; writes: string[]; data: Array<(d: string) => void>; exit: Array<(e: { exitCode: number }) => void> }
 let kept: KeptPty | null
 /** Each take-over the stand-in helper was asked for. */
 let asked: Array<{ sessionId: string; provider: string; size: { cols: number; rows: number }; account?: string | null }>
@@ -210,14 +211,14 @@ function keepFor(sessionId: string, folder: string | null = LAUNCH_FOLDER, rec: 
     if (sid !== sessionId) return null
     // As the manager: a launch prepared on another account takes nothing over.
     if (account !== undefined && account !== (rec.account ?? null)) return null
-    const p: KeptPty = { pid: 7777, writes: [], data: [], exit: [] }
+    const p: KeptPty = { pid: 7777, kills: 0, writes: [], data: [], exit: [] }
     kept = p
     const pty = {
       pid: p.pid, cols: size.cols, rows: size.rows, process: 'pwsh', handleFlowControl: false,
       onData: (cb: (d: string) => void) => { p.data.push(cb); return { dispose: () => {} } },
       onExit: (cb: (e: { exitCode: number }) => void) => { p.exit.push(cb); return { dispose: () => {} } },
       write: (d: string) => { p.writes.push(d) },
-      resize: () => {}, clear: () => {}, pause: () => {}, resume: () => {}, kill: () => {},
+      resize: () => {}, clear: () => {}, pause: () => {}, resume: () => {}, kill: () => { p.kills++ },
     }
     return { pty: pty as never, kept: { conversation: CONV, account: rec.account ?? null, hookFolder: rec.hookFolder ?? null, folder } }
   })
@@ -242,6 +243,7 @@ beforeEach(() => {
   h.bound.length = 0
   h.rewrites.length = 0
   h.disposed.length = 0
+  h.captureThrows = false
   h.telemetry.length = 0
   for (const f of fs.readdirSync(h.urlDir)) fs.rmSync(path.join(h.urlDir, f), { force: true })
 })
@@ -263,6 +265,14 @@ describe('pty-manager.ts: a restored tab takes over the session an update kept r
     expect(kept!.writes).toEqual(['next prompt'])
     // No status line address file was written by its launch: none is written now.
     expect(h.urlWrites).toEqual([])
+  })
+
+  it('a take-over whose bindings fail after it attached: its CLI is ended, nothing is launched in its place, and the spawn fails as a launch\'s does', () => {
+    keepFor(CLAUDE_SID)
+    h.captureThrows = true
+    expect(() => spawnPty(fakeWin, CLAUDE_SID, { cwd: os.tmpdir() } as never)).toThrow('the stand-in capture failed')
+    expect(kept!.kills).toBe(1)
+    expect(seen()).toEqual([...TEARDOWN, 'recordHeldToolSession', 'noteKeptLaunchStatusLine'])
   })
 
   it('its logging run and transcript binding: the folder its CLI runs in and its saved conversation, from the take-over', () => {

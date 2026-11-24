@@ -69,7 +69,7 @@ import { openNotIndexedWindow } from '../logging/indexing-gaps'
 import { getLogSupervisor } from '../logging/logging-service'
 import { getCodexLogBinder } from '../logging/codex-log-binder'
 import { buildResumeTranscriptPath } from '../spawn-claude-command'
-import { captureClaudeAccount, getAccountIdentity, getClaudeProfileId, pushAccountIdentity, startWatchingAccountIdentity } from '../claude-account-identity'
+import { captureClaudeAccount, clearClaudeAccount, getAccountIdentity, getClaudeProfileId, pushAccountIdentity, startWatchingAccountIdentity, stopWatchingAccountIdentity } from '../claude-account-identity'
 import { registerCodexReviewSession, registerClaudeReviewSession, unregisterCodexReviewSession, releaseMcpSessionProvider, recordHeldToolSession, getConductorMcpPort } from '../conductor-mcp-server'
 import { registerCanvasUatRoot, revokeCanvasUatRoots, designateCanvasWorktreeRoot, canvasRootRefusalReason, describeCanvasRootRefusal, setCanvasRootRefusal } from '../canvas/canvas-store'
 import { forgetCanvasMarkers } from '../canvas/canvas-marker-delivery'
@@ -711,10 +711,23 @@ export function takeOverKeptLaunch(b: KeptTakeOverBinding): KeptSessionTakenOver
   if (!taken) return null
   const { pty: proc, kept } = taken
   const launchCwd = kept.folder ?? b.resolvedCwd
-  recordHeldToolSession(b.sessionId, b.launch.id)
-  ports().noteAgentRunFolder(proc, b.sessionId, launchCwd)
-  if (codex) codexTakeOver(b, b.codexLaunch!, proc, kept, launchCwd)
-  else claudeTakeOver(b, proc, kept, launchCwd)
+  try {
+    recordHeldToolSession(b.sessionId, b.launch.id)
+    ports().noteAgentRunFolder(proc, b.sessionId, launchCwd)
+    if (codex) codexTakeOver(b, b.codexLaunch!, proc, kept, launchCwd)
+    else claudeTakeOver(b, proc, kept, launchCwd)
+  } catch (err) {
+    // As a launch that failed after its process started: its CLI is ended
+    // (the holder's end), what was bound goes, and the throw goes on to the
+    // spawn's caller. Its tab reads the failure, and a Restart resumes it.
+    logWarn(`[pty] ${b.sessionId}: the take-over failed after it attached; its CLI is ended (${(err as Error)?.message ?? err})`)
+    try { proc.kill() } catch { /* already gone */ }
+    try { ports().dropGatewayToken(b.sessionId) } catch { /* best-effort */ }
+    for (const unbind of [unbindCodexLease, unbindLaunchTelemetry, unbindLaunchRegistrations, clearClaudeAccount, stopWatchingAccountIdentity]) {
+      try { unbind(b.sessionId) } catch { /* best-effort */ }
+    }
+    throw err
+  }
   logInfo(`[pty] ${b.sessionId}: took over the session the last update kept running, with no launch (conversation ${kept.conversation ?? 'none'})`)
   return { ptyProcess: proc, launchCwd, conversation: kept.conversation, profileId: codex ? undefined : (kept.account ?? undefined) }
 }
