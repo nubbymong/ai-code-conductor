@@ -323,6 +323,12 @@ export interface SessionProvider {
    *  left-behind folders removes one; any other path is left as it is. Never
    *  throws. */
   removeSessionHookFolder?(dir: string): void
+  /** Optional -- Codex (2.1.3-beta.17, aicc_planning#407): at start, remove
+   *  the per-launch resume-list folders a run left in the system's temp
+   *  folder when it ended without its sessions' own end (a kill, a crash, a
+   *  quiet uninstall), a day old or more and holding nothing but what the
+   *  list writes; never a running session's. Never throws. */
+  sweepLeftoverPickFolders?(): void
   /** Optional -- Codex (2.1.3-beta.5): on macOS and Linux a launch that opens
    *  the resume list runs it on the node the user's login shell names. This
    *  asks that shell once, off the event loop, and keeps the answer for the
