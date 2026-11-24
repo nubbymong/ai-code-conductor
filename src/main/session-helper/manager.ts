@@ -823,8 +823,8 @@ export class SessionHelperManager implements MachinesSource {
     this.state = 'ready'
     this.changed()
     // Beside the clean-up below, and waited for at the end: the self-test
-    // reads the copy (its hash) and runs it, so nothing this start began still
-    // has the copy open once the start settles (CI run 45341253799).
+    // reads the copy (its hash) and runs it, so the self-test this start began
+    // no longer has the copy open once the start settles (CI run 45341253799).
     const selfTest = this.selfTestSettled()
     // Every folder of a version a listed or live holder reports is kept, the
     // current version's other builds included (#322); every other old folder

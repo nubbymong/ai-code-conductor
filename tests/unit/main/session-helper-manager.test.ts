@@ -400,8 +400,8 @@ describe('the helper copy: checked before every holder start', () => {
   // for the start removed the copy's folder with the copy still open. Node 20
   // deletes a file that is still open only when it is closed, and rmSync's
   // retries block the very event loop that would close it: ENOTEMPTY, in this
-  // file's teardown on every run (8 folders) and once in
-  // session-helper-flow.test.ts.
+  // file's teardown in both runs read (8 folders each: that run and the green
+  // run 45343419232) and once in session-helper-flow.test.ts.
   it('a start settles only once the self-test it began has, the one a start runs again for a failed self-test too', async () => {
     let release: () => void = () => {}
     let selfTests = 0
