@@ -117,7 +117,9 @@ export function broadcastChoices(sessions: readonly BroadcastChoiceSession[], li
 /**
  * #413, design point 1 (put to the owner 2026-11-24; built on its default
  * until answered): Choose sessions starts with every listed session ticked,
- * so a pick is "untick the ones to skip".
+ * so a pick is "untick the ones to skip". Design point 2 (the same, its
+ * default): every press starts here; a button keeps no pick from its last
+ * press.
  */
 export function chooserStartPick(listed: readonly string[]): string[] {
   return [...listed]

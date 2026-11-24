@@ -10,7 +10,9 @@ import { ConfirmCard } from './menus'
  * broadcast reaches, each with a tick box beside the tab's name, its agent and,
  * for an SSH session, its host as a badge; then Send for the ticked ones.
  * The list starts with every session ticked (chooserStartPick). Cancel and
- * Escape send nothing.
+ * Escape send nothing. Each press starts from that default: a button keeps
+ * no pick from its last press (design point 2; the CommandBar gives each
+ * press its own chooser).
  *
  * The list is the sessions a broadcast reached when the press asked
  * (`listed`), shown live: one that ends while the chooser is up drops out, and

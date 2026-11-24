@@ -278,8 +278,10 @@ type ConfirmState =
   | { kind: 'hide'; tool: CoreToolId }
   | { kind: 'section-band'; sectionId: string; band: CommandBand }
   /** #413: every broadcast press asks, All or the sessions picked.
-   *  `listed`: the sessions a broadcast reached when it asked, in tab order. */
-  | { kind: 'broadcast'; commandId: string; listed: string[] }
+   *  `listed`: the sessions a broadcast reached when it asked, in tab order.
+   *  `press`: this press's number, the chooser's key, so each press starts
+   *  from the default (design point 2: a button keeps no pick). */
+  | { kind: 'broadcast'; commandId: string; listed: string[]; press: number }
 
 export default function CommandBar({ sessionId, configId, sessionType = 'local', partnerEnabled, isPartnerActive, onTogglePartner, partnerSessionId, parentSessionId, mainPaneIsShell = false, configCount }: Props) {
   const webviewKey = parentSessionId ?? sessionId
@@ -675,6 +677,7 @@ export default function CommandBar({ sessionId, configId, sessionType = 'local',
    *  on every session change to keep a list nobody is looking at. With no
    *  session to send to, the tab says so and nothing asks. */
   const askedBroadcast = useRef<string | null>(null)
+  const broadcastPresses = useRef(0)
   const askBroadcast = (cmd: CustomCommand) => {
     const listed = broadcastTargets(useSessionStore.getState().sessions)
     if (listed.length === 0) {
@@ -683,7 +686,8 @@ export default function CommandBar({ sessionId, configId, sessionType = 'local',
       return
     }
     askedBroadcast.current = cmd.id
-    setConfirm({ kind: 'broadcast', commandId: cmd.id, listed })
+    broadcastPresses.current += 1
+    setConfirm({ kind: 'broadcast', commandId: cmd.id, listed, press: broadcastPresses.current })
   }
   const answerBroadcast = (picked: readonly string[] | null) => {
     const id = askedBroadcast.current
@@ -1455,6 +1459,7 @@ export default function CommandBar({ sessionId, configId, sessionType = 'local',
       )}
       {confirm?.kind === 'broadcast' && confirmCmd && (
         <BroadcastChooser
+          key={confirm.press}
           label={confirmCmd.label}
           listed={confirm.listed}
           pressedId={sessionId}

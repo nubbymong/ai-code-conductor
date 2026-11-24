@@ -215,6 +215,22 @@ describe('a button set to "Send to every open session" asks first: All, or the s
     ])
   })
 
+  it('the next press starts from the default again: the button does not remember the last pick (design point 2, its default)', async () => {
+    COMMANDS = [BROADCAST]
+    render()
+    await press('Review all')
+    await click('broadcast-chooser-choose')
+    await tickOnly(['s-1'])
+    await click('broadcast-chooser-send')
+    expect(sentTo()).toEqual([{ sessionId: 's-1', text: 'review the open diff' }])
+    await press('Review all')
+    // The first view again (All and Choose sessions), and every tab ticked.
+    expect(byTest('broadcast-chooser-all')!.textContent).toBe('All (3)')
+    expect(rows()).toEqual([])
+    await click('broadcast-chooser-choose')
+    expect(ticked()).toEqual(['s-1', 's-2', 's-3'])
+  })
+
   it('a pick reaches only the ticked tabs, once each', async () => {
     COMMANDS = [BROADCAST]
     render()
