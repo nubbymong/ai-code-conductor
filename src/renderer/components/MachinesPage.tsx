@@ -78,7 +78,8 @@ function agentName(kind: HeldSession['kind']): string | null {
 }
 
 /** What a held terminal is doing, in plain words. An agent session no tab
- *  shows is one a crash or a quit left: it is being ended, never shown again. */
+ *  shows is one a crash or a quit left: it is being ended, never shown again.
+ *  One an update kept for its restored tab (tabOpen) waits for that tab. */
 function sessionStateText(s: Pick<HeldSession, 'attached' | 'tabOpen' | 'kind'>): string {
   if (agentName(s.kind) !== null && !s.attached && !s.tabOpen) return 'Being ended'
   if (s.attached) return s.tabOpen ? 'Attached to the app' : 'Attached to the app. No tab shows it.'

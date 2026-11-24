@@ -30,15 +30,16 @@ minutes now stop while the session's tab is restored and not yet shown.
   goes to a view that does not exist yet. Main would have to build the launch itself and hold
   the replay for a view mounted later: not small, and not safe in this beta.
 - **Until the tab is shown** (as in B1's gap): Claude Code's hook events queue in its holder
-  (at most 256 events and 2 MiB, helper/src/holder.rs HookQueue) and arrive at the take-over;
-  a Conductor tool call its CLI makes is held by its relay for 30 s and then answered 'AI Code
-  Conductor is updating, try again shortly' (helper/src/relay.rs HOLD and UPDATING), so only a
-  call made in the 30 s before the take-over completes; a Codex session's hook events go to the
-  Hooks gateway with the last run's credential and are refused, until its take-over writes its
-  hook file again. A kept session whose CLI ends by itself before its tab is shown stays
-  recorded until the tab is shown; its take-over then fails as B1 defines, and the tab says to
-  restart it. The Machines page reads a session kept for its tab as "Waiting for the app"
-  (manager.ts toHeld), not "Being ended"; its End still ends it.
+  (at most 256 events and 2 MiB, helper/src/holder.rs HookQueue) and arrive at the take-over.
+  Since B1d (2026-11-24-takeover-hidden-tab-serves-tools.md), from 3 s after Resume a
+  Conductor tool call its CLI makes is served while the tab stays hidden, and a Codex
+  session's hook file is written again with this run's token, so its hook events reach the
+  app; before those 3 s a call is held 30 s by its relay and then answered 'AI Code Conductor
+  is updating, try again shortly' (helper/src/relay.rs HOLD and UPDATING). A kept session
+  whose CLI ends by itself before its tab is shown is ended with its record and files (B1d),
+  and its tab, once shown, resumes its conversation in a new CLI by itself. The Machines page
+  reads a session kept for its tab as "Waiting for the app" (manager.ts toHeld), not "Being
+  ended"; its End still ends it.
 - **The warning** `[vision-mcp] Rejected unauthenticated request on port 19333 (method=POST
   ua="unknown")` (vm:B1, out/086-log-bad.txt, 12:24:53.852Z, 2.0 s after build 2's process
   started and 19 s before the take-over). Sender: the kept Claude Code CLI's status line bridge
@@ -55,5 +56,8 @@ minutes now stop while the session's tab is restored and not yet shown.
   otherwise be a refused request. One status already running at the start can still post the
   last run's address (it reads the file before its usage fetch, up to 5 s), so one refused
   request, and the one warning, remains possible; it then writes its status file as before.
-- Not checked here: the VM line (update mid-turn with the tab hidden for more than 5 minutes,
-  then shown), which the orchestrator runs on the frozen head.
+- VM line PASS on 3d9ea1c4 (WINDOWS_1, two builds on the real update path): both agent tabs
+  hidden 6 min 14 s after Resume with the same CLIs kept, then taken over with no launch; 198
+  of 198 hook events of the gap arrived; a hidden tab closed ended its session in 0.3 s; the
+  Machines page read "Waiting for the app"; no "Rejected unauthenticated request" line in 3
+  of 3 passes; switch off as before.

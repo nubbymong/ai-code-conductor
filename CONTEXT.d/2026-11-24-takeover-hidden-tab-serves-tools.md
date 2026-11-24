@@ -52,6 +52,12 @@ not edited (CONTEXT.d/README.md: never edit another entry's fragment).
   minutes at most); and for one whose tab Resume did not restore, until its 5-minute limit
   ends it. Claude Code's hook events still wait in its holder until the take-over (at most
   256 events and 2 MiB).
-- pty-manager.ts stays at 7,773 lines: two names added to an existing line of its launch
-  bindings' ports.
-- Not checked here: the VM line, which the orchestrator runs on the frozen head.
+- pty-manager.ts: net zero, two names added to an existing line of its launch bindings'
+  ports (7,773 lines on B1c's head; 7,741 on the beta.17 aggregate, against its cap of 7,773).
+- VM line PASS on ab995f72 (WINDOWS_1, five update passes): the hidden sessions served 3.0 s
+  after Resume; 10 of 11 tool calls made while hidden answered with the real result (the
+  first came before the browser had connected) and none "updating"; hidden 7 min 14 s with
+  the same CLIs, 145 of 145 hook events of the gap arrived at the take-over; a hidden CLI
+  that ended was ended within 70 ms and its tab, once shown, resumed by itself; a hidden
+  Codex session's Stop was recorded and raised its tab's dot; the tab on screen at Resume was
+  not served first; switch off as before; no warning or error in the app log.
