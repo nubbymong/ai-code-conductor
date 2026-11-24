@@ -9,8 +9,11 @@
  * A kept session of a provider with no take-over wired, one whose tab is not
  * among the saved sessions, a start that does not follow an update, the
  * agent sessions' setting off, a tab that starts a new CLI instead, a tab
- * that does not take it over in time, and a quit: each ended, its record and
- * what it left on disk removed.
+ * that does not take it over in time, a holder the start cannot reach, and a
+ * quit: each ended, its record and what it left on disk removed. A tab asking
+ * on another account (a Codex lease's, or the account a Claude Code launch
+ * names) takes nothing over, and its launch ends the kept session first. A
+ * take-over that cannot attach says so in the tab, exits 1 and starts nothing.
  *
  * PURE: the real manager and HelperPty against the fake helper, in memory; the
  * launch's bindings (kept-launches.ts) are a stand-in that records what it is
@@ -33,7 +36,7 @@ import type { IPty } from 'node-pty'
 const ptySpawn = vi.hoisted(() => vi.fn())
 vi.mock('node-pty', () => ({ spawn: ptySpawn }))
 
-import { SessionHelperManager, keptSessionIdsIn, setSessionHelper, spawnAgentPty, type HelperHookDeps, type HelperToolDeps, type HelperToolLink } from '../../../src/main/session-helper/manager'
+import { HELPER_SENTENCES, SessionHelperManager, keptSessionIdsIn, setSessionHelper, spawnAgentPty, type HelperHookDeps, type HelperToolDeps, type HelperToolLink } from '../../../src/main/session-helper/manager'
 import { setKeptLaunchBindings, takeKeptSession, type KeptLaunch, type KeptLaunchFacts } from '../../../src/main/sessions/kept-launches'
 import { heldAgentSessionId } from '../../../src/main/session-helper/protocol'
 import type { HookEventFrame } from '../../../src/main/session-helper/protocol'
@@ -406,6 +409,42 @@ describe('the next start after an update: a kept session no tab takes over is en
     expect(takeKeptSession(CLAUDE_TAB, 'claude', SIZE)).toBeNull()
   })
 
+  it('its holder cannot be reached at the start (gone, its store record left, as after a reboot during the update): ended, its record and files go, and its tab starts a new CLI', async () => {
+    const { hc } = await updated()
+    hc.vanish()
+    logs.length = 0
+    await startedWith(makeManager())
+    await until(() => logs.includes(`[session-helper] ${claudeSid}: the session kept for tab ${CLAUDE_TAB} to take over is ended, because its holder could not be reached`), 'the keeper to give it up')
+    expect(keptOnDisk()).toEqual([])
+    expect(removed.map((k) => k.sessionId)).toContain(CLAUDE_TAB)
+    expect(takeKeptSession(CLAUDE_TAB, 'claude', SIZE)).toBeNull()
+    spawnAgentPty(claudeTab(CLAUDE_TAB), SHELL, [], agentOpts())
+    await until(() => freshAttached(claudeSid, hc), 'a new holder for the new CLI')
+  })
+
+  it('a take-over that cannot attach (its holder went after the keeper attached): the tab says so and exits 1, and nothing starts in its place', async () => {
+    const { hc } = await updated()
+    await startedWith(makeManager())
+    await until(() => !!hc.attached, 'the keeper to attach')
+    const holdsBefore = helper.holds()
+    hc.vanish()
+    logs.length = 0
+    const taken = takeKeptSession(CLAUDE_TAB, 'claude', SIZE)
+    expect(taken).not.toBeNull()
+    const shown: string[] = []
+    let exitCode: number | undefined
+    taken!.pty.onData((d) => shown.push(d))
+    taken!.pty.onExit((e) => { exitCode = e.exitCode })
+    await until(() => exitCode !== undefined, 'the take-over to end')
+    expect(shown.join('')).toContain(HELPER_SENTENCES.agentNotTakenOver)
+    expect(exitCode).toBe(1)
+    expect(ptySpawn).not.toHaveBeenCalled()
+    expect(helper.holds()).toBe(holdsBefore)
+    expect(keptOnDisk()).toEqual([])
+    expect(logs.some((l) => l.startsWith(`[session-helper] ${claudeSid}: nothing is started for this terminal, because the held terminal could not be reached`))).toBe(true)
+    expect(logs.some((l) => l.includes('starting it the usual way'))).toBe(false)
+  })
+
   it('a normal quit before its tab took it over ends it, and its record and files go', async () => {
     const { hc } = await updated()
     const m2 = await startedWith(makeManager())
@@ -458,5 +497,21 @@ describe('a Codex session an update kept running (B1.2)', () => {
     expect(logs).toContain(`[session-helper] ${otherSid}: the session kept for tab ${OTHER_TAB} to take over is ended, because its tab started a new CLI instead of taking it over`)
     await until(() => ho.ended, 'the kept session to be ended')
     expect(removed).toEqual([{ sessionId: OTHER_TAB, provider: 'codex', hookFolder: HOOK_FOLDER }])
+  })
+})
+
+describe('a Claude Code session an update kept running, asked for on another account', () => {
+  it('its tab\'s launch names another account (Ask each time, another account picked): not taken over, and the launch that follows ends it first', async () => {
+    const { hc } = await updated()
+    await startedWith(makeManager())
+    expect(takeKeptSession(CLAUDE_TAB, 'claude', SIZE, 'profile-other')).toBeNull()
+    expect(logs).toContain(`[session-helper] ${claudeSid}: the kept session runs on another account than tab ${CLAUDE_TAB}'s launch, so the tab starts a new CLI`)
+    expect(keptOnDisk()).toContain(`${claudeSid}.json`)
+    const holdsBefore = helper.holds()
+    spawnAgentPty(claudeTab(CLAUDE_TAB), SHELL, [], agentOpts())
+    expect(logs).toContain(`[session-helper] ${claudeSid}: the session kept for tab ${CLAUDE_TAB} to take over is ended, because its tab started a new CLI instead of taking it over`)
+    await until(() => hc.ended, 'the kept session to be ended')
+    expect(removed.map((k) => k.sessionId)).toContain(CLAUDE_TAB)
+    await until(() => helper.holds() === holdsBefore + 1 && freshAttached(claudeSid, hc), 'the new CLI after that end')
   })
 })

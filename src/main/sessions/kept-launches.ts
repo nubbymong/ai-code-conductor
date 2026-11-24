@@ -116,7 +116,7 @@ export function setKeptTakeOver(t: TakeOver | null): void {
  *  (S16 step 5): null when it keeps none (the tab starts its CLI the usual
  *  way), or when asking fails. `account`, when given: only a session the
  *  release recorded on that account (the account lease the tab's launch
- *  was prepared with). */
+ *  was prepared with, or the account it names). */
 export function takeKeptSession(sessionId: string, provider: ProviderId, size: { cols: number; rows: number }, account?: string | null): KeptTakeOver | null {
   try {
     return takeOver?.(sessionId, provider, size, account) ?? null

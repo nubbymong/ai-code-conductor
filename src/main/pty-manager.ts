@@ -6051,7 +6051,7 @@ function spawnPtyResolved(
         proceedAfterSetup()
       }
     })
-  } else if (localLaunch && (takenOver = takeOverKeptLaunch({ win, sessionId, launch: localLaunch, resolvedCwd, cols, rows, codexLaunch: options?.codexLaunch, isAsk: options?.isAsk === true }))) {
+  } else if (localLaunch && (takenOver = takeOverKeptLaunch({ win, sessionId, launch: localLaunch, resolvedCwd, cols, rows, codexLaunch: options?.codexLaunch, profileId: options?.profileId, isAsk: options?.isAsk === true }))) {
     ({ ptyProcess, launchCwd: effectiveLaunchCwd, conversation: resumeUuidForBind, profileId: resolvedProfileId } = takenOver)
     if (options?.provider === undefined) options = { ...options, provider: localLaunch.id } // as the Claude Code branch does: its options name the provider looked up
   } else if (localLaunch?.style === 'direct') {

@@ -10,9 +10,11 @@
 // from the folder it runs in. Its exit ends it as a launch's does. A Codex
 // tab (B1.2) asks with the account its launch is prepared on; taken over, its
 // kept hook file is written again with this run's port and a new token, and
-// its lease, conversation and telemetry are bound with no spawn. A tab the
-// helper keeps nothing for, or one prepared on another account, launches as
-// before.
+// its lease, conversation and telemetry are bound with no spawn; one not
+// written again has its kept folder removed. A tab the helper keeps nothing
+// for, or one prepared on another account (a Codex lease's, or the account a
+// Claude Code launch names), launches as before. A take-over whose bindings
+// fail removes what its launch left on disk, as a failed launch does.
 //
 // The session helper is a stand-in behind the seam (kept-launches.ts
 // setKeptTakeOver); tests/unit/main/session-helper-take-over.test.ts holds the
@@ -41,7 +43,12 @@ const h = vi.hoisted(() => ({
   rewrites: [] as Array<[string, string, number, string]>,
   disposed: [] as string[],
   captureThrows: false,
+  recordThrows: false,
   telemetry: [] as Array<Record<string, unknown>>,
+  /** The kept hook folders the Codex provider was asked to remove. */
+  hookFoldersRemoved: [] as string[],
+  /** Whether the Hooks gateway stand-in is listening. */
+  gwListening: true,
 }))
 
 /** The module's functions, each recorded by name, then run as they are. */
@@ -95,7 +102,7 @@ vi.mock('../../../src/main/logging/logging-service', () => ({
 vi.mock('../../../src/main/conductor-mcp-server', () => ({
   getConductorMcpPort: () => h.mcpPort,
   issueMcpSessionToken: () => 'tok',
-  recordHeldToolSession: (sid: string, provider: string) => { h.journal.push('recordHeldToolSession'); h.records.push([sid, provider]) },
+  recordHeldToolSession: (sid: string, provider: string) => { if (h.recordThrows) throw new Error('the stand-in record failed'); h.journal.push('recordHeldToolSession'); h.records.push([sid, provider]) },
   registerCodexReviewSession: () => {},
   registerClaudeReviewSession: () => {},
   unregisterCodexReviewSession: () => {},
@@ -113,6 +120,7 @@ vi.mock('../../../src/main/providers', () => ({
     ...(id === 'codex' ? {
       prepareSessionHooks: (sid: string) => ({ hookFile: `/tmp/codex-hooks/x/${sid}/hook.json`, dispose: () => {} }),
       rewriteSessionHooks: (dir: string, sid: string, port: number, secret: string) => { h.rewrites.push([dir, sid, port, secret]); return { hookFile: path.join(dir, 'hook.json'), dispose: () => { h.disposed.push(dir) } } },
+      removeSessionHookFolder: (dir: string) => { h.hookFoldersRemoved.push(dir) },
     } : {}),
     ingestSessionTelemetry: (_sid: string, o: Record<string, unknown>) => { h.telemetry.push(o); return { stop: () => {} } },
   }),
@@ -122,7 +130,7 @@ vi.mock('../../../src/main/vision-manager', () => ({ isGlobalVisionRunning: () =
 vi.mock('../../../src/main/canvas/canvas-plugin', () => ({ ensureCanvasPlugin: () => null }))
 vi.mock('../../../src/main/hooks', () => ({
   getGateway: () => ({
-    status: () => ({ enabled: true, listening: true, port: 51234 }),
+    status: () => ({ enabled: true, listening: h.gwListening, port: 51234 }),
     registerSession: () => { h.journal.push('gatewaySecret'); return '0f8b6a2c-1d3e-4f50-9a61-7b2c3d4e5f60' },
     unregisterSession: () => {},
   }),
@@ -173,7 +181,7 @@ vi.mock('../../../src/main/legacy-version-manager', () => ({ isVersionInstalled:
 vi.mock('../../../src/main/credential-store', () => ({ loadCredential: () => null }))
 vi.mock('../../../src/main/provider-accounts', () => ({ getAccountsService: () => null }))
 
-const { spawnPty, killPty, writePty, holdsCodexLaunchLease, getKeptCodexConversation } = await import('../../../src/main/pty-manager')
+const { spawnPty, killPty, writePty, holdsCodexLaunchLease, getKeptCodexConversation, REMOVED_ACCOUNT_REFUSAL } = await import('../../../src/main/pty-manager')
 const { setKeptTakeOver } = await import('../../../src/main/sessions/kept-launches')
 
 h.urlDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ccc-takeover-url-'))
@@ -244,7 +252,10 @@ beforeEach(() => {
   h.rewrites.length = 0
   h.disposed.length = 0
   h.captureThrows = false
+  h.recordThrows = false
   h.telemetry.length = 0
+  h.hookFoldersRemoved.length = 0
+  h.gwListening = true
   for (const f of fs.readdirSync(h.urlDir)) fs.rmSync(path.join(h.urlDir, f), { force: true })
 })
 
@@ -267,12 +278,43 @@ describe('pty-manager.ts: a restored tab takes over the session an update kept r
     expect(h.urlWrites).toEqual([])
   })
 
-  it('a take-over whose bindings fail after it attached: its CLI is ended, nothing is launched in its place, and the spawn fails as a launch\'s does', () => {
+  it('a take-over whose bindings fail after it attached: its CLI is ended, nothing is launched in its place, what its launch left on disk goes, and the spawn fails as a launch\'s does', () => {
     keepFor(CLAUDE_SID)
     h.captureThrows = true
     expect(() => spawnPty(fakeWin, CLAUDE_SID, { cwd: os.tmpdir() } as never)).toThrow('the stand-in capture failed')
     expect(kept!.kills).toBe(1)
     expect(seen()).toEqual([...TEARDOWN, 'recordHeldToolSession', 'noteKeptLaunchStatusLine'])
+    // No exit handler of this session removes them: the failure does, as a failed launch's does.
+    expect(h.removedFiles).toEqual([`settings:${CLAUDE_SID}`, `mcp:${CLAUDE_SID}`, `status-url:${CLAUDE_SID}`])
+  })
+
+  it('a Codex take-over whose bindings fail before its hook file is written again: its files and its kept hook folder go', () => {
+    const hookFolder = path.join(os.tmpdir(), 'codex-hooks', 'ccc-codex-hook-kept3')
+    keepFor(CODEX_SID, LAUNCH_FOLDER, { account: 'acct-b1', hookFolder })
+    h.recordThrows = true
+    expect(() => spawnPty(fakeWin, CODEX_SID, { cwd: os.tmpdir(), provider: 'codex', codexOptions: { permissionsPreset: 'read-only' }, codexLaunch: codexLaunch() } as never)).toThrow('the stand-in record failed')
+    expect(kept!.kills).toBe(1)
+    expect(h.rewrites).toEqual([])
+    expect(h.removedFiles).toEqual([`settings:${CODEX_SID}`, `mcp:${CODEX_SID}`, `status-url:${CODEX_SID}`])
+    expect(h.hookFoldersRemoved).toEqual([hookFolder])
+  })
+
+  it('a Claude Code tab whose launch names another account than the kept session\'s (Ask each time, another account picked): asked with that account, nothing taken over, and the launch goes on as before', () => {
+    keepFor(CLAUDE_SID, LAUNCH_FOLDER, { account: 'profile-a' })
+    // The launch's own account rule follows (this harness sets up no account, so it refuses: no kept CLI runs on in its place).
+    expect(() => spawnPty(fakeWin, CLAUDE_SID, { cwd: os.tmpdir(), profileId: 'profile-b' } as never)).toThrow(REMOVED_ACCOUNT_REFUSAL)
+    expect(asked).toEqual([{ sessionId: CLAUDE_SID, provider: 'claude', size: { cols: 120, rows: 30 }, account: 'profile-b' }])
+    expect(kept).toBeNull()
+    expect(seen()).not.toContain('recordHeldToolSession')
+  })
+
+  it('a Claude Code tab whose launch names the account the kept session runs on: taken over, on that account', () => {
+    keepFor(CLAUDE_SID, LAUNCH_FOLDER, { account: 'profile-a' })
+    spawnPty(fakeWin, CLAUDE_SID, { cwd: os.tmpdir(), profileId: 'profile-a' } as never)
+    expect(asked).toEqual([{ sessionId: CLAUDE_SID, provider: 'claude', size: { cols: 120, rows: 30 }, account: 'profile-a' }])
+    expect(seen()).toEqual([...TEARDOWN, 'recordHeldToolSession', 'noteKeptLaunchStatusLine', 'captureClaudeAccount:profile-a', 'bindLoggingRun'])
+    writePty(CLAUDE_SID, 'next prompt')
+    expect(kept!.writes).toEqual(['next prompt'])
   })
 
   it('its logging run and transcript binding: the folder its CLI runs in and its saved conversation, from the take-over', () => {
@@ -343,6 +385,17 @@ describe('pty-manager.ts: a restored tab takes over the session an update kept r
     spawnPty(fakeWin, CODEX_SID, { cwd: os.tmpdir(), provider: 'codex', codexOptions: { permissionsPreset: 'read-only' }, codexLaunch: codexLaunch() } as never)
     expect(seen()).toEqual([...TEARDOWN, 'recordHeldToolSession', 'bindLoggingRun'])
     expect(h.rewrites).toEqual([])
+  })
+
+  it('a Codex tab whose kept hook file is not written again (the Hooks gateway not listening): no rewrite, no token, and its kept folder goes now', () => {
+    const hookFolder = path.join(os.tmpdir(), 'codex-hooks', 'ccc-codex-hook-kept2')
+    keepFor(CODEX_SID, LAUNCH_FOLDER, { account: 'acct-b1', hookFolder })
+    h.gwListening = false
+    spawnPty(fakeWin, CODEX_SID, { cwd: os.tmpdir(), provider: 'codex', codexOptions: { permissionsPreset: 'read-only' }, codexLaunch: codexLaunch() } as never)
+    expect(seen()).toEqual([...TEARDOWN, 'recordHeldToolSession', 'bindLoggingRun'])
+    expect(h.rewrites).toEqual([])
+    // Its file names the last run's port and token: the folder is handed to the provider to remove.
+    expect(h.hookFoldersRemoved).toEqual([hookFolder])
   })
 
   it('a Codex tab whose launch is prepared on another account: asked with that account, then launched as before', () => {

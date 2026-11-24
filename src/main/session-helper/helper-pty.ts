@@ -106,6 +106,10 @@ export interface HelperPtyDriver {
   connect(record: HolderRecord): Promise<HolderConnection>
   /** The terminal the usual way: node-pty with the spawn's own arguments. */
   direct(): IPty
+  /** True: `direct` starts no program, it only says why (a take-over of a
+   *  session an update kept running, 2.1.3-beta.17), so the log says nothing
+   *  is started, never that it starts the usual way. */
+  startsNothing?: true
   /** This terminal is ending; the next holder for the same session waits for it. */
   ending(sid: string, done: Promise<void>): void
   /** This terminal is attached to its tab, or no longer is. */
@@ -1283,7 +1287,7 @@ export class HelperPty implements IPty {
    */
   private fallBack(why: string, record?: HolderRecord, conn?: HolderConnection, nothing = false): void {
     if (this.exited) return
-    this.driver.log(nothing || this.ending
+    this.driver.log(nothing || this.ending || this.driver.startsNothing
       ? `[session-helper] ${this.sid}: nothing is started for this terminal, because ${why}`
       : `[session-helper] ${this.sid}: starting it the usual way, because ${why}`)
     if (conn) {

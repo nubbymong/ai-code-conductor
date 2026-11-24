@@ -104,12 +104,14 @@ const CANVAS_TOOL_PERMISSIONS = ['mcp__conductor__canvas_snapshot', 'mcp__conduc
  * not written. Such a session reports no usage figure, so the Usage page
  * fetches its account as it does an account no session uses (account-usage.ts,
  * setLiveUsageSessionReports; aicc_planning#378). Set at each launch's settings
- * write, cleared when the session's settings are removed at its end.
+ * write, or read back when a tab takes over a session an update kept running
+ * (noteKeptLaunchStatusLine), and cleared when the session's settings are
+ * removed at its end.
  */
 const launchedWithoutAppStatusLine = new Set<string>()
 
 /** Whether the session's latest launch got no status line from the app. False
- *  for a session not launched in this run. */
+ *  for a session neither launched nor taken over in this run. */
 export function sessionLaunchedWithoutAppStatusLine(sessionId: string): boolean {
   return launchedWithoutAppStatusLine.has(sessionId)
 }

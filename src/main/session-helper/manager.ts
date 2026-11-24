@@ -477,9 +477,10 @@ const BINDINGS = 'bindings.json'
 /** The folder of the records of agent sessions an update kept running (S16 step 4). */
 const KEPT = 'kept'
 /** How long a start keeps a session an update kept running for its restored
- *  tab to take over (S16 step 5): every restored tab starts at once (each
- *  tab's terminal mounts at the restore), so this is the bound for a restore
- *  held back (its prompt left open), not the usual wait. Then it is ended. */
+ *  tab to take over (S16 step 5). A restored tab's terminal mounts at the
+ *  restore and starts at once, so this bounds a restore held back: the resume
+ *  prompt left open, or a tab waiting at its account picker (Settings,
+ *  Accounts, 'Ask each time'). Then it is ended. */
 const KEPT_TAKE_OVER_WAIT_MS = 5 * 60_000
 
 /**
@@ -1194,9 +1195,10 @@ export class SessionHelperManager implements MachinesSource {
    * goes at its end as a launch's does. A take-over whose holder cannot be
    * attached ends its CLI, and the tab says to restart it. Null when no
    * session waits for this tab (it starts its CLI the usual way), and while
-   * the app quits or updates. `account` (a Codex launch's lease, B1.2): the
-   * account the tab's launch is prepared on; a kept session on another one
-   * is not taken over, so the launch goes on and ends it first (spawnAgent).
+   * the app quits or updates. `account` (a Codex launch's lease, or the
+   * account a Claude Code launch names): the account the tab's launch is
+   * prepared on; a kept session on another one is not taken over, so the
+   * launch goes on and ends it first (spawnAgent).
    */
   takeOverKept(ctx: AgentSpawnContext, size: { cols: number; rows: number }, account?: string | null): { pty: HelperPty; kept: KeptRecord } | null {
     if (ctx.run || !APP_PTY_ID_RE.test(ctx.sessionId)) return null
@@ -1217,7 +1219,8 @@ export class SessionHelperManager implements MachinesSource {
     const direct = (): IPty => notStartedPty(HELPER_SENTENCES.agentNotTakenOver, size)
     // Its connections read the holder's size (`screen`), as a plain take-over's
     // do; the screen's title too for a provider whose composer rule reads it.
-    const driver = this.driver(direct, false, false, undefined, hooks, tools, true, this.deps.screens?.[ctx.kind] === true)
+    // Its `direct` starts nothing: it only says the session was ended.
+    const driver: HelperPtyDriver = { ...this.driver(direct, false, false, undefined, hooks, tools, true, this.deps.screens?.[ctx.kind] === true), startsNothing: true }
     const wrapper = this.track(new HelperPty({ sid, label: ctx.sessionId, spec, adopt: record, driver, redraw: this.redrawFor(spec) }), ctx.sessionId)
     if (hooks) void wrapper.ended.then(() => hooks.ended())
     // Its routes, for the next update to keep it again.
@@ -1328,11 +1331,11 @@ export class SessionHelperManager implements MachinesSource {
    * `takenOver` (2.1.3-beta.17, S16 steps 5 and 6): the session an update
    * kept running, whose CLI the run that launched it pointed at the relay
    * (its update kept it only so), with no launch here: on from the attach.
-   * The streams its holder gives on the take-over's first connection were
-   * kept while no app took them, or opened meanwhile; each is served with
-   * `toolsChanged` when the provider's CLI lists its tools again on being
-   * told (listsAgain), since this run's tool list may not be the one that
-   * CLI read.
+   * Every stream its holder opens on the take-over's first connection is
+   * served with `toolsChanged` when the provider's CLI lists its tools again
+   * on being told (listsAgain): the ones kept while no app took them, since
+   * this run's tool list may not be the one that CLI read, and any the CLI
+   * opens on that connection later, which lists from this run anyway.
    */
   private toolRoute(ctx: AgentSpawnContext, sid: string, launch: { file: string; args: SpawnArgs; opts: SpawnOptions } | undefined, takenOver = false): ToolRoute | undefined {
     if (ctx.run) return undefined

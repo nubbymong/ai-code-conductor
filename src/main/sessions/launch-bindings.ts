@@ -662,6 +662,9 @@ export interface KeptTakeOverBinding {
   /** A Codex launch's preparation (pty:spawn's): its account lease and its
    *  realm's sessions folder. None: a Codex take-over is not made. */
   codexLaunch?: { lease: AccountLease; sessionsDir: string }
+  /** The account a Claude Code launch names (pty:spawn's profileId): a kept
+   *  session on another account is not taken over. None: any. */
+  profileId?: string
   /** An Ask Conductor launch. */
   isAsk?: boolean
 }
@@ -684,9 +687,12 @@ export interface KeptSessionTakenOver {
  * restored tab of a Claude Code or Codex session the last run's update kept
  * running takes it over, in place of its launch (pty-manager.ts, one entry
  * before the provider branches). Null when the session helper keeps no
- * session for this tab and provider (a Codex one: on the account the tab's
- * launch is prepared on), or for a Codex launch with no preparation: then the
- * launch runs as before.
+ * session for this tab and provider on the account the tab's launch is
+ * prepared on (a Codex one's lease, or the account a Claude Code launch
+ * names), or for a Codex launch with no preparation: then the launch runs as
+ * before, and ends the kept session first. A Claude Code session runs on the
+ * account it names or not at all, so one kept on another account (Settings,
+ * Accounts, 'Ask each time', then another account picked) is never taken over.
  *
  * Nothing is launched and nothing typed: the resume, the per-session files
  * and the launch line are skipped, as the CLI runs. What the launch binds is
@@ -705,9 +711,10 @@ export function takeOverKeptLaunch(b: KeptTakeOverBinding): KeptSessionTakenOver
   const codex = b.launch.style === 'direct'
   // A Codex take-over needs its launch's preparation: its lease names the account.
   if (codex && !b.codexLaunch?.lease) return null
+  const size = { cols: b.cols, rows: b.rows }
   const taken = codex
-    ? takeKeptSession(b.sessionId, b.launch.id, { cols: b.cols, rows: b.rows }, b.codexLaunch?.lease.accountId ?? null)
-    : takeKeptSession(b.sessionId, b.launch.id, { cols: b.cols, rows: b.rows })
+    ? takeKeptSession(b.sessionId, b.launch.id, size, b.codexLaunch?.lease.accountId ?? null)
+    : b.profileId ? takeKeptSession(b.sessionId, b.launch.id, size, b.profileId) : takeKeptSession(b.sessionId, b.launch.id, size)
   if (!taken) return null
   const { pty: proc, kept } = taken
   const launchCwd = kept.folder ?? b.resolvedCwd
@@ -725,6 +732,12 @@ export function takeOverKeptLaunch(b: KeptTakeOverBinding): KeptSessionTakenOver
     try { ports().dropGatewayToken(b.sessionId) } catch { /* best-effort */ }
     for (const unbind of [unbindCodexLease, unbindLaunchTelemetry, unbindLaunchRegistrations, clearClaudeAccount, stopWatchingAccountIdentity]) {
       try { unbind(b.sessionId) } catch { /* best-effort */ }
+    }
+    // What its launch left on disk goes too, as a failed launch's does: no
+    // exit handler of this session will remove it.
+    removeFailedLaunchFiles(b.sessionId)
+    if (kept.hookFolder) {
+      try { b.launch.provider.removeSessionHookFolder?.(kept.hookFolder) } catch { /* best-effort; the sweep remains */ }
     }
     throw err
   }
@@ -800,6 +813,11 @@ function codexTakeOver(b: KeptTakeOverBinding, launch: { lease: AccountLease; se
     } else {
       dropGatewayToken(sessionId)
     }
+  }
+  // Not written again: the file names the last run's port and token, so its
+  // folder goes now, as a kept session's does once it is no longer kept.
+  if (kept.hookFolder && !codexHookFiles.has(sessionId)) {
+    try { provider.removeSessionHookFolder?.(kept.hookFolder) } catch { /* best-effort; the sweep remains */ }
   }
   logInfo(`[pty-manager] Codex hooks for ${sessionId}: ${codexHookedLaunches.has(sessionId) ? 'on, its kept hook file written again' : 'off (its launch had none, the Hooks gateway is off or not listening, or its hook file could not be written again)'}`)
   bindCodexLease(sessionId, launch.lease)

@@ -10,8 +10,10 @@ the tab resumed the conversation in a new CLI.
   store and the tab is in the saved file the start restores from, the record is kept for its
   tab (manager.ts keptAtStart): a keeper stops the holder's away clock, and the record and the
   session's files stay, so the start-up sweeps pass them by. Any other record is ended as
-  before, with one log line saying why. One no tab takes over within 5 minutes, one whose tab
-  starts a new CLI, and one a quit overtakes, are ended, and their record and files go.
+  before, with one log line saying why. One no tab takes over within 5 minutes (the resume
+  prompt left open, or a tab waiting at its account picker), one whose holder the start cannot
+  reach, one whose tab starts a new CLI, and one a quit overtakes, are ended, and their record
+  and files go.
 - **Take-over.** pty-manager.ts asks once, before the provider branches
   (launch-bindings.ts takeOverKeptLaunch, one entry; the file stays at its 7,773-line cap: the
   failed-launch file removal moved into launch-bindings.ts, and the two Codex raw writers
@@ -23,11 +25,19 @@ the tab resumed the conversation in a new CLI.
 - **Bindings made again.** Both: the tool host's record with no credential, the run folder,
   the logging run. Claude Code: the status line's address file only where the launch wrote
   one, the account capture, the review and canvas registrations, the transcript bind by the
-  saved conversation from the recorded folder. Codex: only on the account its tab's launch
-  is prepared on (else the launch goes on and ends it first); its hook file written again in
-  its kept folder with this run's port and a token minted for it (kept-hooks.ts), the lease,
-  the conversation, the pane and colour answers (only live queries: the replay's are taken
-  out), the telemetry claiming the saved conversation by id, and the registrations.
+  saved conversation from the recorded folder. Codex: its hook file written again in its
+  kept folder with this run's port and a token minted for it (kept-hooks.ts), the lease, the
+  conversation, the pane and colour answers (only live queries: the replay's are taken out),
+  the telemetry claiming the saved conversation by id, and the registrations. A kept hook
+  file not written again (the Hooks gateway off or not listening, the write refused) has its
+  folder removed at once: it names the last run's port and token.
+- **Accounts.** Only on the account its tab's launch is prepared on: a Codex launch's lease,
+  or the account a Claude Code launch names (Settings, Accounts, "Ask each time" may pick
+  another for a restored tab). On another account the launch goes on and ends the kept
+  session first: a Claude Code session runs on the account it names or not at all.
+- **Failures.** A take-over whose bindings throw ends its CLI and removes the session's files
+  and its kept hook folder, as a failed launch does (no exit handler would). One that cannot
+  attach says so in its tab, exits 1 and starts nothing in its place.
 - **Step 6.** A tool stream given back on the take-over's first connection is served with
   `notifications/tools/list_changed` for Claude Code only (probe P20 (c)); Codex does not
   list again, and keeps the tool list it started with.
