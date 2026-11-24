@@ -311,6 +311,8 @@ function recordingTerminal(refuses: (data: string) => boolean = () => false) {
       writes.push(data)
       pending.push(() => cb?.())
     },
+    // It holds no rows: nothing brings them down.
+    resize() { throw new Error('not sized by the aligner') },
   }
   const parse = () => { while (pending.length) pending.shift()!() }
   return { term, writes, parse }

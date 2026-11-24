@@ -36,9 +36,22 @@
  * scrollback first and the paint is written as it came. beta.15's VM line
  * (vm:A1, the same on the published beta.14) read a Claude Code tab grown
  * from 103x27 to 140x28 lose the 11 shell rows above its banner: the paint
- * starts at the banner, which xterm held on its row 9. A paint that matches
- * neither way (another program's screen, a size that changed again, a shape
- * not seen) is written as it came, as before.
+ * starts at the banner, which xterm held on its row 9.
+ *
+ * On a narrowing xterm re-wraps the rows a program drew at the old width
+ * (Claude Code's rules and status row) and moves the top of its screen up one
+ * row for each row that adds, with blank rows below its cursor or not (its
+ * Buffer._reflowSmaller). The console keeps its top row, so its paint starts
+ * with lines xterm now holds just above its screen: written as it came, they
+ * showed twice (beta.16 B3's VM line: the banner's top one or two rows, 3 of
+ * 3; M1's g-ccmain-max on the published beta.14: its top two rows). Such a
+ * paint is placed when it paints the console's whole screen, its top lines are
+ * xterm's lines from a row above its screen (top down, as above), and xterm's
+ * screen has at least that many rows below its cursor: xterm's rows are
+ * brought down until the paint's top line is on its top row, then the paint
+ * is written as it came. A paint that matches none of these ways (another
+ * program's screen, a size that changed again, a shape not seen) is written
+ * as it came, as before.
  *
  * Not handled, written as it came, as before:
  *  - a paint made while the program has the cursor hidden: the console sends
@@ -49,17 +62,15 @@
  *    prompt, Claude Code's input row under its full-width rule): xterm does
  *    not re-wrap the line its cursor is on, the console does, so that line
  *    does not match: such a paint is placed only when its top lines are
- *    lines xterm holds lower on its screen (above);
- *  - a narrowing of a program's screen: xterm re-wraps the rows the program
- *    drew at the old width (Claude Code's rules and status row) and moves the
- *    rows at the top of its screen to its scrollback, and the console paints
- *    them again at its top, so they show twice above the screen (M1's
- *    g-ccmain-max on the published beta.14: the banner's top two rows). Rows
- *    do not come back down out of xterm's scrollback.
+ *    lines xterm holds lower on its screen or just above it (above);
+ *  - a narrowing whose paint starts more rows above xterm's screen than xterm's
+ *    screen has rows below its cursor: that many do not come down
+ *    (bringRowsDown).
  * Not measured: a narrowing right after a grow with no output between. xterm
  * then keeps the blank rows under its cursor and moves its rows up into its
  * scrollback; a console that fills its blank rows sends a paint that would
- * need xterm's rows moved down, and it is written as it came.
+ * need xterm's rows moved down: placed only as a narrowing's paint is (above),
+ * else written as it came.
  *
  * Not checked here: whether a console host other than the one built into
  * Windows paints the same way. A session main starts on the console host the
@@ -104,6 +115,9 @@ export interface RepaintTerminal {
     }
   }
   write(data: string, callback?: () => void): void
+  /** Sizes the terminal itself, not the console: a narrowing's paint
+   *  (bringRowsDown) uses it to bring rows down out of the scrollback. */
+  resize(columns: number, rows: number): void
 }
 
 /** Whether a terminal's output goes through the aligner: on Windows only, for
@@ -264,13 +278,15 @@ function rowsOfEnd(term: RepaintTerminal, held: HeldLine, length: number): numbe
 /**
  * The console's paint `paint` (PAINT_START to PAINT_END) rewritten to land
  * where xterm holds its lines, or null to write it as it came. Reads the
- * terminal as it is once everything before the paint is written.
+ * terminal as it is once everything before the paint is written. A narrowing's
+ * paint (bringRowsDown) sizes the terminal before it returns: what it returns
+ * is then written.
  */
 export function alignConsoleRepaint(paint: string, term: RepaintTerminal): string | null {
   if (term.buffer.active.type !== 'normal') return null
   const read = readPaint(paint)
   if (!read) return null
-  return placeWholeScreen(read, paint, term) ?? keepRowsAboveTop(read, paint, term)
+  return placeWholeScreen(read, paint, term) ?? keepRowsAboveTop(read, paint, term) ?? bringRowsDown(read, paint, term)
 }
 
 /** The paint placed when every line of it but its top one is xterm's line
@@ -365,17 +381,61 @@ function keepRowsAboveTop(read: Paint, paint: string, term: RepaintTerminal): st
   const top = buf.baseY
   const cursorRow = top + buf.cursorY
   for (let start = top; start < cursorRow; start++) {
-    let row = start
-    let withText = 0
-    for (const line of lines) {
-      const held = lineFrom(term, row)
-      if (!held || held.end >= cursorRow || held.text !== line) break
-      if (line !== '') withText++
-      row = held.end + 1
-    }
-    if (withText < MIN_TOP_LINES_WITH_TEXT) continue
+    if (topLinesHeldFrom(lines, term, start, cursorRow) < MIN_TOP_LINES_WITH_TEXT) continue
     if (start === top) return null
     return '\x1b[?25l' + `\x1b[${term.rows};1H` + '\n'.repeat(start - top) + paint
+  }
+  return null
+}
+
+/** How many of the paint's top lines with text are xterm's lines from row
+ *  `start` (an absolute row) on, in order: up to the first line that differs,
+ *  a row that is not a line's first, or a line that reaches the cursor's row
+ *  (xterm does not re-wrap it). */
+function topLinesHeldFrom(lines: readonly string[], term: RepaintTerminal, start: number, cursorRow: number): number {
+  let row = start
+  let withText = 0
+  for (const line of lines) {
+    const held = lineFrom(term, row)
+    if (!held || held.end >= cursorRow || held.text !== line) break
+    if (line !== '') withText++
+    row = held.end + 1
+  }
+  return withText
+}
+
+/**
+ * A narrowing's paint: the console's whole screen, whose top lines xterm holds
+ * just above its screen (the rows its re-wrap moved up into its scrollback).
+ * xterm's rows are brought down until the paint's top line is on xterm's top
+ * row, and the paint is written as it came. xterm brings rows down out of its
+ * scrollback only when its screen gains rows while its cursor is on its last
+ * row (Buffer.resize): its screen is cut to its cursor's row, then given its
+ * rows back, each one brought down; the rows brought down past the paint's top
+ * line go up again by line breaks on its bottom row. The rows its screen gives
+ * up (below its cursor, and at its bottom) are rows the paint writes over when
+ * it is written as it came too, as it writes every row of the screen: nothing
+ * that path keeps is lost here but the rows it would show twice. Found from
+ * the row just above xterm's screen up (the fewest rows brought down), at most
+ * as many rows as xterm's screen has below its cursor (the most this brings
+ * down). Null, before anything is changed, for a paint already in place, one
+ * that paints fewer rows than the screen has, or one found nowhere there.
+ */
+function bringRowsDown(read: Paint, paint: string, term: RepaintTerminal): string | null {
+  const buf = term.buffer.active
+  const { lines } = read
+  const { cols, rows } = term
+  const cursorY = buf.cursorY
+  if (lines.length !== rows || !Number.isInteger(cursorY)) return null
+  const top = buf.baseY
+  const cursorRow = top + cursorY
+  if (topLinesHeldFrom(lines, term, top, cursorRow) >= MIN_TOP_LINES_WITH_TEXT) return null
+  for (let down = 1; down <= Math.min(top, rows - 1 - cursorY); down++) {
+    if (topLinesHeldFrom(lines, term, top - down, cursorRow) < MIN_TOP_LINES_WITH_TEXT) continue
+    term.resize(cols, cursorY + 1)
+    term.resize(cols, rows)
+    const up = top - term.buffer.active.baseY - down
+    return up > 0 ? '\x1b[?25l' + `\x1b[${rows};1H` + '\n'.repeat(up) + paint : paint
   }
   return null
 }
