@@ -3,7 +3,8 @@
 // Codex 0.157.1: P19's Windows ready screen and warning-count screen
 // (helper/fixtures/screens, read only), with the composer row as probe P11
 // recorded it after the paste ("[Image #1]") and after the sentence
-// ("[Image #1]  <sentence>").
+// ("[Image #1]  <sentence>"); and the screens C6's own reading recorded on
+// P11's stand-in (after the paste, after the sentence, after Ctrl+U).
 //
 //  - The placeholder alone in a ready composer reads as the placeholder; with
 //    words after it, an empty composer, a turn running (the title's spinner)
@@ -124,6 +125,54 @@ describe('codexScreenPastPlaceholder', () => {
     const prompt = [row('  Do you trust the contents of this directory?'), ...PLACEHOLDER]
     expect(codexScreenPastPlaceholder(prompt, '[Image #1]', false)).toBe(prompt)
     expect(codexScreenPastPlaceholder(null, '[Image #1]', false)).toBeNull()
+  })
+})
+
+// C6's reading on P11's stand-in (Codex 0.157.1, GPT-5.5, the Windows test
+// machine, bundled ConPTY, 120 by 40, 2026-11-24): the screens as recorded
+// (readXtermScreen's rows; the blank rows left out and put back here), after
+// the path's paste, after the sentence typed after it, and after Ctrl+U.
+const H = String.fromCharCode(0x2500)
+const V = String.fromCharCode(0x2502)
+const ELL = String.fromCharCode(0x2026)
+const DOT = String.fromCharCode(0xb7)
+const EM = String.fromCharCode(0x2014)
+const recorded = (rows: Array<[number, string, string?]>): ScreenLine[] => {
+  const out: ScreenLine[] = Array.from({ length: 40 }, () => ({ text: '', typed: '', inverse: '', width: 120, end: 0 }))
+  for (const [i, text, typed] of rows) out[i] = { text, typed: typed ?? text, inverse: '', width: 120, end: text.length }
+  return out
+}
+const BANNER = (run: string): Array<[number, string, string?]> => [
+  [0, `${String.fromCharCode(0x256d)}${H.repeat(53)}${String.fromCharCode(0x256e)}`, ''],
+  [1, `${V} >_ OpenAI Codex (v0.157.1)                          ${V}`, '     OpenAI Codex'],
+  [2, `${V}${' '.repeat(53)}${V}`, ''],
+  [3, `${V} model:     GPT-5.5   /model to change               ${V}`, '             GPT-5.5   /model'],
+  [4, `${V} directory: ~\\AppData\\Local\\Temp\\${ELL}\\${run}\\work ${V}`, `             ~\\AppData\\Local\\Temp\\${ELL}\\${run}\\work`],
+  [5, `${String.fromCharCode(0x2570)}${H.repeat(53)}${String.fromCharCode(0x256f)}`, ''],
+]
+const FOOTER = (run: string): [number, string] => [38, `  GPT-5.5 default ${DOT} ~\\AppData\\Local\\Temp\\p11-naQ3IN\\${run}\\work`]
+const REC_SENTENCE = `p11 probe codex-send-1: I just snapped a region of my screen ${EM} please view it.`
+const REC_PLACEHOLDER = recorded([...BANNER('codex-send-1'), [36, `${P} [Image #1]`], FOOTER('codex-send-1')])
+const REC_SENT = recorded([...BANNER('codex-send-1'), [36, `${P} [Image #1]  ${REC_SENTENCE}`], FOOTER('codex-send-1')])
+const REC_CLEARED = recorded([...BANNER('codex-undo-1'), [36, `${P} Ask Codex to do anything`, P], FOOTER('codex-undo-1'), [39, '  ? for shortcuts']])
+
+describe('on the screens C6\'s reading recorded from Codex 0.157.1', () => {
+  it('after the paste: the composer reads ready but not empty, so the submit primitive alone would never type the sentence', () => {
+    expect(readCodexScreen(REC_PLACEHOLDER, null, { title: 'work' })).toEqual({ screen: 'ready', text: '[Image #1]' })
+    expect(codexImagePlaceholderShown(REC_PLACEHOLDER, null, 'work')).toBe('[Image #1]')
+    expect(codexDraftIsImagePlaceholder(codexComposerDraft(REC_PLACEHOLDER))).toBe(true)
+    expect(readCodexScreen(codexScreenPastPlaceholder(REC_PLACEHOLDER, '[Image #1]', false), null, { title: 'work' })).toEqual({ screen: 'ready', text: '' })
+  })
+
+  it('after the sentence: read past the placeholder, the sentence as typed (a space first) is the whole text', () => {
+    expect(codexImagePlaceholderShown(REC_SENT, null, 'work')).toBeNull()
+    expect(codexTextTyped(codexScreenPastPlaceholder(REC_SENT, '[Image #1]', true), ` ${REC_SENTENCE}`, null, 'work')).toBe(true)
+  })
+
+  it('after Ctrl+U: ready and empty, read as it is once the sentence was typed, and no reading before', () => {
+    expect(readCodexScreen(REC_CLEARED, null, { title: 'work' })).toEqual({ screen: 'ready', text: '' })
+    expect(codexScreenPastPlaceholder(REC_CLEARED, '[Image #1]', true)).toBe(REC_CLEARED)
+    expect(codexScreenPastPlaceholder(REC_CLEARED, '[Image #1]', false)).toBeNull()
   })
 })
 

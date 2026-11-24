@@ -1,6 +1,9 @@
 // The submit primitive's driver (WP2 PR 4, P4.1): main's own reading of each
 // local Codex session's screen, and the one door through which main submits a
-// text into it (./composer-submit.ts holds the rule).
+// text into it (./composer-submit.ts holds the rule). Since 2.1.3-beta.17 C6
+// (aicc_planning#415) also the door for a saved image, pasted as Codex's own
+// paste (pasteImageIntoCodexComposer holds that rule, which types its sentence
+// through the primitive), on the same per-run chain.
 //
 // WHY A PANE OF ITS OWN. Main holds a Codex session's screen only while the
 // Watchdog is on (default off), and the renderer's screen is the renderer's:
@@ -364,8 +367,10 @@ export function submitCodexText(sessionId: string, text: string, opts: ComposerS
 }
 
 /** 2.1.3-beta.17 C6: how long the image rule waits for Codex's image
- *  placeholder once the path's paste has gone. Probe P11 saw "[Image #1]"
- *  1.5 s after the paste in 3 of 3 runs (ADR-030, the P11 result). */
+ *  placeholder once the path's paste has gone. C6's reading (P11's stand-in,
+ *  Codex 0.157.1 on the Windows test machine, 2026-11-24, P11's 96 by 64
+ *  JPEG): "[Image #1]" showed 251 to 314 ms after the paste in 7 of 7 runs. A
+ *  full-size Snap picture was not measured, so the bound keeps room. */
 export const IMAGE_PLACEHOLDER_WAIT_MS = 5_000
 /** C6: how long the sentence waits for the composer that holds only the
  *  placeholder, read ready on two reads, before nothing more is typed. */
@@ -384,6 +389,14 @@ interface ImageShot { lines: ScreenLine[] | null; title: string | null }
  * `deps` (submitCodexImage drives it). Probe P11 found Codex 0.157.1 attaches
  * a path it gets as a bracketed paste, showing "[Image #1]" in its composer,
  * and reads a path typed as text only as words (ADR-030, the P11 result).
+ * C6's reading on P11's stand-in (Codex 0.157.1, 2026-11-24) is what the
+ * waits and the take-back stand on: with the placeholder shown, the composer
+ * reads ready but not empty, so the primitive alone would never type the
+ * sentence; read past the placeholder it reads ready and empty, and the
+ * sentence typed after it confirms (4 of 4); Ctrl+U clears the placeholder
+ * in about 80 ms and the next turn carries no picture (4 of 4, with and
+ * without the sentence typed); one Backspace leaves it (it takes the space
+ * Codex types after it).
  *
  * 1. Refuses an empty path, or a path or sentence the primitive would refuse
  *    (a control character, a character outside the Basic Multilingual Plane),

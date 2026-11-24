@@ -128,8 +128,10 @@ const CODEX_MANAGED_LAUNCH_ONLY = 'not used for Codex: launches go through the m
 
 /** WP2 PR 4, P4.1: main's reading of each Codex run's screen (its pane, or
  *  since 2.1.3-beta.14 B2 a held run's holder's screen) and the submit
- *  primitive (session-screen.ts drives composer-submit.ts), offered through
- *  the registered provider: the PTY manager reaches this package only that way. */
+ *  primitive (session-screen.ts drives composer-submit.ts), and since
+ *  2.1.3-beta.17 C6 the image rule (session-screen.ts submitCodexImage), offered
+ *  through the registered provider: the PTY manager and the session input
+ *  module reach this package only that way. */
 const CODEX_RUN_SCREEN: SessionRunScreen = {
   open: (sessionId, opts) => openCodexScreen(sessionId, opts),
   feed: (sessionId, data) => feedCodexScreen(sessionId, data),

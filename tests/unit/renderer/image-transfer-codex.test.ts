@@ -2,7 +2,7 @@
  * 2.1.3-beta.17 C6 (aicc_planning#415): a saved image (Snap's picture,
  * Alt+V's) into a Codex session on this computer.
  *  - sendImageToCodexSession asks main to paste the path as Codex's own paste
- *    (pty.submitImage) with the sentence made ASCII; nothing is typed from
+ *    (pty.submitImage) with the sentence as given; nothing is typed from
  *    here when main sent it.
  *  - Main's `not-taken` (Codex not ready, no placeholder, its warning count),
  *    or an ask that fails: today's line, by the rule that types into Codex
@@ -25,13 +25,12 @@ vi.mock('../../../src/renderer/lib/codexComposer', () => ({
 }))
 ;(globalThis as unknown as { window: unknown }).window = { electronAPI: { pty: { submitImage: h.submitImage } } }
 
-const { sendImageToCodexSession, sendImageToSession, codexImageSentence, imagePathRefusedNote } = await import('../../../src/renderer/utils/imageTransfer')
+const { sendImageToCodexSession, sendImageToSession, imagePathRefusedNote } = await import('../../../src/renderer/utils/imageTransfer')
 const { useSessionStore } = await import('../../../src/renderer/stores/sessionStore')
 const { usePasteHintStore } = await import('../../../src/renderer/stores/pasteHintStore')
 
 const PATH = 'C:\\Users\\me\\AppData\\Local\\AI Code Conductor\\resources\\screenshots\\screenshot-2026-11-24-061500.jpg'
 const SNAP = 'I just snapped a region of my screen \u2014 please view it.'
-const SNAP_ASCII = 'I just snapped a region of my screen - please view it.'
 const flush = (): Promise<void> => new Promise((r) => setTimeout(r, 0))
 
 beforeEach(() => {
@@ -42,12 +41,12 @@ beforeEach(() => {
 })
 
 describe('sendImageToCodexSession', () => {
-  it('asks main to paste the path, with the sentence in ASCII, and types nothing itself when it was sent', async () => {
+  it('asks main to paste the path, with the sentence as given, and types nothing itself when it was sent', async () => {
     h.submitImage.mockResolvedValue({ outcome: 'sent' })
     const notes: string[] = []
     sendImageToCodexSession('cx1', PATH, SNAP, (n) => notes.push(n))
     await flush()
-    expect(h.submitImage).toHaveBeenCalledWith({ sessionId: 'cx1', path: PATH, sentence: SNAP_ASCII })
+    expect(h.submitImage).toHaveBeenCalledWith({ sessionId: 'cx1', path: PATH, sentence: SNAP })
     expect(h.sendImagePathToCodex).not.toHaveBeenCalled()
     expect(h.writeSessionInput).not.toHaveBeenCalled()
     expect(notes).toEqual([])
@@ -59,7 +58,7 @@ describe('sendImageToCodexSession', () => {
     sendImageToCodexSession('cx1', PATH, SNAP, onNote)
     await flush()
     expect(h.sendImagePathToCodex).toHaveBeenCalledTimes(1)
-    expect(h.sendImagePathToCodex).toHaveBeenCalledWith('cx1', PATH, onNote, undefined, SNAP_ASCII)
+    expect(h.sendImagePathToCodex).toHaveBeenCalledWith('cx1', PATH, onNote, undefined, SNAP)
     expect(h.writeSessionInput).not.toHaveBeenCalled()
   })
 
@@ -102,7 +101,7 @@ describe('sendImageToSession with a Codex session', () => {
     h.submitImage.mockResolvedValue({ outcome: 'not-taken' })
     sendImageToSession('cx9', PATH, SNAP, 'local')
     await flush()
-    expect(h.submitImage).toHaveBeenCalledWith({ sessionId: 'cx9', path: PATH, sentence: SNAP_ASCII })
+    expect(h.submitImage).toHaveBeenCalledWith({ sessionId: 'cx9', path: PATH, sentence: SNAP })
     expect(h.writeSessionInput).not.toHaveBeenCalled()
     const onNote = h.sendImagePathToCodex.mock.calls[0][2] as (n: string) => void
     onNote('Codex is busy with a turn, so nothing was sent.')
@@ -115,13 +114,5 @@ describe('sendImageToSession with a Codex session', () => {
     await flush()
     expect(h.submitImage).not.toHaveBeenCalled()
     expect(h.writeSessionInput).toHaveBeenCalledTimes(1)
-  })
-})
-
-describe('codexImageSentence', () => {
-  it('an em or en dash becomes a plain hyphen; anything else is kept', () => {
-    expect(codexImageSentence(SNAP)).toBe(SNAP_ASCII)
-    expect(codexImageSentence('a \u2013 b')).toBe('a - b')
-    expect(codexImageSentence('Please view this image.')).toBe('Please view this image.')
   })
 })

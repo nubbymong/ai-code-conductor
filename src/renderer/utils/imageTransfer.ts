@@ -70,13 +70,6 @@ export function composeLocalPathPrompt(
   return `${ctx} ${filePath}`
 }
 
-/** 2.1.3-beta.17 C6: a sentence as a Codex session gets it, in ASCII: Codex
- *  dropped the line's em dash when the app typed it (P3.15), and the rule that
- *  types into Codex sends a line only once it reads it on screen as sent. */
-export function codexImageSentence(sentence: string): string {
-  return sentence.replace(/\s*[–—]\s*/g, ' - ')
-}
-
 /** C6: what the user is told when main refused the image's path for Codex. */
 export function imagePathRefusedNote(hostFilePath: string): string {
   return `The image's path could not be typed into Codex, so nothing was sent; the image was saved on this computer at ${hostFilePath}.`
@@ -93,7 +86,8 @@ export function imagePathRefusedNote(hostFilePath: string): string {
  * rule that types into Codex (sendImagePathToCodex), which types only into a
  * ready, empty composer and otherwise tells `onNote` why it typed nothing. A
  * session that is gone, or a path main refuses, gets nothing typed, and
- * `onNote` is told. `sentence` is made ASCII first (codexImageSentence).
+ * `onNote` is told. The sentence goes as given (C6's reading: an em dash typed
+ * after the placeholder reached Codex's turn, 3 of 3).
  */
 export function sendImageToCodexSession(
   sessionId: string,
@@ -101,7 +95,7 @@ export function sendImageToCodexSession(
   sentence: string,
   onNote: (note: string) => void,
 ): void {
-  const words = codexImageSentence(sentence.trim() || 'Please view this image.')
+  const words = sentence.trim() || 'Please view this image.'
   const typed = (): void => sendImagePathToCodex(sessionId, hostFilePath, onNote, undefined, words)
   void window.electronAPI.pty.submitImage({ sessionId, path: hostFilePath, sentence: words }).then(
     (result) => {

@@ -1,7 +1,10 @@
 /**
  * Typing a Codex command into Codex's composer (P3.8 rounds 1 and 2): the
  * strip's Compact (/compact), the command bar's model pill (/model: Codex's
- * own model-and-effort picker), and Plan mode at launch (/plan).
+ * own model-and-effort picker), and Plan mode at launch (/plan); and (P3.15)
+ * the line naming a saved image, which since 2.1.3-beta.17 C6 a Codex session
+ * gets only when main could not paste the image as Codex's own paste
+ * (sendImagePathToCodex).
  *
  * A command is typed only into Codex's READY, EMPTY composer, and its Enter is
  * pressed only when the screen then shows exactly that command typed, in the

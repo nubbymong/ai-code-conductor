@@ -388,7 +388,8 @@ export interface HeldScreenRows {
  *  door through which main types a text into the session's composer. Every
  *  method is keyed by the app's session id; a respawn opens a new pane.
  *  2.1.3-beta.14 B2: a run its session helper holds is read from the
- *  holder's screen instead, and has no pane (`held`). */
+ *  holder's screen instead, and has no pane (`held`). 2.1.3-beta.17 C6: and
+ *  the door for a saved image (`submitImage`). */
 export interface SessionRunScreen {
   /** Open the pane for a session's new run, replacing any earlier one.
    *  `write`: one raw write into that run's process. `current`: whether that
