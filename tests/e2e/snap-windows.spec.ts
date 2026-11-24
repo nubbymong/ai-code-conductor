@@ -66,6 +66,26 @@
  *      768 display as 455 by 341 DIP and 683 by 512 physical, the helper read
  *      1024 by 768, the engine refused the mismatch and the previous Snap took
  *      the press).
+ *   D12 MENU OUT OF THE PICTURE (plan 2.1.3-beta.17 C3, aicc_planning#406):
+ *      the Snap menu is never in a press's picture. Before each press the
+ *      menu's box is read on the app's page, with two pictures of that box
+ *      from the page itself (webContents.capturePage): the menu open, and the
+ *      menu closed again. The press's picture of the box (Rectangle drawn over
+ *      the box, or Whole screen cut at the box) is read pixel by pixel on the
+ *      pixels where those two differ (at least MENU_PIXEL_GAP apart): the menu
+ *      is seen when most of them are nearer the open one. First a control, a
+ *      test-only copy of the menu left on screen 300 ms after the Rectangle
+ *      click (a menu whose close is late), the page not slowed: the menu is
+ *      seen in all 6 pictures (Rectangle and Whole screen, 3 runs each), so the
+ *      check can fail. Then the page's CPU slowed by CDP
+ *      (Emulation.setCPUThrottlingRate) at 4x and at 20x, from just before the
+ *      Rectangle click until the overlay is up: 3 runs each of Rectangle and
+ *      Whole screen at each rate, and the menu is seen in none of the 12. The
+ *      slowing itself is read (a fixed loop's time on the page at rate 1 and at
+ *      the rate) and is at least half the rate, or the run did not make its
+ *      condition. Every box's two pictures differ on at least MENU_MIN_PIXELS
+ *      pixels, or the box was not read. One test, so a red press still leaves
+ *      every reading; it runs last, so a red one skips nothing.
  * READINGS (recorded): R1, what main has loaded once the app has started and
  *   its tab runs (before any press): the native add-ons (.node files, from
  *   main's module cache and from the process report) and the files of the
@@ -128,7 +148,9 @@ const readings: Record<string, unknown> = {
   pressMs: [] as number[], helperMs: [] as number[], overlayMs: [] as number[], overlayReadyMs: [] as number[],
   enterToFileMs: [] as number[], fileToTypedMs: [] as number[],
 }
-const push = (key: string, v: number) => { (readings[key] as number[]).push(v) }
+const push = (key: string, v: number) => { ((readings[key] ??= []) as number[]).push(v) }
+/** A reading's name under a prefix (D12's: menuOverlayMs), or the name itself. */
+const named = (prefix: string | undefined, key: string) => prefix ? `${prefix}${key[0].toUpperCase()}${key.slice(1)}` : key
 let ctx: IsolatedApp | undefined
 /** Every line main writes to its console (logInfo writes there too). */
 const mainLines: string[] = []
@@ -290,21 +312,25 @@ const snapButton = () => ctx!.page.locator('[data-testid="snap-button"]').first(
 /** Press Snap, Rectangle with the new Snap: wait for one overlay page per
  *  display, each with its picture; answer which page is the display holding
  *  the app's window, and where the drag starts there (over the app's window,
- *  below the overlay's bar). */
-async function pressNew(): Promise<{ overlay: Page; display: Disp; start: { x: number; y: number }; from: Mark }> {
+ *  below the overlay's bar). D12 passes `menuOpen` (run with the menu open,
+ *  just before the Rectangle click), `overlayUp` (run once every overlay page
+ *  has its picture) and `prefix` (its readings' names). */
+async function pressNew(opts: { menuOpen?: () => Promise<void>; overlayUp?: () => Promise<void>; prefix?: string } = {}): Promise<{ overlay: Page; display: Disp; start: { x: number; y: number }; from: Mark }> {
   const { app, page } = ctx!
   const displays = await electronDisplays(app)
   await expect(snapButton()).toBeEnabled({ timeout: CANCEL_MS })
   const from = mark()
   await snapButton().click()
+  if (opts.menuOpen) await opts.menuOpen()
   const started = performance.now()
   await page.getByRole('button', { name: 'Rectangle' }).click()
   await expect.poll(() => overlayPages(app).length, { timeout: OVERLAY_MS, intervals: [50] }).toBe(displays.length)
   const pages = overlayPages(app)
   for (const p of pages) await expect(p.locator('body.pictured')).toBeAttached({ timeout: OVERLAY_MS })
-  push('overlayMs', Math.round(performance.now() - started))
+  if (opts.overlayUp) await opts.overlayUp()
+  push(named(opts.prefix, 'overlayMs'), Math.round(performance.now() - started))
   const ready = linesSince(from, '[snap] overlay pages ready').map((l) => /in (\d+) ms/.exec(l)?.[1]).filter(Boolean)
-  if (ready.length) push('overlayReadyMs', Number(ready[0]))
+  if (ready.length) push(named(opts.prefix, 'overlayReadyMs'), Number(ready[0]))
 
   const main = await (await app.browserWindow(page)).evaluate((w) => w.getBounds())
   const centre = { x: main.x + main.width / 2, y: main.y + main.height / 2 }
@@ -346,17 +372,19 @@ async function expectOverlayGone(): Promise<void> {
 }
 
 /** The one JPEG a press saved, checked at its size and not all black, and its
- *  path typed into the tab. */
-async function expectSaved(before: string[], answeredAt: number, width: number, height: number): Promise<void> {
+ *  path typed into the tab; answers its name. D12 passes `lit: false` (a box
+ *  of the dark menu or of the terminal behind it can be mostly near black)
+ *  and `prefix` (its readings' names). */
+async function expectSaved(before: string[], answeredAt: number, width: number, height: number, opts: { lit?: boolean; prefix?: string } = {}): Promise<string> {
   await expect.poll(() => jpegs().filter((f) => !before.includes(f)).length, { timeout: OVERLAY_MS, intervals: [50] }).toBe(1)
-  push('enterToFileMs', Math.round(performance.now() - answeredAt))
+  push(named(opts.prefix, 'enterToFileMs'), Math.round(performance.now() - answeredAt))
   const savedAt = performance.now()
   const name = jpegs().find((f) => !before.includes(f))!
   const file = path.join(shotsDir(), name)
   const info = await jpegInfo(ctx!.app, file)
   expect(info.empty, name).toBe(false)
   expect({ width: info.width, height: info.height }, name).toEqual({ width, height })
-  expect(info.lit, `${name}: pixels not near black, of ${info.pixels}`).toBeGreaterThan(info.pixels / 100)
+  if (opts.lit !== false) expect(info.lit, `${name}: pixels not near black, of ${info.pixels}`).toBeGreaterThan(info.pixels / 100)
   try {
     await expect.poll(typedText, { timeout: OVERLAY_MS, intervals: [50] }).toContain(`${path.sep}screenshots${path.sep}${name}`)
   } catch (err) {
@@ -364,7 +392,7 @@ async function expectSaved(before: string[], answeredAt: number, width: number, 
     readings.atTypedFailure = { terminal: await terminalText(ctx!.page).catch(() => 'unread'), launches: launches(), typed: typedText() }
     throw err
   }
-  push('fileToTypedMs', Math.round(performance.now() - savedAt))
+  push(named(opts.prefix, 'fileToTypedMs'), Math.round(performance.now() - savedAt))
   // From the beta.16 aggregate (X1.2) main types a saved image into a local
   // Claude Code tab in three writes: the path as a bracketed paste, a space
   // and the sentence 1.5 s later, Enter 0.7 s after that (session-input
@@ -382,6 +410,7 @@ async function expectSaved(before: string[], answeredAt: number, width: number, 
     readings.atEnterFailure = { terminal: await terminalText(ctx!.page).catch(() => 'unread'), typed: typedText() }
     throw err
   }
+  return name
 }
 
 /** Press Snap, Rectangle; wait for the previous Snap's window; cancel it with
@@ -406,6 +435,225 @@ async function pressAndCancelPrevious(): Promise<number> {
 }
 
 const noPressFolder = () => expect(fs.existsSync(path.join(ctx!.dataDir, 'electron-userdata', 'snap-capture'))).toBe(false)
+
+// D12: the Snap menu is never in a press's picture (aicc_planning#406).
+
+/** A pixel tells D12's two page pictures of the menu's box (open, closed)
+ *  apart when its colours differ by at least this much, summed over red, green
+ *  and blue: 16 a channel on average, well above a JPEG's noise on flat
+ *  colour. */
+const MENU_PIXEL_GAP = 48
+/** A box whose two page pictures differ on fewer pixels than this is not read. */
+const MENU_MIN_PIXELS = 50
+/** The control's late close (the plan review's finding 11: the menu's close
+ *  delayed 300 ms). */
+const MENU_COPY_MS = 300
+/** D12's three parts: the control (the page not slowed, the late copy of the
+ *  menu), then the page's CPU slowed 4 and 20 times (plan C3). */
+const MENU_PARTS = [{ rate: 1, copy: true }, { rate: 4, copy: false }, { rate: 20, copy: false }] as const
+
+type Box = { x: number; y: number; width: number; height: number }
+type MenuAnswer = 'rectangle' | 'whole'
+type MenuRead = { label: string; rate: number; copy: boolean; answer: MenuAnswer; box: Box; differing: number; nearerOpen: number; meanToOpen: number; meanToClosed: number; seen: boolean }
+
+/** The Snap menu's box on the screen and in the page, in DIP, its edges
+ *  rounded outwards to whole DIP. The menu is the parent of its Rectangle
+ *  item (ScreenshotButton.tsx), never the control's copy of it. */
+async function menuBox(): Promise<{ screen: Box; inPage: Box }> {
+  const r = await ctx!.page.evaluate(() => {
+    const menu = Array.from(document.querySelectorAll('button'))
+      .find((b) => (b.textContent ?? '').trim() === 'Rectangle' && !b.closest('[data-snap-menu-copy]'))?.parentElement
+    if (!menu) return null
+    const b = menu.getBoundingClientRect()
+    return { x: b.left, y: b.top, width: b.width, height: b.height }
+  })
+  expect(r, 'the Snap menu is open').not.toBeNull()
+  const { content, zoom } = await (await ctx!.app.browserWindow(ctx!.page)).evaluate((w) => ({ content: w.getContentBounds(), zoom: w.webContents.getZoomFactor() }))
+  const x0 = Math.floor(content.x + r!.x * zoom)
+  const y0 = Math.floor(content.y + r!.y * zoom)
+  const x1 = Math.ceil(content.x + (r!.x + r!.width) * zoom)
+  const y1 = Math.ceil(content.y + (r!.y + r!.height) * zoom)
+  const screen = { x: x0, y: y0, width: x1 - x0, height: y1 - y0 }
+  return { screen, inPage: { x: x0 - content.x, y: y0 - content.y, width: screen.width, height: screen.height } }
+}
+
+/** The page's own picture of a box (DIP in the page), as a PNG in base64. */
+const pagePicture = async (box: Box): Promise<string> =>
+  (await ctx!.app.browserWindow(ctx!.page)).evaluate(async (w, b) => (await w.webContents.capturePage(b)).toPNG().toString('base64'), box)
+
+/** Two frames on the page: what it changed before them is drawn. */
+const twoFrames = () => ctx!.page.evaluate(() => new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r()))))
+
+/** The control: a copy of the open menu laid over it, left on screen `ms`
+ *  after the page's next click (the Rectangle click), as a menu whose close is
+ *  late would be. Test only: hidden from the page's roles, never clicked. */
+const keepMenuCopy = (ms: number) => ctx!.page.evaluate((lateMs) => {
+  const menu = Array.from(document.querySelectorAll('button'))
+    .find((b) => (b.textContent ?? '').trim() === 'Rectangle' && !b.closest('[data-snap-menu-copy]'))?.parentElement
+  if (!menu) throw new Error('no Snap menu to copy')
+  const b = menu.getBoundingClientRect()
+  const copy = menu.cloneNode(true) as HTMLElement
+  copy.setAttribute('aria-hidden', 'true')
+  copy.setAttribute('inert', '')
+  copy.setAttribute('data-snap-menu-copy', '')
+  Object.assign(copy.style, { position: 'fixed', left: `${b.left}px`, top: `${b.top}px`, bottom: 'auto', width: `${b.width}px`, height: `${b.height}px`, margin: '0', zIndex: '2147483647', pointerEvents: 'none' })
+  document.body.appendChild(copy)
+  document.addEventListener('click', () => { setTimeout(() => copy.remove(), lateMs) }, { capture: true, once: true })
+}, ms)
+
+/** Sets the app page's CPU slowing (CDP Emulation.setCPUThrottlingRate; 1 is
+ *  none), through Playwright's CDP session, or main's own debugger when that
+ *  session cannot open; answers which. */
+async function pageCpuRate(): Promise<{ via: string; set: (rate: number) => Promise<void> }> {
+  try {
+    const cdp = await ctx!.page.context().newCDPSession(ctx!.page)
+    await cdp.send('Emulation.setCPUThrottlingRate', { rate: 1 })
+    return { via: 'playwright cdp', set: async (rate) => { await cdp.send('Emulation.setCPUThrottlingRate', { rate }) } }
+  } catch (err) {
+    readings.menuCdpError = err instanceof Error ? err.message : String(err)
+  }
+  const win = await ctx!.app.browserWindow(ctx!.page)
+  await win.evaluate((w) => { if (!w.webContents.debugger.isAttached()) w.webContents.debugger.attach('1.3') })
+  return { via: 'electron debugger', set: async (rate) => { await win.evaluate((w, r) => w.webContents.debugger.sendCommand('Emulation.setCPUThrottlingRate', { rate: r }), rate) } }
+}
+
+/** A fixed loop's time on the app's page, in ms: read at rate 1 and at a
+ *  rate, it shows the slowing took. */
+const pageLoopMs = () => ctx!.page.evaluate(() => {
+  const started = performance.now()
+  let x = 0
+  for (let i = 0; i < 20_000_000; i++) x = (x + i) % 1_000_003
+  return { ms: performance.now() - started, x }
+}).then((r) => r.ms)
+
+/** A saved picture's box (all of it, or `crop` in its pixels) read against the
+ *  page's two pictures of it, each brought to the box's size: on the pixels
+ *  where those two differ by MENU_PIXEL_GAP or more, how many are nearer the
+ *  open one; the mean difference to each, a channel; and the box as a PNG. */
+const readMenuBox = (file: string, crop: Box | null, open: string, closed: string) => ctx!.app.evaluate(({ nativeImage }, a) => {
+  const pic = a.crop ? nativeImage.createFromPath(a.file).crop(a.crop) : nativeImage.createFromPath(a.file)
+  const { width, height } = pic.getSize()
+  const sized = (b64: string) => {
+    const img = nativeImage.createFromBuffer(Buffer.from(b64, 'base64'))
+    const s = img.getSize()
+    return s.width === width && s.height === height ? img : img.resize({ width, height, quality: 'best' })
+  }
+  const p = pic.toBitmap()
+  const o = sized(a.open).toBitmap()
+  const c = sized(a.closed).toBitmap()
+  const n = Math.min(p.length, o.length, c.length)
+  let differing = 0
+  let nearerOpen = 0
+  let toOpen = 0
+  let toClosed = 0
+  for (let i = 0; i + 3 < n; i += 4) {
+    let dOpen = 0
+    let dClosed = 0
+    let gap = 0
+    for (let k = 0; k < 3; k++) {
+      dOpen += Math.abs(p[i + k] - o[i + k])
+      dClosed += Math.abs(p[i + k] - c[i + k])
+      gap += Math.abs(o[i + k] - c[i + k])
+    }
+    toOpen += dOpen
+    toClosed += dClosed
+    if (gap >= a.gap) {
+      differing++
+      if (dOpen < dClosed) nearerOpen++
+    }
+  }
+  const pixels = Math.max(1, Math.floor(n / 4))
+  return { width, height, differing, nearerOpen, meanToOpen: toOpen / pixels / 3, meanToClosed: toClosed / pixels / 3, png: pic.toPNG().toString('base64') }
+}, { file, crop, open, closed, gap: MENU_PIXEL_GAP })
+
+/** One D12 press: the menu's box and the page's two pictures of it (open with
+ *  Rectangle under the pointer, as at the click; then closed again), the
+ *  press (the page slowed to `rate` from just before the Rectangle click until
+ *  the overlay is up; with `copy`, the control's late copy of the menu), the
+ *  answer (Rectangle drawn over the box, or Whole screen), and the saved
+ *  picture's box read. Its three pictures go to $SNAP_E2E_OUT/menu. */
+async function pressReadingMenu(label: string, answerWith: MenuAnswer, rate: number, copy: boolean, cpu: (rate: number) => Promise<void>): Promise<MenuRead> {
+  const page = ctx!.page
+  const rectangleItem = () => page.getByRole('button', { name: 'Rectangle' })
+  const before = jpegs()
+  await expect(snapButton()).toBeEnabled({ timeout: CANCEL_MS })
+  await snapButton().click()
+  const menu = await menuBox()
+  await rectangleItem().hover()
+  await twoFrames()
+  const open = await pagePicture(menu.inPage)
+  // The Snap button closes its own menu (ScreenshotButton toggleDropdown).
+  await snapButton().click()
+  await expect(rectangleItem()).toHaveCount(0, { timeout: CANCEL_MS })
+  await twoFrames()
+  const closed = await pagePicture(menu.inPage)
+  let pressed: Awaited<ReturnType<typeof pressNew>> | undefined
+  try {
+    pressed = await pressNew({
+      prefix: 'menu',
+      menuOpen: async () => {
+        expect((await menuBox()).screen, 'the menu opens where it was read').toEqual(menu.screen)
+        await rectangleItem().hover()
+        if (copy) await keepMenuCopy(MENU_COPY_MS)
+        await cpu(rate)
+      },
+      overlayUp: () => cpu(1),
+    })
+  } finally {
+    await cpu(1)
+  }
+  const { overlay, display, from } = pressed!
+  const s = display.scaleFactor
+  const box = { x: menu.screen.x - display.bounds.x, y: menu.screen.y - display.bounds.y, width: menu.screen.width, height: menu.screen.height }
+  // Below the overlay's bar (16 DIP from the top, about 40 tall).
+  expect(box.y, 'the menu is below the overlay\'s bar').toBeGreaterThanOrEqual(60)
+  let width: number
+  let height: number
+  let answeredAt: number
+  if (answerWith === 'rectangle') {
+    // The engine's crop (bmp.ts pixelRectFor): each edge rounded at the scale.
+    width = Math.round((box.x + box.width) * s) - Math.round(box.x * s)
+    height = Math.round((box.y + box.height) * s) - Math.round(box.y * s)
+    await overlay.mouse.move(box.x, box.y)
+    await overlay.mouse.down()
+    await overlay.mouse.move(box.x + box.width / 2, box.y + box.height / 2, { steps: 4 })
+    await overlay.mouse.move(box.x + box.width, box.y + box.height, { steps: 4 })
+    await overlay.mouse.up()
+    answeredAt = performance.now()
+    await answer(overlay, () => overlay.keyboard.press('Enter'))
+  } else {
+    // Today's cap, as D3 reads it.
+    const { width: pw, height: ph } = display.physical
+    const capped = Math.max(pw, ph) <= MAX_DIM ? { width: pw, height: ph }
+      : pw >= ph ? { width: MAX_DIM, height: Math.round(ph * MAX_DIM / pw) } : { width: Math.round(pw * MAX_DIM / ph), height: MAX_DIM }
+    width = capped.width
+    height = capped.height
+    answeredAt = performance.now()
+    await answer(overlay, () => overlay.getByRole('button', { name: 'Whole screen' }).click())
+  }
+  await expectOverlayGone()
+  const name = await expectSaved(before, answeredAt, width, height, { lit: false, prefix: 'menu' })
+  await expect.poll(() => snapLines(from).length, { timeout: CANCEL_MS }).toBe(1)
+  expect(snapLines(from)[0], 'the new Snap took the press').toMatch(answerWith === 'rectangle'
+    ? /^\[snap\] new engine: a rectangle of display \d+, /
+    : /^\[snap\] new engine: the whole screen of display \d+, /)
+  // The whole screen's picture is cut at the box (its pixels, at the cap's size).
+  const k = width / display.physical.width
+  const crop = answerWith === 'whole'
+    ? { x: Math.round(box.x * s * k), y: Math.round(box.y * s * k), width: Math.round(box.width * s * k), height: Math.round(box.height * s * k) }
+    : null
+  const r = await readMenuBox(path.join(shotsDir(), name), crop, open, closed)
+  const dir = path.join(OUT, 'menu')
+  fs.mkdirSync(dir, { recursive: true })
+  fs.writeFileSync(path.join(dir, `${label}-picture.png`), Buffer.from(r.png, 'base64'))
+  fs.writeFileSync(path.join(dir, `${label}-open.png`), Buffer.from(open, 'base64'))
+  fs.writeFileSync(path.join(dir, `${label}-closed.png`), Buffer.from(closed, 'base64'))
+  return {
+    label, rate, copy, answer: answerWith, box: menu.screen, differing: r.differing, nearerOpen: r.nearerOpen,
+    meanToOpen: Math.round(r.meanToOpen * 10) / 10, meanToClosed: Math.round(r.meanToClosed * 10) / 10,
+    seen: r.differing >= MENU_MIN_PIXELS && r.nearerOpen * 2 > r.differing,
+  }
+}
 
 test.describe.configure({ mode: 'serial' })
 
@@ -669,5 +917,39 @@ test.describe('Snap on Windows', () => {
     expect(r.jpegBytes, 'toJPEG gives nothing for a picture with no 1x form').toBe(0)
     expect(r.pngBytes).toBeGreaterThan(0)
     expect(r.pngSize).toEqual({ width: 6, height: 4 })
+  })
+
+  test('D12 MENU OUT OF THE PICTURE: the control\'s late menu is seen in every picture, and with the page slowed 4 and 20 times the menu is in none', async () => {
+    test.setTimeout(MENU_PARTS.length * RUNS * 2 * PRESS_TEST_MS + 60_000)
+    const cpu = await pageCpuRate()
+    const reads: MenuRead[] = []
+    const slowing: Array<{ rate: number; atOneMs: number; atRateMs: number }> = []
+    try {
+      for (const { rate, copy } of MENU_PARTS) {
+        if (rate !== 1) {
+          await pageLoopMs()
+          const atOneMs = await pageLoopMs()
+          await cpu.set(rate)
+          let atRateMs: number
+          try { atRateMs = await pageLoopMs() } finally { await cpu.set(1) }
+          slowing.push({ rate, atOneMs: Math.round(atOneMs), atRateMs: Math.round(atRateMs) })
+        }
+        for (let run = 1; run <= RUNS; run++) {
+          for (const answerWith of ['rectangle', 'whole'] as const) {
+            reads.push(await pressReadingMenu(`${copy ? 'control' : `x${rate}`}-${answerWith}-${run}`, answerWith, rate, copy, cpu.set))
+          }
+        }
+      }
+    } finally {
+      await cpu.set(1).catch(() => undefined)
+      readings.menuCpuVia = cpu.via
+      readings.menuSlowing = slowing
+      readings.menuReads = reads
+      console.log(`[snap-e2e] D12 ${JSON.stringify({ via: cpu.via, slowing, reads })}`)
+    }
+    expect(slowing.filter((s) => s.atRateMs * 2 < s.atOneMs * s.rate), 'the page slowed to at least half of each rate').toEqual([])
+    expect(reads.filter((r) => r.differing < MENU_MIN_PIXELS).map((r) => r.label), 'every box read: its two page pictures differ').toEqual([])
+    expect(reads.filter((r) => r.copy && !r.seen).map((r) => r.label), 'the control: the late copy of the menu is seen').toEqual([])
+    expect(reads.filter((r) => !r.copy && r.seen).map((r) => r.label), 'the menu is in no picture of the slowed page').toEqual([])
   })
 })
