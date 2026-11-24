@@ -332,16 +332,37 @@ export async function readLogDirSetting(configFile: string, files: AccountFileFs
 // The two log-folder channels
 // ---------------------------------------------------------------------------
 
+// The characters hasShellObjectName reads, as char codes.
+const SLASH = 0x2f
+const BACKSLASH = 0x5c
+const DOT = 0x2e
+const SPACE = 0x20
+const OPEN_BRACE = 0x7b
+const CLOSE_BRACE = 0x7d
+
 /** Windows: whether any folder name on `p` ends in `.{...}` (trailing dots
  *  and spaces, which Windows drops, set aside). Explorer may take a folder so
  *  named for a shell object rather than a plain folder, so a log_dir with
- *  one anywhere on its path is refused, never shown. Linear in `p`. */
+ *  one anywhere on its path is refused, never shown.
+ *
+ *  One pass over `p`, linear, that makes no string per name: a name has the
+ *  shape when its last character other than a dot or a space is `}` and it
+ *  holds `.{` (a `.{` never sits in the trailing dots and spaces, since `{`
+ *  is neither). A split into names made a long path's check pay garbage
+ *  collections a shorter one did not, which a growth check reads as growth. */
 export function hasShellObjectName(p: string): boolean {
-  for (const name of p.split(/[\\/]/)) {
-    let end = name.length
-    while (end > 0 && (name[end - 1] === '.' || name[end - 1] === ' ')) end--
-    const s = name.slice(0, end)
-    if (s.endsWith('}') && s.includes('.{')) return true
+  let last = -1          // the name's last character other than a dot or a space
+  let dotBrace = false   // the name holds `.{`
+  for (let i = 0; i <= p.length; i++) {
+    const c = i < p.length ? p.charCodeAt(i) : SLASH   // the end of `p` ends its last name
+    if (c === SLASH || c === BACKSLASH) {
+      if (last === CLOSE_BRACE && dotBrace) return true
+      last = -1
+      dotBrace = false
+    } else {
+      if (c === OPEN_BRACE && i > 0 && p.charCodeAt(i - 1) === DOT) dotBrace = true
+      if (c !== DOT && c !== SPACE) last = c
+    }
   }
   return false
 }

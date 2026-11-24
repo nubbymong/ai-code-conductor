@@ -216,7 +216,9 @@ describe('debug:openAccountLogFolder -- what a folder must be', () => {
     // of seven, so a slow spell on the runner lands on both sizes, not on one.
     // Under NOISE_FLOOR_MS the smaller time is mostly timer and scheduler
     // noise, so no ratio is judged there: the larger time is held to eight
-    // times the floor instead.
+    // times the floor instead. The check makes no string per name: when it
+    // split the path, each larger-size call paid garbage collections the
+    // smaller one did not (CI run 45338578450: 7.45 ms, then 59.93 ms).
     const NOISE_FLOOR_MS = 5
     const longPath = (n: number) => `C:\\${'{x}\\'.repeat(n)}${'.{'.repeat(n)}y${' .'.repeat(n)}`
     const once = (p: string): number => {
@@ -235,6 +237,30 @@ describe('debug:openAccountLogFolder -- what a folder must be', () => {
       t4 = Math.min(t4, once(large))
     }
     expect(t4 / Math.max(t1, NOISE_FLOOR_MS), `${t1.toFixed(2)} ms, then ${t4.toFixed(2)} ms (floor ${NOISE_FLOOR_MS} ms)`).toBeLessThan(8)
+  })
+
+  it('the name rule in one pass answers as the rule read name by name, for every path of up to 6 characters from its alphabet', () => {
+    // The rule as it was written before the one-pass check: split into names,
+    // trailing dots and spaces set aside, then `}` at the end and `.{` inside.
+    const byName = (p: string): boolean => p.split(/[\\/]/).some((name) => {
+      const s = name.replace(/[. ]+$/, '')
+      return s.endsWith('}') && s.includes('.{')
+    })
+    const alphabet = ['.', '{', '}', ' ', '\\', '/', 'x']
+    let paths = ['']
+    let checked = 0
+    let shaped = 0
+    for (let len = 0; len <= 6; len++) {
+      for (const p of paths) {
+        const want = byName(p)
+        if (hasShellObjectName(p) !== want) expect(hasShellObjectName(p), JSON.stringify(p)).toBe(want)
+        checked++
+        if (want) shaped++
+      }
+      if (len < 6) paths = paths.flatMap((p) => alphabet.map((c) => p + c))
+    }
+    expect(checked).toBe(137_257)   // 7^0 + 7^1 + ... + 7^6
+    expect(shaped).toBeGreaterThan(1000)
   })
 
   it('a log_dir with no way to reveal it, or whose reveal throws, is refused and never opened', async () => {
