@@ -310,6 +310,11 @@ export interface ElectronAPI {
     /** P3.16a round 2 (Q5): `'restart'` when a Restart ends the process (its
      *  next one follows), so its exit is not the session's end. */
     kill: (sessionId: string, reason?: 'restart') => void
+    /** aicc_planning#423: the tabs Resume restored, and a tab shown and
+     *  starting now: a session an update kept for a restored tab not on
+     *  screen waits for that tab until it is shown. */
+    tabsRestored: (sessionIds: string[]) => void
+    tabShown: (sessionId: string) => void
     onData: (sessionId: string, callback: (data: string) => void) => () => void
     onExit: (sessionId: string, callback: (exitCode: number) => void) => () => void
     /** aicc_planning#392: the tab's next output chunk is its restored replay,

@@ -14,11 +14,15 @@ const save = vi.fn(async () => true)
 // the lookup finds nothing).
 type Target = { uuid: string; cwd: string } | null
 let lookup: (id: string) => Promise<Target> = async () => null
+/** aicc_planning#423: what main is told the restore brought back, with the
+ *  store's sessions at that moment. */
+const tabsToldRestored: Array<{ ids: string[]; inStore: string[] }> = []
 ;(globalThis as any).window = (globalThis as any).window ?? {}
 ;(globalThis as any).window.electronAPI = {
   ...((globalThis as any).window?.electronAPI ?? {}),
   session: { save, clear: vi.fn(async () => true), load: vi.fn(), hasSaved: vi.fn() },
   logsdb: { getResumeTarget: (id: string) => lookup(id) },
+  pty: { tabsRestored: (ids: string[]) => { tabsToldRestored.push({ ids: [...ids], inStore: useSessionStore.getState().sessions.map((s) => s.id) }) } },
 }
 
 const { restoreSavedSessions, buildSessionState, buildSessionStateWithResumeTargets } = await import('../../../src/renderer/session-persistence')
@@ -92,6 +96,12 @@ describe('restoreSavedSessions -- the restore lands', () => {
     expect(s.sessions.map((x) => x.id)).toEqual(['a', 'b'])
     expect(s.activeSessionId).toBe('b')
     expect(s.isRestoring).toBe(false)
+  })
+
+  it('aicc_planning#423: tells main once which tabs came back, all of them, as the store holds them (a session an update kept for a tab not on screen then waits for it)', async () => {
+    tabsToldRestored.length = 0
+    await restoreSavedSessions(state([saved({ id: 'a' }), saved({ id: 'b' }), saved({ id: 'c', shellOnly: true })], { activeSessionId: 'a' }), ref(), deps())
+    expect(tabsToldRestored).toEqual([{ ids: ['a', 'b', 'c'], inStore: ['a', 'b', 'c'] }])
   })
 
   it('MUTANT 1: clears the unsettled ref once the restore has landed (a zero-session close may then clear the file)', async () => {

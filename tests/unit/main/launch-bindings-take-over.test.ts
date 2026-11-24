@@ -196,7 +196,7 @@ vi.mock('../../../src/main/credential-store', () => ({ loadCredential: () => nul
 vi.mock('../../../src/main/provider-accounts', () => ({ getAccountsService: () => null }))
 
 const { spawnPty, killPty, writePty, holdsCodexLaunchLease, getKeptCodexConversation, REMOVED_ACCOUNT_REFUSAL } = await import('../../../src/main/pty-manager')
-const { setKeptTakeOver } = await import('../../../src/main/sessions/kept-launches')
+const { setKeptTakeOver, holdKeptLaunch } = await import('../../../src/main/sessions/kept-launches')
 const { notIndexedSnapshot, resetIndexingGapsForTests, conversationKey } = await import('../../../src/main/logging/indexing-gaps')
 const { codexFolderKey } = await import('../../../src/main/logging/codex-folder-key')
 
@@ -396,6 +396,34 @@ describe('pty-manager.ts: a restored tab takes over the session an update kept r
     keepFor(CLAUDE_SID)
     spawnPty(fakeWin, CLAUDE_SID, { cwd: os.tmpdir() } as never)
     expect(h.urlWrites).toEqual([[CLAUDE_SID, `http://127.0.0.1:19333/status?cccSessionId=${CLAUDE_SID}&token=new-run`]])
+  })
+
+  it('aicc_planning#423: held for its tab at the start, its status line address file (the last run\'s address and credential, which this run refuses) is emptied, and kept, so the take-over still writes this run\'s address into it', () => {
+    fs.writeFileSync(path.join(h.urlDir, `ccc-status-${CLAUDE_SID}.url`), 'http://127.0.0.1:19333/status?cccSessionId=x&token=last-run')
+    holdKeptLaunch({ sessionId: CLAUDE_SID, provider: 'claude', hookFolder: null })
+    expect(h.urlWrites).toEqual([[CLAUDE_SID, '']])
+    expect(h.removedFiles).toEqual([])
+    h.urlWrites.length = 0
+    h.mcpPort = 19333
+    keepFor(CLAUDE_SID)
+    spawnPty(fakeWin, CLAUDE_SID, { cwd: os.tmpdir() } as never)
+    expect(h.urlWrites).toEqual([[CLAUDE_SID, `http://127.0.0.1:19333/status?cccSessionId=${CLAUDE_SID}&token=new-run`]])
+  })
+
+  it('aicc_planning#423: the status line reads an emptied address file as no address, so it sends no request (it writes its status file); the last run\'s address it would send as it is', async () => {
+    const { SHIM_STATUS_URL_JS } = await import('../../../src/main/providers/claude/statusline-gather')
+    const file = path.join(h.urlDir, `ccc-status-${CLAUDE_SID}.url`)
+    const addressRead = (): string => new Function('fs', 'process', `${SHIM_STATUS_URL_JS}\nreturn statusUrl;`)(fs, { argv: ['node', 'bridge.js', CLAUDE_SID, file], env: {} }) as string
+    fs.writeFileSync(file, 'http://127.0.0.1:19333/status?cccSessionId=x&token=last-run')
+    expect(addressRead()).toBe('http://127.0.0.1:19333/status?cccSessionId=x&token=last-run')
+    fs.writeFileSync(file, '')
+    expect(addressRead()).toBe('')
+  })
+
+  it('aicc_planning#423: held for its tab, a session whose launch wrote no status line address file: nothing written', () => {
+    holdKeptLaunch({ sessionId: CODEX_SID, provider: 'codex', hookFolder: null })
+    expect(h.urlWrites).toEqual([])
+    expect(h.removedFiles).toEqual([])
   })
 
   it('its own exit ends it as a launch\'s exit does: its files once, then the teardown\'s three parts', () => {

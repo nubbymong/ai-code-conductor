@@ -25,8 +25,10 @@ export interface HeldSession {
   startedAt: number
   /** True while the app is connected to it. */
   attached: boolean
-  /** True while a tab in the app shows it. A held terminal with no app
-   *  attached and no tab is one a crash left behind. */
+  /** True while a tab in the app shows it, and for an agent session an update
+   *  kept running for its tab to take over (that tab may be restored and not
+   *  yet shown). A held terminal with no app attached and no tab is one a
+   *  crash left behind. */
   tabOpen: boolean
   /** 2.1.3-beta.9: true for the terminal of a report the app runs on its own
    *  (an Insights report), not a tab's session. Its label names the report;

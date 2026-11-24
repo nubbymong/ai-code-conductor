@@ -40,6 +40,10 @@ vi.mock('node-pty', () => ({ spawn: ptySpawn }))
 
 import { HELPER_SENTENCES, SessionHelperManager, keptSessionIdsIn, setSessionHelper, spawnAgentPty, type HelperHookDeps, type HelperToolDeps, type HelperToolLink } from '../../../src/main/session-helper/manager'
 import { setKeptLaunchBindings, takeKeptSession, type KeptLaunch, type KeptLaunchFacts } from '../../../src/main/sessions/kept-launches'
+// aicc_planning#423: the seam the pty handlers tell (keptTabsRestored,
+// keptTabShown, keptTabClosed), read off the module so a case still loads on
+// the code before it.
+import * as keptSeam from '../../../src/main/sessions/kept-launches'
 import { heldAgentSessionId } from '../../../src/main/session-helper/protocol'
 import type { HookEventFrame } from '../../../src/main/session-helper/protocol'
 import { FakeHelper, type FakeHolder } from './session-helper-fake-holder'
@@ -578,6 +582,212 @@ describe('a kept record\'s launch folder is read by the rule the helper checks a
     const taken = takeKeptSession(CLAUDE_TAB, 'claude', SIZE)
     expect(taken).not.toBeNull()
     expect(taken!.kept.folder).toBe(read)
+  })
+})
+
+/**
+ * aicc_planning#423 (beta.17 B1c): a restored tab that is not on screen
+ * mounts its terminal only when it is shown (App.tsx renders it with
+ * display: none, and TerminalView waits for a size before it starts), so its
+ * take-over is asked for only then. The renderer says which tabs Resume
+ * restored (restoredTabs), and which tab is shown and starts (tabShown); a
+ * close says which tab went (tabClosed), each for that tab's session alone;
+ * the Machines page reads the kept session as a tab's, not as being ended.
+ * The default 5-minute limit runs under fake timers. The three are called
+ * optionally (`?.`): on the code
+ * before this fix they do not exist, and each case fails on what it checks.
+ */
+describe('a restored tab not on screen keeps the session an update kept for it until it is shown (aicc_planning#423)', () => {
+  const FIVE_MIN = 5 * 60_000
+  /** Every kept session the stand-in launch bindings were asked to hold. */
+  let held: KeptLaunch[]
+  beforeEach(() => {
+    held = []
+    setKeptLaunchBindings({ describe: (id) => facts[id] ?? { conversation: null, account: null, hookFolder: null }, remove: (k) => { removed.push(k) }, hold: (k) => { held.push(k) } })
+  })
+  /** Fake setTimeout and clearTimeout for `run`, the clock still moving with real time. */
+  async function withFakeTimers(run: () => Promise<void>): Promise<void> {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'], shouldAdvanceTime: true })
+    try { await run() } finally { vi.useRealTimers() }
+  }
+  /** The kept Claude Code session after a start that follows the update, its
+   *  keeper attached and the other provider's session ended. */
+  async function keptAtNextStart(o: { takeOver?: 'both' } = {}): Promise<{ m2: SessionHelperManager; hc: FakeHolder; ho: FakeHolder; stream: number }> {
+    const run1 = await updated()
+    logs.length = 0
+    const m2 = await startedWith(makeManager(o))
+    await until(() => !!run1.hc.attached, 'the keeper to attach')
+    if (!o.takeOver) await until(() => run1.ho.ended, 'the other provider\'s session to be ended')
+    return { m2, ...run1 }
+  }
+  const endedForTime = () => logs.some((l) => l.includes(`${claudeSid}: the session kept for tab ${CLAUDE_TAB} to take over is ended, because its tab did not take it over within`))
+
+  it('its tab restored and not shown: past the 5-minute limit the session is still kept, its record and files with it; shown, the tab takes it over with the same CLI and no launch', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'], shouldAdvanceTime: true })
+    try {
+      const { m2, hc, stream } = await keptAtNextStart()
+      // Resume: the renderer restores the tab (session-persistence.ts) and
+      // says so; the tab is not the one on screen, so nothing asks for it.
+      m2.restoredTabs?.([CLAUDE_TAB, OTHER_TAB])
+      await vi.advanceTimersByTimeAsync(FIVE_MIN + 60_000)
+      expect(endedForTime(), 'not ended by the time limit').toBe(false)
+      expect(hc.ended).toBe(false)
+      expect(keptOnDisk()).toEqual([`${claudeSid}.json`])
+      expect(removed.map((k) => k.sessionId)).toEqual([OTHER_TAB])
+      expect(hc.waitingEvents).toHaveLength(1)
+      // Shown much later: its view starts, and its spawn asks for the take-over.
+      await vi.advanceTimersByTimeAsync(30 * 60_000)
+      expect(hc.ended).toBe(false)
+      m2.tabShown?.(CLAUDE_TAB)
+      const holdsBefore = helper.holds()
+      const taken = takeKeptSession(CLAUDE_TAB, 'claude', SIZE)
+      expect(taken).not.toBeNull()
+      const shown: string[] = []
+      taken!.pty.onData((d) => shown.push(d))
+      await until(() => !!hc.attached && hc.attached.ackedCaps.includes('hooks') && hc.attached.ackedCaps.includes('mcp'), 'the tab to attach with hooks and tools')
+      expect(helper.holds()).toBe(holdsBefore)
+      expect(hc.requests.filter((r) => r.t === 'term.launch')).toHaveLength(1)
+      expect(ptySpawn).not.toHaveBeenCalled()
+      await until(() => shown.join('').includes('written while no app was there'), 'the replay')
+      await until(() => events.length === 1, 'the hook event its holder queued meanwhile')
+      await until(() => served.length === 1, 'the kept tool stream to be served')
+      expect(hc.keptStreams.has(stream)).toBe(false)
+      expect(keptOnDisk()).toEqual([])
+      expect(hc.ended).toBe(false)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('its tab restored and closed before it was shown (told through the seam the pty handlers use): ended at once, its record and files go, and nothing is kept for it', async () => {
+    await withFakeTimers(async () => {
+      const { hc } = await keptAtNextStart()
+      const seam = keptSeam as Partial<typeof keptSeam>
+      seam.keptTabsRestored?.([CLAUDE_TAB])
+      await vi.advanceTimersByTimeAsync(FIVE_MIN + 60_000)
+      expect(hc.ended).toBe(false)
+      seam.keptTabClosed?.(CLAUDE_TAB)
+      expect(logs).toContain(`[session-helper] ${claudeSid}: the session kept for tab ${CLAUDE_TAB} to take over is ended, because its tab was closed`)
+      expect(keptOnDisk()).toEqual([])
+      expect(removed.map((k) => k.sessionId).sort()).toEqual([CLAUDE_TAB, OTHER_TAB])
+      await until(() => hc.ended, 'the kept session to be ended')
+      expect(takeKeptSession(CLAUDE_TAB, 'claude', SIZE)).toBeNull()
+    })
+  })
+
+  it('a tab Resume did not restore (the resume prompt answered with other tabs, or not at all): ended when its 5-minute limit runs out, as before', async () => {
+    await withFakeTimers(async () => {
+      const { m2, hc } = await keptAtNextStart()
+      m2.restoredTabs?.([OTHER_TAB])
+      // Its limit began at the start, before keptAtNextStart's waits, and fake
+      // time also moves with real time: 4 minutes leaves those waits room.
+      await vi.advanceTimersByTimeAsync(FIVE_MIN - 60_000)
+      expect(hc.ended).toBe(false)
+      await vi.advanceTimersByTimeAsync(61_000)
+      expect(logs).toContain(`[session-helper] ${claudeSid}: the session kept for tab ${CLAUDE_TAB} to take over is ended, because its tab did not take it over within ${FIVE_MIN} ms`)
+      await until(() => hc.ended, 'the kept session to be ended')
+      expect(keptOnDisk()).toEqual([])
+      expect(takeKeptSession(CLAUDE_TAB, 'claude', SIZE)).toBeNull()
+    })
+  })
+
+  it('its tab shown with no take-over asked (its launch waiting at its account picker; told through the seam): ended 5 minutes after it was shown, not before', async () => {
+    await withFakeTimers(async () => {
+      const { m2, hc } = await keptAtNextStart()
+      m2.restoredTabs?.([CLAUDE_TAB])
+      await vi.advanceTimersByTimeAsync(20 * 60_000)
+      ;(keptSeam as Partial<typeof keptSeam>).keptTabShown?.(CLAUDE_TAB)
+      expect(logs).toContain(`[session-helper] ${claudeSid}: tab ${CLAUDE_TAB} is shown, so the session kept for it waits for its take-over from now`)
+      await vi.advanceTimersByTimeAsync(FIVE_MIN - 1_000)
+      expect(hc.ended).toBe(false)
+      await vi.advanceTimersByTimeAsync(2_000)
+      expect(logs).toContain(`[session-helper] ${claudeSid}: the session kept for tab ${CLAUDE_TAB} to take over is ended, because its tab did not take it over within ${FIVE_MIN} ms of being shown`)
+      await until(() => hc.ended, 'the kept session to be ended')
+      expect(keptOnDisk()).toEqual([])
+    })
+  })
+
+  it('two tabs restored, only the other shown, and a tab with no kept session closed: the 5 minutes run for the shown tab\'s session alone, and a close ends only the session kept for that tab', async () => {
+    await withFakeTimers(async () => {
+      // Both providers kept; Resume restores both tabs and shows the other
+      // one (the tab on screen), and a tab with nothing kept for it is closed.
+      const { m2, hc, ho } = await keptAtNextStart({ takeOver: 'both' })
+      m2.restoredTabs?.([CLAUDE_TAB, OTHER_TAB])
+      m2.tabShown?.(OTHER_TAB)
+      m2.tabClosed?.('abcdef0123456789abcdee13')
+      await vi.advanceTimersByTimeAsync(FIVE_MIN + 60_000)
+      expect(endedForTime(), 'the hidden tab\'s session is not ended by the time limit').toBe(false)
+      expect(hc.ended).toBe(false)
+      expect(keptOnDisk()).toEqual([`${claudeSid}.json`])
+      expect(logs).toContain(`[session-helper] ${otherSid}: the session kept for tab ${OTHER_TAB} to take over is ended, because its tab did not take it over within ${FIVE_MIN} ms of being shown`)
+      await until(() => ho.ended, 'the shown tab\'s session to be ended')
+      // Its tab closed afterwards: nothing is kept for it, and the hidden
+      // tab's session stays kept for its own take-over.
+      m2.tabClosed?.(OTHER_TAB)
+      expect(hc.ended).toBe(false)
+      expect(keptOnDisk()).toEqual([`${claudeSid}.json`])
+      expect(takeKeptSession(CLAUDE_TAB, 'claude', SIZE)).not.toBeNull()
+      await until(() => !!hc.attached && hc.attached.ackedCaps.includes('hooks') && hc.attached.ackedCaps.includes('mcp'), 'the hidden tab to take its session over')
+      expect(hc.ended).toBe(false)
+    })
+  })
+
+  it('on the Machines page, a session kept for its restored tab reads as a tab\'s (waiting for the app), not as one being ended', async () => {
+    const { m2 } = await keptAtNextStart()
+    m2.restoredTabs?.([CLAUDE_TAB])
+    expect((await m2.status()).sessions).toContainEqual(expect.objectContaining({ id: claudeSid, kind: 'claude', attached: false, tabOpen: true }))
+  })
+
+  it('its tab shown before main heard of the restore (the tab on screen at Resume): the restore does not stop its limit', async () => {
+    await withFakeTimers(async () => {
+      const { m2, hc } = await keptAtNextStart()
+      m2.tabShown?.(CLAUDE_TAB)
+      m2.restoredTabs?.([CLAUDE_TAB])
+      await vi.advanceTimersByTimeAsync(FIVE_MIN + 1_000)
+      expect(endedForTime()).toBe(true)
+      await until(() => hc.ended, 'the kept session to be ended')
+    })
+  })
+
+  it('a normal quit with its tab restored and not shown: ended as a quit ends one kept for its tab, its record and files with it', async () => {
+    const { m2, hc } = await keptAtNextStart()
+    m2.restoredTabs?.([CLAUDE_TAB])
+    const done = m2.shutdown()
+    expect(done).not.toBeNull()
+    await done
+    managers.splice(managers.indexOf(m2), 1)
+    expect(hc.ended).toBe(true)
+    expect(keptOnDisk()).toEqual([])
+    expect(removed.map((k) => k.sessionId).sort()).toEqual([CLAUDE_TAB, OTHER_TAB])
+  })
+
+  it('the agent sessions\' switch off: the kept session is ended at the start as before, the restore and the show change nothing, and the shown tab starts the usual way', async () => {
+    const { hc } = await updated()
+    logs.length = 0
+    const m2 = makeManager()
+    await m2.start({ atStartup: true, plain: false, agents: false })
+    setSessionHelper(m2)
+    m2.restoredTabs?.([CLAUDE_TAB])
+    m2.tabShown?.(CLAUDE_TAB)
+    await until(() => hc.ended, 'the kept session to be ended at the start')
+    expect(held).toEqual([])
+    expect(takeKeptSession(CLAUDE_TAB, 'claude', SIZE)).toBeNull()
+    spawnAgentPty(claudeTab(CLAUDE_TAB), SHELL, [], agentOpts())
+    await until(() => ptySpawn.mock.calls.length === 1, 'the usual start')
+  })
+
+  it('the start holds what each session kept for its tab left naming the last run (its status line\'s address file), and nothing of one it ends', async () => {
+    await keptAtNextStart({ takeOver: 'both' })
+    expect(held.slice().sort((a, b) => a.sessionId.localeCompare(b.sessionId))).toEqual([
+      { sessionId: CLAUDE_TAB, provider: 'claude', hookFolder: null },
+      { sessionId: OTHER_TAB, provider: 'codex', hookFolder: HOOK_FOLDER },
+    ])
+  })
+
+  it('a session the start ends is not held', async () => {
+    await keptAtNextStart()
+    expect(held.map((k) => k.sessionId)).toEqual([CLAUDE_TAB])
+    expect(removed.map((k) => k.sessionId)).toEqual([OTHER_TAB])
   })
 })
 
