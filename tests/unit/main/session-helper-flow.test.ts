@@ -90,18 +90,7 @@ afterEach(async () => {
     for (const c of r.conns) c.close()
   }
   await tick(10)
-  // A folder holding the helper's just-copied .exe can stay busy on Windows
-  // CI past these retries (run 45341253799: ENOTEMPTY here, and on 8 folders
-  // of the same fixture in session-helper-manager.test.ts, which leaves them
-  // as this does). It is left in this run's own temp folder, which the run's
-  // teardown removes: cleanup of a disposable folder is not a test result.
-  for (const f of folders.splice(0)) {
-    try {
-      rmSync(f, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 })
-    } catch (err) {
-      process.stderr.write(`session-helper-flow: left ${f} behind (${(err as NodeJS.ErrnoException).code ?? String(err)})\n`)
-    }
-  }
+  for (const f of folders.splice(0)) rmSync(f, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 })
 })
 
 /**
