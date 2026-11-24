@@ -54,7 +54,7 @@ bug"). C5's review and join recorded three limits of its narrowing placement (co
   characters as one cell (2), no-cell characters as one cell (2). Counted on the 18 tests of
   console-repaint-narrow-keep.test.ts after it: the selection's columns not cut to the width (1),
   `<=` for `<` in the view's at-once check (1), the view moved at once in every case (2).
-- **Not handled.** A selection selected again keeps its start and length: a later narrowing of
+- **Not handled.** A selection selected again keeps its start and length, unless it is of whole lines (aicc_planning#422: lineSelectionKeep.ts keeps those lines): a later narrowing of
   columns moves its end as xterm moves any selection made by `select`, where one made with the
   mouse keeps its end cell. `rowsOfPaint` counts two kinds of input as xterm does not, neither in
   a console paint (a wrapped row is written cell by cell, a mark in its character's cell): an
