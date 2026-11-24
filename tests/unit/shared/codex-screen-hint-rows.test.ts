@@ -15,18 +15,20 @@
 // The draft and height readers also read a draft that Codex wraps onto more
 // rows over the queue hint, so composer-submit can take back a text it typed
 // while a reply streamed (codexComposerDraft, codexComposerRows).
-// Still refused, on purpose: a warning count at the right of the row,
-// "<warning sign> 1 warning . f2 to view" (both versions; P19 drew it with a
-// config whose MCP server program does not exist, and with the stand-in model
-// both versions drew it from the first prompt on). Once a text is typed at an
-// idle composer, Codex keeps the count alone under the footer (its own
-// snapshot test warning_notice_styles, chat_composer/warning_notice_tests.rs
-// at both tags; P19's bytes, codex-macos-queue-hint event 83). No recording
-// holds that row at an idle composer and no reader that confirms a typed text
-// takes it, so with the count accepted the app would type and never press
-// Enter. Also refused: any row not recorded (another key, another count), two
-// rows under the footer, a row at another indent or above the footer, and
-// every row under a wrapped footer. Codex 0.170.0 adds the thread's title to
+// A warning count at the right of the row, "<warning sign> 1 warning . f2 to
+// view" (both versions; P19 drew it with a config whose MCP server program
+// does not exist, and with the stand-in model both versions drew it from the
+// first prompt on), was refused here until 2.1.3-beta.17 C7 (aicc_planning
+// #371): once a text is typed at an idle composer, Codex keeps the count alone
+// under the footer, a row no reader that confirms a typed text took, so with
+// the count accepted the app would have typed and never pressed Enter. C7's
+// recording hold recorded that screen and the readers now take it; the
+// recorded screens with the count read ready here, and
+// tests/unit/shared/codex-screen-warning-row.test.ts holds the rest. Still
+// refused: any row not recorded (another key, the count beside the queue hint
+// or alone under an empty composer), two rows under the footer, a row at
+// another indent or above the footer, and every row under a wrapped footer.
+// Codex 0.170.0 adds the thread's title to
 // its footer once a prompt is sent, and the footer wraps when the folder and
 // the title do not fit: those recordings still read unrecognised (the corpus
 // test lists them, with the warning ones).
@@ -37,14 +39,14 @@
 //
 // Not checked here:
 //  - a reply that streams: Codex shows no busy row then (P19 saw its working
-//    row once, right after Enter), and every recorded mid-reply screen ends
-//    in the warning count, so none shows a streaming reply over a row taken
-//    here; the corpus test lists what the reader reads on them
-//    (KNOWN_MISREADS);
+//    row once, right after Enter); on Windows and Linux its title spinner
+//    reads busy (the corpus test's case 5), and the corpus test lists what
+//    the reader reads on macOS (KNOWN_MISREADS);
 //  - text typed at a composer with no turn running: the recordings hold it
 //    with no warning (codex170-macos-queue-hint events 38 to 40: the hint row
 //    goes and the footer takes the last row, which codexTextTyped confirms),
-//    and none holds it with a warning count;
+//    and with the count C7's recordings hold it
+//    (tests/unit/shared/codex-screen-warning-row.test.ts);
 //  - a draft wrapped onto more rows over the queue hint is built here, not
 //    recorded (every recorded draft is one row); under such a draft the hint
 //    row's indent is checked against the footer row's only where the wrapped
@@ -87,7 +89,7 @@ const QUEUE: Record<string, ScreenLine[]> = {
 }
 
 /** The recorded screens that end in a warning count at the right of the
- *  hint row, under a footer of one row: still unrecognised. */
+ *  hint row, under a footer of one row: unrecognised until C7, ready since. */
 const WARNING_SCREENS: Record<string, ScreenLine[]> = {
   'codex170-windows-bundled-warning-hint': [blank(), blank(), EMPTY, blank(), plain(`  p19-probe default ${DOT} ~\\AppData\\Local\\Temp\\p19-9qw1BB\\codex-bundled-warning-1\\work`), plain(`  ${ARROW} for agents ${DOT} ? for shortcuts${' '.repeat(63)}${WARN} 1 warning ${DOT} f2 to view`)],
   'codex170-macos-warning-hint': [blank(), blank(), EMPTY, blank(), plain(`  p19-probe default ${DOT} /private/var/folders/q2/p1t6rgxj5fj32g1dc7dmd49r0000gn/T/p19-yqcGCX/codex-pty-warning-1/work`), plain(`  ${ARROW} for agents ${DOT} ? for shortcuts${' '.repeat(63)}${WARN} 1 warning ${DOT} f2 to view`)],
@@ -197,7 +199,7 @@ describe("Codex's hint rows under the footer, as P19's second run recorded them 
     for (const [what, under] of Object.entries({
       'a wrapped footer': wrappedFooter,
       'a row not recorded': [footerRow(QUEUED), plain('  tab to queue')],
-      'the warning count': [footerRow(QUEUED), plain(`${' '.repeat(95)}${WARNING}`)],
+      'the queue hint with the warning count': [footerRow(QUEUED), plain(`  tab to queue message${' '.repeat(73)}${WARNING}`)],
       'the hint at 4': [footerRow(QUEUED), hint(4, 'tab to queue message')],
       'the hint at 0': [footerRow(QUEUED), hint(0, 'tab to queue message')],
       'the hint twice': [footerRow(QUEUED), lastRow(QUEUED), lastRow(QUEUED)],
@@ -207,6 +209,12 @@ describe("Codex's hint rows under the footer, as P19's second run recorded them 
       expect(codexComposerRows(screen), what).toBeNull()
       expect(readCodexScreen(screen).screen, what).toBe('unrecognised')
     }
+    // C7: over the warning count alone (Codex's row under a draft at rest), a
+    // two-row draft is read, all of it, two rows.
+    const counted = twoRowDraft([footerRow(QUEUED), plain(`${' '.repeat(W - 1 - WARNING.length)}${WARNING}`)])
+    expect(codexComposerDraft(counted)).toBe(NOTE.replace(/\s+/g, ''))
+    expect(codexComposerRows(counted)).toBe(2)
+    expect(codexTextTyped(counted, NOTE)).toBe(true)
   })
 
   it("the recorded screens whose footer wraps still read unrecognised, and what their composer holds is not read", () => {
@@ -216,18 +224,19 @@ describe("Codex's hint rows under the footer, as P19's second run recorded them 
     }
   })
 
-  it('the recorded screens with a warning count at the right of the row still read unrecognised, so nothing is typed there', () => {
+  it('C7 (#371): the recorded screens with a warning count at the right of the row read ready, the composer empty', () => {
     for (const [name, screen] of Object.entries(WARNING_SCREENS)) {
-      expect(readCodexScreen(screen).screen, name).toBe('unrecognised')
-      expect(readCodexScreen(screen, ['p19-probe']).screen, name).toBe('unrecognised')
-      expect(codexComposerState(screen), name).toBe('not-ready')
+      expect(readCodexScreen(screen), name).toEqual({ screen: 'ready', text: '' })
+      expect(readCodexScreen(screen, ['p19-probe']), name).toEqual({ screen: 'ready', text: '' })
+      expect(codexComposerState(screen), name).toBe('ready')
+      expect(codexComposerDraft(screen), name).toBe('')
     }
-    // Why: once a text is typed at the idle composer, Codex keeps the count
-    // alone under the footer (warning_notice_styles), which no confirm reader
-    // takes, so the text would be typed and Enter never pressed.
+    // Once a text is typed at the idle composer, Codex keeps the count alone
+    // under the footer (warning_notice_styles; C7's recordings), and the
+    // reader that confirms a typed text takes it, so Enter is pressed.
     const typed = [blank(), blank(), plain(`${P} keep this draft`), blank(), footerRow(WARNING_SCREENS['codex-macos-warning-hint']), plain(`${' '.repeat(W - 1 - WARNING.length)}${WARNING}`)]
-    expect(codexTextTyped(typed, 'keep this draft')).toBe(false)
-    expect(readCodexScreen(typed).screen).toBe('unrecognised')
+    expect(codexTextTyped(typed, 'keep this draft')).toBe(true)
+    expect(readCodexScreen(typed)).toEqual({ screen: 'ready', text: 'keep this draft' })
   })
 
   it('each row twice under the footer reads unrecognised', () => {
@@ -281,16 +290,28 @@ describe("Codex's hint rows under the footer, as P19's second run recorded them 
       '  tab to queue message.',
       '  tab to queue',
       '  ? for shortcuts                                                                                   100% context left',
-      `  f6 for shortcuts${' '.repeat(77)}${WARN} 1 warning ${DOT} f2 to view`,
-      `  ${ARROW} for agents ${DOT} f6 for shortcuts${' '.repeat(62)}${WARN} 1 warning ${DOT} f2 to view`,
       `  tab to queue message${' '.repeat(73)}${WARN} 1 warning ${DOT} f2 to view`,
       `  ? for shortcuts${' '.repeat(36)}junk${' '.repeat(38)}${WARN} 1 warning ${DOT} f2 to view`,
-      `  ? for shortcuts${' '.repeat(77)}${WARN} 2 warnings ${DOT} f2 to view`,
       `  ? for shortcuts${' '.repeat(78)}${WARN} 1 warning`,
       `${' '.repeat(95)}${WARN} 1 warning ${DOT} f2 to view`,
       '  Tip: Use /init to create an AGENTS.md with project-specific guidance.',
     ]) {
       expect(readCodexScreen([...base, footer, plain(text)]).screen, text).toBe('unrecognised')
+    }
+  })
+
+  it('C7 (#371): a hint row Codex draws at rest with the warning count at its right edge reads ready, a count of 2 too', () => {
+    const base = composerPart(READY['codex170-linux-ready'])
+    const footer = footerRow(READY['codex170-linux-ready'])
+    for (const text of [
+      `  ? for shortcuts${' '.repeat(78)}${WARN} 1 warning ${DOT} f2 to view`,
+      `  ? for shortcuts${' '.repeat(77)}${WARN} 2 warnings ${DOT} f2 to view`,
+      `  f6 for shortcuts${' '.repeat(77)}${WARN} 1 warning ${DOT} f2 to view`,
+      `  ${ARROW} for agents ${DOT} ? for shortcuts${' '.repeat(63)}${WARN} 1 warning ${DOT} f2 to view`,
+      `  ${ARROW} for agents ${DOT} f6 for shortcuts${' '.repeat(62)}${WARN} 1 warning ${DOT} f2 to view`,
+    ]) {
+      expect(text.length, text).toBe(W - 1)
+      expect(readCodexScreen([...base, footer, plain(text)]), text).toEqual({ screen: 'ready', text: '' })
     }
   })
 })

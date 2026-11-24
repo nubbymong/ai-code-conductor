@@ -54,7 +54,7 @@ describe('readCodexScreen with the title', () => {
     expect(readCodexScreen(ready)).toEqual({ screen: 'ready', text: '' })
   })
 
-  it('a footer with a row under it (the warning count) reads busy under a spinner title, else unrecognised', () => {
+  it('a footer with a row under it that is none of Codex\'s (its warning count is read since 2.1.3-beta.17 C7) reads busy under a spinner title, else unrecognised', () => {
     const counted = screenOf('', [plain('  1 warning')])
     expect(readCodexScreen(counted, null, { title: spin() }).screen).toBe('busy')
     expect(readCodexScreen(counted, null, { title: 'work' }).screen).toBe('unrecognised')
