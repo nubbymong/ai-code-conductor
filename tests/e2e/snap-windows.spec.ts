@@ -73,7 +73,10 @@
  *      menu closed again. The press's picture of the box (Rectangle drawn over
  *      the box, or Whole screen cut at the box) is read pixel by pixel on the
  *      pixels where those two differ (at least MENU_PIXEL_GAP apart): the menu
- *      is seen when most of them are nearer the open one. First a control, a
+ *      is seen when most of them are nearer the open one; the box shows the
+ *      app when its nearer page picture is closer than half the gap between
+ *      the two (each box must). The app's window is kept on top for D12's
+ *      presses, as it is when its user clicks its menu. First a control, a
  *      test-only copy of the menu left on screen 300 ms after the Rectangle
  *      click (a menu whose close is late), the page not slowed: the menu is
  *      seen in all 6 pictures (Rectangle and Whole screen, 3 runs each), so the
@@ -454,7 +457,11 @@ const MENU_PARTS = [{ rate: 1, copy: true }, { rate: 4, copy: false }, { rate: 2
 
 type Box = { x: number; y: number; width: number; height: number }
 type MenuAnswer = 'rectangle' | 'whole'
-type MenuRead = { label: string; rate: number; copy: boolean; answer: MenuAnswer; box: Box; differing: number; nearerOpen: number; meanToOpen: number; meanToClosed: number; seen: boolean }
+/** One D12 press as read. `app`: the box shows the app, its nearer page
+ *  picture closer than half the mean gap between the two (run 45348436201's
+ *  boxes showed a console window instead: nearer mean 42 to 44 a channel,
+ *  gap 18 to 23). `seen`: the menu is in the picture. */
+type MenuRead = { label: string; rate: number; copy: boolean; answer: MenuAnswer; box: Box; differing: number; nearerOpen: number; meanToOpen: number; meanToClosed: number; meanGap: number; app: boolean; seen: boolean }
 
 /** The Snap menu's box on the screen and in the page, in DIP, its edges
  *  rounded outwards to whole DIP. The menu is the parent of its Rectangle
@@ -529,7 +536,8 @@ const pageLoopMs = () => ctx!.page.evaluate(() => {
 /** A saved picture's box (all of it, or `crop` in its pixels) read against the
  *  page's two pictures of it, each brought to the box's size: on the pixels
  *  where those two differ by MENU_PIXEL_GAP or more, how many are nearer the
- *  open one; the mean difference to each, a channel; and the box as a PNG. */
+ *  open one; the mean difference, a channel, to each and between the two; and
+ *  the box as a PNG. */
 const readMenuBox = (file: string, crop: Box | null, open: string, closed: string) => ctx!.app.evaluate(({ nativeImage }, a) => {
   const pic = a.crop ? nativeImage.createFromPath(a.file).crop(a.crop) : nativeImage.createFromPath(a.file)
   const { width, height } = pic.getSize()
@@ -546,6 +554,7 @@ const readMenuBox = (file: string, crop: Box | null, open: string, closed: strin
   let nearerOpen = 0
   let toOpen = 0
   let toClosed = 0
+  let gaps = 0
   for (let i = 0; i + 3 < n; i += 4) {
     let dOpen = 0
     let dClosed = 0
@@ -557,13 +566,17 @@ const readMenuBox = (file: string, crop: Box | null, open: string, closed: strin
     }
     toOpen += dOpen
     toClosed += dClosed
+    gaps += gap
     if (gap >= a.gap) {
       differing++
       if (dOpen < dClosed) nearerOpen++
     }
   }
   const pixels = Math.max(1, Math.floor(n / 4))
-  return { width, height, differing, nearerOpen, meanToOpen: toOpen / pixels / 3, meanToClosed: toClosed / pixels / 3, png: pic.toPNG().toString('base64') }
+  return {
+    width, height, differing, nearerOpen, meanToOpen: toOpen / pixels / 3, meanToClosed: toClosed / pixels / 3,
+    meanGap: gaps / pixels / 3, png: pic.toPNG().toString('base64'),
+  }
 }, { file, crop, open, closed, gap: MENU_PIXEL_GAP })
 
 /** One D12 press: the menu's box and the page's two pictures of it (open with
@@ -648,9 +661,11 @@ async function pressReadingMenu(label: string, answerWith: MenuAnswer, rate: num
   fs.writeFileSync(path.join(dir, `${label}-picture.png`), Buffer.from(r.png, 'base64'))
   fs.writeFileSync(path.join(dir, `${label}-open.png`), Buffer.from(open, 'base64'))
   fs.writeFileSync(path.join(dir, `${label}-closed.png`), Buffer.from(closed, 'base64'))
+  const tenth = (v: number) => Math.round(v * 10) / 10
   return {
     label, rate, copy, answer: answerWith, box: menu.screen, differing: r.differing, nearerOpen: r.nearerOpen,
-    meanToOpen: Math.round(r.meanToOpen * 10) / 10, meanToClosed: Math.round(r.meanToClosed * 10) / 10,
+    meanToOpen: tenth(r.meanToOpen), meanToClosed: tenth(r.meanToClosed), meanGap: tenth(r.meanGap),
+    app: Math.min(r.meanToOpen, r.meanToClosed) * 2 <= r.meanGap,
     seen: r.differing >= MENU_MIN_PIXELS && r.nearerOpen * 2 > r.differing,
   }
 }
@@ -921,6 +936,13 @@ test.describe('Snap on Windows', () => {
 
   test('D12 MENU OUT OF THE PICTURE: the control\'s late menu is seen in every picture, and with the page slowed 4 and 20 times the menu is in none', async () => {
     test.setTimeout(MENU_PARTS.length * RUNS * 2 * PRESS_TEST_MS + 60_000)
+    // The app's window over every other, as it is when its user clicks its
+    // menu. In run 45348436201 it was on top at D2 (overlay-mid-drag.png) but
+    // a console window lay over the menu's box by D12 (every box showed that
+    // window's log lines). The overlay still goes over it (overlay.ts:
+    // 'screen-saver', moveTop).
+    const win = await ctx!.app.browserWindow(ctx!.page)
+    await win.evaluate((w) => { w.setAlwaysOnTop(true); w.moveTop() })
     const cpu = await pageCpuRate()
     const reads: MenuRead[] = []
     const slowing: Array<{ rate: number; atOneMs: number; atRateMs: number }> = []
@@ -942,6 +964,7 @@ test.describe('Snap on Windows', () => {
       }
     } finally {
       await cpu.set(1).catch(() => undefined)
+      await win.evaluate((w) => w.setAlwaysOnTop(false)).catch(() => undefined)
       readings.menuCpuVia = cpu.via
       readings.menuSlowing = slowing
       readings.menuReads = reads
@@ -949,6 +972,7 @@ test.describe('Snap on Windows', () => {
     }
     expect(slowing.filter((s) => s.atRateMs * 2 < s.atOneMs * s.rate), 'the page slowed to at least half of each rate').toEqual([])
     expect(reads.filter((r) => r.differing < MENU_MIN_PIXELS).map((r) => r.label), 'every box read: its two page pictures differ').toEqual([])
+    expect(reads.filter((r) => !r.app).map((r) => r.label), 'every box shows the app, not another window').toEqual([])
     expect(reads.filter((r) => r.copy && !r.seen).map((r) => r.label), 'the control: the late copy of the menu is seen').toEqual([])
     expect(reads.filter((r) => !r.copy && r.seen).map((r) => r.label), 'the menu is in no picture of the slowed page').toEqual([])
   })
