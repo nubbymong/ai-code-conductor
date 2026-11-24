@@ -7583,7 +7583,7 @@ function endLiveRun(sessionId: string, opts: KillPtyOptions = {}): void {
   }
   // P3.10 round 2 (R8): a killed Codex session's gateway token goes now, so the gateway refuses its dying process's late hooks; the record that its
   // hooks are Codex's stays until the process exits (codexGatewayTokens). B1e: not one served while its tab was not shown (no process here):
-  // its take-over writes its own over it, and the gateway keeps the tab's events (launch-bindings.ts keepServedToken settles it).
+  // its take-over writes its own over it, and the gateway keeps the tab's events (launch-bindings.ts keepServedToken; settleServedToken settles it).
   if (codexGatewayTokens.has(sessionId) && !keepServedToken(sessionId)) {
     try { getGateway()?.unregisterSession(sessionId) } catch { /* the gateway may have stopped */ }
   }

@@ -1055,6 +1055,8 @@ describe('B1e: a session kept for a restored tab not shown has its hook events t
   it('gap 1: not shown past the wait, the event its holder queued and each new one (Claude Code asking for approval) reach the app under the tab\'s id before any take-over; shown, the take-over takes only what came after, never one again, and the tab\'s hook record is not ended', async () => {
     const { m2, hc } = await keptAtNextStart({ serveMs: 30 })
     expect(waitsForTakeOver(CLAUDE_TAB)).toBe(true)
+    // Per tab: the other tab's Codex session is ended at this start, so nothing waits for it.
+    expect(waitsForTakeOver(OTHER_TAB)).toBe(false)
     m2.restoredTabs?.([{ id: CLAUDE_TAB, cwd: CWD }])
     // The turn's end its holder queued in the gap (seq 1).
     await until(() => events.length === 1, 'the queued hook event while the tab is not shown')
@@ -1067,6 +1069,7 @@ describe('B1e: a session kept for a restored tab not shown has its hook events t
     await until(() => events.length === 2, 'the approval question while the tab is not shown')
     expect(events[1]).toMatchObject({ id: CLAUDE_TAB, e: { seq: 2, kind: 'Notification' } })
     expect(waitsForTakeOver(CLAUDE_TAB)).toBe(true)
+    expect(waitsForTakeOver(OTHER_TAB)).toBe(false)
     // Shown: the take-over attaches in the keeper's place.
     const keeper = hc.attached
     m2.tabShown?.(CLAUDE_TAB)
