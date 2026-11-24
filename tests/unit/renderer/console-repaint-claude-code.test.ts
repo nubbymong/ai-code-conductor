@@ -10,6 +10,13 @@
 // finds the paint's top lines lower on xterm's screen and moves xterm's rows above
 // them to its scrollback first.
 //
+// aicc_planning#414: the same tab grown and then narrowed again showed its banner's
+// top rows twice (beta.16 B3's VM line, 3 of 3; M1's g-ccmain-max). Replayed here,
+// xterm's re-wrap at the narrower width moved the top of its screen up one row for
+// each row it added (the rule above the cursor and the status row), blank rows at
+// its bottom or not, and the console's paint started at the banner, two rows above
+// xterm's screen. The aligner now brings those rows down before the paint.
+//
 // Here M1's recorded Claude Code tab (console-repaint-cc-streams.ts) is written into
 // xterm's own terminal with no window (@xterm/headless 6.0.0, the version the app
 // ships) with the renderer's terminal options, as console-repaint-after-resize.test.ts
@@ -107,16 +114,62 @@ const paintOf = (name: string) => {
   return expandRules((ev as { write: string }).write)
 }
 
-describe('M1\'s recorded Claude Code tab on the published beta.14 (aicc_planning#404)', () => {
+/** g-ccmain-max through the aligner (aicc_planning#414): xterm's re-wrap moved
+ *  the banner's top two rows up into its scrollback (baseY 4 to 6) and the
+ *  console painted them again on its top rows (the VM's rows 4 and 5 are its
+ *  rows 6 and 7); they are brought down first, so the screen is the console's
+ *  paint from the banner on and the rows above it are the shell's: the VM's
+ *  reading with those two rows once, the screen's top two rows higher. */
+const MAX = RECORDED_CC_RESIZES.find((r) => r.name === 'g-ccmain-max')!
+const MAX_ALIGNED: RecordedRows = {
+  ...MAX.after, baseY: MAX.after.baseY - 2, length: MAX.after.length - 2,
+  rows: MAX.after.rows.filter((_, i) => i !== 4 && i !== 5),
+}
+
+/** Each recording through the aligner: the VM's reading, but for the
+ *  narrowing the aligner now places. */
+const alignedAfter = (rec: RecordedCcResize): RecordedRows => (rec.name === 'g-ccmain-max' ? MAX_ALIGNED : rec.after)
+
+describe('M1\'s recorded Claude Code tab on the published beta.14 (aicc_planning#404, #414)', () => {
   for (const rec of RECORDED_CC_RESIZES) {
     const sizes = [rec.before.size, ...rec.events.flatMap((e) => ('resize' in e ? [e.resize] : []))].join(' to ')
-    it(`${rec.name} (${sizes}): the recording is whole; written as it came and through the aligner, the VM's reading row for row`, async () => {
+    const through = rec.name === 'g-ccmain-max' ? 'through the aligner the banner once' : 'through the aligner the same'
+    it(`${rec.name} (${sizes}): the recording is whole; written as it came, the VM's reading row for row; ${through}`, async () => {
       for (const ev of rec.events) if ('write' in ev) expect(expandRules(ev.write), 'the recorded output, to the character').toHaveLength(ev.chars)
       expect(held(await restore(rec.before)), 'the rows the VM read before the size').toEqual(asRead(rec.before))
       expect(held(await replay(rec.before, rec.events, false))).toEqual(asRead(rec.after))
-      expect(held(await replay(rec.before, rec.events, true))).toEqual(asRead(rec.after))
+      expect(held(await replay(rec.before, rec.events, true))).toEqual(asRead(alignedAfter(rec)))
     }, 20_000)
   }
+
+  it('g-ccmain-max, written as it came: xterm\'s re-wrap moved the banner\'s top two rows up into its scrollback before the paint, and the paint wrote them again (the VM\'s reading)', async () => {
+    const rec = byName('g-ccmain-max')
+    const term = await restore(rec.before)
+    term.resize(...size('103x27'))
+    // The rule above the cursor's row and the status row each take one more
+    // row at 103 columns: the top of the screen moves up two rows, though the
+    // screen's bottom 19 rows held no text.
+    expect([term.buffer.active.baseY, lines(term)[term.buffer.active.baseY].text]).toEqual([6, ' ▝▝   ▝▝   C:\\Users\\User\\p2w\\projects\\web-app'])
+    const today = await replay(rec.before, rec.events, false)
+    expect([count(today, ' ▐▛███▛█   Claude Code v2.1.328'), count(today, '▝▜██████▀  Opus 5.5 with medium effort · API Usage Billing')]).toEqual([2, 2])
+    // The VM's rows 4 and 5 are its rows 6 and 7 again (MAX_ALIGNED leaves them out).
+    expect(rec.after.rows.slice(4, 6)).toEqual(rec.after.rows.slice(6, 8))
+  }, 20_000)
+
+  it('g-ccmain-max through the aligner: each of the banner\'s rows and the shell\'s once, the screen the console\'s paint, the cursor where it put it', async () => {
+    const rec = byName('g-ccmain-max')
+    const term = await replay(rec.before, rec.events, true)
+    for (const text of [...rec.before.rows.slice(0, 2), ' ▐▛███▛█   Claude Code v2.1.328', '▝▜██████▀  Opus 5.5 with medium effort · API Usage Billing', ' ▝▝   ▝▝   C:\\Users\\User\\p2w\\projects\\web-app']) {
+      expect(count(term, text), text).toBe(1)
+    }
+    // The paint written as it came on a terminal whose top row is the banner's
+    // gives the same screen, row for row.
+    const b = term.buffer.active
+    const fresh = makeTerminal('103x27')
+    await write(fresh, paintOf('g-ccmain-max'))
+    expect(held(term).rows.slice(b.baseY)).toEqual(held(fresh).rows)
+    expect([b.cursorX, b.cursorY]).toEqual([2, 6])
+  }, 20_000)
 
   it('on the grows the shell\'s rows with text stay above Claude Code\'s screen, each once (they were above xterm\'s screen before the size)', async () => {
     for (const name of ['g-ccmain-grow', 'g-cctrust-grow']) {
@@ -178,18 +231,20 @@ describe('the published beta.14\'s Claude Code tab grown from 103x27 to 140x28 (
     expect([b.cursorX, b.cursorY]).toEqual(today.cursor)
   }, 20_000)
 
-  it('maximised again (140x28 to 103x27): the shell\'s lines are still above the banner, each once', async () => {
+  it('maximised again (140x28 to 103x27): the shell\'s lines are still above the banner, each once, and the banner shows once (B3\'s VM line on beta.16 read its top rows twice, aicc_planning#414)', async () => {
     const shell = await shellLines()
     const term = await replay(PUBLISHED_CONTROL.before, [...growEvents, ...maxEvents], true)
     const all = lines(term)
     const bannerAt = all.findIndex((l) => l.text === BANNER)
     expect(all.slice(0, bannerAt).map((l) => l.text)).toEqual(shell)
     for (const text of shell.filter((t) => t !== '')) expect(count(term, text), text).toBe(1)
-    // Not handled (consoleRepaint.ts): xterm re-wraps Claude Code's rules and
-    // status row at the narrower width and moves the banner's top two rows to
-    // its scrollback, and the console paints them again on its top rows, as
-    // M1's g-ccmain-max read on the published beta.14.
-    expect(count(term, BANNER)).toBe(2)
+    // xterm re-wraps Claude Code's rules and status row at the narrower width
+    // and moves the banner's top two rows to its scrollback; they are brought
+    // down before the console paints them again on its top rows.
+    expect(count(term, BANNER)).toBe(1)
+    expect(count(term, '▝▜██████▀  Opus 5.5 with medium effort · API Usage Billing')).toBe(1)
+    // The banner is xterm's top row, where the console's paint put it.
+    expect(all[bannerAt].row).toBe(term.buffer.active.baseY)
   }, 20_000)
 })
 
@@ -236,6 +291,125 @@ describe('a paint whose top lines xterm holds lower on its screen', () => {
     const term = await programTerminal({ head: ['$ shell 1', 'HEADER A', 'HEADER B', 'middle'] })
     const paint = programPaint(['HEADER A', 'HEADER B'])
     expect(alignConsoleRepaint(paint, term)).toBe(`\x1b[?25l\x1b[10;1H\n${paint}`)
+  })
+})
+
+const RULE_30 = '-'.repeat(30)
+const STATUS_30 = 'mode on' + ' '.repeat(10) + 'not logged in'
+
+/** A terminal holding `shell` lines of a shell in its scrollback, then a
+ *  program's screen from its top row at 30 columns: two header lines, a blank
+ *  row, a full-width rule, its input row with the cursor on it, a full-width
+ *  rule, a full-width status row and blank rows (`bottom`: a line on its last
+ *  row; `cursorAtBottom`: the cursor on its last row instead). Then narrowed
+ *  to 20 columns, as xterm narrows it: the rule above the cursor and the
+ *  status row take one more row each, and the top of its screen moves up two
+ *  rows (the program's header lines); three with the cursor on its last row. */
+async function narrowedTerminal(opts: { shell?: number; bottom?: string; cursorAtBottom?: boolean } = {}): Promise<Terminal> {
+  const term = new Terminal({ cols: 30, rows: 10, scrollback: 100, allowProposedApi: true })
+  const shell = Array.from({ length: opts.shell ?? 12 }, (_, i) => `$ shell ${i + 1}`)
+  const screen = ['HEADER A', 'HEADER B', '', RULE_30, '> input', RULE_30, STATUS_30, '', '', opts.bottom ?? '']
+  await write(term, [...shell, ...screen].join('\r\n') + (opts.cursorAtBottom ? '\x1b[10;1H' : '\x1b[5;8H'))
+  term.resize(20, 10)
+  return term
+}
+
+/** The program's screen drawn again at 20 columns, as the console paints it. */
+function narrowPaint(top: string[] = ['HEADER A', 'HEADER B']): string {
+  const body = [...top, '', '-'.repeat(20), '> input', '-'.repeat(20), 'mode on  logged out']
+  while (body.length < 10) body.push('')
+  return '\x1b[?25l\x1b[H' + body.map((l) => `${l}\x1b[K`).join('\r\n') + `\x1b[${top.length + 3};8H\x1b[?25h`
+}
+
+/** What the paint shows on a terminal of its own: the console's screen. */
+async function paintedAlone(paint: string): Promise<string[]> {
+  const t = new Terminal({ cols: 20, rows: 10, scrollback: 100, allowProposedApi: true })
+  await write(t, paint)
+  return screenOf(t)
+}
+
+/** Every row of the terminal and where its top and cursor are. */
+const stateOf = (term: Terminal) => ({ ...held(term), rows: lines(term).map((l) => l.text) })
+
+describe('a narrowing\'s paint whose top lines xterm holds just above its screen (aicc_planning#414)', () => {
+  for (const shell of [12, 1]) {
+    it(`${shell === 12 ? 'more scrollback than rows below the cursor' : 'less scrollback than rows below the cursor'} (${shell} shell line(s)): the header lines are brought down, each line once, the screen the console's`, async () => {
+      const term = await narrowedTerminal({ shell })
+      expect(term.buffer.active.baseY, 'xterm moved the header lines up into its scrollback').toBe(shell + 2)
+      const paint = narrowPaint()
+      const out = alignConsoleRepaint(paint, term)
+      expect(out).not.toBeNull()
+      await write(term, out!)
+      const b = term.buffer.active
+      expect(b.baseY).toBe(shell)
+      for (let i = 1; i <= shell; i++) expect(count(term, `$ shell ${i}`), `$ shell ${i}`).toBe(1)
+      expect([count(term, 'HEADER A'), count(term, 'HEADER B')]).toEqual([1, 1])
+      expect(screenOf(term)).toEqual(await paintedAlone(paint))
+      expect([b.cursorX, b.cursorY, term.cols, term.rows]).toEqual([7, 4, 20, 10])
+    })
+  }
+
+  it('written as it came (beta.16): the header lines show twice', async () => {
+    const term = await narrowedTerminal()
+    await write(term, narrowPaint())
+    expect([count(term, 'HEADER A'), count(term, 'HEADER B')]).toEqual([2, 2])
+  })
+
+  it('a line on the last row of xterm\'s screen: the paint writes that row again on either path, so bringing rows down loses nothing more', async () => {
+    const aligned = await narrowedTerminal({ bottom: 'last row' })
+    await write(aligned, alignConsoleRepaint(narrowPaint(), aligned)!)
+    const asItCame = await narrowedTerminal({ bottom: 'last row' })
+    await write(asItCame, narrowPaint())
+    expect([count(aligned, 'HEADER A'), count(aligned, 'last row')]).toEqual([1, 0])
+    expect([count(asItCame, 'HEADER A'), count(asItCame, 'last row')]).toEqual([2, 0])
+    for (let i = 1; i <= 12; i++) expect(count(aligned, `$ shell ${i}`), `$ shell ${i}`).toBe(1)
+  })
+
+  it('through the aligner after a size: the same, and the output after the paint follows it', async () => {
+    const term = await narrowedTerminal()
+    const aligner = createConsoleRepaintAligner(term, { now: () => 0 })
+    aligner.noteResize()
+    await new Promise<void>((done) => aligner.write(`${narrowPaint()}\x1b[8;1Hafter`, done))
+    expect([count(term, 'HEADER A'), count(term, 'HEADER B'), term.buffer.active.baseY]).toEqual([1, 1, 12])
+    expect(screenOf(term)[4]).toBe('> input')
+    expect(screenOf(term)[7]).toBe('after')
+  })
+})
+
+describe('a paint that is not a narrowing\'s of this screen is written as it came, the terminal left as it was', () => {
+  const unchanged = async (paint: string, term: Terminal) => {
+    const before = stateOf(term)
+    expect(alignConsoleRepaint(paint, term)).toBeNull()
+    expect(stateOf(term)).toEqual(before)
+  }
+
+  it('top lines that xterm does not hold above its screen', async () => {
+    await unchanged(narrowPaint(['OTHER A', 'OTHER B']), await narrowedTerminal())
+  })
+
+  it('only one line with text in common above the screen', async () => {
+    await unchanged(narrowPaint(['HEADER A', 'OTHER B']), await narrowedTerminal())
+  })
+
+  it('more rows above xterm\'s screen than its screen has below its cursor (the cursor on its last row): they do not come down', async () => {
+    const term = await narrowedTerminal({ cursorAtBottom: true })
+    expect([term.buffer.active.baseY, term.buffer.active.cursorY]).toEqual([15, 9])
+    await unchanged(narrowPaint(), term)
+  })
+
+  it('a paint already in place, its top lines also just above xterm\'s screen (a block shown twice): no rows brought down', async () => {
+    const term = new Terminal({ cols: 20, rows: 10, scrollback: 100, allowProposedApi: true })
+    const shell = Array.from({ length: 12 }, (_, i) => `$ shell ${i + 1}`)
+    const screen = ['HEADER A', 'HEADER B', '', '-'.repeat(20), '> input', '-'.repeat(20), 'old status', '', '', '']
+    await write(term, [...shell, 'HEADER A', 'HEADER B', ...screen].join('\r\n') + '\x1b[5;8H')
+    expect([term.buffer.active.baseY, screenOf(term)[0]]).toEqual([14, 'HEADER A'])
+    await unchanged(narrowPaint(), term)
+  })
+
+  it('a paint of fewer rows than the screen has', async () => {
+    const short = narrowPaint().replace(/\r\n\x1b\[K(?=\x1b\[5;8H)/, '')
+    expect(short.split('\r\n')).toHaveLength(9)
+    await unchanged(short, await narrowedTerminal())
   })
 })
 
