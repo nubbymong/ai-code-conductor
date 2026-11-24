@@ -42,7 +42,7 @@
 // required: a pane is never fed unclamped output.
 import { Terminal } from '@xterm/headless'
 import { readXtermScreen, readCodexScreen, codexComposerDraft, type ScreenLine } from '../../../shared/codex-screen'
-import { codexImagePlaceholderShown, codexDraftIsImagePlaceholder, codexWarningCountShown, codexScreenPastPlaceholder } from '../../../shared/codex-image-screen'
+import { codexImagePlaceholderShown, codexDraftIsImagePlaceholder, codexScreenPastPlaceholder } from '../../../shared/codex-image-screen'
 import type { SubmitTextResult } from '../../../shared/types'
 import type { HeldScreenRows, RunScreenImageNotPasted, RunScreenImageResult } from '../types'
 import {
@@ -403,14 +403,13 @@ interface ImageShot { lines: ScreenLine[] | null; title: string | null }
  *    before anything is typed.
  * 2. Waits within `readyWaitMs` for Codex's ready, EMPTY composer, ready on
  *    two reads SUBMIT_READY_SECOND_READ_MS apart, as the primitive's own wait
- *    reads it. Codex's warning count showing (aicc_planning#371): nothing
- *    typed, at once (`warning-count`).
+ *    reads it.
  * 3. The path as a bracketed paste, in one write.
  * 4. Polls for Codex's image placeholder alone in the ready composer
  *    (codexImagePlaceholderShown) within IMAGE_PLACEHOLDER_WAIT_MS. A prompt
  *    up meanwhile: nothing more typed or taken back (its keys are the
- *    prompt's). The placeholder not shown in time (`no-placeholder`), or the
- *    warning count shown: the paste is taken back (below).
+ *    prompt's). The placeholder not shown in time (`no-placeholder`): the
+ *    paste is taken back (below).
  * 5. The sentence, after a space, through the submit primitive
  *    (submitToCodexComposer, the rule submitCodexText drives), reading the
  *    composer with the placeholder taken as its start
@@ -418,9 +417,9 @@ interface ImageShot { lines: ScreenLine[] | null; title: string | null }
  *    within IMAGE_SENTENCE_READY_WAIT_MS, types the sentence in one write,
  *    presses Enter as its own write only once the screen shows the
  *    placeholder and the whole sentence, and takes its text back with Ctrl+U
- *    (the placeholder with it) when it is not confirmed. The placeholder gone
- *    or a warning count shown: no reading, so no Enter. Nothing of the
- *    sentence typed: the paste is taken back (below).
+ *    (the placeholder with it) when it is not confirmed. The placeholder
+ *    gone: no reading, so no Enter. Nothing of the sentence typed: the paste
+ *    is taken back (below).
  * 6. Taking the paste back, as the primitive takes text back: after the
  *    paste's ingestion window, on a screen it can read with no prompt up, and
  *    only while the composer holds nothing but the paste (the placeholder
@@ -428,6 +427,14 @@ interface ImageShot { lines: ScreenLine[] | null; title: string | null }
  *    empty within SUBMIT_CLEAR_VERIFY_MS. Anything else, or the clear not
  *    seen: nothing (more) taken back, and the answer says what it typed may
  *    still be at the prompt (`left`).
+ * Codex's warning count (2.1.3-beta.17 C9, aicc_planning#420) is read as the
+ * composer readers read it since C7 (aicc_planning#371,
+ * src/shared/codex-screen.ts): at the right of the hint row of a ready, empty
+ * composer, and alone under the footer once the composer holds the
+ * placeholder or the sentence. So the image goes in while it shows, and a
+ * screen with it that is not at its prompt (a reply running, a prompt up, the
+ * count alone under an empty composer, which is not recorded) is waited on
+ * and refused as without it.
  * Never sends Ctrl+C. A run that ends meanwhile: `session-gone`, nothing more.
  */
 export async function pasteImageIntoCodexComposer(imagePath: string, sentence: string, deps: ComposerSubmitDeps, opts: { readyWaitMs: number }): Promise<RunScreenImageResult> {
@@ -454,26 +461,16 @@ export async function pasteImageIntoCodexComposer(imagePath: string, sentence: s
     return shown.screen === 'ready' && shown.text === '' ? 'ready' : 'waiting'
   }
 
-  // 2. The ready, empty composer, on two reads; never with the warning count.
+  // 2. The ready, empty composer, on two reads.
   const waitUntil = deps.now() + Math.max(0, opts.readyWaitMs)
   let last: 'ready' | 'blocked' | 'waiting' = 'waiting'
   for (;;) {
     if (!deps.live()) return notPasted('session-gone', false)
-    let shot = await read()
-    if (codexWarningCountShown(shot.lines)) {
-      log('Codex shows its warning count; nothing typed')
-      return notPasted('warning-count', false)
-    }
-    last = state(shot)
+    last = state(await read())
     if (last === 'ready') {
       await deps.sleep(SUBMIT_READY_SECOND_READ_MS)
       if (!deps.live()) return notPasted('session-gone', false)
-      shot = await read()
-      if (codexWarningCountShown(shot.lines)) {
-        log('Codex shows its warning count; nothing typed')
-        return notPasted('warning-count', false)
-      }
-      last = state(shot)
+      last = state(await read())
       if (last === 'ready') break
     }
     if (deps.now() >= waitUntil) return notPasted(last === 'blocked' ? 'prompt-on-screen' : 'busy-timeout', false)
@@ -527,7 +524,6 @@ export async function pasteImageIntoCodexComposer(imagePath: string, sentence: s
       log('a prompt came up after the paste; nothing more typed or taken back')
       return notPasted('prompt-on-screen', true)
     }
-    if (codexWarningCountShown(shot.lines)) return takeBack('warning-count')
     placeholder = codexImagePlaceholderShown(shot.lines, models, shot.title)
     if (placeholder) break
     if (deps.now() >= placeholderBy) return takeBack('no-placeholder')

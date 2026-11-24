@@ -12,7 +12,7 @@
  * after it follows it on the same row ("[Image #1]  <sentence>"); the turn
  * then carries the picture and the placeholder, not the path.
  */
-import { readCodexScreen, codexComposerText, type ScreenLine } from './codex-screen'
+import { readCodexScreen, codexComposerText, codexScreenLessCountAlone, type ScreenLine } from './codex-screen'
 
 /** Codex's placeholder for an attached image. */
 const IMAGE_PLACEHOLDER_RE = /^\[Image #(\d{1,3})\]$/
@@ -21,11 +21,6 @@ const IMAGE_PLACEHOLDER_RE = /^\[Image #(\d{1,3})\]$/
  *  ./codex-screen.ts reads the composer row. */
 const COMPOSER_ROW_RE = new RegExp(`^[${String.fromCharCode(0x203a)}${String.fromCharCode(0xbb)}](?: |$)`)
 const GLYPH_PREFIX_RE = new RegExp(`^[${String.fromCharCode(0x203a)}${String.fromCharCode(0xbb)}] ?`)
-
-/** Codex's warning count, on the row under its footer (aicc_planning#371:
- *  "<warning sign> 1 warning . f2 to view", right-aligned; P19's recordings,
- *  helper/fixtures/screens). */
-const WARNING_COUNT_RE = new RegExp(`${String.fromCharCode(0x26a0)}\\uFE0F? ?\\d{1,4} warnings?\\b`)
 
 /** The index of the composer row: the last row with Codex's prompt glyph. */
 function composerRowIndex(lines: readonly ScreenLine[]): number {
@@ -48,16 +43,6 @@ export function codexDraftIsImagePlaceholder(draft: string | null | undefined): 
   return typeof draft === 'string' && /^\[Image#\d{1,3}\]$/.test(draft)
 }
 
-/** Whether Codex shows its warning count under the composer (anywhere on the
- *  screen when no composer is drawn). The image rule types nothing more while
- *  it shows, whatever the composer readers make of that screen
- *  (aicc_planning#371). */
-export function codexWarningCountShown(lines: ScreenLine[] | null | undefined): boolean {
-  if (!lines || lines.length === 0) return false
-  const i = composerRowIndex(lines)
-  return lines.slice(i + 1).some((l) => WARNING_COUNT_RE.test(l.text))
-}
-
 /**
  * The screen as the image rule reads it while it types the sentence after
  * the image's placeholder: Codex's composer with `placeholder` taken as its
@@ -68,24 +53,29 @@ export function codexWarningCountShown(lines: ScreenLine[] | null | undefined): 
  * - A prompt up: the screen as it is (the primitive reads it as a prompt and
  *   stops), and so with no composer drawn.
  * - The composer row starting with `placeholder`: that row without it (its
- *   text, and its typed and inverse readings, cut at the same cells).
+ *   text, and its typed and inverse readings, cut at the same cells). Since
+ *   2.1.3-beta.17 C9 (aicc_planning#420) Codex's warning count alone under
+ *   the footer is left out as well, where ./codex-screen.ts's readers take it
+ *   under the composer Codex shows (codexScreenLessCountAlone): with the
+ *   placeholder cut that composer reads empty, and the count alone under an
+ *   empty composer is not recorded, so the readers would refuse it. The
+ *   count at the right of a hint row is read as the readers read it.
  * - `typed` (the sentence has been written) and the composer empty: the
  *   screen as it is (the take-back's clear reads ready and empty).
  * - Anything else (the placeholder gone or moved, the composer holding
- *   something before it, the warning count showing): no reading (null), so
- *   the primitive types nothing more and presses no Enter.
+ *   something before it): no reading (null), so the primitive types nothing
+ *   more and presses no Enter.
  */
 export function codexScreenPastPlaceholder(lines: ScreenLine[] | null | undefined, placeholder: string, typed: boolean, models?: readonly string[] | null): ScreenLine[] | null {
   if (!lines) return null
   if (readCodexScreen(lines, models).screen === 'blocked') return lines
   const i = composerRowIndex(lines)
   if (i < 0) return lines
-  if (codexWarningCountShown(lines)) return null
   const row = lines[i]
   const prefix = GLYPH_PREFIX_RE.exec(row.text)?.[0] ?? ''
   if (row.text.slice(prefix.length).startsWith(placeholder)) {
     const cut = (s: string): string => (s.length > prefix.length ? s.slice(0, prefix.length) + s.slice(prefix.length + placeholder.length) : s)
-    const out = lines.slice()
+    const out = codexScreenLessCountAlone(lines).slice()
     out[i] = { ...row, text: cut(row.text), typed: cut(row.typed), ...(typeof row.inverse === 'string' ? { inverse: cut(row.inverse) } : {}) }
     return out
   }

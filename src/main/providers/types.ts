@@ -436,10 +436,9 @@ export interface SessionRunScreen {
 /** Why a run screen's image rule did not paste and send an image: the
  *  session gone; a path or sentence it refuses before typing anything; the
  *  ready, empty composer not seen in the wait (`busy-timeout`), or a prompt
- *  up; the CLI's warning count showing; the CLI's image placeholder not shown
- *  after the paste; the sentence not confirmed on screen (`not-drawn`,
- *  `too-tall`). */
-export type RunScreenImageNotPasted = 'session-gone' | 'refused-text' | 'busy-timeout' | 'prompt-on-screen' | 'warning-count' | 'no-placeholder' | 'not-drawn' | 'too-tall'
+ *  up; the CLI's image placeholder not shown after the paste; the sentence
+ *  not confirmed on screen (`not-drawn`, `too-tall`). */
+export type RunScreenImageNotPasted = 'session-gone' | 'refused-text' | 'busy-timeout' | 'prompt-on-screen' | 'no-placeholder' | 'not-drawn' | 'too-tall'
 
 /** 2.1.3-beta.17 C6: what a run screen's image rule did. `left`: what it
  *  typed may still be at the prompt (it could not take it back for certain);

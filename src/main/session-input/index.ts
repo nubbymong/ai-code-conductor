@@ -456,14 +456,15 @@ async function typeImage(sessionId: string, imagePath: string, sentence: string,
  * session, main's pane otherwise), then has the submit primitive type the
  * sentence, confirm it and press Enter (providers/codex/session-screen.ts,
  * pasteImageIntoCodexComposer, says how). What it could not paste (not ready
- * in the wait, no placeholder, Codex's warning count showing, the sentence
- * not confirmed) it takes back as the composer rule takes text back, or, when
- * it cannot do that for certain, leaves and types nothing more; either way it
- * answers `not-taken`, with one log line saying why. Taken back: the renderer
- * then types today's line by its own Codex rule, which types only into a
- * ready, empty composer and otherwise says why it typed nothing. Left: the
- * answer carries `left`, and the renderer types nothing and says the image is
- * at the prompt and was not sent.
+ * in the wait, no placeholder, the sentence not confirmed; since
+ * 2.1.3-beta.17 C9 Codex's warning count is read as its composer readers
+ * read it, not refused) it takes back as the composer rule takes text back,
+ * or, when it cannot do that for certain, leaves and types nothing more;
+ * either way it answers `not-taken`, with one log line saying why. Taken
+ * back: the renderer then types today's line by its own Codex rule, which
+ * types only into a ready, empty composer and otherwise says why it typed
+ * nothing. Left: the answer carries `left`, and the renderer types nothing
+ * and says the image is at the prompt and was not sent.
  *
  * Not this door's (`not-taken`, nothing typed; the renderer keeps its own way
  * for it): an SSH Persistent session (tmux). The renderer asks only for a
