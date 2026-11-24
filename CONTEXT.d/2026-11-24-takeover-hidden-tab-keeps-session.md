@@ -31,9 +31,14 @@ minutes now stop while the session's tab is restored and not yet shown.
   the replay for a view mounted later: not small, and not safe in this beta.
 - **Until the tab is shown** (as in B1's gap): Claude Code's hook events queue in its holder
   (at most 256 events and 2 MiB, helper/src/holder.rs HookQueue) and arrive at the take-over;
-  a Conductor tool call its CLI makes waits for the take-over; a Codex session's hook events go
-  to the Hooks gateway with the last run's credential and are refused, until its take-over
-  writes its hook file again.
+  a Conductor tool call its CLI makes is held by its relay for 30 s and then answered 'AI Code
+  Conductor is updating, try again shortly' (helper/src/relay.rs HOLD and UPDATING), so only a
+  call made in the 30 s before the take-over completes; a Codex session's hook events go to the
+  Hooks gateway with the last run's credential and are refused, until its take-over writes its
+  hook file again. A kept session whose CLI ends by itself before its tab is shown stays
+  recorded until the tab is shown; its take-over then fails as B1 defines, and the tab says to
+  restart it. The Machines page reads a session kept for its tab as "Waiting for the app"
+  (manager.ts toHeld), not "Being ended"; its End still ends it.
 - **The warning** `[vision-mcp] Rejected unauthenticated request on port 19333 (method=POST
   ua="unknown")` (vm:B1, out/086-log-bad.txt, 12:24:53.852Z, 2.0 s after build 2's process
   started and 19 s before the take-over). Sender: the kept Claude Code CLI's status line bridge
@@ -47,6 +52,8 @@ minutes now stop while the session's tab is restored and not yet shown.
   holdKeptLaunchFiles, through kept-launches.ts holdKeptLaunch), so the bridge writes its
   status file with no request; the file stays, so the take-over still writes this run's
   address into it. With hidden tabs now kept for longer, every status in that time would
-  otherwise be a refused request.
+  otherwise be a refused request. One status already running at the start can still post the
+  last run's address (it reads the file before its usage fetch, up to 5 s), so one refused
+  request, and the one warning, remains possible; it then writes its status file as before.
 - Not checked here: the VM line (update mid-turn with the tab hidden for more than 5 minutes,
   then shown), which the orchestrator runs on the frozen head.

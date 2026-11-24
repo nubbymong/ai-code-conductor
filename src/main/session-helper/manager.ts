@@ -2273,9 +2273,12 @@ export class SessionHelperManager implements MachinesSource {
       // A tab of this run shows it only through the terminal that holder was
       // started for. A holder a crash or a quit left is being ended, never
       // shown again, even while its tab waits for that end under the same id
-      // to start a new one: no tab shows it.
+      // to start a new one: no tab shows it. One an update kept running for
+      // its tab to take over (aicc_planning#423) waits for that tab, which may
+      // be restored and not yet shown: it reads as a tab's, not as being ended.
       const w = this.live.get(r.session)
       const own = w && w.heldRecord?.pid === r.pid ? w : undefined
+      const forTab = this.keptForTabs.get(r.session)?.record.pid === r.pid
       // Its kind names the provider; End only, never Re-attach (the page). A
       // run of the app's own goes by what it is (an Insights report), and is
       // marked as one, so the page asks about the report, not a tab.
@@ -2286,7 +2289,7 @@ export class SessionHelperManager implements MachinesSource {
         label: run ?? (this.savedTabs.get(r.label) || 'Session'),
         startedAt: r.started,
         attached: !!own && own.isAttached,
-        tabOpen: !!own,
+        tabOpen: !!own || forTab,
         ...(run !== null ? { run: true } : {}),
       }
     }

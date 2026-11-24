@@ -571,8 +571,10 @@ describe('a Codex session an update kept running on its resume list (aicc_planni
  * display: none, and TerminalView waits for a size before it starts), so its
  * take-over is asked for only then. The renderer says which tabs Resume
  * restored (restoredTabs), and which tab is shown and starts (tabShown); a
- * close says which tab went (tabClosed). The default 5-minute limit runs
- * under fake timers. The three are called optionally (`?.`): on the code
+ * close says which tab went (tabClosed), each for that tab's session alone;
+ * the Machines page reads the kept session as a tab's, not as being ended.
+ * The default 5-minute limit runs under fake timers. The three are called
+ * optionally (`?.`): on the code
  * before this fix they do not exist, and each case fails on what it checks.
  */
 describe('a restored tab not on screen keeps the session an update kept for it until it is shown (aicc_planning#423)', () => {
@@ -657,9 +659,11 @@ describe('a restored tab not on screen keeps the session an update kept for it u
     await withFakeTimers(async () => {
       const { m2, hc } = await keptAtNextStart()
       m2.restoredTabs?.([OTHER_TAB])
-      await vi.advanceTimersByTimeAsync(FIVE_MIN - 1_000)
+      // Its limit began at the start, before keptAtNextStart's waits, and fake
+      // time also moves with real time: 4 minutes leaves those waits room.
+      await vi.advanceTimersByTimeAsync(FIVE_MIN - 60_000)
       expect(hc.ended).toBe(false)
-      await vi.advanceTimersByTimeAsync(2_000)
+      await vi.advanceTimersByTimeAsync(61_000)
       expect(logs).toContain(`[session-helper] ${claudeSid}: the session kept for tab ${CLAUDE_TAB} to take over is ended, because its tab did not take it over within ${FIVE_MIN} ms`)
       await until(() => hc.ended, 'the kept session to be ended')
       expect(keptOnDisk()).toEqual([])
@@ -681,6 +685,37 @@ describe('a restored tab not on screen keeps the session an update kept for it u
       await until(() => hc.ended, 'the kept session to be ended')
       expect(keptOnDisk()).toEqual([])
     })
+  })
+
+  it('two tabs restored, only the other shown, and a tab with no kept session closed: the 5 minutes run for the shown tab\'s session alone, and a close ends only the session kept for that tab', async () => {
+    await withFakeTimers(async () => {
+      // Both providers kept; Resume restores both tabs and shows the other
+      // one (the tab on screen), and a tab with nothing kept for it is closed.
+      const { m2, hc, ho } = await keptAtNextStart({ takeOver: 'both' })
+      m2.restoredTabs?.([CLAUDE_TAB, OTHER_TAB])
+      m2.tabShown?.(OTHER_TAB)
+      m2.tabClosed?.('abcdef0123456789abcdee13')
+      await vi.advanceTimersByTimeAsync(FIVE_MIN + 60_000)
+      expect(endedForTime(), 'the hidden tab\'s session is not ended by the time limit').toBe(false)
+      expect(hc.ended).toBe(false)
+      expect(keptOnDisk()).toEqual([`${claudeSid}.json`])
+      expect(logs).toContain(`[session-helper] ${otherSid}: the session kept for tab ${OTHER_TAB} to take over is ended, because its tab did not take it over within ${FIVE_MIN} ms of being shown`)
+      await until(() => ho.ended, 'the shown tab\'s session to be ended')
+      // Its tab closed afterwards: nothing is kept for it, and the hidden
+      // tab's session stays kept for its own take-over.
+      m2.tabClosed?.(OTHER_TAB)
+      expect(hc.ended).toBe(false)
+      expect(keptOnDisk()).toEqual([`${claudeSid}.json`])
+      expect(takeKeptSession(CLAUDE_TAB, 'claude', SIZE)).not.toBeNull()
+      await until(() => !!hc.attached && hc.attached.ackedCaps.includes('hooks') && hc.attached.ackedCaps.includes('mcp'), 'the hidden tab to take its session over')
+      expect(hc.ended).toBe(false)
+    })
+  })
+
+  it('on the Machines page, a session kept for its restored tab reads as a tab\'s (waiting for the app), not as one being ended', async () => {
+    const { m2 } = await keptAtNextStart()
+    m2.restoredTabs?.([CLAUDE_TAB])
+    expect((await m2.status()).sessions).toContainEqual(expect.objectContaining({ id: claudeSid, kind: 'claude', attached: false, tabOpen: true }))
   })
 
   it('its tab shown before main heard of the restore (the tab on screen at Resume): the restore does not stop its limit', async () => {
