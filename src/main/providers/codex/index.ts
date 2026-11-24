@@ -7,7 +7,7 @@ import type { AllowanceReading } from '../../../shared/usage-types'
 import type { ProviderCapabilities, AuthRealm, RealmUse } from '../../../shared/providers'
 import type { ProviderPackage, ProviderPricingOperations, RealmRef } from '../core'
 import { CODEX_ENABLEMENT } from './enablement'
-import { resolveCodexBinary, resolveCodexBinaryAsync, buildCodexSpawn, codexHookDataDir, warmNodeExeOnPosix } from './spawn'
+import { resolveCodexBinary, resolveCodexBinaryAsync, buildCodexSpawn, codexHookDataDir, sweepStaleCodexPickFolders, warmNodeExeOnPosix } from './spawn'
 import { openCodexScreen, feedCodexScreen, resizeCodexScreen, closeCodexScreen, hasCodexScreen, submitCodexText, submitCodexImage } from './session-screen'
 import { detectCodexUi } from './ui-detection'
 import { watchAndClaimRollout } from './telemetry'
@@ -48,7 +48,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { sweepStaleFolders } from '../../stale-folder-sweep'
 import { secureOwnerOnlyFolders, readOwnerOnlyFoldersWindows } from '../../owner-only-folders'
-import { logWarn } from '../../debug-logger'
+import { logInfo, logWarn } from '../../debug-logger'
 
 // WP2 Codex adapter: the CLI contract, install recipes, the allowlisted
 // subprocess environment, realm paths, the CLI runner and discovery.
@@ -381,6 +381,17 @@ export class CodexProvider implements SessionProvider {
    *  hook root only (hooks.ts removeKeptCodexHookFolder). */
   removeSessionHookFolder(dir: string): void {
     try { removeKeptCodexHookFolder(dir, codexHookDataDir()) } catch { /* best-effort; the sweep remains */ }
+  }
+
+  /** 2.1.3-beta.17 (aicc_planning#407): at start, the resume list's pick
+   *  folders a run left in the temp folder when it ended without its
+   *  sessions' own end, a day old or more (spawn.ts
+   *  sweepStaleCodexPickFolders); one log line when any went. */
+  sweepLeftoverPickFolders(): void {
+    try {
+      const removed = sweepStaleCodexPickFolders()
+      if (removed > 0) logInfo(`[codex] start: removed ${removed} resume-list pick folder(s) left in the temp folder by a run that ended without closing its sessions`)
+    } catch { /* best-effort; the next start tries again */ }
   }
 }
 

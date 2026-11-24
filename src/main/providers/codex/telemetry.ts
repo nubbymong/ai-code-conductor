@@ -16,7 +16,7 @@
  *   watchAndClaimRollout    -- 250ms-poll claim + 500ms-poll tail pipeline
  */
 
-import { readdirSync, lstatSync, realpathSync, unlinkSync, rmdirSync, openSync, fstatSync, readSync, closeSync, constants as fsConstants, promises as fsp } from 'fs'
+import { readdirSync, lstatSync, realpathSync, unlinkSync, rmdirSync, utimesSync, openSync, fstatSync, readSync, closeSync, constants as fsConstants, promises as fsp } from 'fs'
 import type { FileHandle } from 'fs/promises'
 import { join, relative, isAbsolute, sep, dirname, basename } from 'path'
 import { computeCodexCostUsd } from './pricing'
@@ -708,6 +708,12 @@ const LOOKUP_INTERVAL_MAX_MS = 30_000
 const LOOKUP_MAX_MISSES = 10
 /** The most of a pick file that is read. */
 const PICK_FILE_MAX_BYTES = 1_024
+/** How often a watch sets its pick folder's time to now, while the session
+ *  runs (aicc_planning#407): the start-up sweep of left-behind pick folders
+ *  (spawn.ts sweepStaleCodexPickFolders) takes only one a day old, so it
+ *  never takes a running session's, in this copy of the app or another one
+ *  sharing the temp folder (a dev build beside the installed app). */
+export const PICK_FOLDER_TOUCH_MS = 3_600_000
 /** How far before a New conversation decision a new rollout may say it began
  *  (the decision is dated by the pick file, or by its reading if earlier). */
 const FRESH_DECISION_TOLERANCE_MS = 1_000
@@ -1541,6 +1547,19 @@ export function watchAndClaimRollout(
   }
   if (!waitsForUser) armClaimDeadline()
 
+  // The pick folder is in use for as long as this watch runs: its time is
+  // set to now every PICK_FOLDER_TOUCH_MS, while it is still the folder made
+  // for the launch, so no start-up sweep takes it (aicc_planning#407).
+  let touchHandle: ReturnType<typeof setInterval> | null = null
+  if (pickFile && pickFolder) {
+    touchHandle = setInterval(() => {
+      if (stopped || !pickFolderIntact()) return
+      const at = new Date()
+      try { utimesSync(dirname(pickFile), at, at) } catch { /* gone: nothing to keep */ }
+    }, PICK_FOLDER_TOUCH_MS)
+    touchHandle.unref?.()
+  }
+
   return {
     /** P3.10: the session's own hook (authenticated by its gateway token)
      *  reported the rollout its Codex is on. That is exact, as Claude's
@@ -1610,6 +1629,10 @@ export function watchAndClaimRollout(
       if (tailIntervalHandle) {
         clearInterval(tailIntervalHandle)
         tailIntervalHandle = null
+      }
+      if (touchHandle) {
+        clearInterval(touchHandle)
+        touchHandle = null
       }
       if (claimedPath) {
         claimed.delete(claimedPath)

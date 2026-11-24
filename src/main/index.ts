@@ -1112,6 +1112,9 @@ if (!gotTheLock) {
     // (removed on normal dispose; a crash leaves them), and a settings-<sid>.json a
     // local launch of this install left (aicc_planning#385). Independent of hooks.
     cleanupStaleMcpConfigs(sessionHelperKeptIds())
+    // aicc_planning#407: the pick folders a killed run's resume lists left in
+    // the temp folder, a day old or more (never a running session's).
+    try { getProvider('codex').sweepLeftoverPickFolders?.() } catch { /* best effort */ }
     // #330: end the console hosts the run before left when it was ended from
     // outside, and record this run for the next start (Windows, background).
     endLeftoverConsoleHostsAtStart()

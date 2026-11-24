@@ -15,6 +15,7 @@ vi.mock('electron', () => ({
   BrowserWindow: class {},
   desktopCapturer: { getSources: async () => [] },
   dialog: { showMessageBox: async () => ({ response: 1 }) },
+  ipcMain: { removeAllListeners: () => {} },
   nativeImage: { createFromBuffer: () => ({ isEmpty: () => true }), createFromBitmap: () => ({ isEmpty: () => true }) },
   shell: { openExternal: async () => {} },
   systemPreferences: { getMediaAccessStatus: () => 'granted' },
