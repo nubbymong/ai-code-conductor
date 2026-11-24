@@ -203,6 +203,8 @@ export interface KeptTabSignals {
   restored(tabs: ReadonlyArray<RestoredTab>): void
   shown(sessionId: string): void
   closed(sessionId: string): void
+  /** B1e: whether a session is kept for this tab now, not yet taken over. */
+  waits?(sessionId: string): boolean
 }
 let tabSignals: KeptTabSignals | null = null
 
@@ -220,4 +222,14 @@ export function keptTabShown(sessionId: string): void {
 }
 export function keptTabClosed(sessionId: string): void {
   try { tabSignals?.closed(sessionId) } catch { /* a quit ends it */ }
+}
+
+/** aicc_planning#423 (B1e): true while the helper keeps a session for this
+ *  tab that the tab has not taken over: from the start that kept it until
+ *  its take-over or its end. What it says then (its hook events, its status
+ *  line) reaches the tab, and a transcript it names is bound by nothing
+ *  until its take-over, which binds its logging run and transcript first.
+ *  False when asking fails. */
+export function keptForItsTab(sessionId: string): boolean {
+  try { return tabSignals?.waits?.(sessionId) === true } catch { return false }
 }

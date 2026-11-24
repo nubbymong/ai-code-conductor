@@ -39,6 +39,11 @@
 // session's hook file written again), with nothing of its account, telemetry
 // or conversation. The take-over's own teardown clears that first, and
 // unserveKeptLaunchUnseen drops it when the session is kept no longer.
+// B1e: that teardown leaves a Codex session's served token for the take-over
+// to write its own over (keepServedToken), so the hook events the Hooks
+// gateway took for the tab stay in its record; and pty-manager.ts binds no
+// transcript a session kept for its tab names until its take-over
+// (keptForItsTab).
 //
 // What stays in pty-manager.ts, and why:
 //  - the per-session records and the helpers that keep them, which much of
@@ -87,6 +92,8 @@ import { noteCodexSessionGuidance, forgetCodexSessionGuidance } from '../canvas/
 import { tryGetProvider } from '../providers'
 import { launchKeptForUpdate, setKeptLaunchBindings, takeKeptSession, type KeptLaunch, type KeptLaunchFacts, type KeptSessionFacts, type KeptUnseen } from './kept-launches'
 import { HelperPty } from '../session-helper/helper-pty'
+// B1e: pty-manager.ts's hook transcript route asks it, through this module (its one import of the kept-session seam).
+export { keptForItsTab } from './kept-launches'
 
 /** A Codex launch's hook file: the file that hands its gateway token to the
  *  hook, with the way to remove it. */
@@ -749,12 +756,13 @@ export interface KeptSessionTakenOver {
 export function takeOverKeptLaunch(b: KeptTakeOverBinding): KeptSessionTakenOver | null {
   const codex = b.launch.style === 'direct'
   // A Codex take-over needs its launch's preparation: its lease names the account.
-  if (codex && !b.codexLaunch?.lease) return null
+  // B1e: no take-over: a token its serving kept goes before the launch mints its own.
+  if (codex && !b.codexLaunch?.lease) { settleServedToken(b.sessionId); return null }
   const size = { cols: b.cols, rows: b.rows }
   const taken = codex
     ? takeKeptSession(b.sessionId, b.launch.id, size, b.codexLaunch?.lease.accountId ?? null)
     : b.profileId ? takeKeptSession(b.sessionId, b.launch.id, size, b.profileId) : takeKeptSession(b.sessionId, b.launch.id, size)
-  if (!taken) return null
+  if (!taken) { settleServedToken(b.sessionId); return null }
   const { pty: proc, kept } = taken
   const launchCwd = kept.folder ?? b.resolvedCwd
   try {
@@ -768,6 +776,7 @@ export function takeOverKeptLaunch(b: KeptTakeOverBinding): KeptSessionTakenOver
     // spawn's caller. Its tab reads the failure, and a Restart resumes it.
     logWarn(`[pty] ${b.sessionId}: the take-over failed after it attached; its CLI is ended (${(err as Error)?.message ?? err})`)
     try { proc.kill() } catch { /* already gone */ }
+    servedTokens.delete(b.sessionId)
     try { ports().dropGatewayToken(b.sessionId) } catch { /* best-effort */ }
     for (const unbind of [unbindCodexLease, unbindLaunchTelemetry, unbindLaunchRegistrations, clearClaudeAccount, stopWatchingAccountIdentity]) {
       try { unbind(b.sessionId) } catch { /* best-effort */ }
@@ -841,6 +850,8 @@ function codexTakeOver(b: KeptTakeOverBinding, launch: { lease: AccountLease; se
   const { sessionId, resolvedCwd, win } = b
   const provider = b.launch.provider
   const hookFile = rewriteKeptCodexHooks(sessionId, kept.hookFolder, provider)
+  // B1e: its token is now written over the one it was served with, if any; not written, that one goes.
+  settleServedToken(sessionId, hookFile !== null)
   if (hookFile) {
     codexHookFiles.set(sessionId, hookFile)
     codexHookedLaunches.add(sessionId)
@@ -922,8 +933,10 @@ const unseenServed = new Set<string>()
  * reach this run. Nothing of the account, the telemetry, the logging run or
  * the conversation, and no hook file or hooked launch is recorded, so no
  * hook claims a transcript before its take-over. The take-over's spawn runs
- * the teardown first (killPty), which clears all of it and the mark, and
- * makes it again. What this bound goes with unserveKeptLaunchUnseen.
+ * the teardown first (killPty), which clears all of it and the mark (B1e:
+ * but leaves the gateway token, keepServedToken, for the take-over to write
+ * its own over), and makes it again. What this bound goes with
+ * unserveKeptLaunchUnseen.
  */
 export function serveKeptLaunchUnseen(kept: KeptUnseen, cwd: string | undefined): boolean {
   if (!(getConductorMcpPort() > 0)) return false
@@ -950,11 +963,42 @@ export function serveKeptLaunchUnseen(kept: KeptUnseen, cwd: string | undefined)
   return true
 }
 
+/** B1e: sessions whose gateway token, minted when they were served while
+ *  their tab was not shown, the kill before a launch of the tab kept
+ *  (keepServedToken), until that launch or the session's end settles it. */
+const servedTokens = new Set<string>()
+
+/**
+ * aicc_planning#423 (B1e): the kill before a launch of the tab (pty-manager.ts
+ * endLiveRun) leaves the gateway token of a session served while its tab was
+ * not shown, rather than unregistering it, which would also drop the hook
+ * events the Hooks gateway took for the tab: the take-over that follows writes
+ * its own token over it (codexTakeOver), and the gateway keeps those events
+ * in the tab's record. Settled by that launch (takeOverKeptLaunch) or the
+ * session's end (unserveKeptLaunchUnseen). True when left.
+ */
+export function keepServedToken(sessionId: string): boolean {
+  if (!unseenServed.has(sessionId)) return false
+  servedTokens.add(sessionId)
+  return true
+}
+
+/** B1e: a token keepServedToken left is settled: `replaced` when the
+ *  take-over wrote its own over it; otherwise it goes now, with the events
+ *  the gateway holds for it, unless a launch since has made the session's
+ *  token another's (a Claude Code launch's). */
+function settleServedToken(sessionId: string, replaced = false): void {
+  if (!servedTokens.delete(sessionId) || replaced) return
+  if (ports().codexGatewayTokens.has(sessionId)) ports().dropGatewayToken(sessionId)
+}
+
 /** B1d: a session served while its tab was not shown is kept no longer: what
  *  serveKeptLaunchUnseen bound goes (its registrations and its gateway
  *  token). Nothing when the mark is gone: a launch of the tab has torn it
- *  down already and bound its own, which stay. */
+ *  down already and bound its own, which stay. B1e: a token that teardown
+ *  left goes (settleServedToken): a tab's close kills first (pty:kill). */
 export function unserveKeptLaunchUnseen(sessionId: string): void {
+  settleServedToken(sessionId)
   if (!unseenServed.has(sessionId)) return
   unbindLaunchRegistrations(sessionId)
   ports().dropGatewayToken(sessionId)
