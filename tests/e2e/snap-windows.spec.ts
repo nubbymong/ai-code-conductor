@@ -49,6 +49,28 @@
  *   D10 HELPER DIRECT: the built helper's capture, run once from the test, has
  *      each picture's size equal its header and the line, each matched to one
  *      of Electron's displays by physical bounds and scale.
+ *   D11 SCALED START (added at the beta.16 aggregate; a second launch, after
+ *      the first app has quit): the app started with Chromium's
+ *      --force-device-scale-factor=1.5, a test-only switch used in this spec
+ *      only. Windows' own scale is not changed, so the helper still reads the
+ *      display at Windows' scale. Electron reads its one display at scale 1.5,
+ *      and one Claude Code tab runs the stand-in as in D1.
+ *   D12 SCALED RECTANGLE, 1 run: Snap, Rectangle opens one overlay page with
+ *      its picture (a picture made at 1.5 has no 1x form; Electron 44's toJPEG
+ *      gives nothing for it, so it goes as a PNG at its scale: A2's fix; the
+ *      encoding the page got is recorded); the 200 by 120 DIP drag shows
+ *      300 x 180, and Enter gives one new JPEG of 300 by 180 (each edge times
+ *      1.5, rounded, as the engine crops), not all black, its path typed into
+ *      the tab; one line names a rectangle of that size, the helper's time
+ *      within the 2 s bound and one display.
+ *   D13 SCALED WHOLE SCREEN, 1 run: Whole screen gives one new JPEG of the
+ *      display at its physical size (capped at 1920), not all black, its path
+ *      typed into the tab; one line names the whole screen at that size.
+ *   D11 to D13 do not use D2's display list check: it holds the line's scale
+ *   (the helper's, read from Windows) equal to Electron's, and a forced scale
+ *   is Chromium's alone, so the two differ here by design. The engine pairs
+ *   the two by physical edges, each within one pixel (engine.ts
+ *   matchDisplays); D12 records both lists and the overlay window's bounds.
  * READINGS (recorded): R1, what main has loaded once the app has started and
  *   its tab runs (before any press): the native add-ons (.node files, from
  *   main's module cache and from the process report) and the files of the
@@ -71,7 +93,8 @@
  * the stand-in started on the tab's terminal 11.2 s after the tab's Snap
  * button showed (PowerShell's cold start, then the launch line), within
  * TAB_MS: under three times that reading, not ten, and not raised.
- * The readings go to the log and to $SNAP_E2E_OUT/readings.json.
+ * The readings go to the log and to $SNAP_E2E_OUT/readings.json; D11 to D13's
+ * to $SNAP_E2E_OUT/readings-scaled.json. D11 to D13 use the same bounds.
  */
 import { test, expect, type ElectronApplication, type Page } from '@playwright/test'
 import { execFile } from 'child_process'
@@ -100,12 +123,21 @@ const CANCEL_MS = 5_000
 const PRESS_TEST_MS = 30_000
 /** The engine's own bound on the helper (helper-capture.ts HELPER_CAPTURE_BOUND_MS). */
 const HELPER_BOUND_MS = 2_000
+/** D11 to D13: Chromium's forced display scale. */
+const FORCED_SCALE = 1.5
 
 const readings: Record<string, unknown> = {
   pressMs: [] as number[], helperMs: [] as number[], overlayMs: [] as number[], overlayReadyMs: [] as number[],
   enterToFileMs: [] as number[], fileToTypedMs: [] as number[],
 }
-const push = (key: string, v: number) => { (readings[key] as number[]).push(v) }
+/** D11 to D13's readings. */
+const scaled: Record<string, unknown> = {
+  helperMs: [] as number[], overlayMs: [] as number[], overlayReadyMs: [] as number[],
+  enterToFileMs: [] as number[], fileToTypedMs: [] as number[],
+}
+/** The readings the running app's presses go to. */
+let current: Record<string, unknown> = readings
+const push = (key: string, v: number) => { (current[key] as number[]).push(v) }
 let ctx: IsolatedApp | undefined
 /** Every line main writes to its console (logInfo writes there too). */
 const mainLines: string[] = []
@@ -292,6 +324,13 @@ async function pressNew(): Promise<{ overlay: Page; display: Disp; start: { x: n
     if (b.x === display.bounds.x && b.y === display.bounds.y && b.width === display.bounds.width && b.height === display.bounds.height) overlay = p
   }
   expect(overlay, `an overlay page at the bounds of display ${display.id}`).toBeDefined()
+  return { overlay: overlay!, display, start: dragStart(main, display), from }
+}
+
+type Bounds = { x: number; y: number; width: number; height: number }
+/** Where the drag starts, in the display's own DIP: over the app's window on
+ *  that display, below the overlay's bar, with room for the whole drag. */
+function dragStart(main: Bounds, display: Disp): { x: number; y: number } {
   // The app's window on that display, in the display's own DIP.
   const left = Math.max(main.x, display.bounds.x) - display.bounds.x
   const top = Math.max(main.y, display.bounds.y) - display.bounds.y
@@ -300,7 +339,39 @@ async function pressNew(): Promise<{ overlay: Page; display: Disp; start: { x: n
   // Below the bar (16 DIP from the top, about 40 tall) and inside the app's window.
   const start = { x: left + 40, y: Math.max(top + 40, 100) }
   expect(start.x + DRAG.width <= right && start.y + DRAG.height <= bottom, `the drag fits the app's window on the display: ${JSON.stringify({ left, top, right, bottom })}`).toBe(true)
-  return { overlay: overlay!, display, start, from }
+  return start
+}
+
+/** D12, D13: press Snap, Rectangle on the one display there is; wait for its
+ *  one overlay page with its picture, and record the page's bounds and the
+ *  encoding its picture came in. When no page opens, the engine's own lines
+ *  since the press are kept: they say why (for example the previous Snap took
+ *  the press). */
+async function pressScaled(): Promise<{ overlay: Page; display: Disp; start: { x: number; y: number }; from: Mark }> {
+  const { app, page } = ctx!
+  const displays = await electronDisplays(app)
+  expect(displays.length, 'one display').toBe(1)
+  await expect(snapButton()).toBeEnabled({ timeout: CANCEL_MS })
+  const from = mark()
+  await snapButton().click()
+  const started = performance.now()
+  await page.getByRole('button', { name: 'Rectangle' }).click()
+  try {
+    await expect.poll(() => overlayPages(app).length, { timeout: OVERLAY_MS, intervals: [50] }).toBe(1)
+    await expect(overlayPages(app)[0].locator('body.pictured')).toBeAttached({ timeout: OVERLAY_MS })
+  } catch (err) {
+    scaled.atNoOverlay = { newEngine: snapLines(from), previousEngine: linesSince(from, '[snap] previous engine:'), overlay: linesSince(from, '[snap] overlay') }
+    throw err
+  }
+  push('overlayMs', Math.round(performance.now() - started))
+  const ready = linesSince(from, '[snap] overlay pages ready').map((l) => /in (\d+) ms/.exec(l)?.[1]).filter(Boolean)
+  if (ready.length) push('overlayReadyMs', Number(ready[0]))
+  const overlay = overlayPages(app)[0]
+  scaled.overlayBounds = await (await app.browserWindow(overlay)).evaluate((w) => w.getBounds())
+  scaled.pictureEncoding = await overlay.evaluate(() => /^data:image\/(\w+);/.exec((document.getElementById('picture') as HTMLImageElement | null)?.src ?? '')?.[1] ?? 'none')
+  console.log(`[snap-e2e] scaled overlay: picture as ${String(scaled.pictureEncoding)}, window ${JSON.stringify(scaled.overlayBounds)}, display ${JSON.stringify(displays[0])}`)
+  const main = await (await app.browserWindow(page)).evaluate((w) => w.getBounds())
+  return { overlay, display: displays[0], start: dragStart(main, displays[0]), from }
 }
 
 /** An action that answers the overlay. Main closes every overlay page at the
@@ -338,7 +409,7 @@ async function expectSaved(before: string[], answeredAt: number, width: number, 
     await expect.poll(typedText, { timeout: OVERLAY_MS, intervals: [50] }).toContain(`${path.sep}screenshots${path.sep}${name}`)
   } catch (err) {
     // What the tab showed and what the stand-in recorded, for the cause.
-    readings.atTypedFailure = { terminal: await terminalText(ctx!.page).catch(() => 'unread'), launches: launches(), typed: typedText() }
+    current.atTypedFailure = { terminal: await terminalText(ctx!.page).catch(() => 'unread'), launches: launches(), typed: typedText() }
     throw err
   }
   push('fileToTypedMs', Math.round(performance.now() - savedAt))
@@ -367,6 +438,61 @@ async function pressAndCancelPrevious(): Promise<number> {
 
 const noPressFolder = () => expect(fs.existsSync(path.join(ctx!.dataDir, 'electron-userdata', 'snap-capture'))).toBe(false)
 
+/** Start the app with the new Snap chosen, the stand-in and the built helper,
+ *  its window on the primary display; `args` are extra switches (D11). */
+async function launchSnapApp(into: Record<string, unknown>, args: string[] = []): Promise<void> {
+  fs.mkdirSync(OUT, { recursive: true })
+  expect(HELPER, 'SNAP_E2E_HELPER names the built helper').not.toBe('')
+  expect(fs.existsSync(HELPER), `no helper at ${HELPER}`).toBe(true)
+  const started = performance.now()
+  ctx = await launchIsolatedApp({
+    seedExtra: (dataDir) => { chooseSnap(dataDir, 'new'); seedDomTerminal(dataDir) },
+    env: (dataDir) => ({
+      PATH: pathWith(installStandInClaude(standInDir(dataDir))),
+      CCC_E2E_SNAP_HELPER: HELPER,
+    }),
+    args,
+  })
+  into.launchMs = Math.round(performance.now() - started)
+  ctx.app.on('console', (m) => { mainLines.push(m.text()) })
+  // E2E_HEADLESS shows the app's window at -10000,-10000, off every display
+  // (src/main/index.ts, ready-to-show). Snap pictures the screen, so the
+  // window goes where a user has it: on the primary display, within its work
+  // area. (Run 45269811648 read the window's right and bottom edges at
+  // -8720 and -9280: -10000 plus 1280 by 720.)
+  const area = await ctx.app.evaluate(({ screen }) => screen.getPrimaryDisplay().workArea)
+  const placed = { x: area.x, y: area.y, width: Math.min(1280, area.width), height: Math.min(720, area.height) }
+  await (await ctx.app.browserWindow(ctx.page)).evaluate((w, b) => w.setBounds(b), placed)
+  into.appWindow = await (await ctx.app.browserWindow(ctx.page)).evaluate((w) => w.getBounds())
+}
+
+/** Open one Claude Code tab on the stand-in and wait until the stand-in runs
+ *  on the tab's terminal (D1; D11 opens its tab the same way). */
+async function openSnapTab(into: Record<string, unknown>): Promise<void> {
+  const page = ctx!.page
+  const started = performance.now()
+  await page.locator('[data-testid="panel-tab-saved"]').click()
+  await page.locator('[data-testid="new-button"]').click()
+  await page.locator('[data-testid="new-menu-config"]').click()
+  await expect(page.locator('text=New saved config')).toBeVisible({ timeout: TAB_MS })
+  await page.locator('[role="radiogroup"][aria-label="Provider"] label:has(input[value="claude"])').click()
+  await page.locator('[role="radiogroup"][aria-label="Connection"] label:has(input[value="local"])').click()
+  await page.locator('input[placeholder*="path"]').first().fill(ctx!.dataDir)
+  await page.locator('input[placeholder="e.g. App Dev"]').fill(LABEL)
+  await page.locator('[data-testid="session-dialog-submit"]').click()
+  await expect(page.locator('text=New saved config')).toHaveCount(0, { timeout: TAB_MS })
+  await expect(snapButton()).toBeVisible({ timeout: TAB_MS })
+  into.tabMs = Math.round(performance.now() - started)
+  // The tab runs the stand-in on a terminal: a Snap's path is typed into it.
+  try {
+    await expect.poll(() => launches().some((l) => l.stdinTty === true), { timeout: TAB_MS, intervals: [100] }).toBe(true)
+    await expect.poll(() => terminalText(page), { timeout: TAB_MS, intervals: [100] }).toContain('stand-in Claude Code ready')
+  } finally {
+    into.launches = launches()
+    into.terminalAtStart = await terminalText(page).catch((e: Error) => `unread: ${e.message}`)
+  }
+}
+
 test.describe.configure({ mode: 'serial' })
 
 test.describe('Snap on Windows', () => {
@@ -374,28 +500,8 @@ test.describe('Snap on Windows', () => {
 
   test.beforeAll(async () => {
     test.setTimeout(LAUNCH_MS + 10_000)
-    fs.mkdirSync(OUT, { recursive: true })
-    expect(HELPER, 'SNAP_E2E_HELPER names the built helper').not.toBe('')
-    expect(fs.existsSync(HELPER), `no helper at ${HELPER}`).toBe(true)
-    const started = performance.now()
-    ctx = await launchIsolatedApp({
-      seedExtra: (dataDir) => { chooseSnap(dataDir, 'new'); seedDomTerminal(dataDir) },
-      env: (dataDir) => ({
-        PATH: pathWith(installStandInClaude(standInDir(dataDir))),
-        CCC_E2E_SNAP_HELPER: HELPER,
-      }),
-    })
-    readings.launchMs = Math.round(performance.now() - started)
-    ctx.app.on('console', (m) => { mainLines.push(m.text()) })
-    // E2E_HEADLESS shows the app's window at -10000,-10000, off every display
-    // (src/main/index.ts, ready-to-show). Snap pictures the screen, so the
-    // window goes where a user has it: on the primary display, within its work
-    // area. (Run 45269811648 read the window's right and bottom edges at
-    // -8720 and -9280: -10000 plus 1280 by 720.)
-    const area = await ctx.app.evaluate(({ screen }) => screen.getPrimaryDisplay().workArea)
-    const placed = { x: area.x, y: area.y, width: Math.min(1280, area.width), height: Math.min(720, area.height) }
-    await (await ctx.app.browserWindow(ctx.page)).evaluate((w, b) => w.setBounds(b), placed)
-    readings.appWindow = await (await ctx.app.browserWindow(ctx.page)).evaluate((w) => w.getBounds())
+    current = readings
+    await launchSnapApp(readings)
   })
 
   test.afterAll(async () => {
@@ -408,28 +514,7 @@ test.describe('Snap on Windows', () => {
 
   test('D1 START: one Claude Code tab opens and shows the Snap button', async () => {
     test.setTimeout(TAB_MS + 10_000)
-    const page = ctx!.page
-    const started = performance.now()
-    await page.locator('[data-testid="panel-tab-saved"]').click()
-    await page.locator('[data-testid="new-button"]').click()
-    await page.locator('[data-testid="new-menu-config"]').click()
-    await expect(page.locator('text=New saved config')).toBeVisible({ timeout: TAB_MS })
-    await page.locator('[role="radiogroup"][aria-label="Provider"] label:has(input[value="claude"])').click()
-    await page.locator('[role="radiogroup"][aria-label="Connection"] label:has(input[value="local"])').click()
-    await page.locator('input[placeholder*="path"]').first().fill(ctx!.dataDir)
-    await page.locator('input[placeholder="e.g. App Dev"]').fill(LABEL)
-    await page.locator('[data-testid="session-dialog-submit"]').click()
-    await expect(page.locator('text=New saved config')).toHaveCount(0, { timeout: TAB_MS })
-    await expect(snapButton()).toBeVisible({ timeout: TAB_MS })
-    readings.tabMs = Math.round(performance.now() - started)
-    // The tab runs the stand-in on a terminal: a Snap's path is typed into it.
-    try {
-      await expect.poll(() => launches().some((l) => l.stdinTty === true), { timeout: TAB_MS, intervals: [100] }).toBe(true)
-      await expect.poll(() => terminalText(page), { timeout: TAB_MS, intervals: [100] }).toContain('stand-in Claude Code ready')
-    } finally {
-      readings.launches = launches()
-      readings.terminalAtStart = await terminalText(page).catch((e: Error) => `unread: ${e.message}`)
-    }
+    await openSnapTab(readings)
   })
 
   test('R1 ADD-ONS AT START: what main has loaded before any press of the previous Snap', async () => {
@@ -613,5 +698,90 @@ test.describe('Snap on Windows', () => {
     } finally {
       fs.rmSync(folder, { recursive: true, force: true })
     }
+  })
+})
+
+// After the first describe: a red here cannot skip D1 to D10 (serial mode).
+test.describe(`Snap on Windows at a forced display scale of ${FORCED_SCALE}`, () => {
+  test.skip(process.platform !== 'win32', 'Snap on Windows: the runner is Windows')
+
+  test.beforeAll(async () => {
+    test.setTimeout(LAUNCH_MS + 10_000)
+    current = scaled
+    await launchSnapApp(scaled, [`--force-device-scale-factor=${FORCED_SCALE}`])
+  })
+
+  test.afterAll(async () => {
+    test.setTimeout(120_000)
+    fs.mkdirSync(OUT, { recursive: true })
+    fs.writeFileSync(path.join(OUT, 'readings-scaled.json'), JSON.stringify(scaled, null, 2))
+    console.log(`[snap-e2e] scaled readings ${JSON.stringify(scaled)}`)
+    await closeIsolatedApp(ctx)
+  })
+
+  test('D11 SCALED START: Electron reads its one display at the forced scale, and one Claude Code tab shows the Snap button', async () => {
+    test.setTimeout(TAB_MS + 10_000)
+    const displays = await electronDisplays(ctx!.app)
+    scaled.electronDisplays = displays
+    expect(displays.length, 'one display on the runner').toBe(1)
+    expect(displays[0].scaleFactor, `the forced scale took: ${JSON.stringify(displays)}`).toBe(FORCED_SCALE)
+    await openSnapTab(scaled)
+  })
+
+  test('D12 SCALED RECTANGLE: the overlay shows its picture, and a 200 by 120 DIP drag gives one JPEG of 300 by 180, typed into the tab', async () => {
+    test.setTimeout(PRESS_TEST_MS)
+    const before = jpegs()
+    const typedBefore = typedText().length
+    const { overlay, display, start, from } = await pressScaled()
+    const s = display.scaleFactor
+    // The engine's crop (bmp.ts pixelRectFor): each edge rounded at the scale.
+    const width = Math.round((start.x + DRAG.width) * s) - Math.round(start.x * s)
+    const height = Math.round((start.y + DRAG.height) * s) - Math.round(start.y * s)
+    expect({ width, height }).toEqual({ width: DRAG.width * FORCED_SCALE, height: DRAG.height * FORCED_SCALE })
+    await overlay.mouse.move(start.x, start.y)
+    await overlay.mouse.down()
+    await overlay.mouse.move(start.x + DRAG.width / 2, start.y + DRAG.height / 2, { steps: 4 })
+    await overlay.mouse.move(start.x + DRAG.width, start.y + DRAG.height, { steps: 4 })
+    await overlay.screenshot({ path: path.join(OUT, 'overlay-mid-drag-scaled.png') })
+    await overlay.mouse.up()
+    await expect(overlay.locator('#size')).toHaveText(`${width} ${String.fromCharCode(0xd7)} ${height}`)
+    const answeredAt = performance.now()
+    await answer(overlay, () => overlay.keyboard.press('Enter'))
+    await expectOverlayGone()
+    await expectSaved(before, answeredAt, width, height)
+    expect(typedText().length).toBeGreaterThan(typedBefore)
+    await expect.poll(() => snapLines(from).length, { timeout: CANCEL_MS }).toBe(1)
+    const line = snapLines(from)[0]
+    scaled.rectangleLine = line
+    const m = /^\[snap\] new engine: a rectangle of display (\d+), (\d+)x(\d+); the helper took (\d+) ms; (display 1 \d+x\d+ at \d+%(?: \(primary\))?)$/.exec(line)
+    expect(m, line).not.toBeNull()
+    expect(`${m![2]}x${m![3]}`).toBe(`${width}x${height}`)
+    push('helperMs', Number(m![4]))
+    expect(Number(m![4])).toBeLessThanOrEqual(HELPER_BOUND_MS)
+    noPressFolder()
+  })
+
+  test('D13 SCALED WHOLE SCREEN: one JPEG of the display at its physical size, capped at 1920, typed into the tab', async () => {
+    test.setTimeout(PRESS_TEST_MS)
+    const before = jpegs()
+    const { overlay, from } = await pressScaled()
+    const answeredAt = performance.now()
+    await answer(overlay, () => overlay.getByRole('button', { name: 'Whole screen' }).click())
+    await expectOverlayGone()
+    // The line comes once the picture is saved; it names the size the helper read.
+    await expect.poll(() => snapLines(from).length, { timeout: OVERLAY_MS }).toBe(1)
+    const line = snapLines(from)[0]
+    scaled.wholeLine = line
+    const m = /^\[snap\] new engine: the whole screen of display (\d+), (\d+)x(\d+); the helper took (\d+) ms; display 1 (\d+)x(\d+) at \d+%(?: \(primary\))?$/.exec(line)
+    expect(m, line).not.toBeNull()
+    const pw = Number(m![2])
+    const ph = Number(m![3])
+    expect(`${pw}x${ph}`, 'the whole screen is the display as the helper read it').toBe(`${m![5]}x${m![6]}`)
+    push('helperMs', Number(m![4]))
+    expect(Number(m![4])).toBeLessThanOrEqual(HELPER_BOUND_MS)
+    const capped = Math.max(pw, ph) <= MAX_DIM ? { width: pw, height: ph }
+      : pw >= ph ? { width: MAX_DIM, height: Math.round(ph * MAX_DIM / pw) } : { width: Math.round(pw * MAX_DIM / ph), height: MAX_DIM }
+    await expectSaved(before, answeredAt, capped.width, capped.height)
+    noPressFolder()
   })
 })
