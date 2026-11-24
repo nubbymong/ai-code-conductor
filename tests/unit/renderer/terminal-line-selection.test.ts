@@ -1,8 +1,9 @@
 // @vitest-environment jsdom
-// aicc_planning#422 (beta.17 C10): a triple-click line selection across a narrowing of the
-// columns only, on the app's xterm (@xterm/xterm 6.0.0) in jsdom, its cell measured as 9x17
-// as console-repaint-narrow-keep.test.ts does. The clicks go through xterm's own mouse
-// handler (SelectionService.handleMouseDown: the third press has detail 3).
+// aicc_planning#422 (beta.17 C10) and #424 (C11): a selection (a triple-click's line, a drag
+// over part of a line) across a change of the columns only, on the app's xterm
+// (@xterm/xterm 6.0.0) in jsdom, its cell measured as 9x17 as
+// console-repaint-narrow-keep.test.ts does. The clicks and drags go through xterm's own
+// mouse handler (SelectionService.handleMouseDown: the third press has detail 3).
 import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from 'vitest'
 import { Terminal } from '@xterm/xterm'
 import { createConsoleRepaintAligner, type RepaintTerminal } from '../../../src/renderer/components/terminal/consoleRepaint'
@@ -678,5 +679,136 @@ describe('a drag over part of a line kept on its text by keepLineSelection, as T
     const select = vi.spyOn(term, 'select')
     term.resize(20, 10)
     expect(select).not.toHaveBeenCalled()
+  })
+})
+
+/** A session whose scrollback is full: 200 lines at 40 columns in a buffer of
+ *  50 + 10 rows, every fifth a rule as wide as the screen (as a console draws
+ *  them), then `screen` rows if given (a program's screen, its cursor set by it). */
+async function fullTerminal(screen: string[] = [], after = ''): Promise<Terminal> {
+  const host = document.createElement('div')
+  document.body.appendChild(host)
+  const term = new Terminal({ cols: 40, rows: 10, scrollback: 50 })
+  term.open(host)
+  made.push(term)
+  const lines = Array.from({ length: 200 }, (_, i) => (i % 5 === 0 ? '-'.repeat(40) : `line ${i + 1} of the session`))
+  await write(term, [...lines, ...screen].join('\r\n') + after)
+  await frame()
+  return term
+}
+
+const rowOf = (term: Terminal, text: string) => {
+  for (let y = 0; y < term.buffer.active.length; y++) if (term.buffer.active.getLine(y)?.translateToString(true) === text) return y
+  return -1
+}
+
+describe('a full scrollback: the rows a narrowing adds push rows off the top, and xterm leaves every marker that many rows above its line (aicc_planning#424)', () => {
+  it('a drag over part of a line in view, narrowed by one column, widened back and narrowed to 25: the same text on its line (unfixed: the rule line above it)', async () => {
+    const term = await fullTerminal()
+    expect(term.buffer.active.length).toBe(60)
+    keepLineSelection(term)
+    dragBetween(term, 4, 6, 9, 6)
+    expect(term.getSelection()).toBe(' 197 ')
+    term.resize(39, 10)
+    expect(term.buffer.active.length).toBe(60)
+    expect(pos(term)).toEqual([4, rowOf(term, 'line 197 of the session'), 9, rowOf(term, 'line 197 of the session')])
+    expect(term.getSelection()).toBe(' 197 ')
+    term.resize(40, 10)
+    expect(term.getSelection()).toBe(' 197 ')
+    term.resize(25, 10)
+    expect(term.getSelection()).toBe(' 197 ')
+  })
+
+  it('a triple-clicked line in view, narrowed by one column: the same line', async () => {
+    const term = await fullTerminal()
+    keepLineSelection(term)
+    clickCell(term, 5, 6, 3)
+    expect(term.getSelection()).toBe('line 197 of the session')
+    term.resize(39, 10)
+    expect(term.getSelection()).toBe('line 197 of the session')
+  })
+
+  it('output after the drag (rows added at the bottom), then narrowed: the same text', async () => {
+    const term = await fullTerminal()
+    keepLineSelection(term)
+    dragBetween(term, 4, 6, 9, 6)
+    expect(term.getSelection()).toBe(' 197 ')
+    await write(term, '\r\n' + Array.from({ length: 20 }, (_, i) => (i % 4 === 0 ? '='.repeat(40) : `later ${i + 1}`)).join('\r\n'))
+    expect(term.getSelection()).toBe(' 197 ')
+    term.resize(39, 10)
+    expect(term.getSelection()).toBe(' 197 ')
+  })
+
+  it('a program screen under it whose last row is as wide as the screen (re-wrapped too): a drag in the rows above, narrowed: the same text', async () => {
+    const screen = ['HEADER A', 'HEADER B', '', '', '', '', '-'.repeat(40), '> input', '-'.repeat(40), 'mode on' + ' '.repeat(20) + 'not logged in']
+    const term = await fullTerminal(screen, '\x1b[8;8H')
+    expect(term.buffer.active.getLine(59)?.translateToString(true)).toBe(screen[9])
+    keepLineSelection(term)
+    term.scrollToLine(20)
+    await frame()
+    const text = term.buffer.active.getLine(26)!.translateToString(true)
+    dragBetween(term, 4, 6, 9, 6)
+    const picked = term.getSelection()
+    expect(pos(term)).toEqual([4, 26, 9, 26])
+    expect(picked).toBe(text.slice(4, 9))
+    term.resize(39, 10)
+    expect(term.getSelection()).toBe(picked)
+    expect(pos(term)![1]).toBe(rowOf(term, text))
+  })
+
+  it('a drag over only the empty cells after a short line, narrowed to fewer columns than its start, then widened back: still those empty cells', async () => {
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    const term = new Terminal({ cols: 40, rows: 10, scrollback: 50 })
+    term.open(host)
+    made.push(term)
+    await write(term, Array.from({ length: 200 }, (_, i) => (i % 5 === 0 ? '-'.repeat(40) : `l${i + 1}`)).join('\r\n'))
+    await frame()
+    keepLineSelection(term)
+    dragBetween(term, 30, 6, 35, 6)
+    expect(term.getSelection()).toBe('')
+    term.resize(20, 10)
+    expect(term.getSelection()).toBe('')
+    term.resize(40, 10)
+    expect(term.getSelection()).toBe('')
+  })
+})
+
+describe('a drag in progress when the columns change (aicc_planning#424)', () => {
+  it('an earlier drag noted, the mouse pressed and moved for a new one, the columns narrowed: the earlier one is not selected again, and the new drag goes on', async () => {
+    const term = await linesTerminal(30, UNDER_LONG)
+    keepLineSelection(term)
+    dragCells(term, 2, 0, 4)
+    expect(term.getSelection()).toBe('$ she')
+    const select = vi.spyOn(term, 'select')
+    const screen = term.element!.querySelector('.xterm-screen') as HTMLElement
+    const at = (x: number, row: number) => ({ clientX: x * 9 + 1, clientY: row * 17 + 8, button: 0, bubbles: true })
+    screen.dispatchEvent(new MouseEvent('mousedown', { ...at(2, 3), detail: 1 }))
+    document.dispatchEvent(new MouseEvent('mousemove', { ...at(7, 3), buttons: 1 }))
+    expect(term.getSelection()).toBe('shell')
+    term.resize(20, 10)
+    expect(select).not.toHaveBeenCalled()
+    document.dispatchEvent(new MouseEvent('mousemove', { ...at(9, 4), buttons: 1 }))
+    document.dispatchEvent(new MouseEvent('mouseup', { ...at(9, 4), detail: 1 }))
+    expect(pos(term)).toEqual([2, 3, 9, 4])
+    expect(term.getSelection()).toBe('shell 3\n$ shell 4')
+    // The new one, reported at the release, is kept from here on.
+    term.resize(30, 10)
+    expect(term.getSelection()).toBe('shell 3\n$ shell 4')
+  })
+
+  it('the right button held (xterm drags no selection with it) while the columns narrow: the noted drag is kept on its text', async () => {
+    const term = await linesTerminal(30, UNDER_LONG)
+    keepLineSelection(term)
+    dragCells(term, 2, 0, 4)
+    expect(term.getSelection()).toBe('$ she')
+    const screen = term.element!.querySelector('.xterm-screen') as HTMLElement
+    const at = { clientX: 2 * 9 + 1, clientY: 3 * 17 + 8, button: 2, bubbles: true }
+    screen.dispatchEvent(new MouseEvent('mousedown', { ...at, buttons: 2, detail: 1 }))
+    term.resize(20, 10)
+    expect(pos(term)).toEqual([0, 3, 5, 3])
+    expect(term.getSelection()).toBe('$ she')
+    document.dispatchEvent(new MouseEvent('mouseup', { ...at, detail: 1 }))
+    expect(term.getSelection()).toBe('$ she')
   })
 })
