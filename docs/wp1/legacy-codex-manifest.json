@@ -1,8 +1,8 @@
 {
   "schema": "wp1-legacy-codex-manifest/3",
-  "generatedAt": "2026-11-24T22:23:41.312Z",
-  "head": "b62cb389dfba5c871a51f1306d05e432596be8e2",
-  "tree": "c9477a4d2d7c33fa4247b72ddfede3c4ffba70db",
+  "generatedAt": "2026-11-24T22:59:43.594Z",
+  "head": "1a2c07746d83eade8faf1bda318a72c1a89f08a2",
+  "tree": "f00c91e707ac05aa6364b1bb814a0952da2fbe14",
   "scannedWorkingTree": false,
   "predicateDigest": "100a1233edebdc39a5f9004d3fba980a89ebb15b25872e52076386bc84b03153",
   "predicates": [
@@ -116,8 +116,8 @@
     "\\.(png|jpg|jpeg|gif|ico|icns|webp|svg|woff2?|ttf|otf|mp4|zip|asar|node|exe|dll|dylib|so|pdf)$",
     "^package-lock\\.json$"
   ],
-  "trackedFileCount": 3867,
-  "excludedFileCount": 613,
+  "trackedFileCount": 3868,
+  "excludedFileCount": 614,
   "scannedFileCount": 3254,
   "unscopedFileCount": 15,
   "unscoped": [
@@ -139,8 +139,8 @@
   ],
   "unscopedMentions": [],
   "unreadable": [],
-  "matchedPathCount": 1094,
-  "pathDigest": "3de083bf177f93a88504fb99a6739568b6b03100d6a634095f482ebe8687318c",
+  "matchedPathCount": 1095,
+  "pathDigest": "54b3942f8623d03ed64e7787ac3a90036882f33968d28fef05d9c005654648b5",
   "entries": [
     {
       "path": ".github/workflows/ci.yml",
@@ -183,7 +183,7 @@
       "predicates": [
         "P12"
       ],
-      "lineCount": 31
+      "lineCount": 32
     },
     {
       "path": "SECURITY.md",
@@ -218,7 +218,7 @@
       "predicates": [
         "P12"
       ],
-      "lineCount": 3
+      "lineCount": 4
     },
     {
       "path": "docs/wp2/completion-plan.md",
@@ -963,7 +963,7 @@
       "predicates": [
         "P14"
       ],
-      "lineCount": 30
+      "lineCount": 31
     },
     {
       "path": "helper/probes/c7-scenarios.json",
@@ -1952,7 +1952,7 @@
         "P01",
         "P14"
       ],
-      "lineCount": 28
+      "lineCount": 30
     },
     {
       "path": "src/main/providers/codex/conductor-tools.ts",
@@ -2484,7 +2484,7 @@
         "P08",
         "P14"
       ],
-      "lineCount": 39
+      "lineCount": 40
     },
     {
       "path": "src/renderer/App.tsx",
@@ -2661,6 +2661,13 @@
         "P11"
       ],
       "lineCount": 6
+    },
+    {
+      "path": "src/renderer/components/ScreenshotButton.tsx",
+      "predicates": [
+        "P11"
+      ],
+      "lineCount": 3
     },
     {
       "path": "src/renderer/components/SessionDialog.tsx",
@@ -3493,7 +3500,7 @@
       "predicates": [
         "P11"
       ],
-      "lineCount": 122
+      "lineCount": 123
     },
     {
       "path": "src/renderer/types/electron.d.ts",
@@ -3502,7 +3509,7 @@
         "P08",
         "P11"
       ],
-      "lineCount": 25
+      "lineCount": 27
     },
     {
       "path": "src/renderer/utils/accountChip.ts",
@@ -3580,7 +3587,7 @@
         "P12",
         "P14"
       ],
-      "lineCount": 172
+      "lineCount": 170
     },
     {
       "path": "src/shared/ask-conductor-provider.ts",

@@ -1,8 +1,8 @@
 {
   "schema": "wp1-legacy-codex-ledger/2",
   "predicateDigest": "100a1233edebdc39a5f9004d3fba980a89ebb15b25872e52076386bc84b03153",
-  "manifestPathDigest": "3de083bf177f93a88504fb99a6739568b6b03100d6a634095f482ebe8687318c",
-  "manifestHead": "b62cb389dfba5c871a51f1306d05e432596be8e2",
+  "manifestPathDigest": "54b3942f8623d03ed64e7787ac3a90036882f33968d28fef05d9c005654648b5",
+  "manifestHead": "1a2c07746d83eade8faf1bda318a72c1a89f08a2",
   "dispositions": {
     "retain": "unchanged observable behaviour, characterization proof",
     "move": "moved behind a package boundary and/or adapted at the call site, regression proof (newPath when relocated)",
@@ -3899,6 +3899,16 @@
       "disposition": "replace",
       "evidence": "WP2 upgrade walk: the resume prompt restores every saved session as before, names whose conversations stay resumable by provider (Claude, Codex, or both) instead of Claude alone, and wears the launch surfaces' own tag on a session whose provider cannot launch now, which reopens as Not started (WP1.2, WP1.3); tests/unit/renderer/resume-sessions-prompt.test.tsx, tests/unit/renderer/app-lifecycle-wiring.test.ts",
       "note": "session surface (runtime work package); provider conditionals here are outside the WP1 core/shared AST rule scope"
+    },
+    {
+      "path": "src/renderer/components/ScreenshotButton.tsx",
+      "predicates": [
+        "P11"
+      ],
+      "category": "UI-ONLY",
+      "disposition": "retain",
+      "evidence": "existing file retained; baseline suite green at 6bafcc33 (docs/wp1/baseline-2026-09-19.md); 2.1.3-beta.17 section C6 (aicc_planning#415), comment only: the sessionType comment says main pastes a saved image into Claude Code or Codex on this computer as the CLI's own paste, and a Codex tab main cannot paste into gets the line by the Codex typing rule; no Codex code path in the file (WP1.33)",
+      "note": "matched since the 2.1.3-beta.17 release commit (was not matched); P11: one comment"
     },
     {
       "path": "src/renderer/components/SessionDialog.tsx",
