@@ -98,6 +98,7 @@ const DIRECT_FEATURE_IDS: readonly string[] = [
   'commands.create-command',
   'commands.command-sections',
   'commands.ctrl-click-args',
+  'commands.broadcast',
   'security.encrypted-notes',
   'webview.opened',
   'artifacts.opened',

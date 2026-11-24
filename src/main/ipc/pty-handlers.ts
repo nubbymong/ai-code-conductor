@@ -2,7 +2,7 @@ import { ipcMain, BrowserWindow, app } from 'electron'
 import { z } from 'zod'
 import { spawnPty, writePty, resizePty, killPty, getSshFlow, endSshRemoteDetailed, probeTmuxLive, holdsCodexLaunchLease, codexLaunchLeaseTaken, beginSpawnPreparation, isSessionWritable, isSessionLiveOrStarting, SSHOptions, SshEndTarget, getKeptCodexConversation, getKeptCodexConversationSource, codexRunEnded, codexConversationHeldElsewhere, endAgentRunsInFolder } from '../pty-manager'
 import type { CodexLaunch } from '../pty-manager'
-import { handOffAskQuestion, submitPrompt, type PromptButtonMode } from '../session-input'
+import { handOffAskQuestion, submitPrompt, submitImage, type PromptButtonMode, type ImageSubmitResult } from '../session-input'
 import { ensureHelpWorkspace, helpWorkspaceDir } from '../help-workspace'
 import { ASK_HELP_FOLDER_FAILED } from '../../shared/ask-conductor-provider'
 import { getResourcesDirectory } from './setup-handlers'
@@ -732,10 +732,14 @@ const askHandOffSchema = z.object({
 export const PROMPT_BUTTON_MAX_CHARS = 100_000
 
 /** #333: `pty:submitPrompt`'s payload: the session and a prompt button's
- *  text, checked as askConductor:handOff checks its question. */
+ *  text, checked as askConductor:handOff checks its question. 2.1.3-beta.16
+ *  X1.2: with `image`, a saved image's path, the text is the sentence that
+ *  goes with it, and main's image door types both (session-input
+ *  submitImage, which holds the path to a tighter cap of its own). */
 const promptSubmitSchema = z.object({
   sessionId: z.string().regex(/^[A-Za-z0-9_-]{1,128}$/),
   text: z.string().min(1).max(PROMPT_BUTTON_MAX_CHARS),
+  image: z.string().min(1).max(PROMPT_BUTTON_MAX_CHARS).optional(),
 }).strict()
 
 /** #333: Settings, Custom Commands, "Prompt buttons": type only when the
@@ -804,11 +808,16 @@ export function registerPtyHandlers(getWindow: () => BrowserWindow | null): void
   // renderer passes only the session and the text. A partner terminal's id is
   // refused: its buttons are shell lines, which keep pty:write. The app's
   // window only; the text is never logged.
-  ipcMain.handle(IPC.PTY_SUBMIT_PROMPT, async (e, args: unknown): Promise<PromptButtonResult> => {
+  // 2.1.3-beta.16 X1.2 (aicc_planning#405): with an image's path, the same
+  // channel asks main's image door (session-input submitImage) to type the
+  // path as a bracketed paste, then the text, then Enter. An image is always
+  // sent: the Type it only setting is the prompt buttons', not read here.
+  ipcMain.handle(IPC.PTY_SUBMIT_PROMPT, async (e, args: unknown): Promise<PromptButtonResult | ImageSubmitResult> => {
     if (!fromApp(e)) return { outcome: 'not-sent', reason: 'session-gone' }
     const parsed = promptSubmitSchema.safeParse(args)
     if (!parsed.success) return { outcome: 'not-sent', reason: 'refused-text' }
     if (isPartnerPtyId(parsed.data.sessionId)) return { outcome: 'not-sent', reason: 'session-gone' }
+    if (parsed.data.image !== undefined) return submitImage(parsed.data.sessionId, parsed.data.image, parsed.data.text)
     return submitPrompt(parsed.data.sessionId, parsed.data.text, promptButtonMode())
   })
 

@@ -9,6 +9,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > `src/renderer/changelog.ts`. After editing that file, run `npm run changelog`
 > (CI enforces that this file is in sync via `npm run changelog:check`).
 
+## [2.1.3-beta.16] - 2026-11-24
+
+### Warnings
+- This beta series begins moving the app's background services, and over the next betas your sessions, onto one helper per machine. If you want a quiet build, stay on the stable release.
+- On Windows, choosing Save sessions at an update keeps the terminals the session helper holds running only if the new version opens within two minutes of the old one closing. The installer's pages count toward those two minutes, so finish the installer promptly.
+- On Windows, Snap now takes its picture with the app's own capture and overlay by default. If a press cannot take a picture, the earlier Snap opens for that press; to use the earlier Snap every time, choose Settings, Custom Commands, Snap, Snap on Windows: Previous.
+- To go back to 2.1.3-beta.15, download its installer from the GitHub releases page and run it over this version.
+
+> On Windows, Snap now takes its picture with the app's own overlay, a rectangle or the whole screen, and the earlier Snap is a setting away. A Global prompt button can now send to every open Claude Code and Codex session. A Snap picture or an Alt+V image now reaches a Claude Code session on this computer as Claude Code's own pasted image. A Codex session the app starts no longer shows a warning count of the app's making, and on Windows a Claude Code tab you make larger keeps the lines above its banner.
+
+### Added
+- On Windows, Snap's Rectangle now shows the app's own overlay: drag an area and press Enter, or pick Whole screen; Esc cancels (there are no drawing tools). If it cannot take a picture, the earlier Snap opens instead, and Settings, Custom Commands, Snap, Snap on Windows: Previous brings the earlier Snap back. macOS and Linux keep the earlier Snap. (Checked on Windows Server 2025 with one display at 100%; a display scaled above 100%, several displays and mixed scaling were not checked.)
+- A Global prompt button can now send to every open Claude Code and Codex session: turn on "Send to every open session" in its edit dialog, or Shift+click it and confirm. A small "all" pill and the button's tooltip mark these buttons. Only a prompt with no arguments can do this; terminal-only tabs and Ask Conductor never get it, and each session takes the prompt by its own rule, as a single press does.
+- A Snap picture, or an image pasted with Alt+V while the focus is outside the terminal, now reaches a Claude Code session on this computer as Claude Code's own pasted image ([Image #1]), so the picture goes to the model with your message instead of only its file path. Codex and SSH sessions get the image as before. (Measured with Claude Code 2.1.330 on Windows 11 build 22621; macOS and Linux were not measured.)
+
+### Fixed
+- A Codex session the app starts (Codex 0.157.0 or later) no longer shows a warning count caused by the app's own launch, so prompt buttons, canvas notes, image paste and Ask Conductor questions are typed into it again. (Measured with Codex CLI 0.157.1 on Windows 11 build 22621.)
+- On Windows, a Claude Code tab that you make larger now keeps the PowerShell lines above Claude Code's banner: scroll up and they are still there. (Measured on Windows 11 build 22621 with Claude Code 2.1.330.)
+- On Windows, the app's entry in the installed programs list now names its install folder, and an uninstall ends a session helper process only while it is still the one it found.
+
 ## [2.1.3-beta.15] - 2026-11-23
 
 ### Warnings
@@ -2158,6 +2178,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Tab attention indicators for waiting prompts
 - Context usage tracking via statusline API
 
+[2.1.3-beta.16]: https://github.com/nubbymong/ai-code-conductor/releases/tag/v2.1.3-beta.16
 [2.1.3-beta.15]: https://github.com/nubbymong/ai-code-conductor/releases/tag/v2.1.3-beta.15
 [2.1.3-beta.14]: https://github.com/nubbymong/ai-code-conductor/releases/tag/v2.1.3-beta.14
 [2.1.3-beta.13]: https://github.com/nubbymong/ai-code-conductor/releases/tag/v2.1.3-beta.13

@@ -2,11 +2,13 @@ import { BrowserWindow, desktopCapturer, dialog, nativeImage, shell, systemPrefe
 import { join } from 'path'
 import { mkdirSync, existsSync, readdirSync, statSync, unlinkSync, writeFileSync } from 'fs'
 import { randomBytes } from 'crypto'
-import Screenshots from 'electron-screenshots'
+// A type only: the package itself is loaded by the first press that uses it
+// (loadPreviousSnap below), never at main's start (ADR-030 S8 step 3).
+import type Screenshots from 'electron-screenshots'
 
 import { getResourcesDirectory } from './ipc/setup-handlers'
 import { isReapableImageFile } from './clipboard-file'
-import { logWarn } from './debug-logger'
+import { logInfo, logWarn } from './debug-logger'
 import { screenCaptureAllowed, type ScreenPermissionDeps } from './screenshot-permission'
 
 function getScreenshotsDir(): string { return join(getResourcesDirectory(), 'screenshots') }
@@ -56,7 +58,9 @@ const SCREENSHOT_MAX_DIM = 1920
 const SCREENSHOT_JPEG_QUALITY = 85
 
 /**
- * Capture a rectangle region of the screen.
+ * The previous Snap's capture of a rectangle region of the screen: Snap on
+ * macOS and Linux; on Windows a setting away (the new Snap is the default)
+ * and the one that takes any press the new Snap cannot do.
  *
  * Backed by `electron-screenshots` — a maintained library that handles
  * the platform-specific stuff (multi-monitor, taskbar coverage, focus
@@ -71,9 +75,23 @@ const SCREENSHOT_JPEG_QUALITY = 85
 let captureInProgress = false
 let screenshotsInstance: Screenshots | null = null
 
-function getScreenshotsInstance(): Screenshots {
+/**
+ * The previous Snap's package, loaded the first time a press uses it: on
+ * Windows, where the new Snap is the default, only a press with Previous
+ * chosen or one the new Snap hands on; on macOS and Linux, the first press.
+ * So main does not load it, or what it loads, at start (ADR-030 S8 step 3).
+ * A load that fails rejects: the press answers nothing and writes one line to
+ * app.log, as a press it takes does (runRectangleCapture).
+ */
+async function loadPreviousSnap(): Promise<typeof Screenshots> {
+  const loaded = await import('electron-screenshots')
+  return ((loaded as { default?: typeof Screenshots }).default ?? loaded) as typeof Screenshots
+}
+
+async function getScreenshotsInstance(): Promise<Screenshots> {
   if (!screenshotsInstance) {
-    screenshotsInstance = new Screenshots({
+    const PreviousSnap = await loadPreviousSnap()
+    screenshotsInstance = new PreviousSnap({
       // singleWindow=false (default) gives a separate overlay per
       // display, so a 3-monitor setup doesn't end up with the live
       // taskbars of monitors 2/3 showing under the overlay on
@@ -129,18 +147,56 @@ function systemScreenPermission(mainWindow: BrowserWindow | null): ScreenPermiss
 }
 
 /**
+ * Save a picture the new Snap cut (src/main/snap/engine.ts): rows from the
+ * top, four bytes a pixel, in physical pixels. The same 1920 cap and JPEG as
+ * every other Snap, into the screenshots folder; returns the file.
+ */
+export function saveSnapPicture(picture: { width: number; height: number; bgra: Buffer }): string {
+  ensureDir()
+  const filePath = uniquePath(generateFilename())
+  const img = nativeImage.createFromBitmap(picture.bgra, { width: picture.width, height: picture.height })
+  if (img.isEmpty()) throw new Error('an empty picture')
+  writeFileSync(filePath, constrainToMaxDim(img, SCREENSHOT_MAX_DIM).toJPEG(SCREENSHOT_JPEG_QUALITY))
+  return filePath
+}
+
+/** What a press of the new Snap came to (src/main/snap/engine.ts SnapOutcome). */
+export type NewSnapOutcome =
+  | { kind: 'saved'; file: string }
+  | { kind: 'cancelled' }
+  | { kind: 'no-desktop' }
+  | { kind: 'previous'; why: string }
+
+/**
  * Snap's capture of a region. On macOS the Screen Recording permission is
  * checked first (screenshot-permission.ts): when it is not granted the user is
  * told and offered System Settings, and nothing is captured. Whatever goes
  * wrong after that (the capture library failing to load or to start, a throw
  * in its start) answers null, so it never reaches the uncaught-exception
  * handler. `permission` is a parameter for tests; the app passes none.
+ *
+ * `newEngine` is the new Snap (ADR-030 S8 steps 2 and 3), given by the IPC
+ * handler on Windows unless Previous is chosen (src/shared/snap-engine.ts: the
+ * default is the new one): it runs first, and when it answers `previous`
+ * (anything it could not do, or a throw) the previous Snap takes the press.
+ * Cancelled, or no desktop to capture (exit 3): nothing.
  */
-export async function captureRectangle(mainWindow: BrowserWindow, permission?: ScreenPermissionDeps): Promise<string | null> {
+export async function captureRectangle(mainWindow: BrowserWindow, permission?: ScreenPermissionDeps, newEngine?: () => Promise<NewSnapOutcome>): Promise<string | null> {
   if (captureInProgress) return null
   captureInProgress = true
   try {
     if (!(await screenCaptureAllowed(permission ?? systemScreenPermission(mainWindow)))) return null
+    if (newEngine) {
+      let outcome: NewSnapOutcome
+      try {
+        outcome = await newEngine()
+      } catch (err) {
+        logWarn(`[snap] new engine: an error (${err instanceof Error ? err.name : 'error'}); the previous Snap takes this press`)
+        outcome = { kind: 'previous', why: 'an error' }
+      }
+      if (outcome.kind === 'saved') return outcome.file
+      if (outcome.kind !== 'previous') return null
+    }
     return await runRectangleCapture()
   } catch (err) {
     logWarn(`[screenshot] capture failed (${err instanceof Error ? err.name : 'error'}); nothing captured`)
@@ -150,30 +206,32 @@ export async function captureRectangle(mainWindow: BrowserWindow, permission?: S
   }
 }
 
-function runRectangleCapture(): Promise<string | null> {
+async function runRectangleCapture(): Promise<string | null> {
+  let library: Screenshots
+  try {
+    library = await getScreenshotsInstance()
+  } catch (err) {
+    // The package failed to load (its first press) or to start. The log line
+    // holds the error's name and code only: its message can hold a path.
+    const code = (err as { code?: unknown } | null)?.code
+    logWarn(`[snap] previous engine: its package could not be loaded (${err instanceof Error ? err.name : 'error'}${typeof code === 'string' ? ` ${code}` : ''}); nothing captured`)
+    console.error('[screenshot] the capture library could not start:', err)
+    return null
+  }
+  logInfo('[snap] previous engine: loaded; it takes this press')
   return new Promise<string | null>((resolve) => {
-    let screenshots: Screenshots | null = null
     let settled = false
 
     const finish = (result: string | null) => {
       if (settled) return
       settled = true
       try {
-        screenshots?.removeAllListeners('ok')
-        screenshots?.removeAllListeners('cancel')
-        screenshots?.removeAllListeners('save')
+        library.removeAllListeners('ok')
+        library.removeAllListeners('cancel')
+        library.removeAllListeners('save')
       } catch { /* a listener that cannot be removed leaves nothing to answer */ }
       resolve(result)
     }
-
-    try {
-      screenshots = getScreenshotsInstance()
-    } catch (err) {
-      console.error('[screenshot] the capture library could not start:', err)
-      finish(null)
-      return
-    }
-    const library = screenshots
 
     const handleBuffer = (buffer: Buffer) => {
       try {

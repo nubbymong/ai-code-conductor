@@ -2,9 +2,11 @@
 /**
  * P3.15 (row 70): Alt+V with focus outside the terminal (with the terminal
  * focused, the key goes to the CLI, which pastes the image itself). The app
- * saves the clipboard image, then: a Claude session gets the line it always
- * got (unchanged); a Codex session gets its line through the Codex typing
- * rule (sendImagePathToCodex), whose notes show in the session's paste hint;
+ * saves the clipboard image, then: a Claude session is handed to
+ * sendImageToSession, which asks main to paste a local one as Claude Code's
+ * own paste (2.1.3-beta.16 X1.2) and types the host fetch line over SSH; a
+ * Codex session gets its line through the Codex typing rule
+ * (sendImagePathToCodex), whose notes show in the session's paste hint;
  * a plain terminal (P3.16a, U6) gets only the image's path, quoted for its shell,
  * typed and not submitted, with no sentence: a shell reads no images, and a
  * sentence and an Enter would be typed into it as a command. Over SSH the file
@@ -83,7 +85,7 @@ async function altV(sessions: Session[], active: string) {
 }
 
 describe('Alt+V with focus outside the terminal (P3.15, row 70)', () => {
-  it('a Claude session gets the line it always got, typed and submitted by the app', async () => {
+  it('a Claude session is handed to sendImageToSession with the sentence and its session type', async () => {
     await altV([session('cl1')], 'cl1')
     expect(saveImage).toHaveBeenCalledTimes(1)
     expect(h.sendImageToSession).toHaveBeenCalledWith('cl1', IMG, 'I just pasted an image \u2014 please view it.', 'local')

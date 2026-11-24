@@ -1,9 +1,9 @@
 {
   "schema": "wp1-legacy-codex-manifest/3",
-  "generatedAt": "2026-11-23T04:39:16.698Z",
-  "head": "12713dd508600811bd1b63e02de617aefb1e9d56",
-  "tree": "1c94879862e87e86bb1100923b98b1d5729d8a53",
-  "scannedWorkingTree": false,
+  "generatedAt": "2026-11-24T00:39:25.018Z",
+  "head": "42bc27386466f342f613cbda633efbd2b4dd208c",
+  "tree": "7b3bd9d244d231c7409ced2838473ff61016fd85",
+  "scannedWorkingTree": true,
   "predicateDigest": "100a1233edebdc39a5f9004d3fba980a89ebb15b25872e52076386bc84b03153",
   "predicates": [
     {
@@ -116,9 +116,9 @@
     "\\.(png|jpg|jpeg|gif|ico|icns|webp|svg|woff2?|ttf|otf|mp4|zip|asar|node|exe|dll|dylib|so|pdf)$",
     "^package-lock\\.json$"
   ],
-  "trackedFileCount": 3728,
-  "excludedFileCount": 581,
-  "scannedFileCount": 3147,
+  "trackedFileCount": 3787,
+  "excludedFileCount": 593,
+  "scannedFileCount": 3194,
   "unscopedFileCount": 15,
   "unscoped": [
     ".claude/settings.json",
@@ -139,8 +139,8 @@
   ],
   "unscopedMentions": [],
   "unreadable": [],
-  "matchedPathCount": 1063,
-  "pathDigest": "f5f9aac694736574badba0470f1296de5bee206546fd74d409b9e7084c8c3e86",
+  "matchedPathCount": 1069,
+  "pathDigest": "d12233ca633f6065be83ecba424cad5244d8c17f41031320f16e6745d39cb4ed",
   "entries": [
     {
       "path": ".github/workflows/ci.yml",
@@ -932,6 +932,21 @@
         "P14"
       ],
       "lineCount": 24
+    },
+    {
+      "path": "helper/probes/p11-model-stand-in.cjs",
+      "predicates": [
+        "P14"
+      ],
+      "lineCount": 5
+    },
+    {
+      "path": "helper/probes/p11-probe.cjs",
+      "predicates": [
+        "P04",
+        "P14"
+      ],
+      "lineCount": 25
     },
     {
       "path": "helper/probes/p18-stand-in.cjs",
@@ -1960,7 +1975,7 @@
         "P09",
         "P14"
       ],
-      "lineCount": 297
+      "lineCount": 310
     },
     {
       "path": "src/main/providers/codex/insights-exec.ts",
@@ -2090,7 +2105,7 @@
         "P07",
         "P14"
       ],
-      "lineCount": 198
+      "lineCount": 221
     },
     {
       "path": "src/main/providers/codex/telemetry.ts",
@@ -2278,7 +2293,7 @@
       "predicates": [
         "P14"
       ],
-      "lineCount": 57
+      "lineCount": 64
     },
     {
       "path": "src/main/session-resume-enrich.ts",
@@ -2500,7 +2515,7 @@
         "P07",
         "P11"
       ],
-      "lineCount": 65
+      "lineCount": 66
     },
     {
       "path": "src/renderer/components/ConductorMcpPage.tsx",
@@ -3440,7 +3455,7 @@
         "P08",
         "P11"
       ],
-      "lineCount": 24
+      "lineCount": 25
     },
     {
       "path": "src/renderer/utils/accountChip.ts",
@@ -5457,6 +5472,13 @@
       "lineCount": 33
     },
     {
+      "path": "tests/unit/main/image-paste-ipc.test.ts",
+      "predicates": [
+        "P13"
+      ],
+      "lineCount": 3
+    },
+    {
       "path": "tests/unit/main/insights-codex-fs-guards.test.ts",
       "predicates": [
         "P01",
@@ -5761,7 +5783,7 @@
         "P07",
         "P13"
       ],
-      "lineCount": 17
+      "lineCount": 39
     },
     {
       "path": "tests/unit/main/pty-session-liveness.test.ts",
@@ -5994,6 +6016,13 @@
       "lineCount": 9
     },
     {
+      "path": "tests/unit/main/session-input-image.test.ts",
+      "predicates": [
+        "P13"
+      ],
+      "lineCount": 6
+    },
+    {
       "path": "tests/unit/main/session-input-ownership.test.ts",
       "predicates": [
         "P13"
@@ -6015,7 +6044,7 @@
         "P07",
         "P13"
       ],
-      "lineCount": 47
+      "lineCount": 51
     },
     {
       "path": "tests/unit/main/session-resume-enrich.test.ts",
@@ -6645,6 +6674,16 @@
       "lineCount": 96
     },
     {
+      "path": "tests/unit/providers/codex/spawn-daemon-auto-start.test.ts",
+      "predicates": [
+        "P01",
+        "P04",
+        "P07",
+        "P13"
+      ],
+      "lineCount": 53
+    },
+    {
       "path": "tests/unit/providers/codex/spawn-extra-args.test.ts",
       "predicates": [
         "P01",
@@ -7241,7 +7280,7 @@
       "predicates": [
         "P13"
       ],
-      "lineCount": 4
+      "lineCount": 7
     },
     {
       "path": "tests/unit/renderer/commandbar-one-row.test.tsx",
@@ -8268,6 +8307,13 @@
       "lineCount": 1
     },
     {
+      "path": "tests/unit/scripts/probe-p11.test.ts",
+      "predicates": [
+        "P13"
+      ],
+      "lineCount": 11
+    },
+    {
       "path": "tests/unit/scripts/probe-p19-job.test.ts",
       "predicates": [
         "P13"
@@ -8377,7 +8423,7 @@
         "P04",
         "P13"
       ],
-      "lineCount": 428,
+      "lineCount": 432,
       "truncated": true
     },
     {

@@ -520,6 +520,53 @@ function refuseCmdExeNetworkFolder(viaCmdExe: boolean, folder: string | undefine
  *  limit is 8,191 including the terminator). */
 export const CMD_EXE_LINE_MAX = 8_191
 
+/** aicc_planning#371 (2.1.3-beta.16, B1F): the `-c` entry that turns off
+ *  Codex's automatic start of its shared background server. Each `-c` key the
+ *  app sets already makes Codex run without that server (embedded). From
+ *  0.156.0 Codex then also shows "Running without the shared background
+ *  server: command-line configuration overrides (-c, --enable, --disable, or
+ *  --search) requires embedded mode." as a startup warning, whose count on the
+ *  hint row is a row the app's screen reader refuses, so the app typed
+ *  nothing into the tab. Codex shows that warning only while this feature is
+ *  on (codex-rs/tui/src/startup_orchestration.rs, the
+ *  `daemon_exclusion.filter(|_| auto_start_daemon)` step, rust-v0.156.0 to
+ *  rust-v0.171.0): with it off the launch runs embedded, as before, and
+ *  without the warning. Read at every supported tag: 0.156.0 to 0.171.0 know
+ *  the key; 0.153.4 to 0.155.1 have no such server start and no such warning,
+ *  and only log a feature key they do not know (codex-rs/features/src/lib.rs
+ *  `apply_map`), except under `--strict-config`, where they refuse it
+ *  (codex-rs/config/src/loader/mod.rs): see codexDaemonAutoStartOffArgs. Not
+ *  `--no-daemon` or `--disable daemon_auto_start`: 0.153.4 to 0.155.1 exit
+ *  on both. */
+export const CODEX_DAEMON_AUTO_START_OFF = 'features.daemon_auto_start=false'
+
+/** Whether a `-c` entry leaves Codex free to use its shared background
+ *  server: the keys `config_exclusion` allows (codex-rs/tui/src/
+ *  daemon_startup.rs; the same shape at every tag from rust-v0.156.0 to
+ *  rust-v0.171.0, and any `features.<name>` is allowed at the newest, so no
+ *  older tag allows more). Any other key makes Codex run embedded. */
+function codexOverrideKeepsServer(entry: string): boolean {
+  const eq = entry.indexOf('=')
+  const key = (eq < 0 ? entry : entry.slice(0, eq)).trim()
+  return key === 'suppress_unstable_features_warning' || key === 'tui.fullscreen_transcript'
+    || key === 'tui' || key === 'features' || /^features\.[^.]+$/.test(key)
+}
+
+/** The entry above, for a launch that the app's own `-c` keys (`appFlags`,
+ *  before the user's arguments) already run embedded, so Codex does the same
+ *  as before; nothing for any other launch, which keeps whatever Codex does
+ *  with its server. Nothing either when the user's own arguments name
+ *  `--strict-config`: a Codex before 0.156.0 refuses the key under it, and
+ *  from 0.156.0 that flag alone makes Codex run embedded (and warn while its
+ *  automatic server start is on, the default from 0.157.0). */
+export function codexDaemonAutoStartOffArgs(appFlags: readonly string[], extraArgs: unknown): string[] {
+  const embedded = appFlags.some((a, i) => i > 0 && appFlags[i - 1] === '-c' && !codexOverrideKeepsServer(a))
+  if (!embedded) return []
+  const strict = typeof extraArgs === 'string'
+    && codexExtraArgWords(extraArgs).some((w) => w.replace(/\\/g, '').toLowerCase().startsWith('--strict-config'))
+  return strict ? [] : ['-c', CODEX_DAEMON_AUTO_START_OFF]
+}
+
 /** WP2 PR 4, P4.1 (PB2): the app's tools a Codex session runs without
  *  asking, on every preset, as a Claude session's two are pre-allowed in every
  *  mode (hooks/per-session-settings.ts CANVAS_TOOL_PERMISSIONS): neither takes
@@ -936,6 +983,12 @@ function buildCodexSpawnCommand(opts: SpawnOptions): ProviderSpawnCommand {
       hooksInstalled = true
     }
   }
+
+  // aicc_planning#371 (B1F): the app's own `-c` keys run Codex embedded; say
+  // so with the server's auto-start off, so Codex does not also warn about
+  // it on the hint row. Last of the app's flags, before the user's, on every
+  // route below (the picker and a held launch keep it as it is).
+  flags.push(...codexDaemonAutoStartOffArgs(flags, co.extraArgs))
 
   // P3.11 (row 62): the user's extra CLI arguments, after every flag the app
   // sets (so none of the app's arguments can become the value of one of

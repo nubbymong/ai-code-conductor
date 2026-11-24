@@ -156,6 +156,9 @@ describe('buildCodexSpawn: the app\'s hooks', () => {
     expect(out.env[CODEX_HOOK_FILE_ENV]).toBe(hookFile)
     expect(out.env.CLAUDE_MULTI_SESSION_ID).toBe('sess-1')
     expect(out.hooksInstalled).toBe(true)
+    // aicc_planning#371 (B1F): the hooks are this launch's only app -c entries; the key follows them, once, as its last two arguments.
+    expect(out.args.filter((a) => a === 'features.daemon_auto_start=false')).toHaveLength(1)
+    expect(out.args.slice(-2)).toEqual(['-c', 'features.daemon_auto_start=false'])
     // The token is never on the command line or in the environment.
     expect(JSON.stringify(out)).not.toMatch(/0f8b6a2c|token/i)
   })

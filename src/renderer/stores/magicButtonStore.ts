@@ -1,9 +1,14 @@
 import { create } from 'zustand'
 import { saveConfigNow } from '../utils/config-saver'
+import type { SnapEngine } from '../../shared/snap-engine'
 
 export interface MagicButtonSettings {
   screenshotColor: string
   autoDeleteDays: number | null
+  /** Snap on Windows: the user's own choice, saved only when made (no
+   *  default here: src/shared/snap-engine.ts holds it, so a later default
+   *  reaches everyone who never chose). Main reads it at each press. */
+  snapEngineWindows?: SnapEngine
 }
 
 interface MagicButtonState {

@@ -598,9 +598,9 @@ export const trainingSteps: TrainingStep[] = [
     sinceVersion: '1.4.0',
     section: 'productivity',
     summary:
-      'Capture a region of any screen and hand it straight to the agent. Local sessions get the file path written into the prompt; SSH sessions fetch the image over the Conductor MCP tunnel.',
+      'Capture a region of any screen and hand it straight to the agent. A local session gets the picture as a pasted image ([Image #1]) or, for an assistant the app does not paste for yet, as its file path typed into the prompt; SSH sessions fetch the image over the Conductor MCP tunnel.',
     highlights: [
-      'Region capture with magnifier, mosaic, brush, redo / undo built in',
+      'On Windows, Snap\'s Rectangle shows the app\'s own overlay: drag an area and press Enter, or pick Whole screen (no drawing tools). **Settings → Custom Commands → Snap**, Snap on Windows: **Previous** brings back the earlier Snap, with its magnifier, mosaic, brush and redo / undo, which macOS and Linux use; it also opens by itself for any press the new one cannot take',
       'Window capture mode -- pick from a thumbnail list of any open window',
       'JPEG-encoded at 1920px max long edge to stay under the agent\'s image budget',
       'Saved to the session resources screenshots/ folder so you can drag-drop later too',
@@ -616,7 +616,7 @@ export const trainingSteps: TrainingStep[] = [
       'Snap a UI bug, then ask the agent to look at the screenshot you just snapped -- it ingests the image directly and you skip the upload-and-describe roundtrip.',
     bullets: [
       '**Region or window** capture, both routed straight to the agent',
-      'Local sessions get the **file path** in the prompt; SSH uses **vision MCP fetch**',
+      'Local sessions get a **pasted image** or, for an assistant the app does not paste for yet, the **file path** in the prompt; SSH uses **vision MCP fetch**',
       'Encoded at **1920px / JPEG 85** to stay under image budget',
       '**Esc** cancels mid-drag if you change your mind',
     ],
@@ -875,7 +875,8 @@ export const trainingSteps: TrainingStep[] = [
     highlights: [
       'Ctrl+Tab / Ctrl+Shift+Tab -- cycle between sessions',
       'Ctrl+1–9 -- jump directly to session N',
-      'Alt+V -- paste a clipboard image: in a local session, the assistant pastes it itself; with focus elsewhere, the app saves it and types its path (over SSH, it asks Claude to fetch it); a plain terminal, or a local session\'s partner shell in a partner view, gets only the quoted path (an SSH session\'s partner gets nothing; the hint says where the image was saved), with no Enter (on macOS and Linux, only an sh, bash, zsh, dash or ksh shell)',
+      'Shift+click a Global prompt button -- send that one press to every open Claude Code and Codex session; the app asks first',
+      'Alt+V -- paste a clipboard image: in a local session, the assistant pastes it itself; with focus elsewhere, the app saves it and a Claude Code session on this computer gets it as its own pasted image (a Codex session gets its path typed; over SSH, it asks Claude to fetch it); a plain terminal, or a local session\'s partner shell in a partner view, gets only the quoted path (an SSH session\'s partner gets nothing; the hint says where the image was saved), with no Enter (on macOS and Linux, only an sh, bash, zsh, dash or ksh shell)',
       'Esc -- close browser pane / dismiss tour / cancel context menu',
       'Status bar -- live tokens, cost, rate limits',
     ],
@@ -883,6 +884,7 @@ export const trainingSteps: TrainingStep[] = [
       highlights: [
         'Ctrl+Tab / Ctrl+Shift+Tab -- cycle between sessions',
         'Ctrl+1-9 -- jump directly to session N',
+        'Shift+click a Global prompt button -- send that one press to every open session; the app asks first',
         'Alt+V -- paste a clipboard image: in a local session, the assistant pastes it itself; with focus elsewhere, the app saves it and types its path; a plain terminal, or a local session\'s partner shell in a partner view, gets only the quoted path (an SSH session\'s partner gets nothing; the hint says where the image was saved), with no Enter (on macOS and Linux, only an sh, bash, zsh, dash or ksh shell)',
         'Esc -- close browser pane / dismiss tour / cancel context menu',
         'Status bar -- live tokens, cost, rate limits',

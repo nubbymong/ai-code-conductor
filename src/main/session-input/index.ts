@@ -24,6 +24,12 @@
 // That door is new, not moved: it has its own rule, order and delay, written
 // at it. Everything said below about the moved bodies is about the others.
 //
+// Since 2.1.3-beta.16 section X1 (aicc_planning#405) it also types a saved
+// image's path into a Claude Code session on this computer as the CLI's own
+// paste (submitImage), asked by the renderer over pty:submitPrompt with the
+// image's path. That door is new too, with its own rule and waits, written at
+// it, and the same per-session order as the prompt buttons'.
+//
 // Since 2.1.3-beta.10 section A2 the Watchdog's retry comes in through one
 // door, submitRetry: a Codex session's goes through the Codex package's
 // submit primitive, as a canvas marker's does, instead of the raw writer
@@ -195,16 +201,16 @@ export const PROMPT_CODEX_MAX_CODE_POINTS = 8_000
  *  Commands): main reads which from the saved settings at each press. */
 export type PromptButtonMode = 'send' | 'type'
 
-/** Each session's prompt presses, one at a time in the order pressed: the
- *  tail of its chain, kept only while one is in hand. */
-const promptChains = new Map<string, Promise<PromptButtonResult>>()
+/** Each session's prompt presses and images (submitImage), one at a time in
+ *  the order asked for: the tail of its chain, kept only while one is in hand. */
+const promptChains = new Map<string, Promise<unknown>>()
 /** Each session's last prompt press, for the repeat window, kept for that long. */
 const lastPromptPress = new Map<string, { text: string; at: number }>()
 
 const wait = (ms: number): Promise<void> => new Promise((resolve) => { setTimeout(resolve, ms) })
 
-/** Resolves PROMPT_ENTER_DELAY_MS after the last slice writePty cuts `data`
- *  into has gone (a write over WRITE_CHUNK_SIZE units goes in slices
+/** Resolves `delayMs` (PROMPT_ENTER_DELAY_MS unless given) after the last
+ *  slice writePty cuts `data` into has gone (a write over WRITE_CHUNK_SIZE units goes in slices
  *  WRITE_CHUNK_DELAY ms apart, pty-chunked-write.ts). The delay first, then
  *  one WRITE_CHUNK_DELAY wait per slice after the first. Counted from the
  *  slices, not from the call: a slice still to go when the delay ends (main
@@ -212,8 +218,8 @@ const wait = (ms: number): Promise<void> => new Promise((resolve) => { setTimeou
  *  it) had its timer set before each of these waits is, and timers of one
  *  length run in the order they were set, so each wait ends only after one
  *  more slice went. */
-async function textSettled(data: string): Promise<void> {
-  await wait(PROMPT_ENTER_DELAY_MS)
+async function textSettled(data: string, delayMs: number = PROMPT_ENTER_DELAY_MS): Promise<void> {
+  await wait(delayMs)
   const slices = data.length > WRITE_CHUNK_SIZE ? Math.ceil(data.length / WRITE_CHUNK_SIZE) : 1
   for (let i = 1; i < slices; i++) await wait(WRITE_CHUNK_DELAY)
 }
@@ -334,6 +340,109 @@ export function submitPrompt(sessionId: string, text: string, mode: PromptButton
     logInfo(`[prompt-button] ${sessionId}: a prompt of ${chars} characters ${promptOutcomeWords(result)}`)
     return result
   })
+  promptChains.set(sessionId, next)
+  void next.then(() => { if (promptChains.get(sessionId) === next) promptChains.delete(sessionId) })
+  return next
+}
+
+/** 2.1.3-beta.16 X1.2: how long the image door waits after the path's
+ *  bracketed paste has gone before it types the sentence, and how long the
+ *  Enter follows the sentence. These are the waits probe P11 measured with
+ *  (helper/probes/p11-probe.cjs; the Windows test machine, Claude Code
+ *  2.1.330, 2026-11-23): in 5 of 5 paste runs Claude Code showed its
+ *  "[Image #1]" placeholder 1.5 s after the paste and sent the picture with
+ *  the turn. Shorter waits were not measured. */
+export const IMAGE_PASTE_SETTLE_MS = 1_500
+export const IMAGE_ENTER_DELAY_MS = 700
+/** X1.2: the longest image path and sentence the door takes. */
+export const IMAGE_PATH_MAX_CHARS = 4_096
+export const IMAGE_SENTENCE_MAX_CHARS = 1_000
+
+/** What the image door did: `sent`; `not-taken`, a session it does not type
+ *  an image into (Codex, or an SSH Persistent session), which the caller then
+ *  sends to its own way; or `not-sent` and why. */
+export type ImageSubmitResult =
+  | { outcome: 'sent' }
+  | { outcome: 'not-taken' }
+  | { outcome: 'not-sent'; reason: 'session-gone' | 'refused-text' }
+
+const PASTE_START = '\u001b[200~'
+const PASTE_END = '\u001b[201~'
+
+/** Whether `text` holds a control character (C0, DEL or C1): in a path one
+ *  could end the bracketed paste early and be read as keys. */
+function hasControlChar(text: string): boolean {
+  for (let i = 0; i < text.length; i++) {
+    const c = text.charCodeAt(i)
+    if (c < 0x20 || (c >= 0x7f && c <= 0x9f)) return true
+  }
+  return false
+}
+
+/** One image, typed into `pressedFor` only (submitImage). Never rejects: a
+ *  write that throws is the session gone. */
+async function typeImage(sessionId: string, imagePath: string, sentence: string, pressedFor: IPty): Promise<ImageSubmitResult> {
+  const gone: ImageSubmitResult = { outcome: 'not-sent', reason: 'session-gone' }
+  try {
+    const p = port()
+    const live = (): boolean => p.run(sessionId) === pressedFor
+    if (!live()) return gone
+    const paste = `${PASTE_START}${imagePath}${PASTE_END}`
+    p.write(sessionId, paste)
+    await textSettled(paste, IMAGE_PASTE_SETTLE_MS)
+    if (!live()) return gone
+    const words = ` ${sentence}`
+    p.write(sessionId, words)
+    await textSettled(words, IMAGE_ENTER_DELAY_MS)
+    if (!live()) return gone
+    p.write(sessionId, '\r')
+    return { outcome: 'sent' }
+  } catch {
+    return gone
+  }
+}
+
+/**
+ * 2.1.3-beta.16 X1.2 (aicc_planning#405): a saved image (Snap's picture, or
+ * Alt+V's) into a Claude Code session on this computer, as the CLI's own
+ * paste. Probe P11 found Claude Code attaches a path it gets as a bracketed
+ * paste, as its own paste does, and only reads a path typed as text as words
+ * (ADR-030, the P11 result). So the path goes in as a bracketed paste
+ * (ESC [200~ path ESC [201~), then, IMAGE_PASTE_SETTLE_MS after it went, a
+ * space and the sentence, then, IMAGE_ENTER_DELAY_MS after that, Enter, each
+ * its own write through the write port (writePty), and each only while the
+ * session's terminal process is still the one it had when this was asked.
+ * The Enter always goes: the prompt buttons' Type it only setting is theirs.
+ *
+ * Not this door's (`not-taken`, nothing typed; the renderer keeps its own way
+ * for them): a Codex session (its submit primitive refuses a control
+ * character, so a paste needs a rule of its own, in beta.17) and an SSH
+ * Persistent session (tmux). The renderer asks only for a session on this
+ * computer: an SSH session gets the image through the host fetch tool, and a
+ * plain terminal never reaches here. A path or sentence holding a control
+ * character, an empty path, or one over its cap is refused (`refused-text`)
+ * and nothing is typed. A session with no terminal process takes nothing.
+ * Images and prompt presses for one session go one at a time, in order
+ * (promptChains). The log names an image by its path's length only.
+ * Throws before the PTY manager registers its ports, as every door does;
+ * otherwise never rejects.
+ */
+export function submitImage(sessionId: string, imagePath: string, sentence: string): Promise<ImageSubmitResult> {
+  const p = port()
+  const chars = [...imagePath].length
+  const done = (result: ImageSubmitResult): ImageSubmitResult => {
+    logInfo(`[image-paste] ${sessionId}: an image path of ${chars} characters ${result.outcome === 'sent' ? 'sent as a paste' : result.outcome === 'not-taken' ? 'not taken (the session gets it its own way)' : `not sent (${result.reason})`}`)
+    return result
+  }
+  if (p.isCodexSession(sessionId) || p.tmuxWrapped(sessionId)) return Promise.resolve(done({ outcome: 'not-taken' }))
+  if (!imagePath || imagePath.length > IMAGE_PATH_MAX_CHARS || sentence.length > IMAGE_SENTENCE_MAX_CHARS || hasControlChar(imagePath) || hasControlChar(sentence)) {
+    return Promise.resolve(done({ outcome: 'not-sent', reason: 'refused-text' }))
+  }
+  const pressedFor = p.run(sessionId)
+  if (!pressedFor) return Promise.resolve(done({ outcome: 'not-sent', reason: 'session-gone' }))
+  const before = promptChains.get(sessionId)
+  const go = (): Promise<ImageSubmitResult> => typeImage(sessionId, imagePath, sentence, pressedFor)
+  const next = (before ? before.then(go, go) : go()).then(done)
   promptChains.set(sessionId, next)
   void next.then(() => { if (promptChains.get(sessionId) === next) promptChains.delete(sessionId) })
   return next

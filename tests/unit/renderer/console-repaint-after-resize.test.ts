@@ -21,8 +21,9 @@
 // hunk runs in tests/unit/renderer/terminalview-console-repaint.test.tsx.
 //
 // Not checked here:
-//  - another Windows build, a tab on the console host the app ships, and a
-//    Claude Code tab's screen: the VM line on A1's head reads them.
+//  - another Windows build and a tab on the console host the app ships: the VM
+//    line on A1's head reads them;
+//  - a Claude Code tab's screen: console-repaint-claude-code.test.ts replays it.
 import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
@@ -304,7 +305,7 @@ function recordingTerminal(refuses: (data: string) => boolean = () => false) {
   const term: RepaintTerminal = {
     cols: 20,
     rows: 6,
-    buffer: { active: { type: 'normal', baseY: 0, getLine: () => undefined } },
+    buffer: { active: { type: 'normal', baseY: 0, cursorY: 0, getLine: () => undefined } },
     write(data, cb) {
       if (refuses(data)) throw new Error('xterm refused the write')
       writes.push(data)

@@ -6,8 +6,10 @@ import { sendImageToSession } from '../utils/imageTransfer'
 
 interface Props {
   sessionId: string
-  // sessionType is no longer needed for image transport: both local and SSH
-  // sessions use the Conductor MCP server's fetch_host_screenshot tool.
+  // How the picture reaches the session (imageTransfer.ts sendImageToSession):
+  // on this computer main pastes its path into Claude Code (the other
+  // assistant's tab gets the sentence and the path typed); over SSH the session is asked to fetch
+  // it with the Conductor MCP server's fetch_host_screenshot tool.
   sessionType: 'local' | 'ssh'
 }
 

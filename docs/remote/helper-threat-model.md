@@ -702,7 +702,7 @@ rollback returns to the earlier beta's rows, and every row has a negative test.
   SHA-256 again (3.1). Tested in `tests/unit/main/vision-manager-start-mode.test.ts`.
 - **The capture mode reads only the screen its own session shows, and writes
   only new files in the folder it is given (from 2.1.3-beta.14, Windows;
-  nothing in the app runs it yet).** `aicc-helper capture` (protocol 15,
+  from 2.1.3-beta.16 the app runs it for the new Snap, `src/main/snap/`).** `aicc-helper capture` (protocol 15,
   "Capturing the displays") is a command line, not a message: no connection,
   holder or remote host can ask for it, and it opens no endpoint. It grabs the
   whole displays of the desktop its own process sees, as any program of the
@@ -719,8 +719,31 @@ rollback returns to the earlier beta's rows, and every row has a negative test.
   time). Tested in `helper/tests/capture.rs`
   and the unit tests of `helper/src/capture.rs`; probe P21 measures it on the
   test machine and, for the console half, on the GitHub Windows runner. An
-  adversarial pass of it is owed to the security round
-  before 2.1 stable (aicc_planning #320), before the app runs it.
+  adversarial pass of it, and of the app's run of it, is owed to the security
+  round before 2.1 stable (aicc_planning #320).
+- **The app runs the capture mode for Snap (from 2.1.3-beta.16, Windows).**
+  Main starts the helper beside the app by its full path, with `capture --out`
+  and a new folder of its own under the user data folder
+  (`snap-capture/press-*`; only `press-*` folders directly inside it are ever
+  removed), arguments as a list and no shell, and ends it through its own
+  handle after 2 s. It takes only `display-<n>.bmp` names from the helper's
+  one line, never a path, reads at most 16 pictures of at most 16384 by 16384
+  pixels, and removes the folder before the overlay opens and on every path.
+  An app that is not packaged also takes a test-only helper path
+  (`CCC_E2E_SNAP_HELPER`) when it is absolute; a packaged app never reads it.
+  Tested in `tests/unit/main/snap/` and by snap-e2e.
+- **Snap's overlay shows a capture and answers only a rectangle, Whole screen
+  or a cancel (from 2.1.3-beta.16, Windows).** One window per display
+  (`src/main/snap/overlay.ts`), sandboxed, with context isolation and no Node,
+  its navigation and new windows refused; its page loads only its own script
+  and style under a `default-src 'none'` policy and shows one `data:` picture.
+  Its preload (`src/preload/snap-overlay.ts`) has two calls, the picture asked
+  for once and one answer; main answers only its own overlay pages, clamps a
+  rectangle to its display, and closes every overlay window on Escape, a
+  failed load, a gone renderer, a destroyed window or a page not ready in 5
+  seconds. Tested in `tests/unit/main/snap-overlay.test.ts`. An adversarial
+  pass of it is owed to the security round before 2.1 stable
+  (aicc_planning #320).
 
 ## 4 Review
 

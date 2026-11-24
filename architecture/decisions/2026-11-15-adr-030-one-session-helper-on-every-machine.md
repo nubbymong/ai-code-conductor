@@ -344,7 +344,7 @@ otherwise carried from earlier measurement.
 | Utility processes | 3 | 2 after the local deletion if probe P16 passed |
 | Supervisors | 3 (shown through one registry from beta 4) | 2 once the hooks gateway is gone |
 | PTY owners in the app | 3 files | 0 or 1 after the remote deletion |
-| Native add-ons loaded in main | 2 | 1 once the old Snap package is deleted; 0 or 1 after the remote deletion |
+| Native add-ons loaded in main | 1 at start, and 2 once the previous Snap has taken a press, read on the GitHub Windows runner by snap-e2e with one Claude Code tab (run 45271463233 before the cutover, run 45273010875 after it): at start only node-pty's `conpty.node`; a press of the previous Snap adds `node-screenshots`, which its package loads at its first capture (the earlier figure of 2 counted it at start). From 2.1.3-beta.16 on Windows the package's 36 JS files also load only at that first press, not at start; the count at start stays 1 | 1 once the old Snap package is deleted; 0 or 1 after the remote deletion |
 | Headless terminals in main (the Watchdog and the Codex session screen) | 2 (from 2.1.3-beta.14, 1 for a held Codex session) | 1 after the local deletion; 0 after the remote deletion |
 | Readers of one session's screen | Up to 3 | 1 |
 | Installer size | Not printed | Printed from the first build that carries the helper, and again when the Linux and macOS host builds and the Windows host builds are added |
@@ -739,6 +739,63 @@ of 2026-11-22 stands. Not measured: a signed-in user's session that is not eleva
 Snap runs in), Windows 11, a second scale, mixed scaling, more than one display, any size but
 1024 by 768. The probe is `helper/probes/p21-capture.cjs` with `p21-windows.ps1`; the job is
 `probe-p21` in `.github/workflows/ci.yml`.
+
+P21 basic-user reading (2026-11-23, plan 2.1.3-beta.16 A1, the `snap-e2e` job of ci.yml on the
+GitHub Windows runner, CI run 45264100584 on 5b5ab894, with the helper that job built in
+release). From `runas /trustlevel:0x20000` (the Basic User level), the token held the
+Administrators group for deny only, at the High mandatory level (`whoami /groups`). CAPTURES:
+the mode exited 0 and wrote the one display Windows listed, 1024 by 768 at 100%, its size and
+header matching its line. Two earlier dispatches of the same step (45260050397, 45263269386)
+also captured, but are not counted: two faults in the step, since fixed, kept their exit status
+or token from being read. Not measured: a session at the Medium level, where a signed-in user
+who is not elevated runs (runas's Basic User level did not lower the level on the runner),
+Windows 11, a second scale, mixed scaling, more than one display. The owner's first press of
+the new Snap is the first reading at that level, and the previous Snap takes any failed press.
+The step is `scripts/ci/snap-basic-user.mjs`.
+
+P21 in the app (2026-11-23, plan 2.1.3-beta.16 A1, snap-e2e run 45273010875 on the GitHub
+Windows runner, windows-2025, one 1024 by 768 display at 100%):
+
+- the app's new Snap ran the mode with its 2 s bound in 13 presses (3 each of a rectangle, the
+  whole screen and Escape, 1 with no choice saved, 3 in D7 with a helper that is not there);
+  the helper took 66 to 153 ms in the 9 runs whose times were recorded;
+- the overlay was on screen 307 to 464 ms after the press;
+- a capture from a token with the Administrators group for deny only (runas
+  /trustlevel:0x20000), still at the High mandatory level, CAPTURES in 362 ms.
+
+Not measured: a Medium-level (not elevated) signed-in session, Windows 11, a second scale, more
+than one display.
+
+P11 result (2026-11-23, plan 2.1.3-beta.16 X1, aicc_planning#405; the Windows test machine,
+build 22621, on node-pty's bundled ConPTY, as the app gives a local session's PTY; Claude Code
+2.1.330, and Codex 0.157.1 started with gpt-5.5, the model the app's Codex tab there starts
+with; each with no account and a made-up key, in a fresh environment whose home, app data and
+config folders were in the probe's own temporary folder, pointed at a stand-in model on a
+loopback port that records whether the turn carries an image and which picture it is). The
+decision lines were fixed before measuring and are in the probe's header. The picture was a 96
+by 64 JPEG named as Snap names one, in the shape of the app's default screenshots folder
+(`AI Code Conductor\resources\screenshots` under the run's local app data, a path with
+spaces). For both CLIs, the path as a bracketed paste, then a space and a sentence 1.5 s later,
+then Enter 0.7 s after that, ATTACHES: in 3 of 3 runs the turn carried the probe's picture, the
+same bytes; each CLI showed "[Image #1]" in its prompt before the sentence was typed, and the
+turn's text held the placeholder, not the path. Today's typed form (the sentence and the path
+typed as one write, then Enter as its own write) is NOT: in 3 of 3 runs the turn reached the
+model with no image and the path as words. Each CLI had asked for bracketed paste in every run.
+Recorded once each, with no verdict: a path with no space, and the spaced path in double
+quotes, both attached as a paste. What it means, as fixed before measuring: X1.2 is built for
+Claude Code (a local Claude Code session gets an image as a bracketed paste of the path, then
+the sentence, then Enter); Codex's paste waits for beta.17, since its submit primitive refuses
+a control character. P11 does not fail for either CLI on This computer on Windows, so declared
+exception 6 is not taken there. Two probe fixes came from a one-run check before the measured
+run (Codex's offer of a newer model answered with "Use existing model"; the model name in
+Codex's footer, which it writes in capitals, matched in any case). Neither changes a decision
+line. The measured runs were two invocations of the same code, one per CLI. Not measured: waits
+shorter than 1.5 s and 0.7 s; a session held by the session helper; a path long enough to be
+written in slices; macOS and Linux; a remote host (P4); other versions of either CLI. The probe
+is `helper/probes/p11-probe.cjs` with `p11-model-stand-in.cjs` (SHA-256 of each read with LF
+line ends: e3cbf104113c4f46af357449276c8f6c431f694b15694b870c3dcedba67eaa8b and
+58594bda5ceb37617630c1350c0cfbf0bcadb5fac7d0ed5b4bf3f5045e03a5cd; the probe file as of
+fec8023d).
 
 ## Parked questions
 

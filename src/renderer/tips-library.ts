@@ -176,6 +176,23 @@ export const TIPS_LIBRARY: Tip[] = [
   },
 
   {
+    id: 'tip.command-broadcast-shift-click',
+    category: 'commands',
+    complexity: 'intermediate',
+    priority: 70,
+    requires: ['commands.create-command'],
+    excludes: ['commands.broadcast'],
+    variants: {
+      primary: {
+        shortText: 'Shift+click a Global prompt to send it to every session',
+        title: 'Send One Prompt to Every Session',
+        body: '**Shift+click** a Global prompt button and the app offers to send that one press to every open Claude Code and Codex session, SSH and background tabs included. It asks first, so a slip sends nothing: **Send** or Enter sends, **Cancel** or Escape does not.\n\nWant a button that always does this? Edit it and tick **Send to every open session**; it then carries a small **all** pill and sends on a plain click.\n\nOnly a prompt with no arguments can do this. Terminal-only tabs and Ask Conductor never get it, and each session takes the prompt by its own rule, so the tab you pressed in tells you how many it reached.',
+        focusHint: 'Command bar -- your Global prompt buttons',
+      },
+    },
+  },
+
+  {
     id: 'tip.command-sections',
     category: 'commands',
     complexity: 'simple',
@@ -421,7 +438,24 @@ export const TIPS_LIBRARY: Tip[] = [
       primary: {
         shortText: 'Paste clipboard images with Alt+V',
         title: 'Paste Image from Clipboard',
-        body: 'Image on your clipboard? Click into a session on this computer and press **Alt+V**: the key goes to the assistant, which pastes the image itself (Codex shows it as [Image #1]).\n\nWith focus elsewhere in the app, **Alt+V** saves the image and types a line with its path into the session, for the assistant to open. On a Codex session the app types it only into an empty Codex prompt, and says why when it cannot. On an SSH session, press **Alt+V** with focus outside the terminal: the app saves the image on this computer and asks Claude to fetch it over the connection.\n\nWith focus elsewhere, **Alt+V** types only the image\'s path into a plain terminal, or into a local session\'s partner shell while its partner view is shown: quoted for the shell, with no Enter, ready for a command of your own. On macOS and Linux the path is typed only into an sh, bash, zsh, dash or ksh shell. Any other shell there, a plain terminal over SSH, or an SSH session\'s partner shell (it runs on the host) gets nothing, and the hint says where the image was saved.\n\nWorks with screenshots, images copied from a browser, diagrams from Excalidraw, or an image file you copied in File Explorer or Finder. No more "let me save this to disk first and drag it in".',
+        body: 'Image on your clipboard? Click into a session on this computer and press **Alt+V**: the key goes to the assistant, which pastes the image itself (Codex shows it as [Image #1]).\n\nWith focus elsewhere in the app, **Alt+V** saves the image and sends it to the session: Claude Code on this computer gets it as its own pasted image ([Image #1]) with a short sentence, and the app presses Enter. On a Codex session the app types a line with its path, only into an empty Codex prompt, and says why when it cannot. On an SSH session, press **Alt+V** with focus outside the terminal: the app saves the image on this computer and asks Claude to fetch it over the connection.\n\nWith focus elsewhere, **Alt+V** types only the image\'s path into a plain terminal, or into a local session\'s partner shell while its partner view is shown: quoted for the shell, with no Enter, ready for a command of your own. On macOS and Linux the path is typed only into an sh, bash, zsh, dash or ksh shell. Any other shell there, a plain terminal over SSH, or an SSH session\'s partner shell (it runs on the host) gets nothing, and the hint says where the image was saved.\n\nWorks with screenshots, images copied from a browser, diagrams from Excalidraw, or an image file you copied in File Explorer or Finder. No more "let me save this to disk first and drag it in".',
+      },
+    },
+  },
+
+  {
+    id: 'tip.snap-windows-choice',
+    category: 'productivity',
+    complexity: 'simple',
+    priority: 55,
+    requires: ['sessions.create-config'],
+    platforms: ['win32'],
+    variants: {
+      primary: {
+        shortText: 'Snap on Windows: new overlay, or the earlier Snap',
+        title: 'Snap on Windows',
+        body: 'On Windows, **Snap > Rectangle** now uses the app\'s own overlay: drag an area and press **Enter**, or pick **Whole screen**; **Esc** cancels. Prefer the earlier Snap with its drawing tools? **Settings > Custom Commands > Snap**, **Snap on Windows: Previous**. If the new one ever cannot take a picture, the earlier one opens for that press by itself.',
+        focusHint: 'Session toolbar -- the Snap button',
       },
     },
   },

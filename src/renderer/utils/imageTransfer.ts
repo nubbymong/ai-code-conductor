@@ -9,10 +9,13 @@ import { quoteArgForShell } from '../../shared/shell-quote'
  *
  * For a Claude session:
  *
- * Local sessions: write the absolute path into the prompt. Claude's
- * built-in Read tool ingests the file directly — no extra MCP round-
- * trip, fastest path, and matches what Claude Code does when you drag
- * an image onto its CLI.
+ * Local sessions (2.1.3-beta.16 X1.2): main types the absolute path as a
+ * bracketed paste, which Claude Code attaches as its own pasted image
+ * ("[Image #1]"), then the sentence, then Enter (pty.submitImage; probe P11,
+ * ADR-030: a path typed as text reaches the model only as words). A session
+ * main does not type an image into (Snap's picture in the other assistant's
+ * tab) answers `not-taken` and gets the line it always got: the sentence and
+ * the path typed, then Enter.
  *
  * SSH sessions: write the bare filename and ask Claude to call
  * `mcp__conductor__fetch_host_screenshot`. The remote machine
@@ -51,8 +54,9 @@ export function composeFetchHostScreenshotPrompt(
 }
 
 /**
- * Compose a local-path prompt — writes the absolute path so Claude's
- * Read tool can ingest it directly.
+ * Compose a local-path prompt: the sentence, then the absolute path, typed as
+ * text. Since X1.2 only the line for a session main does not paste an image
+ * into (sendImageToSession).
  */
 export function composeLocalPathPrompt(
   filePath: string,
@@ -68,9 +72,11 @@ export function composeLocalPathPrompt(
  * @param sessionId - target Claude PTY session id
  * @param hostFilePath - absolute local path of the image file
  * @param userContext - optional context message prepended to the prompt
- * @param sessionType - 'local' uses direct path; 'ssh' uses MCP fetch.
- *                     Defaults to MCP fetch for back-compat with any caller
- *                     that doesn't yet thread the type through.
+ * @param sessionType - 'local': main pastes the path (pty.submitImage), or,
+ *                     for a session it does not take, the path typed with the
+ *                     sentence; 'ssh' uses MCP fetch. Defaults to MCP fetch
+ *                     for back-compat with any caller that doesn't yet
+ *                     thread the type through.
  */
 export function sendImageToSession(
   sessionId: string,
@@ -78,11 +84,19 @@ export function sendImageToSession(
   userContext?: string,
   sessionType?: 'local' | 'ssh'
 ): void {
-  const prompt = sessionType === 'local'
-    ? composeLocalPathPrompt(hostFilePath, userContext)
-    : composeFetchHostScreenshotPrompt(basename(hostFilePath), userContext)
+  if (sessionType === 'local') {
+    // The line a session gets when main does not paste the image for it
+    // (`not-taken`), or when the ask itself failed; a trailing \r submits it.
+    const typed = (): void => writeSessionInput(sessionId, composeLocalPathPrompt(hostFilePath, userContext) + '\r')
+    const sentence = userContext?.trim() || 'Please view this image.'
+    void window.electronAPI.pty.submitImage({ sessionId, path: hostFilePath, sentence }).then(
+      (result) => { if (result.outcome === 'not-taken') typed() },
+      typed,
+    )
+    return
+  }
   // Trailing \r submits the prompt to Claude
-  writeSessionInput(sessionId, prompt + '\r')
+  writeSessionInput(sessionId, composeFetchHostScreenshotPrompt(basename(hostFilePath), userContext) + '\r')
 }
 
 /**

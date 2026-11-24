@@ -1,8 +1,8 @@
 //! `aicc-helper`: the session helper's command line. The app runs it
 //! (`src/main/session-helper/`, and on Windows its `start`, `end`,
 //! `console-hosts` and `end-console-host` modes), a held session's CLI runs
-//! `hook` and `mcp`, and the tests run every command. Nothing in the app runs
-//! `capture` yet: probe P21 measures it first.
+//! `hook` and `mcp`, and the tests run every command. On Windows the app
+//! also runs `capture` for Snap (`src/main/snap/`).
 //!
 //! ```text
 //! aicc-helper version
@@ -154,7 +154,7 @@ fn main() -> ExitCode {
         // (Windows, consoles.rs).
         "end-console-host" => aicc_helper::consoles::end_command(rest),
         // One picture of each display, for Snap (Windows; capture.rs). The
-        // app does not run it yet.
+        // app runs it for the new Snap, the Windows default (src/main/snap/).
         "capture" => aicc_helper::capture::command(rest),
         // A run with one terminal, as the app has for a tab, for the tests of
         // console-hosts (Windows); not a public command.
