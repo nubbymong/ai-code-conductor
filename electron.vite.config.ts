@@ -48,6 +48,10 @@ export default defineConfig({
       rollupOptions: {
         input: {
           index: resolve(__dirname, 'src/preload/index.ts'),
+          // Snap's own overlay (src/main/snap/overlay.ts). Sandboxed, so it must
+          // build to one file: it imports nothing from src/ that index.ts also
+          // imports, or the shared code would become a chunk it cannot load.
+          'snap-overlay': resolve(__dirname, 'src/preload/snap-overlay.ts'),
         }
       }
     }
@@ -64,7 +68,9 @@ export default defineConfig({
       outDir: resolve(__dirname, 'out/renderer'),
       rollupOptions: {
         input: {
-          index: resolve(__dirname, 'src/renderer/index.html')
+          index: resolve(__dirname, 'src/renderer/index.html'),
+          // Snap's own overlay page, one window per display (src/main/snap/overlay.ts).
+          'snap-overlay': resolve(__dirname, 'src/renderer/snap-overlay.html')
         }
       }
     }

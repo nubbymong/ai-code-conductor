@@ -10,6 +10,7 @@ import { effectiveKind } from '../command-bar/layout'
 import { CommandChip } from '../command-bar/chips'
 import { ConfirmCard } from '../command-bar/menus'
 import { commandSecretKey } from '../../../shared/command-secret'
+import { savedSnapEngine, SNAP_ENGINE_DEFAULT_WINDOWS } from '../../../shared/snap-engine'
 import { COLOR_SWATCHES } from '../SessionDialog'
 import { Toggle } from '../SettingsPage'
 import CommandDialog from '../CommandDialog'
@@ -19,7 +20,8 @@ import CommandDialog from '../CommandDialog'
  * "useful, not Nth-degree optionality". Four cards and nothing else:
  *   1. Command bar  -- one row / two rows then fold; show the command bar
  *   2. Core tools   -- where hidden tools come back (Logs notes the privacy toggle)
- *   3. Snap         -- colour + auto-delete, moved here from Snap's right-click
+ *   3. Snap         -- colour + auto-delete, moved here from Snap's right-click;
+ *                      on Windows, which Snap takes the picture (New / Previous)
  *   4. Commands     -- a plain searchable list: Edit / Delete, "Needs review" filter;
  *                      and what prompt buttons do: send, or type only (#333)
  * Explicitly NOT here: density, default-icon style, applies-to chips, bulk
@@ -67,6 +69,10 @@ export function CustomCommandsTab() {
   // ---- 3. snap --------------------------------------------------------------------
   const snap = useMagicButtonStore((s) => s.settings)
   const updateSnap = useMagicButtonStore((s) => s.updateSettings)
+  // Snap on Windows: the saved choice, or the default when none is saved
+  // (src/shared/snap-engine.ts). macOS and Linux have the previous Snap only.
+  const isWindows = (window as unknown as { electronPlatform?: string }).electronPlatform === 'win32'
+  const snapEngine = savedSnapEngine(snap.snapEngineWindows) ?? SNAP_ENGINE_DEFAULT_WINDOWS
 
   // ---- 4. commands ------------------------------------------------------------------
   const { commands, sections, removeCommand, updateCommand } = useCommandStore()
@@ -169,6 +175,20 @@ export function CustomCommandsTab() {
             />
             <span className="text-xs text-overlay1">days</span>
           </div>
+          {isWindows && (
+            <div data-testid="settings-snap-engine">
+              <div className="flex flex-wrap items-center gap-x-4 gap-y-1" role="radiogroup" aria-label="Snap on Windows">
+                <span className="text-sm text-text">Snap on Windows:</span>
+                {([['new', 'New'], ['previous', 'Previous']] as const).map(([value, label]) => (
+                  <label key={value} className="flex items-center gap-2 cursor-pointer select-none">
+                    <input type="radio" name="snap-engine-windows" checked={snapEngine === value} onChange={() => updateSnap({ snapEngineWindows: value })} className="accent-blue" data-testid={`settings-snap-engine-${value}`} />
+                    <span className="text-sm text-text leading-tight">{label}</span>
+                  </label>
+                ))}
+              </div>
+              <p className="text-[11px] text-overlay0 leading-tight mt-1">New: a rectangle or the whole screen, with no drawing tools. Previous: the earlier Snap. If the new one cannot take a picture, the previous one opens instead.</p>
+            </div>
+          )}
         </div>
       </Card>
 

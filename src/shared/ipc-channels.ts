@@ -175,8 +175,12 @@ export const IPC = {
   SCREENSHOT_LIST_WINDOWS: 'screenshot:listWindows',
   SCREENSHOT_LIST_RECENT: 'screenshot:listRecent',
   SCREENSHOT_CLEANUP: 'screenshot:cleanup',
-  SCREENSHOT_REGION_SELECTED: 'screenshot:regionSelected',
-  SCREENSHOT_CANCELLED: 'screenshot:cancelled',
+  // Snap's own overlay (src/main/snap/overlay.ts), its page only: the page asks
+  // for its display's picture once (invoke), then answers once (send). Spelled
+  // out again in src/preload/snap-overlay.ts, a sandboxed preload that may not
+  // load this file (tests/unit/main/snap-overlay.test.ts holds the two equal).
+  SNAP_OVERLAY_READY: 'snapOverlay:ready',
+  SNAP_OVERLAY_ANSWER: 'snapOverlay:answer',
 
   // Session persistence
   SESSION_SAVE: 'session:save',
