@@ -108,12 +108,19 @@ const FOOTER_EFFORTS = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'ma
 /** A model id as the footer can show it, when the session's are not known. */
 const ANY_MODEL = '[A-Za-z0-9][A-Za-z0-9._:/-]*'
 const escapeRe = (s: string): string => s.replace(/[.*+?^${}()|[\]\\/-]/g, '\\$&')
+/** An escaped model id whose letters match in either case. */
+const anyCase = (s: string): string => s.replace(/[A-Za-z]/g, (c) => `[${c.toLowerCase()}${c.toUpperCase()}]`)
 /** The footer (round 2, FT): "<model> <effort> . <folder>", the model one of
- *  `models` when they are given. Codex's own hint lines ("enter select . esc
- *  back", "MCP servers . 2 enabled", "Git . main") name no level after a
- *  model, so they never match. */
+ *  `models` when they are given, its letters in either case (2.1.3-beta.17
+ *  C8, aicc_planning#416): Codex 0.157.1 names a model its own catalogue
+ *  knows by the catalogue's display name, so a session on gpt-5.5 shows
+ *  "GPT-5.5 medium" (the test machine, on a stand-in model server that
+ *  serves no model list), and one on a model it does not know shows the id
+ *  as given ("p19-probe default", probe P19's recordings). Codex's own hint
+ *  lines ("enter select . esc back", "MCP servers . 2 enabled", "Git .
+ *  main") name no level after a model, so they never match. */
 function footerRe(models?: readonly string[] | null): RegExp {
-  const model = models && models.length > 0 ? `(?:${models.map(escapeRe).join('|')})` : ANY_MODEL
+  const model = models && models.length > 0 ? `(?:${models.map((m) => anyCase(escapeRe(m))).join('|')})` : ANY_MODEL
   return new RegExp(`^ {0,8}${model} (?:${FOOTER_EFFORTS.join('|')}) ${MIDDLE_DOT} \\S`)
 }
 /** On screen means the composer is not the one taking keys: the trust
