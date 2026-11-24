@@ -46,7 +46,11 @@ clean tree each time. 043d7924 added a snap-e2e case at a forced display scale
 of 1.5 (D11 to D13), owed since A2's review, and a later commit reverts it: on
 its first run (45304028588) the forced scale gave Electron a display of 683 by
 512 physical pixels where the helper read Windows' 1024 by 768, so the engine
-could not pair them and the previous Snap took the press.
+could not pair them and the previous Snap took the press. The switch changes
+Chromium's picture of the display, not Windows', so it cannot stand in for a
+display Windows scales. In the case's place a new D11 reads the fallback's two
+Electron calls on a picture made at 1.5. A picture on a display above 100%
+stays unread in real Electron: the owner's first press is that reading.
 
 **The release commit.** Version 2.1.3-beta.16 and its changelog entry (dated
 2026-11-24, CHANGELOG.md regenerated). The surface sweep: app-knowledge (the

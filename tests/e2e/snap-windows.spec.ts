@@ -49,6 +49,17 @@
  *   D10 HELPER DIRECT: the built helper's capture, run once from the test, has
  *      each picture's size equal its header and the line, each matched to one
  *      of Electron's displays by physical bounds and scale.
+ *   D11 SCALED PICTURE (added at the beta.16 aggregate): in this Electron a
+ *      picture made at a scale of 1.5 (createFromBitmap with a scaleFactor, as
+ *      windows-engine.ts makes one on a display at 150%) is not empty, toJPEG
+ *      gives nothing for it, and toPNG at that scale gives a PNG of the
+ *      picture's own size: the two calls of the overlay's fallback (overlay.ts
+ *      pictureDataUrl), read in real Electron. No display above 100% is read:
+ *      the runner has none, and Chromium's --force-device-scale-factor cannot
+ *      stand in for one (run 45304028588: under it Electron listed the 1024 by
+ *      768 display as 455 by 341 DIP and 683 by 512 physical, the helper read
+ *      1024 by 768, the engine refused the mismatch and the previous Snap took
+ *      the press).
  * READINGS (recorded): R1, what main has loaded once the app has started and
  *   its tab runs (before any press): the native add-ons (.node files, from
  *   main's module cache and from the process report) and the files of the
@@ -613,5 +624,20 @@ test.describe('Snap on Windows', () => {
     } finally {
       fs.rmSync(folder, { recursive: true, force: true })
     }
+  })
+
+  test('D11 SCALED PICTURE: in this Electron a picture made at 1.5 has no JPEG form, and its PNG at that scale is the whole picture', async () => {
+    const r = await ctx!.app.evaluate(({ nativeImage }) => {
+      const width = 6
+      const height = 4
+      const img = nativeImage.createFromBitmap(Buffer.alloc(width * height * 4, 255), { width, height, scaleFactor: 1.5 })
+      const png = img.toPNG({ scaleFactor: 1.5 })
+      return { empty: img.isEmpty(), jpegBytes: img.toJPEG(92).length, pngBytes: png.length, pngSize: nativeImage.createFromBuffer(png).getSize() }
+    })
+    readings.scaledPicture = r
+    expect(r.empty).toBe(false)
+    expect(r.jpegBytes, 'toJPEG gives nothing for a picture with no 1x form').toBe(0)
+    expect(r.pngBytes).toBeGreaterThan(0)
+    expect(r.pngSize).toEqual({ width: 6, height: 4 })
   })
 })
