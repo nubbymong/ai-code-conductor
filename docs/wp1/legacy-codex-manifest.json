@@ -1,9 +1,9 @@
 {
   "schema": "wp1-legacy-codex-manifest/3",
-  "generatedAt": "2026-11-24T00:39:25.018Z",
-  "head": "42bc27386466f342f613cbda633efbd2b4dd208c",
-  "tree": "7b3bd9d244d231c7409ced2838473ff61016fd85",
-  "scannedWorkingTree": true,
+  "generatedAt": "2026-11-24T05:21:52.795Z",
+  "head": "4f7af17eba822c8a1dceb382da3575baece8163d",
+  "tree": "e48cf8c31e68c813bfa11e753b576fde7bbf86c8",
+  "scannedWorkingTree": false,
   "predicateDigest": "100a1233edebdc39a5f9004d3fba980a89ebb15b25872e52076386bc84b03153",
   "predicates": [
     {
@@ -116,9 +116,9 @@
     "\\.(png|jpg|jpeg|gif|ico|icns|webp|svg|woff2?|ttf|otf|mp4|zip|asar|node|exe|dll|dylib|so|pdf)$",
     "^package-lock\\.json$"
   ],
-  "trackedFileCount": 3787,
-  "excludedFileCount": 593,
-  "scannedFileCount": 3194,
+  "trackedFileCount": 3790,
+  "excludedFileCount": 595,
+  "scannedFileCount": 3195,
   "unscopedFileCount": 15,
   "unscoped": [
     ".claude/settings.json",
@@ -139,8 +139,8 @@
   ],
   "unscopedMentions": [],
   "unreadable": [],
-  "matchedPathCount": 1069,
-  "pathDigest": "d12233ca633f6065be83ecba424cad5244d8c17f41031320f16e6745d39cb4ed",
+  "matchedPathCount": 1071,
+  "pathDigest": "890606e4e15b84c958d005dbcd2c6800a9ecb5f6807f6e1db364311717187c3a",
   "entries": [
     {
       "path": ".github/workflows/ci.yml",
@@ -931,7 +931,7 @@
       "predicates": [
         "P14"
       ],
-      "lineCount": 24
+      "lineCount": 30
     },
     {
       "path": "helper/probes/p11-model-stand-in.cjs",
@@ -2515,7 +2515,7 @@
         "P07",
         "P11"
       ],
-      "lineCount": 66
+      "lineCount": 65
     },
     {
       "path": "src/renderer/components/ConductorMcpPage.tsx",
@@ -3439,14 +3439,14 @@
         "P11",
         "P12"
       ],
-      "lineCount": 235
+      "lineCount": 237
     },
     {
       "path": "src/renderer/training-steps.ts",
       "predicates": [
         "P11"
       ],
-      "lineCount": 120
+      "lineCount": 122
     },
     {
       "path": "src/renderer/types/electron.d.ts",
@@ -3525,7 +3525,7 @@
         "P12",
         "P14"
       ],
-      "lineCount": 170
+      "lineCount": 172
     },
     {
       "path": "src/shared/ask-conductor-provider.ts",
@@ -7260,11 +7260,25 @@
       "lineCount": 4
     },
     {
+      "path": "tests/unit/renderer/command-broadcast.test.ts",
+      "predicates": [
+        "P13"
+      ],
+      "lineCount": 2
+    },
+    {
       "path": "tests/unit/renderer/command-dialog-capabilities.test.tsx",
       "predicates": [
         "P13"
       ],
       "lineCount": 10
+    },
+    {
+      "path": "tests/unit/renderer/commandbar-broadcast.test.tsx",
+      "predicates": [
+        "P13"
+      ],
+      "lineCount": 7
     },
     {
       "path": "tests/unit/renderer/commandbar-codex-toolbar.test.ts",
@@ -8423,7 +8437,7 @@
         "P04",
         "P13"
       ],
-      "lineCount": 432,
+      "lineCount": 433,
       "truncated": true
     },
     {

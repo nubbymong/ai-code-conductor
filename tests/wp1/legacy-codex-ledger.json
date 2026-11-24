@@ -1,8 +1,8 @@
 {
   "schema": "wp1-legacy-codex-ledger/2",
   "predicateDigest": "100a1233edebdc39a5f9004d3fba980a89ebb15b25872e52076386bc84b03153",
-  "manifestPathDigest": "d12233ca633f6065be83ecba424cad5244d8c17f41031320f16e6745d39cb4ed",
-  "manifestHead": "42bc27386466f342f613cbda633efbd2b4dd208c",
+  "manifestPathDigest": "890606e4e15b84c958d005dbcd2c6800a9ecb5f6807f6e1db364311717187c3a",
+  "manifestHead": "4f7af17eba822c8a1dceb382da3575baece8163d",
   "dispositions": {
     "retain": "unchanged observable behaviour, characterization proof",
     "move": "moved behind a package boundary and/or adapted at the call site, regression proof (newPath when relocated)",
@@ -10369,6 +10369,16 @@
       "note": ""
     },
     {
+      "path": "tests/unit/renderer/command-broadcast.test.ts",
+      "predicates": [
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "replace",
+      "evidence": "existing test retained; must stay green on the merge candidate (WP1.33); WP1.33 mapping: 2.1.3-beta.17 section C2 (aicc_planning#413) added the chooser's list cases: a Codex tab is listed, by its work name and its agent 'Codex', beside the Claude Code tabs; the other cases are unchanged; tests/unit/renderer/command-broadcast.test.ts",
+      "note": "matched since 2.1.3-beta.17 section C2 (was not matched)"
+    },
+    {
       "path": "tests/unit/renderer/command-dialog-capabilities.test.tsx",
       "predicates": [
         "P13"
@@ -10377,6 +10387,16 @@
       "disposition": "replace",
       "evidence": "WP1.58: one case added in WP2 commit 6e review fix, Ask Conductor disabled with the reason while Claude Code is off (WP1.2); every existing case unchanged; adapted in place: tests/unit/renderer/command-dialog-capabilities.test.tsx",
       "note": ""
+    },
+    {
+      "path": "tests/unit/renderer/commandbar-broadcast.test.tsx",
+      "predicates": [
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "replace",
+      "evidence": "existing test retained; must stay green on the merge candidate (WP1.33); WP1.33 mapping: 2.1.3-beta.17 section C2 (aicc_planning#413) adapted it for the broadcast chooser: a Codex tab is among the open tabs, listed with its agent 'Codex', reached by All and left out when unticked; the chooser's words name Claude Code and Codex sessions; tests/unit/renderer/commandbar-broadcast.test.tsx",
+      "note": "matched since 2.1.3-beta.17 section C2 (was not matched)"
     },
     {
       "path": "tests/unit/renderer/commandbar-codex-toolbar.test.ts",
