@@ -1,6 +1,6 @@
 // 2.1.3-beta.17 C6 (aicc_planning#415): Codex's image placeholder read from
 // its screen (src/shared/codex-image-screen.ts), on screens recorded from
-// Codex 0.157.1: P19's Windows ready screen and warning-count screens
+// Codex 0.157.1: P19's Windows ready screen and macOS warning-count screen, and C7's Windows warning-draft screen
 // (helper/fixtures/screens, read only), with the composer row as probe P11
 // recorded it after the paste ("[Image #1]") and after the sentence
 // ("[Image #1]  <sentence>"); and the screens C6's own reading recorded on

@@ -431,10 +431,10 @@ interface ImageShot { lines: ScreenLine[] | null; title: string | null }
  * composer readers read it since C7 (aicc_planning#371,
  * src/shared/codex-screen.ts): at the right of the hint row of a ready, empty
  * composer, and alone under the footer once the composer holds the
- * placeholder or the sentence. So the image goes in while it shows, and a
- * screen with it that is not at its prompt (a reply running, a prompt up, the
- * count alone under an empty composer, which is not recorded) is waited on
- * and refused as without it.
+ * placeholder or the sentence. So the image goes in while it shows. A reply
+ * running or a prompt up with it is waited on and refused as without it; the
+ * count alone under an empty composer (not recorded) is no screen the readers
+ * recognise, so it is waited on and refused too.
  * Never sends Ctrl+C. A run that ends meanwhile: `session-gone`, nothing more.
  */
 export async function pasteImageIntoCodexComposer(imagePath: string, sentence: string, deps: ComposerSubmitDeps, opts: { readyWaitMs: number }): Promise<RunScreenImageResult> {

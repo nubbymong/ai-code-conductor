@@ -18,9 +18,10 @@ aggregate's C7 join. Base: loop/beta/beta17-aggregate at 1320cde5.
   the two image test files).
 - **Why C6 had the guard.** At C6's build the readers could not read a count screen (#371's
   known issue), so C6 stopped on the count itself, independent of C7's change (plan review
-  finding 13). Read against C7's readers, the guard catches no screen they do not already
-  refuse: with the count, a ready reading has only the footer and Codex's anchored count row
-  under the composer. So the guard goes, and nothing replaces it in the rule.
+  finding 13). Read against C7's readers, the only screens the guard refuses that they do not are Codex's
+  own count screens at its prompt (a ready reading has only the footer and Codex's anchored
+  count row under the composer), which are the screens this fix lets through. Every other
+  screen with the count they already refuse. So the guard goes, and nothing replaces it.
 - **The fix.** The rule reads the count as C7's readers do. At rest the hint row with the count
   reads ready and empty, so the paste goes; "[Image #1]" over the count alone reads as the
   placeholder; the sentence is typed and confirmed; Enter goes once. One gap needed code: the
@@ -30,10 +31,10 @@ aggregate's C7 join. Base: loop/beta/beta17-aggregate at 1320cde5.
   alone exactly where C7's `rowsUnder` takes it (the last row, at the footer's indent, one cell
   from the right edge, under a composer that holds something). The cut screen uses it.
   `RunScreenImageNotPasted` loses `warning-count`, which nothing produces now.
-- **Still refused, as without the count.** A reply running (its busy row or the title's
+- **Still refused.** As without the count: a reply running (its busy row or the title's
   spinner): the rule waits, as a prompt button does, and types nothing while it runs. A prompt
-  up. The count alone under an empty composer, or a row under the placeholder that is not
-  Codex's count. A reply that ends within the 5 s wait now gets the image; before, the count
+  up. And as screens the readers do not recognise: the count alone under an empty composer,
+  or a row under the placeholder that is not Codex's count. A reply that ends within the 5 s wait now gets the image; before, the count
   refused at once.
 - **Tests.** tests/unit/main/codex-image-paste.test.ts (the simulated Codex draws the count as
   Codex does; a new block over the recorded screens) and tests/unit/shared/codex-image-screen.test.ts
@@ -44,6 +45,9 @@ aggregate's C7 join. Base: loop/beta/beta17-aggregate at 1320cde5.
   composer; a running reply read as ready; the title's spinner not read.
 - **Not recorded.** "[Image #1]" over the count itself. Codex keeps the count alone under any
   composer that holds something (C7's hold: a draft, a wrapped draft, its paste placeholder, a
-  draft after a reply), and the screen with the hint row kept is read as well. A VM line on
-  Codex 0.157.1 with the count showing is owed. Also not covered: macOS, Linux, Codex versions
-  other than 0.157.1, a session held by the session helper on the real CLI.
+  draft after a reply), and the screen with the hint row kept is read as well. The VM line on
+  Codex 0.157.1 with the count showing passed on f21c11f5: Alt+V at rest 3 of 3 and while a
+  reply streamed 3 of 3, each sent once as "[Image #1]"; the beta.16 control sent no image.
+  Snap with the count did not run there (no desktop over SSH) and is owed to a desktop. Also not
+  covered: macOS, Linux, Codex versions other than 0.157.1, a session held by the session helper
+  on the real CLI.

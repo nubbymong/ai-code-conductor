@@ -7,8 +7,8 @@
 //    path, the sentence and a prompt button's ready wait; nothing is written
 //    through the write port. Pasted: sent.
 //  - Not pasted (Codex busy, no placeholder, the sentence not confirmed, a
-//    prompt up): not-taken, so the renderer types today's
-//    line by its own Codex rule; one log line says why. A paste the rule left
+//    prompt up): not-taken, so the renderer types today's line by its own
+//    Codex rule; one log line says why. A paste the rule left
 //    at the prompt (a prompt came up after it): not-taken with left, so the
 //    renderer types nothing and says the image is at the prompt; the others
 //    carry no left.
