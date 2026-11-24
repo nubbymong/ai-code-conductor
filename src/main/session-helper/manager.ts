@@ -666,6 +666,8 @@ interface KeptForTab {
   serve?: ReturnType<typeof setTimeout>
   /** B1e: its keeper's hook route, from its serving while its tab is not shown. */
   hooks?: HookRoute
+  /** B1f: its keeper's tool route, from the same serving (reclaim() keeps it again). */
+  tools?: ToolRoute
 }
 
 export class SessionHelperManager implements MachinesSource {
@@ -1962,6 +1964,12 @@ export class SessionHelperManager implements MachinesSource {
    * those files, and ends the session as before. Any other agent session (one
    * on the loopback route, a run of the app's own) is left to the kill.
    *
+   * Hook events (aicc_planning#423, B1f): a connection that takes them (a
+   * Claude Code session's, and a keeper's of a session kept for its tab not
+   * shown) lets go by a detach, which the update waits for (endsForUpdate):
+   * its holder sends no event after its answer, so a later one waits there
+   * for the next start; a keeper's session stays kept for the next start.
+   *
    * A held terminal kept for a tab that no tab took over (one a crash left,
    * one Re-attach opened a tab for, one an earlier reclaim() kept) is not
    * reached by that kill. When `restorable` is a set (Save, even with no tab
@@ -1979,6 +1987,9 @@ export class SessionHelperManager implements MachinesSource {
     const saved = (tab: string) => restorable !== null && this.savedTabs.has(tab) && restorable.has(tab)
     let n = 0
     let agents = 0
+    // B1f: each connection that takes hook events lets go by a detach, which
+    // the update waits for (endsForUpdate): its later events wait in its holder.
+    const lets: Promise<void>[] = []
     for (const [sid, w] of this.live) {
       if (!w.throughHelper || w.isReleased) continue
       const kind = heldIdKind(sid)
@@ -1996,6 +2007,7 @@ export class SessionHelperManager implements MachinesSource {
         continue
       }
       this.released.set(sid, kept ? { record, pty: w, kept } : { record, pty: w })
+      if (w.letGone) lets.push(this.letGoLogged(sid, w.letGone))
       if (kept) {
         agents++
         this.deps.log(`[session-helper] ${sid}: an app update lets go of this ${kept.provider} session of tab ${kept.label} with its CLI running, and records it for the next start (${keptBindsText(kept)})`)
@@ -2017,7 +2029,13 @@ export class SessionHelperManager implements MachinesSource {
       this.reclaimed.delete(sid)
       ends.push(this.endRecord(r).catch((err) => this.deps.log(`[session-helper] ${sid}: could not be ended at the update: ${message(err)}`)))
     }
-    this.updateEnds = Promise.allSettled(ends).then(() => undefined)
+    // B1f: a keeper that takes hook events (B1e: a session kept for its tab
+    // not shown) lets go the same way; it stays kept for the next start, and
+    // reclaim() keeps it again.
+    for (const [sid, k] of this.keepers) {
+      lets.push(k.ready.then(() => (k.conn?.hooks && !k.conn.isClosed ? this.letGoLogged(sid, k.conn.letGo()) : undefined)))
+    }
+    this.updateEnds = Promise.allSettled([...ends, ...lets]).then(() => undefined)
     try {
       this.writeMarker('update')
     } catch (err) {
@@ -2033,9 +2051,17 @@ export class SessionHelperManager implements MachinesSource {
 
   /** Settles once every end the last releaseForUpdate sent was answered (or
    *  failed): the kept terminals ended because the user discarded the saved
-   *  sessions. The caller bounds the wait; the app exits next. */
+   *  sessions; and, B1f, once each holder it let go of by a detach answered
+   *  (or did not in time). The caller bounds the wait; the app exits next. */
   endsForUpdate(): Promise<void> {
     return this.updateEnds
+  }
+
+  /** B1f: an update's let-go of a connection that takes hook events, with its log line. */
+  private letGoLogged(sid: string, answered: Promise<boolean>): Promise<void> {
+    return answered.then((yes) => this.deps.log(yes
+      ? `[session-helper] ${sid}: its holder let go of it for the update, so a hook event it makes from now on waits there for the next start`
+      : `[session-helper] ${sid}: its holder did not answer the update's let-go, so its connection is closed; a hook event it makes before the app exits may not reach the next start`))
   }
 
   /** True while an app update keeps this tab's agent session running (S16
@@ -2224,7 +2250,8 @@ export class SessionHelperManager implements MachinesSource {
       if (e.hooks) this.keep(record, undefined, e.hooks)
       return
     }
-    this.keep(record, this.toolRoute(ctx, sid, undefined, true, true), e.hooks)
+    e.tools = this.toolRoute(ctx, sid, undefined, true, true)
+    this.keep(record, e.tools, e.hooks)
   }
 
   /** aicc_planning#423: this tab is shown and starts now (TerminalView's first
@@ -2325,6 +2352,12 @@ export class SessionHelperManager implements MachinesSource {
       this.reclaimed.set(record.session, record)
       this.keep(record)
     }
+    // B1f: a session kept for its tab whose keeper the update let go of (it
+    // took hook events) is kept again, as its serving kept it.
+    for (const [sid, e] of this.keptForTabs) {
+      const k = this.keepers.get(sid)
+      if (e.hooks && !this.quitting && (!k?.conn || k.conn.isClosed)) this.keep(e.record, e.tools, e.hooks)
+    }
     try {
       if (!this.quitting) this.writeMarker()
     } catch (err) {
@@ -2376,8 +2409,13 @@ export class SessionHelperManager implements MachinesSource {
       if (kept) this.forgetKept(kept)
     }
     // Kept for a tab that has not taken it over (S16 step 5): its keeper's
-    // end above ends it, and its record and what it left on disk go.
-    for (const sid of [...this.keptForTabs.keys()]) this.forgetKeptForTab(sid)
+    // end above ends it; one whose keeper an update let go of (B1f) has no
+    // keeper left and is ended by its record. Its record and what it left on
+    // disk go.
+    for (const [sid, e] of [...this.keptForTabs]) {
+      if (this.updating && e.hooks) waits.push(this.endRecord(e.record).catch(() => { /* its away clock ends it, and the next start */ }))
+      this.forgetKeptForTab(sid)
+    }
     this.released.clear()
     this.reclaimed.clear()
     this.adoptable.clear()

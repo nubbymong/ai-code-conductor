@@ -237,7 +237,7 @@ function savedTabIds(): Set<string> {
   }
 }
 
-/** How long an update waits for the ends releaseHeldTerminalsForUpdate sent (a quit's own bound). */
+/** How long an update waits for what releaseHeldTerminalsForUpdate sent: its ends, and its holders' answers to a let-go (B1f). A quit's own bound. */
 export const UPDATE_END_WAIT_MS = 1500
 
 /** The update's installer could not be started: what was let go of is kept

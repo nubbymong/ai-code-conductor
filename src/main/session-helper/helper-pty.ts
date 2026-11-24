@@ -508,7 +508,8 @@ export class HelperPty implements IPty {
 
   /**
    * An app update (Windows, plan section B2): let go of the holder without
-   * ending it. The connection closes with no term.end, so the holder's away
+   * ending it. The connection closes with no term.end (after a term.detach,
+   * for one that takes hook events: B1f), so the holder's away
    * clock starts (two minutes), and the new version's start shows the
    * terminal again, as it does after a crash. An agent session's is let go
    * of the same way (2.1.3-beta.14, S16 step 4), and its restored tab in the
@@ -528,9 +529,17 @@ export class HelperPty implements IPty {
     this.showHeld()
     this.setDetached()
     this.stopRedraw()
-    conn?.close()
+    // aicc_planning#423 (B1f): one that takes hook events lets go by a detach
+    // (connection.ts letGo), so a later event waits in its holder for the
+    // next start; any other closes as before.
+    if (conn?.hooks) this.letGone = conn.letGo()
+    else conn?.close()
     return true
   }
+
+  /** B1f: set by release() for a connection that takes hook events: true once
+   *  its holder let go of it, false when it did not answer. */
+  letGone: Promise<boolean> | null = null
 
   // ── the ways in ────────────────────────────────────────────────────────────
 

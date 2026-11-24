@@ -112,6 +112,10 @@ export interface ConnectionOptions {
 
 export const HELLO_TIMEOUT_MS = 10_000
 export const REPLY_TIMEOUT_MS = 10_000
+/** How long letGo() waits for its holder's answer: under the update's own
+ *  bound (app-wiring.ts UPDATE_END_WAIT_MS), so an unanswered let-go closes
+ *  its connection, and is logged, before the update kills the PTYs. */
+export const LET_GO_WAIT_MS = 1_000
 /** The holder closes a connection idle for 60 s; the app pings every 15 s. */
 export const PING_EVERY_MS = 15_000
 /** Typed input between two pings, at most (section 15). */
@@ -338,6 +342,8 @@ export class HolderConnection extends EventEmitter<HolderConnectionEvents> {
    *  answered (at most MCP_OPEN_CALLS_MAX a stream): when the app ends the
    *  stream, each is answered with an error (closeMcp). */
   private readonly mcpCalls = new Map<number, Set<string | number>>()
+  /** Set by letGo() until the holder answers its `term.detach` (B1f). */
+  private lettingGo: { id: number; done: (answered: boolean) => void } | null = null
 
   private constructor(stream: Duplex, hello: Hello, rest: Buffer, opts: ConnectionOptions) {
     super()
@@ -619,6 +625,45 @@ export class HolderConnection extends EventEmitter<HolderConnectionEvents> {
     this.shut()
   }
 
+  /**
+   * aicc_planning#423 (B1f): let go of the terminal with `term.detach`, in
+   * place of close(), for an app update. A Windows named pipe has no
+   * half-close: after close() the holder keeps this connection attached until
+   * the app's handle closes, and each hook event it writes meanwhile leaves
+   * its queue as sent while this side drops it unread. A holder answers
+   * `term.detached`, sends nothing after it and closes (section 15), so a
+   * later event waits in its queue for the next attach. From the call the
+   * connection is closed as close() closes it, except that it still reads,
+   * and reports, the hook events the holder sent before its answer; nothing
+   * else it reads is reported. True once the holder answered; false when it
+   * did not within LET_GO_WAIT_MS, or the connection went first. The stream
+   * is closed either way.
+   */
+  letGo(): Promise<boolean> {
+    if (this.closed) return Promise.resolve(false)
+    const id = this.takeId()
+    try {
+      this.stream.write(encodeJsonFrame({ t: 'term.detach', id }))
+    } catch {
+      this.close()
+      return Promise.resolve(false)
+    }
+    return new Promise<boolean>((resolve) => {
+      const done = (answered: boolean): void => {
+        if (this.lettingGo?.id !== id) return
+        this.lettingGo = null
+        clearTimeout(timer)
+        try { this.stream.destroy() } catch { /* gone */ }
+        resolve(answered)
+      }
+      const timer = setTimeout(() => done(false), Math.min(this.replyTimeoutMs, LET_GO_WAIT_MS))
+      timer.unref?.()
+      this.lettingGo = { id, done }
+      this.stream.once('close', () => done(false))
+      this.shut()
+    })
+  }
+
   private shut(): void {
     if (this.closed) return
     this.closed = true
@@ -638,15 +683,29 @@ export class HolderConnection extends EventEmitter<HolderConnectionEvents> {
   }
 
   private onBytes(chunk: Buffer): void {
-    if (this.closed) return
+    if (this.closed && !this.lettingGo) return
     let frames
     try {
       frames = this.reader.push(chunk)
     } catch {
       this.close()
+      this.lettingGo?.done(false)
       return
     }
     for (const f of frames) {
+      if (this.closed) {
+        // Letting go (letGo): the hook events before the holder's answer, then its answer; nothing else.
+        const going = this.lettingGo
+        if (!going) return
+        if (f.kind === 1 || f.channel !== CONTROL_CHANNEL) continue
+        const m = f.json as Json
+        if (!m || typeof m !== 'object' || Array.isArray(m)) continue
+        if (m.t === 'event') {
+          const e = this.hooks ? readEventFrame(m, f.size) : null
+          if (e) this.emit('event', e)
+        } else if (m.re === going.id) going.done(m.t === 'term.detached')
+        continue
+      }
       if (f.kind === 1) {
         if (f.channel === TERMINAL_CHANNEL) this.emit('output', f.bytes)
         continue
