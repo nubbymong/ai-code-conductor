@@ -100,6 +100,15 @@ const LAUNCH = [
   'echo "AICC-HASH $N ok $x"',
 ]
 
+/** Remove's one delete: the device folder, by the host's own home variable and
+ *  the device id, each required to be set and not empty. A list of its own so
+ *  the profile-home guard in tests/wp1/managed-launch.test.ts can name this one
+ *  line: it reads the home of the host's account in a shell script and composes
+ *  no environment. */
+const DELETE_DEVICE_FOLDER = [
+  'rm -rf -- "${HOME:?}/.aicc/${D:?}" || no cannot-remove',
+]
+
 const join = (parts: readonly string[]): string => parts.join('; ')
 
 // ── the scripts ──────────────────────────────────────────────────────────────
@@ -218,7 +227,7 @@ const SPECS = {
       ...CHECKS,
       '[ -e "$A" ] || [ -L "$A" ] || { r gone yes; r end ok; exit 0; }',
       ...EXISTING,
-      'rm -rf -- "${HOME:?}/.aicc/${D:?}" || no cannot-remove',
+      ...DELETE_DEVICE_FOLDER,
       'rmdir -- "$HOME/.aicc" 2>/dev/null',
       'pv "/tmp/aicc-$u" && rmdir -- "/tmp/aicc-$u" 2>/dev/null',
       '[ -e "$A" ] && no still-there',

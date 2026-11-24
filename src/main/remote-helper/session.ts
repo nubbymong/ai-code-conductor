@@ -75,12 +75,20 @@ export function remoteCwd(remotePath: string | undefined, home: string): string 
   return `${home.replace(/\/+$/, '')}/${p}`
 }
 
+/** The host account's own variables for a remote launch: what the probe read
+ *  on the host (its home folder, user, login shell and PATH). Never a profile
+ *  folder of this computer, so not the managed-launch choke point's; the
+ *  profile-home guard in tests/wp1/managed-launch.test.ts names this one line. */
+const hostAccountEnv = (m: RemoteMachineRecord): Record<string, string> => ({
+  HOME: m.home, USER: m.user, LOGNAME: m.user, SHELL: m.shell, PATH: m.path,
+})
+
 /** What the CLI is started with on the host. */
 export function remoteLaunchSpec(m: RemoteMachineRecord, cliArgs: readonly string[], cliEnv: Record<string, string>, remotePath: string | undefined, cols: number, rows: number): LaunchSpec {
   const claude = m.claudePath ?? '/usr/local/bin/claude'
   const argv = m.shellIsSh ? [m.shell, '-il', '-c', 'exec "$0" "$@"', claude, ...cliArgs] : [claude, ...cliArgs]
   const env: Record<string, string> = {
-    HOME: m.home, USER: m.user, LOGNAME: m.user, SHELL: m.shell, PATH: m.path,
+    ...hostAccountEnv(m),
     LANG: m.lang ?? 'C.UTF-8', TERM: 'xterm-256color', COLORTERM: 'truecolor',
     ...cliEnv,
   }

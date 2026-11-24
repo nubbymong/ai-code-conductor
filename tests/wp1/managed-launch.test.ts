@@ -180,6 +180,34 @@ export function profileHomeEnvOffenders(files: ReadonlyArray<{ path: string; tex
         "'HOME', 'USER', 'LOGNAME',",
       ]),
     }],
+    // 2.1.3-beta.17 (remote step 1, aicc_planning#411): the home of a REMOTE
+    // host's account, never a profile home of this computer. The ssh exec's
+    // env allow-list forwards the parent's own HOME/USERPROFILE to ssh.exe
+    // unchanged, as cli-env.ts above does for Codex; a remote launch carries
+    // the host's HOME as the probe read it there; and Remove's one delete
+    // reads the host's HOME inside a shell script run there.
+    ['src/main/remote-helper/ssh-exec.ts', {
+      anchor: /^const ENV_ALLOW = \[$/,
+      close: /^\]$/,
+      lines: new Set([
+        "'PATH', 'HOME', 'USER', 'LOGNAME', 'LANG', 'SSH_AUTH_SOCK', 'KRB5CCNAME',",
+        "'SYSTEMROOT', 'WINDIR', 'SYSTEMDRIVE', 'USERPROFILE', 'HOMEDRIVE', 'HOMEPATH', 'APPDATA', 'LOCALAPPDATA',",
+      ]),
+    }],
+    ['src/main/remote-helper/session.ts', {
+      anchor: /^const hostAccountEnv = \(m: RemoteMachineRecord\): Record<string, string> => \(\{$/,
+      close: /^\}\)$/,
+      lines: new Set([
+        'HOME: m.home, USER: m.user, LOGNAME: m.user, SHELL: m.shell, PATH: m.path,',
+      ]),
+    }],
+    ['src/main/remote-helper/scripts.ts', {
+      anchor: /^const DELETE_DEVICE_FOLDER = \[$/,
+      close: /^\]$/,
+      lines: new Set([
+        '\'rm -rf -- "${HOME:?}/.aicc/${D:?}" || no cannot-remove\',',
+      ]),
+    }],
   ])
   const exempted = (file: string, lines: readonly string[], i: number): boolean => {
     const ex = ALLOWED_LITERALS.get(file)
