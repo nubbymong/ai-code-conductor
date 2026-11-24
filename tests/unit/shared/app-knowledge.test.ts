@@ -2238,8 +2238,11 @@ describe('the 2.1.3-beta.8 sweep', () => {
     expect(`${t.variants.primary.title} ${t.variants.primary.body}`).not.toMatch(/—/)
     const machines = step('machines').highlights.join('\n')
     expect(machines).toContain('On Windows, choose **Save sessions** when you update the app and each held Terminal or Partner terminal keeps running')
-    // Agent sessions the helper holds still end at an update (#713).
-    expect(machines).toContain('A Claude Code or Codex session has **End** only. An update ends it, and after a crash it is ended')
+    // Agent sessions the helper holds end after a crash (#713); since
+    // 2.1.3-beta.17 B1 (aicc_planning#412) Save sessions keeps them on Windows.
+    expect(machines).toContain('A Claude Code or Codex session has **End** only. After a crash it is ended')
+    expect(machines).toContain('On Windows, **Save sessions** at an update keeps it running: resume your sessions within five minutes of the new version opening')
+    expect(t.variants.primary.body).toContain('a Claude Code or Codex session is kept the same way: resume your sessions within **five minutes**')
     expect(step('settings').highlights.join('\n')).toContain('or through an update when you choose **Save sessions**')
     // Combined Mode reads the same for either assistant, so it names no provider.
     expect(step('combined-mode').highlights.join('\n')).toContain('On Windows it also keeps running through an app update when you choose **Save sessions**')

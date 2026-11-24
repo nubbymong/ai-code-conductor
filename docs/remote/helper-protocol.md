@@ -1324,13 +1324,14 @@ protocol change 9) its `away` part.
   from the holder's side or the connection is lost.
 - **What is not here yet.** A kept stream is given to the next attach of the
   same holder, which within one run of the app is the app again: it attaches
-  by itself after a dropped link. It is not given to a new run of the app,
-  as after an update: on Windows an update lets a held agent session's CLI
-  run on and records it (S16 step 4), but the next start still ends it, and
-  elsewhere an update ends every agent session; an agent session is not
-  shown again after the app restarts, so a stream is given back inside one
-  app run only, until the step that takes a kept session over in its tab
-  (ADR-030 S16, step 5). A relay that did not ack `away` (its holder does not offer it) whose
+  by itself after a dropped link. From 2.1.3-beta.17 it is given to a new
+  run of the app too, after an update on Windows: the update lets a held
+  agent session's CLI run on and records it (S16 step 4), the next start
+  keeps it for its restored tab, and that tab's attach is given each kept
+  stream (step 5); on such a stream the tool host first sends
+  `notifications/tools/list_changed` to a CLI that lists its tools again
+  (Claude Code; step 6). Elsewhere an update ends every agent session, and
+  after a crash an agent session is not shown again. A relay that did not ack `away` (its holder does not offer it) whose
   stream ended stays ended: when the app's connection to a session's holder
   drops and comes back, that session's CLI has no tool server until it
   starts one again (in Claude Code, /mcp) or the session is restarted. Nothing tells a

@@ -1585,7 +1585,7 @@ export const TIPS_LIBRARY: Tip[] = [
       primary: {
         shortText: 'Save sessions at an update keeps held terminals running',
         title: 'Terminals That Live Through an Update',
-        body: 'With **Plain terminals through the session helper** on (**Settings, General, Terminal**; a preview, off by default), choose **Save sessions** when the app asks before an update. The terminals the session helper holds keep running, and the new version shows each one again in its tab, with what it printed meanwhile, up to the last 2 MiB.\n\nFinish the installer within **two minutes**: a held terminal waits that long for the new version, counted from when the old one closed. **Close sessions** ends them instead. Claude Code and Codex sessions are not kept: their tabs resume the conversation.',
+        body: 'With **Plain terminals through the session helper** on (**Settings, General, Terminal**; a preview, off by default), choose **Save sessions** when the app asks before an update. The terminals the session helper holds keep running, and the new version shows each one again in its tab, with what it printed meanwhile, up to the last 2 MiB.\n\nFinish the installer within **two minutes**: a held terminal waits that long for the new version, counted from when the old one closed. **Close sessions** ends them instead. With **Claude Code and Codex sessions through the session helper** on as well, a Claude Code or Codex session is kept the same way: resume your sessions within **five minutes** of the new version opening and its tab shows the same session, with no resume.',
         actionLabel: 'Open Settings',
         actionTarget: 'settings',
         focusHint: 'Settings -- General, under Terminal',

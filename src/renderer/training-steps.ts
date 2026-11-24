@@ -675,7 +675,7 @@ export const trainingSteps: TrainingStep[] = [
       '**Re-attach** connects a waiting terminal again, and opens a Terminal only tab for one no tab shows; **End** stops one after you confirm',
       'After a crash on Windows, open the app within two minutes and resume your sessions: each held terminal shows again in its tab, with what it printed meanwhile, up to the last 2 MiB. Quitting normally ends them',
       'On Windows, choose **Save sessions** when you update the app and each held Terminal or Partner terminal keeps running. If the new version opens within two minutes, it shows them again. **Close sessions** ends them',
-      'A Claude Code or Codex session has **End** only. An update ends it, and after a crash it is ended, reading **Being ended** until it is gone. Either way its tab resumes the conversation',
+      'A Claude Code or Codex session has **End** only. After a crash it is ended, reading **Being ended** until it is gone, and its tab resumes the conversation. On Windows, **Save sessions** at an update keeps it running: resume your sessions within five minutes of the new version opening and its tab shows the same session again',
       'With **Claude Code and Codex sessions through the session helper** on, an Insights report for a Claude Code account runs inside the helper too, and is listed as **Insights report** while it runs, with **End** only',
       'SSH tabs and their partner terminals, a terminal run as administrator, and the tabs the app opens for a sign-in or to install or update a program start as before',
       'The page reads when you open it, when you come back to its tab and on **Refresh**',
