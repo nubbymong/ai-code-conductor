@@ -12,6 +12,7 @@
 //! aicc-helper list --store <folder>
 //! aicc-helper hook --store <folder> --session <sid>
 //! aicc-helper mcp --store <folder> --session <sid>
+//! aicc-helper bridge --store <folder> --session <sid>                (macOS and Linux only)
 //! aicc-helper start [--hide] --cwd <folder> -- <program> [args...]   (Windows only)
 //! aicc-helper end --pid <n> --created <t>                            (Windows only)
 //! aicc-helper console-hosts [--pid <n> --created <t>]                (Windows only)
@@ -28,7 +29,12 @@
 //! event, read from standard input, to the session's holder; it always exits
 //! 0 and prints nothing (`hook.rs`). `mcp` relays a session's tool server
 //! through its holder: standard output carries only the messages, and it
-//! exits 0 only when its standard input ended (`relay.rs`).
+//! exits 0 only when its standard input ended (`relay.rs`). `bridge` carries
+//! one connection to a session's holder over its standard input and output,
+//! byte for byte, as the app reaches a holder on another machine through
+//! `ssh -T`: it exits 0 when the holder closes the connection, 3 with no
+//! holder for the session, 2 on a usage error, and 1 otherwise and on Windows
+//! (`bridge.rs`).
 #![deny(unsafe_code)]
 
 use aicc_helper::hello::{self, Hello, CAPS};
@@ -43,7 +49,7 @@ use std::process::ExitCode;
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
-const USAGE: &str = "usage: aicc-helper <version | hello | selftest | hold | list | hook | mcp | start | end | console-hosts | end-console-host | capture> [options]";
+const USAGE: &str = "usage: aicc-helper <version | hello | selftest | hold | list | hook | mcp | bridge | start | end | console-hosts | end-console-host | capture> [options]";
 /// The ring is 1 KiB to 64 MiB; the protocol's default is 2 MiB.
 const MIN_RING_BYTES: usize = 1024;
 const MAX_RING_BYTES: usize = 64 * 1024 * 1024;
@@ -126,6 +132,11 @@ fn main() -> ExitCode {
     // The relay too: its standard output is the CLI's, for messages only.
     if raw.first().map_or(false, |c| c.as_os_str() == "mcp") {
         return cmd_mcp(&raw[1..]);
+    }
+    // The bridge too: an argument that is not Unicode is a usage error (2),
+    // never a panic.
+    if raw.first().map_or(false, |c| c.as_os_str() == "bridge") {
+        return cmd_bridge(&raw[1..]);
     }
     let args: Vec<String> = std::env::args().skip(1).collect();
     let command = match args.first() {
@@ -418,6 +429,36 @@ fn cmd_mcp(raw: &[OsString]) -> ExitCode {
         None => relay::EXIT_FAILED,
     };
     ExitCode::from(code)
+}
+
+/// The bridge (macOS and Linux): exit 2 on a command line it does not take,
+/// an argument that is not Unicode included; on Windows it does not run, and
+/// exits 1 whatever it is given.
+#[cfg(unix)]
+fn cmd_bridge(raw: &[OsString]) -> ExitCode {
+    let args: Vec<String> = match raw.iter().map(|a| a.to_str().map(str::to_string)).collect::<Option<Vec<String>>>() {
+        Some(args) => args,
+        None => return usage("bridge takes Unicode arguments only"),
+    };
+    let a = match Args::parse(&args, &["--store", "--session"], &[]) {
+        Ok(a) => a,
+        Err(e) => return usage(&e),
+    };
+    let store_dir = match a.get("--store") {
+        Some(s) if !s.is_empty() => PathBuf::from(s),
+        _ => return usage("bridge needs --store"),
+    };
+    let sid = match a.get("--session") {
+        Some(s) if hello::valid_sid(s) => s,
+        Some(_) => return usage("--session breaks the session id pattern"),
+        None => return usage("bridge needs --session"),
+    };
+    ExitCode::from(aicc_helper::bridge::run(&store_dir, sid))
+}
+
+#[cfg(windows)]
+fn cmd_bridge(_raw: &[OsString]) -> ExitCode {
+    fail("bridge runs on macOS and Linux only")
 }
 
 fn cmd_list(args: &[String]) -> ExitCode {

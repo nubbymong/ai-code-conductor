@@ -16,6 +16,13 @@ import yaml from 'js-yaml'
  * `build.files` is a whitelist and `extraResources` / `extraFiles` copy named
  * files, so a helper/ at the top level is packaged only by those entries.
  * scripts/verify-bundled-helper.mjs then checks the packaged copy itself.
+ *
+ * From 2.1.3-beta.17 (A1, remote step 1) the Windows package also carries the
+ * static Linux helper the release job downloads to
+ * helper/target/helper-linux-musl/, as resources/helper/linux-x64/aicc-helper,
+ * and the manifest scripts/write-helper-manifest.mjs writes to
+ * helper/target/helper-manifest/, as resources/helper/manifest.json. Each is a
+ * folder entry with a one-file filter, so nothing else beside them ships.
  */
 
 const ROOT = resolve(__dirname, '../../..')
@@ -121,6 +128,12 @@ const HELPER_FILES = [
   'helper/target/release/aicc_helper.pdb',
   'helper/target/release/deps/aicc_helper-0123456789abcdef.exe',
   'helper/target/release/build/aicc-helper-0123456789abcdef/output',
+  // The musl build's own output, and anything else beside the files the
+  // Windows package takes from the Linux helper's and the manifest's folders.
+  'helper/target/x86_64-unknown-linux-musl/release/aicc-helper',
+  'helper/target/x86_64-unknown-linux-musl/release/aicc-helper.d',
+  'helper/target/helper-linux-musl/aicc-fake-cli',
+  'helper/target/helper-manifest/manifest.json.tmp',
 ]
 
 /**
@@ -137,6 +150,15 @@ const SHIPPED = {
   mac: { entry: { from: 'helper/target/release/aicc-helper', to: 'helper/aicc-helper' }, file: 'helper/target/release/aicc-helper' },
   linux: { entry: { from: 'helper/target/release/aicc-helper', to: 'helper/aicc-helper' }, file: 'helper/target/release/aicc-helper' },
 } as const
+
+/**
+ * The two more files the Windows package carries (2.1.3-beta.17): the static
+ * Linux helper and the manifest, each by a folder entry with a one-file filter.
+ */
+const WIN_LINUX = [
+  { entry: { from: 'helper/target/helper-linux-musl', to: 'helper/linux-x64', filter: ['aicc-helper'] }, file: 'helper/target/helper-linux-musl/aicc-helper' },
+  { entry: { from: 'helper/target/helper-manifest', to: 'helper', filter: ['manifest.json'] }, file: 'helper/target/helper-manifest/manifest.json' },
+] as const
 
 describe('the installer ships the release session helper and nothing else of helper/', () => {
   const entries = packagingEntries(pkg.build)
@@ -165,12 +187,32 @@ describe('the installer ships the release session helper and nothing else of hel
     for (const [platform, want] of Object.entries(SHIPPED)) {
       const section = packagingEntries(pkg.build[platform]).filter((e) => e.list !== 'files')
       const helperEntries = section.filter((e) => normPath(e.value).startsWith('helper'))
-      expect(helperEntries, platform).toHaveLength(1)
+      // Windows: the helper, then the static Linux helper and its manifest.
+      expect(helperEntries, platform).toHaveLength(platform === 'win' ? 1 + WIN_LINUX.length : 1)
       const raw = ([] as unknown[]).concat(pkg.build[platform].extraResources ?? []).find((x) => !!x && typeof x === 'object' && (x as { from?: string }).from === want.entry.from)
       expect(raw, platform).toEqual(want.entry)
       expect(takes(helperEntries[0], want.file), platform).toBe(true)
       expect(pkg.build[platform].extraFiles, platform).toBeUndefined()
     }
+  })
+
+  it('the Windows package carries the static Linux helper and its manifest, each by a folder entry that takes its one file (2.1.3-beta.17)', () => {
+    const raw = ([] as unknown[]).concat(pkg.build.win.extraResources ?? [])
+    expect(raw).toEqual([SHIPPED.win.entry, ...WIN_LINUX.map((w) => w.entry)])
+    for (const want of WIN_LINUX) {
+      const [one] = packagingEntries({ extraResources: [want.entry] })
+      expect(takes(one, want.file), want.file).toBe(true)
+      for (const file of [...HELPER_FILES, SHIPPED.win.file]) expect(takes(one, file), `${want.entry.from} would copy ${file}`).toBe(false)
+    }
+    // The macOS and Linux packages carry neither.
+    for (const platform of ['mac', 'linux']) {
+      for (const want of WIN_LINUX) expect(packagingEntries(pkg.build[platform]).some((e) => takes(e, want.file)), `${platform}: ${want.file}`).toBe(false)
+    }
+    // Where the release job puts them is where the scripts read and write them.
+    const src = readFileSync(resolve(ROOT, 'scripts/verify-bundled-helper.mjs'), 'utf-8')
+    expect(src).toContain(`export const LINUX_HELPER_SOURCE = '${WIN_LINUX[0].file}'`)
+    expect(src).toContain(`export const MANIFEST_SOURCE = '${WIN_LINUX[1].file}'`)
+    expect(src).toContain("export const LINUX_HELPER = 'linux-x64/aicc-helper'")
   })
 
   it('the Windows helper entry is one electron-builder signs: a folder, not a single file', () => {
@@ -198,7 +240,7 @@ describe('the installer ships the release session helper and nothing else of hel
     const listed = entries.filter((e) => e.list === 'files')
     expect(listed.length).toBeGreaterThan(0)
     for (const entry of listed) {
-      for (const file of [...HELPER_FILES, SHIPPED.win.file, SHIPPED.mac.file]) expect(takes(entry, file), `${JSON.stringify(entry)} would package ${file}`).toBe(false)
+      for (const file of [...HELPER_FILES, SHIPPED.win.file, SHIPPED.mac.file, ...WIN_LINUX.map((w) => w.file)]) expect(takes(entry, file), `${JSON.stringify(entry)} would package ${file}`).toBe(false)
     }
   })
 
@@ -211,6 +253,7 @@ describe('the installer ships the release session helper and nothing else of hel
     // And the release helper is taken, so the check above is not vacuous.
     expect(copied.some((e) => takes(e, SHIPPED.win.file))).toBe(true)
     expect(copied.some((e) => takes(e, SHIPPED.mac.file))).toBe(true)
+    for (const want of WIN_LINUX) expect(copied.some((e) => takes(e, want.file)), want.file).toBe(true)
   })
 
   it('FileSet objects keep their source root and filter, and the check judges them (a flattened `from` once matched nothing)', () => {
@@ -236,7 +279,7 @@ describe('the installer ships the release session helper and nothing else of hel
     expect(takes(folder, 'helper/Cargo.toml')).toBe(true)
     expect(takes(read(['!helper/**'])[0], 'helper/Cargo.toml')).toBe(false)
     // Each platform's entry takes its one file and nothing else.
-    for (const want of Object.values(SHIPPED)) {
+    for (const want of [...Object.values(SHIPPED), ...WIN_LINUX]) {
       const [one] = read([want.entry])
       expect(takes(one, want.file)).toBe(true)
       for (const file of HELPER_FILES) expect(takes(one, file), file).toBe(false)
@@ -257,6 +300,7 @@ describe('the installer ships the release session helper and nothing else of hel
     }
     // The build output, on the other hand, must be ignored.
     expect(ignored('helper/target/release/aicc-helper.exe')).toBe(true)
+    for (const want of WIN_LINUX) expect(ignored(want.file), want.file).toBe(true)
   })
 
   it('helper/ is a top-level folder, not under resources/ or src/ (resources/ ships whole)', () => {
@@ -293,11 +337,35 @@ describe('the installer ships the release session helper and nothing else of hel
   })
 
   it('a release/* test installer from ci.yml carries the helper too: built before it is packaged and checked after, under the same condition', () => {
-    type Step = { name?: string; if?: string; run?: string; 'working-directory'?: string }
-    const ci = yaml.load(readFileSync(resolve(ROOT, '.github/workflows/ci.yml'), 'utf-8')) as { jobs: Record<string, { steps: Step[] }> }
+    type Step = { name?: string; if?: string; run?: string; uses?: string; with?: Record<string, unknown>; 'working-directory'?: string }
+    const ci = yaml.load(readFileSync(resolve(ROOT, '.github/workflows/ci.yml'), 'utf-8')) as { jobs: Record<string, { if?: string; needs?: unknown; steps: Step[] }> }
+    // Windows (from 2.1.3-beta.17): a job of its own, for a release/* source
+    // branch only, that needs the Linux job building the static Linux helper.
+    const win = ci.jobs['release-windows-installer']
+    expect(win.if).toContain("startsWith(github.head_ref, 'release/')")
+    expect(win.needs).toBe('release-helper-linux')
+    expect(ci.jobs['release-helper-linux'].if).toBe(win.if)
+    const ws = win.steps
+    const wat = (pred: (s: Step) => boolean, what: string) => {
+      const i = ws.findIndex(pred)
+      expect(i, what).toBeGreaterThan(-1)
+      return i
+    }
+    const wbuild = wat((s) => /cargo build --release --locked/.test(s.run ?? ''), 'the helper build')
+    expect(ws[wbuild]['working-directory']).toBe('helper')
+    const download = wat((s) => /^actions\/download-artifact@/.test(s.uses ?? ''), 'the Linux helper download')
+    expect(ws[download].with).toEqual({ name: 'helper-linux-musl-installer', path: 'helper/target/helper-linux-musl' })
+    const manifest = wat((s) => s.run?.trim() === 'node scripts/write-helper-manifest.mjs', 'the manifest')
+    const wpack = wat((s) => s.run?.trim() === 'npx electron-builder --win --config.npmRebuild=false', 'the packaging')
+    const wverify = wat((s) => s.run?.trim() === 'npm run verify:helper', 'the packaged check')
+    expect(wbuild).toBeLessThan(wpack)
+    expect(download).toBeLessThan(manifest)
+    expect(manifest).toBeLessThan(wpack)
+    expect(wverify).toBeGreaterThan(wpack)
+    // The job's own condition is the only one: every step of it runs.
+    for (const s of ws) expect(s.if, s.name).toBeUndefined()
     for (const [job, pack] of [
       ['test', 'npx electron-builder --mac'],
-      ['test-windows-build', 'npx electron-builder --win --config.npmRebuild=false'],
     ] as const) {
       const steps = ci.jobs[job].steps
       const at = steps.findIndex((s) => s.run?.trim() === pack)
@@ -321,6 +389,12 @@ describe('the installer ships the release session helper and nothing else of hel
     expect(packaging.sort()).toEqual(['package', 'package:linux', 'package:mac', 'package:store', 'package:win'])
     for (const name of packaging) {
       expect(pkg.scripts[name], name).toMatch(/&& npm run verify:helper$/)
+      // A Windows package writes the Linux helper's manifest before electron-builder runs.
+      const writes = pkg.scripts[name].indexOf('node scripts/write-helper-manifest.mjs && ')
+      if (/electron-builder --win\b/.test(pkg.scripts[name])) {
+        expect(writes, name).toBeGreaterThan(-1)
+        expect(writes, name).toBeLessThan(pkg.scripts[name].indexOf('electron-builder --win'))
+      } else expect(writes, name).toBe(-1)
     }
   })
 })

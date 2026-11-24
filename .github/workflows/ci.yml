@@ -321,7 +321,7 @@ jobs:
       # CI lacks the Apple Developer ID secrets the formal release workflow
       # uses, so the macOS DMG is unsigned and Gatekeeper will warn on
       # first launch (right-click → Open). The Windows installer is made the
-      # same way in `test-windows-build` below, unsigned, with the same
+      # same way in `release-windows-installer` below, unsigned, with the same
       # SmartScreen warning as the release pipeline.
       # Gate on runner.os, NOT a matrix image name: `matrix.os` carries whatever
       # image is pinned above, so a re-pin silently turns these steps off while
@@ -542,15 +542,137 @@ jobs:
         if: steps.scope.outputs.suite != 'false'
         run: npm run build
 
-      # The Windows half of the beta-testing artifact pipeline (see the macOS
-      # half in the test job): on a release/* branch, the installer, packaged,
-      # checked and uploaded here only. This job does not wait for the unit
-      # parts, which run beside it, so on a red run the installer can still be
-      # uploaded; `Test (windows-2025)` is what says whether the tree passed.
-      # The installer carries the session helper, built and checked as in the
-      # macOS half.
+  # The Windows half of the beta-testing artifact pipeline (see the macOS half
+  # in the test job), in two jobs of their own from 2.1.3-beta.17: on a pull
+  # request from a release/* branch, the installer is packaged, checked and
+  # uploaded by `release-windows-installer` only. The installer carries the
+  # session helper, built and checked as in the macOS half, and the static
+  # Linux helper with its manifest (remote step 1), which only a Linux runner
+  # builds: `release-helper-linux` builds it with the Helper job's steps word
+  # for word, and the packaging job needs it. So neither the Build and native
+  # tests job nor `Test (windows-2025)` ever waits for a Linux build; neither
+  # job is a required check, no job needs the packaging job, and on a red run
+  # the installer can still be uploaded (`Test (windows-2025)` is what says
+  # whether the tree passed).
+  #
+  # Both have the same condition: the Test jobs' pull-request rule, for a
+  # release/* source branch only (a push has no source branch). The artifact
+  # is named apart from the Helper job's helper-linux-musl, which the same run
+  # may upload too (tests/unit/scripts/helper-release-job.test.ts).
+  release-helper-linux:
+    name: Static Linux helper (release/* test installer)
+    if: |
+      startsWith(github.head_ref, 'release/') &&
+      contains(github.event.pull_request.labels.*.name, 'ci-run') &&
+      github.event.action != 'unlabeled' &&
+      (github.event.action != 'labeled' || github.event.label.name == 'ci-run') &&
+      (github.event.action != 'edited' || github.event.changes.base.ref.from != '')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    env:
+      CARGO_TERM_COLOR: never
+      CARGO_INCREMENTAL: '0'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Install the pinned Rust toolchain
+        shell: bash
+        working-directory: helper
+        run: |
+          rustup show active-toolchain || rustup toolchain install
+          rustc --version
+          cargo --version
+
+      - name: Build the glibc debug helper the static check compares against
+        shell: bash
+        working-directory: helper
+        run: cargo build --locked --bin aicc-helper
+
+      - name: Build the static Linux helper
+        shell: bash
+        working-directory: helper
+        run: |
+          rustup target add x86_64-unknown-linux-musl
+          cargo build --locked --release --target x86_64-unknown-linux-musl --bin aicc-helper
+          mkdir -p target/helper-linux-musl
+          cp target/x86_64-unknown-linux-musl/release/aicc-helper target/helper-linux-musl/
+
+      - name: Check the Linux helper is static
+        shell: bash
+        working-directory: helper
+        run: |
+          # 0 static, 1 not static, 2 not an x86-64 ELF file or not read.
+          is_static() {
+            local hdr segs dyn
+            hdr=$(readelf --file-header --wide "$1") || return 2
+            grep -q 'Class:[[:space:]]*ELF64' <<<"$hdr" || return 2
+            grep -q 'Machine:[[:space:]]*Advanced Micro Devices X86-64' <<<"$hdr" || return 2
+            segs=$(readelf --program-headers --wide "$1") || return 2
+            dyn=$(readelf --dynamic --wide "$1") || return 2
+            grep -q 'INTERP' <<<"$segs" && return 1
+            grep -q '(NEEDED)' <<<"$dyn" && return 1
+            return 0
+          }
+          built=target/helper-linux-musl/aicc-helper
+          rc=0; is_static "$built" || rc=$?
+          file "$built"
+          echo "Static Linux helper: $(file -b "$built"), $(stat -c %s "$built") bytes." >> "$GITHUB_STEP_SUMMARY"
+          if [ "$rc" != 0 ]; then
+            echo "::error::$built is not a static x86-64 ELF program (check status $rc)"
+            exit 1
+          fi
+          rc=0; is_static target/debug/aicc-helper || rc=$?
+          if [ "$rc" != 1 ]; then
+            echo "::error::the check did not find the glibc debug build dynamic (check status $rc), so it proves nothing"
+            exit 1
+          fi
+          echo "static: $built; the check finds the glibc debug build dynamic, as it must"
+
+      - name: Upload the static Linux helper
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: helper-linux-musl-installer
+          path: helper/target/helper-linux-musl
+          if-no-files-found: error
+          retention-days: 14
+
+  release-windows-installer:
+    name: Windows test installer (release/* branches)
+    needs: release-helper-linux
+    if: |
+      startsWith(github.head_ref, 'release/') &&
+      contains(github.event.pull_request.labels.*.name, 'ci-run') &&
+      github.event.action != 'unlabeled' &&
+      (github.event.action != 'labeled' || github.event.label.name == 'ci-run') &&
+      (github.event.action != 'edited' || github.event.changes.base.ref.from != '')
+    runs-on: windows-2025
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Install Electron binary
+        run: node node_modules/electron/install.js
+
+      - name: Build
+        run: npm run build
+
       - name: Build the session helper (release/* branches only)
-        if: steps.scope.outputs.suite != 'false' && runner.os == 'Windows' && startsWith(github.head_ref, 'release/')
         shell: bash
         working-directory: helper
         env:
@@ -562,25 +684,32 @@ jobs:
 
       # Check the helper carries its own C runtime, as the Helper job and release.yml do (helper/.cargo/config.toml, scripts/check-pe-imports.mjs).
       - name: Check the session helper carries its own C runtime (release/* branches only)
-        if: steps.scope.outputs.suite != 'false' && runner.os == 'Windows' && startsWith(github.head_ref, 'release/')
         run: node scripts/check-pe-imports.mjs helper/target/release/aicc-helper.exe
 
+      # The static Linux helper from the job above, and the manifest of its
+      # hash, written before packaging, as release.yml's build-windows does
+      # (scripts/write-helper-manifest.mjs).
+      - name: Download the static Linux helper
+        uses: actions/download-artifact@v8
+        with:
+          name: helper-linux-musl-installer
+          path: helper/target/helper-linux-musl
+
+      - name: Write the session helper manifest
+        run: node scripts/write-helper-manifest.mjs
+
       - name: Package Windows installer (release/* branches only)
-        if: steps.scope.outputs.suite != 'false' && runner.os == 'Windows' && startsWith(github.head_ref, 'release/')
         # --config.npmRebuild=false: Windows uses the prebuilds as-is (see above
         # test-windows-part), so electron-builder must not rebuild them either.
         run: npx electron-builder --win --config.npmRebuild=false
 
       - name: Verify native modules unpacked (release/* branches only)
-        if: steps.scope.outputs.suite != 'false' && runner.os == 'Windows' && startsWith(github.head_ref, 'release/')
         run: npm run verify:package
 
       - name: Verify the session helper is packaged (release/* branches only)
-        if: steps.scope.outputs.suite != 'false' && runner.os == 'Windows' && startsWith(github.head_ref, 'release/')
         run: npm run verify:helper
 
       - name: Upload Windows installer
-        if: steps.scope.outputs.suite != 'false' && runner.os == 'Windows' && startsWith(github.head_ref, 'release/')
         uses: actions/upload-artifact@v7
         with:
           name: windows-installer-${{ github.sha }}
@@ -1298,8 +1427,10 @@ jobs:
   # It builds and tests the helper on the three OSes it runs on, and uploads
   # the Windows build. On Windows it also fails if the release build imports a
   # C runtime DLL (scripts/check-pe-imports.mjs). On Linux it also builds a
-  # static helper for the remote probes, checks it is static and uploads it
-  # (helper-linux-musl); nothing ships it. Probe P7
+  # static helper, checks it is static and uploads it (helper-linux-musl):
+  # from 2.1.3-beta.17 the Windows installer carries that file for Linux
+  # machines, built by release.yml's helper-linux job with these same steps,
+  # and a VM or dev package takes it from this artifact. Probe P7
   # (helper/probes/p7-windows-survival.ps1) is answered (2026-11-15, ADR-030);
   # its script rides in the artifact as the record of how, and it drives
   # commands this build no longer has, so running it again needs a
@@ -1477,8 +1608,11 @@ jobs:
       # above links this runner's glibc 2.39, newer than some hosts have. On Unix
       # the helper needs only libc and vt100 (helper/Cargo.toml), both Rust
       # crates, so the musl target links it with the C library that Rust's musl
-      # target carries itself: no package is installed. Nothing ships it; it is
-      # uploaded for the probes only.
+      # target carries itself: no package is installed. From 2.1.3-beta.17 the
+      # Windows installer carries this file (resources/helper/linux-x64/aicc-helper)
+      # for the app to upload to a Linux machine: release.yml's helper-linux job
+      # and the release/* test installer's Linux job build it with these three
+      # steps word for word (tests/unit/scripts/helper-release-job.test.ts).
       - name: Build the static Linux helper
         if: steps.scope.outputs.helper != 'false' && steps.lock.outputs.present == 'true' && runner.os == 'Linux'
         shell: bash
