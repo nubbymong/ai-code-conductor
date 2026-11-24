@@ -94,8 +94,8 @@ describe('busy: nothing is lost', () => {
       q.noteHookEvent(SID, opener)
       expect(q.deliver(SID, APPROVAL)).toBe('queued')
       expect(written).toHaveLength(0)
-      // An agent's event (Claude Code's agent_id on it), with no Agent, Task
-      // or Workflow call of the main agent open: no turn reads open.
+      // An agent's event (Claude Code's agent_id on it), with no Agent, Task,
+      // Workflow or Skill call of the main agent open: no turn reads open.
       written = []
       timers = []
       const r = makeQueue()
@@ -711,11 +711,12 @@ describe('an agent\'s tool calls do not hold a decision after the main agent\'s 
     expect(written).toEqual([{ sessionId: SID, line: APPROVAL }])
   })
 
-  // Kept as it was: a decision filed while the main agent waits on a
-  // subagent it started (an Agent call not in the background) waits for the
-  // main turn's Stop, and the subagent's tool calls keep that turn alive, so
-  // the fallback does not hand it on into the running turn. Green before the
-  // fix too; it pins what the fix must keep.
+  // A decision filed while the main agent waits on a subagent it started (an
+  // Agent call not in the background) waits for the main turn's Stop, and the
+  // subagent's tool calls keep that turn alive, so the fallback does not hand
+  // it on into the running turn: that half was green before the fix and pins
+  // what the fix must keep. The last step is new with the fix (red before
+  // it): once the call has returned, another agent's tool calls buy no time.
   it('while the main agent\'s own Agent call is open, its subagent\'s tool calls keep the turn alive past 120 s; after that call returns they no longer do', () => {
     const FG_AGENT = { agentId: 'aaee6bf0aca801ea2' }
     const q = realClockQueue()
@@ -736,6 +737,53 @@ describe('an agent\'s tool calls do not hold a decision after the main agent\'s 
     q.noteHookEvent(SID, 'PreToolUse', { ...BG_AGENT, toolName: 'Read' })
     vi.advanceTimersByTime(60_000)
     expect(written).toEqual([{ sessionId: SID, line: APPROVAL }])
+  })
+
+  // A Skill call whose skill runs in a subagent holds the main agent the same
+  // way an Agent call does, and that subagent's events carry an agent id.
+  // Red before Skill was named with Agent, Task and Workflow: the subagent's
+  // tool calls bought no time, so the decision was handed on at minute 2,
+  // into the running turn.
+  it('while the main agent\'s own Skill call runs its skill in a subagent, that subagent\'s tool calls keep the turn alive past 120 s; after the call returns they no longer do', () => {
+    const SKILL_AGENT = { agentId: 'a5c1f0e2b7d94a613' }
+    const q = realClockQueue()
+    q.noteHookEvent(SID, 'UserPromptSubmit')
+    q.noteHookEvent(SID, 'PreToolUse', { toolName: 'Skill' })
+    q.noteHookEvent(SID, 'SubagentStart', SKILL_AGENT)
+    expect(q.deliver(SID, APPROVAL)).toBe('queued')
+    for (let minute = 1; minute <= 5; minute++) {
+      vi.advanceTimersByTime(60_000)
+      q.noteHookEvent(SID, minute % 2 ? 'PreToolUse' : 'PostToolUse', { ...SKILL_AGENT, toolName: 'Read' })
+      expect(written, `minute ${minute}`).toEqual([])
+    }
+    q.noteHookEvent(SID, 'PostToolUse', { toolName: 'Skill' })
+    expect(written).toEqual([])
+    // The call returned: another agent's tool calls now buy no time.
+    vi.advanceTimersByTime(60_000)
+    q.noteHookEvent(SID, 'PreToolUse', { ...BG_AGENT, toolName: 'Read' })
+    expect(written).toEqual([])
+    vi.advanceTimersByTime(60_000)
+    expect(written).toEqual([{ sessionId: SID, line: APPROVAL }])
+  })
+
+  it('a Skill call that loads its skill inline returns at once, and opens no wait', () => {
+    const q = realClockQueue()
+    q.noteHookEvent(SID, 'UserPromptSubmit')
+    q.noteHookEvent(SID, 'PreToolUse', { toolName: 'Skill' })
+    q.noteHookEvent(SID, 'PostToolUse', { toolName: 'Skill' })
+    // Inside the turn: an agent's tool calls buy no time once the call has
+    // returned, so a decision is handed on 120 s after the main agent's last hook.
+    expect(q.deliver(SID, APPROVAL)).toBe('queued')
+    vi.advanceTimersByTime(60_000)
+    q.noteHookEvent(SID, 'PreToolUse', { ...BG_AGENT, toolName: 'Read' })
+    vi.advanceTimersByTime(60_000)
+    expect(written).toEqual([{ sessionId: SID, line: APPROVAL }])
+    // After the Stop: an agent's tool call opens no turn.
+    q.noteHookEvent(SID, 'Stop')
+    q.noteHookEvent(SID, 'PreToolUse', { ...BG_AGENT, toolName: 'Read' })
+    expect(q.isTurnOpen(SID)).toBe(false)
+    expect(q.deliver(SID, REVIEW)).toBe('sent')
+    expect(written.map((w) => w.line)).toEqual([APPROVAL, REVIEW])
   })
 
   it('an Agent call that starts its agent in the background returns at once, and opens no wait', () => {

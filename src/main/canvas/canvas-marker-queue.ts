@@ -33,7 +33,7 @@
 // SubagentStop) and never on the main agent's (read on Claude Code 2.1.330
 // for a subagent, a background subagent and a Workflow agent). So an event
 // with an agent id is the main turn's only while the main agent waits on an
-// agent it started: its own Agent, Task or Workflow call is open (its
+// agent it started: its own Agent, Task, Workflow or Skill call is open (its
 // PreToolUse seen, its PostToolUse not yet). Then the agent's tool calls keep
 // the main turn alive, as before. Otherwise such an event neither opens the
 // turn nor restarts the fallback (noteHookEvent).
@@ -105,9 +105,9 @@ interface SessionState {
   turnOpen: boolean
   pending: PendingMarker[]
   cancelFallback: (() => void) | null
-  /** How many of the main agent's Agent, Task or Workflow calls are open (a
-   *  PreToolUse seen, its PostToolUse not yet). Back to 0 at Stop and at
-   *  SessionStart. */
+  /** How many of the main agent's Agent, Task, Workflow or Skill calls are
+   *  open (a PreToolUse seen, its PostToolUse not yet). Back to 0 at Stop and
+   *  at SessionStart. */
   agentCallsOpen: number
   /** The turn last read closed by a Stop: the next event that opens it is
    *  logged (one line, for the owner's app.log). */
@@ -124,12 +124,14 @@ export interface HookEventFrom {
   toolName?: string
 }
 
-/** The tools whose call runs another agent. The main agent waits on its call
- *  until that call's PostToolUse; a call that starts its agent in the
+/** The tools whose call can run another agent. The main agent waits on its
+ *  call until that call's PostToolUse; a call that starts its agent in the
  *  background (a Workflow call, or an Agent call with run_in_background, as
- *  read on Claude Code 2.1.330) returns at once. The same names as the
- *  effort tracker's spawn bracket (effort-tracker.ts). */
-const AGENT_TOOLS: ReadonlySet<string> = new Set(['Task', 'Agent', 'Workflow'])
+ *  read on Claude Code 2.1.330) returns at once. The effort tracker's spawn
+ *  bracket names (effort-tracker.ts), and Skill: a skill that runs in a
+ *  subagent holds the main agent in its Skill call the same way, and one
+ *  loaded inline returns at once. */
+const AGENT_TOOLS: ReadonlySet<string> = new Set(['Task', 'Agent', 'Workflow', 'Skill'])
 
 /**
  * Which hook events say a turn is OPEN.
@@ -269,12 +271,12 @@ export class CanvasMarkerQueue {
    * tool it is about (feedEntryOf lifts both from the payload).
    *
    * An event with an agent id (a subagent's or a workflow agent's) counts as
-   * the main turn's only while one of the main agent's own Agent, Task or
-   * Workflow calls is open: the main agent is waiting on that call, so its
-   * agent's tool calls show the main turn alive. Otherwise it neither opens
-   * the turn nor restarts the fallback (aicc_planning#409): after the main
-   * agent's Stop, a background agent's or a Workflow agent's tool calls do
-   * not hold a decision until the user prompts the agent.
+   * the main turn's only while one of the main agent's own Agent, Task,
+   * Workflow or Skill calls is open: the main agent is waiting on that call,
+   * so its agent's tool calls show the main turn alive. Otherwise it neither
+   * opens the turn nor restarts the fallback (aicc_planning#409): after the
+   * main agent's Stop, a background agent's or a Workflow agent's tool calls
+   * do not hold a decision until the user prompts the agent.
    */
   noteHookEvent(sessionId: string, event: string, from: HookEventFrom = {}): void {
     if (event === 'Stop') {

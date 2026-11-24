@@ -23,8 +23,8 @@
   before redaction, for the gateway and the session helper's transport
   alike; the boot wiring passes it and the tool name to the queue. An event
   with an agent id counts as the main turn's only while one of the main
-  agent's own Agent, Task or Workflow calls is open (its PreToolUse seen,
-  its PostToolUse not yet; reset at Stop and SessionStart): then the main
+  agent's own Agent, Task, Workflow or Skill calls is open (its PreToolUse
+  seen, its PostToolUse not yet; reset at Stop and SessionStart): then the main
   agent is waiting on that agent, and its tool calls keep the turn alive as
   before. Otherwise it neither opens the turn nor restarts the fallback.
   One log line when an event opens the turn again after a Stop: its name
@@ -35,4 +35,10 @@
   PreToolUse(Agent), then wait at most 120 s more for the ready prompt and
   be dropped as not sent if the subagent ran longer. beta.16 held it to the
   main Stop and typed it. A background Agent call and every Workflow call
-  return at once (hold 1), so they open no wait.
+  return at once (hold 1), so they open no wait. A Skill call counts too: a
+  skill that runs in a subagent holds the main agent in its Skill call the
+  same way, and one loaded inline returns at once. The cost: a main-agent
+  Agent, Task, Workflow or Skill call whose PostToolUse never arrives stays
+  open until the next Stop or SessionStart (a turn interrupted while the
+  main agent waits on a subagent sends no Stop), and until then the
+  session's agent events count as the main turn's, as before the fix.
