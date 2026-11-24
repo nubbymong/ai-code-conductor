@@ -22,15 +22,18 @@
  *   D2 RECTANGLE, 3 runs: Snap, Rectangle opens one overlay page per Electron
  *      display, each with its picture; a 200 by 120 DIP drag shows its size in
  *      the display's pixels, and Enter gives one new JPEG of that size (200 and
- *      120 times the display's scale), not all black; its path is typed into
- *      the tab; one line names a rectangle of that size, the helper's time
+ *      120 times the display's scale), not all black; its path reaches the tab
+ *      as main's paste, then the sentence and Enter (since X1.2; the run ends
+ *      once that Enter is typed); one line names a rectangle of that size, the
+ *      helper's time
  *      (within the 2 s bound) and one entry per display at its physical size
  *      and scale; no overlay page is left, the button is usable again, and no
  *      press folder is left. Run 1 keeps a picture of the overlay mid-drag
  *      (overlay-mid-drag.png, the runner's desktop only).
  *   D3 WHOLE SCREEN, 3 runs: Whole screen gives one new JPEG of the display at
  *      its physical size (the longer side capped at 1920), not all black; its
- *      path is typed into the tab; one line names the whole screen.
+ *      path reaches the tab as main's paste, then the sentence and Enter (the
+ *      run ends once that Enter is typed); one line names the whole screen.
  *   D4 ESCAPE, 3 runs: Escape gives no file and types nothing; one line says
  *      cancelled; no overlay page is left and the button is usable again.
  *   D5 DEFAULT (S8 step 3): with no choice saved (magic-buttons.json without
@@ -82,6 +85,12 @@
  * the stand-in started on the tab's terminal 11.2 s after the tab's Snap
  * button showed (PowerShell's cold start, then the launch line), within
  * TAB_MS: under three times that reading, not ten, and not raised.
+ * With X1.2 in (the beta.16 aggregate, run 45304028588 on 5a2f0f41), a
+ * picture's sentence follows its paste by 1.5 s and its Enter by 2.2 s, and a
+ * picture pressed meanwhile waited behind the one before it: 82 to 1818 ms
+ * from the file to its path. Each picture test now ends at its own Enter,
+ * within OVERLAY_MS: about four and a half times that 2.2 s, not ten, and not
+ * raised.
  * The readings go to the log and to $SNAP_E2E_OUT/readings.json.
  */
 import { test, expect, type ElectronApplication, type Page } from '@playwright/test'
@@ -353,6 +362,23 @@ async function expectSaved(before: string[], answeredAt: number, width: number, 
     throw err
   }
   push('fileToTypedMs', Math.round(performance.now() - savedAt))
+  // From the beta.16 aggregate (X1.2) main types a saved image into a local
+  // Claude Code tab in three writes: the path as a bracketed paste, a space
+  // and the sentence 1.5 s later, Enter 0.7 s after that (session-input
+  // submitImage, IMAGE_PASTE_SETTLE_MS and IMAGE_ENTER_DELAY_MS). The press is
+  // done when that Enter has reached the tab, so the next test reads a tab at
+  // rest (D4's "types nothing") and the next picture's path does not wait
+  // behind this one. An event wait inside the unchanged OVERLAY_MS.
+  try {
+    await expect.poll(() => {
+      const t = typedText()
+      const at = t.lastIndexOf(name)
+      return at >= 0 && t.indexOf('\r', at) > at
+    }, { timeout: OVERLAY_MS, intervals: [50] }).toBe(true)
+  } catch (err) {
+    readings.atEnterFailure = { terminal: await terminalText(ctx!.page).catch(() => 'unread'), typed: typedText() }
+    throw err
+  }
 }
 
 /** Press Snap, Rectangle; wait for the previous Snap's window; cancel it with
