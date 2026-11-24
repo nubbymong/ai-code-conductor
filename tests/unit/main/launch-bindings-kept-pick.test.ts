@@ -334,9 +334,14 @@ describe('the next start\'s take-over of that session', () => {
   it('a folder put in the kept one\'s place: not read and not removed, by the take-over\'s watcher or once the session is kept no longer', async () => {
     const pick = pickFolder()
     rollout(ID, Date.now() - 3 * 24 * 3600_000)
-    // The kept folder went and another was made at its path.
+    // The kept folder went and another was put at its path: made beside it
+    // first and renamed into place, so it is another folder on every system.
+    // (Removed and then made at the same path, the Linux runner gave the new
+    // folder the old one's device and file id: CI run 45399392626.)
+    const other = `${pick.dir}-other`
+    mkdirSync(other)
     rmdirSync(pick.dir)
-    mkdirSync(pick.dir)
+    renameSync(other, pick.dir)
     expect(codexFolderIdentity(pick.dir)?.id).not.toBe(pick.folder.id)
     takeOver({ conversation: null, account: ACCOUNT, hookFolder: null, pick: { file: pick.file, folder: pick.folder } })
     writePick(pick.file, { id: ID })

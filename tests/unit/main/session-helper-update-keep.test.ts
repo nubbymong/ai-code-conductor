@@ -36,7 +36,10 @@ import { heldAgentSessionId } from '../../../src/main/session-helper/protocol'
 import { FakeHelper, type FakeHolder } from './session-helper-fake-holder'
 
 const SHELL = 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe'
-const CWD = 'C:\\Users\\someone\\project'
+// Absolute on the system the test runs on: a kept record keeps its folder
+// only when it is (manager.ts absoluteFolder), and on Linux or macOS a
+// Windows path is a relative name.
+const CWD = process.platform === 'win32' ? 'C:\\Users\\someone\\project' : '/home/someone/project'
 const agentOpts = () => ({ name: 'xterm-256color', cols: 120, rows: 30, cwd: CWD, env: { Path: 'C:\\Windows' }, useConpty: true })
 const tick = (ms = 0) => new Promise((r) => setTimeout(r, ms))
 async function until(cond: () => boolean, what: string, ms = 3000): Promise<void> {
