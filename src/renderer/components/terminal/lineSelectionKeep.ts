@@ -45,7 +45,13 @@
  * selection left on its cells: only a trim is acted on. A marker on the
  * buffer's first row, registered ahead of the ends' markers, tells them apart:
  * any trim takes it first. When an end's marker goes and that one is still
- * there, the note goes and the selection stays as xterm keeps it. Selecting
+ * there, the note goes and the selection stays as xterm keeps it. An end whose
+ * line is the buffer's first row (the top row of a program's alternate screen,
+ * or of a session with no scrollback yet) is on that marker's row, and an
+ * erase of the row takes both: a marker on the second row tells that from a
+ * trim (a trim of one row moves it up, a longer one takes it after the
+ * first-row marker; an erase of the screen reaches it before the first row,
+ * or not at all). Selecting
  * again is noted the same way, so a later change
  * of the columns keeps it too. A drag in progress (the left
  * button pressed in the terminal, not yet let go) is xterm's: it reports the
@@ -182,6 +188,11 @@ export function keepLineSelection(term: LineSelectionTerminal): Disposable {
   /** On the buffer's first row while a selection is noted, registered ahead of
    *  the ends' markers (noteAt): any trim disposes it, and before theirs. */
   let top: Marker | null = null
+  /** On the buffer's second row while a selection is noted, registered ahead of
+   *  the ends' markers too (noteAt), and the row it was put on: for an end on
+   *  the buffer's first row, whose erase takes the first-row marker as well. */
+  let second: Marker | null = null
+  let secondAt = -1
 
   const forget = (): void => {
     // The note goes first, so its markers disposed here are not taken for
@@ -194,6 +205,8 @@ export function keepLineSelection(term: LineSelectionTerminal): Disposable {
     bottom = null
     top?.dispose()
     top = null
+    second?.dispose()
+    second = null
   }
 
   const bottomRow = (): number => {
@@ -231,12 +244,31 @@ export function keepLineSelection(term: LineSelectionTerminal): Disposable {
     // they were registered, so when a trim disposes an end's, this one is gone.
     const buf = t.buffer.active
     const guard = t.registerMarker(-(buf.baseY + buf.cursorY)) ?? null
+    // An end on the buffer's first row: an erase of that row (ESC[2J, ESC[1J)
+    // takes the first-row marker with the end's. The second-row marker tells
+    // that from a trim: a trim of one row moves it up and a longer one takes it
+    // after the first-row marker, while those erases go up the screen and reach
+    // it first (or leave it, when the cursor is on its row).
+    const under = buf.length > 1 ? t.registerMarker(1 - (buf.baseY + buf.cursorY)) ?? null : null
+    const underAt = under ? under.line : -1
+    let underErased = false
+    under?.onDispose?.(() => { if (guard?.isDisposed !== true) underErased = true })
+    /** xterm has just disposed the marker of an end: by a trim. */
+    const trimmed = (onFirst: boolean): boolean => {
+      if (guard?.isDisposed !== true) return false
+      if (!onFirst || !under) return true
+      return under.isDisposed ? !underErased : under.line < underAt
+    }
     const a = endAt(start)
     const b = a && endAt(end)
     if (a && b) {
       const mine = { start: a, end: b }
+      const startOnFirst = guard !== null && a.marker.line === guard.line
+      const endOnFirst = guard !== null && b.marker.line === guard.line
       noted = mine
       top = guard
+      second = under
+      secondAt = underAt
       markBottom()
       // xterm disposed the end's marker: the first row of its line went off the
       // top (output in a full scrollback, a narrowing's trim). xterm clears a
@@ -244,13 +276,13 @@ export function keepLineSelection(term: LineSelectionTerminal): Disposable {
       // triple-click's line, one selected again by select) it moves to row 0,
       // on other text, and never clears (SelectionModel.handleTrim). So it is
       // cleared here; a drag in progress is xterm's and is left. A row a
-      // program erased or deleted (the first-row marker still there): the note
+      // program erased or deleted (not a trim: see trimmed above): the note
       // goes and the selection stays as xterm keeps it.
       b.marker.onDispose?.(() => {
         if (noted !== mine) return
-        const trimmed = guard?.isDisposed === true
+        const byTrim = trimmed(endOnFirst)
         forget()
-        if (trimmed && !pressed) t.clearSelection?.()
+        if (byTrim && !pressed) t.clearSelection?.()
       })
       // xterm disposed the start's marker alone: the first row of the start's
       // line went off the top. After output the rest is kept (keepRest) once
@@ -259,7 +291,7 @@ export function keepLineSelection(term: LineSelectionTerminal): Disposable {
       a.marker.onDispose?.(() => {
         if (noted !== mine) return
         // Not a trim (its row erased or deleted): as xterm keeps it.
-        if (guard?.isDisposed !== true) { forget(); return }
+        if (!trimmed(startOnFirst)) { forget(); return }
         queueMicrotask(() => {
           if (noted !== mine) return
           try {
@@ -273,6 +305,7 @@ export function keepLineSelection(term: LineSelectionTerminal): Disposable {
     } else {
       a?.marker.dispose()
       guard?.dispose()
+      under?.dispose()
     }
   }
 
@@ -325,11 +358,13 @@ export function keepLineSelection(term: LineSelectionTerminal): Disposable {
     }
   }
 
-  /** After a write whose trim took the first-row marker and left the note: noted
-   *  again where it is, so that marker is again ahead of the ends' markers. An
-   *  end whose marker is gone is its hook's (noteAt). */
+  /** After a write whose trim took the first-row marker and left the note, or
+   *  that erased or moved the second-row marker: noted again where it is, so
+   *  both are again on their rows and ahead of the ends' markers. An end whose
+   *  marker is gone is its hook's (noteAt). */
   const renew = (): void => {
-    if (!noted || top?.isDisposed !== true) return
+    if (!noted) return
+    if (top?.isDisposed !== true && (!second || (!second.isDisposed && second.line === secondAt))) return
     const start = place(noted.start, t.cols, true, 0)
     const end = place(noted.end, t.cols, false, 0)
     if (!start || !end) return

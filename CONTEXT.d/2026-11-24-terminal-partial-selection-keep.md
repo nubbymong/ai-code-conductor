@@ -109,15 +109,37 @@ them"; and the first sentence of the "Not handled" bullet of 2026-11-24-cc-narro
     console-repaint-cc-streams.ts's 5 Claude Code recordings (each paint after its size, plain and
     through the aligner; 56 checks): this branch matches xterm alone and C10's head 3fb3e921 in 192
     of 192; c1bba4aa cleared 20 that all three leave selected (Codex's redraw after a size change,
-    the lower row, its cells then blank). Not covered (measured by the review): one write
-    that both pushes rows off the top and then erases the selection's rows is still read as a trim,
-    and the selection is cleared where xterm alone keeps it; likewise an erase of a selection whose
-    end's line is the buffer's first row (the first-row marker is on that row, and goes first).
+    the lower row, its cells then blank). The review's third re-check replayed every row with text
+    (48 recordings, a selection before each event that disposes a marker; 2,526 checks): b9e0c805
+    differed from xterm alone and C10's head in 12, all the top row of Claude Code's screen, a
+    selection made in the 7 to 8 ms between its mouse-mode resend and its paint; a selection made
+    before the resend is cleared by xterm alone too. An end on the buffer's first row (the top row
+    of a program's alternate screen, or the first line of a session with no scrollback, as after the
+    clear command) is on the first-row marker's row, and an erase of that row (ESC[2J, ESC[1J) takes
+    both markers: b9e0c805 read that as a trim and cleared the selection (measured by the third
+    re-check, the same text painted again on the same row: nothing selected in 6 of 6, where xterm
+    alone and 3fb3e921 keep it in 6 of 6). Fixed in the aggregate's join: a marker on the buffer's
+    second row, registered ahead of the ends' markers too, tells that erase from a trim. A trim of
+    one row moves it up and a longer one takes it after the first-row marker, while ESC[2J and
+    ESC[1J go up the screen and reach it first, or leave it when the cursor is on its row; after a
+    write that erased or moved it, the note is taken again. Measured in the join, the 8 tests
+    below: red on the merged head `Tests  5 failed | 75 passed (80)` (the 3 guards pass there),
+    `Tests  80 passed (80)` with the fix. The re-check's 6 mutants, each red (failed of 80): a
+    first-row end's disposal always a trim (5), a trim of many rows not read (1), a trim of one row
+    not read (4), the second row's erase not heard (4), not noted again for the second-row marker
+    (1), the second-row marker registered after the ends' (5). The re-check's replay of the top,
+    middle, last and cursor rows with this fix: 1,257 checks, none differing from xterm alone and
+    3fb3e921. Not covered (measured by the review): output that pushes rows off the top and then
+    erases the selection's rows, parsed by xterm in one go (one write, or writes that arrive before
+    it parses: it reports once per parse), is still read as a trim, and the selection is cleared
+    where xterm alone keeps it; and a delete of the buffer's first row (delete line or scroll up
+    there) is read as a trim, its line having gone. Each clears the selection or keeps less of it;
+    neither copies other text.
     When output takes only the start's line, the rest is kept: a drag over three lines kept once
     ran on past its end (copied "...line 197 of the session\nline 198 " where "...line 197 " was
     selected). xterm keeps a drag's end and moves its start to row 0, its column kept: left so and
-    noted again, so a
-    later change of the columns keeps it. One made by a start and a length runs on: selected again
+    noted again, so a later change of the columns keeps it. One made by a start and a length runs
+    on: selected again
     from row 0, column 0, to the noted end, once the trim is over (xterm moves the end's marker
     after the start's, so a microtask). A first drag's rest so loses the cells of row 0 before its
     start's column, where xterm's comment says column 0; left as xterm keeps it. In a narrowing a
@@ -131,9 +153,9 @@ them"; and the first sentence of the "Not handled" bullet of 2026-11-24-cc-narro
     0e7b7eeb, 0 of 336 with the fix; kept once then output, the rest from (0,0) in 37 of 48, where
     0e7b7eeb copies other text in 37 (the other 11 are cleared at 39; on 0e7b7eeb 10 are, and one
     copies other text).
-- **Tests.** terminal-line-selection.test.ts, 72: C10's 4 measurements, 5 new ones (above), C10's
-  18 keep tests and 18 new, 7 from the review round, 10 from its re-check and 10 from its second
-  re-check. One of C10's changed:
+- **Tests.** terminal-line-selection.test.ts, 80: C10's 4 measurements, 5 new ones (above), C10's
+  18 keep tests and 18 new, 7 from the review round, 10 from its re-check, 10 from its second
+  re-check and 8 from its third. One of C10's changed:
   a drag over a wrapped line's second row asserted that nothing was selected again (the bug); it
   now asserts its text ('w' x15, at (10,2)-(20,3)).
   C10's "$ she" measurement moved to the new block and runs on xterm alone (with the module wired it
@@ -181,5 +203,12 @@ them"; and the first sentence of the "Not handled" bullet of 2026-11-24-cc-narro
   row 0, column 0). Red on c1bba4aa: `Tests  8 failed | 64 passed (72)`, the 2 guards passing.
   Mutants on the fix, each red (failed of 72): the end's hook takes any disposal (1), the start's
   hook takes any disposal (2), not noted again after a write that trimmed (1), the first-row
-  marker registered after the ends' (6), a trimmed end never cleared (6). With C5b's four
-  console-repaint files and C10's terminalview-live-button.test.tsx: 168 of 168 across the 6 files.
+  marker registered after the ends' (6), a trimmed end never cleared (6).
+  The third re-check's 8, added in the aggregate's join: 5 for an erase of the buffer's first row
+  (the alternate screen's top row, ESC[2J ESC[H; a triple-clicked top row, ESC[5;1H ESC[1J; the top
+  row alone reset, ESC[2;1H ESC[1J; a session with no scrollback, ESC[2J ESC[H; the clear
+  command's ESC[H ESC[2J ESC[3J and the same lines again, its first line selected) and 3 guards for
+  a trim there (a line feed on the alternate screen's last row; ESC[3J; ESC[1;1H ESC[J, then a line
+  feed in a later write). Red on the merged head: `Tests  5 failed | 75 passed (80)`, the 3 guards
+  passing; the mutants are in the third review item. With C5b's four console-repaint files and
+  C10's terminalview-live-button.test.tsx: 176 of 176 across the 6 files.

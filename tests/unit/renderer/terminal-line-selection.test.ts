@@ -1080,3 +1080,99 @@ describe('a program erases or deletes the rows a selection is on: xterm disposes
     expect(pos(term)).toEqual([0, 0, 9, 1])
   })
 })
+
+/** A program's screen in the alternate buffer, 10 rows of text, over a session whose scrollback is full. */
+async function alternateScreen(): Promise<Terminal> {
+  const term = await fullTerminal()
+  await write(term, '\x1b[?1049h' + Array.from({ length: 10 }, (_, i) => `\x1b[${i + 1};1Hscreen row ${i + 1} of the program`).join(''))
+  await frame()
+  return term
+}
+
+describe('an end on the buffer\'s first row (the top row of a program\'s alternate screen, or of a session with no scrollback yet): an erase of that row takes the first-row marker with the end\'s, and is still not a trim (aicc_planning#424)', () => {
+  it('the alternate buffer: a drag on the top row of the screen, the program erases its screen (ESC[2J ESC[H) and paints the same rows: still selected, the same text (unfixed: nothing selected)', async () => {
+    const term = await alternateScreen()
+    keepLineSelection(term)
+    dragBetween(term, 7, 0, 12, 0)
+    expect(term.getSelection()).toBe('row 1')
+    const at = pos(term)
+    await write(term, '\x1b[2J\x1b[H' + sameRows(term))
+    expect(term.getSelection()).toBe('row 1')
+    expect(pos(term)).toEqual(at)
+  })
+
+  it('the alternate buffer: a triple-clicked top row, the program erases the rows above its cursor (ESC[5;1H ESC[1J) and paints them again: still that line (unfixed: nothing selected)', async () => {
+    const term = await alternateScreen()
+    keepLineSelection(term)
+    clickCell(term, 5, 0, 3)
+    expect(term.getSelection()).toBe('screen row 1 of the program')
+    await write(term, '\x1b[5;1H\x1b[1J' + sameRows(term))
+    expect(term.getSelection()).toBe('screen row 1 of the program')
+  })
+
+  it('the alternate buffer: a drag on the top row, the cursor on the second row and the rows above it erased (ESC[2;1H ESC[1J: the top row alone is reset) and painted again: still selected (unfixed: nothing selected)', async () => {
+    const term = await alternateScreen()
+    keepLineSelection(term)
+    dragBetween(term, 7, 0, 12, 0)
+    const at = pos(term)
+    await write(term, '\x1b[2;1H\x1b[1J' + sameRows(term))
+    expect(term.getSelection()).toBe('row 1')
+    expect(pos(term)).toEqual(at)
+  })
+
+  it('a session with no scrollback yet: a drag on the top row, the program erases its screen (ESC[2J ESC[H) and paints the same rows: still selected (unfixed: nothing selected)', async () => {
+    const term = await programTerminal(0)
+    expect(term.buffer.active.baseY).toBe(0)
+    keepLineSelection(term)
+    dragBetween(term, 0, 0, 6, 0)
+    expect(term.getSelection()).toBe('HEADER')
+    const at = pos(term)
+    await write(term, '\x1b[2J\x1b[H' + sameRows(term))
+    expect(term.getSelection()).toBe('HEADER')
+    expect(pos(term)).toEqual(at)
+  })
+
+  it('a clear and the same lines again (ESC[H ESC[2J ESC[3J, as the clear command sends), the first line selected: still selected at the next clear (unfixed: nothing selected)', async () => {
+    const term = await fullTerminal()
+    keepLineSelection(term)
+    const report = '\x1b[H\x1b[2J\x1b[3Jfirst line of the report\r\nsecond line\r\nthird line'
+    await write(term, report)
+    expect(term.buffer.active.baseY).toBe(0)
+    dragBetween(term, 0, 0, 5, 0)
+    expect(term.getSelection()).toBe('first')
+    const at = pos(term)
+    await write(term, report)
+    expect(term.getSelection()).toBe('first')
+    expect(pos(term)).toEqual(at)
+  })
+
+  it('the alternate buffer: a triple-clicked top row, a line feed on the last row scrolls the screen up one row (a trim of one row): nothing stays selected (a guard: xterm alone keeps the row that moved up selected)', async () => {
+    const term = await alternateScreen()
+    keepLineSelection(term)
+    clickCell(term, 5, 0, 3)
+    expect(pos(term)).toEqual([0, 0, 40, 0])
+    await write(term, '\x1b[10;1H\n')
+    expect(term.hasSelection()).toBe(false)
+  })
+
+  it('a triple-clicked line on the buffer\'s first row, the program erases the scrollback (ESC[3J: a trim of many rows at once, which takes the second-row marker after the first-row one): nothing stays selected (a guard)', async () => {
+    const term = await fullTerminal()
+    keepLineSelection(term)
+    term.scrollToTop()
+    await frame()
+    clickCell(term, 5, 0, 3)
+    expect(pos(term)).toEqual([0, 0, 40, 0])
+    await write(term, '\x1b[3J')
+    expect(term.hasSelection()).toBe(false)
+  })
+
+  it('the alternate buffer: a triple-clicked top row, the program erases under it and paints again (ESC[1;1H ESC[J, as Codex redraws: the second-row marker goes, the top row\'s stay), then a line feed on the last row in a later write: still that line after the erase, nothing selected after the trim (a guard: the second-row marker is renewed after a write that erased it)', async () => {
+    const term = await alternateScreen()
+    keepLineSelection(term)
+    clickCell(term, 5, 0, 3)
+    await write(term, '\x1b[1;1H\x1b[J' + sameRows(term))
+    expect(term.getSelection()).toBe('screen row 1 of the program')
+    await write(term, '\x1b[10;1H\n')
+    expect(term.hasSelection()).toBe(false)
+  })
+})
