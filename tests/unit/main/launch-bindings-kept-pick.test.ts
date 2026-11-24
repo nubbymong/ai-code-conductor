@@ -80,7 +80,7 @@ vi.mock('../../../src/main/canvas/canvas-store', () => ({
   registerCanvasUatRoot: () => true, revokeCanvasUatRoots: () => {}, designateCanvasWorktreeRoot: () => true,
   canvasRootRefusalReason: () => null, describeCanvasRootRefusal: () => '', setCanvasRootRefusal: () => {},
 }))
-vi.mock('../../../src/main/canvas/canvas-marker-delivery', () => ({ forgetCanvasMarkers: () => {} }))
+vi.mock('../../../src/main/canvas/canvas-marker-delivery', () => ({ forgetCanvasMarkers: () => {}, releaseCanvasMarkersForTab: () => {} }))
 vi.mock('../../../src/main/canvas/codex-canvas-roots', () => ({ registerCodexCanvasRoots: () => {}, codexDesignatedWorktree: () => null }))
 vi.mock('../../../src/main/canvas/codex-guidance', () => ({ noteCodexSessionGuidance: () => {}, forgetCodexSessionGuidance: () => {} }))
 // The provider registry: the real Codex provider, built below.

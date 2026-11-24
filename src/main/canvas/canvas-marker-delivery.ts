@@ -43,10 +43,26 @@
 // Its canvas is told it was not sent all the same, and main logs the late
 // answer (claude-marker-typing.ts).
 //
+// A TAB NOT SHOWN YET (aicc_planning#423, B1g). A session an app update kept
+// running for a restored tab that has not taken it over (kept-launches.ts
+// keptForItsTab: the tab not shown yet, or its launch still preparing) has no
+// terminal in this run to type into. A marker handed on for it (its write)
+// waits here instead, in order, and the canvas is told nothing (the channel
+// answers 'queued'). Right after the tab's take-over (launch-bindings.ts
+// takeOverKeptLaunch) each goes on as the queue hands one on
+// (releaseCanvasMarkersForTab): held again while a turn reads open, else
+// written, once. While the session waits for its tab, its end or restart
+// above (forgetCanvasMarkers) drops nothing: the take-over's own kill, and a
+// Restart's, come before the same CLI goes on in the tab. When it is kept no
+// longer without a take-over (its tab closed, its CLI ended, its time limit,
+// End, a quit: launch-bindings.ts unserveKeptLaunchUnseen), those waiting
+// here, then those the queue holds, are told to their canvas as not sent (the
+// session gone), once.
+//
 // Not every marker that does not reach the agent reaches a canvas. These are
 // dropped with a log line only, and no canvas is told:
 //  - the markers the queue drops, the oldest first, when more than
-//    MARKER_QUEUE_MAX wait;
+//    MARKER_QUEUE_MAX wait, and so do those waiting for a tab's take-over;
 //  - a marker whose write answers later (a Codex session's, waiting for
 //    Codex's prompt) and has not answered when its session ends:
 //    forgetCanvasMarkers clears its awaiting record before that answer
@@ -55,8 +71,9 @@
 //  - a marker filed with no canvas named (only direct callers;
 //    canvas:agentMarker always names one), wherever it is dropped.
 
-import { CanvasMarkerQueue, type HookEventFrom } from './canvas-marker-queue'
+import { CanvasMarkerQueue, MARKER_QUEUE_MAX, type HookEventFrom } from './canvas-marker-queue'
 import { forgetClaudeMarkers, noteClaudeMarkerTurnBegun, setClaudeMarkerHoldAgain, setClaudeMarkerUndelivered } from './claude-marker-typing'
+import { keptForItsTab } from '../sessions/kept-launches'
 import { logInfo, logWarn } from '../debug-logger'
 import type { CanvasMarkerUndelivered, SubmitTextResult } from '../../shared/types'
 
@@ -85,11 +102,35 @@ export interface CanvasMarkerWiring {
    *  or restarted. Never called for a delivered or typed one, except a Claude
    *  Code marker whose type request was already sent when its session's
    *  markers were cleared: it is told at the clear and may still be typed
-   *  (see the header). */
+   *  (see the header). B1g: also one that waited for its tab's take-over
+   *  when the session kept for that tab ended first. */
   onUndelivered?: (u: CanvasMarkerUndelivered) => void
 }
 
 let queue: CanvasMarkerQueue | null = null
+let wired: CanvasMarkerWiring | null = null
+
+/** B1g: per session, the markers handed on while its kept session waits for
+ *  its tab's take-over, in the order handed on (see the header). */
+const forTab = new Map<string, Array<{ line: string; canvasId: string | undefined }>>()
+
+/** B1g: a marker handed on for a tab whose kept session waits for its
+ *  take-over waits for it here (true); any other is written (false). The same
+ *  line about the same canvas is collapsed into one waiting, as the queue
+ *  collapses one. */
+function holdForTab(sessionId: string, line: string, canvasId: string | undefined): boolean {
+  if (!keptForItsTab(sessionId)) return false
+  const held = forTab.get(sessionId) ?? []
+  forTab.set(sessionId, held)
+  if (held.some((m) => m.line === line && m.canvasId === canvasId)) return true
+  if (held.length >= MARKER_QUEUE_MAX) {
+    const dropped = held.shift()
+    logWarn(`[canvas-marker] ${sessionId}: too many markers wait for its tab's take-over -- dropped the oldest: ${dropped?.line}`)
+  }
+  held.push({ line, canvasId })
+  logInfo(`[canvas-marker] ${sessionId}: its tab has not taken over the session an update kept for it, so a marker waits for the take-over (${held.length} waiting)`)
+  return true
+}
 
 /** The marker writes still awaiting an answer, per session. The canvas a
  *  marker was filed on travels with its own write (ADR-009 round 1: never
@@ -100,6 +141,7 @@ const awaiting = new Map<string, Set<object>>()
 
 /** The queue's write: the wiring's, with a later answer followed up. */
 function writeThrough(wiring: CanvasMarkerWiring, sessionId: string, line: string, canvasId: string | undefined): void {
+  if (holdForTab(sessionId, line, canvasId)) return
   const answer = wiring.write(sessionId, line, canvasId)
   if (!answer || typeof (answer as Promise<SubmitTextResult>).then !== 'function') return
   const token = {}
@@ -145,6 +187,7 @@ function tellForgotten(wiring: CanvasMarkerWiring, sessionId: string, line: stri
 /** Wire the queue to the PTY and the hook stream. Called once, at boot. */
 export function startCanvasMarkerQueue(wiring: CanvasMarkerWiring): void {
   if (queue) return
+  wired = wiring
   queue = new CanvasMarkerQueue({
     write: (sessionId, line, canvasId) => writeThrough(wiring, sessionId, line, canvasId),
     forgotten: (sessionId, line, canvasId) => tellForgotten(wiring, sessionId, line, canvasId),
@@ -177,11 +220,33 @@ export function startCanvasMarkerQueue(wiring: CanvasMarkerWiring): void {
  * delivered, a Claude Code session's dropped untyped).
  *
  * Before boot wiring (and in tests that never wire it) there is nothing to
- * deliver to; say so rather than pretending it went out.
+ * deliver to; say so rather than pretending it went out. B1g: one handed on
+ * for a tab whose kept session waits for its take-over waits for it, so it
+ * is 'queued' too.
  */
 export function deliverCanvasMarker(sessionId: string, line: string, canvasId?: string): 'sent' | 'queued' | 'unwired' {
   if (!queue) return 'unwired'
-  return queue.deliver(sessionId, line, typeof canvasId === 'string' && canvasId ? canvasId : undefined)
+  const answer = queue.deliver(sessionId, line, typeof canvasId === 'string' && canvasId ? canvasId : undefined)
+  return answer === 'sent' && keptForItsTab(sessionId) ? 'queued' : answer
+}
+
+/** B1g: the tab took over the session an update kept for it, and the run is
+ *  the session's (launch-bindings.ts takeOverKeptLaunch asks right after its
+ *  spawn). Each marker that waited for it goes on, once, in order, as the
+ *  queue hands one on: held again while a turn reads open (ahead of the
+ *  markers the queue holds, filed after it), else written. A second call
+ *  finds nothing. */
+export function releaseCanvasMarkersForTab(sessionId: string): void {
+  const held = forTab.get(sessionId)
+  if (!held) return
+  forTab.delete(sessionId)
+  const q = queue
+  const w = wired
+  if (!q || !w || held.length === 0) return
+  logInfo(`[canvas-marker] ${sessionId}: its tab took over the session kept for it, so ${held.length} marker(s) that waited for it go on`)
+  for (const m of held) {
+    if (!q.holdAgain(sessionId, m.line, m.canvasId)) writeThrough(w, sessionId, m.line, m.canvasId)
+  }
 }
 
 /** A session's PTY is gone; drop anything still held for it, at Claude
@@ -195,9 +260,27 @@ export function deliverCanvasMarker(sessionId: string, line: string, canvasId?: 
  *  given back to it takes the markers behind it along (canvas-marker-queue.ts,
  *  holdAgain). So the prompt's are told first, at once and in the order handed
  *  in, then the queue's, in the order held. Idempotent: a second call finds
- *  nothing. */
+ *  nothing.
+ *
+ *  B1g: while the session's kept session waits for its tab's take-over,
+ *  nothing is dropped (the kills before the take-over: its spawn's own and a
+ *  Restart's; the same CLI goes on in the tab). Once it is kept no longer
+ *  with no take-over, the markers that waited for the take-over are told
+ *  after any at the prompt and before the queue's: each was handed on before
+ *  the queue took any it holds now. */
 export function forgetCanvasMarkers(sessionId: string): void {
+  if (keptForItsTab(sessionId)) {
+    const waiting = (forTab.get(sessionId)?.length ?? 0) + (queue?.pendingCount(sessionId) ?? 0)
+    if (waiting > 0) logInfo(`[canvas-marker] ${sessionId}: its ${waiting} marker(s) are kept: the session an update kept for its tab waits for the tab to take it over`)
+    return
+  }
   forgetClaudeMarkers(sessionId)
+  const held = forTab.get(sessionId) ?? []
+  forTab.delete(sessionId)
+  if (held.length > 0 && wired) {
+    logWarn(`[canvas-marker] ${sessionId}: the session kept for its tab ended before the tab took it over, with ${held.length} marker(s) waiting for it`)
+    for (const m of held) tellForgotten(wired, sessionId, m.line, m.canvasId)
+  }
   queue?.forget(sessionId)
   awaiting.delete(sessionId)
 }
@@ -205,6 +288,8 @@ export function forgetCanvasMarkers(sessionId: string): void {
 /** Test seam. */
 export function _resetCanvasMarkerQueueForTest(): void {
   queue = null
+  wired = null
+  forTab.clear()
   awaiting.clear()
   setClaudeMarkerUndelivered(null)
   setClaudeMarkerHoldAgain(null)

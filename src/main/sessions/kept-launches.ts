@@ -65,7 +65,9 @@ export interface KeptLaunchBindings {
    *  (the tool host is not serving). */
   serve?(kept: KeptUnseen, cwd: string | undefined): boolean
   /** What serve bound goes, once the session is kept no longer; nothing when
-   *  a launch of the tab has cleared it already (its spawn's teardown). */
+   *  a launch of the tab has cleared it already (its spawn's teardown). B1g:
+   *  asked whether or not it was served, it also drops the canvas decisions
+   *  that waited for the take-over. */
   unserve?(sessionId: string): void
 }
 

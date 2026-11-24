@@ -1422,6 +1422,8 @@ export function registerPtyHandlers(getWindow: () => BrowserWindow | null): void
     sshShellSessions.delete(sessionId)
     // #580: nothing left to deliver a queued canvas marker to. Logged loudly if
     // any were still held, because that is a verdict the agent never heard.
+    // B1g: kept while the session an update kept for the tab waits for its
+    // take-over; a close then drops them when that session ends (just below).
     forgetCanvasMarkers(sessionId)
     // aicc_planning#423: a closed tab never takes over the session an update
     // kept for it (a restored tab not shown yet): it is ended now. A

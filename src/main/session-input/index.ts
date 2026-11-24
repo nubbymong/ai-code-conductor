@@ -521,6 +521,8 @@ export function submitImage(sessionId: string, imagePath: string, sentence: stri
  * again by hand in the same terminal is not); a session with no run takes
  * nothing and answers not delivered (the session gone), as the branch above
  * does for a session whose screen it does not read, so its canvas is told.
+ * (aicc_planning#423, B1g: a tab whose kept session waits for its take-over
+ * is not asked: canvas-marker-delivery.ts holds its markers until then.)
  * Otherwise it answers nothing: a marker the chain drops untyped (held past its bound, its run
  * ended) is told to its canvas by the chain itself. `canvasId`, the canvas
  * the marker was filed on when the caller named one, goes with the line, so

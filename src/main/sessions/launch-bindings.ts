@@ -43,7 +43,10 @@
 // to write its own over (keepServedToken), so the hook events the Hooks
 // gateway took for the tab stay in its record; and pty-manager.ts binds no
 // transcript a session kept for its tab names until its take-over
-// (keptForItsTab).
+// (keptForItsTab). B1g: a canvas decision filed for such a tab waits for its
+// take-over (canvas-marker-delivery.ts), which lets it go on
+// (takeOverKeptLaunch); an end with no take-over drops it
+// (unserveKeptLaunchUnseen).
 //
 // What stays in pty-manager.ts, and why:
 //  - the per-session records and the helpers that keep them, which much of
@@ -85,7 +88,7 @@ import { buildResumeTranscriptPath } from '../spawn-claude-command'
 import { captureClaudeAccount, clearClaudeAccount, getAccountIdentity, getClaudeProfileId, pushAccountIdentity, startWatchingAccountIdentity, stopWatchingAccountIdentity } from '../claude-account-identity'
 import { registerCodexReviewSession, registerClaudeReviewSession, unregisterCodexReviewSession, releaseMcpSessionProvider, recordHeldToolSession, getConductorMcpPort } from '../conductor-mcp-server'
 import { registerCanvasUatRoot, revokeCanvasUatRoots, designateCanvasWorktreeRoot, canvasRootRefusalReason, describeCanvasRootRefusal, setCanvasRootRefusal } from '../canvas/canvas-store'
-import { forgetCanvasMarkers } from '../canvas/canvas-marker-delivery'
+import { forgetCanvasMarkers, releaseCanvasMarkersForTab } from '../canvas/canvas-marker-delivery'
 import type { CodexCanvasLaunch } from '../canvas/codex-canvas-launch'
 import { registerCodexCanvasRoots, codexDesignatedWorktree } from '../canvas/codex-canvas-roots'
 import { noteCodexSessionGuidance, forgetCodexSessionGuidance } from '../canvas/codex-guidance'
@@ -793,6 +796,8 @@ export function takeOverKeptLaunch(b: KeptTakeOverBinding): KeptSessionTakenOver
     throw err
   }
   logInfo(`[pty] ${b.sessionId}: took over the session the last update kept running, with no launch (conversation ${kept.conversation ?? 'none'})`)
+  // B1g: the canvas decisions that waited for this take-over go on once the run is the session's (pty-manager.ts registers it later in this same call).
+  queueMicrotask(() => releaseCanvasMarkersForTab(b.sessionId))
   const now = Date.now()
   return { ptyProcess: proc, launchCwd, conversation: kept.conversation, profileId: codex ? undefined : (kept.account ?? undefined), since: kept.at > 0 ? Math.min(kept.at, now) : now }
 }
@@ -996,8 +1001,11 @@ function settleServedToken(sessionId: string, replaced = false): void {
  *  serveKeptLaunchUnseen bound goes (its registrations and its gateway
  *  token). Nothing when the mark is gone: a launch of the tab has torn it
  *  down already and bound its own, which stay. B1e: a token that teardown
- *  left goes (settleServedToken): a tab's close kills first (pty:kill). */
+ *  left goes (settleServedToken): a tab's close kills first (pty:kill).
+ *  B1g: and, served or not, the canvas decisions that waited for its
+ *  take-over (no kill before it dropped them) go, each told to its canvas. */
 export function unserveKeptLaunchUnseen(sessionId: string): void {
+  forgetCanvasMarkers(sessionId)
   settleServedToken(sessionId)
   if (!unseenServed.has(sessionId)) return
   unbindLaunchRegistrations(sessionId)
@@ -1149,7 +1157,9 @@ export function unbindLaunchRegistrations(sessionId: string): void {
   // spawnPty calls killPty → here before a respawn, so the new session inherits
   // nothing. Idempotent: a no-op for a session with no queue. The module holds
   // no static import of pty-manager (its PTY end is injected at boot from
-  // index.ts), so importing it here introduces no cycle.
+  // index.ts), so importing it here introduces no cycle. B1g: a no-op too
+  // while the session an update kept for the tab waits for its take-over (the
+  // same CLI goes on); unserveKeptLaunchUnseen drops them if it never does.
   forgetCanvasMarkers(sessionId)
   // WP2 PR 4, P4.1: the submit primitive's reading of a Codex run (its pane,
   // or B2 its holder's screen) goes with it (a submission still waiting on it
