@@ -137,6 +137,16 @@ export interface PickFolderIdentity {
   real: string
 }
 
+/** 2.1.3-beta.17 (aicc_planning#419): a launch's pick file with its folder
+ *  as made, and the resume picker's last decision its watcher read (the
+ *  conversation it opened, or when it chose a new one): what an app update
+ *  that keeps the session running records, for the next run's watcher. */
+export interface ResumePick {
+  file: string
+  folder: PickFolderIdentity
+  decided?: { id: string } | { fresh: number }
+}
+
 /** The session helper's relay mode for one held session's `conductor` tool
  *  server (2.1.3-beta.11, plan section B2): `<helperPath> mcp --store <store>
  *  --session <sid>`, which the CLI starts as its tool server and which
@@ -192,6 +202,9 @@ export interface TelemetryOptions {
   /** The pick file's folder as it was made: no pick is read, and nothing
    *  there removed, unless it is still that folder. */
   pickFolder?: PickFolderIdentity
+  /** A take-over of a launch through the picker (aicc_planning#419): the
+   *  decision the last run's watcher read, read here as the first. */
+  picked?: ResumePick['decided']
   /** `certain` (P3.6): false when the rollout could have been another
    *  launch's (two new sessions in one folder, P3.5's recorded limit).
    *  `exact` (P3.10): the conversation is known, not inferred: a resume by
@@ -214,8 +227,13 @@ export interface TelemetryOptions {
 }
 
 export interface TelemetrySource {
-  /** Stop the underlying watcher / tail when the session ends. */
-  stop(): void
+  /** Stop the underlying watcher / tail when the session ends.
+   *  `keepPickFolder` (aicc_planning#419): an app update keeps the session
+   *  running, so its pick folder stays for its resume picker. */
+  stop(opts?: { keepPickFolder?: boolean }): void
+  /** Codex (aicc_planning#419): the launch's pick, while its folder is still
+   *  the one made; null otherwise. */
+  pick?(): ResumePick | null
   /** Codex (P3.10): the session's own hook reported `rolloutPath` as the
    *  conversation it is on. The watcher claims it exactly (it checks the
    *  path is a rollout inside its realm whose session_meta names the id in
@@ -331,6 +349,10 @@ export interface SessionProvider {
    *  removeSessionHookFolder takes; the answer removes it the same way. Null
    *  when it cannot be written: nothing is started here. */
   rewriteSessionHooks?(dir: string, sessionId: string, port: number, secret: string): { hookFile: string; dispose(): void } | null
+  /** Optional -- Codex (aicc_planning#419): the pick folder of a session an
+   *  update kept running, once it is kept no longer: removed as its watcher's
+   *  stop removes it, only while it is still the folder made. Never throws. */
+  removeSessionPickFolder?(pick: ResumePick): void
   /** Optional -- Codex (2.1.3-beta.5): on macOS and Linux a launch that opens
    *  the resume list runs it on the node the user's login shell names. This
    *  asks that shell once, off the event loop, and keeps the answer for the

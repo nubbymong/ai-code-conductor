@@ -149,7 +149,7 @@ import {
 } from './protocol'
 import type { HelperHookTarget, HelperHooksResult } from '../hooks/session-hooks-writer'
 import type { HelperMcpConfigResult } from '../hooks/per-session-settings'
-import type { HeldToolLaunch, HeldToolLaunchAnswer, HeldToolRelay } from '../providers/types'
+import type { HeldToolLaunch, HeldToolLaunchAnswer, HeldToolRelay, ResumePick } from '../providers/types'
 import { describeKeptLaunch, removeKeptLaunch, setKeptLaunchCheck, setKeptTakeOver } from '../sessions/kept-launches'
 import { InstallError, bundledConptySource, checkedConpty, copyMatches, installHelperCopy, removeOldVersionFolders, sha256File, type InstalledHelper } from './install'
 
@@ -494,6 +494,8 @@ const KEPT_TAKE_OVER_WAIT_MS = 5 * 60_000
  * 2.1.3-beta.17 (S16 step 5): the folder its CLI was launched in, and
  * whether it runs on node-pty's bundled ConPTY, for its take-over; a record
  * an earlier version wrote has no folder (null) and reads as not bundled.
+ * `pick` (aicc_planning#419): a launch through the resume list's pick file,
+ * its folder as made and the decision read last, for the take-over's watcher.
  */
 export interface KeptRecord {
   session: string
@@ -504,6 +506,7 @@ export interface KeptRecord {
   hookFolder: string | null
   folder: string | null
   bundled?: true
+  pick?: ResumePick
   at: number
 }
 
@@ -517,10 +520,24 @@ function absoluteFolder(x: unknown): string | null {
   return typeof x === 'string' && x.length <= FOLDER_MAX && path.isAbsolute(x) && !/[\x00-\x1f\x7f]/.test(x) ? x : null
 }
 
+/** A kept record's pick (aicc_planning#419): an absolute file named
+ *  pick.json and its folder's identity (device and file id, real path), with
+ *  the decision read last when it reads; null when it does not read. */
+function keptPickOf(x: unknown): ResumePick | null {
+  const p = x && typeof x === 'object' ? x as Record<string, unknown> : {}
+  const f = p.folder && typeof p.folder === 'object' ? p.folder as Record<string, unknown> : {}
+  const d = p.decided && typeof p.decided === 'object' ? p.decided as Record<string, unknown> : {}
+  const file = absoluteFolder(p.file)
+  const real = absoluteFolder(f.real)
+  if (!file || path.basename(file) !== 'pick.json' || typeof f.id !== 'string' || !/^\d{1,40}:\d{1,40}$/.test(f.id) || !real) return null
+  const decided = typeof d.id === 'string' && CONVERSATION_RE.test(d.id) ? { id: d.id } : typeof d.fresh === 'number' && Number.isFinite(d.fresh) ? { fresh: d.fresh } : null
+  return { file, folder: { id: f.id, real }, ...(decided ? { decided } : {}) }
+}
+
 /** A kept record read strictly, from its file under the name `sid`: null
  *  when its id, tab and provider are not one agent session of this app's. A
- *  conversation, an account, a hook folder or a launch folder that does not
- *  read is none. */
+ *  conversation, an account, a hook folder, a launch folder or a pick that
+ *  does not read is none. */
 function keptRecordOf(v: unknown, sid: string): KeptRecord | null {
   if (!v || typeof v !== 'object') return null
   const r = v as Record<string, unknown>
@@ -530,6 +547,7 @@ function keptRecordOf(v: unknown, sid: string): KeptRecord | null {
   const provider = PROVIDER_IDS.find((p) => heldAgentSessionId(label, p) === sid)
   if (provider === undefined || r.provider !== provider) return null
   const text = (x: unknown, re: RegExp): string | null => (typeof x === 'string' && re.test(x) ? x : null)
+  const pick = keptPickOf(r.pick)
   return {
     session: sid,
     label,
@@ -539,6 +557,7 @@ function keptRecordOf(v: unknown, sid: string): KeptRecord | null {
     hookFolder: absoluteFolder(r.hookFolder),
     folder: absoluteFolder(r.folder),
     ...(r.bundled === true ? { bundled: true as const } : {}),
+    ...(pick ? { pick } : {}),
     at: typeof r.at === 'number' && Number.isFinite(r.at) ? r.at : 0,
   }
 }
@@ -1969,7 +1988,7 @@ export class SessionHelperManager implements MachinesSource {
   /** An agent session an update kept running that is kept no longer: its
    *  record, and what its launch left on disk (kept-launches.ts). */
   private forgetKept(k: KeptRecord): void {
-    removeKeptLaunch({ sessionId: k.label, provider: k.provider, hookFolder: k.hookFolder })
+    removeKeptLaunch({ sessionId: k.label, provider: k.provider, hookFolder: k.hookFolder, ...(k.pick ? { pick: k.pick } : {}) })
     this.removeKeptRecord(k.session)
   }
 

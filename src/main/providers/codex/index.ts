@@ -1,7 +1,7 @@
 // Codex provider package: public entry point (WP1, design 7.1). Everything
 // outside this directory imports from here; the dependency-boundary test
 // holds the deep imports at zero.
-import type { SessionProvider, SessionRunScreen, SpawnOptions, TelemetrySource, HistorySession, ProviderSpawnCommand, TelemetryOptions, HeldToolLaunch, HeldToolLaunchAnswer, HeldToolRelay, ExitKey } from '../types'
+import type { SessionProvider, SessionRunScreen, SpawnOptions, TelemetrySource, HistorySession, ProviderSpawnCommand, TelemetryOptions, HeldToolLaunch, HeldToolLaunchAnswer, HeldToolRelay, ExitKey, ResumePick } from '../types'
 import type { LegacyVersion, StatuslineData } from '../../../shared/types'
 import type { AllowanceReading } from '../../../shared/usage-types'
 import type { ProviderCapabilities, AuthRealm, RealmUse } from '../../../shared/providers'
@@ -10,7 +10,7 @@ import { CODEX_ENABLEMENT } from './enablement'
 import { resolveCodexBinary, resolveCodexBinaryAsync, buildCodexSpawn, codexHookDataDir, warmNodeExeOnPosix } from './spawn'
 import { openCodexScreen, feedCodexScreen, resizeCodexScreen, closeCodexScreen, hasCodexScreen, submitCodexText } from './session-screen'
 import { detectCodexUi } from './ui-detection'
-import { watchAndClaimRollout } from './telemetry'
+import { watchAndClaimRollout, removeCodexPickFolder } from './telemetry'
 import { warmCodexResume } from './rollout-lookup'
 import { deployCodexResumePickerScript } from './resume-picker'
 import { deployCodexHookScripts, writeCodexHookFile, removeCodexHookFile, removeKeptCodexHookFolder, prepareCodexHookFolders, preparedCodexHookRoot, codexPlainWrapperDir, codexLocalAppData, codexHookCommand } from './hooks'
@@ -228,13 +228,14 @@ export class CodexProvider implements SessionProvider {
     const marks = this.carryMarks
     const allowanceAfter = marks ? (rolloutPath: string): number | null => marks.cutoff(sessionsDir, codexRolloutIdFromName(rolloutPath)) : undefined
     const watch = opts.resumeId || opts.pickFile || opts.onClaim || opts.onRelease || opts.onShared || opts.onRollout || allowanceAfter
-      ? watchAndClaimRollout(sessionId, opts.cwd, opts.spawnTimestamp, onUpdate, sessionsDir, onAllowance, { resumeId: opts.resumeId, resumePath: opts.resumePath, pickFile: opts.pickFile, pickFolder: opts.pickFolder, onClaim: opts.onClaim, onRelease: opts.onRelease, onShared: opts.onShared, onRollout: opts.onRollout, ...(allowanceAfter ? { allowanceAfter } : {}) })
+      ? watchAndClaimRollout(sessionId, opts.cwd, opts.spawnTimestamp, onUpdate, sessionsDir, onAllowance, { resumeId: opts.resumeId, resumePath: opts.resumePath, pickFile: opts.pickFile, pickFolder: opts.pickFolder, ...(opts.picked ? { picked: opts.picked } : {}), onClaim: opts.onClaim, onRelease: opts.onRelease, onShared: opts.onShared, onRollout: opts.onRollout, ...(allowanceAfter ? { allowanceAfter } : {}) })
       : watchAndClaimRollout(sessionId, opts.cwd, opts.spawnTimestamp, onUpdate, sessionsDir, onAllowance)
     if (!live) return watch
     // The realm's live figure lasts while one of its sessions still reports.
     const release = live.open(sessionsDir)
     return {
-      stop() { try { watch.stop() } finally { release() } },
+      stop(o) { try { watch.stop(o) } finally { release() } },
+      pick: () => watch.pick?.() ?? null,
       // P3.10: the exact claim from the session's own hook, and another
       // session's proof that an inferred claim here is not this one's.
       noteExactRollout: (rolloutPath: string) => watch.noteExactRollout?.(rolloutPath) ?? null,
@@ -400,6 +401,12 @@ export class CodexProvider implements SessionProvider {
         try { removeKeptCodexHookFolder(dir, codexHookDataDir()) } catch { /* best-effort; the sweep remains */ }
       },
     }
+  }
+
+  /** aicc_planning#419: the resume list's pick folder of a session an app
+   *  update kept running, once it is kept no longer (telemetry.ts). */
+  removeSessionPickFolder(pick: ResumePick): void {
+    try { removeCodexPickFolder(pick.file, pick.folder) } catch { /* best-effort */ }
   }
 }
 

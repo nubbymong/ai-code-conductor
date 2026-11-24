@@ -21,7 +21,8 @@
 // S16 step 4 (aicc_planning#387, #359): a session an app update keeps running
 // (kept-launches.ts launchKeptForUpdate) keeps what its launch put on disk
 // through its kill: unbindLaunchFiles leaves its three per-session files, and
-// unbindLaunchTelemetry its Codex hook folder. What the unbinds drop from this
+// unbindLaunchTelemetry its Codex hook folder and (aicc_planning#419) its
+// resume list's pick folder. What the unbinds drop from this
 // run's memory still goes. describeLaunch says what the release records of
 // it, and removeKeptLaunchFiles removes what it left once it is no longer kept.
 //
@@ -53,7 +54,7 @@ import { nativeTheme, type BrowserWindow } from 'electron'
 import type * as pty from 'node-pty'
 import type { ProviderId } from '../../shared/providers'
 import type { AccountLease } from '../providers/core'
-import type { ProviderSpawnCommand, SessionProvider, SessionRunScreen, TelemetrySource } from '../providers/types'
+import type { ProviderSpawnCommand, SessionProvider, SessionRunScreen, TelemetryOptions, TelemetrySource } from '../providers/types'
 import { getGateway } from '../hooks'
 import { removeLocalSessionSettings, removeLocalSessionMcpConfig, removeLocalSessionStatusUrl, getLocalSessionStatusUrlPath, writeLocalSessionStatusUrl, noteKeptLaunchStatusLine } from '../hooks/per-session-settings'
 import { logInfo, logError, logWarn } from '../debug-logger'
@@ -170,7 +171,7 @@ export interface CodexLaunchBinding {
   codexCwd: string
   /** Taken right before the spawn: where the telemetry's claim window starts. */
   codexSpawnTimestamp: number
-  built: Pick<ProviderSpawnCommand, 'resumeId' | 'resumePath' | 'pickFile' | 'pickFolder'>
+  built: Pick<ProviderSpawnCommand, 'resumeId' | 'resumePath' | 'pickFile' | 'pickFolder'> & Pick<TelemetryOptions, 'picked'>
   /** The session's configured project folder, resolved. */
   resolvedCwd: string
   codexCanvas: Pick<CodexCanvasLaunch, 'designatedWorktree' | 'guidance'>
@@ -363,7 +364,7 @@ export function bindCodexLaunch(binding: CodexLaunchBinding): void {
       sessionsDir: launch.sessionsDir,
       ...(built.resumeId ? { resumeId: built.resumeId } : {}),
       ...(built.resumeId && built.resumePath ? { resumePath: built.resumePath } : {}),
-      ...(built.pickFile ? { pickFile: built.pickFile, pickFolder: built.pickFolder } : {}),
+      ...(built.pickFile ? { pickFile: built.pickFile, pickFolder: built.pickFolder, ...(built.picked ? { picked: built.picked } : {}) } : {}),
       onClaim: (claimed) => {
         keepCodexConversation(sessionId, { uuid: claimed.id, cwd: claimed.cwd }, launch.lease.accountId, { inferred: claimed.exact !== true })
         // P3.6: a claim that could have been another session's.
@@ -743,6 +744,9 @@ export function takeOverKeptLaunch(b: KeptTakeOverBinding): KeptSessionTakenOver
     if (kept.hookFolder) {
       try { b.launch.provider.removeSessionHookFolder?.(kept.hookFolder) } catch { /* best-effort; the sweep remains */ }
     }
+    if (kept.pick) {
+      try { b.launch.provider.removeSessionPickFolder?.(kept.pick) } catch { /* best-effort */ }
+    }
     throw err
   }
   logInfo(`[pty] ${b.sessionId}: took over the session the last update kept running, with no launch (conversation ${kept.conversation ?? 'none'})`)
@@ -795,7 +799,8 @@ function claudeTakeOver(b: KeptTakeOverBinding, proc: pty.IPty, kept: KeptSessio
  * handler, as the Codex branch's (the colour answers take only live queries:
  * the session helper takes the replay's queries out); the Ask mark; and its
  * telemetry, review registration and Agent Canvas roots (bindCodexLaunch), the
- * telemetry claiming the saved conversation by its id.
+ * telemetry claiming the saved conversation by its id, or for a launch through
+ * the resume list through its kept pick file (aicc_planning#419).
  */
 function codexTakeOver(b: KeptTakeOverBinding, launch: { lease: AccountLease; sessionsDir: string }, proc: pty.IPty, kept: KeptSessionFacts, launchCwd: string): void {
   const { ptySessions, codexHookFiles, codexHookedLaunches, codexAskSessions, noteGatewayToken, dropGatewayToken, keepCodexConversation, codexRunWriters } = ports()
@@ -843,7 +848,12 @@ function codexTakeOver(b: KeptTakeOverBinding, launch: { lease: AccountLease; se
   else codexAskSessions.delete(sessionId)
   bindCodexLaunch({
     win, sessionId, provider, launch, codexCwd: launchCwd, codexSpawnTimestamp: Date.now(),
-    built: kept.conversation ? { resumeId: kept.conversation } : {},
+    // A launch through the resume list (aicc_planning#419): its kept pick file
+    // and folder, as the launch bound them, so the list's next decision is
+    // read; the conversation it is on (else the decision read last) first.
+    built: kept.pick
+      ? { pickFile: kept.pick.file, pickFolder: kept.pick.folder, ...(kept.conversation ? { picked: { id: kept.conversation } } : kept.pick.decided ? { picked: kept.pick.decided } : {}) }
+      : kept.conversation ? { resumeId: kept.conversation } : {},
     resolvedCwd, codexCanvas: { designatedWorktree: codexDesignatedWorktree(resolvedCwd, sessionId), guidance: null }, runProvider: b.launch.id,
   })
 }
@@ -894,11 +904,12 @@ export function unbindCodexLease(sessionId: string): void {
  *  nothing when there is nothing to drop. A session an app update keeps
  *  running keeps its hook folder (S16 step 4): its CLI's hook reads the file
  *  in it at every event, and removeKeptLaunchFiles removes it once it is not
- *  kept. */
+ *  kept. So does its resume list's pick folder (aicc_planning#419). */
 export function unbindLaunchTelemetry(sessionId: string): void {
   const { codexTelemetrySources, codexHookFiles, notIndexedSessions, claudeTranscripts, claudeFolders, codexFolders, endSessionNotIndexed, forgetCodexHooks } = ports()
+  const kept = launchKeptForUpdate(sessionId)
   // Let go of here, so forgetCodexHooks below finds no file to remove.
-  if (launchKeptForUpdate(sessionId)) codexHookFiles.delete(sessionId)
+  if (kept) codexHookFiles.delete(sessionId)
   // Stop Codex telemetry source if one was registered for this session. On a
   // natural Codex exit (user typed exit/quit, Ctrl+D, crash) this is the ONLY
   // place that stops the 500ms full-file-read tail poller — killPty isn't hit
@@ -913,7 +924,7 @@ export function unbindLaunchTelemetry(sessionId: string): void {
   codexFolders.delete(sessionId)
   endSessionNotIndexed(sessionId, Date.now())
   if (codexTel) {
-    try { codexTel.stop() } catch { /* noop */ }
+    try { codexTel.stop(kept ? { keepPickFolder: true } : undefined) } catch { /* noop */ }
     codexTelemetrySources.delete(sessionId)
     // P3.12 round 2 (Q3): a session reading this one's conversation beside
     // it holds it now (its watcher says so, and its logs bind it).
@@ -1003,16 +1014,20 @@ const CONVERSATION_ID_RE = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-
  * session's lease, else the profile a Claude Code session started under;
  * null for the default account) and its Codex hook folder. Each is null when
  * not known: a session that has not started a conversation yet has none.
+ * And (aicc_planning#419) a launch through the resume list's pick, from its
+ * watcher, while the pick folder is still the one made.
  */
 export function describeLaunch(sessionId: string): KeptLaunchFacts {
-  const { codexLaunchLeases, codexHookFiles, keptCodexConversations, claudeTranscripts } = ports()
+  const { codexLaunchLeases, codexHookFiles, keptCodexConversations, claudeTranscripts, codexTelemetrySources } = ports()
   const claim = keptCodexConversations.get(sessionId)?.uuid
   const named = claudeTranscripts.get(sessionId)
   const fromName = named ? /([^\\/]+)\.jsonl$/.exec(named)?.[1] : undefined
   const conversation = [claim, fromName].find((id): id is string => typeof id === 'string' && CONVERSATION_ID_RE.test(id)) ?? null
   const account = codexLaunchLeases.get(sessionId)?.accountId ?? getClaudeProfileId(sessionId) ?? null
   const hookFile = codexHookFiles.get(sessionId)?.hookFile
-  return { conversation, account, hookFolder: hookFile ? path.dirname(hookFile) : null }
+  let pick: KeptLaunchFacts['pick'] | null = null
+  try { pick = codexTelemetrySources.get(sessionId)?.pick?.() ?? null } catch { pick = null }
+  return { conversation, account, hookFolder: hookFile ? path.dirname(hookFile) : null, ...(pick ? { pick } : {}) }
 }
 
 /**
@@ -1020,7 +1035,8 @@ export function describeLaunch(sessionId: string): KeptLaunchFacts {
  * step 4): the next start ended it, the update did not start, or a quit or a
  * new start of its tab came first. Its three per-session files, as its exit
  * would have removed them, and its hook folder, which its provider removes
- * only from its own hook root.
+ * only from its own hook root. And (aicc_planning#419) its resume list's pick
+ * folder, which its provider removes only while it is still the one made.
  */
 export function removeKeptLaunchFiles(kept: KeptLaunch): void {
   removeLocalSessionSettings(kept.sessionId)
@@ -1028,6 +1044,9 @@ export function removeKeptLaunchFiles(kept: KeptLaunch): void {
   removeLocalSessionStatusUrl(kept.sessionId)
   if (kept.hookFolder) {
     try { tryGetProvider(kept.provider)?.removeSessionHookFolder?.(kept.hookFolder) } catch (err) { logWarn(`[pty] ${kept.sessionId}: the hook folder an update kept could not be removed: ${(err as Error)?.message ?? err}`) }
+  }
+  if (kept.pick) {
+    try { tryGetProvider(kept.provider)?.removeSessionPickFolder?.(kept.pick) } catch { /* best-effort */ }
   }
 }
 

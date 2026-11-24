@@ -3,12 +3,13 @@
 // This is the seam between the session helper (session-helper/manager.ts),
 // which decides which sessions an update keeps and records them, and a
 // launch's bindings (launch-bindings.ts), which know what a launch put on
-// disk. It imports one type alone, so neither side imports the other: the helper
+// disk. It imports types alone, so neither side imports the other: the helper
 // says which sessions are kept, and the launch bindings hand over how to
 // describe one and how to remove what one left on disk.
 //
 // A kept session's files stay through its kill: its per-session settings
-// file, MCP config and status URL file, and its launch's hook folder.
+// file, MCP config and status URL file, its launch's hook folder, and the
+// resume list's pick folder (aicc_planning#419).
 // What the launch bound in this run's memory still goes at the kill, as
 // before: this run is ending, and a take-over (S16 step 5) makes it again.
 //
@@ -17,31 +18,36 @@
 // (takeKeptSession), and the launch bindings make the take-over's bindings.
 import type { IPty } from 'node-pty'
 import type { ProviderId } from '../../shared/providers/ids'
+import type { ResumePick } from '../providers/types'
 
 /** What the release records of a session it keeps, as this run knows it:
  *  the conversation it is on, the account it runs on (an opaque id; null for
  *  the provider's default account, or not known), and the folder of its
- *  launch's hook file (null when its launch has none). */
+ *  launch's hook file (null when its launch has none). `pick`
+ *  (aicc_planning#419): a launch through the resume list's pick file, its
+ *  folder as made and the decision read last. */
 export interface KeptLaunchFacts {
   conversation: string | null
   account: string | null
   hookFolder: string | null
+  pick?: ResumePick
 }
 
 /** A kept session, as its record names it: the tab's id, its provider, and
- *  its launch's hook folder. */
+ *  its launch's hook folder and pick. */
 export interface KeptLaunch {
   sessionId: string
   provider: ProviderId
   hookFolder: string | null
+  pick?: ResumePick
 }
 
 /** What the launch bindings hand over, once, when they load. */
 export interface KeptLaunchBindings {
   describe(sessionId: string): KeptLaunchFacts
-  /** Remove what the kept session left on disk: its three per-session files
-   *  and its hook folder. Only once the session is no longer kept: it ended,
-   *  or it is being ended. */
+  /** Remove what the kept session left on disk: its three per-session files,
+   *  its hook folder and its pick folder. Only once the session is no longer
+   *  kept: it ended, or it is being ended. */
   remove(kept: KeptLaunch): void
 }
 
