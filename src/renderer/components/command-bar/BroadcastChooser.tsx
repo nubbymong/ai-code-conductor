@@ -55,7 +55,8 @@ export default function BroadcastChooser({ label, listed, pressedId, onAnswer }:
   })
 
   // Enter: the primary button of what is shown, read at the key (a ref, so
-  // the listener is added once and never answers with a stale list).
+  // the listener is added once and answers with the list as last drawn; the
+  // bar filters the answer again at the press).
   const primary = React.useRef(answerAll)
   primary.current = choosing ? answerPicked : answerAll
   React.useEffect(() => {
