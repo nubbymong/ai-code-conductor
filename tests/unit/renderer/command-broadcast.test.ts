@@ -15,7 +15,7 @@
 import { describe, it, expect, vi } from 'vitest'
 import {
   broadcastTargets, isBroadcastTarget, broadcastBlocker, isBroadcastButton,
-  tallyBroadcast, broadcastNote, broadcastPrompt, broadcastChoices, liveBroadcastPick,
+  tallyBroadcast, broadcastNote, broadcastPrompt, broadcastChoices, liveBroadcastPick, chooserStartPick,
   type BroadcastSession, type BroadcastChoiceSession,
 } from '../../../src/renderer/lib/commandBroadcast'
 import type { PromptButtonResult } from '../../../src/shared/types'
@@ -175,5 +175,15 @@ describe('the chooser\'s list and the sessions its answer reaches (#413)', () =>
     expect(liveBroadcastPick(SESSIONS, ['shell', 'ask', 'ended', 'nobody'])).toEqual([])
     const later = SESSIONS.map((s) => (s.id === 'c' ? { ...s, ptyExited: true } : s))
     expect(liveBroadcastPick(later, ['a', 'c'])).toEqual(['a'])
+  })
+})
+
+describe('where the chooser\'s ticks start (#413, design point 1, its default)', () => {
+  it('every listed session ticked, in the listed order, as a copy the chooser may change', () => {
+    const listed = ['a', 'b', 'c']
+    const start = chooserStartPick(listed)
+    expect(start).toEqual(['a', 'b', 'c'])
+    start.pop()
+    expect(listed).toEqual(['a', 'b', 'c'])
   })
 })

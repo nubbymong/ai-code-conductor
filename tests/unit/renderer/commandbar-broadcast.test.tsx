@@ -199,6 +199,22 @@ describe('a button set to "Send to every open session" asks first: All, or the s
     expect(submitPrompt).not.toHaveBeenCalled()
   })
 
+  it('Choose sessions starts with every listed tab ticked, so a pick is unticking the ones to skip (design point 1, its default)', async () => {
+    COMMANDS = [BROADCAST]
+    render()
+    await press('Review all')
+    await click('broadcast-chooser-choose')
+    expect(ticked()).toEqual(['s-1', 's-2', 's-3'])
+    expect(byTest('broadcast-chooser-send')!.textContent).toBe('Send (3)')
+    // Codex unticked: Send reaches the two Claude Code tabs only.
+    await act(async () => { tickBox('s-3').click(); await settle() })
+    await click('broadcast-chooser-send')
+    expect(sentTo()).toEqual([
+      { sessionId: 's-1', text: 'review the open diff' },
+      { sessionId: 's-2', text: 'review the open diff' },
+    ])
+  })
+
   it('a pick reaches only the ticked tabs, once each', async () => {
     COMMANDS = [BROADCAST]
     render()

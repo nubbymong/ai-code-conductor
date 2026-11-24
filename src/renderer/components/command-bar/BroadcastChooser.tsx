@@ -1,6 +1,6 @@
 import React from 'react'
 import { useSessionStore } from '../../stores/sessionStore'
-import { broadcastChoices } from '../../lib/commandBroadcast'
+import { broadcastChoices, chooserStartPick } from '../../lib/commandBroadcast'
 import { ConfirmCard } from './menus'
 
 /**
@@ -9,7 +9,8 @@ import { ConfirmCard } from './menus'
  * to', then All (N), the primary button, or Choose sessions: the sessions a
  * broadcast reaches, each with a tick box beside the tab's name, its agent and,
  * for an SSH session, its host as a badge; then Send for the ticked ones.
- * Cancel and Escape send nothing.
+ * The list starts with every session ticked (chooserStartPick). Cancel and
+ * Escape send nothing.
  *
  * The list is the sessions a broadcast reached when the press asked
  * (`listed`), shown live: one that ends while the chooser is up drops out, and
@@ -38,7 +39,8 @@ export default function BroadcastChooser({ label, listed, pressedId, onAnswer }:
   const sessions = useSessionStore((s) => s.sessions)
   const choices = React.useMemo(() => broadcastChoices(sessions, listed), [sessions, listed])
   const [choosing, setChoosing] = React.useState(false)
-  const [ticked, setTicked] = React.useState<ReadonlySet<string>>(() => new Set<string>())
+  // Design point 1: the list starts with every listed session ticked.
+  const [ticked, setTicked] = React.useState<ReadonlySet<string>>(() => new Set(chooserStartPick(listed)))
   const tickedIds = choices.filter((c) => ticked.has(c.id)).map((c) => c.id)
 
   const answerAll = () => { if (choices.length > 0) onAnswer(choices.map((c) => c.id)) }

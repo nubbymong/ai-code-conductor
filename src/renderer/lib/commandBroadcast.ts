@@ -115,6 +115,15 @@ export function broadcastChoices(sessions: readonly BroadcastChoiceSession[], li
 }
 
 /**
+ * #413, design point 1 (put to the owner 2026-11-24; built on its default
+ * until answered): Choose sessions starts with every listed session ticked,
+ * so a pick is "untick the ones to skip".
+ */
+export function chooserStartPick(listed: readonly string[]): string[] {
+  return [...listed]
+}
+
+/**
  * #413: the sessions a chooser's answer goes to, read at the press: of the
  * ids picked, those a broadcast still reaches now, in tab order, each once.
  * A session that ended, or stopped being an agent tab, while the chooser was
