@@ -14,6 +14,8 @@
  * on another account (a Codex lease's, or the account a Claude Code launch
  * names) takes nothing over, and its launch ends the kept session first. A
  * take-over that cannot attach says so in the tab, exits 1 and starts nothing.
+ * A Codex session kept on its resume list carries its pick through the record
+ * to the take-over, or to the removal when it is ended (aicc_planning#419).
  *
  * PURE: the real manager and HelperPty against the fake helper, in memory; the
  * launch's bindings (kept-launches.ts) are a stand-in that records what it is
@@ -26,7 +28,7 @@
  * take-over's size wait, which this one shares).
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync, existsSync, readdirSync } from 'fs'
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync, existsSync, readdirSync, readFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import type { IPty } from 'node-pty'
@@ -506,6 +508,56 @@ describe('a Codex session an update kept running (B1.2)', () => {
     expect(logs).toContain(`[session-helper] ${otherSid}: the session kept for tab ${OTHER_TAB} to take over is ended, because its tab started a new CLI instead of taking it over`)
     await until(() => ho.ended, 'the kept session to be ended')
     expect(removed).toEqual([{ sessionId: OTHER_TAB, provider: 'codex', hookFolder: HOOK_FOLDER }])
+  })
+})
+
+describe('a Codex session an update kept running on its resume list (aicc_planning#419)', () => {
+  const PICK_DIR = join(tmpdir(), 'ccc-codex-pick-Ab12Cd')
+  const PICK = { file: join(PICK_DIR, 'pick.json'), folder: { id: '1234567:89012345', real: PICK_DIR }, decided: { fresh: 1_790_000_000_000 } }
+  const recordFile = () => join(keptDir(), `${otherSid}.json`)
+
+  it('the release records its pick (the file, the folder as made, the decision read last), and the next start hands it to the tab that takes it over', async () => {
+    facts[OTHER_TAB] = { conversation: null, account: 'acct-7', hookFolder: HOOK_FOLDER, pick: PICK }
+    await updated()
+    expect(JSON.parse(readFileSync(recordFile(), 'utf8')).pick).toEqual(PICK)
+    await startedWith(makeManager({ takeOver: 'both' }))
+    const taken = takeKeptSession(OTHER_TAB, 'codex', SIZE, 'acct-7')
+    expect(taken).not.toBeNull()
+    expect(taken!.kept.pick).toEqual(PICK)
+  })
+
+  it('one no tab takes over is ended, its pick handed to the removal with its other files', async () => {
+    facts[OTHER_TAB] = { conversation: null, account: 'acct-7', hookFolder: HOOK_FOLDER, pick: PICK }
+    const { ho } = await updated()
+    await startedWith(makeManager())
+    await until(() => ho.ended, 'the Codex session to be ended')
+    expect(removed).toEqual([{ sessionId: OTHER_TAB, provider: 'codex', hookFolder: HOOK_FOLDER, pick: PICK }])
+  })
+
+  it.each([
+    ['a file not named pick.json', { ...PICK, file: join(PICK_DIR, 'notes.txt') }],
+    ['a relative file', { ...PICK, file: join('ccc-codex-pick-Ab12Cd', 'pick.json') }],
+    ['a folder id that is not a device and file id', { ...PICK, folder: { ...PICK.folder, id: '../x' } }],
+    ['a relative real folder', { ...PICK, folder: { ...PICK.folder, real: 'ccc-codex-pick-Ab12Cd' } }],
+    ['no folder', { file: PICK.file }],
+  ])('a record whose pick is %s reads with no pick', async (_what, bad) => {
+    facts[OTHER_TAB] = { conversation: null, account: 'acct-7', hookFolder: HOOK_FOLDER, pick: PICK }
+    await updated()
+    // Written over on disk, as a record the start acts on could be.
+    writeFileSync(recordFile(), JSON.stringify({ ...JSON.parse(readFileSync(recordFile(), 'utf8')), pick: bad }))
+    await startedWith(makeManager({ takeOver: 'both' }))
+    const taken = takeKeptSession(OTHER_TAB, 'codex', SIZE, 'acct-7')
+    expect(taken).not.toBeNull()
+    expect(taken!.kept.pick).toBeUndefined()
+    expect(taken!.kept.hookFolder).toBe(HOOK_FOLDER)
+  })
+
+  it('a decision that does not read is left out; the pick stays', async () => {
+    facts[OTHER_TAB] = { conversation: null, account: 'acct-7', hookFolder: HOOK_FOLDER, pick: PICK }
+    await updated()
+    writeFileSync(recordFile(), JSON.stringify({ ...JSON.parse(readFileSync(recordFile(), 'utf8')), pick: { ...PICK, decided: { id: '--config=x' } } }))
+    await startedWith(makeManager({ takeOver: 'both' }))
+    expect(takeKeptSession(OTHER_TAB, 'codex', SIZE, 'acct-7')!.kept.pick).toEqual({ file: PICK.file, folder: PICK.folder })
   })
 })
 
