@@ -13,6 +13,28 @@ interface Props {
   sessionType: 'local' | 'ssh'
 }
 
+/** Resolves once the page has made two frames: the first animation frame runs
+ *  before the frame that draws what was just changed, the second once that
+ *  frame is made. A page that is hidden, or hides meanwhile, makes no frames
+ *  and shows nothing, so it resolves then. Snap asks for its capture only
+ *  after this, so the menu it just closed is off the screen before the picture
+ *  is taken (aicc_planning#406). */
+function afterTwoFrames(): Promise<void> {
+  return new Promise((resolve) => {
+    let done = false
+    const finish = () => {
+      if (done) return
+      done = true
+      document.removeEventListener('visibilitychange', onHidden)
+      resolve()
+    }
+    const onHidden = () => { if (document.visibilityState === 'hidden') finish() }
+    if (document.visibilityState === 'hidden') return finish()
+    document.addEventListener('visibilitychange', onHidden)
+    requestAnimationFrame(() => requestAnimationFrame(finish))
+  })
+}
+
 export default function ScreenshotButton({ sessionId, sessionType }: Props) {
   const color = useMagicButtonStore((s) => s.settings.screenshotColor)
   const [showDropdown, setShowDropdown] = useState(false)
@@ -47,6 +69,9 @@ export default function ScreenshotButton({ sessionId, sessionType }: Props) {
     setShowDropdown(false)
     setCapturing(true)
     try {
+      // The new Snap pictures the screen as soon as it is asked: the menu's
+      // close is drawn first, or the menu can be in the picture.
+      await afterTwoFrames()
       const path = await window.electronAPI.screenshot.captureRectangle()
       if (path) {
         sendImageToSession(sessionId, path, 'I just snapped a region of my screen — please view it.', sessionType)

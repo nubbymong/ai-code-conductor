@@ -89,6 +89,12 @@
  *      condition. Every box's two pictures differ on at least MENU_MIN_PIXELS
  *      pixels, or the box was not read. One test, so a red press still leaves
  *      every reading; it runs last, so a red one skips nothing.
+ *      Before the fix (run 45349991502 on 60e1b1ae, one 1024x768 display at
+ *      100%): the slowing read 4.4x and 25x; the control seen 6 of 6; the
+ *      menu in 0 of 6 pictures at 4x and in 6 of 6 at 20x (3 Rectangle, 3
+ *      Whole screen), as the press asked for the capture in the same task
+ *      that closed the menu. The fix (ScreenshotButton.tsx afterTwoFrames)
+ *      asks only after the page has drawn the close.
  * READINGS (recorded): R1, what main has loaded once the app has started and
  *   its tab runs (before any press): the native add-ons (.node files, from
  *   main's module cache and from the process report) and the files of the
