@@ -106,6 +106,8 @@
  * served while its tab stays unseen, from UNSEEN_SERVE_AFTER_MS after Resume
  * (a keeper that acks `mcp`, keep), and one whose CLI ends by itself before
  * its tab is shown is ended with its record, so its tab resumes by itself.
+ * B1e: from then its hook events reach the tab at once too (that keeper acks
+ * `hooks`); the take-over goes on from the last one it took.
  *
  * 2.1.3-beta.14 (plan section B2, aicc_planning#388): an agent session of a
  * provider in deps.screens (app-wiring.ts gives Codex's) asks on its
@@ -398,6 +400,8 @@ export interface HelperHookDeps {
 interface HookRoute {
   /** Its settings file was switched: its hook events go through its holder. */
   isOn(): boolean
+  /** The last `seq` it took (B1e: where a take-over after a keeper's goes on). */
+  lastSeq(): number
   launched(conn: HolderConnection): void
   event(e: HookEventFrame): void
   ended(): void
@@ -660,6 +664,8 @@ interface KeptForTab {
   timer: ReturnType<typeof setTimeout> | null
   shown?: true
   serve?: ReturnType<typeof setTimeout>
+  /** B1e: its keeper's hook route, from its serving while its tab is not shown. */
+  hooks?: HookRoute
 }
 
 export class SessionHelperManager implements MachinesSource {
@@ -1288,7 +1294,8 @@ export class SessionHelperManager implements MachinesSource {
     if (entry.serve) clearTimeout(entry.serve)
     this.removeKeptRecord(sid)
     const { kept, record } = entry
-    const hooks = this.hookRoute(ctx, sid, true)
+    // B1e: on from the last hook event its keeper took while its tab was not shown.
+    const hooks = this.hookRoute(ctx, sid, true, false, entry.hooks)
     const tools = this.toolRoute(ctx, sid, undefined, true)
     const spec: LaunchSpec = { argv: [''], cwd: kept.folder ?? '', env: {}, cols: size.cols, rows: size.rows, ...(kept.bundled ? { conpty: 'bundled' as const } : {}) }
     const direct = (): IPty => notStartedPty(HELPER_SENTENCES.agentNotTakenOver, size)
@@ -1328,17 +1335,29 @@ export class SessionHelperManager implements MachinesSource {
    * it only so): on from the attach, so the events its holder queued while no
    * app took them come first. The signals module takes them while the
    * gateway is on and listening, as for any session through the helper.
+   *
+   * `unseen` (aicc_planning#423, B1e): the same, before the take-over, for a
+   * session kept for its restored tab while that tab is not shown: its
+   * keeper's (serveUnseen), so the tab's attention mark and hook record have
+   * its events at once, and none is lost to the holder's queue limit. No
+   * transcript is bound from them until the take-over (keptForItsTab). Its
+   * end (an end of the session with no take-over: forgetKeptForTab) ends the
+   * tab's hook record and takes nothing more; a take-over does not end it.
+   * `after`: that keeper's route, for the take-over's: it goes on from the
+   * last `seq` the keeper took, so no event is taken twice (the holder sends
+   * one to one attach only, and one whose send failed again to the next).
    */
-  private hookRoute(ctx: AgentSpawnContext, sid: string, takenOver = false): HookRoute | undefined {
+  private hookRoute(ctx: AgentSpawnContext, sid: string, takenOver = false, unseen = false, after?: HookRoute): HookRoute | undefined {
     if (ctx.run) return undefined
     const deps = this.deps.hooks?.[ctx.kind]
     if (!deps) return undefined
     const appId = ctx.sessionId
     let on = takenOver
-    let lastSeq = 0
-    if (takenOver) this.deps.log(`[session-helper] ${appId}: its hook events go through its holder from the take-over, PreToolUse included`)
+    let lastSeq = after?.lastSeq() ?? 0
+    if (takenOver) this.deps.log(`[session-helper] ${appId}: its hook events go through its holder ${unseen ? 'while its tab is not shown' : 'from the take-over, PreToolUse included'}`)
     return {
       isOn: () => on,
+      lastSeq: () => lastSeq,
       launched: (conn) => {
         // Relies on the PTY manager having written the file already: it does,
         // with no await between the spawn call and the write (see above).
@@ -1366,6 +1385,7 @@ export class SessionHelperManager implements MachinesSource {
       },
       ended: () => {
         if (on) deps.ended(appId)
+        if (unseen) on = false
       },
     }
   }
@@ -1736,12 +1756,15 @@ export class SessionHelperManager implements MachinesSource {
    *  tab, served its tool calls while that tab is not shown (restoredTabs):
    *  this keeper acks `mcp`, so its holder gives it the kept tool streams, and
    *  replaces the one holding it once that one is up (a tab's attach waits
-   *  for this one in turn, connectFor). A session kept for its tab whose CLI
-   *  has ended, at the attach or after it, is ended with its record. */
-  private keep(record: HolderRecord, tools?: ToolRoute): void {
+   *  for this one in turn, connectFor). `hooks` (B1e): the same keeper, or
+   *  one on its own when the tool calls are not served, acks `hooks`, so its
+   *  holder gives it the hook events it queued and each new one. A session
+   *  kept for its tab whose CLI has ended, at the attach or after it, is
+   *  ended with its record. */
+  private keep(record: HolderRecord, tools?: ToolRoute, hooks?: HookRoute): void {
     const sid = record.session
     const earlier = this.keepers.get(sid)
-    if (this.quitting || (earlier && !tools)) return
+    if (this.quitting || (earlier && !tools && !hooks)) return
     const entry: { record: HolderRecord; conn?: HolderConnection; ready: Promise<void> } = { record, ready: Promise.resolve() }
     entry.ready = (async () => {
       try {
@@ -1751,7 +1774,7 @@ export class SessionHelperManager implements MachinesSource {
           entry.conn = earlier.conn
           if (this.quitting || this.keepers.get(sid) !== entry) return
         }
-        const conn = await this.open(record, undefined, undefined, tools)
+        const conn = await this.open(record, undefined, hooks, tools)
         entry.conn = conn
         conn.on('close', () => {
           if (this.keepers.get(sid) === entry) this.keepers.delete(sid)
@@ -2183,19 +2206,25 @@ export class SessionHelperManager implements MachinesSource {
    * take-over, as before. The take-over (its spawn's killPty first) clears
    * these and makes them again; an end of the session unbinds them
    * (forgetKeptForTab).
+   *
+   * B1e: the keeper takes its hook events too, where its provider's go
+   * through a holder (hookRoute's `unseen`), served or not.
    */
   private serveUnseen(sid: string, e: KeptForTab, cwd: string | undefined): void {
     e.serve = undefined
     if (this.keptForTabs.get(sid) !== e || e.shown || this.quitting || this.updating) return
     const { kept, record } = e
+    const ctx: AgentSpawnContext = { sessionId: kept.label, kind: kept.provider }
+    e.hooks = this.hookRoute(ctx, sid, true, true)
     const why = !this.deps.tools?.[kept.provider] ? 'its provider\'s tools do not go through a holder'
       : !serveKeptLaunch({ sessionId: kept.label, provider: kept.provider, hookFolder: kept.hookFolder, folder: kept.folder }, cwd) ? 'the tool host is not serving, or its bindings could not be made'
         : null
     if (why !== null) {
       this.deps.log(`[session-helper] ${sid}: tab ${kept.label} is not shown, and its Conductor tool calls wait for its take-over, because ${why}`)
+      if (e.hooks) this.keep(record, undefined, e.hooks)
       return
     }
-    this.keep(record, this.toolRoute({ sessionId: kept.label, kind: kept.provider }, sid, undefined, true, true))
+    this.keep(record, this.toolRoute(ctx, sid, undefined, true, true), e.hooks)
   }
 
   /** aicc_planning#423: this tab is shown and starts now (TerminalView's first
@@ -2222,16 +2251,25 @@ export class SessionHelperManager implements MachinesSource {
   /** An agent session kept for its tab (S16 step 5) is kept no longer: its
    *  time limit stops, what was bound to serve its tool calls while its tab
    *  was not shown goes (B1d: unserveKeptLaunch, which leaves alone what a
-   *  launch of its tab has bound since), and its record and what it left on
-   *  disk go. Nothing is ended here (see endKeptForTab). */
+   *  launch of its tab has bound since), the tab's hook record of it ends
+   *  (B1e: its keeper's hook route, which takes nothing more), and its record
+   *  and what it left on disk go. Nothing is ended here (see endKeptForTab). */
   private forgetKeptForTab(sid: string): void {
     const entry = this.keptForTabs.get(sid)
     if (!entry) return
     this.keptForTabs.delete(sid)
     if (entry.timer) clearTimeout(entry.timer)
     if (entry.serve) clearTimeout(entry.serve)
+    entry.hooks?.ended()
     unserveKeptLaunch(entry.kept.label)
     this.forgetKept(entry.kept)
+  }
+
+  /** aicc_planning#423 (B1e): whether a session is kept for this tab now, not
+   *  yet taken over (kept-launches.ts keptForItsTab). */
+  waitsForTakeOver(appPtyId: string): boolean {
+    for (const e of this.keptForTabs.values()) if (e.kept.label === appPtyId) return true
+    return false
   }
 
   /** An agent session kept for its tab that the tab will not take over: it is
@@ -2596,6 +2634,8 @@ setKeptTabSignals({
   restored: (tabs) => current?.restoredTabs(tabs),
   shown: (appPtyId) => current?.tabShown(appPtyId),
   closed: (appPtyId) => current?.tabClosed(appPtyId),
+  // B1e: and whether one waits for its tab's take-over (no transcript is bound from it until then).
+  waits: (appPtyId) => current?.waitsForTakeOver(appPtyId) === true,
 })
 
 export function getSessionHelper(): SessionHelperManager | null {

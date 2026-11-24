@@ -93,6 +93,8 @@ let served: Array<{ id: string; link: HelperToolLink; opts: { toolsChanged?: boo
 let servedOther: Array<{ id: string; opts: { toolsChanged?: boolean } | undefined }>
 /** Every hook event the stand-in signals module was handed. */
 let events: Array<{ id: string; e: HookEventFrame }>
+/** B1e: each tab whose hook record the stand-in signals module was told is over (endHelperHooks). */
+let endedHooks: string[]
 /** The saved tabs the stand-in app-wiring answers; null: none given. */
 let savedTabs: ReadonlySet<string> | null
 /** Whether Claude Code's tool functions say its CLI lists its tools again. */
@@ -107,7 +109,7 @@ function claudeTools(): HelperToolDeps {
   }
 }
 const otherTools: HelperToolDeps = { serve: (id, _link, opts) => { servedOther.push({ id, opts }); return true }, serving: () => true, relayLaunch: (_id, launch) => ({ args: typeof launch.args === 'string' ? launch.args : [...launch.args] }) }
-const hooks: HelperHookDeps = { taking: () => true, useHelperHooks: () => 'switched', event: (id, e) => { events.push({ id, e }) }, ended: () => {} }
+const hooks: HelperHookDeps = { taking: () => true, useHelperHooks: () => 'switched', event: (id, e) => { events.push({ id, e }) }, ended: (id) => { endedHooks.push(id) } }
 
 function makeManager(o: { takeOver?: false | 'claude' | 'both'; waitMs?: number; serveMs?: number } = {}): SessionHelperManager {
   let self: SessionHelperManager | undefined
@@ -170,6 +172,7 @@ beforeEach(() => {
   served = []
   servedOther = []
   events = []
+  endedHooks = []
   savedTabs = null
   listsAgain = true
   setKeptLaunchBindings({ describe: (id) => facts[id] ?? { conversation: null, account: null, hookFolder: null }, remove: (k) => { removed.push(k) } })
@@ -635,7 +638,9 @@ describe('a restored tab not on screen keeps the session an update kept for it u
       expect(hc.ended).toBe(false)
       expect(keptOnDisk()).toEqual([`${claudeSid}.json`])
       expect(removed.map((k) => k.sessionId)).toEqual([OTHER_TAB])
-      expect(hc.waitingEvents).toHaveLength(1)
+      // B1e: the hook event its holder queued was taken while the tab was not shown (its keeper acks hooks).
+      await until(() => events.length === 1, 'the queued hook event while the tab is not shown')
+      expect(hc.waitingEvents).toEqual([])
       // Shown much later: its view starts, and its spawn asks for the take-over.
       await vi.advanceTimersByTimeAsync(30 * 60_000)
       expect(hc.ended).toBe(false)
@@ -858,9 +863,10 @@ describe('B1d: a session kept for a restored tab not shown is served its tool ca
     await until(() => served.length === 1, 'the kept stream to be served while the tab is not shown')
     expect(servedUnseen).toEqual([{ kept: { sessionId: CLAUDE_TAB, provider: 'claude', hookFolder: null, folder: CWD }, cwd: CWD }])
     expect(served[0]).toMatchObject({ id: CLAUDE_TAB, opts: { toolsChanged: true } })
-    // A keeper that takes tool streams, and still no hook events (they wait in the holder for the take-over).
+    // A keeper that takes tool streams, and (B1e) hook events: the one its holder queued is taken now.
     expect(hc.attached!.ackedCaps).toContain('mcp')
-    expect(hc.attached!.ackedCaps).not.toContain('hooks')
+    expect(hc.attached!.ackedCaps).toContain('hooks')
+    await until(() => events.length === 1, 'the queued hook event while the tab is not shown')
     expect(hc.relayTold.filter((t) => t.stream === stream).map((t) => t.t)).toEqual(['mcp.away', 'mcp.back'])
     expect(logs).toContain(`[session-helper] ${CLAUDE_TAB}: its Conductor tools go through its holder while its tab is not shown`)
     expect(logs).toContain(`[session-helper] ${CLAUDE_TAB}: a tool stream is served on its keeper's connection while its tab is not shown, and its CLI is told its tool list may have changed`)
@@ -874,13 +880,14 @@ describe('B1d: a session kept for a restored tab not shown is served its tool ca
     // Still kept, nothing ended, nothing unbound.
     expect(hc.ended).toBe(false)
     expect(keptOnDisk()).toEqual([`${claudeSid}.json`])
-    expect(hc.waitingEvents).toHaveLength(1)
+    expect(hc.waitingEvents).toEqual([])
     expect(unserved).toEqual([])
     // Shown: its take-over attaches in the keeper's place, with hooks and tools.
+    const keeper = hc.attached
     m2.tabShown?.(CLAUDE_TAB)
     const taken = takeKeptSession(CLAUDE_TAB, 'claude', SIZE)
     expect(taken).not.toBeNull()
-    await until(() => !!hc.attached && hc.attached.ackedCaps.includes('hooks') && hc.attached.ackedCaps.includes('mcp'), 'the take-over to attach')
+    await until(() => !!hc.attached && hc.attached !== keeper && hc.attached.ackedCaps.includes('hooks') && hc.attached.ackedCaps.includes('mcp'), 'the take-over to attach')
     await until(() => served.length === 2, 'the stream to be served on the take-over')
     expect(served[1]).toMatchObject({ id: CLAUDE_TAB, opts: { toolsChanged: true } })
     expect(logs).toContain(`[session-helper] ${CLAUDE_TAB}: a tool stream is served on the take-over's connection, and its CLI is told its tool list may have changed`)
@@ -1011,15 +1018,137 @@ describe('B1d: a session kept for a restored tab not shown is served its tool ca
     const { m2, hc } = await keptAtNextStart({ serveMs: 30 })
     m2.restoredTabs?.([{ id: CLAUDE_TAB, cwd: CWD }])
     await until(() => served.length === 1, 'the kept stream to be served')
+    // B1e: the keeper acks hooks too, so the take-over is the connection after it.
+    const keeper = hc.attached
     m2.tabShown?.(CLAUDE_TAB)
     const taken = takeKeptSession(CLAUDE_TAB, 'claude', SIZE)!
     let exitCode: number | undefined
     taken.pty.onExit((e) => { exitCode = e.exitCode })
-    await until(() => !!hc.attached?.ackedCaps.includes('hooks'), 'the take-over to attach')
+    await until(() => !!hc.attached && hc.attached !== keeper && hc.attached.ackedCaps.includes('hooks'), 'the take-over to attach')
     hc.exitChild(3)
     await until(() => exitCode !== undefined, 'the tab to read the end')
     expect(exitCode).toBe(3)
     expect(logs.some((l) => l.includes('its CLI ended before its tab took it over'))).toBe(false)
     expect(unserved).toEqual([])
+  })
+})
+
+/**
+ * aicc_planning#423, B1e (vm:B1d's notes 3 and 4): a restored tab may stay
+ * unseen for a long time while its kept CLI works. From the same wait after
+ * Resume as B1d's serving, a kept Claude Code session's hook events reach the
+ * app at once (the keeper acks `hooks`, so its holder hands it the queue and
+ * each new event): the tab's attention mark and its hook record, and none
+ * lost to the holder's queue limit. The take-over goes on from the last event
+ * the keeper took, so none is taken twice, and nothing ends that record at the
+ * take-over; an end without one ends it, and takes nothing more. Whether a
+ * session waits for its tab's take-over is answered through the seam
+ * (keptForItsTab: no transcript is bound from what it says until then;
+ * launch-bindings-take-over.test.ts holds that gate). The stand-in bindings
+ * answer whether they served, as B1d's do.
+ */
+describe('B1e: a session kept for a restored tab not shown has its hook events taken at once (aicc_planning#423)', () => {
+  let serveAnswer: boolean
+  beforeEach(() => {
+    serveAnswer = true
+    setKeptLaunchBindings({
+      describe: (id: string) => facts[id] ?? { conversation: null, account: null, hookFolder: null },
+      remove: (k: KeptLaunch) => { removed.push(k) },
+      hold: () => {},
+      serve: () => serveAnswer,
+      unserve: () => {},
+    } as KeptLaunchBindings)
+  })
+  async function keptAtNextStart(o: { serveMs?: number } = {}): Promise<{ m2: SessionHelperManager; hc: FakeHolder }> {
+    const run1 = await updated()
+    logs.length = 0
+    // Run 1's own terminal ended its hook record at the update's kill: only this start's count.
+    endedHooks = []
+    const m2 = await startedWith(makeManager(o))
+    await until(() => !!run1.hc.attached, 'the keeper to attach')
+    return { m2, hc: run1.hc }
+  }
+  /** The seam's answer, read off the module so a case still loads on the code before it. */
+  const waitsForTakeOver = (id: string): unknown => (keptSeam as Partial<Record<string, unknown>> as { keptForItsTab?: (id: string) => boolean }).keptForItsTab?.(id)
+  const permissionPrompt = { hook_event_name: 'Notification', notification_type: 'permission_prompt', message: 'Claude needs your permission to use Bash' }
+
+  it('gap 1: not shown past the wait, the event its holder queued and each new one (Claude Code asking for approval) reach the app under the tab\'s id before any take-over; shown, the take-over takes only what came after, never one again, and the tab\'s hook record is not ended', async () => {
+    const { m2, hc } = await keptAtNextStart({ serveMs: 30 })
+    expect(waitsForTakeOver(CLAUDE_TAB)).toBe(true)
+    // Per tab: the other tab's Codex session is ended at this start, so nothing waits for it.
+    expect(waitsForTakeOver(OTHER_TAB)).toBe(false)
+    m2.restoredTabs?.([{ id: CLAUDE_TAB, cwd: CWD }])
+    // The turn's end its holder queued in the gap (seq 1).
+    await until(() => events.length === 1, 'the queued hook event while the tab is not shown')
+    expect(events[0]).toMatchObject({ id: CLAUDE_TAB, e: { seq: 1, kind: 'Stop' } })
+    expect(hc.attached!.ackedCaps).toContain('hooks')
+    expect(hc.waitingEvents).toEqual([])
+    expect(logs).toContain(`[session-helper] ${CLAUDE_TAB}: its hook events go through its holder while its tab is not shown`)
+    // Claude Code stops at its own approval question: at once, not at the take-over.
+    hc.hookEvent('Notification', permissionPrompt)
+    await until(() => events.length === 2, 'the approval question while the tab is not shown')
+    expect(events[1]).toMatchObject({ id: CLAUDE_TAB, e: { seq: 2, kind: 'Notification' } })
+    expect(waitsForTakeOver(CLAUDE_TAB)).toBe(true)
+    expect(waitsForTakeOver(OTHER_TAB)).toBe(false)
+    // Shown: the take-over attaches in the keeper's place.
+    const keeper = hc.attached
+    m2.tabShown?.(CLAUDE_TAB)
+    expect(takeKeptSession(CLAUDE_TAB, 'claude', SIZE)).not.toBeNull()
+    expect(waitsForTakeOver(CLAUDE_TAB)).toBe(false)
+    await until(() => !!hc.attached && hc.attached !== keeper && hc.attached.ackedCaps.includes('hooks') && hc.attached.ackedCaps.includes('mcp'), 'the take-over to attach')
+    // One the keeper took, sent again (section 15: the app drops a seq it has seen), then the next.
+    hc.sendEvent({ t: 'event', seq: 2, kind: 'Notification', payload: permissionPrompt })
+    hc.hookEvent('Stop', { hook_event_name: 'Stop', session_id: CONV })
+    await until(() => events.length >= 3, 'the event after the take-over')
+    await tick(50)
+    expect(events.map((x) => [x.id, x.e.seq])).toEqual([[CLAUDE_TAB, 1], [CLAUDE_TAB, 2], [CLAUDE_TAB, 3]])
+    expect(endedHooks).toEqual([])
+  })
+
+  it('the bindings answer that it is not served (the tool host is not serving): its hook events still reach the app while its tab is not shown; its tool streams wait for the take-over', async () => {
+    serveAnswer = false
+    const { m2, hc } = await keptAtNextStart({ serveMs: 30 })
+    m2.restoredTabs?.([{ id: CLAUDE_TAB, cwd: CWD }])
+    await until(() => events.length === 1, 'the queued hook event while the tab is not shown')
+    expect(hc.attached!.ackedCaps).toContain('hooks')
+    expect(hc.attached!.ackedCaps).not.toContain('mcp')
+    expect(served).toEqual([])
+    expect(hc.keptStreams.size).toBe(1)
+  })
+
+  it('served, then its tab closed: the tab\'s hook record is ended with it, and an event its keeper still reads is not taken', async () => {
+    const { m2, hc } = await keptAtNextStart({ serveMs: 30 })
+    m2.restoredTabs?.([{ id: CLAUDE_TAB, cwd: CWD }])
+    await until(() => events.length === 1, 'the queued hook event while the tab is not shown')
+    m2.tabClosed?.(CLAUDE_TAB)
+    expect(endedHooks).toEqual([CLAUDE_TAB])
+    expect(waitsForTakeOver(CLAUDE_TAB)).toBe(false)
+    hc.hookEvent('Stop', { hook_event_name: 'Stop', session_id: CONV })
+    await until(() => hc.ended, 'the kept session to be ended')
+    await tick(50)
+    expect(events).toHaveLength(1)
+  })
+
+  it('its tab shown within the wait (the tab on screen at Resume): its hook events wait in its holder for the take-over, as before', async () => {
+    const { m2, hc } = await keptAtNextStart({ serveMs: 150 })
+    m2.restoredTabs?.([{ id: CLAUDE_TAB, cwd: CWD }])
+    m2.tabShown?.(CLAUDE_TAB)
+    await tick(400)
+    expect(events).toEqual([])
+    expect(hc.attached!.ackedCaps).not.toContain('hooks')
+    expect(hc.waitingEvents).toHaveLength(1)
+    expect(waitsForTakeOver(CLAUDE_TAB)).toBe(true)
+  })
+
+  it('the agent sessions\' switch off: nothing is kept, so nothing waits for a take-over and no hook event is taken early', async () => {
+    const { hc } = await updated()
+    const m2 = makeManager({ serveMs: 30 })
+    await m2.start({ atStartup: true, plain: false, agents: false })
+    setSessionHelper(m2)
+    m2.restoredTabs?.([{ id: CLAUDE_TAB, cwd: CWD }])
+    await until(() => hc.ended, 'the kept session to be ended at the start')
+    await tick(100)
+    expect(waitsForTakeOver(CLAUDE_TAB) ?? false).toBe(false)
+    expect(events).toEqual([])
   })
 })

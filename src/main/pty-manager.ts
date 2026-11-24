@@ -90,7 +90,7 @@ import { getWatchdogManager } from './watchdog/watchdog-manager'
 import { clearCodexIdleAttention } from './codex-idle-attention'
 import { SSH_ATTENTION_OSC_PREFIX, SSH_ATTENTION_MAX_PAYLOAD, parseSshAttentionPayload, deliverRemoteAttention } from './ssh-attention'
 import type { HookEvent } from '../shared/hook-types'
-import { setLaunchBindingPorts, mintCodexHooks, keepCodexHooks, bindCodexLease, bindCodexPane, bindCodexLaunch, bindClaudeLaunch, bindLoggingRun, unbindLaunchFiles, unbindCodexLease, unbindLaunchTelemetry, unbindLaunchRegistrations, takeOverKeptLaunch, removeFailedLaunchFiles, type KeptSessionTakenOver } from './sessions/launch-bindings'
+import { setLaunchBindingPorts, mintCodexHooks, keepCodexHooks, bindCodexLease, bindCodexPane, bindCodexLaunch, bindClaudeLaunch, bindLoggingRun, unbindLaunchFiles, unbindCodexLease, unbindLaunchTelemetry, unbindLaunchRegistrations, takeOverKeptLaunch, removeFailedLaunchFiles, keepServedToken, keptForItsTab, type KeptSessionTakenOver } from './sessions/launch-bindings'
 
 import * as path from 'path'
 import * as fs from 'fs'
@@ -919,11 +919,11 @@ export function noteCodexHookEvent(e: { sessionId?: unknown; event?: unknown; pa
   }
 }
 
-/** P3.10 (round 1, B5): where a hook's transcript path goes: a Codex
- *  session's own watch (noteCodexHookTranscript), else Claude's sinks, the
+/** P3.10 (round 1, B5): where a hook's (or a status's) transcript path goes: nowhere while an update's kept session waits for its tab's take-over
+ *  (B1e, aicc_planning#423: the take-over binds first), else a Codex session's own watch (noteCodexHookTranscript), else Claude's sinks, the
  *  account attribution and the transcript binder, as before P3.10. */
 export function routeHookTranscriptPath(sessionId: string, transcriptPath: string, claude: { attribute: (sessionId: string, transcriptPath: string) => void; bind: (sessionId: string, transcriptPath: string) => void }): void {
-  if (noteCodexHookTranscript(sessionId, transcriptPath)) return
+  if (keptForItsTab(sessionId) || noteCodexHookTranscript(sessionId, transcriptPath)) return
   // P3.16 (M1): the conversation a Claude session is on, for the windows
   // written while not indexed (whether or not the binder indexes it).
   noteClaudeTranscript(sessionId, transcriptPath)
@@ -7549,10 +7549,10 @@ function endLiveRun(sessionId: string, opts: KillPtyOptions = {}): void {
     try { closeWindow = releaseNotIndexedWindow(sessionId) } catch { /* best-effort */ }
     if (closeWindow) closeWindowWhenEnded(entry.ptyProcess, closeWindow)
   }
-  // P3.10 round 2 (R8): a killed Codex session's gateway token goes now, so
-  // the gateway refuses its dying process's late hooks; the record that its
-  // hooks are Codex's stays until the process exits (codexGatewayTokens).
-  if (codexGatewayTokens.has(sessionId)) {
+  // P3.10 round 2 (R8): a killed Codex session's gateway token goes now, so the gateway refuses its dying process's late hooks; the record that its
+  // hooks are Codex's stays until the process exits (codexGatewayTokens). B1e: not one served while its tab was not shown (no process here):
+  // its take-over writes its own over it, and the gateway keeps the tab's events (launch-bindings.ts keepServedToken; settleServedToken settles it).
+  if (codexGatewayTokens.has(sessionId) && !keepServedToken(sessionId)) {
     try { getGateway()?.unregisterSession(sessionId) } catch { /* the gateway may have stopped */ }
   }
   // Read persistence BEFORE cleanupSessionResources runs (it no longer clears

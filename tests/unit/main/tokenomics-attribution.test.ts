@@ -540,10 +540,13 @@ describe('main composes the attribution beside the transcript binder (MP10)', ()
     // attribution, then the binder (behaviour: pty-codex-hooks.test.ts).
     // P3.16 (M1): first noting the transcript for the not-indexed windows,
     // which returns nothing and gates neither (pty-codex-logs.test.ts).
+    // aicc_planning#423 (B1e): none of it while a session an update kept
+    // waits for its tab's take-over, which binds its logging run and
+    // transcript first (behaviour: launch-bindings-take-over.test.ts).
     expect(code).toMatch(/import \{[^}]*\brouteHookTranscriptPath\b[^}]*\} from '\.\/pty-manager'/)
     const route = /const routeTranscriptPath = \(sessionId: string, path: string\) => \{\s*routeHookTranscriptPath\(sessionId, path, \{\s*attribute: attributeTranscript,\s*bind: \(sid, p\) => \{ getTranscriptBinder\(\)\?\.notifyTranscriptPath\(sid, p\) \},\s*\}\)\s*\}/
     expect(code).toMatch(route)
-    expect(ptyCode).toMatch(/export function routeHookTranscriptPath\([\s\S]*?\): void \{\s*if \(noteCodexHookTranscript\(sessionId, transcriptPath\)\) return\s*(?:\/\/[^\n]*\n\s*)*noteClaudeTranscript\(sessionId, transcriptPath\)\s*claude\.attribute\(sessionId, transcriptPath\)\s*claude\.bind\(sessionId, transcriptPath\)\s*\}/)
+    expect(ptyCode).toMatch(/export function routeHookTranscriptPath\([\s\S]*?\): void \{\s*if \(keptForItsTab\(sessionId\) \|\| noteCodexHookTranscript\(sessionId, transcriptPath\)\) return\s*(?:\/\/[^\n]*\n\s*)*noteClaudeTranscript\(sessionId, transcriptPath\)\s*claude\.attribute\(sessionId, transcriptPath\)\s*claude\.bind\(sessionId, transcriptPath\)\s*\}/)
     // The hooks gateway and the statusline both feed the route.
     expect(code).toMatch(/onTranscriptPath: routeTranscriptPath/)
     expect(code).toMatch(/setTranscriptPathSink\(routeTranscriptPath\)/)

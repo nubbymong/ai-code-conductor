@@ -163,7 +163,8 @@ vi.mock('../../../src/main/hooks', () => ({
   getGateway: () => ({
     status: () => ({ enabled: true, listening: h.gwListening, port: 51234 }),
     registerSession: () => { h.journal.push('gatewaySecret'); return '0f8b6a2c-1d3e-4f50-9a61-7b2c3d4e5f60' },
-    unregisterSession: (sid: string) => { h.unregistered.push(sid) },
+    // Unregistering a token is also what drops the events the gateway holds for that session (hooks-gateway.ts and hooks-gateway-proxy.ts unregisterSession).
+    unregisterSession: (sid: string) => { h.unregistered.push(sid); h.journal.push('gatewayUnregister') },
   }),
   isExactBindSourceActive: () => true,
 }))
@@ -230,7 +231,7 @@ vi.mock('../../../src/main/credential-store', () => ({ loadCredential: () => nul
 vi.mock('../../../src/main/provider-accounts', () => ({ getAccountsService: () => null }))
 
 const { spawnPty, killPty, writePty, holdsCodexLaunchLease, getKeptCodexConversation, REMOVED_ACCOUNT_REFUSAL, isCodexPtySession, routeHookTranscriptPath } = await import('../../../src/main/pty-manager')
-const { setKeptTakeOver, holdKeptLaunch } = await import('../../../src/main/sessions/kept-launches')
+const { setKeptTakeOver, holdKeptLaunch, setKeptTabSignals } = await import('../../../src/main/sessions/kept-launches')
 // B1d: read off the module, as a plain copy of what it exports (the mock
 // throws on a name it does not have), so each case fails on what it checks on
 // the code before it.
@@ -589,7 +590,7 @@ describe('B1d: a session kept for a restored tab not shown, served its Conductor
     expect(holdsCodexToken(CODEX_SID)).toBe(false)
   })
 
-  it('finding 2, a Codex session with a kept hook folder: its hook file written again with this run\'s port and a new token, so its hook events reach this run as Codex\'s; no transcript is claimed from them; shown, the take-over\'s teardown drops that token and keeps the folder, and the take-over writes the file again with its own', () => {
+  it('finding 2, a Codex session with a kept hook folder: its hook file written again with this run\'s port and a new token, so its hook events reach this run as Codex\'s; no transcript is claimed from them; shown, the take-over\'s teardown keeps the folder, and the take-over writes the file again with its own token over that one (B1e: not dropped first, which would drop the events the gateway holds for the tab)', () => {
     h.mcpPort = 19333
     expect(serveUnseen(codexKept(), PROJECT)).toBe(true)
     expect(h.records).toEqual([[CODEX_SID, 'codex']])
@@ -608,7 +609,7 @@ describe('B1d: a session kept for a restored tab not shown, served its Conductor
     // Its tab shown: the take-over.
     keepFor(CODEX_SID, LAUNCH_FOLDER, { account: 'acct-b1', hookFolder })
     spawnPty(fakeWin, CODEX_SID, { ...codexSpawn, codexLaunch: codexLaunch() } as never)
-    expect(h.unregistered).toEqual([CODEX_SID])
+    expect(h.unregistered).toEqual([])
     expect(h.disposed).toEqual([])
     expect(h.hookFoldersRemoved).toEqual([])
     expect(h.rewrites).toHaveLength(2)
@@ -653,5 +654,110 @@ describe('B1d: a session kept for a restored tab not shown, served its Conductor
     unserveUnseen(CODEX_SID)
     expect({ released: h.released.length, unregistered: h.unregistered.length, revoked: h.revoked.length }).toEqual(before)
     expect(holdsCodexToken(CODEX_SID)).toBe(true)
+  })
+})
+
+/**
+ * aicc_planning#423, B1e (vm:B1d's notes 3 and 4). (1) A transcript named for
+ * a session the helper keeps for its tab, before its take-over (a hook event
+ * its keeper took while the tab was not shown, or a status its status line
+ * wrote to its status file, both through routeHookTranscriptPath), binds
+ * nothing: no conversation noted, no account attribution, no transcript
+ * binder; the take-over binds its logging run and transcript first, as
+ * before, and what follows binds. (2) A Codex session served while its tab was
+ * not shown keeps its gateway token through the kill before its take-over
+ * (unregistering it is what drops the events the Hooks gateway took for the
+ * tab), and the take-over writes its own over it; any other end drops it,
+ * before a launch in its place mints its own. The manager's half:
+ * session-helper-take-over.test.ts.
+ */
+describe('B1e: what a session kept for its tab says before its take-over (aicc_planning#423)', () => {
+  const hookFolder = path.join(os.tmpdir(), 'codex-hooks', 'ccc-codex-hook-unseen2')
+  const codexKept = (): Unseen => ({ sessionId: CODEX_SID, provider: 'codex', hookFolder, folder: LAUNCH_FOLDER })
+  const codexSpawn = { cwd: os.tmpdir(), provider: 'codex', codexOptions: { permissionsPreset: 'read-only' } }
+
+  it('gap 1: a transcript a Claude Code session kept for its tab names (its hook event while the tab is not shown, or its status line\'s file) binds nothing before its take-over: no conversation noted, no account attribution, no transcript binder, no logging run; taken over, the next one binds as before', () => {
+    const waiting = new Set([CLAUDE_SID])
+    setKeptTabSignals({ restored: () => {}, shown: () => {}, closed: () => {}, waits: (id: string) => waiting.has(id) } as never)
+    try {
+      h.logOn = true
+      const transcript = path.join(os.tmpdir(), 'projects', 'C--work-app', `${CONV}.jsonl`)
+      const sinks = { attribute: vi.fn(), bind: vi.fn() }
+      routeHookTranscriptPath(CLAUDE_SID, transcript, sinks)
+      expect(sinks.attribute).not.toHaveBeenCalled()
+      expect(sinks.bind).not.toHaveBeenCalled()
+      expect(h.bound).toEqual([])
+      expect(h.registered).toEqual([])
+      expect(h.runStarts).toEqual([])
+      // Its tab shown: the take-over, after which the manager keeps it for its tab no longer.
+      keepFor(CLAUDE_SID)
+      spawnPty(fakeWin, CLAUDE_SID, { cwd: os.tmpdir() } as never)
+      waiting.delete(CLAUDE_SID)
+      expect(h.runStarts).toHaveLength(1)
+      routeHookTranscriptPath(CLAUDE_SID, transcript, sinks)
+      expect(sinks.attribute).toHaveBeenCalledWith(CLAUDE_SID, transcript)
+      expect(sinks.bind).toHaveBeenCalledWith(CLAUDE_SID, transcript)
+    } finally {
+      setKeptTabSignals(null)
+    }
+  })
+
+  it('gap 1: a session no tab waits for (a launch\'s, or none) routes as before', () => {
+    setKeptTabSignals({ restored: () => {}, shown: () => {}, closed: () => {}, waits: () => false } as never)
+    try {
+      const transcript = path.join(os.tmpdir(), 'projects', 'C--work-app', `${CONV}.jsonl`)
+      const sinks = { attribute: vi.fn(), bind: vi.fn() }
+      routeHookTranscriptPath(CLAUDE_SID, transcript, sinks)
+      expect(sinks.attribute).toHaveBeenCalledWith(CLAUDE_SID, transcript)
+      expect(sinks.bind).toHaveBeenCalledWith(CLAUDE_SID, transcript)
+    } finally {
+      setKeptTabSignals(null)
+    }
+  })
+
+  it('gap 2, a Codex session served while its tab is not shown, then taken over: the kill before the take-over leaves its token, so the events the Hooks gateway holds for the tab stay; the take-over writes its own over it, and its own exit drops that one', () => {
+    h.mcpPort = 19333
+    expect(serveUnseen(codexKept(), PROJECT)).toBe(true)
+    keepFor(CODEX_SID, LAUNCH_FOLDER, { account: 'acct-b1', hookFolder })
+    spawnPty(fakeWin, CODEX_SID, { ...codexSpawn, codexLaunch: codexLaunch() } as never)
+    expect(h.unregistered).toEqual([])
+    expect(h.rewrites).toHaveLength(2)
+    expect(holdsCodexToken(CODEX_SID)).toBe(true)
+    for (const cb of [...kept!.exit]) cb({ exitCode: 0 })
+    expect(h.unregistered).toEqual([CODEX_SID])
+  })
+
+  it('gap 2, a Codex session served, then taken over while the Hooks gateway is not listening: no token is written again, so the one it was served with goes too', () => {
+    h.mcpPort = 19333
+    serveUnseen(codexKept(), PROJECT)
+    h.gwListening = false
+    keepFor(CODEX_SID, LAUNCH_FOLDER, { account: 'acct-b1', hookFolder })
+    spawnPty(fakeWin, CODEX_SID, { ...codexSpawn, codexLaunch: codexLaunch() } as never)
+    expect(h.rewrites).toHaveLength(1)
+    expect(h.unregistered).toEqual([CODEX_SID])
+    expect(holdsCodexToken(CODEX_SID)).toBe(false)
+  })
+
+  it('gap 2, a Codex session served, then its tab\'s launch prepared on another account (no take-over): the token it was served with, and the events the gateway holds for it, go before that launch mints its own, which stays', () => {
+    h.mcpPort = 19333
+    serveUnseen(codexKept(), PROJECT)
+    h.mcpPort = 0
+    keepFor(CODEX_SID, LAUNCH_FOLDER, { account: 'acct-other' })
+    spawnPty(fakeWin, CODEX_SID, { ...codexSpawn, codexLaunch: codexLaunch() } as never)
+    expect(h.unregistered).toEqual([CODEX_SID])
+    expect(h.journal.indexOf('gatewayUnregister')).toBeLessThan(h.journal.indexOf('mintCodexHooks'))
+    expect(holdsCodexToken(CODEX_SID)).toBe(true)
+    unserveUnseen(CODEX_SID)
+    expect(h.unregistered).toEqual([CODEX_SID])
+    expect(holdsCodexToken(CODEX_SID)).toBe(true)
+  })
+
+  it('a Codex session served, then its tab closed (pty:kill: the kill, then the close of the session kept for it): its token goes, and nothing marks the closed tab as a Codex one', () => {
+    h.mcpPort = 19333
+    serveUnseen(codexKept(), PROJECT)
+    killPty(CODEX_SID, { reason: 'close' })
+    unserveUnseen(CODEX_SID)
+    expect(h.unregistered).toEqual([CODEX_SID])
+    expect(holdsCodexToken(CODEX_SID)).toBe(false)
   })
 })
