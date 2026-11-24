@@ -35,10 +35,15 @@ b0b450ec). Windows, behind the agent sessions' switch. Fragments B1c to B1e
   terminal is told at once, as before. An open tab, and a tab taken over: as before. No
   helper (Rust), protocol, session helper manager or pty-manager.ts change (pty-manager.ts
   7,741 lines, cap 7,773).
-- **Tests.** The new file (13 cases): 9 red on b0b450ec, the 4 that pin unchanged
-  behaviour green there; all 13 green with the fix; mutants each turn their cases red: the hold dropped, the release not made, the
-  release made before the run is the session's, the kill's keep dropped, the release list
-  not cleared, the collapse dropped (a Codex double press, which Codex's primitive does not
-  collapse), the end's drop removed, the kept check dropped from the hold, the keep made for
-  every session.
+- **Tests.** The new file (14 cases): 10 red on b0b450ec, the 4 that pin unchanged
+  behaviour green there; all 14 green with the fix. A check that something was typed polls
+  for it (the Claude Code chain runs a real 300 ms timer); a fixed wait comes only before a
+  check that nothing was. Mutants each turn their cases red: the hold dropped, the release
+  not made, the release made before the run is the session's, the kill's keep dropped, the
+  release list not cleared, the collapse dropped (a Codex double press, which Codex's
+  primitive does not collapse), the end's drop removed, the kept check dropped from the
+  hold, the keep made for every session, the cap removed (33 handed on, not 32). The drop
+  at an end reads keptForItsTab, so it works only because the session helper forgets the
+  tab's entry before it asks unserve: session-helper-take-over.test.ts now holds the real
+  manager to that order (its mutant, the two swapped, turns 3 cases red).
 - Not checked here: the two-build VM line (the orchestrator's).

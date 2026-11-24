@@ -62,7 +62,8 @@
 // Not every marker that does not reach the agent reaches a canvas. These are
 // dropped with a log line only, and no canvas is told:
 //  - the markers the queue drops, the oldest first, when more than
-//    MARKER_QUEUE_MAX wait, and so do those waiting for a tab's take-over;
+//    MARKER_QUEUE_MAX wait, and the markers waiting for a tab's take-over
+//    that are dropped the same way, past the same count;
 //  - a marker whose write answers later (a Codex session's, waiting for
 //    Codex's prompt) and has not answered when its session ends:
 //    forgetCanvasMarkers clears its awaiting record before that answer

@@ -18,8 +18,14 @@
 // right after the take-over it goes the way an open tab's does (Claude Code:
 // typed at its ready, empty prompt; Codex: its submit primitive), once. A tab
 // closed, or a kept session ended, before the take-over drops it, and the
-// canvas is told once (the session gone). Nothing kept for the tab (the
-// switch off), and an open tab, are as before.
+// canvas is told once (the session gone). Past MARKER_QUEUE_MAX waiting, the
+// oldest is dropped with a log line only, as the queue drops one. Nothing kept
+// for the tab (the switch off), and an open tab, are as before.
+//
+// 14 cases: 10 red on b0b450ec; the 4 that pin unchanged behaviour (nothing
+// kept, an open tab's close, an open tab's typing, a kept session ended
+// first) green there. A check that something was typed polls for it
+// (typedIs); a fixed wait is kept only before a check that nothing was.
 //
 // Driven through the REAL pty-manager (its spawn's take-over branch and its
 // kill), the REAL launch bindings, the REAL marker queue and its wiring as
@@ -34,7 +40,8 @@
 // pty:write handler does. Codex's submit primitive is a stand-in that records.
 //
 // Not checked here: the manager itself (session-helper-take-over.test.ts holds
-// it to its keeping, take-over and ends); the renderer's reading of Claude
+// it to its keeping, take-over and ends, and to forgetting the tab's entry
+// before it asks unserve, which the drop at an end needs); the renderer's reading of Claude
 // Code's prompt (canvas-marker-claude-gate.test.ts).
 import { describe, it, expect, beforeEach, afterAll, vi } from 'vitest'
 import * as fs from 'fs'
@@ -148,6 +155,7 @@ vi.mock('../../../src/main/provider-accounts', () => ({ getAccountsService: () =
 const { spawnPty, killPty, writePty } = await import('../../../src/main/pty-manager')
 const { submitMarker } = await import('../../../src/main/session-input')
 const delivery = await import('../../../src/main/canvas/canvas-marker-delivery')
+const { MARKER_QUEUE_MAX } = await import('../../../src/main/canvas/canvas-marker-queue')
 const typing = await import('../../../src/main/canvas/claude-marker-typing')
 const { setKeptTakeOver, setKeptTabSignals, unserveKeptLaunch, keptTabClosed } = await import('../../../src/main/sessions/kept-launches')
 // Read off the module as a plain copy, so a case fails on what it checks on
@@ -176,7 +184,12 @@ const codexLaunch = () => ({
 })
 const codexOptions = () => ({ cwd: PROJECT, provider: 'codex', codexOptions: { permissionsPreset: 'read-only' }, codexLaunch: codexLaunch() }) as never
 const tick = (ms = 0) => new Promise((r) => setTimeout(r, ms))
-/** Past the Claude Code chain's probe, its second read (300 ms) and its type. */
+/** What was typed at Claude Code's prompt, polled until it reads `lines`: the
+ *  chain runs a real 300 ms timer (its second read), so a positive check
+ *  waits for its result rather than for a fixed time. */
+const typedIs = (lines: string[]) => vi.waitFor(() => expect(typeAsks).toEqual(lines), { timeout: 15_000, interval: 20 })
+/** How long a check that nothing (more) was typed waits: past the Claude
+ *  Code chain's probe, its second read (300 ms) and its type. */
 const TYPED_BY_MS = 700
 
 /** The tabs a session is kept for, until each is taken over or ended. */
@@ -274,8 +287,7 @@ describe('B1g: a canvas decision for a restored tab whose kept session waits for
 
     spawnPty(fakeWin, CLAUDE_SID, { cwd: PROJECT } as never)
     expect(waiting.has(CLAUDE_SID)).toBe(false)
-    await tick(TYPED_BY_MS)
-    expect(typeAsks).toEqual([MARKER])
+    await typedIs([MARKER])
     expect(markersIn(keptWrites)).toEqual([`${MARKER}\r`])
     expect(h.writes).toEqual([])
     await tick(TYPED_BY_MS)
@@ -295,8 +307,7 @@ describe('B1g: a canvas decision for a restored tab whose kept session waits for
 
     // The same CLI's turn ends (its hook route goes on across the take-over, B1e).
     emit(CLAUDE_SID, 'Stop')
-    await tick(TYPED_BY_MS)
-    expect(typeAsks).toEqual([MARKER])
+    await typedIs([MARKER])
     expect(markersIn(keptWrites)).toEqual([`${MARKER}\r`])
     expect(told).toEqual([])
   })
@@ -309,8 +320,7 @@ describe('B1g: a canvas decision for a restored tab whose kept session waits for
     delivery.forgetCanvasMarkers(CLAUDE_SID)
     spawnPty(fakeWin, CLAUDE_SID, { cwd: PROJECT } as never)
     emit(CLAUDE_SID, 'Stop')
-    await tick(TYPED_BY_MS)
-    expect(typeAsks).toEqual([MARKER])
+    await typedIs([MARKER])
     expect(told).toEqual([])
   })
 
@@ -348,8 +358,7 @@ describe('B1g: a canvas decision for a restored tab whose kept session waits for
     delivery.deliverCanvasMarker(CLAUDE_SID, MARKER, CANVAS)
     delivery.deliverCanvasMarker(CLAUDE_SID, MARKER_2, CANVAS)
     spawnPty(fakeWin, CLAUDE_SID, { cwd: PROJECT } as never)
-    await tick(TYPED_BY_MS * 2)
-    expect(typeAsks).toEqual([MARKER, MARKER_2])
+    await typedIs([MARKER, MARKER_2])
     releaseForTab(CLAUDE_SID)
     emit(CLAUDE_SID, 'Stop')
     await tick(TYPED_BY_MS * 2)
@@ -379,8 +388,7 @@ describe('B1g: a canvas decision for a restored tab whose kept session waits for
     await tick(TYPED_BY_MS)
     expect(typeAsks).toEqual([])
     emit(CLAUDE_SID, 'Stop')
-    await tick(TYPED_BY_MS * 2)
-    expect(typeAsks).toEqual([MARKER, MARKER_2])
+    await typedIs([MARKER, MARKER_2])
     expect(told).toEqual([])
   })
 
@@ -443,8 +451,17 @@ describe('B1g: a canvas decision for a restored tab whose kept session waits for
     spawnPty(fakeWin, CLAUDE_SID, { cwd: PROJECT } as never)
     await tick()
     expect(delivery.deliverCanvasMarker(CLAUDE_SID, MARKER, CANVAS)).toBe('sent')
-    await tick(TYPED_BY_MS)
-    expect(typeAsks).toEqual([MARKER])
+    await typedIs([MARKER])
+    expect(told).toEqual([])
+  })
+
+  it('past the cap: when more than MARKER_QUEUE_MAX wait for the take-over, the oldest is dropped with a log line only (no canvas is told), and the rest go on in order', async () => {
+    keepFor(CODEX_SID, 'acct-b1g')
+    const lines = Array.from({ length: MARKER_QUEUE_MAX + 1 }, (_, i) => `Review #${i + 1} — 1 notes · canvas_review R${i + 1}`)
+    for (const l of lines) delivery.deliverCanvasMarker(CODEX_SID, l, CANVAS)
+    spawnPty(fakeWin, CODEX_SID, codexOptions())
+    await tick(50)
+    expect(h.codexSubmits.map(([, l]) => l)).toEqual(lines.slice(1))
     expect(told).toEqual([])
   })
 })

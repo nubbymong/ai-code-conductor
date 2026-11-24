@@ -831,18 +831,24 @@ describe('B1d: a session kept for a restored tab not shown is served its tool ca
   /** What the stand-in bindings were asked to serve, and told to unserve. */
   let servedUnseen: Array<{ kept: KeptUnseen; cwd: string | undefined }>
   let unserved: string[]
+  /** B1g: at each unserve, whether the seam still said a session waits for
+   *  that tab. The canvas decisions held for it are dropped there only when
+   *  it says no (canvas-marker-delivery.ts forgetCanvasMarkers), so the
+   *  manager must forget the tab's entry before it asks. */
+  let waitingAtUnserve: unknown[]
   /** What the stand-in answers: served, or not (the tool host not serving). */
   let serveAnswer: boolean
   beforeEach(() => {
     servedUnseen = []
     unserved = []
+    waitingAtUnserve = []
     serveAnswer = true
     const bindings = {
       describe: (id: string) => facts[id] ?? { conversation: null, account: null, hookFolder: null },
       remove: (k: KeptLaunch) => { removed.push(k) },
       hold: () => {},
       serve: (kept: KeptUnseen, cwd: string | undefined) => { servedUnseen.push({ kept, cwd }); return serveAnswer },
-      unserve: (id: string) => { unserved.push(id) },
+      unserve: (id: string) => { unserved.push(id); waitingAtUnserve.push(keptSeam.keptForItsTab(id)) },
     }
     setKeptLaunchBindings(bindings as KeptLaunchBindings)
   })
@@ -973,6 +979,7 @@ describe('B1d: a session kept for a restored tab not shown is served its tool ca
     m2.tabClosed?.(CLAUDE_TAB)
     expect(logs).toContain(endedBecause('its tab was closed'))
     expect(unserved).toEqual([CLAUDE_TAB])
+    expect(waitingAtUnserve).toEqual([false])
     await until(() => hc.ended, 'the kept session to be ended')
     expect(keptOnDisk()).toEqual([])
   })
@@ -987,6 +994,7 @@ describe('B1d: a session kept for a restored tab not shown is served its tool ca
     managers.splice(managers.indexOf(m2), 1)
     expect(hc.ended).toBe(true)
     expect(unserved).toEqual([CLAUDE_TAB])
+    expect(waitingAtUnserve).toEqual([false])
     expect(keptOnDisk()).toEqual([])
   })
 
@@ -998,6 +1006,7 @@ describe('B1d: a session kept for a restored tab not shown is served its tool ca
     expect(keptOnDisk()).toEqual([])
     expect(removed.map((k) => k.sessionId)).toContain(CLAUDE_TAB)
     expect(unserved).toEqual([CLAUDE_TAB])
+    expect(waitingAtUnserve).toEqual([false])
     expect(takeKeptSession(CLAUDE_TAB, 'claude', SIZE)).toBeNull()
     await until(() => hc.ended, 'its holder to be ended')
     spawnAgentPty(claudeTab(CLAUDE_TAB), SHELL, [], agentOpts())

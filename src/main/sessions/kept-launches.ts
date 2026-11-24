@@ -143,7 +143,8 @@ export function serveKeptLaunch(k: KeptUnseen, cwd: string | undefined): boolean
 }
 
 /** A session kept for its tab is kept no longer: what serveKeptLaunch bound
- *  goes. Never throws. */
+ *  goes, and (B1g) the canvas decisions that waited for its take-over are
+ *  dropped and told to their canvas. Never throws. */
 export function unserveKeptLaunch(sessionId: string): void {
   try {
     bindings?.unserve?.(sessionId)
