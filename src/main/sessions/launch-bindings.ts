@@ -25,6 +25,13 @@
 // run's memory still goes. describeLaunch says what the release records of
 // it, and removeKeptLaunchFiles removes what it left once it is no longer kept.
 //
+// S16 step 5 (2.1.3-beta.17, aicc_planning#412): the next start's restored tab
+// takes such a Claude Code session over in place of its launch
+// (takeOverKeptLaunch): the session helper shows its terminal again, and this
+// module makes the launch's bindings again for the CLI that runs, with no
+// launch. A Codex launch is not taken over here: its kept session is ended
+// at that start, as before.
+//
 // What stays in pty-manager.ts, and why:
 //  - the per-session records and the helpers that keep them, which much of
 //    pty-manager.ts reads: it hands them over once, when it loads
@@ -40,6 +47,7 @@
 //    launch holds (mintCodexHooks and keepCodexHooks hand them back);
 //  - every comparison with a provider name: pty-manager.ts works each one out
 //    and hands the answer in (tests/unit/architecture/provider-name-ratchet.test.ts).
+import * as fs from 'fs'
 import * as path from 'path'
 import { nativeTheme, type BrowserWindow } from 'electron'
 import type * as pty from 'node-pty'
@@ -47,12 +55,14 @@ import type { ProviderId } from '../../shared/providers'
 import type { AccountLease } from '../providers/core'
 import type { ProviderSpawnCommand, SessionProvider, SessionRunScreen, TelemetrySource } from '../providers/types'
 import { getGateway } from '../hooks'
-import { removeLocalSessionSettings, removeLocalSessionMcpConfig, removeLocalSessionStatusUrl } from '../hooks/per-session-settings'
+import { removeLocalSessionSettings, removeLocalSessionMcpConfig, removeLocalSessionStatusUrl, getLocalSessionStatusUrlPath, writeLocalSessionStatusUrl } from '../hooks/per-session-settings'
 import { logInfo, logError, logWarn } from '../debug-logger'
 import { readConfig } from '../config-manager'
 import { isHomeOrAncestor } from '../path-utils'
 import { decorateStatuslineWithColour } from '../account-color'
-import { clampAnsiChunk } from '../watchdog/watchdog-manager'
+import { clampAnsiChunk, getWatchdogManager } from '../watchdog/watchdog-manager'
+import { getPtyIntegrityMonitor } from '../services/pty-integrity-monitor'
+import { designatedWorktreeDir } from '../canvas/canvas-worktree'
 import { createColorQueryResponder, terminalReplyColors, type ColorQueryResponder } from '../terminal-query-responder'
 import { shouldRegisterRun } from '../logging/should-register-run'
 import { openNotIndexedWindow } from '../logging/indexing-gaps'
@@ -60,14 +70,14 @@ import { getLogSupervisor } from '../logging/logging-service'
 import { getCodexLogBinder } from '../logging/codex-log-binder'
 import { buildResumeTranscriptPath } from '../spawn-claude-command'
 import { captureClaudeAccount, getAccountIdentity, getClaudeProfileId, pushAccountIdentity, startWatchingAccountIdentity } from '../claude-account-identity'
-import { registerCodexReviewSession, registerClaudeReviewSession, unregisterCodexReviewSession, releaseMcpSessionProvider } from '../conductor-mcp-server'
+import { registerCodexReviewSession, registerClaudeReviewSession, unregisterCodexReviewSession, releaseMcpSessionProvider, recordHeldToolSession, getConductorMcpPort } from '../conductor-mcp-server'
 import { registerCanvasUatRoot, revokeCanvasUatRoots, designateCanvasWorktreeRoot, canvasRootRefusalReason, describeCanvasRootRefusal, setCanvasRootRefusal } from '../canvas/canvas-store'
 import { forgetCanvasMarkers } from '../canvas/canvas-marker-delivery'
 import type { CodexCanvasLaunch } from '../canvas/codex-canvas-launch'
 import { registerCodexCanvasRoots } from '../canvas/codex-canvas-roots'
 import { noteCodexSessionGuidance, forgetCodexSessionGuidance } from '../canvas/codex-guidance'
 import { tryGetProvider } from '../providers'
-import { launchKeptForUpdate, setKeptLaunchBindings, type KeptLaunch, type KeptLaunchFacts } from './kept-launches'
+import { launchKeptForUpdate, setKeptLaunchBindings, takeKeptSession, type KeptLaunch, type KeptLaunchFacts } from './kept-launches'
 import { HelperPty } from '../session-helper/helper-pty'
 
 /** A Codex launch's hook file: the file that hands its gateway token to the
@@ -114,6 +124,9 @@ export interface LaunchBindingPorts {
   /** Closes the session's reading of the Codex run screen (its pane, or a
    *  held run's holder's screen), which only pty-manager.ts reaches. */
   closeCodexRunScreen(sessionId: string): void
+  /** Where a local agent process works, until its exit (pty-manager.ts's
+   *  record for ending the runs in a folder). */
+  noteAgentRunFolder(proc: pty.IPty, sessionId: string, folder: string): void
 }
 
 let registered: LaunchBindingPorts | null = null
@@ -630,6 +643,87 @@ export function bindLoggingRun(binding: LoggingRunBinding): LoggingRun {
   return { logSup, codexLocalRun }
 }
 
+/** A restored tab's launch, which a take-over replaces (2.1.3-beta.17, S16
+ *  step 5). */
+export interface KeptTakeOverBinding {
+  win: BrowserWindow
+  sessionId: string
+  /** The provider the launch starts, and how pty-manager.ts starts it (its
+   *  LocalLaunch): the take-over's bindings follow the way, never a name. */
+  launch: { id: ProviderId; style: 'direct' | 'claude-shell' }
+  /** The session's configured project folder, resolved. */
+  resolvedCwd: string
+  cols: number
+  rows: number
+}
+
+/** What a take-over hands back to the launch it replaces: the session's
+ *  terminal, and what its logging run and transcript binding read in place
+ *  of a launch's. */
+export interface KeptSessionTakenOver {
+  ptyProcess: pty.IPty
+  /** The folder its CLI was launched in: the record's, else the configured folder. */
+  launchCwd: string
+  /** The conversation it is on, or null. */
+  conversation: string | null
+  /** The account profile it runs on; undefined for the default account. */
+  profileId: string | undefined
+}
+
+/**
+ * 2.1.3-beta.17 (plan section B1, S16 step 5, aicc_planning#412): the
+ * restored tab of a Claude Code session the last run's update kept running
+ * takes it over, in place of its launch (pty-manager.ts, one entry before the
+ * provider branches). Null when the session helper keeps no session for this
+ * tab and provider, or for a launch whose take-over is not built here (a
+ * Codex launch): then the launch runs as before.
+ *
+ * Nothing is launched and nothing typed: the resume, the per-session files
+ * and the launch line are skipped, as the CLI runs. What the launch binds is
+ * made again for that CLI, before its holder is attached: the tool host's
+ * record of the session, with no credential (its tool streams come through
+ * its holder); its status line's address file written again with this run's
+ * address, only where its launch wrote one (its bridge reads the file each
+ * tick; this issues the session's credential into that owner-only file, as a
+ * launch's settings write does); where the run works; the account capture and
+ * its watch, the review registration (the folder the CLI was launched in, as a
+ * launch registers it) and the Agent Canvas roots (the configured folder and
+ * the designated worktree, never a transcript's folder: bindClaudeLaunch's
+ * rule); and the data handler, as the Claude Code branch's. The session's
+ * entry, its watchdog, its logging run and its transcript binding (by the
+ * saved conversation, from the folder it runs in) follow in pty-manager.ts
+ * from what this answers, before its hook events can bind a transcript.
+ */
+export function takeOverKeptLaunch(b: KeptTakeOverBinding): KeptSessionTakenOver | null {
+  if (b.launch.style !== 'claude-shell') return null
+  const { ptySessions, noteAgentRunFolder } = ports()
+  const taken = takeKeptSession(b.sessionId, b.launch.id, { cols: b.cols, rows: b.rows })
+  if (!taken) return null
+  const { pty: proc, kept } = taken
+  const { sessionId, resolvedCwd, win } = b
+  const launchCwd = kept.folder ?? resolvedCwd
+  const profileId = kept.account ?? undefined
+  recordHeldToolSession(sessionId, b.launch.id)
+  if (fs.existsSync(getLocalSessionStatusUrlPath(sessionId))) {
+    let url = ''
+    try { url = tryGetProvider(b.launch.id)?.statusPostUrl?.(sessionId, undefined, getConductorMcpPort(), true) ?? '' } catch { url = '' }
+    if (url) writeLocalSessionStatusUrl(sessionId, url)
+    else removeLocalSessionStatusUrl(sessionId)
+  }
+  noteAgentRunFolder(proc, sessionId, launchCwd)
+  bindClaudeLaunch({ sessionId, resolvedProfileId: profileId, claudeCwd: launchCwd, resolvedCwd, designatedWorktree: isHomeOrAncestor(resolvedCwd) ? null : designatedWorktreeDir(resolvedCwd, sessionId) })
+  proc.onData((data) => {
+    if (win.isDestroyed()) return
+    // The generation guard of every session's data: only while this terminal is the session's.
+    if (ptySessions.get(sessionId)?.ptyProcess !== proc) return
+    getPtyIntegrityMonitor()?.recordPtyData(sessionId, data.length)
+    getWatchdogManager()?.feedData(sessionId, data)
+    win.webContents.send(`pty:data:${sessionId}`, data)
+  })
+  logInfo(`[pty] ${sessionId}: took over the session the last update kept running, with no launch (conversation ${kept.conversation ?? 'none'})`)
+  return { ptyProcess: proc, launchCwd, conversation: kept.conversation, profileId }
+}
+
 /** The session's own end (its exit, when no newer process has taken the
  *  session over, or a quit's or an update's kill: killAllPty and
  *  gracefulExitPty's forced kill, which the app does not outlive,
@@ -647,6 +741,16 @@ export function unbindLaunchFiles(sessionId: string): void {
   // ADR-009 token custody: the status-URL sidecar carries this session's MCP
   // token, so it is swept on the SAME teardown as the other two.
   removeLocalSessionStatusUrl(sessionId)
+}
+
+/** A local launch that failed after its process started (pty-manager.ts's
+ *  unwinding of it): its three per-session files, each removed
+ *  best-effort, in the order its exit removes them. Moved here with no change
+ *  (2.1.3-beta.17), so pty-manager.ts stays within its line cap. */
+export function removeFailedLaunchFiles(sessionId: string): void {
+  try { removeLocalSessionSettings(sessionId) } catch { /* best-effort */ }
+  try { removeLocalSessionMcpConfig(sessionId) } catch { /* best-effort */ }
+  try { removeLocalSessionStatusUrl(sessionId) } catch { /* best-effort */ }
 }
 
 /** Teardown, first part (cleanupSessionResources): the Codex session's

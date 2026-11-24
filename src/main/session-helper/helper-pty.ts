@@ -11,8 +11,10 @@
  *
  * Two ways in:
  *  - launch: a new holder for a new terminal;
- *  - adopt: a holder that outlived the app (a crash), whose terminal the
- *    restored tab shows again, its scrollback first.
+ *  - adopt: a holder that outlived the app (a crash, or an update), whose
+ *    terminal the restored tab shows again, its scrollback first; from
+ *    2.1.3-beta.17 an agent session an update kept running is taken over
+ *    this way too (S16 step 5), with no launch.
  *
  * A connection that drops while the terminal runs (the holder closes one that
  * fell behind its output, section 15) is attached again from the last byte
@@ -413,6 +415,10 @@ export class HelperPty implements IPty {
   get heldRecord(): HolderRecord | undefined { return this.inner ? undefined : this.record }
   /** True once release() let go of the holder for an app update. */
   get isReleased(): boolean { return this.released }
+  /** The folder its program was launched in, and whether it runs on node-pty's
+   *  bundled ConPTY (2.1.3-beta.17, S16 step 5): what an update's record of an
+   *  agent session keeps for the take-over in its restored tab. */
+  get launchShape(): { cwd: string; bundled: boolean } { return { cwd: this.spec.cwd, bundled: this.spec.conpty === 'bundled' } }
   /**
    * 2.1.3-beta.14 B2 (aicc_planning#388): the holder's screen read, while
    * this terminal goes through a holder whose connection acked `screen` and
@@ -501,8 +507,9 @@ export class HelperPty implements IPty {
    * ending it. The connection closes with no term.end, so the holder's away
    * clock starts (two minutes), and the new version's start shows the
    * terminal again, as it does after a crash. An agent session's is let go
-   * of the same way (2.1.3-beta.14, S16 step 4), and the new version's start
-   * ends it, until a take-over exists. Only a terminal through a holder that
+   * of the same way (2.1.3-beta.14, S16 step 4), and its restored tab in the
+   * new version takes it over (2.1.3-beta.17, S16 step 5) where the manager
+   * says so; else that start ends it. Only a terminal through a holder that
    * has been attached is let go of; any other (still starting, ending, over,
    * or the usual way) answers false and is left to kill() as before.
    */

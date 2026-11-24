@@ -328,8 +328,10 @@ export function registerUpdateHandlers(): void {
     // whose tabs were saved are let go of first, so the kill below does not
     // end them; the new version shows them again. So is a held agent session
     // whose tools go through its holder (2.1.3-beta.14, S16 step 4): its CLI
-    // runs on and it is recorded, and the new version still ends it until a
-    // take-over exists. macOS and Linux end them.
+    // runs on and it is recorded, and its restored tab in the new version
+    // takes it over where its provider's take-over is built (2.1.3-beta.17,
+    // S16 step 5: Claude Code); else the new version ends it. macOS and Linux
+    // end them.
     // A release that fails stops nothing: what it did not let go of ends.
     const releasing = process.platform === 'win32'
     try {
