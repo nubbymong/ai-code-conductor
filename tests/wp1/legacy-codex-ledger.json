@@ -10374,9 +10374,9 @@
         "P13"
       ],
       "category": "TEST",
-      "disposition": "replace",
-      "evidence": "existing test retained; must stay green on the merge candidate (WP1.33); WP1.33 mapping: 2.1.3-beta.17 section C2 (aicc_planning#413) added the chooser's list cases: a Codex tab is listed, by its work name and its agent 'Codex', beside the Claude Code tabs; the other cases are unchanged; tests/unit/renderer/command-broadcast.test.ts",
-      "note": "matched since 2.1.3-beta.17 section C2 (was not matched)"
+      "disposition": "added",
+      "evidence": "test created by 2.1.3-beta.16 section B4 (aicc_planning#399), after the WP1 baseline; 2.1.3-beta.17 section C2 (aicc_planning#413) added the broadcast chooser's list cases (tests/unit/renderer/command-broadcast.test.ts): each listed agent tab is named with its agent from provider-names.ts, a Codex tab listed as 'Codex' beside the Claude Code tabs, and the answer reaches only the picked tabs a broadcast still reaches at the press (WP1.68)",
+      "note": "matched since 2.1.3-beta.17 section C2 (was not matched); a Codex session is one fixture row among the tabs a broadcast reaches; nothing compares a provider name"
     },
     {
       "path": "tests/unit/renderer/command-dialog-capabilities.test.tsx",
@@ -10394,9 +10394,9 @@
         "P13"
       ],
       "category": "TEST",
-      "disposition": "replace",
-      "evidence": "existing test retained; must stay green on the merge candidate (WP1.33); WP1.33 mapping: 2.1.3-beta.17 section C2 (aicc_planning#413) adapted it for the broadcast chooser: a Codex tab is among the open tabs, listed with its agent 'Codex', reached by All and left out when unticked; the chooser's words name Claude Code and Codex sessions; tests/unit/renderer/commandbar-broadcast.test.tsx",
-      "note": "matched since 2.1.3-beta.17 section C2 (was not matched)"
+      "disposition": "added",
+      "evidence": "test created by 2.1.3-beta.16 section B4 (aicc_planning#399), after the WP1 baseline; 2.1.3-beta.17 section C2 (aicc_planning#413) adapted it for the broadcast chooser (tests/unit/renderer/commandbar-broadcast.test.tsx): every broadcast press opens the chooser; a Codex tab is among the open tabs, listed with its agent 'Codex', reached by All and left out when unticked; the chooser's words name Claude Code and Codex sessions (WP1.68)",
+      "note": "matched since 2.1.3-beta.17 section C2 (was not matched); the CommandBar with mocked stores and a stand-in prompt path; a Codex tab is one fixture row, nothing started"
     },
     {
       "path": "tests/unit/renderer/commandbar-codex-toolbar.test.ts",
