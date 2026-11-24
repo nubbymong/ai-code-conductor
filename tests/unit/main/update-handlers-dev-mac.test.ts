@@ -63,6 +63,7 @@ vi.mock('../../../src/main/update-watcher', () => ({
 }))
 vi.mock('../../../src/main/debug-logger', () => ({ logInfo: vi.fn(), logError: vi.fn() }))
 vi.mock('../../../src/main/pty-manager', () => ({ killAllPty: vi.fn() }))
+vi.mock('../../../src/main/conductor-mcp-server', () => ({ noteUpdateHandOver: vi.fn() }))
 // What app.exit runs first (the vision browser's end); not what this file tests.
 vi.mock('../../../src/main/hard-exit', () => ({ hardExitTeardown: vi.fn() }))
 

@@ -5,6 +5,7 @@ import * as fs from 'fs'
 import { checkForUpdatesOnDemand, markUpdateInstalled, getProjectRootPath, setSourcePathInRegistry, hasSourcePath, isPackagedApp, isStoreBuild } from '../update-watcher'
 import { checkGitHubRelease, downloadGitHubRelease, prepareLinuxAppImageUpdate, isPathOnNoexecMount, InstallerIntegrityError, stillMatchesDigest, createInstallerDir } from '../github-update'
 import { killAllPty } from '../pty-manager'
+import { noteUpdateHandOver } from '../conductor-mcp-server'
 import { releaseHeldTerminalsForUpdate, reclaimReleasedTerminals } from '../session-helper/app-wiring'
 import { hardExitTeardown } from '../hard-exit'
 import { expandArtifactName } from '../artifact-name'
@@ -338,6 +339,8 @@ export function registerUpdateHandlers(): void {
         try { await releaseHeldTerminalsForUpdate({ discarded }) } catch (e) { logError('[update] The held terminals could not be let go of:', e) }
       }
       logInfo('[update] Killing all PTYs...')
+      // vm:B1f: a kept CLI's status post after the kill is logged at info.
+      noteUpdateHandOver()
       killAllPty()
 
       logInfo('[update] Launching installer...')
