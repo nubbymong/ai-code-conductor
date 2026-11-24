@@ -1,9 +1,9 @@
 {
   "schema": "wp1-legacy-codex-manifest/3",
-  "generatedAt": "2026-11-24T10:20:33.930Z",
-  "head": "1242b70d5a64b2740329049b1029e24d7b4f5da4",
-  "tree": "b6017bd9fa502837b82fdeb844dea8f50f2436db",
-  "scannedWorkingTree": true,
+  "generatedAt": "2026-11-24T10:43:10.647Z",
+  "head": "72cdd91c823c858f6037068e7993ff2350e6b524",
+  "tree": "dd6d05a2dcb91858f67c9f5b12fc422c778fa0a5",
+  "scannedWorkingTree": false,
   "predicateDigest": "100a1233edebdc39a5f9004d3fba980a89ebb15b25872e52076386bc84b03153",
   "predicates": [
     {
@@ -116,9 +116,9 @@
     "\\.(png|jpg|jpeg|gif|ico|icns|webp|svg|woff2?|ttf|otf|mp4|zip|asar|node|exe|dll|dylib|so|pdf)$",
     "^package-lock\\.json$"
   ],
-  "trackedFileCount": 3836,
-  "excludedFileCount": 602,
-  "scannedFileCount": 3234,
+  "trackedFileCount": 3843,
+  "excludedFileCount": 603,
+  "scannedFileCount": 3240,
   "unscopedFileCount": 15,
   "unscoped": [
     ".claude/settings.json",
@@ -139,8 +139,8 @@
   ],
   "unscopedMentions": [],
   "unreadable": [],
-  "matchedPathCount": 1081,
-  "pathDigest": "67ccce5e332c00073837356547edfcfbfc9465dd996b824ad5c7b62327329584",
+  "matchedPathCount": 1087,
+  "pathDigest": "157dcac24d38a2bea67fa30279ae40f41e35f1dfe11a7241a1daf9a267ad760b",
   "entries": [
     {
       "path": ".github/workflows/ci.yml",
@@ -527,6 +527,22 @@
       "lineCount": 9
     },
     {
+      "path": "helper/fixtures/screens/codex-windows-bundled-warning-draft.json",
+      "predicates": [
+        "P01",
+        "P14"
+      ],
+      "lineCount": 6
+    },
+    {
+      "path": "helper/fixtures/screens/codex-windows-bundled-warning-draft.rows.json",
+      "predicates": [
+        "P01",
+        "P14"
+      ],
+      "lineCount": 7
+    },
+    {
       "path": "helper/fixtures/screens/codex-windows-bundled-warning-hint.json",
       "predicates": [
         "P01",
@@ -605,6 +621,22 @@
         "P14"
       ],
       "lineCount": 26
+    },
+    {
+      "path": "helper/fixtures/screens/codex-windows-system-warning-draft.json",
+      "predicates": [
+        "P01",
+        "P14"
+      ],
+      "lineCount": 6
+    },
+    {
+      "path": "helper/fixtures/screens/codex-windows-system-warning-draft.rows.json",
+      "predicates": [
+        "P01",
+        "P14"
+      ],
+      "lineCount": 7
     },
     {
       "path": "helper/fixtures/screens/codex170-linux-after-reply.json",
@@ -932,6 +964,13 @@
         "P14"
       ],
       "lineCount": 30
+    },
+    {
+      "path": "helper/probes/c7-scenarios.json",
+      "predicates": [
+        "P14"
+      ],
+      "lineCount": 18
     },
     {
       "path": "helper/probes/p11-model-stand-in.cjs",
@@ -3578,7 +3617,7 @@
         "P01",
         "P14"
       ],
-      "lineCount": 69
+      "lineCount": 82
     },
     {
       "path": "src/shared/container-command.ts",
@@ -6738,7 +6777,7 @@
         "P07",
         "P13"
       ],
-      "lineCount": 53
+      "lineCount": 52
     },
     {
       "path": "tests/unit/providers/codex/spawn-extra-args.test.ts",
@@ -8526,7 +8565,7 @@
         "P01",
         "P13"
       ],
-      "lineCount": 98
+      "lineCount": 108
     },
     {
       "path": "tests/unit/shared/codex-screen-shortcuts-hint.test.ts",
@@ -8542,7 +8581,15 @@
         "P01",
         "P13"
       ],
-      "lineCount": 33
+      "lineCount": 34
+    },
+    {
+      "path": "tests/unit/shared/codex-screen-warning-row.test.ts",
+      "predicates": [
+        "P01",
+        "P13"
+      ],
+      "lineCount": 86
     },
     {
       "path": "tests/unit/shared/extra-args.test.ts",
@@ -8571,7 +8618,7 @@
       "predicates": [
         "P13"
       ],
-      "lineCount": 68
+      "lineCount": 74
     },
     {
       "path": "tests/unit/status-ingest.test.ts",
