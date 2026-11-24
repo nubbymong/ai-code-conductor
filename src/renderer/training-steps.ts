@@ -600,7 +600,7 @@ export const trainingSteps: TrainingStep[] = [
     summary:
       'Capture a region of any screen and hand it straight to the agent. A local session gets the picture as a pasted image ([Image #1]) or, for an assistant the app does not paste for yet, as its file path typed into the prompt; SSH sessions fetch the image over the Conductor MCP tunnel.',
     highlights: [
-      'On Windows, Region shows the app\'s own overlay: drag an area and press Enter, or pick Whole screen (no drawing tools). **Settings → Custom Commands → Snap**, Snap on Windows: **Previous** brings back the earlier Snap, with its magnifier, mosaic, brush and redo / undo, which macOS and Linux use; it also opens by itself for any press the new one cannot take',
+      'On Windows, Snap\'s Rectangle shows the app\'s own overlay: drag an area and press Enter, or pick Whole screen (no drawing tools). **Settings → Custom Commands → Snap**, Snap on Windows: **Previous** brings back the earlier Snap, with its magnifier, mosaic, brush and redo / undo, which macOS and Linux use; it also opens by itself for any press the new one cannot take',
       'Window capture mode -- pick from a thumbnail list of any open window',
       'JPEG-encoded at 1920px max long edge to stay under the agent\'s image budget',
       'Saved to the session resources screenshots/ folder so you can drag-drop later too',
@@ -616,7 +616,7 @@ export const trainingSteps: TrainingStep[] = [
       'Snap a UI bug, then ask the agent to look at the screenshot you just snapped -- it ingests the image directly and you skip the upload-and-describe roundtrip.',
     bullets: [
       '**Region or window** capture, both routed straight to the agent',
-      'Local sessions get the **file path** in the prompt; SSH uses **vision MCP fetch**',
+      'Local sessions get a **pasted image** or, for an assistant the app does not paste for yet, the **file path** in the prompt; SSH uses **vision MCP fetch**',
       'Encoded at **1920px / JPEG 85** to stay under image budget',
       '**Esc** cancels mid-drag if you change your mind',
     ],
