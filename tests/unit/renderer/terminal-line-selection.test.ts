@@ -46,9 +46,10 @@ const pos = (term: Terminal) => {
 const RULE_30 = '-'.repeat(30)
 const STATUS_30 = 'mode on' + ' '.repeat(10) + 'not logged in'
 
-/** `shell` lines of a shell, then a program's screen at 30x10 with the cursor
- *  on its input row (console-repaint-narrow-keep.test.ts's programTerminal). */
-async function programTerminal(shell: number, rows = 10): Promise<Terminal> {
+/** `shell` lines of a shell (that many `$ shell N`, or these lines), then a
+ *  program's screen at 30x10 with the cursor on its input row
+ *  (console-repaint-narrow-keep.test.ts's programTerminal). */
+async function programTerminal(shell: number | string[], rows = 10): Promise<Terminal> {
   const host = document.createElement('div')
   document.body.appendChild(host)
   const term = new Terminal({ cols: 30, rows, scrollback: 200 })
@@ -56,7 +57,8 @@ async function programTerminal(shell: number, rows = 10): Promise<Terminal> {
   made.push(term)
   const screen = ['HEADER A', 'HEADER B', '', RULE_30, '> input', RULE_30, STATUS_30]
   while (screen.length < rows) screen.push('')
-  const lines = [...Array.from({ length: shell }, (_, i) => `$ shell ${i + 1}`), ...screen]
+  const shellLines = typeof shell === 'number' ? Array.from({ length: shell }, (_, i) => `$ shell ${i + 1}`) : shell
+  const lines = [...shellLines, ...screen]
   await write(term, lines.join('\r\n') + '\x1b[5;8H')
   await frame()
   return term
@@ -80,6 +82,17 @@ function dragCells(term: Terminal, viewRow: number, fromCol: number, toCol: numb
   screen.dispatchEvent(new MouseEvent('mousedown', { clientX: fromCol * 9 + 1, clientY: y, button: 0, detail: 1, bubbles: true }))
   document.dispatchEvent(new MouseEvent('mousemove', { clientX: toCol * 9 + 8, clientY: y, button: 0, buttons: 1, bubbles: true }))
   document.dispatchEvent(new MouseEvent('mouseup', { clientX: toCol * 9 + 8, clientY: y, button: 0, detail: 1, bubbles: true }))
+}
+
+/** A drag from the cell edge `fromX` of view row `fromRow` to the edge `toX`
+ *  of view row `toRow` (0 to the columns: xterm takes the edge nearest the
+ *  pointer, so these are the selection's own start and end). */
+function dragBetween(term: Terminal, fromX: number, fromRow: number, toX: number, toRow: number): void {
+  const screen = term.element!.querySelector('.xterm-screen') as HTMLElement
+  const at = (x: number, row: number) => ({ clientX: x * 9 + 1, clientY: row * 17 + 8, button: 0, bubbles: true })
+  screen.dispatchEvent(new MouseEvent('mousedown', { ...at(fromX, fromRow), detail: 1 }))
+  document.dispatchEvent(new MouseEvent('mousemove', { ...at(toX, toRow), buttons: 1 }))
+  document.dispatchEvent(new MouseEvent('mouseup', { ...at(toX, toRow), detail: 1 }))
 }
 
 /** The console's paint after a narrowing to 20x10, through the aligner as
@@ -129,22 +142,6 @@ describe('a triple-click line selection and a narrowing of the columns only, on 
     expect(term.getSelection()).toBe('$ shell 3')
   })
 
-  it('a drag inside a row below a longer line the narrowing re-wraps: xterm leaves it on its row, which now holds the longer line\'s last part (kept so: a drag is not a line)', async () => {
-    const host = document.createElement('div')
-    document.body.appendChild(host)
-    const term = new Terminal({ cols: 30, rows: 10, scrollback: 200 })
-    term.open(host)
-    made.push(term)
-    await write(term, ['$ shell 1', 'x'.repeat(25), '$ shell 3', '$ shell 4'].join('\r\n'))
-    await frame()
-    keepLineSelection(term)
-    dragCells(term, 2, 0, 4)
-    expect(term.getSelection()).toBe('$ she')
-    term.resize(20, 10)
-    expect(pos(term)).toEqual([0, 2, 5, 2])
-    expect(term.getSelection()).toBe('xxxxx')
-  })
-
   it('the rows change as well: xterm clears it (SelectionService, rowsChanged)', async () => {
     const term = await programTerminal(12, 11)
     term.scrollToTop()
@@ -153,6 +150,67 @@ describe('a triple-click line selection and a narrowing of the columns only, on 
     expect(term.getSelection()).toBe('$ shell 3')
     term.resize(20, 10)
     expect(term.hasSelection()).toBe(false)
+  })
+})
+
+/** Lines under a 25-cell line: a narrowing to 20 columns wraps it over two
+ *  rows and moves every line below it a row down. */
+const UNDER_LONG = ['$ shell 1', 'x'.repeat(25), '$ shell 3', '$ shell 4', '$ shell 5']
+/** A 45-cell line of five runs, each told apart: A to D ten cells, E five. */
+const RUNS_45 = 'A'.repeat(10) + 'B'.repeat(10) + 'C'.repeat(10) + 'D'.repeat(10) + 'E'.repeat(5)
+
+describe('a drag over part of a line and a change of the columns only, on xterm itself (the measurement, aicc_planning#424)', () => {
+  it('a drag inside a row below a longer line the narrowing re-wraps: xterm leaves it on its row, which now holds the longer line\'s last part', async () => {
+    const term = await linesTerminal(30, UNDER_LONG)
+    dragCells(term, 2, 0, 4)
+    expect(term.getSelection()).toBe('$ she')
+    term.resize(20, 10)
+    expect(pos(term)).toEqual([0, 2, 5, 2])
+    expect(term.getSelection()).toBe('xxxxx')
+  })
+
+  it('a drag over part of a wrapped line, across its row break: xterm keeps its cells, which now hold other parts of the line', async () => {
+    const term = await linesTerminal(30, ['$ shell 1', RUNS_45, '$ shell 3'])
+    dragBetween(term, 25, 1, 5, 2)
+    expect(term.getSelection()).toBe('CCCCCDDDDD')
+    term.resize(20, 10)
+    expect(pos(term)).toEqual([25, 1, 5, 2])
+    expect(term.getSelection(), 'narrowed').toBe('CCCCC')
+    term.resize(50, 10)
+    expect(pos(term)).toEqual([25, 1, 5, 2])
+    expect(term.getSelection(), 'then widened past the line').toBe('CCCCCDDDDDDDDDDEEEEE\n$ she')
+  })
+
+  it('a drag over the ends of two lines below a longer line the narrowing re-wraps: other text', async () => {
+    const term = await linesTerminal(30, UNDER_LONG)
+    dragBetween(term, 2, 2, 5, 3)
+    expect(term.getSelection()).toBe('shell 3\n$ she')
+    term.resize(20, 10)
+    expect(pos(term)).toEqual([2, 2, 5, 3])
+    expect(term.getSelection()).toBe('xxx\n$ she')
+  })
+
+  it('with the Claude Code paint after it through the aligner (C5b selects it again by its start and length): the same other text', async () => {
+    const term = await programTerminal(['$ shell 1', 'x'.repeat(25), ...Array.from({ length: 10 }, (_, i) => `$ shell ${i + 3}`)])
+    term.scrollToTop()
+    await frame()
+    dragBetween(term, 0, 2, 5, 2)
+    expect(term.getSelection()).toBe('$ she')
+    term.resize(20, 10)
+    await paintThroughAligner(term)
+    expect(countOf(term, 'HEADER A'), 'the paint was placed').toBe(1)
+    expect(pos(term)).toEqual([0, 2, 5, 2])
+    expect(term.getSelection()).toBe('xxxxx')
+  })
+
+  it('a drag that ends on a line\'s first cell copies the line break before it; xterm\'s select (a start and a length) cannot end there: the same cells end at the row before, with no line break', async () => {
+    const term = await linesTerminal(30, SHELL)
+    dragBetween(term, 0, 2, 0, 4)
+    expect(pos(term)).toEqual([0, 2, 0, 4])
+    expect(term.getSelection()).toBe('$ shell 3\n$ shell 4\n')
+    term.select(0, 2, 60)
+    expect(pos(term)).toEqual([0, 2, 30, 3])
+    expect(term.getSelection()).toBe('$ shell 3\n$ shell 4')
   })
 })
 
@@ -294,14 +352,14 @@ describe('kept on its line by keepLineSelection, as TerminalView wires it (aicc_
     expect(term.getSelection()).toBe('z'.repeat(30))
   })
 
-  it('a drag over the second row of a wrapped line, from its first cell to past its last: not taken for a line (left as xterm keeps it)', async () => {
+  it('a drag over the second row of a wrapped line, from its first cell to past its last: the same part of the line, not grown to the whole line (xterm: the row\'s cells, other text)', async () => {
     const term = await linesTerminal(30, ['$ shell 1', 'z'.repeat(30) + 'w'.repeat(15), '$ shell 3'])
     keepLineSelection(term)
-    const select = vi.spyOn(term, 'select')
     dragCells(term, 2, 0, 29)
     expect(term.getSelection()).toBe('w'.repeat(15))
     term.resize(20, 10)
-    expect(select).not.toHaveBeenCalled()
+    expect(pos(term)).toEqual([10, 2, 20, 3])
+    expect(term.getSelection()).toBe('w'.repeat(15))
   })
 
   it('a longer line above it re-wrapped by the narrowing moves its line down a row: the selection moves with it (xterm: stays on the row)', async () => {
@@ -408,5 +466,217 @@ describe('kept on its line by keepLineSelection, as TerminalView wires it (aicc_
     try {
       expect(() => keepLineSelection(term as never).dispose()).not.toThrow()
     } finally { term.dispose() }
+  })
+})
+
+/** 40 wide characters, each told apart (U+4E00 on: two cells each). */
+const WIDE_40 = Array.from({ length: 40 }, (_, i) => String.fromCodePoint(0x4e00 + i)).join('')
+
+describe('a drag over part of a line kept on its text by keepLineSelection, as TerminalView wires it (aicc_planning#424)', () => {
+  it('a drag inside a row below a longer line the narrowing re-wraps: the same text a row down, and back on its row when widened again (xterm: the longer line\'s last part)', async () => {
+    const term = await linesTerminal(30, UNDER_LONG)
+    keepLineSelection(term)
+    dragCells(term, 2, 0, 4)
+    term.resize(20, 10)
+    expect(pos(term)).toEqual([0, 3, 5, 3])
+    expect(term.getSelection()).toBe('$ she')
+    term.resize(30, 10)
+    expect(pos(term)).toEqual([0, 2, 5, 2])
+    expect(term.getSelection()).toBe('$ she')
+  })
+
+  it('a drag over part of a wrapped line, across its row break: the same part, narrowed and then widened past the line (xterm: other parts)', async () => {
+    const term = await linesTerminal(30, ['$ shell 1', RUNS_45, '$ shell 3'])
+    keepLineSelection(term)
+    dragBetween(term, 25, 1, 5, 2)
+    term.resize(20, 10)
+    expect(pos(term)).toEqual([5, 2, 15, 2])
+    expect(term.getSelection()).toBe('CCCCCDDDDD')
+    term.resize(50, 10)
+    expect(pos(term)).toEqual([25, 1, 35, 1])
+    expect(term.getSelection()).toBe('CCCCCDDDDD')
+  })
+
+  it('a drag from a cell that starts a row at the new width: its start on that row\'s first cell, as xterm\'s own drag gives it, not past the end of the row before', async () => {
+    const term = await linesTerminal(30, ['$ shell 1', RUNS_45, '$ shell 3'])
+    keepLineSelection(term)
+    dragBetween(term, 20, 1, 5, 2)
+    expect(term.getSelection()).toBe('C'.repeat(10) + 'DDDDD')
+    term.resize(20, 10)
+    expect(pos(term)).toEqual([0, 2, 15, 2])
+    expect(term.getSelection()).toBe('C'.repeat(10) + 'DDDDD')
+  })
+
+  it('a drag over only the empty cells after a line\'s text, narrowed to fewer columns than its start: left selected as xterm keeps it (nothing to select again)', async () => {
+    const term = await linesTerminal(30, UNDER_LONG)
+    keepLineSelection(term)
+    dragBetween(term, 20, 2, 25, 2)
+    expect(term.hasSelection()).toBe(true)
+    expect(term.getSelection()).toBe('')
+    term.resize(20, 10)
+    expect(term.hasSelection()).toBe(true)
+    expect(term.getSelection()).toBe('')
+  })
+
+  it('a drag over the ends of two lines below a longer line the narrowing re-wraps: the same text (xterm: other text)', async () => {
+    const term = await linesTerminal(30, UNDER_LONG)
+    keepLineSelection(term)
+    dragBetween(term, 2, 2, 5, 3)
+    term.resize(20, 10)
+    expect(pos(term)).toEqual([2, 3, 5, 4])
+    expect(term.getSelection()).toBe('shell 3\n$ she')
+  })
+
+  it('with the Claude Code paint after it through the aligner (C5b selects the same cells again, which xterm reports to no one), then a second narrowing: the same text each time', async () => {
+    const term = await programTerminal(['$ shell 1', 'x'.repeat(25), ...Array.from({ length: 10 }, (_, i) => `$ shell ${i + 3}`)])
+    keepLineSelection(term)
+    term.scrollToTop()
+    await frame()
+    dragBetween(term, 0, 2, 5, 2)
+    term.resize(20, 10)
+    expect(term.getSelection()).toBe('$ she')
+    await paintThroughAligner(term)
+    expect(countOf(term, 'HEADER A'), 'the paint was placed').toBe(1)
+    expect(term.getSelection()).toBe('$ she')
+    term.resize(12, 10)
+    expect(pos(term), 'the longer line over three rows now').toEqual([0, 4, 5, 4])
+    expect(term.getSelection()).toBe('$ she')
+  })
+
+  it('a widening that joins a wrapped line above it: a drag below moves up a row with its line (xterm: stays on the row, the next line)', async () => {
+    const term = await linesTerminal(20, UNDER_LONG)
+    keepLineSelection(term)
+    dragCells(term, 3, 0, 4)
+    expect(term.getSelection()).toBe('$ she')
+    term.resize(30, 10)
+    expect(pos(term)).toEqual([0, 2, 5, 2])
+    expect(term.getSelection()).toBe('$ she')
+  })
+
+  it('a drag that ends past the end of its line\'s text: the same line at a narrower width, not run on into the next', async () => {
+    const term = await linesTerminal(30, UNDER_LONG)
+    keepLineSelection(term)
+    dragBetween(term, 2, 2, 25, 2)
+    expect(term.getSelection()).toBe('shell 3')
+    term.resize(20, 10)
+    expect(pos(term)).toEqual([2, 3, 20, 3])
+    expect(term.getSelection()).toBe('shell 3')
+  })
+
+  it('a drag that starts past the end of its line\'s text and ends in the next line: the line break and the same text (its start kept at its line\'s end)', async () => {
+    const term = await linesTerminal(30, UNDER_LONG)
+    keepLineSelection(term)
+    dragBetween(term, 25, 2, 5, 3)
+    expect(term.getSelection()).toBe('\n$ she')
+    term.resize(20, 10)
+    expect(pos(term)).toEqual([20, 3, 5, 4])
+    expect(term.getSelection()).toBe('\n$ she')
+  })
+
+  it('a drag over wide characters of a wrapped line, narrowed to a width that leaves each row\'s last cell empty: the same characters, and widened back (xterm\'s re-wrap skips those cells; counted, the drag would move a character)', async () => {
+    const term = await linesTerminal(30, ['$ shell 1', WIDE_40, '$ shell 3'])
+    keepLineSelection(term)
+    const two = WIDE_40.slice(32, 34)
+    dragBetween(term, 4, 3, 8, 3)
+    expect(term.getSelection()).toBe(two)
+    term.resize(21, 10)
+    expect(pos(term)).toEqual([4, 4, 8, 4])
+    expect(term.getSelection()).toBe(two)
+    term.resize(30, 10)
+    expect(pos(term)).toEqual([4, 3, 8, 3])
+    expect(term.getSelection()).toBe(two)
+  })
+
+  it('a drag to past the end of a row whose last cell xterm left empty before a wide character: that cell is the row\'s end, not the next character', async () => {
+    const term = await linesTerminal(21, ['$ shell 1', WIDE_40, '$ shell 3'])
+    keepLineSelection(term)
+    const two = WIDE_40.slice(8, 10)
+    dragBetween(term, 16, 1, 21, 1)
+    expect(term.getSelection()).toBe(two)
+    term.resize(30, 10)
+    expect(pos(term)).toEqual([16, 1, 20, 1])
+    expect(term.getSelection()).toBe(two)
+  })
+
+  it('a drag over part of the line the cursor is on, which xterm does not re-wrap: the same text on its row (counted as re-wrapped, it would move)', async () => {
+    const term = await linesTerminal(30, ['$ shell 1', '$ ' + RUNS_45])
+    keepLineSelection(term)
+    dragBetween(term, 2, 2, 12, 2)
+    expect(term.getSelection()).toBe('D'.repeat(10))
+    term.resize(20, 10)
+    expect(pos(term)).toEqual([2, 2, 12, 2])
+    expect(term.getSelection()).toBe('D'.repeat(10))
+  })
+
+  it('the cursor\'s line narrowed (not re-wrapped, its rows cut), then output moves the cursor on and a widening re-wraps it: counted as it is after the cut, the same text', async () => {
+    const term = await linesTerminal(30, ['$ shell 1', '$ ' + RUNS_45])
+    keepLineSelection(term)
+    dragBetween(term, 2, 2, 12, 2)
+    term.resize(20, 10)
+    expect(term.getSelection()).toBe('D'.repeat(10))
+    await write(term, '\r\n$ next')
+    term.resize(30, 10)
+    expect(pos(term)).toEqual([22, 1, 2, 2])
+    expect(term.getSelection()).toBe('D'.repeat(10))
+  })
+
+  it('a drag over part of a wrapped line in the alternate buffer, which xterm does not re-wrap: the same text on its row', async () => {
+    const term = await linesTerminal(30, ['\x1b[?1049h$ shell 1', RUNS_45, '$ shell 3'])
+    expect(term.buffer.active.type).toBe('alternate')
+    keepLineSelection(term)
+    dragBetween(term, 0, 2, 5, 2)
+    expect(term.getSelection()).toBe('DDDDD')
+    term.resize(20, 10)
+    expect(pos(term)).toEqual([0, 2, 5, 2])
+    expect(term.getSelection()).toBe('DDDDD')
+  })
+
+  it('a drag that ends on a line\'s first cell, nothing moved by the narrowing: left as xterm keeps it, its last line break copied', async () => {
+    const term = await linesTerminal(30, SHELL)
+    keepLineSelection(term)
+    const select = vi.spyOn(term, 'select')
+    dragBetween(term, 0, 2, 0, 4)
+    expect(term.getSelection()).toBe('$ shell 3\n$ shell 4\n')
+    term.resize(20, 10)
+    expect(select).not.toHaveBeenCalled()
+    expect(term.getSelection()).toBe('$ shell 3\n$ shell 4\n')
+  })
+
+  it('a drag that ends on a line\'s first cell, its lines moved by the narrowing: the same lines, without the last line break (xterm\'s select cannot end on a line\'s first cell)', async () => {
+    const term = await linesTerminal(30, UNDER_LONG)
+    keepLineSelection(term)
+    dragBetween(term, 0, 2, 0, 4)
+    expect(term.getSelection()).toBe('$ shell 3\n$ shell 4\n')
+    term.resize(20, 10)
+    expect(pos(term)).toEqual([0, 3, 20, 4])
+    expect(term.getSelection()).toBe('$ shell 3\n$ shell 4')
+  })
+
+  it('Select all across a widening that joins a wrapped line (the buffer\'s last row is a new one): still Select all, taking in the output written after it', async () => {
+    const term = await linesTerminal(20, UNDER_LONG)
+    keepLineSelection(term)
+    term.selectAll()
+    term.resize(30, 10)
+    await write(term, '\r\n' + Array.from({ length: 15 }, (_, i) => `later ${i + 1}`).join('\r\n'))
+    expect(term.getSelection()).toContain('later 15')
+  })
+
+  it('a drag whose first line was trimmed off the top of the scrollback (its marker gone with it): not selected again', async () => {
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    const term = new Terminal({ cols: 30, rows: 10, scrollback: 5 })
+    term.open(host)
+    made.push(term)
+    await write(term, SHELL.join('\r\n'))
+    await frame()
+    keepLineSelection(term)
+    dragBetween(term, 2, 0, 5, 2)
+    expect(term.getSelection()).toBe('shell 1\n$ shell 2\n$ she')
+    // 6 lines and 10 more fill the 15 rows of the buffer and one: the first line goes.
+    await write(term, '\r\n' + Array.from({ length: 10 }, (_, i) => `later ${i + 1}`).join('\r\n'))
+    expect(term.hasSelection(), 'xterm keeps the rest of it').toBe(true)
+    const select = vi.spyOn(term, 'select')
+    term.resize(20, 10)
+    expect(select).not.toHaveBeenCalled()
   })
 })
