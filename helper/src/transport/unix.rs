@@ -208,6 +208,16 @@ impl Stream {
         }
     }
 
+    /// End this side's writing only: the peer reads what was written, then
+    /// the end of the stream, and reading on any clone goes on. The bridge
+    /// (`bridge.rs`) does this when its standard input ends, so the holder
+    /// sees the connection go and closes its own half.
+    pub fn shutdown_write(&self) {
+        unsafe {
+            libc::shutdown(self.inner.as_raw_fd(), libc::SHUT_WR);
+        }
+    }
+
     /// End the connection after what was written: the peer reads it, then the
     /// end of the stream. The cut both ways, which also wakes a reader blocked
     /// on this side, comes `LINGER` later; if no thread can be made to wait
