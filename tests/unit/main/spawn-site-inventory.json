@@ -278,6 +278,21 @@
    "how": "system-folder",
    "reason": "reg.exe by its full path in the system folder (systemTool), arguments as a list, no shell."
   },
+  "src/main/remote-helper/ssh-exec.ts :: execFile(sshPath()": {
+   "count": 1,
+   "how": "full-path",
+   "reason": "`ssh -V`, once per run, for remote step 1 (2.1.3-beta.17 A2): the program the runner is given, which main gives as sshProgram() (remote-machines-handlers.ts), the same program found the same way as pty-manager's SSH sites: on Windows ssh.exe by the full path found in PATH's fully qualified folders; none found: sshProgram throws, nothing starts, and the version reads as unknown. Arguments as a list, no shell, an allow-listed environment (sshEnv)."
+  },
+  "src/main/remote-helper/ssh-exec.ts :: nodeSpawn(file": {
+   "count": 1,
+   "how": "not-a-process",
+   "reason": "nodeSshRunner's spawn: child_process.spawn handed on as the runner's own spawn, whose calls are the two runner.spawn(runner.sshPath() sites listed beside it; it starts only the file they give."
+  },
+  "src/main/remote-helper/ssh-exec.ts :: runner.spawn(runner.sshPath()": {
+   "count": 2,
+   "how": "full-path",
+   "reason": "ssh for remote step 1's one-shot execs (runScript) and the bridge exec (openScriptStream), 2.1.3-beta.17 A2: the runner's sshPath(), which main gives as sshProgram() (remote-machines-handlers.ts): on Windows ssh.exe by the full path found in PATH's fully qualified folders (ssh-program.ts; none found: sshProgram throws, nothing starts and the exec fails); elsewhere ssh by name. Arguments as a list with no shell: fixed options, -p, -l, --, the target and one fixed /bin/sh -c script command whose values are each pattern-checked first (scripts.ts), and an allow-listed environment (sshEnv)."
+  },
   "src/main/review-diff.ts :: execFile(git": {
    "count": 1,
    "how": "full-path",

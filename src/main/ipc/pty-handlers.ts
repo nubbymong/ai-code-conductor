@@ -2,6 +2,8 @@ import { ipcMain, BrowserWindow, app } from 'electron'
 import { z } from 'zod'
 import { spawnPty, writePty, resizePty, killPty, getSshFlow, endSshRemoteDetailed, probeTmuxLive, holdsCodexLaunchLease, codexLaunchLeaseTaken, beginSpawnPreparation, isSessionWritable, isSessionLiveOrStarting, SSHOptions, SshEndTarget, getKeptCodexConversation, getKeptCodexConversationSource, codexRunEnded, codexConversationHeldElsewhere, endAgentRunsInFolder } from '../pty-manager'
 import type { CodexLaunch } from '../pty-manager'
+import { isRemoteHelperTab } from '../remote-helper'
+import { SSH_THROUGH_HELPER } from '../../shared/remote-machines'
 import { handOffAskQuestion, submitPrompt, submitImage, type PromptButtonMode, type ImageSubmitResult } from '../session-input'
 import { ensureHelpWorkspace, helpWorkspaceDir } from '../help-workspace'
 import { ASK_HELP_FOLDER_FAILED } from '../../shared/ask-conductor-provider'
@@ -1462,7 +1464,8 @@ export function registerPtyHandlers(getWindow: () => BrowserWindow | null): void
 
   ipcMain.handle(IPC.SSH_FLOW_GET_STATE, async (_event, sessionId: string) => {
     sessionIdSchema.parse(sessionId)
-    return getSshFlow(sessionId)?.getState() ?? { state: 'connecting' }
+    // 2.1.3-beta.17 A2: a tab through the session helper has no SSH flow, and the overlay is not shown for it.
+    return getSshFlow(sessionId)?.getState() ?? (isRemoteHelperTab(sessionId) ? { state: SSH_THROUGH_HELPER } : { state: 'connecting' })
   })
 
   // SSH tmux enhancement (item 4): deliberately END a persistent remote session

@@ -36,6 +36,7 @@ import { sentinelSettingsText } from './sentinel/sentinel-report-text'
 import { useProviderAccountsStore, sentinelCodexAccountChoices, accountDisplayName } from '../stores/providerAccountsStore'
 import { FOOTER_BARE_LABEL_PROVIDER, footerHiddenLabelsFor } from '../../shared/usage-labels'
 import type { ProviderId } from '../../shared/providers'
+import { REMOTE_SWITCH_TEXT } from '../../shared/remote-machines'
 declare const __BUILD_TIME__: string
 declare const __BUILD_SHA__: string
 declare const __APP_VERSION__: string
@@ -639,6 +640,21 @@ export default function SettingsPage({ initialTab, onNavigateToSessions, onUpdat
                     <span className="block text-[10px] text-[var(--text-muted)]">Preview, off by default. A Claude Code or Codex session on this computer starts inside the session helper, launched exactly as before. It does not survive a crash yet: when you open the app again, the session is ended and its tab resumes the conversation as before. Quitting normally ends it. On Windows, ending a session also ends every program it started, even one it opened in a window of its own. SSH sessions are not affected. Applies to sessions started after the change. The Machines page lists them. Insights' Claude Code report runs this way too.</span>
                   </span>
                 </label>
+                {/* 2.1.3-beta.17 (plan section A2): remote sessions through the session helper, a preview (Windows). */}
+                {window.electronPlatform === 'win32' && (
+                  <label className="flex items-start gap-2 text-sm text-subtext0 cursor-pointer mt-2" data-testid="setting-remote-sessions-helper">
+                    <input
+                      type="checkbox"
+                      checked={settings.remoteSessionsThroughHelper === true}
+                      onChange={(e) => save({ remoteSessionsThroughHelper: e.target.checked })}
+                      className="mt-0.5 rounded border-surface1"
+                    />
+                    <span>
+                      Remote sessions through the session helper (Linux, preview)
+                      <span className="block text-[10px] text-[var(--text-muted)]">{REMOTE_SWITCH_TEXT}</span>
+                    </span>
+                  </label>
+                )}
                 <p className="text-[11px] text-[var(--text-muted)] mt-2 leading-relaxed">
                   Terminal settings apply to new terminals. Restart sessions for changes to take effect.
                 </p>

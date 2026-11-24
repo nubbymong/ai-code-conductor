@@ -810,6 +810,14 @@ export interface ElectronAPI {
     runSelfTest: () => Promise<import('../../shared/machines').SelfTestResult>
     endSession: (id: string) => Promise<import('../../shared/machines').MachineActionResult>
     reattach: (id: string) => Promise<import('../../shared/machines').MachineActionResult>
+    /** 2.1.3-beta.17: Linux machines for remote sessions through the session helper. */
+    remote: {
+      state: () => Promise<import('../../shared/remote-machines').RemoteMachinesState>
+      prepare: (configId: string) => Promise<import('../../shared/remote-machines').RemoteConsent>
+      add: (token: string) => Promise<import('../../shared/remote-machines').RemoteActionResult>
+      check: (did: string) => Promise<import('../../shared/remote-machines').RemoteActionResult>
+      remove: (did: string) => Promise<import('../../shared/remote-machines').RemoteActionResult>
+    }
   }
   cli: {
     check: () => Promise<boolean>

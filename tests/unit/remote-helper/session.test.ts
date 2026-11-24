@@ -1,0 +1,213 @@
+/**
+ * A Claude Code SSH tab through the session helper on its machine (plan
+ * 2.1.3-beta.17, section A2; aicc_planning#411), with a fake ssh whose bridge
+ * exec (A1's contract: `aicc-helper bridge --store <folder> --session <sid>`,
+ * exit 3 with no holder) hands back a fake holder's connection: the launch
+ * goes through the host's login shell with no typed line; a dropped link
+ * attaches again once, with the holder's replay; a closed tab sends
+ * term.end; a holder a crash left for the tab's session is ended before a
+ * new one starts; an image paste types nothing.
+ */
+import { describe, it, expect, beforeAll, afterAll } from 'vitest'
+import * as fs from 'fs'
+import * as os from 'os'
+import * as path from 'path'
+import { FakeHolder } from '../main/session-helper-fake-holder'
+import { RemoteHelperPty, remoteSessionId, remoteLaunchSpec, remoteCwd, IMAGE_HELD_BACK_NOTE, RECONNECT_DELAYS_MS } from '../../../src/main/remote-helper/session'
+import type { RemoteMachineRecord } from '../../../src/main/remote-helper/machines'
+import type { HolderRecord } from '../../../src/main/session-helper/protocol'
+import { FakeSsh, type ExecCall, type FakeAnswer } from './fake-ssh'
+
+const SHA = 'a'.repeat(64)
+const MACHINE: RemoteMachineRecord = {
+  did: '0123456789abcdef0123456789abcdef', host: 'rocky.lan', port: 22, user: 'nick', label: 'Rocky', addedAt: 1,
+  os: 'Linux', arch: 'x86_64', home: '/home/nick', shell: '/bin/bash', shellIsSh: true,
+  claudePath: '/home/nick/.npm-global/bin/claude', path: '/home/nick/.npm-global/bin:/usr/bin:/bin', lang: 'C.UTF-8',
+  helper: { version: '0.1.0', sha256: SHA, folder: `0.1.0-${SHA.slice(0, 12)}` }, check: { at: 1, ok: true },
+}
+const INSTALL = 'f'.repeat(32)
+
+let store: string
+beforeAll(() => { store = fs.mkdtempSync(path.join(os.tmpdir(), 'rh-session-')) })
+afterAll(() => { fs.rmSync(store, { recursive: true, force: true }) })
+
+async function until(what: string, ok: () => boolean, ms = 4000): Promise<void> {
+  const start = Date.now()
+  while (!ok()) {
+    if (Date.now() - start > ms) throw new Error(`timed out waiting for ${what}`)
+    await new Promise((r) => setTimeout(r, 10))
+  }
+}
+
+/** The record a holder's `hold --detach` prints on Linux. */
+function linuxRecord(h: FakeHolder): HolderRecord {
+  return { ...h.record(), endpoint: `/tmp/aicc-1000/${h.sid}-0123456789abcdef.sock` }
+}
+
+function holdAnswer(c: ExecCall, h: FakeHolder): FakeAnswer {
+  return { stdout: `AICC-HASH ${c.values[0]} ok ${SHA}\n${JSON.stringify(linuxRecord(h))}\n` }
+}
+
+function tab(ssh: FakeSsh, appPtyId: string, logs: string[] = []) {
+  const spec = remoteLaunchSpec(MACHINE, ['--model', 'opus[1m]'], { CLAUDE_CODE_DISABLE_MOUSE: '1' }, '~/work', 100, 30)
+  const pty = new RemoteHelperPty({ appPtyId, machine: MACHINE, installId: INSTALL, runner: ssh, spec, log: (m) => logs.push(m), reconnectDelaysMs: [10, 10], sleep: (ms) => new Promise((r) => setTimeout(r, ms)) })
+  let out = ''
+  pty.onData((d) => { out += d })
+  let exit: number | null = null
+  pty.onExit((e) => { exit = e.exitCode })
+  return { pty, out: () => out, exit: () => exit }
+}
+
+describe('remote session: the launch', () => {
+  it('a config\'s remote path is made absolute against the host home', () => {
+    expect(remoteCwd('', '/home/n')).toBe('/home/n')
+    expect(remoteCwd('~', '/home/n')).toBe('/home/n')
+    expect(remoteCwd('~/a b', '/home/n')).toBe('/home/n/a b')
+    expect(remoteCwd('/srv/x', '/home/n')).toBe('/srv/x')
+    expect(remoteCwd('proj', '/home/n/')).toBe('/home/n/proj')
+  })
+
+  it('starts the CLI through the host\'s login shell, values as arguments, with the -il PATH, in the tab\'s folder, and nothing typed', async () => {
+    const sid = remoteSessionId('tab-launch')
+    const holder = new FakeHolder(sid, 'tab-launch', store)
+    const ssh = new FakeSsh({ answer: (c) => (c.script === 'hold' ? holdAnswer(c, holder) : { code: 1 }), bridge: () => holder.connect() })
+    const t = tab(ssh, 'tab-launch')
+    await until('the launch', () => holder.launch !== null && holder.attached !== null)
+    expect(holder.launch?.argv).toEqual(['/bin/bash', '-il', '-c', 'exec "$0" "$@"', '/home/nick/.npm-global/bin/claude', '--model', 'opus[1m]'])
+    expect(holder.launch?.cwd).toBe('/home/nick/work')
+    expect(holder.launch?.env).toMatchObject({ HOME: '/home/nick', USER: 'nick', SHELL: '/bin/bash', PATH: '/home/nick/.npm-global/bin:/usr/bin:/bin', TERM: 'xterm-256color', CLAUDE_CODE_DISABLE_MOUSE: '1' })
+    // Its pid is never one on this computer.
+    expect(t.pty.pid).toBe(0)
+    // The hold exec names the helper folder, hash and session; the bridge too.
+    expect(ssh.scripts()).toEqual(['hold', 'bridge'])
+    expect(ssh.calls[0].values.slice(1)).toEqual([MACHINE.did, INSTALL, MACHINE.helper.folder, SHA, sid, 'tab-launch'])
+    expect(ssh.calls[1].values.slice(3)).toEqual([MACHINE.helper.folder, SHA, sid])
+    holder.output('FAKE-CLI READY\r\n')
+    await until('output', () => t.out().includes('FAKE-CLI READY'))
+    t.pty.write('hello\r')
+    await until('input', () => Buffer.concat(holder.input).toString() === 'hello\r')
+    t.pty.resize(120, 40)
+    await until('the resize', () => holder.size?.cols === 120 && holder.size.rows === 40)
+    t.pty.kill()
+    await t.pty.ended
+  })
+})
+
+describe('remote session: a dropped link', () => {
+  it('attaches again from the last byte seen, once, and the replay shows what came meanwhile, each byte once', async () => {
+    const sid = remoteSessionId('tab-drop')
+    const holder = new FakeHolder(sid, 'tab-drop', store)
+    let bridges = 0
+    let detachedAtSecond: boolean | null = null
+    const ssh = new FakeSsh({
+      answer: (c) => (c.script === 'hold' ? holdAnswer(c, holder) : { code: 1 }),
+      bridge: () => {
+        if (++bridges === 2) {
+          // While the link is down the program goes on writing: only the ring has it.
+          detachedAtSecond = holder.attached === null
+          holder.output('two ')
+        }
+        return holder.connect()
+      },
+    })
+    const logs: string[] = []
+    const t = tab(ssh, 'tab-drop', logs)
+    await until('attached', () => holder.attached !== null)
+    holder.output('one ')
+    await until('first output', () => t.out() === 'one ')
+    // The ssh child of the bridge ends (a dropped link).
+    const first = ssh.children[1]
+    expect(t.pty.linkPid).toBe(first.pid)
+    first.kill()
+    await until('attached again', () => holder.attaches === 2 && t.out() === 'one two ')
+    expect(detachedAtSecond).toBe(true)
+    expect(t.pty.linkPid).toBe(ssh.children[2].pid)
+    expect(ssh.scripts()).toEqual(['hold', 'bridge', 'bridge'])
+    const attaches = holder.requests.filter((r) => r.t === 'term.attach')
+    expect(attaches.map((r) => r.from)).toEqual([0, 4])
+    expect(logs.some((l) => l.includes('attaching again from 4'))).toBe(true)
+    holder.output('three')
+    await until('live again', () => t.out() === 'one two three')
+    t.pty.kill()
+    await t.pty.ended
+  })
+
+  it('a bridge that finds no holder (exit 3) is not tried again, and the tab ends', async () => {
+    const sid = remoteSessionId('tab-gone')
+    const holder = new FakeHolder(sid, 'tab-gone', store)
+    let bridges = 0
+    const ssh = new FakeSsh({ answer: (c) => (c.script === 'hold' ? holdAnswer(c, holder) : { code: 1 }), bridge: () => (++bridges === 1 ? holder.connect() : null) })
+    const t = tab(ssh, 'tab-gone')
+    await until('attached', () => holder.attached !== null)
+    ssh.children[1].kill()
+    await until('the end', () => t.exit() !== null, 6000)
+    // One try to come back (it found no holder), then the end's own try: nothing more.
+    expect(ssh.scripts().filter((s) => s === 'bridge').length).toBeLessThanOrEqual(3)
+    expect(RECONNECT_DELAYS_MS.reduce((a, b) => a + b, 0)).toBeLessThan(120_000)
+  })
+})
+
+describe('remote session: the end', () => {
+  it('a closed tab sends term.end, and the holder ends', async () => {
+    const sid = remoteSessionId('tab-close')
+    const holder = new FakeHolder(sid, 'tab-close', store)
+    const ssh = new FakeSsh({ answer: (c) => (c.script === 'hold' ? holdAnswer(c, holder) : { code: 1 }), bridge: () => holder.connect() })
+    const t = tab(ssh, 'tab-close')
+    await until('attached', () => holder.attached !== null)
+    t.pty.kill()
+    await t.pty.ended
+    expect(holder.endsAsked).toBe(1)
+    expect(holder.ended).toBe(true)
+    expect(t.exit()).not.toBeNull()
+  })
+
+  it('a holder an earlier run left for the tab\'s session (hold exits 3) is ended first, then a new one starts: never two CLIs on one conversation', async () => {
+    const sid = remoteSessionId('tab-left')
+    const left = new FakeHolder(sid, 'tab-left', store)
+    left.launch = { t: 'term.launch' }
+    left.child = 'running'
+    const fresh = new FakeHolder(sid, 'tab-left', store)
+    let holds = 0
+    const ssh = new FakeSsh({
+      answer: (c) => {
+        if (c.script === 'hold') return ++holds === 1 ? { code: 3, stdout: `AICC-HASH ${c.values[0]} ok ${SHA}\n` } : holdAnswer(c, fresh)
+        if (c.script === 'list') return { stdout: `AICC-HASH ${c.values[0]} ok ${SHA}\n{"v":1,"sessions":[${JSON.stringify(linuxRecord(left))}],"removed":0,"skipped":0}\n` }
+        return { code: 1 }
+      },
+      bridge: (c) => (c.values[0] && left.ended ? fresh.connect() : left.connect()),
+    })
+    const t = tab(ssh, 'tab-left')
+    await until('the new holder attached', () => fresh.attached !== null)
+    expect(left.endsAsked).toBe(1)
+    expect(left.ended).toBe(true)
+    expect(ssh.scripts().slice(0, 4)).toEqual(['hold', 'list', 'bridge', 'hold'])
+    t.pty.kill()
+    await t.pty.ended
+  })
+
+  it('a helper file that fails its hash check on the host starts nothing: the tab says why and ends', async () => {
+    const ssh = new FakeSsh({ answer: (c) => ({ code: 97, stdout: `AICC-HASH ${c.values[0]} mismatch ${'b'.repeat(64)}\n` }) })
+    const t = tab(ssh, 'tab-bad-hash')
+    await until('the end', () => t.exit() !== null)
+    expect(t.exit()).toBe(1)
+    expect(t.out()).toContain('could not start through the session helper on rocky.lan')
+    expect(t.out()).toContain('did not pass its hash check (mismatch)')
+    expect(ssh.scripts()).toEqual(['hold'])
+  })
+})
+
+describe('remote session: an image paste', () => {
+  it('types nothing into the tab (it has no image fetch tool in this preview) and says so in the tab', async () => {
+    const sid = remoteSessionId('tab-image')
+    const holder = new FakeHolder(sid, 'tab-image', store)
+    const ssh = new FakeSsh({ answer: (c) => (c.script === 'hold' ? holdAnswer(c, holder) : { code: 1 }), bridge: () => holder.connect() })
+    const t = tab(ssh, 'tab-image')
+    await until('attached', () => holder.attached !== null)
+    t.pty.write('I just pasted an image (use mcp__conductor__fetch_host_screenshot with filename="snap.png" to load the image from the Conductor host)\r')
+    expect(t.out()).toContain(IMAGE_HELD_BACK_NOTE)
+    t.pty.write('typed\r')
+    await until('typed input', () => Buffer.concat(holder.input).toString() === 'typed\r')
+    t.pty.kill()
+    await t.pty.ended
+  })
+})
