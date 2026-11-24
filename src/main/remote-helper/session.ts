@@ -225,11 +225,13 @@ export class RemoteDriver implements HelperPtyDriver {
 
   async connect(record: HolderRecord): Promise<HolderConnection> {
     const again = this.connected.has(record.nonce)
-    const delays = again ? [0, ...(this.o.reconnectDelaysMs ?? RECONNECT_DELAYS_MS)] : [0]
+    // A closed tab gets one try (its end, term.end); only a tab still open
+    // waits out a dropped link.
+    const delays = again && !this.closed ? [0, ...(this.o.reconnectDelaysMs ?? RECONNECT_DELAYS_MS)] : [0]
     let last: Error = new Error('no try was made')
     for (const d of delays) {
       if (d > 0) await this.sleep(d)
-      if (this.closed && again) throw new Error('the tab was closed')
+      if (d > 0 && this.closed) break
       try {
         const conn = await this.connectOnce(record)
         this.connected.add(record.nonce)
@@ -265,10 +267,12 @@ export class RemoteDriver implements HelperPtyDriver {
         helloTimeoutMs: BRIDGE_HELLO_MS,
       })
     } catch (err) {
-      opened.stream.destroy()
+      // ssh's exit status first (a bridge that found no holder exits 3, often
+      // just after its output ends), then ssh is ended if it still runs.
       let timer: ReturnType<typeof setTimeout> | undefined
       const r = await Promise.race([opened.result, new Promise<null>((res) => { timer = setTimeout(() => res(null), 2000) })])
       if (timer) clearTimeout(timer)
+      opened.stream.destroy()
       if (r?.code === 3) throw new FinalError(`no holder runs for this tab on ${this.o.machine.host} any more`)
       throw err
     }

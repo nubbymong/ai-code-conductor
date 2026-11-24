@@ -4,13 +4,13 @@
  * SSH path unchanged, and the log says why in one line.
  *
  * Through the helper: the switch is on (Windows), the tab is a Claude Code
- * tab (not Terminal only), its saved config's Connection is SSH (an explicit
- * `detachable: false`: a config with no `detachable` value is SSH Persistent,
- * shared/types.ts SshConfig.detachable), it signs in by key, has no
- * post-connect command, no container and no Windows host, and its host, port
- * and user are a machine added on the Machines page, checked, and holding this
- * build's helper. The SSH branch refuses a provider it does not run before this is
- * asked, so the tab is Claude Code or Terminal only here.
+ * tab (not a plain terminal), its saved config's Connection is SSH (an
+ * explicit `detachable: false`: a config with no `detachable` value is SSH
+ * Persistent, shared/types.ts SshConfig.detachable), it signs in by key, has
+ * no post-connect command, no container and no Windows host, and its host,
+ * port and user are a machine added on the Machines page, checked, and
+ * holding this build's helper. The SSH branch refuses a provider it does not
+ * run before this is asked, so the tab is Claude Code or a plain terminal here.
  *
  * This file imports nothing of Electron.
  */
@@ -37,7 +37,7 @@ export interface RouteInput {
 export const ROUTE_WHY = {
   off: 'the remote sessions switch is off',
   platform: 'remote sessions through the session helper run from Windows only in this preview',
-  shellOnly: 'it is a Terminal only tab, not a Claude Code tab',
+  shellOnly: 'it is a plain terminal (a Terminal only tab or a partner terminal), not a Claude Code tab',
   persistent: 'its saved config\'s Connection is SSH Persistent (a config that never chose one is SSH Persistent); only Connection set to SSH runs through the session helper in this preview',
   container: 'it runs Claude Code in a container',
   postCommand: 'it runs a post-connect command',

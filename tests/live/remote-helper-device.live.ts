@@ -152,8 +152,10 @@ describe('remote helper on a real Linux host', () => {
     // The file there is the installer's, by its hash, in its folder, owner-only.
     const there = sshRun(`sha256sum "$HOME/.aicc/${machine.did}/helper/${helper.folder}/aicc-helper"; stat -c %a "$HOME/.aicc" "$HOME/.aicc/${machine.did}" "$HOME/.aicc/${machine.did}/helper/${helper.folder}/aicc-helper"`)
     note('host-file', there.out)
-    expect(there.out.split(/\s+/)[0]).toBe(helper.sha256)
-    expect(there.out).toMatch(/700\s+700\s+700/)
+    // The account's rc file prints a line first: only the command's own lines are read.
+    const lines = there.out.split(/\r?\n/)
+    expect(lines.find((l) => /^[0-9a-f]{64}\s/.test(l))?.slice(0, 64)).toBe(helper.sha256)
+    expect(lines.filter((l) => /^[0-7]{3}$/.test(l))).toEqual(['700', '700', '700'])
   })
 
   it('a Check passes again with nothing uploaded', async () => {
