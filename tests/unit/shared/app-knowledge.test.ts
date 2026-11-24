@@ -231,7 +231,8 @@ describe('app knowledge after P3.14', () => {
 // P3.15 (rows 70, 71): what the VM run showed. Alt+V with the terminal focused
 // goes to the assistant, which pastes the image itself; with focus elsewhere
 // the app saves the image and types its path (the tip said it always pasted a
-// path into Claude's prompt). Codex's Windows sandbox: only the administrator
+// path into Claude's prompt; from 2.1.3-beta.16, X1.2, a Claude Code session on
+// this computer gets it as its own pasted image). Codex's Windows sandbox: only the administrator
 // setup lets Codex edit on its own; the non-admin one, or none, asks before
 // every edit on Standard and fails on Auto; an elevated app stalls it. Codex's
 // own behaviour, given as a known issue with its workaround, and a tip.
@@ -245,11 +246,11 @@ describe('app knowledge and tips after P3.15', () => {
     // over SSH the app's own path (focus outside the terminal) is the one named.
     expect(t.body).toMatch(/Click into a session on this computer and press \*\*Alt\+V\*\*: the key goes to the assistant, which pastes the image itself/)
     expect(t.body).toMatch(/On an SSH session, press \*\*Alt\+V\*\* with focus outside the terminal: the app saves the image on this computer and asks Claude to fetch it over the connection/)
-    expect(t.body).toMatch(/With focus elsewhere in the app, \*\*Alt\+V\*\* saves the image and types a line with its path into the session/)
-    expect(t.body).toMatch(/On a Codex session the app types it only into an empty Codex prompt, and says why when it cannot/)
+    expect(t.body).toMatch(/With focus elsewhere in the app, \*\*Alt\+V\*\* saves the image and sends it to the session: Claude Code on this computer gets it as its own pasted image \(\[Image #1\]\) with a short sentence, and the app presses Enter/)
+    expect(t.body).toMatch(/On a Codex session the app types a line with its path, only into an empty Codex prompt, and says why when it cannot/)
     const guide = trainingSteps.flatMap((s) => s.highlights ?? []).find((l) => l.startsWith('Alt+V'))!
     expect(guide).not.toMatch(/Claude.s prompt/)
-    expect(guide).toMatch(/in a local session, the assistant pastes it itself; with focus elsewhere, the app saves it and types its path \(over SSH, it asks Claude to fetch it\)/)
+    expect(guide).toMatch(/in a local session, the assistant pastes it itself; with focus elsewhere, the app saves it and a Claude Code session on this computer gets it as its own pasted image \(a Codex session gets its path typed; over SSH, it asks Claude to fetch it\)/)
   })
   it('the known issue gives the Windows sandbox workaround: the administrator setup once, what the other choice does, and never an elevated app', () => {
     const k = body('known-issues')

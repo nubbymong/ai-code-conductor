@@ -196,7 +196,7 @@ export function useKeyboardShortcuts(
             } else if (session?.provider === 'codex') {
               sendImagePathToCodex(sessionId, res.path, (note) => usePasteHintStore.getState().show(sessionId, note))
             } else {
-              // Success is self-evident — the path appears in the prompt (no toast).
+              // Success is self-evident: the image shows in the prompt (Claude Code's [Image #1] for a local session, the typed line over SSH), so no toast.
               sendImageToSession(sessionId, res.path, 'I just pasted an image — please view it.', session?.sessionType)
             }
           } else {

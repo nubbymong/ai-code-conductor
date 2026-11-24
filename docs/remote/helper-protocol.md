@@ -723,8 +723,10 @@ the install folder, as it runs `console-hosts`.
 
 **Capturing the displays (Windows only, from 2.1.3-beta.14).** Protocol change
 2 (ADR-030): a command-line mode on This computer only, display pictures only,
-for Snap (D3, D4). Nothing in the app runs it yet; probe P21 measures it first
-(ADR-030, Probes), and the command line may still change until the app runs it.
+for Snap (D3, D4). From 2.1.3-beta.16 the app runs it for Snap on Windows,
+where the new Snap is the default (`src/main/snap/`), with a 2 s bound after
+which it ends the helper through its own handle; probe P21 measured it first
+(ADR-030, Probes).
 
 ```
 aicc-helper capture --out <folder>
@@ -1452,5 +1454,6 @@ it refuses the field with `bad-field`. The `hook` command line (2.1.3-beta.8)
 is frozen with them: its options, its exit status (always 0) and its silence.
 So is the `mcp` command line (2.1.3-beta.10): its options, its exit status (0
 at the end of its input, 1 otherwise) and a standard output that carries only
-messages. The `capture` command line (2.1.3-beta.14) is not frozen yet: nothing
-in the app runs it.
+messages. The `capture` command line (2.1.3-beta.14) is frozen from
+2.1.3-beta.16, when the app's Snap began to run it (`src/main/snap/`): its
+options, its one line and its exit statuses.

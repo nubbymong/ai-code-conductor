@@ -338,6 +338,51 @@ display of 1024 by 768 at 100%). Not measured: the test machine's own console
 (nobody was signed in there), a session that is not elevated, Windows 11, a
 second scale, mixed scaling.
 
+# Probe P11: does a CLI attach an image from an inserted path like its own paste?
+
+`p11-probe.cjs` with `p11-model-stand-in.cjs` (ADR-030, probe table; it gates
+image paste through an inserted path, S17 and D5). It runs Claude Code and Codex
+on node-pty (on Windows on node-pty's bundled ConPTY, as the app gives a local
+session), in a fresh environment with every per-user folder in the probe's own
+temporary folder, no account and no key of anyone's. Each CLI is pointed at the
+stand-in model, served from the probe on a loopback port. The stand-in records
+whether the turn carries an image and which picture it is: by its SHA-256, or by
+its width and height when a CLI encodes it again. The picture's bytes are never
+kept. Codex runs with `--no-daemon` and the model gpt-5.5, with its update check
+off. Run it on the Windows test machine from a checkout of the repository (its
+node_modules give node-pty and @xterm/headless at the versions package.json
+names; it refuses any other):
+
+```powershell
+node p11-probe.cjs run --root <checkout> --out <folder> --claude <path to claude.exe> --codex <path to codex.exe>
+```
+
+`--only claude` or `--only codex` runs one CLI (a run of Codex alone prints the
+X1.2 line with Claude Code as not run), `--forms` runs a subset of the forms,
+and `--runs` sets the runs per form (3 for a verdict). The picture is a 96 by 64
+JPEG kept in the script. It is written as Snap names one into the app's default
+screenshots folder under the run's own local app data, a path with spaces. Two
+forms get a verdict, 3 runs each: `paste` (the path as a bracketed paste, then a
+space and the sentence 1.5 s later, then Enter 0.7 s after that) and `typed`
+(today's form: the sentence and the path as one write, then Enter). Two more run
+once each, with no verdict: `paste-plain` (a path with no space) and
+`paste-quoted` (the path in double quotes). The decision lines are in the
+script's header and were fixed before measuring: ATTACHES when the turn carried
+the picture in 3 of 3 runs, NOT when it reached the model with no image in 3 of
+3, CANNOT MEASURE when no turn came in 3 of 3, otherwise NO VERDICT. It cleans up
+after each run and at its end. A process counts as its own only when it started
+after its parent, and each is stopped only after its name and start time are
+checked. The last lines are `P11 Claude Code ...`, `P11 Codex ...`,
+`P11 FOR X1.2: ...` and `P11 RESULT: ...`, or
+`P11 RESULT: COULD NOT RUN - <reason>`. When something was left,
+`; clean-up incomplete: <what>` is added and the exit code is 2. The record is
+`p11-result.json`, with personal paths written as placeholders and the probe
+code named by the sha256 of its two files.
+
+The answer is in ADR-030 after the P21 results. On the Windows test machine
+(2026-11-23; Claude Code 2.1.330, Codex 0.157.1), both CLIs ATTACH the path as a
+bracketed paste and do NOT attach it as typed text, 3 of 3 runs each.
+
 # Probes P3 and P6: does a holder outlive the ssh logout, and is an exec's PATH the login PATH?
 
 `p3-p6-linux.cjs` (ADR-030, probe table; P3 gates remote sessions through the
