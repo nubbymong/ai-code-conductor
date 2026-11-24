@@ -77,10 +77,11 @@
  *      app when its nearer page picture is closer than half the gap between
  *      the two (each box must). The app's window is kept on top for D12's
  *      presses, as it is when its user clicks its menu. First a control, a
- *      test-only copy of the menu left on screen 300 ms after the Rectangle
- *      click (a menu whose close is late), the page not slowed: the menu is
- *      seen in all 6 pictures (Rectangle and Whole screen, 3 runs each), so the
- *      check can fail. Then the page's CPU slowed by CDP
+ *      test-only copy of the menu left on screen until the overlay is up (a
+ *      menu that has not closed when the picture is taken), the page not
+ *      slowed: the menu is seen in all 6 pictures (Rectangle and Whole
+ *      screen, 3 runs each), so the check can fail. Then the page's CPU slowed
+ *      by CDP
  *      (Emulation.setCPUThrottlingRate) at 4x and at 20x, from just before the
  *      Rectangle click until the overlay is up: 3 runs each of Rectangle and
  *      Whole screen at each rate, and the menu is seen in none of the 12. The
@@ -90,10 +91,10 @@
  *      pixels, or the box was not read. One test, so a red press still leaves
  *      every reading; it runs last, so a red one skips nothing.
  *      Before the fix (run 45349991502 on 60e1b1ae, one 1024x768 display at
- *      100%): the slowing read 4.4x and 25x; the control seen 6 of 6; the
- *      menu in 0 of 6 pictures at 4x and in 6 of 6 at 20x (3 Rectangle, 3
- *      Whole screen), as the press asked for the capture in the same task
- *      that closed the menu. The fix (ScreenshotButton.tsx afterTwoFrames)
+ *      100%): the slowing read 4.4x and 25x; the control (then a copy left
+ *      300 ms after the click) seen 6 of 6; the menu in 0 of 6 pictures at 4x
+ *      and in 6 of 6 at 20x (3 Rectangle, 3 Whole screen), as the press asked
+ *      for the capture in the same task that closed the menu. The fix (ScreenshotButton.tsx afterTwoFrames)
  *      asks only after the page has drawn the close.
  * READINGS (recorded): R1, what main has loaded once the app has started and
  *   its tab runs (before any press): the native add-ons (.node files, from
@@ -454,10 +455,7 @@ const noPressFolder = () => expect(fs.existsSync(path.join(ctx!.dataDir, 'electr
 const MENU_PIXEL_GAP = 48
 /** A box whose two page pictures differ on fewer pixels than this is not read. */
 const MENU_MIN_PIXELS = 50
-/** The control's late close (the plan review's finding 11: the menu's close
- *  delayed 300 ms). */
-const MENU_COPY_MS = 300
-/** D12's three parts: the control (the page not slowed, the late copy of the
+/** D12's three parts: the control (the page not slowed, the copy of the
  *  menu), then the page's CPU slowed 4 and 20 times (plan C3). */
 const MENU_PARTS = [{ rate: 1, copy: true }, { rate: 4, copy: false }, { rate: 20, copy: false }] as const
 
@@ -497,10 +495,12 @@ const pagePicture = async (box: Box): Promise<string> =>
 /** Two frames on the page: what it changed before them is drawn. */
 const twoFrames = () => ctx!.page.evaluate(() => new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r()))))
 
-/** The control: a copy of the open menu laid over it, left on screen `ms`
- *  after the page's next click (the Rectangle click), as a menu whose close is
- *  late would be. Test only: hidden from the page's roles, never clicked. */
-const keepMenuCopy = (ms: number) => ctx!.page.evaluate((lateMs) => {
+/** The control: a copy of the open menu laid over it, left on screen until
+ *  dropMenuCopy takes it away once the overlay is up, so it is there when the
+ *  picture is taken; not on a clock, as the helper's time varies (37 to 432 ms
+ *  in six runs' readings). Test only: hidden from the page's roles, never
+ *  clicked. */
+const keepMenuCopy = () => ctx!.page.evaluate(() => {
   const menu = Array.from(document.querySelectorAll('button'))
     .find((b) => (b.textContent ?? '').trim() === 'Rectangle' && !b.closest('[data-snap-menu-copy]'))?.parentElement
   if (!menu) throw new Error('no Snap menu to copy')
@@ -511,8 +511,12 @@ const keepMenuCopy = (ms: number) => ctx!.page.evaluate((lateMs) => {
   copy.setAttribute('data-snap-menu-copy', '')
   Object.assign(copy.style, { position: 'fixed', left: `${b.left}px`, top: `${b.top}px`, bottom: 'auto', width: `${b.width}px`, height: `${b.height}px`, margin: '0', zIndex: '2147483647', pointerEvents: 'none' })
   document.body.appendChild(copy)
-  document.addEventListener('click', () => { setTimeout(() => copy.remove(), lateMs) }, { capture: true, once: true })
-}, ms)
+})
+
+/** Takes the control's copy of the menu away. */
+const dropMenuCopy = () => ctx!.page.evaluate(() => {
+  for (const el of Array.from(document.querySelectorAll('[data-snap-menu-copy]'))) el.remove()
+})
 
 /** Sets the app page's CPU slowing (CDP Emulation.setCPUThrottlingRate; 1 is
  *  none), through Playwright's CDP session, or main's own debugger when that
@@ -588,7 +592,7 @@ const readMenuBox = (file: string, crop: Box | null, open: string, closed: strin
 /** One D12 press: the menu's box and the page's two pictures of it (open with
  *  Rectangle under the pointer, as at the click; then closed again), the
  *  press (the page slowed to `rate` from just before the Rectangle click until
- *  the overlay is up; with `copy`, the control's late copy of the menu), the
+ *  the overlay is up; with `copy`, the control's copy of the menu), the
  *  answer (Rectangle drawn over the box, or Whole screen), and the saved
  *  picture's box read. Its three pictures go to $SNAP_E2E_OUT/menu. */
 async function pressReadingMenu(label: string, answerWith: MenuAnswer, rate: number, copy: boolean, cpu: (rate: number) => Promise<void>): Promise<MenuRead> {
@@ -613,13 +617,17 @@ async function pressReadingMenu(label: string, answerWith: MenuAnswer, rate: num
       menuOpen: async () => {
         expect((await menuBox()).screen, 'the menu opens where it was read').toEqual(menu.screen)
         await rectangleItem().hover()
-        if (copy) await keepMenuCopy(MENU_COPY_MS)
+        if (copy) await keepMenuCopy()
         await cpu(rate)
       },
-      overlayUp: () => cpu(1),
+      overlayUp: async () => {
+        await cpu(1)
+        if (copy) await dropMenuCopy()
+      },
     })
   } finally {
     await cpu(1)
+    if (copy) await dropMenuCopy().catch(() => undefined)
   }
   const { overlay, display, from } = pressed!
   const s = display.scaleFactor
@@ -940,7 +948,7 @@ test.describe('Snap on Windows', () => {
     expect(r.pngSize).toEqual({ width: 6, height: 4 })
   })
 
-  test('D12 MENU OUT OF THE PICTURE: the control\'s late menu is seen in every picture, and with the page slowed 4 and 20 times the menu is in none', async () => {
+  test('D12 MENU OUT OF THE PICTURE: the control\'s menu is seen in every picture, and with the page slowed 4 and 20 times the menu is in none', async () => {
     test.setTimeout(MENU_PARTS.length * RUNS * 2 * PRESS_TEST_MS + 60_000)
     // The app's window over every other, as it is when its user clicks its
     // menu. In run 45348436201 it was on top at D2 (overlay-mid-drag.png) but
@@ -979,7 +987,7 @@ test.describe('Snap on Windows', () => {
     expect(slowing.filter((s) => s.atRateMs * 2 < s.atOneMs * s.rate), 'the page slowed to at least half of each rate').toEqual([])
     expect(reads.filter((r) => r.differing < MENU_MIN_PIXELS).map((r) => r.label), 'every box read: its two page pictures differ').toEqual([])
     expect(reads.filter((r) => !r.app).map((r) => r.label), 'every box shows the app, not another window').toEqual([])
-    expect(reads.filter((r) => r.copy && !r.seen).map((r) => r.label), 'the control: the late copy of the menu is seen').toEqual([])
+    expect(reads.filter((r) => r.copy && !r.seen).map((r) => r.label), 'the control: the copy of the menu is seen').toEqual([])
     expect(reads.filter((r) => !r.copy && r.seen).map((r) => r.label), 'the menu is in no picture of the slowed page').toEqual([])
   })
 })
