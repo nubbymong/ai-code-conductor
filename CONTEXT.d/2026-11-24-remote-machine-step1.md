@@ -1,8 +1,8 @@
 ## 2026-11-24 -- remote step 1: a Linux machine added once, and a Claude Code SSH tab through the session helper there (A2.1)
 
-Plan 2.1.3-beta.17 section A2, aicc_planning#411; its first build step (A2.1).
-The bridge mode itself is A1's (aicc_planning#410); A2.2 merges A1's frozen
-branch and runs remote-helper-e2e with the real bridge.
+Plan 2.1.3-beta.17 section A2, aicc_planning#411; its first build step (A2.1),
+then A2.2 (below). The bridge mode itself is A1's (aicc_planning#410), merged
+into this branch in A2.2.
 
 What was built:
 - `src/main/remote-helper/` (no Electron import): one-shot ssh execs with the
@@ -38,5 +38,30 @@ Decided while building (recorded for the aggregate's docs):
 - No read-back hash: a host with no sha256sum, shasum or openssl is refused at
   Add (each start hashes the file with the same tool).
 - A tab through the helper has no status line, usage, app tools, hook events or
-  image paste in this preview; an image paste or Snap types nothing and the tab
-  says so; prompt buttons and broadcast type as into any Claude Code tab.
+  image paste in this preview; an image paste, Snap or screenshot storyboard
+  types nothing and the tab says so; prompt buttons and broadcast type as into
+  any Claude Code tab.
+
+A2.2 (A1 joined, the device check green):
+- A1's frozen branch (aad6cc3b) is merged in (a merge commit; no textual
+  conflict). The one semantic difference: a dev run now reads the helper and
+  its manifest where A1's scripts put them (helper/target/helper-linux-musl/
+  aicc-helper, helper/target/helper-manifest/manifest.json); a package keeps
+  resources/helper. The job writes the manifest with A1's writer, and the
+  device check reads the helper through the app's own manifest reader.
+- remote-helper-e2e on this branch (retries 0): run 45335138014 red (the test
+  killed the link after a 240 KB flood had already arrived, and closed the
+  tab in that moment); run 45336099500 red (its last count matched its own
+  command line); run 45336427954 green, 6 of 6: Add, Check, another
+  install's Remove refused, the fake CLI session (rc variable, a link killed
+  at rest and back), a shell session (resize; 20,000 lines printed while the
+  bridge was stopped, then the link killed: "attaching again from 258", every
+  line once, none seen before), Remove, nothing left.
+- Found by the first run and fixed in the app: a tab closed just as its link
+  drops sent its term.end into the dead link, and the holder ran on until its
+  away clock. Such an end now goes once more on a new link.
+- Found while writing finding 6's tests and fixed: a write longer than 256
+  bytes is sliced by writePty, so the image request could be split and the
+  rest typed; the write door (pty:write) now holds the whole request back
+  first, and the screenshot menu sends one request instead of its line by
+  line storyboard on such a tab.

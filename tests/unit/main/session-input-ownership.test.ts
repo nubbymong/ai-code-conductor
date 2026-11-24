@@ -168,6 +168,11 @@ const ALLOWED: Record<string, Record<string, Allowed>> = {
     write: { count: 1, why: "the session helper's transport: a held terminal's input, as raw input frames, or into the direct terminal", until: 'stays' },
     fallBack: { count: 1, why: "the session helper's transport: the input queued before a fall back to a direct terminal", until: 'stays' },
   },
+  // 2.1.3-beta.17 (plan section A2): a remote tab's terminal is a HelperPty
+  // behind RemoteHelperPty, which writePty reaches as the tab's ptyProcess.
+  'src/main/remote-helper/session.ts': {
+    write: { count: 1, why: "the remote session helper's transport: a remote tab's input, handed on to its HelperPty over the bridge (writePty reaches it as the tab's PTY)", until: 'stays' },
+  },
 }
 
 type N = { type: string; start: number; loc?: { start: { line: number } }; [k: string]: any }

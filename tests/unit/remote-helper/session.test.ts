@@ -5,8 +5,9 @@
  * exit 3 with no holder) hands back a fake holder's connection: the launch
  * goes through the host's login shell with no typed line; a dropped link
  * attaches again once, with the holder's replay; a closed tab sends
- * term.end; a holder a crash left for the tab's session is ended before a
- * new one starts; an image paste types nothing.
+ * term.end, even one closed just as its link drops (the end goes once more
+ * on a new link); a holder a crash left for the tab's session is ended
+ * before a new one starts; an image paste types nothing.
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
 import * as fs from 'fs'

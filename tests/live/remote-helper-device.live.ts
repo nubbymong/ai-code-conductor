@@ -295,10 +295,11 @@ describe('remote helper on a real Linux host', () => {
     const r = await machines.remove(machine.did)
     note('remove', r)
     expect(r.ok, r.message).toBe(true)
-    // pgrep -f reads every process's command line, the shell running this
-    // check's own included: with the device folder's path written out in the
-    // command, that shell (and the subshell of its pipe) matched it. Kept as a
-    // reading, not a check, so the record shows what such a match is.
+    // pgrep -f reads every process's command line: with the device folder's
+    // path written out in the command, the shell running it on the host
+    // matched, and so did this test's own ssh client when the host is this
+    // machine (the CI job's localhost sshd; run 45336427954's reading lists
+    // both). Kept as a reading, not a check, so the record shows such a match.
     note('self-match', sshRun(`pgrep -a -f -- "[.]aicc/${machine.did}"; test -e "$HOME/.aicc/${machine.did}" || true`).out)
     // So the device id is given as $D: this check's own command line never
     // holds ".aicc/<did>", and the processes it lists are the run's own.
