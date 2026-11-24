@@ -43,7 +43,7 @@ use aicc_helper::serve::{self, Options};
 use aicc_helper::store::{self, DEFAULT_AWAY_SECS, MAX_AWAY_SECS};
 use aicc_helper::{client, detach, hook, relay, selftest, VERSION};
 use std::ffi::OsString;
-use std::io::Read;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::mpsc;
@@ -111,14 +111,16 @@ impl Args {
     }
 }
 
+// `fail` and `usage` write with writeln!, not eprintln!: eprintln! panics
+// when standard error is closed (a bridge whose ssh link dropped, for one),
+// and the exit status would be 101, not the command's own.
 fn fail(msg: &str) -> ExitCode {
-    eprintln!("aicc-helper: {msg}");
+    let _ = writeln!(std::io::stderr(), "aicc-helper: {msg}");
     ExitCode::from(1)
 }
 
 fn usage(msg: &str) -> ExitCode {
-    eprintln!("aicc-helper: {msg}");
-    eprintln!("{USAGE}");
+    let _ = writeln!(std::io::stderr(), "aicc-helper: {msg}\n{USAGE}");
     ExitCode::from(2)
 }
 

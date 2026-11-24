@@ -4,7 +4,9 @@
 //! on another machine. The test stands in for the app on the far side of the
 //! bridge's pipes: a holder of the fake CLI started with `hold --detach` for
 //! the protocol exchange, and a stand-in holder on a real endpoint where the
-//! test needs exact bytes both ways, or a holder that never closes.
+//! test needs exact bytes both ways, a holder that never closes, or more
+//! than the bridge's queue for standard output holds. A standard error that
+//! cannot be written leaves every exit status as documented.
 //!
 //! On Windows the mode does not run: it exits 1.
 
@@ -19,12 +21,20 @@ fn the_bridge_does_not_run_on_windows_and_exits_1() {
         let out = Command::new(HELPER).args(args).stdin(Stdio::null()).output().expect("run the helper");
         assert_eq!(out.status.code(), Some(1), "{args:?}: {}", String::from_utf8_lossy(&out.stderr));
         assert!(out.stdout.is_empty(), "{args:?} printed on standard output");
+        // A standard error that cannot be written changes nothing: 1, not
+        // 101 from a panic.
+        let (read_end, write_end) = std::io::pipe().expect("a pipe");
+        drop(read_end);
+        let out = Command::new(HELPER).args(args).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(write_end).output().expect("run the helper");
+        assert_eq!(out.status.code(), Some(1), "{args:?} with standard error closed: {}", out.status);
+        assert!(out.stdout.is_empty(), "{args:?} printed on standard output");
     }
 }
 
 #[cfg(unix)]
 mod on_unix {
     use super::{Command, Stdio, HELPER};
+    use aicc_helper::bridge::MAX_QUEUED;
     use aicc_helper::client::{self, Client};
     use aicc_helper::frame::{self, Body, Direction, Frame};
     use aicc_helper::hello::{self, LOCAL_CAPS, MAX_HELLO_LINE};
@@ -333,19 +343,36 @@ mod on_unix {
 
         /// The bridge's exit status, within `limit`.
         fn wait(&mut self, limit: Duration) -> ExitStatus {
-            let until = Instant::now() + limit;
-            loop {
-                if let Some(status) = self.child.try_wait().expect("ask for the bridge's status") {
-                    return status;
-                }
-                if Instant::now() >= until {
-                    let _ = self.child.kill();
-                    let _ = self.child.wait();
-                    panic!("the bridge did not exit within {limit:?}");
-                }
-                thread::sleep(Duration::from_millis(20));
-            }
+            exit_within(&mut self.child, limit)
         }
+    }
+
+    /// A bridge's exit status, within `limit`; past it the bridge is ended
+    /// and the test fails.
+    fn exit_within(child: &mut Child, limit: Duration) -> ExitStatus {
+        let until = Instant::now() + limit;
+        loop {
+            if let Some(status) = child.try_wait().expect("ask for the bridge's status") {
+                return status;
+            }
+            if Instant::now() >= until {
+                let _ = child.kill();
+                let _ = child.wait();
+                panic!("the bridge did not exit within {limit:?}");
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
+    }
+
+    /// Write `len` bytes to `s`, `block` over and over, then flush.
+    fn send_repeated(s: &mut impl Write, block: &[u8], len: usize) -> std::io::Result<()> {
+        let mut left = len;
+        while left > 0 {
+            let n = left.min(block.len());
+            s.write_all(&block[..n])?;
+            left -= n;
+        }
+        s.flush()
     }
 
     impl Drop for Bridge {
@@ -577,6 +604,107 @@ mod on_unix {
         let status = b.wait(WAIT);
         assert_eq!(status.code(), Some(1), "{status}");
         assert!(b.rest().is_empty(), "the bridge printed something of its own");
+        let _ = release_tx.send(());
+    }
+
+    /// A standard error that cannot be written, as once the ssh link has
+    /// dropped and sshd has closed all three pipes: the bridge still exits
+    /// with its own status, 3 with no holder and 2 on a usage error, never
+    /// 101 from a panic.
+    #[test]
+    fn a_closed_standard_error_does_not_change_the_exit_status() {
+        let _serial = one_at_a_time();
+        let store_dir = Folder::new("closed-stderr");
+        store::prepare(&store_dir.0).expect("a store");
+        let dir = store_dir.arg();
+        let cases: [(&[&str], i32); 2] = [(&["bridge", "--store", dir.as_str(), "--session", "brdg-0008"], 3), (&["bridge", "--store", dir.as_str()], 2)];
+        for (args, code) in cases {
+            let (read_end, write_end) = std::io::pipe().expect("a pipe");
+            drop(read_end);
+            let out = Command::new(HELPER).args(args).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(write_end).output().expect("run the bridge");
+            assert_eq!(out.status.code(), Some(code), "{args:?} with standard error closed: {}", out.status);
+            assert!(out.stdout.is_empty(), "{args:?}: printed on standard output");
+        }
+    }
+
+    /// The queue for standard output counts only what standard output has
+    /// not taken yet: more than `MAX_QUEUED` passes in all while standard
+    /// output keeps reading. A stand-in holder sends five eighths of the
+    /// bound, waits until the test has read all of it, sends as much again
+    /// and closes.
+    #[test]
+    fn more_than_the_queue_bound_passes_in_all_when_standard_output_is_read() {
+        let _serial = one_at_a_time();
+        let store_dir = Folder::new("past-bound");
+        let sid = "brdg-0009";
+        let listener = Listener::bind(sid).expect("listen");
+        write_record(&store_dir, sid, listener.endpoint(), std::process::id());
+        let part = MAX_QUEUED * 5 / 8;
+        let block = pattern(1024 * 1024, 7);
+        let sending = block.clone();
+        let (go_tx, go) = mpsc::channel::<()>();
+        thread::spawn(move || {
+            if let Ok(mut s) = listener.accept() {
+                if send_repeated(&mut s, &sending, part).is_ok() && go.recv_timeout(Duration::from_secs(60)).is_ok() {
+                    let _ = send_repeated(&mut s, &sending, part);
+                }
+                // Dropped here: the stand-in closes the connection.
+            }
+        });
+
+        let mut b = Bridge::start(&store_dir, sid);
+        let until = Instant::now() + WAIT;
+        while b.buf.len() < part {
+            assert!(b.fill(until), "only {} of the first {part} bytes came through the bridge", b.buf.len());
+        }
+        let _ = go_tx.send(());
+        let out = b.rest();
+        let status = b.wait(WAIT);
+        assert_eq!(out.len(), 2 * part, "standard output carried {} of {} bytes; the bridge exited {status}", out.len(), 2 * part);
+        assert!(out.chunks(block.len()).all(|c| c == &block[..c.len()]), "what the holder sent did not reach standard output as it was");
+        assert_eq!(status.code(), Some(0), "{status}");
+    }
+
+    /// Standard output that is never read: once more than `MAX_QUEUED` is
+    /// waiting for it, the bridge ends the connection and exits 1, saying
+    /// why, though the holder still holds the connection open.
+    #[test]
+    fn standard_output_not_read_past_the_bound_gets_exit_1() {
+        let _serial = one_at_a_time();
+        let store_dir = Folder::new("bound");
+        let sid = "brdg-0010";
+        let listener = Listener::bind(sid).expect("listen");
+        write_record(&store_dir, sid, listener.endpoint(), std::process::id());
+        let (release_tx, release) = mpsc::channel::<()>();
+        thread::spawn(move || {
+            if let Ok(mut s) = listener.accept() {
+                // A write fails once the bridge has ended the connection.
+                let _ = send_repeated(&mut s, &pattern(1024 * 1024, 7), MAX_QUEUED + 16 * 1024 * 1024);
+                // Hold the connection open until the test is done.
+                let _ = release.recv_timeout(Duration::from_secs(60));
+            }
+        });
+
+        let mut child = Command::new(HELPER)
+            .args(["bridge", "--store", &store_dir.arg(), "--session", sid])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("start the bridge");
+        // Standard input stays open, and standard output open and unread.
+        let _stdin = child.stdin.take();
+        let _stdout = child.stdout.take();
+        let mut stderr = child.stderr.take().expect("its standard error");
+        let said = thread::spawn(move || {
+            let mut text = String::new();
+            let _ = stderr.read_to_string(&mut text);
+            text
+        });
+        let status = exit_within(&mut child, WAIT);
+        let said = said.join().unwrap_or_default();
+        assert_eq!(status.code(), Some(1), "{status}: {said}");
+        assert!(said.contains("more than 64 MiB behind the holder"), "standard error: {said:?}");
         let _ = release_tx.send(());
     }
 }

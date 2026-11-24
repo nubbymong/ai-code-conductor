@@ -106,7 +106,9 @@ pub fn run(store_dir: &Path, sid: &str) -> u8 {
 }
 
 fn said(code: u8, msg: &str) -> u8 {
-    eprintln!("aicc-helper: bridge: {msg}");
+    // Not eprintln!: it panics when standard error is closed, as it is once
+    // the ssh link has dropped, and the exit status would be 101.
+    let _ = writeln!(io::stderr(), "aicc-helper: bridge: {msg}");
     code
 }
 
