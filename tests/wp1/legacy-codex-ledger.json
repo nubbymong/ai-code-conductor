@@ -1,8 +1,8 @@
 {
   "schema": "wp1-legacy-codex-ledger/2",
   "predicateDigest": "100a1233edebdc39a5f9004d3fba980a89ebb15b25872e52076386bc84b03153",
-  "manifestPathDigest": "48ae371eb0f77efcbe1443dd92509ffb4bc4133be5cd591ad4a8ae2ead6ad536",
-  "manifestHead": "cfe6ee002091200720e660b8809afdc4e6ef5b50",
+  "manifestPathDigest": "3de083bf177f93a88504fb99a6739568b6b03100d6a634095f482ebe8687318c",
+  "manifestHead": "b62cb389dfba5c871a51f1306d05e432596be8e2",
   "dispositions": {
     "retain": "unchanged observable behaviour, characterization proof",
     "move": "moved behind a package boundary and/or adapted at the call site, regression proof (newPath when relocated)",
@@ -11692,6 +11692,16 @@
       "disposition": "added",
       "evidence": "new WP2 P3 usage track MP6 (owner decision 2026-09-27, docs/wp1/owner-decisions-2026-09-27.md; the approved canvas, usage footer settings, D2, Q1.5) test (tests/unit/renderer/strip-usage-consistency.test.ts): the strip reads Weekly, D2, the placeholder for any reporting provider and the Q1.5 cost wording (WP1.68)",
       "note": ""
+    },
+    {
+      "path": "tests/unit/renderer/terminal-line-selection.test.ts",
+      "predicates": [
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "test created by 2.1.3-beta.17 section C10 (aicc_planning#422), after the WP1 baseline; section C11 (aicc_planning#424) join fix: one guard test names the erase Codex sends when it redraws (ESC[1;1H ESC[J) as the bytes it writes to the app's xterm in jsdom; a terminal selection kept across a change of the columns, no Codex code path (WP1.67); tests/unit/renderer/terminal-line-selection.test.ts",
+      "note": "matched since 2.1.3-beta.17 section C11 (was not matched); P13: one test title"
     },
     {
       "path": "tests/unit/renderer/terminalview-account-launch.test.tsx",
