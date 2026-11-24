@@ -130,7 +130,9 @@ function liveRun(sessionId: string): CodexRun | null {
 
 /** The models the session's footer may name: the one Codex reported, the
  *  one it was started on, and the registry's Codex list (a Default launch
- *  shows Codex's own choice, a /model pick a listed one). */
+ *  shows Codex's own choice, a /model pick a listed one). The footer is
+ *  matched against them in either case (Codex 0.157.1 shows gpt-5.5 as
+ *  "GPT-5.5": shared/codex-screen.ts, footerRe). */
 function sessionFooterModels(sessionId: string): readonly string[] | null {
   const s = useSessionStore.getState().sessions.find((x) => x.id === sessionId)
   const own = [s?.modelName, s?.codexOptions?.model].filter((m): m is string => typeof m === 'string' && m.length > 0)
