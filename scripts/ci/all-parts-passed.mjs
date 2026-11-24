@@ -2,7 +2,8 @@
 // `Test (windows-2025)` is a required check (ADR-028). The Windows suite runs
 // in parts, each a job of its own (ci.yml): `test-windows-part` splits the unit
 // suite with vitest --shard, and `test-windows-build` runs the typecheck, the
-// native tests, the build and, on a release/* branch, the installer. The job
+// native tests and the build (the release/* test installer is a job of its own,
+// `release-windows-installer`, which this check never waits for). The job
 // named `Test (windows-2025)` needs all of them, starts whatever they ended
 // with (`always()`, a run cancelled as a whole included), and runs this, so
 // the required check passes only when every part did.

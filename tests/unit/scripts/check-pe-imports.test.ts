@@ -453,7 +453,8 @@ describe('every Windows build of the shipped helper is checked right after it is
   })
 
   it('ci.yml release/* test installer: after the build, under the same condition, before it is packaged', () => {
-    const steps = stepsOf(wf['.github/workflows/ci.yml'].jobs['test-windows-build'])
+    // Its own job from 2.1.3-beta.17 (it needs the static Linux helper's job).
+    const steps = stepsOf(wf['.github/workflows/ci.yml'].jobs['release-windows-installer'])
     const build = steps.findIndex(runsCargoBuild)
     expect(build).toBeGreaterThan(0)
     const check = steps[build + 1]

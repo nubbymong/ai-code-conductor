@@ -17,7 +17,8 @@
 //! bytes, can be cloned for a second thread, takes a read timeout, writes a
 //! whole message within one time limit however slowly the peer reads
 //! (`write_all_within`; the holder uses `WRITE_TIMEOUT`), and `shutdown` from
-//! any clone wakes a blocked reader.
+//! any clone wakes a blocked reader. On macOS and Linux `shutdown_write` ends
+//! the writing half alone (the bridge, `bridge.rs`).
 
 use std::time::Duration;
 

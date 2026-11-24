@@ -229,8 +229,9 @@ describe('ci.yml: Cargo.lock, --locked and the artifacts', () => {
 /**
  * The static Linux helper (plan 2.1.3-beta.13 C2, aicc_planning#377): the
  * Linux leg also builds the helper for musl, checks the file is static and
- * uploads it as helper-linux-musl, for probes P3 and P6 on remote hosts.
- * Nothing ships it.
+ * uploads it as helper-linux-musl, first for probes P3 and P6 on remote
+ * hosts. From 2.1.3-beta.17 the Windows installer carries that file, built by
+ * release.yml with these steps word for word (helper-release-job.test.ts).
  *
  * Not checked here: that the musl build links, and that readelf prints what
  * the check looks for. Only CI builds Rust; the check step runs itself on the

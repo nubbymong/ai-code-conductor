@@ -470,15 +470,34 @@ describe('ci.yml: a docs-only change skips the suite on Windows and macOS, and t
     const python = (job: Job) => job.steps.filter((s) => /^actions\/setup-python@/.test(s.uses ?? '') || /\bpip\b/.test(s.run ?? ''))
     for (const [id, job] of [['test-windows-part', part], ['test-windows-build', build]] as Array<[string, Job]>) expect(python(job), id).toEqual([])
     expect(python(test)).toHaveLength(2)
-    expect(build.steps.find((s) => s.name === 'Package Windows installer (release/* branches only)')!.run).toContain('--config.npmRebuild=false')
+    // The Windows test installer is packaged in a job of its own (from
+    // 2.1.3-beta.17), which needs the static Linux helper's job: the same
+    // rules as the build job for native code, with no Python.
+    const installer = ci.jobs['release-windows-installer']
+    expect(python(installer)).toEqual([])
+    expect(installer.steps.find((s) => s.name === 'Package Windows installer (release/* branches only)')!.run).toContain('--config.npmRebuild=false')
+    expect(installer.steps.find((s) => s.name === 'Install dependencies')!.run).toBe('npm ci --ignore-scripts')
     expect(build.steps.find((s) => s.name === 'Install dependencies')!.run).toBe('npm ci --ignore-scripts')
-    // The installers: macOS in the test job, Windows in the build job, each on a release/* branch only.
-    expect(on(build, 'Package Windows installer (release/* branches only)', 'Windows', 'release/v2.1.3')).toBe(true)
-    expect(on(build, 'Package Windows installer (release/* branches only)', 'Windows')).toBe(false)
-    expect(on(build, 'Verify native modules unpacked (release/* branches only)', 'Windows', 'release/v2.1.3')).toBe(true)
-    expect(on(build, 'Verify native modules unpacked (release/* branches only)', 'Windows')).toBe(false)
-    expect(on(build, 'Upload Windows installer', 'Windows', 'release/v2.1.3')).toBe(true)
-    expect(on(build, 'Upload Windows installer', 'Windows')).toBe(false)
+    // The installers: macOS in the test job, Windows in its own job, each on a release/* branch only.
+    const fromRelease = (ctx: GhaContext): GhaContext => ({ ...ctx, github: { ...(ctx.github as Record<string, unknown>), head_ref: 'release/v2.1.3' } })
+    for (const id of ['release-windows-installer', 'release-helper-linux']) {
+      expect(runs(id, fromRelease(pr('synchronize', { labels: ['ci-run'] }))), `${id}: a release/* PR with ci-run`).toBe(true)
+      expect(runs(id, fromRelease(pr('labeled', { labels: ['ci-run'], label: 'ci-run' }))), `${id}: ci-run added to a release/* PR`).toBe(true)
+      expect(runs(id, pr('synchronize', { labels: ['ci-run'] })), `${id}: another branch`).toBe(false)
+      expect(runs(id, fromRelease(pr('synchronize'))), `${id}: no ci-run`).toBe(false)
+      expect(runs(id, fromRelease(pr('labeled', { labels: ['ci-run', 'in-beta'], label: 'in-beta' }))), `${id}: another label`).toBe(false)
+      expect(runs(id, fromRelease(textEdited({ labels: ['ci-run'] }))), `${id}: a text edit`).toBe(false)
+      expect(runs(id, push()), `${id}: a push`).toBe(false)
+      expect(runs(id, dispatch()), `${id}: a dispatch`).toBe(false)
+    }
+    // Nothing the required checks wait for needs them, and the build job packages nothing now.
+    for (const [id, job] of Object.entries(ci.jobs)) {
+      if (id !== 'release-windows-installer') expect(([] as unknown[]).concat(job.needs ?? []), id).not.toContain('release-windows-installer')
+    }
+    expect(installer.needs).toBe('release-helper-linux')
+    for (const name of ['Package Windows installer (release/* branches only)', 'Verify native modules unpacked (release/* branches only)', 'Upload Windows installer']) {
+      expect(build.steps.some((s) => s.name === name), `build: ${name}`).toBe(false)
+    }
     expect(on(test, 'Package macOS DMG (release/* branches only)', 'macOS', 'release/v2.1.3')).toBe(true)
     expect(on(test, 'Package macOS DMG (release/* branches only)', 'macOS')).toBe(false)
     expect(on(test, 'Upload macOS DMG', 'Linux', 'release/v2.1.3')).toBe(false)
@@ -644,7 +663,8 @@ describe('release.yml: a beta release reuses green CI for the same tree; a stabl
 
   it('the two jobs that run the suite wait for the lookup, and skip the suite on beta only, on the literal true only', () => {
     for (const id of ['build-windows', 'build-linux']) {
-      expect(release.jobs[id].needs, id).toEqual(['gate', 'ci-reuse'])
+      // build-windows also needs the static Linux helper it packages (2.1.3-beta.17).
+      expect(release.jobs[id].needs, id).toEqual(id === 'build-windows' ? ['gate', 'ci-reuse', 'helper-linux'] : ['gate', 'ci-reuse'])
       const steps = suiteStepsOf(id)
       expect(steps.map((s) => s.name), id).toEqual(['Run tests'])
       const cond = steps[0].if
