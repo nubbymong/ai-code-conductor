@@ -7,6 +7,8 @@
 // (P3.8): only into the ready, empty composer, with Enter on its own after the
 // burst, and only when the screen then shows exactly that line. When it cannot
 // be sent, the user is told why.
+// Since 2.1.3-beta.17 C6 a Codex session gets this line only when main could
+// not paste the image as Codex's own paste (image-transfer-codex.test.ts).
 import { describe, it, expect } from 'vitest'
 import {
   sendImagePathToCodex,
@@ -14,7 +16,6 @@ import {
   IMAGE_TYPED_NOT_SENT,
   IMAGE_TAKEN_BACK,
   IMAGE_BEHIND_QUESTION,
-  IMAGE_AT_PROMPT,
   CODEX_SUBMIT_DELAY_MS,
   CODEX_READY_POLL_MS,
   NOT_AT_PROMPT,
@@ -196,17 +197,18 @@ describe('sendImagePathToCodex (P3.15, row 70)', () => {
     expect(notes).toEqual([])
   })
 
-  it('C6: a composer holding the image main pasted and left there: nothing typed, and the note says the image is at the prompt', () => {
-    for (const row of [`${GLYPH} [Image #1]`, `${GLYPH} [Image #1]  I just pasted an image - please view it.`]) {
+  // Whose image a placeholder is cannot be read from the screen (the user's
+  // own Alt+V or Ctrl+V paste reads the same as main's), so this rule says
+  // only what it reads; main's `left` is what says the image is at the prompt
+  // (image-transfer-codex.test.ts).
+  it('C6: a composer holding an image reads TEXT_IN_PROMPT, as any typed text', () => {
+    for (const row of [`${GLYPH} [Image #1]`, `${GLYPH} [Image #1]  I just pasted an image - please view it.`, `${GLYPH} half a question`]) {
       const h = harness(composerShows(row))
       h.send()
       h.advance(CODEX_SUBMIT_DELAY_MS * 4)
       expect(h.writes, row).toEqual([])
-      expect(h.notes, row).toEqual([IMAGE_AT_PROMPT])
+      expect(h.notes, row).toEqual([TEXT_IN_PROMPT])
     }
-    const other = harness(composerShows(`${GLYPH} half a question`))
-    other.send()
-    expect(other.notes).toEqual([TEXT_IN_PROMPT])
   })
 })
 

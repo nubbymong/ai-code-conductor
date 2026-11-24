@@ -25,7 +25,7 @@ import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import {
-  codexImagePlaceholderShown, codexDraftIsImagePlaceholder, codexWarningCountShown, codexScreenPastPlaceholder, codexComposerHoldsImage,
+  codexImagePlaceholderShown, codexDraftIsImagePlaceholder, codexWarningCountShown, codexScreenPastPlaceholder,
 } from '../../../src/shared/codex-image-screen'
 import { readCodexScreen, codexTextTyped, codexComposerDraft, type ScreenLine } from '../../../src/shared/codex-screen'
 
@@ -130,8 +130,9 @@ describe('codexScreenPastPlaceholder', () => {
 
 // C6's reading on P11's stand-in (Codex 0.157.1, GPT-5.5, the Windows test
 // machine, bundled ConPTY, 120 by 40, 2026-11-24): the screens as recorded
-// (readXtermScreen's rows; the blank rows left out and put back here), after
-// the path's paste, after the sentence typed after it, and after Ctrl+U.
+// (readXtermScreen's rows; the blank rows, and the Tip row Codex drew above
+// the cleared composer, left out; the blank rows put back here), after the
+// path's paste, after the sentence typed after it, and after Ctrl+U.
 const H = String.fromCharCode(0x2500)
 const V = String.fromCharCode(0x2502)
 const ELL = String.fromCharCode(0x2026)
@@ -182,12 +183,5 @@ describe('the draft and the composer', () => {
     expect(codexDraftIsImagePlaceholder(codexComposerDraft(WITH_SENTENCE))).toBe(false)
     expect(codexDraftIsImagePlaceholder('')).toBe(false)
     expect(codexDraftIsImagePlaceholder(null)).toBe(false)
-  })
-
-  it('codexComposerHoldsImage: a composer starting with the placeholder, with or without words after it', () => {
-    expect(codexComposerHoldsImage(PLACEHOLDER)).toBe(true)
-    expect(codexComposerHoldsImage(WITH_SENTENCE)).toBe(true)
-    expect(codexComposerHoldsImage(READY)).toBe(false)
-    expect(codexComposerHoldsImage(withComposer(`${P} see [Image #1]`))).toBe(false)
   })
 })

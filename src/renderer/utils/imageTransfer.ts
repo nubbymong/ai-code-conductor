@@ -2,7 +2,7 @@ import { writeSessionInput } from '../components/terminal/tmuxWheelScroll'
 import { quoteArgForShell } from '../../shared/shell-quote'
 import { useSessionStore } from '../stores/sessionStore'
 import { usePasteHintStore } from '../stores/pasteHintStore'
-import { sendImagePathToCodex, NOT_AT_PROMPT } from '../lib/codexComposer'
+import { sendImagePathToCodex, NOT_AT_PROMPT, IMAGE_AT_PROMPT } from '../lib/codexComposer'
 /**
  * Image transfer helper: gets a host-saved image into a session. The prompts
  * below are a Claude session's; a plain terminal (and the partner shell) gets
@@ -84,10 +84,15 @@ export function imagePathRefusedNote(hostFilePath: string): string {
  * Codex not ready in its wait, no placeholder, its warning count showing; or
  * an ask that failed) gets today's line, the sentence and the path, by the
  * rule that types into Codex (sendImagePathToCodex), which types only into a
- * ready, empty composer and otherwise tells `onNote` why it typed nothing. A
- * session that is gone, or a path main refuses, gets nothing typed, and
- * `onNote` is told. The sentence goes as given (C6's reading: an em dash typed
- * after the placeholder reached Codex's turn, 3 of 3).
+ * ready, empty composer and otherwise tells `onNote` why it typed nothing.
+ * When main says it left its paste at the prompt (`not-taken` with `left`: it
+ * could not take "[Image #1]" back for certain), nothing more is typed and
+ * `onNote` hears that the image is at the prompt and was not sent; only main
+ * knows the placeholder is its own, since a composer holding the user's own
+ * pasted image reads the same. A session that is gone, or a path main
+ * refuses, gets nothing typed, and `onNote` is told. The sentence goes as
+ * given (PB3: U+2014 is kept on 0.153.4 and 0.155.1 typed this way; C6's
+ * reading: after the placeholder on 0.157.1 it reached Codex's turn, 3 of 3).
  */
 export function sendImageToCodexSession(
   sessionId: string,
@@ -99,8 +104,11 @@ export function sendImageToCodexSession(
   const typed = (): void => sendImagePathToCodex(sessionId, hostFilePath, onNote, undefined, words)
   void window.electronAPI.pty.submitImage({ sessionId, path: hostFilePath, sentence: words }).then(
     (result) => {
-      if (result.outcome === 'not-taken') typed()
-      else if (result.outcome === 'not-sent') onNote(result.reason === 'refused-text' ? imagePathRefusedNote(hostFilePath) : NOT_AT_PROMPT)
+      if (result.outcome === 'not-taken') {
+        // `left`: main's ImageSubmitResult (session-input), read as main sends it.
+        if ((result as { left?: boolean }).left === true) onNote(IMAGE_AT_PROMPT)
+        else typed()
+      } else if (result.outcome === 'not-sent') onNote(result.reason === 'refused-text' ? imagePathRefusedNote(hostFilePath) : NOT_AT_PROMPT)
     },
     typed,
   )

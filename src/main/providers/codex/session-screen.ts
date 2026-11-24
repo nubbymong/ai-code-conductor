@@ -369,7 +369,7 @@ export function submitCodexText(sessionId: string, text: string, opts: ComposerS
 /** 2.1.3-beta.17 C6: how long the image rule waits for Codex's image
  *  placeholder once the path's paste has gone. C6's reading (P11's stand-in,
  *  Codex 0.157.1 on the Windows test machine, 2026-11-24, P11's 96 by 64
- *  JPEG): "[Image #1]" showed 251 to 314 ms after the paste in 7 of 7 runs. A
+ *  JPEG): "[Image #1]" showed 251 to 314 ms after the paste in 8 of 8 runs. A
  *  full-size Snap picture was not measured, so the bound keeps room. */
 export const IMAGE_PLACEHOLDER_WAIT_MS = 5_000
 /** C6: how long the sentence waits for the composer that holds only the

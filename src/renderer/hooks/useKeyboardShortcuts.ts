@@ -127,9 +127,11 @@ export function useKeyboardShortcuts(
       // as a bracketed paste, which Claude Code attaches as its own pasted image,
       // then the sentence and Enter (imageTransfer.ts, 2.1.3-beta.16 X1.2), an SSH
       // one, which can't reach the host filesystem, the Conductor MCP fetch over
-      // the reverse tunnel. A Codex session: its line through the Codex typing
-      // rule. A plain terminal: only the quoted path, with no Enter; over SSH
-      // nothing, with a hint saying where the image is. The partner shell in
+      // the reverse tunnel. A Codex session: main pastes the path as Codex's own
+      // paste, then the sentence and Enter (2.1.3-beta.17 C6); what main cannot
+      // paste gets its line through the Codex typing rule. A plain terminal:
+      // only the quoted path, with no Enter; over SSH nothing, with a hint
+      // saying where the image is. The partner shell in
       // the partner view of a local tab: only the quoted path, with no Enter;
       // of an SSH tab (#86: a shell on the host) nothing, with the same hint as
       // a plain terminal over SSH. A plain terminal or a partner

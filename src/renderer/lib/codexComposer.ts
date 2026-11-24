@@ -51,7 +51,6 @@ import {
   codexTitleBusy, type CodexScreenKind,
 } from '../../shared/codex-screen'
 export { readCodexScreen, codexComposerState, codexComposerText, codexCommandTyped, codexTextTyped, codexPlanModeOnScreen }
-import { codexComposerHoldsImage } from '../../shared/codex-image-screen'
 export type { CodexComposerState, CodexScreenKind } from '../../shared/codex-screen'
 
 /** The session's Plan mode reading, from its live screen and its models. */
@@ -319,13 +318,16 @@ export function typeIntoCodexComposer(
 }
 
 /** P3.15 (row 70): the words the app types before an image's path at Codex's
- *  prompt. The same as Claude's line, in ASCII: Codex dropped its em dash. */
+ *  prompt. The same as Claude's line, in ASCII: Codex dropped its em dash when
+ *  the line and its Enter went in one write (P3.15); typed first with Enter
+ *  after, an em dash is kept (PB3), so a caller's own words go as given. */
 export const CODEX_IMAGE_LINE = 'I just pasted an image - please view it.'
 export const IMAGE_TYPED_NOT_SENT = "The image's path is at the Codex prompt but was not sent: check it, then press Enter."
 export const IMAGE_TAKEN_BACK = 'The image was not sent: Codex was not ready for it, so what the app typed was taken back.'
 export const IMAGE_BEHIND_QUESTION = "The image was not sent: Codex asked a question first. Answer it, then check the Codex prompt for the image's path and press Enter."
 /** 2.1.3-beta.17 C6: main pasted the image ("[Image #1]") but could not send
- *  it or take it back, and nothing more was typed. */
+ *  it or take it back, and nothing more was typed (main's `not-taken` with
+ *  `left`; imageTransfer.ts, sendImageToCodexSession, says it). */
 export const IMAGE_AT_PROMPT = 'The image is at the Codex prompt but was not sent: check it, then press Enter.'
 
 /**
@@ -342,8 +344,7 @@ export const IMAGE_AT_PROMPT = 'The image is at the Codex prompt but was not sen
  * Since 2.1.3-beta.17 C6 it is the line a Codex session gets when main could
  * not paste the image as Codex's own (src/renderer/utils/imageTransfer.ts,
  * sendImageToCodexSession), for Alt+V and Snap alike; `sentence` is the line's
- * words (CODEX_IMAGE_LINE unless given). A composer main left the image's
- * placeholder in is not typed into, and the note says the image is there.
+ * words (CODEX_IMAGE_LINE unless given).
  */
 export function sendImagePathToCodex(
   sessionId: string,
@@ -359,8 +360,7 @@ export function sendImagePathToCodex(
     },
     wrapped: true,
   })
-  if (typing.typed || !typing.reason) return
-  onNote(typing.reason === TEXT_IN_PROMPT && codexComposerHoldsImage(deps.readScreen(sessionId)) ? IMAGE_AT_PROMPT : typing.reason)
+  if (!typing.typed && typing.reason) onNote(typing.reason)
 }
 
 /** Why a Plan mode launch's /plan was not sent (rounds 2 and 3): the prompt

@@ -7,6 +7,9 @@
  *  - Main's `not-taken` (Codex not ready, no placeholder, its warning count),
  *    or an ask that fails: today's line, by the rule that types into Codex
  *    (sendImagePathToCodex), with the same words and the note callback.
+ *  - Main's `not-taken` with `left` (its paste may still be at the prompt):
+ *    nothing typed; the note says the image is at the prompt. Only main
+ *    knows the placeholder is its own (mutant: `left` ignored).
  *  - The session gone, or a path main refuses: nothing typed; the note says so.
  *  - sendImageToSession hands a local Codex session there (its notes to the
  *    session's paste hint), and never types the raw line into it; an SSH one
@@ -22,6 +25,7 @@ vi.mock('../../../src/renderer/components/terminal/tmuxWheelScroll', () => ({ wr
 vi.mock('../../../src/renderer/lib/codexComposer', () => ({
   sendImagePathToCodex: h.sendImagePathToCodex,
   NOT_AT_PROMPT: 'Codex is not at its prompt, so nothing was sent.',
+  IMAGE_AT_PROMPT: 'The image is at the Codex prompt but was not sent: check it, then press Enter.',
 }))
 ;(globalThis as unknown as { window: unknown }).window = { electronAPI: { pty: { submitImage: h.submitImage } } }
 
@@ -60,6 +64,25 @@ describe('sendImageToCodexSession', () => {
     expect(h.sendImagePathToCodex).toHaveBeenCalledTimes(1)
     expect(h.sendImagePathToCodex).toHaveBeenCalledWith('cx1', PATH, onNote, undefined, SNAP)
     expect(h.writeSessionInput).not.toHaveBeenCalled()
+  })
+
+  it('not-taken with left: IMAGE_AT_PROMPT, the typing rule not asked', async () => {
+    h.submitImage.mockResolvedValue({ outcome: 'not-taken', left: true })
+    const notes: string[] = []
+    sendImageToCodexSession('cx1', PATH, SNAP, (n) => notes.push(n))
+    await flush()
+    expect(h.sendImagePathToCodex).not.toHaveBeenCalled()
+    expect(h.writeSessionInput).not.toHaveBeenCalled()
+    expect(notes).toEqual(['The image is at the Codex prompt but was not sent: check it, then press Enter.'])
+  })
+
+  it('not-taken without left: the typing rule is asked, and no note from here', async () => {
+    h.submitImage.mockResolvedValue({ outcome: 'not-taken' })
+    const notes: string[] = []
+    sendImageToCodexSession('cx1', PATH, SNAP, (n) => notes.push(n))
+    await flush()
+    expect(h.sendImagePathToCodex).toHaveBeenCalledTimes(1)
+    expect(notes).toEqual([])
   })
 
   it('an ask that fails: the same fallback', async () => {

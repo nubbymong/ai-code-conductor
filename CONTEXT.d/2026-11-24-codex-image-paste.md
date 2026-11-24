@@ -16,7 +16,10 @@ cannot paste (not ready, no placeholder, Codex's warning count, the sentence
 not confirmed) it takes back with Ctrl+U, only while the composer holds
 nothing but the paste, and the renderer types today's line by its own Codex
 rule, which types only into an empty composer and says why when it cannot.
-Snap in a Codex tab goes the same way now and no longer types the raw line
+A paste it cannot take back for certain it leaves, and its `not-taken` answer
+carries `left`: the renderer then types nothing and says the image is at the
+prompt (only main knows the placeholder is its own; the user's own pasted
+image reads the same on the screen). Snap in a Codex tab goes the same way now and no longer types the raw line
 (the sentence, the path and Enter in one write), which Codex never sent.
 
 Why the rule is built this way (C6's reading, plan review finding 14, no
@@ -25,7 +28,7 @@ bundled ConPTY, 120 by 40): with the placeholder in the composer, Codex's
 screen reads ready but not empty, so `submitCodexText` alone waits for an
 empty composer and would never type the sentence; read past the placeholder
 it reads ready and empty and the sentence typed after it confirms (4 of 4).
-The placeholder showed 251 to 314 ms after the paste (7 of 7). Ctrl+U cleared
+The placeholder showed 251 to 314 ms after the paste (8 of 8). Ctrl+U cleared
 it in about 80 ms and the next turn carried no picture (4 of 4, with and
 without the sentence typed); one Backspace left it (it took the space Codex
 types after it). An em dash typed after the placeholder reached the turn
@@ -37,6 +40,8 @@ never interleave; the session input ownership test counts the new door as it
 counts `submit`. `providers/codex/composer-submit.ts` and
 `shared/codex-screen.ts` are unchanged (C7's files).
 
-Not measured: a full-size Snap picture's placeholder time (the wait is 5 s);
+Not measured: Codex versions other than 0.157.1 (the app supports 0.153.4 to
+0.171.0; where the placeholder does not read, the fallback line is typed); a
+full-size Snap picture's placeholder time (the wait is 5 s);
 a session held by the session helper on the real CLI; macOS and Linux; Codex
 over SSH (not a route today).

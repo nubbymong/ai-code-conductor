@@ -8,7 +8,10 @@
 //    through the write port. Pasted: sent.
 //  - Not pasted (Codex busy, no placeholder, its warning count, the sentence
 //    not confirmed, a prompt up): not-taken, so the renderer types today's
-//    line by its own Codex rule; one log line says why.
+//    line by its own Codex rule; one log line says why. A paste the rule left
+//    at the prompt (a prompt came up after it): not-taken with left, so the
+//    renderer types nothing and says the image is at the prompt; the others
+//    carry no left.
 //  - The session gone, or a path the rule refuses: not sent, as for Claude.
 //  - Main reads no screen for the session: not-taken.
 //  - A path with a control character: refused before the rule is asked.
@@ -19,7 +22,8 @@
 //
 // Red on beta: a Codex session answered not-taken and the rule was never
 // asked. Mutants this must catch: the Codex branch dropped (not-taken for
-// every Codex session); the image not chained with the prompt presses.
+// every Codex session); the image not chained with the prompt presses;
+// `left` dropped from main's answer.
 import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from 'vitest'
 
 const h = vi.hoisted(() => ({
@@ -97,11 +101,11 @@ describe('submitImage: a Codex session', () => {
     ['the warning count showing', 'warning-count', false],
     ['the sentence not confirmed', 'not-drawn', false],
     ['a prompt up after the paste', 'prompt-on-screen', true],
-  ] as const)('%s: not-taken, so the renderer types today\'s line; one log line says why', async (_name, reason, left) => {
+  ] as const)('%s: not-taken (with left when the paste may still be at the prompt); one log line says why', async (_name, reason, left) => {
     const id = fresh()
     startRun(id)
     h.screen.submitImage.mockResolvedValue({ pasted: false, reason, left })
-    expect(await input.submitImage(id, PATH, SENTENCE)).toEqual({ outcome: 'not-taken' })
+    expect(await input.submitImage(id, PATH, SENTENCE)).toStrictEqual(left ? { outcome: 'not-taken', left: true } : { outcome: 'not-taken' })
     const lines = h.infos.filter((l) => l.startsWith(`[image-paste] ${id}:`))
     expect(lines).toHaveLength(1)
     expect(lines[0]).toContain(reason)

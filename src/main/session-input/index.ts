@@ -370,11 +370,13 @@ export const IMAGE_CODEX_READY_WAIT_MS = PROMPT_CODEX_READY_WAIT_MS
 
 /** What the image door did: `sent`; `not-taken`, an image it did not paste
  *  (an SSH Persistent session, or since 2.1.3-beta.17 C6 a Codex session it
- *  could not paste the image into), which the caller then sends its own way;
- *  or `not-sent` and why. */
+ *  could not paste the image into), which the caller then sends its own way,
+ *  with `left` when the paste main typed may still be at the prompt (it could
+ *  not take it back for certain), so the caller types nothing more; or
+ *  `not-sent` and why. */
 export type ImageSubmitResult =
   | { outcome: 'sent' }
-  | { outcome: 'not-taken' }
+  | { outcome: 'not-taken'; left?: true }
   | { outcome: 'not-sent'; reason: 'session-gone' | 'refused-text' }
 
 const PASTE_START = '\u001b[200~'
@@ -393,10 +395,9 @@ function hasControlChar(text: string): boolean {
 /** C6: one image into a Codex session's run `pressedFor` only, by the Codex
  *  package's image rule (SessionRunScreen.submitImage), reached through the
  *  registry. What that rule could not paste is `not-taken`, the log saying
- *  why and whether what it typed may still be at the prompt: the caller then
- *  types today's line by its own Codex rule, which types only into a ready,
- *  empty composer, so a paste left at the prompt gets nothing more and a
- *  note. Never rejects. */
+ *  why: with `left` when what it typed may still be at the prompt, so the
+ *  caller types nothing more and says the image is there; without, the
+ *  caller types today's line by its own Codex rule. Never rejects. */
 async function typeCodexImage(sessionId: string, imagePath: string, sentence: string, pressedFor: IPty): Promise<{ result: ImageSubmitResult; why: string }> {
   try {
     if (port().run(sessionId) !== pressedFor) return { result: { outcome: 'not-sent', reason: 'session-gone' }, why: '' }
@@ -405,7 +406,7 @@ async function typeCodexImage(sessionId: string, imagePath: string, sentence: st
     const r = await screen.submitImage(sessionId, imagePath, sentence, { readyWaitMs: IMAGE_CODEX_READY_WAIT_MS })
     if (r.pasted) return { result: { outcome: 'sent' }, why: '' }
     if (r.reason === 'session-gone' || r.reason === 'refused-text') return { result: { outcome: 'not-sent', reason: r.reason }, why: '' }
-    return { result: { outcome: 'not-taken' }, why: `${r.reason}${r.left ? ', what it typed may still be at the prompt' : ''}` }
+    return { result: r.left ? { outcome: 'not-taken', left: true } : { outcome: 'not-taken' }, why: `${r.reason}${r.left ? ', what it typed may still be at the prompt' : ''}` }
   } catch {
     return { result: { outcome: 'not-sent', reason: 'session-gone' }, why: '' }
   }
@@ -458,10 +459,11 @@ async function typeImage(sessionId: string, imagePath: string, sentence: string,
  * in the wait, no placeholder, Codex's warning count showing, the sentence
  * not confirmed) it takes back as the composer rule takes text back, or, when
  * it cannot do that for certain, leaves and types nothing more; either way it
- * answers `not-taken`, with one log line saying why: the renderer then types
- * today's line by its own Codex rule, which types only into a ready, empty
- * composer and otherwise says why it typed nothing (a paste left at the
- * prompt: that the image is there and was not sent).
+ * answers `not-taken`, with one log line saying why. Taken back: the renderer
+ * then types today's line by its own Codex rule, which types only into a
+ * ready, empty composer and otherwise says why it typed nothing. Left: the
+ * answer carries `left`, and the renderer types nothing and says the image is
+ * at the prompt and was not sent.
  *
  * Not this door's (`not-taken`, nothing typed; the renderer keeps its own way
  * for it): an SSH Persistent session (tmux). The renderer asks only for a

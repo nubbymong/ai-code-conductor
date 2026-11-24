@@ -42,12 +42,6 @@ export function codexImagePlaceholderShown(lines: ScreenLine[] | null | undefine
   return read.screen === 'ready' && IMAGE_PLACEHOLDER_RE.test(read.text) ? read.text : null
 }
 
-/** Whether Codex's composer starts with an image placeholder (an image the
- *  app pasted, left at the prompt with or without words after it). */
-export function codexComposerHoldsImage(lines: ScreenLine[] | null | undefined): boolean {
-  return /^\[Image #\d{1,3}\]/.test(codexComposerText(lines))
-}
-
 /** Whether `draft` (codexComposerDraft's reading: every space dropped) is an
  *  image placeholder alone. */
 export function codexDraftIsImagePlaceholder(draft: string | null | undefined): boolean {
