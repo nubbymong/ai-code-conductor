@@ -67,7 +67,16 @@ Windows, behind the agent sessions' switch. This fragment adds to B1e's
   Codex onto the hook mode, a later S12 step). ADR-030's P20 (a) measured what a hook post
   nobody takes costs Codex: the tool runs as in the control and nothing on screen says a hook
   failed (its hooks are asynchronous), so only the event is lost.
-- pty-manager.ts is not touched (7,773 lines).
-- Not checked here: the VM line (a real pipe and a real holder), which the orchestrator runs on
-  the frozen head; it counts from the new let-go answer line, and reads the time from the
-  let-go line to that answer line.
+- pty-manager.ts is not touched (7,741 lines on the beta.17 aggregate after this joins).
+- VM line (vm:B1f, WINDOWS_1, two unsigned builds of 45de07ef on the real update path):
+  PASS on substance. 8 of 8 hand-overs; the answer line came for 16 of 16 Claude Code
+  sessions, 7 to 11 ms after their let-go lines, and the "did not answer" line never came.
+  66 events were made between a let-go line and its app's exit: 61 of 61 from the answer
+  line on are in the next run's record once; 3 made before the answer are in the old run's
+  record once (by design); 2 made 13 and 18 ms before the let-go by the app's clock are in
+  neither record as read, because the old run's record cannot be read once the let-go
+  starts (a limit of the measurement, not provable either way). Made after an answer and
+  lost: 0. Held twice: 0. Its one FAIL, 7 [WARN] lines, was not B1f's: the old app's
+  refusal of a kept session's status post after the update's kill, the same code as
+  beta.16's. The aggregate's join fix logs that one refusal at info (fix(conductor),
+  2.1.3-beta.17).
