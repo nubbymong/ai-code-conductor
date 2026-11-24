@@ -231,6 +231,21 @@ describe('a button set to "Send to every open session" asks first: All, or the s
     expect(ticked()).toEqual(['s-1', 's-2', 's-3'])
   })
 
+  it('a press while the chooser is still up starts from the default too: each press gets its own chooser', async () => {
+    COMMANDS = [BROADCAST]
+    render()
+    await press('Review all')
+    await click('broadcast-chooser-choose')
+    await tickOnly(['s-1'])
+    // Not answered: the card does not hold focus, so a chip can be pressed again from the keyboard.
+    await press('Review all')
+    expect(byTest('broadcast-chooser-all')!.textContent).toBe('All (3)')
+    expect(rows()).toEqual([])
+    await click('broadcast-chooser-choose')
+    expect(ticked()).toEqual(['s-1', 's-2', 's-3'])
+    expect(submitPrompt).not.toHaveBeenCalled()
+  })
+
   it('a pick reaches only the ticked tabs, once each', async () => {
     COMMANDS = [BROADCAST]
     render()
@@ -279,7 +294,7 @@ describe('a button set to "Send to every open session" asks first: All, or the s
     expect(submitPrompt).not.toHaveBeenCalled()
   })
 
-  it('the pressed tab\'s agent pane is shown only when the pressed tab is one of those it goes to', async () => {
+  it('the pressed tab\'s agent pane is shown only when the pressed tab is one of those it goes to, and the pane it shows takes the keyboard', async () => {
     COMMANDS = [BROADCAST]
     const onTogglePartner = vi.fn()
     render({ isPartnerActive: true, onTogglePartner })
@@ -289,9 +304,18 @@ describe('a button set to "Send to every open session" asks first: All, or the s
     await click('broadcast-chooser-send')
     expect(sentTo()).toEqual([{ sessionId: 's-2', text: 'review the open diff' }])
     expect(onTogglePartner).not.toHaveBeenCalled()
+    // Not picked: its partner shell stays up, so the keyboard goes there.
+    expect(focusEvents).toEqual([{ sessionId: 's-1-partner' }])
     await press('Review all')
     await click('broadcast-chooser-all')
     expect(onTogglePartner).toHaveBeenCalledTimes(1)
+    // Picked: its agent pane is shown and takes the keyboard. That pane takes
+    // the request only once it is shown (TerminalView listens while active), so
+    // the hand-off waits for the switch, as a single press does: sent at once,
+    // it would be dropped.
+    expect(focusEvents).toEqual([{ sessionId: 's-1-partner' }])
+    await act(async () => { await new Promise((r) => setTimeout(r, 150)) })
+    expect(focusEvents).toEqual([{ sessionId: 's-1-partner' }, { sessionId: 's-1' }])
   })
 
   it('with no open agent session to send to, the pressed tab says so and nothing asks', async () => {

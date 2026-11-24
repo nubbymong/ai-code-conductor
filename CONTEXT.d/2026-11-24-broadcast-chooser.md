@@ -22,8 +22,11 @@ all or select session to make this easier".
   answer is filtered again at the press (`liveBroadcastPick`), so a tab that ended while the
   chooser was up gets nothing. Terminal-only tabs, Ask Conductor and ended tabs are never
   listed, as before. With no agent tab to send to, the pressed tab says so and nothing asks.
-- **The pressed tab** keeps what a press gave it (its page watch, the keyboard, the one note
-  with the count); its agent pane is shown only when it is one of the tabs the press goes to.
+- **The pressed tab** keeps what a press gave it (its page watch, the one note with the count);
+  its agent pane is shown only when it is one of the tabs the press goes to. The keyboard goes
+  to the pane it shows afterwards: the agent pane (once it is shown, as a single press waits for
+  it), or the partner shell it was showing when it was not picked. Beta.16 sent that hand-off in
+  the same moment as the pane switch, so it was dropped; the fix covers both cases.
 - **Design points, on the defaults while the owner is away, one commit each:** the list starts
   with every listed tab ticked (`chooserStartPick`); a button keeps no pick from its last press
   (the bar numbers each press and keys the chooser by it). An owner answer later changes one

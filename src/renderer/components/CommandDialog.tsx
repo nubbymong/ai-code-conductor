@@ -759,8 +759,7 @@ export default function CommandDialog({ onConfirm, onCancel, initial, configId, 
                   </div>
                 </Field>
 
-                {/* #399: one press to every open session. Offered on a simple
-                    Global prompt; any other button shows it off, with why. */}
+                {/* #399: "Send to every open session". A press asks: All, or the sessions picked (#413). Offered on a simple Global prompt; any other button shows it off, with why. */}
                 <div className="mb-3" data-testid="command-field-broadcast">
                   <label className={`flex items-center gap-2 text-[12.5px] font-medium select-none ${broadcastWhyNot ? 'cursor-not-allowed' : 'cursor-pointer'}`} style={{ ...LABEL_STYLE, opacity: broadcastWhyNot ? 0.55 : 1 }}>
                     <input

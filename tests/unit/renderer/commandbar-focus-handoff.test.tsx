@@ -13,8 +13,9 @@
  * why in its note when the answer is not sent; and it writes the old line and
  * Enter through pty.write only when the preload has no such bridge.
  * Since 2.1.3-beta.16 (aicc_planning#399) a broadcast press sends through that
- * same path to every open agent tab, a Codex tab as well as a Claude Code tab
- * (the rest of the broadcast wiring: commandbar-broadcast.test.tsx).
+ * same path to every open agent tab, a Codex tab as well as a Claude Code tab;
+ * since 2.1.3-beta.17 (aicc_planning#413) it asks first, and All sends (the
+ * rest of the broadcast wiring: commandbar-broadcast.test.tsx).
  */
 import React from 'react'
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
@@ -200,7 +201,7 @@ describe('a prompt button is typed by main (#333)', () => {
   })
 })
 
-describe('#399: a broadcast press goes through the same prompt path to every open agent tab', () => {
+describe('#399, #413: a broadcast press asks, and All goes through the same prompt path to every open agent tab', () => {
   const tab = (id: string, over: Record<string, unknown> = {}) => ({ id, label: id, workingDirectory: '/', color: '#89b4fa', sessionType: 'local', model: '', ...over })
 
   it('a Claude Code tab and a Codex tab get the text once each, a terminal-only tab nothing', async () => {
@@ -208,6 +209,9 @@ describe('#399: a broadcast press goes through the same prompt path to every ope
     COMMANDS = [{ id: 'b1', label: 'Review all', prompt: 'review the open diff', scope: 'global', kind: 'prompt', target: 'claude', broadcast: true }]
     act(() => { root.render(React.createElement(CommandBar, { sessionId: 's-1', parentSessionId: 's-1', configId: 'cfg' } as never)) })
     await act(async () => { buttonNamed('Review all')!.click(); await new Promise((r) => setTimeout(r, 0)) })
+    // #413: the press asks first; nothing is sent until the chooser is answered.
+    expect(submitPrompt).not.toHaveBeenCalled()
+    await act(async () => { container.querySelector<HTMLElement>('[data-testid="broadcast-chooser-all"]')!.click(); await new Promise((r) => setTimeout(r, 0)) })
     expect(submitPrompt.mock.calls.map((c) => (c as unknown[])[0])).toEqual([
       { sessionId: 's-1', text: 'review the open diff' },
       { sessionId: 'cx', text: 'review the open diff' },

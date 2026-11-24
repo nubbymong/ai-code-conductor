@@ -651,13 +651,15 @@ export default function CommandBar({ sessionId, configId, sessionType = 'local',
    * chooser's answer reaches at the press, #413), each through its own prompt
    * path in main (lib/commandBroadcast: the sends, the count), and show one
    * note on this tab with the count. This tab gets what a single press gives
-   * it besides: its page watch starts and its terminal takes the keyboard, and
-   * when it is one of the targets its agent pane is shown.
+   * it besides: its page watch starts, and the pane it shows afterwards takes
+   * the keyboard: its agent pane when it is one of the targets, else the
+   * partner shell it was showing.
    */
   const broadcastCommand = (cmd: CustomCommand, targets: readonly string[]) => {
     const text = buildFullCommand(cmd)
     trackUsage('commands.broadcast')
-    if (isPartnerActive && onTogglePartner && targets.includes(sessionId)) onTogglePartner()
+    const showAgentPane = !!isPartnerActive && !!onTogglePartner && targets.includes(sessionId)
+    if (showAgentPane) onTogglePartner?.()
     void broadcastPrompt(text, targets, (args) => window.electronAPI.pty.submitPrompt(args), dropTmuxCopyModeBelief)
       .then((tally) => {
         const note = broadcastNote(tally)
@@ -666,7 +668,15 @@ export default function CommandBar({ sessionId, configId, sessionType = 'local',
     const webViewUrl = cmd.webView?.enabled ? cmd.webView.url : null
     if (webViewUrl) startWebviewPolling(webViewUrl)
     else if (webviewUrls.length > 0) void probeWebviewUrls(webviewKey, webviewUrls)
-    window.dispatchEvent(new CustomEvent('ccc:focus-terminal', { detail: { sessionId } }))
+    // The keyboard goes to the pane this tab shows after the press: its agent
+    // pane, or its partner shell when that stayed up (this tab was not picked).
+    const keyboardTo = isPartnerActive && !showAgentPane && partnerSessionId ? partnerSessionId : sessionId
+    const handOff = () => window.dispatchEvent(new CustomEvent('ccc:focus-terminal', { detail: { sessionId: keyboardTo } }))
+    // A pane switched in by this press takes the request only once it is shown
+    // (TerminalView listens while it is active), so wait for the switch, as a
+    // single press does (typeIntoPty); sent now, the request would be dropped.
+    if (showAgentPane) setTimeout(handOff, 100)
+    else handOff()
   }
 
   /** #413: the button a broadcast press asked about, until All, Send or
