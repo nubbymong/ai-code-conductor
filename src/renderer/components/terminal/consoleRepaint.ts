@@ -39,19 +39,26 @@
  * starts at the banner, which xterm held on its row 9.
  *
  * On a narrowing xterm re-wraps the rows a program drew at the old width
- * (Claude Code's rules and status row) and moves the top of its screen up one
- * row for each row that adds, with blank rows below its cursor or not (its
- * Buffer._reflowSmaller). The console keeps its top row, so its paint starts
- * with lines xterm now holds just above its screen: written as it came, they
- * showed twice (beta.16 B3's VM line: the banner's top one or two rows, 3 of
- * 3; M1's g-ccmain-max on the published beta.14: its top two rows). Such a
- * paint is placed when it paints the console's whole screen, its top lines are
- * xterm's lines from a row above its screen (top down, as above), and xterm's
- * screen has at least that many rows below its cursor: xterm's rows are
- * brought down until the paint's top line is on its top row, then the paint
- * is written as it came. A paint that matches none of these ways (another
- * program's screen, a size that changed again, a shape not seen) is written
- * as it came, as before.
+ * (Claude Code's rules and status row) and, when it holds scrollback, moves
+ * the top of its screen up one row for each row that adds, with blank rows
+ * below its cursor or not (its Buffer._reflowSmaller). The console keeps its
+ * top row, so its paint starts with lines xterm now holds just above its
+ * screen: written as it came, they showed twice (beta.16 B3's VM line: the
+ * banner's top one or two rows, 3 of 3; M1's g-ccmain-max on the published
+ * beta.14: its top two rows). Such a paint is placed when it takes the
+ * console's whole screen (its lines counted by the rows each takes at the new
+ * width: the console writes a line longer than a row with no line break
+ * inside it, as in its own re-wrap of a full-width rule, painted before the
+ * program draws again: the published beta.16 on C5's VM line, 1 of the 9
+ * recorded narrowings of Claude Code's main screen, 20 lines over 27 rows 3 ms
+ * after the size, the program's paint 15 ms later), its top lines are xterm's
+ * lines from a row above its screen (top down, as above), and xterm's screen
+ * has at least that many rows below its cursor: xterm's rows are brought down
+ * until the paint's top line is on its top row, then the paint is written as
+ * it came, a selection and a view the user has scrolled up kept on their rows
+ * (bringRowsDown). A paint that matches none of these ways (another program's
+ * screen, a size that changed again, a shape not seen) is written as it came,
+ * as before.
  *
  * Not handled, written as it came, as before:
  *  - a paint made while the program has the cursor hidden: the console sends
@@ -109,6 +116,9 @@ export interface RepaintTerminal {
     readonly active: {
       readonly type: 'normal' | 'alternate'
       readonly baseY: number
+      /** The row the view starts on: below baseY when the user has scrolled
+       *  up. */
+      readonly viewportY: number
       /** The cursor's row on the screen. */
       readonly cursorY: number
       getLine(y: number): RepaintLine | undefined
@@ -118,6 +128,15 @@ export interface RepaintTerminal {
   /** Sizes the terminal itself, not the console: a narrowing's paint
    *  (bringRowsDown) uses it to bring rows down out of the scrollback. */
   resize(columns: number, rows: number): void
+  /** Moves the view: bringRowsDown puts a view the user has scrolled up back
+   *  on its rows (putViewBack). */
+  scrollLines(amount: number): void
+  scrollToLine(line: number): void
+  /** The app's xterm (@xterm/xterm) has a selection; @xterm/headless has
+   *  none. bringRowsDown selects again what its sizes cleared. */
+  hasSelection?(): boolean
+  getSelectionPosition?(): { start: { x: number; y: number }; end: { x: number; y: number } } | undefined
+  select?(column: number, row: number, length: number): void
 }
 
 /** Whether a terminal's output goes through the aligner: on Windows only, for
@@ -132,6 +151,10 @@ interface Paint {
   /** The console's lines, its top one first, each line's text with the
    *  spaces at its end left off. */
   lines: string[]
+  /** Each line as it is written from the left edge: its text, and a number
+   *  for each step to the right (`ESC[nC`), which stops at the last column
+   *  and never starts a row (rowsOfPaint). */
+  runs: Array<Array<string | number>>
   /** Where the top line's text ends in the paint: at the first line break, or
    *  at the paint's own cursor position when it has one line only. */
   topEnd: number
@@ -149,6 +172,8 @@ interface Paint {
 function readPaint(paint: string): Paint | null {
   const body = paint.length - PAINT_END.length
   const lines: string[] = []
+  const runs: Array<Array<string | number>> = []
+  let run: Array<string | number> = []
   let text = ''
   let topEnd = -1
   const head = PAINT_START.exec(paint)
@@ -178,6 +203,7 @@ function readPaint(paint: string): Paint | null {
           const n = params === '' ? 1 : Number(params)
           if (n > 1000) return null
           text += ' '.repeat(Math.max(1, n))
+          run.push(Math.max(1, n))
         } else if (final === 'H') {
           // The paint's own cursor: only as its last sequence.
           if (j + 1 !== body || !/^\d+;\d+$/.test(params)) return null
@@ -204,17 +230,109 @@ function readPaint(paint: string): Paint | null {
       if (paint.charCodeAt(i + 1) !== 0x0a) return null
       if (lines.length === 0) topEnd = i
       lines.push(text.trimEnd())
+      runs.push(run)
       text = ''
+      run = []
       i += 2
       continue
     }
     if (c < 0x20 || (c >= 0x7f && c <= 0x9f)) return null
     text += paint[i]
+    if (typeof run[run.length - 1] === 'string') run[run.length - 1] += paint[i]
+    else run.push(paint[i])
     i++
   }
   lines.push(text.trimEnd())
+  runs.push(run)
   if (topEnd < 0) topEnd = body
-  return { lines, topEnd, topKeep, placesCursor }
+  return { lines, runs, topEnd, topKeep, placesCursor }
+}
+
+/** The characters xterm gives no cell of their own (combining marks, format
+ *  characters, the Hangul vowels and final consonants U+1160 to U+11FF):
+ *  @xterm/xterm 6.0.0's UnicodeV6 tables (src/common/input/UnicodeV6.ts,
+ *  from Markus Kuhn's wcwidth), as first and last code point of each run.
+ *  console-repaint-claude-code.test.ts reads every width cellsOf gives
+ *  against xterm's own. */
+const NO_CELL: ReadonlyArray<readonly [number, number]> = [
+  [0x0300, 0x036f], [0x0483, 0x0486], [0x0488, 0x0489], [0x0591, 0x05bd], [0x05bf, 0x05bf],
+  [0x05c1, 0x05c2], [0x05c4, 0x05c5], [0x05c7, 0x05c7], [0x0600, 0x0603], [0x0610, 0x0615],
+  [0x064b, 0x065e], [0x0670, 0x0670], [0x06d6, 0x06e4], [0x06e7, 0x06e8], [0x06ea, 0x06ed],
+  [0x070f, 0x070f], [0x0711, 0x0711], [0x0730, 0x074a], [0x07a6, 0x07b0], [0x07eb, 0x07f3],
+  [0x0901, 0x0902], [0x093c, 0x093c], [0x0941, 0x0948], [0x094d, 0x094d], [0x0951, 0x0954],
+  [0x0962, 0x0963], [0x0981, 0x0981], [0x09bc, 0x09bc], [0x09c1, 0x09c4], [0x09cd, 0x09cd],
+  [0x09e2, 0x09e3], [0x0a01, 0x0a02], [0x0a3c, 0x0a3c], [0x0a41, 0x0a42], [0x0a47, 0x0a48],
+  [0x0a4b, 0x0a4d], [0x0a70, 0x0a71], [0x0a81, 0x0a82], [0x0abc, 0x0abc], [0x0ac1, 0x0ac5],
+  [0x0ac7, 0x0ac8], [0x0acd, 0x0acd], [0x0ae2, 0x0ae3], [0x0b01, 0x0b01], [0x0b3c, 0x0b3c],
+  [0x0b3f, 0x0b3f], [0x0b41, 0x0b43], [0x0b4d, 0x0b4d], [0x0b56, 0x0b56], [0x0b82, 0x0b82],
+  [0x0bc0, 0x0bc0], [0x0bcd, 0x0bcd], [0x0c3e, 0x0c40], [0x0c46, 0x0c48], [0x0c4a, 0x0c4d],
+  [0x0c55, 0x0c56], [0x0cbc, 0x0cbc], [0x0cbf, 0x0cbf], [0x0cc6, 0x0cc6], [0x0ccc, 0x0ccd],
+  [0x0ce2, 0x0ce3], [0x0d41, 0x0d43], [0x0d4d, 0x0d4d], [0x0dca, 0x0dca], [0x0dd2, 0x0dd4],
+  [0x0dd6, 0x0dd6], [0x0e31, 0x0e31], [0x0e34, 0x0e3a], [0x0e47, 0x0e4e], [0x0eb1, 0x0eb1],
+  [0x0eb4, 0x0eb9], [0x0ebb, 0x0ebc], [0x0ec8, 0x0ecd], [0x0f18, 0x0f19], [0x0f35, 0x0f35],
+  [0x0f37, 0x0f37], [0x0f39, 0x0f39], [0x0f71, 0x0f7e], [0x0f80, 0x0f84], [0x0f86, 0x0f87],
+  [0x0f90, 0x0f97], [0x0f99, 0x0fbc], [0x0fc6, 0x0fc6], [0x102d, 0x1030], [0x1032, 0x1032],
+  [0x1036, 0x1037], [0x1039, 0x1039], [0x1058, 0x1059], [0x1160, 0x11ff], [0x135f, 0x135f],
+  [0x1712, 0x1714], [0x1732, 0x1734], [0x1752, 0x1753], [0x1772, 0x1773], [0x17b4, 0x17b5],
+  [0x17b7, 0x17bd], [0x17c6, 0x17c6], [0x17c9, 0x17d3], [0x17dd, 0x17dd], [0x180b, 0x180d],
+  [0x18a9, 0x18a9], [0x1920, 0x1922], [0x1927, 0x1928], [0x1932, 0x1932], [0x1939, 0x193b],
+  [0x1a17, 0x1a18], [0x1b00, 0x1b03], [0x1b34, 0x1b34], [0x1b36, 0x1b3a], [0x1b3c, 0x1b3c],
+  [0x1b42, 0x1b42], [0x1b6b, 0x1b73], [0x1dc0, 0x1dca], [0x1dfe, 0x1dff], [0x200b, 0x200f],
+  [0x202a, 0x202e], [0x2060, 0x2063], [0x206a, 0x206f], [0x20d0, 0x20ef], [0x302a, 0x302f],
+  [0x3099, 0x309a], [0xa806, 0xa806], [0xa80b, 0xa80b], [0xa825, 0xa826], [0xfb1e, 0xfb1e],
+  [0xfe00, 0xfe0f], [0xfe20, 0xfe23], [0xfeff, 0xfeff], [0xfff9, 0xfffb],
+  [0x10a01, 0x10a03], [0x10a05, 0x10a06], [0x10a0c, 0x10a0f], [0x10a38, 0x10a3a], [0x10a3f, 0x10a3f],
+  [0x1d167, 0x1d169], [0x1d173, 0x1d182], [0x1d185, 0x1d18b], [0x1d1aa, 0x1d1ad], [0x1d242, 0x1d244],
+  [0xe0001, 0xe0001], [0xe0020, 0xe007f], [0xe0100, 0xe01ef],
+]
+
+/** The cells xterm gives a character the console writes (no control
+ *  character reaches here: readPaint refuses them): UnicodeV6's widths, the
+ *  ones xterm uses when no other provider is loaded (TerminalView loads none).
+ *  0 for one NO_CELL holds, 2 for the East Asian wide ranges it lists, 1 for
+ *  every other. Exported for its test. */
+export function cellsOf(code: number): number {
+  let lo = 0
+  let hi = NO_CELL.length - 1
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1
+    if (code < NO_CELL[mid][0]) hi = mid - 1
+    else if (code > NO_CELL[mid][1]) lo = mid + 1
+    else return 0
+  }
+  if (code < 0x1100) return 1
+  if (code <= 0x115f || code === 0x2329 || code === 0x232a) return 2
+  if (code >= 0x2e80 && code <= 0xa4cf && code !== 0x303f) return 2
+  if ((code >= 0xac00 && code <= 0xd7a3) || (code >= 0xf900 && code <= 0xfaff)) return 2
+  if ((code >= 0xfe10 && code <= 0xfe19) || (code >= 0xfe30 && code <= 0xfe6f)) return 2
+  if ((code >= 0xff00 && code <= 0xff60) || (code >= 0xffe0 && code <= 0xffe6)) return 2
+  if ((code >= 0x20000 && code <= 0x2fffd) || (code >= 0x30000 && code <= 0x3fffd)) return 2
+  return 1
+}
+
+/** How many rows the paint takes on a terminal `cols` columns wide: each line
+ *  from the left edge, a character that does not fit on its row starting the
+ *  next one, as xterm writes it (the console writes a line longer than a row
+ *  with no line break inside it). */
+function rowsOfPaint(read: Paint, cols: number): number {
+  let rows = 0
+  for (const run of read.runs) {
+    let row = 1
+    let col = 0
+    for (const step of run) {
+      if (typeof step === 'number') {
+        col = Math.min(col + step, cols - 1)
+        continue
+      }
+      for (const ch of step) {
+        const cells = cellsOf(ch.codePointAt(0)!)
+        if (col + cells > cols) { row++; col = 0 }
+        col += cells
+      }
+    }
+    rows += row
+  }
+  return rows
 }
 
 interface HeldLine {
@@ -280,13 +398,27 @@ function rowsOfEnd(term: RepaintTerminal, held: HeldLine, length: number): numbe
  * where xterm holds its lines, or null to write it as it came. Reads the
  * terminal as it is once everything before the paint is written. A narrowing's
  * paint (bringRowsDown) sizes the terminal before it returns: what it returns
- * is then written.
+ * is then written. The aligner also runs its `settle` once that is written
+ * (placeConsoleRepaint): this alone does not.
  */
 export function alignConsoleRepaint(paint: string, term: RepaintTerminal): string | null {
+  return placeConsoleRepaint(paint, term)?.out ?? null
+}
+
+/** A paint rewritten to land where xterm holds its lines. */
+interface Placement {
+  out: string
+  /** Runs once `out` is written (bringRowsDown: a scrolled-up view put back
+   *  on its rows after the line breaks in `out`). */
+  settle?: () => void
+}
+
+function placeConsoleRepaint(paint: string, term: RepaintTerminal): Placement | null {
   if (term.buffer.active.type !== 'normal') return null
   const read = readPaint(paint)
   if (!read) return null
-  return placeWholeScreen(read, paint, term) ?? keepRowsAboveTop(read, paint, term) ?? bringRowsDown(read, paint, term)
+  const out = placeWholeScreen(read, paint, term) ?? keepRowsAboveTop(read, paint, term)
+  return out !== null ? { out } : bringRowsDown(read, paint, term)
 }
 
 /** The paint placed when every line of it but its top one is xterm's line
@@ -323,10 +455,10 @@ function placeWholeScreen(read: Paint, paint: string, term: RepaintTerminal): st
   else topRows = above.text.endsWith(first) ? rowsOfEnd(term, above, first.length) : null
   if (topRows === null) return null
   // Scroll xterm's rows up until the paint's second line lands where xterm
-  // holds it. A paint that would need them down cannot be placed (rows do not
-  // come back down out of xterm's scrollback), and one that needs more rows
-  // than the screen has is not this terminal's screen: both are written as
-  // they came.
+  // holds it. A paint that would need them down is not placed this way (a
+  // narrowing's paint is tried by bringRowsDown, below), and one that needs
+  // more rows than the screen has is not this terminal's screen: neither is
+  // placed here.
   const secondRow = above.end + 1
   const scroll = secondRow - topRows - top
   if (scroll < 0 || scroll > term.rows) return null
@@ -419,25 +551,59 @@ function topLinesHeldFrom(lines: readonly string[], term: RepaintTerminal, start
  * the row just above xterm's screen up (the fewest rows brought down), at most
  * as many rows as xterm's screen has below its cursor (the most this brings
  * down). Null, before anything is changed, for a paint already in place, one
- * that paints fewer rows than the screen has, or one found nowhere there.
+ * that takes fewer or more rows than the screen has (each line counted by the
+ * rows it takes at this width, rowsOfPaint: the console writes a line longer
+ * than a row with no line break inside it), or one found nowhere there.
+ *
+ * The two sizes are xterm's own resize. It clears a selection whenever its
+ * rows change (SelectionService), and a view the user has scrolled up moves up
+ * one row for each row brought down (Buffer.resize). Every row above the
+ * cursor's keeps its place in the buffer, and the paint writes the lines it
+ * was found by on the rows that held them, so the selection is selected again
+ * where it was, and the view is put back on the row it started on
+ * (putViewBack), once the paint is written (`settle`: the line breaks that
+ * scroll the rows brought down back up do not move a view the user has
+ * scrolled up) and, when its row is above xterm's screen already, at once too.
  */
-function bringRowsDown(read: Paint, paint: string, term: RepaintTerminal): string | null {
+function bringRowsDown(read: Paint, paint: string, term: RepaintTerminal): Placement | null {
   const buf = term.buffer.active
   const { lines } = read
   const { cols, rows } = term
   const cursorY = buf.cursorY
-  if (lines.length !== rows || !Number.isInteger(cursorY)) return null
+  if (!Number.isInteger(cursorY) || rowsOfPaint(read, cols) !== rows) return null
   const top = buf.baseY
   const cursorRow = top + cursorY
   if (topLinesHeldFrom(lines, term, top, cursorRow) >= MIN_TOP_LINES_WITH_TEXT) return null
   for (let down = 1; down <= Math.min(top, rows - 1 - cursorY); down++) {
     if (topLinesHeldFrom(lines, term, top - down, cursorRow) < MIN_TOP_LINES_WITH_TEXT) continue
+    const view = buf.viewportY
+    const selection = term.hasSelection?.() ? term.getSelectionPosition?.() : undefined
     term.resize(cols, cursorY + 1)
     term.resize(cols, rows)
+    try {
+      if (selection) term.select?.(selection.start.x, selection.start.y, (selection.end.y - selection.start.y) * cols + selection.end.x - selection.start.x)
+    } catch { /* the selection stays cleared */ }
+    const settle = view < top ? () => putViewBack(term, view) : undefined
+    // Now when its row is above xterm's screen again; else only once the line
+    // breaks below have made room (moved to the bottom now, it would count as
+    // back at the bottom: TerminalView's onScroll).
+    if (settle && view <= term.buffer.active.baseY) settle()
     const up = top - term.buffer.active.baseY - down
-    return up > 0 ? '\x1b[?25l' + `\x1b[${rows};1H` + '\n'.repeat(up) + paint : paint
+    return { out: up > 0 ? '\x1b[?25l' + `\x1b[${rows};1H` + '\n'.repeat(up) + paint : paint, settle }
   }
   return null
+}
+
+/** Puts a view the user has scrolled up back on row `view` (a row of the
+ *  buffer, not of the screen; on the bottom row when the buffer's scrollback
+ *  ends above it). The app's xterm moves its view by its scroll bar, which its
+ *  own resize does not move: the step up makes it take the view from there
+ *  first, so the move to `view` lands on that row in both xterms. */
+function putViewBack(term: RepaintTerminal, view: number): void {
+  try {
+    term.scrollLines(-1)
+    term.scrollToLine(view)
+  } catch { /* the view stays where it is */ }
 }
 
 export interface ConsoleRepaintAligner {
@@ -483,10 +649,10 @@ export function createConsoleRepaintAligner(term: RepaintTerminal, opts: { now: 
     // left waiting.
     try {
       term.write(data.slice(0, at), () => {
-        let out: string | null = null
-        try { out = alignConsoleRepaint(paint, term) } catch { out = null }
+        let placed: Placement | null = null
+        try { placed = placeConsoleRepaint(paint, term) } catch { placed = null }
         waiting = false
-        try { term.write(out ?? paint) } catch { /* xterm refused it: lost either way */ }
+        try { term.write(placed?.out ?? paint, placed?.settle) } catch { /* xterm refused it: lost either way */ }
         try { put(rest, parsed) } catch { parsed?.() }
         drain()
       })

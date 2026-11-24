@@ -317,3 +317,103 @@ export function controlPaint(gccmainPaint: string): string {
   if (!gccmainPaint.includes(oldVersion) || !gccmainPaint.includes(oldSuggestion)) throw new Error('not a paint of g-ccmain')
   return gccmainPaint.replace(oldVersion, newVersion).replace(oldSuggestion, newSuggestion)
 }
+
+/**
+ * aicc_planning#414 (beta.17 C5b): C5's VM line on the published beta.16 (Windows 11
+ * build 22621, Claude Code 2.1.330, out/vmout/records). A Claude Code tab started at
+ * 140x28 and maximised back to 103x27 (pn-pcn1): the console painted its own re-wrap
+ * of its screen first, 20 lines over 27 rows (each full-width rule runs on into the
+ * row below it with no line break: a line longer than a row), and Claude Code's
+ * paint came 15 ms later; 1 of the 9 recorded narrowings of Claude Code's main
+ * screen (C5's 8 and M1's g-ccmain-max) came as two paints. The same tab grown to
+ * 140x28 again (pn-pcn1b-1grown) and maximised back: one paint, Claude Code's.
+ */
+export const RECORDED_TWO_PAINTS = {
+  first: {
+    name: 'pn-pcn1',
+    // pn-pcn1-0before.rows.json: the tab started at 140x28.
+    before: {
+      size: '140x28', baseY: 0, cursor: [2, 15], length: 28,
+      wrapped: [6, 7, 8],
+      rows: [
+        "Windows PowerShell",
+        "Copyright (C) Microsoft Corporation. All rights reserved.",
+        "",
+        "Install the latest PowerShell for new features and improvements! https://aka.ms/PSWindows",
+        "",
+        "PS C:\\Users\\User\\p2w\\projects\\web-app> Set-Location -LiteralPath 'C:\\Users\\User\\p2w\\projects\\web-app'; $env:CCC_CLAUDE_BIN = 'C:\\Users\\User\\",
+        "AppData\\Roaming\\npm\\claude.cmd'; & 'C:\\Program Files\\nodejs\\node.exe' 'C:\\Users\\User\\AppData\\Local\\AI Code Conductor\\resources\\scripts\\resum",
+        "e-picker.js' --model 'opus' --settings 'C:\\Users\\User\\.claude\\settings-c8cf266a62ab7f5bebda4cf0.json' --mcp-config 'C:\\Users\\User\\.claude\\mc",
+        "p-c8cf266a62ab7f5bebda4cf0.json' --plugin-dir 'C:\\Users\\User\\AppData\\Local\\AI Code Conductor\\resources\\canvas-plugin'; exit",
+        " ▐▛███▛█   Claude Code v2.1.330",
+        "▝▜██████▀  Opus 5.5 with medium effort · API Usage Billing",
+        " ▝▝   ▝▝   C:\\Users\\User\\p2w\\projects\\web-app",
+        "",
+        "",
+        "<─140>",
+        "> Try \"how do I log an error?\"",
+        "<─140>",
+        "  ⏵⏵ auto mode on (shift+tab to cycle)                                                                          Not logged in · run /login",
+      ],
+    },
+    events: [
+      { resize: '103x27' },
+      { chars: 1794, write: "\u001b[?25l\u001b[HWindows PowerShell\u001b[K\r\nCopyright (C) Microsoft Corporation. All rights reserved.\u001b[K\r\n\u001b[K\r\nInstall the latest PowerShell for new features and improvements! https://aka.ms/PSWindows\u001b[K\r\n\u001b[K\r\nPS C:\\Users\\User\\p2w\\projects\\web-app> \u001b[93mSet-Location \u001b[90m-LiteralPath \u001b[36m'C:\\Users\\User\\p2w\\projects\\web-app'\u001b[m; \u001b[92m$env:CCC_CLAUDE_BIN \u001b[90m= \u001b[36m'C:\\Users\\User\\AppData\\Roaming\\npm\\claude.cmd'\u001b[m; & \u001b[36m'C:\\Program Files\\nodejs\\node.exe' 'C:\\Users\\User\\AppData\\Local\\AI Code Conductor\\resources\\scripts\\resume-picker.js' \u001b[90m--model \u001b[36m'opus' \u001b[90m--settings \u001b[36m'C:\\Users\\User\\.claude\\settings-c8cf266a62ab7f5bebda4cf0.json' \u001b[90m--mcp-config \u001b[36m'C:\\Users\\User\\.claude\\mcp-c8cf266a62ab7f5bebda4cf0.json' \u001b[90m--plugin-dir \u001b[36m'C:\\Users\\User\\AppData\\Local\\AI Code Conductor\\resources\\canvas-plugin'\u001b[m; \u001b[92mexit\u001b[K\u001b[38;2;215;119;87m\r\n ▐\u001b[48;2;0;0;0m▛███▛█\u001b[m   \u001b[1mClaude\u001b[22m \u001b[1mCode\u001b[22m \u001b[38;2;153;153;153mv2.1.330\u001b[K\u001b[38;2;215;119;87m\r\n▝▜\u001b[48;2;0;0;0m█████\u001b[49m█▀  \u001b[38;2;153;153;153mOpus 5.5 with medium effort · API Usage Billing\u001b[K\u001b[38;2;215;119;87m\r\n ▝▝   ▝▝   \u001b[38;2;153;153;153mC:\\Users\\User\\p2w\\projects\\web-app\u001b[K\u001b[m\r\n\u001b[K\r\n\u001b[K\u001b[38;2;136;136;136m\r\n<─140>\u001b[m> \u001b[2mTry\u001b[22m \u001b[2m\"how\u001b[22m \u001b[2mdo\u001b[22m \u001b[2mI\u001b[22m \u001b[2mlog\u001b[22m \u001b[2man\u001b[22m \u001b[2merror?\"\u001b[22m\u001b[K\u001b[38;2;136;136;136m\r\n<─140>  \u001b[38;2;255;193;7m⏵⏵ auto mode on \u001b[38;2;153;153;153m(shift+tab to cycle)                            \u001b[K\u001b[m\r\n\u001b[46X\u001b[38;2;255;107;128m\u001b[46CNot logged in · run /login\u001b[K\u001b[m\r\n\u001b[K\r\n\u001b[K\r\n\u001b[K\r\n\u001b[K\r\n\u001b[K\r\n\u001b[K\u001b[18;40H\u001b[?25h" }, // 3 ms after the size
+      { chars: 922, write: "\u001b[?25l\u001b[38;2;215;119;87m\u001b[H ▐\u001b[48;2;0;0;0m▛███▛█\u001b[m   \u001b[1mClaude\u001b[22m \u001b[1mCode\u001b[22m \u001b[38;2;153;153;153mv2.1.330\u001b[K\u001b[38;2;215;119;87m\r\n▝▜\u001b[48;2;0;0;0m█████\u001b[49m█▀  \u001b[38;2;153;153;153mOpus 5.5 with medium effort · API Usage Billing\u001b[K\u001b[38;2;215;119;87m\r\n ▝▝   ▝▝   \u001b[38;2;153;153;153mC:\\Users\\User\\p2w\\projects\\web-app\u001b[K\u001b[m\r\n\u001b[K\r\n\u001b[K\u001b[38;2;136;136;136m\r\n<─103>\u001b[m\r\n> \u001b[2mTry\u001b[22m \u001b[2m\"how\u001b[22m \u001b[2mdo\u001b[22m \u001b[2mI\u001b[22m \u001b[2mlog\u001b[22m \u001b[2man\u001b[22m \u001b[2merror?\"\u001b[22m\u001b[K\u001b[38;2;136;136;136m\r\n<─103>\u001b[m\r\n  \u001b[38;2;255;193;7m⏵⏵ auto mode on \u001b[38;2;153;153;153m(shift+tab to cycle)\u001b[37X\u001b[38;2;255;107;128m\u001b[37CNot logged in · run /login  \u001b[m\r\n\u001b[K\r\n\u001b[K\r\n\u001b[K\r\n\u001b[K\r\n\u001b[K\r\n\u001b[K\r\n\u001b[K\r\n\u001b[K\r\n\u001b[K\r\n\u001b[K\r\n\u001b[K\r\n\u001b[K\r\n\u001b[K\r\n\u001b[K\r\n\u001b[K\r\n\u001b[K\r\n\u001b[K\r\n\u001b[K\u001b[7;3H\u001b[?25h" }, // 18 ms after the size
+    ],
+    // pn-pcn1-2back.rows.json: the VM's reading after it.
+    after: {
+      size: '103x27', baseY: 11, cursor: [2, 6], length: 38,
+      wrapped: [6, 7, 8, 9, 10],
+      rows: [
+        "Windows PowerShell",
+        "Copyright (C) Microsoft Corporation. All rights reserved.",
+        "",
+        "Install the latest PowerShell for new features and improvements! https://aka.ms/PSWindows",
+        "",
+        "PS C:\\Users\\User\\p2w\\projects\\web-app> Set-Location -LiteralPath 'C:\\Users\\User\\p2w\\projects\\web-app'; ",
+        "$env:CCC_CLAUDE_BIN = 'C:\\Users\\User\\AppData\\Roaming\\npm\\claude.cmd'; & 'C:\\Program Files\\nodejs\\node.e",
+        "xe' 'C:\\Users\\User\\AppData\\Local\\AI Code Conductor\\resources\\scripts\\resume-picker.js' --model 'opus' -",
+        "-settings 'C:\\Users\\User\\.claude\\settings-c8cf266a62ab7f5bebda4cf0.json' --mcp-config 'C:\\Users\\User\\.c",
+        "laude\\mcp-c8cf266a62ab7f5bebda4cf0.json' --plugin-dir 'C:\\Users\\User\\AppData\\Local\\AI Code Conductor\\re",
+        "sources\\canvas-plugin'; exit",
+        " ▐▛███▛█   Claude Code v2.1.330",
+        "▝▜██████▀  Opus 5.5 with medium effort · API Usage Billing",
+        " ▝▝   ▝▝   C:\\Users\\User\\p2w\\projects\\web-app",
+        "",
+        "",
+        "<─103>",
+        "> Try \"how do I log an error?\"",
+        "<─103>",
+        "  ⏵⏵ auto mode on (shift+tab to cycle)                                     Not logged in · run /login  ",
+      ],
+    },
+  } satisfies RecordedCcResize,
+  // pn-pcn1b-1grown.rows.json: the same tab grown to 140x28 again.
+  grown: {
+    size: '140x28', baseY: 9, cursor: [2, 6], length: 37,
+    wrapped: [6, 7, 8],
+    rows: [
+      "Windows PowerShell",
+      "Copyright (C) Microsoft Corporation. All rights reserved.",
+      "",
+      "Install the latest PowerShell for new features and improvements! https://aka.ms/PSWindows",
+      "",
+      "PS C:\\Users\\User\\p2w\\projects\\web-app> Set-Location -LiteralPath 'C:\\Users\\User\\p2w\\projects\\web-app'; $env:CCC_CLAUDE_BIN = 'C:\\Users\\User\\",
+      "AppData\\Roaming\\npm\\claude.cmd'; & 'C:\\Program Files\\nodejs\\node.exe' 'C:\\Users\\User\\AppData\\Local\\AI Code Conductor\\resources\\scripts\\resum",
+      "e-picker.js' --model 'opus' --settings 'C:\\Users\\User\\.claude\\settings-c8cf266a62ab7f5bebda4cf0.json' --mcp-config 'C:\\Users\\User\\.claude\\mc",
+      "p-c8cf266a62ab7f5bebda4cf0.json' --plugin-dir 'C:\\Users\\User\\AppData\\Local\\AI Code Conductor\\resources\\canvas-plugin'; exit",
+      " ▐▛███▛█   Claude Code v2.1.330",
+      "▝▜██████▀  Opus 5.5 with medium effort · API Usage Billing",
+      " ▝▝   ▝▝   C:\\Users\\User\\p2w\\projects\\web-app",
+      "",
+      "",
+      "<─140>",
+      "> Try \"how do I log an error?\"",
+      "<─140>",
+      "  ⏵⏵ auto mode on (shift+tab to cycle)                                                                          Not logged in · run /login  ",
+    ],
+  } satisfies RecordedRows,
+  // pn-pcn1b-max-stream.stream.json: its one paint, 2 ms after the size (103x27).
+  grownPaint: { chars: 922, write: "\u001b[?25l\u001b[38;2;215;119;87m\u001b[H ▐\u001b[48;2;0;0;0m▛███▛█\u001b[m   \u001b[1mClaude\u001b[22m \u001b[1mCode\u001b[22m \u001b[38;2;153;153;153mv2.1.330\u001b[K\u001b[38;2;215;119;87m\r\n▝▜\u001b[48;2;0;0;0m█████\u001b[49m█▀  \u001b[38;2;153;153;153mOpus 5.5 with medium effort · API Usage Billing\u001b[K\u001b[38;2;215;119;87m\r\n ▝▝   ▝▝   \u001b[38;2;153;153;153mC:\\Users\\User\\p2w\\projects\\web-app\u001b[K\u001b[m\r\n\u001b[K\r\n\u001b[K\u001b[38;2;136;136;136m\r\n<─103>\u001b[m\r\n> \u001b[2mTry\u001b[22m \u001b[2m\"how\u001b[22m \u001b[2mdo\u001b[22m \u001b[2mI\u001b[22m \u001b[2mlog\u001b[22m \u001b[2man\u001b[22m \u001b[2merror?\"\u001b[22m\u001b[K\u001b[38;2;136;136;136m\r\n<─103>\u001b[m\r\n  \u001b[38;2;255;193;7m⏵⏵ auto mode on \u001b[38;2;153;153;153m(shift+tab to cycle)\u001b[37X\u001b[38;2;255;107;128m\u001b[37CNot logged in · run /login  \u001b[m\r\n\u001b[K\r\n\u001b[K\r\n\u001b[K\r\n\u001b[K\r\n\u001b[K\r\n\u001b[K\r\n\u001b[K\r\n\u001b[K\r\n\u001b[K\r\n\u001b[K\r\n\u001b[K\r\n\u001b[K\r\n\u001b[K\r\n\u001b[K\r\n\u001b[K\r\n\u001b[K\r\n\u001b[K\r\n\u001b[K\u001b[7;3H\u001b[?25h" },
+}

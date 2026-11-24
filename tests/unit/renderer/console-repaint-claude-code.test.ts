@@ -17,6 +17,14 @@
 // its bottom or not, and the console's paint started at the banner, two rows above
 // xterm's screen. The aligner now brings those rows down before the paint.
 //
+// aicc_planning#414 (C5b): the console can answer a narrowing with its own re-wrap
+// of its screen first and Claude Code's paint after it (C5's VM line on the
+// published beta.16, RECORDED_TWO_PAINTS): its full-width rules run on into the
+// row below with no line break, so the re-wrap holds lines longer than a row and has
+// fewer lines than the screen has rows. On a tab grown first it starts at the banner
+// two rows above xterm's screen too; the aligner now counts each line by the rows it
+// takes and brings those rows down for it as well.
+//
 // Here M1's recorded Claude Code tab (console-repaint-cc-streams.ts) is written into
 // xterm's own terminal with no window (@xterm/headless 6.0.0, the version the app
 // ships) with the renderer's terminal options, as console-repaint-after-resize.test.ts
@@ -30,9 +38,9 @@
 import { describe, it, expect } from 'vitest'
 import { Terminal } from '@xterm/headless'
 import { TERMINAL_SCROLLBACK_LINES } from '../../../src/shared/terminal-scrollback'
-import { alignConsoleRepaint, createConsoleRepaintAligner } from '../../../src/renderer/components/terminal/consoleRepaint'
+import { alignConsoleRepaint, cellsOf, createConsoleRepaintAligner } from '../../../src/renderer/components/terminal/consoleRepaint'
 import {
-  RECORDED_CC_RESIZES, PUBLISHED_CONTROL, controlPaint, expandRules, type RecordedCcResize, type RecordedRows,
+  RECORDED_CC_RESIZES, PUBLISHED_CONTROL, RECORDED_TWO_PAINTS, controlPaint, expandRules, type RecordedCcResize, type RecordedRows,
 } from './console-repaint-cc-streams'
 
 const size = (s: string): [number, number] => s.split('x').map(Number) as [number, number]
@@ -374,6 +382,102 @@ describe('a narrowing\'s paint whose top lines xterm holds just above its screen
     expect(screenOf(term)[4]).toBe('> input')
     expect(screenOf(term)[7]).toBe('after')
   })
+
+  it('the console\'s own re-wrap first (each 30-column rule run on into the row below, no line break: 7 lines over the 10 rows), then the program\'s paint: placed by the rows its lines take, each line once, the screen the program\'s (aicc_planning#414, C5b)', async () => {
+    const term = await narrowedTerminal()
+    const rewrap = consoleRewrap()
+    expect(rewrap.split('\r\n')).toHaveLength(7)
+    const out = alignConsoleRepaint(rewrap, term)
+    expect(out, 'C5 (f1999f08) wrote it as it came: 7 lines, not 10').not.toBeNull()
+    await write(term, out!)
+    expect(term.buffer.active.baseY).toBe(12)
+    expect(screenOf(term)).toEqual(await paintedAlone(rewrap))
+    // Then the program's paint, after the same size: already in place, written as it came.
+    const program = narrowPaint()
+    expect(alignConsoleRepaint(program, term)).toBeNull()
+    await write(term, program)
+    for (let i = 1; i <= 12; i++) expect(count(term, `$ shell ${i}`), `$ shell ${i}`).toBe(1)
+    expect([count(term, 'HEADER A'), count(term, 'HEADER B')]).toEqual([1, 1])
+    expect(screenOf(term)).toEqual(await paintedAlone(program))
+  })
+
+  it('the two paints written as they came (C5 too, for the re-wrap): the header lines show twice', async () => {
+    const term = await narrowedTerminal()
+    await write(term, consoleRewrap())
+    await write(term, narrowPaint())
+    expect([count(term, 'HEADER A'), count(term, 'HEADER B')]).toEqual([2, 2])
+  })
+
+  it('a line of wide characters counted two cells each (15 of them take two rows at 20 columns): placed', async () => {
+    const term = await narrowedTerminal()
+    const wide = '漢'.repeat(15)
+    const paint = narrowPaint().replace('mode on  logged out\x1b[K\r\n\x1b[K', `${wide}\x1b[K`)
+    expect(paint.split('\r\n')).toHaveLength(9)
+    expect(await paintedAlone(paint)).toContain('漢'.repeat(5))
+    expect(alignConsoleRepaint(paint, term)).not.toBeNull()
+    expect(count(term, 'HEADER A')).toBe(1)
+  })
+})
+
+/** The console's own re-wrap of narrowedTerminal's screen at 20 columns, as
+ *  C5's VM recorded one (RECORDED_TWO_PAINTS): it keeps its top row, and each
+ *  30-column rule runs on into the row below it with no line break. */
+function consoleRewrap(): string {
+  const body = ['HEADER A', 'HEADER B', '', RULE_30 + '> input', RULE_30 + STATUS_30, '', '']
+  return '\x1b[?25l\x1b[H' + body.map((l) => `${l}\x1b[K`).join('\r\n') + '\x1b[5;18H\x1b[?25h'
+}
+
+describe('a narrowing whose console paints its own re-wrap first, lines longer than a row (C5\'s VM line on the published beta.16, aicc_planning#414)', () => {
+  const { grown, grownPaint } = RECORDED_TWO_PAINTS
+  const first: RecordedCcResize = RECORDED_TWO_PAINTS.first
+  const BANNER = ' ▐▛███▛█   Claude Code v2.1.330'
+  const BANNER_2 = '▝▜██████▀  Opus 5.5 with medium effort · API Usage Billing'
+  const rewrap = expandRules((first.events[1] as { write: string }).write)
+  const program = expandRules(grownPaint.write)
+
+  /** The console's re-wrap of the grown tab's screen, built from pn-pcn1's, not
+   *  recorded so: its lines from the banner on (the grown tab's console screen
+   *  starts at the banner), blank rows to fill the screen, the cursor on the
+   *  input row (pn-pcn1's column, its row 11 rows higher, as the banner is). */
+  const grownRewrap = (() => {
+    const lines = rewrap.slice(0, rewrap.indexOf('\x1b[18;40H')).split('\r\n').slice(6)
+    lines[0] = '\x1b[?25l\x1b[38;2;215;119;87m\x1b[H' + lines[0]
+    return [...lines, ...Array<string>(11).fill('\x1b[K')].join('\r\n') + '\x1b[7;40H\x1b[?25h'
+  })()
+
+  /** The paint on a 103x27 terminal of its own: the top of its screen, how many
+   *  of its rows run on from the row above, and its rows. */
+  const alone = async (paint: string) => {
+    const t = makeTerminal('103x27')
+    await write(t, paint)
+    const b = t.buffer.active
+    const runOn = Array.from({ length: b.length }, (_, i) => b.getLine(i)?.isWrapped).filter(Boolean).length
+    return { baseY: b.baseY, runOn, rows: held(t).rows }
+  }
+
+  it('pn-pcn1 (140x28 to 103x27): the recording is whole; the console\'s re-wrap is 20 lines over the screen\'s 27 rows, 7 of them run on; through the aligner, the VM\'s reading', async () => {
+    for (const ev of first.events) if ('write' in ev) expect(expandRules(ev.write), 'the recorded output, to the character').toHaveLength(ev.chars)
+    expect(held(await restore(first.before)), 'the rows the VM read before the size').toEqual(asRead(first.before))
+    expect(rewrap.split('\r\n')).toHaveLength(20)
+    expect(await alone(rewrap)).toMatchObject({ baseY: 0, runOn: 7 })
+    expect(held(await replay(first.before, first.events, true))).toEqual(asRead(first.after))
+  }, 20_000)
+
+  it('the tab grown again (pn-pcn1b) and narrowed with the same two paints: written as it came, the banner\'s top two rows twice; through the aligner once, the shell\'s lines once, the screen Claude Code\'s paint', async () => {
+    expect(held(await restore(grown)), 'the rows the VM read before the size').toEqual(asRead(grown))
+    expect(program).toHaveLength(grownPaint.chars)
+    expect(grownRewrap.split('\r\n')).toHaveLength(25)
+    expect(await alone(grownRewrap)).toMatchObject({ baseY: 0, runOn: 2 })
+    const events = [{ resize: '103x27' }, { write: grownRewrap, chars: grownRewrap.length }, { write: program, chars: program.length }]
+    const today = await replay(grown, events, false)
+    expect([count(today, BANNER), count(today, BANNER_2)]).toEqual([2, 2])
+    const term = await replay(grown, events, true)
+    expect([count(term, BANNER), count(term, BANNER_2)], 'C5 (f1999f08): 2 and 2').toEqual([1, 1])
+    for (const text of ['Windows PowerShell', 'Copyright (C) Microsoft Corporation. All rights reserved.']) expect(count(term, text), text).toBe(1)
+    const b = term.buffer.active
+    expect(held(term).rows.slice(b.baseY)).toEqual((await alone(program)).rows)
+    expect([b.cursorX, b.cursorY]).toEqual([2, 6])
+  }, 20_000)
 })
 
 describe('a paint that is not a narrowing\'s of this screen is written as it came, the terminal left as it was', () => {
@@ -410,6 +514,49 @@ describe('a paint that is not a narrowing\'s of this screen is written as it cam
     const short = narrowPaint().replace(/\r\n\x1b\[K(?=\x1b\[5;8H)/, '')
     expect(short.split('\r\n')).toHaveLength(9)
     await unchanged(short, await narrowedTerminal())
+  })
+
+  it('a paint of more rows than the screen has: 10 lines, one of them longer than a row (11 rows)', async () => {
+    const long = narrowPaint().replace('mode on  logged out', 'mode on  logged out and more')
+    expect(long.split('\r\n')).toHaveLength(10)
+    await unchanged(long, await narrowedTerminal())
+  })
+})
+
+describe('the cells a line of the console\'s paint takes, as xterm writes it (aicc_planning#414, C5b)', () => {
+  /** The cells xterm gives each code point in `codes`: written after an `a`
+   *  on a row of its own, it is where the `|` after it lands (the row's last
+   *  one), less one. */
+  async function xtermCells(codes: number[]): Promise<number[]> {
+    const term = new Terminal({ cols: 10, rows: 1, scrollback: codes.length + 10, allowProposedApi: true })
+    await write(term, codes.map((c) => `a${String.fromCodePoint(c)}|`).join('\r\n'))
+    const b = term.buffer.active
+    return codes.map((_, i) => {
+      const line = b.getLine(i)!
+      for (let x = 9; x >= 0; x--) if (line.getCell(x)?.getChars() === '|') return x - 1
+      return -1
+    })
+  }
+
+  it('cellsOf gives xterm\'s own width for every code point of the Basic Multilingual Plane and the ones it lists above it', async () => {
+    const codes: number[] = []
+    for (let c = 0xa0; c <= 0xffff; c++) if (c < 0xd800 || c > 0xdfff) codes.push(c)
+    for (let c = 0x20; c < 0x7f; c++) codes.push(c)
+    for (const [from, to] of [[0x10a00, 0x10a40], [0x1d160, 0x1d250], [0x1f300, 0x1f6ff], [0x1f900, 0x1faff], [0x1fffe, 0x20010], [0x2fff0, 0x30010], [0x3fff0, 0x3ffff], [0xe0000, 0xe01f0]]) {
+      for (let c = from; c <= to; c++) codes.push(c)
+    }
+    const want = await xtermCells(codes)
+    const differ = codes.filter((c, i) => cellsOf(c) !== want[i]).map((c) => c.toString(16))
+    expect(differ).toEqual([])
+    expect(new Set(want)).toEqual(new Set([0, 1, 2]))
+  }, 60_000)
+
+  it('a combining mark takes no cell: a line of 20 cells with one in it is one row at 20 columns, and the narrowing\'s paint holding it is placed', async () => {
+    const accent = String.fromCodePoint(0x301)
+    const paint = narrowPaint().replace('mode on  logged out', `mode on  logge${accent}d out!`)
+    expect((await paintedAlone(paint))[6]).toBe(`mode on  logge${accent}d out!`)
+    const term = await narrowedTerminal()
+    expect(alignConsoleRepaint(paint, term)).not.toBeNull()
   })
 })
 
