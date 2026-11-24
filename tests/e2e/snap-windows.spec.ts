@@ -3,6 +3,9 @@
  * 2.1.3-beta.16, section A1; aicc_planning#401). Run ONLY by the snap-e2e job
  * in ci.yml (a dispatch), with `--retries=0 --workers=1`: never on the test
  * machine, never on a developer's PC (it presses Snap on the real screen).
+ * Without SNAP_E2E_HELPER every test here is skipped, so a full Playwright run
+ * leaves Snap unpressed; in the job a run that skipped everything fails its
+ * next step.
  *
  * One app (launchIsolatedApp: every per-user folder in its own temp folder),
  * one Claude Code tab on a stand-in `claude` (the Snap button shows on agent
@@ -408,6 +411,7 @@ test.describe.configure({ mode: 'serial' })
 
 test.describe('Snap on Windows', () => {
   test.skip(process.platform !== 'win32', 'Snap on Windows: the runner is Windows')
+  test.skip(!HELPER, 'the snap-e2e job only (ci.yml): it needs SNAP_E2E_HELPER, the helper that job built')
 
   test.beforeAll(async () => {
     test.setTimeout(LAUNCH_MS + 10_000)
