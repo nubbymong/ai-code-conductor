@@ -6,8 +6,8 @@ pty-manager.ts are unchanged; they read the screen through it.
 
 - **The recordings (#371 step 1).** C7's recording hold ran P19's recorder (helper/probes/p19-record.cjs
   at origin/beta, sha256 7ac8f649...) on the Windows test machine with a scenario file of its own
-  (c7-scenarios.json, sha256 1965f197...): Codex 0.157.1 on the probe's stand-in model, every launch with
-  the config of P19's warning launch (a tool server whose program does not exist), both ConPTYs, 3 runs
+  (c7-scenarios.json, sha256 1965f197..., committed byte for byte as helper/probes/c7-scenarios.json):
+  Codex 0.157.1 on the probe's stand-in model, every launch with the config of P19's warning launch (a tool server whose program does not exist), both ConPTYs, 3 runs
   of each of its two sequences (the wrapped draft, the paste and the queue hint once each). Every run
   drew the same rows: at an idle composer the hint and the count at the
   right of the row under the footer, one cell from the right edge; once a text is typed (a draft, a

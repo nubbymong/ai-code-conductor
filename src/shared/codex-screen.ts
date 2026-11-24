@@ -221,7 +221,10 @@ const HINT_ROWS: readonly HintRow[] = [
  *    draft typed after a reply (C7's recording hold, Codex 0.157.1 on both
  *    Windows ConPTYs, 3 runs each: codex-windows-*-warning-draft.json).
  *  A count of 1 says "warning", more say "warnings" (2 recorded after the
- *  first reply). Not recorded, so still read as no row of Codex's: the
+ *  first reply). Taken without a recording of the pair, each part being
+ *  recorded: the count beside "f6 for shortcuts" (both forms), a count
+ *  above 2, and Codex 0.170.0's count alone under a draft (its snapshot test
+ *  says the same row). Not recorded, so still read as no row of Codex's: the
  *  count with any other key than f2, beside the queue hint (P19 drew the
  *  queue hint with no count), or alone under an empty composer. */
 const WARNING_COUNT_RE = new RegExp(`^${String.fromCharCode(0x26a0)} ([1-9]\\d{0,3}) (warnings?) ${MIDDLE_DOT} f2 to view$`)

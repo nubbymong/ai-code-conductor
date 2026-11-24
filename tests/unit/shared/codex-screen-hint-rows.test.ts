@@ -25,13 +25,15 @@
 // recording hold recorded that screen and the readers now take it; the
 // recorded screens with the count read ready here, and
 // tests/unit/shared/codex-screen-warning-row.test.ts holds the rest. Still
-// refused: any row not recorded (another key, the count beside the queue hint
-// or alone under an empty composer), two rows under the footer, a row at
-// another indent or above the footer, and every row under a wrapped footer.
-// Codex 0.170.0 adds the thread's title to
-// its footer once a prompt is sent, and the footer wraps when the folder and
-// the title do not fit: those recordings still read unrecognised (the corpus
-// test lists them, with the warning ones).
+// refused: the count with another key than f2, beside the queue hint or alone
+// under an empty composer, any other row not recorded, two rows under the
+// footer, a row at another indent or above the footer, and every row under a
+// wrapped footer. Taken without a recording of the pair, each part being
+// recorded: the count beside the rebound hints ("f6 for shortcuts", both
+// forms) and a count above 2. Codex 0.170.0 adds the thread's title to its
+// footer once a prompt is sent, and the footer wraps when the folder and the
+// title do not fit: those recordings still read unrecognised (the corpus test
+// lists them).
 //
 // The screens are the bottom six rows of the last screen of each recording
 // (<name>.rows.json), copied as recorded, with the prompt glyph, the middle
