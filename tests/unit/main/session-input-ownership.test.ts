@@ -143,9 +143,17 @@ const ALLOWED: Record<string, Record<string, Allowed>> = {
     writeTmuxStageCmd: { count: 2, why: 'the SSH launch sequence: the architecture probe and the tmux stage', until: 'S25 (the launch spec, remotely)' },
     attemptTmuxPush: { count: 3, why: 'the SSH launch sequence: the tmux push, its Ctrl-C and its clean-up line', until: 'S25 (the launch spec, remotely)' },
     spawnPtyResolved: {
-      count: 10,
-      why: "in the SSH branch the tmux patch (2), the password and sudo answers (2) and the partner folder line (1); in the local branch the folder line, the launch line and a plain terminal's start command (3); the Codex pane writer, the raw writer the run screen types through, reached only through this module, and the Codex colour answer, a terminal reply (2)",
-      until: 'S25 and S11 (the launch writes); the pane writer and the colour answer stay',
+      count: 8,
+      why: "in the SSH branch the tmux patch (2), the password and sudo answers (2) and the partner folder line (1); in the local branch the folder line, the launch line and a plain terminal's start command (3)",
+      until: 'S25 and S11 (the launch writes)',
+    },
+    // 2.1.3-beta.17 (plan section B1.2, S16 step 5): the two Codex writers
+    // moved here from spawnPtyResolved, not added, so a Codex take-over's pane
+    // gets the same two (handed to launch-bindings.ts through its ports).
+    codexRunWriters: {
+      count: 2,
+      why: 'the Codex pane writer, the raw writer the run screen types through, reached only through this module, and the Codex colour answer, a terminal reply, for a Codex launch and a Codex take-over (S16 step 5)',
+      until: 'stays',
     },
   },
   'src/main/ipc/pty-handlers.ts': {

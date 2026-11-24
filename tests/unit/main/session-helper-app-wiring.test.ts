@@ -529,3 +529,26 @@ describe("a held Codex session's screen reads (2.1.3-beta.14, plan section B2)",
     expect(h.made[0].deps.screens).toEqual({ codex: true })
   })
 })
+
+describe('the take-over of a session an update kept running (2.1.3-beta.17, plan section B1)', () => {
+  it('the manager is told to take over Claude Code\'s and Codex\'s kept sessions, reads the saved tabs from the saved file when asked, and only Claude Code\'s tool streams given back say the tool list changed', () => {
+    h.settings = { agentSessionsThroughHelper: true }
+    initSessionHelper(() => {})
+    const deps = h.made[0].deps as { takeOver?: unknown; savedTabs?: () => ReadonlySet<string>; tools: Record<string, { listsAgain?: boolean; serve: (id: string, link: unknown, opts?: { toolsChanged?: boolean }) => boolean }> }
+    expect(deps.takeOver).toEqual({ claude: true, codex: true })
+    // The saved file is read only when the manager asks.
+    expect(h.savedStateReads).toBe(0)
+    h.savedState = { sessions: [{ id: 'abcdef0123456789abcdef01' }, { id: 'abcdef0123456789abcdef02' }] }
+    expect(deps.savedTabs!()).toEqual(new Set(['abcdef0123456789abcdef01', 'abcdef0123456789abcdef02']))
+    h.savedState = new Error('does not read')
+    expect(deps.savedTabs!()).toEqual(new Set())
+    // P20 (c): Claude Code lists its tools again on being told; Codex does not.
+    expect(deps.tools.claude.listsAgain).toBe(true)
+    expect(deps.tools.codex.listsAgain).toBeUndefined()
+    const link = { send() {}, take() {}, close() {} }
+    deps.tools.claude.serve('abcdef0123456789abcdef01', link, { toolsChanged: true })
+    expect(h.serveStream).toHaveBeenLastCalledWith('abcdef0123456789abcdef01', link, { toolsChanged: true })
+    deps.tools.claude.serve('abcdef0123456789abcdef01', link)
+    expect(h.serveStream).toHaveBeenLastCalledWith('abcdef0123456789abcdef01', link)
+  })
+})

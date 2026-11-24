@@ -67,13 +67,7 @@ import { dispatchSSHStatuslineUpdate, cleanupStatusFile } from './statusline-wat
 import { forgetSession } from './background-context'
 import { getGateway, isExactBindSourceActive } from './hooks'
 import { injectHooks } from './hooks/session-hooks-writer'
-import {
-  writeLocalSessionSettings,
-  removeLocalSessionSettings,
-  writeLocalSessionMcpConfig,
-  removeLocalSessionMcpConfig,
-  removeLocalSessionStatusUrl,
-} from './hooks/per-session-settings'
+import { writeLocalSessionSettings, writeLocalSessionMcpConfig } from './hooks/per-session-settings'
 import { unregisterCodexReviewSession, releaseMcpSessionProvider } from './conductor-mcp-server'
 import { ensureCanvasPlugin } from './canvas/canvas-plugin'
 import { designatedWorktreeDir } from './canvas/canvas-worktree'
@@ -96,7 +90,7 @@ import { getWatchdogManager } from './watchdog/watchdog-manager'
 import { clearCodexIdleAttention } from './codex-idle-attention'
 import { SSH_ATTENTION_OSC_PREFIX, SSH_ATTENTION_MAX_PAYLOAD, parseSshAttentionPayload, deliverRemoteAttention } from './ssh-attention'
 import type { HookEvent } from '../shared/hook-types'
-import { setLaunchBindingPorts, mintCodexHooks, keepCodexHooks, bindCodexLease, bindCodexPane, bindCodexLaunch, bindClaudeLaunch, bindLoggingRun, unbindLaunchFiles, unbindCodexLease, unbindLaunchTelemetry, unbindLaunchRegistrations } from './sessions/launch-bindings'
+import { setLaunchBindingPorts, mintCodexHooks, keepCodexHooks, bindCodexLease, bindCodexPane, bindCodexLaunch, bindClaudeLaunch, bindLoggingRun, unbindLaunchFiles, unbindCodexLease, unbindLaunchTelemetry, unbindLaunchRegistrations, takeOverKeptLaunch, removeFailedLaunchFiles, type KeptSessionTakenOver } from './sessions/launch-bindings'
 
 import * as path from 'path'
 import * as fs from 'fs'
@@ -563,8 +557,8 @@ function savedConfigLoggingOff(configs: unknown, configId: string | undefined, p
 /**
  * P3.12 (X1, Z1): the local Codex sessions running while not indexed (logging
  * off in Settings or in their config, or before the notice naming Codex was
- * seen), each with the moment it became not indexed (its launch, or the
- * switch-off). Every conversation such a session is on is marked written while
+ * seen), each with the moment it became not indexed (its launch, the switch-off,
+ * or, taken over, when the update let go of it). Every conversation such a session is on is marked written while
  * not indexed (indexing-gaps.ts) from that moment, not from its claim of the
  * conversation (Codex writes the first records before the claim), so no later
  * run, from any tab, indexes what was written then. Cleared when a launch of
@@ -830,6 +824,11 @@ function forgetCodexHooks(sessionId: string): void {
   codexResumedById.delete(sessionId)
   codexRefusedHookLogged.delete(sessionId)
   lastCodexHookRollout.delete(sessionId)
+}
+
+/** A Codex run's two raw writers, its pane's and its colour answer's, for its launch and its take-over (S16 step 5); the session input check counts them here. */
+function codexRunWriters(codexRun: pty.IPty): { write: (data: string) => void; writeColourAnswer: (bytes: string) => void } {
+  return { write: (data) => codexRun.write(data), writeColourAnswer: (bytes) => codexRun.write(bytes) }
 }
 
 /** P3.10 round 1 (B1): the session's gateway token was just minted, by a
@@ -2862,11 +2861,11 @@ function spawnPtyResolved(
   const cols = options?.cols || 120
   const rows = options?.rows || 30
 
-  let ptyProcess: pty.IPty
+  let ptyProcess: pty.IPty, takenOver: KeptSessionTakenOver | null // S16 step 5: a kept session its restored tab takes over (launch-bindings.ts)
   // P3.12 round 6 (Z1): when this launch's Codex process was started (taken before
   // its spawn): the moment the session became not indexed, when it launched so.
   let codexLaunchedAt: number | undefined
-  // P3.16 (M1): the same for this launch's Claude process.
+  // P3.16 (M1): the same for this launch's Claude process. A take-over sets both: when the update let go of it.
   let claudeLaunchedAt: number | undefined
 
   // Hoisted to function scope so the shared post-spawn tail (session-log capture)
@@ -6020,6 +6019,9 @@ function spawnPtyResolved(
         proceedAfterSetup()
       }
     })
+  } else if (localLaunch && (takenOver = takeOverKeptLaunch({ win, sessionId, launch: localLaunch, resolvedCwd, cols, rows, codexLaunch: options?.codexLaunch, profileId: options?.profileId, isAsk: options?.isAsk === true }))) {
+    ({ ptyProcess, launchCwd: effectiveLaunchCwd, conversation: resumeUuidForBind, profileId: resolvedProfileId, since: claudeLaunchedAt } = takenOver); codexLaunchedAt = claudeLaunchedAt
+    if (options?.provider === undefined) options = { ...options, provider: localLaunch.id } // as the Claude Code branch does: its options name the provider looked up
   } else if (localLaunch?.style === 'direct') {
     // Codex local session — spawn `codex` directly. Codex itself owns the
     // REPL, so there is no shell-wrap-then-cd-then-launch dance like Claude
@@ -6202,7 +6204,7 @@ function spawnPtyResolved(
       // Watchdog's CSI clamp.
       const codexRun = started
       const runScreen = provider.runScreen
-      const colorQueries = bindCodexPane({ sessionId, codexRun, runScreen, cols, rows, write: (data) => codexRun.write(data), writeColourAnswer: (bytes) => codexRun.write(bytes) })
+      const colorQueries = bindCodexPane({ sessionId, codexRun, runScreen, cols, rows, ...codexRunWriters(codexRun) })
       ptyProcess.onData((rawData) => {
         if (win.isDestroyed()) return
         if (ptySessions.get(sessionId)?.ptyProcess !== ptyProcess) return // rc.15 review R9
@@ -6975,9 +6977,7 @@ function spawnPtyResolved(
         logWarn(`[pty] Local spawn for ${sessionId} failed after its process started; the process is ended (${(err as Error)?.message ?? err})`)
         try { localStarted.kill() } catch { /* already gone */ }
         dropGatewayToken(sessionId)
-        try { removeLocalSessionSettings(sessionId) } catch { /* best-effort */ }
-        try { removeLocalSessionMcpConfig(sessionId) } catch { /* best-effort */ }
-        try { removeLocalSessionStatusUrl(sessionId) } catch { /* best-effort */ }
+        removeFailedLaunchFiles(sessionId)
         try { cleanupSessionResources(sessionId) } catch { /* best-effort */ }
         try { clearClaudeAccount(sessionId) } catch { /* best-effort */ }
         try { stopWatchingAccountIdentity(sessionId) } catch { /* best-effort */ }
@@ -7287,7 +7287,7 @@ setLaunchBindingPorts({
   ptySessions, codexHookFiles, codexHookedLaunches, codexLaunchLeases, takenCodexLeases, codexAskSessions, codexTelemetrySources, indexedRuns,
   notIndexedSessions, codexContextRollouts, keptCodexConversations, lastCodexHookRollout, claudeTranscripts, claudeFolders, codexFolders,
   noteGatewayToken, dropGatewayToken, forgetCodexHooks, keepCodexConversation, markCodexConversationUncertain, clearCodexDoubtFromHook,
-  noteCodexContextRollout, endSessionNotIndexed, noteCodexFolder, savedConfigLoggingOff, noteClaudeFolder, noteClaudeTranscript, markSessionNotIndexed,
+  noteCodexContextRollout, endSessionNotIndexed, noteCodexFolder, savedConfigLoggingOff, noteClaudeFolder, noteClaudeTranscript, markSessionNotIndexed, noteAgentRunFolder, codexRunWriters,
   closeCodexRunScreen: (sessionId) => codexRunScreen()?.close(sessionId),
 })
 

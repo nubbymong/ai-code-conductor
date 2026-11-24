@@ -200,6 +200,20 @@ export function issueMcpSessionToken(sessionId: string, provider: McpClientProvi
   return tokenOfForm(sessionId, form)
 }
 
+/** 2.1.3-beta.17 (S16 step 5, aicc_planning#412): the record of a session
+ *  whose CLI an app update kept running, made when its restored tab takes it
+ *  over, with no credential made or handed out: its tool streams come
+ *  through its holder (serveToolStream checks no credential), and its CLI
+ *  holds the last run's credential, which this run refuses. The record is
+ *  for a launch of its own, in the run form, as a launch's first issue makes
+ *  it; a credential issued later in that launch (its status line's address)
+ *  keeps the record's launch and form. */
+export function recordHeldToolSession(sessionId: string, provider: McpClientProvider): void {
+  const held = sessionRecords.get(sessionId)
+  sessionRecords.set(sessionId, { provider: held?.provider ?? provider, form: held?.form ?? 'run', launch: held?.launch ?? ++lastSessionLaunch })
+  noRecordLogged.delete(sessionId)
+}
+
 /** Release a session's record when its process is torn down
  *  (pty-manager.ts cleanupSessionResources, which runs before every launch
  *  and when a session ends), and close every tool stream that session opened.
@@ -1785,8 +1799,15 @@ class ToolStreamTransport {
  * made or checked here: the stream comes through the session's own holder.
  * The stream ends with the session's record (releaseMcpSessionProvider), when
  * the server stops, when the link closes, or when its launch is over.
+ *
+ * `toolsChanged` (2.1.3-beta.17, S16 step 6): the stream was given back to
+ * this run by a CLI an app update kept running, which listed its tools from
+ * the last run's server. Once the server is connected, the CLI is sent
+ * `notifications/tools/list_changed`, so a CLI that lists again on it (Claude
+ * Code, probe P20) reads this run's tool list. The request handler is not
+ * changed.
  */
-export function serveToolStream(sessionId: string, link: ToolStreamLink): boolean {
+export function serveToolStream(sessionId: string, link: ToolStreamLink, opts?: { toolsChanged?: boolean }): boolean {
   const refuse = (why: string): false => {
     logWarn(`[vision-mcp] Refused a tool stream (sid=${sessionId}): ${why}`)
     try { link.close() } catch { /* already closed */ }
@@ -1809,7 +1830,11 @@ export function serveToolStream(sessionId: string, link: ToolStreamLink): boolea
     return false
   }
   logInfo(`[vision-mcp] New tool stream (source=${source}, sid=${sessionId})`)
-  Promise.resolve(server.connect(transport)).catch((err: any) => {
+  Promise.resolve(server.connect(transport)).then(() => {
+    if (opts?.toolsChanged !== true) return
+    logInfo(`[vision-mcp] Told the CLI of sid=${sessionId} its tool list may have changed (a tool stream given back after an update)`)
+    return transport.send({ jsonrpc: '2.0', method: 'notifications/tools/list_changed' })
+  }).catch((err: any) => {
     logError(`[vision-mcp] Tool stream connect error (sid=${sessionId}): ${err?.message ?? err}`)
     void transport.close()
   })

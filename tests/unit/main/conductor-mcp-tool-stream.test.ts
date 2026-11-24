@@ -410,3 +410,49 @@ describe('a stream reads a message as the /mcp route reads a body', () => {
     expect(link.closed).toBe(false)
   })
 })
+
+// 2.1.3-beta.17, plan section B1 (S16 steps 5 and 6, aicc_planning#412): a
+// restored tab that takes over a session an update kept running makes the
+// session's record with no credential (recordHeldToolSession), and a stream
+// its holder gives back is served with `toolsChanged`: the CLI is told its
+// tool list may have changed once the server is connected.
+describe('a stream given back to a take-over (S16 steps 5 and 6)', () => {
+  it('a record made with no credential: a stream is served the record\'s tool set, a tool list first with no handshake (as a stream given back starts)', async () => {
+    server.recordHeldToolSession('ts-held-1', 'claude')
+    expect(server.mcpSessionProvider('ts-held-1')).toBe('claude')
+    const link = newLink()
+    expect(server.serveToolStream('ts-held-1', link)).toBe(true)
+    expect(await link.toolNames()).toEqual(CLAUDE_NAMES)
+    // Released with the session, as a launch's record is.
+    server.releaseMcpSessionProvider('ts-held-1')
+    expect(link.closed).toBe(true)
+    expect(server.mcpSessionProvider('ts-held-1')).toBeNull()
+  })
+
+  it('toolsChanged: the CLI is sent notifications/tools/list_changed once, then is answered as before', async () => {
+    server.recordHeldToolSession('ts-held-2', 'claude')
+    const link = newLink()
+    expect(server.serveToolStream('ts-held-2', link, { toolsChanged: true })).toBe(true)
+    await until(() => link.sent.length > 0, 'the notification')
+    expect(link.sent).toEqual([{ jsonrpc: '2.0', method: 'notifications/tools/list_changed' }])
+    expect(await link.toolNames()).toEqual(CLAUDE_NAMES)
+    expect(link.sent.filter((m) => m.method === 'notifications/tools/list_changed')).toHaveLength(1)
+  })
+
+  it('without toolsChanged nothing is sent before the CLI asks', async () => {
+    server.recordHeldToolSession('ts-held-3', 'claude')
+    const link = newLink()
+    expect(server.serveToolStream('ts-held-3', link)).toBe(true)
+    await tick(30)
+    expect(link.sent).toEqual([])
+  })
+
+  it('a credential issued later in the same launch (its status line\'s address) keeps the record\'s launch: the stream served before goes on', async () => {
+    server.recordHeldToolSession('ts-held-4', 'claude')
+    const link = newLink()
+    expect(server.serveToolStream('ts-held-4', link)).toBe(true)
+    server.issueMcpSessionToken('ts-held-4', 'claude')
+    expect(await link.toolNames()).toEqual(CLAUDE_NAMES)
+    expect(link.closed).toBe(false)
+  })
+})

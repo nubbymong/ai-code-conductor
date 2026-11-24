@@ -15,6 +15,7 @@ import { warmCodexResume } from './rollout-lookup'
 import { deployCodexResumePickerScript } from './resume-picker'
 import { deployCodexHookScripts, writeCodexHookFile, removeCodexHookFile, removeKeptCodexHookFolder, prepareCodexHookFolders, preparedCodexHookRoot, codexPlainWrapperDir, codexLocalAppData, codexHookCommand } from './hooks'
 import type { SecureHookFolders } from './hooks'
+import { rewriteKeptCodexHookFile } from './kept-hooks'
 import { CODEX_PINNED_CLI_VERSION, CODEX_MIN_SUPPORTED_VERSION, CODEX_MAX_TESTED_VERSION } from './cli-contract'
 import { codexInstallRecipes } from './install-recipes'
 import { codexOperationBaseEnv } from './process-env'
@@ -392,6 +393,27 @@ export class CodexProvider implements SessionProvider {
       const removed = sweepStaleCodexPickFolders()
       if (removed > 0) logInfo(`[codex] start: removed ${removed} resume-list pick folder(s) left in the temp folder by a run that ended without closing its sessions`)
     } catch { /* best-effort; the next start tries again */ }
+  }
+
+  /** 2.1.3-beta.17 (S16 step 5): the hook file of a session an app update
+   *  kept running, written again in its own folder for the run that takes it
+   *  over (kept-hooks.ts); removed with that folder, as a kept one is. */
+  rewriteSessionHooks(dir: string, sessionId: string, port: number, secret: string): { hookFile: string; dispose(): void } | null {
+    let file: string | null = null
+    try { file = rewriteKeptCodexHookFile(dir, sessionId, port, secret, codexHookDataDir()) } catch { file = null }
+    if (!file) {
+      logWarn(`[codex] hooks: the hook file of ${sessionId}'s kept session could not be written again; the session gets no hook events`)
+      return null
+    }
+    let disposed = false
+    return {
+      hookFile: file,
+      dispose: () => {
+        if (disposed) return
+        disposed = true
+        try { removeKeptCodexHookFolder(dir, codexHookDataDir()) } catch { /* best-effort; the sweep remains */ }
+      },
+    }
   }
 }
 

@@ -31,6 +31,9 @@ export function tempSessionSettings() {
       return write(settingsPath(sessionId), '{}\n')
     },
     sessionLaunchedWithoutAppStatusLine: (sessionId: string) => withoutStatusLine.has(sessionId),
+    /** A kept session taken over (2.1.3-beta.17): the settings this stand-in
+     *  writes carry no status line, so it reads as launched without the app's. */
+    noteKeptLaunchStatusLine: (sessionId: string) => { withoutStatusLine.add(sessionId) },
     writeLocalSessionMcpConfig: (sessionId: string) => write(mcpPath(sessionId), '{"mcpServers":{}}\n'),
     writeLocalSessionStatusUrl: (sessionId: string) => write(statusPath(sessionId), 'http://127.0.0.1/status\n'),
     removeLocalSessionSettings: (sessionId: string) => {
