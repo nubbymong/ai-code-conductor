@@ -26,7 +26,8 @@ bug"). C5's review and join recorded three limits of its narrowing placement (co
   back, 140x28 to 103x27, changes both), and keeps it when only its columns change (a narrower
   window of the same height, a pane opened beside the terminal). On such a narrowing C5's two
   resizes cleared it. **Fix:** `bringRowsDown` reads it before its resizes and selects it again
-  after, by its start and length: every row above the cursor's keeps its place in the buffer, and
+  after, by its start and length, its columns cut to the screen's width: every row above the
+  cursor's keeps its place in the buffer, and
   the paint writes the lines it was found by on the rows that held them.
 - **3. A scrolled-up view.** Measured: C5's resizes moved a view the user had scrolled up by the
   rows brought down (C5's VM record tg-cc2, grown and maximised back, a view 3 rows up: from row 6
@@ -37,19 +38,26 @@ bug"). C5's review and join recorded three limits of its narrowing placement (co
   that row is above xterm's screen again, and in any case once the paint is written (the aligner
   passes `settle` to the paint's write: the line breaks that scroll the rows brought down back up
   do not move a scrolled-up view). Never moved to the bottom on the way: TerminalView's onScroll
-  would count the user back at the bottom.
+  would count the user back at the bottom. So a view whose row is xterm's top row once the rows
+  are brought down (the bottom) is put back only once the paint is written, not at once.
 - **Tests.** `tests/unit/renderer/console-repaint-claude-code.test.ts` (RECORDED_TWO_PAINTS in
   console-repaint-cc-streams.ts: pn-pcn1 through the aligner is the VM's reading; the grown tab's
   two paints show the banner once; small terminals for the re-wrap, wide characters, a combining
   mark and a paint of more rows; `cellsOf` against xterm's own width for every code point of the
   Basic Multilingual Plane and the ranges above it it lists) and the new
   `tests/unit/renderer/console-repaint-narrow-keep.test.ts` (jsdom: the app's xterm for the
-  selection; the app's and headless xterm for the view). Red on C5's head f1999f08: 15 of 89
-  across those two, console-repaint-after-resize.test.ts and terminalview-console-repaint.test.tsx;
-  green after, 89 of 89. Mutants, each red: rows counted as lines (4), no selection again (3), no
-  view kept (7), no `settle` (3), no step up (1), the view moved at once when it would reach the
-  bottom (1), wide characters as one cell (2), no-cell characters as one cell (2).
+  selection, one dragged past the end of its line among them; the app's and headless xterm for the
+  view, 1 and 3 rows up for the bottom). Red on C5's head f1999f08: 17 of 91 across those two,
+  console-repaint-after-resize.test.ts and terminalview-console-repaint.test.tsx; green after, 91
+  of 91. Mutants, each red, counted on the 89 tests before C5b's review added two: rows counted as
+  lines (4), no selection again (3), no view kept (7), no `settle` (3), no step up (1), wide
+  characters as one cell (2), no-cell characters as one cell (2). Counted on the 18 tests of
+  console-repaint-narrow-keep.test.ts after it: the selection's columns not cut to the width (1),
+  `<=` for `<` in the view's at-once check (1), the view moved at once in every case (2).
 - **Not handled.** A selection selected again keeps its start and length: a later narrowing of
   columns moves its end as xterm moves any selection made by `select`, where one made with the
-  mouse keeps its end cell. **Not checked here:** the app's xterm in Electron with its WebGL
+  mouse keeps its end cell. `rowsOfPaint` counts two kinds of input as xterm does not, neither in
+  a console paint (a wrapped row is written cell by cell, a mark in its character's cell): an
+  erase (`ESC[nX`) right after a full row, and a mark with no character before it. Such a paint is
+  written as it came. **Not checked here:** the app's xterm in Electron with its WebGL
   renderer (jsdom lays nothing out: the tests measure its cell as 9x17); the VM line on C5b's head.

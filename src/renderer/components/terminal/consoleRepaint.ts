@@ -313,7 +313,11 @@ export function cellsOf(code: number): number {
 /** How many rows the paint takes on a terminal `cols` columns wide: each line
  *  from the left edge, a character that does not fit on its row starting the
  *  next one, as xterm writes it (the console writes a line longer than a row
- *  with no line break inside it). */
+ *  with no line break inside it). Not counted as xterm does, and in no console
+ *  paint (a wrapped row is written cell by cell, a mark in its character's
+ *  cell): an erase (`ESC[nX`) right after a full row, which takes xterm's
+ *  cursor back to the last column, and a mark with no character before it,
+ *  which xterm gives a cell. */
 function rowsOfPaint(read: Paint, cols: number): number {
   let rows = 0
   for (const run of read.runs) {
@@ -560,7 +564,8 @@ function topLinesHeldFrom(lines: readonly string[], term: RepaintTerminal, start
  * one row for each row brought down (Buffer.resize). Every row above the
  * cursor's keeps its place in the buffer, and the paint writes the lines it
  * was found by on the rows that held them, so the selection is selected again
- * where it was, and the view is put back on the row it started on
+ * where it was, its columns cut to the screen's width (xterm reads one that
+ * runs past it to the row's end), and the view is put back on the row it started on
  * (putViewBack), once the paint is written (`settle`: the line breaks that
  * scroll the rows brought down back up do not move a view the user has
  * scrolled up) and, when its row is above xterm's screen already, at once too.
@@ -581,13 +586,13 @@ function bringRowsDown(read: Paint, paint: string, term: RepaintTerminal): Place
     term.resize(cols, cursorY + 1)
     term.resize(cols, rows)
     try {
-      if (selection) term.select?.(selection.start.x, selection.start.y, (selection.end.y - selection.start.y) * cols + selection.end.x - selection.start.x)
+      if (selection) { const from = Math.min(selection.start.x, cols); const to = Math.min(selection.end.x, cols); term.select?.(from, selection.start.y, (selection.end.y - selection.start.y) * cols + to - from) }
     } catch { /* the selection stays cleared */ }
     const settle = view < top ? () => putViewBack(term, view) : undefined
     // Now when its row is above xterm's screen again; else only once the line
     // breaks below have made room (moved to the bottom now, it would count as
     // back at the bottom: TerminalView's onScroll).
-    if (settle && view <= term.buffer.active.baseY) settle()
+    if (settle && view < term.buffer.active.baseY) settle()
     const up = top - term.buffer.active.baseY - down
     return { out: up > 0 ? '\x1b[?25l' + `\x1b[${rows};1H` + '\n'.repeat(up) + paint : paint, settle }
   }

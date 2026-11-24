@@ -166,6 +166,20 @@ describe('a narrowing of columns only whose paint xterm\'s rows are brought down
     expect([count(term, 'HEADER A'), term.getSelection()]).toEqual([1, before])
   })
 
+  it('a selection dragged past the end of its line (its end column past the new width, as xterm keeps it): the same text, not run on into the next row', async () => {
+    const term = await programTerminal('app', 12) as AppTerminal
+    // As a mouse drag sets it: xterm keeps its end cell across a narrowing of
+    // columns only, so its end column is past the new width.
+    const model = (term as any)._core._selectionService._model
+    model.selectionStart = [0, 2]
+    model.selectionEnd = [28, 2]
+    term.resize(20, 10)
+    expect(term.getSelection()).toBe('$ shell 3')
+    await paintThroughAligner(term)
+    expect(count(term, 'HEADER A'), 'the paint was placed').toBe(1)
+    expect(term.getSelection()).toBe('$ shell 3')
+  })
+
   it('no selection: none is made', async () => {
     const term = await programTerminal('app', 12) as AppTerminal
     await narrowAndPaint(term)
@@ -228,18 +242,23 @@ describe('a view the user has scrolled up, across a narrowing whose paint xterm\
     })
   }
 
-  it('app: scrolled up fewer rows than were brought down, the view never reaches the bottom on the way (TerminalView\'s onScroll would count the user back at the bottom)', async () => {
-    const term = await programTerminal('app', 40) as AppTerminal
-    term.scrollLines(-1)
-    term.resize(20, 10)
-    await frame()
-    const seen: Array<[number, number]> = []
-    const sub = term.onScroll(() => seen.push([term.buffer.active.viewportY, term.buffer.active.baseY]))
-    await paintThroughAligner(term)
-    sub.dispose()
-    expect(term.buffer.active.viewportY).toBe(39)
-    expect(seen.filter(([view, base]) => view >= base)).toEqual([])
-  })
+  // 1 row up: the view (39) is below xterm's top row once the rows are brought
+  // down (37). 3 rows up: the view (37) is xterm's top row then, the bottom.
+  for (const [up, view] of [[1, 39], [3, 37]] as const) {
+    it(`app: scrolled up fewer rows than were brought down (${up} row${up > 1 ? 's' : ''} up), the view never reaches the bottom on the way (TerminalView's onScroll would count the user back at the bottom)`, async () => {
+      const term = await programTerminal('app', 40) as AppTerminal
+      term.scrollLines(-up)
+      term.resize(20, 10)
+      await frame()
+      expect(term.buffer.active.viewportY).toBe(view)
+      const seen: Array<[number, number]> = []
+      const sub = term.onScroll(() => seen.push([term.buffer.active.viewportY, term.buffer.active.baseY]))
+      await paintThroughAligner(term)
+      sub.dispose()
+      expect([term.buffer.active.viewportY, lineAt(term, term.buffer.active.viewportY)]).toEqual([view, `$ shell ${view + 1}`])
+      expect(seen.filter(([v, base]) => v >= base)).toEqual([])
+    })
+  }
 
   it('headless, written as it came (no aligner): the view stays where it was, the header lines twice', async () => {
     const term = await programTerminal('headless', 40)

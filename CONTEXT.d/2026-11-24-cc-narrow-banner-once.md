@@ -27,8 +27,9 @@ same.
   `term.resize` calls at the same width, in the paint's write callback), and the rows brought down
   past the paint's top line go up again by line breaks. The rows the screen gives up are rows the
   paint writes over on today's path too. Bounded by the rows below the cursor; a paint already in
-  place, one of fewer rows than the screen, or one found nowhere above is written as it came, the
-  terminal untouched. `RepaintTerminal` gains `resize`.
+  place, one of fewer lines than the screen has rows (C5b counts each line by the rows it takes,
+  fewer or more: 2026-11-24-cc-narrow-banner-limits.md), or one found nowhere above is written as
+  it came, the terminal untouched. `RepaintTerminal` gains `resize`.
 - **Tests.** `tests/unit/renderer/console-repaint-claude-code.test.ts`, 32 tests: g-ccmain-max
   written as it came is still the VM's reading and through the aligner is that reading with the two
   rows once; the published control's maximise back shows its banner once; small terminals for the
