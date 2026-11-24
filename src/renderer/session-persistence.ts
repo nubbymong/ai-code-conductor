@@ -530,7 +530,12 @@ export async function restoreSavedSessions(
     // aicc_planning#423: main is told which tabs came back. A tab not on
     // screen starts (and takes over a session an update kept for it) only once
     // it is shown, so that session waits for it with no time limit till then.
-    try { window.electronAPI.pty?.tabsRestored?.(restoredIds) } catch { /* each kept session keeps its time limit */ }
+    // B1d: a local agent tab with the folder its launch is configured in (as
+    // its view passes it to pty.spawn), for the canvas roots that session is
+    // served its Conductor tools with meanwhile. Main refuses a list with a
+    // folder over 4096 characters, so one longer is left out (none is real).
+    const restoredTabs = restoredSessions.map((s) => ({ id: s.id, ...(s.sessionType === 'local' && !s.shellOnly && s.workingDirectory && s.workingDirectory.length <= 4096 ? { cwd: s.workingDirectory } : {}) }))
+    try { window.electronAPI.pty?.tabsRestored?.(restoredTabs) } catch { /* each kept session keeps its time limit */ }
     // SSH Persistent (Phase 1): rehydrate the left-running registry from the
     // same persisted file BEFORE the save below (which folds it back in via
     // buildSessionState). App-restart restore is otherwise UNCHANGED — the

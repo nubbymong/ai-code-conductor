@@ -55,6 +55,19 @@ const h = vi.hoisted(() => ({
   settings: {} as Record<string, unknown>,
   /** What the last take-over answered pty-manager.ts (takeOverKeptLaunch). */
   takenOver: null as { since: number } | null,
+  /** B1d: each review registration ([tool, session, folder]), each MCP record
+   *  released, each gateway token unregistered, each canvas root asked for
+   *  ([session, folder]), each Codex canvas root pair asked for, each session
+   *  whose canvas roots were revoked, each warning logged; and whether the
+   *  Codex provider's hook file rewrite (tryGetProvider's) writes nothing. */
+  reviews: [] as Array<[string, string, string]>,
+  released: [] as string[],
+  unregistered: [] as string[],
+  canvasRoots: [] as Array<[string, string]>,
+  codexRoots: [] as Array<[string, string, string | null]>,
+  revoked: [] as string[],
+  warns: [] as string[],
+  rewriteFails: false,
 }))
 
 /** The module's functions, each recorded by name, then run as they are; what
@@ -117,14 +130,18 @@ vi.mock('../../../src/main/conductor-mcp-server', () => ({
   getConductorMcpPort: () => h.mcpPort,
   issueMcpSessionToken: () => 'tok',
   recordHeldToolSession: (sid: string, provider: string) => { if (h.recordThrows) throw new Error('the stand-in record failed'); h.journal.push('recordHeldToolSession'); h.records.push([sid, provider]) },
-  registerCodexReviewSession: () => {},
-  registerClaudeReviewSession: () => {},
+  registerCodexReviewSession: (sid: string, cwd: string) => { h.reviews.push(['codex_review', sid, cwd]) },
+  registerClaudeReviewSession: (sid: string, cwd: string) => { h.reviews.push(['claude_review', sid, cwd]) },
   unregisterCodexReviewSession: () => {},
-  releaseMcpSessionProvider: () => {},
+  releaseMcpSessionProvider: (sid: string) => { h.released.push(sid) },
 }))
 vi.mock('../../../src/main/providers', () => ({
   providerCapability: () => ({ enabled: true }),
-  tryGetProvider: () => ({ statusPostUrl: (sid: string, _r: unknown, port: number) => `http://127.0.0.1:${port}/status?cccSessionId=${sid}&token=new-run` }),
+  tryGetProvider: (id: string) => ({
+    statusPostUrl: (sid: string, _r: unknown, port: number) => `http://127.0.0.1:${port}/status?cccSessionId=${sid}&token=new-run`,
+    // B1d: the registry's Codex provider writes a kept hook file again (a session served while its tab is not shown).
+    ...(id === 'codex' ? { rewriteSessionHooks: (dir: string, sid: string, port: number, secret: string) => { if (h.rewriteFails) return null; h.rewrites.push([dir, sid, port, secret]); return { hookFile: path.join(dir, 'hook.json'), dispose: () => { h.disposed.push(dir) } } } } : {}),
+  }),
   getProvider: (id: string) => ({
     resolveBinary: () => ({ cmd: 'claude', source: 'system' }),
     buildSpawnCommand: (opts: Record<string, any>) => {
@@ -146,10 +163,27 @@ vi.mock('../../../src/main/hooks', () => ({
   getGateway: () => ({
     status: () => ({ enabled: true, listening: h.gwListening, port: 51234 }),
     registerSession: () => { h.journal.push('gatewaySecret'); return '0f8b6a2c-1d3e-4f50-9a61-7b2c3d4e5f60' },
-    unregisterSession: () => {},
+    unregisterSession: (sid: string) => { h.unregistered.push(sid) },
   }),
   isExactBindSourceActive: () => true,
 }))
+// B1d: the canvas roots a session is given, and the warnings logged, recorded on the way through.
+vi.mock('../../../src/main/canvas/canvas-store', async (importOriginal) => {
+  const real = await importOriginal<typeof import('../../../src/main/canvas/canvas-store')>()
+  return {
+    ...real,
+    registerCanvasUatRoot: (sid: string, dir: string) => { h.canvasRoots.push([sid, dir]); return real.registerCanvasUatRoot(sid, dir) },
+    revokeCanvasUatRoots: (sid: string) => { h.revoked.push(sid); real.revokeCanvasUatRoots(sid) },
+  }
+})
+vi.mock('../../../src/main/canvas/codex-canvas-roots', async (importOriginal) => {
+  const real = await importOriginal<typeof import('../../../src/main/canvas/codex-canvas-roots')>()
+  return { ...real, registerCodexCanvasRoots: (sid: string, cwd: string, worktree: string | null) => { h.codexRoots.push([sid, cwd, worktree]); real.registerCodexCanvasRoots(sid, cwd, worktree) } }
+})
+vi.mock('../../../src/main/debug-logger', async (importOriginal) => {
+  const real = await importOriginal<typeof import('../../../src/main/debug-logger')>()
+  return { ...real, logWarn: (...a: unknown[]) => { h.warns.push(a.map(String).join(' ')); real.logWarn(...a) } }
+})
 vi.mock('../../../src/main/hooks/session-hooks-writer', () => ({ injectHooks: () => { h.journal.push('injectHooks') } }))
 vi.mock('../../../src/main/hooks/per-session-settings', () => ({
   writeLocalSessionSettings: () => { h.journal.push('writeSettings'); return '/nonexistent/settings.json' },
@@ -195,15 +229,26 @@ vi.mock('../../../src/main/legacy-version-manager', () => ({ isVersionInstalled:
 vi.mock('../../../src/main/credential-store', () => ({ loadCredential: () => null }))
 vi.mock('../../../src/main/provider-accounts', () => ({ getAccountsService: () => null }))
 
-const { spawnPty, killPty, writePty, holdsCodexLaunchLease, getKeptCodexConversation, REMOVED_ACCOUNT_REFUSAL } = await import('../../../src/main/pty-manager')
+const { spawnPty, killPty, writePty, holdsCodexLaunchLease, getKeptCodexConversation, REMOVED_ACCOUNT_REFUSAL, isCodexPtySession, routeHookTranscriptPath } = await import('../../../src/main/pty-manager')
 const { setKeptTakeOver, holdKeptLaunch } = await import('../../../src/main/sessions/kept-launches')
+// B1d: read off the module, as a plain copy of what it exports (the mock
+// throws on a name it does not have), so each case fails on what it checks on
+// the code before it.
+const launchBindings: Record<string, unknown> = Object.fromEntries(Object.entries(await import('../../../src/main/sessions/launch-bindings')))
+type Unseen = { sessionId: string; provider: 'claude' | 'codex'; hookFolder: string | null; folder: string | null }
+const serveUnseen = (k: Unseen, cwd: string | undefined): unknown => (launchBindings.serveKeptLaunchUnseen as ((k: Unseen, cwd: string | undefined) => boolean) | undefined)?.(k, cwd)
+const unserveUnseen = (id: string): void => { (launchBindings.unserveKeptLaunchUnseen as ((id: string) => void) | undefined)?.(id) }
+const holdsCodexToken = (id: string): unknown => (launchBindings.holdsCodexGatewayToken as ((id: string) => boolean) | undefined)?.(id)
 const { notIndexedSnapshot, resetIndexingGapsForTests, conversationKey } = await import('../../../src/main/logging/indexing-gaps')
 const { codexFolderKey } = await import('../../../src/main/logging/codex-folder-key')
 
 h.urlDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ccc-takeover-url-'))
+/** B1d: a restored tab's configured folder, a real one (a launch's folder is resolved: resolveCwd). */
+const PROJECT = fs.mkdtempSync(path.join(os.tmpdir(), 'ccc-unseen-project-'))
 afterAll(() => {
   setKeptTakeOver(null)
   if (path.basename(h.urlDir).startsWith('ccc-takeover-url-')) fs.rmSync(h.urlDir, { recursive: true, force: true })
+  if (path.basename(PROJECT).startsWith('ccc-unseen-project-')) fs.rmSync(PROJECT, { recursive: true, force: true })
 })
 
 const CODEX_SID = 'cx0000000000000000000008'
@@ -274,6 +319,14 @@ beforeEach(() => {
   h.gwListening = true
   h.settings = {}
   h.takenOver = null
+  h.reviews.length = 0
+  h.released.length = 0
+  h.unregistered.length = 0
+  h.canvasRoots.length = 0
+  h.codexRoots.length = 0
+  h.revoked.length = 0
+  h.warns.length = 0
+  h.rewriteFails = false
   resetIndexingGapsForTests()
   for (const f of fs.readdirSync(h.urlDir)) fs.rmSync(path.join(h.urlDir, f), { force: true })
 })
@@ -486,5 +539,117 @@ describe('pty-manager.ts: a restored tab takes over the session an update kept r
     spawnPty(fakeWin, CODEX_SID, { cwd: os.tmpdir(), provider: 'codex', codexOptions: { permissionsPreset: 'read-only' }, codexLaunch: codexLaunch() } as never)
     expect(asked.map((a) => a.account)).toEqual(['acct-b1'])
     expect(seen()).toEqual([...TEARDOWN, 'mintCodexHooks', 'gatewaySecret', 'keepCodexHooks', 'bindCodexLease', 'spawn', 'bindCodexPane', 'bindCodexLaunch', 'bindLoggingRun'])
+  })
+})
+
+/**
+ * aicc_planning#423, B1d (review:B1c findings 1 and 2): while its restored
+ * tab is not shown, the session kept for it is served its Conductor tool
+ * calls (serveKeptLaunchUnseen): the tool host's record and the review and
+ * canvas registrations, by the way its provider's sessions start, and a Codex
+ * session's hook file written again with a new token so its hook events reach
+ * this run; nothing of its account, telemetry, logging run or conversation.
+ * The take-over's own teardown clears it and binds again; a session kept no
+ * longer is unbound (unserveKeptLaunchUnseen), unless a launch of its tab has
+ * cleared that already. The manager's half: session-helper-take-over.test.ts.
+ */
+describe('B1d: a session kept for a restored tab not shown, served its Conductor tools (aicc_planning#423)', () => {
+  const SECRET = '0f8b6a2c-1d3e-4f50-9a61-7b2c3d4e5f60'
+  const hookFolder = path.join(os.tmpdir(), 'codex-hooks', 'ccc-codex-hook-unseen1')
+  const claudeKept = (): Unseen => ({ sessionId: CLAUDE_SID, provider: 'claude', hookFolder: null, folder: LAUNCH_FOLDER })
+  const codexKept = (): Unseen => ({ sessionId: CODEX_SID, provider: 'codex', hookFolder, folder: LAUNCH_FOLDER })
+  // The tab's launch, in the folder the other cases launch in (this harness stands in no canvas skills).
+  const codexSpawn = { cwd: os.tmpdir(), provider: 'codex', codexOptions: { permissionsPreset: 'read-only' } }
+
+  it('a Claude Code session, the tool host serving: the tool host\'s record with no credential, codex_review from the folder its CLI runs in, the canvas root from its tab\'s folder; no account capture, telemetry, logging run or spawn; kept no longer, what it bound goes', () => {
+    h.mcpPort = 19333
+    expect(serveUnseen(claudeKept(), PROJECT)).toBe(true)
+    expect(h.records).toEqual([[CLAUDE_SID, 'claude']])
+    expect(h.reviews).toEqual([['codex_review', CLAUDE_SID, LAUNCH_FOLDER]])
+    expect(h.canvasRoots).toEqual([[CLAUDE_SID, PROJECT]])
+    expect(seen()).toEqual(['recordHeldToolSession'])
+    expect(h.journal.filter((n) => n.startsWith('captureClaudeAccount'))).toEqual([])
+    expect(h.telemetry).toEqual([])
+    expect(h.runStarts).toEqual([])
+    unserveUnseen(CLAUDE_SID)
+    expect(h.released).toEqual([CLAUDE_SID])
+    expect(h.revoked).toEqual([CLAUDE_SID])
+  })
+
+  it('the tool host not serving: not served, and nothing is bound', () => {
+    h.mcpPort = 0
+    expect(serveUnseen(claudeKept(), PROJECT)).toBe(false)
+    expect(serveUnseen(codexKept(), PROJECT)).toBe(false)
+    expect(h.records).toEqual([])
+    expect(h.reviews).toEqual([])
+    expect(h.canvasRoots).toEqual([])
+    expect(h.rewrites).toEqual([])
+    expect(holdsCodexToken(CODEX_SID)).toBe(false)
+  })
+
+  it('finding 2, a Codex session with a kept hook folder: its hook file written again with this run\'s port and a new token, so its hook events reach this run as Codex\'s; no transcript is claimed from them; shown, the take-over\'s teardown drops that token and keeps the folder, and the take-over writes the file again with its own', () => {
+    h.mcpPort = 19333
+    expect(serveUnseen(codexKept(), PROJECT)).toBe(true)
+    expect(h.records).toEqual([[CODEX_SID, 'codex']])
+    expect(h.rewrites).toEqual([[hookFolder, CODEX_SID, 51234, SECRET]])
+    expect(holdsCodexToken(CODEX_SID)).toBe(true)
+    expect(isCodexPtySession(CODEX_SID)).toBe(false)
+    expect(h.reviews).toEqual([['claude_review', CODEX_SID, PROJECT]])
+    expect(h.codexRoots.map(([sid, cwd]) => [sid, cwd])).toEqual([[CODEX_SID, PROJECT]])
+    expect(h.telemetry).toEqual([])
+    // A hook naming its transcript: Codex's (no Claude sink), and not taken (its launch is not marked hooked).
+    const sinks = { attribute: vi.fn(), bind: vi.fn() }
+    routeHookTranscriptPath(CODEX_SID, path.join(LAUNCH_FOLDER, 'rollout-unseen.jsonl'), sinks)
+    expect(sinks.attribute).not.toHaveBeenCalled()
+    expect(sinks.bind).not.toHaveBeenCalled()
+    expect(h.warns.filter((w) => w.includes('a hook named a transcript'))).toEqual([])
+    // Its tab shown: the take-over.
+    keepFor(CODEX_SID, LAUNCH_FOLDER, { account: 'acct-b1', hookFolder })
+    spawnPty(fakeWin, CODEX_SID, { ...codexSpawn, codexLaunch: codexLaunch() } as never)
+    expect(h.unregistered).toEqual([CODEX_SID])
+    expect(h.disposed).toEqual([])
+    expect(h.hookFoldersRemoved).toEqual([])
+    expect(h.rewrites).toHaveLength(2)
+    expect(holdsCodexToken(CODEX_SID)).toBe(true)
+  })
+
+  it('a Codex session whose hook file is not written again: no token is left for it, and its tools are served all the same', () => {
+    h.mcpPort = 19333
+    h.rewriteFails = true
+    expect(serveUnseen(codexKept(), PROJECT)).toBe(true)
+    expect(h.journal).toContain('gatewaySecret')
+    expect(h.rewrites).toEqual([])
+    expect(holdsCodexToken(CODEX_SID)).toBe(false)
+    expect(h.unregistered).toEqual([CODEX_SID])
+    expect(h.records).toEqual([[CODEX_SID, 'codex']])
+    unserveUnseen(CODEX_SID)
+  })
+
+  it('kept no longer (its tab closed, its CLI ended, the limit, a quit): its registrations and its token go, once', () => {
+    h.mcpPort = 19333
+    serveUnseen(codexKept(), PROJECT)
+    unserveUnseen(CODEX_SID)
+    expect(h.released).toEqual([CODEX_SID])
+    expect(h.revoked).toEqual([CODEX_SID])
+    expect(h.unregistered).toEqual([CODEX_SID])
+    expect(holdsCodexToken(CODEX_SID)).toBe(false)
+    unserveUnseen(CODEX_SID)
+    expect(h.released).toEqual([CODEX_SID])
+  })
+
+  it('its tab starts a new CLI instead (the kept session is on another account): that launch\'s teardown clears what serving bound, so ending the kept session after it leaves the new launch\'s MCP record and gateway token alone', () => {
+    h.mcpPort = 19333
+    serveUnseen(codexKept(), PROJECT)
+    // The launch with the tools off, as the other launch cases run (this harness stands in no canvas skills).
+    h.mcpPort = 0
+    keepFor(CODEX_SID, LAUNCH_FOLDER, { account: 'acct-other' })
+    spawnPty(fakeWin, CODEX_SID, { ...codexSpawn, codexLaunch: codexLaunch() } as never)
+    expect(seen()).toContain('spawn')
+    expect(holdsCodexToken(CODEX_SID)).toBe(true)
+    const before = { released: h.released.length, unregistered: h.unregistered.length, revoked: h.revoked.length }
+    // The manager ends the kept session as the new CLI starts (spawnAgent), and unserves it.
+    unserveUnseen(CODEX_SID)
+    expect({ released: h.released.length, unregistered: h.unregistered.length, revoked: h.revoked.length }).toEqual(before)
+    expect(holdsCodexToken(CODEX_SID)).toBe(true)
   })
 })

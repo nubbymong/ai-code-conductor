@@ -33,6 +33,13 @@
 // launch. A Codex session's hook file is written again in its kept folder
 // with a token minted for the take-over.
 //
+// aicc_planning#423 (B1d): until then, a session kept for a restored tab that
+// is not shown yet is served its Conductor tool calls (serveKeptLaunchUnseen:
+// the tool host's record and the review and canvas registrations, and a Codex
+// session's hook file written again), with nothing of its account, telemetry
+// or conversation. The take-over's own teardown clears that first, and
+// unserveKeptLaunchUnseen drops it when the session is kept no longer.
+//
 // What stays in pty-manager.ts, and why:
 //  - the per-session records and the helpers that keep them, which much of
 //    pty-manager.ts reads: it hands them over once, when it loads
@@ -59,7 +66,7 @@ import { getGateway } from '../hooks'
 import { removeLocalSessionSettings, removeLocalSessionMcpConfig, removeLocalSessionStatusUrl, getLocalSessionStatusUrlPath, writeLocalSessionStatusUrl, noteKeptLaunchStatusLine } from '../hooks/per-session-settings'
 import { logInfo, logError, logWarn } from '../debug-logger'
 import { readConfig } from '../config-manager'
-import { isHomeOrAncestor } from '../path-utils'
+import { isHomeOrAncestor, resolveCwd } from '../path-utils'
 import { decorateStatuslineWithColour } from '../account-color'
 import { clampAnsiChunk, getWatchdogManager } from '../watchdog/watchdog-manager'
 import { getPtyIntegrityMonitor } from '../services/pty-integrity-monitor'
@@ -78,7 +85,7 @@ import type { CodexCanvasLaunch } from '../canvas/codex-canvas-launch'
 import { registerCodexCanvasRoots, codexDesignatedWorktree } from '../canvas/codex-canvas-roots'
 import { noteCodexSessionGuidance, forgetCodexSessionGuidance } from '../canvas/codex-guidance'
 import { tryGetProvider } from '../providers'
-import { launchKeptForUpdate, setKeptLaunchBindings, takeKeptSession, type KeptLaunch, type KeptLaunchFacts, type KeptSessionFacts } from './kept-launches'
+import { launchKeptForUpdate, setKeptLaunchBindings, takeKeptSession, type KeptLaunch, type KeptLaunchFacts, type KeptSessionFacts, type KeptUnseen } from './kept-launches'
 import { HelperPty } from '../session-helper/helper-pty'
 
 /** A Codex launch's hook file: the file that hands its gateway token to the
@@ -132,6 +139,13 @@ export interface LaunchBindingPorts {
    *  (pty-manager.ts's, where the session input check counts them), for a
    *  take-over's pane as for a launch's. */
   codexRunWriters(codexRun: pty.IPty): Pick<CodexPaneBinding, 'write' | 'writeColourAnswer'>
+  /** The sessions whose latest gateway token a Codex launch minted
+   *  (pty-manager.ts's record, read for holdsCodexGatewayToken). */
+  codexGatewayTokens: ReadonlySet<string>
+  /** How pty-manager.ts starts a provider's sessions (its launchStyleOf): a
+   *  kept session served while its tab is not shown is bound by that way,
+   *  as its take-over is, never by a name. */
+  launchStyleOf(id: ProviderId): 'direct' | 'claude-shell' | undefined
 }
 
 let registered: LaunchBindingPorts | null = null
@@ -419,6 +433,16 @@ export function bindCodexLaunch(binding: CodexLaunchBinding): void {
     },
   )
   codexTelemetrySources.set(sessionId, codexTelSrc)
+  registerCodexLaunchTools({ sessionId, resolvedCwd, codexCanvas })
+}
+
+/**
+ * A Codex launch's registrations (bindCodexLaunch; and aicc_planning#423,
+ * B1d, a session kept for a restored tab not shown yet): the claude_review
+ * registration, and the Agent Canvas roots and guidance.
+ */
+function registerCodexLaunchTools(binding: Pick<CodexLaunchBinding, 'sessionId' | 'resolvedCwd' | 'codexCanvas'>): void {
+  const { sessionId, resolvedCwd, codexCanvas } = binding
   // WP2 commit 5b: a local Codex session may ask for a Claude review of
   // its configured project directory, never home or above it (the
   // codex_review rule, #188) -- and never the directory a resumed
@@ -460,7 +484,17 @@ export function bindClaudeLaunch(binding: ClaudeLaunchBinding): void {
   // Watch for a mid-session account change (user runs /login in the terminal
   // without a respawn), so the strip/card/statusline follow the new account.
   startWatchingAccountIdentity(sessionId, resolvedProfileId)
+  registerClaudeLaunchTools({ sessionId, claudeCwd, resolvedCwd, designatedWorktree })
+}
 
+/**
+ * A Claude Code launch's registrations (bindClaudeLaunch; and
+ * aicc_planning#423, B1d, a session kept for a restored tab not shown yet):
+ * the codex_review registration, the Agent Canvas serving root, and the
+ * designated worktree.
+ */
+function registerClaudeLaunchTools(binding: Pick<ClaudeLaunchBinding, 'sessionId' | 'claudeCwd' | 'resolvedCwd' | 'designatedWorktree'>): void {
+  const { sessionId, claudeCwd, resolvedCwd, designatedWorktree } = binding
   // Every LOCAL Claude session with a real project folder REGISTERS for
   // codex_review here; registering does not offer the tool. Whether it is
   // offered is decided per MCP connection (offeredReviewTool, called from
@@ -803,26 +837,13 @@ function claudeTakeOver(b: KeptTakeOverBinding, proc: pty.IPty, kept: KeptSessio
  * the resume list through its kept pick file (aicc_planning#419).
  */
 function codexTakeOver(b: KeptTakeOverBinding, launch: { lease: AccountLease; sessionsDir: string }, proc: pty.IPty, kept: KeptSessionFacts, launchCwd: string): void {
-  const { ptySessions, codexHookFiles, codexHookedLaunches, codexAskSessions, noteGatewayToken, dropGatewayToken, keepCodexConversation, codexRunWriters } = ports()
+  const { ptySessions, codexHookFiles, codexHookedLaunches, codexAskSessions, keepCodexConversation, codexRunWriters } = ports()
   const { sessionId, resolvedCwd, win } = b
   const provider = b.launch.provider
-  const gw = getGateway()
-  const gwStatus = gw?.status()
-  if (kept.hookFolder && gw && gwStatus?.listening && gwStatus.port && provider.rewriteSessionHooks) {
-    let hookFile: CodexHookFile | null = null
-    try {
-      const secret = gw.registerSession(sessionId)
-      noteGatewayToken(sessionId, true)
-      hookFile = provider.rewriteSessionHooks(kept.hookFolder, sessionId, gwStatus.port, secret)
-    } catch (err) {
-      logError(`[pty] Failed to write the kept Codex session's hook file again for ${sessionId}: ${(err as Error)?.message ?? err}`)
-    }
-    if (hookFile) {
-      codexHookFiles.set(sessionId, hookFile)
-      codexHookedLaunches.add(sessionId)
-    } else {
-      dropGatewayToken(sessionId)
-    }
+  const hookFile = rewriteKeptCodexHooks(sessionId, kept.hookFolder, provider)
+  if (hookFile) {
+    codexHookFiles.set(sessionId, hookFile)
+    codexHookedLaunches.add(sessionId)
   }
   // Not written again: the file names the last run's port and token, so its
   // folder goes now, as a kept session's does once it is no longer kept.
@@ -856,6 +877,94 @@ function codexTakeOver(b: KeptTakeOverBinding, launch: { lease: AccountLease; se
       : kept.conversation ? { resumeId: kept.conversation } : {},
     resolvedCwd, codexCanvas: { designatedWorktree: codexDesignatedWorktree(resolvedCwd, sessionId), guidance: null }, runProvider: b.launch.id,
   })
+}
+
+/**
+ * A kept Codex session's hook file written again in its own folder with this
+ * run's gateway port and a token minted for it, when the Hooks gateway is on
+ * and listening (its take-over's, and B1d its serving while its tab is not
+ * shown). The file, or null when it was not written: then no token is left
+ * for it (one minted is dropped). Nothing is recorded of the file here.
+ */
+function rewriteKeptCodexHooks(sessionId: string, hookFolder: string | null, provider: SessionProvider): CodexHookFile | null {
+  const { noteGatewayToken, dropGatewayToken } = ports()
+  const gw = getGateway()
+  const gwStatus = gw?.status()
+  if (!hookFolder || !gw || !gwStatus?.listening || !gwStatus.port || !provider.rewriteSessionHooks) return null
+  let hookFile: CodexHookFile | null = null
+  try {
+    const secret = gw.registerSession(sessionId)
+    noteGatewayToken(sessionId, true)
+    hookFile = provider.rewriteSessionHooks(hookFolder, sessionId, gwStatus.port, secret)
+  } catch (err) {
+    logError(`[pty] Failed to write the kept Codex session's hook file again for ${sessionId}: ${(err as Error)?.message ?? err}`)
+  }
+  if (!hookFile) dropGatewayToken(sessionId)
+  return hookFile
+}
+
+/** Sessions kept for a restored tab not shown yet that serveKeptLaunchUnseen
+ *  served (B1d), until a launch's teardown of the tab's id
+ *  (unbindLaunchRegistrations) or its unserving clears the mark. */
+const unseenServed = new Set<string>()
+
+/**
+ * aicc_planning#423 (B1d): the session an update kept for a restored tab
+ * that is not shown yet is served its Conductor tool calls until its
+ * take-over, as the take-over serves them, so its running turn's tool calls
+ * do not wait in its relay and get the answer that the app is updating. Only
+ * while the tool host is serving (false otherwise, and nothing is bound):
+ * the tool host's record of the session with no credential, and the review
+ * and canvas registrations, from the tab's configured folder (`cwd`, the
+ * renderer's, resolved as a launch's is) by the way its provider's sessions
+ * are started; for a Codex session with a kept hook folder, its hook file
+ * written again with a new token (rewriteKeptCodexHooks), so its hook events
+ * reach this run. Nothing of the account, the telemetry, the logging run or
+ * the conversation, and no hook file or hooked launch is recorded, so no
+ * hook claims a transcript before its take-over. The take-over's spawn runs
+ * the teardown first (killPty), which clears all of it and the mark, and
+ * makes it again. What this bound goes with unserveKeptLaunchUnseen.
+ */
+export function serveKeptLaunchUnseen(kept: KeptUnseen, cwd: string | undefined): boolean {
+  if (!(getConductorMcpPort() > 0)) return false
+  const style = ports().launchStyleOf(kept.provider)
+  const provider = tryGetProvider(kept.provider)
+  if (!style || !provider) return false
+  const { sessionId } = kept
+  const resolvedCwd = resolveCwd(cwd)
+  try {
+    recordHeldToolSession(sessionId, kept.provider)
+    unseenServed.add(sessionId)
+    if (style === 'direct') {
+      rewriteKeptCodexHooks(sessionId, kept.hookFolder, provider)
+      registerCodexLaunchTools({ sessionId, resolvedCwd, codexCanvas: { designatedWorktree: codexDesignatedWorktree(resolvedCwd, sessionId), guidance: null } })
+    } else {
+      registerClaudeLaunchTools({ sessionId, claudeCwd: kept.folder ?? resolvedCwd, resolvedCwd, designatedWorktree: isHomeOrAncestor(resolvedCwd) ? null : designatedWorktreeDir(resolvedCwd, sessionId) })
+    }
+  } catch (err) {
+    logWarn(`[pty] ${sessionId}: the session kept for this tab could not be served its Conductor tools while its tab is not shown (${(err as Error)?.message ?? err})`)
+    unserveKeptLaunchUnseen(sessionId)
+    return false
+  }
+  logInfo(`[pty] ${sessionId}: the session kept for this tab is served its Conductor tools while its tab is not shown`)
+  return true
+}
+
+/** B1d: a session served while its tab was not shown is kept no longer: what
+ *  serveKeptLaunchUnseen bound goes (its registrations and its gateway
+ *  token). Nothing when the mark is gone: a launch of the tab has torn it
+ *  down already and bound its own, which stay. */
+export function unserveKeptLaunchUnseen(sessionId: string): void {
+  if (!unseenServed.has(sessionId)) return
+  unbindLaunchRegistrations(sessionId)
+  ports().dropGatewayToken(sessionId)
+}
+
+/** Whether a Codex launch's gateway token is the session's latest (one
+ *  served while its tab is not shown too, B1d): its hook events are Codex's,
+ *  for the attention source, whether or not a PTY of it runs here. */
+export function holdsCodexGatewayToken(sessionId: string): boolean {
+  return registered?.codexGatewayTokens.has(sessionId) === true
 }
 
 /** The session's own end (its exit, when no newer process has taken the
@@ -950,6 +1059,10 @@ export function unbindLaunchTelemetry(sessionId: string): void {
  *  Each step does nothing when there is nothing to drop. */
 export function unbindLaunchRegistrations(sessionId: string): void {
   const { codexAskSessions, closeCodexRunScreen } = ports()
+  // B1d: this teardown (a launch's, before it binds its own) ends what
+  // serveKeptLaunchUnseen bound with the rest, so unserving that session
+  // later (unserveKeptLaunchUnseen) leaves the launch's bindings alone.
+  unseenServed.delete(sessionId)
   // SECURITY (adversarial review, #188): deregister codex_review here so
   // registration is strictly RE-ESTABLISHED per spawn. spawnPty calls killPty
   // (→ this) before it re-registers, so a session that restarts into a
@@ -1063,4 +1176,4 @@ export function holdKeptLaunchFiles(kept: KeptLaunch): void {
   if (fs.existsSync(getLocalSessionStatusUrlPath(kept.sessionId))) writeLocalSessionStatusUrl(kept.sessionId, '')
 }
 
-setKeptLaunchBindings({ describe: describeLaunch, remove: removeKeptLaunchFiles, hold: holdKeptLaunchFiles })
+setKeptLaunchBindings({ describe: describeLaunch, remove: removeKeptLaunchFiles, hold: holdKeptLaunchFiles, serve: serveKeptLaunchUnseen, unserve: unserveKeptLaunchUnseen })

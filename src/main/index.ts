@@ -10,6 +10,7 @@ import { sweepAbandonedProfiles } from './account-web/sign-in'
 import { setSignInWindowsQuitting } from './account-web/in-app-sign-in'
 import { warnAboutOrphanedSharedPartitions } from './account-web/orphan-partitions'
 import { killAllPty, gracefulExitAllPty, isSessionWritable, routeHookTranscriptPath, noteCodexHookEvent, isCodexPtySession, codexRolloutForSessionContext, applyLoggingSwitches } from './pty-manager'
+import { holdsCodexGatewayToken } from './sessions/launch-bindings'
 import { submitRetry, submitMarker } from './session-input'
 import { registerResumeHandlers } from './ipc/resume-handlers'
 import { registerCliHandlers } from './ipc/cli-handlers'
@@ -1055,8 +1056,10 @@ if (!gotTheLock) {
         onHookEvent((e) => { if (e.sessionId) cb(e.sessionId, e.event) })
       },
     })
-    // P3.10 (row 47): Codex sessions' own hook events map to attention too.
-    startAttentionSource({ isCodexSession: isCodexPtySession })
+    // P3.10 (row 47): Codex sessions' own hook events map to attention too;
+    // aicc_planning#423 (B1d): so do those of a session holding a Codex
+    // token with no PTY here yet (one kept for a restored tab not shown).
+    startAttentionSource({ isCodexSession: (id) => isCodexPtySession(id) || holdsCodexGatewayToken(id) })
     // P3.10 round 1 (B4): a conversation a Codex session's own Codex started
     // (its SessionStart hook) proves another session's inferred claim of it
     // wrong; the gateway hands the transcript path over before the event.

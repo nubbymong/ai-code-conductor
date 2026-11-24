@@ -16,6 +16,10 @@
 // 2.1.3-beta.17 (S16 step 5, aicc_planning#412): the next start's restored
 // tab asks, through the same seam, for the session the helper keeps for it
 // (takeKeptSession), and the launch bindings make the take-over's bindings.
+// aicc_planning#423 (B1d): a session kept for a restored tab that is not shown
+// yet is served its Conductor tool calls through the same seam until then
+// (serveKeptLaunch), and what that bound goes when it is kept no longer
+// (unserveKeptLaunch).
 import type { IPty } from 'node-pty'
 import type { ProviderId } from '../../shared/providers/ids'
 import type { ResumePick } from '../providers/types'
@@ -53,6 +57,22 @@ export interface KeptLaunchBindings {
    *  its launch left that names the last run's address and credential, which
    *  this run refuses, is emptied until the take-over writes it again. */
   hold?(kept: KeptLaunch): void
+  /** aicc_planning#423 (B1d): the session kept for a restored tab that is not
+   *  shown is served its Conductor tool calls under the tab's id until the
+   *  take-over: the tool host's record, the review and canvas registrations
+   *  (`cwd`: the tab's configured folder), and the hook file in its kept hook
+   *  folder, where it has one, written again. False when it is not served
+   *  (the tool host is not serving). */
+  serve?(kept: KeptUnseen, cwd: string | undefined): boolean
+  /** What serve bound goes, once the session is kept no longer; nothing when
+   *  a launch of the tab has cleared it already (its spawn's teardown). */
+  unserve?(sessionId: string): void
+}
+
+/** A kept session to serve while its tab is not shown (B1d): as its record
+ *  names it, with the folder its CLI was launched in (null: not recorded). */
+export interface KeptUnseen extends KeptLaunch {
+  folder: string | null
 }
 
 const NOTHING_KNOWN: KeptLaunchFacts = { conversation: null, account: null, hookFolder: null }
@@ -110,6 +130,26 @@ export function holdKeptLaunch(k: KeptLaunch): void {
   }
 }
 
+/** A session kept for a restored tab not shown: its tool calls served now
+ *  (B1d). False when they are not, or when asking fails. */
+export function serveKeptLaunch(k: KeptUnseen, cwd: string | undefined): boolean {
+  try {
+    return bindings?.serve?.(k, cwd) === true
+  } catch {
+    return false
+  }
+}
+
+/** A session kept for its tab is kept no longer: what serveKeptLaunch bound
+ *  goes. Never throws. */
+export function unserveKeptLaunch(sessionId: string): void {
+  try {
+    bindings?.unserve?.(sessionId)
+  } catch {
+    /* best-effort: the tab's next launch makes its own bindings */
+  }
+}
+
 /** What the last run's update recorded of a session a tab takes over: what
  *  its release knew (KeptLaunchFacts), the folder its CLI was launched in
  *  (null when the record does not say: one an earlier version wrote), and
@@ -148,11 +188,19 @@ export function takeKeptSession(sessionId: string, provider: ProviderId, size: {
   }
 }
 
+/** A tab Resume restored: its id, and (B1d) the folder a local agent tab's
+ *  launch is configured in, for the canvas roots its kept session is served
+ *  with while the tab is not shown. */
+export interface RestoredTab {
+  id: string
+  cwd?: string
+}
+
 /** What the renderer says of its tabs that a session kept for a restored tab
  *  waits on (aicc_planning#423): the tabs Resume restored, a tab shown and
  *  starting now, and a tab closed. */
 export interface KeptTabSignals {
-  restored(sessionIds: ReadonlyArray<string>): void
+  restored(tabs: ReadonlyArray<RestoredTab>): void
   shown(sessionId: string): void
   closed(sessionId: string): void
 }
@@ -164,8 +212,8 @@ export function setKeptTabSignals(s: KeptTabSignals | null): void {
 }
 
 /** The IPC handlers (pty-handlers.ts) pass each one on. Never throw. */
-export function keptTabsRestored(sessionIds: ReadonlyArray<string>): void {
-  try { tabSignals?.restored(sessionIds) } catch { /* each kept session keeps its time limit */ }
+export function keptTabsRestored(tabs: ReadonlyArray<RestoredTab>): void {
+  try { tabSignals?.restored(tabs) } catch { /* each kept session keeps its time limit */ }
 }
 export function keptTabShown(sessionId: string): void {
   try { tabSignals?.shown(sessionId) } catch { /* its kept session keeps no limit then; a close or a quit ends it */ }

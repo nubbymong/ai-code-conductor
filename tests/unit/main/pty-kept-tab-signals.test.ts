@@ -1,7 +1,8 @@
 /**
  * aicc_planning#423 (beta.17 B1c): what the renderer says of its restored tabs
  * reaches the session helper through the REAL pty handlers: the tabs Resume
- * restored (pty:tabsRestored), a tab shown and starting now (pty:tabShown),
+ * restored (pty:tabsRestored; B1d, each with a local agent tab's folder, a
+ * bounded string), a tab shown and starting now (pty:tabShown),
  * and a tab closed (pty:kill with no reason). A session an update kept for a
  * restored tab not on screen waits for that tab with no time limit until it
  * is shown, and a close ends it at once (session-helper-take-over.test.ts
@@ -90,9 +91,14 @@ describe('pty:kill: a close ends the session kept for the tab; a Restart does no
 })
 
 describe('pty:tabsRestored and pty:tabShown: from the app\'s window only, and only a payload that reads', () => {
-  it('the tabs Resume restored reach the helper as they are', () => {
-    restored(fromApp, [TAB, OTHER])
-    expect(told).toEqual([['restored', [TAB, OTHER]]])
+  it('the tabs Resume restored reach the helper as they are, each with its folder when it has one (B1d)', () => {
+    restored(fromApp, [{ id: TAB, cwd: 'C:\\Users\\someone\\project' }, { id: OTHER }])
+    expect(told).toEqual([['restored', [{ id: TAB, cwd: 'C:\\Users\\someone\\project' }, { id: OTHER }]]])
+  })
+
+  it('a folder at the bound (4096 characters) reads', () => {
+    restored(fromApp, [{ id: TAB, cwd: 'C'.repeat(4096) }])
+    expect(told).toEqual([['restored', [{ id: TAB, cwd: 'C'.repeat(4096) }]]])
   })
 
   it('a tab shown reaches the helper', () => {
@@ -101,18 +107,23 @@ describe('pty:tabsRestored and pty:tabShown: from the app\'s window only, and on
   })
 
   it('another sender, or a subframe of the app\'s window: nothing reaches the helper', () => {
-    restored(fromElsewhere, [TAB])
+    restored(fromElsewhere, [{ id: TAB, cwd: 'C:\\x' }])
     shown(fromElsewhere, TAB)
-    restored(fromSubframe, [TAB])
+    restored(fromSubframe, [{ id: TAB, cwd: 'C:\\x' }])
     shown(fromSubframe, TAB)
     expect(told).toEqual([])
   })
 
   it.each([
-    ['not a list', TAB],
-    ['a list with a value that is not a tab id', [TAB, '../x']],
-    ['a list with a non-string', [TAB, 7]],
-    ['a list longer than any app makes', Array.from({ length: 1001 }, () => TAB)],
+    ['not a list', { id: TAB }],
+    ['a list of bare ids (the earlier payload)', [TAB, OTHER]],
+    ['a list with an id that is not a tab id', [{ id: TAB }, { id: '../x' }]],
+    ['a list with a non-string id', [{ id: TAB }, { id: 7 }]],
+    ['a list with a folder that is not a string', [{ id: TAB, cwd: 7 }]],
+    ['a list with an empty folder', [{ id: TAB, cwd: '' }]],
+    ['a list with a folder longer than 4096 characters', [{ id: TAB, cwd: 'C'.repeat(4097) }]],
+    ['a list with a field it does not name', [{ id: TAB, cwd: 'C:\\x', root: 'C:\\' }]],
+    ['a list longer than any app makes', Array.from({ length: 1001 }, () => ({ id: TAB }))],
   ])('pty:tabsRestored with %s: dropped', (_what, payload) => {
     restored(fromApp, payload)
     expect(told).toEqual([])
