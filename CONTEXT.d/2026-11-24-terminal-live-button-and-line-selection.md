@@ -71,3 +71,4 @@ the app's xterm (@xterm/xterm 6.0.0 in jsdom) before any fix.
   stays on its row as xterm keeps it (xterm moves no selection with its re-wrap), as before:
   measured, a drag over "$ she" under a 25-cell line copies "xxxxx" after a narrowing from 30 to
   20 columns. The brief kept drags as they are; it is xterm's own behaviour, on beta.16 too.
+  Handled since by C11 (aicc_planning#424, 2026-11-24-terminal-partial-selection-keep.md).
