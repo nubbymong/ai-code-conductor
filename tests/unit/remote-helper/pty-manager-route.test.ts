@@ -9,10 +9,11 @@
  * log line says why; a tab that does go through it starts no node-pty and
  * asks its machine for a holder. The switch is off unless saved exactly true,
  * and while it is off nothing else of the feature is asked; records that do
- * not read send a tab the usual way. A tab through the helper tells its SSH
- * flow overlay at once, and keeps no SSH flow after a start that failed. The
+ * not read send a tab the usual way and are not written over. A tab through
+ * the helper tells its SSH flow overlay at once, keeps no SSH flow after a
+ * start that failed, and what it is sent reaches the PTY integrity count. The
  * launch carries the app's light or dark scheme. pty-manager.ts stays at or
- * under its cap.
+ * under its cap (PTY_MANAGER_LINE_CAP, read from pr-numbers.mjs).
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { readFileSync } from 'fs'
@@ -50,9 +51,11 @@ import { remoteSessionId, IMAGE_HELD_BACK_NOTE } from '../../../src/main/remote-
 import { SSH_THROUGH_HELPER } from '../../../src/shared/remote-machines'
 import { FakeHolder } from '../main/session-helper-fake-holder'
 import { ROUTE_WHY } from '../../../src/main/remote-helper/route'
-import type { RemoteMachineRecord, RemoteMachines } from '../../../src/main/remote-helper/machines'
+import { RemoteMachines, type RemoteMachineRecord } from '../../../src/main/remote-helper/machines'
 import type { SSHOptions } from '../../../src/main/ssh-options'
 import { FakeSsh } from './fake-ssh'
+// Plain ESM with main() behind an argv[1] check: importing it runs nothing.
+import { PTY_MANAGER_LINE_CAP, countLines } from '../../../scripts/ci/pr-numbers.mjs'
 
 const fakeProvider = {
   id: 'claude', displayName: 'Claude', resolveBinary: () => null, buildSpawnCommand: () => ({ cmd: '', args: [], env: {} }),
@@ -77,16 +80,20 @@ interface DepsOver {
   findByTarget?: () => RemoteMachineRecord | undefined
   bundledSha256?: () => string | null
   systemPrefersDark?: () => boolean
+  /** The machine list itself, in place of the stub built from findByTarget. */
+  machines?: RemoteMachines
+  onOutput?: (sessionId: string, length: number) => void
 }
 function plugIn(switchOn: boolean, machine: RemoteMachineRecord | null = MACHINE, over: DepsOver = {}): void {
   ssh = new FakeSsh({ answer: () => ({ code: 255, stderr: 'Connection refused' }) })
   setRemoteHelperDeps({
     platform: 'win32',
     settings: over.settings ?? (() => ({ remoteSessionsThroughHelper: switchOn })),
-    machines: { findByTarget: over.findByTarget ?? (() => machine ?? undefined), installId: () => 'f'.repeat(32) } as unknown as RemoteMachines,
+    machines: over.machines ?? ({ findByTarget: over.findByTarget ?? (() => machine ?? undefined), installId: () => 'f'.repeat(32) } as unknown as RemoteMachines),
     runner: ssh,
     bundledSha256: over.bundledSha256 ?? (() => SHA),
     systemPrefersDark: over.systemPrefersDark ?? (() => true),
+    onOutput: over.onOutput ?? (() => {}),
     log: (m) => logs.push(m),
   })
 }
@@ -181,13 +188,18 @@ describe('pty-manager SSH branch: the usual path is unchanged for every tab that
     expect(logs).toContain(`[remote-helper] route-off-records: the usual SSH path, because ${ROUTE_WHY.off}`)
   })
 
-  it('the switch on and records that cannot be read: the usual path, and the log says why', () => {
+  it('the switch on and records that cannot be read: the usual path, the log says why, and the records are not written over', () => {
     setRemoteHelperDeps(null)
     const before = spawnSsh('route-on-records', SSH_TAB)
-    plugIn(true, MACHINE, { findByTarget: () => { throw new Error('EBUSY: resource busy or locked') } })
+    // The real machine list, on a records file whose read fails (a busy file).
+    const write = vi.fn()
+    const store = { read: () => { throw Object.assign(new Error('EBUSY: resource busy or locked, open'), { code: 'EBUSY' }) }, write }
+    const machines = new RemoteMachines({ runner: new FakeSsh({ answer: () => ({ code: 1 }) }), store, bundled: async () => ({ ok: false, why: 'none' }), inUse: () => 0, log: () => {} })
+    plugIn(true, MACHINE, { machines })
     expect(spawnSsh('route-on-records', SSH_TAB)).toEqual(before)
     expect(ssh.calls).toHaveLength(0)
-    expect(logs).toContain("[remote-helper] route-on-records: the usual SSH path, because the session helper's records could not be read (EBUSY: resource busy or locked)")
+    expect(write).not.toHaveBeenCalled()
+    expect(logs).toContain("[remote-helper] route-on-records: the usual SSH path, because the session helper's records could not be read (EBUSY: resource busy or locked, open)")
     expect(isRemoteHelperTab('route-on-records')).toBe(false)
   })
 })
@@ -226,7 +238,8 @@ describe('pty-manager SSH branch: a tab that goes through the session helper', (
 
   it('tells the tab\'s SSH flow overlay at once, and a start that fails at once still has no SSH flow until the tab is closed or started again', async () => {
     // The fake ssh refuses every connection: the hold fails, the tab shows why and its terminal ends.
-    plugIn(true)
+    const counted: Array<[string, number]> = []
+    plugIn(true, MACHINE, { onOutput: (sid, n) => { counted.push([sid, n]) } })
     const id = 'route-fails'
     const sent: Array<[string, unknown]> = []
     const tabWin = { webContents: { send: (ch: string, d: unknown) => { sent.push([ch, d]) } }, isDestroyed: () => false } as never
@@ -237,6 +250,11 @@ describe('pty-manager SSH branch: a tab that goes through the session helper', (
     expect(sent.filter(([ch]) => ch === `ssh:flowState:${id}`)).toEqual([[`ssh:flowState:${id}`, { state: SSH_THROUGH_HELPER }]])
     await until(() => sent.some(([ch]) => ch === `pty:exit:${id}`))
     expect(sent.some(([ch, d]) => ch === `pty:data:${id}` && String(d).includes('could not start through the session helper on rocky.lan'))).toBe(true)
+    // What the tab was sent reaches the PTY integrity count, as the usual paths' output does.
+    const shown = sent.filter(([ch]) => ch === `pty:data:${id}`).reduce((n, [, d]) => n + String(d).length, 0)
+    expect(shown).toBeGreaterThan(0)
+    expect(counted.every(([sid]) => sid === id)).toBe(true)
+    expect(counted.reduce((n, [, len]) => n + len, 0)).toBe(shown)
     expect(remoteTabsOn(MACHINE.did)).toBe(0)
     // Over, and still no SSH flow: the overlay's catch-up reads 'through-helper', not 'connecting'.
     expect(getSshFlow(id)).toBeUndefined()
@@ -322,9 +340,7 @@ describe('pty-manager.ts: one entry, at the top of the SSH branch, and the cap',
     expect(src.match(/break sshBranch/g)).toHaveLength(1)
   })
 
-  it('is at or under its cap of 7,773 lines (scripts/ci/pr-numbers.mjs)', () => {
-    const lines = readFileSync(resolve(__dirname, '../../../src/main/pty-manager.ts'), 'utf8').split('\n').length - 1
-    expect(lines).toBeLessThanOrEqual(7773)
-    expect(readFileSync(resolve(__dirname, '../../../scripts/ci/pr-numbers.mjs'), 'utf8')).toContain('7773')
+  it('is at or under its cap (PTY_MANAGER_LINE_CAP in scripts/ci/pr-numbers.mjs, the one source of the number)', () => {
+    expect(countLines(src)).toBeLessThanOrEqual(PTY_MANAGER_LINE_CAP)
   })
 })

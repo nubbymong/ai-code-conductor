@@ -50,7 +50,8 @@ vi.mock('../../../src/main/remote-helper/manifest', async (importOriginal) => ({
   readBundledLinuxHelper: async () => ({ ok: true, helper: h.HELPER }),
 }))
 
-const { registerRemoteMachinesHandlers, REMOTE_NOT_AVAILABLE } = await import('../../../src/main/ipc/remote-machines-handlers')
+const { registerRemoteMachinesHandlers, REMOTE_NOT_AVAILABLE, REMOTE_STATE_UNREAD } = await import('../../../src/main/ipc/remote-machines-handlers')
+const { setPtyIntegrityMonitor } = await import('../../../src/main/services/pty-integrity-monitor')
 const { MACHINES_NOT_APP } = await import('../../../src/main/ipc/machines-handlers')
 const { RemoteMachines } = await import('../../../src/main/remote-helper/machines')
 
@@ -222,6 +223,18 @@ describe('Windows only', () => {
     expect(d.runner).toBe(ssh)
     expect(d.machines).toBeInstanceOf(RemoteMachines)
     expect(typeof d.systemPrefersDark).toBe('function')
+    // What a tab through the helper was sent reaches the PTY integrity count, as every other tab's output does.
+    expect(typeof d.onOutput).toBe('function')
+    const recordPtyData = vi.fn()
+    setPtyIntegrityMonitor({ recordPtyData } as never)
+    try {
+      d.onOutput('tab-remote', 12)
+    } finally {
+      setPtyIntegrityMonitor(null)
+    }
+    expect(recordPtyData).toHaveBeenCalledWith('tab-remote', 12)
+    // With no monitor, nothing throws.
+    expect(() => d.onOutput('tab-remote', 3)).not.toThrow()
     h.settings = { remoteSessionsThroughHelper: true, theme: 'light' }
     expect(d.settings()).toEqual({ remoteSessionsThroughHelper: true, theme: 'light' })
     expect(((await call(IPC.MACHINES_REMOTE_STATE)) as RemoteMachinesState).switchOn).toBe(true)
@@ -241,5 +254,20 @@ describe('the cards', () => {
     expect(s.machines[0]).toMatchObject({ did: DID, checked: false, lastCheck: { ok: false, detail: REMOTE_OTHER_HELPER } })
     h.stored = { v: 1, installId: 'f'.repeat(32), machines: [record()] }
     expect(((await call(IPC.MACHINES_REMOTE_STATE)) as RemoteMachinesState).machines[0]).toMatchObject({ checked: true })
+  })
+
+  it('a records file that does not read: the section stays and says so, Add is off, and the file is not written', async () => {
+    const kept = { installId: 'not an install id', machines: 'not a list' }
+    h.stored = kept
+    register()
+    const s = (await call(IPC.MACHINES_REMOTE_STATE)) as RemoteMachinesState
+    expect(s).toEqual({ available: true, switchOn: true, bundled: { ok: false, why: REMOTE_STATE_UNREAD }, machines: [], candidates: [] })
+    expect(h.stored).toBe(kept)
+    // Each action refuses, and none writes the file or starts an ssh.
+    expect((await call(IPC.MACHINES_REMOTE_PREPARE, 'cfg-key')).ok).toBe(false)
+    expect((await call(IPC.MACHINES_REMOTE_CHECK, DID)).ok).toBe(false)
+    expect((await call(IPC.MACHINES_REMOTE_REMOVE, DID)).ok).toBe(false)
+    expect(h.stored).toBe(kept)
+    expect(ssh.calls).toHaveLength(0)
   })
 })

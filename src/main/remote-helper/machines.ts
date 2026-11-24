@@ -31,7 +31,8 @@
  *
  * The records live in one JSON file in this install's own data folder (not
  * the shared resources folder), with this install's id; a dev or test run
- * keeps its own.
+ * keeps its own. Only a missing file is made; one that is there but does not
+ * read is left as it is, and every use of it fails (RECORDS_UNREAD).
  *
  * This file imports nothing of Electron.
  */
@@ -79,24 +80,41 @@ interface RecordsFile {
 
 /** Where the records are kept. Tests hand one in memory. */
 export interface MachineStore {
+  /** The records as stored; null only when there are none yet (no file).
+   *  Throws when they are there but do not read. */
   read(): unknown
   write(value: RecordsFile): void
 }
 
-/** The records file: written whole (a temporary file, then a rename), owner-only. */
+/** What every use of records that are there but do not read throws: they are
+ *  never written over, so no added machine and no install id is lost. */
+export const RECORDS_UNREAD = 'the remote machines file does not read; it was left as it is'
+
+/** The records file: written whole (a temporary file, flushed, then a rename),
+ *  owner-only. A missing file reads as null; any other failure (a busy file, a
+ *  file that does not parse) throws. */
 export function fileStore(file: string): MachineStore {
   return {
     read: () => {
+      let text: string
       try {
-        return JSON.parse(fs.readFileSync(file, 'utf8'))
-      } catch {
-        return null
+        text = fs.readFileSync(file, 'utf8')
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null
+        throw err
       }
+      return JSON.parse(text)
     },
     write: (value) => {
       fs.mkdirSync(path.dirname(file), { recursive: true })
       const tmp = `${file}.${process.pid}.tmp`
-      fs.writeFileSync(tmp, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 })
+      const fd = fs.openSync(tmp, 'w', 0o600)
+      try {
+        fs.writeFileSync(fd, `${JSON.stringify(value, null, 2)}\n`)
+        fs.fsyncSync(fd)
+      } finally {
+        fs.closeSync(fd)
+      }
       fs.renameSync(tmp, file)
     },
   }
@@ -230,14 +248,19 @@ export class RemoteMachines {
   private now(): number { return this.deps.now?.() ?? Date.now() }
   private rand(): string { return this.deps.random?.() ?? randomBytes(16).toString('hex') }
 
+  /** The records. Only none at all (null) makes this install's id and writes
+   *  it; records that are there but do not read, or hold no valid install id or
+   *  list, throw and are left as they are. */
   private load(): RecordsFile {
-    const raw = this.deps.store.read() as Partial<RecordsFile> | null
-    const installId = raw && typeof raw.installId === 'string' && INSTALL_ID_RE.test(raw.installId) ? raw.installId : null
-    const machines = raw && Array.isArray(raw.machines) ? raw.machines.map(readRecord).filter((m): m is RemoteMachineRecord => m !== null) : []
-    if (installId) return { v: 1, installId, machines }
-    const made: RecordsFile = { v: 1, installId: this.rand(), machines }
-    this.deps.store.write(made)
-    return made
+    const raw = this.deps.store.read()
+    if (raw === null) {
+      const made: RecordsFile = { v: 1, installId: this.rand(), machines: [] }
+      this.deps.store.write(made)
+      return made
+    }
+    const r = (raw && typeof raw === 'object' ? raw : {}) as Partial<RecordsFile>
+    if (typeof r.installId !== 'string' || !INSTALL_ID_RE.test(r.installId) || !Array.isArray(r.machines)) throw new Error(RECORDS_UNREAD)
+    return { v: 1, installId: r.installId, machines: r.machines.map(readRecord).filter((m): m is RemoteMachineRecord => m !== null) }
   }
 
   private save(f: RecordsFile): void { this.deps.store.write(f) }

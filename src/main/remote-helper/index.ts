@@ -34,6 +34,8 @@ export interface RemoteHelperDeps {
   bundledSha256: () => string | null
   /** The system's dark preference (Electron's nativeTheme), for the theme 'system'. */
   systemPrefersDark: () => boolean
+  /** What the tab was sent, for the PTY integrity count: the session id and the text's length. */
+  onOutput: (sessionId: string, length: number) => void
   log: (message: string) => void
 }
 
@@ -195,6 +197,9 @@ export function remoteHelperPty(win: OutputWindow, sessionId: string, options: R
   let over = false
   pty.onData((data) => {
     if (over || win.isDestroyed()) return
+    // Counted as every other tab's output is (pty-manager's recordPtyData), so
+    // the Services page's byte gap holds for this tab too.
+    d.onOutput(sessionId, data.length)
     win.webContents.send(`pty:data:${sessionId}`, data)
   })
   pty.onExit(() => {

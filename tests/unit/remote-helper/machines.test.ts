@@ -4,10 +4,16 @@
  * without the user's yes; the host's hash is compared with the installer's
  * manifest, and a mismatch stops the Add and removes the upload (and what the
  * Add made); a failed self-test leaves the machine added but not checked;
- * Remove is refused while a tab or a held session runs there.
+ * Remove is refused while a tab or a held session runs there. The records
+ * file: only a missing one is made (with a new install id); one that does not
+ * read, or does not hold this install's records, is left as it is and every
+ * use of it throws, so no added machine or install id is lost.
  */
-import { describe, it, expect, beforeEach } from 'vitest'
-import { RemoteMachines, MACHINE_TEXT, type MachineStore } from '../../../src/main/remote-helper/machines'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs'
+import { tmpdir } from 'os'
+import { join } from 'path'
+import { RemoteMachines, MACHINE_TEXT, RECORDS_UNREAD, fileStore, type MachineStore } from '../../../src/main/remote-helper/machines'
 import type { BundledLinuxHelper } from '../../../src/main/remote-helper/manifest'
 import { routeSshTab, ROUTE_WHY } from '../../../src/main/remote-helper/route'
 import { REMOTE_OTHER_HELPER } from '../../../src/shared/remote-machines'
@@ -51,7 +57,7 @@ function memoryStore(): MachineStore & { value: unknown } {
 }
 
 let inUse = 0
-function machines(ssh: FakeSsh, store = memoryStore(), bundled: () => BundledLinuxHelper = () => HELPER) {
+function machines(ssh: FakeSsh, store: MachineStore = memoryStore(), bundled: () => BundledLinuxHelper = () => HELPER) {
   return new RemoteMachines({
     runner: ssh,
     store,
@@ -63,6 +69,102 @@ function machines(ssh: FakeSsh, store = memoryStore(), bundled: () => BundledLin
 }
 
 beforeEach(() => { inUse = 0 })
+
+describe('remote machines: the records file', () => {
+  const ID = 'e'.repeat(32)
+  /** A store holding `value`, its writes watched. */
+  function holding(value: unknown) {
+    const write = vi.fn()
+    return { store: { read: () => value, write }, write }
+  }
+
+  it('a store whose read fails (a busy file): every use throws, and nothing is written', () => {
+    const write = vi.fn()
+    const busy = Object.assign(new Error('EBUSY: resource busy or locked, open'), { code: 'EBUSY' })
+    const m = machines(new FakeSsh(linuxHost()), { read: () => { throw busy }, write })
+    expect(() => m.list()).toThrow('EBUSY')
+    expect(() => m.installId()).toThrow('EBUSY')
+    expect(write).not.toHaveBeenCalled()
+  })
+
+  const unread: Array<[string, unknown]> = [
+    ['an empty object', {}],
+    ['no install id', { v: 1, machines: [] }],
+    ['an install id that is not one', { v: 1, installId: 'not-an-id', machines: [] }],
+    ['no list of machines', { v: 1, installId: ID }],
+    ['a list that is not one', { v: 1, installId: ID, machines: 'x' }],
+    ['not an object', 'remote machines'],
+  ]
+  for (const [name, value] of unread) {
+    it(`a records file holding ${name}: every use throws, and it is not written over`, () => {
+      const { store, write } = holding(value)
+      const m = machines(new FakeSsh(linuxHost()), store)
+      expect(() => m.list()).toThrow(RECORDS_UNREAD)
+      expect(() => m.installId()).toThrow(RECORDS_UNREAD)
+      expect(() => m.findByTarget({ host: 'rocky.lan', port: 22, username: 'nick' })).toThrow(RECORDS_UNREAD)
+      expect(write).not.toHaveBeenCalled()
+    })
+  }
+
+  it('no records yet (null): the first use makes this install\'s id, once', () => {
+    const store = memoryStore()
+    const m = machines(new FakeSsh(linuxHost()), store)
+    expect(m.list()).toEqual([])
+    const id = m.installId()
+    expect(id).toMatch(/^[0-9a-f]{32}$/)
+    expect(store.value).toEqual({ v: 1, installId: id, machines: [] })
+    expect(m.installId()).toBe(id)
+  })
+
+  describe('fileStore, on a real file', () => {
+    let dir = ''
+    beforeEach(() => { dir = mkdtempSync(join(tmpdir(), 'rh-records-')) })
+    afterEach(() => { if (dir) rmSync(dir, { recursive: true, force: true }); dir = '' })
+    /** fileStore on `file`, its writes watched (they still run). */
+    function onFile(file: string) {
+      const real = fileStore(file)
+      const write = vi.fn((v: Parameters<MachineStore['write']>[0]) => real.write(v))
+      return { store: { read: real.read, write }, write }
+    }
+
+    it('a missing file reads as no records: the first use makes the file, with an install id', () => {
+      const file = join(dir, 'data', 'remote-machines.json')
+      expect(fileStore(file).read()).toBeNull()
+      const m = machines(new FakeSsh(linuxHost()), onFile(file).store)
+      const id = m.installId()
+      expect(JSON.parse(readFileSync(file, 'utf8'))).toEqual({ v: 1, installId: id, machines: [] })
+    })
+
+    it('a file that does not parse throws, and its bytes are unchanged', () => {
+      const file = join(dir, 'remote-machines.json')
+      writeFileSync(file, 'not json')
+      const { store, write } = onFile(file)
+      expect(() => store.read()).toThrow()
+      const m = machines(new FakeSsh(linuxHost()), store)
+      expect(() => m.list()).toThrow()
+      expect(write).not.toHaveBeenCalled()
+      expect(readFileSync(file, 'utf8')).toBe('not json')
+    })
+
+    it('a path that cannot be read (a folder) throws, and nothing is written', () => {
+      const file = join(dir, 'remote-machines.json')
+      mkdirSync(file)
+      const { store, write } = onFile(file)
+      const m = machines(new FakeSsh(linuxHost()), store)
+      expect(() => m.list()).toThrow()
+      expect(write).not.toHaveBeenCalled()
+      expect(existsSync(`${file}.${process.pid}.tmp`)).toBe(false)
+    })
+
+    it('a write then a read gives back the same records', () => {
+      const file = join(dir, 'remote-machines.json')
+      const value = { v: 1 as const, installId: ID, machines: [] }
+      fileStore(file).write(value)
+      expect(fileStore(file).read()).toEqual(value)
+      expect(machines(new FakeSsh(linuxHost()), fileStore(file)).installId()).toBe(ID)
+    })
+  })
+})
 
 describe('remote machines: the Add list', () => {
   it('offers each saved SSH config, and says why a password, Windows or broken one cannot be added', () => {

@@ -13,6 +13,7 @@ import {
 } from '../../shared/remote-machines'
 import { readConfig } from '../config-manager'
 import { logInfo, logWarn } from '../debug-logger'
+import { getPtyIntegrityMonitor } from '../services/pty-integrity-monitor'
 import { sshProgram } from '../ssh-program'
 import { instanceRecordPath } from '../session-helper/install'
 import { setRemoteHelperDeps, remoteTabsOn } from '../remote-helper'
@@ -41,6 +42,10 @@ import { appWindowSender } from './trusted-sender'
 export const REMOTE_STATE_TIMEOUT_MS = 10_000
 export const REMOTE_ACTION_TIMEOUT_MS = 300_000
 export const REMOTE_NOT_AVAILABLE = 'Remote sessions through the session helper run from Windows only in this preview.'
+/** The state's answer on Windows when the list did not load (its records file
+ *  does not read, or no answer in time): the section stays, lists nothing and
+ *  offers no Add, and says so. */
+export const REMOTE_STATE_UNREAD = 'The Linux machines list did not load. Nothing on it was changed; the app\'s log says why.'
 const NOT_LISTED = 'That machine is not on this computer\'s list.'
 
 /** The saved settings; null when they do not read. */
@@ -72,7 +77,12 @@ export function registerRemoteMachinesHandlers(getWindow: () => BrowserWindow | 
       }
       return manifestSha
     }
-    setRemoteHelperDeps({ platform, settings: savedSettings, machines, runner, bundledSha256, systemPrefersDark: () => nativeTheme.shouldUseDarkColors, log: logInfo })
+    setRemoteHelperDeps({
+      platform, settings: savedSettings, machines, runner, bundledSha256,
+      systemPrefersDark: () => nativeTheme.shouldUseDarkColors,
+      onOutput: (id, n) => { getPtyIntegrityMonitor()?.recordPtyData(id, n) },
+      log: logInfo,
+    })
   }
   const refuse = (message: string): RemoteActionResult => ({ ok: false, message })
 
@@ -91,7 +101,7 @@ export function registerRemoteMachinesHandlers(getWindow: () => BrowserWindow | 
         machines: m.views(b.ok ? b.helper.sha256 : null),
         candidates: m.candidates(readConfig('configs')),
       }
-    }, () => none)
+    }, (): RemoteMachinesState => ({ available: true, switchOn, bundled: { ok: false, why: REMOTE_STATE_UNREAD }, machines: [], candidates: [] }))
   })
 
   ipcMain.handle(IPC.MACHINES_REMOTE_PREPARE, async (event, configId: unknown): Promise<RemoteConsent> => {

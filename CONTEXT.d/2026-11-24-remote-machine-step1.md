@@ -17,7 +17,7 @@ What was built:
   (`index.ts`).
 - `pty-manager.ts`: one entry after the SSH branch's Codex refusal (a labelled
   branch, two lines); `SSHOptions` moved to `src/main/ssh-options.ts` so the
-  remote module can read it (the file is 7,741 lines, cap 7,773).
+  remote module can read it (the file is 7,741 lines; the cap goes down to it).
 - Machines: a Linux machines section (Windows) with Add (a question naming the
   file, its size and SHA-256 first, then a one-time token), Check and Remove.
 - Settings, General, Terminal: "Remote sessions through the session helper
@@ -87,3 +87,19 @@ A2.3 (the section review's findings, all applied):
 - The switch's text says Restart on such a tab starts a new conversation
   (/resume picks the earlier one up); a refused key sign-in says a key with a
   passphrase works only through the ssh agent.
+
+A2.4 (the whole-diff review's findings, all applied):
+- The records file: only a missing one is made. One that is there but does
+  not read (a busy file, a file that does not parse, no valid install id or
+  list of machines) is left as it is, and every use of it fails, where it was
+  written over with a new install id and no machines: every added machine was
+  lost, and their helper folders named an install id the app no longer had.
+  Its writes are flushed before the rename. When the list does not load, the
+  Machines page's Linux machines section stays and says so, with no Add,
+  where it vanished.
+- What a tab through the helper is sent reaches the PTY integrity count, as
+  every other tab's output does: the Services page showed such a tab at
+  `in:0` with a negative gap, and no loss on it could be flagged.
+- The SSH flow door's "through-helper" answer has its own test, and the route
+  test reads pty-manager.ts's cap from scripts/ci/pr-numbers.mjs instead of
+  restating it.
