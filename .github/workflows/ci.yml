@@ -557,9 +557,12 @@ jobs:
   # whether the tree passed).
   #
   # Both have the same condition: the Test jobs' pull-request rule, for a
-  # release/* source branch only (a push has no source branch). The artifact
-  # is named apart from the Helper job's helper-linux-musl, which the same run
-  # may upload too (tests/unit/scripts/helper-release-job.test.ts).
+  # release/* source branch only (a push has no source branch). Neither reads
+  # the change scope (scripts/ci/change-scope.mjs): a documentation-only
+  # release/* pull request packages the Windows installer too, where the macOS
+  # half in the test job is skipped with the suite. The artifact is named apart
+  # from the Helper job's helper-linux-musl, which the same run may upload too
+  # (tests/unit/scripts/helper-release-job.test.ts).
   release-helper-linux:
     name: Static Linux helper (release/* test installer)
     if: |
@@ -718,8 +721,9 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-  # The required check `Test (windows-2025)`, for the Windows jobs above. It
-  # needs every one of them and starts whatever they ended with (`always()`:
+  # The required check `Test (windows-2025)`, for the Windows suite jobs above
+  # (`test-windows-part` and `test-windows-build`, not the release/* installer
+  # jobs). It needs both of them and starts whatever they ended with (`always()`:
   # without it, a part that failed would leave this job skipped, and a skipped
   # job reports as passed). scripts/ci/all-parts-passed.mjs then passes only
   # when each of them passed: a part that failed, was cancelled, timed out or
