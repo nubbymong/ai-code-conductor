@@ -59,5 +59,8 @@ bug"). C5's review and join recorded three limits of its narrowing placement (co
   mouse keeps its end cell. `rowsOfPaint` counts two kinds of input as xterm does not, neither in
   a console paint (a wrapped row is written cell by cell, a mark in its character's cell): an
   erase (`ESC[nX`) right after a full row, and a mark with no character before it. Such a paint is
-  written as it came. **Not checked here:** the app's xterm in Electron with its WebGL
-  renderer (jsdom lays nothing out: the tests measure its cell as 9x17); the VM line on C5b's head.
+  counted a row off: written as it came, or, when that count is the screen's rows, still placed by
+  bringing rows down (measured on headless xterm at 20x10, one of each kind: placed, the header
+  once). **Not checked here:** the app's xterm in Electron with its WebGL renderer (jsdom lays
+  nothing out: the tests measure its cell as 9x17). The VM line on C5b's head 5a7cf0f2 ran after
+  this was written: PASS (WINDOWS_1).
