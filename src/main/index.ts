@@ -1051,8 +1051,11 @@ if (!gotTheLock) {
         const w = getWindow()
         if (w && !w.isDestroyed()) w.webContents.send(IPC.CANVAS_AGENT_MARKER_UNDELIVERED, u)
       },
+      // aicc_planning#409: with the agent that fired it and the tool it is
+      // about, so a background agent's tool calls after the main agent's
+      // Stop do not hold a decision.
       subscribe: (cb) => {
-        onHookEvent((e) => { if (e.sessionId) cb(e.sessionId, e.event) })
+        onHookEvent((e) => { if (e.sessionId) cb(e.sessionId, e.event, { agentId: e.agentId, toolName: e.toolName }) })
       },
     })
     // P3.10 (row 47): Codex sessions' own hook events map to attention too.

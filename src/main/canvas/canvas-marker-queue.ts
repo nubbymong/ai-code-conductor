@@ -22,6 +22,22 @@
 // `PostToolUse` / `Stop` events per session, so the turn is observed, not
 // inferred.
 //
+// WHOSE TURN (aicc_planning#409). The session's subagents and workflow agents
+// send their hook events to the same session, and they can keep calling tools
+// after the main agent's turn has ended (a background agent, a Workflow's
+// agents). Read as turn activity, each of their tool calls opened the turn
+// again after the main agent's Stop, so a decision filed then was held until
+// they went quiet for the whole fallback bound or the user prompted the agent
+// (#409's log: two decisions held that way). Claude Code puts `agent_id` on
+// every event one of its agents fires (its tool calls, SubagentStart,
+// SubagentStop) and never on the main agent's (read on Claude Code 2.1.330
+// for a subagent, a background subagent and a Workflow agent). So an event
+// with an agent id is the main turn's only while the main agent waits on an
+// agent it started: its own Agent, Task or Workflow call is open (its
+// PreToolUse seen, its PostToolUse not yet). Then the agent's tool calls keep
+// the main turn alive, as before. Otherwise such an event neither opens the
+// turn nor restarts the fallback (noteHookEvent).
+//
 // FAIL-OPEN BY CONSTRUCTION. The queue only ever engages on POSITIVE evidence
 // that a turn is open. With hooks disabled (or a gateway that never binds) no
 // turn-opening event arrives, `turnOpen` is false, and every marker is handed
@@ -47,7 +63,8 @@ import { logInfo, logWarn } from '../debug-logger'
  *  (aicc_planning#81).
  *
  *  Silence is all it can see. Only a turn-opening hook re-arms it (a prompt
- *  sent, a tool starting or finishing, a subagent starting), and no hook
+ *  sent, a tool starting or finishing, a subagent starting), of the main
+ *  agent or of an agent the main agent waits on (noteHookEvent), and no hook
  *  fires while a tool runs or while the agent thinks or writes. So two
  *  minutes with no tool starting or finishing (a long build or test run, or
  *  the agent thinking or writing at length) count as silence, and the held
@@ -88,7 +105,31 @@ interface SessionState {
   turnOpen: boolean
   pending: PendingMarker[]
   cancelFallback: (() => void) | null
+  /** How many of the main agent's Agent, Task or Workflow calls are open (a
+   *  PreToolUse seen, its PostToolUse not yet). Back to 0 at Stop and at
+   *  SessionStart. */
+  agentCallsOpen: number
+  /** The turn last read closed by a Stop: the next event that opens it is
+   *  logged (one line, for the owner's app.log). */
+  closedByStop: boolean
 }
+
+/** What the queue reads of a hook event besides its name. Both are lifted
+ *  from the payload by the hooks gateway's feedEntryOf, for both transports. */
+export interface HookEventFrom {
+  /** Claude Code's `agent_id`: set on every event a subagent or a workflow
+   *  agent fires, never on the main agent's. */
+  agentId?: string
+  /** The tool a PreToolUse or PostToolUse is about. */
+  toolName?: string
+}
+
+/** The tools whose call runs another agent. The main agent waits on its call
+ *  until that call's PostToolUse; a call that starts its agent in the
+ *  background (a Workflow call, or an Agent call with run_in_background, as
+ *  read on Claude Code 2.1.330) returns at once. The same names as the
+ *  effort tracker's spawn bracket (effort-tracker.ts). */
+const AGENT_TOOLS: ReadonlySet<string> = new Set(['Task', 'Agent', 'Workflow'])
 
 /**
  * Which hook events say a turn is OPEN.
@@ -128,7 +169,7 @@ export class CanvasMarkerQueue {
   private state(sessionId: string): SessionState {
     let s = this.sessions.get(sessionId)
     if (!s) {
-      s = { turnOpen: false, pending: [], cancelFallback: null }
+      s = { turnOpen: false, pending: [], cancelFallback: null, agentCallsOpen: 0, closedByStop: false }
       this.sessions.set(sessionId, s)
     }
     return s
@@ -223,12 +264,25 @@ export class CanvasMarkerQueue {
     return true
   }
 
-  /** A hook event arrived for this session. */
-  noteHookEvent(sessionId: string, event: string): void {
+  /**
+   * A hook event arrived for this session. `from` is who fired it and the
+   * tool it is about (feedEntryOf lifts both from the payload).
+   *
+   * An event with an agent id (a subagent's or a workflow agent's) counts as
+   * the main turn's only while one of the main agent's own Agent, Task or
+   * Workflow calls is open: the main agent is waiting on that call, so its
+   * agent's tool calls show the main turn alive. Otherwise it neither opens
+   * the turn nor restarts the fallback (aicc_planning#409): after the main
+   * agent's Stop, a background agent's or a Workflow agent's tool calls do
+   * not hold a decision until the user prompts the agent.
+   */
+  noteHookEvent(sessionId: string, event: string, from: HookEventFrom = {}): void {
     if (event === 'Stop') {
       const s = this.sessions.get(sessionId)
       if (!s) return
       s.turnOpen = false
+      s.agentCallsOpen = 0
+      s.closedByStop = true
       this.flush(sessionId)
       return
     }
@@ -239,23 +293,40 @@ export class CanvasMarkerQueue {
       const s = this.sessions.get(sessionId)
       if (!s) return
       s.turnOpen = false
+      s.agentCallsOpen = 0
+      s.closedByStop = false
       this.flush(sessionId)
       return
     }
     if (!TURN_OPENING_EVENTS.has(event)) return
+    const fromAgent = typeof from.agentId === 'string' && from.agentId !== ''
+    if (fromAgent) {
+      // Not the main agent's event, and the main agent waits on no agent: it
+      // says nothing about the main turn.
+      const waiting = this.sessions.get(sessionId)
+      if (!waiting || waiting.agentCallsOpen === 0) return
+    }
     const s = this.state(sessionId)
-    if (!s.turnOpen) s.turnOpen = true
+    if (!fromAgent && from.toolName !== undefined && AGENT_TOOLS.has(from.toolName)) {
+      if (event === 'PreToolUse') s.agentCallsOpen++
+      else if (event === 'PostToolUse' && s.agentCallsOpen > 0) s.agentCallsOpen--
+    }
+    if (!s.turnOpen) {
+      s.turnOpen = true
+      if (s.closedByStop) {
+        s.closedByStop = false
+        // The event's name and whether it carried an agent id, nothing of its
+        // payload: if a decision is held again, the app.log shows what opened
+        // the turn it waited for.
+        logInfo(`[canvas-marker] the agent turn for ${sessionId} reads open again after a Stop, on ${event} (${fromAgent ? 'with' : 'no'} agent id)`)
+      }
+    }
     // The turn just showed it is alive, so the fallback starts again from now
     // (aicc_planning#81). It is there for a turn whose hook stream has gone
     // SILENT, and armed once at queue time it measured the marker's age
     // instead: a long turn still firing tool hooks had its marker typed into
     // it after 120 s, where the TUI swallowed it. Only while something is
     // held; an idle session's hooks arm nothing.
-    //
-    // Known tradeoff: the event name does not say which agent fired it, so a
-    // background subagent's tool hooks after the main turn's Stop reopen the
-    // turn (as before) and now also keep a marker held until they go quiet or
-    // the main agent's next Stop. A delay, never a loss.
     if (s.pending.length > 0) this.rearmFallback(sessionId, s)
   }
 

@@ -656,6 +656,12 @@ function buildSummary(
  * session helper (2.1.3-beta.8, plan section A4; src/main/session-signals/
  * hooks.ts helperHookEvent): one builder, so the two transports cannot drift.
  * `eventName` is the event's own name (`hook_event_name`, or `event`).
+ *
+ * The agent that fired it is lifted before redaction, as the tool name is:
+ * Claude Code's top-level `agent_id`, set on every event a subagent or a
+ * workflow agent fires and never on the main agent's. The canvas marker
+ * queue reads it to tell the main agent's turn from its agents' tool calls
+ * (aicc_planning#409).
  */
 export function feedEntryOf(sessionId: string, eventName: string, parsed: Record<string, unknown>): RingBufferEntry {
   const event = boundScalar(eventName) as HookEventKind
@@ -665,6 +671,9 @@ export function feedEntryOf(sessionId: string, eventName: string, parsed: Record
       : typeof parsed.toolName === 'string'
         ? (parsed.toolName as string)
         : undefined,
+  )
+  const agentId = boundScalar(
+    typeof parsed.agent_id === 'string' && parsed.agent_id !== '' ? (parsed.agent_id as string) : undefined,
   )
   const rawPayload =
     parsed.payload && typeof parsed.payload === 'object'
@@ -682,6 +691,7 @@ export function feedEntryOf(sessionId: string, eventName: string, parsed: Record
     sessionId,
     event,
     toolName,
+    ...(agentId !== undefined ? { agentId } : {}),
     // Summary is built from the FULL redacted payload (so it stays accurate),
     // THEN the stored/emitted payload is bounded to ~8 KiB so feed history can't
     // grow unbounded (RING_BUFFER_CAP entries * ~8 KiB = hard memory ceiling).

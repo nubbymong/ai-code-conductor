@@ -143,7 +143,8 @@ export function helperHooksTaken(): boolean {
  * passed on. In the gateway's order: the transcript path first (lifted before
  * redaction, through sanitiseTranscriptPath; a value that does not pass is
  * dropped and logged by its length only), then the feed entry (the gateway's
- * own feedEntryOf, so the redaction and the bounding cannot drift from it;
+ * own feedEntryOf, so the redaction, the bounding and the agent id it lifts
+ * for the canvas marker queue cannot drift from it;
  * the kind is the payload's own `hook_event_name`, which readEventFrame
  * checks), the entry into the session's ring, the consumers, and the
  * renderer. Events the holder dropped while no app was attached (`lost`) are

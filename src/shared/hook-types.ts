@@ -13,6 +13,10 @@ export interface HookEvent {
   sessionId: string
   event: HookEventKind | string
   toolName?: string
+  /** Claude Code's `agent_id`, lifted from the payload before redaction: set
+   *  on every event a subagent or a workflow agent fires, never on the main
+   *  agent's (aicc_planning#409). */
+  agentId?: string
   summary?: string
   payload: Record<string, unknown>
   ts: number

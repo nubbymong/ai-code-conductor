@@ -187,6 +187,41 @@ describe('a helper event gets what the gateway gives its own', () => {
     helperHookEvent(SID, { kind: 'Stop', payload: { hook_event_name: 'Stop', n: 1001 } })
     expect(emit.mock.calls.filter((c) => c[0] === IPC.HOOKS_DROPPED)).toEqual([[IPC.HOOKS_DROPPED, { sessionId: SID }]])
   })
+
+  // aicc_planning#409: the canvas marker queue tells the main agent's turn
+  // from its agents' tool calls by the agent id feedEntryOf lifts, so a held
+  // session's events must carry the same one as the gateway's. Payloads as
+  // C1's hold 1 read them on Claude Code 2.1.330: a Workflow agent's
+  // PreToolUse carries agent_id and agent_type after permission_mode; the
+  // main agent's carries neither.
+  it('the agent id is lifted alike on both transports, before redaction; the main agent\'s events carry none', async () => {
+    vi.spyOn(Date, 'now').mockReturnValue(1_700_000_000_000)
+    const base = { session_id: '8f0c2b1e-5d4a-4c3b-9a2f-1e0d9c8b7a65', transcript_path: TRANSCRIPT, cwd: 'C:\\work\\app', prompt_id: 'p1', permission_mode: 'default' }
+    const cases: Array<[Record<string, unknown>, string | undefined]> = [
+      [{ ...base, agent_id: 'a29cfab6678f85d73', agent_type: 'workflow-subagent', effort: { level: 'high' }, hook_event_name: 'PreToolUse', tool_name: 'Read', tool_input: { file_path: 'C:\\work\\app\\a.ts' }, tool_use_id: 't1' }, 'a29cfab6678f85d73'],
+      [{ ...base, agent_id: 'aac60e49fb296beb6', agent_type: 'general-purpose', hook_event_name: 'SubagentStart' }, 'aac60e49fb296beb6'],
+      [{ ...base, effort: { level: 'high' }, hook_event_name: 'PreToolUse', tool_name: 'Agent', tool_input: { prompt: `use ${GHP}` }, tool_use_id: 't2' }, undefined],
+      // Not a usable id: no agent id at all, as for the main agent.
+      [{ ...base, agent_id: '', hook_event_name: 'PostToolUse', tool_name: 'Read' }, undefined],
+      [{ ...base, agent_id: 42, hook_event_name: 'PostToolUse', tool_name: 'Read' }, undefined],
+      // Bounded as the tool name is.
+      [{ ...base, agent_id: 'a'.repeat(300), hook_event_name: 'PostToolUse', tool_name: 'Read' }, 'a'.repeat(128)],
+    ]
+    for (const [payload, agentId] of cases) {
+      emit.mockClear()
+      seen.length = 0
+      await viaGateway(payload)
+      helperHookEvent(SID, { kind: payload.hook_event_name as string, payload: structuredClone(payload) })
+      const [fromGateway, fromHelper] = feedEvents()
+      const what = `${String(payload.hook_event_name)} ${String(payload.agent_id)}`
+      expect(fromGateway.agentId, what).toBe(agentId)
+      expect(fromHelper.agentId, what).toBe(agentId)
+      expect('agentId' in fromHelper, what).toBe(agentId !== undefined)
+      expect(fromHelper, what).toEqual(fromGateway)
+      // Every consumer (the canvas marker queue's wiring among them) gets it.
+      expect(seen.map(([e]) => e.agentId), what).toEqual([agentId, agentId])
+    }
+  })
 })
 
 describe('the transcript path, the lost count, and the master switch', () => {
