@@ -389,8 +389,9 @@ jobs:
   #     count is the size of the matrix (strategy.job-total): add a part there
   #     to raise it. Each part's summary lists its slowest files, which is
   #     where a weight that has drifted shows.
-  #   - test-windows-build: the typecheck, the native tests, the build and, on
-  #     a release/* branch, the installer, once.
+  #   - test-windows-build: the typecheck, the native tests and the build. On
+  #     a release/* branch the installer is made once, by
+  #     `release-windows-installer` (below), which this check never waits for.
   # Each decides the scope itself ("Decide the scope"), as the Test jobs do,
   # and starts on the same events. None of their names begins with `Test (`,
   # so the release gate and the green-run reuse (TEST_JOB_RE) read only
