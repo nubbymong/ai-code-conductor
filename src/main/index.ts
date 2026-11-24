@@ -85,6 +85,7 @@ import { registerGitHubHandlers } from './ipc/github-handlers'
 import { registerHooksHandlers } from './ipc/hooks-handlers'
 import { registerServiceHealthHandlers } from './ipc/service-health-handlers'
 import { registerMachinesHandlers, getMachinesSource } from './ipc/machines-handlers'
+import { registerRemoteMachinesHandlers } from './ipc/remote-machines-handlers'
 import { initSessionHelper, applySessionHelperSettings, noteSessionHelperTabs, shutdownSessionHelper, holdQuitForSessionHelper, sessionHelperServiceState, sessionHelperKeptIds, sessionHelperKeptHookFolders } from './session-helper/app-wiring'
 import { endLeftoverConsoleHostsAtStart } from './console-host-leftovers'
 import { createServiceRegistry } from './services/service-registry'
@@ -1099,6 +1100,9 @@ if (!gotTheLock) {
     // helper is off and holds nothing; the helper work plugs the real one in with
     // setMachinesSource (./ipc/machines-handlers). Read per call, so a swap shows at once.
     registerMachinesHandlers(getMachinesSource, getWindow)
+    // 2.1.3-beta.17 (plan section A2): Linux machines for remote sessions
+    // through the session helper, and their routing for the PTY manager.
+    registerRemoteMachinesHandlers(getWindow)
     // 2.1.3-beta.14 (S16 step 4, aicc_planning#359): both sweeps leave the
     // files of the agent sessions the session helper keeps for this run.
     if (hooksEnabled) {

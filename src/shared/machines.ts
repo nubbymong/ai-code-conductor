@@ -2,8 +2,9 @@
  * The Machines page's seam (2.1.3-beta.6, plan section C).
  *
  * The page asks one MachinesSource what the session helper on a machine is
- * doing and which sessions it holds. This beta has one machine, This computer.
- * Main owns the source: the default one (src/main/ipc/machines-handlers.ts)
+ * doing and which sessions it holds, for This computer. The Linux machines
+ * added for remote sessions (2.1.3-beta.17) have types of their own
+ * (remote-machines.ts) and doors of their own. Main owns the source: the default one (src/main/ipc/machines-handlers.ts)
  * says the helper is off and holds nothing, and the helper work swaps in the
  * real one with setMachinesSource. The renderer only ever sees these types over
  * the typed bridge, so nothing here may name a path, a pipe or a process id.

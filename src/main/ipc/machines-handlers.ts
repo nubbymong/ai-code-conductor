@@ -73,8 +73,9 @@ function failedStatus(detail: string): MachineStatus {
   return { id: 'this-computer', name: 'This computer', helper: { state: 'failed', detail }, sessions: [] }
 }
 
-/** Run one call to the source; a throw or a silence past `ms` gives `onFail()`. */
-async function answer<T>(label: string, ms: number, call: () => Promise<T>, onFail: () => T): Promise<T> {
+/** Run one call to the source; a throw or a silence past `ms` gives `onFail()`.
+ *  The remote machines' doors use it too (remote-machines-handlers.ts). */
+export async function answer<T>(label: string, ms: number, call: () => Promise<T>, onFail: () => T): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined
   try {
     const silent = new Promise<never>((_, reject) => {

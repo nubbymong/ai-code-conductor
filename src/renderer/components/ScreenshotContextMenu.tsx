@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react'
 import { formatTimestamp } from '../utils/screenshotPath'
-import { sendStoryboardToSession } from '../utils/imageTransfer'
+import { sendImageToSession, sendStoryboardToSession } from '../utils/imageTransfer'
+import { SSH_THROUGH_HELPER } from '../../shared/remote-machines'
 import { DialogButton } from './ui/Dialog'
 import { isContextMenuGesture } from '../lib/pointer'
 
@@ -19,7 +20,7 @@ interface Props {
   onClose: () => void
 }
 
-export default function ScreenshotContextMenu({ x, y, sessionId, sessionType: _sessionType, onClose }: Props) {
+export default function ScreenshotContextMenu({ x, y, sessionId, sessionType, onClose }: Props) {
   const [screenshots, setScreenshots] = useState<ScreenshotEntry[]>([])
   const [loading, setLoading] = useState(true)
   const [selected, setSelected] = useState<Set<string>>(new Set())
@@ -78,7 +79,20 @@ export default function ScreenshotContextMenu({ x, y, sessionId, sessionType: _s
     if (paths.length > 0) {
       // Both local and SSH sessions use the conductor MCP fetch_host_screenshot
       // tool — Claude calls it once per filename to load each image inline.
-      sendStoryboardToSession(sessionId, paths, 'Please look at the following screenshots from my host machine.')
+      const context = 'Please look at the following screenshots from my host machine.'
+      const send = () => sendStoryboardToSession(sessionId, paths, context)
+      if (sessionType !== 'ssh') {
+        send()
+      } else {
+        // 2.1.3-beta.17 (plan section A2): a tab through the session helper has
+        // no such tool yet. The storyboard goes line by line, so main could not
+        // hold it back whole; one request goes instead, which main holds back
+        // and names in the tab, and no line of the storyboard is typed there.
+        void window.electronAPI.ssh.getState(sessionId).then(
+          (s) => { if (s?.state === SSH_THROUGH_HELPER) sendImageToSession(sessionId, paths[0], context, 'ssh'); else send() },
+          send,
+        )
+      }
     }
     onClose()
   }

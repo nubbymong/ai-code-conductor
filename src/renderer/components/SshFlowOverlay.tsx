@@ -6,6 +6,7 @@ import { useSessionStore } from '../stores/sessionStore'
 import { DialogButton } from './ui/Dialog'
 import { CLAUDE_OFF, useClaudeOff } from '../lib/claudeOff'
 import { launchRefusalOf } from '../../shared/providers'
+import { SSH_THROUGH_HELPER } from '../../shared/remote-machines'
 
 interface Props {
   sessionId: string
@@ -58,6 +59,7 @@ type FlowState =
   | 'shell-only'
   | 'skipped'
   | 'failed'
+  | typeof SSH_THROUGH_HELPER
 
 /**
  * In-pane overlay shown over an SSH terminal pane while in manual flow.
@@ -161,11 +163,14 @@ export default function SshFlowOverlay({ sessionId, hasPostCommand, shellOnly, e
 
   if (!enabled) return null
 
-  // Hide overlay once we're past the user-action stages.
+  // Hide overlay once we're past the user-action stages, and for a tab that
+  // runs through the session helper on its machine (2.1.3-beta.17 A2): it has
+  // no setup or launch steps, so main reports no SSH flow for it.
   if (
     state === 'claude-running'
     || state === 'shell-only'
     || state === 'skipped'
+    || state === SSH_THROUGH_HELPER
   ) {
     return null
   }

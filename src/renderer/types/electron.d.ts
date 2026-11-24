@@ -233,7 +233,7 @@ export interface ElectronAPI {
         runtime?: import('../../shared/types').SshRuntime
         /** #242 tier 5: respawning a session that previously reached
          *  claude-running -- drives `--continue` when no tmux persistence
-         *  is available. See SSHOptions.reconnect in pty-manager.ts. */
+         *  is available. See SSHOptions.reconnect in ssh-options.ts. */
         reconnect?: boolean
         /** SSH tmux enhancement (item 1): "Detachable" toggle (default ON). */
         detachable?: boolean
@@ -810,6 +810,14 @@ export interface ElectronAPI {
     runSelfTest: () => Promise<import('../../shared/machines').SelfTestResult>
     endSession: (id: string) => Promise<import('../../shared/machines').MachineActionResult>
     reattach: (id: string) => Promise<import('../../shared/machines').MachineActionResult>
+    /** 2.1.3-beta.17: Linux machines for remote sessions through the session helper. */
+    remote: {
+      state: () => Promise<import('../../shared/remote-machines').RemoteMachinesState>
+      prepare: (configId: string) => Promise<import('../../shared/remote-machines').RemoteConsent>
+      add: (token: string) => Promise<import('../../shared/remote-machines').RemoteActionResult>
+      check: (did: string) => Promise<import('../../shared/remote-machines').RemoteActionResult>
+      remove: (did: string) => Promise<import('../../shared/remote-machines').RemoteActionResult>
+    }
   }
   cli: {
     check: () => Promise<boolean>
