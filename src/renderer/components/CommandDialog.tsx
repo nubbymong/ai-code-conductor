@@ -176,7 +176,8 @@ export default function CommandDialog({ onConfirm, onCancel, initial, configId, 
   const storedSecret = !!initial?.hasSecretArg
   const [hasSecret, setHasSecret] = useState<boolean>(storedSecret)
   const [secretValue, setSecretValue] = useState('')
-  // #399: send to every open session on a plain press (a simple prompt only).
+  // #399: a plain press goes to every open session, or the sessions picked
+  // (it asks, #413); a simple prompt only.
   const [broadcast, setBroadcast] = useState<boolean>(!!initial?.broadcast)
   // The upgrade review banner (D13): reasons fixed here, or the whole thing dismissed.
   const [fixedReasons, setFixedReasons] = useState<CommandReviewReason[]>([])
@@ -774,7 +775,7 @@ export default function CommandDialog({ onConfirm, onCancel, initial, configId, 
                     {BROADCAST_OPTION_LABEL}
                   </label>
                   <p id="command-broadcast-hint" className={HINT_CLASS} style={HINT_STYLE} data-testid="command-broadcast-hint">
-                    {broadcastWhyNot ?? 'One press sends it once to every open agent session, SSH and background tabs included. Terminal-only tabs and Ask Conductor get nothing. Without it, Shift+click sends one press to every open session, after asking.'}
+                    {broadcastWhyNot ?? 'One press asks where to send it: All, every open agent session (SSH and background tabs included), or the sessions you pick. Terminal-only tabs and Ask Conductor get nothing. Without it, Shift+click asks the same.'}
                   </p>
                 </div>
 

@@ -22,18 +22,29 @@
  *    arguments and no secret (`broadcastBlocker`). Shell lines never go to
  *    every session: one press would run a command in every terminal.
  *
+ * aicc_planning#413 (2.1.3-beta.17, plan section C2): every broadcast press
+ * asks first. A press of a button with the option, and a Shift+click on any
+ * other simple Global prompt, open one chooser (command-bar/BroadcastChooser):
+ * All, or the sessions the user ticks. The owner (chat, 2026-11-24): "when the
+ * user clicks a broadcast button they should be given the option of all or
+ * select session". The chooser lists `broadcastChoices`; its answer is
+ * filtered again by `liveBroadcastPick` at the press, so a session that ended
+ * while it was up gets nothing.
+ *
  * No React and no store here, so the rules are testable on their own.
  */
 import type { Session } from '../stores/sessionStore'
 import type { CustomCommand } from '../stores/commandStore'
 import type { PromptButtonResult, SubmitNotDeliveredReason } from '../../shared/types'
 import { sessionCapabilities } from './session-capabilities'
+import { PROVIDER_NAMES } from '../provider-names'
 
 /** The option's name in the button's edit dialog. */
 export const BROADCAST_OPTION_LABEL = 'Send to every open session'
 
-/** What the pill on a broadcast button says to a tooltip and a screen reader. */
-export const BROADCAST_PILL_LABEL = 'Sends to every open session'
+/** What the pill on a broadcast button says to a tooltip and a screen reader:
+ *  a press asks, All or the sessions you pick (#413). */
+export const BROADCAST_PILL_LABEL = 'Sends to every open session, or the ones you pick'
 
 /** The fields of a session that decide whether a broadcast reaches it. */
 export type BroadcastSession = Pick<Session, 'id' | 'provider' | 'sessionType' | 'shellOnly' | 'configId' | 'sshConfig' | 'kind' | 'ptyExited' | 'neverStarted'>
@@ -63,6 +74,57 @@ export function broadcastTargets(sessions: readonly BroadcastSession[]): string[
   return ids
 }
 
+/** #413: one line of the broadcast chooser's list. */
+export interface BroadcastChoice {
+  id: string
+  /** The tab's name, as the tab strip shows it: its work name, else its config's. */
+  name: string
+  /** What the session's agent is called on screen (provider-names.ts). */
+  agent: string
+  /** The host an SSH session runs on, or null for a session on this computer. */
+  machine: string | null
+}
+
+/** The fields of a session the chooser shows. */
+export type BroadcastChoiceSession = BroadcastSession & Partial<Pick<Session, 'label' | 'customName'>>
+
+/**
+ * #413: the chooser's list. Of the sessions it listed when it opened
+ * (`listed`), those a broadcast still reaches now, in tab order, each once. A
+ * session that ends while the chooser is up drops out of it; one opened since
+ * is not added, so All answers what the chooser showed. A terminal-only tab,
+ * Ask Conductor and an ended tab are never listed (`isBroadcastTarget`).
+ */
+export function broadcastChoices(sessions: readonly BroadcastChoiceSession[], listed: readonly string[]): BroadcastChoice[] {
+  const wanted = new Set(listed)
+  const byId = new Map<string, BroadcastChoiceSession>()
+  for (const s of sessions) if (s && typeof s.id === 'string' && !byId.has(s.id)) byId.set(s.id, s)
+  const choices: BroadcastChoice[] = []
+  for (const id of broadcastTargets(sessions)) {
+    const s = byId.get(id)
+    if (!s || !wanted.has(id)) continue
+    const caps = sessionCapabilities(s)
+    choices.push({
+      id,
+      name: s.customName?.trim() || s.label || id,
+      agent: caps.agent ? PROVIDER_NAMES[caps.agent] : '',
+      machine: caps.mainRunsOn === 'remote' ? (caps.remoteHost || 'SSH') : null,
+    })
+  }
+  return choices
+}
+
+/**
+ * #413: the sessions a chooser's answer goes to, read at the press: of the
+ * ids picked, those a broadcast still reaches now, in tab order, each once.
+ * A session that ended, or stopped being an agent tab, while the chooser was
+ * up gets nothing.
+ */
+export function liveBroadcastPick(sessions: readonly BroadcastSession[], picked: readonly string[]): string[] {
+  const wanted = new Set(picked)
+  return broadcastTargets(sessions).filter((id) => wanted.has(id))
+}
+
 /** The fields of a button that decide whether it can go to every session. */
 export type BroadcastFields = Pick<CustomCommand, 'scope' | 'kind' | 'target' | 'defaultArgs' | 'lastCustomArgs' | 'hasSecretArg'>
 
@@ -82,9 +144,10 @@ export function broadcastBlocker(cmd: BroadcastFields): string | null {
   return null
 }
 
-/** Whether a plain press of this button goes to every open session: its
- *  option is on and it is a simple prompt. A record that has the option but
- *  is no longer one (hand-edited, say) presses as a single button. */
+/** Whether a plain press of this button is a broadcast press (it asks, All or
+ *  the sessions picked: #413): its option is on and it is a simple prompt. A
+ *  record that has the option but is no longer one (hand-edited, say)
+ *  presses as a single button. */
 export function isBroadcastButton(cmd: BroadcastFields & Pick<CustomCommand, 'broadcast'>): boolean {
   return cmd.broadcast === true && broadcastBlocker(cmd) === null
 }

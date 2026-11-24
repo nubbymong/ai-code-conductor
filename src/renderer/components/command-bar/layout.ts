@@ -170,8 +170,9 @@ export function chipTitle(cmd: CustomCommand, caps: SessionCapabilities, section
     : `runs in ${describeTarget(caps, cmd.target === 'partner' ? 'partner' : 'claude')}`
   const scope = cmd.scope === 'global' ? 'Global — every config' : 'Session — this config only'
   const parts = [`${cmd.label} — ${kindWord}`, where, scope]
-  // #399: a broadcast press goes to every open session, not only this one.
-  if (isBroadcastButton(cmd)) parts.push('sends to every open session')
+  // #399: a broadcast press goes to every open session, or the sessions
+  // picked (it asks, #413), not only this one.
+  if (isBroadcastButton(cmd)) parts.push('sends to every open session, or the ones you pick')
   if (sectionName) parts.push(`section ${sectionName}`)
   if (cmd.kind !== 'page' && cmd.defaultArgs?.length) parts.push(`args: ${cmd.defaultArgs.join(' ')} (Ctrl+click to change for one run)`)
   return parts.join(' · ')

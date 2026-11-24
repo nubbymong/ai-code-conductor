@@ -7,12 +7,16 @@
  * ended session (Q2); each session's own prompt path decides and the pressed
  * tab shows one count (Q3); only a simple prompt can go to every session:
  * Global, no arguments, no remembered Ctrl+click arguments, no secret (Q4).
+ * aicc_planning#413 (2.1.3-beta.17, plan section C2): every broadcast press
+ * asks, All or the sessions picked; the chooser's list (broadcastChoices) and
+ * the sessions its answer reaches at the press (liveBroadcastPick).
  * The CommandBar's own wiring is in commandbar-broadcast.test.tsx.
  */
 import { describe, it, expect, vi } from 'vitest'
 import {
   broadcastTargets, isBroadcastTarget, broadcastBlocker, isBroadcastButton,
-  tallyBroadcast, broadcastNote, broadcastPrompt, type BroadcastSession,
+  tallyBroadcast, broadcastNote, broadcastPrompt, broadcastChoices, liveBroadcastPick,
+  type BroadcastSession, type BroadcastChoiceSession,
 } from '../../../src/renderer/lib/commandBroadcast'
 import type { PromptButtonResult } from '../../../src/shared/types'
 
@@ -134,5 +138,42 @@ describe('each session\'s own path decides, and one note counts it (#399 Q3)', (
 
   it('a press every session dropped as a repeat says nothing, as a single press does', () => {
     expect(broadcastNote({ total: 2, sent: 0, typed: 0, busyOrEnded: 0, refused: 0, repeats: 2 })).toBeNull()
+  })
+})
+
+describe('the chooser\'s list and the sessions its answer reaches (#413)', () => {
+  const SSH = { host: 'build-box', port: 22, username: 'u', remotePath: '/' }
+  const SESSIONS: BroadcastChoiceSession[] = [
+    { ...agent('a'), label: 'alpha' },
+    { ...agent('b', { sessionType: 'ssh', sshConfig: SSH }), label: 'beta' },
+    { ...agent('c', { provider: 'codex' }), label: 'gamma-config', customName: '  gamma work  ' },
+    { ...agent('shell', { shellOnly: true }), label: 'shell' },
+    { ...agent('ask', { kind: 'ask' }), label: 'Ask' },
+    { ...agent('ended', { ptyExited: true }), label: 'ended' },
+  ]
+  const ALL = ['a', 'b', 'c', 'shell', 'ask', 'ended']
+
+  it('lists each listed agent tab in tab order: its name as the tab strip shows it, its agent, the host of an SSH tab', () => {
+    expect(broadcastChoices(SESSIONS, ['c', 'b', 'a'])).toEqual([
+      { id: 'a', name: 'alpha', agent: 'Claude Code', machine: null },
+      { id: 'b', name: 'beta', agent: 'Claude Code', machine: 'build-box' },
+      { id: 'c', name: 'gamma work', agent: 'Codex', machine: null },
+    ])
+  })
+
+  it('never lists a terminal-only tab, Ask Conductor or an ended tab, even when asked to', () => {
+    expect(broadcastChoices(SESSIONS, ALL).map((c) => c.id)).toEqual(['a', 'b', 'c'])
+  })
+
+  it('drops a listed tab that has ended since, and adds no tab that was not listed', () => {
+    const later = [...SESSIONS.map((s) => (s.id === 'b' ? { ...s, ptyExited: true } : s)), { ...agent('d'), label: 'delta' }]
+    expect(broadcastChoices(later, ['a', 'b', 'c']).map((c) => c.id)).toEqual(['a', 'c'])
+  })
+
+  it('the answer reaches the picked tabs a broadcast still reaches at the press, in tab order, each once', () => {
+    expect(liveBroadcastPick(SESSIONS, ['c', 'a', 'c'])).toEqual(['a', 'c'])
+    expect(liveBroadcastPick(SESSIONS, ['shell', 'ask', 'ended', 'nobody'])).toEqual([])
+    const later = SESSIONS.map((s) => (s.id === 'c' ? { ...s, ptyExited: true } : s))
+    expect(liveBroadcastPick(later, ['a', 'c'])).toEqual(['a'])
   })
 })

@@ -1,13 +1,15 @@
 // @vitest-environment jsdom
 /**
- * #399 (2.1.3-beta.16, plan section B4): a Shift+click on a button folded into
- * its band's overflow list asks first, as it does on the bar. The overflow row
- * hands the Shift key on to the CommandBar's press (CommandBar.tsx, BandOverflow
- * onRun); without it, a Shift+click on a folded simple Global prompt would send
- * to its own tab only, with no question asked.
+ * #399 (2.1.3-beta.16, plan section B4) and aicc_planning#413 (2.1.3-beta.17,
+ * plan section C2): a broadcast press on a button folded into its band's
+ * overflow list asks as it does on the bar: the same chooser, All or the
+ * sessions picked. The overflow row hands the Shift key on to the
+ * CommandBar's press (CommandBar.tsx, BandOverflow onRun); without it, a
+ * Shift+click on a folded simple Global prompt would send to its own tab
+ * only, with no question asked.
  *
  * The harness is commandbar-broadcast.test.tsx's, with the band folding forced:
- * useBandFolding reports the Global band's one button as folded, so it sits in
+ * useBandFolding reports the Global band's buttons as folded, so they sit in
  * the overflow list and not on the row.
  */
 import React from 'react'
@@ -67,16 +69,18 @@ const OPEN = [
   { id: 's-2', label: 'remote', workingDirectory: '/', color: '#89b4fa', sessionType: 'ssh', model: 'sonnet', sshConfig: { host: 'build-box', port: 22, username: 'u', remotePath: '/' } },
   { id: 'sh', label: 'shell', workingDirectory: '/', color: '#89b4fa', sessionType: 'local', model: '', shellOnly: true },
 ]
-/** A simple Global prompt without the option: a Shift+click asks first. */
+/** A simple Global prompt without the option: a Shift+click asks. */
 const PLAIN = { id: 'p1', label: 'Resume', prompt: 'resume from the handoff', scope: 'global', kind: 'prompt', target: 'claude' }
+/** A button with the option on: a plain press asks. */
+const BROADCAST = { id: 'b1', label: 'Review all', prompt: 'review the open diff', scope: 'global', kind: 'prompt', target: 'claude', broadcast: true }
 
 let container: HTMLDivElement
 let root: Root
 
 beforeEach(() => {
-  COMMANDS = [PLAIN]
+  COMMANDS = [PLAIN, BROADCAST]
   SESSIONS = OPEN
-  FOLDED = { global: new Set(['p1']) }
+  FOLDED = { global: new Set(['p1', 'b1']) }
   ptyWrite.mockClear()
   submitPrompt.mockClear()
   ;(globalThis as any).window.electronAPI.pty = { write: ptyWrite, submitPrompt }
@@ -91,29 +95,30 @@ afterEach(() => {
 
 const settle = () => new Promise((r) => setTimeout(r, 0))
 const byTest = (id: string) => container.querySelector<HTMLElement>(`[data-testid="${id}"]`)
-const card = () => byTest('confirm-broadcast')
+const chooser = () => byTest('broadcast-chooser')
 const sentTo = () => submitPrompt.mock.calls.map((c) => c[0])
 
-/** Render the bar, open the Global band's overflow list and click the folded button's row. */
-const clickFolded = async (init: MouseEventInit) => {
+/** Render the bar, open the Global band's overflow list and click a folded button's row. */
+const clickFolded = async (id: string, label: string, init: MouseEventInit) => {
   act(() => { root.render(React.createElement(CommandBar, { sessionId: 's-1', parentSessionId: 's-1', partnerSessionId: 's-1-partner', configId: 'cfg' } as never)) })
-  // Folded: not on the row, only behind "1 more".
-  expect(Array.from(container.querySelectorAll('[data-testid="command-chip"]')).some((b) => b.textContent?.includes('Resume'))).toBe(false)
+  // Folded: not on the row, only behind "2 more".
+  expect(Array.from(container.querySelectorAll('[data-testid="command-chip"]')).some((b) => b.textContent?.includes(label))).toBe(false)
   await act(async () => { byTest('command-more-global')!.click(); await settle() })
-  const row = container.querySelector<HTMLElement>('[data-testid="command-overflow-item"][data-command-id="p1"]')!
+  const row = container.querySelector<HTMLElement>(`[data-testid="command-overflow-item"][data-command-id="${id}"]`)!
   expect(row).not.toBeNull()
   await act(async () => { row.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, ...init })); await settle() })
 }
 
-describe('a button folded into its band\'s overflow list (#399)', () => {
-  it('Shift+click on its row asks first, and Send reaches every open agent tab once', async () => {
-    await clickFolded({ shiftKey: true })
-    expect(card()).not.toBeNull()
-    expect(byTest('confirm-broadcast-title')!.textContent).toBe('Send to 2 open sessions?')
+describe('a button folded into its band\'s overflow list (#399, #413)', () => {
+  it('Shift+click on its row opens the chooser, and All reaches every open agent tab once', async () => {
+    await clickFolded('p1', 'Resume', { shiftKey: true })
+    expect(chooser()).not.toBeNull()
+    expect(byTest('broadcast-chooser-title')!.textContent).toBe('Send "Resume" to')
+    expect(byTest('broadcast-chooser-all')!.textContent).toBe('All (2)')
     expect(submitPrompt).not.toHaveBeenCalled()
     expect(ptyWrite).not.toHaveBeenCalled()
-    await act(async () => { byTest('confirm-broadcast-ok')!.click(); await settle() })
-    expect(card()).toBeNull()
+    await act(async () => { byTest('broadcast-chooser-all')!.click(); await settle() })
+    expect(chooser()).toBeNull()
     expect(sentTo()).toEqual([
       { sessionId: 's-1', text: 'resume from the handoff' },
       { sessionId: 's-2', text: 'resume from the handoff' },
@@ -121,9 +126,22 @@ describe('a button folded into its band\'s overflow list (#399)', () => {
     expect(ptyWrite).not.toHaveBeenCalled()
   })
 
-  it('a plain click on its row still reaches only its own tab, without asking', async () => {
-    await clickFolded({})
-    expect(card()).toBeNull()
+  it('a plain click on a broadcast button\'s row asks the same way, and a pick reaches only the ticked tab', async () => {
+    await clickFolded('b1', 'Review all', {})
+    expect(chooser()).not.toBeNull()
+    expect(submitPrompt).not.toHaveBeenCalled()
+    await act(async () => { byTest('broadcast-chooser-choose')!.click(); await settle() })
+    for (const r of Array.from(container.querySelectorAll<HTMLElement>('[data-testid="broadcast-choice"]'))) {
+      const box = r.querySelector<HTMLInputElement>('[data-testid="broadcast-choice-tick"]')!
+      if (box.checked !== (r.dataset.sessionId === 's-2')) await act(async () => { box.click(); await settle() })
+    }
+    await act(async () => { byTest('broadcast-chooser-send')!.click(); await settle() })
+    expect(sentTo()).toEqual([{ sessionId: 's-2', text: 'review the open diff' }])
+  })
+
+  it('a plain click on a button without the option still reaches only its own tab, without asking', async () => {
+    await clickFolded('p1', 'Resume', {})
+    expect(chooser()).toBeNull()
     expect(sentTo()).toEqual([{ sessionId: 's-1', text: 'resume from the handoff' }])
   })
 })

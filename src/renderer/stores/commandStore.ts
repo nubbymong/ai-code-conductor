@@ -86,9 +86,10 @@ export interface CustomCommand {
    *  (#379). Absent means 'ask', and the dialog writes this only when the user
    *  ticks "remember". See shared/gui-exe.ts. */
   guiExePolicy?: GuiExePolicy
-  /** #399: "Send to every open session". A plain press sends the prompt to
-   *  every open agent session, each through its own prompt path, instead of
-   *  to the pressed tab only (lib/commandBroadcast). Only a simple prompt can
+  /** #399: "Send to every open session". A plain press asks, All or the
+   *  sessions picked (#413), and sends the prompt to those agent sessions,
+   *  each through its own prompt path, instead of to the pressed tab only
+   *  (lib/commandBroadcast). Only a simple prompt can
    *  carry it: Global, for the agent, no arguments and no secret
    *  (broadcastBlocker); on any other record it is ignored, and a move to
    *  the Session band clears it. Absent means a single press. */
