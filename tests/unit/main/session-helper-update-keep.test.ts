@@ -150,11 +150,9 @@ afterEach(async () => {
     Promise.allSettled([...quits, ...starts.splice(0)]),
     new Promise<void>((r) => { timer = setTimeout(r, 3000) }),
   ]).finally(() => clearTimeout(timer))
-  try {
-    rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 25 })
-  } catch (err) {
-    process.stderr.write(`session-helper-update-keep: left ${dir} behind (${(err as NodeJS.ErrnoException).code ?? String(err)})\n`)
-  }
+  // The starts include the self-test each began (session-helper-manager.test.ts
+  // says why that matters): a folder that cannot go here is a real failure.
+  rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 25 })
 })
 
 /** A Claude Code tab and another provider's tab through their holders, attached,
