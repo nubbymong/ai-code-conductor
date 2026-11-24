@@ -137,6 +137,7 @@ import {
   heldIdKind,
   heldSessionId,
   helperOs,
+  isAbsoluteFor,
   parseSelfTestResult,
   parseVersionLine,
   readListing,
@@ -520,6 +521,14 @@ function absoluteFolder(x: unknown): string | null {
   return typeof x === 'string' && x.length <= FOLDER_MAX && path.isAbsolute(x) && !/[\x00-\x1f\x7f]/.test(x) ? x : null
 }
 
+/** The folder a kept session's CLI runs in (its launch's cwd, which the
+ *  helper was given): read by the rule a launch is checked by for the
+ *  helper's system (protocol.ts isAbsoluteFor, as checkLaunch reads it), not
+ *  by this process's path rules; otherwise as absoluteFolder. */
+function launchFolder(x: unknown, os: HelperOs): string | null {
+  return typeof x === 'string' && x.length <= FOLDER_MAX && isAbsoluteFor(x, os) && !/[\x00-\x1f\x7f]/.test(x) ? x : null
+}
+
 /** A kept record's pick (aicc_planning#419): an absolute file named
  *  pick.json and its folder's identity (device and file id, real path), with
  *  the decision read last when it reads; null when it does not read. */
@@ -537,8 +546,8 @@ function keptPickOf(x: unknown): ResumePick | null {
 /** A kept record read strictly, from its file under the name `sid`: null
  *  when its id, tab and provider are not one agent session of this app's. A
  *  conversation, an account, a hook folder, a launch folder or a pick that
- *  does not read is none. */
-function keptRecordOf(v: unknown, sid: string): KeptRecord | null {
+ *  does not read is none. `os`: the helper's system, for the launch folder. */
+function keptRecordOf(v: unknown, sid: string, os: HelperOs): KeptRecord | null {
   if (!v || typeof v !== 'object') return null
   const r = v as Record<string, unknown>
   if (r.v !== 1 || r.session !== sid || heldIdKind(sid) !== 'agent') return null
@@ -555,7 +564,7 @@ function keptRecordOf(v: unknown, sid: string): KeptRecord | null {
     conversation: text(r.conversation, CONVERSATION_RE),
     account: text(r.account, ACCOUNT_RE),
     hookFolder: absoluteFolder(r.hookFolder),
-    folder: absoluteFolder(r.folder),
+    folder: launchFolder(r.folder, os),
     ...(r.bundled === true ? { bundled: true as const } : {}),
     ...(pick ? { pick } : {}),
     at: typeof r.at === 'number' && Number.isFinite(r.at) ? r.at : 0,
@@ -563,8 +572,8 @@ function keptRecordOf(v: unknown, sid: string): KeptRecord | null {
 }
 
 /** The kept records in the helper's folder, by session id; null for one that
- *  does not read. No holder is asked. */
-function readKeptStore(root: string): Array<{ sid: string; record: KeptRecord | null }> {
+ *  does not read. No holder is asked. `os`: the helper's system (helperOs). */
+function readKeptStore(root: string, os: HelperOs = helperOs()): Array<{ sid: string; record: KeptRecord | null }> {
   const dir = path.join(root, KEPT)
   let names: string[]
   try {
@@ -577,7 +586,7 @@ function readKeptStore(root: string): Array<{ sid: string; record: KeptRecord | 
     const m = /^(.+)\.json$/.exec(name)
     if (!m || !SID_RE.test(m[1])) continue
     let record: KeptRecord | null = null
-    try { record = keptRecordOf(JSON.parse(fs.readFileSync(path.join(dir, name), 'utf8')), m[1]) } catch { /* below */ }
+    try { record = keptRecordOf(JSON.parse(fs.readFileSync(path.join(dir, name), 'utf8')), m[1], os) } catch { /* below */ }
     out.push({ sid: m[1], record })
   }
   return out
@@ -1978,7 +1987,7 @@ export class SessionHelperManager implements MachinesSource {
    *  (`shape`, for the take-over). Undefined, with one log line, when it
    *  cannot be written. */
   private recordKept(sid: string, label: string, provider: ProviderId, shape: { cwd: string; bundled: boolean }): KeptRecord | undefined {
-    const record = keptRecordOf({ v: 1, session: sid, label, provider, ...describeKeptLaunch(label), folder: shape.cwd, ...(shape.bundled ? { bundled: true } : {}), at: this.deps.now() }, sid)
+    const record = keptRecordOf({ v: 1, session: sid, label, provider, ...describeKeptLaunch(label), folder: shape.cwd, ...(shape.bundled ? { bundled: true } : {}), at: this.deps.now() }, sid, this.os)
     if (!record) {
       this.deps.log(`[session-helper] ${sid}: the agent session could not be recorded, so it is ended at the update as before`)
       return undefined
@@ -2033,7 +2042,7 @@ export class SessionHelperManager implements MachinesSource {
       }
       return saved
     }
-    for (const { sid, record: kept } of readKeptStore(this.root)) {
+    for (const { sid, record: kept } of readKeptStore(this.root, this.os)) {
       if (!kept) {
         this.deps.log(`[session-helper] ${sid}: a record of an agent session an update kept running did not read, and is removed`)
         this.removeKeptRecord(sid)
@@ -2548,7 +2557,7 @@ function markReason(marker: string): 'update' | null {
  * not, so the start that ends it also removes what it left.
  */
 export function agentRecordsIn(root: string, platform?: NodeJS.Platform): boolean {
-  return readStore(path.join(root, 'store'), helperOs(platform)).some((r) => heldIdKind(r.session) === 'agent') || readKeptStore(root).length > 0
+  return readStore(path.join(root, 'store'), helperOs(platform)).some((r) => heldIdKind(r.session) === 'agent') || readKeptStore(root, helperOs(platform)).length > 0
 }
 
 /**

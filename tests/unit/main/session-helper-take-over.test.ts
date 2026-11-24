@@ -45,10 +45,7 @@ import type { HookEventFrame } from '../../../src/main/session-helper/protocol'
 import { FakeHelper, type FakeHolder } from './session-helper-fake-holder'
 
 const SHELL = 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe'
-// Absolute on the system the test runs on: a kept record keeps its folder
-// only when it is (manager.ts absoluteFolder), and on Linux or macOS a
-// Windows path is a relative name.
-const CWD = process.platform === 'win32' ? 'C:\\Users\\someone\\project' : '/home/someone/project'
+const CWD = 'C:\\Users\\someone\\project'
 const agentOpts = () => ({ name: 'xterm-256color', cols: 120, rows: 30, cwd: CWD, env: { Path: 'C:\\Windows' }, useConpty: true })
 const tick = (ms = 0) => new Promise((r) => setTimeout(r, ms))
 async function until(cond: () => boolean, what: string, ms = 3000): Promise<void> {
@@ -561,6 +558,26 @@ describe('a Codex session an update kept running on its resume list (aicc_planni
     writeFileSync(recordFile(), JSON.stringify({ ...JSON.parse(readFileSync(recordFile(), 'utf8')), pick: { ...PICK, decided: { id: '--config=x' } } }))
     await startedWith(makeManager({ takeOver: 'both' }))
     expect(takeKeptSession(OTHER_TAB, 'codex', SIZE, 'acct-7')!.kept.pick).toEqual({ file: PICK.file, folder: PICK.folder })
+  })
+})
+
+describe('a kept record\'s launch folder is read by the rule the helper checks a launch folder by, on the helper\'s system', () => {
+  const recordFile = () => join(keptDir(), `${claudeSid}.json`)
+
+  // These managers run the Windows helper (platform win32) on whatever system
+  // runs the test, so the folder is read by the Windows rule on every one.
+  it.each([
+    ['a folder on a drive: read', CWD, CWD],
+    ['a folder with no drive (rooted, as Unix writes one): none', '/home/someone/project', null],
+    ['a folder relative to a drive: none', 'C:project', null],
+  ])('%s', async (_what, folder, read) => {
+    await updated()
+    // Written over on disk, as a record the start acts on could be.
+    writeFileSync(recordFile(), JSON.stringify({ ...JSON.parse(readFileSync(recordFile(), 'utf8')), folder }))
+    await startedWith(makeManager())
+    const taken = takeKeptSession(CLAUDE_TAB, 'claude', SIZE)
+    expect(taken).not.toBeNull()
+    expect(taken!.kept.folder).toBe(read)
   })
 })
 
