@@ -1419,8 +1419,10 @@ export class SessionHelperManager implements MachinesSource {
       isOn: () => on,
       connected: (conn) => {
         const again = connections++ > 0
-        // S16 step 6: the take-over's first connection is given the streams
-        // the holder kept; their CLI is told its tool list may have changed.
+        // S16 step 6: the take-over's first connection (B1d: or the keeper's,
+        // for a session served while its tab is not shown) is given the
+        // streams the holder kept; their CLI is told its tool list may have
+        // changed.
         const toolsChanged = takenOver && !again && deps.listsAgain === true
         const links = new Map<number, StreamLink>()
         // The connection reports these only when it acked `mcp`, and only for
@@ -1445,7 +1447,7 @@ export class SessionHelperManager implements MachinesSource {
           } else if (again) {
             this.deps.log(`[session-helper] ${appId}: a tool stream is served on the connection that attached again (one its holder kept while the link was down, or a new one)`)
           } else if (toolsChanged) {
-            this.deps.log(`[session-helper] ${appId}: a tool stream is served on the take-over's connection, and its CLI is told its tool list may have changed`)
+            this.deps.log(`[session-helper] ${appId}: a tool stream is served on ${unseen ? 'its keeper\'s connection while its tab is not shown' : 'the take-over\'s connection'}, and its CLI is told its tool list may have changed`)
           }
         })
         conn.on('mcp', (stream, m) => links.get(stream)?.deliver(m))

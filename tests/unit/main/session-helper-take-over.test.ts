@@ -797,8 +797,10 @@ describe('a Claude Code session an update kept running, asked for on another acc
  * taken over without being served first. The launch bindings are a stand-in
  * that answers whether it served (serve) and records what it is told to
  * unbind (unserve); launch-bindings-take-over.test.ts holds the real ones.
- * Every case fails on the code before it: restoredTabs took ids alone, and
- * nothing was served or ended for these.
+ * Every case but one fails on the code before it (restoredTabs took ids
+ * alone, and nothing was served or ended for these); 'its tab shown within
+ * the wait' passes there by design, since nothing was served at all, and is
+ * held by its two mutants (serve with no wait, serve when shown).
  */
 describe('B1d: a session kept for a restored tab not shown is served its tool calls, and ended when its CLI ends (aicc_planning#423)', () => {
   /** What the stand-in bindings were asked to serve, and told to unserve. */
@@ -841,6 +843,8 @@ describe('B1d: a session kept for a restored tab not shown is served its tool ca
     expect(hc.attached!.ackedCaps).not.toContain('hooks')
     expect(hc.relayTold.filter((t) => t.stream === stream).map((t) => t.t)).toEqual(['mcp.away', 'mcp.back'])
     expect(logs).toContain(`[session-helper] ${CLAUDE_TAB}: its Conductor tools go through its holder while its tab is not shown`)
+    expect(logs).toContain(`[session-helper] ${CLAUDE_TAB}: a tool stream is served on its keeper's connection while its tab is not shown, and its CLI is told its tool list may have changed`)
+    expect(logs.some((l) => l.includes('served on the take-over\'s connection'))).toBe(false)
     const got: unknown[] = []
     served[0].link.take((m) => { got.push(m) }, () => {})
     hc.relay(stream, { jsonrpc: '2.0', id: 7, method: 'tools/call', params: { name: 'canvas_review' } })
@@ -859,12 +863,29 @@ describe('B1d: a session kept for a restored tab not shown is served its tool ca
     await until(() => !!hc.attached && hc.attached.ackedCaps.includes('hooks') && hc.attached.ackedCaps.includes('mcp'), 'the take-over to attach')
     await until(() => served.length === 2, 'the stream to be served on the take-over')
     expect(served[1]).toMatchObject({ id: CLAUDE_TAB, opts: { toolsChanged: true } })
+    expect(logs).toContain(`[session-helper] ${CLAUDE_TAB}: a tool stream is served on the take-over's connection, and its CLI is told its tool list may have changed`)
     await until(() => events.length === 1, 'the hook event its holder queued')
     expect(hc.requests.filter((r) => r.t === 'term.launch')).toHaveLength(1)
     expect(ptySpawn).not.toHaveBeenCalled()
     // The take-over's own teardown (its spawn's killPty) clears what serving bound; the manager unbinds nothing more.
     expect(unserved).toEqual([])
     expect(keptOnDisk()).toEqual([])
+  })
+
+  it('both providers kept, each tab restored with its own folder: each is served under its own tab with that tab\'s folder, the Codex one with its kept hook folder and by its own tool functions, not told a tool list changed', async () => {
+    const OTHER_CWD = 'D:\\repo'
+    const { m2, hc, ho } = await keptAtNextStart({ serveMs: 30, takeOver: 'both' })
+    await until(() => !!ho.attached, 'the other keeper to attach')
+    // The other tab listed first: a folder taken from the first tab, not each tab's own, gives the Claude Code session the wrong one.
+    m2.restoredTabs?.([{ id: OTHER_TAB, cwd: OTHER_CWD }, { id: CLAUDE_TAB, cwd: CWD }])
+    await until(() => served.length === 1 && servedOther.length === 1, 'both kept streams to be served while their tabs are not shown')
+    expect(servedUnseen).toHaveLength(2)
+    expect(servedUnseen).toContainEqual({ kept: { sessionId: CLAUDE_TAB, provider: 'claude', hookFolder: null, folder: CWD }, cwd: CWD })
+    expect(servedUnseen).toContainEqual({ kept: { sessionId: OTHER_TAB, provider: 'codex', hookFolder: HOOK_FOLDER, folder: CWD }, cwd: OTHER_CWD })
+    expect(served[0]).toMatchObject({ id: CLAUDE_TAB, opts: { toolsChanged: true } })
+    expect(servedOther).toEqual([{ id: OTHER_TAB, opts: undefined }])
+    expect(ho.attached!.ackedCaps).toContain('mcp')
+    expect(hc.ended || ho.ended).toBe(false)
   })
 
   it('its tab shown within the wait (the tab on screen at Resume): nothing is served before its take-over', async () => {

@@ -41,12 +41,17 @@ not edited (CONTEXT.d/README.md: never edit another entry's fragment).
   A session kept no longer in any other way (its tab closed, the 5 minutes after its tab was
   shown, its CLI ended, its holder not reached, End on the Machines page, a quit) has what the
   serving bound removed (unserveKeptLaunch), never what a launch of its tab bound since.
-- **As B1 defines it, unchanged.** A tool call in flight at the moment of the take-over is
-  answered with an error, and a retry works at once. From the start until 3 s after Resume,
-  and while the tool host is not serving, a call is held 30 s by the relay and then answered
-  "AI Code Conductor is updating, try again shortly": the app is restarting then. Claude
-  Code's hook events still wait in its holder until the take-over (at most 256 events and
-  2 MiB).
+- **At the take-over.** A tool call in flight when a served session's tab is shown and takes
+  it over is answered "This tool connection has ended." (connection.ts
+  TOOL_STREAM_SENTENCES.ended: the take-over's teardown ends the tool host's side of the
+  stream first), and a retry works at once.
+- **As B1 defines it, unchanged.** A call is held 30 s by the relay and then answered "AI
+  Code Conductor is updating, try again shortly": from the start until 3 s after Resume (the
+  app is restarting then); while the tool host is not serving; for a session whose tab was
+  shown within those 3 s, until its take-over (its launch may wait at its account picker, 5
+  minutes at most); and for one whose tab Resume did not restore, until its 5-minute limit
+  ends it. Claude Code's hook events still wait in its holder until the take-over (at most
+  256 events and 2 MiB).
 - pty-manager.ts stays at 7,773 lines: two names added to an existing line of its launch
   bindings' ports.
 - Not checked here: the VM line, which the orchestrator runs on the frozen head.
