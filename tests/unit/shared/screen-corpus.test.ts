@@ -11,7 +11,10 @@
 // state P19's second run records only (Codex's mid-reply of its short turn,
 // and the hint rows) ends 300 ms after its mark, with no resize. The program
 // is the CLI at one version: codex is Codex 0.157.1, codex170 is Codex
-// 0.170.0 (VERSION below). Each recording names the CLI and its version, the
+// 0.170.0 (VERSION below). Codex's warning-draft (2.1.3-beta.17 C7,
+// aicc_planning #371) comes from C7's recording hold on the Windows test
+// machine (P19's recorder with a scenario file of the hold's own), recorded
+// only as the hint rows are. Each recording names the CLI and its version, the
 // system, the size, and holds the
 // chunks as node-pty handed them over (on macOS and Linux a character split
 // across two reads joins the second, as node-pty's own decoder does), with
@@ -40,7 +43,9 @@
 //     that moves nothing still fails here until the rows files are written
 //     again);
 //  2. the reader of each recording's program reads the state in its name
-//     (readClaudeScreen, readCodexScreen; for the shell both read no prompt);
+//     (readClaudeScreen, readCodexScreen; for the shell both read no prompt),
+//     and for Codex's warning draft (C7) a prompt holding the draft the probe
+//     typed;
 //  3. the names come from the fixed sets, each recording has its rows file and
 //     its program's version, each runs on from its first byte with no gap,
 //     each known misread is a recording, each LEFT_OUT row names the fixed
@@ -105,7 +110,11 @@ const CLI_STATES = ['first-screen', 'ready', 'mid-reply', 'after-reply'] as cons
  *  only): a draft typed while a turn runs (the queue hint), the shortcuts key
  *  rebound, the agents form of the hint row, and a warning drawn on it. */
 const HINT_STATES = ['queue-hint', 'rebound-hint', 'agents-hint', 'warning-hint'] as const
-const CODEX_STATES = [...CLI_STATES, ...HINT_STATES] as const
+/** 2.1.3-beta.17 C7 (aicc_planning #371): a draft typed at an idle composer
+ *  while Codex shows a warning count, which it then keeps alone under the
+ *  footer (C7's recording hold, record only). */
+const DRAFT_STATES = ['warning-draft'] as const
+const CODEX_STATES = [...CLI_STATES, ...HINT_STATES, ...DRAFT_STATES] as const
 const STATES: Record<string, readonly string[]> = { claude: CLI_STATES, codex: CODEX_STATES, codex170: CODEX_STATES, shell: ['after-output'] }
 const PROGRAMS = Object.keys(STATES)
 const SYSTEMS = ['windows-bundled', 'windows-system', 'macos', 'linux'] as const
@@ -121,10 +130,12 @@ const VERSION: Record<string, string | null> = { claude: '2.1.328', codex: '0.15
  *  takes the prompt's place: claude-screen.ts); Codex's is its sign-in
  *  choice, which its reader knows by "Press enter to continue". The queue
  *  hint shows while a turn runs, with a draft in the composer: busy. The
- *  other hint rows are on an empty ready composer. */
+ *  other hint rows are on an empty ready composer. The warning draft is a
+ *  ready composer holding the draft the probe typed (DRAFT_STATES). */
 const CODEX_EXPECTED: Record<string, string> = {
   'first-screen': 'blocked', ready: 'ready', 'mid-reply': 'busy', 'after-reply': 'ready',
   'queue-hint': 'busy', 'rebound-hint': 'ready', 'agents-hint': 'ready', 'warning-hint': 'ready',
+  'warning-draft': 'ready',
 }
 const EXPECTED: Record<string, Record<string, string>> = {
   claude: { 'first-screen': 'no-prompt', ready: 'ready', 'mid-reply': 'busy', 'after-reply': 'ready' },
@@ -147,10 +158,12 @@ interface LeftOut { program: string; state: string; systems: readonly string[]; 
 const HINT_ELSEWHERE = 'kept on one Windows system (the bundled ConPTY, which the app gives Codex sessions) and one other (macOS) by the order of keeping; P19\'s second run recorded the same row here too'
 const LEFT_OUT: LeftOut[] = [
   { program: 'codex', state: 'agents-hint', systems: SYSTEMS, why: 'not reached: Codex 0.157.1 does not draw the agents form of the hint row (P19\'s second run waited 60 s on every system; the screen showed the ready composer with "? for shortcuts")' },
-  { program: 'codex', state: 'after-reply', systems: ['linux'], why: 'over the 3 MiB corpus cap: last in the order of keeping (243,915 bytes; 173,132 were left)' },
-  { program: 'codex170', state: 'first-screen', systems: SYSTEMS, why: 'not in the plan\'s order of keeping, so not added (P19\'s second run recorded it: the sign-in choice, as Codex 0.157.1\'s; the four are 56,262 bytes, and 173,132 bytes of the 3 MiB cap were left)' },
+  { program: 'codex', state: 'after-reply', systems: ['linux'], why: 'over the 3 MiB corpus cap: last in the order of keeping (243,915 bytes; 173,132 were left then, 146,829 since 2.1.3-beta.17 C7 added its two warning drafts)' },
+  { program: 'codex170', state: 'first-screen', systems: SYSTEMS, why: 'not in the plan\'s order of keeping, so not added (P19\'s second run recorded it: the sign-in choice, as Codex 0.157.1\'s; the four are 56,262 bytes, and 173,132 bytes of the 3 MiB cap were left then, 146,829 since 2.1.3-beta.17 C7)' },
   ...['queue-hint', 'rebound-hint', 'warning-hint'].map((state) => ({ program: 'codex', state, systems: ['windows-system', 'linux'], why: HINT_ELSEWHERE })),
   ...HINT_STATES.map((state) => ({ program: 'codex170', state, systems: ['windows-system', 'linux'], why: HINT_ELSEWHERE })),
+  { program: 'codex', state: 'warning-draft', systems: ['macos', 'linux'], why: 'not recorded: 2.1.3-beta.17 C7\'s recording hold ran on the Windows test machine only (both ConPTYs, 3 runs each, the same row in every run)' },
+  { program: 'codex170', state: 'warning-draft', systems: SYSTEMS, why: 'not recorded: 2.1.3-beta.17 C7\'s recording hold ran Codex 0.157.1 only' },
 ]
 const leftOutFor = (n: { program: string; system: string; state: string }, rows: readonly LeftOut[] = LEFT_OUT): LeftOut | undefined =>
   rows.find((l) => l.program === n.program && l.state === n.state && l.systems.includes(n.system))
@@ -167,40 +180,40 @@ const strayLeftOut = (rows: readonly LeftOut[]): string[] =>
  *  at its ready composer (aicc_planning#349, in 2.1.3-beta.10). The 33
  *  recordings P19's second run added all read unrecognised until the reader
  *  learned the other rows recorded there (aicc_planning#357, in
- *  2.1.3-beta.12, tests/unit/shared/codex-screen-hint-rows.test.ts); these
- *  are left, all still unrecognised:
+ *  2.1.3-beta.12, tests/unit/shared/codex-screen-hint-rows.test.ts). The 8
+ *  that end in a warning count at the right of the hint row (both versions;
+ *  P19 drew it with a config whose MCP server program does not exist, and
+ *  with the stand-in model both versions drew it from the first prompt on)
+ *  were listed until the reader learned that row, and the count Codex keeps
+ *  alone under the footer once a text is typed (aicc_planning#371, in
+ *  2.1.3-beta.17 C7, tests/unit/shared/codex-screen-warning-row.test.ts).
+ *  These are left:
  *  - where the thread title and the working folder do not fit in 120 columns,
  *    Codex 0.170.0's footer wraps onto a second row (its macOS and Windows
  *    screens after the prompt is sent; their temporary folders are longer than
  *    Linux's), and a wrapped footer still reads unrecognised, whatever row is
  *    under it;
- *  - the others end in a warning count at the right of the hint row (both
- *    versions; P19 drew it with a config whose MCP server program does not
- *    exist, and the screens after a prompt show it too: with the stand-in
- *    model both versions drew it from the first prompt on), a row the reader
- *    does not take: once a text is typed at an idle
- *    composer Codex keeps the count alone under the footer, which no reader
- *    that confirms a typed text takes. No mid-reply screen holds an "esc to
- *    interrupt" row (Codex drew its working row once, after Enter, and not
- *    while the reply streamed), and each ends in the same rows as its
- *    after-reply screen.
+ *  - Codex 0.157.1's macOS mid-reply reads ready: no mid-reply screen holds an
+ *    "esc to interrupt" row (Codex drew its working row once, after Enter, and
+ *    not while the reply streamed), each ends in the same rows as its
+ *    after-reply screen, and on macOS no title spinner says busy either
+ *    (aicc_planning#370; until C7 its warning count made it read
+ *    unrecognised).
  *  Since 2.1.3-beta.13 B2 (aicc_planning#370) the reader takes the window
  *  title too, and the Windows and Linux mid-reply and queue-hint screens read
- *  busy by its spinner (case 5), whatever their rows; the macOS ones end with
- *  no spinner, and are still listed. */
+ *  busy by its spinner (case 5), whatever their rows. */
 interface Misread { ticket: string; reads: string }
 const UNRECOGNISED: Misread = { ticket: 'aicc_planning#357', reads: 'unrecognised' }
-const KNOWN_MISREADS: Record<string, Misread> = Object.fromEntries([
-  // Codex 0.170.0 after a prompt on macOS and Windows: the footer wraps.
-  'codex170-macos-mid-reply',
-  'codex170-windows-bundled-after-reply', 'codex170-windows-system-after-reply', 'codex170-macos-after-reply',
-  'codex170-macos-queue-hint',
-  // A warning count at the right of the hint row, under a footer of one row.
-  'codex170-windows-bundled-warning-hint', 'codex170-macos-warning-hint', 'codex170-linux-after-reply',
-  'codex-windows-bundled-warning-hint', 'codex-macos-warning-hint',
-  'codex-windows-bundled-after-reply', 'codex-windows-system-after-reply', 'codex-macos-after-reply',
-  'codex-macos-mid-reply',
-].map((name) => [name, UNRECOGNISED]))
+const KNOWN_MISREADS: Record<string, Misread> = {
+  ...Object.fromEntries([
+    // Codex 0.170.0 after a prompt on macOS and Windows: the footer wraps.
+    'codex170-macos-mid-reply',
+    'codex170-windows-bundled-after-reply', 'codex170-windows-system-after-reply', 'codex170-macos-after-reply',
+    'codex170-macos-queue-hint',
+  ].map((name) => [name, UNRECOGNISED])),
+  // A reply streaming on macOS: no busy sign on screen or in the title.
+  'codex-macos-mid-reply': { ticket: 'aicc_planning#370', reads: 'ready' },
+}
 
 /** B2 (case 5): the recordings whose output last set a title with Codex's
  *  braille spinner (probe P19's second run: a reply streaming, and the queue
@@ -349,15 +362,26 @@ function readerAnswer(program: string, lines: ScreenLine[], title: string | null
   return claude.screen === codex.screen ? claude : { screen: `${claude.screen} (Claude Code's reader), ${codex.screen} (Codex's)`, text: '' }
 }
 
-/** Whether the reader's answer is the state in the recording's name. */
-function readsAsNamed(name: string, lines: ScreenLine[], title: string | null = null): string | null {
+/** Whether the reader's answer is the state in the recording's name; for a
+ *  draft state (C7), with the prompt holding `draft`, what the probe typed. */
+function readsAsNamed(name: string, lines: ScreenLine[], title: string | null = null, draft: string | null = null): string | null {
   const n = NAME_BY.get(name)
   if (!n) return `${name} is not a corpus name`
   const want = EXPECTED[n.program][n.state]
   const got = readerAnswer(n.program, lines, title)
   if (got.screen !== want) return `${name}: read ${got.screen}, its name says ${n.state} (${want})`
   if (EMPTY_PROMPT.includes(n.state) && got.text !== '') return `${name}: the prompt holds ${JSON.stringify(got.text)}, not nothing`
+  if ((DRAFT_STATES as readonly string[]).includes(n.state) && got.text !== draft) return `${name}: the prompt holds ${JSON.stringify(got.text)}, not the draft typed, ${JSON.stringify(draft)}`
   return null
+}
+
+/** C7: for a draft state, the keys the probe typed last before its mark (the
+ *  draft); null for any other state. */
+function draftOf(name: string): string | null {
+  const n = NAME_BY.get(name)
+  if (!n || !(DRAFT_STATES as readonly string[]).includes(n.state)) return null
+  const keys = readRecording(name).events.filter((e): e is OtherEvent => !isChunk(e) && e.ev === 'keys')
+  return keys[keys.length - 1]?.keys ?? null
 }
 
 /** Case 2's verdict on readsAsNamed's answer: null when the recording reads
@@ -454,7 +478,7 @@ describe('the screen corpus (helper/fixtures/screens)', () => {
   describe('2. each reader reads the state in the recording\'s name', () => {
     it.each(RECORDINGS)('%s', async (name) => {
       const { screens, title } = await rowsOf(name)
-      expect(misreadProblem(name, readsAsNamed(name, screens[screens.length - 1].lines, title ?? null))).toBeNull()
+      expect(misreadProblem(name, readsAsNamed(name, screens[screens.length - 1].lines, title ?? null, draftOf(name)))).toBeNull()
     }, 30_000)
   })
 
@@ -518,7 +542,7 @@ describe('the screen corpus (helper/fixtures/screens)', () => {
   })
 
   describe('the checks catch what they are for (planted)', () => {
-    it('case 5: the title moves the reading: a ready screen given a spinner title reads busy, a mid-reply one read without its title reads its rows', async () => {
+    it('case 5: the title moves the reading: a ready screen given a spinner title reads busy, a mid-reply one read without its title reads its rows (ready since C7 reads its warning row: no busy row)', async () => {
       const ready = await rowsOf('codex-windows-bundled-ready')
       const mid = await rowsOf('codex-windows-bundled-mid-reply')
       const readyLines = ready.screens[ready.screens.length - 1].lines
@@ -526,7 +550,7 @@ describe('the screen corpus (helper/fixtures/screens)', () => {
       expect(readerAnswer('codex', readyLines, ready.title ?? null).screen).toBe('ready')
       expect(readerAnswer('codex', readyLines, `${String.fromCharCode(0x280b)} work`).screen).toBe('busy')
       expect(codexTitleBusy(mid.title)).toBe(true)
-      expect(readerAnswer('codex', midLines).screen).toBe('unrecognised')
+      expect(readerAnswer('codex', midLines).screen).toBe('ready')
       expect(readsAsNamed('codex-windows-bundled-mid-reply', midLines)).not.toBeNull()
       expect(readsAsNamed('codex-windows-bundled-mid-reply', midLines, mid.title ?? null)).toBeNull()
     }, 30_000)
@@ -579,6 +603,18 @@ describe('the screen corpus (helper/fixtures/screens)', () => {
       expect(misreadProblem(renamed, problem, {})).toBe(problem)
       expect(misreadProblem(ready, null, {})).toBeNull()
     })
+
+    it('case 2 (C7): a draft state is held to the draft the probe typed', async () => {
+      const name = 'codex-windows-bundled-warning-draft'
+      const { screens, title } = await rowsOf(name)
+      const lines = screens[screens.length - 1].lines
+      const draft = draftOf(name)
+      expect(draft).toBe("p19 short: print the probe's short reply")
+      expect(readsAsNamed(name, lines, title ?? null, draft)).toBeNull()
+      expect(readsAsNamed(name, lines, title ?? null, `${draft}x`)).not.toBeNull()
+      expect(readsAsNamed(name, lines, title ?? null)).not.toBeNull()
+      expect(draftOf('codex-windows-bundled-warning-hint')).toBeNull()
+    }, 30_000)
 
     it('case 3: a known misread that is no recording is caught', () => {
       const listed = (name: string): Record<string, Misread> => ({ [name]: { ticket: 'T', reads: 'unrecognised' } })

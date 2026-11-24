@@ -93,7 +93,7 @@ export type CodexComposerState = 'ready' | 'busy' | 'not-ready'
 /** What the live screen shows, in more detail than the state (round 2, WW):
  *  'unrecognised' is a composer with a footer under it that is not the last
  *  row (a narrow window wraps it, or a row is drawn under it), Codex's one
- *  hint row under the footer aside (HINT_ROWS). */
+ *  row under the footer aside (HINT_ROWS, and C7's warning row). */
 export type CodexScreenKind = 'ready' | 'busy' | 'blocked' | 'no-prompt' | 'unrecognised' | 'starting'
 
 /** Codex's prompt glyphs: the composer's, and the one it draws at ultra. */
@@ -190,15 +190,10 @@ const SHORTCUTS_HINT = '? for shortcuts'
 /** 2.1.3-beta.12 C3 (aicc_planning #357): the other rows probe P19's second
  *  run recorded there, each as recorded (helper/fixtures/screens/, Codex
  *  0.157.1 and 0.170.0): 0.170.0's own ready row (laid out by
- *  chat_composer/passive_hints.rs at the rust-v0.170.0 tag, which also puts
- *  the warning count at the right; agents_navigation.rs says when the agents
- *  label shows), the shortcuts key rebound to F6 in both versions, and the
- *  queue hint. Not the warning count at the right of the row: once a text is
- *  typed at an idle composer, Codex keeps the count alone under the footer
- *  (its snapshot test warning_notice_styles, both versions), a row no
- *  recording holds there and no reader that confirms a typed text takes. So
- *  a screen with the count still reads unrecognised, and nothing is typed
- *  while it shows. */
+ *  chat_composer/passive_hints.rs at the rust-v0.170.0 tag; agents_navigation.rs
+ *  says when the agents label shows), the shortcuts key rebound to F6 in both
+ *  versions, and the queue hint. The warning count at the right of the row
+ *  is read since 2.1.3-beta.17 C7 (WARNING_COUNT_RE, below). */
 const AGENTS = `${String.fromCharCode(0x2190)} for agents ${MIDDLE_DOT} `
 /** One row Codex draws under the footer, at the footer's indent. `busy`:
  *  Codex draws it only while a turn runs (its queue hint, under a draft typed
@@ -211,24 +206,82 @@ const HINT_ROWS: readonly HintRow[] = [
   { text: `${AGENTS}f6 for shortcuts` },
   { text: 'tab to queue message', busy: true },
 ]
-/** Which of HINT_ROWS `row` is, at the indent of the footer row above it. */
-function hintRowOf(row: ScreenLine, footerRow: ScreenLine): HintRow | null {
+/** 2.1.3-beta.17 C7 (aicc_planning #371): the warning count Codex draws at
+ *  the right of the row under its footer, "<warning sign> N warning(s) .
+ *  f2 to view", ending one cell from the row's right edge (both versions; a
+ *  tool server that cannot start, --strict-config, or on Windows with
+ *  0.161.0+ the app run as administrator; Codex's snapshot test
+ *  warning_notice_styles, chat_composer/warning_notice_tests.rs at
+ *  rust-v0.157.1 and rust-v0.170.0). Probe P19 recorded it twice:
+ *  - at an empty composer, at the right of the hint row ("? for shortcuts"
+ *    on 0.157.1, the agents form on 0.170.0), at rest and while a reply
+ *    streams (P19's second run, helper/fixtures/screens/);
+ *  - ALONE under the footer once a text is typed at an idle composer: a
+ *    draft, a draft Codex wraps onto two rows, its paste placeholder, a
+ *    draft typed after a reply (C7's recording hold, Codex 0.157.1 on both
+ *    Windows ConPTYs, 3 runs each: codex-windows-*-warning-draft.json).
+ *  A count of 1 says "warning", more say "warnings" (2 recorded after the
+ *  first reply). Taken without a recording of the pair, each part being
+ *  recorded: the count beside "f6 for shortcuts" (both forms), a count
+ *  above 2, and Codex 0.170.0's count alone under a draft (its snapshot test
+ *  says the same row). Not recorded, so still read as no row of Codex's: the
+ *  count with any other key than f2, beside the queue hint (P19 drew the
+ *  queue hint with no count), or alone under an empty composer. */
+const WARNING_COUNT_RE = new RegExp(`^${String.fromCharCode(0x26a0)} ([1-9]\\d{0,3}) (warnings?) ${MIDDLE_DOT} f2 to view$`)
+/** What one row under the footer is: one of HINT_ROWS (`busy` its own), or
+ *  C7's warning row; `countAlone`: the warning count with nothing at its
+ *  left. */
+interface UnderFooterRow { busy: boolean; countAlone: boolean }
+/** C7: whether `body` (the row less the footer's indent) is the warning row:
+ *  the count at the right, ending one cell from the edge where the reader
+ *  knows the row's width, with at its left nothing or one of the hint rows
+ *  Codex draws at rest and at least one space. */
+function warningRowOf(row: ScreenLine, body: string): UnderFooterRow | null {
+  const at = body.lastIndexOf(String.fromCharCode(0x26a0))
+  if (at < 0) return null
+  const count = WARNING_COUNT_RE.exec(body.slice(at))
+  if (!count || (count[1] === '1') !== (count[2] === 'warning')) return null
+  if (row.width !== undefined && row.end !== undefined && row.end !== row.width - 1) return null
+  const left = body.slice(0, at)
+  if (left.trim() === '') return { busy: false, countAlone: true }
+  const gap = / +$/.exec(left)
+  if (!gap) return null
+  const hint = left.slice(0, left.length - gap[0].length)
+  return HINT_ROWS.some((h) => !h.busy && h.text === hint) ? { busy: false, countAlone: false } : null
+}
+/** Which row Codex draws under the footer `row` is, at the indent of the
+ *  footer row above it: one of HINT_ROWS, or (C7) the warning row. */
+function underFooterRowOf(row: ScreenLine, footerRow: ScreenLine): UnderFooterRow | null {
   const indent = /^ */.exec(footerRow.text)?.[0] ?? ''
   if (!row.text.startsWith(indent)) return null
   const body = row.text.slice(indent.length)
-  return HINT_ROWS.find((h) => body === h.text) ?? null
+  const hint = HINT_ROWS.find((h) => body === h.text)
+  if (hint) return { busy: hint.busy === true, countAlone: false }
+  return warningRowOf(row, body)
 }
-/** The rows under the composer row `i` of `shown`, less one hint row when it
- *  is the last row, at the indent of the row above it (that row's own reader
- *  checks it is the footer), whatever the composer's height; and which hint
- *  row it was. The draft and height readers so read a draft Codex wraps onto
- *  more rows over the queue hint too, and composer-submit can take it back.
- *  The screen's state (layout()) reads ready or busy only when one row is
- *  left, the footer: the hint row under the footer of a one-row composer. */
-function rowsUnder(shown: ScreenLine[], i: number): { under: ScreenLine[]; hint: HintRow | null } {
+/** The rows under the composer row `i` of `shown`, less one row Codex draws
+ *  under its footer when it is the last row, at the indent of the row above
+ *  it (that row's own reader checks it is the footer), whatever the
+ *  composer's height; and which row it was. The draft and height readers so
+ *  read a draft Codex wraps onto more rows over the queue hint, or (C7) over
+ *  the warning count alone, too, and composer-submit can take it back. The
+ *  count alone is taken only under a composer that holds something, as
+ *  recorded. The screen's state (layout()) reads ready or busy only when one
+ *  row is left, the footer: the row under the footer of a one-row
+ *  composer. */
+function rowsUnder(shown: ScreenLine[], i: number): { under: ScreenLine[]; hint: UnderFooterRow | null } {
   const below = shown.slice(i + 1)
-  const hint = below.length >= 2 ? hintRowOf(below[below.length - 1], below[below.length - 2]) : null
+  let hint = below.length >= 2 ? underFooterRowOf(below[below.length - 1], below[below.length - 2]) : null
+  if (hint?.countAlone && composerContent(shown[i]) === '') hint = null
   return { under: hint ? below.slice(0, -1) : below, hint }
+}
+/** C7: `below` (the rows under the composer row) less Codex's warning count
+ *  alone as the last row, directly under a footer row: the one row the
+ *  readers that confirm a typed text take under the footer (Codex hides its
+ *  hint rows once a text is typed, and keeps the count). */
+function lessCountAlone(below: ScreenLine[], footer: RegExp): ScreenLine[] {
+  if (below.length < 2 || !footer.test(below[below.length - 2].text)) return below
+  return underFooterRowOf(below[below.length - 1], below[below.length - 2])?.countAlone ? below.slice(0, -1) : below
 }
 
 const nonBlank = (l: ScreenLine): boolean => l.text.trim() !== ''
@@ -252,7 +305,8 @@ function composerContent(row: ScreenLine): string {
 
 /** The screen's structure: what it shows, the composer's content, and the
  *  footer row under the composer when that is the last row (or has only one
- *  of Codex's hint rows under it, HINT_ROWS; its queue hint reads busy).
+ *  of Codex's rows under it, HINT_ROWS or C7's warning row; its queue hint
+ *  reads busy).
  *  `startup`
  *  (round 4, E3): whether the run is still starting, so that Codex's
  *  start-up row counts; it counts only in its own place, the status row
@@ -302,14 +356,15 @@ export function codexComposerText(lines: ScreenLine[] | null | undefined): strin
 /** Whether the screen shows `command` typed at the composer with nothing in
  *  the way (round 2, G5): no blocking prompt, no turn running (by its row,
  *  or by `title`, B2), the composer holding exactly the command, and under it
- *  only its popup or the footer. */
+ *  only its popup or the footer (C7: and Codex's warning count alone under
+ *  the footer, as the last row). */
 export function codexCommandTyped(lines: ScreenLine[] | null | undefined, command: string, models?: readonly string[] | null, title?: string | null): boolean {
   if (!lines || lines.length === 0 || blocked(lines) || turnShown(lines, title)) return false
   const shown = lines.filter(nonBlank)
   const i = composerIndex(shown)
   if (i < 0 || composerContent(shown[i]) !== command) return false
   const footer = footerRe(models)
-  return shown.slice(i + 1).every((l) => POPUP_ROW_RE.test(l.text) || footer.test(l.text))
+  return lessCountAlone(shown.slice(i + 1), footer).every((l) => POPUP_ROW_RE.test(l.text) || footer.test(l.text))
 }
 
 /** A row Codex wraps the composer's text onto: indented under the text. */
@@ -319,7 +374,8 @@ const WRAPPED_ROW_RE = /^ {2,}\S/
  *  over the composer row and the rows Codex wraps it onto in a narrow pane
  *  (each indented under the text), with nothing in the way: no blocking
  *  prompt, no turn running (by its row, or by `title`, B2), and under it only
- *  those rows and then the footer.
+ *  those rows and then the footer (C7: and Codex's warning count alone under
+ *  the footer, as the last row).
  *  The rows are read together with their spaces dropped, because a wrap may
  *  fall at a space (which the wrap takes) or inside a word. */
 export function codexTextTyped(lines: ScreenLine[] | null | undefined, text: string, models?: readonly string[] | null, title?: string | null): boolean {
@@ -328,8 +384,9 @@ export function codexTextTyped(lines: ScreenLine[] | null | undefined, text: str
   const shown = lines.filter(nonBlank)
   const i = composerIndex(shown)
   if (i < 0) return false
-  const below = shown.slice(i + 1)
-  if (below.length === 0 || !footerRe(models).test(below[below.length - 1].text)) return false
+  const footer = footerRe(models)
+  const below = lessCountAlone(shown.slice(i + 1), footer)
+  if (below.length === 0 || !footer.test(below[below.length - 1].text)) return false
   const wrapped = below.slice(0, -1)
   if (!wrapped.every((l) => WRAPPED_ROW_RE.test(l.text))) return false
   return [composerContent(shown[i]), ...wrapped.map((l) => l.text)].join('').replace(/\s+/g, '') === want
@@ -340,9 +397,9 @@ export function codexTextTyped(lines: ScreenLine[] | null | undefined, text: str
  *  it onto, each indented under the text, together with every space dropped);
  *  '' for nothing or Codex's placeholder. Null when what it holds cannot be
  *  read: a prompt up, no composer, or anything but those rows between it and
- *  the footer (a popup, say; one of Codex's hint rows under the footer, as
- *  the last row, is read whatever the composer's height, HINT_ROWS, the
- *  queue hint too). */
+ *  the footer (a popup, say; one of Codex's rows under the footer, as the
+ *  last row, is read whatever the composer's height: HINT_ROWS, the queue
+ *  hint too, and C7's warning row, the count alone under a draft). */
 export function codexComposerDraft(lines: ScreenLine[] | null | undefined, models?: readonly string[] | null): string | null {
   if (!lines || lines.length === 0 || blocked(lines)) return null
   const shown = lines.filter(nonBlank)
@@ -362,9 +419,10 @@ const PASTED_CONTENT_RE = /^\[Pasted Content (\d{1,7}) chars\]$/
 /** WP2 PR 4, P4.1 (PB9): whether the screen shows Codex's paste placeholder
  *  for exactly `codePoints` at the composer, with nothing in the way: no
  *  blocking prompt, no turn running (by its row, or by `title`, B2), the
- *  composer holding only the placeholder, and under it only the footer. Codex
- *  folds a text into it from 1,001 code points on, both supported versions,
- *  every width probed. */
+ *  composer holding only the placeholder, and under it only the footer (C7:
+ *  and Codex's warning count alone under it, as recorded). Codex folds a text
+ *  into it from 1,001 code points on, both supported versions, every width
+ *  probed. */
 export function codexPastedContentShown(lines: ScreenLine[] | null | undefined, codePoints: number, models?: readonly string[] | null, title?: string | null): boolean {
   if (!Number.isInteger(codePoints) || codePoints < 1) return false
   if (!lines || lines.length === 0 || blocked(lines) || turnShown(lines, title)) return false
@@ -373,8 +431,9 @@ export function codexPastedContentShown(lines: ScreenLine[] | null | undefined, 
   if (i < 0) return false
   const m = PASTED_CONTENT_RE.exec(composerContent(shown[i]))
   if (!m || Number(m[1]) !== codePoints) return false
-  const below = shown.slice(i + 1)
-  return below.length === 1 && footerRe(models).test(below[0].text)
+  const footer = footerRe(models)
+  const below = lessCountAlone(shown.slice(i + 1), footer)
+  return below.length === 1 && footer.test(below[0].text)
 }
 
 /** WP2 PR 4, P4.1 (PB9): how many rows the composer takes on screen now, from
@@ -383,8 +442,9 @@ export function codexPastedContentShown(lines: ScreenLine[] | null | undefined, 
  *  footer. Codex's composer is at most the pane's rows minus 4 high, and a
  *  taller text scrolls inside it (its first rows hidden), so a composer this
  *  tall holds a text that cannot be confirmed on screen. 2.1.3-beta.12 C3:
- *  one of Codex's hint rows under the footer, as the last row, is not
- *  counted, whatever the composer's height (HINT_ROWS). */
+ *  one of Codex's rows under the footer, as the last row, is not counted,
+ *  whatever the composer's height (HINT_ROWS; since 2.1.3-beta.17 C7 the
+ *  warning row too). */
 export function codexComposerRows(lines: ScreenLine[] | null | undefined, models?: readonly string[] | null): number | null {
   if (!lines || lines.length === 0) return null
   const shown = lines.filter(nonBlank)

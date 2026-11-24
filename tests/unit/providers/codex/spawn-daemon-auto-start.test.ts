@@ -3,11 +3,11 @@
  * warning count of the app's making. Each `-c` key the app sets runs Codex
  * without its shared background server (embedded), and from 0.156.0 Codex,
  * while its automatic server start is on (the default from 0.157.0), then also
- * warns about that on its hint row, a row the app's screen reader
- * refuses, so nothing was typed into the tab. The launch now carries
- * `-c features.daemon_auto_start=false` (src/main/providers/codex/spawn.ts,
- * codexDaemonAutoStartOffArgs): Codex runs embedded as before, without the
- * warning. These cases read the argv on every route the builder has: direct,
+ * warns about that on its hint row, a row the app's screen reader refused
+ * until 2.1.3-beta.17 C7, so nothing was typed into the tab. The launch
+ * now carries `-c features.daemon_auto_start=false`
+ * (src/main/providers/codex/spawn.ts, codexDaemonAutoStartOffArgs): Codex
+ * runs embedded as before, without the warning. These cases read the argv on every route the builder has: direct,
  * the npm launcher's cmd.exe line, Ask Conductor's question on argv, an exact
  * resume, the resume list (picker), and a launch the session helper holds.
  *
