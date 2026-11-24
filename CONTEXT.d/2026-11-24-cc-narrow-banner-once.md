@@ -27,8 +27,9 @@ same.
   `term.resize` calls at the same width, in the paint's write callback), and the rows brought down
   past the paint's top line go up again by line breaks. The rows the screen gives up are rows the
   paint writes over on today's path too. Bounded by the rows below the cursor; a paint already in
-  place, one of fewer rows than the screen, or one found nowhere above is written as it came, the
-  terminal untouched. `RepaintTerminal` gains `resize`.
+  place, one of fewer lines than the screen has rows (C5b counts each line by the rows it takes,
+  fewer or more: 2026-11-24-cc-narrow-banner-limits.md), or one found nowhere above is written as
+  it came, the terminal untouched. `RepaintTerminal` gains `resize`.
 - **Tests.** `tests/unit/renderer/console-repaint-claude-code.test.ts`, 32 tests: g-ccmain-max
   written as it came is still the VM's reading and through the aligner is that reading with the two
   rows once; the published control's maximise back shows its banner once; small terminals for the
@@ -38,6 +39,11 @@ same.
   the scroll-back dropped (7 red), the cursor bound dropped (1 red), the in-place check dropped
   (1 red). M1's plain-terminal recordings stay ALL-OK and B3's grow recordings unchanged.
 - **Not handled.** A narrowing whose paint starts more rows above xterm's screen than xterm's
-  screen has rows below its cursor. **Not checked here:** the app's xterm with its WebGL renderer
-  (the two resizes are synchronous, in one write callback; the renderer draws on the next frame);
-  C5's VM line reads B3's line on the frozen head.
+  screen has rows below its cursor. C5's head also left three limits that C5b
+  (2026-11-24-cc-narrow-banner-limits.md) fixed: a narrowing's paint holding a line longer than a
+  row (the console writes it with no line break inside it, so the paint has fewer lines than the
+  screen has rows) was written as it came, its top rows still twice; the two resizes cleared a
+  selection (xterm does on any change of rows); and they moved a view the user had scrolled up by
+  the rows brought down. **Not checked here:** the app's xterm with its WebGL renderer (the two
+  resizes are synchronous, in one write callback; the renderer draws on the next frame); C5's VM
+  line reads B3's line on the frozen head.
