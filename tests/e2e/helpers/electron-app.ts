@@ -170,9 +170,6 @@ export async function launchIsolatedApp(opts?: {
    *  `Path`, and two spellings in one environment block leave which one wins
    *  to chance); `undefined` removes it. */
   env?: (dataDir: string) => Record<string, string | undefined>
-  /** Command-line switches for this app instance, after the app's path and
-   *  its user data folder (snap-windows.spec.ts's forced display scale). */
-  args?: string[]
 }): Promise<IsolatedApp> {
   sweepStaleTempDirs()
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ccc-e2e-'))
@@ -181,7 +178,7 @@ export async function launchIsolatedApp(opts?: {
   // P3.16 (M7): a home of its own inside dataDir, so a session's files under
   // the home never land in the runner's real one (isolated-env.ts).
   const app = await electron.launch({
-    args: [APP_PATH, `--user-data-dir=${path.join(dataDir, 'electron-userdata')}`, ...(opts?.args ?? [])],
+    args: [APP_PATH, `--user-data-dir=${path.join(dataDir, 'electron-userdata')}`],
     env: isolatedLaunchEnv(dataDir, opts?.env?.(dataDir) ?? {}),
   })
   const page = await app.firstWindow()

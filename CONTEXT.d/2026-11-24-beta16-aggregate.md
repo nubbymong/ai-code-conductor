@@ -3,9 +3,10 @@
 **One PR for the beta.** The reviewed sections of 2.1.3-beta.16 were merged at
 their frozen heads with real merge commits onto one branch from beta (#760), in
 the order B2, B3, B4, B1F, A1 (with A2 merged into it) and X1, one push each.
-The version bump, the changelog entry and the release surface sweep are the
-branch's last commit. Nothing in the plan was dropped; B1F joined from outside
-the plan (B1's hold found its cause).
+The version bump, the changelog entry and the release surface sweep are one
+commit, 5a2f0f41; the commits after it answer the final step's findings.
+Nothing in the plan was dropped; B1F joined from outside the plan (B1's hold
+found its cause).
 
 **Sections and their fragments (15.8).** A1, aicc_planning#401:
 `2026-11-23-snap-own-capture-windows.md`. A2, aicc_planning#402:
@@ -41,9 +42,11 @@ join (A1 changed neither file); `src/main/session-input/index.ts` is X1's only
 **Commits on the branch besides the joins.** aa8979b4, 5b538e90, 337bec27 and
 1217de2e apply review wording (B2, B3, B4, B1F). 9f016863 and 4e538393 add the
 WP1 ledger rows for B1F's and X1's new files, the manifest rewritten on the
-clean tree each time. 043d7924 adds snap-e2e's case at a forced display scale
-of 1.5 (D11 to D13), owed since A2's review; snap-e2e on the PR's head is its
-first run.
+clean tree each time. 043d7924 added a snap-e2e case at a forced display scale
+of 1.5 (D11 to D13), owed since A2's review, and a later commit reverts it: on
+its first run (45304028588) the forced scale gave Electron a display of 683 by
+512 physical pixels where the helper read Windows' 1024 by 768, so the engine
+could not pair them and the previous Snap took the press.
 
 **The release commit.** Version 2.1.3-beta.16 and its changelog entry (dated
 2026-11-24, CHANGELOG.md regenerated). The surface sweep: app-knowledge (the
@@ -62,11 +65,12 @@ The `pty-manager.ts` cap stays at 7,773, the file's length.
 **Not measured, carried to the owner's steps or to beta.17.** A capture from a
 signed-in user who is not elevated (the Medium level): CI's basic-user step ran
 at the High level with the Administrators group for deny only, so the owner's
-first press is that reading, and the previous Snap takes any failed press. A
-second display and mixed scaling. After a grow then a narrowing back, a Claude
-Code tab can show the top row of its banner twice above the screen (B3's VM
-note; no workaround, so no known-issues entry; a beta.17 candidate). Codex's
-image paste waits for beta.17.
+first press is that reading, and the previous Snap takes any failed press. The
+overlay's picture on a display above 100% in real Electron (the PNG path is
+unit-tested only), a second display and mixed scaling. After a grow then a
+narrowing back, a Claude Code tab can show the top row of its banner twice
+above the screen (B3's VM note; no workaround, so no known-issues entry; a
+beta.17 candidate). Codex's image paste waits for beta.17.
 
 ADR-009 passes are owed before stable for A1, A2, B2, B4, B1F and X1, on the
 aicc_planning #320 list.
