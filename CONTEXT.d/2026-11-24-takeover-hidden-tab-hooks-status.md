@@ -53,6 +53,16 @@ token), and with them the hook sentence of B1c's "Until the tab is shown" bullet
   the tab's launch is not a take-over (another account), or when the session ends (a close
   kills first, then ends it), that token goes (settleServedToken), before a launch mints its
   own.
-- pty-manager.ts stays at 7,773 lines: eight existing lines changed (two conditions, their
-  comments, and two names added to its launch bindings' import), none added.
-- Not checked here: the VM line, which the orchestrator runs on the frozen head.
+- pty-manager.ts: eight existing lines changed (two conditions, their comments, and two
+  names added to its launch bindings' import), none added. 7,773 lines on B1d's head, 7,741
+  on the beta.17 aggregate.
+- VM line (vm:B1e, WINDOWS_1, two unsigned builds on the real update path) passed on the
+  frozen head ba559fb5. Hidden Claude Code tabs: every hook event made while hidden reached
+  the app's record once (50 of 50, 34 of 34, 48 of 48); the attention mark showed at the
+  approval question and about a minute after a turn ended; no transcript was bound before
+  the take-over. Two events of one tool call made between the old app's let-go and its exit
+  (once in six tab-updates) did not reach the new run: that is the update's hand-over, not
+  B1e, and lane B1f takes it. A
+  hidden Codex tab's Stop stayed in its record after the take-over. The status reached the
+  hidden tab through its status file, and the address file stayed empty until the
+  take-over, as item (3) says.
