@@ -5,8 +5,10 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
  * press that uses it, never at main's start (ADR-030 S8 step 3; plan
  * 2.1.3-beta.16 A1, aicc_planning#401): on Windows, where the new Snap is the
  * default, only a press with Previous chosen or one the new Snap hands on; on
- * macOS and Linux, the first press. A package that fails to load fails that
- * press only. Each press the previous Snap takes writes one line to app.log:
+ * macOS and Linux, the first press. The package is made again at each press
+ * (its page is closed once a press settles, aicc_planning#408); its files are
+ * loaded once. A package that fails to load fails that press only. Each
+ * press the previous Snap takes writes one line to app.log:
  * that its package loaded and takes the press, or that it could not be loaded
  * (the error's name and code only, never its message, which can hold a path).
  * Each test imports screenshot-capture.ts afresh, with a stand-in package that
@@ -23,6 +25,7 @@ vi.mock('electron', () => ({
   BrowserWindow: class {},
   desktopCapturer: { getSources: async () => [] },
   dialog: { showMessageBox: async () => ({ response: 1 }) },
+  ipcMain: { removeAllListeners: () => {} },
   nativeImage: { createFromBuffer: () => ({ isEmpty: () => true }), createFromBitmap: () => ({ isEmpty: () => true }) },
   shell: { openExternal: async () => {} },
   systemPreferences: { getMediaAccessStatus: () => 'granted' },
@@ -90,13 +93,13 @@ describe('the previous Snap\'s package is loaded by the first press that uses it
     expect(lib.loads).toBe(0)
   })
 
-  it('a press with no new Snap (Previous chosen, macOS, Linux) loads it then, once; a second press reuses it', async () => {
+  it('a press with no new Snap (Previous chosen, macOS, Linux) loads it then, once; a second press makes the package again (its page was closed once the first press settled) and does not load it again', async () => {
     const { captureRectangle } = await fresh()
     expect(lib.loads).toBe(0)
     expect(await captureRectangle(win, windows)).toBeNull()
     expect(lib.loads).toBe(1)
     expect(await captureRectangle(win, windows)).toBeNull()
-    expect({ loads: lib.loads, constructed: lib.constructed, startCalls: lib.startCalls }).toEqual({ loads: 1, constructed: 1, startCalls: 2 })
+    expect({ loads: lib.loads, constructed: lib.constructed, startCalls: lib.startCalls }).toEqual({ loads: 1, constructed: 2, startCalls: 2 })
   })
 
   it('a press the new Snap answers (saved, cancelled, no desktop) never loads it', async () => {

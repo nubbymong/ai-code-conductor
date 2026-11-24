@@ -38,12 +38,18 @@ Plan 2.1.3-beta.17, section C4 (aicc_planning#407 and #408), at origin/beta e102
   a 15 s timeout), and CI's upstream watch `npm view <package> version`; neither is the
   `@latest version --prefer-online` form #408 saw, so it is probably Claude Code's own. The VM
   line's trace of its parent and command line decides.
-- **Tests.** `tests/unit/providers/codex/pick-folder-sweep.test.ts` (8, host-safe; a folder the fs
-  stand-in reads as a link stands in for one), `pick-folder-sweep-links.test.ts` (1, HOST
-  QUARANTINE: a planted junction, CI only), `tests/unit/main/screenshot-previous-snap-page.test.ts`
-  (4). Red against e10278e7: all 12 host-safe ones. Mutants, each red: the age bound dropped (2),
-  the content check dropped (1), the link check dropped (1), the hourly mark dropped (1), the page
-  closed without waiting for the overlay (2), the in-use guard dropped (1).
-- **Not checked here:** a folder of another user's (POSIX; needs a second account); the planted
-  link (CI only, first run on the aggregate PR); a real press's time with the page made at every
-  press (snap-e2e's previous-Snap readings, and the VM line).
+- **Tests.** `tests/unit/providers/codex/pick-folder-sweep.test.ts` (9, host-safe; a folder the fs
+  stand-in reads as a link stands in for one; a stand-in for this process's user id checks the
+  owner on every platform), `pick-folder-sweep-links.test.ts` (1, HOST QUARANTINE: a planted
+  junction, CI only), `tests/unit/main/screenshot-previous-snap-page.test.ts` (4). Red against
+  e10278e7: all 13 host-safe ones. Mutants, each red: the age bound dropped (2), the content check
+  dropped (1), the link check dropped (1), the owner check dropped (1), the hourly mark dropped
+  (1), the page closed without waiting for the overlay (2), the in-use guard dropped (1).
+  `tests/unit/main/snap/previous-snap-lazy-load.test.ts` (9) is updated to the new behaviour: a
+  second press makes the package again (its page was closed once the first press settled) and does
+  not load its files again (`constructed: 2`, red against e10278e7's screenshot-capture.ts, which
+  kept the package); its electron stand-in gains `ipcMain`, as the two sibling files did.
+- **Not checked here:** a real folder of another user's (needs a second account); the owner check
+  runs against a stand-in for this process's user id. The planted link (CI only, first run on the
+  aggregate PR); a real press's time with the page made at every press (snap-e2e's previous-Snap
+  readings, and the VM line).

@@ -13,8 +13,9 @@
 // file): a real folder the fs stand-in below reads as a link (lstat says a
 // symbolic link, not a directory, as Node reads a junction) stands in for
 // one; a planted link is pick-folder-sweep-links.test.ts, quarantined from
-// the host. Not checked here: a folder of another user's (POSIX only; making
-// one needs a second account).
+// the host. Not checked here: a real folder of another user's (needs a second
+// account); the owner check runs against a stand-in for this process's user
+// id.
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import * as fs from 'fs'
 import * as os from 'os'
@@ -148,6 +149,22 @@ describe('the start-up sweep of left-behind pick folders (aicc_planning#407)', (
       asLink.names.delete(name)
     }
     expect(fs.readdirSync(dir)).toEqual([CODEX_PICK_FILE_NAME])
+  })
+
+  it('leaves a pick folder another user owns, where the platform keeps owners, and takes it once it reads as this user\'s', () => {
+    const tmp = root()
+    const dir = folder(tmp, `${CODEX_PICK_DIR_PREFIX}other1`, 25 * HOUR, [CODEX_PICK_FILE_NAME])
+    const owner = fs.lstatSync(dir).uid
+    const had = Object.getOwnPropertyDescriptor(process, 'getuid')
+    Object.defineProperty(process, 'getuid', { value: () => owner + 1, configurable: true, writable: true })
+    try {
+      expect(sweepStaleCodexPickFolders(tmp)).toBe(0)
+    } finally {
+      if (had) Object.defineProperty(process, 'getuid', had)
+      else delete (process as { getuid?: unknown }).getuid
+    }
+    expect(fs.readdirSync(dir)).toEqual([CODEX_PICK_FILE_NAME])
+    expect(sweepStaleCodexPickFolders(tmp)).toBe(1)
   })
 
   it('looks nowhere but the folder it is given, and answers 0 for one that is not there or not absolute', () => {
