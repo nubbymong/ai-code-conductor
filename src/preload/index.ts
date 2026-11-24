@@ -201,7 +201,7 @@ export interface ElectronAPI {
         postCommand?: string
         /** #242 tier 5: respawning a session that previously reached
          *  claude-running -- drives `--continue` when no tmux persistence
-         *  is available. See SSHOptions.reconnect in pty-manager.ts. */
+         *  is available. See SSHOptions.reconnect in ssh-options.ts. */
         reconnect?: boolean
         /** SSH tmux enhancement (item 1): "Detachable" toggle (default ON;
          *  only false disables tmux persistence). */
