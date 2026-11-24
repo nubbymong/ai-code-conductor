@@ -1,7 +1,10 @@
 /**
  * Typing a Codex command into Codex's composer (P3.8 rounds 1 and 2): the
  * strip's Compact (/compact), the command bar's model pill (/model: Codex's
- * own model-and-effort picker), and Plan mode at launch (/plan).
+ * own model-and-effort picker), and Plan mode at launch (/plan); and (P3.15)
+ * the line naming a saved image, which since 2.1.3-beta.17 C6 a Codex session
+ * gets only when main could not paste the image as Codex's own paste
+ * (sendImagePathToCodex).
  *
  * A command is typed only into Codex's READY, EMPTY composer, and its Enter is
  * pressed only when the screen then shows exactly that command typed, in the
@@ -315,31 +318,42 @@ export function typeIntoCodexComposer(
 }
 
 /** P3.15 (row 70): the words the app types before an image's path at Codex's
- *  prompt. The same as Claude's line, in ASCII: Codex dropped its em dash. */
+ *  prompt. The same as Claude's line, in ASCII: Codex dropped its em dash when
+ *  the line and its Enter went in one write (P3.15); typed first with Enter
+ *  after, an em dash is kept (PB3), so a caller's own words go as given. */
 export const CODEX_IMAGE_LINE = 'I just pasted an image - please view it.'
 export const IMAGE_TYPED_NOT_SENT = "The image's path is at the Codex prompt but was not sent: check it, then press Enter."
 export const IMAGE_TAKEN_BACK = 'The image was not sent: Codex was not ready for it, so what the app typed was taken back.'
 export const IMAGE_BEHIND_QUESTION = "The image was not sent: Codex asked a question first. Answer it, then check the Codex prompt for the image's path and press Enter."
+/** 2.1.3-beta.17 C6: main pasted the image ("[Image #1]") but could not send
+ *  it or take it back, and nothing more was typed (main's `not-taken` with
+ *  `left`; imageTransfer.ts, sendImageToCodexSession, says it). */
+export const IMAGE_AT_PROMPT = 'The image is at the Codex prompt but was not sent: check it, then press Enter.'
 
 /**
- * P3.15 (row 70): Alt+V pressed with focus outside the terminal, on a Codex
- * session, after the app saved the clipboard image to `hostFilePath`. As for
- * Claude, the app types a line naming the image and submits it; for Codex it
- * is typed by the rule above (the ready, empty composer only, its Enter on
- * its own after the burst, and only when the screen then shows exactly the
- * line), because the VM run showed one write of the line and its Enter is
- * taken as a paste and never submitted. In a narrow pane the line wraps onto
- * further composer rows, which are read with it (round 1, F8). `onNote` hears
- * why it was not sent; nothing when it was, or when the session restarted in
- * between.
+ * P3.15 (row 70): the line naming a saved image at `hostFilePath`, typed into
+ * a Codex session and submitted. As for Claude, the app types a line naming
+ * the image and submits it; for Codex it is typed by the rule above (the
+ * ready, empty composer only, its Enter on its own after the burst, and only
+ * when the screen then shows exactly the line), because the VM run showed one
+ * write of the line and its Enter is taken as a paste and never submitted. In
+ * a narrow pane the line wraps onto further composer rows, which are read with
+ * it (round 1, F8). `onNote` hears why it was not sent; nothing when it was,
+ * or when the session restarted in between.
+ *
+ * Since 2.1.3-beta.17 C6 it is the line a Codex session gets when main could
+ * not paste the image as Codex's own (src/renderer/utils/imageTransfer.ts,
+ * sendImageToCodexSession), for Alt+V and Snap alike; `sentence` is the line's
+ * words (CODEX_IMAGE_LINE unless given).
  */
 export function sendImagePathToCodex(
   sessionId: string,
   hostFilePath: string,
   onNote: (note: string) => void,
   deps: CodexComposerDeps = defaultCodexComposerDeps,
+  sentence: string = CODEX_IMAGE_LINE,
 ): void {
-  const typing = typeIntoCodexComposer(sessionId, `${CODEX_IMAGE_LINE} ${hostFilePath}`, deps, {
+  const typing = typeIntoCodexComposer(sessionId, `${sentence} ${hostFilePath}`, deps, {
     onSettled: (sent, how) => {
       if (sent || how.reason === 'cancelled' || how.reason === 'run-changed') return
       onNote(how.erased ? IMAGE_TAKEN_BACK : how.reason === 'blocked' ? IMAGE_BEHIND_QUESTION : IMAGE_TYPED_NOT_SENT)

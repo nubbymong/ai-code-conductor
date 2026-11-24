@@ -19,7 +19,8 @@
 // This reads every src/main/**/*.ts file and finds, in each file outside the
 // module, every place that types into a session's terminal:
 //  - writePty, writeSubmittedLine, pastePty, writeCanvasMarkerLine,
-//    handOffAskQuestion, submitCodexText or writeCliSetupPty named in code,
+//    handOffAskQuestion, submitCodexText, submitCodexImage (2.1.3-beta.17
+//    C6) or writeCliSetupPty named in code,
 //    under any name: imported, or destructured (from a namespace, a require, a
 //    dynamic import, an assignment or a parameter, renamed or not, with a
 //    default or nested), then called, or handed on as a value (an argument, a
@@ -34,7 +35,8 @@
 //    destructured from src/main/session-input, or read from a namespace of
 //    it, is not counted, whatever it is (but what its codexRunScreen returns
 //    is a run screen, below);
-//  - `.submit` read from a provider's run screen, or destructured from one:
+//  - `.submit`, or `.submitImage` (2.1.3-beta.17 C6), read from a provider's
+//    run screen, or destructured from one:
 //    anything traced to a `.runScreen` read (destructured included), typed
 //    SessionRunScreen or `X['runScreen']`, typed as what the module's
 //    codexRunScreen returns (`ReturnType<typeof codexRunScreen>`, wrapped in
@@ -100,7 +102,7 @@ const MODULE_DIR = 'src/main/session-input/'
 const MODULE_ENTRY = 'src/main/session-input/index.ts'
 
 /** The functions that type into a session: today's, and the ones they replaced. */
-const TYPING_FUNCTIONS = new Set(['writePty', 'writeSubmittedLine', 'pastePty', 'writeCanvasMarkerLine', 'handOffAskQuestion', 'submitCodexText', 'writeCliSetupPty'])
+const TYPING_FUNCTIONS = new Set(['writePty', 'writeSubmittedLine', 'pastePty', 'writeCanvasMarkerLine', 'handOffAskQuestion', 'submitCodexText', 'submitCodexImage', 'writeCliSetupPty'])
 /** The modules that export one: a namespace of one handed on whole hands them on. */
 const TYPING_MODULES = new Set(['src/main/pty-manager', 'src/main/providers/codex/session-screen', 'src/main/ipc/setup-handlers'])
 const PTY_TYPES = new Set(['IPty', 'HelperPty'])
@@ -159,10 +161,10 @@ const ALLOWED: Record<string, Record<string, Allowed>> = {
     spawnClaudeInsights: { count: 1, why: "Insights' own report terminal: /exit", until: 'S18' },
   },
   'src/main/providers/codex/session-screen.ts': {
-    run: { count: 1, why: "the run screen's writer: the raw writer the Codex run screen types through, reached only through runScreen.submit, which only this module calls", until: 'stays' },
+    run: { count: 1, why: "the run screen's writer: the raw writer the Codex run screen types through, reached only through runScreen.submit and (2.1.3-beta.17 C6) runScreen.submitImage, which only this module calls; both go through its one helper, onRun", until: 'stays' },
   },
   'src/main/providers/codex/index.ts': {
-    '(top level)': { count: 1, why: "the Codex package's runScreen.submit itself, handing a submission to its run (submitCodexText)", until: 'stays' },
+    '(top level)': { count: 2, why: "the Codex package's runScreen.submit itself, handing a submission to its run (submitCodexText); and (2.1.3-beta.17 C6, aicc_planning#415) its runScreen.submitImage, handing an image to its run (submitCodexImage): the image door's Codex rule, which only this module calls", until: 'stays' },
   },
   'src/main/session-helper/helper-pty.ts': {
     write: { count: 1, why: "the session helper's transport: a held terminal's input, as raw input frames, or into the direct terminal", until: 'stays' },
@@ -518,7 +520,7 @@ export function typingSites(code: string, file = 'src/main/snippet.ts'): Site[] 
     const prop = propName(m)
     if (prop && TYPING_FUNCTIONS.has(prop) && nsKind(m.object) !== 'door') add(at, ancestors, `.${prop}${how}`)
     if (prop === 'write' && (isHandle(m.object) || byName(m.object))) add(at, ancestors, `.write on a PTY${how}`)
-    if (prop === 'submit' && isScreen(m.object)) add(at, ancestors, `.submit on a run screen${how}`)
+    if ((prop === 'submit' || prop === 'submitImage') && isScreen(m.object)) add(at, ancestors, `.${prop} on a run screen${how}`)
   }
   /** Whether a namespace at `n` is only read through (a static key, a binding
    *  whose own uses are judged, a load for its side effects), not handed on. */
@@ -789,6 +791,7 @@ describe('the check sees each way of typing into a session (verify the verifier)
     ['writeCanvasMarkerLine', `import { writeCanvasMarkerLine } from './pty-manager'\nconst a = writeCanvasMarkerLine(id, line)`],
     ['handOffAskQuestion from the PTY manager', `import { handOffAskQuestion } from '../pty-manager'\nhandOffAskQuestion(win, id, q)`],
     ['submitCodexText', `import { submitCodexText as send } from './session-screen'\nsend(id, text, { readyWaitMs: 1 })`],
+    ['submitCodexImage', `import { submitCodexImage as paste } from './session-screen'\npaste(id, path, words, { readyWaitMs: 1 })`],
     ['writeCliSetupPty', `import { writeCliSetupPty } from './ipc/setup-handlers'\nwriteCliSetupPty('x')`],
     ['a typing function handed on as an argument', `import { writePty } from './pty-manager'\ninitWatchdog(writePty)`],
     ['a typing function handed on as a property', `import { writePty } from './pty-manager'\nstart({ write: writePty })`],
@@ -830,6 +833,8 @@ describe('the check sees each way of typing into a session (verify the verifier)
     ['a run screen from a function in the file', `function screen() { try { return getProvider('codex').runScreen } catch { return undefined } }\nconst x = screen()\nx!.submit(id, t, o)`],
     ['a run screen typed as one', `const go = (s: SessionRunScreen) => s.submit(id, t, o)`],
     ['a run screen\'s submit, bracketed', `provider.runScreen!['submit'](id, t, o)`],
+    ['a run screen\'s submitImage', `getProvider('codex').runScreen.submitImage(id, path, words, { readyWaitMs: 1 })`],
+    ['a submitImage destructured from a run screen', `const { submitImage } = provider.runScreen!\nsubmitImage!(id, path, words, o)`],
     ['a parameter typed as the provider\'s run screen', `function f(s: NonNullable<SessionProvider['runScreen']>) { s.submit(id, t, o) }`],
     ['a parameter typed IPty', `import * as pty from 'node-pty'\nfunction f(p: pty.IPty) { p.write('x') }`],
     ['a name typed IPty', `import type { IPty } from 'node-pty'\nlet t: IPty | null = null\nt!.write('x')`],

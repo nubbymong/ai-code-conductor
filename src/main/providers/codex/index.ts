@@ -8,7 +8,7 @@ import type { ProviderCapabilities, AuthRealm, RealmUse } from '../../../shared/
 import type { ProviderPackage, ProviderPricingOperations, RealmRef } from '../core'
 import { CODEX_ENABLEMENT } from './enablement'
 import { resolveCodexBinary, resolveCodexBinaryAsync, buildCodexSpawn, codexHookDataDir, warmNodeExeOnPosix } from './spawn'
-import { openCodexScreen, feedCodexScreen, resizeCodexScreen, closeCodexScreen, hasCodexScreen, submitCodexText } from './session-screen'
+import { openCodexScreen, feedCodexScreen, resizeCodexScreen, closeCodexScreen, hasCodexScreen, submitCodexText, submitCodexImage } from './session-screen'
 import { detectCodexUi } from './ui-detection'
 import { watchAndClaimRollout } from './telemetry'
 import { warmCodexResume } from './rollout-lookup'
@@ -128,8 +128,10 @@ const CODEX_MANAGED_LAUNCH_ONLY = 'not used for Codex: launches go through the m
 
 /** WP2 PR 4, P4.1: main's reading of each Codex run's screen (its pane, or
  *  since 2.1.3-beta.14 B2 a held run's holder's screen) and the submit
- *  primitive (session-screen.ts drives composer-submit.ts), offered through
- *  the registered provider: the PTY manager reaches this package only that way. */
+ *  primitive (session-screen.ts drives composer-submit.ts), and since
+ *  2.1.3-beta.17 C6 the image rule (session-screen.ts submitCodexImage), offered
+ *  through the registered provider: the PTY manager and the session input
+ *  module reach this package only that way. */
 const CODEX_RUN_SCREEN: SessionRunScreen = {
   open: (sessionId, opts) => openCodexScreen(sessionId, opts),
   feed: (sessionId, data) => feedCodexScreen(sessionId, data),
@@ -137,6 +139,7 @@ const CODEX_RUN_SCREEN: SessionRunScreen = {
   close: (sessionId) => closeCodexScreen(sessionId),
   has: (sessionId) => hasCodexScreen(sessionId),
   submit: (sessionId, text, opts) => submitCodexText(sessionId, text, opts),
+  submitImage: (sessionId, imagePath, sentence, opts) => submitCodexImage(sessionId, imagePath, sentence, opts),
 }
 
 /** WP2 PR 4: Codex's model prices (pricing.ts), offered to Tokenomics through

@@ -1,6 +1,9 @@
 // The submit primitive's driver (WP2 PR 4, P4.1): main's own reading of each
 // local Codex session's screen, and the one door through which main submits a
-// text into it (./composer-submit.ts holds the rule).
+// text into it (./composer-submit.ts holds the rule). Since 2.1.3-beta.17 C6
+// (aicc_planning#415) also the door for a saved image, pasted as Codex's own
+// paste (pasteImageIntoCodexComposer holds that rule, which types its sentence
+// through the primitive), on the same per-run chain.
 //
 // WHY A PANE OF ITS OWN. Main holds a Codex session's screen only while the
 // Watchdog is on (default off), and the renderer's screen is the renderer's:
@@ -38,10 +41,15 @@
 // imports no shared module that reaches the other provider's package. It is
 // required: a pane is never fed unclamped output.
 import { Terminal } from '@xterm/headless'
-import { readXtermScreen, type ScreenLine } from '../../../shared/codex-screen'
+import { readXtermScreen, readCodexScreen, codexComposerDraft, type ScreenLine } from '../../../shared/codex-screen'
+import { codexImagePlaceholderShown, codexDraftIsImagePlaceholder, codexWarningCountShown, codexScreenPastPlaceholder } from '../../../shared/codex-image-screen'
 import type { SubmitTextResult } from '../../../shared/types'
-import type { HeldScreenRows } from '../types'
-import { submitToCodexComposer, type ComposerSubmitOptions } from './composer-submit'
+import type { HeldScreenRows, RunScreenImageNotPasted, RunScreenImageResult } from '../types'
+import {
+  submitToCodexComposer, submitTextRefusal, submitIngestionWindowMs, TAKE_BACK_KEY,
+  SUBMIT_READY_POLL_MS, SUBMIT_READY_SECOND_READ_MS, SUBMIT_CONFIRM_POLL_MS, SUBMIT_CLEAR_VERIFY_MS,
+  type ComposerSubmitDeps, type ComposerSubmitOptions,
+} from './composer-submit'
 import { logInfo, logWarn } from '../../debug-logger'
 
 /** No terminal is anywhere near this; a resize past it is ignored. */
@@ -299,6 +307,46 @@ export async function readCodexScreenOnce(sessionId: string): Promise<{ lines: S
 }
 
 /**
+ * One submission on the session's run, after anything already in flight for
+ * it (one at a time, in order): `body` gets the rule's ports, reading the
+ * run's screen from whichever source it has (B2: the holder's, or the pane)
+ * and writing only into this run, and the reader, for its log line. `gone`
+ * when the session has no reading. Since 2.1.3-beta.17 C6 both of the run's
+ * doors go through it: a text (submitCodexText) and an image
+ * (submitCodexImage), so one never lands between the other's keys.
+ */
+function onRun<T>(sessionId: string, tag: string, gone: T, body: (deps: ComposerSubmitDeps, screen: ScreenReader) => Promise<T>): Promise<T> {
+  // The run's record, which holds the raw writer the PTY manager handed in.
+  const pane = runs.get(sessionId)
+  if (!pane) return Promise.resolve(gone)
+  const live = (): boolean => runs.get(sessionId) === pane && pane.current()
+  const run = async (): Promise<T> => {
+    const screen = screenReader(pane, live)
+    return body({
+      readScreen: screen.lines,
+      readTitle: screen.title,
+      settle: screen.settle,
+      size: screen.size,
+      write: (data) => { if (live()) pane.write(data) },
+      live,
+      now: () => Date.now(),
+      sleep,
+      log: (msg) => logInfo(`[${tag}] ${sessionId}: ${msg}`),
+    }, screen)
+  }
+  const next = pane.chain.then(run, run)
+  pane.chain = next.catch(() => undefined)
+  return next
+}
+
+/** The reader's part of a log line: where the rule read the screen, and how
+ *  many of the holder's reads gave none. */
+const readFrom = (screen: ScreenReader): string => {
+  const failed = screen.failed()
+  return `the rule read ${screen.from()}${failed > 0 ? `, and ${failed} of its reads gave no screen` : ''}`
+}
+
+/**
  * Submit `text` into the session's Codex composer by the primitive's rule,
  * after anything already in flight for this run (one at a time, in order).
  * Not delivered, `session-gone`, when the session has no reading or its run
@@ -306,36 +354,226 @@ export async function readCodexScreenOnce(sessionId: string): Promise<{ lines: S
  * of it and where the rule read the screen (B2: the holder's, or the pane).
  */
 export function submitCodexText(sessionId: string, text: string, opts: ComposerSubmitOptions): Promise<SubmitTextResult> {
-  // The run's record, which holds the raw writer the PTY manager handed in.
-  const pane = runs.get(sessionId)
-  if (!pane) return Promise.resolve({ delivered: false, reason: 'session-gone' })
-  const live = (): boolean => runs.get(sessionId) === pane && pane.current()
-  const run = async (): Promise<SubmitTextResult> => {
-    const screen = screenReader(pane, live)
+  return onRun<SubmitTextResult>(sessionId, 'codex-submit', { delivered: false, reason: 'session-gone' }, async (deps, screen) => {
     try {
-      const result = await submitToCodexComposer(text, {
-        readScreen: screen.lines,
-        readTitle: screen.title,
-        settle: screen.settle,
-        size: screen.size,
-        write: (data) => { if (live()) pane.write(data) },
-        live,
-        now: () => Date.now(),
-        sleep,
-        log: (msg) => logInfo(`[codex-submit] ${sessionId}: ${msg}`),
-      }, opts)
-      const failed = screen.failed()
-      const noScreen = failed > 0 ? `, and ${failed} of its reads gave no screen` : ''
-      logInfo(`[codex-submit] ${sessionId}: ${result.delivered ? 'delivered' : `not delivered (${result.reason})`}, ${[...text].length} code points; the rule read ${screen.from()}${noScreen}`)
+      const result = await submitToCodexComposer(text, deps, opts)
+      logInfo(`[codex-submit] ${sessionId}: ${result.delivered ? 'delivered' : `not delivered (${result.reason})`}, ${[...text].length} code points; ${readFrom(screen)}`)
       return result
     } catch (err) {
       logWarn(`[codex-submit] ${sessionId}: the submission failed (the rule read ${screen.from()}): ${(err as Error)?.message ?? err}`)
       return { delivered: false, reason: 'session-gone' }
     }
+  })
+}
+
+/** 2.1.3-beta.17 C6: how long the image rule waits for Codex's image
+ *  placeholder once the path's paste has gone. C6's reading (P11's stand-in,
+ *  Codex 0.157.1 on the Windows test machine, 2026-11-24, P11's 96 by 64
+ *  JPEG): "[Image #1]" showed 251 to 314 ms after the paste in 8 of 8 runs. A
+ *  full-size Snap picture was not measured, so the bound keeps room. */
+export const IMAGE_PLACEHOLDER_WAIT_MS = 5_000
+/** C6: how long the sentence waits for the composer that holds only the
+ *  placeholder, read ready on two reads, before nothing more is typed. */
+export const IMAGE_SENTENCE_READY_WAIT_MS = 2_000
+
+const PASTE_START = '\u001b[200~'
+const PASTE_END = '\u001b[201~'
+
+/** One read: the screen, and the window title taken with it. */
+interface ImageShot { lines: ScreenLine[] | null; title: string | null }
+
+/**
+ * 2.1.3-beta.17 C6 (aicc_planning#415): a saved image's path into Codex's
+ * composer as Codex's own paste, then the sentence, then Enter. PURE, as the
+ * submit primitive is: the screen, the writer, liveness and the clock come in
+ * `deps` (submitCodexImage drives it). Probe P11 found Codex 0.157.1 attaches
+ * a path it gets as a bracketed paste, showing "[Image #1]" in its composer,
+ * and reads a path typed as text only as words (ADR-030, the P11 result).
+ * C6's reading on P11's stand-in (Codex 0.157.1, 2026-11-24) is what the
+ * waits and the take-back stand on: with the placeholder shown, the composer
+ * reads ready but not empty, so the primitive alone would never type the
+ * sentence; read past the placeholder it reads ready and empty, and the
+ * sentence typed after it confirms (4 of 4); Ctrl+U clears the placeholder
+ * in about 80 ms and the next turn carries no picture (4 of 4, with and
+ * without the sentence typed); one Backspace leaves it (it takes the space
+ * Codex types after it).
+ *
+ * 1. Refuses an empty path, or a path or sentence the primitive would refuse
+ *    (a control character, a character outside the Basic Multilingual Plane),
+ *    before anything is typed.
+ * 2. Waits within `readyWaitMs` for Codex's ready, EMPTY composer, ready on
+ *    two reads SUBMIT_READY_SECOND_READ_MS apart, as the primitive's own wait
+ *    reads it. Codex's warning count showing (aicc_planning#371): nothing
+ *    typed, at once (`warning-count`).
+ * 3. The path as a bracketed paste, in one write.
+ * 4. Polls for Codex's image placeholder alone in the ready composer
+ *    (codexImagePlaceholderShown) within IMAGE_PLACEHOLDER_WAIT_MS. A prompt
+ *    up meanwhile: nothing more typed or taken back (its keys are the
+ *    prompt's). The placeholder not shown in time (`no-placeholder`), or the
+ *    warning count shown: the paste is taken back (below).
+ * 5. The sentence, after a space, through the submit primitive
+ *    (submitToCodexComposer, the rule submitCodexText drives), reading the
+ *    composer with the placeholder taken as its start
+ *    (codexScreenPastPlaceholder): it waits for that composer ready and empty
+ *    within IMAGE_SENTENCE_READY_WAIT_MS, types the sentence in one write,
+ *    presses Enter as its own write only once the screen shows the
+ *    placeholder and the whole sentence, and takes its text back with Ctrl+U
+ *    (the placeholder with it) when it is not confirmed. The placeholder gone
+ *    or a warning count shown: no reading, so no Enter. Nothing of the
+ *    sentence typed: the paste is taken back (below).
+ * 6. Taking the paste back, as the primitive takes text back: after the
+ *    paste's ingestion window, on a screen it can read with no prompt up, and
+ *    only while the composer holds nothing but the paste (the placeholder
+ *    alone, or a part of the path): Ctrl+U, then the composer read ready and
+ *    empty within SUBMIT_CLEAR_VERIFY_MS. Anything else, or the clear not
+ *    seen: nothing (more) taken back, and the answer says what it typed may
+ *    still be at the prompt (`left`).
+ * Never sends Ctrl+C. A run that ends meanwhile: `session-gone`, nothing more.
+ */
+export async function pasteImageIntoCodexComposer(imagePath: string, sentence: string, deps: ComposerSubmitDeps, opts: { readyWaitMs: number }): Promise<RunScreenImageResult> {
+  const models = deps.models ?? null
+  const log = (msg: string): void => { try { deps.log?.(msg) } catch { /* a log line never breaks the rule */ } }
+  const notPasted = (reason: RunScreenImageNotPasted, left: boolean): RunScreenImageResult => ({ pasted: false, reason, left })
+  if (typeof imagePath !== 'string' || imagePath === '' || submitTextRefusal(imagePath) || submitTextRefusal(sentence)) return notPasted('refused-text', false)
+
+  // Every read waits for the screen to draw what the session has sent, as
+  // the primitive's does; a screen not drawn in time gives no reading.
+  const read = async (): Promise<ImageShot> => {
+    if (deps.settle) {
+      let drawn = false
+      try { drawn = (await deps.settle()) === true } catch { drawn = false }
+      if (!drawn) return { lines: null, title: null }
+    }
+    let title: string | null = null
+    try { title = deps.readTitle?.() ?? null } catch { title = null }
+    try { return { lines: deps.readScreen(), title } } catch { return { lines: null, title } }
   }
-  const next = pane.chain.then(run, run)
-  pane.chain = next.catch(() => undefined)
-  return next
+  const state = ({ lines, title }: ImageShot): 'ready' | 'blocked' | 'waiting' => {
+    const shown = readCodexScreen(lines, models, { title })
+    if (shown.screen === 'blocked') return 'blocked'
+    return shown.screen === 'ready' && shown.text === '' ? 'ready' : 'waiting'
+  }
+
+  // 2. The ready, empty composer, on two reads; never with the warning count.
+  const waitUntil = deps.now() + Math.max(0, opts.readyWaitMs)
+  let last: 'ready' | 'blocked' | 'waiting' = 'waiting'
+  for (;;) {
+    if (!deps.live()) return notPasted('session-gone', false)
+    let shot = await read()
+    if (codexWarningCountShown(shot.lines)) {
+      log('Codex shows its warning count; nothing typed')
+      return notPasted('warning-count', false)
+    }
+    last = state(shot)
+    if (last === 'ready') {
+      await deps.sleep(SUBMIT_READY_SECOND_READ_MS)
+      if (!deps.live()) return notPasted('session-gone', false)
+      shot = await read()
+      if (codexWarningCountShown(shot.lines)) {
+        log('Codex shows its warning count; nothing typed')
+        return notPasted('warning-count', false)
+      }
+      last = state(shot)
+      if (last === 'ready') break
+    }
+    if (deps.now() >= waitUntil) return notPasted(last === 'blocked' ? 'prompt-on-screen' : 'busy-timeout', false)
+    await deps.sleep(SUBMIT_READY_POLL_MS)
+  }
+
+  // 3. The paste, in one write.
+  deps.write(`${PASTE_START}${imagePath}${PASTE_END}`)
+  const pastedAt = deps.now()
+
+  // 6. The paste taken back, only while the composer holds nothing but it.
+  const takeBack = async (reason: RunScreenImageNotPasted): Promise<RunScreenImageResult> => {
+    const ingested = pastedAt + submitIngestionWindowMs([...imagePath].length)
+    if (deps.now() < ingested) await deps.sleep(ingested - deps.now())
+    if (!deps.live()) return notPasted('session-gone', true)
+    const before = await read()
+    if (before.lines === null || state(before) === 'blocked') {
+      log(before.lines === null ? 'the paste was not taken back: the screen cannot be read' : 'the paste was not taken back: a prompt is up')
+      return notPasted(reason, true)
+    }
+    const draft = codexComposerDraft(before.lines, models)
+    if (draft === '') return notPasted(reason, false)
+    if (draft === null || !(codexDraftIsImagePlaceholder(draft) || imagePath.replace(/\s+/g, '').includes(draft))) {
+      log(draft === null ? 'the paste was not taken back: what the composer holds cannot be read' : 'the paste was not taken back: the composer holds more than the paste')
+      return notPasted(reason, true)
+    }
+    deps.write(TAKE_BACK_KEY)
+    const clearUntil = deps.now() + SUBMIT_CLEAR_VERIFY_MS
+    for (;;) {
+      await deps.sleep(SUBMIT_CONFIRM_POLL_MS)
+      if (!deps.live()) return notPasted('session-gone', true)
+      if (state(await read()) === 'ready') {
+        log('the paste was taken back (Ctrl+U)')
+        return notPasted(reason, false)
+      }
+      if (deps.now() >= clearUntil) {
+        log('the paste was taken back (Ctrl+U) but the cleared composer was not seen in time')
+        return notPasted(reason, true)
+      }
+    }
+  }
+
+  // 4. Codex's placeholder for the image.
+  let placeholder: string | null = null
+  const placeholderBy = pastedAt + IMAGE_PLACEHOLDER_WAIT_MS
+  for (;;) {
+    await deps.sleep(SUBMIT_CONFIRM_POLL_MS)
+    if (!deps.live()) return notPasted('session-gone', true)
+    const shot = await read()
+    if (state(shot) === 'blocked') {
+      log('a prompt came up after the paste; nothing more typed or taken back')
+      return notPasted('prompt-on-screen', true)
+    }
+    if (codexWarningCountShown(shot.lines)) return takeBack('warning-count')
+    placeholder = codexImagePlaceholderShown(shot.lines, models, shot.title)
+    if (placeholder) break
+    if (deps.now() >= placeholderBy) return takeBack('no-placeholder')
+  }
+
+  // 5. The sentence, through the primitive, past the placeholder.
+  const shown = placeholder
+  let typed = false
+  const past: ComposerSubmitDeps = {
+    ...deps,
+    readScreen: () => codexScreenPastPlaceholder(deps.readScreen(), shown, typed, models),
+    write: (data) => { typed = true; deps.write(data) },
+    log: (msg) => log(`the sentence: ${msg}`),
+  }
+  const result = await submitToCodexComposer(` ${sentence}`, past, { readyWaitMs: IMAGE_SENTENCE_READY_WAIT_MS })
+  if (result.delivered) return { pasted: true }
+  if (result.reason === 'session-gone') return notPasted('session-gone', true)
+  if (result.reason === 'prompt-on-screen') return notPasted('prompt-on-screen', true)
+  if (!typed) return takeBack(result.reason === 'too-tall' ? 'too-tall' : 'busy-timeout')
+  // The primitive took its text back, with the placeholder, if it could.
+  const after = await read()
+  return notPasted(result.reason === 'too-tall' ? 'too-tall' : 'not-drawn', state(after) !== 'ready')
+}
+
+/**
+ * C6: a saved image into the session's Codex composer by the image rule
+ * (pasteImageIntoCodexComposer), after anything already in flight for this
+ * run, as one submission: nothing else is typed between the paste and the
+ * Enter. Not pasted, `session-gone`, when the session has no reading or its
+ * run ends meanwhile. Never rejects. One log line says what came of it and
+ * where the rule read the screen; the log names the image by its path's
+ * length only.
+ */
+export function submitCodexImage(sessionId: string, imagePath: string, sentence: string, opts: { readyWaitMs: number }): Promise<RunScreenImageResult> {
+  return onRun<RunScreenImageResult>(sessionId, 'codex-image', { pasted: false, reason: 'session-gone', left: false }, async (deps, screen) => {
+    const chars = typeof imagePath === 'string' ? [...imagePath].length : 0
+    try {
+      const result = await pasteImageIntoCodexComposer(imagePath, sentence, deps, opts)
+      const what = result.pasted ? 'pasted and sent' : `not pasted (${result.reason})${result.left ? '; what it typed may still be at the prompt' : ''}`
+      logInfo(`[codex-image] ${sessionId}: an image path of ${chars} characters ${what}; ${readFrom(screen)}`)
+      return result
+    } catch (err) {
+      logWarn(`[codex-image] ${sessionId}: the image failed (the rule read ${screen.from()}): ${(err as Error)?.message ?? err}`)
+      return { pasted: false, reason: 'session-gone', left: true }
+    }
+  })
 }
 
 /** Test seam. */

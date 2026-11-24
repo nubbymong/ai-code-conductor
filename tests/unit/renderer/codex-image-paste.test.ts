@@ -7,6 +7,8 @@
 // (P3.8): only into the ready, empty composer, with Enter on its own after the
 // burst, and only when the screen then shows exactly that line. When it cannot
 // be sent, the user is told why.
+// Since 2.1.3-beta.17 C6 a Codex session gets this line only when main could
+// not paste the image as Codex's own paste (image-transfer-codex.test.ts).
 import { describe, it, expect } from 'vitest'
 import {
   sendImagePathToCodex,
@@ -173,6 +175,40 @@ describe('sendImagePathToCodex (P3.15, row 70)', () => {
     h.advance(CODEX_SUBMIT_DELAY_MS * 4)
     expect(h.writes).toEqual([LINE])
     expect(h.notes).toEqual([])
+  })
+
+  // 2.1.3-beta.17 C6: the line a Codex session gets when main could not paste
+  // the image as Codex's own (imageTransfer.ts, sendImageToCodexSession).
+  it('C6: with the caller\'s words, the line is those words and the path', () => {
+    const words = 'I just snapped a region of my screen - please view it.'
+    const writes: string[] = []
+    const notes: string[] = []
+    const deps: CodexComposerDeps = {
+      readScreen: () => S.READY,
+      currentRun: () => ({ createdAt: 1, spawnToken: 1 }),
+      write: (_id, d) => { writes.push(d) },
+      setTimeout: () => 0,
+      clearTimeout: () => {},
+      pending: new Set<string>(),
+      startupDone: new StartupDoneRuns(),
+    }
+    sendImagePathToCodex('s1', PATH, (n) => notes.push(n), deps, words)
+    expect(writes).toEqual([`${words} ${PATH}`])
+    expect(notes).toEqual([])
+  })
+
+  // Whose image a placeholder is cannot be read from the screen (the user's
+  // own Alt+V or Ctrl+V paste reads the same as main's), so this rule says
+  // only what it reads; main's `left` is what says the image is at the prompt
+  // (image-transfer-codex.test.ts).
+  it('C6: a composer holding an image reads TEXT_IN_PROMPT, as any typed text', () => {
+    for (const row of [`${GLYPH} [Image #1]`, `${GLYPH} [Image #1]  I just pasted an image - please view it.`, `${GLYPH} half a question`]) {
+      const h = harness(composerShows(row))
+      h.send()
+      h.advance(CODEX_SUBMIT_DELAY_MS * 4)
+      expect(h.writes, row).toEqual([])
+      expect(h.notes, row).toEqual([TEXT_IN_PROMPT])
+    }
   })
 })
 
