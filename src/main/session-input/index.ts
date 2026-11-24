@@ -392,10 +392,11 @@ function hasControlChar(text: string): boolean {
 
 /** C6: one image into a Codex session's run `pressedFor` only, by the Codex
  *  package's image rule (SessionRunScreen.submitImage), reached through the
- *  registry. What that rule could not paste, and did not leave at the prompt
- *  or took back, is `not-taken`: the caller then types today's line by its
- *  own Codex rule, which types only into the ready, empty composer. Never
- *  rejects. */
+ *  registry. What that rule could not paste is `not-taken`, the log saying
+ *  why and whether what it typed may still be at the prompt: the caller then
+ *  types today's line by its own Codex rule, which types only into a ready,
+ *  empty composer, so a paste left at the prompt gets nothing more and a
+ *  note. Never rejects. */
 async function typeCodexImage(sessionId: string, imagePath: string, sentence: string, pressedFor: IPty): Promise<{ result: ImageSubmitResult; why: string }> {
   try {
     if (port().run(sessionId) !== pressedFor) return { result: { outcome: 'not-sent', reason: 'session-gone' }, why: '' }
@@ -455,10 +456,12 @@ async function typeImage(sessionId: string, imagePath: string, sentence: string,
  * sentence, confirm it and press Enter (providers/codex/session-screen.ts,
  * pasteImageIntoCodexComposer, says how). What it could not paste (not ready
  * in the wait, no placeholder, Codex's warning count showing, the sentence
- * not confirmed) it takes back as the composer rule takes text back, and
+ * not confirmed) it takes back as the composer rule takes text back, or, when
+ * it cannot do that for certain, leaves and types nothing more; either way it
  * answers `not-taken`, with one log line saying why: the renderer then types
  * today's line by its own Codex rule, which types only into a ready, empty
- * composer and otherwise says why it typed nothing.
+ * composer and otherwise says why it typed nothing (a paste left at the
+ * prompt: that the image is there and was not sent).
  *
  * Not this door's (`not-taken`, nothing typed; the renderer keeps its own way
  * for it): an SSH Persistent session (tmux). The renderer asks only for a
