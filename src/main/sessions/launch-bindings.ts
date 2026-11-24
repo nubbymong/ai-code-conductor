@@ -26,11 +26,11 @@
 // it, and removeKeptLaunchFiles removes what it left once it is no longer kept.
 //
 // S16 step 5 (2.1.3-beta.17, aicc_planning#412): the next start's restored tab
-// takes such a Claude Code session over in place of its launch
+// takes such a Claude Code or Codex session over in place of its launch
 // (takeOverKeptLaunch): the session helper shows its terminal again, and this
 // module makes the launch's bindings again for the CLI that runs, with no
-// launch. A Codex launch is not taken over here: its kept session is ended
-// at that start, as before.
+// launch. A Codex session's hook file is written again in its kept folder
+// with a token minted for the take-over.
 //
 // What stays in pty-manager.ts, and why:
 //  - the per-session records and the helpers that keep them, which much of
@@ -74,10 +74,10 @@ import { registerCodexReviewSession, registerClaudeReviewSession, unregisterCode
 import { registerCanvasUatRoot, revokeCanvasUatRoots, designateCanvasWorktreeRoot, canvasRootRefusalReason, describeCanvasRootRefusal, setCanvasRootRefusal } from '../canvas/canvas-store'
 import { forgetCanvasMarkers } from '../canvas/canvas-marker-delivery'
 import type { CodexCanvasLaunch } from '../canvas/codex-canvas-launch'
-import { registerCodexCanvasRoots } from '../canvas/codex-canvas-roots'
+import { registerCodexCanvasRoots, codexDesignatedWorktree } from '../canvas/codex-canvas-roots'
 import { noteCodexSessionGuidance, forgetCodexSessionGuidance } from '../canvas/codex-guidance'
 import { tryGetProvider } from '../providers'
-import { launchKeptForUpdate, setKeptLaunchBindings, takeKeptSession, type KeptLaunch, type KeptLaunchFacts } from './kept-launches'
+import { launchKeptForUpdate, setKeptLaunchBindings, takeKeptSession, type KeptLaunch, type KeptLaunchFacts, type KeptSessionFacts } from './kept-launches'
 import { HelperPty } from '../session-helper/helper-pty'
 
 /** A Codex launch's hook file: the file that hands its gateway token to the
@@ -127,6 +127,10 @@ export interface LaunchBindingPorts {
   /** Where a local agent process works, until its exit (pty-manager.ts's
    *  record for ending the runs in a folder). */
   noteAgentRunFolder(proc: pty.IPty, sessionId: string, folder: string): void
+  /** A Codex run's two raw writers, its pane's and its colour answer's
+   *  (pty-manager.ts's, where the session input check counts them), for a
+   *  take-over's pane as for a launch's. */
+  codexRunWriters(codexRun: pty.IPty): Pick<CodexPaneBinding, 'write' | 'writeColourAnswer'>
 }
 
 let registered: LaunchBindingPorts | null = null
@@ -650,11 +654,16 @@ export interface KeptTakeOverBinding {
   sessionId: string
   /** The provider the launch starts, and how pty-manager.ts starts it (its
    *  LocalLaunch): the take-over's bindings follow the way, never a name. */
-  launch: { id: ProviderId; style: 'direct' | 'claude-shell' }
+  launch: { id: ProviderId; style: 'direct' | 'claude-shell'; provider: SessionProvider }
   /** The session's configured project folder, resolved. */
   resolvedCwd: string
   cols: number
   rows: number
+  /** A Codex launch's preparation (pty:spawn's): its account lease and its
+   *  realm's sessions folder. None: a Codex take-over is not made. */
+  codexLaunch?: { lease: AccountLease; sessionsDir: string }
+  /** An Ask Conductor launch. */
+  isAsk?: boolean
 }
 
 /** What a take-over hands back to the launch it replaces: the session's
@@ -672,46 +681,64 @@ export interface KeptSessionTakenOver {
 
 /**
  * 2.1.3-beta.17 (plan section B1, S16 step 5, aicc_planning#412): the
- * restored tab of a Claude Code session the last run's update kept running
- * takes it over, in place of its launch (pty-manager.ts, one entry before the
- * provider branches). Null when the session helper keeps no session for this
- * tab and provider, or for a launch whose take-over is not built here (a
- * Codex launch): then the launch runs as before.
+ * restored tab of a Claude Code or Codex session the last run's update kept
+ * running takes it over, in place of its launch (pty-manager.ts, one entry
+ * before the provider branches). Null when the session helper keeps no
+ * session for this tab and provider (a Codex one: on the account the tab's
+ * launch is prepared on), or for a Codex launch with no preparation: then the
+ * launch runs as before.
  *
  * Nothing is launched and nothing typed: the resume, the per-session files
  * and the launch line are skipped, as the CLI runs. What the launch binds is
- * made again for that CLI, before its holder is attached: the tool host's
- * record of the session, with no credential (its tool streams come through
- * its holder); its status line's address file written again with this run's
- * address, only where its launch wrote one (its bridge reads the file each
- * tick; this issues the session's credential into that owner-only file, as a
- * launch's settings write does); where the run works; the account capture and
- * its watch, the review registration (the folder the CLI was launched in, as a
- * launch registers it) and the Agent Canvas roots (the configured folder and
- * the designated worktree, never a transcript's folder: bindClaudeLaunch's
- * rule); and the data handler, as the Claude Code branch's. The session's
- * entry, its watchdog, its logging run and its transcript binding (by the
- * saved conversation, from the folder it runs in) follow in pty-manager.ts
+ * made again for that CLI, before its holder is attached, and in both cases
+ * the tool host's record of the session, with no credential (its tool streams
+ * come through its holder), and where the run works. A Claude Code session
+ * (claudeTakeOver): its status line's address file, its account capture and
+ * registrations, and its data handler. A Codex session (codexTakeOver): its
+ * hook file, its lease, its conversation, its pane and colour answers, its
+ * data handler, its telemetry and registrations. The session's entry, its
+ * watchdog, its logging run and, for Claude Code, its transcript binding (by
+ * the saved conversation, from the folder it runs in) follow in pty-manager.ts
  * from what this answers, before its hook events can bind a transcript.
  */
 export function takeOverKeptLaunch(b: KeptTakeOverBinding): KeptSessionTakenOver | null {
-  if (b.launch.style !== 'claude-shell') return null
-  const { ptySessions, noteAgentRunFolder } = ports()
-  const taken = takeKeptSession(b.sessionId, b.launch.id, { cols: b.cols, rows: b.rows })
+  const codex = b.launch.style === 'direct'
+  // A Codex take-over needs its launch's preparation: its lease names the account.
+  if (codex && !b.codexLaunch?.lease) return null
+  const taken = codex
+    ? takeKeptSession(b.sessionId, b.launch.id, { cols: b.cols, rows: b.rows }, b.codexLaunch?.lease.accountId ?? null)
+    : takeKeptSession(b.sessionId, b.launch.id, { cols: b.cols, rows: b.rows })
   if (!taken) return null
   const { pty: proc, kept } = taken
+  const launchCwd = kept.folder ?? b.resolvedCwd
+  recordHeldToolSession(b.sessionId, b.launch.id)
+  ports().noteAgentRunFolder(proc, b.sessionId, launchCwd)
+  if (codex) codexTakeOver(b, b.codexLaunch!, proc, kept, launchCwd)
+  else claudeTakeOver(b, proc, kept, launchCwd)
+  logInfo(`[pty] ${b.sessionId}: took over the session the last update kept running, with no launch (conversation ${kept.conversation ?? 'none'})`)
+  return { ptyProcess: proc, launchCwd, conversation: kept.conversation, profileId: codex ? undefined : (kept.account ?? undefined) }
+}
+
+/**
+ * A Claude Code take-over's own bindings: its status line's address file
+ * written again with this run's address, only where its launch wrote one (its
+ * bridge reads the file each tick; this issues the session's credential into
+ * that owner-only file, as a launch's settings write does); the account
+ * capture and its watch, the review registration (the folder the CLI was
+ * launched in, as a launch registers it) and the Agent Canvas roots (the
+ * configured folder and the designated worktree, never a transcript's folder:
+ * bindClaudeLaunch's rule); and the data handler, as the Claude Code branch's.
+ */
+function claudeTakeOver(b: KeptTakeOverBinding, proc: pty.IPty, kept: KeptSessionFacts, launchCwd: string): void {
+  const { ptySessions } = ports()
   const { sessionId, resolvedCwd, win } = b
-  const launchCwd = kept.folder ?? resolvedCwd
-  const profileId = kept.account ?? undefined
-  recordHeldToolSession(sessionId, b.launch.id)
   if (fs.existsSync(getLocalSessionStatusUrlPath(sessionId))) {
     let url = ''
     try { url = tryGetProvider(b.launch.id)?.statusPostUrl?.(sessionId, undefined, getConductorMcpPort(), true) ?? '' } catch { url = '' }
     if (url) writeLocalSessionStatusUrl(sessionId, url)
     else removeLocalSessionStatusUrl(sessionId)
   }
-  noteAgentRunFolder(proc, sessionId, launchCwd)
-  bindClaudeLaunch({ sessionId, resolvedProfileId: profileId, claudeCwd: launchCwd, resolvedCwd, designatedWorktree: isHomeOrAncestor(resolvedCwd) ? null : designatedWorktreeDir(resolvedCwd, sessionId) })
+  bindClaudeLaunch({ sessionId, resolvedProfileId: kept.account ?? undefined, claudeCwd: launchCwd, resolvedCwd, designatedWorktree: isHomeOrAncestor(resolvedCwd) ? null : designatedWorktreeDir(resolvedCwd, sessionId) })
   proc.onData((data) => {
     if (win.isDestroyed()) return
     // The generation guard of every session's data: only while this terminal is the session's.
@@ -720,8 +747,66 @@ export function takeOverKeptLaunch(b: KeptTakeOverBinding): KeptSessionTakenOver
     getWatchdogManager()?.feedData(sessionId, data)
     win.webContents.send(`pty:data:${sessionId}`, data)
   })
-  logInfo(`[pty] ${sessionId}: took over the session the last update kept running, with no launch (conversation ${kept.conversation ?? 'none'})`)
-  return { ptyProcess: proc, launchCwd, conversation: kept.conversation, profileId }
+}
+
+/**
+ * A Codex take-over's own bindings (B1.2), as its launch makes them, with no
+ * launch: its hook file written again in its own folder (the release's record)
+ * with this run's gateway port and a token minted for the take-over, when the
+ * Hooks gateway is on and listening (the forwarder reads the file at every
+ * event; mintCodexHooks's rule, the file in place of a new folder); the lease
+ * of the account it runs on (the tab's launch was prepared on that one); the
+ * conversation it is on, for the tab; its pane and colour answers
+ * (bindCodexPane: a held run is read from its holder's screen); its data
+ * handler, as the Codex branch's (the colour answers take only live queries:
+ * the session helper takes the replay's queries out); the Ask mark; and its
+ * telemetry, review registration and Agent Canvas roots (bindCodexLaunch), the
+ * telemetry claiming the saved conversation by its id.
+ */
+function codexTakeOver(b: KeptTakeOverBinding, launch: { lease: AccountLease; sessionsDir: string }, proc: pty.IPty, kept: KeptSessionFacts, launchCwd: string): void {
+  const { ptySessions, codexHookFiles, codexHookedLaunches, codexAskSessions, noteGatewayToken, dropGatewayToken, keepCodexConversation, codexRunWriters } = ports()
+  const { sessionId, resolvedCwd, win } = b
+  const provider = b.launch.provider
+  const gw = getGateway()
+  const gwStatus = gw?.status()
+  if (kept.hookFolder && gw && gwStatus?.listening && gwStatus.port && provider.rewriteSessionHooks) {
+    let hookFile: CodexHookFile | null = null
+    try {
+      const secret = gw.registerSession(sessionId)
+      noteGatewayToken(sessionId, true)
+      hookFile = provider.rewriteSessionHooks(kept.hookFolder, sessionId, gwStatus.port, secret)
+    } catch (err) {
+      logError(`[pty] Failed to write the kept Codex session's hook file again for ${sessionId}: ${(err as Error)?.message ?? err}`)
+    }
+    if (hookFile) {
+      codexHookFiles.set(sessionId, hookFile)
+      codexHookedLaunches.add(sessionId)
+    } else {
+      dropGatewayToken(sessionId)
+    }
+  }
+  logInfo(`[pty-manager] Codex hooks for ${sessionId}: ${codexHookedLaunches.has(sessionId) ? 'on, its kept hook file written again' : 'off (its launch had none, the Hooks gateway is off or not listening, or its hook file could not be written again)'}`)
+  bindCodexLease(sessionId, launch.lease)
+  if (kept.conversation) keepCodexConversation(sessionId, { uuid: kept.conversation, cwd: launchCwd }, launch.lease.accountId, { inferred: false })
+  const runScreen = provider.runScreen
+  const colorQueries = bindCodexPane({ sessionId, codexRun: proc, runScreen, cols: b.cols, rows: b.rows, ...codexRunWriters(proc) })
+  proc.onData((rawData) => {
+    if (win.isDestroyed()) return
+    if (ptySessions.get(sessionId)?.ptyProcess !== proc) return
+    const data = colorQueries.filter(rawData)
+    if (data === '') return
+    getPtyIntegrityMonitor()?.recordPtyData(sessionId, data.length)
+    getWatchdogManager()?.feedData(sessionId, data)
+    runScreen?.feed(sessionId, data)
+    win.webContents.send(`pty:data:${sessionId}`, data)
+  })
+  if (b.isAsk === true) codexAskSessions.add(sessionId)
+  else codexAskSessions.delete(sessionId)
+  bindCodexLaunch({
+    win, sessionId, provider, launch, codexCwd: launchCwd, codexSpawnTimestamp: Date.now(),
+    built: kept.conversation ? { resumeId: kept.conversation } : {},
+    resolvedCwd, codexCanvas: { designatedWorktree: codexDesignatedWorktree(resolvedCwd, sessionId), guidance: null }, runProvider: b.launch.id,
+  })
 }
 
 /** The session's own end (its exit, when no newer process has taken the

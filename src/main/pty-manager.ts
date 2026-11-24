@@ -861,6 +861,11 @@ function forgetCodexHooks(sessionId: string): void {
   lastCodexHookRollout.delete(sessionId)
 }
 
+/** A Codex run's two raw writers, its pane's and its colour answer's, for its launch and its take-over (S16 step 5); the session input check counts them here. */
+function codexRunWriters(codexRun: pty.IPty): { write: (data: string) => void; writeColourAnswer: (bytes: string) => void } {
+  return { write: (data) => codexRun.write(data), writeColourAnswer: (bytes) => codexRun.write(bytes) }
+}
+
 /** P3.10 round 1 (B1): the session's gateway token was just minted, by a
  *  Codex launch or not. */
 function noteGatewayToken(sessionId: string, codex: boolean): void {
@@ -6046,10 +6051,9 @@ function spawnPtyResolved(
         proceedAfterSetup()
       }
     })
-  } else if (localLaunch && (takenOver = takeOverKeptLaunch({ win, sessionId, launch: localLaunch, resolvedCwd, cols, rows }))) {
+  } else if (localLaunch && (takenOver = takeOverKeptLaunch({ win, sessionId, launch: localLaunch, resolvedCwd, cols, rows, codexLaunch: options?.codexLaunch, isAsk: options?.isAsk === true }))) {
     ({ ptyProcess, launchCwd: effectiveLaunchCwd, conversation: resumeUuidForBind, profileId: resolvedProfileId } = takenOver)
-    // As the Claude Code branch does: from here its options name the provider that was looked up.
-    if (options?.provider === undefined) options = { ...options, provider: localLaunch.id }
+    if (options?.provider === undefined) options = { ...options, provider: localLaunch.id } // as the Claude Code branch does: its options name the provider looked up
   } else if (localLaunch?.style === 'direct') {
     // Codex local session — spawn `codex` directly. Codex itself owns the
     // REPL, so there is no shell-wrap-then-cd-then-launch dance like Claude
@@ -6232,7 +6236,7 @@ function spawnPtyResolved(
       // Watchdog's CSI clamp.
       const codexRun = started
       const runScreen = provider.runScreen
-      const colorQueries = bindCodexPane({ sessionId, codexRun, runScreen, cols, rows, write: (data) => codexRun.write(data), writeColourAnswer: (bytes) => codexRun.write(bytes) })
+      const colorQueries = bindCodexPane({ sessionId, codexRun, runScreen, cols, rows, ...codexRunWriters(codexRun) })
       ptyProcess.onData((rawData) => {
         if (win.isDestroyed()) return
         if (ptySessions.get(sessionId)?.ptyProcess !== ptyProcess) return // rc.15 review R9
@@ -7315,7 +7319,7 @@ setLaunchBindingPorts({
   ptySessions, codexHookFiles, codexHookedLaunches, codexLaunchLeases, takenCodexLeases, codexAskSessions, codexTelemetrySources, indexedRuns,
   notIndexedSessions, codexContextRollouts, keptCodexConversations, lastCodexHookRollout, claudeTranscripts, claudeFolders, codexFolders,
   noteGatewayToken, dropGatewayToken, forgetCodexHooks, keepCodexConversation, markCodexConversationUncertain, clearCodexDoubtFromHook,
-  noteCodexContextRollout, endSessionNotIndexed, noteCodexFolder, savedConfigLoggingOff, noteClaudeFolder, noteClaudeTranscript, markSessionNotIndexed, noteAgentRunFolder,
+  noteCodexContextRollout, endSessionNotIndexed, noteCodexFolder, savedConfigLoggingOff, noteClaudeFolder, noteClaudeTranscript, markSessionNotIndexed, noteAgentRunFolder, codexRunWriters,
   closeCodexRunScreen: (sessionId) => codexRunScreen()?.close(sessionId),
 })
 

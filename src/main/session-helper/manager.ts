@@ -235,8 +235,8 @@ export interface SessionHelperDeps {
   screens?: Partial<Record<ProviderId, true>>
   /** Providers whose agent session an app update kept running is taken over
    *  by its restored tab at the next start (2.1.3-beta.17, S16 step 5;
-   *  app-wiring.ts gives Claude Code's). A kept session of any other is
-   *  ended at that start, as before. */
+   *  app-wiring.ts gives Claude Code's and Codex's). A kept session of any
+   *  other is ended at that start, as before. */
   takeOver?: Partial<Record<ProviderId, true>>
   /** The tab ids in the saved file this start restores from (app-wiring.ts
    *  reads it): a kept session whose tab is not among them is not kept for
@@ -1194,13 +1194,19 @@ export class SessionHelperManager implements MachinesSource {
    * goes at its end as a launch's does. A take-over whose holder cannot be
    * attached ends its CLI, and the tab says to restart it. Null when no
    * session waits for this tab (it starts its CLI the usual way), and while
-   * the app quits or updates.
+   * the app quits or updates. `account` (a Codex launch's lease, B1.2): the
+   * account the tab's launch is prepared on; a kept session on another one
+   * is not taken over, so the launch goes on and ends it first (spawnAgent).
    */
-  takeOverKept(ctx: AgentSpawnContext, size: { cols: number; rows: number }): { pty: HelperPty; kept: KeptRecord } | null {
+  takeOverKept(ctx: AgentSpawnContext, size: { cols: number; rows: number }, account?: string | null): { pty: HelperPty; kept: KeptRecord } | null {
     if (ctx.run || !APP_PTY_ID_RE.test(ctx.sessionId)) return null
     const sid = heldAgentSessionId(ctx.sessionId, ctx.kind)
     const entry = this.keptForTabs.get(sid)
     if (!entry || this.quitting || this.updating || this.live.has(sid)) return null
+    if (account !== undefined && entry.kept.account !== account) {
+      this.deps.log(`[session-helper] ${sid}: the kept session runs on another account than tab ${ctx.sessionId}'s launch, so the tab starts a new CLI`)
+      return null
+    }
     this.keptForTabs.delete(sid)
     clearTimeout(entry.timer)
     this.removeKeptRecord(sid)
@@ -2384,7 +2390,7 @@ export function setSessionHelper(manager: SessionHelperManager | null): void {
 setKeptLaunchCheck((appPtyId) => current?.keepsLaunchOf(appPtyId) === true)
 // And a restored tab's launch asks it for the session it keeps for the tab
 // to take over (S16 step 5), the same way.
-setKeptTakeOver((appPtyId, provider, size) => current?.takeOverKept({ sessionId: appPtyId, kind: provider }, size) ?? null)
+setKeptTakeOver((appPtyId, provider, size, account) => current?.takeOverKept({ sessionId: appPtyId, kind: provider }, size, account) ?? null)
 
 export function getSessionHelper(): SessionHelperManager | null {
   return current

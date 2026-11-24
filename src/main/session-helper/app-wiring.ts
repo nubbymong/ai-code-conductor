@@ -131,10 +131,10 @@ function ensureManager(): SessionHelperManager {
     // 2.1.3-beta.14 B2: Codex's composer rule reads a held session's screen
     // and title from its holder (providers/codex/session-screen.ts).
     screens: { codex: true },
-    // 2.1.3-beta.17 (S16 step 5): a Claude Code session an update kept running
-    // is taken over by its restored tab, when that tab is in the saved file
-    // the start restores from; another provider's is ended at start.
-    takeOver: { claude: true },
+    // 2.1.3-beta.17 (S16 step 5): a Claude Code or Codex session an update
+    // kept running is taken over by its restored tab, when that tab is in the
+    // saved file the start restores from (launch-bindings.ts takeOverKeptLaunch).
+    takeOver: { claude: true, codex: true },
     savedTabs: savedTabIds,
     ...(oldCopiesCleanUp ? { copyAfter: oldCopiesCleanUp } : {}),
   })

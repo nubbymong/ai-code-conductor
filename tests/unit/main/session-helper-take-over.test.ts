@@ -80,6 +80,8 @@ let facts: Record<string, KeptLaunchFacts>
 let removed: KeptLaunch[]
 /** Every stream the stand-in tool host was asked to serve, with what it was told. */
 let served: Array<{ id: string; link: HelperToolLink; opts: { toolsChanged?: boolean } | undefined }>
+/** The same, for the other provider's (Codex's) tool functions. */
+let servedOther: Array<{ id: string; opts: { toolsChanged?: boolean } | undefined }>
 /** Every hook event the stand-in signals module was handed. */
 let events: Array<{ id: string; e: HookEventFrame }>
 /** The saved tabs the stand-in app-wiring answers; null: none given. */
@@ -95,10 +97,10 @@ function claudeTools(): HelperToolDeps {
     ...(listsAgain === undefined ? {} : { listsAgain }),
   }
 }
-const otherTools: HelperToolDeps = { serve: () => true, serving: () => true, relayLaunch: (_id, launch) => ({ args: typeof launch.args === 'string' ? launch.args : [...launch.args] }) }
+const otherTools: HelperToolDeps = { serve: (id, _link, opts) => { servedOther.push({ id, opts }); return true }, serving: () => true, relayLaunch: (_id, launch) => ({ args: typeof launch.args === 'string' ? launch.args : [...launch.args] }) }
 const hooks: HelperHookDeps = { taking: () => true, useHelperHooks: () => 'switched', event: (id, e) => { events.push({ id, e }) }, ended: () => {} }
 
-function makeManager(o: { takeOver?: boolean; waitMs?: number } = {}): SessionHelperManager {
+function makeManager(o: { takeOver?: false | 'claude' | 'both'; waitMs?: number } = {}): SessionHelperManager {
   let self: SessionHelperManager | undefined
   const alive = () => { if (self && gone.has(self)) throw new Error('this app is gone') }
   const m = new SessionHelperManager({
@@ -110,7 +112,7 @@ function makeManager(o: { takeOver?: boolean; waitMs?: number } = {}): SessionHe
     log: (l) => logs.push(l),
     hooks: { claude: hooks },
     tools: { claude: claudeTools(), codex: otherTools },
-    ...(o.takeOver === false ? {} : { takeOver: { claude: true as const } }),
+    ...(o.takeOver === false ? {} : { takeOver: o.takeOver === 'both' ? { claude: true as const, codex: true as const } : { claude: true as const } }),
     ...(savedTabs ? { savedTabs: () => savedTabs! } : {}),
     ...(o.waitMs !== undefined ? { keptTakeOverWaitMs: o.waitMs } : {}),
   })
@@ -156,6 +158,7 @@ beforeEach(() => {
   }
   removed = []
   served = []
+  servedOther = []
   events = []
   savedTabs = null
   listsAgain = true
@@ -200,7 +203,8 @@ async function updated(): Promise<{ hc: FakeHolder; ho: FakeHolder; stream: numb
   const ho = helper.holders.get(otherSid)!
   hc.output('claude says hello\r\n')
   const stream = hc.openToolStream({ away: true })!
-  await until(() => served.length === 1, 'run 1 to serve the tool stream')
+  ho.openToolStream({ away: true })
+  await until(() => served.length === 1 && servedOther.length === 1, 'run 1 to serve both tool streams')
   m1.noteSavedTabs([{ id: CLAUDE_TAB, label: 'Claude' }, { id: OTHER_TAB, label: 'Other' }])
   expect(m1.releaseForUpdate(SAVED)).toBe(2)
   claude.kill()
@@ -211,6 +215,7 @@ async function updated(): Promise<{ hc: FakeHolder; ho: FakeHolder; stream: numb
   hc.output('written while no app was there\r\n')
   hc.hookEvent('Stop', { hook_event_name: 'Stop', session_id: CONV })
   served = []
+  servedOther = []
   return { hc, ho, stream }
 }
 
@@ -412,5 +417,46 @@ describe('the next start after an update: a kept session no tab takes over is en
     expect(hc.ended).toBe(true)
     expect(keptOnDisk()).toEqual([])
     expect(removed.map((k) => k.sessionId).sort()).toEqual([CLAUDE_TAB, OTHER_TAB])
+  })
+})
+
+describe('a Codex session an update kept running (B1.2)', () => {
+  it('its restored tab, on the account the session runs on, takes it over with no launch: the kept tool stream is served with nothing more said (Codex does not list its tools again), and a colour query in the replay is not passed on', async () => {
+    const { ho } = await updated()
+    // The CLI asked its terminal's colour in the gap: the replay must not carry it on.
+    ho.output('\x1b]11;?\x07before the take-over\r\n')
+    const holdsBefore = helper.holds()
+    logs.length = 0
+    await startedWith(makeManager({ takeOver: 'both' }))
+    expect(logs).toContain(`[session-helper] ${otherSid}: the last run's update kept this codex session of tab ${OTHER_TAB} running (conversation ${OTHER_CONV}, account acct-7, hook folder ccc-codex-hook-XyZ789); it is kept for its tab to take over`)
+    expect(keptOnDisk()).toEqual([`${claudeSid}.json`, `${otherSid}.json`].sort())
+    const taken = takeKeptSession(OTHER_TAB, 'codex', SIZE, 'acct-7')
+    expect(taken).not.toBeNull()
+    expect(taken!.kept).toMatchObject({ conversation: OTHER_CONV, account: 'acct-7', hookFolder: HOOK_FOLDER, folder: CWD })
+    const shown: string[] = []
+    taken!.pty.onData((d) => shown.push(d))
+    await until(() => !!ho.attached?.ackedCaps.includes('mcp'), 'the take-over to attach')
+    await until(() => shown.join('').includes('before the take-over'), 'the replay')
+    expect(shown.join('')).not.toContain('\x1b]11;?')
+    await until(() => servedOther.length === 1, 'the kept stream to be served')
+    expect(servedOther[0]).toEqual({ id: OTHER_TAB, opts: undefined })
+    expect(helper.holds()).toBe(holdsBefore)
+    expect(ho.requests.filter((r) => r.t === 'term.launch')).toHaveLength(1)
+    expect(ptySpawn).not.toHaveBeenCalled()
+    expect(keptOnDisk()).toEqual([`${claudeSid}.json`])
+    expect(removed.map((k) => k.sessionId)).toEqual([])
+  })
+
+  it('its tab\'s launch prepared on another account: not taken over, and the launch that follows ends it first', async () => {
+    const { ho } = await updated()
+    const m2 = await startedWith(makeManager({ takeOver: 'both' }))
+    expect(takeKeptSession(OTHER_TAB, 'codex', SIZE, 'acct-other')).toBeNull()
+    expect(logs).toContain(`[session-helper] ${otherSid}: the kept session runs on another account than tab ${OTHER_TAB}'s launch, so the tab starts a new CLI`)
+    expect(keptOnDisk()).toContain(`${otherSid}.json`)
+    void m2
+    spawnAgentPty(otherTab(OTHER_TAB), SHELL, [], agentOpts())
+    expect(logs).toContain(`[session-helper] ${otherSid}: the session kept for tab ${OTHER_TAB} to take over is ended, because its tab started a new CLI instead of taking it over`)
+    await until(() => ho.ended, 'the kept session to be ended')
+    expect(removed).toEqual([{ sessionId: OTHER_TAB, provider: 'codex', hookFolder: HOOK_FOLDER }])
   })
 })

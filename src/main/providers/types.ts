@@ -323,6 +323,14 @@ export interface SessionProvider {
    *  left-behind folders removes one; any other path is left as it is. Never
    *  throws. */
   removeSessionHookFolder?(dir: string): void
+  /** Optional -- Codex (2.1.3-beta.17, S16 step 5): the hook file of a
+   *  session an app update kept running, written again in that session's own
+   *  per-launch folder (`dir`, the release's record) with this run's port and
+   *  a token minted for the take-over: its CLI's hook reads the file at every
+   *  event. Only a per-launch folder of this install's own hook root, as
+   *  removeSessionHookFolder takes; the answer removes it the same way. Null
+   *  when it cannot be written: nothing is started here. */
+  rewriteSessionHooks?(dir: string, sessionId: string, port: number, secret: string): { hookFile: string; dispose(): void } | null
   /** Optional -- Codex (2.1.3-beta.5): on macOS and Linux a launch that opens
    *  the resume list runs it on the node the user's login shell names. This
    *  asks that shell once, off the event loop, and keeps the answer for the

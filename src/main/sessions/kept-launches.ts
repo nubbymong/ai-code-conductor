@@ -104,7 +104,7 @@ export interface KeptTakeOver {
   kept: KeptSessionFacts
 }
 
-type TakeOver = (sessionId: string, provider: ProviderId, size: { cols: number; rows: number }) => KeptTakeOver | null
+type TakeOver = (sessionId: string, provider: ProviderId, size: { cols: number; rows: number }, account?: string | null) => KeptTakeOver | null
 let takeOver: TakeOver | null = null
 
 /** session-helper/manager.ts, when it loads. */
@@ -114,10 +114,12 @@ export function setKeptTakeOver(t: TakeOver | null): void {
 
 /** The session the helper keeps for this tab and provider, taken over now
  *  (S16 step 5): null when it keeps none (the tab starts its CLI the usual
- *  way), or when asking fails. */
-export function takeKeptSession(sessionId: string, provider: ProviderId, size: { cols: number; rows: number }): KeptTakeOver | null {
+ *  way), or when asking fails. `account`, when given: only a session the
+ *  release recorded on that account (the account lease the tab's launch
+ *  was prepared with). */
+export function takeKeptSession(sessionId: string, provider: ProviderId, size: { cols: number; rows: number }, account?: string | null): KeptTakeOver | null {
   try {
-    return takeOver?.(sessionId, provider, size) ?? null
+    return takeOver?.(sessionId, provider, size, account) ?? null
   } catch {
     return null
   }

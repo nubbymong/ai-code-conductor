@@ -531,11 +531,11 @@ describe("a held Codex session's screen reads (2.1.3-beta.14, plan section B2)",
 })
 
 describe('the take-over of a session an update kept running (2.1.3-beta.17, plan section B1)', () => {
-  it('the manager is told to take over Claude Code\'s kept sessions only, reads the saved tabs from the saved file when asked, and only Claude Code\'s tool streams given back say the tool list changed', () => {
+  it('the manager is told to take over Claude Code\'s and Codex\'s kept sessions, reads the saved tabs from the saved file when asked, and only Claude Code\'s tool streams given back say the tool list changed', () => {
     h.settings = { agentSessionsThroughHelper: true }
     initSessionHelper(() => {})
     const deps = h.made[0].deps as { takeOver?: unknown; savedTabs?: () => ReadonlySet<string>; tools: Record<string, { listsAgain?: boolean; serve: (id: string, link: unknown, opts?: { toolsChanged?: boolean }) => boolean }> }
-    expect(deps.takeOver).toEqual({ claude: true })
+    expect(deps.takeOver).toEqual({ claude: true, codex: true })
     // The saved file is read only when the manager asks.
     expect(h.savedStateReads).toBe(0)
     h.savedState = { sessions: [{ id: 'abcdef0123456789abcdef01' }, { id: 'abcdef0123456789abcdef02' }] }

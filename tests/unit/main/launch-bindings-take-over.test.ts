@@ -8,8 +8,11 @@
 // line's address file only where its launch wrote one), and the session's
 // entry, logging run and transcript binding follow, by the saved conversation
 // from the folder it runs in. Its exit ends it as a launch's does. A Codex
-// launch never asks (its take-over is not built here), and a tab the helper
-// keeps nothing for launches as before.
+// tab (B1.2) asks with the account its launch is prepared on; taken over, its
+// kept hook file is written again with this run's port and a new token, and
+// its lease, conversation and telemetry are bound with no spawn. A tab the
+// helper keeps nothing for, or one prepared on another account, launches as
+// before.
 //
 // The session helper is a stand-in behind the seam (kept-launches.ts
 // setKeptTakeOver); tests/unit/main/session-helper-take-over.test.ts holds the
@@ -35,6 +38,9 @@ const h = vi.hoisted(() => ({
   runStarts: [] as Array<Record<string, unknown>>,
   registered: [] as Array<[string, string]>,
   bound: [] as Array<[string, string]>,
+  rewrites: [] as Array<[string, string, number, string]>,
+  disposed: [] as string[],
+  telemetry: [] as Array<Record<string, unknown>>,
 }))
 
 /** The module's functions, each recorded by name, then run as they are. */
@@ -103,8 +109,11 @@ vi.mock('../../../src/main/providers', () => ({
       if (opts.provider !== 'codex') return { cmd: 'pwsh', args: [], env: {} }
       return { cmd: opts.realmLaunch.executable, args: [], env: { ...opts.realmLaunch.env }, hooksInstalled: !!opts.codexHooks }
     },
-    ...(id === 'codex' ? { prepareSessionHooks: (sid: string) => ({ hookFile: `/tmp/codex-hooks/x/${sid}/hook.json`, dispose: () => {} }) } : {}),
-    ingestSessionTelemetry: () => ({ stop: () => {} }),
+    ...(id === 'codex' ? {
+      prepareSessionHooks: (sid: string) => ({ hookFile: `/tmp/codex-hooks/x/${sid}/hook.json`, dispose: () => {} }),
+      rewriteSessionHooks: (dir: string, sid: string, port: number, secret: string) => { h.rewrites.push([dir, sid, port, secret]); return { hookFile: path.join(dir, 'hook.json'), dispose: () => { h.disposed.push(dir) } } },
+    } : {}),
+    ingestSessionTelemetry: (_sid: string, o: Record<string, unknown>) => { h.telemetry.push(o); return { stop: () => {} } },
   }),
 }))
 vi.mock('../../../src/main/providers/claude/spawn', () => ({ resolveClaudeBinary: () => ({ cmd: 'claude', source: 'system' }), resolveHostColorScheme: () => 'dark' }))
@@ -162,7 +171,7 @@ vi.mock('../../../src/main/legacy-version-manager', () => ({ isVersionInstalled:
 vi.mock('../../../src/main/credential-store', () => ({ loadCredential: () => null }))
 vi.mock('../../../src/main/provider-accounts', () => ({ getAccountsService: () => null }))
 
-const { spawnPty, killPty, writePty } = await import('../../../src/main/pty-manager')
+const { spawnPty, killPty, writePty, holdsCodexLaunchLease, getKeptCodexConversation } = await import('../../../src/main/pty-manager')
 const { setKeptTakeOver } = await import('../../../src/main/sessions/kept-launches')
 
 h.urlDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ccc-takeover-url-'))
@@ -192,12 +201,14 @@ const tick = (ms = 0) => new Promise((r) => setTimeout(r, ms))
 interface KeptPty { pid: number; writes: string[]; data: Array<(d: string) => void>; exit: Array<(e: { exitCode: number }) => void> }
 let kept: KeptPty | null
 /** Each take-over the stand-in helper was asked for. */
-let asked: Array<{ sessionId: string; provider: string; size: { cols: number; rows: number } }>
+let asked: Array<{ sessionId: string; provider: string; size: { cols: number; rows: number }; account?: string | null }>
 
-function keepFor(sessionId: string, folder: string | null = LAUNCH_FOLDER): void {
-  setKeptTakeOver((sid, provider, size) => {
-    asked.push({ sessionId: sid, provider, size })
+function keepFor(sessionId: string, folder: string | null = LAUNCH_FOLDER, rec: { account?: string | null; hookFolder?: string | null } = {}): void {
+  setKeptTakeOver((sid, provider, size, account) => {
+    asked.push({ sessionId: sid, provider, size, account })
     if (sid !== sessionId) return null
+    // As the manager: a launch prepared on another account takes nothing over.
+    if (account !== undefined && account !== (rec.account ?? null)) return null
     const p: KeptPty = { pid: 7777, writes: [], data: [], exit: [] }
     kept = p
     const pty = {
@@ -207,7 +218,7 @@ function keepFor(sessionId: string, folder: string | null = LAUNCH_FOLDER): void
       write: (d: string) => { p.writes.push(d) },
       resize: () => {}, clear: () => {}, pause: () => {}, resume: () => {}, kill: () => {},
     }
-    return { pty: pty as never, kept: { conversation: CONV, account: null, hookFolder: null, folder } }
+    return { pty: pty as never, kept: { conversation: CONV, account: rec.account ?? null, hookFolder: rec.hookFolder ?? null, folder } }
   })
 }
 
@@ -228,6 +239,9 @@ beforeEach(() => {
   h.runStarts.length = 0
   h.registered.length = 0
   h.bound.length = 0
+  h.rewrites.length = 0
+  h.disposed.length = 0
+  h.telemetry.length = 0
   for (const f of fs.readdirSync(h.urlDir)) fs.rmSync(path.join(h.urlDir, f), { force: true })
 })
 
@@ -292,10 +306,38 @@ describe('pty-manager.ts: a restored tab takes over the session an update kept r
     expect(seen()).toEqual([...TEARDOWN, 'spawn', 'bindClaudeLaunch', 'captureClaudeAccount:default', 'writeSettings', 'gatewaySecret', 'injectHooks', 'writeMcpConfig', 'bindLoggingRun'])
   })
 
-  it('a Codex launch never asks (its take-over is not built here): launched as before', () => {
-    keepFor(CODEX_SID)
+  it('a Codex tab the helper keeps a session for (B1.2), on the account its launch is prepared on: no spawn, no new hook folder; its kept hook file written again with this run\'s port and a new token, its lease, its conversation and its telemetry by the saved conversation; its exit removes the kept folder', () => {
+    const hookFolder = path.join(os.tmpdir(), 'codex-hooks', 'ccc-codex-hook-kept1')
+    keepFor(CODEX_SID, LAUNCH_FOLDER, { account: 'acct-b1', hookFolder })
+    const launch = codexLaunch()
+    spawnPty(fakeWin, CODEX_SID, { cwd: os.tmpdir(), provider: 'codex', codexOptions: { permissionsPreset: 'read-only' }, codexLaunch: launch } as never)
+    expect(asked).toEqual([{ sessionId: CODEX_SID, provider: 'codex', size: { cols: 120, rows: 30 }, account: 'acct-b1' }])
+    // No spawn, no hook folder of a launch (mintCodexHooks), no command built (keepCodexHooks).
+    expect(seen()).toEqual([...TEARDOWN, 'recordHeldToolSession', 'gatewaySecret', 'bindLoggingRun'])
+    expect(h.records).toEqual([[CODEX_SID, 'codex']])
+    expect(h.rewrites).toEqual([[hookFolder, CODEX_SID, 51234, '0f8b6a2c-1d3e-4f50-9a61-7b2c3d4e5f60']])
+    expect(holdsCodexLaunchLease(CODEX_SID, launch.lease as never)).toBe(true)
+    expect(getKeptCodexConversation(CODEX_SID)).toEqual({ uuid: CONV, cwd: LAUNCH_FOLDER })
+    expect(h.telemetry).toEqual([expect.objectContaining({ cwd: LAUNCH_FOLDER, sessionsDir: launch.sessionsDir, resumeId: CONV })])
+    // The session's entry is the kept terminal.
+    writePty(CODEX_SID, 'next prompt')
+    expect(kept!.writes).toEqual(['next prompt'])
+    // Its own exit: the rewritten hook file's folder goes with the session's resources.
+    for (const cb of [...kept!.exit]) cb({ exitCode: 0 })
+    expect(h.disposed).toEqual([hookFolder])
+  })
+
+  it('a Codex tab whose kept session has no hook folder: nothing written, no token minted', () => {
+    keepFor(CODEX_SID, LAUNCH_FOLDER, { account: 'acct-b1' })
     spawnPty(fakeWin, CODEX_SID, { cwd: os.tmpdir(), provider: 'codex', codexOptions: { permissionsPreset: 'read-only' }, codexLaunch: codexLaunch() } as never)
-    expect(asked).toEqual([])
+    expect(seen()).toEqual([...TEARDOWN, 'recordHeldToolSession', 'bindLoggingRun'])
+    expect(h.rewrites).toEqual([])
+  })
+
+  it('a Codex tab whose launch is prepared on another account: asked with that account, then launched as before', () => {
+    keepFor(CODEX_SID, LAUNCH_FOLDER, { account: 'acct-other' })
+    spawnPty(fakeWin, CODEX_SID, { cwd: os.tmpdir(), provider: 'codex', codexOptions: { permissionsPreset: 'read-only' }, codexLaunch: codexLaunch() } as never)
+    expect(asked.map((a) => a.account)).toEqual(['acct-b1'])
     expect(seen()).toEqual([...TEARDOWN, 'mintCodexHooks', 'gatewaySecret', 'keepCodexHooks', 'bindCodexLease', 'spawn', 'bindCodexPane', 'bindCodexLaunch', 'bindLoggingRun'])
   })
 })
