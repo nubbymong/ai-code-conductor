@@ -305,7 +305,7 @@ export interface ElectronAPI {
      *  paste, then the sentence, then Enter. `not-taken`: a session main does
      *  not type an image into (Codex, an SSH Persistent session); the caller
      *  sends it its own way. */
-    submitImage: (args: { sessionId: string; path: string; sentence: string }) => Promise<{ outcome: 'sent' } | { outcome: 'not-taken' } | { outcome: 'not-sent'; reason: 'session-gone' | 'refused-text' }>
+    submitImage: (args: { sessionId: string; path: string; sentence: string }) => Promise<{ outcome: 'sent' } | { outcome: 'not-taken'; left?: true } | { outcome: 'not-sent'; reason: 'session-gone' | 'refused-text' }>
     resize: (sessionId: string, cols: number, rows: number) => void
     /** P3.16a round 2 (Q5): `'restart'` when a Restart ends the process (its
      *  next one follows), so its exit is not the session's end. */

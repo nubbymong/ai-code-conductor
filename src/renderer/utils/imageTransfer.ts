@@ -106,7 +106,7 @@ export function sendImageToCodexSession(
     (result) => {
       if (result.outcome === 'not-taken') {
         // `left`: main's ImageSubmitResult (session-input), read as main sends it.
-        if ((result as { left?: boolean }).left === true) onNote(IMAGE_AT_PROMPT)
+        if (result.left === true) onNote(IMAGE_AT_PROMPT)
         else typed()
       } else if (result.outcome === 'not-sent') onNote(result.reason === 'refused-text' ? imagePathRefusedNote(hostFilePath) : NOT_AT_PROMPT)
     },
