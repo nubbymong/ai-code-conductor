@@ -201,6 +201,109 @@ describe('kept on its line by keepLineSelection, as TerminalView wires it (aicc_
     expect(term.getSelection()).toBe('$ shell 3')
   })
 
+  it('a second change of the columns after the Claude Code paint through the aligner: still the same line (C5b\'s two sizes clear it and it selects the same cells again, which xterm reports to no one)', async () => {
+    const term = await programTerminal(12)
+    keepLineSelection(term)
+    term.scrollToTop()
+    await frame()
+    clickCell(term, 3, 2, 3)
+    term.resize(20, 10)
+    const resize = vi.spyOn(term, 'resize')
+    const reported: Array<number[] | null> = []
+    const sub = term.onSelectionChange(() => reported.push(pos(term)))
+    await paintThroughAligner(term)
+    sub.dispose()
+    expect(resize.mock.calls, 'the paint went through bringRowsDown\'s two sizes').toEqual([[20, 5], [20, 10]])
+    expect(reported, 'two clears reported; the same cells selected again, not').toEqual([null, null])
+    expect(countOf(term, 'HEADER A'), 'the paint was placed').toBe(1)
+    expect(term.getSelection()).toBe('$ shell 3')
+    resize.mockRestore()
+    term.resize(15, 10)
+    expect(pos(term)).toEqual([0, 2, 15, 2])
+    expect(term.getSelection()).toBe('$ shell 3')
+  })
+
+  it('cleared since it was noted (a change of the rows, typing, a single click), then the columns alone in the same turn: not selected again', async () => {
+    const clears: Array<[string, (term: Terminal) => void]> = [
+      ['a change of the rows', (term) => term.resize(30, 9)],
+      ['typing', (term) => term.input('x', true)],
+      ['a single click', (term) => clickCell(term, 3, 2, 1)],
+    ]
+    for (const [what, clear] of clears) {
+      const term = await linesTerminal(30, SHELL)
+      keepLineSelection(term)
+      clickCell(term, 3, 2, 3)
+      expect(term.getSelection(), what).toBe('$ shell 3')
+      const select = vi.spyOn(term, 'select')
+      clear(term)
+      expect(term.hasSelection(), what).toBe(false)
+      term.resize(20, term.rows)
+      expect(select, what).not.toHaveBeenCalled()
+      expect(term.hasSelection(), what).toBe(false)
+    }
+  })
+
+  it('a line selected again after a change of the rows cleared it: kept at the next change of the columns (compared with the last size, not the first)', async () => {
+    const term = await linesTerminal(30, SHELL)
+    keepLineSelection(term)
+    clickCell(term, 3, 2, 3)
+    term.resize(30, 9)
+    expect(term.hasSelection()).toBe(false)
+    await frame()
+    clickCell(term, 3, 2, 3)
+    expect(term.getSelection()).toBe('$ shell 3')
+    term.resize(20, 9)
+    expect(term.getSelection()).toBe('$ shell 3')
+  })
+
+  it('the same cells dragged over by hand after typing cleared the line, output having moved other lines under them (xterm reports no change): left as xterm keeps a drag, not moved to the line noted before', async () => {
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    const term = new Terminal({ cols: 30, rows: 10, scrollback: 5 })
+    term.open(host)
+    made.push(term)
+    // 15 lines fill the buffer (5 of scrollback and 10 rows): each line after drops one from the top.
+    await write(term, Array.from({ length: 15 }, (_, i) => `L${i + 1}`).join('\r\n'))
+    await frame()
+    keepLineSelection(term)
+    clickCell(term, 1, 2, 3)
+    expect(term.getSelection()).toBe('L8')
+    term.input('x', true)
+    expect(term.hasSelection()).toBe(false)
+    await write(term, '\r\nL16\r\nL17')
+    const reported: Array<number[] | null> = []
+    const sub = term.onSelectionChange(() => reported.push(pos(term)))
+    dragCells(term, 2, 0, 29)
+    sub.dispose()
+    expect(term.getSelection(), 'two rows dropped from the top: L10 is on those cells now').toBe('L10')
+    expect(reported, 'no change reported: the cells xterm last reported, the line\'s').toEqual([])
+    const select = vi.spyOn(term, 'select')
+    term.resize(20, 10)
+    expect(term.getSelection()).toBe('L10')
+    expect(select).not.toHaveBeenCalled()
+  })
+
+  it('a drag over the first row of a wrapped line, from its first cell to past its last: kept as xterm keeps it, not grown to the whole line', async () => {
+    const term = await linesTerminal(30, ['$ shell 1', 'z'.repeat(30) + 'w'.repeat(15), '$ shell 3'])
+    keepLineSelection(term)
+    const select = vi.spyOn(term, 'select')
+    dragCells(term, 1, 0, 29)
+    expect(term.getSelection()).toBe('z'.repeat(30))
+    term.resize(50, 10)
+    expect(select).not.toHaveBeenCalled()
+    expect(term.getSelection()).toBe('z'.repeat(30))
+  })
+
+  it('a drag over the second row of a wrapped line, from its first cell to past its last: not taken for a line (left as xterm keeps it)', async () => {
+    const term = await linesTerminal(30, ['$ shell 1', 'z'.repeat(30) + 'w'.repeat(15), '$ shell 3'])
+    keepLineSelection(term)
+    const select = vi.spyOn(term, 'select')
+    dragCells(term, 2, 0, 29)
+    expect(term.getSelection()).toBe('w'.repeat(15))
+    term.resize(20, 10)
+    expect(select).not.toHaveBeenCalled()
+  })
+
   it('a longer line above it re-wrapped by the narrowing moves its line down a row: the selection moves with it (xterm: stays on the row)', async () => {
     const term = await linesTerminal(30, ['$ shell 1', 'x'.repeat(25), '$ shell 3', '$ shell 4', '$ shell 5'])
     keepLineSelection(term)

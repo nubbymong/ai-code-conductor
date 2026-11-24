@@ -9,8 +9,9 @@
 // (scrollableElement.ts _onMouseWheel: consumeMouseWheel = didScroll). So that listener
 // heard a wheel only when the view could not move (at the top or at the bottom): a scroll
 // up that stopped short of the top never showed the button until the next output. Not a
-// harness effect: a mouse notch, a touchpad's fractional steps and a line-mode wheel are
-// all stopped the same way. Every way a user moves the view (wheel, scroll bar, keyboard)
+// harness effect: the stop is xterm's for any wheel that moved its scroll position, whatever
+// the size of its step (one row, a mouse notch, a touchpad's fractional steps and a
+// line-mode wheel are measured below). Every way a user moves the view (wheel, scroll bar, keyboard)
 // does fire xterm's onScroll with the view above the bottom, which the fix reads.
 import { describe, it, expect, beforeAll, afterAll, afterEach } from 'vitest'
 import { Terminal } from '@xterm/xterm'
@@ -77,8 +78,12 @@ const wheel = (on: HTMLElement, deltaY: number, deltaMode = 0) =>
 
 describe('xterm 6 and a wheel over its screen (the measurement, aicc_planning#421)', () => {
   // One row's height (the VM line's step), a mouse notch on Windows (100 px)
-  // and a touchpad's small fractional steps, all deltaMode 0 (pixels), as
-  // Chromium gives them; a line-mode wheel (deltaMode 1) too.
+  // and a touchpad's small fractional steps, all deltaMode 0 (pixels); a
+  // line-mode wheel (deltaMode 1) too. jsdom's WheelEvent has no wheelDeltaY,
+  // so xterm reads deltaY here (mouseEvent.ts: -deltaY / 40) where Chromium's
+  // event has one and xterm reads that (wheelDeltaY / 120): the size of the
+  // step differs from the app's, the stop does not (scrollableElement.ts
+  // _onMouseWheel stops any wheel that moved its scroll position).
   const shapes: Array<[string, number[], number]> = [
     ['one row\'s height (17 px), the VM line\'s step', [-17], 0],
     ['a mouse notch (100 px)', [-100], 0],
