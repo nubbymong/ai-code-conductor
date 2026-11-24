@@ -136,6 +136,7 @@ vi.mock('../../../src/main/hooks/per-session-settings', () => ({
   removeLocalSessionStatusUrl: (sid: string) => { h.removedFiles.push(`status-url:${sid}`) },
   getLocalSessionStatusUrlPath: (sid: string) => path.join(h.urlDir, `ccc-status-${sid}.url`),
   writeLocalSessionStatusUrl: (sid: string, url: string) => { h.urlWrites.push([sid, url]); return path.join(h.urlDir, `ccc-status-${sid}.url`) },
+  noteKeptLaunchStatusLine: () => { h.journal.push('noteKeptLaunchStatusLine') },
 }))
 vi.mock('../../../src/main/claude-account-identity', () => ({
   captureClaudeAccount: (sid: string, profile: string | undefined) => { h.journal.push(`captureClaudeAccount:${profile ?? 'default'}`) },
@@ -193,7 +194,7 @@ const codexLaunch = () => ({
   sessionsDir: '/res/codex-realms/b1/sessions',
 })
 const TEARDOWN = ['unbindCodexLease', 'unbindLaunchTelemetry', 'unbindLaunchRegistrations']
-const WATCHED = new Set(['mintCodexHooks', 'keepCodexHooks', 'bindCodexLease', 'bindCodexPane', 'bindCodexLaunch', 'bindClaudeLaunch', 'bindLoggingRun', 'unbindLaunchFiles', ...TEARDOWN, 'spawn', 'recordHeldToolSession', 'gatewaySecret', 'injectHooks', 'writeSettings', 'writeMcpConfig'])
+const WATCHED = new Set(['mintCodexHooks', 'keepCodexHooks', 'bindCodexLease', 'bindCodexPane', 'bindCodexLaunch', 'bindClaudeLaunch', 'bindLoggingRun', 'unbindLaunchFiles', ...TEARDOWN, 'spawn', 'recordHeldToolSession', 'gatewaySecret', 'injectHooks', 'writeSettings', 'writeMcpConfig', 'noteKeptLaunchStatusLine'])
 const seen = (): string[] => h.journal.filter((n) => WATCHED.has(n) || n.startsWith('captureClaudeAccount'))
 const tick = (ms = 0) => new Promise((r) => setTimeout(r, ms))
 
@@ -252,7 +253,7 @@ describe('pty-manager.ts: a restored tab takes over the session an update kept r
     spawnPty(fakeWin, CLAUDE_SID, { cwd: os.tmpdir() } as never)
     expect(asked).toEqual([{ sessionId: CLAUDE_SID, provider: 'claude', size: { cols: 120, rows: 30 } }])
     // bindClaudeLaunch runs inside the module (its account capture shows it).
-    expect(seen()).toEqual([...TEARDOWN, 'recordHeldToolSession', 'captureClaudeAccount:default', 'bindLoggingRun'])
+    expect(seen()).toEqual([...TEARDOWN, 'recordHeldToolSession', 'noteKeptLaunchStatusLine', 'captureClaudeAccount:default', 'bindLoggingRun'])
     expect(h.records).toEqual([[CLAUDE_SID, 'claude']])
     // No launch line, past the 300 ms a launch types it at.
     await tick(400)

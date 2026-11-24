@@ -55,7 +55,7 @@ import type { ProviderId } from '../../shared/providers'
 import type { AccountLease } from '../providers/core'
 import type { ProviderSpawnCommand, SessionProvider, SessionRunScreen, TelemetrySource } from '../providers/types'
 import { getGateway } from '../hooks'
-import { removeLocalSessionSettings, removeLocalSessionMcpConfig, removeLocalSessionStatusUrl, getLocalSessionStatusUrlPath, writeLocalSessionStatusUrl } from '../hooks/per-session-settings'
+import { removeLocalSessionSettings, removeLocalSessionMcpConfig, removeLocalSessionStatusUrl, getLocalSessionStatusUrlPath, writeLocalSessionStatusUrl, noteKeptLaunchStatusLine } from '../hooks/per-session-settings'
 import { logInfo, logError, logWarn } from '../debug-logger'
 import { readConfig } from '../config-manager'
 import { isHomeOrAncestor } from '../path-utils'
@@ -732,6 +732,9 @@ export function takeOverKeptLaunch(b: KeptTakeOverBinding): KeptSessionTakenOver
 function claudeTakeOver(b: KeptTakeOverBinding, proc: pty.IPty, kept: KeptSessionFacts, launchCwd: string): void {
   const { ptySessions } = ports()
   const { sessionId, resolvedCwd, win } = b
+  // Whether its launch got the app's status line, for the Usage page (read
+  // back from the settings file that launch wrote, which the update kept).
+  noteKeptLaunchStatusLine(sessionId)
   if (fs.existsSync(getLocalSessionStatusUrlPath(sessionId))) {
     let url = ''
     try { url = tryGetProvider(b.launch.id)?.statusPostUrl?.(sessionId, undefined, getConductorMcpPort(), true) ?? '' } catch { url = '' }
