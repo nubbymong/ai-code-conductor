@@ -1,8 +1,8 @@
 {
   "schema": "wp1-legacy-codex-ledger/2",
   "predicateDigest": "100a1233edebdc39a5f9004d3fba980a89ebb15b25872e52076386bc84b03153",
-  "manifestPathDigest": "8de5c5d0c6f4e31ab0f9a037699acccc9190f6d060b01765d11615ed5402f597",
-  "manifestHead": "ab3a2dcf4d4cb79f53349f8ee5ca753ecf0eff94",
+  "manifestPathDigest": "48ae371eb0f77efcbe1443dd92509ffb4bc4133be5cd591ad4a8ae2ead6ad536",
+  "manifestHead": "cfe6ee002091200720e660b8809afdc4e6ef5b50",
   "dispositions": {
     "retain": "unchanged observable behaviour, characterization proof",
     "move": "moved behind a package boundary and/or adapted at the call site, regression proof (newPath when relocated)",
@@ -3000,6 +3000,17 @@
       "disposition": "added",
       "evidence": "new WP2 Codex adapter module: code-defined install and update recipes; covered by tests/wp1/install-recipes.test.ts (WP1.18, WP1.32)",
       "note": "created by WP2"
+    },
+    {
+      "path": "src/main/providers/codex/kept-hooks.ts",
+      "predicates": [
+        "P01",
+        "P14"
+      ],
+      "category": "LAUNCH",
+      "disposition": "added",
+      "evidence": "new 2.1.3-beta.17 section B1.2 module (src/main/providers/codex/kept-hooks.ts, S16 step 5, aicc_planning#412): the hook.json of a Codex session an app update kept running, written again in its own per-launch folder of this install's prepared hook root with this run's port and a token minted for the take-over; any other folder refused (WP1.68); tests/unit/providers/codex/kept-hooks.test.ts",
+      "note": "created by 2.1.3-beta.17 section B1.2"
     },
     {
       "path": "src/main/providers/codex/mcp-config.ts",
@@ -8108,6 +8119,19 @@
       "note": "created by 2.1.3-beta.14 section B2; the fake holder in memory, nothing started"
     },
     {
+      "path": "tests/unit/main/launch-bindings-kept-pick.test.ts",
+      "predicates": [
+        "P04",
+        "P07",
+        "P10",
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "new 2.1.3-beta.17 section B1b test (tests/unit/main/launch-bindings-kept-pick.test.ts, aicc_planning#419): a Codex session an app update keeps running while its resume list is open keeps its pick folder through the kill; the release records the pick file, the folder's identity as made and the decision read last; the next start's take-over binds them, so the list's next pick is read; the folder goes once the session is kept no longer; every other stop removes it as before (WP1.68)",
+      "note": "created by 2.1.3-beta.17 section B1b; the real launch bindings, Codex provider and watcher on real temp folders, no link planted (host-safe)"
+    },
+    {
       "path": "tests/unit/main/launch-bindings-kept.test.ts",
       "predicates": [
         "P13"
@@ -8129,6 +8153,19 @@
       "disposition": "added",
       "evidence": "new 2.1.3-beta.13 section B1 test (tests/unit/main/launch-bindings-launch.test.ts): through the real spawnPty, pty-manager.ts calls each launch binding once per launch at its place (a Codex launch's hooks before its command, its lease before the spawn, its pane and conversation after it; a Claude Code launch's account capture after its spawn) and a session's own exit removes its files once before the teardown's three parts, in order (WP1.68)",
       "note": "created by 2.1.3-beta.13 section B1; a stand-in Codex launch with a made-up realm path, nothing started"
+    },
+    {
+      "path": "tests/unit/main/launch-bindings-take-over.test.ts",
+      "predicates": [
+        "P04",
+        "P05",
+        "P07",
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "new 2.1.3-beta.17 section B1 test (tests/unit/main/launch-bindings-take-over.test.ts, S16 step 5, aicc_planning#412): through the real spawnPty a restored Claude Code or Codex tab takes over the session an update kept running in place of its launch (no spawn, no files, no launch line; the bindings made again; a Codex hook file rewritten with a new token; another account launches as before) (WP1.68)",
+      "note": "created by 2.1.3-beta.17 section B1; launch-bindings-launch.test.ts's harness with a made-up realm path; nothing started"
     },
     {
       "path": "tests/unit/main/launch-bindings.test.ts",
@@ -8729,6 +8766,16 @@
       "disposition": "added",
       "evidence": "2.1.3-beta.7 case in a 2.1.3-beta.6 test (tests/unit/main/session-helper-pty-site.test.ts): the two local agent spawns in pty-manager.ts, the Codex one included, go through spawnAgentPty with the arguments they had, and the SSH start stays node-pty's own (WP1.68)",
       "note": "created by 2.1.3-beta.6 (plan section B); reads source files only"
+    },
+    {
+      "path": "tests/unit/main/session-helper-take-over.test.ts",
+      "predicates": [
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "new 2.1.3-beta.17 section B1 test (tests/unit/main/session-helper-take-over.test.ts, S16 steps 5 and 6, aicc_planning#412): the next start keeps a session an update kept running for its restored tab, which takes it over with no launch (queued hook events, the kept tool stream, list_changed for Claude Code only); every other case ends it as before (WP1.68)",
+      "note": "created by 2.1.3-beta.17 section B1; the P13 hits are the Codex tab and its hook folder; a fake helper in memory and a mocked node-pty, no process starts"
     },
     {
       "path": "tests/unit/main/session-helper-update-keep.test.ts",
@@ -9448,6 +9495,17 @@
       "disposition": "added",
       "evidence": "new WP2 PR 4 P4.7 (row 68) test: the report run's argv is the analysis form less --ephemeral, with no path in it, and its run reads the stream as the reviewer does (WP1.33); tests/unit/providers/codex/insights-exec.test.ts",
       "note": ""
+    },
+    {
+      "path": "tests/unit/providers/codex/kept-hooks.test.ts",
+      "predicates": [
+        "P01",
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "new 2.1.3-beta.17 section B1.2 test (tests/unit/providers/codex/kept-hooks.test.ts, S16 step 5, aicc_planning#412): a kept Codex session's hook file rewritten in place with the new port and token, and refused for any folder that is not a per-launch folder of the prepared hook root (WP1.68)",
+      "note": "created by 2.1.3-beta.17 section B1.2; real temp folders only, no link planted (host-safe)"
     },
     {
       "path": "tests/unit/providers/codex/mcp-config.test.ts",
