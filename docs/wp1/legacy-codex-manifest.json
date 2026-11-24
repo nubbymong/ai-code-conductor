@@ -1,9 +1,9 @@
 {
   "schema": "wp1-legacy-codex-manifest/3",
-  "generatedAt": "2026-11-24T07:26:38.896Z",
-  "head": "4ef7c6d425eb169aa2b36909c7f24ffb333cd2f4",
-  "tree": "b09cbdc1a49e0ab836bd2dc9a8e17fb9dda19a3c",
-  "scannedWorkingTree": false,
+  "generatedAt": "2026-11-24T10:20:33.930Z",
+  "head": "1242b70d5a64b2740329049b1029e24d7b4f5da4",
+  "tree": "b6017bd9fa502837b82fdeb844dea8f50f2436db",
+  "scannedWorkingTree": true,
   "predicateDigest": "100a1233edebdc39a5f9004d3fba980a89ebb15b25872e52076386bc84b03153",
   "predicates": [
     {
@@ -116,9 +116,9 @@
     "\\.(png|jpg|jpeg|gif|ico|icns|webp|svg|woff2?|ttf|otf|mp4|zip|asar|node|exe|dll|dylib|so|pdf)$",
     "^package-lock\\.json$"
   ],
-  "trackedFileCount": 3805,
-  "excludedFileCount": 599,
-  "scannedFileCount": 3206,
+  "trackedFileCount": 3836,
+  "excludedFileCount": 602,
+  "scannedFileCount": 3234,
   "unscopedFileCount": 15,
   "unscoped": [
     ".claude/settings.json",
@@ -139,8 +139,8 @@
   ],
   "unscopedMentions": [],
   "unreadable": [],
-  "matchedPathCount": 1079,
-  "pathDigest": "be3ece2e83a47863138d56bff2b16667cdb631b98481096ed0e6a3ded981f879",
+  "matchedPathCount": 1081,
+  "pathDigest": "67ccce5e332c00073837356547edfcfbfc9465dd996b824ad5c7b62327329584",
   "entries": [
     {
       "path": ".github/workflows/ci.yml",
@@ -1533,7 +1533,7 @@
       "predicates": [
         "P14"
       ],
-      "lineCount": 50
+      "lineCount": 51
     },
     {
       "path": "src/main/insights-codex.ts",
@@ -1975,7 +1975,7 @@
         "P09",
         "P14"
       ],
-      "lineCount": 312
+      "lineCount": 315
     },
     {
       "path": "src/main/providers/codex/insights-exec.ts",
@@ -2105,7 +2105,7 @@
         "P07",
         "P14"
       ],
-      "lineCount": 221
+      "lineCount": 233
     },
     {
       "path": "src/main/providers/codex/telemetry.ts",
@@ -2115,7 +2115,7 @@
         "P07",
         "P14"
       ],
-      "lineCount": 58
+      "lineCount": 59
     },
     {
       "path": "src/main/providers/codex/ui-detection.ts",
@@ -2179,7 +2179,7 @@
         "P07",
         "P14"
       ],
-      "lineCount": 41
+      "lineCount": 42
     },
     {
       "path": "src/main/pty-input-guard.ts",
@@ -6573,6 +6573,23 @@
         "P13"
       ],
       "lineCount": 2
+    },
+    {
+      "path": "tests/unit/providers/codex/pick-folder-sweep-links.test.ts",
+      "predicates": [
+        "P01",
+        "P13"
+      ],
+      "lineCount": 6
+    },
+    {
+      "path": "tests/unit/providers/codex/pick-folder-sweep.test.ts",
+      "predicates": [
+        "P01",
+        "P07",
+        "P13"
+      ],
+      "lineCount": 50
     },
     {
       "path": "tests/unit/providers/codex/pricing-live.test.ts",
