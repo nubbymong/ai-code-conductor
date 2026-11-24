@@ -3907,7 +3907,7 @@
       ],
       "category": "UI-ONLY",
       "disposition": "retain",
-      "evidence": "existing file retained; baseline suite green at 6bafcc33 (docs/wp1/baseline-2026-09-19.md); 2.1.3-beta.17 section C6 (aicc_planning#415), comment only: the sessionType comment says main pastes a saved image into Claude Code or Codex on this computer as the CLI's own paste, and a Codex tab main cannot paste into gets the line by the Codex typing rule; no Codex code path in the file (WP1.33)",
+      "evidence": "existing file retained; baseline suite green at 6bafcc33 (docs/wp1/baseline-2026-09-19.md); 2.1.3-beta.17 section C6 (aicc_planning#415), comment only: the sessionType comment says main pastes a saved image into Claude Code or Codex on this computer as the CLI's own paste, and a Codex session main cannot paste into gets the line by the Codex typing rule; no Codex code path in the file (WP1.33)",
       "note": "matched since the 2.1.3-beta.17 release commit (was not matched); P11: one comment"
     },
     {

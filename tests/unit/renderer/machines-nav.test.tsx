@@ -225,11 +225,13 @@ describe('the surface sweep for the Machines page', () => {
     expect(`${tip.variants.primary.title} ${body}`).not.toMatch(/—/)
   })
 
-  it('the Feature Guide reference says what the page is, that it holds only This computer, and that the helper is off by default', () => {
+  it('the Feature Guide reference says what the page is, that it holds This computer and, with the remote preview on, the Linux machines added, and that the helper is off by default', () => {
     const section = APP_KNOWLEDGE_SECTIONS.find((s) => s.id === 'machines')!
     expect(section).toBeTruthy()
     expect(section.title).toBe('The Machines page')
-    expect(section.body).toContain('one machine, This computer')
+    // 2.1.3-beta.17 A2 (aicc_planning#411): Linux machines join This computer, on Windows, behind the remote switch.
+    expect(section.body).toContain('In this release it holds This computer and, on Windows with Remote sessions through the session helper on (a preview, below), the Linux machines you added.')
+    expect(section.body).not.toContain('one machine, This computer')
     expect(section.body).toContain('off by default')
     // Where the settings are is said once, for both; then each setting by name.
     expect(section.body).toContain('Two settings in Settings, General, under Terminal')
