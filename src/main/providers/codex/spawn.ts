@@ -584,9 +584,9 @@ export const CMD_EXE_LINE_MAX = 8_191
  *  0.156.0 Codex then also shows "Running without the shared background
  *  server: command-line configuration overrides (-c, --enable, --disable, or
  *  --search) requires embedded mode." as a startup warning, whose count on the
- *  hint row is a row the app's screen reader refuses, so the app typed
- *  nothing into the tab. Codex shows that warning only while this feature is
- *  on (codex-rs/tui/src/startup_orchestration.rs, the
+ *  hint row was a row the app's screen reader refused until 2.1.3-beta.17 C7,
+ *  so the app typed nothing into the tab. Codex shows that warning only while
+ *  this feature is on (codex-rs/tui/src/startup_orchestration.rs, the
  *  `daemon_exclusion.filter(|_| auto_start_daemon)` step, rust-v0.156.0 to
  *  rust-v0.171.0): with it off the launch runs embedded, as before, and
  *  without the warning. Read at every supported tag: 0.156.0 to 0.171.0 know

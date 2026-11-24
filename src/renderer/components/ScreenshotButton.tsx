@@ -7,9 +7,10 @@ import { sendImageToSession } from '../utils/imageTransfer'
 interface Props {
   sessionId: string
   // How the picture reaches the session (imageTransfer.ts sendImageToSession):
-  // on this computer main pastes its path into Claude Code (the other
-  // assistant's tab gets the sentence and the path typed); over SSH the session is asked to fetch
-  // it with the Conductor MCP server's fetch_host_screenshot tool.
+  // on this computer main pastes its path into Claude Code or Codex as the
+  // CLI's own paste (a Codex tab main cannot paste into gets the line by the
+  // Codex typing rule); over SSH the session is asked to fetch it with the
+  // Conductor MCP server's fetch_host_screenshot tool.
   sessionType: 'local' | 'ssh'
 }
 

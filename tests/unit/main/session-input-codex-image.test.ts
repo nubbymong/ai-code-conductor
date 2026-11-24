@@ -109,6 +109,7 @@ describe('submitImage: a Codex session', () => {
     expect(lines).toHaveLength(1)
     expect(lines[0]).toContain(reason)
     if (left) expect(lines[0]).toContain('may still be at the prompt')
+    expect(lines[0].includes('its own way')).toBe(!left)
   })
 
   it.each([['session-gone'], ['refused-text']] as const)('the rule answers %s: not sent', async (reason) => {

@@ -166,7 +166,7 @@ export default function RemoteMachinesSection({ active = true }: { active?: bool
             disabled={busy || addable.length === 0}
             onChange={(e) => setPicked(e.target.value)}
           >
-            {state.candidates.length === 0 && <option value="">No saved SSH config</option>}
+            {state.candidates.length === 0 && <option value="">No SSH config to add</option>}
             {state.candidates.map((c) => (
               <option key={c.configId} value={c.configId} disabled={!c.addable} title={c.why}>
                 {c.label} ({c.target}){c.addable ? '' : ` - ${c.why}`}

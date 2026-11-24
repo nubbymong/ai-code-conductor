@@ -68,15 +68,37 @@ rollback returns to the earlier beta's rows, and every row has a negative test.
 
 ### 3.1 A tampered or replaced helper binary
 
-- The helper ships inside the signed app with a compiled-in manifest of every
-  released helper's hash; the host never downloads it. The launcher execs only
+- The helper ships inside the signed app with a manifest of every released
+  helper's hash (as built from 2.1.3-beta.17, a file beside the Linux helper,
+  next point, not compiled in); the host never downloads it. The launcher execs only
   on a hash match, which the app checks again. This catches corruption, wrong
   files and changes by other users past the folder modes; not root or the same
   user (section 2). `emit`, `mcp` and `askpass` are not hash-checked. macOS
   helpers are signed (Windows at R13); Linux relies on the manifest.
+- **The manifest for a remote machine (from 2.1.3-beta.17).** It is a file the
+  Windows installer carries beside the Linux helper
+  (`resources/helper/manifest.json`: the Linux helper's path, version and
+  SHA-256), written by the release job before packaging and checked against
+  the packaged file by `npm run verify:helper`; it lists only the helper that
+  installer carries, never the Windows helper (signing changes its bytes).
+- **Remote step 1 (2.1.3-beta.17, Linux hosts, key sign-in).** The Linux
+  helper goes to a host only after the user's yes, by standard input to a
+  staging folder. The app compares its SHA-256 with the installer's
+  manifest, which the app re-hashes before upload, and commits it only on a
+  match. The launcher hashes it again before every start and runs it only on
+  the expected hash. Every script except probe and install checks $HOME
+  (absolute, owned, not open to others) and the owner marker before it acts.
+  No Claude token, MCP config, hooks file or status shim goes to the host.
+  No value a host reported is put on a command line. Remove also takes away
+  the holders' run folder, /tmp/aicc-<uid>, when it is the user's and empty
+  (rmdir only). A machine's first connection takes an unknown host key
+  (trust on first use, as a plain SSH tab does); later execs take only that
+  key, from the user's own known_hosts (the app's own pin store, section 3.8,
+  is not built yet). An adversarial pass of step 1 is owed to the security
+  round before 2.1 stable (aicc_planning #320).
 - **This computer (2.1.3-beta.6, plain and partner terminals).** There is no
-  host and no manifest here: the compiled-in hash manifest in the point above
-  is for remote machines, and on This computer the trust anchor is the signed install
+  host and no manifest here: the hash manifest in the first point of this
+  section is for remote machines, and on This computer the trust anchor is the signed install
   plus the hash check below: the helper installed with the signed app
   (`resources/helper/`, signed with the app on Windows and macOS; the release
   workflow checks the helper's own signature, signer and timestamp on Windows,
@@ -387,7 +409,10 @@ rollback returns to the earlier beta's rows, and every row has a negative test.
   local-socket module), a symbol check and a CI system-call trace of every
   role; two canaries (a plain internet socket, and a raw-syscall one from a
   pre-`main` initialiser, also through io_uring) must turn them red on every
-  run. Programs the helper starts are not covered.
+  run. Programs the helper starts are not covered. The `bridge` mode
+  (2.1.3-beta.17) opens no network socket: it connects to the holder's local
+  Unix socket with the same checks as any client and copies bytes between it
+  and its own standard input and output.
 - Reproducible builds: Linux built twice and compared; macOS compared before
   signing, with the post-signing hash in the manifest. Decoders are fuzzed on
   both sides. Rust gets a separate reviewer with a Rust brief.
@@ -744,6 +769,12 @@ rollback returns to the earlier beta's rows, and every row has a negative test.
   seconds. Tested in `tests/unit/main/snap-overlay.test.ts`. An adversarial
   pass of it is owed to the security round before 2.1 stable
   (aicc_planning #320).
+- **Hooks gateway token of a Codex session served while its tab is not shown
+  (B1e, from 2.1.3-beta.17, Windows).** Kept through the kill before its
+  take-over and replaced by the take-over's token in the same synchronous
+  spawn; dropped at every other end, before any launch of the tab mints its
+  own. An adversarial pass of it is owed to the security round before 2.1
+  stable (aicc_planning #320).
 
 ## 4 Review
 

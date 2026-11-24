@@ -301,10 +301,12 @@ export interface ElectronAPI {
      *  Shell line buttons keep `write`. */
     submitPrompt: (args: { sessionId: string; text: string }) => Promise<PromptButtonResult>
     /** 2.1.3-beta.16 X1.2: a saved image into a Claude Code session on this
-     *  computer, as the CLI's own paste: main types the path as a bracketed
-     *  paste, then the sentence, then Enter. `not-taken`: a session main does
-     *  not type an image into (Codex, an SSH Persistent session); the caller
-     *  sends it its own way. */
+     *  computer, or since 2.1.3-beta.17 C6 a Codex one, as the CLI's own
+     *  paste: main types the path as a bracketed paste, then the sentence,
+     *  then Enter. `not-taken`: an image main did not paste (an SSH Persistent
+     *  session, or a Codex session it could not paste into); the caller sends
+     *  it its own way, or, with `left` (main's paste may still be at the Codex
+     *  prompt), types nothing more and says so. */
     submitImage: (args: { sessionId: string; path: string; sentence: string }) => Promise<{ outcome: 'sent' } | { outcome: 'not-taken'; left?: true } | { outcome: 'not-sent'; reason: 'session-gone' | 'refused-text' }>
     resize: (sessionId: string, cols: number, rows: number) => void
     /** P3.16a round 2 (Q5): `'restart'` when a Restart ends the process (its

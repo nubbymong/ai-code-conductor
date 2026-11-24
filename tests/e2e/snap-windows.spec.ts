@@ -81,21 +81,22 @@
  *      menu that has not closed when the picture is taken), the page not
  *      slowed: the menu is seen in all 6 pictures (Rectangle and Whole
  *      screen, 3 runs each), so the check can fail. Then the page's CPU slowed
- *      by CDP
- *      (Emulation.setCPUThrottlingRate) at 4x and at 20x, from just before the
- *      Rectangle click until the overlay is up: 3 runs each of Rectangle and
- *      Whole screen at each rate, and the menu is seen in none of the 12. The
- *      slowing itself is read (a fixed loop's time on the page at rate 1 and at
- *      the rate) and is at least half the rate, or the run did not make its
- *      condition. Every box's two pictures differ on at least MENU_MIN_PIXELS
- *      pixels, or the box was not read. One test, so a red press still leaves
- *      every reading; it runs last, so a red one skips nothing.
+ *      by CDP (Emulation.setCPUThrottlingRate) at 4x and at 20x, from just
+ *      before the Rectangle click until the overlay is up: 3 runs each of
+ *      Rectangle and Whole screen at each rate, and the menu is seen in none of
+ *      the 12. The slowing itself is read (a fixed loop's time on the page at
+ *      rate 1 and at the rate) and is at least half the rate, or the run did
+ *      not make its condition. Every box's two pictures differ on at least
+ *      MENU_MIN_PIXELS pixels, or the box was not read. One test, so a red
+ *      press still leaves every reading; it runs last, so a red one skips
+ *      nothing.
  *      Before the fix (run 45349991502 on 60e1b1ae, one 1024x768 display at
  *      100%): the slowing read 4.4x and 25x; the control (then a copy left
  *      300 ms after the click) seen 6 of 6; the menu in 0 of 6 pictures at 4x
  *      and in 6 of 6 at 20x (3 Rectangle, 3 Whole screen), as the press asked
- *      for the capture in the same task that closed the menu. The fix (ScreenshotButton.tsx afterTwoFrames)
- *      asks only after the page has drawn the close.
+ *      for the capture in the same task that closed the menu. The fix
+ *      (ScreenshotButton.tsx afterTwoFrames) asks only after the page has
+ *      drawn the close.
  * READINGS (recorded): R1, what main has loaded once the app has started and
  *   its tab runs (before any press): the native add-ons (.node files, from
  *   main's module cache and from the process report) and the files of the

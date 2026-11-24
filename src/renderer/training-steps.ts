@@ -598,7 +598,7 @@ export const trainingSteps: TrainingStep[] = [
     sinceVersion: '1.4.0',
     section: 'productivity',
     summary:
-      'Capture a region of any screen and hand it straight to the agent. A local session gets the picture as a pasted image ([Image #1]) or, for an assistant the app does not paste for yet, as its file path typed into the prompt; SSH sessions fetch the image over the Conductor MCP tunnel.',
+      'Capture a region of any screen and hand it straight to the agent. A local session gets the picture as the assistant\x27s own pasted image ([Image #1]) or, when the assistant cannot take it, as its file path typed into the prompt; SSH sessions fetch the image over the Conductor MCP tunnel.',
     highlights: [
       'On Windows, Snap\'s Rectangle shows the app\'s own overlay: drag an area and press Enter, or pick Whole screen (no drawing tools). **Settings → Custom Commands → Snap**, Snap on Windows: **Previous** brings back the earlier Snap, with its magnifier, mosaic, brush and redo / undo, which macOS and Linux use; it also opens by itself for any press the new one cannot take',
       'Window capture mode -- pick from a thumbnail list of any open window',
@@ -616,7 +616,7 @@ export const trainingSteps: TrainingStep[] = [
       'Snap a UI bug, then ask the agent to look at the screenshot you just snapped -- it ingests the image directly and you skip the upload-and-describe roundtrip.',
     bullets: [
       '**Region or window** capture, both routed straight to the agent',
-      'Local sessions get a **pasted image** or, for an assistant the app does not paste for yet, the **file path** in the prompt; SSH uses **vision MCP fetch**',
+      'Local sessions get a **pasted image** or, when the assistant cannot take it, the **file path** in the prompt; SSH uses **vision MCP fetch**',
       'Encoded at **1920px / JPEG 85** to stay under image budget',
       '**Esc** cancels mid-drag if you change your mind',
     ],
@@ -678,6 +678,7 @@ export const trainingSteps: TrainingStep[] = [
       'A Claude Code or Codex session has **End** only. After a crash it is ended, reading **Being ended** until it is gone, and its tab resumes the conversation. On Windows, **Save sessions** at an update keeps it running: resume your sessions within five minutes of the new version opening and its tab shows the same session again',
       'With **Claude Code and Codex sessions through the session helper** on, an Insights report for a Claude Code account runs inside the helper too, and is listed as **Insights report** while it runs, with **End** only',
       'SSH tabs and their partner terminals, a terminal run as administrator, and the tabs the app opens for a sign-in or to install or update a program start as before',
+      'On Windows, the Machines page also lists the Linux machines you added for remote sessions through the session helper (preview), with Add, Check and Remove',
       'The page reads when you open it, when you come back to its tab and on **Refresh**',
     ],
     howToTrigger: [
@@ -794,7 +795,7 @@ export const trainingSteps: TrainingStep[] = [
       'Every preference you can set lives here, organised in a left rail. Sandboxed renderer + signed updates + zod-validated IPC keep the app safe; the visible knobs let you tune everything else.',
     highlights: [
       'General -- default working dir, machine name, update channel, security toggles, and the Tokenomics switch (the usage index can be switched off)',
-      'General, under Terminal -- two previews, both off by default. **Plain terminals through the session helper** keeps local Terminal only tabs and local partner terminals running on Windows if the app crashes, or through an update when you choose **Save sessions**. **Claude Code and Codex sessions through the session helper** runs local Claude Code and Codex sessions inside the helper. The **Machines** page shows the helper and what it holds',
+      'General, under Terminal -- previews, each off by default. **Plain terminals through the session helper** keeps local Terminal only tabs and local partner terminals running on Windows if the app crashes, or through an update when you choose **Save sessions**. **Claude Code and Codex sessions through the session helper** runs local Claude Code and Codex sessions inside the helper. The **Machines** page shows the helper and what it holds. On Windows a third preview, **Remote sessions through the session helper**, runs a Claude Code SSH tab to a Linux machine you added on the Machines page through the helper there',
       'Accounts -- the Providers card (Claude Code and Codex on or off) and every Claude and Codex account',
       'Status Line -- toggle each element of the in-terminal status bar + font + size',
       'Shortcuts -- rebind every keyboard shortcut',
@@ -875,8 +876,8 @@ export const trainingSteps: TrainingStep[] = [
     highlights: [
       'Ctrl+Tab / Ctrl+Shift+Tab -- cycle between sessions',
       'Ctrl+1–9 -- jump directly to session N',
-      'Shift+click a Global prompt button -- send that one press to every open Claude Code and Codex session; the app asks first',
-      'Alt+V -- paste a clipboard image: in a local session, the assistant pastes it itself; with focus elsewhere, the app saves it and a Claude Code session on this computer gets it as its own pasted image (a Codex session gets its path typed; over SSH, it asks Claude to fetch it); a plain terminal, or a local session\'s partner shell in a partner view, gets only the quoted path (an SSH session\'s partner gets nothing; the hint says where the image was saved), with no Enter (on macOS and Linux, only an sh, bash, zsh, dash or ksh shell)',
+      'Shift+click a Global prompt button -- send that one press to every open Claude Code and Codex session, or the ones you pick; the app asks first',
+      'Alt+V -- paste a clipboard image: in a local session, the assistant pastes it itself; with focus elsewhere, the app saves it and a Claude Code session on this computer gets it as its own pasted image (a Codex session on this computer gets it as Codex\x27s own pasted image too; over SSH, it asks Claude to fetch it); a plain terminal, or a local session\'s partner shell in a partner view, gets only the quoted path (an SSH session\'s partner gets nothing; the hint says where the image was saved), with no Enter (on macOS and Linux, only an sh, bash, zsh, dash or ksh shell)',
       'Esc -- close browser pane / dismiss tour / cancel context menu',
       'Status bar -- live tokens, cost, rate limits',
     ],
@@ -884,8 +885,8 @@ export const trainingSteps: TrainingStep[] = [
       highlights: [
         'Ctrl+Tab / Ctrl+Shift+Tab -- cycle between sessions',
         'Ctrl+1-9 -- jump directly to session N',
-        'Shift+click a Global prompt button -- send that one press to every open session; the app asks first',
-        'Alt+V -- paste a clipboard image: in a local session, the assistant pastes it itself; with focus elsewhere, the app saves it and types its path; a plain terminal, or a local session\'s partner shell in a partner view, gets only the quoted path (an SSH session\'s partner gets nothing; the hint says where the image was saved), with no Enter (on macOS and Linux, only an sh, bash, zsh, dash or ksh shell)',
+        'Shift+click a Global prompt button -- send it to every open session, or the ones you pick; the app asks first',
+        'Alt+V -- paste a clipboard image: in a local session, the assistant pastes it itself; with focus elsewhere, the app saves it and a Codex session on this computer gets it as Codex\x27s own pasted image (one that cannot take it gets its path typed); a plain terminal, or a local session\'s partner shell in a partner view, gets only the quoted path (an SSH session\'s partner gets nothing; the hint says where the image was saved), with no Enter (on macOS and Linux, only an sh, bash, zsh, dash or ksh shell)',
         'Esc -- close browser pane / dismiss tour / cancel context menu',
         'Status bar -- live tokens, cost, rate limits',
       ],

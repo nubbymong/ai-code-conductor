@@ -482,7 +482,7 @@ export function submitImage(sessionId: string, imagePath: string, sentence: stri
   const chars = [...imagePath].length
   const done = (result: ImageSubmitResult, why = ''): ImageSubmitResult => {
     const what = result.outcome === 'sent' ? 'sent as a paste'
-      : result.outcome === 'not-taken' ? `not taken (${why ? `${why}; ` : ''}the session gets it its own way)`
+      : result.outcome === 'not-taken' ? `not taken (${why ? `${why}; ` : ''}${result.left ? 'nothing more is typed' : 'the session gets it its own way'})`
         : `not sent (${result.reason})`
     logInfo(`[image-paste] ${sessionId}: an image path of ${chars} characters ${what}`)
     return result

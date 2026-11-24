@@ -70,7 +70,7 @@ const managers: SessionHelperManager[] = []
 /** Every start a test began, awaited or not: the teardown waits for them. */
 const starts: Promise<unknown>[] = []
 
-const folder =(name: string) => mkdirSync(join(root, name), { recursive: true })
+const folder = (name: string) => mkdirSync(join(root, name), { recursive: true })
 const names = () => readdirSync(root).sort()
 const listCalls = () => helper.calls.filter((c) => c.args[0] === 'list')
 const cleanUp = (over: Partial<Parameters<typeof removeOldCopiesWithHelperOff>[0]> = {}) =>

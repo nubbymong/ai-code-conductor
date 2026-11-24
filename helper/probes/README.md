@@ -201,6 +201,10 @@ script's header, written before measuring.
   turn runs three times, like the first run's launches.
   `P19 SIZES` says which recordings would be over the screen corpus's cap of
   256 KiB.
+- **C7's recording hold.** C7's recording hold (2.1.3-beta.17,
+  aicc_planning#371) ran the same recorder with `c7-scenarios.json`: every
+  launch with the warning launch's config, a draft typed at the idle composer,
+  a wrapped draft, a paste and a draft after a reply.
 - **The console hosts, on Windows.** After each program's end its console
   hosts are counted 1, 2, 5, 10, 30 and 60 s after node-pty reported the exit,
   before anything of that run is stopped, while the next run goes on.
@@ -382,6 +386,11 @@ code named by the sha256 of its two files.
 The answer is in ADR-030 after the P21 results. On the Windows test machine
 (2026-11-23; Claude Code 2.1.330, Codex 0.157.1), both CLIs ATTACH the path as a
 bracketed paste and do NOT attach it as typed text, 3 of 3 runs each.
+
+C6 (2.1.3-beta.17) read Codex's side on P11's stand-in with a scratch copy of
+this probe's run code (no build): the placeholder showed 251 to 314 ms after
+the paste (8 of 8); Ctrl+U takes the placeholder and its picture back (4 of 4);
+one Backspace does not (ADR-030, the C6 reading).
 
 # Probes P3 and P6: does a holder outlive the ssh logout, and is an exec's PATH the login PATH?
 

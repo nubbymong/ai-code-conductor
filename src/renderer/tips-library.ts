@@ -184,9 +184,9 @@ export const TIPS_LIBRARY: Tip[] = [
     excludes: ['commands.broadcast'],
     variants: {
       primary: {
-        shortText: 'Shift+click a Global prompt to send it to every session',
-        title: 'Send One Prompt to Every Session',
-        body: '**Shift+click** a Global prompt button and the app offers to send that one press to every open Claude Code and Codex session, SSH and background tabs included. It asks first, so a slip sends nothing: **Send** or Enter sends, **Cancel** or Escape does not.\n\nWant a button that always does this? Edit it and tick **Send to every open session**; it then carries a small **all** pill and sends on a plain click.\n\nOnly a prompt with no arguments can do this. Terminal-only tabs and Ask Conductor never get it, and each session takes the prompt by its own rule, so the tab you pressed in tells you how many it reached.',
+        shortText: 'Shift+click a Global prompt to send it to many sessions',
+        title: 'Send One Prompt to Many Sessions',
+        body: '**Shift+click** a Global prompt button and the app asks where to send that one press: **All** sends it to every open Claude Code and Codex session, SSH and background tabs included; **Choose sessions** lists them with every one ticked, so you untick the ones to skip and press **Send**. Enter picks All, and **Cancel** or Escape sends nothing.\n\nWant a button that asks this on a plain click? Edit it and tick **Send to every open session**; it then carries a small **all** pill.\n\nOnly a prompt with no arguments can do this. Terminal-only tabs and Ask Conductor are never listed, and each session takes the prompt by its own rule, so the tab you pressed in tells you how many it reached.',
         focusHint: 'Command bar -- your Global prompt buttons',
       },
     },
@@ -438,7 +438,7 @@ export const TIPS_LIBRARY: Tip[] = [
       primary: {
         shortText: 'Paste clipboard images with Alt+V',
         title: 'Paste Image from Clipboard',
-        body: 'Image on your clipboard? Click into a session on this computer and press **Alt+V**: the key goes to the assistant, which pastes the image itself (Codex shows it as [Image #1]).\n\nWith focus elsewhere in the app, **Alt+V** saves the image and sends it to the session: Claude Code on this computer gets it as its own pasted image ([Image #1]) with a short sentence, and the app presses Enter. On a Codex session the app types a line with its path, only into an empty Codex prompt, and says why when it cannot. On an SSH session, press **Alt+V** with focus outside the terminal: the app saves the image on this computer and asks Claude to fetch it over the connection.\n\nWith focus elsewhere, **Alt+V** types only the image\'s path into a plain terminal, or into a local session\'s partner shell while its partner view is shown: quoted for the shell, with no Enter, ready for a command of your own. On macOS and Linux the path is typed only into an sh, bash, zsh, dash or ksh shell. Any other shell there, a plain terminal over SSH, or an SSH session\'s partner shell (it runs on the host) gets nothing, and the hint says where the image was saved.\n\nWorks with screenshots, images copied from a browser, diagrams from Excalidraw, or an image file you copied in File Explorer or Finder. No more "let me save this to disk first and drag it in".',
+        body: 'Image on your clipboard? Click into a session on this computer and press **Alt+V**: the key goes to the assistant, which pastes the image itself (Codex shows it as [Image #1]).\n\nWith focus elsewhere in the app, **Alt+V** saves the image and sends it to the session: Claude Code on this computer gets it as its own pasted image ([Image #1]) with a short sentence, and the app presses Enter. A Codex session on this computer gets it as Codex\'s own pasted image ([Image #1]) with a short sentence once its prompt is empty, and the app presses Enter; if Codex is busy or cannot take it, the app types a line with the image\'s path instead, and says why when it cannot. On an SSH session, press **Alt+V** with focus outside the terminal: the app saves the image on this computer and asks Claude to fetch it over the connection.\n\nWith focus elsewhere, **Alt+V** types only the image\'s path into a plain terminal, or into a local session\'s partner shell while its partner view is shown: quoted for the shell, with no Enter, ready for a command of your own. On macOS and Linux the path is typed only into an sh, bash, zsh, dash or ksh shell. Any other shell there, a plain terminal over SSH, or an SSH session\'s partner shell (it runs on the host) gets nothing, and the hint says where the image was saved.\n\nWorks with screenshots, images copied from a browser, diagrams from Excalidraw, or an image file you copied in File Explorer or Finder. No more "let me save this to disk first and drag it in".',
       },
     },
   },
@@ -1568,6 +1568,24 @@ export const TIPS_LIBRARY: Tip[] = [
         shortText: 'Claude Code and Codex can run inside the session helper',
         title: 'Sessions Through the Session Helper',
         body: 'A preview, **off by default**: **Settings, General, Terminal, Claude Code and Codex sessions through the session helper** starts each Claude Code or Codex session on this computer inside the **session helper**, launched exactly as before. The **Machines** page then lists them as **Claude Code** and **Codex** under their tab names, with **End**.\n\nSuch a session does not survive a crash yet: when you open the app again, it is ended and its tab resumes the conversation. On Windows, ending one also ends every program it started, even one in a window of its own. SSH sessions are not affected, and Terminal only tabs and partner terminals have their own switch just above it.',
+        actionLabel: 'Open Settings',
+        actionTarget: 'settings',
+        focusHint: 'Settings -- General, under Terminal',
+      },
+    },
+  },
+
+  {
+    id: 'tip.remote-sessions-helper',
+    category: 'advanced',
+    complexity: 'intermediate',
+    priority: 22,
+    platforms: ['win32'],
+    variants: {
+      primary: {
+        shortText: 'A Claude Code SSH tab can run through the session helper on Linux',
+        title: 'Remote Sessions Through the Session Helper',
+        body: 'A preview, **off by default** (Windows): turn on **Settings, General, Terminal, Remote sessions through the session helper**, then on the **Machines** page **Add a Linux machine** from a saved SSH config that signs in with a key. A Claude Code tab on a config whose **Connection** is **SSH** (not SSH Persistent) to that machine then starts with nothing typed into the host\'s shell, and comes back after a dropped connection with what you missed.\n\nNot through the helper yet: the Agent Canvas, the browser, the Conductor\'s other tools, hooks and the status line, so such a tab has none of them. Every other SSH tab runs the usual way.',
         actionLabel: 'Open Settings',
         actionTarget: 'settings',
         focusHint: 'Settings -- General, under Terminal',

@@ -1173,7 +1173,8 @@ jobs:
   # not one of the checks a PR waits for, not in release.yml and not read by
   # scripts/release-gate.mjs. It only reads: no secret, read-only permissions,
   # the actions pinned by commit. What is uploaded as snap-e2e-<os> is the
-  # readings, Playwright's report and its pictures of the app's own windows.
+  # readings, Playwright's report, its pictures of the app's own windows and
+  # D12's pictures of the Snap menu's box (cut from the runner's own screen).
   # tests/unit/scripts/snap-e2e-job.test.ts evaluates its condition.
   snap-e2e:
     if: github.event_name == 'workflow_dispatch' && inputs.snap_e2e == true

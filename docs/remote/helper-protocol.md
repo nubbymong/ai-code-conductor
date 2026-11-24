@@ -19,6 +19,12 @@ probe (ADR) must confirm. R5 fixtures fix field types, lengths and refusals.
   from R9, `paste/`); `backup/`; and `edits` (section 8). Nothing is written,
   run or deleted in a `did` folder whose marker lacks this install's ids; the
   app never removes another install's folder, it only lists it (section 8).
+- **Step 1 as built (2.1.3-beta.17).** Under `~/.aicc/<did>/`: `owner`,
+  holding `aicc-owner 1 <did> <install id>`;
+  `helper/<version>-<first 12 hex>/aicc-helper` (0700); `helper/.new-<nonce>/`
+  for an upload until the app commits or discards it; and `store/` (the
+  holders' records, section 15). A remote tab's session id is `rm` and 30 hex
+  of a hash of its app id.
 - **Session id (`sid`)**, chosen by the app: `^[A-Za-z0-9][A-Za-z0-9_-]{7,31}$`.
   Every socket bind and connect happens after a `chdir` into the session
   folder, by the name `s`, so a long home never meets the path limit.
@@ -71,6 +77,18 @@ refused, naming the key. `ssh -G` cannot show what ssh sends; the CI canary
 below carries that claim. The user matches `^[A-Za-z0-9_][A-Za-z0-9._@-]{0,63}$`,
 the target (name, address or config alias) `^[A-Za-z0-9][A-Za-z0-9._:-]{0,252}$`,
 the port 1 to 65535; a value that breaks its pattern stops before ssh starts.
+
+Step 1's execs (2.1.3-beta.17) use, for a key-only host: `-a -x -T -e none`,
+BatchMode=yes, ForwardAgent=no, ForwardX11=no, ForwardX11Trusted=no,
+GSSAPIDelegateCredentials=no, ClearAllForwardings=yes, Tunnel=no,
+PermitLocalCommand=no, ControlMaster=no, ControlPath=none, RemoteCommand=none,
+UpdateHostKeys=no, ConnectTimeout=8, ServerAliveInterval=15,
+ServerAliveCountMax=3, and, from the ssh -V that knows them,
+SetEnv=AICC_NONE=1 (7.8), StdinNull=no, SessionType=default,
+ForkAfterAuthentication=no (8.7) and EnableEscapeCommandline=no (9.2); the
+environment is an allow-list. The host key is the user's own known_hosts
+entry: accept-new on a machine's first connection (Add), as a plain SSH tab
+does, and yes on every later exec; the app's own pin store is not built yet.
 
 **Host keys.** The MAC-checked device record (threat model 3.12) is the only
 store of a pin. Each ssh gets a 0600 known-hosts file the app writes from it in
@@ -141,13 +159,24 @@ Values come as arguments after the script; content comes on stdin.
 
 | Command, through the launcher (section 13) | Connection | From |
 | --- | --- | --- |
-| `serve --proto 1 --nonce <n> --session <sid>` | `ssh -T`, the side channel, while connected | R6 |
-| `attach --session <sid> --from <offset>` | `ssh -tt`, the terminal, while connected | R9 |
+| `serve --proto 1 --nonce <n> --session <sid>` | `ssh -T`, the side channel, while connected | R6; superseded by `bridge` in step 1 (one connection per session) |
+| `attach --session <sid> --from <offset>` | `ssh -tt`, the terminal, while connected | R9; superseded by `bridge` in step 1 (one connection per session) |
+| `bridge --store <store> --session <sid>` | `ssh -T`, the session's one connection (its terminal and its messages), while connected | step 1 (2.1.3-beta.17): copies its standard input to the holder's socket and the socket to its standard output, byte for byte; exit 0 the holder closed, 3 no holder, 2 usage, 1 otherwise |
 | `selftest`, `list`, `end --session <sid>`, each `--nonce <n>` | one-shot exec | R6 |
 
 The CLI or sudo starts `emit` (statusline and hook command, R6, R7), `mcp`
 (stdio MCP server, R8) and `askpass` (sudo wrapper, R11), each with
 `--session <sid>`. The prompt sudo passes to `askpass` is not forwarded.
+
+Remote step 1 (2.1.3-beta.17, `src/main/remote-helper/scripts.ts`): each exec
+is `/bin/sh -c '<fixed script>' aicc <values>`; the script text holds no
+quote, backslash or line end. Results come as `AICC-RESULT <nonce> <key>
+<value>` word lines, ending with `AICC-RESULT <nonce> end ok|refused
+<reason>`, and the launcher prints `AICC-HASH <nonce>
+ok|mismatch|missing|no-tool <hex>` before it runs the helper. Anything an rc
+file prints before those lines is dropped, up to 64 KiB. The section 15
+frames of one session ride one `ssh -T` bridge exec, not a `-tt` terminal plus
+a side connection (ADR-030 protocol change 16).
 
 ## 5 Processes
 
@@ -1149,7 +1178,15 @@ treats the payload as untrusted text. Fixtures: the `hooks` part of
   not take them in that time is closed while they wait on. No event follows
   `term.detached`, `replaced`, `term.exit`, `term.ended`, or either `busy` an
   attach can end with (the connection fell too far behind, or no thread could
-  carry its output): one that comes later waits for the next attach. An event
+  carry its output): one that comes later waits for the next attach. At an
+  app update the app lets go of each connection that acked `hooks` with
+  `term.detach`, not a close, and reads the events the holder sent before the
+  answer (2.1.3-beta.17, B1f): a Windows named pipe has no half-close, so a
+  connection the app only closes stays attached until the app's handle
+  closes, and each event written to it meanwhile counts as sent. From
+  2.1.3-beta.17 the app's keeper of a session kept for a restored tab not yet
+  shown acks `hooks`, so the holder hands it the queue then; the take-over's
+  connection gets only what came after. An event
   whose send failed waits for the next attach, and the app drops a `seq` it
   has already seen (section 9). A holder that ends drops its queue.
 
@@ -1330,7 +1367,13 @@ protocol change 9) its `away` part.
   keeps it for its restored tab, and that tab's attach is given each kept
   stream (step 5); on such a stream the tool host first sends
   `notifications/tools/list_changed` to a CLI that lists its tools again
-  (Claude Code; step 6). Elsewhere an update ends every agent session, and
+  (Claude Code; step 6). From 2.1.3-beta.17 (B1d) the next start serves a
+  session kept for a restored tab that is not shown yet. 3 s after Resume its
+  keeper attaches again with mcp, so the holder gives it the kept streams,
+  and the app serves them under the tab's id. The tab's take-over attaches in
+  its place later, and the streams are given to it in turn. A call in flight
+  at that moment is answered with an error, and a retry works. Elsewhere an
+  update ends every agent session, and
   after a crash an agent session is not shown again. A relay that did not ack `away` (its holder does not offer it) whose
   stream ended stays ended: when the app's connection to a session's holder
   drops and comes back, that session's CLI has no tool server until it
