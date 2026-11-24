@@ -428,12 +428,14 @@ export function AddMenu(p: {
 }
 
 /* ------------------------------------------------------------------------ */
-/* Confirms (scope change on drop, hide a tool)                               */
+/* Confirms (scope change on drop, hide a tool, the broadcast chooser)       */
 /* ------------------------------------------------------------------------ */
 
+/** `disabled`: drawn, but not pressable (the broadcast chooser's Send with
+ *  nothing ticked, #413). */
 export function ConfirmCard({ title, body, actions, onCancel, testId }: {
   title: string; body: React.ReactNode
-  actions: Array<{ label: string; onClick: () => void; primary?: boolean; danger?: boolean; testId?: string }>
+  actions: Array<{ label: string; onClick: () => void; primary?: boolean; danger?: boolean; disabled?: boolean; testId?: string }>
   onCancel: () => void; testId?: string
 }) {
   React.useEffect(() => {
@@ -458,8 +460,9 @@ export function ConfirmCard({ title, body, actions, onCancel, testId }: {
               key={a.label}
               type="button"
               onClick={a.onClick}
+              disabled={a.disabled}
               data-testid={a.testId}
-              className="h-7 px-3 rounded-md text-xs font-medium"
+              className="h-7 px-3 rounded-md text-xs font-medium disabled:opacity-50 disabled:cursor-not-allowed"
               style={a.danger
                 ? { background: 'color-mix(in srgb, var(--status-danger) 16%, transparent)', color: 'var(--status-danger)', border: '1px solid color-mix(in srgb, var(--status-danger) 40%, transparent)' }
                 : a.primary

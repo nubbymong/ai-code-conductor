@@ -106,10 +106,10 @@ describe('chip title = menu header, one string', () => {
     expect(chipTitle(cmd({ id: 'Fix', label: 'Fix' }), codex)).toContain('runs in the Codex terminal')
     expect(chipTitle(cmd({ id: 'D', label: 'Docs', kind: 'page', pageUrl: 'https://d/' }), local)).toContain('Opens https://d/ in the browser pane')
   })
-  it('a broadcast button says it sends to every open session; the same record without the option does not (#399)', () => {
+  it('a broadcast button says it sends to every open session, or the ones you pick (#413); the same record without the option does not (#399)', () => {
     const base = { id: 'Review', label: 'Review all', kind: 'prompt', target: 'claude' } as const
     const on = chipTitle(cmd({ ...base, broadcast: true }), local)
-    expect(on).toContain('sends to every open session')
+    expect(on).toContain('sends to every open session, or the ones you pick')
     expect(on).toContain('runs in the Claude terminal')
     expect(chipTitle(cmd({ ...base }), local)).not.toContain('every open session')
     // The option on a record that is not a simple prompt does nothing, so the title says nothing.
