@@ -10,6 +10,7 @@ import { onFontsReady, terminalFontOptions, terminalFontReady, terminalFontSpecs
 import { atlasCoordinator } from './terminal/atlasCoordinator'
 import { createHiddenOutputQueue, type HiddenOutputQueue } from './terminal/hiddenOutputQueue'
 import { consoleRepaintApplies, createConsoleRepaintAligner, type ConsoleRepaintAligner } from './terminal/consoleRepaint'
+import { keepLineSelection } from './terminal/lineSelectionKeep'
 import {
   createStaleGlyphRepainter,
   shouldRepaintOnOutput,
@@ -826,6 +827,10 @@ export default function TerminalView({ sessionId, configId, cwd, shellOnly, elev
       })
 
       term.open(container)
+      // aicc_planning#422: a triple-click's line stays that line when only
+      // the columns change (terminal/lineSelectionKeep.ts). Its listeners and
+      // marker are the terminal's, disposed with it.
+      keepLineSelection(term)
 
       // Load WebGL renderer (Codex recommendation #2). This swaps
       // xterm's default DOM glyph rendering for GPU-textured
@@ -1556,20 +1561,18 @@ export default function TerminalView({ sessionId, configId, cwd, shellOnly, elev
       }
 
       // --- Scroll state management ---
-      // Use wheel events to detect intentional user scroll, not onScroll
-      // (which fires spuriously during term.write and causes pull-down)
+      // The scrolled-up state shows the Live (scroll to bottom) button and
+      // paces #273's repaints; where output goes is decided from the live
+      // view before each write (decideFollow, #73), not from it. It is set
+      // once a scroll has settled: onScroll also fires during term.write and
+      // a resize, and a move that passes through must not show the button.
       const updateScrollState = (scrolledUp: boolean) => {
         isScrolledUpRef.current = scrolledUp
         setIsScrolledUp(scrolledUp)
       }
 
-      handleWheel = () => {
-        if (!term) return
-        // #273: record the scroll and bust any stale glyphs now. Normal buffer
-        // only — the alternate screen (TUI apps) owns its own repaints.
-        lastWheelAt = Date.now()
-        if (term.buffer.active.type !== 'alternate') repainter?.schedule()
-        // After the wheel event settles, check viewport position
+      // After a scroll settles, check viewport position
+      const checkScrollSoon = () => {
         if (refreshTimer) clearTimeout(refreshTimer)
         refreshTimer = setTimeout(() => {
           refreshTimer = null
@@ -1587,16 +1590,34 @@ export default function TerminalView({ sessionId, configId, cwd, shellOnly, elev
           } catch { /* terminal may be disposed */ }
         }, 80)
       }
+
+      handleWheel = () => {
+        if (!term) return
+        // #273: record the scroll and bust any stale glyphs now. Normal buffer
+        // only — the alternate screen (TUI apps) owns its own repaints.
+        // aicc_planning#421: xterm 6 stops each wheel event it moves the view
+        // with, so this hears a wheel only where the view cannot move (at the
+        // top of the scrollback or at the bottom).
+        lastWheelAt = Date.now()
+        if (term.buffer.active.type !== 'alternate') repainter?.schedule()
+        checkScrollSoon()
+      }
       container.addEventListener('wheel', handleWheel)
 
-      // Only use onScroll to detect when user scrolls back to bottom
-      // (e.g. via keyboard PageDown or scrollbar drag)
+      // aicc_planning#421: every scroll (wheel, scroll bar, keyboard) moves
+      // the view through onScroll. A view left above the bottom is checked
+      // once it has settled; at the bottom (output following) nothing is
+      // armed. Back at the bottom, the button goes at once.
       term.onScroll(() => {
-        if (disposed || !term || !isScrolledUpRef.current) return
+        if (disposed || !term) return
         try {
           const buf = term.buffer.active
           const atBottom = buf.viewportY >= buf.baseY
-          if (atBottom) updateScrollState(false)
+          if (isScrolledUpRef.current) {
+            if (atBottom) updateScrollState(false)
+          } else if (!atBottom) {
+            checkScrollSoon()
+          }
         } catch { /* terminal may be disposed */ }
       })
 
@@ -1618,8 +1639,10 @@ export default function TerminalView({ sessionId, configId, cwd, shellOnly, elev
       const writeOutput = (filtered: string, parsed?: () => void, asIs = false): void => {
         // Sticky-bottom follow (issue #73): sample the LIVE viewport position
         // BEFORE this chunk lays out and decide from THAT — not from the
-        // wheel-set latch, which scrollbar-thumb drags and keyboard scrolling
-        // never touched, so live output kept yanking the viewport back down.
+        // scrolled-up latch, which is set only once a scroll has settled (and
+        // before #73 only by the wheel, which scrollbar-thumb drags and
+        // keyboard scrolling never touched, so live output kept yanking the
+        // viewport back down).
         // Each write runs atomically, so viewportY is the user's current
         // position. Keeps the scrolled-up latch (the scroll-to-bottom button)
         // in sync with where the user actually is, every write.
