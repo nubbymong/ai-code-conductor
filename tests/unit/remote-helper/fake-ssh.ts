@@ -104,7 +104,8 @@ export class FakeSsh implements SshRunner {
         end.on('data', (b: Buffer) => child.stdout.write(b))
         end.on('end', () => child.finish(0))
         end.on('close', () => child.finish(0))
-        child.stdin.on('data', (b: Buffer) => end.write(b))
+        // A dead ssh carries nothing more to the host.
+        child.stdin.on('data', (b: Buffer) => { if (child.exitCode === null && child.signalCode === null) end.write(b) })
         child.stdin.on('end', () => end.end())
         // ssh gone: the bridge's socket closes, so the holder sees its connection end.
         child.on('close', () => end.end())

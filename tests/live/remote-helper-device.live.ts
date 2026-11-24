@@ -24,13 +24,16 @@
  *   REMOTE_HELPER_OUT       a folder for the readings (optional)
  *
  * In order: Add (the question, then probe, upload by standard input, the hash
- * against the manifest, version, self-test); a
- * second install's Remove refused by the owner marker; a session holding the
- * fake CLI through the login shell (bytes in, output out, what the rc file
- * exported); a resize, read back by `stty` in a shell session; the bridge's
- * ssh child killed and the tab back with the replay of what came meanwhile;
- * the end (term.end); Remove; nothing left under ~/.aicc and no helper
- * process of the run left.
+ * against the manifest, version, self-test); a second install's Remove
+ * refused by the owner marker; a session holding the fake CLI through the
+ * login shell (bytes in, output out, what the rc file exported), its link's
+ * ssh killed at rest and the tab back on a new link; a shell session: a
+ * resize read back by `stty`, then 20,000 lines printed while its bridge on
+ * the host is stopped, its link's ssh killed, and the tab back with the
+ * holder's replay, each line once; each closed tab's holder ended
+ * (term.end); Remove; nothing left under ~/.aicc and no helper process of the
+ * run left. The test's own execs read only what their command prints (an rc
+ * file prints first).
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
 import { spawnSync } from 'child_process'
@@ -56,6 +59,8 @@ let target: SshTarget
 let helper: BundledLinuxHelper
 let fakeCli: string
 let remoteFakeDir = ''
+/** A bridge the replay step stopped on the host, until it is let go. */
+let stoppedBridge = ''
 const runner = nodeSshRunner(() => 'ssh')
 const expectRc = process.env.REMOTE_HELPER_EXPECT_RC === '1'
 
@@ -64,12 +69,23 @@ function memoryStore(): MachineStore {
   return { read: () => v, write: (x) => { v = JSON.parse(JSON.stringify(x)) } }
 }
 
-/** One plain ssh exec for the test's own steps (not the app's): the same fixed options. */
+/** The line the test's own execs print before their command: what an rc file
+ *  prints comes before it, and only what comes after it is read. */
+const OWN = 'AICC-E2E-OWN'
+
+/** One plain ssh exec for the test's own steps (not the app's): the same
+ *  fixed options. `out` is the command's own output, after OWN. */
 function sshRun(command: string, input?: Buffer): { code: number | null; out: string; err: string } {
-  const args = execArgv(target, { version: null }, command)
+  const args = execArgv(target, { version: null }, `echo ${OWN}; ${command}`)
   const r = spawnSync('ssh', args, { input: input ?? Buffer.alloc(0), env: sshEnv(process.env), timeout: 60_000, maxBuffer: 16 * 1024 * 1024 })
-  return { code: r.status, out: String(r.stdout ?? ''), err: String(r.stderr ?? '') }
+  const raw = String(r.stdout ?? '').replace(/\r\n/g, '\n')
+  const at = raw.indexOf(`${OWN}\n`)
+  return { code: r.status, out: at >= 0 ? raw.slice(at + OWN.length + 1) : '', err: String(r.stderr ?? '') }
 }
+
+/** The tab's logs, kept for the readings and read by the re-attach checks. */
+const sessionLogs: string[] = []
+const sessionLog = (line: string) => { sessionLogs.push(line); note(`session-log-${sessionLogs.length}`, line) }
 
 async function until(what: string, ok: () => boolean, ms = 30_000): Promise<void> {
   const start = Date.now()
@@ -124,7 +140,9 @@ beforeAll(async () => {
 
 afterAll(() => {
   if (remoteFakeDir && /^\/[A-Za-z0-9._/-]+\/aicc-e2e\.[A-Za-z0-9]+$/.test(remoteFakeDir)) {
-    sshRun(`rm -f -- ${remoteFakeDir}/aicc-fake-cli; rmdir -- ${remoteFakeDir}`)
+    // A bridge the replay step stopped is let go first, whatever failed.
+    if (stoppedBridge) sshRun(`kill -CONT ${stoppedBridge} 2>/dev/null; true`)
+    sshRun(`rm -f -- ${remoteFakeDir}/aicc-fake-cli ${remoteFakeDir}/ready ${remoteFakeDir}/go ${remoteFakeDir}/printed; rmdir -- ${remoteFakeDir}`)
   }
   if (OUT) {
     fs.mkdirSync(OUT, { recursive: true })
@@ -186,7 +204,7 @@ describe('remote helper on a real Linux host', () => {
     expect(remoteFakeDir, up.err).toMatch(/aicc-e2e\./)
     const m: RemoteMachineRecord = { ...machine, claudePath: `${remoteFakeDir}/aicc-fake-cli`, check: { at: Date.now(), ok: true } }
     inUse = 1
-    const pty = new RemoteHelperPty({ appPtyId: 'e2e-tab-1', machine: m, installId: machines.installId(), runner, spec: remoteLaunchSpec(m, [], {}, '~', 100, 30), log: (l) => note(`session-${Date.now()}`, l) })
+    const pty = new RemoteHelperPty({ appPtyId: 'e2e-tab-1', machine: m, installId: machines.installId(), runner, spec: remoteLaunchSpec(m, [], {}, '~', 100, 30), log: sessionLog })
     let out = ''
     pty.onData((d) => { out += d })
     try {
@@ -199,35 +217,33 @@ describe('remote helper on a real Linux host', () => {
         pty.write('env AICC_RC_MARK\r')
         await until('the rc variable', () => out.includes('env AICC_RC_MARK=from-rc'))
       }
-      // The link drops in the middle of a flood: what came meanwhile is replayed, each line once.
-      pty.write('flood 20000\r')
-      await until('the flood to start', () => out.includes('line 000001'))
+      // The link's ssh is killed at rest: the tab comes back on a new link by
+      // itself, and what is typed after reaches the same program.
       const link = pty.linkPid
       expect(link).toBeGreaterThan(0)
       process.kill(link!)
-      await until('the flood to end', () => out.includes('flood done'), 120_000)
-      expect(pty.linkPid).not.toBe(link)
-      const lines = out.match(/line \d{6}/g) ?? []
-      note('flood', { lines: lines.length, distinct: new Set(lines).size })
-      expect(new Set(lines).size).toBe(20000)
-      expect(lines.length).toBe(20000)
+      await until('a new link', () => pty.linkPid !== undefined && pty.linkPid !== link)
       pty.write('after\r')
       await until('input after the re-attach', () => out.includes('echo: after'))
+      expect(sessionLogs.some((l) => /attaching again from [1-9][0-9]*$/.test(l))).toBe(true)
     } finally {
       pty.kill()
       await pty.ended
       inUse = 0
       if (OUT) fs.writeFileSync(path.join(OUT, 'session-1.txt'), out)
     }
+    // A closed tab ends its holder (term.end): nothing of the session is left.
     await untilHost('the holder to end', `pgrep -f -- "--store $HOME/[.]aicc/${machine.did}/store" | wc -l`, '0')
   })
 
-  it('a resize reaches the program (stty in a shell session)', async () => {
+  it('a shell session: a resize reaches the program (stty), and a link dropped while output waits comes back with the replay, each line once', async () => {
     const m: RemoteMachineRecord = { ...machine, claudePath: '/bin/sh', check: { at: Date.now(), ok: true } }
     inUse = 1
-    const pty = new RemoteHelperPty({ appPtyId: 'e2e-tab-2', machine: m, installId: machines.installId(), runner, spec: remoteLaunchSpec(m, [], {}, '~', 100, 30), log: () => {} })
+    const pty = new RemoteHelperPty({ appPtyId: 'e2e-tab-2', machine: m, installId: machines.installId(), runner, spec: remoteLaunchSpec(m, [], {}, '~', 100, 30), log: sessionLog })
     let out = ''
     pty.onData((d) => { out += d })
+    const d = remoteFakeDir
+    expect(d).toMatch(/aicc-e2e\./)
     try {
       await new Promise((r) => setTimeout(r, 1500))
       pty.write('stty size\r')
@@ -236,12 +252,43 @@ describe('remote helper on a real Linux host', () => {
       await new Promise((r) => setTimeout(r, 500))
       pty.write('stty size\r')
       await until('the new size', () => /\b40 120\b/.test(out))
+
+      // The replay, made certain: the shell is told to wait for a file, the
+      // link's bridge on the host is stopped (so nothing more reaches the
+      // app), the shell prints 20,000 lines into the holder's ring, then the
+      // link's ssh here is killed. The tab attaches again from the last byte
+      // it saw, and the holder's replay brings every line, each once.
+      pty.write(`touch ${d}/ready; while [ ! -e ${d}/go ]; do sleep 0.1; done; seq -f 'line %06g' 1 20000; echo flood' 'done; touch ${d}/printed\r`)
+      await untilHost('the shell to wait', `test -e ${d}/ready && echo yes`, 'yes')
+      const link = pty.linkPid
+      expect(link).toBeGreaterThan(0)
+      const pids = sshRun(`pgrep -f -- "bridge --store $HOME/[.]aicc/${machine.did}/store --session ${pty.sid}"`).out.trim().split(/\s+/).filter(Boolean)
+      note('bridge-pids', pids)
+      expect(pids).toHaveLength(1)
+      stoppedBridge = pids[0]
+      expect(sshRun(`kill -STOP ${stoppedBridge} && ps -o stat= -p ${stoppedBridge}`).out.trim()).toMatch(/^T/)
+      sshRun(`touch ${d}/go`)
+      await untilHost('the lines to be printed', `test -e ${d}/printed && echo yes`, 'yes', 30_000)
+      expect(out).not.toContain('flood done')
+      const seenBefore = (out.match(/line \d{6}/g) ?? []).length
+      process.kill(link!)
+      sshRun(`kill -CONT ${stoppedBridge} 2>/dev/null; true`)
+      stoppedBridge = ''
+      await until('the lines after the re-attach', () => out.includes('flood done'), 60_000)
+      expect(pty.linkPid).not.toBe(link)
+      const lines = out.match(/line \d{6}/g) ?? []
+      note('replay', { seenBefore, lines: lines.length, distinct: new Set(lines).size })
+      expect(new Set(lines).size).toBe(20000)
+      expect(lines.length).toBe(20000)
+      pty.write('echo typed after\r')
+      await until('input after the replay', () => /\ntyped after/.test(out.replace(/\r/g, '')))
     } finally {
       pty.kill()
       await pty.ended
       inUse = 0
       if (OUT) fs.writeFileSync(path.join(OUT, 'session-2.txt'), out)
     }
+    await untilHost('the holder to end', `pgrep -f -- "--store $HOME/[.]aicc/${machine.did}/store" | wc -l`, '0')
   })
 
   it('Remove takes it away: nothing of the run is left under ~/.aicc, and no helper process', async () => {

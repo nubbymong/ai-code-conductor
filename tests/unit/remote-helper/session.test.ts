@@ -161,6 +161,40 @@ describe('remote session: the end', () => {
     expect(t.exit()).not.toBeNull()
   })
 
+  it('a tab closed just as its link drops still ends its holder: the end goes once more, over a link of its own', async () => {
+    const sid = remoteSessionId('tab-close-drop')
+    const holder = new FakeHolder(sid, 'tab-close-drop', store)
+    const ssh = new FakeSsh({ answer: (c) => (c.script === 'hold' ? holdAnswer(c, holder) : { code: 1 }), bridge: () => holder.connect() })
+    const logs: string[] = []
+    const t = tab(ssh, 'tab-close-drop', logs)
+    await until('attached', () => holder.attached !== null)
+    // The link's ssh dies and the tab is closed in the same moment: the end
+    // sent on the old link goes down with it (a dead ssh carries nothing).
+    ssh.children[1].kill()
+    t.pty.kill()
+    await t.pty.ended
+    await until('the holder ended', () => holder.ended)
+    expect(holder.endsAsked).toBe(1)
+    expect(ssh.scripts()).toEqual(['hold', 'bridge', 'bridge'])
+    expect(logs.some((l) => l.includes('the link dropped as the tab closed; its end goes once more on a new link'))).toBe(true)
+  })
+
+  it('a tab closed as its link drops, when the end did reach the holder: the second try finds no holder and stops', async () => {
+    const sid = remoteSessionId('tab-close-gone')
+    const holder = new FakeHolder(sid, 'tab-close-gone', store)
+    let bridges = 0
+    // The second bridge finds no holder (exit 3): the end had reached it after all.
+    const ssh = new FakeSsh({ answer: (c) => (c.script === 'hold' ? holdAnswer(c, holder) : { code: 1 }), bridge: () => (++bridges === 1 ? holder.connect() : null) })
+    const t = tab(ssh, 'tab-close-gone')
+    await until('attached', () => holder.attached !== null)
+    ssh.children[1].kill()
+    t.pty.kill()
+    await t.pty.ended
+    await new Promise((r) => setTimeout(r, 50))
+    expect(ssh.scripts()).toEqual(['hold', 'bridge', 'bridge'])
+    expect(t.exit()).not.toBeNull()
+  })
+
   it('a holder an earlier run left for the tab\'s session (hold exits 3) is ended first, then a new one starts: never two CLIs on one conversation', async () => {
     const sid = remoteSessionId('tab-left')
     const left = new FakeHolder(sid, 'tab-left', store)

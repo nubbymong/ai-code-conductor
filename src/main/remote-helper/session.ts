@@ -21,7 +21,8 @@
  * back-off (1, 2, 4, 8, 16, 32, 32 s) within the holder's two-minute away
  * clock, never after a sign-in or host key failure, a hash mismatch, or a
  * bridge that finds no holder. A closed tab or a quit ends the session
- * (`term.end`), as a plain SSH session ends then (D13).
+ * (`term.end`), as a plain SSH session ends then (D13); a tab closed just as
+ * its link drops sends its end once more, over a link of its own.
  *
  * What such a tab does not have in this preview: the status line and usage,
  * the app's tools (canvas, vision, the image fetch tool an SSH tab uses for
@@ -34,7 +35,7 @@
  */
 import { createHash } from 'crypto'
 import type { IDisposable, IEvent, IPty } from 'node-pty'
-import { HolderConnection } from '../session-helper/connection'
+import { HolderConnection, HolderError } from '../session-helper/connection'
 import { HelperPty, NothingStartedError, type HelperPtyDriver } from '../session-helper/helper-pty'
 import { checkLaunch, readListing, readRecord, type HolderRecord, type LaunchSpec } from '../session-helper/protocol'
 import { holderLabel } from './scripts'
@@ -246,8 +247,34 @@ export class RemoteDriver implements HelperPtyDriver {
     throw last
   }
 
+  /**
+   * A tab closed just as its link dropped: HelperPty sends the end over the
+   * connection it still has, and the link takes it down with it (the
+   * connection closes before the holder answers, so the holder never got it,
+   * or ended and could not say so). Such an end goes once more, over a link of
+   * its own; a holder already gone answers that with a bridge exit 3, and the
+   * end is done. Any other request fails as it did.
+   */
+  private endOnceMore(conn: HolderConnection, record: HolderRecord): void {
+    const request = conn.request.bind(conn)
+    conn.request = async (msg, onReply) => {
+      try {
+        return await request(msg, onReply)
+      } catch (err) {
+        if (msg.t !== 'term.end' || !this.closed || !(err instanceof HolderError) || err.code !== 'io') throw err
+        this.o.log(`[remote-helper] ${record.session}: the link dropped as the tab closed; its end goes once more on a new link`)
+        const again = await this.connectOnce(record, false)
+        try {
+          return await again.request(msg, onReply)
+        } finally {
+          again.close()
+        }
+      }
+    }
+  }
+
   /** One bridge exec, and the holder's hello over it. */
-  private async connectOnce(record: HolderRecord): Promise<HolderConnection> {
+  private async connectOnce(record: HolderRecord, endAgain = true): Promise<HolderConnection> {
     const nonce = newNonce()
     let opened: Awaited<ReturnType<typeof openScriptStream>>
     try {
@@ -258,7 +285,7 @@ export class RemoteDriver implements HelperPtyDriver {
     }
     this.linkPid = opened.pid
     try {
-      return await HolderConnection.open({
+      const conn = await HolderConnection.open({
         record,
         os: 'unix',
         // The endpoint is on the host: the bridge, as this user there, connects to it.
@@ -266,6 +293,8 @@ export class RemoteDriver implements HelperPtyDriver {
         openStream: async () => opened.stream,
         helloTimeoutMs: BRIDGE_HELLO_MS,
       })
+      if (endAgain) this.endOnceMore(conn, record)
+      return conn
     } catch (err) {
       // ssh's exit status first (a bridge that found no holder exits 3, often
       // just after its output ends), then ssh is ended if it still runs.
