@@ -424,6 +424,7 @@ describe('pty-manager.ts: a restored tab takes over the session an update kept r
     expect(seen()).toEqual([...TEARDOWN, 'recordHeldToolSession', 'gatewaySecret', 'bindLoggingRun'])
     expect(h.records).toEqual([[CODEX_SID, 'codex']])
     expect(h.rewrites).toEqual([[hookFolder, CODEX_SID, 51234, '0f8b6a2c-1d3e-4f50-9a61-7b2c3d4e5f60']])
+    expect(h.hookFoldersRemoved).toEqual([]) // written again: its folder stays for the CLI's hooks
     expect(holdsCodexLaunchLease(CODEX_SID, launch.lease as never)).toBe(true)
     expect(getKeptCodexConversation(CODEX_SID)).toEqual({ uuid: CONV, cwd: LAUNCH_FOLDER })
     expect(h.telemetry).toEqual([expect.objectContaining({ cwd: LAUNCH_FOLDER, sessionsDir: launch.sessionsDir, resumeId: CONV })])
@@ -440,6 +441,7 @@ describe('pty-manager.ts: a restored tab takes over the session an update kept r
     spawnPty(fakeWin, CODEX_SID, { cwd: os.tmpdir(), provider: 'codex', codexOptions: { permissionsPreset: 'read-only' }, codexLaunch: codexLaunch() } as never)
     expect(seen()).toEqual([...TEARDOWN, 'recordHeldToolSession', 'bindLoggingRun'])
     expect(h.rewrites).toEqual([])
+    expect(h.hookFoldersRemoved).toEqual([]) // written again: its folder stays for the CLI's hooks
   })
 
   it('a Codex tab whose kept hook file is not written again (the Hooks gateway not listening): no rewrite, no token, and its kept folder goes now', () => {
