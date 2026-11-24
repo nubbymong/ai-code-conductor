@@ -10,6 +10,7 @@ import { describe, it, expect, beforeEach } from 'vitest'
 import { RemoteMachines, MACHINE_TEXT, type MachineStore } from '../../../src/main/remote-helper/machines'
 import type { BundledLinuxHelper } from '../../../src/main/remote-helper/manifest'
 import { routeSshTab, ROUTE_WHY } from '../../../src/main/remote-helper/route'
+import { REMOTE_OTHER_HELPER } from '../../../src/shared/remote-machines'
 import { FakeSsh, result, type ExecCall, type FakeAnswer } from './fake-ssh'
 
 const SHA = 'a'.repeat(64)
@@ -50,11 +51,11 @@ function memoryStore(): MachineStore & { value: unknown } {
 }
 
 let inUse = 0
-function machines(ssh: FakeSsh, store = memoryStore()) {
+function machines(ssh: FakeSsh, store = memoryStore(), bundled: () => BundledLinuxHelper = () => HELPER) {
   return new RemoteMachines({
     runner: ssh,
     store,
-    bundled: async () => ({ ok: true, helper: HELPER }),
+    bundled: async () => ({ ok: true, helper: bundled() }),
     readFile: async () => BYTES,
     inUse: () => inUse,
     log: () => {},
@@ -249,6 +250,46 @@ describe('remote machines: Check', () => {
     const r = await m.check(m.list()[0].did)
     expect(r.ok).toBe(true)
     expect(ssh.scripts()).toEqual(['probe', 'version', 'selftest'])
+  })
+
+  it('a machine holding another helper than this build\'s (after an update) reads not checked on its card, with the line that Check updates it', async () => {
+    const ssh = new FakeSsh(linuxHost())
+    const m = machines(ssh)
+    const q = await m.prepare(CONFIGS, 'cfg-key')
+    if (!q.ok) throw new Error(q.message)
+    await m.add(q.token)
+    const at = m.list()[0].check.at
+    expect(m.views(SHA)[0]).toMatchObject({ checked: true, lastCheck: { at, ok: true } })
+    expect(m.views('b'.repeat(64))[0]).toMatchObject({ checked: false, lastCheck: { at, ok: false, detail: REMOTE_OTHER_HELPER } })
+    // A build with no Linux helper: nothing to compare with (the page says the build has none).
+    expect(m.views(null)[0]).toMatchObject({ checked: true })
+    // The routing agrees: its tabs take the usual path until Check.
+    expect(routeSshTab({ platform: 'win32', switchOn: true, ssh: { host: 'rocky.lan', port: 22, username: 'nick', remotePath: '~', detachable: false }, shellOnly: false, machine: m.list()[0], bundledSha256: 'b'.repeat(64) })).toEqual({ via: 'today', why: ROUTE_WHY.oldHelper })
+  })
+
+  it('Check on a machine holding another helper installs this build\'s first (probe, install, commit, version, self-test), and the record takes its version, hash and folder', async () => {
+    const NEW_SHA = 'c'.repeat(64)
+    const NEW: BundledLinuxHelper = { file: '/x/linux-x64/aicc-helper', version: '0.2.0', sha256: NEW_SHA, size: 4096, folder: `0.2.0-${NEW_SHA.slice(0, 12)}` }
+    let bundled = HELPER
+    const ssh = new FakeSsh(linuxHost())
+    const m = machines(ssh, memoryStore(), () => bundled)
+    const q = await m.prepare(CONFIGS, 'cfg-key')
+    if (!q.ok) throw new Error(q.message)
+    await m.add(q.token)
+    // An update: the app now carries 0.2.0.
+    bundled = NEW
+    ssh.calls.length = 0
+    ssh.host = linuxHost({
+      install: (c) => ({ stdout: result(c.values[0], { hash: NEW_SHA }) }),
+      version: (c) => ({ stdout: `AICC-HASH ${c.values[0]} ok ${NEW_SHA}\naicc-helper 0.2.0\n` }),
+    })
+    const r = await m.check(m.list()[0].did)
+    expect(r.ok).toBe(true)
+    expect(ssh.scripts()).toEqual(['probe', 'install', 'commit', 'version', 'selftest'])
+    expect(ssh.calls[2].values.slice(3)).toEqual([NEW.folder, ssh.calls[1].values[0]])
+    expect(ssh.calls[3].values.slice(3)).toEqual([NEW.folder, NEW_SHA])
+    expect(m.list()[0].helper).toEqual({ version: '0.2.0', sha256: NEW_SHA, folder: NEW.folder })
+    expect(m.views(NEW_SHA)[0]).toMatchObject({ checked: true, helperVersion: '0.2.0' })
   })
 
   it('a home folder that changed stops the machine until it is added again', async () => {

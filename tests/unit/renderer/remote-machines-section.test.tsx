@@ -13,7 +13,10 @@ import React from 'react'
 import { describe, it, expect, afterEach, vi } from 'vitest'
 import { createRoot, type Root } from 'react-dom/client'
 import { act } from 'react'
-import { REMOTE_ROUTE_NOTE, type RemoteMachinesState } from '../../../src/shared/remote-machines'
+import { readFileSync } from 'fs'
+import { resolve } from 'path'
+import { REMOTE_OTHER_HELPER, REMOTE_ROUTE_NOTE, REMOTE_SESSIONS_SETTING, type RemoteMachinesState } from '../../../src/shared/remote-machines'
+import { DEFAULT_SETTINGS } from '../../../src/renderer/stores/settingsStore'
 
 ;(globalThis as any).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -124,10 +127,45 @@ describe('Linux machines on the Machines page', () => {
     expect(remote.remove).toHaveBeenCalledWith(DID)
   })
 
+  it('a machine holding another helper than this build\'s says Check updates it', async () => {
+    install(state({ machines: [{ did: DID, label: 'Rocky', target: 'nick@rocky.lan:22', checked: false, lastCheck: { at: Date.now(), ok: false, detail: REMOTE_OTHER_HELPER }, helperVersion: '0.1.0', system: 'Linux x86_64', inUse: 0 }] }))
+    await mount()
+    const line = container.querySelector('[data-testid="remote-machine-state"]')?.textContent
+    expect(line).toBe('Not checked: this build of the app carries another version of the session helper; press Check to update it')
+    expect(button('Check')?.disabled).toBe(false)
+  })
+
   it('Remove is not offered while a tab runs through the helper there', async () => {
     install(state({ machines: [{ did: DID, label: 'Rocky', target: 'nick@rocky.lan:22', checked: true, lastCheck: { at: Date.now(), ok: true }, helperVersion: '0.1.0', system: 'Linux x86_64', inUse: 1 }] }))
     await mount()
     expect(button('Remove')?.disabled).toBe(true)
     expect(container.querySelector('[data-testid="remote-machine-state"]')?.textContent).toContain('a tab runs through the helper here')
+  })
+})
+
+// The switch (Settings, General, under Terminal), as held-terminal-tab.test.ts
+// pins its two siblings: off by default, Windows only, after the agent
+// sessions' switch, and it saves the key main reads.
+describe('the remote sessions switch in Settings', () => {
+  it('is off by default', () => {
+    expect(DEFAULT_SETTINGS.remoteSessionsThroughHelper).toBe(false)
+    expect(REMOTE_SESSIONS_SETTING).toBe('remoteSessionsThroughHelper')
+  })
+
+  it('is shown on Windows only, after the agent sessions\' switch, and saves remoteSessionsThroughHelper', () => {
+    const page = readFileSync(resolve(__dirname, '../../../src/renderer/components/SettingsPage.tsx'), 'utf8').replace(/\r\n/g, '\n')
+    const agents = page.indexOf('data-testid="setting-agent-sessions-helper"')
+    const remote = page.indexOf('data-testid="setting-remote-sessions-helper"')
+    expect(agents).toBeGreaterThan(0)
+    expect(remote).toBeGreaterThan(agents)
+    expect(page.match(/data-testid="setting-remote-sessions-helper"/g)).toHaveLength(1)
+    // The Windows gate opens right before it, after the agent sessions' label closes.
+    const gate = page.lastIndexOf("{window.electronPlatform === 'win32' && (", remote)
+    expect(gate).toBeGreaterThan(page.indexOf('</label>', agents))
+    expect(page.slice(gate, remote)).toMatch(/^\{window\.electronPlatform === 'win32' && \(\n\s*<label [^>]*$/)
+    const block = page.slice(remote, page.indexOf('</label>', remote))
+    expect(block).toContain('checked={settings.remoteSessionsThroughHelper === true}')
+    expect(block).toContain('onChange={(e) => save({ remoteSessionsThroughHelper: e.target.checked })}')
+    expect(block).toContain('{REMOTE_SWITCH_TEXT}')
   })
 })

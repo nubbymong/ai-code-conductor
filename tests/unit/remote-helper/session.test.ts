@@ -7,14 +7,17 @@
  * attaches again once, with the holder's replay; a closed tab sends
  * term.end, even one closed just as its link drops (the end goes once more
  * on a new link); a holder a crash left for the tab's session is ended
- * before a new one starts; an image paste types nothing.
+ * before a new one starts; an image paste types nothing, and only the app's
+ * own image request is held back; a launch the holder refuses names the
+ * folder and the holder's words in the tab.
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
 import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
 import { FakeHolder } from '../main/session-helper-fake-holder'
-import { RemoteHelperPty, remoteSessionId, remoteLaunchSpec, remoteCwd, IMAGE_HELD_BACK_NOTE, RECONNECT_DELAYS_MS } from '../../../src/main/remote-helper/session'
+import { RemoteHelperPty, remoteSessionId, remoteLaunchSpec, remoteCwd, IMAGE_HELD_BACK_NOTE, RECONNECT_DELAYS_MS, STORYBOARD_TOOL_LINE } from '../../../src/main/remote-helper/session'
+import { composeFetchHostScreenshotPrompt } from '../../../src/renderer/utils/imageTransfer'
 import type { RemoteMachineRecord } from '../../../src/main/remote-helper/machines'
 import type { HolderRecord } from '../../../src/main/session-helper/protocol'
 import { FakeSsh, type ExecCall, type FakeAnswer } from './fake-ssh'
@@ -231,6 +234,22 @@ describe('remote session: the end', () => {
     expect(ssh.scripts()).toEqual(['hold', 'bridge', 'bridge'])
   })
 
+  it('a launch the holder refuses (the folder is not there) names the folder and the holder\'s words, not "it did not answer", and the holder is ended', async () => {
+    const sid = remoteSessionId('tab-refused')
+    const holder = new FakeHolder(sid, 'tab-refused', store)
+    const ssh = new FakeSsh({
+      answer: (c) => (c.script === 'hold' ? holdAnswer(c, holder) : { code: 1 }),
+      // Its hello says the session is new; then it refuses the launch.
+      bridge: () => { const end = holder.connect(); holder.launch = { t: 'term.launch' }; return end },
+    })
+    const t = tab(ssh, 'tab-refused')
+    await until('the end', () => t.exit() !== null)
+    expect(t.out()).toContain('Claude Code could not be started in /home/nick/work on rocky.lan: this holder has launched its session already')
+    expect(t.out()).not.toContain('it did not answer')
+    await until('the holder ended', () => holder.ended)
+    expect(holder.endsAsked).toBe(1)
+  })
+
   it('a helper file that fails its hash check on the host starts nothing: the tab says why and ends', async () => {
     const ssh = new FakeSsh({ answer: (c) => ({ code: 97, stdout: `AICC-HASH ${c.values[0]} mismatch ${'b'.repeat(64)}\n` }) })
     const t = tab(ssh, 'tab-bad-hash')
@@ -253,6 +272,30 @@ describe('remote session: an image paste', () => {
     expect(t.out()).toContain(IMAGE_HELD_BACK_NOTE)
     t.pty.write('typed\r')
     await until('typed input', () => Buffer.concat(holder.input).toString() === 'typed\r')
+    t.pty.kill()
+    await t.pty.ended
+  })
+
+  it('holds back only the app\'s own request: a paste or a typed line that names the tool reaches the CLI unchanged', async () => {
+    const sid = remoteSessionId('tab-names-tool')
+    const holder = new FakeHolder(sid, 'tab-names-tool', store)
+    const ssh = new FakeSsh({ answer: (c) => (c.script === 'hold' ? holdAnswer(c, holder) : { code: 1 }), bridge: () => holder.connect() })
+    const t = tab(ssh, 'tab-names-tool')
+    await until('attached', () => holder.attached !== null)
+    // The app's own request, as the renderer writes it (the same function, so the two cannot drift), and the storyboard's line.
+    t.pty.write(`${composeFetchHostScreenshotPrompt('a.png', 'I just pasted an image, please view it.')}\r`)
+    t.pty.write('Frames (use mcp__conductor__fetch_host_screenshot for each):\n')
+    expect(t.out().split(IMAGE_HELD_BACK_NOTE)).toHaveLength(3)
+    // Anything else that names the tool is typed as it is.
+    const paste = '\x1b[200~tools: mcp__conductor__fetch_host_screenshot, mcp__conductor__vision_click\r\nheldBackImage holds back the fetch_host_screenshot request\x1b[201~'
+    const typed = 'why does mcp__conductor__fetch_host_screenshot fail here?\r'
+    t.pty.write(paste)
+    t.pty.write(typed)
+    await until('the paste and the line', () => Buffer.concat(holder.input).toString() === paste + typed)
+    expect(t.out().split(IMAGE_HELD_BACK_NOTE)).toHaveLength(3)
+    // The storyboard's line is the one the renderer writes (imageTransfer.ts sendStoryboardToSession).
+    expect(STORYBOARD_TOOL_LINE).toBe('Frames (use mcp__conductor__fetch_host_screenshot for each):\n')
+    expect(fs.readFileSync(path.resolve(__dirname, '../../../src/renderer/utils/imageTransfer.ts'), 'utf8')).toContain(`'${STORYBOARD_TOOL_LINE.slice(0, -1)}',`)
     t.pty.kill()
     await t.pty.ended
   })

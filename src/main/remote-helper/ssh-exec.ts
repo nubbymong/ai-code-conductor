@@ -189,7 +189,7 @@ export function sshFailure(r: Pick<ExecResult, 'code' | 'stderr' | 'timedOut'>):
   if (r.code !== 255) return null
   const t = r.stderr
   if (/Host key verification failed|REMOTE HOST IDENTIFICATION HAS CHANGED/i.test(t)) return 'its host key is not the one known for it (or not known yet): connect to it once with a plain SSH tab, then try again'
-  if (/Permission denied/i.test(t)) return 'it did not take a key sign-in (the session helper does not use passwords)'
+  if (/Permission denied/i.test(t)) return 'it did not take a key sign-in (the session helper types no password or passphrase: a key with a passphrase works only through the ssh agent)'
   if (/Could not resolve|Name or service not known|No such host is known/i.test(t)) return 'its host name was not found'
   if (/Connection refused/i.test(t)) return 'it refused the connection'
   if (/timed out|No route to host|Network is unreachable/i.test(t)) return 'it did not answer'

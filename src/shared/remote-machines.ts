@@ -11,12 +11,17 @@ export const REMOTE_SESSIONS_SETTING = 'remoteSessionsThroughHelper'
  *  through the helper, and each thing such a tab does not have yet (plan
  *  finding 6). */
 export const REMOTE_SWITCH_TEXT =
-  'Preview, off by default. A Claude Code tab whose saved config\'s Connection is SSH (not SSH Persistent), with key sign-in, no post-connect command and no container, to a Linux machine you added and checked on the Machines page, runs through the session helper there: nothing is typed into the host\'s shell to set it up or start it, and a dropped connection comes back within two minutes with what you missed. Not through the helper yet: the status line and usage, the app\'s tools (canvas, vision, image fetch) and hook events (the attention sign, the Watchdog). An image pasted or snapped into such a tab is not sent, and the tab says so. Prompt buttons and broadcast type into it as into any Claude Code tab. Closing the tab or quitting ends its session. Every other SSH tab, and every tab while this is off, runs the usual way. Applies to tabs opened after the change.'
+  'Preview, off by default. A Claude Code tab whose saved config\'s Connection is SSH (not SSH Persistent), with key sign-in, no post-connect command and no container, to a Linux machine you added and checked on the Machines page, runs through the session helper there: nothing is typed into the host\'s shell to set it up or start it, and a dropped connection comes back within two minutes with what you missed. Not through the helper yet: the status line and usage, the app\'s tools (canvas, vision, image fetch) and hook events (the attention sign, the Watchdog). An image pasted or snapped into such a tab is not sent, and the tab says so. Prompt buttons and broadcast type into it as into any Claude Code tab. Closing the tab or quitting ends its session, and Restart on such a tab starts a new conversation (type /resume there to pick the earlier one up). Every other SSH tab, and every tab while this is off, runs the usual way. Applies to tabs opened after the change.'
 
 /** Which tabs go through the helper, and why another does not (plan finding
  *  5): the machine's card says it in one line while the switch is on. */
 export const REMOTE_ROUTE_NOTE =
   'A Claude Code tab whose saved config has Connection set to SSH, with key sign-in, no post-connect command and no container, runs through the session helper here. SSH Persistent (the default for a config that never chose), a post-connect command, a container or a password sign-in keep the usual SSH path.'
+
+/** A machine's card reads not checked, with this line, while the machine
+ *  holds another session helper than this build of the app carries (after an
+ *  update): its tabs take the usual path until Check installs this one. */
+export const REMOTE_OTHER_HELPER = 'this build of the app carries another version of the session helper; press Check to update it'
 
 /** One added machine, for its card. */
 export interface RemoteMachineView {
@@ -26,7 +31,9 @@ export interface RemoteMachineView {
   label: string
   /** `user@host:port`. */
   target: string
-  /** Its last check passed: tabs may go through the helper there. */
+  /** Its last check passed and it holds this build's helper: tabs may go
+   *  through the helper there (one holding another reads false, with
+   *  REMOTE_OTHER_HELPER as its detail). */
   checked: boolean
   /** When it was last checked (ms since the epoch), and what that said. */
   lastCheck: { at: number; ok: boolean; detail?: string }
@@ -70,8 +77,10 @@ export interface RemoteActionResult {
   message: string
 }
 
-/** What main answers the SSH flow overlay for a tab through the session
- *  helper: it has no SSH flow, and the overlay hides (SshFlowOverlay.tsx). */
+/** What main sends the SSH flow overlay when a tab starts through the session
+ *  helper, and answers its catch-up until the tab is closed or started again
+ *  (a start that failed included): it has no SSH flow, and the overlay hides
+ *  (SshFlowOverlay.tsx). */
 export const SSH_THROUGH_HELPER = 'through-helper'
 
 /** A device id, as Check and Remove take it. */

@@ -6,7 +6,7 @@
  * user-message blocks render black on a light terminal. Book item 34: only the
  * local Claude path ever set it — SSH and Codex sessions came up dark. ONE
  * definition here, used by all three launch paths (local Claude env, Codex env,
- * SSH remote launch line).
+ * SSH remote launch line), and by a fourth: a remote tab through the session helper.
  */
 
 export type HostColorScheme = 'light' | 'dark'

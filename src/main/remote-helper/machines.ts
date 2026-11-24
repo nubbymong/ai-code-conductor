@@ -46,7 +46,7 @@ import {
 } from './ssh-exec'
 import type { BundledLinuxHelper } from './manifest'
 import type { RemoteActionResult, RemoteAddCandidate, RemoteConsent, RemoteMachineView } from '../../shared/remote-machines'
-import { REMOTE_TOKEN_RE } from '../../shared/remote-machines'
+import { REMOTE_OTHER_HELPER, REMOTE_TOKEN_RE } from '../../shared/remote-machines'
 
 /** What the app keeps of one added machine. */
 export interface RemoteMachineRecord {
@@ -254,11 +254,18 @@ export class RemoteMachines {
     return this.list().find((m) => m.host === t.host && m.port === t.port && m.user === t.username)
   }
 
-  views(): RemoteMachineView[] {
-    return this.list().map((m) => ({
-      did: m.did, label: m.label, target: `${m.user}@${m.host}:${m.port}`, checked: m.check.ok, lastCheck: m.check,
-      helperVersion: m.helper.version, system: `${m.os} ${m.arch}`, inUse: this.deps.inUse(m.did),
-    }))
+  /** The cards. `bundledSha256`: the SHA-256 of this build's Linux helper (null:
+   *  none). A machine holding another reads not checked, and says Check
+   *  updates it, as the routing sends its tabs the usual way (route.ts). */
+  views(bundledSha256: string | null): RemoteMachineView[] {
+    return this.list().map((m) => {
+      const other = bundledSha256 !== null && m.helper.sha256 !== bundledSha256
+      const lastCheck = other ? { at: m.check.at, ok: false, detail: REMOTE_OTHER_HELPER } : m.check
+      return {
+        did: m.did, label: m.label, target: `${m.user}@${m.host}:${m.port}`, checked: lastCheck.ok, lastCheck,
+        helperVersion: m.helper.version, system: `${m.os} ${m.arch}`, inUse: this.deps.inUse(m.did),
+      }
+    })
   }
 
   /** The saved SSH configs Add offers, each with whether it can be added. */

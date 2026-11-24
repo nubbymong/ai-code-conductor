@@ -5,7 +5,8 @@
  * cuts a write longer than 256 bytes into slices, so a slice can never split
  * the tool's name and let the rest of the line (its Enter included) reach the
  * CLI. A write the remote module holds back never reaches writePty; every
- * other write reaches it unchanged.
+ * other write reaches it unchanged. The kill door (a close or a Restart)
+ * forgets a remote tab's start after killPty.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
@@ -15,14 +16,16 @@ vi.mock('electron', () => ({
   BrowserWindow: class {},
 }))
 const writePty = vi.fn()
+const order: string[] = []
 vi.mock('../../../src/main/pty-manager', () => ({
-  spawnPty: vi.fn(), writePty: (...a: unknown[]) => writePty(...a), resizePty: vi.fn(), killPty: vi.fn(), getSshFlow: vi.fn(),
+  spawnPty: vi.fn(), writePty: (...a: unknown[]) => writePty(...a), resizePty: vi.fn(), killPty: (id: string) => { order.push(`killPty ${id}`) }, getSshFlow: vi.fn(),
   endSshRemote: vi.fn(), probeTmuxLive: vi.fn(),
 }))
 const holdBackRemoteImage = vi.fn((_id: string, _data: string) => false)
 vi.mock('../../../src/main/remote-helper', () => ({
   isRemoteHelperTab: () => false,
   holdBackRemoteImage: (id: string, data: string) => holdBackRemoteImage(id, data),
+  forgetRemoteHelperTab: (id: string) => { order.push(`forget ${id}`) },
 }))
 vi.mock('../../../src/main/debug-capture', () => ({ logUserInput: vi.fn(), isDebugModeEnabled: () => false }))
 vi.mock('../../../src/main/debug-logger', () => ({ logInfo: vi.fn(), logWarn: vi.fn(), logError: vi.fn() }))
@@ -60,5 +63,15 @@ describe('pty:write and a tab through the session helper', () => {
     expect(writePty).toHaveBeenCalledWith('tab-any', LONG)
     write({}, 'tab-any', 'ls\r')
     expect(writePty).toHaveBeenLastCalledWith('tab-any', 'ls\r')
+  })
+})
+
+describe('pty:kill and a tab through the session helper', () => {
+  it('a close or a Restart forgets the tab\'s start through the helper after killPty (a start that failed is over already, so killPty does not reach it)', () => {
+    const kill = on.get('pty:kill')!
+    order.length = 0
+    kill({}, 'tab-remote', 'close')
+    kill({}, 'tab-again', 'restart')
+    expect(order).toEqual(['killPty tab-remote', 'forget tab-remote', 'killPty tab-again', 'forget tab-again'])
   })
 })

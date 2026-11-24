@@ -65,3 +65,25 @@ A2.2 (A1 joined, the device check green):
   rest typed; the write door (pty:write) now holds the whole request back
   first, and the screenshot menu sends one request instead of its line by
   line storyboard on such a tab.
+
+A2.3 (the section review's findings, all applied):
+- The switch is read first: while it is off (and unless it is saved exactly
+  true) the machine records and the manifest are not asked for, so a dormant
+  feature makes no records file and a busy or full disk fails no SSH spawn.
+  With it on, records that do not read send the tab the usual way, with one
+  log line.
+- A tab started through the helper tells its SSH flow overlay at once, and
+  keeps answering "through-helper" after a start that failed, until it is
+  closed (the kill door forgets it: killPty does not reach a terminal that is
+  over) or started again.
+- A launch the holder refuses (the config's remote folder is not there) names
+  the folder and the holder's words in the tab.
+- The launch carries COLORFGBG from the app's theme, as the usual SSH launch
+  line does.
+- A machine holding another helper than this build's reads not checked on its
+  card, with "press Check to update it"; Check installs this build's first.
+- Only the app's own image request is held back (one line in its shape, or the
+  storyboard's line); a paste or a line that only names the tool is typed.
+- The switch's text says Restart on such a tab starts a new conversation
+  (/resume picks the earlier one up); a refused key sign-in says a key with a
+  passphrase works only through the ssh agent.

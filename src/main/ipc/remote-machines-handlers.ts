@@ -1,4 +1,4 @@
-import { app, ipcMain } from 'electron'
+import { app, ipcMain, nativeTheme } from 'electron'
 import type { BrowserWindow } from 'electron'
 import { readFileSync } from 'fs'
 import { IPC } from '../../shared/ipc-channels'
@@ -72,7 +72,7 @@ export function registerRemoteMachinesHandlers(getWindow: () => BrowserWindow | 
       }
       return manifestSha
     }
-    setRemoteHelperDeps({ platform, settings: savedSettings, machines, runner, bundledSha256, log: logInfo })
+    setRemoteHelperDeps({ platform, settings: savedSettings, machines, runner, bundledSha256, systemPrefersDark: () => nativeTheme.shouldUseDarkColors, log: logInfo })
   }
   const refuse = (message: string): RemoteActionResult => ({ ok: false, message })
 
@@ -88,7 +88,7 @@ export function registerRemoteMachinesHandlers(getWindow: () => BrowserWindow | 
         available: true,
         switchOn,
         bundled: b.ok ? { ok: true, version: b.helper.version, size: b.helper.size, sha12: b.helper.sha256.slice(0, 12) } : { ok: false, why: b.why },
-        machines: m.views(),
+        machines: m.views(b.ok ? b.helper.sha256 : null),
         candidates: m.candidates(readConfig('configs')),
       }
     }, () => none)

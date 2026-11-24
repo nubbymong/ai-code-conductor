@@ -17,9 +17,10 @@
  *
  * A dropped link (the ssh child ended, or a pong that never came) attaches
  * again from the last byte seen, with the holder's replay: HelperPty asks for
- * a new connection, and this driver tries a new bridge exec with section 11's
- * back-off (1, 2, 4, 8, 16, 32, 32 s) within the holder's two-minute away
- * clock, never after a sign-in or host key failure, a hash mismatch, or a
+ * a new connection, and this driver tries a new bridge exec after 1, 2, 4, 8,
+ * 16, 32 and 32 s (section 11's 1 to 16 s, then two tries more: 95 s of
+ * waiting in all, inside the holder's two-minute away clock), never after a
+ * sign-in or host key failure, a hash mismatch, or a
  * bridge that finds no holder. A closed tab or a quit ends the session
  * (`term.end`), as a plain SSH session ends then (D13); a tab closed just as
  * its link drops sends its end once more, over a link of its own.
@@ -41,6 +42,7 @@ import type { IDisposable, IEvent, IPty } from 'node-pty'
 import { HolderConnection, HolderError } from '../session-helper/connection'
 import { HelperPty, NothingStartedError, type HelperPtyDriver } from '../session-helper/helper-pty'
 import { checkLaunch, readListing, readRecord, type HolderRecord, type LaunchSpec } from '../session-helper/protocol'
+import { stripSpoofableText } from '../../shared/safe-text'
 import { holderLabel } from './scripts'
 import { afterHashLine, newNonce, openScriptStream, readHashLine, runScript, sshFailure, type SshRunner, type SshTarget } from './ssh-exec'
 import type { RemoteMachineRecord } from './machines'
@@ -51,7 +53,7 @@ export function remoteSessionId(appPtyId: string): string {
   return `rm${createHash('sha256').update(`aicc-remote-session\0${appPtyId}`, 'utf8').digest('hex').slice(0, 30)}`
 }
 
-/** Section 11's back-off for a dropped link, within the two-minute away clock. */
+/** The waits between tries for a dropped link: section 11's 1, 2, 4, 8, 16 s, then 32 s twice; 95 s in all, inside the two-minute away clock. */
 export const RECONNECT_DELAYS_MS = [1000, 2000, 4000, 8000, 16000, 32000, 32000]
 /** How long a bridge exec may take to pass its hash line, and the hello after it. */
 export const BRIDGE_OPEN_MS = 30_000
@@ -251,6 +253,13 @@ export class RemoteDriver implements HelperPtyDriver {
   }
 
   /**
+   * Two requests on a connection get more than a plain failure.
+   *
+   * A launch the holder refuses (the config's remote folder is not there, so
+   * the CLI cannot start in it): the tab's note names the folder and the
+   * holder's words, not "it did not answer" (HelperPty then ends the holder
+   * and shows direct()).
+   *
    * A tab closed just as its link dropped: HelperPty sends the end over the
    * connection it still has, and the link takes it down with it (the
    * connection closes before the holder answers, so the holder never got it,
@@ -258,12 +267,15 @@ export class RemoteDriver implements HelperPtyDriver {
    * its own; a holder already gone answers that with a bridge exit 3, and the
    * end is done. Any other request fails as it did.
    */
-  private endOnceMore(conn: HolderConnection, record: HolderRecord): void {
+  private wrapRequests(conn: HolderConnection, record: HolderRecord): void {
     const request = conn.request.bind(conn)
     conn.request = async (msg, onReply) => {
       try {
         return await request(msg, onReply)
       } catch (err) {
+        if (msg.t === 'term.launch') {
+          this.why = `Claude Code could not be started in ${this.o.spec.cwd} on ${this.o.machine.host}: ${stripSpoofableText((err as Error).message, 200)}`
+        }
         if (msg.t !== 'term.end' || !this.closed || !(err instanceof HolderError) || err.code !== 'io') throw err
         this.o.log(`[remote-helper] ${record.session}: the link dropped as the tab closed; its end goes once more on a new link`)
         const again = await this.connectOnce(record, false)
@@ -296,7 +308,7 @@ export class RemoteDriver implements HelperPtyDriver {
         openStream: async () => opened.stream,
         helloTimeoutMs: BRIDGE_HELLO_MS,
       })
-      if (endAgain) this.endOnceMore(conn, record)
+      if (endAgain) this.wrapRequests(conn, record)
       return conn
     } catch (err) {
       // ssh's exit status first (a bridge that found no holder exits 3, often
@@ -393,9 +405,20 @@ export class RemoteHelperPty implements IPty {
   }
 }
 
+/** The end of the app's own image request line
+ *  (renderer/utils/imageTransfer.ts composeFetchHostScreenshotPrompt): one
+ *  line, ending with the tool and the image's file name. */
+const IMAGE_REQUEST_LINE = new RegExp(`^[^\\r\\n]* \\(use ${HOST_IMAGE_TOOL} with filename="[^"\\r\\n]*" to load the image from the Conductor host\\)$`)
+/** The storyboard's own line naming the tool (sendStoryboardToSession), as it is written. */
+export const STORYBOARD_TOOL_LINE = `Frames (use ${HOST_IMAGE_TOOL} for each):\n`
+
 /** The app's own request for the host image tool, which a tab through the
- *  helper does not have: held back (RemoteHelperPty.write). */
+ *  helper does not have: held back (RemoteHelperPty.write). Only that
+ *  request: a single line in its shape (less one Enter at its end), or the
+ *  storyboard's line. Anything else that names the tool (a paste of a tool
+ *  list, a log, notes) is typed as it is. */
 export function heldBackImage(data: string | Buffer): boolean {
   const text = typeof data === 'string' ? data : data.toString('utf8')
-  return text.includes(HOST_IMAGE_TOOL)
+  if (text === STORYBOARD_TOOL_LINE) return true
+  return IMAGE_REQUEST_LINE.test(text.endsWith('\r') ? text.slice(0, -1) : text)
 }

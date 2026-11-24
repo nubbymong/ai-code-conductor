@@ -2,7 +2,7 @@ import { ipcMain, BrowserWindow, app } from 'electron'
 import { z } from 'zod'
 import { spawnPty, writePty, resizePty, killPty, getSshFlow, endSshRemoteDetailed, probeTmuxLive, holdsCodexLaunchLease, codexLaunchLeaseTaken, beginSpawnPreparation, isSessionWritable, isSessionLiveOrStarting, SSHOptions, SshEndTarget, getKeptCodexConversation, getKeptCodexConversationSource, codexRunEnded, codexConversationHeldElsewhere, endAgentRunsInFolder } from '../pty-manager'
 import type { CodexLaunch } from '../pty-manager'
-import { holdBackRemoteImage, isRemoteHelperTab } from '../remote-helper'
+import { forgetRemoteHelperTab, holdBackRemoteImage, isRemoteHelperTab } from '../remote-helper'
 import { SSH_THROUGH_HELPER } from '../../shared/remote-machines'
 import { handOffAskQuestion, submitPrompt, submitImage, type PromptButtonMode, type ImageSubmitResult } from '../session-input'
 import { ensureHelpWorkspace, helpWorkspaceDir } from '../help-workspace'
@@ -1409,6 +1409,8 @@ export function registerPtyHandlers(getWindow: () => BrowserWindow | null): void
     // the session's end; any other kill is a close. Only the exact string
     // 'restart' is a Restart's.
     killPty(sessionId, { reason: reason === 'restart' ? 'restart' : 'close' })
+    // 2.1.3-beta.17 A2: a remote tab whose start failed is over already, so killPty does not reach it.
+    forgetRemoteHelperTab(sessionId)
     sshClaudeLaunches.delete(sessionId)
     sshShellSessions.delete(sessionId)
     // #580: nothing left to deliver a queued canvas marker to. Logged loudly if
