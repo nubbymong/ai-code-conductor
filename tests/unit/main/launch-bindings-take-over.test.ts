@@ -14,7 +14,9 @@
 // written again has its kept folder removed. A tab the helper keeps nothing
 // for, or one prepared on another account (a Codex lease's, or the account a
 // Claude Code launch names), launches as before. A take-over whose bindings
-// fail removes what its launch left on disk, as a failed launch does.
+// fail removes what its launch left on disk, as a failed launch does. A
+// take-over that is not indexed opens its not-indexed windows (indexing-gaps.ts)
+// from when the update let go of it, never later than now.
 //
 // The session helper is a stand-in behind the seam (kept-launches.ts
 // setKeptTakeOver); tests/unit/main/session-helper-take-over.test.ts holds the
@@ -49,14 +51,26 @@ const h = vi.hoisted(() => ({
   hookFoldersRemoved: [] as string[],
   /** Whether the Hooks gateway stand-in is listening. */
   gwListening: true,
+  /** What the config stand-in answers for the app's settings. */
+  settings: {} as Record<string, unknown>,
+  /** What the last take-over answered pty-manager.ts (takeOverKeptLaunch). */
+  takenOver: null as { since: number } | null,
 }))
 
-/** The module's functions, each recorded by name, then run as they are. */
+/** The module's functions, each recorded by name, then run as they are; what
+ *  a take-over answers is kept. */
 vi.mock('../../../src/main/sessions/launch-bindings', async (importOriginal) => {
   const real = await importOriginal<Record<string, unknown>>()
   const wrapped: Record<string, unknown> = {}
   for (const [name, v] of Object.entries(real)) {
-    wrapped[name] = typeof v === 'function' ? (...a: unknown[]) => { h.journal.push(name); return (v as (...x: unknown[]) => unknown)(...a) } : v
+    wrapped[name] = typeof v === 'function'
+      ? (...a: unknown[]) => {
+        h.journal.push(name)
+        const r = (v as (...x: unknown[]) => unknown)(...a)
+        if (name === 'takeOverKeptLaunch') h.takenOver = r as { since: number } | null
+        return r
+      }
+      : v
   }
   return wrapped
 })
@@ -165,7 +179,7 @@ vi.mock('../../../src/main/watchdog/watchdog-manager', () => ({
 }))
 vi.mock('../../../src/main/config-manager', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../../src/main/config-manager')>()),
-  readConfig: () => ({}),
+  readConfig: (name: string) => (name === 'settings' ? h.settings : {}),
   getConfigDir: () => os.tmpdir(),
 }))
 vi.mock('../../../src/main/account-profiles', async (importOriginal) => ({
@@ -183,6 +197,8 @@ vi.mock('../../../src/main/provider-accounts', () => ({ getAccountsService: () =
 
 const { spawnPty, killPty, writePty, holdsCodexLaunchLease, getKeptCodexConversation, REMOVED_ACCOUNT_REFUSAL } = await import('../../../src/main/pty-manager')
 const { setKeptTakeOver } = await import('../../../src/main/sessions/kept-launches')
+const { notIndexedSnapshot, resetIndexingGapsForTests, conversationKey } = await import('../../../src/main/logging/indexing-gaps')
+const { codexFolderKey } = await import('../../../src/main/logging/codex-folder-key')
 
 h.urlDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ccc-takeover-url-'))
 afterAll(() => {
@@ -213,7 +229,7 @@ let kept: KeptPty | null
 /** Each take-over the stand-in helper was asked for. */
 let asked: Array<{ sessionId: string; provider: string; size: { cols: number; rows: number }; account?: string | null }>
 
-function keepFor(sessionId: string, folder: string | null = LAUNCH_FOLDER, rec: { account?: string | null; hookFolder?: string | null } = {}): void {
+function keepFor(sessionId: string, folder: string | null = LAUNCH_FOLDER, rec: { account?: string | null; hookFolder?: string | null; at?: number } = {}): void {
   setKeptTakeOver((sid, provider, size, account) => {
     asked.push({ sessionId: sid, provider, size, account })
     if (sid !== sessionId) return null
@@ -228,7 +244,7 @@ function keepFor(sessionId: string, folder: string | null = LAUNCH_FOLDER, rec: 
       write: (d: string) => { p.writes.push(d) },
       resize: () => {}, clear: () => {}, pause: () => {}, resume: () => {}, kill: () => { p.kills++ },
     }
-    return { pty: pty as never, kept: { conversation: CONV, account: rec.account ?? null, hookFolder: rec.hookFolder ?? null, folder } }
+    return { pty: pty as never, kept: { conversation: CONV, account: rec.account ?? null, hookFolder: rec.hookFolder ?? null, folder, at: rec.at ?? 0 } }
   })
 }
 
@@ -256,6 +272,9 @@ beforeEach(() => {
   h.telemetry.length = 0
   h.hookFoldersRemoved.length = 0
   h.gwListening = true
+  h.settings = {}
+  h.takenOver = null
+  resetIndexingGapsForTests()
   for (const f of fs.readdirSync(h.urlDir)) fs.rmSync(path.join(h.urlDir, f), { force: true })
 })
 
@@ -333,6 +352,42 @@ describe('pty-manager.ts: a restored tab takes over the session an update kept r
     keepFor(CLAUDE_SID, null)
     spawnPty(fakeWin, CLAUDE_SID, { cwd: os.tmpdir() } as never)
     expect(h.registered).toEqual([[CLAUDE_SID, os.tmpdir()]])
+  })
+
+  it('not indexed (logging off in Settings): its conversation\'s window opens when the update let go of it, so what its CLI wrote while no app ran is in it', () => {
+    h.settings = { loggingEnabled: false }
+    const releasedAt = Date.now() - 60_000
+    keepFor(CLAUDE_SID, LAUNCH_FOLDER, { at: releasedAt })
+    spawnPty(fakeWin, CLAUDE_SID, { cwd: os.tmpdir() } as never)
+    expect(notIndexedSnapshot().conversations[conversationKey(`${CONV}.jsonl`)]).toEqual([[releasedAt, null]])
+  })
+
+  it('a Codex tab not indexed: its launch folder\'s cover window opens when the update let go of it', () => {
+    h.settings = { loggingEnabled: false }
+    const releasedAt = Date.now() - 60_000
+    keepFor(CODEX_SID, LAUNCH_FOLDER, { account: 'acct-b1', at: releasedAt })
+    spawnPty(fakeWin, CODEX_SID, { cwd: os.tmpdir(), provider: 'codex', codexOptions: { permissionsPreset: 'read-only' }, codexLaunch: codexLaunch() } as never)
+    expect(notIndexedSnapshot().conversations[codexFolderKey(LAUNCH_FOLDER)]).toEqual([[releasedAt, null]])
+  })
+
+  it.each([
+    ['does not say when (an earlier version\'s)', () => 0],
+    ['says a time later than now (the clock was set back)', () => Date.now() + 3_600_000],
+  ])('not indexed, a record that %s: its window opens at the take-over', (_what, at) => {
+    h.settings = { loggingEnabled: false }
+    keepFor(CLAUDE_SID, LAUNCH_FOLDER, { at: at() })
+    const before = Date.now()
+    spawnPty(fakeWin, CLAUDE_SID, { cwd: os.tmpdir() } as never)
+    const after = Date.now()
+    // The take-over's own answer, never later than now (indexing-gaps.ts also
+    // clamps a window's start to now, so the window alone would not show it).
+    expect(h.takenOver!.since).toBeGreaterThanOrEqual(before)
+    expect(h.takenOver!.since).toBeLessThanOrEqual(after)
+    const windows = notIndexedSnapshot().conversations[conversationKey(`${CONV}.jsonl`)]
+    expect(windows).toHaveLength(1)
+    expect(windows[0][1]).toBeNull()
+    expect(windows[0][0]).toBeGreaterThanOrEqual(before)
+    expect(windows[0][0]).toBeLessThanOrEqual(after)
   })
 
   it('its launch wrote a status line address file: written again with this run\'s address', () => {

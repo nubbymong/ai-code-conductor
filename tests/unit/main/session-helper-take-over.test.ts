@@ -224,7 +224,9 @@ async function updated(): Promise<{ hc: FakeHolder; ho: FakeHolder; stream: numb
 
 describe('the next start after an update: a restored tab takes its kept session over (S16 steps 5 and 6)', () => {
   it('keeps the Claude Code session for its tab and ends the other provider\'s; the tab takes it over with no launch: the same holder attached, its replay shown, the queued hook event delivered, the kept tool stream given back and served with toolsChanged; the record goes, the files stay', async () => {
+    const beforeRelease = Date.now()
     const { hc, ho, stream } = await updated()
+    const afterRelease = Date.now()
     const holdsBefore = helper.holds()
     logs.length = 0
     const m2 = makeManager()
@@ -249,7 +251,10 @@ describe('the next start after an update: a restored tab takes its kept session 
     // The restored tab's launch asks for it, as launch-bindings.ts does.
     const taken = takeKeptSession(CLAUDE_TAB, 'claude', SIZE)
     expect(taken).not.toBeNull()
-    expect(taken!.kept).toMatchObject({ conversation: CONV, account: 'profile-mt4okz66-147e4a', hookFolder: null, folder: CWD })
+    // `at`: when the update let go of it, read back from its record (the take-over's not-indexed windows open from it).
+    expect(taken!.kept).toMatchObject({ conversation: CONV, account: 'profile-mt4okz66-147e4a', hookFolder: null, folder: CWD, at: expect.any(Number) })
+    expect(taken!.kept.at).toBeGreaterThanOrEqual(beforeRelease)
+    expect(taken!.kept.at).toBeLessThanOrEqual(afterRelease)
     const shown: string[] = []
     taken!.pty.onData((d) => shown.push(d))
     await until(() => !!hc.attached && hc.attached.ackedCaps.includes('hooks') && hc.attached.ackedCaps.includes('mcp'), 'the tab to attach with hooks and tools')
@@ -461,7 +466,9 @@ describe('the next start after an update: a kept session no tab takes over is en
 
 describe('a Codex session an update kept running (B1.2)', () => {
   it('its restored tab, on the account the session runs on, takes it over with no launch: the kept tool stream is served with nothing more said (Codex does not list its tools again), and a colour query in the replay is not passed on', async () => {
+    const beforeRelease = Date.now()
     const { ho } = await updated()
+    const afterRelease = Date.now()
     // The CLI asked its terminal's colour in the gap: the replay must not carry it on.
     ho.output('\x1b]11;?\x07before the take-over\r\n')
     const holdsBefore = helper.holds()
@@ -471,7 +478,9 @@ describe('a Codex session an update kept running (B1.2)', () => {
     expect(keptOnDisk()).toEqual([`${claudeSid}.json`, `${otherSid}.json`].sort())
     const taken = takeKeptSession(OTHER_TAB, 'codex', SIZE, 'acct-7')
     expect(taken).not.toBeNull()
-    expect(taken!.kept).toMatchObject({ conversation: OTHER_CONV, account: 'acct-7', hookFolder: HOOK_FOLDER, folder: CWD })
+    expect(taken!.kept).toMatchObject({ conversation: OTHER_CONV, account: 'acct-7', hookFolder: HOOK_FOLDER, folder: CWD, at: expect.any(Number) })
+    expect(taken!.kept.at).toBeGreaterThanOrEqual(beforeRelease)
+    expect(taken!.kept.at).toBeLessThanOrEqual(afterRelease)
     const shown: string[] = []
     taken!.pty.onData((d) => shown.push(d))
     await until(() => !!ho.attached?.ackedCaps.includes('mcp'), 'the take-over to attach')

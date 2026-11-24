@@ -592,8 +592,8 @@ function savedConfigLoggingOff(configs: unknown, configId: string | undefined, p
 /**
  * P3.12 (X1, Z1): the local Codex sessions running while not indexed (logging
  * off in Settings or in their config, or before the notice naming Codex was
- * seen), each with the moment it became not indexed (its launch, or the
- * switch-off). Every conversation such a session is on is marked written while
+ * seen), each with the moment it became not indexed (its launch, the switch-off,
+ * or, taken over, when the update let go of it). Every conversation such a session is on is marked written while
  * not indexed (indexing-gaps.ts) from that moment, not from its claim of the
  * conversation (Codex writes the first records before the claim), so no later
  * run, from any tab, indexes what was written then. Cleared when a launch of
@@ -2900,7 +2900,7 @@ function spawnPtyResolved(
   // P3.12 round 6 (Z1): when this launch's Codex process was started (taken before
   // its spawn): the moment the session became not indexed, when it launched so.
   let codexLaunchedAt: number | undefined
-  // P3.16 (M1): the same for this launch's Claude process.
+  // P3.16 (M1): the same for this launch's Claude process. A take-over sets both: when the update let go of it.
   let claudeLaunchedAt: number | undefined
 
   // Hoisted to function scope so the shared post-spawn tail (session-log capture)
@@ -6052,7 +6052,7 @@ function spawnPtyResolved(
       }
     })
   } else if (localLaunch && (takenOver = takeOverKeptLaunch({ win, sessionId, launch: localLaunch, resolvedCwd, cols, rows, codexLaunch: options?.codexLaunch, profileId: options?.profileId, isAsk: options?.isAsk === true }))) {
-    ({ ptyProcess, launchCwd: effectiveLaunchCwd, conversation: resumeUuidForBind, profileId: resolvedProfileId } = takenOver)
+    ({ ptyProcess, launchCwd: effectiveLaunchCwd, conversation: resumeUuidForBind, profileId: resolvedProfileId, since: claudeLaunchedAt } = takenOver); codexLaunchedAt = claudeLaunchedAt
     if (options?.provider === undefined) options = { ...options, provider: localLaunch.id } // as the Claude Code branch does: its options name the provider looked up
   } else if (localLaunch?.style === 'direct') {
     // Codex local session — spawn `codex` directly. Codex itself owns the

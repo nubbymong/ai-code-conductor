@@ -91,10 +91,13 @@ export function removeKeptLaunch(k: KeptLaunch): void {
 }
 
 /** What the last run's update recorded of a session a tab takes over: what
- *  its release knew (KeptLaunchFacts), and the folder its CLI was launched in
- *  (null when the record does not say: one an earlier version wrote). */
+ *  its release knew (KeptLaunchFacts), the folder its CLI was launched in
+ *  (null when the record does not say: one an earlier version wrote), and
+ *  when the update let go of it. */
 export interface KeptSessionFacts extends KeptLaunchFacts {
   folder: string | null
+  /** When the update let go of it, in ms; 0 when the record does not say. */
+  at: number
 }
 
 /** A session the helper kept for a tab, now taken over: its terminal, and

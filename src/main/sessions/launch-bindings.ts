@@ -680,6 +680,10 @@ export interface KeptSessionTakenOver {
   conversation: string | null
   /** The account profile it runs on; undefined for the default account. */
   profileId: string | undefined
+  /** The moment its not-indexed windows open from: when the update let go
+   *  of it (never later than now), so what its CLI wrote while no app ran is
+   *  in a window; now when the record does not say. */
+  since: number
 }
 
 /**
@@ -742,7 +746,8 @@ export function takeOverKeptLaunch(b: KeptTakeOverBinding): KeptSessionTakenOver
     throw err
   }
   logInfo(`[pty] ${b.sessionId}: took over the session the last update kept running, with no launch (conversation ${kept.conversation ?? 'none'})`)
-  return { ptyProcess: proc, launchCwd, conversation: kept.conversation, profileId: codex ? undefined : (kept.account ?? undefined) }
+  const now = Date.now()
+  return { ptyProcess: proc, launchCwd, conversation: kept.conversation, profileId: codex ? undefined : (kept.account ?? undefined), since: kept.at > 0 ? Math.min(kept.at, now) : now }
 }
 
 /**

@@ -23,7 +23,11 @@ the tab resumed the conversation in a new CLI.
   middle), and its hook events and tool streams go to this run from the attach. The record
   now carries the folder the CLI was launched in and its ConPTY.
 - **Bindings made again.** Both: the tool host's record with no credential, the run folder,
-  the logging run. Claude Code: the status line's address file only where the launch wrote
+  the logging run. A session not indexed (logging off in Settings or in its config, or the
+  notice not yet seen) has its not-indexed windows (indexing-gaps.ts) open from the time the
+  update let go of it, from its record, never later than now (now when the record does not
+  say), so what its CLI wrote while no app ran is not indexed later. Claude Code: the status
+  line's address file only where the launch wrote
   one, the account capture, the review and canvas registrations, the transcript bind by the
   saved conversation from the recorded folder. Codex: its hook file written again in its
   kept folder with this run's port and a token minted for it (kept-hooks.ts), the lease, the
