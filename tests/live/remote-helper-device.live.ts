@@ -106,6 +106,8 @@ let machines: RemoteMachines
 let machine: RemoteMachineRecord
 /** How many entries ~/.aicc held before the run (another install's folders stay). */
 let aiccBefore = '0'
+/** Whether the holders' run folder, /tmp/aicc-<uid>, was there before the run. */
+let runDirBefore = ''
 
 /** Poll a host command until it prints `want`. */
 async function untilHost(what: string, command: string, want: string, ms = 10_000): Promise<void> {
@@ -135,6 +137,8 @@ beforeAll(async () => {
   note('target', `${target.user}@${target.host}:${target.port}`)
   aiccBefore = sshRun('ls -A "$HOME/.aicc" 2>/dev/null | wc -l').out.trim() || '0'
   note('aicc-before', aiccBefore)
+  runDirBefore = sshRun('test -e "/tmp/aicc-$(id -u)" && echo there || echo absent').out.trim()
+  note('run-dir-before', runDirBefore)
   machines = machinesWith(memoryStore())
 })
 
@@ -308,5 +312,12 @@ describe('remote helper on a real Linux host', () => {
     // As many entries in ~/.aicc as before the run (none on a fresh account), the device folder gone, no process of the run.
     const [count, gone, ...procs] = left.out.trim().split('\n').map((l) => l.trim())
     expect([count, gone, procs]).toEqual([aiccBefore, 'gone', []])
+    // The holders' run folder (/tmp/aicc-<uid>, made by Add's self-test): Remove
+    // takes it away when it is empty, so a run that made it leaves none (vm:A2's
+    // reading: it stayed, empty, after Remove). One that was there before the
+    // run may hold another session's socket and is not checked.
+    const runDirAfter = sshRun('test -e "/tmp/aicc-$(id -u)" && echo there || echo gone').out.trim()
+    note('run-dir-after', runDirAfter)
+    if (runDirBefore === 'absent') expect(runDirAfter).toBe('gone')
   })
 })

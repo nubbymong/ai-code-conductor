@@ -139,6 +139,25 @@ describe('the fixed scripts', () => {
     expect(del).toBeGreaterThan(t.indexOf('[ ${#D} -eq 32 ] || no bad-device-id'))
     expect(t.match(/rm -rf/g)).toHaveLength(1)
   })
+
+  // vm:A2 (WINDOWS_1 to Ubuntu): Add's self-test made /tmp/aicc-<uid>, the
+  // holders' run folder (helper/src/transport/unix.rs run_dir), and Remove left
+  // it behind, empty. Remove now takes it away only when it is empty: rmdir,
+  // never a recursive delete, since another session of the same account may
+  // hold a socket there.
+  it('Remove takes the holders\' run folder /tmp/aicc-<uid> away only when it is the user\'s, private and empty, after the device folder', () => {
+    const cmd = scriptCommand('remove', [N, D, I])
+    const rmdirRun = 'pv "/tmp/aicc-$u" && rmdir -- "/tmp/aicc-$u" 2>/dev/null'
+    expect(cmd).toBe(`/bin/sh -c '${scriptText('remove')}' aicc ${N} ${D} ${I}`)
+    expect(cmd).toContain(rmdirRun)
+    expect(cmd.indexOf(rmdirRun)).toBeGreaterThan(cmd.indexOf('u=$(id -u)'))
+    expect(cmd.indexOf(rmdirRun)).toBeGreaterThan(cmd.indexOf('rm -rf -- "${HOME:?}/.aicc/${D:?}" || no cannot-remove'))
+    // Nothing but that rmdir touches the run folder: no rm of any kind.
+    expect(cmd).not.toMatch(/rm (-[a-z]+ )*(--)? *"?\/tmp\/aicc/)
+    expect(cmd.match(/\/tmp\/aicc-/g)).toHaveLength(2)
+    // No other script names the run folder.
+    for (const n of names.filter((x) => x !== 'remove')) expect(scriptText(n), n).not.toContain('/tmp/aicc')
+  })
 })
 
 describe('ssh exec: what a host prints', () => {

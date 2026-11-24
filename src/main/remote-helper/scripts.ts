@@ -206,7 +206,11 @@ const SPECS = {
    *  marker with this install's ids, then `~/.aicc` when that is left empty.
    *  A device id that breaks its pattern, or is empty, stops at the first
    *  check; another install's folder stops at the marker. The app asks the
-   *  holders first (`list`) and refuses while one runs. */
+   *  holders first (`list`) and refuses while one runs. Last, the holders' run
+   *  folder `/tmp/aicc-<uid>` (helper/src/transport/unix.rs `run_dir`; Add's
+   *  self-test makes it) goes when it is the user's, 0700 and empty: rmdir
+   *  only, never a recursive delete, since another session of the same
+   *  account may hold a socket there. */
   remove: {
     values: [],
     text: join([
@@ -216,6 +220,7 @@ const SPECS = {
       ...EXISTING,
       'rm -rf -- "${HOME:?}/.aicc/${D:?}" || no cannot-remove',
       'rmdir -- "$HOME/.aicc" 2>/dev/null',
+      'pv "/tmp/aicc-$u" && rmdir -- "/tmp/aicc-$u" 2>/dev/null',
       '[ -e "$A" ] && no still-there',
       'r end ok',
     ]),

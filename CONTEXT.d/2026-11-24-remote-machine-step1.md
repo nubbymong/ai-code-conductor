@@ -103,3 +103,14 @@ A2.4 (the whole-diff review's findings, all applied):
 - The SSH flow door's "through-helper" answer has its own test, and the route
   test reads pty-manager.ts's cap from scripts/ci/pr-numbers.mjs instead of
   restating it.
+
+At the aggregate's join (vm:A2's one minor finding, fixed):
+- Remove left the holders' run folder, /tmp/aicc-<uid>, on the host: Add's
+  self-test makes it (helper/src/transport/unix.rs `run_dir`), a tab's socket
+  in it goes when the tab closes, and the folder stayed, empty and owner-only,
+  after Remove (WINDOWS_1 to Ubuntu 24.04). Remove now ends with
+  `pv "/tmp/aicc-$u" && rmdir -- "/tmp/aicc-$u"`: only when the folder is the
+  user's, 0700 and empty, never a recursive delete, since another session of
+  the same account may hold a socket there. The unit test pins the command;
+  the device check reads the folder before the run and, when the run made it,
+  checks it is gone after Remove.
