@@ -28,8 +28,9 @@ them"; and the first sentence of the "Not handled" bullet of 2026-11-24-cc-narro
   TerminalView leaves reflowCursorLine off): an end there keeps its row and column. After each
   change the note is taken again at the new width, so a cursor's line cut by a narrowing is counted
   as it is after the cut when a later widening re-wraps it. Select all, a change of the rows (xterm
-  clears it), C10's clear-then-same-cells microtask and an end whose line was trimmed off the top
-  behave as C10 had them; @xterm/headless gets nothing.
+  clears it) and C10's clear-then-same-cells microtask behave as C10 had them; an end whose line
+  was trimmed off the top is not selected again (and see the third review item below);
+  @xterm/headless gets nothing.
 - **Not handled.** xterm's public `select` takes a start and a length, so a selection it has to
   select again cannot end on a line's first cell (a drag down to a row's left edge, whose copy ends
   with the line break before that line): it ends on the last cell of the row before, the same cells,
@@ -38,13 +39,16 @@ them"; and the first sentence of the "Not handled" bullet of 2026-11-24-cc-narro
   length at a row's end). Only when the lines moved: with nothing moved it is left exact. C5b's
   selecting again after its paint has the same limit. Ending it there needs xterm's private
   selection model, which the app's code does not touch.
-  A selection on the topmost rows of a full scrollback can be cleared by xterm's own trim during a
-  narrowing while its line stays in the buffer, and is not selected again: nothing is selected, as
-  without the module, so no other text is copied (measured by the fixer: the full 50 + 10 row test
-  buffer narrowed 40 to 39 pushes 12 rows off; a drag on row 11 is cleared, its line now on row 2;
-  from row 12 down the text is kept, where xterm alone copies other text). The clear comes inside
-  xterm's resize before any public event, so telling it from a clear by the user in the same turn
-  needs a hook into xterm's resize.
+  A selection on the top rows of a full scrollback is not kept through a narrowing: xterm's trim
+  (one row for each row the re-wrap adds) takes its rows above row 0. xterm clears a drag there,
+  with no event, though its line may still be in the buffer lower down (measured by the fixer: the
+  full 50 + 10 row test buffer narrowed 40 to 39 pushes 12 rows off; a drag on row 11 is cleared,
+  its line now on row 2; from row 12 down the text is kept, where xterm alone copies other text).
+  How many rows that is depends on how much re-wraps (measured on xterm alone at 140x28 with 10,000
+  rows of scrollback, 30% of the lines 200 cells long, 140 to 100 columns: the trim is 2,354 rows,
+  and the lines that were on rows 1,908 to 2,353 are still in the buffer). Keeping it needs a hook
+  into xterm's resize. Any other selection there is cleared too (the third item below), so nothing
+  else is copied.
 - **Found in review (review:C11), fixed on this branch.**
   - *A full scrollback.* In a tab whose scrollback is full (any long session), a narrowing selected
     other text again, for a drag and for a triple-clicked line. Cause, in xterm 6.0.0
@@ -70,9 +74,41 @@ them"; and the first sentence of the "Not handled" bullet of 2026-11-24-cc-narro
     (the only one xterm drags a selection with) is pressed in the terminal and not yet let go, a
     change of the columns drops the note and selects nothing again. The release is heard by a
     once-only listener on the document, added per press, so nothing stays on it.
-- **Tests.** terminal-line-selection.test.ts, 52: C10's 4 measurements, 5 new ones (above), C10's
-  18 keep tests and 18 new, and 7 from the review round. One of C10's changed: a drag over a
-  wrapped line's second row asserted that nothing was selected again (the bug); it now asserts its text ('w' x15, at (10,2)-(20,3)).
+  - *A selection a trim takes above row 0* (the review's re-check of 0e7b7eeb; fixed on
+    fix/terminal-selection-trim-clear). In a full scrollback other text stayed selected when output
+    or a narrowing's trim took a selection's rows above row 0. Cause, in xterm 6.0.0
+    (SelectionModel.handleTrim): it clears only a selection that has an end (a drag). One made by a
+    start and a length (a triple-clicked line, and every selection this module or C5b selected again
+    with `select`) is never cleared: its start is moved to row 0 and its length kept. xterm disposes
+    the note's markers in the same trim, so keep() forgot the note and left that row-0 selection.
+    Measured by the review on 0e7b7eeb (the full 50 + 10 row buffer, each of its 40 short lines in
+    turn): a triple-clicked line narrowed 40 to 20 copies other text in 35 of 40 ("ion\n-----"); a
+    drag kept once (40 to 39) and pushed off by 80 lines of output copies "r 21", where xterm alone
+    has nothing selected; in 320 random sessions 64 of 621 checks left other text. Fix: when xterm
+    disposes the end's marker (the first row of the end's line went off the top), the note goes and
+    the selection is cleared, unless a drag is in progress (xterm's). forget() drops the note before
+    it disposes the markers, so its own disposals are not taken for xterm's. When output takes only
+    the start's line, the rest is kept: a drag over three lines kept once ran on past its end
+    (copied "...line 197 of the session\nline 198 " where "...line 197 " was selected). xterm
+    keeps a drag's end and moves its start to row 0, its column kept: left so and noted again, so a
+    later change of the columns keeps it. One made by a start and a length runs on: selected again
+    from row 0, column 0, to the noted end, once the trim is over (xterm moves the end's marker
+    after the start's, so a microtask). A first drag's rest so loses the cells of row 0 before its
+    start's column, where xterm's comment says column 0; left as xterm keeps it. In a narrowing a
+    start's marker the trim disposes does not mean its line has gone (every marker it keeps is left
+    rows above its line), and the rest from row 0 took in text above the start (measured by the
+    fixer: a drag from row 10 narrowed 40 to 39 kept 40 dashes where 35 were selected, its rule line
+    still on rows 0 and 1; kept once and narrowed 39 to 20, from rows 35 and 36, it took in the five
+    lines above), so keep() clears it there, as for an end's. Measured by the fixer on three-line
+    drags from each of rows 0 to 47, seven plans (40 to 39; 40 to 20; kept once then 20; kept once
+    then 30; output; kept once then output; kept once, output, then 30): other text 105 of 336 on
+    0e7b7eeb, 0 of 336 with the fix; kept once then output, the rest from (0,0) in 37 of 48, where
+    0e7b7eeb copies other text in 37 (the other 11 are cleared at 39; on 0e7b7eeb 10 are, and one
+    copies other text).
+- **Tests.** terminal-line-selection.test.ts, 62: C10's 4 measurements, 5 new ones (above), C10's
+  18 keep tests and 18 new, 7 from the review round and 10 from its re-check. One of C10's changed:
+  a drag over a wrapped line's second row asserted that nothing was selected again (the bug); it
+  now asserts its text ('w' x15, at (10,2)-(20,3)).
   C10's "$ she" measurement moved to the new block and runs on xterm alone (with the module wired it
   is now kept). Red on the base 3bacadfc: 13 of 45 (the changed one and 12 new); the other 6 new
   are guards (a cursor's line, the alternate buffer, a drag ending on a line's first cell with
@@ -87,10 +123,24 @@ them"; and the first sentence of the "Not handled" bullet of 2026-11-24-cc-narro
   to 25; a triple-clicked line; output after the drag; a program screen whose last row is as wide
   as the screen; a drag over empty cells narrowed below its start and widened back), a drag in
   progress, and the right button held (a guard). Red on af3fa861: `Tests  6 failed | 46 passed
-  (52)`, the 6 that test the two fixes; the right-button guard passes there. Mutants on the fix, each red (failed of
-  51, before the guard was added): the count always 0 (5), no `onWriteParsed` listener (1), the
-  buffer's last row instead of its line's first row (1), the count on a widening too (9), no clamp
-  at 0 (11), no bottom marker at the note (4), an off note with nothing to select kept (1), no
-  check of a press in progress (1), a press never noted (1), a press never let go (26), no mouseup
-  listener (26); the left-button check dropped: 1 of 52. With C5b's four console-repaint files and
-  C10's terminalview-live-button.test.tsx: 148 of 148 across the 6 files.
+  (52)`, the 6 that test the two fixes; the right-button guard passes there. Mutants on the fix,
+  each red (failed of 51, before the guard was added): the count always 0 (5), no `onWriteParsed`
+  listener (1), the buffer's last row instead of its line's first row (1), the count on a widening
+  too (9), no clamp at 0 (11), no bottom marker at the note (4), an off note with nothing to select
+  kept (1), no check of a press in progress (1), a press never noted (1), a press never let go
+  (26), no mouseup listener (26); the left-button check dropped: 1 of 52.
+  The re-check's 10: the review's 7 (a triple-clicked line a narrowing pushes off; a triple-clicked
+  line still in the buffer after 40 to 20; a drag kept once then narrowed to 20; a drag kept once
+  then pushed off by output; a triple-clicked line pushed off by output; and two guards: a line
+  moved up but not off is kept, a drag in progress while output pushes the noted one off goes on)
+  and 3 for the start's line (a drag over three lines kept once, its first line pushed off by
+  output: the rest from row 0, column 0; a first drag, output, then a widening: the rest as xterm
+  keeps it, kept on its text; a narrowing's trim takes the start's marker while its line is lower
+  down: nothing selected). Red on 0e7b7eeb: `62 tests | 8 failed`; the 2 guards pass there.
+  Mutants on the fix, each red (failed of 62): no end hook (2), any disposal taken for xterm's (46),
+  the note not dropped first (46), cleared during a drag too (1), the note dropped but not cleared
+  (5), the start's marker heard for the clear (3), no start hook (2), the start hook run during the
+  trim (2), the rest always left as xterm keeps it (1), the rest always from row 0 (2), the rest
+  from xterm's start column (1), a narrowing's gone start not cleared (1), a narrowing's gone start
+  kept from row 0 (1), the rest not noted again (1). With C5b's four console-repaint files and C10's
+  terminalview-live-button.test.tsx: 158 of 158 across the 6 files.

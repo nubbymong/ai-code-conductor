@@ -27,8 +27,20 @@
  * leaves reflowCursorLine off): an end on such a line keeps its row and
  * column. Select all is left as xterm keeps it; a change of the rows clears
  * any selection in xterm and is left so; an end whose line was trimmed off the
- * top is not selected again. Selecting again is noted the same way, so a
- * later change of the columns keeps it too. A drag in progress (the left
+ * top is not selected again. When the first row of the end's line goes off the
+ * top (output in a full scrollback, a narrowing's trim), the note goes and
+ * what xterm still has selected is cleared: xterm clears a drag there itself,
+ * but a selection made by a start and a length (a triple-click's line, one
+ * selected again by select) it moves to row 0, on other text, and never
+ * clears (SelectionModel.handleTrim). A drag in progress is left to xterm.
+ * When output takes only the start's line, the rest is kept: xterm keeps a
+ * drag's end and moves its start to row 0, but a selection made by a start
+ * and a length keeps its length and runs on past its end, so it is selected
+ * again from row 0, column 0, to the noted end. A narrowing's trim leaves the
+ * markers it keeps rows above their lines (see below), so a start's marker it
+ * disposes does not mean that line has gone: the selection is cleared there,
+ * as for an end's. Selecting again is noted the same way, so a later change
+ * of the columns keeps it too. A drag in progress (the left
  * button pressed in the terminal, not yet let go) is xterm's: it reports the
  * selection at the release, so a change of the columns before that drops the
  * note and selects nothing again.
@@ -64,6 +76,7 @@ interface Disposable { dispose(): void }
 interface Marker extends Disposable {
   readonly line: number
   readonly isDisposed: boolean
+  onDispose?(listener: () => void): Disposable
 }
 
 interface Cell {
@@ -93,6 +106,7 @@ export interface LineSelectionTerminal {
   hasSelection?(): boolean
   getSelectionPosition?(): { start: { x: number; y: number }; end: { x: number; y: number } } | undefined
   select?(column: number, row: number, length: number): void
+  clearSelection?(): void
   registerMarker?(cursorYOffset?: number): Marker | undefined
 }
 
@@ -160,9 +174,12 @@ export function keepLineSelection(term: LineSelectionTerminal): Disposable {
   let bottom: Marker | null = null
 
   const forget = (): void => {
-    noted?.start.marker.dispose()
-    noted?.end.marker.dispose()
+    // The note goes first, so its markers disposed here are not taken for
+    // xterm's own disposal (noteAt).
+    const was = noted
     noted = null
+    was?.start.marker.dispose()
+    was?.end.marker.dispose()
     bottom?.dispose()
     bottom = null
   }
@@ -200,8 +217,38 @@ export function keepLineSelection(term: LineSelectionTerminal): Disposable {
   const noteAt = (start: At, end: At): void => {
     const a = endAt(start)
     const b = a && endAt(end)
-    if (a && b) { noted = { start: a, end: b }; markBottom() }
-    else a?.marker.dispose()
+    if (a && b) {
+      const mine = { start: a, end: b }
+      noted = mine
+      markBottom()
+      // xterm disposed the end's marker: the first row of its line went off the
+      // top (output in a full scrollback, a narrowing's trim). xterm clears a
+      // drag there, but a selection made by a start and a length (a
+      // triple-click's line, one selected again by select) it moves to row 0,
+      // on other text, and never clears (SelectionModel.handleTrim). So it is
+      // cleared here; a drag in progress is xterm's and is left.
+      b.marker.onDispose?.(() => {
+        if (noted !== mine) return
+        forget()
+        if (!pressed) t.clearSelection?.()
+      })
+      // xterm disposed the start's marker alone: the first row of the start's
+      // line went off the top. After output the rest is kept (keepRest) once
+      // the trim is over: xterm moves the end's marker after this one. A
+      // narrowing's trim is keep()'s, which runs before then.
+      a.marker.onDispose?.(() => {
+        if (noted !== mine) return
+        queueMicrotask(() => {
+          if (noted !== mine) return
+          try {
+            if (pressed || !t.hasSelection()) { forget(); return }
+            const at = place(mine.end, t.cols, false, 0)
+            if (at) keepRest(at, t.cols)
+            else forget()
+          } catch { forget() }
+        })
+      })
+    } else a?.marker.dispose()
   }
 
   /** Where `end` is at `cols` columns, its marker `off` rows above its line.
@@ -227,6 +274,30 @@ export function keepLineSelection(term: LineSelectionTerminal): Disposable {
       left -= cells
     }
     return { x: Math.min(left, cols), y: last }
+  }
+
+  /** Output took the start's line off the top and not the end's, at `end` at
+   *  `cols` columns. A drag xterm keeps ends there already (it moves the
+   *  drag's start to row 0): noted as xterm keeps it. A selection made by a
+   *  start and a length keeps its length and runs on past the end: the rest is
+   *  selected again, from row 0, column 0, to the noted end. */
+  const keepRest = (end: At, cols: number): void => {
+    const now = t.getSelectionPosition()
+    if (now && now.end.x === end.x && now.end.y === end.y) {
+      forget()
+      noteAt(now.start, end)
+      return
+    }
+    const length = end.y * cols + end.x
+    if (length <= 0) { forget(); t.clearSelection?.(); return }
+    const was = noted
+    // Fires onSelectionChange (noted again there) unless the cells are the
+    // last it fired for.
+    t.select(0, 0, length)
+    if (noted === was) {
+      forget()
+      noteAt({ x: 0, y: 0 }, end)
+    }
   }
 
   const note = (): void => {
@@ -268,7 +339,11 @@ export function keepLineSelection(term: LineSelectionTerminal): Disposable {
     const off = narrowed && bottom && !bottom.isDisposed ? Math.max(0, bottomRow() - bottom.line) : 0
     const start = place(was.start, cols, true, off)
     const end = place(was.end, cols, false, off)
-    if (!start || !end) { forget(); return }
+    // A marker this narrowing's trim disposed (the end's is cleared by noteAt
+    // already). Every marker it keeps is left rows above its line, so the
+    // start's line may still be lower down, and xterm's cells hold other text:
+    // cleared, as xterm clears a drag whose end goes.
+    if (!start || !end) { forget(); t.clearSelection?.(); return }
     const length = (end.y - start.y) * cols + end.x - start.x
     // Nothing to select again: a note whose markers are off is dropped.
     if (length <= 0) { if (off) forget(); return }

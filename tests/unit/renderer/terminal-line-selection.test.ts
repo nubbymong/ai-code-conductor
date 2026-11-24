@@ -812,3 +812,151 @@ describe('a drag in progress when the columns change (aicc_planning#424)', () =>
     expect(term.getSelection()).toBe('$ she')
   })
 })
+
+describe('a selection that a trim takes above row 0: xterm clears a drag there, and moves one made by a start and a length (a triple-click\'s line, one selected again by select) to row 0, on other text (SelectionModel.handleTrim; aicc_planning#424)', () => {
+  it('a triple-clicked line that a narrowing pushes off the top of a full scrollback: nothing stays selected (unfixed: the rule line on row 0)', async () => {
+    const term = await fullTerminal()
+    keepLineSelection(term)
+    term.scrollToTop()
+    await frame()
+    clickCell(term, 5, 4, 3)
+    expect(term.getSelection()).toBe('line 145 of the session')
+    term.resize(39, 10)
+    expect(rowOf(term, 'line 145 of the session')).toBe(-1)
+    expect(term.hasSelection()).toBe(false)
+  })
+
+  it('a triple-clicked line still in the buffer after 40 to 20 columns, its marker gone with the rows pushed off: nothing stays selected (unfixed: other text on row 0)', async () => {
+    const term = await fullTerminal()
+    keepLineSelection(term)
+    term.scrollToLine(27)
+    await frame()
+    clickCell(term, 5, 4, 3)
+    expect(term.getSelection()).toBe('line 172 of the session')
+    term.resize(20, 10)
+    expect(rowOf(term, 'line 172 of the sess')).toBeGreaterThan(0)
+    expect(term.hasSelection()).toBe(false)
+  })
+
+  it('a drag selected again once (40 to 39), then pushed off by a narrowing to 20: nothing stays selected, as xterm alone leaves a drag (unfixed: a selection on row 0)', async () => {
+    const term = await fullTerminal()
+    keepLineSelection(term)
+    term.scrollToLine(8)
+    await frame()
+    dragBetween(term, 4, 4, 9, 4)
+    expect(term.getSelection()).toBe(' 153 ')
+    term.resize(39, 10)
+    expect(term.getSelection()).toBe(' 153 ')
+    term.resize(20, 10)
+    expect(term.hasSelection()).toBe(false)
+  })
+
+  it('a drag selected again once (40 to 39), then pushed off the top by output alone: nothing stays selected, as xterm alone leaves a drag (unfixed: other text on row 0)', async () => {
+    const term = await fullTerminal()
+    keepLineSelection(term)
+    dragBetween(term, 4, 6, 9, 6)
+    term.resize(39, 10)
+    expect(term.getSelection()).toBe(' 197 ')
+    await write(term, '\r\n' + Array.from({ length: 80 }, (_, i) => `later ${i + 1}`).join('\r\n'))
+    expect(term.hasSelection()).toBe(false)
+  })
+
+  it('a triple-clicked line pushed off the top by output alone: nothing stays selected (xterm alone keeps other text selected on row 0)', async () => {
+    const term = await fullTerminal()
+    keepLineSelection(term)
+    clickCell(term, 5, 6, 3)
+    expect(term.getSelection()).toBe('line 197 of the session')
+    await write(term, '\r\n' + Array.from({ length: 80 }, (_, i) => `later ${i + 1}`).join('\r\n'))
+    expect(term.hasSelection()).toBe(false)
+  })
+
+  it('a selection whose line output moves up but not off the top: kept, and kept at the next change of the columns (a guard)', async () => {
+    const term = await fullTerminal()
+    keepLineSelection(term)
+    dragBetween(term, 4, 6, 9, 6)
+    term.resize(39, 10)
+    expect(term.getSelection()).toBe(' 197 ')
+    await write(term, '\r\n' + Array.from({ length: 20 }, (_, i) => `later ${i + 1}`).join('\r\n'))
+    expect(term.getSelection()).toBe(' 197 ')
+    term.resize(30, 10)
+    expect(term.getSelection()).toBe(' 197 ')
+  })
+})
+
+describe('a drag in progress when output pushes the noted selection off the top (aicc_planning#424)', () => {
+  it('an earlier drag on the top rows noted, the mouse pressed and moved for a new one lower down, 10 lines of output: the new drag goes on and its release is reported', async () => {
+    const term = await fullTerminal()
+    keepLineSelection(term)
+    term.scrollToTop()
+    await frame()
+    dragBetween(term, 4, 3, 9, 3)
+    expect(term.getSelection()).toBe(' 144 ')
+    term.scrollToBottom()
+    await frame()
+    const screen = term.element!.querySelector('.xterm-screen') as HTMLElement
+    const at = (x: number, row: number) => ({ clientX: x * 9 + 1, clientY: row * 17 + 8, button: 0, bubbles: true })
+    screen.dispatchEvent(new MouseEvent('mousedown', { ...at(4, 6), detail: 1 }))
+    document.dispatchEvent(new MouseEvent('mousemove', { ...at(9, 6), buttons: 1 }))
+    expect(term.getSelection()).toBe(' 197 ')
+    await write(term, '\r\n' + Array.from({ length: 10 }, (_, i) => `later ${i + 1}`).join('\r\n'))
+    expect(term.getSelection()).toBe(' 197 ')
+    document.dispatchEvent(new MouseEvent('mouseup', { ...at(9, 6), detail: 1 }))
+    expect(term.getSelection()).toBe(' 197 ')
+    term.resize(39, 10)
+    expect(term.getSelection()).toBe(' 197 ')
+  })
+})
+
+describe('a selection over several lines whose first line alone goes off the top (aicc_planning#424)', () => {
+  it('a drag over three lines selected again once (40 to 39), its first line pushed off by output: the rest, from row 0, column 0, to its end, kept at the next change of the columns (unfixed: runs on past its end)', async () => {
+    const term = await fullTerminal()
+    keepLineSelection(term)
+    dragBetween(term, 5, 4, 9, 6)
+    const picked = '195 of the session\n' + '-'.repeat(40) + '\nline 197 '
+    expect(term.getSelection()).toBe(picked)
+    term.resize(39, 10)
+    expect(term.getSelection()).toBe(picked)
+    const row = term.getSelectionPosition()!.start.y
+    await write(term, '\r\n' + Array.from({ length: row + 1 }, (_, i) => `later ${i + 1}`).join('\r\n'))
+    expect(rowOf(term, 'line 195 of the session')).toBe(-1)
+    expect(term.getSelection()).toBe('-'.repeat(40) + '\nline 197 ')
+    expect(pos(term)!.slice(0, 2)).toEqual([0, 0])
+    term.resize(40, 10)
+    expect(term.getSelection()).toBe('-'.repeat(40) + '\nline 197 ')
+  })
+
+  it('a first drag over three lines at 39 columns (a rule line in two rows in the middle), its first line pushed off by output: the rest as xterm keeps it, then kept on its text through a widening that joins the rule\'s rows (xterm alone: runs on into the next line)', async () => {
+    const term = await fullTerminal()
+    term.resize(39, 10)
+    keepLineSelection(term)
+    const r = rowOf(term, 'line 195 of the session')
+    expect(rowOf(term, 'line 197 of the session')).toBe(r + 3)
+    term.scrollToLine(Math.max(0, r - 4))
+    await frame()
+    const v = r - term.buffer.active.viewportY
+    dragBetween(term, 5, v, 9, v + 3)
+    expect(term.getSelection()).toBe('195 of the session\n' + '-'.repeat(40) + '\nline 197 ')
+    const select = vi.spyOn(term, 'select')
+    await write(term, '\r\n' + Array.from({ length: r + 1 }, (_, i) => `later ${i + 1}`).join('\r\n'))
+    expect(rowOf(term, 'line 195 of the session')).toBe(-1)
+    // xterm keeps the drag's end and moves its start to row 0 (its column
+    // kept): nothing selected again.
+    const rest = '-'.repeat(35) + '\nline 197 '
+    expect(term.getSelection()).toBe(rest)
+    expect(select).not.toHaveBeenCalled()
+    term.resize(40, 10)
+    expect(term.getSelection()).toBe(rest)
+  })
+
+  it('a drag over three lines whose first line\'s marker a narrowing\'s trim takes, the line itself still in the buffer lower down: nothing stays selected, as when the end\'s goes (unfixed: other text on row 0)', async () => {
+    const term = await fullTerminal()
+    keepLineSelection(term)
+    term.scrollToLine(6)
+    await frame()
+    dragBetween(term, 5, 4, 9, 6)
+    expect(term.getSelection()).toBe('-'.repeat(35) + '\nline 152 of the session\nline 153 ')
+    term.resize(39, 10)
+    expect(rowOf(term, 'line 152 of the session')).toBeGreaterThan(0)
+    expect(term.hasSelection()).toBe(false)
+  })
+})
