@@ -291,6 +291,32 @@ function lessCountAlone(below: ScreenLine[], footer: RegExp): ScreenLine[] {
   return underFooterRowOf(below[below.length - 1], below[below.length - 2])?.countAlone ? below.slice(0, -1) : below
 }
 
+/** 2.1.3-beta.17 C9 (aicc_planning#420): `lines` with Codex's warning count
+ *  alone under its footer as a blank row, where the readers take it
+ *  (rowsUnder: the last row, the count alone at the footer's indent, one cell
+ *  from the right edge, under a composer that holds something); `lines`
+ *  itself otherwise. Main's Codex image rule reads the composer past its
+ *  image placeholder (./codex-image-screen.ts, codexScreenPastPlaceholder):
+ *  with the placeholder cut the composer reads empty, and the count alone
+ *  under an empty composer is not recorded, so the readers would refuse the
+ *  screen Codex really shows (the placeholder, the count alone under it). */
+export function codexScreenLessCountAlone(lines: ScreenLine[]): ScreenLine[] {
+  const shown = lines.filter(nonBlank)
+  const i = composerIndex(shown)
+  if (i < 0 || !rowsUnder(shown, i).hint?.countAlone) return lines
+  const at = lines.lastIndexOf(shown[shown.length - 1])
+  const row = lines[at]
+  const out = lines.slice()
+  out[at] = {
+    text: '',
+    typed: '',
+    ...(typeof row.inverse === 'string' ? { inverse: '' } : {}),
+    ...(row.width !== undefined ? { width: row.width } : {}),
+    ...(row.end !== undefined ? { end: 0 } : {}),
+  }
+  return out
+}
+
 const nonBlank = (l: ScreenLine): boolean => l.text.trim() !== ''
 const blocked = (lines: ScreenLine[]): boolean => lines.some((l) => BLOCKING_RE.some((re) => re.test(l.text)))
 

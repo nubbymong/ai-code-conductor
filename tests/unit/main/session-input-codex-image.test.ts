@@ -6,8 +6,8 @@
 //  - A Codex session: the run screen's image rule is asked once, with the
 //    path, the sentence and a prompt button's ready wait; nothing is written
 //    through the write port. Pasted: sent.
-//  - Not pasted (Codex busy, no placeholder, its warning count, the sentence
-//    not confirmed, a prompt up): not-taken, so the renderer types today's
+//  - Not pasted (Codex busy, no placeholder, the sentence not confirmed, a
+//    prompt up): not-taken, so the renderer types today's
 //    line by its own Codex rule; one log line says why. A paste the rule left
 //    at the prompt (a prompt came up after it): not-taken with left, so the
 //    renderer types nothing and says the image is at the prompt; the others
@@ -98,7 +98,6 @@ describe('submitImage: a Codex session', () => {
   it.each([
     ['Codex busy for the whole wait', 'busy-timeout', false],
     ['no placeholder after the paste (taken back)', 'no-placeholder', false],
-    ['the warning count showing', 'warning-count', false],
     ['the sentence not confirmed', 'not-drawn', false],
     ['a prompt up after the paste', 'prompt-on-screen', true],
   ] as const)('%s: not-taken (with left when the paste may still be at the prompt); one log line says why', async (_name, reason, left) => {

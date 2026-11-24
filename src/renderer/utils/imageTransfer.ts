@@ -81,7 +81,7 @@ export function imagePathRefusedNote(hostFilePath: string): string {
  * Codex's own paste, then the sentence, then Enter (pty.submitImage; probe
  * P11: Codex attaches a path it gets as a bracketed paste, "[Image #1]", and
  * reads a typed path only as words). What main could not paste (`not-taken`:
- * Codex not ready in its wait, no placeholder, its warning count showing; or
+ * Codex not ready in its wait, no placeholder; or
  * an ask that failed) gets today's line, the sentence and the path, by the
  * rule that types into Codex (sendImagePathToCodex), which types only into a
  * ready, empty composer and otherwise tells `onNote` why it typed nothing.

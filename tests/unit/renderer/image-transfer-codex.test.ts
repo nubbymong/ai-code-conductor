@@ -4,7 +4,7 @@
  *  - sendImageToCodexSession asks main to paste the path as Codex's own paste
  *    (pty.submitImage) with the sentence as given; nothing is typed from
  *    here when main sent it.
- *  - Main's `not-taken` (Codex not ready, no placeholder, its warning count),
+ *  - Main's `not-taken` (Codex not ready, no placeholder),
  *    or an ask that fails: today's line, by the rule that types into Codex
  *    (sendImagePathToCodex), with the same words and the note callback.
  *  - Main's `not-taken` with `left` (its paste may still be at the prompt):
