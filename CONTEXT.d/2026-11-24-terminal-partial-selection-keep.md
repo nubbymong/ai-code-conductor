@@ -82,15 +82,41 @@ them"; and the first sentence of the "Not handled" bullet of 2026-11-24-cc-narro
     with `select`) is never cleared: its start is moved to row 0 and its length kept. xterm disposes
     the note's markers in the same trim, so keep() forgot the note and left that row-0 selection.
     Measured by the review on 0e7b7eeb (the full 50 + 10 row buffer, each of its 40 short lines in
-    turn): a triple-clicked line narrowed 40 to 20 copies other text in 35 of 40 ("ion\n-----"); a
-    drag kept once (40 to 39) and pushed off by 80 lines of output copies "r 21", where xterm alone
-    has nothing selected; in 320 random sessions 64 of 621 checks left other text. Fix: when xterm
-    disposes the end's marker (the first row of the end's line went off the top), the note goes and
-    the selection is cleared, unless a drag is in progress (xterm's). forget() drops the note before
-    it disposes the markers, so its own disposals are not taken for xterm's. When output takes only
-    the start's line, the rest is kept: a drag over three lines kept once ran on past its end
-    (copied "...line 197 of the session\nline 198 " where "...line 197 " was selected). xterm
-    keeps a drag's end and moves its start to row 0, its column kept: left so and noted again, so a
+    turn): a triple-clicked line narrowed 40 to 20 copies other text in 35 of 40
+    ("ion\n--------------------"); a drag kept once (40 to 39) and pushed off by 80 lines of output
+    copies "r 21", where xterm alone has nothing selected; in 320 random sessions 64 of 621 checks
+    left other text. Fix: when a trim disposes the end's marker (the first row of the end's line
+    went off the top), the note goes and the selection is cleared, unless a drag is in progress
+    (xterm's). forget() drops the note before it disposes the markers, so its own disposals are not
+    taken for xterm's. xterm disposes a marker on a row a program erases (ESC[J, ESC[2J:
+    InputHandler._resetBufferLine, Buffer.clearMarkers) or deletes (delete line, scroll up: a
+    splice) too, and leaves the selection on its cells. The first version of this fix took any
+    disposal for a trim (found by the review's second re-check of c1bba4aa): a selection in view was
+    cleared whenever a program erased its rows, even when it painted the same text again on the same
+    rows (8 of 8 cases, where xterm alone keeps it), and when a delete or a scroll up took the
+    start's marker it was selected again from the buffer's first row, taking in the whole scrollback
+    above. Only a trim is acted on now. A marker on the buffer's first row, registered ahead of the
+    ends' markers when a selection is noted, tells them apart: xterm disposes a trim's markers in the
+    order they were registered, and any trim takes that row, while an erase of the screen does not
+    reach it or reaches it after the selection's rows. When an end's marker goes and that one is
+    still there, the note goes and the selection stays as xterm keeps it. After a write whose trim
+    took that marker but left the note, the note is taken again, so a new one is again ahead of the
+    ends' markers. Measured by the fixer, the 10 new tests (below): red on c1bba4aa `Tests  8 failed
+    | 64 passed (72)` (the 2 guards pass there), 72 of 72 with the fix. Replayed with a selection
+    made in view (a drag and a selected row, on two rows of each screen), the repo's 11 after-reply
+    recordings in helper/fixtures/screens (each span of output that erases the display; 136 checks
+    from 4 Claude Code and 5 Codex recordings, the other 2 have no row with text there) and
+    console-repaint-cc-streams.ts's 5 Claude Code recordings (each paint after its size, plain and
+    through the aligner; 56 checks): this branch matches xterm alone and C10's head 3fb3e921 in 192
+    of 192; c1bba4aa cleared 20 that all three leave selected (Codex's redraw after a size change,
+    the lower row, its cells then blank). Not covered (measured by the review): one write
+    that both pushes rows off the top and then erases the selection's rows is still read as a trim,
+    and the selection is cleared where xterm alone keeps it; likewise an erase of a selection whose
+    end's line is the buffer's first row (the first-row marker is on that row, and goes first).
+    When output takes only the start's line, the rest is kept: a drag over three lines kept once
+    ran on past its end (copied "...line 197 of the session\nline 198 " where "...line 197 " was
+    selected). xterm keeps a drag's end and moves its start to row 0, its column kept: left so and
+    noted again, so a
     later change of the columns keeps it. One made by a start and a length runs on: selected again
     from row 0, column 0, to the noted end, once the trim is over (xterm moves the end's marker
     after the start's, so a microtask). A first drag's rest so loses the cells of row 0 before its
@@ -105,8 +131,9 @@ them"; and the first sentence of the "Not handled" bullet of 2026-11-24-cc-narro
     0e7b7eeb, 0 of 336 with the fix; kept once then output, the rest from (0,0) in 37 of 48, where
     0e7b7eeb copies other text in 37 (the other 11 are cleared at 39; on 0e7b7eeb 10 are, and one
     copies other text).
-- **Tests.** terminal-line-selection.test.ts, 62: C10's 4 measurements, 5 new ones (above), C10's
-  18 keep tests and 18 new, 7 from the review round and 10 from its re-check. One of C10's changed:
+- **Tests.** terminal-line-selection.test.ts, 72: C10's 4 measurements, 5 new ones (above), C10's
+  18 keep tests and 18 new, 7 from the review round, 10 from its re-check and 10 from its second
+  re-check. One of C10's changed:
   a drag over a wrapped line's second row asserted that nothing was selected again (the bug); it
   now asserts its text ('w' x15, at (10,2)-(20,3)).
   C10's "$ she" measurement moved to the new block and runs on xterm alone (with the module wired it
@@ -142,5 +169,17 @@ them"; and the first sentence of the "Not handled" bullet of 2026-11-24-cc-narro
   (5), the start's marker heard for the clear (3), no start hook (2), the start hook run during the
   trim (2), the rest always left as xterm keeps it (1), the rest always from row 0 (2), the rest
   from xterm's start column (1), a narrowing's gone start not cleared (1), a narrowing's gone start
-  kept from row 0 (1), the rest not noted again (1). With C5b's four console-repaint files and C10's
-  terminalview-live-button.test.tsx: 158 of 158 across the 6 files.
+  kept from row 0 (1), the rest not noted again (1).
+  The second re-check's 10: 8 for a program's erase or delete (a drag, the screen erased from home
+  and the same rows painted again; a triple-clicked line, the screen erased with ESC[2J; a drag
+  over four lines, erased from the row under its first line; the alternate buffer; erased, then a
+  change of the columns: not selected again; output that trims without reaching the selection,
+  then an erase: the first-row marker taken again; a drag over four lines, its first line deleted;
+  a drag from the view's top row, the screen scrolled up one row) and 2 guards for the order (a
+  triple-clicked line on the buffer's first row, one line of output: nothing selected; three lines
+  selected by a start and a length from the buffer's first row, one line of output: the rest from
+  row 0, column 0). Red on c1bba4aa: `Tests  8 failed | 64 passed (72)`, the 2 guards passing.
+  Mutants on the fix, each red (failed of 72): the end's hook takes any disposal (1), the start's
+  hook takes any disposal (2), not noted again after a write that trimmed (1), the first-row
+  marker registered after the ends' (6), a trimmed end never cleared (6). With C5b's four
+  console-repaint files and C10's terminalview-live-button.test.tsx: 168 of 168 across the 6 files.

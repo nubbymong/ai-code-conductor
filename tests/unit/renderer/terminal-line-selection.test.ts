@@ -960,3 +960,123 @@ describe('a selection over several lines whose first line alone goes off the top
     expect(term.hasSelection()).toBe(false)
   })
 })
+
+/** The view's rows as they are now, each painted again on its own row (a program drawing the
+ *  same screen again). */
+const sameRows = (term: Terminal): string => {
+  const b = term.buffer.active
+  return Array.from({ length: term.rows }, (_, i) => `\x1b[${i + 1};1H${b.getLine(b.baseY + i)?.translateToString(true) ?? ''}`).join('')
+}
+
+describe('a program erases or deletes the rows a selection is on: xterm disposes the markers on those rows too (InputHandler._resetBufferLine, a splice\'s delete), and that is not a trim: the selection stays as xterm keeps it (aicc_planning#424)', () => {
+  it('a drag in view, the program erases from home (ESC[H ESC[J) and paints the same rows: still selected, the same text (unfixed: nothing selected)', async () => {
+    const term = await fullTerminal()
+    keepLineSelection(term)
+    dragBetween(term, 4, 6, 9, 6)
+    expect(term.getSelection()).toBe(' 197 ')
+    const at = pos(term)
+    await write(term, '\x1b[H\x1b[J' + sameRows(term))
+    expect(term.getSelection()).toBe(' 197 ')
+    expect(pos(term)).toEqual(at)
+  })
+
+  it('a triple-clicked line in view, the program erases its screen (ESC[2J ESC[H) and paints the same rows: still that line (unfixed: nothing selected)', async () => {
+    const term = await fullTerminal()
+    keepLineSelection(term)
+    clickCell(term, 5, 6, 3)
+    expect(term.getSelection()).toBe('line 197 of the session')
+    await write(term, '\x1b[2J\x1b[H' + sameRows(term))
+    expect(term.getSelection()).toBe('line 197 of the session')
+  })
+
+  it('a drag over four lines, the program erases from the row under its first line down (ESC[r;1H ESC[J: the end\'s row, not the start\'s) and paints those rows again: still selected, the same text (unfixed: nothing selected)', async () => {
+    const term = await fullTerminal()
+    keepLineSelection(term)
+    dragBetween(term, 5, 3, 9, 6)
+    const picked = term.getSelection()
+    const at = pos(term)
+    expect(picked).toBe('194 of the session\nline 195 of the session\n' + '-'.repeat(40) + '\nline 197 ')
+    await write(term, '\x1b[5;1H\x1b[J' + sameRows(term))
+    expect(term.getSelection()).toBe(picked)
+    expect(pos(term)).toEqual(at)
+  })
+
+  it('the alternate buffer: a drag, the program erases its screen and paints the same rows: still selected (unfixed: nothing selected)', async () => {
+    const term = await fullTerminal()
+    await write(term, '\x1b[?1049h' + Array.from({ length: 10 }, (_, i) => `\x1b[${i + 1};1Hscreen row ${i + 1} of the program`).join(''))
+    await frame()
+    keepLineSelection(term)
+    dragBetween(term, 7, 4, 12, 4)
+    expect(term.getSelection()).toBe('row 5')
+    await write(term, '\x1b[2J\x1b[H' + sameRows(term))
+    expect(term.getSelection()).toBe('row 5')
+  })
+
+  it('erased and painted again, then the columns change: left as xterm keeps it, not selected again and not cleared (unfixed: nothing selected)', async () => {
+    const term = await fullTerminal()
+    keepLineSelection(term)
+    dragBetween(term, 4, 6, 9, 6)
+    const at = pos(term)
+    await write(term, '\x1b[2J\x1b[H' + sameRows(term))
+    const select = vi.spyOn(term, 'select')
+    term.resize(41, 10)
+    expect(select).not.toHaveBeenCalled()
+    expect(pos(term)).toEqual(at)
+  })
+
+  it('output that pushes rows off the top without reaching the selection, then in a later write the program erases and paints its rows again: still selected (the first-row marker is renewed after a write that trimmed)', async () => {
+    const term = await fullTerminal()
+    keepLineSelection(term)
+    dragBetween(term, 4, 6, 9, 6)
+    expect(term.getSelection()).toBe(' 197 ')
+    await write(term, '\r\nlater 1\r\nlater 2')
+    expect(term.getSelection()).toBe(' 197 ')
+    await write(term, '\x1b[H\x1b[J' + sameRows(term))
+    expect(term.getSelection()).toBe(' 197 ')
+  })
+
+  it('a drag over four lines, the program deletes the first of them (ESC[r;1H ESC[M): left on its cells as xterm keeps it, not selected again from the buffer\'s first row (unfixed: every line of the scrollback above it)', async () => {
+    const term = await fullTerminal()
+    keepLineSelection(term)
+    dragBetween(term, 5, 3, 9, 6)
+    const at = pos(term)!
+    expect(at[1]).toBeGreaterThan(0)
+    const select = vi.spyOn(term, 'select')
+    await write(term, '\x1b[4;1H\x1b[M')
+    expect(select).not.toHaveBeenCalled()
+    expect(pos(term)).toEqual(at)
+  })
+
+  it('a drag over four lines from the top row of the view, the program scrolls its screen up one row (ESC[S): left on its cells as xterm keeps it, not selected again from the buffer\'s first row (unfixed: every line of the scrollback above it)', async () => {
+    const term = await fullTerminal()
+    keepLineSelection(term)
+    dragBetween(term, 5, 0, 9, 3)
+    const at = pos(term)!
+    expect(at[1]).toBe(50)
+    const select = vi.spyOn(term, 'select')
+    await write(term, '\x1b[S')
+    expect(select).not.toHaveBeenCalled()
+    expect(pos(term)).toEqual(at)
+  })
+
+  it('a triple-clicked line on the buffer\'s first row, one line of output (the first trim after the note takes it): nothing stays selected (a guard: the first-row marker is ahead of the ends\')', async () => {
+    const term = await fullTerminal()
+    keepLineSelection(term)
+    term.scrollToTop()
+    await frame()
+    clickCell(term, 5, 0, 3)
+    expect(pos(term)).toEqual([0, 0, 40, 0])
+    await write(term, '\r\nlater 1')
+    expect(term.hasSelection()).toBe(false)
+  })
+
+  it('three lines selected by a start and a length from the buffer\'s first row, one line of output (the first trim after the note takes the first): the rest, from row 0, column 0 (a guard: the first-row marker is ahead of the ends\')', async () => {
+    const term = await fullTerminal()
+    keepLineSelection(term)
+    term.select(5, 0, 35 + 40 + 9)
+    expect(term.getSelection()).toBe('-'.repeat(35) + '\nline 142 of the session\nline 143 ')
+    await write(term, '\r\nlater 1')
+    expect(term.getSelection()).toBe('line 142 of the session\nline 143 ')
+    expect(pos(term)).toEqual([0, 0, 9, 1])
+  })
+})
