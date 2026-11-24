@@ -47,31 +47,47 @@ export function manifestEntry(json: unknown, wanted: string = LINUX_HELPER_PATH)
   return null
 }
 
-/** Where this build keeps the helper folder: resources/helper in an installed
- *  app; in a dev run, the Helper job's static Linux build with a manifest
- *  written beside it (helper/target/helper-linux-musl). */
-export function bundledHelperDir(opts: { isPackaged: boolean; resourcesPath: string; appPath: string }): string {
-  return opts.isPackaged ? path.join(opts.resourcesPath, 'helper') : path.join(opts.appPath, 'helper', 'target', 'helper-linux-musl')
+/** Where this build keeps the manifest and the Linux helper. */
+export interface BundledHelperPaths {
+  manifest: string
+  file: string
+}
+
+/** Where a dev run (not packaged) finds the two, as A1's scripts put them
+ *  before packaging (scripts/verify-bundled-helper.mjs LINUX_HELPER_SOURCE and
+ *  MANIFEST_SOURCE): the Helper job's helper-linux-musl artifact, and the
+ *  manifest `node scripts/write-helper-manifest.mjs` writes for it. */
+export const DEV_LINUX_HELPER = 'helper/target/helper-linux-musl/aicc-helper'
+export const DEV_MANIFEST = 'helper/target/helper-manifest/manifest.json'
+
+/** Where this build keeps the manifest and the Linux helper: resources/helper
+ *  in an installed app (the package's layout); in a dev run, A1's places. */
+export function bundledHelperPaths(opts: { isPackaged: boolean; resourcesPath: string; appPath: string }): BundledHelperPaths {
+  if (opts.isPackaged) {
+    const dir = path.join(opts.resourcesPath, 'helper')
+    return { manifest: path.join(dir, MANIFEST_NAME), file: path.join(dir, ...LINUX_HELPER_PATH.split('/')) }
+  }
+  return { manifest: path.join(opts.appPath, ...DEV_MANIFEST.split('/')), file: path.join(opts.appPath, ...DEV_LINUX_HELPER.split('/')) }
 }
 
 /** The sentence for a build that carries no usable Linux helper. */
 export const NO_LINUX_HELPER = 'This build of the app carries no Linux session helper, so no machine can be added from it.'
 
 /**
- * The Linux helper of the helper folder `dir`, checked: the manifest reads,
- * names the file, and the file's SHA-256 is the manifest's. Answers why not
- * otherwise, in a plain sentence.
+ * The Linux helper at `paths`, checked: the manifest reads, names the file,
+ * and the file's SHA-256 is the manifest's. Answers why not otherwise, in a
+ * plain sentence.
  */
-export async function readBundledLinuxHelper(dir: string): Promise<{ ok: true; helper: BundledLinuxHelper } | { ok: false; why: string }> {
+export async function readBundledLinuxHelper(paths: BundledHelperPaths): Promise<{ ok: true; helper: BundledLinuxHelper } | { ok: false; why: string }> {
   let json: unknown
   try {
-    json = JSON.parse(await fs.promises.readFile(path.join(dir, MANIFEST_NAME), 'utf8'))
+    json = JSON.parse(await fs.promises.readFile(paths.manifest, 'utf8'))
   } catch {
     return { ok: false, why: NO_LINUX_HELPER }
   }
   const entry = manifestEntry(json)
   if (!entry) return { ok: false, why: NO_LINUX_HELPER }
-  const file = path.join(dir, ...LINUX_HELPER_PATH.split('/'))
+  const file = paths.file
   let bytes: Buffer
   try {
     bytes = await fs.promises.readFile(file)

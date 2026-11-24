@@ -7,6 +7,8 @@ import yaml from 'js-yaml'
 import { evalIf, type GhaContext } from '../../helpers/gha-expr'
 import { TEST_JOB_RE } from '../../../scripts/release-gate.mjs'
 import { judge } from '../../../scripts/ci/vitest-ran.mjs'
+import { LINUX_HELPER_SOURCE, MANIFEST_SOURCE } from '../../../scripts/verify-bundled-helper.mjs'
+import { DEV_LINUX_HELPER, DEV_MANIFEST } from '../../../src/main/remote-helper/manifest'
 
 /**
  * The Remote helper e2e job of ci.yml (plan 2.1.3-beta.17, section A2, rule
@@ -129,13 +131,28 @@ describe('ci.yml: the Remote helper e2e job only reads, runs its file once, and 
     const build = step('Build the static helper and the fake CLI')
     expect(String(build.run)).toContain('cargo build --locked --release --target x86_64-unknown-linux-musl --bin aicc-helper --bin aicc-fake-cli')
     expect(build['working-directory']).toBe('helper')
-    const order = ['Install the pinned Rust toolchain and the musl target', 'Build the static helper and the fake CLI', 'Install dependencies', 'Provision an ephemeral key-auth sshd', 'Give the account rc files as a real one has', 'Write the hosts file (no secret)', 'Run the remote helper device check', 'Fail a run in which no test ran, or one did not pass', 'Upload the two programs and the readings']
+    // The helper goes where release.yml hands it to the Windows package, and where a dev run reads it.
+    expect(String(build.run)).toContain('cp target/x86_64-unknown-linux-musl/release/aicc-helper target/helper-linux-musl/')
+    expect(LINUX_HELPER_SOURCE).toBe(`helper/target/helper-linux-musl/aicc-helper`)
+    expect(DEV_LINUX_HELPER).toBe(LINUX_HELPER_SOURCE)
+    const order = ['Install the pinned Rust toolchain and the musl target', 'Build the static helper and the fake CLI', 'Install dependencies', 'Write the helper\'s manifest as for the installer', 'Provision an ephemeral key-auth sshd', 'Give the account rc files as a real one has', 'Write the hosts file (no secret)', 'Run the remote helper device check', 'Fail a run in which no test ran, or one did not pass', 'Upload the two programs, the manifest and the readings']
     const at = order.map((n) => names().indexOf(n))
     expect(at.every((i) => i >= 0), JSON.stringify(names())).toBe(true)
     expect([...at].sort((a, b) => a - b)).toEqual(at)
   })
 
-  it('runs the one live file under the live config with retries off, handing it the hosts file and the two programs', () => {
+  it('writes the manifest with the installer\'s own script (A1\'s), which refuses a helper that is not static, and keeps a copy beside the programs', () => {
+    const write = step('Write the helper\'s manifest as for the installer')
+    const lines = String(write.run).trim().split('\n').map((l) => l.trim())
+    expect(lines).toContain('set -euo pipefail')
+    expect(lines).toContain('node scripts/write-helper-manifest.mjs')
+    expect(lines).toContain('cp helper/target/helper-manifest/manifest.json helper/target/remote-helper-e2e/manifest.json')
+    expect(String(write.run)).not.toMatch(/\|\||continue-on-error|true\b/)
+    expect(MANIFEST_SOURCE).toBe('helper/target/helper-manifest/manifest.json')
+    expect(DEV_MANIFEST).toBe(MANIFEST_SOURCE)
+  })
+
+  it('runs the one live file under the live config with retries off, handing it the hosts file, the helper and its manifest, and the fake CLI', () => {
     const run = step('Run the remote helper device check')
     const cmd = String(run.run).trim()
     expect(cmd.startsWith(`npx vitest run --config vitest.live.config.ts ${LIVE} `), cmd).toBe(true)
@@ -144,12 +161,15 @@ describe('ci.yml: the Remote helper e2e job only reads, runs its file once, and 
     expect(cmd).not.toMatch(/--passWithNoTests|\|\||continue-on-error/)
     expect(cmd).toContain('--outputFile.json="$REMOTE_HELPER_OUT/vitest.json"')
     expect(run.env?.REMOTE_HELPER_HOSTS).toBe('${{ runner.temp }}/remote-helper-e2e/hosts.json')
-    expect(run.env?.REMOTE_HELPER_BIN).toBe('helper/target/remote-helper-e2e/aicc-helper')
+    expect(run.env?.REMOTE_HELPER_BIN).toBe(DEV_LINUX_HELPER)
+    expect(run.env?.REMOTE_HELPER_MANIFEST).toBe(DEV_MANIFEST)
     expect(run.env?.REMOTE_HELPER_FAKE_CLI).toBe('helper/target/remote-helper-e2e/aicc-fake-cli')
     // The default config never picks the live file up, so no other suite runs it.
     expect(read('vitest.config.ts')).not.toMatch(/tests\/live/)
     expect(read('vitest.live.config.ts')).toContain("'tests/live/**/*.live.ts'")
-    for (const v of ['REMOTE_HELPER_HOSTS', 'REMOTE_HELPER_BIN', 'REMOTE_HELPER_FAKE_CLI']) expect(read(LIVE)).toContain(v)
+    for (const v of ['REMOTE_HELPER_HOSTS', 'REMOTE_HELPER_BIN', 'REMOTE_HELPER_MANIFEST', 'REMOTE_HELPER_FAKE_CLI']) expect(read(LIVE)).toContain(v)
+    // The live file reads the helper through the app's own manifest reader.
+    expect(read(LIVE)).toMatch(/readBundledLinuxHelper\(\{ manifest: need\('REMOTE_HELPER_MANIFEST'\), file: need\('REMOTE_HELPER_BIN'\) \}\)/)
   })
 
   it('fails the job when no test ran or one did not pass, even after a red check step', () => {
@@ -163,8 +183,8 @@ describe('ci.yml: the Remote helper e2e job only reads, runs its file once, and 
     expect(judge({ numTotalTests: 6, numPassedTests: 6, numFailedTests: 0 }).ok).toBe(true)
   })
 
-  it('uploads the two programs and the readings even when a step failed', () => {
-    const upload = step('Upload the two programs and the readings')
+  it('uploads the two programs, the manifest and the readings even when a step failed', () => {
+    const upload = step('Upload the two programs, the manifest and the readings')
     expect(String(upload.uses)).toMatch(/^actions\/upload-artifact@[0-9a-f]{40}$/)
     expect(upload.if).toBe('always()')
     expect(upload.with?.name).toBe('remote-helper-e2e')

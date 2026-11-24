@@ -1,7 +1,6 @@
 import { app, ipcMain } from 'electron'
 import type { BrowserWindow } from 'electron'
 import { readFileSync } from 'fs'
-import * as path from 'path'
 import { IPC } from '../../shared/ipc-channels'
 import { MACHINES_NO_ANSWER } from '../../shared/machines'
 import {
@@ -18,7 +17,7 @@ import { sshProgram } from '../ssh-program'
 import { instanceRecordPath } from '../session-helper/install'
 import { setRemoteHelperDeps, remoteTabsOn } from '../remote-helper'
 import { RemoteMachines, fileStore } from '../remote-helper/machines'
-import { MANIFEST_NAME, bundledHelperDir, manifestEntry, readBundledLinuxHelper } from '../remote-helper/manifest'
+import { bundledHelperPaths, manifestEntry, readBundledLinuxHelper } from '../remote-helper/manifest'
 import { nodeSshRunner } from '../remote-helper/ssh-exec'
 import { MACHINES_NOT_APP, answer } from './machines-handlers'
 import { appWindowSender } from './trusted-sender'
@@ -55,18 +54,18 @@ function savedSettings(): Record<string, unknown> | null {
 
 export function registerRemoteMachinesHandlers(getWindow: () => BrowserWindow | null, platform: NodeJS.Platform = process.platform): void {
   const trusted = appWindowSender(getWindow)
-  const dir = bundledHelperDir({ isPackaged: app.isPackaged, resourcesPath: process.resourcesPath, appPath: app.getAppPath() })
+  const paths = bundledHelperPaths({ isPackaged: app.isPackaged, resourcesPath: process.resourcesPath, appPath: app.getAppPath() })
   const recordsFile = instanceRecordPath('remote-machines.json', { isPackaged: app.isPackaged, userData: () => app.getPath('userData') })
   let machines: RemoteMachines | null = null
   if (platform === 'win32' && recordsFile) {
     const runner = nodeSshRunner(() => sshProgram())
-    machines = new RemoteMachines({ runner, store: fileStore(recordsFile), bundled: () => readBundledLinuxHelper(dir), inUse: remoteTabsOn, log: logInfo })
+    machines = new RemoteMachines({ runner, store: fileStore(recordsFile), bundled: () => readBundledLinuxHelper(paths), inUse: remoteTabsOn, log: logInfo })
     // The manifest's hash, read once: the routing compares each machine's helper with it.
     let manifestSha: string | null | undefined
     const bundledSha256 = (): string | null => {
       if (manifestSha === undefined) {
         try {
-          manifestSha = manifestEntry(JSON.parse(readFileSync(path.join(dir, MANIFEST_NAME), 'utf8')))?.sha256 ?? null
+          manifestSha = manifestEntry(JSON.parse(readFileSync(paths.manifest, 'utf8')))?.sha256 ?? null
         } catch {
           manifestSha = null
         }
@@ -84,7 +83,7 @@ export function registerRemoteMachinesHandlers(getWindow: () => BrowserWindow | 
     const m = machines
     if (!m) return none
     return answer('remote state', REMOTE_STATE_TIMEOUT_MS, async (): Promise<RemoteMachinesState> => {
-      const b = await readBundledLinuxHelper(dir)
+      const b = await readBundledLinuxHelper(paths)
       return {
         available: true,
         switchOn,

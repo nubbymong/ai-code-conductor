@@ -1434,7 +1434,8 @@ jobs:
   # aicc_planning#411). The app's own remote-helper code (src/main/remote-helper/,
   # no Electron) under Node, against an ephemeral localhost sshd on this runner
   # (as ssh-smoke makes it): no host and no secret. It builds the static Linux
-  # helper and aicc-fake-cli here, gives the account an rc file that prints a
+  # helper (with its bridge mode) and aicc-fake-cli here, writes the helper's
+  # manifest with the installer's own script, gives the account an rc file that prints a
   # line and sets a variable and a `claude` on PATH that only an interactive
   # login shell sees, then runs tests/live/remote-helper-device.live.ts once,
   # with retries off: Add (upload, hash equal, self-test), another install's
@@ -1447,8 +1448,8 @@ jobs:
   # not one of the checks a PR waits for, not in release.yml and not read by
   # scripts/release-gate.mjs. It only reads: no secret, read-only permissions,
   # the actions pinned by commit. What is uploaded as remote-helper-e2e is the
-  # two programs it built (a host line from a test PC runs the same file with
-  # them) and the readings. tests/unit/scripts/remote-helper-e2e-job.test.ts
+  # two programs it built and the helper's manifest (a host line from a test
+  # PC runs the same file with them) and the readings. tests/unit/scripts/remote-helper-e2e-job.test.ts
   # evaluates its condition.
   remote-helper-e2e:
     if: github.event_name == 'workflow_dispatch' && inputs.remote_helper_e2e == true
@@ -1479,16 +1480,30 @@ jobs:
           rustc --version
 
       # As the Helper job's static build: musl, so it runs on any Linux x86-64.
+      # The helper goes where release.yml hands it to the Windows package
+      # (target/helper-linux-musl), which is also where a dev run of the app
+      # reads it (src/main/remote-helper/manifest.ts).
       - name: Build the static helper and the fake CLI
         shell: bash
         working-directory: helper
         run: |
           cargo build --locked --release --target x86_64-unknown-linux-musl --bin aicc-helper --bin aicc-fake-cli
-          mkdir -p target/remote-helper-e2e
+          mkdir -p target/helper-linux-musl target/remote-helper-e2e
+          cp target/x86_64-unknown-linux-musl/release/aicc-helper target/helper-linux-musl/
           cp target/x86_64-unknown-linux-musl/release/aicc-helper target/x86_64-unknown-linux-musl/release/aicc-fake-cli target/remote-helper-e2e/
 
       - name: Install dependencies
         run: npm ci --ignore-scripts
+
+      # The manifest the Windows installer carries, written by the script the
+      # packaging runs (A1's), which also refuses a helper that is not a static
+      # x86-64 program. The check reads the helper through it, as the app does.
+      - name: Write the helper's manifest as for the installer
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/write-helper-manifest.mjs
+          cp helper/target/helper-manifest/manifest.json helper/target/remote-helper-e2e/manifest.json
 
       - name: Provision an ephemeral key-auth sshd
         shell: bash
@@ -1567,7 +1582,8 @@ jobs:
         shell: bash
         env:
           REMOTE_HELPER_HOSTS: ${{ runner.temp }}/remote-helper-e2e/hosts.json
-          REMOTE_HELPER_BIN: helper/target/remote-helper-e2e/aicc-helper
+          REMOTE_HELPER_BIN: helper/target/helper-linux-musl/aicc-helper
+          REMOTE_HELPER_MANIFEST: helper/target/helper-manifest/manifest.json
           REMOTE_HELPER_FAKE_CLI: helper/target/remote-helper-e2e/aicc-fake-cli
           REMOTE_HELPER_EXPECT_RC: '1'
           REMOTE_HELPER_OUT: ${{ runner.temp }}/remote-helper-e2e
@@ -1580,7 +1596,7 @@ jobs:
           REPORT: ${{ runner.temp }}/remote-helper-e2e/vitest.json
         run: node scripts/ci/vitest-ran.mjs "$REPORT"
 
-      - name: Upload the two programs and the readings
+      - name: Upload the two programs, the manifest and the readings
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:

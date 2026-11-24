@@ -14,6 +14,8 @@
  * What it takes, from the environment (no secret anywhere):
  *   REMOTE_HELPER_HOSTS     a JSON file: { "host": ..., "user": ..., "port": ... }
  *   REMOTE_HELPER_BIN       the static Linux helper (the job's build, or its artifact)
+ *   REMOTE_HELPER_MANIFEST  its manifest, written by scripts/write-helper-manifest.mjs
+ *                           as for the installer (the job's, or its artifact's)
  *   REMOTE_HELPER_FAKE_CLI  aicc-fake-cli for Linux; it is copied to a temporary
  *                           folder on the host for the session steps and removed after
  *   REMOTE_HELPER_EXPECT_RC '1' where the account's rc files were set up by the job:
@@ -22,7 +24,7 @@
  *   REMOTE_HELPER_OUT       a folder for the readings (optional)
  *
  * In order: Add (the question, then probe, upload by standard input, the hash
- * against the "manifest" made here from the file, version, self-test); a
+ * against the manifest, version, self-test); a
  * second install's Remove refused by the owner marker; a session holding the
  * fake CLI through the login shell (bytes in, output out, what the rc file
  * exported); a resize, read back by `stty` in a shell session; the bridge's
@@ -32,14 +34,13 @@
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
 import { spawnSync } from 'child_process'
-import { createHash } from 'crypto'
 import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
 import { RemoteMachines, type MachineStore, type RemoteMachineRecord } from '../../src/main/remote-helper/machines'
 import { nodeSshRunner, execArgv, sshEnv, type SshTarget } from '../../src/main/remote-helper/ssh-exec'
 import { RemoteHelperPty, remoteLaunchSpec } from '../../src/main/remote-helper/session'
-import type { BundledLinuxHelper } from '../../src/main/remote-helper/manifest'
+import { readBundledLinuxHelper, type BundledLinuxHelper } from '../../src/main/remote-helper/manifest'
 
 const need = (name: string): string => {
   const v = process.env[name]
@@ -101,17 +102,20 @@ async function untilHost(what: string, command: string, want: string, ms = 10_00
   }
 }
 
-beforeAll(() => {
+beforeAll(async () => {
   const hosts = JSON.parse(fs.readFileSync(need('REMOTE_HELPER_HOSTS'), 'utf8')) as { host?: unknown; user?: unknown; port?: unknown }
   target = { host: String(hosts.host), user: String(hosts.user), port: Number(hosts.port ?? 22) }
-  const bin = need('REMOTE_HELPER_BIN')
   fakeCli = need('REMOTE_HELPER_FAKE_CLI')
-  const bytes = fs.readFileSync(bin)
-  const sha256 = createHash('sha256').update(bytes).digest('hex')
-  const version = /^version = "([^"]+)"/m.exec(fs.readFileSync(path.join(__dirname, '../../helper/Cargo.toml'), 'utf8'))![1]
-  // The "manifest": what release.yml writes for the installer (A1's contract), made here from the file.
-  helper = { file: bin, version, sha256, size: bytes.length, folder: `${version}-${sha256.slice(0, 12)}` }
-  note('helper', { version, sha256, size: bytes.length })
+  // The helper and its manifest as A1's scripts make them for the installer
+  // (scripts/write-helper-manifest.mjs), read by the app's own reader: the
+  // file's hash against the manifest's, its version and folder from it.
+  const bundled = await readBundledLinuxHelper({ manifest: need('REMOTE_HELPER_MANIFEST'), file: need('REMOTE_HELPER_BIN') })
+  if (!bundled.ok) throw new Error(`the helper and its manifest do not read: ${bundled.why}`)
+  helper = bundled.helper
+  const cargoVersion = /^version = "([^"]+)"/m.exec(fs.readFileSync(path.join(__dirname, '../../helper/Cargo.toml'), 'utf8'))![1]
+  expect(helper.version).toBe(cargoVersion)
+  const { version, sha256, size } = helper
+  note('helper', { version, sha256, size })
   note('target', `${target.user}@${target.host}:${target.port}`)
   aiccBefore = sshRun('ls -A "$HOME/.aicc" 2>/dev/null | wc -l').out.trim() || '0'
   note('aicc-before', aiccBefore)
