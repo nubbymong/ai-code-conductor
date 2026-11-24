@@ -33,10 +33,16 @@ vi.mock('../../../src/main/windows-programs', async (importOriginal) => {
   }
 })
 
+import { mkdtempSync, rmSync } from 'fs'
+import { tmpdir } from 'os'
+import { join } from 'path'
 import type { SessionProvider } from '../../../src/main/providers/types'
-import { spawnPty, killPty } from '../../../src/main/pty-manager'
+import { spawnPty, killPty, writePty, getSshFlow } from '../../../src/main/pty-manager'
+import { submitPrompt } from '../../../src/main/session-input'
 import { registerProvider } from '../../../src/main/providers'
-import { setRemoteHelperDeps, isRemoteHelperTab } from '../../../src/main/remote-helper'
+import { setRemoteHelperDeps, isRemoteHelperTab, holdBackRemoteImage } from '../../../src/main/remote-helper'
+import { remoteSessionId, IMAGE_HELD_BACK_NOTE } from '../../../src/main/remote-helper/session'
+import { FakeHolder } from '../main/session-helper-fake-holder'
 import { ROUTE_WHY } from '../../../src/main/remote-helper/route'
 import type { RemoteMachineRecord, RemoteMachines } from '../../../src/main/remote-helper/machines'
 import type { SSHOptions } from '../../../src/main/ssh-options'
@@ -86,6 +92,14 @@ beforeEach(() => {
   logs = []
   registerProvider(fakeProvider)
 })
+
+async function until(ok: () => boolean, ms = 4000): Promise<void> {
+  const start = Date.now()
+  while (!ok()) {
+    if (Date.now() - start > ms) throw new Error('timed out')
+    await new Promise((r) => setTimeout(r, 10))
+  }
+}
 afterEach(() => setRemoteHelperDeps(null))
 
 describe('pty-manager SSH branch: the usual path is unchanged for every tab that does not go through the session helper', () => {
@@ -135,6 +149,54 @@ describe('pty-manager SSH branch: a tab that goes through the session helper', (
     expect(ssh.scripts()[0]).toBe('hold')
     killPty('route-helper')
     expect(isRemoteHelperTab('route-helper')).toBe(false)
+  })
+})
+
+describe('a tab through the session helper: what it has and does not have in this preview (plan finding 6)', () => {
+  let store = ''
+  afterEach(() => { if (store) rmSync(store, { recursive: true, force: true }); store = '' })
+
+  it('nothing of the app goes to the host; a prompt button and a typed line reach the CLI; an image request of any length types nothing and the tab says so; no SSH flow', async () => {
+    store = mkdtempSync(join(tmpdir(), 'rh-route-'))
+    const id = 'route-what'
+    const holder = new FakeHolder(remoteSessionId(id), id, store)
+    plugIn(true)
+    ssh.host = {
+      answer: (c) => (c.script === 'hold' ? { stdout: `AICC-HASH ${c.values[0]} ok ${SHA}\n${JSON.stringify({ ...holder.record(), endpoint: `/tmp/aicc-1000/${holder.sid}-0123456789abcdef.sock` })}\n` } : { code: 1 }),
+      bridge: () => holder.connect(),
+    }
+    const shown: string[] = []
+    const tabWin = { webContents: { send: (ch: string, d: unknown) => { if (ch === `pty:data:${id}`) shown.push(String(d)) } }, isDestroyed: () => false } as never
+    captured = null
+    spawnPty(tabWin, id, { ssh: SSH_TAB, cols: 100, rows: 30, model: 'opus' })
+    expect(captured).toBeNull()
+    await until(() => holder.attached !== null && holder.launch !== null)
+    // No status shim, MCP config, settings or hook file, and no secret, go with the launch.
+    const launch = holder.launch as { argv?: string[]; env?: Record<string, string> }
+    expect((launch.argv ?? []).join(' ')).not.toMatch(/--mcp-config|--settings|--append-system-prompt|statusline/i)
+    expect(Object.keys(launch.env ?? {}).filter((k) => /TOKEN|SECRET|KEY|^CCC_|^ANTHROPIC/i.test(k))).toEqual([])
+    // A prompt button (Send) types by the usual rule for a Claude Code tab: its text, then Enter.
+    const r = await submitPrompt(id, 'run the tests', 'send')
+    expect(r).toEqual({ outcome: 'sent' })
+    await until(() => Buffer.concat(holder.input).toString() === 'run the tests\r')
+    // A typed line goes as it is.
+    writePty(id, 'ls\r')
+    await until(() => Buffer.concat(holder.input).toString() === 'run the tests\rls\r')
+    // The app's own image request, longer than one 256-byte slice: held back whole at the write door.
+    const image = `${'I just pasted an image and I would like you to look at it carefully, '.repeat(3)}(use mcp__conductor__fetch_host_screenshot with filename="screenshot-2026-11-24T05-55-12-123Z.png" to load the image from the Conductor host)\r`
+    expect(image.length).toBeGreaterThan(256)
+    expect(holdBackRemoteImage(id, image)).toBe(true)
+    await new Promise((res) => setTimeout(res, 50))
+    expect(shown.join('')).toContain(IMAGE_HELD_BACK_NOTE)
+    expect(Buffer.concat(holder.input).toString()).toBe('run the tests\rls\r')
+    // Any other tab's write, and any other write here, is not held back.
+    expect(holdBackRemoteImage(id, 'hello\r')).toBe(false)
+    expect(holdBackRemoteImage('route-not-remote', image)).toBe(false)
+    // No SSH flow: the overlay reads none for this tab (pty-handlers answers 'through-helper').
+    expect(getSshFlow(id)).toBeUndefined()
+    expect(ssh.scripts()).toEqual(['hold', 'bridge'])
+    killPty(id)
+    await until(() => holder.ended)
   })
 })
 

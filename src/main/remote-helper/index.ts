@@ -15,7 +15,7 @@
 import type { IPty } from 'node-pty'
 import type { SSHOptions } from '../ssh-options'
 import { routeSshTab } from './route'
-import { RemoteHelperPty, remoteLaunchSpec } from './session'
+import { RemoteHelperPty, heldBackImage, remoteLaunchSpec } from './session'
 import type { RemoteMachines } from './machines'
 import type { SshRunner } from './ssh-exec'
 
@@ -50,6 +50,21 @@ export function remoteTabsOn(did: string): number {
  *  overlay is not shown for it). */
 export function isRemoteHelperTab(sessionId: string): boolean {
   return openTabs.has(sessionId)
+}
+
+/**
+ * The renderer's write for a tab through the helper, read whole before the
+ * PTY manager cuts a long one into 256-byte slices (writePty): the app's own
+ * image request (the host image fetch tool, which such a tab does not have in
+ * this preview) is held back entire, and the tab says so. A slice could
+ * otherwise split the tool's name and let the rest of the line, its Enter
+ * included, reach the CLI. True when it was held back.
+ */
+export function holdBackRemoteImage(sessionId: string, data: string): boolean {
+  const pty = openTabs.get(sessionId)
+  if (!pty || typeof data !== 'string' || !heldBackImage(data)) return false
+  pty.holdBackImage()
+  return true
 }
 
 /** The spawn options this reads: pty-manager's own, structurally. */

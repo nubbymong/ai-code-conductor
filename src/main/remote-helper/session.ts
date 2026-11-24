@@ -26,10 +26,13 @@
  *
  * What such a tab does not have in this preview: the status line and usage,
  * the app's tools (canvas, vision, the image fetch tool an SSH tab uses for
- * Snap and paste), hook events (attention, Watchdog). An image paste or Snap
- * types nothing: the app's own request for the image fetch tool is held back
- * and the tab shows a note instead (heldBackImage). Prompt buttons and
- * broadcast type into it by the usual rule for a Claude Code tab.
+ * Snap and paste), hook events (attention, Watchdog). An image paste, Snap or
+ * screenshot storyboard types nothing: the app's own request for the image
+ * fetch tool is held back whole at the write door, before it is sliced
+ * (holdBackRemoteImage, ./index.ts; the screenshot menu sends one such request
+ * in place of its storyboard), and the tab shows a note instead
+ * (heldBackImage). Prompt buttons and broadcast type into it by the usual rule
+ * for a Claude Code tab.
  *
  * This file imports nothing of Electron.
  */
@@ -366,12 +369,17 @@ export class RemoteHelperPty implements IPty {
   get throughHelper(): boolean { return this.inner.throughHelper }
 
   write(data: string | Buffer): void {
-    if (heldBackImage(data)) {
-      this.driver.log(`[remote-helper] ${this.sid}: an image was not typed (the tab has no image fetch tool in this preview)`)
-      this.data.fire(IMAGE_HELD_BACK_NOTE)
-      return
-    }
+    if (heldBackImage(data)) { this.holdBackImage(); return }
     this.inner.write(data)
+  }
+
+  /** The app's own image request was held back: nothing typed, and the tab
+   *  says why. The write door holds a whole request back before it is sliced
+   *  (holdBackRemoteImage, ./index.ts); write() above catches one that comes
+   *  another way. */
+  holdBackImage(): void {
+    this.driver.log(`[remote-helper] ${this.sid}: an image was not typed (the tab has no image fetch tool in this preview)`)
+    this.data.fire(IMAGE_HELD_BACK_NOTE)
   }
 
   resize(cols: number, rows: number): void { this.inner.resize(cols, rows) }
