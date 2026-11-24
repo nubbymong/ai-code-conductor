@@ -55,7 +55,7 @@
 //  - a marker filed with no canvas named (only direct callers;
 //    canvas:agentMarker always names one), wherever it is dropped.
 
-import { CanvasMarkerQueue } from './canvas-marker-queue'
+import { CanvasMarkerQueue, type HookEventFrom } from './canvas-marker-queue'
 import { forgetClaudeMarkers, noteClaudeMarkerTurnBegun, setClaudeMarkerHoldAgain, setClaudeMarkerUndelivered } from './claude-marker-typing'
 import { logInfo, logWarn } from '../debug-logger'
 import type { CanvasMarkerUndelivered, SubmitTextResult } from '../../shared/types'
@@ -72,9 +72,11 @@ export interface CanvasMarkerWiring {
    * typed only at its ready, empty prompt; claude-marker-typing.ts). Without
    * it the feature loses the turn boundary, not the report: a marker that is
    * then not typed within its bound is still told to its canvas as not sent
-   * (onUndelivered).
+   * (onUndelivered). `from` carries the event's agent id and tool name, so
+   * the queue can tell the main agent's turn from its agents' tool calls
+   * (aicc_planning#409; canvas-marker-queue.ts noteHookEvent).
    */
-  subscribe?: (cb: (sessionId: string, event: string) => void) => void
+  subscribe?: (cb: (sessionId: string, event: string, from?: HookEventFrom) => void) => void
   /** P4.1: a marker that did not reach the agent, with the canvas it was
    *  filed on: one the submit primitive did not deliver, a Claude Code
    *  marker claude-marker-typing.ts dropped untyped (still held after its
@@ -154,8 +156,8 @@ export function startCanvasMarkerQueue(wiring: CanvasMarkerWiring): void {
   // prompt, while that turn reads open.
   setClaudeMarkerHoldAgain((sessionId, line, canvasId) => queue?.holdAgain(sessionId, line, canvasId) ?? false)
   if (wiring.subscribe) {
-    wiring.subscribe((sessionId, event) => {
-      queue?.noteHookEvent(sessionId, event)
+    wiring.subscribe((sessionId, event, from) => {
+      queue?.noteHookEvent(sessionId, event, { agentId: from?.agentId, toolName: from?.toolName })
       // A turn began: a Claude Code marker waiting at the prompt goes back to
       // the queue, which now reads that turn open, rather than spending its
       // bound during it. Told after the queue has read the event.

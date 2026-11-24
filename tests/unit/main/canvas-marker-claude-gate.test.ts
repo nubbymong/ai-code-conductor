@@ -582,7 +582,7 @@ describe('a verdict waiting at the prompt when a turn begins waits for that turn
     expect(told).toEqual([])
   })
 
-  it('a tool hook with no prompt sent (a background agent) sends nothing back: typed once the prompt reads ready', async () => {
+  it('a tool hook with no prompt sent (no agent id on it, so read as the main agent\'s) sends nothing back: typed once the prompt reads ready', async () => {
     screen = S.TYPED
     expect(delivery.deliverCanvasMarker(SID, MARKER, CANVAS_A)).toBe('sent')
     await vi.advanceTimersByTimeAsync(5_000)
@@ -690,7 +690,7 @@ describe('a verdict the queue still holds when its session ends or restarts is t
     expect(told).toEqual(gone)
   })
 
-  it('one held at the prompt on a screen it does not read, a second queued behind a background agent\'s tool hook, then the session restarts: each told once, in the order filed', async () => {
+  it('one held at the prompt on a screen it does not read, a second queued behind a tool hook with no agent id, then the session restarts: each told once, in the order filed', async () => {
     screen = S.UNKNOWN_QUESTION_UNDER_OLD_PROMPT
     expect(delivery.deliverCanvasMarker(SID, MARKER, CANVAS_A)).toBe('sent')
     await vi.advanceTimersByTimeAsync(5_000)

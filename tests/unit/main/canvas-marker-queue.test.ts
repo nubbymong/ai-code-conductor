@@ -11,11 +11,14 @@
  * boundary, in order, and never hold one for ever.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 
-vi.mock('../../../src/main/debug-logger', () => ({ logInfo: () => {}, logWarn: () => {}, logError: () => {} }))
+vi.mock('../../../src/main/debug-logger', () => ({ logInfo: vi.fn(), logWarn: () => {}, logError: () => {} }))
 
 const { CanvasMarkerQueue, MARKER_FALLBACK_FLUSH_MS, MARKER_QUEUE_MAX } =
   await import('../../../src/main/canvas/canvas-marker-queue')
+const { logInfo } = await import('../../../src/main/debug-logger')
 
 const SID = 'session-1'
 const APPROVAL = 'Approved v7 on the canvas · canvas_version_verdict recorded'
@@ -83,7 +86,7 @@ describe('busy: nothing is lost', () => {
     expect(q.pendingCount(SID)).toBe(0)
   })
 
-  it('a tool call opens the turn too — not only a user prompt', () => {
+  it('a tool call of the main agent opens the turn too — not only a user prompt; the same events from one of its agents do not (aicc_planning#409)', () => {
     for (const opener of ['UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'SubagentStart']) {
       written = []
       timers = []
@@ -91,6 +94,15 @@ describe('busy: nothing is lost', () => {
       q.noteHookEvent(SID, opener)
       expect(q.deliver(SID, APPROVAL)).toBe('queued')
       expect(written).toHaveLength(0)
+      // An agent's event (Claude Code's agent_id on it), with no Agent, Task,
+      // Workflow or Skill call of the main agent open: no turn reads open.
+      written = []
+      timers = []
+      const r = makeQueue()
+      r.noteHookEvent(SID, opener, { agentId: 'aaee6bf0aca801ea2', toolName: 'Read' })
+      expect(r.isTurnOpen(SID), opener).toBe(false)
+      expect(r.deliver(SID, APPROVAL), opener).toBe('sent')
+      expect(written).toHaveLength(1)
     }
   })
 
@@ -298,7 +310,7 @@ describe('a long turn whose hooks keep firing (aicc_planning#81)', () => {
     expect(written).toHaveLength(1)
   })
 
-  it('every turn-opening hook re-arms it: UserPromptSubmit and SubagentStart as well as the tool hooks', () => {
+  it('every turn-opening hook of the main agent re-arms it: UserPromptSubmit and SubagentStart as well as the tool hooks', () => {
     for (const opener of ['UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'SubagentStart']) {
       written = []
       const q = realClockQueue()
@@ -308,6 +320,20 @@ describe('a long turn whose hooks keep firing (aicc_planning#81)', () => {
       q.noteHookEvent(SID, opener)
       vi.advanceTimersByTime(100_000)
       expect(written, opener).toEqual([])
+      q.forget(SID)
+    }
+  })
+
+  it('the same hooks from an agent the main agent does not wait on buy no extra time (aicc_planning#409)', () => {
+    for (const opener of ['UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'SubagentStart']) {
+      written = []
+      const q = realClockQueue()
+      q.noteHookEvent(SID, 'UserPromptSubmit')
+      q.deliver(SID, APPROVAL)
+      vi.advanceTimersByTime(100_000)
+      q.noteHookEvent(SID, opener, { agentId: 'a29cfab6678f85d73', toolName: 'Read' })
+      vi.advanceTimersByTime(MARKER_FALLBACK_FLUSH_MS - 100_000)
+      expect(written, opener).toEqual([{ sessionId: SID, line: APPROVAL }])
       q.forget(SID)
     }
   })
@@ -576,6 +602,252 @@ describe('holdAgain: a marker handed on comes back while a turn reads open', () 
   })
 })
 
+// ── An agent's tool calls after the main agent's Stop (aicc_planning#409) ───
+//
+// The live failure (owner's app.log, beta.11, Claude Code 2.1.329): the main
+// agent stopped at 02:55:12, its Workflow agents kept calling tools on the
+// same session id from 02:55:22, a decision filed at 02:57:11 was queued as if
+// a turn were running, and it was typed only at the main agent's next Stop
+// (03:01:17), in a turn the owner had to start. Each agent tool call opened
+// the turn again and re-armed the fallback, so the hold had no bound but the
+// agents' own quiet.
+//
+// Read on Claude Code 2.1.330 (C1's hold 1 on the published beta.16): every
+// event a subagent, a background subagent or a Workflow agent fires carries
+// agent_id; the main agent's never do; all carry the main transcript_path.
+//
+// Mutations to prove these can fail: drop the agent-id check in noteHookEvent
+// (canvas-marker-queue.ts); re-arm the fallback on an agent's event; ignore
+// the open Agent call (agentCallsOpen) and treat every agent event alike.
+describe('an agent\'s tool calls do not hold a decision after the main agent\'s Stop (aicc_planning#409)', () => {
+  beforeEach(() => {
+    vi.useFakeTimers()
+    vi.mocked(logInfo).mockClear()
+  })
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  const WF_AGENT = { agentId: 'a29cfab6678f85d73' }
+  const BG_AGENT = { agentId: 'aac60e49fb296beb6' }
+
+  function realClockQueue() {
+    return new CanvasMarkerQueue({ write: (sessionId, line) => { written.push({ sessionId, line }) } })
+  }
+
+  it('Stop, then an agent\'s PreToolUse and PostToolUse every 60 s, then a decision: handed on at once, never held', () => {
+    const q = realClockQueue()
+    q.noteHookEvent(SID, 'UserPromptSubmit')
+    q.noteHookEvent(SID, 'Stop')
+    for (let minute = 1; minute <= 5; minute++) {
+      vi.advanceTimersByTime(60_000)
+      q.noteHookEvent(SID, 'PreToolUse', { ...WF_AGENT, toolName: 'Read' })
+      q.noteHookEvent(SID, 'PostToolUse', { ...WF_AGENT, toolName: 'Read' })
+      expect(q.isTurnOpen(SID), `minute ${minute}`).toBe(false)
+    }
+    // Handed on at once: session-input's submitMarker types it at the next
+    // ready, empty prompt (claude-marker-typing.ts); nothing waits here.
+    expect(q.deliver(SID, APPROVAL)).toBe('sent')
+    expect(written).toEqual([{ sessionId: SID, line: APPROVAL }])
+    expect(q.pendingCount(SID)).toBe(0)
+    // More agent tool calls after it hold nothing and send nothing again.
+    vi.advanceTimersByTime(60_000)
+    q.noteHookEvent(SID, 'PreToolUse', { ...WF_AGENT, toolName: 'Read' })
+    expect(q.deliver(SID, REVIEW)).toBe('sent')
+    vi.advanceTimersByTime(10 * MARKER_FALLBACK_FLUSH_MS)
+    expect(written.map((w) => w.line)).toEqual([APPROVAL, REVIEW])
+  })
+
+  it('the order hold 1 read for a Workflow agent on Claude Code 2.1.330: a decision filed among the agent\'s calls after the main Stop goes out at once', () => {
+    const q = realClockQueue()
+    q.noteHookEvent(SID, 'UserPromptSubmit')
+    q.noteHookEvent(SID, 'PreToolUse', { toolName: 'Workflow' })
+    q.noteHookEvent(SID, 'PostToolUse', { toolName: 'Workflow' })
+    q.noteHookEvent(SID, 'SubagentStart', WF_AGENT)
+    q.noteHookEvent(SID, 'Stop')
+    vi.advanceTimersByTime(136)
+    q.noteHookEvent(SID, 'PreToolUse', { ...WF_AGENT, toolName: 'Read' })
+    q.noteHookEvent(SID, 'PostToolUse', { ...WF_AGENT, toolName: 'Read' })
+    vi.advanceTimersByTime(5_200)
+    q.noteHookEvent(SID, 'PreToolUse', { ...WF_AGENT, toolName: 'Read' })
+    expect(q.deliver(SID, APPROVAL)).toBe('sent')
+    q.noteHookEvent(SID, 'PostToolUse', { ...WF_AGENT, toolName: 'Read' })
+    q.noteHookEvent(SID, 'SubagentStop', WF_AGENT)
+    expect(written).toEqual([{ sessionId: SID, line: APPROVAL }])
+    // The task notification is the main agent's own turn (no agent id): it
+    // opens the turn, and a decision filed in it waits for its Stop.
+    q.noteHookEvent(SID, 'UserPromptSubmit')
+    expect(q.deliver(SID, REVIEW)).toBe('queued')
+    q.noteHookEvent(SID, 'Stop')
+    expect(written.map((w) => w.line)).toEqual([APPROVAL, REVIEW])
+  })
+
+  it('a decision held in an open main turn is handed on 120 s after the main agent\'s last hook, however often an agent it does not wait on calls tools', () => {
+    const q = realClockQueue()
+    q.noteHookEvent(SID, 'UserPromptSubmit')
+    expect(q.deliver(SID, APPROVAL)).toBe('queued')
+    vi.advanceTimersByTime(60_000)
+    q.noteHookEvent(SID, 'PreToolUse', { ...BG_AGENT, toolName: 'Read' })
+    vi.advanceTimersByTime(59_999)
+    q.noteHookEvent(SID, 'PostToolUse', { ...BG_AGENT, toolName: 'Read' })
+    expect(written, 'one millisecond short of 120 s after the main agent\'s last hook').toEqual([])
+    vi.advanceTimersByTime(1)
+    expect(written).toEqual([{ sessionId: SID, line: APPROVAL }])
+    expect(q.isTurnOpen(SID)).toBe(false)
+  })
+
+  it('a hook of the main agent (no agent id) still opens the turn after a Stop and holds a decision until the next Stop', () => {
+    const q = realClockQueue()
+    q.noteHookEvent(SID, 'UserPromptSubmit')
+    q.noteHookEvent(SID, 'Stop')
+    q.noteHookEvent(SID, 'PreToolUse', { toolName: 'Bash' })
+    expect(q.isTurnOpen(SID)).toBe(true)
+    expect(q.deliver(SID, APPROVAL)).toBe('queued')
+    vi.advanceTimersByTime(60_000)
+    q.noteHookEvent(SID, 'PostToolUse', { toolName: 'Bash' })
+    vi.advanceTimersByTime(60_000)
+    expect(written).toEqual([])
+    q.noteHookEvent(SID, 'Stop')
+    expect(written).toEqual([{ sessionId: SID, line: APPROVAL }])
+  })
+
+  // A decision filed while the main agent waits on a subagent it started (an
+  // Agent call not in the background) waits for the main turn's Stop, and the
+  // subagent's tool calls keep that turn alive, so the fallback does not hand
+  // it on into the running turn: that half was green before the fix and pins
+  // what the fix must keep. The last step is new with the fix (red before
+  // it): once the call has returned, another agent's tool calls buy no time.
+  it('while the main agent\'s own Agent call is open, its subagent\'s tool calls keep the turn alive past 120 s; after that call returns they no longer do', () => {
+    const FG_AGENT = { agentId: 'aaee6bf0aca801ea2' }
+    const q = realClockQueue()
+    q.noteHookEvent(SID, 'UserPromptSubmit')
+    q.noteHookEvent(SID, 'PreToolUse', { toolName: 'Agent' })
+    q.noteHookEvent(SID, 'SubagentStart', FG_AGENT)
+    expect(q.deliver(SID, APPROVAL)).toBe('queued')
+    for (let minute = 1; minute <= 5; minute++) {
+      vi.advanceTimersByTime(60_000)
+      q.noteHookEvent(SID, minute % 2 ? 'PreToolUse' : 'PostToolUse', { ...FG_AGENT, toolName: 'Read' })
+      expect(written, `minute ${minute}`).toEqual([])
+    }
+    q.noteHookEvent(SID, 'SubagentStop', FG_AGENT)
+    q.noteHookEvent(SID, 'PostToolUse', { toolName: 'Agent' })
+    expect(written).toEqual([])
+    // The call returned: another agent's tool calls now buy no time.
+    vi.advanceTimersByTime(60_000)
+    q.noteHookEvent(SID, 'PreToolUse', { ...BG_AGENT, toolName: 'Read' })
+    vi.advanceTimersByTime(60_000)
+    expect(written).toEqual([{ sessionId: SID, line: APPROVAL }])
+  })
+
+  // A Skill call whose skill runs in a subagent holds the main agent the same
+  // way an Agent call does, and that subagent's events carry an agent id.
+  // Red before Skill was named with Agent, Task and Workflow: the subagent's
+  // tool calls bought no time, so the decision was handed on at minute 2,
+  // into the running turn.
+  it('while the main agent\'s own Skill call runs its skill in a subagent, that subagent\'s tool calls keep the turn alive past 120 s; after the call returns they no longer do', () => {
+    const SKILL_AGENT = { agentId: 'a5c1f0e2b7d94a613' }
+    const q = realClockQueue()
+    q.noteHookEvent(SID, 'UserPromptSubmit')
+    q.noteHookEvent(SID, 'PreToolUse', { toolName: 'Skill' })
+    q.noteHookEvent(SID, 'SubagentStart', SKILL_AGENT)
+    expect(q.deliver(SID, APPROVAL)).toBe('queued')
+    for (let minute = 1; minute <= 5; minute++) {
+      vi.advanceTimersByTime(60_000)
+      q.noteHookEvent(SID, minute % 2 ? 'PreToolUse' : 'PostToolUse', { ...SKILL_AGENT, toolName: 'Read' })
+      expect(written, `minute ${minute}`).toEqual([])
+    }
+    q.noteHookEvent(SID, 'PostToolUse', { toolName: 'Skill' })
+    expect(written).toEqual([])
+    // The call returned: another agent's tool calls now buy no time.
+    vi.advanceTimersByTime(60_000)
+    q.noteHookEvent(SID, 'PreToolUse', { ...BG_AGENT, toolName: 'Read' })
+    expect(written).toEqual([])
+    vi.advanceTimersByTime(60_000)
+    expect(written).toEqual([{ sessionId: SID, line: APPROVAL }])
+  })
+
+  it('a Skill call that loads its skill inline returns at once, and opens no wait', () => {
+    const q = realClockQueue()
+    q.noteHookEvent(SID, 'UserPromptSubmit')
+    q.noteHookEvent(SID, 'PreToolUse', { toolName: 'Skill' })
+    q.noteHookEvent(SID, 'PostToolUse', { toolName: 'Skill' })
+    // Inside the turn: an agent's tool calls buy no time once the call has
+    // returned, so a decision is handed on 120 s after the main agent's last hook.
+    expect(q.deliver(SID, APPROVAL)).toBe('queued')
+    vi.advanceTimersByTime(60_000)
+    q.noteHookEvent(SID, 'PreToolUse', { ...BG_AGENT, toolName: 'Read' })
+    vi.advanceTimersByTime(60_000)
+    expect(written).toEqual([{ sessionId: SID, line: APPROVAL }])
+    // After the Stop: an agent's tool call opens no turn.
+    q.noteHookEvent(SID, 'Stop')
+    q.noteHookEvent(SID, 'PreToolUse', { ...BG_AGENT, toolName: 'Read' })
+    expect(q.isTurnOpen(SID)).toBe(false)
+    expect(q.deliver(SID, REVIEW)).toBe('sent')
+    expect(written.map((w) => w.line)).toEqual([APPROVAL, REVIEW])
+  })
+
+  it('an Agent call that starts its agent in the background returns at once, and opens no wait', () => {
+    const q = realClockQueue()
+    q.noteHookEvent(SID, 'UserPromptSubmit')
+    q.noteHookEvent(SID, 'PreToolUse', { toolName: 'Agent' })
+    q.noteHookEvent(SID, 'PostToolUse', { toolName: 'Agent' })
+    q.noteHookEvent(SID, 'Stop')
+    q.noteHookEvent(SID, 'PreToolUse', { ...BG_AGENT, toolName: 'Read' })
+    expect(q.isTurnOpen(SID)).toBe(false)
+    expect(q.deliver(SID, APPROVAL)).toBe('sent')
+  })
+
+  it('an Agent call whose PostToolUse never came is closed by the Stop, and by a SessionStart', () => {
+    for (const closer of ['Stop', 'SessionStart']) {
+      written = []
+      const q = realClockQueue()
+      q.noteHookEvent(SID, 'UserPromptSubmit')
+      q.noteHookEvent(SID, 'PreToolUse', { toolName: 'Task' })
+      q.noteHookEvent(SID, closer)
+      q.noteHookEvent(SID, 'PreToolUse', { ...BG_AGENT, toolName: 'Read' })
+      expect(q.isTurnOpen(SID), closer).toBe(false)
+      expect(q.deliver(SID, APPROVAL), closer).toBe('sent')
+    }
+  })
+
+  it('an agent\'s own Agent call opens no wait for the main turn', () => {
+    const q = realClockQueue()
+    q.noteHookEvent(SID, 'UserPromptSubmit')
+    q.noteHookEvent(SID, 'Stop')
+    q.noteHookEvent(SID, 'PreToolUse', { ...WF_AGENT, toolName: 'Agent' })
+    q.noteHookEvent(SID, 'PreToolUse', { ...WF_AGENT, toolName: 'Read' })
+    expect(q.isTurnOpen(SID)).toBe(false)
+    expect(q.deliver(SID, APPROVAL)).toBe('sent')
+  })
+
+  it('an empty agent id is no agent id: the event is the main agent\'s', () => {
+    const q = realClockQueue()
+    q.noteHookEvent(SID, 'UserPromptSubmit')
+    q.noteHookEvent(SID, 'Stop')
+    q.noteHookEvent(SID, 'PreToolUse', { agentId: '', toolName: 'Bash' })
+    expect(q.isTurnOpen(SID)).toBe(true)
+  })
+
+  it('one log line when an event opens the turn again after a Stop: its name and whether it carried an agent id, nothing of its payload', () => {
+    const reopened = () => vi.mocked(logInfo).mock.calls.map((c) => String(c[0])).filter((l) => l.includes('after a Stop'))
+    const q = realClockQueue()
+    // The first turn follows no Stop: no line.
+    q.noteHookEvent(SID, 'UserPromptSubmit')
+    expect(reopened()).toEqual([])
+    q.noteHookEvent(SID, 'Stop')
+    // An agent's calls open nothing, so they log nothing.
+    q.noteHookEvent(SID, 'PreToolUse', { ...WF_AGENT, toolName: 'Read' })
+    expect(reopened()).toEqual([])
+    q.noteHookEvent(SID, 'PreToolUse', { toolName: 'Bash' })
+    q.noteHookEvent(SID, 'PostToolUse', { toolName: 'Bash' })
+    expect(reopened()).toEqual([`[canvas-marker] the agent turn for ${SID} reads open again after a Stop, on PreToolUse (no agent id)`])
+    // A SessionStart is not a Stop: the next turn after it logs nothing.
+    q.noteHookEvent(SID, 'SessionStart')
+    q.noteHookEvent(SID, 'UserPromptSubmit')
+    expect(reopened()).toHaveLength(1)
+  })
+})
+
 // ── The singleton around it ─────────────────────────────────────────────────
 describe('canvas-marker-delivery', () => {
   it('is honest before boot wires it, and routes through the queue after', async () => {
@@ -640,6 +912,38 @@ describe('canvas-marker-delivery', () => {
     expect(out).toEqual([])
     expect(told).toHaveLength(2)
     mod._resetCanvasMarkerQueueForTest()
+  })
+
+  it('the hook stream passes each event\'s agent id and tool name to the queue (aicc_planning#409)', async () => {
+    const mod = await import('../../../src/main/canvas/canvas-marker-delivery')
+    mod._resetCanvasMarkerQueueForTest()
+    const out: string[] = []
+    let emit: ((sessionId: string, event: string, from?: { agentId?: string; toolName?: string }) => void) | null = null
+    mod.startCanvasMarkerQueue({
+      write: (_s, line) => { out.push(line) },
+      subscribe: (cb) => { emit = cb },
+    })
+    emit!(SID, 'UserPromptSubmit')
+    emit!(SID, 'Stop')
+    // An agent's tool call after the Stop: the decision goes out at once.
+    emit!(SID, 'PreToolUse', { agentId: 'a29cfab6678f85d73', toolName: 'Read' })
+    expect(mod.deliverCanvasMarker(SID, APPROVAL)).toBe('sent')
+    // The main agent's Agent call is open: its agent's tool calls are the
+    // main turn's, so a decision waits for the Stop.
+    emit!(SID, 'PreToolUse', { toolName: 'Agent' })
+    emit!(SID, 'PreToolUse', { agentId: 'aaee6bf0aca801ea2', toolName: 'Read' })
+    expect(mod.deliverCanvasMarker(SID, REVIEW)).toBe('queued')
+    emit!(SID, 'Stop')
+    expect(out).toEqual([APPROVAL, REVIEW])
+    mod._resetCanvasMarkerQueueForTest()
+  })
+
+  it('the app\'s boot wiring hands the queue each hook event\'s agent id and tool name (src/main/index.ts)', () => {
+    const src = readFileSync(join(__dirname, '../../../src/main/index.ts'), 'utf8').replace(/\r\n/g, '\n')
+    const at = src.indexOf('startCanvasMarkerQueue({')
+    expect(at).toBeGreaterThan(-1)
+    const block = src.slice(at, src.indexOf('\n    })', at))
+    expect(block).toMatch(/onHookEvent\(\(e\) => \{ if \(e\.sessionId\) cb\(e\.sessionId, e\.event, \{ agentId: e\.agentId, toolName: e\.toolName \}\) \}\)/)
   })
 
   it('with NO hook stream every marker goes out immediately — the pre-#580 behaviour', async () => {
