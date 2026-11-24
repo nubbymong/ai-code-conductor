@@ -295,9 +295,17 @@ describe('remote helper on a real Linux host', () => {
     const r = await machines.remove(machine.did)
     note('remove', r)
     expect(r.ok, r.message).toBe(true)
-    const left = sshRun(`ls -A "$HOME/.aicc" 2>/dev/null | wc -l; pgrep -f -- "[.]aicc/${machine.did}" | wc -l; test -e "$HOME/.aicc/${machine.did}" && echo there || echo gone`)
+    // pgrep -f reads every process's command line, the shell running this
+    // check's own included: with the device folder's path written out in the
+    // command, that shell (and the subshell of its pipe) matched it. Kept as a
+    // reading, not a check, so the record shows what such a match is.
+    note('self-match', sshRun(`pgrep -a -f -- "[.]aicc/${machine.did}"; test -e "$HOME/.aicc/${machine.did}" || true`).out)
+    // So the device id is given as $D: this check's own command line never
+    // holds ".aicc/<did>", and the processes it lists are the run's own.
+    const left = sshRun(`D=${machine.did}; ls -A "$HOME/.aicc" 2>/dev/null | wc -l; test -e "$HOME/.aicc/$D" && echo there || echo gone; pgrep -a -f -- "[.]aicc/$D" || true`)
     note('left', left.out)
-    // As many entries in ~/.aicc as before the run (none on a fresh account), no process of the run, the device folder gone.
-    expect(left.out.trim().split(/\s+/)).toEqual([aiccBefore, '0', 'gone'])
+    // As many entries in ~/.aicc as before the run (none on a fresh account), the device folder gone, no process of the run.
+    const [count, gone, ...procs] = left.out.trim().split('\n').map((l) => l.trim())
+    expect([count, gone, procs]).toEqual([aiccBefore, 'gone', []])
   })
 })
