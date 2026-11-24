@@ -151,23 +151,17 @@ afterEach(async () => {
   const quits = managers.splice(0).map((m) => { try { return m.shutdown() } catch { return null } })
   setSessionHelper(null)
   for (const h of helper.holders.values()) h.dropAll()
-  // The managers' own work (a start still copying, a self-test still hashing)
-  // settles first: on Windows a file still open keeps its folder in use.
+  // The managers' own work settles first: a start still copying, and the
+  // self-test a start began, which reads and runs the copy (a start settles
+  // once it has). On Node 20 a file still open keeps its folder from going,
+  // and rmSync's retries block the event loop that would close it (CI run
+  // 45341253799), so a folder that cannot go here is a real failure.
   let timer: NodeJS.Timeout | undefined
   await Promise.race([
     Promise.allSettled([...quits, ...starts.splice(0)]),
     new Promise<void>((r) => { timer = setTimeout(r, 3000) }),
   ]).finally(() => clearTimeout(timer))
-  // Real-time scanning on Windows can hold a just-written .exe for seconds
-  // (Windows CI: still busy after 5 s of retries; tests/wp1/fake-cli.test.ts
-  // saw the same). A folder that still cannot go is left in this run's own
-  // temp folder, which the run's teardown removes: every test makes its own
-  // folder, and cleanup of a disposable folder is not a test result.
-  try {
-    rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 25 })
-  } catch (err) {
-    process.stderr.write(`session-helper-manager: left ${dir} behind (${(err as NodeJS.ErrnoException).code ?? String(err)})\n`)
-  }
+  rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 25 })
 })
 
 /** The app is gone without a quit: its terminals cannot reach their holders
@@ -399,6 +393,48 @@ describe('the helper copy: checked before every holder start', () => {
     logs.length = 0
     await m.runSelfTest()
     expect(logs).toContain('[session-helper] self-test: passed: All 2 checks passed.')
+  })
+
+  // CI run 45341253799 (Windows, Node 20): a start settled while the
+  // self-test it began still read the helper's copy, so a teardown that waited
+  // for the start removed the copy's folder with the copy still open. Node 20
+  // deletes a file that is still open only when it is closed, and rmSync's
+  // retries block the very event loop that would close it: ENOTEMPTY, in this
+  // file's teardown in both runs read (8 folders each: that run and the green
+  // run 45343419232) and once in session-helper-flow.test.ts.
+  it('a start settles only once the self-test it began has, the one a start runs again for a failed self-test too', async () => {
+    let release: () => void = () => {}
+    let selfTests = 0
+    helper.selfTestOk = false
+    const m = makeManager({
+      exec: async (file, args) => {
+        if (args[0] === 'selftest') {
+          selfTests++
+          await new Promise<void>((r) => { release = r })
+        }
+        return helper.exec(file, args)
+      },
+    })
+    let settled = false
+    const first = m.start({ atStartup: true }).then(() => { settled = true })
+    await until(() => selfTests === 1, "the start's self-test")
+    await tick(100)
+    expect(settled, 'the start settled with its self-test still running').toBe(false)
+    release()
+    await first
+    expect(m.serviceState().state).toBe('failed')
+    // Switched on again: the helper that failed is tested again, and that
+    // start too settles only once its self-test has.
+    m.stopRouting()
+    helper.selfTestOk = true
+    settled = false
+    const again = m.start({ atStartup: false }).then(() => { settled = true })
+    await until(() => selfTests === 2, 'the self-test run again')
+    await tick(100)
+    expect(settled, 'the start settled with the self-test it ran again still running').toBe(false)
+    release()
+    await again
+    expect(m.serviceState().state).toBe('ready')
   })
 
   it('old version folders no holder runs from are removed, another build of the current version too', async () => {
@@ -843,6 +879,10 @@ describe('which terminals, and the hold step', () => {
     expect(p).toBeInstanceOf(HelperPty)
     await until(() => (p as HelperPty).isAttached, 'the terminal through the helper')
     await until(() => m.serviceState().state === 'ready', 'ready after the second copy')
+    // The copy tried again for that terminal runs its own self-test, which
+    // reads and runs the copy and which no start or quit waits for: waited for
+    // here, so the teardown never removes the copy while it is still open.
+    await until(() => !!(m as unknown as { selfTest?: unknown }).selfTest, 'the self-test after the second copy')
   })
 
   it('switching on again tests a helper that failed its self-test again, and a pass makes it ready', async () => {

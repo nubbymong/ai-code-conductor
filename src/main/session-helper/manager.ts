@@ -684,7 +684,9 @@ export class SessionHelperManager implements MachinesSource {
    * is carried then. What runs synchronously decides, before any tab can
    * ask, which held terminals a restored tab takes over and which agent
    * sessions are ended, so a tab restored at once already waits for that
-   * end; the copy, the listing and the self-test follow.
+   * end; the copy, the listing and the self-test follow. The answer settles
+   * once all of those have, the self-test included (it reads and runs the
+   * copy): the app does not wait for it, a test's teardown does.
    *
    * With both settings off after a crash, a plain terminal the crash left
    * held is still kept for its tab, as one is when its setting is switched
@@ -699,10 +701,11 @@ export class SessionHelperManager implements MachinesSource {
         return Promise.resolve()
       }
       if (this.info) {
-        // Set up already. One that failed its own self-test is tested again.
-        if (this.state === 'failed') void this.runSelfTest().catch(() => { /* recorded in runSelfTest */ })
+        // Set up already. One that failed its own self-test is tested again,
+        // and this start settles once that test has.
+        const tested = this.state === 'failed' ? this.selfTestSettled() : Promise.resolve()
         this.changed()
-        return Promise.resolve()
+        return tested
       }
       // A helper that could not be set up is tried again.
       this.installing = null
@@ -819,13 +822,24 @@ export class SessionHelperManager implements MachinesSource {
     if (!this.info) return
     this.state = 'ready'
     this.changed()
-    void this.runSelfTest().catch(() => { /* recorded in runSelfTest */ })
+    // Beside the clean-up below, and waited for at the end: the self-test
+    // reads the copy (its hash) and runs it, so the self-test this start began
+    // no longer has the copy open once the start settles (CI run 45341253799).
+    const selfTest = this.selfTestSettled()
     // Every folder of a version a listed or live holder reports is kept, the
     // current version's other builds included (#322); every other old folder
     // goes (see removeOldVersionFolders).
     const heldVersions = new Set([...this.listing, ...this.heldRecords()].map((r) => r.helper))
     const removed = await removeOldVersionFolders(this.root, info.folder, heldVersions)
     if (removed.length > 0) this.deps.log(`[session-helper] removed old helper folder(s): ${removed.join(', ')}`)
+    await selfTest
+  }
+
+  /** A self-test begun on the app's own account (not asked for from the
+   *  Machines page): settles once it has, never failing (runSelfTest records
+   *  its result). */
+  private selfTestSettled(): Promise<void> {
+    return this.runSelfTest().then(() => undefined, () => undefined)
   }
 
   /** The helper's copy, put in place once. Null when it cannot be used. */
