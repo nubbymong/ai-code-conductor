@@ -22,7 +22,9 @@
  * stand-in signals module, so a case shows which run took each event. The
  * update is driven as update-handlers.ts drives it: releaseForUpdate, the wait
  * for what it sent (endsForUpdate, which app-wiring bounds), the kill of every
- * PTY, then the exit.
+ * PTY, then the exit. Where the bound matters, app-wiring's own race runs
+ * (releaseHeldTerminalsForUpdate; of its imports only the saved file is read
+ * on that path, so the rest are stand-ins).
  *
  * Not checked here: the real pipe and the real holder (the VM line); the other
  * provider's sessions (their hook events go to the Hooks gateway, not through
@@ -37,8 +39,21 @@ import type { IPty } from 'node-pty'
 
 const ptySpawn = vi.hoisted(() => vi.fn())
 vi.mock('node-pty', () => ({ spawn: ptySpawn }))
+/** The tab ids in the saved file app-wiring's update race reads. */
+const savedFile = vi.hoisted(() => ({ ids: [] as string[] }))
+vi.mock('../../../src/main/session-state', () => ({ peekSessionState: () => ({ sessions: savedFile.ids.map((id) => ({ id })) }) }))
+// app-wiring.ts's other imports: not read on its update race.
+vi.mock('../../../src/main/config-manager', () => ({}))
+vi.mock('../../../src/main/ipc/machines-handlers', () => ({}))
+vi.mock('../../../src/main/hooks/per-session-settings', () => ({}))
+vi.mock('../../../src/main/hooks/session-hooks-writer', () => ({}))
+vi.mock('../../../src/main/session-signals/hooks', () => ({}))
+vi.mock('../../../src/main/conductor-mcp-server', () => ({}))
+vi.mock('../../../src/main/providers', () => ({}))
 
 import { SessionHelperManager, setSessionHelper, spawnAgentPty, spawnPlainPty, type HelperHookDeps, type HelperToolDeps } from '../../../src/main/session-helper/manager'
+import { UPDATE_END_WAIT_MS, releaseHeldTerminalsForUpdate } from '../../../src/main/session-helper/app-wiring'
+import { LET_GO_WAIT_MS } from '../../../src/main/session-helper/connection'
 import { setKeptLaunchBindings, takeKeptSession, type KeptLaunch, type KeptLaunchBindings, type KeptLaunchFacts } from '../../../src/main/sessions/kept-launches'
 import { heldAgentSessionId } from '../../../src/main/session-helper/protocol'
 import { FakeHelper, type FakeHolder } from './session-helper-fake-holder'
@@ -85,7 +100,7 @@ let served: Array<{ run: number; id: string }>
 
 const takenBy = (run: number): number[] => events.filter((x) => x.run === run).map((x) => x.seq)
 
-function makeManager(run: number, o: { serveMs?: number; replyTimeoutMs?: number } = {}): SessionHelperManager {
+function makeManager(run: number, o: { serveMs?: number } = {}): SessionHelperManager {
   let self: SessionHelperManager | undefined
   const alive = () => { if (self && gone.has(self)) throw new Error('this app is gone') }
   const hooks: HelperHookDeps = { taking: () => true, useHelperHooks: () => 'switched', event: (id, e) => { events.push({ run, id, seq: e.seq }) }, ended: () => {} }
@@ -101,7 +116,6 @@ function makeManager(run: number, o: { serveMs?: number; replyTimeoutMs?: number
     tools: { claude: tools },
     takeOver: { claude: true },
     ...(o.serveMs !== undefined ? { unseenServeAfterMs: o.serveMs } : {}),
-    ...(o.replyTimeoutMs !== undefined ? { replyTimeoutMs: o.replyTimeoutMs } : {}),
   })
   self = m
   managers.push(m)
@@ -134,8 +148,8 @@ async function update(m: SessionHelperManager, ptys: IPty[]): Promise<number> {
 }
 
 /** Run 1: a Claude Code tab through its holder, its hook events and tool calls switched to it, its tab saved. */
-async function runOne(o: { replyTimeoutMs?: number } = {}): Promise<{ m1: SessionHelperManager; claude: IPty; hc: FakeHolder }> {
-  const m1 = await startedWith(makeManager(1, o))
+async function runOne(): Promise<{ m1: SessionHelperManager; claude: IPty; hc: FakeHolder }> {
+  const m1 = await startedWith(makeManager(1))
   const claude = spawnAgentPty({ sessionId: CLAUDE_TAB, kind: 'claude' }, SHELL, [], agentOpts())
   await until(() => logs.includes(`[session-helper] ${CLAUDE_TAB}: its hook events go through its holder, PreToolUse included`) && logs.includes(`[session-helper] ${CLAUDE_TAB}: its Conductor tools go through its holder`), 'its hooks and tools to go through its holder')
   const hc = helper.holders.get(claudeSid)!
@@ -169,6 +183,7 @@ beforeEach(() => {
   logs = []
   events = []
   served = []
+  savedFile.ids = []
   facts = { [CLAUDE_TAB]: { conversation: CONV, account: 'acct-1', hookFolder: null } }
   setKeptLaunchBindings({
     describe: (id: string) => facts[id] ?? { conversation: null, account: null, hookFolder: null },
@@ -287,14 +302,36 @@ describe('B1f: the hook events made after an update lets go of a kept Claude Cod
     expect(hc.keptStreams.has(stream!)).toBe(true)
   })
 
-  it('a holder that does not answer the let-go: its connection is closed after the reply wait, as at any request, and the log says so', async () => {
-    const { m1, claude, hc } = await runOne({ replyTimeoutMs: 120 })
+  it('a holder that does not answer the let-go, with the app\'s own waits: the let-go gives up within LET_GO_WAIT_MS, under the update\'s UPDATE_END_WAIT_MS, so before the kill its connection is closed and the log says so', async () => {
+    expect(LET_GO_WAIT_MS).toBeLessThan(UPDATE_END_WAIT_MS)
+    // The default reply wait (10 s): the let-go's own wait is what bounds it.
+    const { claude, hc } = await runOne()
     hc.answerDetach = false
-    m1.releaseForUpdate(SAVED)
-    await m1.endsForUpdate()
+    savedFile.ids = [CLAUDE_TAB]
+    // The update's own race (app-wiring.ts): the let-go, then its wait, UPDATE_END_WAIT_MS at most.
+    expect(await releaseHeldTerminalsForUpdate()).toBe(1)
+    expect(detaches(hc)).toBe(1)
+    // What update-handlers.ts runs next is the kill of every PTY: the let-go gave up before it, and said so.
     expect(logs).toContain(`[session-helper] ${claudeSid}: its holder did not answer the update's let-go, so its connection is closed; a hook event it makes before the app exits may not reach the next start`)
+    await until(() => hc.conns.size === 0, 'its holder to see the connection closed', 200)
     claude.kill()
-    await until(() => hc.conns.size === 0, 'the connection to close')
+  })
+
+  it('a quit that overtakes an update, with a session kept for its restored tab not shown whose keeper the update let go of: the quit ends it, once', async () => {
+    const { m1, claude, hc } = await runOne()
+    await update(m1, [claude])
+    exit(m1)
+    const m2 = await startedWith(makeManager(2, { serveMs: 20 }))
+    m2.restoredTabs([{ id: CLAUDE_TAB, cwd: CWD }])
+    await until(() => !!hc.attached?.ackedCaps.includes('hooks'), 'its keeper to take hook events while its tab is not shown')
+    m2.noteSavedTabs([{ id: CLAUDE_TAB, label: 'Claude' }])
+    m2.releaseForUpdate(SAVED)
+    await m2.endsForUpdate()
+    // Its keeper was let go of, so it has no keeper left to end it through.
+    expect(detaches(hc)).toBe(2)
+    await m2.shutdown()
+    expect(hc.requests.filter((r) => r.t === 'term.end')).toHaveLength(1)
+    expect(hc.ended).toBe(true)
   })
 
   it('pin: a plain terminal (no hook events) is let go of as before: closed with no term.detach, its holder kept for the next start', async () => {
@@ -326,7 +363,7 @@ describe('B1f: the hook events made after an update lets go of a kept Claude Cod
     expect(helper.holders.size).toBe(0)
   })
 
-  it('pin: a normal quit (no update) ends every held agent session with term.end: nothing is let go of, detached or kept, and its holder keeps no event', async () => {
+  it('pin: a normal quit (no update) ends every held agent session with term.end: nothing is let go of, detached or kept', async () => {
     const { m1, hc } = await runOne()
     const quit = m1.shutdown()
     expect(quit).not.toBeNull()

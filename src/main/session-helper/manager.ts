@@ -2386,8 +2386,13 @@ export class SessionHelperManager implements MachinesSource {
       if (kept) this.forgetKept(kept)
     }
     // Kept for a tab that has not taken it over (S16 step 5): its keeper's
-    // end above ends it, and its record and what it left on disk go.
-    for (const sid of [...this.keptForTabs.keys()]) this.forgetKeptForTab(sid)
+    // end above ends it; one whose keeper an update let go of (B1f) has no
+    // keeper left and is ended by its record. Its record and what it left on
+    // disk go.
+    for (const [sid, e] of [...this.keptForTabs]) {
+      if (this.updating && e.hooks) waits.push(this.endRecord(e.record).catch(() => { /* its away clock ends it, and the next start */ }))
+      this.forgetKeptForTab(sid)
+    }
     this.released.clear()
     this.reclaimed.clear()
     this.adoptable.clear()

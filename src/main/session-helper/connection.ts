@@ -112,6 +112,10 @@ export interface ConnectionOptions {
 
 export const HELLO_TIMEOUT_MS = 10_000
 export const REPLY_TIMEOUT_MS = 10_000
+/** How long letGo() waits for its holder's answer: under the update's own
+ *  bound (app-wiring.ts UPDATE_END_WAIT_MS), so an unanswered let-go closes
+ *  its connection, and is logged, before the update kills the PTYs. */
+export const LET_GO_WAIT_MS = 1_000
 /** The holder closes a connection idle for 60 s; the app pings every 15 s. */
 export const PING_EVERY_MS = 15_000
 /** Typed input between two pings, at most (section 15). */
@@ -632,7 +636,7 @@ export class HolderConnection extends EventEmitter<HolderConnectionEvents> {
    * connection is closed as close() closes it, except that it still reads,
    * and reports, the hook events the holder sent before its answer; nothing
    * else it reads is reported. True once the holder answered; false when it
-   * did not within the reply wait, or the connection went first. The stream
+   * did not within LET_GO_WAIT_MS, or the connection went first. The stream
    * is closed either way.
    */
   letGo(): Promise<boolean> {
@@ -652,7 +656,7 @@ export class HolderConnection extends EventEmitter<HolderConnectionEvents> {
         try { this.stream.destroy() } catch { /* gone */ }
         resolve(answered)
       }
-      const timer = setTimeout(() => done(false), this.replyTimeoutMs)
+      const timer = setTimeout(() => done(false), Math.min(this.replyTimeoutMs, LET_GO_WAIT_MS))
       timer.unref?.()
       this.lettingGo = { id, done }
       this.stream.once('close', () => done(false))
@@ -699,7 +703,7 @@ export class HolderConnection extends EventEmitter<HolderConnectionEvents> {
         if (m.t === 'event') {
           const e = this.hooks ? readEventFrame(m, f.size) : null
           if (e) this.emit('event', e)
-        } else if (m.re === going.id) going.done(true)
+        } else if (m.re === going.id) going.done(m.t === 'term.detached')
         continue
       }
       if (f.kind === 1) {
