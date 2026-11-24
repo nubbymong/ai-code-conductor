@@ -827,9 +827,9 @@ export default function TerminalView({ sessionId, configId, cwd, shellOnly, elev
       })
 
       term.open(container)
-      // aicc_planning#422: a triple-click's line stays that line when only
-      // the columns change (terminal/lineSelectionKeep.ts). Its listeners and
-      // marker are the terminal's, disposed with it.
+      // aicc_planning#422, #424: a selection keeps its text when only the
+      // columns change (terminal/lineSelectionKeep.ts). Its listeners and
+      // markers are the terminal's, disposed with it.
       keepLineSelection(term)
 
       // Load WebGL renderer (Codex recommendation #2). This swaps
