@@ -9,8 +9,11 @@
 //    1,500 ms after it went, a space and the sentence; 700 ms after that,
 //    exactly one Enter as its own write (probe P11's measured sequence). A
 //    long path's sentence waits for its last slice.
-//  - Not this door's: a Codex session and an SSH Persistent session answer
-//    not-taken, and nothing is written.
+//  - Not this door's: an SSH Persistent session answers not-taken, and
+//    nothing is written. A Codex session goes to the Codex package's image
+//    rule (2.1.3-beta.17 C6, session-input-codex-image.test.ts); with no
+//    Codex package registered, as here, main reads no screen for it, so it
+//    answers not-taken and nothing is written.
 //  - A path or sentence with a control character (an ESC that would end the
 //    paste early, a line break, DEL, a C1), an empty path or one over the cap,
 //    or a sentence over its cap: refused, nothing written.
@@ -131,7 +134,7 @@ describe('submitImage: a saved image as Claude Code\'s own paste', () => {
     expect(await answer).toEqual({ outcome: 'sent' })
   })
 
-  it.each([['a Codex session', codex], ['an SSH Persistent session', tmux]] as const)('%s is not this door\'s: not-taken, nothing written', async (_name, kindSet) => {
+  it.each([['a Codex session main reads no screen for', codex], ['an SSH Persistent session', tmux]] as const)('%s: not-taken, nothing written', async (_name, kindSet) => {
     const id = fresh('other')
     const run = startRun(id)
     kindSet.add(id)

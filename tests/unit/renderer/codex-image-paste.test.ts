@@ -14,6 +14,7 @@ import {
   IMAGE_TYPED_NOT_SENT,
   IMAGE_TAKEN_BACK,
   IMAGE_BEHIND_QUESTION,
+  IMAGE_AT_PROMPT,
   CODEX_SUBMIT_DELAY_MS,
   CODEX_READY_POLL_MS,
   NOT_AT_PROMPT,
@@ -173,6 +174,39 @@ describe('sendImagePathToCodex (P3.15, row 70)', () => {
     h.advance(CODEX_SUBMIT_DELAY_MS * 4)
     expect(h.writes).toEqual([LINE])
     expect(h.notes).toEqual([])
+  })
+
+  // 2.1.3-beta.17 C6: the line a Codex session gets when main could not paste
+  // the image as Codex's own (imageTransfer.ts, sendImageToCodexSession).
+  it('C6: with the caller\'s words, the line is those words and the path', () => {
+    const words = 'I just snapped a region of my screen - please view it.'
+    const writes: string[] = []
+    const notes: string[] = []
+    const deps: CodexComposerDeps = {
+      readScreen: () => S.READY,
+      currentRun: () => ({ createdAt: 1, spawnToken: 1 }),
+      write: (_id, d) => { writes.push(d) },
+      setTimeout: () => 0,
+      clearTimeout: () => {},
+      pending: new Set<string>(),
+      startupDone: new StartupDoneRuns(),
+    }
+    sendImagePathToCodex('s1', PATH, (n) => notes.push(n), deps, words)
+    expect(writes).toEqual([`${words} ${PATH}`])
+    expect(notes).toEqual([])
+  })
+
+  it('C6: a composer holding the image main pasted and left there: nothing typed, and the note says the image is at the prompt', () => {
+    for (const row of [`${GLYPH} [Image #1]`, `${GLYPH} [Image #1]  I just pasted an image - please view it.`]) {
+      const h = harness(composerShows(row))
+      h.send()
+      h.advance(CODEX_SUBMIT_DELAY_MS * 4)
+      expect(h.writes, row).toEqual([])
+      expect(h.notes, row).toEqual([IMAGE_AT_PROMPT])
+    }
+    const other = harness(composerShows(`${GLYPH} half a question`))
+    other.send()
+    expect(other.notes).toEqual([TEXT_IN_PROMPT])
   })
 })
 

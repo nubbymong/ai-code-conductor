@@ -5,8 +5,8 @@ import { requestCloseSession } from '../stores/sshCloseStore'
 import { matchesShortcut, DEFAULT_SHORTCUTS } from '../utils/shortcuts'
 import { captureGlyphDiagnostic } from '../utils/glyphDiagnostic'
 import { requestResync } from '../components/terminal/repaintRegistry'
-import { sendImageToSession, typeImagePathIntoShell } from '../utils/imageTransfer'
-import { sendImagePathToCodex } from '../lib/codexComposer'
+import { sendImageToSession, sendImageToCodexSession, typeImagePathIntoShell } from '../utils/imageTransfer'
+import { CODEX_IMAGE_LINE } from '../lib/codexComposer'
 import { usePasteHintStore } from '../stores/pasteHintStore'
 import { useAppMetaStore } from '../stores/appMetaStore'
 import { deriveOnboarding } from '../onboarding/gate'
@@ -150,8 +150,10 @@ export function useKeyboardShortcuts(
           if ('path' in res) {
             // P3.15 (row 70): this runs with focus outside the terminal (a
             // focused terminal hands Alt+V to the CLI, which pastes the image
-            // itself). A Codex session's line goes through the rule the app
-            // types into Codex by, and a line it could not send says why.
+            // itself). Since 2.1.3-beta.17 C6 a Codex session's image goes in
+            // as Codex's own paste, by main (sendImageToCodexSession); what main
+            // cannot paste gets the line by the rule the app types into Codex
+            // by, and a line it could not send says why.
             if (showingPartner) {
               // P3.16a (N9): in the partner view the partner shell is on screen
               // and the session's terminal is hidden, so the image goes to the
@@ -194,7 +196,7 @@ export function useKeyboardShortcuts(
                 usePasteHintStore.getState().show(sessionId, notTypedHint(res.path))
               }
             } else if (session?.provider === 'codex') {
-              sendImagePathToCodex(sessionId, res.path, (note) => usePasteHintStore.getState().show(sessionId, note))
+              sendImageToCodexSession(sessionId, res.path, CODEX_IMAGE_LINE, (note) => usePasteHintStore.getState().show(sessionId, note))
             } else {
               // Success is self-evident: the image shows in the prompt (Claude Code's [Image #1] for a local session, the typed line over SSH), so no toast.
               sendImageToSession(sessionId, res.path, 'I just pasted an image — please view it.', session?.sessionType)

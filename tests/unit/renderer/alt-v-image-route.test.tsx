@@ -5,8 +5,9 @@
  * saves the clipboard image, then: a Claude session is handed to
  * sendImageToSession, which asks main to paste a local one as Claude Code's
  * own paste (2.1.3-beta.16 X1.2) and types the host fetch line over SSH; a
- * Codex session gets its line through the Codex typing rule
- * (sendImagePathToCodex), whose notes show in the session's paste hint;
+ * Codex session is handed to sendImageToCodexSession (2.1.3-beta.17 C6: main
+ * pastes it as Codex's own paste, and what main cannot paste gets the line by
+ * the Codex typing rule), whose notes show in the session's paste hint;
  * a plain terminal (P3.16a, U6) gets only the image's path, quoted for its shell,
  * typed and not submitted, with no sentence: a shell reads no images, and a
  * sentence and an Enter would be typed into it as a command. Over SSH the file
@@ -21,13 +22,9 @@ import { act } from 'react'
 ;(globalThis as any).IS_REACT_ACT_ENVIRONMENT = true
 
 // typeImagePathIntoShell says whether it typed (PR-level ADR-009 round 1, A1): it does, unless a case says not.
-const h = vi.hoisted(() => ({ sendImageToSession: vi.fn(), sendImagePathToCodex: vi.fn(), typeImagePathIntoShell: vi.fn((..._a: unknown[]) => true) }))
+const h = vi.hoisted(() => ({ sendImageToSession: vi.fn(), sendImageToCodexSession: vi.fn(), typeImagePathIntoShell: vi.fn((..._a: unknown[]) => true) }))
 vi.mock('../../../src/renderer/onboarding/gate', () => ({ deriveOnboarding: () => ({ due: false, steps: [] }) }))
-vi.mock('../../../src/renderer/utils/imageTransfer', () => ({ sendImageToSession: h.sendImageToSession, typeImagePathIntoShell: h.typeImagePathIntoShell }))
-vi.mock('../../../src/renderer/lib/codexComposer', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('../../../src/renderer/lib/codexComposer')>()),
-  sendImagePathToCodex: h.sendImagePathToCodex,
-}))
+vi.mock('../../../src/renderer/utils/imageTransfer', () => ({ sendImageToSession: h.sendImageToSession, sendImageToCodexSession: h.sendImageToCodexSession, typeImagePathIntoShell: h.typeImagePathIntoShell }))
 
 const { useKeyboardShortcuts } = await import('../../../src/renderer/hooks/useKeyboardShortcuts')
 const { useSessionStore } = await import('../../../src/renderer/stores/sessionStore')
@@ -54,7 +51,7 @@ let saveImage: ReturnType<typeof vi.fn>
 
 beforeEach(() => {
   h.sendImageToSession.mockReset()
-  h.sendImagePathToCodex.mockReset()
+  h.sendImageToCodexSession.mockReset()
   h.typeImagePathIntoShell.mockReset()
   saveImage = vi.fn(async () => ({ path: IMG }))
   ;(window as any).electronAPI = { clipboard: { saveImage } }
@@ -79,7 +76,7 @@ async function altV(sessions: Session[], active: string) {
   act(() => { window.dispatchEvent(new KeyboardEvent('keydown', { key: 'v', altKey: true, bubbles: true })) })
   // The handler awaits the saved image, then acts once: a sender, or a hint.
   await vi.waitFor(() => {
-    const acted = h.sendImageToSession.mock.calls.length + h.sendImagePathToCodex.mock.calls.length + h.typeImagePathIntoShell.mock.calls.length + Object.keys(usePasteHintStore.getState().hints).length
+    const acted = h.sendImageToSession.mock.calls.length + h.sendImageToCodexSession.mock.calls.length + h.typeImagePathIntoShell.mock.calls.length + Object.keys(usePasteHintStore.getState().hints).length
     if (acted === 0) throw new Error('the Alt+V handler has not acted yet')
   })
 }
@@ -89,15 +86,15 @@ describe('Alt+V with focus outside the terminal (P3.15, row 70)', () => {
     await altV([session('cl1')], 'cl1')
     expect(saveImage).toHaveBeenCalledTimes(1)
     expect(h.sendImageToSession).toHaveBeenCalledWith('cl1', IMG, 'I just pasted an image \u2014 please view it.', 'local')
-    expect(h.sendImagePathToCodex).not.toHaveBeenCalled()
+    expect(h.sendImageToCodexSession).not.toHaveBeenCalled()
   })
 
-  it('a Codex session gets its line through the Codex typing rule, and that rule\'s note shows in the session\'s paste hint', async () => {
+  it('a Codex session is handed to sendImageToCodexSession with the Codex line\'s words, and its note shows in the session\'s paste hint', async () => {
     await altV([session('cx1', { provider: 'codex' } as Partial<Session>)], 'cx1')
     expect(h.sendImageToSession).not.toHaveBeenCalled()
-    expect(h.sendImagePathToCodex).toHaveBeenCalledTimes(1)
-    const [sid, p, onNote] = h.sendImagePathToCodex.mock.calls[0]
-    expect([sid, p]).toEqual(['cx1', IMG])
+    expect(h.sendImageToCodexSession).toHaveBeenCalledTimes(1)
+    const [sid, p, words, onNote] = h.sendImageToCodexSession.mock.calls[0]
+    expect([sid, p, words]).toEqual(['cx1', IMG, 'I just pasted an image - please view it.'])
     act(() => { (onNote as (n: string) => void)('Codex is busy with a turn, so nothing was sent.') })
     expect(usePasteHintStore.getState().hints.cx1).toBe('Codex is busy with a turn, so nothing was sent.')
   })
@@ -109,7 +106,7 @@ describe('Alt+V with focus outside the terminal (P3.15, row 70)', () => {
       expect(h.typeImagePathIntoShell, provider).toHaveBeenCalledTimes(1)
       expect(h.typeImagePathIntoShell.mock.calls[0].slice(0, 2), provider).toEqual(['sh1', IMG])
       expect(h.sendImageToSession, provider).not.toHaveBeenCalled()
-      expect(h.sendImagePathToCodex, provider).not.toHaveBeenCalled()
+      expect(h.sendImageToCodexSession, provider).not.toHaveBeenCalled()
       expect(usePasteHintStore.getState().hints.sh1, provider).toBeUndefined()
     }
   })
@@ -133,7 +130,7 @@ describe('Alt+V with focus outside the terminal (P3.15, row 70)', () => {
       await altV([session('sh3', { shellOnly: true, ...dead } as Partial<Session>)], 'sh3')
       expect(h.typeImagePathIntoShell, label).not.toHaveBeenCalled()
       expect(h.sendImageToSession, label).not.toHaveBeenCalled()
-      expect(h.sendImagePathToCodex, label).not.toHaveBeenCalled()
+      expect(h.sendImageToCodexSession, label).not.toHaveBeenCalled()
       const hint = usePasteHintStore.getState().hints.sh3
       expect(hint, label).toContain('not running')
       expect(hint, label).toContain(IMG)
@@ -144,7 +141,7 @@ describe('Alt+V with focus outside the terminal (P3.15, row 70)', () => {
     await altV([session('sh2', { shellOnly: true, sessionType: 'ssh' } as Partial<Session>)], 'sh2')
     expect(h.typeImagePathIntoShell).not.toHaveBeenCalled()
     expect(h.sendImageToSession).not.toHaveBeenCalled()
-    expect(h.sendImagePathToCodex).not.toHaveBeenCalled()
+    expect(h.sendImageToCodexSession).not.toHaveBeenCalled()
     const hint = usePasteHintStore.getState().hints.sh2
     expect(hint).toContain('remote shell cannot read')
     expect(hint).toContain(IMG)
@@ -179,7 +176,7 @@ describe('Alt+V with focus outside the terminal (P3.15, row 70)', () => {
   it('no image on the clipboard: the same hint as before, and nothing typed', async () => {
     saveImage.mockResolvedValue({ error: 'no-image' })
     await altV([session('cx1', { provider: 'codex' } as Partial<Session>)], 'cx1')
-    expect(h.sendImagePathToCodex).not.toHaveBeenCalled()
+    expect(h.sendImageToCodexSession).not.toHaveBeenCalled()
     expect(h.sendImageToSession).not.toHaveBeenCalled()
     expect(usePasteHintStore.getState().hints.cx1).toMatch(/No image in clipboard/)
   })
@@ -221,7 +218,7 @@ describe('Alt+V in the partner view goes to the partner shell on screen (P3.16a,
   it('a partner shell that is not running: nothing is typed into either terminal, and the hint says so and where the image is', async () => {
     for (const extra of [{}, { provider: 'codex' }, { shellOnly: true }, { sessionType: 'ssh' }] as Array<Partial<Session>>) {
       const label = JSON.stringify(extra)
-      h.typeImagePathIntoShell.mockReset(); h.sendImageToSession.mockReset(); h.sendImagePathToCodex.mockReset()
+      h.typeImagePathIntoShell.mockReset(); h.sendImageToSession.mockReset(); h.sendImageToCodexSession.mockReset()
       usePasteHintStore.setState({ hints: {} })
       for (const el of paneEls) { clearSpawned(el.getAttribute('data-terminal-session') ?? ''); el.remove() }
       paneEls = []
@@ -229,7 +226,7 @@ describe('Alt+V in the partner view goes to the partner shell on screen (P3.16a,
       await altV([session('px1', extra)], 'px1')
       expect(h.typeImagePathIntoShell, label).not.toHaveBeenCalled()
       expect(h.sendImageToSession, label).not.toHaveBeenCalled()
-      expect(h.sendImagePathToCodex, label).not.toHaveBeenCalled()
+      expect(h.sendImageToCodexSession, label).not.toHaveBeenCalled()
       expect(usePasteHintStore.getState().hints.px1, label).toBe(`This terminal is not running, so nothing was typed; the image was saved on this computer at ${IMG}.`)
     }
   })
@@ -251,7 +248,7 @@ describe('Alt+V in the partner view goes to the partner shell on screen (P3.16a,
     await altV([session('cx1', { provider: 'codex' } as Partial<Session>)], 'cx1')
     expect(h.typeImagePathIntoShell).toHaveBeenCalledTimes(1)
     expect(h.typeImagePathIntoShell.mock.calls[0].slice(0, 2)).toEqual(['cx1-partner', IMG])
-    expect(h.sendImagePathToCodex).not.toHaveBeenCalled()
+    expect(h.sendImageToCodexSession).not.toHaveBeenCalled()
     expect(h.sendImageToSession).not.toHaveBeenCalled()
     expect(usePasteHintStore.getState().hints).toEqual({})
   })
@@ -259,8 +256,8 @@ describe('Alt+V in the partner view goes to the partner shell on screen (P3.16a,
   it('a Codex tab showing its main view (the partner mounted and hidden): the Codex route, to the Codex session', async () => {
     mountPanes([['cx1', true], ['cx1-partner', false]])
     await altV([session('cx1', { provider: 'codex' } as Partial<Session>)], 'cx1')
-    expect(h.sendImagePathToCodex).toHaveBeenCalledTimes(1)
-    expect(h.sendImagePathToCodex.mock.calls[0].slice(0, 2)).toEqual(['cx1', IMG])
+    expect(h.sendImageToCodexSession).toHaveBeenCalledTimes(1)
+    expect(h.sendImageToCodexSession.mock.calls[0].slice(0, 2)).toEqual(['cx1', IMG])
     expect(h.typeImagePathIntoShell).not.toHaveBeenCalled()
     expect(h.sendImageToSession).not.toHaveBeenCalled()
   })
@@ -271,7 +268,7 @@ describe('Alt+V in the partner view goes to the partner shell on screen (P3.16a,
     expect(h.typeImagePathIntoShell).toHaveBeenCalledTimes(1)
     expect(h.typeImagePathIntoShell.mock.calls[0].slice(0, 2)).toEqual(['cl1-partner', IMG])
     expect(h.sendImageToSession).not.toHaveBeenCalled()
-    expect(h.sendImagePathToCodex).not.toHaveBeenCalled()
+    expect(h.sendImageToCodexSession).not.toHaveBeenCalled()
   })
 
   it('a Claude tab showing its main view (the partner mounted and hidden): the line it always got, to the Claude session', async () => {
@@ -279,7 +276,7 @@ describe('Alt+V in the partner view goes to the partner shell on screen (P3.16a,
     await altV([session('cl1')], 'cl1')
     expect(h.sendImageToSession).toHaveBeenCalledWith('cl1', IMG, 'I just pasted an image \u2014 please view it.', 'local')
     expect(h.typeImagePathIntoShell).not.toHaveBeenCalled()
-    expect(h.sendImagePathToCodex).not.toHaveBeenCalled()
+    expect(h.sendImageToCodexSession).not.toHaveBeenCalled()
   })
 
   // #86: an SSH tab's partner shell runs on the HOST now, which cannot read a
@@ -296,7 +293,7 @@ describe('Alt+V in the partner view goes to the partner shell on screen (P3.16a,
       await altV([session('ss1', { sessionType: 'ssh', sshConfig: { host: 'build-box', port: 22, username: 'nick', remotePath: '~' }, ...extra } as Partial<Session>)], 'ss1')
       expect(h.typeImagePathIntoShell, label).not.toHaveBeenCalled()
       expect(h.sendImageToSession, label).not.toHaveBeenCalled()
-      expect(h.sendImagePathToCodex, label).not.toHaveBeenCalled()
+      expect(h.sendImageToCodexSession, label).not.toHaveBeenCalled()
       expect(usePasteHintStore.getState().hints.ss1, label).toBe(`The image was saved on this computer at ${IMG}; the remote shell cannot read it, so nothing was typed.`)
     }
   })
@@ -330,14 +327,14 @@ describe('Alt+V in the partner view goes to the partner shell on screen (P3.16a,
     await altV([session('cx1', { provider: 'codex' } as Partial<Session>)], 'cx1')
     expect(h.typeImagePathIntoShell).toHaveBeenCalledTimes(1)
     expect(h.typeImagePathIntoShell.mock.calls[0].slice(0, 2)).toEqual(['cx1-partner', IMG])
-    expect(h.sendImagePathToCodex).not.toHaveBeenCalled()
+    expect(h.sendImageToCodexSession).not.toHaveBeenCalled()
   })
 
   it('only this tab\'s own partner counts: another tab\'s partner marked on screen leaves this tab\'s route as it is', async () => {
     mountPanes([['cx1', false], ['cx2-partner', true]])
     await altV([session('cx1', { provider: 'codex' } as Partial<Session>), session('cx2', { provider: 'codex' } as Partial<Session>)], 'cx1')
-    expect(h.sendImagePathToCodex).toHaveBeenCalledTimes(1)
-    expect(h.sendImagePathToCodex.mock.calls[0].slice(0, 2)).toEqual(['cx1', IMG])
+    expect(h.sendImageToCodexSession).toHaveBeenCalledTimes(1)
+    expect(h.sendImageToCodexSession.mock.calls[0].slice(0, 2)).toEqual(['cx1', IMG])
     expect(h.typeImagePathIntoShell).not.toHaveBeenCalled()
   })
 
@@ -346,7 +343,7 @@ describe('Alt+V in the partner view goes to the partner shell on screen (P3.16a,
     saveImage.mockResolvedValue({ error: 'no-image' })
     await altV([session('cx1', { provider: 'codex' } as Partial<Session>)], 'cx1')
     expect(h.typeImagePathIntoShell).not.toHaveBeenCalled()
-    expect(h.sendImagePathToCodex).not.toHaveBeenCalled()
+    expect(h.sendImageToCodexSession).not.toHaveBeenCalled()
     expect(usePasteHintStore.getState().hints.cx1).toMatch(/No image in clipboard/)
   })
 

@@ -418,7 +418,28 @@ export interface SessionRunScreen {
    *  says no and nothing is typed (2.1.3-beta.10 section A2: the Watchdog's
    *  retry sets both). */
   submit(sessionId: string, text: string, opts: { readyWaitMs: number; readyBy?: number; stillWanted?: () => boolean }): Promise<SubmitTextResult>
+  /** 2.1.3-beta.17 C6 (aicc_planning#415): a saved image's path into the
+   *  composer as the CLI's own paste, then `sentence`, then Enter, by the
+   *  package's image rule, after anything already in flight for the run;
+   *  waits up to `readyWaitMs` for the ready, empty composer. Never rejects.
+   *  Absent: the package has no image rule. */
+  submitImage?(sessionId: string, imagePath: string, sentence: string, opts: { readyWaitMs: number }): Promise<RunScreenImageResult>
 }
+
+/** Why a run screen's image rule did not paste and send an image: the
+ *  session gone; a path or sentence it refuses before typing anything; the
+ *  ready, empty composer not seen in the wait (`busy-timeout`), or a prompt
+ *  up; the CLI's warning count showing; the CLI's image placeholder not shown
+ *  after the paste; the sentence not confirmed on screen (`not-drawn`,
+ *  `too-tall`). */
+export type RunScreenImageNotPasted = 'session-gone' | 'refused-text' | 'busy-timeout' | 'prompt-on-screen' | 'warning-count' | 'no-placeholder' | 'not-drawn' | 'too-tall'
+
+/** 2.1.3-beta.17 C6: what a run screen's image rule did. `left`: what it
+ *  typed may still be at the prompt (it could not take it back for certain);
+ *  false when it typed nothing, or took it back and saw the composer empty. */
+export type RunScreenImageResult =
+  | { pasted: true }
+  | { pasted: false; reason: RunScreenImageNotPasted; left: boolean }
 
 export interface SshCapableProvider extends SessionProvider {
   getSshSettingsPath(sessionId: string): string

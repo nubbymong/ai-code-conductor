@@ -8,7 +8,7 @@ import type { ProviderCapabilities, AuthRealm, RealmUse } from '../../../shared/
 import type { ProviderPackage, ProviderPricingOperations, RealmRef } from '../core'
 import { CODEX_ENABLEMENT } from './enablement'
 import { resolveCodexBinary, resolveCodexBinaryAsync, buildCodexSpawn, codexHookDataDir, warmNodeExeOnPosix } from './spawn'
-import { openCodexScreen, feedCodexScreen, resizeCodexScreen, closeCodexScreen, hasCodexScreen, submitCodexText } from './session-screen'
+import { openCodexScreen, feedCodexScreen, resizeCodexScreen, closeCodexScreen, hasCodexScreen, submitCodexText, submitCodexImage } from './session-screen'
 import { detectCodexUi } from './ui-detection'
 import { watchAndClaimRollout } from './telemetry'
 import { warmCodexResume } from './rollout-lookup'
@@ -137,6 +137,7 @@ const CODEX_RUN_SCREEN: SessionRunScreen = {
   close: (sessionId) => closeCodexScreen(sessionId),
   has: (sessionId) => hasCodexScreen(sessionId),
   submit: (sessionId, text, opts) => submitCodexText(sessionId, text, opts),
+  submitImage: (sessionId, imagePath, sentence, opts) => submitCodexImage(sessionId, imagePath, sentence, opts),
 }
 
 /** WP2 PR 4: Codex's model prices (pricing.ts), offered to Tokenomics through

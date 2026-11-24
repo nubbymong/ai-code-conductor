@@ -30,6 +30,12 @@
 // image's path. That door is new too, with its own rule and waits, written at
 // it, and the same per-session order as the prompt buttons'.
 //
+// Since 2.1.3-beta.17 section C6 (aicc_planning#415) the same door pastes an
+// image into a Codex session on this computer too, by the Codex package's
+// image rule (SessionRunScreen.submitImage), reached through the registry as
+// the submit primitive is; what that rule cannot paste the renderer types by
+// its own Codex rule, written at submitImage.
+//
 // Since 2.1.3-beta.10 section A2 the Watchdog's retry comes in through one
 // door, submitRetry: a Codex session's goes through the Codex package's
 // submit primitive, as a canvas marker's does, instead of the raw writer
@@ -358,9 +364,14 @@ export const IMAGE_ENTER_DELAY_MS = 700
 export const IMAGE_PATH_MAX_CHARS = 4_096
 export const IMAGE_SENTENCE_MAX_CHARS = 1_000
 
-/** What the image door did: `sent`; `not-taken`, a session it does not type
- *  an image into (Codex, or an SSH Persistent session), which the caller then
- *  sends to its own way; or `not-sent` and why. */
+/** 2.1.3-beta.17 C6: how long a Codex session's image waits for Codex's
+ *  ready, empty composer, as a prompt button does. */
+export const IMAGE_CODEX_READY_WAIT_MS = PROMPT_CODEX_READY_WAIT_MS
+
+/** What the image door did: `sent`; `not-taken`, an image it did not paste
+ *  (an SSH Persistent session, or since 2.1.3-beta.17 C6 a Codex session it
+ *  could not paste the image into), which the caller then sends its own way;
+ *  or `not-sent` and why. */
 export type ImageSubmitResult =
   | { outcome: 'sent' }
   | { outcome: 'not-taken' }
@@ -377,6 +388,26 @@ function hasControlChar(text: string): boolean {
     if (c < 0x20 || (c >= 0x7f && c <= 0x9f)) return true
   }
   return false
+}
+
+/** C6: one image into a Codex session's run `pressedFor` only, by the Codex
+ *  package's image rule (SessionRunScreen.submitImage), reached through the
+ *  registry. What that rule could not paste, and did not leave at the prompt
+ *  or took back, is `not-taken`: the caller then types today's line by its
+ *  own Codex rule, which types only into the ready, empty composer. Never
+ *  rejects. */
+async function typeCodexImage(sessionId: string, imagePath: string, sentence: string, pressedFor: IPty): Promise<{ result: ImageSubmitResult; why: string }> {
+  try {
+    if (port().run(sessionId) !== pressedFor) return { result: { outcome: 'not-sent', reason: 'session-gone' }, why: '' }
+    const screen = codexRunScreen()
+    if (!screen?.submitImage || !screen.has(sessionId)) return { result: { outcome: 'not-taken' }, why: 'main reads no screen for it' }
+    const r = await screen.submitImage(sessionId, imagePath, sentence, { readyWaitMs: IMAGE_CODEX_READY_WAIT_MS })
+    if (r.pasted) return { result: { outcome: 'sent' }, why: '' }
+    if (r.reason === 'session-gone' || r.reason === 'refused-text') return { result: { outcome: 'not-sent', reason: r.reason }, why: '' }
+    return { result: { outcome: 'not-taken' }, why: `${r.reason}${r.left ? ', what it typed may still be at the prompt' : ''}` }
+  } catch {
+    return { result: { outcome: 'not-sent', reason: 'session-gone' }, why: '' }
+  }
 }
 
 /** One image, typed into `pressedFor` only (submitImage). Never rejects: a
@@ -414,35 +445,54 @@ async function typeImage(sessionId: string, imagePath: string, sentence: string,
  * session's terminal process is still the one it had when this was asked.
  * The Enter always goes: the prompt buttons' Type it only setting is theirs.
  *
+ * A Codex session (2.1.3-beta.17 C6, aicc_planning#415): the Codex package's
+ * image rule, reached through the registry (typeCodexImage), since Codex's
+ * submit primitive refuses a control character and a bracketed paste holds
+ * two. It waits up to IMAGE_CODEX_READY_WAIT_MS for Codex's ready, empty
+ * composer, as a prompt button does, pastes the path, reads Codex's image
+ * placeholder on the screen the composer rule reads (the holder's for a held
+ * session, main's pane otherwise), then has the submit primitive type the
+ * sentence, confirm it and press Enter (providers/codex/session-screen.ts,
+ * pasteImageIntoCodexComposer, says how). What it could not paste (not ready
+ * in the wait, no placeholder, Codex's warning count showing, the sentence
+ * not confirmed) it takes back as the composer rule takes text back, and
+ * answers `not-taken`, with one log line saying why: the renderer then types
+ * today's line by its own Codex rule, which types only into a ready, empty
+ * composer and otherwise says why it typed nothing.
+ *
  * Not this door's (`not-taken`, nothing typed; the renderer keeps its own way
- * for them): a Codex session (its submit primitive refuses a control
- * character, so a paste needs a rule of its own, in beta.17) and an SSH
- * Persistent session (tmux). The renderer asks only for a session on this
- * computer: an SSH session gets the image through the host fetch tool, and a
- * plain terminal never reaches here. A path or sentence holding a control
- * character, an empty path, or one over its cap is refused (`refused-text`)
- * and nothing is typed. A session with no terminal process takes nothing.
- * Images and prompt presses for one session go one at a time, in order
- * (promptChains). The log names an image by its path's length only.
+ * for it): an SSH Persistent session (tmux). The renderer asks only for a
+ * session on this computer: an SSH session gets the image through the host
+ * fetch tool, and a plain terminal never reaches here. A path or sentence
+ * holding a control character, an empty path, or one over its cap is refused
+ * (`refused-text`) and nothing is typed. A session with no terminal process
+ * takes nothing. Images and prompt presses for one session go one at a time,
+ * in order (promptChains). The log names an image by its path's length only.
  * Throws before the PTY manager registers its ports, as every door does;
  * otherwise never rejects.
  */
 export function submitImage(sessionId: string, imagePath: string, sentence: string): Promise<ImageSubmitResult> {
   const p = port()
   const chars = [...imagePath].length
-  const done = (result: ImageSubmitResult): ImageSubmitResult => {
-    logInfo(`[image-paste] ${sessionId}: an image path of ${chars} characters ${result.outcome === 'sent' ? 'sent as a paste' : result.outcome === 'not-taken' ? 'not taken (the session gets it its own way)' : `not sent (${result.reason})`}`)
+  const done = (result: ImageSubmitResult, why = ''): ImageSubmitResult => {
+    const what = result.outcome === 'sent' ? 'sent as a paste'
+      : result.outcome === 'not-taken' ? `not taken (${why ? `${why}; ` : ''}the session gets it its own way)`
+        : `not sent (${result.reason})`
+    logInfo(`[image-paste] ${sessionId}: an image path of ${chars} characters ${what}`)
     return result
   }
-  if (p.isCodexSession(sessionId) || p.tmuxWrapped(sessionId)) return Promise.resolve(done({ outcome: 'not-taken' }))
+  if (p.tmuxWrapped(sessionId)) return Promise.resolve(done({ outcome: 'not-taken' }))
   if (!imagePath || imagePath.length > IMAGE_PATH_MAX_CHARS || sentence.length > IMAGE_SENTENCE_MAX_CHARS || hasControlChar(imagePath) || hasControlChar(sentence)) {
     return Promise.resolve(done({ outcome: 'not-sent', reason: 'refused-text' }))
   }
   const pressedFor = p.run(sessionId)
   if (!pressedFor) return Promise.resolve(done({ outcome: 'not-sent', reason: 'session-gone' }))
+  const codex = p.isCodexSession(sessionId)
   const before = promptChains.get(sessionId)
-  const go = (): Promise<ImageSubmitResult> => typeImage(sessionId, imagePath, sentence, pressedFor)
-  const next = (before ? before.then(go, go) : go()).then(done)
+  const go = (): Promise<ImageSubmitResult> => codex
+    ? typeCodexImage(sessionId, imagePath, sentence, pressedFor).then(({ result, why }) => done(result, why))
+    : typeImage(sessionId, imagePath, sentence, pressedFor).then((result) => done(result))
+  const next = before ? before.then(go, go) : go()
   promptChains.set(sessionId, next)
   void next.then(() => { if (promptChains.get(sessionId) === next) promptChains.delete(sessionId) })
   return next
