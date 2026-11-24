@@ -185,6 +185,17 @@ describe('remote session: the end', () => {
     await t.pty.ended
   })
 
+  it('a helper with no bridge mode (exit 2, a usage error) is not tried again: the tab names the exit and ends', async () => {
+    const sid = remoteSessionId('tab-no-bridge')
+    const holder = new FakeHolder(sid, 'tab-no-bridge', store)
+    const ssh = new FakeSsh({ answer: (c) => (c.script === 'hold' ? holdAnswer(c, holder) : { code: 1 }), bridge: () => null, bridgeExit: 2 })
+    const t = tab(ssh, 'tab-no-bridge')
+    await until('the end', () => t.exit() !== null)
+    expect(t.out()).toContain("the session helper's bridge on rocky.lan exited 2")
+    // The start's one try, then the end's one try at term.end: never the back-off.
+    expect(ssh.scripts()).toEqual(['hold', 'bridge', 'bridge'])
+  })
+
   it('a helper file that fails its hash check on the host starts nothing: the tab says why and ends', async () => {
     const ssh = new FakeSsh({ answer: (c) => ({ code: 97, stdout: `AICC-HASH ${c.values[0]} mismatch ${'b'.repeat(64)}\n` }) })
     const t = tab(ssh, 'tab-bad-hash')

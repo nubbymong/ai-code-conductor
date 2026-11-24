@@ -274,6 +274,13 @@ export class RemoteDriver implements HelperPtyDriver {
       if (timer) clearTimeout(timer)
       opened.stream.destroy()
       if (r?.code === 3) throw new FinalError(`no holder runs for this tab on ${this.o.machine.host} any more`)
+      // Any other exit of the bridge before its hello is named, so the tab's
+      // note says it; a usage error (2: a helper without the mode) is not
+      // tried again, and exit 1 may be.
+      if (typeof r?.code === 'number') {
+        const why = `${(err as Error).message} (the session helper's bridge on ${this.o.machine.host} exited ${r.code})`
+        throw r.code === 2 ? new FinalError(why) : new Error(why)
+      }
       throw err
     }
   }

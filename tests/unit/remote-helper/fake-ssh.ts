@@ -72,8 +72,9 @@ export interface FakeHost {
   /** Answers a one-shot exec; called once its standard input has ended. */
   answer: (call: ExecCall) => FakeAnswer
   /** Answers a bridge exec: the holder's end of the connection, or null for
-   *  no holder (the bridge exits 3). */
+   *  none, when the bridge exits `bridgeExit` (3, no holder, unless set). */
   bridge?: (call: ExecCall, child: FakeChild) => Duplex | null
+  bridgeExit?: number
 }
 
 export class FakeSsh implements SshRunner {
@@ -97,7 +98,7 @@ export class FakeSsh implements SshRunner {
       setImmediate(() => {
         const end = this.host.bridge?.(call, child) ?? null
         child.stdout.write(`some rc file text\nAICC-HASH ${nonce} ok ${values[4]}\n`)
-        if (!end) { child.finish(3); return }
+        if (!end) { child.finish(this.host.bridgeExit ?? 3); return }
         // The link going down cuts the holder's connection; that is not news.
         end.on('error', () => { /* the link went down */ })
         end.on('data', (b: Buffer) => child.stdout.write(b))
