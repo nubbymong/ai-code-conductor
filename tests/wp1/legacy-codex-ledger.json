@@ -1,8 +1,8 @@
 {
   "schema": "wp1-legacy-codex-ledger/2",
   "predicateDigest": "100a1233edebdc39a5f9004d3fba980a89ebb15b25872e52076386bc84b03153",
-  "manifestPathDigest": "157dcac24d38a2bea67fa30279ae40f41e35f1dfe11a7241a1daf9a267ad760b",
-  "manifestHead": "72cdd91c823c858f6037068e7993ff2350e6b524",
+  "manifestPathDigest": "8de5c5d0c6f4e31ab0f9a037699acccc9190f6d060b01765d11615ed5402f597",
+  "manifestHead": "ab3a2dcf4d4cb79f53349f8ee5ca753ecf0eff94",
   "dispositions": {
     "retain": "unchanged observable behaviour, characterization proof",
     "move": "moved behind a package boundary and/or adapted at the call site, regression proof (newPath when relocated)",
@@ -5312,7 +5312,7 @@
       ],
       "category": "UI-ONLY",
       "disposition": "added",
-      "evidence": "new WP2 PR 3 P3.10 module (src/shared/codex-screen.ts): the pure reading of a Codex pane shared by the renderer's typed commands and main's Watchdog, moved byte-identically from the renderer (screenRegistry's readXtermScreen, codexComposer's reading); Codex's hook review screens read as blocking (WP1.68); tests/unit/renderer/codex-screen-hooks-review.test.ts, tests/unit/renderer/codex-composer.test.ts, tests/unit/renderer/screen-registry.test.ts; WP2 PR 3 P3.15 round 1 (the spec, code-quality and ADR-009 lens findings, and the VM re-check) (WP1.68): codexTextTyped reads text typed at the composer over its wrapped rows (indented under the text), with nothing in the way and the footer last; tests/unit/renderer/codex-image-paste.test.ts; WP2 PR 4 P4.1: the MCP approval form and the sandbox menu title read as blocked, two new readers (WP1.68); tests/unit/renderer/codex-screen-p41.test.ts; WP2 PR 4 P4.3 carrier (row 53, fc460f8f): codexPromptKeeps, the text Codex's prompt keeps and how many characters outside the BMP it would drop (WP1.68); tests/unit/main/codex-ask-carrier.test.ts; 2.1.3-beta.10 section C5 (aicc_planning #349): Codex 0.157.1's one shortcuts hint row under the footer (\"? for shortcuts\", at the footer's indent) reads as the footer alone did, ready or busy; any other row, a second hint row or a wrapped footer still reads unrecognised (WP1.68); tests/unit/shared/codex-screen-shortcuts-hint.test.ts; 2.1.3-beta.12 section C3 (aicc_planning #357): the other rows probe P19's second run recorded under the footer (Codex 0.170.0's agents row, the shortcuts key rebound to F6, the queue hint) read as the footer alone did, the queue hint busy, and the composer's draft and height are read over them, a draft Codex wraps onto more rows over the queue hint too; a warning count at the right of the row, any row not recorded, two rows, another indent or a wrapped footer still reads unrecognised (WP1.68); tests/unit/shared/codex-screen-hint-rows.test.ts; 2.1.3-beta.17 section C7 (aicc_planning #371): Codex's warning count at the right of the row under the footer reads with the hint row it sits beside, and the count alone under a draft is read by the draft and height readers and taken by the readers that confirm a typed text (codexTextTyped, codexCommandTyped, codexPastedContentShown), so composer-submit presses Enter or takes its text back (WP1.68); tests/unit/shared/codex-screen-warning-row.test.ts",
+      "evidence": "new WP2 PR 3 P3.10 module (src/shared/codex-screen.ts): the pure reading of a Codex pane shared by the renderer's typed commands and main's Watchdog, moved byte-identically from the renderer (screenRegistry's readXtermScreen, codexComposer's reading); Codex's hook review screens read as blocking (WP1.68); tests/unit/renderer/codex-screen-hooks-review.test.ts, tests/unit/renderer/codex-composer.test.ts, tests/unit/renderer/screen-registry.test.ts; WP2 PR 3 P3.15 round 1 (the spec, code-quality and ADR-009 lens findings, and the VM re-check) (WP1.68): codexTextTyped reads text typed at the composer over its wrapped rows (indented under the text), with nothing in the way and the footer last; tests/unit/renderer/codex-image-paste.test.ts; WP2 PR 4 P4.1: the MCP approval form and the sandbox menu title read as blocked, two new readers (WP1.68); tests/unit/renderer/codex-screen-p41.test.ts; WP2 PR 4 P4.3 carrier (row 53, fc460f8f): codexPromptKeeps, the text Codex's prompt keeps and how many characters outside the BMP it would drop (WP1.68); tests/unit/main/codex-ask-carrier.test.ts; 2.1.3-beta.10 section C5 (aicc_planning #349): Codex 0.157.1's one shortcuts hint row under the footer (\"? for shortcuts\", at the footer's indent) reads as the footer alone did, ready or busy; any other row, a second hint row or a wrapped footer still reads unrecognised (WP1.68); tests/unit/shared/codex-screen-shortcuts-hint.test.ts; 2.1.3-beta.12 section C3 (aicc_planning #357): the other rows probe P19's second run recorded under the footer (Codex 0.170.0's agents row, the shortcuts key rebound to F6, the queue hint) read as the footer alone did, the queue hint busy, and the composer's draft and height are read over them, a draft Codex wraps onto more rows over the queue hint too; a warning count at the right of the row, any row not recorded, two rows, another indent or a wrapped footer still reads unrecognised (WP1.68); tests/unit/shared/codex-screen-hint-rows.test.ts; 2.1.3-beta.17 section C7 (aicc_planning #371): Codex's warning count at the right of the row under the footer reads with the hint row it sits beside, and the count alone under a draft is read by the draft and height readers and taken by the readers that confirm a typed text (codexTextTyped, codexCommandTyped, codexPastedContentShown), so composer-submit presses Enter or takes its text back (WP1.68); tests/unit/shared/codex-screen-warning-row.test.ts; 2.1.3-beta.17 section C8 (aicc_planning #416): the footer's model is matched in either case (Codex 0.157.1 shows gpt-5.5 as GPT-5.5) (WP1.68); tests/unit/shared/codex-screen-footer-model.test.ts",
       "note": "created by WP2 PR 3 P3.10; no Node import, used by main and renderer"
     },
     {
@@ -12181,6 +12181,17 @@
       "disposition": "added",
       "evidence": "new 2.1.3-beta.17 section C6 test (aicc_planning#415): the placeholder, draft, warning-count and past-placeholder readers on P19's recorded screens and on the screens C6's reading recorded from Codex 0.157.1 (WP1.68); tests/unit/shared/codex-image-screen.test.ts",
       "note": "created by 2.1.3-beta.17 section C6; reads helper/fixtures/screens read only"
+    },
+    {
+      "path": "tests/unit/shared/codex-screen-footer-model.test.ts",
+      "predicates": [
+        "P01",
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "new 2.1.3-beta.17 section C8 test (tests/unit/shared/codex-screen-footer-model.test.ts, aicc_planning #416): Codex 0.157.1's recorded ready screen whose footer names the session's model in capitals (GPT-5.5) reads ready and empty with the model as the app holds it (gpt-5.5); every footer reader and the renderer's Compact, model pill, Plan mode and image-line callers read it and type; a footer naming another model in any case, Codex's hint lines and a level in capitals read nothing (WP1.68)",
+      "note": "created by 2.1.3-beta.17 section C8; pure rows, nothing started"
     },
     {
       "path": "tests/unit/shared/codex-screen-hint-rows.test.ts",
