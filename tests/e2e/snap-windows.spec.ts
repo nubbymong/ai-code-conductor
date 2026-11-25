@@ -145,13 +145,20 @@
  *      warning sign, on two reads 300 ms apart; the Snap button shows.
  *   C2 RECTANGLE, 3 runs, and C3 WHOLE SCREEN, 3 runs, each pressed while
  *      Codex is at rest with "1 warning" (two reads 300 ms apart): one new
- *      JPEG at D2's or D3's size, not all black; one new-engine line; one
- *      line from main saying Codex's image rule pasted and sent it; exactly
- *      one new request from Codex to the stand-in (the turn), whose pictures
- *      are every picture pressed so far, in order, each once by its SHA-256,
- *      the newest this press's file (Codex sends the whole conversation with
- *      each turn); then Codex at rest with its count again, and still that
- *      one request.
+ *      JPEG at D2's or D3's size, not all black, its SHA-256 none of an
+ *      earlier press's; one new-engine line; one line from main saying
+ *      Codex's image rule pasted and sent it; exactly one new request from
+ *      Codex to the stand-in (the turn), whose pictures are every picture
+ *      pressed so far, in order, each once by its SHA-256, the newest this
+ *      press's file (Codex sends the whole conversation with each turn); then
+ *      Codex at rest with its count again, and still that one request. Each
+ *      run's picture is made to differ from the one before it (PICTURE_STEP:
+ *      C2's drag starts 16 DIP further right a run, C3 moves the app's window
+ *      16 DIP right a run and back after), so a turn that sent an earlier
+ *      press's picture again fails. Without it, run 45582381926 on d886147e
+ *      pictured the same screen twice: C2 run 3's picture was C2 run 2's, and
+ *      C3 run 2's was C3 run 1's, byte for byte (Codex numbers each message's
+ *      image [Image #1], so its screen after each turn is the same).
  * The reading before C2 and C3 were added (rule 34; run 45578961836, Codex
  * 0.157.1, one 1024x768 display at 100%): the tab opened, Codex asked only
  * its hooks review (the project's trust is seeded, and no sandbox menu
@@ -744,10 +751,14 @@ async function pressReadingMenu(label: string, answerWith: MenuAnswer, rate: num
  *  (src/main/index.ts, ready-to-show). Snap pictures the screen, so the
  *  window goes where a user has it: on the primary display, within its work
  *  area. (Run 45269811648 read the window's right and bottom edges at -8720
- *  and -9280: -10000 plus 1280 by 720.) Answers the window's bounds. */
-async function placeAppWindow(): Promise<unknown> {
+ *  and -9280: -10000 plus 1280 by 720.) Answers the window's bounds. C3
+ *  passes `right`: the window's left edge that many DIP further right, its
+ *  size unchanged. (The window is at least 1280 by 720 DIP, src/main/index.ts
+ *  minWidth and minHeight, so on the runner's 1024 by 768 display it already
+ *  runs past the display's right edge: run 45582381926 read 0,0 1280x720.) */
+async function placeAppWindow(right = 0): Promise<unknown> {
   const area = await ctx!.app.evaluate(({ screen }) => screen.getPrimaryDisplay().workArea)
-  const placed = { x: area.x, y: area.y, width: Math.min(1280, area.width), height: Math.min(720, area.height) }
+  const placed = { x: area.x + right, y: area.y, width: Math.min(1280, area.width), height: Math.min(720, area.height) }
   await (await ctx!.app.browserWindow(ctx!.page)).evaluate((w, b) => w.setBounds(b), placed)
   return (await ctx!.app.browserWindow(ctx!.page)).evaluate((w) => w.getBounds())
 }
@@ -781,6 +792,9 @@ test.describe('Snap on Windows', () => {
     fs.writeFileSync(path.join(OUT, 'readings.json'), JSON.stringify(readings, null, 2))
     console.log(`[snap-e2e] readings ${JSON.stringify(readings)}`)
     await closeIsolatedApp(ctx)
+    // Part two shares `ctx`: never leave it naming this closed app, whose
+    // process id Windows may have given to another program by then.
+    ctx = undefined
   })
 
   test('D1 START: one Claude Code tab opens and shows the Snap button', async () => {
@@ -1061,6 +1075,13 @@ const DEAD_PROXY = { HTTPS_PROXY: 'http://127.0.0.1:9', HTTP_PROXY: 'http://127.
 /** See the header. */
 const CODEX_START_MS = 120_000
 const CODEX_TURN_MS = 20_000
+/** How far each C2 and C3 run moves its picture (DIP): C2's drag starts this
+ *  much further right a run, C3 moves the app's window this much further
+ *  right a run. Without it two presses could picture the same screen: in run
+ *  45582381926 C2 run 3's picture was C2 run 2's byte for byte, and C3 run
+ *  2's was C3 run 1's (Codex numbers each message's image [Image #1], so its
+ *  screen after each turn is the same). */
+const PICTURE_STEP = 16
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
 /** One request probe P11's stand-in saw (its onEvent; a body is never kept),
@@ -1159,11 +1180,12 @@ async function expectCodexAtRestWithCount(): Promise<void> {
 }
 
 /** After a press into the Codex tab: the one JPEG it saved (its size, not all
- *  black); one new-engine line; main's one line saying Codex's image rule
- *  pasted and sent it; and exactly one new turn at the stand-in, whose
- *  pictures are every picture pressed so far, in order, each once, the newest
- *  this file's SHA-256 (Codex sends the whole conversation each turn). Then
- *  Codex back at rest with its count, and still that one turn. */
+ *  black, its SHA-256 none of an earlier press's); one new-engine line; main's
+ *  one line saying Codex's image rule pasted and sent it; and exactly one new
+ *  turn at the stand-in, whose pictures are every picture pressed so far, in
+ *  order, each once, the newest this file's SHA-256 (Codex sends the whole
+ *  conversation each turn). Then Codex back at rest with its count, and still
+ *  that one turn. */
 async function expectSentToCodex(before: string[], turnsBefore: number, answeredAt: number, width: number, height: number, from: Mark, linePattern: RegExp): Promise<void> {
   await expect.poll(() => jpegs().filter((f) => !before.includes(f)).length, { timeout: OVERLAY_MS, intervals: [50] }).toBe(1)
   push('codexEnterToFileMs', Math.round(performance.now() - answeredAt))
@@ -1176,7 +1198,12 @@ async function expectSentToCodex(before: string[], turnsBefore: number, answered
   expect(info.lit, `${name}: pixels not near black, of ${info.pixels}`).toBeGreaterThan(info.pixels / 100)
   await expect.poll(() => snapLines(from).length, { timeout: CANCEL_MS }).toBe(1)
   expect(snapLines(from)[0]).toMatch(linePattern)
-  codexSent.push(sha256Of(file))
+  // Each press's picture is made to differ from every earlier one (C2's drag
+  // and C3's window move 16 DIP a run), so a turn that sent an earlier
+  // press's picture again cannot pass as this one's.
+  const sha = sha256Of(file)
+  expect(codexSent, 'this press\'s picture differs from every earlier press\'s').not.toContain(sha)
+  codexSent.push(sha)
   try {
     await expect.poll(() => linesSince(from, '[codex-image]').length, { timeout: CODEX_TURN_MS, intervals: [100] }).toBe(1)
     expect(linesSince(from, '[codex-image]')[0]).toMatch(new RegExp(`^\\[codex-image\\] ${codexSid}: an image path of \\d+ characters pasted and sent; `))
@@ -1207,6 +1234,9 @@ test.describe('Snap into a Codex tab on Windows while Codex shows its warning co
   let projectDir = ''
 
   test.beforeAll(async () => {
+    // Part one's app is closed: if this hook fails before its own launch, the
+    // afterAll below closes nothing rather than a stale process id.
+    ctx = undefined
     test.setTimeout(LAUNCH_MS + 130_000)
     fs.mkdirSync(OUT, { recursive: true })
     // In the job this part runs or fails: it is never skipped there.
@@ -1249,6 +1279,7 @@ test.describe('Snap into a Codex tab on Windows while Codex shows its warning co
     fs.writeFileSync(path.join(OUT, 'codex-readings.json'), JSON.stringify(out, null, 2))
     console.log(`[snap-e2e] codex readings ${JSON.stringify(out)}`)
     await closeIsolatedApp(ctx)
+    ctx = undefined
     await standIn?.close()
   })
 
@@ -1304,11 +1335,16 @@ test.describe('Snap into a Codex tab on Windows while Codex shows its warning co
       const before = jpegs()
       const turnsBefore = codexTurns().length
       const { overlay, display, start, from } = await pressNew({ prefix: 'codex' })
-      const { width, height } = rectangleSize(start, DRAG, display.scaleFactor)
-      await overlay.mouse.move(start.x, start.y)
+      // A picture of its own each run (PICTURE_STEP). pressNew's fit check
+      // leaves the room: the drag, at most 32 DIP further right, ends at
+      // 272 DIP of the window's 1024 DIP on the runner's display.
+      const at = { x: start.x + (run - 1) * PICTURE_STEP, y: start.y }
+      push('codexDragX', at.x)
+      const { width, height } = rectangleSize(at, DRAG, display.scaleFactor)
+      await overlay.mouse.move(at.x, at.y)
       await overlay.mouse.down()
-      await overlay.mouse.move(start.x + DRAG.width / 2, start.y + DRAG.height / 2, { steps: 4 })
-      await overlay.mouse.move(start.x + DRAG.width, start.y + DRAG.height, { steps: 4 })
+      await overlay.mouse.move(at.x + DRAG.width / 2, at.y + DRAG.height / 2, { steps: 4 })
+      await overlay.mouse.move(at.x + DRAG.width, at.y + DRAG.height, { steps: 4 })
       await overlay.mouse.up()
       const answeredAt = performance.now()
       await answer(overlay, () => overlay.keyboard.press('Enter'))
@@ -1320,6 +1356,11 @@ test.describe('Snap into a Codex tab on Windows while Codex shows its warning co
   for (let run = 1; run <= RUNS; run++) {
     test(`C3 WHOLE SCREEN run ${run}: the whole screen while Codex shows its warning count goes to Codex as one turn carrying the picture`, async () => {
       test.setTimeout(PRESS_TEST_MS + 2 * CODEX_TURN_MS)
+      // A picture of its own each run (PICTURE_STEP): the app's window moved
+      // right, then Codex read at rest with its count, so the press is still
+      // made while the count shows; the window goes back once the turn is read.
+      const moved = await placeAppWindow((run - 1) * PICTURE_STEP)
+      readings.codexWholeScreenWindow = [...((readings.codexWholeScreenWindow as unknown[] | undefined) ?? []), moved]
       await expectCodexAtRestWithCount()
       const before = jpegs()
       const turnsBefore = codexTurns().length
@@ -1329,6 +1370,7 @@ test.describe('Snap into a Codex tab on Windows while Codex shows its warning co
       await answer(overlay, () => overlay.getByRole('button', { name: 'Whole screen' }).click())
       await expectOverlayGone()
       await expectSentToCodex(before, turnsBefore, answeredAt, width, height, from, /^\[snap\] new engine: the whole screen of display \d+, /)
+      await placeAppWindow()
     })
   }
 })

@@ -15,9 +15,10 @@ Plan 2.1.3-beta.18, section 7.5 (aicc_planning#428). Base: origin/beta at d0be04
   one managed Codex account signed in with a made-up key, its config pointing Codex at probe
   P11's model stand-in on loopback (it names each picture a request carries by its SHA-256) and
   naming one tool server that cannot start. C1 opens the tab and reads the count; C2 Rectangle
-  and C3 Whole screen, 3 runs each, press Snap while the count shows and read the saved JPEG,
-  main's "pasted and sent" line, and exactly one request at the stand-in whose pictures are every
-  picture pressed so far, in order, the newest byte for byte the saved file.
+  and C3 Whole screen, 3 runs each, press Snap while the count shows and read the saved JPEG
+  (its SHA-256 none of an earlier press's), main's "pasted and sent" line, and exactly one
+  request at the stand-in whose pictures are every picture pressed so far, in order, the newest
+  byte for byte the saved file.
 - **Two reds, both the spec's own premises, each read in the run's log.** The footer: the app
   launches Codex with its config's model (`-m gpt-6-astra`), so the footer did not carry the
   account config's model the first pattern named; it is now read by its shape. The turn: P19's
@@ -27,6 +28,13 @@ Plan 2.1.3-beta.18, section 7.5 (aicc_planning#428). Base: origin/beta at d0be04
 - **Result.** Run 45581252484: 29 of 29 green, retries 0 (part one's 22 unchanged; C1, C2 3 of 3,
   C3 3 of 3). The file to Codex's turn took 1.1 to 1.2 s; Codex at rest with its count again
   0.3 s later.
+- **Review round (on d886147e).** In run 45582381926 two presses pictured the same screen as the
+  press before them (C2 run 3 and C3 run 2: Codex numbers each message's image [Image #1], so
+  its screen after each turn is the same), so on those two the check that the newest picture is
+  this press's file could not fail. Each run now moves its picture 16 DIP (C2's drag, C3's app
+  window, put back after) and the press's SHA-256 must be none of an earlier press's. Part two
+  also clears the shared app handle around its hooks, so a failed launch never closes part
+  one's app again by its old process id.
 - **Shared code.** The 9.2 rules' first-screen answer moved from codex-real-launch.spec.ts into
   helpers/codex-mode.ts unchanged, and the footer pattern is exported from
   codex-first-screens.ts. D2, D3 and D12 share the rectangle and whole-screen size rules with C2

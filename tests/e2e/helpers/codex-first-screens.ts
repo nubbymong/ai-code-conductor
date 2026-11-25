@@ -52,7 +52,7 @@ const SELECTED = /^\s*\u203A\s*\d+\./
 const PLACEHOLDER = /^\s*\u203A\s+(?:Ask Codex to do anything|Ask a follow-up question)\s*$/
 /** Codex's footer: "<model> <effort> . <folder>" (src/shared/codex-screen.ts).
  *  Also read by snap-windows.spec.ts's Codex tab. */
-export const FOOTER =/^ {0,8}\S+ (?:none|minimal|low|medium|high|xhigh|max|ultra|default) \u00B7 \S/
+export const FOOTER = /^ {0,8}\S+ (?:none|minimal|low|medium|high|xhigh|max|ultra|default) \u00B7 \S/
 
 /** The selected row of the menu on screen: the LAST row with the selection
  *  mark and an option number, '' when there is none. */
