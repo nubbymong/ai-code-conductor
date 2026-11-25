@@ -38,19 +38,30 @@
  * holder's replay, each line once; a tab in a project folder of a git
  * checkout (2.1.3-beta.18): the project's and the checkout root's hooks in its
  * settings before the app's, and a settings file that is a link not read;
+ * a tab's status line, hook events and tool calls (2.1.3-beta.18 section 3.2,
+ * with the helper of section 3.1): the commands its settings.json and
+ * mcp.json name, run on the host as Claude Code runs them, reach the app's
+ * side of the tab (a status strip, a hook sink and a tool host that answers
+ * each call with the tab it was served for), each once; its link's ssh then
+ * killed and its new link held back until the holder let the old one go:
+ * the statuses, the hook events and a tool call made meanwhile arrive once
+ * the tab is back (the newest status only, the events in order, the call
+ * answered by the app), and all three cross again after; two tabs on the
+ * same machine at once, each one's status line, hook event and tool call on
+ * its own tab only;
  * each closed tab's holder ended (term.end); Remove; nothing left under ~/.aicc and no helper process of the
  * run left. The test's own execs read only what their command prints (an rc
  * file prints first).
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
-import { spawnSync } from 'child_process'
+import { spawn, spawnSync, type ChildProcess } from 'child_process'
 import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
 import { RemoteMachines, type MachineStore, type RemoteMachineRecord } from '../../src/main/remote-helper/machines'
-import { nodeSshRunner, execArgv, sshEnv, type SshTarget } from '../../src/main/remote-helper/ssh-exec'
+import { nodeSshRunner, execArgv, sshEnv, type SshRunner, type SshTarget } from '../../src/main/remote-helper/ssh-exec'
 import { RemoteHelperPty, remoteLaunchSpec, remoteSessionId } from '../../src/main/remote-helper/session'
-import { remoteLaunchOf } from '../../src/main/remote-helper'
+import { remoteLaunchOf, type RemoteSignalDeps } from '../../src/main/remote-helper'
 import { claudeRemoteLaunch } from '../../src/main/providers/claude/remote-launch'
 import { readBundledLinuxHelper, type BundledLinuxHelper } from '../../src/main/remote-helper/manifest'
 
@@ -129,6 +140,121 @@ async function untilHost(what: string, command: string, want: string, ms = 10_00
   }
 }
 
+// ── a tab's status line, hook events and tool calls (2.1.3-beta.18 section 3.2) ──
+
+type StatusLine = Parameters<RemoteSignalDeps['status']>[1]
+type HookEvent = Parameters<RemoteSignalDeps['event']>[1]
+/** What reached the app's side, by tab: one set for every tab, as the app has
+ *  one (ipc/remote-machines-handlers.ts). */
+const got = {
+  status: [] as Array<{ id: string; line: StatusLine }>,
+  events: [] as Array<{ id: string; e: HookEvent }>,
+  served: [] as Array<{ id: string; provider: string }>,
+}
+/** The app's side of a tab, with no Electron: a status strip and a hook sink
+ *  that keep what they are given, and a tool host that answers each call with
+ *  the tab and provider its stream was served for and the word it was sent. */
+const signals: RemoteSignalDeps = {
+  toolsServed: () => true,
+  status: (id, line) => { got.status.push({ id, line }) },
+  event: (id, e) => { got.events.push({ id, e }) },
+  serve: (id, provider, link) => {
+    got.served.push({ id, provider })
+    link.take((m) => {
+      if (Array.isArray(m) || typeof m.method !== 'string' || m.id === undefined) return
+      const word = (m.params as { arguments?: { word?: unknown } } | undefined)?.arguments?.word
+      link.send({ jsonrpc: '2.0', id: m.id, result: { content: [{ type: 'text', text: `served for ${id} as ${provider}: ${String(word)}` }] } })
+    }, () => { /* the stream ended */ })
+    return true
+  },
+}
+const statusOf = (id: string) => got.status.filter((s) => s.id === id).map((s) => s.line)
+const eventsOf = (id: string) => got.events.filter((x) => x.id === id).map((x) => x.e)
+const servedFor = (id: string) => got.served.filter((s) => s.id === id)
+
+/** A status as Claude Code writes it on its status line command's standard
+ *  input: another session's id and paths on the host, and a field outside the
+ *  keep-list, beside what the strip shows. */
+const statusPayload = (name: string, n: number) => ({
+  session_id: 'not-this-tab', transcript_path: '/home/someone/.claude/projects/x/t.jsonl', cwd: '/home/someone',
+  model: { id: `e2e-model-${n}`, display_name: `${name} ${n}` },
+  context_window: { used_percentage: 10 + n, context_window_size: 200000, current_usage: { input_tokens: 1000 * n, output_tokens: 10 * n } },
+  cost: { total_cost_usd: n / 100 },
+  rate_limits: { five_hour: { used_percentage: 20 + n, resets_at: 1_900_000_000 } },
+  not_kept: { secret: 'never kept' },
+})
+
+/** A runner whose execs wait while it is held: a tab's new link is held back,
+ *  so a cut lasts until the test ends it. */
+function gatedRunner(): { runner: SshRunner; hold(): void; release(): void } {
+  let gate: Promise<void> = Promise.resolve()
+  let open = () => {}
+  return {
+    runner: { ...runner, version: async () => { await gate; return runner.version() } },
+    hold: () => { gate = new Promise<void>((r) => { open = r }) },
+    release: () => open(),
+  }
+}
+
+/** A tool server as Claude Code starts one: the command and arguments of the
+ *  session's mcp.json, run on the host with pipes, one JSON-RPC message a
+ *  line each way. Only what comes after the test's own line is read. */
+class Relay {
+  readonly answers: unknown[] = []
+  readonly noise: string[] = []
+  code: number | null | undefined
+  private readonly child: ChildProcess
+  private buf = ''
+  private own = false
+  constructor(conductor: { command: string; args: string[] }) {
+    const q = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`
+    const line = [conductor.command, ...conductor.args].map(q).join(' ')
+    this.child = spawn('ssh', execArgv(target, { version: null }, `echo ${OWN}; exec ${line}`), { stdio: ['pipe', 'pipe', 'pipe'], env: sshEnv(process.env) })
+    this.child.stdout!.on('data', (c: Buffer) => this.take(c.toString('utf8')))
+    this.child.stderr!.on('data', (c: Buffer) => { this.noise.push(`stderr: ${c.toString('utf8')}`) })
+    this.child.on('close', (code) => { this.code = code })
+  }
+  private take(text: string): void {
+    this.buf += text
+    for (let at = this.buf.indexOf('\n'); at >= 0; at = this.buf.indexOf('\n')) {
+      const line = this.buf.slice(0, at).replace(/\r$/, '')
+      this.buf = this.buf.slice(at + 1)
+      if (!this.own) { this.own = line === OWN; continue }
+      try { this.answers.push(JSON.parse(line)) } catch { this.noise.push(line) }
+    }
+  }
+  send(message: unknown): void { this.child.stdin!.write(`${JSON.stringify(message)}\n`) }
+  call(id: number, word: string): void { this.send({ jsonrpc: '2.0', id, method: 'tools/call', params: { name: 'e2e_echo', arguments: { word } } }) }
+  /** The text of each answer to `id`. */
+  answerTo(id: number): string[] {
+    return this.answers
+      .filter((a): a is { id: unknown; result: { content: Array<{ text: string }> } } => !Array.isArray(a) && (a as { id?: unknown }).id === id)
+      .map((a) => a.result.content[0].text)
+  }
+  async end(): Promise<number | null | undefined> {
+    this.child.stdin!.end()
+    await until('the relay to exit', () => this.code !== undefined, 15_000)
+    return this.code
+  }
+  kill(): void { if (this.code === undefined) this.child.kill() }
+}
+const relaysLeft: Relay[] = []
+
+/** The commands a tab's own files on the host name: its status line command,
+ *  the app's hook command (the last of each kind) and its tool server. */
+function tabCommands(folder: string): { status: string; hook: (kind: string) => string; conductor: { command: string; args: string[] } } {
+  const settings = JSON.parse(sshRun(`cat "${folder}/settings.json"`).out) as { statusLine: { command: string }; hooks: Record<string, Array<{ hooks: Array<{ command: string }> }>> }
+  const mcp = JSON.parse(sshRun(`cat "${folder}/mcp.json"`).out) as { mcpServers: { conductor: { command: string; args: string[] } } }
+  return { status: settings.statusLine.command, hook: (kind) => settings.hooks[kind].at(-1)!.hooks[0].command, conductor: mcp.mcpServers.conductor }
+}
+
+/** Run one of them on the host as Claude Code does, the JSON on its standard
+ *  input. The status and hook modes exit 0 and print nothing, whatever happens. */
+function post(command: string, payload: object): void {
+  const r = sshRun(command, Buffer.from(JSON.stringify(payload)))
+  expect([r.code, r.out], r.err).toEqual([0, ''])
+}
+
 beforeAll(async () => {
   const hosts = JSON.parse(fs.readFileSync(need('REMOTE_HELPER_HOSTS'), 'utf8')) as { host?: unknown; user?: unknown; port?: unknown }
   target = { host: String(hosts.host), user: String(hosts.user), port: Number(hosts.port ?? 22) }
@@ -152,6 +278,7 @@ beforeAll(async () => {
 })
 
 afterAll(() => {
+  for (const r of relaysLeft) r.kill()
   if (remoteFakeDir && /^\/[A-Za-z0-9._/-]+\/aicc-e2e\.[A-Za-z0-9]+$/.test(remoteFakeDir)) {
     // A bridge the replay step stopped is let go first, whatever failed.
     if (stoppedBridge) sshRun(`kill -CONT ${stoppedBridge} 2>/dev/null; true`)
@@ -370,6 +497,171 @@ describe('remote helper on a real Linux host', () => {
       inUse = 0
     }
     await untilHost('its folder to go', `test -e "${plan.helper.folder}" && echo there || echo gone`, 'gone')
+  })
+
+  it('a tab\'s status line, hook events and tool calls cross the bridge to the app\'s side, each once, and again after its link\'s ssh is killed (2.1.3-beta.18 section 3.2)', async () => {
+    const d = remoteFakeDir
+    expect(d).toMatch(/aicc-e2e\./)
+    const m: RemoteMachineRecord = { ...machine, claudePath: `${d}/aicc-fake-cli`, check: { at: Date.now(), ok: true } }
+    const id = 'e2e-tab-4'
+    const gate = gatedRunner()
+    inUse = 1
+    const plan = remoteLaunchOf(claudeRemoteLaunch, m, { model: 'e2e-model' }, null, () => true, remoteSessionId(id), 100, 30, true)
+    const pty = new RemoteHelperPty({ appPtyId: id, machine: m, installId: machines.installId(), runner: gate.runner, spec: plan.spec, plan, signals, log: sessionLog })
+    const relays: Relay[] = []
+    let out = ''
+    pty.onData((x) => { out += x })
+    try {
+      await until('the fake CLI\'s banner', () => out.includes('FAKE-CLI READY'))
+      const cmd = tabCommands(plan.helper.folder)
+      const relay = () => { const r = new Relay(cmd.conductor); relays.push(r); relaysLeft.push(r); return r }
+
+      // The status line: cut to the keep-list and mapped by the Claude
+      // package, as the tab's own (no session id, no transcript path, nothing
+      // outside the keep-list).
+      post(cmd.status, statusPayload('E2E Model', 1))
+      await until('the first status line', () => statusOf(id).length === 1)
+      expect(statusOf(id)[0]).toEqual({
+        model: 'E2E Model 1', modelId: 'e2e-model-1', contextUsedPercent: 11, contextWindowSize: 200000, inputTokens: 1000, outputTokens: 10,
+        costUsd: 0.01, rateLimitCurrent: 21, rateLimitCurrentResets: '2030-03-17T17:46:40.000Z',
+      })
+      // A hook event: cut to the keep-list (no prompt), for the tab.
+      post(cmd.hook('Stop'), { hook_event_name: 'Stop', session_id: 'not-this-tab', transcript_path: '/home/someone/t.jsonl', prompt: 'never kept', stop_hook_active: false })
+      await until('the first hook event', () => eventsOf(id).length === 1)
+      expect([eventsOf(id)[0].kind, eventsOf(id)[0].payload]).toEqual(['Stop', { hook_event_name: 'Stop', session_id: 'not-this-tab', transcript_path: '/home/someone/t.jsonl' }])
+      // A tool call: served as the tab's session, its provider's, both ways.
+      const a = relay()
+      a.call(1, 'first')
+      await until('the first tool answer', () => a.answerTo(1).length === 1)
+      expect(a.answerTo(1)).toEqual([`served for ${id} as claude: first`])
+      expect(servedFor(id)).toEqual([{ id, provider: 'claude' }])
+
+      // The link's ssh is killed, and its new link held back until the holder
+      // has let the old one go (its record says it is not attached).
+      const link = pty.linkPid
+      expect(link).toBeGreaterThan(0)
+      gate.hold()
+      process.kill(link!)
+      const record = `${plan.helper.store}/${plan.helper.sid}.json`
+      const start = Date.now()
+      for (;;) {
+        let attached: unknown
+        try { attached = (JSON.parse(sshRun(`cat "${record}"`).out) as { attached?: unknown }).attached } catch { attached = undefined }
+        if (attached === false) break
+        if (Date.now() - start > 15_000) throw new Error(`the holder did not let the link go (attached: ${String(attached)})`)
+        await new Promise((r) => setTimeout(r, 250))
+      }
+      // Meanwhile: two statuses (the holder keeps the newest only), two hook
+      // events (queued), and a tool call from a tool server started in the
+      // cut: its stream is kept and the call held. A batch is answered at once
+      // while the app is away (relay.rs): its answer shows the relay is away
+      // and has read the call before it.
+      post(cmd.status, statusPayload('E2E Model', 2))
+      post(cmd.status, statusPayload('E2E Model', 3))
+      post(cmd.hook('Notification'), { hook_event_name: 'Notification', session_id: 'not-this-tab', message: 'Claude needs your permission to use Bash', notification_type: 'permission_prompt', tool_input: { command: 'never kept' } })
+      post(cmd.hook('Stop'), { hook_event_name: 'Stop', session_id: 'not-this-tab' })
+      const b = relay()
+      b.call(2, 'during')
+      b.send([{ jsonrpc: '2.0', id: 99, method: 'tools/call', params: { name: 'e2e_echo', arguments: { word: 'probe' } } }])
+      await until('the relay to answer the batch as away', () => b.answers.length === 1)
+      expect(b.answers).toEqual([[{ jsonrpc: '2.0', id: 99, result: { content: [{ type: 'text', text: 'AI Code Conductor is updating, try again shortly' }], isError: true } }]])
+      expect([statusOf(id).length, eventsOf(id).length, pty.linkPid]).toEqual([1, 1, link])
+
+      // The new link: the tab attaches again, and gets the newest status once,
+      // the queued events once each in order, and the held call answered.
+      gate.release()
+      await until('a new link', () => pty.linkPid !== undefined && pty.linkPid !== link)
+      await until('the call made in the cut to be answered', () => b.answerTo(2).length === 1)
+      expect(b.answerTo(2)).toEqual([`served for ${id} as claude: during`])
+      await until('the newest status', () => statusOf(id).length === 2)
+      await until('the queued hook events', () => eventsOf(id).length === 3)
+      expect(statusOf(id)[1].model).toBe('E2E Model 3')
+      expect(eventsOf(id).slice(1).map((e) => [e.kind, e.payload])).toEqual([
+        ['Notification', { hook_event_name: 'Notification', session_id: 'not-this-tab', message: 'Claude needs your permission to use Bash', notification_type: 'permission_prompt' }],
+        ['Stop', { hook_event_name: 'Stop', session_id: 'not-this-tab' }],
+      ])
+      expect(sessionLogs.some((l) => l.includes(`${pty.sid}: the connection closed; attaching again from`))).toBe(true)
+
+      // And all three cross again on the new link: the tool server started
+      // before the cut keeps its stream.
+      a.call(3, 'after')
+      await until('a tool answer after the re-attach', () => a.answerTo(3).length === 1)
+      expect(a.answerTo(3)).toEqual([`served for ${id} as claude: after`])
+      post(cmd.status, statusPayload('E2E Model', 4))
+      post(cmd.hook('SessionStart'), { hook_event_name: 'SessionStart', session_id: 'not-this-tab', source: 'resume' })
+      await until('a status and a hook event after the re-attach', () => statusOf(id).length === 3 && eventsOf(id).length === 4)
+
+      // Each once: the whole record of what reached the app's side for the tab.
+      note('signals-tab-4', { status: statusOf(id), events: eventsOf(id), served: servedFor(id), a: a.answers, b: b.answers })
+      expect(statusOf(id).map((s) => s.model)).toEqual(['E2E Model 1', 'E2E Model 3', 'E2E Model 4'])
+      expect(eventsOf(id).map((e) => e.kind)).toEqual(['Stop', 'Notification', 'Stop', 'SessionStart'])
+      const seqs = eventsOf(id).map((e) => e.seq)
+      expect(seqs.every((s, i) => i === 0 || s > seqs[i - 1])).toBe(true)
+      expect(a.answers.map((x) => (x as { id?: unknown }).id)).toEqual([1, 3])
+      expect(b.answers.slice(1).map((x) => (x as { id?: unknown }).id)).toEqual([2])
+      // Served three times, each as the tab's: the first stream, then both kept streams on the new link.
+      expect(servedFor(id)).toEqual([{ id, provider: 'claude' }, { id, provider: 'claude' }, { id, provider: 'claude' }])
+      expect(got.status.length + got.events.length).toBe(statusOf(id).length + eventsOf(id).length)
+      // A tool server whose input ends exits 0, and printed nothing but its messages.
+      for (const r of relays) expect(await r.end()).toBe(0)
+      expect(relays.flatMap((r) => r.noise)).toEqual([])
+    } finally {
+      gate.release()
+      for (const r of relays) r.kill()
+      pty.kill()
+      await pty.ended
+      inUse = 0
+      if (OUT) fs.writeFileSync(path.join(OUT, 'session-4.txt'), out)
+    }
+    await untilHost('the holder to end', `pgrep -f -- "--store $HOME/[.]aicc/${machine.did}/store" | wc -l`, '0')
+    await untilHost('its folder to go', `test -e "${plan.helper.folder}" && echo there || echo gone`, 'gone')
+  })
+
+  it('two tabs on the same machine at once: each one\'s status line, hook event and tool call reach its own tab only (2.1.3-beta.18 section 3.2)', async () => {
+    const d = remoteFakeDir
+    expect(d).toMatch(/aicc-e2e\./)
+    const m: RemoteMachineRecord = { ...machine, claudePath: `${d}/aicc-fake-cli`, check: { at: Date.now(), ok: true } }
+    const ids = ['e2e-tab-5', 'e2e-tab-6']
+    const before = { status: got.status.length, events: got.events.length, served: got.served.length }
+    inUse = 2
+    const tabs = ids.map((id) => {
+      const plan = remoteLaunchOf(claudeRemoteLaunch, m, { model: 'e2e-model' }, null, () => true, remoteSessionId(id), 100, 30, true)
+      const pty = new RemoteHelperPty({ appPtyId: id, machine: m, installId: machines.installId(), runner, spec: plan.spec, plan, signals, log: sessionLog })
+      const tab = { id, plan, pty, out: '', relay: undefined as Relay | undefined }
+      pty.onData((x) => { tab.out += x })
+      return tab
+    })
+    try {
+      for (const t of tabs) await until(`${t.id}'s banner`, () => t.out.includes('FAKE-CLI READY'))
+      expect(tabs[0].plan.helper.folder).not.toBe(tabs[1].plan.helper.folder)
+      for (const t of tabs) {
+        const cmd = tabCommands(t.plan.helper.folder)
+        post(cmd.status, statusPayload(`Model of ${t.id}`, 7))
+        post(cmd.hook('Notification'), { hook_event_name: 'Notification', session_id: `cli-of-${t.id}`, message: `${t.id} needs you`, notification_type: 'permission_prompt' })
+        t.relay = new Relay(cmd.conductor)
+        relaysLeft.push(t.relay)
+        t.relay.call(1, t.id)
+      }
+      for (const t of tabs) {
+        await until(`${t.id}'s status, hook event and tool answer`, () => statusOf(t.id).length === 1 && eventsOf(t.id).length === 1 && t.relay!.answerTo(1).length === 1)
+      }
+      note('signals-two-tabs', tabs.map((t) => ({ id: t.id, status: statusOf(t.id), events: eventsOf(t.id), served: servedFor(t.id), answers: t.relay!.answers })))
+      for (const t of tabs) {
+        expect(statusOf(t.id).map((s) => s.model)).toEqual([`Model of ${t.id} 7`])
+        expect(eventsOf(t.id).map((e) => e.payload)).toEqual([{ hook_event_name: 'Notification', session_id: `cli-of-${t.id}`, message: `${t.id} needs you`, notification_type: 'permission_prompt' }])
+        expect(t.relay!.answerTo(1)).toEqual([`served for ${t.id} as claude: ${t.id}`])
+        expect(servedFor(t.id)).toEqual([{ id: t.id, provider: 'claude' }])
+      }
+      // Nothing for any other tab.
+      expect([got.status.length - before.status, got.events.length - before.events, got.served.length - before.served]).toEqual([2, 2, 2])
+      for (const t of tabs) expect(await t.relay!.end()).toBe(0)
+    } finally {
+      for (const t of tabs) { t.relay?.kill(); t.pty.kill() }
+      for (const t of tabs) await t.pty.ended
+      inUse = 0
+    }
+    await untilHost('both holders to end', `pgrep -f -- "--store $HOME/[.]aicc/${machine.did}/store" | wc -l`, '0')
+    for (const t of tabs) await untilHost(`${t.id}'s folder to go`, `test -e "${t.plan.helper.folder}" && echo there || echo gone`, 'gone')
   })
 
   it('Remove takes it away: nothing of the run is left under ~/.aicc, and no helper process', async () => {

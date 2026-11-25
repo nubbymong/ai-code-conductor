@@ -73,7 +73,7 @@ on:
         required: false
         default: false
       remote_helper_e2e:
-        description: 'Run the remote helper device check (remote-helper-e2e) on the Linux runner: a localhost sshd, the static helper and the fake CLI built here, and the app''s remote-helper code adding the machine, holding a session, re-attaching and removing it; the readings and the two programs are uploaded'
+        description: 'Run the remote helper device check (remote-helper-e2e) on the Linux runner: a localhost sshd, the static helper and the fake CLI built here, and the app''s remote-helper code adding the machine, holding a session, carrying its status line, hook events and tool calls, re-attaching and removing it; the readings and the two programs are uploaded'
         type: boolean
         required: false
         default: false
@@ -1442,7 +1442,12 @@ jobs:
   # with retries off: Add (upload, hash equal, self-test), another install's
   # Remove refused, a session holding the fake CLI (bytes in, output out, the
   # rc variable), a resize, the ssh child killed and a re-attach with the
-  # replay, the end, Remove, nothing left under ~/.aicc.
+  # replay; from 2.1.3-beta.18 (section 3.2) a tab's status line, hook events
+  # and tool calls, posted on the host by the helper's status, hook and relay
+  # modes as its session files name them, reaching the app's side once each,
+  # and again after the ssh child is killed (what was posted in the cut
+  # arrives once it is back), and two tabs at once each getting only its own;
+  # the end, Remove, nothing left under ~/.aicc.
   #
   # It runs ONLY on a dispatch that names it (`remote_helper_e2e`), never on a
   # pull request or a push. It is section evidence, like a test-machine line:
