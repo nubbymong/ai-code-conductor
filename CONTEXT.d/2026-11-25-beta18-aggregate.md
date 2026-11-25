@@ -83,3 +83,15 @@ Machines card now names the remote sessions switch. Two wording fixes: the
 uninstall line says "a Codex session's resume list", and app-knowledge's
 remote paragraph says "A tab through the helper has its status line..." so
 the sentence is not read as the other tabs'.
+
+**After the recheck of the release smoke fixes.** Three of those fixes
+mend things a user of beta.17 saw (the helper tab's header pills, the
+Remove question's old notice, the card's cut name), so the beta.18 entry
+gains a fix line for each, worded to what the code does: the one pill sits
+beside the Watchdog and GitHub pills, the notice is the one an earlier Add,
+Check or Remove left, and only the badges that do not fit move to a second
+line. The Machines card's Remote row now names the switch by its Settings
+label and says it is for Windows: "On Windows: Settings -> General -> Remote
+sessions through the session helper (Linux, preview)"; its test reads the
+label from SettingsPage.tsx, and checks it sits in General's Terminal
+section behind the Windows-only guard.
