@@ -569,7 +569,7 @@ describe('remote helper on a real Linux host', () => {
   // (3.2's fix round: only fake answers fed the app before). Each file is a
   // regular one of the user's in its own private folder, but for what is
   // named; none of their hooks may reach the session's settings.
-  it('project files open to others, over the bound, or (where sudo runs with no password) another user\'s are not read, with one log line each (2.1.3-beta.18 section 3.2)', async () => {
+  it('project files open to others or over the bound are not read, with one log line each (2.1.3-beta.18 section 3.2)', async () => {
     const d = remoteFakeDir
     expect(d).toMatch(/aicc-e2e\./)
     // `open`: its settings.json is 300 KiB of valid JSON (over the 256 KiB
@@ -579,27 +579,38 @@ describe('remote helper on a real Linux host', () => {
     note('proj-open-files', made.out)
     expect(made.out.trim().split('\n'), made.err).toEqual([`666 ${hookText('open').length}`, `600 ${Buffer.byteLength(big)}`])
     const open = await tabSettings('e2e-tab-open', `${d}/proj/open`)
-    expect(open.stop.at(-1)).toBe(open.own)
-    expect(open.stop).not.toContain('echo big')
-    expect(open.stop).not.toContain('echo open')
-    expect(open.skipped.filter((l) => !l.includes(`${open.sid}: home `))).toEqual([
-      notReadLine(open.sid, 'cwd', '.claude/settings.json', 'size'),
-      notReadLine(open.sid, 'cwd', '.claude/settings.local.json', 'mode'),
-    ])
+    // One comparison, so a failure shows every part that differs.
+    expect({
+      appLast: open.stop.at(-1) === open.own,
+      big: open.stop.includes('echo big'),
+      open: open.stop.includes('echo open'),
+      skipped: open.skipped.filter((l) => !l.includes(`${open.sid}: home `)),
+    }).toEqual({
+      appLast: true,
+      big: false,
+      open: false,
+      skipped: [notReadLine(open.sid, 'cwd', '.claude/settings.json', 'size'), notReadLine(open.sid, 'cwd', '.claude/settings.local.json', 'mode')],
+    })
+  })
 
-    // `other`: its settings.json is made another user's (nobody) by sudo.
+  it('a project file of another user\'s (made so by sudo, where it runs with no password: always on the CI runner) is not read, with one log line (2.1.3-beta.18 section 3.2)', async () => {
+    const d = remoteFakeDir
+    expect(d).toMatch(/aicc-e2e\./)
     const sudo = sshRun('sudo -n true >/dev/null 2>&1 && echo yes || echo no').out.trim() === 'yes'
     note('proj-sudo', sudo)
     // On the CI runner it must run: the owner answer is not left unexercised there.
     if (onRunner()) expect(sudo, 'sudo with no password on the CI runner').toBe(true)
     if (!sudo) return
+    // `other`: its settings.json is made another user's (nobody); still 0600.
     const other = sshRun(`umask 077 && mkdir -p ${d}/proj/other/.claude && printf '%s' '${hookText('other')}' > ${d}/proj/other/.claude/settings.json && sudo -n chown nobody ${d}/proj/other/.claude/settings.json && stat -c '%U %a' ${d}/proj/other/.claude/settings.json`)
     note('proj-other-file', other.out)
     expect(other.out.trim(), other.err).toBe('nobody 600')
     const theirs = await tabSettings('e2e-tab-other', `${d}/proj/other`)
-    expect(theirs.stop.at(-1)).toBe(theirs.own)
-    expect(theirs.stop).not.toContain('echo other')
-    expect(theirs.skipped.filter((l) => !l.includes(`${theirs.sid}: home `))).toEqual([notReadLine(theirs.sid, 'cwd', '.claude/settings.json', 'owner')])
+    expect({
+      appLast: theirs.stop.at(-1) === theirs.own,
+      other: theirs.stop.includes('echo other'),
+      skipped: theirs.skipped.filter((l) => !l.includes(`${theirs.sid}: home `)),
+    }).toEqual({ appLast: true, other: false, skipped: [notReadLine(theirs.sid, 'cwd', '.claude/settings.json', 'owner')] })
   })
 
   // A tab that starts in the home folder: that folder is the user's own
@@ -642,15 +653,16 @@ describe('remote helper on a real Linux host', () => {
     try {
       if (set) expect(set.out.trim().split('\n').pop(), set.err).toBe('made')
       const home = await tabSettings('e2e-tab-home', '~')
-      // No project or checkout file is read in the home folder: none is even
-      // tried, so none is logged.
-      expect(home.skipped.filter((l) => / (cwd|checkout) /.test(l))).toEqual([])
-      expect(home.stop.at(-1)).toBe(home.own)
       if (runnerCase) {
         // The user's file, a link, is read: its hook first, the app's last,
-        // and no settings.local.json of the home folder between them.
-        expect(home.stop).toEqual(['echo home-link', home.own])
-        expect(home.skipped).toEqual([])
+        // and no settings.local.json of the home folder between them. No
+        // project or checkout file is read in the home folder: none is even
+        // tried, so nothing is logged.
+        expect({ stop: home.stop, skipped: home.skipped }).toEqual({ stop: ['echo home-link', home.own], skipped: [] })
+      } else {
+        // A host line leaves the account's own files as they are: no project
+        // or checkout line, and the app's hooks last.
+        expect({ appLast: home.stop.at(-1) === home.own, project: home.skipped.filter((l) => / (cwd|checkout) /.test(l)) }).toEqual({ appLast: true, project: [] })
       }
     } finally {
       if (homeUndo) {
