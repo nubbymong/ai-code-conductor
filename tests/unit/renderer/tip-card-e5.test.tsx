@@ -474,3 +474,33 @@ describe('Ask Conductor from the card, with Claude Code switched off and Codex n
     }
   })
 })
+
+// Every tip text, through the card's own body renderer: no bold or code mark
+// shows as text (the beta.17 re-check: a bold span holding code printed its
+// backticks, in the Credential Storage tip).
+describe('tip card -- every tip body reads with its marks as formatting', () => {
+  it('body, bodyMac and bodyWin of every variant of every tip', () => {
+    const real = useTipsStore.getState().getCurrentTip
+    const bad: string[] = []
+    try {
+      for (const tip of TIPS_LIBRARY) {
+        for (const [variant, content] of Object.entries(tip.variants)) {
+          if (!content) continue
+          for (const field of ['body', 'bodyMac', 'bodyWin'] as const) {
+            const text = content[field]
+            if (!text) continue
+            // This one text as the body the card shows, on any platform.
+            const shown = { ...content, body: text, bodyMac: undefined, bodyWin: undefined, focusHint: undefined, focusHintMac: undefined, focusHintWin: undefined }
+            useTipsStore.setState({ currentTipId: tip.id, getCurrentTip: () => ({ tip, content: shown }) })
+            act(() => { root.render(<TipCard key={`${tip.id}-${variant}-${field}`} onClose={() => {}} />) })
+            const body = q('tip-card-body')?.textContent ?? ''
+            if (/\*\*|`/.test(body)) bad.push(`${tip.id} ${variant}.${field}: ${body.match(/.{0,30}(\*\*|`).{0,30}/)?.[0]}`)
+          }
+        }
+      }
+    } finally {
+      useTipsStore.setState({ getCurrentTip: real })
+    }
+    expect(bad).toEqual([])
+  })
+})

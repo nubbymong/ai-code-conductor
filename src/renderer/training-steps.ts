@@ -635,7 +635,7 @@ export const trainingSteps: TrainingStep[] = [
       '**Sessions table** with cost, model, account and config attribution per session',
       '**Filters** -- provider, account, config, date range (7d / 30d / all), and a free-text search over model and project',
       'A model with no price yet reads **no price**, never $0, and a notice names it (a model with no tokens in the figures is not named)',
-      'Pricing from BerriAI`s LiteLLM (cached 24h); a green nav badge shows when the index is fresh',
+      'Pricing from BerriAI\'s LiteLLM (cached 24h); a green nav badge shows when the index is fresh',
       '**Cost or Tokens** -- token counts sit beside the costs, and the chart switches between the two, so usage with no price shows too',
       '**A service you control** -- Settings, General, Tokenomics switches the indexer off (nothing is read, what was recorded stays) and on again (it catches up); **Rescan** reads every transcript again without removing anything; accounts can be left out of the figures',
     ],

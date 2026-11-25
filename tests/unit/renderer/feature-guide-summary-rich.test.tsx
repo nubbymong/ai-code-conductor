@@ -74,10 +74,10 @@ describe("a Feature Guide card's summary", () => {
     expect(Array.from(p.querySelectorAll('code')).map((c) => c.textContent)).toContain('/effort ultracode')
   })
 
-  it('every card the guide shows has no mark left as text in its summary', async () => {
+  it('every card the guide shows has no mark left as text in its summary or its highlights', async () => {
     for (const section of ['getting-started', 'productivity', 'integrations', 'admin', 'tips']) {
       await openGuideAt(section)
-      for (const p of Array.from(container.querySelectorAll('[data-ux-id$="-summary"]'))) {
+      for (const p of Array.from(container.querySelectorAll('[data-ux-id$="-summary"], [data-ux-id$="-highlights"]'))) {
         expect(p.textContent, `${section}: ${p.getAttribute('data-ux-id')}`).not.toMatch(/\*\*|`/)
       }
     }
