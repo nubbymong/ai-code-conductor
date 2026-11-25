@@ -41,6 +41,17 @@ export interface ChangelogEntry {
 // a backtick in a comment opens a phantom string and the parse fails.
 export const changelog: ChangelogEntry[] = [
   {
+    version: '2.1.3-beta.18',
+    date: '2026-11-25',
+    warnings: [
+      'This beta series begins moving the app\'s background services, and over the next betas your sessions, onto one helper per machine. If you want a quiet build, stay on the stable release.',
+      'On Windows, choosing Save sessions at an update keeps the terminals the session helper holds running only if the new version opens within two minutes of the old one closing. The installer\'s pages count toward those two minutes, so finish the installer promptly.',
+      'On Windows, Snap takes its picture with the app\'s own capture and overlay by default. If a press cannot take a picture, the earlier Snap opens for that press; to use the earlier Snap every time, choose Settings, Custom Commands, Snap, Snap on Windows: Previous.',
+      'To go back to 2.1.3-beta.17, download its installer from the GitHub releases page and run it over this version.',
+    ],
+    changes: [],
+  },
+  {
     version: '2.1.3-beta.17',
     date: '2026-11-25',
     highlights: 'Every broadcast press now asks first: All, or the sessions you pick. On Windows, a preview runs a Claude Code SSH tab through the session helper on a Linux machine you add, and with the agent sessions preview on, an app update no longer interrupts your Claude Code and Codex sessions. An image pasted or snapped into a Codex session on this computer now goes in as Codex\'s own paste, a canvas decision reaches a Claude Code session while its background agents run, and the app types into a Codex session while Codex shows a warning count.',

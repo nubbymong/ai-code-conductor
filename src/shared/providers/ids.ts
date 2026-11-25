@@ -16,7 +16,10 @@ export const PROVIDER_IDS: readonly ProviderId[] =
 
 /** The provider a session runs when what started it names none: a config or
  *  a tab saved before the app had a second provider (SpawnOptions.provider's
- *  default, src/main/providers/types.ts). One decision, read here. */
+ *  default, src/main/providers/types.ts). New code reads the default here.
+ *  The older places that write the name in place are the ones the
+ *  provider-name ratchet counts as defaulted ids; they move here as they
+ *  are burned down. */
 export const DEFAULT_PROVIDER_ID: ProviderId = 'claude'
 
 export function isProviderId(value: unknown): value is ProviderId {

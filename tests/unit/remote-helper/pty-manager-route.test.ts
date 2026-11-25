@@ -4,7 +4,8 @@
  * captured (it throws once it has the argv, as ssh-spawn-callsite.test.ts
  * does). Every SSH tab that does not go through the session helper (the
  * switch off, SSH Persistent, a container, a post-connect command, a password
- * sign-in, a machine not added or not checked) reaches node-pty with exactly
+ * sign-in, a machine not added or not checked, a provider with no remote
+ * launch) reaches node-pty with exactly
  * the file, argv and options it gets with no remote helper at all, and one
  * log line says why; a tab that does go through it starts no node-pty and
  * asks its machine for a holder. The switch is off unless saved exactly true,

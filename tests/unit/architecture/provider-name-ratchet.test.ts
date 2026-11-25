@@ -63,7 +63,11 @@
 // A launch-style test is a comparison, in any of the shapes above, with one of
 // the launch styles' words (LocalLaunchStyle in src/main/pty-manager.ts, read
 // from its source) in place of a provider name. A style stands for one
-// provider's launch, so a test of it is a provider test by another name.
+// provider's launch, so a test of it is a provider test by another name. The
+// count reads words, not types, in every folder above: one of those words
+// compared for any other reason is counted all the same (`mode === 'direct'`
+// in a renderer file is one). Give that other thing another word, or narrow
+// this count to the files that hold a launch style in the same change.
 //
 // In src/main/remote-helper alone, a CLI's own words, which belong in the
 // provider's package: a string that is exactly one long flag (`'--effort'`,
@@ -108,10 +112,13 @@
 //    flag or variable inside a longer string (a command line), a flag built
 //    in a template literal with `${}`, the machine record's `claudePath` field
 //    and the probe's `command -v`;
-//  - in a .tsx file, text written between JSX tags is read as code: an
-//    apostrophe, a quote or `//` in it reads as the start of a string or a
-//    comment, which hides the rest of that line (a backtick, up to the next
-//    backtick);
+//  - in a .tsx file, JSX is read as code: an apostrophe, a quote or `//` in
+//    the text between tags reads as the start of a string or a comment, which
+//    hides the rest of that line (a backtick, up to the next backtick); and a
+//    closing tag's `/` with another `/` after it on the line reads as a
+//    regular expression, so a string that holds that second `/` is read
+//    inside out and can hide a check after it on the line
+//    (`<a>x</a>{'x/y'}{p === 'name'}`);
 //  - a file under src that is not TypeScript (src/main/first-start-worker.cjs),
 //    and anything outside src (scripts, helper, tests);
 //  - anything under src/main/providers and src/renderer/providers/<id>, where

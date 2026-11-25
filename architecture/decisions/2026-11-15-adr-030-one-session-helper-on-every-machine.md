@@ -505,7 +505,14 @@ shows its Linux machines section with the switch on or off, and reads the manife
 helper and the records when it is opened (the first read makes the records file with this
 install's id). A machine holding another session
 helper than the app's reads not checked on its card, and its tabs take the usual SSH path,
-until Check installs the app's helper.
+until Check installs the app's helper. 2.1.3-beta.18 section 2 (aicc_planning#430): the launch
+of such a tab comes from the tab's provider package (SessionProvider.remoteLaunch,
+providers/types.ts ProviderRemoteLaunch: hostReads, then launch giving the program, arguments,
+the CLI's own variables, the session's files and the status and hook keep-lists), asked through
+the registry by the tab's provider id; core keeps ssh, the upload, routing, frames, the login
+shell's -il wrapper, the host account's variables, LANG, TERM and COLORFGBG, and names no CLI
+flag or variable. The launch is the same, byte for byte (13,000-row characterisation against
+d0be048e).
 
 P7 result (2026-11-15, Windows test machine, the skeleton holder from #685 and a silent
 install of 2.1.3-beta.4): yes. A detached holder is not in a job object, and it and its

@@ -42,7 +42,7 @@ folders (`src/main/index.ts`) no longer look a provider up by name. Each is a
 loop over the registered providers through `providerMembers` (provider core's
 registry), where it was, each step with its own catch, in today's order
 (Claude Code's statusline script and resume picker, then Codex's resume
-picker and hook forwarder; the sweep, Codex's today). `index.ts:627`, Codex's
+picker and hook forwarder; the sweep, Codex's today). `index.ts:628` (`:627` at d0be048e), Codex's
 hook folders behind Codex's switch, stays and is counted.
 
 `tests/wp1/dependency-boundaries.test.ts` builds its package pattern, its

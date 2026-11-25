@@ -20,8 +20,9 @@
 //      registry definitions and the entry-point re-exports fails (aliasing,
 //      member calls and indirect calls included), and boot goes through the
 //      roots (main/index.ts imports the main root and calls it before its
-//      first getProvider; renderer/main.tsx imports the renderer root above
-//      App). A shared module importing exactly one package entry point fails.
+//      first use of the registry, the script deploys' loop over the registered
+//      providers; renderer/main.tsx imports the renderer root above App). A
+//      shared module importing exactly one package entry point fails.
 //      R3 also pins `applyRealmEnvPatch` to the registry: it takes its policy
 //      as an ARGUMENT, so any caller reaching past realmEnvForProvider can
 //      hand it an empty ambient list and opt out of the D3 removal entirely.
@@ -69,9 +70,13 @@ const REGISTER_FNS = ['registerProviderPackage', 'registerRendererProvider', 're
 const LAUNCH_ENV_FNS = ['applyRealmEnvPatch']
 const LAUNCH_ENV_HOMES = ['src/shared/providers/realm-env.ts', 'src/shared/providers/index.ts', 'src/main/providers/core/registry.ts']
 const REGISTER_HOMES = ['src/main/providers/core/registry.ts', 'src/main/providers/core/index.ts', 'src/main/providers/index.ts', 'src/renderer/providers/core/registry.ts', 'src/renderer/providers/core/index.ts']
-// The provider names are the app's own list of ids (PROVIDER_IDS), never
-// written here: a provider added to that list has its package, its files and
-// its name counted by every rule below from the day it is listed.
+// The provider names in the patterns below are the app's own list of ids
+// (PROVIDER_IDS), not written here: a provider added to that list has its
+// package, its files and its name as a literal counted by R1 to R5 and R7 from
+// the day it is listed. Still written by hand, and Codex's alone: R5's
+// `.codexEnabled` and `isCodex`, and R6's `IPC.CODEX_*`, `electronAPI.codex`
+// and `codexReview` (extractFacts below); another provider's own flag or IPC
+// surface is not counted until it is added there.
 type PackageId = ProviderId | 'core'
 const PACKAGE_IDS: readonly PackageId[] = [...PROVIDER_IDS, 'core']
 const IDS = PROVIDER_IDS.join('|')
@@ -427,7 +432,7 @@ describe('WP1.55 dependency boundaries (AST)', () => {
   it('R6: renderer core touches no provider-specific IPC or preload surface', () => { const p = ruleProviderIpc(files); expect(p, p.join('\n')).toEqual([]) })
   it('R7: every package has its entry point and every file in it is reachable from that entry point (orphans only as recorded)', () => { const p = rulePackageMembership(files, allow.packageOrphans); expect(p, p.join('\n')).toEqual([]) })
 
-  it('R3 boot wiring: main boots through the main root before its first getProvider; the renderer imports its root above App', () => {
+  it('R3 boot wiring: main boots through the main root before its first use of the registry; the renderer imports its root above App', () => {
     const main = readFileSync(resolve(ROOT, 'src/main/index.ts'), 'utf8')
     expect(byPath.get('src/main/index.ts')!.imports).toContain(ROOTS.main)
     // The first runtime consumer of the registry in boot order is the

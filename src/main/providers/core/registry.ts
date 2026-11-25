@@ -1,7 +1,7 @@
 // WP1 provider core (main): the provider registry.
 //
 // Two views over one registration: the session-provider registry the runtime
-// already uses (`getProvider('claude')` from pty-manager and boot), and the
+// already uses (`getProvider('claude')` from pty-manager, `providerMembers` from boot), and the
 // package registry WP1 adds (capabilities, ambient/owned variables, setup/
 // auth/realm operations). Only the composition root (`../compose.ts`)
 // registers packages; this module imports no concrete provider.
