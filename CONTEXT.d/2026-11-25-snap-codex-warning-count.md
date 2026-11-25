@@ -34,7 +34,10 @@ Plan 2.1.3-beta.18, section 7.5 (aicc_planning#428). Base: origin/beta at d0be04
   this press's file could not fail. Each run now moves its picture 16 DIP (C2's drag, C3's app
   window, put back after) and the press's SHA-256 must be none of an earlier press's. Part two
   also clears the shared app handle around its hooks, so a failed launch never closes part
-  one's app again by its old process id.
+  one's app again by its old process id. Run 45586632589 on e89021b6: 29 of 29 green, retries
+  0; the six newest pictures' SHA-256s all differ (C2's drag at 40, 56 and 72 DIP; C3's window
+  at x 0, 16 and 32, still 1280 by 720, the app's minimum); the file to Codex's turn took 1.2 to
+  1.4 s.
 - **Shared code.** The 9.2 rules' first-screen answer moved from codex-real-launch.spec.ts into
   helpers/codex-mode.ts unchanged, and the footer pattern is exported from
   codex-first-screens.ts. D2, D3 and D12 share the rectangle and whole-screen size rules with C2
