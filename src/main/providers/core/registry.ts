@@ -41,6 +41,38 @@ export function tryGetProvider(id: ProviderId): SessionProvider | null {
   return sessions.get(id) ?? null
 }
 
+/** A member a session provider may leave out that is a function. */
+export type OptionalProviderMethod = {
+  [K in keyof SessionProvider]-?: undefined extends SessionProvider[K]
+    ? (NonNullable<SessionProvider[K]> extends (...args: never[]) => unknown ? K : never)
+    : never
+}[keyof SessionProvider]
+
+/** One registered provider's member, called on that provider. */
+export interface ProviderMemberCall<K extends OptionalProviderMethod> {
+  readonly id: ProviderId
+  readonly member: K
+  readonly call: NonNullable<SessionProvider[K]>
+}
+
+/** For each registered provider in the registry's order (PROVIDER_IDS), each
+ *  of `members` it offers, in the order given, bound to that provider. A
+ *  provider that leaves a member out has no entry for it. A caller that loops
+ *  over the answer reaches every provider that offers the member, and names
+ *  none (the start's script deploys and its sweep, src/main/index.ts). */
+export function providerMembers<K extends OptionalProviderMethod>(members: readonly K[]): Array<ProviderMemberCall<K>> {
+  const out: Array<ProviderMemberCall<K>> = []
+  for (const id of PROVIDER_IDS) {
+    const provider = sessions.get(id)
+    if (!provider) continue
+    for (const member of members) {
+      const fn: unknown = provider[member]
+      if (typeof fn === 'function') out.push({ id, member, call: fn.bind(provider) as NonNullable<SessionProvider[K]> })
+    }
+  }
+  return out
+}
+
 /** Why a package is not registrable, or null. Exported so the conformance
  *  suite can assert the same rule the composition root relies on. Accepts
  *  `unknown` because it is the shape check: a malformed package must come

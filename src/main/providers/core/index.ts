@@ -11,7 +11,7 @@ export type {
   ProviderPricingOperations, ModelPrice,
 } from './package'
 export {
-  registerProvider, getProvider, tryGetProvider,
+  registerProvider, getProvider, tryGetProvider, providerMembers,
   registerProviderPackage, packageRegistrationProblem, getProviderPackage, tryGetProviderPackage, listProviderPackages,
   providerCapability, realmEnvForProvider, _resetProviderRegistryForTest,
   ambientAuthVariablesForProvider,

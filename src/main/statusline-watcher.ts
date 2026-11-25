@@ -24,7 +24,8 @@
  *
  * Provider-specific deploy/configure logic lives in providers/claude/statusline.ts
  * and is reached through the registered provider only (WP2 PR 4: no deep import
- * into the package): getProvider('claude').deployStatuslineScript?.(resourcesDir).
+ * into the package): the start's deploys call deployStatuslineScript on each
+ * registered provider that offers it (providerMembers, index.ts).
  */
 import { BrowserWindow } from 'electron'
 import * as fs from 'fs'

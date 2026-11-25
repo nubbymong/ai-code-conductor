@@ -59,7 +59,9 @@
 //  - a failed Codex launch's unwinding, which reads the hook file and token the
 //    launch holds (mintCodexHooks and keepCodexHooks hand them back);
 //  - every comparison with a provider name: pty-manager.ts works each one out
-//    and hands the answer in (tests/unit/architecture/provider-name-ratchet.test.ts).
+//    and hands the answer in (tests/unit/architecture/provider-name-ratchet.test.ts,
+//    which counts this module's tests of a launch style, a style standing for
+//    a provider, as launch-style tests).
 import * as fs from 'fs'
 import * as path from 'path'
 import { nativeTheme, type BrowserWindow } from 'electron'
