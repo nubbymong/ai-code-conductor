@@ -1465,7 +1465,7 @@ describe('installer: the uninstaller removes this user\'s Codex pick folders fro
     expect(here.filter((l) => /^(Push|Pop|Exch)\s+\$9\b/.test(l.code))).toEqual([])
     const body = bodyCode(lines, HERE)
     expect(body.filter((c) => /^StrCpy \$9\b/.test(c))).toEqual(['StrCpy $9 ""'])
-    expect(body.indexOf('StrCpy $9 ""')).toBeLessThan(body.indexOf('StrCpy $R0 "$TEMP"'))
+    expect(body.indexOf('StrCpy $9 ""')).toBeLessThan(body.indexOf('ReadEnvStr $R0 TEMP'))
     const none = body.indexOf('${If} $9 == ""')
     expect(body.slice(none, none + 3).map(quietNote)).toEqual(['${If} $9 == ""', '!insertmacro CccHelperNote "..."', '${EndIf}'])
     expect(none).toBeGreaterThan(body.indexOf('FindClose $R1'))
@@ -1475,14 +1475,34 @@ describe('installer: the uninstaller removes this user\'s Codex pick folders fro
     const lines = analyse(readNsh())
     const body = bodyCode(lines, HERE)
     const all = reachableCode(lines, 'RemoveUserCodexPickFolders')
-    // The temp folder the app made them in (os.tmpdir()): a whole path, and
-    // inside the user's own folder, compared canonically. A shared temp
-    // folder (Windows' own, which the system account gets) is left alone.
-    expect(all.filter((l) => /\$TEMP\b/.test(l.code)).map((l) => l.code)).toEqual(['StrCpy $R0 "$TEMP"'])
+    // The temp folder the app made them in, read as its os.tmpdir() reads it
+    // on Windows: TEMP, then TMP, one trailing backslash dropped. Never NSIS's
+    // own $TEMP, which reads TMP first, so another folder when a user has set
+    // the two apart. Then a whole path, inside the user's own folder, compared
+    // canonically. A shared temp folder (Windows' own, which the system
+    // account gets) is left alone.
+    expect(all.filter((l) => /\$TEMP\b/i.test(l.code)).map((l) => l.code), 'NSIS\'s own $TEMP is not read').toEqual([])
+    expect(all.filter((l) => /^ReadEnvStr\b/.test(l.code)).map((l) => `${l.macro}: ${l.code}`), 'TEMP, then TMP').toEqual([
+      `${HERE}: ReadEnvStr $R0 TEMP`,
+      `${HERE}: ReadEnvStr $R0 TMP`,
+    ])
     expect(all.filter((l) => /\$PROFILE\b/.test(l.code)).map((l) => `${l.macro}: ${l.code}`)).toEqual([`${HERE}: !insertmacro IsSameOrInsideCanon "$PROFILE" "$R0" $6`])
-    const temp = body.indexOf('StrCpy $R0 "$TEMP"')
-    expect(body.slice(temp, temp + 16).map(quietNote)).toEqual([
-      'StrCpy $R0 "$TEMP"',
+    const temp = body.indexOf('ReadEnvStr $R0 TEMP')
+    expect(temp, 'the temp folder is read from TEMP first').toBeGreaterThan(0)
+    expect(body.slice(temp, temp + 26).map(quietNote)).toEqual([
+      'ReadEnvStr $R0 TEMP',
+      '${If} $R0 == ""',
+      'ReadEnvStr $R0 TMP',
+      '${EndIf}',
+      // One trailing backslash goes, as os.tmpdir() drops it, but never the
+      // one after a drive letter.
+      'StrCpy $5 "$R0" 1 -1',
+      'StrCpy $6 "$R0" 1 -2',
+      '${If} $5 == "\\"',
+      '${AndIf} $6 != ":"',
+      'StrCpy $R0 "$R0" -1',
+      '${EndIf}',
+      'ClearErrors',
       'StrCpy $5 "$R0" 2 1',
       'StrCpy $6 "$R0" 2',
       '${If} $5 == ":\\"',

@@ -929,7 +929,11 @@ function extractUninstallMacros(): string {
     .replace(/Software\\(AI Code Conductor|Claude Command Center|Claude Conductor)/g, 'Software\\CccProbe\\$1')
     .replace(/\$PROFILE/g, '$cccProbeProfile')
     .replace(/ReadEnvStr (\$\w+) LOCALAPPDATA/g, 'StrCpy $1 $cccProbeLocalAppData')
-    .replace(/\$TEMP\b/gi, '$cccProbeTemp')
+    // The pick folders' clean-up reads the temp folder as os.tmpdir() does,
+    // TEMP then TMP: two fixture values, so the order shows. NSIS's own $TEMP
+    // is not rewritten: one left in the macros stops the probe below.
+    .replace(/ReadEnvStr (\$\w+) TEMP\b/g, 'StrCpy $1 $cccProbeTemp')
+    .replace(/ReadEnvStr (\$\w+) TMP\b/g, 'StrCpy $1 $cccProbeTmp')
     .replace(/aicc-helper\.exe/gi, PROBE_HELPER_EXE)
     .replace(/^(\s*)DetailPrint\b/gm, '$1!insertmacro CccProbeDetail')
   // Fail closed: anything that could still reach the real folders, the real
@@ -973,6 +977,7 @@ Var cccProbeOuter
 Var cccProbeLocalAppData
 Var cccProbeProfile
 Var cccProbeTemp
+Var cccProbeTmp
 
 ; electron-builder's update flag (StdUtils) and UAC.nsh's two tests, driven by
 ; the ini instead of a real update or a real elevation.
@@ -1026,6 +1031,7 @@ Section "probe"
 ${readCfg('$cccProbeLocalAppData', 'localAppData')}
 ${readCfg('$cccProbeProfile', 'profile')}
 ${readCfg('$cccProbeTemp', 'temp')}
+${readCfg('$cccProbeTmp', 'tmp')}
 ${readCfg('$cccProbeUpdated', 'updated')}
 ${readCfg('$cccProbeAdmin', 'admin')}
 ${readCfg('$cccProbeInner', 'inner')}
@@ -1219,13 +1225,14 @@ describe.skipIf(!MAKENSIS)('installer.nsh behavioural probe: uninstall removes t
    *  under the (sandboxed) brand key; left out, nothing is recorded. `inner`
    *  is the elevated copy of an all-users uninstall, with a user copy behind
    *  it; `outerGone`, that copy did not run the call. `admin` alone is an
-   *  uninstall started elevated, with no user copy behind it. `temp` is the
-   *  temp folder the Codex pick folders' clean-up reads; left out, an empty
-   *  one of its own inside `profile`. Returns the probe's log, the details list of the helper
-   *  clean-up (`details`) and of the pick folders' (`pickDetails`, after
-   *  it), and how long the uninstall took. A loop that never ends fails at
-   *  30 seconds instead of hanging the suite. */
-  function runUninstall(cfg: { localAppData: string; profile: string; temp?: string; updated?: boolean; admin?: boolean; inner?: boolean; outerGone?: boolean; data?: string; res?: string }) {
+   *  uninstall started elevated, with no user copy behind it. `temp` and
+   *  `tmp` are the TEMP and TMP the Codex pick folders' clean-up reads (TEMP
+   *  first, as os.tmpdir() does); left out, `temp` is an empty folder of its
+   *  own inside `profile` and `tmp` is not set. Returns the probe's log, the
+   *  details list of the helper clean-up (`details`) and of the pick
+   *  folders' (`pickDetails`, after it), and how long the uninstall took. A
+   *  loop that never ends fails at 30 seconds instead of hanging the suite. */
+  function runUninstall(cfg: { localAppData: string; profile: string; temp?: string; tmp?: string; updated?: boolean; admin?: boolean; inner?: boolean; outerGone?: boolean; data?: string; res?: string }) {
     regClear()
     if (cfg.data !== undefined) regSet('AI Code Conductor', 'DataDirectory', cfg.data)
     if (cfg.res !== undefined) regSet('AI Code Conductor', 'ResourcesDirectory', cfg.res)
@@ -1235,6 +1242,7 @@ describe.skipIf(!MAKENSIS)('installer.nsh behavioural probe: uninstall removes t
       `localAppData=${cfg.localAppData}`,
       `profile=${cfg.profile}`,
       `temp=${temp}`,
+      `tmp=${cfg.tmp ?? ''}`,
       `updated=${cfg.updated ? 1 : 0}`,
       `admin=${cfg.admin ? 1 : 0}`,
       `inner=${cfg.inner ? 1 : 0}`,
@@ -1847,8 +1855,48 @@ describe.skipIf(!MAKENSIS)('installer.nsh behavioural probe: uninstall removes t
 
     for (const temp of ['', 'relative-temp']) {
       const b = bareTree('un-pick-no-temp')
-      expect(runUninstall({ localAppData: b.lad, profile: b.root, temp }).pickDetails, JSON.stringify(temp)).toEqual(['No temp folder is set, so there are no Codex pick folders to remove.'])
+      expect(runUninstall({ localAppData: b.lad, profile: b.root, temp }).pickDetails, JSON.stringify(temp)).toEqual(['No temp folder is set as a whole path, so there are no Codex pick folders to remove.'])
     }
+  }, 60_000)
+
+  it('reads TEMP before TMP, as the app\'s os.tmpdir() does, and TMP only when TEMP is not set', () => {
+    // NSIS's own temp folder reads TMP first. A user can set the two apart
+    // (TMP on a RAM disk, say, and TEMP left in the user folder), and the
+    // app made its folders in TEMP's.
+    const h = bareTree('un-pick-tmp')
+    const t = pickTemp(h.root)
+    const other = pickTemp(h.root, join(h.root, 'Local', 'Tmp'))
+    const both = runUninstall({ localAppData: h.lad, profile: h.root, temp: t.temp, tmp: other.temp, data: join(h.root, 'My Data'), res: join(h.root, 'My Resources') })
+
+    for (const [k, p] of Object.entries(t.gone)) expect(existsSync(p), `TEMP's ${k} is removed`).toBe(false)
+    for (const [k, p] of Object.entries({ ...other.gone, ...other.stays })) expect(existsSync(p), `TMP's ${k} stays`).toBe(true)
+    expect(both.pickDetails.filter((d) => d.includes(other.temp)), both.pickDetails.join('\n')).toEqual([])
+
+    // With TEMP not set, TMP is the one.
+    const only = runUninstall({ localAppData: h.lad, profile: h.root, temp: '', tmp: other.temp, data: join(h.root, 'My Data'), res: join(h.root, 'My Resources') })
+    for (const [k, p] of Object.entries(other.gone)) expect(existsSync(p), `TMP's ${k} is removed`).toBe(false)
+    for (const [k, p] of Object.entries(other.stays)) expect(existsSync(p), `TMP's ${k} stays`).toBe(true)
+    expect(only.pickDetails.filter((d) => d.startsWith('Removed ')).sort()).toEqual(Object.values(other.gone).map((p) => `Removed the Codex pick folder ${p}`).sort())
+  }, 60_000)
+
+  it('reads a temp folder set with a trailing backslash as the app does, without it: in the folders it removes and in every note', () => {
+    // os.tmpdir() drops one trailing backslash (never the one after a drive
+    // letter), so the app made its folders under the path without it.
+    const h = bareTree('un-pick-slash')
+    const t = pickTemp(h.root)
+    const { pickDetails } = runUninstall({ localAppData: h.lad, profile: h.root, temp: `${t.temp}\\`, data: join(h.root, 'My Data'), res: join(h.root, 'My Resources') })
+
+    for (const [k, p] of Object.entries(t.gone)) expect(existsSync(p), `${k} is removed`).toBe(false)
+    for (const [k, p] of Object.entries(t.stays)) expect(existsSync(p), `${k} stays`).toBe(true)
+    expect([...pickDetails].sort()).toEqual([
+      ...Object.values(t.gone).map((p) => `Removed the Codex pick folder ${p}`),
+      ...stayFolders(t).map((f) => `Kept the Codex pick folder ${f}, because it holds something the app did not put there.`),
+    ].sort())
+
+    // With none there, the note names it without the backslash too.
+    const empty = join(h.root, 'Local', 'Empty')
+    dir(empty)
+    expect(runUninstall({ localAppData: h.lad, profile: h.root, temp: `${empty}\\` }).pickDetails).toEqual([`No Codex pick folders to remove in the temp folder: ${empty}`])
   }, 60_000)
 })
 

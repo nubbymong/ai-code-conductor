@@ -3020,9 +3020,10 @@ FunctionEnd
 ;     never a wildcard delete, never a delete at the next restart.
 ; Never on an update (customUnInstall): an update keeps the sessions the
 ; helper holds, and their pick folders with them. Like the helper clean-up,
-; it runs in the copy of the uninstaller the user started, so $TEMP is that
-; user's temp folder, the one the app used; the elevated copy runs it only
-; when that copy did not.
+; it runs in the copy of the uninstaller the user started (the elevated copy
+; runs it only when that copy did not), and it reads the temp folder the way
+; the app's os.tmpdir() does: TEMP, then TMP (NSIS's own $TEMP reads TMP
+; first).
 ; Known edge: another copy of the app the user runs from elsewhere (a
 ; development build) shares the temp folder, and the pick folder of a
 ; session that copy is running goes too. That session goes on; a later
@@ -3122,7 +3123,22 @@ FunctionEnd
   ; Only this clean-up's notes: in the user's copy, $9 can still hold the
   ; helper clean-up's from the call before.
   StrCpy $9 ""
-  StrCpy $R0 "$TEMP"
+  ; The temp folder the app made them in, read the way its os.tmpdir() reads
+  ; it on Windows: TEMP, then TMP, with one trailing backslash dropped unless
+  ; it follows a drive letter. NSIS's own temp folder reads TMP first, which
+  ; is another folder when a user has set the two apart.
+  ReadEnvStr $R0 TEMP
+  ${If} $R0 == ""
+    ReadEnvStr $R0 TMP
+  ${EndIf}
+  StrCpy $5 "$R0" 1 -1
+  StrCpy $6 "$R0" 1 -2
+  ${If} $5 == "\"
+  ${AndIf} $6 != ":"
+    StrCpy $R0 "$R0" -1
+  ${EndIf}
+  ; A variable that is not set raises the error flag; it goes no further.
+  ClearErrors
   ; A whole path only, as the app's own sweep takes: a drive letter and a
   ; backslash, or a network path.
   StrCpy $5 "$R0" 2 1
@@ -3140,7 +3156,7 @@ FunctionEnd
     ${EndIf}
   ${Else}
     StrCpy $6 0
-    !insertmacro CccHelperNote "No temp folder is set, so there are no Codex pick folders to remove."
+    !insertmacro CccHelperNote "No temp folder is set as a whole path, so there are no Codex pick folders to remove."
   ${EndIf}
   ${If} $6 == 1
     ClearErrors
