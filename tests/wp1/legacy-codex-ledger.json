@@ -1,8 +1,8 @@
 {
   "schema": "wp1-legacy-codex-ledger/2",
   "predicateDigest": "100a1233edebdc39a5f9004d3fba980a89ebb15b25872e52076386bc84b03153",
-  "manifestPathDigest": "b4eccd8b0fa7c1bf28224cd34b318821c952e72bbb29225a3b711073a2c2fc18",
-  "manifestHead": "29c047960e42b425e0271e3443479b124efb3620",
+  "manifestPathDigest": "be9a30992ba2500bf59997b617a575c332d5d125f1eb96a4fc70c6eea0814cbc",
+  "manifestHead": "50b7bb519b54ae5b95a994c888941401c9c19015",
   "dispositions": {
     "retain": "unchanged observable behaviour, characterization proof",
     "move": "moved behind a package boundary and/or adapted at the call site, regression proof (newPath when relocated)",
@@ -379,6 +379,16 @@
       "disposition": "retain",
       "evidence": "WP1.35 front-facing docs, WP2 sweep: the scope names isolation between Claude and Codex accounts in scope (behaviour WP2 implements with one sign-in folder per Codex account) and the Codex CLI itself out of scope; no Codex code path and no unsupported account or history claim",
       "note": "security scope text, not a runtime claim"
+    },
+    {
+      "path": "build/installer.nsh",
+      "predicates": [
+        "P14"
+      ],
+      "category": "OTHER",
+      "disposition": "replace",
+      "evidence": "2.1.3-beta.18 section 7.1 (aicc_planning#407): a full uninstall (never an update) removes this user's Codex resume-list pick folders (ccc-codex-pick-*) from the temp folder, in the copy of the uninstaller the user started, by the app's start-up rule less its age bound (spawn.ts sweepStaleCodexPickFolders): a real folder directly in the temp folder, not a link, holding nothing but plain files named pick.json or pick.json.<16 hex>.tmp, each removed by name, then the folder with plain RMDir; it names Codex only as that folder prefix and in comments, and starts no Codex process (WP1.68); tests/unit/main/installer-branding-guard.test.ts; tests/unit/main/installer-nsis-behaviour.test.ts",
+      "note": "matched since 2.1.3-beta.18 section 7.1 (was not matched); P14: the pick folders' prefix, macro names, notes and comments"
     },
     {
       "path": "docs/USER_GUIDE.md",
@@ -5725,7 +5735,7 @@
       ],
       "category": "TEST",
       "disposition": "added",
-      "evidence": "new WP2 PR 4 P4.9 review (E-5, c75c3acb): the real-launch spec's reader of Codex's first screens by the 9.2 rules: the live screen, Enter only on a verified row of its own menu, each screen once, a ready composer (WP1.60, WP1.2); tests/wp1/mode-matrix.test.ts",
+      "evidence": "new WP2 PR 4 P4.9 review (E-5, c75c3acb): the real-launch spec's reader of Codex's first screens by the 9.2 rules: the live screen, Enter only on a verified row of its own menu, each screen once, a ready composer (WP1.60, WP1.2); tests/wp1/mode-matrix.test.ts; since 2.1.3-beta.18 section 7.5 its FOOTER is also read by snap-windows.spec.ts's Codex tab",
       "note": ""
     },
     {
@@ -5738,7 +5748,7 @@
       ],
       "category": "TEST",
       "disposition": "added",
-      "evidence": "new WP2 PR 4 P4.9 (row 67): what the mode-matrix specs share: Codex on with a managed account, the fake's launch record, the Codex switch, a relaunch (WP1.60); tests/e2e/codex-mode-restart.spec.ts; docs/wp1/evidence/mode-matrix.md",
+      "evidence": "new WP2 PR 4 P4.9 (row 67): what the mode-matrix specs share: Codex on with a managed account, the fake's launch record, the Codex switch, a relaunch (WP1.60); tests/e2e/codex-mode-restart.spec.ts; docs/wp1/evidence/mode-matrix.md; since 2.1.3-beta.18 section 7.5 it holds answerFirstScreen, shared by codex-real-launch.spec.ts and snap-windows.spec.ts",
       "note": "P04: CODEX_HOME of the fake's record and the spec's own folders; P05: codexEnabled seeds and provider checks"
     },
     {
@@ -5807,6 +5817,17 @@
       "disposition": "retain",
       "evidence": "existing test retained unchanged; must stay green on the merge candidate (WP1.33); listed in docs/wp1/baseline-test-inventory.json; WP2 PR 3 P3.16a main track (WP1.68): launches with the isolated environment (a home inside its data dir); tests/unit/e2e-isolated-env.test.ts",
       "note": ""
+    },
+    {
+      "path": "tests/e2e/snap-windows.spec.ts",
+      "predicates": [
+        "P04",
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "2.1.3-beta.18 section 7.5 (aicc_planning#428): part two presses Snap, Rectangle and Whole screen, into a real Codex 0.157.1 tab while Codex shows its warning count, on the GitHub Windows runner in the snap-e2e job only; one managed Codex account, the loopback model stand-in, the 9.2 rules (WP1.60, WP1.2); tests/unit/scripts/snap-e2e-job.test.ts",
+      "note": "P04: CODEX_HOME is the spec's own empty folder in its data dir for the app, and the account folder for the CLI's made-up-key sign-in (isolation, not a resolver)"
     },
     {
       "path": "tests/fixtures/codex-rollouts/malformed.jsonl",
@@ -8235,6 +8256,26 @@
       "disposition": "added",
       "evidence": "new 2.1.3-beta.14 section C9 test (aicc_planning#362) (tests/unit/main/installed-codex-models.test.ts): Codex found is one read and the picker offers its list; a failed read, Codex off or not found leave the registry alone; a switch-off drops the list and an overtaken read is not used; a read counts as Codex in use; Sentinel's start-up read joins the follower's, and a start-up read that began before Codex was found is taken as the follower's (one run either way), while one for another version is read again, and one overtaken by Codex no longer found is dropped (WP1.68); tests/unit/main/installed-codex-models.test.ts",
       "note": "created by 2.1.3-beta.14 section C9; the accounts service is faked: no process, no folder, no network"
+    },
+    {
+      "path": "tests/unit/main/installer-branding-guard.test.ts",
+      "predicates": [
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "test created by 2.1.1-beta.3, after the WP1 baseline; 2.1.3-beta.18 section 7.1 (aicc_planning#407) added the static cases for the uninstaller's Codex pick folders' clean-up (tests/unit/main/installer-branding-guard.test.ts): inserted once under the non-update guard after the helper clean-up, the user's copy, the temp folder only, the app's prefix and file names read from spawn.ts and the picker library, the link check before reading and before deleting, files by name and no RMDir /r (WP1.68)",
+      "note": "matched since 2.1.3-beta.18 section 7.1 (was not matched); reads build/installer.nsh, spawn.ts and the picker library as text, nothing started"
+    },
+    {
+      "path": "tests/unit/main/installer-nsis-behaviour.test.ts",
+      "predicates": [
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "replace",
+      "evidence": "existing test retained; must stay green on the merge candidate (WP1.33); listed in docs/wp1/baseline-test-inventory.json; WP1.33 mapping: 2.1.3-beta.18 section 7.1 (aicc_planning#407) added the uninstall probe's Codex pick folder cases (real makensis over a fixture temp folder: the app's own folders go, every other folder, a link and a link inside one stay, nothing on an update) and points the probe's temp folder at a fixture; the other cases are unchanged; tests/unit/main/installer-nsis-behaviour.test.ts",
+      "note": "matched since 2.1.3-beta.18 section 7.1 (was not matched); fixture folders named like the pick folders only, no Codex process"
     },
     {
       "path": "tests/unit/main/launch-bindings-held-screen.test.ts",
@@ -12287,6 +12328,16 @@
       "disposition": "replace",
       "evidence": "existing test retained unchanged; must stay green on the merge candidate (WP1.33); listed in docs/wp1/baseline-test-inventory.json; WP1.33 mapping: WP2 PR 3 P3.8 round 1 (row 39) passes the Codex list to runGate and adds the Codex check's cases (missing refuses, extra warns, a missing or empty list fails closed, only the codex family counts); the existing cases are unchanged; tests/unit/scripts/release-gate.test.ts; WP1.33 mapping: WP2 PR 3 P3.8 round 2 added the duplicate and malformed-list cases; tests/unit/scripts/release-gate.test.ts; WP1.33 mapping: WP2 PR 4 fix pass 10 (eeb09462) passes the Electron version and the floors to runGate (an Electron with no floor for the existing cases, which are otherwise unchanged) and adds the macOS floor cases; tests/unit/scripts/release-gate.test.ts; WP1.33 mapping: WP2 PR 4 fix pass 11 (5789b728) adds the resolved-version, exact-version and unreadable-entry cases and reads codexResult null-safely; tests/unit/scripts/release-gate.test.ts",
       "note": "re-dispositioned in WP2 PR 3 P3.8 round 1 (was retain)"
+    },
+    {
+      "path": "tests/unit/scripts/snap-e2e-job.test.ts",
+      "predicates": [
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "2.1.3-beta.18 section 7.5 (aicc_planning#428): the snap-e2e job installs Codex 0.157.1 from npm into a prefix of its own with scripts off and hands the spec that prefix (WP1.67); tests/unit/scripts/snap-e2e-job.test.ts",
+      "note": "reads ci.yml only"
     },
     {
       "path": "tests/unit/scripts/upstream-cli-watch-workflow.test.ts",

@@ -1,8 +1,8 @@
 {
   "schema": "wp1-legacy-codex-manifest/3",
-  "generatedAt": "2026-11-25T09:28:27.151Z",
-  "head": "29c047960e42b425e0271e3443479b124efb3620",
-  "tree": "17c0270790d171ee31e293601ee102991433518b",
+  "generatedAt": "2026-11-25T09:52:12.585Z",
+  "head": "50b7bb519b54ae5b95a994c888941401c9c19015",
+  "tree": "73b113356d3181c7386c8aa137f6a2e5923dcbf0",
   "scannedWorkingTree": true,
   "predicateDigest": "100a1233edebdc39a5f9004d3fba980a89ebb15b25872e52076386bc84b03153",
   "predicates": [
@@ -116,8 +116,8 @@
     "\\.(png|jpg|jpeg|gif|ico|icns|webp|svg|woff2?|ttf|otf|mp4|zip|asar|node|exe|dll|dylib|so|pdf)$",
     "^package-lock\\.json$"
   ],
-  "trackedFileCount": 3894,
-  "excludedFileCount": 621,
+  "trackedFileCount": 3896,
+  "excludedFileCount": 623,
   "scannedFileCount": 3273,
   "unscopedFileCount": 15,
   "unscoped": [
@@ -139,8 +139,8 @@
   ],
   "unscopedMentions": [],
   "unreadable": [],
-  "matchedPathCount": 1110,
-  "pathDigest": "b4eccd8b0fa7c1bf28224cd34b318821c952e72bbb29225a3b711073a2c2fc18",
+  "matchedPathCount": 1115,
+  "pathDigest": "be9a30992ba2500bf59997b617a575c332d5d125f1eb96a4fc70c6eea0814cbc",
   "entries": [
     {
       "path": ".github/workflows/ci.yml",
@@ -148,7 +148,7 @@
         "P04",
         "P14"
       ],
-      "lineCount": 67
+      "lineCount": 76
     },
     {
       "path": ".github/workflows/upstream-cli-watch.yml",
@@ -191,6 +191,13 @@
         "P12"
       ],
       "lineCount": 3
+    },
+    {
+      "path": "build/installer.nsh",
+      "predicates": [
+        "P14"
+      ],
+      "lineCount": 24
     },
     {
       "path": "docs/USER_GUIDE.md",
@@ -2228,7 +2235,7 @@
         "P01",
         "P14"
       ],
-      "lineCount": 65
+      "lineCount": 67
     },
     {
       "path": "src/main/providers/codex/spawn.ts",
@@ -3873,7 +3880,7 @@
         "P04",
         "P13"
       ],
-      "lineCount": 57
+      "lineCount": 56
     },
     {
       "path": "tests/e2e/codex-reconfirm-upgrade.spec.ts",
@@ -3916,7 +3923,7 @@
         "P01",
         "P13"
       ],
-      "lineCount": 9
+      "lineCount": 10
     },
     {
       "path": "tests/e2e/helpers/codex-mode.ts",
@@ -3926,7 +3933,7 @@
         "P05",
         "P13"
       ],
-      "lineCount": 55
+      "lineCount": 59
     },
     {
       "path": "tests/e2e/helpers/electron-app.ts",
@@ -3976,6 +3983,14 @@
         "P13"
       ],
       "lineCount": 1
+    },
+    {
+      "path": "tests/e2e/snap-windows.spec.ts",
+      "predicates": [
+        "P04",
+        "P13"
+      ],
+      "lineCount": 142
     },
     {
       "path": "tests/fixtures/codex-rollouts/malformed.jsonl",
@@ -5719,6 +5734,20 @@
         "P13"
       ],
       "lineCount": 69
+    },
+    {
+      "path": "tests/unit/main/installer-branding-guard.test.ts",
+      "predicates": [
+        "P13"
+      ],
+      "lineCount": 22
+    },
+    {
+      "path": "tests/unit/main/installer-nsis-behaviour.test.ts",
+      "predicates": [
+        "P13"
+      ],
+      "lineCount": 38
     },
     {
       "path": "tests/unit/main/launch-bindings-held-screen.test.ts",
@@ -8644,6 +8673,13 @@
         "P13"
       ],
       "lineCount": 63
+    },
+    {
+      "path": "tests/unit/scripts/snap-e2e-job.test.ts",
+      "predicates": [
+        "P13"
+      ],
+      "lineCount": 11
     },
     {
       "path": "tests/unit/scripts/upstream-cli-watch-workflow.test.ts",
