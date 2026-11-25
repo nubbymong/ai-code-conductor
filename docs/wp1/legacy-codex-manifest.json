@@ -1,8 +1,8 @@
 {
   "schema": "wp1-legacy-codex-manifest/3",
-  "generatedAt": "2026-11-25T09:52:12.585Z",
-  "head": "50b7bb519b54ae5b95a994c888941401c9c19015",
-  "tree": "73b113356d3181c7386c8aa137f6a2e5923dcbf0",
+  "generatedAt": "2026-11-25T11:01:44.726Z",
+  "head": "082a119bb8d1ea79f0e5628df5a86aff250d60aa",
+  "tree": "6ab2f486b4b11594e19f18b092726671942ffdb4",
   "scannedWorkingTree": true,
   "predicateDigest": "100a1233edebdc39a5f9004d3fba980a89ebb15b25872e52076386bc84b03153",
   "predicates": [
@@ -116,9 +116,9 @@
     "\\.(png|jpg|jpeg|gif|ico|icns|webp|svg|woff2?|ttf|otf|mp4|zip|asar|node|exe|dll|dylib|so|pdf)$",
     "^package-lock\\.json$"
   ],
-  "trackedFileCount": 3896,
-  "excludedFileCount": 623,
-  "scannedFileCount": 3273,
+  "trackedFileCount": 3901,
+  "excludedFileCount": 625,
+  "scannedFileCount": 3276,
   "unscopedFileCount": 15,
   "unscoped": [
     ".claude/settings.json",
@@ -139,8 +139,8 @@
   ],
   "unscopedMentions": [],
   "unreadable": [],
-  "matchedPathCount": 1115,
-  "pathDigest": "be9a30992ba2500bf59997b617a575c332d5d125f1eb96a4fc70c6eea0814cbc",
+  "matchedPathCount": 1119,
+  "pathDigest": "d2ef3dedfbe24913f62b91565adb3b170e2efecd943bc1525f33f9ad88b1f3d5",
   "entries": [
     {
       "path": ".github/workflows/ci.yml",
@@ -1215,7 +1215,7 @@
         "P01",
         "P14"
       ],
-      "lineCount": 14
+      "lineCount": 15
     },
     {
       "path": "scripts/ci/upstream-cli-watch.mjs",
@@ -2099,7 +2099,7 @@
         "P09",
         "P14"
       ],
-      "lineCount": 327
+      "lineCount": 329
     },
     {
       "path": "src/main/providers/codex/insights-exec.ts",
@@ -2123,7 +2123,7 @@
         "P01",
         "P14"
       ],
-      "lineCount": 10
+      "lineCount": 11
     },
     {
       "path": "src/main/providers/codex/mcp-config.ts",
@@ -2319,7 +2319,7 @@
         "P07",
         "P14"
       ],
-      "lineCount": 46
+      "lineCount": 47
     },
     {
       "path": "src/main/pty-input-guard.ts",
@@ -2419,14 +2419,21 @@
         "P08",
         "P14"
       ],
-      "lineCount": 12
+      "lineCount": 17
+    },
+    {
+      "path": "src/main/session-helper/connection.ts",
+      "predicates": [
+        "P14"
+      ],
+      "lineCount": 1
     },
     {
       "path": "src/main/session-helper/manager.ts",
       "predicates": [
         "P14"
       ],
-      "lineCount": 19
+      "lineCount": 36
     },
     {
       "path": "src/main/session-input/index.ts",
@@ -2444,12 +2451,19 @@
       "lineCount": 7
     },
     {
+      "path": "src/main/session-signals/hooks.ts",
+      "predicates": [
+        "P14"
+      ],
+      "lineCount": 1
+    },
+    {
       "path": "src/main/sessions/launch-bindings.ts",
       "predicates": [
         "P04",
         "P14"
       ],
-      "lineCount": 243
+      "lineCount": 244
     },
     {
       "path": "src/main/stale-folder-sweep.ts",
@@ -3679,7 +3693,7 @@
         "P12",
         "P14"
       ],
-      "lineCount": 170
+      "lineCount": 172
     },
     {
       "path": "src/shared/ask-conductor-provider.ts",
@@ -5791,7 +5805,7 @@
         "P07",
         "P13"
       ],
-      "lineCount": 146
+      "lineCount": 159
     },
     {
       "path": "tests/unit/main/launch-bindings.test.ts",
@@ -6205,7 +6219,15 @@
         "P04",
         "P13"
       ],
-      "lineCount": 22
+      "lineCount": 46
+    },
+    {
+      "path": "tests/unit/main/session-helper-codex-hooks.test.ts",
+      "predicates": [
+        "P01",
+        "P13"
+      ],
+      "lineCount": 41
     },
     {
       "path": "tests/unit/main/session-helper-connection.test.ts",
@@ -6968,7 +6990,7 @@
         "P07",
         "P13"
       ],
-      "lineCount": 149
+      "lineCount": 157
     },
     {
       "path": "tests/unit/providers/codex/spawn-node-lookup.test.ts",
@@ -8552,12 +8574,20 @@
       "lineCount": 4
     },
     {
+      "path": "tests/unit/scripts/codex-hook-forwarder-helper.test.ts",
+      "predicates": [
+        "P01",
+        "P13"
+      ],
+      "lineCount": 11
+    },
+    {
       "path": "tests/unit/scripts/codex-hook-forwarder.test.ts",
       "predicates": [
         "P01",
         "P13"
       ],
-      "lineCount": 35
+      "lineCount": 36
     },
     {
       "path": "tests/unit/scripts/codex-resume-picker-flags.test.ts",
@@ -8755,7 +8785,7 @@
         "P04",
         "P13"
       ],
-      "lineCount": 435,
+      "lineCount": 437,
       "truncated": true
     },
     {
