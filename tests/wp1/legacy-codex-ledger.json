@@ -10710,8 +10710,8 @@
       ],
       "category": "TEST",
       "disposition": "added",
-      "evidence": "test created by the 2.1.3-beta.17 aggregate's final step (the release smoke's Feature Guide finding), after the WP1 baseline: a card's summary in the Feature Guide and the Feature tour shows its bold and code marks as formatting; it names the Machines card's bold setting \"Claude Code and Codex sessions through the session helper\", no Codex code path (WP1.67); tests/unit/renderer/feature-guide-summary-rich.test.tsx",
-      "note": "matched since the 2.1.3-beta.17 final step (new file); P13: one expected bold name"
+      "evidence": "test created by the 2.1.3-beta.17 aggregate's final step (the release smoke's Feature Guide finding), after the WP1 baseline: a card's summary in the Feature Guide and the Feature tour shows its bold and code marks as formatting; it names the Machines card's bold setting \"Claude Code and Codex sessions through the session helper\", no Codex code path (WP1.67); tests/unit/renderer/feature-guide-summary-rich.test.tsx; 2.1.3-beta.18 section 7.3 (aicc_planning#426): the guide sweep also runs with Codex alone and with Claude Code alone, over the cards and copy the page takes for that choice (stepsForAssistants), no Codex code path (WP1.67); tests/unit/renderer/feature-guide-summary-rich.test.tsx",
+      "note": "matched since the 2.1.3-beta.17 final step (new file); P13: one expected bold name, and since 2.1.3-beta.18 section 7.3 the guide sweep's choice of assistants ('codex', Codex alone) with its comment and type"
     },
     {
       "path": "tests/unit/renderer/footer-hidden-buckets-migration.test.ts",
