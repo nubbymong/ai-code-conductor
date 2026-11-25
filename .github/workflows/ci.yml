@@ -1176,6 +1176,15 @@ jobs:
   # readings, Playwright's report, its pictures of the app's own windows and
   # D12's pictures of the Snap menu's box (cut from the runner's own screen).
   # tests/unit/scripts/snap-e2e-job.test.ts evaluates its condition.
+  #
+  # The spec's second part (plan 2.1.3-beta.18, section 7.5; aicc_planning#428)
+  # opens a Codex tab in an app of its own: Codex 0.157.1, the version the
+  # test machine's readings used (probe P19, beta.17 C9), installed from npm
+  # into a prefix and a cache of its own with scripts off, as the Probe P19 job
+  # installs it, and put first on the app's PATH, so the app finds the npm
+  # shim as it finds a user's npm install. Its model is a stand-in on a
+  # loopback port (probe P11's) and its config names one tool server that
+  # cannot start, so Codex shows its warning count.
   snap-e2e:
     if: github.event_name == 'workflow_dispatch' && inputs.snap_e2e == true
     name: Snap e2e (${{ matrix.os }})
@@ -1229,6 +1238,15 @@ jobs:
       - name: Build the app
         run: npm run build
 
+      # The Codex the spec's Codex tab runs (see the job's comment above).
+      - name: Install Codex 0.157.1 into its own prefix
+        shell: bash
+        env:
+          CODEX_VERSION: '0.157.1'
+          PREFIX: ${{ runner.temp }}/snap-codex
+          NPM_CACHE: ${{ runner.temp }}/npm-snap-codex-cache
+        run: npm install --global --prefix "$PREFIX" --ignore-scripts --cache "$NPM_CACHE" --no-audit --no-fund "@openai/codex@$CODEX_VERSION"
+
       # A measurement: it prints what the run read and is red only when the
       # script itself could not run. "not measured" (the runner refused the
       # token) is a reading.
@@ -1243,6 +1261,7 @@ jobs:
         env:
           SNAP_E2E_OUT: ${{ runner.temp }}/snap-e2e
           SNAP_E2E_HELPER: ${{ github.workspace }}\helper\target\release\aicc-helper.exe
+          SNAP_E2E_CODEX: ${{ runner.temp }}/snap-codex
           PLAYWRIGHT_JSON_OUTPUT_NAME: ${{ runner.temp }}/snap-e2e/playwright-report.json
         run: npx playwright test tests/e2e/snap-windows.spec.ts --retries=0 --workers=1 --reporter=list,json
 

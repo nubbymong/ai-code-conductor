@@ -160,6 +160,20 @@ describe('ci.yml: the Snap e2e job only reads, runs Playwright once per test, an
     expect(read(SPEC)).toContain('SNAP_E2E_HELPER')
   })
 
+  // Plan 2.1.3-beta.18, section 7.5 (aicc_planning#428): the spec's Codex tab
+  // runs Codex 0.157.1 from npm, installed as the Probe P19 job installs it.
+  it('installs Codex 0.157.1 from npm into a prefix and a cache of its own with scripts off, before Playwright runs, and hands the spec that prefix', () => {
+    const install = step('Install Codex 0.157.1 into its own prefix')
+    expect(install.shell).toBe('bash')
+    expect(String(install.run).trim()).toBe('npm install --global --prefix "$PREFIX" --ignore-scripts --cache "$NPM_CACHE" --no-audit --no-fund "@openai/codex@$CODEX_VERSION"')
+    expect(install.env?.CODEX_VERSION).toBe('0.157.1')
+    expect(install.env?.PREFIX).toBe('${{ runner.temp }}/snap-codex')
+    expect(install.env?.NPM_CACHE).toBe('${{ runner.temp }}/npm-snap-codex-cache')
+    expect(names().indexOf('Install Codex 0.157.1 into its own prefix')).toBeLessThan(names().indexOf('Run the Snap end-to-end check'))
+    expect(step('Run the Snap end-to-end check').env?.SNAP_E2E_CODEX).toBe(install.env?.PREFIX)
+    expect(read(SPEC)).toContain('SNAP_E2E_CODEX')
+  })
+
   it('fails the job when the report shows a retried, flaky or failed test, even after a red Playwright step', () => {
     const check = step('Fail a run Playwright retried or reported flaky')
     expect(String(check.run).trim()).toBe('node scripts/ci/playwright-no-retry.mjs "$REPORT"')

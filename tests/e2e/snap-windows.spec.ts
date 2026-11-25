@@ -126,12 +126,38 @@
  * within OVERLAY_MS: about four and a half times that 2.2 s, not ten, and not
  * raised.
  * The readings go to the log and to $SNAP_E2E_OUT/readings.json.
+ *
+ * PART TWO, A CODEX TAB WHILE CODEX SHOWS ITS WARNING COUNT (plan
+ * 2.1.3-beta.18, section 7.5; aicc_planning#428). An app of its own, in a
+ * serial group of its own, so a red test in part one skips nothing here.
+ * Codex 0.157.1, the version the test machine's readings used (probe P19,
+ * beta.17 C9), from npm (the job's install, SNAP_E2E_CODEX), first on the
+ * app's PATH; one managed Codex account, signed in with a made-up key; its
+ * config points Codex at probe P11's model stand-in on a loopback port (the
+ * stand-in names every picture a request carries by its SHA-256) and names
+ * one tool server that cannot start (probe P19's warning launch), so Codex
+ * shows its warning count on the hint row. Everything else Codex might reach
+ * goes to a dead proxy.
+ *   C1 START: the app finds that Codex (found, 0.157.1); a Codex tab opens on
+ *      the account, its first screens answered by the 9.2 rules
+ *      (helpers/codex-first-screens.ts); within CODEX_START_MS the tab shows
+ *      Codex's composer, its footer (P19's model name) and "1 warning" after
+ *      the warning sign, on two reads 300 ms apart; the Snap button shows.
+ * CODEX_START_MS was set before any reading on the runner (P19's own bound
+ * for Codex's ready composer is 60 s, the real-launch spec's 150 s); the
+ * run's reading is codexStartMs. The part's readings go to
+ * $SNAP_E2E_OUT/codex-readings.json.
  */
 import { test, expect, type ElectronApplication, type Page } from '@playwright/test'
-import { execFile } from 'child_process'
+import { execFile, spawnSync } from 'child_process'
 import fs from 'fs'
+import { createRequire } from 'module'
 import path from 'path'
 import { launchIsolatedApp, closeIsolatedApp, IsolatedApp } from './helpers/electron-app'
+import { seedCodexAccount, realmDirOf, createCodexConfig, openSession, activeSessionId, terminalRows, answerFirstScreen } from './helpers/codex-mode'
+import { nextFirstScreen, type FirstScreenAnswer } from './helpers/codex-first-screens'
+import { pathWithoutCodex } from './helpers/fake-codex'
+import { isolatedHomeDir } from './helpers/isolated-env'
 
 /** A Claude Code the app supports (CLAUDE_MIN_MANAGED_CLI_VERSION, as
  *  onboarding-provider-select.spec.ts's stand-in answers). */
@@ -685,9 +711,20 @@ async function pressReadingMenu(label: string, answerWith: MenuAnswer, rate: num
   }
 }
 
-test.describe.configure({ mode: 'serial' })
+/** E2E_HEADLESS shows the app's window at -10000,-10000, off every display
+ *  (src/main/index.ts, ready-to-show). Snap pictures the screen, so the
+ *  window goes where a user has it: on the primary display, within its work
+ *  area. (Run 45269811648 read the window's right and bottom edges at -8720
+ *  and -9280: -10000 plus 1280 by 720.) Answers the window's bounds. */
+async function placeAppWindow(): Promise<unknown> {
+  const area = await ctx!.app.evaluate(({ screen }) => screen.getPrimaryDisplay().workArea)
+  const placed = { x: area.x, y: area.y, width: Math.min(1280, area.width), height: Math.min(720, area.height) }
+  await (await ctx!.app.browserWindow(ctx!.page)).evaluate((w, b) => w.setBounds(b), placed)
+  return (await ctx!.app.browserWindow(ctx!.page)).evaluate((w) => w.getBounds())
+}
 
 test.describe('Snap on Windows', () => {
+  test.describe.configure({ mode: 'serial' })
   test.skip(process.platform !== 'win32', 'Snap on Windows: the runner is Windows')
   test.skip(!HELPER, 'the snap-e2e job only (ci.yml): it needs SNAP_E2E_HELPER, the helper that job built')
 
@@ -706,15 +743,7 @@ test.describe('Snap on Windows', () => {
     })
     readings.launchMs = Math.round(performance.now() - started)
     ctx.app.on('console', (m) => { mainLines.push(m.text()) })
-    // E2E_HEADLESS shows the app's window at -10000,-10000, off every display
-    // (src/main/index.ts, ready-to-show). Snap pictures the screen, so the
-    // window goes where a user has it: on the primary display, within its work
-    // area. (Run 45269811648 read the window's right and bottom edges at
-    // -8720 and -9280: -10000 plus 1280 by 720.)
-    const area = await ctx.app.evaluate(({ screen }) => screen.getPrimaryDisplay().workArea)
-    const placed = { x: area.x, y: area.y, width: Math.min(1280, area.width), height: Math.min(720, area.height) }
-    await (await ctx.app.browserWindow(ctx.page)).evaluate((w, b) => w.setBounds(b), placed)
-    readings.appWindow = await (await ctx.app.browserWindow(ctx.page)).evaluate((w) => w.getBounds())
+    readings.appWindow = await placeAppWindow()
   })
 
   test.afterAll(async () => {
@@ -990,5 +1019,189 @@ test.describe('Snap on Windows', () => {
     expect(reads.filter((r) => !r.app).map((r) => r.label), 'every box shows the app, not another window').toEqual([])
     expect(reads.filter((r) => r.copy && !r.seen).map((r) => r.label), 'the control: the copy of the menu is seen').toEqual([])
     expect(reads.filter((r) => !r.copy && r.seen).map((r) => r.label), 'the menu is in no picture of the slowed page').toEqual([])
+  })
+})
+
+// PART TWO (see the header): Snap into a Codex tab while Codex shows its
+// warning count.
+
+/** The Codex the job installed (its npm prefix), or '' off the job. */
+const CODEX_PREFIX = process.env.SNAP_E2E_CODEX ? path.resolve(process.env.SNAP_E2E_CODEX) : ''
+/** The Codex the test machine's readings used (P19; beta.17 C9). */
+const CODEX_VERSION = '0.157.1'
+const CODEX_LABEL = 'Snap Codex E2E'
+/** The model Codex asks for: P19's name, so the footer reads as on P19's recorded screens. */
+const CODEX_MODEL = 'p19-probe'
+const CODEX_FAKE_KEY = 'sk-e2e-fake-key-not-real'
+/** Everything but loopback goes nowhere (as codex-real-launch.spec.ts). */
+const DEAD_PROXY = { HTTPS_PROXY: 'http://127.0.0.1:9', HTTP_PROXY: 'http://127.0.0.1:9', ALL_PROXY: 'http://127.0.0.1:9', NO_PROXY: '127.0.0.1,localhost' }
+/** See the header. */
+const CODEX_START_MS = 120_000
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
+
+/** One request probe P11's stand-in saw (its onEvent; a body is never kept),
+ *  each picture it carried named by its SHA-256. */
+type StandInEvent = {
+  ev: string; t: number; id: number; path?: string; kind?: string; tools?: number
+  images?: Array<{ way?: string; sha256?: string; kind?: string; bytes?: number; width?: number | null; height?: number | null }>
+}
+type StandIn = { listen: () => Promise<number>; close: () => Promise<void> }
+const { createModelStandIn } = createRequire(__filename)('../../helper/probes/p11-model-stand-in.cjs') as { createModelStandIn: (o: { onEvent: (e: StandInEvent) => void }) => StandIn }
+const standInEvents: StandInEvent[] = []
+let codexSid = ''
+
+/** The npm shim the job's install made. */
+const codexShim = () => path.join(CODEX_PREFIX, 'codex.cmd')
+
+/** The account folder's config: the model stand-in on loopback with no
+ *  retries, the project trusted, and P19's tool server that cannot start. */
+function codexConfigToml(port: number, projectDir: string): string {
+  return [
+    '# snap-e2e (plan 2.1.3-beta.18, 7.5): TEST HARNESS ONLY, a throwaway Codex home. The model is the loopback stand-in; no network.',
+    `model = "${CODEX_MODEL}"`,
+    'model_provider = "snape2e"',
+    '',
+    '[model_providers.snape2e]',
+    'name = "snap-e2e model stand-in (loopback test harness)"',
+    `base_url = "http://127.0.0.1:${port}/v1"`,
+    'wire_api = "responses"',
+    'request_max_retries = 0',
+    'stream_max_retries = 0',
+    '',
+    `[projects.'${projectDir}']`,
+    'trust_level = "trusted"',
+    '',
+    // P19's warning launch (p19-scenarios.json): a tool server whose program is not there.
+    '[mcp_servers.snape2eprobe]',
+    `command = '${path.join(projectDir, 'snap-e2e-no-such-program')}'`,
+    '',
+  ].join('\n')
+}
+
+/** The job's Codex run once outside the app on the account's folder (the
+ *  made-up key's sign-in, its check), as codex-real-launch.spec.ts runs it: no
+ *  Codex or OpenAI variable of the runner's, the spec's home, the dead proxy,
+ *  and through cmd.exe, since the shim is a .cmd. */
+function runCodexCli(dataDir: string, realm: string, args: string[], input?: string) {
+  const env: Record<string, string> = {}
+  for (const [k, v] of Object.entries(process.env)) {
+    if (v === undefined || /^(OPENAI_|CODEX_)/i.test(k)) continue
+    env[k] = v
+  }
+  const home = isolatedHomeDir(dataDir)
+  fs.mkdirSync(home, { recursive: true })
+  Object.assign(env, { USERPROFILE: home, HOME: home, CODEX_HOME: realm, ...DEAD_PROXY })
+  const shell = path.join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'cmd.exe')
+  return spawnSync(shell, ['/d', '/s', '/c', `""${codexShim()}" ${args.join(' ')}"`], { env, input, encoding: 'utf8', timeout: 60_000, windowsHide: true, windowsVerbatimArguments: true })
+}
+
+/** The Codex tab's screen as one text, each row's end trimmed. */
+const codexScreen = async (): Promise<string> => (await terminalRows(ctx!.page)).map((r) => r.replace(/\s+$/, '')).join('\n')
+/** Codex's composer with its footer under it (P19's pattern for a ready session). */
+const COMPOSER_AND_FOOTER = new RegExp(`(?:^|\\n) ?\\u203a(?:[ \\n]|$)[\\s\\S]*\\n {1,4}${CODEX_MODEL} [^\\n]*\\u00b7`)
+/** Codex's warning count after its warning sign (P19's recorded hint row: "1 warning . f2 to view"). */
+const warningCount = (screen: string): number | null => {
+  const m = /\u26a0 (\d+) warnings?\b/.exec(screen)
+  return m ? Number(m[1]) : null
+}
+const atRestWithCount = (screen: string) => COMPOSER_AND_FOOTER.test(screen) && warningCount(screen) !== null
+
+test.describe('Snap into a Codex tab on Windows while Codex shows its warning count', () => {
+  test.describe.configure({ mode: 'serial' })
+  test.skip(process.platform !== 'win32', 'Snap on Windows: the runner is Windows')
+  test.skip(!HELPER, 'the snap-e2e job only (ci.yml): it needs SNAP_E2E_HELPER and SNAP_E2E_CODEX, the helper that job built and the Codex it installed')
+
+  let standIn: StandIn | undefined
+  let projectDir = ''
+
+  test.beforeAll(async () => {
+    test.setTimeout(LAUNCH_MS + 130_000)
+    fs.mkdirSync(OUT, { recursive: true })
+    // In the job this part runs or fails: it is never skipped there.
+    expect(CODEX_PREFIX, 'SNAP_E2E_CODEX names the Codex the job installed').not.toBe('')
+    expect(fs.existsSync(codexShim()), `no Codex at ${codexShim()}`).toBe(true)
+    standIn = createModelStandIn({ onEvent: (e) => { standInEvents.push(e) } })
+    const port = await standIn.listen()
+    const started = performance.now()
+    ctx = await launchIsolatedApp({
+      seedExtra: (dataDir) => {
+        chooseSnap(dataDir, 'new')
+        seedCodexAccount(dataDir, { fake: false, domTerminal: true, method: 'apiKey' })
+        projectDir = path.join(dataDir, 'codex-project')
+        fs.mkdirSync(projectDir, { recursive: true })
+        const realm = realmDirOf(dataDir)
+        fs.writeFileSync(path.join(realm, 'config.toml'), codexConfigToml(port, projectDir))
+        const login = runCodexCli(dataDir, realm, ['login', '--with-api-key'], `${CODEX_FAKE_KEY}\n`)
+        if (login.status !== 0) throw new Error(`the made-up key's sign-in failed (exit ${login.status}): ${login.stderr}`)
+        const status = runCodexCli(dataDir, realm, ['login', 'status'])
+        if (!/Logged in using an API key/.test(`${status.stdout}${status.stderr}`)) throw new Error(`the account folder is not signed in with the made-up key: ${status.stdout}${status.stderr}`)
+      },
+      env: (dataDir) => ({
+        PATH: [CODEX_PREFIX, ...pathWithoutCodex(process.env.PATH ?? '')].join(path.delimiter),
+        // "Sign-in already on this computer": an empty folder of the spec's.
+        CODEX_HOME: (() => { const d = path.join(dataDir, 'codex-home'); fs.mkdirSync(d, { recursive: true }); return d })(),
+        CCC_E2E_SNAP_HELPER: HELPER,
+        ...DEAD_PROXY,
+      }),
+    })
+    readings.codexLaunchMs = Math.round(performance.now() - started)
+    ctx.app.on('console', (m) => { mainLines.push(m.text()) })
+    readings.codexAppWindow = await placeAppWindow()
+  })
+
+  test.afterAll(async () => {
+    test.setTimeout(120_000)
+    readings.codexRequests = standInEvents.filter((e) => e.ev === 'request').map(({ id, t, path: p, kind, tools, images }) => ({ id, t, path: p, kind, tools, images }))
+    const out = Object.fromEntries(Object.entries(readings).filter(([k]) => k.startsWith('codex')))
+    fs.mkdirSync(OUT, { recursive: true })
+    fs.writeFileSync(path.join(OUT, 'codex-readings.json'), JSON.stringify(out, null, 2))
+    console.log(`[snap-e2e] codex readings ${JSON.stringify(out)}`)
+    await closeIsolatedApp(ctx)
+    await standIn?.close()
+  })
+
+  test('C1 START: a Codex 0.157.1 tab on the stand-in, with a tool server that cannot start, shows Codex\'s warning count and the Snap button', async () => {
+    test.setTimeout(CODEX_START_MS + 60_000)
+    const page = ctx!.page
+    const discovered = await page.evaluate(async () => {
+      const api = (window as unknown as { electronAPI: { providerAccounts: { discover: (id: string) => Promise<unknown> } } }).electronAPI
+      return api.providerAccounts.discover('codex')
+    }) as { ok: boolean; installation?: Record<string, unknown> }
+    readings.codexDiscovery = discovered.installation
+      ? { state: discovered.installation.discoveryState, version: discovered.installation.version, compatibility: discovered.installation.compatibility }
+      : discovered
+    expect(discovered.installation, JSON.stringify(discovered)).toMatchObject({ discoveryState: 'found', version: CODEX_VERSION })
+    const started = performance.now()
+    await createCodexConfig(page, { label: CODEX_LABEL, dir: projectDir })
+    await openSession(page, CODEX_LABEL)
+    codexSid = await activeSessionId(page)
+    await expect(snapButton()).toBeVisible({ timeout: TAB_MS })
+    // Codex's first screens, each answered once by the 9.2 rules, then its
+    // composer, footer and warning count on two reads 300 ms apart.
+    const answered: FirstScreenAnswer[] = []
+    let shown = false
+    try {
+      const deadline = Date.now() + CODEX_START_MS
+      while (Date.now() < deadline) {
+        const next = nextFirstScreen(await terminalRows(page), answered)
+        if (next.act === 'answer') {
+          answered.push({ kind: next.kind, screen: await answerFirstScreen(page, codexSid, next.kind) })
+          continue
+        }
+        if (atRestWithCount(await codexScreen())) {
+          await sleep(300)
+          if (atRestWithCount(await codexScreen())) { shown = true; break }
+        }
+        await sleep(250)
+      }
+    } finally {
+      readings.codexStartMs = Math.round(performance.now() - started)
+      readings.codexFirstScreens = answered.map((a) => a.kind)
+      readings.codexScreenAtStart = (await codexScreen().catch((e: Error) => `unread: ${e.message}`)).split('\n').filter((l) => l.trim())
+      readings.codexMainLines = mainLines.filter((l) => /codex/i.test(l)).slice(-60)
+    }
+    const screen = await codexScreen()
+    expect(shown, `no composer, footer and warning count within ${CODEX_START_MS} ms; the screen:\n${screen}`).toBe(true)
+    expect(warningCount(screen), `the warning count is the one tool server's; the screen:\n${screen}`).toBe(1)
   })
 })

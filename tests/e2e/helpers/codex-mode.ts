@@ -20,6 +20,7 @@ import {
 import type { ProviderRegistryDoc, RegistryResult } from '../../../src/shared/providers'
 import { installFakeCodex, signInFakeRealm } from './fake-codex'
 import { isolatedLaunchEnv } from './isolated-env'
+import { FIRST_SCREENS, confirmable, type FirstScreen } from './codex-first-screens'
 
 const APP_PATH = path.resolve(__dirname, '../../../out/main/index.js')
 const IS_WIN = process.platform === 'win32'
@@ -203,6 +204,31 @@ export async function ptyWrite(page: Page, sessionId: string, data: string): Pro
     const api = (window as unknown as { electronAPI: { pty: { write: (id: string, data: string) => void } } }).electronAPI
     api.pty.write(id, d)
   }, [sessionId, data] as const)
+}
+
+/** Answer one of Codex's first screens by the 9.2 rules
+ *  (helpers/codex-first-screens.ts): move the selection with that screen's
+ *  own keys, then press Enter only once the LIVE menu's selected row is the
+ *  option the spec answers, read again for a bounded time; otherwise stop
+ *  with nothing confirmed. Returns the screen Enter confirmed. Used by
+ *  codex-real-launch.spec.ts and snap-windows.spec.ts's Codex tab. */
+export async function answerFirstScreen(page: Page, sid: string, kind: FirstScreen): Promise<string> {
+  const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
+  await sleep(400)
+  for (const key of FIRST_SCREENS[kind].keys) { await ptyWrite(page, sid, key); await sleep(300) }
+  let check: ReturnType<typeof confirmable> = { ok: false, row: '' }
+  let rows: string[] = []
+  const until = Date.now() + 3000
+  while (Date.now() < until) {
+    await sleep(400)
+    rows = await terminalRows(page)
+    check = confirmable(rows, kind)
+    if (check.ok) break
+  }
+  if (!check.ok) throw new Error(`${kind} screen: ${check.why ?? 'not confirmable'} (the row read: ${JSON.stringify(check.row.trim())}); nothing was confirmed`)
+  await ptyWrite(page, sid, '\r')
+  await sleep(1500)
+  return rows.join('\n')
 }
 
 /** Restart the tab on screen with the header's Restart, Restart (a fresh
