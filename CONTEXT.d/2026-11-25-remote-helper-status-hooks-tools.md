@@ -1,8 +1,9 @@
-## 2026-11-25 -- remote: a helper tab gets its status line, hook events and the Conductor's tools (3.2a)
+## 2026-11-25 -- remote: a helper tab gets its status line, hook events and the Conductor's tools (3.2a, 3.2b)
 
-2.1.3-beta.18 section 3.2, first build step (aicc_planning#431), on section 2's
-group and against section 3.1's helper contract (a fake holder in the unit
-tests; 3.2b merges 3.1 and runs the real helper in remote-helper-e2e).
+2.1.3-beta.18 section 3.2 (aicc_planning#431), on section 2's group. Built in
+two steps: 3.2a against section 3.1's helper contract, with a fake holder in
+the unit tests; 3.2b merged 3.1's reviewed head (19331daf) and runs the real
+helper in remote-helper-e2e (below).
 
 The session's own files. Before the hold, one fixed exec (`reads`,
 remote-helper/scripts.ts) prints the host files the provider names
@@ -40,3 +41,21 @@ Off by default, unchanged when off: pty-manager.ts untouched; the usual-path
 tests now run with the app's side plugged in and assert it is never asked.
 Group shape changes (types.ts): `RemoteHelperCommands.folder`,
 `RemoteLaunchOptions.tools`, `ProviderRemoteLaunch.statusLine`.
+
+The real helper (3.2b). remote-helper-e2e builds the helper from helper/,
+which is 3.1's reviewed tree byte for byte; the binary it built has the
+SHA-256 of 3.1's helper-linux-musl artifact (Helper run 45570181579),
+365a78ea...e1ac. Its live file now runs, on the host, the commands a tab's own
+settings.json and mcp.json name, as Claude Code runs them: the status mode and
+the hook mode with the JSON on standard input, and the relay as a tool
+server. Each reaches the app's side once (a status strip, a hook sink and a
+tool host with no Electron). Then the link's ssh is killed and its new link
+held back (a gated runner) until the holder's record says it is not
+attached; two statuses, two hook events and a call from a tool server
+started in the cut (a batch the relay answers at once while the app is away
+shows it holds the call) arrive once the tab is back: the newest status only,
+the events once each in order, the call answered by the app. All three cross
+again after, and two tabs at once each get only their own. Green on db4e4bf3
+(run 45580498626, retries 0); red with helper/ put back to its tree before
+3.1 ("aicc-helper: unknown command status", run 45580902430, a throwaway
+branch since deleted).
