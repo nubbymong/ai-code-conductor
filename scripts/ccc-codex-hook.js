@@ -24,12 +24,28 @@
 //    hook's answer), never waits more than a few seconds, and always exits 0.
 // With no hook file (Codex run outside the app with this hook trusted) it does
 // nothing.
+//
+// 2.1.3-beta.18 (ADR-030 S12): a session the session helper holds sends its
+// events through its holder instead, so an app update loses none. Its launch
+// names the helper's hook mode in the environment (AICC_HELPER_PATH, and
+// AICC_HELPER_STORE and AICC_HELPER_SESSION, which the hook mode reads
+// itself; session-helper/protocol.ts HOOK_MODE_ENV). Then this runs that
+// program, `hook`, with the event on its standard input, and posts nothing.
+// The command Codex runs stays the same for every session (its trust is kept
+// on the command's text), which is why this script, not the command, chooses.
+// It trusts the named program no more than the hook file: it runs it only
+// when its real path is this user's helper copy as the app lays it out
+// (`<helper folder>/<version>-<12 hex>/aicc-helper[.exe]`: no link at any
+// level the app made, one plain file with one name), the store is that
+// helper folder's `store` and the session has the helper's shape. Anything
+// else, or only some of the three named, does nothing at all.
 
 'use strict'
 
 const fs = require('fs')
 const path = require('path')
 const http = require('http')
+const { spawn } = require('child_process')
 
 const MAX_BODY_BYTES = 4 * 1024 * 1024
 const MAX_FILE_BYTES = 4096
@@ -43,6 +59,27 @@ const FILE_NAME = 'hook.json'
  *  (providers/codex/hooks.ts CODEX_HOOK_ROOT_NAME). */
 const ROOT_NAME = 'codex-hooks'
 const READ_NO_FOLLOW = fs.constants.O_RDONLY | (typeof fs.constants.O_NOFOLLOW === 'number' ? fs.constants.O_NOFOLLOW : 0)
+/** The variables a held session's launch names its hook mode by
+ *  (src/main/session-helper/protocol.ts HOOK_MODE_ENV). */
+const HELPER_ENV = { helper: 'AICC_HELPER_PATH', store: 'AICC_HELPER_STORE', session: 'AICC_HELPER_SESSION' }
+/** A holder's session id (helper/src/hello.rs valid_sid; protocol.ts SID_RE). */
+const HELPER_SID_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{7,31}$/
+/** A helper copy's version folder, `<version>-<first 12 hex of its SHA-256>`
+ *  (session-helper/protocol.ts HELPER_FOLDER_RE, install.ts versionFolderName). */
+const HELPER_FOLDER_RE = /^([0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.]+)?)-[0-9a-f]{12}$/
+/** The folder the helper copies are in: the installed app's `helper`, or a
+ *  dev run's `helper/dev` (session-helper/install.ts helperRootDir). */
+const HELPER_ROOT_NAMES = ['helper', 'dev']
+/** The holders' store, beside the version folders (manager.ts). */
+const HELPER_STORE_NAME = 'store'
+/** How long the hook mode may run: it ends itself within 2 s (helper/src/hook.rs DEADLINE). */
+const HELPER_TIMEOUT_MS = 3000
+const CONTROL_RE = /[\x00-\x1f\x7f]/
+
+/** The helper's program name (session-helper/install.ts HELPER_EXE_NAME). */
+function helperExeName(platform) {
+  return platform === 'win32' ? 'aicc-helper.exe' : 'aicc-helper'
+}
 
 /** Two paths as the platform's file system compares them. */
 function samePath(a, b, platform) {
@@ -111,6 +148,93 @@ function readHookFile(env, platform) {
   return { port: j.port, sid: j.sid, token: j.token }
 }
 
+/**
+ * The hook mode a held session's launch names (2.1.3-beta.18), checked:
+ * `{ exe }` to run; null when the environment names none of the three
+ * variables (not a held session: the hook file's route, as before); false
+ * when it names any of them and they do not all check (nothing is done).
+ * The program must be this user's helper copy as the app lays it out: its
+ * name the helper's, in a version folder, in the helper folder, whose real
+ * path is that very path below the real path of the folder the helper folder
+ * is in (no link or junction at any level the app made), a plain file with
+ * one name. The store must be that helper folder's `store`, and the session
+ * of the helper's shape. `fsx` stands in for fs in tests.
+ */
+function readHelper(env, platform, fsx) {
+  const plat = platform || process.platform
+  const io = fsx || fs
+  const exe = env[HELPER_ENV.helper]
+  const store = env[HELPER_ENV.store]
+  const sid = env[HELPER_ENV.session]
+  if (exe === undefined && store === undefined && sid === undefined) return null
+  if (typeof exe !== 'string' || typeof store !== 'string' || typeof sid !== 'string') return false
+  if (!HELPER_SID_RE.test(sid)) return false
+  if (!path.isAbsolute(exe) || !path.isAbsolute(store) || CONTROL_RE.test(exe) || CONTROL_RE.test(store)) return false
+  if (path.basename(exe) !== helperExeName(plat)) return false
+  const version = path.dirname(exe)
+  const root = path.dirname(version)
+  const above = path.dirname(root)
+  if (!HELPER_FOLDER_RE.test(path.basename(version)) || !HELPER_ROOT_NAMES.includes(path.basename(root))) return false
+  if (!above || above === root) return false
+  if (!samePath(path.resolve(store), path.join(root, HELPER_STORE_NAME), plat)) return false
+  let realExe
+  let realAbove
+  try {
+    realExe = io.realpathSync.native(exe)
+    realAbove = io.realpathSync.native(above)
+  } catch {
+    return false
+  }
+  if (!samePath(realExe, path.join(realAbove, path.basename(root), path.basename(version), path.basename(exe)), plat)) return false
+  let st
+  try { st = io.lstatSync(exe, { bigint: true }) } catch { return false }
+  if (!st.isFile() || st.isSymbolicLink() || st.nlink !== 1n) return false
+  return { exe }
+}
+
+/** Run the hook mode, `<exe> hook` (the store and the session from the
+ *  environment it inherits), with `body` on its standard input and nothing
+ *  read from its output; `done` is called once, when it exits or fails, or
+ *  after HELPER_TIMEOUT_MS. `spawnFn` stands in for child_process.spawn in tests. */
+function runHook(helper, body, done, spawnFn) {
+  let finished = false
+  let child = null
+  let timer = null
+  const end = () => {
+    if (finished) return
+    finished = true
+    if (timer) clearTimeout(timer)
+    done()
+  }
+  timer = setTimeout(() => {
+    try { if (child) child.kill() } catch { /* gone */ }
+    end()
+  }, HELPER_TIMEOUT_MS)
+  try {
+    child = (spawnFn || spawn)(helper.exe, ['hook'], { stdio: ['pipe', 'ignore', 'ignore'], windowsHide: true, shell: false })
+  } catch {
+    end()
+    return
+  }
+  child.on('error', end)
+  child.on('exit', end)
+  if (child.stdin) {
+    child.stdin.on('error', () => { /* the hook mode stopped reading: its own rule */ })
+    child.stdin.end(body)
+  }
+}
+
+/** Where this event goes: `{ hook }` (the held session's hook mode), `{ post }`
+ *  (the gateway, by the hook file), or null (nowhere). A held session's event
+ *  never goes to the gateway. */
+function chooseRoute(env, platform, fsx) {
+  const helper = readHelper(env, platform, fsx)
+  if (helper === false) return null
+  if (helper) return { hook: helper }
+  const cfg = readHookFile(env, platform)
+  return cfg ? { post: cfg } : null
+}
+
 /** The request's options: 127.0.0.1 itself, and no agent (`agent: false`
  *  takes a fresh connection outside the shared agent, which is where Node's
  *  environment proxy support lives). */
@@ -171,14 +295,15 @@ function main() {
   const quit = () => process.exit(0)
   process.on('uncaughtException', quit)
   setTimeout(quit, DEADLINE_MS)
-  const cfg = readHookFile(process.env)
-  if (!cfg) return quit()
+  const route = chooseRoute(process.env)
+  if (!route) return quit()
   readBody(process.stdin, (body) => {
     if (!body || body.length === 0) return quit()
-    forward(cfg, body, quit)
+    if (route.hook) runHook(route.hook, body, quit)
+    else forward(route.post, body, quit)
   })
 }
 
 if (require.main === module) main()
 
-module.exports = { readHookFile, forward, readBody, requestOptions, MAX_BODY_BYTES, MAX_FILE_BYTES, ROOT_NAME }
+module.exports = { readHookFile, forward, readBody, requestOptions, readHelper, runHook, chooseRoute, MAX_BODY_BYTES, MAX_FILE_BYTES, ROOT_NAME, HELPER_ENV, HELPER_TIMEOUT_MS }

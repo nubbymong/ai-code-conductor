@@ -859,7 +859,7 @@ describe('B1d: a session kept for a restored tab not shown is served its tool ca
     expect(hc.attached!.ackedCaps).not.toContain('mcp')
     m2.restoredTabs?.([{ id: CLAUDE_TAB, cwd: CWD }, { id: OTHER_TAB }])
     await until(() => served.length === 1, 'the kept stream to be served while the tab is not shown')
-    expect(servedUnseen).toEqual([{ kept: { sessionId: CLAUDE_TAB, provider: 'claude', hookFolder: null, folder: CWD }, cwd: CWD }])
+    expect(servedUnseen).toEqual([{ kept: { sessionId: CLAUDE_TAB, provider: 'claude', hookFolder: null, folder: CWD, hooks: 'holder' }, cwd: CWD }])
     expect(served[0]).toMatchObject({ id: CLAUDE_TAB, opts: { toolsChanged: true } })
     // A keeper that takes tool streams, and (B1e) hook events: the one its holder queued is taken now.
     expect(hc.attached!.ackedCaps).toContain('mcp')
@@ -905,7 +905,7 @@ describe('B1d: a session kept for a restored tab not shown is served its tool ca
     m2.restoredTabs?.([{ id: OTHER_TAB, cwd: OTHER_CWD }, { id: CLAUDE_TAB, cwd: CWD }])
     await until(() => served.length === 1 && servedOther.length === 1, 'both kept streams to be served while their tabs are not shown')
     expect(servedUnseen).toHaveLength(2)
-    expect(servedUnseen).toContainEqual({ kept: { sessionId: CLAUDE_TAB, provider: 'claude', hookFolder: null, folder: CWD }, cwd: CWD })
+    expect(servedUnseen).toContainEqual({ kept: { sessionId: CLAUDE_TAB, provider: 'claude', hookFolder: null, folder: CWD, hooks: 'holder' }, cwd: CWD })
     expect(servedUnseen).toContainEqual({ kept: { sessionId: OTHER_TAB, provider: 'codex', hookFolder: HOOK_FOLDER, folder: CWD }, cwd: OTHER_CWD })
     expect(served[0]).toMatchObject({ id: CLAUDE_TAB, opts: { toolsChanged: true } })
     expect(servedOther).toEqual([{ id: OTHER_TAB, opts: undefined }])

@@ -399,6 +399,13 @@ export interface SessionProvider {
    *  session on another machine through the session helper there. Absent:
    *  the provider's SSH tabs take the usual SSH path. */
   readonly remoteLaunch?: ProviderRemoteLaunch
+  /** Optional -- both packages declare it (2.1.3-beta.18, ADR-030 S12): the
+   *  kinds a held session's holder takes and its connections report; how
+   *  they reach the holder is the app's hook route (Claude Code: its settings
+   *  file; Codex: its launch, as `hookKinds`). At most 16 plain words (ASCII
+   *  letters and digits) of at most 64 characters, none twice. Absent, a
+   *  session switched by its launch keeps its hooks as they are. */
+  readonly heldHookKinds?: readonly string[]
   /**
    * Optional -- copy the provider's resume-picker script into
    * `<resourcesDir>/scripts/`. Both providers implement this in P4. The

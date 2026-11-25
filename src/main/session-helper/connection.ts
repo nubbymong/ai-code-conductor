@@ -43,6 +43,7 @@ import {
   CONTROL_CHANNEL,
   FrameReader,
   HELLO_LINE_MAX,
+  HELPER_HOOK_KINDS,
   HOOKS_CAP,
   JSON_DEPTH_MAX,
   LOCAL_CAPS,
@@ -88,9 +89,17 @@ export interface ConnectionOptions {
   openStream?: (endpoint: string) => Promise<Duplex>
   /** Section 15's folder check on Unix. Tests skip it. */
   checkEndpointFolder?: (endpoint: string) => string | null
-  /** This connection takes hook events (a Claude Code session whose hooks may
-   *  go through its holder): `hooks` is acked when the holder offers it. */
+  /** This connection takes hook events (an agent session whose hooks may go
+   *  through its holder: Claude Code's by its settings file, and from
+   *  2.1.3-beta.18 Codex's by its launch): `hooks` is acked when the holder
+   *  offers it. */
   hooks?: boolean
+  /** The hook kinds its session takes (2.1.3-beta.18: the kinds its package
+   *  declares, SessionProvider.heldHookKinds; a session whose CLI runs the
+   *  hook mode from its own environment declares them in its launch too, as
+   *  `hookKinds`): only an event of one of these is reported. Absent: the
+   *  nine (HELPER_HOOK_KINDS). */
+  hookKinds?: readonly string[]
   /** This connection carries the session's tool streams: `mcp` is acked when
    *  the holder offers it. The manager sets it only when the app gives it the
    *  tool functions, which app-wiring.ts does for the agent sessions. */
@@ -304,6 +313,8 @@ export class HolderConnection extends EventEmitter<HolderConnectionEvents> {
   /** True when this connection acked `hooks`: the holder offered it and the
    *  connection wanted it. Only then are hook events reported. */
   readonly hooks: boolean
+  /** The hook kinds it reports (ConnectionOptions.hookKinds). */
+  private readonly hookKinds: readonly string[]
   /** True when this connection acked `mcp`: the holder offered it and the
    *  connection wanted it. Only then are tool stream messages reported. */
   readonly mcp: boolean
@@ -350,6 +361,7 @@ export class HolderConnection extends EventEmitter<HolderConnectionEvents> {
     this.stream = stream
     this.hello = hello
     this.hooks = opts.hooks === true && hello.caps.includes(HOOKS_CAP)
+    this.hookKinds = opts.hookKinds ?? HELPER_HOOK_KINDS
     this.mcp = opts.mcp === true && hello.caps.includes(MCP_CAP)
     this.screen = opts.screen === true && hello.caps.includes(SCREEN_CAP)
     this.title = this.screen && opts.title === true && hello.caps.includes(TITLE_CAP)
@@ -701,7 +713,7 @@ export class HolderConnection extends EventEmitter<HolderConnectionEvents> {
         const m = f.json as Json
         if (!m || typeof m !== 'object' || Array.isArray(m)) continue
         if (m.t === 'event') {
-          const e = this.hooks ? readEventFrame(m, f.size) : null
+          const e = this.hooks ? readEventFrame(m, f.size, this.hookKinds) : null
           if (e) this.emit('event', e)
         } else if (m.re === going.id) going.done(m.t === 'term.detached')
         continue
@@ -721,7 +733,7 @@ export class HolderConnection extends EventEmitter<HolderConnectionEvents> {
         // carries a `re` is refused by its exact fields, and answers no
         // request): strictly, and reported only on a connection that acked
         // hooks. One that does not read is dropped (a holder sends none).
-        const e = this.hooks ? readEventFrame(m, f.size) : null
+        const e = this.hooks ? readEventFrame(m, f.size, this.hookKinds) : null
         if (e) this.emit('event', e)
         continue
       }

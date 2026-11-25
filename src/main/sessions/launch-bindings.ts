@@ -751,7 +751,8 @@ export interface KeptSessionTakenOver {
  * come through its holder), and where the run works. A Claude Code session
  * (claudeTakeOver): its status line's address file, its account capture and
  * registrations, and its data handler. A Codex session (codexTakeOver): its
- * hook file, its lease, its conversation, its pane and colour answers, its
+ * hook file (none when its hook events go through its holder, 2.1.3-beta.18),
+ * its lease, its conversation, its pane and colour answers, its
  * data handler, its telemetry and registrations. The session's entry, its
  * watchdog, its logging run and, for Claude Code, its transcript binding (by
  * the saved conversation, from the folder it runs in) follow in pty-manager.ts
@@ -839,7 +840,9 @@ function claudeTakeOver(b: KeptTakeOverBinding, proc: pty.IPty, kept: KeptSessio
  * launch: its hook file written again in its own folder (the release's record)
  * with this run's gateway port and a token minted for the take-over, when the
  * Hooks gateway is on and listening (the forwarder reads the file at every
- * event; mintCodexHooks's rule, the file in place of a new folder); the lease
+ * event; mintCodexHooks's rule, the file in place of a new folder), unless
+ * its launch sent its hook events through its holder (2.1.3-beta.18, the
+ * record's mark: they come through the take-over's attach); the lease
  * of the account it runs on (the tab's launch was prepared on that one); the
  * conversation it is on, for the tab; its pane and colour answers
  * (bindCodexPane: a held run is read from its holder's screen); its data
@@ -853,19 +856,28 @@ function codexTakeOver(b: KeptTakeOverBinding, launch: { lease: AccountLease; se
   const { ptySessions, codexHookFiles, codexHookedLaunches, codexAskSessions, keepCodexConversation, codexRunWriters } = ports()
   const { sessionId, resolvedCwd, win } = b
   const provider = b.launch.provider
-  const hookFile = rewriteKeptCodexHooks(sessionId, kept.hookFolder, provider)
+  // 2.1.3-beta.18 (ADR-030 S12): a launch whose hook events went through its
+  // holder (its record's mark) runs its forwarder from its own environment,
+  // which names the holder and never this file: nothing is written again, and
+  // its events come through the take-over's attach. Without the mark (its
+  // hooks were on the Hooks gateway, or 2.1.3-beta.17 or earlier kept it) the
+  // file is written again with this run's port and a new token, as before.
+  const throughHolder = kept.hooks === 'holder'
+  const hookFile = throughHolder ? null : rewriteKeptCodexHooks(sessionId, kept.hookFolder, provider)
   // B1e: its token is now written over the one it was served with, if any; not written, that one goes.
   settleServedToken(sessionId, hookFile !== null)
   if (hookFile) {
     codexHookFiles.set(sessionId, hookFile)
     codexHookedLaunches.add(sessionId)
   }
+  // Its hook events are its own through its holder: its hook names its transcript as a launch's does.
+  if (throughHolder) codexHookedLaunches.add(sessionId)
   // Not written again: the file names the last run's port and token, so its
   // folder goes now, as a kept session's does once it is no longer kept.
   if (kept.hookFolder && !codexHookFiles.has(sessionId)) {
     try { provider.removeSessionHookFolder?.(kept.hookFolder) } catch { /* best-effort; the sweep remains */ }
   }
-  logInfo(`[pty-manager] Codex hooks for ${sessionId}: ${codexHookedLaunches.has(sessionId) ? 'on, its kept hook file written again' : 'off (its launch had none, the Hooks gateway is off or not listening, or its hook file could not be written again)'}`)
+  logInfo(`[pty-manager] Codex hooks for ${sessionId}: ${throughHolder ? 'on, through its holder (its launch sent them there), so its hook file is not written again' : codexHookedLaunches.has(sessionId) ? 'on, its kept hook file written again' : 'off (its launch had none, the Hooks gateway is off or not listening, or its hook file could not be written again)'}`)
   bindCodexLease(sessionId, launch.lease)
   if (kept.conversation) keepCodexConversation(sessionId, { uuid: kept.conversation, cwd: launchCwd }, launch.lease.accountId, { inferred: false })
   const runScreen = provider.runScreen
@@ -900,6 +912,9 @@ function codexTakeOver(b: KeptTakeOverBinding, launch: { lease: AccountLease; se
  * and listening (its take-over's, and B1d its serving while its tab is not
  * shown). The file, or null when it was not written: then no token is left
  * for it (one minted is dropped). Nothing is recorded of the file here.
+ * 2.1.3-beta.18: asked only for a session whose record has no mark that its
+ * hook events go through its holder (one 2.1.3-beta.17 or earlier kept, or
+ * one whose hooks were on the Hooks gateway).
  */
 function rewriteKeptCodexHooks(sessionId: string, hookFolder: string | null, provider: SessionProvider): CodexHookFile | null {
   const { noteGatewayToken, dropGatewayToken } = ports()
@@ -934,7 +949,8 @@ const unseenServed = new Set<string>()
  * renderer's, resolved as a launch's is) by the way its provider's sessions
  * are started; for a Codex session with a kept hook folder, its hook file
  * written again with a new token (rewriteKeptCodexHooks), so its hook events
- * reach this run. Nothing of the account, the telemetry, the logging run or
+ * reach this run, unless its hook events go through its holder (2.1.3-beta.18,
+ * the record's mark: its keeper takes them). Nothing of the account, the telemetry, the logging run or
  * the conversation, and no hook file or hooked launch is recorded, so no
  * hook claims a transcript before its take-over. The take-over's spawn runs
  * the teardown first (killPty), which clears all of it and the mark (B1e:
@@ -953,7 +969,9 @@ export function serveKeptLaunchUnseen(kept: KeptUnseen, cwd: string | undefined)
     recordHeldToolSession(sessionId, kept.provider)
     unseenServed.add(sessionId)
     if (style === 'direct') {
-      rewriteKeptCodexHooks(sessionId, kept.hookFolder, provider)
+      // 2.1.3-beta.18: one whose hook events go through its holder (its
+      // record's mark) has them taken by its keeper; its file is not written.
+      if (kept.hooks !== 'holder') rewriteKeptCodexHooks(sessionId, kept.hookFolder, provider)
       registerCodexLaunchTools({ sessionId, resolvedCwd, codexCanvas: { designatedWorktree: codexDesignatedWorktree(resolvedCwd, sessionId), guidance: null } })
     } else {
       registerClaudeLaunchTools({ sessionId, claudeCwd: kept.folder ?? resolvedCwd, resolvedCwd, designatedWorktree: isHomeOrAncestor(resolvedCwd) ? null : designatedWorktreeDir(resolvedCwd, sessionId) })

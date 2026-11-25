@@ -15,7 +15,7 @@ import { detectCodexUi } from './ui-detection'
 import { watchAndClaimRollout, removeCodexPickFolder } from './telemetry'
 import { warmCodexResume } from './rollout-lookup'
 import { deployCodexResumePickerScript } from './resume-picker'
-import { deployCodexHookScripts, writeCodexHookFile, removeCodexHookFile, removeKeptCodexHookFolder, prepareCodexHookFolders, preparedCodexHookRoot, codexPlainWrapperDir, codexLocalAppData, codexHookCommand } from './hooks'
+import { deployCodexHookScripts, writeCodexHookFile, removeCodexHookFile, removeKeptCodexHookFolder, prepareCodexHookFolders, preparedCodexHookRoot, codexPlainWrapperDir, codexLocalAppData, codexHookCommand, CODEX_HOOK_EVENTS } from './hooks'
 import type { SecureHookFolders } from './hooks'
 import { rewriteKeptCodexHookFile } from './kept-hooks'
 import { CODEX_PINNED_CLI_VERSION, CODEX_MIN_SUPPORTED_VERSION, CODEX_MAX_TESTED_VERSION } from './cli-contract'
@@ -283,6 +283,12 @@ export class CodexProvider implements SessionProvider {
   heldToolLaunch(sessionId: string, launch: HeldToolLaunch, relay: HeldToolRelay): HeldToolLaunchAnswer {
     return codexHeldToolLaunch(sessionId, launch, relay)
   }
+
+  /** 2.1.3-beta.18 (ADR-030 S12): the six hook events the app gives every
+   *  launch (hooks.ts CODEX_HOOK_EVENTS), declared to a held session's holder:
+   *  its forwarder runs the session helper's hook mode named in its
+   *  environment, and the holder takes these kinds only. */
+  readonly heldHookKinds: readonly string[] = CODEX_HOOK_EVENTS
 
   async deployResumePickerScript(resourcesDir: string): Promise<void> {
     // Two steps, each tried whatever the other did (a failed picker deploy

@@ -5,6 +5,7 @@ import type { SshCapableProvider, SpawnOptions, TelemetrySource, HistorySession,
 import type { LegacyVersion, SshRuntime, StatuslineData } from '../../../shared/types'
 import type { ProviderCapabilities } from '../../../shared/providers'
 import type { ProviderPackage } from '../core'
+import { HELPER_HOOK_KINDS } from '../../session-helper/protocol'
 import { resolveClaudeBinary, buildClaudeLocalSpawn } from './spawn'
 import {
   getRemoteSetupCommand, remoteSessionSettingsPath, remoteSessionMcpConfigPath,
@@ -162,6 +163,12 @@ export class ClaudeProvider implements SshCapableProvider {
   statusPostUrl(sessionId: string, remoteMcpPort: number | undefined, mcpPort: number, includeConductorMcp: boolean): string {
     return statusPostUrl(sessionId, remoteMcpPort, mcpPort, includeConductorMcp)
   }
+  /** 2.1.3-beta.18 (ADR-030 S12): the nine hook events its per-session
+   *  settings file injects (session-helper/protocol.ts HELPER_HOOK_KINDS, the
+   *  same set as session-hooks-writer.ts MVP_EVENTS), which a held session's
+   *  holder takes with no `hookKinds` in its launch; its connections report
+   *  these kinds only. */
+  readonly heldHookKinds: readonly string[] = HELPER_HOOK_KINDS
   remoteSessionCleanupCommand(sessionId: string): string {
     return buildRemoteSessionCleanupCommand(sessionId)
   }
