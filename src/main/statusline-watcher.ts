@@ -110,6 +110,24 @@ export function dispatchSSHStatuslineUpdate(json: string, fromSessionId?: string
 }
 
 /**
+ * 2.1.3-beta.18 (plan section 3.2): the status line of a tab through the
+ * session helper on another machine, as its provider mapped it from the
+ * status its holder passed on (remote-helper/signals.ts). It is the tab's own
+ * (`appPtyId`): the session id is set here, never read from the host. A path
+ * on that host is display text, so no transcript path goes on to the
+ * transcript binder and no usage buckets to the usage sink
+ * (docs/remote/helper-protocol.md, payload allow-lists), whatever the mapping
+ * gave. Then the shape filter every payload passes (sanitiseSentinelPayload)
+ * and the same fan-out.
+ */
+export function dispatchHelperStatus(appPtyId: string, line: Readonly<Record<string, unknown>>): void {
+  if (!sshDispatchWindow) return
+  const { transcriptPath: _path, usageBuckets: _buckets, ...shown } = line
+  const data = sanitiseSentinelPayload({ ...shown, sessionId: appPtyId })
+  if (data) deliverStatus(data, sshDispatchWindow)
+}
+
+/**
  * Length cap for every free string a status payload can carry.
  *
  * Adversarial review (ADR-009): the sanitiser bounded `sessionId` and nothing

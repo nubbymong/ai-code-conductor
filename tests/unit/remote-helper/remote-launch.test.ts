@@ -5,15 +5,18 @@
  * - Characterisation: for a table of saved options, settings, machines and
  *   folders, the launch core builds from the Claude package's remote launch
  *   is the launch d0be048e built in core, byte for byte (argv, folder,
- *   environment and its order). The "before" is d0be048e's own code, copied
- *   below unchanged but for the one host-account line it called.
+ *   environment and its order), but for the two arguments section 3.2 adds
+ *   first: --settings and, while the app serves its tools, --mcp-config, each
+ *   naming the session's own file on the host. The "before" is d0be048e's own
+ *   code, copied below unchanged but for the one host-account line it called.
  * - src/main/remote-helper names no flag or variable of a CLI and no path to
  *   a provider's CLI (red on d0be048e: index.ts's four flags and five
  *   CLAUDE_CODE_ variables, session.ts's fallback path).
  * - Core asks the registry by the tab's provider id, and gives the package
- *   the options, the machine, the helper's commands and no host read; a
- *   provider with no remote launch, or a launch that asks for what this build
- *   does not carry, sends the tab the usual way.
+ *   the options, the machine, the helper's commands and every host read not
+ *   made yet (section 3.2: the driver reads them and asks again); a provider
+ *   with no remote launch, or a launch that names a host read or a session
+ *   file core cannot give to the host, sends the tab the usual way.
  * - The real Claude package carries the group.
  */
 import { describe, it, expect, afterEach } from 'vitest'
@@ -115,19 +118,23 @@ describe('the launch is the same, byte for byte (characterisation against d0be04
   ]
   const PATHS: Array<string | undefined> = [undefined, '~', '~/work', '/srv/app', 'rel/dir']
 
-  it('every row: argv, folder and environment equal, in the same order', () => {
+  it('every row: argv, folder and environment equal, in the same order, but for the session files\' arguments first', () => {
     let rows = 0
     const differ: string[] = []
-    for (const m of MACHINES) for (const remotePath of PATHS) for (const o of OPTIONS) for (const settings of SETTINGS) for (const dark of [true, false]) {
+    const sid = remoteSessionId('tab-1')
+    for (const m of MACHINES) for (const remotePath of PATHS) for (const o of OPTIONS) for (const settings of SETTINGS) for (const dark of [true, false]) for (const tools of [false, true]) {
       const options: RemoteSpawnOptions = o.ssh ? { ...o, ssh: { ...o.ssh, remotePath } } : o
       const systemPrefersDark = () => dark
-      const before = beforeLaunchSpec(m, beforeCliArgs(options), beforeCliEnv(settings, options, systemPrefersDark), options.ssh?.remotePath, 100, 30)
-      const after = remoteLaunchOf(claudeRemoteLaunch, m, options, settings, systemPrefersDark, remoteSessionId('tab-1'), 100, 30)
+      // Section 3.2: the session's own files, in its folder on the host, first on the line.
+      const folder = `${m.home.replace(/\/+$/, '')}/.aicc/${m.did}/sessions/${sid}`
+      const files = ['--settings', `${folder}/settings.json`, ...(tools ? ['--mcp-config', `${folder}/mcp.json`] : [])]
+      const before = beforeLaunchSpec(m, [...files, ...beforeCliArgs(options)], beforeCliEnv(settings, options, systemPrefersDark), options.ssh?.remotePath, 100, 30)
+      const after = remoteLaunchOf(claudeRemoteLaunch, m, options, settings, systemPrefersDark, sid, 100, 30, tools).spec
       rows++
-      if (JSON.stringify(after) !== JSON.stringify(before)) differ.push(`${JSON.stringify({ m: m.claudePath, remotePath, options, settings, dark })}\n  before ${JSON.stringify(before)}\n  after  ${JSON.stringify(after)}`)
+      if (JSON.stringify(after) !== JSON.stringify(before)) differ.push(`${JSON.stringify({ m: m.claudePath, remotePath, options, settings, dark, tools })}\n  before ${JSON.stringify(before)}\n  after  ${JSON.stringify(after)}`)
     }
     expect(differ.slice(0, 3)).toEqual([])
-    expect(rows).toBe(MACHINES.length * PATHS.length * OPTIONS.length * SETTINGS.length * 2)
+    expect(rows).toBe(MACHINES.length * PATHS.length * OPTIONS.length * SETTINGS.length * 2 * 2)
   })
 })
 
@@ -269,10 +276,12 @@ describe('core asks the tab\'s provider, by its id, through the registry', () =>
     expect(pty).not.toBeNull()
     expect(byDefault.calls).toEqual([])
     const sid = remoteSessionId(id)
-    const options: RemoteLaunchOptions = { model: 'm1', effortLevel: 'high', permissionMode: 'plan', extraArgs: '-a b', disableAutoMemory: true, reconnect: true, cwd: '/home/nick/work', settings: { remoteSessionsThroughHelper: true, theme: 'light', classicTerminalCopyPaste: false } }
+    // No app side plugged in here: the app's tools are not served to it.
+    const options: RemoteLaunchOptions = { model: 'm1', effortLevel: 'high', permissionMode: 'plan', extraArgs: '-a b', disableAutoMemory: true, reconnect: true, cwd: '/home/nick/work', settings: { remoteSessionsThroughHelper: true, theme: 'light', classicTerminalCopyPaste: false }, tools: false }
+    const helper = { helperPath: `/home/nick/.aicc/${MACHINE.did}/helper/${MACHINE.helper.folder}/aicc-helper`, store: `/home/nick/.aicc/${MACHINE.did}/store`, sid, folder: `/home/nick/.aicc/${MACHINE.did}/sessions/${sid}` }
     expect(other.calls).toEqual([
       { step: 'hostReads', options, machine: MACHINE },
-      { step: 'launch', options, machine: MACHINE, helper: { helperPath: `/home/nick/.aicc/${MACHINE.did}/helper/${MACHINE.helper.folder}/aicc-helper`, store: `/home/nick/.aicc/${MACHINE.did}/store`, sid }, reads: [] },
+      { step: 'launch', options, machine: MACHINE, helper, reads: [] },
     ])
     await until('the launch', () => holder.launch !== null && holder.attached !== null)
     const launch = holder.launch as { argv: string[]; cwd: string; env: Record<string, string> }
@@ -298,8 +307,11 @@ describe('core asks the tab\'s provider, by its id, through the registry', () =>
 
   const usualCases: Array<[string, () => SessionProvider, string]> = [
     ['a provider with no remote launch', () => provider(DEFAULT), `its provider (Fake ${DEFAULT}) has no launch through the session helper`],
-    ['a launch that asks for a host file read first', () => provider(DEFAULT, { hostReads: () => [{ from: 'home', path: '.cli/settings.json' }], launch: () => { throw new Error('not reached') } }), 'its provider asks for files on the host to be read before the launch, which this build does not do'],
-    ['a launch that gives a file for the session\'s folder', () => provider(DEFAULT, { hostReads: () => [], launch: () => ({ program: '/opt/cli', args: [], env: {}, files: [{ name: 'settings.json', content: '{}' }], statusKeep: [], hookKeep: [] }) }), 'its provider gives files for the session\'s folder on the host, which this build does not write'],
+    // Section 3.2: host reads and session files are carried, each checked before ssh starts.
+    ['a host read out of its folder', () => provider(DEFAULT, { hostReads: () => [{ from: 'home', path: '.cli/../../etc/shadow' }], launch: () => { throw new Error('not reached') } }), 'its provider asks for a host file that cannot be read (its path is not plain names joined by /)'],
+    ['a host read from no folder core knows', () => provider(DEFAULT, { hostReads: () => [{ from: 'root' as 'home', path: 'etc/shadow' }], launch: () => { throw new Error('not reached') } }), 'its provider asks for a host file that cannot be read (its folder is not home, cwd or checkout)'],
+    ['a session file whose name is a path', () => provider(DEFAULT, { hostReads: () => [], launch: () => ({ program: '/opt/cli', args: [], env: {}, files: [{ name: '../settings.json', content: '{}' }], statusKeep: [], hookKeep: [] }) }), 'its provider gives a session file whose name is not a plain one, or is given twice'],
+    ['a session file given twice', () => provider(DEFAULT, { hostReads: () => [], launch: () => ({ program: '/opt/cli', args: [], env: {}, files: [{ name: 'a.json', content: '{}' }, { name: 'a.json', content: '[]' }], statusKeep: [], hookKeep: [] }) }), 'its provider gives a session file whose name is not a plain one, or is given twice'],
     ['a launch that sets a variable core sets', () => provider(DEFAULT, { hostReads: () => [], launch: () => ({ program: '/opt/cli', args: [], env: { Path: '/elsewhere' }, files: [], statusKeep: [], hookKeep: [] }) }), 'the provider\'s launch sets Path, which the session helper\'s launch sets itself'],
     ['a launch that sets the terminal\'s scheme', () => provider(DEFAULT, { hostReads: () => [], launch: () => ({ program: '/opt/cli', args: [], env: { COLORFGBG: '1;2' }, files: [], statusKeep: [], hookKeep: [] }) }), 'the provider\'s launch sets COLORFGBG, which the session helper\'s launch sets itself'],
     ['a launch that throws', () => provider(DEFAULT, { hostReads: () => [], launch: () => { throw new Error('the package could not build it') } }), 'the package could not build it'],
@@ -317,7 +329,7 @@ describe('core asks the tab\'s provider, by its id, through the registry', () =>
 
 describe('the session helper\'s commands and the spec core builds', () => {
   it('name the helper and the store by the layout scripts.ts keeps, under the home the check read', () => {
-    expect(remoteHelperCommands(MACHINE, 'rmabc')).toEqual({ helperPath: `/home/nick/.aicc/${MACHINE.did}/helper/${MACHINE.helper.folder}/aicc-helper`, store: `/home/nick/.aicc/${MACHINE.did}/store`, sid: 'rmabc' })
+    expect(remoteHelperCommands(MACHINE, 'rmabc')).toEqual({ helperPath: `/home/nick/.aicc/${MACHINE.did}/helper/${MACHINE.helper.folder}/aicc-helper`, store: `/home/nick/.aicc/${MACHINE.did}/store`, sid: 'rmabc', folder: `/home/nick/.aicc/${MACHINE.did}/sessions/rmabc` })
     expect(remoteHelperCommands({ ...MACHINE, home: '/home/nick//' }, 'rmabc').store).toBe(`/home/nick/.aicc/${MACHINE.did}/store`)
   })
 
@@ -336,8 +348,19 @@ describe('the real Claude package carries the group', () => {
     expect(pkg.session.remoteLaunch).toBe(claudeRemoteLaunch)
     registerProvider(pkg.session)
     expect(tryGetProvider(pkg.id)?.remoteLaunch).toBe(claudeRemoteLaunch)
-    expect(claudeRemoteLaunch.hostReads({ reconnect: false, cwd: '/home/nick', settings: null }, MACHINE)).toEqual([])
-    const l = claudeRemoteLaunch.launch({ reconnect: false, cwd: '/home/nick', settings: null }, MACHINE, remoteHelperCommands(MACHINE, 'rmx'), [])
-    expect({ files: l.files, statusKeep: l.statusKeep, hookKeep: l.hookKeep }).toEqual({ files: [], statusKeep: [], hookKeep: [] })
+    // Section 3.2: the settings files whose hooks the session keeps, its own files, and its keep-lists.
+    const o: RemoteLaunchOptions = { reconnect: false, cwd: '/home/nick', settings: null, tools: true }
+    expect(claudeRemoteLaunch.hostReads(o, MACHINE)).toEqual([
+      { from: 'home', path: '.claude/settings.json' },
+      { from: 'cwd', path: '.claude/settings.json' },
+      { from: 'cwd', path: '.claude/settings.local.json' },
+      { from: 'checkout', path: '.claude/settings.local.json' },
+    ])
+    const l = claudeRemoteLaunch.launch(o, MACHINE, remoteHelperCommands(MACHINE, 'rmx0123456789'), [])
+    expect(l.files.map((f) => f.name)).toEqual(['settings.json', 'mcp.json'])
+    expect(claudeRemoteLaunch.launch({ ...o, tools: false }, MACHINE, remoteHelperCommands(MACHINE, 'rmx0123456789'), []).files.map((f) => f.name)).toEqual(['settings.json'])
+    expect(l.statusKeep.length).toBeGreaterThan(0)
+    expect(l.hookKeep).toContain('hook_event_name')
+    expect(typeof claudeRemoteLaunch.statusLine).toBe('function')
   })
 })

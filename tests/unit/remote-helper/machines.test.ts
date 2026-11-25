@@ -45,6 +45,7 @@ function linuxHost(over: Partial<Record<ExecCall['script'], (c: ExecCall) => Fak
         case 'version': return { stdout: `AICC-HASH ${n} ok ${SHA}\naicc-helper 0.1.0\n` }
         case 'selftest': return { stdout: `AICC-HASH ${n} ok ${SHA}\nAICC-RESULT ${n} {"ok":true,"helper":"0.1.0","checks":[{"name":"frames","ok":true}]}\n` }
         case 'list': return { stdout: `AICC-HASH ${n} ok ${SHA}\n{"v":1,"sessions":[],"removed":0,"skipped":0}\n` }
+        case 'sweep': return { stdout: `AICC-HASH ${n} ok ${SHA}\n${result(n, { swept: '0' })}` }
         default: return { code: 1 }
       }
     },
@@ -355,7 +356,35 @@ describe('remote machines: Check', () => {
     ssh.calls.length = 0
     const r = await m.check(m.list()[0].did)
     expect(r.ok).toBe(true)
-    expect(ssh.scripts()).toEqual(['probe', 'version', 'selftest'])
+    // 2.1.3-beta.18 (plan section 3.2): last, the session folders whose holder is gone.
+    expect(ssh.scripts()).toEqual(['probe', 'version', 'selftest', 'sweep'])
+    expect(ssh.calls[3].values.slice(1)).toEqual([m.list()[0].did, m.installId(), HELPER.folder, SHA])
+  })
+
+  it('removes the session folders whose holder is gone (one log line with how many); a sweep that fails, or a count that does not read, changes nothing of its answer', async () => {
+    const ssh = new FakeSsh(linuxHost())
+    const m = machines(ssh)
+    const q = await m.prepare(CONFIGS, 'cfg-key')
+    if (!q.ok) throw new Error(q.message)
+    await m.add(q.token)
+    // Add sweeps nothing: a machine just added has no session.
+    expect(ssh.scripts()).not.toContain('sweep')
+    const did = m.list()[0].did
+    const swept = (count: string) => (c: ExecCall): FakeAnswer => ({ stdout: `AICC-HASH ${c.values[0]} ok ${SHA}\n${result(c.values[0], { swept: count })}` })
+    const cases: Array<[(c: ExecCall) => FakeAnswer, string[]]> = [
+      [swept('2'), ['[remote-helper] rocky.lan: removed 2 session folder(s) whose holder is gone']],
+      [swept('0'), []],
+      [swept('2;x'), []],
+      [(c) => ({ stdout: result(c.values[0], {}, 'refused sessions-folder-not-private') }), ['[remote-helper] rocky.lan: its session folders were not checked (the sessions folder there is not a private folder of yours)']],
+      [() => ({ code: 255, stderr: 'Connection reset' }), ['[remote-helper] rocky.lan: its session folders were not checked (ssh could not connect to it)']],
+      [() => ({ code: 0, stdout: 'nothing marked' }), ['[remote-helper] rocky.lan: its session folders were not checked (no answer)']],
+    ]
+    for (const [sweep, said] of cases) {
+      ssh.host = linuxHost({ sweep })
+      logs = []
+      expect((await m.check(did)).ok).toBe(true)
+      expect(logs.filter((l) => l.includes('session folder'))).toEqual(said)
+    }
   })
 
   it('a machine holding another helper than this build\'s (after an update) reads not checked on its card, with the line that Check updates it', async () => {
@@ -391,9 +420,11 @@ describe('remote machines: Check', () => {
     })
     const r = await m.check(m.list()[0].did)
     expect(r.ok).toBe(true)
-    expect(ssh.scripts()).toEqual(['probe', 'install', 'commit', 'version', 'selftest'])
+    // Then the sweep (2.1.3-beta.18 section 3.2), through the helper just put in place.
+    expect(ssh.scripts()).toEqual(['probe', 'install', 'commit', 'version', 'selftest', 'sweep'])
     expect(ssh.calls[2].values.slice(3)).toEqual([NEW.folder, ssh.calls[1].values[0]])
     expect(ssh.calls[3].values.slice(3)).toEqual([NEW.folder, NEW_SHA])
+    expect(ssh.calls[5].values.slice(3)).toEqual([NEW.folder, NEW_SHA])
     expect(m.list()[0].helper).toEqual({ version: '0.2.0', sha256: NEW_SHA, folder: NEW.folder })
     expect(m.views(NEW_SHA)[0]).toMatchObject({ checked: true, helperVersion: '0.2.0' })
   })

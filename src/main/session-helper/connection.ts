@@ -20,7 +20,11 @@
  * section B1, aicc_planning#384) only when it is given the `title` option.
  * The manager gives both to a held agent session's connections when its
  * provider's composer rule reads the holder's screen (deps.screens;
- * 2.1.3-beta.14, plan section B2, aicc_planning#388).
+ * 2.1.3-beta.14, plan section B2, aicc_planning#388). A connection asks for
+ * `status` (the session's status line, 2.1.3-beta.18) only when it is given
+ * the `status` option, which a tab through the session helper on another
+ * machine is (remote-helper/session.ts); it then reports each `status` the
+ * holder sends.
  *
  * On a connection that acked `mcp`, the app sends a tool stream's messages
  * (sendMcp) only when the holder would read them, and ends its side of a
@@ -50,6 +54,7 @@ import {
   MCP_CAP,
   PROTO_VERSION,
   SCREEN_CAP,
+  STATUS_CAP,
   TERMINAL_CHANNEL,
   TITLE_CAP,
   chooseProto,
@@ -65,12 +70,14 @@ import {
   readMcpClose,
   readMcpOpen,
   readScreenRows,
+  readStatusFrame,
   type Hello,
   type HookEventFrame,
   type McpMessage,
   type HelperOs,
   type HolderRecord,
   type ScreenRows,
+  type StatusFrame,
 } from './protocol'
 
 /** A refusal or failure, with the protocol's code when the holder named one. */
@@ -114,6 +121,10 @@ export interface ConnectionOptions {
    *  beside `screen` for a held agent session's of a provider in its
    *  deps.screens (2.1.3-beta.14 B2). */
   title?: boolean
+  /** This connection takes the session's status line: `status` is acked when
+   *  the holder offers it (2.1.3-beta.18; a tab through the session helper on
+   *  another machine). */
+  status?: boolean
   helloTimeoutMs?: number
   replyTimeoutMs?: number
   pingEveryMs?: number
@@ -298,6 +309,8 @@ export type HolderConnectionEvents = {
   notice: [code: string, text: string]
   /** A hook event the holder passed on; only on a connection that acked `hooks`. */
   event: [e: HookEventFrame]
+  /** The newest status line the holder passed on; only on a connection that acked `status`. */
+  status: [s: StatusFrame]
   /** A relay opened a tool stream (the holder's number for it); only on a
    *  connection that acked `mcp`, as are the next two. */
   mcpOpen: [stream: number]
@@ -325,6 +338,9 @@ export class HolderConnection extends EventEmitter<HolderConnectionEvents> {
    *  offered both and the connection asked for both. Only then does
    *  readScreen's answer carry the title. */
   readonly title: boolean
+  /** True when this connection acked `status`: the holder offered it and the
+   *  connection asked for it. Only then are status lines reported. */
+  readonly status: boolean
   private readonly stream: Duplex
   private readonly reader = new FrameReader('helper_to_app')
   private nextId = 2
@@ -365,12 +381,13 @@ export class HolderConnection extends EventEmitter<HolderConnectionEvents> {
     this.mcp = opts.mcp === true && hello.caps.includes(MCP_CAP)
     this.screen = opts.screen === true && hello.caps.includes(SCREEN_CAP)
     this.title = this.screen && opts.title === true && hello.caps.includes(TITLE_CAP)
+    this.status = opts.status === true && hello.caps.includes(STATUS_CAP)
     this.replyTimeoutMs = opts.replyTimeoutMs ?? REPLY_TIMEOUT_MS
     stream.on('data', (chunk: Buffer) => this.onBytes(chunk))
     stream.on('close', () => this.shut())
     stream.on('end', () => this.shut())
     stream.on('error', () => this.shut())
-    stream.write(encodeJsonFrame(helloAck(this.hooks, this.mcp, this.screen, this.title)))
+    stream.write(encodeJsonFrame(helloAck(this.hooks, this.mcp, this.screen, this.title, this.status)))
     if (rest.length > 0) this.onBytes(rest)
     stream.resume()
     const every = opts.pingEveryMs ?? PING_EVERY_MS
@@ -735,6 +752,14 @@ export class HolderConnection extends EventEmitter<HolderConnectionEvents> {
         // hooks. One that does not read is dropped (a holder sends none).
         const e = this.hooks ? readEventFrame(m, f.size, this.hookKinds) : null
         if (e) this.emit('event', e)
+        continue
+      }
+      if (m.t === 'status') {
+        // The newest status line, read the same way: before any reply lookup
+        // (a `status` that carries a `re` is refused by its exact fields),
+        // strictly, and reported only on a connection that acked `status`.
+        const s = this.status ? readStatusFrame(m, f.size) : null
+        if (s) this.emit('status', s)
         continue
       }
       if (m.t === 'mcp.open' || m.t === 'mcp' || m.t === 'mcp.close') {

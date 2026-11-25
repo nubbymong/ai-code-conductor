@@ -240,8 +240,10 @@ export async function runScript(
   target: SshTarget,
   script: ScriptName,
   values: readonly string[],
-  opts: { firstConnection?: boolean; stdin?: Buffer; timeoutMs?: number } = {},
+  opts: { firstConnection?: boolean; stdin?: Buffer; timeoutMs?: number; stdoutMax?: number } = {},
 ): Promise<ExecResult> {
+  // A host read's exec prints its files as hex (2.1.3-beta.18 section 3.2), so it may keep more.
+  const stdoutMax = opts.stdoutMax ?? EXEC_STDOUT_MAX
   const command = scriptCommand(script, values)
   const args = execArgv(target, { version: await runner.version(), firstConnection: opts.firstConnection }, command)
   return new Promise<ExecResult>((resolve) => {
@@ -261,7 +263,7 @@ export async function runScript(
     timer.unref?.()
     child.stdout?.on('data', (c: Buffer) => {
       outBytes += c.length
-      if (outBytes > EXEC_STDOUT_MAX) { try { child.kill() } catch { /* gone */ } return }
+      if (outBytes > stdoutMax) { try { child.kill() } catch { /* gone */ } return }
       out.push(c)
     })
     child.stderr?.on('data', (c: Buffer) => { if (err.length < STDERR_MAX) err += c.toString('utf8').slice(0, STDERR_MAX - err.length) })

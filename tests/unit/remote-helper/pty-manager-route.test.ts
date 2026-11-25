@@ -47,9 +47,10 @@ import type { SessionProvider } from '../../../src/main/providers/types'
 import { spawnPty, killPty, writePty, getSshFlow } from '../../../src/main/pty-manager'
 import { submitPrompt } from '../../../src/main/session-input'
 import { registerProvider } from '../../../src/main/providers'
-import { setRemoteHelperDeps, isRemoteHelperTab, holdBackRemoteImage, forgetRemoteHelperTab, remoteTabsOn, remoteTerminalEnv } from '../../../src/main/remote-helper'
+import { setRemoteHelperDeps, isRemoteHelperTab, forgetRemoteHelperTab, remoteTabsOn, remoteTerminalEnv, type RemoteSignalDeps } from '../../../src/main/remote-helper'
 import { claudeRemoteLaunch } from '../../../src/main/providers/claude/remote-launch'
-import { remoteSessionId, IMAGE_HELD_BACK_NOTE } from '../../../src/main/remote-helper/session'
+import { remoteHelperCommands, remoteSessionId } from '../../../src/main/remote-helper/session'
+import { result } from './fake-ssh'
 import { SSH_THROUGH_HELPER } from '../../../src/shared/remote-machines'
 import { FakeHolder } from '../main/session-helper-fake-holder'
 import { ROUTE_WHY } from '../../../src/main/remote-helper/route'
@@ -82,6 +83,16 @@ const SSH_TAB: SSHOptions = { host: 'rocky.lan', port: 22, username: 'nick', rem
 
 let logs: string[] = []
 let ssh: FakeSsh
+/** Each call the app's side of a helper tab got (2.1.3-beta.18 section 3.2):
+ *  none on the usual path, whatever the tab. */
+let signalCalls: string[] = []
+const recordingSignals: RemoteSignalDeps = {
+  toolsServed: () => { signalCalls.push('toolsServed'); return true },
+  status: (id) => { signalCalls.push(`status ${id}`) },
+  event: (id) => { signalCalls.push(`event ${id}`) },
+  serve: (id) => { signalCalls.push(`serve ${id}`); return false },
+  ended: (id) => { signalCalls.push(`ended ${id}`) },
+}
 /** What a test hands in place of the usual deps. */
 interface DepsOver {
   settings?: () => Record<string, unknown> | null
@@ -103,6 +114,7 @@ function plugIn(switchOn: boolean, machine: RemoteMachineRecord | null = MACHINE
     systemPrefersDark: over.systemPrefersDark ?? (() => true),
     onOutput: over.onOutput ?? (() => {}),
     log: (m) => logs.push(m),
+    signals: recordingSignals,
   })
 }
 
@@ -119,6 +131,7 @@ function spawnSsh(id: string, ssh: SSHOptions, extra: Record<string, unknown> = 
 
 beforeEach(() => {
   logs = []
+  signalCalls = []
   registerProvider(fakeProvider)
 })
 
@@ -132,6 +145,11 @@ async function until(ok: () => boolean, ms = 4000): Promise<void> {
 afterEach(() => setRemoteHelperDeps(null))
 
 describe('pty-manager SSH branch: the usual path is unchanged for every tab that does not go through the session helper', () => {
+  // The app's side of a helper tab is plugged in for every case (2.1.3-beta.18
+  // section 3.2) and nothing of it is asked: no status line, hook event, tool
+  // stream, tools question or end of its hook state for a tab on the usual path.
+  afterEach(() => { expect(signalCalls).toEqual([]) })
+
   const cases: Array<[string, SSHOptions, boolean, RemoteMachineRecord | null, string]> = [
     ['the switch off', SSH_TAB, false, MACHINE, ROUTE_WHY.off],
     ['SSH Persistent (no detachable value)', { ...SSH_TAB, detachable: undefined }, true, MACHINE, ROUTE_WHY.persistent],
@@ -241,14 +259,15 @@ describe('the launch carries the app\'s light or dark scheme, as the usual SSH l
 })
 
 describe('pty-manager SSH branch: a tab that goes through the session helper', () => {
-  it('starts no node-pty, asks its machine for a holder by one exec, and ends with its tab', async () => {
+  it('starts no node-pty, asks its machine first for the settings files its session keeps (2.1.3-beta.18 section 3.2), and ends with its tab', async () => {
     plugIn(true)
     const got = spawnSsh('route-helper', SSH_TAB)
     expect(got).toBeNull()
     expect(isRemoteHelperTab('route-helper')).toBe(true)
     expect(logs.some((l) => l.startsWith('[remote-helper] route-helper: through the session helper on nick@rocky.lan:22'))).toBe(true)
     await until(() => ssh.calls.length > 0)
-    expect(ssh.scripts()).toEqual(['hold'])
+    // The fake host refuses every connection: the start stops at its first exec.
+    expect(ssh.scripts()).toEqual(['reads'])
     // Started again and closed while it starts: killPty reaches it, and it is forgotten.
     expect(spawnSsh('route-helper', SSH_TAB)).toBeNull()
     expect(isRemoteHelperTab('route-helper')).toBe(true)
@@ -297,17 +316,21 @@ describe('pty-manager SSH branch: a tab that goes through the session helper', (
   })
 })
 
-describe('a tab through the session helper: what it has and does not have in this preview (plan finding 6)', () => {
+describe('a tab through the session helper: what goes to its host, and what it types (plan finding 6; 2.1.3-beta.18 section 3.2)', () => {
   let store = ''
   afterEach(() => { if (store) rmSync(store, { recursive: true, force: true }); store = '' })
 
-  it('nothing of the app goes to the host; a prompt button and a typed line reach the CLI; an image request of any length types nothing and the tab says so; no SSH flow', async () => {
+  it('only its own files go to the host, named on its launch, with no secret; a prompt button, a typed line and an image request of any length reach the CLI whole; no SSH flow', async () => {
     store = mkdtempSync(join(tmpdir(), 'rh-route-'))
     const id = 'route-what'
     const holder = new FakeHolder(remoteSessionId(id), id, store)
     plugIn(true, MACHINE, { settings: () => ({ remoteSessionsThroughHelper: true, theme: 'light' }) })
     ssh.host = {
-      answer: (c) => (c.script === 'hold' ? { stdout: `AICC-HASH ${c.values[0]} ok ${SHA}\n${JSON.stringify({ ...holder.record(), endpoint: `/tmp/aicc-1000/${holder.sid}-0123456789abcdef.sock` })}\n` } : { code: 1 }),
+      answer: (c) => {
+        if (c.script === 'hold') return { stdout: `AICC-HASH ${c.values[0]} ok ${SHA}\n${JSON.stringify({ ...holder.record(), endpoint: `/tmp/aicc-1000/${holder.sid}-0123456789abcdef.sock` })}\n` }
+        if (c.script === 'reads' || c.script === 'files') return { stdout: result(c.values[0], {}) }
+        return { code: 1 }
+      },
       bridge: () => holder.connect(),
     }
     const shown: string[] = []
@@ -316,10 +339,13 @@ describe('a tab through the session helper: what it has and does not have in thi
     spawnPty(tabWin, id, { ssh: SSH_TAB, cols: 100, rows: 30, model: 'opus' })
     expect(captured).toBeNull()
     await until(() => holder.attached !== null && holder.launch !== null)
-    // No status shim, MCP config, settings or hook file, and no secret, go with the launch.
+    // Its own files, in its own folder on the host, and nothing else of the app: no secret goes with the launch.
     const launch = holder.launch as { argv?: string[]; env?: Record<string, string> }
-    expect((launch.argv ?? []).join(' ')).not.toMatch(/--mcp-config|--settings|--append-system-prompt|statusline/i)
+    const folder = remoteHelperCommands(MACHINE, remoteSessionId(id)).folder
+    expect(launch.argv?.slice(4, 9)).toEqual([MACHINE.claudePath, '--settings', `${folder}/settings.json`, '--mcp-config', `${folder}/mcp.json`])
+    expect((launch.argv ?? []).join(' ')).not.toMatch(/--append-system-prompt|statusline|localhost|127\.0\.0\.1|token/i)
     expect(Object.keys(launch.env ?? {}).filter((k) => /TOKEN|SECRET|KEY|^CCC_|^ANTHROPIC/i.test(k))).toEqual([])
+    expect(ssh.scripts()).toEqual(['reads', 'hold', 'files', 'bridge'])
     // The app's light theme reaches the CLI, as on the usual SSH launch line.
     expect(launch.env?.COLORFGBG).toBe('0;15')
     // A prompt button (Send) types by the usual rule for a Claude Code tab: its text, then Enter.
@@ -329,19 +355,15 @@ describe('a tab through the session helper: what it has and does not have in thi
     // A typed line goes as it is.
     writePty(id, 'ls\r')
     await until(() => Buffer.concat(holder.input).toString() === 'run the tests\rls\r')
-    // The app's own image request, longer than one 256-byte slice: held back whole at the write door.
+    // The app's own image request, longer than one 256-byte slice: the tab has
+    // the image fetch tool, so the request reaches the CLI whole, in order.
     const image = `${'I just pasted an image and I would like you to look at it carefully, '.repeat(3)}(use mcp__conductor__fetch_host_screenshot with filename="screenshot-2026-11-24T05-55-12-123Z.png" to load the image from the Conductor host)\r`
     expect(image.length).toBeGreaterThan(256)
-    expect(holdBackRemoteImage(id, image)).toBe(true)
-    await new Promise((res) => setTimeout(res, 50))
-    expect(shown.join('')).toContain(IMAGE_HELD_BACK_NOTE)
-    expect(Buffer.concat(holder.input).toString()).toBe('run the tests\rls\r')
-    // Any other tab's write, and any other write here, is not held back.
-    expect(holdBackRemoteImage(id, 'hello\r')).toBe(false)
-    expect(holdBackRemoteImage('route-not-remote', image)).toBe(false)
+    writePty(id, image)
+    await until(() => Buffer.concat(holder.input).toString() === `run the tests\rls\r${image}`)
+    expect(shown.join('')).not.toMatch(/nothing was typed/)
     // No SSH flow: the overlay reads none for this tab (pty-handlers answers 'through-helper').
     expect(getSshFlow(id)).toBeUndefined()
-    expect(ssh.scripts()).toEqual(['hold', 'bridge'])
     killPty(id)
     await until(() => holder.ended)
   })

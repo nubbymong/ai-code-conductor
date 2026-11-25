@@ -2,7 +2,7 @@ import { ipcMain, BrowserWindow, app } from 'electron'
 import { z } from 'zod'
 import { spawnPty, writePty, resizePty, killPty, getSshFlow, endSshRemoteDetailed, probeTmuxLive, holdsCodexLaunchLease, codexLaunchLeaseTaken, beginSpawnPreparation, isSessionWritable, isSessionLiveOrStarting, SSHOptions, SshEndTarget, getKeptCodexConversation, getKeptCodexConversationSource, codexRunEnded, codexConversationHeldElsewhere, endAgentRunsInFolder } from '../pty-manager'
 import type { CodexLaunch } from '../pty-manager'
-import { forgetRemoteHelperTab, holdBackRemoteImage, isRemoteHelperTab } from '../remote-helper'
+import { forgetRemoteHelperTab, isRemoteHelperTab } from '../remote-helper'
 import { SSH_THROUGH_HELPER } from '../../shared/remote-machines'
 import { handOffAskQuestion, submitPrompt, submitImage, type PromptButtonMode, type ImageSubmitResult } from '../session-input'
 import { ensureHelpWorkspace, helpWorkspaceDir } from '../help-workspace'
@@ -1402,8 +1402,6 @@ export function registerPtyHandlers(getWindow: () => BrowserWindow | null): void
     if (isDebugModeEnabled()) {
       logUserInput(sessionId, data, 'inputBar')
     }
-    // 2.1.3-beta.17 A2: an image request for a tab through the session helper is held back whole, before writePty slices it.
-    if (holdBackRemoteImage(sessionId, data)) return
     writePty(sessionId, data)
   })
 
