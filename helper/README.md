@@ -60,7 +60,8 @@ aicc-helper hello --nonce <32 hex> --session <sid> [--state new] [--sha256 <64 h
 aicc-helper selftest [--nonce <32 hex>]
 aicc-helper hold --store <folder> --session <sid> [--label <text>] [--away <seconds>] [--ring-bytes <n>] [--detach]
 aicc-helper list --store <folder>
-aicc-helper hook --store <folder> --session <sid>
+aicc-helper hook [--store <folder>] [--session <sid>]               (each left out: AICC_HELPER_STORE, AICC_HELPER_SESSION)
+aicc-helper status [--store <folder>] [--session <sid>]             (the same)
 aicc-helper mcp --store <folder> --session <sid>
 aicc-helper bridge --store <folder> --session <sid>                (macOS and Linux only)
 aicc-helper start [--hide] --cwd <folder> -- <program> [args...]   (Windows only)
@@ -73,10 +74,20 @@ aicc-helper capture --out <folder>                                 (Windows only
 `hold --detach` prints the holder's record as one JSON line once the holder
 listens; the app then connects to the record's endpoint, launches the program
 with `term.launch` and attaches with `term.attach`. `list` prints every session
-in the store, as protocol section 15 describes. `hook` is a Claude Code command
+in the store, as protocol section 15 describes. `hook` is a CLI's command
 hook: it passes the event on its standard input to the session's holder,
 always exits 0 and prints nothing (from 2.1.3-beta.8 a held Claude Code session
-runs it, behind the agent sessions' switch with the HTTP Hooks Gateway on). `mcp`
+runs it, behind the agent sessions' switch with the HTTP Hooks Gateway on). Its
+own check of the event's kind is the kind's shape (one plain word of at most 64
+ASCII letters or digits); which kinds a session takes is its holder's, from the
+`hookKinds` its launch declared, or the nine the app injects into a Claude Code
+session when it declared none (from 2.1.3-beta.18). `status` is a CLI's status
+line command, the same way (from 2.1.3-beta.18): it passes the status on its
+standard input, one JSON object of at most 65,280 bytes, to the session's
+holder as `status.set`, always exits 0 within 2 s and prints nothing; the
+holder keeps the newest and sends it to each connection that acked `status`
+beside `local` (the app's), at most 10 a second. `hook` and `status` take the store and the session from
+`AICC_HELPER_STORE` and `AICC_HELPER_SESSION` when the options leave them out. `mcp`
 is a tool server a CLI starts: standard output carries only the messages its
 stream brings and the answers it gives in the app's place while the app is away,
 and it exits 0 only when its standard input ends (from 2.1.3-beta.11 a held

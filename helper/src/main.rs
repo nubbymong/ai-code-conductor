@@ -1,8 +1,8 @@
 //! `aicc-helper`: the session helper's command line. The app runs it
 //! (`src/main/session-helper/`, and on Windows its `start`, `end`,
 //! `console-hosts` and `end-console-host` modes), a held session's CLI runs
-//! `hook` and `mcp`, and the tests run every command. On Windows the app
-//! also runs `capture` for Snap (`src/main/snap/`).
+//! `hook`, `status` and `mcp`, and the tests run every command. On Windows
+//! the app also runs `capture` for Snap (`src/main/snap/`).
 //!
 //! ```text
 //! aicc-helper version
@@ -10,7 +10,8 @@
 //! aicc-helper selftest [--nonce <32 hex>]
 //! aicc-helper hold --store <folder> --session <sid> [--label <text>] [--away <seconds>] [--ring-bytes N] [--detach]
 //! aicc-helper list --store <folder>
-//! aicc-helper hook --store <folder> --session <sid>
+//! aicc-helper hook [--store <folder>] [--session <sid>]      (each left out: AICC_HELPER_STORE, AICC_HELPER_SESSION)
+//! aicc-helper status [--store <folder>] [--session <sid>]    (the same)
 //! aicc-helper mcp --store <folder> --session <sid>
 //! aicc-helper bridge --store <folder> --session <sid>                (macOS and Linux only)
 //! aicc-helper start [--hide] --cwd <folder> -- <program> [args...]   (Windows only)
@@ -27,7 +28,11 @@
 //! `--detach`. `list` prints every session in the store as one JSON line,
 //! removing the records of holders that are gone. `hook` passes one hook
 //! event, read from standard input, to the session's holder; it always exits
-//! 0 and prints nothing (`hook.rs`). `mcp` relays a session's tool server
+//! 0 and prints nothing (`hook.rs`). `status` passes one status line update,
+//! read from standard input, to the session's holder, the same way: it
+//! always exits 0, within 2 s, and prints nothing (`status.rs`). Either
+//! takes the store and the session from `AICC_HELPER_STORE` and
+//! `AICC_HELPER_SESSION` when its options leave them out. `mcp` relays a session's tool server
 //! through its holder: standard output carries only the messages, and it
 //! exits 0 only when its standard input ended (`relay.rs`). `bridge` carries
 //! one connection to a session's holder over its standard input and output,
@@ -41,7 +46,7 @@ use aicc_helper::hello::{self, Hello, CAPS};
 use aicc_helper::ring::DEFAULT_RING_BYTES;
 use aicc_helper::serve::{self, Options};
 use aicc_helper::store::{self, DEFAULT_AWAY_SECS, MAX_AWAY_SECS};
-use aicc_helper::{client, detach, hook, relay, selftest, VERSION};
+use aicc_helper::{client, detach, hook, relay, selftest, status, VERSION};
 use std::ffi::OsString;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -49,7 +54,7 @@ use std::process::ExitCode;
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
-const USAGE: &str = "usage: aicc-helper <version | hello | selftest | hold | list | hook | mcp | bridge | start | end | console-hosts | end-console-host | capture> [options]";
+const USAGE: &str = "usage: aicc-helper <version | hello | selftest | hold | list | hook | status | mcp | bridge | start | end | console-hosts | end-console-host | capture> [options]";
 /// The ring is 1 KiB to 64 MiB; the protocol's default is 2 MiB.
 const MIN_RING_BYTES: usize = 1024;
 const MAX_RING_BYTES: usize = 64 * 1024 * 1024;
@@ -130,6 +135,10 @@ fn main() -> ExitCode {
     let raw: Vec<OsString> = std::env::args_os().skip(1).collect();
     if raw.first().map_or(false, |c| c.as_os_str() == "hook") {
         return cmd_hook(&raw[1..]);
+    }
+    // The status mode the same way: it never prints or fails either.
+    if raw.first().map_or(false, |c| c.as_os_str() == "status") {
+        return cmd_status(&raw[1..]);
     }
     // The relay too: its standard output is the CLI's, for messages only.
     if raw.first().map_or(false, |c| c.as_os_str() == "mcp") {
@@ -415,6 +424,18 @@ fn cmd_hook(raw: &[OsString]) -> ExitCode {
     let args: Option<Vec<String>> = raw.iter().map(|a| a.to_str().map(str::to_string)).collect();
     if let Some(args) = args {
         let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| hook::run(&args)));
+    }
+    ExitCode::SUCCESS
+}
+
+/// A CLI's status line command: whatever happens, exit 0 and print nothing,
+/// a panic included (what a status line command prints is the CLI's status
+/// line). An argument that is not Unicode loses the update.
+fn cmd_status(raw: &[OsString]) -> ExitCode {
+    std::panic::set_hook(Box::new(|_| {}));
+    let args: Option<Vec<String>> = raw.iter().map(|a| a.to_str().map(str::to_string)).collect();
+    if let Some(args) = args {
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| status::run(&args)));
     }
     ExitCode::SUCCESS
 }

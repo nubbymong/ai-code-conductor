@@ -72,18 +72,41 @@
 //! connection that acked `title` beside `screen` (from 2.1.3-beta.14) gets the
 //! screen's title in `screen.rows` too; any other gets `screen.rows` as before.
 //!
+//! Hook kinds (from 2.1.3-beta.18): a `term.launch` may declare the hook kinds
+//! its session takes (`hookKinds`); a `hook.event` of any other kind is then
+//! `bad-field`. A launch that declares none, and a holder not yet launched,
+//! take the nine the app injects into a Claude Code session, as before.
+//!
+//! The status line (capability `status`, from 2.1.3-beta.18): any connection
+//! that acked `status` may post the session's status (`status.set`, answered
+//! `status.taken`). The holder keeps the newest only, in one slot, numbered
+//! with the session's next status `seq` (from 1, apart from the hook events'
+//! own), and sends it as `status` to each connection that acked `status`
+//! beside `local` (an app's connection): the newest it holds once, right
+//! after that connection's ack, then each newer one, in rounds at most
+//! `STATUS_EVERY` apart (10 a second for the session), the newest winning
+//! over any posted between two rounds. A connection that acked `status`
+//! without `local` (the status mode's) may post and is sent none. A
+//! connection is sent a `seq` once, and never an older one after a newer.
+//! A status is only numbered and passed on: nothing is run, opened or
+//! written for it. No status follows a connection's last word, as no hook
+//! event does.
+//!
 //! Locks: a connection's stream gate (`Conn::live`) first (the attached
 //! connection's before a relay's, which guards that relay's tool messages),
 //! then the hook events (`Serve::hooks`), then the tool streams
-//! (`Serve::tools`), then the record, then the serve state, then the holder's
-//! own, its screen's last (never the other way), and nothing is written to a
-//! connection while the record, the serve state or the screen is held. Hook events are written to a
+//! (`Serve::tools`), then the status slot (`Serve::status`), then the record,
+//! then the serve state, then the holder's own, its screen's last (never the
+//! other way), and nothing is written to a connection while the status slot,
+//! the record, the serve state or the screen is held. Hook events are written to a
 //! connection under its gate and the hook lock, so they go out in `seq` order
 //! and never inside an attach's reply and replay or after its last word; the
 //! hook lock is held for at most `WRITE_TIMEOUT` of writing at a time. A tool
 //! message is written under the gate of the connection it goes to, and only
 //! while its stream is with that connection, which a stream joins and leaves
-//! under; so no tool message follows the last word either.
+//! under; so no tool message follows the last word either. A status is
+//! written under the gate of the connection it goes to, after the slot has
+//! marked it sent to that connection and been let go.
 
 use crate::frame::{self, Body, Direction, Frame, FrameError};
 use crate::hello::{self, Hello, PROTO_VERSIONS};
@@ -99,7 +122,7 @@ use std::collections::VecDeque;
 use std::io::{self, Read};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -115,18 +138,27 @@ pub const SCREEN_CAP: &str = "screen";
 /// The capability that adds the screen's title to `screen.rows` (from
 /// 2.1.3-beta.14). It counts only beside `screen`.
 pub const TITLE_CAP: &str = "title";
+/// The capability that allows the status line (from 2.1.3-beta.18):
+/// `status.set` from the connection, and `status` to it when it acked
+/// `local` too. A holder that offers it also takes `hookKinds` in a launch.
+pub const STATUS_CAP: &str = "status";
 /// What a holder offers in its hello: the frozen core, `local` for the
 /// terminal messages, `hooks` for hook events (from 2.1.3-beta.8), `mcp` for
 /// tool streams (from 2.1.3-beta.10), `away` for kept tool streams and
-/// `screen` for screen reads (both from 2.1.3-beta.12), and `title` for the
-/// title in a screen read (from 2.1.3-beta.14). The app acks `core` and
+/// `screen` for screen reads (both from 2.1.3-beta.12), `title` for the
+/// title in a screen read (from 2.1.3-beta.14), and `status` for the status
+/// line (from 2.1.3-beta.18). The app acks `core` and
 /// `local` (`hello::LOCAL_CAPS`), `hooks` on a connection that takes hook
 /// events, `mcp` on one that carries tool streams and `screen` on one that
 /// reads the screen (a plain terminal's, from 2.1.3-beta.13; a held Codex
 /// session's, from 2.1.3-beta.14), and `title` beside it on the latter. The
-/// hook mode acks `hook::ACK_CAPS` and the relay
-/// `relay::ACK_CAPS`.
-pub const HOLDER_CAPS: [&str; 7] = ["core", "local", HOOKS_CAP, MCP_CAP, AWAY_CAP, SCREEN_CAP, TITLE_CAP];
+/// hook mode acks `hook::ACK_CAPS`, the status mode `status::ACK_CAPS` and
+/// the relay `relay::ACK_CAPS`.
+pub const HOLDER_CAPS: [&str; 8] = ["core", "local", HOOKS_CAP, MCP_CAP, AWAY_CAP, SCREEN_CAP, TITLE_CAP, STATUS_CAP];
+/// The least time between two rounds of `status` (10 a second for the
+/// session, protocol section 12); a status posted between two rounds waits
+/// for the next, and only the newest goes.
+pub const STATUS_EVERY: Duration = Duration::from_millis(100);
 /// The most JSON a screen answer may be: what one frame to the app holds.
 pub const SCREEN_ANSWER_MAX: usize = frame::MAX_JSON_HELPER_TO_APP;
 /// Tool streams one session may have open at once; one more `mcp.open` gets
@@ -309,6 +341,9 @@ struct State {
     enders: Vec<(Arc<Conn>, u64)>,
     /// The program's exit code (if it has one), once the session has ended.
     ended: Option<Option<i32>>,
+    /// The hook kinds the session takes, as its launch declared them
+    /// (`hookKinds`), from the moment a launch is taken; None: the nine.
+    hook_kinds: Option<Vec<String>>,
 }
 
 /// A stream read that must finish by `until`: each read waits only for what
@@ -412,6 +447,42 @@ struct Tools {
     last: u64,
 }
 
+/// The session's status line: the newest status only (one slot), and the
+/// connections that take it.
+struct Status {
+    /// The newest status, its `seq` and payload; None until the first.
+    newest: Option<(u64, Value)>,
+    /// The `seq` the last status took: each takes the next, from 1.
+    last_seq: u64,
+    /// When the last round of `status` began; None before the first.
+    last_round: Option<Instant>,
+    /// Each connection that acked `status`, and the newest `seq` it was
+    /// sent (0: none yet).
+    to: Vec<(Arc<Conn>, u64)>,
+}
+
+impl Status {
+    /// True when a connection that takes the status lacks the newest.
+    fn due(&self) -> bool {
+        match &self.newest {
+            Some((seq, _)) => self.to.iter().any(|(_, sent)| sent < seq),
+            None => false,
+        }
+    }
+}
+
+/// Wait on `wake` with `guard` held, as long as `limit` at most (None: until
+/// woken). A wait that returns early is the caller's to look at again.
+fn wait_on<'a, T>(wake: &Condvar, guard: MutexGuard<'a, T>, limit: Option<Duration>) -> MutexGuard<'a, T> {
+    match limit {
+        None => wake.wait(guard).unwrap_or_else(|poisoned| poisoned.into_inner()),
+        Some(d) => match wake.wait_timeout(guard, d) {
+            Ok((g, _)) => g,
+            Err(poisoned) => poisoned.into_inner().0,
+        },
+    }
+}
+
 /// A tool message for a stream that is not open (or not this connection's).
 const NO_STREAM: (&str, &str) = (request::CODE_NOT_FOUND, "no tool stream of this connection has that number");
 /// An `mcp` from a relay whose stream is kept: not passed on, and the stream
@@ -425,6 +496,9 @@ struct Serve {
     state: Mutex<State>,
     hooks: Mutex<Hooks>,
     tools: Mutex<Tools>,
+    status: Mutex<Status>,
+    /// Wakes the status pump (`status_pump`): a new status, or the end.
+    status_wake: Condvar,
     record: Mutex<Record>,
     /// `State::ending`, for threads that only look.
     ending: AtomicBool,
@@ -474,6 +548,16 @@ pub fn event_message(ev: &HookEvent, lost: u64) -> Value {
 /// `hook.taken`: the reply to `hook.event` `re`, with the `seq` it took.
 pub fn hook_taken(re: u64, seq: u64) -> Value {
     reply("hook.taken", re, vec![("seq", Value::uint(seq))])
+}
+
+/// `status`: the session's status line, to a connection that acked `status`.
+pub fn status_message(seq: u64, payload: Value) -> Value {
+    Value::obj(vec![("t", Value::str("status")), ("seq", Value::uint(seq)), ("payload", payload)])
+}
+
+/// `status.taken`: the reply to `status.set` `re`, with the `seq` it took.
+pub fn status_taken(re: u64, seq: u64) -> Value {
+    reply("status.taken", re, vec![("seq", Value::uint(seq))])
 }
 
 /// `mcp.open`: tool stream `stream` begins (from a relay, its own number;
@@ -649,7 +733,7 @@ fn check_ack(v: &Value) -> Result<(Allowed, Asked), Refusal> {
     if !seen.contains(&"core") {
         return bad(request::CODE_BAD_FIELD, "caps must hold core");
     }
-    let allowed = Allowed { local: seen.contains(&"local"), hooks: seen.contains(&HOOKS_CAP), mcp: seen.contains(&MCP_CAP), screen: seen.contains(&SCREEN_CAP) };
+    let allowed = Allowed { local: seen.contains(&"local"), hooks: seen.contains(&HOOKS_CAP), mcp: seen.contains(&MCP_CAP), screen: seen.contains(&SCREEN_CAP), status: seen.contains(&STATUS_CAP) };
     Ok((allowed, Asked { away: allowed.mcp && seen.contains(&AWAY_CAP), title: allowed.screen && seen.contains(&TITLE_CAP) }))
 }
 
@@ -725,6 +809,105 @@ impl Serve {
         let mut hooks = lock(&self.hooks);
         if hooks.to.as_ref().map(|(c, _)| c.id) == Some(conn.id) {
             hooks.to = None;
+        }
+    }
+
+    /// Number a status and keep it as the newest, in place of any older
+    /// one; the status pump sends it on. Its `seq`; None while the session
+    /// is ending.
+    fn post_status(&self, payload: Value) -> Option<u64> {
+        let seq = {
+            let mut status = lock(&self.status);
+            if self.ending.load(Ordering::SeqCst) {
+                return None;
+            }
+            status.last_seq += 1;
+            let seq = status.last_seq;
+            status.newest = Some((seq, payload));
+            seq
+        };
+        self.status_wake.notify_all();
+        Some(seq)
+    }
+
+    /// `conn` acked `status` and `local`: it takes the status from now on, and is sent
+    /// the newest there is, once, at once (not waiting for a round).
+    fn take_status(&self, conn: &Arc<Conn>) {
+        let _live = lock(&conn.live);
+        let newest = {
+            let mut status = lock(&self.status);
+            if self.ending.load(Ordering::SeqCst) {
+                return;
+            }
+            let newest = status.newest.clone();
+            let sent = newest.as_ref().map_or(0, |(seq, _)| *seq);
+            status.to.push((Arc::clone(conn), sent));
+            newest
+        };
+        if let Some((seq, payload)) = newest {
+            let _ = conn.send_json(status_message(seq, payload));
+        }
+    }
+
+    /// `conn` takes no more status. Called beside `stop_hooks`, under
+    /// `conn.live`, so no status follows its last word.
+    fn stop_status(&self, conn: &Conn) {
+        lock(&self.status).to.retain(|(c, _)| c.id != conn.id);
+    }
+
+    /// Send `conn` the newest status, if it still takes the status and has
+    /// not been sent that one (or a newer one).
+    fn send_status(&self, conn: &Arc<Conn>) {
+        let _live = lock(&conn.live);
+        let message = {
+            let mut status = lock(&self.status);
+            if self.ending.load(Ordering::SeqCst) {
+                return;
+            }
+            let (seq, payload) = match &status.newest {
+                Some((seq, payload)) => (*seq, payload.clone()),
+                None => return,
+            };
+            match status.to.iter_mut().find(|entry| entry.0.id == conn.id) {
+                Some((_, sent)) if *sent < seq => {
+                    *sent = seq;
+                    status_message(seq, payload)
+                }
+                _ => return,
+            }
+        };
+        let _ = conn.send_json(message);
+    }
+
+    /// The status pump, a thread of its own for the holder's life: once a
+    /// connection that takes the status lacks the newest, and `STATUS_EVERY`
+    /// has passed since the last round began, a round sends the newest to
+    /// each such connection. A status posted meanwhile replaces the one
+    /// waiting, so the newest wins.
+    fn status_pump(self: Arc<Self>) {
+        loop {
+            let mut status = lock(&self.status);
+            loop {
+                if self.ending.load(Ordering::SeqCst) {
+                    return;
+                }
+                if !status.due() {
+                    status = wait_on(&self.status_wake, status, None);
+                    continue;
+                }
+                let now = Instant::now();
+                let next = status.last_round.map(|at| at + STATUS_EVERY);
+                match next {
+                    Some(next) if next > now => status = wait_on(&self.status_wake, status, Some(next - now)),
+                    _ => break,
+                }
+            }
+            status.last_round = Some(Instant::now());
+            let to: Vec<Arc<Conn>> = status.to.iter().map(|(c, _)| Arc::clone(c)).collect();
+            drop(status);
+            for conn in &to {
+                self.send_status(conn);
+            }
         }
     }
 
@@ -1163,6 +1346,10 @@ impl Serve {
             tools.to = None;
             tools.open.clear();
         }
+        // No status either: a round under way sends nothing once the
+        // session is ending, and the pump stops.
+        lock(&self.status).to.clear();
+        self.status_wake.notify_all();
         let mut told: Vec<Arc<Conn>> = Vec::new();
         for (conn, re) in requester.map(|(c, re)| (Arc::clone(c), re)).into_iter().chain(enders) {
             say_ended(&conn, re, code);
@@ -1337,6 +1524,14 @@ impl Serve {
                 return;
             }
         };
+        // A connection that acked `status` beside `local` (an app's) takes
+        // it from its ack on: the newest there is now, then each newer one.
+        // One that acked `status` alone (the status mode's) only posts: it
+        // is sent none, so its own post never waits behind a status it has
+        // not read yet.
+        if allowed.status && allowed.local {
+            self.take_status(conn);
+        }
         let mut refusals: VecDeque<Instant> = VecDeque::new();
         let mut input = InputGate::default();
         loop {
@@ -1364,7 +1559,10 @@ impl Serve {
                         let _ = conn.send_error(None, frame::CODE_BAD_FRAME, "a control message off channel 0");
                         return;
                     }
-                    match request::parse_allowed(&v, allowed).and_then(|req| self.admit(conn, req)) {
+                    // A hook event is read against the kinds the session's
+                    // launch declared (the nine when it declared none).
+                    let declared = if v.get("t").and_then(Value::as_str) == Some("hook.event") { lock(&self.state).hook_kinds.clone() } else { None };
+                    match request::parse_in_session(&v, allowed, declared.as_deref()).and_then(|req| self.admit(conn, req)) {
                         Ok(req) => {
                             if matches!(req, Request::Ping { .. }) {
                                 input.ping();
@@ -1436,6 +1634,17 @@ impl Serve {
                 }
                 Flow::Continue
             }
+            Request::StatusSet { id, payload, .. } => {
+                match self.post_status(payload) {
+                    Some(seq) => {
+                        let _ = conn.send_json(status_taken(id, seq));
+                    }
+                    None => {
+                        let _ = conn.send_error(Some(id), request::CODE_NOT_FOUND, "the session is ending");
+                    }
+                }
+                Flow::Continue
+            }
             Request::Resize { id, size } => {
                 let holder = {
                     let st = lock(&self.state);
@@ -1479,12 +1688,13 @@ impl Serve {
                     return Flow::Continue;
                 }
                 self.update_record(|_| {});
-                // No live output, no hook event and no tool message after
-                // the reply.
+                // No live output, no hook event, no tool message and no
+                // status after the reply.
                 let mut live = lock(&conn.live);
                 *live = 0;
                 self.stop_hooks(conn);
                 self.stop_tools(conn);
+                self.stop_status(conn);
                 let _ = conn.send_json(reply("term.detached", id, vec![]));
                 drop(live);
                 Flow::Close
@@ -1550,6 +1760,9 @@ impl Serve {
                 return;
             }
             st.launching = true;
+            // From here a hook event is read against what this launch
+            // declared, before its program can send one.
+            st.hook_kinds = l.hook_kinds.clone();
         }
         // A launch on the bundled ConPTY that cannot load it fails here,
         // before anything is started, and is answered `io` below.
@@ -1575,8 +1788,13 @@ impl Serve {
                 let _ = conn.send_json(reply("term.launched", l.id, vec![("pid", Value::uint(u64::from(pid)))]));
             }
             Err(e) => {
-                // Nothing was launched: a later launch may try again.
-                lock(&self.state).launching = false;
+                // Nothing was launched: a later launch may try again, and
+                // declare its own kinds.
+                {
+                    let mut st = lock(&self.state);
+                    st.launching = false;
+                    st.hook_kinds = None;
+                }
                 let _ = conn.send_error(Some(l.id), frame::CODE_IO, &format!("could not start the program: {e}"));
             }
         }
@@ -1624,6 +1842,7 @@ impl Serve {
             *live = 0;
             self.stop_hooks(&old);
             self.stop_tools(&old);
+            self.stop_status(&old);
             let _ = old.send_error(None, request::CODE_REPLACED, "a newer connection attached to this terminal");
             old.closer.close_after_writes();
             drop(live);
@@ -1696,9 +1915,10 @@ impl Serve {
                 return;
             }
             // No hook event after either last word: later ones wait for the
-            // next attach. The tool streams end with it.
+            // next attach. The tool streams end with it, and the status.
             serve.stop_hooks(&conn);
             serve.stop_tools(&conn);
+            serve.stop_status(&conn);
             match holder.exit_code() {
                 Some(code) => conn.send_exit(code),
                 None => {
@@ -1716,6 +1936,7 @@ impl Serve {
             *live = 0;
             self.stop_hooks(conn);
             self.stop_tools(conn);
+            self.stop_status(conn);
             let _ = conn.send_error(None, request::CODE_BUSY, "the holder could not carry live output; attach again from the last offset seen");
             drop(live);
             return Flow::Close;
@@ -1743,9 +1964,10 @@ impl Serve {
             // The streams it carried as the attached connection end with it,
             // and its own stream as a relay (whether or not it said
             // `mcp.close`: a CLI's end does not always end its tool server's
-            // input).
+            // input). It takes no more status either.
             let _gate = lock(&conn.live);
             self.stop_tools(conn);
+            self.stop_status(conn);
         }
         self.relay_ends(conn, None);
         if was_attached {
@@ -1812,9 +2034,12 @@ pub fn run(opts: Options) -> io::Result<()> {
             ending: false,
             enders: Vec::new(),
             ended: None,
+            hook_kinds: None,
         }),
         hooks: Mutex::new(Hooks { queue: HookQueue::new(), to: None }),
         tools: Mutex::new(Tools { to: None, open: Vec::new(), last: 0 }),
+        status: Mutex::new(Status { newest: None, last_seq: 0, last_round: None, to: Vec::new() }),
+        status_wake: Condvar::new(),
         record: Mutex::new(record),
         ending: AtomicBool::new(false),
         next_id: AtomicU64::new(1),
@@ -1824,6 +2049,12 @@ pub fn run(opts: Options) -> io::Result<()> {
     if let Err(e) = thread::Builder::new().spawn(move || clock.clock()) {
         // No away clock, no holder: its record goes, and its endpoint with
         // the listener.
+        store::remove(&serve.opts.store, &serve.opts.sid, std::process::id());
+        return Err(e);
+    }
+    let pump = Arc::clone(&serve);
+    if let Err(e) = thread::Builder::new().spawn(move || pump.status_pump()) {
+        // No status pump, no holder, the same way.
         store::remove(&serve.opts.store, &serve.opts.sid, std::process::id());
         return Err(e);
     }
@@ -1873,21 +2104,21 @@ mod tests {
 
     #[test]
     fn hooks_is_offered_and_an_ack_of_it_allows_hook_events() {
-        assert_eq!(HOLDER_CAPS.to_vec(), vec!["core", "local", "hooks", "mcp", "away", "screen", "title"]);
-        let both = Allowed { local: true, hooks: true, mcp: false, screen: false };
+        assert_eq!(HOLDER_CAPS.to_vec(), vec!["core", "local", "hooks", "mcp", "away", "screen", "title", "status"]);
+        let both = Allowed { local: true, hooks: true, mcp: false, screen: false, status: false };
         assert_eq!(acked("{\"t\":\"hello.ack\",\"proto\":1,\"caps\":[\"core\",\"local\",\"hooks\"]}"), Ok(both));
-        assert_eq!(acked("{\"t\":\"hello.ack\",\"proto\":1,\"caps\":[\"core\",\"hooks\"]}"), Ok(Allowed { local: false, hooks: true, mcp: false, screen: false }));
+        assert_eq!(acked("{\"t\":\"hello.ack\",\"proto\":1,\"caps\":[\"core\",\"hooks\"]}"), Ok(Allowed { local: false, hooks: true, mcp: false, screen: false, status: false }));
         // The app's own ack: no hook event will ever be sent to it.
-        assert_eq!(acked("{\"t\":\"hello.ack\",\"proto\":1,\"caps\":[\"core\",\"local\"]}"), Ok(Allowed { local: true, hooks: false, mcp: false, screen: false }));
+        assert_eq!(acked("{\"t\":\"hello.ack\",\"proto\":1,\"caps\":[\"core\",\"local\"]}"), Ok(Allowed { local: true, hooks: false, mcp: false, screen: false, status: false }));
         assert_eq!(acked("{\"t\":\"hello.ack\",\"proto\":1,\"caps\":[\"hooks\"]}"), Err(request::CODE_BAD_FIELD));
         assert_eq!(acked("{\"t\":\"hello.ack\",\"proto\":1,\"caps\":[\"core\",\"hooks\",\"hooks\"]}"), Err(request::CODE_BAD_FIELD));
     }
 
     #[test]
     fn mcp_is_offered_and_an_ack_of_it_allows_tool_streams() {
-        // The relay's ack, and everything a holder offers.
-        assert_eq!(acked("{\"t\":\"hello.ack\",\"proto\":1,\"caps\":[\"core\",\"local\",\"mcp\"]}"), Ok(Allowed { local: true, hooks: false, mcp: true, screen: false }));
-        assert_eq!(acked("{\"t\":\"hello.ack\",\"proto\":1,\"caps\":[\"mcp\",\"hooks\",\"local\",\"core\"]}"), Ok(Allowed { local: true, hooks: true, mcp: true, screen: false }));
+        // The relay's ack, and everything a holder offered before kept streams.
+        assert_eq!(acked("{\"t\":\"hello.ack\",\"proto\":1,\"caps\":[\"core\",\"local\",\"mcp\"]}"), Ok(Allowed { local: true, hooks: false, mcp: true, screen: false, status: false }));
+        assert_eq!(acked("{\"t\":\"hello.ack\",\"proto\":1,\"caps\":[\"mcp\",\"hooks\",\"local\",\"core\"]}"), Ok(Allowed { local: true, hooks: true, mcp: true, screen: false, status: false }));
         assert_eq!(acked("{\"t\":\"hello.ack\",\"proto\":1,\"caps\":[\"mcp\"]}"), Err(request::CODE_BAD_FIELD));
         assert_eq!(acked("{\"t\":\"hello.ack\",\"proto\":1,\"caps\":[\"core\",\"mcp\",\"mcp\"]}"), Err(request::CODE_BAD_FIELD));
         assert_eq!(MAX_TOOL_STREAMS, 8);
@@ -1895,25 +2126,25 @@ mod tests {
 
     #[test]
     fn away_is_offered_and_counts_only_beside_mcp() {
-        let relay = Allowed { local: true, hooks: false, mcp: true, screen: false };
+        let relay = Allowed { local: true, hooks: false, mcp: true, screen: false, status: false };
         // A relay of now; one from before `away`, served as before.
         assert_eq!(acked_away("{\"t\":\"hello.ack\",\"proto\":1,\"caps\":[\"core\",\"local\",\"mcp\",\"away\"]}"), Ok((relay, true)));
         assert_eq!(acked_away("{\"t\":\"hello.ack\",\"proto\":1,\"caps\":[\"core\",\"local\",\"mcp\"]}"), Ok((relay, false)));
         // Without `mcp` it keeps nothing, as no stream can be opened.
-        assert_eq!(acked_away("{\"t\":\"hello.ack\",\"proto\":1,\"caps\":[\"core\",\"local\",\"away\"]}"), Ok((Allowed { local: true, hooks: false, mcp: false, screen: false }, false)));
+        assert_eq!(acked_away("{\"t\":\"hello.ack\",\"proto\":1,\"caps\":[\"core\",\"local\",\"away\"]}"), Ok((Allowed { local: true, hooks: false, mcp: false, screen: false, status: false }, false)));
         // Everything a holder offered before screen reads.
-        assert_eq!(acked_away("{\"t\":\"hello.ack\",\"proto\":1,\"caps\":[\"away\",\"mcp\",\"hooks\",\"local\",\"core\"]}"), Ok((Allowed { local: true, hooks: true, mcp: true, screen: false }, true)));
+        assert_eq!(acked_away("{\"t\":\"hello.ack\",\"proto\":1,\"caps\":[\"away\",\"mcp\",\"hooks\",\"local\",\"core\"]}"), Ok((Allowed { local: true, hooks: true, mcp: true, screen: false, status: false }, true)));
         assert_eq!(acked_away("{\"t\":\"hello.ack\",\"proto\":1,\"caps\":[\"core\",\"mcp\",\"away\",\"away\"]}"), Err(request::CODE_BAD_FIELD));
     }
 
     #[test]
     fn screen_is_offered_and_an_ack_of_it_allows_screen_reads_only() {
         assert_eq!(HOLDER_CAPS[5], SCREEN_CAP);
-        assert_eq!(acked("{\"t\":\"hello.ack\",\"proto\":1,\"caps\":[\"core\",\"screen\"]}"), Ok(Allowed { local: false, hooks: false, mcp: false, screen: true }));
+        assert_eq!(acked("{\"t\":\"hello.ack\",\"proto\":1,\"caps\":[\"core\",\"screen\"]}"), Ok(Allowed { local: false, hooks: false, mcp: false, screen: true, status: false }));
         // Everything a holder offered before the title.
         assert_eq!(
             acked_away("{\"t\":\"hello.ack\",\"proto\":1,\"caps\":[\"core\",\"local\",\"hooks\",\"mcp\",\"away\",\"screen\"]}"),
-            Ok((Allowed { local: true, hooks: true, mcp: true, screen: true }, true))
+            Ok((Allowed { local: true, hooks: true, mcp: true, screen: true, status: false }, true))
         );
         // The app's own ack of now, and the relay's, allow no screen read.
         assert_eq!(acked("{\"t\":\"hello.ack\",\"proto\":1,\"caps\":[\"core\",\"local\",\"hooks\"]}").map(|a| a.screen), Ok(false));
@@ -1924,23 +2155,69 @@ mod tests {
     }
 
     #[test]
-    fn title_is_offered_last_and_counts_only_beside_screen() {
-        assert_eq!(HOLDER_CAPS.last(), Some(&TITLE_CAP));
-        let reader = Allowed { local: false, hooks: false, mcp: false, screen: true };
+    fn title_is_offered_and_counts_only_beside_screen() {
+        assert_eq!(HOLDER_CAPS[6], TITLE_CAP);
+        let reader = Allowed { local: false, hooks: false, mcp: false, screen: true, status: false };
         // A reader that asked for the title, and one that did not: the same
         // types allowed, the title only for the first.
         assert_eq!(acked_title("{\"t\":\"hello.ack\",\"proto\":1,\"caps\":[\"core\",\"screen\",\"title\"]}"), Ok((reader, true)));
         assert_eq!(acked_title("{\"t\":\"hello.ack\",\"proto\":1,\"caps\":[\"core\",\"screen\"]}"), Ok((reader, false)));
-        // Everything a holder offers.
+        // Everything a holder offered before the status line.
         assert_eq!(
             acked_asked("{\"t\":\"hello.ack\",\"proto\":1,\"caps\":[\"core\",\"local\",\"hooks\",\"mcp\",\"away\",\"screen\",\"title\"]}"),
-            Ok((Allowed { local: true, hooks: true, mcp: true, screen: true }, Asked { away: true, title: true }))
+            Ok((Allowed { local: true, hooks: true, mcp: true, screen: true, status: false }, Asked { away: true, title: true }))
         );
         // Without `screen` the title is not asked for: no read can be made.
-        assert_eq!(acked_title("{\"t\":\"hello.ack\",\"proto\":1,\"caps\":[\"core\",\"local\",\"title\"]}"), Ok((Allowed { local: true, hooks: false, mcp: false, screen: false }, false)));
+        assert_eq!(acked_title("{\"t\":\"hello.ack\",\"proto\":1,\"caps\":[\"core\",\"local\",\"title\"]}"), Ok((Allowed { local: true, hooks: false, mcp: false, screen: false, status: false }, false)));
         assert_eq!(acked_title("{\"t\":\"hello.ack\",\"proto\":1,\"caps\":[\"core\",\"screen\",\"title\",\"title\"]}"), Err(request::CODE_BAD_FIELD));
         assert_eq!(acked_title("{\"t\":\"hello.ack\",\"proto\":1,\"caps\":[\"title\"]}"), Err(request::CODE_BAD_FIELD));
         assert!(!crate::relay::ACK_CAPS.contains(&TITLE_CAP) && !crate::hook::ACK_CAPS.contains(&TITLE_CAP));
+    }
+
+    #[test]
+    fn status_is_offered_last_and_an_ack_of_it_allows_the_status_line() {
+        assert_eq!(HOLDER_CAPS.last(), Some(&STATUS_CAP));
+        let status_only = Allowed { local: false, hooks: false, mcp: false, screen: false, status: true };
+        // The status mode's ack, and the app's for a tab that takes it.
+        assert_eq!(acked("{\"t\":\"hello.ack\",\"proto\":1,\"caps\":[\"core\",\"status\"]}"), Ok(status_only));
+        assert_eq!(acked("{\"t\":\"hello.ack\",\"proto\":1,\"caps\":[\"core\",\"local\",\"hooks\",\"mcp\",\"status\"]}"), Ok(Allowed { local: true, hooks: true, mcp: true, screen: false, status: true }));
+        // Everything a holder offers.
+        assert_eq!(
+            acked_asked("{\"t\":\"hello.ack\",\"proto\":1,\"caps\":[\"core\",\"local\",\"hooks\",\"mcp\",\"away\",\"screen\",\"title\",\"status\"]}"),
+            Ok((Allowed { local: true, hooks: true, mcp: true, screen: true, status: true }, Asked { away: true, title: true }))
+        );
+        // Every ack from before it: no status.
+        assert_eq!(acked("{\"t\":\"hello.ack\",\"proto\":1,\"caps\":[\"core\",\"local\",\"hooks\"]}").map(|a| a.status), Ok(false));
+        assert_eq!(acked("{\"t\":\"hello.ack\",\"proto\":1,\"caps\":[\"status\"]}"), Err(request::CODE_BAD_FIELD));
+        assert_eq!(acked("{\"t\":\"hello.ack\",\"proto\":1,\"caps\":[\"core\",\"status\",\"status\"]}"), Err(request::CODE_BAD_FIELD));
+        // The hook mode and the relay never ack it; the status mode acks it
+        // and the core only.
+        assert!(!crate::relay::ACK_CAPS.contains(&STATUS_CAP) && !crate::hook::ACK_CAPS.contains(&STATUS_CAP));
+        assert_eq!(crate::status::ACK_CAPS, ["core", STATUS_CAP]);
+        assert_eq!(STATUS_EVERY, Duration::from_millis(100));
+    }
+
+    #[test]
+    fn status_messages_are_the_documented_bytes_and_the_largest_fits_a_frame_once_launched() {
+        let payload = Value::obj(vec![("model", Value::obj(vec![("id", Value::str("m"))]))]);
+        assert_eq!(status_message(3, payload).to_json(), "{\"t\":\"status\",\"seq\":3,\"payload\":{\"model\":{\"id\":\"m\"}}}");
+        assert_eq!(status_taken(2, 7).to_json(), "{\"t\":\"status.taken\",\"re\":2,\"seq\":7}");
+        // The most a status.set may carry, sent on with the longest seq: within
+        // the 52 bytes around it, and the 64 KiB a frame holds once launched.
+        let head = "{\"pad\":\"";
+        let most = format!("{head}{}\"}}", "x".repeat(request::MAX_STATUS_PAYLOAD - head.len() - 2));
+        assert_eq!(most.len(), request::MAX_STATUS_PAYLOAD);
+        let message = status_message(u64::MAX, crate::json::parse(most.as_bytes()).unwrap()).to_json();
+        assert_eq!(message.len() - most.len(), 52, "{}", &message[..60]);
+        assert!(message.len() <= MAX_JSON_AFTER_LAUNCH);
+    }
+
+    #[test]
+    fn a_round_is_due_only_when_a_connection_that_takes_the_status_lacks_the_newest() {
+        let mut s = Status { newest: None, last_seq: 0, last_round: None, to: Vec::new() };
+        assert!(!s.due(), "nothing posted, nobody taking it");
+        s.newest = Some((1, Value::obj(Vec::new())));
+        assert!(!s.due(), "posted, nobody taking it: it is kept, not sent");
     }
 
     #[test]
@@ -2051,24 +2328,31 @@ mod tests {
 
     #[test]
     fn the_largest_event_fits_a_frame_once_launched_and_one_byte_more_is_too_large() {
-        let kind = *request::HOOK_KINDS.iter().max_by_key(|k| k.len()).expect("a kind");
-        let head = format!("{{\"hook_event_name\":\"{kind}\",\"prompt\":\"");
-        let payload_of = |bytes: usize| format!("{head}{}\"}}", "x".repeat(bytes - head.len() - 2));
-        // The most a hook.event may carry, sent on with the longest seq and
-        // lost there are.
-        let most = payload_of(request::MAX_HOOK_PAYLOAD);
-        assert_eq!(most.len(), request::MAX_HOOK_PAYLOAD);
-        let ev = HookEvent { seq: u64::MAX, kind: kind.to_string(), payload: json::parse(most.as_bytes()).unwrap(), bytes: most.len() };
-        let event = event_message(&ev, u64::MAX).to_json();
-        assert!(event.len() <= MAX_JSON_AFTER_LAUNCH, "the largest event is {} bytes", event.len());
-        // One byte more of payload is `too-large`, not a frame over the
-        // limit: the hook.event carrying it, with the longest id, still fits.
-        let over = payload_of(request::MAX_HOOK_PAYLOAD + 1);
-        let id = request::MAX_SAFE_INTEGER - 1;
-        let message = format!("{{\"t\":\"hook.event\",\"id\":{id},\"kind\":\"{kind}\",\"payload\":{over}}}");
-        assert!(message.len() <= MAX_JSON_AFTER_LAUNCH, "a hook.event one byte over is {} bytes", message.len());
-        let refused = request::parse_allowed(&json::parse(message.as_bytes()).unwrap(), Allowed { local: true, hooks: true, mcp: false, screen: false }).unwrap_err();
-        assert_eq!(refused.code, request::CODE_TOO_LARGE);
+        // The longest of the nine, and the longest kind a launch may declare.
+        let nine = *request::HOOK_KINDS.iter().max_by_key(|k| k.len()).expect("a kind");
+        let declared_kind = "K".repeat(request::MAX_HOOK_KIND_CHARS);
+        let declared = vec![declared_kind.clone()];
+        for (kind, kinds, around) in [(nine, None, 105), (declared_kind.as_str(), Some(declared.as_slice()), 153)] {
+            let head = format!("{{\"hook_event_name\":\"{kind}\",\"prompt\":\"");
+            let payload_of = |bytes: usize| format!("{head}{}\"}}", "x".repeat(bytes - head.len() - 2));
+            // The most a hook.event may carry, sent on with the longest seq
+            // and lost there are.
+            let most = payload_of(request::MAX_HOOK_PAYLOAD);
+            assert_eq!(most.len(), request::MAX_HOOK_PAYLOAD);
+            let ev = HookEvent { seq: u64::MAX, kind: kind.to_string(), payload: json::parse(most.as_bytes()).unwrap(), bytes: most.len() };
+            let event = event_message(&ev, u64::MAX).to_json();
+            assert_eq!(event.len() - most.len(), around, "{kind}: the bytes around the payload");
+            assert!(event.len() <= MAX_JSON_AFTER_LAUNCH, "{kind}: the largest event is {} bytes", event.len());
+            // One byte more of payload is `too-large`, not a frame over the
+            // limit: the hook.event carrying it, with the longest id, still fits.
+            let over = payload_of(request::MAX_HOOK_PAYLOAD + 1);
+            let id = request::MAX_SAFE_INTEGER - 1;
+            let message = format!("{{\"t\":\"hook.event\",\"id\":{id},\"kind\":\"{kind}\",\"payload\":{over}}}");
+            assert!(message.len() <= MAX_JSON_AFTER_LAUNCH, "{kind}: a hook.event one byte over is {} bytes", message.len());
+            let hooks = Allowed { local: true, hooks: true, mcp: false, screen: false, status: false };
+            let refused = request::parse_in_session(&json::parse(message.as_bytes()).unwrap(), hooks, kinds).unwrap_err();
+            assert_eq!(refused.code, request::CODE_TOO_LARGE, "{kind}");
+        }
     }
 
     #[test]
