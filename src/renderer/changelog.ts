@@ -42,7 +42,7 @@ export interface ChangelogEntry {
 export const changelog: ChangelogEntry[] = [
   {
     version: '2.1.3-beta.18',
-    date: '2026-11-25',
+    date: '2026-11-26',
     highlights: 'On Windows, a Claude Code tab through the session helper on a Linux machine you added (the remote sessions preview, off by default) now has its status line, its hooks and the Conductor\'s tools, and runs at the effort level set in your Claude Code settings on that machine. Also on Windows, a Codex session started on this version and kept running through an app update (the agent sessions preview) keeps the hook events it makes meanwhile, and a full uninstall now also removes the folders a Codex session\'s resume list left in your temp folder.',
     warnings: [
       'This beta series begins moving the app\'s background services, and over the next betas your sessions, onto one helper per machine. If you want a quiet build, stay on the stable release.',
