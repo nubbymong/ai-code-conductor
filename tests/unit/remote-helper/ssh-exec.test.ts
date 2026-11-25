@@ -13,7 +13,8 @@ import { EventEmitter } from 'events'
 import { PassThrough } from 'stream'
 import type { ChildProcess } from 'child_process'
 import {
-  ExecStream, PREAMBLE_MAX, execArgv, markedLines, nodeSshRunner, parseSshVersion, readHashLine, readScriptResult, runScript, sshEnv, sshFailure, targetProblem,
+  ExecStream, PREAMBLE_MAX, execArgv, markedLines, nodeSshRunner, openScriptStream, parseSshVersion, readHashLine, readScriptResult, runScript, sshEnv, sshFailure, targetProblem,
+  type SshRunner,
 } from '../../../src/main/remote-helper/ssh-exec'
 import { scriptCommand, scriptText, holderLabel, type ScriptName } from '../../../src/main/remote-helper/scripts'
 import { FakeSsh } from './fake-ssh'
@@ -25,6 +26,7 @@ const I = '2'.repeat(32)
 const SHA = 'a'.repeat(64)
 const FOLDER = `0.1.0-${SHA.slice(0, 12)}`
 const SID = `rm${'3'.repeat(30)}`
+const NOT_STARTED = /ssh could not be started on this computer/
 
 describe('ssh exec: the argv', () => {
   it('carries the fixed options of a key-only host, then -p, -l, -- target command, in that order', () => {
@@ -240,10 +242,47 @@ describe('ssh exec: no ssh found', () => {
     const runner = nodeSshRunner(() => { looks++; throw new Error('no ssh program was found') }, () => ({}))
     await expect(runner.version()).resolves.toBeNull()
     const r = await runScript(runner, T, 'probe', [N, D, I])
-    expect(r).toMatchObject({ code: null, stdout: '', timedOut: false })
+    expect(r).toMatchObject({ code: null, stdout: '', timedOut: false, notStarted: true })
     expect(r.stderr).toContain('no ssh program was found')
+    expect(sshFailure(r)).toMatch(NOT_STARTED)
     const before = looks
     await expect(runner.version()).resolves.toBeNull()
     expect(looks).toBe(before + 1)
+  })
+
+  // An ssh found by path that then cannot be spawned (gone, or not runnable)
+  // fails with an error before it has a process id. One that started and then
+  // errs is not "not started".
+  const erring = (child: Child): SshRunner => ({
+    sshPath: () => 'ssh',
+    version: async () => null,
+    env: () => ({}),
+    spawn: (() => {
+      setImmediate(() => child.emit('error', Object.assign(new Error('spawn ssh ENOENT'), { code: 'ENOENT' })))
+      return child as unknown as ChildProcess
+    }) as SshRunner['spawn'],
+  })
+
+  it('an ssh that errs before it has a process id is not started; one that errs after it started is not that', async () => {
+    const lost = await runScript(erring(new Child()), T, 'probe', [N, D, I])
+    expect(lost).toMatchObject({ code: null, notStarted: true })
+    expect(sshFailure(lost)).toMatch(NOT_STARTED)
+    const ran = await runScript(erring(Object.assign(new Child(), { pid: 4242 })), T, 'probe', [N, D, I])
+    expect(ran.notStarted).toBeUndefined()
+    expect(sshFailure(ran)).toBeNull()
+  })
+
+  it('the bridge exec (a tab\'s reconnect) names an ssh that cannot be found or spawned, and starts nothing', async () => {
+    const values = [N, D, I, FOLDER, SHA, SID]
+    const none = new FakeSsh({ answer: () => ({}) })
+    none.sshPath = () => { throw new Error('no ssh program was found') }
+    await expect(openScriptStream(none, T, 'bridge', values, N, 5000)).rejects.toThrow(NOT_STARTED)
+    expect(none.calls).toHaveLength(0)
+    await expect(openScriptStream(erring(new Child()), T, 'bridge', values, N, 5000)).rejects.toThrow(NOT_STARTED)
+  })
+
+  it('only the app sets it: host text that reads like it is a plain failure', () => {
+    expect(sshFailure({ code: null, stderr: 'ssh could not be started on this computer', timedOut: false })).toBeNull()
+    expect(sshFailure({ code: null, stderr: '', timedOut: false, notStarted: true })).toMatch(NOT_STARTED)
   })
 })

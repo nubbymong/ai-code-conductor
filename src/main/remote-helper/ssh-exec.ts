@@ -142,7 +142,14 @@ export interface ExecResult {
   stderr: string
   /** It ran past its time and was ended. */
   timedOut: boolean
+  /** ssh never started on this computer: no ssh was found, or it failed
+   *  before it had a process id. Set by the app alone, never read from
+   *  anything ssh or the host printed. */
+  notStarted?: true
 }
+
+/** sshFailure's words for an ssh that never started on this computer. */
+export const SSH_NOT_STARTED = 'ssh could not be started on this computer (is OpenSSH installed, and is its folder on PATH?)'
 
 /** The most standard output a one-shot exec keeps; more ends it. */
 export const EXEC_STDOUT_MAX = 2 * 1024 * 1024
@@ -193,7 +200,8 @@ export function nodeSshRunner(sshPath: () => string, env: () => NodeJS.ProcessEn
 }
 
 /** Why an exec's ssh failed, in plain words; null when ssh itself did not fail. */
-export function sshFailure(r: Pick<ExecResult, 'code' | 'stderr' | 'timedOut'>): string | null {
+export function sshFailure(r: Pick<ExecResult, 'code' | 'stderr' | 'timedOut' | 'notStarted'>): string | null {
+  if (r.notStarted) return SSH_NOT_STARTED
   if (r.timedOut) return 'the machine did not answer in time'
   if (r.code !== 255) return null
   const t = r.stderr
@@ -229,7 +237,7 @@ export async function runScript(
     try {
       child = runner.spawn(runner.sshPath(), args, { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true, env: runner.env() })
     } catch (err) {
-      resolve({ code: null, stdout: '', stderr: (err as Error).message.slice(0, STDERR_MAX), timedOut: false })
+      resolve({ code: null, stdout: '', stderr: (err as Error).message.slice(0, STDERR_MAX), timedOut: false, notStarted: true })
       return
     }
     const out: Buffer[] = []
@@ -245,13 +253,14 @@ export async function runScript(
       out.push(c)
     })
     child.stderr?.on('data', (c: Buffer) => { if (err.length < STDERR_MAX) err += c.toString('utf8').slice(0, STDERR_MAX - err.length) })
-    const done = (code: number | null) => {
+    const done = (code: number | null, notStarted = false) => {
       if (settled) return
       settled = true
       clearTimeout(timer)
-      resolve({ code, stdout: Buffer.concat(out).toString('utf8'), stderr: err, timedOut })
+      resolve({ code, stdout: Buffer.concat(out).toString('utf8'), stderr: err, timedOut, ...(notStarted ? { notStarted: true as const } : {}) })
     }
-    child.on('error', (e) => { err += e.message; done(null) })
+    // A spawn that failed (no process id) never started ssh.
+    child.on('error', (e) => { err += e.message; done(null, child.pid === undefined) })
     child.on('close', (code) => done(typeof code === 'number' ? code : null))
     child.stdin?.on('error', () => { /* ssh ended first: its exit says why */ })
     if (opts.stdin) child.stdin?.end(opts.stdin)
@@ -411,14 +420,23 @@ export async function openScriptStream(
 ): Promise<{ stream: ExecStream; pid: number | undefined; result: Promise<ExecResult> }> {
   const command = scriptCommand(script, values)
   const args = execArgv(target, { version: await runner.version() }, command)
-  const child = runner.spawn(runner.sshPath(), args, { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true, env: runner.env() })
+  let child: ChildProcess
+  try {
+    child = runner.spawn(runner.sshPath(), args, { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true, env: runner.env() })
+  } catch {
+    // No ssh found, or none that could be spawned: nothing started.
+    throw Object.assign(new Error(SSH_NOT_STARTED), { final: false })
+  }
   let err = ''
   child.stderr?.on('data', (c: Buffer) => { if (err.length < STDERR_MAX) err += c.toString('utf8').slice(0, STDERR_MAX - err.length) })
   const result = new Promise<ExecResult>((resolve) => {
     let done = false
-    const settle = (code: number | null) => { if (!done) { done = true; resolve({ code, stdout: '', stderr: err, timedOut: false }) } }
+    const settle = (code: number | null, notStarted = false) => {
+      if (!done) { done = true; resolve({ code, stdout: '', stderr: err, timedOut: false, ...(notStarted ? { notStarted: true as const } : {}) }) }
+    }
     child.on('close', (code) => settle(typeof code === 'number' ? code : null))
-    child.on('error', (e) => { err += e.message; settle(null) })
+    // A spawn that failed (no process id) never started ssh.
+    child.on('error', (e) => { err += e.message; settle(null, child.pid === undefined) })
   })
   return new Promise((resolve, reject) => {
     let settled = false
@@ -439,7 +457,7 @@ export async function openScriptStream(
     }
     const timer = setTimeout(() => fail('the machine did not answer in time', false), timeoutMs)
     timer.unref?.()
-    stream.on('error', (e) => fail(e.message, /hash check/.test(e.message)))
+    stream.on('error', (e) => fail(child.pid === undefined ? SSH_NOT_STARTED : e.message, /hash check/.test(e.message)))
     void result.then((r) => fail(
       sshFailure(r) ?? (r.code === 3 ? 'no session helper holds this session on the machine' : `the session helper on the machine ended before it answered (exit ${r.code ?? 'unknown'})`),
       isFinalSshFailure(r) || r.code === 3 || r.code === 97,

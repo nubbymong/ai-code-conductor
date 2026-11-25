@@ -409,3 +409,46 @@ describe('remote machines: Check', () => {
     expect(m.list()[0].check.ok).toBe(false)
   })
 })
+
+// Found by the beta.17 final-head review: with no ssh on this computer, Add
+// and Check said the host did not answer its questions ("is /bin/sh there?")
+// and Remove that it did not say whether the folder went: the real cause was
+// in no answer and no log line.
+describe('remote machines: no ssh on this computer', () => {
+  const noSsh = () => { throw new Error('ssh was not found in a folder PATH names (ssh.exe).') }
+  const named = /^rocky\.lan could not be reached: ssh could not be started on this computer/
+
+  it('Add says ssh could not be started here, not that the host did not answer, and starts nothing', async () => {
+    const ssh = new FakeSsh(linuxHost())
+    const m = machines(ssh)
+    const q = await m.prepare(CONFIGS, 'cfg-key')
+    if (!q.ok) throw new Error(q.message)
+    ssh.sshPath = noSsh
+    const r = await m.add(q.token)
+    expect(r.ok).toBe(false)
+    expect(r.message).toMatch(named)
+    expect(r.message).not.toMatch(/bin\/sh/)
+    expect(ssh.calls).toHaveLength(0)
+    expect(m.list()).toHaveLength(0)
+  })
+
+  it('Check and Remove of a machine added while ssh was there say the same, and the machine is kept', async () => {
+    const ssh = new FakeSsh(linuxHost())
+    const m = machines(ssh)
+    const q = await m.prepare(CONFIGS, 'cfg-key')
+    if (!q.ok) throw new Error(q.message)
+    expect((await m.add(q.token)).ok).toBe(true)
+    ssh.calls.length = 0
+    ssh.sshPath = noSsh
+    const did = m.list()[0].did
+    const c = await m.check(did)
+    expect(c.ok).toBe(false)
+    expect(c.message).toMatch(/did not pass its check: rocky\.lan could not be reached: ssh could not be started on this computer/)
+    expect(c.message).not.toMatch(/bin\/sh/)
+    const r = await m.remove(did)
+    expect(r.ok).toBe(false)
+    expect(r.message).toMatch(named)
+    expect(ssh.calls).toHaveLength(0)
+    expect(m.list()).toHaveLength(1)
+  })
+})
