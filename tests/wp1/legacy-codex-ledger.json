@@ -1,8 +1,8 @@
 {
   "schema": "wp1-legacy-codex-ledger/2",
   "predicateDigest": "100a1233edebdc39a5f9004d3fba980a89ebb15b25872e52076386bc84b03153",
-  "manifestPathDigest": "0eb1a56b084a5b39a75c5df039facec645e916c240f7b7ab188e098df1616610",
-  "manifestHead": "13a7090642b2828ad567a2bea5fa3bc8491d0006",
+  "manifestPathDigest": "e64e00237db196b73955570a39d5eedf24edf0583f85f5751a782cad921b673b",
+  "manifestHead": "83709ff41d7249e4853b68e23ac900ae6f93a7d6",
   "dispositions": {
     "retain": "unchanged observable behaviour, characterization proof",
     "move": "moved behind a package boundary and/or adapted at the call site, regression proof (newPath when relocated)",
@@ -1437,6 +1437,94 @@
       "note": "written by the test with SCREEN_CORPUS_WRITE=1; fixture data, no Codex code path"
     },
     {
+      "path": "helper/fixtures/screens/codex172-windows-bundled-after-reply.json",
+      "predicates": [
+        "P01",
+        "P14"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "ADR-030 screen corpus (2.1.3-beta.18 section 7.4, aicc_planning#427, 7.4's recording hold with probe P19's recorder): a recording of Codex 0.172.0's real screen on GPT-6.1 Terra, picked in Codex's own model picker, taken with no account (a stand-in model on the same machine), or the rows @xterm/headless gives for it; fixture data read by tests only, never shipped; no legacy Codex code path; listed in the repository-wide legacy Codex manifest, zero unmatched at the merge gate (WP1.67), tests/unit/shared/screen-corpus.test.ts",
+      "note": "fixture data: the chunks Codex wrote, with the state and key marks; no Codex code path"
+    },
+    {
+      "path": "helper/fixtures/screens/codex172-windows-bundled-after-reply.rows.json",
+      "predicates": [
+        "P01",
+        "P14"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "ADR-030 screen corpus (2.1.3-beta.18 section 7.4, aicc_planning#427, 7.4's recording hold with probe P19's recorder): a recording of Codex 0.172.0's real screen on GPT-6.1 Terra, picked in Codex's own model picker, taken with no account (a stand-in model on the same machine), or the rows @xterm/headless gives for it; fixture data read by tests only, never shipped; no legacy Codex code path; listed in the repository-wide legacy Codex manifest, zero unmatched at the merge gate (WP1.67), tests/unit/shared/screen-corpus.test.ts",
+      "note": "written by the test with SCREEN_CORPUS_WRITE=1; fixture data, no Codex code path"
+    },
+    {
+      "path": "helper/fixtures/screens/codex172-windows-bundled-ready.json",
+      "predicates": [
+        "P01",
+        "P14"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "ADR-030 screen corpus (2.1.3-beta.18 section 7.4, aicc_planning#427, 7.4's recording hold with probe P19's recorder): a recording of Codex 0.172.0's real screen on GPT-6.1 Terra, picked in Codex's own model picker, taken with no account (a stand-in model on the same machine), or the rows @xterm/headless gives for it; fixture data read by tests only, never shipped; no legacy Codex code path; listed in the repository-wide legacy Codex manifest, zero unmatched at the merge gate (WP1.67), tests/unit/shared/screen-corpus.test.ts",
+      "note": "fixture data: the chunks Codex wrote, with the state and key marks; no Codex code path"
+    },
+    {
+      "path": "helper/fixtures/screens/codex172-windows-bundled-ready.rows.json",
+      "predicates": [
+        "P01",
+        "P14"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "ADR-030 screen corpus (2.1.3-beta.18 section 7.4, aicc_planning#427, 7.4's recording hold with probe P19's recorder): a recording of Codex 0.172.0's real screen on GPT-6.1 Terra, picked in Codex's own model picker, taken with no account (a stand-in model on the same machine), or the rows @xterm/headless gives for it; fixture data read by tests only, never shipped; no legacy Codex code path; listed in the repository-wide legacy Codex manifest, zero unmatched at the merge gate (WP1.67), tests/unit/shared/screen-corpus.test.ts",
+      "note": "written by the test with SCREEN_CORPUS_WRITE=1; fixture data, no Codex code path"
+    },
+    {
+      "path": "helper/fixtures/screens/codex172-windows-system-after-reply.json",
+      "predicates": [
+        "P01",
+        "P14"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "ADR-030 screen corpus (2.1.3-beta.18 section 7.4, aicc_planning#427, 7.4's recording hold with probe P19's recorder): a recording of Codex 0.172.0's real screen on GPT-6.1 Terra, picked in Codex's own model picker, taken with no account (a stand-in model on the same machine), or the rows @xterm/headless gives for it; fixture data read by tests only, never shipped; no legacy Codex code path; listed in the repository-wide legacy Codex manifest, zero unmatched at the merge gate (WP1.67), tests/unit/shared/screen-corpus.test.ts",
+      "note": "fixture data: the chunks Codex wrote, with the state and key marks; no Codex code path"
+    },
+    {
+      "path": "helper/fixtures/screens/codex172-windows-system-after-reply.rows.json",
+      "predicates": [
+        "P01",
+        "P14"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "ADR-030 screen corpus (2.1.3-beta.18 section 7.4, aicc_planning#427, 7.4's recording hold with probe P19's recorder): a recording of Codex 0.172.0's real screen on GPT-6.1 Terra, picked in Codex's own model picker, taken with no account (a stand-in model on the same machine), or the rows @xterm/headless gives for it; fixture data read by tests only, never shipped; no legacy Codex code path; listed in the repository-wide legacy Codex manifest, zero unmatched at the merge gate (WP1.67), tests/unit/shared/screen-corpus.test.ts",
+      "note": "written by the test with SCREEN_CORPUS_WRITE=1; fixture data, no Codex code path"
+    },
+    {
+      "path": "helper/fixtures/screens/codex172-windows-system-ready.json",
+      "predicates": [
+        "P01",
+        "P14"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "ADR-030 screen corpus (2.1.3-beta.18 section 7.4, aicc_planning#427, 7.4's recording hold with probe P19's recorder): a recording of Codex 0.172.0's real screen on GPT-6.1 Terra, picked in Codex's own model picker, taken with no account (a stand-in model on the same machine), or the rows @xterm/headless gives for it; fixture data read by tests only, never shipped; no legacy Codex code path; listed in the repository-wide legacy Codex manifest, zero unmatched at the merge gate (WP1.67), tests/unit/shared/screen-corpus.test.ts",
+      "note": "fixture data: the chunks Codex wrote, with the state and key marks; no Codex code path"
+    },
+    {
+      "path": "helper/fixtures/screens/codex172-windows-system-ready.rows.json",
+      "predicates": [
+        "P01",
+        "P14"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "ADR-030 screen corpus (2.1.3-beta.18 section 7.4, aicc_planning#427, 7.4's recording hold with probe P19's recorder): a recording of Codex 0.172.0's real screen on GPT-6.1 Terra, picked in Codex's own model picker, taken with no account (a stand-in model on the same machine), or the rows @xterm/headless gives for it; fixture data read by tests only, never shipped; no legacy Codex code path; listed in the repository-wide legacy Codex manifest, zero unmatched at the merge gate (WP1.67), tests/unit/shared/screen-corpus.test.ts",
+      "note": "written by the test with SCREEN_CORPUS_WRITE=1; fixture data, no Codex code path"
+    },
+    {
       "path": "helper/probes/README.md",
       "predicates": [
         "P14"
@@ -1455,6 +1543,16 @@
       "disposition": "added",
       "evidence": "2.1.3-beta.17 section C7 (aicc_planning#371): the scenario file C7's recording hold ran with ADR-030 probe P19's recorder on the Windows test machine; never shipped; no legacy Codex code path; listed in the repository-wide legacy Codex manifest, zero unmatched at the merge gate (WP1.67), tests/wp1/legacy-codex-gate.test.ts",
       "note": "the keys, marks and config of each launch C7's hold recorded, every one a Codex launch that shows a warning count"
+    },
+    {
+      "path": "helper/probes/h74-scenarios.json",
+      "predicates": [
+        "P14"
+      ],
+      "category": "OTHER",
+      "disposition": "added",
+      "evidence": "2.1.3-beta.18 section 7.4 (aicc_planning#427): the scenario file 7.4's recording hold ran with ADR-030 probe P19's recorder on the Windows test machine; never shipped; no legacy Codex code path; listed in the repository-wide legacy Codex manifest, zero unmatched at the merge gate (WP1.67), tests/wp1/legacy-codex-gate.test.ts",
+      "note": "the keys, marks and screen patterns of each launch 7.4's hold recorded: Codex 0.172.0 picking GPT-6.1 Terra in its own model picker, then one turn"
     },
     {
       "path": "helper/probes/p11-model-stand-in.cjs",
