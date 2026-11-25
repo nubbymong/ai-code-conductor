@@ -533,9 +533,14 @@ export class RemoteDriver implements HelperPtyDriver {
   }
 
   ending(sid: string, done: Promise<void>): void {
-    // Once the holder ended, the session's own folder goes, when its files
-    // were sent; a new holder for the same id (a Restart) waits for both.
-    const whole = done.catch(() => { /* ended either way */ }).then(() => (this.filesSent ? this.removeFolder(sid) : undefined))
+    // Once the holder ended, the app's hook state for the tab goes (its feed
+    // ring and its overflow and lost-event marks, as a held session's on this
+    // computer go), then the session's own folder, when its files were sent;
+    // a new holder for the same id (a Restart, which reuses the tab's id)
+    // waits for all of it.
+    const whole = done.catch(() => { /* ended either way */ })
+      .then(() => { try { this.o.signals?.ended(this.o.appPtyId) } catch { /* the app's own */ } })
+      .then(() => (this.filesSent ? this.removeFolder(sid) : undefined))
     endings.set(sid, whole)
     void whole.finally(() => { if (endings.get(sid) === whole) endings.delete(sid) })
   }

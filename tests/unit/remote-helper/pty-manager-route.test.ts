@@ -86,6 +86,7 @@ const recordingSignals: RemoteSignalDeps = {
   status: (id) => { signalCalls.push(`status ${id}`) },
   event: (id) => { signalCalls.push(`event ${id}`) },
   serve: (id) => { signalCalls.push(`serve ${id}`); return false },
+  ended: (id) => { signalCalls.push(`ended ${id}`) },
 }
 /** What a test hands in place of the usual deps. */
 interface DepsOver {
@@ -141,7 +142,7 @@ afterEach(() => setRemoteHelperDeps(null))
 describe('pty-manager SSH branch: the usual path is unchanged for every tab that does not go through the session helper', () => {
   // The app's side of a helper tab is plugged in for every case (2.1.3-beta.18
   // section 3.2) and nothing of it is asked: no status line, hook event, tool
-  // stream or tools question for a tab on the usual path.
+  // stream, tools question or end of its hook state for a tab on the usual path.
   afterEach(() => { expect(signalCalls).toEqual([]) })
 
   const cases: Array<[string, SSHOptions, boolean, RemoteMachineRecord | null, string]> = [

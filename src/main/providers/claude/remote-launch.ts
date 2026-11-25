@@ -65,7 +65,10 @@ export function claudeRemoteEnv(o: RemoteLaunchOptions): Record<string, string> 
  *  session's settings file carries first: the user's, then the session
  *  folder's project and local settings, then the checkout root's local
  *  settings (hooks/session-hooks-writer.ts resolveInheritedHooks reads the same
- *  four on this computer; the usual SSH setup reads them on the host). */
+ *  four on this computer; the usual SSH setup reads them on the host). The
+ *  user's own is read as Claude Code reads it, a link followed (a dotfiles
+ *  link keeps its hooks); a project file only when it is no link and the host
+ *  user's own, not open to others (remote-helper/scripts.ts ONE_READ). */
 export const CLAUDE_HOST_READS: readonly RemoteHostRead[] = [
   { from: 'home', path: '.claude/settings.json' },
   { from: 'cwd', path: '.claude/settings.json' },

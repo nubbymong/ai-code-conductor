@@ -70,13 +70,15 @@ function signals(tools = true) {
   const status: Array<[string, RemoteStatusLine]> = []
   const events: Array<[string, HookEventFrame]> = []
   const served: Array<{ id: string; provider: string; link: HelperToolLink }> = []
+  const ended: string[] = []
   const deps: RemoteSignalDeps = {
     toolsServed: () => tools,
     status: (id, line) => { status.push([id, line]) },
     event: (id, e) => { events.push([id, e]) },
     serve: (id, p, link) => { served.push({ id, provider: p, link }); return true },
+    ended: (id) => { ended.push(id) },
   }
-  return { deps, status, events, served }
+  return { deps, status, events, served, ended }
 }
 
 function plugIn(deps: RemoteSignalDeps | undefined): void {
@@ -300,6 +302,30 @@ describe('a helper tab\'s own files on its host', () => {
     expect(un.values.slice(1)).toEqual([MACHINE.did, INSTALL, remoteSessionId(id)])
     expect(endedFirst).toBe(true)
   })
+
+  // Reviewer finding (3.2's fix round): a helper tab's hook state (its feed
+  // ring, its overflow and lost-event marks, all kept by the tab's id) was
+  // never ended, so a Restart's Hooks feed held the last run's events and its
+  // notices never fired again. The local held session ends it; now so does a
+  // remote tab, once its holder ended and before its folder goes.
+  it('at its end its hook state is ended once, for its own id, after its holder ended and before its folder goes', async () => {
+    const id = 'sig-hooks-end'
+    const s = signals()
+    plugIn(s.deps)
+    const holder = holderFor(id)
+    let atFolder: { holderEnded: boolean; ended: string[] } | null = null
+    answering(holder, { unsession: () => { atFolder = { holderEnded: holder.ended, ended: [...s.ended] } } })
+    const pty = remoteHelperPty(win, id, { ssh: SSH_TAB }, 100, 30)
+    await until('attached', () => holder.attached !== null)
+    holder.hookEvent('Stop', { hook_event_name: 'Stop', session_id: 's1' })
+    await until('the event', () => s.events.length === 1)
+    expect(s.ended).toEqual([])
+    pty!.kill()
+    await until('the folder\'s removal', () => atFolder !== null)
+    expect(atFolder).toEqual({ holderEnded: true, ended: [id] })
+    await new Promise((r) => setTimeout(r, 30))
+    expect(s.ended).toEqual([id])
+  })
 })
 
 describe('the status line, hook events and tool streams of a helper tab', () => {
@@ -484,6 +510,9 @@ describe('the status line, hook events and tool streams of a helper tab', () => 
     p1!.kill()
     p2!.kill()
     await until('both holders to end', () => one.ended && two.ended)
+    // Each tab's hook state is ended for its own id, once.
+    await until('both ends', () => s.ended.length === 2)
+    expect([...s.ended].sort()).toEqual(['sig-one', 'sig-two'])
   })
 
   it('with no app side plugged in, its connections ask for none of them, and its files still go', async () => {

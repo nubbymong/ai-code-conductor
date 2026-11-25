@@ -8,6 +8,7 @@
 //  - a hook event goes to the session signals module as a remote one (its
 //    transcript path kept from the binder);
 //  - a status line goes to the status strip's helper ingest;
+//  - the tab's end ends its hook state there (endHelperHooks);
 //  - the tools are served only while the built-in tools are on and their
 //    server has a port.
 //
@@ -40,6 +41,7 @@ vi.mock('../../../src/main/conductor-mcp-server', () => ({
 vi.mock('../../../src/main/conductor-tools-switch', () => ({ conductorToolsMasterOn: () => h.master }))
 vi.mock('../../../src/main/session-signals/hooks', () => ({
   helperHookEvent: (id: string, _e: unknown, opts?: { remote?: boolean }) => { h.calls.push(`event ${id} ${JSON.stringify(opts ?? {})}`) },
+  endHelperHooks: (id: string) => { h.calls.push(`end hooks ${id}`) },
 }))
 vi.mock('../../../src/main/statusline-watcher', () => ({
   dispatchHelperStatus: (id: string, line: Record<string, unknown>) => { h.calls.push(`status ${id} ${JSON.stringify(line)}`) },
@@ -61,7 +63,7 @@ function signals() {
   expect(h.deps).toHaveLength(1)
   const s = h.deps[0].signals
   expect(s).toBeDefined()
-  return s as { toolsServed(): boolean; status(id: string, l: unknown): void; event(id: string, e: unknown): void; serve(id: string, p: string, link: unknown): boolean }
+  return s as { toolsServed(): boolean; status(id: string, l: unknown): void; event(id: string, e: unknown): void; serve(id: string, p: string, link: unknown): boolean; ended(id: string): void }
 }
 
 describe('the app\'s side of a helper tab', () => {
@@ -78,6 +80,13 @@ describe('the app\'s side of a helper tab', () => {
     s.event('tab-remote', { seq: 1, kind: 'Stop', payload: { hook_event_name: 'Stop' } })
     s.status('tab-remote', { model: 'Opus' })
     expect(h.calls).toEqual(['event tab-remote {"remote":true}', 'status tab-remote {"model":"Opus"}'])
+  })
+
+  it('the tab\'s end ends its hook state in the session signals module (its ring and marks), for the tab only', () => {
+    const s = signals()
+    expect(typeof s.ended).toBe('function')
+    s.ended('tab-remote')
+    expect(h.calls).toEqual(['end hooks tab-remote'])
   })
 
   it('the tools are served only while the built-in tools are on and their server has a port', () => {

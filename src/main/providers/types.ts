@@ -234,7 +234,10 @@ export interface RemoteHostRead {
 }
 
 /** A host read as it came back: its text, or null when it was not read (not
- *  there, a link, not the host user's own, or over the bound). */
+ *  there, not a regular file, or over the bound; and for a `cwd` or
+ *  `checkout` read, a link, not the host user's own, or open to others). A
+ *  `home` read is read as Claude Code reads the user's own file: a link is
+ *  followed (remote-helper/scripts.ts ONE_READ). */
 export interface RemoteHostFile extends RemoteHostRead {
   readonly content: string | null
 }

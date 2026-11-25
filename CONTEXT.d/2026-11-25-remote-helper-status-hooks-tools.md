@@ -9,10 +9,13 @@ The session's own files. Before the hold, one fixed exec (`reads`,
 remote-helper/scripts.ts) prints the host files the provider names
 (`hostReads`) as hex: for Claude Code, `~/.claude/settings.json`, the session
 folder's `.claude/settings.json` and `.claude/settings.local.json`, and the git
-checkout root's `.claude/settings.local.json`, each only a plain file of the
-host user's own, not a link, not writable by others (group only when it is the
-user's own group), at most 256 KiB; a file that is there and not taken is
-logged once. The session folder and the checkout root count only when they are
+checkout root's `.claude/settings.local.json`, each a regular file of at most
+256 KiB. The user's own file is read as Claude Code reads it, a link followed,
+so a dotfiles link (stow, chezmoi, Home Manager) keeps its hooks in the
+session's settings; a project file only when it and every folder on its way
+are no link and the host user's own, not writable by others (group only when
+it is the user's own group). A file that is there and not taken is logged
+once. The session folder and the checkout root count only when they are
 not the home folder or above it; the root follows the usual SSH setup's rule.
 The provider's launch is asked again with what was read (its program,
 arguments and variables must not change). After the hold, one exec (`files`)
@@ -33,9 +36,15 @@ delivered for the tab's own id through statusline-watcher.ts
 dispatchHelperStatus (no transcript path, no usage buckets). A hook event is
 cut to `hookKeep` and goes to helperHookEvent with `remote` (its transcript
 path stays display text, never the binder's). A tool stream is served as the
-tab's session with no credential (recordHeldToolSession, serveToolStream). A
-status or event seq already taken is not delivered twice. The image hold-back
-of beta.17 is gone: the tab has the image fetch tool.
+tab's session with no credential (recordHeldToolSession, serveToolStream),
+through the same links a held session on this computer uses
+(session-helper/tool-links.ts, moved out of manager.ts so both share one
+copy). A status or event seq already taken is not delivered twice. Once the
+holder ended, the tab's hook state goes (RemoteSignalDeps.ended,
+endHelperHooks), as a held session's does, before its folder is removed: a
+Restart reuses the tab's id, and its Hooks feed starts empty with its overflow
+and lost-event notices armed again. The image hold-back of beta.17 is gone:
+the tab has the image fetch tool.
 
 Off by default, unchanged when off: pty-manager.ts untouched; the usual-path
 tests now run with the app's side plugged in and assert it is never asked.

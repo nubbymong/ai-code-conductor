@@ -18,7 +18,7 @@ import { sshProgram } from '../ssh-program'
 import { instanceRecordPath } from '../session-helper/install'
 import { getConductorMcpPort, recordHeldToolSession, serveToolStream } from '../conductor-mcp-server'
 import { conductorToolsMasterOn } from '../conductor-tools-switch'
-import { helperHookEvent } from '../session-signals/hooks'
+import { endHelperHooks, helperHookEvent } from '../session-signals/hooks'
 import { dispatchHelperStatus } from '../statusline-watcher'
 import { setRemoteHelperDeps, remoteTabsOn, type RemoteSignalDeps } from '../remote-helper'
 import { RemoteMachines, fileStore } from '../remote-helper/machines'
@@ -56,6 +56,9 @@ const remoteSignals: RemoteSignalDeps = {
     recordHeldToolSession(appPtyId, provider)
     return serveToolStream(appPtyId, link)
   },
+  // The tab's run is over: its hook state goes, as a held session's does
+  // (session-helper/app-wiring.ts), so a Restart's feed starts empty.
+  ended: (appPtyId) => endHelperHooks(appPtyId),
 }
 
 /** How long main waits on each door: an Add uploads a file of a few MB and

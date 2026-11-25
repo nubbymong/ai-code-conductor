@@ -24,12 +24,17 @@
  * tool streams it kept back. A status or an event whose `seq` this tab has
  * had already is not delivered twice.
  *
+ * The tab's end (./session.ts RemoteDriver.ending, once its holder ended):
+ * the app's hook state for the tab's id goes (`ended`), as a held session's
+ * on this computer does, so a Restart, which reuses the tab's id, starts
+ * with an empty Hooks feed and its overflow and lost-event notices armed.
+ *
  * This file imports nothing of Electron: the app's side comes in as
  * RemoteSignalDeps (ipc/remote-machines-handlers.ts gives it).
  */
 import type { HolderConnection } from '../session-helper/connection'
-import type { HookEventFrame, McpMessage } from '../session-helper/protocol'
-import type { HelperToolLink } from '../session-helper/manager'
+import type { HookEventFrame } from '../session-helper/protocol'
+import { wireToolStreams, type HelperToolLink } from '../session-helper/tool-links'
 import type { ProviderId } from '../../shared/providers/ids'
 import type { ProviderRemoteLaunch, RemoteLaunch, RemoteStatusLine } from '../providers/types'
 import { keepFields } from './session-files'
@@ -48,47 +53,10 @@ export interface RemoteSignalDeps {
    *  (conductor-mcp-server.ts recordHeldToolSession, then serveToolStream).
    *  False when it was refused: the link is closed then. */
   serve(appPtyId: string, provider: ProviderId, link: HelperToolLink): boolean
-}
-
-/** One tool stream the tab's holder opened on a connection, as the tool host
- *  is handed it (the same shape session-helper/manager.ts StreamLink gives a
- *  held session on this computer). */
-class RemoteToolLink implements HelperToolLink {
-  private onMessage: ((message: McpMessage) => void) | null = null
-  private onClose: (() => void) | null = null
-  private over = false
-
-  constructor(private readonly conn: HolderConnection, private readonly stream: number, private readonly forget: () => void) {}
-
-  send(message: McpMessage): void {
-    if (this.over) return
-    if (this.conn.sendMcp(this.stream, message) === 'refused') this.ended()
-  }
-
-  take(onMessage: (message: McpMessage) => void, onClose: () => void): void {
-    if (this.over || this.onMessage) return
-    this.onMessage = onMessage
-    this.onClose = onClose
-  }
-
-  close(): void {
-    if (this.over) return
-    this.over = true
-    this.conn.closeMcp(this.stream)
-    this.forget()
-  }
-
-  deliver(message: McpMessage): void {
-    if (!this.over) this.onMessage?.(message)
-  }
-
-  ended(): void {
-    if (this.over) return
-    this.over = true
-    this.conn.closeMcp(this.stream)
-    this.forget()
-    try { this.onClose?.() } catch { /* the tool host's own */ }
-  }
+  /** The tab's session is over and its holder ended: its hook state goes
+   *  (session-signals/hooks.ts endHelperHooks: its feed ring, and its overflow
+   *  and lost-event marks). Once per run, before a Restart's run starts. */
+  ended(appPtyId: string): void
 }
 
 /** What one tab's signals are routed by. */
@@ -149,23 +117,8 @@ export class RemoteSignals {
       this.lastEvent = e.seq
       deps.event(appPtyId, { ...e, payload: keepFields(e.payload, this.launch.hookKeep) })
     })
-    const links = new Map<number, RemoteToolLink>()
-    conn.on('mcpOpen', (stream) => {
-      const link = new RemoteToolLink(conn, stream, () => { if (links.get(stream) === link) links.delete(stream) })
-      links.set(stream, link)
-      let served = false
-      try {
-        served = deps.serve(appPtyId, this.o.provider, link)
-      } catch (err) {
-        this.o.log(`[remote-helper] ${appPtyId}: the tool host failed on a tool stream: ${(err as Error).message}`)
-      }
-      if (!served) {
-        link.close()
-        this.o.log(`[remote-helper] ${appPtyId}: a tool stream its holder opened was not served`)
-      }
-    })
-    conn.on('mcp', (stream, m) => links.get(stream)?.deliver(m))
-    conn.on('mcpClose', (stream) => links.get(stream)?.ended())
-    conn.on('close', () => { for (const link of [...links.values()]) link.ended() })
+    // The links and their routing are a held session's on this computer
+    // (session-helper/tool-links.ts); each stream is served as the tab's.
+    wireToolStreams(conn, (link) => deps.serve(appPtyId, this.o.provider, link), (m) => this.o.log(`[remote-helper] ${appPtyId}: ${m}`))
   }
 }

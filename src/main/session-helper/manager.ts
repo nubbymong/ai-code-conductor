@@ -155,8 +155,8 @@ import {
   type HolderRecord,
   type HookEventFrame,
   type LaunchSpec,
-  type McpMessage,
 } from './protocol'
+import { wireToolStreams, type HelperToolLink } from './tool-links'
 import type { HelperHookTarget, HelperHooksResult } from '../hooks/session-hooks-writer'
 import type { HelperMcpConfigResult } from '../hooks/per-session-settings'
 import type { HeldToolLaunch, HeldToolLaunchAnswer, HeldToolRelay, ResumePick } from '../providers/types'
@@ -294,17 +294,9 @@ export interface HelperToolDeps {
   relayLaunch?(appPtyId: string, launch: HeldToolLaunch, relay: HeldToolRelay): HeldToolLaunchAnswer
 }
 
-/** One tool stream as the tool host is handed it (conductor-mcp-server.ts
- *  ToolStreamLink). */
-export interface HelperToolLink {
-  /** One JSON-RPC message to the session's CLI. */
-  send(message: McpMessage): void
-  /** What takes each message the CLI sends, and what hears the stream end
-   *  from the holder's side. Once; a message before it is dropped. */
-  take(onMessage: (message: McpMessage) => void, onClose: () => void): void
-  /** End the stream from the tool host's side. */
-  close(): void
-}
+/** One tool stream as the tool host is handed it: ./tool-links.ts, shared
+ *  with a tab through the session helper on another machine. */
+export type { HelperToolLink } from './tool-links'
 
 /** One tab's tool streams through its holder (toolRoute). */
 interface ToolRoute {
@@ -331,53 +323,6 @@ const RELAY_LAUNCH_STAYS_BECAUSE: Record<Extract<HeldToolLaunchAnswer, { refused
   'no-tools': 'its launch names no conductor tool server of the app\'s (the built-in tools are off, or the tool host was not started when it was built)',
   'unsafe-path': 'the helper\'s path or its store\'s path cannot be given on its launch exactly',
   'cmd-line': 'its launch is one command line through cmd.exe, or hands its arguments to one (an npm launcher), and the relay\'s arguments cannot pass that line\'s quoting rule',
-}
-
-/**
- * One tool stream a holder opened on a connection, as the tool host is handed
- * it: what the tool host sends goes on the stream, and what the relay sends
- * reaches it, until either side ends the stream or the connection goes.
- */
-class StreamLink implements HelperToolLink {
-  private onMessage: ((message: McpMessage) => void) | null = null
-  private onClose: (() => void) | null = null
-  private over = false
-
-  constructor(private readonly conn: HolderConnection, private readonly stream: number, private readonly forget: () => void) {}
-
-  send(message: McpMessage): void {
-    if (this.over) return
-    // One the holder would not read is answered and ends the stream on the
-    // connection's side (connection.ts sendMcp): the tool host's side ends too.
-    if (this.conn.sendMcp(this.stream, message) === 'refused') this.ended()
-  }
-
-  take(onMessage: (message: McpMessage) => void, onClose: () => void): void {
-    if (this.over || this.onMessage) return
-    this.onMessage = onMessage
-    this.onClose = onClose
-  }
-
-  close(): void {
-    if (this.over) return
-    this.over = true
-    this.conn.closeMcp(this.stream)
-    this.forget()
-  }
-
-  /** One message the relay sent on the stream. */
-  deliver(message: McpMessage): void {
-    if (!this.over) this.onMessage?.(message)
-  }
-
-  /** The stream ended from the holder's side, or its connection went. */
-  ended(): void {
-    if (this.over) return
-    this.over = true
-    this.conn.closeMcp(this.stream)
-    this.forget()
-    try { this.onClose?.() } catch { /* the tool host's own */ }
-  }
 }
 
 /** What a Claude Code session's hooks through its holder need of the app
@@ -1469,35 +1414,19 @@ export class SessionHelperManager implements MachinesSource {
         // streams the holder kept; their CLI is told its tool list may have
         // changed.
         const toolsChanged = takenOver && !again && deps.listsAgain === true
-        const links = new Map<number, StreamLink>()
-        // The connection reports these only when it acked `mcp`, and only for
-        // a stream the holder opened on it (connection.ts): that is the guard.
-        conn.on('mcpOpen', (stream) => {
-          const link = new StreamLink(conn, stream, () => { if (links.get(stream) === link) links.delete(stream) })
-          if (!on) {
-            link.close()
-            this.deps.log(`[session-helper] ${appId}: a tool stream its holder opened was not served, because its CLI was not pointed at its holder`)
-            return
+        const log = (m: string): void => this.deps.log(`[session-helper] ${appId}: ${m}`)
+        // A stream opened while the session is not switched is refused (`on`
+        // is read at each open: a launch's switch comes after its first
+        // connection). ./tool-links.ts makes the links (shared with a remote tab).
+        wireToolStreams(conn, (link) => {
+          const served = toolsChanged ? deps.serve(appId, link, { toolsChanged: true }) : deps.serve(appId, link)
+          if (served && again) {
+            log('a tool stream is served on the connection that attached again (one its holder kept while the link was down, or a new one)')
+          } else if (served && toolsChanged) {
+            log(`a tool stream is served on ${unseen ? 'its keeper\'s connection while its tab is not shown' : 'the take-over\'s connection'}, and its CLI is told its tool list may have changed`)
           }
-          links.set(stream, link)
-          let served = false
-          try {
-            served = toolsChanged ? deps.serve(appId, link, { toolsChanged: true }) : deps.serve(appId, link)
-          } catch (err) {
-            this.deps.log(`[session-helper] ${appId}: the tool host failed on a tool stream: ${message(err)}`)
-          }
-          if (!served) {
-            link.close()
-            this.deps.log(`[session-helper] ${appId}: a tool stream its holder opened was not served`)
-          } else if (again) {
-            this.deps.log(`[session-helper] ${appId}: a tool stream is served on the connection that attached again (one its holder kept while the link was down, or a new one)`)
-          } else if (toolsChanged) {
-            this.deps.log(`[session-helper] ${appId}: a tool stream is served on ${unseen ? 'its keeper\'s connection while its tab is not shown' : 'the take-over\'s connection'}, and its CLI is told its tool list may have changed`)
-          }
-        })
-        conn.on('mcp', (stream, m) => links.get(stream)?.deliver(m))
-        conn.on('mcpClose', (stream) => links.get(stream)?.ended())
-        conn.on('close', () => { for (const link of [...links.values()]) link.ended() })
+          return served
+        }, log, () => (on ? null : 'a tool stream its holder opened was not served, because its CLI was not pointed at its holder'))
       },
     }
     // A take-over launches nothing: its CLI was switched by the run that launched it.

@@ -178,16 +178,25 @@ const CHECKOUT_ROOT = [
 ]
 
 /**
- * `one <i> <base> <path>`: the host read `i`, `path` under `base`. Every
- * folder on the way and the file must be no link and pass `ow`, the file a
- * regular one of at most HOST_READ_MAX bytes. Prints `f<i> ok <hex>` (its
- * bytes as lower-case hex), or `f<i> skip <why>` for one that is there and is
- * not taken (link, type, owner, mode, size); nothing for one that is not there.
+ * `one <i> <base> <path>`: the host read `i`, `path` under `base`. Prints
+ * `f<i> ok <hex>` (its bytes as lower-case hex), or `f<i> skip <why>` for one
+ * that is there and is not taken; nothing for one that is not there. Either
+ * way the file must be a regular one of at most HOST_READ_MAX bytes (`type`,
+ * `size`).
+ *
+ * The user's own file (`hm` = 1, a `home` read) is read as Claude Code reads
+ * it, and as hooks/session-hooks-writer.ts resolveInheritedHooks and the
+ * usual SSH setup (providers/claude/ssh-shim.ts) read it: links followed, so
+ * a settings file or a `~/.claude` that is a dotfiles link (stow, chezmoi,
+ * Home Manager) keeps its hooks in the session's settings. A project file
+ * (`cwd`, `checkout`: a repository controls it) is taken only when every
+ * folder on the way and the file are no link (`link`) and pass `ow` (`owner`,
+ * `mode`).
  */
 const ONE_READ = [
   'sk() { r "f$1" skip "$2"; }',
-  'one() { j=$1; x=$2; IFS=/; set -- $3; IFS=$o',
-  'while [ $# -gt 0 ]; do x=$x/$1; shift; if [ -L "$x" ]; then sk $j link; return 0; fi; [ -e "$x" ] || return 0; if [ $# -gt 0 ]; then [ -d "$x" ] || { sk $j type; return 0; }; else [ -f "$x" ] || { sk $j type; return 0; }; fi; ow "$x"; e=$?; if [ $e = 1 ]; then sk $j owner; return 0; fi; if [ $e != 0 ]; then sk $j mode; return 0; fi; done',
+  'one() { j=$1; x=$2; if [ $hm = 1 ]; then x=$x/$3; [ -e "$x" ] || return 0; [ -f "$x" ] || { sk $j type; return 0; }; else IFS=/; set -- $3; IFS=$o',
+  'while [ $# -gt 0 ]; do x=$x/$1; shift; if [ -L "$x" ]; then sk $j link; return 0; fi; [ -e "$x" ] || return 0; if [ $# -gt 0 ]; then [ -d "$x" ] || { sk $j type; return 0; }; else [ -f "$x" ] || { sk $j type; return 0; }; fi; ow "$x"; e=$?; if [ $e = 1 ]; then sk $j owner; return 0; fi; if [ $e != 0 ]; then sk $j mode; return 0; fi; done; fi',
   `n=$(wc -c < "$x"); n=$((n+0)); [ "$n" -le ${HOST_READ_MAX} ] || { sk $j size; return 0; }`,
   'r "f$j" ok "$(od -A n -v -t x1 "$x" | tr -d "[:space:]")"; }',
 ]
@@ -359,7 +368,8 @@ const SPECS = {
    *  line per read, `<from> <path>` (home, cwd or checkout, and plain names
    *  joined by `/`). The session folder counts only when it is not the home
    *  folder or a folder above it (that is the user's own source), and the
-   *  checkout root only then. Each read is ONE_READ's. */
+   *  checkout root only then. Each read is ONE_READ's: a `home` one as Claude
+   *  Code reads the user's own file, the others as project files. */
   reads: {
     values: [],
     text: join([
@@ -369,12 +379,12 @@ const SPECS = {
       ...OWN,
       ...CHECKOUT_ROOT,
       ...ONE_READ,
-      'o=$IFS; K=; kd=0; w=',
+      'o=$IFS; K=; kd=0; w=; hm=0',
       'IFS= read -r c || c=',
       'case "$c" in /*) w=$(cd "$c" 2>/dev/null && pwd -P) || w=;; esac',
       '[ -n "$w" ] && ab "$w" "$h" && w=',
       'i=0',
-      'while read -r k p; do b=; case "$k" in home) b=$h;; cwd) b=$w;; checkout) if [ $kd = 0 ]; then kd=1; [ -n "$w" ] && cr; fi; b=$K;; esac; [ -n "$b" ] && [ -n "$p" ] && one $i "$b" "$p"; i=$((i+1)); done',
+      'while read -r k p; do b=; hm=0; case "$k" in home) b=$h; hm=1;; cwd) b=$w;; checkout) if [ $kd = 0 ]; then kd=1; [ -n "$w" ] && cr; fi; b=$K;; esac; [ -n "$b" ] && [ -n "$p" ] && one $i "$b" "$p"; i=$((i+1)); done',
       'r end ok',
     ]),
   },

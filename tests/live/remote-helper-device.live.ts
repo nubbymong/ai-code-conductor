@@ -38,6 +38,11 @@
  * holder's replay, each line once; a tab in a project folder of a git
  * checkout (2.1.3-beta.18): the project's and the checkout root's hooks in its
  * settings before the app's, and a settings file that is a link not read;
+ * project files that are open to others, over the bound or (where sudo runs
+ * with no password, as on the CI runner) another user's, each not read with
+ * one log line; a tab in the home folder: no project or checkout file read
+ * there, and (on the CI runner only) the user's own settings file read as
+ * Claude Code reads it when it is a link, then put back as it was;
  * a tab's status line, hook events and tool calls (2.1.3-beta.18 section 3.2,
  * with the helper of section 3.1): the commands its settings.json and
  * mcp.json name, run on the host as Claude Code runs them, reach the app's
@@ -48,7 +53,10 @@
  * the tab is back (the newest status only, the events in order, the call
  * answered by the app), and all three cross again after; two tabs on the
  * same machine at once, each one's status line, hook event and tool call on
- * its own tab only;
+ * its own tab only; each closed tab's hook state ended once, for its own id;
+ * a running tab's folder kept by its end's removal while its holder has a
+ * record (`held`), and a Check that removes a session folder whose holder is
+ * gone and keeps the running tab's;
  * each closed tab's holder ended (term.end); Remove; nothing left under ~/.aicc and no helper process of the
  * run left. The test's own execs read only what their command prints (an rc
  * file prints first).
@@ -59,7 +67,7 @@ import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
 import { RemoteMachines, type MachineStore, type RemoteMachineRecord } from '../../src/main/remote-helper/machines'
-import { nodeSshRunner, execArgv, sshEnv, type SshRunner, type SshTarget } from '../../src/main/remote-helper/ssh-exec'
+import { nodeSshRunner, execArgv, sshEnv, newNonce, readScriptResult, runScript, type SshRunner, type SshTarget } from '../../src/main/remote-helper/ssh-exec'
 import { RemoteHelperPty, remoteLaunchSpec, remoteSessionId } from '../../src/main/remote-helper/session'
 import { remoteLaunchOf, type RemoteSignalDeps } from '../../src/main/remote-helper'
 import { claudeRemoteLaunch } from '../../src/main/providers/claude/remote-launch'
@@ -117,10 +125,20 @@ async function until(what: string, ok: () => boolean, ms = 30_000): Promise<void
 
 let installs = 0
 let inUse = 0
+/** What the machine list logged (a Check's sweep line is read). */
+const machineLogs: string[] = []
 function machinesWith(store: MachineStore): RemoteMachines {
   installs++
-  return new RemoteMachines({ runner, store, bundled: async () => ({ ok: true, helper }), inUse: () => inUse, log: (m) => { note(`log-${installs}-${Object.keys(readings).length}`, m) } })
+  return new RemoteMachines({ runner, store, bundled: async () => ({ ok: true, helper }), inUse: () => inUse, log: (m) => { machineLogs.push(m); note(`log-${installs}-${Object.keys(readings).length}`, m) } })
 }
+
+/** The CI job's own runner (a localhost sshd on GitHub's Linux runner): the
+ *  only place this file changes the account's own ~/.claude, and where sudo
+ *  must run with no password. A host line from a test PC never does either. */
+const onRunner = (): boolean => process.env.GITHUB_ACTIONS === 'true' && (target.host === '127.0.0.1' || target.host === 'localhost')
+
+/** A settings file's text whose one hook, on Stop, runs `echo <word>`. */
+const hookText = (word: string): string => JSON.stringify({ hooks: { Stop: [{ matcher: '', hooks: [{ type: 'command', command: `echo ${word}` }] }] } })
 
 let machines: RemoteMachines
 let machine: RemoteMachineRecord
@@ -150,6 +168,8 @@ const got = {
   status: [] as Array<{ id: string; line: StatusLine }>,
   events: [] as Array<{ id: string; e: HookEvent }>,
   served: [] as Array<{ id: string; provider: string }>,
+  /** Each tab whose run ended (its hook state goes), by id. */
+  ended: [] as string[],
 }
 /** The app's side of a tab, with no Electron: a status strip and a hook sink
  *  that keep what they are given, and a tool host that answers each call with
@@ -167,6 +187,7 @@ const signals: RemoteSignalDeps = {
     }, () => { /* the stream ended */ })
     return true
   },
+  ended: (id) => { got.ended.push(id) },
 }
 const statusOf = (id: string) => got.status.filter((s) => s.id === id).map((s) => s.line)
 const eventsOf = (id: string) => got.events.filter((x) => x.id === id).map((x) => x.e)
@@ -255,6 +276,44 @@ function post(command: string, payload: object): void {
   expect([r.code, r.out], r.err).toEqual([0, ''])
 }
 
+// ── which host files a tab's settings take (2.1.3-beta.18 section 3.2) ──
+
+/** A tab on the fake CLI that starts in `remotePath`: the commands of its
+ *  session's Stop hooks in order, the app's own, and the lines it logged for
+ *  a host file that was not read. The tab is closed and its folder gone when
+ *  this returns. */
+async function tabSettings(id: string, remotePath: string): Promise<{ stop: string[]; own: string; skipped: string[]; sid: string }> {
+  const m: RemoteMachineRecord = { ...machine, claudePath: `${remoteFakeDir}/aicc-fake-cli`, check: { at: Date.now(), ok: true } }
+  inUse = 1
+  const plan = remoteLaunchOf(claudeRemoteLaunch, m, { model: 'e2e-model', ssh: { host: target.host, port: target.port, username: target.user, remotePath } }, null, () => true, remoteSessionId(id), 100, 30)
+  const before = sessionLogs.length
+  const pty = new RemoteHelperPty({ appPtyId: id, machine: m, installId: machines.installId(), runner, spec: plan.spec, plan, log: sessionLog })
+  let out = ''
+  pty.onData((x) => { out += x })
+  try {
+    await until(`${id}'s banner`, () => out.includes('FAKE-CLI READY'))
+    const settings = JSON.parse(sshRun(`cat "${plan.helper.folder}/settings.json"`).out) as { hooks: Record<string, Array<{ hooks: Array<{ command: string }> }>> }
+    const stop = settings.hooks.Stop.map((e) => e.hooks[0].command)
+    const skipped = sessionLogs.slice(before).filter((l) => l.includes('was not read'))
+    note(`settings-${id}`, { stop, skipped })
+    return { stop, own: `'${plan.helper.helperPath}' hook --store '${plan.helper.store}' --session ${plan.helper.sid}`, skipped, sid: plan.helper.sid }
+  } finally {
+    pty.kill()
+    await pty.ended
+    inUse = 0
+    await untilHost(`${id}'s folder to go`, `test -e "${plan.helper.folder}" && echo there || echo gone`, 'gone')
+  }
+}
+
+/** The line a tab logs for a host file it did not read. */
+const notReadLine = (sid: string, from: string, file: string, why: string): string => `[remote-helper] ${sid}: ${from} ${file} on ${target.host} was not read (${why}), so nothing it sets is in the session's settings`
+
+/** On the CI runner, the home folder step's undo: the account's own
+ *  ~/.claude as it was (only what the step made is removed, then what it
+ *  moved aside comes back). Set once the step changed it; afterAll runs it
+ *  again when the step did not get to. */
+let homeUndo = ''
+
 beforeAll(async () => {
   const hosts = JSON.parse(fs.readFileSync(need('REMOTE_HELPER_HOSTS'), 'utf8')) as { host?: unknown; user?: unknown; port?: unknown }
   target = { host: String(hosts.host), user: String(hosts.user), port: Number(hosts.port ?? 22) }
@@ -282,8 +341,15 @@ afterAll(() => {
   if (remoteFakeDir && /^\/[A-Za-z0-9._/-]+\/aicc-e2e\.[A-Za-z0-9]+$/.test(remoteFakeDir)) {
     // A bridge the replay step stopped is let go first, whatever failed.
     if (stoppedBridge) sshRun(`kill -CONT ${stoppedBridge} 2>/dev/null; true`)
+    // The home folder step's undo, when it did not get to run it: the account's ~/.claude as it was.
+    if (homeUndo) sshRun(homeUndo)
     // The project step's checkout (its .git folder holds what git init made), inside this run's own folder.
     sshRun(`rm -rf -- '${remoteFakeDir}/repo'`)
+    // The project files not read: the one made another user's goes by sudo
+    // first (where sudo ran), then the rest. The home step's files by name
+    // after its undo: a folder still holding what it moved aside stays.
+    sshRun(`sudo -n rm -f -- '${remoteFakeDir}/proj/other/.claude/settings.json' 2>/dev/null; rm -rf -- '${remoteFakeDir}/proj'`)
+    sshRun(`rm -f -- '${remoteFakeDir}/home/hooks.json' '${remoteFakeDir}/home/local.json'; rmdir -- '${remoteFakeDir}/home/saved' '${remoteFakeDir}/home' 2>/dev/null; true`)
     sshRun(`rm -f -- ${remoteFakeDir}/aicc-fake-cli ${remoteFakeDir}/ready ${remoteFakeDir}/go ${remoteFakeDir}/printed; rmdir -- ${remoteFakeDir}`)
   }
   if (OUT) {
@@ -499,6 +565,103 @@ describe('remote helper on a real Linux host', () => {
     await untilHost('its folder to go', `test -e "${plan.helper.folder}" && echo there || echo gone`, 'gone')
   })
 
+  // The reads script's owner, mode and size answers, run by a real shell
+  // (3.2's fix round: only fake answers fed the app before). Each file is a
+  // regular one of the user's in its own private folder, but for what is
+  // named; none of their hooks may reach the session's settings.
+  it('project files open to others, over the bound, or (where sudo runs with no password) another user\'s are not read, with one log line each (2.1.3-beta.18 section 3.2)', async () => {
+    const d = remoteFakeDir
+    expect(d).toMatch(/aicc-e2e\./)
+    // `open`: its settings.json is 300 KiB of valid JSON (over the 256 KiB
+    // bound), and its settings.local.json can be written by anyone (0666).
+    const big = JSON.stringify({ ...JSON.parse(hookText('big')), pad: 'x'.repeat(300 * 1024) })
+    const made = sshRun(`umask 077 && mkdir -p ${d}/proj/open/.claude && cat > ${d}/proj/open/.claude/settings.json && printf '%s' '${hookText('open')}' > ${d}/proj/open/.claude/settings.local.json && chmod 666 ${d}/proj/open/.claude/settings.local.json && stat -c '%a %s' ${d}/proj/open/.claude/settings.local.json ${d}/proj/open/.claude/settings.json`, Buffer.from(big))
+    note('proj-open-files', made.out)
+    expect(made.out.trim().split('\n'), made.err).toEqual([`666 ${hookText('open').length}`, `600 ${Buffer.byteLength(big)}`])
+    const open = await tabSettings('e2e-tab-open', `${d}/proj/open`)
+    expect(open.stop.at(-1)).toBe(open.own)
+    expect(open.stop).not.toContain('echo big')
+    expect(open.stop).not.toContain('echo open')
+    expect(open.skipped.filter((l) => !l.includes(`${open.sid}: home `))).toEqual([
+      notReadLine(open.sid, 'cwd', '.claude/settings.json', 'size'),
+      notReadLine(open.sid, 'cwd', '.claude/settings.local.json', 'mode'),
+    ])
+
+    // `other`: its settings.json is made another user's (nobody) by sudo.
+    const sudo = sshRun('sudo -n true >/dev/null 2>&1 && echo yes || echo no').out.trim() === 'yes'
+    note('proj-sudo', sudo)
+    // On the CI runner it must run: the owner answer is not left unexercised there.
+    if (onRunner()) expect(sudo, 'sudo with no password on the CI runner').toBe(true)
+    if (!sudo) return
+    const other = sshRun(`umask 077 && mkdir -p ${d}/proj/other/.claude && printf '%s' '${hookText('other')}' > ${d}/proj/other/.claude/settings.json && sudo -n chown nobody ${d}/proj/other/.claude/settings.json && stat -c '%U %a' ${d}/proj/other/.claude/settings.json`)
+    note('proj-other-file', other.out)
+    expect(other.out.trim(), other.err).toBe('nobody 600')
+    const theirs = await tabSettings('e2e-tab-other', `${d}/proj/other`)
+    expect(theirs.stop.at(-1)).toBe(theirs.own)
+    expect(theirs.stop).not.toContain('echo other')
+    expect(theirs.skipped.filter((l) => !l.includes(`${theirs.sid}: home `))).toEqual([notReadLine(theirs.sid, 'cwd', '.claude/settings.json', 'owner')])
+  })
+
+  // A tab that starts in the home folder: that folder is the user's own
+  // source, so no project or checkout file is read there. And the user's own
+  // settings file is read as Claude Code reads it (3.2's fix round): a
+  // dotfiles link (stow, chezmoi, Home Manager) is followed, so its hooks stay
+  // in the session's settings. Only on the CI runner is ~/.claude changed for
+  // that: settings.json becomes a link to a file holding a Stop hook, and a
+  // settings.local.json holding another one shows no project file is read;
+  // both are put back as they were.
+  it('a tab in the home folder: the user\'s own settings file read as Claude Code reads it, a link followed, and no project or checkout file (2.1.3-beta.18 section 3.2)', async () => {
+    const d = remoteFakeDir
+    expect(d).toMatch(/aicc-e2e\./)
+    const runnerCase = onRunner()
+    let set: ReturnType<typeof sshRun> | undefined
+    if (runnerCase) {
+      const h = `${d}/home`
+      const c = '"${HOME:?}/.claude"'
+      // The undo removes only what the step made (the link to this run's
+      // file, a local file equal to this run's), moves back what it saved,
+      // removes ~/.claude when the step made it, and says whether all of
+      // that is done. Set before the step changes anything.
+      homeUndo = [
+        `if [ -L ${c}/settings.json ] && [ "$(readlink ${c}/settings.json)" = ${h}/hooks.json ]; then rm -f -- ${c}/settings.json; fi`,
+        `if [ -f ${c}/settings.local.json ] && [ ! -L ${c}/settings.local.json ] && cmp -s ${c}/settings.local.json ${h}/local.json; then rm -f -- ${c}/settings.local.json; fi`,
+        `for f in settings.json settings.local.json; do if [ -e ${h}/saved/$f ] || [ -L ${h}/saved/$f ]; then [ -e ${c}/$f ] || [ -L ${c}/$f ] || mv -- ${h}/saved/$f ${c}/$f; fi; done`,
+        `if [ -e ${h}/made-dir ]; then rmdir -- ${c} && rm -f -- ${h}/made-dir; fi`,
+        `n=0; for f in saved/settings.json saved/settings.local.json made-dir; do if [ -e ${h}/$f ] || [ -L ${h}/$f ]; then n=1; fi; done; [ $n = 0 ] && echo undone || echo not-undone`,
+      ].join('; ')
+      // Each file there now saved aside first, then the link and the local file made.
+      set = sshRun([
+        `umask 077; mkdir -p ${h}/saved || exit 1`,
+        `printf '%s' '${hookText('home-link')}' > ${h}/hooks.json && printf '%s' '${hookText('home-local')}' > ${h}/local.json || exit 1`,
+        `if [ -e ${c} ] || [ -L ${c} ]; then echo dir-there; else mkdir ${c} && touch ${h}/made-dir && echo dir-made; fi`,
+        `for f in settings.json settings.local.json; do if [ -e ${c}/$f ] || [ -L ${c}/$f ]; then mv -- ${c}/$f ${h}/saved/$f || exit 1; echo saved-$f; fi; done`,
+        `ln -s ${h}/hooks.json ${c}/settings.json && cp ${h}/local.json ${c}/settings.local.json && echo made`,
+      ].join('; '))
+      note('home-set', set.out)
+    }
+    try {
+      if (set) expect(set.out.trim().split('\n').pop(), set.err).toBe('made')
+      const home = await tabSettings('e2e-tab-home', '~')
+      // No project or checkout file is read in the home folder: none is even
+      // tried, so none is logged.
+      expect(home.skipped.filter((l) => / (cwd|checkout) /.test(l))).toEqual([])
+      expect(home.stop.at(-1)).toBe(home.own)
+      if (runnerCase) {
+        // The user's file, a link, is read: its hook first, the app's last,
+        // and no settings.local.json of the home folder between them.
+        expect(home.stop).toEqual(['echo home-link', home.own])
+        expect(home.skipped).toEqual([])
+      }
+    } finally {
+      if (homeUndo) {
+        const undo = sshRun(homeUndo)
+        note('home-undo', undo.out)
+        expect(undo.out.trim(), undo.err).toBe('undone')
+        homeUndo = ''
+      }
+    }
+  })
+
   it('a tab\'s status line, hook events and tool calls cross the bridge to the app\'s side, each once, and again after its link\'s ssh is killed (2.1.3-beta.18 section 3.2)', async () => {
     const d = remoteFakeDir
     expect(d).toMatch(/aicc-e2e\./)
@@ -615,6 +778,8 @@ describe('remote helper on a real Linux host', () => {
     }
     await untilHost('the holder to end', `pgrep -f -- "--store $HOME/[.]aicc/${machine.did}/store" | wc -l`, '0')
     await untilHost('its folder to go', `test -e "${plan.helper.folder}" && echo there || echo gone`, 'gone')
+    // Its hook state was ended once, for its id, before its folder went.
+    expect(got.ended).toEqual([id])
   })
 
   it('two tabs on the same machine at once: each one\'s status line, hook event and tool call reach its own tab only (2.1.3-beta.18 section 3.2)', async () => {
@@ -662,6 +827,58 @@ describe('remote helper on a real Linux host', () => {
     }
     await untilHost('both holders to end', `pgrep -f -- "--store $HOME/[.]aicc/${machine.did}/store" | wc -l`, '0')
     for (const t of tabs) await untilHost(`${t.id}'s folder to go`, `test -e "${t.plan.helper.folder}" && echo there || echo gone`, 'gone')
+    // Each tab's hook state ended once, for its own id.
+    expect(got.ended.filter((x) => ids.includes(x)).sort()).toEqual([...ids].sort())
+  })
+
+  // The end's removal and Check's sweep, run by a real shell (3.2's fix
+  // round: only fake answers fed the app before). A tab's end does not remove
+  // its folder while its holder still has a record (`held`): the folder is
+  // the next Check's then. A Check removes each session folder whose holder
+  // is gone, and keeps a running tab's.
+  it('a running tab keeps its folder: its end\'s removal says held, and a Check removes only a folder whose holder is gone (2.1.3-beta.18 section 3.2)', async () => {
+    const d = remoteFakeDir
+    expect(d).toMatch(/aicc-e2e\./)
+    const m: RemoteMachineRecord = { ...machine, claudePath: `${d}/aicc-fake-cli`, check: { at: Date.now(), ok: true } }
+    const id = 'e2e-tab-7'
+    inUse = 1
+    const plan = remoteLaunchOf(claudeRemoteLaunch, m, { model: 'e2e-model' }, null, () => true, remoteSessionId(id), 100, 30, true)
+    const pty = new RemoteHelperPty({ appPtyId: id, machine: m, installId: machines.installId(), runner, spec: plan.spec, plan, signals, log: sessionLog })
+    const live = plan.helper.folder
+    // A folder a dropped connection could have left: a session id no tab of
+    // this run has, private, with a file in it, and no holder's record.
+    const stray = `${path.posix.dirname(live)}/${remoteSessionId('e2e-stray')}`
+    let out = ''
+    pty.onData((x) => { out += x })
+    try {
+      await until('the fake CLI\'s banner', () => out.includes('FAKE-CLI READY'))
+      const made = sshRun(`umask 077 && mkdir -m 700 "${stray}" && printf x > "${stray}/settings.json" && test ! -e "${plan.helper.store}/${remoteSessionId('e2e-stray')}.json" && echo made`)
+      expect(made.out.trim(), made.err).toBe('made')
+      // The end's removal for the running tab: refused, its folder kept.
+      const nonce = newNonce()
+      const un = await runScript(runner, target, 'unsession', [nonce, machine.did, machines.installId(), plan.helper.sid])
+      const res = readScriptResult(un.stdout, nonce)
+      note('unsession-held', { code: un.code, values: res ? [...res.values] : null, ok: res?.ok, refused: res?.refused })
+      expect([res?.ok, res?.refused], un.stderr).toEqual([false, 'held'])
+      expect(sshRun(`test -f "${live}/settings.json" && echo there || echo gone`).out.trim()).toBe('there')
+      // A Check: the stray folder goes, the running tab's stays.
+      const logsBefore = machineLogs.length
+      const r = await machines.check(machine.did)
+      note('check-sweep', { r, logs: machineLogs.slice(logsBefore) })
+      expect(r.ok, r.message).toBe(expectRc || r.ok)
+      expect(machineLogs.slice(logsBefore)).toContain(`[remote-helper] ${target.host}: removed 1 session folder(s) whose holder is gone`)
+      expect(sshRun(`test -e "${stray}" && echo there || echo gone; test -f "${live}/settings.json" && echo there || echo gone`).out.trim().split('\n')).toEqual(['gone', 'there'])
+      // The running tab is still served after the Check.
+      pty.write('still\r')
+      await until('input after the Check', () => out.includes('echo: still'))
+    } finally {
+      pty.kill()
+      await pty.ended
+      inUse = 0
+    }
+    await untilHost('the holder to end', `pgrep -f -- "--store $HOME/[.]aicc/${machine.did}/store" | wc -l`, '0')
+    await untilHost('its folder to go', `test -e "${live}" && echo there || echo gone`, 'gone')
+    expect(got.ended.filter((x) => x === id)).toEqual([id])
   })
 
   it('Remove takes it away: nothing of the run is left under ~/.aicc, and no helper process', async () => {
