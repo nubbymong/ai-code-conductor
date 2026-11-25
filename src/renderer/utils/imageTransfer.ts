@@ -5,6 +5,7 @@ import { usePasteHintStore } from '../stores/pasteHintStore'
 import { sendImagePathToCodex, NOT_AT_PROMPT, IMAGE_AT_PROMPT } from '../lib/codexComposer'
 import { sessionCapabilities } from '../lib/session-capabilities'
 import type { ImageLine } from '../lib/session-capabilities'
+import { SSH_THROUGH_HELPER } from '../../shared/remote-machines'
 /**
  * Image transfer helper: gets a host-saved image into a session. The prompts
  * below are a Claude session's; a plain terminal (and the partner shell) gets
@@ -33,6 +34,8 @@ import type { ImageLine } from '../lib/session-capabilities'
  * the auto-injected reverse tunnel) is the only way the image lands on
  * Claude's input. Vision MCP is started at app launch, so this path is
  * always available on SSH sessions even when no browser is configured.
+ * A tab through the session helper on its machine gets the request, then
+ * its Enter as its own write (sendFetchRequest, below).
  *
  * Both paths cap the image to 1920px / JPG q85 server-side
  * (screenshot-capture.ts) so neither saturates Claude's image-size
@@ -149,6 +152,44 @@ export function sendImageToCodexSession(
   sendImageThroughMain(sessionId, hostFilePath, sentence, 'composer', onNote)
 }
 
+/** 2.1.3-beta.18 fix round (section 3.2's host line): how long the Enter
+ *  waits after an image request typed into a tab through the session helper,
+ *  as a prompt button's Enter waits after its text in a Claude Code session
+ *  (main's session-input PROMPT_ENTER_DELAY_MS, #333). */
+export const HELPER_ENTER_DELAY_MS = 300
+
+/**
+ * The host fetch request into an SSH tab, and its Enter.
+ *
+ * Today's SSH tab gets them in one write, as it always did. A tab main says
+ * runs through the session helper on its machine (ssh.getState answers
+ * SSH_THROUGH_HELPER) gets the request, then the Enter as its own write
+ * HELPER_ENTER_DELAY_MS later. Claude Code makes a control character a key of
+ * its own only in a read shorter than 64 characters (measured from its input
+ * tokenizer, 2.1.332), and the helper hands each write to the program on the
+ * host whole, so the request and its Enter in one write reached it as one read
+ * and the Enter stayed in the text: typed, not sent (the host line, 2 of 2).
+ * The Enter is not typed when the tab started again while it waited (main
+ * pushes the tab's flow state at every start) or was closed. A preload with
+ * no such bridge, or an ask that fails, gets the one write.
+ */
+function sendFetchRequest(sessionId: string, request: string): void {
+  const whole = (): void => writeSessionInput(sessionId, request + '\r')
+  const ssh = window.electronAPI?.ssh
+  if (typeof ssh?.getState !== 'function') { whole(); return }
+  void ssh.getState(sessionId).then((flow: { state?: string } | null | undefined) => {
+    if (flow?.state !== SSH_THROUGH_HELPER) { whole(); return }
+    writeSessionInput(sessionId, request)
+    let startedAgain = false
+    const off = typeof ssh.onFlowState === 'function' ? ssh.onFlowState(sessionId, () => { startedAgain = true }) : undefined
+    setTimeout(() => {
+      try { off?.() } catch { /* already gone */ }
+      if (startedAgain || !useSessionStore.getState().sessions.some((s) => s.id === sessionId)) return
+      writeSessionInput(sessionId, '\r')
+    }, HELPER_ENTER_DELAY_MS)
+  }, whole)
+}
+
 /** The session's image line (sessionCapabilities' imageLine), from its
  *  record in the session store, read as every reader of the store reads one. */
 function imageLineOf(sessionId: string): ImageLine | null {
@@ -182,8 +223,8 @@ export function sendImageToSession(
     sendImageThroughMain(sessionId, hostFilePath, userContext ?? '', imageLineOf(sessionId), (note) => usePasteHintStore.getState().show(sessionId, note))
     return
   }
-  // Trailing \r submits the prompt to Claude
-  writeSessionInput(sessionId, composeFetchHostScreenshotPrompt(basename(hostFilePath), userContext) + '\r')
+  // Its Enter submits the prompt to Claude (sendFetchRequest).
+  sendFetchRequest(sessionId, composeFetchHostScreenshotPrompt(basename(hostFilePath), userContext))
 }
 
 /**
