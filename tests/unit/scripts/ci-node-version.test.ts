@@ -41,7 +41,7 @@ const OTHER_NODE: Record<string, { node: string; reason: string }> = {
   'ci.yml probe-p19': {
     node: '22',
     reason:
-      "Probe P19 runs the published Claude Code and Codex CLIs, not the app's code, and keeps the Node its own comment names: Claude Code's package asks for Node 22 or later.",
+      "Probe P19 runs the published agent CLIs, not the app's code, and keeps the Node its own comment names: Claude Code's package asks for Node 22 or later.",
   },
 }
 
