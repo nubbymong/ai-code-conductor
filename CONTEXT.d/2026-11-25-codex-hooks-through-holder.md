@@ -29,11 +29,17 @@ has the helper's shape (plan review finding 10). Some but not all named, or a
 check failing: nothing at all. None named: the hook file and the gateway, as
 before.
 
-The app's side. app-wiring.ts's hook table has a codex row (launchKinds from
-the package, keptOnGateway). A held Codex session's connections report events
-of its declared kinds only (connection.ts `hookKinds`; readEventFrame takes
-the session's kinds, the nine by default, so Claude Code's sessions and
-section 3.2's remote tabs read as before). The release writes `hooks: 'holder'`
+The app's side. Both packages declare SessionProvider.heldHookKinds (Claude
+Code: the nine its settings file injects; Codex: its six), so the member adds
+no single-provider optional member (17 of 19, the base's 17). app-wiring.ts
+makes both hook rows with one factory over the id, hookDeps(provider, how):
+'settings' (Claude Code) switches the settings file; 'launch' (Codex) sets
+byLaunch and keptOnGateway, the latter because Codex's take-over writes its
+hook file again. Every row's kinds come from its package (manager.ts
+HelperHookDeps.kinds); the launch is changed only with byLaunch. A held
+session's connections report events of its package's kinds only
+(connection.ts `hookKinds`; readEventFrame takes the session's kinds, the
+nine by default, so section 3.2's remote tabs read as before). The release writes `hooks: 'holder'`
 in the kept record of a session whose hook events went through its holder
 (Claude Code's too). A Codex take-over with the mark takes its events through
 its holder and writes no hook file; one with no mark (kept by 2.1.3-beta.17 or

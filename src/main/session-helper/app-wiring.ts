@@ -84,39 +84,38 @@ async function cleanUpOldCopies(): Promise<void> {
 }
 
 /**
- * A Claude Code session's hooks through its holder (2.1.3-beta.8, plan
- * section A4): while the hooks gateway takes hook events (the signals
- * module's live answer), the tab's per-session settings file (the one the PTY
- * manager wrote just after the spawn call) is switched to the helper's hook
- * mode, and each event the holder passes on goes to the session signals module
- * under the tab's id.
+ * A held session's hooks through its holder, for `provider`: while the hooks
+ * gateway takes hook events (the signals module's live answer), its hooks are
+ * switched to the helper's hook mode, and each event the holder passes on
+ * goes to the session signals module under the tab's id, of the kinds its
+ * package declares (SessionProvider.heldHookKinds) only. `how` is how its
+ * hooks reach the holder:
+ *  - 'settings' (Claude Code, 2.1.3-beta.8, plan section A4): the tab's
+ *    per-session settings file (the one the PTY manager wrote just after the
+ *    spawn call) is switched to the hook mode.
+ *  - 'launch' (2.1.3-beta.18, ADR-030 S12: a CLI that runs one hook command
+ *    for every session of this install, Codex's forwarder, whose trust Codex
+ *    keys on the command's text): the declared kinds go in the launch its
+ *    holder runs, with the hook mode's variables in its environment, which
+ *    the forwarder runs the hook mode from; each event waits in its holder
+ *    while no app takes it. keptOnGateway is true because that provider's
+ *    take-over writes its hook file again (Codex: launch-bindings.ts
+ *    codexTakeOver), so a session of it whose hook events stay on the hooks
+ *    gateway is still kept at an app update. A provider added here with
+ *    'launch' must have such a take-over, or its kept sessions lose their
+ *    hook events.
  */
-const helperHookDeps: HelperHookDeps = {
-  taking: () => helperHooksTaken(),
-  useHelperHooks: (appPtyId, target) => switchHooksToHelper({ settingsPath: getLocalSessionSettingsPath(appPtyId), sessionId: appPtyId, target }),
-  event: (appPtyId, e) => helperHookEvent(appPtyId, e),
-  ended: (appPtyId) => endHelperHooks(appPtyId),
-}
-
-/**
- * 2.1.3-beta.18 (ADR-030 S12): a session whose CLI runs one hook command for
- * every session of this install (Codex's forwarder, whose trust Codex keys on
- * the command's text) has its hook events through its holder from its
- * launch: the kinds its package declares (SessionProvider.heldHookKinds) go
- * in the launch its holder runs, with the hook mode's variables in its
- * environment, which the forwarder runs the hook mode from. Each event
- * reaches the session signals module under the tab's id, as a Claude Code
- * session's does, and waits in its holder while no app takes it. A session of
- * it whose hook events stay on the hooks gateway is still kept at an app
- * update: its take-over writes its hook file again, as before.
- */
-function launchHookDeps(provider: ProviderId): HelperHookDeps {
-  return {
+function hookDeps(provider: ProviderId, how: 'settings' | 'launch'): HelperHookDeps {
+  const common: HelperHookDeps = {
     taking: () => helperHooksTaken(),
-    launchKinds: () => tryGetProvider(provider)?.heldHookKinds,
-    keptOnGateway: true,
+    kinds: () => tryGetProvider(provider)?.heldHookKinds,
     event: (appPtyId, e) => helperHookEvent(appPtyId, e),
     ended: (appPtyId) => endHelperHooks(appPtyId),
+  }
+  if (how === 'launch') return { ...common, byLaunch: true, keptOnGateway: true }
+  return {
+    ...common,
+    useHelperHooks: (appPtyId, target) => switchHooksToHelper({ settingsPath: getLocalSessionSettingsPath(appPtyId), sessionId: appPtyId, target }),
   }
 }
 
@@ -149,7 +148,7 @@ function ensureManager(): SessionHelperManager {
     log: (message) => logInfo(message),
     // Claude Code's sessions by their settings file; Codex's by their launch
     // (2.1.3-beta.18). Another provider's session keeps its hooks as they are.
-    hooks: { claude: helperHookDeps, codex: launchHookDeps('codex') },
+    hooks: { claude: hookDeps('claude', 'settings'), codex: hookDeps('codex', 'launch') },
     tools: helperToolDeps,
     // 2.1.3-beta.14 B2: Codex's composer rule reads a held session's screen
     // and title from its holder (providers/codex/session-screen.ts).

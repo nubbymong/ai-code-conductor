@@ -89,13 +89,16 @@ export interface ConnectionOptions {
   openStream?: (endpoint: string) => Promise<Duplex>
   /** Section 15's folder check on Unix. Tests skip it. */
   checkEndpointFolder?: (endpoint: string) => string | null
-  /** This connection takes hook events (a Claude Code session whose hooks may
-   *  go through its holder): `hooks` is acked when the holder offers it. */
+  /** This connection takes hook events (an agent session whose hooks may go
+   *  through its holder: Claude Code's by its settings file, and from
+   *  2.1.3-beta.18 Codex's by its launch): `hooks` is acked when the holder
+   *  offers it. */
   hooks?: boolean
-  /** The hook kinds its session takes, when its launch declares them
-   *  (`hookKinds`, 2.1.3-beta.18: a session whose CLI runs the hook mode from
-   *  its own environment): only an event of one of these is reported.
-   *  Absent: the nine (HELPER_HOOK_KINDS). */
+  /** The hook kinds its session takes (2.1.3-beta.18: the kinds its package
+   *  declares, SessionProvider.heldHookKinds; a session whose CLI runs the
+   *  hook mode from its own environment declares them in its launch too, as
+   *  `hookKinds`): only an event of one of these is reported. Absent: the
+   *  nine (HELPER_HOOK_KINDS). */
   hookKinds?: readonly string[]
   /** This connection carries the session's tool streams: `mcp` is acked when
    *  the holder offers it. The manager sets it only when the app gives it the

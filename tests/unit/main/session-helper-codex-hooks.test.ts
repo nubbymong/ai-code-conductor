@@ -40,8 +40,9 @@ vi.mock('node-pty', () => ({ spawn: ptySpawn }))
 import { SessionHelperManager, setSessionHelper, spawnAgentPty, type HelperHookDeps, type HelperToolDeps } from '../../../src/main/session-helper/manager'
 import { HelperPty } from '../../../src/main/session-helper/helper-pty'
 import { setKeptLaunchBindings, takeKeptSession, type KeptLaunchBindings, type KeptLaunchFacts } from '../../../src/main/sessions/kept-launches'
-import { HOOK_MODE_ENV, heldAgentSessionId } from '../../../src/main/session-helper/protocol'
+import { HELPER_HOOK_KINDS, HOOK_MODE_ENV, heldAgentSessionId } from '../../../src/main/session-helper/protocol'
 import { CODEX_HOOK_EVENTS } from '../../../src/main/providers/codex/hooks'
+import { ClaudeProvider } from '../../../src/main/providers/claude'
 import { FakeHelper, type FakeHolder } from './session-helper-fake-holder'
 
 const SHELL = 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe'
@@ -89,6 +90,8 @@ let events: Array<{ run: number; id: string; seq: number; kind: string }>
 let taking: boolean
 /** What the Codex package declares (SessionProvider.heldHookKinds). */
 let declared: readonly string[] | undefined
+/** What the Claude Code package declares: its own declaration unless a case narrows it. */
+let claudeDeclared: readonly string[] | undefined
 
 const takenBy = (run: number): Array<[number, string]> => events.filter((x) => x.run === run).map((x) => [x.seq, x.kind])
 
@@ -96,9 +99,10 @@ function makeManager(run: number): SessionHelperManager {
   let self: SessionHelperManager | undefined
   const alive = () => { if (self && gone.has(self)) throw new Error('this app is gone') }
   const event = (id: string, e: { seq: number; kind: string }) => { events.push({ run, id, seq: e.seq, kind: e.kind }) }
-  // As app-wiring.ts gives them: Codex by its launch, Claude Code by its settings file.
-  const codexHooks: HelperHookDeps = { taking: () => taking, launchKinds: () => declared, keptOnGateway: true, event, ended: () => {} }
-  const claudeHooks: HelperHookDeps = { taking: () => taking, useHelperHooks: () => 'switched', event, ended: () => {} }
+  // As app-wiring.ts gives them (hookDeps): Codex by its launch, Claude Code
+  // by its settings file, each with the kinds its package declares.
+  const codexHooks: HelperHookDeps = { taking: () => taking, kinds: () => declared, byLaunch: true, keptOnGateway: true, event, ended: () => {} }
+  const claudeHooks: HelperHookDeps = { taking: () => taking, kinds: () => claudeDeclared, useHelperHooks: () => 'switched', event, ended: () => {} }
   const tools: HelperToolDeps = { serve: () => true, serving: () => true, relayLaunch: (_id, launch) => ({ args: typeof launch.args === 'string' ? launch.args : [...launch.args] }) }
   const claudeTools: HelperToolDeps = { serve: () => true, serving: () => true, useRelayConfig: () => 'switched' }
   const m = new SessionHelperManager({
@@ -164,6 +168,7 @@ beforeEach(() => {
   events = []
   taking = true
   declared = SIX
+  claudeDeclared = new ClaudeProvider().heldHookKinds
   const facts: Record<string, KeptLaunchFacts> = { [TAB]: { conversation: CONV, account: ACCOUNT, hookFolder: null } }
   setKeptLaunchBindings({
     describe: (id: string) => facts[id] ?? { conversation: null, account: null, hookFolder: null },
@@ -221,6 +226,8 @@ describe('a held Codex session\'s launch: the hook mode\'s variables and Codex\'
   })
 
   it('a Claude Code session\'s connection still takes the nine only: a PermissionRequest its holder sends is not taken', async () => {
+    // The kinds are read from the Claude Code package: the nine its settings file injects.
+    expect(claudeDeclared).toEqual([...HELPER_HOOK_KINDS])
     const m = await startedWith(makeManager(1))
     spawnAgentPty({ sessionId: CLAUDE_TAB, kind: 'claude' }, SHELL, [], agentOpts())
     const csid = heldAgentSessionId(CLAUDE_TAB, 'claude')
@@ -235,6 +242,24 @@ describe('a held Codex session\'s launch: the hook mode\'s variables and Codex\'
     await tick(30)
     expect(takenBy(1)).toEqual([[2, 'Stop']])
     expect(m.serviceState().state).toBe('ready')
+  })
+
+  it('a session switched by its settings file reports the kinds its own package declares, with none in its launch: a narrower list drops a kind of the nine', async () => {
+    claudeDeclared = ['Stop', 'PreToolUse']
+    await startedWith(makeManager(1))
+    spawnAgentPty({ sessionId: CLAUDE_TAB, kind: 'claude' }, SHELL, [], agentOpts())
+    const csid = heldAgentSessionId(CLAUDE_TAB, 'claude')
+    await until(() => logs.includes(`[session-helper] ${CLAUDE_TAB}: its hook events go through its holder, PreToolUse included`), 'its hooks to go through its holder')
+    const h = helper.holders.get(csid)!
+    // Declaring kinds does not change its launch: only a byLaunch provider's goes with them.
+    expect(launchOf(h).hookKinds).toBeUndefined()
+    expect(launchOf(h).env).toEqual(agentOpts().env)
+    h.hookEvent('Notification', { hook_event_name: 'Notification' })
+    h.hookEvent('PreToolUse', { hook_event_name: 'PreToolUse', tool_name: 'Bash' })
+    h.hookEvent('Stop', { hook_event_name: 'Stop' })
+    await until(() => events.length === 2, 'the two declared kinds')
+    await tick(30)
+    expect(takenBy(1)).toEqual([[2, 'PreToolUse'], [3, 'Stop']])
   })
 
   it('a holder from before 2.1.3-beta.18 (no `status`), the gateway not taking hook events, or no kinds declared: the launch is the frame it was, and its hooks stay on the gateway, with one line saying why', async () => {

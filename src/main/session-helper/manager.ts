@@ -124,7 +124,7 @@
  *
  * 2.1.3-beta.18 (plan section 5, ADR-030 S12, aicc_planning#433): a held
  * Codex session's hook events go through its holder too (hookRoute, by its
- * launch: deps.hooks' launchKinds). Its hook command stays the same for every
+ * launch: deps.hooks' byLaunch). Its hook command stays the same for every
  * session, so the launch its holder runs is given the hook mode's variables
  * (HOOK_MODE_ENV) and the kinds the Codex package declares (`hookKinds`); its
  * forwarder runs the hook mode from them. An update's release marks the kept
@@ -403,16 +403,23 @@ export interface HelperHookDeps {
   taking(): boolean
   /** Claude Code: point the tab's per-session settings file at the helper's
    *  hook mode, for every injected event (session-hooks-writer.ts
-   *  switchHooksToHelper). Its holder takes the nine (HELPER_HOOK_KINDS). A
-   *  provider gives this or launchKinds; given both, only launchKinds is used. */
+   *  switchHooksToHelper). Its holder takes the nine (HELPER_HOOK_KINDS),
+   *  with no `hookKinds` in its launch. Not used with byLaunch. */
   useHelperHooks?(appPtyId: string, target: HelperHookTarget): HelperHooksResult
   /** 2.1.3-beta.18 (ADR-030 S12): the hook kinds the provider's package
-   *  declares (SessionProvider.heldHookKinds) for a CLI whose hooks run the
-   *  helper's hook mode named in its own environment (Codex's forwarder,
-   *  scripts/ccc-codex-hook.js). The launch a holder runs is given the hook
-   *  mode's variables (HOOK_MODE_ENV) and these kinds (`hookKinds`), which its
-   *  holder then takes alone. None declared: its hooks stay as they are. */
-  launchKinds?(): readonly string[] | undefined
+   *  declares (SessionProvider.heldHookKinds), for every provider: the only
+   *  kinds its sessions' connections report (ConnectionOptions.hookKinds),
+   *  and with byLaunch the kinds its launch declares. None declared, or not
+   *  ones a holder takes: its connections report the nine, and a byLaunch
+   *  provider's hooks stay as they are. */
+  kinds?(): readonly string[] | undefined
+  /** 2.1.3-beta.18 (ADR-030 S12): its hooks are switched by its launch, not by
+   *  a settings file: for a CLI whose hooks run the helper's hook mode named
+   *  in its own environment (Codex's forwarder, scripts/ccc-codex-hook.js),
+   *  the launch a holder runs is given the hook mode's variables
+   *  (HOOK_MODE_ENV) and the kinds its package declares (`hookKinds`), which
+   *  its holder then takes alone. */
+  byLaunch?: true
   /** 2.1.3-beta.18: a session of this provider whose hook events stay on the
    *  hooks gateway may still be kept at an app update (keepable), because its
    *  take-over writes its hook file again (Codex: launch-bindings.ts
@@ -435,11 +442,12 @@ interface HookRoute {
   /** The last `seq` it took (B1e: where a take-over after a keeper's goes on). */
   lastSeq(): number
   launched(conn: HolderConnection): void
-  /** A provider with launchKinds: what the launch on `conn` goes with (see
-   *  HelperPtyDriver.launchHooks). */
+  /** A provider switched by its launch (byLaunch): what the launch on `conn`
+   *  goes with (see HelperPtyDriver.launchHooks). */
   launchHooks?(conn: HolderConnection, env: Readonly<Record<string, string>>): { env: Record<string, string>; hookKinds: readonly string[] } | undefined
-  /** A provider with launchKinds: the kinds its launch declares, the only
-   *  ones its connections report (ConnectionOptions.hookKinds). Absent: the nine. */
+  /** The kinds its package declares (HelperHookDeps.kinds), the only ones its
+   *  connections report (ConnectionOptions.hookKinds); with byLaunch, the
+   *  kinds its launch declares too. Absent: the nine. */
   kinds?: readonly string[]
   event(e: HookEventFrame): void
   ended(): void
@@ -1410,12 +1418,12 @@ export class SessionHelperManager implements MachinesSource {
    * last `seq` the keeper took, so no event is taken twice (the holder sends
    * one to one attach only, and one whose send failed again to the next).
    *
-   * 2.1.3-beta.18 (ADR-030 S12): a provider whose package declares the hook
-   * kinds its CLI reports through the hook mode named in its own environment
-   * (deps.launchKinds: a held Codex session, whose hook command, its
-   * forwarder, stays the same for every session so that the trust Codex
-   * records for it holds) is switched by its launch instead: before
-   * term.launch (`launchHooks`, with `spec`, the launch's own), when its
+   * 2.1.3-beta.18 (ADR-030 S12): a provider whose CLI reports its hook events
+   * through the hook mode named in its own environment (deps.byLaunch: a held
+   * Codex session, whose hook command, its forwarder, stays the same for
+   * every session so that the trust Codex records for it holds) is switched
+   * by its launch instead, with the kinds its package declares (deps.kinds):
+   * before term.launch (`launchHooks`, with `spec`, the launch's own), when its
    * holder offers `hooks` and takes a launch's hook kinds (a holder that
    * offers HOOK_KINDS_OFFERED_WITH), the helper copy is known, the gateway is
    * taking hook events and the kinds are ones a holder takes, the launch's
@@ -1425,9 +1433,10 @@ export class SessionHelperManager implements MachinesSource {
    * Anything else leaves its hooks on the gateway, with one log line, and the
    * launch is the frame it was before. The usual start it falls back to
    * keeps the spawn's own environment, so its forwarder posts to the gateway
-   * as before. Its connections report an event only of a kind its launch
-   * declares (ConnectionOptions.hookKinds; a take-over's, the kinds its
-   * provider declares now); a Claude Code session's, of the nine.
+   * as before. Every session's connections report an event only of a kind
+   * its package declares (ConnectionOptions.hookKinds; a take-over's, the
+   * kinds its provider declares now): a Codex session's, the kinds its launch
+   * declared; a Claude Code session's, the nine its settings file injects.
    */
   private hookRoute(ctx: AgentSpawnContext, sid: string, takenOver = false, unseen = false, after?: HookRoute, spec?: LaunchSpec): HookRoute | undefined {
     if (ctx.run) return undefined
@@ -1437,13 +1446,14 @@ export class SessionHelperManager implements MachinesSource {
     let on = takenOver
     let lastSeq = after?.lastSeq() ?? 0
     const stays = (why: string): void => this.deps.log(`[session-helper] ${appId}: its hooks stay on the hooks gateway, because ${why}`)
-    /** The kinds its provider declares for its launch, when they are ones a
-     *  holder takes; its connections report those kinds only. */
-    const declared = deps.launchKinds?.()
-    const launchKinds = validHookKinds(declared) && declared.length > 0 ? [...declared] : undefined
+    /** The kinds its package declares, when they are ones a holder takes:
+     *  its connections report those kinds only (and with byLaunch, its
+     *  launch declares them). */
+    const declared = deps.kinds?.()
+    const kinds = validHookKinds(declared) && declared.length > 0 ? [...declared] : undefined
     if (takenOver) this.deps.log(`[session-helper] ${appId}: its hook events go through its holder ${unseen ? 'while its tab is not shown' : 'from the take-over, PreToolUse included'}`)
     const route: HookRoute = {
-      ...(launchKinds ? { kinds: launchKinds } : {}),
+      ...(kinds ? { kinds } : {}),
       isOn: () => on,
       lastSeq: () => lastSeq,
       launched: (conn) => {
@@ -1478,7 +1488,7 @@ export class SessionHelperManager implements MachinesSource {
       },
     }
     // A take-over launches nothing: its launch was switched by the run that made it.
-    if (!deps.launchKinds || takenOver || !spec) return route
+    if (!deps.byLaunch || takenOver || !spec) return route
     /** The launch last asked for went with the hook mode's variables. */
     let given = false
     route.launched = () => {
@@ -1493,12 +1503,12 @@ export class SessionHelperManager implements MachinesSource {
       if (!conn.hello.caps.includes(HOOK_KINDS_OFFERED_WITH)) { stays('its holder does not take the hook kinds a launch declares (a session helper from before 2.1.3-beta.18)'); return undefined }
       if (!exe) { stays('the helper copy is not known'); return undefined }
       if (!deps.taking()) { stays('the hooks gateway is off or not listening, so no hook event would be taken'); return undefined }
-      if (!launchKinds) { stays('its provider declares no hook kinds a holder takes'); return undefined }
+      if (!kinds) { stays('its provider declares no hook kinds a holder takes'); return undefined }
       const withVars = withHookModeEnv(env, { helper: exe, store: this.store, session: sid })
       const refused = checkLaunch({ ...spec, env: withVars }, this.os)
       if (refused) { stays(`the helper would refuse its launch with the hook mode's variables (${refused.why})`); return undefined }
       given = true
-      return { env: withVars, hookKinds: [...launchKinds] }
+      return { env: withVars, hookKinds: [...kinds] }
     }
     return route
   }
