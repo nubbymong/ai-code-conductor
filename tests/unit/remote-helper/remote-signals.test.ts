@@ -244,16 +244,16 @@ describe('a helper tab\'s own files on its host', () => {
     const id = 'sig-skips'
     plugIn(signals().deps)
     const holder = holderFor(id)
-    answering(holder, { reads: { f0: 'skip link', f1: 'skip owner', f2: 'skip size', f3: 'ok zz' } })
+    answering(holder, { reads: { f0: 'skip size', f1: 'skip link', f2: 'skip owner', f3: 'ok zz' } })
     const pty = remoteHelperPty(win, id, { ssh: SSH_TAB }, 100, 30)
     await until('the launch', () => holder.launch !== null)
     const settings = JSON.parse(filesOf(ssh.calls[2]).get('settings.json')!)
     for (const kind of NINE) expect(settings.hooks[kind]).toHaveLength(1)
     const sid = remoteSessionId(id)
     expect(logs.filter((l) => l.includes('was not read'))).toEqual([
-      `[remote-helper] ${sid}: home .claude/settings.json on rocky.lan was not read (link), so nothing it sets is in the session's settings`,
-      `[remote-helper] ${sid}: cwd .claude/settings.json on rocky.lan was not read (owner), so nothing it sets is in the session's settings`,
-      `[remote-helper] ${sid}: cwd .claude/settings.local.json on rocky.lan was not read (size), so nothing it sets is in the session's settings`,
+      `[remote-helper] ${sid}: home .claude/settings.json on rocky.lan was not read (size), so nothing it sets is in the session's settings`,
+      `[remote-helper] ${sid}: cwd .claude/settings.json on rocky.lan was not read (link), so nothing it sets is in the session's settings`,
+      `[remote-helper] ${sid}: cwd .claude/settings.local.json on rocky.lan was not read (owner), so nothing it sets is in the session's settings`,
       `[remote-helper] ${sid}: checkout .claude/settings.local.json on rocky.lan was not read (unknown), so nothing it sets is in the session's settings`,
     ])
     pty!.kill()

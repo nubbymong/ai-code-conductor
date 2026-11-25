@@ -270,7 +270,8 @@ export type RemoteStatusLine = Partial<Omit<StatuslineData, 'sessionId'>>
  *  Core asks for the launch twice: once before anything is read on the host
  *  (`reads` all null), to check the start, then with the reads; the
  *  program, its arguments and its variables do not change with what was
- *  read (a start whose do is refused), only the files and keep-lists may. */
+ *  read (a launch whose program, arguments or variables differ is refused),
+ *  only the files and keep-lists may. */
 export interface ProviderRemoteLaunch {
   /** The host files the launch needs read first, in order; none: nothing is read. */
   hostReads(options: RemoteLaunchOptions, machine: RemoteLaunchMachine): readonly RemoteHostRead[]

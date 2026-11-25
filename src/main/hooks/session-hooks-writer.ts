@@ -341,7 +341,6 @@ function gitRootClaudeDir(cwd: string, homeDir: string, ids: PosixIds, skipped: 
   return claudeDirUsable(claudeDir, ids, skipped) ? claudeDir : null
 }
 
-
 /**
  * Reproduce the hooks Claude Code would apply for a session launched in `cwd`,
  * so CCC can MERGE them with its own gateway hooks rather than shadow them.

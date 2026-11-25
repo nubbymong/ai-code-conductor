@@ -84,3 +84,11 @@ retries 0). Red with the round's two fixes reverted and the owner, mode,
 size and held answers mutated (run 45587798588: those six steps red), and
 with the home folder guard and the sweep's record check mutated (run
 45587864235: those two steps red); throwaway branches since deleted.
+
+The final-head review's minors. The unit test of skipped files no longer
+answers a link for the user's own file, which the reads script never sends
+now; that read is skipped for its size, and the link case is a project
+file's (red with `link` taken out of HOST_READ_SKIPS: that line reads
+`unknown`). The screenshot menu loses its unused tab-type prop; the menu is
+rendered nowhere in src, which predates this section and goes to its own
+lane. Two comment fixes in types.ts and session-hooks-writer.ts.

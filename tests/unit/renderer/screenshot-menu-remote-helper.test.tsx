@@ -49,13 +49,13 @@ function fakeApi(state: string | Error) {
 
 /** Opens the menu, ticks both pictures, presses Insert Selected, and waits
  *  long enough for a whole storyboard (one line every 80 ms). */
-async function insertBoth(sessionType: 'local' | 'ssh') {
+async function insertBoth() {
   host = document.createElement('div')
   document.body.appendChild(host)
   root = createRoot(host)
   const onClose = vi.fn()
   await act(async () => {
-    root!.render(<ScreenshotContextMenu x={10} y={500} sessionId="tab-1" sessionType={sessionType} onClose={onClose} />)
+    root!.render(<ScreenshotContextMenu x={10} y={500} sessionId="tab-1" onClose={onClose} />)
   })
   await act(async () => { await new Promise((r) => setTimeout(r, 0)) })
   const boxes = [...host.querySelectorAll('input[type="checkbox"]')] as HTMLInputElement[]
@@ -81,7 +81,7 @@ describe('the screenshot menu on a tab through the session helper', () => {
 
   it('gets the storyboard, as every other tab does, and no state is asked', async () => {
     const { writes, getState } = fakeApi(SSH_THROUGH_HELPER)
-    const onClose = await insertBoth('ssh')
+    const onClose = await insertBoth()
     storyboard(writes)
     expect(getState).not.toHaveBeenCalled()
     expect(onClose).toHaveBeenCalled()
@@ -89,14 +89,7 @@ describe('the screenshot menu on a tab through the session helper', () => {
 
   it('an SSH tab on the usual path gets the same storyboard', async () => {
     const { writes, getState } = fakeApi('claude-running')
-    await insertBoth('ssh')
-    storyboard(writes)
-    expect(getState).not.toHaveBeenCalled()
-  })
-
-  it('a tab on this computer gets the same storyboard', async () => {
-    const { writes, getState } = fakeApi(SSH_THROUGH_HELPER)
-    await insertBoth('local')
+    await insertBoth()
     storyboard(writes)
     expect(getState).not.toHaveBeenCalled()
   })

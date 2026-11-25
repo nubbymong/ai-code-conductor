@@ -15,11 +15,10 @@ interface Props {
   x: number
   y: number
   sessionId: string
-  sessionType: 'local' | 'ssh'
   onClose: () => void
 }
 
-export default function ScreenshotContextMenu({ x, y, sessionId, sessionType: _sessionType, onClose }: Props) {
+export default function ScreenshotContextMenu({ x, y, sessionId, onClose }: Props) {
   const [screenshots, setScreenshots] = useState<ScreenshotEntry[]>([])
   const [loading, setLoading] = useState(true)
   const [selected, setSelected] = useState<Set<string>>(new Set())
