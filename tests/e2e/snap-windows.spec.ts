@@ -147,11 +147,11 @@
  *      Codex is at rest with "1 warning" (two reads 300 ms apart): one new
  *      JPEG at D2's or D3's size, not all black; one new-engine line; one
  *      line from main saying Codex's image rule pasted and sent it; exactly
- *      one new turn at the stand-in (a request with Codex's tools), whose
- *      pictures are every picture pressed so far, in order, each once by its
- *      SHA-256, the newest this press's file (Codex sends the whole
- *      conversation with each turn); then Codex at rest with its count
- *      again, and still that one turn.
+ *      one new request from Codex to the stand-in (the turn), whose pictures
+ *      are every picture pressed so far, in order, each once by its SHA-256,
+ *      the newest this press's file (Codex sends the whole conversation with
+ *      each turn); then Codex at rest with its count again, and still that
+ *      one request.
  * The reading before C2 and C3 were added (rule 34; run 45578961836, Codex
  * 0.157.1, one 1024x768 display at 100%): the tab opened, Codex asked only
  * its hooks review (the project's trust is seeded, and no sandbox menu
@@ -1063,7 +1063,7 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 /** One request probe P11's stand-in saw (its onEvent; a body is never kept),
  *  each picture it carried named by its SHA-256. */
 type StandInEvent = {
-  ev: string; t: number; id: number; path?: string; kind?: string; tools?: number
+  ev: string; t: number; id: number; path?: string; kind?: string; tools?: number; stream?: boolean; model?: string | null
   images?: Array<{ way?: string; sha256?: string; kind?: string; bytes?: number; width?: number | null; height?: number | null }>
 }
 type StandIn = { listen: () => Promise<number>; close: () => Promise<void> }
@@ -1136,9 +1136,13 @@ function codexRest(screen: string): { atRest: boolean; count: number | null } {
 const warningCount = (screen: string): number | null => codexRest(screen).count
 const atRestWithCount = (screen: string) => { const r = codexRest(screen); return r.atRest && r.count !== null }
 
-/** The turns the stand-in has seen: Codex's requests that carry its tools
- *  (Codex 0.157.1 sends a second request with no tools after a turn, P19). */
-const codexTurns = () => standInEvents.filter((e) => e.ev === 'request' && e.path === '/v1/responses' && Number(e.tools ?? 0) > 0)
+/** Every request Codex has sent its model (the stand-in's Responses route).
+ *  Each is counted, whatever it carries: in run 45580311269 the one request a
+ *  press made was the turn ("[Image #1]", the sentence, and the stand-in's
+ *  "ok" on Codex's screen), and it carried no tools, so P19's note that a
+ *  turn carries Codex's tools and a second request after it does not, made
+ *  on P19's own launch, does not describe the app's. */
+const codexTurns = () => standInEvents.filter((e) => e.ev === 'request' && e.path === '/v1/responses' && e.kind !== 'not-found')
 /** The pictures pressed into the Codex tab so far, by SHA-256, in order. */
 const codexSent: string[] = []
 const sha256Of = (file: string) => crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex')
@@ -1236,7 +1240,7 @@ test.describe('Snap into a Codex tab on Windows while Codex shows its warning co
 
   test.afterAll(async () => {
     test.setTimeout(120_000)
-    readings.codexRequests = standInEvents.filter((e) => e.ev === 'request').map(({ id, t, path: p, kind, tools, images }) => ({ id, t, path: p, kind, tools, images }))
+    readings.codexRequests = standInEvents.filter((e) => e.ev === 'request').map(({ id, t, path: p, kind, tools, stream, model, images }) => ({ id, t, path: p, kind, tools, stream, model, images }))
     const out = Object.fromEntries(Object.entries(readings).filter(([k]) => k.startsWith('codex')))
     fs.mkdirSync(OUT, { recursive: true })
     fs.writeFileSync(path.join(OUT, 'codex-readings.json'), JSON.stringify(out, null, 2))
