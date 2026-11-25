@@ -125,16 +125,33 @@ describe('training-steps', () => {
   // 2.1.3-beta.18 release smoke (card-machines): the Machines card named the
   // switches for plain terminals and for sessions, but not the third one, so
   // how to turn the remote sessions preview on was not there. The row names
-  // the switch by the label Settings shows (SettingsPage.tsx), Windows only as
-  // the switch itself is.
+  // the switch by the label Settings shows, read here from SettingsPage.tsx,
+  // and by where it is (General, its Terminal section). The switch shows on
+  // Windows only, so the row says that first. (The recheck of 69fd3ead: the
+  // row ended "(Windows)" where Settings shows "(Linux, preview)".)
   describe('the Machines card names the remote sessions switch', () => {
-    it('has a Remote row pointing at the switch by its Settings label', () => {
+    it('has a Remote row pointing at the switch by its Settings label and place', () => {
       const card = trainingSteps.find((s) => s.id === 'machines')
       if (!card) throw new Error('no trainingSteps entry with id "machines"')
       const row = (card.howToTrigger ?? []).find((t) => t.label === 'Remote')
-      expect(row?.value).toBe('Settings -> General -> Remote sessions through the session helper (Windows)')
+      expect(row?.value).toBe('On Windows: Settings -> General -> Remote sessions through the session helper (Linux, preview)')
       const page = readFileSync(resolve(__dirname, '../../src/renderer/components/SettingsPage.tsx'), 'utf8')
-      expect(page).toContain('Remote sessions through the session helper (Linux, preview)')
+      // The label is the text the switch's own <span> starts with.
+      const at = page.indexOf('data-testid="setting-remote-sessions-helper"')
+      expect(at).toBeGreaterThan(-1)
+      const label = /<span>\s*([^<]+?)\s*<span/.exec(page.slice(at))?.[1]
+      expect(label).toBe('Remote sessions through the session helper (Linux, preview)')
+      expect(row?.value).toContain(`Settings -> General -> ${label}`)
+      // ...in the General tab's Terminal section, as the row's path says.
+      const general = page.indexOf("activeTab === 'general'")
+      const terminal = page.indexOf('<Section title="Terminal"', general)
+      const next = page.indexOf('<Section title=', terminal + 1)
+      expect(general).toBeGreaterThan(-1)
+      expect(terminal).toBeGreaterThan(general)
+      expect(at).toBeGreaterThan(terminal)
+      expect(at).toBeLessThan(next)
+      // ...and shown on Windows only, as the row's "On Windows:" says.
+      expect(page.slice(at - 240, at)).toContain("window.electronPlatform === 'win32' && (")
     })
   })
 
