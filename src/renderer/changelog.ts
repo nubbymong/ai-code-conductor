@@ -57,6 +57,9 @@ export const changelog: ChangelogEntry[] = [
       { type: 'fix', description: 'A Claude Code tab through the session helper (the remote sessions preview) now runs at the effort level set in your Claude Code settings on that machine, as a usual SSH tab does; before, it ran at the model\'s default effort.' },
       { type: 'fix', description: 'A full uninstall on Windows now also removes the folders a Codex session\'s resume list left in your temp folder, and finds the same temp folder the app used even when TEMP and TMP point to different places.' },
       { type: 'fix', description: 'On Windows, with Claude Code and Codex sessions through the session helper switched on, a Codex session kept running through an app update now keeps the hook events it makes during the update, so its tab is marked when a turn ends or asks for approval. This holds for a Codex session started on this version or later.' },
+      { type: 'fix', description: 'A Claude Code tab through the session helper (the remote sessions preview) now shows one plain pill in its header, "Account not shown through the helper yet", instead of loading pills that never filled.' },
+      { type: 'fix', description: 'On the Machines page, opening the Remove question now clears the notice an earlier Add, Check or Remove left, so an old answer no longer sits under the new question.' },
+      { type: 'fix', description: 'A session card in the sidebar now keeps about ten characters of its name, or all of a shorter name, beside a full row of badges; badges that do not fit move to a second line instead of cutting the name short.' },
     ],
   },
   {
