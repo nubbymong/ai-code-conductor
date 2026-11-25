@@ -313,11 +313,8 @@ export function cellsOf(code: number): number {
 /** How many rows the paint takes on a terminal `cols` columns wide: each line
  *  from the left edge, a character that does not fit on its row starting the
  *  next one, as xterm writes it (the console writes a line longer than a row
- *  with no line break inside it). Not counted as xterm does, and in no console
- *  paint (a wrapped row is written cell by cell, a mark in its character's
- *  cell): an erase (`ESC[nX`) right after a full row, which takes xterm's
- *  cursor back to the last column, and a mark with no character before it,
- *  which xterm gives a cell. */
+ *  with no line break inside it). Two kinds of input that no console paint
+ *  holds are not counted as xterm counts them. */
 function rowsOfPaint(read: Paint, cols: number): number {
   let rows = 0
   for (const run of read.runs) {
