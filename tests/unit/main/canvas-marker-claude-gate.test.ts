@@ -17,8 +17,10 @@
 // src/shared/claude-screen.ts) over a fake IPC hop. What reaches the session's
 // process is what the mocked node-pty records.
 //
-// Mutant this must catch: submitMarker's Claude branch calling
-// submitLine(sessionId, line) in place of queueClaudeMarkerLine.
+// Mutant this must catch: the Claude Code package's marker member typing the
+// line and Enter at once, in one write (the Watchdog retry's way, as the
+// module's submitLine did until 2.1.3-beta.18 section 4), in place of
+// queueClaudeMarkerLine.
 import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from 'vitest'
 import * as fs from 'fs'
 import * as os from 'os'
@@ -61,14 +63,20 @@ vi.mock('../../../src/main/logging/logging-service', () => ({ getLogSupervisor: 
 vi.mock('../../../src/main/conductor-mcp-server', () => ({
   getConductorMcpPort: () => 0, registerCodexReviewSession: () => {}, registerClaudeReviewSession: () => {}, unregisterCodexReviewSession: () => {}, releaseMcpSessionProvider: () => {},
 }))
-vi.mock('../../../src/main/providers', () => ({
-  providerCapability: () => ({ enabled: true }),
-  getProvider: () => ({
-    resolveBinary: () => ({ cmd: 'claude', source: 'system' }),
-    buildSpawnCommand: () => ({ cmd: 'pwsh', args: [], env: {} }),
-    ingestSessionTelemetry: () => ({ stop: () => {} }),
-  }),
-}))
+// Since 2.1.3-beta.18 section 4 the marker door types a Claude Code session
+// through the Claude Code package's own run screen, as the provider hands it.
+vi.mock('../../../src/main/providers', async () => {
+  const { CLAUDE_RUN_SCREEN } = await import('../../../src/main/providers/claude/run-screen')
+  return {
+    providerCapability: () => ({ enabled: true }),
+    getProvider: () => ({
+      resolveBinary: () => ({ cmd: 'claude', source: 'system' }),
+      buildSpawnCommand: () => ({ cmd: 'pwsh', args: [], env: {} }),
+      ingestSessionTelemetry: () => ({ stop: () => {} }),
+      runScreen: CLAUDE_RUN_SCREEN,
+    }),
+  }
+})
 vi.mock('../../../src/main/providers/claude/spawn', () => ({ resolveClaudeBinary: () => ({ cmd: 'claude', source: 'system' }), resolveHostColorScheme: () => 'dark' }))
 vi.mock('../../../src/main/vision-manager', () => ({ isGlobalVisionRunning: () => false, getGlobalVisionConfig: () => null, teardownVisionSession: () => {} }))
 vi.mock('../../../src/main/canvas/canvas-plugin', () => ({ ensureCanvasPlugin: () => null }))

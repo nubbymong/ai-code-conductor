@@ -35,12 +35,17 @@ const h = vi.hoisted(() => ({
   },
 }))
 
-vi.mock('../../../src/main/providers', () => ({
-  getProvider: (id: string) => {
-    if (id !== 'codex') throw new Error('no such provider in this test')
-    return { runScreen: h.screen }
-  },
-}))
+// Since 2.1.3-beta.18 section 4 the door reaches the image rule through the
+// Codex package's door members, built here over the fake run screen.
+vi.mock('../../../src/main/providers', async () => {
+  const { codexDoorMembers } = await import('../../../src/main/providers/codex/run-screen-doors')
+  return {
+    getProvider: (id: string) => {
+      if (id !== 'codex') throw new Error('no such provider in this test')
+      return { runScreen: { ...h.screen, ...codexDoorMembers(h.screen as never) } }
+    },
+  }
+})
 vi.mock('../../../src/main/debug-logger', () => ({
   logInfo: (msg: string) => { h.infos.push(msg) },
   logWarn: () => {},
@@ -58,8 +63,8 @@ const ports = {
   write: (sessionId: string, data: string): void => { runs.get(sessionId)?.write(data) },
   run: (sessionId: string) => runs.get(sessionId) as never,
   tmuxWrapped: () => false,
-  isCodexSession: () => true,
-  isCodexAskSession: () => false,
+  providerOf: () => 'codex' as const,
+  isAskSession: () => false,
 }
 
 let n = 0

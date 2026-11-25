@@ -1,17 +1,20 @@
-// The session input module's submitLine into an SSH session (2.1.3-beta.9
-// section A1): the Watchdog's retry into an SSH Persistent session (its
-// Claude Code wrapped in tmux on the host) goes in after tmux's leave key, so a
-// pane the user scrolled up in (tmux copy-mode, which swallows input) is left
-// first and the retry reaches Claude Code (#85). Any other SSH session gets the
-// line and Enter only. The rest of submitLine is in session-input.test.ts; this
-// half needs the SSH flow's own mocks (as pty-manager-ssh-tmux.test.ts drives
-// it): the real spawnPty SSH branch and the real Claude Code provider over a
-// recording stand-in for node-pty, so nothing is started and no host reached.
-// These assertions held on beta, against pty-manager's writeSubmittedLine,
-// before it moved.
+// The Watchdog's retry into an SSH session (session-input submitRetry, typed
+// by the Claude Code package's retry member since 2.1.3-beta.18 section 4):
+// the retry into an SSH Persistent session (its Claude Code wrapped in tmux on
+// the host) goes in after tmux's leave key, so a pane the user scrolled up in
+// (tmux copy-mode, which swallows input) is left first and the retry reaches
+// Claude Code (#85). Any other SSH session gets the line and Enter only. The
+// rest of the retry is in session-input.test.ts; this half needs the SSH
+// flow's own mocks (as pty-manager-ssh-tmux.test.ts drives it): the real
+// spawnPty SSH branch, the real PTY manager's ports and the real Claude Code
+// provider, registered, over a recording stand-in for node-pty, so nothing is
+// started and no host reached. These assertions held on beta, against
+// pty-manager's writeSubmittedLine, before it moved, and against the module's
+// submitLine (2.1.3-beta.9 section A1) until section 4 removed it.
 //
 // Mutants this must catch: the leave key dropped; the leave key added to a
-// session that is not wrapped.
+// session that is not wrapped; the Claude Code package's run screen (or its
+// retry member) gone, which leaves the retry untyped.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
 vi.mock('os', async (importOriginal) => ({ ...(await importOriginal<typeof import('os')>()), platform: () => 'linux' }))
@@ -36,7 +39,7 @@ vi.mock('electron', () => ({
 vi.mock('../../../src/main/watchdog/watchdog-manager', () => ({ getWatchdogManager: () => null }))
 
 const { spawnPty, getSshFlow, killPty, _getSshNonceForTest } = await import('../../../src/main/pty-manager')
-const { submitLine } = await import('../../../src/main/session-input')
+const { submitRetry } = await import('../../../src/main/session-input')
 const { registerProvider } = await import('../../../src/main/providers')
 const { ClaudeProvider } = await import('../../../src/main/providers/claude')
 const { TMUX_WHEEL_EXIT_KEY } = await import('../../../src/shared/tmux-wheel')
@@ -84,26 +87,26 @@ afterEach(() => {
   vi.useRealTimers()
 })
 
-describe('submitLine into an SSH session', () => {
+describe('the Watchdog\'s retry into an SSH session (submitRetry)', () => {
   it('an SSH Persistent session (Claude Code wrapped in tmux): the leave key, then exactly the line and Enter, as one write', () => {
     const launch = launchClaude()
     expect(launch).toMatch(/new-session\s+-s\s+ccc-/)
-    submitLine(SID, 'continue')
+    submitRetry(SID, 'continue')
     expect(h.writes).toEqual([`${TMUX_WHEEL_EXIT_KEY}continue\r`])
   })
 
   it('an SSH session that is not wrapped: exactly the line and Enter, no leave key', () => {
     const launch = launchClaude({ detachable: false })
     expect(launch).not.toMatch(/new-session\s+-s\s+ccc-/)
-    submitLine(SID, 'continue')
+    submitRetry(SID, 'continue')
     expect(h.writes).toEqual(['continue\r'])
   })
 
   it('a repeat within 300 ms is suppressed on a wrapped session too', () => {
     launchClaude()
-    submitLine(SID, 'continue')
+    submitRetry(SID, 'continue')
     vi.advanceTimersByTime(100)
-    submitLine(SID, 'continue')
+    submitRetry(SID, 'continue')
     expect(h.writes).toEqual([`${TMUX_WHEEL_EXIT_KEY}continue\r`])
   })
 })

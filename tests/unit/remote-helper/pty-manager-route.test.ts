@@ -58,13 +58,17 @@ import type { SSHOptions } from '../../../src/main/ssh-options'
 import { FakeSsh } from './fake-ssh'
 // Plain ESM with main() behind an argv[1] check: importing it runs nothing.
 import { PTY_MANAGER_LINE_CAP, countLines } from '../../../scripts/ci/pr-numbers.mjs'
+import { CLAUDE_RUN_SCREEN } from '../../../src/main/providers/claude/run-screen'
 
+// runScreen: since 2.1.3-beta.18 section 4 a prompt button types a Claude
+// Code tab through the Claude Code package's own run screen.
 const fakeProvider = {
   id: 'claude', displayName: 'Claude', resolveBinary: () => null, buildSpawnCommand: () => ({ cmd: '', args: [], env: {} }),
   detectUiRunning: () => false, ingestSessionTelemetry: () => ({ stop() {} }), listHistorySessions: async () => [],
   resumeCommand: () => ({ cmd: '', args: [] }), configureMcpServer: async () => {}, getSshSettingsPath: () => '', getSshMcpConfigPath: () => '', configureRemoteSettings: () => '',
   // The Claude package's own remote launch (2.1.3-beta.18 section 2).
   remoteLaunch: claudeRemoteLaunch,
+  runScreen: CLAUDE_RUN_SCREEN,
 } as unknown as SessionProvider
 const win = { webContents: { send() {} }, isDestroyed: () => false } as never
 

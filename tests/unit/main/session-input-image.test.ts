@@ -35,9 +35,17 @@ import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from 'vite
 
 const h = vi.hoisted(() => ({ infos: [] as string[] }))
 
-vi.mock('../../../src/main/providers', () => ({
-  getProvider: () => { throw new Error('no provider in this test') },
-}))
+// Since 2.1.3-beta.18 section 4 the door types a Claude Code session through
+// the Claude Code package's own run screen; no Codex package is registered.
+vi.mock('../../../src/main/providers', async () => {
+  const { CLAUDE_RUN_SCREEN } = await import('../../../src/main/providers/claude/run-screen')
+  return {
+    getProvider: (id: string) => {
+      if (id === 'claude') return { runScreen: CLAUDE_RUN_SCREEN }
+      throw new Error('no such provider in this test')
+    },
+  }
+})
 vi.mock('../../../src/main/debug-logger', () => ({
   logInfo: (msg: string) => { h.infos.push(msg) },
   logWarn: () => {},
@@ -65,8 +73,8 @@ const ports = {
   },
   run: (sessionId: string) => runs.get(sessionId) as never,
   tmuxWrapped: (sessionId: string) => tmux.has(sessionId),
-  isCodexSession: (sessionId: string) => codex.has(sessionId),
-  isCodexAskSession: () => false,
+  providerOf: (sessionId: string) => (codex.has(sessionId) ? 'codex' as const : 'claude' as const),
+  isAskSession: () => false,
 }
 
 let n = 0
