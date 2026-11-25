@@ -387,9 +387,10 @@ describe('reads with a write flag, and the other entry points, aimed at a real h
   // spawn of the same program, then hands it to Node. On Windows Node offers
   // the function but answers that it is not available there, which is what
   // the first case sees on a Windows machine. Its POSIX branch (the
-  // replacement itself) runs only on a POSIX Node 22.15 or later, which no CI
-  // test job runs (they run Node 20, which has no process.execve), so it has
-  // not been run yet; the conformance job's macOS rc leg runs the real
+  // replacement itself) runs only on a POSIX Node 22.15 or later: CI's macOS
+  // and Linux test jobs, on Node 24 from 2.1.3-beta.18 (aicc_planning#418;
+  // first run CI run 45577050374, green; on Node 20 it was skipped, as Node 20
+  // has no process.execve). The conformance job's macOS rc leg runs the real
   // launcher through the guard. The probe gets homes and a temp folder of its
   // own, in a folder named like a temp folder: a child trusts its parent's
   // temp folder only when it is named like one, and this case does not depend

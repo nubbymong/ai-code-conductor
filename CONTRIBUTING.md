@@ -4,7 +4,7 @@ Thanks for your interest in contributing! This document covers setup, coding sta
 
 ## Prerequisites
 
-- Node.js 20+
+- Node.js 24, the Node the app's Electron carries and the one CI runs (some dependencies need 22 or later)
 - npm 9+
 - [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) installed and authenticated
 - Optional: OpenAI's [Codex CLI](https://github.com/openai/codex) 0.153.4 or newer, to work on Codex features

@@ -129,7 +129,8 @@ describe.runIf(onWindows)('Windows: a node.exe found under a folder whose name h
    *  test; at br\v1 beside it: a hard link to that copy, or a second copy
    *  when the link cannot be made. Never a link to the node running this
    *  test: it runs until the whole run ends, and the classic Windows delete
-   *  (Node 20's fs.rmSync, as on CI) refuses to remove any name of a program
+   *  (Node 20's fs.rmSync, which CI ran until 2.1.3-beta.18 and a
+   *  contributor may still run) refuses to remove any name of a program
    *  that is running, so ROOT could not be removed. */
   let found = ''
   let beside = ''
