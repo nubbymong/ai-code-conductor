@@ -2625,6 +2625,13 @@ Section "probe"
       IntOp $6 $6 + 1
     \${Loop}
     FileWrite $cccProbeLog "exitcode=$1$\\r$\\n"
+    ; Windows sets the exit code before it signals the process object, and TerminateProcess fails only once the process has terminated (ExitProcess and TerminateProcess docs), so wait for the signal too, through a second, SYNCHRONIZE-only handle ($8 keeps the pid this process's).
+    System::Call 'kernel32::OpenProcess(i 0x00100000, i 0, i $3) p .r9'
+    System::Call 'kernel32::WaitForSingleObject(p r9, i 30000) i .r0'
+    FileWrite $cccProbeLog "signaled=$0$\\r$\\n"
+    \${If} $9 != 0
+      System::Call 'kernel32::CloseHandle(p r9)'
+    \${EndIf}
   \${EndIf}
   ; The end, as CccCloseAppCopies step 3 makes it.
   System::Call 'kernel32::TerminateProcess(p r8, i 1) i .r6 ?e'
@@ -2651,7 +2658,7 @@ SectionEnd
     }
   }
 
-  /** Open `pid` with `rights` ("none": no handle at all), wait for it to exit when `waitExit`, end it, and read why that failed. */
+  /** Open `pid` with `rights` ("none": no handle at all), wait for it to exit (exit code set, then process object signaled) when `waitExit`, end it, and read why that failed. */
   function runWhy(cfg: { pid: number; rights: string; waitExit: boolean }) {
     compileWhy()
     writeFileSync(wcfg(), ['[why]', `pid=${cfg.pid}`, `rights=${cfg.rights}`, `waitExit=${cfg.waitExit ? 1 : 0}`, ''].join('\r\n'))
@@ -2678,6 +2685,8 @@ SectionEnd
     const { out, details, log } = runWhy({ pid: copy.pid, rights: '0x1001', waitExit: true })
     expect(Number(out.opened), log).not.toBe(0)
     expect(out.exitcode, 'it exited by itself before the end').not.toBe('259')
+    // 0 is WAIT_OBJECT_0: Windows had finished ending it, not only set its exit code.
+    expect(out.signaled, `it had fully exited before the end\n${log}`).toBe('0')
     expect(out.terminated, log).toBe('0')
     expect(details, log).toEqual([`Could not end process ${copy.pid}: it had already exited.`])
     expect(await waitGone(copy.pid)).toBe(true)
