@@ -109,8 +109,8 @@ export function hooksOfSettingsText(text: string | null): Record<string, unknown
  *  copies them into its session file (ssh-shim.ts generateRemoteSetupScript),
  *  then over them the status line, the helper's status mode, and the hooks,
  *  the host's own (in `reads`' order) then the helper's hook mode for the nine
- *  events, identical entries dropped. Claude Code takes some keys only from a
- *  --settings file: a top-level effortLevel in the user's own settings is a
+ *  events, identical entries dropped. Claude Code reads some keys differently
+ *  by source: a top-level effortLevel in the user's own settings is a
  *  legacy effort it applies to some models only, while in a --settings file it
  *  is the session's effort (2.1.3-beta.18 fix round, item 2: without the copy
  *  a helper tab ran at the model's default effort, today's SSH tab at the

@@ -39,8 +39,9 @@ probe (ADR) must confirm. R5 fixtures fix field types, lengths and refusals.
   the hold, the fixed `files` script writes the launch's `settings.json` (the
   host user's own `~/.claude/settings.json` keys less `mcpServers`, as the
   usual SSH setup's session file carries them, since Claude Code takes a
-  top-level `effortLevel` as the session's effort only from a `--settings`
-  file; over them, the status line is the status mode and hooks are the
+  top-level `effortLevel` as the session's effort from every settings source
+  but the user's own (in ~/.claude/settings.json it is a legacy effort some
+  models take), a `--settings` file among them; over them, the status line is the status mode and hooks are the
   host's own, then the hook mode's nine, identical entries once) and, while
   the app serves its tools, `mcp.json` (`conductor` is the relay) into
   `sessions/<sid>/` (folder 0700, files 0600), contents on standard input

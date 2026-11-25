@@ -16,8 +16,8 @@
  * program's terminal whole (helper/src/holder.rs, the input thread), so the
  * request and its CR, written together (about 175 characters), reached Claude
  * Code as one read. A marker line is under 64 characters, so its CR was the
- * Enter. Today's SSH tab reaches the host through ConPTY and ssh.exe, which
- * hand the input on in pieces.
+ * Enter. Today's SSH tab sends the same one write through ConPTY and ssh.exe
+ * and submits; how they split it was not measured.
  *
  * The fix: for a tab main says goes through the helper (ssh.getState answers
  * `through-helper`), the request, then its Enter as its own write
