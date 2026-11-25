@@ -11,10 +11,14 @@
 // state P19's second run records only (Codex's mid-reply of its short turn,
 // and the hint rows) ends 300 ms after its mark, with no resize. The program
 // is the CLI at one version: codex is Codex 0.157.1, codex170 is Codex
-// 0.170.0 (VERSION below). Codex's warning-draft (2.1.3-beta.17 C7,
-// aicc_planning #371) comes from C7's recording hold on the Windows test
-// machine (P19's recorder with a scenario file of the hold's own), recorded
-// only as the hint rows are. Each recording names the CLI and its version, the
+// 0.170.0, codex172 is Codex 0.172.0 (VERSION below). Codex's warning-draft
+// (2.1.3-beta.17 C7, aicc_planning #371) comes from C7's recording hold on the
+// Windows test machine (P19's recorder with a scenario file of the hold's
+// own), recorded only as the hint rows are. So do Codex 0.172.0's ready and
+// after-reply (2.1.3-beta.18 section 7.4, aicc_planning #427): 7.4's recording
+// hold on the same machine, with helper/probes/h74-scenarios.json, picked
+// GPT-6.1 Terra in Codex's own model picker for the session, then sent one
+// turn. Each recording names the CLI and its version, the
 // system, the size, and holds the
 // chunks as node-pty handed them over (on macOS and Linux a character split
 // across two reads joins the second, as node-pty's own decoder does), with
@@ -58,7 +62,13 @@
 //     recording's output last set: a braille spinner exactly on the Windows
 //     and Linux screens of a reply streaming and of the queue hint, and the
 //     title changes no other recording's reading. Case 2 reads each recording
-//     with its title, as the app's Codex readers do.
+//     with its title, as the app's Codex readers do;
+//  6. (2.1.3-beta.18 section 7.4, aicc_planning#427) each Codex 0.172.0
+//     recording ends with one footer row naming GPT-6.1 Terra by its display
+//     name of two words ("GPT-6.1 Terra low"), and Codex's reader reads it
+//     ready and empty with no model list (main's readers), with the model's id
+//     (gpt-6.1-terra, a hyphen where the footer has a space) alone and in a
+//     list (the renderer's rule), and not with a list that lacks the model.
 // A recording a reader misreads is a finding, not a fixture to bend: it is
 // listed in KNOWN_MISREADS with its ticket and the wrong answer the reader
 // gives, so a change in that answer fails case 2 too, and the reader is fixed.
@@ -115,14 +125,16 @@ const HINT_STATES = ['queue-hint', 'rebound-hint', 'agents-hint', 'warning-hint'
  *  footer (C7's recording hold, record only). */
 const DRAFT_STATES = ['warning-draft'] as const
 const CODEX_STATES = [...CLI_STATES, ...HINT_STATES, ...DRAFT_STATES] as const
-const STATES: Record<string, readonly string[]> = { claude: CLI_STATES, codex: CODEX_STATES, codex170: CODEX_STATES, shell: ['after-output'] }
+const STATES: Record<string, readonly string[]> = { claude: CLI_STATES, codex: CODEX_STATES, codex170: CODEX_STATES, codex172: CODEX_STATES, shell: ['after-output'] }
 const PROGRAMS = Object.keys(STATES)
 const SYSTEMS = ['windows-bundled', 'windows-system', 'macos', 'linux'] as const
 /** The ConPTY each system's recordings ran under (null: not Windows). */
 const CONPTY: Record<string, string | null> = { 'windows-bundled': 'bundled', 'windows-system': 'system', macos: null, linux: null }
-const CLI_NAME: Record<string, string> = { claude: 'Claude Code', codex: 'Codex', codex170: 'Codex', shell: 'default shell' }
+const CLI_NAME: Record<string, string> = { claude: 'Claude Code', codex: 'Codex', codex170: 'Codex', codex172: 'Codex', shell: 'default shell' }
+/** The programs Codex's reader reads: each a version of Codex. */
+const CODEX_PROGRAMS = PROGRAMS.filter((p) => CLI_NAME[p] === 'Codex')
 /** The version every recording of a program is of (null: the shell). */
-const VERSION: Record<string, string | null> = { claude: '2.1.328', codex: '0.157.1', codex170: '0.170.0', shell: null }
+const VERSION: Record<string, string | null> = { claude: '2.1.328', codex: '0.157.1', codex170: '0.170.0', codex172: '0.172.0', shell: null }
 
 /** What each reader must read for a state. "working" is the readers' busy.
  *  Claude Code's first screen with no account is its theme picker, drawn
@@ -141,6 +153,7 @@ const EXPECTED: Record<string, Record<string, string>> = {
   claude: { 'first-screen': 'no-prompt', ready: 'ready', 'mid-reply': 'busy', 'after-reply': 'ready' },
   codex: CODEX_EXPECTED,
   codex170: CODEX_EXPECTED,
+  codex172: CODEX_EXPECTED,
   shell: { 'after-output': 'no-prompt' },
 }
 /** The states whose prompt holds nothing when they are read. */
@@ -158,12 +171,17 @@ interface LeftOut { program: string; state: string; systems: readonly string[]; 
 const HINT_ELSEWHERE = 'kept on one Windows system (the bundled ConPTY, which the app gives Codex sessions) and one other (macOS) by the order of keeping; P19\'s second run recorded the same row here too'
 const LEFT_OUT: LeftOut[] = [
   { program: 'codex', state: 'agents-hint', systems: SYSTEMS, why: 'not reached: Codex 0.157.1 does not draw the agents form of the hint row (P19\'s second run waited 60 s on every system; the screen showed the ready composer with "? for shortcuts")' },
-  { program: 'codex', state: 'after-reply', systems: ['linux'], why: 'over the 3 MiB corpus cap: last in the order of keeping (243,915 bytes; 173,132 were left then, 146,829 since 2.1.3-beta.17 C7 added its two warning drafts)' },
-  { program: 'codex170', state: 'first-screen', systems: SYSTEMS, why: 'not in the plan\'s order of keeping, so not added (P19\'s second run recorded it: the sign-in choice, as Codex 0.157.1\'s; the four are 56,262 bytes, and 173,132 bytes of the 3 MiB cap were left then, 146,829 since 2.1.3-beta.17 C7)' },
+  { program: 'codex', state: 'after-reply', systems: ['linux'], why: 'over the 3 MiB corpus cap: last in the order of keeping (243,915 bytes; 173,132 were left then, 146,829 after 2.1.3-beta.17 C7 added its two warning drafts, 73,071 since 2.1.3-beta.18 section 7.4 added Codex 0.172.0\'s four recordings)' },
+  { program: 'codex170', state: 'first-screen', systems: SYSTEMS, why: 'not in the plan\'s order of keeping, so not added (P19\'s second run recorded it: the sign-in choice, as Codex 0.157.1\'s; the four are 56,262 bytes, and 173,132 bytes of the 3 MiB cap were left then, 146,829 after 2.1.3-beta.17 C7, 73,071 since 2.1.3-beta.18 section 7.4)' },
   ...['queue-hint', 'rebound-hint', 'warning-hint'].map((state) => ({ program: 'codex', state, systems: ['windows-system', 'linux'], why: HINT_ELSEWHERE })),
   ...HINT_STATES.map((state) => ({ program: 'codex170', state, systems: ['windows-system', 'linux'], why: HINT_ELSEWHERE })),
   { program: 'codex', state: 'warning-draft', systems: ['macos', 'linux'], why: 'not recorded: 2.1.3-beta.17 C7\'s recording hold ran on the Windows test machine only (both ConPTYs, 3 runs each, the same row in every run)' },
   { program: 'codex170', state: 'warning-draft', systems: SYSTEMS, why: 'not recorded: 2.1.3-beta.17 C7\'s recording hold ran Codex 0.157.1 only' },
+  // Codex 0.172.0 (2.1.3-beta.18 section 7.4, aicc_planning#427): its ready and after-reply on GPT-6.1 Terra only.
+  ...['ready', 'after-reply'].map((state) => ({ program: 'codex172', state, systems: ['macos', 'linux'], why: 'not recorded: 2.1.3-beta.18 section 7.4\'s recording hold ran on the Windows test machine only (both ConPTYs, 3 runs of each of its three launches)' })),
+  { program: 'codex172', state: 'first-screen', systems: SYSTEMS, why: 'not recorded: section 7.4\'s hold marks only the screens after GPT-6.1 Terra is picked, idle and after a turn (aicc_planning#427)' },
+  { program: 'codex172', state: 'mid-reply', systems: SYSTEMS, why: 'not recorded: on GPT-6.1 Terra, Codex 0.172.0 sent each turn with no tools (all 36 requests of section 7.4\'s 18 runs), and P19\'s stand-in streams its reply only to a request that carries tools, so it answered with its one word at once and no reply streamed to mark' },
+  ...[...HINT_STATES, ...DRAFT_STATES].map((state) => ({ program: 'codex172', state, systems: SYSTEMS, why: 'not recorded: each is a launch of its own, outside section 7.4\'s hold (idle and after a turn on GPT-6.1 Terra, aicc_planning#427); its ready and after-reply show the agents form of the hint row already' })),
 ]
 const leftOutFor = (n: { program: string; system: string; state: string }, rows: readonly LeftOut[] = LEFT_OUT): LeftOut | undefined =>
   rows.find((l) => l.program === n.program && l.state === n.state && l.systems.includes(n.system))
@@ -192,7 +210,12 @@ const strayLeftOut = (rows: readonly LeftOut[]): string[] =>
  *    Codex 0.170.0's footer wraps onto a second row (its macOS and Windows
  *    screens after the prompt is sent; their temporary folders are longer than
  *    Linux's), and a wrapped footer still reads unrecognised, whatever row is
- *    under it;
+ *    under it. Codex 0.172.0's footer wraps the same way after P19's short
+ *    prompt (2.1.3-beta.18 section 7.4's hold, its tseq launch: the
+ *    after-reply of both ConPTYs reads unrecognised); the corpus holds that
+ *    hold's launch with P19's long prompt, whose footer fits in 120 columns,
+ *    so its after-reply shows the model's two words with a thread title
+ *    (case 6), and the wrap stays listed on the codex170 recordings below;
  *  - Codex 0.157.1's macOS mid-reply reads ready: no mid-reply screen holds an
  *    "esc to interrupt" row (Codex drew its working row once, after Enter, and
  *    not while the reply streamed), each ends in the same rows as its
@@ -219,10 +242,12 @@ const KNOWN_MISREADS: Record<string, Misread> = {
  *  braille spinner (probe P19's second run: a reply streaming, and the queue
  *  hint under a draft typed then, on Windows and Linux). */
 const TITLE_SPINS = ['windows-bundled', 'windows-system', 'linux'].flatMap((s) => ['mid-reply', 'queue-hint'].map((st) => `-${s}-${st}`))
-const spinsByName = (name: string): boolean => /^codex(170)?-/.test(name) && TITLE_SPINS.some((end) => name.endsWith(end))
 
 const NAMES = PROGRAMS.flatMap((p) => SYSTEMS.flatMap((s) => STATES[p].map((st) => ({ name: `${p}-${s}-${st}`, program: p, system: s, state: st }))))
 const NAME_BY = new Map(NAMES.map((n) => [n.name, n]))
+/** Whether a name is a recording of a version of Codex (CODEX_PROGRAMS). */
+const isCodexName = (name: string): boolean => CODEX_PROGRAMS.includes(NAME_BY.get(name)?.program ?? '')
+const spinsByName = (name: string): boolean => isCodexName(name) && TITLE_SPINS.some((end) => name.endsWith(end))
 
 // ── the files ───────────────────────────────────────────────────────────────
 interface ChunkEvent { o: number; t: number; text: string }
@@ -356,7 +381,7 @@ function xtermProblem(name: string, committed: unknown, loaded: string = XTERM_V
  *  title (B2); for the shell, both readers. */
 function readerAnswer(program: string, lines: ScreenLine[], title: string | null = null): { screen: string; text: string } {
   if (program === 'claude') return readClaudeScreen(lines)
-  if (program === 'codex' || program === 'codex170') return readCodexScreen(lines, null, { title })
+  if (CODEX_PROGRAMS.includes(program)) return readCodexScreen(lines, null, { title })
   const claude = readClaudeScreen(lines)
   const codex = readCodexScreen(lines, null, { title })
   return claude.screen === codex.screen ? claude : { screen: `${claude.screen} (Claude Code's reader), ${codex.screen} (Codex's)`, text: '' }
@@ -525,10 +550,11 @@ describe('the screen corpus (helper/fixtures/screens)', () => {
   })
 
   describe('5. the window title Codex\'s output sets (B2, aicc_planning#370)', () => {
-    const CODEX = RECORDINGS.filter((n) => /^codex(170)?-/.test(n))
-    it('holds Codex recordings that end with a spinner title and that do not (a vacuous pass is no pass)', () => {
+    const CODEX = RECORDINGS.filter(isCodexName)
+    it('holds Codex recordings that end with a spinner title and that do not, of every Codex version (a vacuous pass is no pass)', () => {
       expect(CODEX.filter(spinsByName).length).toBeGreaterThan(0)
       expect(CODEX.filter((n) => !spinsByName(n)).length).toBeGreaterThan(0)
+      expect(CODEX_PROGRAMS.filter((p) => !CODEX.some((n) => NAME_BY.get(n)?.program === p))).toEqual([])
     })
 
     it.each(CODEX)('%s: a spinner title exactly where Codex draws one; it reads busy, and every other title changes nothing', async (name) => {
@@ -538,6 +564,27 @@ describe('the screen corpus (helper/fixtures/screens)', () => {
       expect({ spins: codexTitleBusy(title) }).toEqual({ spins: spinsByName(name) })
       if (spinsByName(name)) expect(readerAnswer(program, lines, title ?? null).screen).toBe('busy')
       else expect(readerAnswer(program, lines, title ?? null)).toEqual(readerAnswer(program, lines))
+    }, 30_000)
+  })
+
+  describe('6. Codex 0.172.0 on GPT-6.1 Terra: the footer names the model in two words, and Codex\'s reader reads it (2.1.3-beta.18 section 7.4, aicc_planning#427)', () => {
+    const TERRA = RECORDINGS.filter((n) => NAME_BY.get(n)?.program === 'codex172')
+    /** The footer as Codex 0.172.0 drew it: the display name, the level, then the folder. */
+    const TERRA_FOOTER = new RegExp(`^ {2}GPT-6\\.1 Terra low ${String.fromCharCode(0xb7)} \\S`)
+    /** The model's id as the app holds it, alone and in a list, and a list without it. */
+    const LISTS: ReadonlyArray<readonly string[] | null> = [null, ['gpt-6.1-terra'], ['gpt-6.1-sol', 'gpt-6.1-terra', 'gpt-5.5']]
+    const WITHOUT = ['gpt-6.1-sol', 'gpt-5.5']
+
+    it('holds the hold\'s four recordings, idle and after a turn on both ConPTYs (a vacuous pass is no pass)', () => {
+      expect(TERRA).toEqual(['windows-bundled', 'windows-system'].flatMap((s) => ['after-reply', 'ready'].map((st) => `codex172-${s}-${st}`)))
+    })
+
+    it.each(TERRA)('%s: one footer row names GPT-6.1 Terra; it reads ready and empty with no list and with the id, and not with a list that lacks it', async (name) => {
+      const { screens, title } = await rowsOf(name)
+      const lines = screens[screens.length - 1].lines
+      expect(lines.filter((l) => TERRA_FOOTER.test(l.text)).map((l) => l.text.slice(0, 21))).toEqual([`  GPT-6.1 Terra low ${String.fromCharCode(0xb7)}`])
+      for (const models of LISTS) expect(readCodexScreen(lines, models, { title: title ?? null }), String(models)).toEqual({ screen: 'ready', text: '' })
+      expect(readCodexScreen(lines, WITHOUT, { title: title ?? null })).toEqual({ screen: 'no-prompt', text: '' })
     }, 30_000)
   })
 

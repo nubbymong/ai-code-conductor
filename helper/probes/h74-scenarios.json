@@ -1,0 +1,431 @@
+{
+  "about": "Plan 2.1.3-beta.18, section 7.4's recording hold (aicc_planning#427): the scenario p19-record.cjs runs on the Windows test machine with Codex 0.172.0. Codex only. Each launch reaches P19's ready composer (its footer names the stand-in's model, p19-probe), picks GPT-6.1 Terra in Codex's own /model picker (one row down at a time until the marked row is GPT-6.1 Terra, Enter, then \"s\" in the effort picker: this session only), then: ready (idle with the Terra footer), one turn, after-reply (the composer back with its Worked for row and the Terra footer, read on the screen: Codex 0.172.0 on GPT-6.1 Terra sends its turn with no tools, so the stand-in answers it with its one word). Every mark is record only (to the mark and recordOnlyMs on, no resize). tseq: P19's short prompt. ttiny: P19's long prompt (its reply set to 8 lines, as C7's hold, in case a turn carries tools). tterse: the prompt p19 terra turn (14 characters), so the footer after the turn fits in 120 columns. Sizes, prompts, the short reply and the screen patterns are P19's own (helper/probes/p19-scenarios.json).",
+  "size": {
+    "cols": 120,
+    "rows": 40
+  },
+  "runs": 3,
+  "cutBytes": 65536,
+  "settleMs": 2000,
+  "sampleMs": 250,
+  "nudgeMs": 300,
+  "recordOnlyMs": 300,
+  "tailLines": 200,
+  "scrollback": 1000,
+  "prompt": "p19 probe: print the probe's lines",
+  "shortPrompt": "p19 short: print the probe's short reply",
+  "apiKey": "sk-ant-p19-probe-made-up-not-a-real-key-0000",
+  "reply": {
+    "lines": 8,
+    "lineMs": 150,
+    "marker": "p19 probe",
+    "line": "p19 line {n} of {total}: the quick brown fox jumps over the lazy dog",
+    "after": "\n\n",
+    "blockLines": 10
+  },
+  "shortReply": {
+    "lines": 30,
+    "lineMs": 50,
+    "marker": "p19 short",
+    "line": "p19 short line {n} of {total}: the quick brown fox jumps over the lazy dog",
+    "after": "\n\n",
+    "blockLines": 10
+  },
+  "programs": [
+    {
+      "id": "codex",
+      "name": "Codex",
+      "verdict": false,
+      "args": [
+        "--no-daemon"
+      ],
+      "exitKeys": [
+        "\u0003",
+        "\u0003"
+      ],
+      "launches": [
+        {
+          "id": "tseq",
+          "seed": "codex",
+          "steps": [
+            {
+              "do": "until",
+              "label": "the ready composer with its footer (the session ready)",
+              "screen": "(?:^|\\n) ?›(?:[ \\n]|$)[\\s\\S]*\\n {1,4}p19-probe [^\\n]*·",
+              "not": "esc to interrupt",
+              "timeoutMs": 60000,
+              "rules": [
+                {
+                  "label": "folder trust",
+                  "screen": "trust the contents|allow Codex to work in this folder|Do you trust",
+                  "keys": "\r"
+                },
+                {
+                  "label": "press Enter",
+                  "screen": "[Pp]ress [Ee]nter to continue",
+                  "keys": "\r"
+                }
+              ]
+            },
+            {
+              "do": "settle",
+              "quietMs": 1500,
+              "minBytes": 0,
+              "timeoutMs": 3000
+            },
+            {
+              "do": "keys",
+              "keys": "/model",
+              "afterMs": 700
+            },
+            {
+              "do": "keys",
+              "keys": "\r",
+              "afterMs": 0
+            },
+            {
+              "do": "until",
+              "label": "the model picker",
+              "screen": "Select Model",
+              "timeoutMs": 10000,
+              "rules": []
+            },
+            {
+              "do": "until",
+              "label": "GPT-6.1 Terra marked in the model picker",
+              "screen": "(?:^|\\n) *› *\\d+\\. GPT-6\\.1[ -]Terra\\b",
+              "timeoutMs": 40000,
+              "rules": [
+                {
+                  "label": "one row down in the model picker",
+                  "screen": "Select Model",
+                  "keys": "\u001b[B",
+                  "max": 16
+                }
+              ]
+            },
+            {
+              "do": "keys",
+              "keys": "\r",
+              "afterMs": 0
+            },
+            {
+              "do": "until",
+              "label": "the effort picker for GPT-6.1 Terra",
+              "screen": "Select Reasoning Level for GPT-6\\.1[ -]Terra",
+              "timeoutMs": 10000,
+              "rules": []
+            },
+            {
+              "do": "keys",
+              "keys": "s",
+              "afterMs": 0
+            },
+            {
+              "do": "until",
+              "label": "the ready composer with the Terra footer",
+              "screen": "(?:^|\\n) ?›(?:[ \\n]|$)[\\s\\S]*\\n {1,4}GPT-6\\.1[ -]Terra [^\\n]*·",
+              "not": "esc to interrupt|Select Model|Select Reasoning",
+              "timeoutMs": 15000,
+              "rules": []
+            },
+            {
+              "do": "settle",
+              "quietMs": 1500,
+              "minBytes": 0,
+              "timeoutMs": 4000
+            },
+            {
+              "do": "mark",
+              "state": "ready",
+              "recordOnly": true
+            },
+            {
+              "do": "keys",
+              "keys": "{shortPrompt}",
+              "afterMs": 700
+            },
+            {
+              "do": "keys",
+              "keys": "\r",
+              "afterMs": 0
+            },
+            {
+              "do": "until",
+              "label": "the composer back after the turn, with the Terra footer",
+              "screen": "Worked for[\\s\\S]*\\n ?›(?:[ \\n]|$)[\\s\\S]*\\n {1,4}GPT-6\\.1[ -]Terra [^\\n]*·",
+              "not": "esc to interrupt",
+              "timeoutMs": 30000,
+              "rules": []
+            },
+            {
+              "do": "settle",
+              "quietMs": 2000,
+              "minBytes": 0,
+              "timeoutMs": 4000
+            },
+            {
+              "do": "mark",
+              "state": "after-reply",
+              "recordOnly": true
+            }
+          ]
+        },
+        {
+          "id": "ttiny",
+          "seed": "codex",
+          "steps": [
+            {
+              "do": "until",
+              "label": "the ready composer with its footer (the session ready)",
+              "screen": "(?:^|\\n) ?›(?:[ \\n]|$)[\\s\\S]*\\n {1,4}p19-probe [^\\n]*·",
+              "not": "esc to interrupt",
+              "timeoutMs": 60000,
+              "rules": [
+                {
+                  "label": "folder trust",
+                  "screen": "trust the contents|allow Codex to work in this folder|Do you trust",
+                  "keys": "\r"
+                },
+                {
+                  "label": "press Enter",
+                  "screen": "[Pp]ress [Ee]nter to continue",
+                  "keys": "\r"
+                }
+              ]
+            },
+            {
+              "do": "settle",
+              "quietMs": 1500,
+              "minBytes": 0,
+              "timeoutMs": 3000
+            },
+            {
+              "do": "keys",
+              "keys": "/model",
+              "afterMs": 700
+            },
+            {
+              "do": "keys",
+              "keys": "\r",
+              "afterMs": 0
+            },
+            {
+              "do": "until",
+              "label": "the model picker",
+              "screen": "Select Model",
+              "timeoutMs": 10000,
+              "rules": []
+            },
+            {
+              "do": "until",
+              "label": "GPT-6.1 Terra marked in the model picker",
+              "screen": "(?:^|\\n) *› *\\d+\\. GPT-6\\.1[ -]Terra\\b",
+              "timeoutMs": 40000,
+              "rules": [
+                {
+                  "label": "one row down in the model picker",
+                  "screen": "Select Model",
+                  "keys": "\u001b[B",
+                  "max": 16
+                }
+              ]
+            },
+            {
+              "do": "keys",
+              "keys": "\r",
+              "afterMs": 0
+            },
+            {
+              "do": "until",
+              "label": "the effort picker for GPT-6.1 Terra",
+              "screen": "Select Reasoning Level for GPT-6\\.1[ -]Terra",
+              "timeoutMs": 10000,
+              "rules": []
+            },
+            {
+              "do": "keys",
+              "keys": "s",
+              "afterMs": 0
+            },
+            {
+              "do": "until",
+              "label": "the ready composer with the Terra footer",
+              "screen": "(?:^|\\n) ?›(?:[ \\n]|$)[\\s\\S]*\\n {1,4}GPT-6\\.1[ -]Terra [^\\n]*·",
+              "not": "esc to interrupt|Select Model|Select Reasoning",
+              "timeoutMs": 15000,
+              "rules": []
+            },
+            {
+              "do": "settle",
+              "quietMs": 1500,
+              "minBytes": 0,
+              "timeoutMs": 4000
+            },
+            {
+              "do": "mark",
+              "state": "ready",
+              "recordOnly": true
+            },
+            {
+              "do": "keys",
+              "keys": "{prompt}",
+              "afterMs": 700
+            },
+            {
+              "do": "keys",
+              "keys": "\r",
+              "afterMs": 0
+            },
+            {
+              "do": "until",
+              "label": "the composer back after the turn, with the Terra footer",
+              "screen": "Worked for[\\s\\S]*\\n ?›(?:[ \\n]|$)[\\s\\S]*\\n {1,4}GPT-6\\.1[ -]Terra [^\\n]*·",
+              "not": "esc to interrupt",
+              "timeoutMs": 30000,
+              "rules": []
+            },
+            {
+              "do": "settle",
+              "quietMs": 2000,
+              "minBytes": 0,
+              "timeoutMs": 4000
+            },
+            {
+              "do": "mark",
+              "state": "after-reply",
+              "recordOnly": true
+            }
+          ]
+        },
+        {
+          "id": "tterse",
+          "seed": "codex",
+          "steps": [
+            {
+              "do": "until",
+              "label": "the ready composer with its footer (the session ready)",
+              "screen": "(?:^|\\n) ?›(?:[ \\n]|$)[\\s\\S]*\\n {1,4}p19-probe [^\\n]*·",
+              "not": "esc to interrupt",
+              "timeoutMs": 60000,
+              "rules": [
+                {
+                  "label": "folder trust",
+                  "screen": "trust the contents|allow Codex to work in this folder|Do you trust",
+                  "keys": "\r"
+                },
+                {
+                  "label": "press Enter",
+                  "screen": "[Pp]ress [Ee]nter to continue",
+                  "keys": "\r"
+                }
+              ]
+            },
+            {
+              "do": "settle",
+              "quietMs": 1500,
+              "minBytes": 0,
+              "timeoutMs": 3000
+            },
+            {
+              "do": "keys",
+              "keys": "/model",
+              "afterMs": 700
+            },
+            {
+              "do": "keys",
+              "keys": "\r",
+              "afterMs": 0
+            },
+            {
+              "do": "until",
+              "label": "the model picker",
+              "screen": "Select Model",
+              "timeoutMs": 10000,
+              "rules": []
+            },
+            {
+              "do": "until",
+              "label": "GPT-6.1 Terra marked in the model picker",
+              "screen": "(?:^|\\n) *› *\\d+\\. GPT-6\\.1[ -]Terra\\b",
+              "timeoutMs": 40000,
+              "rules": [
+                {
+                  "label": "one row down in the model picker",
+                  "screen": "Select Model",
+                  "keys": "\u001b[B",
+                  "max": 16
+                }
+              ]
+            },
+            {
+              "do": "keys",
+              "keys": "\r",
+              "afterMs": 0
+            },
+            {
+              "do": "until",
+              "label": "the effort picker for GPT-6.1 Terra",
+              "screen": "Select Reasoning Level for GPT-6\\.1[ -]Terra",
+              "timeoutMs": 10000,
+              "rules": []
+            },
+            {
+              "do": "keys",
+              "keys": "s",
+              "afterMs": 0
+            },
+            {
+              "do": "until",
+              "label": "the ready composer with the Terra footer",
+              "screen": "(?:^|\\n) ?›(?:[ \\n]|$)[\\s\\S]*\\n {1,4}GPT-6\\.1[ -]Terra [^\\n]*·",
+              "not": "esc to interrupt|Select Model|Select Reasoning",
+              "timeoutMs": 15000,
+              "rules": []
+            },
+            {
+              "do": "settle",
+              "quietMs": 1500,
+              "minBytes": 0,
+              "timeoutMs": 4000
+            },
+            {
+              "do": "mark",
+              "state": "ready",
+              "recordOnly": true
+            },
+            {
+              "do": "keys",
+              "keys": "p19 terra turn",
+              "afterMs": 700
+            },
+            {
+              "do": "keys",
+              "keys": "\r",
+              "afterMs": 0
+            },
+            {
+              "do": "until",
+              "label": "the composer back after the turn, with the Terra footer",
+              "screen": "Worked for[\\s\\S]*\\n ?›(?:[ \\n]|$)[\\s\\S]*\\n {1,4}GPT-6\\.1[ -]Terra [^\\n]*·",
+              "not": "esc to interrupt",
+              "timeoutMs": 30000,
+              "rules": []
+            },
+            {
+              "do": "settle",
+              "quietMs": 2000,
+              "minBytes": 0,
+              "timeoutMs": 4000
+            },
+            {
+              "do": "mark",
+              "state": "after-reply",
+              "recordOnly": true
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
