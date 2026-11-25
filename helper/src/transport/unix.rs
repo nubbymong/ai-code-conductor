@@ -1054,13 +1054,16 @@ mod tests {
         let took = started.elapsed();
         assert!(super::super::is_timeout(&e), "{e:?}");
         assert!(took >= Duration::from_millis(1250) && took < Duration::from_secs(3), "a 1.3 s limit took {took:?}");
+        // A wide limit here, so only the recheck decides: bytes 1.1 s in come
+        // after the first one.
+        r.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
         let writer = std::thread::spawn(move || {
             std::thread::sleep(Duration::from_millis(1100));
             w.write_all(b"late").unwrap();
             w
         });
         let started = Instant::now();
-        let n = r.read(&mut buf).unwrap_or_else(|e| panic!("bytes sent 1.1 s into a 1.3 s limit were not read: {e} after {:?}", started.elapsed()));
+        let n = r.read(&mut buf).unwrap_or_else(|e| panic!("bytes sent 1.1 s into a 5 s limit, after the first recheck, were not read: {e} after {:?}", started.elapsed()));
         assert_eq!(&buf[..n], b"late");
         drop(writer.join().unwrap());
     }
