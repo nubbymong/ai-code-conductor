@@ -21,9 +21,10 @@
 //    for a hyphen (the last describe holds the release smoke's footer of
 //    Codex 0.172.0 on GPT-6.1 Terra);
 //  - a signed-in Codex (the record ran on the stand-in);
-//  - the screen corpus (helper/fixtures/screens/): every recording there runs
-//    on probe P19's own model, which Codex shows as given, and the corpus
-//    reads with no model list;
+//  - the screen corpus (helper/fixtures/screens/): its recordings run on probe
+//    P19's own model, which Codex shows as given, and the corpus reads them
+//    with no model list, except Codex 0.172.0's on GPT-6.1 Terra, which
+//    screen-corpus.test.ts case 6 reads with and without the model's id;
 //  - each row's width, end and inverse cells (the record does not hold them).
 import { describe, it, expect } from 'vitest'
 import {
@@ -201,8 +202,11 @@ describe("the renderer's callers of the session's models type into it", () => {
 // and a prompt button gave busy-timeout (main's readers, which read any model
 // id, and an id held no space). TERRA is vm:C6's screen with that footer row,
 // drawn with the two leading spaces Codex 0.157.1 draws (the smoke's note
-// gives the row trimmed). The other rows of the 0.172.0 screen were not
-// recorded; a raw recording of it is owed to the screen corpus.
+// gives the row trimmed). The smoke did not record the other rows of the
+// 0.172.0 screen. 2.1.3-beta.18 section 7.4 (aicc_planning#427) recorded it
+// with probe P19's recorder into the screen corpus (the codex172 recordings,
+// read by screen-corpus.test.ts case 6): Codex 0.172.0 draws the footer with
+// the same two leading spaces, "GPT-6.1 Terra low", then the folder.
 const TERRA_FOOTER = `  GPT-6.1 Terra low ${DOT} ${FOLDER}`
 const TERRA = withFooter(TERRA_FOOTER)
 /** The registry's Codex list, as sessionFooterModels hands it (ids). */
