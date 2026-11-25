@@ -1,11 +1,15 @@
 import { writeSessionInput } from '../components/terminal/tmuxWheelScroll'
 import { quoteArgForShell } from '../../shared/shell-quote'
+import { useSessionStore } from '../stores/sessionStore'
+import { usePasteHintStore } from '../stores/pasteHintStore'
+import { sendImagePathToCodex, NOT_AT_PROMPT, IMAGE_AT_PROMPT } from '../lib/codexComposer'
 /**
  * Image transfer helper: gets a host-saved image into a session. The prompts
  * below are a Claude session's; a plain terminal (and the partner shell) gets
  * only the image's path, quoted for its shell (composeShellImagePath, below);
- * the other assistant's line goes through its own typing rule. Which route a
- * pasted image takes is decided in hooks/useKeyboardShortcuts.ts.
+ * a Codex session's goes through main's door too, with its own fallback
+ * (sendImageToCodexSession, below). Which route a pasted image takes is
+ * decided in hooks/useKeyboardShortcuts.ts.
  *
  * For a Claude session:
  *
@@ -13,9 +17,9 @@ import { quoteArgForShell } from '../../shared/shell-quote'
  * bracketed paste, which Claude Code attaches as its own pasted image
  * ("[Image #1]"), then the sentence, then Enter (pty.submitImage; probe P11,
  * ADR-030: a path typed as text reaches the model only as words). A session
- * main does not type an image into (Snap's picture in the other assistant's
- * tab) answers `not-taken` and gets the line it always got: the sentence and
- * the path typed, then Enter.
+ * main does not type an image into (an SSH Persistent session) answers
+ * `not-taken` and gets the line it always got: the sentence and the path
+ * typed, then Enter.
  *
  * SSH sessions: write the bare filename and ask Claude to call
  * `mcp__conductor__fetch_host_screenshot`. The remote machine
@@ -66,8 +70,59 @@ export function composeLocalPathPrompt(
   return `${ctx} ${filePath}`
 }
 
+/** C6: what the user is told when main refused the image's path for Codex. */
+export function imagePathRefusedNote(hostFilePath: string): string {
+  return `The image's path could not be typed into Codex, so nothing was sent; the image was saved on this computer at ${hostFilePath}.`
+}
+
 /**
- * Send a host-saved image file to a Claude session.
+ * 2.1.3-beta.17 C6 (aicc_planning#415): a host-saved image into a Codex
+ * session on this computer (Alt+V, Snap). Main is asked to paste the path as
+ * Codex's own paste, then the sentence, then Enter (pty.submitImage; probe
+ * P11: Codex attaches a path it gets as a bracketed paste, "[Image #1]", and
+ * reads a typed path only as words). What main could not paste (`not-taken`:
+ * Codex not ready in its wait, no placeholder; or an ask that failed) gets
+ * today's line, the sentence and the path, by the rule that types into Codex
+ * (sendImagePathToCodex), which types only into a ready, empty composer and
+ * otherwise tells `onNote` why it typed nothing.
+ * When main says it left its paste at the prompt (`not-taken` with `left`: it
+ * could not take "[Image #1]" back for certain), nothing more is typed and
+ * `onNote` hears that the image is at the prompt and was not sent; only main
+ * knows the placeholder is its own, since a composer holding the user's own
+ * pasted image reads the same. A session that is gone, or a path main
+ * refuses, gets nothing typed, and `onNote` is told. The sentence goes as
+ * given (PB3: U+2014 is kept on 0.153.4 and 0.155.1 typed this way; C6's
+ * reading: after the placeholder on 0.157.1 it reached Codex's turn, 3 of 3).
+ */
+export function sendImageToCodexSession(
+  sessionId: string,
+  hostFilePath: string,
+  sentence: string,
+  onNote: (note: string) => void,
+): void {
+  const words = sentence.trim() || 'Please view this image.'
+  const typed = (): void => sendImagePathToCodex(sessionId, hostFilePath, onNote, undefined, words)
+  void window.electronAPI.pty.submitImage({ sessionId, path: hostFilePath, sentence: words }).then(
+    (result) => {
+      if (result.outcome === 'not-taken') {
+        // `left`: main's ImageSubmitResult (session-input), read as main sends it.
+        if (result.left === true) onNote(IMAGE_AT_PROMPT)
+        else typed()
+      } else if (result.outcome === 'not-sent') onNote(result.reason === 'refused-text' ? imagePathRefusedNote(hostFilePath) : NOT_AT_PROMPT)
+    },
+    typed,
+  )
+}
+
+/** Whether the session runs Codex (its record in the session store). */
+function isCodexSession(sessionId: string): boolean {
+  return useSessionStore.getState().sessions.find((s) => s.id === sessionId)?.provider === 'codex'
+}
+
+/**
+ * Send a host-saved image file to a Claude session (or, since 2.1.3-beta.17
+ * C6, a Codex session on this computer: sendImageToCodexSession, its notes in
+ * the session's paste hint).
  *
  * @param sessionId - target Claude PTY session id
  * @param hostFilePath - absolute local path of the image file
@@ -84,6 +139,10 @@ export function sendImageToSession(
   userContext?: string,
   sessionType?: 'local' | 'ssh'
 ): void {
+  if (sessionType === 'local' && isCodexSession(sessionId)) {
+    sendImageToCodexSession(sessionId, hostFilePath, userContext ?? '', (note) => usePasteHintStore.getState().show(sessionId, note))
+    return
+  }
   if (sessionType === 'local') {
     // The line a session gets when main does not paste the image for it
     // (`not-taken`), or when the ask itself failed; a trailing \r submits it.

@@ -9,10 +9,14 @@ terminals when Settings has "Plain terminals through the session helper" on,
 and, since 2.1.3-beta.7, for local Claude Code sessions and the other agent
 sessions (each assistant's CLI in its tab) when the agent sessions' switch
 below it is on (`agentSessionsThroughHelper`). Both are off by default; the
-app side is `src/main/session-helper/`. Nothing else here ships. It is a top-level folder on purpose, not under `src/` or `resources/`,
+app side is `src/main/session-helper/`. From 2.1.3-beta.17 the Windows
+installer also carries the static Linux build (`resources/helper/linux-x64/aicc-helper`)
+and a manifest of its version and SHA-256 (`resources/helper/manifest.json`),
+for the app to upload to a Linux machine (remote step 1). Nothing else here
+ships. It is a top-level folder on purpose, not under `src/` or `resources/`,
 so no packaging glob picks it up (`tests/unit/scripts/helper-packaging.test.ts`
-fails if anything but the release program would, and
-`scripts/verify-bundled-helper.mjs` checks the packaged copy).
+fails if anything but those files would, and
+`scripts/verify-bundled-helper.mjs` checks the packaged copies).
 
 The protocol it follows is `docs/remote/helper-protocol.md`; the rules for its
 build are in `docs/remote/helper-threat-model.md` 3.10.
@@ -35,16 +39,18 @@ build are in `docs/remote/helper-threat-model.md` 3.10.
 | Console hosts | `src/consoles.rs` | Windows only. `console-hosts`: at the app's start, ends the console hosts the run before left when it was ended from outside (only that run's, by parent, creation time, user and program file), and names the process that started it for the app to record. `end-console-host` (from 2.1.3-beta.14): while the app runs, ends each console host of its terminals on Windows' own ConPTY that was made in the time it is given, is 6 s old or more, and is the console host of no running process. Each holds a host open from its check to its end |
 | Capture mode | `src/capture.rs` | Windows only (from 2.1.3-beta.14; macOS and Linux exit 4, not supported). `capture --out <folder>`: one 32-bit BMP of each whole display in physical pixels, each file made new, and one JSON line of each display's bounds and scale; exit 3 when it cannot see the screen (an SSH session, a locked screen). For Snap (ADR-030 D3, D4): from 2.1.3-beta.16 the app runs it for the new Snap on Windows, the default (`src/main/snap/`), with a 2 s bound; probe P21 measured it first |
 | Tool relay | `src/relay.rs` | `mcp`: a session's tool server as its CLI starts one. It carries one JSON-RPC message a line between its standard input and output and the session's holder, which passes them to the attached connection that acked `mcp` (from 2.1.3-beta.10; from 2.1.3-beta.11 a held session's CLI starts it, behind the agent sessions' switch). With a holder that offers `away` (from 2.1.3-beta.12) its stream is kept while the app is away: a call made meanwhile waits up to 30 s, then gets the fixed "updating" answer, and a call the app had when it went is answered at once and never sent again |
+| Bridge | `src/bridge.rs` | macOS and Linux only (from 2.1.3-beta.17, remote step 1). `bridge`: one connection to a session's holder carried over its standard input and output, byte for byte, as the app reaches a holder on another machine through one `ssh -T` exec; what the holder sends is queued for standard output (64 MiB at most) so a slow link never makes the holder wait |
 | Self-test | `src/selftest.rs` | Codec, hello, ring, a terminal round trip and a round trip over the local transport, one `AICC-RESULT` line; it closes its terminal before it moves on, and on Windows it runs in a job object when one can be made, so nothing it starts (its terminal's `conhost.exe` included) outlives it |
 | Fake CLI | `src/bin/aicc-fake-cli.rs` | A stand-in provider CLI for tests and probes |
 | Fixtures | `fixtures/*.json` | Frame, hello, limit and local transport vectors read by the Rust tests and by `tests/unit/scripts/helper-fixtures.test.ts` |
 
 The local transport is protocol section 15. The release build ships in the
-installers (`resources/helper/`), signed with the app on Windows and macOS.
-Not in it yet: the hash manifest, seccomp, the event spool and `since_seq`, the
-remote `serve`, `emit` and `mcp` (the local `mcp` relay is in). Those are later
-slices. The app side for
-This computer is in `src/main/session-helper/`.
+installers (`resources/helper/`), signed with the app on Windows and macOS; the
+Windows installer also carries the static Linux build and its hash manifest
+(from 2.1.3-beta.17). Not in it yet: seccomp, the event spool and `since_seq`,
+`emit` and the remote `mcp` (the local `mcp` relay is in). Those are later
+slices. A holder on another machine is reached through `bridge` (below). The
+app side for This computer is in `src/main/session-helper/`.
 
 ## Commands
 
@@ -56,6 +62,7 @@ aicc-helper hold --store <folder> --session <sid> [--label <text>] [--away <seco
 aicc-helper list --store <folder>
 aicc-helper hook --store <folder> --session <sid>
 aicc-helper mcp --store <folder> --session <sid>
+aicc-helper bridge --store <folder> --session <sid>                (macOS and Linux only)
 aicc-helper start [--hide] --cwd <folder> -- <program> [args...]   (Windows only)
 aicc-helper end --pid <n> --created <t>                            (Windows only)
 aicc-helper console-hosts [--pid <n> --created <t>]                (Windows only)
@@ -75,7 +82,17 @@ stream brings and the answers it gives in the app's place while the app is away,
 and it exits 0 only when its standard input ends (from 2.1.3-beta.11 a held
 session's CLI starts it, behind the agent sessions' switch). In the debug build
 `cargo test` runs, a held call waits 4 s instead of 30 s, so the tests can wait
-one out. `start` prints
+one out. `bridge` (macOS and Linux, from 2.1.3-beta.17) carries one
+connection to a session's holder over its own standard input and output,
+byte for byte, so the app reaches a holder on another machine through one
+`ssh -T` exec and speaks the protocol to it end to end; it never reads or
+writes a frame itself. It reads the session's record and connects with the
+same checks as any client (the socket's folder and owner, the peer's user id).
+When its standard input ends it closes its half of the connection, and the
+holder keeps the session, as for any connection that goes. It exits 0 when the
+holder closes the connection, 3 with no holder for the session (no record, its
+process gone, or nothing on its endpoint), 2 on a usage error, and 1 otherwise
+and on Windows (`src/bridge.rs`). `start` prints
 `{"pid":<n>,"created":"<t>"}` and exits without waiting for the program; `end`
 prints `ended` or `left` (protocol section 15, "Starting a program" and "Ending
 a program it started"). `console-hosts` and `end-console-host` print
@@ -134,7 +151,17 @@ On Linux the Helper job also builds the release helper for
 `x86_64-unknown-linux-musl`, a static program that runs on any x86-64 Linux
 whatever its glibc, checks with `readelf` that it names no program interpreter
 and no shared library, and uploads it as the `helper-linux-musl` artifact. It
-is for the remote probes P3 and P6 (`probes/README.md`); nothing ships it.
+was first for the remote probes P3 and P6 (`probes/README.md`). From
+2.1.3-beta.17 the Windows installer carries it: `release.yml`'s `helper-linux`
+job builds it with the same three steps, `build-windows` puts it at
+`target/helper-linux-musl/aicc-helper`, and `node scripts/write-helper-manifest.mjs`
+writes `target/helper-manifest/manifest.json` before packaging. The manifest
+lists the Linux file only, as `{"v":1,"files":[{"path":"linux-x64/aicc-helper","version":"<this crate's>","sha256":"<64 hex>"}]}`
+with the path relative to `resources/helper/`: electron-builder signs
+`aicc-helper.exe` in the package, which changes its bytes after any hash
+written before. A Windows package made on a VM or a dev PC takes the file from
+the head's `helper-linux-musl` artifact the same way; without it, the manifest
+step and `npm run verify:helper` fail.
 
 ## Dependencies
 

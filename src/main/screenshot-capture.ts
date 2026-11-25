@@ -1,4 +1,4 @@
-import { BrowserWindow, desktopCapturer, dialog, nativeImage, shell, systemPreferences } from 'electron'
+import { BrowserWindow, desktopCapturer, dialog, ipcMain, nativeImage, shell, systemPreferences } from 'electron'
 import { join } from 'path'
 import { mkdirSync, existsSync, readdirSync, statSync, unlinkSync, writeFileSync } from 'fs'
 import { randomBytes } from 'crypto'
@@ -74,6 +74,46 @@ const SCREENSHOT_JPEG_QUALITY = 85
  */
 let captureInProgress = false
 let screenshotsInstance: Screenshots | null = null
+/** True from a press's start of the previous Snap to its answer. */
+let previousSnapInUse = false
+
+/** The channels the previous Snap's package listens on in main
+ *  (electron-screenshots 0.6.2, lib/index.js: its constructor's, its
+ *  capture's and its reset's). Nothing else in the app uses them. */
+const PREVIOUS_SNAP_CHANNELS = ['SCREENSHOTS:ready', 'SCREENSHOTS:reset', 'SCREENSHOTS:ok', 'SCREENSHOTS:cancel', 'SCREENSHOTS:save'] as const
+
+function removePreviousSnapListeners(): void {
+  for (const channel of PREVIOUS_SNAP_CHANNELS) {
+    try { ipcMain.removeAllListeners(channel) } catch { /* nothing to remove */ }
+  }
+}
+
+/**
+ * The previous Snap's page (the package's own page, with no window of its
+ * own) closed once its press has settled (aicc_planning#408): at once when
+ * its overlay window is gone, else when the package says the overlay closed
+ * (its `windowClosed`, after its own end of the capture). The package is
+ * made again, with a new page, at the next press. A press that took it up
+ * meanwhile keeps it, and closes it when it settles. No log line: a press's
+ * one previous-engine line stays its only one (snap-e2e D8 reads it).
+ */
+function closePreviousSnapWhenSettled(library: Screenshots): void {
+  const close = (): void => {
+    if (screenshotsInstance !== library || previousSnapInUse) return
+    screenshotsInstance = null
+    removePreviousSnapListeners()
+    try {
+      const page = library.$view?.webContents
+      if (page && !page.isDestroyed()) page.close()
+    } catch { /* already gone */ }
+  }
+  // Never throws: the press's answer (a saved file) is already decided.
+  try {
+    const win = library.$win
+    if (win && !win.isDestroyed()) library.once('windowClosed', close)
+    else close()
+  } catch { /* left for the next press's settle */ }
+}
 
 /**
  * The previous Snap's package, loaded the first time a press uses it: on
@@ -88,6 +128,9 @@ async function loadPreviousSnap(): Promise<typeof Screenshots> {
   return ((loaded as { default?: typeof Screenshots }).default ?? loaded) as typeof Screenshots
 }
 
+/** The package as a press uses it: made, with its page, at a press when none
+ *  is kept (the last press's page was closed once it settled,
+ *  closePreviousSnapWhenSettled). */
 async function getScreenshotsInstance(): Promise<Screenshots> {
   if (!screenshotsInstance) {
     const PreviousSnap = await loadPreviousSnap()
@@ -213,12 +256,26 @@ async function runRectangleCapture(): Promise<string | null> {
   } catch (err) {
     // The package failed to load (its first press) or to start. The log line
     // holds the error's name and code only: its message can hold a path.
+    // What a half-made package listened on goes with it.
+    removePreviousSnapListeners()
     const code = (err as { code?: unknown } | null)?.code
     logWarn(`[snap] previous engine: its package could not be loaded (${err instanceof Error ? err.name : 'error'}${typeof code === 'string' ? ` ${code}` : ''}); nothing captured`)
     console.error('[screenshot] the capture library could not start:', err)
     return null
   }
   logInfo('[snap] previous engine: loaded; it takes this press')
+  previousSnapInUse = true
+  try {
+    return await previousSnapPress(library)
+  } finally {
+    previousSnapInUse = false
+    closePreviousSnapWhenSettled(library)
+  }
+}
+
+/** One press of the previous Snap: its answer once the user confirms (ok or
+ *  save, saved as every Snap is) or cancels, or the capture fails. */
+function previousSnapPress(library: Screenshots): Promise<string | null> {
   return new Promise<string | null>((resolve) => {
     let settled = false
 

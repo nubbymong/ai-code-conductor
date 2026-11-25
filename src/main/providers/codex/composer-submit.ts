@@ -2,8 +2,10 @@
 // VM probes PB3 and PB9): the one way main types a text into a Codex session's
 // composer and submits it. The canvas marker queue uses it for a Codex
 // session, and Ask Conductor's carrier (P4.3) reuses it, as do a command bar
-// prompt button (#333) and, since 2.1.3-beta.10 section A2, the Watchdog's
-// retry (both through src/main/session-input).
+// prompt button (#333), since 2.1.3-beta.10 section A2 the Watchdog's retry
+// (both through src/main/session-input), and since 2.1.3-beta.17 C6 the Codex
+// image rule for the sentence after an image's placeholder
+// (./session-screen.ts, pasteImageIntoCodexComposer).
 //
 // PURE: the rule only. The session's screen, its writer, its liveness and the
 // clock are injected (the driver is ./session-screen.ts, which reads a bounded

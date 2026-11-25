@@ -282,9 +282,12 @@ describe('today\'s registration order, as src/main/index.ts starts the consumers
     expect([...seq].sort((x, y) => x - y)).toEqual(seq)
   })
 
-  it('the canvas turn boundary registers inside the queue\'s start, from the hook stream', () => {
+  // aicc_planning#409: the boundary also gets the agent that fired the event
+  // and the tool it is about, so a background agent's tool calls after the
+  // main agent's Stop do not hold a canvas decision.
+  it('the canvas turn boundary registers inside the queue\'s start, from the hook stream, with the agent id and tool name', () => {
     const canvas = block(index, at('startCanvasMarkerQueue({'))
-    expect(canvas).toMatch(/subscribe: \(cb\) => \{\s*onHookEvent\(\(e\) => \{ if \(e\.sessionId\) cb\(e\.sessionId, e\.event\) \}\)\s*\}/)
+    expect(canvas).toMatch(/subscribe: \(cb\) => \{\s*onHookEvent\(\(e\) => \{ if \(e\.sessionId\) cb\(e\.sessionId, e\.event, \{ agentId: e\.agentId, toolName: e\.toolName \}\) \}\)\s*\}/)
   })
 
   it('the supervisor\'s transcript path goes through the module', () => {

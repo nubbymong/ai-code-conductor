@@ -104,14 +104,38 @@ const CANVAS_TOOL_PERMISSIONS = ['mcp__conductor__canvas_snapshot', 'mcp__conduc
  * not written. Such a session reports no usage figure, so the Usage page
  * fetches its account as it does an account no session uses (account-usage.ts,
  * setLiveUsageSessionReports; aicc_planning#378). Set at each launch's settings
- * write, cleared when the session's settings are removed at its end.
+ * write, or read back when a tab takes over a session an update kept running
+ * (noteKeptLaunchStatusLine), and cleared when the session's settings are
+ * removed at its end.
  */
 const launchedWithoutAppStatusLine = new Set<string>()
 
 /** Whether the session's latest launch got no status line from the app. False
- *  for a session not launched in this run. */
+ *  for a session neither launched nor taken over in this run. */
 export function sessionLaunchedWithoutAppStatusLine(sessionId: string): boolean {
   return launchedWithoutAppStatusLine.has(sessionId)
+}
+
+/**
+ * 2.1.3-beta.17 (S16 step 5, aicc_planning#412): a session an app update kept
+ * running, taken over by its restored tab with no launch, so this run wrote no
+ * settings file for it: whether its launch got the app's status line is read
+ * back from the settings file that launch wrote and the update kept. The
+ * app's statusLine runs the app's script with this session's id
+ * (statusline-command.ts); a statusLine of the user's own, none, or a file that
+ * does not read counts as without it.
+ */
+export function noteKeptLaunchStatusLine(sessionId: string): void {
+  let app = false
+  try {
+    const v = JSON.parse(fs.readFileSync(getLocalSessionSettingsPath(sessionId), 'utf-8')) as { statusLine?: { command?: unknown } } | null
+    const command = v && typeof v === 'object' ? v.statusLine?.command : undefined
+    app = typeof command === 'string' && command.includes('claude-multi-statusline.js') && command.includes(` ${sessionId.replace(/[^a-zA-Z0-9_-]/g, '_')}`)
+  } catch {
+    app = false
+  }
+  if (app) launchedWithoutAppStatusLine.delete(sessionId)
+  else launchedWithoutAppStatusLine.add(sessionId)
 }
 
 export function writeLocalSessionSettings(sessionId: string, opts: WriteSessionSettingsOptions = {}): string {

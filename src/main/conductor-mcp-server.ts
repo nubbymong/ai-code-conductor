@@ -180,6 +180,26 @@ function sessionLaunchOf(sessionId: string): number | null {
  *  until they are issued again, so a remote that keeps posting is one line). */
 const noRecordLogged = new Set<string>()
 
+/** 2.1.3-beta.17 (vm:B1f): the sessions that held a record when an app
+ *  update began to kill every PTY (noteUpdateHandOver). The kill releases
+ *  each record, and a CLI the update keeps running goes on posting its status
+ *  line to this run until the app exits. That POST /status is refused as any
+ *  other, and logged at info, once per session; every other refusal is still
+ *  a warning. A session issued again leaves the set. */
+const handedOverAtUpdate = new Set<string>()
+/** The sessions of handedOverAtUpdate already logged (once each). */
+const handOverRefusalLogged = new Set<string>()
+
+/** Called by the update install (ipc/update-handlers.ts) just before it kills
+ *  every PTY: notes each session that holds a record now. Logging only; what
+ *  a request is served is unchanged. */
+export function noteUpdateHandOver(): void {
+  for (const sessionId of sessionRecords.keys()) {
+    handedOverAtUpdate.add(sessionId)
+    handOverRefusalLogged.delete(sessionId)
+  }
+}
+
 /** Hand a session its MCP credential, recording the provider it goes to.
  *  Every writer of a session's MCP config, SSH shim or Codex environment
  *  issues through here, never through `mcpSessionToken` directly.
@@ -197,7 +217,23 @@ export function issueMcpSessionToken(sessionId: string, provider: McpClientProvi
   }
   sessionRecords.set(sessionId, { provider: held?.provider === 'codex' ? 'codex' : provider, form, launch: held?.launch ?? ++lastSessionLaunch })
   noRecordLogged.delete(sessionId)
+  handedOverAtUpdate.delete(sessionId)
   return tokenOfForm(sessionId, form)
+}
+
+/** 2.1.3-beta.17 (S16 step 5, aicc_planning#412): the record of a session
+ *  whose CLI an app update kept running, made when its restored tab takes it
+ *  over, with no credential made or handed out: its tool streams come
+ *  through its holder (serveToolStream checks no credential), and its CLI
+ *  holds the last run's credential, which this run refuses. The record is
+ *  for a launch of its own, in the run form, as a launch's first issue makes
+ *  it; a credential issued later in that launch (its status line's address)
+ *  keeps the record's launch and form. */
+export function recordHeldToolSession(sessionId: string, provider: McpClientProvider): void {
+  const held = sessionRecords.get(sessionId)
+  sessionRecords.set(sessionId, { provider: held?.provider ?? provider, form: held?.form ?? 'run', launch: held?.launch ?? ++lastSessionLaunch })
+  noRecordLogged.delete(sessionId)
+  handedOverAtUpdate.delete(sessionId)
 }
 
 /** Release a session's record when its process is torn down
@@ -1372,10 +1408,16 @@ export async function startMcpServer(
       // Every route below acts for this session, so every route refuses alike,
       // with the 403 /sse and /mcp have always answered.
       if (!sessionRecords.has(authedSession)) {
-        if (!noRecordLogged.has(authedSession)) {
-          noRecordLogged.add(authedSession)
-          const route = (req.url ?? '').split('?')[0].slice(0, 32)
-          logWarn(`[vision-mcp] Refused ${req.method} ${route} (sid=${authedSession}): no credential is issued to this session now`)
+        const route = (req.url ?? '').split('?')[0].slice(0, 32)
+        // vm:B1f: a CLI an update keeps running posts its status line until
+        // the app exits; only that refusal is logged at info.
+        const handedOver = req.method === 'POST' && route === '/status' && handedOverAtUpdate.has(authedSession)
+        const logged = handedOver ? handOverRefusalLogged : noRecordLogged
+        if (!logged.has(authedSession)) {
+          logged.add(authedSession)
+          const line = `[vision-mcp] Refused ${req.method} ${route} (sid=${authedSession}): no credential is issued to this session now`
+          if (handedOver) logInfo(`${line} (released at the app update's hand-over)`)
+          else logWarn(line)
         }
         res.writeHead(403, { 'Content-Type': 'text/plain; charset=utf-8' })
         res.end('Forbidden')
@@ -1785,8 +1827,15 @@ class ToolStreamTransport {
  * made or checked here: the stream comes through the session's own holder.
  * The stream ends with the session's record (releaseMcpSessionProvider), when
  * the server stops, when the link closes, or when its launch is over.
+ *
+ * `toolsChanged` (2.1.3-beta.17, S16 step 6): the stream was given back to
+ * this run by a CLI an app update kept running, which listed its tools from
+ * the last run's server. Once the server is connected, the CLI is sent
+ * `notifications/tools/list_changed`, so a CLI that lists again on it (Claude
+ * Code, probe P20) reads this run's tool list. The request handler is not
+ * changed.
  */
-export function serveToolStream(sessionId: string, link: ToolStreamLink): boolean {
+export function serveToolStream(sessionId: string, link: ToolStreamLink, opts?: { toolsChanged?: boolean }): boolean {
   const refuse = (why: string): false => {
     logWarn(`[vision-mcp] Refused a tool stream (sid=${sessionId}): ${why}`)
     try { link.close() } catch { /* already closed */ }
@@ -1809,7 +1858,11 @@ export function serveToolStream(sessionId: string, link: ToolStreamLink): boolea
     return false
   }
   logInfo(`[vision-mcp] New tool stream (source=${source}, sid=${sessionId})`)
-  Promise.resolve(server.connect(transport)).catch((err: any) => {
+  Promise.resolve(server.connect(transport)).then(() => {
+    if (opts?.toolsChanged !== true) return
+    logInfo(`[vision-mcp] Told the CLI of sid=${sessionId} its tool list may have changed (a tool stream given back after an update)`)
+    return transport.send({ jsonrpc: '2.0', method: 'notifications/tools/list_changed' })
+  }).catch((err: any) => {
     logError(`[vision-mcp] Tool stream connect error (sid=${sessionId}): ${err?.message ?? err}`)
     void transport.close()
   })

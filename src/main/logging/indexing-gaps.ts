@@ -17,8 +17,10 @@
  * name the transcript, or its exact resume at launch), and the worker leaves
  * out its records by record time as it does a rollout's.
  *
- * A window opens at the moment the session BECAME not indexed (its launch, or
- * the switch-off), not at its claim of the conversation: Codex writes the
+ * A window opens at the moment the session BECAME not indexed (its launch, the
+ * switch-off, or, for a session an app update kept running and its tab took
+ * over, the moment that update let go of it, so what its CLI wrote while no
+ * app ran is inside), not at its claim of the conversation: Codex writes the
  * rollout's session_meta and the first prompt before the claim, and a later
  * reader from the start would index them. A conversation begun earlier (a
  * resume) opens at that moment too, so what it had indexed stays indexed.
@@ -281,9 +283,10 @@ function closeHeld(held: { key: string; win: NotIndexedWindow }, ts: number): vo
   held.win[1] = Math.max(held.win[0], ts)
 }
 
-/** `sessionId`, not indexed since `since` (its launch, or the switch-off),
- *  holds the conversation at `rolloutPath` as of `now` (the claim; by default
- *  `since`): a window opens at `since`, and the window the session held on
+/** `sessionId`, not indexed since `since` (its launch, the switch-off, or,
+ *  taken over, when the update let go of it), holds the conversation at
+ *  `rolloutPath` as of `now` (the claim; by default `since`): a window opens
+ *  at `since`, and the window the session held on
  *  another conversation closes at `now`. PR-level ADR-009 round 1 (C1): a
  *  cover the session holds (a Codex session's launch folder) stays open and
  *  held. Round 1 (C2): taken past the conversations' cap too (a Codex session

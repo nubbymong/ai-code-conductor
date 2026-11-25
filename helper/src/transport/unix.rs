@@ -208,6 +208,17 @@ impl Stream {
         }
     }
 
+    /// End this side's writing only: the peer reads what was written, then
+    /// the end of the stream, and reading on any clone goes on. The bridge
+    /// (`bridge.rs`) does this when its standard input ends, so the holder
+    /// sees the connection go and closes its own half. On macOS the holder's
+    /// read sees it only because that read waits in poll (`WAKE_RECHECK`).
+    pub fn shutdown_write(&self) {
+        unsafe {
+            libc::shutdown(self.inner.as_raw_fd(), libc::SHUT_WR);
+        }
+    }
+
     /// End the connection after what was written: the peer reads it, then the
     /// end of the stream. The cut both ways, which also wakes a reader blocked
     /// on this side, comes `LINGER` later; if no thread can be made to wait
@@ -233,9 +244,11 @@ impl Stream {
 
     /// Wait up to `max` for the peer to close its end, which it does once it
     /// has read everything; what it still sends is read and dropped. Used
-    /// before the holder exits, so its last message is not cut off.
+    /// before the holder exits, so its last message is not cut off. It reads
+    /// through `Stream::read`, so on macOS it sees the close however the
+    /// wakeup goes (`WAKE_RECHECK`).
     pub fn wait_peer_close(&self, max: Duration) {
-        let mut s = match self.inner.try_clone() {
+        let mut s = match self.try_clone() {
             Ok(s) => s,
             Err(_) => return,
         };
@@ -255,8 +268,72 @@ impl Stream {
 }
 
 impl Read for Stream {
+    /// On macOS the wait for something to read is `wait_readable`'s, never
+    /// the read's own sleep in the kernel: see `WAKE_RECHECK`.
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        #[cfg(target_vendor = "apple")]
+        {
+            // The socket's own read limit, as `set_read_timeout` set it on any
+            // handle of this connection; None waits for ever. A limit that
+            // cannot be read is no reason to wait for ever, nor to fail the
+            // read: macOS refuses socket options once a connection has ended
+            // both ways (`set_unless_ended`), and there a read never waits, so
+            // the plain read below gives what is still buffered, then the end,
+            // as every caller expects.
+            if !buf.is_empty() {
+                if let Ok(limit) = self.inner.read_timeout() {
+                    wait_readable(self.inner.as_raw_fd(), limit)?;
+                }
+            }
+        }
         self.inner.read(buf)
+    }
+}
+
+/// macOS can lose the wakeup of a read that goes to sleep on a Unix socket
+/// just as the peer ends its writing (`shutdown(SHUT_WR)`, which the bridge
+/// does when its standard input ends): the read sleeps on, until its limit or
+/// the next change on the connection, though any new look at the socket sees
+/// the end (poll reports POLLIN|POLLHUP, a one-byte peek reads the end). CI
+/// measured it in the bridge's bytes exchange on macOS 26: 10 of 2000 rounds,
+/// each with the stand-in holder asleep 5 s on an end already there; none of
+/// 2000 on Linux. With the wait in poll instead, none of 3000 rounds, the end
+/// seen within 265 microseconds in every one. So a read on macOS waits in
+/// poll, and asks the socket afresh at least this often, so that a wakeup
+/// lost there too would cost at most this long, never the read's whole limit.
+#[cfg(target_vendor = "apple")]
+const WAKE_RECHECK: Duration = Duration::from_secs(1);
+
+/// Wait until a read on `fd` would not wait (bytes, the end of the stream, an
+/// error or a hang-up), within `limit` (None: for ever), in polls of at most
+/// `WAKE_RECHECK` each. Past `limit` it fails as the socket's own read limit
+/// does (EAGAIN, a timeout to `is_timeout`).
+#[cfg(target_vendor = "apple")]
+fn wait_readable(fd: RawFd, limit: Option<Duration>) -> io::Result<()> {
+    let deadline = limit.map(|l| Instant::now() + l);
+    loop {
+        let slice = match deadline {
+            Some(d) => {
+                let left = d.saturating_duration_since(Instant::now());
+                if left.is_zero() {
+                    return Err(io::Error::from_raw_os_error(libc::EAGAIN));
+                }
+                left.min(WAKE_RECHECK)
+            }
+            None => WAKE_RECHECK,
+        };
+        let mut p = libc::pollfd { fd, events: libc::POLLIN, revents: 0 };
+        let ms = slice.as_millis().clamp(1, i32::MAX as u128) as libc::c_int;
+        let n = unsafe { libc::poll(&mut p, 1, ms) };
+        if n > 0 {
+            return Ok(());
+        }
+        if n < 0 {
+            let e = io::Error::last_os_error();
+            if e.kind() != io::ErrorKind::Interrupted {
+                return Err(e);
+            }
+        }
     }
 }
 
@@ -939,6 +1016,56 @@ mod tests {
         assert!(Listener::bind_at(&path.to_string_lossy()).is_err(), "a bind over a socket file that was there");
         assert!(path.exists(), "the bind removed a file that was there");
         fs::remove_file(&path).unwrap();
+    }
+
+    /// A read with nothing to read fails as a timeout at its limit, not much
+    /// before or after it, and the same connection then still reads what
+    /// comes and the end of the stream (on macOS through `wait_readable`).
+    #[test]
+    fn a_read_keeps_its_limit_and_still_reads_what_comes_and_the_end() {
+        let (mine, theirs) = UnixStream::pair().unwrap();
+        let mut r = Stream::new(mine).unwrap();
+        let mut w = Stream::new(theirs).unwrap();
+        r.set_read_timeout(Some(Duration::from_millis(300))).unwrap();
+        let mut buf = [0u8; 16];
+        let started = Instant::now();
+        let e = r.read(&mut buf).expect_err("nothing was sent");
+        let took = started.elapsed();
+        assert!(super::super::is_timeout(&e), "{e:?}");
+        assert!(took >= Duration::from_millis(250) && took < Duration::from_secs(2), "a 300 ms limit took {took:?}");
+        w.write_all(b"hi").unwrap();
+        assert_eq!(r.read(&mut buf).unwrap(), 2);
+        w.shutdown_write();
+        assert_eq!(r.read(&mut buf).unwrap(), 0, "the end of the stream after the peer ended its writing");
+    }
+
+    /// A limit longer than one `WAKE_RECHECK` (1 s on macOS): the wait goes
+    /// on past the first recheck to the whole limit, and bytes that come
+    /// after the first recheck are read.
+    #[test]
+    fn a_read_longer_than_one_recheck_keeps_its_whole_limit() {
+        let (mine, theirs) = UnixStream::pair().unwrap();
+        let mut r = Stream::new(mine).unwrap();
+        let mut w = Stream::new(theirs).unwrap();
+        r.set_read_timeout(Some(Duration::from_millis(1300))).unwrap();
+        let mut buf = [0u8; 16];
+        let started = Instant::now();
+        let e = r.read(&mut buf).expect_err("nothing was sent");
+        let took = started.elapsed();
+        assert!(super::super::is_timeout(&e), "{e:?}");
+        assert!(took >= Duration::from_millis(1250) && took < Duration::from_secs(3), "a 1.3 s limit took {took:?}");
+        // A wide limit here, so only the recheck decides: bytes 1.1 s in come
+        // after the first one.
+        r.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        let writer = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(1100));
+            w.write_all(b"late").unwrap();
+            w
+        });
+        let started = Instant::now();
+        let n = r.read(&mut buf).unwrap_or_else(|e| panic!("bytes sent 1.1 s into a 5 s limit, after the first recheck, were not read: {e} after {:?}", started.elapsed()));
+        assert_eq!(&buf[..n], b"late");
+        drop(writer.join().unwrap());
     }
 
     #[test]

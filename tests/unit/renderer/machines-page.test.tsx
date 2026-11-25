@@ -270,6 +270,14 @@ describe('Machines page: what it shows for each helper state', () => {
     expect(bridge.endSession).toHaveBeenCalledWith('c')
   })
 
+  it('a Claude Code session an update kept for its restored tab (not attached, its tab open) reads Waiting for the app, not Being ended, and keeps End (aicc_planning#423)', async () => {
+    install(status({}, [held({ id: 'k', label: 'Payments', kind: 'claude', attached: false, tabOpen: true })]))
+    await open()
+    expect(byTestId('machines-session-state')?.textContent).toBe('Waiting for the app')
+    expect(byLabel('End Payments')?.disabled).toBe(false)
+    expect(byLabel('Re-attach Payments')).toBeNull()
+  })
+
   it('ending a Codex session asks in its own words too, and a terminal still asks as a terminal (PR review)', async () => {
     install(status({}, [held({ id: 'x', label: 'Docs', kind: 'codex' }), held({ id: 'p', label: 'build watcher', kind: 'plain' })]))
     await open()

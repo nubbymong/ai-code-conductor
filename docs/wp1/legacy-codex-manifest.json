@@ -1,9 +1,9 @@
 {
   "schema": "wp1-legacy-codex-manifest/3",
-  "generatedAt": "2026-11-24T00:39:25.018Z",
-  "head": "42bc27386466f342f613cbda633efbd2b4dd208c",
-  "tree": "7b3bd9d244d231c7409ced2838473ff61016fd85",
-  "scannedWorkingTree": true,
+  "generatedAt": "2026-11-25T00:55:50.371Z",
+  "head": "13a7090642b2828ad567a2bea5fa3bc8491d0006",
+  "tree": "e37bb9ca2461fb82f9e958e42c4ba593e62dac70",
+  "scannedWorkingTree": false,
   "predicateDigest": "100a1233edebdc39a5f9004d3fba980a89ebb15b25872e52076386bc84b03153",
   "predicates": [
     {
@@ -116,9 +116,9 @@
     "\\.(png|jpg|jpeg|gif|ico|icns|webp|svg|woff2?|ttf|otf|mp4|zip|asar|node|exe|dll|dylib|so|pdf)$",
     "^package-lock\\.json$"
   ],
-  "trackedFileCount": 3787,
-  "excludedFileCount": 593,
-  "scannedFileCount": 3194,
+  "trackedFileCount": 3869,
+  "excludedFileCount": 614,
+  "scannedFileCount": 3255,
   "unscopedFileCount": 15,
   "unscoped": [
     ".claude/settings.json",
@@ -139,8 +139,8 @@
   ],
   "unscopedMentions": [],
   "unreadable": [],
-  "matchedPathCount": 1069,
-  "pathDigest": "d12233ca633f6065be83ecba424cad5244d8c17f41031320f16e6745d39cb4ed",
+  "matchedPathCount": 1096,
+  "pathDigest": "0eb1a56b084a5b39a75c5df039facec645e916c240f7b7ab188e098df1616610",
   "entries": [
     {
       "path": ".github/workflows/ci.yml",
@@ -183,7 +183,7 @@
       "predicates": [
         "P12"
       ],
-      "lineCount": 31
+      "lineCount": 32
     },
     {
       "path": "SECURITY.md",
@@ -218,7 +218,7 @@
       "predicates": [
         "P12"
       ],
-      "lineCount": 3
+      "lineCount": 4
     },
     {
       "path": "docs/wp2/completion-plan.md",
@@ -527,6 +527,22 @@
       "lineCount": 9
     },
     {
+      "path": "helper/fixtures/screens/codex-windows-bundled-warning-draft.json",
+      "predicates": [
+        "P01",
+        "P14"
+      ],
+      "lineCount": 6
+    },
+    {
+      "path": "helper/fixtures/screens/codex-windows-bundled-warning-draft.rows.json",
+      "predicates": [
+        "P01",
+        "P14"
+      ],
+      "lineCount": 7
+    },
+    {
       "path": "helper/fixtures/screens/codex-windows-bundled-warning-hint.json",
       "predicates": [
         "P01",
@@ -605,6 +621,22 @@
         "P14"
       ],
       "lineCount": 26
+    },
+    {
+      "path": "helper/fixtures/screens/codex-windows-system-warning-draft.json",
+      "predicates": [
+        "P01",
+        "P14"
+      ],
+      "lineCount": 6
+    },
+    {
+      "path": "helper/fixtures/screens/codex-windows-system-warning-draft.rows.json",
+      "predicates": [
+        "P01",
+        "P14"
+      ],
+      "lineCount": 7
     },
     {
       "path": "helper/fixtures/screens/codex170-linux-after-reply.json",
@@ -931,7 +963,14 @@
       "predicates": [
         "P14"
       ],
-      "lineCount": 24
+      "lineCount": 31
+    },
+    {
+      "path": "helper/probes/c7-scenarios.json",
+      "predicates": [
+        "P14"
+      ],
+      "lineCount": 18
     },
     {
       "path": "helper/probes/p11-model-stand-in.cjs",
@@ -1533,7 +1572,7 @@
       "predicates": [
         "P14"
       ],
-      "lineCount": 50
+      "lineCount": 53
     },
     {
       "path": "src/main/insights-codex.ts",
@@ -1913,7 +1952,7 @@
         "P01",
         "P14"
       ],
-      "lineCount": 28
+      "lineCount": 30
     },
     {
       "path": "src/main/providers/codex/conductor-tools.ts",
@@ -1975,7 +2014,7 @@
         "P09",
         "P14"
       ],
-      "lineCount": 310
+      "lineCount": 321
     },
     {
       "path": "src/main/providers/codex/insights-exec.ts",
@@ -1992,6 +2031,14 @@
         "P14"
       ],
       "lineCount": 40
+    },
+    {
+      "path": "src/main/providers/codex/kept-hooks.ts",
+      "predicates": [
+        "P01",
+        "P14"
+      ],
+      "lineCount": 10
     },
     {
       "path": "src/main/providers/codex/mcp-config.ts",
@@ -2095,7 +2142,7 @@
         "P01",
         "P14"
       ],
-      "lineCount": 31
+      "lineCount": 65
     },
     {
       "path": "src/main/providers/codex/spawn.ts",
@@ -2105,7 +2152,7 @@
         "P07",
         "P14"
       ],
-      "lineCount": 221
+      "lineCount": 233
     },
     {
       "path": "src/main/providers/codex/telemetry.ts",
@@ -2115,7 +2162,7 @@
         "P07",
         "P14"
       ],
-      "lineCount": 58
+      "lineCount": 65
     },
     {
       "path": "src/main/providers/codex/ui-detection.ts",
@@ -2179,7 +2226,7 @@
         "P07",
         "P14"
       ],
-      "lineCount": 41
+      "lineCount": 45
     },
     {
       "path": "src/main/pty-input-guard.ts",
@@ -2196,7 +2243,7 @@
         "P07",
         "P14"
       ],
-      "lineCount": 361
+      "lineCount": 365
     },
     {
       "path": "src/main/sanitize-restored-spawn-options.ts",
@@ -2279,21 +2326,21 @@
         "P08",
         "P14"
       ],
-      "lineCount": 9
+      "lineCount": 12
     },
     {
       "path": "src/main/session-helper/manager.ts",
       "predicates": [
         "P14"
       ],
-      "lineCount": 15
+      "lineCount": 19
     },
     {
       "path": "src/main/session-input/index.ts",
       "predicates": [
         "P14"
       ],
-      "lineCount": 64
+      "lineCount": 82
     },
     {
       "path": "src/main/session-resume-enrich.ts",
@@ -2309,7 +2356,7 @@
         "P04",
         "P14"
       ],
-      "lineCount": 179
+      "lineCount": 243
     },
     {
       "path": "src/main/stale-folder-sweep.ts",
@@ -2437,7 +2484,7 @@
         "P08",
         "P14"
       ],
-      "lineCount": 39
+      "lineCount": 40
     },
     {
       "path": "src/renderer/App.tsx",
@@ -2515,7 +2562,7 @@
         "P07",
         "P11"
       ],
-      "lineCount": 66
+      "lineCount": 65
     },
     {
       "path": "src/renderer/components/ConductorMcpPage.tsx",
@@ -2614,6 +2661,13 @@
         "P11"
       ],
       "lineCount": 6
+    },
+    {
+      "path": "src/renderer/components/ScreenshotButton.tsx",
+      "predicates": [
+        "P11"
+      ],
+      "lineCount": 3
     },
     {
       "path": "src/renderer/components/SessionDialog.tsx",
@@ -3015,7 +3069,7 @@
         "P05",
         "P11"
       ],
-      "lineCount": 12
+      "lineCount": 15
     },
     {
       "path": "src/renderer/hooks/useLaunchConfig.ts",
@@ -3073,7 +3127,7 @@
         "P07",
         "P11"
       ],
-      "lineCount": 103
+      "lineCount": 115
     },
     {
       "path": "src/renderer/lib/command-upgrade.ts",
@@ -3439,14 +3493,14 @@
         "P11",
         "P12"
       ],
-      "lineCount": 235
+      "lineCount": 237
     },
     {
       "path": "src/renderer/training-steps.ts",
       "predicates": [
         "P11"
       ],
-      "lineCount": 120
+      "lineCount": 123
     },
     {
       "path": "src/renderer/types/electron.d.ts",
@@ -3455,7 +3509,7 @@
         "P08",
         "P11"
       ],
-      "lineCount": 25
+      "lineCount": 27
     },
     {
       "path": "src/renderer/utils/accountChip.ts",
@@ -3471,6 +3525,14 @@
         "P11"
       ],
       "lineCount": 29
+    },
+    {
+      "path": "src/renderer/utils/imageTransfer.ts",
+      "predicates": [
+        "P05",
+        "P11"
+      ],
+      "lineCount": 21
     },
     {
       "path": "src/renderer/utils/launchAccount.ts",
@@ -3557,12 +3619,20 @@
       "lineCount": 2
     },
     {
+      "path": "src/shared/codex-image-screen.ts",
+      "predicates": [
+        "P01",
+        "P14"
+      ],
+      "lineCount": 25
+    },
+    {
       "path": "src/shared/codex-screen.ts",
       "predicates": [
         "P01",
         "P14"
       ],
-      "lineCount": 69
+      "lineCount": 90
     },
     {
       "path": "src/shared/container-command.ts",
@@ -4921,7 +4991,7 @@
         "P01",
         "P13"
       ],
-      "lineCount": 36
+      "lineCount": 44
     },
     {
       "path": "tests/unit/main/canvas-codex-launch-wiring.test.ts",
@@ -5145,6 +5215,14 @@
       "lineCount": 40
     },
     {
+      "path": "tests/unit/main/codex-image-paste.test.ts",
+      "predicates": [
+        "P01",
+        "P13"
+      ],
+      "lineCount": 56
+    },
+    {
       "path": "tests/unit/main/codex-logging-optout-spawn.test.ts",
       "predicates": [
         "P01",
@@ -5242,6 +5320,14 @@
         "P13"
       ],
       "lineCount": 5
+    },
+    {
+      "path": "tests/unit/main/codex-session-screen-image.test.ts",
+      "predicates": [
+        "P01",
+        "P13"
+      ],
+      "lineCount": 36
     },
     {
       "path": "tests/unit/main/codex-session-screen.test.ts",
@@ -5557,6 +5643,16 @@
       "lineCount": 33
     },
     {
+      "path": "tests/unit/main/launch-bindings-kept-pick.test.ts",
+      "predicates": [
+        "P04",
+        "P07",
+        "P10",
+        "P13"
+      ],
+      "lineCount": 62
+    },
+    {
       "path": "tests/unit/main/launch-bindings-kept.test.ts",
       "predicates": [
         "P13"
@@ -5572,6 +5668,16 @@
         "P13"
       ],
       "lineCount": 22
+    },
+    {
+      "path": "tests/unit/main/launch-bindings-take-over.test.ts",
+      "predicates": [
+        "P04",
+        "P05",
+        "P07",
+        "P13"
+      ],
+      "lineCount": 146
     },
     {
       "path": "tests/unit/main/launch-bindings.test.ts",
@@ -5985,7 +6091,7 @@
         "P04",
         "P13"
       ],
-      "lineCount": 17
+      "lineCount": 22
     },
     {
       "path": "tests/unit/main/session-helper-connection.test.ts",
@@ -6009,6 +6115,13 @@
       "lineCount": 4
     },
     {
+      "path": "tests/unit/main/session-helper-take-over.test.ts",
+      "predicates": [
+        "P13"
+      ],
+      "lineCount": 30
+    },
+    {
       "path": "tests/unit/main/session-helper-update-keep.test.ts",
       "predicates": [
         "P13"
@@ -6016,18 +6129,26 @@
       "lineCount": 9
     },
     {
+      "path": "tests/unit/main/session-input-codex-image.test.ts",
+      "predicates": [
+        "P01",
+        "P13"
+      ],
+      "lineCount": 15
+    },
+    {
       "path": "tests/unit/main/session-input-image.test.ts",
       "predicates": [
         "P13"
       ],
-      "lineCount": 6
+      "lineCount": 8
     },
     {
       "path": "tests/unit/main/session-input-ownership.test.ts",
       "predicates": [
         "P13"
       ],
-      "lineCount": 67
+      "lineCount": 72
     },
     {
       "path": "tests/unit/main/session-input-prompt.test.ts",
@@ -6499,6 +6620,14 @@
       "lineCount": 26
     },
     {
+      "path": "tests/unit/providers/codex/kept-hooks.test.ts",
+      "predicates": [
+        "P01",
+        "P13"
+      ],
+      "lineCount": 22
+    },
+    {
       "path": "tests/unit/providers/codex/mcp-config.test.ts",
       "predicates": [
         "P01",
@@ -6533,6 +6662,23 @@
         "P13"
       ],
       "lineCount": 2
+    },
+    {
+      "path": "tests/unit/providers/codex/pick-folder-sweep-links.test.ts",
+      "predicates": [
+        "P01",
+        "P13"
+      ],
+      "lineCount": 6
+    },
+    {
+      "path": "tests/unit/providers/codex/pick-folder-sweep.test.ts",
+      "predicates": [
+        "P01",
+        "P07",
+        "P13"
+      ],
+      "lineCount": 50
     },
     {
       "path": "tests/unit/providers/codex/pricing-live.test.ts",
@@ -6681,7 +6827,7 @@
         "P07",
         "P13"
       ],
-      "lineCount": 53
+      "lineCount": 52
     },
     {
       "path": "tests/unit/providers/codex/spawn-extra-args.test.ts",
@@ -7007,7 +7153,7 @@
       "predicates": [
         "P13"
       ],
-      "lineCount": 44
+      "lineCount": 43
     },
     {
       "path": "tests/unit/renderer/app-lifecycle-wiring.test.ts",
@@ -7156,7 +7302,7 @@
         "P01",
         "P13"
       ],
-      "lineCount": 45
+      "lineCount": 53
     },
     {
       "path": "tests/unit/renderer/codex-mini-icon.test.ts",
@@ -7260,11 +7406,25 @@
       "lineCount": 4
     },
     {
+      "path": "tests/unit/renderer/command-broadcast.test.ts",
+      "predicates": [
+        "P13"
+      ],
+      "lineCount": 2
+    },
+    {
       "path": "tests/unit/renderer/command-dialog-capabilities.test.tsx",
       "predicates": [
         "P13"
       ],
       "lineCount": 10
+    },
+    {
+      "path": "tests/unit/renderer/commandbar-broadcast.test.tsx",
+      "predicates": [
+        "P13"
+      ],
+      "lineCount": 7
     },
     {
       "path": "tests/unit/renderer/commandbar-codex-toolbar.test.ts",
@@ -7342,6 +7502,13 @@
       "lineCount": 37
     },
     {
+      "path": "tests/unit/renderer/feature-guide-summary-rich.test.tsx",
+      "predicates": [
+        "P13"
+      ],
+      "lineCount": 1
+    },
+    {
       "path": "tests/unit/renderer/footer-hidden-buckets-migration.test.ts",
       "predicates": [
         "P13"
@@ -7394,6 +7561,21 @@
         "P13"
       ],
       "lineCount": 302
+    },
+    {
+      "path": "tests/unit/renderer/image-transfer-codex.test.ts",
+      "predicates": [
+        "P01",
+        "P13"
+      ],
+      "lineCount": 42
+    },
+    {
+      "path": "tests/unit/renderer/image-transfer-local.test.ts",
+      "predicates": [
+        "P13"
+      ],
+      "lineCount": 2
     },
     {
       "path": "tests/unit/renderer/insights-codex-empty.test.ts",
@@ -7896,7 +8078,7 @@
         "P07",
         "P13"
       ],
-      "lineCount": 23
+      "lineCount": 24
     },
     {
       "path": "tests/unit/renderer/session-persistence-resume.test.ts",
@@ -8049,6 +8231,13 @@
         "P13"
       ],
       "lineCount": 17
+    },
+    {
+      "path": "tests/unit/renderer/terminal-line-selection.test.ts",
+      "predicates": [
+        "P13"
+      ],
+      "lineCount": 1
     },
     {
       "path": "tests/unit/renderer/terminalview-account-launch.test.tsx",
@@ -8423,8 +8612,24 @@
         "P04",
         "P13"
       ],
-      "lineCount": 432,
+      "lineCount": 434,
       "truncated": true
+    },
+    {
+      "path": "tests/unit/shared/codex-image-screen.test.ts",
+      "predicates": [
+        "P01",
+        "P13"
+      ],
+      "lineCount": 87
+    },
+    {
+      "path": "tests/unit/shared/codex-screen-footer-model.test.ts",
+      "predicates": [
+        "P01",
+        "P13"
+      ],
+      "lineCount": 70
     },
     {
       "path": "tests/unit/shared/codex-screen-hint-rows.test.ts",
@@ -8432,7 +8637,7 @@
         "P01",
         "P13"
       ],
-      "lineCount": 98
+      "lineCount": 108
     },
     {
       "path": "tests/unit/shared/codex-screen-shortcuts-hint.test.ts",
@@ -8448,7 +8653,15 @@
         "P01",
         "P13"
       ],
-      "lineCount": 33
+      "lineCount": 34
+    },
+    {
+      "path": "tests/unit/shared/codex-screen-warning-row.test.ts",
+      "predicates": [
+        "P01",
+        "P13"
+      ],
+      "lineCount": 86
     },
     {
       "path": "tests/unit/shared/extra-args.test.ts",
@@ -8477,7 +8690,7 @@
       "predicates": [
         "P13"
       ],
-      "lineCount": 68
+      "lineCount": 74
     },
     {
       "path": "tests/unit/status-ingest.test.ts",

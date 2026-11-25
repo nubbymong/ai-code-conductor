@@ -3,10 +3,11 @@
  * an app update on Windows, with the agent sessions' setting on, lets go of a
  * held agent session of a saved tab with its CLI running, when its tool calls
  * (and a Claude Code session's hook events) go through its holder, and
- * records it for the next start. Until the take-over is built (step 5), the
- * next start reads the record, logs what a take-over would bind, removes the
- * record and what the session left on disk, and ends the session before its
- * tab starts a new CLI. An update that does not start ends it at once.
+ * records it for the next start. With no take-over wired for its provider
+ * (this file's managers wire none), the next start reads the record, logs
+ * it, removes the record and what the session left on disk, and ends the
+ * session before its tab starts a new CLI. An update that does not start
+ * ends it at once.
  *
  * PURE: the real manager and HelperPty against the fake helper, in memory; the
  * launch's bindings (kept-launches.ts) are a stand-in that records what it is
@@ -15,7 +16,8 @@
  *
  * Not checked here: off Windows (releaseForUpdate lets go of nothing there,
  * unchanged); the update path itself (update-handlers.ts, unchanged order:
- * the release, then killAllPty); a take-over (step 5, not built).
+ * the release, then killAllPty); a take-over (S16 step 5, 2.1.3-beta.17:
+ * tests/unit/main/session-helper-take-over.test.ts).
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync, existsSync, readdirSync, readFileSync } from 'fs'
@@ -150,11 +152,9 @@ afterEach(async () => {
     Promise.allSettled([...quits, ...starts.splice(0)]),
     new Promise<void>((r) => { timer = setTimeout(r, 3000) }),
   ]).finally(() => clearTimeout(timer))
-  try {
-    rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 25 })
-  } catch (err) {
-    process.stderr.write(`session-helper-update-keep: left ${dir} behind (${(err as NodeJS.ErrnoException).code ?? String(err)})\n`)
-  }
+  // The starts include the self-test each began (session-helper-manager.test.ts
+  // says why that matters): a folder that cannot go here is a real failure.
+  rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 25 })
 })
 
 /** A Claude Code tab and another provider's tab through their holders, attached,
@@ -185,10 +185,10 @@ describe('an app update keeps a held agent session running (S16 step 4)', () => 
     const m = await startedWith(makeManager())
     const { claude, other, hc, ho } = await twoHeld(m)
     expect(m.releaseForUpdate(SAVED)).toBe(2)
-    expect(logs).toContain('[session-helper] an app update: 0 held terminal(s) are let go of, for the new version to show again, and 2 agent session(s) are let go of with their CLIs running, for the next start to end; 0 kept terminal(s) are left running')
+    expect(logs).toContain('[session-helper] an app update: 0 held terminal(s) are let go of, for the new version to show again, and 2 agent session(s) are let go of with their CLIs running, recorded for the next start; 0 kept terminal(s) are left running')
     // Recorded before the kill: provider, conversation, account and hook folder.
     expect(keptOnDisk()).toEqual([`${claudeSid}.json`, `${otherSid}.json`].sort())
-    expect(readKept(claudeSid)).toEqual({ v: 1, session: claudeSid, label: CLAUDE_TAB, provider: 'claude', conversation: CONV, account: 'profile-mt4okz66-147e4a', hookFolder: null, at: expect.any(Number) })
+    expect(readKept(claudeSid)).toEqual({ v: 1, session: claudeSid, label: CLAUDE_TAB, provider: 'claude', conversation: CONV, account: 'profile-mt4okz66-147e4a', hookFolder: null, folder: CWD, at: expect.any(Number) })
     expect(readKept(otherSid)).toMatchObject({ session: otherSid, label: OTHER_TAB, provider: 'codex', conversation: OTHER_CONV, account: 'acct-7', hookFolder: HOOK_FOLDER })
     expect(logs).toContain(`[session-helper] ${claudeSid}: an app update lets go of this claude session of tab ${CLAUDE_TAB} with its CLI running, and records it for the next start (conversation ${CONV}, account profile-mt4okz66-147e4a, hook folder none)`)
     // The launch bindings keep each one's files at its kill while the update goes on.
@@ -347,7 +347,7 @@ describe('an app update keeps a held agent session running (S16 step 4)', () => 
   })
 })
 
-describe('the next start, until the take-over exists (S16 step 5)', () => {
+describe('the next start, with no take-over wired for the provider (S16 step 5 not wired)', () => {
   /** Run 1 lets both sessions go for the update, kills every PTY and exits. */
   async function updated(): Promise<{ hc: FakeHolder; ho: FakeHolder }> {
     const m1 = await startedWith(makeManager())
@@ -360,7 +360,7 @@ describe('the next start, until the take-over exists (S16 step 5)', () => {
     return { hc, ho }
   }
 
-  it('reads each record and logs what a take-over would bind, removes the record and what the session left on disk before any tab starts, and ends the session; the restored tab starts its CLI only after that end', async () => {
+  it('reads and logs each record, removes the record and what the session left on disk before any tab starts, and ends the session; the restored tab starts its CLI only after that end', async () => {
     const { hc, ho } = await updated()
     // The helper comes up for the records alone, too.
     expect(agentRecordsIn(root, 'win32')).toBe(true)
@@ -373,8 +373,8 @@ describe('the next start, until the take-over exists (S16 step 5)', () => {
     void m2.start(ON_AGENTS)
     setSessionHelper(m2)
     // Synchronous: read, logged, removed, before the copy, the listing or any tab.
-    expect(keptLine(claudeSid)).toBe(`[session-helper] ${claudeSid}: the last run's update kept this claude session of tab ${CLAUDE_TAB} running; a take-over would bind conversation ${CONV}, account profile-mt4okz66-147e4a, hook folder none. Until the take-over exists it is ended, and its tab resumes the conversation as before`)
-    expect(keptLine(otherSid)).toBe(`[session-helper] ${otherSid}: the last run's update kept this codex session of tab ${OTHER_TAB} running; a take-over would bind conversation ${OTHER_CONV}, account acct-7, hook folder ccc-codex-hook-AbC123. Until the take-over exists it is ended, and its tab resumes the conversation as before`)
+    expect(keptLine(claudeSid)).toBe(`[session-helper] ${claudeSid}: the last run's update kept this claude session of tab ${CLAUDE_TAB} running (conversation ${CONV}, account profile-mt4okz66-147e4a, hook folder none); it is ended, and its tab resumes the conversation as before, because a take-over of this provider's sessions is not built`)
+    expect(keptLine(otherSid)).toBe(`[session-helper] ${otherSid}: the last run's update kept this codex session of tab ${OTHER_TAB} running (conversation ${OTHER_CONV}, account acct-7, hook folder ccc-codex-hook-AbC123); it is ended, and its tab resumes the conversation as before, because a take-over of this provider's sessions is not built`)
     expect(bySession(removed)).toEqual([
       { sessionId: CLAUDE_TAB, provider: 'claude', hookFolder: null },
       { sessionId: OTHER_TAB, provider: 'codex', hookFolder: HOOK_FOLDER },

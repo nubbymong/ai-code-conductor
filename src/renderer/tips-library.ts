@@ -184,9 +184,9 @@ export const TIPS_LIBRARY: Tip[] = [
     excludes: ['commands.broadcast'],
     variants: {
       primary: {
-        shortText: 'Shift+click a Global prompt to send it to every session',
-        title: 'Send One Prompt to Every Session',
-        body: '**Shift+click** a Global prompt button and the app offers to send that one press to every open Claude Code and Codex session, SSH and background tabs included. It asks first, so a slip sends nothing: **Send** or Enter sends, **Cancel** or Escape does not.\n\nWant a button that always does this? Edit it and tick **Send to every open session**; it then carries a small **all** pill and sends on a plain click.\n\nOnly a prompt with no arguments can do this. Terminal-only tabs and Ask Conductor never get it, and each session takes the prompt by its own rule, so the tab you pressed in tells you how many it reached.',
+        shortText: 'Shift+click a Global prompt to send it to many sessions',
+        title: 'Send One Prompt to Many Sessions',
+        body: '**Shift+click** a Global prompt button and the app asks where to send that one press: **All** sends it to every open Claude Code and Codex session, SSH and background tabs included; **Choose sessions** lists them with every one ticked, so you untick the ones to skip and press **Send**. Enter picks All, and **Cancel** or Escape sends nothing.\n\nWant a button that asks this on a plain click? Edit it and tick **Send to every open session**; it then carries a small **all** pill.\n\nOnly a prompt with no arguments can do this. Terminal-only tabs and Ask Conductor are never listed, and each session takes the prompt by its own rule, so the tab you pressed in tells you how many it reached.',
         focusHint: 'Command bar -- your Global prompt buttons',
       },
     },
@@ -279,7 +279,7 @@ export const TIPS_LIBRARY: Tip[] = [
       primary: {
         shortText: 'Dial Claude\'s thinking depth with /effort',
         title: 'Effort Level',
-        body: '**Effort** controls how hard Claude thinks before responding. Set a **Starting effort** on the saved config, and change it live inside Claude with **`/effort`**.\n\nLevels, lightest to heaviest: **low**, **medium**, **high**, **xhigh**, **max**, **ultracode** (ultracode also turns on dynamic workflows). Higher effort means deeper thinking, slower replies, and more cost.\n\nThe Conductor shows the current level as a colour-coded pill on the session card and in the statusline, tinted green through red as effort rises, so you can read it at a glance without opening the session.',
+        body: '**Effort** controls how hard Claude thinks before responding. Set a **Starting effort** on the saved config, and change it live inside Claude with `/effort`.\n\nLevels, lightest to heaviest: **low**, **medium**, **high**, **xhigh**, **max**, **ultracode** (ultracode also turns on dynamic workflows). Higher effort means deeper thinking, slower replies, and more cost.\n\nThe Conductor shows the current level as a colour-coded pill on the session card and in the statusline, tinted green through red as effort rises, so you can read it at a glance without opening the session.',
       },
     },
   },
@@ -300,7 +300,7 @@ export const TIPS_LIBRARY: Tip[] = [
       postUse: {
         shortText: 'A remote session shows its account and usage too',
         title: 'What a Remote Session Reports Back',
-        body: 'A remote session is not a second-class one. It reports its status back over its own connection to the app, so it fills in the same places a local session does: the **account line** on the session card, the **account pill** in the header, and its own bars in the **multi-account strip** along the bottom -- 5-hour, weekly and the per-model ones. All of it is there the moment the session connects, not after a restart, and the header names the connection with a single **SSH** or **SSH-Persistent** pill carrying the host address.\n\nRun **`/login`** on the remote and the session moves to the right account within a few seconds; you do not have to relaunch it.\n\nThere is nothing to install on the host and no setup to re-run. It needs the **built-in tools** left on (Settings > General) because the status travels back through the connection they open -- so if a remote status line is the only one missing, look there first.',
+        body: 'A remote session is not a second-class one. It reports its status back over its own connection to the app, so it fills in the same places a local session does: the **account line** on the session card, the **account pill** in the header, and its own bars in the **multi-account strip** along the bottom -- 5-hour, weekly and the per-model ones. All of it is there the moment the session connects, not after a restart, and the header names the connection with a single **SSH** or **SSH-Persistent** pill carrying the host address.\n\nRun `/login` on the remote and the session moves to the right account within a few seconds; you do not have to relaunch it.\n\nThere is nothing to install on the host and no setup to re-run. It needs the **built-in tools** left on (Settings > General) because the status travels back through the connection they open -- so if a remote status line is the only one missing, look there first.',
       },
     },
   },
@@ -316,7 +316,7 @@ export const TIPS_LIBRARY: Tip[] = [
       primary: {
         shortText: 'A remote session gets your local account\'s tools',
         title: 'Account Tools on a Remote Session',
-        body: 'A session running on another machine over SSH can still reach the account tools that live **here** on yours. When the remote is signed in as one of the accounts you also use locally, the session header grows the same **claude.ai** and **Claude Code** pills a local session has -- each with a refresh -- and its **right-click menu** grows **Open artifacts** and the sign-in items.\n\nThey work because those checks and actions run on your own machine for that account identity, not on the remote. So the tools appear only when the remote account matches a local one; with no match the header just names the account, as before.\n\nOne thing stays local: **switching** a session\'s account. A remote session uses the login on its own host -- to change that, run **`/login`** over there.',
+        body: 'A session running on another machine over SSH can still reach the account tools that live **here** on yours. When the remote is signed in as one of the accounts you also use locally, the session header grows the same **claude.ai** and **Claude Code** pills a local session has -- each with a refresh -- and its **right-click menu** grows **Open artifacts** and the sign-in items.\n\nThey work because those checks and actions run on your own machine for that account identity, not on the remote. So the tools appear only when the remote account matches a local one; with no match the header just names the account, as before.\n\nOne thing stays local: **switching** a session\'s account. A remote session uses the login on its own host -- to change that, run `/login` over there.',
         focusHint: 'A remote session\'s header pills, and its right-click menu in the sidebar',
       },
     },
@@ -438,7 +438,7 @@ export const TIPS_LIBRARY: Tip[] = [
       primary: {
         shortText: 'Paste clipboard images with Alt+V',
         title: 'Paste Image from Clipboard',
-        body: 'Image on your clipboard? Click into a session on this computer and press **Alt+V**: the key goes to the assistant, which pastes the image itself (Codex shows it as [Image #1]).\n\nWith focus elsewhere in the app, **Alt+V** saves the image and sends it to the session: Claude Code on this computer gets it as its own pasted image ([Image #1]) with a short sentence, and the app presses Enter. On a Codex session the app types a line with its path, only into an empty Codex prompt, and says why when it cannot. On an SSH session, press **Alt+V** with focus outside the terminal: the app saves the image on this computer and asks Claude to fetch it over the connection.\n\nWith focus elsewhere, **Alt+V** types only the image\'s path into a plain terminal, or into a local session\'s partner shell while its partner view is shown: quoted for the shell, with no Enter, ready for a command of your own. On macOS and Linux the path is typed only into an sh, bash, zsh, dash or ksh shell. Any other shell there, a plain terminal over SSH, or an SSH session\'s partner shell (it runs on the host) gets nothing, and the hint says where the image was saved.\n\nWorks with screenshots, images copied from a browser, diagrams from Excalidraw, or an image file you copied in File Explorer or Finder. No more "let me save this to disk first and drag it in".',
+        body: 'Image on your clipboard? Click into a session on this computer and press **Alt+V**: the key goes to the assistant, which pastes the image itself (Codex shows it as [Image #1]).\n\nWith focus elsewhere in the app, **Alt+V** saves the image and sends it to the session: Claude Code on this computer gets it as its own pasted image ([Image #1]) with a short sentence, and the app presses Enter. A Codex session on this computer gets it as Codex\'s own pasted image ([Image #1]) with a short sentence once its prompt is empty, and the app presses Enter; if Codex is busy or cannot take it, the app types a line with the image\'s path instead, and says why when it cannot. On an SSH session, press **Alt+V** with focus outside the terminal: the app saves the image on this computer and asks Claude to fetch it over the connection.\n\nWith focus elsewhere, **Alt+V** types only the image\'s path into a plain terminal, or into a local session\'s partner shell while its partner view is shown: quoted for the shell, with no Enter, ready for a command of your own. On macOS and Linux the path is typed only into an sh, bash, zsh, dash or ksh shell. Any other shell there, a plain terminal over SSH, or an SSH session\'s partner shell (it runs on the host) gets nothing, and the hint says where the image was saved.\n\nWorks with screenshots, images copied from a browser, diagrams from Excalidraw, or an image file you copied in File Explorer or Finder. No more "let me save this to disk first and drag it in".',
       },
     },
   },
@@ -663,9 +663,9 @@ export const TIPS_LIBRARY: Tip[] = [
       primary: {
         shortText: 'How your SSH passwords are encrypted',
         title: 'Credential Storage',
-        body: 'SSH passwords and OAuth account tokens are encrypted using **Electron\'s `safeStorage` API**, which wraps your OS credential store:\n\n• **Windows** -- DPAPI (Data Protection API), tied to your Windows user account\n• **macOS** -- Keychain\n• **Linux** -- libsecret (Secret Service)\n\nEncrypted blobs are stored in `resources/CONFIG/ssh-credentials.json` with an `enc:` prefix. The renderer process **never** sees plaintext -- decryption happens only in the main process, right before the credential is needed.\n\nIf you move the app to a new machine, encrypted credentials won\'t work there -- you\'ll need to re-enter them (they\'re tied to the old OS\'s credential store).',
-        bodyMac: 'SSH passwords and OAuth account tokens are encrypted using **Electron\'s `safeStorage` API** which wraps macOS **Keychain**.\n\nEncrypted blobs are stored in `~/Library/Application Support/Claude Conductor/resources/CONFIG/ssh-credentials.json` with an `enc:` prefix. The renderer process **never** sees plaintext -- decryption happens only in the main process.\n\nIf you move the app to a new machine, encrypted credentials won\'t work there -- you\'ll need to re-enter them (they\'re tied to the old Keychain).',
-        bodyWin: 'SSH passwords and OAuth account tokens are encrypted using **Electron\'s `safeStorage` API** which wraps **Windows DPAPI** (Data Protection API), tied to your Windows user account.\n\nEncrypted blobs are stored under your resources folder (`%LOCALAPPDATA%\\AI Code Conductor\\resources\\CONFIG\\ssh-credentials.json` on a new install, `...\\Claude Command Center\\...` if you upgraded from an older version) with an `enc:` prefix. The renderer process **never** sees plaintext -- decryption happens only in the main process.\n\nIf you move the app to a new Windows machine or reinstall the OS, encrypted credentials won\'t decrypt there -- you\'ll need to re-enter them.',
+        body: 'SSH passwords and OAuth account tokens are encrypted using **Electron\'s safeStorage API**, which wraps your OS credential store:\n\n• **Windows** -- DPAPI (Data Protection API), tied to your Windows user account\n• **macOS** -- Keychain\n• **Linux** -- libsecret (Secret Service)\n\nEncrypted blobs are stored in `resources/CONFIG/ssh-credentials.json` with an `enc:` prefix. The renderer process **never** sees plaintext -- decryption happens only in the main process, right before the credential is needed.\n\nIf you move the app to a new machine, encrypted credentials won\'t work there -- you\'ll need to re-enter them (they\'re tied to the old OS\'s credential store).',
+        bodyMac: 'SSH passwords and OAuth account tokens are encrypted using **Electron\'s safeStorage API** which wraps macOS **Keychain**.\n\nEncrypted blobs are stored in `~/Library/Application Support/Claude Conductor/resources/CONFIG/ssh-credentials.json` with an `enc:` prefix. The renderer process **never** sees plaintext -- decryption happens only in the main process.\n\nIf you move the app to a new machine, encrypted credentials won\'t work there -- you\'ll need to re-enter them (they\'re tied to the old Keychain).',
+        bodyWin: 'SSH passwords and OAuth account tokens are encrypted using **Electron\'s safeStorage API** which wraps **Windows DPAPI** (Data Protection API), tied to your Windows user account.\n\nEncrypted blobs are stored under your resources folder (`%LOCALAPPDATA%\\AI Code Conductor\\resources\\CONFIG\\ssh-credentials.json` on a new install, `...\\Claude Command Center\\...` if you upgraded from an older version) with an `enc:` prefix. The renderer process **never** sees plaintext -- decryption happens only in the main process.\n\nIf you move the app to a new Windows machine or reinstall the OS, encrypted credentials won\'t decrypt there -- you\'ll need to re-enter them.',
       },
     },
   },
@@ -1576,6 +1576,24 @@ export const TIPS_LIBRARY: Tip[] = [
   },
 
   {
+    id: 'tip.remote-sessions-helper',
+    category: 'advanced',
+    complexity: 'intermediate',
+    priority: 22,
+    platforms: ['win32'],
+    variants: {
+      primary: {
+        shortText: 'Run a Claude Code SSH tab through the session helper',
+        title: 'Remote Sessions Through the Session Helper',
+        body: 'A preview, **off by default** (Windows): turn on **Settings, General, Terminal, Remote sessions through the session helper**, then on the **Machines** page **Add a Linux machine** from a saved SSH config that signs in with a key. A Claude Code tab on a config whose **Connection** is **SSH** (not SSH Persistent) to that machine then starts with nothing typed into the host\'s shell, and comes back after a dropped connection with what you missed.\n\nNot through the helper yet: the Agent Canvas, the browser, the Conductor\'s other tools, hooks and the status line, so such a tab has none of them. Every other SSH tab runs the usual way.',
+        actionLabel: 'Open Settings',
+        actionTarget: 'settings',
+        focusHint: 'Settings -- General, under Terminal',
+      },
+    },
+  },
+
+  {
     id: 'tip.update-keeps-terminals',
     category: 'advanced',
     complexity: 'intermediate',
@@ -1585,7 +1603,7 @@ export const TIPS_LIBRARY: Tip[] = [
       primary: {
         shortText: 'Save sessions at an update keeps held terminals running',
         title: 'Terminals That Live Through an Update',
-        body: 'With **Plain terminals through the session helper** on (**Settings, General, Terminal**; a preview, off by default), choose **Save sessions** when the app asks before an update. The terminals the session helper holds keep running, and the new version shows each one again in its tab, with what it printed meanwhile, up to the last 2 MiB.\n\nFinish the installer within **two minutes**: a held terminal waits that long for the new version, counted from when the old one closed. **Close sessions** ends them instead. Claude Code and Codex sessions are not kept: their tabs resume the conversation.',
+        body: 'With **Plain terminals through the session helper** on (**Settings, General, Terminal**; a preview, off by default), choose **Save sessions** when the app asks before an update. The terminals the session helper holds keep running, and the new version shows each one again in its tab, with what it printed meanwhile, up to the last 2 MiB.\n\nFinish the installer within **two minutes**: a held terminal waits that long for the new version, counted from when the old one closed. **Close sessions** ends them instead. With **Claude Code and Codex sessions through the session helper** on as well, a Claude Code or Codex session is kept the same way: resume your sessions within **five minutes** of the new version opening and its tab shows the same session, with no resume.',
         actionLabel: 'Open Settings',
         actionTarget: 'settings',
         focusHint: 'Settings -- General, under Terminal',

@@ -135,9 +135,97 @@ jobs:
           CHANNEL: ${{ inputs.channel }}
         run: node scripts/ci/reuse-green-ci.mjs
 
+  # ── The static Linux helper (2.1.3-beta.17, remote step 1) ──
+  # The Windows installer carries the static Linux helper the app uploads to
+  # a Linux machine (resources/helper/linux-x64/aicc-helper) and a manifest of
+  # its hash (resources/helper/manifest.json). This job builds it with the
+  # Helper job's three steps word for word (ci.yml: the musl build with
+  # --locked, the static check, the upload as helper-linux-musl). The glibc
+  # debug build before them is the one the static check must find not static,
+  # as the Helper job's Build step makes it there. build-windows needs this
+  # job and takes its file before packaging. It has no `if`: a dry run runs
+  # it too, so a dry run proves the hand-over, the manifest and the packaged
+  # check (tests/unit/scripts/helper-release-job.test.ts pins all of this).
+  # It holds no secret and only reads the repository.
+  helper-linux:
+    name: Static Linux helper
+    needs: gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    env:
+      CARGO_TERM_COLOR: never
+      CARGO_INCREMENTAL: '0'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Install the pinned Rust toolchain
+        shell: bash
+        working-directory: helper
+        run: |
+          rustup show active-toolchain || rustup toolchain install
+          rustc --version
+          cargo --version
+
+      - name: Build the glibc debug helper the static check compares against
+        shell: bash
+        working-directory: helper
+        run: cargo build --locked --bin aicc-helper
+
+      - name: Build the static Linux helper
+        shell: bash
+        working-directory: helper
+        run: |
+          rustup target add x86_64-unknown-linux-musl
+          cargo build --locked --release --target x86_64-unknown-linux-musl --bin aicc-helper
+          mkdir -p target/helper-linux-musl
+          cp target/x86_64-unknown-linux-musl/release/aicc-helper target/helper-linux-musl/
+
+      - name: Check the Linux helper is static
+        shell: bash
+        working-directory: helper
+        run: |
+          # 0 static, 1 not static, 2 not an x86-64 ELF file or not read.
+          is_static() {
+            local hdr segs dyn
+            hdr=$(readelf --file-header --wide "$1") || return 2
+            grep -q 'Class:[[:space:]]*ELF64' <<<"$hdr" || return 2
+            grep -q 'Machine:[[:space:]]*Advanced Micro Devices X86-64' <<<"$hdr" || return 2
+            segs=$(readelf --program-headers --wide "$1") || return 2
+            dyn=$(readelf --dynamic --wide "$1") || return 2
+            grep -q 'INTERP' <<<"$segs" && return 1
+            grep -q '(NEEDED)' <<<"$dyn" && return 1
+            return 0
+          }
+          built=target/helper-linux-musl/aicc-helper
+          rc=0; is_static "$built" || rc=$?
+          file "$built"
+          echo "Static Linux helper: $(file -b "$built"), $(stat -c %s "$built") bytes." >> "$GITHUB_STEP_SUMMARY"
+          if [ "$rc" != 0 ]; then
+            echo "::error::$built is not a static x86-64 ELF program (check status $rc)"
+            exit 1
+          fi
+          rc=0; is_static target/debug/aicc-helper || rc=$?
+          if [ "$rc" != 1 ]; then
+            echo "::error::the check did not find the glibc debug build dynamic (check status $rc), so it proves nothing"
+            exit 1
+          fi
+          echo "static: $built; the check finds the glibc debug build dynamic, as it must"
+
+      - name: Upload the static Linux helper
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: helper-linux-musl
+          path: helper/target/helper-linux-musl
+          if-no-files-found: error
+          retention-days: 14
+
   # ── Build Windows installer ──
   build-windows:
-    needs: [gate, ci-reuse]
+    needs: [gate, ci-reuse, helper-linux]
     # Pinned off windows-latest: the new vs2026 image breaks @electron/node-gyp
     # (no supported Visual Studio). Same pin as ci.yml — unpin together.
     runs-on: windows-2025
@@ -259,6 +347,21 @@ jobs:
       - name: Check the session helper carries its own C runtime
         run: node scripts/check-pe-imports.mjs helper/target/release/aicc-helper.exe
 
+      # The static Linux helper the installer carries for Linux machines
+      # (2.1.3-beta.17, remote step 1), from this run's helper-linux job, and
+      # the manifest of its hash, written before packaging. electron-builder
+      # signs aicc-helper.exe in the packaged folder, which changes its bytes,
+      # so the manifest lists the Linux helper only; it never changes, as only
+      # Windows programs are signed (scripts/write-helper-manifest.mjs).
+      - name: Download the static Linux helper
+        uses: actions/download-artifact@v8
+        with:
+          name: helper-linux-musl
+          path: helper/target/helper-linux-musl
+
+      - name: Write the session helper manifest
+        run: node scripts/write-helper-manifest.mjs
+
       # ── Windows code signing: SSL.com eSigner CKA (cloud HSM) ──
       # The signing key lives in SSL.com's cloud HSM and never exists as a file
       # on the runner. CKA registers a Windows KSP so the key appears in the
@@ -341,6 +444,8 @@ jobs:
 
       # The package carries the session helper and nothing else of helper/
       # (scripts/verify-bundled-helper.mjs): a package without it fails here.
+      # On Windows that is the signed aicc-helper.exe, the static Linux helper
+      # and the manifest, whose hash must be the packaged Linux file's.
       - name: Verify the session helper is packaged
         run: npm run verify:helper
 

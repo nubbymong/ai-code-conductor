@@ -105,14 +105,16 @@ const helperHookDeps: HelperHookDeps = {
  * Conductor tools' server is started. A Claude Code session's per-session MCP
  * config file (the one the PTY manager wrote just after the spawn call) is
  * switched to the helper's relay; a Codex session's launch is given its relay
- * form by the Codex package (heldToolLaunch).
+ * form by the Codex package (heldToolLaunch). 2.1.3-beta.17 (S16 step 6): a
+ * stream given back to a take-over is served with `toolsChanged` for Claude
+ * Code, which lists its tools again on being told (probe P20); Codex does not.
  */
 const toolHost: Pick<HelperToolDeps, 'serve' | 'serving'> = {
-  serve: (appPtyId, link) => serveToolStream(appPtyId, link),
+  serve: (appPtyId, link, opts) => (opts ? serveToolStream(appPtyId, link, opts) : serveToolStream(appPtyId, link)),
   serving: () => getConductorMcpPort() > 0,
 }
 const helperToolDeps: Partial<Record<ProviderId, HelperToolDeps>> = {
-  claude: { ...toolHost, useRelayConfig: (appPtyId, relay) => switchMcpConfigToHelper({ configPath: getLocalSessionMcpConfigPath(appPtyId), sessionId: appPtyId, relay }) },
+  claude: { ...toolHost, listsAgain: true, useRelayConfig: (appPtyId, relay) => switchMcpConfigToHelper({ configPath: getLocalSessionMcpConfigPath(appPtyId), sessionId: appPtyId, relay }) },
   codex: { ...toolHost, relayLaunch: (appPtyId, launch, relay) => tryGetProvider('codex')?.heldToolLaunch?.(appPtyId, launch, relay) ?? { refused: 'no-tools' } },
 }
 
@@ -129,6 +131,11 @@ function ensureManager(): SessionHelperManager {
     // 2.1.3-beta.14 B2: Codex's composer rule reads a held session's screen
     // and title from its holder (providers/codex/session-screen.ts).
     screens: { codex: true },
+    // 2.1.3-beta.17 (S16 step 5): a Claude Code or Codex session an update
+    // kept running is taken over by its restored tab, when that tab is in the
+    // saved file the start restores from (launch-bindings.ts takeOverKeptLaunch).
+    takeOver: { claude: true, codex: true },
+    savedTabs: savedTabIds,
     ...(oldCopiesCleanUp ? { copyAfter: oldCopiesCleanUp } : {}),
   })
   m.onChange(() => notify?.())
@@ -147,7 +154,10 @@ function ensureManager(): SessionHelperManager {
  * all the same, carrying nothing new, to end those agent sessions before
  * their tabs start their CLIs again (and keep a crash's plain terminals for
  * their tabs). Both off with none of those: the old helper copies an earlier
- * run left are removed (2.1.3-beta.15, cleanUpOldCopies).
+ * run left are removed (2.1.3-beta.15, cleanUpOldCopies). With the agent
+ * sessions' setting on, a session an update kept running whose tab is in
+ * the saved file this start restores from is kept for that tab to take over
+ * (2.1.3-beta.17, S16 step 5).
  */
 export function initSessionHelper(onChange: () => void): void {
   notify = onChange
@@ -183,8 +193,9 @@ export function noteSessionHelperTabs(state: { sessions?: ReadonlyArray<{ id: st
  * the held plain and partner terminals whose tabs the next start restores are
  * let go of instead of ended, for the new version to show again, and so is a
  * held agent session whose tools go through its holder, recorded for the next
- * start, which still ends it until a take-over exists (2.1.3-beta.14, S16
- * step 4: the manager's releaseForUpdate). Those tabs
+ * start (2.1.3-beta.14, S16 step 4: the manager's releaseForUpdate), whose
+ * restored tab takes it over where its provider's take-over is wired
+ * (2.1.3-beta.17, S16 step 5: takeOver above), else the start ends it. Those tabs
  * are read from the saved file itself, because "Close without saving" clears
  * it without a save the manager hears of; a cleared file, or one that cannot
  * be read, lets go of nothing (those tabs end as before).
@@ -226,7 +237,7 @@ function savedTabIds(): Set<string> {
   }
 }
 
-/** How long an update waits for the ends releaseHeldTerminalsForUpdate sent (a quit's own bound). */
+/** How long an update waits for what releaseHeldTerminalsForUpdate sent: its ends, and its holders' answers to a let-go (B1f). A quit's own bound. */
 export const UPDATE_END_WAIT_MS = 1500
 
 /** The update's installer could not be started: what was let go of is kept

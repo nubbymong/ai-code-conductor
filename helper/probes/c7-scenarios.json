@@ -1,0 +1,440 @@
+{
+  "about": "Plan 2.1.3-beta.17, section C7, step (1) (aicc_planning#371): the scenario p19-record.cjs runs on the Windows test machine for the recording hold. Codex only, every launch with the config of P19's warning launch (a tool server whose program does not exist), so Codex draws a warning count under its footer. Every mark is record only (to the mark and recordOnlyMs on, no resize). wseq: idle with the count, the prompt typed as a draft, the middle of P19's short reply, after it, then a draft typed after the reply. wtiny: the same with a reply of 8 lines, so the recordings stay small. wwrap: a draft long enough to wrap, at the idle composer. wpaste: a bracketed paste of 1,200 characters at the idle composer. wqueue: a draft typed while the short turn runs. Sizes, prompts, the short reply, the screen patterns and the config lines are P19's own (helper/probes/p19-scenarios.json).",
+  "size": {
+    "cols": 120,
+    "rows": 40
+  },
+  "runs": 3,
+  "cutBytes": 65536,
+  "settleMs": 2000,
+  "sampleMs": 250,
+  "nudgeMs": 300,
+  "recordOnlyMs": 300,
+  "tailLines": 200,
+  "scrollback": 1000,
+  "prompt": "p19 probe: print the probe's lines",
+  "shortPrompt": "p19 short: print the probe's short reply",
+  "apiKey": "sk-ant-p19-probe-made-up-not-a-real-key-0000",
+  "reply": {
+    "lines": 8,
+    "lineMs": 150,
+    "marker": "p19 probe",
+    "line": "p19 line {n} of {total}: the quick brown fox jumps over the lazy dog",
+    "after": "\n\n",
+    "blockLines": 10
+  },
+  "shortReply": {
+    "lines": 30,
+    "lineMs": 50,
+    "marker": "p19 short",
+    "line": "p19 short line {n} of {total}: the quick brown fox jumps over the lazy dog",
+    "after": "\n\n",
+    "blockLines": 10
+  },
+  "programs": [
+    {
+      "id": "codex",
+      "name": "Codex",
+      "verdict": false,
+      "args": [
+        "--no-daemon"
+      ],
+      "exitKeys": [
+        "\u0003",
+        "\u0003",
+        "\u0003"
+      ],
+      "launches": [
+        {
+          "id": "wseq",
+          "seed": "codex",
+          "codexConfig": [
+            "[mcp_servers.p19probe]",
+            "command = '{work}/p19-no-such-program'"
+          ],
+          "steps": [
+            {
+              "do": "until",
+              "label": "a warning count on the hint row (⚠ and a number) under the footer, an MCP server that cannot start",
+              "screen": "\\n {1,4}p19-probe [^\\n]*·[\\s\\S]*⚠ \\d+",
+              "timeoutMs": 60000,
+              "rules": [
+                {
+                  "label": "folder trust",
+                  "screen": "trust the contents|allow Codex to work in this folder|Do you trust",
+                  "keys": "\r"
+                },
+                {
+                  "label": "press Enter",
+                  "screen": "[Pp]ress [Ee]nter to continue",
+                  "keys": "\r"
+                }
+              ]
+            },
+            {
+              "do": "settle",
+              "quietMs": 1000,
+              "minBytes": 0,
+              "timeoutMs": 4000
+            },
+            {
+              "do": "mark",
+              "state": "warning-idle",
+              "recordOnly": true
+            },
+            {
+              "do": "keys",
+              "keys": "{shortPrompt}",
+              "afterMs": 700
+            },
+            {
+              "do": "settle",
+              "quietMs": 1000,
+              "minBytes": 0,
+              "timeoutMs": 4000
+            },
+            {
+              "do": "mark",
+              "state": "warning-draft",
+              "recordOnly": true
+            },
+            {
+              "do": "keys",
+              "keys": "\r",
+              "afterMs": 0
+            },
+            {
+              "do": "reply",
+              "atLeast": 0.35,
+              "timeoutMs": 60000
+            },
+            {
+              "do": "mark",
+              "state": "warning-mid-reply",
+              "recordOnly": true
+            },
+            {
+              "do": "replyDone",
+              "timeoutMs": 30000
+            },
+            {
+              "do": "until",
+              "label": "the ready composer after the reply",
+              "screen": "(?:^|\\n) ?›(?:[ \\n]|$)",
+              "not": "esc to interrupt",
+              "timeoutMs": 30000,
+              "rules": []
+            },
+            {
+              "do": "settle",
+              "quietMs": 2000,
+              "minBytes": 0,
+              "timeoutMs": 4000
+            },
+            {
+              "do": "mark",
+              "state": "warning-after-reply",
+              "recordOnly": true
+            },
+            {
+              "do": "keys",
+              "keys": "p19 draft after the reply",
+              "afterMs": 700
+            },
+            {
+              "do": "settle",
+              "quietMs": 1000,
+              "minBytes": 0,
+              "timeoutMs": 4000
+            },
+            {
+              "do": "mark",
+              "state": "warning-after-reply-draft",
+              "recordOnly": true
+            }
+          ]
+        },
+        {
+          "id": "wtiny",
+          "seed": "codex",
+          "codexConfig": [
+            "[mcp_servers.p19probe]",
+            "command = '{work}/p19-no-such-program'"
+          ],
+          "steps": [
+            {
+              "do": "until",
+              "label": "a warning count on the hint row (⚠ and a number) under the footer, an MCP server that cannot start",
+              "screen": "\\n {1,4}p19-probe [^\\n]*·[\\s\\S]*⚠ \\d+",
+              "timeoutMs": 60000,
+              "rules": [
+                {
+                  "label": "folder trust",
+                  "screen": "trust the contents|allow Codex to work in this folder|Do you trust",
+                  "keys": "\r"
+                },
+                {
+                  "label": "press Enter",
+                  "screen": "[Pp]ress [Ee]nter to continue",
+                  "keys": "\r"
+                }
+              ]
+            },
+            {
+              "do": "settle",
+              "quietMs": 1000,
+              "minBytes": 0,
+              "timeoutMs": 4000
+            },
+            {
+              "do": "mark",
+              "state": "warning-idle",
+              "recordOnly": true
+            },
+            {
+              "do": "keys",
+              "keys": "{prompt}",
+              "afterMs": 700
+            },
+            {
+              "do": "settle",
+              "quietMs": 1000,
+              "minBytes": 0,
+              "timeoutMs": 4000
+            },
+            {
+              "do": "mark",
+              "state": "warning-draft",
+              "recordOnly": true
+            },
+            {
+              "do": "keys",
+              "keys": "\r",
+              "afterMs": 0
+            },
+            {
+              "do": "reply",
+              "atLeast": 0.35,
+              "timeoutMs": 60000
+            },
+            {
+              "do": "mark",
+              "state": "warning-mid-reply",
+              "recordOnly": true
+            },
+            {
+              "do": "replyDone",
+              "timeoutMs": 30000
+            },
+            {
+              "do": "until",
+              "label": "the ready composer after the reply",
+              "screen": "(?:^|\\n) ?›(?:[ \\n]|$)",
+              "not": "esc to interrupt",
+              "timeoutMs": 30000,
+              "rules": []
+            },
+            {
+              "do": "settle",
+              "quietMs": 2000,
+              "minBytes": 0,
+              "timeoutMs": 4000
+            },
+            {
+              "do": "mark",
+              "state": "warning-after-reply",
+              "recordOnly": true
+            },
+            {
+              "do": "keys",
+              "keys": "p19 draft after the reply",
+              "afterMs": 700
+            },
+            {
+              "do": "settle",
+              "quietMs": 1000,
+              "minBytes": 0,
+              "timeoutMs": 4000
+            },
+            {
+              "do": "mark",
+              "state": "warning-after-reply-draft",
+              "recordOnly": true
+            }
+          ]
+        },
+        {
+          "id": "wwrap",
+          "seed": "codex",
+          "runs": 1,
+          "codexConfig": [
+            "[mcp_servers.p19probe]",
+            "command = '{work}/p19-no-such-program'"
+          ],
+          "steps": [
+            {
+              "do": "until",
+              "label": "a warning count on the hint row (⚠ and a number) under the footer, an MCP server that cannot start",
+              "screen": "\\n {1,4}p19-probe [^\\n]*·[\\s\\S]*⚠ \\d+",
+              "timeoutMs": 60000,
+              "rules": [
+                {
+                  "label": "folder trust",
+                  "screen": "trust the contents|allow Codex to work in this folder|Do you trust",
+                  "keys": "\r"
+                },
+                {
+                  "label": "press Enter",
+                  "screen": "[Pp]ress [Ee]nter to continue",
+                  "keys": "\r"
+                }
+              ]
+            },
+            {
+              "do": "settle",
+              "quietMs": 1000,
+              "minBytes": 0,
+              "timeoutMs": 4000
+            },
+            {
+              "do": "keys",
+              "keys": "p19 wrapped draft: the quick brown fox jumps over the lazy dog the quick brown fox jumps over the lazy dog the quick brown fox jumps over the lazy dog end",
+              "afterMs": 700
+            },
+            {
+              "do": "settle",
+              "quietMs": 1000,
+              "minBytes": 0,
+              "timeoutMs": 4000
+            },
+            {
+              "do": "mark",
+              "state": "warning-draft-wrapped",
+              "recordOnly": true
+            }
+          ]
+        },
+        {
+          "id": "wpaste",
+          "seed": "codex",
+          "runs": 1,
+          "codexConfig": [
+            "[mcp_servers.p19probe]",
+            "command = '{work}/p19-no-such-program'"
+          ],
+          "steps": [
+            {
+              "do": "until",
+              "label": "a warning count on the hint row (⚠ and a number) under the footer, an MCP server that cannot start",
+              "screen": "\\n {1,4}p19-probe [^\\n]*·[\\s\\S]*⚠ \\d+",
+              "timeoutMs": 60000,
+              "rules": [
+                {
+                  "label": "folder trust",
+                  "screen": "trust the contents|allow Codex to work in this folder|Do you trust",
+                  "keys": "\r"
+                },
+                {
+                  "label": "press Enter",
+                  "screen": "[Pp]ress [Ee]nter to continue",
+                  "keys": "\r"
+                }
+              ]
+            },
+            {
+              "do": "settle",
+              "quietMs": 1000,
+              "minBytes": 0,
+              "timeoutMs": 4000
+            },
+            {
+              "do": "keys",
+              "keys": "\u001b[200~the quick brown fox jumps over the lazy dog the quick brown fox jumps over the lazy dog the quick brown fox jumps over the lazy dog the quick brown fox jumps over the lazy dog the quick brown fox jumps over the lazy dog the quick brown fox jumps over the lazy dog the quick brown fox jumps over the lazy dog the quick brown fox jumps over the lazy dog the quick brown fox jumps over the lazy dog the quick brown fox jumps over the lazy dog the quick brown fox jumps over the lazy dog the quick brown fox jumps over the lazy dog the quick brown fox jumps over the lazy dog the quick brown fox jumps over the lazy dog the quick brown fox jumps over the lazy dog the quick brown fox jumps over the lazy dog the quick brown fox jumps over the lazy dog the quick brown fox jumps over the lazy dog the quick brown fox jumps over the lazy dog the quick brown fox jumps over the lazy dog the quick brown fox jumps over the lazy dog the quick brown fox jumps over the lazy dog the quick brown fox jumps over the lazy dog the quick brown fox jumps over the lazy dog the quick brown fox jumps over the lazy dog the quick brown fox jumps over the lazy dog the quick brown fox jumps over the lazy dog the quick b.\u001b[201~",
+              "afterMs": 700
+            },
+            {
+              "do": "until",
+              "label": "the paste placeholder in the composer",
+              "screen": "\\[Pasted Content \\d+ chars\\]",
+              "timeoutMs": 8000,
+              "rules": []
+            },
+            {
+              "do": "settle",
+              "quietMs": 1000,
+              "minBytes": 0,
+              "timeoutMs": 4000
+            },
+            {
+              "do": "mark",
+              "state": "warning-pasted",
+              "recordOnly": true
+            }
+          ]
+        },
+        {
+          "id": "wqueue",
+          "seed": "codex",
+          "runs": 1,
+          "codexConfig": [
+            "[mcp_servers.p19probe]",
+            "command = '{work}/p19-no-such-program'"
+          ],
+          "steps": [
+            {
+              "do": "until",
+              "label": "a warning count on the hint row (⚠ and a number) under the footer, an MCP server that cannot start",
+              "screen": "\\n {1,4}p19-probe [^\\n]*·[\\s\\S]*⚠ \\d+",
+              "timeoutMs": 60000,
+              "rules": [
+                {
+                  "label": "folder trust",
+                  "screen": "trust the contents|allow Codex to work in this folder|Do you trust",
+                  "keys": "\r"
+                },
+                {
+                  "label": "press Enter",
+                  "screen": "[Pp]ress [Ee]nter to continue",
+                  "keys": "\r"
+                }
+              ]
+            },
+            {
+              "do": "settle",
+              "quietMs": 1000,
+              "minBytes": 0,
+              "timeoutMs": 4000
+            },
+            {
+              "do": "keys",
+              "keys": "{shortPrompt}",
+              "afterMs": 700
+            },
+            {
+              "do": "keys",
+              "keys": "\r",
+              "afterMs": 100
+            },
+            {
+              "do": "keys",
+              "keys": "p19 queued draft",
+              "afterMs": 0
+            },
+            {
+              "do": "until",
+              "label": "the queue hint (a draft typed while the short turn runs)",
+              "screen": "to queue",
+              "timeoutMs": 5000,
+              "rules": []
+            },
+            {
+              "do": "mark",
+              "state": "warning-queue-hint",
+              "recordOnly": true
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

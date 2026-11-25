@@ -23,12 +23,16 @@
 //    the connection is asked for it AND the hello offers it (a plain
 //    terminal's take-over asks from 2.1.3-beta.13, a held Codex session's
 //    connections from 2.1.3-beta.14); a read on a connection that acked it is
-//    a request like any other, and its answer passes the reader.
+//    a request like any other, and its answer passes the reader;
+//  - letGo (2.1.3-beta.17, plan section B1f): settled true only by the
+//    `term.detached` carrying its detach's id, false by an `error` carrying
+//    it, and false at once when the stream closes or a frame does not read
+//    (which destroys the stream); no other reply (a pong, another id) settles it.
 import { describe, it, expect, afterEach } from 'vitest'
 import { readFileSync } from 'fs'
 import { resolve } from 'path'
 import { FrameReader, encodeJsonFrame, readScreenLines, readScreenRows, type HolderRecord } from '../../../src/main/session-helper/protocol'
-import { HolderConnection, MCP_MESSAGE_TO_HELPER_MAX, MCP_OPEN_CALLS_MAX, TOOL_STREAM_SENTENCES } from '../../../src/main/session-helper/connection'
+import { HolderConnection, LET_GO_WAIT_MS, MCP_MESSAGE_TO_HELPER_MAX, MCP_OPEN_CALLS_MAX, TOOL_STREAM_SENTENCES } from '../../../src/main/session-helper/connection'
 import { duplexPair } from './session-helper-fake-holder'
 
 type Json = Record<string, unknown>
@@ -60,15 +64,16 @@ afterEach(() => { for (const c of open.splice(0)) c.close() })
 
 /** A holder that says hello offering `caps`, and the app's connection to it
  *  (`hooks`: the connection wants hook events; `mcp`: it carries tool streams;
- *  `screen`: it reads the screen). */
-async function connected(caps: string[], hooks: boolean, mcp = false, screen = false) {
+ *  `screen`: it reads the screen; `pingEveryMs`: its keep-alive, off in
+ *  effect unless given). `app` and `holder` are the two ends of its stream. */
+async function connected(caps: string[], hooks: boolean, mcp = false, screen = false, pingEveryMs = 600_000) {
   const [app, holder] = duplexPair()
   const fromApp: Json[] = []
   const reader = new FrameReader('app_to_helper')
   holder.on('data', (chunk: Buffer) => { for (const f of reader.push(chunk)) if (f.kind === 0) fromApp.push(f.json as Json) })
   const hello = { proto: [1], helper: { version: '0.1.0' }, os: 'windows', arch: 'x86_64', caps, session: { sid: SID, state: 'live' } }
   holder.write(`AICC-HELLO ${NONCE} ${JSON.stringify(hello)}\n`)
-  const conn = await HolderConnection.open({ record: RECORD, os: 'windows', openStream: async () => app, hooks, mcp, screen, pingEveryMs: 600_000 })
+  const conn = await HolderConnection.open({ record: RECORD, os: 'windows', openStream: async () => app, hooks, mcp, screen, pingEveryMs })
   open.push(conn)
   const events: unknown[] = []
   conn.on('event', (e) => { events.push(e) })
@@ -77,7 +82,7 @@ async function connected(caps: string[], hooks: boolean, mcp = false, screen = f
   conn.on('mcp', (stream, message) => { tools.push(['mcp', stream, message]) })
   conn.on('mcpClose', (stream) => { tools.push(['close', stream]) })
   await until(() => fromApp.length >= 1, 'the hello.ack')
-  return { conn, fromApp, events, tools, send: (m: unknown, channel = 0) => { holder.write(encodeJsonFrame(m, channel)) } }
+  return { conn, fromApp, events, tools, app, holder, send: (m: unknown, channel = 0) => { holder.write(encodeJsonFrame(m, channel)) } }
 }
 
 describe('the connection acks hooks only when it wants them and the holder offers them', () => {
@@ -427,5 +432,62 @@ describe('the connection acks screen only when asked for it and the holder offer
     const not = await connected(NOW_CAPS, false, false, false)
     await expect(not.conn.readScreen()).rejects.toMatchObject({ code: 'unknown-type' })
     expect(not.fromApp.filter((m) => m.t === 'screen.read')).toEqual([])
+  })
+})
+
+describe('letGo (2.1.3-beta.17, plan section B1f): settled by its own answer only, and at once when the stream goes', () => {
+  /** A promise's outcome, readable while it is still pending. */
+  function watch(p: Promise<boolean>) {
+    const w = { done: false, value: undefined as boolean | undefined, p }
+    void p.then((v) => { w.done = true; w.value = v })
+    return w
+  }
+  /** letGo() on a connection that acked hooks: the let-go, and its detach's id. */
+  async function lettingGo(c: Awaited<ReturnType<typeof connected>>) {
+    const going = watch(c.conn.letGo())
+    await until(() => c.fromApp.some((m) => m.t === 'term.detach'), 'the detach')
+    return { going, id: c.fromApp.find((m) => m.t === 'term.detach')!.id as number }
+  }
+  /** Well under LET_GO_WAIT_MS: settled by then is settled by what came, not by the wait. */
+  const AT_ONCE_MS = LET_GO_WAIT_MS / 4
+
+  it('a pong for an earlier ping and a reply carrying another id do not settle it; the term.detached with its own id settles it true', async () => {
+    const c = await connected(['core', 'local', 'hooks'], true, false, false, 20)
+    await until(() => c.fromApp.some((m) => m.t === 'ping'), 'a ping')
+    const ping = c.fromApp.find((m) => m.t === 'ping')!.id as number
+    const { going, id } = await lettingGo(c)
+    expect(id).not.toBe(ping)
+    c.send({ t: 'pong', re: ping })
+    c.send({ t: 'term.resized', re: id + 1000 })
+    await tick(50)
+    expect(going.done).toBe(false)
+    c.send({ t: 'term.detached', re: id })
+    expect(await going.p).toBe(true)
+  })
+
+  it('an error answer carrying its id settles it false, at once', async () => {
+    const c = await connected(['core', 'local', 'hooks'], true)
+    const { going, id } = await lettingGo(c)
+    c.send({ t: 'error', re: id, code: 'not-connected', message: 'this connection is not attached' })
+    await until(() => going.done, 'the let-go to settle', AT_ONCE_MS)
+    expect(going.value).toBe(false)
+  })
+
+  it('the stream closing before any answer settles it false at once, not after its wait', async () => {
+    const c = await connected(['core', 'local', 'hooks'], true)
+    const { going } = await lettingGo(c)
+    c.holder.destroy()
+    await until(() => going.done, 'the let-go to settle', AT_ONCE_MS)
+    expect(going.value).toBe(false)
+  })
+
+  it('a frame that does not parse settles it false at once and destroys the stream', async () => {
+    const c = await connected(['core', 'local', 'hooks'], true)
+    const { going } = await lettingGo(c)
+    // A frame length of 0: out of range, so the reader throws.
+    c.holder.write(Buffer.alloc(9))
+    await until(() => going.done, 'the let-go to settle', AT_ONCE_MS)
+    expect(going.value).toBe(false)
+    expect(c.app.destroyed).toBe(true)
   })
 })

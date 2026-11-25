@@ -1,20 +1,21 @@
 // Codex provider package: public entry point (WP1, design 7.1). Everything
 // outside this directory imports from here; the dependency-boundary test
 // holds the deep imports at zero.
-import type { SessionProvider, SessionRunScreen, SpawnOptions, TelemetrySource, HistorySession, ProviderSpawnCommand, TelemetryOptions, HeldToolLaunch, HeldToolLaunchAnswer, HeldToolRelay, ExitKey } from '../types'
+import type { SessionProvider, SessionRunScreen, SpawnOptions, TelemetrySource, HistorySession, ProviderSpawnCommand, TelemetryOptions, HeldToolLaunch, HeldToolLaunchAnswer, HeldToolRelay, ExitKey, ResumePick } from '../types'
 import type { LegacyVersion, StatuslineData } from '../../../shared/types'
 import type { AllowanceReading } from '../../../shared/usage-types'
 import type { ProviderCapabilities, AuthRealm, RealmUse } from '../../../shared/providers'
 import type { ProviderPackage, ProviderPricingOperations, RealmRef } from '../core'
 import { CODEX_ENABLEMENT } from './enablement'
-import { resolveCodexBinary, resolveCodexBinaryAsync, buildCodexSpawn, codexHookDataDir, warmNodeExeOnPosix } from './spawn'
-import { openCodexScreen, feedCodexScreen, resizeCodexScreen, closeCodexScreen, hasCodexScreen, submitCodexText } from './session-screen'
+import { resolveCodexBinary, resolveCodexBinaryAsync, buildCodexSpawn, codexHookDataDir, sweepStaleCodexPickFolders, warmNodeExeOnPosix } from './spawn'
+import { openCodexScreen, feedCodexScreen, resizeCodexScreen, closeCodexScreen, hasCodexScreen, submitCodexText, submitCodexImage } from './session-screen'
 import { detectCodexUi } from './ui-detection'
-import { watchAndClaimRollout } from './telemetry'
+import { watchAndClaimRollout, removeCodexPickFolder } from './telemetry'
 import { warmCodexResume } from './rollout-lookup'
 import { deployCodexResumePickerScript } from './resume-picker'
 import { deployCodexHookScripts, writeCodexHookFile, removeCodexHookFile, removeKeptCodexHookFolder, prepareCodexHookFolders, preparedCodexHookRoot, codexPlainWrapperDir, codexLocalAppData, codexHookCommand } from './hooks'
 import type { SecureHookFolders } from './hooks'
+import { rewriteKeptCodexHookFile } from './kept-hooks'
 import { CODEX_PINNED_CLI_VERSION, CODEX_MIN_SUPPORTED_VERSION, CODEX_MAX_TESTED_VERSION } from './cli-contract'
 import { codexInstallRecipes } from './install-recipes'
 import { codexOperationBaseEnv } from './process-env'
@@ -48,7 +49,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { sweepStaleFolders } from '../../stale-folder-sweep'
 import { secureOwnerOnlyFolders, readOwnerOnlyFoldersWindows } from '../../owner-only-folders'
-import { logWarn } from '../../debug-logger'
+import { logInfo, logWarn } from '../../debug-logger'
 
 // WP2 Codex adapter: the CLI contract, install recipes, the allowlisted
 // subprocess environment, realm paths, the CLI runner and discovery.
@@ -128,8 +129,10 @@ const CODEX_MANAGED_LAUNCH_ONLY = 'not used for Codex: launches go through the m
 
 /** WP2 PR 4, P4.1: main's reading of each Codex run's screen (its pane, or
  *  since 2.1.3-beta.14 B2 a held run's holder's screen) and the submit
- *  primitive (session-screen.ts drives composer-submit.ts), offered through
- *  the registered provider: the PTY manager reaches this package only that way. */
+ *  primitive (session-screen.ts drives composer-submit.ts), and since
+ *  2.1.3-beta.17 C6 the image rule (session-screen.ts submitCodexImage), offered
+ *  through the registered provider: the PTY manager and the session input
+ *  module reach this package only that way. */
 const CODEX_RUN_SCREEN: SessionRunScreen = {
   open: (sessionId, opts) => openCodexScreen(sessionId, opts),
   feed: (sessionId, data) => feedCodexScreen(sessionId, data),
@@ -137,6 +140,7 @@ const CODEX_RUN_SCREEN: SessionRunScreen = {
   close: (sessionId) => closeCodexScreen(sessionId),
   has: (sessionId) => hasCodexScreen(sessionId),
   submit: (sessionId, text, opts) => submitCodexText(sessionId, text, opts),
+  submitImage: (sessionId, imagePath, sentence, opts) => submitCodexImage(sessionId, imagePath, sentence, opts),
 }
 
 /** WP2 PR 4: Codex's model prices (pricing.ts), offered to Tokenomics through
@@ -227,13 +231,14 @@ export class CodexProvider implements SessionProvider {
     const marks = this.carryMarks
     const allowanceAfter = marks ? (rolloutPath: string): number | null => marks.cutoff(sessionsDir, codexRolloutIdFromName(rolloutPath)) : undefined
     const watch = opts.resumeId || opts.pickFile || opts.onClaim || opts.onRelease || opts.onShared || opts.onRollout || allowanceAfter
-      ? watchAndClaimRollout(sessionId, opts.cwd, opts.spawnTimestamp, onUpdate, sessionsDir, onAllowance, { resumeId: opts.resumeId, resumePath: opts.resumePath, pickFile: opts.pickFile, pickFolder: opts.pickFolder, onClaim: opts.onClaim, onRelease: opts.onRelease, onShared: opts.onShared, onRollout: opts.onRollout, ...(allowanceAfter ? { allowanceAfter } : {}) })
+      ? watchAndClaimRollout(sessionId, opts.cwd, opts.spawnTimestamp, onUpdate, sessionsDir, onAllowance, { resumeId: opts.resumeId, resumePath: opts.resumePath, pickFile: opts.pickFile, pickFolder: opts.pickFolder, ...(opts.picked ? { picked: opts.picked } : {}), onClaim: opts.onClaim, onRelease: opts.onRelease, onShared: opts.onShared, onRollout: opts.onRollout, ...(allowanceAfter ? { allowanceAfter } : {}) })
       : watchAndClaimRollout(sessionId, opts.cwd, opts.spawnTimestamp, onUpdate, sessionsDir, onAllowance)
     if (!live) return watch
     // The realm's live figure lasts while one of its sessions still reports.
     const release = live.open(sessionsDir)
     return {
-      stop() { try { watch.stop() } finally { release() } },
+      stop(o) { try { watch.stop(o) } finally { release() } },
+      pick: () => watch.pick?.() ?? null,
       // P3.10: the exact claim from the session's own hook, and another
       // session's proof that an inferred claim here is not this one's.
       noteExactRollout: (rolloutPath: string) => watch.noteExactRollout?.(rolloutPath) ?? null,
@@ -378,6 +383,44 @@ export class CodexProvider implements SessionProvider {
    *  hook root only (hooks.ts removeKeptCodexHookFolder). */
   removeSessionHookFolder(dir: string): void {
     try { removeKeptCodexHookFolder(dir, codexHookDataDir()) } catch { /* best-effort; the sweep remains */ }
+  }
+
+  /** 2.1.3-beta.17 (aicc_planning#407): at start, the resume list's pick
+   *  folders a run left in the temp folder when it ended without its
+   *  sessions' own end, a day old or more (spawn.ts
+   *  sweepStaleCodexPickFolders); one log line when any went. */
+  sweepLeftoverPickFolders(): void {
+    try {
+      const removed = sweepStaleCodexPickFolders()
+      if (removed > 0) logInfo(`[codex] start: removed ${removed} resume-list pick folder(s) left in the temp folder by a run that ended without closing its sessions`)
+    } catch { /* best-effort; the next start tries again */ }
+  }
+
+  /** 2.1.3-beta.17 (S16 step 5): the hook file of a session an app update
+   *  kept running, written again in its own folder for the run that takes it
+   *  over (kept-hooks.ts); removed with that folder, as a kept one is. */
+  rewriteSessionHooks(dir: string, sessionId: string, port: number, secret: string): { hookFile: string; dispose(): void } | null {
+    let file: string | null = null
+    try { file = rewriteKeptCodexHookFile(dir, sessionId, port, secret, codexHookDataDir()) } catch { file = null }
+    if (!file) {
+      logWarn(`[codex] hooks: the hook file of ${sessionId}'s kept session could not be written again; the session gets no hook events`)
+      return null
+    }
+    let disposed = false
+    return {
+      hookFile: file,
+      dispose: () => {
+        if (disposed) return
+        disposed = true
+        try { removeKeptCodexHookFolder(dir, codexHookDataDir()) } catch { /* best-effort; the sweep remains */ }
+      },
+    }
+  }
+
+  /** aicc_planning#419: the resume list's pick folder of a session an app
+   *  update kept running, once it is kept no longer (telemetry.ts). */
+  removeSessionPickFolder(pick: ResumePick): void {
+    try { removeCodexPickFolder(pick.file, pick.folder) } catch { /* best-effort */ }
   }
 }
 

@@ -1,8 +1,9 @@
-// The Machines page's bridge (2.1.3-beta.6, plan section C.1): the four channel
-// names are pinned (a rename breaks the preload, the typings and the handlers
-// together), and each preload method invokes exactly its own channel with the
-// caller's argument unchanged and hands back what main answers. (That every IPC
-// value is unique is pinned once, for all channels, in ipc-channels-channels.test.ts.)
+// The Machines page's bridge (2.1.3-beta.6, plan section C.1; the remote
+// machines' five, 2.1.3-beta.17 A2): the channel names are pinned (a rename
+// breaks the preload, the typings and the handlers together), and each preload
+// method invokes exactly its own channel with the caller's argument unchanged
+// and hands back what main answers. (That every IPC value is unique is pinned
+// once, for all channels, in ipc-channels-channels.test.ts.)
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { IPC } from '../../src/shared/ipc-channels'
 
@@ -36,6 +37,12 @@ describe('Machines channel names', () => {
     expect(ipc.MACHINES_SELF_TEST).toBe('machines:selfTest')
     expect(ipc.MACHINES_END_SESSION).toBe('machines:endSession')
     expect(ipc.MACHINES_REATTACH).toBe('machines:reattach')
+    // 2.1.3-beta.17 (plan section A2): the remote machines' doors.
+    expect(ipc.MACHINES_REMOTE_STATE).toBe('machines:remote:state')
+    expect(ipc.MACHINES_REMOTE_PREPARE).toBe('machines:remote:prepare')
+    expect(ipc.MACHINES_REMOTE_ADD).toBe('machines:remote:add')
+    expect(ipc.MACHINES_REMOTE_CHECK).toBe('machines:remote:check')
+    expect(ipc.MACHINES_REMOTE_REMOVE).toBe('machines:remote:remove')
   })
 })
 
@@ -46,6 +53,11 @@ describe('Machines preload bridge', () => {
       [() => api.machines.runSelfTest(), IPC.MACHINES_SELF_TEST, []],
       [() => api.machines.endSession('held-1'), IPC.MACHINES_END_SESSION, ['held-1']],
       [() => api.machines.reattach('held-1'), IPC.MACHINES_REATTACH, ['held-1']],
+      [() => api.machines.remote.state(), IPC.MACHINES_REMOTE_STATE, []],
+      [() => api.machines.remote.prepare('cfg-1'), IPC.MACHINES_REMOTE_PREPARE, ['cfg-1']],
+      [() => api.machines.remote.add('a'.repeat(32)), IPC.MACHINES_REMOTE_ADD, ['a'.repeat(32)]],
+      [() => api.machines.remote.check('b'.repeat(32)), IPC.MACHINES_REMOTE_CHECK, ['b'.repeat(32)]],
+      [() => api.machines.remote.remove('b'.repeat(32)), IPC.MACHINES_REMOTE_REMOVE, ['b'.repeat(32)]],
     ]
     for (const [run, channel, args] of cases) {
       el.ipcRenderer.invoke.mockClear()
@@ -62,6 +74,7 @@ describe('Machines preload bridge', () => {
   })
 
   it('offers no push: the page reads on open, on Refresh and after each action', () => {
-    expect(Object.keys(api.machines).sort()).toEqual(['endSession', 'reattach', 'runSelfTest', 'status'])
+    expect(Object.keys(api.machines).sort()).toEqual(['endSession', 'reattach', 'remote', 'runSelfTest', 'status'])
+    expect(Object.keys(api.machines.remote).sort()).toEqual(['add', 'check', 'prepare', 'remove', 'state'])
   })
 })

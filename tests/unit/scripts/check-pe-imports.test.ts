@@ -404,7 +404,7 @@ describe('isEntryPoint: the check runs whenever node is started with it, by any 
 // ---------------------------------------------------------------- where it runs
 
 type Step = { name?: string; if?: string; run?: string; uses?: string; with?: Record<string, unknown>; env?: Record<string, unknown>; 'working-directory'?: string }
-type Job = { env?: Record<string, unknown>; steps?: Step[] }
+type Job = { 'runs-on'?: unknown; env?: Record<string, unknown>; steps?: Step[] }
 type Workflow = { env?: Record<string, unknown>; jobs: Record<string, Job> }
 /** Every workflow file, so one added later is read too. */
 const WORKFLOWS = readdirSync(resolve(ROOT, '.github/workflows'))
@@ -422,6 +422,16 @@ const RELEASE = /--release\b|--profile[\s=]+release\b|\s-r\b/
 /** Any cargo command at all. */
 const CARGO_ANY = /(?:^|[\s;&|(])cargo\s/m
 const runsCargoBuild = (s: Step) => CARGO_BUILD.test(s.run ?? '')
+/** A build that makes no Windows program, so has no PE to check: a job named
+ *  for macOS or Linux, a step limited to those runners, or (2.1.3-beta.17, the
+ *  dispatch-only remote-helper-e2e job) a job pinned to an ubuntu or macOS
+ *  runner. Never a build that names a Windows target: a cross build on such a
+ *  runner still makes a PE. */
+const buildsNoWindowsProgram = (name: string, job: Job, s: Step): boolean => {
+  if (/--target[\s=]+\S*windows/i.test(s.run ?? '')) return false
+  const runsOn = typeof job['runs-on'] === 'string' ? job['runs-on'] : ''
+  return /mac|linux/i.test(name) || /runner\.os == '(macOS|Linux)'/.test(s.if ?? '') || /^(ubuntu|macos)-/i.test(runsOn)
+}
 
 describe('the workflow files are all read', () => {
   it('ci.yml and release.yml among them, each with jobs', () => {
@@ -453,7 +463,8 @@ describe('every Windows build of the shipped helper is checked right after it is
   })
 
   it('ci.yml release/* test installer: after the build, under the same condition, before it is packaged', () => {
-    const steps = stepsOf(wf['.github/workflows/ci.yml'].jobs['test-windows-build'])
+    // Its own job from 2.1.3-beta.17 (it needs the static Linux helper's job).
+    const steps = stepsOf(wf['.github/workflows/ci.yml'].jobs['release-windows-installer'])
     const build = steps.findIndex(runsCargoBuild)
     expect(build).toBeGreaterThan(0)
     const check = steps[build + 1]
@@ -482,7 +493,7 @@ describe('every Windows build of the shipped helper is checked right after it is
         stepsOf(job).forEach((s, i) => {
           if (!runsCargoBuild(s) || !RELEASE.test(s.run ?? '')) return
           // The macOS and Linux jobs build a Mach-O or ELF program: nothing to check here.
-          if (/mac|linux/i.test(name) || /runner\.os == '(macOS|Linux)'/.test(s.if ?? '')) return
+          if (buildsNoWindowsProgram(name, job, s)) return
           builds[f] = (builds[f] ?? 0) + 1
           expect(stepsOf(job).slice(i + 1).some(isCheck), `${f} ${name}: "${s.name}" is not followed by the check`).toBe(true)
         })
@@ -493,6 +504,18 @@ describe('every Windows build of the shipped helper is checked right after it is
     // dispatch-only Probe P21 job, which measures the program it builds, and the
     // dispatch-only Snap e2e job, whose app runs the program it builds.
     expect(builds).toEqual({ '.github/workflows/ci.yml': 4, '.github/workflows/release.yml': 1 })
+  })
+
+  it('a build on an ubuntu or macOS runner has no PE to check, unless it names a Windows target', () => {
+    const at = (run: string, cond?: string): Step => ({ run, if: cond })
+    const linuxMusl = 'cargo build --locked --release --target x86_64-unknown-linux-musl'
+    expect(buildsNoWindowsProgram('remote-helper-e2e', { 'runs-on': 'ubuntu-latest' }, at(linuxMusl))).toBe(true)
+    expect(buildsNoWindowsProgram('build', { 'runs-on': 'macos-15' }, at('cargo build --release'))).toBe(true)
+    expect(buildsNoWindowsProgram('build', { 'runs-on': 'ubuntu-latest' }, at('cargo build --release --target x86_64-pc-windows-gnu'))).toBe(false)
+    expect(buildsNoWindowsProgram('helper-linux', { 'runs-on': 'ubuntu-latest' }, at('cargo build --release --target=x86_64-pc-windows-msvc'))).toBe(false)
+    expect(buildsNoWindowsProgram('build', { 'runs-on': 'windows-2025' }, at('cargo build --release'))).toBe(false)
+    expect(buildsNoWindowsProgram('build', { 'runs-on': '${{ matrix.os }}' }, at('cargo build --release'))).toBe(false)
+    expect(buildsNoWindowsProgram('build', { 'runs-on': '${{ matrix.os }}' }, at('cargo build --release', "runner.os == 'Linux'"))).toBe(true)
   })
 
   it('ci.yml Snap e2e: after the release build, before the app is built and run', () => {

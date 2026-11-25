@@ -2,8 +2,9 @@
  * The Machines page's seam (2.1.3-beta.6, plan section C).
  *
  * The page asks one MachinesSource what the session helper on a machine is
- * doing and which sessions it holds. This beta has one machine, This computer.
- * Main owns the source: the default one (src/main/ipc/machines-handlers.ts)
+ * doing and which sessions it holds, for This computer. The Linux machines
+ * added for remote sessions (2.1.3-beta.17) have types of their own
+ * (remote-machines.ts) and doors of their own. Main owns the source: the default one (src/main/ipc/machines-handlers.ts)
  * says the helper is off and holds nothing, and the helper work swaps in the
  * real one with setMachinesSource. The renderer only ever sees these types over
  * the typed bridge, so nothing here may name a path, a pipe or a process id.
@@ -24,8 +25,10 @@ export interface HeldSession {
   startedAt: number
   /** True while the app is connected to it. */
   attached: boolean
-  /** True while a tab in the app shows it. A held terminal with no app
-   *  attached and no tab is one a crash left behind. */
+  /** True while a tab in the app shows it, and for an agent session an update
+   *  kept running for its tab to take over (that tab may be restored and not
+   *  yet shown). A held terminal with no app attached and no tab is one a
+   *  crash left behind. */
   tabOpen: boolean
   /** 2.1.3-beta.9: true for the terminal of a report the app runs on its own
    *  (an Insights report), not a tab's session. Its label names the report;

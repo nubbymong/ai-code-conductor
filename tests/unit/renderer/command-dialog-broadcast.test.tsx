@@ -144,7 +144,7 @@ describe('the dialog\'s preview draws the pill the bar will show (#399)', () => 
     expect(previewPill()).toBeNull()
     act(() => { toggle().click() })
     expect(previewPill()).not.toBeNull()
-    expect(previewPill()!.getAttribute('aria-label')).toBe('Sends to every open session')
+    expect(previewPill()!.getAttribute('aria-label')).toBe('Sends to every open session, or the ones you pick')
     act(() => { toggle().click() })
     expect(previewPill()).toBeNull()
   })

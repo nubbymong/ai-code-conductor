@@ -43,7 +43,7 @@ vi.mock('../../../src/main/providers', () => ({
   }),
 }))
 
-const { writeLocalSessionSettings, removeLocalSessionSettings, getLocalSessionSettingsPath, sessionLaunchedWithoutAppStatusLine } =
+const { writeLocalSessionSettings, removeLocalSessionSettings, getLocalSessionSettingsPath, sessionLaunchedWithoutAppStatusLine, noteKeptLaunchStatusLine } =
   await import('../../../src/main/hooks/per-session-settings')
 
 const APP_LINE = { type: 'command', command: 'node "/res/scripts/claude-multi-statusline.js" sid' }
@@ -117,5 +117,19 @@ describe('whether a launch got the app\'s status line (aicc_planning#378)', () =
     expect(sessionLaunchedWithoutAppStatusLine('sid-end')).toBe(true)
     removeLocalSessionSettings('sid-end')
     expect(sessionLaunchedWithoutAppStatusLine('sid-end')).toBe(false)
+  })
+
+  // 2.1.3-beta.17 (S16 step 5, aicc_planning#412): a session an update kept
+  // running, taken over with no launch in this run: read back from the
+  // settings file its launch wrote, which the update kept.
+  it("a kept session taken over: with the app's status line when its kept settings file runs the app's script with its id; without it for one of the user's own, none, or no file", () => {
+    const kept = (sid: string, statusLine: unknown) => fs.writeFileSync(getLocalSessionSettingsPath(sid), JSON.stringify(statusLine === undefined ? {} : { statusLine }))
+    kept('sid-kept-app', { type: 'command', command: 'node "/res/scripts/claude-multi-statusline.js" sid-kept-app "/home/u/.claude/ccc-status-sid-kept-app.url"' })
+    kept('sid-kept-own', { type: 'command', command: 'my-own-status-line.sh' })
+    kept('sid-kept-other', { type: 'command', command: 'node "/res/scripts/claude-multi-statusline.js" another-sid' })
+    kept('sid-kept-none', undefined)
+    for (const sid of ['sid-kept-app', 'sid-kept-own', 'sid-kept-other', 'sid-kept-none', 'sid-kept-nofile']) noteKeptLaunchStatusLine(sid)
+    expect(sessionLaunchedWithoutAppStatusLine('sid-kept-app')).toBe(false)
+    for (const sid of ['sid-kept-own', 'sid-kept-other', 'sid-kept-none', 'sid-kept-nofile']) expect(sessionLaunchedWithoutAppStatusLine(sid), sid).toBe(true)
   })
 })

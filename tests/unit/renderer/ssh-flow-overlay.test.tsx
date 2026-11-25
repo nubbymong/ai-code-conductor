@@ -19,6 +19,7 @@ import { act } from 'react'
 const { default: SshFlowOverlay, failureText, CONTAINER_ENTRY_FAILED, CONTAINER_LEFT, ENTRY_UNVERIFIED } = await import('../../../src/renderer/components/SshFlowOverlay')
 import { useSessionStore } from '../../../src/renderer/stores/sessionStore'
 import { SSH_ENTRY } from '../../../src/shared/ssh-entry'
+import { SSH_THROUGH_HELPER } from '../../../src/shared/remote-machines'
 import type { Session } from '../../../src/renderer/stores/sessionStore'
 
 const WARNING = 'persistent session unavailable'
@@ -372,5 +373,27 @@ describe('SshFlowOverlay while the post-connect command runs', () => {
     expect(container.textContent).toContain('Run post-connect command')
     await act(async () => { flowCb?.({ state: 'failed', info: 'container entry failed' }) })
     expect(container.querySelector('[data-testid="ssh-run-post-command-again"]')).not.toBeNull()
+  })
+})
+
+// 2.1.3-beta.17 A2 (aicc_planning#411): a tab through the session helper on its
+// machine has no SSH flow: main answers the catch-up with `through-helper`,
+// and the overlay shows no card (no Waiting for SSH login, no Launch Claude).
+describe('SshFlowOverlay on a tab through the session helper', () => {
+  it('shows nothing once main says the tab runs through the session helper', async () => {
+    setSession({ host: 'h', port: 22, username: 'u', remotePath: '~', detachable: false })
+    ;(globalThis as any).window.electronAPI.ssh.getState = vi.fn(async () => ({ state: SSH_THROUGH_HELPER }))
+    await act(async () => { root.render(<SshFlowOverlay sessionId="s1" hasPostCommand={false} shellOnly={false} enabled />) })
+    await act(async () => { await Promise.resolve() })
+    expect(container.innerHTML).toBe('')
+    expect(container.textContent).not.toContain('Launch Claude')
+  })
+
+  it('before that answer it shows the connecting card, as for any SSH tab', async () => {
+    setSession({ host: 'h', port: 22, username: 'u', remotePath: '~', detachable: false })
+    mount()
+    expect(container.innerHTML).not.toBe('')
+    await push({ state: SSH_THROUGH_HELPER })
+    expect(container.innerHTML).toBe('')
   })
 })

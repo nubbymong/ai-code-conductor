@@ -58,9 +58,9 @@ interface Props {
   mode?: WalkthroughMode
 }
 
-/** Render bullet text with **bold** segments */
+/** Render bullet text with **bold** and `code` segments */
 function renderBullet(text: string): React.ReactNode {
-  const parts = text.split(/(\*\*[^*]+\*\*)/)
+  const parts = text.split(/(\*\*[^*]+\*\*|`[^`]+`)/)
   return parts.map((part, i) => {
     if (part.startsWith('**') && part.endsWith('**')) {
       return (
@@ -68,6 +68,9 @@ function renderBullet(text: string): React.ReactNode {
           {part.slice(2, -2)}
         </span>
       )
+    }
+    if (part.length > 2 && part.startsWith('`') && part.endsWith('`')) {
+      return <code key={i} className="font-mono" style={{ color: 'var(--text-primary)' }}>{part.slice(1, -1)}</code>
     }
     return <span key={i}>{part}</span>
   })
@@ -309,8 +312,8 @@ export default function TrainingWalkthrough({ onClose, showAll = false, mode = '
                   {step.title}
                 </div>
               )}
-              <p className="text-sm leading-relaxed" style={{ color: 'var(--text-secondary)' }}>
-                {step.summary}
+              <p className="text-sm leading-relaxed" style={{ color: 'var(--text-secondary)' }} data-ux-id="tour-summary">
+                {renderBullet(step.summary)}
               </p>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-1">
                 <div>

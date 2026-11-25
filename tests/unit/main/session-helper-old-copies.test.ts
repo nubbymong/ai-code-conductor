@@ -67,6 +67,8 @@ let root: string
 let helper: FakeHelper
 let logs: string[]
 const managers: SessionHelperManager[] = []
+/** Every start a test began, awaited or not: the teardown waits for them. */
+const starts: Promise<unknown>[] = []
 
 const folder = (name: string) => mkdirSync(join(root, name), { recursive: true })
 const names = () => readdirSync(root).sort()
@@ -82,6 +84,8 @@ function makeManager(over: Partial<ConstructorParameters<typeof SessionHelperMan
     spawnDirect: (file, args, o) => ptySpawn(file, args, o), conptySource: () => null, log: (m) => logs.push(m), ...over,
   })
   managers.push(m)
+  const start = m.start.bind(m)
+  m.start = (o) => { const p = start(o); starts.push(p); return p }
   return m
 }
 
@@ -100,8 +104,9 @@ afterEach(async () => {
   const quits = managers.splice(0).map((m) => { try { return m.shutdown() } catch { return null } })
   for (const h of helper.holders.values()) h.dropAll()
   let timer: NodeJS.Timeout | undefined
-  await Promise.race([Promise.allSettled(quits), new Promise<void>((r) => { timer = setTimeout(r, 3000) })]).finally(() => clearTimeout(timer))
-  try { rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 25 }) } catch { /* the run's own temp folder goes with the run */ }
+  await Promise.race([Promise.allSettled([...quits, ...starts.splice(0)]), new Promise<void>((r) => { timer = setTimeout(r, 3000) })]).finally(() => clearTimeout(timer))
+  // The starts include the self-test each began (session-helper-manager.test.ts says why that matters): a folder that cannot go here is a real failure.
+  rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 25 })
 })
 
 describe('the start-up clean-up of old helper copies with both switches off', () => {

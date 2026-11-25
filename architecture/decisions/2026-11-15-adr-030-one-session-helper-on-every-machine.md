@@ -78,7 +78,7 @@ Rows are numbered so that "does not own" can name the owner.
 |---|---|---|---|---|---|
 | 1 | Core shell | Electron main process | The window and preload IPC; config and session state files; the one service registry (start, stop, health and restart of every service row, routed to the supervisor that holds the process; today's three supervisors stay); start-up and quit order; the updater (check, verify, detach every holder, install, then ask row 3 to re-open tabs and re-attach); the order of steps in the first-run flow and the upgrade assistant | Any PTY or CLI process; helper rows (read-only on Services); tool logic; account rules; paste staging; what a status or hook frame means; what is queued, or how long a session lives, while the app is away | Renderer through preload; core modules by direct call; workers over message ports |
 | 2 | Renderer UI | Sandboxed window | Drawing and user input only; reporting the paste key to core | Any state of record; any file or process access; where a session runs; reading a session's screen to decide whether the app may type (moves to rows 3 and 14); the paste decision (row 8) | Core only, through preload |
-| 3 | Session client and launch spec builder (new; replaces `pty-manager.ts`) | Module in core | The one list of sessions (live, detached, leftover) and their attach state; finding leftover sessions by asking each machine's helper; the one launch spec (program, arguments, environment, folder, account binding, provider files, the saved post-connect command as a pre-launch step, the lifetime kind); mapping every saved config shape to a launch spec; attach, detach, replay by offset, resize, write; re-opening tabs after an update or crash; `submit`, the one function through which the app itself types into a CLI; handing each incoming frame to its one owner | The PTY, the CLI and the screen (row 4); chunking a large write and the away clock (row 4); what an account is (row 6); what a tool does (row 7); what a frame means (row 13); when a CLI takes typed text (row 14); ssh options and host keys (row 5); conversation content (row 10) | Holders, with protocol frames: a named pipe or Unix socket on This computer, two ssh connections for a remote machine; renderer through core IPC |
+| 3 | Session client and launch spec builder (new; replaces `pty-manager.ts`) | Module in core | The one list of sessions (live, detached, leftover) and their attach state; finding leftover sessions by asking each machine's helper; the one launch spec (program, arguments, environment, folder, account binding, provider files, the saved post-connect command as a pre-launch step, the lifetime kind); mapping every saved config shape to a launch spec; attach, detach, replay by offset, resize, write; re-opening tabs after an update or crash; `submit`, the one function through which the app itself types into a CLI; handing each incoming frame to its one owner | The PTY, the CLI and the screen (row 4); chunking a large write and the away clock (row 4); what an account is (row 6); what a tool does (row 7); what a frame means (row 13); when a CLI takes typed text (row 14); ssh options and host keys (row 5); conversation content (row 10) | Holders, with protocol frames: a named pipe or Unix socket on This computer, one ssh exec per session for a remote machine (the bridge, 2.1.3-beta.17; protocol change 16); renderer through core IPC |
 | 4 | Session helper (new, Rust) | One holder process per session on the session's machine, the same binary on every system; no daemon, no port. Short-lived modes: statusline, hook, mcp relay, run, capture, list, self-test | The PTY and the CLI process; applying the launch spec exactly; the output ring with offsets; the one screen of record and the last-output time; the session folder and its removal at session end; enforcing the lifetime kind and the away clock; answering list mode; while the app is away, a bounded queue of status and hook events, holding a tool call about 30 seconds, and letting a held permission question fall back to the CLI's own prompt; chunking a large write on whole characters; transfer and paste-folder caps; holding an account token in memory only; forwarding the conversation file; screen grabbing in capture mode | Any decision (which account, sign-in kind or tools; retry or not; what to launch; which lifetime kind; whether a screen is ready; what a paste becomes); any pattern about a CLI's screen text; writing a token to disk or argv; the host's own login; its own install, update or health row (row 5); what conversation content means (row 10) | The session client only (frames); the CLI through its short-lived modes |
 | 5 | Machines (new) | Module in core plus a page | One record per machine, This computer always present (OS, shell, CLI paths, pinned host key, helper version and hash, last self-test); installing, checking, re-provisioning and removing the helper on Linux, macOS and Windows hosts; the helper store on This computer; helper health rows; ssh connection settings; the transport over which row 3 asks a machine what is running; the Machines page. It stores three per-machine values for their owners: the tool allow-list (row 7), the "use this host's own login" switch (row 6), the Tokenomics exclusion (row 10) | The session list (row 3; the page shows it and its buttons call row 3); session lifetime (rows 3 and 4); the allow or deny decision; which login a launch uses; what is indexed; launch specs | Local file copy for This computer; fixed-option ssh commands for remote machines |
 | 6 | Accounts | Module in core | Accounts managed once for local and remote: the registry; each account's sign-in kind; the token in the OS secure store on the app machine; per-account config folders for Standard login; which login a launch on a given machine uses; usage reads; the one in-use lease per account. It hands row 3 an account binding for a launch | Launching anything; carrying the token to the CLI (rows 3 and 4); a host's own CLI login files; a CLI's environment variable names (row 14); Codex accounts on a remote host until their probe passes | Session client (binding and lease); account web views; data workers for attribution |
@@ -253,7 +253,7 @@ cut over.
 
 ## Protocol changes
 
-Fifteen changes to protocol version 1. Each is written into
+Sixteen changes to protocol version 1. Each is written into
 `docs/remote/helper-protocol.md` by the slice that first uses it, inside that
 slice's adversarial pass.
 
@@ -289,6 +289,16 @@ slice's adversarial pass.
 15. **Host platforms.** Windows hosts, with the user's local application data
     folder as the install root, PowerShell one-shot commands and a named pipe
     on the host. Not a frame change; numbered so a reference to it is exact.
+16. **One ssh exec per remote session** (2.1.3-beta.17, remote step 1). The
+    helper's `bridge` mode copies a remote holder's connection, section 15's
+    frames as a local holder's endpoint carries them, to an `ssh -T` exec's
+    standard input and output byte for byte, so a session's terminal and the
+    helper's messages ride one connection. This changes the shape the owner
+    agreed on 2026-11-14 (a second ssh connection per session) and component
+    row 3 for the helper path. The reason: one code path with local sessions,
+    and the remote terminal never passes through a console on Windows, which
+    is where the SSH status line breaks today. `serve` and `attach` stay
+    unbuilt and unchanged.
 
 ## Declared exceptions
 
@@ -457,6 +467,45 @@ connection and an unknown name have labels of their own, a host name with a colo
 reported as not left as found. On 2026-11-21 the host that answered was left as found: every holder ended, the probe's temporary folder
 deleted, and `/tmp/aicc-<uid>`, which was not there before, not there after; nothing was
 made on the other. The probe is `helper/probes/p3-p6-linux.cjs`.
+
+Remote step 1 (2.1.3-beta.17, plan sections A1 and A2, aicc_planning#410 and #411) ships off
+by default, behind a Settings switch, before P1 and P2 run. P1 (the status line through the
+helper) needs a status frame on the session's one stream, which beta.18 adds; until then a tab
+through the helper has no status line, and P1 gates any default. P2 (saved passwords through
+askpass) gates password hosts; step 1 takes key sign-in only, so a config with a saved password
+keeps the usual SSH path. Decided for step 1: a session's terminal and the helper's messages
+ride ONE `ssh -T` exec per session, the helper's `bridge` mode (`bridge --store
+~/.aicc/<did>/store --session <sid>`), which copies the holder's section 15 connection to ssh's
+pipes byte for byte: no `ssh -tt` terminal and no `serve` side channel, so remote sessions take
+the local holders' one code path and no ConPTY sits on the remote terminal (protocol change 16;
+component row 3). S24, the helper half (A1): `aicc-helper bridge` (macOS and Linux) carries one
+holder connection over an `ssh -T` exec's standard input and output, byte for byte, and never
+reads a frame; the Windows installer carries the static Linux helper
+(`resources/helper/linux-x64/aicc-helper`) and `resources/helper/manifest.json` (`{v:1,
+files:[{path, version, sha256}]}`), written before packaging and listing the Linux helper only,
+because electron-builder signs `aicc-helper.exe` in the package. S24, the app half (A2; Windows
+app, Linux x86-64 hosts, key sign-in): a machine is added once on Machines from a saved SSH
+config: a question naming the file, its size and SHA-256; the file uploaded on standard input
+into ~/.aicc/<did>; its SHA-256 there compared with the installer's manifest; version and
+self-test; a record of OS, architecture, home, login shell, the CLI's path and the PATH from one
+-il lookup, the helper's version and hash, and the last check; Check and Remove. S25's first
+session kind (off by default): a tab whose saved config's Connection is SSH (detachable: false),
+key sign-in, no post-connect command, no container, to an added and checked Linux machine
+holding this build's helper, runs through a holder there: hold --detach by one exec, then the
+bridge on one ssh -T exec per session whose pipes carry the holder's frames; the CLI starts
+through the host's login shell (<shell> -il -c exec "$0" "$@" <claude> <args>, D8). A dropped
+link attaches again from the last byte seen with the replay (section 11's back-off, within the
+2-minute away clock); a closed tab or a quit sends term.end, once more on a new link if the old
+one dropped as it closed. remote-helper-e2e run 45337753429: 20,000 lines printed while the
+bridge was stopped came back once each. Not through the helper yet: the status line and usage,
+the Agent Canvas, the browser and the Conductor's other tools, hook events, image paste. With
+the switch off no SSH tab reads or writes anything of remote step 1: a tab's start asks for the
+machine records and the manifest only once the switch is saved on. The Machines page on Windows
+shows its Linux machines section with the switch on or off, and reads the manifest, the Linux
+helper and the records when it is opened (the first read makes the records file with this
+install's id). A machine holding another session
+helper than the app's reads not checked on its card, and its tabs take the usual SSH path,
+until Check installs the app's helper.
 
 P7 result (2026-11-15, Windows test machine, the skeleton holder from #685 and a silent
 install of 2.1.3-beta.4): yes. A detached holder is not in a job object, and it and its
@@ -651,7 +700,10 @@ or queue-hint screen holds an `esc to interrupt` row, the reader's only sign of 
 its working row once, right after Enter, and not while the reply streamed. The reader fix in the
 same beta (aicc_planning#357, plan 2.1.3-beta.12 C3) reads 12 of the 33; the other 21, a footer
 wrapped onto two rows (8) or a warning count at the right of the hint row (13), still read
-unrecognised and are listed in the corpus test as known misreads. Not measured: a signed-in account's
+unrecognised and are listed in the corpus test as known misreads. Since 2.1.3-beta.17 C7
+(aicc_planning#371) the reader takes the warning count as well; the corpus test now lists 6
+known misreads: the 5 recordings whose Codex 0.170.0 footer wraps (#357) and Codex 0.157.1's
+macOS mid-reply, which reads ready (#370). Not measured: a signed-in account's
 screens (whether a real model gives the warning, or a hint row A2 could not reach without an
 account), the holder's own PTY code, the app's real attach path, any size but 120 by 40.
 
@@ -703,6 +755,59 @@ change 3. Not measured: a signed-in account and a real model, the app's own gate
 path (the probe writes the same entries), a settings file written in place, Claude Code's other
 hook events, macOS and Linux, Codex below 0.157.1 (the tested range starts at 0.153.4). The
 probe is `helper/probes/p20-probe.cjs`.
+
+S16 steps 5 and 6 (2.1.3-beta.17, plan section B1, aicc_planning#412), Windows, behind the
+agent sessions' setting. The start after an update keeps each recorded session whose provider's
+take-over is wired (Claude Code and Codex), whose holder's record is in the store and whose tab
+is in the saved file, for that tab, and a keeper stops its away clock while the session waits
+for it: up to 5 minutes from the start, except as B1c below sets out for a tab Resume restored.
+The restored tab's launch is replaced by a take-over (pty-manager.ts, one entry;
+launch-bindings.ts takeOverKeptLaunch): nothing is spawned, written into a file the CLI reads
+once, or typed. The holder's terminal is attached as a plain take-over's is, with its hook
+events and tool streams on from the attach. The launch's bindings are made again: a tool host
+record with no credential; for Claude Code the status line URL file (only where the launch wrote
+one), the account capture and registrations, and the transcript bind by the saved conversation
+from the recorded launch folder; for Codex, only on the account the tab's launch is prepared on,
+its hook.json rewritten in the kept folder with this run's port and a new token, the lease, the
+pane and live-only colour answers, and the telemetry by the saved conversation id, or, for a
+session started through the resume list, by its pick file, which an update that keeps the
+session keeps with its folder (aicc_planning#419): the release records the file, the folder's
+identity as made and the decision read last, the take-over binds them as the launch did, seeded
+with the conversation the session is on, so the list's next decision is read, and the folder
+goes with the session's other files once it is kept no longer. An update from 2.1.3-beta.16
+still removes it at the release. Step 6 sends `notifications/tools/list_changed` on a given-back
+stream for Claude Code only, per P20 (c). Any other recorded session is ended at the start as
+before. Step 7 (macOS and Linux, P8) is not built.
+
+B1c (aicc_planning#423): a restored tab not on screen starts, and takes its session over, only
+when it is shown. The renderer says which tabs Resume restored (pty:tabsRestored) and which tab
+is shown (pty:tabShown), so the 5-minute limit stops from Resume until the tab is shown, and a
+closed tab ends its session at once. The start empties the session's status line address file,
+which names the last run's address and credential, until the take-over writes it again. B1d
+(aicc_planning#423): while a restored tab is not shown, the session kept for it is served its
+Conductor tool calls from 3 s after Resume. The launch bindings make the tool host's record with
+no credential, and the review and canvas registrations from the tab's configured folder, which
+pty:tabsRestored now carries. A keeper that acks mcp is given the kept tool streams. A Codex
+session's hook file is written again with a new token, and no transcript is claimed before the
+take-over. A kept session whose CLI ends by itself is ended with its record, and its tab
+resumes by itself.
+
+B1e (aicc_planning#423): from the serving's wait after Resume, the keeper of a Claude Code
+session kept for its restored tab acks `hooks`, served or not, so its hook events reach the tab
+at once; the take-over goes on from the last `seq` that keeper took. While a session waits for
+its tab's take-over, no transcript is bound from its hook events or its status line
+(routeHookTranscriptPath, keptForItsTab). A Codex session's serving token is kept through the
+kill before its take-over and replaced by the take-over's own, so the Hooks gateway keeps the
+tab's hook record; any other end drops it.
+
+At an update the app lets go of each connection that takes hook events with `term.detach` and
+waits for the answer (B1f, aicc_planning#423), so a Claude Code session's hook events made after
+the let-go reach the next start. A Codex session's made from the let-go until the next run
+writes its hook file again are lost (P20 (a)); S16 item 4's later S12 step closes that. The
+first update into 2.1.3-beta.17 still has the Claude Code window, because the old app does the
+let-go. The holder's hook queue (256 events or 2 MiB, the oldest dropped first) now holds only
+what a session makes while no app takes its hook events: from the old app's exit until 3 s
+after Resume.
 
 P21 result (2026-11-22, plan 2.1.3-beta.14 C6, the Windows test machine, build 22621, with the
 `helper-windows` artifact of Helper run 45032133403 on 0e2d6f98, whose `aicc-helper.exe` has
@@ -796,6 +901,23 @@ is `helper/probes/p11-probe.cjs` with `p11-model-stand-in.cjs` (SHA-256 of each 
 line ends: e3cbf104113c4f46af357449276c8f6c431f694b15694b870c3dcedba67eaa8b and
 58594bda5ceb37617630c1350c0cfbf0bcadb5fac7d0ed5b4bf3f5045e03a5cd; the probe file as of
 fec8023d).
+
+C6 reading and build (2026-11-24, plan 2.1.3-beta.17 C6, aicc_planning#415; P11's stand-in,
+Codex 0.157.1 with GPT-5.5, the Windows test machine, bundled ConPTY, 120 by 40, no build): with
+"[Image #1]" in the composer, Codex's screen reads ready but not empty, so the submit primitive
+alone never types the sentence; read past the placeholder it reads ready and empty, and the
+sentence typed after it confirms (4 of 4). The placeholder showed 251 to 314 ms after the paste
+(8 of 8); Ctrl+U cleared it in about 80 ms and the next turn carried no picture (4 of 4, with
+and without the sentence typed); one Backspace left it; an em dash typed after it reached the
+turn (3 of 3); the turn carried the same picture (3 of 3). Built on that: a local Codex session
+gets a saved image as a bracketed paste of its path, its placeholder read on the screen its
+composer rule reads (the holder's for a held session, main's pane otherwise), then the sentence
+through the submit primitive read past the placeholder, confirmed, then Enter; what it cannot
+paste it takes back with Ctrl+U, only while the composer holds nothing but the paste, and the
+renderer types the old line by its Codex rule. Since C9 (aicc_planning#420) the image rule reads
+Codex's warning count as C7's readers do, so an image goes in as Codex's own paste while the
+count shows. Not measured: a full-size Snap picture's placeholder time (the wait is 5 s), a held
+session on the real CLI, macOS and Linux.
 
 ## Parked questions
 

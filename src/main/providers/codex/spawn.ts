@@ -13,7 +13,7 @@ import { colorFgBgValue } from '../host-color-scheme'
 import { windowsFolderAsRun, windowsPathFolderIsFullyQualified } from '../windows-path-names'
 import { codexShellEnv, CMD_UNSAFE_PATH_RE } from './cli-runner'
 import { CODEX_CONVERSATION_ID_RE, codexFolderIdentity, resolveCodexResume } from './rollout-lookup'
-import { codexHookCommand, codexHookConfigArgs, codexPlainWrapperDir, codexLocalAppData, verifyPlainCodexHookWrapper, CODEX_HOOK_FILE_ENV, CODEX_HOOK_SCRIPT, CODEX_HOOK_WRAPPER } from './hooks'
+import { codexHookCommand, codexHookConfigArgs, codexPlainWrapperDir, codexLocalAppData, verifyPlainCodexHookWrapper, CODEX_HOOK_FILE_ENV, CODEX_HOOK_SCRIPT, CODEX_HOOK_STALE_MS, CODEX_HOOK_WRAPPER } from './hooks'
 import { codexExtraArgsProblem, codexExtraArgWords } from '../../../shared/extra-args'
 import { logInfo, logWarn } from '../../debug-logger'
 import { isPlainScriptFile, isRealScriptFolder, deployFailedThisRun } from '../../script-deploy'
@@ -337,6 +337,64 @@ export function pickerNodeFor(env: Readonly<Record<string, string | undefined>>,
  *  directly because no node was found to run the list. */
 export const CODEX_RESUME_LIST_SKIPPED_NO_NODE = 'Node.js was not found, so the resume list was skipped and Codex starts directly'
 
+/** The folder a launch through the resume list makes in the system's temp
+ *  folder for the list's pick file (P3.5; below, in the builder): its name
+ *  starts with this, and the session's watcher removes it, with the file, when
+ *  the session ends (telemetry.ts). */
+export const CODEX_PICK_DIR_PREFIX = 'ccc-codex-pick-'
+/** The pick file's name in that folder. */
+export const CODEX_PICK_FILE_NAME = 'pick.json'
+/** The pick file's staging names (the list's writePick, scripts/lib). */
+const PICK_STAGING_RE = /^pick\.json\.[0-9a-f]{16}\.tmp$/
+/** How old a pick folder must be before a start removes it: the hook
+ *  folders' bound (hooks.ts CODEX_HOOK_STALE_MS). A running session's watcher
+ *  sets its folder's time to now every hour (telemetry.ts
+ *  PICK_FOLDER_TOUCH_MS), so a folder this old is no running session's, in
+ *  this copy of the app or another one sharing the temp folder. */
+export const CODEX_PICK_STALE_MS = CODEX_HOOK_STALE_MS
+
+/**
+ * At start (aicc_planning#407): remove the pick folders a run left in the
+ * temp folder when it ended without its sessions' own end (a kill, a crash,
+ * a quiet uninstall). Only a folder directly in `tmp` whose name starts with
+ * CODEX_PICK_DIR_PREFIX, a real folder (never a link or junction), this
+ * user's (where the platform keeps owners), older than `maxAgeMs`, and
+ * empty or holding only the pick file and its staging files: each file
+ * removed by name, then the folder, never recursively. Anything else there
+ * keeps the folder whole. A session an app update kept running has no pick
+ * folder left by then: its watcher's end at the release removed it.
+ * Answers how many were removed. Never throws.
+ */
+export function sweepStaleCodexPickFolders(tmp: string = os.tmpdir(), now: number = Date.now(), maxAgeMs: number = CODEX_PICK_STALE_MS): number {
+  let removed = 0
+  if (typeof tmp !== 'string' || !tmp || !path.isAbsolute(tmp)) return 0
+  let names: string[]
+  try { names = fs.readdirSync(tmp) } catch { return 0 }
+  const uid = typeof process.getuid === 'function' ? process.getuid() : null
+  for (const name of names) {
+    if (!name.startsWith(CODEX_PICK_DIR_PREFIX)) continue
+    const dir = path.join(tmp, name)
+    // A real folder only: null for a link, a junction or anything else.
+    const made = codexFolderIdentity(dir)
+    if (!made) continue
+    let st: fs.Stats
+    try { st = fs.lstatSync(dir) } catch { continue }
+    if (uid !== null && st.uid !== uid) continue
+    if (now - st.mtimeMs < maxAgeMs) continue
+    let inside: fs.Dirent[]
+    try { inside = fs.readdirSync(dir, { withFileTypes: true }) } catch { continue }
+    if (!inside.every((e) => e.isFile() && (e.name === CODEX_PICK_FILE_NAME || PICK_STAGING_RE.test(e.name)))) continue
+    // Still the folder looked at, right before anything in it is removed.
+    const still = codexFolderIdentity(dir)
+    if (!still || still.id !== made.id || still.real !== made.real) continue
+    for (const e of inside) {
+      try { fs.unlinkSync(path.join(dir, e.name)) } catch { /* gone */ }
+    }
+    try { fs.rmdirSync(dir); removed++ } catch { /* not empty, or gone */ }
+  }
+  return removed
+}
+
 /** macOS and Linux (2.1.3-beta.5): ask the login shell where node is, off the
  *  main thread, and keep the answer for resolveNodeExe. One question at a
  *  time; nothing at all once an answer is kept, and nothing on Windows. A
@@ -526,9 +584,9 @@ export const CMD_EXE_LINE_MAX = 8_191
  *  0.156.0 Codex then also shows "Running without the shared background
  *  server: command-line configuration overrides (-c, --enable, --disable, or
  *  --search) requires embedded mode." as a startup warning, whose count on the
- *  hint row is a row the app's screen reader refuses, so the app typed
- *  nothing into the tab. Codex shows that warning only while this feature is
- *  on (codex-rs/tui/src/startup_orchestration.rs, the
+ *  hint row was a row the app's screen reader refused until 2.1.3-beta.17 C7,
+ *  so the app typed nothing into the tab. Codex shows that warning only while
+ *  this feature is on (codex-rs/tui/src/startup_orchestration.rs, the
  *  `daemon_exclusion.filter(|_| auto_start_daemon)` step, rust-v0.156.0 to
  *  rust-v0.171.0): with it off the launch runs embedded, as before, and
  *  without the warning. Read at every supported tag: 0.156.0 to 0.171.0 know
@@ -1088,15 +1146,17 @@ function buildCodexSpawnCommand(opts: SpawnOptions): ProviderSpawnCommand {
       // in a folder of its own, made for this launch with an unguessable
       // name (owner-only where the platform keeps modes, so no other user
       // can put a file there first), written by the picker only and read and
-      // removed, with its folder, by the watcher. The folder's identity is
+      // removed, with its folder, by the watcher; one a run left when it
+      // ended without the session's end goes at a start a day later
+      // (sweepStaleCodexPickFolders, aicc_planning#407). The folder's identity is
       // recorded as made (fix round 3): the watcher and the picker use it
       // only while it is still that folder, never one put in its place.
       let pickFile: string | undefined
       let pickFolder: PickFolderIdentity | null = null
       try {
-        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ccc-codex-pick-'))
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), CODEX_PICK_DIR_PREFIX))
         pickFolder = codexFolderIdentity(dir)
-        if (pickFolder) pickFile = path.join(dir, 'pick.json')
+        if (pickFolder) pickFile = path.join(dir, CODEX_PICK_FILE_NAME)
         else { try { fs.rmdirSync(dir) } catch { /* left empty */ } }
       } catch {
         pickFile = undefined

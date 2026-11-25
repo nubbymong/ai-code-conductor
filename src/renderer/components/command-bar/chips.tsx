@@ -91,7 +91,8 @@ export function MachineBadge({ text, className }: { text: string; className?: st
 }
 
 /**
- * #399: the pill on a button that sends to every open session. The owner
+ * #399: the pill on a button that sends to every open session, or the
+ * sessions picked (a press asks, #413). The owner
  * asked for "a pill on the button to differenttae ... somehting subtle": a
  * small rounded tag in the bar's muted surface and text tones (the tones
  * MachineBadge uses, a step quieter), a broadcast mark and a tiny "all". The
@@ -196,7 +197,7 @@ export interface CommandChipProps {
 /**
  * A user button: icon + label like the Core tools, the colour in the ICON
  * (glyph or monogram tile) never on the surface, and right-edge marks only
- * -- the "all" pill (sends to every open session, #399), lock (carries a
+ * -- the "all" pill (a broadcast button, #399, #413), lock (carries a
  * secret), browser (watches a page), chevron (has args), pin (pinned), and an
  * amber dot when the upgrade review wants a look (D13).
  */

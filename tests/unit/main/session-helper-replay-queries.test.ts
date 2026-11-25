@@ -4,7 +4,7 @@
  * src/main/session-helper/replay-queries.ts and helper-pty.ts).
  *
  * The screen corpus (helper/fixtures/screens/) holds the agent CLIs' and the
- * shells' real output; 51 of its 61 recordings hold terminal queries. Each is
+ * shells' real output; 52 of its 63 recordings hold terminal queries. Each is
  * taken over from offset 0, through the fake holder and the real HelperPty,
  * into a terminal that answers as the tab's does: @xterm/headless 6.0.0's own
  * answers go back to the holder as the tab's do, and the colour and
@@ -318,13 +318,13 @@ const CORPUS_QUERY = /\x1b\[(?:0?c|>0?c|\??[56]n|>0?q|\?u)|\x1b\](?:0*1[012]|0*4
 const withStandIns = (s: string) => s.replace(CORPUS_QUERY, ST)
 
 describe('the screen corpus, taken over from offset 0 (2.1.3-beta.13, plan section A3)', () => {
-  it('holds the queries the plan found: 51 of its 61 recordings', () => {
+  it('holds the queries the plan found, and the two recordings 2.1.3-beta.17 C7 added (one holds a query): 52 of its 63 recordings', () => {
     const holding = RECORDINGS.filter((f) => {
       const out = outputOf(JSON.parse(readFileSync(join(CORPUS, f), 'utf8')) as Recording)
       return withStandIns(out) !== out
     })
-    expect(RECORDINGS).toHaveLength(61)
-    expect(holding).toHaveLength(51)
+    expect(RECORDINGS).toHaveLength(63)
+    expect(holding).toHaveLength(52)
   })
 
   for (const file of RECORDINGS) {

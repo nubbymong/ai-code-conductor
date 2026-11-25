@@ -3,10 +3,11 @@
  * saved image (Snap's picture, Alt+V's) to a session.
  *  - On this computer: main is asked to paste the path into the session
  *    (pty.submitImage, with the caller's sentence, or the default one), and
- *    nothing is typed from here. Main's answer `not-taken` (Snap in the other
- *    assistant's tab) gets the line it always got: the sentence and the path typed, then
+ *    nothing is typed from here. Main's answer `not-taken` (an SSH Persistent
+ *    session) gets the line it always got: the sentence and the path typed, then
  *    Enter. So does an ask that fails. A session that is gone, or a path main
- *    refuses, gets nothing.
+ *    refuses, gets nothing. (A Codex session goes its own way since
+ *    2.1.3-beta.17 C6: image-transfer-codex.test.ts.)
  *  - Over SSH, or with no session type: the host fetch line, as before, and
  *    main is not asked.
  * Red on beta: a local image was typed as text and main never asked.

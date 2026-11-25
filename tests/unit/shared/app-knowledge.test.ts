@@ -247,10 +247,11 @@ describe('app knowledge and tips after P3.15', () => {
     expect(t.body).toMatch(/Click into a session on this computer and press \*\*Alt\+V\*\*: the key goes to the assistant, which pastes the image itself/)
     expect(t.body).toMatch(/On an SSH session, press \*\*Alt\+V\*\* with focus outside the terminal: the app saves the image on this computer and asks Claude to fetch it over the connection/)
     expect(t.body).toMatch(/With focus elsewhere in the app, \*\*Alt\+V\*\* saves the image and sends it to the session: Claude Code on this computer gets it as its own pasted image \(\[Image #1\]\) with a short sentence, and the app presses Enter/)
-    expect(t.body).toMatch(/On a Codex session the app types a line with its path, only into an empty Codex prompt, and says why when it cannot/)
+    // 2.1.3-beta.17 C6 (aicc_planning#415): a Codex session on this computer gets Codex's own paste.
+    expect(t.body).toMatch(/A Codex session on this computer gets it as Codex's own pasted image \(\[Image #1\]\) with a short sentence once its prompt is empty, and the app presses Enter; if Codex is busy or cannot take it, the app types a line with the image's path instead, and says why when it cannot/)
     const guide = trainingSteps.flatMap((s) => s.highlights ?? []).find((l) => l.startsWith('Alt+V'))!
     expect(guide).not.toMatch(/Claude.s prompt/)
-    expect(guide).toMatch(/in a local session, the assistant pastes it itself; with focus elsewhere, the app saves it and a Claude Code session on this computer gets it as its own pasted image \(a Codex session gets its path typed; over SSH, it asks Claude to fetch it\)/)
+    expect(guide).toMatch(/in a local session, the assistant pastes it itself; with focus elsewhere, the app saves it and a Claude Code session on this computer gets it as its own pasted image \(a Codex session on this computer gets it as Codex's own pasted image too; over SSH, it asks Claude to fetch it\)/)
   })
   it('the known issue gives the Windows sandbox workaround: the administrator setup once, what the other choice does, and never an elevated app', () => {
     const k = body('known-issues')
@@ -2186,7 +2187,8 @@ describe('the 2.1.3-beta.8 sweep', () => {
     expect(m).toContain('The new version has the same two minutes, counted from when the old one closed')
     expect(m).toContain('Re-attach is refused and says the app is being updated')
     expect(m).toContain('On a Mac or Linux an update still ends them')
-    expect(m).toContain('Claude Code and Codex sessions are not kept through an update: their tabs resume the conversation')
+    // 2.1.3-beta.17 B1 (aicc_planning#412): kept through an update only on Windows, behind the agent sessions' setting.
+    expect(m).toContain('Claude Code and Codex sessions are kept through an update only on Windows, with Claude Code and Codex sessions through the session helper on (below); any other one is not kept, and its tab resumes the conversation.')
     expect(m).toContain('why a held terminal can still end during an update')
   })
 
@@ -2238,8 +2240,11 @@ describe('the 2.1.3-beta.8 sweep', () => {
     expect(`${t.variants.primary.title} ${t.variants.primary.body}`).not.toMatch(/—/)
     const machines = step('machines').highlights.join('\n')
     expect(machines).toContain('On Windows, choose **Save sessions** when you update the app and each held Terminal or Partner terminal keeps running')
-    // Agent sessions the helper holds still end at an update (#713).
-    expect(machines).toContain('A Claude Code or Codex session has **End** only. An update ends it, and after a crash it is ended')
+    // Agent sessions the helper holds end after a crash (#713); since
+    // 2.1.3-beta.17 B1 (aicc_planning#412) Save sessions keeps them on Windows.
+    expect(machines).toContain('A Claude Code or Codex session has **End** only. After a crash it is ended')
+    expect(machines).toContain('On Windows, **Save sessions** at an update keeps it running: resume your sessions within five minutes of the new version opening')
+    expect(t.variants.primary.body).toContain('a Claude Code or Codex session is kept the same way: resume your sessions within **five minutes**')
     expect(step('settings').highlights.join('\n')).toContain('or through an update when you choose **Save sessions**')
     // Combined Mode reads the same for either assistant, so it names no provider.
     expect(step('combined-mode').highlights.join('\n')).toContain('On Windows it also keeps running through an app update when you choose **Save sessions**')
@@ -2548,9 +2553,10 @@ describe('the 2.1.3-beta.11 sweep', () => {
 })
 
 // 2.1.3-beta.12 known issues: a held terminal shown again once its earlier
-// output is no longer held (aicc_planning#352), and the four Codex screens
-// the reader still refuses after it learned the hint rows (aicc_planning#357),
-// each with its workaround, so a later edit cannot drop one silently.
+// output is no longer held (aicc_planning#352), and the three Codex screens
+// the reader still refuses after it learned the hint rows (aicc_planning#357)
+// and the warning count (2.1.3-beta.17 C7, aicc_planning#371), each with its
+// workaround, so a later edit cannot drop one silently.
 describe('the 2.1.3-beta.12 known issues', () => {
   const body = (id: string) => APP_KNOWLEDGE_SECTIONS.find((x) => x.id === id)!.body
   const para = (start: string) => body('known-issues').split('\n\n').find((x) => x.startsWith(start))
@@ -2584,17 +2590,19 @@ describe('the 2.1.3-beta.12 known issues', () => {
     expect(para(held)).toContain('The same line shows in any terminal or session the helper holds, under either setting, when the app falls so far behind its output that the helper no longer holds what it missed.')
   })
 
-  it('the four Codex screens the reader still refuses each say what is not typed and give a workaround (aicc_planning#357)', () => {
+  it('the three Codex screens the reader still refuses each say what is not typed and give a workaround (aicc_planning#357)', () => {
     expect(para(twoRows)).toContain('Workaround: widen the pane, or use a shorter working folder.')
     // Narrowed to macOS in 2.1.3-beta.13 (aicc_planning#370): the title spinner is the busy sign on Windows and Linux.
     expect(para('On macOS, text the app types into a Codex session while Codex writes a reply')).toContain('Workaround: send it again once the reply ends.')
     expect(para('Text the app types into a Codex session while Codex writes a reply')).toBeUndefined()
-    expect(para(warningCount)).toContain('Workaround: type the note into the Codex session yourself.')
+    // 2.1.3-beta.17 C7 (aicc_planning#371): the reader takes the warning count, so
+    // its entry is gone (Compact with the count measured sent on the VM).
+    expect(para(warningCount)).toBeUndefined()
     expect(para(movedKey)).toContain('Workaround: move the shortcuts key back to ? or to F6, or type the note into the Codex session yourself.')
   })
 
   it('a command bar prompt button that sends its prompt is named where the reader types nothing, as the release line names it (aicc_planning#357)', () => {
-    for (const start of [twoRows, warningCount, movedKey]) {
+    for (const start of [twoRows, movedKey]) {
       expect(para(start), start).toContain('A command bar prompt button that sends its prompt types nothing either, and the command bar says the prompt was not sent.')
     }
   })

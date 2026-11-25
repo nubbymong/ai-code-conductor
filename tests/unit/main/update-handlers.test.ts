@@ -17,7 +17,7 @@ const handlers = new Map<string, (...args: unknown[]) => unknown>()
 const shownErrorBoxes: Array<[string, string]> = []
 const exitCalls: number[] = []
 /** The install path's steps, in the order they ran (plan section B2). */
-const steps = vi.hoisted(() => ({ order: [] as string[], releaseThrows: false, releaseDelayMs: 0, choices: [] as unknown[] }))
+const steps = vi.hoisted(() => ({ order: [] as string[], releaseThrows: false, releaseDelayMs: 0, choices: [] as unknown[], handOverNotedAt: [] as number[] }))
 
 vi.mock('electron', () => ({
   ipcMain: { handle: (ch: string, fn: (...a: unknown[]) => unknown) => { handlers.set(ch, fn) } },
@@ -122,6 +122,9 @@ vi.mock('../../../src/main/update-watcher', () => ({
 }))
 vi.mock('../../../src/main/debug-logger', () => ({ logInfo: vi.fn(), logError: vi.fn() }))
 vi.mock('../../../src/main/pty-manager', () => ({ killAllPty: vi.fn(() => { steps.order.push('kill every PTY') }) }))
+// vm:B1f: the MCP server's note of the sessions an update hands over, by
+// where in the steps it ran (kept out of steps.order, which the cases list).
+vi.mock('../../../src/main/conductor-mcp-server', () => ({ noteUpdateHandOver: vi.fn(() => { steps.handOverNotedAt.push(steps.order.length) }) }))
 // The session helper's two update calls (plan section B2), as steps.
 vi.mock('../../../src/main/session-helper/app-wiring', () => ({
   // Async, as the real one is (it waits briefly for the ends it sent): the
@@ -173,6 +176,7 @@ beforeEach(() => {
   steps.releaseThrows = false
   steps.releaseDelayMs = 0
   steps.choices.length = 0
+  steps.handOverNotedAt.length = 0
   registerUpdateHandlers()
 })
 
@@ -409,6 +413,14 @@ describe('update:installAndRestart — held terminals keep running through an up
       steps.releaseDelayMs = 20 // a release that takes a while: the kill still waits for it
       await expect(invoke()).resolves.toBe(true)
       expect(steps.order).toEqual(['release held terminals', 'released', 'kill every PTY', 'launch', 'end the vision browser', 'exit'])
+    })
+  })
+
+  it('the MCP server notes the sessions it hands over once, after the let-go and just before every PTY is killed (vm:B1f)', async () => {
+    await on('win32', async () => {
+      await expect(invoke()).resolves.toBe(true)
+      expect(steps.order.indexOf('kill every PTY')).toBe(2)
+      expect(steps.handOverNotedAt).toEqual([2])
     })
   })
 

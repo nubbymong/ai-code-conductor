@@ -45,7 +45,8 @@ import { writeSessionInput, dropTmuxCopyModeBelief } from './terminal/tmuxWheelS
 import { usePasteHintStore } from '../stores/pasteHintStore'
 import { stripSpoofableText } from '../../shared/safe-text'
 import type { PromptButtonResult, SubmitNotDeliveredReason } from '../../shared/types'
-import { broadcastTargets, broadcastPrompt, broadcastNote, broadcastBlocker, isBroadcastButton } from '../lib/commandBroadcast'
+import { broadcastTargets, broadcastPrompt, broadcastNote, broadcastBlocker, isBroadcastButton, liveBroadcastPick, tallyBroadcast } from '../lib/commandBroadcast'
+import BroadcastChooser from './command-bar/BroadcastChooser'
 
 // User-picked section colours are Mocha pastels tuned for dark surfaces;
 // rendered as bare text on the light theme they wash out. Darken them toward
@@ -276,9 +277,11 @@ type ConfirmState =
   | { kind: 'delete'; commandId: string }
   | { kind: 'hide'; tool: CoreToolId }
   | { kind: 'section-band'; sectionId: string; band: CommandBand }
-  /** #399: a Shift+click asks before one press goes to every open session.
-   *  `count`: the open agent sessions when it asked. */
-  | { kind: 'broadcast'; commandId: string; count: number }
+  /** #413: every broadcast press asks, All or the sessions picked.
+   *  `listed`: the sessions a broadcast reached when it asked, in tab order.
+   *  `press`: this press's number, the chooser's key, so each press starts
+   *  from the default (design point 2: a button keeps no pick). */
+  | { kind: 'broadcast'; commandId: string; listed: string[]; press: number }
 
 export default function CommandBar({ sessionId, configId, sessionType = 'local', partnerEnabled, isPartnerActive, onTogglePartner, partnerSessionId, parentSessionId, mainPaneIsShell = false, configCount }: Props) {
   const webviewKey = parentSessionId ?? sessionId
@@ -644,19 +647,19 @@ export default function CommandBar({ sessionId, configId, sessionType = 'local',
     !!caps.agent && !caps.isAsk && broadcastBlocker(cmd) === null && typeof window.electronAPI?.pty?.submitPrompt === 'function'
 
   /**
-   * #399: send this button's prompt to every open agent session, each through
-   * its own prompt path in main (lib/commandBroadcast: which sessions, the
-   * sends, the count), and show one note on this tab with the count. This tab
-   * gets what a single press gives it besides: its agent pane is shown, its
-   * page watch starts, and its terminal takes the keyboard. Read from the
-   * session store at the press, so the bar does not redraw on every session
-   * change to keep a count nobody is looking at.
+   * #399: send this button's prompt to each of `targets` (the sessions the
+   * chooser's answer reaches at the press, #413), each through its own prompt
+   * path in main (lib/commandBroadcast: the sends, the count), and show one
+   * note on this tab with the count. This tab gets what a single press gives
+   * it besides: its page watch starts, and the pane it shows afterwards takes
+   * the keyboard: its agent pane when it is one of the targets, else the
+   * partner shell it was showing.
    */
-  const broadcastCommand = (cmd: CustomCommand) => {
+  const broadcastCommand = (cmd: CustomCommand, targets: readonly string[]) => {
     const text = buildFullCommand(cmd)
-    const targets = broadcastTargets(useSessionStore.getState().sessions)
     trackUsage('commands.broadcast')
-    if (isPartnerActive && onTogglePartner) onTogglePartner()
+    const showAgentPane = !!isPartnerActive && !!onTogglePartner && targets.includes(sessionId)
+    if (showAgentPane) onTogglePartner?.()
     void broadcastPrompt(text, targets, (args) => window.electronAPI.pty.submitPrompt(args), dropTmuxCopyModeBelief)
       .then((tally) => {
         const note = broadcastNote(tally)
@@ -665,30 +668,50 @@ export default function CommandBar({ sessionId, configId, sessionType = 'local',
     const webViewUrl = cmd.webView?.enabled ? cmd.webView.url : null
     if (webViewUrl) startWebviewPolling(webViewUrl)
     else if (webviewUrls.length > 0) void probeWebviewUrls(webviewKey, webviewUrls)
-    window.dispatchEvent(new CustomEvent('ccc:focus-terminal', { detail: { sessionId } }))
+    // The keyboard goes to the pane this tab shows after the press: its agent
+    // pane, or its partner shell when that stayed up (this tab was not picked).
+    const keyboardTo = isPartnerActive && !showAgentPane && partnerSessionId ? partnerSessionId : sessionId
+    const handOff = () => window.dispatchEvent(new CustomEvent('ccc:focus-terminal', { detail: { sessionId: keyboardTo } }))
+    // A pane switched in by this press takes the request only once it is shown
+    // (TerminalView listens while it is active), so wait for the switch, as a
+    // single press does (typeIntoPty); sent now, the request would be dropped.
+    if (showAgentPane) setTimeout(handOff, 100)
+    else handOff()
   }
 
-  /** #399: the button a Shift+click asked about, until Send or Cancel answers
-   *  it. Read and cleared by the first answer, so a second Enter or a second
-   *  click on Send cannot send it twice. A held Enter's repeats never answer
-   *  it at all: the card's keydown handler below swallows them. */
+  /** #413: the button a broadcast press asked about, until All, Send or
+   *  Cancel answers the chooser. Read and cleared by the first answer, so a
+   *  second Enter or a second click cannot send it twice. A held Enter's
+   *  repeats never answer it at all: the chooser swallows them. The sessions
+   *  are read from the session store at the press, so the bar does not redraw
+   *  on every session change to keep a list nobody is looking at. With no
+   *  session to send to, the tab says so and nothing asks. */
   const askedBroadcast = useRef<string | null>(null)
+  const broadcastPresses = useRef(0)
   const askBroadcast = (cmd: CustomCommand) => {
+    const listed = broadcastTargets(useSessionStore.getState().sessions)
+    if (listed.length === 0) {
+      const note = broadcastNote(tallyBroadcast([]))
+      if (note) usePasteHintStore.getState().show(sessionId, note, PROMPT_NOTE_MS)
+      return
+    }
     askedBroadcast.current = cmd.id
-    setConfirm({ kind: 'broadcast', commandId: cmd.id, count: broadcastTargets(useSessionStore.getState().sessions).length })
+    broadcastPresses.current += 1
+    setConfirm({ kind: 'broadcast', commandId: cmd.id, listed, press: broadcastPresses.current })
   }
-  const answerBroadcast = (send: boolean) => {
+  const answerBroadcast = (picked: readonly string[] | null) => {
     const id = askedBroadcast.current
     askedBroadcast.current = null
     setConfirm(null)
-    if (!send || !id) return
-    // Read again: the button may have been edited while the card was up.
+    if (!picked || !id) return
+    // Read again: the button may have been edited while the chooser was up,
+    // and a picked session may have ended (it gets nothing).
     const cmd = commands.find((c) => c.id === id)
-    if (cmd && canBroadcast(cmd)) broadcastCommand(cmd)
+    if (cmd && canBroadcast(cmd)) broadcastCommand(cmd, liveBroadcastPick(useSessionStore.getState().sessions, picked))
   }
 
-  /** `shift`: a Shift+click (#399). On a simple Global prompt it asks, then
-   *  sends that one press to every open session; on any other button it is a
+  /** `shift`: a Shift+click (#399). On a simple Global prompt it is a
+   *  broadcast press (the chooser asks, #413); on any other button it is a
    *  plain press. */
   const runCommand = (cmd: CustomCommand, withArgsAt?: DOMRect, shift = false) => {
     if (cmd.kind === 'page') {
@@ -702,15 +725,12 @@ export default function CommandBar({ sessionId, configId, sessionType = 'local',
       setArgsPopover({ cmd, rect: withArgsAt })
       return
     }
-    // #399: a button set to "Send to every open session" goes to every open
-    // agent session on a plain press (or a Shift+click), with no
-    // confirmation: the option is the user's own standing choice. Without
-    // it, a Shift+click asks first ("a warning in case accidetnal for shift
-    // click", the owner), so a slip sends nothing.
-    if (canBroadcast(cmd)) {
-      if (isBroadcastButton(cmd)) { broadcastCommand(cmd); return }
-      if (shift) { askBroadcast(cmd); return }
-    }
+    // #413: every broadcast press asks, All or the sessions picked (the
+    // owner: "they should be given the option of all or select session"): a
+    // plain press (or a Shift+click) of a button set to "Send to every open
+    // session", and a Shift+click on any other simple Global prompt. A slip
+    // sends nothing.
+    if (canBroadcast(cmd) && (shift || isBroadcastButton(cmd))) { askBroadcast(cmd); return }
     sendCommand(cmd, buildFullCommand(cmd))
   }
 
@@ -900,31 +920,6 @@ export default function CommandBar({ sessionId, configId, sessionType = 'local',
     hasPill: p.inapplicable.length > 0,
   })), [plans, collapsedSectionIds])
   const { folded } = useBandFolding(rowRef, foldBands, overflowMode, !!dragId)
-
-  // #399: Enter sends from the Shift+click confirmation (its card answers
-  // Escape and Cancel itself). Taken wherever focus is, so it never reaches
-  // the terminal underneath, except on a button in the card: a focused
-  // Cancel or Send answers its own Enter. Only while the card is drawn: it
-  // is not when its button has gone. A held key's repeat is swallowed and
-  // never sends: holding Shift+Enter on a chip opens the card on the first
-  // keydown, and its repeats must not answer the card before it is read.
-  const answerBroadcastRef = useRef(answerBroadcast)
-  answerBroadcastRef.current = answerBroadcast
-  const askingBroadcast = confirm?.kind === 'broadcast' && commands.some((c) => c.id === confirm.commandId)
-  useEffect(() => {
-    if (!askingBroadcast) return
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key !== 'Enter' || e.isComposing) return
-      const t = e.target
-      if (t instanceof Element && t.closest('[data-testid="confirm-broadcast"] button')) return
-      e.preventDefault()
-      e.stopPropagation()
-      if (e.repeat) return
-      answerBroadcastRef.current(true)
-    }
-    window.addEventListener('keydown', onKey, true)
-    return () => window.removeEventListener('keydown', onKey, true)
-  }, [askingBroadcast])
 
   const configName = useMemo(() => session?.label, [session])
 
@@ -1473,12 +1468,12 @@ export default function CommandBar({ sessionId, configId, sessionType = 'local',
         />
       )}
       {confirm?.kind === 'broadcast' && confirmCmd && (
-        <ConfirmCard
-          testId="confirm-broadcast"
-          title={`Send to ${confirm.count} open session${confirm.count === 1 ? '' : 's'}?`}
-          body={<>Shift+click sends "{confirmCmd.label}" once to every open Claude Code and Codex session, SSH and background tabs included. Terminal-only tabs and Ask Conductor get nothing.</>}
-          actions={[{ label: 'Send', primary: true, testId: 'confirm-broadcast-ok', onClick: () => answerBroadcast(true) }]}
-          onCancel={() => answerBroadcast(false)}
+        <BroadcastChooser
+          key={confirm.press}
+          label={confirmCmd.label}
+          listed={confirm.listed}
+          pressedId={sessionId}
+          onAnswer={answerBroadcast}
         />
       )}
       {confirm?.kind === 'delete' && confirmCmd && (

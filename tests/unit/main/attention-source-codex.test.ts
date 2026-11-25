@@ -13,6 +13,7 @@ vi.mock('../../../src/main/session-signals/hooks', () => ({ onHookEvent: () => (
 import { routeAttentionEvent, codexAttentionForEvent, CODEX_IDLE_ATTENTION_MS, CODEX_OWN_PRE_WINDOW_MS, _resetAttentionSourceForTest, clearCodexIdleAttention } from '../../../src/main/attention-source'
 import { onInternal } from '../../../src/main/internal-events'
 import type { HookEvent } from '../../../src/shared/hook-types'
+import { MAIN_INDEX, block, runCut } from '../../helpers/main-index-cut'
 
 const ev = (sessionId: string, event: string, payload: Record<string, unknown> = {}): HookEvent => ({ sessionId, event, payload, ts: 0 })
 
@@ -96,6 +97,26 @@ describe('Codex attention (row 47)', () => {
     const h = harness(new Set(['c']))
     routeAttentionEvent(ev('c', 'Notification', { notification_type: 'idle_prompt' }), h.opts)
     expect(h.pushed).toEqual([])
+  })
+
+  // aicc_planning#423 (B1d): a Codex session kept for a restored tab that is
+  // not shown has its hook file written again with a new token, and no PTY
+  // here until its take-over. The check src/main/index.ts hands the
+  // attention source, cut from it and run with stand-ins for the two answers.
+  it('B1d: a session holding a Codex token with no PTY here (one kept for a restored tab not shown) maps as Codex: its approval raises the dot, and its turn\'s end arms the idle wait', () => {
+    const at = MAIN_INDEX.indexOf('startAttentionSource(')
+    expect(at).toBeGreaterThanOrEqual(0)
+    const wired = runCut<{ isCodexSession: (id: string) => boolean }>(block(MAIN_INDEX, at + 'startAttentionSource('.length), {
+      isCodexPtySession: (id: string) => id === 'live',
+      holdsCodexGatewayToken: (id: string) => id === 'unseen',
+    })
+    expect(['live', 'unseen', 'k'].map((id) => wired.isCodexSession(id))).toEqual([true, true, false])
+    const h = harness(new Set())
+    const opts = { ...h.opts, isCodexSession: wired.isCodexSession }
+    routeAttentionEvent(ev('unseen', 'PermissionRequest'), opts)
+    routeAttentionEvent(ev('unseen', 'Stop'), opts)
+    expect(h.pushed).toEqual([['unseen', true]])
+    expect(h.timers.map((t) => t.ms)).toEqual([CODEX_IDLE_ATTENTION_MS])
   })
 })
 

@@ -10,6 +10,7 @@ import { sweepAbandonedProfiles } from './account-web/sign-in'
 import { setSignInWindowsQuitting } from './account-web/in-app-sign-in'
 import { warnAboutOrphanedSharedPartitions } from './account-web/orphan-partitions'
 import { killAllPty, gracefulExitAllPty, isSessionWritable, routeHookTranscriptPath, noteCodexHookEvent, isCodexPtySession, codexRolloutForSessionContext, applyLoggingSwitches } from './pty-manager'
+import { holdsCodexGatewayToken } from './sessions/launch-bindings'
 import { submitRetry, submitMarker } from './session-input'
 import { registerResumeHandlers } from './ipc/resume-handlers'
 import { registerCliHandlers } from './ipc/cli-handlers'
@@ -85,6 +86,7 @@ import { registerGitHubHandlers } from './ipc/github-handlers'
 import { registerHooksHandlers } from './ipc/hooks-handlers'
 import { registerServiceHealthHandlers } from './ipc/service-health-handlers'
 import { registerMachinesHandlers, getMachinesSource } from './ipc/machines-handlers'
+import { registerRemoteMachinesHandlers } from './ipc/remote-machines-handlers'
 import { initSessionHelper, applySessionHelperSettings, noteSessionHelperTabs, shutdownSessionHelper, holdQuitForSessionHelper, sessionHelperServiceState, sessionHelperKeptIds, sessionHelperKeptHookFolders } from './session-helper/app-wiring'
 import { endLeftoverConsoleHostsAtStart } from './console-host-leftovers'
 import { createServiceRegistry } from './services/service-registry'
@@ -1051,12 +1053,17 @@ if (!gotTheLock) {
         const w = getWindow()
         if (w && !w.isDestroyed()) w.webContents.send(IPC.CANVAS_AGENT_MARKER_UNDELIVERED, u)
       },
+      // aicc_planning#409: with the agent that fired it and the tool it is
+      // about, so a background agent's tool calls after the main agent's
+      // Stop do not hold a decision.
       subscribe: (cb) => {
-        onHookEvent((e) => { if (e.sessionId) cb(e.sessionId, e.event) })
+        onHookEvent((e) => { if (e.sessionId) cb(e.sessionId, e.event, { agentId: e.agentId, toolName: e.toolName }) })
       },
     })
-    // P3.10 (row 47): Codex sessions' own hook events map to attention too.
-    startAttentionSource({ isCodexSession: isCodexPtySession })
+    // P3.10 (row 47): Codex sessions' own hook events map to attention too;
+    // aicc_planning#423 (B1d): so do those of a session holding a Codex
+    // token with no PTY here yet (one kept for a restored tab not shown).
+    startAttentionSource({ isCodexSession: (id) => isCodexPtySession(id) || holdsCodexGatewayToken(id) })
     // P3.10 round 1 (B4): a conversation a Codex session's own Codex started
     // (its SessionStart hook) proves another session's inferred claim of it
     // wrong; the gateway hands the transcript path over before the event.
@@ -1096,6 +1103,9 @@ if (!gotTheLock) {
     // helper is off and holds nothing; the helper work plugs the real one in with
     // setMachinesSource (./ipc/machines-handlers). Read per call, so a swap shows at once.
     registerMachinesHandlers(getMachinesSource, getWindow)
+    // 2.1.3-beta.17 (plan section A2): Linux machines for remote sessions
+    // through the session helper, and their routing for the PTY manager.
+    registerRemoteMachinesHandlers(getWindow)
     // 2.1.3-beta.14 (S16 step 4, aicc_planning#359): both sweeps leave the
     // files of the agent sessions the session helper keeps for this run.
     if (hooksEnabled) {
@@ -1105,6 +1115,9 @@ if (!gotTheLock) {
     // (removed on normal dispose; a crash leaves them), and a settings-<sid>.json a
     // local launch of this install left (aicc_planning#385). Independent of hooks.
     cleanupStaleMcpConfigs(sessionHelperKeptIds())
+    // aicc_planning#407: the pick folders a killed run's resume lists left in
+    // the temp folder, a day old or more (never a running session's).
+    try { getProvider('codex').sweepLeftoverPickFolders?.() } catch { /* best effort */ }
     // #330: end the console hosts the run before left when it was ended from
     // outside, and record this run for the next start (Windows, background).
     endLeftoverConsoleHostsAtStart()

@@ -16,13 +16,13 @@
  *   watchAndClaimRollout    -- 250ms-poll claim + 500ms-poll tail pipeline
  */
 
-import { readdirSync, lstatSync, realpathSync, unlinkSync, rmdirSync, openSync, fstatSync, readSync, closeSync, constants as fsConstants, promises as fsp } from 'fs'
+import { readdirSync, lstatSync, realpathSync, unlinkSync, rmdirSync, utimesSync, openSync, fstatSync, readSync, closeSync, constants as fsConstants, promises as fsp } from 'fs'
 import type { FileHandle } from 'fs/promises'
 import { join, relative, isAbsolute, sep, dirname, basename } from 'path'
 import { computeCodexCostUsd } from './pricing'
 import { CODEX_CONVERSATION_ID_RE, codexDayFolders, codexFolderIdentity, findCodexRollout, isRealFolder, parseSessionMetaLine, readRolloutFirstLine, sameDirectory, sameFolderByRealPath } from './rollout-lookup'
 import type { FoundRollout, RolloutSessionMeta } from './rollout-lookup'
-import type { PickFolderIdentity } from '../types'
+import type { PickFolderIdentity, ResumePick } from '../types'
 import { normaliseCodexRateLimits, mergeAllowanceReadings, readingToBuckets, isoFromEpochMs, zonedTimeMs, CODEX_DEFAULT_LIMIT_ID } from './rate-limits'
 import { conversationRunningTime, noteConversationRunningTime } from '../../conversation-running-time'
 import type { StatuslineData } from '../../../shared/types'
@@ -669,6 +669,10 @@ export interface CodexClaimOptions {
    *  that one (the same device and file id, the same real path, not a
    *  link or junction). Without it no pick is read. */
   pickFolder?: PickFolderIdentity
+  /** 2.1.3-beta.17 (aicc_planning#419): the picker's decision a run before
+   *  this watch read (a take-over of a session an app update kept running):
+   *  this watch's first decision, as if read from the pick file. */
+  picked?: ResumePick['decided']
   /** Told once which conversation the watcher claimed: its id and the
    *  directory its rollout records. Only a conversation id is reported.
    *  `certain` (P3.6): false when the rollout could have been another
@@ -708,6 +712,12 @@ const LOOKUP_INTERVAL_MAX_MS = 30_000
 const LOOKUP_MAX_MISSES = 10
 /** The most of a pick file that is read. */
 const PICK_FILE_MAX_BYTES = 1_024
+/** How often a watch sets its pick folder's time to now, while the session
+ *  runs (aicc_planning#407): the start-up sweep of left-behind pick folders
+ *  (spawn.ts sweepStaleCodexPickFolders) takes only one a day old, so it
+ *  never takes a running session's, in this copy of the app or another one
+ *  sharing the temp folder (a dev build beside the installed app). */
+export const PICK_FOLDER_TOUCH_MS = 3_600_000
 /** How far before a New conversation decision a new rollout may say it began
  *  (the decision is dated by the pick file, or by its reading if earlier). */
 const FRESH_DECISION_TOLERANCE_MS = 1_000
@@ -717,6 +727,42 @@ const READ_NO_FOLLOW = fsConstants.O_RDONLY | (typeof fsConstants.O_NOFOLLOW ===
 
 /** A decision the resume picker recorded (see CodexClaimOptions.pickFile). */
 type PickDecision = { kind: 'id'; id: string } | { kind: 'fresh'; at: number }
+
+/** A decision a run before this watch read (CodexClaimOptions.picked), or
+ *  null when it is neither a conversation id nor a time. */
+function keptDecision(d: ResumePick['decided'] | undefined): PickDecision | null {
+  if (d && 'id' in d && typeof d.id === 'string' && CODEX_CONVERSATION_ID_RE.test(d.id)) return { kind: 'id', id: d.id }
+  if (d && 'fresh' in d && typeof d.fresh === 'number' && Number.isFinite(d.fresh)) return { kind: 'fresh', at: Math.min(d.fresh, Date.now()) }
+  return null
+}
+
+/**
+ * The pick file's own folder (fix round 2), made for the launch, while it is
+ * still that folder (fix round 3): the pick file, and any new file a picker
+ * stopped between its write and its rename left (`pick.json.<16 hex>.tmp`),
+ * are removed, then the folder, never recursively: anything else there keeps
+ * it. Any other folder is left. A watch's stop, and (aicc_planning#419) the
+ * folder of a session an app update kept running, once it is kept no longer.
+ */
+export function removeCodexPickFolder(pickFile: string, pickFolder: PickFolderIdentity): void {
+  const dir = dirname(pickFile)
+  const now = codexFolderIdentity(dir)
+  if (!now || now.id !== pickFolder.id || now.real !== pickFolder.real) return
+  // The folder check and the unlink are separate operations on the path
+  // (Node has no unlinkat); see the pick file's limit in the P3.5 record.
+  try { unlinkSync(pickFile) } catch { /* not there, or already gone */ }
+  const prefix = `${basename(pickFile)}.`
+  try {
+    for (const e of readdirSync(dir, { withFileTypes: true })) {
+      if (!e.isFile() || !e.name.startsWith(prefix) || !e.name.endsWith('.tmp')) continue
+      if (!/^[0-9a-f]{16}$/.test(e.name.slice(prefix.length, -'.tmp'.length))) continue
+      try { unlinkSync(join(dir, e.name)) } catch { /* gone */ }
+    }
+  } catch { /* not listed: left */ }
+  if (/^ccc-codex-pick-/.test(basename(dir))) {
+    try { rmdirSync(dir) } catch { /* not empty, or gone */ }
+  }
+}
 
 /** What a watcher reads of a rollout from its start (a claim, or a rollout
  *  replaced): all of it when it is no bigger than these two together, else
@@ -789,7 +835,8 @@ function realFolderChain(sessionsDir: string, dir: string): boolean {
  *    the cmd.exe wrapper can run noticeably longer. A picker launch waits for
  *    the user instead: nothing runs until they pick, however long that takes.
  * 4. stop() clears both timeouts, the claim-poll interval, and the tail-poll
- *    interval, removes the path from the claimed set and the pick file.
+ *    interval, removes the path from the claimed set and the pick file with
+ *    its folder (kept when an app update keeps the session running).
  *
  * Windows path note: Codex records cwd exactly as provided by the OS at spawn
  * time. Pass the same resolvedCwd string from pty-manager (backslashes on
@@ -882,8 +929,9 @@ export function watchAndClaimRollout(
   let claimedFileChanged = false
   /** P3.12 round 1 (B1): the claimed rollout's session_meta, to report again. */
   let claimedMeta: RolloutSessionMeta | null = null
-  /** The picker's latest decision (none yet: nothing is claimed). */
-  let decision: PickDecision | null = null
+  /** The picker's latest decision (none yet: nothing is claimed); first the
+   *  one a run before read, for a take-over (aicc_planning#419). */
+  let decision: PickDecision | null = pickFile && !resumeId ? keptDecision(claimOpts?.picked) : null
   /** A pick entry already dealt with (read, or refused), by its identity: never read again. */
   let handledPick: string | null = null
   /** This launch's run of the claimed conversation (P3.7, row 36): its id,
@@ -1541,6 +1589,19 @@ export function watchAndClaimRollout(
   }
   if (!waitsForUser) armClaimDeadline()
 
+  // The pick folder is in use for as long as this watch runs: its time is
+  // set to now every PICK_FOLDER_TOUCH_MS, while it is still the folder made
+  // for the launch, so no start-up sweep takes it (aicc_planning#407).
+  let touchHandle: ReturnType<typeof setInterval> | null = null
+  if (pickFile && pickFolder) {
+    touchHandle = setInterval(() => {
+      if (stopped || !pickFolderIntact()) return
+      const at = new Date()
+      try { utimesSync(dirname(pickFile), at, at) } catch { /* gone: nothing to keep */ }
+    }, PICK_FOLDER_TOUCH_MS)
+    touchHandle.unref?.()
+  }
+
   return {
     /** P3.10: the session's own hook (authenticated by its gateway token)
      *  reported the rollout its Codex is on. That is exact, as Claude's
@@ -1596,7 +1657,14 @@ export function watchAndClaimRollout(
       if (!stopped && !claimedPath) armClaimDeadline()
       return true
     },
-    stop(): void {
+    /** aicc_planning#419: the pick file and its folder as made, while it is
+     *  still that folder, and the picker's decision read last. */
+    pick(): ResumePick | null {
+      if (stopped || !pickFile || !pickFolder || !pickFolderIntact()) return null
+      const decided = decision?.kind === 'id' ? { id: decision.id } : decision ? { fresh: decision.at } : undefined
+      return { file: pickFile, folder: pickFolder, ...(decided ? { decided } : {}) }
+    },
+    stop(opts?: { keepPickFolder?: boolean }): void {
       stopped = true
       // The run is over with its process (P3.7): its running time is kept.
       settleRun()
@@ -1611,30 +1679,20 @@ export function watchAndClaimRollout(
         clearInterval(tailIntervalHandle)
         tailIntervalHandle = null
       }
+      if (touchHandle) {
+        clearInterval(touchHandle)
+        touchHandle = null
+      }
       if (claimedPath) {
         claimed.delete(claimedPath)
         claimedPath = null
       }
-      // The pick file's own folder (fix round 2), made for this launch, while
-      // it is still that folder (fix round 3): the pick file, and any new
-      // file a picker stopped between its write and its rename left
-      // (`pick.json.<16 hex>.tmp`), are removed, then the folder, never
-      // recursively: anything else there keeps it. Any other folder is left.
-      if (pickFile && pickFolderIntact()) {
-        removePickFile()
-        const dir = dirname(pickFile)
-        const prefix = `${basename(pickFile)}.`
-        try {
-          for (const e of readdirSync(dir, { withFileTypes: true })) {
-            if (!e.isFile() || !e.name.startsWith(prefix) || !e.name.endsWith('.tmp')) continue
-            if (!/^[0-9a-f]{16}$/.test(e.name.slice(prefix.length, -'.tmp'.length))) continue
-            try { unlinkSync(join(dir, e.name)) } catch { /* gone */ }
-          }
-        } catch { /* not listed: left */ }
-        if (/^ccc-codex-pick-/.test(basename(dir))) {
-          try { rmdirSync(dir) } catch { /* not empty, or gone */ }
-        }
-      }
+      // The pick file's own folder, while it is still the one made
+      // (removeCodexPickFolder). Not when an app update keeps the session
+      // running (aicc_planning#419): its picker runs on and writes there, and
+      // the next run's take-over reads it; once it is kept no longer the
+      // folder goes (the provider's removeSessionPickFolder).
+      if (pickFile && pickFolder && opts?.keepPickFolder !== true) removeCodexPickFolder(pickFile, pickFolder)
     },
   }
 }

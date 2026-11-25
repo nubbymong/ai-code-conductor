@@ -305,12 +305,16 @@ function recordingTerminal(refuses: (data: string) => boolean = () => false) {
   const term: RepaintTerminal = {
     cols: 20,
     rows: 6,
-    buffer: { active: { type: 'normal', baseY: 0, cursorY: 0, getLine: () => undefined } },
+    buffer: { active: { type: 'normal', baseY: 0, viewportY: 0, cursorY: 0, getLine: () => undefined } },
     write(data, cb) {
       if (refuses(data)) throw new Error('xterm refused the write')
       writes.push(data)
       pending.push(() => cb?.())
     },
+    // It holds no rows: nothing brings them down, nor puts a view back.
+    resize() { throw new Error('not sized by the aligner') },
+    scrollLines() { throw new Error('not scrolled by the aligner') },
+    scrollToLine() { throw new Error('not scrolled by the aligner') },
   }
   const parse = () => { while (pending.length) pending.shift()!() }
   return { term, writes, parse }

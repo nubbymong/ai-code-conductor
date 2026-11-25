@@ -68,6 +68,14 @@
  * Output frames (2.1.3-beta.13, plan section A3): `frameBytes` sets the most
  * bytes one raw frame carries, so a replay can be cut anywhere, inside an
  * escape sequence too.
+ *
+ * A Windows named pipe (aicc_planning#423, B1f): `noHalfClose` makes a holder
+ * take no notice of the app's `end()` (a pipe has no half-close, so the app's
+ * handle stays open and the holder's writes still succeed); only the close of
+ * the app's handle lets go of the connection (its destroy, or the app's exit:
+ * `dropAll`). `term.detach` is answered as a real holder answers it: from the
+ * attached connection only, nothing more is sent to it after `term.detached`
+ * (a hook event waits for the next attach), and the connection is closed.
  */
 import { randomBytes } from 'crypto'
 import * as fs from 'fs'
@@ -214,6 +222,10 @@ export class FakeHolder {
   screenAnswer: 'rows' | 'error' | 'bad' | 'none' = 'rows'
   /** The screen reads it was asked for, once launched, by a connection that acked `screen`, one it leaves unanswered (`screenAnswer` 'none') included. */
   screenReads = 0
+  /** B1f: a Windows named pipe; the app's `end()` is not seen, only its handle's close. */
+  noHalfClose = false
+  /** B1f: answers term.detach; false leaves it unanswered. */
+  answerDetach = true
 
   constructor(readonly sid: string, readonly label: string, readonly store: string) {
     this.endpoint = `\\\\.\\pipe\\aicc-helper-${sid}-${hex(16)}`
@@ -362,7 +374,8 @@ export class FakeHolder {
         if (this.attaches > attaches && this.attached === conn) this.giveBack(conn)
       }
     })
-    mine.on('end', () => conn.close())
+    if (this.noHalfClose) mine.on('close', () => conn.close())
+    else mine.on('end', () => conn.close())
     return app
   }
 
@@ -442,6 +455,14 @@ export class FakeHolder {
         if (conn.ackedCaps.includes('hooks')) for (const e of this.waitingEvents.splice(0)) conn.sendJson(e)
         return
       }
+      case 'term.detach':
+        if (!this.answerDetach) return
+        if (conn !== this.attached) return err('not-connected', 'this connection is not attached')
+        // The away clock starts, and nothing follows the answer: a later hook event waits.
+        this.detached()
+        conn.sendJson({ t: 'term.detached', re })
+        conn.close()
+        return
       case 'term.resize':
         if (conn !== this.attached) return err('not-connected', 'not attached')
         this.size = { cols: Number(m.cols), rows: Number(m.rows) }
@@ -581,6 +602,8 @@ export class FakeHelper {
   holderCaps: string[] = ['core', 'local', 'hooks', 'mcp']
   /** Each frame of typed input any holder's program gets, with its holder. */
   onTyped: ((h: FakeHolder, bytes: Buffer) => void) | null = null
+  /** B1f: the holders `hold` starts from now on are on Windows named pipes (FakeHolder.noHalfClose). */
+  noHalfClose = false
 
   /** Every holder whose away clock ran out ends, as its own timer would end it. */
   tick(): void {
@@ -605,6 +628,7 @@ export class FakeHelper {
       }
       if (this.holdBusy) h.launch = { t: 'term.launch' }
       h.caps = [...this.holderCaps]
+      h.noHalfClose = this.noHalfClose
       h.onTyped = (b) => this.onTyped?.(h, b)
       h.writeRecord()
       this.holders.set(sid, h)

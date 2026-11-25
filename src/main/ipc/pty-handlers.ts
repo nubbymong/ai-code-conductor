@@ -2,6 +2,8 @@ import { ipcMain, BrowserWindow, app } from 'electron'
 import { z } from 'zod'
 import { spawnPty, writePty, resizePty, killPty, getSshFlow, endSshRemoteDetailed, probeTmuxLive, holdsCodexLaunchLease, codexLaunchLeaseTaken, beginSpawnPreparation, isSessionWritable, isSessionLiveOrStarting, SSHOptions, SshEndTarget, getKeptCodexConversation, getKeptCodexConversationSource, codexRunEnded, codexConversationHeldElsewhere, endAgentRunsInFolder } from '../pty-manager'
 import type { CodexLaunch } from '../pty-manager'
+import { forgetRemoteHelperTab, holdBackRemoteImage, isRemoteHelperTab } from '../remote-helper'
+import { SSH_THROUGH_HELPER } from '../../shared/remote-machines'
 import { handOffAskQuestion, submitPrompt, submitImage, type PromptButtonMode, type ImageSubmitResult } from '../session-input'
 import { ensureHelpWorkspace, helpWorkspaceDir } from '../help-workspace'
 import { ASK_HELP_FOLDER_FAILED } from '../../shared/ask-conductor-provider'
@@ -27,6 +29,7 @@ import { bindSshToSavedConfig, argSecretAllowed, findSavedConfig } from '../spaw
 import { logWarn } from '../debug-logger'
 import { IPC, ptyReplayAtHolderSizeChannel } from '../../shared/ipc-channels'
 import { setReplayAtHolderSizeNotice } from '../session-helper/helper-pty'
+import { keptTabClosed, keptTabShown, keptTabsRestored } from '../sessions/kept-launches'
 import { getPtyIntegrityMonitor } from '../services/pty-integrity-monitor'
 import type { PtyIntegrityReport } from '../../shared/service-health'
 import type { SshRuntime, DetachedRemoteLiveness, HostPingResult, DetachedRemote, SshEndRemoteResult, SubmitTextResult, PromptButtonResult } from '../../shared/types'
@@ -719,6 +722,12 @@ function codexAccountOwnership(service: AccountsService, accountId: string): 'co
 /** WP2 PR 4, P4.1: `canvas:sessionGuidance`'s payload: one session id. */
 const sessionGuidanceSchema = z.object({ sessionId: z.string().regex(/^[A-Za-z0-9_-]{1,128}$/) }).strict()
 
+/** aicc_planning#423: `pty:tabsRestored`'s payload: the tabs Resume restored,
+ *  each its id and (B1d) a local agent tab's configured folder, a bounded
+ *  string as pty:spawn's resume folder is (main resolves it as a launch's
+ *  folder: resolveCwd, then the canvas store's own floors). */
+const tabsRestoredSchema = z.array(z.object({ id: sessionIdSchema, cwd: z.string().min(1).max(4096).optional() }).strict()).max(1000)
+
 /** WP2 PR 4, P4.3: `askConductor:handOff`'s payload: the Ask session and the
  *  question, bounded as the pty:spawn schema bounds askPrompt. */
 const askHandOffSchema = z.object({
@@ -1393,6 +1402,8 @@ export function registerPtyHandlers(getWindow: () => BrowserWindow | null): void
     if (isDebugModeEnabled()) {
       logUserInput(sessionId, data, 'inputBar')
     }
+    // 2.1.3-beta.17 A2: an image request for a tab through the session helper is held back whole, before writePty slices it.
+    if (holdBackRemoteImage(sessionId, data)) return
     writePty(sessionId, data)
   })
 
@@ -1405,11 +1416,35 @@ export function registerPtyHandlers(getWindow: () => BrowserWindow | null): void
     // the session's end; any other kill is a close. Only the exact string
     // 'restart' is a Restart's.
     killPty(sessionId, { reason: reason === 'restart' ? 'restart' : 'close' })
+    // 2.1.3-beta.17 A2: a remote tab whose start failed is over already, so killPty does not reach it.
+    forgetRemoteHelperTab(sessionId)
     sshClaudeLaunches.delete(sessionId)
     sshShellSessions.delete(sessionId)
     // #580: nothing left to deliver a queued canvas marker to. Logged loudly if
     // any were still held, because that is a verdict the agent never heard.
     forgetCanvasMarkers(sessionId)
+    // aicc_planning#423: a closed tab never takes over the session an update
+    // kept for it (a restored tab not shown yet): it is ended now. A
+    // Restart's tab starts again and takes it over then.
+    if (reason !== 'restart' && typeof sessionId === 'string') keptTabClosed(sessionId)
+  })
+
+  // aicc_planning#423: Resume restored these tabs, and a tab is shown and
+  // starts now (the renderer's session-persistence.ts and TerminalView). A
+  // session an update kept for a restored tab not on screen waits for that
+  // tab with no time limit until it is shown (session-helper/manager.ts
+  // restoredTabs and tabShown, through kept-launches.ts), and (B1d) is served
+  // its Conductor tool calls meanwhile, with its tab's folder for its canvas
+  // roots. The app's window only.
+  ipcMain.on(IPC.PTY_TABS_RESTORED, (e, tabs: unknown) => {
+    if (!fromApp(e)) return
+    const parsed = tabsRestoredSchema.safeParse(tabs)
+    if (parsed.success) keptTabsRestored(parsed.data)
+  })
+  ipcMain.on(IPC.PTY_TAB_SHOWN, (e, id: unknown) => {
+    if (!fromApp(e)) return
+    const parsed = sessionIdSchema.safeParse(id)
+    if (parsed.success) keptTabShown(parsed.data)
   })
 
   ipcMain.on(IPC.PTY_INTEGRITY_REPORT, (_event, report: PtyIntegrityReport) => {
@@ -1462,7 +1497,8 @@ export function registerPtyHandlers(getWindow: () => BrowserWindow | null): void
 
   ipcMain.handle(IPC.SSH_FLOW_GET_STATE, async (_event, sessionId: string) => {
     sessionIdSchema.parse(sessionId)
-    return getSshFlow(sessionId)?.getState() ?? { state: 'connecting' }
+    // 2.1.3-beta.17 A2: a tab through the session helper has no SSH flow, and the overlay is not shown for it.
+    return getSshFlow(sessionId)?.getState() ?? (isRemoteHelperTab(sessionId) ? { state: SSH_THROUGH_HELPER } : { state: 'connecting' })
   })
 
   // SSH tmux enhancement (item 4): deliberately END a persistent remote session

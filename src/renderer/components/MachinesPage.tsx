@@ -5,12 +5,15 @@ import { MACHINES_NO_ANSWER, type HeldSession, type HelperState, type MachineAct
 import type { ProviderId } from '../../shared/providers'
 import { showHeldTerminalTab } from '../utils/heldTerminalTab'
 import { PROVIDER_NAMES } from '../provider-names'
+import RemoteMachinesSection from './RemoteMachinesSection'
 
-// The Machines page (2.1.3-beta.6, plan section C): one card, This computer.
+// The Machines page (2.1.3-beta.6, plan section C): the This computer card.
 // It shows what the session helper is doing and the terminals it holds, and
 // lets you run the helper's self-test, re-attach a terminal and end one. It
 // reads on open, each time its tab comes back to the front, on Refresh and
-// after each action; nothing is pushed to it.
+// after each action; nothing is pushed to it. Below it (2.1.3-beta.17, plan
+// section A2, Windows): the Linux machines added for remote sessions through
+// the session helper (RemoteMachinesSection).
 
 const headerIcon = (
   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
@@ -75,7 +78,8 @@ function agentName(kind: HeldSession['kind']): string | null {
 }
 
 /** What a held terminal is doing, in plain words. An agent session no tab
- *  shows is one a crash or a quit left: it is being ended, never shown again. */
+ *  shows is one a crash or a quit left: it is being ended, never shown again.
+ *  One an update kept for its restored tab (tabOpen) waits for that tab. */
 function sessionStateText(s: Pick<HeldSession, 'attached' | 'tabOpen' | 'kind'>): string {
   if (agentName(s.kind) !== null && !s.attached && !s.tabOpen) return 'Being ended'
   if (s.attached) return s.tabOpen ? 'Attached to the app' : 'Attached to the app. No tab shows it.'
@@ -465,6 +469,7 @@ export default function MachinesPage({ active = true }: { active?: boolean }) {
             </>
           )}
         </section>
+        <RemoteMachinesSection active={active} />
       </div>
     </PageFrame>
   )

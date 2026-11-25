@@ -137,6 +137,16 @@ export interface PickFolderIdentity {
   real: string
 }
 
+/** 2.1.3-beta.17 (aicc_planning#419): a launch's pick file with its folder
+ *  as made, and the resume picker's last decision its watcher read (the
+ *  conversation it opened, or when it chose a new one): what an app update
+ *  that keeps the session running records, for the next run's watcher. */
+export interface ResumePick {
+  file: string
+  folder: PickFolderIdentity
+  decided?: { id: string } | { fresh: number }
+}
+
 /** The session helper's relay mode for one held session's `conductor` tool
  *  server (2.1.3-beta.11, plan section B2): `<helperPath> mcp --store <store>
  *  --session <sid>`, which the CLI starts as its tool server and which
@@ -192,6 +202,9 @@ export interface TelemetryOptions {
   /** The pick file's folder as it was made: no pick is read, and nothing
    *  there removed, unless it is still that folder. */
   pickFolder?: PickFolderIdentity
+  /** A take-over of a launch through the picker (aicc_planning#419): the
+   *  decision the last run's watcher read, read here as the first. */
+  picked?: ResumePick['decided']
   /** `certain` (P3.6): false when the rollout could have been another
    *  launch's (two new sessions in one folder, P3.5's recorded limit).
    *  `exact` (P3.10): the conversation is known, not inferred: a resume by
@@ -214,8 +227,13 @@ export interface TelemetryOptions {
 }
 
 export interface TelemetrySource {
-  /** Stop the underlying watcher / tail when the session ends. */
-  stop(): void
+  /** Stop the underlying watcher / tail when the session ends.
+   *  `keepPickFolder` (aicc_planning#419): an app update keeps the session
+   *  running, so its pick folder stays for its resume picker. */
+  stop(opts?: { keepPickFolder?: boolean }): void
+  /** Codex (aicc_planning#419): the launch's pick, while its folder is still
+   *  the one made; null otherwise. */
+  pick?(): ResumePick | null
   /** Codex (P3.10): the session's own hook reported `rolloutPath` as the
    *  conversation it is on. The watcher claims it exactly (it checks the
    *  path is a rollout inside its realm whose session_meta names the id in
@@ -323,6 +341,24 @@ export interface SessionProvider {
    *  left-behind folders removes one; any other path is left as it is. Never
    *  throws. */
   removeSessionHookFolder?(dir: string): void
+  /** Optional -- Codex (2.1.3-beta.17, aicc_planning#407): at start, remove
+   *  the per-launch resume-list folders a run left in the system's temp
+   *  folder when it ended without its sessions' own end (a kill, a crash, a
+   *  quiet uninstall), a day old or more and holding nothing but what the
+   *  list writes; never a running session's. Never throws. */
+  sweepLeftoverPickFolders?(): void
+  /** Optional -- Codex (2.1.3-beta.17, S16 step 5): the hook file of a
+   *  session an app update kept running, written again in that session's own
+   *  per-launch folder (`dir`, the release's record) with this run's port and
+   *  a token minted for the take-over: its CLI's hook reads the file at every
+   *  event. Only a per-launch folder of this install's own hook root, as
+   *  removeSessionHookFolder takes; the answer removes it the same way. Null
+   *  when it cannot be written: nothing is started here. */
+  rewriteSessionHooks?(dir: string, sessionId: string, port: number, secret: string): { hookFile: string; dispose(): void } | null
+  /** Optional -- Codex (aicc_planning#419): the pick folder of a session an
+   *  update kept running, once it is kept no longer: removed as its watcher's
+   *  stop removes it, only while it is still the folder made. Never throws. */
+  removeSessionPickFolder?(pick: ResumePick): void
   /** Optional -- Codex (2.1.3-beta.5): on macOS and Linux a launch that opens
    *  the resume list runs it on the node the user's login shell names. This
    *  asks that shell once, off the event loop, and keeps the answer for the
@@ -388,7 +424,8 @@ export interface HeldScreenRows {
  *  door through which main types a text into the session's composer. Every
  *  method is keyed by the app's session id; a respawn opens a new pane.
  *  2.1.3-beta.14 B2: a run its session helper holds is read from the
- *  holder's screen instead, and has no pane (`held`). */
+ *  holder's screen instead, and has no pane (`held`). 2.1.3-beta.17 C6: and
+ *  the door for a saved image (`submitImage`). */
 export interface SessionRunScreen {
   /** Open the pane for a session's new run, replacing any earlier one.
    *  `write`: one raw write into that run's process. `current`: whether that
@@ -418,7 +455,27 @@ export interface SessionRunScreen {
    *  says no and nothing is typed (2.1.3-beta.10 section A2: the Watchdog's
    *  retry sets both). */
   submit(sessionId: string, text: string, opts: { readyWaitMs: number; readyBy?: number; stillWanted?: () => boolean }): Promise<SubmitTextResult>
+  /** 2.1.3-beta.17 C6 (aicc_planning#415): a saved image's path into the
+   *  composer as the CLI's own paste, then `sentence`, then Enter, by the
+   *  package's image rule, after anything already in flight for the run;
+   *  waits up to `readyWaitMs` for the ready, empty composer. Never rejects.
+   *  Absent: the package has no image rule. */
+  submitImage?(sessionId: string, imagePath: string, sentence: string, opts: { readyWaitMs: number }): Promise<RunScreenImageResult>
 }
+
+/** Why a run screen's image rule did not paste and send an image: the
+ *  session gone; a path or sentence it refuses before typing anything; the
+ *  ready, empty composer not seen in the wait (`busy-timeout`), or a prompt
+ *  up; the CLI's image placeholder not shown after the paste; the sentence
+ *  not confirmed on screen (`not-drawn`, `too-tall`). */
+export type RunScreenImageNotPasted = 'session-gone' | 'refused-text' | 'busy-timeout' | 'prompt-on-screen' | 'no-placeholder' | 'not-drawn' | 'too-tall'
+
+/** 2.1.3-beta.17 C6: what a run screen's image rule did. `left`: what it
+ *  typed may still be at the prompt (it could not take it back for certain);
+ *  false when it typed nothing, or took it back and saw the composer empty. */
+export type RunScreenImageResult =
+  | { pasted: true }
+  | { pasted: false; reason: RunScreenImageNotPasted; left: boolean }
 
 export interface SshCapableProvider extends SessionProvider {
   getSshSettingsPath(sessionId: string): string

@@ -233,7 +233,7 @@ export interface ElectronAPI {
         runtime?: import('../../shared/types').SshRuntime
         /** #242 tier 5: respawning a session that previously reached
          *  claude-running -- drives `--continue` when no tmux persistence
-         *  is available. See SSHOptions.reconnect in pty-manager.ts. */
+         *  is available. See SSHOptions.reconnect in ssh-options.ts. */
         reconnect?: boolean
         /** SSH tmux enhancement (item 1): "Detachable" toggle (default ON). */
         detachable?: boolean
@@ -301,15 +301,24 @@ export interface ElectronAPI {
      *  Shell line buttons keep `write`. */
     submitPrompt: (args: { sessionId: string; text: string }) => Promise<PromptButtonResult>
     /** 2.1.3-beta.16 X1.2: a saved image into a Claude Code session on this
-     *  computer, as the CLI's own paste: main types the path as a bracketed
-     *  paste, then the sentence, then Enter. `not-taken`: a session main does
-     *  not type an image into (Codex, an SSH Persistent session); the caller
-     *  sends it its own way. */
-    submitImage: (args: { sessionId: string; path: string; sentence: string }) => Promise<{ outcome: 'sent' } | { outcome: 'not-taken' } | { outcome: 'not-sent'; reason: 'session-gone' | 'refused-text' }>
+     *  computer, or since 2.1.3-beta.17 C6 a Codex one, as the CLI's own
+     *  paste: main types the path as a bracketed paste, then the sentence,
+     *  then Enter. `not-taken`: an image main did not paste (an SSH Persistent
+     *  session, or a Codex session it could not paste into); the caller sends
+     *  it its own way, or, with `left` (main's paste may still be at the Codex
+     *  prompt), types nothing more and says so. */
+    submitImage: (args: { sessionId: string; path: string; sentence: string }) => Promise<{ outcome: 'sent' } | { outcome: 'not-taken'; left?: true } | { outcome: 'not-sent'; reason: 'session-gone' | 'refused-text' }>
     resize: (sessionId: string, cols: number, rows: number) => void
     /** P3.16a round 2 (Q5): `'restart'` when a Restart ends the process (its
      *  next one follows), so its exit is not the session's end. */
     kill: (sessionId: string, reason?: 'restart') => void
+    /** aicc_planning#423: the tabs Resume restored, and a tab shown and
+     *  starting now: a session an update kept for a restored tab not on
+     *  screen waits for that tab until it is shown (B1d: each restored tab
+     *  with a local agent tab's configured folder, for the canvas roots its
+     *  kept session is served with meanwhile). */
+    tabsRestored: (tabs: Array<{ id: string; cwd?: string }>) => void
+    tabShown: (sessionId: string) => void
     onData: (sessionId: string, callback: (data: string) => void) => () => void
     onExit: (sessionId: string, callback: (exitCode: number) => void) => () => void
     /** aicc_planning#392: the tab's next output chunk is its restored replay,
@@ -810,6 +819,14 @@ export interface ElectronAPI {
     runSelfTest: () => Promise<import('../../shared/machines').SelfTestResult>
     endSession: (id: string) => Promise<import('../../shared/machines').MachineActionResult>
     reattach: (id: string) => Promise<import('../../shared/machines').MachineActionResult>
+    /** 2.1.3-beta.17: Linux machines for remote sessions through the session helper. */
+    remote: {
+      state: () => Promise<import('../../shared/remote-machines').RemoteMachinesState>
+      prepare: (configId: string) => Promise<import('../../shared/remote-machines').RemoteConsent>
+      add: (token: string) => Promise<import('../../shared/remote-machines').RemoteActionResult>
+      check: (did: string) => Promise<import('../../shared/remote-machines').RemoteActionResult>
+      remove: (did: string) => Promise<import('../../shared/remote-machines').RemoteActionResult>
+    }
   }
   cli: {
     check: () => Promise<boolean>

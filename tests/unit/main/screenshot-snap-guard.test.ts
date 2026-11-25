@@ -24,6 +24,7 @@ vi.mock('electron', () => ({
     },
   },
   dialog: { showMessageBox: async () => ({ response: 1 }) },
+  ipcMain: { removeAllListeners: () => {} },
   nativeImage: { createFromBuffer: () => ({ isEmpty: () => true }) },
   shell: { openExternal: async () => {} },
   systemPreferences: { getMediaAccessStatus: () => 'granted' },
@@ -210,7 +211,7 @@ describe('captureRectangle with the permission check and a throwing capture', ()
   })
 
   it('answers nothing, not an error, when the capture library cannot be started', async () => {
-    // The library is made once and kept, so this needs the module as it is before the first Snap.
+    // A fresh module, so the package's first load is this press's.
     vi.resetModules()
     const fresh = await import('../../../src/main/screenshot-capture')
     lib.mode = 'construct-throws'

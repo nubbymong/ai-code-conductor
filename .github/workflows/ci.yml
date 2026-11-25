@@ -16,8 +16,9 @@ on:
   # Release level (P4.8; OD20 D7, WP1.71): the release-candidate Codex CLI is
   # checked on its own, dispatched with its version, besides the minimum and
   # pinned ones every run checks. On a dispatch the codex-conformance job runs,
-  # with the always-on changelog check, probe-p19, probe-p21 and snap-e2e when
-  # the dispatch names them (probe_p19, probe_p21, snap_e2e), the
+  # with the always-on changelog check, probe-p19, probe-p21, snap-e2e and
+  # remote-helper-e2e when the dispatch names them (probe_p19, probe_p21,
+  # snap_e2e, remote_helper_e2e), the
   # claude-conformance job when
   # claude_rc_version is set, and
   # the Helper job too when the `helper` input is set; every other job's
@@ -68,6 +69,11 @@ on:
         default: false
       snap_e2e:
         description: 'Run the Snap end-to-end check (snap-e2e) on the Windows runner: the built app, its Snap button and the helper''s capture mode on the runner''s own desktop, plus one capture from a basic-user token; the readings are uploaded'
+        type: boolean
+        required: false
+        default: false
+      remote_helper_e2e:
+        description: 'Run the remote helper device check (remote-helper-e2e) on the Linux runner: a localhost sshd, the static helper and the fake CLI built here, and the app''s remote-helper code adding the machine, holding a session, re-attaching and removing it; the readings and the two programs are uploaded'
         type: boolean
         required: false
         default: false
@@ -321,7 +327,7 @@ jobs:
       # CI lacks the Apple Developer ID secrets the formal release workflow
       # uses, so the macOS DMG is unsigned and Gatekeeper will warn on
       # first launch (right-click → Open). The Windows installer is made the
-      # same way in `test-windows-build` below, unsigned, with the same
+      # same way in `release-windows-installer` below, unsigned, with the same
       # SmartScreen warning as the release pipeline.
       # Gate on runner.os, NOT a matrix image name: `matrix.os` carries whatever
       # image is pinned above, so a re-pin silently turns these steps off while
@@ -389,8 +395,9 @@ jobs:
   #     count is the size of the matrix (strategy.job-total): add a part there
   #     to raise it. Each part's summary lists its slowest files, which is
   #     where a weight that has drifted shows.
-  #   - test-windows-build: the typecheck, the native tests, the build and, on
-  #     a release/* branch, the installer, once.
+  #   - test-windows-build: the typecheck, the native tests and the build. On
+  #     a release/* branch the installer is made once, by
+  #     `release-windows-installer` (below), which this check never waits for.
   # Each decides the scope itself ("Decide the scope"), as the Test jobs do,
   # and starts on the same events. None of their names begins with `Test (`,
   # so the release gate and the green-run reuse (TEST_JOB_RE) read only
@@ -542,15 +549,140 @@ jobs:
         if: steps.scope.outputs.suite != 'false'
         run: npm run build
 
-      # The Windows half of the beta-testing artifact pipeline (see the macOS
-      # half in the test job): on a release/* branch, the installer, packaged,
-      # checked and uploaded here only. This job does not wait for the unit
-      # parts, which run beside it, so on a red run the installer can still be
-      # uploaded; `Test (windows-2025)` is what says whether the tree passed.
-      # The installer carries the session helper, built and checked as in the
-      # macOS half.
+  # The Windows half of the beta-testing artifact pipeline (see the macOS half
+  # in the test job), in two jobs of their own from 2.1.3-beta.17: on a pull
+  # request from a release/* branch, the installer is packaged, checked and
+  # uploaded by `release-windows-installer` only. The installer carries the
+  # session helper, built and checked as in the macOS half, and the static
+  # Linux helper with its manifest (remote step 1), which only a Linux runner
+  # builds: `release-helper-linux` builds it with the Helper job's steps word
+  # for word, and the packaging job needs it. So neither the Build and native
+  # tests job nor `Test (windows-2025)` ever waits for a Linux build; neither
+  # job is a required check, no job needs the packaging job, and on a red run
+  # the installer can still be uploaded (`Test (windows-2025)` is what says
+  # whether the tree passed).
+  #
+  # Both have the same condition: the Test jobs' pull-request rule, for a
+  # release/* source branch only (a push has no source branch). Neither reads
+  # the change scope (scripts/ci/change-scope.mjs): a documentation-only
+  # release/* pull request packages the Windows installer too, where the macOS
+  # half in the test job is skipped with the suite. The artifact is named apart
+  # from the Helper job's helper-linux-musl, which the same run may upload too
+  # (tests/unit/scripts/helper-release-job.test.ts).
+  release-helper-linux:
+    name: Static Linux helper (release/* test installer)
+    if: |
+      startsWith(github.head_ref, 'release/') &&
+      contains(github.event.pull_request.labels.*.name, 'ci-run') &&
+      github.event.action != 'unlabeled' &&
+      (github.event.action != 'labeled' || github.event.label.name == 'ci-run') &&
+      (github.event.action != 'edited' || github.event.changes.base.ref.from != '')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    env:
+      CARGO_TERM_COLOR: never
+      CARGO_INCREMENTAL: '0'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Install the pinned Rust toolchain
+        shell: bash
+        working-directory: helper
+        run: |
+          rustup show active-toolchain || rustup toolchain install
+          rustc --version
+          cargo --version
+
+      - name: Build the glibc debug helper the static check compares against
+        shell: bash
+        working-directory: helper
+        run: cargo build --locked --bin aicc-helper
+
+      - name: Build the static Linux helper
+        shell: bash
+        working-directory: helper
+        run: |
+          rustup target add x86_64-unknown-linux-musl
+          cargo build --locked --release --target x86_64-unknown-linux-musl --bin aicc-helper
+          mkdir -p target/helper-linux-musl
+          cp target/x86_64-unknown-linux-musl/release/aicc-helper target/helper-linux-musl/
+
+      - name: Check the Linux helper is static
+        shell: bash
+        working-directory: helper
+        run: |
+          # 0 static, 1 not static, 2 not an x86-64 ELF file or not read.
+          is_static() {
+            local hdr segs dyn
+            hdr=$(readelf --file-header --wide "$1") || return 2
+            grep -q 'Class:[[:space:]]*ELF64' <<<"$hdr" || return 2
+            grep -q 'Machine:[[:space:]]*Advanced Micro Devices X86-64' <<<"$hdr" || return 2
+            segs=$(readelf --program-headers --wide "$1") || return 2
+            dyn=$(readelf --dynamic --wide "$1") || return 2
+            grep -q 'INTERP' <<<"$segs" && return 1
+            grep -q '(NEEDED)' <<<"$dyn" && return 1
+            return 0
+          }
+          built=target/helper-linux-musl/aicc-helper
+          rc=0; is_static "$built" || rc=$?
+          file "$built"
+          echo "Static Linux helper: $(file -b "$built"), $(stat -c %s "$built") bytes." >> "$GITHUB_STEP_SUMMARY"
+          if [ "$rc" != 0 ]; then
+            echo "::error::$built is not a static x86-64 ELF program (check status $rc)"
+            exit 1
+          fi
+          rc=0; is_static target/debug/aicc-helper || rc=$?
+          if [ "$rc" != 1 ]; then
+            echo "::error::the check did not find the glibc debug build dynamic (check status $rc), so it proves nothing"
+            exit 1
+          fi
+          echo "static: $built; the check finds the glibc debug build dynamic, as it must"
+
+      - name: Upload the static Linux helper
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: helper-linux-musl-installer
+          path: helper/target/helper-linux-musl
+          if-no-files-found: error
+          retention-days: 14
+
+  release-windows-installer:
+    name: Windows test installer (release/* branches)
+    needs: release-helper-linux
+    if: |
+      startsWith(github.head_ref, 'release/') &&
+      contains(github.event.pull_request.labels.*.name, 'ci-run') &&
+      github.event.action != 'unlabeled' &&
+      (github.event.action != 'labeled' || github.event.label.name == 'ci-run') &&
+      (github.event.action != 'edited' || github.event.changes.base.ref.from != '')
+    runs-on: windows-2025
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Install Electron binary
+        run: node node_modules/electron/install.js
+
+      - name: Build
+        run: npm run build
+
       - name: Build the session helper (release/* branches only)
-        if: steps.scope.outputs.suite != 'false' && runner.os == 'Windows' && startsWith(github.head_ref, 'release/')
         shell: bash
         working-directory: helper
         env:
@@ -562,25 +694,32 @@ jobs:
 
       # Check the helper carries its own C runtime, as the Helper job and release.yml do (helper/.cargo/config.toml, scripts/check-pe-imports.mjs).
       - name: Check the session helper carries its own C runtime (release/* branches only)
-        if: steps.scope.outputs.suite != 'false' && runner.os == 'Windows' && startsWith(github.head_ref, 'release/')
         run: node scripts/check-pe-imports.mjs helper/target/release/aicc-helper.exe
 
+      # The static Linux helper from the job above, and the manifest of its
+      # hash, written before packaging, as release.yml's build-windows does
+      # (scripts/write-helper-manifest.mjs).
+      - name: Download the static Linux helper
+        uses: actions/download-artifact@v8
+        with:
+          name: helper-linux-musl-installer
+          path: helper/target/helper-linux-musl
+
+      - name: Write the session helper manifest
+        run: node scripts/write-helper-manifest.mjs
+
       - name: Package Windows installer (release/* branches only)
-        if: steps.scope.outputs.suite != 'false' && runner.os == 'Windows' && startsWith(github.head_ref, 'release/')
         # --config.npmRebuild=false: Windows uses the prebuilds as-is (see above
         # test-windows-part), so electron-builder must not rebuild them either.
         run: npx electron-builder --win --config.npmRebuild=false
 
       - name: Verify native modules unpacked (release/* branches only)
-        if: steps.scope.outputs.suite != 'false' && runner.os == 'Windows' && startsWith(github.head_ref, 'release/')
         run: npm run verify:package
 
       - name: Verify the session helper is packaged (release/* branches only)
-        if: steps.scope.outputs.suite != 'false' && runner.os == 'Windows' && startsWith(github.head_ref, 'release/')
         run: npm run verify:helper
 
       - name: Upload Windows installer
-        if: steps.scope.outputs.suite != 'false' && runner.os == 'Windows' && startsWith(github.head_ref, 'release/')
         uses: actions/upload-artifact@v7
         with:
           name: windows-installer-${{ github.sha }}
@@ -588,8 +727,9 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-  # The required check `Test (windows-2025)`, for the Windows jobs above. It
-  # needs every one of them and starts whatever they ended with (`always()`:
+  # The required check `Test (windows-2025)`, for the Windows suite jobs above
+  # (`test-windows-part` and `test-windows-build`, not the release/* installer
+  # jobs). It needs both of them and starts whatever they ended with (`always()`:
   # without it, a part that failed would leave this job skipped, and a skipped
   # job reports as passed). scripts/ci/all-parts-passed.mjs then passes only
   # when each of them passed: a part that failed, was cancelled, timed out or
@@ -1033,7 +1173,8 @@ jobs:
   # not one of the checks a PR waits for, not in release.yml and not read by
   # scripts/release-gate.mjs. It only reads: no secret, read-only permissions,
   # the actions pinned by commit. What is uploaded as snap-e2e-<os> is the
-  # readings, Playwright's report and its pictures of the app's own windows.
+  # readings, Playwright's report, its pictures of the app's own windows and
+  # D12's pictures of the Snap menu's box (cut from the runner's own screen).
   # tests/unit/scripts/snap-e2e-job.test.ts evaluates its condition.
   snap-e2e:
     if: github.event_name == 'workflow_dispatch' && inputs.snap_e2e == true
@@ -1290,6 +1431,183 @@ jobs:
       - name: SSH multi-session -R test (#24)
         run: npx vitest run --config vitest.live.config.ts tests/live/ssh-multisession.live.ts
 
+  # Remote helper device check (plan 2.1.3-beta.17, section A2, rule 35;
+  # aicc_planning#411). The app's own remote-helper code (src/main/remote-helper/,
+  # no Electron) under Node, against an ephemeral localhost sshd on this runner
+  # (as ssh-smoke makes it): no host and no secret. It builds the static Linux
+  # helper (with its bridge mode) and aicc-fake-cli here, writes the helper's
+  # manifest with the installer's own script, gives the account an rc file that prints a
+  # line and sets a variable and a `claude` on PATH that only an interactive
+  # login shell sees, then runs tests/live/remote-helper-device.live.ts once,
+  # with retries off: Add (upload, hash equal, self-test), another install's
+  # Remove refused, a session holding the fake CLI (bytes in, output out, the
+  # rc variable), a resize, the ssh child killed and a re-attach with the
+  # replay, the end, Remove, nothing left under ~/.aicc.
+  #
+  # It runs ONLY on a dispatch that names it (`remote_helper_e2e`), never on a
+  # pull request or a push. It is section evidence, like a test-machine line:
+  # not one of the checks a PR waits for, not in release.yml and not read by
+  # scripts/release-gate.mjs. It only reads: no secret, read-only permissions,
+  # the actions pinned by commit. What is uploaded as remote-helper-e2e is the
+  # two programs it built and the helper's manifest (a host line from a test
+  # PC runs the same file with them) and the readings. tests/unit/scripts/remote-helper-e2e-job.test.ts
+  # evaluates its condition.
+  remote-helper-e2e:
+    if: github.event_name == 'workflow_dispatch' && inputs.remote_helper_e2e == true
+    name: Remote helper e2e
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    env:
+      CARGO_TERM_COLOR: never
+      CARGO_INCREMENTAL: '0'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install the pinned Rust toolchain and the musl target
+        shell: bash
+        working-directory: helper
+        run: |
+          rustup show active-toolchain || rustup toolchain install
+          rustup target add x86_64-unknown-linux-musl
+          rustc --version
+
+      # As the Helper job's static build: musl, so it runs on any Linux x86-64.
+      # The helper goes where release.yml hands it to the Windows package
+      # (target/helper-linux-musl), which is also where a dev run of the app
+      # reads it (src/main/remote-helper/manifest.ts).
+      - name: Build the static helper and the fake CLI
+        shell: bash
+        working-directory: helper
+        run: |
+          cargo build --locked --release --target x86_64-unknown-linux-musl --bin aicc-helper --bin aicc-fake-cli
+          mkdir -p target/helper-linux-musl target/remote-helper-e2e
+          cp target/x86_64-unknown-linux-musl/release/aicc-helper target/helper-linux-musl/
+          cp target/x86_64-unknown-linux-musl/release/aicc-helper target/x86_64-unknown-linux-musl/release/aicc-fake-cli target/remote-helper-e2e/
+
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+
+      # The manifest the Windows installer carries, written by the script the
+      # packaging runs (A1's), which also refuses a helper that is not a static
+      # x86-64 program. The check reads the helper through it, as the app does.
+      - name: Write the helper's manifest as for the installer
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/write-helper-manifest.mjs
+          cp helper/target/helper-manifest/manifest.json helper/target/remote-helper-e2e/manifest.json
+
+      - name: Provision an ephemeral key-auth sshd
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq && sudo apt-get install -y -qq openssh-server netcat-openbsd
+          # Unlock the password-locked runner account for key sign-in (sshd with
+          # UsePAM no refuses a locked account); password sign-in stays off.
+          echo "$(whoami):ci-remote-helper-$(date +%s)" | sudo chpasswd
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          ssh-keygen -t ed25519 -N '' -f ~/.ssh/id_ed25519 -q
+          cat ~/.ssh/id_ed25519.pub >> ~/.ssh/authorized_keys
+          chmod 600 ~/.ssh/authorized_keys
+          D="$RUNNER_TEMP/sshd"; mkdir -p "$D"
+          ssh-keygen -t ed25519 -N '' -f "$D/hostkey" -q
+          cat > "$D/sshd_config" <<EOF
+          Port 2222
+          ListenAddress 127.0.0.1
+          HostKey $D/hostkey
+          PidFile $D/sshd.pid
+          AuthorizedKeysFile $HOME/.ssh/authorized_keys
+          PasswordAuthentication no
+          PubkeyAuthentication yes
+          AllowTcpForwarding no
+          UsePAM no
+          StrictModes no
+          LogLevel VERBOSE
+          EOF
+          sudo mkdir -p /run/sshd
+          sudo "$(command -v sshd)" -t -f "$D/sshd_config"
+          sudo "$(command -v sshd)" -f "$D/sshd_config" -E "$D/sshd.log"
+          for i in $(seq 1 20); do nc -z 127.0.0.1 2222 && break; sleep 0.5; done
+          nc -z 127.0.0.1 2222 || { echo "sshd failed to start"; sudo cat "$D/sshd.log" 2>/dev/null || true; exit 1; }
+          # Its host key goes into known_hosts here; the app's own first exec
+          # would take it the same way (accept-new), every later one only it.
+          ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new -p 2222 "$(whoami)@127.0.0.1" 'echo SSHD_UP' || { sudo cat "$D/sshd.log" 2>/dev/null || true; exit 1; }
+
+      # What a real account's rc files do: ~/.bashrc prints a line on every
+      # start (the scripts and the bridge drop it), and only an interactive
+      # login shell gets AICC_RC_MARK and a `claude` on PATH (P6's fallback,
+      # ADR-030). The two checks after it show the exec sees neither and
+      # `bash -il` sees both, or the step fails.
+      - name: Give the account rc files as a real one has
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/aicc-e2e-bin"
+          cp helper/target/remote-helper-e2e/aicc-fake-cli "$HOME/aicc-e2e-bin/claude"
+          old="$RUNNER_TEMP/bashrc.old"
+          cp "$HOME/.bashrc" "$old" 2>/dev/null || : > "$old"
+          {
+            echo 'echo "rc file: hello from ~/.bashrc"'
+            cat "$old"
+            echo 'case $- in *i*) export AICC_RC_MARK=from-rc; export PATH="$HOME/aicc-e2e-bin:$PATH";; esac'
+          } > "$HOME/.bashrc"
+          echo '[ -f "$HOME/.bashrc" ] && . "$HOME/.bashrc"' >> "$HOME/.bash_profile"
+          exec_sees=$(ssh -o BatchMode=yes -p 2222 "$(whoami)@127.0.0.1" 'echo "${AICC_RC_MARK:-unset} $(command -v claude || echo none)"' | tail -n 1)
+          il_sees=$(bash -ilc 'echo "${AICC_RC_MARK:-unset} $(command -v claude || echo none)"' </dev/null 2>/dev/null | tail -n 1)
+          echo "an exec sees: $exec_sees"
+          echo "an interactive login shell sees: $il_sees"
+          [ "$exec_sees" = "unset none" ] || { echo "::error::the exec sees what only a login shell should"; exit 1; }
+          [ "$il_sees" = "from-rc $HOME/aicc-e2e-bin/claude" ] || { echo "::error::bash -il does not see the rc file's variable and claude"; exit 1; }
+
+      - name: Write the hosts file (no secret)
+        shell: bash
+        env:
+          OUT: ${{ runner.temp }}/remote-helper-e2e
+        run: |
+          mkdir -p "$OUT"
+          printf '{ "host": "127.0.0.1", "user": "%s", "port": 2222 }\n' "$(whoami)" > "$OUT/hosts.json"
+
+      # The default vitest config does not include tests/live, so no other
+      # suite runs it; vitest fails when no test file is found, and the next
+      # step fails a run in which no test ran or one was retried.
+      - name: Run the remote helper device check
+        shell: bash
+        env:
+          REMOTE_HELPER_HOSTS: ${{ runner.temp }}/remote-helper-e2e/hosts.json
+          REMOTE_HELPER_BIN: helper/target/helper-linux-musl/aicc-helper
+          REMOTE_HELPER_MANIFEST: helper/target/helper-manifest/manifest.json
+          REMOTE_HELPER_FAKE_CLI: helper/target/remote-helper-e2e/aicc-fake-cli
+          REMOTE_HELPER_EXPECT_RC: '1'
+          REMOTE_HELPER_OUT: ${{ runner.temp }}/remote-helper-e2e
+        run: npx vitest run --config vitest.live.config.ts tests/live/remote-helper-device.live.ts --retry=0 --reporter=default --reporter=json --outputFile.json="$REMOTE_HELPER_OUT/vitest.json"
+
+      - name: Fail a run in which no test ran, or one did not pass
+        if: ${{ !cancelled() }}
+        shell: bash
+        env:
+          REPORT: ${{ runner.temp }}/remote-helper-e2e/vitest.json
+        run: node scripts/ci/vitest-ran.mjs "$REPORT"
+
+      - name: Upload the two programs, the manifest and the readings
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: remote-helper-e2e
+          path: |
+            helper/target/remote-helper-e2e
+            ${{ runner.temp }}/remote-helper-e2e
+          if-no-files-found: warn
+          retention-days: 14
+
 
   # The Rust session helper (helper/; ADR-029, ADR-030). The installers carry
   # its release build (release.yml builds it, and so do the release/* packaging
@@ -1298,8 +1616,10 @@ jobs:
   # It builds and tests the helper on the three OSes it runs on, and uploads
   # the Windows build. On Windows it also fails if the release build imports a
   # C runtime DLL (scripts/check-pe-imports.mjs). On Linux it also builds a
-  # static helper for the remote probes, checks it is static and uploads it
-  # (helper-linux-musl); nothing ships it. Probe P7
+  # static helper, checks it is static and uploads it (helper-linux-musl):
+  # from 2.1.3-beta.17 the Windows installer carries that file for Linux
+  # machines, built by release.yml's helper-linux job with these same steps,
+  # and a VM or dev package takes it from this artifact. Probe P7
   # (helper/probes/p7-windows-survival.ps1) is answered (2026-11-15, ADR-030);
   # its script rides in the artifact as the record of how, and it drives
   # commands this build no longer has, so running it again needs a
@@ -1477,8 +1797,11 @@ jobs:
       # above links this runner's glibc 2.39, newer than some hosts have. On Unix
       # the helper needs only libc and vt100 (helper/Cargo.toml), both Rust
       # crates, so the musl target links it with the C library that Rust's musl
-      # target carries itself: no package is installed. Nothing ships it; it is
-      # uploaded for the probes only.
+      # target carries itself: no package is installed. From 2.1.3-beta.17 the
+      # Windows installer carries this file (resources/helper/linux-x64/aicc-helper)
+      # for the app to upload to a Linux machine: release.yml's helper-linux job
+      # and the release/* test installer's Linux job build it with these three
+      # steps word for word (tests/unit/scripts/helper-release-job.test.ts).
       - name: Build the static Linux helper
         if: steps.scope.outputs.helper != 'false' && steps.lock.outputs.present == 'true' && runner.os == 'Linux'
         shell: bash
