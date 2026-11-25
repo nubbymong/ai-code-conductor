@@ -19,15 +19,26 @@ import yaml from 'js-yaml'
  * and the workflows follow it. One step keeps another Node, named below with
  * its reason; an exception that is no longer true fails too.
  *
+ * Every job in the two workflows that installs the app (a run step with
+ * `npm ci`) must have a setup-node step, so a job that loses it cannot fall
+ * back to the runner's own Node unnoticed. That list is read from the
+ * workflows, not kept by hand; the jobs that run the app's unit tests, its
+ * build and its installer are also named, so that a change to how one
+ * installs cannot quietly drop it from the list.
+ *
  * Not checked here: the other workflows (pr-title.yml, issue-disposition.yml,
  * close-in-beta-on-promotion.yml), which run the repository's own scripts and
- * no test of the app; and whether a job passes on that Node (CI shows it).
+ * no test of the app; whether a job passes on that Node (CI shows it); and the
+ * jobs of these two files that run no npm ci and have no setup-node step
+ * (ci.yml desktop-gate, test-windows, probe-p21, helper, pr-numbers,
+ * release-helper-linux; release.yml helper-linux), which run only the
+ * repository's scripts, or no Node at all, on the runner's own Node.
  */
 
 const ROOT = resolve(__dirname, '../../..')
 const read = (p: string) => readFileSync(resolve(ROOT, p), 'utf-8').replace(/\r\n/g, '\n')
 
-type Step = { uses?: string; with?: Record<string, unknown> }
+type Step = { uses?: string; run?: string; with?: Record<string, unknown> }
 type Job = { steps?: Step[] }
 type Workflow = { jobs: Record<string, Job> }
 
@@ -41,11 +52,15 @@ const OTHER_NODE: Record<string, { node: string; reason: string }> = {
   'ci.yml probe-p19': {
     node: '22',
     reason:
-      "Probe P19 runs the published agent CLIs, not the app's code, and keeps the Node its own comment names: Claude Code's package asks for Node 22 or later.",
+      "Probe P19 runs the published agent CLIs, not the app's code, and only on a dispatch that names it; #418 switched the seventeen steps that test, build and release the app and left this one on the Node 22 its own comment names (Claude Code's floor), so moving it to 24 needs a P19 dispatch of its own.",
   },
 }
 
-/** The jobs that run the app's tests, the build or the installer: each must be among those read. */
+/**
+ * Named jobs that run the app's unit tests, its build or its installer. Each
+ * must be among INSTALLING_JOBS below, which is read from the workflows, so a
+ * change to how one of them installs cannot drop it from that check unnoticed.
+ */
 const TEST_AND_BUILD_JOBS = [
   'ci.yml test',
   'ci.yml test-windows-part',
@@ -66,6 +81,14 @@ const found: Found[] = WORKFLOWS.flatMap((file) => {
   )
 })
 
+/** Every job in the two workflows that installs the app (a run step with `npm ci`). */
+const INSTALLING_JOBS: string[] = WORKFLOWS.flatMap((file) => {
+  const wf = yaml.load(read(`.github/workflows/${file}`)) as Workflow
+  return Object.entries(wf.jobs)
+    .filter(([, job]) => (job.steps ?? []).some((s) => typeof s.run === 'string' && /\bnpm ci\b/.test(s.run)))
+    .map(([id]) => `${file} ${id}`)
+})
+
 const electronMajor = (): number => {
   const pkg = JSON.parse(read('package.json')) as { devDependencies?: Record<string, string>; dependencies?: Record<string, string> }
   const v = pkg.devDependencies?.electron ?? pkg.dependencies?.electron ?? ''
@@ -83,9 +106,10 @@ describe('CI runs on the Node the app ships (aicc_planning#418)', () => {
     ).toBeDefined()
   })
 
-  it('reads a setup-node step in every job that runs the tests, the build or the installer', () => {
+  it('reads a setup-node step in every job that installs the app with npm ci, the named test, build and installer jobs among them', () => {
     const where = new Set(found.map((f) => f.where))
-    expect(TEST_AND_BUILD_JOBS.filter((j) => !where.has(j))).toEqual([])
+    expect(TEST_AND_BUILD_JOBS.filter((j) => !INSTALLING_JOBS.includes(j))).toEqual([])
+    expect(INSTALLING_JOBS.filter((j) => !where.has(j))).toEqual([])
   })
 
   it("every setup-node step in ci.yml and release.yml asks for Electron's Node, except the one named with its reason", () => {
