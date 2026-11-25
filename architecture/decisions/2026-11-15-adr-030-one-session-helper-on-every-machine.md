@@ -514,6 +514,15 @@ shell's -il wrapper, the host account's variables, LANG, TERM and COLORFGBG, and
 flag or variable. The launch is the same, byte for byte (13,000-row characterisation against
 d0be048e).
 
+Beta.18 (plan section 3.1, aicc_planning#431 and #433): the helper gains a status mode
+(`aicc-helper status`, a CLI's status line command) and a `status` capability: the holder keeps
+the newest status in one slot and sends it as `status` to each app connection that acked it, at
+most 10 a second, so a tab through the helper can have a status line (P1 still gates any
+default). A launch may declare the hook kinds its session takes (`hookKinds`, at most 16), so
+another CLI's hook events can go through its holder (S12's remaining step, section 5); the hook
+and status modes read their store and session from `AICC_HELPER_STORE` and
+`AICC_HELPER_SESSION` when the command line leaves them out.
+
 P7 result (2026-11-15, Windows test machine, the skeleton holder from #685 and a silent
 install of 2.1.3-beta.4): yes. A detached holder is not in a job object, and it and its
 console child survive the app process tree being ended and the installer running; a

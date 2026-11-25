@@ -83,8 +83,8 @@ ASCII letters or digits); which kinds a session takes is its holder's, from the
 `hookKinds` its launch declared, or the nine the app injects into a Claude Code
 session when it declared none (from 2.1.3-beta.18). `status` is a CLI's status
 line command, the same way (from 2.1.3-beta.18): it passes the status on its
-standard input, one JSON object of at most 65,280 bytes, to the session's
-holder as `status.set`, always exits 0 within 2 s and prints nothing; the
+standard input, one JSON object of at most 65,280 bytes as compact JSON, to
+the session's holder as `status.set`, always exits 0 within 2 s and prints nothing; the
 holder keeps the newest and sends it to each connection that acked `status`
 beside `local` (the app's), at most 10 a second. `hook` and `status` take the store and the session from
 `AICC_HELPER_STORE` and `AICC_HELPER_SESSION` when the options leave them out. `mcp`

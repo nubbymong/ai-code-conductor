@@ -454,7 +454,7 @@ fn the_tool_stream_limits_match_the_constants() {
 fn kept_tool_stream_vectors_read_as_the_fixtures_say() {
     let doc = load("local.json");
     let away = doc.get("away").expect("away");
-    // What a holder offered before screen reads; one of now is the `screen`
+    // What a holder offered before screen reads; one of now is the `status`
     // part's.
     assert_eq!(strings(away, "offered"), serve::HOLDER_CAPS[..5].to_vec());
     assert_eq!(strings(away, "relay_caps"), relay::ACK_CAPS.to_vec());

@@ -325,8 +325,7 @@ export function helloAck(hooks = false, mcp = false, screen = false, title = fal
 
 // ── hook events (section 15, capability `hooks`) ──────────────────────────────
 
-/** The nine hook events the app injects, the only kinds a holder passes on
- *  (src/main/hooks/session-hooks-writer.ts MVP_EVENTS). */
+/** The nine hook events the app injects into a Claude Code session (src/main/hooks/session-hooks-writer.ts MVP_EVENTS): the kinds a holder passes on for a launch that declares none (`hookKinds`, from 2.1.3-beta.18). */
 export const HELPER_HOOK_KINDS = [
   'PreToolUse', 'PostToolUse', 'Notification', 'SessionStart', 'Stop', 'UserPromptSubmit', 'SubagentStart', 'SubagentStop', 'StopFailure',
 ] as const

@@ -29,7 +29,7 @@ import { duplexPair } from './session-helper-fake-holder'
 type Json = Record<string, unknown>
 
 const S = JSON.parse(readFileSync(resolve(__dirname, '../../../helper/fixtures/local.json'), 'utf8')).screen
-/** What a holder of now offers, and one from before the title. */
+/** What a holder offered from 2.1.3-beta.14 to 2.1.3-beta.17 (a holder of now adds status), and one from before the title. */
 const NOW_CAPS: string[] = S.offered
 const BEFORE_CAPS = NOW_CAPS.filter((c) => c !== TITLE_CAP)
 /** The vector of a title the output set, as the holder sends it to a

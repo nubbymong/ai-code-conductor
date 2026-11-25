@@ -456,8 +456,9 @@ struct Status {
     last_seq: u64,
     /// When the last round of `status` began; None before the first.
     last_round: Option<Instant>,
-    /// Each connection that acked `status`, and the newest `seq` it was
-    /// sent (0: none yet).
+    /// Each connection that acked `status` beside `local` (an app's), and the
+    /// newest `seq` it was sent (0: none yet). One that acked `status` alone
+    /// (the status mode's) only posts and is never here.
     to: Vec<(Arc<Conn>, u64)>,
 }
 
@@ -2213,7 +2214,7 @@ mod tests {
     }
 
     #[test]
-    fn a_round_is_due_only_when_a_connection_that_takes_the_status_lacks_the_newest() {
+    fn a_round_is_not_due_while_nothing_is_posted_or_no_connection_takes_the_status() {
         let mut s = Status { newest: None, last_seq: 0, last_round: None, to: Vec::new() };
         assert!(!s.due(), "nothing posted, nobody taking it");
         s.newest = Some((1, Value::obj(Vec::new())));
