@@ -105,22 +105,31 @@ const GLYPH_PREFIX_RE = new RegExp(`^[${GLYPHS}] ?`)
 /** The efforts the footer names: Codex's levels, and "default" when the
  *  model's own applies (VM: gpt-5.2 and gpt-5.3-codex launched with none). */
 const FOOTER_EFFORTS = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra', 'default']
-/** A model id as the footer can show it, when the session's are not known. */
-const ANY_MODEL = '[A-Za-z0-9][A-Za-z0-9._:/-]*'
+/** A model as the footer can show it, when the session's are not known: an
+ *  id, or a display name of two words ("GPT-6.1 Terra", Codex 0.172.0). */
+const MODEL_WORD = '[A-Za-z0-9][A-Za-z0-9._:/-]*'
+const ANY_MODEL = `${MODEL_WORD}(?: ${MODEL_WORD})?`
 const escapeRe = (s: string): string => s.replace(/[.*+?^${}()|[\]\\/-]/g, '\\$&')
 /** An escaped model id whose letters match in either case. */
 const anyCase = (s: string): string => s.replace(/[A-Za-z]/g, (c) => `[${c.toLowerCase()}${c.toUpperCase()}]`)
+/** A listed model id as the footer can show it: its letters in either case,
+ *  and each hyphen a hyphen or a space. */
+const listedModel = (m: string): string => anyCase(escapeRe(m).replace(/\\-/g, '[- ]'))
 /** The footer (round 2, FT): "<model> <effort> . <folder>", the model one of
  *  `models` when they are given, its letters in either case (2.1.3-beta.17
  *  C8, aicc_planning#416): Codex 0.157.1 names a model its own catalogue
  *  knows by the catalogue's display name, so a session on gpt-5.5 shows
  *  "GPT-5.5 medium" (the test machine, on a stand-in model server that
  *  serves no model list), and one on a model it does not know shows the id
- *  as given ("p19-probe default", probe P19's recordings). Codex's own hint
- *  lines ("enter select . esc back", "MCP servers . 2 enabled", "Git .
- *  main") name no level after a model, so they never match. */
+ *  as given ("p19-probe default", probe P19's recordings). A display name can
+ *  also hold a space where the id has a hyphen: Codex 0.172.0 shows a session
+ *  on gpt-6.1-terra as "GPT-6.1 Terra low" (the beta.17 release smoke), so a
+ *  listed id's hyphen matches a hyphen or a space, and with no list the model
+ *  may be two words. Codex's own hint lines ("enter select . esc back", "MCP
+ *  servers . 2 enabled", "Git . main") name no level after a model, so they
+ *  never match. */
 function footerRe(models?: readonly string[] | null): RegExp {
-  const model = models && models.length > 0 ? `(?:${models.map((m) => anyCase(escapeRe(m))).join('|')})` : ANY_MODEL
+  const model = models && models.length > 0 ? `(?:${models.map(listedModel).join('|')})` : ANY_MODEL
   return new RegExp(`^ {0,8}${model} (?:${FOOTER_EFFORTS.join('|')}) ${MIDDLE_DOT} \\S`)
 }
 /** On screen means the composer is not the one taking keys: the trust

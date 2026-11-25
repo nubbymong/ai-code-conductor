@@ -328,7 +328,7 @@ export class RemoteMachines {
     const mb = (b.helper.size / (1024 * 1024)).toFixed(1)
     return {
       ok: true, token, target: cand.target,
-      text: `Install the session helper on ${target.host}? One file, ${mb} MB, SHA-256 ${b.helper.sha256.slice(0, 12)}, into ~/.aicc in your account there. No root, no service: nothing runs when no session uses it. Remove takes it away.`,
+      text: `Install the session helper on ${cand.target}? One file, ${mb} MB, SHA-256 ${b.helper.sha256.slice(0, 12)}, into ~/.aicc in your account there. No root, no service: nothing runs when no session uses it. Remove takes it away.`,
     }
   }
 

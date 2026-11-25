@@ -499,8 +499,11 @@ link attaches again from the last byte seen with the replay (section 11's back-o
 one dropped as it closed. remote-helper-e2e run 45337753429: 20,000 lines printed while the
 bridge was stopped came back once each. Not through the helper yet: the status line and usage,
 the Agent Canvas, the browser and the Conductor's other tools, hook events, image paste. With
-the switch off nothing of remote step 1 is read or written: the machine records and the
-manifest are asked for only once the switch is saved on. A machine holding another session
+the switch off no SSH tab reads or writes anything of remote step 1: a tab's start asks for the
+machine records and the manifest only once the switch is saved on. The Machines page on Windows
+shows its Linux machines section with the switch on or off, and reads the manifest, the Linux
+helper and the records when it is opened (the first read makes the records file with this
+install's id). A machine holding another session
 helper than the app's reads not checked on its card, and its tabs take the usual SSH path,
 until Check installs the app's helper.
 

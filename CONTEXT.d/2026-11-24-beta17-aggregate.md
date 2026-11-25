@@ -45,7 +45,8 @@ slowed, control 6 of 6).
 display name (GPT-5.5), so the renderer's footer match, case-sensitive against
 the session's models, refused Compact, the model pill, Plan mode and the Alt+V
 line; footerRe now matches the listed models in either case; main's readers
-were never affected.
+were not affected by the case. A display name with a space (GPT-6.1 Terra,
+Codex 0.172.0) stopped both; see the final step's fix round below.
 
 **Decided at launch, recorded in ADR-030.** Remote step 1 runs each session on
 one `ssh -T` exec through the helper's `bridge` mode, not the two ssh
@@ -82,11 +83,30 @@ go. C11's five limits each clear a selection or keep less of it, never select
 other text.
 
 **Not measured, carried to the release smoke or beta.18.** Snap into a Codex
-tab with the warning count (no desktop over SSH), so app-knowledge names only
-Alt+V for that case. A Codex footer of 0.170.0 or later on a model whose
-display name has a space. The status line through the helper (P1) and password
-hosts (P2). A selection after a trim in a full scrollback on the WebGL renderer.
+tab with the warning count (no desktop over SSH), so the changelog claims the
+count case for Alt+V only and app-knowledge says nothing of it. The status line
+through the helper (P1) and password hosts (P2). A selection after a trim in a
+full scrollback on the WebGL renderer.
+
+**The final step's fix round.** The release smoke ran Codex 0.172.0 (unpacked
+in its own folder on the test machine, nothing installed) and picked GPT-6.1
+Terra in Codex's own picker: the footer read "GPT-6.1 Terra low", a space
+where the id gpt-6.1-terra has a hyphen, and the app typed nothing into a
+Codex at rest (Compact and the model pill "not at its prompt", a prompt button
+busy-timeout). footerRe (src/shared/codex-screen.ts) now lets a listed id's
+hyphen match a hyphen or a space, and reads a model of up to two words when it
+has no list (main's readers); `codex-screen-footer-model.test.ts` holds the
+smoke's footer row on vm:C6's screen, red on the old reader. A raw recording of
+that 0.172.0 screen is owed to the screen corpus. Also fixed from the smoke:
+the Add question names the account, host and port as Remove does; a Feature
+Guide card's summary, and the tour's, shows its bold and code marks as
+formatting (the Machines card showed them as text, on beta.16 too); the agent
+sessions switch says an update keeps them running. From the final-head review:
+a remote tab that cannot start logs that nothing is started; the take-over
+tests' teardowns fail on a folder that cannot go, as H's do; wording in
+app-knowledge, the changelog, ADR-030, README and the threat model.
 
 ADR-009 passes are owed before stable for A1, A2, B1 to B1f, C1, C2, C4, C6,
-C7, C8 and C9, and for the CI-answering commits cffd828e, 6ffb59cb and
-00259a9e and the join fix b2909a52, on the aicc_planning #320 list.
+C7, C8 and C9, the footer reader's widening in the final step's fix round, and
+for the CI-answering commits cffd828e, 6ffb59cb and 00259a9e and the join fix
+b2909a52, on the aicc_planning #320 list.

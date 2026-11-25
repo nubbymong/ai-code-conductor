@@ -250,6 +250,9 @@ describe('pty-manager SSH branch: a tab that goes through the session helper', (
     expect(sent.filter(([ch]) => ch === `ssh:flowState:${id}`)).toEqual([[`ssh:flowState:${id}`, { state: SSH_THROUGH_HELPER }]])
     await until(() => sent.some(([ch]) => ch === `pty:exit:${id}`))
     expect(sent.some(([ch, d]) => ch === `pty:data:${id}` && String(d).includes('could not start through the session helper on rocky.lan'))).toBe(true)
+    // The log says nothing starts: the tab only shows why (A2 x B1, the aggregate's final-head review).
+    expect(logs.some((l) => l.includes('nothing is started for this terminal, because'))).toBe(true)
+    expect(logs.some((l) => l.includes('starting it the usual way'))).toBe(false)
     // What the tab was sent reaches the PTY integrity count, as the usual paths' output does.
     const shown = sent.filter(([ch]) => ch === `pty:data:${id}`).reduce((n, [, d]) => n + String(d).length, 0)
     expect(shown).toBeGreaterThan(0)

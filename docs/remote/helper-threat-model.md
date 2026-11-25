@@ -86,9 +86,12 @@ rollback returns to the earlier beta's rows, and every row has a negative test.
   staging folder. The app compares its SHA-256 with the installer's
   manifest, which the app re-hashes before upload, and commits it only on a
   match. The launcher hashes it again before every start and runs it only on
-  the expected hash. Every script except probe and install checks $HOME
-  (absolute, owned, not open to others) and the owner marker before it acts.
-  No Claude token, MCP config, hooks file or status shim goes to the host.
+  the expected hash. Every script checks $HOME (absolute, a real folder,
+  owned, not open to others) before it acts. Every script except probe and
+  install also checks that ~/.aicc and the device folder are private and that
+  the device folder carries this install's owner marker; install makes them
+  when they are missing, checks that they are private, and checks the marker
+  when the device folder is already there. No Claude token, MCP config, hooks file or status shim goes to the host.
   No value a host reported is put on a command line. Remove also takes away
   the holders' run folder, /tmp/aicc-<uid>, when it is the user's and empty
   (rmdir only). A machine's first connection takes an unknown host key

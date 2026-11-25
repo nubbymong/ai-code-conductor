@@ -94,5 +94,7 @@ describe('the setting', () => {
     expect(block).toContain('On Windows, ending a session also ends every program it started, even one it opened in a window of its own.')
     // 2.1.3-beta.9, plan section B1: the same switch carries Insights' report terminal.
     expect(block).toContain("Insights' Claude Code report runs this way too.")
+    // 2.1.3-beta.17, plan section B1 (the release smoke): an update keeps it running, and its tab takes it over.
+    expect(block).toContain('On Windows it keeps running through an app update when you choose Save sessions, for up to two minutes until the new version opens: resume your sessions within five minutes of that and its tab takes the same session over.')
   })
 })

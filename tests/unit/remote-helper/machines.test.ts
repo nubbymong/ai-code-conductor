@@ -186,6 +186,9 @@ describe('remote machines: nothing is uploaded without a yes', () => {
     expect(q.ok).toBe(true)
     // The question names the file's size and hash and where it goes, and starts nothing.
     if (q.ok) expect(q.text).toContain(`SHA-256 ${SHA.slice(0, 12)}`)
+    // It names the account, host and port, as Remove does: two saved configs
+    // for one host differ by account (the beta.17 release smoke).
+    if (q.ok) expect(q.text.startsWith('Install the session helper on nick@rocky.lan:22? One file, ')).toBe(true)
     expect(ssh.calls).toHaveLength(0)
     if (!q.ok) return
     await m.add(q.token)

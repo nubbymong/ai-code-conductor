@@ -17,8 +17,9 @@
 // The screens with something typed are SCREEN with its composer row replaced.
 //
 // Not checked here:
-//  - a display name that differs from its id by more than case (none is
-//    recorded on a screen);
+//  - a display name that differs from its id by more than case and a space
+//    for a hyphen (the last describe holds the release smoke's footer of
+//    Codex 0.172.0 on GPT-6.1 Terra);
 //  - a signed-in Codex (the record ran on the stand-in);
 //  - the screen corpus (helper/fixtures/screens/): every recording there runs
 //    on probe P19's own model, which Codex shows as given, and the corpus
@@ -68,10 +69,11 @@ const SCREEN: ScreenLine[] = Array.from({ length: 26 }, (_, k) => {
   return k + 1 === COMPOSER_ROW ? { text, typed: GLYPH } : plain(text)
 })
 
-/** SCREEN with `text` typed in its composer (not dim) and the footer as
- *  recorded under it; Codex draws no shortcuts hint under a typed text. */
-const typedScreen = (text: string): ScreenLine[] =>
-  SCREEN.slice(0, 26 - 1).map((l, k) => (k + 1 === COMPOSER_ROW ? plain(`${GLYPH} ${text}`) : l))
+/** `base` (SCREEN by default) with `text` typed in its composer (not dim) and
+ *  its footer as recorded under it; Codex draws no shortcuts hint under a
+ *  typed text. */
+const typedScreen = (text: string, base: ScreenLine[] = SCREEN): ScreenLine[] =>
+  base.slice(0, 26 - 1).map((l, k) => (k + 1 === COMPOSER_ROW ? plain(`${GLYPH} ${text}`) : l))
 /** SCREEN with its footer row replaced. */
 const withFooter = (row: string): ScreenLine[] => SCREEN.map((l) => (l.text === FOOTER ? plain(row) : l))
 
@@ -122,22 +124,23 @@ describe('the footer names the session\'s model in capitals (Codex 0.157.1)', ()
   })
 })
 
-/** The renderer's Codex rule over SCREEN, with the session's models as the
- *  app holds them: what it writes, the screen Codex then shows, and a clock. */
-function harness() {
+/** The renderer's Codex rule over `base` (SCREEN by default), with the
+ *  session's models as the app holds them: what it writes, the screen Codex
+ *  then shows, and a clock. */
+function harness(base: ScreenLine[] = SCREEN, models: readonly string[] = LISTED) {
   const writes: string[] = []
   let timers: Array<{ fn: () => void; at: number; id: number }> = []
   let now = 0
   let nextId = 1
-  const state = { screen: SCREEN }
+  const state = { screen: base }
   const deps: CodexComposerDeps = {
     readScreen: () => state.screen,
     readTitle: () => 'codex-lab',
     currentRun: () => ({ createdAt: 1000, spawnToken: 7 }),
-    write: (_id, d) => { writes.push(d); if (d !== '\r') state.screen = typedScreen(d) },
+    write: (_id, d) => { writes.push(d); if (d !== '\r') state.screen = typedScreen(d, base) },
     setTimeout: (fn, ms) => { const id = nextId++; timers.push({ fn, at: now + ms, id }); return id },
     clearTimeout: (id) => { timers = timers.filter((t) => t.id !== id) },
-    footerModels: () => LISTED,
+    footerModels: () => models,
     pending: new Set<string>(),
     startupDone: new StartupDoneRuns(),
   }
@@ -185,5 +188,64 @@ describe("the renderer's callers of the session's models type into it", () => {
     h.advance(CODEX_SUBMIT_DELAY_MS + CODEX_READY_POLL_MS)
     expect(gaveUp).toEqual([])
     expect(h.writes).toEqual(['/plan', '\r'])
+  })
+})
+
+// The beta.17 release smoke (SM2), on the test machine: Codex 0.172.0, with
+// GPT-6.1 Terra picked in Codex's own model picker, drew its footer as
+// "GPT-6.1 Terra low . ~\p2w\projects\codex-lab": the display name holds a
+// space where the id (gpt-6.1-terra, resources/codex-model-catalogue.json)
+// has a hyphen. Codex was at rest with an empty prompt, and the app typed
+// nothing: Compact and the model pill said "Codex is not at its prompt, so
+// nothing was sent." (the renderer's rule, which reads the session's models),
+// and a prompt button gave busy-timeout (main's readers, which read any model
+// id, and an id held no space). TERRA is vm:C6's screen with that footer row,
+// drawn with the two leading spaces Codex 0.157.1 draws (the smoke's note
+// gives the row trimmed). The other rows of the 0.172.0 screen were not
+// recorded; a raw recording of it is owed to the screen corpus.
+const TERRA_FOOTER = `  GPT-6.1 Terra low ${DOT} ${FOLDER}`
+const TERRA = withFooter(TERRA_FOOTER)
+/** The registry's Codex list, as sessionFooterModels hands it (ids). */
+const WITH_TERRA = ['gpt-6.2-sol', 'gpt-6.2-astra', 'gpt-6.1-terra', 'gpt-6.1-sol', 'gpt-5.5']
+
+describe('a display name with a space where the id has a hyphen (Codex 0.172.0, GPT-6.1 Terra)', () => {
+  it('reads ready and empty with the session\'s models, and with no list (main\'s readers)', () => {
+    for (const models of [WITH_TERRA, ['gpt-6.1-terra'], null]) {
+      expect(readCodexScreen(TERRA, models), String(models)).toEqual({ screen: 'ready', text: '' })
+      expect(codexComposerState(TERRA, models), String(models)).toBe('ready')
+    }
+    expect(codexCommandTyped(typedScreen('/compact', TERRA), '/compact', WITH_TERRA)).toBe(true)
+    expect(codexTextTyped(typedScreen('half a question', TERRA), 'half a question', null)).toBe(true)
+  })
+
+  it('a list without that model still reads the footer as another model\'s', () => {
+    expect(codexComposerState(TERRA, OWN)).toBe('not-ready')
+    expect(codexComposerState(TERRA, ['gpt-6.1-sol', 'gpt-6-astra'])).toBe('not-ready')
+  })
+
+  it('a hyphen of a listed id matches a hyphen or a space, nothing else', () => {
+    for (const row of [`  GPT-6.1-Terra low ${DOT} ${FOLDER}`, `  gpt-6.1-terra low ${DOT} ${FOLDER}`, `  GPT 6.1 Terra low ${DOT} ${FOLDER}`]) {
+      expect(codexComposerState(withFooter(row), ['gpt-6.1-terra']), row).toBe('ready')
+    }
+    for (const row of [`  GPT-6.1_Terra low ${DOT} ${FOLDER}`, `  GPT-6.1Terra low ${DOT} ${FOLDER}`, `  GPT-6.1  Terra low ${DOT} ${FOLDER}`]) {
+      expect(codexComposerState(withFooter(row), ['gpt-6.1-terra']), row).toBe('not-ready')
+    }
+  })
+
+  it('with no list, a model of three words, or two words with no level after them, is still not the footer', () => {
+    for (const row of [`  GPT 6.1 Terra low ${DOT} ${FOLDER}`, `  GPT-6.1 Terra ${DOT} ${FOLDER}`, `  GPT-6.1 Terra Low ${DOT} ${FOLDER}`]) {
+      expect(codexComposerState(withFooter(row), null), row).toBe('not-ready')
+    }
+  })
+
+  it('Compact and the model pill type into it: the command, then its Enter', () => {
+    for (const command of ['/compact', '/model']) {
+      const h = harness(TERRA, WITH_TERRA)
+      const typing = typeIntoCodexComposer('s1', command, h.deps)
+      expect(typing, command).toMatchObject({ typed: true })
+      expect(typing.reason, command).toBeUndefined()
+      h.advance(CODEX_SUBMIT_DELAY_MS)
+      expect(h.writes, command).toEqual([command, '\r'])
+    }
   })
 })

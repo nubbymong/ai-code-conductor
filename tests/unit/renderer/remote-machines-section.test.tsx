@@ -41,7 +41,7 @@ let root: Root
 function install(s: RemoteMachinesState) {
   const remote = {
     state: vi.fn(async () => s),
-    prepare: vi.fn(async () => ({ ok: true, token: TOKEN, target: 'nick@rocky.lan:22', text: 'Install the session helper on rocky.lan? One file, 2.9 MB, SHA-256 abcdef012345, into ~/.aicc in your account there.' })),
+    prepare: vi.fn(async () => ({ ok: true, token: TOKEN, target: 'nick@rocky.lan:22', text: 'Install the session helper on nick@rocky.lan:22? One file, 2.9 MB, SHA-256 abcdef012345, into ~/.aicc in your account there.' })),
     add: vi.fn(async () => ({ ok: true, message: 'Added rocky.lan. Its self-test passed.' })),
     check: vi.fn(async () => ({ ok: true, message: 'rocky.lan passed its check.' })),
     remove: vi.fn(async () => ({ ok: true, message: 'Removed the session helper from rocky.lan.' })),

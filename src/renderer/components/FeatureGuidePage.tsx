@@ -323,7 +323,7 @@ function FeatureCard({ step, onOpenExplained }: { step: TrainingStep; onOpenExpl
             </button>
           )}
         </div>
-        {step.summary && <p className="text-[13px] mb-3.5 max-w-[80ch]" style={{ color: 'var(--text-secondary)' }}>{step.summary}</p>}
+        {step.summary && <p className="text-[13px] mb-3.5 max-w-[80ch]" style={{ color: 'var(--text-secondary)' }} data-ux-id={`card-${step.id}-summary`}>{renderRich(step.summary)}</p>}
         <div className="grid gap-6" style={{ gridTemplateColumns: '1fr 240px' }}>
           <div data-ux-id={`card-${step.id}-highlights`}>
             <h4 className="fg-eyebrow">Worth knowing</h4>

@@ -169,6 +169,8 @@ export class RemoteDriver implements HelperPtyDriver {
   closed = false
   /** The bridge exec's ssh process now (for the host line and the e2e job). */
   linkPid: number | undefined
+  /** `direct` starts no program: it only says why (a NoticePty). */
+  readonly startsNothing = true as const
   private why = ''
   private readonly connected = new Set<string>()
   private readonly target: SshTarget
