@@ -316,6 +316,15 @@ export interface SessionProvider {
    *  keeps the arguments the builder made. Pure: it reads nothing and writes
    *  nothing. */
   heldToolLaunch?(sessionId: string, launch: HeldToolLaunch, relay: HeldToolRelay): HeldToolLaunchAnswer
+  /** Optional -- Codex (2.1.3-beta.18, ADR-030 S12): the hook kinds a held
+   *  session's CLI reports through its holder when its hooks run the session
+   *  helper's hook mode named in its own environment (Codex's forwarder runs
+   *  it when its launch names the helper, its store and the session). The
+   *  session helper declares them in the launch its holder runs
+   *  (`hookKinds`), and the holder then takes those kinds only: at most 16
+   *  plain words (ASCII letters and digits) of at most 64 characters, none
+   *  twice. Absent: the provider's held sessions keep their hooks as they are. */
+  readonly heldHookKinds?: readonly string[]
   /**
    * Optional -- copy the provider's resume-picker script into
    * `<resourcesDir>/scripts/`. Both providers implement this in P4. The

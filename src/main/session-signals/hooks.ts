@@ -100,7 +100,7 @@ export function startHookSignals(): void {
 // ── hook events through the session helper (section A4) ──────────────────────
 
 /** One hook event a session's holder passed on (session-helper/protocol.ts
- *  readEventFrame): the payload as Claude Code wrote it (cut by the hook mode
+ *  readEventFrame): the payload as its CLI wrote it (cut by the hook mode
  *  when it was large, which a top-level `"cut": true` says), untrusted text. */
 export interface HelperHookEvent {
   kind: string

@@ -462,24 +462,45 @@ describe('index.ts calls the wiring at the right moments', () => {
 })
 
 describe("Claude Code sessions' hooks through the holder (2.1.3-beta.8, plan section A4)", () => {
-  it('the manager gets hooks for Claude Code sessions only, wired to the settings writer and the session signals module', () => {
+  it('the manager gets hooks for Claude Code sessions by their settings file and (2.1.3-beta.18) Codex sessions by their launch, each wired to the session signals module', () => {
     h.settings = { agentSessionsThroughHelper: true }
     initSessionHelper(() => {})
-    const hooks = h.made[0].deps.hooks as Record<string, { taking: () => boolean; useHelperHooks: (id: string, t: unknown) => unknown; event: (id: string, e: unknown) => void; ended: (id: string) => void }>
-    expect(Object.keys(hooks)).toEqual(['claude'])
+    const hooks = h.made[0].deps.hooks as Record<string, { taking: () => boolean; useHelperHooks?: (id: string, t: unknown) => unknown; launchKinds?: () => readonly string[] | undefined; keptOnGateway?: true; event: (id: string, e: unknown) => void; ended: (id: string) => void }>
+    expect(Object.keys(hooks).sort()).toEqual(['claude', 'codex'])
     // Whether hook events are taken now is the session signals module's live answer.
     h.helperTaking.mockReturnValueOnce(false)
     expect(hooks.claude.taking()).toBe(false)
     expect(hooks.claude.taking()).toBe(true)
     expect(h.helperTaking).toHaveBeenCalledTimes(2)
     const target = { helperPath: 'C:/h/aicc-helper.exe', store: 'C:/h/store', sid: 'ag0123456789abcdef0123456789abcd', launcher: 'git-bash' }
-    expect(hooks.claude.useHelperHooks('abcdef0123456789abcdef01', target)).toBe('switched')
+    expect(hooks.claude.useHelperHooks!('abcdef0123456789abcdef01', target)).toBe('switched')
     expect(h.switchHooks).toHaveBeenCalledWith({ settingsPath: 'C:/Users/u/.claude/settings-abcdef0123456789abcdef01.json', sessionId: 'abcdef0123456789abcdef01', target })
     const e = { seq: 1, kind: 'Stop', payload: { hook_event_name: 'Stop' } }
     hooks.claude.event('abcdef0123456789abcdef01', e)
     expect(h.helperEvent).toHaveBeenCalledWith('abcdef0123456789abcdef01', e)
     hooks.claude.ended('abcdef0123456789abcdef01')
     expect(h.helperEnded).toHaveBeenCalledWith('abcdef0123456789abcdef01')
+    expect(hooks.claude.launchKinds).toBeUndefined()
+    expect(hooks.claude.keptOnGateway).toBeUndefined()
+
+    // Codex: no settings file to switch; the kinds its package declares go in
+    // its launch, and one kept with its hooks on the gateway is still kept.
+    expect(hooks.codex.useHelperHooks).toBeUndefined()
+    expect(hooks.codex.keptOnGateway).toBe(true)
+    h.providers = {}
+    expect(hooks.codex.launchKinds!()).toBeUndefined()
+    h.providers = { codex: {} }
+    expect(hooks.codex.launchKinds!()).toBeUndefined()
+    h.providers = { codex: { heldHookKinds: ['SessionStart', 'PermissionRequest'] } }
+    expect(hooks.codex.launchKinds!()).toEqual(['SessionStart', 'PermissionRequest'])
+    h.providers = {}
+    h.helperTaking.mockReturnValueOnce(false)
+    expect(hooks.codex.taking()).toBe(false)
+    const ce = { seq: 2, kind: 'PermissionRequest', payload: { hook_event_name: 'PermissionRequest' } }
+    hooks.codex.event('abcdef0123456789abcdef02', ce)
+    expect(h.helperEvent).toHaveBeenCalledWith('abcdef0123456789abcdef02', ce)
+    hooks.codex.ended('abcdef0123456789abcdef02')
+    expect(h.helperEnded).toHaveBeenCalledWith('abcdef0123456789abcdef02')
   })
 })
 

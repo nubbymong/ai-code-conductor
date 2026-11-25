@@ -275,7 +275,7 @@ let kept: KeptPty | null
 /** Each take-over the stand-in helper was asked for. */
 let asked: Array<{ sessionId: string; provider: string; size: { cols: number; rows: number }; account?: string | null }>
 
-function keepFor(sessionId: string, folder: string | null = LAUNCH_FOLDER, rec: { account?: string | null; hookFolder?: string | null; at?: number } = {}): void {
+function keepFor(sessionId: string, folder: string | null = LAUNCH_FOLDER, rec: { account?: string | null; hookFolder?: string | null; at?: number; hooks?: 'holder' } = {}): void {
   setKeptTakeOver((sid, provider, size, account) => {
     asked.push({ sessionId: sid, provider, size, account })
     if (sid !== sessionId) return null
@@ -290,7 +290,7 @@ function keepFor(sessionId: string, folder: string | null = LAUNCH_FOLDER, rec: 
       write: (d: string) => { p.writes.push(d) },
       resize: () => {}, clear: () => {}, pause: () => {}, resume: () => {}, kill: () => { p.kills++ },
     }
-    return { pty: pty as never, kept: { conversation: CONV, account: rec.account ?? null, hookFolder: rec.hookFolder ?? null, folder, at: rec.at ?? 0 } }
+    return { pty: pty as never, kept: { conversation: CONV, account: rec.account ?? null, hookFolder: rec.hookFolder ?? null, folder, at: rec.at ?? 0, ...(rec.hooks ? { hooks: rec.hooks } : {}) } }
   })
 }
 
@@ -537,6 +537,24 @@ describe('pty-manager.ts: a restored tab takes over the session an update kept r
     expect(h.hookFoldersRemoved).toEqual([hookFolder])
   })
 
+  it('2.1.3-beta.18 (ADR-030 S12): a Codex tab whose kept session sent its hook events through its holder (its record\'s mark): its hook file is not written again and no token is minted, its kept folder goes now, and its own hooks still name its transcript to it', () => {
+    const hookFolder = path.join(os.tmpdir(), 'codex-hooks', 'ccc-codex-hook-kept3')
+    keepFor(CODEX_SID, LAUNCH_FOLDER, { account: 'acct-b1', hookFolder, hooks: 'holder' })
+    spawnPty(fakeWin, CODEX_SID, { cwd: os.tmpdir(), provider: 'codex', codexOptions: { permissionsPreset: 'read-only' }, codexLaunch: codexLaunch() } as never)
+    // No gatewaySecret: nothing minted, nothing written (the Hooks gateway is listening).
+    expect(seen()).toEqual([...TEARDOWN, 'recordHeldToolSession', 'bindLoggingRun'])
+    expect(h.rewrites).toEqual([])
+    expect(h.hookFoldersRemoved).toEqual([hookFolder])
+    // Its hook events come through its holder, so its launch counts as hooked:
+    // a transcript its hook names is read by its own watch (here a stand-in
+    // with no reading, which says so once), never by a Claude sink.
+    const sinks = { attribute: vi.fn(), bind: vi.fn() }
+    routeHookTranscriptPath(CODEX_SID, path.join(LAUNCH_FOLDER, 'rollout-held.jsonl'), sinks)
+    expect(sinks.attribute).not.toHaveBeenCalled()
+    expect(sinks.bind).not.toHaveBeenCalled()
+    expect(h.warns.filter((w) => w.includes(`Codex session ${CODEX_SID}: a hook named a transcript`))).toHaveLength(1)
+  })
+
   it('a Codex tab whose launch is prepared on another account: asked with that account, then launched as before', () => {
     keepFor(CODEX_SID, LAUNCH_FOLDER, { account: 'acct-other' })
     spawnPty(fakeWin, CODEX_SID, { cwd: os.tmpdir(), provider: 'codex', codexOptions: { permissionsPreset: 'read-only' }, codexLaunch: codexLaunch() } as never)
@@ -625,6 +643,17 @@ describe('B1d: a session kept for a restored tab not shown, served its Conductor
     expect(holdsCodexToken(CODEX_SID)).toBe(false)
     expect(h.unregistered).toEqual([CODEX_SID])
     expect(h.records).toEqual([[CODEX_SID, 'codex']])
+    unserveUnseen(CODEX_SID)
+  })
+
+  it('2.1.3-beta.18 (ADR-030 S12): a Codex session whose hook events go through its holder (its record\'s mark): its hook file is not written again and no token is minted (its keeper takes its events); its tools are served all the same', () => {
+    h.mcpPort = 19333
+    expect(serveUnseen({ ...codexKept(), hooks: 'holder' } as Unseen, PROJECT)).toBe(true)
+    expect(h.journal).not.toContain('gatewaySecret')
+    expect(h.rewrites).toEqual([])
+    expect(holdsCodexToken(CODEX_SID)).toBe(false)
+    expect(h.records).toEqual([[CODEX_SID, 'codex']])
+    expect(h.codexRoots.map(([sid, cwd]) => [sid, cwd])).toEqual([[CODEX_SID, PROJECT]])
     unserveUnseen(CODEX_SID)
   })
 

@@ -99,6 +99,28 @@ const helperHookDeps: HelperHookDeps = {
 }
 
 /**
+ * 2.1.3-beta.18 (ADR-030 S12): a session whose CLI runs one hook command for
+ * every session of this install (Codex's forwarder, whose trust Codex keys on
+ * the command's text) has its hook events through its holder from its
+ * launch: the kinds its package declares (SessionProvider.heldHookKinds) go
+ * in the launch its holder runs, with the hook mode's variables in its
+ * environment, which the forwarder runs the hook mode from. Each event
+ * reaches the session signals module under the tab's id, as a Claude Code
+ * session's does, and waits in its holder while no app takes it. A session of
+ * it whose hook events stay on the hooks gateway is still kept at an app
+ * update: its take-over writes its hook file again, as before.
+ */
+function launchHookDeps(provider: ProviderId): HelperHookDeps {
+  return {
+    taking: () => helperHooksTaken(),
+    launchKinds: () => tryGetProvider(provider)?.heldHookKinds,
+    keptOnGateway: true,
+    event: (appPtyId, e) => helperHookEvent(appPtyId, e),
+    ended: (appPtyId) => endHelperHooks(appPtyId),
+  }
+}
+
+/**
  * A held session's Conductor tools through its holder (2.1.3-beta.11, plan
  * section B2): each tool stream its holder opens is served by the tool host
  * (conductor-mcp-server.ts serveToolStream) for the tab's session, while the
@@ -125,8 +147,9 @@ function ensureManager(): SessionHelperManager {
     root: rootDir(),
     bundled: bundledPath(),
     log: (message) => logInfo(message),
-    // Claude Code's sessions only: another provider's session keeps its hooks as they are.
-    hooks: { claude: helperHookDeps },
+    // Claude Code's sessions by their settings file; Codex's by their launch
+    // (2.1.3-beta.18). Another provider's session keeps its hooks as they are.
+    hooks: { claude: helperHookDeps, codex: launchHookDeps('codex') },
     tools: helperToolDeps,
     // 2.1.3-beta.14 B2: Codex's composer rule reads a held session's screen
     // and title from its holder (providers/codex/session-screen.ts).

@@ -188,7 +188,7 @@ describe('an app update keeps a held agent session running (S16 step 4)', () => 
     expect(logs).toContain('[session-helper] an app update: 0 held terminal(s) are let go of, for the new version to show again, and 2 agent session(s) are let go of with their CLIs running, recorded for the next start; 0 kept terminal(s) are left running')
     // Recorded before the kill: provider, conversation, account and hook folder.
     expect(keptOnDisk()).toEqual([`${claudeSid}.json`, `${otherSid}.json`].sort())
-    expect(readKept(claudeSid)).toEqual({ v: 1, session: claudeSid, label: CLAUDE_TAB, provider: 'claude', conversation: CONV, account: 'profile-mt4okz66-147e4a', hookFolder: null, folder: CWD, at: expect.any(Number) })
+    expect(readKept(claudeSid)).toEqual({ v: 1, session: claudeSid, label: CLAUDE_TAB, provider: 'claude', conversation: CONV, account: 'profile-mt4okz66-147e4a', hookFolder: null, folder: CWD, hooks: 'holder', at: expect.any(Number) })
     expect(readKept(otherSid)).toMatchObject({ session: otherSid, label: OTHER_TAB, provider: 'codex', conversation: OTHER_CONV, account: 'acct-7', hookFolder: HOOK_FOLDER })
     expect(logs).toContain(`[session-helper] ${claudeSid}: an app update lets go of this claude session of tab ${CLAUDE_TAB} with its CLI running, and records it for the next start (conversation ${CONV}, account profile-mt4okz66-147e4a, hook folder none)`)
     // The launch bindings keep each one's files at its kill while the update goes on.

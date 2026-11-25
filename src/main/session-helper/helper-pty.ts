@@ -124,6 +124,13 @@ export interface HelperPtyDriver {
    *  then goes through its holder). Undefined: the spec's. Only for this
    *  launch: the usual way keeps the spawn's own arguments. */
   launchArgs?(conn: HolderConnection): Pick<LaunchSpec, 'argv' | 'line'> | undefined
+  /** The launch on `conn` with the session's hook events through its holder
+   *  from its own environment (2.1.3-beta.18, ADR-030 S12: manager.ts
+   *  hookRoute): the environment it goes with (`env`, the spec's, with the hook
+   *  mode's variables added) and the hook kinds its holder takes
+   *  (`hookKinds`). Undefined: the spec's environment, and no `hookKinds`.
+   *  Only for this launch: the usual way keeps the spawn's own environment. */
+  launchHooks?(conn: HolderConnection, env: Readonly<Record<string, string>>): { env: Record<string, string>; hookKinds: readonly string[] } | undefined
   log(message: string): void
   /** The clock for the attach-again budget, and for the time a take-over's
    *  tab took to reach its holder's size (logged). */
@@ -569,18 +576,27 @@ export class HelperPty implements IPty {
     } catch (err) {
       this.driver.log(`[session-helper] ${this.sid}: before the launch: ${(err as Error).message}`)
     }
+    let hooks: { env: Record<string, string>; hookKinds: readonly string[] } | undefined
+    try {
+      hooks = this.driver.launchHooks?.(conn, this.spec.env)
+    } catch (err) {
+      this.driver.log(`[session-helper] ${this.sid}: before the launch: ${(err as Error).message}`)
+    }
     try {
       const launched = await conn.request({
         t: 'term.launch',
         argv: start.argv,
         cwd: this.spec.cwd,
-        env: this.spec.env,
+        env: hooks ? hooks.env : this.spec.env,
         cols: sent.cols,
         rows: sent.rows,
         // The Windows fields, only when the spec gives them: a launch without
         // them is the same frame as before they existed.
         ...(start.line !== undefined ? { line: start.line } : {}),
         ...(this.spec.conpty !== undefined ? { conpty: this.spec.conpty } : {}),
+        // 2.1.3-beta.18: only for a launch whose hook events go through its
+        // holder from its own environment; every other is the same frame as before.
+        ...(hooks ? { hookKinds: [...hooks.hookKinds] } : {}),
       })
       if (typeof launched.pid === 'number') this.childPid = launched.pid
     } catch (err) {

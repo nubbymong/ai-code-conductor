@@ -70,9 +70,12 @@ export interface KeptLaunchBindings {
 }
 
 /** A kept session to serve while its tab is not shown (B1d): as its record
- *  names it, with the folder its CLI was launched in (null: not recorded). */
+ *  names it, with the folder its CLI was launched in (null: not recorded) and
+ *  (2.1.3-beta.18) its record's mark that its hook events go through its
+ *  holder (KeptSessionFacts `hooks`). */
 export interface KeptUnseen extends KeptLaunch {
   folder: string | null
+  hooks?: 'holder'
 }
 
 const NOTHING_KNOWN: KeptLaunchFacts = { conversation: null, account: null, hookFolder: null }
@@ -158,6 +161,12 @@ export interface KeptSessionFacts extends KeptLaunchFacts {
   folder: string | null
   /** When the update let go of it, in ms; 0 when the record does not say. */
   at: number
+  /** 2.1.3-beta.18 (ADR-030 S12): 'holder' when its launch sent its hook
+   *  events through its holder, which its take-over then takes them from (a
+   *  kept hook file is not written again); absent in a record of one whose
+   *  hook events went to the hooks gateway, or one 2.1.3-beta.17 or earlier
+   *  wrote. */
+  hooks?: 'holder'
 }
 
 /** A session the helper kept for a tab, now taken over: its terminal, and

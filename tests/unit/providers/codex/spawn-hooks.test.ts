@@ -163,6 +163,21 @@ describe('buildCodexSpawn: the app\'s hooks', () => {
     expect(JSON.stringify(out)).not.toMatch(/0f8b6a2c|token/i)
   })
 
+  it('2.1.3-beta.18 (ADR-030 S12): the hook command is the same text for every session (Codex keeps its trust on it), and a hook mode variable the launch inherited is dropped in every spelling: only the session helper gives a held launch its own', () => {
+    // The command's text, pinned (a held session changes its launch's environment, never this).
+    expect(codexHookCommand('C:\\res\\scripts', 'win32', false)).toBe('C:\\res\\scripts\\ccc-codex-hook.cmd')
+    expect(codexHookCommand('C:\\Program Files\\res\\scripts', 'win32', false)).toBe("& 'C:\\Program Files\\res\\scripts\\ccc-codex-hook.cmd'")
+    expect(codexHookCommand('/res/scripts', 'linux', false)).toBe("node '/res/scripts/ccc-codex-hook.js'")
+    expect(codexHookConfigArgs('C:\\res\\scripts\\ccc-codex-hook.cmd').slice(0, 2)).toEqual(['-c', "hooks.SessionStart=[{hooks=[{type='command',command='C:\\res\\scripts\\ccc-codex-hook.cmd',timeout=10,async=true}]}]"])
+    resources()
+    const inherited = { AICC_HELPER_PATH: 'C:\\other\\helper\\0.1.0-0123456789ab\\aicc-helper.exe', AICC_HELPER_STORE: 'C:\\other\\helper\\store', aicc_helper_session: 'ag0123456789abcdef0123456789abcd' }
+    const out = new CodexProvider().buildSpawnCommand({ ...opts, realmLaunch: { ...launch, env: { ...launch.env, ...inherited } }, codexHooks: { hookFile } })
+    expect(out.hooksInstalled).toBe(true)
+    expect(Object.keys(out.env).filter((k) => k.toUpperCase().startsWith('AICC_HELPER_'))).toEqual(process.platform === 'win32' ? [] : ['aicc_helper_session'])
+    expect(out.env.CLAUDE_MULTI_SESSION_ID).toBe('sess-1')
+    expect(out.env[CODEX_HOOK_FILE_ENV]).toBe(hookFile)
+  })
+
   it('without a hook file (the Hooks gateway off or not listening): no hooks, nothing named', () => {
     resources()
     const out = new CodexProvider().buildSpawnCommand(opts)
