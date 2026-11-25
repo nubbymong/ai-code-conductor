@@ -35,7 +35,8 @@
 //    retry's 5 s leaves it untyped though its incident is still on.
 //
 // Mutants this must catch: a Codex retry written raw with Enter, also at the
-// real wiring in index.ts (send: submitLine); a retry that was not delivered
+// real wiring in index.ts (send: a raw line and Enter, as the module's
+// submitLine typed until 2.1.3-beta.18 section 4); a retry that was not delivered
 // and is not logged; a take-back that clears the user's typing; a retry's
 // wait counted from when its turn comes; an incident check dropped or not
 // asked before typing.
@@ -213,7 +214,7 @@ describe('WatchdogManager: a Codex session\'s retry, by the Codex composer rule'
     const block = index.slice(at, end)
     expect(block).toContain('send: (sessionId, text, stillWanted) => submitRetry(sessionId, text, stillWanted)')
     expect(block).not.toMatch(/^\s*write\s*:/m)
-    // Calls only: the comment in the block names submitLine's rule.
+    // Calls only (a comment in the block may name the removed submitLine).
     expect(block).not.toMatch(/\bsubmitLine\s*\(/)
   })
 

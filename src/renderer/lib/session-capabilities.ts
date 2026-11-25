@@ -19,6 +19,7 @@
  * the same machine on every session type.
  */
 import type { Session } from '../stores/sessionStore'
+import type { ProviderId } from '../../shared/providers'
 
 export type CommandTarget = 'claude' | 'partner'
 export type AgentId = 'claude' | 'codex'
@@ -61,7 +62,8 @@ export interface SessionCapabilities {
   /** Snap types an English prompt into the main pane -- nonsense on a shell. */
   canSendImageToAgent: boolean
   /** How the main pane's agent takes a saved image's line when main did not
-   *  paste the image (ImageLine); null for a plain shell, which gets none. */
+   *  paste the image (ImageLine); null for a plain shell, or for a provider
+   *  with no line of its own, which get none. */
   imageLine: ImageLine | null
   /** A session with no saved config has no "this config" to scope to. */
   hasConfig: boolean
@@ -79,8 +81,10 @@ export interface SessionCapabilities {
 }
 
 const AGENT_NAMES: Record<AgentId, string> = { claude: 'Claude', codex: 'Codex' }
-/** Each agent's image line (ImageLine): a new agent says its own here. */
-const IMAGE_LINES: Record<AgentId, ImageLine> = { claude: 'enter', codex: 'composer' }
+/** Each provider's image line (ImageLine), or null for one with none. Keyed
+ *  by ProviderId, so a provider added to PROVIDER_IDS is a compile error here
+ *  until its line is decided; a provider is never given another's line. */
+const IMAGE_LINES: Readonly<Record<ProviderId, ImageLine | null>> = { claude: 'enter', codex: 'composer' }
 
 export function sessionCapabilities(session: CapabilitySource | null | undefined): SessionCapabilities {
   const provider: AgentId = session?.provider === 'codex' ? 'codex' : 'claude'
@@ -105,7 +109,12 @@ export function sessionCapabilities(session: CapabilitySource | null | undefined
     logsEmptyReason,
     canIndexLogs: logsEmptyReason === null,
     canSendImageToAgent: !shellOnly,
-    imageLine: agent ? IMAGE_LINES[agent] : null,
+    // By the record's own provider, not `agent` (which reads every provider
+    // that is not Codex as Claude Code): a record with no provider is read as
+    // `provider` reads it (Claude Code), and a provider with no line here gets
+    // none. (`provider`, not a provider's name, as the fallback: the
+    // provider-name ratchet counts an id defaulted to a name.)
+    imageLine: shellOnly ? null : (IMAGE_LINES[session?.provider ?? provider] ?? null),
     hasConfig: !!session?.configId,
     isAsk: session?.kind === 'ask',
     runsOn,

@@ -44,6 +44,20 @@ The ownership test counts the two packages' typing sites with their reasons
 (its two new module-shape checks red on d0be048e). Mutant caught: Claude
 Code's run screen put back as the prompt door's fall-through.
 
+Review fixes (the same day). The renderer's image line is keyed by ProviderId
+and read from the record's own provider, so a provider with no line gets none
+(it read every provider that is not Codex as Claude Code, so a new provider's
+session got Claude Code's line after main's `not-taken`); adding a provider is
+a compile error there until its line is decided. submitLine is removed: no
+src code called it once the retry became the Claude Code package's member,
+and its tests now type through submitRetry (the SSH ones through the real,
+registered Claude Code package). New: tests/unit/providers/
+run-screen-doors-wired.test.ts holds the real packages to their door members
+(every other door test hands a stand-in run screen), red with the Claude Code
+package's runScreen deleted and with the Codex package's door members dropped.
+The isAskSession port's doc now says it is the PTY manager's Codex Ask record,
+which a Claude Code Ask launch is not in.
+
 Owed. ADR-009 pass before stable (aicc_planning#320 list): what the app types
 into a PTY. A VM line on this head (plain and held, Claude Code and Codex,
 each of the four presses), run by the orchestrator's VM lane.

@@ -23,7 +23,8 @@ const PASTE_END = '\u001b[201~'
  * leave key on an SSH Persistent session (#85: the wheel opens tmux's
  * scrollback view there, and copy-mode would swallow the retry; outside it
  * the key does nothing), typed at once, as the Watchdog decides. It answers
- * nothing. This is what the module's submitLine types, byte for byte.
+ * nothing. These are the bytes the module's submitLine typed until
+ * 2.1.3-beta.18 section 4, byte for byte.
  */
 function retryClaudeLine(text: string, typing: RunScreenTyping): void {
   typing.write(`${typing.leave}${text}\r`)

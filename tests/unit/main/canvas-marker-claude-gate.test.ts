@@ -17,8 +17,10 @@
 // src/shared/claude-screen.ts) over a fake IPC hop. What reaches the session's
 // process is what the mocked node-pty records.
 //
-// Mutant this must catch: submitMarker's Claude branch calling
-// submitLine(sessionId, line) in place of queueClaudeMarkerLine.
+// Mutant this must catch: the Claude Code package's marker member typing the
+// line and Enter at once, in one write (the Watchdog retry's way, as the
+// module's submitLine did until 2.1.3-beta.18 section 4), in place of
+// queueClaudeMarkerLine.
 import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from 'vitest'
 import * as fs from 'fs'
 import * as os from 'os'

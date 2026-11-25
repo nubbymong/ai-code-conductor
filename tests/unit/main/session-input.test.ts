@@ -18,8 +18,10 @@
 //    is chunked, as writePty does for every submit; an SSH Persistent
 //    session's (over fake ports: a fresh copy of the module, the session
 //    wrapped in tmux) is the leave key, the line and Enter in one write. The
-//    SSH flow's own proof that such a session is wrapped, and submitLine's
-//    leave key in it, is session-input-ssh.test.ts. A Codex session's goes to
+//    SSH flow's own proof that such a session is wrapped, and the retry's
+//    leave key in it, is session-input-ssh.test.ts. (submitLine, which these
+//    cases were first written against, is gone since 2.1.3-beta.18 section 4:
+//    the Claude Code package's retry member types the same bytes.) A Codex session's goes to
 //    the run screen's submit with a 5 s ready wait and answers its result,
 //    never written raw; the wait's end is fixed at the call (readyBy) and the
 //    Watchdog's incident check is handed on with it (PR #746 review; red on
@@ -238,7 +240,7 @@ doors.claude = (await import('../../../src/main/providers/claude/run-screen')).C
 doors.codexDoorMembers = (await import('../../../src/main/providers/codex/run-screen-doors')).codexDoorMembers
 
 const { spawnPty, killPty, gracefulExitPty, isSessionWritable } = await import('../../../src/main/pty-manager')
-const { submitLine, submitRetry, RETRY_CODEX_READY_WAIT_MS, submitMarker, askQuestion, handOffAskQuestion, ASK_READY_WAIT_MS, setSessionInputPorts, pasteEnvelope, sendExitKeys } = await import('../../../src/main/session-input')
+const { submitRetry, RETRY_CODEX_READY_WAIT_MS, submitMarker, askQuestion, handOffAskQuestion, ASK_READY_WAIT_MS, setSessionInputPorts, pasteEnvelope, sendExitKeys } = await import('../../../src/main/session-input')
 type Run = Parameters<typeof sendExitKeys>[1]
 const { MARKER_FALLBACK_FLUSH_MS } = await import('../../../src/main/canvas/canvas-marker-queue')
 const { IPC } = await import('../../../src/shared/ipc-channels')
@@ -302,7 +304,7 @@ afterAll(() => {
   if (h.resources) { try { fs.rmSync(h.resources, { recursive: true, force: true }) } catch { /* best effort */ } }
 })
 
-describe('submitRetry: the Watchdog\'s retry into a Claude Code session is submitLine\'s', () => {
+describe('submitRetry: the Watchdog\'s retry into a Claude Code session is the line and Enter in one write', () => {
   it('a local session: exactly the line and Enter, once, and no answer', async () => {
     const term = await claudeSession()
     expect(submitRetry(SID, 'continue')).toBeUndefined()
@@ -764,7 +766,9 @@ describe('the ports: registered once, by the PTY manager, when it loads', () => 
       run: () => undefined, tmuxWrapped: () => true, providerOf: () => 'codex' as const, isAskSession: () => true,
     }
     expect(() => setSessionInputPorts(other)).toThrow(/already registered/)
-    submitLine(SID, 'continue')
+    // The first ports' providerOf reads the session as Claude Code's, so the
+    // retry is its line and Enter, into its own terminal.
+    submitRetry(SID, 'continue')
     expect(term.writes).toEqual(['continue\r'])
     expect(redirected).toEqual([])
   })
@@ -775,7 +779,6 @@ describe('the ports: registered once, by the PTY manager, when it loads', () => 
     vi.resetModules()
     const fresh = await import('../../../src/main/session-input')
     const before = allWrites()
-    expect(() => fresh.submitLine(SID, 'continue')).toThrow(/has not registered its ports/)
     expect(() => fresh.submitRetry(SID, 'continue')).toThrow(/has not registered its ports/)
     expect(() => fresh.submitMarker(SID, MARKER)).toThrow(/has not registered its ports/)
     expect(() => fresh.handOffAskQuestion(fakeWin, SID, 'type this')).toThrow(/has not registered its ports/)

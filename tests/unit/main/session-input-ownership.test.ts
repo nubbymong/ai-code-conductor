@@ -8,7 +8,7 @@
 // text, which the renderer asks for over pty:submitPrompt. Since 2.1.3-beta.10
 // section A2 the Watchdog's retry comes in through submitRetry, for both CLIs,
 // and typeKeys, the raw writer a Codex retry was typed through, is gone.
-// Every other caller asks the module (submitRetry, submitLine, submitMarker,
+// Every other caller asks the module (submitRetry, submitMarker,
 // handOffAskQuestion, pasteEnvelope, submitPrompt); sendExitKeys, which skips the quit's
 // own checks (a CLI the app started, no tmux-persistent remote), is the PTY
 // manager's quit's only (beta.9 A2); askQuestion, which skips the Ask check, is the PTY
@@ -209,7 +209,7 @@ const ALLOWED: Record<string, Record<string, Allowed>> = {
   // Code package's run screen. Each types only through the typing its door
   // hands it (the write port), and only for a session the package runs.
   'src/main/providers/claude/run-screen.ts': {
-    retryClaudeLine: { count: 1, why: "the Watchdog's retry into a Claude Code session: the leave key, the line and Enter in one write (submitLine's bytes)", until: 'S13 (once main reads a Claude Code screen)' },
+    retryClaudeLine: { count: 1, why: "the Watchdog's retry into a Claude Code session: the leave key, the line and Enter in one write (the bytes submitLine typed)", until: 'S13 (once main reads a Claude Code screen)' },
     sendClaudePrompt: { count: 2, why: "a prompt button's Send into a Claude Code session: the text, then Enter as its own write", until: 'S13 (once main reads a Claude Code screen)' },
     pasteClaudeImage: { count: 3, why: "an image into a Claude Code session (X1.2): the path as a bracketed paste, the sentence, then Enter, each its own write", until: 'stays' },
   },
@@ -992,7 +992,7 @@ describe('the check sees each way of typing into a session (verify the verifier)
   }
 
   const clean: Array<[string, string, string?]> = [
-    ['the module\'s submitLine', `import { submitLine } from './session-input'\nsubmitLine(id, 'continue')`],
+    ['the module\'s submitRetry', `import { submitRetry } from './session-input'\nsubmitRetry(id, 'continue')`],
     // 2.1.3-beta.18 section 4: what the PTY manager reaches the run screens
     // through, and the typing's reads that type nothing.
     ['the module\'s closeRunScreens and resizeRunScreens', `import { closeRunScreens, resizeRunScreens } from './session-input'\ncloseRunScreens(id)\nresizeRunScreens(id, 80, 24)`, 'src/main/pty-manager.ts'],
@@ -1101,7 +1101,7 @@ describe('the check sees each way of typing into a session (verify the verifier)
 
   it('the door check sees askQuestion however it is reached: imported, renamed, from a namespace, a require, a dynamic import, destructured or re-exported', () => {
     const names = (code: string, file = 'src/main/feature.ts'): string[] => doorReads(code, file).map((r) => r.name)
-    expect(names(`import { askQuestion as ask, submitLine } from './session-input'`)).toEqual(['askQuestion', 'submitLine'])
+    expect(names(`import { askQuestion as ask, submitRetry } from './session-input'`)).toEqual(['askQuestion', 'submitRetry'])
     expect(names(`import * as input from './session-input'\ninput.askQuestion(w, id, q)`)).toEqual(['askQuestion'])
     expect(names(`const input = require('../session-input')\nconst again = input\nagain['askQuestion'](w, id, q)`, 'src/main/ipc/feature.ts')).toEqual(['askQuestion'])
     expect(names(`async function go() { const { askQuestion: a } = await import('./session-input'); a(w, id, q) }`)).toEqual(['askQuestion'])

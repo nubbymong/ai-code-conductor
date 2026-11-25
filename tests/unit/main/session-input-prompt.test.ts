@@ -9,7 +9,7 @@
 //    exactly one Enter as its own write 300 ms after the text's last slice
 //    went: on this computer, held by the session helper, and over SSH (an SSH
 //    Persistent session gets the tmux leave key first, in the text's write, as
-//    submitLine does, and again at the start of the Enter's write, so a wheel
+//    the Watchdog's retry does, and again at the start of the Enter's write, so a wheel
 //    turn between the two cannot leave the Enter to tmux's copy-mode). A
 //    600-byte text's Enter comes 300 ms after its third slice, not 300 ms
 //    after the call.

@@ -59,7 +59,9 @@
 // door, submitRetry: a Codex session's goes through the Codex package's
 // submit primitive, as a canvas marker's does, instead of the raw writer
 // (typeKeys, removed) the Watchdog typed it through by a rule of its own; a
-// Claude Code session's is submitLine's, unchanged. That changes how a Codex
+// Claude Code session's is the tmux leave key on an SSH Persistent session,
+// then the line and Enter in one write, unchanged (since 2.1.3-beta.18
+// section 4 the Claude Code package's retry member). That changes how a Codex
 // retry is typed, written at submitRetry, and nothing else said below.
 //
 // Each function's body moved here from the PTY manager as it was: nothing
@@ -117,7 +119,7 @@ export interface SessionInputPorts {
    *  read it), or null: a plain shell, or no session. Every door types
    *  through that provider's run screen, and only through it. */
   providerOf: (sessionId: string) => ProviderId | null
-  /** Whether the session launched as Ask Conductor (isAsk). */
+  /** Whether the PTY manager recorded the session as an Ask Conductor launch whose later questions this module types (its codexAskSessions: today only a Codex session launched as Ask; a Claude Code Ask session is not recorded, so its hand-off takes nothing here, and a new provider's Ask launch must be recorded there before its ask member is reached). */
   isAskSession: (sessionId: string) => boolean
 }
 
@@ -161,8 +163,13 @@ function notTaken(sessionId: string, what: string): void {
 
 /** What a door hands a run screen's member (RunScreenTyping) for `run`, the
  *  session's terminal process when the door was asked: the write port, the
- *  tmux leave key on an SSH Persistent session (read now, as submitLine reads
- *  it), whether the run is still the session's, and textSettled. */
+ *  tmux leave key on an SSH Persistent session (read now, when the door is
+ *  asked), whether the run is still the session's, and textSettled.
+ *  #85: the wheel opens tmux's scrollback view on an SSH Persistent session,
+ *  and copy-mode swallows input, so a pane the user scrolled up in would take
+ *  a retry or a prompt instead of the CLI. The leave key is given for every
+ *  wrapped session because main cannot see copy-mode: outside it, tmux's root
+ *  table binds that key to nothing (verified against tmux 3.4, 2026-09-20). */
 function typingFor(sessionId: string, run: IPty | undefined): RunScreenTyping {
   const p = port()
   return {
@@ -199,27 +206,6 @@ export function resizeRunScreens(sessionId: string, cols: number, rows: number):
   eachRunScreen((screen) => screen.resize(sessionId, cols, rows))
 }
 
-/**
- * #85 — submit a programmatic LINE into a session, leaving tmux copy-mode
- * first when the session is tmux-wrapped: the line and Enter in one write.
- * (The Watchdog's retry into a Claude Code session typed through this until
- * 2.1.3-beta.18 section 4; it is now the Claude Code package's retry member,
- * which writes the same bytes through the run screen's typing.)
- *
- * The wheel now opens tmux's scrollback view on an SSH Persistent session, and
- * copy-mode SWALLOWS input: a user who scrolled up to read something and then
- * walked away leaves the pane in a state where the watchdog's rate-limit retry
- * would go to the scrollback viewer instead of claude, and the session would
- * simply never resume. The leave key is prepended unconditionally for a wrapped
- * session because main cannot observe copy-mode: outside it, tmux's root table
- * binds that key to a silent no-op, so the cost of being wrong is nothing
- * (verified against tmux 3.4, 2026-09-20). Untouched for every other session.
- */
-export function submitLine(sessionId: string, line: string): void {
-  const prefix = port().tmuxWrapped(sessionId) ? TMUX_WHEEL_EXIT_KEY : ''
-  port().write(sessionId, `${prefix}${line}\r`)
-}
-
 /** 2.1.3-beta.10 section A2: how long the Watchdog's retry waits for a CLI's
  *  ready, empty composer, where its provider's rule reads one (Codex's),
  *  before it answers not delivered. */
@@ -244,7 +230,8 @@ export const RETRY_CODEX_READY_WAIT_MS = 5_000
  *   is typed: an incident that is over leaves the retry untyped (PR #746
  *   review).
  * - A Claude Code session's (on this computer, held by the session helper,
- *   or over SSH) is submitLine's bytes, the line and Enter in one write, and
+ *   or over SSH) is the leave key on an SSH Persistent session, then the
+ *   line and Enter, in one write, and
  *   answers nothing. It is typed at once, as the Watchdog decides, so
  *   `stillWanted` has nothing to guard there.
  * - A session whose provider has no retry rule (or no provider, or none
@@ -361,7 +348,7 @@ function promptOutcomeWords(result: PromptButtonResult): string {
  *
  * - Type: the text through the write port (writePty: its 256-byte slices and
  *   its launch-pending buffer still apply), after the tmux leave key for an
- *   SSH Persistent session as submitLine does, and no Enter.
+ *   SSH Persistent session as the Watchdog's retry does, and no Enter.
  * - Send, a Claude Code session (on this computer, held by the session
  *   helper or over SSH; the Claude Code package's prompt member since
  *   2.1.3-beta.18 section 4): the text as above, then Enter as its own
@@ -395,7 +382,7 @@ function promptOutcomeWords(result: PromptButtonResult): string {
  * names a prompt by its length only. Throws before the PTY manager registers
  * its ports, as every door does; otherwise never rejects.
  *
- * Claude Code's rule lived here, beside submitLine, until 2.1.3-beta.18
+ * Claude Code's rule lived here, in this module, until 2.1.3-beta.18
  * section 4 moved it, unchanged, into the Claude Code package's run screen
  * (providers/claude/run-screen.ts).
  */
