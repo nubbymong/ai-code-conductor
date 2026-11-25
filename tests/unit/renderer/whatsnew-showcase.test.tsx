@@ -666,7 +666,7 @@ describe('since tags: pinned, parseable, and curated for the newest release', ()
     'Across the app / Fable 5.2.': '2.1.3-beta.1',
     'Across the app / A Machines page.': '2.1.3-beta.6',
     'Across the app / Snap, its own overlay.': '2.1.3-beta.16',
-    'Sessions / Broadcast asks first.': '2.1.3-beta.17',
+    'Sessions / Send a prompt to every session.': '2.1.3-beta.17',
     'Sessions / Remote sessions preview.': '2.1.3-beta.17',
     'Accounts & usage / Codex accounts.': '2.1.1-beta.2',
     'Accounts & usage / Switch mid-session.': '2.1.0-beta.16',
@@ -715,7 +715,7 @@ describe('since tags: pinned, parseable, and curated for the newest release', ()
     const titlesAt = (v: typeof view, version: string): string[] =>
       W.summaryContent(v, changelog, version).sections.flatMap((s) => s.items.map((i) => i.title))
     const at18 = titlesAt(view, '2.1.3-beta.18')
-    for (const t of ['New models, no update.', 'Fable 5.2.', 'A Machines page.', 'Snap, its own overlay.', 'Broadcast asks first.', 'Remote sessions preview.']) {
+    for (const t of ['New models, no update.', 'Fable 5.2.', 'A Machines page.', 'Snap, its own overlay.', 'Send a prompt to every session.', 'Remote sessions preview.']) {
       expect(at18, t).toContain(t)
     }
     // The remote preview runs Claude Code only: with Claude Code off it goes.
@@ -724,10 +724,10 @@ describe('since tags: pinned, parseable, and curated for the newest release', ()
     // overlay and no broadcast chooser.
     const at16 = titlesAt(view, '2.1.3-beta.16')
     expect(at16).toContain('Snap, its own overlay.')
-    expect(at16).not.toContain('Broadcast asks first.')
+    expect(at16).not.toContain('Send a prompt to every session.')
     // A fresh install keeps its introduction: the 2.1.3 lines are told
     // against a before.
-    expect(titlesAt({ ...view, fresh: true }, '2.1.3-beta.18')).not.toContain('Broadcast asks first.')
+    expect(titlesAt({ ...view, fresh: true }, '2.1.3-beta.18')).not.toContain('Send a prompt to every session.')
   })
 
   it('every tag parses as a version (an unreadable tag would rank oldest and never show)', () => {

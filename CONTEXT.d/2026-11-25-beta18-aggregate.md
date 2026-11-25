@@ -95,3 +95,15 @@ label and says it is for Windows: "On Windows: Settings -> General -> Remote
 sessions through the session helper (Linux, preview)"; its test reads the
 label from SettingsPage.tsx, and checks it sits in General's Terminal
 section behind the Windows-only guard.
+
+**After the final-head review.** Two wording fixes, no code change. The
+remote sessions switch text and the Feature Guide said a remote session's own
+folder in ~/.aicc is removed when the session ends. A closed or restarted tab
+does remove it, but a quit does not wait for the unsession exec
+(remote-helper/session.ts ending(); will-quit holds only for the local
+helper's ends), so the folder a quit leaves goes at the next Check. Both texts
+now say that, and session.ts's header says it too. What's New on an update:
+the broadcast line read against beta.16, but every beta updater reads from
+2.1.2, where sending to every session is itself new; it is now "Send a prompt
+to every session." And the remote preview line names its status line and
+tools, which is what beta.18 adds.

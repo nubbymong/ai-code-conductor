@@ -241,8 +241,8 @@ const SECTIONS_213: WhatsNewSection[] = [
   {
     heading: 'Sessions',
     items: [
-      { since: '2.1.3-beta.17', upgradeOnly: true, title: 'Broadcast asks first.', desc: 'Every broadcast press asks first: All, or only the sessions you pick.' },
-      { since: '2.1.3-beta.17', upgradeOnly: true, title: 'Remote sessions preview.', desc: 'On Windows, off by default: a Claude Code SSH tab can run through the session helper on a Linux machine.', needsClaude: true },
+      { since: '2.1.3-beta.17', upgradeOnly: true, title: 'Send a prompt to every session.', desc: 'A Global prompt button can go to every open session; each press asks first: All, or the ones you pick.' },
+      { since: '2.1.3-beta.17', upgradeOnly: true, title: 'Remote sessions preview.', desc: 'On Windows, off by default: a Claude Code SSH tab runs through the session helper, with status line and tools.', needsClaude: true },
     ],
   },
 ]
