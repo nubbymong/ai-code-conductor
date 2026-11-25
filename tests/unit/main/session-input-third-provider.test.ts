@@ -35,7 +35,7 @@ const h = vi.hoisted(() => ({
   /** The stand-in third provider's run screen. */
   third: null as Record<string, unknown> | null,
   /** The Codex package's run screen as the registry hands it (close and resize only here). */
-  codex: null as Record<string, unknown> | null,
+  codexScreen: null as Record<string, unknown> | null,
 }))
 
 vi.mock('../../../src/main/providers', async () => {
@@ -44,7 +44,7 @@ vi.mock('../../../src/main/providers', async () => {
     getProvider: (id: string) => {
       if (id === 'claude') return { runScreen: CLAUDE_RUN_SCREEN }
       if (id === 'third') return { runScreen: h.third }
-      if (id === 'codex' && h.codex) return { runScreen: h.codex }
+      if (id === 'codex' && h.codexScreen) return { runScreen: h.codexScreen }
       throw new Error(`no provider ${id}`)
     },
   }
@@ -97,7 +97,7 @@ beforeEach(() => {
   h.infos = []
   h.queued = []
   h.third = noRules()
-  h.codex = null
+  h.codexScreen = null
   notices.length = 0
 })
 afterEach(async () => {
@@ -250,11 +250,11 @@ describe('the module names no provider', () => {
 describe('the PTY manager\'s close and resize of a run\'s reading', () => {
   it('reach every registered provider\'s run screen, and skip one the registry does not have', () => {
     const seen: string[] = []
-    h.codex = { ...noRules(), close: (id: string) => { seen.push(`close ${id}`) }, resize: (id: string, c: number, r: number) => { seen.push(`resize ${id} ${c}x${r}`) } }
+    h.codexScreen = { ...noRules(), close: (id: string) => { seen.push(`close ${id}`) }, resize: (id: string, c: number, r: number) => { seen.push(`resize ${id} ${c}x${r}`) } }
     input.closeRunScreens('s1')
     input.resizeRunScreens('s1', 80, 24)
     expect(seen).toEqual(['close s1', 'resize s1 80x24'])
-    h.codex = null
+    h.codexScreen = null
     expect(() => input.closeRunScreens('s1')).not.toThrow()
     expect(() => input.resizeRunScreens('s1', 80, 24)).not.toThrow()
   })
