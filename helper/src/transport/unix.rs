@@ -244,9 +244,11 @@ impl Stream {
 
     /// Wait up to `max` for the peer to close its end, which it does once it
     /// has read everything; what it still sends is read and dropped. Used
-    /// before the holder exits, so its last message is not cut off.
+    /// before the holder exits, so its last message is not cut off. It reads
+    /// through `Stream::read`, so on macOS it sees the close however the
+    /// wakeup goes (`WAKE_RECHECK`).
     pub fn wait_peer_close(&self, max: Duration) {
-        let mut s = match self.inner.try_clone() {
+        let mut s = match self.try_clone() {
             Ok(s) => s,
             Err(_) => return,
         };
@@ -271,10 +273,17 @@ impl Read for Stream {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         #[cfg(target_vendor = "apple")]
         {
+            // The socket's own read limit, as `set_read_timeout` set it on any
+            // handle of this connection; None waits for ever. A limit that
+            // cannot be read is no reason to wait for ever, nor to fail the
+            // read: macOS refuses socket options once a connection has ended
+            // both ways (`set_unless_ended`), and there a read never waits, so
+            // the plain read below gives what is still buffered, then the end,
+            // as every caller expects.
             if !buf.is_empty() {
-                // The socket's own read limit, as `set_read_timeout` set it
-                // on any handle of this connection; None waits for ever.
-                wait_readable(self.inner.as_raw_fd(), self.inner.read_timeout().unwrap_or(None))?;
+                if let Ok(limit) = self.inner.read_timeout() {
+                    wait_readable(self.inner.as_raw_fd(), limit)?;
+                }
             }
         }
         self.inner.read(buf)
@@ -1028,6 +1037,32 @@ mod tests {
         assert_eq!(r.read(&mut buf).unwrap(), 2);
         w.shutdown_write();
         assert_eq!(r.read(&mut buf).unwrap(), 0, "the end of the stream after the peer ended its writing");
+    }
+
+    /// A limit longer than one `WAKE_RECHECK` (1 s on macOS): the wait goes
+    /// on past the first recheck to the whole limit, and bytes that come
+    /// after the first recheck are read.
+    #[test]
+    fn a_read_longer_than_one_recheck_keeps_its_whole_limit() {
+        let (mine, theirs) = UnixStream::pair().unwrap();
+        let mut r = Stream::new(mine).unwrap();
+        let mut w = Stream::new(theirs).unwrap();
+        r.set_read_timeout(Some(Duration::from_millis(1300))).unwrap();
+        let mut buf = [0u8; 16];
+        let started = Instant::now();
+        let e = r.read(&mut buf).expect_err("nothing was sent");
+        let took = started.elapsed();
+        assert!(super::super::is_timeout(&e), "{e:?}");
+        assert!(took >= Duration::from_millis(1250) && took < Duration::from_secs(3), "a 1.3 s limit took {took:?}");
+        let writer = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(1100));
+            w.write_all(b"late").unwrap();
+            w
+        });
+        let started = Instant::now();
+        let n = r.read(&mut buf).unwrap_or_else(|e| panic!("bytes sent 1.1 s into a 1.3 s limit were not read: {e} after {:?}", started.elapsed()));
+        assert_eq!(&buf[..n], b"late");
+        drop(writer.join().unwrap());
     }
 
     #[test]
