@@ -166,7 +166,8 @@ export type SpawnFn = (file: string, args: readonly string[], opts: SpawnOptions
 export interface SshRunner {
   /** ssh's absolute path (Windows: the system OpenSSH, found as a plain SSH tab finds it). */
   sshPath(): string
-  /** `ssh -V`'s version, read once. */
+  /** `ssh -V`'s version: kept once read; null (no ssh, or no version read)
+   *  is asked again at the next call. */
   version(): Promise<[number, number] | null>
   spawn: SpawnFn
   env(): Record<string, string>
@@ -179,9 +180,11 @@ export function nodeSshRunner(sshPath: () => string, env: () => NodeJS.ProcessEn
     sshPath,
     version: () => {
       if (version) return version
-      // sshPath() throws when no ssh is found (sshProgram). That reads as an
-      // unknown version and is not kept, so an ssh installed later is found
-      // on the next call, and an exec meets its own failure at its spawn.
+      // sshPath() throws when no ssh is found (sshProgram), and an `ssh -V`
+      // that fails after it started (a kept path gone, its time out) reads no
+      // version. Either reads as unknown and is not kept, so the next call
+      // reads again (an ssh installed later is found), and an exec meets its
+      // own failure at its spawn. A version read is kept for the run.
       let settle: (v: [number, number] | null) => void = () => {}
       const read = new Promise<[number, number] | null>((resolve) => { settle = resolve })
       try {
@@ -192,6 +195,7 @@ export function nodeSshRunner(sshPath: () => string, env: () => NodeJS.ProcessEn
         return Promise.resolve(null)
       }
       version = read
+      void read.then((v) => { if (v === null && version === read) version = null })
       return version
     },
     spawn: (file, args, opts) => nodeSpawn(file, args, opts),

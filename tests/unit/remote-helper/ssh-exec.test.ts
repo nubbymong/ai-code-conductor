@@ -8,10 +8,26 @@
  * variables; and what a host's rc files print before the marked lines is
  * dropped, up to 64 KiB.
  */
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { EventEmitter } from 'events'
 import { PassThrough } from 'stream'
 import type { ChildProcess } from 'child_process'
+
+// No process starts in this file: the real runner's `ssh -V` (execFile) and
+// spawn are fakes, and a test that sets no answer gets an error from them.
+type ExecFileCb = (e: Error | null, stdout: string, stderr: string) => void
+const cp = vi.hoisted(() => ({ execFile: vi.fn(), spawn: vi.fn() }))
+vi.mock('child_process', async (importOriginal) => {
+  const real = await importOriginal<typeof import('child_process')>()
+  return { ...real, execFile: cp.execFile, spawn: cp.spawn, default: { ...real, execFile: cp.execFile, spawn: cp.spawn } }
+})
+beforeEach(() => {
+  cp.execFile.mockReset().mockImplementation((file: string, _a: unknown, _o: unknown, cb: ExecFileCb) => {
+    setImmediate(() => cb(new Error(`no process in this test: ${file}`), '', ''))
+    return {}
+  })
+  cp.spawn.mockReset().mockImplementation((file: string) => { throw new Error(`no process in this test: ${file}`) })
+})
 import {
   ExecStream, PREAMBLE_MAX, execArgv, markedLines, nodeSshRunner, openScriptStream, parseSshVersion, readHashLine, readScriptResult, runScript, sshEnv, sshFailure, targetProblem,
   type SshRunner,
@@ -284,5 +300,44 @@ describe('ssh exec: no ssh found', () => {
   it('only the app sets it: host text that reads like it is a plain failure', () => {
     expect(sshFailure({ code: null, stderr: 'ssh could not be started on this computer', timedOut: false })).toBeNull()
     expect(sshFailure({ code: null, stderr: '', timedOut: false, notStarted: true })).toMatch(NOT_STARTED)
+  })
+})
+
+// Found by the beta.17 final-head review: a version read is kept for the run
+// (one `ssh -V`), and only a version is: an `ssh -V` that failed after it
+// started (a kept path gone, its 10 s time out) gave null, and that null was
+// kept for the rest of the run, so every exec left out the versioned options.
+describe('ssh exec: the local ssh version', () => {
+  const answers = (...outs: Array<{ err?: Error; stderr?: string }>) => {
+    for (const o of outs) {
+      cp.execFile.mockImplementationOnce((_f: string, _a: unknown, _o: unknown, cb: ExecFileCb) => {
+        setImmediate(() => cb(o.err ?? null, '', o.stderr ?? ''))
+        return {}
+      })
+    }
+  }
+
+  it('a version read is kept for the run: one ssh -V, however many ask, at once or later', async () => {
+    answers({ stderr: 'OpenSSH_for_Windows_9.5p1, LibreSSL 3.8.2\r\n' })
+    const runner = nodeSshRunner(() => 'C:\\Windows\\System32\\OpenSSH\\ssh.exe', () => ({}))
+    expect(await Promise.all([runner.version(), runner.version()])).toEqual([[9, 5], [9, 5]])
+    expect(await runner.version()).toEqual([9, 5])
+    expect(await runner.version()).toEqual([9, 5])
+    expect(cp.execFile).toHaveBeenCalledTimes(1)
+    expect(cp.execFile.mock.calls[0].slice(0, 2)).toEqual(['C:\\Windows\\System32\\OpenSSH\\ssh.exe', ['-V']])
+  })
+
+  it('an ssh -V that fails after it started is not kept: the next call reads it again, until a version is read', async () => {
+    answers(
+      { err: Object.assign(new Error('spawn /usr/bin/ssh ENOENT'), { code: 'ENOENT' }) },
+      { err: Object.assign(new Error('Command failed'), { killed: true, signal: 'SIGTERM' }) },
+      { stderr: 'OpenSSH_9.6p1 Ubuntu-3ubuntu13.5, OpenSSL 3.0.13 30 Jan 2024\n' },
+    )
+    const runner = nodeSshRunner(() => '/usr/bin/ssh', () => ({}))
+    expect(await runner.version()).toBeNull()
+    expect(await runner.version()).toBeNull()
+    expect(await runner.version()).toEqual([9, 6])
+    expect(await runner.version()).toEqual([9, 6])
+    expect(cp.execFile).toHaveBeenCalledTimes(3)
   })
 })

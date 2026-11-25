@@ -281,7 +281,7 @@
   "src/main/remote-helper/ssh-exec.ts :: execFile(sshPath()": {
    "count": 1,
    "how": "full-path",
-   "reason": "`ssh -V`, once per run, for remote step 1 (2.1.3-beta.17 A2): the program the runner is given, which main gives as sshProgram() (remote-machines-handlers.ts), the same program found the same way as pty-manager's SSH sites: on Windows ssh.exe by the full path found in PATH's fully qualified folders; none found: sshProgram throws, nothing starts, and the version reads as unknown. Arguments as a list, no shell, an allow-listed environment (sshEnv)."
+   "reason": "`ssh -V` for remote step 1 (2.1.3-beta.17 A2), kept for the run once it gives a version (no version read, or no ssh found, is asked again at the next exec): the program the runner is given, which main gives as sshProgram() (remote-machines-handlers.ts), the same program found the same way as pty-manager's SSH sites: on Windows ssh.exe by the full path found in PATH's fully qualified folders; none found: sshProgram throws, nothing starts, and the version reads as unknown. Arguments as a list, no shell, an allow-listed environment (sshEnv)."
   },
   "src/main/remote-helper/ssh-exec.ts :: nodeSpawn(file": {
    "count": 1,
