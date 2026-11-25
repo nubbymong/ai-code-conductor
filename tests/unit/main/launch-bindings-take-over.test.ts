@@ -648,13 +648,17 @@ describe('B1d: a session kept for a restored tab not shown, served its Conductor
 
   it('2.1.3-beta.18 (ADR-030 S12): a Codex session whose hook events go through its holder (its record\'s mark): its hook file is not written again and no token is minted (its keeper takes its events); its tools are served all the same', () => {
     h.mcpPort = 19333
-    expect(serveUnseen({ ...codexKept(), hooks: 'holder' } as Unseen, PROJECT)).toBe(true)
-    expect(h.journal).not.toContain('gatewaySecret')
-    expect(h.rewrites).toEqual([])
-    expect(holdsCodexToken(CODEX_SID)).toBe(false)
-    expect(h.records).toEqual([[CODEX_SID, 'codex']])
-    expect(h.codexRoots.map(([sid, cwd]) => [sid, cwd])).toEqual([[CODEX_SID, PROJECT]])
-    unserveUnseen(CODEX_SID)
+    try {
+      expect(serveUnseen({ ...codexKept(), hooks: 'holder' } as Unseen, PROJECT)).toBe(true)
+      expect(h.journal).not.toContain('gatewaySecret')
+      expect(h.rewrites).toEqual([])
+      expect(holdsCodexToken(CODEX_SID)).toBe(false)
+      expect(h.records).toEqual([[CODEX_SID, 'codex']])
+      expect(h.codexRoots.map(([sid, cwd]) => [sid, cwd])).toEqual([[CODEX_SID, PROJECT]])
+    } finally {
+      // What it bound goes whatever failed above, so the next case starts clean.
+      unserveUnseen(CODEX_SID)
+    }
   })
 
   it('kept no longer (its tab closed, its CLI ended, the limit, a quit): its registrations and its token go, once', () => {

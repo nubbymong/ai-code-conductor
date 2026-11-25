@@ -32,6 +32,14 @@
  *
  * `--dangerously-bypass-hook-trust` is never used: it would run every hook
  * unreviewed, a repository's own included, for the whole session.
+ *
+ * 2.1.3-beta.18 (ADR-030 S12): a session the session helper holds sends its
+ * hook events through its holder instead, so an app update loses none. Its
+ * command stays this same one (the trust above holds); the launch its holder
+ * runs names the helper's hook mode in its environment (the session helper's
+ * HOOK_MODE_ENV), and the forwarder then runs that program with the event on
+ * its standard input and posts nothing. The kinds its holder takes are these
+ * six, which the package declares (its provider's heldHookKinds, index.ts).
  */
 import * as fs from 'fs'
 import * as path from 'path'
