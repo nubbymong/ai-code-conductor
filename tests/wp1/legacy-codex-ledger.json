@@ -1,8 +1,8 @@
 {
   "schema": "wp1-legacy-codex-ledger/2",
   "predicateDigest": "100a1233edebdc39a5f9004d3fba980a89ebb15b25872e52076386bc84b03153",
-  "manifestPathDigest": "e64e00237db196b73955570a39d5eedf24edf0583f85f5751a782cad921b673b",
-  "manifestHead": "83709ff41d7249e4853b68e23ac900ae6f93a7d6",
+  "manifestPathDigest": "b4eccd8b0fa7c1bf28224cd34b318821c952e72bbb29225a3b711073a2c2fc18",
+  "manifestHead": "29c047960e42b425e0271e3443479b124efb3620",
   "dispositions": {
     "retain": "unchanged observable behaviour, characterization proof",
     "move": "moved behind a package boundary and/or adapted at the call site, regression proof (newPath when relocated)",
@@ -2872,6 +2872,16 @@
       "note": "created by WP2 commit 5b"
     },
     {
+      "path": "src/main/providers/claude/run-screen.ts",
+      "predicates": [
+        "P14"
+      ],
+      "category": "LAUNCH",
+      "disposition": "added",
+      "evidence": "new 2.1.3-beta.18 section 4 (aicc_planning#432) module: the Claude Code package's run screen, holding the rules the session input module typed for every session that was not Codex (the Watchdog's retry, a prompt button's Send, a canvas marker, an image paste), moved unchanged behind the package's door members; a provider with no member for a door takes nothing there (WP1.68); tests/unit/main/session-input-third-provider.test.ts, tests/unit/providers/run-screen-doors-wired.test.ts",
+      "note": "P14: comments only (Ask Conductor runs on Codex; main opens a pane for a Codex run only); no Codex code path"
+    },
+    {
       "path": "src/main/providers/claude/spawn.ts",
       "predicates": [
         "P14"
@@ -3238,6 +3248,17 @@
       "disposition": "added",
       "evidence": "new WP2 PR 3 P3.5 (rows 34, 38; parity) module: a conversation's rollout found by its id in the launch's own realm sessions folder only (a bounded walk of real folders; the file name and its session_meta id must agree), the day folders a new rollout may be in (by UTC and by local date), bounded first-line reads (WP1.68); tests/unit/providers/codex/telemetry-claim-anywhere.test.ts; WP2 PR 3 P3.5 step 2: resolveCodexResume decides whether a launch resumes a conversation exactly (its rollout in the launch's own realm) and in which directory (WP1.38); tests/unit/providers/codex/rollout-lookup.test.ts; WP2 PR 3 P3.5 fix round 1: the walk is bounded by entries and day folders and follows no link at any level, every rollout of an id is found and one is chosen (the kept directory first, then the one in its own date folder), and a resume says when no rollout records the kept directory (WP1.68); tests/unit/providers/codex/rollout-lookup.test.ts",
       "note": "created by WP2 PR 3 P3.5"
+    },
+    {
+      "path": "src/main/providers/codex/run-screen-doors.ts",
+      "predicates": [
+        "P01",
+        "P14"
+      ],
+      "category": "LAUNCH",
+      "disposition": "added",
+      "evidence": "new 2.1.3-beta.18 section 4 (aicc_planning#432) module: the Codex package's door members (retry, prompt, marker, image, ask), the Codex calls the session input module made for a session it tested as Codex, moved unchanged over the package's submit primitive and image rule (WP1.68); tests/unit/main/session-input-codex-image.test.ts, tests/unit/main/session-input-prompt.test.ts, tests/unit/providers/run-screen-doors-wired.test.ts",
+      "note": "P01: the file path; P14: the Codex package's own door rules and their comments"
     },
     {
       "path": "src/main/providers/codex/session-screen.ts",
@@ -5287,13 +5308,12 @@
     {
       "path": "src/renderer/utils/imageTransfer.ts",
       "predicates": [
-        "P05",
         "P11"
       ],
       "category": "UI-ONLY",
       "disposition": "replace",
-      "evidence": "2.1.3-beta.17 section C6 (aicc_planning#415): sendImageToCodexSession asks main's image door to paste a saved image into a Codex session on this computer as Codex's own paste; main's not-taken gets today's line by the Codex typing rule (sendImagePathToCodex); not-taken with left gets the image-at-prompt note and nothing typed; sendImageToSession hands a local Codex session there (WP1.68); tests/unit/renderer/image-transfer-codex.test.ts",
-      "note": "matched since 2.1.3-beta.17 section C6 (was not matched); P05: isCodexSession's provider === 'codex'; P11: the Codex route's names and comments"
+      "evidence": "2.1.3-beta.17 section C6 (aicc_planning#415): sendImageToCodexSession asks main's image door to paste a saved image into a Codex session on this computer as Codex's own paste; main's not-taken gets today's line by the Codex typing rule (sendImagePathToCodex); not-taken with left gets the image-at-prompt note and nothing typed; sendImageToSession hands a local Codex session there (WP1.68); tests/unit/renderer/image-transfer-codex.test.ts; 2.1.3-beta.18 section 4 (aicc_planning#432): the provider comparison is gone; every local session goes through main's image door and its image line (WP1.68); tests/unit/renderer/image-transfer-line.test.ts",
+      "note": "P05 gone since 2.1.3-beta.18 section 4; P11: the composer route's names and comments"
     },
     {
       "path": "src/renderer/utils/launchAccount.ts",
@@ -8938,6 +8958,16 @@
       "note": "created by 2.1.3-beta.10 section A1; fake ports and a fake run screen, nothing started"
     },
     {
+      "path": "tests/unit/main/session-input-third-provider.test.ts",
+      "predicates": [
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "new 2.1.3-beta.18 section 4 (aicc_planning#432) test (tests/unit/main/session-input-third-provider.test.ts): a stand-in third provider gets nothing typed at the doors that fell through to Claude Code, and its own member at each of the five doors; the module names no provider (WP1.68)",
+      "note": "P13: the registry mock's Codex run screen (close and resize) and the base port's Codex-shaped fakes"
+    },
+    {
       "path": "tests/unit/main/session-input.test.ts",
       "predicates": [
         "P04",
@@ -10145,6 +10175,17 @@
       "note": "created by WP2 PR 4 (owner answers): the provider deep imports routed"
     },
     {
+      "path": "tests/unit/providers/run-screen-doors-wired.test.ts",
+      "predicates": [
+        "P07",
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "new 2.1.3-beta.18 section 4 (aicc_planning#432) test (tests/unit/providers/run-screen-doors-wired.test.ts): the real Claude Code package's run screen offers retry, prompt, marker and image, and no ask or submit; the real Codex package's offers retry, prompt, marker, image and ask (WP1.68)",
+      "note": "created by 2.1.3-beta.18 section 4 review fixes; constructs the real CodexProvider, nothing started"
+    },
+    {
       "path": "tests/unit/pty-manager-ssh-container-entry.test.ts",
       "predicates": [
         "P13"
@@ -10896,6 +10937,16 @@
       "disposition": "added",
       "evidence": "new 2.1.3-beta.17 section C6 test (aicc_planning#415): sendImageToCodexSession asks main first; not-taken falls back to the Codex typing rule, not-taken with left gives the image-at-prompt note and types nothing; a gone session or refused path types nothing; Snap in a local Codex tab never types the raw line (WP1.68); tests/unit/renderer/image-transfer-codex.test.ts",
       "note": "created by 2.1.3-beta.17 section C6; mocked bridge"
+    },
+    {
+      "path": "tests/unit/renderer/image-transfer-line.test.ts",
+      "predicates": [
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "new 2.1.3-beta.18 section 4 (aicc_planning#432) test (tests/unit/renderer/image-transfer-line.test.ts): each session's image line (Claude Code enter, Codex composer, none for a plain shell or a provider with no line), and nothing typed for a session with none after main's not-taken; the sender reads no provider (WP1.68)",
+      "note": "P13: the mocked Codex composer rule (sendImagePathToCodex) and Codex's image line"
     },
     {
       "path": "tests/unit/renderer/image-transfer-local.test.ts",

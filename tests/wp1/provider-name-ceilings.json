@@ -2,9 +2,9 @@
   "schema": "provider-name-ceilings/2",
   "note": "Per-file ceilings of the provider-name ratchet (tests/unit/architecture/provider-name-ratchet.test.ts, which says exactly what is counted): for each TypeScript file in src/main, src/renderer, src/shared and src/preload outside the provider packages (src/main/providers and src/renderer/providers/<id>), how many comparisons with a provider name it holds, how many ids it defaults to one, how many registry lookups by a provider name it makes, how many launch styles it compares, and (in src/main/remote-helper) how many CLI flags, variables and paths it names, as they stand. A file lists the counts it holds; one it does not list is none. Lower a number when its count drops, take a count out at none and a file out when it holds none; never raise a number and never add a count or a file. `total` is the sum of `files`.",
   "total": {
-    "comparisons": 271,
+    "comparisons": 270,
     "rederivations": 91,
-    "lookups": 21,
+    "lookups": 20,
     "launchStyleTests": 6,
     "remoteCliTerms": 0
   },
@@ -96,9 +96,6 @@
       "lookups": 1
     },
     "src/main/session-helper/app-wiring.ts": {
-      "lookups": 1
-    },
-    "src/main/session-input/index.ts": {
       "lookups": 1
     },
     "src/main/session-resume-enrich.ts": {
@@ -344,9 +341,6 @@
     "src/renderer/utils/accountChip.ts": {
       "comparisons": 1,
       "rederivations": 1
-    },
-    "src/renderer/utils/imageTransfer.ts": {
-      "comparisons": 1
     },
     "src/renderer/utils/launchAccount.ts": {
       "comparisons": 1,
