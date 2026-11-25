@@ -68,3 +68,19 @@ again after, and two tabs at once each get only their own. Green on db4e4bf3
 (run 45580498626, retries 0); red with helper/ put back to its tree before
 3.1 ("aicc-helper: unknown command status", run 45580902430, a throwaway
 branch since deleted).
+
+The review's fix round (2f7968f8, 82b8a030). A tab's hook state is ended at
+its end (above). The tool stream links are one copy (tool-links.ts). The
+user's own settings file is read as Claude Code reads it (above). The live
+file now runs against a real shell what only fake answers reached before: a
+project file open to others (mode), one over the bound (size) and, by sudo
+on the runner, another user's (owner), each not read with one log line; a
+tab in the home folder reads no project or checkout file, and on the runner
+the account's ~/.claude/settings.json, made a link for the step and put back
+after, is read first; a running tab's end removal answers `held`; a Check
+sweeps one folder whose holder is gone and keeps the running tab's; each
+tab's hook state ends once. Green on 82b8a030 (run 45587703224, 13 of 13,
+retries 0). Red with the round's two fixes reverted and the owner, mode,
+size and held answers mutated (run 45587798588: those six steps red), and
+with the home folder guard and the sweep's record check mutated (run
+45587864235: those two steps red); throwaway branches since deleted.
