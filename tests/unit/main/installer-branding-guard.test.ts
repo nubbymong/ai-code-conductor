@@ -1076,7 +1076,8 @@ describe('installer: the uninstaller removes the session helper folder, and noth
     const body = bodyCode(lines, 'customUnInstall')
     const at = body.indexOf('!insertmacro RemoveUserHelperFolder')
     expect(at, 'customUnInstall inserts RemoveUserHelperFolder').toBeGreaterThan(0)
-    expect(body.slice(at - 1, at + 2)).toEqual(['${IfNot} ${isUpdated}', '!insertmacro RemoveUserHelperFolder', '${EndIf}'])
+    // The Codex pick folders' clean-up (aicc_planning #407, below) shares the guard.
+    expect(body.slice(at - 1, at + 3)).toEqual(['${IfNot} ${isUpdated}', '!insertmacro RemoveUserHelperFolder', '!insertmacro RemoveUserCodexPickFolders', '${EndIf}'])
     const inserts = lines
       .filter((l) => /^!insertmacro\s+"?RemoveUserHelperFolder(Here)?\b/.test(l.code))
       .map((l) => `${l.macro}: ${l.code}`)
@@ -1397,6 +1398,293 @@ describe('installer: the uninstaller removes the session helper folder, and noth
     }
     expect(unused(['customUnInstall'], 'un'), 'unused in the uninstaller pass').toEqual([])
     expect(unused(['customInit', 'customInstall'], 'inst'), 'unused in the installer pass').toEqual([])
+  })
+})
+
+describe('installer: the uninstaller removes this user\'s Codex pick folders from the temp folder, and nothing more (static, aicc_planning #407)', () => {
+  // A Codex tab started through the resume list makes ccc-codex-pick-<random>
+  // in the temp folder; a start removes one a kill left once it is a day old,
+  // and an uninstall with no later start left them for good. These hold what
+  // the file alone can prove; installer-nsis-behaviour.test.ts runs the
+  // macros with makensis over a real temp folder, on CI's Windows parts.
+  const read = (...p: string[]) => readFileSync(join(ROOT, ...p), 'utf-8')
+  const HERE = 'RemoveUserCodexPickFoldersHere'
+
+  it('customUnInstall inserts it once, inside ${IfNot} ${isUpdated}, right after the helper clean-up, and nowhere else', () => {
+    // After: the helper clean-up ends the terminals the session helper still
+    // holds, which could still use a pick folder. Never on an update, which
+    // keeps those sessions and their pick folders.
+    const lines = analyse(readNsh())
+    const body = bodyCode(lines, 'customUnInstall')
+    const at = body.indexOf('!insertmacro RemoveUserCodexPickFolders')
+    expect(at, 'customUnInstall inserts RemoveUserCodexPickFolders').toBeGreaterThan(0)
+    expect(body.slice(at - 2, at + 2)).toEqual(['${IfNot} ${isUpdated}', '!insertmacro RemoveUserHelperFolder', '!insertmacro RemoveUserCodexPickFolders', '${EndIf}'])
+    const inserts = lines
+      .filter((l) => /^!insertmacro\s+"?(RemoveUserCodexPickFolders(Here)?|CccIsPickFile)\b/.test(l.code))
+      .map((l) => `${l.macro}: ${l.code}`)
+    expect(inserts).toEqual([
+      'RemoveUserCodexPickFolders: !insertmacro RemoveUserCodexPickFoldersHere',
+      `${HERE}: !insertmacro CccIsPickFile "$R3" "$R8" $5`,
+      `${HERE}: !insertmacro CccIsPickFile "$R3" "$R8" $5`,
+      'customUnInstall: !insertmacro RemoveUserCodexPickFolders',
+    ])
+    // The uninstaller pass only: customUnInstall is compiled there alone, and
+    // neither macro declares a Var or a Function (-WX).
+    const all = reachableCode(lines, 'RemoveUserCodexPickFolders')
+    expect(all.filter((l) => /^(Var|Function|FunctionEnd)\b/.test(l.code))).toEqual([])
+  })
+
+  it('it runs in the copy the user started when there is one, so it reads that user\'s temp folder, and shows what it did', () => {
+    const lines = analyse(readNsh())
+    expect(bodyCode(lines, 'RemoveUserCodexPickFolders')).toEqual([
+      'Push $9',
+      'StrCpy $9 ""',
+      '${If} ${UAC_IsInnerInstance}',
+      '!insertmacro UAC_AsUser_Call Label cccPickFoldersHere ${UAC_SYNCREGISTERS}',
+      '${EndIf}',
+      '${If} $9 == ""',
+      'Call :cccPickFoldersHere',
+      '${EndIf}',
+      '!insertmacro CccPrintHelperNotes',
+      'Pop $9',
+      'Goto cccPickFoldersDone',
+      'cccPickFoldersHere:',
+      `!insertmacro ${HERE}`,
+      'Return',
+      'cccPickFoldersDone:',
+    ])
+    const all = reachableCode(lines, 'RemoveUserCodexPickFolders')
+    expect(all.filter((l) => /UAC_IsAdmin/.test(l.code))).toEqual([])
+    // Only the printer shows anything, in the copy that has a window.
+    expect(all.filter((l) => /^DetailPrint\b/.test(l.code)).map((l) => l.macro)).toEqual(['CccPrintHelperNotes', 'CccPrintHelperNotes'])
+    // $9 carries the notes back: the clean-up never saves it over them. It
+    // starts empty there (the user's copy can still hold the helper
+    // clean-up's notes), and every route adds at least one note, so the
+    // elevated copy never runs it a second time after the user's did.
+    const here = reachableCode(lines, HERE)
+    expect(here.filter((l) => /^(Push|Pop|Exch)\s+\$9\b/.test(l.code))).toEqual([])
+    const body = bodyCode(lines, HERE)
+    expect(body.filter((c) => /^StrCpy \$9\b/.test(c))).toEqual(['StrCpy $9 ""'])
+    expect(body.indexOf('StrCpy $9 ""')).toBeLessThan(body.indexOf('ReadEnvStr $R0 TEMP'))
+    const none = body.indexOf('${If} $9 == ""')
+    expect(body.slice(none, none + 3).map(quietNote)).toEqual(['${If} $9 == ""', '!insertmacro CccHelperNote "..."', '${EndIf}'])
+    expect(none).toBeGreaterThan(body.indexOf('FindClose $R1'))
+  })
+
+  it('it reads only the user\'s own temp folder, inside their user folder, and in it only names with the app\'s own prefix, compared with case', () => {
+    const lines = analyse(readNsh())
+    const body = bodyCode(lines, HERE)
+    const all = reachableCode(lines, 'RemoveUserCodexPickFolders')
+    // The temp folder the app made them in, read as its os.tmpdir() reads it
+    // on Windows: TEMP, then TMP, one trailing backslash dropped. Never NSIS's
+    // own $TEMP, which reads TMP first, so another folder when a user has set
+    // the two apart. Then a whole path, inside the user's own folder, compared
+    // canonically. A shared temp folder (Windows' own, which the system
+    // account gets) is left alone.
+    expect(all.filter((l) => /\$TEMP\b/i.test(l.code)).map((l) => l.code), 'NSIS\'s own $TEMP is not read').toEqual([])
+    expect(all.filter((l) => /^ReadEnvStr\b/.test(l.code)).map((l) => `${l.macro}: ${l.code}`), 'TEMP, then TMP').toEqual([
+      `${HERE}: ReadEnvStr $R0 TEMP`,
+      `${HERE}: ReadEnvStr $R0 TMP`,
+    ])
+    expect(all.filter((l) => /\$PROFILE\b/.test(l.code)).map((l) => `${l.macro}: ${l.code}`)).toEqual([`${HERE}: !insertmacro IsSameOrInsideCanon "$PROFILE" "$R0" $6`])
+    const temp = body.indexOf('ReadEnvStr $R0 TEMP')
+    expect(temp, 'the temp folder is read from TEMP first').toBeGreaterThan(0)
+    expect(body.slice(temp, temp + 26).map(quietNote)).toEqual([
+      'ReadEnvStr $R0 TEMP',
+      '${If} $R0 == ""',
+      'ReadEnvStr $R0 TMP',
+      '${EndIf}',
+      // One trailing backslash goes, as os.tmpdir() drops it, but never the
+      // one after a drive letter.
+      'StrCpy $5 "$R0" 1 -1',
+      'StrCpy $6 "$R0" 1 -2',
+      '${If} $5 == "\\"',
+      '${AndIf} $6 != ":"',
+      'StrCpy $R0 "$R0" -1',
+      '${EndIf}',
+      'ClearErrors',
+      'StrCpy $5 "$R0" 2 1',
+      'StrCpy $6 "$R0" 2',
+      '${If} $5 == ":\\"',
+      '${OrIf} $6 == "\\\\"',
+      '!insertmacro IsSameOrInsideCanon "$PROFILE" "$R0" $6',
+      '${If} $6 != 1',
+      '!insertmacro CccHelperNote "..."',
+      '${EndIf}',
+      '${Else}',
+      'StrCpy $6 0',
+      '!insertmacro CccHelperNote "..."',
+      '${EndIf}',
+      '${If} $6 == 1',
+      'ClearErrors',
+      'FindFirst $R1 $R2 "$R0\\ccc-codex-pick-*"',
+    ])
+    // Its own entries, by the prefix spawn.ts gives the folders.
+    const prefix = /export const CODEX_PICK_DIR_PREFIX = '([^']+)'/.exec(read('src', 'main', 'providers', 'codex', 'spawn.ts'))?.[1]
+    expect(prefix).toBe('ccc-codex-pick-')
+    expect(all.filter((l) => /^Find(First|Next)\b/.test(l.code)).map((l) => l.code)).toEqual([
+      `FindFirst $R1 $R2 "$R0\\${prefix}*"`,
+      'FindFirst $R4 $R8 "$R3\\*.*"',
+      'FindNext $R4 $R8',
+      'FindFirst $R4 $R8 "$R3\\*.*"',
+      'FindNext $R4 $R8',
+      'FindNext $R1 $R2',
+    ])
+    // The wildcard ignores case, so the name is compared again with case,
+    // and only a folder goes on.
+    const name = body.indexOf(`StrCpy $5 "$R2" ${prefix!.length}`)
+    expect(name).toBeGreaterThan(temp)
+    expect(body.slice(name, name + 4)).toEqual([
+      `StrCpy $5 "$R2" ${prefix!.length}`,
+      `\${If} $5 S== "${prefix}"`,
+      '${AndIf} ${FileExists} "$R0\\$R2\\*.*"',
+      'StrCpy $R3 "$R0\\$R2"',
+    ])
+  })
+
+  it('it never enters a link: each folder is checked before it is read, and again right before anything in it goes', () => {
+    const body = bodyCode(analyse(readNsh()), HERE)
+    const first = body.indexOf('${GetFileAttributes} "$R3" "REPARSE_POINT" $5')
+    expect(first).toBeGreaterThan(body.indexOf('StrCpy $R3 "$R0\\$R2"'))
+    // Fail closed: only a hard "0" goes on.
+    expect(body.slice(first, first + 4).map(quietNote)).toEqual([
+      '${GetFileAttributes} "$R3" "REPARSE_POINT" $5',
+      '${If} $5 != 0',
+      '!insertmacro CccHelperNote "..."',
+      '${Else}',
+    ])
+    // Read only after that check.
+    expect(body.indexOf('FindFirst $R4 $R8 "$R3\\*.*"')).toBeGreaterThan(first)
+    const again = body.indexOf('${GetFileAttributes} "$R3" "REPARSE_POINT" $5', first + 1)
+    expect(again, 'the folder is checked again').toBeGreaterThan(body.indexOf('FindClose $R4'))
+    expect(body.slice(again, again + 6).map(quietNote)).toEqual([
+      '${GetFileAttributes} "$R3" "REPARSE_POINT" $5',
+      '${If} $5 != 0',
+      '!insertmacro CccHelperNote "..."',
+      '${Else}',
+      'ClearErrors',
+      'FindFirst $R4 $R8 "$R3\\*.*"',
+    ])
+    expect(body.filter((c) => /REPARSE_POINT/.test(c))).toHaveLength(2)
+    expect(body.indexOf('Delete "$R3\\$R8"')).toBeGreaterThan(again)
+    expect(body.indexOf('RMDir "$R3"')).toBeGreaterThan(again)
+  })
+
+  it('it keeps the whole folder unless everything in it is a plain file with the list\'s own names: pick.json, or its staging name', () => {
+    const lines = analyse(readNsh())
+    const body = bodyCode(lines, HERE)
+    // One entry that is not the list's ends the look and keeps the folder;
+    // so does a folder that cannot be listed.
+    const look = body.indexOf('StrCpy $6 1')
+    expect(body.slice(look, look + 20).map(quietNote)).toEqual([
+      'StrCpy $6 1',
+      'ClearErrors',
+      'FindFirst $R4 $R8 "$R3\\*.*"',
+      '${If} ${Errors}',
+      'StrCpy $6 0',
+      '${EndIf}',
+      '${Do}',
+      '${If} $R8 == ""',
+      '${ExitDo}',
+      '${EndIf}',
+      '${If} $R8 != "."',
+      '${AndIf} $R8 != ".."',
+      '!insertmacro CccIsPickFile "$R3" "$R8" $5',
+      '${If} $5 != 1',
+      'StrCpy $6 0',
+      '${ExitDo}',
+      '${EndIf}',
+      '${EndIf}',
+      'FindNext $R4 $R8',
+      '${Loop}',
+    ])
+    const kept = body.indexOf('${If} $6 != 1', look)
+    expect(kept).toBe(look + 22)
+    expect(body.slice(kept, kept + 3).map(quietNote)).toEqual(['${If} $6 != 1', '!insertmacro CccHelperNote "..."', '${Else}'])
+
+    // The names are the app's: spawn.ts's pick file and staging pattern, and
+    // the picker's 8 random bytes in hex (scripts/lib, writePick).
+    const spawn = read('src', 'main', 'providers', 'codex', 'spawn.ts')
+    expect(spawn).toContain("export const CODEX_PICK_FILE_NAME = 'pick.json'")
+    expect(spawn).toContain('const PICK_STAGING_RE = /^pick\\.json\\.[0-9a-f]{16}\\.tmp$/')
+    expect(read('scripts', 'lib', 'codex-resume-picker-lib.js')).toContain("const tmp = `${file}.${crypto.randomBytes(8).toString('hex')}.tmp`")
+    const is = bodyCode(lines, 'CccIsPickFile')
+    expect(is.slice(0, 3)).toEqual(['StrCpy ${OUT} 0', '${If} "${NAME}" S== "pick.json"', 'StrCpy ${OUT} 1'])
+    const staging = is.indexOf('StrLen $R5 "${NAME}"')
+    expect(is.slice(staging, staging + 12)).toEqual([
+      'StrLen $R5 "${NAME}"',
+      'StrCpy $R6 "${NAME}" 10',
+      'StrCpy $R7 "${NAME}" "" -4',
+      `\${If} $R5 == ${'pick.json.'.length + 16 + '.tmp'.length}`,
+      '${AndIf} $R6 S== "pick.json."',
+      '${AndIf} $R7 S== ".tmp"',
+      'StrCpy ${OUT} 1',
+      'StrCpy $R6 10',
+      '${Do}',
+      `\${If} $R6 >= ${10 + 16}`,
+      '${ExitDo}',
+      '${EndIf}',
+    ])
+    expect(is).toContain('!insertmacro CccCharIn "$R7" "0123456789abcdef" $2')
+    // A plain file only: not a folder, not a link (a link to a file named
+    // pick.json is not the list's), and fail closed on both.
+    const plain = is.indexOf('${GetFileAttributes} "${DIR}\\${NAME}" "DIRECTORY" $R5')
+    expect(is.slice(plain - 1, plain + 6)).toEqual([
+      '${If} ${OUT} == 1',
+      '${GetFileAttributes} "${DIR}\\${NAME}" "DIRECTORY" $R5',
+      '${GetFileAttributes} "${DIR}\\${NAME}" "REPARSE_POINT" $R6',
+      '${If} $R5 != 0',
+      '${OrIf} $R6 != 0',
+      'StrCpy ${OUT} 0',
+      '${EndIf}',
+    ])
+  })
+
+  it('it never deletes recursively, by a wildcard or at the next restart: each file by its checked name, then the folder with plain RMDir', () => {
+    const lines = analyse(readNsh())
+    const all = reachableCode(lines, 'RemoveUserCodexPickFolders')
+    expect(all.filter((l) => /^RMDir\b/i.test(l.code) && /\/r\b/i.test(l.code)), 'no RMDir /r').toEqual([])
+    expect(all.some((l) => /REBOOTOK/i.test(l.code)), 'no delete is set for the next start').toBe(false)
+    expect(all.filter((l) => /^RMDir\b/i.test(l.code)).map((l) => `${l.macro}: ${l.code}`)).toEqual([`${HERE}: RMDir "$R3"`])
+    expect(all.filter((l) => /^Delete\b/i.test(l.code)).map((l) => `${l.macro}: ${l.code}`)).toEqual([`${HERE}: Delete "$R3\\$R8"`])
+    // That name has just been checked to be one of the list's own files.
+    const body = bodyCode(lines, HERE)
+    const del = body.indexOf('Delete "$R3\\$R8"')
+    expect(body.slice(del - 2, del + 1)).toEqual(['!insertmacro CccIsPickFile "$R3" "$R8" $5', '${If} $5 == 1', 'Delete "$R3\\$R8"'])
+    // The folder goes after its files, and the note says whether it did.
+    const rm = body.indexOf('RMDir "$R3"')
+    expect(body.slice(rm - 2, rm + 6).map(quietNote)).toEqual([
+      'FindClose $R4',
+      'ClearErrors',
+      'RMDir "$R3"',
+      '${If} ${FileExists} "$R3\\*.*"',
+      '!insertmacro CccHelperNote "..."',
+      '${Else}',
+      '!insertmacro CccHelperNote "..."',
+      '${EndIf}',
+    ])
+    // No other program runs.
+    expect(all.filter((l) => /taskkill|tasklist|wmic|powershell|nsExec::|ExecWait|ExecShell|\bExec\b|System::Call/i.test(l.code))).toEqual([])
+  })
+
+  it('it gives back every register but $9, in order', () => {
+    const body = bodyCode(analyse(readNsh()), HERE)
+    const pushed = body.filter((c) => /^Push\s/.test(c)).map((c) => c.split(/\s+/)[1])
+    const popped = body.filter((c) => /^Pop\s/.test(c)).map((c) => c.split(/\s+/)[1])
+    expect(popped).toEqual([...pushed].reverse())
+    // Every register it or CccIsPickFile (with CccCharIn) writes is one of them.
+    const written = new Set(
+      reachableCode(analyse(readNsh()), HERE)
+        .filter((l) => !['CccHelperNote'].includes(l.macro))
+        .map((l) => /^(?:StrCpy|StrLen|IntOp|FindFirst|FindNext)\s+(\$\w+)/.exec(l.code)?.[1] ?? /^\$\{GetFileAttributes\}\s+"[^"]*"\s+"\w+"\s+(\$\w+)/.exec(l.code)?.[1])
+        .filter((r): r is string => r !== undefined && !/^\$\{/.test(r)),
+    )
+    written.delete('$9')
+    // $cccCanon* are CanonPathPair's scratch variables, not registers.
+    for (const r of [...written]) if (/^\$cccCanon/.test(r)) written.delete(r)
+    // The name a search writes, and the answers the inserted macros write.
+    for (const r of ['$R2', '$R8', '$5', '$6', '$2']) written.add(r)
+    expect([...written].filter((r) => !pushed.includes(r)), 'written but not saved').toEqual([])
   })
 })
 
