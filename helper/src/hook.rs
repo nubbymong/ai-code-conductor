@@ -1,17 +1,22 @@
 //! `aicc-helper hook --store <folder> --session <sid>`: one hook event of a
-//! Claude Code session, passed to the session's holder (protocol section 15,
-//! capability `hooks`).
+//! session, passed to the session's holder (protocol section 15, capability
+//! `hooks`). From 2.1.3-beta.18 either option may be left out and is then
+//! read from the environment: the store from `AICC_HELPER_STORE`, the
+//! session from `AICC_HELPER_SESSION` (`parse_args_or_env`).
 //!
-//! Claude Code runs it as a command hook and writes the event as JSON on its
+//! A CLI runs it as a command hook and writes the event as JSON on its
 //! standard input. The hook mode reads that to the end, keeping at most 4 MiB,
-//! takes `hook_event_name` (one of the nine kinds the app injects; a payload
-//! that names a member twice is not an event, and an escaped lone surrogate
-//! reads as U+FFFD), cuts the payload to fit (`cut`), reads the session's
-//! record with the store's own
+//! takes `hook_event_name` (one plain word, `request::plain_word`: which
+//! kinds a session takes is its holder's to decide, from what the session's
+//! launch declared, or the nine the app injects into a Claude Code session
+//! when it declared none; a payload that names a member twice is not an
+//! event, and an escaped lone surrogate reads as U+FFFD), cuts the payload to
+//! fit (`cut`), reads the session's record with the store's own
 //! strict reader, connects to the holder with the client list mode uses (the
 //! endpoint's checks, then the hello's nonce and session), acks `core`,
-//! `local` and `hooks`, sends one `hook.event` and waits for its reply. All of
-//! it within 2 s.
+//! `local` and `hooks`, sends one `hook.event` and waits for its reply (a
+//! kind the holder does not take is answered `bad-field`). All of it within
+//! 2 s.
 //!
 //! It always exits 0 and never writes to standard output or standard error:
 //! Claude Code adds what a SessionStart or UserPromptSubmit hook prints to the
@@ -24,7 +29,7 @@ use crate::client::Client;
 use crate::frame::Body;
 use crate::hello::{self, valid_sid};
 use crate::json::{self, Value};
-use crate::request::{repeats_a_name, HOOK_KINDS};
+use crate::request::{plain_word, repeats_a_name};
 use crate::serve::HOOKS_CAP;
 use crate::store;
 use std::io::Read;
@@ -45,7 +50,12 @@ pub const MAX_STRING: usize = 4 * 1024;
 /// What is left of a payload that nothing less will fit.
 pub const KEPT_FIELDS: [&str; 5] = ["hook_event_name", "session_id", "transcript_path", "cwd", "tool_name"];
 /// The payload sits one level inside the message that carries it.
-const MAX_PAYLOAD_DEPTH: usize = json::MAX_DEPTH - 1;
+pub(crate) const MAX_PAYLOAD_DEPTH: usize = json::MAX_DEPTH - 1;
+/// The variable the store is read from when `--store` is left out (the hook
+/// and status modes, from 2.1.3-beta.18).
+pub const STORE_ENV: &str = "AICC_HELPER_STORE";
+/// The variable the session id is read from when `--session` is left out.
+pub const SESSION_ENV: &str = "AICC_HELPER_SESSION";
 /// The id of the one `hook.event` (app ids are even).
 const EVENT_ID: u64 = 2;
 /// What the hook mode acks: the frozen core, `local` and `hooks`, and never
@@ -72,7 +82,7 @@ pub fn run(args: &[String]) {
 
 /// The work; None wherever it stops, and the event is lost.
 fn deliver(args: &[String], deadline: Instant) -> Option<()> {
-    let (store_dir, sid) = parse_args(args)?;
+    let (store_dir, sid) = parse_args_or_env(args, from_env)?;
     let input = read_stdin()?;
     let (kind, payload) = event_from(&input)?;
     let rec = store::read(&store_dir, &sid)?.ok()?;
@@ -98,7 +108,7 @@ fn deliver(args: &[String], deadline: Instant) -> Option<()> {
 }
 
 /// The time left until `deadline`; None once it has passed.
-fn left(deadline: Instant) -> Option<Duration> {
+pub(crate) fn left(deadline: Instant) -> Option<Duration> {
     deadline.checked_duration_since(Instant::now()).filter(|d| !d.is_zero())
 }
 
@@ -106,6 +116,30 @@ fn left(deadline: Instant) -> Option<Duration> {
 /// not empty and the session id of its pattern. The relay (`relay.rs`) takes
 /// the same command line.
 pub(crate) fn parse_args(args: &[String]) -> Option<(PathBuf, String)> {
+    let (store_dir, sid) = given(args)?;
+    finish(store_dir, sid)
+}
+
+/// The hook and status modes' command line: as `parse_args`, except that
+/// either option may be left out, and is then read from `env` (the
+/// process's environment: `STORE_ENV`, `SESSION_ENV`). An option given wins
+/// over its variable; a variable that is empty, or not Unicode, is as good
+/// as none.
+pub(crate) fn parse_args_or_env(args: &[String], env: impl Fn(&str) -> Option<String>) -> Option<(PathBuf, String)> {
+    let (store_dir, sid) = given(args)?;
+    let store_env = if store_dir.is_none() { env(STORE_ENV) } else { None };
+    let sid_env = if sid.is_none() { env(SESSION_ENV) } else { None };
+    finish(store_dir.or(store_env.as_deref()), sid.or(sid_env.as_deref()))
+}
+
+/// The process's environment variable `name`, when it is set and Unicode.
+pub(crate) fn from_env(name: &str) -> Option<String> {
+    std::env::var(name).ok()
+}
+
+/// The options given: `--store` and `--session`, each at most once, and
+/// nothing else. None for any other command line.
+fn given(args: &[String]) -> Option<(Option<&str>, Option<&str>)> {
     let mut store_dir: Option<&str> = None;
     let mut sid: Option<&str> = None;
     let mut i = 0;
@@ -121,20 +155,25 @@ pub(crate) fn parse_args(args: &[String]) -> Option<(PathBuf, String)> {
         }
         i += 2;
     }
+    Some((store_dir, sid))
+}
+
+/// Both present, the store not empty and the session id of its pattern.
+fn finish(store_dir: Option<&str>, sid: Option<&str>) -> Option<(PathBuf, String)> {
     let store_dir = store_dir.filter(|s| !s.is_empty())?;
     let sid = sid.filter(|s| valid_sid(s))?;
     Some((PathBuf::from(store_dir), sid.to_string()))
 }
 
 /// Standard input to its end, at most `MAX_STDIN` bytes of it kept.
-fn read_stdin() -> Option<Vec<u8>> {
+pub(crate) fn read_stdin() -> Option<Vec<u8>> {
     read_capped(std::io::stdin().lock(), MAX_STDIN)
 }
 
 /// `r` to its end. None when it could not be read, or held more than `max`
 /// bytes: the rest is still read, so the writer is not cut off, and nothing
 /// of it is kept.
-fn read_capped<R: Read>(mut r: R, max: usize) -> Option<Vec<u8>> {
+pub(crate) fn read_capped<R: Read>(mut r: R, max: usize) -> Option<Vec<u8>> {
     let mut kept: Vec<u8> = Vec::new();
     let mut over = false;
     let mut chunk = vec![0u8; 64 * 1024];
@@ -182,7 +221,7 @@ fn escaped_unit(input: &[u8], at: usize) -> Option<u32> {
 /// inside a pair, as a tool's output cut in the middle of an emoji: the
 /// app's JSON.parse reads it, json.rs does not, and the event would be lost.
 /// Only escapes inside strings change; json.rs judges everything else.
-fn mend_surrogates(input: &[u8]) -> Vec<u8> {
+pub(crate) fn mend_surrogates(input: &[u8]) -> Vec<u8> {
     const HIGH: std::ops::RangeInclusive<u32> = 0xD800..=0xDBFF;
     const LOW: std::ops::RangeInclusive<u32> = 0xDC00..=0xDFFF;
     let replacement = "\u{fffd}".as_bytes();
@@ -232,17 +271,19 @@ fn mend_surrogates(input: &[u8]) -> Vec<u8> {
 }
 
 /// The event's kind and its payload, cut to fit. None when the input is not
-/// a JSON object (of at most 32 levels) whose `hook_event_name` is one of the
-/// nine kinds, or when it names one of its members twice: json.rs finds the
-/// first and the app's JSON.parse the last, so the two would read it apart.
-/// An escaped lone surrogate reads as U+FFFD (`mend_surrogates`).
+/// a JSON object (of at most 32 levels) whose `hook_event_name` is a plain
+/// word (`request::plain_word`), or when it names one of its members twice:
+/// json.rs finds the first and the app's JSON.parse the last, so the two
+/// would read it apart. Whether the session takes that kind is the holder's
+/// to decide: it knows what the session's launch declared. An escaped lone
+/// surrogate reads as U+FFFD (`mend_surrogates`).
 pub fn event_from(input: &[u8]) -> Option<(String, Value)> {
     let payload = json::parse(&mend_surrogates(input)).ok()?;
     if repeats_a_name(&payload) {
         return None;
     }
     let kind = match payload.get("hook_event_name").and_then(Value::as_str) {
-        Some(k) if HOOK_KINDS.contains(&k) => k.to_string(),
+        Some(k) if plain_word(k) => k.to_string(),
         _ => return None,
     };
     Some((kind, cut(payload)))
@@ -345,7 +386,7 @@ fn cut_string(s: &mut String) {
 mod tests {
     use super::*;
     use crate::frame::{self, Direction, Frame};
-    use crate::request::{self, Allowed, Request, MAX_HOOK_PAYLOAD};
+    use crate::request::{self, Allowed, Request, HOOK_KINDS, MAX_HOOK_PAYLOAD};
     use crate::serve::MAX_JSON_AFTER_LAUNCH;
 
     fn strings(a: &[&str]) -> Vec<String> {
@@ -371,6 +412,46 @@ mod tests {
         ] {
             assert_eq!(parse_args(&strings(bad)), None, "{bad:?}");
         }
+    }
+
+    #[test]
+    fn the_hook_and_status_modes_read_a_store_and_a_session_left_out_from_the_environment() {
+        let both = |name: &str| match name {
+            STORE_ENV => Some("/env-store".to_string()),
+            SESSION_ENV => Some("sess-env-01".to_string()),
+            _ => None,
+        };
+        let none = |_: &str| -> Option<String> { None };
+        fn read(args: &[&str], env: &dyn Fn(&str) -> Option<String>) -> Option<(PathBuf, String)> {
+            parse_args_or_env(&strings(args), env)
+        }
+        let at = |store: &str, sid: &str| Some((PathBuf::from(store), sid.to_string()));
+        // Each left out: from its variable. Each given: the option wins.
+        assert_eq!(read(&[], &both), at("/env-store", "sess-env-01"));
+        assert_eq!(read(&["--store", "/s"], &both), at("/s", "sess-env-01"));
+        assert_eq!(read(&["--session", "sess-0001"], &both), at("/env-store", "sess-0001"));
+        assert_eq!(read(&["--store", "/s", "--session", "sess-0001"], &both), at("/s", "sess-0001"));
+        // With no variables, the command line as before.
+        assert_eq!(read(&["--store", "/s", "--session", "sess-0001"], &none), at("/s", "sess-0001"));
+        for args in [&[][..], &["--store", "/s"][..], &["--session", "sess-0001"][..]] {
+            assert_eq!(read(args, &none), None, "{args:?}");
+        }
+        // A variable is held to the option's rules: an empty store, a session
+        // id that breaks its pattern.
+        let bad = |name: &str| match name {
+            STORE_ENV => Some(String::new()),
+            SESSION_ENV => Some("bad id".to_string()),
+            _ => None,
+        };
+        assert_eq!(read(&["--session", "sess-0001"], &bad), None);
+        assert_eq!(read(&["--store", "/s"], &bad), None);
+        // A command line it does not take is not saved by the variables.
+        for args in [&["--x", "1"][..], &["--store"][..], &["--store", "/s", "--store", "/t"][..], &["hook"][..]] {
+            assert_eq!(read(args, &both), None, "{args:?}");
+        }
+        // The relay's command line reads no variable.
+        assert_eq!(parse_args(&[]), None);
+        assert_eq!((STORE_ENV, SESSION_ENV), ("AICC_HELPER_STORE", "AICC_HELPER_SESSION"));
     }
 
     #[test]
@@ -419,22 +500,32 @@ mod tests {
     }
 
     #[test]
-    fn only_a_json_object_naming_one_of_the_nine_kinds_is_an_event() {
-        for kind in HOOK_KINDS {
+    fn only_a_json_object_naming_a_plain_word_kind_is_an_event() {
+        // The nine, and any other plain word: which kinds a session takes is
+        // its holder's to decide (from 2.1.3-beta.18), so another CLI's
+        // PermissionRequest is sent on to a holder whose launch declared it.
+        let longest = "K".repeat(64);
+        let mut kinds: Vec<&str> = HOOK_KINDS.to_vec();
+        kinds.extend(["PermissionRequest", "stop", longest.as_str()]);
+        for kind in kinds {
             let input = format!("{{\"session_id\":\"abc\",\"hook_event_name\":\"{kind}\"}}");
             let (k, payload) = event_from(input.as_bytes()).expect(kind);
             assert_eq!(k, kind);
             assert_eq!(payload.to_json(), input, "a small payload is kept as it is");
         }
         let deep = format!("{{\"hook_event_name\":\"Stop\",\"x\":{}{}}}", "[".repeat(32), "]".repeat(32));
+        let too_long = format!("{{\"hook_event_name\":\"{}\"}}", "K".repeat(65));
         for bad in [
             "",
             "not json",
             "[\"Stop\"]",
             "\"Stop\"",
             "{}",
-            "{\"hook_event_name\":\"PermissionRequest\"}",
-            "{\"hook_event_name\":\"stop\"}",
+            "{\"hook_event_name\":\"\"}",
+            "{\"hook_event_name\":\"Pre-Tool\"}",
+            "{\"hook_event_name\":\"session.idle\"}",
+            "{\"hook_event_name\":\"Stop \"}",
+            too_long.as_str(),
             "{\"hook_event_name\":1}",
             "{\"hook_event_name\":\"Stop\"} trailing",
             deep.as_str(),
@@ -635,7 +726,7 @@ mod tests {
             let message = hook_event(&kind, got);
             let bytes = frame::encode(&Frame::json(0, message.clone()), Direction::AppToHelper).expect("the message encodes");
             assert!(bytes.len() - 9 <= MAX_JSON_AFTER_LAUNCH, "message {n} is {} bytes", bytes.len() - 9);
-            let parsed = request::parse_allowed(&message, Allowed { local: true, hooks: true, mcp: false, screen: false });
+            let parsed = request::parse_allowed(&message, Allowed { local: true, hooks: true, mcp: false, screen: false, status: false });
             match parsed {
                 Ok(Request::HookEvent { payload, bytes, .. }) => {
                     assert_eq!(bytes, payload.to_json().len(), "payload {n}");

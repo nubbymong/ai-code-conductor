@@ -28,6 +28,7 @@ pub mod screen;
 pub mod selftest;
 pub mod serve;
 pub mod start;
+pub mod status;
 pub mod store;
 pub mod transport;
 #[cfg(windows)]
