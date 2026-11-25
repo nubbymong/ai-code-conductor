@@ -523,6 +523,12 @@ another CLI's hook events can go through its holder (S12's remaining step, secti
 and status modes read their store and session from `AICC_HELPER_STORE` and
 `AICC_HELPER_SESSION` when the command line leaves them out.
 
+2.1.3-beta.18 section 4 (aicc_planning#432; seam audit S3; component rows 3 and 14): the five
+input doors (Watchdog retry, prompt button, image, canvas marker, Ask hand-off) type through the
+run screen of the session's own provider (SessionRunScreen's retry, prompt, marker, image and ask
+members); Claude Code's typing rules moved into the Claude Code package unchanged; a provider
+with no member for a door takes nothing there; codexRunScreen is gone.
+
 P7 result (2026-11-15, Windows test machine, the skeleton holder from #685 and a silent
 install of 2.1.3-beta.4): yes. A detached holder is not in a job object, and it and its
 console child survive the app process tree being ended and the installer running; a

@@ -138,8 +138,10 @@ export interface LaunchBindingPorts {
   noteClaudeFolder(sessionId: string, launchCwd: string): void
   noteClaudeTranscript(sessionId: string, transcriptPath: string): void
   markSessionNotIndexed(sessionId: string, provider: ProviderId, since: number, now?: number): void
-  /** Closes the session's reading of the Codex run screen (its pane, or a
-   *  held run's holder's screen), which only pty-manager.ts reaches. */
+  /** Closes the session's reading in every registered provider's run screen
+   *  (Codex's pane, or a held run's holder's screen; session-input's
+   *  closeRunScreens since 2.1.3-beta.18 section 4), which only
+   *  pty-manager.ts reaches. */
   closeCodexRunScreen(sessionId: string): void
   /** Where a local agent process works, until its exit (pty-manager.ts's
    *  record for ending the runs in a folder). */

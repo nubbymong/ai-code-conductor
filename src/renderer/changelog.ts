@@ -49,7 +49,9 @@ export const changelog: ChangelogEntry[] = [
       'On Windows, Snap takes its picture with the app\'s own capture and overlay by default. If a press cannot take a picture, the earlier Snap opens for that press; to use the earlier Snap every time, choose Settings, Custom Commands, Snap, Snap on Windows: Previous.',
       'To go back to 2.1.3-beta.17, download its installer from the GitHub releases page and run it over this version.',
     ],
-    changes: [],
+    changes: [
+      { type: 'improvement', description: 'Under the hood, prompt buttons, broadcasts, canvas notes, Alt+V images and the Watchdog\'s retry now type into each session by that session\'s own assistant\'s rules, which is groundwork for more assistants; nothing you see changes.' },
+    ],
   },
   {
     version: '2.1.3-beta.17',
