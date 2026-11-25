@@ -8,7 +8,7 @@
 use aicc_helper::client::Client;
 use aicc_helper::frame::{self, Body, Direction, Frame};
 use aicc_helper::hello::{self, Hello, LOCAL_CAPS};
-use aicc_helper::hook::ACK_CAPS;
+use aicc_helper::hook::{ACK_CAPS, SESSION_ENV, STORE_ENV};
 use aicc_helper::json::{self, Value};
 use aicc_helper::pids;
 use aicc_helper::serve::HOLDER_CAPS;
@@ -193,15 +193,20 @@ impl Ran {
 /// Run `aicc-helper hook` with `args`, `input` on its standard input, the way
 /// Claude Code runs a command hook.
 fn hook_run(args: &[&str], input: &[u8]) -> Ran {
+    hook_run_with(args, input, &[])
+}
+
+/// `hook_run`, with in the hook mode's environment the variables `env`
+/// names, and neither of the two it reads a store and a session from
+/// otherwise (`hook::STORE_ENV`, `hook::SESSION_ENV`).
+fn hook_run_with(args: &[&str], input: &[u8], env: &[(&str, &str)]) -> Ran {
     let started = Instant::now();
-    let mut child = Command::new(HELPER)
-        .arg("hook")
-        .args(args)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("start the hook mode");
+    let mut command = Command::new(HELPER);
+    command.arg("hook").args(args).env_remove(STORE_ENV).env_remove(SESSION_ENV);
+    for (name, value) in env {
+        command.env(name, value);
+    }
+    let mut child = command.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().expect("start the hook mode");
     let mut stdin = child.stdin.take().expect("its standard input");
     let input = input.to_vec();
     // The hook mode may stop reading at its deadline: a write it does not
@@ -347,13 +352,19 @@ fn launch_env() -> Vec<(String, String)> {
 
 /// Launch the fake CLI from `app`'s connection.
 fn launch(app: &mut App, cwd: &Folder) {
+    launch_declaring(app, cwd, None);
+}
+
+/// Launch the fake CLI from `app`'s connection, declaring the hook kinds
+/// its session takes (`hookKinds`), or none.
+fn launch_declaring(app: &mut App, cwd: &Folder, kinds: Option<&[&str]>) {
     let id = app.id();
     let env = Value::Obj(launch_env().into_iter().map(|(k, v)| (k, Value::Str(v))).collect());
-    let launched = app.call(msg(
-        "term.launch",
-        id,
-        vec![("argv", Value::strs(&[FAKE])), ("cwd", Value::Str(cwd.arg())), ("env", env), ("cols", Value::uint(120)), ("rows", Value::uint(30))],
-    ));
+    let mut fields = vec![("argv", Value::strs(&[FAKE])), ("cwd", Value::Str(cwd.arg())), ("env", env), ("cols", Value::uint(120)), ("rows", Value::uint(30))];
+    if let Some(kinds) = kinds {
+        fields.push(("hookKinds", Value::strs(kinds)));
+    }
+    let launched = app.call(msg("term.launch", id, fields));
     assert_eq!(t_of(&launched), "term.launched", "{}", launched.to_json());
 }
 
@@ -415,7 +426,7 @@ fn hook_runs_reach_the_attached_app_in_order_and_whole() {
     let sid = "hooks-order-01";
     let held = Held(hold(&store_dir, sid));
     let mut app = App::connect(&held.0, &ACK_CAPS);
-    assert_eq!(app.client.hello.caps, vec!["core".to_string(), "local".to_string(), "hooks".to_string(), "mcp".to_string(), "away".to_string(), "screen".to_string(), "title".to_string()]);
+    assert_eq!(app.client.hello.caps, vec!["core".to_string(), "local".to_string(), "hooks".to_string(), "mcp".to_string(), "away".to_string(), "screen".to_string(), "title".to_string(), "status".to_string()]);
     launch(&mut app, &work);
     attach(&mut app);
 
@@ -490,8 +501,11 @@ fn a_hook_run_that_cannot_pass_its_event_on_exits_0_and_says_nothing() {
     }
     assert!(!missing.exists(), "the hook mode made the store");
 
-    // What came on standard input is not an event of the nine: nothing, not
-    // JSON, not an object, another kind, a name given twice, or over 4 MiB.
+    // What came on standard input is not an event this session takes:
+    // nothing, not JSON, not an object, a kind its holder (launched with no
+    // hookKinds, so the nine) does not take, a name given twice, or over
+    // 4 MiB. The hook mode sends the other kind on (its own check is the
+    // kind's shape alone) and the holder refuses it.
     let over = format!("{{\"hook_event_name\":\"Stop\",\"x\":\"{}\"}}", "x".repeat(4 * 1024 * 1024));
     for (what, input) in [
         ("nothing", Vec::new()),
@@ -793,5 +807,98 @@ fn no_hook_event_follows_term_exit_and_the_next_attach_gets_what_came_after() {
     let events = again.events(1);
     assert_eq!(num(&events[0], "seq"), Some(1), "{}", events[0].to_json());
     assert!(events[0].get("lost").is_none(), "{}", events[0].to_json());
+    end(&held.0);
+}
+
+/// Six kinds a launch may declare for a CLI other than Claude Code (section 5
+/// of the 2.1.3-beta.18 plan declares these for a held session):
+/// PermissionRequest, not one of the nine, among them.
+const DECLARED_SIX: [&str; 6] = ["SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse", "PermissionRequest", "Stop"];
+
+#[test]
+fn the_kinds_a_launch_declares_decide_which_hook_events_its_holder_takes() {
+    let _serial = one_at_a_time();
+    let store_dir = Folder::new("store-kinds");
+    let work = Folder::new("work-kinds");
+    let permission = event_input("PermissionRequest", ",\"tool_name\":\"Bash\"");
+    let notification = event_input("Notification", ",\"message\":\"Claude is waiting for your input\"");
+    let stop = event_input("Stop", "");
+
+    // A holder launched with the six: the hook mode, run as a CLI runs it,
+    // passes PermissionRequest and Stop on, and the holder refuses
+    // Notification, which is not among them. Each run is answered at once.
+    let sid = "hooks-kinds-01";
+    let declared = Held(hold(&store_dir, sid));
+    let mut app = App::connect(&declared.0, &ACK_CAPS);
+    launch_declaring(&mut app, &work, Some(&DECLARED_SIX[..]));
+    attach(&mut app);
+    for input in [&permission, &notification, &stop] {
+        let ran = hook_to(&store_dir, sid, input.as_bytes());
+        assert!(ran.quiet() && ran.took < HOOK_BOUND, "{}", ran.say());
+    }
+    let events = app.events(2);
+    for (n, (event, input)) in events.iter().zip([&permission, &stop]).enumerate() {
+        let sent = json::parse(input.as_bytes()).expect("JSON");
+        assert_eq!(num(event, "seq"), Some(n as u64 + 1), "{}", event.to_json());
+        assert_eq!(event.get("kind"), sent.get("hook_event_name"), "{}", event.to_json());
+        assert_eq!(event.get("payload"), Some(&sent), "{}", event.to_json());
+    }
+    if let Some(m) = app.next(Duration::from_secs(1)) {
+        panic!("a kind the launch did not declare reached the app: {}", m.to_json());
+    }
+    end(&declared.0);
+
+    // A holder launched without hookKinds takes the nine, as before:
+    // Notification is passed on and PermissionRequest is dropped.
+    let sid = "hooks-kinds-02";
+    let nine = Held(hold(&store_dir, sid));
+    let mut app = App::connect(&nine.0, &ACK_CAPS);
+    launch(&mut app, &work);
+    attach(&mut app);
+    for input in [&permission, &notification] {
+        let ran = hook_to(&store_dir, sid, input.as_bytes());
+        assert!(ran.quiet() && ran.took < HOOK_BOUND, "{}", ran.say());
+    }
+    let event = app.events(1).remove(0);
+    assert_eq!((num(&event, "seq"), event.get("kind").and_then(Value::as_str)), (Some(1), Some("Notification")), "{}", event.to_json());
+    if let Some(m) = app.next(Duration::from_secs(1)) {
+        panic!("PermissionRequest reached the app through a holder that declared no kinds: {}", m.to_json());
+    }
+    end(&nine.0);
+}
+
+#[test]
+fn a_hook_run_reads_a_store_and_a_session_left_out_from_the_environment() {
+    let _serial = one_at_a_time();
+    let store_dir = Folder::new("store-env");
+    let work = Folder::new("work-env");
+    let sid = "hooks-env-0001";
+    let held = Held(hold(&store_dir, sid));
+    let mut app = App::connect(&held.0, &ACK_CAPS);
+    launch(&mut app, &work);
+    attach(&mut app);
+    let store_arg = store_dir.arg();
+    let stop = event_input("Stop", "");
+
+    // Both from the environment; the session from the command line over a
+    // variable that names another; the store from the command line and the
+    // session from its variable.
+    let runs: [(&[&str], Vec<(&str, &str)>); 3] = [
+        (&[], vec![(STORE_ENV, store_arg.as_str()), (SESSION_ENV, sid)]),
+        (&["--session", sid], vec![(STORE_ENV, store_arg.as_str()), (SESSION_ENV, "hooks-other-01")]),
+        (&["--store", store_arg.as_str()], vec![(SESSION_ENV, sid)]),
+    ];
+    for (n, (args, env)) in runs.iter().enumerate() {
+        let ran = hook_run_with(args, stop.as_bytes(), env);
+        assert!(ran.quiet(), "{args:?} {env:?}: {}", ran.say());
+        let event = app.events(1).remove(0);
+        assert_eq!(num(&event, "seq"), Some(n as u64 + 1), "{args:?} {env:?}: {}", event.to_json());
+    }
+    // A session named by neither: nothing.
+    let ran = hook_run_with(&[], stop.as_bytes(), &[(STORE_ENV, store_arg.as_str())]);
+    assert!(ran.quiet(), "{}", ran.say());
+    if let Some(m) = app.next(Duration::from_secs(1)) {
+        panic!("a run with no session reached the app: {}", m.to_json());
+    }
     end(&held.0);
 }

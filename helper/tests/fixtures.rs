@@ -204,6 +204,10 @@ fn described(req: &Request) -> Value {
             if l.conpty == Conpty::Bundled {
                 m.push(("conpty", Value::str("bundled")));
             }
+            // The hook kinds the launch declared, only when it declared them.
+            if let Some(kinds) = &l.hook_kinds {
+                m.push(("hookKinds", Value::Arr(kinds.iter().map(|k| Value::Str(k.clone())).collect())));
+            }
             Value::obj(m)
         }
         Request::Attach { id, from } => {
@@ -235,13 +239,18 @@ fn described(req: &Request) -> Value {
             m.push(("count", Value::uint(*count as u64)));
             Value::obj(m)
         }
+        Request::StatusSet { id, payload, .. } => {
+            let mut m = head("status.set", *id);
+            m.push(("payload", payload.clone()));
+            Value::obj(m)
+        }
     }
 }
 
 /// A message read on a connection that acked `local` or not, and neither
 /// `hooks` nor `mcp`: the app's own ack.
 fn local_only(v: &Value, local: bool) -> Result<Request, request::Refusal> {
-    request::parse_allowed(v, Allowed { local, hooks: false, mcp: false, screen: false })
+    request::parse_allowed(v, Allowed { local, hooks: false, mcp: false, screen: false, status: false })
 }
 
 // ── local.json `hooks`: hook events (capability `hooks`) ────────────────────
@@ -249,7 +258,7 @@ fn local_only(v: &Value, local: bool) -> Result<Request, request::Refusal> {
 /// What a vector's `acked` says the connection acked; by default core,
 /// local and hooks.
 fn acked(case: &Value) -> Allowed {
-    acked_or(case, Allowed { local: true, hooks: true, mcp: false, screen: false })
+    acked_or(case, Allowed { local: true, hooks: true, mcp: false, screen: false, status: false })
 }
 
 /// What a vector's `acked` says the connection acked; `default` when it
@@ -259,7 +268,7 @@ fn acked_or(case: &Value, default: Allowed) -> Allowed {
         None => default,
         Some(caps) => {
             let has = |cap: &str| caps.iter().any(|c| c.as_str() == Some(cap));
-            Allowed { local: has("local"), hooks: has(serve::HOOKS_CAP), mcp: has(serve::MCP_CAP), screen: has(serve::SCREEN_CAP) }
+            Allowed { local: has("local"), hooks: has(serve::HOOKS_CAP), mcp: has(serve::MCP_CAP), screen: has(serve::SCREEN_CAP), status: has(serve::STATUS_CAP) }
         }
     }
 }
@@ -356,7 +365,7 @@ fn the_largest_hook_event_fits_a_frame_once_launched() {
     assert_eq!(event.len() as u64, n(largest, "event_bytes"));
     assert!(event.len() <= serve::MAX_JSON_AFTER_LAUNCH, "the largest event is {} bytes", event.len());
     // As a hook.event: the most is taken, one byte more is too large.
-    let both = Allowed { local: true, hooks: true, mcp: false, screen: false };
+    let both = Allowed { local: true, hooks: true, mcp: false, screen: false, status: false };
     let message = |p: &str| json::parse(format!("{{\"t\":\"hook.event\",\"id\":2,\"kind\":\"{kind}\",\"payload\":{p}}}").as_bytes()).expect("JSON");
     assert!(request::parse_allowed(&message(&payload), both).is_ok(), "the largest payload is refused");
     let refused = request::parse_allowed(&message(&payload_of(most + 1)), both).expect_err("a payload one byte larger");
@@ -370,7 +379,7 @@ fn tool_stream_messages_read_as_the_fixtures_say() {
     let doc = load("local.json");
     let mcp = doc.get("mcp").expect("mcp");
     let requests = mcp.get("requests").expect("requests");
-    let relay_ack = Allowed { local: true, hooks: false, mcp: true, screen: false };
+    let relay_ack = Allowed { local: true, hooks: false, mcp: true, screen: false, status: false };
     let mut ran = 0;
     for case in items(requests, "valid") {
         let name = text(case, "name");
@@ -488,7 +497,9 @@ fn kept_tool_stream_vectors_read_as_the_fixtures_say() {
 fn screen_reads_read_as_the_fixtures_say() {
     let doc = load("local.json");
     let part = doc.get("screen").expect("screen");
-    assert_eq!(strings(part, "offered"), serve::HOLDER_CAPS.to_vec());
+    // What a holder offered before the status line; one of now is the
+    // `status` part's.
+    assert_eq!(strings(part, "offered"), serve::HOLDER_CAPS[..7].to_vec());
     let l = part.get("limits").expect("limits");
     let n = |k: &str| l.get(k).and_then(Value::as_u64).unwrap_or_else(|| panic!("missing number {k}"));
     assert_eq!(n("tail_lines"), request::MAX_TAIL_LINES);
@@ -499,7 +510,7 @@ fn screen_reads_read_as_the_fixtures_say() {
     assert_eq!(n("answer_bytes"), serve::SCREEN_ANSWER_MAX as u64);
     assert_eq!(serve::SCREEN_ANSWER_MAX, frame::MAX_JSON_HELPER_TO_APP);
     let requests = part.get("requests").expect("requests");
-    let reader = Allowed { local: false, hooks: false, mcp: false, screen: true };
+    let reader = Allowed { local: false, hooks: false, mcp: false, screen: true, status: false };
     let mut ran = 0;
     for case in items(requests, "valid") {
         let name = text(case, "name");
@@ -564,6 +575,82 @@ fn acked_asks_title(case: &Value) -> bool {
     let caps = case.get("acked").and_then(Value::as_array);
     let has = |cap: &str| caps.map_or(false, |cs| cs.iter().any(|c| c.as_str() == Some(cap)));
     has(serve::SCREEN_CAP) && has(serve::TITLE_CAP)
+}
+
+// ── local.json `status`: the status line (capability `status`) and the hook
+// kinds a launch declares (`hookKinds`), from 2.1.3-beta.18 ──────────────────
+
+/// The hook kinds a vector's session declared at its launch (`declared`):
+/// None when it says null or nothing (the nine).
+fn declared(case: &Value) -> Option<Vec<String>> {
+    match case.get("declared") {
+        None | Some(Value::Null) => None,
+        Some(v) => Some(v.as_array().expect("declared is an array").iter().map(|k| k.as_str().expect("a kind").to_string()).collect()),
+    }
+}
+
+#[test]
+fn status_and_hook_kind_vectors_read_as_the_fixtures_say() {
+    let doc = load("local.json");
+    let part = doc.get("status").expect("status");
+    assert_eq!(strings(part, "offered"), serve::HOLDER_CAPS.to_vec());
+    assert_eq!(strings(part, "status_caps"), aicc_helper::status::ACK_CAPS.to_vec());
+    let env = part.get("env").expect("env");
+    assert_eq!((text(env, "store"), text(env, "session")), (hook::STORE_ENV, hook::SESSION_ENV));
+    let l = part.get("limits").expect("limits");
+    let n = |k: &str| l.get(k).and_then(Value::as_u64).unwrap_or_else(|| panic!("missing number {k}"));
+    assert_eq!(n("payload_bytes"), request::MAX_STATUS_PAYLOAD as u64);
+    assert_eq!(n("stdin_bytes"), hook::MAX_STDIN as u64);
+    assert_eq!(n("deadline_ms"), aicc_helper::status::DEADLINE.as_millis() as u64);
+    assert_eq!(n("round_ms"), serve::STATUS_EVERY.as_millis() as u64);
+    assert_eq!(n("hook_kinds"), request::MAX_HOOK_KINDS as u64);
+    assert_eq!(n("hook_kind_chars"), request::MAX_HOOK_KIND_CHARS as u64);
+    // By default a vector is read as a connection that acked core and status.
+    let status_ack = Allowed { local: false, hooks: false, mcp: false, screen: false, status: true };
+    let requests = part.get("requests").expect("requests");
+    let mut ran = 0;
+    // A launch vector tagged `os` applies on that OS only (its paths).
+    for case in items(requests, "valid").iter().filter(|c| applies(c)) {
+        let name = text(case, "name");
+        let value = json::parse(text(case, "json").as_bytes()).unwrap_or_else(|e| panic!("{name}: not JSON: {e:?}"));
+        let kinds = declared(case);
+        let req = request::parse_in_session(&value, acked_or(case, status_ack), kinds.as_deref()).unwrap_or_else(|r| panic!("{name}: refused with {}: {}", r.code, r.text));
+        assert_eq!(described(&req).to_json(), case.get("expect").expect("expect").to_json(), "{name}");
+        ran += 1;
+    }
+    let mut codes: Vec<&str> = Vec::new();
+    for case in items(requests, "invalid").iter().filter(|c| applies(c)) {
+        let name = text(case, "name");
+        let value = json::parse(text(case, "json").as_bytes()).unwrap_or_else(|e| panic!("{name}: not JSON: {e:?}"));
+        let kinds = declared(case);
+        let refusal = request::parse_in_session(&value, acked_or(case, status_ack), kinds.as_deref()).expect_err(name);
+        assert_eq!(refusal.code, text(case, "error"), "{name}: {}", refusal.text);
+        codes.push(refusal.code);
+        ran += 1;
+    }
+    assert!(ran >= 12, "only {ran} status and hook kind vectors");
+    for code in [request::CODE_BAD_FIELD, request::CODE_TOO_LARGE, request::CODE_UNKNOWN_TYPE] {
+        assert!(codes.contains(&code), "no vector refused with {code}");
+    }
+}
+
+#[test]
+fn status_messages_are_the_documented_bytes() {
+    let doc = load("local.json");
+    let part = doc.get("status").expect("status");
+    let n = |v: &Value, k: &str| v.get(k).and_then(Value::as_u64).unwrap_or_else(|| panic!("missing number {k}"));
+    for case in items(part, "messages") {
+        let name = text(case, "name");
+        let message = serve::status_message(n(case, "seq"), case.get("payload").expect("payload").clone());
+        assert_eq!(message.to_json(), text(case, "json"), "{name}");
+        assert!(frame::encode(&frame::Frame::json(0, message), Direction::HelperToApp).is_ok(), "{name}");
+    }
+    let taken = part.get("taken").expect("taken");
+    assert_eq!(serve::status_taken(n(taken, "re"), n(taken, "seq")).to_json(), text(taken, "json"));
+    // What the status mode sends for a status, as its vector says.
+    let set = part.get("set").expect("set");
+    let payload = aicc_helper::status::payload_from(text(set, "stdin").as_bytes()).expect("a status");
+    assert_eq!(aicc_helper::status::status_set(payload).to_json(), text(set, "json"));
 }
 
 #[test]
