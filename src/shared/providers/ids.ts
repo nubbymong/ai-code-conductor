@@ -14,6 +14,11 @@ const PROVIDER_ID_ORDER: Readonly<Record<ProviderId, number>> = { claude: 0, cod
 export const PROVIDER_IDS: readonly ProviderId[] =
   (Object.keys(PROVIDER_ID_ORDER) as ProviderId[]).sort((a, b) => PROVIDER_ID_ORDER[a] - PROVIDER_ID_ORDER[b])
 
+/** The provider a session runs when what started it names none: a config or
+ *  a tab saved before the app had a second provider (SpawnOptions.provider's
+ *  default, src/main/providers/types.ts). One decision, read here. */
+export const DEFAULT_PROVIDER_ID: ProviderId = 'claude'
+
 export function isProviderId(value: unknown): value is ProviderId {
   return typeof value === 'string' && (PROVIDER_IDS as readonly string[]).includes(value)
 }

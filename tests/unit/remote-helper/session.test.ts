@@ -53,7 +53,7 @@ function holdAnswer(c: ExecCall, h: FakeHolder): FakeAnswer {
 }
 
 function tab(ssh: FakeSsh, appPtyId: string, logs: string[] = []) {
-  const spec = remoteLaunchSpec(MACHINE, ['--model', 'opus[1m]'], { CLAUDE_CODE_DISABLE_MOUSE: '1' }, '~/work', 100, 30)
+  const spec = remoteLaunchSpec(MACHINE, { program: MACHINE.claudePath!, args: ['--model', 'opus[1m]'], env: { CLAUDE_CODE_DISABLE_MOUSE: '1' } }, {}, '~/work', 100, 30)
   const pty = new RemoteHelperPty({ appPtyId, machine: MACHINE, installId: INSTALL, runner: ssh, spec, log: (m) => logs.push(m), reconnectDelaysMs: [10, 10], sleep: (ms) => new Promise((r) => setTimeout(r, ms)) })
   let out = ''
   pty.onData((d) => { out += d })
