@@ -19,10 +19,10 @@ import type { TrainingSection, TrainingStep } from '../../../src/renderer/traini
 vi.mock('../../../src/renderer/hooks/useThemeController', () => ({ useResolvedTheme: () => 'dark' }))
 ;(window as any).electronPlatform = 'win32'
 
-const { trainingSteps } = await import('../../../src/renderer/training-steps')
+const { trainingSteps, stepsForAssistants, SECTION_LABELS } = await import('../../../src/renderer/training-steps')
 const { useSettingsStore, DEFAULT_SETTINGS } = await import('../../../src/renderer/stores/settingsStore')
 const { useProviderAccountsStore } = await import('../../../src/renderer/stores/providerAccountsStore')
-const { choiceSettings } = await import('../../../src/renderer/onboarding/provider-choice')
+const { choiceSettings, onlyAssistantInUse } = await import('../../../src/renderer/onboarding/provider-choice')
 const { default: FeatureGuidePage } = await import('../../../src/renderer/components/FeatureGuidePage')
 const { default: TrainingWalkthrough } = await import('../../../src/renderer/components/TrainingWalkthrough')
 const { snapshot } = await import('./accounts-snapshot-harness')
@@ -75,11 +75,14 @@ describe("a Feature Guide card's summary", () => {
     expect(Array.from(p.querySelectorAll('code')).map((c) => c.textContent)).toContain('/effort ultracode')
   })
 
-  it('every card the guide shows has no mark left as text in its summary or its highlights', async () => {
+  it('every card the guide shows, with either assistant alone or both, has no mark left as text in its summary or its highlights', async () => {
     const bad: string[] = []
-    for (const section of SECTIONS) {
-      await openGuideAt(section)
-      bad.push(...sweepGuideCards(section, cardsOf(section)))
+    for (const choice of ['both', 'claude', 'codex'] as const) {
+      await act(async () => { useSettingsStore.setState({ settings: { ...DEFAULT_SETTINGS, ...choiceSettings(choice) }, isLoaded: true }) })
+      for (const section of SECTIONS) {
+        await openGuideAt(section)
+        bad.push(...sweepGuideCards(section, cardsOf(section, choice)).map((l) => `${choice}: ${l}`))
+      }
     }
     expect(bad).toEqual([])
   })
@@ -89,12 +92,17 @@ describe("a Feature Guide card's summary", () => {
 // page (#426, the same shape as the tip sweep's): the sweep used to take every
 // summary and highlights element it found and check those, so a section that
 // drew no cards, or a card that drew no summary or list, passed it. Now each
-// card the data puts in the section must be on the page, with the summary the
-// data gives it and every highlight in the list, each with text and none with a
-// mark left as text. One line per problem, naming the section and the element.
-const SECTIONS: readonly TrainingSection[] = ['getting-started', 'productivity', 'integrations', 'admin', 'tips']
-/** The cards of a section: all of them, as both assistants are in use here. */
-const cardsOf = (section: TrainingSection): TrainingStep[] => trainingSteps.filter((s) => s.section === section)
+// card the data puts in the section must be on the page, with a summary element
+// when the data gives it a summary and one list item for each highlight the data
+// gives it, each with text and none with a mark left as text. One line per
+// problem, naming the section and the element. The sections come from the data
+// (SECTION_LABELS), so a new one is swept, and one the page does not offer fails
+// openGuideAt's rail check. The cards are the ones the page takes for a choice of
+// assistants (stepsForAssistants), so a Codex-only card's own copy is read too.
+const SECTIONS = Object.keys(SECTION_LABELS) as TrainingSection[]
+/** The cards of a section the guide shows for a choice of assistants, with that mode's copy, as the page takes them (stepsForAssistants). */
+const cardsOf = (section: TrainingSection, choice: 'both' | 'claude' | 'codex' = 'both'): TrainingStep[] =>
+  stepsForAssistants(trainingSteps, onlyAssistantInUse(choiceSettings(choice))).filter((s) => s.section === section)
 
 function sweepGuideCards(section: TrainingSection, cards: readonly TrainingStep[]): string[] {
   const bad: string[] = []

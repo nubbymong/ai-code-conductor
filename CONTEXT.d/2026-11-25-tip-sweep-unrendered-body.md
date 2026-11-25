@@ -13,9 +13,18 @@ Tip sweep: each tip text must put a `tip-card-body` element on screen, with text
 in it, before the mark check; a miss is one line naming the tip, the variant and
 the field. The sweep also counts the texts it sent through the card, and an empty
 count fails. Guide sweep: it now runs from the data. Each card the data puts in a
-section must be on the page, with the summary the data gives it and every
-highlight in its list, each with text and none with a mark; one line per
-problem. A section with no card in the data is a line too.
+section must be on the page, with a summary element when the data gives it a
+summary and one list item per highlight the data gives it, each with text and
+none with a mark; one line per problem. A section with no card in the data is a
+line too. The sweep runs three times: with both assistants, with Claude Code
+alone and with Codex alone, each time over the cards the page takes for that
+choice (`stepsForAssistants`), so the Codex-only copy the guide draws is read
+too (five cards: Session Configuration, Ask Conductor, Conductor MCP, Cloud
+Agents and Tips & Shortcuts; the Settings card's Codex-only copy changes only its bullets, which the
+guide does not draw beside its highlights). The sections come from
+`SECTION_LABELS`, not a list typed into the test. A bold code mark put into the
+Tips card's Codex-only highlights fails the three-choice sweep (one line, on the
+Codex choice) and passed the old both-only sweep.
 
 Both sweeps are helper functions with stand-in tests: a tip with no body element,
 a tip with a blank body, a card the page does not draw beside one it does, a
