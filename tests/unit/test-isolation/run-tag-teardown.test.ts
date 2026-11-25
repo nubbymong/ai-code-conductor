@@ -122,21 +122,39 @@ describe('removeRunTempFolders', () => {
 
   // POSIX only: a folder without write permission stops a removal there (on Windows,
   // Node clears the read-only attribute and removes it anyway); root ignores the mode.
+  //
+  // "With the error" means the error Node's own rmSync raised, and its code depends on
+  // the runtime: Node 20's rm (JavaScript) and Node 24's native rm on Linux give a
+  // permission code (EACCES or EPERM), from the file's unlink; Node 24's native rm on
+  // macOS gives ENOTEMPTY, the folder's own removal failing with the file still in it
+  // (CI run 45577050374, macOS, Node 24.22.3, the first run of this file on Node 24).
+  // So the code is read from a twin folder, made and removed the same way, and onError
+  // must carry exactly that code.
   it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
     'tells onError of a folder it could not remove, with the error, and does not count it as removed',
     () => {
       const tmp = fresh()
       const tag = newRunTag()
       const stuck = plant(tmp, `ccc-vitest-${tag}-a`)
-      fs.chmodSync(path.join(stuck, 'sub'), 0o500) // its file cannot be unlinked
+      const twin = plant(fresh(), 'twin')
+      // Their files cannot be unlinked.
+      for (const dir of [stuck, twin]) fs.chmodSync(path.join(dir, 'sub'), 0o500)
       try {
+        let code: unknown
+        try {
+          // The options removeRunTempFolders passes (tests/helpers/vitest-run-tag.mjs, RM_OPTIONS).
+          fs.rmSync(twin, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 })
+        } catch (err) {
+          code = (err as { code?: unknown }).code
+        }
+        expect(code, 'Node removed the twin folder, so there is no error to compare with').toMatch(/^E[A-Z]+$/)
         const errors: string[] = []
         const removed = removeRunTempFolders(tmp, tag, (name, err) => errors.push(`${name} ${String((err as { code?: string }).code)}`))
         expect(removed).toEqual([])
-        expect(errors).toHaveLength(1)
-        expect(errors[0]).toMatch(new RegExp(`^ccc-vitest-${tag}-a (EACCES|EPERM)$`))
+        expect(errors).toEqual([`ccc-vitest-${tag}-a ${String(code)}`])
+        expect(fs.existsSync(path.join(stuck, 'sub', 'file.txt'))).toBe(true)
       } finally {
-        fs.chmodSync(path.join(stuck, 'sub'), 0o700)
+        for (const dir of [stuck, twin]) if (fs.existsSync(path.join(dir, 'sub'))) fs.chmodSync(path.join(dir, 'sub'), 0o700)
       }
     },
   )
