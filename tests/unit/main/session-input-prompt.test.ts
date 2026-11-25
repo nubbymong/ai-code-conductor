@@ -57,22 +57,30 @@ const h = vi.hoisted(() => ({
   infos: [] as string[],
 }))
 
-vi.mock('../../../src/main/providers', () => ({
-  getProvider: (id: string) => {
-    if (id !== 'codex') throw new Error(`no provider ${id}`)
-    return {
-      runScreen: {
-        submit: async (sessionId: string, text: string, opts: { readyWaitMs: number }) => {
-          h.submits.push({ sessionId, text, readyWaitMs: opts.readyWaitMs })
-          if (h.submitGate) await h.submitGate
-          return h.submitAnswer
-        },
-        has: () => true,
-        open: () => {}, close: () => {}, resize: () => {}, feed: () => {},
-      },
-    }
-  },
-}))
+// Since 2.1.3-beta.18 section 4 the door types each session through its
+// provider's run screen: a Claude Code session through the Claude Code
+// package's own, a Codex session through the Codex package's door members,
+// built here over the fake submit primitive.
+vi.mock('../../../src/main/providers', async () => {
+  const { CLAUDE_RUN_SCREEN } = await import('../../../src/main/providers/claude/run-screen')
+  const { codexDoorMembers } = await import('../../../src/main/providers/codex/run-screen-doors')
+  const base = {
+    submit: async (sessionId: string, text: string, opts: { readyWaitMs: number }) => {
+      h.submits.push({ sessionId, text, readyWaitMs: opts.readyWaitMs })
+      if (h.submitGate) await h.submitGate
+      return h.submitAnswer
+    },
+    has: () => true,
+  }
+  const codexScreen = { ...base, ...codexDoorMembers(base), open: () => {}, close: () => {}, resize: () => {}, feed: () => {} }
+  return {
+    getProvider: (id: string) => {
+      if (id === 'claude') return { runScreen: CLAUDE_RUN_SCREEN }
+      if (id !== 'codex') throw new Error(`no provider ${id}`)
+      return { runScreen: codexScreen }
+    },
+  }
+})
 vi.mock('../../../src/main/debug-logger', () => ({
   logInfo: (msg: string) => { h.infos.push(msg) },
   logWarn: () => {},
@@ -117,8 +125,8 @@ const ports = {
   },
   run: (sessionId: string) => runs.get(sessionId) as never,
   tmuxWrapped: (sessionId: string) => tmux.has(sessionId),
-  isCodexSession: (sessionId: string) => codex.has(sessionId),
-  isCodexAskSession: () => false,
+  providerOf: (sessionId: string) => (codex.has(sessionId) ? 'codex' as const : 'claude' as const),
+  isAskSession: () => false,
 }
 
 let n = 0

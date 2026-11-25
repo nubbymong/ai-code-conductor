@@ -64,12 +64,20 @@ vi.mock('../../../../src/main/debug-logger', () => ({
   logError: () => {},
 }))
 vi.mock('../../../../src/main/hooks/index', () => ({ getGateway: () => null }))
-vi.mock('../../../../src/main/providers', () => ({
-  getProvider: (id: string) => {
-    if (id !== 'codex') throw new Error(`no provider ${id}`)
-    return { runScreen: h.runScreen }
-  },
-}))
+// Since 2.1.3-beta.18 section 4 the retry door types each session through its
+// provider's run screen: Claude Code's own, and Codex's door members built
+// here over whichever run screen a test hands out.
+vi.mock('../../../../src/main/providers', async () => {
+  const { CLAUDE_RUN_SCREEN } = await import('../../../../src/main/providers/claude/run-screen')
+  const { codexDoorMembers } = await import('../../../../src/main/providers/codex/run-screen-doors')
+  return {
+    getProvider: (id: string) => {
+      if (id === 'claude') return { runScreen: CLAUDE_RUN_SCREEN }
+      if (id !== 'codex') throw new Error(`no provider ${id}`)
+      return { runScreen: h.runScreen ? { ...h.runScreen, ...codexDoorMembers(h.runScreen as never) } : h.runScreen }
+    },
+  }
+})
 
 const { WatchdogManager, clampAnsiChunk } = await import('../../../../src/main/watchdog/watchdog-manager')
 const input = await import('../../../../src/main/session-input')
@@ -98,8 +106,8 @@ input.setSessionInputPorts({
   write: (sessionId, data) => { h.writes.push([sessionId, data]) },
   run: () => undefined,
   tmuxWrapped: () => false,
-  isCodexSession: (sessionId) => sessionId === 'cx',
-  isCodexAskSession: () => false,
+  providerOf: (sessionId) => (sessionId === 'cx' ? 'codex' : 'claude'),
+  isAskSession: () => false,
 })
 
 const SQ = '\u25a0'

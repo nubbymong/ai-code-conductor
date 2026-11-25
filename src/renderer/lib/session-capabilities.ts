@@ -23,6 +23,14 @@ import type { Session } from '../stores/sessionStore'
 export type CommandTarget = 'claude' | 'partner'
 export type AgentId = 'claude' | 'codex'
 export type LogsEmptyReason = 'shell-only' | 'ssh'
+/** 2.1.3-beta.18 section 4: how an agent takes a saved image's line (the
+ *  sentence and the path) when main's image door did not paste the image for
+ *  it (utils/imageTransfer.ts): `enter`, typed and sent in one write (Claude
+ *  Code reads one write of a line and its Enter as a submission); `composer`,
+ *  typed only into the agent's ready, empty composer and confirmed before its
+ *  Enter, by the renderer's composer rule, which says why when it types
+ *  nothing (Codex submits no such one write, PB3). */
+export type ImageLine = 'enter' | 'composer'
 
 export type CapabilitySource = Pick<Session, 'provider' | 'sessionType' | 'shellOnly' | 'configId' | 'sshConfig' | 'kind'>
 
@@ -52,6 +60,9 @@ export interface SessionCapabilities {
   canIndexLogs: boolean
   /** Snap types an English prompt into the main pane -- nonsense on a shell. */
   canSendImageToAgent: boolean
+  /** How the main pane's agent takes a saved image's line when main did not
+   *  paste the image (ImageLine); null for a plain shell, which gets none. */
+  imageLine: ImageLine | null
   /** A session with no saved config has no "this config" to scope to. */
   hasConfig: boolean
   /** True when this is the Ask Conductor help session. */
@@ -68,6 +79,8 @@ export interface SessionCapabilities {
 }
 
 const AGENT_NAMES: Record<AgentId, string> = { claude: 'Claude', codex: 'Codex' }
+/** Each agent's image line (ImageLine): a new agent says its own here. */
+const IMAGE_LINES: Record<AgentId, ImageLine> = { claude: 'enter', codex: 'composer' }
 
 export function sessionCapabilities(session: CapabilitySource | null | undefined): SessionCapabilities {
   const provider: AgentId = session?.provider === 'codex' ? 'codex' : 'claude'
@@ -92,6 +105,7 @@ export function sessionCapabilities(session: CapabilitySource | null | undefined
     logsEmptyReason,
     canIndexLogs: logsEmptyReason === null,
     canSendImageToAgent: !shellOnly,
+    imageLine: agent ? IMAGE_LINES[agent] : null,
     hasConfig: !!session?.configId,
     isAsk: session?.kind === 'ask',
     runsOn,

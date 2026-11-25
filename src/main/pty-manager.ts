@@ -23,7 +23,7 @@ import { isProviderId, type RealmOwnership, type ProviderId } from '../shared/pr
 import { spawnAgentPty, spawnPlainPty, whenHeldKnown } from './session-helper/manager'
 import type { SSHOptions } from './ssh-options'
 import { remoteHelperPty } from './remote-helper'
-import { setSessionInputPorts, askQuestion as typeAskQuestion, codexRunScreen, cancelPastes, sendExitKeys } from './session-input'
+import { setSessionInputPorts, askQuestion as typeAskQuestion, closeRunScreens, resizeRunScreens, cancelPastes, sendExitKeys } from './session-input'
 import { IPC } from '../shared/ipc-channels'
 import { askConductorProjectDocMaxBytes } from './help-workspace'
 import { resolveRunningClaudeInfo } from '../shared/ssh-tmux-persistence'
@@ -6230,7 +6230,7 @@ function spawnPtyResolved(
     } catch (err) {
       // P3.10: a launch that failed keeps no hook file or hooked mark, and
       // (round 1, B2) no gateway token it minted.
-      codexRunScreen()?.close(sessionId)
+      closeRunScreens(sessionId)
       codexAskSessions.delete(sessionId)
       if (hookFile) { try { hookFile.dispose() } catch { /* best-effort */ } }
       forgetCodexHooks(sessionId)
@@ -7280,15 +7280,15 @@ setSessionInputPorts({
   write: (sessionId, data) => writePty(sessionId, data),
   run: (sessionId) => ptySessions.get(sessionId)?.ptyProcess,
   tmuxWrapped: (sessionId) => sshTmuxWrappedBySession.has(sessionId),
-  isCodexSession: isCodexPtySession,
-  isCodexAskSession: (sessionId) => codexAskSessions.has(sessionId),
+  providerOf: (sessionId) => { const s = ptySessions.get(sessionId); return s ? s.agent ?? (s.appStartedCli ? claudeSshSurface().id : null) : null },
+  isAskSession: (sessionId) => codexAskSessions.has(sessionId),
 })
 setLaunchBindingPorts({
   ptySessions, codexHookFiles, codexHookedLaunches, codexLaunchLeases, takenCodexLeases, codexAskSessions, codexTelemetrySources, indexedRuns, codexGatewayTokens,
   notIndexedSessions, codexContextRollouts, keptCodexConversations, lastCodexHookRollout, claudeTranscripts, claudeFolders, codexFolders,
   noteGatewayToken, dropGatewayToken, forgetCodexHooks, keepCodexConversation, markCodexConversationUncertain, clearCodexDoubtFromHook,
   noteCodexContextRollout, endSessionNotIndexed, noteCodexFolder, savedConfigLoggingOff, noteClaudeFolder, noteClaudeTranscript, markSessionNotIndexed, noteAgentRunFolder, codexRunWriters, launchStyleOf,
-  closeCodexRunScreen: (sessionId) => codexRunScreen()?.close(sessionId),
+  closeCodexRunScreen: (sessionId) => closeRunScreens(sessionId),
 })
 
 export function writePty(sessionId: string, data: string): void {
@@ -7376,8 +7376,8 @@ export function resizePty(sessionId: string, cols: number, rows: number): void {
     getPtyIntegrityMonitor()?.recordResizeApplied(sessionId, cols, rows)
     // Keep the watchdog's rendered pane wrapping like the real one (#266).
     getWatchdogManager()?.noteResize(sessionId, cols, rows)
-    // WP2 PR 4, P4.1: and the submit primitive's reading of a Codex session.
-    codexRunScreen()?.resize(sessionId, cols, rows)
+    // WP2 PR 4, P4.1: and each provider's run screen's reading of it (Codex's).
+    resizeRunScreens(sessionId, cols, rows)
   } catch (err: unknown) {
     const code = (err as NodeJS.ErrnoException)?.code
     if (code === 'EPIPE' || code === 'EIO') {

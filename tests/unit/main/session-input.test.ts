@@ -196,19 +196,28 @@ vi.mock('../../../src/main/account-profiles', async (importOriginal) => ({
 
 /** The registered Claude Code provider: a launch with nothing to run, and
  *  the quit keys as the Claude Code package names them (the package's own
- *  are held to these in pty-quit-exit-keys-local.test.ts). */
+ *  are held to these in pty-quit-exit-keys-local.test.ts). Since 2.1.3-beta.18
+ *  section 4 the doors type a Claude Code session through its package's run
+ *  screen, so this is the package's own (providers/claude/run-screen.ts). */
 function claudeProvider(): Record<string, unknown> {
   return {
     resolveBinary: () => ({ cmd: 'claude', source: 'system' }),
     buildSpawnCommand: () => ({ cmd: 'pwsh', args: [], env: {} }),
     ingestSessionTelemetry: () => ({ stop: () => {} }),
     exitKeys: [{ data: '\x1b', atMs: 0 }, { data: '\x03', atMs: 100 }, { data: '/exit\r', atMs: 300 }],
+    runScreen: doors.claude,
   }
 }
 /** The registered Codex provider, with the run screen's submit recorded, and
  *  the quit keys as the Codex package names them (held to the package's own
- *  in pty-quit-exit-keys-local.test.ts). */
+ *  in pty-quit-exit-keys-local.test.ts). Since 2.1.3-beta.18 section 4 the
+ *  doors reach the submit through the Codex package's door members, built
+ *  here over this fake (providers/codex/run-screen-doors.ts). */
 function codexProvider(): Record<string, unknown> {
+  const base = {
+    has: () => true,
+    submit: async (sessionId: string, text: string, opts: { readyWaitMs: number }) => { h.submits.push({ sessionId, text, readyWaitMs: opts.readyWaitMs }); h.submitOpts.push({ ...opts }); return h.submitAnswer },
+  }
   return {
     resolveBinary: () => ({ cmd: 'claude', source: 'system' }),
     buildSpawnCommand: () => ({ cmd: '/proven/codex', args: [], env: {}, logLine: '--sandbox workspace-write' }),
@@ -217,12 +226,16 @@ function codexProvider(): Record<string, unknown> {
     ...(h.withRunScreen ? {
       runScreen: {
         open: () => {}, feed: () => {}, resize: () => {}, close: () => {},
-        has: () => true,
-        submit: async (sessionId: string, text: string, opts: { readyWaitMs: number }) => { h.submits.push({ sessionId, text, readyWaitMs: opts.readyWaitMs }); h.submitOpts.push({ ...opts }); return h.submitAnswer },
+        ...base,
+        ...doors.codexDoorMembers!(base as never),
       },
     } : {}),
   }
 }
+/** The two packages' door members, loaded below (getProvider is asked only once the tests run). */
+const doors: { claude?: unknown; codexDoorMembers?: typeof import('../../../src/main/providers/codex/run-screen-doors').codexDoorMembers } = {}
+doors.claude = (await import('../../../src/main/providers/claude/run-screen')).CLAUDE_RUN_SCREEN
+doors.codexDoorMembers = (await import('../../../src/main/providers/codex/run-screen-doors')).codexDoorMembers
 
 const { spawnPty, killPty, gracefulExitPty, isSessionWritable } = await import('../../../src/main/pty-manager')
 const { submitLine, submitRetry, RETRY_CODEX_READY_WAIT_MS, submitMarker, askQuestion, handOffAskQuestion, ASK_READY_WAIT_MS, setSessionInputPorts, pasteEnvelope, sendExitKeys } = await import('../../../src/main/session-input')
@@ -345,7 +358,7 @@ describe('submitRetry: the Watchdog\'s retry into a Claude Code session is submi
     const writes: Array<[string, string]> = []
     fresh.setSessionInputPorts({
       write: (sessionId, data) => { writes.push([sessionId, data]) },
-      run: () => undefined, tmuxWrapped: () => true, isCodexSession: () => false, isCodexAskSession: () => false,
+      run: () => undefined, tmuxWrapped: () => true, providerOf: () => 'claude', isAskSession: () => false,
     })
     expect(fresh.submitRetry('sshp', 'continue')).toBeUndefined()
     expect(writes).toEqual([['sshp', `${TMUX_WHEEL_EXIT_KEY}continue\r`]])
@@ -748,7 +761,7 @@ describe('the ports: registered once, by the PTY manager, when it loads', () => 
     const redirected: string[] = []
     const other = {
       write: (sessionId: string, data: string) => { redirected.push(`${sessionId}:${data}`) },
-      run: () => undefined, tmuxWrapped: () => true, isCodexSession: () => true, isCodexAskSession: () => true,
+      run: () => undefined, tmuxWrapped: () => true, providerOf: () => 'codex' as const, isAskSession: () => true,
     }
     expect(() => setSessionInputPorts(other)).toThrow(/already registered/)
     submitLine(SID, 'continue')

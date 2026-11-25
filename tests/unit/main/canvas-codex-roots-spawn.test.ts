@@ -51,10 +51,14 @@ vi.mock('../../../src/main/conductor-mcp-server', () => ({
 }))
 const STALE_WT = path.join('F:', 'stale-outer', 'ccc-wt', 'deadbeefdead')
 // The registered Codex provider's pane is the real one (session-screen.ts):
-// the PTY manager reaches it only through the registry.
+// the PTY manager reaches it only through the registry. Since 2.1.3-beta.18
+// section 4 the doors reach its submit through the Codex package's door
+// members, built here over it.
 vi.mock('../../../src/main/providers', async () => {
   const screen = await import('../../../src/main/providers/codex/session-screen')
-  const runScreen = { open: screen.openCodexScreen, feed: screen.feedCodexScreen, resize: screen.resizeCodexScreen, close: screen.closeCodexScreen, has: screen.hasCodexScreen, submit: screen.submitCodexText }
+  const { codexDoorMembers } = await import('../../../src/main/providers/codex/run-screen-doors')
+  const base = { has: screen.hasCodexScreen, submit: screen.submitCodexText }
+  const runScreen = { open: screen.openCodexScreen, feed: screen.feedCodexScreen, resize: screen.resizeCodexScreen, close: screen.closeCodexScreen, ...base, ...codexDoorMembers(base) }
   return { providerCapability: () => ({ enabled: true }), getProvider: () => ({
     runScreen,
     buildSpawnCommand: (opts: Record<string, unknown>) => {

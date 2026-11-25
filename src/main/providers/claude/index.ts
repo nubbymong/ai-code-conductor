@@ -25,6 +25,7 @@ import type { ClaudeReviewPorts } from './review-launch'
 import { createClaudeAuthOperations } from './auth-operations'
 import type { ClaudeAuthPorts } from './auth-operations'
 import { CLAUDE_ENABLEMENT } from './enablement'
+import { CLAUDE_RUN_SCREEN } from './run-screen'
 
 // The managed-launch surface is re-exported so the composition root and the
 // conformance suite reach it through this entry point, never by deep import.
@@ -85,6 +86,9 @@ export class ClaudeProvider implements SshCapableProvider {
   readonly id = 'claude' as const
   readonly displayName = 'Claude Code'
   readonly exitKeys = CLAUDE_EXIT_KEYS
+  /** 2.1.3-beta.18 section 4 (aicc_planning#432): how the session input
+   *  module's doors type into a Claude Code session (run-screen.ts). */
+  readonly runScreen = CLAUDE_RUN_SCREEN
 
   resolveBinary(legacyVersion?: LegacyVersion): { cmd: string; args: string[] } | null {
     return resolveClaudeBinary(legacyVersion)
