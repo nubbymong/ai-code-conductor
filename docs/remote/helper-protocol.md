@@ -37,12 +37,16 @@ probe (ADR) must confirm. R5 fixtures fix field types, lengths and refusals.
   only when that is the user's own group). A checkout root is used only when
   it is not the session folder, the home folder or a folder above it. After
   the hold, the fixed `files` script writes the launch's `settings.json` (the
-  status line is the status mode; hooks are the host's own, then the hook
-  mode's nine, identical entries once) and, while the app serves its tools,
-  `mcp.json` (`conductor` is the relay) into `sessions/<sid>/` (folder 0700,
-  files 0600), contents on standard input after a `<name>:<size>,...` layout
-  value, each file staged, size-checked and moved over its name. They name
-  the helper's path, the store and the session id only. `unsession` removes
+  host user's own `~/.claude/settings.json` keys less `mcpServers`, as the
+  usual SSH setup's session file carries them, since Claude Code takes a
+  top-level `effortLevel` as the session's effort only from a `--settings`
+  file; over them, the status line is the status mode and hooks are the
+  host's own, then the hook mode's nine, identical entries once) and, while
+  the app serves its tools, `mcp.json` (`conductor` is the relay) into
+  `sessions/<sid>/` (folder 0700, files 0600), contents on standard input
+  after a `<name>:<size>,...` layout value, each file staged, size-checked
+  and moved over its name. Besides the host's own settings, they name the
+  helper's path, the store and the session id only. `unsession` removes
   the folder once the holder's record is gone; at a Check, `sweep` removes
   any folder whose holder is gone. Such a session's app connection acks
   `status` and `hooks`, and `mcp` while the app serves its tools, beside

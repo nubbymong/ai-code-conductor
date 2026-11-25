@@ -235,7 +235,10 @@ describe('a helper tab\'s own files on its host', () => {
     expect(settings.hooks.PreToolUse).toEqual([user, project, local, root, own])
     expect(settings.hooks.Stop).toEqual([user, own])
     expect(settings.hooks.NotAnArray).toBeUndefined()
-    expect(settings.model).toBeUndefined()
+    // The user's own settings keys are carried, as today's SSH session file
+    // carries them (2.1.3-beta.18 fix round, item 2: effortLevel there is the
+    // session's effort); a project file's are Claude Code's own to read.
+    expect(settings.model).toBe('opus')
     pty!.kill()
     await until('the holder to end', () => holder.ended)
   })

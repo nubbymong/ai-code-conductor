@@ -6,8 +6,9 @@
 // wrapper, the host account's variables, LANG, TERM and COLORFGBG.
 //
 // 2.1.3-beta.18 section 3.2 (aicc_planning#431): the session's own files on
-// the host. settings.json gives the status line (the helper's status mode)
-// and the hooks: the host's own first (its user settings, then the session
+// the host. settings.json carries the host user's own settings, as the usual
+// SSH setup's session file does, and gives the status line (the helper's
+// status mode) and the hooks: the host's own first (its user settings, then the session
 // folder's project and local settings, then the checkout root's local
 // settings, the files Claude Code itself reads, which core reads on the host
 // first: hostReads), then the helper's hook mode for the nine events the app
@@ -76,18 +77,24 @@ export const CLAUDE_HOST_READS: readonly RemoteHostRead[] = [
   { from: 'checkout', path: '.claude/settings.local.json' },
 ]
 
-/** The `hooks` of one settings file's text, keeping only array-valued events;
- *  nothing for a file not read, not JSON, or of another shape. Data only:
- *  nothing in it is run here. */
-export function hooksOfSettingsText(text: string | null): Record<string, unknown[]> {
-  if (text === null) return {}
+/** One settings file's text as an object; null for a file not read, not
+ *  JSON, or of another shape. Data only: nothing in it is run here. */
+function settingsOfText(text: string | null): Record<string, unknown> | null {
+  if (text === null) return null
   let parsed: unknown
   try {
     parsed = JSON.parse(text)
   } catch {
-    return {}
+    return null
   }
-  const hooks = parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? (parsed as Record<string, unknown>).hooks : undefined
+  return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? (parsed as Record<string, unknown>) : null
+}
+
+/** The `hooks` of one settings file's text, keeping only array-valued events;
+ *  nothing for a file not read, not JSON, or of another shape. Data only:
+ *  nothing in it is run here. */
+export function hooksOfSettingsText(text: string | null): Record<string, unknown[]> {
+  const hooks = settingsOfText(text)?.hooks
   const out: Record<string, unknown[]> = {}
   if (hooks && typeof hooks === 'object' && !Array.isArray(hooks)) {
     for (const [event, arr] of Object.entries(hooks as Record<string, unknown>)) {
@@ -97,11 +104,18 @@ export function hooksOfSettingsText(text: string | null): Record<string, unknown
   return out
 }
 
-/** The session's settings file: the status line is the helper's status mode,
- *  and the hooks are the host's own (in `reads`' order), then the helper's
- *  hook mode for the nine events, identical entries dropped. Throws when the
- *  helper's path or store cannot be put in a command safely: the tab then
- *  takes the usual SSH path. */
+/** The session's settings file: the host user's own settings (the `home`
+ *  read, ~/.claude/settings.json) less mcpServers, as the usual SSH setup
+ *  copies them into its session file (ssh-shim.ts generateRemoteSetupScript),
+ *  then over them the status line, the helper's status mode, and the hooks,
+ *  the host's own (in `reads`' order) then the helper's hook mode for the nine
+ *  events, identical entries dropped. Claude Code takes some keys only from a
+ *  --settings file: a top-level effortLevel in the user's own settings is a
+ *  legacy effort it applies to some models only, while in a --settings file it
+ *  is the session's effort (2.1.3-beta.18 fix round, item 2: without the copy
+ *  a helper tab ran at the model's default effort, today's SSH tab at the
+ *  user's). Throws when the helper's path or store cannot be put in a command
+ *  safely: the tab then takes the usual SSH path. */
 export function claudeRemoteSettings(helper: RemoteHelperCommands, reads: readonly RemoteHostFile[]): Record<string, unknown> {
   const target = { helperPath: helper.helperPath, store: helper.store, sid: helper.sid, launcher: 'sh' as const }
   const statusCommand = helperStatusCommand(target)
@@ -109,7 +123,10 @@ export function claudeRemoteSettings(helper: RemoteHelperCommands, reads: readon
   const own = helperHooksBlockFor(target, HELPER_HOOK_KINDS)
   if (statusCommand === null || own === null) throw new Error('the session helper\'s path on the host cannot be put in a status line or hook command safely')
   const hooks = concatHookMaps(...reads.map((r) => hooksOfSettingsText(r.content)), own)
-  return { statusLine: { type: 'command', command: statusCommand }, hooks }
+  const home = CLAUDE_HOST_READS[0]
+  const user = { ...settingsOfText(reads.find((r) => r.from === home.from && r.path === home.path)?.content ?? null) }
+  delete user.mcpServers
+  return { ...user, statusLine: { type: 'command', command: statusCommand }, hooks }
 }
 
 /** The session's tool config: the `conductor` server is the helper's relay
