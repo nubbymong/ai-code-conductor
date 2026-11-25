@@ -51,7 +51,7 @@ jobs:
 
       - uses: actions/setup-node@v7
         with:
-          node-version: '20'
+          node-version: '24'
 
       # The gate reads the WP1 binding on its own (ADR-027): the paths changed
       # since the manifest's boundHead, which a depth-1 checkout does not carry
@@ -125,7 +125,7 @@ jobs:
 
       - uses: actions/setup-node@v7
         with:
-          node-version: '20'
+          node-version: '24'
 
       - name: Look for a green CI run on this exact tree
         id: find
@@ -242,7 +242,7 @@ jobs:
 
       - uses: actions/setup-node@v7
         with:
-          node-version: '20'
+          node-version: '24'
           cache: 'npm'
 
       - uses: actions/setup-python@v7
@@ -572,7 +572,7 @@ jobs:
 
       - uses: actions/setup-node@v7
         with:
-          node-version: '20'
+          node-version: '24'
           cache: 'npm'
 
       - uses: actions/setup-python@v7
@@ -728,7 +728,7 @@ jobs:
 
       - uses: actions/setup-node@v7
         with:
-          node-version: '20'
+          node-version: '24'
           cache: 'npm'
 
       - uses: actions/setup-python@v7
@@ -822,7 +822,7 @@ jobs:
 
       - uses: actions/setup-node@v7
         with:
-          node-version: '20'
+          node-version: '24'
 
       # Derive the release body from src/renderer/changelog.ts (the single
       # source of truth). Empty output = no changelog entry for this version;
@@ -1241,7 +1241,7 @@ jobs:
 
       - uses: actions/setup-node@v7
         with:
-          node-version: '20'
+          node-version: '24'
 
       - name: Relabel the milestone's in-beta issues in-release
         env:

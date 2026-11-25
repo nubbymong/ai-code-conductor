@@ -123,7 +123,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:
-          node-version: '20'
+          node-version: '24'
       - name: Verify CHANGELOG.md matches changelog.ts
         run: node scripts/gen-changelog.js --check
 
@@ -259,7 +259,7 @@ jobs:
       - uses: actions/setup-node@v7
         if: steps.scope.outputs.suite != 'false'
         with:
-          node-version: '20'
+          node-version: '24'
           cache: 'npm'
 
       - uses: actions/setup-python@v7
@@ -461,7 +461,7 @@ jobs:
       - uses: actions/setup-node@v7
         if: steps.scope.outputs.suite != 'false'
         with:
-          node-version: '20'
+          node-version: '24'
           cache: 'npm'
 
       - name: Install dependencies
@@ -526,7 +526,7 @@ jobs:
       - uses: actions/setup-node@v7
         if: steps.scope.outputs.suite != 'false'
         with:
-          node-version: '20'
+          node-version: '24'
           cache: 'npm'
 
       - name: Install dependencies
@@ -670,7 +670,7 @@ jobs:
 
       - uses: actions/setup-node@v7
         with:
-          node-version: '20'
+          node-version: '24'
           cache: 'npm'
 
       - name: Install dependencies
@@ -849,7 +849,7 @@ jobs:
 
       - uses: actions/setup-node@v7
         with:
-          node-version: '20'
+          node-version: '24'
           cache: 'npm'
 
       - uses: actions/setup-python@v7
@@ -1197,7 +1197,7 @@ jobs:
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
-          node-version: '20'
+          node-version: '24'
           cache: 'npm'
 
       - name: Install the pinned Rust toolchain
@@ -1318,7 +1318,7 @@ jobs:
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
-          node-version: '20'
+          node-version: '24'
           cache: 'npm'
 
       # The suite imports only pure modules of the app (the reviewer's argv, the
@@ -1385,7 +1385,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:
-          node-version: '20'
+          node-version: '24'
           cache: 'npm'
       - name: Install dependencies
         run: npm ci --ignore-scripts
@@ -1469,7 +1469,7 @@ jobs:
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
-          node-version: '20'
+          node-version: '24'
           cache: 'npm'
 
       - name: Install the pinned Rust toolchain and the musl target
