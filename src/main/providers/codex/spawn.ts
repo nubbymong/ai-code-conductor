@@ -361,8 +361,10 @@ export const CODEX_PICK_STALE_MS = CODEX_HOOK_STALE_MS
  * user's (where the platform keeps owners), older than `maxAgeMs`, and
  * empty or holding only the pick file and its staging files: each file
  * removed by name, then the folder, never recursively. Anything else there
- * keeps the folder whole. A session an app update kept running has no pick
- * folder left by then: its watcher's end at the release removed it.
+ * keeps the folder whole. A session an app update kept running keeps its
+ * pick folder (aicc_planning#419: the release stops its watcher with
+ * keepPickFolder), and the provider's removeSessionPickFolder removes it
+ * once the session is kept no longer.
  * Answers how many were removed. Never throws.
  */
 export function sweepStaleCodexPickFolders(tmp: string = os.tmpdir(), now: number = Date.now(), maxAgeMs: number = CODEX_PICK_STALE_MS): number {

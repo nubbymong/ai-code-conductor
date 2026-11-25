@@ -2099,7 +2099,8 @@ describe('the 2.1.3-beta.7 sweep', () => {
 
   it('the installer paragraph says the uninstaller removes the helper folder and the pages share one look', () => {
     const p = APP_KNOWLEDGE_SECTIONS.map((s) => s.body).find((b) => b.includes('On Windows the installer opens with a Welcome page'))!
-    expect(p).toContain("removes the session helper's own folder, with its copies and records; an update leaves that folder in place")
+    // 2.1.3-beta.18 section 7.1 (aicc_planning#407): the uninstall also removes the Codex pick folders.
+    expect(p).toContain("removes the session helper's own folder, with its copies and records, and the folders a Codex tab's resume list left in your temp folder when that temp folder is inside your user folder; an update leaves all of them in place")
     expect(p).toContain('Every page of the installer and the uninstaller has the same light look')
   })
 

@@ -938,8 +938,10 @@ through the submit primitive read past the placeholder, confirmed, then Enter; w
 paste it takes back with Ctrl+U, only while the composer holds nothing but the paste, and the
 renderer types the old line by its Codex rule. Since C9 (aicc_planning#420) the image rule reads
 Codex's warning count as C7's readers do, so an image goes in as Codex's own paste while the
-count shows. Not measured: a full-size Snap picture's placeholder time (the wait is 5 s), a held
-session on the real CLI, macOS and Linux.
+count shows. Since 2.1.3-beta.18 section 7.5 (snap-e2e run 45582381926, Codex 0.157.1 on GitHub's
+Windows Server 2025 runner), Snap pictures of 200 by 120 and 1024 by 768 pressed while the count
+shows went from the saved file to Codex's turn in 1.1 to 1.2 s, inside the 5 s wait. Not measured:
+a picture larger than 1024 by 768, a held session on the real CLI, macOS and Linux.
 
 ## Parked questions
 

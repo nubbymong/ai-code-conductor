@@ -19,6 +19,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 - Under the hood, prompt buttons, broadcasts, canvas notes, Alt+V images and the Watchdog's retry now type into each session by that session's own assistant's rules, which is groundwork for more assistants; nothing you see changes.
+- Checked in this version: a Snap picture, Rectangle or Whole screen, goes into a Codex session on this computer as Codex's own pasted image ([Image #1]) and is sent once also while Codex shows a warning count under its prompt, as an Alt+V image does. (Measured with Codex CLI 0.157.1 on a GitHub Windows Server 2025 runner, one 1024 by 768 display at 100%, 3 presses of each.)
+
+### Fixed
+- A full uninstall on Windows now also removes the folders a Codex tab's resume list left in your temp folder, and finds the same temp folder the app used even when TEMP and TMP point to different places.
 
 ## [2.1.3-beta.17] - 2026-11-25
 
