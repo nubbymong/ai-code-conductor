@@ -126,12 +126,66 @@
  * within OVERLAY_MS: about four and a half times that 2.2 s, not ten, and not
  * raised.
  * The readings go to the log and to $SNAP_E2E_OUT/readings.json.
+ *
+ * PART TWO, A CODEX TAB WHILE CODEX SHOWS ITS WARNING COUNT (plan
+ * 2.1.3-beta.18, section 7.5; aicc_planning#428). An app of its own, in a
+ * serial group of its own, so a red test in part one skips nothing here.
+ * Codex 0.157.1, the version the test machine's readings used (probe P19,
+ * beta.17 C9), from npm (the job's install, SNAP_E2E_CODEX), first on the
+ * app's PATH; one managed Codex account, signed in with a made-up key; its
+ * config points Codex at probe P11's model stand-in on a loopback port (the
+ * stand-in names every picture a request carries by its SHA-256) and names
+ * one tool server that cannot start (probe P19's warning launch), so Codex
+ * shows its warning count on the hint row. Everything else Codex might reach
+ * goes to a dead proxy.
+ *   C1 START: the app finds that Codex (found, 0.157.1); a Codex tab opens on
+ *      the account, its first screens answered by the 9.2 rules
+ *      (helpers/codex-first-screens.ts); within CODEX_START_MS the tab shows
+ *      Codex's composer, its footer and, under it, "1 warning" after the
+ *      warning sign, on two reads 300 ms apart; the Snap button shows.
+ *   C2 RECTANGLE, 3 runs, and C3 WHOLE SCREEN, 3 runs, each pressed while
+ *      Codex is at rest with "1 warning" (two reads 300 ms apart): one new
+ *      JPEG at D2's or D3's size, not all black, its SHA-256 none of an
+ *      earlier press's; one new-engine line; one line from main saying
+ *      Codex's image rule pasted and sent it; exactly one new request from
+ *      Codex to the stand-in (the turn), whose pictures are every picture
+ *      pressed so far, in order, each once by its SHA-256, the newest this
+ *      press's file (Codex sends the whole conversation with each turn); then
+ *      Codex at rest with its count again, and still that one request. Each
+ *      run's picture is made to differ from the one before it (PICTURE_STEP:
+ *      C2's drag starts 16 DIP further right a run, C3 moves the app's window
+ *      16 DIP right a run and back after), so a turn that sent an earlier
+ *      press's picture again fails. Without it, run 45582381926 on d886147e
+ *      pictured the same screen twice: C2 run 3's picture was C2 run 2's, and
+ *      C3 run 2's was C3 run 1's, byte for byte (Codex numbers each message's
+ *      image [Image #1], so its screen after each turn is the same).
+ * The reading before C2 and C3 were added (rule 34; run 45578961836, Codex
+ * 0.157.1, one 1024x768 display at 100%): the tab opened, Codex asked only
+ * its hooks review (the project's trust is seeded, and no sandbox menu
+ * showed), and its hint row read "1 warning . f2 to view"; the stand-in saw
+ * no request before a turn.
+ * CODEX_START_MS and CODEX_TURN_MS were set before any reading on the runner
+ * (P19's own bound for Codex's ready composer is 60 s, the real-launch
+ * spec's 150 s; C6's image rule waits up to 5 s for a ready composer and
+ * Codex's placeholder showed within 314 ms), and are not raised. Read since
+ * (run 45581252484 on de5d6c9c, all 7 green): Codex at rest with its count
+ * 5.4 s after the tab was asked for (5.8 s in run 45580311269), Enter to the
+ * file 32 to 94 ms, the file to Codex's turn at the stand-in 1.1 to 1.2 s,
+ * the turn to Codex at rest again 0.3 s; the app launches Codex with
+ * `-m gpt-6-astra`, and each press made one request, with no tools. The
+ * part's readings go to $SNAP_E2E_OUT/codex-readings.json.
  */
 import { test, expect, type ElectronApplication, type Page } from '@playwright/test'
-import { execFile } from 'child_process'
+import { execFile, spawnSync } from 'child_process'
+import crypto from 'crypto'
 import fs from 'fs'
+import { createRequire } from 'module'
 import path from 'path'
 import { launchIsolatedApp, closeIsolatedApp, IsolatedApp } from './helpers/electron-app'
+import { seedCodexAccount, realmDirOf, createCodexConfig, openSession, activeSessionId, terminalRows, answerFirstScreen } from './helpers/codex-mode'
+import { nextFirstScreen, FOOTER, type FirstScreenAnswer } from './helpers/codex-first-screens'
+import { pathWithoutCodex } from './helpers/fake-codex'
+import { isolatedHomeDir } from './helpers/isolated-env'
 
 /** A Claude Code the app supports (CLAUDE_MIN_MANAGED_CLI_VERSION, as
  *  onboarding-provider-select.spec.ts's stand-in answers). */
@@ -447,6 +501,21 @@ async function pressAndCancelPrevious(): Promise<number> {
 
 const noPressFolder = () => expect(fs.existsSync(path.join(ctx!.dataDir, 'electron-userdata', 'snap-capture'))).toBe(false)
 
+/** A rectangle's picture size: the engine's crop (bmp.ts pixelRectFor), each
+ *  edge rounded at the display's scale. */
+const rectangleSize = (at: { x: number; y: number }, size: { width: number; height: number }, scale: number) => ({
+  width: Math.round((at.x + size.width) * scale) - Math.round(at.x * scale),
+  height: Math.round((at.y + size.height) * scale) - Math.round(at.y * scale),
+})
+
+/** The whole screen's picture size: today's cap (screenshot-capture.ts
+ *  constrainToMaxDim), the longer side to 1920, the other kept in proportion. */
+function wholeScreenSize(display: Disp): { width: number; height: number } {
+  const { width: pw, height: ph } = display.physical
+  if (Math.max(pw, ph) <= MAX_DIM) return { width: pw, height: ph }
+  return pw >= ph ? { width: MAX_DIM, height: Math.round(ph * MAX_DIM / pw) } : { width: Math.round(pw * MAX_DIM / ph), height: MAX_DIM }
+}
+
 // D12: the Snap menu is never in a press's picture (aicc_planning#406).
 
 /** A pixel tells D12's two page pictures of the menu's box (open, closed)
@@ -639,9 +708,7 @@ async function pressReadingMenu(label: string, answerWith: MenuAnswer, rate: num
   let height: number
   let answeredAt: number
   if (answerWith === 'rectangle') {
-    // The engine's crop (bmp.ts pixelRectFor): each edge rounded at the scale.
-    width = Math.round((box.x + box.width) * s) - Math.round(box.x * s)
-    height = Math.round((box.y + box.height) * s) - Math.round(box.y * s)
+    ({ width, height } = rectangleSize(box, box, s))
     await overlay.mouse.move(box.x, box.y)
     await overlay.mouse.down()
     await overlay.mouse.move(box.x + box.width / 2, box.y + box.height / 2, { steps: 4 })
@@ -650,12 +717,7 @@ async function pressReadingMenu(label: string, answerWith: MenuAnswer, rate: num
     answeredAt = performance.now()
     await answer(overlay, () => overlay.keyboard.press('Enter'))
   } else {
-    // Today's cap, as D3 reads it.
-    const { width: pw, height: ph } = display.physical
-    const capped = Math.max(pw, ph) <= MAX_DIM ? { width: pw, height: ph }
-      : pw >= ph ? { width: MAX_DIM, height: Math.round(ph * MAX_DIM / pw) } : { width: Math.round(pw * MAX_DIM / ph), height: MAX_DIM }
-    width = capped.width
-    height = capped.height
+    ({ width, height } = wholeScreenSize(display))
     answeredAt = performance.now()
     await answer(overlay, () => overlay.getByRole('button', { name: 'Whole screen' }).click())
   }
@@ -685,9 +747,24 @@ async function pressReadingMenu(label: string, answerWith: MenuAnswer, rate: num
   }
 }
 
-test.describe.configure({ mode: 'serial' })
+/** E2E_HEADLESS shows the app's window at -10000,-10000, off every display
+ *  (src/main/index.ts, ready-to-show). Snap pictures the screen, so the
+ *  window goes where a user has it: on the primary display, within its work
+ *  area. (Run 45269811648 read the window's right and bottom edges at -8720
+ *  and -9280: -10000 plus 1280 by 720.) Answers the window's bounds. C3
+ *  passes `right`: the window's left edge that many DIP further right, its
+ *  size unchanged. (The window is at least 1280 by 720 DIP, src/main/index.ts
+ *  minWidth and minHeight, so on the runner's 1024 by 768 display it already
+ *  runs past the display's right edge: run 45582381926 read 0,0 1280x720.) */
+async function placeAppWindow(right = 0): Promise<unknown> {
+  const area = await ctx!.app.evaluate(({ screen }) => screen.getPrimaryDisplay().workArea)
+  const placed = { x: area.x + right, y: area.y, width: Math.min(1280, area.width), height: Math.min(720, area.height) }
+  await (await ctx!.app.browserWindow(ctx!.page)).evaluate((w, b) => w.setBounds(b), placed)
+  return (await ctx!.app.browserWindow(ctx!.page)).evaluate((w) => w.getBounds())
+}
 
 test.describe('Snap on Windows', () => {
+  test.describe.configure({ mode: 'serial' })
   test.skip(process.platform !== 'win32', 'Snap on Windows: the runner is Windows')
   test.skip(!HELPER, 'the snap-e2e job only (ci.yml): it needs SNAP_E2E_HELPER, the helper that job built')
 
@@ -706,15 +783,7 @@ test.describe('Snap on Windows', () => {
     })
     readings.launchMs = Math.round(performance.now() - started)
     ctx.app.on('console', (m) => { mainLines.push(m.text()) })
-    // E2E_HEADLESS shows the app's window at -10000,-10000, off every display
-    // (src/main/index.ts, ready-to-show). Snap pictures the screen, so the
-    // window goes where a user has it: on the primary display, within its work
-    // area. (Run 45269811648 read the window's right and bottom edges at
-    // -8720 and -9280: -10000 plus 1280 by 720.)
-    const area = await ctx.app.evaluate(({ screen }) => screen.getPrimaryDisplay().workArea)
-    const placed = { x: area.x, y: area.y, width: Math.min(1280, area.width), height: Math.min(720, area.height) }
-    await (await ctx.app.browserWindow(ctx.page)).evaluate((w, b) => w.setBounds(b), placed)
-    readings.appWindow = await (await ctx.app.browserWindow(ctx.page)).evaluate((w) => w.getBounds())
+    readings.appWindow = await placeAppWindow()
   })
 
   test.afterAll(async () => {
@@ -723,6 +792,9 @@ test.describe('Snap on Windows', () => {
     fs.writeFileSync(path.join(OUT, 'readings.json'), JSON.stringify(readings, null, 2))
     console.log(`[snap-e2e] readings ${JSON.stringify(readings)}`)
     await closeIsolatedApp(ctx)
+    // Part two shares `ctx`: never leave it naming this closed app, whose
+    // process id Windows may have given to another program by then.
+    ctx = undefined
   })
 
   test('D1 START: one Claude Code tab opens and shows the Snap button', async () => {
@@ -763,9 +835,7 @@ test.describe('Snap on Windows', () => {
       const typedBefore = typedText().length
       const { overlay, display, start, from } = await pressNew()
       const s = display.scaleFactor
-      // The engine's crop (bmp.ts pixelRectFor): each edge rounded at the scale.
-      const width = Math.round((start.x + DRAG.width) * s) - Math.round(start.x * s)
-      const height = Math.round((start.y + DRAG.height) * s) - Math.round(start.y * s)
+      const { width, height } = rectangleSize(start, DRAG, s)
       await overlay.mouse.move(start.x, start.y)
       await overlay.mouse.down()
       await overlay.mouse.move(start.x + DRAG.width / 2, start.y + DRAG.height / 2, { steps: 4 })
@@ -796,9 +866,7 @@ test.describe('Snap on Windows', () => {
       const before = jpegs()
       const { overlay, display, from } = await pressNew()
       const { width: pw, height: ph } = display.physical
-      // Today's cap (screenshot-capture.ts constrainToMaxDim): the longer side to 1920, the other kept in proportion.
-      const capped = Math.max(pw, ph) <= MAX_DIM ? { width: pw, height: ph }
-        : pw >= ph ? { width: MAX_DIM, height: Math.round(ph * MAX_DIM / pw) } : { width: Math.round(pw * MAX_DIM / ph), height: MAX_DIM }
+      const capped = wholeScreenSize(display)
       const answeredAt = performance.now()
       await answer(overlay, () => overlay.getByRole('button', { name: 'Whole screen' }).click())
       await expectOverlayGone()
@@ -991,4 +1059,318 @@ test.describe('Snap on Windows', () => {
     expect(reads.filter((r) => r.copy && !r.seen).map((r) => r.label), 'the control: the copy of the menu is seen').toEqual([])
     expect(reads.filter((r) => !r.copy && r.seen).map((r) => r.label), 'the menu is in no picture of the slowed page').toEqual([])
   })
+})
+
+// PART TWO (see the header): Snap into a Codex tab while Codex shows its
+// warning count.
+
+/** The Codex the job installed (its npm prefix), or '' off the job. */
+const CODEX_PREFIX = process.env.SNAP_E2E_CODEX ? path.resolve(process.env.SNAP_E2E_CODEX) : ''
+/** The Codex the test machine's readings used (P19; beta.17 C9). */
+const CODEX_VERSION = '0.157.1'
+const CODEX_LABEL = 'Snap Codex E2E'
+const CODEX_FAKE_KEY = 'sk-e2e-fake-key-not-real'
+/** Everything but loopback goes nowhere (as codex-real-launch.spec.ts). */
+const DEAD_PROXY = { HTTPS_PROXY: 'http://127.0.0.1:9', HTTP_PROXY: 'http://127.0.0.1:9', ALL_PROXY: 'http://127.0.0.1:9', NO_PROXY: '127.0.0.1,localhost' }
+/** See the header. */
+const CODEX_START_MS = 120_000
+const CODEX_TURN_MS = 20_000
+/** How far each C2 and C3 run moves its picture (DIP): C2's drag starts this
+ *  much further right a run, C3 moves the app's window this much further
+ *  right a run. Without it two presses could picture the same screen: in run
+ *  45582381926 C2 run 3's picture was C2 run 2's byte for byte, and C3 run
+ *  2's was C3 run 1's (Codex numbers each message's image [Image #1], so its
+ *  screen after each turn is the same). */
+const PICTURE_STEP = 16
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
+
+/** One request probe P11's stand-in saw (its onEvent; a body is never kept),
+ *  each picture it carried named by its SHA-256. */
+type StandInEvent = {
+  ev: string; t: number; id: number; path?: string; kind?: string; tools?: number; stream?: boolean; model?: string | null
+  images?: Array<{ way?: string; sha256?: string; kind?: string; bytes?: number; width?: number | null; height?: number | null }>
+}
+type StandIn = { listen: () => Promise<number>; close: () => Promise<void> }
+const { createModelStandIn } = createRequire(__filename)('../../helper/probes/p11-model-stand-in.cjs') as { createModelStandIn: (o: { onEvent: (e: StandInEvent) => void }) => StandIn }
+const standInEvents: StandInEvent[] = []
+let codexSid = ''
+
+/** The npm shim the job's install made. */
+const codexShim = () => path.join(CODEX_PREFIX, 'codex.cmd')
+
+/** The account folder's config: the model stand-in on loopback with no
+ *  retries, the project trusted, and P19's tool server that cannot start.
+ *  No model: the app names the one its config chose (`-m`). */
+function codexConfigToml(port: number, projectDir: string): string {
+  return [
+    '# snap-e2e (plan 2.1.3-beta.18, 7.5): TEST HARNESS ONLY, a throwaway Codex home. The model is the loopback stand-in; no network.',
+    'model_provider = "snape2e"',
+    '',
+    '[model_providers.snape2e]',
+    'name = "snap-e2e model stand-in (loopback test harness)"',
+    `base_url = "http://127.0.0.1:${port}/v1"`,
+    'wire_api = "responses"',
+    'request_max_retries = 0',
+    'stream_max_retries = 0',
+    '',
+    `[projects.'${projectDir}']`,
+    'trust_level = "trusted"',
+    '',
+    // P19's warning launch (p19-scenarios.json): a tool server whose program is not there.
+    '[mcp_servers.snape2eprobe]',
+    `command = '${path.join(projectDir, 'snap-e2e-no-such-program')}'`,
+    '',
+  ].join('\n')
+}
+
+/** The job's Codex run once outside the app on the account's folder (the
+ *  made-up key's sign-in, its check), as codex-real-launch.spec.ts runs it: no
+ *  Codex or OpenAI variable of the runner's, the spec's home, the dead proxy,
+ *  and through cmd.exe, since the shim is a .cmd. */
+function runCodexCli(dataDir: string, realm: string, args: string[], input?: string) {
+  const env: Record<string, string> = {}
+  for (const [k, v] of Object.entries(process.env)) {
+    if (v === undefined || /^(OPENAI_|CODEX_)/i.test(k)) continue
+    env[k] = v
+  }
+  const home = isolatedHomeDir(dataDir)
+  fs.mkdirSync(home, { recursive: true })
+  Object.assign(env, { USERPROFILE: home, HOME: home, CODEX_HOME: realm, ...DEAD_PROXY })
+  const shell = path.join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'cmd.exe')
+  return spawnSync(shell, ['/d', '/s', '/c', `""${codexShim()}" ${args.join(' ')}"`], { env, input, encoding: 'utf8', timeout: 60_000, windowsHide: true, windowsVerbatimArguments: true })
+}
+
+/** The Codex tab's screen as one text, each row's end trimmed. */
+const codexScreen = async (): Promise<string> => (await terminalRows(ctx!.page)).map((r) => r.replace(/\s+$/, '')).join('\n')
+/** Codex's composer and its footer on the screen's last rows that are not
+ *  blank: the footer by its shape (the 9.2 rules' FOOTER: the app launches
+ *  Codex with its config's model, `-m gpt-6-astra` in run 45578961836, so the
+ *  footer does not carry the account config's model), the composer row (the
+ *  prompt sign) right above it; and Codex's warning count under the footer
+ *  (P19's recorded hint row: the warning sign, "1 warning . f2 to view"), or
+ *  null. */
+function codexRest(screen: string): { atRest: boolean; count: number | null } {
+  const shown = screen.split('\n').filter((l) => l.trim() !== '')
+  let footer = -1
+  for (let i = shown.length - 1; i >= 0 && footer < 0; i--) if (FOOTER.test(shown[i])) footer = i
+  if (footer < 1) return { atRest: false, count: null }
+  const m = /\u26a0 (\d+) warnings?\b/.exec(shown.slice(footer + 1).join('\n'))
+  return { atRest: /^ ?\u203a(?: |$)/.test(shown[footer - 1]), count: m ? Number(m[1]) : null }
+}
+const warningCount = (screen: string): number | null => codexRest(screen).count
+const atRestWithCount = (screen: string) => { const r = codexRest(screen); return r.atRest && r.count !== null }
+
+/** Every request Codex has sent its model (the stand-in's Responses route).
+ *  Each is counted, whatever it carries: in run 45580311269 the one request a
+ *  press made was the turn ("[Image #1]", the sentence, and the stand-in's
+ *  "ok" on Codex's screen), and it carried no tools, so P19's note that a
+ *  turn carries Codex's tools and a second request after it does not, made
+ *  on P19's own launch, does not describe the app's. */
+const codexTurns = () => standInEvents.filter((e) => e.ev === 'request' && e.path === '/v1/responses' && e.kind !== 'not-found')
+/** The pictures pressed into the Codex tab so far, by SHA-256, in order. */
+const codexSent: string[] = []
+const sha256Of = (file: string) => crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex')
+
+/** Before a press into the Codex tab: Codex at rest, its warning count 1, on
+ *  two reads 300 ms apart (a press made while the count shows). */
+async function expectCodexAtRestWithCount(): Promise<void> {
+  const read = async () => { const s = await codexScreen(); return atRestWithCount(s) && warningCount(s) === 1 }
+  const twice = async () => { if (!(await read())) return false; await sleep(300); return read() }
+  await expect.poll(twice, { timeout: CODEX_TURN_MS, intervals: [250] }).toBe(true)
+}
+
+/** After a press into the Codex tab: the one JPEG it saved (its size, not all
+ *  black, its SHA-256 none of an earlier press's); one new-engine line; main's
+ *  one line saying Codex's image rule pasted and sent it; and exactly one new
+ *  turn at the stand-in, whose pictures are every picture pressed so far, in
+ *  order, each once, the newest this file's SHA-256 (Codex sends the whole
+ *  conversation each turn). Then Codex back at rest with its count, and still
+ *  that one turn. */
+async function expectSentToCodex(before: string[], turnsBefore: number, answeredAt: number, width: number, height: number, from: Mark, linePattern: RegExp): Promise<void> {
+  await expect.poll(() => jpegs().filter((f) => !before.includes(f)).length, { timeout: OVERLAY_MS, intervals: [50] }).toBe(1)
+  push('codexEnterToFileMs', Math.round(performance.now() - answeredAt))
+  const savedAt = performance.now()
+  const name = jpegs().find((f) => !before.includes(f))!
+  const file = path.join(shotsDir(), name)
+  const info = await jpegInfo(ctx!.app, file)
+  expect(info.empty, name).toBe(false)
+  expect({ width: info.width, height: info.height }, name).toEqual({ width, height })
+  expect(info.lit, `${name}: pixels not near black, of ${info.pixels}`).toBeGreaterThan(info.pixels / 100)
+  await expect.poll(() => snapLines(from).length, { timeout: CANCEL_MS }).toBe(1)
+  expect(snapLines(from)[0]).toMatch(linePattern)
+  // Each press's picture is made to differ from every earlier one (C2's drag
+  // and C3's window move 16 DIP a run), so a turn that sent an earlier
+  // press's picture again cannot pass as this one's.
+  const sha = sha256Of(file)
+  expect(codexSent, 'this press\'s picture differs from every earlier press\'s').not.toContain(sha)
+  codexSent.push(sha)
+  try {
+    await expect.poll(() => linesSince(from, '[codex-image]').length, { timeout: CODEX_TURN_MS, intervals: [100] }).toBe(1)
+    expect(linesSince(from, '[codex-image]')[0]).toMatch(new RegExp(`^\\[codex-image\\] ${codexSid}: an image path of \\d+ characters pasted and sent; `))
+    await expect.poll(() => codexTurns().length, { timeout: CODEX_TURN_MS, intervals: [100] }).toBeGreaterThan(turnsBefore)
+    push('codexFileToTurnMs', Math.round(performance.now() - savedAt))
+    const turn = codexTurns()[turnsBefore]
+    expect((turn.images ?? []).map((i) => i.sha256 ?? `${i.way ?? 'unknown'} (not inline)`), 'the turn\'s pictures: every picture pressed so far, in order, each once').toEqual(codexSent)
+    const turnAt = performance.now()
+    await expectCodexAtRestWithCount()
+    push('codexTurnToRestMs', Math.round(performance.now() - turnAt))
+    expect(codexTurns().length, 'one turn for the press').toBe(turnsBefore + 1)
+  } catch (err) {
+    readings.codexAtFailure = {
+      screen: (await codexScreen().catch((e: Error) => `unread: ${e.message}`)).split('\n').filter((l) => l.trim()),
+      lines: mainLines.slice(from.console).filter((l) => /codex|snap/i.test(l)).slice(-40),
+      sent: codexSent,
+    }
+    throw err
+  }
+}
+
+test.describe('Snap into a Codex tab on Windows while Codex shows its warning count', () => {
+  test.describe.configure({ mode: 'serial' })
+  test.skip(process.platform !== 'win32', 'Snap on Windows: the runner is Windows')
+  test.skip(!HELPER, 'the snap-e2e job only (ci.yml): it needs SNAP_E2E_HELPER and SNAP_E2E_CODEX, the helper that job built and the Codex it installed')
+
+  let standIn: StandIn | undefined
+  let projectDir = ''
+
+  test.beforeAll(async () => {
+    // Part one's app is closed: if this hook fails before its own launch, the
+    // afterAll below closes nothing rather than a stale process id.
+    ctx = undefined
+    test.setTimeout(LAUNCH_MS + 130_000)
+    fs.mkdirSync(OUT, { recursive: true })
+    // In the job this part runs or fails: it is never skipped there.
+    expect(CODEX_PREFIX, 'SNAP_E2E_CODEX names the Codex the job installed').not.toBe('')
+    expect(fs.existsSync(codexShim()), `no Codex at ${codexShim()}`).toBe(true)
+    standIn = createModelStandIn({ onEvent: (e) => { standInEvents.push(e) } })
+    const port = await standIn.listen()
+    const started = performance.now()
+    ctx = await launchIsolatedApp({
+      seedExtra: (dataDir) => {
+        chooseSnap(dataDir, 'new')
+        seedCodexAccount(dataDir, { fake: false, domTerminal: true, method: 'apiKey' })
+        projectDir = path.join(dataDir, 'codex-project')
+        fs.mkdirSync(projectDir, { recursive: true })
+        const realm = realmDirOf(dataDir)
+        fs.writeFileSync(path.join(realm, 'config.toml'), codexConfigToml(port, projectDir))
+        const login = runCodexCli(dataDir, realm, ['login', '--with-api-key'], `${CODEX_FAKE_KEY}\n`)
+        if (login.status !== 0) throw new Error(`the made-up key's sign-in failed (exit ${login.status}): ${login.stderr}`)
+        const status = runCodexCli(dataDir, realm, ['login', 'status'])
+        if (!/Logged in using an API key/.test(`${status.stdout}${status.stderr}`)) throw new Error(`the account folder is not signed in with the made-up key: ${status.stdout}${status.stderr}`)
+      },
+      env: (dataDir) => ({
+        PATH: [CODEX_PREFIX, ...pathWithoutCodex(process.env.PATH ?? '')].join(path.delimiter),
+        // "Sign-in already on this computer": an empty folder of the spec's.
+        CODEX_HOME: (() => { const d = path.join(dataDir, 'codex-home'); fs.mkdirSync(d, { recursive: true }); return d })(),
+        CCC_E2E_SNAP_HELPER: HELPER,
+        ...DEAD_PROXY,
+      }),
+    })
+    readings.codexLaunchMs = Math.round(performance.now() - started)
+    ctx.app.on('console', (m) => { mainLines.push(m.text()) })
+    readings.codexAppWindow = await placeAppWindow()
+  })
+
+  test.afterAll(async () => {
+    test.setTimeout(120_000)
+    readings.codexRequests = standInEvents.filter((e) => e.ev === 'request').map(({ id, t, path: p, kind, tools, stream, model, images }) => ({ id, t, path: p, kind, tools, stream, model, images }))
+    const out = Object.fromEntries(Object.entries(readings).filter(([k]) => k.startsWith('codex')))
+    fs.mkdirSync(OUT, { recursive: true })
+    fs.writeFileSync(path.join(OUT, 'codex-readings.json'), JSON.stringify(out, null, 2))
+    console.log(`[snap-e2e] codex readings ${JSON.stringify(out)}`)
+    await closeIsolatedApp(ctx)
+    ctx = undefined
+    await standIn?.close()
+  })
+
+  test('C1 START: a Codex 0.157.1 tab on the stand-in, with a tool server that cannot start, shows Codex\'s warning count and the Snap button', async () => {
+    test.setTimeout(CODEX_START_MS + 60_000)
+    const page = ctx!.page
+    const discovered = await page.evaluate(async () => {
+      const api = (window as unknown as { electronAPI: { providerAccounts: { discover: (id: string) => Promise<unknown> } } }).electronAPI
+      return api.providerAccounts.discover('codex')
+    }) as { ok: boolean; installation?: Record<string, unknown> }
+    readings.codexDiscovery = discovered.installation
+      ? { state: discovered.installation.discoveryState, version: discovered.installation.version, compatibility: discovered.installation.compatibility }
+      : discovered
+    expect(discovered.installation, JSON.stringify(discovered)).toMatchObject({ discoveryState: 'found', version: CODEX_VERSION })
+    const started = performance.now()
+    await createCodexConfig(page, { label: CODEX_LABEL, dir: projectDir })
+    await openSession(page, CODEX_LABEL)
+    codexSid = await activeSessionId(page)
+    await expect(snapButton()).toBeVisible({ timeout: TAB_MS })
+    // Codex's first screens, each answered once by the 9.2 rules, then its
+    // composer, footer and warning count on two reads 300 ms apart.
+    const answered: FirstScreenAnswer[] = []
+    let shown = false
+    try {
+      const deadline = Date.now() + CODEX_START_MS
+      while (Date.now() < deadline) {
+        const next = nextFirstScreen(await terminalRows(page), answered)
+        if (next.act === 'answer') {
+          answered.push({ kind: next.kind, screen: await answerFirstScreen(page, codexSid, next.kind) })
+          continue
+        }
+        if (atRestWithCount(await codexScreen())) {
+          await sleep(300)
+          if (atRestWithCount(await codexScreen())) { shown = true; break }
+        }
+        await sleep(250)
+      }
+    } finally {
+      readings.codexStartMs = Math.round(performance.now() - started)
+      readings.codexFirstScreens = answered.map((a) => a.kind)
+      readings.codexScreenAtStart = (await codexScreen().catch((e: Error) => `unread: ${e.message}`)).split('\n').filter((l) => l.trim())
+      readings.codexMainLines = mainLines.filter((l) => /codex/i.test(l)).slice(-60)
+    }
+    const screen = await codexScreen()
+    expect(shown, `no composer, footer and warning count within ${CODEX_START_MS} ms; the screen:\n${screen}`).toBe(true)
+    expect(warningCount(screen), `the warning count is the one tool server's; the screen:\n${screen}`).toBe(1)
+  })
+
+  for (let run = 1; run <= RUNS; run++) {
+    test(`C2 RECTANGLE run ${run}: a 200 by 120 DIP drag and Enter while Codex shows its warning count go to Codex as one turn carrying the picture`, async () => {
+      test.setTimeout(PRESS_TEST_MS + 2 * CODEX_TURN_MS)
+      await expectCodexAtRestWithCount()
+      const before = jpegs()
+      const turnsBefore = codexTurns().length
+      const { overlay, display, start, from } = await pressNew({ prefix: 'codex' })
+      // A picture of its own each run (PICTURE_STEP). pressNew's fit check
+      // leaves the room: the drag, at most 32 DIP further right, ends at
+      // 272 DIP of the window's 1024 DIP on the runner's display.
+      const at = { x: start.x + (run - 1) * PICTURE_STEP, y: start.y }
+      push('codexDragX', at.x)
+      const { width, height } = rectangleSize(at, DRAG, display.scaleFactor)
+      await overlay.mouse.move(at.x, at.y)
+      await overlay.mouse.down()
+      await overlay.mouse.move(at.x + DRAG.width / 2, at.y + DRAG.height / 2, { steps: 4 })
+      await overlay.mouse.move(at.x + DRAG.width, at.y + DRAG.height, { steps: 4 })
+      await overlay.mouse.up()
+      const answeredAt = performance.now()
+      await answer(overlay, () => overlay.keyboard.press('Enter'))
+      await expectOverlayGone()
+      await expectSentToCodex(before, turnsBefore, answeredAt, width, height, from, /^\[snap\] new engine: a rectangle of display \d+, /)
+    })
+  }
+
+  for (let run = 1; run <= RUNS; run++) {
+    test(`C3 WHOLE SCREEN run ${run}: the whole screen while Codex shows its warning count goes to Codex as one turn carrying the picture`, async () => {
+      test.setTimeout(PRESS_TEST_MS + 2 * CODEX_TURN_MS)
+      // A picture of its own each run (PICTURE_STEP): the app's window moved
+      // right, then Codex read at rest with its count, so the press is still
+      // made while the count shows; the window goes back once the turn is read.
+      const moved = await placeAppWindow((run - 1) * PICTURE_STEP)
+      readings.codexWholeScreenWindow = [...((readings.codexWholeScreenWindow as unknown[] | undefined) ?? []), moved]
+      await expectCodexAtRestWithCount()
+      const before = jpegs()
+      const turnsBefore = codexTurns().length
+      const { overlay, display, from } = await pressNew({ prefix: 'codex' })
+      const { width, height } = wholeScreenSize(display)
+      const answeredAt = performance.now()
+      await answer(overlay, () => overlay.getByRole('button', { name: 'Whole screen' }).click())
+      await expectOverlayGone()
+      await expectSentToCodex(before, turnsBefore, answeredAt, width, height, from, /^\[snap\] new engine: the whole screen of display \d+, /)
+      await placeAppWindow()
+    })
+  }
 })

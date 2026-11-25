@@ -68,7 +68,8 @@ afterEach(() => {
 
 // ── 1. the corpus ───────────────────────────────────────────────────────────
 const DIR = resolve(__dirname, '../../../helper/fixtures/screens')
-const CODEX = readdirSync(DIR).filter((f) => /^codex(170)?-.+\.json$/.test(f) && !f.endsWith('.rows.json')).map((f) => f.slice(0, -'.json'.length)).sort()
+/** Every Codex recording: the corpus names one program per Codex version (codex, codex170, codex172). */
+const CODEX = readdirSync(DIR).filter((f) => /^codex\d*-.+\.json$/.test(f) && !f.endsWith('.rows.json')).map((f) => f.slice(0, -'.json'.length)).sort()
 
 interface RecEvent { text?: string; ev?: string; cols?: number; rows?: number }
 interface Recording { cols: number; rows: number; events: RecEvent[] }

@@ -212,6 +212,55 @@ describe('readHookFile', () => {
   })
 })
 
+// 2.1.3-beta.18, plan section 5 (review finding 10): the hook mode a held
+// session's launch names is run only from this user's helper copy as the app
+// lays it out, with no link at any level the app made. The host-safe cases
+// (and a stand-in file system for each link) are in
+// tests/unit/scripts/codex-hook-forwarder-helper.test.ts; these plant the
+// links themselves.
+describe('readHelper: real links', () => {
+  const EXE = process.platform === 'win32' ? 'aicc-helper.exe' : 'aicc-helper'
+  const readHelper = (fwd as unknown as { readHelper: (env: Record<string, string>) => { exe: string } | null | false }).readHelper
+  /** The helper copy as the app lays it out, in a fresh folder: `<at>/helper/<version>/<exe>`. */
+  function helperCopy(at = appDir()): { exe: string; store: string; root: string } {
+    const root = join(at, 'helper')
+    const exe = join(root, '0.1.0-0123456789ab', EXE)
+    mkdirSync(dirname(exe), { recursive: true })
+    writeFileSync(exe, 'MZ the helper copy')
+    mkdirSync(join(root, 'store'))
+    return { exe, store: join(root, 'store'), root }
+  }
+  const env = (exe: string, store: string) => ({ AICC_HELPER_PATH: exe, AICC_HELPER_STORE: store, AICC_HELPER_SESSION: 'ag0123456789abcdef0123456789abcd' })
+
+  it('the copy as made is run; reached through a link or junction at its version folder or its helper folder, it is not', () => {
+    const real = helperCopy()
+    expect(readHelper(env(real.exe, real.store))).toEqual({ exe: real.exe })
+    // The version folder a junction to the real one.
+    const at = appDir()
+    mkdirSync(join(at, 'helper', 'store'), { recursive: true })
+    const viaVersion = join(at, 'helper', '0.1.0-0123456789ab')
+    folderLink(dirname(real.exe), viaVersion)
+    expect(readHelper(env(join(viaVersion, EXE), join(at, 'helper', 'store')))).toBe(false)
+    // The helper folder a junction to the real one.
+    const at2 = appDir()
+    folderLink(real.root, join(at2, 'helper'))
+    expect(readHelper(env(join(at2, 'helper', '0.1.0-0123456789ab', EXE), join(at2, 'helper', 'store')))).toBe(false)
+    // The folder above the helper folder is the user's or the system's choice: reached through a link, read.
+    const viaAbove = join(appDir(), 'above-link')
+    folderLink(dirname(real.root), viaAbove)
+    expect(readHelper(env(join(viaAbove, 'helper', '0.1.0-0123456789ab', EXE), join(viaAbove, 'helper', 'store')))).toEqual({ exe: join(viaAbove, 'helper', '0.1.0-0123456789ab', EXE) })
+  })
+
+  it('a copy with a second name (a hard link) is not run', () => {
+    const real = helperCopy()
+    const other = join(dirname(real.root), 'other.exe')
+    writeFileSync(other, 'MZ another program')
+    rmSync(real.exe)
+    linkSync(other, real.exe)
+    expect(readHelper(env(real.exe, real.store))).toBe(false)
+  })
+})
+
 interface Captured { opts: Record<string, any>; body: Buffer | null; req: EventEmitter & { destroy: () => void; end: (b: Buffer) => void } }
 function fakeRequest(behaviour: 'ok' | 'error' | 'timeout', captured: Captured[]) {
   return (opts: Record<string, any>, onRes: (res: EventEmitter & { resume: () => void }) => void) => {

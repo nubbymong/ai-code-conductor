@@ -14,6 +14,7 @@ import { windowsFolderAsRun, windowsPathFolderIsFullyQualified } from '../window
 import { codexShellEnv, CMD_UNSAFE_PATH_RE } from './cli-runner'
 import { CODEX_CONVERSATION_ID_RE, codexFolderIdentity, resolveCodexResume } from './rollout-lookup'
 import { codexHookCommand, codexHookConfigArgs, codexPlainWrapperDir, codexLocalAppData, verifyPlainCodexHookWrapper, CODEX_HOOK_FILE_ENV, CODEX_HOOK_SCRIPT, CODEX_HOOK_STALE_MS, CODEX_HOOK_WRAPPER } from './hooks'
+import { HOOK_MODE_ENV } from '../../session-helper/protocol'
 import { codexExtraArgsProblem, codexExtraArgWords } from '../../../shared/extra-args'
 import { logInfo, logWarn } from '../../debug-logger'
 import { isPlainScriptFile, isRealScriptFolder, deployFailedThisRun } from '../../script-deploy'
@@ -361,8 +362,10 @@ export const CODEX_PICK_STALE_MS = CODEX_HOOK_STALE_MS
  * user's (where the platform keeps owners), older than `maxAgeMs`, and
  * empty or holding only the pick file and its staging files: each file
  * removed by name, then the folder, never recursively. Anything else there
- * keeps the folder whole. A session an app update kept running has no pick
- * folder left by then: its watcher's end at the release removed it.
+ * keeps the folder whole. A session an app update kept running keeps its
+ * pick folder (aicc_planning#419: the release stops its watcher with
+ * keepPickFolder), and the provider's removeSessionPickFolder removes it
+ * once the session is kept no longer.
  * Answers how many were removed. Never throws.
  */
 export function sweepStaleCodexPickFolders(tmp: string = os.tmpdir(), now: number = Date.now(), maxAgeMs: number = CODEX_PICK_STALE_MS): number {
@@ -952,6 +955,12 @@ function buildCodexSpawnCommand(opts: SpawnOptions): ProviderSpawnCommand {
   // credential, so CODEX_HOME stays the one the launch set.
   const env: Record<string, string> = { ...launch.env }
   setOwned(env, 'CLAUDE_MULTI_SESSION_ID', opts.sessionId, win32)
+  // 2.1.3-beta.18 (ADR-030 S12): the hook mode's variables come only from the
+  // session helper, on the launch a holder runs for this session (its
+  // manager's hookRoute). One this process inherited (the app started from a
+  // held session's own shell) would send this session's hook events to that
+  // other session's holder: the forwarder runs the hook mode it names.
+  for (const name of Object.values(HOOK_MODE_ENV)) dropVariable(env, name, win32)
   // U6: bearer token for the per-spawn conductor MCP entry above. Per-session
   // HMAC, matched to the cccSessionId baked into the URL (GHSA-q83v-phcc-hgv4).
   if (mcpPort > 0) {

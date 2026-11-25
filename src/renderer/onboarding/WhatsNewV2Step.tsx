@@ -223,12 +223,26 @@ const SECTIONS_211: WhatsNewSection[] = [
 /** Every curated set, oldest first. */
 // 2.1.3: the model list refreshes without a release, and Fable 5.2. Upgrade
 // only: a fresh install meets the current model list in the picker itself.
+// 2.1.3-beta.18 release smoke (a-boot.txt): a tester read only those two
+// lines, and none of the line's own features, so the Machines page, Snap's own
+// overlay, the broadcast chooser and the remote sessions preview each get one,
+// tagged with the first build that shipped it. Upgrade only too: each is told
+// against a before, and a fresh install meets them in the Feature Guide.
 const SECTIONS_213: WhatsNewSection[] = [
   {
     heading: 'Across the app',
     items: [
       { since: '2.1.3-beta.1', upgradeOnly: true, title: 'New models, no update.', desc: 'The model list refreshes at start-up, so a new model can reach the picker without a new version of the app.' },
       { since: '2.1.3-beta.1', upgradeOnly: true, title: 'Fable 5.2.', desc: 'Fable 5.2 is in the model picker.', needsClaude: true },
+      { since: '2.1.3-beta.6', upgradeOnly: true, title: 'A Machines page.', desc: 'A page on the left rail shows this computer\'s session helper and what it holds.' },
+      { since: '2.1.3-beta.16', upgradeOnly: true, title: 'Snap, its own overlay.', desc: 'On Windows, Snap takes its picture with its own overlay: a rectangle or the whole screen.' },
+    ],
+  },
+  {
+    heading: 'Sessions',
+    items: [
+      { since: '2.1.3-beta.17', upgradeOnly: true, title: 'Send a prompt to every session.', desc: 'A Global prompt button can go to every open session; each press asks first: All, or the ones you pick.' },
+      { since: '2.1.3-beta.17', upgradeOnly: true, title: 'Remote sessions preview.', desc: 'On Windows, off by default: a Claude Code SSH tab runs through the session helper, with status line and tools.', needsClaude: true },
     ],
   },
 ]

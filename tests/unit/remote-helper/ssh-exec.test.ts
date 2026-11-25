@@ -248,6 +248,38 @@ describe('ssh exec: the bridge stream', () => {
   })
 })
 
+// 2.1.3-beta.18 fix round, item 3 (section 3.2's host line): with the tab's
+// local ssh.exe killed, the re-attach line read "the session helper on the
+// machine ended before it answered (exit 4294967295)", while the helper on the
+// host kept running: it was the ssh on this computer that ended, and
+// 4294967295 is Windows' -1 read unsigned. A bridge whose ssh ends before the
+// launcher's hash line now says which side ended: an exit no remote command
+// gives (outside 0 to 255), printed signed, or a signal, is the ssh link on
+// this computer; a remote exit keeps its words.
+describe('ssh exec: a bridge whose ssh ends before the helper answers', () => {
+  const values = [N, D, I, FOLDER, SHA, SID]
+  const cutWith = (code: number | null, signal?: string) => new FakeSsh({ answer: () => ({}), bridgeCut: () => ({ code, ...(signal ? { signal } : {}) }) })
+
+  it('ssh ended on this computer with -1 (Windows, read unsigned): the ssh link on this computer, its exit signed', async () => {
+    await expect(openScriptStream(cutWith(4294967295), T, 'bridge', values, N, 5000)).rejects.toMatchObject({
+      message: 'the ssh link on this computer ended before the session helper answered (ssh exit -1)',
+      final: false,
+    })
+  })
+
+  it('ssh ended by a signal (POSIX): the ssh link on this computer, the signal named', async () => {
+    await expect(openScriptStream(cutWith(null, 'SIGKILL'), T, 'bridge', values, N, 5000)).rejects.toMatchObject({
+      message: 'the ssh link on this computer ended before the session helper answered (ssh ended by SIGKILL)',
+      final: false,
+    })
+  })
+
+  it('a remote exit keeps its words: 1, and 3 (no holder, final)', async () => {
+    await expect(openScriptStream(cutWith(1), T, 'bridge', values, N, 5000)).rejects.toMatchObject({ message: 'the session helper on the machine ended before it answered (exit 1)', final: false })
+    await expect(openScriptStream(cutWith(3), T, 'bridge', values, N, 5000)).rejects.toMatchObject({ message: 'no session helper holds this session on the machine', final: true })
+  })
+})
+
 // Found by the beta.17 final-head review: sshProgram() throws when no ssh is
 // found, and the runner kept that failure as its version for the rest of the
 // run, so every later exec failed before its own handling, even once ssh was

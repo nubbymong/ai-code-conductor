@@ -95,6 +95,8 @@ import { replayTail, rowsOf } from './replay-tail'
 import { ReplayQueryFilter } from './replay-queries'
 import { PTY_IO_FAILED_GRACE_MS, PTY_IO_FAILED_TEXT, guardPtyIo } from '../pty-input-guard'
 import type { ReplayAtHolderSize } from '../../shared/replay-at-holder-size'
+import { TMUX_WHEEL_EXIT_KEY } from '../../shared/tmux-wheel'
+import { PROMPT_ENTER_DELAY_MS } from '../session-input/enter-delay'
 
 export interface HelperPtyDriver {
   /** Start a holder for `sid` and answer its record. Throws when the helper
@@ -124,6 +126,13 @@ export interface HelperPtyDriver {
    *  then goes through its holder). Undefined: the spec's. Only for this
    *  launch: the usual way keeps the spawn's own arguments. */
   launchArgs?(conn: HolderConnection): Pick<LaunchSpec, 'argv' | 'line'> | undefined
+  /** The launch on `conn` with the session's hook events through its holder
+   *  from its own environment (2.1.3-beta.18, ADR-030 S12: manager.ts
+   *  hookRoute): the environment it goes with (`env`, the spec's, with the hook
+   *  mode's variables added) and the hook kinds its holder takes
+   *  (`hookKinds`). Undefined: the spec's environment, and no `hookKinds`.
+   *  Only for this launch: the usual way keeps the spawn's own environment. */
+  launchHooks?(conn: HolderConnection, env: Readonly<Record<string, string>>): { env: Record<string, string>; hookKinds: readonly string[] } | undefined
   log(message: string): void
   /** The clock for the attach-again budget, and for the time a take-over's
    *  tab took to reach its holder's size (logged). */
@@ -178,6 +187,9 @@ export interface HelperPtyOptions {
 export const LOST_EXIT_CODE = -1
 /** Input kept while the terminal is first being attached. */
 const QUEUE_MAX_BYTES = 1024 * 1024
+/** The frames that are a lone Enter: '\r', or the tmux leave key then '\r'. */
+const LONE_ENTERS = [Buffer.from('\r', 'utf8'), Buffer.from(`${TMUX_WHEEL_EXIT_KEY}\r`, 'utf8')]
+const isLoneEnter = (b: Buffer): boolean => LONE_ENTERS.some((e) => e.equals(b))
 /** Attaches again after a connection dropped: at most this many in REATTACH_WINDOW_MS. */
 export const REATTACH_TRIES = 3
 export const REATTACH_WINDOW_MS = 60_000
@@ -295,6 +307,9 @@ export class HelperPty implements IPty {
   private size: { cols: number; rows: number }
   private queued: Buffer[] = []
   private queuedBytes = 0
+  /** The attach's flush of the queued input waits before a lone Enter
+   *  (flushQueued): until it goes, what is typed waits behind it. */
+  private flushWait: ReturnType<typeof setTimeout> | undefined
   private sizeChanged = false
   private attached = false
   private everAttached = false
@@ -448,7 +463,7 @@ export class HelperPty implements IPty {
     if (this.exited) return
     if (this.inner) { this.inner.write(data); return }
     const bytes = typeof data === 'string' ? Buffer.from(data, 'utf8') : data
-    if (this.attached && this.conn && !this.conn.isClosed) { this.conn.sendInput(bytes); return }
+    if (this.attached && this.conn && !this.conn.isClosed && this.flushWait === undefined) { this.conn.sendInput(bytes); return }
     // Before the first attach the shell is not even there yet, so a runaway
     // paste is cut short. Once attached, nothing typed is dropped: a gap in
     // the input would reach the program.
@@ -522,6 +537,15 @@ export class HelperPty implements IPty {
     if (this.inner || this.exited || this.ending || this.released || !this.record || !this.everAttached) return false
     this.released = true
     const conn = this.conn
+    // A flush waiting before a lone Enter sends the rest now, as it all went
+    // before that wait (2.1.3-beta.18 fix round): nothing typed is dropped.
+    if (this.flushWait !== undefined && conn && !conn.isClosed) {
+      this.stopFlushWait()
+      const rest = this.queued
+      this.queued = []
+      this.queuedBytes = 0
+      for (const b of rest) conn.sendInput(b)
+    }
     // Cleared first, so the connection's own close finds nothing to do here.
     this.conn = undefined
     // A replay still held is shown before the holder is let go of.
@@ -569,18 +593,27 @@ export class HelperPty implements IPty {
     } catch (err) {
       this.driver.log(`[session-helper] ${this.sid}: before the launch: ${(err as Error).message}`)
     }
+    let hooks: { env: Record<string, string>; hookKinds: readonly string[] } | undefined
+    try {
+      hooks = this.driver.launchHooks?.(conn, this.spec.env)
+    } catch (err) {
+      this.driver.log(`[session-helper] ${this.sid}: before the launch: ${(err as Error).message}`)
+    }
     try {
       const launched = await conn.request({
         t: 'term.launch',
         argv: start.argv,
         cwd: this.spec.cwd,
-        env: this.spec.env,
+        env: hooks ? hooks.env : this.spec.env,
         cols: sent.cols,
         rows: sent.rows,
         // The Windows fields, only when the spec gives them: a launch without
         // them is the same frame as before they existed.
         ...(start.line !== undefined ? { line: start.line } : {}),
         ...(this.spec.conpty !== undefined ? { conpty: this.spec.conpty } : {}),
+        // 2.1.3-beta.18: only for a launch whose hook events go through its
+        // holder from its own environment; every other is the same frame as before.
+        ...(hooks ? { hookKinds: [...hooks.hookKinds] } : {}),
       })
       if (typeof launched.pid === 'number') this.childPid = launched.pid
     } catch (err) {
@@ -780,15 +813,55 @@ export class HelperPty implements IPty {
     // a replay still waits to be shown at its holder's size, the tab's size
     // after it does (aicc_planning#392).
     if (this.sizeChanged && !this.redraw && !this.sizeWait && !this.replayAt && this.fitWait === undefined) this.sendResize()
-    const queued = this.queued
-    this.queued = []
-    this.queuedBytes = 0
-    for (const b of queued) conn.sendInput(b)
+    this.flushQueued(conn)
     // The replay may have been shown already, before this attach was settled.
     // One held to its end that nothing else shows now (it is empty, and no
     // redraw or size wait follows) goes here.
     if (this.held?.due && !this.sizeWait) this.showHeld()
     this.redrawOnce(conn)
+  }
+
+  /**
+   * What was typed while the terminal was not attached, on `conn`, in the
+   * order typed (2.1.3-beta.18 fix round). A frame that is a lone Enter ('\r',
+   * or the tmux leave key then '\r') goes PROMPT_ENTER_DELAY_MS after the
+   * frame before it, and what is typed meanwhile waits behind it (write), so
+   * the order holds. The holder writes frames that come back to back into one
+   * read of the program, and Claude Code (2.1.332, measured) takes a control
+   * character as a key only in a read shorter than 64 characters: an image
+   * request and its Enter typed during a link drop were typed and not sent
+   * once the link was back. A lone Enter first in line goes at once, and
+   * frames with no lone Enter among them go at once, as they always did. A
+   * drop during the wait leaves the rest queued for the attach again, the
+   * Enter first (setDetached); an update's let-go sends it at once (release).
+   */
+  private flushQueued(conn: HolderConnection): void {
+    const queued = this.queued
+    this.queued = []
+    this.queuedBytes = 0
+    let i = 0
+    for (; i < queued.length; i++) {
+      if (conn.isClosed || (i > 0 && isLoneEnter(queued[i]))) break
+      conn.sendInput(queued[i])
+    }
+    if (i === queued.length) return
+    // Anything queued while these were sent was handed to `conn` before them
+    // (a close in the middle carries its unsent input to the next connection).
+    this.queued = [...this.queued, ...queued.slice(i)]
+    this.queuedBytes = this.queued.reduce((n, b) => n + b.length, 0)
+    if (conn.isClosed) return
+    this.flushWait = setTimeout(() => {
+      this.flushWait = undefined
+      if (this.exited || this.released || this.inner || this.conn !== conn || !this.attached || conn.isClosed) return
+      this.flushQueued(conn)
+    }, PROMPT_ENTER_DELAY_MS)
+  }
+
+  /** No flush waits before a lone Enter from here on: what it held stays queued. */
+  private stopFlushWait(): void {
+    if (this.flushWait === undefined) return
+    clearTimeout(this.flushWait)
+    this.flushWait = undefined
   }
 
   /**
@@ -1181,6 +1254,9 @@ export class HelperPty implements IPty {
     this.pauseRedraw()
     // So is the tab's size a replay at its holder's size waited for.
     this.stopFitWait()
+    // A flush waiting before a lone Enter: the Enter and what follows it stay
+    // queued, for the attach again (or the usual way's terminal).
+    this.stopFlushWait()
     if (!this.attached) return
     this.attached = false
     this.driver.attachedChanged(this.sid, false)

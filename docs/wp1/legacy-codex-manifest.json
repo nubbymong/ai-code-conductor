@@ -1,9 +1,9 @@
 {
   "schema": "wp1-legacy-codex-manifest/3",
-  "generatedAt": "2026-11-25T00:55:50.371Z",
-  "head": "13a7090642b2828ad567a2bea5fa3bc8491d0006",
-  "tree": "e37bb9ca2461fb82f9e958e42c4ba593e62dac70",
-  "scannedWorkingTree": false,
+  "generatedAt": "2026-11-25T11:01:44.726Z",
+  "head": "082a119bb8d1ea79f0e5628df5a86aff250d60aa",
+  "tree": "6ab2f486b4b11594e19f18b092726671942ffdb4",
+  "scannedWorkingTree": true,
   "predicateDigest": "100a1233edebdc39a5f9004d3fba980a89ebb15b25872e52076386bc84b03153",
   "predicates": [
     {
@@ -116,9 +116,9 @@
     "\\.(png|jpg|jpeg|gif|ico|icns|webp|svg|woff2?|ttf|otf|mp4|zip|asar|node|exe|dll|dylib|so|pdf)$",
     "^package-lock\\.json$"
   ],
-  "trackedFileCount": 3869,
-  "excludedFileCount": 614,
-  "scannedFileCount": 3255,
+  "trackedFileCount": 3901,
+  "excludedFileCount": 625,
+  "scannedFileCount": 3276,
   "unscopedFileCount": 15,
   "unscoped": [
     ".claude/settings.json",
@@ -139,8 +139,8 @@
   ],
   "unscopedMentions": [],
   "unreadable": [],
-  "matchedPathCount": 1096,
-  "pathDigest": "0eb1a56b084a5b39a75c5df039facec645e916c240f7b7ab188e098df1616610",
+  "matchedPathCount": 1119,
+  "pathDigest": "d2ef3dedfbe24913f62b91565adb3b170e2efecd943bc1525f33f9ad88b1f3d5",
   "entries": [
     {
       "path": ".github/workflows/ci.yml",
@@ -148,7 +148,7 @@
         "P04",
         "P14"
       ],
-      "lineCount": 67
+      "lineCount": 76
     },
     {
       "path": ".github/workflows/upstream-cli-watch.yml",
@@ -191,6 +191,13 @@
         "P12"
       ],
       "lineCount": 3
+    },
+    {
+      "path": "build/installer.nsh",
+      "predicates": [
+        "P14"
+      ],
+      "lineCount": 24
     },
     {
       "path": "docs/USER_GUIDE.md",
@@ -959,11 +966,75 @@
       "lineCount": 21
     },
     {
+      "path": "helper/fixtures/screens/codex172-windows-bundled-after-reply.json",
+      "predicates": [
+        "P01",
+        "P14"
+      ],
+      "lineCount": 12
+    },
+    {
+      "path": "helper/fixtures/screens/codex172-windows-bundled-after-reply.rows.json",
+      "predicates": [
+        "P01",
+        "P14"
+      ],
+      "lineCount": 9
+    },
+    {
+      "path": "helper/fixtures/screens/codex172-windows-bundled-ready.json",
+      "predicates": [
+        "P01",
+        "P14"
+      ],
+      "lineCount": 9
+    },
+    {
+      "path": "helper/fixtures/screens/codex172-windows-bundled-ready.rows.json",
+      "predicates": [
+        "P01",
+        "P14"
+      ],
+      "lineCount": 9
+    },
+    {
+      "path": "helper/fixtures/screens/codex172-windows-system-after-reply.json",
+      "predicates": [
+        "P01",
+        "P14"
+      ],
+      "lineCount": 12
+    },
+    {
+      "path": "helper/fixtures/screens/codex172-windows-system-after-reply.rows.json",
+      "predicates": [
+        "P01",
+        "P14"
+      ],
+      "lineCount": 9
+    },
+    {
+      "path": "helper/fixtures/screens/codex172-windows-system-ready.json",
+      "predicates": [
+        "P01",
+        "P14"
+      ],
+      "lineCount": 9
+    },
+    {
+      "path": "helper/fixtures/screens/codex172-windows-system-ready.rows.json",
+      "predicates": [
+        "P01",
+        "P14"
+      ],
+      "lineCount": 9
+    },
+    {
       "path": "helper/probes/README.md",
       "predicates": [
         "P14"
       ],
-      "lineCount": 31
+      "lineCount": 33
     },
     {
       "path": "helper/probes/c7-scenarios.json",
@@ -971,6 +1042,13 @@
         "P14"
       ],
       "lineCount": 18
+    },
+    {
+      "path": "helper/probes/h74-scenarios.json",
+      "predicates": [
+        "P14"
+      ],
+      "lineCount": 9
     },
     {
       "path": "helper/probes/p11-model-stand-in.cjs",
@@ -1137,7 +1215,7 @@
         "P01",
         "P14"
       ],
-      "lineCount": 14
+      "lineCount": 15
     },
     {
       "path": "scripts/ci/upstream-cli-watch.mjs",
@@ -1572,7 +1650,7 @@
       "predicates": [
         "P14"
       ],
-      "lineCount": 53
+      "lineCount": 51
     },
     {
       "path": "src/main/insights-codex.ts",
@@ -1874,6 +1952,13 @@
       "lineCount": 2
     },
     {
+      "path": "src/main/providers/claude/run-screen.ts",
+      "predicates": [
+        "P14"
+      ],
+      "lineCount": 3
+    },
+    {
       "path": "src/main/providers/claude/spawn.ts",
       "predicates": [
         "P14"
@@ -2014,7 +2099,7 @@
         "P09",
         "P14"
       ],
-      "lineCount": 321
+      "lineCount": 329
     },
     {
       "path": "src/main/providers/codex/insights-exec.ts",
@@ -2038,7 +2123,7 @@
         "P01",
         "P14"
       ],
-      "lineCount": 10
+      "lineCount": 11
     },
     {
       "path": "src/main/providers/codex/mcp-config.ts",
@@ -2137,12 +2222,20 @@
       "lineCount": 63
     },
     {
+      "path": "src/main/providers/codex/run-screen-doors.ts",
+      "predicates": [
+        "P01",
+        "P14"
+      ],
+      "lineCount": 20
+    },
+    {
       "path": "src/main/providers/codex/session-screen.ts",
       "predicates": [
         "P01",
         "P14"
       ],
-      "lineCount": 65
+      "lineCount": 67
     },
     {
       "path": "src/main/providers/codex/spawn.ts",
@@ -2226,7 +2319,7 @@
         "P07",
         "P14"
       ],
-      "lineCount": 45
+      "lineCount": 47
     },
     {
       "path": "src/main/pty-input-guard.ts",
@@ -2243,7 +2336,7 @@
         "P07",
         "P14"
       ],
-      "lineCount": 365
+      "lineCount": 361
     },
     {
       "path": "src/main/sanitize-restored-spawn-options.ts",
@@ -2326,21 +2419,28 @@
         "P08",
         "P14"
       ],
-      "lineCount": 12
+      "lineCount": 17
+    },
+    {
+      "path": "src/main/session-helper/connection.ts",
+      "predicates": [
+        "P14"
+      ],
+      "lineCount": 1
     },
     {
       "path": "src/main/session-helper/manager.ts",
       "predicates": [
         "P14"
       ],
-      "lineCount": 19
+      "lineCount": 36
     },
     {
       "path": "src/main/session-input/index.ts",
       "predicates": [
         "P14"
       ],
-      "lineCount": 82
+      "lineCount": 61
     },
     {
       "path": "src/main/session-resume-enrich.ts",
@@ -2351,12 +2451,19 @@
       "lineCount": 7
     },
     {
+      "path": "src/main/session-signals/hooks.ts",
+      "predicates": [
+        "P14"
+      ],
+      "lineCount": 1
+    },
+    {
       "path": "src/main/sessions/launch-bindings.ts",
       "predicates": [
         "P04",
         "P14"
       ],
-      "lineCount": 243
+      "lineCount": 244
     },
     {
       "path": "src/main/stale-folder-sweep.ts",
@@ -3150,7 +3257,7 @@
         "P05",
         "P11"
       ],
-      "lineCount": 7
+      "lineCount": 10
     },
     {
       "path": "src/renderer/onboarding/AssistantsStep.tsx",
@@ -3529,10 +3636,9 @@
     {
       "path": "src/renderer/utils/imageTransfer.ts",
       "predicates": [
-        "P05",
         "P11"
       ],
-      "lineCount": 21
+      "lineCount": 16
     },
     {
       "path": "src/renderer/utils/launchAccount.ts",
@@ -3587,7 +3693,7 @@
         "P12",
         "P14"
       ],
-      "lineCount": 170
+      "lineCount": 172
     },
     {
       "path": "src/shared/ask-conductor-provider.ts",
@@ -3788,7 +3894,7 @@
         "P04",
         "P13"
       ],
-      "lineCount": 57
+      "lineCount": 56
     },
     {
       "path": "tests/e2e/codex-reconfirm-upgrade.spec.ts",
@@ -3831,7 +3937,7 @@
         "P01",
         "P13"
       ],
-      "lineCount": 9
+      "lineCount": 10
     },
     {
       "path": "tests/e2e/helpers/codex-mode.ts",
@@ -3841,7 +3947,7 @@
         "P05",
         "P13"
       ],
-      "lineCount": 55
+      "lineCount": 59
     },
     {
       "path": "tests/e2e/helpers/electron-app.ts",
@@ -3891,6 +3997,14 @@
         "P13"
       ],
       "lineCount": 1
+    },
+    {
+      "path": "tests/e2e/snap-windows.spec.ts",
+      "predicates": [
+        "P04",
+        "P13"
+      ],
+      "lineCount": 142
     },
     {
       "path": "tests/fixtures/codex-rollouts/malformed.jsonl",
@@ -5011,7 +5125,7 @@
         "P07",
         "P13"
       ],
-      "lineCount": 20
+      "lineCount": 23
     },
     {
       "path": "tests/unit/main/canvas-launch-tools-switch.test.ts",
@@ -5133,7 +5247,7 @@
         "P07",
         "P13"
       ],
-      "lineCount": 29
+      "lineCount": 32
     },
     {
       "path": "tests/unit/main/codex-background-launch.test.ts",
@@ -5196,7 +5310,7 @@
         "P01",
         "P13"
       ],
-      "lineCount": 96
+      "lineCount": 97
     },
     {
       "path": "tests/unit/main/codex-history-copy-not-link.test.ts",
@@ -5636,6 +5750,20 @@
       "lineCount": 69
     },
     {
+      "path": "tests/unit/main/installer-branding-guard.test.ts",
+      "predicates": [
+        "P13"
+      ],
+      "lineCount": 22
+    },
+    {
+      "path": "tests/unit/main/installer-nsis-behaviour.test.ts",
+      "predicates": [
+        "P13"
+      ],
+      "lineCount": 38
+    },
+    {
       "path": "tests/unit/main/launch-bindings-held-screen.test.ts",
       "predicates": [
         "P13"
@@ -5677,7 +5805,7 @@
         "P07",
         "P13"
       ],
-      "lineCount": 146
+      "lineCount": 159
     },
     {
       "path": "tests/unit/main/launch-bindings.test.ts",
@@ -5826,7 +5954,7 @@
         "P07",
         "P13"
       ],
-      "lineCount": 16
+      "lineCount": 19
     },
     {
       "path": "tests/unit/main/pty-conpty-per-provider.test.ts",
@@ -6091,7 +6219,15 @@
         "P04",
         "P13"
       ],
-      "lineCount": 22
+      "lineCount": 46
+    },
+    {
+      "path": "tests/unit/main/session-helper-codex-hooks.test.ts",
+      "predicates": [
+        "P01",
+        "P13"
+      ],
+      "lineCount": 41
     },
     {
       "path": "tests/unit/main/session-helper-connection.test.ts",
@@ -6134,7 +6270,7 @@
         "P01",
         "P13"
       ],
-      "lineCount": 15
+      "lineCount": 17
     },
     {
       "path": "tests/unit/main/session-input-image.test.ts",
@@ -6148,7 +6284,7 @@
       "predicates": [
         "P13"
       ],
-      "lineCount": 72
+      "lineCount": 84
     },
     {
       "path": "tests/unit/main/session-input-prompt.test.ts",
@@ -6156,7 +6292,14 @@
         "P05",
         "P13"
       ],
-      "lineCount": 26
+      "lineCount": 29
+    },
+    {
+      "path": "tests/unit/main/session-input-third-provider.test.ts",
+      "predicates": [
+        "P13"
+      ],
+      "lineCount": 19
     },
     {
       "path": "tests/unit/main/session-input.test.ts",
@@ -6165,7 +6308,7 @@
         "P07",
         "P13"
       ],
-      "lineCount": 51
+      "lineCount": 55
     },
     {
       "path": "tests/unit/main/session-resume-enrich.test.ts",
@@ -6208,7 +6351,7 @@
         "P08",
         "P13"
       ],
-      "lineCount": 12
+      "lineCount": 22
     },
     {
       "path": "tests/unit/main/terminal-query-responder-xterm.test.ts",
@@ -6245,7 +6388,7 @@
         "P01",
         "P13"
       ],
-      "lineCount": 43
+      "lineCount": 45
     },
     {
       "path": "tests/unit/main/watchdog/codex-watchdog.test.ts",
@@ -6847,7 +6990,7 @@
         "P07",
         "P13"
       ],
-      "lineCount": 149
+      "lineCount": 157
     },
     {
       "path": "tests/unit/providers/codex/spawn-node-lookup.test.ts",
@@ -7023,6 +7166,14 @@
         "P13"
       ],
       "lineCount": 37
+    },
+    {
+      "path": "tests/unit/providers/run-screen-doors-wired.test.ts",
+      "predicates": [
+        "P07",
+        "P13"
+      ],
+      "lineCount": 10
     },
     {
       "path": "tests/unit/pty-manager-ssh-container-entry.test.ts",
@@ -7506,7 +7657,7 @@
       "predicates": [
         "P13"
       ],
-      "lineCount": 1
+      "lineCount": 4
     },
     {
       "path": "tests/unit/renderer/footer-hidden-buckets-migration.test.ts",
@@ -7569,6 +7720,13 @@
         "P13"
       ],
       "lineCount": 42
+    },
+    {
+      "path": "tests/unit/renderer/image-transfer-line.test.ts",
+      "predicates": [
+        "P13"
+      ],
+      "lineCount": 18
     },
     {
       "path": "tests/unit/renderer/image-transfer-local.test.ts",
@@ -8416,12 +8574,20 @@
       "lineCount": 4
     },
     {
+      "path": "tests/unit/scripts/codex-hook-forwarder-helper.test.ts",
+      "predicates": [
+        "P01",
+        "P13"
+      ],
+      "lineCount": 11
+    },
+    {
       "path": "tests/unit/scripts/codex-hook-forwarder.test.ts",
       "predicates": [
         "P01",
         "P13"
       ],
-      "lineCount": 35
+      "lineCount": 36
     },
     {
       "path": "tests/unit/scripts/codex-resume-picker-flags.test.ts",
@@ -8539,6 +8705,13 @@
       "lineCount": 63
     },
     {
+      "path": "tests/unit/scripts/snap-e2e-job.test.ts",
+      "predicates": [
+        "P13"
+      ],
+      "lineCount": 11
+    },
+    {
       "path": "tests/unit/scripts/upstream-cli-watch-workflow.test.ts",
       "predicates": [
         "P13"
@@ -8612,7 +8785,7 @@
         "P04",
         "P13"
       ],
-      "lineCount": 434,
+      "lineCount": 437,
       "truncated": true
     },
     {
@@ -8629,7 +8802,7 @@
         "P01",
         "P13"
       ],
-      "lineCount": 70
+      "lineCount": 73
     },
     {
       "path": "tests/unit/shared/codex-screen-hint-rows.test.ts",
@@ -8690,7 +8863,7 @@
       "predicates": [
         "P13"
       ],
-      "lineCount": 74
+      "lineCount": 97
     },
     {
       "path": "tests/unit/status-ingest.test.ts",

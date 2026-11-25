@@ -73,7 +73,7 @@ on:
         required: false
         default: false
       remote_helper_e2e:
-        description: 'Run the remote helper device check (remote-helper-e2e) on the Linux runner: a localhost sshd, the static helper and the fake CLI built here, and the app''s remote-helper code adding the machine, holding a session, re-attaching and removing it; the readings and the two programs are uploaded'
+        description: 'Run the remote helper device check (remote-helper-e2e) on the Linux runner: a localhost sshd, the static helper and the fake CLI built here, and the app''s remote-helper code adding the machine, holding a session, carrying its status line, hook events and tool calls, re-attaching and removing it; the readings and the two programs are uploaded'
         type: boolean
         required: false
         default: false
@@ -123,7 +123,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:
-          node-version: '20'
+          node-version: '24'
       - name: Verify CHANGELOG.md matches changelog.ts
         run: node scripts/gen-changelog.js --check
 
@@ -259,7 +259,7 @@ jobs:
       - uses: actions/setup-node@v7
         if: steps.scope.outputs.suite != 'false'
         with:
-          node-version: '20'
+          node-version: '24'
           cache: 'npm'
 
       - uses: actions/setup-python@v7
@@ -461,7 +461,7 @@ jobs:
       - uses: actions/setup-node@v7
         if: steps.scope.outputs.suite != 'false'
         with:
-          node-version: '20'
+          node-version: '24'
           cache: 'npm'
 
       - name: Install dependencies
@@ -526,7 +526,7 @@ jobs:
       - uses: actions/setup-node@v7
         if: steps.scope.outputs.suite != 'false'
         with:
-          node-version: '20'
+          node-version: '24'
           cache: 'npm'
 
       - name: Install dependencies
@@ -670,7 +670,7 @@ jobs:
 
       - uses: actions/setup-node@v7
         with:
-          node-version: '20'
+          node-version: '24'
           cache: 'npm'
 
       - name: Install dependencies
@@ -849,7 +849,7 @@ jobs:
 
       - uses: actions/setup-node@v7
         with:
-          node-version: '20'
+          node-version: '24'
           cache: 'npm'
 
       - uses: actions/setup-python@v7
@@ -1176,6 +1176,15 @@ jobs:
   # readings, Playwright's report, its pictures of the app's own windows and
   # D12's pictures of the Snap menu's box (cut from the runner's own screen).
   # tests/unit/scripts/snap-e2e-job.test.ts evaluates its condition.
+  #
+  # The spec's second part (plan 2.1.3-beta.18, section 7.5; aicc_planning#428)
+  # opens a Codex tab in an app of its own: Codex 0.157.1, the version the
+  # test machine's readings used (probe P19, beta.17 C9), installed from npm
+  # into a prefix and a cache of its own with scripts off, as the Probe P19 job
+  # installs it, and put first on the app's PATH, so the app finds the npm
+  # shim as it finds a user's npm install. Its model is a stand-in on a
+  # loopback port (probe P11's) and its config names one tool server that
+  # cannot start, so Codex shows its warning count.
   snap-e2e:
     if: github.event_name == 'workflow_dispatch' && inputs.snap_e2e == true
     name: Snap e2e (${{ matrix.os }})
@@ -1197,7 +1206,7 @@ jobs:
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
-          node-version: '20'
+          node-version: '24'
           cache: 'npm'
 
       - name: Install the pinned Rust toolchain
@@ -1229,6 +1238,15 @@ jobs:
       - name: Build the app
         run: npm run build
 
+      # The Codex the spec's Codex tab runs (see the job's comment above).
+      - name: Install Codex 0.157.1 into its own prefix
+        shell: bash
+        env:
+          CODEX_VERSION: '0.157.1'
+          PREFIX: ${{ runner.temp }}/snap-codex
+          NPM_CACHE: ${{ runner.temp }}/npm-snap-codex-cache
+        run: npm install --global --prefix "$PREFIX" --ignore-scripts --cache "$NPM_CACHE" --no-audit --no-fund "@openai/codex@$CODEX_VERSION"
+
       # A measurement: it prints what the run read and is red only when the
       # script itself could not run. "not measured" (the runner refused the
       # token) is a reading.
@@ -1243,6 +1261,7 @@ jobs:
         env:
           SNAP_E2E_OUT: ${{ runner.temp }}/snap-e2e
           SNAP_E2E_HELPER: ${{ github.workspace }}\helper\target\release\aicc-helper.exe
+          SNAP_E2E_CODEX: ${{ runner.temp }}/snap-codex
           PLAYWRIGHT_JSON_OUTPUT_NAME: ${{ runner.temp }}/snap-e2e/playwright-report.json
         run: npx playwright test tests/e2e/snap-windows.spec.ts --retries=0 --workers=1 --reporter=list,json
 
@@ -1318,7 +1337,7 @@ jobs:
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
-          node-version: '20'
+          node-version: '24'
           cache: 'npm'
 
       # The suite imports only pure modules of the app (the reviewer's argv, the
@@ -1385,7 +1404,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:
-          node-version: '20'
+          node-version: '24'
           cache: 'npm'
       - name: Install dependencies
         run: npm ci --ignore-scripts
@@ -1442,7 +1461,12 @@ jobs:
   # with retries off: Add (upload, hash equal, self-test), another install's
   # Remove refused, a session holding the fake CLI (bytes in, output out, the
   # rc variable), a resize, the ssh child killed and a re-attach with the
-  # replay, the end, Remove, nothing left under ~/.aicc.
+  # replay; from 2.1.3-beta.18 (section 3.2) a tab's status line, hook events
+  # and tool calls, posted on the host by the helper's status, hook and relay
+  # modes as its session files name them, reaching the app's side once each,
+  # and again after the ssh child is killed (what was posted in the cut
+  # arrives once it is back), and two tabs at once each getting only its own;
+  # the end, Remove, nothing left under ~/.aicc.
   #
   # It runs ONLY on a dispatch that names it (`remote_helper_e2e`), never on a
   # pull request or a push. It is section evidence, like a test-machine line:
@@ -1469,7 +1493,7 @@ jobs:
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
-          node-version: '20'
+          node-version: '24'
           cache: 'npm'
 
       - name: Install the pinned Rust toolchain and the musl target

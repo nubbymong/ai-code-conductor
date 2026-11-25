@@ -346,7 +346,10 @@ function reportDropped(tell: Undelivered | null, sessionId: string, canvasId: st
  * line typed since it was handed in, or behind a marker given back since
  * then, or held when a turn began since then, is given back to the queue
  * while a turn reads open (see GIVEN BACK TO THE QUEUE above), through the
- * holdAgain installed when it was handed in. Returns at once.
+ * holdAgain installed when it was handed in. Returns at once. Its one caller
+ * is the Claude Code package's run screen (its marker member,
+ * providers/claude/run-screen.ts, since 2.1.3-beta.18 section 4), which the
+ * session input module's submitMarker asks for a Claude Code session only.
  */
 export function queueClaudeMarkerLine(sessionId: string, line: string, runLive: () => boolean, canvasId?: string): void {
   let entry = chains.get(sessionId)

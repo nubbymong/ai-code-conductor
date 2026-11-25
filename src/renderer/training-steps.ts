@@ -685,6 +685,7 @@ export const trainingSteps: TrainingStep[] = [
       { label: 'Open', value: 'Left rail -> Machines, beside Tokenomics' },
       { label: 'Switch on', value: 'Settings -> General -> Plain terminals through the session helper' },
       { label: 'Sessions', value: 'Settings -> General -> Claude Code and Codex sessions through the session helper' },
+      { label: 'Remote', value: 'On Windows: Settings -> General -> Remote sessions through the session helper (Linux, preview)' },
       { label: 'Services', value: 'Title bar -> Services pill -> Session helper' },
     ],
     proTip:
@@ -795,7 +796,7 @@ export const trainingSteps: TrainingStep[] = [
       'Every preference you can set lives here, organised in a left rail. Sandboxed renderer + signed updates + zod-validated IPC keep the app safe; the visible knobs let you tune everything else.',
     highlights: [
       'General -- default working dir, machine name, update channel, security toggles, and the Tokenomics switch (the usage index can be switched off)',
-      'General, under Terminal -- previews, each off by default. **Plain terminals through the session helper** keeps local Terminal only tabs and local partner terminals running on Windows if the app crashes, or through an update when you choose **Save sessions**. **Claude Code and Codex sessions through the session helper** runs local Claude Code and Codex sessions inside the helper. The **Machines** page shows the helper and what it holds. On Windows a third preview, **Remote sessions through the session helper**, runs a Claude Code SSH tab to a Linux machine you added on the Machines page through the helper there',
+      'General, under Terminal -- previews, each off by default. **Plain terminals through the session helper** keeps local Terminal only tabs and local partner terminals running on Windows if the app crashes, or through an update when you choose **Save sessions**. **Claude Code and Codex sessions through the session helper** runs local Claude Code and Codex sessions inside the helper. The **Machines** page shows the helper and what it holds. On Windows a third preview, **Remote sessions through the session helper**, runs a Claude Code SSH tab to a Linux machine you added on the Machines page through the helper there, with its status line, its hooks and the Conductor\'s tools',
       'Accounts -- the Providers card (Claude Code and Codex on or off) and every Claude and Codex account',
       'Status Line -- toggle each element of the in-terminal status bar + font + size',
       'Shortcuts -- rebind every keyboard shortcut',

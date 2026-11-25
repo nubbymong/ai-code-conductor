@@ -9,11 +9,13 @@ import type { ProviderPackage, ProviderPricingOperations, RealmRef } from '../co
 import { CODEX_ENABLEMENT } from './enablement'
 import { resolveCodexBinary, resolveCodexBinaryAsync, buildCodexSpawn, codexHookDataDir, sweepStaleCodexPickFolders, warmNodeExeOnPosix } from './spawn'
 import { openCodexScreen, feedCodexScreen, resizeCodexScreen, closeCodexScreen, hasCodexScreen, submitCodexText, submitCodexImage } from './session-screen'
+import { codexDoorMembers } from './run-screen-doors'
+import type { CodexScreenPrimitives } from './run-screen-doors'
 import { detectCodexUi } from './ui-detection'
 import { watchAndClaimRollout, removeCodexPickFolder } from './telemetry'
 import { warmCodexResume } from './rollout-lookup'
 import { deployCodexResumePickerScript } from './resume-picker'
-import { deployCodexHookScripts, writeCodexHookFile, removeCodexHookFile, removeKeptCodexHookFolder, prepareCodexHookFolders, preparedCodexHookRoot, codexPlainWrapperDir, codexLocalAppData, codexHookCommand } from './hooks'
+import { deployCodexHookScripts, writeCodexHookFile, removeCodexHookFile, removeKeptCodexHookFolder, prepareCodexHookFolders, preparedCodexHookRoot, codexPlainWrapperDir, codexLocalAppData, codexHookCommand, CODEX_HOOK_EVENTS } from './hooks'
 import type { SecureHookFolders } from './hooks'
 import { rewriteKeptCodexHookFile } from './kept-hooks'
 import { CODEX_PINNED_CLI_VERSION, CODEX_MIN_SUPPORTED_VERSION, CODEX_MAX_TESTED_VERSION } from './cli-contract'
@@ -132,15 +134,21 @@ const CODEX_MANAGED_LAUNCH_ONLY = 'not used for Codex: launches go through the m
  *  primitive (session-screen.ts drives composer-submit.ts), and since
  *  2.1.3-beta.17 C6 the image rule (session-screen.ts submitCodexImage), offered
  *  through the registered provider: the PTY manager and the session input
- *  module reach this package only that way. */
+ *  module reach this package only that way. Since 2.1.3-beta.18 section 4
+ *  the module's doors ask it for a Codex session through its door members
+ *  (run-screen-doors.ts), built over these same primitives. */
+const CODEX_SCREEN_PRIMITIVES: CodexScreenPrimitives = {
+  has: (sessionId) => hasCodexScreen(sessionId),
+  submit: (sessionId, text, opts) => submitCodexText(sessionId, text, opts),
+  submitImage: (sessionId, imagePath, sentence, opts) => submitCodexImage(sessionId, imagePath, sentence, opts),
+}
 const CODEX_RUN_SCREEN: SessionRunScreen = {
   open: (sessionId, opts) => openCodexScreen(sessionId, opts),
   feed: (sessionId, data) => feedCodexScreen(sessionId, data),
   resize: (sessionId, cols, rows) => resizeCodexScreen(sessionId, cols, rows),
   close: (sessionId) => closeCodexScreen(sessionId),
-  has: (sessionId) => hasCodexScreen(sessionId),
-  submit: (sessionId, text, opts) => submitCodexText(sessionId, text, opts),
-  submitImage: (sessionId, imagePath, sentence, opts) => submitCodexImage(sessionId, imagePath, sentence, opts),
+  ...CODEX_SCREEN_PRIMITIVES,
+  ...codexDoorMembers(CODEX_SCREEN_PRIMITIVES),
 }
 
 /** WP2 PR 4: Codex's model prices (pricing.ts), offered to Tokenomics through
@@ -275,6 +283,12 @@ export class CodexProvider implements SessionProvider {
   heldToolLaunch(sessionId: string, launch: HeldToolLaunch, relay: HeldToolRelay): HeldToolLaunchAnswer {
     return codexHeldToolLaunch(sessionId, launch, relay)
   }
+
+  /** 2.1.3-beta.18 (ADR-030 S12): the six hook events the app gives every
+   *  launch (hooks.ts CODEX_HOOK_EVENTS), declared to a held session's holder:
+   *  its forwarder runs the session helper's hook mode named in its
+   *  environment, and the holder takes these kinds only. */
+  readonly heldHookKinds: readonly string[] = CODEX_HOOK_EVENTS
 
   async deployResumePickerScript(resourcesDir: string): Promise<void> {
     // Two steps, each tried whatever the other did (a failed picker deploy

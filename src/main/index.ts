@@ -29,7 +29,7 @@ import {
 import { startStatuslineWatcher, setTranscriptPathSink, setStatuslineUsageSink, healGlobalStatusline } from './statusline-watcher'
 import { recordLiveUsageForSession, setClaudeAccountDataAllowed, setLiveUsageTranscriptProfile, setLiveUsageSessionReports } from './usage/account-usage'
 import { sessionLaunchedWithoutAppStatusLine } from './hooks/per-session-settings'
-import { getProvider } from './providers'
+import { getProvider, providerMembers } from './providers'
 import { composeProviders, flushPendingProviderCliKills } from './providers/compose'
 import { initAccountRegistry, reconcileLegacyAccountStores, getConsumerLeases } from './provider-account-registry'
 import { initProviderAccounts, getAccountsService, runStartupProviderMigrations, followResourcesDirectory, discoverProvidersAtStart, providerOnNow } from './provider-accounts'
@@ -495,8 +495,8 @@ if (!gotTheLock) {
 
     buildAndSetAppMenu()
 
-    // Register built-in providers first — must happen before any code calls
-    // getProvider('claude'), including deployStatuslineScript below.
+    // Register built-in providers first — must happen before any code looks a
+    // provider up, including the script deploys below.
     // Registration fails closed on a malformed provider declaration, which is
     // a build-time defect the conformance suite catches; if one ever reaches a
     // user, say so. Without this the app dies with no window and no message.
@@ -601,21 +601,22 @@ if (!gotTheLock) {
 
     // Make the resources folder's scripts folders this user's alone (the
     // owner-only rule, asynchronously: script-folders.ts), then deploy into
-    // them the statusline script (per-session command), both resume pickers
-    // and the Codex hook forwarder; a launch takes a script from them only
-    // once all of that ran, and only from a folder the rule passed. Each step
-    // has its own catch, so one that fails cannot skip the steps after it (a
+    // them each registered provider's scripts, provider by provider in the
+    // registry's order, its statusline script then its resume picker (today
+    // Claude Code's statusline script and resume picker, then Codex's resume
+    // picker and hook forwarder); a launch takes a script from them only once
+    // all of that ran, and only from a folder the rule passed. Each step has
+    // its own catch, so one that fails cannot skip the steps after it (a
     // failing Claude picker deploy never leaves the Codex scripts missing or
     // stale).
     Promise.resolve()
       .then(() => secureScriptFolders(getResourcesDirectory(), secureScriptFoldersRule))
       .catch((err) => console.warn('[main] Failed to check the scripts folders:', err))
-      .then(() => getProvider('claude').deployStatuslineScript?.(getResourcesDirectory()))
-      .catch((err) => console.warn('[main] Failed to deploy the statusline script:', err))
-      .then(() => getProvider('claude').deployResumePickerScript?.(getResourcesDirectory()))
-      .catch((err) => console.warn('[main] Failed to deploy the Claude resume picker:', err))
-      .then(() => getProvider('codex').deployResumePickerScript?.(getResourcesDirectory()))
-      .catch((err) => console.warn('[main] Failed to deploy the Codex resume picker and hook scripts:', err))
+      .then(async () => {
+        for (const { id, member, call } of providerMembers(['deployStatuslineScript', 'deployResumePickerScript'])) {
+          try { await call(getResourcesDirectory()) } catch (err) { console.warn(`[main] Failed to deploy the scripts of ${id} (${member}):`, err) }
+        }
+      })
       .then(() => scriptFoldersDeployed())
       // P3.10 round 4 (P1): the folders the Codex hooks use, made this user's
       // alone by the owner-only rule (one asynchronous call), only while Codex
@@ -1087,9 +1088,12 @@ if (!gotTheLock) {
     initWatchdogManager({
       getWindow,
       isSessionAlive: isSessionWritable,
-      // 2.1.3-beta.10 A2: a Claude Code session's retry is submitLine's; a
-      // Codex session's goes through the Codex composer rule, which answers,
-      // and is typed only while its incident is still on (stillWanted).
+      // 2.1.3-beta.10 A2, 2.1.3-beta.18 section 4: each session's retry is the
+      // retry member of its own provider's run screen (session-input
+      // submitRetry): a Claude Code session's is the tmux leave key on an SSH
+      // Persistent session, then the line and Enter in one write, and answers
+      // nothing; a Codex session's goes through the Codex composer rule, which
+      // answers, and is typed only while its incident is still on (stillWanted).
       send: (sessionId, text, stillWanted) => submitRetry(sessionId, text, stillWanted),
       // Refresh the services view live when a watchdog state changes; routed
       // through the same merge so the push carries every source (#235).
@@ -1116,8 +1120,11 @@ if (!gotTheLock) {
     // local launch of this install left (aicc_planning#385). Independent of hooks.
     cleanupStaleMcpConfigs(sessionHelperKeptIds())
     // aicc_planning#407: the pick folders a killed run's resume lists left in
-    // the temp folder, a day old or more (never a running session's).
-    try { getProvider('codex').sweepLeftoverPickFolders?.() } catch { /* best effort */ }
+    // the temp folder, a day old or more (never a running session's), swept by
+    // each registered provider that keeps them (today Codex), each by itself.
+    for (const { call } of providerMembers(['sweepLeftoverPickFolders'])) {
+      try { call() } catch { /* best effort; the next provider's sweep still runs */ }
+    }
     // #330: end the console hosts the run before left when it was ended from
     // outside, and record this run for the next start (Windows, background).
     endLeftoverConsoleHostsAtStart()

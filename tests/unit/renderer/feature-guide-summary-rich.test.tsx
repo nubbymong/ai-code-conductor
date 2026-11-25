@@ -12,16 +12,17 @@ import React from 'react'
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { createRoot, type Root } from 'react-dom/client'
 import { act } from 'react'
+import type { TrainingSection, TrainingStep } from '../../../src/renderer/training-steps'
 
 ;(globalThis as any).IS_REACT_ACT_ENVIRONMENT = true
 
 vi.mock('../../../src/renderer/hooks/useThemeController', () => ({ useResolvedTheme: () => 'dark' }))
 ;(window as any).electronPlatform = 'win32'
 
-const { trainingSteps } = await import('../../../src/renderer/training-steps')
+const { trainingSteps, stepsForAssistants, SECTION_LABELS } = await import('../../../src/renderer/training-steps')
 const { useSettingsStore, DEFAULT_SETTINGS } = await import('../../../src/renderer/stores/settingsStore')
 const { useProviderAccountsStore } = await import('../../../src/renderer/stores/providerAccountsStore')
-const { choiceSettings } = await import('../../../src/renderer/onboarding/provider-choice')
+const { choiceSettings, onlyAssistantInUse } = await import('../../../src/renderer/onboarding/provider-choice')
 const { default: FeatureGuidePage } = await import('../../../src/renderer/components/FeatureGuidePage')
 const { default: TrainingWalkthrough } = await import('../../../src/renderer/components/TrainingWalkthrough')
 const { snapshot } = await import('./accounts-snapshot-harness')
@@ -74,13 +75,110 @@ describe("a Feature Guide card's summary", () => {
     expect(Array.from(p.querySelectorAll('code')).map((c) => c.textContent)).toContain('/effort ultracode')
   })
 
-  it('every card the guide shows has no mark left as text in its summary or its highlights', async () => {
-    for (const section of ['getting-started', 'productivity', 'integrations', 'admin', 'tips']) {
-      await openGuideAt(section)
-      for (const p of Array.from(container.querySelectorAll('[data-ux-id$="-summary"], [data-ux-id$="-highlights"]'))) {
-        expect(p.textContent, `${section}: ${p.getAttribute('data-ux-id')}`).not.toMatch(/\*\*|`/)
+  it('every card the guide shows, with either assistant alone or both, has no mark left as text in its summary or its highlights', async () => {
+    const bad: string[] = []
+    for (const choice of ['both', 'claude', 'codex'] as const) {
+      await act(async () => { useSettingsStore.setState({ settings: { ...DEFAULT_SETTINGS, ...choiceSettings(choice) }, isLoaded: true }) })
+      for (const section of SECTIONS) {
+        await openGuideAt(section)
+        bad.push(...sweepGuideCards(section, cardsOf(section, choice)).map((l) => `${choice}: ${l}`))
       }
     }
+    expect(bad).toEqual([])
+  })
+})
+
+// The guide's cards are swept from the data, not from what happens to be on the
+// page (#426, the same shape as the tip sweep's): the sweep used to take every
+// summary and highlights element it found and check those, so a section that
+// drew no cards, or a card that drew no summary or list, passed it. Now each
+// card the data puts in the section must be on the page, with a summary element
+// when the data gives it a summary and one list item for each highlight the data
+// gives it, each with text and none with a mark left as text. One line per
+// problem, naming the section and the element. The sections come from the data
+// (SECTION_LABELS), so a new one is swept, and one the page does not offer fails
+// openGuideAt's rail check. The cards are the ones the page takes for a choice of
+// assistants (stepsForAssistants), so a Codex-only card's own copy is read too.
+const SECTIONS = Object.keys(SECTION_LABELS) as TrainingSection[]
+/** The cards of a section the guide shows for a choice of assistants, with that mode's copy, as the page takes them (stepsForAssistants). */
+const cardsOf = (section: TrainingSection, choice: 'both' | 'claude' | 'codex' = 'both'): TrainingStep[] =>
+  stepsForAssistants(trainingSteps, onlyAssistantInUse(choiceSettings(choice))).filter((s) => s.section === section)
+
+function sweepGuideCards(section: TrainingSection, cards: readonly TrainingStep[]): string[] {
+  const bad: string[] = []
+  if (cards.length === 0) bad.push(`${section}: the data has no card for this section`)
+  for (const step of cards) {
+    const card = container.querySelector(`[data-ux-id="card-${step.id}"]`)
+    if (!card) { bad.push(`${section}: card-${step.id} is not on the page`); continue }
+    const read = (what: 'summary' | 'highlights', el: Element | null, text: string | null) => {
+      const at = `${section}: card-${step.id}-${what}`
+      if (!el) bad.push(`${at} is not on the page`)
+      else if (!(text ?? '').trim()) bad.push(`${at} shows no text`)
+      else if (/\*\*|`/.test(text!)) bad.push(`${at} shows a mark as text: ${text!.match(/.{0,30}(\*\*|`).{0,30}/)?.[0]}`)
+    }
+    if (step.summary) {
+      const p = card.querySelector(`[data-ux-id="card-${step.id}-summary"]`)
+      read('summary', p, p?.textContent ?? null)
+    }
+    const list = card.querySelector(`[data-ux-id="card-${step.id}-highlights"]`)
+    read('highlights', list, list?.textContent ?? null)
+    // The list holds every highlight the card has, each with text in it.
+    const want = (step.highlights ?? step.bullets ?? []).length
+    const items = list ? Array.from(list.querySelectorAll('li')) : []
+    if (list && items.length !== want) bad.push(`${section}: card-${step.id}-highlights shows ${items.length} of ${want} items`)
+    items.forEach((li, i) => {
+      if (!(li.textContent ?? '').trim()) bad.push(`${section}: card-${step.id}-highlights item ${i + 1} shows no text`)
+    })
+  }
+  return bad
+}
+
+describe('the guide sweep fails a card that did not render', () => {
+  it('a card the data holds and the section does not show is named', async () => {
+    await openGuideAt('tips')
+    expect(sweepGuideCards('tips', cardsOf('tips'))).toEqual([])
+    const standIn: TrainingStep = { ...cardsOf('tips')[0], id: 'stand-in-card', summary: 'A stand-in.', highlights: ['One.'] }
+    // It sits beside a card that did render: the old sweep checked what was
+    // there and passed.
+    expect(sweepGuideCards('tips', [...cardsOf('tips'), standIn])).toEqual(['tips: card-stand-in-card is not on the page'])
+  })
+
+  it('a section the page is not showing is every one of its cards missing, not clean', async () => {
+    await openGuideAt('productivity')
+    const want = cardsOf('tips')
+    expect(want.length).toBeGreaterThan(0)
+    expect(sweepGuideCards('tips', want)).toEqual(want.map((s) => `tips: card-${s.id} is not on the page`))
+  })
+
+  it('a section with no cards in the data is a finding, not a pass', async () => {
+    await openGuideAt('tips')
+    expect(sweepGuideCards('tips', [])).toEqual(['tips: the data has no card for this section'])
+  })
+
+  it('a card whose list is shorter than its data, or whose summary the page does not draw, is named', async () => {
+    await openGuideAt('tips')
+    const real = cardsOf('tips')[0]
+    const shown = real.highlights ?? real.bullets
+    expect(sweepGuideCards('tips', [{ ...real, highlights: [...shown, 'A highlight the card does not draw.'] }]))
+      .toEqual([`tips: card-${real.id}-highlights shows ${shown.length} of ${shown.length + 1} items`])
+    // The summary element is drawn only when the card has a summary: take it
+    // out of the card on the page, and the sweep must say so.
+    container.querySelector(`[data-ux-id="card-${real.id}-summary"]`)!.remove()
+    expect(sweepGuideCards('tips', [real])).toEqual([`tips: card-${real.id}-summary is not on the page`])
+  })
+
+  it('an item with no text in it, and a mark left as text, are named', async () => {
+    await openGuideAt('tips')
+    const real = cardsOf('tips')[0]
+    const items = Array.from(container.querySelectorAll(`[data-ux-id="card-${real.id}-highlights"] li`))
+    expect(items.length).toBeGreaterThan(0)
+    items[0].textContent = ''
+    expect(sweepGuideCards('tips', [real])).toEqual([`tips: card-${real.id}-highlights item 1 shows no text`])
+    items[0].textContent = 'A highlight with **bold** left as text'
+    const marked = sweepGuideCards('tips', [real])
+    expect(marked).toHaveLength(1)
+    expect(marked[0]).toContain(`tips: card-${real.id}-highlights shows a mark as text: `)
+    expect(marked[0]).toContain('**bold**')
   })
 })
 

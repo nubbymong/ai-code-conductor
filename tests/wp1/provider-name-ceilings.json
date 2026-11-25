@@ -1,62 +1,63 @@
 {
-  "schema": "provider-name-ceilings/1",
-  "note": "Per-file ceilings of the provider-name ratchet (tests/unit/architecture/provider-name-ratchet.test.ts, which says exactly what is counted): for each file in src/main outside src/main/providers, how many comparisons with a provider name it holds and how many ids it defaults to one, as they stand. Lower a number when its count drops and take a file out when both reach none; never raise a number and never add a file. `total` is the sum of `files`.",
+  "schema": "provider-name-ceilings/2",
+  "note": "Per-file ceilings of the provider-name ratchet (tests/unit/architecture/provider-name-ratchet.test.ts, which says exactly what is counted): for each TypeScript file in src/main, src/renderer, src/shared and src/preload outside the provider packages (src/main/providers and src/renderer/providers/<id>), how many comparisons with a provider name it holds, how many ids it defaults to one, how many registry lookups by a provider name it makes, how many launch styles it compares, and (in src/main/remote-helper) how many CLI flags, variables and paths it names, as they stand. A file lists the counts it holds; one it does not list is none. Lower a number when its count drops, take a count out at none and a file out when it holds none; never raise a number and never add a count or a file. `total` is the sum of `files`.",
   "total": {
-    "comparisons": 73,
-    "rederivations": 32
+    "comparisons": 270,
+    "rederivations": 91,
+    "lookups": 20,
+    "launchStyleTests": 6,
+    "remoteCliTerms": 0
   },
   "files": {
     "src/main/account-web/codex-web-session.ts": {
-      "comparisons": 1,
-      "rederivations": 0
+      "comparisons": 1
     },
     "src/main/account-web/codex-web-wiring.ts": {
-      "comparisons": 1,
-      "rederivations": 0
+      "comparisons": 1
     },
     "src/main/claude-cli-probe.ts": {
-      "comparisons": 1,
-      "rederivations": 0
+      "comparisons": 1
     },
     "src/main/cloud-agent-manager.ts": {
       "comparisons": 2,
       "rederivations": 1
     },
+    "src/main/codex-review-mcp-tool.ts": {
+      "lookups": 2
+    },
     "src/main/conductor-mcp-server.ts": {
       "comparisons": 4,
-      "rederivations": 0
+      "lookups": 2
     },
     "src/main/config-manager.ts": {
-      "comparisons": 1,
-      "rederivations": 0
+      "comparisons": 1
     },
     "src/main/github/session/codex-rollout-loader.ts": {
-      "comparisons": 1,
-      "rederivations": 0
+      "comparisons": 1
+    },
+    "src/main/hooks/per-session-settings.ts": {
+      "lookups": 1
     },
     "src/main/index.ts": {
       "comparisons": 1,
-      "rederivations": 0
+      "lookups": 1
     },
     "src/main/insights-cross-account.ts": {
-      "comparisons": 2,
-      "rederivations": 0
+      "comparisons": 2
     },
     "src/main/insights-runner.ts": {
       "comparisons": 8,
-      "rederivations": 3
+      "rederivations": 3,
+      "lookups": 1
     },
     "src/main/ipc/cloud-agent-handlers.ts": {
-      "comparisons": 1,
-      "rederivations": 0
+      "comparisons": 1
     },
     "src/main/ipc/codex-web-handlers.ts": {
-      "comparisons": 1,
-      "rederivations": 0
+      "comparisons": 1
     },
     "src/main/ipc/github-handlers.ts": {
-      "comparisons": 1,
-      "rederivations": 0
+      "comparisons": 1
     },
     "src/main/ipc/insights-handlers.ts": {
       "comparisons": 3,
@@ -64,51 +65,304 @@
     },
     "src/main/ipc/pty-handlers.ts": {
       "comparisons": 7,
-      "rederivations": 2
+      "rederivations": 2,
+      "lookups": 2
     },
     "src/main/launch-one-at-a-time.ts": {
-      "comparisons": 0,
       "rederivations": 3
     },
     "src/main/logging/should-register-run.ts": {
-      "comparisons": 3,
-      "rederivations": 0
+      "comparisons": 3
     },
     "src/main/logging/transcripts-worker.ts": {
-      "comparisons": 1,
-      "rederivations": 0
+      "comparisons": 1
     },
     "src/main/pty-manager.ts": {
       "comparisons": 18,
-      "rederivations": 15
+      "rederivations": 15,
+      "lookups": 4,
+      "launchStyleTests": 4
     },
     "src/main/sanitize-restored-spawn-options.ts": {
-      "comparisons": 2,
-      "rederivations": 0
+      "comparisons": 2
     },
     "src/main/sentinel/index.ts": {
       "comparisons": 1,
-      "rederivations": 0
+      "lookups": 2
     },
     "src/main/sentinel/sentinel-analysis.ts": {
       "comparisons": 2,
-      "rederivations": 4
+      "rederivations": 4,
+      "lookups": 1
+    },
+    "src/main/session-helper/app-wiring.ts": {
+      "lookups": 1
     },
     "src/main/session-resume-enrich.ts": {
       "comparisons": 2,
       "rederivations": 2
     },
+    "src/main/session-signals/status.ts": {
+      "lookups": 1
+    },
+    "src/main/sessions/launch-bindings.ts": {
+      "launchStyleTests": 2
+    },
+    "src/main/statusline-watcher.ts": {
+      "lookups": 1
+    },
     "src/main/tokenomics/tk-db.ts": {
-      "comparisons": 3,
-      "rederivations": 0
+      "comparisons": 3
     },
     "src/main/tokenomics/tk-pricing.ts": {
       "comparisons": 1,
-      "rederivations": 0
+      "lookups": 1
     },
     "src/main/watchdog/watchdog-manager.ts": {
       "comparisons": 5,
       "rederivations": 1
+    },
+    "src/renderer/components/AiUsagePopover.tsx": {
+      "comparisons": 1,
+      "rederivations": 1
+    },
+    "src/renderer/components/CloudAgentsPage.tsx": {
+      "comparisons": 2
+    },
+    "src/renderer/components/CodexCanvasNotices.tsx": {
+      "comparisons": 1
+    },
+    "src/renderer/components/CommandBar.tsx": {
+      "comparisons": 4,
+      "rederivations": 4
+    },
+    "src/renderer/components/FeatureGuidePage.tsx": {
+      "comparisons": 1
+    },
+    "src/renderer/components/GuidedTour.tsx": {
+      "comparisons": 6
+    },
+    "src/renderer/components/InsightsPage.tsx": {
+      "comparisons": 12,
+      "rederivations": 3
+    },
+    "src/renderer/components/LogsPane.tsx": {
+      "comparisons": 1,
+      "rederivations": 1
+    },
+    "src/renderer/components/MemoryPage.tsx": {
+      "comparisons": 1
+    },
+    "src/renderer/components/MultiSpawnStartupPage.tsx": {
+      "comparisons": 1,
+      "rederivations": 1
+    },
+    "src/renderer/components/NewAgentDialog.tsx": {
+      "comparisons": 7,
+      "rederivations": 1
+    },
+    "src/renderer/components/ResumeSessionsPrompt.tsx": {
+      "comparisons": 2,
+      "rederivations": 2
+    },
+    "src/renderer/components/SessionDialog.tsx": {
+      "comparisons": 20,
+      "rederivations": 1
+    },
+    "src/renderer/components/SessionDialog/ProviderSegmentedControl.tsx": {
+      "comparisons": 9
+    },
+    "src/renderer/components/SessionHeader.tsx": {
+      "comparisons": 6,
+      "rederivations": 3
+    },
+    "src/renderer/components/SessionStatusStrip.tsx": {
+      "comparisons": 3,
+      "rederivations": 1
+    },
+    "src/renderer/components/SettingsPage.tsx": {
+      "comparisons": 6,
+      "rederivations": 1
+    },
+    "src/renderer/components/Sidebar.tsx": {
+      "comparisons": 2,
+      "rederivations": 2
+    },
+    "src/renderer/components/TerminalView.tsx": {
+      "comparisons": 4,
+      "rederivations": 1
+    },
+    "src/renderer/components/WebviewPane.tsx": {
+      "comparisons": 4,
+      "rederivations": 1
+    },
+    "src/renderer/components/agent-hub/AgentHubOnboarding.tsx": {
+      "comparisons": 2
+    },
+    "src/renderer/components/command-bar/chips.tsx": {
+      "comparisons": 1
+    },
+    "src/renderer/components/command-bar/layout.ts": {
+      "comparisons": 1
+    },
+    "src/renderer/components/github/sections/recent-files-heading.ts": {
+      "comparisons": 1
+    },
+    "src/renderer/components/insights/CrossAccountReport.tsx": {
+      "comparisons": 4,
+      "rederivations": 1
+    },
+    "src/renderer/components/insights/insightsAccounts.ts": {
+      "comparisons": 1
+    },
+    "src/renderer/components/logs/ChatTranscriptView.tsx": {
+      "comparisons": 1
+    },
+    "src/renderer/components/sentinel/SentinelDot.tsx": {
+      "comparisons": 1
+    },
+    "src/renderer/components/sentinel/sentinel-report-text.ts": {
+      "comparisons": 2,
+      "rederivations": 2
+    },
+    "src/renderer/components/settings/CodeReviewTools.tsx": {
+      "comparisons": 4
+    },
+    "src/renderer/components/settings/TokenomicsSettings.tsx": {
+      "comparisons": 2
+    },
+    "src/renderer/components/settings/accounts/AddProviderAccountDialog.tsx": {
+      "comparisons": 1
+    },
+    "src/renderer/components/settings/accounts/ManagedAccountsSection.tsx": {
+      "comparisons": 2
+    },
+    "src/renderer/components/settings/accounts/ProvidersCard.tsx": {
+      "comparisons": 1
+    },
+    "src/renderer/components/settings/accounts/accounts-ui.tsx": {
+      "comparisons": 2
+    },
+    "src/renderer/components/sidebar/AskConductorDock.tsx": {
+      "comparisons": 1
+    },
+    "src/renderer/components/sidebar/Badges.tsx": {
+      "comparisons": 3
+    },
+    "src/renderer/components/sidebar/ConfigRow.tsx": {
+      "comparisons": 1,
+      "rederivations": 1
+    },
+    "src/renderer/components/sidebar/QuickStartPanel.tsx": {
+      "comparisons": 1,
+      "rederivations": 1
+    },
+    "src/renderer/components/sidebar/SessionContextMenu.tsx": {
+      "comparisons": 2,
+      "rederivations": 1
+    },
+    "src/renderer/components/sidebar/SessionRow.tsx": {
+      "comparisons": 4,
+      "rederivations": 3
+    },
+    "src/renderer/components/tokenomics/KpiRow.tsx": {
+      "comparisons": 1
+    },
+    "src/renderer/components/tokenomics/modelColors.ts": {
+      "comparisons": 1
+    },
+    "src/renderer/components/tokenomics/tk-labels.ts": {
+      "comparisons": 2
+    },
+    "src/renderer/hooks/useKeyboardShortcuts.ts": {
+      "comparisons": 1
+    },
+    "src/renderer/hooks/useLaunchConfig.ts": {
+      "comparisons": 6,
+      "rederivations": 4
+    },
+    "src/renderer/hooks/useSwitchAccount.ts": {
+      "comparisons": 1,
+      "rederivations": 2
+    },
+    "src/renderer/lib/askConductor.ts": {
+      "comparisons": 5
+    },
+    "src/renderer/lib/askConductorGate.ts": {
+      "comparisons": 2
+    },
+    "src/renderer/lib/claude-cli-options.ts": {
+      "rederivations": 2
+    },
+    "src/renderer/lib/claude-web-targets.ts": {
+      "comparisons": 4,
+      "rederivations": 2
+    },
+    "src/renderer/lib/command-upgrade.ts": {
+      "comparisons": 1,
+      "rederivations": 1
+    },
+    "src/renderer/lib/session-capabilities.ts": {
+      "comparisons": 1
+    },
+    "src/renderer/onboarding/AssistantsStep.tsx": {
+      "comparisons": 1
+    },
+    "src/renderer/onboarding/FindClaudeStep.tsx": {
+      "comparisons": 1
+    },
+    "src/renderer/onboarding/codex-art.tsx": {
+      "comparisons": 2
+    },
+    "src/renderer/onboarding/hello-codex.ts": {
+      "comparisons": 1
+    },
+    "src/renderer/onboarding/provider-choice.ts": {
+      "comparisons": 2
+    },
+    "src/renderer/session-persistence.ts": {
+      "comparisons": 5,
+      "rederivations": 4
+    },
+    "src/renderer/stores/cloudAgentStore.ts": {
+      "comparisons": 2,
+      "rederivations": 1
+    },
+    "src/renderer/stores/providerAccountsStore.ts": {
+      "comparisons": 5,
+      "rederivations": 1
+    },
+    "src/renderer/stores/webviewStore.ts": {
+      "comparisons": 3
+    },
+    "src/renderer/training-steps.ts": {
+      "comparisons": 2
+    },
+    "src/renderer/utils/accountChip.ts": {
+      "comparisons": 1,
+      "rederivations": 1
+    },
+    "src/renderer/utils/launchAccount.ts": {
+      "comparisons": 1,
+      "rederivations": 2
+    },
+    "src/renderer/utils/sessionLaunch.ts": {
+      "comparisons": 4,
+      "rederivations": 3
+    },
+    "src/renderer/utils/switchAccountItems.ts": {
+      "comparisons": 1,
+      "rederivations": 1
+    },
+    "src/shared/ask-conductor-provider.ts": {
+      "comparisons": 1
+    },
+    "src/shared/model-registry.ts": {
+      "comparisons": 8,
+      "rederivations": 3
+    },
+    "src/shared/providers/accounts-view.ts": {
+      "comparisons": 1
     }
   }
 }

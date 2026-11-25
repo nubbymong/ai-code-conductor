@@ -18,6 +18,7 @@ import { useRestartSession } from '../hooks/useRestartSession'
 import { RowMenu } from './ui/RowMenu'
 import { ASK_LABEL } from '../lib/askConductor'
 import { sshAuthGiveUpMemory } from '../stores/sshAuthGiveUp'
+import { useThroughHelper } from '../hooks/useThroughHelper'
 
 declare const __APP_VERSION__: string
 
@@ -551,6 +552,10 @@ function SessionAuthPills({ session }: { session: Session }) {
   const profile = useAccountProfilesStore((s) => (profileId ? s.profiles.find((p) => p.id === profileId) : undefined))
   const status = useAccountAuthStore((s) => (profileId ? s.byProfile[profileId] : undefined))
   const claudeOffNow = useClaudeOff()
+  // A tab through the session helper on its machine (the remote sessions
+  // preview) does not report its account yet (its status line has no account:
+  // aicc_planning#434), so its loading pills would wait for nothing.
+  const throughHelper = useThroughHelper(session.id, isSshClaude)
 
   React.useEffect(() => {
     // This header renders only the ACTIVE session, so mounting/param-change is
@@ -602,6 +607,24 @@ function SessionAuthPills({ session }: { session: Session }) {
     // inheriting whatever was left of the first one's 20s timer. A session that
     // already gave up once renders the fallback immediately on remount
     // (sshAuthGiveUpMemory) — re-activation must not re-arm the shimmer.
+    // A tab through the session helper has nothing to wait for (its account is
+    // not reported through the helper yet), so it says so at once instead of
+    // the loading pills (2.1.3-beta.18 release smoke: 20 s of them, then
+    // nothing). An account that does arrive takes the branches below.
+    if (!remoteEmail && !sshProfileId && throughHelper) {
+      return (
+        <>
+          <HeaderPill
+            label="Account not shown through the helper yet"
+            tone="var(--text-muted)"
+            title="This tab runs through the session helper on its machine. Its account, and the claude.ai and Claude Code sign-ins, are not shown through the helper yet."
+            testId="session-pill-account-not-shown"
+          />
+          <WatchdogPill session={session} />
+          {gitHubTail}
+        </>
+      )
+    }
     if (!remoteEmail && !sshProfileId) return <SshAuthPending key={session.id} sessionId={session.id} gitHubTail={gitHubTail} />
     // Identity to show: the reported/mapped remote email when known, else the
     // mapped profile's own email or name as a first-connect placeholder, so the

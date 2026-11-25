@@ -25,6 +25,33 @@ probe (ADR) must confirm. R5 fixtures fix field types, lengths and refusals.
   for an upload until the app commits or discards it; and `store/` (the
   holders' records, section 15). A remote tab's session id is `rm` and 30 hex
   of a hash of its app id.
+- **Session files (2.1.3-beta.18, section 3.2).** Before the hold, the fixed
+  `reads` script prints, as hex, up to four host settings files the provider
+  names (Claude Code: `~/.claude/settings.json`; the session folder's
+  `.claude/settings.json` and `.claude/settings.local.json`; its git checkout
+  root's `.claude/settings.local.json`), parsed in the app as data, never
+  run. Each is a regular file of at most 256 KiB. The user's own file is read
+  as Claude Code reads it, a link followed (a dotfiles link keeps its hooks);
+  a project or checkout-root file only when it and every folder on its way
+  are no link and the host user's own, not writable by others (by its group
+  only when that is the user's own group). A checkout root is used only when
+  it is not the session folder, the home folder or a folder above it. After
+  the hold, the fixed `files` script writes the launch's `settings.json` (the
+  host user's own `~/.claude/settings.json` keys less `mcpServers`, as the
+  usual SSH setup's session file carries them, since Claude Code takes a
+  top-level `effortLevel` as the session's effort from every settings source
+  but the user's own (in ~/.claude/settings.json it is a legacy effort some
+  models take), a `--settings` file among them; over them, the status line is the status mode and hooks are the
+  host's own, then the hook mode's nine, identical entries once) and, while
+  the app serves its tools, `mcp.json` (`conductor` is the relay) into
+  `sessions/<sid>/` (folder 0700, files 0600), contents on standard input
+  after a `<name>:<size>,...` layout value, each file staged, size-checked
+  and moved over its name. Besides the host's own settings, they name the
+  helper's path, the store and the session id only. `unsession` removes
+  the folder once the holder's record is gone; at a Check, `sweep` removes
+  any folder whose holder is gone. Such a session's app connection acks
+  `status` and `hooks`, and `mcp` while the app serves its tools, beside
+  `local`.
 - **Session id (`sid`)**, chosen by the app: `^[A-Za-z0-9][A-Za-z0-9_-]{7,31}$`.
   Every socket bind and connect happens after a `chdir` into the session
   folder, by the name `s`, so a long home never meets the path limit.
@@ -330,6 +357,23 @@ duration totals; CLI version; the remote CLI session id; remote paths `cwd`,
 `transcript_path` and the workspace folders. `event` keeps hook name, the
 remote CLI session id, notification text (a label of at most 1,024
 characters) and tool name; prompts, tool inputs and results are dropped.
+As built (2.1.3-beta.18, section 3.2; providers/claude/remote-launch.ts
+CLAUDE_STATUS_KEEP and CLAUDE_HOOK_KEEP), `status` keeps `model.id`,
+`model.display_name`, `context_window.used_percentage`,
+`remaining_percentage`, `context_window_size` and
+`current_usage.input_tokens`, `output_tokens`,
+`cache_creation_input_tokens` and `cache_read_input_tokens`,
+`cost.total_cost_usd`, `total_duration_ms`, `total_lines_added` and
+`total_lines_removed`, `version`, `session_id`, `cwd`, `transcript_path`,
+`workspace.current_dir` and `workspace.project_dir`, and `used_percentage`
+and `resets_at` of `rate_limits.five_hour` and `rate_limits.seven_day`.
+`event` keeps `hook_event_name`, `session_id`, `message`,
+`notification_type`, `tool_name`, `transcript_path`, `agent_id`,
+`effort.level`, `error`, `reason`, `error_type` and `source`. A kept value
+is a string of at most 4,096 characters, a finite number or a boolean;
+anything else is dropped. A status is delivered under the tab's own id,
+never a session id from the payload. Its strings are then bounded at 256
+characters (statusline-watcher.ts STATUS_STRING_MAX).
 
 **Named edits (closed list, from R7).** One row: `claude-folder-trust` sets
 `projects["<cwd>"].hasTrustDialogAccepted` to `true` in the CLI's config file
@@ -906,13 +950,14 @@ fails or does not read removes nothing.
 `["core","local","hooks"]` from 2.1.3-beta.8,
 `["core","local","hooks","mcp"]` from 2.1.3-beta.10,
 `["core","local","hooks","mcp","away","screen"]` from 2.1.3-beta.12 and
-`["core","local","hooks","mcp","away","screen","title"]` from 2.1.3-beta.14, `session.state` is `new`
+`["core","local","hooks","mcp","away","screen","title"]` from 2.1.3-beta.14 and
+`["core","local","hooks","mcp","away","screen","title","status"]` from 2.1.3-beta.18, `session.state` is `new`
 before a launch and `live` after. The app's first frame must be a `hello.ack` with
 exactly `t`, `proto` and `caps`: `proto` 1, `caps` holding `core` and nothing
 the holder did not offer; `local` allows the messages below, `hooks` the hook
 events, `mcp` the tool streams, `away`, beside `mcp`, kept tool streams,
-`screen` the screen reads and `title`, beside `screen`, the title in them (all
-below). A first frame that is raw, or
+`screen` the screen reads and `title`, beside `screen`, the title in them, and
+`status` the status line (all below). A first frame that is raw, or
 JSON off channel 0, gets `bad-frame`; another type `unknown-type`, another
 version `proto-mismatch`, anything else `bad-field`; then the holder closes the
 connection. With no `hello.ack` in 10 s it sends `timeout` and
@@ -948,7 +993,7 @@ the last column of section 8's table):
 
 | Type | Reply | Fields and rules |
 | --- | --- | --- |
-| `term.launch` | `term.launched` `{re, pid}` | `{id, argv, cwd, env, cols, rows}`, and on Windows `line` and `conpty` if wanted (below); once per holder, then `busy`; a program that does not start gets `io`, and a later launch may try again; while the session is ending, `not-found` |
+| `term.launch` | `term.launched` `{re, pid}` | `{id, argv, cwd, env, cols, rows}`, `hookKinds` if wanted (from 2.1.3-beta.18), and on Windows `line` and `conpty` if wanted (below); once per holder, then `busy`; a program that does not start gets `io`, and a later launch may try again; while the session is ending, `not-found` |
 | `term.attach` | `term.attached` `{re, from, ring_start, ring_end, truncated, running, code?}` | `{id, from}`; then the output from `from` on channel 1, then live output; before a launch, or while the session is ending, `not-found` |
 | `term.resize` | `term.resized` `{re}` | `{id, cols, rows}`; only the attached connection, else `not-connected` |
 | `term.detach` | `term.detached` `{re}` | `{id}`; only the attached connection, else `not-connected`; the holder then closes the connection and the session keeps running |
@@ -956,6 +1001,8 @@ the last column of section 8's table):
 | `term.exit` | none | `{code}`, from the holder to the attached connection, once: after the program's last output, and also when another connection ended the session, which then closes this one |
 | `hook.event` | `hook.taken` `{re, seq}` | `{id, kind, payload}`; only on a connection that acked `hooks`, attached or not; while the session is ending, `not-found` (hook events, below) |
 | `event` | none | `{seq, kind, payload, lost?}`, from the holder to the attached connection, only if that connection acked `hooks` (hook events, below) |
+| `status.set` | `status.taken` `{re, seq}` | `{id, payload}`; only on a connection that acked `status`, attached or not; while the session is ending, `not-found` (the status line, below) |
+| `status` | none | `{seq, payload}`, from the holder to each connection that acked `status` beside `local` (the status line, below) |
 | `mcp.open` | none | `{stream}`; from a relay that is not attached, for its one stream, and from the holder to the attached connection that acked `mcp`, on the holder's number for it, for a new stream or a kept one it is given; with no such connection, `not-connected`, or `mcp.away` for a relay that acked `away` while the program runs (tool streams, below) |
 | `mcp` | none | `{stream, message}`, one JSON-RPC message: from a relay on its stream, and from the attached connection on a stream it was sent `mcp.open` for; each passed to the other side on that side's number; from a relay while its stream is kept, `not-connected` (tool streams, below) |
 | `mcp.close` | none | `{stream}`; from a relay, and from the holder to whichever side is still there when the other ends (tool streams, below) |
@@ -1024,6 +1071,15 @@ stream messages carry no id: a refusal of one has no `re`.
   code can put node-pty's two files in that folder of its copy of the helper
   and check them against node-pty's own before each use, as it checks the
   helper. The app does not yet send either field or copy those files.
+- **Launch: `hookKinds`** (from 2.1.3-beta.18). A launch may declare the hook
+  kinds its session takes: an array of at most 16 plain words, each 1 to 64
+  ASCII letters or digits, none given twice; an empty array is a session that
+  takes none. More than 16 words, or a word over 64 characters, is
+  `too-large`; any other break of that shape is `bad-field`. A holder launched
+  with it takes a `hook.event` of those kinds only (another kind is
+  `bad-field`); one launched without it, and a holder not yet launched, takes
+  the nine, as before. A holder from before 2.1.3-beta.18 refuses the field
+  with `bad-field`; a holder whose hello offers `status` takes it.
 - **Attach.** `from` is an offset in the output, as in section 11: past
   `ring_end` is `bad-field`; older than the ring holds is answered from
   `ring_start` with `truncated` true. The app on This computer then holds the
@@ -1087,35 +1143,59 @@ of section 8 (R7) is a separate capability that also carries
 `session.prepare`. A Claude Code session's hooks can reach the app through its
 holder instead of the hooks gateway. A holder from 2.1.3-beta.8 offers `hooks`
 in its hello. The app acks `["core","local","hooks"]` only on the connections
-of a Claude Code session it started through the holder (the agent sessions'
-setting, off by default), and only when the hello offers `hooks`; every other
-connection acks `["core","local"]` and is never sent a hook event. For such a
-session, while the hooks gateway is on and listening, the app switches the
-session's settings file to the hook mode for every injected event,
-`PreToolUse` included (from 2.1.3-beta.14; before it `PreToolUse` stayed on
-the hooks gateway), once the holder answers `term.launched` and before the
-attach sends the launch line; a holder without `hooks` leaves the session on
-the gateway. The app reads each `event` strictly (on channel 0 only, its fields
-only, `seq` from 1, `kind` one of the nine and the payload's
+of a Claude Code session, or (from 2.1.3-beta.18) a Codex session, it started
+through the holder (the agent sessions' setting, off by default), and only
+when the hello offers `hooks`; every other connection acks `["core","local"]`
+and is never sent a hook event. For such a Claude Code session, while the
+hooks gateway is on and listening, the app switches the session's settings
+file to the hook mode for every injected event, `PreToolUse` included (from
+2.1.3-beta.14; before it `PreToolUse` stayed on the hooks gateway), once the
+holder answers `term.launched` and before the attach sends the launch line; a
+holder without `hooks` leaves the session on the gateway.
+
+From 2.1.3-beta.18 a held Codex session's hooks go through its holder too.
+Codex runs one hook command for every session, and keys its trust on the
+command's text, so the app switches no file. The launch its holder runs
+carries `hookKinds` (`SessionStart`, `UserPromptSubmit`, `PreToolUse`,
+`PostToolUse`, `PermissionRequest`, `Stop`) and, in its environment,
+`AICC_HELPER_PATH` (the helper copy), `AICC_HELPER_STORE` and
+`AICC_HELPER_SESSION`. These are sent only to a holder that offers `hooks` and
+`status`. The app's forwarder (`scripts/ccc-codex-hook.js`) runs
+`<AICC_HELPER_PATH> hook` with the event on its standard input, only when that
+path's real path is this user's helper copy as the app lays it out (no link at
+any level the app made, one name), the store is that helper folder's `store`
+and the session has the helper's shape; otherwise it does nothing. A Codex
+session that is not held keeps its hook file and the gateway.
+
+The app reads each `event` strictly (on channel 0 only, its fields only, `seq`
+from 1, `kind` one of the kinds the session's launch declared (`hookKinds`),
+or of the nine when it declared none (from 2.1.3-beta.18), and the payload's
 `hook_event_name`, the payload at most 65,280 bytes and the message at most
 64 KiB), drops a `seq` it has seen (an app before 2.1.3-beta.14 also dropped a
 `PreToolUse`), takes none while the hooks gateway is off or not listening, and
 treats the payload as untrusted text. Fixtures: the `hooks` part of
 `helper/fixtures/local.json`.
 
-- **The hook mode.** Claude Code runs, as a command hook,
+- **The hook mode.** A CLI runs, as a command hook,
 
   ```
   aicc-helper hook --store <folder> --session <sid>
   ```
 
-  and writes the event as JSON on its standard input. The hook mode reads
-  that to the end and keeps at most 4 MiB: a larger event is lost. The input
-  must be a JSON object, at most 32 levels deep, whose `hook_event_name` is
-  one of the nine kinds the app injects: `PreToolUse`, `PostToolUse`,
+  and writes the event as JSON on its standard input. Either option may be
+  left out (from 2.1.3-beta.18): the store is then read from the variable
+  `AICC_HELPER_STORE` and the session from `AICC_HELPER_SESSION`; an option
+  given wins over its variable, and a variable that is empty or not Unicode
+  counts as left out. The hook mode reads its standard input to the end and
+  keeps at most 4 MiB: a larger event is lost. The input must be a JSON
+  object, at most 32 levels deep, whose `hook_event_name` is one plain word
+  of 1 to 64 ASCII letters or digits (from 2.1.3-beta.18; before it, one of
+  the nine kinds the app injects: `PreToolUse`, `PostToolUse`,
   `Notification`, `SessionStart`, `Stop`, `UserPromptSubmit`,
-  `SubagentStart`, `SubagentStop` and `StopFailure` (`PermissionRequest` is
-  not one), and that names none of its own members twice (the helper would
+  `SubagentStart`, `SubagentStop` and `StopFailure`): which kinds a session
+  takes is its holder's to decide (`hookKinds`, above), and a kind it does
+  not take is answered `bad-field` and lost, and that names none of its own
+  members twice (the helper would
   read the first, the app's `JSON.parse` the last). A `\u` escape of a code
   unit from D800 to DFFF that is not half of a pair, which Node writes when a
   string is cut inside a pair (a tool's output cut in the middle of an
@@ -1131,8 +1211,9 @@ treats the payload as untrusted text. Fixtures: the `hooks` part of
   SessionStart or UserPromptSubmit hook prints to the conversation, and an
   exit other than 0 (2 above all) changes what the CLI does. Whatever fails
   (no store, a session id that breaks its pattern, an argument that is not
-  Unicode, a record whose holder is gone, `busy`, input that is not an event
-  of the nine or names a member twice, input over 32 levels deep, no reply
+  Unicode, a record whose holder is gone, `busy`, input whose
+  `hook_event_name` is not a plain word, a kind the holder does not take or
+  names a member twice, input over 32 levels deep, no reply
   in time) loses that one event, silently. The hook mode writes no file (a
   stale record is left as it is, not removed as list mode removes it) and
   starts no process.
@@ -1148,13 +1229,14 @@ treats the payload as untrusted text. Fixtures: the `hooks` part of
   `transcript_path`, `cwd` and `tool_name` stay, those that are strings,
   with `"cut": true`: about 21 KiB at most. So a `hook.event` from the hook
   mode always fits the 64 KiB a frame may hold once the session is launched.
-- **`hook.event`** `{id, kind, payload}`: `kind` one of the nine, `payload` a
-  JSON object of at most 65,280 bytes as compact JSON (64 KiB less 256, the
+- **`hook.event`** `{id, kind, payload}`: `kind` a kind the session takes
+  (those its launch declared in `hookKinds`, or the nine), `payload` a JSON
+  object of at most 65,280 bytes as compact JSON (64 KiB less 256, the
   room the `event` around it needs) that names none of its own members twice
   and whose `hook_event_name` is `kind`. Any connection whose `hello.ack`
   named `hooks` may send it, attached to the terminal or not, within the
   limits above (16 connections, the budget of 20 `bad-field` or `too-large`
-  replies in 60 s, the frame's JSON limit). A kind not of the nine; a
+  replies in 60 s, the frame's JSON limit). A kind the session does not take; a
   payload that is not an object, names a member twice or whose
   `hook_event_name` is not `kind`; or a field missing, unknown or given
   twice is `bad-field`. A larger payload is `too-large`, before a launch and
@@ -1189,6 +1271,48 @@ treats the payload as untrusted text. Fixtures: the `hooks` part of
   connection gets only what came after. An event
   whose send failed waits for the next attach, and the app drops a `seq` it
   has already seen (section 9). A holder that ends drops its queue.
+
+**The status line (capability `status`, from 2.1.3-beta.18).** A session's
+status line can reach the app through its holder. A holder from 2.1.3-beta.18
+offers `status`, last in its hello. The holder only numbers a status and
+passes the newest on: it runs, opens and writes nothing for one. Fixtures: the
+`status` part of `helper/fixtures/local.json`.
+
+- **The status mode.** A CLI runs, as its status line command,
+  `aicc-helper status [--store <folder>] [--session <sid>]` (an option left
+  out is read as the hook mode reads it) and writes the status as JSON on its
+  standard input. The status mode reads that to the end and keeps at most
+  4 MiB. It sends the status only when it is one JSON object, at most 31
+  levels deep, that names none of its own members twice, of at most 65,280
+  bytes as compact JSON; nothing is cut. An escaped lone surrogate reads as
+  U+FFFD, as in the hook mode. It reads the session's record and connects as
+  the hook mode does; a holder whose hello does not offer `status` is sent
+  nothing. Otherwise it sends `hello.ack` with `caps` `["core","status"]` and
+  one `status.set`, and waits for the reply. All of it is done within 2 s of
+  its start. It always exits 0 and never writes to standard output or
+  standard error; whatever fails loses that one update, silently, and the
+  next carries the whole status again.
+- **`status.set`** `{id, payload}`: `payload` a JSON object of at most 65,280
+  bytes as compact JSON that names none of its own members twice. Any
+  connection whose `hello.ack` named `status` may send it, attached or not;
+  on one that did not it is `unknown-type` and a close. A larger payload is
+  `too-large`; one that is not an object or names a member twice, or a field
+  missing, unknown or given twice, is `bad-field`. The reply is
+  `status.taken` `{re, seq}`; while the session is ending, `not-found`.
+- **`status`** `{seq, payload}`, from the holder, on channel 0, at most
+  65,332 bytes of JSON. The holder keeps the newest status only, in one slot:
+  each `status.set` takes the session's next status `seq`, from 1 (its own
+  count, apart from the hook events'), and replaces the one before. It goes
+  to each connection whose `hello.ack` named `status` beside `local` (an
+  app's connection; one that acked `status` without `local`, as the status
+  mode does, posts and is sent none): the newest the holder holds once, right
+  after that connection's ack, before anything else it is sent, then each
+  newer one, in rounds that begin at least 100 ms apart (10 a second for the
+  session, section 12), the newest posted between two rounds going and the
+  ones before it not. A connection is never sent a `seq` twice, nor an older
+  one after a newer. No status follows `term.detached`, `replaced`,
+  `term.exit`, `term.ended`, or either `busy` an attach can end with. The app
+  drops a `seq` it has already seen. A holder that ends drops its status.
 
 **Tool streams (capability `mcp`, from 2.1.3-beta.10).** A session's tool
 server can be a relay that its CLI starts, carrying the session's tool calls
@@ -1496,8 +1620,13 @@ record version or capability. A message may gain an optional field, as
 `term.launch` gained `line` and `conpty` (2.1.3-beta.7): a holder from before
 it refuses the field with `bad-field`. The `hook` command line (2.1.3-beta.8)
 is frozen with them: its options, its exit status (always 0) and its silence.
-So is the `mcp` command line (2.1.3-beta.10): its options, its exit status (0
-at the end of its input, 1 otherwise) and a standard output that carries only
-messages. The `capture` command line (2.1.3-beta.14) is frozen from
+From 2.1.3-beta.18 either of its options may be left out and read from
+`AICC_HELPER_STORE` and `AICC_HELPER_SESSION`; every command line that worked
+before works the same. The `status` command line (2.1.3-beta.18) is frozen the
+same way: its options and variables, its exit status (always 0) and its
+silence. `term.launch` gained `hookKinds` (2.1.3-beta.18) as it gained `line`
+and `conpty`. The `mcp` command line (2.1.3-beta.10) is frozen too: its
+options, its exit status (0 at the end of its input, 1 otherwise) and a
+standard output that carries only messages. The `capture` command line (2.1.3-beta.14) is frozen from
 2.1.3-beta.16, when the app's Snap began to run it (`src/main/snap/`): its
 options, its one line and its exit statuses.

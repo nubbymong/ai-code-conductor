@@ -36,7 +36,7 @@
  * moved, Enter only on that row), so config.toml records no hook trust.
  * Every request stays on the VM: a dead proxy for everything but loopback.
  */
-import { test, expect, type Page } from '@playwright/test'
+import { test, expect } from '@playwright/test'
 import fs from 'fs'
 import path from 'path'
 import crypto from 'crypto'
@@ -46,9 +46,9 @@ import { launchIsolatedApp, closeIsolatedApp, type IsolatedApp } from './helpers
 import { pathWithoutCodex } from './helpers/fake-codex'
 import { isolatedHomeDir } from './helpers/isolated-env'
 import {
-  seedCodexAccount, realmDirOf, createCodexConfig, openSession, activeSessionId, terminalRows, ptyWrite,
+  seedCodexAccount, realmDirOf, createCodexConfig, openSession, activeSessionId, terminalRows, ptyWrite, answerFirstScreen,
 } from './helpers/codex-mode'
-import { FIRST_SCREENS, nextFirstScreen, confirmable, composerReady, type FirstScreen, type FirstScreenAnswer } from './helpers/codex-first-screens'
+import { nextFirstScreen, composerReady, type FirstScreenAnswer } from './helpers/codex-first-screens'
 import { classifyCodexVersion, CODEX_MIN_SUPPORTED_VERSION, CODEX_PINNED_CLI_VERSION } from '../../src/main/providers/codex/cli-contract'
 
 const IS_WIN = process.platform === 'win32'
@@ -149,29 +149,6 @@ function cliEnv(dataDir: string, extra: Record<string, string>): Record<string, 
   const home = isolatedHomeDir(dataDir)
   fs.mkdirSync(home, { recursive: true })
   return { ...env, USERPROFILE: home, HOME: home, ...DEAD_PROXY, ...extra }
-}
-
-/** Answer one first screen by the 9.2 rules (helpers/codex-first-screens.ts):
- *  move the selection with that screen's own keys, then press Enter only once
- *  the LIVE menu's selected row is the option the spec answers, read again
- *  for a bounded time; otherwise stop with nothing confirmed. Returns the
- *  screen Enter confirmed. */
-async function answerFirstScreen(page: Page, sid: string, kind: FirstScreen): Promise<string> {
-  await sleep(400)
-  for (const key of FIRST_SCREENS[kind].keys) { await ptyWrite(page, sid, key); await sleep(300) }
-  let check: ReturnType<typeof confirmable> = { ok: false, row: '' }
-  let rows: string[] = []
-  const until = Date.now() + 3000
-  while (Date.now() < until) {
-    await sleep(400)
-    rows = await terminalRows(page)
-    check = confirmable(rows, kind)
-    if (check.ok) break
-  }
-  if (!check.ok) throw new Error(`${kind} screen: ${check.why ?? 'not confirmable'} (the row read: ${JSON.stringify(check.row.trim())}); nothing was confirmed`)
-  await ptyWrite(page, sid, '\r')
-  await sleep(1500)
-  return rows.join('\n')
 }
 
 test.skip(!GIVEN || !FAKE_MODEL_URL, 'VM only: needs CCC_E2E_REAL_CODEX (the installed Codex CLIs) and CCC_E2E_FAKE_MODEL_URL (the loopback fake model)')

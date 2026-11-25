@@ -1,7 +1,10 @@
 //! `aicc-helper mcp --store <folder> --session <sid>`: a session's tool
 //! server as its CLI starts one, relayed through the session's holder to the
-//! app (protocol section 15, capability `mcp`, from 2.1.3-beta.10). Nothing in
-//! the app starts it or names it yet.
+//! app (protocol section 15, capability `mcp`, from 2.1.3-beta.10). The app
+//! names it as the `conductor` tool server of a held Claude Code session on
+//! this computer (hooks/per-session-settings.ts relayConductorEntry) and of a
+//! tab through the session helper on another machine (its session's mcp.json,
+//! providers/claude/remote-launch.ts claudeRemoteMcp).
 //!
 //! The CLI starts it as its own child, with pipes for its standard input and
 //! output, and speaks MCP to it: one JSON-RPC message a line, each way. The

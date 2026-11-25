@@ -205,6 +205,12 @@ script's header, written before measuring.
   aicc_planning#371) ran the same recorder with `c7-scenarios.json`: every
   launch with the warning launch's config, a draft typed at the idle composer,
   a wrapped draft, a paste and a draft after a reply.
+- **7.4's recording hold.** 2.1.3-beta.18 section 7.4's recording hold
+  (aicc_planning#427) ran the same recorder with `h74-scenarios.json` on
+  Codex 0.172.0: GPT-6.1 Terra picked in Codex's own `/model` picker for the
+  session, the idle composer, then one turn, every mark record only. Run 1 of
+  its long-prompt launch is the screen corpus's `codex172` program (ready and
+  after-reply on both ConPTYs).
 - **The console hosts, on Windows.** After each program's end its console
   hosts are counted 1, 2, 5, 10, 30 and 60 s after node-pty reported the exit,
   before anything of that run is stopped, while the next run goes on.
@@ -221,7 +227,8 @@ FAILS with what the screen showed). It runs only when named:
 
 Thirty-three of this run's recordings are in the screen corpus
 (`helper/fixtures/screens/`, checked by `tests/unit/shared/screen-corpus.test.ts`,
-where the program `codex170` is Codex 0.170.0 and `codex` is 0.157.1). Each is
+where the program `codex170` is Codex 0.170.0, `codex172` is 0.172.0 and `codex`
+is 0.157.1). Each is
 run 1 of its launch up to its state's `mark-end` line: every line before it, in
 order, without the `exit` line and earlier `mark-end` lines, a mark keeping only
 its state; the chunks decoded as one UTF-8 stream (a character split across two

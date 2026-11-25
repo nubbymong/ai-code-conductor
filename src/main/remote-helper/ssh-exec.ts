@@ -137,6 +137,8 @@ export interface ExecResult {
   /** ssh's exit status (the remote command's, once it ran), or null when it
    *  was ended by a signal or never started. */
   code: number | null
+  /** The signal that ended ssh on this computer (POSIX), when one did. */
+  signal?: string
   stdout: string
   /** At most 64 KiB of it (section 12), for the log. */
   stderr: string
@@ -225,6 +227,27 @@ export function sshFailure(r: Pick<ExecResult, 'code' | 'stderr' | 'timedOut' | 
   return 'ssh could not connect to it'
 }
 
+/**
+ * How ssh ended on this computer, when its exit is not a remote command's: a
+ * signal (POSIX), or an exit status no remote command gives (outside 0 to
+ * 255; Windows' -1, from a process ended by force, reads 4294967295 unsigned
+ * and is printed signed). Null for a remote command's exit (0 to 255), or none.
+ * 2.1.3-beta.18 fix round, item 3: such an end was told as the session
+ * helper's on the machine.
+ */
+export function localSshEnd(r: Pick<ExecResult, 'code' | 'signal'>): string | null {
+  if (r.signal) return `ssh ended by ${r.signal}`
+  if (r.code === null) return null
+  const signed = r.code > 0x7fffffff ? r.code - 0x100000000 : r.code
+  return signed >= 0 && signed <= 255 ? null : `ssh exit ${signed}`
+}
+
+/** An exec's exit for a message: how ssh ended on this computer
+ *  (localSshEnd), or the remote command's exit status. */
+export function exitText(r: Pick<ExecResult, 'code' | 'signal'>): string {
+  return localSshEnd(r) ?? `exit ${r.code ?? 'unknown'}`
+}
+
 /** An authentication or host key failure: never tried again by itself (section 11). */
 export function isFinalSshFailure(r: Pick<ExecResult, 'code' | 'stderr'>): boolean {
   return r.code === 255 && /Host key verification failed|REMOTE HOST IDENTIFICATION HAS CHANGED|Permission denied/i.test(r.stderr)
@@ -240,8 +263,10 @@ export async function runScript(
   target: SshTarget,
   script: ScriptName,
   values: readonly string[],
-  opts: { firstConnection?: boolean; stdin?: Buffer; timeoutMs?: number } = {},
+  opts: { firstConnection?: boolean; stdin?: Buffer; timeoutMs?: number; stdoutMax?: number } = {},
 ): Promise<ExecResult> {
+  // A host read's exec prints its files as hex (2.1.3-beta.18 section 3.2), so it may keep more.
+  const stdoutMax = opts.stdoutMax ?? EXEC_STDOUT_MAX
   const command = scriptCommand(script, values)
   const args = execArgv(target, { version: await runner.version(), firstConnection: opts.firstConnection }, command)
   return new Promise<ExecResult>((resolve) => {
@@ -261,19 +286,19 @@ export async function runScript(
     timer.unref?.()
     child.stdout?.on('data', (c: Buffer) => {
       outBytes += c.length
-      if (outBytes > EXEC_STDOUT_MAX) { try { child.kill() } catch { /* gone */ } return }
+      if (outBytes > stdoutMax) { try { child.kill() } catch { /* gone */ } return }
       out.push(c)
     })
     child.stderr?.on('data', (c: Buffer) => { if (err.length < STDERR_MAX) err += c.toString('utf8').slice(0, STDERR_MAX - err.length) })
-    const done = (code: number | null, notStarted = false) => {
+    const done = (code: number | null, notStarted = false, signal?: string | null) => {
       if (settled) return
       settled = true
       clearTimeout(timer)
-      resolve({ code, stdout: Buffer.concat(out).toString('utf8'), stderr: err, timedOut, ...(notStarted ? { notStarted: true as const } : {}) })
+      resolve({ code, stdout: Buffer.concat(out).toString('utf8'), stderr: err, timedOut, ...(signal ? { signal } : {}), ...(notStarted ? { notStarted: true as const } : {}) })
     }
     // A spawn that failed (no process id) never started ssh.
     child.on('error', (e) => { err += e.message; done(null, child.pid === undefined) })
-    child.on('close', (code) => done(typeof code === 'number' ? code : null))
+    child.on('close', (code, signal) => done(typeof code === 'number' ? code : null, false, signal))
     child.stdin?.on('error', () => { /* ssh ended first: its exit says why */ })
     if (opts.stdin) child.stdin?.end(opts.stdin)
     else child.stdin?.end()
@@ -445,10 +470,10 @@ export async function openScriptStream(
   child.stderr?.on('data', (c: Buffer) => { if (err.length < STDERR_MAX) err += c.toString('utf8').slice(0, STDERR_MAX - err.length) })
   const result = new Promise<ExecResult>((resolve) => {
     let done = false
-    const settle = (code: number | null, notStarted = false) => {
-      if (!done) { done = true; resolve({ code, stdout: '', stderr: err, timedOut: false, ...(notStarted ? { notStarted: true as const } : {}) }) }
+    const settle = (code: number | null, notStarted = false, signal?: string | null) => {
+      if (!done) { done = true; resolve({ code, stdout: '', stderr: err, timedOut: false, ...(signal ? { signal } : {}), ...(notStarted ? { notStarted: true as const } : {}) }) }
     }
-    child.on('close', (code) => settle(typeof code === 'number' ? code : null))
+    child.on('close', (code, signal) => settle(typeof code === 'number' ? code : null, false, signal))
     // A spawn that failed (no process id) never started ssh.
     child.on('error', (e) => { err += e.message; settle(null, child.pid === undefined) })
   })
@@ -475,8 +500,17 @@ export async function openScriptStream(
       if (child.pid === undefined) fail(SSH_NOT_STARTED, false, e.message)
       else fail(e.message, /hash check/.test(e.message))
     })
+    // Which side ended: ssh on this computer (killed: the link was cut), or
+    // the helper's launcher on the machine (its exit status).
+    const endedWords = (r: ExecResult): string => {
+      if (r.code === 3) return 'no session helper holds this session on the machine'
+      const local = localSshEnd(r)
+      return local !== null
+        ? `the ssh link on this computer ended before the session helper answered (${local})`
+        : `the session helper on the machine ended before it answered (exit ${r.code ?? 'unknown'})`
+    }
     void result.then((r) => fail(
-      sshFailure(r) ?? (r.code === 3 ? 'no session helper holds this session on the machine' : `the session helper on the machine ended before it answered (exit ${r.code ?? 'unknown'})`),
+      sshFailure(r) ?? endedWords(r),
       isFinalSshFailure(r) || r.code === 3 || r.code === 97,
       r.notStarted ? r.stderr : undefined,
     ))

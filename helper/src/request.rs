@@ -7,10 +7,18 @@
 //! Windows), on Windows only: on macOS and Linux either is `bad-field`.
 //!
 //! `hook.event` is allowed only once `hooks` is acked: one hook event of the
-//! session, of one of the nine kinds the app injects, its payload a JSON
-//! object of at most 65,280 bytes that names none of its members twice and
-//! whose `hook_event_name` is that kind. The holder only numbers it and
-//! passes it on.
+//! session, of a kind the session takes, its payload a JSON object of at most
+//! 65,280 bytes that names none of its members twice and whose
+//! `hook_event_name` is that kind. The kinds a session takes come with its
+//! launch (from 2.1.3-beta.18): the plain words its `term.launch` declared in
+//! `hookKinds`, or, when it declared none (and before a launch), the nine the
+//! app injects into a Claude Code session. The holder only numbers an event
+//! and passes it on.
+//!
+//! `status.set` is allowed only once `status` is acked (from 2.1.3-beta.18):
+//! the session's status line, a JSON object of at most 65,280 bytes that names
+//! none of its members twice. The holder only numbers it and passes the
+//! newest on.
 //!
 //! `mcp.open`, `mcp` and `mcp.close` are allowed only once `mcp` is acked
 //! (from 2.1.3-beta.10): a tool stream's messages, between a relay
@@ -42,15 +50,25 @@ pub const MAX_LINE_UNITS: usize = 32766;
 pub const MAX_TERM_CELLS: u64 = 1000;
 /// The largest integer a JavaScript number holds exactly: request ids and offsets.
 pub const MAX_SAFE_INTEGER: u64 = 9_007_199_254_740_991;
-/// The hook events a holder takes: the nine the app injects into a Claude
-/// Code session (src/main/hooks/session-hooks-writer.ts, MVP_EVENTS).
+/// The hook events a holder takes when its launch declared none
+/// (`hookKinds`), and before a launch: the nine the app injects into a
+/// Claude Code session (src/main/hooks/session-hooks-writer.ts, MVP_EVENTS).
 pub const HOOK_KINDS: [&str; 9] = ["PreToolUse", "PostToolUse", "Notification", "SessionStart", "Stop", "UserPromptSubmit", "SubagentStart", "SubagentStop", "StopFailure"];
+/// The most hook kinds a launch may declare (`hookKinds`).
+pub const MAX_HOOK_KINDS: usize = 16;
+/// The longest hook kind, in characters (each an ASCII letter or digit).
+pub const MAX_HOOK_KIND_CHARS: usize = 64;
 /// The most a hook event's payload may be, as compact JSON: 64 KiB less 256
-/// bytes, the room the `event` around it needs (at most 105 bytes, with the
-/// longest kind, `seq` and `lost`). So every `event` a holder sends fits the
+/// bytes, the room the `event` around it needs (at most 105 bytes with the
+/// longest of the nine kinds, `seq` and `lost`; 153 with a kind a launch
+/// declared of 64 characters). So every `event` a holder sends fits the
 /// 64 KiB a frame holds once launched, and a `hook.event` over the limit is
 /// `too-large`, not a frame over it, after a launch as before.
 pub const MAX_HOOK_PAYLOAD: usize = 65_280;
+/// The most a status payload may be, as compact JSON: the same as a hook
+/// event's, for the same reason (the `status` around it needs at most 52
+/// bytes, with the longest `seq`).
+pub const MAX_STATUS_PAYLOAD: usize = MAX_HOOK_PAYLOAD;
 /// The most a tool message's `message` may be on its way to the app, as
 /// compact JSON: 1 MiB less 256 bytes, the room the `mcp` around it needs
 /// (at most 48 bytes, with the longest `stream`). So every `mcp` the holder
@@ -96,6 +114,8 @@ pub struct Launch {
     pub line: Option<String>,
     /// Windows only: which ConPTY the terminal runs on.
     pub conpty: Conpty,
+    /// The hook kinds the session takes (`hookKinds`); None: the nine.
+    pub hook_kinds: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -122,17 +142,21 @@ pub enum Request {
     ScreenRead { id: u64 },
     /// The screen's last `count` lines, 1 to `MAX_TAIL_LINES`.
     ScreenTail { id: u64, count: usize },
+    /// The session's status line now: a JSON object of `bytes` as compact
+    /// JSON (measured once, here).
+    StatusSet { id: u64, payload: Value, bytes: usize },
 }
 
 /// What a connection's `hello.ack` allowed beyond the core: `local`, the
 /// terminal messages; `hooks`, hook events; `mcp`, tool streams; `screen`,
-/// screen reads.
+/// screen reads; `status`, the status line (from 2.1.3-beta.18).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Allowed {
     pub local: bool,
     pub hooks: bool,
     pub mcp: bool,
     pub screen: bool,
+    pub status: bool,
 }
 
 /// The fields of one type: those it must have, and those it may also have.
@@ -140,7 +164,7 @@ type Fields = (&'static [&'static str], &'static [&'static str]);
 
 /// The types an app may send once `local` is acked, and their fields.
 const LOCAL_TYPES: [(&str, Fields); 5] = [
-    ("term.launch", (&["t", "id", "argv", "cwd", "env", "cols", "rows"], &["line", "conpty"])),
+    ("term.launch", (&["t", "id", "argv", "cwd", "env", "cols", "rows"], &["line", "conpty", "hookKinds"])),
     ("term.attach", (&["t", "id", "from"], &[])),
     ("term.resize", (&["t", "id", "cols", "rows"], &[])),
     ("term.detach", (&["t", "id"], &[])),
@@ -155,6 +179,9 @@ const HOOK_TYPES: [(&str, Fields); 1] = [("hook.event", (&["t", "id", "kind", "p
 
 /// The types a connection may send once `screen` is acked.
 const SCREEN_TYPES: [(&str, Fields); 2] = [("screen.read", (&["t", "id"], &[])), ("screen.tail", (&["t", "id", "count"], &[]))];
+
+/// The types a connection may send once `status` is acked.
+const STATUS_TYPES: [(&str, Fields); 1] = [("status.set", (&["t", "id", "payload"], &[]))];
 
 /// The tool stream messages a connection may send once `mcp` is acked, and
 /// their fields: no `id`, as none gets a reply.
@@ -308,7 +335,61 @@ pub fn parse_launch(v: &Value, id: u64) -> Result<Launch, Refusal> {
         Some(value) => parse_conpty(value, re)?,
         None => Conpty::System,
     };
-    Ok(Launch { id, argv, cwd: cwd.to_string(), env, size, line, conpty })
+    let hook_kinds = match v.get("hookKinds") {
+        Some(value) => Some(parse_hook_kinds(value, re)?),
+        None => None,
+    };
+    Ok(Launch { id, argv, cwd: cwd.to_string(), env, size, line, conpty, hook_kinds })
+}
+
+/// A hook kind's shape: one plain word, 1 to `MAX_HOOK_KIND_CHARS` ASCII
+/// letters or digits. The hook mode sends only a kind of this shape, and a
+/// launch declares only such kinds; which kinds a session takes is its
+/// holder's to decide (`takes_kind`).
+pub fn plain_word(s: &str) -> bool {
+    !s.is_empty() && s.len() <= MAX_HOOK_KIND_CHARS && s.bytes().all(|b| b.is_ascii_alphanumeric())
+}
+
+/// True when a session takes hook events of `kind`: one of those its launch
+/// declared (`declared`), or, when it declared none (None, and before a
+/// launch), one of the nine (`HOOK_KINDS`).
+pub fn takes_kind(declared: Option<&[String]>, kind: &str) -> bool {
+    match declared {
+        Some(kinds) => kinds.iter().any(|k| k == kind),
+        None => HOOK_KINDS.contains(&kind),
+    }
+}
+
+/// `hookKinds`: the hook kinds the session takes, an array of at most
+/// `MAX_HOOK_KINDS` plain words (`plain_word`), none given twice. An empty
+/// array is a session that takes no hook event. More words, or a longer
+/// word, is `too-large`; anything else that breaks the shape is `bad-field`.
+fn parse_hook_kinds(v: &Value, re: Option<u64>) -> Result<Vec<String>, Refusal> {
+    let items = match v.as_array() {
+        Some(items) => items,
+        None => return refuse(CODE_BAD_FIELD, re, "hookKinds must be an array of plain words"),
+    };
+    if items.len() > MAX_HOOK_KINDS {
+        return refuse(CODE_TOO_LARGE, re, "hookKinds has more than 16 words");
+    }
+    let mut kinds: Vec<String> = Vec::with_capacity(items.len());
+    for item in items {
+        let kind = match item.as_str() {
+            Some(k) => k,
+            None => return refuse(CODE_BAD_FIELD, re, "hookKinds must be an array of plain words"),
+        };
+        if kind.chars().count() > MAX_HOOK_KIND_CHARS {
+            return refuse(CODE_TOO_LARGE, re, "a hook kind is over 64 characters");
+        }
+        if !plain_word(kind) {
+            return refuse(CODE_BAD_FIELD, re, "a hook kind must be 1 to 64 ASCII letters or digits");
+        }
+        if kinds.iter().any(|k| k == kind) {
+            return refuse(CODE_BAD_FIELD, re, "a hook kind is given twice");
+        }
+        kinds.push(kind.to_string());
+    }
+    Ok(kinds)
 }
 
 /// `line`: the exact command line the program reads (`CreateProcessW`'s
@@ -375,15 +456,15 @@ pub fn repeats_a_name(v: &Value) -> bool {
     }
 }
 
-/// Check a `hook.event` (its keys already checked): `kind` one of
-/// `HOOK_KINDS`, `payload` an object of at most `MAX_HOOK_PAYLOAD` bytes as
-/// compact JSON, naming none of its members twice, whose `hook_event_name`
-/// is `kind`.
-fn parse_hook_event(v: &Value, id: u64) -> Result<Request, Refusal> {
+/// Check a `hook.event` (its keys already checked): `kind` a kind the session
+/// takes (`takes_kind`, with what its launch declared), `payload` an object
+/// of at most `MAX_HOOK_PAYLOAD` bytes as compact JSON, naming none of its
+/// members twice, whose `hook_event_name` is `kind`.
+fn parse_hook_event(v: &Value, id: u64, declared: Option<&[String]>) -> Result<Request, Refusal> {
     let re = Some(id);
     let kind = match v.get("kind").and_then(Value::as_str) {
-        Some(k) if HOOK_KINDS.contains(&k) => k.to_string(),
-        _ => return refuse(CODE_BAD_FIELD, re, "kind must be one of the nine hook events the app injects"),
+        Some(k) if plain_word(k) && takes_kind(declared, k) => k.to_string(),
+        _ => return refuse(CODE_BAD_FIELD, re, "kind must be a hook event this session takes: one its launch declared, or one of the nine the app injects when it declared none"),
     };
     let payload = match v.get("payload") {
         Some(p) if matches!(p, Value::Obj(_)) => p,
@@ -400,6 +481,25 @@ fn parse_hook_event(v: &Value, id: u64) -> Result<Request, Refusal> {
         return refuse(CODE_BAD_FIELD, re, "payload.hook_event_name must be the event's kind");
     }
     Ok(Request::HookEvent { id, kind, payload: payload.clone(), bytes })
+}
+
+/// Check a `status.set` (its keys already checked): `payload` an object of
+/// at most `MAX_STATUS_PAYLOAD` bytes as compact JSON, naming none of its
+/// members twice. Nothing else in it is the holder's to judge.
+fn parse_status_set(v: &Value, id: u64) -> Result<Request, Refusal> {
+    let re = Some(id);
+    let payload = match v.get("payload") {
+        Some(p) if matches!(p, Value::Obj(_)) => p,
+        _ => return refuse(CODE_BAD_FIELD, re, "payload must be a JSON object"),
+    };
+    let bytes = payload.to_json().len();
+    if bytes > MAX_STATUS_PAYLOAD {
+        return refuse(CODE_TOO_LARGE, re, "payload is over 65280 bytes as JSON");
+    }
+    if repeats_a_name(payload) {
+        return refuse(CODE_BAD_FIELD, re, "payload names a member twice");
+    }
+    Ok(Request::StatusSet { id, payload: payload.clone(), bytes })
 }
 
 /// Check a tool stream message of type `t`: exactly `fields`, `stream` a
@@ -431,8 +531,17 @@ fn parse_tool(v: &Value, t: &str, fields: &[&str]) -> Result<Request, Refusal> {
     }
 }
 
-/// Check one control message, allowed what the connection's ack allowed.
+/// Check one control message, allowed what the connection's ack allowed, as
+/// a holder whose launch declared no hook kinds reads it (and one not yet
+/// launched): a `hook.event` of one of the nine.
 pub fn parse_allowed(v: &Value, allowed: Allowed) -> Result<Request, Refusal> {
+    parse_in_session(v, allowed, None)
+}
+
+/// Check one control message, allowed what the connection's ack allowed, in
+/// a session whose launch declared the hook kinds `declared` (None: it
+/// declared none, or nothing is launched yet).
+pub fn parse_in_session(v: &Value, allowed: Allowed, declared: Option<&[String]>) -> Result<Request, Refusal> {
     if v.keys().is_none() {
         return refuse(CODE_BAD_FIELD, None, "a control message must be a JSON object");
     }
@@ -452,6 +561,9 @@ pub fn parse_allowed(v: &Value, allowed: Allowed) -> Result<Request, Refusal> {
     }
     if fields.is_none() && allowed.screen {
         fields = SCREEN_TYPES.iter().find(|(name, _)| *name == t).map(|(_, f)| *f);
+    }
+    if fields.is_none() && allowed.status {
+        fields = STATUS_TYPES.iter().find(|(name, _)| *name == t).map(|(_, f)| *f);
     }
     if fields.is_none() && allowed.mcp {
         if let Some((_, tool_fields)) = TOOL_TYPES.iter().find(|(name, _)| *name == t) {
@@ -480,7 +592,8 @@ pub fn parse_allowed(v: &Value, allowed: Allowed) -> Result<Request, Refusal> {
         "term.resize" => Ok(Request::Resize { id, size: size(v, re)? }),
         "term.detach" => Ok(Request::Detach { id }),
         "term.end" => Ok(Request::End { id }),
-        "hook.event" => parse_hook_event(v, id),
+        "hook.event" => parse_hook_event(v, id, declared),
+        "status.set" => parse_status_set(v, id),
         "screen.read" => Ok(Request::ScreenRead { id }),
         "screen.tail" => match v.get("count").and_then(Value::as_u64) {
             Some(count) if (1..=MAX_TAIL_LINES).contains(&count) => Ok(Request::ScreenTail { id, count: count as usize }),
@@ -513,7 +626,7 @@ mod tests {
     /// A message read on a connection that acked `local` or not, and not
     /// `hooks`.
     fn parse(v: &Value, local: bool) -> Result<Request, Refusal> {
-        parse_allowed(v, Allowed { local, hooks: false, mcp: false, screen: false })
+        parse_allowed(v, Allowed { local, hooks: false, mcp: false, screen: false, status: false })
     }
 
     fn parsed(text: &str) -> Result<Request, Refusal> {
@@ -692,7 +805,7 @@ mod tests {
         assert_eq!(parse(&v, false).unwrap_err().code, CODE_UNKNOWN_TYPE);
     }
 
-    const HOOKS: Allowed = Allowed { local: true, hooks: true, mcp: false, screen: false };
+    const HOOKS: Allowed = Allowed { local: true, hooks: true, mcp: false, screen: false, status: false };
 
     fn hook(text: &str) -> Result<Request, Refusal> {
         parse_allowed(&json::parse(text.as_bytes()).unwrap(), HOOKS)
@@ -724,11 +837,11 @@ mod tests {
         // Not without hooks acked, whatever else was: the connection is closed.
         let v = json::parse(b"{\"t\":\"hook.event\",\"id\":2,\"kind\":\"Stop\",\"payload\":{\"hook_event_name\":\"Stop\"}}").unwrap();
         assert_eq!(parse(&v, true).unwrap_err().code, CODE_UNKNOWN_TYPE);
-        assert_eq!(parse_allowed(&v, Allowed { local: true, hooks: false, mcp: false, screen: false }).unwrap_err().code, CODE_UNKNOWN_TYPE);
+        assert_eq!(parse_allowed(&v, Allowed { local: true, hooks: false, mcp: false, screen: false, status: false }).unwrap_err().code, CODE_UNKNOWN_TYPE);
         // Hooks alone allow it, and the terminal messages still need local.
-        assert!(parse_allowed(&v, Allowed { local: false, hooks: true, mcp: false, screen: false }).is_ok());
+        assert!(parse_allowed(&v, Allowed { local: false, hooks: true, mcp: false, screen: false, status: false }).is_ok());
         let end = json::parse(b"{\"t\":\"term.end\",\"id\":10}").unwrap();
-        assert_eq!(parse_allowed(&end, Allowed { local: false, hooks: true, mcp: false, screen: false }).unwrap_err().code, CODE_UNKNOWN_TYPE);
+        assert_eq!(parse_allowed(&end, Allowed { local: false, hooks: true, mcp: false, screen: false, status: false }).unwrap_err().code, CODE_UNKNOWN_TYPE);
     }
 
     #[test]
@@ -774,7 +887,7 @@ mod tests {
     }
 
     /// What the relay acks: core, local and mcp.
-    const TOOLS: Allowed = Allowed { local: true, hooks: false, mcp: true, screen: false };
+    const TOOLS: Allowed = Allowed { local: true, hooks: false, mcp: true, screen: false, status: false };
 
     fn tool(text: &str) -> Result<Request, Refusal> {
         parse_allowed(&json::parse(text.as_bytes()).unwrap(), TOOLS)
@@ -794,12 +907,12 @@ mod tests {
         // A batch is an array.
         assert!(matches!(tool("{\"t\":\"mcp\",\"stream\":3,\"message\":[{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{}}]}"), Ok(Request::Mcp { .. })));
         // Not without mcp acked, whatever else was: the connection is closed.
-        for acked in [Allowed { local: true, hooks: true, mcp: false, screen: false }, Allowed::default()] {
+        for acked in [Allowed { local: true, hooks: true, mcp: false, screen: false, status: false }, Allowed::default()] {
             let v = json::parse(b"{\"t\":\"mcp.open\",\"stream\":1}").unwrap();
             assert_eq!(parse_allowed(&v, acked).unwrap_err().code, CODE_UNKNOWN_TYPE, "{acked:?}");
         }
         // Mcp alone allows them, and the terminal messages still need local.
-        let mcp_only = Allowed { local: false, hooks: false, mcp: true, screen: false };
+        let mcp_only = Allowed { local: false, hooks: false, mcp: true, screen: false, status: false };
         assert!(parse_allowed(&json::parse(b"{\"t\":\"mcp.open\",\"stream\":1}").unwrap(), mcp_only).is_ok());
         let end = json::parse(b"{\"t\":\"term.end\",\"id\":10}").unwrap();
         assert_eq!(parse_allowed(&end, mcp_only).unwrap_err().code, CODE_UNKNOWN_TYPE);
@@ -840,7 +953,7 @@ mod tests {
         assert_eq!((MAX_MCP_TO_APP, MAX_MCP_TO_HELPER), (1024 * 1024 - 256, 16 * 1024 * 1024 - 256));
     }
 
-    const SCREEN: Allowed = Allowed { local: false, hooks: false, mcp: false, screen: true };
+    const SCREEN: Allowed = Allowed { local: false, hooks: false, mcp: false, screen: true, status: false };
 
     fn screen(text: &str, allowed: Allowed) -> Result<Request, Refusal> {
         parse_allowed(&json::parse(text.as_bytes()).unwrap(), allowed)
@@ -853,7 +966,7 @@ mod tests {
         assert_eq!(screen("{\"t\":\"screen.tail\",\"id\":6,\"count\":1}", SCREEN), Ok(Request::ScreenTail { id: 6, count: 1 }));
         // Without `screen` acked a read is a type the connection does not
         // allow, whatever else it acked.
-        let everything_else = Allowed { local: true, hooks: true, mcp: true, screen: false };
+        let everything_else = Allowed { local: true, hooks: true, mcp: true, screen: false, status: false };
         for text in ["{\"t\":\"screen.read\",\"id\":2}", "{\"t\":\"screen.tail\",\"id\":2,\"count\":5}"] {
             for allowed in [everything_else, Allowed::default()] {
                 assert_eq!(screen(text, allowed).unwrap_err().code, CODE_UNKNOWN_TYPE, "{text} with {allowed:?}");
@@ -881,5 +994,147 @@ mod tests {
         ] {
             assert_eq!(screen(bad, SCREEN).unwrap_err().code, CODE_BAD_FIELD, "{bad}");
         }
+    }
+
+    /// Six kinds a launch may declare for a CLI other than Claude Code: the
+    /// six section 5 of the 2.1.3-beta.18 plan declares for a held session,
+    /// PermissionRequest (not one of the nine) among them. The helper names no CLI.
+    const DECLARED_SIX: [&str; 6] = ["SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse", "PermissionRequest", "Stop"];
+
+    fn declared_kinds(text: &str) -> Result<Option<Vec<String>>, &'static str> {
+        match parsed(text) {
+            Ok(Request::Launch(l)) => Ok(l.hook_kinds),
+            Ok(other) => panic!("{other:?}"),
+            Err(r) => Err(r.code),
+        }
+    }
+
+    #[test]
+    fn a_launch_may_declare_the_hook_kinds_its_session_takes() {
+        let p = format!("[\"{PROGRAM}\"]");
+        let with = |kinds: &str| launch_with(&p, &format!("\"hookKinds\":{kinds}"));
+        let words = |kinds: &[&str]| kinds.iter().map(|k| format!("\"{k}\"")).collect::<Vec<_>>().join(",");
+        // None declared: the nine, as before. Six declared; none at all.
+        assert_eq!(declared_kinds(&launch(&p, "{}")), Ok(None));
+        let six: Vec<String> = DECLARED_SIX.iter().map(|k| k.to_string()).collect();
+        assert_eq!(declared_kinds(&with(&format!("[{}]", words(&DECLARED_SIX)))), Ok(Some(six)));
+        assert_eq!(declared_kinds(&with("[]")), Ok(Some(Vec::new())));
+        // 16 words of 64 characters is the most; one more of either is too large.
+        let sixteen: Vec<String> = (0..16).map(|n| format!("{}{n:02}", "K".repeat(62))).collect();
+        let refs: Vec<&str> = sixteen.iter().map(String::as_str).collect();
+        assert_eq!(declared_kinds(&with(&format!("[{}]", words(&refs)))), Ok(Some(sixteen.clone())));
+        let mut seventeen = refs.clone();
+        seventeen.push("Stop");
+        assert_eq!(declared_kinds(&with(&format!("[{}]", words(&seventeen)))), Err(CODE_TOO_LARGE));
+        assert_eq!(declared_kinds(&with(&format!("[\"{}\"]", "a".repeat(65)))), Err(CODE_TOO_LARGE));
+        // Anything else that is not a list of plain words, each once, is bad-field.
+        for bad in ["\"Stop\"", "null", "{}", "[1]", "[null]", "[\"\"]", "[\"Pre-Tool\"]", "[\"a b\"]", "[\"stop.idle\"]", "[\"caf\\u00e9\"]", "[\"Stop\",\"Stop\"]", "[[\"Stop\"]]"] {
+            assert_eq!(declared_kinds(&with(bad)), Err(CODE_BAD_FIELD), "hookKinds {bad}");
+        }
+        assert_eq!(declared_kinds(&launch_with(&p, "\"hookKinds\":[],\"hookKinds\":[]")), Err(CODE_BAD_FIELD), "given twice");
+        assert_eq!((MAX_HOOK_KINDS, MAX_HOOK_KIND_CHARS), (16, 64));
+    }
+
+    #[test]
+    fn a_hook_kind_is_a_plain_word() {
+        let longest = "a".repeat(64);
+        let longer = "a".repeat(65);
+        for good in ["Stop", "PermissionRequest", "K9", "9", longest.as_str()] {
+            assert!(plain_word(good), "{good}");
+        }
+        for bad in ["", "a b", "Pre-Tool", "session.idle", "under_score", "caf\u{e9}", "Stop\n", longer.as_str()] {
+            assert!(!plain_word(bad), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn a_hook_event_is_taken_only_of_a_kind_its_session_takes() {
+        let event = |kind: &str| json::parse(format!("{{\"t\":\"hook.event\",\"id\":2,\"kind\":\"{kind}\",\"payload\":{{\"hook_event_name\":\"{kind}\"}}}}").as_bytes()).unwrap();
+        let six: Vec<String> = DECLARED_SIX.iter().map(|k| k.to_string()).collect();
+        let taken = |kind: &str, declared: Option<&[String]>| match parse_in_session(&event(kind), HOOKS, declared) {
+            Ok(Request::HookEvent { kind: k, .. }) => {
+                assert_eq!(k, kind);
+                Ok(())
+            }
+            Ok(other) => panic!("{other:?}"),
+            Err(r) => Err((r.code, r.re)),
+        };
+        // A launch that declared the six: those, and nothing else.
+        for kind in DECLARED_SIX {
+            assert_eq!(taken(kind, Some(six.as_slice())), Ok(()), "{kind}");
+        }
+        for kind in ["Notification", "SubagentStop", "stop", "permissionrequest"] {
+            assert_eq!(taken(kind, Some(six.as_slice())), Err((CODE_BAD_FIELD, Some(2))), "{kind}");
+        }
+        // One that declared none, or no launch yet: the nine, as before.
+        for kind in HOOK_KINDS {
+            assert_eq!(taken(kind, None), Ok(()), "{kind}");
+        }
+        assert_eq!(taken("PermissionRequest", None), Err((CODE_BAD_FIELD, Some(2))));
+        assert_eq!(parse_allowed(&event("PermissionRequest"), HOOKS).unwrap_err().code, CODE_BAD_FIELD);
+        // An empty list takes nothing.
+        let none: Vec<String> = Vec::new();
+        assert_eq!(taken("Stop", Some(none.as_slice())), Err((CODE_BAD_FIELD, Some(2))));
+        // The shape is checked whatever the list holds (a launch never
+        // declares such a kind).
+        let odd = vec!["a-b".to_string()];
+        assert_eq!(taken("a-b", Some(odd.as_slice())), Err((CODE_BAD_FIELD, Some(2))));
+        assert!(takes_kind(Some(odd.as_slice()), "a-b") && !takes_kind(None, "a-b"));
+    }
+
+    const STATUS: Allowed = Allowed { local: false, hooks: false, mcp: false, screen: false, status: true };
+
+    fn status(text: &str, allowed: Allowed) -> Result<Request, Refusal> {
+        parse_allowed(&json::parse(text.as_bytes()).unwrap(), allowed)
+    }
+
+    /// A status.set whose payload is exactly `bytes` long as JSON.
+    fn status_of_size(bytes: usize) -> String {
+        let head = "{\"model\":{\"id\":\"m\"},\"pad\":\"";
+        let payload = format!("{head}{}\"}}", "x".repeat(bytes - head.len() - 2));
+        assert_eq!(payload.len(), bytes);
+        format!("{{\"t\":\"status.set\",\"id\":2,\"payload\":{payload}}}")
+    }
+
+    #[test]
+    fn a_status_set_reads_with_its_payload_once_status_is_acked() {
+        let text = "{\"t\":\"status.set\",\"id\":4,\"payload\":{\"model\":{\"id\":\"m\",\"display_name\":\"M\"},\"cost\":{\"total_cost_usd\":0.5}}}";
+        let want = "{\"model\":{\"id\":\"m\",\"display_name\":\"M\"},\"cost\":{\"total_cost_usd\":0.5}}";
+        match status(text, STATUS).unwrap() {
+            Request::StatusSet { id, payload, bytes } => assert_eq!((id, payload.to_json(), bytes), (4, want.to_string(), want.len())),
+            other => panic!("{other:?}"),
+        }
+        // Not without status acked, whatever else was: the connection is closed.
+        let everything_else = Allowed { local: true, hooks: true, mcp: true, screen: true, status: false };
+        for allowed in [everything_else, Allowed::default()] {
+            assert_eq!(status(text, allowed).unwrap_err().code, CODE_UNKNOWN_TYPE, "{allowed:?}");
+        }
+        // Status alone allows no terminal message and no hook event.
+        assert_eq!(status("{\"t\":\"term.end\",\"id\":2}", STATUS).unwrap_err().code, CODE_UNKNOWN_TYPE);
+        assert_eq!(status("{\"t\":\"hook.event\",\"id\":2,\"kind\":\"Stop\",\"payload\":{\"hook_event_name\":\"Stop\"}}", STATUS).unwrap_err().code, CODE_UNKNOWN_TYPE);
+        // 64 KiB less 256 of payload is the most; one byte more is too large.
+        assert!(matches!(status(&status_of_size(MAX_STATUS_PAYLOAD), STATUS), Ok(Request::StatusSet { bytes: MAX_STATUS_PAYLOAD, .. })));
+        let refused = status(&status_of_size(MAX_STATUS_PAYLOAD + 1), STATUS).unwrap_err();
+        assert_eq!((refused.code, refused.re), (CODE_TOO_LARGE, Some(2)));
+        assert_eq!(MAX_STATUS_PAYLOAD, 64 * 1024 - 256);
+    }
+
+    #[test]
+    fn a_status_set_that_breaks_its_schema_is_bad_field() {
+        for bad in [
+            "{\"t\":\"status.set\",\"id\":3,\"payload\":{}}",
+            "{\"t\":\"status.set\",\"payload\":{}}",
+            "{\"t\":\"status.set\",\"id\":2}",
+            "{\"t\":\"status.set\",\"id\":2,\"payload\":[]}",
+            "{\"t\":\"status.set\",\"id\":2,\"payload\":\"x\"}",
+            "{\"t\":\"status.set\",\"id\":2,\"payload\":null}",
+            "{\"t\":\"status.set\",\"id\":2,\"payload\":{},\"seq\":1}",
+            "{\"t\":\"status.set\",\"id\":2,\"payload\":{},\"payload\":{}}",
+            "{\"t\":\"status.set\",\"id\":2,\"payload\":{\"cwd\":\"/a\",\"cwd\":\"/b\"}}",
+        ] {
+            assert_eq!(status(bad, STATUS).unwrap_err().code, CODE_BAD_FIELD, "{bad}");
+        }
+        // A name repeated further in is not the holder's to judge.
+        assert!(status("{\"t\":\"status.set\",\"id\":2,\"payload\":{\"model\":{\"a\":1,\"a\":2}}}", STATUS).is_ok());
     }
 }

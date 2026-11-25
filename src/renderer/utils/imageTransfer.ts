@@ -3,13 +3,20 @@ import { quoteArgForShell } from '../../shared/shell-quote'
 import { useSessionStore } from '../stores/sessionStore'
 import { usePasteHintStore } from '../stores/pasteHintStore'
 import { sendImagePathToCodex, NOT_AT_PROMPT, IMAGE_AT_PROMPT } from '../lib/codexComposer'
+import { sessionCapabilities } from '../lib/session-capabilities'
+import type { ImageLine } from '../lib/session-capabilities'
+import { SSH_THROUGH_HELPER } from '../../shared/remote-machines'
 /**
  * Image transfer helper: gets a host-saved image into a session. The prompts
  * below are a Claude session's; a plain terminal (and the partner shell) gets
  * only the image's path, quoted for its shell (composeShellImagePath, below);
  * a Codex session's goes through main's door too, with its own fallback
  * (sendImageToCodexSession, below). Which route a pasted image takes is
- * decided in hooks/useKeyboardShortcuts.ts.
+ * decided in hooks/useKeyboardShortcuts.ts. Since 2.1.3-beta.18 section 4 a
+ * session on this computer is sent by one path whatever its agent
+ * (sendImageThroughMain): main's door decides the paste by the session's own
+ * provider, and the session's image line (session-capabilities.ts) what is
+ * typed when main does not paste it.
  *
  * For a Claude session:
  *
@@ -27,6 +34,8 @@ import { sendImagePathToCodex, NOT_AT_PROMPT, IMAGE_AT_PROMPT } from '../lib/cod
  * the auto-injected reverse tunnel) is the only way the image lands on
  * Claude's input. Vision MCP is started at app launch, so this path is
  * always available on SSH sessions even when no browser is configured.
+ * A tab through the session helper on its machine gets the request, then
+ * its Enter as its own write (sendFetchRequest, below).
  *
  * Both paths cap the image to 1920px / JPG q85 server-side
  * (screenshot-capture.ts) so neither saturates Claude's image-size
@@ -76,6 +85,44 @@ export function imagePathRefusedNote(hostFilePath: string): string {
 }
 
 /**
+ * 2.1.3-beta.18 section 4 (aicc_planning#432): a host-saved image into a
+ * session on this computer, for every agent: main's image door is asked to
+ * paste it by the rule of the session's own provider (pty.submitImage), and
+ * what main did not paste is typed by the session's own image line (`line`,
+ * sessionCapabilities' imageLine): `enter`, the sentence and the path, then
+ * Enter, in one write; `composer`, the same words by the rule that types into
+ * Codex (sendImagePathToCodex), which tells `onNote` why when it types
+ * nothing; none, nothing. Main's `left` (what it pasted may still be at the
+ * prompt) types nothing more and tells `onNote`; a `not-sent` answer is told
+ * to `onNote` only on the composer line, as before. An ask that fails gets
+ * the session's line too. The sentence goes as given, or the default one.
+ */
+function sendImageThroughMain(
+  sessionId: string,
+  hostFilePath: string,
+  sentence: string,
+  line: ImageLine | null,
+  onNote: (note: string) => void,
+): void {
+  const words = sentence.trim() || 'Please view this image.'
+  const typed = (): void => {
+    if (line === 'composer') sendImagePathToCodex(sessionId, hostFilePath, onNote, undefined, words)
+    // A trailing \r submits it.
+    else if (line === 'enter') writeSessionInput(sessionId, composeLocalPathPrompt(hostFilePath, words) + '\r')
+  }
+  void window.electronAPI.pty.submitImage({ sessionId, path: hostFilePath, sentence: words }).then(
+    (result) => {
+      if (result.outcome === 'not-taken') {
+        // `left`: main's ImageSubmitResult (session-input), read as main sends it.
+        if (result.left === true) onNote(IMAGE_AT_PROMPT)
+        else typed()
+      } else if (result.outcome === 'not-sent' && line === 'composer') onNote(result.reason === 'refused-text' ? imagePathRefusedNote(hostFilePath) : NOT_AT_PROMPT)
+    },
+    typed,
+  )
+}
+
+/**
  * 2.1.3-beta.17 C6 (aicc_planning#415): a host-saved image into a Codex
  * session on this computer (Alt+V, Snap). Main is asked to paste the path as
  * Codex's own paste, then the sentence, then Enter (pty.submitImage; probe
@@ -93,6 +140,8 @@ export function imagePathRefusedNote(hostFilePath: string): string {
  * refuses, gets nothing typed, and `onNote` is told. The sentence goes as
  * given (PB3: U+2014 is kept on 0.153.4 and 0.155.1 typed this way; C6's
  * reading: after the placeholder on 0.157.1 it reached Codex's turn, 3 of 3).
+ * Since 2.1.3-beta.18 section 4 this is sendImageThroughMain on the composer
+ * line.
  */
 export function sendImageToCodexSession(
   sessionId: string,
@@ -100,36 +149,65 @@ export function sendImageToCodexSession(
   sentence: string,
   onNote: (note: string) => void,
 ): void {
-  const words = sentence.trim() || 'Please view this image.'
-  const typed = (): void => sendImagePathToCodex(sessionId, hostFilePath, onNote, undefined, words)
-  void window.electronAPI.pty.submitImage({ sessionId, path: hostFilePath, sentence: words }).then(
-    (result) => {
-      if (result.outcome === 'not-taken') {
-        // `left`: main's ImageSubmitResult (session-input), read as main sends it.
-        if (result.left === true) onNote(IMAGE_AT_PROMPT)
-        else typed()
-      } else if (result.outcome === 'not-sent') onNote(result.reason === 'refused-text' ? imagePathRefusedNote(hostFilePath) : NOT_AT_PROMPT)
-    },
-    typed,
-  )
+  sendImageThroughMain(sessionId, hostFilePath, sentence, 'composer', onNote)
 }
 
-/** Whether the session runs Codex (its record in the session store). */
-function isCodexSession(sessionId: string): boolean {
-  return useSessionStore.getState().sessions.find((s) => s.id === sessionId)?.provider === 'codex'
+/** 2.1.3-beta.18 fix round (section 3.2's host line): how long the Enter
+ *  waits after an image request typed into a tab through the session helper,
+ *  as a prompt button's Enter waits after its text in a Claude Code session
+ *  (main's session-input PROMPT_ENTER_DELAY_MS, #333). */
+export const HELPER_ENTER_DELAY_MS = 300
+
+/**
+ * The host fetch request into an SSH tab, and its Enter.
+ *
+ * Today's SSH tab gets them in one write, as it always did. A tab main says
+ * runs through the session helper on its machine (ssh.getState answers
+ * SSH_THROUGH_HELPER) gets the request, then the Enter as its own write
+ * HELPER_ENTER_DELAY_MS later. Claude Code makes a control character a key of
+ * its own only in a read shorter than 64 characters (measured from its input
+ * tokenizer, 2.1.332), and the helper hands each write to the program on the
+ * host whole, so the request and its Enter in one write reached it as one read
+ * and the Enter stayed in the text: typed, not sent (the host line, 2 of 2).
+ * The Enter is not typed when the tab started again while it waited (main
+ * pushes the tab's flow state at every start) or was closed. A preload with
+ * no such bridge, or an ask that fails, gets the one write.
+ */
+function sendFetchRequest(sessionId: string, request: string): void {
+  const whole = (): void => writeSessionInput(sessionId, request + '\r')
+  const ssh = window.electronAPI?.ssh
+  if (typeof ssh?.getState !== 'function') { whole(); return }
+  void ssh.getState(sessionId).then((flow: { state?: string } | null | undefined) => {
+    if (flow?.state !== SSH_THROUGH_HELPER) { whole(); return }
+    writeSessionInput(sessionId, request)
+    let startedAgain = false
+    const off = typeof ssh.onFlowState === 'function' ? ssh.onFlowState(sessionId, () => { startedAgain = true }) : undefined
+    setTimeout(() => {
+      try { off?.() } catch { /* already gone */ }
+      if (startedAgain || !useSessionStore.getState().sessions.some((s) => s.id === sessionId)) return
+      writeSessionInput(sessionId, '\r')
+    }, HELPER_ENTER_DELAY_MS)
+  }, whole)
+}
+
+/** The session's image line (sessionCapabilities' imageLine), from its
+ *  record in the session store, read as every reader of the store reads one. */
+function imageLineOf(sessionId: string): ImageLine | null {
+  return sessionCapabilities(useSessionStore.getState().sessions.find((s) => s.id === sessionId)).imageLine
 }
 
 /**
  * Send a host-saved image file to a Claude session (or, since 2.1.3-beta.17
- * C6, a Codex session on this computer: sendImageToCodexSession, its notes in
- * the session's paste hint).
+ * C6, a Codex session on this computer; since 2.1.3-beta.18 section 4 every
+ * session on this computer goes one way, sendImageThroughMain, with its
+ * notes in the session's paste hint).
  *
  * @param sessionId - target Claude PTY session id
  * @param hostFilePath - absolute local path of the image file
  * @param userContext - optional context message prepended to the prompt
  * @param sessionType - 'local': main pastes the path (pty.submitImage), or,
- *                     for a session it does not take, the path typed with the
- *                     sentence; 'ssh' uses MCP fetch. Defaults to MCP fetch
+ *                     for a session it does not take, the session's own
+ *                     image line; 'ssh' uses MCP fetch. Defaults to MCP fetch
  *                     for back-compat with any caller that doesn't yet
  *                     thread the type through.
  */
@@ -139,23 +217,14 @@ export function sendImageToSession(
   userContext?: string,
   sessionType?: 'local' | 'ssh'
 ): void {
-  if (sessionType === 'local' && isCodexSession(sessionId)) {
-    sendImageToCodexSession(sessionId, hostFilePath, userContext ?? '', (note) => usePasteHintStore.getState().show(sessionId, note))
-    return
-  }
   if (sessionType === 'local') {
-    // The line a session gets when main does not paste the image for it
-    // (`not-taken`), or when the ask itself failed; a trailing \r submits it.
-    const typed = (): void => writeSessionInput(sessionId, composeLocalPathPrompt(hostFilePath, userContext) + '\r')
-    const sentence = userContext?.trim() || 'Please view this image.'
-    void window.electronAPI.pty.submitImage({ sessionId, path: hostFilePath, sentence }).then(
-      (result) => { if (result.outcome === 'not-taken') typed() },
-      typed,
-    )
+    // 2.1.3-beta.18 section 4: main's door for every session on this
+    // computer; what it does not paste, the session's own image line.
+    sendImageThroughMain(sessionId, hostFilePath, userContext ?? '', imageLineOf(sessionId), (note) => usePasteHintStore.getState().show(sessionId, note))
     return
   }
-  // Trailing \r submits the prompt to Claude
-  writeSessionInput(sessionId, composeFetchHostScreenshotPrompt(basename(hostFilePath), userContext) + '\r')
+  // Its Enter submits the prompt to Claude (sendFetchRequest).
+  sendFetchRequest(sessionId, composeFetchHostScreenshotPrompt(basename(hostFilePath), userContext))
 }
 
 /**

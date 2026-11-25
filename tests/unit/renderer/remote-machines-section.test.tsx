@@ -135,6 +135,26 @@ describe('Linux machines on the Machines page', () => {
     expect(button('Check')?.disabled).toBe(false)
   })
 
+  // 2.1.3-beta.18 release smoke (u-remove-confirm.png): the Remove question
+  // opened under the green notice of the machine's Add five minutes before,
+  // so the page showed an old answer beside a new question.
+  it('opening the Remove question clears the last action\'s notice', async () => {
+    const m = { did: DID, label: 'Rocky', target: 'nick@rocky.lan:22', checked: true, lastCheck: { at: Date.now(), ok: true }, helperVersion: '0.1.0', system: 'Linux x86_64', inUse: 0 }
+    const remote = install(state({ machines: [m] }))
+    await mount()
+    const notice = () => container.querySelector('[data-testid="remote-notice"]')?.textContent
+    await click(button('Check'))
+    expect(notice()).toBe('rocky.lan passed its check.')
+    await click(button('Remove'))
+    expect(container.querySelector('[aria-label="Confirm removing Rocky"]')).not.toBeNull()
+    expect(remote.remove).not.toHaveBeenCalled()
+    expect(notice()).toBe('')
+    // Keep it sends nothing and brings no old notice back.
+    await click(button('Keep it'))
+    expect(remote.remove).not.toHaveBeenCalled()
+    expect(notice()).toBe('')
+  })
+
   it('Remove is not offered while a tab runs through the helper there', async () => {
     install(state({ machines: [{ did: DID, label: 'Rocky', target: 'nick@rocky.lan:22', checked: true, lastCheck: { at: Date.now(), ok: true }, helperVersion: '0.1.0', system: 'Linux x86_64', inUse: 1 }] }))
     await mount()

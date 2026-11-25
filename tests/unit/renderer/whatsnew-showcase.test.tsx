@@ -664,6 +664,10 @@ describe('since tags: pinned, parseable, and curated for the newest release', ()
     'Working with Claude / Ask Conductor.': '2.1.0-beta.16',
     'Across the app / New models, no update.': '2.1.3-beta.1',
     'Across the app / Fable 5.2.': '2.1.3-beta.1',
+    'Across the app / A Machines page.': '2.1.3-beta.6',
+    'Across the app / Snap, its own overlay.': '2.1.3-beta.16',
+    'Sessions / Send a prompt to every session.': '2.1.3-beta.17',
+    'Sessions / Remote sessions preview.': '2.1.3-beta.17',
     'Accounts & usage / Codex accounts.': '2.1.1-beta.2',
     'Accounts & usage / Switch mid-session.': '2.1.0-beta.16',
     'Accounts & usage / claude.ai in the app.': '2.1.0-beta.16',
@@ -700,6 +704,30 @@ describe('since tags: pinned, parseable, and curated for the newest release', ()
     }
     expect(lines).toEqual(LINE_TAGS)
     expect(Object.fromEntries(SHOWCASES.map((p) => [p.id, (p as any).since]))).toEqual(PAGE_TAGS)
+  })
+
+  // 2.1.3-beta.18 release smoke (a-boot.txt): a tester updating to beta.18
+  // read "What's new since 2.1.2 / 2 things worth knowing": the model list and
+  // Fable 5.2, and none of the 2.1.3 line's own features. The line now tells
+  // them, each from the first build that shipped it.
+  it('the 2.1.3 line tells its own features to someone coming from 2.1.2', () => {
+    const view = { anchor: '2.1.2', fresh: false, withClaude: true, withCodex: true }
+    const titlesAt = (v: typeof view, version: string): string[] =>
+      W.summaryContent(v, changelog, version).sections.flatMap((s) => s.items.map((i) => i.title))
+    const at18 = titlesAt(view, '2.1.3-beta.18')
+    for (const t of ['New models, no update.', 'Fable 5.2.', 'A Machines page.', 'Snap, its own overlay.', 'Send a prompt to every session.', 'Remote sessions preview.']) {
+      expect(at18, t).toContain(t)
+    }
+    // The remote preview runs Claude Code only: with Claude Code off it goes.
+    expect(titlesAt({ ...view, withClaude: false }, '2.1.3-beta.18')).not.toContain('Remote sessions preview.')
+    // A build never tells a line newer than itself: beta.16 had the Snap
+    // overlay and no broadcast chooser.
+    const at16 = titlesAt(view, '2.1.3-beta.16')
+    expect(at16).toContain('Snap, its own overlay.')
+    expect(at16).not.toContain('Send a prompt to every session.')
+    // A fresh install keeps its introduction: the 2.1.3 lines are told
+    // against a before.
+    expect(titlesAt({ ...view, fresh: true }, '2.1.3-beta.18')).not.toContain('Send a prompt to every session.')
   })
 
   it('every tag parses as a version (an unreadable tag would rank oldest and never show)', () => {

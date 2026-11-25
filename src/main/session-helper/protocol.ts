@@ -41,6 +41,13 @@ export const SCREEN_CAP = 'screen'
  *  held agent session's connections ask for it beside `screen` when its
  *  provider's composer rule reads the holder's screen. */
 export const TITLE_CAP = 'title'
+/** The status line through the holder (section 15, from 2.1.3-beta.18): acked
+ *  beside `local` only by a connection that takes the session's status line,
+ *  and only when the holder offers it. Such a connection is sent `status`, the
+ *  newest status the CLI's status line command (the helper's status mode)
+ *  posted. From 2.1.3-beta.18 (plan section 3.2) a tab through the session
+ *  helper on another machine asks for it. */
+export const STATUS_CAP = 'status'
 /** Terminal bytes travel on this channel both ways; control messages on 0. */
 export const TERMINAL_CHANNEL = 1
 /** Control messages (JSON) travel on this channel, both ways. */
@@ -313,24 +320,83 @@ export function chooseProto(app: readonly number[], helper: readonly number[]): 
 /** The app's answer to a holder's hello: `core` and `local`, `hooks` when this
  *  connection takes hook events, `mcp` when it carries tool streams,
  *  `screen` when it reads the screen and `title`, beside `screen` only, when
- *  its screen reads take the title (each only ever when the hello offered
- *  it). */
-export function helloAck(hooks = false, mcp = false, screen = false, title = false): { t: 'hello.ack'; proto: number; caps: string[] } {
+ *  its screen reads take the title, `status` when it takes the status line
+ *  (each only ever when the hello offered it). */
+export function helloAck(hooks = false, mcp = false, screen = false, title = false, status = false): { t: 'hello.ack'; proto: number; caps: string[] } {
   return {
     t: 'hello.ack',
     proto: PROTO_VERSION,
-    caps: [...LOCAL_CAPS, ...(hooks ? [HOOKS_CAP] : []), ...(mcp ? [MCP_CAP] : []), ...(screen ? [SCREEN_CAP] : []), ...(screen && title ? [TITLE_CAP] : [])],
+    caps: [...LOCAL_CAPS, ...(hooks ? [HOOKS_CAP] : []), ...(mcp ? [MCP_CAP] : []), ...(screen ? [SCREEN_CAP] : []), ...(screen && title ? [TITLE_CAP] : []), ...(status ? [STATUS_CAP] : [])],
   }
+}
+
+// ── the status line (section 15, capability `status`) ────────────────────────
+
+/** A status's payload as compact JSON, at most: what the status mode posts
+ *  (helper/src/request.rs MAX_STATUS_PAYLOAD), the hook payload's bound. */
+export const STATUS_PAYLOAD_MAX = 65_280
+/** A `status` message's JSON, at most: the frame limit once a session is launched. */
+export const STATUS_JSON_MAX = 64 * 1024
+
+/** The newest status line a holder passed on. */
+export interface StatusFrame {
+  /** The session's number for it, from 1; a newer status has a higher one. */
+  seq: number
+  /** The status as the CLI wrote it on its status line command's standard
+   *  input. Untrusted: read only through its provider's keep-list. */
+  payload: Record<string, unknown>
+}
+
+const STATUS_FIELDS = new Set(['t', 'seq', 'payload'])
+
+/**
+ * A `status` message from a holder, read strictly: exactly `t`, `seq` and
+ * `payload`, `seq` a whole number from 1, `payload` an object of at most
+ * STATUS_PAYLOAD_MAX bytes as compact JSON, and the message (`size` bytes as
+ * it came) within STATUS_JSON_MAX. Null otherwise.
+ */
+export function readStatusFrame(m: unknown, size: number): StatusFrame | null {
+  if (!isObject(m) || m.t !== 'status' || !isWhole(size) || size > STATUS_JSON_MAX) return null
+  if (Object.keys(m).length !== STATUS_FIELDS.size || !Object.keys(m).every((k) => STATUS_FIELDS.has(k))) return null
+  if (!isWhole(m.seq) || m.seq < 1) return null
+  const payload = m.payload
+  if (!isObject(payload)) return null
+  if (Buffer.byteLength(JSON.stringify(payload), 'utf8') > STATUS_PAYLOAD_MAX) return null
+  return { seq: m.seq, payload }
 }
 
 // ── hook events (section 15, capability `hooks`) ──────────────────────────────
 
-/** The nine hook events the app injects, the only kinds a holder passes on
- *  (src/main/hooks/session-hooks-writer.ts MVP_EVENTS). */
+/** The nine hook events the app injects into a Claude Code session
+ *  (src/main/hooks/session-hooks-writer.ts MVP_EVENTS): the kinds a holder
+ *  passes on for a launch that declares none (`hookKinds`, from 2.1.3-beta.18). */
 export const HELPER_HOOK_KINDS = [
   'PreToolUse', 'PostToolUse', 'Notification', 'SessionStart', 'Stop', 'UserPromptSubmit', 'SubagentStart', 'SubagentStop', 'StopFailure',
 ] as const
-export type HelperHookKind = (typeof HELPER_HOOK_KINDS)[number]
+/** The most hook kinds a launch declares (`hookKinds`, from 2.1.3-beta.18;
+ *  helper/src/request.rs MAX_HOOK_KINDS). */
+export const HOOK_KINDS_MAX = 16
+/** The capability whose offer says a holder takes `hookKinds` in a launch: a
+ *  holder that offers `status` does (2.1.3-beta.18, helper/src/serve.rs). */
+export const HOOK_KINDS_OFFERED_WITH = STATUS_CAP
+/** The variables a held session's launch names its hook mode by when its CLI
+ *  runs that mode from its own environment (2.1.3-beta.18, ADR-030 S12: its
+ *  provider's hook forwarder reads the same three): the helper copy, its
+ *  store and the holder's session. The hook mode reads the store and the
+ *  session from the last two itself (helper/src/hook.rs STORE_ENV,
+ *  SESSION_ENV). */
+export const HOOK_MODE_ENV = { helper: 'AICC_HELPER_PATH', store: 'AICC_HELPER_STORE', session: 'AICC_HELPER_SESSION' } as const
+/** A hook kind's shape, as the helper reads one (helper/src/request.rs
+ *  plain_word): 1 to 64 ASCII letters or digits. */
+export const HOOK_KIND_RE = /^[A-Za-z0-9]{1,64}$/
+
+/** A launch's `hookKinds` the holder takes: at most HOOK_KINDS_MAX words of
+ *  HOOK_KIND_RE's shape, none twice. */
+export function validHookKinds(kinds: unknown): kinds is readonly string[] {
+  if (!Array.isArray(kinds) || kinds.length > HOOK_KINDS_MAX) return false
+  return kinds.every((k) => typeof k === 'string' && HOOK_KIND_RE.test(k)) && new Set(kinds).size === kinds.length
+}
+
 /** A hook event's payload as compact JSON, at most: 64 KiB less the room the
  *  `event` around it needs. */
 export const HOOK_PAYLOAD_MAX = 65_280
@@ -341,8 +407,9 @@ export const HOOK_EVENT_JSON_MAX = 64 * 1024
 export interface HookEventFrame {
   /** The session's number for it, from 1. */
   seq: number
-  kind: HelperHookKind
-  /** The event as Claude Code wrote it, cut by the hook mode when it was large
+  /** Its kind: one of the kinds its session takes (readEventFrame's `kinds`). */
+  kind: string
+  /** The event as the CLI wrote it, cut by the hook mode when it was large
    *  (a top-level `"cut": true` says so). Untrusted text. */
   payload: Record<string, unknown>
   /** How many events the holder dropped just before this one. */
@@ -353,21 +420,23 @@ const EVENT_FIELDS = new Set(['t', 'seq', 'kind', 'payload', 'lost'])
 
 /**
  * An `event` message from a holder, read strictly: exactly its fields, `seq`
- * a whole number from 1, `kind` one of the nine, `payload` an object of at
+ * a whole number from 1, `kind` one of `kinds`, `payload` an object of at
  * most HOOK_PAYLOAD_MAX bytes whose `hook_event_name` is `kind`, `lost` a
  * whole number when given, and the message (`size` bytes as it came) within
- * HOOK_EVENT_JSON_MAX. Null otherwise.
+ * HOOK_EVENT_JSON_MAX. Null otherwise. `kinds` (2.1.3-beta.18): the kinds the
+ * session takes, the `hookKinds` its launch declared, as its holder takes
+ * them; the nine (HELPER_HOOK_KINDS) for a session whose launch declared none.
  */
-export function readEventFrame(m: unknown, size: number): HookEventFrame | null {
+export function readEventFrame(m: unknown, size: number, kinds: readonly string[] = HELPER_HOOK_KINDS): HookEventFrame | null {
   if (!isObject(m) || m.t !== 'event' || !isWhole(size) || size > HOOK_EVENT_JSON_MAX) return null
   for (const k of Object.keys(m)) if (!EVENT_FIELDS.has(k)) return null
   if (!isWhole(m.seq) || m.seq < 1) return null
-  if (typeof m.kind !== 'string' || !(HELPER_HOOK_KINDS as readonly string[]).includes(m.kind)) return null
+  if (typeof m.kind !== 'string' || !kinds.includes(m.kind)) return null
   const payload = m.payload
   if (!isObject(payload) || payload.hook_event_name !== m.kind) return null
   if (Buffer.byteLength(JSON.stringify(payload), 'utf8') > HOOK_PAYLOAD_MAX) return null
   if (m.lost !== undefined && !isWhole(m.lost)) return null
-  return { seq: m.seq, kind: m.kind as HelperHookKind, payload, ...(m.lost !== undefined ? { lost: m.lost } : {}) }
+  return { seq: m.seq, kind: m.kind, payload, ...(m.lost !== undefined ? { lost: m.lost } : {}) }
 }
 
 // ── tool streams (section 15, capability `mcp`) ───────────────────────────────

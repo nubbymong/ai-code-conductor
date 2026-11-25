@@ -10,7 +10,8 @@
 //      neutral src/main/providers/{index,types,host-color-scheme}.ts,
 //      src/renderer/providers/core) reaches no concrete provider module,
 //      directly or TRANSITIVELY through any re-exporting intermediary.
-//   R2 the Claude and Codex packages never import each other directly; the
+//   R2 no provider's package (each id in PROVIDER_IDS: today Claude's and
+//      Codex's) imports another's directly; the
 //      transitive reach between them through shared main modules is a
 //      ratchet against a committed allowlist (the base already entangles
 //      them through conductor-mcp-server).
@@ -19,8 +20,9 @@
 //      registry definitions and the entry-point re-exports fails (aliasing,
 //      member calls and indirect calls included), and boot goes through the
 //      roots (main/index.ts imports the main root and calls it before its
-//      first getProvider; renderer/main.tsx imports the renderer root above
-//      App). A shared module importing exactly one package entry point fails.
+//      first use of the registry, the script deploys' loop over the registered
+//      providers; renderer/main.tsx imports the renderer root above App). A
+//      shared module importing exactly one package entry point fails.
 //      R3 also pins `applyRealmEnvPatch` to the registry: it takes its policy
 //      as an ARGUMENT, so any caller reaching past realmEnvForProvider can
 //      hand it an empty ambient list and opt out of the D3 removal entirely.
@@ -50,6 +52,7 @@ import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { parse } from '@babel/parser'
 import { resolvePhase } from './phase'
+import { PROVIDER_IDS, type ProviderId } from '../../src/shared/providers/ids'
 type Node = { type: string; start?: number | null; end?: number | null; loc?: unknown }
 
 const ROOT = resolve(__dirname, '..', '..')
@@ -67,12 +70,25 @@ const REGISTER_FNS = ['registerProviderPackage', 'registerRendererProvider', 're
 const LAUNCH_ENV_FNS = ['applyRealmEnvPatch']
 const LAUNCH_ENV_HOMES = ['src/shared/providers/realm-env.ts', 'src/shared/providers/index.ts', 'src/main/providers/core/registry.ts']
 const REGISTER_HOMES = ['src/main/providers/core/registry.ts', 'src/main/providers/core/index.ts', 'src/main/providers/index.ts', 'src/renderer/providers/core/registry.ts', 'src/renderer/providers/core/index.ts']
-const PKG_RE = /^src\/(main|renderer)\/providers\/(claude|codex|core)\//
+// The provider names in the patterns below are the app's own list of ids
+// (PROVIDER_IDS), not written here: a provider added to that list has its
+// package, its files and its name as a literal counted by R1 to R5 and R7 from
+// the day it is listed. Still written by hand, and Codex's alone: R5's
+// `.codexEnabled` and `isCodex`, and R6's `IPC.CODEX_*`, `electronAPI.codex`
+// and `codexReview` (extractFacts below); another provider's own flag or IPC
+// surface is not counted until it is added there.
+type PackageId = ProviderId | 'core'
+const PACKAGE_IDS: readonly PackageId[] = [...PROVIDER_IDS, 'core']
+const IDS = PROVIDER_IDS.join('|')
+const PKG_RE = new RegExp(`^src\\/(main|renderer)\\/providers\\/(${PACKAGE_IDS.join('|')})\\/`)
 const SHARED_CORE_RE = /^src\/shared\/providers\//
 const pkgDir = (side: 'main' | 'renderer', id: string) => `src/${side}/providers/${id}/`
-const CONCRETE_TARGET = /(^|\/)providers\/(claude|codex)\/|(^|\/)(codex|claude)[-\w]*\.tsx?$|codexaccountstore|account-profiles|profile-consumers|claude-account-identity|account-web\//
+// A provider's package, a file named after a provider, and the modules that
+// hold one provider's account machinery under a neutral name.
+const CONCRETE_TARGET = new RegExp(`(^|\\/)providers\\/(${IDS})\\/|(^|\\/)(${IDS})[-\\w]*\\.tsx?$|account-profiles|profile-consumers|account-web\\/`)
 const OPS = new Set(['===', '!==', '==', '!='])
-const NAME_LITERALS = new Set(['claude', 'codex'])
+const NAME_LITERALS = new Set<string>(PROVIDER_IDS)
+const NAME_IN_REGEX = new RegExp(IDS, 'i')
 const LITERAL_CALLS = new Set(['includes', 'startsWith', 'endsWith', 'match', 'test', 'is'])
 
 function walk(dir: string, out: string[] = []): string[] {
@@ -161,7 +177,7 @@ export function extractFacts(path: string, text: string, resolveFrom?: string): 
           const name = !callee.computed && prop.type === 'Identifier' ? (prop.name as string) : str(prop) ?? ''
           const obj = callee.object as AnyNode
           if (LITERAL_CALLS.has(name) && (args.some(providerLiteral) || (obj.type === 'ArrayExpression' && (obj.elements as AnyNode[]).some(providerLiteral)))) facts.conditionals.push(`${path}:${line(n)} ${snippet(n)}`)
-          if (name === 'match' || name === 'test') { const re = args[0] ?? obj; if (isNode(re) && re.type === 'RegExpLiteral' && /codex|claude/i.test(re.pattern as string)) facts.conditionals.push(`${path}:${line(n)} ${snippet(n)}`) }
+          if (name === 'match' || name === 'test') { const re = args[0] ?? obj; if (isNode(re) && re.type === 'RegExpLiteral' && NAME_IN_REGEX.test(re.pattern as string)) facts.conditionals.push(`${path}:${line(n)} ${snippet(n)}`) }
         }
         break
       }
@@ -222,9 +238,9 @@ export interface Allowlists {
   phase: 'gate0' | 'candidate'
 }
 const isCore = (p: string) => CORE_DIRS.some((d) => lower(p).startsWith(d)) || CORE_FILES.includes(lower(p))
-const packageOf = (p: string): { side: 'main' | 'renderer'; id: 'claude' | 'codex' | 'core' } | null => {
+const packageOf = (p: string): { side: 'main' | 'renderer'; id: PackageId } | null => {
   const m = PKG_RE.exec(lower(p))
-  return m ? { side: m[1] as 'main' | 'renderer', id: m[2] as 'claude' | 'codex' | 'core' } : null
+  return m ? { side: m[1] as 'main' | 'renderer', id: m[2] as PackageId } : null
 }
 const samePackage = (a: string, b: string) => { const x = packageOf(a), y = packageOf(b); return !!x && !!y && x.side === y.side && x.id === y.id }
 // The entry point is the PACKAGE ROOT index only. Matching any nested
@@ -277,14 +293,17 @@ export function ruleCrossPackage(files: FileFacts[], allow: Allowlists['crossPac
   for (const f of files) {
     const own = packageOf(f.path)
     if (!own || own.id === 'core') continue
-    const other = pkgDir(own.side, own.id === 'claude' ? 'codex' : 'claude')
-    for (const t of f.imports) if (lower(t).startsWith(other)) out.push(`R2 direct cross-package import: ${f.path} -> ${t}`)
-    const parent = reachable(g, f.path, (p) => !lower(p).startsWith(other) && !samePackage(p, f.path))
-    for (const t of parent.keys()) {
-      if (!lower(t).startsWith(other)) continue
-      const via = parent.get(t)!
-      if (samePackage(via, f.path)) continue // reported from the file that leaves the package
-      found.add(`${f.path} -> ${via} -> ${t}`)
+    // Each other provider's package on the same side, one at a time.
+    for (const otherId of PROVIDER_IDS.filter((id) => id !== own.id)) {
+      const other = pkgDir(own.side, otherId)
+      for (const t of f.imports) if (lower(t).startsWith(other)) out.push(`R2 direct cross-package import: ${f.path} -> ${t}`)
+      const parent = reachable(g, f.path, (p) => !lower(p).startsWith(other) && !samePackage(p, f.path))
+      for (const t of parent.keys()) {
+        if (!lower(t).startsWith(other)) continue
+        const via = parent.get(t)!
+        if (samePackage(via, f.path)) continue // reported from the file that leaves the package
+        found.add(`${f.path} -> ${via} -> ${t}`)
+      }
     }
   }
   const allowed = new Set(allow.map((e) => `${e.from} -> ${e.via} -> ${e.to}`))
@@ -296,7 +315,9 @@ export function ruleCrossPackage(files: FileFacts[], allow: Allowlists['crossPac
 export function ruleRoots(files: FileFacts[]): string[] {
   const out: string[] = []
   for (const side of ['main', 'renderer'] as const) {
-    const both = files.filter((f) => f.imports.some((t) => lower(t).startsWith(pkgDir(side, 'claude'))) && f.imports.some((t) => lower(t).startsWith(pkgDir(side, 'codex')))).map((f) => f.path).sort()
+    // A file that imports two providers' packages or more (with two
+    // providers: both of them).
+    const both = files.filter((f) => PROVIDER_IDS.filter((id) => f.imports.some((t) => lower(t).startsWith(pkgDir(side, id)))).length >= 2).map((f) => f.path).sort()
     if (both.join(',') !== ROOTS[side]) out.push(`R3 files importing both ${side} packages must be exactly [${ROOTS[side]}], got [${both.join(', ')}]`)
     for (const f of files) {
       if (ROOT_FILES.includes(f.path) || packageOf(f.path)) continue
@@ -354,7 +375,7 @@ export function rulePackageMembership(files: FileFacts[], orphanAllow: string[])
   const out: string[] = []
   const g = graph(files)
   const found = new Set<string>()
-  for (const side of ['main', 'renderer'] as const) for (const id of ['claude', 'codex', 'core'] as const) {
+  for (const side of ['main', 'renderer'] as const) for (const id of PACKAGE_IDS) {
     const dir = pkgDir(side, id)
     const members = files.filter((f) => lower(f.path).startsWith(dir)).map((f) => f.path)
     if (!members.length) { if (id !== 'core') out.push(`R7 package ${dir} has no files`); continue }
@@ -411,13 +432,13 @@ describe('WP1.55 dependency boundaries (AST)', () => {
   it('R6: renderer core touches no provider-specific IPC or preload surface', () => { const p = ruleProviderIpc(files); expect(p, p.join('\n')).toEqual([]) })
   it('R7: every package has its entry point and every file in it is reachable from that entry point (orphans only as recorded)', () => { const p = rulePackageMembership(files, allow.packageOrphans); expect(p, p.join('\n')).toEqual([]) })
 
-  it('R3 boot wiring: main boots through the main root before its first getProvider; the renderer imports its root above App', () => {
+  it('R3 boot wiring: main boots through the main root before its first use of the registry; the renderer imports its root above App', () => {
     const main = readFileSync(resolve(ROOT, 'src/main/index.ts'), 'utf8')
     expect(byPath.get('src/main/index.ts')!.imports).toContain(ROOTS.main)
     // The first runtime consumer of the registry in boot order is the
-    // statusline deploy chain; the comment above the call mentions getProvider
-    // too, so anchor on the consumer expression, not the bare identifier.
-    const consumer = main.indexOf("getProvider('claude').deployStatuslineScript")
+    // script deploy chain, which loops over the registered providers; anchor
+    // on that call, not on a bare identifier a comment could name.
+    const consumer = main.indexOf("providerMembers(['deployStatuslineScript'")
     expect(consumer).toBeGreaterThan(0)
     expect(main.indexOf('composeProviders()')).toBeGreaterThan(0)
     expect(main.indexOf('composeProviders()')).toBeLessThan(consumer)

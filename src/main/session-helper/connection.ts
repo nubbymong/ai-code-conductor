@@ -20,7 +20,11 @@
  * section B1, aicc_planning#384) only when it is given the `title` option.
  * The manager gives both to a held agent session's connections when its
  * provider's composer rule reads the holder's screen (deps.screens;
- * 2.1.3-beta.14, plan section B2, aicc_planning#388).
+ * 2.1.3-beta.14, plan section B2, aicc_planning#388). A connection asks for
+ * `status` (the session's status line, 2.1.3-beta.18) only when it is given
+ * the `status` option, which a tab through the session helper on another
+ * machine is (remote-helper/session.ts); it then reports each `status` the
+ * holder sends.
  *
  * On a connection that acked `mcp`, the app sends a tool stream's messages
  * (sendMcp) only when the holder would read them, and ends its side of a
@@ -43,12 +47,14 @@ import {
   CONTROL_CHANNEL,
   FrameReader,
   HELLO_LINE_MAX,
+  HELPER_HOOK_KINDS,
   HOOKS_CAP,
   JSON_DEPTH_MAX,
   LOCAL_CAPS,
   MCP_CAP,
   PROTO_VERSION,
   SCREEN_CAP,
+  STATUS_CAP,
   TERMINAL_CHANNEL,
   TITLE_CAP,
   chooseProto,
@@ -64,12 +70,14 @@ import {
   readMcpClose,
   readMcpOpen,
   readScreenRows,
+  readStatusFrame,
   type Hello,
   type HookEventFrame,
   type McpMessage,
   type HelperOs,
   type HolderRecord,
   type ScreenRows,
+  type StatusFrame,
 } from './protocol'
 
 /** A refusal or failure, with the protocol's code when the holder named one. */
@@ -88,9 +96,17 @@ export interface ConnectionOptions {
   openStream?: (endpoint: string) => Promise<Duplex>
   /** Section 15's folder check on Unix. Tests skip it. */
   checkEndpointFolder?: (endpoint: string) => string | null
-  /** This connection takes hook events (a Claude Code session whose hooks may
-   *  go through its holder): `hooks` is acked when the holder offers it. */
+  /** This connection takes hook events (an agent session whose hooks may go
+   *  through its holder: Claude Code's by its settings file, and from
+   *  2.1.3-beta.18 Codex's by its launch): `hooks` is acked when the holder
+   *  offers it. */
   hooks?: boolean
+  /** The hook kinds its session takes (2.1.3-beta.18: the kinds its package
+   *  declares, SessionProvider.heldHookKinds; a session whose CLI runs the
+   *  hook mode from its own environment declares them in its launch too, as
+   *  `hookKinds`): only an event of one of these is reported. Absent: the
+   *  nine (HELPER_HOOK_KINDS). */
+  hookKinds?: readonly string[]
   /** This connection carries the session's tool streams: `mcp` is acked when
    *  the holder offers it. The manager sets it only when the app gives it the
    *  tool functions, which app-wiring.ts does for the agent sessions. */
@@ -105,6 +121,10 @@ export interface ConnectionOptions {
    *  beside `screen` for a held agent session's of a provider in its
    *  deps.screens (2.1.3-beta.14 B2). */
   title?: boolean
+  /** This connection takes the session's status line: `status` is acked when
+   *  the holder offers it (2.1.3-beta.18; a tab through the session helper on
+   *  another machine). */
+  status?: boolean
   helloTimeoutMs?: number
   replyTimeoutMs?: number
   pingEveryMs?: number
@@ -289,6 +309,8 @@ export type HolderConnectionEvents = {
   notice: [code: string, text: string]
   /** A hook event the holder passed on; only on a connection that acked `hooks`. */
   event: [e: HookEventFrame]
+  /** The newest status line the holder passed on; only on a connection that acked `status`. */
+  status: [s: StatusFrame]
   /** A relay opened a tool stream (the holder's number for it); only on a
    *  connection that acked `mcp`, as are the next two. */
   mcpOpen: [stream: number]
@@ -304,6 +326,8 @@ export class HolderConnection extends EventEmitter<HolderConnectionEvents> {
   /** True when this connection acked `hooks`: the holder offered it and the
    *  connection wanted it. Only then are hook events reported. */
   readonly hooks: boolean
+  /** The hook kinds it reports (ConnectionOptions.hookKinds). */
+  private readonly hookKinds: readonly string[]
   /** True when this connection acked `mcp`: the holder offered it and the
    *  connection wanted it. Only then are tool stream messages reported. */
   readonly mcp: boolean
@@ -314,6 +338,9 @@ export class HolderConnection extends EventEmitter<HolderConnectionEvents> {
    *  offered both and the connection asked for both. Only then does
    *  readScreen's answer carry the title. */
   readonly title: boolean
+  /** True when this connection acked `status`: the holder offered it and the
+   *  connection asked for it. Only then are status lines reported. */
+  readonly status: boolean
   private readonly stream: Duplex
   private readonly reader = new FrameReader('helper_to_app')
   private nextId = 2
@@ -350,15 +377,17 @@ export class HolderConnection extends EventEmitter<HolderConnectionEvents> {
     this.stream = stream
     this.hello = hello
     this.hooks = opts.hooks === true && hello.caps.includes(HOOKS_CAP)
+    this.hookKinds = opts.hookKinds ?? HELPER_HOOK_KINDS
     this.mcp = opts.mcp === true && hello.caps.includes(MCP_CAP)
     this.screen = opts.screen === true && hello.caps.includes(SCREEN_CAP)
     this.title = this.screen && opts.title === true && hello.caps.includes(TITLE_CAP)
+    this.status = opts.status === true && hello.caps.includes(STATUS_CAP)
     this.replyTimeoutMs = opts.replyTimeoutMs ?? REPLY_TIMEOUT_MS
     stream.on('data', (chunk: Buffer) => this.onBytes(chunk))
     stream.on('close', () => this.shut())
     stream.on('end', () => this.shut())
     stream.on('error', () => this.shut())
-    stream.write(encodeJsonFrame(helloAck(this.hooks, this.mcp, this.screen, this.title)))
+    stream.write(encodeJsonFrame(helloAck(this.hooks, this.mcp, this.screen, this.title, this.status)))
     if (rest.length > 0) this.onBytes(rest)
     stream.resume()
     const every = opts.pingEveryMs ?? PING_EVERY_MS
@@ -701,7 +730,7 @@ export class HolderConnection extends EventEmitter<HolderConnectionEvents> {
         const m = f.json as Json
         if (!m || typeof m !== 'object' || Array.isArray(m)) continue
         if (m.t === 'event') {
-          const e = this.hooks ? readEventFrame(m, f.size) : null
+          const e = this.hooks ? readEventFrame(m, f.size, this.hookKinds) : null
           if (e) this.emit('event', e)
         } else if (m.re === going.id) going.done(m.t === 'term.detached')
         continue
@@ -721,8 +750,16 @@ export class HolderConnection extends EventEmitter<HolderConnectionEvents> {
         // carries a `re` is refused by its exact fields, and answers no
         // request): strictly, and reported only on a connection that acked
         // hooks. One that does not read is dropped (a holder sends none).
-        const e = this.hooks ? readEventFrame(m, f.size) : null
+        const e = this.hooks ? readEventFrame(m, f.size, this.hookKinds) : null
         if (e) this.emit('event', e)
+        continue
+      }
+      if (m.t === 'status') {
+        // The newest status line, read the same way: before any reply lookup
+        // (a `status` that carries a `re` is refused by its exact fields),
+        // strictly, and reported only on a connection that acked `status`.
+        const s = this.status ? readStatusFrame(m, f.size) : null
+        if (s) this.emit('status', s)
         continue
       }
       if (m.t === 'mcp.open' || m.t === 'mcp' || m.t === 'mcp.close') {

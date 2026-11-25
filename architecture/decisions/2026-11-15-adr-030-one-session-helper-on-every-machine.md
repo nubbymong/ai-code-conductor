@@ -470,8 +470,16 @@ made on the other. The probe is `helper/probes/p3-p6-linux.cjs`.
 
 Remote step 1 (2.1.3-beta.17, plan sections A1 and A2, aicc_planning#410 and #411) ships off
 by default, behind a Settings switch, before P1 and P2 run. P1 (the status line through the
-helper) needs a status frame on the session's one stream, which beta.18 adds; until then a tab
-through the helper has no status line, and P1 gates any default. P2 (saved passwords through
+helper) needs a status frame on the session's one stream, which beta.18 adds (S26: the helper's
+status mode and the `status` capability, section 3.1; routed to the tab's strip, section 3.2);
+P1 still gates any default. A helper tab's status line does not show the account label, the
+per-model weekly buckets or extra usage. The SSH shim reads and fetches these on the host with
+the host's token (statusline-gather.ts:71-96); the helper reads no credential and calls no
+network. Bringing the account label, the per-model weekly buckets and extra usage to a helper
+tab's status line is aicc_planning#434, and it gates any default, beside P1. P1 on Ubuntu 24.04
+(the 2.1.3-beta.18 host line, section 3.2): the strip's first value came before Claude Code's
+ready prompt in all five runs (4 to 210 ms before it in the four timed). P1 on Rocky Linux 10.2
+is owed: the host did not answer its one 8 s try in 2.1.3-beta.18. P2 (saved passwords through
 askpass) gates password hosts; step 1 takes key sign-in only, so a config with a saved password
 keeps the usual SSH path. Decided for step 1: a session's terminal and the helper's messages
 ride ONE `ssh -T` exec per session, the helper's `bridge` mode (`bridge --store
@@ -505,7 +513,43 @@ shows its Linux machines section with the switch on or off, and reads the manife
 helper and the records when it is opened (the first read makes the records file with this
 install's id). A machine holding another session
 helper than the app's reads not checked on its card, and its tabs take the usual SSH path,
-until Check installs the app's helper.
+until Check installs the app's helper. 2.1.3-beta.18 section 2 (aicc_planning#430): the launch
+of such a tab comes from the tab's provider package (SessionProvider.remoteLaunch,
+providers/types.ts ProviderRemoteLaunch: hostReads, then launch giving the program, arguments,
+the CLI's own variables, the session's files and the status and hook keep-lists), asked through
+the registry by the tab's provider id; core keeps ssh, the upload, routing, frames, the login
+shell's -il wrapper, the host account's variables, LANG, TERM and COLORFGBG, and names no CLI
+flag or variable. The launch is the same, byte for byte (13,000-row characterisation against
+d0be048e).
+
+Beta.18 (plan section 3.1, aicc_planning#431 and #433): the helper gains a status mode
+(`aicc-helper status`, a CLI's status line command) and a `status` capability: the holder keeps
+the newest status in one slot and sends it as `status` to each app connection that acked it, at
+most 10 a second, so a tab through the helper can have a status line (P1 still gates any
+default). A launch may declare the hook kinds its session takes (`hookKinds`, at most 16), so
+another CLI's hook events can go through its holder (S12's remaining step, section 5); the hook
+and status modes read their store and session from `AICC_HELPER_STORE` and
+`AICC_HELPER_SESSION` when the command line leaves them out.
+
+2.1.3-beta.18 section 3.2 (aicc_planning#431) carries them, together and still off by default:
+a tab through the helper gets its status line (its CLI's status line command is the helper's
+status mode, which posts `status.set` to the holder; the holder sends the newest as a `status`
+frame on the tab's one stream to its connection, which acks `status`), its hook events (the
+hook mode; `event` frames; the connection acks `hooks`) and the Conductor's tools (the relay;
+`mcp` frames; the connection acks `mcp` while the app serves its tools; each stream is served
+as the tab's session with no credential): S27's tools half. Its own files go into
+`~/.aicc/<did>/sessions/<sid>/` before its launch (the provider package's `files`: Claude
+Code's settings.json and, while the app serves its tools, mcp.json; the host's settings files
+are read first, as data, so the session keeps the host's own hooks before the app's; the
+user's own file is read as Claude Code reads it, a link followed) and go at its end or at the
+next Check. Each status and hook payload is cut to the provider's keep-list; a remote path in
+it is display text, never handed to the transcript binder or the usage sink.
+
+2.1.3-beta.18 section 4 (aicc_planning#432; seam audit S3; component rows 3 and 14): the five
+input doors (Watchdog retry, prompt button, image, canvas marker, Ask hand-off) type through the
+run screen of the session's own provider (SessionRunScreen's retry, prompt, marker, image and ask
+members); Claude Code's typing rules moved into the Claude Code package unchanged; a provider
+with no member for a door takes nothing there; codexRunScreen is gone.
 
 P7 result (2026-11-15, Windows test machine, the skeleton holder from #685 and a silent
 install of 2.1.3-beta.4): yes. A detached holder is not in a job object, and it and its
@@ -803,7 +847,13 @@ tab's hook record; any other end drops it.
 At an update the app lets go of each connection that takes hook events with `term.detach` and
 waits for the answer (B1f, aicc_planning#423), so a Claude Code session's hook events made after
 the let-go reach the next start. A Codex session's made from the let-go until the next run
-writes its hook file again are lost (P20 (a)); S16 item 4's later S12 step closes that. The
+writes its hook file again were lost (P20 (a)). From 2.1.3-beta.18 (S12's remaining step, plan
+section 5), a held Codex session's launch names the helper's hook mode in its environment
+(AICC_HELPER_PATH, AICC_HELPER_STORE, AICC_HELPER_SESSION) and declares Codex's six kinds
+(`hookKinds`). Its forwarder runs the hook mode, and its events wait in its holder and reach the
+take-over. The release marks the kept record (`hooks: "holder"`). A session kept by
+2.1.3-beta.17 or earlier has no mark and still has its hook file written again at the take-over;
+that branch is deleted one beta later. With this, S12's app half is done. The
 first update into 2.1.3-beta.17 still has the Claude Code window, because the old app does the
 let-go. The holder's hook queue (256 events or 2 MiB, the oldest dropped first) now holds only
 what a session makes while no app takes its hook events: from the old app's exit until 3 s
@@ -916,8 +966,10 @@ through the submit primitive read past the placeholder, confirmed, then Enter; w
 paste it takes back with Ctrl+U, only while the composer holds nothing but the paste, and the
 renderer types the old line by its Codex rule. Since C9 (aicc_planning#420) the image rule reads
 Codex's warning count as C7's readers do, so an image goes in as Codex's own paste while the
-count shows. Not measured: a full-size Snap picture's placeholder time (the wait is 5 s), a held
-session on the real CLI, macOS and Linux.
+count shows. Since 2.1.3-beta.18 section 7.5 (snap-e2e run 45582381926, Codex 0.157.1 on GitHub's
+Windows Server 2025 runner), Snap pictures of 200 by 120 and 1024 by 768 pressed while the count
+shows went from the saved file to Codex's turn in 1.1 to 1.2 s, inside the 5 s wait. Not measured:
+a picture larger than 1024 by 768, a held session on the real CLI, macOS and Linux.
 
 ## Parked questions
 

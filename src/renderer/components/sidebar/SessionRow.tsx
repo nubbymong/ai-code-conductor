@@ -88,6 +88,15 @@ export default function SessionRow({ session, isActive, needsAttention, isRenami
     outputMoving &&
     !asleep &&
     !(needsAttention || session.needsAttention === true)
+  // The name the card shows, and the floor of its column: about ten
+  // characters, or the name's own length and one more when shorter (in `ch`
+  // of the name's own type size, set on .nm). The grid's name column is 1fr
+  // with .nm's min-width as its floor, so the badge column (auto) can no
+  // longer take the whole row; the badges wrap instead (2.1.3-beta.18 release
+  // smoke: ATTENTION, SSH, the working mark, the type mark and XHIGH left
+  // "S18 Ubuntu A" as "S..").
+  const shownName = session.customName?.trim() || session.label
+  const nameFloorCh = Math.min(10, Array.from(shownName).length + 1)
   const providerLabel = session.shellOnly ? 'shell' : (session.provider ?? 'claude')
   const metaLine = `${session.modelName ?? session.model ?? ''}${providerLabel ? ` · ${providerLabel}` : ''}`.trim()
 
@@ -189,8 +198,8 @@ export default function SessionRow({ session, isActive, needsAttention, isRenami
           its own. If a future change inserts something to the right of the
           alias, that new element will be the one to clip -- reorder
           deliberately or add min-w-0 + flex-shrink rules at that point. */}
-      <span className="nm relative z-10 row-start-1 flex items-center gap-1.5">
-        <span className="text-[13px] truncate" style={{ fontWeight: isActive ? 700 : 600, opacity: asleep ? 0.7 : undefined }} title={session.customName?.trim() ? `${session.customName.trim()} · ${session.label}` : session.label}>{session.customName?.trim() || session.label}</span>
+      <span className="nm relative z-10 row-start-1 flex items-center gap-1.5 text-[13px]" style={{ minWidth: `${nameFloorCh}ch` }}>
+        <span className="text-[13px] truncate" style={{ fontWeight: isActive ? 700 : 600, opacity: asleep ? 0.7 : undefined }} title={session.customName?.trim() ? `${session.customName.trim()} · ${session.label}` : session.label}>{shownName}</span>
         {ordinal !== undefined && (
           <span
             className="session-ordinal shrink-0 text-[11px] tabular-nums text-[var(--text-muted)]"
@@ -205,7 +214,7 @@ export default function SessionRow({ session, isActive, needsAttention, isRenami
       {/* Line 1, col 3: status pill only. The account colour dot lives on line 3
           next to the account name; the old right-side account dot + identity chip
           were redundant with that dot and the card's left identity rail. */}
-      <span className="relative z-10 row-start-1 flex items-center gap-1.5 justify-self-end">
+      <span className="relative z-10 row-start-1 flex flex-wrap items-center justify-end gap-x-1.5 gap-y-1 justify-self-end">
         <StatusPill state={st} />
         {/* Session TYPE, in one place on every card (canvas review 2026-08-19).
             Transport first (SSH, or SSH+tmux — the link icon), then the type

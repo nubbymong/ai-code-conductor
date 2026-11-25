@@ -5,6 +5,7 @@ import type { SshCapableProvider, SpawnOptions, TelemetrySource, HistorySession,
 import type { LegacyVersion, SshRuntime, StatuslineData } from '../../../shared/types'
 import type { ProviderCapabilities } from '../../../shared/providers'
 import type { ProviderPackage } from '../core'
+import { HELPER_HOOK_KINDS } from '../../session-helper/protocol'
 import { resolveClaudeBinary, buildClaudeLocalSpawn } from './spawn'
 import {
   getRemoteSetupCommand, remoteSessionSettingsPath, remoteSessionMcpConfigPath,
@@ -25,6 +26,8 @@ import type { ClaudeReviewPorts } from './review-launch'
 import { createClaudeAuthOperations } from './auth-operations'
 import type { ClaudeAuthPorts } from './auth-operations'
 import { CLAUDE_ENABLEMENT } from './enablement'
+import { claudeRemoteLaunch } from './remote-launch'
+import { CLAUDE_RUN_SCREEN } from './run-screen'
 
 // The managed-launch surface is re-exported so the composition root and the
 // conformance suite reach it through this entry point, never by deep import.
@@ -85,6 +88,11 @@ export class ClaudeProvider implements SshCapableProvider {
   readonly id = 'claude' as const
   readonly displayName = 'Claude Code'
   readonly exitKeys = CLAUDE_EXIT_KEYS
+  /** 2.1.3-beta.18 section 2: a session on another machine through the session helper there. */
+  readonly remoteLaunch = claudeRemoteLaunch
+  /** 2.1.3-beta.18 section 4 (aicc_planning#432): how the session input
+   *  module's doors type into a Claude Code session (run-screen.ts). */
+  readonly runScreen = CLAUDE_RUN_SCREEN
 
   resolveBinary(legacyVersion?: LegacyVersion): { cmd: string; args: string[] } | null {
     return resolveClaudeBinary(legacyVersion)
@@ -155,6 +163,12 @@ export class ClaudeProvider implements SshCapableProvider {
   statusPostUrl(sessionId: string, remoteMcpPort: number | undefined, mcpPort: number, includeConductorMcp: boolean): string {
     return statusPostUrl(sessionId, remoteMcpPort, mcpPort, includeConductorMcp)
   }
+  /** 2.1.3-beta.18 (ADR-030 S12): the nine hook events its per-session
+   *  settings file injects (session-helper/protocol.ts HELPER_HOOK_KINDS, the
+   *  same set as session-hooks-writer.ts MVP_EVENTS), which a held session's
+   *  holder takes with no `hookKinds` in its launch; its connections report
+   *  these kinds only. */
+  readonly heldHookKinds: readonly string[] = HELPER_HOOK_KINDS
   remoteSessionCleanupCommand(sessionId: string): string {
     return buildRemoteSessionCleanupCommand(sessionId)
   }

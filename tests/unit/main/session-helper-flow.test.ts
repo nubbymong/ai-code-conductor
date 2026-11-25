@@ -48,6 +48,8 @@ import { PTY_IO_FAILED_GRACE_MS, PTY_IO_FAILED_TEXT } from '../../../src/main/pt
 import { RAW_MAX, heldSessionId, type HolderRecord, type LaunchSpec } from '../../../src/main/session-helper/protocol'
 import { SessionHelperManager } from '../../../src/main/session-helper/manager'
 import { FakeHelper, FakeHolder, duplexPair, type ConnEvent } from './session-helper-fake-holder'
+import { PROMPT_ENTER_DELAY_MS } from '../../../src/main/session-input/enter-delay'
+import { TMUX_WHEEL_EXIT_KEY } from '../../../src/shared/tmux-wheel'
 
 // The managers below are given their own usual-way spawn; node-pty itself is never loaded.
 vi.mock('node-pty', () => ({ spawn: () => { throw new Error('node-pty is not used in this file') } }))
@@ -323,6 +325,149 @@ describe('a connection that drops while the terminal runs is attached again', ()
     await until(() => r.exits.length === 1 && r.h.ended, 'the exit and the end')
     await tick(30)
     expect(r.exits).toHaveLength(1)
+  })
+})
+
+/**
+ * 2.1.3-beta.18 fix round, second pass (aicc_planning#431, PR #762 review):
+ * what was typed while the terminal was detached goes at the attach again in
+ * order, but a frame that is a lone Enter ('\r', or the tmux leave key then
+ * '\r') goes PROMPT_ENTER_DELAY_MS after the frame before it, and what is
+ * typed meanwhile waits behind it. Claude Code (2.1.332, measured) takes a
+ * control character as a key only in a read shorter than 64 characters, and
+ * the holder writes frames that come back to back into one read: an image
+ * request (about 175 characters) and its Enter queued during a link drop were
+ * typed and not sent once the link was back. The holder's clock here is
+ * vitest's (setTimeout only), so the gap is exact; the streams run on their
+ * own. Red on 7a2b8c8c: the Enter went with the request, in the same turn.
+ * Mutants this must catch (each run, each red): the lone Enter flushed with
+ * the frame before it; input typed during the wait sent ahead of the Enter; a
+ * frame the flush sent kept in the queue and sent again.
+ */
+describe('input typed while detached: a lone Enter goes PROMPT_ENTER_DELAY_MS after the frame before it at the attach again', () => {
+  const REQUEST = `Please use the fetch_host_screenshot tool to fetch ${'x'.repeat(100)} and look at it.`
+  /** Let the streams run a while, firing only the timers due now. */
+  const turns = async (k = 40): Promise<void> => {
+    for (let i = 0; i < k; i++) {
+      vi.advanceTimersByTime(0)
+      await new Promise<void>((res) => setImmediate(res))
+    }
+  }
+  async function untilTurns(cond: () => boolean, what: string): Promise<void> {
+    for (let i = 0; i < 400 && !cond(); i++) await turns(1)
+    if (!cond()) throw new Error(`timed out waiting for ${what}`)
+  }
+  /** A terminal whose connections note each frame HelperPty hands them, whose
+   *  connection is dropped with the attach again held until `open()`. */
+  async function droppedRig(): Promise<{ r: Rig; sent: string[]; open: () => void; hold: () => void }> {
+    const gate = { wait: null as Promise<void> | null, open: () => {} }
+    const sent: string[] = []
+    const r = rig({
+      connect: async (record, openConn) => {
+        if (gate.wait) await gate.wait
+        const c = await openConn(record)
+        const send = c.sendInput.bind(c)
+        c.sendInput = (b: Buffer) => { sent.push(b.toString('utf8')); send(b) }
+        return c
+      },
+    })
+    await attached(r)
+    const hold = (): void => { gate.wait = new Promise<void>((res) => { gate.open = () => { gate.wait = null; res() } }) }
+    hold()
+    r.h.fallBehind()
+    await until(() => !r.p.isAttached, 'the drop')
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    return { r, sent, open: () => gate.open(), hold }
+  }
+  afterEach(() => { vi.useRealTimers() })
+
+  it('a request and its Enter: the request at the attach, the Enter as its own frame PROMPT_ENTER_DELAY_MS later', async () => {
+    expect(REQUEST.length).toBeGreaterThan(64)
+    const { r, sent, open } = await droppedRig()
+    r.p.write(REQUEST)
+    r.p.write('\r')
+    open()
+    await untilTurns(() => sent.length > 0 && r.p.isAttached, 'the attach again')
+    await turns()
+    expect(sent).toEqual([REQUEST])
+    vi.advanceTimersByTime(PROMPT_ENTER_DELAY_MS - 1)
+    await turns()
+    expect(sent).toEqual([REQUEST])
+    vi.advanceTimersByTime(1)
+    await turns()
+    expect(sent).toEqual([REQUEST, '\r'])
+    await untilTurns(() => r.typed() === `${REQUEST}\r`, 'the request and its Enter at the holder')
+    expect(r.exits).toEqual([])
+  })
+
+  it('the tmux leave key then Enter is a lone Enter too', async () => {
+    const { r, sent, open } = await droppedRig()
+    r.p.write(REQUEST)
+    r.p.write(`${TMUX_WHEEL_EXIT_KEY}\r`)
+    open()
+    await untilTurns(() => sent.length > 0 && r.p.isAttached, 'the attach again')
+    await turns()
+    expect(sent).toEqual([REQUEST])
+    vi.advanceTimersByTime(PROMPT_ENTER_DELAY_MS)
+    await turns()
+    expect(sent).toEqual([REQUEST, `${TMUX_WHEEL_EXIT_KEY}\r`])
+  })
+
+  it('what is typed while the Enter waits goes behind it, in order', async () => {
+    const { r, sent, open } = await droppedRig()
+    r.p.write(REQUEST)
+    r.p.write('\r')
+    open()
+    await untilTurns(() => sent.length > 0 && r.p.isAttached, 'the attach again')
+    r.p.write('n')
+    r.p.write('ext')
+    await turns()
+    expect(sent).toEqual([REQUEST])
+    vi.advanceTimersByTime(PROMPT_ENTER_DELAY_MS)
+    await turns()
+    expect(sent).toEqual([REQUEST, '\r', 'n', 'ext'])
+    // The flush is over: the next key goes at once.
+    r.p.write('!')
+    expect(sent).toEqual([REQUEST, '\r', 'n', 'ext', '!'])
+    await untilTurns(() => r.typed() === `${REQUEST}\rnext!`, 'everything once, in order, at the holder')
+  })
+
+  it('queued keys with no lone Enter go at once and in order, as before; an Enter inside a frame stays in it', async () => {
+    const { r, sent, open } = await droppedRig()
+    for (const k of ['a', 'b', 'c', `${REQUEST}\r`]) r.p.write(k)
+    open()
+    await untilTurns(() => sent.length > 0 && r.p.isAttached, 'the attach again')
+    expect(sent).toEqual(['a', 'b', 'c', `${REQUEST}\r`])
+  })
+
+  it('a lone Enter first in the queue goes at once', async () => {
+    const { r, sent, open } = await droppedRig()
+    r.p.write('\r')
+    r.p.write('d')
+    open()
+    await untilTurns(() => sent.length > 0 && r.p.isAttached, 'the attach again')
+    expect(sent).toEqual(['\r', 'd'])
+  })
+
+  it('a second drop while the Enter waits: the Enter goes once, first, on the next attach', async () => {
+    const { r, sent, open, hold } = await droppedRig()
+    r.p.write(REQUEST)
+    r.p.write('\r')
+    open()
+    await untilTurns(() => sent.length > 0 && r.p.isAttached, 'the attach again')
+    hold()
+    r.h.fallBehind()
+    await untilTurns(() => !r.p.isAttached, 'the second drop')
+    vi.advanceTimersByTime(PROMPT_ENTER_DELAY_MS * 2)
+    await turns()
+    expect(sent).toEqual([REQUEST])
+    open()
+    await untilTurns(() => sent.length > 1 && r.p.isAttached, 'the attach after the second drop')
+    expect(sent).toEqual([REQUEST, '\r'])
+    vi.advanceTimersByTime(PROMPT_ENTER_DELAY_MS * 2)
+    await turns()
+    await untilTurns(() => r.typed() === `${REQUEST}\r`, 'the request and one Enter at the holder')
+    expect(sent).toEqual([REQUEST, '\r'])
   })
 })
 

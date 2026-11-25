@@ -7,16 +7,16 @@
  * attaches again once, with the holder's replay; a closed tab sends
  * term.end, even one closed just as its link drops (the end goes once more
  * on a new link); a holder a crash left for the tab's session is ended
- * before a new one starts; an image paste types nothing, and only the app's
- * own image request is held back; a launch the holder refuses names the
- * folder and the holder's words in the tab.
+ * before a new one starts; the app's own image request is typed as it is
+ * (2.1.3-beta.18 section 3.2: such a tab has the image fetch tool); a launch
+ * the holder refuses names the folder and the holder's words in the tab.
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
 import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
 import { FakeHolder } from '../main/session-helper-fake-holder'
-import { RemoteHelperPty, remoteSessionId, remoteLaunchSpec, remoteCwd, IMAGE_HELD_BACK_NOTE, RECONNECT_DELAYS_MS, STORYBOARD_TOOL_LINE } from '../../../src/main/remote-helper/session'
+import { RemoteHelperPty, remoteSessionId, remoteLaunchSpec, remoteCwd, RECONNECT_DELAYS_MS } from '../../../src/main/remote-helper/session'
 import { composeFetchHostScreenshotPrompt } from '../../../src/renderer/utils/imageTransfer'
 import type { RemoteMachineRecord } from '../../../src/main/remote-helper/machines'
 import type { HolderRecord } from '../../../src/main/session-helper/protocol'
@@ -53,7 +53,7 @@ function holdAnswer(c: ExecCall, h: FakeHolder): FakeAnswer {
 }
 
 function tab(ssh: FakeSsh, appPtyId: string, logs: string[] = []) {
-  const spec = remoteLaunchSpec(MACHINE, ['--model', 'opus[1m]'], { CLAUDE_CODE_DISABLE_MOUSE: '1' }, '~/work', 100, 30)
+  const spec = remoteLaunchSpec(MACHINE, { program: MACHINE.claudePath!, args: ['--model', 'opus[1m]'], env: { CLAUDE_CODE_DISABLE_MOUSE: '1' } }, {}, '~/work', 100, 30)
   const pty = new RemoteHelperPty({ appPtyId, machine: MACHINE, installId: INSTALL, runner: ssh, spec, log: (m) => logs.push(m), reconnectDelaysMs: [10, 10], sleep: (ms) => new Promise((r) => setTimeout(r, ms)) })
   let out = ''
   pty.onData((d) => { out += d })
@@ -132,6 +132,34 @@ describe('remote session: a dropped link', () => {
     expect(logs.some((l) => l.includes('attaching again from 4'))).toBe(true)
     holder.output('three')
     await until('live again', () => t.out() === 'one two three')
+    t.pty.kill()
+    await t.pty.ended
+  })
+
+  // 2.1.3-beta.18 fix round, item 3: the host line's re-attach line, with the
+  // tab's local ssh killed (exit -1 on Windows, read unsigned), blamed the
+  // helper on the machine. It names the ssh link on this computer now.
+  it.each([
+    ['ssh killed on Windows (-1, read unsigned)', { code: 4294967295 }, 'ssh exit -1'],
+    ['ssh ended by a signal', { code: null, signal: 'SIGKILL' }, 'ssh ended by SIGKILL'],
+  ] as const)('%s while the link is down: the re-attach line names the ssh link on this computer', async (_name, cut, end) => {
+    const id = `tab-cut-${end.length}`
+    const sid = remoteSessionId(id)
+    const holder = new FakeHolder(sid, id, store)
+    let bridges = 0
+    const ssh = new FakeSsh({
+      answer: (c) => (c.script === 'hold' ? holdAnswer(c, holder) : { code: 1 }),
+      bridge: () => holder.connect(),
+      bridgeCut: () => (++bridges === 2 ? { ...cut } : undefined),
+    })
+    const logs: string[] = []
+    const t = tab(ssh, id, logs)
+    await until('attached', () => holder.attached !== null)
+    ssh.children[1].kill()
+    await until('attached again', () => holder.attaches === 2)
+    expect(logs.filter((l) => l.includes('is not back yet'))).toEqual([
+      `[remote-helper] ${sid}: the link to rocky.lan is not back yet (the ssh link on this computer ended before the session helper answered (${end}))`,
+    ])
     t.pty.kill()
     await t.pty.ended
   })
@@ -262,40 +290,19 @@ describe('remote session: the end', () => {
 })
 
 describe('remote session: an image paste', () => {
-  it('types nothing into the tab (it has no image fetch tool in this preview) and says so in the tab', async () => {
+  it('the app\'s own image request and the storyboard\'s line are typed as they are: the tab has the image fetch tool (2.1.3-beta.18 section 3.2)', async () => {
     const sid = remoteSessionId('tab-image')
     const holder = new FakeHolder(sid, 'tab-image', store)
     const ssh = new FakeSsh({ answer: (c) => (c.script === 'hold' ? holdAnswer(c, holder) : { code: 1 }), bridge: () => holder.connect() })
     const t = tab(ssh, 'tab-image')
     await until('attached', () => holder.attached !== null)
-    t.pty.write('I just pasted an image (use mcp__conductor__fetch_host_screenshot with filename="snap.png" to load the image from the Conductor host)\r')
-    expect(t.out()).toContain(IMAGE_HELD_BACK_NOTE)
-    t.pty.write('typed\r')
-    await until('typed input', () => Buffer.concat(holder.input).toString() === 'typed\r')
-    t.pty.kill()
-    await t.pty.ended
-  })
-
-  it('holds back only the app\'s own request: a paste or a typed line that names the tool reaches the CLI unchanged', async () => {
-    const sid = remoteSessionId('tab-names-tool')
-    const holder = new FakeHolder(sid, 'tab-names-tool', store)
-    const ssh = new FakeSsh({ answer: (c) => (c.script === 'hold' ? holdAnswer(c, holder) : { code: 1 }), bridge: () => holder.connect() })
-    const t = tab(ssh, 'tab-names-tool')
-    await until('attached', () => holder.attached !== null)
-    // The app's own request, as the renderer writes it (the same function, so the two cannot drift), and the storyboard's line.
-    t.pty.write(`${composeFetchHostScreenshotPrompt('a.png', 'I just pasted an image, please view it.')}\r`)
-    t.pty.write('Frames (use mcp__conductor__fetch_host_screenshot for each):\n')
-    expect(t.out().split(IMAGE_HELD_BACK_NOTE)).toHaveLength(3)
-    // Anything else that names the tool is typed as it is.
-    const paste = '\x1b[200~tools: mcp__conductor__fetch_host_screenshot, mcp__conductor__vision_click\r\nheldBackImage holds back the fetch_host_screenshot request\x1b[201~'
-    const typed = 'why does mcp__conductor__fetch_host_screenshot fail here?\r'
-    t.pty.write(paste)
-    t.pty.write(typed)
-    await until('the paste and the line', () => Buffer.concat(holder.input).toString() === paste + typed)
-    expect(t.out().split(IMAGE_HELD_BACK_NOTE)).toHaveLength(3)
-    // The storyboard's line is the one the renderer writes (imageTransfer.ts sendStoryboardToSession).
-    expect(STORYBOARD_TOOL_LINE).toBe('Frames (use mcp__conductor__fetch_host_screenshot for each):\n')
-    expect(fs.readFileSync(path.resolve(__dirname, '../../../src/renderer/utils/imageTransfer.ts'), 'utf8')).toContain(`'${STORYBOARD_TOOL_LINE.slice(0, -1)}',`)
+    // The app's own request, as the renderer writes it (the same function), and the storyboard's line.
+    const request = `${composeFetchHostScreenshotPrompt('a.png', 'I just pasted an image, please view it.')}\r`
+    const frames = 'Frames (use mcp__conductor__fetch_host_screenshot for each):\n'
+    t.pty.write(request)
+    t.pty.write(frames)
+    await until('both typed', () => Buffer.concat(holder.input).toString() === request + frames)
+    expect(t.out()).not.toMatch(/nothing was typed/)
     t.pty.kill()
     await t.pty.ended
   })

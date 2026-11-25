@@ -2099,7 +2099,8 @@ describe('the 2.1.3-beta.7 sweep', () => {
 
   it('the installer paragraph says the uninstaller removes the helper folder and the pages share one look', () => {
     const p = APP_KNOWLEDGE_SECTIONS.map((s) => s.body).find((b) => b.includes('On Windows the installer opens with a Welcome page'))!
-    expect(p).toContain("removes the session helper's own folder, with its copies and records; an update leaves that folder in place")
+    // 2.1.3-beta.18 section 7.1 (aicc_planning#407): the uninstall also removes the Codex pick folders.
+    expect(p).toContain("removes the session helper's own folder, with its copies and records, and the folders a Codex session's resume list left in your temp folder when that temp folder is inside your user folder; an update leaves all of them in place")
     expect(p).toContain('Every page of the installer and the uninstaller has the same light look')
   })
 
@@ -2192,12 +2193,17 @@ describe('the 2.1.3-beta.8 sweep', () => {
     expect(m).toContain('why a held terminal can still end during an update')
   })
 
-  it('the Machines section says a held Claude Code session sends its hooks through the helper, PreToolUse included, off by default', () => {
+  it('the Machines section says a held Claude Code or Codex session sends its hooks through the helper, PreToolUse included, off by default', () => {
     const m = body('machines')
-    expect(m).toContain('a Claude Code session the helper holds sends its hook events to the app through the session helper')
+    // 2.1.3-beta.18 section 5 (aicc_planning#433): a held Codex session's hooks go through its holder too.
+    expect(m).toContain('a Claude Code or Codex session the helper holds sends its hook events to the app through the session helper')
     expect(m).toContain('through the session helper, the check before each tool runs (PreToolUse) included')
     expect(m).not.toContain('still goes to the HTTP Hooks Gateway')
-    expect(m).toContain('a Codex session sends its hooks as it did')
+    expect(m).not.toContain('a Codex session sends its hooks as it did')
+    // The update gap: a held Codex session's events wait in the helper; one a beta.17 or earlier started does not.
+    expect(m).toContain("A Codex session's hook events made during the update wait in the session helper and reach the app when the new version starts, as a Claude Code session's do.")
+    expect(m).toContain('A Codex session that 2.1.3-beta.17 or earlier started still sends them the old way, at the update from that version and at any later update it is kept through')
+    expect(m).toContain('may leave its tab unmarked. Open the tab to see it.')
     // It names its own setting: the HTTP Hooks Gateway just before it is on by default.
     expect(m).toContain('With Claude Code and Codex sessions through the session helper off, which is the default, every session sends its hooks to the gateway as before')
     expect(m).not.toContain('With the setting off, which is the default')
@@ -2562,7 +2568,9 @@ describe('the 2.1.3-beta.12 known issues', () => {
   const para = (start: string) => body('known-issues').split('\n\n').find((x) => x.startsWith(start))
   const src = (...parts: string[]) => fs.readFileSync(path.resolve(__dirname, '..', '..', '..', 'src', ...parts), 'utf8')
   const held = 'With Plain terminals through the session helper on, a terminal the helper holds keeps only the last 2 MiB of what it printed.'
-  const twoRows = 'With Codex 0.170.0, the app types nothing into a Codex session after its first prompt while the line under Codex\'s prompt takes two rows.'
+  // 2.1.3-beta.18 section 7.4 (aicc_planning#427): Codex 0.172.0's footer wraps
+  // the same way after a long first prompt (its recording hold read it), so the entry names it.
+  const twoRows = 'With Codex 0.170.0 or 0.172.0, the app types nothing into a Codex session after its first prompt while the line under Codex\'s prompt takes two rows.'
   const warningCount = 'While Codex shows a warning count on the line under its prompt'
   const movedKey = 'With Codex 0.157.1 or 0.170.0, when your Codex config moves the shortcuts key to a key other than F6, the app types nothing into a Codex session'
 

@@ -10,10 +10,23 @@
  * frames (protocol section 15) ride ssh's pipes: no typed setup or launch
  * line, no sentinel parsing, no ConPTY between the app and the host. The
  * launch starts the CLI through the host user's login shell
- * (`<shell> -il -c 'exec "$0" "$@"' <claude> <args>`, ADR-030 D8), values as
+ * (`<shell> -il -c 'exec "$0" "$@"' <program> <args>`, ADR-030 D8), values as
  * arguments, so what the user's rc files set reaches the CLI as on the usual
- * path; the `-il` PATH is the one the machine's record keeps. Nothing goes to
- * the host for it: no Claude token, MCP config, hooks file or status shim.
+ * path; the `-il` PATH is the one the machine's record keeps. The program, its
+ * arguments and the CLI's own variables come from the tab's provider package
+ * (its remote launch, providers/types.ts ProviderRemoteLaunch; 2.1.3-beta.18
+ * section 2); this file names no flag or variable of a CLI.
+ *
+ * Its own files (2.1.3-beta.18 section 3.2): before the hold, one exec reads
+ * the host files the provider names (its hostReads: for Claude Code, the
+ * settings files whose hooks the session keeps), as data; after the hold and
+ * before the launch, one exec writes the files the provider's launch gives
+ * into the session's own folder there (`~/.aicc/<did>/sessions/<sid>/`,
+ * 0700), contents on standard input. They name the helper's path, its store
+ * and the session id on the host: never an address, a port or a credential of
+ * this computer. The folder goes at the session's end (`unsession`), and the
+ * next Check removes any whose holder is gone (`sweep`); a quit does not wait
+ * for the unsession exec, so a folder a quit leaves goes at that Check.
  *
  * A dropped link (the ssh child ended, or a pong that never came) attaches
  * again from the last byte seen, with the holder's replay: HelperPty asks for
@@ -25,15 +38,17 @@
  * (`term.end`), as a plain SSH session ends then (D13); a tab closed just as
  * its link drops sends its end once more, over a link of its own.
  *
- * What such a tab does not have in this preview: the status line and usage,
- * the app's tools (canvas, vision, the image fetch tool an SSH tab uses for
- * Snap and paste), hook events (attention, Watchdog). An image paste, Snap or
- * screenshot storyboard types nothing: the app's own request for the image
- * fetch tool is held back whole at the write door, before it is sliced
- * (holdBackRemoteImage, ./index.ts; the screenshot menu sends one such request
- * in place of its storyboard), and the tab shows a note instead
- * (heldBackImage). Prompt buttons and broadcast type into it by the usual rule
- * for a Claude Code tab.
+ * Its status line, hook events and tools (2.1.3-beta.18 section 3.2): the
+ * tab's connections ack `status`, `hooks` and `mcp`, and ./signals.ts routes
+ * what comes on them: the status line to the tab's strip, the hook events to
+ * the session signals module (attention, the canvas turn boundary, the
+ * Watchdog), each tool stream to the tool host as the tab's session, with no
+ * credential, the tool set an SSH tab has (the image fetch tool an image
+ * paste, Snap and the screenshot storyboard use included). What such a tab
+ * does not have in this preview: the account label, the per-model weekly
+ * buckets and extra usage on its status line (the helper reads no credential
+ * and calls no network). Prompt buttons and broadcast type into it by the
+ * usual rule for a Claude Code tab.
  *
  * This file imports nothing of Electron.
  */
@@ -43,9 +58,13 @@ import { HolderConnection, HolderError } from '../session-helper/connection'
 import { HelperPty, NothingStartedError, type HelperPtyDriver } from '../session-helper/helper-pty'
 import { checkLaunch, readListing, readRecord, type HolderRecord, type LaunchSpec } from '../session-helper/protocol'
 import { stripSpoofableText } from '../../shared/safe-text'
-import { holderLabel } from './scripts'
-import { afterHashLine, newNonce, notStartedLogLine, openScriptStream, readHashLine, runScript, sshFailure, type SshRunner, type SshTarget } from './ssh-exec'
-import type { RemoteMachineRecord } from './machines'
+import type { ProviderId } from '../../shared/providers/ids'
+import type { ProviderRemoteLaunch, RemoteHelperCommands, RemoteHostFile, RemoteHostRead, RemoteLaunch, RemoteLaunchOptions } from '../providers/types'
+import { HOST_READ_MAX, holderLabel } from './scripts'
+import { EXEC_STDOUT_MAX, afterHashLine, exitText, localSshEnd, newNonce, notStartedLogLine, openScriptStream, readHashLine, readScriptResult, runScript, sshFailure, type SshRunner, type SshTarget } from './ssh-exec'
+import { hostReadsInput, hostReadsOf, sessionFilesInput } from './session-files'
+import { RemoteSignals, type RemoteSignalDeps } from './signals'
+import { refusalText, type RemoteMachineRecord } from './machines'
 
 /** The helper's session id for a remote tab: always the same for the same app
  *  id, never one a local terminal or agent session gets (`rm` and 30 hex). */
@@ -58,12 +77,6 @@ export const RECONNECT_DELAYS_MS = [1000, 2000, 4000, 8000, 16000, 32000, 32000]
 /** How long a bridge exec may take to pass its hash line, and the hello after it. */
 export const BRIDGE_OPEN_MS = 30_000
 export const BRIDGE_HELLO_MS = 20_000
-
-/** The tool name the app's own image route asks an SSH tab's CLI to call
- *  (renderer/utils/imageTransfer.ts): a tab through the helper has no such
- *  tool in this preview. */
-export const HOST_IMAGE_TOOL = 'mcp__conductor__fetch_host_screenshot'
-export const IMAGE_HELD_BACK_NOTE = '\r\n[Images do not reach a session through the session helper yet (remote preview), so nothing was typed. Turn the remote sessions switch off in Settings to paste images over SSH.]\r\n'
 
 /** The folder a session starts in: the config's remote path made absolute
  *  against the host's home (`~`, `~/x`, a relative path), else the home. */
@@ -83,15 +96,56 @@ const hostAccountEnv = (m: RemoteMachineRecord): Record<string, string> => ({
   HOME: m.home, USER: m.user, LOGNAME: m.user, SHELL: m.shell, PATH: m.path,
 })
 
-/** What the CLI is started with on the host. */
-export function remoteLaunchSpec(m: RemoteMachineRecord, cliArgs: readonly string[], cliEnv: Record<string, string>, remotePath: string | undefined, cols: number, rows: number): LaunchSpec {
-  const claude = m.claudePath ?? '/usr/local/bin/claude'
-  const argv = m.shellIsSh ? [m.shell, '-il', '-c', 'exec "$0" "$@"', claude, ...cliArgs] : [claude, ...cliArgs]
-  const env: Record<string, string> = {
+/** The session helper's commands for session `sid` on machine `m`, by the
+ *  layout the scripts keep there (scripts.ts: `~/.aicc/<did>/helper/<folder>/aicc-helper`,
+ *  `~/.aicc/<did>/store` and, for the session's own files,
+ *  `~/.aicc/<did>/sessions/<sid>`), from the home folder the machine's check read. */
+export function remoteHelperCommands(m: RemoteMachineRecord, sid: string): RemoteHelperCommands {
+  const device = `${m.home.replace(/\/+$/, '')}/.aicc/${m.did}`
+  return { helperPath: `${device}/helper/${m.helper.folder}/aicc-helper`, store: `${device}/store`, sid, folder: `${device}/sessions/${sid}` }
+}
+
+/** A tab's launch through the helper, as its provider gave it before anything
+ *  was read on the host (./index.ts remoteLaunchOf). The driver reads the
+ *  host files it names, asks the launch again with them, and writes its files. */
+export interface RemoteLaunchPlan {
+  /** The tab's provider, whose session the tool host serves. */
+  readonly provider: ProviderId
+  readonly via: ProviderRemoteLaunch
+  readonly options: RemoteLaunchOptions
+  readonly helper: RemoteHelperCommands
+  /** The host files to read first (the provider's hostReads), in order. */
+  readonly reads: readonly RemoteHostRead[]
+  /** The launch asked with every read not made: its program, arguments and
+   *  variables are the spec's, and the launch asked with the reads must give
+   *  the same. */
+  readonly first: RemoteLaunch
+  readonly spec: LaunchSpec
+}
+
+/** The most standard output a host read's exec keeps: every file at its
+ *  bound as hex, and room for its lines. */
+const hostReadsStdoutMax = (reads: number): number => Math.max(EXEC_STDOUT_MAX, reads * HOST_READ_MAX * 2 + 64 * 1024)
+
+/**
+ * What the CLI is started with on the host: the provider's program,
+ * arguments and variables (`cli`, its remote launch), through the host
+ * user's login shell when that is of the sh family, with the host account's
+ * variables, LANG and TERM first and the terminal's own (`terminalEnv`: its
+ * light or dark scheme) last. Throws when `cli.env` names a variable this
+ * sets itself: the provider's launch never replaces one.
+ */
+export function remoteLaunchSpec(m: RemoteMachineRecord, cli: Pick<RemoteLaunch, 'program' | 'args' | 'env'>, terminalEnv: Readonly<Record<string, string>>, remotePath: string | undefined, cols: number, rows: number): LaunchSpec {
+  const argv = m.shellIsSh ? [m.shell, '-il', '-c', 'exec "$0" "$@"', cli.program, ...cli.args] : [cli.program, ...cli.args]
+  const own: Record<string, string> = {
     ...hostAccountEnv(m),
     LANG: m.lang ?? 'C.UTF-8', TERM: 'xterm-256color', COLORTERM: 'truecolor',
-    ...cliEnv,
   }
+  const taken = new Set([...Object.keys(own), ...Object.keys(terminalEnv)].map((k) => k.toUpperCase()))
+  for (const k of Object.keys(cli.env)) {
+    if (taken.has(k.toUpperCase())) throw new Error(`the provider's launch sets ${k}, which the session helper's launch sets itself`)
+  }
+  const env: Record<string, string> = { ...own, ...cli.env, ...terminalEnv }
   return { argv, cwd: remoteCwd(remotePath, m.home), env, cols, rows }
 }
 
@@ -158,6 +212,13 @@ export interface RemoteSessionOptions {
   runner: SshRunner
   spec: LaunchSpec
   log: (message: string) => void
+  /** The launch its provider gave (2.1.3-beta.18 section 3.2): the host files
+   *  read first, the session's files written before the launch and removed at
+   *  its end, and the keep-lists. Absent: none of that, the spec alone. */
+  plan?: RemoteLaunchPlan
+  /** Where the tab's status line, hook events and tool streams go. Absent:
+   *  its connections ask for none of them. */
+  signals?: RemoteSignalDeps
   /** The back-off for a dropped link; tests shorten it. */
   reconnectDelaysMs?: readonly number[]
   sleep?: (ms: number) => Promise<void>
@@ -175,10 +236,18 @@ export class RemoteDriver implements HelperPtyDriver {
   private readonly connected = new Set<string>()
   private readonly target: SshTarget
   private readonly sleep: (ms: number) => Promise<void>
+  /** The tab's status line, hook events and tool streams; none without a plan and the app's side. */
+  private readonly signals: RemoteSignals | undefined
+  /** Set once the session's files were sent to the host: its end removes the folder. */
+  private filesSent = false
 
   constructor(private readonly o: RemoteSessionOptions) {
     this.target = { host: o.machine.host, port: o.machine.port, user: o.machine.user }
     this.sleep = o.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)))
+    const plan = o.plan
+    if (plan && o.signals) {
+      this.signals = new RemoteSignals({ appPtyId: o.appPtyId, provider: plan.provider, via: plan.via, launch: plan.first, tools: plan.options.tools, deps: o.signals, log: o.log })
+    }
   }
 
   private values(nonce: string, ...rest: string[]): string[] {
@@ -191,8 +260,118 @@ export class RemoteDriver implements HelperPtyDriver {
     throw new Error(why)
   }
 
+  /**
+   * The host files the launch needs are read first (when its provider names
+   * any), then the holder is started, then the session's own files are
+   * written (when the launch gives any), all before HelperPty sends the
+   * launch. A start that fails after its holder started ends that holder.
+   */
   async hold(sid: string, label: string, abandoned: () => boolean): Promise<HolderRecord> {
     await afterEnding(sid)
+    const plan = this.o.plan
+    const launch = plan ? await this.launchWithReads(plan, sid) : undefined
+    if (abandoned()) throw new NothingStartedError('the tab was closed while it started')
+    const record = await this.startHolder(sid, label, abandoned)
+    if (launch) {
+      this.signals?.launched(launch)
+      if (launch.files.length > 0) await this.writeFiles(sid, record, launch)
+    }
+    return record
+  }
+
+  /**
+   * The launch asked with what the `reads` exec read on the host (each read
+   * null when the provider names none, or the exec did not take it: one log
+   * line each). Throws, saying why, when the host could not be reached, the
+   * exec refused, or the launch's program, arguments or variables are not the
+   * ones its spec was built from.
+   */
+  private async launchWithReads(plan: RemoteLaunchPlan, sid: string): Promise<RemoteLaunch> {
+    const host = this.o.machine.host
+    let files: RemoteHostFile[] = plan.reads.map((r) => ({ from: r.from, path: r.path, content: null }))
+    if (plan.reads.length > 0) {
+      let stdin: Buffer
+      try {
+        stdin = hostReadsInput(plan.options.cwd, plan.reads)
+      } catch (err) {
+        this.failWith(`the session's settings files on ${host} cannot be read: ${(err as Error).message}`)
+      }
+      const nonce = newNonce()
+      const r = await runScript(this.o.runner, this.target, 'reads', [nonce, this.o.machine.did, this.o.installId], { stdin, stdoutMax: hostReadsStdoutMax(plan.reads.length) })
+      if (r.notStarted) this.o.log(notStartedLogLine(host, r.stderr))
+      const failed = sshFailure(r)
+      if (failed) this.failWith(`${host} could not be reached: ${failed}`)
+      const result = readScriptResult(r.stdout, nonce)
+      if (!result) this.failWith(`${host} did not answer the session helper's read of the session's settings files`)
+      if (!result.ok) this.failWith(`the session's settings files on ${host} were not read: ${refusalText(result.refused)}; press Check on the Machines page`)
+      const answer = hostReadsOf(result, plan.reads)
+      for (const s of answer.skipped) this.o.log(`[remote-helper] ${sid}: ${s.read.from} ${s.read.path} on ${host} was not read (${s.why}), so nothing it sets is in the session's settings`)
+      files = answer.files
+    }
+    let launch: RemoteLaunch
+    try {
+      launch = plan.via.launch(plan.options, this.o.machine, plan.helper, files)
+    } catch (err) {
+      this.failWith(`its provider's launch could not be made: ${(err as Error).message}`)
+    }
+    const same = launch.program === plan.first.program && JSON.stringify(launch.args) === JSON.stringify(plan.first.args) && JSON.stringify(launch.env) === JSON.stringify(plan.first.env)
+    if (!same) this.failWith('its provider\'s launch changed its program, arguments or variables with what was read on the host')
+    return launch
+  }
+
+  /** The session's own files into its folder on the host (the `files` exec).
+   *  On any failure its holder is ended first, then the start fails saying why. */
+  private async writeFiles(sid: string, record: HolderRecord, launch: RemoteLaunch): Promise<void> {
+    const host = this.o.machine.host
+    let why: string | null = null
+    try {
+      const { layout, stdin } = sessionFilesInput(launch.files)
+      const nonce = newNonce()
+      this.filesSent = true
+      const r = await runScript(this.o.runner, this.target, 'files', [nonce, this.o.machine.did, this.o.installId, sid, layout], { stdin })
+      if (r.notStarted) this.o.log(notStartedLogLine(host, r.stderr))
+      const failed = sshFailure(r)
+      const result = failed ? null : readScriptResult(r.stdout, nonce)
+      if (failed) why = `${host} could not be reached: ${failed}`
+      else if (!result) why = `${host} did not answer the session helper's write of the session's files`
+      else if (!result.ok) why = `the session's files could not be written on ${host}: ${refusalText(result.refused)}`
+    } catch (err) {
+      why = (err as Error).message
+    }
+    if (why === null) return
+    await this.endHolder(record)
+    this.failWith(why)
+  }
+
+  /** A holder this start made and cannot use: ended over a link of its own. */
+  private async endHolder(record: HolderRecord): Promise<void> {
+    let conn: HolderConnection | undefined
+    try {
+      conn = await this.connectOnce(record, false)
+      await conn.request({ t: 'term.end' })
+    } catch (err) {
+      this.o.log(`[remote-helper] ${record.session}: the holder started for this tab could not be ended (${(err as Error).message}); its away clock ends it`)
+    } finally {
+      conn?.close()
+    }
+  }
+
+  /** The session's own folder goes (the `unsession` exec), once its holder
+   *  ended. Never throws; one that is not removed is the next Check's. */
+  private async removeFolder(sid: string): Promise<void> {
+    const host = this.o.machine.host
+    try {
+      const nonce = newNonce()
+      const r = await runScript(this.o.runner, this.target, 'unsession', [nonce, this.o.machine.did, this.o.installId, sid])
+      const failed = sshFailure(r)
+      const result = failed ? null : readScriptResult(r.stdout, nonce)
+      if (!result?.ok) this.o.log(`[remote-helper] ${sid}: the session's folder on ${host} was not removed (${failed ?? (result ? refusalText(result.refused) : 'no answer')}); the next Check removes it`)
+    } catch (err) {
+      this.o.log(`[remote-helper] ${sid}: the session's folder on ${host} was not removed (${(err as Error).message}); the next Check removes it`)
+    }
+  }
+
+  private async startHolder(sid: string, label: string, abandoned: () => boolean): Promise<HolderRecord> {
     const host = this.o.machine.host
     for (let attempt = 0; attempt < 2; attempt++) {
       if (abandoned()) throw new NothingStartedError('the tab was closed while it started')
@@ -210,7 +389,7 @@ export class RemoteDriver implements HelperPtyDriver {
         if (attempt === 0 && !abandoned()) { await this.endLeftover(sid); continue }
         this.failWith(`a session the app could not end still runs for this tab on ${host}`)
       }
-      if (r.code !== 0) this.failWith(`the session helper on ${host} could not start a holder (exit ${r.code ?? 'unknown'}: ${r.stderr.trim().slice(0, 200)})`)
+      if (r.code !== 0) this.failWith(`the session helper on ${host} could not start a holder (${exitText(r)}: ${r.stderr.trim().slice(0, 200)})`)
       const line = afterHashLine(r.stdout, nonce).split(/\r?\n/).find((l) => l.startsWith('{'))
       let record: HolderRecord | null = null
       try { record = line ? readRecord(JSON.parse(line), 'unix') : null } catch { record = null }
@@ -250,12 +429,14 @@ export class RemoteDriver implements HelperPtyDriver {
       if (d > 0) await this.sleep(d)
       if (d > 0 && this.closed) break
       try {
-        const conn = await this.connectOnce(record)
+        const conn = await this.connectOnce(record, true, true)
         this.connected.add(record.nonce)
         return conn
       } catch (err) {
         last = err as Error
         if (err instanceof FinalError) break
+        // The reason says which side ended (ssh-exec.ts openScriptStream): the
+        // ssh link on this computer, or the helper on the machine.
         if (again) this.o.log(`[remote-helper] ${record.session}: the link to ${this.o.machine.host} is not back yet (${last.message})`)
       }
     }
@@ -299,8 +480,11 @@ export class RemoteDriver implements HelperPtyDriver {
     }
   }
 
-  /** One bridge exec, and the holder's hello over it. */
-  private async connectOnce(record: HolderRecord, endAgain = true): Promise<HolderConnection> {
+  /** One bridge exec, and the holder's hello over it. `tabs`: a connection of
+   *  the tab's own (connect), which asks for its status line, hook events and
+   *  tool streams and is routed by ./signals.ts; an end's own link asks for
+   *  none of them. */
+  private async connectOnce(record: HolderRecord, endAgain = true, tabs = false): Promise<HolderConnection> {
     const nonce = newNonce()
     let opened: Awaited<ReturnType<typeof openScriptStream>>
     try {
@@ -311,6 +495,7 @@ export class RemoteDriver implements HelperPtyDriver {
       throw e.final ? new FinalError(e.message) : e
     }
     this.linkPid = opened.pid
+    const asks = tabs ? this.signals?.asks : undefined
     try {
       const conn = await HolderConnection.open({
         record,
@@ -319,8 +504,12 @@ export class RemoteDriver implements HelperPtyDriver {
         checkEndpointFolder: () => null,
         openStream: async () => opened.stream,
         helloTimeoutMs: BRIDGE_HELLO_MS,
+        ...(asks?.hooks ? { hooks: true } : {}),
+        ...(asks?.mcp ? { mcp: true } : {}),
+        ...(asks?.status ? { status: true } : {}),
       })
       if (endAgain) this.wrapRequests(conn, record)
+      if (asks) this.signals?.connected(conn)
       return conn
     } catch (err) {
       // ssh's exit status first (a bridge that found no holder exits 3, often
@@ -332,9 +521,14 @@ export class RemoteDriver implements HelperPtyDriver {
       if (r?.code === 3) throw new FinalError(`no holder runs for this tab on ${this.o.machine.host} any more`)
       // Any other exit of the bridge before its hello is named, so the tab's
       // note says it; a usage error (2: a helper without the mode) is not
-      // tried again, and exit 1 may be.
+      // tried again, and exit 1 may be. An exit no remote command gives
+      // (outside 0 to 255: ssh ended by force on this computer) is named as
+      // the ssh link's, signed (2.1.3-beta.18 fix round, item 3).
       if (typeof r?.code === 'number') {
-        const why = `${(err as Error).message} (the session helper's bridge on ${this.o.machine.host} exited ${r.code})`
+        const local = localSshEnd({ code: r.code })
+        const why = local !== null
+          ? `${(err as Error).message} (the ssh link on this computer ended: ${local})`
+          : `${(err as Error).message} (the session helper's bridge on ${this.o.machine.host} exited ${r.code})`
         throw r.code === 2 ? new FinalError(why) : new Error(why)
       }
       throw err
@@ -347,8 +541,16 @@ export class RemoteDriver implements HelperPtyDriver {
   }
 
   ending(sid: string, done: Promise<void>): void {
-    endings.set(sid, done)
-    void done.finally(() => { if (endings.get(sid) === done) endings.delete(sid) })
+    // Once the holder ended, the app's hook state for the tab goes (its feed
+    // ring and its overflow and lost-event marks, as a held session's on this
+    // computer go), then the session's own folder, when its files were sent;
+    // a new holder for the same id (a Restart, which reuses the tab's id)
+    // waits for all of it.
+    const whole = done.catch(() => { /* ended either way */ })
+      .then(() => { try { this.o.signals?.ended(this.o.appPtyId) } catch { /* the app's own */ } })
+      .then(() => (this.filesSent ? this.removeFolder(sid) : undefined))
+    endings.set(sid, whole)
+    void whole.finally(() => { if (endings.get(sid) === whole) endings.delete(sid) })
   }
 
   attachedChanged(): void { /* the Machines page reads tabs, not attaches, in this preview */ }
@@ -393,17 +595,7 @@ export class RemoteHelperPty implements IPty {
   get throughHelper(): boolean { return this.inner.throughHelper }
 
   write(data: string | Buffer): void {
-    if (heldBackImage(data)) { this.holdBackImage(); return }
     this.inner.write(data)
-  }
-
-  /** The app's own image request was held back: nothing typed, and the tab
-   *  says why. The write door holds a whole request back before it is sliced
-   *  (holdBackRemoteImage, ./index.ts); write() above catches one that comes
-   *  another way. */
-  holdBackImage(): void {
-    this.driver.log(`[remote-helper] ${this.sid}: an image was not typed (the tab has no image fetch tool in this preview)`)
-    this.data.fire(IMAGE_HELD_BACK_NOTE)
   }
 
   resize(cols: number, rows: number): void { this.inner.resize(cols, rows) }
@@ -415,22 +607,4 @@ export class RemoteHelperPty implements IPty {
     this.driver.closed = true
     this.inner.kill(signal)
   }
-}
-
-/** The end of the app's own image request line
- *  (renderer/utils/imageTransfer.ts composeFetchHostScreenshotPrompt): one
- *  line, ending with the tool and the image's file name. */
-const IMAGE_REQUEST_LINE = new RegExp(`^[^\\r\\n]* \\(use ${HOST_IMAGE_TOOL} with filename="[^"\\r\\n]*" to load the image from the Conductor host\\)$`)
-/** The storyboard's own line naming the tool (sendStoryboardToSession), as it is written. */
-export const STORYBOARD_TOOL_LINE = `Frames (use ${HOST_IMAGE_TOOL} for each):\n`
-
-/** The app's own request for the host image tool, which a tab through the
- *  helper does not have: held back (RemoteHelperPty.write). Only that
- *  request: a single line in its shape (less one Enter at its end), or the
- *  storyboard's line. Anything else that names the tool (a paste of a tool
- *  list, a log, notes) is typed as it is. */
-export function heldBackImage(data: string | Buffer): boolean {
-  const text = typeof data === 'string' ? data : data.toString('utf8')
-  if (text === STORYBOARD_TOOL_LINE) return true
-  return IMAGE_REQUEST_LINE.test(text.endsWith('\r') ? text.slice(0, -1) : text)
 }

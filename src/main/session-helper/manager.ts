@@ -121,6 +121,17 @@
  * installed helper lists the holders once, and every version or staging
  * folder no listed holder's version needs goes. A manager made later in that
  * run copies only once that has ended (deps.copyAfter).
+ *
+ * 2.1.3-beta.18 (plan section 5, ADR-030 S12, aicc_planning#433): a held
+ * Codex session's hook events go through its holder too (hookRoute, by its
+ * launch: deps.hooks' byLaunch). Its hook command stays the same for every
+ * session, so the launch its holder runs is given the hook mode's variables
+ * (HOOK_MODE_ENV) and the kinds the Codex package declares (`hookKinds`); its
+ * forwarder runs the hook mode from them. An update's release marks the kept
+ * record of a session whose hook events went through its holder (`hooks`),
+ * and only such a Codex session's take-over takes them there; one kept with
+ * its hooks on the Hooks gateway (keptOnGateway) has its hook file written
+ * again by its take-over, as before.
  */
 import { execFile } from 'child_process'
 import * as fs from 'fs'
@@ -140,6 +151,8 @@ import { HelperPty, NothingStartedError, type HelperPtyDriver, type RedrawWay } 
 import {
   APP_PTY_ID_RE,
   HELPER_FOLDER_RE,
+  HOOK_KINDS_OFFERED_WITH,
+  HOOK_MODE_ENV,
   SID_RE,
   checkLaunch,
   heldAgentSessionId,
@@ -151,12 +164,13 @@ import {
   parseVersionLine,
   readListing,
   readRecord,
+  validHookKinds,
   type HelperOs,
   type HolderRecord,
   type HookEventFrame,
   type LaunchSpec,
-  type McpMessage,
 } from './protocol'
+import { wireToolStreams, type HelperToolLink } from './tool-links'
 import type { HelperHookTarget, HelperHooksResult } from '../hooks/session-hooks-writer'
 import type { HelperMcpConfigResult } from '../hooks/per-session-settings'
 import type { HeldToolLaunch, HeldToolLaunchAnswer, HeldToolRelay, ResumePick } from '../providers/types'
@@ -229,8 +243,8 @@ export interface SessionHelperDeps {
   /** Whether no process has this id (process-alive.ts; tests answer for a fake holder). */
   processGone?: (pid: number) => boolean
   /** Agent sessions' hooks through their holders, by provider (app-wiring.ts
-   *  gives Claude Code's only). A provider with none keeps its hooks on the
-   *  hooks gateway. */
+   *  gives Claude Code's, and from 2.1.3-beta.18 Codex's). A provider with
+   *  none keeps its hooks on the hooks gateway. */
   hooks?: Partial<Record<ProviderId, HelperHookDeps>>
   /** Agent sessions' tool calls through their holders, by provider
    *  (2.1.3-beta.11, plan sections B1 and B2). app-wiring.ts gives Claude
@@ -294,17 +308,9 @@ export interface HelperToolDeps {
   relayLaunch?(appPtyId: string, launch: HeldToolLaunch, relay: HeldToolRelay): HeldToolLaunchAnswer
 }
 
-/** One tool stream as the tool host is handed it (conductor-mcp-server.ts
- *  ToolStreamLink). */
-export interface HelperToolLink {
-  /** One JSON-RPC message to the session's CLI. */
-  send(message: McpMessage): void
-  /** What takes each message the CLI sends, and what hears the stream end
-   *  from the holder's side. Once; a message before it is dropped. */
-  take(onMessage: (message: McpMessage) => void, onClose: () => void): void
-  /** End the stream from the tool host's side. */
-  close(): void
-}
+/** One tool stream as the tool host is handed it: ./tool-links.ts, shared
+ *  with a tab through the session helper on another machine. */
+export type { HelperToolLink } from './tool-links'
 
 /** One tab's tool streams through its holder (toolRoute). */
 interface ToolRoute {
@@ -333,78 +339,77 @@ const RELAY_LAUNCH_STAYS_BECAUSE: Record<Extract<HeldToolLaunchAnswer, { refused
   'cmd-line': 'its launch is one command line through cmd.exe, or hands its arguments to one (an npm launcher), and the relay\'s arguments cannot pass that line\'s quoting rule',
 }
 
-/**
- * One tool stream a holder opened on a connection, as the tool host is handed
- * it: what the tool host sends goes on the stream, and what the relay sends
- * reaches it, until either side ends the stream or the connection goes.
- */
-class StreamLink implements HelperToolLink {
-  private onMessage: ((message: McpMessage) => void) | null = null
-  private onClose: (() => void) | null = null
-  private over = false
-
-  constructor(private readonly conn: HolderConnection, private readonly stream: number, private readonly forget: () => void) {}
-
-  send(message: McpMessage): void {
-    if (this.over) return
-    // One the holder would not read is answered and ends the stream on the
-    // connection's side (connection.ts sendMcp): the tool host's side ends too.
-    if (this.conn.sendMcp(this.stream, message) === 'refused') this.ended()
-  }
-
-  take(onMessage: (message: McpMessage) => void, onClose: () => void): void {
-    if (this.over || this.onMessage) return
-    this.onMessage = onMessage
-    this.onClose = onClose
-  }
-
-  close(): void {
-    if (this.over) return
-    this.over = true
-    this.conn.closeMcp(this.stream)
-    this.forget()
-  }
-
-  /** One message the relay sent on the stream. */
-  deliver(message: McpMessage): void {
-    if (!this.over) this.onMessage?.(message)
-  }
-
-  /** The stream ended from the holder's side, or its connection went. */
-  ended(): void {
-    if (this.over) return
-    this.over = true
-    this.conn.closeMcp(this.stream)
-    this.forget()
-    try { this.onClose?.() } catch { /* the tool host's own */ }
-  }
-}
-
-/** What a Claude Code session's hooks through its holder need of the app
- *  (2.1.3-beta.8, plan section A4). */
+/** What a session's hooks through its holder need of the app (2.1.3-beta.8,
+ *  plan section A4: Claude Code's; 2.1.3-beta.18, ADR-030 S12: Codex's). */
 export interface HelperHookDeps {
   /** Whether the app takes hook events now: the hooks gateway is on and
    *  listening (session-signals/hooks.ts helperHooksTaken). A session is
    *  switched to the helper only then. */
   taking(): boolean
-  /** Point the tab's per-session settings file at the helper's hook mode, for
-   *  every injected event (session-hooks-writer.ts switchHooksToHelper). */
-  useHelperHooks(appPtyId: string, target: HelperHookTarget): HelperHooksResult
+  /** Claude Code: point the tab's per-session settings file at the helper's
+   *  hook mode, for every injected event (session-hooks-writer.ts
+   *  switchHooksToHelper). Its holder takes the nine (HELPER_HOOK_KINDS),
+   *  with no `hookKinds` in its launch. Not used with byLaunch. */
+  useHelperHooks?(appPtyId: string, target: HelperHookTarget): HelperHooksResult
+  /** 2.1.3-beta.18 (ADR-030 S12): the hook kinds the provider's package
+   *  declares (SessionProvider.heldHookKinds), for every provider: the only
+   *  kinds its sessions' connections report (ConnectionOptions.hookKinds),
+   *  and with byLaunch the kinds its launch declares. None declared, or not
+   *  ones a holder takes: its connections report the nine, and a byLaunch
+   *  provider's hooks stay as they are. */
+  kinds?(): readonly string[] | undefined
+  /** 2.1.3-beta.18 (ADR-030 S12): its hooks are switched by its launch, not by
+   *  a settings file: for a CLI whose hooks run the helper's hook mode named
+   *  in its own environment (Codex's forwarder, scripts/ccc-codex-hook.js),
+   *  the launch a holder runs is given the hook mode's variables
+   *  (HOOK_MODE_ENV) and the kinds its package declares (`hookKinds`), which
+   *  its holder then takes alone. */
+  byLaunch?: true
+  /** 2.1.3-beta.18: a session of this provider whose hook events stay on the
+   *  hooks gateway may still be kept at an app update (keepable), because its
+   *  take-over writes its hook file again (Codex: launch-bindings.ts
+   *  codexTakeOver); its hook events go through its holder after a take-over
+   *  only when its kept record says its launch sent them there (KeptRecord
+   *  `hooks`). Absent (Claude Code): kept only with its hook events through
+   *  its holder, as before. */
+  keptOnGateway?: true
   /** One hook event the tab's holder passed on (the session signals module). */
   event(appPtyId: string, e: HookEventFrame): void
   /** The tab's session through the helper is over: its hook events with it. */
   ended(appPtyId: string): void
 }
 
-/** One Claude Code session's hooks through its holder (hookRoute). */
+/** One session's hooks through its holder (hookRoute). */
 interface HookRoute {
-  /** Its settings file was switched: its hook events go through its holder. */
+  /** Its hooks were switched to its holder (Claude Code: its settings file;
+   *  Codex: its launch): its hook events go through its holder. */
   isOn(): boolean
   /** The last `seq` it took (B1e: where a take-over after a keeper's goes on). */
   lastSeq(): number
   launched(conn: HolderConnection): void
+  /** A provider switched by its launch (byLaunch): what the launch on `conn`
+   *  goes with (see HelperPtyDriver.launchHooks). */
+  launchHooks?(conn: HolderConnection, env: Readonly<Record<string, string>>): { env: Record<string, string>; hookKinds: readonly string[] } | undefined
+  /** The kinds its package declares (HelperHookDeps.kinds), the only ones its
+   *  connections report (ConnectionOptions.hookKinds); with byLaunch, the
+   *  kinds its launch declares too. Absent: the nine. */
+  kinds?: readonly string[]
   event(e: HookEventFrame): void
   ended(): void
+}
+
+/** `env` with the hook mode's three variables (HOOK_MODE_ENV) set to `vars`:
+ *  every other spelling of each name goes first (on Windows a program reads
+ *  the first match of a name in any case, and the holder refuses two names
+ *  that differ only in case). */
+function withHookModeEnv(env: Readonly<Record<string, string>>, vars: { helper: string; store: string; session: string }): Record<string, string> {
+  const names = new Set(Object.values(HOOK_MODE_ENV).map((n) => n.toUpperCase()))
+  const out: Record<string, string> = {}
+  for (const [k, v] of Object.entries(env)) if (!names.has(k.toUpperCase())) out[k] = v
+  out[HOOK_MODE_ENV.helper] = vars.helper
+  out[HOOK_MODE_ENV.store] = vars.store
+  out[HOOK_MODE_ENV.session] = vars.session
+  return out
 }
 
 /** Why a session's hooks stay on the gateway, for its one log line. */
@@ -521,6 +526,10 @@ const UNSEEN_SERVE_AFTER_MS = 3_000
  * an earlier version wrote has no folder (null) and reads as not bundled.
  * `pick` (aicc_planning#419): a launch through the resume list's pick file,
  * its folder as made and the decision read last, for the take-over's watcher.
+ * `hooks` (2.1.3-beta.18, ADR-030 S12): 'holder' when its hook events went
+ * through its holder, so its take-over takes them there and (a Codex
+ * session) writes no hook file again; a record an earlier version wrote has
+ * none (a Codex session's take-over then writes its hook file again).
  */
 export interface KeptRecord {
   session: string
@@ -532,6 +541,7 @@ export interface KeptRecord {
   folder: string | null
   bundled?: true
   pick?: ResumePick
+  hooks?: 'holder'
   at: number
 }
 
@@ -569,8 +579,9 @@ function keptPickOf(x: unknown): ResumePick | null {
 
 /** A kept record read strictly, from its file under the name `sid`: null
  *  when its id, tab and provider are not one agent session of this app's. A
- *  conversation, an account, a hook folder, a launch folder or a pick that
- *  does not read is none. `os`: the helper's system, for the launch folder. */
+ *  conversation, an account, a hook folder, a launch folder, a pick or a
+ *  hooks mark that does not read is none. `os`: the helper's system, for the
+ *  launch folder. */
 function keptRecordOf(v: unknown, sid: string, os: HelperOs): KeptRecord | null {
   if (!v || typeof v !== 'object') return null
   const r = v as Record<string, unknown>
@@ -591,6 +602,7 @@ function keptRecordOf(v: unknown, sid: string, os: HelperOs): KeptRecord | null 
     folder: launchFolder(r.folder, os),
     ...(r.bundled === true ? { bundled: true as const } : {}),
     ...(pick ? { pick } : {}),
+    ...(r.hooks === 'holder' ? { hooks: 'holder' as const } : {}),
     at: typeof r.at === 'number' && Number.isFinite(r.at) ? r.at : 0,
   }
 }
@@ -1231,7 +1243,7 @@ export class SessionHelperManager implements MachinesSource {
     if (this.state !== 'starting' && this.state !== 'ready') return usualWay(`the session helper is ${this.state}`, ctx.run === true)
     const refused = checkLaunch(spec, this.os)
     if (refused) return usualWay(`the helper would refuse ${refused.why}`, true)
-    const hooks = this.hookRoute(ctx, sid)
+    const hooks = this.hookRoute(ctx, sid, false, false, undefined, spec)
     const tools = this.toolRoute(ctx, sid, { file, args, opts })
     // B2: a provider whose composer rule reads its held session's screen from
     // the holder asks for the screen reads and their title.
@@ -1296,8 +1308,9 @@ export class SessionHelperManager implements MachinesSource {
     if (entry.serve) clearTimeout(entry.serve)
     this.removeKeptRecord(sid)
     const { kept, record } = entry
-    // B1e: on from the last hook event its keeper took while its tab was not shown.
-    const hooks = this.hookRoute(ctx, sid, true, false, entry.hooks)
+    // B1e: on from the last hook event its keeper took while its tab was not
+    // shown. 2.1.3-beta.18: only when its hook events go through its holder.
+    const hooks = this.keptHooksThroughHolder(kept) ? this.hookRoute(ctx, sid, true, false, entry.hooks) : undefined
     const tools = this.toolRoute(ctx, sid, undefined, true)
     const spec: LaunchSpec = { argv: [''], cwd: kept.folder ?? '', env: {}, cols: size.cols, rows: size.rows, ...(kept.bundled ? { conpty: 'bundled' as const } : {}) }
     const direct = (): IPty => notStartedPty(HELPER_SENTENCES.agentNotTakenOver, size)
@@ -1316,7 +1329,8 @@ export class SessionHelperManager implements MachinesSource {
   /**
    * A Claude Code session's hooks through its holder (2.1.3-beta.8, plan
    * section A4), when the app wires them for its provider (deps.hooks: Claude
-   * Code's only, so none for another provider's session). Its connections
+   * Code's, and Codex's by its launch, below; none for another provider's
+   * session). Its connections
    * ack `hooks` when the holder offers it. Its per-session settings file is
    * written for the hooks gateway by the PTY manager in the same synchronous
    * run as the spawn call (pty-manager.ts: spawnAgentPty, then
@@ -1348,16 +1362,43 @@ export class SessionHelperManager implements MachinesSource {
    * `after`: that keeper's route, for the take-over's: it goes on from the
    * last `seq` the keeper took, so no event is taken twice (the holder sends
    * one to one attach only, and one whose send failed again to the next).
+   *
+   * 2.1.3-beta.18 (ADR-030 S12): a provider whose CLI reports its hook events
+   * through the hook mode named in its own environment (deps.byLaunch: a held
+   * Codex session, whose hook command, its forwarder, stays the same for
+   * every session so that the trust Codex records for it holds) is switched
+   * by its launch instead, with the kinds its package declares (deps.kinds):
+   * before term.launch (`launchHooks`, with `spec`, the launch's own), when its
+   * holder offers `hooks` and takes a launch's hook kinds (a holder that
+   * offers HOOK_KINDS_OFFERED_WITH), the helper copy is known, the gateway is
+   * taking hook events and the kinds are ones a holder takes, the launch's
+   * environment gets the hook mode's variables (HOOK_MODE_ENV: the helper
+   * copy, its store and the holder's session) and the launch those kinds
+   * (`hookKinds`); it counts once the holder took that launch (`launched`).
+   * Anything else leaves its hooks on the gateway, with one log line, and the
+   * launch is the frame it was before. The usual start it falls back to
+   * keeps the spawn's own environment, so its forwarder posts to the gateway
+   * as before. Every session's connections report an event only of a kind
+   * its package declares (ConnectionOptions.hookKinds; a take-over's, the
+   * kinds its provider declares now): a Codex session's, the kinds its launch
+   * declared; a Claude Code session's, the nine its settings file injects.
    */
-  private hookRoute(ctx: AgentSpawnContext, sid: string, takenOver = false, unseen = false, after?: HookRoute): HookRoute | undefined {
+  private hookRoute(ctx: AgentSpawnContext, sid: string, takenOver = false, unseen = false, after?: HookRoute, spec?: LaunchSpec): HookRoute | undefined {
     if (ctx.run) return undefined
     const deps = this.deps.hooks?.[ctx.kind]
     if (!deps) return undefined
     const appId = ctx.sessionId
     let on = takenOver
     let lastSeq = after?.lastSeq() ?? 0
+    const stays = (why: string): void => this.deps.log(`[session-helper] ${appId}: its hooks stay on the hooks gateway, because ${why}`)
+    /** The kinds its package declares, when they are ones a holder takes:
+     *  its connections report those kinds only (and with byLaunch, its
+     *  launch declares them). */
+    const declared = deps.kinds?.()
+    const kinds = validHookKinds(declared) && declared.length > 0 ? [...declared] : undefined
     if (takenOver) this.deps.log(`[session-helper] ${appId}: its hook events go through its holder ${unseen ? 'while its tab is not shown' : 'from the take-over, PreToolUse included'}`)
-    return {
+    const route: HookRoute = {
+      ...(kinds ? { kinds } : {}),
       isOn: () => on,
       lastSeq: () => lastSeq,
       launched: (conn) => {
@@ -1365,16 +1406,17 @@ export class SessionHelperManager implements MachinesSource {
         // with no await between the spawn call and the write (see above).
         const exe = this.info?.exe
         if (!conn.hooks || !exe) {
-          this.deps.log(`[session-helper] ${appId}: its hooks stay on the hooks gateway, because ${conn.hooks ? 'the helper copy is not known' : 'its holder does not offer hook events'}`)
+          stays(conn.hooks ? 'the helper copy is not known' : 'its holder does not offer hook events')
           return
         }
         if (!deps.taking()) {
-          this.deps.log(`[session-helper] ${appId}: its hooks stay on the hooks gateway, because the hooks gateway is off or not listening, so no hook event would be taken`)
+          stays('the hooks gateway is off or not listening, so no hook event would be taken')
           return
         }
+        if (!deps.useHelperHooks) return
         const r = deps.useHelperHooks(appId, { helperPath: exe, store: this.store, sid, launcher: this.os === 'windows' ? 'git-bash' : 'sh' })
         if (r !== 'switched') {
-          this.deps.log(`[session-helper] ${appId}: its hooks stay on the hooks gateway, because ${HOOKS_STAY_BECAUSE[r]}`)
+          stays(HOOKS_STAY_BECAUSE[r])
           return
         }
         on = true
@@ -1390,6 +1432,40 @@ export class SessionHelperManager implements MachinesSource {
         if (unseen) on = false
       },
     }
+    // A take-over launches nothing: its launch was switched by the run that made it.
+    if (!deps.byLaunch || takenOver || !spec) return route
+    /** The launch last asked for went with the hook mode's variables. */
+    let given = false
+    route.launched = () => {
+      if (!given) return
+      on = true
+      this.deps.log(`[session-helper] ${appId}: its hook events go through its holder, from its launch's environment`)
+    }
+    route.launchHooks = (conn, env) => {
+      given = false
+      const exe = this.info?.exe
+      if (!conn.hooks) { stays('its holder does not offer hook events'); return undefined }
+      if (!conn.hello.caps.includes(HOOK_KINDS_OFFERED_WITH)) { stays('its holder does not take the hook kinds a launch declares (a session helper from before 2.1.3-beta.18)'); return undefined }
+      if (!exe) { stays('the helper copy is not known'); return undefined }
+      if (!deps.taking()) { stays('the hooks gateway is off or not listening, so no hook event would be taken'); return undefined }
+      if (!kinds) { stays('its provider declares no hook kinds a holder takes'); return undefined }
+      const withVars = withHookModeEnv(env, { helper: exe, store: this.store, session: sid })
+      const refused = checkLaunch({ ...spec, env: withVars }, this.os)
+      if (refused) { stays(`the helper would refuse its launch with the hook mode's variables (${refused.why})`); return undefined }
+      given = true
+      return { env: withVars, hookKinds: [...kinds] }
+    }
+    return route
+  }
+
+  /** 2.1.3-beta.18: whether a session an update kept running sends its hook
+   *  events through its holder: always for a provider kept only so (Claude
+   *  Code's), and for one kept with them on the hooks gateway too (Codex's,
+   *  keptOnGateway) only when its record says its launch sent them there. */
+  private keptHooksThroughHolder(kept: KeptRecord): boolean {
+    const deps = this.deps.hooks?.[kept.provider]
+    if (!deps) return false
+    return deps.keptOnGateway !== true || kept.hooks === 'holder'
   }
 
   /**
@@ -1469,35 +1545,19 @@ export class SessionHelperManager implements MachinesSource {
         // streams the holder kept; their CLI is told its tool list may have
         // changed.
         const toolsChanged = takenOver && !again && deps.listsAgain === true
-        const links = new Map<number, StreamLink>()
-        // The connection reports these only when it acked `mcp`, and only for
-        // a stream the holder opened on it (connection.ts): that is the guard.
-        conn.on('mcpOpen', (stream) => {
-          const link = new StreamLink(conn, stream, () => { if (links.get(stream) === link) links.delete(stream) })
-          if (!on) {
-            link.close()
-            this.deps.log(`[session-helper] ${appId}: a tool stream its holder opened was not served, because its CLI was not pointed at its holder`)
-            return
+        const log = (m: string): void => this.deps.log(`[session-helper] ${appId}: ${m}`)
+        // A stream opened while the session is not switched is refused (`on`
+        // is read at each open: a launch's switch comes after its first
+        // connection). ./tool-links.ts makes the links (shared with a remote tab).
+        wireToolStreams(conn, (link) => {
+          const served = toolsChanged ? deps.serve(appId, link, { toolsChanged: true }) : deps.serve(appId, link)
+          if (served && again) {
+            log('a tool stream is served on the connection that attached again (one its holder kept while the link was down, or a new one)')
+          } else if (served && toolsChanged) {
+            log(`a tool stream is served on ${unseen ? 'its keeper\'s connection while its tab is not shown' : 'the take-over\'s connection'}, and its CLI is told its tool list may have changed`)
           }
-          links.set(stream, link)
-          let served = false
-          try {
-            served = toolsChanged ? deps.serve(appId, link, { toolsChanged: true }) : deps.serve(appId, link)
-          } catch (err) {
-            this.deps.log(`[session-helper] ${appId}: the tool host failed on a tool stream: ${message(err)}`)
-          }
-          if (!served) {
-            link.close()
-            this.deps.log(`[session-helper] ${appId}: a tool stream its holder opened was not served`)
-          } else if (again) {
-            this.deps.log(`[session-helper] ${appId}: a tool stream is served on the connection that attached again (one its holder kept while the link was down, or a new one)`)
-          } else if (toolsChanged) {
-            this.deps.log(`[session-helper] ${appId}: a tool stream is served on ${unseen ? 'its keeper\'s connection while its tab is not shown' : 'the take-over\'s connection'}, and its CLI is told its tool list may have changed`)
-          }
-        })
-        conn.on('mcp', (stream, m) => links.get(stream)?.deliver(m))
-        conn.on('mcpClose', (stream) => links.get(stream)?.ended())
-        conn.on('close', () => { for (const link of [...links.values()]) link.ended() })
+          return served
+        }, log, () => (on ? null : 'a tool stream its holder opened was not served, because its CLI was not pointed at its holder'))
       },
     }
     // A take-over launches nothing: its CLI was switched by the run that launched it.
@@ -1628,7 +1688,7 @@ export class SessionHelperManager implements MachinesSource {
    *  helper is checked before the holder starts. `cleared` (an agent
    *  session): what must settle before a holder starts, in place of the plain
    *  terminal's wait for an earlier holder's end; it throws to start none.
-   *  `hooks`: a Claude Code session's hooks through its holder (hookRoute).
+   *  `hooks`: a session's hooks through its holder (hookRoute).
    *  `tools`: a session's tool calls through its holder (toolRoute).
    *  `screen`: its connections ask for the holder's screen reads (plainDriver;
    *  B2, an agent session of a provider in deps.screens). `title`: beside
@@ -1653,6 +1713,7 @@ export class SessionHelperManager implements MachinesSource {
         },
       } : {}),
       ...(tools?.launchArgs ? { launchArgs: tools.launchArgs } : {}),
+      ...(hooks?.launchHooks ? { launchHooks: hooks.launchHooks } : {}),
       direct,
       ending: (sid, done) => {
         this.endings.set(sid, done)
@@ -1679,7 +1740,7 @@ export class SessionHelperManager implements MachinesSource {
       openStream: this.deps.openStream,
       checkEndpointFolder: this.deps.checkEndpointFolder,
       replyTimeoutMs: this.deps.replyTimeoutMs,
-      ...(hooks ? { hooks: true } : {}),
+      ...(hooks ? { hooks: true, ...(hooks.kinds ? { hookKinds: hooks.kinds } : {}) } : {}),
       ...(tools ? { mcp: true } : {}),
       ...(screen ? { screen: true } : {}),
       ...(screen && title ? { title: true } : {}),
@@ -2000,7 +2061,7 @@ export class SessionHelperManager implements MachinesSource {
       if (!record || !saved(tab)) continue
       // An agent session's record is written before it is let go of: one
       // that cannot be recorded is left to the kill, which ends it.
-      const kept = keeps ? this.recordKept(sid, w.label, keeps.kind, w.launchShape) : undefined
+      const kept = keeps ? this.recordKept(sid, w.label, keeps.kind, w.launchShape, keeps.hooks) : undefined
       if (keeps && !kept) continue
       if (!w.release()) {
         if (kept) this.removeKeptRecord(sid)
@@ -2075,21 +2136,26 @@ export class SessionHelperManager implements MachinesSource {
 
   /** The routes of an agent session an update may keep running: the agent
    *  sessions' setting on, its tool calls through its holder, and its hook
-   *  events too when its provider's can go through one. Null otherwise. */
-  private keepable(w: HelperPty): { kind: ProviderId } | null {
+   *  events too when its provider's can go through one, unless its provider's
+   *  take-over writes its hook file again (keptOnGateway, 2.1.3-beta.18:
+   *  Codex's, as before it had a hook route). Null otherwise. `hooks`: its
+   *  hook events go through its holder. */
+  private keepable(w: HelperPty): { kind: ProviderId; hooks: boolean } | null {
     if (!this.agentsOn) return null
     const routes = this.agentRoutes.get(w)
     if (!routes || !routes.tools.isOn()) return null
-    if (routes.hooks && !routes.hooks.isOn()) return null
-    return { kind: routes.kind }
+    const hooks = routes.hooks?.isOn() === true
+    if (routes.hooks && !hooks && this.deps.hooks?.[routes.kind]?.keptOnGateway !== true) return null
+    return { kind: routes.kind, hooks }
   }
 
   /** Record the release of an agent session an update keeps running, in the
    *  helper's folder, with the folder its CLI was launched in and its ConPTY
-   *  (`shape`, for the take-over). Undefined, with one log line, when it
-   *  cannot be written. */
-  private recordKept(sid: string, label: string, provider: ProviderId, shape: { cwd: string; bundled: boolean }): KeptRecord | undefined {
-    const record = keptRecordOf({ v: 1, session: sid, label, provider, ...describeKeptLaunch(label), folder: shape.cwd, ...(shape.bundled ? { bundled: true } : {}), at: this.deps.now() }, sid, this.os)
+   *  (`shape`, for the take-over), and (2.1.3-beta.18) the mark that its hook
+   *  events go through its holder (`hooks`). Undefined, with one log line,
+   *  when it cannot be written. */
+  private recordKept(sid: string, label: string, provider: ProviderId, shape: { cwd: string; bundled: boolean }, hooks: boolean): KeptRecord | undefined {
+    const record = keptRecordOf({ v: 1, session: sid, label, provider, ...describeKeptLaunch(label), folder: shape.cwd, ...(shape.bundled ? { bundled: true } : {}), ...(hooks ? { hooks: 'holder' } : {}), at: this.deps.now() }, sid, this.os)
     if (!record) {
       this.deps.log(`[session-helper] ${sid}: the agent session could not be recorded, so it is ended at the update as before`)
       return undefined
@@ -2241,9 +2307,9 @@ export class SessionHelperManager implements MachinesSource {
     if (this.keptForTabs.get(sid) !== e || e.shown || this.quitting || this.updating) return
     const { kept, record } = e
     const ctx: AgentSpawnContext = { sessionId: kept.label, kind: kept.provider }
-    e.hooks = this.hookRoute(ctx, sid, true, true)
+    e.hooks = this.keptHooksThroughHolder(kept) ? this.hookRoute(ctx, sid, true, true) : undefined
     const why = !this.deps.tools?.[kept.provider] ? 'its provider\'s tools do not go through a holder'
-      : !serveKeptLaunch({ sessionId: kept.label, provider: kept.provider, hookFolder: kept.hookFolder, folder: kept.folder }, cwd) ? 'the tool host is not serving, or its bindings could not be made'
+      : !serveKeptLaunch({ sessionId: kept.label, provider: kept.provider, hookFolder: kept.hookFolder, folder: kept.folder, ...(kept.hooks ? { hooks: kept.hooks } : {}) }, cwd) ? 'the tool host is not serving, or its bindings could not be made'
         : null
     if (why !== null) {
       this.deps.log(`[session-helper] ${sid}: tab ${kept.label} is not shown, and its Conductor tool calls wait for its take-over, because ${why}`)

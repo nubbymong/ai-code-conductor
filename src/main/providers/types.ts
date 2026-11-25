@@ -1,4 +1,4 @@
-import type { CodexOptions, LegacyVersion, ProviderId, SshConfig, SshRuntime, StatuslineData, SubmitTextResult } from '../../shared/types'
+import type { CodexOptions, LegacyVersion, PromptButtonResult, ProviderId, SshConfig, SshRuntime, StatuslineData, SubmitTextResult } from '../../shared/types'
 
 export interface SpawnOptions {
   sessionId: string
@@ -181,6 +181,110 @@ export type HeldToolLaunchAnswer =
   | { args: string[] | string }
   | { refused: 'no-tools' | 'unsafe-path' | 'cmd-line' }
 
+/** 2.1.3-beta.18 section 2 (aicc_planning#430): what a remote launch is
+ *  given of the tab: its saved launch options, the folder it starts in on
+ *  the host and the app's settings as this start read them. Not the tab's
+ *  SSH options: they hold its sign-in. */
+export interface RemoteLaunchOptions {
+  readonly model?: string
+  readonly effortLevel?: string
+  readonly permissionMode?: string
+  /** The config's extra arguments, as one string. */
+  readonly extraArgs?: string
+  readonly disableAutoMemory?: boolean
+  /** The tab starts again on its last conversation (its SSH options' `reconnect`). */
+  readonly reconnect: boolean
+  /** The folder the session starts in on the host, absolute. */
+  readonly cwd: string
+  /** The app's saved settings as this start read them; null when they do not read. */
+  readonly settings: Readonly<Record<string, unknown>> | null
+  /** The app serves its Conductor tools to this session (2.1.3-beta.18
+   *  section 3.2): the built-in tools are on and their server is started.
+   *  False: the launch names no tool server of the app's. */
+  readonly tools: boolean
+}
+
+/** The machine a remote launch runs on, as its last check on the Machines
+ *  page read it (remote-helper/machines.ts RemoteMachineRecord, structurally). */
+export interface RemoteLaunchMachine {
+  /** The host account's home folder and user name. */
+  readonly home: string
+  readonly user: string
+  /** Where the check found Claude Code's CLI on the host (the login shell's
+   *  `-il` lookup, else the exec's PATH); null: not found. A saved shape that
+   *  changes when a second provider runs over SSH. */
+  readonly claudePath: string | null
+}
+
+/** The session helper on the host, for a command a session's file names
+ *  (`<helperPath> <mode> --store <store> --session <sid>`: the status, hook
+ *  and relay modes): absolute paths on the host, and the holder's session id.
+ *  `folder` (2.1.3-beta.18 section 3.2): the session's own folder on the
+ *  host, absolute, where core writes the launch's `files`; the launch names
+ *  them there. */
+export type RemoteHelperCommands = Readonly<HeldToolRelay> & { readonly folder: string }
+
+/** A file on the host a remote launch needs read before it starts: `path`
+ *  under the host user's home folder, the folder the session starts in, or
+ *  the root of the git checkout that folder is in; plain names joined by `/`,
+ *  none of them `.` or `..`. */
+export interface RemoteHostRead {
+  readonly from: 'home' | 'cwd' | 'checkout'
+  readonly path: string
+}
+
+/** A host read as it came back: its text, or null when it was not read (not
+ *  there, not a regular file, or over the bound; and for a `cwd` or
+ *  `checkout` read, a link, not the host user's own, or open to others). A
+ *  `home` read is read as Claude Code reads the user's own file: a link is
+ *  followed (remote-helper/scripts.ts ONE_READ). */
+export interface RemoteHostFile extends RemoteHostRead {
+  readonly content: string | null
+}
+
+/** What a remote launch starts. `program`: the CLI on the host, an absolute
+ *  path. `env`: the CLI's own variables, never one core sets (the host
+ *  account's, LANG, TERM, COLORTERM, COLORFGBG). `files`: for the session's
+ *  own folder on the host, each a plain name and its text. `statusKeep` and
+ *  `hookKeep`: the fields of a status payload and of a hook event the app
+ *  keeps (a nested field by its dotted path); none: nothing kept. */
+export interface RemoteLaunch {
+  readonly program: string
+  readonly args: readonly string[]
+  readonly env: Readonly<Record<string, string>>
+  readonly files: ReadonlyArray<{ readonly name: string; readonly content: string }>
+  readonly statusKeep: readonly string[]
+  readonly hookKeep: readonly string[]
+}
+
+/** A status line as a provider gives it for the tab's strip: StatuslineData's
+ *  fields less the session id, which core sets to the tab's own. */
+export type RemoteStatusLine = Partial<Omit<StatuslineData, 'sessionId'>>
+
+/** A provider's launch of a session on another machine through the session
+ *  helper there, in two steps. Core (src/main/remote-helper) asks it by the
+ *  tab's provider id through the registry and keeps ssh, the upload, routing,
+ *  frames, the login shell's `-il` wrapper, the host account's variables,
+ *  LANG, TERM and the terminal's light or dark scheme; it names no flag or
+ *  variable of a CLI. Both steps are pure: they read and write nothing.
+ *  Core asks for the launch twice: once before anything is read on the host
+ *  (`reads` all null), to check the start, then with the reads; the
+ *  program, its arguments and its variables do not change with what was
+ *  read (a launch whose program, arguments or variables differ is refused),
+ *  only the files and keep-lists may. */
+export interface ProviderRemoteLaunch {
+  /** The host files the launch needs read first, in order; none: nothing is read. */
+  hostReads(options: RemoteLaunchOptions, machine: RemoteLaunchMachine): readonly RemoteHostRead[]
+  /** The launch. `reads`: what hostReads named, in its order, as read. */
+  launch(options: RemoteLaunchOptions, machine: RemoteLaunchMachine, helper: RemoteHelperCommands, reads: readonly RemoteHostFile[]): RemoteLaunch
+  /** The tab's status line from one status the CLI posted, already cut to
+   *  the launch's `statusKeep` (2.1.3-beta.18 section 3.2). Untrusted input;
+   *  a remote path in it is display text only, never a transcript path.
+   *  Null: nothing to show. Absent: a provider whose tabs get no status line
+   *  this way. */
+  statusLine?(payload: Readonly<Record<string, unknown>>): RemoteStatusLine | null
+}
+
 /** How a session's telemetry finds its transcript. `cwd`: the resolved
  *  working directory the PTY runs in, which Codex uses to claim a new
  *  rollout. `spawnTimestamp`: Date.now() captured immediately before
@@ -316,6 +420,17 @@ export interface SessionProvider {
    *  keeps the arguments the builder made. Pure: it reads nothing and writes
    *  nothing. */
   heldToolLaunch?(sessionId: string, launch: HeldToolLaunch, relay: HeldToolRelay): HeldToolLaunchAnswer
+  /** Optional -- Claude only (2.1.3-beta.18 section 2): the launch of a
+   *  session on another machine through the session helper there. Absent:
+   *  the provider's SSH tabs take the usual SSH path. */
+  readonly remoteLaunch?: ProviderRemoteLaunch
+  /** Optional -- both packages declare it (2.1.3-beta.18, ADR-030 S12): the
+   *  kinds a held session's holder takes and its connections report; how
+   *  they reach the holder is the app's hook route (Claude Code: its settings
+   *  file; Codex: its launch, as `hookKinds`). At most 16 plain words (ASCII
+   *  letters and digits) of at most 64 characters, none twice. Absent, a
+   *  session switched by its launch keeps its hooks as they are. */
+  readonly heldHookKinds?: readonly string[]
   /**
    * Optional -- copy the provider's resume-picker script into
    * `<resourcesDir>/scripts/`. Both providers implement this in P4. The
@@ -391,8 +506,11 @@ export interface SessionProvider {
    *  sign-in, whose copies the app keeps through its own record instead,
    *  src/main/canvas/codex-user-skills.ts). Path arithmetic only. */
   stagedSkillsDir?(home: string, resourcesDir: string): string | null
-  /** Optional -- Codex (P4.1, PB9): main's own reading of each run's screen
-   *  and the submit primitive that types into its composer. */
+  /** Optional: how the session input module's doors type into this
+   *  provider's sessions (2.1.3-beta.18 section 4: each door asks the
+   *  session's own provider here, and one with no rule for a door takes
+   *  nothing there), and for Codex (P4.1, PB9) main's own reading of each
+   *  run's screen and the submit primitive that types into its composer. */
   readonly runScreen?: SessionRunScreen
   /** Subscribe to live telemetry for a spawned session (see TelemetryOptions). */
   ingestSessionTelemetry(
@@ -425,7 +543,16 @@ export interface HeldScreenRows {
  *  method is keyed by the app's session id; a respawn opens a new pane.
  *  2.1.3-beta.14 B2: a run its session helper holds is read from the
  *  holder's screen instead, and has no pane (`held`). 2.1.3-beta.17 C6: and
- *  the door for a saved image (`submitImage`). */
+ *  the door for a saved image (`submitImage`).
+ *
+ *  2.1.3-beta.18 section 4 (aicc_planning#432; ADR-030 component rows 3 and
+ *  14): each door of the session input module types through the run screen
+ *  of the provider that runs the session, by that package's rule for the
+ *  door (`retry`, `prompt`, `marker`, `image`, `ask`); a provider with no
+ *  member for a door takes nothing there. A package that reads no screen of
+ *  its own (Claude Code's) answers `has` false, does nothing at open, feed,
+ *  resize and close, and has no `submit`; main opens a pane for a Codex run
+ *  only. */
 export interface SessionRunScreen {
   /** Open the pane for a session's new run, replacing any earlier one.
    *  `write`: one raw write into that run's process. `current`: whether that
@@ -453,22 +580,92 @@ export interface SessionRunScreen {
    *  the ready, empty composer. Never rejects. `readyBy` (Date.now()'s clock)
    *  ends that wait at the latest, time spent queued included; `stillWanted`
    *  says no and nothing is typed (2.1.3-beta.10 section A2: the Watchdog's
-   *  retry sets both). */
-  submit(sessionId: string, text: string, opts: { readyWaitMs: number; readyBy?: number; stillWanted?: () => boolean }): Promise<SubmitTextResult>
+   *  retry sets both). Absent (2.1.3-beta.18 section 4): the package reads
+   *  no screen to confirm a text on. */
+  submit?(sessionId: string, text: string, opts: { readyWaitMs: number; readyBy?: number; stillWanted?: () => boolean }): Promise<SubmitTextResult>
   /** 2.1.3-beta.17 C6 (aicc_planning#415): a saved image's path into the
    *  composer as the CLI's own paste, then `sentence`, then Enter, by the
    *  package's image rule, after anything already in flight for the run;
    *  waits up to `readyWaitMs` for the ready, empty composer. Never rejects.
-   *  Absent: the package has no image rule. */
+   *  Absent: the package has no image rule of this kind. */
   submitImage?(sessionId: string, imagePath: string, sentence: string, opts: { readyWaitMs: number }): Promise<RunScreenImageResult>
+
+  // 2.1.3-beta.18 section 4: the doors' members. The session input module
+  // calls each for a session this provider runs, with the door's own waits
+  // and the run the door was asked for (`typing`); a member types only
+  // through `typing`, or through the package's own submit primitive. Absent:
+  // the door takes nothing for this provider, logs one line, and never types
+  // another provider's way.
+
+  /** The Watchdog's retry (submitRetry): `text` into the session. A rule
+   *  that reads the screen answers whether it was delivered, waiting up to
+   *  `readyWaitMs` and no later than `readyBy`, and types nothing once
+   *  `stillWanted` says no; a rule that types at once answers nothing.
+   *  `enterDelayMs`: how long an Enter typed as its own write follows the
+   *  text's last slice. */
+  retry?(sessionId: string, text: string, opts: { readyWaitMs: number; readyBy: number; stillWanted?: () => boolean; enterDelayMs: number }, typing: RunScreenTyping): void | Promise<SubmitTextResult>
+  /** A command bar prompt button's Send (submitPrompt; "Type it only" is
+   *  the door's own, for any provider with this member): `text`, then its
+   *  submission. `readyWaitMs`: how long a rule that reads the screen waits
+   *  for the ready, empty composer; `maxCodePoints`: the longest text the
+   *  door hands such a rule; `enterDelayMs`: how long an Enter typed as its
+   *  own write follows the text's last slice. Never rejects. */
+  prompt?(sessionId: string, text: string, opts: { readyWaitMs: number; maxCodePoints: number; enterDelayMs: number }, typing: RunScreenTyping): Promise<PromptButtonResult>
+  /** An Agent Canvas marker line (submitMarker), filed on `canvasId` when the
+   *  caller named one. A rule that reads the screen answers whether it was
+   *  delivered, waiting up to `readyWaitMs`; a rule that holds the line for
+   *  later answers nothing and tells the canvas itself. */
+  marker?(sessionId: string, line: string, opts: { readyWaitMs: number; canvasId?: string }, typing: RunScreenTyping): void | Promise<SubmitTextResult>
+  /** A saved image (submitImage): its path as the CLI's own paste, then
+   *  `sentence`, then Enter. `readyWaitMs`: how long a rule that reads the
+   *  screen waits for the ready, empty composer; `settleMs`: how long the
+   *  sentence follows the paste's last slice; `enterDelayMs`: how long the
+   *  Enter follows the sentence's. Never rejects. */
+  image?(sessionId: string, imagePath: string, sentence: string, opts: { readyWaitMs: number; settleMs: number; enterDelayMs: number }, typing: RunScreenTyping): Promise<RunScreenImageResult>
+  /** Ask Conductor's question (askQuestion, handOffAskQuestion), for a
+   *  session that launched as Ask, waiting up to `readyWaitMs` for the
+   *  ready, empty composer; `removed` is told how many characters were taken
+   *  out first, when any were, because the prompt would drop them. Logs the
+   *  question by its length only. Never rejects. */
+  ask?(sessionId: string, question: string, opts: { readyWaitMs: number; removed: (count: number) => void }): Promise<SubmitTextResult>
+}
+
+/** 2.1.3-beta.18 section 4 (aicc_planning#432): what a door of the session
+ *  input module hands a run screen's member for one run, the session's
+ *  terminal process when the door was asked. Every byte a member types goes
+ *  through `write`, the module's write port (writePty: its duplicate guard,
+ *  its 256-byte slices, its launch-pending buffer), as every byte main types
+ *  into a session does. */
+export interface RunScreenTyping {
+  /** The key that leaves tmux's scrollback view, for an SSH Persistent
+   *  session ('' for every other session): a write starts with it where
+   *  copy-mode would take the keys. */
+  readonly leave: string
+  /** True for a tab that runs through the session helper on its machine
+   *  (2.1.3-beta.18 fix round): the holder there writes each write into the
+   *  program whole, so a line and its Enter in one write reach the CLI as one
+   *  read, and Claude Code (2.1.332, measured) takes a control character as a
+   *  key only in a read shorter than 64 characters. A member types an Enter
+   *  there as its own write. False for every other session. */
+  readonly wholeWrites: boolean
+  /** Whether the session's terminal process is still the run the door was
+   *  asked for (false when it had none). */
+  live(): boolean
+  /** One write into the session's terminal through the write port. */
+  write(data: string): void
+  /** Resolves `delayMs` after the last slice the write port cuts `data`, just
+   *  written, into has gone. */
+  settled(data: string, delayMs: number): Promise<void>
 }
 
 /** Why a run screen's image rule did not paste and send an image: the
  *  session gone; a path or sentence it refuses before typing anything; the
  *  ready, empty composer not seen in the wait (`busy-timeout`), or a prompt
  *  up; the CLI's image placeholder not shown after the paste; the sentence
- *  not confirmed on screen (`not-drawn`, `too-tall`). */
-export type RunScreenImageNotPasted = 'session-gone' | 'refused-text' | 'busy-timeout' | 'prompt-on-screen' | 'no-placeholder' | 'not-drawn' | 'too-tall'
+ *  not confirmed on screen (`not-drawn`, `too-tall`); main reads no screen
+ *  for the session, so the rule was not asked (`no-screen`, 2.1.3-beta.18
+ *  section 4: the check moved from the image door into the package). */
+export type RunScreenImageNotPasted = 'session-gone' | 'refused-text' | 'busy-timeout' | 'prompt-on-screen' | 'no-placeholder' | 'not-drawn' | 'too-tall' | 'no-screen'
 
 /** 2.1.3-beta.17 C6: what a run screen's image rule did. `left`: what it
  *  typed may still be at the prompt (it could not take it back for certain);

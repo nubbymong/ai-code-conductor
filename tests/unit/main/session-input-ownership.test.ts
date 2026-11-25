@@ -2,19 +2,32 @@
 // submit; 2.1.3-beta.9 section A1). The session input module
 // (src/main/session-input/) is where the main process decides, on its own
 // initiative, what goes into a session's terminal: the Watchdog's retry, an
-// Agent Canvas marker, Ask Conductor's question, a channel message and the quit keys. (A Claude Code marker it
-// hands to canvas/claude-marker-typing.ts, which has the renderer type it.)
+// Agent Canvas marker, Ask Conductor's question, a channel message and the quit keys. (A Claude Code marker the
+// Claude Code package hands to canvas/claude-marker-typing.ts, which has the renderer type it.)
 // Since 2.1.3-beta.10 (#333) it also types a command bar prompt button's
 // text, which the renderer asks for over pty:submitPrompt. Since 2.1.3-beta.10
 // section A2 the Watchdog's retry comes in through submitRetry, for both CLIs,
 // and typeKeys, the raw writer a Codex retry was typed through, is gone.
-// Every other caller asks the module (submitRetry, submitLine, submitMarker,
+// Every other caller asks the module (submitRetry, submitMarker,
 // handOffAskQuestion, pasteEnvelope, submitPrompt); sendExitKeys, which skips the quit's
 // own checks (a CLI the app started, no tmux-persistent remote), is the PTY
 // manager's quit's only (beta.9 A2); askQuestion, which skips the Ask check, is the PTY
-// manager's Ask launch's only, and codexRunScreen, the Codex run screen
-// itself, is the PTY manager's only (it resizes and closes each run's reading through
-// it).
+// manager's Ask launch's only. codexRunScreen, the Codex run screen fetched
+// by name, which the PTY manager alone used to resize and close each run's
+// reading, is gone (2.1.3-beta.18 section 4): the module hands out no run
+// screen, and the PTY manager closes and resizes through closeRunScreens and
+// resizeRunScreens, which type nothing.
+//
+// 2.1.3-beta.18 section 4 (aicc_planning#432): each door now types a session
+// through the run screen of the provider that runs it, by that package's
+// member for the door. Those members are outside the module, so they are
+// counted here, in the two packages: the Codex package's door members
+// (providers/codex/run-screen-doors.ts: the submit primitive and the image
+// rule, and the prompt's refused-text typing) and the Claude Code package's
+// run screen (providers/claude/run-screen.ts: the rules the module typed for
+// every session that was not Codex, moved unchanged). A member types only
+// through what its door hands it (RunScreenTyping, whose write is the
+// module's write port) or its own package's primitive.
 //
 // This reads every src/main/**/*.ts file and finds, in each file outside the
 // module, every place that types into a session's terminal:
@@ -33,8 +46,9 @@
 //    on whole (spread, passed, stored, read by a computed key, re-exported)
 //    counts too. The module's own exports are the door: a name imported or
 //    destructured from src/main/session-input, or read from a namespace of
-//    it, is not counted, whatever it is (but what its codexRunScreen returns
-//    is a run screen, below);
+//    it, is not counted, whatever it is (but what a codexRunScreen of it
+//    returns is a run screen, below: the name is gone since 2.1.3-beta.18
+//    section 4, and still recognised, so it cannot come back unseen);
 //  - `.submit`, or `.submitImage` (2.1.3-beta.17 C6), read from a provider's
 //    run screen, or destructured from one:
 //    anything traced to a `.runScreen` read (destructured included), typed
@@ -47,7 +61,8 @@
 //    constructor parameter property whose default is one);
 //  - `.write` read from a PTY handle, or destructured from one: anything typed
 //    IPty or HelperPty or `X['ptyProcess']` (or a type alias of this file that
-//    names one), the result of node-pty's spawn (imported, required or
+//    names one), or (2.1.3-beta.18 section 4) RunScreenTyping, the typing a
+//    door hands a run screen's member, the result of node-pty's spawn (imported, required or
 //    imported at run time), spawnPlainPty, spawnAgentPty or spawnRunPty
 //    (under any name), a `new HelperPty`, a
 //    `.ptyProcess` read (destructured included), a function in the same file
@@ -71,9 +86,11 @@
 //
 // It also holds the module's own shape: nothing it imports, directly or
 // through any file it loads, is the PTY manager (so the ports cannot be
-// registered before the module is ready, and imports run one way); the PTY
-// manager registers the ports in one statement of its own, when it loads; and
-// askQuestion, sendExitKeys and codexRunScreen are reached from the PTY manager only.
+// registered before the module is ready, and imports run one way), and no
+// provider package either (it reaches them through the registry only); the PTY
+// manager registers the ports in one statement of its own, when it loads;
+// askQuestion and sendExitKeys are reached from the PTY manager only; and
+// codexRunScreen is gone.
 //
 // Not checked here: the renderer (its typing moves with S13); a PTY handle
 // held in an object property other than `ptyProcess` (or a backstop name) of
@@ -105,10 +122,13 @@ const MODULE_ENTRY = 'src/main/session-input/index.ts'
 const TYPING_FUNCTIONS = new Set(['writePty', 'writeSubmittedLine', 'pastePty', 'writeCanvasMarkerLine', 'handOffAskQuestion', 'submitCodexText', 'submitCodexImage', 'writeCliSetupPty'])
 /** The modules that export one: a namespace of one handed on whole hands them on. */
 const TYPING_MODULES = new Set(['src/main/pty-manager', 'src/main/providers/codex/session-screen', 'src/main/ipc/setup-handlers'])
-const PTY_TYPES = new Set(['IPty', 'HelperPty'])
+/** A PTY handle's types, and (2.1.3-beta.18 section 4) the typing a door hands
+ *  a run screen's member, whose write is the write port's. */
+const PTY_TYPES = new Set(['IPty', 'HelperPty', 'RunScreenTyping'])
 const PTY_STARTS = new Set(['spawnPlainPty', 'spawnAgentPty', 'spawnRunPty'])
 const SCREEN_TYPES = new Set(['SessionRunScreen'])
-/** The module's export that returns the Codex run screen: a call of it is a run screen. */
+/** The module's export that returned the Codex run screen: a call of it is a
+ *  run screen. Gone since 2.1.3-beta.18 section 4, and still recognised. */
 const DOOR_SCREEN = 'codexRunScreen'
 /** The property an indexed type names a PTY handle or a run screen by (`PtySession['ptyProcess']`). */
 const INDEXED = { pty: 'ptyProcess', screen: 'runScreen' } as const
@@ -173,6 +193,25 @@ const ALLOWED: Record<string, Record<string, Allowed>> = {
   },
   'src/main/providers/codex/index.ts': {
     '(top level)': { count: 2, why: "the Codex package's runScreen.submit itself, handing a submission to its run (submitCodexText); and (2.1.3-beta.17 C6, aicc_planning#415) its runScreen.submitImage, handing an image to its run (submitCodexImage): the image door's Codex rule, which only this module calls", until: 'stays' },
+  },
+  // 2.1.3-beta.18 section 4 (aicc_planning#432): the doors' Codex calls,
+  // moved here from the module, which made each one for a session it tested
+  // as Codex. Each is reached only through its door.
+  'src/main/providers/codex/run-screen-doors.ts': {
+    retry: { count: 1, why: "the Watchdog's retry door's Codex rule: the submit primitive, with the door's ready wait, its readyBy and the incident check", until: 'stays' },
+    prompt: { count: 2, why: "a prompt button's Send on Codex: the submit primitive, and a text it refused before typing anything typed with no Enter through the door's typing (the write port)", until: 'stays' },
+    marker: { count: 1, why: "a canvas marker's Codex rule: the submit primitive, within the marker queue's bound", until: 'stays' },
+    image: { count: 2, why: "an image's Codex rule (C6): the image rule's presence checked, then the image handed to it", until: 'stays' },
+    ask: { count: 1, why: "Ask Conductor's question on Codex: the submit primitive, after the characters Codex's prompt drops are taken out", until: 'stays' },
+  },
+  // 2.1.3-beta.18 section 4 (aicc_planning#432): the rules the module typed
+  // for every session that was not Codex, moved here unchanged as the Claude
+  // Code package's run screen. Each types only through the typing its door
+  // hands it (the write port), and only for a session the package runs.
+  'src/main/providers/claude/run-screen.ts': {
+    retryClaudeLine: { count: 3, why: "the Watchdog's retry into a Claude Code session: the leave key, the line and Enter in one write (the bytes submitLine typed); in a tab through the session helper on its machine, the line, then Enter as its own write (2.1.3-beta.18 fix round)", until: 'S13 (once main reads a Claude Code screen)' },
+    sendClaudePrompt: { count: 2, why: "a prompt button's Send into a Claude Code session: the text, then Enter as its own write", until: 'S13 (once main reads a Claude Code screen)' },
+    pasteClaudeImage: { count: 3, why: "an image into a Claude Code session (X1.2): the path as a bracketed paste, the sentence, then Enter, each its own write", until: 'stays' },
   },
   'src/main/session-helper/helper-pty.ts': {
     write: { count: 1, why: "the session helper's transport: a held terminal's input, as raw input frames, or into the direct terminal", until: 'stays' },
@@ -753,9 +792,13 @@ describe('the session input module is the one door for the app\'s own typing int
   it('nothing the module loads, directly or through any file it loads, is the PTY manager: the PTY manager registers its ports with it', () => {
     const closure = importClosure(MODULE_ENTRY, readIfFile)
     // The walk followed the module's imports past its own folder.
-    expect(closure).toContain('src/main/canvas/claude-marker-typing.ts')
+    expect(closure).toContain('src/main/canvas/canvas-marker-queue.ts')
     expect(closure).toContain('src/main/providers/core/index.ts')
     expect(closure.filter((p) => p === 'src/main/pty-manager.ts' || p.startsWith('src/main/pty-manager/')), closure.join('\n')).toEqual([])
+    // 2.1.3-beta.18 section 4: nor any provider package, nor the Claude Code
+    // marker rule the module used to call: each door reaches a package only
+    // through the registry, as the session's own provider.
+    expect(closure.filter((p) => /^src\/main\/providers\/(?!core\/)[^/]+\//.test(p) || p === 'src/main/canvas/claude-marker-typing.ts'), closure.join('\n')).toEqual([])
   })
 
   it('the PTY manager registers the ports once, when it loads: one call, a statement of the file itself', () => {
@@ -784,13 +827,28 @@ describe('the session input module is the one door for the app\'s own typing int
     expect(where.map((w) => w.split(':')[0]), where.join('\n')).toEqual(['src/main/pty-manager.ts'])
   })
 
-  it("codexRunScreen, the Codex run screen itself, is reached from the PTY manager only (it resizes and closes each run's reading through it)", () => {
+  it('codexRunScreen, the Codex run screen fetched by name, is gone (2.1.3-beta.18 section 4): the module exports no run screen, and nothing reaches one from it', () => {
     const where: string[] = []
     for (const p of sources) {
       if (p.startsWith(MODULE_DIR)) continue
       for (const r of doorReads(read(p), p)) if (r.name === 'codexRunScreen' || r.name === '*') where.push(`${p}:${r.line} (${r.name})`)
     }
-    expect(where.map((w) => w.split(':')[0]), where.join('\n')).toEqual(['src/main/pty-manager.ts'])
+    expect(where, where.join('\n')).toEqual([])
+    // What the PTY manager closes and resizes each run's reading through.
+    const pm = doorReads(read('src/main/pty-manager.ts'), 'src/main/pty-manager.ts').map((r) => r.name)
+    expect(pm).toEqual(expect.arrayContaining(['closeRunScreens', 'resizeRunScreens']))
+    // No export of the module returns or holds a run screen (a function whose
+    // return type, or a const whose type, names SessionRunScreen).
+    const src = read(MODULE_ENTRY)
+    const textOf = (x: N | undefined): string => (x ? src.slice(x.start, x.end) : '')
+    const exported: string[] = []
+    walk(parseTs(src, MODULE_ENTRY), (n) => {
+      if (n.type !== 'ExportNamedDeclaration' || !n.declaration) return
+      const d = n.declaration
+      if (d.type === 'FunctionDeclaration' && /SessionRunScreen/.test(textOf(d.returnType))) exported.push(d.id.name)
+      if (d.type === 'VariableDeclaration') for (const v of d.declarations as N[]) if (/SessionRunScreen/.test(textOf(v.id?.typeAnnotation))) exported.push(v.id.name)
+    })
+    expect(exported).toEqual([])
   })
 })
 
@@ -898,8 +956,14 @@ describe('the check sees each way of typing into a session (verify the verifier)
     ['by name: codexRun', `const f = (codexRun) => codexRun.write(bytes)`],
     ['by name: the run screen\'s pane', `const pane = panes.get(id)\npane.write(data)`],
     ['by name: a field of another object', `deps.ptyProcess.write('x')`],
-    // The door's own copy of the Codex run screen (codexRunScreen): its submit
-    // is still a run screen's submit, however the function is reached.
+    // 2.1.3-beta.18 section 4: the typing a door hands a run screen's member.
+    ['a write on the typing a door hands a member', `import type { RunScreenTyping } from '../types'\nfunction retry(text: string, typing: RunScreenTyping) { typing.write(text + '\\r') }`, 'src/main/providers/x/run-screen.ts'],
+    ['a write on that typing in a member written as a method', `import type { RunScreenTyping } from '../types'\nconst screen = { prompt(id: string, text: string, opts: unknown, t: RunScreenTyping) { t.write(text) } }`, 'src/main/providers/x/run-screen.ts'],
+    ['a write destructured from that typing', `import type { RunScreenTyping } from '../types'\nfunction f(typing: RunScreenTyping) { const { write } = typing; write('x') }`, 'src/main/providers/x/run-screen.ts'],
+    ['a submit on the primitives a package builds its door members over', `import type { SessionRunScreen } from '../types'\ntype Base = Required<Pick<SessionRunScreen, 'has' | 'submit'>>\nexport function doors(base: Base) { return { retry(id: string, t: string) { return base.submit(id, t, { readyWaitMs: 1 }) } } }`, 'src/main/providers/x/run-screen-doors.ts'],
+    // The door's own copy of the Codex run screen (codexRunScreen, gone since
+    // 2.1.3-beta.18 section 4): its submit would still be a run screen's
+    // submit, however the function is reached.
     ['a submit on the door\'s run screen', `import { codexRunScreen } from './session-input'\ncodexRunScreen()?.submit(id, t, o)`],
     ['a submit on the door\'s run screen in the PTY manager, as its marker writer once did', `import { setSessionInputPorts, codexRunScreen } from './session-input'\nexport function writeCanvasMarkerLine(sessionId: string, line: string) {\n  const screen = codexRunScreen()\n  if (!screen) return\n  return screen.submit(sessionId, line, { readyWaitMs: 1 })\n}`, 'src/main/pty-manager.ts'],
     ['a submit on the door\'s run screen read into a name', `import { codexRunScreen } from './session-input'\nconst s = codexRunScreen()\ns!.submit(id, t, o)`],
@@ -928,7 +992,11 @@ describe('the check sees each way of typing into a session (verify the verifier)
   }
 
   const clean: Array<[string, string, string?]> = [
-    ['the module\'s submitLine', `import { submitLine } from './session-input'\nsubmitLine(id, 'continue')`],
+    ['the module\'s submitRetry', `import { submitRetry } from './session-input'\nsubmitRetry(id, 'continue')`],
+    // 2.1.3-beta.18 section 4: what the PTY manager reaches the run screens
+    // through, and the typing's reads that type nothing.
+    ['the module\'s closeRunScreens and resizeRunScreens', `import { closeRunScreens, resizeRunScreens } from './session-input'\ncloseRunScreens(id)\nresizeRunScreens(id, 80, 24)`, 'src/main/pty-manager.ts'],
+    ['the typing\'s other reads', `import type { RunScreenTyping } from '../types'\nasync function f(typing: RunScreenTyping) { if (!typing.live()) return typing.leave; await typing.settled('x', 300) }`, 'src/main/providers/x/run-screen.ts'],
     ['the module\'s own handOffAskQuestion, from a folder below', `import { handOffAskQuestion } from '../session-input'\nhandOffAskQuestion(win, id, q)`, 'src/main/ipc/feature.ts'],
     ['the module\'s own submitPrompt, from a folder below, as pty:submitPrompt calls it', `import { submitPrompt } from '../session-input'\nipcMain.handle(ch, async () => submitPrompt(id, text, mode))`, 'src/main/ipc/feature.ts'],
     ['the module through a namespace import', `import * as input from './session-input'\ninput.submitMarker(id, line)\ninput.handOffAskQuestion(win, id, q)`],
@@ -1033,7 +1101,7 @@ describe('the check sees each way of typing into a session (verify the verifier)
 
   it('the door check sees askQuestion however it is reached: imported, renamed, from a namespace, a require, a dynamic import, destructured or re-exported', () => {
     const names = (code: string, file = 'src/main/feature.ts'): string[] => doorReads(code, file).map((r) => r.name)
-    expect(names(`import { askQuestion as ask, submitLine } from './session-input'`)).toEqual(['askQuestion', 'submitLine'])
+    expect(names(`import { askQuestion as ask, submitRetry } from './session-input'`)).toEqual(['askQuestion', 'submitRetry'])
     expect(names(`import * as input from './session-input'\ninput.askQuestion(w, id, q)`)).toEqual(['askQuestion'])
     expect(names(`const input = require('../session-input')\nconst again = input\nagain['askQuestion'](w, id, q)`, 'src/main/ipc/feature.ts')).toEqual(['askQuestion'])
     expect(names(`async function go() { const { askQuestion: a } = await import('./session-input'); a(w, id, q) }`)).toEqual(['askQuestion'])

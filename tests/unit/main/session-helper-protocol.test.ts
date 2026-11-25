@@ -5,6 +5,10 @@ import {
   FRAME_MIN_REST,
   HELPER_HOOK_KINDS,
   HOOKS_CAP,
+  HOOK_KINDS_MAX,
+  HOOK_KINDS_OFFERED_WITH,
+  HOOK_MODE_ENV,
+  validHookKinds,
   HOOK_EVENT_JSON_MAX,
   HOOK_PAYLOAD_MAX,
   JSON_DEPTH_MAX,
@@ -545,5 +549,47 @@ describe('session helper protocol: screen reads (capability screen, section 15)'
     const tail = (n: number) => ({ ...lines, lines: Array.from({ length: n }, () => ({ text: 'x', typed: 'x' })) })
     expect(readScreenLines(tail(SCREEN_TAIL_MAX), 100)).not.toBeNull()
     expect(readScreenLines(tail(SCREEN_TAIL_MAX + 1), 100)).toBeNull()
+  })
+})
+
+// 2.1.3-beta.18, plan section 5 (ADR-030 S12): the hook kinds a launch
+// declares (`hookKinds`), read against the `status` part of
+// helper/fixtures/local.json, where the helper's own vectors for them are.
+describe('session helper protocol: the hook kinds a launch declares (hookKinds, 2.1.3-beta.18)', () => {
+  const S = local.status
+
+  it("the cap that says a holder takes them, the most kinds, the longest kind and the hook mode's variables are the helper's", () => {
+    expect(S.offered).toContain(HOOK_KINDS_OFFERED_WITH)
+    expect(HOOK_KINDS_MAX).toBe(S.limits.hook_kinds)
+    expect(validHookKinds(['K'.repeat(S.limits.hook_kind_chars)])).toBe(true)
+    expect(validHookKinds(['K'.repeat(S.limits.hook_kind_chars + 1)])).toBe(false)
+    expect({ store: HOOK_MODE_ENV.store, session: HOOK_MODE_ENV.session }).toEqual(S.env)
+  })
+
+  it('what the app would declare, the holder takes; what the holder refuses, the app never declares', () => {
+    const launches = (group: Array<{ name: string; json: string }>) => group.map((v) => ({ name: v.name, m: JSON.parse(v.json) })).filter((v) => v.m.t === 'term.launch')
+    const valid = launches(S.requests.valid)
+    const invalid = launches(S.requests.invalid)
+    expect(valid.length).toBeGreaterThan(0)
+    expect(invalid.length).toBeGreaterThan(0)
+    for (const v of valid) expect(validHookKinds(v.m.hookKinds), v.name).toBe(true)
+    for (const v of invalid) expect(validHookKinds(v.m.hookKinds), v.name).toBe(false)
+    expect(validHookKinds(undefined)).toBe(false)
+    expect(validHookKinds('Stop')).toBe(false)
+  })
+
+  it("an event is read when its kind is one its session takes: the launch's kinds when given, the nine otherwise", () => {
+    const six = ['SessionStart', 'UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'PermissionRequest', 'Stop']
+    const ev = (kind: string) => ({ t: 'event', seq: 1, kind, payload: { hook_event_name: kind } })
+    const size = (m: unknown) => Buffer.byteLength(JSON.stringify(m), 'utf8')
+    const permission = ev('PermissionRequest')
+    expect(readEventFrame(permission, size(permission), six)).toEqual({ seq: 1, kind: 'PermissionRequest', payload: { hook_event_name: 'PermissionRequest' } })
+    expect(readEventFrame(permission, size(permission))).toBeNull()
+    expect(readEventFrame(permission, size(permission), HELPER_HOOK_KINDS)).toBeNull()
+    const notification = ev('Notification')
+    expect(readEventFrame(notification, size(notification))).not.toBeNull()
+    expect(readEventFrame(notification, size(notification), six)).toBeNull()
+    // A session that declared none takes none.
+    expect(readEventFrame(ev('Stop'), size(ev('Stop')), [])).toBeNull()
   })
 })

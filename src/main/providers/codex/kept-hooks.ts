@@ -10,6 +10,11 @@
 // launch makes one: directly in this install's own hook root, prepared this
 // run, with the per-launch prefix, every folder in its chain a real folder
 // (never a link or junction). Nothing else is written, and nothing is started.
+// 2.1.3-beta.18 (ADR-030 S12): only for a kept session whose hook events went
+// to the gateway (its record has no `hooks: 'holder'` mark: one 2.1.3-beta.17
+// or earlier kept, or one whose launch did not send them through its holder);
+// a session whose forwarder runs the session helper's hook mode needs no file
+// (launch-bindings.ts codexTakeOver).
 import * as fs from 'fs'
 import * as path from 'path'
 import { atomicWriteFileSync } from '../../atomic-write'

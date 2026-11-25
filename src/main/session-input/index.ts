@@ -3,10 +3,29 @@
 // own initiative. Main decides here what goes in for the Watchdog's retry
 // (submitRetry), an Agent Canvas marker (submitMarker) and Ask
 // Conductor's question on Codex (askQuestion, handOffAskQuestion), and nowhere
-// else. A Claude Code marker is the one this module does not type itself: it
-// is held by canvas/claude-marker-typing.ts and typed by the renderer at main's
-// request. tests/unit/main/session-input-ownership.test.ts holds every other
-// place in main that types into a session to a shrinking allow-list.
+// else. A Claude Code marker is the one main does not type itself: the
+// Claude Code package hands it to canvas/claude-marker-typing.ts, which has
+// the renderer type it at main's request.
+// tests/unit/main/session-input-ownership.test.ts holds every other place in
+// main that types into a session to a shrinking allow-list.
+//
+// ONE SEAM (2.1.3-beta.18 section 4, aicc_planning#432; ADR-030 component
+// rows 3 and 14). Each door used to ask one question, "is it Codex?", and
+// type Claude Code's way for every other session. Now it asks which provider
+// runs the session (the port's providerOf) and types through that provider's
+// run screen, by the package's rule for the door (SessionRunScreen's retry,
+// prompt, marker, image and ask): the Codex package's members are the Codex
+// calls this module made (providers/codex/run-screen-doors.ts), and the
+// Claude Code package's are the Claude Code rules this module typed
+// (providers/claude/run-screen.ts), moved there unchanged. A provider with no
+// member for a door takes nothing there and the door logs one line: no
+// session is ever typed into by another provider's rule. What the doors
+// still decide themselves is the same for every provider: the order of a
+// session's presses and images, the repeat window, "Type it only", the image
+// door's checks, each door's waits (handed to the member), the dock's
+// notices and the logs. Nothing typed into a Claude Code or Codex session
+// changes by one byte, in order or in time. The sections below that say
+// "Claude Code's" or "Codex's" describe those packages' members.
 //
 // Since 2.1.3-beta.9 section A2 it also pastes a channel message (pasteEnvelope) and types
 // the quit keys into a CLI the app started (sendExitKeys, for the PTY
@@ -40,8 +59,13 @@
 // door, submitRetry: a Codex session's goes through the Codex package's
 // submit primitive, as a canvas marker's does, instead of the raw writer
 // (typeKeys, removed) the Watchdog typed it through by a rule of its own; a
-// Claude Code session's is submitLine's, unchanged. That changes how a Codex
-// retry is typed, written at submitRetry, and nothing else said below.
+// Claude Code session's is the tmux leave key on an SSH Persistent session,
+// then the line and Enter in one write, unchanged (since 2.1.3-beta.18
+// section 4 the Claude Code package's retry member). That changes how a Codex
+// retry is typed, written at submitRetry, and nothing else said below. Since
+// the 2.1.3-beta.18 fix round a tab through the session helper on its machine
+// gets the retry's Enter as its own write (RunScreenTyping.wholeWrites),
+// written at submitRetry too.
 //
 // Each function's body moved here from the PTY manager as it was: nothing
 // typed, its order or its timing changed, and no queue, delay or check added,
@@ -59,9 +83,11 @@
 // manager registers its ports here when it loads (setSessionInputPorts), so
 // the imports run one way. Every byte this module types into a terminal goes
 // through the port's write (writePty, unchanged: its duplicate guard, its
-// 256-byte chunking and its launch-pending buffer), or through the Codex
-// package's run screen, reached through the provider registry as the PTY
-// manager reaches it (WP1 rule R4: no deep import into a provider package).
+// 256-byte chunking and its launch-pending buffer), whether a door writes it
+// or a run screen's member writes it through the RunScreenTyping the door
+// hands it, or through the Codex package's own submit primitive; a provider
+// package is reached only through the provider registry, as the PTY manager
+// reaches it (WP1 rule R4: no deep import into a provider package).
 // The two beta.9 A2 doors are the exceptions, as they were in the PTY manager: a
 // channel envelope and the quit keys are written to the session's terminal
 // process itself, never through writePty's duplicate guard, and each only
@@ -69,17 +95,18 @@
 import type { BrowserWindow } from 'electron'
 import type { IPty } from 'node-pty'
 import { getProvider } from '../providers'
-import type { ExitKey, SessionRunScreen } from '../providers/types'
+import type { ExitKey, RunScreenTyping, SessionRunScreen } from '../providers/types'
 import type { ProviderId } from '../../shared/types'
+import { PROVIDER_IDS } from '../../shared/providers'
 import { IPC } from '../../shared/ipc-channels'
-import { codexPromptKeeps } from '../../shared/codex-screen'
 import { TMUX_WHEEL_EXIT_KEY } from '../../shared/tmux-wheel'
 import type { SubmitTextResult, AskConductorNotice, PromptButtonResult } from '../../shared/types'
 import { MARKER_FALLBACK_FLUSH_MS } from '../canvas/canvas-marker-queue'
-import { queueClaudeMarkerLine } from '../canvas/claude-marker-typing'
 import { logInfo } from '../debug-logger'
 import { PasteQueue } from '../paste-queue'
 import { runChunkedWrite, WRITE_CHUNK_SIZE, WRITE_CHUNK_DELAY } from '../pty-chunked-write'
+import { isRemoteHelperTab } from '../remote-helper'
+import { PROMPT_ENTER_DELAY_MS } from './enter-delay'
 
 /** What the PTY manager lends this module, registered when it loads. */
 export interface SessionInputPorts {
@@ -91,10 +118,14 @@ export interface SessionInputPorts {
   /** Whether the session's launch wrapped its CLI in a tmux persistence
    *  session on the host (an SSH Persistent session). */
   tmuxWrapped: (sessionId: string) => boolean
-  /** Whether the session runs Codex now (a live PTY started as a Codex session). */
-  isCodexSession: (sessionId: string) => boolean
-  /** Whether the session's Codex launched as Ask Conductor (isAsk). */
-  isCodexAskSession: (sessionId: string) => boolean
+  /** 2.1.3-beta.18 section 4: the provider whose CLI the session's terminal
+   *  runs now (the one its live PTY was started for; for a Terminal only SSH
+   *  tab whose launch line the app typed, the SSH surface's, as the quit keys
+   *  read it), or null: a plain shell, or no session. Every door types
+   *  through that provider's run screen, and only through it. */
+  providerOf: (sessionId: string) => ProviderId | null
+  /** Whether the PTY manager recorded the session as an Ask Conductor launch whose later questions this module types (its codexAskSessions: today only a Codex session launched as Ask; a Claude Code Ask session is not recorded, so its hand-off takes nothing here, and a new provider's Ask launch must be recorded there before its ask member is reached). */
+  isAskSession: (sessionId: string) => boolean
 }
 
 let ports: SessionInputPorts | null = null
@@ -112,46 +143,88 @@ function port(): SessionInputPorts {
   return ports
 }
 
-/** WP2 PR 4, P4.1: the Codex package's reading of each run's screen (its pane,
- *  or since 2.1.3-beta.14 B2 a held run's holder's screen) and its submit
- *  primitive (providers/codex/session-screen.ts), from the registered
+/** 2.1.3-beta.18 section 4 (aicc_planning#432): the run screen of the
+ *  provider that runs `sessionId` (the port's providerOf), from the registered
  *  provider: main reaches a provider package only through the registry,
- *  never by importing it. Undefined when none is registered. The PTY manager
- *  resizes and closes each run's reading through this one copy (it opens and
- *  feeds it through its provider's runScreen at the launch). Only the
- *  PTY manager imports it, and session-input-ownership.test.ts counts a
- *  submit on what it returns as typing, outside this module. */
-export function codexRunScreen(): SessionRunScreen | undefined {
-  try { return getProvider('codex').runScreen } catch { return undefined }
+ *  never by importing it, and never by a provider's name. Undefined for a
+ *  session no provider runs, or whose provider is not registered or has no
+ *  run screen. (It replaces codexRunScreen, which fetched the Codex package's
+ *  by name for every session.) Throws before the PTY manager registers its
+ *  ports, as every door does. */
+function screenOf(sessionId: string): SessionRunScreen | undefined {
+  const p = port()
+  let id: ProviderId | null
+  try { id = p.providerOf(sessionId) } catch { return undefined }
+  if (!id) return undefined
+  try { return getProvider(id).runScreen } catch { return undefined }
 }
 
-/**
- * #85 — submit a programmatic LINE into a session (the watchdog's retry into a
- * Claude Code session, through submitRetry), leaving tmux copy-mode first when
- * the session is tmux-wrapped.
- *
- * The wheel now opens tmux's scrollback view on an SSH Persistent session, and
- * copy-mode SWALLOWS input: a user who scrolled up to read something and then
- * walked away leaves the pane in a state where the watchdog's rate-limit retry
- * would go to the scrollback viewer instead of claude, and the session would
- * simply never resume. The leave key is prepended unconditionally for a wrapped
- * session because main cannot observe copy-mode: outside it, tmux's root table
- * binds that key to a silent no-op, so the cost of being wrong is nothing
- * (verified against tmux 3.4, 2026-09-20). Untouched for every other session.
- */
-export function submitLine(sessionId: string, line: string): void {
-  const prefix = port().tmuxWrapped(sessionId) ? TMUX_WHEEL_EXIT_KEY : ''
-  port().write(sessionId, `${prefix}${line}\r`)
+/** A door the session's provider has no member for: nothing is typed (never
+ *  another provider's way), and one log line says so, by the session and the
+ *  door only. */
+function notTaken(sessionId: string, what: string): void {
+  logInfo(`[session-input] ${sessionId}: ${what} was not taken: the session's provider has no rule for it, so nothing was typed`)
 }
 
-/** 2.1.3-beta.10 section A2: how long a Codex session's Watchdog retry waits
- *  for Codex's ready, empty composer before it answers not delivered. */
+/** What a door hands a run screen's member (RunScreenTyping) for `run`, the
+ *  session's terminal process when the door was asked: the write port, the
+ *  tmux leave key on an SSH Persistent session (read now, when the door is
+ *  asked), whether the session is a tab through the session helper on its
+ *  machine (wholeWrites, read now too, from the remote helper's own record of
+ *  the tabs it started), whether the run is still the session's, and
+ *  textSettled.
+ *  #85: the wheel opens tmux's scrollback view on an SSH Persistent session,
+ *  and copy-mode swallows input, so a pane the user scrolled up in would take
+ *  a retry or a prompt instead of the CLI. The leave key is given for every
+ *  wrapped session because main cannot see copy-mode: outside it, tmux's root
+ *  table binds that key to nothing (verified against tmux 3.4, 2026-09-20). */
+function typingFor(sessionId: string, run: IPty | undefined): RunScreenTyping {
+  const p = port()
+  return {
+    leave: p.tmuxWrapped(sessionId) ? TMUX_WHEEL_EXIT_KEY : '',
+    wholeWrites: isRemoteHelperTab(sessionId),
+    live: () => !!run && p.run(sessionId) === run,
+    write: (data) => p.write(sessionId, data),
+    settled: (data, delayMs) => textSettled(data, delayMs),
+  }
+}
+
+/** Every registered provider's run screen, each handed to `each`. */
+function eachRunScreen(each: (screen: SessionRunScreen) => void): void {
+  for (const id of PROVIDER_IDS) {
+    let screen: SessionRunScreen | undefined
+    try { screen = getProvider(id).runScreen } catch { continue }
+    if (screen) each(screen)
+  }
+}
+
+/** 2.1.3-beta.18 section 4: a session's run ended or its session went (the
+ *  PTY manager's launch failure and teardown): each registered provider's run
+ *  screen closes its reading of it, if it has one (a submission still
+ *  waiting on it reports the session gone and types nothing more). Every
+ *  provider's, not the one providerOf names: by then the session's terminal
+ *  may be gone. A run screen with nothing for the session does nothing. */
+export function closeRunScreens(sessionId: string): void {
+  eachRunScreen((screen) => screen.close(sessionId))
+}
+
+/** 2.1.3-beta.18 section 4: the PTY manager's resize of a session's terminal,
+ *  for each registered provider's reading of it (a holder keeps its own size;
+ *  a run screen with nothing for the session does nothing). */
+export function resizeRunScreens(sessionId: string, cols: number, rows: number): void {
+  eachRunScreen((screen) => screen.resize(sessionId, cols, rows))
+}
+
+/** 2.1.3-beta.10 section A2: how long the Watchdog's retry waits for a CLI's
+ *  ready, empty composer, where its provider's rule reads one (Codex's),
+ *  before it answers not delivered. */
 export const RETRY_CODEX_READY_WAIT_MS = 5_000
 
 /**
  * 2.1.3-beta.10 section A2 (aicc_planning #336): the Watchdog's retry into a
- * session, by its CLI's rule. The Watchdog decides when to retry and what;
- * this decides only how the retry is typed.
+ * session, by its CLI's rule (since 2.1.3-beta.18 section 4 the retry member
+ * of the run screen of the provider that runs it). The Watchdog decides when
+ * to retry and what; this decides only how the retry is typed.
  *
  * - A Codex session's goes through the Codex package's submit primitive, as a
  *   canvas marker's and Ask Conductor's question do: typed only at Codex's
@@ -165,30 +238,40 @@ export const RETRY_CODEX_READY_WAIT_MS = 5_000
  *   one it was sent for", is asked before each poll and just before the text
  *   is typed: an incident that is over leaves the retry untyped (PR #746
  *   review).
- * - Every other session's (Claude Code's: on this computer, held by the
- *   session helper, or over SSH) is submitLine's, byte for byte, and answers
- *   nothing. It is typed at once, as the Watchdog decides, so `stillWanted`
- *   has nothing to guard there.
+ * - A Claude Code session's (on this computer, held by the session helper,
+ *   or over SSH) is the leave key on an SSH Persistent session, then the
+ *   line and Enter, in one write, and
+ *   answers nothing. It is typed at once, as the Watchdog decides, so
+ *   `stillWanted` has nothing to guard there. In a tab through the session
+ *   helper on its machine (2.1.3-beta.18 fix round) the Enter is its own
+ *   write PROMPT_ENTER_DELAY_MS after the line's last slice, and only while
+ *   the run is still the one the line went to, as a prompt button's Send
+ *   goes: there a line and its Enter in one write reach Claude Code as one
+ *   read, and in a read of 64 characters or more the Enter stays in the text.
+ * - A session whose provider has no retry rule (or no provider, or none
+ *   registered) gets nothing typed, one log line, and the answer not
+ *   delivered (`session-gone`), so the Watchdog logs it.
  *
  * Throws before the PTY manager registers its ports, as every door does.
  */
 export function submitRetry(sessionId: string, text: string, stillWanted?: () => boolean): void | Promise<SubmitTextResult> {
-  if (port().isCodexSession(sessionId)) {
-    // The primitive answers a session whose screen it does not read itself.
-    const screen = codexRunScreen()
-    if (!screen) return Promise.resolve({ delivered: false, reason: 'session-gone' })
-    return screen.submit(sessionId, text, {
-      readyWaitMs: RETRY_CODEX_READY_WAIT_MS,
-      readyBy: Date.now() + RETRY_CODEX_READY_WAIT_MS,
-      ...(stillWanted ? { stillWanted } : {}),
-    })
+  const screen = screenOf(sessionId)
+  if (!screen?.retry) {
+    notTaken(sessionId, 'a Watchdog retry')
+    return Promise.resolve({ delivered: false, reason: 'session-gone' })
   }
-  submitLine(sessionId, text)
+  return screen.retry(sessionId, text, {
+    readyWaitMs: RETRY_CODEX_READY_WAIT_MS,
+    readyBy: Date.now() + RETRY_CODEX_READY_WAIT_MS,
+    ...(stillWanted ? { stillWanted } : {}),
+    enterDelayMs: PROMPT_ENTER_DELAY_MS,
+  }, typingFor(sessionId, port().run(sessionId)))
 }
 
 /** #333: how long a prompt button's Enter follows the last slice of its text
- *  (the delay the renderer's Codex rule uses, codexComposer.ts). */
-export const PROMPT_ENTER_DELAY_MS = 300
+ *  (the delay the renderer's Codex rule uses, codexComposer.ts). Set in
+ *  ./enter-delay.ts, which the session helper's terminal reads too. */
+export { PROMPT_ENTER_DELAY_MS }
 /** #333: the same text pressed again for a session within this long is
  *  dropped (the window of writePty's duplicate guard, which a write that does
  *  not end in Enter no longer reaches). */
@@ -235,44 +318,31 @@ async function textSettled(data: string, delayMs: number = PROMPT_ENTER_DELAY_MS
  * had when the press was taken (submitPrompt). A press that waited behind
  * another while the session restarted types nothing into the new process.
  * Every typed outcome ends only once its text has settled (textSettled), so
- * the next press cannot land between its slices. Never rejects: a write that
- * throws is the session gone.
+ * the next press cannot land between its slices. Since 2.1.3-beta.18
+ * section 4 a Send is the prompt member of the run screen of the provider
+ * that runs the session, handed the door's waits and the run; "Type it only"
+ * is this door's own, for any provider with that member; a provider without
+ * it takes nothing (`session-gone`, and one log line). Never rejects: a
+ * write that throws is the session gone.
  */
 async function typePrompt(sessionId: string, text: string, mode: PromptButtonMode, pressedFor: IPty | undefined): Promise<PromptButtonResult> {
   const gone: PromptButtonResult = { outcome: 'not-sent', reason: 'session-gone' }
   try {
-    const p = port()
+    const typing = typingFor(sessionId, pressedFor)
     // No process: writePty would hold the text for a later start.
-    const live = (): boolean => !!pressedFor && p.run(sessionId) === pressedFor
-    if (!live()) return gone
-    const leave = p.tmuxWrapped(sessionId) ? TMUX_WHEEL_EXIT_KEY : ''
-    const data = `${leave}${text}`
-    if (mode === 'send' && p.isCodexSession(sessionId)) {
-      if ([...text].length > PROMPT_CODEX_MAX_CODE_POINTS) return { outcome: 'not-sent', reason: 'refused-text' }
-      // The primitive answers a session whose screen it does not read itself.
-      const screen = codexRunScreen()
-      const result: SubmitTextResult = screen
-        ? await screen.submit(sessionId, text, { readyWaitMs: PROMPT_CODEX_READY_WAIT_MS })
-        : { delivered: false, reason: 'session-gone' }
-      if (result.delivered) return { outcome: 'sent' }
-      if (result.reason !== 'refused-text') return { outcome: 'not-sent', reason: result.reason }
-      // Refused before anything was typed (a control character, a line
-      // break, a character Codex's composer drops): typed with no Enter, as a
-      // press always left it on Codex, for the user to check and send.
-      if (!live()) return gone
-      p.write(sessionId, data)
-      await textSettled(data)
-      return { outcome: 'typed', reason: 'refused-text' }
+    if (!typing.live()) return gone
+    const screen = screenOf(sessionId)
+    if (!screen?.prompt) {
+      notTaken(sessionId, 'a prompt button\'s text')
+      return gone
     }
-    p.write(sessionId, data)
+    if (mode === 'send') {
+      return await screen.prompt(sessionId, text, { readyWaitMs: PROMPT_CODEX_READY_WAIT_MS, maxCodePoints: PROMPT_CODEX_MAX_CODE_POINTS, enterDelayMs: PROMPT_ENTER_DELAY_MS }, typing)
+    }
+    const data = `${typing.leave}${text}`
+    typing.write(data)
     await textSettled(data)
-    if (mode === 'type') return { outcome: 'typed' }
-    if (!live()) return gone
-    // Its own write, with the leave key again: the wheel may have opened
-    // tmux's scrollback since the text went, and copy-mode would take a bare
-    // Enter. Outside copy-mode the key does nothing (submitLine).
-    p.write(sessionId, `${leave}\r`)
-    return { outcome: 'sent' }
+    return { outcome: 'typed' }
   } catch {
     return gone
   }
@@ -294,21 +364,25 @@ function promptOutcomeWords(result: PromptButtonResult): string {
  *
  * - Type: the text through the write port (writePty: its 256-byte slices and
  *   its launch-pending buffer still apply), after the tmux leave key for an
- *   SSH Persistent session as submitLine does, and no Enter.
- * - Send, a session that is not Codex (Claude Code, on this computer, held by
- *   the session helper or over SSH): the text as above, then Enter as its own
+ *   SSH Persistent session as the Watchdog's retry does, and no Enter.
+ * - Send, a Claude Code session (on this computer, held by the session
+ *   helper or over SSH; the Claude Code package's prompt member since
+ *   2.1.3-beta.18 section 4): the text as above, then Enter as its own
  *   write PROMPT_ENTER_DELAY_MS after the text's last slice went (textSettled),
  *   and only while the session's terminal process is still the one the text
  *   went to; on an SSH Persistent session the Enter's write starts with the
  *   leave key too. The Enter never rides in the text's write: Codex takes one
  *   write of both as a paste and never submits it, and #333 reports a session
  *   on this computer where such a write was typed and not sent.
- * - Send, a Codex session: the Codex package's submit primitive, as canvas
+ * - Send, a Codex session (the Codex package's prompt member): the Codex
+ *   package's submit primitive, as canvas
  *   notes and Ask Conductor use it, with PROMPT_CODEX_READY_WAIT_MS to wait
  *   for the ready, empty composer; its answer is the answer. A text it refuses
  *   before typing is typed with no Enter, and the answer says so. A text over
  *   PROMPT_CODEX_MAX_CODE_POINTS is not handed to it: nothing is typed, and
  *   the answer is not sent (`refused-text`).
+ * - A session whose provider has no prompt member (or no provider): nothing
+ *   is typed, in either mode, and the answer is not sent (`session-gone`).
  *
  * A press types only into the terminal process the session had when it was
  * pressed: none, or one replaced while the press waited, takes nothing
@@ -324,9 +398,9 @@ function promptOutcomeWords(result: PromptButtonResult): string {
  * names a prompt by its length only. Throws before the PTY manager registers
  * its ports, as every door does; otherwise never rejects.
  *
- * The rule for a session that is not Codex lives here, beside submitLine,
- * until main can read a Claude Code screen (S13); it then belongs in the
- * Claude Code package.
+ * Claude Code's rule lived here, in this module, until 2.1.3-beta.18
+ * section 4 moved it, unchanged, into the Claude Code package's run screen
+ * (providers/claude/run-screen.ts).
  */
 export function submitPrompt(sessionId: string, text: string, mode: PromptButtonMode): Promise<PromptButtonResult> {
   const pressedFor = port().run(sessionId)
@@ -370,7 +444,9 @@ export const IMAGE_CODEX_READY_WAIT_MS = PROMPT_CODEX_READY_WAIT_MS
 
 /** What the image door did: `sent`; `not-taken`, an image it did not paste
  *  (an SSH Persistent session, or since 2.1.3-beta.17 C6 a Codex session it
- *  could not paste the image into), which the caller then sends its own way,
+ *  could not paste the image into, or since 2.1.3-beta.18 section 4 a
+ *  session whose provider has no image rule), which the caller then sends
+ *  its own way (for that last one, none: the renderer types nothing),
  *  with `left` when the paste main typed may still be at the prompt (it could
  *  not take it back for certain), so the caller types nothing more; or
  *  `not-sent` and why. */
@@ -378,9 +454,6 @@ export type ImageSubmitResult =
   | { outcome: 'sent' }
   | { outcome: 'not-taken'; left?: true }
   | { outcome: 'not-sent'; reason: 'session-gone' | 'refused-text' }
-
-const PASTE_START = '\u001b[200~'
-const PASTE_END = '\u001b[201~'
 
 /** Whether `text` holds a control character (C0, DEL or C1): in a path one
  *  could end the bracketed paste early and be read as keys. */
@@ -392,44 +465,25 @@ function hasControlChar(text: string): boolean {
   return false
 }
 
-/** C6: one image into a Codex session's run `pressedFor` only, by the Codex
- *  package's image rule (SessionRunScreen.submitImage), reached through the
- *  registry. What that rule could not paste is `not-taken`, the log saying
- *  why: with `left` when what it typed may still be at the prompt, so the
- *  caller types nothing more and says the image is there; without, the
- *  caller types today's line by its own Codex rule. Never rejects. */
-async function typeCodexImage(sessionId: string, imagePath: string, sentence: string, pressedFor: IPty): Promise<{ result: ImageSubmitResult; why: string }> {
+/** One image into the run `pressedFor` only (submitImage), by the image
+ *  member of `screen`, the run screen of the provider that ran the session
+ *  when the image was asked for (2.1.3-beta.18 section 4; C6's Codex rule and
+ *  X1.2's Claude Code paste are those packages' members). What the member
+ *  could not paste is `not-taken`, the log saying why: with `left` when what
+ *  it typed may still be at the prompt, so the caller types nothing more and
+ *  says the image is there; without, the caller types its own line. A
+ *  provider with no image member takes nothing (`not-taken`). Never rejects:
+ *  a write that throws is the session gone. */
+async function typeImage(sessionId: string, imagePath: string, sentence: string, pressedFor: IPty, screen: SessionRunScreen | undefined): Promise<{ result: ImageSubmitResult; why: string }> {
+  const gone: { result: ImageSubmitResult; why: string } = { result: { outcome: 'not-sent', reason: 'session-gone' }, why: '' }
   try {
-    if (port().run(sessionId) !== pressedFor) return { result: { outcome: 'not-sent', reason: 'session-gone' }, why: '' }
-    const screen = codexRunScreen()
-    if (!screen?.submitImage || !screen.has(sessionId)) return { result: { outcome: 'not-taken' }, why: 'main reads no screen for it' }
-    const r = await screen.submitImage(sessionId, imagePath, sentence, { readyWaitMs: IMAGE_CODEX_READY_WAIT_MS })
+    const typing = typingFor(sessionId, pressedFor)
+    if (!typing.live()) return gone
+    if (!screen?.image) return { result: { outcome: 'not-taken' }, why: 'the session\'s provider has no image rule, so main typed nothing' }
+    const r = await screen.image(sessionId, imagePath, sentence, { readyWaitMs: IMAGE_CODEX_READY_WAIT_MS, settleMs: IMAGE_PASTE_SETTLE_MS, enterDelayMs: IMAGE_ENTER_DELAY_MS }, typing)
     if (r.pasted) return { result: { outcome: 'sent' }, why: '' }
     if (r.reason === 'session-gone' || r.reason === 'refused-text') return { result: { outcome: 'not-sent', reason: r.reason }, why: '' }
     return { result: r.left ? { outcome: 'not-taken', left: true } : { outcome: 'not-taken' }, why: `${r.reason}${r.left ? ', what it typed may still be at the prompt' : ''}` }
-  } catch {
-    return { result: { outcome: 'not-sent', reason: 'session-gone' }, why: '' }
-  }
-}
-
-/** One image, typed into `pressedFor` only (submitImage). Never rejects: a
- *  write that throws is the session gone. */
-async function typeImage(sessionId: string, imagePath: string, sentence: string, pressedFor: IPty): Promise<ImageSubmitResult> {
-  const gone: ImageSubmitResult = { outcome: 'not-sent', reason: 'session-gone' }
-  try {
-    const p = port()
-    const live = (): boolean => p.run(sessionId) === pressedFor
-    if (!live()) return gone
-    const paste = `${PASTE_START}${imagePath}${PASTE_END}`
-    p.write(sessionId, paste)
-    await textSettled(paste, IMAGE_PASTE_SETTLE_MS)
-    if (!live()) return gone
-    const words = ` ${sentence}`
-    p.write(sessionId, words)
-    await textSettled(words, IMAGE_ENTER_DELAY_MS)
-    if (!live()) return gone
-    p.write(sessionId, '\r')
-    return { outcome: 'sent' }
   } catch {
     return gone
   }
@@ -446,9 +500,12 @@ async function typeImage(sessionId: string, imagePath: string, sentence: string,
  * its own write through the write port (writePty), and each only while the
  * session's terminal process is still the one it had when this was asked.
  * The Enter always goes: the prompt buttons' Type it only setting is theirs.
+ * (Since 2.1.3-beta.18 section 4 this is the Claude Code package's image
+ * member, handed IMAGE_PASTE_SETTLE_MS and IMAGE_ENTER_DELAY_MS by this door.)
  *
  * A Codex session (2.1.3-beta.17 C6, aicc_planning#415): the Codex package's
- * image rule, reached through the registry (typeCodexImage), since Codex's
+ * image rule, reached through the registry (the Codex package's image member
+ * since 2.1.3-beta.18 section 4), since Codex's
  * submit primitive refuses a control character and a bracketed paste holds
  * two. It waits up to IMAGE_CODEX_READY_WAIT_MS for Codex's ready, empty
  * composer, as a prompt button does, pastes the path, reads Codex's image
@@ -467,7 +524,8 @@ async function typeImage(sessionId: string, imagePath: string, sentence: string,
  * and says the image is at the prompt and was not sent.
  *
  * Not this door's (`not-taken`, nothing typed; the renderer keeps its own way
- * for it): an SSH Persistent session (tmux). The renderer asks only for a
+ * for it): an SSH Persistent session (tmux), and (2.1.3-beta.18 section 4)
+ * a session whose provider has no image member. The renderer asks only for a
  * session on this computer: an SSH session gets the image through the host
  * fetch tool, and a plain terminal never reaches here. A path or sentence
  * holding a control character, an empty path, or one over its cap is refused
@@ -493,11 +551,11 @@ export function submitImage(sessionId: string, imagePath: string, sentence: stri
   }
   const pressedFor = p.run(sessionId)
   if (!pressedFor) return Promise.resolve(done({ outcome: 'not-sent', reason: 'session-gone' }))
-  const codex = p.isCodexSession(sessionId)
+  // The provider that runs the session now decides the rule, as the Codex
+  // test did, at the ask and not at the chain's turn.
+  const screen = screenOf(sessionId)
   const before = promptChains.get(sessionId)
-  const go = (): Promise<ImageSubmitResult> => codex
-    ? typeCodexImage(sessionId, imagePath, sentence, pressedFor).then(({ result, why }) => done(result, why))
-    : typeImage(sessionId, imagePath, sentence, pressedFor).then((result) => done(result))
+  const go = (): Promise<ImageSubmitResult> => typeImage(sessionId, imagePath, sentence, pressedFor, screen).then(({ result, why }) => done(result, why))
   const next = before ? before.then(go, go) : go()
   promptChains.set(sessionId, next)
   void next.then(() => { if (promptChains.get(sessionId) === next) promptChains.delete(sessionId) })
@@ -513,32 +571,35 @@ export function submitImage(sessionId: string, imagePath: string, sentence: stri
  * whether it was delivered: Codex never submits one write of a line and its
  * Enter (PB3).
  *
- * Every other session's (Claude Code's) is held, in the order handed in, and
+ * A Claude Code session's is held, in the order handed in, and
  * typed only when the session's own screen reads Claude Code's ready, empty
  * prompt, by the same reading the status strip's controls type through
  * (canvas/claude-marker-typing.ts). Only into the run it was handed for, the
  * session's terminal process (a restart is a new run; a Claude Code started
- * again by hand in the same terminal is not); a session with no run takes
- * nothing and answers not delivered (the session gone), as the branch above
- * does for a session whose screen it does not read, so its canvas is told.
- * Otherwise it answers nothing: a marker the chain drops untyped (held past its bound, its run
- * ended) is told to its canvas by the chain itself. `canvasId`, the canvas
- * the marker was filed on when the caller named one, goes with the line, so
- * the same words filed on two canvases stay two markers.
+ * again by hand in the same terminal is not). It answers nothing: a marker
+ * the chain drops untyped (held past its bound, its run ended) is told to
+ * its canvas by the chain itself. `canvasId`, the canvas the marker was
+ * filed on when the caller named one, goes with the line, so the same words
+ * filed on two canvases stay two markers.
+ *
+ * Since 2.1.3-beta.18 section 4 each of those is the marker member of the
+ * run screen of the provider that runs the session, handed the marker
+ * queue's bound and the run. A session with no run takes nothing and answers
+ * not delivered (the session gone), so its canvas is told; so does a session
+ * whose provider has no marker member, with one log line, and nothing typed.
  */
 export function submitMarker(sessionId: string, line: string, canvasId?: string): void | Promise<SubmitTextResult> {
-  if (port().isCodexSession(sessionId)) {
-    // The primitive answers a session whose screen it does not read itself (review A-8).
-    const screen = codexRunScreen()
-    if (!screen) return Promise.resolve({ delivered: false, reason: 'session-gone' })
-    return screen.submit(sessionId, line, { readyWaitMs: MARKER_FALLBACK_FLUSH_MS })
-  }
   const run = port().run(sessionId)
   if (!run) {
     logInfo(`[canvas-marker] ${sessionId}: no running session, so a marker was not typed`)
     return Promise.resolve({ delivered: false, reason: 'session-gone' })
   }
-  queueClaudeMarkerLine(sessionId, line, () => port().run(sessionId) === run, canvasId)
+  const screen = screenOf(sessionId)
+  if (!screen?.marker) {
+    notTaken(sessionId, 'a canvas marker')
+    return Promise.resolve({ delivered: false, reason: 'session-gone' })
+  }
+  return screen.marker(sessionId, line, { readyWaitMs: MARKER_FALLBACK_FLUSH_MS, ...(canvasId !== undefined ? { canvasId } : {}) }, typingFor(sessionId, run))
 }
 
 /** WP2 PR 4, P4.3: how long an Ask question waits for Codex's ready, empty
@@ -560,7 +621,12 @@ function sendAskNotice(win: BrowserWindow, notice: AskConductorNotice): void {
  * would drop are removed first and the dock told how many (section 10
  * question 6, default A); a question that is not sent is said, with why, and
  * the dock keeps it. The log names the question by its length only. Never
- * rejects.
+ * rejects. Since 2.1.3-beta.18 section 4 this is the ask member of the run
+ * screen of the provider that runs the session (the Codex package's, which
+ * logs it), handed ASK_READY_WAIT_MS and the dock's "removed" notice; the
+ * door keeps the dock's "not delivered" notice. A session whose provider has
+ * no ask member gets nothing typed, one log line, and that notice
+ * (`session-gone`).
  *
  * It does NOT check that the session launched as Ask Conductor: it is for the
  * PTY manager's Ask launch only, which has just put the session among the Ask
@@ -568,20 +634,14 @@ function sendAskNotice(win: BrowserWindow, notice: AskConductorNotice): void {
  * session-input-ownership.test.ts holds it to the PTY manager.
  */
 export async function askQuestion(win: BrowserWindow, sessionId: string, question: string): Promise<SubmitTextResult> {
-  let result: SubmitTextResult
+  let result: SubmitTextResult = { delivered: false, reason: 'session-gone' }
   try {
-    const screen = codexRunScreen()
-    if (!screen?.has(sessionId)) {
-      result = { delivered: false, reason: 'session-gone' }
-    } else {
-      const { text, removed } = codexPromptKeeps(question)
-      if (removed > 0) sendAskNotice(win, { sessionId, kind: 'removed', count: removed })
-      result = text.trim() ? await screen.submit(sessionId, text, { readyWaitMs: ASK_READY_WAIT_MS }) : { delivered: false, reason: 'refused-text' }
-    }
+    const screen = screenOf(sessionId)
+    if (!screen?.ask) notTaken(sessionId, 'an Ask question')
+    else result = await screen.ask(sessionId, question, { readyWaitMs: ASK_READY_WAIT_MS, removed: (count) => sendAskNotice(win, { sessionId, kind: 'removed', count }) })
   } catch {
     result = { delivered: false, reason: 'session-gone' }
   }
-  logInfo(`[codex-ask] ${sessionId}: a question of ${[...question].length} characters ${result.delivered ? 'typed into Codex\'s prompt' : `not delivered (${result.reason})`}`)
   if (!result.delivered) sendAskNotice(win, { sessionId, kind: 'not-delivered', reason: result.reason })
   return result
 }
@@ -589,11 +649,17 @@ export async function askQuestion(win: BrowserWindow, sessionId: string, questio
 /**
  * WP2 PR 4, P4.3: a question for a LIVE Ask session on Codex
  * (askConductor:handOff), through the same door as the launch's. Only a
- * running Codex session that launched as Ask takes one; anything else is the
- * session gone, and nothing is typed.
+ * running session that launched as Ask, of a provider with an ask member
+ * (2.1.3-beta.18 section 4: today Codex's), takes one; anything else is the
+ * session gone, and nothing is typed (one log line for an Ask session whose
+ * provider has no ask member).
  */
 export function handOffAskQuestion(win: BrowserWindow, sessionId: string, question: string): Promise<SubmitTextResult> {
-  if (!port().isCodexSession(sessionId) || !port().isCodexAskSession(sessionId)) return Promise.resolve({ delivered: false, reason: 'session-gone' })
+  if (!port().isAskSession(sessionId)) return Promise.resolve({ delivered: false, reason: 'session-gone' })
+  if (!screenOf(sessionId)?.ask) {
+    notTaken(sessionId, 'an Ask question')
+    return Promise.resolve({ delivered: false, reason: 'session-gone' })
+  }
   return askQuestion(win, sessionId, question)
 }
 

@@ -19,12 +19,15 @@
 // 2.1.3-beta.8, section A4: a second transport. A Claude Code session the
 // session helper holds sends its hook events (PreToolUse too, from
 // 2.1.3-beta.14) through its holder, and the session helper manager hands
-// each one here (helperHookEvent). Such an event gets what the gateway gives
-// its own before the same fan-out: the transcript path through the same
-// shape filter, the feed entry from the gateway's own builder (feedEntryOf:
-// the redaction and the bounding), a ring of its own per session, and
-// HOOKS_EVENT to the renderer in the same shape. It is taken only while the
-// gateway would take its own, read from the gateway at each event.
+// each one here (helperHookEvent). From 2.1.3-beta.18 (ADR-030 S12) a held
+// Codex session does too: its forwarder runs the session helper's hook mode
+// named in its launch's environment, and its events take this same path.
+// Such an event gets what the gateway gives its own before the same fan-out:
+// the transcript path through the same shape filter, the feed entry from the
+// gateway's own builder (feedEntryOf: the redaction and the bounding), a ring
+// of its own per session, and HOOKS_EVENT to the renderer in the same shape.
+// It is taken only while the gateway would take its own, read from the
+// gateway at each event.
 import type { HookEvent } from '../../shared/hook-types'
 import { IPC } from '../../shared/ipc-channels'
 import { onGateway, type HooksGatewayLike } from '../hooks/index'
@@ -100,7 +103,7 @@ export function startHookSignals(): void {
 // ── hook events through the session helper (section A4) ──────────────────────
 
 /** One hook event a session's holder passed on (session-helper/protocol.ts
- *  readEventFrame): the payload as Claude Code wrote it (cut by the hook mode
+ *  readEventFrame): the payload as its CLI wrote it (cut by the hook mode
  *  when it was large, which a top-level `"cut": true` says), untrusted text. */
 export interface HelperHookEvent {
   kind: string
@@ -150,19 +153,26 @@ export function helperHooksTaken(): boolean {
  * and the renderer. Events the holder dropped while no app was attached
  * (`lost`) are logged once per session. None is taken while the gateway would
  * take none (helperHooksTaken).
+ *
+ * `remote` (2.1.3-beta.18, plan section 3.2): the event of a tab through the
+ * session helper on another machine. Its transcript path is a path on that
+ * host: display text the consumers compare (the canvas marker queue, the
+ * background-context rule), never handed to the transcript binder.
  */
-export function helperHookEvent(sessionId: string, e: HelperHookEvent): void {
+export function helperHookEvent(sessionId: string, e: HelperHookEvent, opts: { remote?: boolean } = {}): void {
   if (!helperHooksTaken()) return
   if (typeof e.lost === 'number' && e.lost > 0 && !helperLostLogged.has(sessionId)) {
     helperLostLogged.add(sessionId)
     logWarn(`[hooks] the session helper dropped ${e.lost} hook event(s) of ${sessionId} while the app was not attached`)
   }
   const parsed = e.payload
-  const tp = sanitiseTranscriptPath(parsed.transcript_path)
-  if (tp) {
-    try { transcriptPath(sessionId, tp, 'helper') } catch { /* discovery sink must not break the hook path */ }
-  } else if (parsed.transcript_path !== undefined) {
-    logWarn(`[hooks] dropped an unusable transcript_path from the session helper sid=${sessionId} type=${typeof parsed.transcript_path} length=${typeof parsed.transcript_path === 'string' ? parsed.transcript_path.length : 'n/a'}`)
+  if (opts.remote !== true) {
+    const tp = sanitiseTranscriptPath(parsed.transcript_path)
+    if (tp) {
+      try { transcriptPath(sessionId, tp, 'helper') } catch { /* discovery sink must not break the hook path */ }
+    } else if (parsed.transcript_path !== undefined) {
+      logWarn(`[hooks] dropped an unusable transcript_path from the session helper sid=${sessionId} type=${typeof parsed.transcript_path} length=${typeof parsed.transcript_path === 'string' ? parsed.transcript_path.length : 'n/a'}`)
+    }
   }
   const entry = feedEntryOf(sessionId, e.kind, parsed)
   const ring = helperRings.get(sessionId) ?? []

@@ -25,11 +25,14 @@
 //
 // Starts node children in a temp folder of its own, through the guard; no
 // real CLI. The replacement itself happens only on a POSIX Node 22.15 or
-// later, which no CI test job runs (they run Node 20). On CI the first case
-// takes the child route and the second is skipped (Node 20 has no
-// process.execve); on Windows the first takes the child route and the guard
-// refuses the second's execve before Node is asked. The conformance job's
-// macOS rc leg runs the real launcher through the guard.
+// later. CI's test jobs run Node 24 from 2.1.3-beta.18 (aicc_planning#418), so
+// on macOS and Linux the first case's launcher now replaces itself and the
+// guard refuses the second's execve (first run: CI run 45577050374, both
+// green); on Node 20, which they ran until then, the first took the child
+// route and the second was skipped (no process.execve). On
+// Windows the first takes the child route and the guard refuses the second's
+// execve before Node is asked. The conformance job's macOS rc leg runs the
+// real launcher through the guard.
 import { afterAll, describe, expect, it } from 'vitest'
 import fs from 'node:fs'
 import os from 'node:os'

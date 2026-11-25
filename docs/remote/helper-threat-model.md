@@ -91,7 +91,7 @@ rollback returns to the earlier beta's rows, and every row has a negative test.
   install also checks that ~/.aicc and the device folder are private and that
   the device folder carries this install's owner marker; install makes them
   when they are missing, checks that they are private, and checks the marker
-  when the device folder is already there. No Claude token, MCP config, hooks file or status shim goes to the host.
+  when the device folder is already there. No Claude token, and no address, port or credential of the app's computer, goes to the host. From 2.1.3-beta.18 a remote session's own settings.json and mcp.json go to `~/.aicc/<did>/sessions/<sid>/` (0700, files 0600) by the fixed `files` script, contents on standard input; besides the host user's own `~/.claude/settings.json` keys (less `mcpServers`, written back to that host only, as the usual SSH session file carries them), they name the helper's status, hook and relay modes, its store and the session id only, and go at the session's end (`unsession`) or at the next Check (`sweep`). The host settings files a launch reads first (`reads`) are printed as hex and parsed in the app as data, never run. Until the security round, a tab through the helper has the tool set an SSH tab has today, served through its holder with no credential.
   No value a host reported is put on a command line. Remove also takes away
   the holders' run folder, /tmp/aicc-<uid>, when it is the user's and empty
   (rmdir only). A machine's first connection takes an unknown host key
@@ -238,6 +238,12 @@ rollback returns to the earlier beta's rows, and every row has a negative test.
 - The caller is the host, not only the CLI: any process that can reach the
   session socket, the user's other processes on that device included (the
   accepted boundary), can call the session's tools under its allow-list.
+- **As built in 2.1.3-beta.18 (section 3.2):** a tab through the session
+  helper on another machine reaches the Conductor's tools through its holder
+  (the relay, `mcp` frames). It is served as the tab's session with no
+  credential, and it gets the tool set an SSH tab has today. The remote
+  allow-list above lands with the security round before any default
+  (aicc_planning #320).
 - **Default deny, from R2.** The Conductor server marks every SSH session
   remote, and a remote session gets only the tools on the remote allow-list,
   one list on every route (before R8 and on the side channel). The list is a
@@ -778,6 +784,12 @@ rollback returns to the earlier beta's rows, and every row has a negative test.
   spawn; dropped at every other end, before any launch of the tab mints its
   own. An adversarial pass of it is owed to the security round before 2.1
   stable (aicc_planning #320).
+- **The Codex hook forwarder runs the session helper its session names (from
+  2.1.3-beta.18, Windows, section 5).** For a held Codex session, the
+  forwarder runs the helper named by `AICC_HELPER_PATH` in its environment
+  to hand an event to the session's holder, in place of posting it to the
+  hooks gateway. An adversarial pass of it is owed to the security round
+  before 2.1 stable (aicc_planning #320).
 
 ## 4 Review
 

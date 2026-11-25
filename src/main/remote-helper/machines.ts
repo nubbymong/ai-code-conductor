@@ -209,9 +209,19 @@ const REFUSED: Record<string, string> = {
   'cannot-place': 'the file could not be put in place',
   'cannot-remove': 'its folder could not be removed',
   'still-there': 'its folder is still there',
+  // A session's own files (2.1.3-beta.18 section 3.2: the files, unsession and sweep scripts).
+  'bad-session': 'the session id is not one the helper takes',
+  'cannot-make-sessions-folder': 'the sessions folder could not be made there',
+  'sessions-folder-not-private': 'the sessions folder there is not a private folder of yours',
+  'cannot-make-session-folder': 'the session\'s folder could not be made there',
+  'session-folder-not-private': 'the session\'s folder there is not a private folder of yours',
+  'short-file': 'a file did not arrive whole',
+  'file-is-a-folder': 'a folder there has the name of one of the session\'s files',
+  held: 'its holder still runs',
 }
 
-function refusalText(word: string | null): string {
+/** A refusal word a script printed, as a sentence. */
+export function refusalText(word: string | null): string {
   return (word && REFUSED[word]) || `it refused (${word ?? 'no reason given'})`
 }
 
@@ -484,6 +494,8 @@ export class RemoteMachines {
     }
     // 4. version and self-test, through the launcher
     const checked = await this.selfCheck(target, did, install, helper)
+    // 5. at a Check, the session folders whose holder is gone (2.1.3-beta.18 section 3.2)
+    if (checked.ok && !a.first) await this.sweep(target, did, install, helper)
     const record: RemoteMachineRecord = {
       did, host: target.host, port: target.port, user: target.user, label: a.label, addedAt: a.addedAt,
       os, arch, home, shell, shellIsSh, claudePath,
@@ -507,6 +519,20 @@ export class RemoteMachines {
     const r = await runScript(this.deps.runner, target, 'discard', [nonce, did, install, staged]).catch((): ExecResult => ({ code: null, stdout: '', stderr: '', timedOut: false }))
     const res = readScriptResult(r.stdout, nonce)
     if (!res?.ok) this.deps.log(`[remote-helper] ${target.host}: the upload that did not match could not be removed (${refusalText(res?.refused ?? null)})`)
+  }
+
+  /** The session folders a tab's end could not remove (its link was down, the
+   *  app quit first): each one whose holder is gone goes, after list mode
+   *  removes the records of holders that are gone. One log line; a failure
+   *  changes nothing of the Check's answer. */
+  private async sweep(target: SshTarget, did: string, install: string, helper: BundledLinuxHelper): Promise<void> {
+    const nonce = newNonce()
+    const r = await runScript(this.deps.runner, target, 'sweep', [nonce, did, install, helper.folder, helper.sha256]).catch((): ExecResult => ({ code: null, stdout: '', stderr: '', timedOut: false }))
+    const failed = sshFailure(r)
+    const res = failed ? null : readScriptResult(r.stdout, nonce)
+    const swept = res?.values.get('swept') ?? ''
+    if (!res?.ok) this.deps.log(`[remote-helper] ${target.host}: its session folders were not checked (${failed ?? (res ? refusalText(res.refused) : 'no answer')})`)
+    else if (/^[1-9][0-9]{0,5}$/.test(swept)) this.deps.log(`[remote-helper] ${target.host}: removed ${swept} session folder(s) whose holder is gone`)
   }
 
   /** `version` then `selftest`, both through the launcher's hash check. */
