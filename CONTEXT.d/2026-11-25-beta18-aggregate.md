@@ -31,7 +31,8 @@ bytes, the terminal's buffer, the pictures or the pixel reads. No app cause
 was found, so nothing was changed; #425 stays open for the owner's own step.
 
 **The release commit.** Version 2.1.3-beta.18; the changelog entry (dated
-2026-11-25) gains its highlights line and says the remote preview is a
+2026-11-26, the ship day, since 762fefc1; 2026-11-25 before) gains its
+highlights line and says the remote preview is a
 Windows one; CHANGELOG.md regenerated. The surface sweep: app-knowledge
 names what the remote preview does not carry yet (SSH Persistent, password
 sign-in, containers, post-connect commands, macOS and Windows hosts, Codex
@@ -107,3 +108,13 @@ the broadcast line read against beta.16, but every beta updater reads from
 2.1.2, where sending to every session is itself new; it is now "Send a prompt
 to every session." And the remote preview line names its status line and
 tools, which is what beta.18 adds.
+
+**Before the cut.** The changelog entry's date moved to 2026-11-26, the ship
+day (762fefc1). CI on that commit was red in installer-nsis-behaviour's why
+probe: the copy's exit code read 0, and the end through the held handle still
+succeeded. Windows sets a process's exit code before it signals the process
+object (ExitProcess's documented order), and TerminateProcess fails only once
+the process has terminated, so an end between the two succeeds. The case had
+raced since #725. The probe now also waits for that signal, on a second
+handle that can only wait, and the case asserts it (5bfdefac). Test harness
+only: build/installer.nsh is unchanged.
