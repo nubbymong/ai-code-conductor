@@ -201,3 +201,63 @@ describe('SSH account pending shimmer (SshAuthPending)', () => {
     expect(q('[data-testid="session-pill-account"]')).not.toBeNull()
   })
 })
+
+// 2.1.3-beta.18 release smoke (crop-helper-header-pills.png, k-question-a2.png
+// against d-today-ccshow.png): a Claude Code tab through the session helper on
+// a Linux machine never reports its account (the status line does not carry
+// it yet), so its header showed the three loading pills for 20 s and then
+// nothing, where today's SSH tab shows its account. It now says so at once.
+describe('a tab through the session helper (no account through the helper yet)', () => {
+  const HELPER = 'through-helper'
+  let pushes: Array<(msg: { state: string; info?: string }) => void>
+  const ssh = (state: string | null) => {
+    pushes = []
+    ;(globalThis as any).window.electronAPI.ssh = {
+      getState: vi.fn(async () => (state ? { state } : null)),
+      onFlowState: vi.fn((_id: string, cb: (msg: { state: string; info?: string }) => void) => { pushes.push(cb); return () => {} }),
+    }
+  }
+  const settle = async () => { for (let i = 0; i < 4; i++) await act(async () => { await Promise.resolve() }) }
+
+  it('shows one plain account pill that says the account is not shown, never the loading pills', async () => {
+    ssh(HELPER)
+    render(sshNoIdentity())
+    await settle()
+    expect(q('[data-testid="session-auth-pending"]')).toBeNull()
+    expect(container.querySelectorAll('[data-testid="session-auth-skeleton"]').length).toBe(0)
+    const pill = q('[data-testid="session-pill-account-not-shown"]') as HTMLElement | null
+    expect(pill?.textContent).toBe('Account not shown through the helper yet')
+    expect(pill?.getAttribute('title')).toContain('session helper')
+    // No sign-in pills: nothing about this tab's sign-in is known here.
+    expect(q('[data-testid="session-pill-claudeai"]')).toBeNull()
+    expect(q('[data-testid="session-pill-claudecode"]')).toBeNull()
+  })
+
+  it('follows main\'s push: a tab started through the helper after the header mounted', async () => {
+    ssh('connecting')
+    render(sshNoIdentity())
+    await settle()
+    expect(q('[data-testid="session-auth-pending"]')).not.toBeNull()
+    act(() => { for (const p of pushes) p({ state: HELPER }) })
+    expect(q('[data-testid="session-auth-pending"]')).toBeNull()
+    expect(q('[data-testid="session-pill-account-not-shown"]')).not.toBeNull()
+  })
+
+  it('today\'s SSH tab with no identity yet still shows the loading pills', async () => {
+    ssh('claude-running')
+    render(sshNoIdentity())
+    await settle()
+    expect(q('[data-testid="session-auth-pending"]')).not.toBeNull()
+    expect(q('[data-testid="session-pill-account-not-shown"]')).toBeNull()
+  })
+
+  it('an account that does arrive wins: the usual pills', async () => {
+    ssh(HELPER)
+    useAccountProfilesStore.setState({ profiles: [{ id: 'profile-ssh', name: 'Work', accountEmail: 'remote@x.com' } as any] })
+    useAccountAuthStore.setState({ byProfile: { 'profile-ssh': { cliAuthed: true, web: 'active', loading: false, fetchedAt: 1 } } })
+    render(sshNoIdentity({ accountEmail: 'remote@x.com' }))
+    await settle()
+    expect(q('[data-testid="session-pill-account-not-shown"]')).toBeNull()
+    expect(q('[data-testid="session-pill-account"]')).not.toBeNull()
+  })
+})

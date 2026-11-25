@@ -28,7 +28,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 - A Claude Code tab through the session helper (the remote sessions preview) now runs at the effort level set in your Claude Code settings on that machine, as a usual SSH tab does; before, it ran at the model's default effort.
-- A full uninstall on Windows now also removes the folders a Codex tab's resume list left in your temp folder, and finds the same temp folder the app used even when TEMP and TMP point to different places.
+- A full uninstall on Windows now also removes the folders a Codex session's resume list left in your temp folder, and finds the same temp folder the app used even when TEMP and TMP point to different places.
 - On Windows, with Claude Code and Codex sessions through the session helper switched on, a Codex session kept running through an app update now keeps the hook events it makes during the update, so its tab is marked when a turn ends or asks for approval. This holds for a Codex session started on this version or later.
 
 ## [2.1.3-beta.17] - 2026-11-25

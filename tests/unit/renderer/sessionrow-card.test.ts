@@ -55,6 +55,28 @@ describe('SessionRow card', () => {
     expect(container.querySelector('[data-testid="session-row-ordinal"]')).toBeNull()
   })
 
+  // 2.1.3-beta.18 release smoke (crop-sidebar-attention-card.png): with
+  // ATTENTION, SSH, the working mark, the type mark and XHIGH on one card,
+  // the badges took the whole row and "S18 Ubuntu A" read "S..". jsdom cannot
+  // lay out a grid, so this holds the structure that prevents it: the name
+  // column keeps a floor of about ten characters (its own length when
+  // shorter), in the name's own type size, and the badge cluster may wrap.
+  it('a name keeps about ten characters beside a full badge row, and the badges wrap', () => {
+    render(root, { label: 'S18 Ubuntu A', sessionType: 'ssh', effortLevel: 'xhigh', effortLive: true }, { needsAttention: true })
+    const nm = container.querySelector('.nm') as HTMLElement
+    expect(nm.style.minWidth).toBe('10ch')
+    expect(nm.className).toContain('text-[13px]')
+    const cluster = container.querySelector('[data-testid="type-badge-claude"]')!.parentElement!
+    expect(cluster.className).toContain('flex-wrap')
+    expect(cluster.className).toContain('justify-end')
+    // A short name keeps its own length and one more, never ten.
+    render(root, { label: 'web' })
+    expect((container.querySelector('.nm') as HTMLElement).style.minWidth).toBe('4ch')
+    // A custom name is what shows, so it sets the floor.
+    render(root, { label: 'web', customName: 'Backend API refactor' })
+    expect((container.querySelector('.nm') as HTMLElement).style.minWidth).toBe('10ch')
+  })
+
   it('does NOT render a Claude provider badge for the default (claude) provider', () => {
     render(root, { provider: 'claude' })
     expect(container.querySelector('[title="Claude is working"]')).toBeNull()

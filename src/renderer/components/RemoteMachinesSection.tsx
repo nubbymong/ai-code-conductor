@@ -18,12 +18,16 @@ function when(ms: number): string {
   return d.toDateString() === new Date().toDateString() ? time : `${d.toLocaleDateString([], { month: 'short', day: 'numeric' })}, ${time}`
 }
 
-function MachineCard({ m, switchOn, busy, onCheck, onRemove }: {
+function MachineCard({ m, switchOn, busy, onCheck, onRemove, onAsk }: {
   m: RemoteMachineView
   switchOn: boolean
   busy: boolean
   onCheck: () => void
   onRemove: () => void
+  /** The Remove question opens: the page clears the last action's notice,
+   *  so an old answer does not sit under a new question (2.1.3-beta.18
+   *  release smoke). */
+  onAsk: () => void
 }) {
   const [confirming, setConfirming] = useState(false)
   const color = m.checked ? 'var(--status-success)' : 'var(--status-warning)'
@@ -44,7 +48,7 @@ function MachineCard({ m, switchOn, busy, onCheck, onRemove }: {
             <DialogButton variant="secondary" onClick={onCheck} disabled={busy} aria-label={`Check ${m.label}`}>Check</DialogButton>
             <DialogButton
               variant="danger"
-              onClick={() => setConfirming(true)}
+              onClick={() => { onAsk(); setConfirming(true) }}
               disabled={busy || m.inUse > 0}
               title={m.inUse > 0 ? 'Close the tabs that run through the helper here first' : 'Remove the session helper from this machine'}
               aria-label={`Remove ${m.label}`}
@@ -145,6 +149,7 @@ export default function RemoteMachinesSection({ active = true }: { active?: bool
               busy={busy}
               onCheck={() => { void act(() => remote.check(m.did)) }}
               onRemove={() => { void act(() => remote.remove(m.did)) }}
+              onAsk={() => setNotice(null)}
             />
           ))}
         </ul>

@@ -1,4 +1,6 @@
 import { describe, it, expect } from 'vitest'
+import { readFileSync } from 'fs'
+import { resolve } from 'path'
 import {
   trainingSteps,
   currentTrainingVersion,
@@ -117,6 +119,22 @@ describe('training-steps', () => {
       expect(getNewSteps('2.1.0').map((s) => s.id)).toEqual(['provider-accounts', 'ask-conductor', 'code-review', 'cloud-agents', 'machines'])
       // Users arriving from 2.0.x get it as part of the normal backlog.
       expect(getNewSteps('2.0.0').map((s) => s.id)).toContain('ask-conductor')
+    })
+  })
+
+  // 2.1.3-beta.18 release smoke (card-machines): the Machines card named the
+  // switches for plain terminals and for sessions, but not the third one, so
+  // how to turn the remote sessions preview on was not there. The row names
+  // the switch by the label Settings shows (SettingsPage.tsx), Windows only as
+  // the switch itself is.
+  describe('the Machines card names the remote sessions switch', () => {
+    it('has a Remote row pointing at the switch by its Settings label', () => {
+      const card = trainingSteps.find((s) => s.id === 'machines')
+      if (!card) throw new Error('no trainingSteps entry with id "machines"')
+      const row = (card.howToTrigger ?? []).find((t) => t.label === 'Remote')
+      expect(row?.value).toBe('Settings -> General -> Remote sessions through the session helper (Windows)')
+      const page = readFileSync(resolve(__dirname, '../../src/renderer/components/SettingsPage.tsx'), 'utf8')
+      expect(page).toContain('Remote sessions through the session helper (Linux, preview)')
     })
   })
 

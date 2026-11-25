@@ -685,6 +685,7 @@ export const trainingSteps: TrainingStep[] = [
       { label: 'Open', value: 'Left rail -> Machines, beside Tokenomics' },
       { label: 'Switch on', value: 'Settings -> General -> Plain terminals through the session helper' },
       { label: 'Sessions', value: 'Settings -> General -> Claude Code and Codex sessions through the session helper' },
+      { label: 'Remote', value: 'Settings -> General -> Remote sessions through the session helper (Windows)' },
       { label: 'Services', value: 'Title bar -> Services pill -> Session helper' },
     ],
     proTip:

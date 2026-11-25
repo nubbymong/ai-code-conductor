@@ -63,3 +63,23 @@ config, Claude Code asks its trust question itself.
 **The seam audit re-run.** The audit's numbers were measured again at the
 aggregate's head by the audit's own method (git grep over src, the two
 provider folders left out); the table and the exact commands are in PR #762.
+
+**Release smoke fixes.** The release smoke on 449c8b02 (a Windows test VM
+driving an Ubuntu 24.04 host) found five things a user sees, fixed here with
+a test each, red before and green after. On the Machines page the Remove
+question opened under the notice of an earlier action; opening it now clears
+that notice (RemoteMachinesSection). A tab through the session helper never
+reports its account yet, so its header showed three loading pills for 20 s,
+then nothing; it now shows one pill, "Account not shown through the helper
+yet" (SessionHeader, through useThroughHelper, which reads main's SSH flow
+state as the SSH flow overlay does). A session card with ATTENTION, SSH, the
+working mark, the type mark and an effort badge cut its name to "S.."; the
+name column now keeps about ten characters (its own length when shorter) and
+the badges wrap (SessionRow). What's New on an update named only the model
+list and Fable 5.2 for the whole 2.1.3 line; the line now also tells the
+Machines page, Snap's own overlay, the broadcast chooser and the remote
+sessions preview, each tagged with its first build. The Feature Guide's
+Machines card now names the remote sessions switch. Two wording fixes: the
+uninstall line says "a Codex session's resume list", and app-knowledge's
+remote paragraph says "A tab through the helper has its status line..." so
+the sentence is not read as the other tabs'.
