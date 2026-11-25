@@ -93,4 +93,25 @@ describe("the Feature tour's summary", () => {
     expect(p.textContent).toBe(shownAs(summaryOf('session-options')))
     expect(p.textContent).not.toContain('**')
   })
+
+  // The beta.17 final-head re-check: the tour's renderBullet took only bold,
+  // so this card read "Run `workflow` in your prompt, ..." with its marks.
+  it('Dynamic Workflows: a command in backticks is shown as code, with no mark left as text', async () => {
+    expect(summaryOf('dynamic-workflows')).toContain('`/effort ultracode`')
+    await act(async () => { root.render(<TrainingWalkthrough onClose={() => {}} showAll mode="help" />) })
+    const want = shownAs(summaryOf('dynamic-workflows'))
+    const summary = () => document.body.querySelector('[data-ux-id="tour-summary"]') as HTMLElement
+    const dots = Array.from(document.body.querySelectorAll('[aria-label^="Go to step"]')) as HTMLButtonElement[]
+    expect(dots.length).toBeGreaterThan(1)
+    // The card is near the end: from the last dot back, each past the body's
+    // fade (TRANSITION_MS, 160 ms), until the summary is that card's.
+    for (const dot of dots.reverse()) {
+      await act(async () => { dot.click(); await new Promise((r) => setTimeout(r, 220)) })
+      if (summary().textContent?.replace(/`/g, '') === want) break
+    }
+    const p = summary()
+    expect(p.textContent?.replace(/`/g, ''), 'the tour never showed the Dynamic Workflows card').toBe(want)
+    expect(p.textContent).not.toContain('`')
+    expect(Array.from(p.querySelectorAll('code')).map((c) => c.textContent)).toContain('/effort ultracode')
+  }, 20_000)
 })
