@@ -117,7 +117,7 @@ export const trainingSteps: TrainingStep[] = [
       'Run more than one Claude account side by side. Your existing login is captured into a protected primary account on first run, and every session runs under a saved, isolated account, so signing in to one never disturbs another or your default login.',
     highlights: [
       'Pick the account at **launch time** -- the first time a session spawns this run, a small dialog asks which account to use (pre-set to the last one you used)',
-      'Add an account by running **`/login`** in a session: The app detects the new login and offers to save it as a separate named account',
+      'Add an account by running `/login` in a session: The app detects the new login and offers to save it as a separate named account',
       '**Per-session isolation** -- each session gets its own private home, so two sessions on different accounts never cross over',
       'Your **primary** account (the one captured on first run) is protected and can never be deleted',
       'Memory, settings, and history stay **shared** across all accounts',
@@ -915,10 +915,10 @@ export const trainingSteps: TrainingStep[] = [
       'Opus 4.8\'s dynamic workflows orchestrate tens to hundreds of parallel subagents from a JavaScript script Claude writes for you. Run `workflow` in your prompt, run `/effort ultracode`, or use the bundled `/deep-research`. Watch progress via `/workflows`. Caps: 16 concurrent agents, 1000 total per run.',
     highlights: [
       'Ask in the prompt: include the word **workflow** and Claude writes one for the task',
-      'Auto-mode: run **`/effort ultracode`** in Claude to enable auto-orchestration for every task',
-      'Bundled: **`/deep-research <question>`** is the headline preview workflow',
-      'Watch with **`/workflows`** -- per-phase agent counts, token totals, drill-down per agent',
-      'Save with **`s`** in the `/workflows` view -- becomes `/<name>` in future sessions',
+      'Auto-mode: run `/effort ultracode` in Claude to enable auto-orchestration for every task',
+      'Bundled: `/deep-research <question>` is the headline preview workflow',
+      'Watch with `/workflows` -- per-phase agent counts, token totals, drill-down per agent',
+      'Save with `s` in the `/workflows` view -- becomes `/<name>` in future sessions',
     ],
     howToTrigger: [
       { label: 'One-off', value: "include 'workflow' in your prompt" },

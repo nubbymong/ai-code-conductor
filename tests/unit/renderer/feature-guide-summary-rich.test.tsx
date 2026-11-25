@@ -98,20 +98,51 @@ describe("the Feature tour's summary", () => {
   // so this card read "Run `workflow` in your prompt, ..." with its marks.
   it('Dynamic Workflows: a command in backticks is shown as code, with no mark left as text', async () => {
     expect(summaryOf('dynamic-workflows')).toContain('`/effort ultracode`')
-    await act(async () => { root.render(<TrainingWalkthrough onClose={() => {}} showAll mode="help" />) })
-    const want = shownAs(summaryOf('dynamic-workflows'))
-    const summary = () => document.body.querySelector('[data-ux-id="tour-summary"]') as HTMLElement
-    const dots = Array.from(document.body.querySelectorAll('[aria-label^="Go to step"]')) as HTMLButtonElement[]
-    expect(dots.length).toBeGreaterThan(1)
-    // The card is near the end: from the last dot back, each past the body's
-    // fade (TRANSITION_MS, 160 ms), until the summary is that card's.
-    for (const dot of dots.reverse()) {
-      await act(async () => { dot.click(); await new Promise((r) => setTimeout(r, 220)) })
-      if (summary().textContent?.replace(/`/g, '') === want) break
-    }
-    const p = summary()
-    expect(p.textContent?.replace(/`/g, ''), 'the tour never showed the Dynamic Workflows card').toBe(want)
+    const p = await openTourAt('dynamic-workflows')
     expect(p.textContent).not.toContain('`')
     expect(Array.from(p.querySelectorAll('code')).map((c) => c.textContent)).toContain('/effort ultracode')
+  }, 20_000)
+})
+
+/** The tour, mounted (showAll, help mode) and walked to card `id`: its summary. */
+async function openTourAt(id: string): Promise<HTMLElement> {
+  await act(async () => { root.render(<TrainingWalkthrough onClose={() => {}} showAll mode="help" />) })
+  const want = shownAs(summaryOf(id))
+  const summary = () => document.body.querySelector('[data-ux-id="tour-summary"]') as HTMLElement
+  const dots = Array.from(document.body.querySelectorAll('[aria-label^="Go to step"]')) as HTMLButtonElement[]
+  expect(dots.length).toBeGreaterThan(1)
+  // The cards these tests read are near the end: from the last dot back, each
+  // past the body's fade (TRANSITION_MS, 160 ms), until the summary is the card's.
+  for (const dot of dots.reverse()) {
+    await act(async () => { dot.click(); await new Promise((r) => setTimeout(r, 220)) })
+    if (summary().textContent?.replace(/`/g, '') === want) break
+  }
+  expect(summary().textContent?.replace(/`/g, ''), `the tour never showed the ${id} card`).toBe(want)
+  return summary()
+}
+
+// The VM re-check on 11817681: the Dynamic Workflows card's highlights wrote
+// their commands as bold code (**`/workflows`**), and both pages' bold
+// printed the inner text as it is, so the backticks showed.
+describe("the Dynamic Workflows card's highlights", () => {
+  const CODES = ['/effort ultracode', '/deep-research <question>', '/workflows', 's']
+  const check = (list: HTMLElement) => {
+    expect(list.textContent).not.toMatch(/\*\*|`/)
+    const codes = Array.from(list.querySelectorAll('code')).map((c) => c.textContent)
+    for (const c of CODES) expect(codes, c).toContain(c)
+  }
+
+  it('in the Feature Guide show each command as code, with no mark left as text', async () => {
+    await openGuideAt('productivity')
+    const list = container.querySelector('[data-ux-id="card-dynamic-workflows-highlights"]') as HTMLElement
+    expect(list, 'the card shows no highlights').not.toBeNull()
+    check(list)
+  })
+
+  it('in the Feature tour show each command as code, with no mark left as text', async () => {
+    const p = await openTourAt('dynamic-workflows')
+    const list = p.parentElement!.querySelector('ul') as HTMLElement
+    expect(list, 'the tour card shows no highlights').not.toBeNull()
+    check(list)
   }, 20_000)
 })
