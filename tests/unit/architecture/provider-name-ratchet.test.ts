@@ -173,7 +173,7 @@ const ceilings = JSON.parse(readSource(CEILINGS_FILE)) as { schema: string; tota
 const CEILING: Readonly<Record<string, Partial<Counts>>> = ceilings.files
 /** The sums as they stand, stated here as well so that a change to the
  *  ceilings file is a change to this test too. */
-const TOTAL: Counts = { comparisons: 271, rederivations: 91, lookups: 21, launchStyleTests: 6, remoteCliTerms: 10 }
+const TOTAL: Counts = { comparisons: 271, rederivations: 91, lookups: 21, launchStyleTests: 6, remoteCliTerms: 0 }
 
 const escapeRe = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 const IDS = PROVIDER_IDS.map(escapeRe).join('|')

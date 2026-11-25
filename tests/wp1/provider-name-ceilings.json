@@ -6,7 +6,7 @@
     "rederivations": 91,
     "lookups": 21,
     "launchStyleTests": 6,
-    "remoteCliTerms": 10
+    "remoteCliTerms": 0
   },
   "files": {
     "src/main/account-web/codex-web-session.ts": {
@@ -82,12 +82,6 @@
       "rederivations": 15,
       "lookups": 4,
       "launchStyleTests": 4
-    },
-    "src/main/remote-helper/index.ts": {
-      "remoteCliTerms": 9
-    },
-    "src/main/remote-helper/session.ts": {
-      "remoteCliTerms": 1
     },
     "src/main/sanitize-restored-spawn-options.ts": {
       "comparisons": 2
