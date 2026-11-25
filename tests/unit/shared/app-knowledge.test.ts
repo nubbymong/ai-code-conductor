@@ -2562,7 +2562,9 @@ describe('the 2.1.3-beta.12 known issues', () => {
   const para = (start: string) => body('known-issues').split('\n\n').find((x) => x.startsWith(start))
   const src = (...parts: string[]) => fs.readFileSync(path.resolve(__dirname, '..', '..', '..', 'src', ...parts), 'utf8')
   const held = 'With Plain terminals through the session helper on, a terminal the helper holds keeps only the last 2 MiB of what it printed.'
-  const twoRows = 'With Codex 0.170.0, the app types nothing into a Codex session after its first prompt while the line under Codex\'s prompt takes two rows.'
+  // 2.1.3-beta.18 section 7.4 (aicc_planning#427): Codex 0.172.0's footer wraps
+  // the same way after a long first prompt (its recording hold read it), so the entry names it.
+  const twoRows = 'With Codex 0.170.0 or 0.172.0, the app types nothing into a Codex session after its first prompt while the line under Codex\'s prompt takes two rows.'
   const warningCount = 'While Codex shows a warning count on the line under its prompt'
   const movedKey = 'With Codex 0.157.1 or 0.170.0, when your Codex config moves the shortcuts key to a key other than F6, the app types nothing into a Codex session'
 
