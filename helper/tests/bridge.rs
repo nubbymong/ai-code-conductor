@@ -467,7 +467,31 @@ mod on_unix {
     #[test]
     fn the_bytes_pass_both_ways_exactly_as_they_came() {
         let _serial = one_at_a_time();
-        let store_dir = Folder::new("bytes");
+        bytes_both_ways("bytes", 0);
+    }
+
+    /// How many times the next test runs the bytes exchange.
+    const HALF_CLOSE_ROUNDS: usize = 1000;
+
+    /// The bytes exchange again and again. The bridge ends its half of the
+    /// connection just as the stand-in holder takes the last of standard
+    /// input's bytes and reads again, and that read must see the end. On
+    /// macOS it could sleep on, though the end was there for any new look at
+    /// the socket, until the bridge gave up after `HALF_CLOSE_WAIT` and
+    /// exited 1: 10 of 2000 rounds on macOS CI with the read as it was before
+    /// `transport::unix::wait_readable`, none of 2000 on Linux. A holder
+    /// reads its connection with the same `Stream::read` as the stand-in.
+    #[test]
+    fn the_holder_sees_the_end_of_standard_input_however_it_races_the_last_bytes() {
+        let _serial = one_at_a_time();
+        for round in 1..=HALF_CLOSE_ROUNDS {
+            bytes_both_ways("bytes-rounds", round);
+        }
+    }
+
+    /// One bytes exchange through a new bridge (`round` names it in a failure).
+    fn bytes_both_ways(name: &str, round: usize) {
+        let store_dir = Folder::new(&format!("{name}-{round}"));
         let sid = "brdg-0002";
         let listener = Listener::bind(sid).expect("listen");
         write_record(&store_dir, sid, listener.endpoint(), std::process::id());
@@ -498,12 +522,13 @@ mod on_unix {
             let _ = stdin.write_all(&input);
             // Dropped here: standard input ends after the pattern.
         });
+        let started = Instant::now();
         let out = b.rest();
-        assert!(out == to_app, "what the holder sent did not reach standard output as it was: {}", first_difference(&out, &to_app));
+        assert!(out == to_app, "round {round}: what the holder sent did not reach standard output as it was: {}", first_difference(&out, &to_app));
         let received = got.recv_timeout(WAIT).expect("the stand-in read to its end");
-        assert!(received == from_app, "what standard input brought did not reach the holder as it was: {}", first_difference(&received, &from_app));
+        assert!(received == from_app, "round {round}: what standard input brought did not reach the holder as it was: {}", first_difference(&received, &from_app));
         let status = b.wait(WAIT);
-        assert_eq!(status.code(), Some(0), "{status}");
+        assert_eq!(status.code(), Some(0), "round {round}: {status} after {:?}", started.elapsed());
     }
 
     /// No record, a record whose holder's process is gone, and a record
