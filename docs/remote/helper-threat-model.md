@@ -784,6 +784,12 @@ rollback returns to the earlier beta's rows, and every row has a negative test.
   spawn; dropped at every other end, before any launch of the tab mints its
   own. An adversarial pass of it is owed to the security round before 2.1
   stable (aicc_planning #320).
+- **The Codex hook forwarder runs the session helper its session names (from
+  2.1.3-beta.18, Windows, section 5).** For a held Codex session, the
+  forwarder runs the helper named by `AICC_HELPER_PATH` in its environment
+  to hand an event to the session's holder, in place of posting it to the
+  hooks gateway. An adversarial pass of it is owed to the security round
+  before 2.1 stable (aicc_planning #320).
 
 ## 4 Review
 

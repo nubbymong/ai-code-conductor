@@ -475,9 +475,11 @@ status mode and the `status` capability, section 3.1; routed to the tab's strip,
 P1 still gates any default. A helper tab's status line does not show the account label, the
 per-model weekly buckets or extra usage. The SSH shim reads and fetches these on the host with
 the host's token (statusline-gather.ts:71-96); the helper reads no credential and calls no
-network. This also gates any default, beside P1. P1 on Ubuntu 24.04 (the 2.1.3-beta.18 host
-line, section 3.2): the strip's first value came before Claude Code's ready prompt in all five
-runs (4 to 210 ms before it in the four timed). Rocky Linux is not measured yet. P2 (saved passwords through
+network. Bringing the account label, the per-model weekly buckets and extra usage to a helper
+tab's status line is aicc_planning#434, and it gates any default, beside P1. P1 on Ubuntu 24.04
+(the 2.1.3-beta.18 host line, section 3.2): the strip's first value came before Claude Code's
+ready prompt in all five runs (4 to 210 ms before it in the four timed). P1 on Rocky Linux 10.2
+is owed: the host did not answer its one 8 s try in 2.1.3-beta.18. P2 (saved passwords through
 askpass) gates password hosts; step 1 takes key sign-in only, so a config with a saved password
 keeps the usual SSH path. Decided for step 1: a session's terminal and the helper's messages
 ride ONE `ssh -T` exec per session, the helper's `bridge` mode (`bridge --store

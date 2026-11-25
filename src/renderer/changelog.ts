@@ -43,6 +43,7 @@ export const changelog: ChangelogEntry[] = [
   {
     version: '2.1.3-beta.18',
     date: '2026-11-25',
+    highlights: 'On Windows, a Claude Code tab through the session helper on a Linux machine you added (the remote sessions preview, off by default) now has its status line, its hooks and the Conductor\'s tools, and runs at the effort level set in your Claude Code settings on that machine. Also on Windows, a Codex session started on this version and kept running through an app update (the agent sessions preview) keeps the hook events it makes meanwhile, and a full uninstall now also removes the folders a Codex session\'s resume list left in your temp folder.',
     warnings: [
       'This beta series begins moving the app\'s background services, and over the next betas your sessions, onto one helper per machine. If you want a quiet build, stay on the stable release.',
       'On Windows, choosing Save sessions at an update keeps the terminals the session helper holds running only if the new version opens within two minutes of the old one closing. The installer\'s pages count toward those two minutes, so finish the installer promptly.',
@@ -50,7 +51,7 @@ export const changelog: ChangelogEntry[] = [
       'To go back to 2.1.3-beta.17, download its installer from the GitHub releases page and run it over this version.',
     ],
     changes: [
-      { type: 'feature', description: 'A Claude Code tab that runs through the session helper on a Linux machine you added (the remote sessions preview, off by default) now has its status line, its hooks and the Conductor\'s tools (the Agent Canvas, the browser, and image paste and Snap); its status line does not show the account, the per-model weekly limits or extra usage yet.' },
+      { type: 'feature', description: 'On Windows, a Claude Code tab that runs through the session helper on a Linux machine you added (the remote sessions preview, off by default) now has its status line, its hooks and the Conductor\'s tools (the Agent Canvas, the browser, and image paste and Snap); its status line does not show the account, the per-model weekly limits or extra usage yet.' },
       { type: 'improvement', description: 'Under the hood, prompt buttons, broadcasts, canvas notes, Alt+V images and the Watchdog\'s retry now type into each session by that session\'s own assistant\'s rules, which is groundwork for more assistants; nothing you see changes.' },
       { type: 'improvement', description: 'Checked in this version: a Snap picture, Rectangle or Whole screen, goes into a Codex session on this computer as Codex\'s own pasted image ([Image #1]) and is sent once also while Codex shows a warning count under its prompt, as an Alt+V image does. (Measured with Codex CLI 0.157.1 on a GitHub Windows Server 2025 runner, one 1024 by 768 display at 100%, 3 presses of each.)' },
       { type: 'fix', description: 'A Claude Code tab through the session helper (the remote sessions preview) now runs at the effort level set in your Claude Code settings on that machine, as a usual SSH tab does; before, it ran at the model\'s default effort.' },

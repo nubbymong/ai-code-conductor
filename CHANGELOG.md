@@ -17,8 +17,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - On Windows, Snap takes its picture with the app's own capture and overlay by default. If a press cannot take a picture, the earlier Snap opens for that press; to use the earlier Snap every time, choose Settings, Custom Commands, Snap, Snap on Windows: Previous.
 - To go back to 2.1.3-beta.17, download its installer from the GitHub releases page and run it over this version.
 
+> On Windows, a Claude Code tab through the session helper on a Linux machine you added (the remote sessions preview, off by default) now has its status line, its hooks and the Conductor's tools, and runs at the effort level set in your Claude Code settings on that machine. Also on Windows, a Codex session started on this version and kept running through an app update (the agent sessions preview) keeps the hook events it makes meanwhile, and a full uninstall now also removes the folders a Codex session's resume list left in your temp folder.
+
 ### Added
-- A Claude Code tab that runs through the session helper on a Linux machine you added (the remote sessions preview, off by default) now has its status line, its hooks and the Conductor's tools (the Agent Canvas, the browser, and image paste and Snap); its status line does not show the account, the per-model weekly limits or extra usage yet.
+- On Windows, a Claude Code tab that runs through the session helper on a Linux machine you added (the remote sessions preview, off by default) now has its status line, its hooks and the Conductor's tools (the Agent Canvas, the browser, and image paste and Snap); its status line does not show the account, the per-model weekly limits or extra usage yet.
 
 ### Changed
 - Under the hood, prompt buttons, broadcasts, canvas notes, Alt+V images and the Watchdog's retry now type into each session by that session's own assistant's rules, which is groundwork for more assistants; nothing you see changes.
