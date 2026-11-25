@@ -28,12 +28,17 @@
  * refused by the owner marker; a session holding the fake CLI through the
  * login shell on the launch a Claude Code tab gets from its provider package
  * (bytes in, output out, what the rc file exported, the package's CLI
- * variable and the terminal's light or dark scheme), its link's
+ * variable and the terminal's light or dark scheme; from 2.1.3-beta.18, its
+ * own settings.json and mcp.json in its own folder on the host, 0700 and
+ * 0600, naming the helper's modes and nothing of the app's computer, and the
+ * folder gone once its holder ended), its link's
  * ssh killed at rest and the tab back on a new link; a shell session: a
  * resize read back by `stty`, then 20,000 lines printed while its bridge on
  * the host is stopped, its link's ssh killed, and the tab back with the
- * holder's replay, each line once; each closed tab's holder ended
- * (term.end); Remove; nothing left under ~/.aicc and no helper process of the
+ * holder's replay, each line once; a tab in a project folder of a git
+ * checkout (2.1.3-beta.18): the project's and the checkout root's hooks in its
+ * settings before the app's, and a settings file that is a link not read;
+ * each closed tab's holder ended (term.end); Remove; nothing left under ~/.aicc and no helper process of the
  * run left. The test's own execs read only what their command prints (an rc
  * file prints first).
  */
@@ -150,6 +155,8 @@ afterAll(() => {
   if (remoteFakeDir && /^\/[A-Za-z0-9._/-]+\/aicc-e2e\.[A-Za-z0-9]+$/.test(remoteFakeDir)) {
     // A bridge the replay step stopped is let go first, whatever failed.
     if (stoppedBridge) sshRun(`kill -CONT ${stoppedBridge} 2>/dev/null; true`)
+    // The project step's checkout (its .git folder holds what git init made), inside this run's own folder.
+    sshRun(`rm -rf -- '${remoteFakeDir}/repo'`)
     sshRun(`rm -f -- ${remoteFakeDir}/aicc-fake-cli ${remoteFakeDir}/ready ${remoteFakeDir}/go ${remoteFakeDir}/printed; rmdir -- ${remoteFakeDir}`)
   }
   if (OUT) {
@@ -213,14 +220,31 @@ describe('remote helper on a real Linux host', () => {
     const m: RemoteMachineRecord = { ...machine, claudePath: `${remoteFakeDir}/aicc-fake-cli`, check: { at: Date.now(), ok: true } }
     inUse = 1
     // The launch a Claude Code tab gets (2.1.3-beta.18 section 2): the Claude
-    // package's remote launch through core, the program from the machine's record.
-    const spec = remoteLaunchOf(claudeRemoteLaunch, m, { model: 'e2e-model' }, null, () => true, remoteSessionId('e2e-tab-1'), 100, 30)
+    // package's remote launch through core, the program from the machine's
+    // record; with its own files (section 3.2): the host's settings files are
+    // read first, and its settings.json and mcp.json written into its folder.
+    const plan = remoteLaunchOf(claudeRemoteLaunch, m, { model: 'e2e-model' }, null, () => true, remoteSessionId('e2e-tab-1'), 100, 30, true)
+    const spec = plan.spec
     note('session-1-argv', spec.argv)
-    const pty = new RemoteHelperPty({ appPtyId: 'e2e-tab-1', machine: m, installId: machines.installId(), runner, spec, log: sessionLog })
+    const pty = new RemoteHelperPty({ appPtyId: 'e2e-tab-1', machine: m, installId: machines.installId(), runner, spec, plan, log: sessionLog })
+    const folder = plan.helper.folder
     let out = ''
     pty.onData((d) => { out += d })
     try {
       await until('the fake CLI\'s banner', () => out.includes('FAKE-CLI READY'))
+      // Its own files, in its own folder on the host: the user's, 0700 and
+      // 0600, naming the helper's status, hook and relay modes and nothing of
+      // the app's computer.
+      const modes = sshRun(`stat -c '%a %u' "${folder}" "${folder}/settings.json" "${folder}/mcp.json"; id -u`).out.trim().split('\n')
+      note('session-1-files', modes)
+      const uid = modes.pop()
+      expect(modes).toEqual([`700 ${uid}`, `600 ${uid}`, `600 ${uid}`])
+      const settings = JSON.parse(sshRun(`cat "${folder}/settings.json"`).out) as { statusLine: { command: string }; hooks: Record<string, Array<{ hooks: Array<{ command: string }> }>> }
+      expect(settings.statusLine.command).toBe(`'${plan.helper.helperPath}' status --store '${plan.helper.store}' --session ${plan.helper.sid}`)
+      expect(settings.hooks.Stop.at(-1)!.hooks[0].command).toBe(`'${plan.helper.helperPath}' hook --store '${plan.helper.store}' --session ${plan.helper.sid}`)
+      const mcp = sshRun(`cat "${folder}/mcp.json"`).out
+      expect(JSON.parse(mcp)).toEqual({ mcpServers: { conductor: { type: 'stdio', command: plan.helper.helperPath, args: ['mcp', '--store', plan.helper.store, '--session', plan.helper.sid] } } })
+      expect(`${JSON.stringify(settings)}${mcp}`).not.toMatch(/localhost|127\.0\.0\.1|https?:|token/i)
       pty.write('hello\r')
       await until('the echo', () => out.includes('echo: hello'))
       pty.write('pwd\r')
@@ -249,8 +273,10 @@ describe('remote helper on a real Linux host', () => {
       inUse = 0
       if (OUT) fs.writeFileSync(path.join(OUT, 'session-1.txt'), out)
     }
-    // A closed tab ends its holder (term.end): nothing of the session is left.
+    // A closed tab ends its holder (term.end): nothing of the session is left,
+    // its own folder included (section 3.2: removed once its holder ended).
     await untilHost('the holder to end', `pgrep -f -- "--store $HOME/[.]aicc/${machine.did}/store" | wc -l`, '0')
+    await untilHost('its folder to go', `test -e "${folder}" && echo there || echo gone`, 'gone')
   })
 
   it('a shell session: a resize reaches the program (stty), and a link dropped while output waits comes back with the replay, each line once', async () => {
@@ -306,6 +332,44 @@ describe('remote helper on a real Linux host', () => {
       if (OUT) fs.writeFileSync(path.join(OUT, 'session-2.txt'), out)
     }
     await untilHost('the holder to end', `pgrep -f -- "--store $HOME/[.]aicc/${machine.did}/store" | wc -l`, '0')
+  })
+
+  it('a tab in a project folder (2.1.3-beta.18 section 3.2): the host\'s project and checkout root hooks are in its settings before the app\'s; a link is not read, with one log line', async () => {
+    const d = remoteFakeDir
+    expect(d).toMatch(/aicc-e2e\./)
+    // A git checkout whose root has a local settings file, and the session in
+    // a subfolder whose project settings name a hook, beside a local settings
+    // file that is a link. Made 0700 and 0600, as the user's own.
+    const hook = (word: string) => JSON.stringify({ hooks: { Stop: [{ matcher: '', hooks: [{ type: 'command', command: `echo ${word}` }] }] } })
+    const hasGit = sshRun('command -v git >/dev/null 2>&1 && echo yes || echo no').out.trim() === 'yes'
+    note('project-git', hasGit)
+    const made = sshRun(`umask 077 && cd ${d} && mkdir -p repo/.claude repo/sub/.claude && { ${hasGit ? 'git -C repo init -q' : 'true'}; } && printf '%s' '${hook('project')}' > repo/sub/.claude/settings.json && printf '%s' '${hook('root')}' > repo/.claude/settings.local.json && ln -s /etc/hostname repo/sub/.claude/settings.local.json && echo made`)
+    expect(made.out.trim(), made.err).toBe('made')
+    const m: RemoteMachineRecord = { ...machine, claudePath: `${d}/aicc-fake-cli`, check: { at: Date.now(), ok: true } }
+    inUse = 1
+    const plan = remoteLaunchOf(claudeRemoteLaunch, m, { model: 'e2e-model', ssh: { host: target.host, port: target.port, username: target.user, remotePath: `${d}/repo/sub` } }, null, () => true, remoteSessionId('e2e-tab-3'), 100, 30)
+    const before = sessionLogs.length
+    const pty = new RemoteHelperPty({ appPtyId: 'e2e-tab-3', machine: m, installId: machines.installId(), runner, spec: plan.spec, plan, log: sessionLog })
+    let out = ''
+    pty.onData((x) => { out += x })
+    try {
+      await until('the fake CLI\'s banner', () => out.includes('FAKE-CLI READY'))
+      const settings = JSON.parse(sshRun(`cat "${plan.helper.folder}/settings.json"`).out) as { hooks: Record<string, Array<{ hooks: Array<{ command: string }> }>> }
+      const stop = settings.hooks.Stop.map((e) => e.hooks[0].command)
+      note('project-stop-hooks', stop)
+      // The user's own come first (a host line's account may have some), then the project's, the checkout root's, the app's last.
+      const own = `'${plan.helper.helperPath}' hook --store '${plan.helper.store}' --session ${plan.helper.sid}`
+      // With no git on the host, no checkout root is found, so its file is not read.
+      if (hasGit) expect(stop.slice(-3)).toEqual(['echo project', 'echo root', own])
+      else expect(stop.slice(-2)).toEqual(['echo project', own])
+      const skipped = sessionLogs.slice(before).filter((l) => l.includes('was not read'))
+      expect(skipped).toEqual([`[remote-helper] ${plan.helper.sid}: cwd .claude/settings.local.json on ${target.host} was not read (link), so nothing it sets is in the session's settings`])
+    } finally {
+      pty.kill()
+      await pty.ended
+      inUse = 0
+    }
+    await untilHost('its folder to go', `test -e "${plan.helper.folder}" && echo there || echo gone`, 'gone')
   })
 
   it('Remove takes it away: nothing of the run is left under ~/.aicc, and no helper process', async () => {

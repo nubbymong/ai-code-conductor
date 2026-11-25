@@ -150,19 +150,26 @@ export function helperHooksTaken(): boolean {
  * and the renderer. Events the holder dropped while no app was attached
  * (`lost`) are logged once per session. None is taken while the gateway would
  * take none (helperHooksTaken).
+ *
+ * `remote` (2.1.3-beta.18, plan section 3.2): the event of a tab through the
+ * session helper on another machine. Its transcript path is a path on that
+ * host: display text the consumers compare (the canvas marker queue, the
+ * background-context rule), never handed to the transcript binder.
  */
-export function helperHookEvent(sessionId: string, e: HelperHookEvent): void {
+export function helperHookEvent(sessionId: string, e: HelperHookEvent, opts: { remote?: boolean } = {}): void {
   if (!helperHooksTaken()) return
   if (typeof e.lost === 'number' && e.lost > 0 && !helperLostLogged.has(sessionId)) {
     helperLostLogged.add(sessionId)
     logWarn(`[hooks] the session helper dropped ${e.lost} hook event(s) of ${sessionId} while the app was not attached`)
   }
   const parsed = e.payload
-  const tp = sanitiseTranscriptPath(parsed.transcript_path)
-  if (tp) {
-    try { transcriptPath(sessionId, tp, 'helper') } catch { /* discovery sink must not break the hook path */ }
-  } else if (parsed.transcript_path !== undefined) {
-    logWarn(`[hooks] dropped an unusable transcript_path from the session helper sid=${sessionId} type=${typeof parsed.transcript_path} length=${typeof parsed.transcript_path === 'string' ? parsed.transcript_path.length : 'n/a'}`)
+  if (opts.remote !== true) {
+    const tp = sanitiseTranscriptPath(parsed.transcript_path)
+    if (tp) {
+      try { transcriptPath(sessionId, tp, 'helper') } catch { /* discovery sink must not break the hook path */ }
+    } else if (parsed.transcript_path !== undefined) {
+      logWarn(`[hooks] dropped an unusable transcript_path from the session helper sid=${sessionId} type=${typeof parsed.transcript_path} length=${typeof parsed.transcript_path === 'string' ? parsed.transcript_path.length : 'n/a'}`)
+    }
   }
   const entry = feedEntryOf(sessionId, e.kind, parsed)
   const ring = helperRings.get(sessionId) ?? []

@@ -134,11 +134,25 @@ function launcherPath(p: string, launcher: HookLauncher): string | null {
  * pattern: then the session keeps its hooks on the hooks gateway.
  */
 export function helperHookCommand(target: HelperHookTarget): string | null {
+  return helperModeCommand(target, 'hook')
+}
+
+/**
+ * The status line command of a Claude Code session whose status line goes
+ * through the session helper (2.1.3-beta.18 section 3.2, a tab through the
+ * helper on another machine): the helper's status mode, quoted for the
+ * launcher as the hook mode is. Null when it cannot be given safely.
+ */
+export function helperStatusCommand(target: HelperHookTarget): string | null {
+  return helperModeCommand(target, 'status')
+}
+
+function helperModeCommand(target: HelperHookTarget, mode: 'hook' | 'status'): string | null {
   const exe = launcherPath(target.helperPath, target.launcher)
   const store = launcherPath(target.store, target.launcher)
   // The session id: the helper's own pattern (protocol section 15).
   if (exe === null || store === null || !SID_RE.test(target.sid)) return null
-  return `${shellWord(exe)} hook --store ${shellWord(store)} --session ${target.sid}`
+  return `${shellWord(exe)} ${mode} --store ${shellWord(store)} --session ${target.sid}`
 }
 
 /** How long Claude Code may give the hook mode, in seconds. The hook mode
@@ -409,8 +423,11 @@ function gitRootClaudeDir(cwd: string, homeDir: string, ids: PosixIds, skipped: 
 
 /** Concatenate per-event hook arrays across maps (source order preserved),
  *  then drop byte-identical duplicate entries within each event — a guard so
- *  a hook can never double-fire if Claude's own resolution ever also merges. */
-function concatHookMaps(...maps: Record<string, unknown[]>[]): Record<string, unknown[]> {
+ *  a hook can never double-fire if Claude's own resolution ever also merges.
+ *  The Claude package's session file for a tab through the session helper on
+ *  another machine merges the host's hooks with it too (providers/claude/
+ *  remote-launch.ts). */
+export function concatHookMaps(...maps: Record<string, unknown[]>[]): Record<string, unknown[]> {
   const merged: Record<string, unknown[]> = {}
   for (const m of maps) {
     for (const [event, arr] of Object.entries(m)) {

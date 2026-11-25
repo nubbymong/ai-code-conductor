@@ -41,6 +41,13 @@ export const SCREEN_CAP = 'screen'
  *  held agent session's connections ask for it beside `screen` when its
  *  provider's composer rule reads the holder's screen. */
 export const TITLE_CAP = 'title'
+/** The status line through the holder (section 15, from 2.1.3-beta.18): acked
+ *  beside `local` only by a connection that takes the session's status line,
+ *  and only when the holder offers it. Such a connection is sent `status`, the
+ *  newest status the CLI's status line command (the helper's status mode)
+ *  posted. From 2.1.3-beta.18 (plan section 3.2) a tab through the session
+ *  helper on another machine asks for it. */
+export const STATUS_CAP = 'status'
 /** Terminal bytes travel on this channel both ways; control messages on 0. */
 export const TERMINAL_CHANNEL = 1
 /** Control messages (JSON) travel on this channel, both ways. */
@@ -313,14 +320,49 @@ export function chooseProto(app: readonly number[], helper: readonly number[]): 
 /** The app's answer to a holder's hello: `core` and `local`, `hooks` when this
  *  connection takes hook events, `mcp` when it carries tool streams,
  *  `screen` when it reads the screen and `title`, beside `screen` only, when
- *  its screen reads take the title (each only ever when the hello offered
- *  it). */
-export function helloAck(hooks = false, mcp = false, screen = false, title = false): { t: 'hello.ack'; proto: number; caps: string[] } {
+ *  its screen reads take the title, `status` when it takes the status line
+ *  (each only ever when the hello offered it). */
+export function helloAck(hooks = false, mcp = false, screen = false, title = false, status = false): { t: 'hello.ack'; proto: number; caps: string[] } {
   return {
     t: 'hello.ack',
     proto: PROTO_VERSION,
-    caps: [...LOCAL_CAPS, ...(hooks ? [HOOKS_CAP] : []), ...(mcp ? [MCP_CAP] : []), ...(screen ? [SCREEN_CAP] : []), ...(screen && title ? [TITLE_CAP] : [])],
+    caps: [...LOCAL_CAPS, ...(hooks ? [HOOKS_CAP] : []), ...(mcp ? [MCP_CAP] : []), ...(screen ? [SCREEN_CAP] : []), ...(screen && title ? [TITLE_CAP] : []), ...(status ? [STATUS_CAP] : [])],
   }
+}
+
+// ── the status line (section 15, capability `status`) ────────────────────────
+
+/** A status's payload as compact JSON, at most: what the status mode posts
+ *  (helper/src/request.rs MAX_STATUS_PAYLOAD), the hook payload's bound. */
+export const STATUS_PAYLOAD_MAX = 65_280
+/** A `status` message's JSON, at most: the frame limit once a session is launched. */
+export const STATUS_JSON_MAX = 64 * 1024
+
+/** The newest status line a holder passed on. */
+export interface StatusFrame {
+  /** The session's number for it, from 1; a newer status has a higher one. */
+  seq: number
+  /** The status as the CLI wrote it on its status line command's standard
+   *  input. Untrusted: read only through its provider's keep-list. */
+  payload: Record<string, unknown>
+}
+
+const STATUS_FIELDS = new Set(['t', 'seq', 'payload'])
+
+/**
+ * A `status` message from a holder, read strictly: exactly `t`, `seq` and
+ * `payload`, `seq` a whole number from 1, `payload` an object of at most
+ * STATUS_PAYLOAD_MAX bytes as compact JSON, and the message (`size` bytes as
+ * it came) within STATUS_JSON_MAX. Null otherwise.
+ */
+export function readStatusFrame(m: unknown, size: number): StatusFrame | null {
+  if (!isObject(m) || m.t !== 'status' || !isWhole(size) || size > STATUS_JSON_MAX) return null
+  if (Object.keys(m).length !== STATUS_FIELDS.size || !Object.keys(m).every((k) => STATUS_FIELDS.has(k))) return null
+  if (!isWhole(m.seq) || m.seq < 1) return null
+  const payload = m.payload
+  if (!isObject(payload)) return null
+  if (Buffer.byteLength(JSON.stringify(payload), 'utf8') > STATUS_PAYLOAD_MAX) return null
+  return { seq: m.seq, payload }
 }
 
 // ── hook events (section 15, capability `hooks`) ──────────────────────────────

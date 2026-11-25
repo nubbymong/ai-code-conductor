@@ -32,7 +32,11 @@
  * `~/.aicc/<did>/store` (the holders' records; the helper makes it 0700). A
  * new file is written to `helper/.new-<nonce>/` first and moved into its
  * folder only once the app has compared its hash with the installer's
- * manifest (commit), or removed (discard).
+ * manifest (commit), or removed (discard). From 2.1.3-beta.18 (plan section
+ * 3.2) `~/.aicc/<did>/sessions/<sid>/` (0700) holds one session's own files,
+ * which its provider's launch gives (`files`): written before its launch,
+ * removed at its end (`unsession`), and by the next Check once its holder is
+ * gone (`sweep`). Nothing else is written outside `~/.aicc`.
  */
 import { APP_PTY_ID_RE, HELPER_FOLDER_RE, NONCE_RE, SHA256_RE, SID_RE } from '../session-helper/protocol'
 
@@ -108,6 +112,91 @@ const LAUNCH = [
 const DELETE_DEVICE_FOLDER = [
   'rm -rf -- "${HOME:?}/.aicc/${D:?}" || no cannot-remove',
 ]
+
+/** The end's one delete (2.1.3-beta.18 section 3.2): one session's own folder,
+ *  by the device folder and the session id, each required to be set and not
+ *  empty, once it is found a real folder of the user's, mode 0700. */
+const DELETE_SESSION_FOLDER = [
+  'rm -rf -- "${A:?}/sessions/${X:?}" || no cannot-remove',
+]
+
+/** A file a launch reads on the host, at most (2.1.3-beta.18 section 3.2). */
+export const HOST_READ_MAX = 256 * 1024
+
+/**
+ * The host reads' checks (2.1.3-beta.18 section 3.2). `ow` answers 0 for a
+ * path that is the user's own and not writable by others, and writable by
+ * its group only when that group is the user's own per-user group (the
+ * primary group, numbered as the user id), the rule
+ * hooks/session-hooks-writer.ts notPrivateWhy applies to a project file on
+ * this computer; 1 for another user's; 2 for one others may write. `ab`: the
+ * first folder is the second or a folder above it.
+ */
+const OWN = [
+  'g=$(id -g)',
+  'ow() { set -- $(ls -ldn "$1" 2>/dev/null); [ "$3" = "$u" ] || return 1; case "$1" in ????????w*) return 2;; ?????w*) [ "$4" = "$g" ] && [ "$g" = "$u" ] || return 2;; esac; return 0; }',
+  'ab() { [ "$1" = / ] && return 0; case "$2/" in "$1"/*) return 0;; esac; return 1; }',
+]
+
+/**
+ * `cr` sets `K` to the root of the git checkout the session folder (`w`) is
+ * in, whose local settings Claude Code also reads, or leaves it empty: the
+ * rule the usual SSH setup applies on the host (providers/claude/ssh-shim.ts)
+ * and ../git-local-settings-root.ts on this computer. git is asked in the
+ * session folder with every GIT_ variable removed and discovery across
+ * filesystems allowed. A `.git` folder or file strictly below git's top
+ * level, nearest the session folder, is the root instead; a linked worktree
+ * is followed to its main checkout only when its git folder sits in the
+ * common folder's `worktrees` and its `gitdir` file points back at the
+ * worktree's `.git`. No root when it is the session folder, the home folder
+ * or a folder above it, or when it, its `.git` or its `.claude` is another
+ * user's.
+ */
+const CHECKOUT_ROOT = [
+  'gw() { (cd "$w" && git rev-parse "$1" </dev/null 2>/dev/null); }',
+  'cr() { command -v git >/dev/null 2>&1 || return 0',
+  'for v in $(env | cut -d= -f1 | grep -E "^GIT_[A-Za-z0-9_]+$"); do unset "$v"; done',
+  'GIT_DISCOVERY_ACROSS_FILESYSTEM=1; export GIT_DISCOVERY_ACROSS_FILESYSTEM',
+  't=$(gw --show-toplevel) || return 0',
+  't=$(cd "$t" 2>/dev/null && pwd -P) || return 0',
+  '[ -n "$t" ] && ab "$t" "$w" || return 0',
+  'gd=$(gw --git-dir); gc=$(gw --git-common-dir)',
+  'case "$gd" in /*) ;; ?*) gd=$w/$gd;; esac; case "$gc" in /*) ;; ?*) gc=$w/$gc;; esac',
+  '[ -n "$gd" ] && gd=$(cd "$gd" 2>/dev/null && pwd -P)',
+  '[ -n "$gc" ] && gc=$(cd "$gc" 2>/dev/null && pwd -P)',
+  'R=$t; d=$w',
+  'while [ "$d" != "$t" ]; do if [ ! -L "$d/.git" ] && { [ -d "$d/.git" ] || [ -f "$d/.git" ]; }; then R=$d; break; fi; [ "$d" = / ] && break; d=$(dirname "$d"); done',
+  'z=0',
+  'if [ "$R" = "$t" ] && [ -n "$gd" ] && [ -n "$gc" ] && [ "$gd" != "$gc" ] && [ "$(dirname "$gd")" = "$gc/worktrees" ] && [ -f "$gd/gitdir" ] && [ ! -L "$gd/gitdir" ]; then q=$(wc -c < "$gd/gitdir"); q=$((q+0)); if [ $q -le 4096 ]; then q=$(cat "$gd/gitdir"); case "$q" in /*) ;; *) q=$gd/$q;; esac; qd=$(cd "$(dirname "$q")" 2>/dev/null && pwd -P); [ "$qd/$(basename "$q")" = "$t/.git" ] && z=1; fi; fi',
+  'if [ $z = 1 ]; then case "$gc" in */.git) R=$(dirname "$gc");; *) [ -e "$gc/.git" ] || [ -L "$gc/.git" ] || return 0;; esac; fi',
+  '[ "$R" != "$w" ] || return 0',
+  'ab "$R" "$h" && return 0',
+  'set -- $(ls -ldn "$R" 2>/dev/null); [ "$3" = "$u" ] || return 0',
+  'set -- $(ls -ldn "$R/.git" 2>/dev/null); [ "$3" = "$u" ] || return 0',
+  'if [ -e "$R/.claude" ] || [ -L "$R/.claude" ]; then set -- $(ls -ldn "$R/.claude" 2>/dev/null); [ "$3" = "$u" ] || return 0; fi',
+  'K=$R; }',
+]
+
+/**
+ * `one <i> <base> <path>`: the host read `i`, `path` under `base`. Every
+ * folder on the way and the file must be no link and pass `ow`, the file a
+ * regular one of at most HOST_READ_MAX bytes. Prints `f<i> ok <hex>` (its
+ * bytes as lower-case hex), or `f<i> skip <why>` for one that is there and is
+ * not taken (link, type, owner, mode, size); nothing for one that is not there.
+ */
+const ONE_READ = [
+  'sk() { r "f$1" skip "$2"; }',
+  'one() { j=$1; x=$2; IFS=/; set -- $3; IFS=$o',
+  'while [ $# -gt 0 ]; do x=$x/$1; shift; if [ -L "$x" ]; then sk $j link; return 0; fi; [ -e "$x" ] || return 0; if [ $# -gt 0 ]; then [ -d "$x" ] || { sk $j type; return 0; }; else [ -f "$x" ] || { sk $j type; return 0; }; fi; ow "$x"; e=$?; if [ $e = 1 ]; then sk $j owner; return 0; fi; if [ $e != 0 ]; then sk $j mode; return 0; fi; done',
+  `n=$(wc -c < "$x"); n=$((n+0)); [ "$n" -le ${HOST_READ_MAX} ] || { sk $j size; return 0; }`,
+  'r "f$j" ok "$(od -A n -v -t x1 "$x" | tr -d "[:space:]")"; }',
+]
+
+/** A session's files as the `files` script takes them: `<name>:<size>` for
+ *  each, joined by commas, in the order their bytes follow on standard input.
+ *  A name never starts with a dot (the script's staging names do). At most
+ *  eight files. */
+export const FILES_LAYOUT_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}:(0|[1-9][0-9]{0,8})(,[A-Za-z0-9][A-Za-z0-9._-]{0,63}:(0|[1-9][0-9]{0,8})){0,7}$/
 
 const join = (parts: readonly string[]): string => parts.join('; ')
 
@@ -263,6 +352,97 @@ const SPECS = {
   bridge: {
     values: [FOLDER, HASH, SESSION],
     text: join(['N=$1; D=$2; I=$3; F=$4; H=$5; X=$6', ...CHECKS, ...LAUNCH, 'exec "$P" bridge --store "$A/store" --session "$X"']),
+  },
+  /** 2.1.3-beta.18 section 3.2: the host files a session's launch reads
+   *  first (its provider's hostReads), printed as data and written nowhere.
+   *  Standard input: the session folder's absolute path on one line, then one
+   *  line per read, `<from> <path>` (home, cwd or checkout, and plain names
+   *  joined by `/`). The session folder counts only when it is not the home
+   *  folder or a folder above it (that is the user's own source), and the
+   *  checkout root only then. Each read is ONE_READ's. */
+  reads: {
+    values: [],
+    text: join([
+      'N=$1; D=$2; I=$3',
+      ...CHECKS,
+      ...EXISTING,
+      ...OWN,
+      ...CHECKOUT_ROOT,
+      ...ONE_READ,
+      'o=$IFS; K=; kd=0; w=',
+      'IFS= read -r c || c=',
+      'case "$c" in /*) w=$(cd "$c" 2>/dev/null && pwd -P) || w=;; esac',
+      '[ -n "$w" ] && ab "$w" "$h" && w=',
+      'i=0',
+      'while read -r k p; do b=; case "$k" in home) b=$h;; cwd) b=$w;; checkout) if [ $kd = 0 ]; then kd=1; [ -n "$w" ] && cr; fi; b=$K;; esac; [ -n "$b" ] && [ -n "$p" ] && one $i "$b" "$p"; i=$((i+1)); done',
+      'r end ok',
+    ]),
+  },
+  /** 2.1.3-beta.18 section 3.2: one session's own files, from standard input,
+   *  into `sessions/<X>/` (made 0700 when missing), before its launch. `L` is
+   *  the layout (FILES_LAYOUT_RE): the bytes follow in its order. All of them
+   *  are read into a staging file first and checked for their size; each file
+   *  is then cut from it into a staging name and moved over its own name. */
+  files: {
+    values: [SESSION, { name: 'file layout', re: FILES_LAYOUT_RE }],
+    text: join([
+      'N=$1; D=$2; I=$3; X=$4; L=$5',
+      ...CHECKS,
+      ...EXISTING,
+      'umask 077',
+      'case "$X" in *[!A-Za-z0-9_-]*|"") no bad-session;; esac',
+      'S=$A/sessions; Q=$S/$X',
+      '[ -e "$S" ] || [ -L "$S" ] || mkdir "$S" || no cannot-make-sessions-folder',
+      'pv "$S" || no sessions-folder-not-private',
+      '[ -e "$Q" ] || [ -L "$Q" ] || mkdir "$Q" || no cannot-make-session-folder',
+      'pv "$Q" || no session-folder-not-private',
+      'o=$IFS; IFS=,; set -- $L; IFS=$o',
+      'z=0; for e in "$@"; do z=$((z+${e##*:})); done',
+      'T=$Q/.in-$N',
+      'head -c "$z" > "$T" 2>/dev/null',
+      'n=$(wc -c < "$T"); n=$((n+0))',
+      '[ "$n" -eq "$z" ] || { rm -f -- "$T"; no short-upload; }',
+      'p=0; for e in "$@"; do m=${e%%:*}; s=${e##*:}; F=$Q/.$m.$N; if [ -d "$Q/$m" ] && [ ! -L "$Q/$m" ]; then rm -f -- "$T"; no file-is-a-folder; fi; tail -c +$((p+1)) "$T" | head -c "$s" > "$F"; k=$(wc -c < "$F"); k=$((k+0)); if [ "$k" -ne "$s" ]; then rm -f -- "$F" "$T"; no short-file; fi; mv -f -- "$F" "$Q/$m" || { rm -f -- "$F" "$T"; no cannot-place; }; p=$((p+s)); done',
+      'rm -f -- "$T"',
+      'r end ok',
+    ]),
+  },
+  /** 2.1.3-beta.18 section 3.2: a session's own folder goes, at its end. A
+   *  session whose holder still has a record keeps it (`held`): the next
+   *  Check's sweep takes it once that holder is gone. */
+  unsession: {
+    values: [SESSION],
+    text: join([
+      'N=$1; D=$2; I=$3; X=$4',
+      ...CHECKS,
+      ...EXISTING,
+      'case "$X" in *[!A-Za-z0-9_-]*|"") no bad-session;; esac',
+      'Q=$A/sessions/$X',
+      '[ -e "$Q" ] || [ -L "$Q" ] || { r gone yes; r end ok; exit 0; }',
+      '[ -e "$A/store/$X.json" ] && no held',
+      'pv "$Q" || no session-folder-not-private',
+      ...DELETE_SESSION_FOLDER,
+      '[ -e "$Q" ] && no still-there',
+      'r end ok',
+    ]),
+  },
+  /** 2.1.3-beta.18 section 3.2, at Check: list mode first (it removes the
+   *  records of holders that are gone), then every session folder whose
+   *  holder has no record goes. Through the launcher. */
+  sweep: {
+    values: [FOLDER, HASH],
+    text: join([
+      'N=$1; D=$2; I=$3; F=$4; H=$5',
+      ...CHECKS,
+      ...LAUNCH,
+      '"$P" list --store "$A/store" </dev/null >/dev/null 2>&1',
+      'S=$A/sessions; c=0',
+      '[ -d "$S" ] && [ ! -L "$S" ] || { r swept 0; r end ok; exit 0; }',
+      'pv "$S" || no sessions-folder-not-private',
+      'for X in $(ls -A "$S"); do case "$X" in *[!A-Za-z0-9_-]*|"") continue;; esac; [ -e "$A/store/$X.json" ] && continue; pv "$S/$X" || continue; rm -rf -- "${A:?}/sessions/${X:?}" && c=$((c+1)); done',
+      'r swept $c',
+      'r end ok',
+    ]),
   },
 } satisfies Record<string, ScriptSpec>
 

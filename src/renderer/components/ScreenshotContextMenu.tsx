@@ -1,7 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react'
 import { formatTimestamp } from '../utils/screenshotPath'
-import { sendImageToSession, sendStoryboardToSession } from '../utils/imageTransfer'
-import { SSH_THROUGH_HELPER } from '../../shared/remote-machines'
+import { sendStoryboardToSession } from '../utils/imageTransfer'
 import { DialogButton } from './ui/Dialog'
 import { isContextMenuGesture } from '../lib/pointer'
 
@@ -20,7 +19,7 @@ interface Props {
   onClose: () => void
 }
 
-export default function ScreenshotContextMenu({ x, y, sessionId, sessionType, onClose }: Props) {
+export default function ScreenshotContextMenu({ x, y, sessionId, sessionType: _sessionType, onClose }: Props) {
   const [screenshots, setScreenshots] = useState<ScreenshotEntry[]>([])
   const [loading, setLoading] = useState(true)
   const [selected, setSelected] = useState<Set<string>>(new Set())
@@ -78,21 +77,10 @@ export default function ScreenshotContextMenu({ x, y, sessionId, sessionType, on
 
     if (paths.length > 0) {
       // Both local and SSH sessions use the conductor MCP fetch_host_screenshot
-      // tool — Claude calls it once per filename to load each image inline.
-      const context = 'Please look at the following screenshots from my host machine.'
-      const send = () => sendStoryboardToSession(sessionId, paths, context)
-      if (sessionType !== 'ssh') {
-        send()
-      } else {
-        // 2.1.3-beta.17 (plan section A2): a tab through the session helper has
-        // no such tool yet. The storyboard goes line by line, so main could not
-        // hold it back whole; one request goes instead, which main holds back
-        // and names in the tab, and no line of the storyboard is typed there.
-        void window.electronAPI.ssh.getState(sessionId).then(
-          (s) => { if (s?.state === SSH_THROUGH_HELPER) sendImageToSession(sessionId, paths[0], context, 'ssh'); else send() },
-          send,
-        )
-      }
+      // tool — Claude calls it once per filename to load each image inline. A
+      // tab through the session helper has the tool too (2.1.3-beta.18, plan
+      // section 3.2), so it gets the storyboard as every other tab does.
+      sendStoryboardToSession(sessionId, paths, 'Please look at the following screenshots from my host machine.')
     }
     onClose()
   }

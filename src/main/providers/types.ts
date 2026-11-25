@@ -198,6 +198,10 @@ export interface RemoteLaunchOptions {
   readonly cwd: string
   /** The app's saved settings as this start read them; null when they do not read. */
   readonly settings: Readonly<Record<string, unknown>> | null
+  /** The app serves its Conductor tools to this session (2.1.3-beta.18
+   *  section 3.2): the built-in tools are on and their server is started.
+   *  False: the launch names no tool server of the app's. */
+  readonly tools: boolean
 }
 
 /** The machine a remote launch runs on, as its last check on the Machines
@@ -214,8 +218,11 @@ export interface RemoteLaunchMachine {
 
 /** The session helper on the host, for a command a session's file names
  *  (`<helperPath> <mode> --store <store> --session <sid>`: the status, hook
- *  and relay modes): absolute paths on the host, and the holder's session id. */
-export type RemoteHelperCommands = Readonly<HeldToolRelay>
+ *  and relay modes): absolute paths on the host, and the holder's session id.
+ *  `folder` (2.1.3-beta.18 section 3.2): the session's own folder on the
+ *  host, absolute, where core writes the launch's `files`; the launch names
+ *  them there. */
+export type RemoteHelperCommands = Readonly<HeldToolRelay> & { readonly folder: string }
 
 /** A file on the host a remote launch needs read before it starts: `path`
  *  under the host user's home folder, the folder the session starts in, or
@@ -247,17 +254,31 @@ export interface RemoteLaunch {
   readonly hookKeep: readonly string[]
 }
 
+/** A status line as a provider gives it for the tab's strip: StatuslineData's
+ *  fields less the session id, which core sets to the tab's own. */
+export type RemoteStatusLine = Partial<Omit<StatuslineData, 'sessionId'>>
+
 /** A provider's launch of a session on another machine through the session
  *  helper there, in two steps. Core (src/main/remote-helper) asks it by the
  *  tab's provider id through the registry and keeps ssh, the upload, routing,
  *  frames, the login shell's `-il` wrapper, the host account's variables,
  *  LANG, TERM and the terminal's light or dark scheme; it names no flag or
- *  variable of a CLI. Both steps are pure: they read and write nothing. */
+ *  variable of a CLI. Both steps are pure: they read and write nothing.
+ *  Core asks for the launch twice: once before anything is read on the host
+ *  (`reads` all null), to check the start, then with the reads; the
+ *  program, its arguments and its variables do not change with what was
+ *  read (a start whose do is refused), only the files and keep-lists may. */
 export interface ProviderRemoteLaunch {
   /** The host files the launch needs read first, in order; none: nothing is read. */
   hostReads(options: RemoteLaunchOptions, machine: RemoteLaunchMachine): readonly RemoteHostRead[]
   /** The launch. `reads`: what hostReads named, in its order, as read. */
   launch(options: RemoteLaunchOptions, machine: RemoteLaunchMachine, helper: RemoteHelperCommands, reads: readonly RemoteHostFile[]): RemoteLaunch
+  /** The tab's status line from one status the CLI posted, already cut to
+   *  the launch's `statusKeep` (2.1.3-beta.18 section 3.2). Untrusted input;
+   *  a remote path in it is display text only, never a transcript path.
+   *  Null: nothing to show. Absent: a provider whose tabs get no status line
+   *  this way. */
+  statusLine?(payload: Readonly<Record<string, unknown>>): RemoteStatusLine | null
 }
 
 /** How a session's telemetry finds its transcript. `cwd`: the resolved

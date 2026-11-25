@@ -7,16 +7,16 @@
  * attaches again once, with the holder's replay; a closed tab sends
  * term.end, even one closed just as its link drops (the end goes once more
  * on a new link); a holder a crash left for the tab's session is ended
- * before a new one starts; an image paste types nothing, and only the app's
- * own image request is held back; a launch the holder refuses names the
- * folder and the holder's words in the tab.
+ * before a new one starts; the app's own image request is typed as it is
+ * (2.1.3-beta.18 section 3.2: such a tab has the image fetch tool); a launch
+ * the holder refuses names the folder and the holder's words in the tab.
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
 import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
 import { FakeHolder } from '../main/session-helper-fake-holder'
-import { RemoteHelperPty, remoteSessionId, remoteLaunchSpec, remoteCwd, IMAGE_HELD_BACK_NOTE, RECONNECT_DELAYS_MS, STORYBOARD_TOOL_LINE } from '../../../src/main/remote-helper/session'
+import { RemoteHelperPty, remoteSessionId, remoteLaunchSpec, remoteCwd, RECONNECT_DELAYS_MS } from '../../../src/main/remote-helper/session'
 import { composeFetchHostScreenshotPrompt } from '../../../src/renderer/utils/imageTransfer'
 import type { RemoteMachineRecord } from '../../../src/main/remote-helper/machines'
 import type { HolderRecord } from '../../../src/main/session-helper/protocol'
@@ -262,40 +262,19 @@ describe('remote session: the end', () => {
 })
 
 describe('remote session: an image paste', () => {
-  it('types nothing into the tab (it has no image fetch tool in this preview) and says so in the tab', async () => {
+  it('the app\'s own image request and the storyboard\'s line are typed as they are: the tab has the image fetch tool (2.1.3-beta.18 section 3.2)', async () => {
     const sid = remoteSessionId('tab-image')
     const holder = new FakeHolder(sid, 'tab-image', store)
     const ssh = new FakeSsh({ answer: (c) => (c.script === 'hold' ? holdAnswer(c, holder) : { code: 1 }), bridge: () => holder.connect() })
     const t = tab(ssh, 'tab-image')
     await until('attached', () => holder.attached !== null)
-    t.pty.write('I just pasted an image (use mcp__conductor__fetch_host_screenshot with filename="snap.png" to load the image from the Conductor host)\r')
-    expect(t.out()).toContain(IMAGE_HELD_BACK_NOTE)
-    t.pty.write('typed\r')
-    await until('typed input', () => Buffer.concat(holder.input).toString() === 'typed\r')
-    t.pty.kill()
-    await t.pty.ended
-  })
-
-  it('holds back only the app\'s own request: a paste or a typed line that names the tool reaches the CLI unchanged', async () => {
-    const sid = remoteSessionId('tab-names-tool')
-    const holder = new FakeHolder(sid, 'tab-names-tool', store)
-    const ssh = new FakeSsh({ answer: (c) => (c.script === 'hold' ? holdAnswer(c, holder) : { code: 1 }), bridge: () => holder.connect() })
-    const t = tab(ssh, 'tab-names-tool')
-    await until('attached', () => holder.attached !== null)
-    // The app's own request, as the renderer writes it (the same function, so the two cannot drift), and the storyboard's line.
-    t.pty.write(`${composeFetchHostScreenshotPrompt('a.png', 'I just pasted an image, please view it.')}\r`)
-    t.pty.write('Frames (use mcp__conductor__fetch_host_screenshot for each):\n')
-    expect(t.out().split(IMAGE_HELD_BACK_NOTE)).toHaveLength(3)
-    // Anything else that names the tool is typed as it is.
-    const paste = '\x1b[200~tools: mcp__conductor__fetch_host_screenshot, mcp__conductor__vision_click\r\nheldBackImage holds back the fetch_host_screenshot request\x1b[201~'
-    const typed = 'why does mcp__conductor__fetch_host_screenshot fail here?\r'
-    t.pty.write(paste)
-    t.pty.write(typed)
-    await until('the paste and the line', () => Buffer.concat(holder.input).toString() === paste + typed)
-    expect(t.out().split(IMAGE_HELD_BACK_NOTE)).toHaveLength(3)
-    // The storyboard's line is the one the renderer writes (imageTransfer.ts sendStoryboardToSession).
-    expect(STORYBOARD_TOOL_LINE).toBe('Frames (use mcp__conductor__fetch_host_screenshot for each):\n')
-    expect(fs.readFileSync(path.resolve(__dirname, '../../../src/renderer/utils/imageTransfer.ts'), 'utf8')).toContain(`'${STORYBOARD_TOOL_LINE.slice(0, -1)}',`)
+    // The app's own request, as the renderer writes it (the same function), and the storyboard's line.
+    const request = `${composeFetchHostScreenshotPrompt('a.png', 'I just pasted an image, please view it.')}\r`
+    const frames = 'Frames (use mcp__conductor__fetch_host_screenshot for each):\n'
+    t.pty.write(request)
+    t.pty.write(frames)
+    await until('both typed', () => Buffer.concat(holder.input).toString() === request + frames)
+    expect(t.out()).not.toMatch(/nothing was typed/)
     t.pty.kill()
     await t.pty.ended
   })

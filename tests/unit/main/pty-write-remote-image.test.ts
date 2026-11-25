@@ -1,11 +1,9 @@
 /**
  * The renderer's write door, `pty:write` (plan 2.1.3-beta.17, section A2,
- * plan-review finding 6; aicc_planning#411): for a tab through the session
- * helper, the app's own image request is asked about WHOLE, before writePty
- * cuts a write longer than 256 bytes into slices, so a slice can never split
- * the tool's name and let the rest of the line (its Enter included) reach the
- * CLI. A write the remote module holds back never reaches writePty; every
- * other write reaches it unchanged. The kill door (a close or a Restart)
+ * plan-review finding 6; aicc_planning#411). From 2.1.3-beta.18 (plan section
+ * 3.2) a tab through the session helper has the image fetch tool, so the
+ * app's own image request is no longer held back there: every write, that
+ * one included, reaches writePty whole and unchanged. The kill door (a close or a Restart)
  * forgets a remote tab's start after killPty. The SSH flow door answers
  * 'through-helper' for a tab through the helper that has no SSH flow (also
  * after a start that failed), so the overlay's catch-up poll does not put the
@@ -30,11 +28,9 @@ vi.mock('../../../src/main/pty-manager', () => ({
   getSshFlow: (id: string) => sshFlow(id),
   endSshRemote: vi.fn(), probeTmuxLive: vi.fn(),
 }))
-const holdBackRemoteImage = vi.fn((_id: string, _data: string) => false)
 const helperTab = vi.fn((_id: string) => false)
 vi.mock('../../../src/main/remote-helper', () => ({
   isRemoteHelperTab: (id: string) => helperTab(id),
-  holdBackRemoteImage: (id: string, data: string) => holdBackRemoteImage(id, data),
   forgetRemoteHelperTab: (id: string) => { order.push(`forget ${id}`) },
 }))
 vi.mock('../../../src/main/debug-capture', () => ({ logUserInput: vi.fn(), isDebugModeEnabled: () => false }))
@@ -54,21 +50,23 @@ const LONG = `${'x'.repeat(300)} (use mcp__conductor__fetch_host_screenshot with
 
 beforeEach(() => {
   writePty.mockClear()
-  holdBackRemoteImage.mockClear()
 })
 
 describe('pty:write and a tab through the session helper', () => {
-  it('asks the remote module about the whole write first; one it holds back never reaches writePty', () => {
+  it('the app\'s own image request reaches writePty whole and unchanged, on a tab through the helper as on any other', () => {
     expect(write).toBeTypeOf('function')
-    holdBackRemoteImage.mockImplementationOnce(() => true)
-    write({}, 'tab-remote', LONG)
-    expect(holdBackRemoteImage).toHaveBeenCalledWith('tab-remote', LONG)
-    expect(writePty).not.toHaveBeenCalled()
+    helperTab.mockImplementation(() => true)
+    try {
+      write({}, 'tab-remote', LONG)
+      expect(writePty).toHaveBeenCalledTimes(1)
+      expect(writePty).toHaveBeenCalledWith('tab-remote', LONG)
+    } finally {
+      helperTab.mockImplementation(() => false)
+    }
   })
 
   it('every other write reaches writePty whole and unchanged', () => {
     write({}, 'tab-any', LONG)
-    expect(holdBackRemoteImage).toHaveBeenCalledWith('tab-any', LONG)
     expect(writePty).toHaveBeenCalledTimes(1)
     expect(writePty).toHaveBeenCalledWith('tab-any', LONG)
     write({}, 'tab-any', 'ls\r')

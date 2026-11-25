@@ -16,7 +16,11 @@ import { logInfo, logWarn } from '../debug-logger'
 import { getPtyIntegrityMonitor } from '../services/pty-integrity-monitor'
 import { sshProgram } from '../ssh-program'
 import { instanceRecordPath } from '../session-helper/install'
-import { setRemoteHelperDeps, remoteTabsOn } from '../remote-helper'
+import { getConductorMcpPort, recordHeldToolSession, serveToolStream } from '../conductor-mcp-server'
+import { conductorToolsMasterOn } from '../conductor-tools-switch'
+import { helperHookEvent } from '../session-signals/hooks'
+import { dispatchHelperStatus } from '../statusline-watcher'
+import { setRemoteHelperDeps, remoteTabsOn, type RemoteSignalDeps } from '../remote-helper'
 import { RemoteMachines, fileStore } from '../remote-helper/machines'
 import { bundledHelperPaths, manifestEntry, readBundledLinuxHelper } from '../remote-helper/manifest'
 import { nodeSshRunner } from '../remote-helper/ssh-exec'
@@ -33,9 +37,26 @@ import { appWindowSender } from './trusted-sender'
  *
  * registerRemoteMachinesHandlers also plugs remote step 1 into the PTY
  * manager (setRemoteHelperDeps): the machine records, the ssh runner and the
- * installer's Linux helper. Windows only: elsewhere the state says so, every
- * action is refused, and every SSH tab takes the usual path.
+ * installer's Linux helper, and (2.1.3-beta.18, plan section 3.2) where a
+ * tab's status line, hook events and tool streams go: the status strip's
+ * ingest, the session signals module, and the tool host, which serves a
+ * tab's tool streams as its session with no credential. Windows only:
+ * elsewhere the state says so, every action is refused, and every SSH tab
+ * takes the usual path.
  */
+
+/** A tab through the helper: its status line, hook events and tool streams. */
+const remoteSignals: RemoteSignalDeps = {
+  toolsServed: () => conductorToolsMasterOn() && getConductorMcpPort() > 0,
+  status: (appPtyId, line) => dispatchHelperStatus(appPtyId, line),
+  event: (appPtyId, e) => helperHookEvent(appPtyId, e, { remote: true }),
+  serve: (appPtyId, provider, link) => {
+    // The record a credential would make, with none made or handed out: the
+    // stream comes through the tab's holder, and serveToolStream checks no credential.
+    recordHeldToolSession(appPtyId, provider)
+    return serveToolStream(appPtyId, link)
+  },
+}
 
 /** How long main waits on each door: an Add uploads a file of a few MB and
  *  runs five more execs; a Check may upload too. */
@@ -82,6 +103,7 @@ export function registerRemoteMachinesHandlers(getWindow: () => BrowserWindow | 
       systemPrefersDark: () => nativeTheme.shouldUseDarkColors,
       onOutput: (id, n) => { getPtyIntegrityMonitor()?.recordPtyData(id, n) },
       log: logInfo,
+      signals: remoteSignals,
     })
   }
   const refuse = (message: string): RemoteActionResult => ({ ok: false, message })
