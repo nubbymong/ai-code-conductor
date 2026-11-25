@@ -19,7 +19,10 @@
 // session id on the host: never an address, a port, a token or a path of this
 // computer. The status and hook keep-lists say what of a status and of a hook
 // event the app keeps.
-import { buildHelperHooksBlock, concatHookMaps, helperStatusCommand } from '../../hooks/session-hooks-writer'
+// Pure, with no import that reaches Electron: core asks this launch under
+// plain Node too (tests/live/remote-helper-device.live.ts).
+import { concatHookMaps, helperHooksBlockFor, helperStatusCommand } from '../../hooks/helper-hook-commands'
+import { HELPER_HOOK_KINDS } from '../../session-helper/protocol'
 import type { ProviderRemoteLaunch, RemoteHelperCommands, RemoteHostFile, RemoteHostRead, RemoteLaunch, RemoteLaunchMachine, RemoteLaunchOptions, RemoteStatusLine } from '../types'
 
 /** Where the CLI is started when the machine's check found none. */
@@ -99,7 +102,8 @@ export function hooksOfSettingsText(text: string | null): Record<string, unknown
 export function claudeRemoteSettings(helper: RemoteHelperCommands, reads: readonly RemoteHostFile[]): Record<string, unknown> {
   const target = { helperPath: helper.helperPath, store: helper.store, sid: helper.sid, launcher: 'sh' as const }
   const statusCommand = helperStatusCommand(target)
-  const own = buildHelperHooksBlock(target)
+  // The nine events the app takes, as buildHelperHooksBlock gives a held session on this computer.
+  const own = helperHooksBlockFor(target, HELPER_HOOK_KINDS)
   if (statusCommand === null || own === null) throw new Error('the session helper\'s path on the host cannot be put in a status line or hook command safely')
   const hooks = concatHookMaps(...reads.map((r) => hooksOfSettingsText(r.content)), own)
   return { statusLine: { type: 'command', command: statusCommand }, hooks }
