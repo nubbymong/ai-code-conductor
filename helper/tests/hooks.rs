@@ -38,7 +38,9 @@ fn one_at_a_time() -> MutexGuard<'static, ()> {
     ONE_AT_A_TIME.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
-/// A new, empty folder of this test, removed when dropped.
+/// A new, empty folder of this test, 0700 whatever the umask on macOS and
+/// Linux (a crate's tests share one process and its umask), removed when
+/// dropped.
 struct Folder(PathBuf);
 
 impl Folder {
@@ -46,6 +48,11 @@ impl Folder {
         let dir = std::env::temp_dir().join(format!("aicc-hooks-test-{name}-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).expect("a folder");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&dir, fs::Permissions::from_mode(0o700)).expect("the folder's mode");
+        }
         Folder(dir)
     }
 
