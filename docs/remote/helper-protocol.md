@@ -25,6 +25,28 @@ probe (ADR) must confirm. R5 fixtures fix field types, lengths and refusals.
   for an upload until the app commits or discards it; and `store/` (the
   holders' records, section 15). A remote tab's session id is `rm` and 30 hex
   of a hash of its app id.
+- **Session files (2.1.3-beta.18, section 3.2).** Before the hold, the fixed
+  `reads` script prints, as hex, up to four host settings files the provider
+  names (Claude Code: `~/.claude/settings.json`; the session folder's
+  `.claude/settings.json` and `.claude/settings.local.json`; its git checkout
+  root's `.claude/settings.local.json`), parsed in the app as data, never
+  run. Each is a regular file of at most 256 KiB. The user's own file is read
+  as Claude Code reads it, a link followed (a dotfiles link keeps its hooks);
+  a project or checkout-root file only when it and every folder on its way
+  are no link and the host user's own, not writable by others (by its group
+  only when that is the user's own group). A checkout root is used only when
+  it is not the session folder, the home folder or a folder above it. After
+  the hold, the fixed `files` script writes the launch's `settings.json` (the
+  status line is the status mode; hooks are the host's own, then the hook
+  mode's nine, identical entries once) and, while the app serves its tools,
+  `mcp.json` (`conductor` is the relay) into `sessions/<sid>/` (folder 0700,
+  files 0600), contents on standard input after a `<name>:<size>,...` layout
+  value, each file staged, size-checked and moved over its name. They name
+  the helper's path, the store and the session id only. `unsession` removes
+  the folder once the holder's record is gone; at a Check, `sweep` removes
+  any folder whose holder is gone. Such a session's app connection acks
+  `status` and `hooks`, and `mcp` while the app serves its tools, beside
+  `local`.
 - **Session id (`sid`)**, chosen by the app: `^[A-Za-z0-9][A-Za-z0-9_-]{7,31}$`.
   Every socket bind and connect happens after a `chdir` into the session
   folder, by the name `s`, so a long home never meets the path limit.
@@ -330,6 +352,23 @@ duration totals; CLI version; the remote CLI session id; remote paths `cwd`,
 `transcript_path` and the workspace folders. `event` keeps hook name, the
 remote CLI session id, notification text (a label of at most 1,024
 characters) and tool name; prompts, tool inputs and results are dropped.
+As built (2.1.3-beta.18, section 3.2; providers/claude/remote-launch.ts
+CLAUDE_STATUS_KEEP and CLAUDE_HOOK_KEEP), `status` keeps `model.id`,
+`model.display_name`, `context_window.used_percentage`,
+`remaining_percentage`, `context_window_size` and
+`current_usage.input_tokens`, `output_tokens`,
+`cache_creation_input_tokens` and `cache_read_input_tokens`,
+`cost.total_cost_usd`, `total_duration_ms`, `total_lines_added` and
+`total_lines_removed`, `version`, `session_id`, `cwd`, `transcript_path`,
+`workspace.current_dir` and `workspace.project_dir`, and `used_percentage`
+and `resets_at` of `rate_limits.five_hour` and `rate_limits.seven_day`.
+`event` keeps `hook_event_name`, `session_id`, `message`,
+`notification_type`, `tool_name`, `transcript_path`, `agent_id`,
+`effort.level`, `error`, `reason`, `error_type` and `source`. A kept value
+is a string of at most 4,096 characters, a finite number or a boolean;
+anything else is dropped. A status is delivered under the tab's own id,
+never a session id from the payload. Its strings are then bounded at 256
+characters (statusline-watcher.ts STATUS_STRING_MAX).
 
 **Named edits (closed list, from R7).** One row: `claude-folder-trust` sets
 `projects["<cwd>"].hasTrustDialogAccepted` to `true` in the CLI's config file

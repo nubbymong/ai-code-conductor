@@ -470,8 +470,14 @@ made on the other. The probe is `helper/probes/p3-p6-linux.cjs`.
 
 Remote step 1 (2.1.3-beta.17, plan sections A1 and A2, aicc_planning#410 and #411) ships off
 by default, behind a Settings switch, before P1 and P2 run. P1 (the status line through the
-helper) needs a status frame on the session's one stream, which beta.18 adds; until then a tab
-through the helper has no status line, and P1 gates any default. P2 (saved passwords through
+helper) needs a status frame on the session's one stream, which beta.18 adds (S26: the helper's
+status mode and the `status` capability, section 3.1; routed to the tab's strip, section 3.2);
+P1 still gates any default. A helper tab's status line does not show the account label, the
+per-model weekly buckets or extra usage. The SSH shim reads and fetches these on the host with
+the host's token (statusline-gather.ts:71-96); the helper reads no credential and calls no
+network. This also gates any default, beside P1. P1 on Ubuntu 24.04 (the 2.1.3-beta.18 host
+line, section 3.2): the strip's first value came before Claude Code's ready prompt in all five
+runs (4 to 210 ms before it in the four timed). Rocky Linux is not measured yet. P2 (saved passwords through
 askpass) gates password hosts; step 1 takes key sign-in only, so a config with a saved password
 keeps the usual SSH path. Decided for step 1: a session's terminal and the helper's messages
 ride ONE `ssh -T` exec per session, the helper's `bridge` mode (`bridge --store
@@ -522,6 +528,20 @@ default). A launch may declare the hook kinds its session takes (`hookKinds`, at
 another CLI's hook events can go through its holder (S12's remaining step, section 5); the hook
 and status modes read their store and session from `AICC_HELPER_STORE` and
 `AICC_HELPER_SESSION` when the command line leaves them out.
+
+2.1.3-beta.18 section 3.2 (aicc_planning#431) carries them, together and still off by default:
+a tab through the helper gets its status line (its CLI's status line command is the helper's
+status mode, which posts `status.set` to the holder; the holder sends the newest as a `status`
+frame on the tab's one stream to its connection, which acks `status`), its hook events (the
+hook mode; `event` frames; the connection acks `hooks`) and the Conductor's tools (the relay;
+`mcp` frames; the connection acks `mcp` while the app serves its tools; each stream is served
+as the tab's session with no credential): S27's tools half. Its own files go into
+`~/.aicc/<did>/sessions/<sid>/` before its launch (the provider package's `files`: Claude
+Code's settings.json and, while the app serves its tools, mcp.json; the host's settings files
+are read first, as data, so the session keeps the host's own hooks before the app's; the
+user's own file is read as Claude Code reads it, a link followed) and go at its end or at the
+next Check. Each status and hook payload is cut to the provider's keep-list; a remote path in
+it is display text, never handed to the transcript binder or the usage sink.
 
 2.1.3-beta.18 section 4 (aicc_planning#432; seam audit S3; component rows 3 and 14): the five
 input doors (Watchdog retry, prompt button, image, canvas marker, Ask hand-off) type through the
