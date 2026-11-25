@@ -26,7 +26,9 @@
  * In order: Add (the question, then probe, upload by standard input, the hash
  * against the manifest, version, self-test); a second install's Remove
  * refused by the owner marker; a session holding the fake CLI through the
- * login shell (bytes in, output out, what the rc file exported), its link's
+ * login shell on the launch a Claude Code tab gets from its provider package
+ * (bytes in, output out, what the rc file exported, the package's CLI
+ * variable and the terminal's light or dark scheme), its link's
  * ssh killed at rest and the tab back on a new link; a shell session: a
  * resize read back by `stty`, then 20,000 lines printed while its bridge on
  * the host is stopped, its link's ssh killed, and the tab back with the
@@ -42,7 +44,9 @@ import * as os from 'os'
 import * as path from 'path'
 import { RemoteMachines, type MachineStore, type RemoteMachineRecord } from '../../src/main/remote-helper/machines'
 import { nodeSshRunner, execArgv, sshEnv, type SshTarget } from '../../src/main/remote-helper/ssh-exec'
-import { RemoteHelperPty, remoteLaunchSpec } from '../../src/main/remote-helper/session'
+import { RemoteHelperPty, remoteLaunchSpec, remoteSessionId } from '../../src/main/remote-helper/session'
+import { remoteLaunchOf } from '../../src/main/remote-helper'
+import { claudeRemoteLaunch } from '../../src/main/providers/claude/remote-launch'
 import { readBundledLinuxHelper, type BundledLinuxHelper } from '../../src/main/remote-helper/manifest'
 
 const need = (name: string): string => {
@@ -208,7 +212,11 @@ describe('remote helper on a real Linux host', () => {
     expect(remoteFakeDir, up.err).toMatch(/aicc-e2e\./)
     const m: RemoteMachineRecord = { ...machine, claudePath: `${remoteFakeDir}/aicc-fake-cli`, check: { at: Date.now(), ok: true } }
     inUse = 1
-    const pty = new RemoteHelperPty({ appPtyId: 'e2e-tab-1', machine: m, installId: machines.installId(), runner, spec: remoteLaunchSpec(m, [], {}, '~', 100, 30), log: sessionLog })
+    // The launch a Claude Code tab gets (2.1.3-beta.18 section 2): the Claude
+    // package's remote launch through core, the program from the machine's record.
+    const spec = remoteLaunchOf(claudeRemoteLaunch, m, { model: 'e2e-model' }, null, () => true, remoteSessionId('e2e-tab-1'), 100, 30)
+    note('session-1-argv', spec.argv)
+    const pty = new RemoteHelperPty({ appPtyId: 'e2e-tab-1', machine: m, installId: machines.installId(), runner, spec, log: sessionLog })
     let out = ''
     pty.onData((d) => { out += d })
     try {
@@ -217,6 +225,11 @@ describe('remote helper on a real Linux host', () => {
       await until('the echo', () => out.includes('echo: hello'))
       pty.write('pwd\r')
       await until('its folder', () => out.includes(`cwd: ${machine.home}`))
+      // The package's CLI variable and core's terminal variable reach the program on the host.
+      pty.write('env CLAUDE_CODE_DISABLE_MOUSE\r')
+      await until('the package\'s variable', () => out.includes('env CLAUDE_CODE_DISABLE_MOUSE=1'))
+      pty.write('env COLORFGBG\r')
+      await until('the terminal\'s variable', () => out.includes('env COLORFGBG=15;0'))
       if (expectRc) {
         pty.write('env AICC_RC_MARK\r')
         await until('the rc variable', () => out.includes('env AICC_RC_MARK=from-rc'))
@@ -243,7 +256,7 @@ describe('remote helper on a real Linux host', () => {
   it('a shell session: a resize reaches the program (stty), and a link dropped while output waits comes back with the replay, each line once', async () => {
     const m: RemoteMachineRecord = { ...machine, claudePath: '/bin/sh', check: { at: Date.now(), ok: true } }
     inUse = 1
-    const pty = new RemoteHelperPty({ appPtyId: 'e2e-tab-2', machine: m, installId: machines.installId(), runner, spec: remoteLaunchSpec(m, [], {}, '~', 100, 30), log: sessionLog })
+    const pty = new RemoteHelperPty({ appPtyId: 'e2e-tab-2', machine: m, installId: machines.installId(), runner, spec: remoteLaunchSpec(m, { program: '/bin/sh', args: [], env: {} }, {}, '~', 100, 30), log: sessionLog })
     let out = ''
     pty.onData((d) => { out += d })
     const d = remoteFakeDir

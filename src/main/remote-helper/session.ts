@@ -10,9 +10,12 @@
  * frames (protocol section 15) ride ssh's pipes: no typed setup or launch
  * line, no sentinel parsing, no ConPTY between the app and the host. The
  * launch starts the CLI through the host user's login shell
- * (`<shell> -il -c 'exec "$0" "$@"' <claude> <args>`, ADR-030 D8), values as
+ * (`<shell> -il -c 'exec "$0" "$@"' <program> <args>`, ADR-030 D8), values as
  * arguments, so what the user's rc files set reaches the CLI as on the usual
- * path; the `-il` PATH is the one the machine's record keeps. Nothing goes to
+ * path; the `-il` PATH is the one the machine's record keeps. The program, its
+ * arguments and the CLI's own variables come from the tab's provider package
+ * (its remote launch, providers/types.ts ProviderRemoteLaunch; 2.1.3-beta.18
+ * section 2); this file names no flag or variable of a CLI. Nothing goes to
  * the host for it: no Claude token, MCP config, hooks file or status shim.
  *
  * A dropped link (the ssh child ended, or a pong that never came) attaches
@@ -43,6 +46,7 @@ import { HolderConnection, HolderError } from '../session-helper/connection'
 import { HelperPty, NothingStartedError, type HelperPtyDriver } from '../session-helper/helper-pty'
 import { checkLaunch, readListing, readRecord, type HolderRecord, type LaunchSpec } from '../session-helper/protocol'
 import { stripSpoofableText } from '../../shared/safe-text'
+import type { RemoteHelperCommands, RemoteLaunch } from '../providers/types'
 import { holderLabel } from './scripts'
 import { afterHashLine, newNonce, notStartedLogLine, openScriptStream, readHashLine, runScript, sshFailure, type SshRunner, type SshTarget } from './ssh-exec'
 import type { RemoteMachineRecord } from './machines'
@@ -83,15 +87,33 @@ const hostAccountEnv = (m: RemoteMachineRecord): Record<string, string> => ({
   HOME: m.home, USER: m.user, LOGNAME: m.user, SHELL: m.shell, PATH: m.path,
 })
 
-/** What the CLI is started with on the host. */
-export function remoteLaunchSpec(m: RemoteMachineRecord, cliArgs: readonly string[], cliEnv: Record<string, string>, remotePath: string | undefined, cols: number, rows: number): LaunchSpec {
-  const claude = m.claudePath ?? '/usr/local/bin/claude'
-  const argv = m.shellIsSh ? [m.shell, '-il', '-c', 'exec "$0" "$@"', claude, ...cliArgs] : [claude, ...cliArgs]
-  const env: Record<string, string> = {
+/** The session helper's commands for session `sid` on machine `m`, by the
+ *  layout the scripts keep there (scripts.ts: `~/.aicc/<did>/helper/<folder>/aicc-helper`
+ *  and `~/.aicc/<did>/store`), from the home folder the machine's check read. */
+export function remoteHelperCommands(m: RemoteMachineRecord, sid: string): RemoteHelperCommands {
+  const device = `${m.home.replace(/\/+$/, '')}/.aicc/${m.did}`
+  return { helperPath: `${device}/helper/${m.helper.folder}/aicc-helper`, store: `${device}/store`, sid }
+}
+
+/**
+ * What the CLI is started with on the host: the provider's program,
+ * arguments and variables (`cli`, its remote launch), through the host
+ * user's login shell when that is of the sh family, with the host account's
+ * variables, LANG and TERM first and the terminal's own (`terminalEnv`: its
+ * light or dark scheme) last. Throws when `cli.env` names a variable this
+ * sets itself: the provider's launch never replaces one.
+ */
+export function remoteLaunchSpec(m: RemoteMachineRecord, cli: Pick<RemoteLaunch, 'program' | 'args' | 'env'>, terminalEnv: Readonly<Record<string, string>>, remotePath: string | undefined, cols: number, rows: number): LaunchSpec {
+  const argv = m.shellIsSh ? [m.shell, '-il', '-c', 'exec "$0" "$@"', cli.program, ...cli.args] : [cli.program, ...cli.args]
+  const own: Record<string, string> = {
     ...hostAccountEnv(m),
     LANG: m.lang ?? 'C.UTF-8', TERM: 'xterm-256color', COLORTERM: 'truecolor',
-    ...cliEnv,
   }
+  const taken = new Set([...Object.keys(own), ...Object.keys(terminalEnv)].map((k) => k.toUpperCase()))
+  for (const k of Object.keys(cli.env)) {
+    if (taken.has(k.toUpperCase())) throw new Error(`the provider's launch sets ${k}, which the session helper's launch sets itself`)
+  }
+  const env: Record<string, string> = { ...own, ...cli.env, ...terminalEnv }
   return { argv, cwd: remoteCwd(remotePath, m.home), env, cols, rows }
 }
 

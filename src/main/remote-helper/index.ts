@@ -3,8 +3,10 @@
  *
  * pty-manager.ts asks remoteHelperPty once per SSH spawn, at the top of its
  * SSH branch, after the branch refuses a provider SSH does not run. It answers a terminal through
- * the session helper on the tab's machine when routeSshTab says so, and null
- * otherwise; null leaves the SSH branch exactly as it was (the usual SSH
+ * the session helper on the tab's machine when routeSshTab says so and the
+ * tab's provider has a remote launch (asked through the registry by the
+ * tab's provider id, 2.1.3-beta.18 section 2), and null otherwise; null
+ * leaves the SSH branch exactly as it was (the usual SSH
  * path), and either way one log line says which and why. The switch is read
  * first: while it is off nothing else of the feature is asked (its records
  * file is not read or made). Until main plugs in the deps
@@ -17,11 +19,15 @@
 import type { IPty } from 'node-pty'
 import { IPC } from '../../shared/ipc-channels'
 import { SSH_THROUGH_HELPER } from '../../shared/remote-machines'
+import { DEFAULT_PROVIDER_ID, type ProviderId } from '../../shared/providers/ids'
+import { tryGetProvider } from '../providers'
 import { colorFgBgValue, resolveHostColorScheme } from '../providers/host-color-scheme'
+import type { ProviderRemoteLaunch, RemoteLaunchOptions } from '../providers/types'
+import type { LaunchSpec } from '../session-helper/protocol'
 import type { SSHOptions } from '../ssh-options'
 import { ROUTE_WHY, routeSshTab, type Route } from './route'
-import { RemoteHelperPty, heldBackImage, remoteLaunchSpec } from './session'
-import type { RemoteMachines } from './machines'
+import { RemoteHelperPty, heldBackImage, remoteCwd, remoteHelperCommands, remoteLaunchSpec, remoteSessionId } from './session'
+import type { RemoteMachineRecord, RemoteMachines } from './machines'
 import type { SshRunner } from './ssh-exec'
 
 export interface RemoteHelperDeps {
@@ -88,6 +94,8 @@ export function holdBackRemoteImage(sessionId: string, data: string): boolean {
 
 /** The spawn options this reads: pty-manager's own, structurally. */
 export interface RemoteSpawnOptions {
+  /** The tab's provider; absent: DEFAULT_PROVIDER_ID, as for every spawn. */
+  provider?: ProviderId
   ssh?: SSHOptions
   shellOnly?: boolean
   model?: string
@@ -103,36 +111,40 @@ export interface OutputWindow {
   webContents: { send(channel: string, ...args: unknown[]): void }
 }
 
-/** The CLI's arguments: the config's model, effort, permission mode and extra
- *  arguments, as the usual SSH launch line gives them, and --continue on a
- *  reconnect. Values are arguments (no shell parses them on the way). */
-export function remoteCliArgs(o: RemoteSpawnOptions): string[] {
-  const args: string[] = []
-  if (o.effortLevel) args.push('--effort', o.effortLevel)
-  if (o.model) args.push('--model', o.model)
-  if (o.permissionMode && o.permissionMode !== 'default') args.push('--permission-mode', o.permissionMode)
-  if (o.ssh?.reconnect) args.push('--continue')
-  const extra = o.extraArgs?.trim()
-  if (extra) args.push(...extra.split(/\s+/))
-  return args
-}
-
-/** The CLI's own switches the settings set, as the usual SSH launch sets them,
- *  and the app's light or dark scheme (COLORFGBG, host-color-scheme.ts), so
- *  Claude Code draws for the tab's background. */
-export function remoteCliEnv(settings: Record<string, unknown> | null, o: RemoteSpawnOptions, systemPrefersDark: () => boolean): Record<string, string> {
-  const env: Record<string, string> = {}
-  if (o.disableAutoMemory) env.CLAUDE_CODE_DISABLE_AUTO_MEMORY = '1'
-  if (settings?.classicTerminalCopyPaste !== false) {
-    env.CLAUDE_CODE_DISABLE_MOUSE = '1'
-    env.CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN = '1'
-  }
-  if (settings?.clickableQuestions !== true) env.CLAUDE_CODE_DISABLE_MOUSE_CLICKS = '1'
-  if (settings?.disableBackgroundTasks !== false) env.CLAUDE_CODE_DISABLE_BACKGROUND_TASKS = '1'
+/** The terminal's own variables for the launch: the app's light or dark
+ *  scheme (COLORFGBG, host-color-scheme.ts), as the usual SSH launch sets it,
+ *  so the CLI draws for the tab's background. */
+export function remoteTerminalEnv(settings: Readonly<Record<string, unknown>> | null, systemPrefersDark: () => boolean): Record<string, string> {
   const theme = typeof settings?.theme === 'string' ? settings.theme : undefined
   // The system is asked only when the theme follows it.
-  env.COLORFGBG = colorFgBgValue(resolveHostColorScheme(theme, theme === 'system' ? systemPrefersDark() : true))
-  return env
+  return { COLORFGBG: colorFgBgValue(resolveHostColorScheme(theme, theme === 'system' ? systemPrefersDark() : true)) }
+}
+
+/**
+ * The tab's launch on machine `m`, from its provider's remote launch (`via`):
+ * the tab's saved options and the settings this start read, the helper's
+ * commands for session `sid`, and nothing read on the host. Throws, saying
+ * why, when the launch asks for what this build does not carry yet (a file
+ * read on the host first, a file for the session's folder there) or names a
+ * variable the session helper's launch sets itself; the tab then takes the
+ * usual path.
+ */
+export function remoteLaunchOf(via: ProviderRemoteLaunch, m: RemoteMachineRecord, options: RemoteSpawnOptions, settings: Readonly<Record<string, unknown>> | null, systemPrefersDark: () => boolean, sid: string, cols: number, rows: number): LaunchSpec {
+  const remotePath = options.ssh?.remotePath
+  const launchOptions: RemoteLaunchOptions = {
+    model: options.model,
+    effortLevel: options.effortLevel,
+    permissionMode: options.permissionMode,
+    extraArgs: options.extraArgs,
+    disableAutoMemory: options.disableAutoMemory,
+    reconnect: !!options.ssh?.reconnect,
+    cwd: remoteCwd(remotePath, m.home),
+    settings,
+  }
+  if (via.hostReads(launchOptions, m).length > 0) throw new Error('its provider asks for files on the host to be read before the launch, which this build does not do')
+  const cli = via.launch(launchOptions, m, remoteHelperCommands(m, sid), [])
+  if (cli.files.length > 0) throw new Error('its provider gives files for the session\'s folder on the host, which this build does not write')
+  return remoteLaunchSpec(m, cli, remoteTerminalEnv(settings, systemPrefersDark), remotePath, cols, rows)
 }
 
 /**
@@ -174,6 +186,10 @@ export function remoteHelperPty(win: OutputWindow, sessionId: string, options: R
   }
   if (route.via === 'today') return usual(route.why)
   const m = route.machine
+  // The launch is the tab's provider's, asked through the registry by its id.
+  const providerId = options.provider ?? DEFAULT_PROVIDER_ID
+  const provider = tryGetProvider(providerId)
+  if (!provider?.remoteLaunch) return usual(`its provider (${provider?.displayName ?? providerId}) has no launch through the session helper`)
   let pty: RemoteHelperPty
   try {
     pty = new RemoteHelperPty({
@@ -181,7 +197,7 @@ export function remoteHelperPty(win: OutputWindow, sessionId: string, options: R
       machine: m,
       installId: d.machines.installId(),
       runner: d.runner,
-      spec: remoteLaunchSpec(m, remoteCliArgs(options), remoteCliEnv(settings, options, d.systemPrefersDark), ssh.remotePath, cols, rows),
+      spec: remoteLaunchOf(provider.remoteLaunch, m, options, settings, d.systemPrefersDark, remoteSessionId(sessionId), cols, rows),
       log: d.log,
     })
   } catch (err) {

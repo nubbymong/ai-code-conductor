@@ -181,6 +181,85 @@ export type HeldToolLaunchAnswer =
   | { args: string[] | string }
   | { refused: 'no-tools' | 'unsafe-path' | 'cmd-line' }
 
+/** 2.1.3-beta.18 section 2 (aicc_planning#430): what a remote launch is
+ *  given of the tab: its saved launch options, the folder it starts in on
+ *  the host and the app's settings as this start read them. Not the tab's
+ *  SSH options: they hold its sign-in. */
+export interface RemoteLaunchOptions {
+  readonly model?: string
+  readonly effortLevel?: string
+  readonly permissionMode?: string
+  /** The config's extra arguments, as one string. */
+  readonly extraArgs?: string
+  readonly disableAutoMemory?: boolean
+  /** The tab starts again on its last conversation (its SSH options' `reconnect`). */
+  readonly reconnect: boolean
+  /** The folder the session starts in on the host, absolute. */
+  readonly cwd: string
+  /** The app's saved settings as this start read them; null when they do not read. */
+  readonly settings: Readonly<Record<string, unknown>> | null
+}
+
+/** The machine a remote launch runs on, as its last check on the Machines
+ *  page read it (remote-helper/machines.ts RemoteMachineRecord, structurally). */
+export interface RemoteLaunchMachine {
+  /** The host account's home folder and user name. */
+  readonly home: string
+  readonly user: string
+  /** Where the check found Claude Code's CLI on the host (the login shell's
+   *  `-il` lookup, else the exec's PATH); null: not found. A saved shape that
+   *  changes when a second provider runs over SSH. */
+  readonly claudePath: string | null
+}
+
+/** The session helper on the host, for a command a session's file names
+ *  (`<helperPath> <mode> --store <store> --session <sid>`: the status, hook
+ *  and relay modes): absolute paths on the host, and the holder's session id. */
+export type RemoteHelperCommands = Readonly<HeldToolRelay>
+
+/** A file on the host a remote launch needs read before it starts: `path`
+ *  under the host user's home folder, the folder the session starts in, or
+ *  the root of the git checkout that folder is in; plain names joined by `/`,
+ *  none of them `.` or `..`. */
+export interface RemoteHostRead {
+  readonly from: 'home' | 'cwd' | 'checkout'
+  readonly path: string
+}
+
+/** A host read as it came back: its text, or null when it was not read (not
+ *  there, a link, not the host user's own, or over the bound). */
+export interface RemoteHostFile extends RemoteHostRead {
+  readonly content: string | null
+}
+
+/** What a remote launch starts. `program`: the CLI on the host, an absolute
+ *  path. `env`: the CLI's own variables, never one core sets (the host
+ *  account's, LANG, TERM, COLORTERM, COLORFGBG). `files`: for the session's
+ *  own folder on the host, each a plain name and its text. `statusKeep` and
+ *  `hookKeep`: the fields of a status payload and of a hook event the app
+ *  keeps (a nested field by its dotted path); none: nothing kept. */
+export interface RemoteLaunch {
+  readonly program: string
+  readonly args: readonly string[]
+  readonly env: Readonly<Record<string, string>>
+  readonly files: ReadonlyArray<{ readonly name: string; readonly content: string }>
+  readonly statusKeep: readonly string[]
+  readonly hookKeep: readonly string[]
+}
+
+/** A provider's launch of a session on another machine through the session
+ *  helper there, in two steps. Core (src/main/remote-helper) asks it by the
+ *  tab's provider id through the registry and keeps ssh, the upload, routing,
+ *  frames, the login shell's `-il` wrapper, the host account's variables,
+ *  LANG, TERM and the terminal's light or dark scheme; it names no flag or
+ *  variable of a CLI. Both steps are pure: they read and write nothing. */
+export interface ProviderRemoteLaunch {
+  /** The host files the launch needs read first, in order; none: nothing is read. */
+  hostReads(options: RemoteLaunchOptions, machine: RemoteLaunchMachine): readonly RemoteHostRead[]
+  /** The launch. `reads`: what hostReads named, in its order, as read. */
+  launch(options: RemoteLaunchOptions, machine: RemoteLaunchMachine, helper: RemoteHelperCommands, reads: readonly RemoteHostFile[]): RemoteLaunch
+}
+
 /** How a session's telemetry finds its transcript. `cwd`: the resolved
  *  working directory the PTY runs in, which Codex uses to claim a new
  *  rollout. `spawnTimestamp`: Date.now() captured immediately before
@@ -316,6 +395,10 @@ export interface SessionProvider {
    *  keeps the arguments the builder made. Pure: it reads nothing and writes
    *  nothing. */
   heldToolLaunch?(sessionId: string, launch: HeldToolLaunch, relay: HeldToolRelay): HeldToolLaunchAnswer
+  /** Optional -- Claude only (2.1.3-beta.18 section 2): the launch of a
+   *  session on another machine through the session helper there. Absent:
+   *  the provider's SSH tabs take the usual SSH path. */
+  readonly remoteLaunch?: ProviderRemoteLaunch
   /**
    * Optional -- copy the provider's resume-picker script into
    * `<resourcesDir>/scripts/`. Both providers implement this in P4. The

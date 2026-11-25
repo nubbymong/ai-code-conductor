@@ -46,7 +46,8 @@ import type { SessionProvider } from '../../../src/main/providers/types'
 import { spawnPty, killPty, writePty, getSshFlow } from '../../../src/main/pty-manager'
 import { submitPrompt } from '../../../src/main/session-input'
 import { registerProvider } from '../../../src/main/providers'
-import { setRemoteHelperDeps, isRemoteHelperTab, holdBackRemoteImage, forgetRemoteHelperTab, remoteTabsOn, remoteCliEnv } from '../../../src/main/remote-helper'
+import { setRemoteHelperDeps, isRemoteHelperTab, holdBackRemoteImage, forgetRemoteHelperTab, remoteTabsOn, remoteTerminalEnv } from '../../../src/main/remote-helper'
+import { claudeRemoteLaunch } from '../../../src/main/providers/claude/remote-launch'
 import { remoteSessionId, IMAGE_HELD_BACK_NOTE } from '../../../src/main/remote-helper/session'
 import { SSH_THROUGH_HELPER } from '../../../src/shared/remote-machines'
 import { FakeHolder } from '../main/session-helper-fake-holder'
@@ -61,6 +62,8 @@ const fakeProvider = {
   id: 'claude', displayName: 'Claude', resolveBinary: () => null, buildSpawnCommand: () => ({ cmd: '', args: [], env: {} }),
   detectUiRunning: () => false, ingestSessionTelemetry: () => ({ stop() {} }), listHistorySessions: async () => [],
   resumeCommand: () => ({ cmd: '', args: [] }), configureMcpServer: async () => {}, getSshSettingsPath: () => '', getSshMcpConfigPath: () => '', configureRemoteSettings: () => '',
+  // The Claude package's own remote launch (2.1.3-beta.18 section 2).
+  remoteLaunch: claudeRemoteLaunch,
 } as unknown as SessionProvider
 const win = { webContents: { send() {} }, isDestroyed: () => false } as never
 
@@ -152,6 +155,18 @@ describe('pty-manager SSH branch: the usual path is unchanged for every tab that
     })
   }
 
+  it('a tab whose provider has no remote launch (2.1.3-beta.18 section 2): node-pty gets the same file, argv and options, and the log says why', () => {
+    setRemoteHelperDeps(null)
+    const before = spawnSsh('route-no-launch', SSH_TAB)
+    expect(before, 'the usual path reached node-pty').not.toBeNull()
+    registerProvider({ ...fakeProvider, remoteLaunch: undefined } as SessionProvider)
+    plugIn(true)
+    expect(spawnSsh('route-no-launch', SSH_TAB)).toEqual(before)
+    expect(ssh.calls).toHaveLength(0)
+    expect(logs).toContain('[remote-helper] route-no-launch: the usual SSH path, because its provider (Claude) has no launch through the session helper')
+    expect(isRemoteHelperTab('route-no-launch')).toBe(false)
+  })
+
   it('a Terminal only tab takes the usual path too', () => {
     plugIn(true)
     expect(spawnSsh('route-shell', SSH_TAB, { shellOnly: true })).not.toBeNull()
@@ -208,14 +223,14 @@ describe('the launch carries the app\'s light or dark scheme, as the usual SSH l
   const dark = () => true
   const light = () => false
   it('light gives 0;15; dark and no theme give 15;0; system follows the system and is asked only then', () => {
-    expect(remoteCliEnv({ theme: 'light' }, {}, dark).COLORFGBG).toBe('0;15')
-    expect(remoteCliEnv({ theme: 'dark' }, {}, light).COLORFGBG).toBe('15;0')
-    expect(remoteCliEnv({}, {}, light).COLORFGBG).toBe('15;0')
-    expect(remoteCliEnv(null, {}, light).COLORFGBG).toBe('15;0')
-    expect(remoteCliEnv({ theme: 'system' }, {}, dark).COLORFGBG).toBe('15;0')
-    expect(remoteCliEnv({ theme: 'system' }, {}, light).COLORFGBG).toBe('0;15')
+    expect(remoteTerminalEnv({ theme: 'light' }, dark)).toEqual({ COLORFGBG: '0;15' })
+    expect(remoteTerminalEnv({ theme: 'dark' }, light)).toEqual({ COLORFGBG: '15;0' })
+    expect(remoteTerminalEnv({}, light)).toEqual({ COLORFGBG: '15;0' })
+    expect(remoteTerminalEnv(null, light)).toEqual({ COLORFGBG: '15;0' })
+    expect(remoteTerminalEnv({ theme: 'system' }, dark)).toEqual({ COLORFGBG: '15;0' })
+    expect(remoteTerminalEnv({ theme: 'system' }, light)).toEqual({ COLORFGBG: '0;15' })
     const asked = vi.fn(() => false)
-    remoteCliEnv({ theme: 'light' }, {}, asked)
+    remoteTerminalEnv({ theme: 'light' }, asked)
     expect(asked).not.toHaveBeenCalled()
   })
 })
