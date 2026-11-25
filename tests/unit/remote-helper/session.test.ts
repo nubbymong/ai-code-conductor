@@ -136,6 +136,34 @@ describe('remote session: a dropped link', () => {
     await t.pty.ended
   })
 
+  // 2.1.3-beta.18 fix round, item 3: the host line's re-attach line, with the
+  // tab's local ssh killed (exit -1 on Windows, read unsigned), blamed the
+  // helper on the machine. It names the ssh link on this computer now.
+  it.each([
+    ['ssh killed on Windows (-1, read unsigned)', { code: 4294967295 }, 'ssh exit -1'],
+    ['ssh ended by a signal', { code: null, signal: 'SIGKILL' }, 'ssh ended by SIGKILL'],
+  ] as const)('%s while the link is down: the re-attach line names the ssh link on this computer', async (_name, cut, end) => {
+    const id = `tab-cut-${end.length}`
+    const sid = remoteSessionId(id)
+    const holder = new FakeHolder(sid, id, store)
+    let bridges = 0
+    const ssh = new FakeSsh({
+      answer: (c) => (c.script === 'hold' ? holdAnswer(c, holder) : { code: 1 }),
+      bridge: () => holder.connect(),
+      bridgeCut: () => (++bridges === 2 ? { ...cut } : undefined),
+    })
+    const logs: string[] = []
+    const t = tab(ssh, id, logs)
+    await until('attached', () => holder.attached !== null)
+    ssh.children[1].kill()
+    await until('attached again', () => holder.attaches === 2)
+    expect(logs.filter((l) => l.includes('is not back yet'))).toEqual([
+      `[remote-helper] ${sid}: the link to rocky.lan is not back yet (the ssh link on this computer ended before the session helper answered (${end}))`,
+    ])
+    t.pty.kill()
+    await t.pty.ended
+  })
+
   it('a bridge that finds no holder (exit 3) is not tried again, and the tab ends', async () => {
     const sid = remoteSessionId('tab-gone')
     const holder = new FakeHolder(sid, 'tab-gone', store)

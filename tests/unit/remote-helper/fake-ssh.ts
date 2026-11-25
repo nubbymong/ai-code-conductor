@@ -75,6 +75,10 @@ export interface FakeHost {
    *  none, when the bridge exits `bridgeExit` (3, no holder, unless set). */
   bridge?: (call: ExecCall, child: FakeChild) => Duplex | null
   bridgeExit?: number
+  /** A bridge exec whose ssh ends on this computer before the launcher's
+   *  hash line (a cut link: ssh killed), with this exit code or signal;
+   *  undefined: the bridge runs as `bridge` says. */
+  bridgeCut?: (call: ExecCall) => { code: number | null; signal?: string } | undefined
 }
 
 export class FakeSsh implements SshRunner {
@@ -96,6 +100,8 @@ export class FakeSsh implements SshRunner {
     if (script === 'bridge') {
       const nonce = values[0]
       setImmediate(() => {
+        const cut = this.host.bridgeCut?.(call)
+        if (cut) { child.finish(cut.code, cut.signal ?? null); return }
         const end = this.host.bridge?.(call, child) ?? null
         child.stdout.write(`some rc file text\nAICC-HASH ${nonce} ok ${values[4]}\n`)
         if (!end) { child.finish(this.host.bridgeExit ?? 3); return }

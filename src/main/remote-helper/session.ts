@@ -60,7 +60,7 @@ import { stripSpoofableText } from '../../shared/safe-text'
 import type { ProviderId } from '../../shared/providers/ids'
 import type { ProviderRemoteLaunch, RemoteHelperCommands, RemoteHostFile, RemoteHostRead, RemoteLaunch, RemoteLaunchOptions } from '../providers/types'
 import { HOST_READ_MAX, holderLabel } from './scripts'
-import { EXEC_STDOUT_MAX, afterHashLine, newNonce, notStartedLogLine, openScriptStream, readHashLine, readScriptResult, runScript, sshFailure, type SshRunner, type SshTarget } from './ssh-exec'
+import { EXEC_STDOUT_MAX, afterHashLine, exitText, localSshEnd, newNonce, notStartedLogLine, openScriptStream, readHashLine, readScriptResult, runScript, sshFailure, type SshRunner, type SshTarget } from './ssh-exec'
 import { hostReadsInput, hostReadsOf, sessionFilesInput } from './session-files'
 import { RemoteSignals, type RemoteSignalDeps } from './signals'
 import { refusalText, type RemoteMachineRecord } from './machines'
@@ -388,7 +388,7 @@ export class RemoteDriver implements HelperPtyDriver {
         if (attempt === 0 && !abandoned()) { await this.endLeftover(sid); continue }
         this.failWith(`a session the app could not end still runs for this tab on ${host}`)
       }
-      if (r.code !== 0) this.failWith(`the session helper on ${host} could not start a holder (exit ${r.code ?? 'unknown'}: ${r.stderr.trim().slice(0, 200)})`)
+      if (r.code !== 0) this.failWith(`the session helper on ${host} could not start a holder (${exitText(r)}: ${r.stderr.trim().slice(0, 200)})`)
       const line = afterHashLine(r.stdout, nonce).split(/\r?\n/).find((l) => l.startsWith('{'))
       let record: HolderRecord | null = null
       try { record = line ? readRecord(JSON.parse(line), 'unix') : null } catch { record = null }
@@ -434,6 +434,8 @@ export class RemoteDriver implements HelperPtyDriver {
       } catch (err) {
         last = err as Error
         if (err instanceof FinalError) break
+        // The reason says which side ended (ssh-exec.ts openScriptStream): the
+        // ssh link on this computer, or the helper on the machine.
         if (again) this.o.log(`[remote-helper] ${record.session}: the link to ${this.o.machine.host} is not back yet (${last.message})`)
       }
     }
@@ -518,9 +520,14 @@ export class RemoteDriver implements HelperPtyDriver {
       if (r?.code === 3) throw new FinalError(`no holder runs for this tab on ${this.o.machine.host} any more`)
       // Any other exit of the bridge before its hello is named, so the tab's
       // note says it; a usage error (2: a helper without the mode) is not
-      // tried again, and exit 1 may be.
+      // tried again, and exit 1 may be. An exit no remote command gives
+      // (outside 0 to 255: ssh ended by force on this computer) is named as
+      // the ssh link's, signed (2.1.3-beta.18 fix round, item 3).
       if (typeof r?.code === 'number') {
-        const why = `${(err as Error).message} (the session helper's bridge on ${this.o.machine.host} exited ${r.code})`
+        const local = localSshEnd({ code: r.code })
+        const why = local !== null
+          ? `${(err as Error).message} (the ssh link on this computer ended: ${local})`
+          : `${(err as Error).message} (the session helper's bridge on ${this.o.machine.host} exited ${r.code})`
         throw r.code === 2 ? new FinalError(why) : new Error(why)
       }
       throw err
