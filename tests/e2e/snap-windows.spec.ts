@@ -141,21 +141,39 @@
  *   C1 START: the app finds that Codex (found, 0.157.1); a Codex tab opens on
  *      the account, its first screens answered by the 9.2 rules
  *      (helpers/codex-first-screens.ts); within CODEX_START_MS the tab shows
- *      Codex's composer, its footer (P19's model name) and "1 warning" after
- *      the warning sign, on two reads 300 ms apart; the Snap button shows.
- * CODEX_START_MS was set before any reading on the runner (P19's own bound
- * for Codex's ready composer is 60 s, the real-launch spec's 150 s); the
- * run's reading is codexStartMs. The part's readings go to
+ *      Codex's composer, its footer and, under it, "1 warning" after the
+ *      warning sign, on two reads 300 ms apart; the Snap button shows.
+ *   C2 RECTANGLE, 3 runs, and C3 WHOLE SCREEN, 3 runs, each pressed while
+ *      Codex is at rest with "1 warning" (two reads 300 ms apart): one new
+ *      JPEG at D2's or D3's size, not all black; one new-engine line; one
+ *      line from main saying Codex's image rule pasted and sent it; exactly
+ *      one new turn at the stand-in (a request with Codex's tools), whose
+ *      pictures are every picture pressed so far, in order, each once by its
+ *      SHA-256, the newest this press's file (Codex sends the whole
+ *      conversation with each turn); then Codex at rest with its count
+ *      again, and still that one turn.
+ * The reading before C2 and C3 were added (rule 34; run 45578961836, Codex
+ * 0.157.1, one 1024x768 display at 100%): the tab opened, Codex asked only
+ * its hooks review (the project's trust is seeded, and no sandbox menu
+ * showed), and its hint row read "1 warning . f2 to view"; the stand-in saw
+ * no request before a turn.
+ * CODEX_START_MS and CODEX_TURN_MS were set before any reading on the runner
+ * (P19's own bound for Codex's ready composer is 60 s, the real-launch
+ * spec's 150 s; C6's image rule waits up to 5 s for a ready composer and
+ * Codex's placeholder showed within 314 ms); the run's readings are
+ * codexStartMs, codexEnterToFileMs, codexFileToTurnMs and
+ * codexTurnToRestMs. The part's readings go to
  * $SNAP_E2E_OUT/codex-readings.json.
  */
 import { test, expect, type ElectronApplication, type Page } from '@playwright/test'
 import { execFile, spawnSync } from 'child_process'
+import crypto from 'crypto'
 import fs from 'fs'
 import { createRequire } from 'module'
 import path from 'path'
 import { launchIsolatedApp, closeIsolatedApp, IsolatedApp } from './helpers/electron-app'
 import { seedCodexAccount, realmDirOf, createCodexConfig, openSession, activeSessionId, terminalRows, answerFirstScreen } from './helpers/codex-mode'
-import { nextFirstScreen, type FirstScreenAnswer } from './helpers/codex-first-screens'
+import { nextFirstScreen, FOOTER, type FirstScreenAnswer } from './helpers/codex-first-screens'
 import { pathWithoutCodex } from './helpers/fake-codex'
 import { isolatedHomeDir } from './helpers/isolated-env'
 
@@ -473,6 +491,21 @@ async function pressAndCancelPrevious(): Promise<number> {
 
 const noPressFolder = () => expect(fs.existsSync(path.join(ctx!.dataDir, 'electron-userdata', 'snap-capture'))).toBe(false)
 
+/** A rectangle's picture size: the engine's crop (bmp.ts pixelRectFor), each
+ *  edge rounded at the display's scale. */
+const rectangleSize = (at: { x: number; y: number }, size: { width: number; height: number }, scale: number) => ({
+  width: Math.round((at.x + size.width) * scale) - Math.round(at.x * scale),
+  height: Math.round((at.y + size.height) * scale) - Math.round(at.y * scale),
+})
+
+/** The whole screen's picture size: today's cap (screenshot-capture.ts
+ *  constrainToMaxDim), the longer side to 1920, the other kept in proportion. */
+function wholeScreenSize(display: Disp): { width: number; height: number } {
+  const { width: pw, height: ph } = display.physical
+  if (Math.max(pw, ph) <= MAX_DIM) return { width: pw, height: ph }
+  return pw >= ph ? { width: MAX_DIM, height: Math.round(ph * MAX_DIM / pw) } : { width: Math.round(pw * MAX_DIM / ph), height: MAX_DIM }
+}
+
 // D12: the Snap menu is never in a press's picture (aicc_planning#406).
 
 /** A pixel tells D12's two page pictures of the menu's box (open, closed)
@@ -665,9 +698,7 @@ async function pressReadingMenu(label: string, answerWith: MenuAnswer, rate: num
   let height: number
   let answeredAt: number
   if (answerWith === 'rectangle') {
-    // The engine's crop (bmp.ts pixelRectFor): each edge rounded at the scale.
-    width = Math.round((box.x + box.width) * s) - Math.round(box.x * s)
-    height = Math.round((box.y + box.height) * s) - Math.round(box.y * s)
+    ({ width, height } = rectangleSize(box, box, s))
     await overlay.mouse.move(box.x, box.y)
     await overlay.mouse.down()
     await overlay.mouse.move(box.x + box.width / 2, box.y + box.height / 2, { steps: 4 })
@@ -676,12 +707,7 @@ async function pressReadingMenu(label: string, answerWith: MenuAnswer, rate: num
     answeredAt = performance.now()
     await answer(overlay, () => overlay.keyboard.press('Enter'))
   } else {
-    // Today's cap, as D3 reads it.
-    const { width: pw, height: ph } = display.physical
-    const capped = Math.max(pw, ph) <= MAX_DIM ? { width: pw, height: ph }
-      : pw >= ph ? { width: MAX_DIM, height: Math.round(ph * MAX_DIM / pw) } : { width: Math.round(pw * MAX_DIM / ph), height: MAX_DIM }
-    width = capped.width
-    height = capped.height
+    ({ width, height } = wholeScreenSize(display))
     answeredAt = performance.now()
     await answer(overlay, () => overlay.getByRole('button', { name: 'Whole screen' }).click())
   }
@@ -792,9 +818,7 @@ test.describe('Snap on Windows', () => {
       const typedBefore = typedText().length
       const { overlay, display, start, from } = await pressNew()
       const s = display.scaleFactor
-      // The engine's crop (bmp.ts pixelRectFor): each edge rounded at the scale.
-      const width = Math.round((start.x + DRAG.width) * s) - Math.round(start.x * s)
-      const height = Math.round((start.y + DRAG.height) * s) - Math.round(start.y * s)
+      const { width, height } = rectangleSize(start, DRAG, s)
       await overlay.mouse.move(start.x, start.y)
       await overlay.mouse.down()
       await overlay.mouse.move(start.x + DRAG.width / 2, start.y + DRAG.height / 2, { steps: 4 })
@@ -825,9 +849,7 @@ test.describe('Snap on Windows', () => {
       const before = jpegs()
       const { overlay, display, from } = await pressNew()
       const { width: pw, height: ph } = display.physical
-      // Today's cap (screenshot-capture.ts constrainToMaxDim): the longer side to 1920, the other kept in proportion.
-      const capped = Math.max(pw, ph) <= MAX_DIM ? { width: pw, height: ph }
-        : pw >= ph ? { width: MAX_DIM, height: Math.round(ph * MAX_DIM / pw) } : { width: Math.round(pw * MAX_DIM / ph), height: MAX_DIM }
+      const capped = wholeScreenSize(display)
       const answeredAt = performance.now()
       await answer(overlay, () => overlay.getByRole('button', { name: 'Whole screen' }).click())
       await expectOverlayGone()
@@ -1030,13 +1052,12 @@ const CODEX_PREFIX = process.env.SNAP_E2E_CODEX ? path.resolve(process.env.SNAP_
 /** The Codex the test machine's readings used (P19; beta.17 C9). */
 const CODEX_VERSION = '0.157.1'
 const CODEX_LABEL = 'Snap Codex E2E'
-/** The model Codex asks for: P19's name, so the footer reads as on P19's recorded screens. */
-const CODEX_MODEL = 'p19-probe'
 const CODEX_FAKE_KEY = 'sk-e2e-fake-key-not-real'
 /** Everything but loopback goes nowhere (as codex-real-launch.spec.ts). */
 const DEAD_PROXY = { HTTPS_PROXY: 'http://127.0.0.1:9', HTTP_PROXY: 'http://127.0.0.1:9', ALL_PROXY: 'http://127.0.0.1:9', NO_PROXY: '127.0.0.1,localhost' }
 /** See the header. */
 const CODEX_START_MS = 120_000
+const CODEX_TURN_MS = 20_000
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
 /** One request probe P11's stand-in saw (its onEvent; a body is never kept),
@@ -1054,11 +1075,11 @@ let codexSid = ''
 const codexShim = () => path.join(CODEX_PREFIX, 'codex.cmd')
 
 /** The account folder's config: the model stand-in on loopback with no
- *  retries, the project trusted, and P19's tool server that cannot start. */
+ *  retries, the project trusted, and P19's tool server that cannot start.
+ *  No model: the app names the one its config chose (`-m`). */
 function codexConfigToml(port: number, projectDir: string): string {
   return [
     '# snap-e2e (plan 2.1.3-beta.18, 7.5): TEST HARNESS ONLY, a throwaway Codex home. The model is the loopback stand-in; no network.',
-    `model = "${CODEX_MODEL}"`,
     'model_provider = "snape2e"',
     '',
     '[model_providers.snape2e]',
@@ -1097,14 +1118,78 @@ function runCodexCli(dataDir: string, realm: string, args: string[], input?: str
 
 /** The Codex tab's screen as one text, each row's end trimmed. */
 const codexScreen = async (): Promise<string> => (await terminalRows(ctx!.page)).map((r) => r.replace(/\s+$/, '')).join('\n')
-/** Codex's composer with its footer under it (P19's pattern for a ready session). */
-const COMPOSER_AND_FOOTER = new RegExp(`(?:^|\\n) ?\\u203a(?:[ \\n]|$)[\\s\\S]*\\n {1,4}${CODEX_MODEL} [^\\n]*\\u00b7`)
-/** Codex's warning count after its warning sign (P19's recorded hint row: "1 warning . f2 to view"). */
-const warningCount = (screen: string): number | null => {
-  const m = /\u26a0 (\d+) warnings?\b/.exec(screen)
-  return m ? Number(m[1]) : null
+/** Codex's composer and its footer on the screen's last rows that are not
+ *  blank: the footer by its shape (the 9.2 rules' FOOTER: the app launches
+ *  Codex with its config's model, `-m gpt-6-astra` in run 45578961836, so the
+ *  footer does not carry the account config's model), the composer row (the
+ *  prompt sign) right above it; and Codex's warning count under the footer
+ *  (P19's recorded hint row: the warning sign, "1 warning . f2 to view"), or
+ *  null. */
+function codexRest(screen: string): { atRest: boolean; count: number | null } {
+  const shown = screen.split('\n').filter((l) => l.trim() !== '')
+  let footer = -1
+  for (let i = shown.length - 1; i >= 0 && footer < 0; i--) if (FOOTER.test(shown[i])) footer = i
+  if (footer < 1) return { atRest: false, count: null }
+  const m = /\u26a0 (\d+) warnings?\b/.exec(shown.slice(footer + 1).join('\n'))
+  return { atRest: /^ ?\u203a(?: |$)/.test(shown[footer - 1]), count: m ? Number(m[1]) : null }
 }
-const atRestWithCount = (screen: string) => COMPOSER_AND_FOOTER.test(screen) && warningCount(screen) !== null
+const warningCount = (screen: string): number | null => codexRest(screen).count
+const atRestWithCount = (screen: string) => { const r = codexRest(screen); return r.atRest && r.count !== null }
+
+/** The turns the stand-in has seen: Codex's requests that carry its tools
+ *  (Codex 0.157.1 sends a second request with no tools after a turn, P19). */
+const codexTurns = () => standInEvents.filter((e) => e.ev === 'request' && e.path === '/v1/responses' && Number(e.tools ?? 0) > 0)
+/** The pictures pressed into the Codex tab so far, by SHA-256, in order. */
+const codexSent: string[] = []
+const sha256Of = (file: string) => crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex')
+
+/** Before a press into the Codex tab: Codex at rest, its warning count 1, on
+ *  two reads 300 ms apart (a press made while the count shows). */
+async function expectCodexAtRestWithCount(): Promise<void> {
+  const read = async () => { const s = await codexScreen(); return atRestWithCount(s) && warningCount(s) === 1 }
+  const twice = async () => { if (!(await read())) return false; await sleep(300); return read() }
+  await expect.poll(twice, { timeout: CODEX_TURN_MS, intervals: [250] }).toBe(true)
+}
+
+/** After a press into the Codex tab: the one JPEG it saved (its size, not all
+ *  black); one new-engine line; main's one line saying Codex's image rule
+ *  pasted and sent it; and exactly one new turn at the stand-in, whose
+ *  pictures are every picture pressed so far, in order, each once, the newest
+ *  this file's SHA-256 (Codex sends the whole conversation each turn). Then
+ *  Codex back at rest with its count, and still that one turn. */
+async function expectSentToCodex(before: string[], turnsBefore: number, answeredAt: number, width: number, height: number, from: Mark, linePattern: RegExp): Promise<void> {
+  await expect.poll(() => jpegs().filter((f) => !before.includes(f)).length, { timeout: OVERLAY_MS, intervals: [50] }).toBe(1)
+  push('codexEnterToFileMs', Math.round(performance.now() - answeredAt))
+  const savedAt = performance.now()
+  const name = jpegs().find((f) => !before.includes(f))!
+  const file = path.join(shotsDir(), name)
+  const info = await jpegInfo(ctx!.app, file)
+  expect(info.empty, name).toBe(false)
+  expect({ width: info.width, height: info.height }, name).toEqual({ width, height })
+  expect(info.lit, `${name}: pixels not near black, of ${info.pixels}`).toBeGreaterThan(info.pixels / 100)
+  await expect.poll(() => snapLines(from).length, { timeout: CANCEL_MS }).toBe(1)
+  expect(snapLines(from)[0]).toMatch(linePattern)
+  codexSent.push(sha256Of(file))
+  try {
+    await expect.poll(() => linesSince(from, '[codex-image]').length, { timeout: CODEX_TURN_MS, intervals: [100] }).toBe(1)
+    expect(linesSince(from, '[codex-image]')[0]).toMatch(new RegExp(`^\\[codex-image\\] ${codexSid}: an image path of \\d+ characters pasted and sent; `))
+    await expect.poll(() => codexTurns().length, { timeout: CODEX_TURN_MS, intervals: [100] }).toBeGreaterThan(turnsBefore)
+    push('codexFileToTurnMs', Math.round(performance.now() - savedAt))
+    const turn = codexTurns()[turnsBefore]
+    expect((turn.images ?? []).map((i) => i.sha256 ?? `${i.way ?? 'unknown'} (not inline)`), 'the turn\'s pictures: every picture pressed so far, in order, each once').toEqual(codexSent)
+    const turnAt = performance.now()
+    await expectCodexAtRestWithCount()
+    push('codexTurnToRestMs', Math.round(performance.now() - turnAt))
+    expect(codexTurns().length, 'one turn for the press').toBe(turnsBefore + 1)
+  } catch (err) {
+    readings.codexAtFailure = {
+      screen: (await codexScreen().catch((e: Error) => `unread: ${e.message}`)).split('\n').filter((l) => l.trim()),
+      lines: mainLines.slice(from.console).filter((l) => /codex|snap/i.test(l)).slice(-40),
+      sent: codexSent,
+    }
+    throw err
+  }
+}
 
 test.describe('Snap into a Codex tab on Windows while Codex shows its warning count', () => {
   test.describe.configure({ mode: 'serial' })
@@ -1204,4 +1289,39 @@ test.describe('Snap into a Codex tab on Windows while Codex shows its warning co
     expect(shown, `no composer, footer and warning count within ${CODEX_START_MS} ms; the screen:\n${screen}`).toBe(true)
     expect(warningCount(screen), `the warning count is the one tool server's; the screen:\n${screen}`).toBe(1)
   })
+
+  for (let run = 1; run <= RUNS; run++) {
+    test(`C2 RECTANGLE run ${run}: a 200 by 120 DIP drag and Enter while Codex shows its warning count go to Codex as one turn carrying the picture`, async () => {
+      test.setTimeout(PRESS_TEST_MS + 2 * CODEX_TURN_MS)
+      await expectCodexAtRestWithCount()
+      const before = jpegs()
+      const turnsBefore = codexTurns().length
+      const { overlay, display, start, from } = await pressNew({ prefix: 'codex' })
+      const { width, height } = rectangleSize(start, DRAG, display.scaleFactor)
+      await overlay.mouse.move(start.x, start.y)
+      await overlay.mouse.down()
+      await overlay.mouse.move(start.x + DRAG.width / 2, start.y + DRAG.height / 2, { steps: 4 })
+      await overlay.mouse.move(start.x + DRAG.width, start.y + DRAG.height, { steps: 4 })
+      await overlay.mouse.up()
+      const answeredAt = performance.now()
+      await answer(overlay, () => overlay.keyboard.press('Enter'))
+      await expectOverlayGone()
+      await expectSentToCodex(before, turnsBefore, answeredAt, width, height, from, /^\[snap\] new engine: a rectangle of display \d+, /)
+    })
+  }
+
+  for (let run = 1; run <= RUNS; run++) {
+    test(`C3 WHOLE SCREEN run ${run}: the whole screen while Codex shows its warning count goes to Codex as one turn carrying the picture`, async () => {
+      test.setTimeout(PRESS_TEST_MS + 2 * CODEX_TURN_MS)
+      await expectCodexAtRestWithCount()
+      const before = jpegs()
+      const turnsBefore = codexTurns().length
+      const { overlay, display, from } = await pressNew({ prefix: 'codex' })
+      const { width, height } = wholeScreenSize(display)
+      const answeredAt = performance.now()
+      await answer(overlay, () => overlay.getByRole('button', { name: 'Whole screen' }).click())
+      await expectOverlayGone()
+      await expectSentToCodex(before, turnsBefore, answeredAt, width, height, from, /^\[snap\] new engine: the whole screen of display \d+, /)
+    })
+  }
 })
