@@ -160,10 +160,13 @@
  * CODEX_START_MS and CODEX_TURN_MS were set before any reading on the runner
  * (P19's own bound for Codex's ready composer is 60 s, the real-launch
  * spec's 150 s; C6's image rule waits up to 5 s for a ready composer and
- * Codex's placeholder showed within 314 ms); the run's readings are
- * codexStartMs, codexEnterToFileMs, codexFileToTurnMs and
- * codexTurnToRestMs. The part's readings go to
- * $SNAP_E2E_OUT/codex-readings.json.
+ * Codex's placeholder showed within 314 ms), and are not raised. Read since
+ * (run 45581252484 on de5d6c9c, all 7 green): Codex at rest with its count
+ * 5.4 s after the tab was asked for (5.8 s in run 45580311269), Enter to the
+ * file 32 to 94 ms, the file to Codex's turn at the stand-in 1.1 to 1.2 s,
+ * the turn to Codex at rest again 0.3 s; the app launches Codex with
+ * `-m gpt-6-astra`, and each press made one request, with no tools. The
+ * part's readings go to $SNAP_E2E_OUT/codex-readings.json.
  */
 import { test, expect, type ElectronApplication, type Page } from '@playwright/test'
 import { execFile, spawnSync } from 'child_process'
