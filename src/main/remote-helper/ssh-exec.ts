@@ -148,8 +148,16 @@ export interface ExecResult {
   notStarted?: true
 }
 
-/** sshFailure's words for an ssh that never started on this computer. */
-export const SSH_NOT_STARTED = 'ssh could not be started on this computer (is OpenSSH installed, and is its folder on PATH?)'
+/** sshFailure's words for an ssh that never started on this computer. A
+ *  remote action never reads PATH again, so a change to it takes a restart. */
+export const SSH_NOT_STARTED = 'ssh could not be started on this computer (is OpenSSH installed, and is its folder on PATH as a full path? Restart the app after a change to PATH)'
+
+/** The log line for an ssh that never started: the error its start got and
+ *  nothing else (no environment, no command line), on one line, bounded. It
+ *  tells a blocked ssh.exe from a missing one. */
+export function notStartedLogLine(host: string, error: string): string {
+  return `[remote-helper] ${host}: ssh could not be started on this computer: ${error.replace(/\s+/g, ' ').trim().slice(0, 300)}`
+}
 
 /** The most standard output a one-shot exec keeps; more ends it. */
 export const EXEC_STDOUT_MAX = 2 * 1024 * 1024
@@ -412,7 +420,9 @@ export class ExecStream extends Duplex {
 /**
  * Start one long exec of `script` and answer its stream once the launcher's
  * hash line said `ok` (ExecStream). Rejects, with ssh ended, when ssh fails,
- * the hash line says anything else, or nothing comes within `timeoutMs`.
+ * the hash line says anything else, or nothing comes within `timeoutMs`. The
+ * error carries `final`, and, when ssh never started, `startError`: the error
+ * its start got, for the caller's log (notStartedLogLine).
  */
 export async function openScriptStream(
   runner: SshRunner,
@@ -427,9 +437,9 @@ export async function openScriptStream(
   let child: ChildProcess
   try {
     child = runner.spawn(runner.sshPath(), args, { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true, env: runner.env() })
-  } catch {
+  } catch (e) {
     // No ssh found, or none that could be spawned: nothing started.
-    throw Object.assign(new Error(SSH_NOT_STARTED), { final: false })
+    throw Object.assign(new Error(SSH_NOT_STARTED), { final: false, startError: e instanceof Error ? e.message : String(e) })
   }
   let err = ''
   child.stderr?.on('data', (c: Buffer) => { if (err.length < STDERR_MAX) err += c.toString('utf8').slice(0, STDERR_MAX - err.length) })
@@ -452,19 +462,23 @@ export async function openScriptStream(
     })
     // `final`: no new try will mend it (a sign-in or host key failure, a hash
     // that is not the app's, no holder for the session): section 11.
-    const fail = (why: string, final: boolean) => {
+    const fail = (why: string, final: boolean, startError?: string) => {
       if (settled) return
       settled = true
       clearTimeout(timer)
       stream.destroy()
-      reject(Object.assign(new Error(why), { final }))
+      reject(Object.assign(new Error(why), { final, ...(startError === undefined ? {} : { startError }) }))
     }
     const timer = setTimeout(() => fail('the machine did not answer in time', false), timeoutMs)
     timer.unref?.()
-    stream.on('error', (e) => fail(child.pid === undefined ? SSH_NOT_STARTED : e.message, /hash check/.test(e.message)))
+    stream.on('error', (e) => {
+      if (child.pid === undefined) fail(SSH_NOT_STARTED, false, e.message)
+      else fail(e.message, /hash check/.test(e.message))
+    })
     void result.then((r) => fail(
       sshFailure(r) ?? (r.code === 3 ? 'no session helper holds this session on the machine' : `the session helper on the machine ended before it answered (exit ${r.code ?? 'unknown'})`),
       isFinalSshFailure(r) || r.code === 3 || r.code === 97,
+      r.notStarted ? r.stderr : undefined,
     ))
   })
 }

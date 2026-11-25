@@ -57,6 +57,7 @@ function memoryStore(): MachineStore & { value: unknown } {
 }
 
 let inUse = 0
+let logs: string[] = []
 function machines(ssh: FakeSsh, store: MachineStore = memoryStore(), bundled: () => BundledLinuxHelper = () => HELPER) {
   return new RemoteMachines({
     runner: ssh,
@@ -64,11 +65,11 @@ function machines(ssh: FakeSsh, store: MachineStore = memoryStore(), bundled: ()
     bundled: async () => ({ ok: true, helper: bundled() }),
     readFile: async () => BYTES,
     inUse: () => inUse,
-    log: () => {},
+    log: (line) => { logs.push(line) },
   })
 }
 
-beforeEach(() => { inUse = 0 })
+beforeEach(() => { inUse = 0; logs = [] })
 
 describe('remote machines: the records file', () => {
   const ID = 'e'.repeat(32)
@@ -417,8 +418,11 @@ describe('remote machines: Check', () => {
 describe('remote machines: no ssh on this computer', () => {
   const noSsh = () => { throw new Error('ssh was not found in a folder PATH names (ssh.exe).') }
   const named = /^rocky\.lan could not be reached: ssh could not be started on this computer/
+  // The error ssh's start got goes to the log, so a blocked ssh.exe is told
+  // from a missing one.
+  const logged = (): string[] => logs.filter((l) => l === '[remote-helper] rocky.lan: ssh could not be started on this computer: ssh was not found in a folder PATH names (ssh.exe).')
 
-  it('Add says ssh could not be started here, not that the host did not answer, and starts nothing', async () => {
+  it('Add says ssh could not be started here, not that the host did not answer, logs why, and starts nothing', async () => {
     const ssh = new FakeSsh(linuxHost())
     const m = machines(ssh)
     const q = await m.prepare(CONFIGS, 'cfg-key')
@@ -427,7 +431,9 @@ describe('remote machines: no ssh on this computer', () => {
     const r = await m.add(q.token)
     expect(r.ok).toBe(false)
     expect(r.message).toMatch(named)
+    expect(r.message).toMatch(/is its folder on PATH as a full path\? Restart the app after a change to PATH\)\.$/)
     expect(r.message).not.toMatch(/bin\/sh/)
+    expect(logged()).toHaveLength(1)
     expect(ssh.calls).toHaveLength(0)
     expect(m.list()).toHaveLength(0)
   })
@@ -445,9 +451,11 @@ describe('remote machines: no ssh on this computer', () => {
     expect(c.ok).toBe(false)
     expect(c.message).toMatch(/did not pass its check: rocky\.lan could not be reached: ssh could not be started on this computer/)
     expect(c.message).not.toMatch(/bin\/sh/)
+    expect(logged()).toHaveLength(1)
     const r = await m.remove(did)
     expect(r.ok).toBe(false)
     expect(r.message).toMatch(named)
+    expect(logged()).toHaveLength(2)
     expect(ssh.calls).toHaveLength(0)
     expect(m.list()).toHaveLength(1)
   })

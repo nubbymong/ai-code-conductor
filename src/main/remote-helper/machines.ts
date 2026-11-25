@@ -42,7 +42,7 @@ import * as path from 'path'
 import { parseSelfTestResult, parseVersionLine, readListing } from '../session-helper/protocol'
 import { DID_RE, INSTALL_ID_RE } from './scripts'
 import {
-  afterHashLine, newNonce, readHashLine, readScriptResult, runScript, sshFailure, targetProblem,
+  afterHashLine, newNonce, notStartedLogLine, readHashLine, readScriptResult, runScript, sshFailure, targetProblem,
   type ExecResult, type SshRunner, type SshTarget,
 } from './ssh-exec'
 import type { BundledLinuxHelper } from './manifest'
@@ -391,7 +391,7 @@ export class RemoteMachines {
     // The holders first: a session still held there keeps the folder.
     const nonce = newNonce()
     const listed = await runScript(this.deps.runner, target, 'list', [nonce, m.did, install, m.helper.folder, m.helper.sha256])
-    const failed = sshFailure(listed)
+    const failed = this.sshFailed(m.host, listed)
     if (failed) return { ok: false, message: `${m.host} could not be reached: ${failed}.` }
     const hash = readHashLine(listed.stdout, nonce)
     if (hash?.state === 'ok') {
@@ -412,7 +412,7 @@ export class RemoteMachines {
   private async runRemove(target: SshTarget, did: string, install: string): Promise<RemoteActionResult> {
     const nonce = newNonce()
     const r = await runScript(this.deps.runner, target, 'remove', [nonce, did, install])
-    const failed = sshFailure(r)
+    const failed = this.sshFailed(target.host, r)
     if (failed) return { ok: false, message: `${target.host} could not be reached: ${failed}.` }
     const res = readScriptResult(r.stdout, nonce)
     if (!res) return { ok: false, message: `${target.host} did not say whether the helper's folder was removed.` }
@@ -438,7 +438,7 @@ export class RemoteMachines {
     // 2. probe
     let nonce = newNonce()
     const probed = await runScript(this.deps.runner, target, 'probe', [nonce, did, install], { firstConnection: a.first })
-    const pf = sshFailure(probed)
+    const pf = this.sshFailed(target.host, probed)
     if (pf) return { ok: false, message: `${target.host} could not be reached: ${pf}.` }
     const probe = readScriptResult(probed.stdout, nonce)
     if (!probe) return { ok: false, message: `${target.host} did not answer the session helper's questions (is /bin/sh there?).` }
@@ -462,7 +462,7 @@ export class RemoteMachines {
       const bytes = await (this.deps.readFile ?? fs.promises.readFile)(helper.file)
       if (bytes.length !== helper.size) return { ok: false, message: 'The app\'s Linux helper changed while it was being read. Try again.' }
       const up = await runScript(this.deps.runner, target, 'install', [nonce, did, install, String(helper.size)], { stdin: bytes, timeoutMs: 180_000 })
-      const uf = sshFailure(up)
+      const uf = this.sshFailed(target.host, up)
       if (uf) return fail(`${target.host} could not be reached: ${uf}.`, a.first)
       const res = readScriptResult(up.stdout, nonce)
       if (!res) return fail(`${target.host} did not say whether the upload arrived.`, a.first)
@@ -477,7 +477,7 @@ export class RemoteMachines {
       }
       nonce = newNonce()
       const put = await runScript(this.deps.runner, target, 'commit', [nonce, did, install, helper.folder, staged])
-      const cf = sshFailure(put)
+      const cf = this.sshFailed(target.host, put)
       if (cf) return fail(`${target.host} could not be reached: ${cf}.`, a.first)
       const cr = readScriptResult(put.stdout, nonce)
       if (!cr?.ok) return fail(`The file could not be put in place: ${refusalText(cr?.refused ?? null)}.`, a.first)
@@ -496,6 +496,12 @@ export class RemoteMachines {
     return { ok: true, record }
   }
 
+  /** sshFailure; an ssh that never started also logs the error its start got. */
+  private sshFailed(host: string, r: ExecResult): string | null {
+    if (r.notStarted) this.deps.log(notStartedLogLine(host, r.stderr))
+    return sshFailure(r)
+  }
+
   private async discard(target: SshTarget, did: string, install: string, staged: string): Promise<void> {
     const nonce = newNonce()
     const r = await runScript(this.deps.runner, target, 'discard', [nonce, did, install, staged]).catch((): ExecResult => ({ code: null, stdout: '', stderr: '', timedOut: false }))
@@ -507,7 +513,7 @@ export class RemoteMachines {
   private async selfCheck(target: SshTarget, did: string, install: string, helper: BundledLinuxHelper): Promise<{ ok: true } | { ok: false; why: string }> {
     let nonce = newNonce()
     const v = await runScript(this.deps.runner, target, 'version', [nonce, did, install, helper.folder, helper.sha256])
-    const vf = sshFailure(v)
+    const vf = this.sshFailed(target.host, v)
     if (vf) return { ok: false, why: `it could not be reached (${vf})` }
     const vh = readHashLine(v.stdout, nonce)
     if (vh?.state !== 'ok') return { ok: false, why: `the helper file there did not pass its hash check (${vh?.state ?? 'no answer'})` }
@@ -515,7 +521,7 @@ export class RemoteMachines {
     if (version !== helper.version) return { ok: false, why: `the helper there reports version ${version ?? 'nothing'}, not ${helper.version}` }
     nonce = newNonce()
     const s = await runScript(this.deps.runner, target, 'selftest', [nonce, did, install, helper.folder, helper.sha256])
-    const sf = sshFailure(s)
+    const sf = this.sshFailed(target.host, s)
     if (sf) return { ok: false, why: `it could not be reached (${sf})` }
     if (readHashLine(s.stdout, nonce)?.state !== 'ok') return { ok: false, why: 'the helper file there did not pass its hash check' }
     const report = parseSelfTestResult(afterHashLine(s.stdout, nonce), nonce)

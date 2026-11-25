@@ -300,3 +300,37 @@ describe('remote session: an image paste', () => {
     await t.pty.ended
   })
 })
+
+// Found by the beta.17 final-head review: an ssh that could not be started
+// was named nowhere, and the error its start got went to no log, so a blocked
+// ssh.exe could not be told from a missing one.
+describe('remote session: no ssh on this computer', () => {
+  const noSsh = () => { throw new Error('ssh was not found in a folder PATH names (ssh.exe).') }
+  const line = '[remote-helper] rocky.lan: ssh could not be started on this computer: ssh was not found in a folder PATH names (ssh.exe).'
+
+  it('a tab start says so in its note, logs the error ssh\'s start got, and starts nothing', async () => {
+    const ssh = new FakeSsh({ answer: () => ({ code: 1 }) })
+    ssh.sshPath = noSsh
+    const logs: string[] = []
+    const t = tab(ssh, 'tab-no-ssh', logs)
+    await until('the end', () => t.exit() !== null)
+    expect(t.out()).toContain('could not start through the session helper on rocky.lan: rocky.lan could not be reached: ssh could not be started on this computer')
+    expect(logs).toContain(line)
+    expect(ssh.calls).toHaveLength(0)
+  })
+
+  it('a reconnect (the bridge exec) logs the error ssh\'s start got', async () => {
+    const sid = remoteSessionId('tab-no-ssh-again')
+    const holder = new FakeHolder(sid, 'tab-no-ssh-again', store)
+    const ssh = new FakeSsh({ answer: (c) => (c.script === 'hold' ? holdAnswer(c, holder) : { code: 1 }), bridge: () => holder.connect() })
+    const logs: string[] = []
+    const t = tab(ssh, 'tab-no-ssh-again', logs)
+    await until('attached', () => holder.attached !== null)
+    ssh.sshPath = noSsh
+    ssh.children[1].kill()
+    await until('the log line', () => logs.includes(line))
+    expect(ssh.scripts()).toEqual(['hold', 'bridge'])
+    t.pty.kill()
+    await t.pty.ended
+  })
+})

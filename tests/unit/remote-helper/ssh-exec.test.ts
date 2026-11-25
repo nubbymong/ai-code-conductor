@@ -29,7 +29,7 @@ beforeEach(() => {
   cp.spawn.mockReset().mockImplementation((file: string) => { throw new Error(`no process in this test: ${file}`) })
 })
 import {
-  ExecStream, PREAMBLE_MAX, execArgv, markedLines, nodeSshRunner, openScriptStream, parseSshVersion, readHashLine, readScriptResult, runScript, sshEnv, sshFailure, targetProblem,
+  ExecStream, PREAMBLE_MAX, execArgv, markedLines, nodeSshRunner, notStartedLogLine, openScriptStream, parseSshVersion, readHashLine, readScriptResult, runScript, sshEnv, sshFailure, targetProblem,
   type SshRunner,
 } from '../../../src/main/remote-helper/ssh-exec'
 import { scriptCommand, scriptText, holderLabel, type ScriptName } from '../../../src/main/remote-helper/scripts'
@@ -288,13 +288,22 @@ describe('ssh exec: no ssh found', () => {
     expect(sshFailure(ran)).toBeNull()
   })
 
-  it('the bridge exec (a tab\'s reconnect) names an ssh that cannot be found or spawned, and starts nothing', async () => {
+  it('the bridge exec (a tab\'s reconnect) names an ssh that cannot be found or spawned, hands on the error for the log, and starts nothing', async () => {
     const values = [N, D, I, FOLDER, SHA, SID]
     const none = new FakeSsh({ answer: () => ({}) })
     none.sshPath = () => { throw new Error('no ssh program was found') }
-    await expect(openScriptStream(none, T, 'bridge', values, N, 5000)).rejects.toThrow(NOT_STARTED)
+    await expect(openScriptStream(none, T, 'bridge', values, N, 5000)).rejects.toMatchObject({ message: expect.stringMatching(NOT_STARTED), final: false, startError: 'no ssh program was found' })
     expect(none.calls).toHaveLength(0)
-    await expect(openScriptStream(erring(new Child()), T, 'bridge', values, N, 5000)).rejects.toThrow(NOT_STARTED)
+    await expect(openScriptStream(erring(new Child()), T, 'bridge', values, N, 5000)).rejects.toMatchObject({ message: expect.stringMatching(NOT_STARTED), final: false, startError: 'spawn ssh ENOENT' })
+  })
+
+  it('the log line for it holds the error alone, on one line, bounded', () => {
+    const head = '[remote-helper] rocky.lan: ssh could not be started on this computer: '
+    expect(notStartedLogLine('rocky.lan', 'spawn C:\\x\\ssh.exe EACCES')).toBe(`${head}spawn C:\\x\\ssh.exe EACCES`)
+    const long = notStartedLogLine('rocky.lan', `a\r\nb\t${'x'.repeat(1000)}`)
+    expect(long).not.toMatch(/[\r\n\t]/)
+    expect(long.startsWith(`${head}a b x`)).toBe(true)
+    expect(long.length).toBe(head.length + 300)
   })
 
   it('only the app sets it: host text that reads like it is a plain failure', () => {

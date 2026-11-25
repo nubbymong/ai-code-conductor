@@ -44,7 +44,7 @@ import { HelperPty, NothingStartedError, type HelperPtyDriver } from '../session
 import { checkLaunch, readListing, readRecord, type HolderRecord, type LaunchSpec } from '../session-helper/protocol'
 import { stripSpoofableText } from '../../shared/safe-text'
 import { holderLabel } from './scripts'
-import { afterHashLine, newNonce, openScriptStream, readHashLine, runScript, sshFailure, type SshRunner, type SshTarget } from './ssh-exec'
+import { afterHashLine, newNonce, notStartedLogLine, openScriptStream, readHashLine, runScript, sshFailure, type SshRunner, type SshTarget } from './ssh-exec'
 import type { RemoteMachineRecord } from './machines'
 
 /** The helper's session id for a remote tab: always the same for the same app
@@ -199,6 +199,7 @@ export class RemoteDriver implements HelperPtyDriver {
       const nonce = newNonce()
       const r = await runScript(this.o.runner, this.target, 'hold', this.values(nonce, sid, holderLabel(label)))
       const failed = sshFailure(r)
+      if (r.notStarted) this.o.log(notStartedLogLine(host, r.stderr))
       if (failed) this.failWith(`${host} could not be reached: ${failed}`)
       const hash = readHashLine(r.stdout, nonce)
       if (!hash) this.failWith(`${host} did not answer the session helper (is it still added? press Check on the Machines page)`)
@@ -305,7 +306,8 @@ export class RemoteDriver implements HelperPtyDriver {
     try {
       opened = await openScriptStream(this.o.runner, this.target, 'bridge', this.values(nonce, record.session), nonce, BRIDGE_OPEN_MS)
     } catch (err) {
-      const e = err as Error & { final?: boolean }
+      const e = err as Error & { final?: boolean; startError?: string }
+      if (typeof e.startError === 'string') this.o.log(notStartedLogLine(this.o.machine.host, e.startError))
       throw e.final ? new FinalError(e.message) : e
     }
     this.linkPid = opened.pid
