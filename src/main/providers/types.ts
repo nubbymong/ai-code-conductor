@@ -600,8 +600,10 @@ export interface SessionRunScreen {
   /** The Watchdog's retry (submitRetry): `text` into the session. A rule
    *  that reads the screen answers whether it was delivered, waiting up to
    *  `readyWaitMs` and no later than `readyBy`, and types nothing once
-   *  `stillWanted` says no; a rule that types at once answers nothing. */
-  retry?(sessionId: string, text: string, opts: { readyWaitMs: number; readyBy: number; stillWanted?: () => boolean }, typing: RunScreenTyping): void | Promise<SubmitTextResult>
+   *  `stillWanted` says no; a rule that types at once answers nothing.
+   *  `enterDelayMs`: how long an Enter typed as its own write follows the
+   *  text's last slice. */
+  retry?(sessionId: string, text: string, opts: { readyWaitMs: number; readyBy: number; stillWanted?: () => boolean; enterDelayMs: number }, typing: RunScreenTyping): void | Promise<SubmitTextResult>
   /** A command bar prompt button's Send (submitPrompt; "Type it only" is
    *  the door's own, for any provider with this member): `text`, then its
    *  submission. `readyWaitMs`: how long a rule that reads the screen waits
@@ -639,6 +641,13 @@ export interface RunScreenTyping {
    *  session ('' for every other session): a write starts with it where
    *  copy-mode would take the keys. */
   readonly leave: string
+  /** True for a tab that runs through the session helper on its machine
+   *  (2.1.3-beta.18 fix round): the holder there writes each write into the
+   *  program whole, so a line and its Enter in one write reach the CLI as one
+   *  read, and Claude Code (2.1.332, measured) takes a control character as a
+   *  key only in a read shorter than 64 characters. A member types an Enter
+   *  there as its own write. False for every other session. */
+  readonly wholeWrites: boolean
   /** Whether the session's terminal process is still the run the door was
    *  asked for (false when it had none). */
   live(): boolean

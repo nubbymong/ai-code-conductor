@@ -62,7 +62,10 @@
 // Claude Code session's is the tmux leave key on an SSH Persistent session,
 // then the line and Enter in one write, unchanged (since 2.1.3-beta.18
 // section 4 the Claude Code package's retry member). That changes how a Codex
-// retry is typed, written at submitRetry, and nothing else said below.
+// retry is typed, written at submitRetry, and nothing else said below. Since
+// the 2.1.3-beta.18 fix round a tab through the session helper on its machine
+// gets the retry's Enter as its own write (RunScreenTyping.wholeWrites),
+// written at submitRetry too.
 //
 // Each function's body moved here from the PTY manager as it was: nothing
 // typed, its order or its timing changed, and no queue, delay or check added,
@@ -102,6 +105,8 @@ import { MARKER_FALLBACK_FLUSH_MS } from '../canvas/canvas-marker-queue'
 import { logInfo } from '../debug-logger'
 import { PasteQueue } from '../paste-queue'
 import { runChunkedWrite, WRITE_CHUNK_SIZE, WRITE_CHUNK_DELAY } from '../pty-chunked-write'
+import { isRemoteHelperTab } from '../remote-helper'
+import { PROMPT_ENTER_DELAY_MS } from './enter-delay'
 
 /** What the PTY manager lends this module, registered when it loads. */
 export interface SessionInputPorts {
@@ -164,7 +169,10 @@ function notTaken(sessionId: string, what: string): void {
 /** What a door hands a run screen's member (RunScreenTyping) for `run`, the
  *  session's terminal process when the door was asked: the write port, the
  *  tmux leave key on an SSH Persistent session (read now, when the door is
- *  asked), whether the run is still the session's, and textSettled.
+ *  asked), whether the session is a tab through the session helper on its
+ *  machine (wholeWrites, read now too, from the remote helper's own record of
+ *  the tabs it started), whether the run is still the session's, and
+ *  textSettled.
  *  #85: the wheel opens tmux's scrollback view on an SSH Persistent session,
  *  and copy-mode swallows input, so a pane the user scrolled up in would take
  *  a retry or a prompt instead of the CLI. The leave key is given for every
@@ -174,6 +182,7 @@ function typingFor(sessionId: string, run: IPty | undefined): RunScreenTyping {
   const p = port()
   return {
     leave: p.tmuxWrapped(sessionId) ? TMUX_WHEEL_EXIT_KEY : '',
+    wholeWrites: isRemoteHelperTab(sessionId),
     live: () => !!run && p.run(sessionId) === run,
     write: (data) => p.write(sessionId, data),
     settled: (data, delayMs) => textSettled(data, delayMs),
@@ -233,7 +242,12 @@ export const RETRY_CODEX_READY_WAIT_MS = 5_000
  *   or over SSH) is the leave key on an SSH Persistent session, then the
  *   line and Enter, in one write, and
  *   answers nothing. It is typed at once, as the Watchdog decides, so
- *   `stillWanted` has nothing to guard there.
+ *   `stillWanted` has nothing to guard there. In a tab through the session
+ *   helper on its machine (2.1.3-beta.18 fix round) the Enter is its own
+ *   write PROMPT_ENTER_DELAY_MS after the line's last slice, and only while
+ *   the run is still the one the line went to, as a prompt button's Send
+ *   goes: there a line and its Enter in one write reach Claude Code as one
+ *   read, and in a read of 64 characters or more the Enter stays in the text.
  * - A session whose provider has no retry rule (or no provider, or none
  *   registered) gets nothing typed, one log line, and the answer not
  *   delivered (`session-gone`), so the Watchdog logs it.
@@ -250,12 +264,14 @@ export function submitRetry(sessionId: string, text: string, stillWanted?: () =>
     readyWaitMs: RETRY_CODEX_READY_WAIT_MS,
     readyBy: Date.now() + RETRY_CODEX_READY_WAIT_MS,
     ...(stillWanted ? { stillWanted } : {}),
+    enterDelayMs: PROMPT_ENTER_DELAY_MS,
   }, typingFor(sessionId, port().run(sessionId)))
 }
 
 /** #333: how long a prompt button's Enter follows the last slice of its text
- *  (the delay the renderer's Codex rule uses, codexComposer.ts). */
-export const PROMPT_ENTER_DELAY_MS = 300
+ *  (the delay the renderer's Codex rule uses, codexComposer.ts). Set in
+ *  ./enter-delay.ts, which the session helper's terminal reads too. */
+export { PROMPT_ENTER_DELAY_MS }
 /** #333: the same text pressed again for a session within this long is
  *  dropped (the window of writePty's duplicate guard, which a write that does
  *  not end in Enter no longer reaches). */

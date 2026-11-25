@@ -24,10 +24,29 @@ const PASTE_END = '\u001b[201~'
  * scrollback view there, and copy-mode would swallow the retry; outside it
  * the key does nothing), typed at once, as the Watchdog decides. It answers
  * nothing. These are the bytes the module's submitLine typed until
- * 2.1.3-beta.18 section 4, byte for byte.
+ * 2.1.3-beta.18 section 4, byte for byte, for every session but one.
+ *
+ * A tab through the session helper on its machine (`typing.wholeWrites`,
+ * 2.1.3-beta.18 fix round) gets the line, then Enter as its own write
+ * `enterDelayMs` after the line's last slice went, and only while the run is
+ * still the one the line went to, as a prompt button's Send goes (below). The
+ * holder there writes each write whole, so the line and its Enter in one
+ * write reach Claude Code as one read, and Claude Code (2.1.332, measured)
+ * takes a control character as a key only in a read shorter than 64
+ * characters: a retry message of 63 characters or more was typed and not
+ * sent. The line's write is made at once, so one that throws still throws to
+ * the Watchdog; an Enter that cannot go is dropped, as the session is gone.
  */
-function retryClaudeLine(text: string, typing: RunScreenTyping): void {
-  typing.write(`${typing.leave}${text}\r`)
+function retryClaudeLine(text: string, opts: { enterDelayMs: number }, typing: RunScreenTyping): void {
+  if (!typing.wholeWrites) {
+    typing.write(`${typing.leave}${text}\r`)
+    return
+  }
+  const data = `${typing.leave}${text}`
+  typing.write(data)
+  void typing.settled(data, opts.enterDelayMs).then(() => {
+    if (typing.live()) typing.write(`${typing.leave}\r`)
+  }).catch(() => { /* the session is gone */ })
 }
 
 /**
@@ -93,7 +112,7 @@ export const CLAUDE_RUN_SCREEN: SessionRunScreen = {
   resize: () => {},
   close: () => {},
   has: () => false,
-  retry: (_sessionId, text, _opts, typing) => retryClaudeLine(text, typing),
+  retry: (_sessionId, text, opts, typing) => retryClaudeLine(text, opts, typing),
   prompt: (_sessionId, text, opts, typing) => sendClaudePrompt(text, opts, typing),
   marker: (sessionId, line, opts, typing) => holdClaudeMarker(sessionId, line, opts.canvasId, typing),
   image: (_sessionId, imagePath, sentence, opts, typing) => pasteClaudeImage(imagePath, sentence, opts, typing),
