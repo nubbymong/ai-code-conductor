@@ -171,11 +171,20 @@ export function nodeSshRunner(sshPath: () => string, env: () => NodeJS.ProcessEn
   return {
     sshPath,
     version: () => {
-      version ??= new Promise((resolve) => {
+      if (version) return version
+      // sshPath() throws when no ssh is found (sshProgram). That reads as an
+      // unknown version and is not kept, so an ssh installed later is found
+      // on the next call, and an exec meets its own failure at its spawn.
+      let settle: (v: [number, number] | null) => void = () => {}
+      const read = new Promise<[number, number] | null>((resolve) => { settle = resolve })
+      try {
         execFile(sshPath(), ['-V'], { windowsHide: true, timeout: 10_000, env: sshEnv(env()) }, (_err, stdout, stderr) => {
-          resolve(parseSshVersion(`${stderr ?? ''}${stdout ?? ''}`))
+          settle(parseSshVersion(`${stderr ?? ''}${stdout ?? ''}`))
         })
-      })
+      } catch {
+        return Promise.resolve(null)
+      }
+      version = read
       return version
     },
     spawn: (file, args, opts) => nodeSpawn(file, args, opts),

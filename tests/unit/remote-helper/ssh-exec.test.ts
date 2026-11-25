@@ -13,7 +13,7 @@ import { EventEmitter } from 'events'
 import { PassThrough } from 'stream'
 import type { ChildProcess } from 'child_process'
 import {
-  ExecStream, PREAMBLE_MAX, execArgv, markedLines, parseSshVersion, readHashLine, readScriptResult, runScript, sshEnv, sshFailure, targetProblem,
+  ExecStream, PREAMBLE_MAX, execArgv, markedLines, nodeSshRunner, parseSshVersion, readHashLine, readScriptResult, runScript, sshEnv, sshFailure, targetProblem,
 } from '../../../src/main/remote-helper/ssh-exec'
 import { scriptCommand, scriptText, holderLabel, type ScriptName } from '../../../src/main/remote-helper/scripts'
 import { FakeSsh } from './fake-ssh'
@@ -227,5 +227,23 @@ describe('ssh exec: the bridge stream', () => {
     const e2 = new Promise<Error>((r) => s2.on('error', r))
     bad.stdout.write(`AICC-HASH ${N} mismatch ${'b'.repeat(64)}\n`)
     expect((await e2).message).toMatch(/hash check \(mismatch\)/)
+  })
+})
+
+// Found by the beta.17 final-head review: sshProgram() throws when no ssh is
+// found, and the runner kept that failure as its version for the rest of the
+// run, so every later exec failed before its own handling, even once ssh was
+// installed. Nothing starts here: the stand-in throws before any spawn.
+describe('ssh exec: no ssh found', () => {
+  it('reads as an unknown version, an exec answers its own failure, and the next call looks for ssh again', async () => {
+    let looks = 0
+    const runner = nodeSshRunner(() => { looks++; throw new Error('no ssh program was found') }, () => ({}))
+    await expect(runner.version()).resolves.toBeNull()
+    const r = await runScript(runner, T, 'probe', [N, D, I])
+    expect(r).toMatchObject({ code: null, stdout: '', timedOut: false })
+    expect(r.stderr).toContain('no ssh program was found')
+    const before = looks
+    await expect(runner.version()).resolves.toBeNull()
+    expect(looks).toBe(before + 1)
   })
 })
