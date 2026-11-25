@@ -1099,16 +1099,33 @@ of section 8 (R7) is a separate capability that also carries
 `session.prepare`. A Claude Code session's hooks can reach the app through its
 holder instead of the hooks gateway. A holder from 2.1.3-beta.8 offers `hooks`
 in its hello. The app acks `["core","local","hooks"]` only on the connections
-of a Claude Code session it started through the holder (the agent sessions'
-setting, off by default), and only when the hello offers `hooks`; every other
-connection acks `["core","local"]` and is never sent a hook event. For such a
-session, while the hooks gateway is on and listening, the app switches the
-session's settings file to the hook mode for every injected event,
-`PreToolUse` included (from 2.1.3-beta.14; before it `PreToolUse` stayed on
-the hooks gateway), once the holder answers `term.launched` and before the
-attach sends the launch line; a holder without `hooks` leaves the session on
-the gateway. The app reads each `event` strictly (on channel 0 only, its fields
-only, `seq` from 1, `kind` one of the nine and the payload's
+of a Claude Code session, or (from 2.1.3-beta.18) a Codex session, it started
+through the holder (the agent sessions' setting, off by default), and only
+when the hello offers `hooks`; every other connection acks `["core","local"]`
+and is never sent a hook event. For such a Claude Code session, while the
+hooks gateway is on and listening, the app switches the session's settings
+file to the hook mode for every injected event, `PreToolUse` included (from
+2.1.3-beta.14; before it `PreToolUse` stayed on the hooks gateway), once the
+holder answers `term.launched` and before the attach sends the launch line; a
+holder without `hooks` leaves the session on the gateway.
+
+From 2.1.3-beta.18 a held Codex session's hooks go through its holder too.
+Codex runs one hook command for every session, and keys its trust on the
+command's text, so the app switches no file. The launch its holder runs
+carries `hookKinds` (`SessionStart`, `UserPromptSubmit`, `PreToolUse`,
+`PostToolUse`, `PermissionRequest`, `Stop`) and, in its environment,
+`AICC_HELPER_PATH` (the helper copy), `AICC_HELPER_STORE` and
+`AICC_HELPER_SESSION`. These are sent only to a holder that offers `hooks` and
+`status`. The app's forwarder (`scripts/ccc-codex-hook.js`) runs
+`<AICC_HELPER_PATH> hook` with the event on its standard input, only when that
+path's real path is this user's helper copy as the app lays it out (no link at
+any level the app made, one name), the store is that helper folder's `store`
+and the session has the helper's shape; otherwise it does nothing. A Codex
+session that is not held keeps its hook file and the gateway.
+
+The app reads each `event` strictly (on channel 0 only, its fields only, `seq`
+from 1, `kind` one of the kinds the session's launch declared (`hookKinds`),
+or of the nine when it declared none (from 2.1.3-beta.18), and the payload's
 `hook_event_name`, the payload at most 65,280 bytes and the message at most
 64 KiB), drops a `seq` it has seen (an app before 2.1.3-beta.14 also dropped a
 `PreToolUse`), takes none while the hooks gateway is off or not listening, and

@@ -825,7 +825,13 @@ tab's hook record; any other end drops it.
 At an update the app lets go of each connection that takes hook events with `term.detach` and
 waits for the answer (B1f, aicc_planning#423), so a Claude Code session's hook events made after
 the let-go reach the next start. A Codex session's made from the let-go until the next run
-writes its hook file again are lost (P20 (a)); S16 item 4's later S12 step closes that. The
+writes its hook file again were lost (P20 (a)). From 2.1.3-beta.18 (S12's remaining step, plan
+section 5), a held Codex session's launch names the helper's hook mode in its environment
+(AICC_HELPER_PATH, AICC_HELPER_STORE, AICC_HELPER_SESSION) and declares Codex's six kinds
+(`hookKinds`). Its forwarder runs the hook mode, and its events wait in its holder and reach the
+take-over. The release marks the kept record (`hooks: "holder"`). A session kept by
+2.1.3-beta.17 or earlier has no mark and still has its hook file written again at the take-over;
+that branch is deleted one beta later. With this, S12's app half is done. The
 first update into 2.1.3-beta.17 still has the Claude Code window, because the old app does the
 let-go. The holder's hook queue (256 events or 2 MiB, the oldest dropped first) now holds only
 what a session makes while no app takes its hook events: from the old app's exit until 3 s

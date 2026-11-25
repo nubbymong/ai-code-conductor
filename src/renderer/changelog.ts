@@ -53,6 +53,7 @@ export const changelog: ChangelogEntry[] = [
       { type: 'improvement', description: 'Under the hood, prompt buttons, broadcasts, canvas notes, Alt+V images and the Watchdog\'s retry now type into each session by that session\'s own assistant\'s rules, which is groundwork for more assistants; nothing you see changes.' },
       { type: 'improvement', description: 'Checked in this version: a Snap picture, Rectangle or Whole screen, goes into a Codex session on this computer as Codex\'s own pasted image ([Image #1]) and is sent once also while Codex shows a warning count under its prompt, as an Alt+V image does. (Measured with Codex CLI 0.157.1 on a GitHub Windows Server 2025 runner, one 1024 by 768 display at 100%, 3 presses of each.)' },
       { type: 'fix', description: 'A full uninstall on Windows now also removes the folders a Codex tab\'s resume list left in your temp folder, and finds the same temp folder the app used even when TEMP and TMP point to different places.' },
+      { type: 'fix', description: 'On Windows, with Claude Code and Codex sessions through the session helper switched on, a Codex session kept running through an app update now keeps the hook events it makes during the update, so its tab is marked when a turn ends or asks for approval. This holds for a Codex session started on this version or later.' },
     ],
   },
   {

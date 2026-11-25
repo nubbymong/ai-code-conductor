@@ -2193,12 +2193,17 @@ describe('the 2.1.3-beta.8 sweep', () => {
     expect(m).toContain('why a held terminal can still end during an update')
   })
 
-  it('the Machines section says a held Claude Code session sends its hooks through the helper, PreToolUse included, off by default', () => {
+  it('the Machines section says a held Claude Code or Codex session sends its hooks through the helper, PreToolUse included, off by default', () => {
     const m = body('machines')
-    expect(m).toContain('a Claude Code session the helper holds sends its hook events to the app through the session helper')
+    // 2.1.3-beta.18 section 5 (aicc_planning#433): a held Codex session's hooks go through its holder too.
+    expect(m).toContain('a Claude Code or Codex session the helper holds sends its hook events to the app through the session helper')
     expect(m).toContain('through the session helper, the check before each tool runs (PreToolUse) included')
     expect(m).not.toContain('still goes to the HTTP Hooks Gateway')
-    expect(m).toContain('a Codex session sends its hooks as it did')
+    expect(m).not.toContain('a Codex session sends its hooks as it did')
+    // The update gap: a held Codex session's events wait in the helper; one a beta.17 or earlier started does not.
+    expect(m).toContain("A Codex session's hook events made during the update wait in the session helper and reach the app when the new version starts, as a Claude Code session's do.")
+    expect(m).toContain('A Codex session that 2.1.3-beta.17 or earlier started still sends them the old way, at the update from that version and at any later update it is kept through')
+    expect(m).toContain('may leave its tab unmarked. Open the tab to see it.')
     // It names its own setting: the HTTP Hooks Gateway just before it is on by default.
     expect(m).toContain('With Claude Code and Codex sessions through the session helper off, which is the default, every session sends its hooks to the gateway as before')
     expect(m).not.toContain('With the setting off, which is the default')
