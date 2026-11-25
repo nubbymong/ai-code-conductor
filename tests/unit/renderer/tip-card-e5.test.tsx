@@ -29,6 +29,7 @@ import * as fs from 'node:fs'
 import * as path from 'node:path'
 import { createRoot, type Root } from 'react-dom/client'
 import { act } from 'react'
+import type { Tip, TipContent } from '../../../src/renderer/tips-library'
 
 ;(globalThis as any).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -478,29 +479,90 @@ describe('Ask Conductor from the card, with Claude Code switched off and Codex n
 // Every tip text, through the card's own body renderer: no bold or code mark
 // shows as text (the beta.17 re-check: a bold span holding code printed its
 // backticks, in the Credential Storage tip).
-describe('tip card -- every tip body reads with its marks as formatting', () => {
-  it('body, bodyMac and bodyWin of every variant of every tip', () => {
-    const real = useTipsStore.getState().getCurrentTip
-    const bad: string[] = []
-    try {
-      for (const tip of TIPS_LIBRARY) {
-        for (const [variant, content] of Object.entries(tip.variants)) {
-          if (!content) continue
-          for (const field of ['body', 'bodyMac', 'bodyWin'] as const) {
-            const text = content[field]
-            if (!text) continue
-            // This one text as the body the card shows, on any platform.
-            const shown = { ...content, body: text, bodyMac: undefined, bodyWin: undefined, focusHint: undefined, focusHintMac: undefined, focusHintWin: undefined }
-            useTipsStore.setState({ currentTipId: tip.id, getCurrentTip: () => ({ tip, content: shown }) })
-            act(() => { root.render(<TipCard key={`${tip.id}-${variant}-${field}`} onClose={() => {}} />) })
-            const body = q('tip-card-body')?.textContent ?? ''
-            if (/\*\*|`/.test(body)) bad.push(`${tip.id} ${variant}.${field}: ${body.match(/.{0,30}(\*\*|`).{0,30}/)?.[0]}`)
-          }
+//
+// A body the card did not draw is a failure of its own (#426). The sweep used
+// to read a missing body element as '' and find no mark in it, so it passed
+// for the case it exists to catch. Each text must now put a body element on
+// screen, with text in it, before the mark check; a problem is one line naming
+// the tip, the variant and the field.
+type ShownTip = { tip: Tip; content: TipContent } | null
+
+/** Every body text of `tips` through the card. `resolve` is what the store
+ *  hands the card for one text: the tip with that text as its body, as the card
+ *  gets it. A test hands it something else to stand in for a card that shows
+ *  nothing. `checked` counts the texts that went through the card, so a sweep
+ *  that visited nothing cannot pass either. */
+function sweepTipBodies(
+  tips: readonly Tip[],
+  resolve: (tip: Tip, shown: TipContent) => ShownTip = (tip, shown) => ({ tip, content: shown }),
+): { bad: string[]; checked: number } {
+  const real = useTipsStore.getState().getCurrentTip
+  const bad: string[] = []
+  let checked = 0
+  try {
+    for (const tip of tips) {
+      for (const [variant, content] of Object.entries(tip.variants)) {
+        if (!content) continue
+        for (const field of ['body', 'bodyMac', 'bodyWin'] as const) {
+          const text = content[field]
+          if (!text) continue
+          checked++
+          const where = `${tip.id} ${variant}.${field}`
+          // This one text as the body the card shows, on any platform.
+          const shown = { ...content, body: text, bodyMac: undefined, bodyWin: undefined, focusHint: undefined, focusHintMac: undefined, focusHintWin: undefined }
+          const current = resolve(tip, shown)
+          useTipsStore.setState({ currentTipId: tip.id, getCurrentTip: () => current })
+          act(() => { root.render(<TipCard key={`${tip.id}-${variant}-${field}`} onClose={() => {}} />) })
+          const bodyEl = q('tip-card-body')
+          if (!bodyEl) { bad.push(`${where}: the card drew no body element`); continue }
+          const body = bodyEl.textContent ?? ''
+          if (body.trim() === '') { bad.push(`${where}: the body element shows no text`); continue }
+          if (/\*\*|`/.test(body)) bad.push(`${where}: ${body.match(/.{0,30}(\*\*|`).{0,30}/)?.[0]}`)
         }
       }
-    } finally {
-      useTipsStore.setState({ getCurrentTip: real })
     }
+  } finally {
+    useTipsStore.setState({ getCurrentTip: real })
+  }
+  return { bad, checked }
+}
+
+describe('tip card -- every tip body reads with its marks as formatting', () => {
+  it('body, bodyMac and bodyWin of every variant of every tip', () => {
+    const { bad, checked } = sweepTipBodies(TIPS_LIBRARY)
+    expect(checked, 'the sweep sent no tip text through the card').toBeGreaterThan(0)
     expect(bad).toEqual([])
+  })
+
+  // The stand-ins: a tip whose body the card does not draw. The first gets no
+  // card at all (the store resolves nothing for it, as for a tip whose
+  // `excludes` just fired); the second gets a card whose body holds no text.
+  // Each must be reported by name -- on the old sweep both read as '' and passed.
+  describe('a tip whose body did not render fails the sweep', () => {
+    const base = FREE_TIPS[0]
+    const standIn = (id: string, body: string): Tip => ({
+      ...base,
+      id,
+      variants: { primary: { ...base.variants.primary, body, bodyMac: undefined, bodyWin: undefined } },
+    })
+
+    it('no body element at all: one line naming the tip, the variant and the field', () => {
+      const { bad, checked } = sweepTipBodies([standIn('tip.stand-in-no-card', 'A body that is never drawn.')], () => null)
+      expect(checked).toBe(1)
+      expect(bad).toEqual(['tip.stand-in-no-card primary.body: the card drew no body element'])
+    })
+
+    it('a body element with no text in it: one line naming the tip, the variant and the field', () => {
+      const { bad, checked } = sweepTipBodies([standIn('tip.stand-in-blank', '   ')])
+      expect(checked).toBe(1)
+      expect(bad).toEqual(['tip.stand-in-blank primary.body: the body element shows no text'])
+    })
+
+    it('a body that does render is not reported, and a mark left as text in one still is', () => {
+      expect(sweepTipBodies([standIn('tip.stand-in-fine', 'A body with **bold** and `code`.')]).bad).toEqual([])
+      // The beta.17 shape: a bold span holding code prints its backticks.
+      expect(sweepTipBodies([standIn('tip.stand-in-marks', 'Run **`/thing`** now.')]).bad)
+        .toEqual(['tip.stand-in-marks primary.body: Run `/thing` now.'])
+    })
   })
 })
