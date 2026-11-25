@@ -2990,6 +2990,259 @@ FunctionEnd
   Pop $0
 !macroend
 
+; ============================================================
+; UNINSTALLER: the Codex pick folders in the user's temp folder
+; ============================================================
+; A Codex tab started through the resume list makes a folder of its own in
+; the user's temp folder, ccc-codex-pick-<random>, for the list's pick file
+; (src/main/providers/codex/spawn.ts, CODEX_PICK_DIR_PREFIX). The session's
+; end removes it, and a start of the app removes one a kill or a crash left
+; once it is a day old (sweepStaleCodexPickFolders). An uninstall with no
+; later start left them for good (aicc_planning #407), so the uninstaller
+; removes this user's by the start's rule, less its age: by the time it
+; runs, the uninstaller has closed this install's copies of the app
+; (customCheckAppRunning) and RemoveUserHelperFolder has ended the terminals
+; the session helper held, so no session of this install still uses one.
+; The temp folder has to be a whole path inside the user's own folder
+; ($PROFILE), which only that user and administrators can write to; a
+; shared one (Windows' own, which an uninstall run as the system account
+; gets) is left alone. Then, for each entry directly in it whose name starts
+; with the prefix (case counts, as in the app):
+;   - It has to be a folder, and not a link (a junction or a symbolic link).
+;     A link is left as it is, and nothing behind it is read.
+;   - Everything in it has to be a plain file named pick.json or
+;     pick.json.<16 hex digits>.tmp, the list's staging name (writePick in
+;     scripts/lib/codex-resume-picker-lib.js). Anything else keeps the whole
+;     folder, with every file in it.
+;   - It is checked again not to be a link right before anything in it
+;     goes. Then each of those files goes by its name, then the folder with
+;     plain RMDir, which takes it only when it is empty. Never RMDir /r,
+;     never a wildcard delete, never a delete at the next restart.
+; Never on an update (customUnInstall): an update keeps the sessions the
+; helper holds, and their pick folders with them. Like the helper clean-up,
+; it runs in the copy of the uninstaller the user started, so $TEMP is that
+; user's temp folder, the one the app used; the elevated copy runs it only
+; when that copy did not.
+; Known edge: another copy of the app the user runs from elsewhere (a
+; development build) shares the temp folder, and the pick folder of a
+; session that copy is running goes too. That session goes on; a later
+; choice in its resume list is not recorded, and the list says so.
+; Not covered, as for the helper folder: a program already running as the
+; user that swaps a checked folder for a link between the check and the
+; delete. Even then, only files with the two names above could go.
+
+; ${OUT} = 1 when ${NAME}, in the folder ${DIR}, is a plain file (not a
+; folder, not a link) named pick.json or pick.json.<16 hex>.tmp, with the
+; hex in lower case as the list writes it. Case counts (S==). Scratch: $R5
+; $R6 $R7 $2, and $0 $1 (CccCharIn).
+!macro CccIsPickFile DIR NAME OUT
+  StrCpy ${OUT} 0
+  ${If} "${NAME}" S== "pick.json"
+    StrCpy ${OUT} 1
+  ${Else}
+    StrLen $R5 "${NAME}"
+    StrCpy $R6 "${NAME}" 10
+    StrCpy $R7 "${NAME}" "" -4
+    ${If} $R5 == 30
+    ${AndIf} $R6 S== "pick.json."
+    ${AndIf} $R7 S== ".tmp"
+      StrCpy ${OUT} 1
+      StrCpy $R6 10
+      ${Do}
+        ${If} $R6 >= 26
+          ${ExitDo}
+        ${EndIf}
+        StrCpy $R7 "${NAME}" 1 $R6
+        !insertmacro CccCharIn "$R7" "0123456789abcdef" $2
+        ${If} $2 != 1
+          StrCpy ${OUT} 0
+          ${ExitDo}
+        ${EndIf}
+        IntOp $R6 $R6 + 1
+      ${Loop}
+    ${EndIf}
+  ${EndIf}
+  ${If} ${OUT} == 1
+    ; Fail closed: only a hard "0" for both goes on.
+    ${GetFileAttributes} "${DIR}\${NAME}" "DIRECTORY" $R5
+    ${GetFileAttributes} "${DIR}\${NAME}" "REPARSE_POINT" $R6
+    ${If} $R5 != 0
+    ${OrIf} $R6 != 0
+      StrCpy ${OUT} 0
+    ${EndIf}
+  ${EndIf}
+!macroend
+
+; Removes this user's Codex pick folders from the temp folder, and shows in
+; the details list what it did. customUnInstall inserts it after
+; RemoveUserHelperFolder, never on an update. It runs in the copy the user
+; started when there is one, as RemoveUserHelperFolder does (see there), and
+; hands its notes back in $9.
+!macro RemoveUserCodexPickFolders
+  Push $9
+  StrCpy $9 ""
+  ${If} ${UAC_IsInnerInstance}
+    !insertmacro UAC_AsUser_Call Label cccPickFoldersHere ${UAC_SYNCREGISTERS}
+  ${EndIf}
+  ${If} $9 == ""
+    Call :cccPickFoldersHere
+  ${EndIf}
+  !insertmacro CccPrintHelperNotes
+  Pop $9
+  Goto cccPickFoldersDone
+  cccPickFoldersHere:
+    !insertmacro RemoveUserCodexPickFoldersHere
+    Return
+  cccPickFoldersDone:
+!macroend
+
+; The clean-up itself, in whichever copy RemoveUserCodexPickFolders chose. It
+; adds a note for every pick folder it removes or leaves ($9), or one saying
+; there were none, and shows none itself. Registers are saved and restored,
+; all but $9. $R0 is the temp folder, $R1 the search in it and $R2 the name
+; found, $R3 a pick folder, $R4 the search in that and $R8 the name found,
+; $5 and $6 answers; $R5 to $R7 and $0 to $2 are the scratch of
+; CccIsPickFile and IsSameOrInsideCanon (which also uses $cccCanon*).
+!macro RemoveUserCodexPickFoldersHere
+  Push $0
+  Push $1
+  Push $2
+  Push $5
+  Push $6
+  Push $R0
+  Push $R1
+  Push $R2
+  Push $R3
+  Push $R4
+  Push $R5
+  Push $R6
+  Push $R7
+  Push $R8
+
+  ; Only this clean-up's notes: in the user's copy, $9 can still hold the
+  ; helper clean-up's from the call before.
+  StrCpy $9 ""
+  StrCpy $R0 "$TEMP"
+  ; A whole path only, as the app's own sweep takes: a drive letter and a
+  ; backslash, or a network path.
+  StrCpy $5 "$R0" 2 1
+  StrCpy $6 "$R0" 2
+  ${If} $5 == ":\"
+  ${OrIf} $6 == "\\"
+    ; And only a temp folder inside the user's own folder, which only that
+    ; user and administrators can write to, compared canonically. A shared
+    ; one, such as Windows' own temp folder, which an uninstall run as the
+    ; system account gets, is left alone: the app never ran there, and any
+    ; user can make folders in it. $6 = 1 when it is the user's own.
+    !insertmacro IsSameOrInsideCanon "$PROFILE" "$R0" $6
+    ${If} $6 != 1
+      !insertmacro CccHelperNote "Left the Codex pick folders in $R0 as they are, because that temp folder is not inside your user folder."
+    ${EndIf}
+  ${Else}
+    StrCpy $6 0
+    !insertmacro CccHelperNote "No temp folder is set, so there are no Codex pick folders to remove."
+  ${EndIf}
+  ${If} $6 == 1
+    ClearErrors
+    FindFirst $R1 $R2 "$R0\ccc-codex-pick-*"
+    ${Do}
+      ${If} $R2 == ""
+        ${ExitDo}
+      ${EndIf}
+      ; The wildcard ignores case; the app's prefix does not.
+      StrCpy $5 "$R2" 15
+      ${If} $5 S== "ccc-codex-pick-"
+      ${AndIf} ${FileExists} "$R0\$R2\*.*"
+        StrCpy $R3 "$R0\$R2"
+        ; Fail closed: only a hard "0" (no reparse attribute) goes on.
+        ${GetFileAttributes} "$R3" "REPARSE_POINT" $5
+        ${If} $5 != 0
+          !insertmacro CccHelperNote "Left the Codex pick folder $R3 as it is, because it is a link."
+        ${Else}
+          ; Everything in it has to be the list's, or the whole folder stays.
+          ; A folder that cannot be listed stays too.
+          StrCpy $6 1
+          ClearErrors
+          FindFirst $R4 $R8 "$R3\*.*"
+          ${If} ${Errors}
+            StrCpy $6 0
+          ${EndIf}
+          ${Do}
+            ${If} $R8 == ""
+              ${ExitDo}
+            ${EndIf}
+            ${If} $R8 != "."
+            ${AndIf} $R8 != ".."
+              !insertmacro CccIsPickFile "$R3" "$R8" $5
+              ${If} $5 != 1
+                StrCpy $6 0
+                ${ExitDo}
+              ${EndIf}
+            ${EndIf}
+            FindNext $R4 $R8
+          ${Loop}
+          FindClose $R4
+          ClearErrors
+          ${If} $6 != 1
+            !insertmacro CccHelperNote "Kept the Codex pick folder $R3, because it holds something the app did not put there."
+          ${Else}
+            ; Still not a link, right before anything in it goes.
+            ${GetFileAttributes} "$R3" "REPARSE_POINT" $5
+            ${If} $5 != 0
+              !insertmacro CccHelperNote "Left the Codex pick folder $R3 as it is, because it is a link."
+            ${Else}
+              ClearErrors
+              FindFirst $R4 $R8 "$R3\*.*"
+              ${Do}
+                ${If} $R8 == ""
+                  ${ExitDo}
+                ${EndIf}
+                ${If} $R8 != "."
+                ${AndIf} $R8 != ".."
+                  !insertmacro CccIsPickFile "$R3" "$R8" $5
+                  ${If} $5 == 1
+                    Delete "$R3\$R8"
+                  ${EndIf}
+                ${EndIf}
+                FindNext $R4 $R8
+              ${Loop}
+              FindClose $R4
+              ClearErrors
+              RMDir "$R3"
+              ${If} ${FileExists} "$R3\*.*"
+                !insertmacro CccHelperNote "Kept the Codex pick folder $R3, because something in it is still in use or was not made by the app."
+              ${Else}
+                !insertmacro CccHelperNote "Removed the Codex pick folder $R3"
+              ${EndIf}
+            ${EndIf}
+          ${EndIf}
+        ${EndIf}
+      ${EndIf}
+      FindNext $R1 $R2
+    ${Loop}
+    FindClose $R1
+    ClearErrors
+    ${If} $9 == ""
+      !insertmacro CccHelperNote "No Codex pick folders to remove in the temp folder: $R0"
+    ${EndIf}
+  ${EndIf}
+
+  Pop $R8
+  Pop $R7
+  Pop $R6
+  Pop $R5
+  Pop $R4
+  Pop $R3
+  Pop $R2
+  Pop $R1
+  Pop $R0
+  Pop $6
+  Pop $5
+  Pop $2
+  Pop $1
+  Pop $0
+!macroend
+
 !macro customUnInstall
   ; Read ResourcesDirectory from new key, fall back to old key
   ReadRegStr $0 HKCU "Software\AI Code Conductor" "ResourcesDirectory"
@@ -3030,8 +3283,12 @@ FunctionEnd
   ; copies and records stay. The one exception is Setup started with
   ; --delete-app-data: it then passes that flag instead of --updated, which
   ; asks for the app's data to go, and the helper folder goes with it.
+  ; Then the Codex pick folders in the user's temp folder
+  ; (RemoveUserCodexPickFolders above), under the same rule, and after the
+  ; helper clean-up has ended the terminals that could still use one.
   ${IfNot} ${isUpdated}
     !insertmacro RemoveUserHelperFolder
+    !insertmacro RemoveUserCodexPickFolders
   ${EndIf}
 !macroend
 
