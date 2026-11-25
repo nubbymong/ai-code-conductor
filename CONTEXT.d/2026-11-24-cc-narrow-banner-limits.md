@@ -54,8 +54,7 @@ bug"). C5's review and join recorded three limits of its narrowing placement (co
   characters as one cell (2), no-cell characters as one cell (2). Counted on the 18 tests of
   console-repaint-narrow-keep.test.ts after it: the selection's columns not cut to the width (1),
   `<=` for `<` in the view's at-once check (1), the view moved at once in every case (2).
-- **Not handled.** A selection selected again is made by `select` (a start and a length), so one that ended on a line's first cell ends on the last cell of the row before and its copy loses that last line break; its text is kept at a later change of the columns by lineSelectionKeep.ts (aicc_planning#422, #424). `rowsOfPaint` counts two kinds of input as xterm does not, neither in
-  a console paint. Such a paint is counted a row off: written as it came, or, when that count is
-  the screen's rows, still placed by bringing rows down. **Not checked here:** the app's xterm in
-  Electron with its WebGL renderer (jsdom lays nothing out: the tests measure its cell as 9x17).
+- **Not handled.** A selection selected again is made by `select` (a start and a length), so one that ended on a line's first cell ends on the last cell of the row before and its copy loses that last line break; its text is kept at a later change of the columns by lineSelectionKeep.ts (aicc_planning#422, #424). `rowsOfPaint` has a limit with input
+  no console paint holds. **Not checked here:** the app's xterm in Electron with its WebGL renderer
+  (jsdom lays nothing out: the tests measure its cell as 9x17).
   The VM line on C5b's head 5a7cf0f2 ran after this was written: PASS (WINDOWS_1).
