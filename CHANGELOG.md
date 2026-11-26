@@ -17,6 +17,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - On Windows, Snap takes its picture with the app's own capture and overlay by default. If a press cannot take a picture, the earlier Snap opens for that press; to use the earlier Snap every time, choose Settings, Custom Commands, Snap, Snap on Windows: Previous.
 - To go back to 2.1.3-beta.18, download its installer from the GitHub releases page and run it over this version.
 
+> On Windows, the remote sessions preview (off by default) now adds arm64 Linux machines, such as a Raspberry Pi, as well as x86-64 ones; keeps an SSH Persistent tab on its machine until you end it, through a quit or an update; and names a helper tab's account on its status line, with its weekly limits by model and extra usage when this computer holds that account and has a current reading for it. In a narrow pane, a Codex 0.170.0 or 0.172.0 session now takes prompt buttons and canvas notes after its first prompt when its title wraps onto a second row, and Codex up to 0.172.0 counts as tested.
+
 ### Added
 - On Windows, the Machines page can now add an arm64 Linux machine, such as a Raspberry Pi 5, as well as an x86-64 one, for the remote sessions preview (off by default). The installer carries a session helper for each, and the machine's own answer picks which file is sent.
 - On Windows, a Claude Code tab through the session helper on a Linux machine you added (the remote sessions preview, off by default) now names the account it runs as. It shows the weekly limits by model and extra usage when this computer holds that account and has a current reading for it; otherwise it says they are not available and keeps the host's own five-hour and weekly bars.
@@ -26,7 +28,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - Sessions held by the session helper on a remote Linux machine stay reachable when a clean-up of /tmp removes their connection file.
 - Session settings a quit left on a Linux machine are removed at the next start, not only at the next Check.
-- A Check on a remote machine now removes the session helper an earlier version of the app left there, once no session on that machine still uses it.
+- A Check on a remote machine now removes the session helper an earlier version of the app left there, when no tab runs there through the helper and no session is kept there.
 - In a narrow pane, a Codex 0.170.0 or 0.172.0 session now takes canvas notes, Ask Conductor questions, the app's own Codex commands, Watchdog retries and prompt buttons after its first prompt, when the conversation's title runs onto a second row under Codex's prompt. Before this fix, the app typed nothing there and the command bar said the prompt was not sent.
 - Codex up to version 0.172.0 now counts as tested. With such a Codex, the Set up Codex page, the Providers card and Sentinel no longer say it is newer than the versions this app was tested with, and a closed Codex account's usage card fetches a fresh reading instead of showing its last one. Before, Codex 0.172.0 got that notice.
 - With remote sessions through the session helper on (a preview, off by default), a canvas decision line typed into a Claude Code tab on a Linux machine is now sent whatever its length. Before, a line of 63 characters or more would have been left typed at the prompt (an approval line is 59 to 61 characters today).
@@ -42,7 +44,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A session that asks for you while a page such as Machines or Settings is in front now marks its tab and its card, also when it is the session you looked at last.
 - The Feature Guide's Reference now shows each known issue as a paragraph of its own; before, the whole list ran together as one paragraph.
 
-## [2.1.3-beta.18] - 2026-11-26
+## [2.1.3-beta.18] - 2026-11-25
 
 ### Warnings
 - This beta series begins moving the app's background services, and over the next betas your sessions, onto one helper per machine. If you want a quiet build, stay on the stable release.

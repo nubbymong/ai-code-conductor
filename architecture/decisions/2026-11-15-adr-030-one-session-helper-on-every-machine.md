@@ -174,7 +174,11 @@ Rows are numbered so that "does not own" can name the owner.
   already under tmux at the remote cutover stays on the old path until it
   ends. From 2.1.3-beta.19 (section 1.2): a session already under tmux stays
   on the old path until it ends, enforced by the registry tmux entry and the
-  open-tab checks.
+  open-tab checks. An SSH Persistent tab through the helper is held by an
+  until-ended holder (S25's second kind, `hold --until-ended`): with nobody
+  attached it ends once its program has exited; until an app has attached for
+  the first time, no sooner than the default 120 s after its start. It also
+  ends at `term.end`, or with the machine.
 - **D14 Existing users and configs.** Every saved config shape maps to the new
   path automatically, with nothing re-entered, and the mapping is tested
   against real shapes. No screen is removed before its replacement is live and
@@ -483,9 +487,10 @@ Remote step 1 (2.1.3-beta.17, plan sections A1 and A2, aicc_planning#410 and #41
 by default, behind a Settings switch, before P1 and P2 run. P1 (the status line through the
 helper) needs a status frame on the session's one stream, which beta.18 adds (S26: the helper's
 status mode and the `status` capability, section 3.1; routed to the tab's strip, section 3.2);
-P1 still gates any default. A helper tab's status line names its account and, where this
-computer holds that account, shows the per-model weekly buckets and extra usage (2.1.3-beta.19
-section 3, aicc_planning#434). At every start of the tab, launch or attach, the app reads one
+P1 still gates any default, and beside it aicc_planning#434: the account label, the per-model
+weekly buckets and extra usage reach a helper tab before any default. From 2.1.3-beta.19
+(section 3) a helper tab's status line names its account and, where this computer holds that
+account, shows the per-model weekly buckets and extra usage. At every start of the tab, launch or attach, the app reads one
 field of the host's ~/.claude.json (oauthAccount.emailAddress) through the helper's field mode,
 never the file, and passes it through the account label's display gate; the buckets and extra
 usage are this computer's own usage reading of that account (the Account usage page's figure),
@@ -496,7 +501,12 @@ current reading (a stale one counts as none), the strip says not available. A us
 host with its token is not built. P1 on Ubuntu 24.04
 (the 2.1.3-beta.18 host line, section 3.2): the strip's first value came before Claude Code's
 ready prompt in all five runs (4 to 210 ms before it in the four timed). P1 on Rocky Linux 10.2
-is owed: the host did not answer its one 8 s try in 2.1.3-beta.18. P2 (saved passwords through
+(x86-64) (2.1.3-beta.19 section 1.2's host line, SSH Persistent through the holder, Claude Code
+2.1.332): the first status update (the account label, read at launch) came before the ready
+prompt in all four runs, 953 to 2,781 ms before it, and the first with Claude Code's own values
+from 196 ms before it to 8 ms after it. On the owner's Raspberry Pi 5 (arm64) (the same
+section's Pi line, four runs): 3,429 to 4,621 ms before it, and Claude Code's own values 250 to
+470 ms after it. P2 (saved passwords through
 askpass) gates password hosts; step 1 takes key sign-in only, so a config with a saved password
 keeps the usual SSH path. Decided for step 1: a session's terminal and the helper's messages
 ride ONE `ssh -T` exec per session, the helper's `bridge` mode (`bridge --store

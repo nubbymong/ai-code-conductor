@@ -43,6 +43,7 @@ export const changelog: ChangelogEntry[] = [
   {
     version: '2.1.3-beta.19',
     date: '2026-11-26',
+    highlights: 'On Windows, the remote sessions preview (off by default) now adds arm64 Linux machines, such as a Raspberry Pi, as well as x86-64 ones; keeps an SSH Persistent tab on its machine until you end it, through a quit or an update; and names a helper tab\'s account on its status line, with its weekly limits by model and extra usage when this computer holds that account and has a current reading for it. In a narrow pane, a Codex 0.170.0 or 0.172.0 session now takes prompt buttons and canvas notes after its first prompt when its title wraps onto a second row, and Codex up to 0.172.0 counts as tested.',
     warnings: [
       'This beta series begins moving the app\'s background services, and over the next betas your sessions, onto one helper per machine. If you want a quiet build, stay on the stable release.',
       'On Windows, choosing Save sessions at an update keeps the terminals the session helper holds running only if the new version opens within two minutes of the old one closing. The installer\'s pages count toward those two minutes, so finish the installer promptly.',
@@ -56,7 +57,7 @@ export const changelog: ChangelogEntry[] = [
       { type: 'feature', description: 'An SSH Persistent tab whose kept session has ended on its machine (for example after the machine restarts) says so at once and offers Restart, which starts a new session on the same conversation. A saved config\'s SSH-Persistent badge names the session helper when the helper keeps its sessions.' },
       { type: 'fix', description: 'Sessions held by the session helper on a remote Linux machine stay reachable when a clean-up of /tmp removes their connection file.' },
       { type: 'fix', description: 'Session settings a quit left on a Linux machine are removed at the next start, not only at the next Check.' },
-      { type: 'fix', description: 'A Check on a remote machine now removes the session helper an earlier version of the app left there, once no session on that machine still uses it.' },
+      { type: 'fix', description: 'A Check on a remote machine now removes the session helper an earlier version of the app left there, when no tab runs there through the helper and no session is kept there.' },
       { type: 'fix', description: 'In a narrow pane, a Codex 0.170.0 or 0.172.0 session now takes canvas notes, Ask Conductor questions, the app\'s own Codex commands, Watchdog retries and prompt buttons after its first prompt, when the conversation\'s title runs onto a second row under Codex\'s prompt. Before this fix, the app typed nothing there and the command bar said the prompt was not sent.' },
       { type: 'fix', description: 'Codex up to version 0.172.0 now counts as tested. With such a Codex, the Set up Codex page, the Providers card and Sentinel no longer say it is newer than the versions this app was tested with, and a closed Codex account\'s usage card fetches a fresh reading instead of showing its last one. Before, Codex 0.172.0 got that notice.' },
       { type: 'fix', description: 'With remote sessions through the session helper on (a preview, off by default), a canvas decision line typed into a Claude Code tab on a Linux machine is now sent whatever its length. Before, a line of 63 characters or more would have been left typed at the prompt (an approval line is 59 to 61 characters today).' },
@@ -75,7 +76,7 @@ export const changelog: ChangelogEntry[] = [
   },
   {
     version: '2.1.3-beta.18',
-    date: '2026-11-26',
+    date: '2026-11-25',
     highlights: 'On Windows, a Claude Code tab through the session helper on a Linux machine you added (the remote sessions preview, off by default) now has its status line, its hooks and the Conductor\'s tools, and runs at the effort level set in your Claude Code settings on that machine. Also on Windows, a Codex session started on this version and kept running through an app update (the agent sessions preview) keeps the hook events it makes meanwhile, and a full uninstall now also removes the folders a Codex session\'s resume list left in your temp folder.',
     warnings: [
       'This beta series begins moving the app\'s background services, and over the next betas your sessions, onto one helper per machine. If you want a quiet build, stay on the stable release.',
