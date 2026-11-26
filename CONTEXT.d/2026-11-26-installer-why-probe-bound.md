@@ -7,8 +7,8 @@ unchanged, no bound was loosened, nothing retries.
 - **The defect.** The probe in tests/unit/main/installer-nsis-behaviour.test.ts
   that runs CccWhyNotEnded for real waited up to 30 s for the copy's exit code
   (300 rounds of Sleep 100), then up to 30 s more for the signal that the
-  process object is gone. That is 60 s, the same as spawnSync's timeout and the
-  case's own. A copy that never exits therefore ended in a spawn timeout with no
+  process object is gone. That is 60 s, the same as spawnSync's timeout then and
+  the case's own. A copy that never exits therefore ended in a spawn timeout with no
   log, and the failure said nothing about why.
 - **The fix.** The probe takes one budget from its ini (`budgetMs`, 30000 when
   absent) and measures it with GetTickCount, as the difference of two tick
@@ -21,8 +21,10 @@ unchanged, no bound was loosened, nothing retries.
   signaled=258 (a wait that timed out). `left=0` is the check that the two waits
   share one bound; there is no wall-clock assert beyond the case's own timeout.
 - **A probe that does not finish** now fails with the log it had written, not
-  with the spawn error alone.
+  with the spawn error alone. The spawn's bound is 45 s, under a case's 60 s,
+  so that failure comes before the case's own timeout.
 - **Where it runs.** CI's Windows jobs only (HOST QUARANTINE). It was never run
   on a developer machine: the probe script was compiled with makensis to check
-  its syntax, and the red and green runs are the release workflow's dry run on
-  the section's branch (see the PR's section note for the run ids).
+  its syntax. The green run is the release workflow's dry run on the section's
+  branch; the red run is the same dry run on a throwaway branch that put the
+  old waits back, deleted after (see the PR's section note for the run ids).

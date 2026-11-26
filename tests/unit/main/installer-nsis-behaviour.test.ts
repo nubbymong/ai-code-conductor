@@ -2579,9 +2579,9 @@ describe.skipIf(!MAKENSIS)('installer.nsh behavioural probe: the app check close
   // gone) share ONE budget, `budgetMs` in the ini (30,000 when it is absent),
   // measured with GetTickCount: the signal wait gets what is left, never less
   // than 0. Apart, each had 30 s, together 60 s, which is what spawnSync and a
-  // case allow, so a copy that never exited ended in a spawn timeout with no
-  // log of why (aicc_planning#440). Test harness only: build/installer.nsh is
-  // not changed.
+  // case allowed then, so a copy that never exited ended in a spawn timeout
+  // with no log of why (aicc_planning#440). Test harness only:
+  // build/installer.nsh is not changed.
   const whyProbe = () => join(awork, 'probe-why.exe')
   const wcfg = () => join(awork, 'probe-why.ini')
   const wlog = () => join(awork, 'probe-why.log')
@@ -2700,7 +2700,13 @@ SectionEnd
     compileWhy()
     writeFileSync(wcfg(), ['[why]', `pid=${cfg.pid}`, `rights=${cfg.rights}`, `waitExit=${cfg.waitExit ? 1 : 0}`, ...(cfg.budgetMs === undefined ? [] : [`budgetMs=${cfg.budgetMs}`]), ''].join('\r\n'))
     rmSync(wlog(), { force: true })
-    const run = spawnSync(whyProbe(), [], { encoding: 'utf-8', stdio: 'pipe', timeout: 60_000 })
+    // 45 s, under a case's 60 s: a probe that does not finish has to fail
+    // here, with its log, before the case's own timeout does. With both at
+    // 60 s the case's timeout won wherever a case awaits after the throw (the
+    // never-exits case's `finally`), and the failure was "Test timed out in
+    // 60000ms" with no log (run 45777849090). The probe's own bound is its
+    // budget, 30 s at most, plus the half second CccWhyNotEnded reads for.
+    const run = spawnSync(whyProbe(), [], { encoding: 'utf-8', stdio: 'pipe', timeout: 45_000 })
     if (run.error) {
       const partial = existsSync(wlog()) ? readFileSync(wlog(), 'utf-8') : '(it had written no log)'
       throw new Error(`the why probe did not finish: ${run.error.message}\nits log so far:\n${partial}`)
@@ -2737,9 +2743,9 @@ SectionEnd
     // probe's own end. With a 2 s budget the exit-code wait ends at the
     // budget still reading STILL_ACTIVE (259), the signal wait is then given
     // what is left, which is 0 ms, and it times out (258, WAIT_TIMEOUT).
-    // Apart, each wait had its own 30 s, 60 s together, which is the spawn's
-    // and this case's whole timeout: the probe ended in a spawn timeout with
-    // nothing logged. There is no wall-clock assert here beyond that
+    // Apart, each wait had its own 30 s, 60 s together, which was the spawn's
+    // whole timeout then and is this case's: the probe ended in a spawn
+    // timeout with nothing logged. There is no wall-clock assert here beyond that
     // timeout: `left` is the budget the signal wait was given, and it is 0
     // only when the first wait had spent all of it.
     compileWhy()
