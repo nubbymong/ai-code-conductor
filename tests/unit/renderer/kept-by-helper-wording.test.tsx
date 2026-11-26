@@ -60,7 +60,7 @@ describe('the close question', () => {
 
 describe('the persistence chip', () => {
   it('names the helper for a kept tab, and tmux for any other persistent one', () => {
-    act(() => { root.render(<><TransportBadge kind="persistent" helper /><TransportBadge kind="persistent" /></>) })
+    act(() => { root.render(<><TransportBadge kind="persistent" keeper="helper" /><TransportBadge kind="persistent" /></>) })
     const titles = [...container.querySelectorAll('[data-testid="ssh-persistent-badge"]')].map((b) => b.getAttribute('title'))
     expect(titles[0]).toContain('kept by the session helper on its machine until you end it')
     expect(titles[1]).toContain('tmux')

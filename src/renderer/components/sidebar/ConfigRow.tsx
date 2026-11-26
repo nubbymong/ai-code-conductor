@@ -26,6 +26,7 @@ import { useDetachedLivenessStore } from '../../stores/livenessStore'
 import { useHostReachabilityStore } from '../../stores/hostReachability'
 import { matchDetachedRemotes } from '../../utils/detachedRemotes'
 import { verifiedLiveCount } from '../../utils/detachedRemotesLiveness'
+import { usePersistentKeeper } from '../../hooks/usePersistentKeeper'
 import MultiSpawnControl from './MultiSpawnControl'
 
 interface ConfigRowProps {
@@ -121,6 +122,9 @@ export default function ConfigRow({ config, onLaunch, onEdit, onDelete, onPin, o
     ssh: config.sshConfig,
     persistent: configIsPersistent(config.sshConfig),
   })
+  // Its title names what keeps this config's sessions: the session helper,
+  // tmux, or either while nothing has decided it (2.1.3-beta.19 section 1.2).
+  const keeperOf = usePersistentKeeper()
 
   return (
     <div
@@ -196,7 +200,7 @@ export default function ConfigRow({ config, onLaunch, onEdit, onDelete, onPin, o
           persistent config (detachable, the SSH default) reads SSH-Persistent,
           matching the running-session badge; a standard one reads SSH. So the
           three remote kinds are told apart before launch, not after. */}
-      <TransportBadge kind={transport} container={containerNameOf(config.sshConfig)} />
+      <TransportBadge kind={transport} container={containerNameOf(config.sshConfig)} keeper={keeperOf(config)} />
       {config.sessionType === 'ssh' && <SshReattachBadge count={reattachCount} />}
       {runningCount > 0 && (
         <button

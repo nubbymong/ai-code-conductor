@@ -7,7 +7,9 @@
 // THREE-WAY choice made here:
 //
 //   container   — claude runs one hop deeper, inside a container
-//   persistent  — tmux-wrapped; a dropped connection reattaches
+//   persistent  — kept in tmux, or by the session helper on its machine
+//                 (2.1.3-beta.19: PersistentKeeper below); a dropped
+//                 connection reattaches
 //   ssh         — a plain remote session
 //   none        — not an SSH row at all
 //
@@ -85,7 +87,37 @@ export function resolveTransportBadge(args: {
 }
 
 /** A SAVED config's predicted persistence: detachable is opt-OUT, so anything
- *  but an explicit `false` means the tmux ladder will be attempted. */
+ *  but an explicit `false` means its session is kept (the tmux ladder, or the
+ *  session helper where main's route sends it: persistentKeeperOf). */
 export function configIsPersistent(ssh?: SshBadgeInput): boolean {
   return ssh?.detachable !== false
+}
+
+/** What keeps a persistent SSH session, for its chip's title: tmux (the usual
+ *  path), the session helper on its machine, or, for a saved config whose path
+ *  nothing has decided yet, either one. */
+export type PersistentKeeper = 'tmux' | 'helper' | 'either'
+
+/**
+ * What keeps a SAVED config's persistent sessions (2.1.3-beta.19 section 1.2,
+ * the Rocky host line's finding 2), by the mark the session card and the
+ * header pill read for a live one (remoteVia 'helper'), lifted to the config:
+ * - 'helper' when a session of it is kept by the session helper: an open tab
+ *   marked so, or one left running there (a registry entry with mux 'helper');
+ * - 'tmux' when it is on the usual path: the remote sessions switch is off, or
+ *   a session of it runs on that path (an open tab not marked, or a tmux
+ *   entry), and main's route keeps every launch of such a config there;
+ * - 'either' when nothing has decided it: the switch is on and no session of
+ *   it is open or left running, so its next start's route decides.
+ */
+export function persistentKeeperOf(i: {
+  switchOn: boolean
+  /** The marks (remoteVia) of this config's open SSH tabs, one per tab. */
+  openTabs: ReadonlyArray<string | undefined>
+  /** The multiplexers (mux) of this config's left-running registry entries. */
+  leftRunning: ReadonlyArray<string | undefined>
+}): PersistentKeeper {
+  if (i.openTabs.includes('helper') || i.leftRunning.includes('helper')) return 'helper'
+  if (!i.switchOn || i.openTabs.length > 0 || i.leftRunning.length > 0) return 'tmux'
+  return 'either'
 }
