@@ -84,6 +84,18 @@
 // pending line; the same words filed on another canvas are another marker,
 // typed in their turn (two canvases of one session can file the same words).
 //
+// ITS ENTER (2.1.3-beta.19 section 6.1). The renderer types the line and its
+// Enter in one write, but for a tab through the session helper on its
+// machine: the holder there hands each write to Claude Code as one read, and
+// Claude Code (2.1.332, measured) takes a control character as a key only in
+// a read shorter than 64 characters, so a longer line would be typed and not
+// sent. For such a tab the Claude Code package hands in its own Enter
+// (ClaudeMarkerEnter); every request for the marker then says enterApart, the
+// renderer types the line alone, and once it answers typed the chain hands
+// the line to that Enter, which types Enter as its own write once the line
+// has gone, and only while the run is still the one the line went to. The
+// next marker of the session waits for it.
+//
 // The renderer half is one main -> renderer request and one reply, id
 // correlated, with a timeout (as canvas-snapshot-broker.ts does): this module
 // owns the pending map and the timeout; the IPC layer moves the bytes.
@@ -152,9 +164,11 @@ export function setClaudeMarkerHoldAgain(fn: HoldAgain | null): void {
 }
 
 /** Ask the renderer to read (probe) or type at the session's Claude Code
- *  prompt, for the marker `markerId`. Resolves its answer, or null when there
- *  was no window or no answer in CLAUDE_MARKER_ANSWER_MS. Never rejects. */
-export function askClaudePrompt(sessionId: string, mode: ClaudeMarkerMode, line: string, markerId: string): Promise<ClaudeMarkerAnswer | null> {
+ *  prompt, for the marker `markerId`. `enterApart`: the line is typed alone
+ *  and main types its Enter (see ITS ENTER above); the request says so only
+ *  then. Resolves its answer, or null when there was no window or no answer
+ *  in CLAUDE_MARKER_ANSWER_MS. Never rejects. */
+export function askClaudePrompt(sessionId: string, mode: ClaudeMarkerMode, line: string, markerId: string, enterApart = false): Promise<ClaudeMarkerAnswer | null> {
   if (!sender) return Promise.resolve(null)
   const requestId = randomId()
   return new Promise((resolve) => {
@@ -165,7 +179,7 @@ export function askClaudePrompt(sessionId: string, mode: ClaudeMarkerMode, line:
     ;(timer as { unref?: () => void }).unref?.()
     pending.set(requestId, { resolve, timer })
     let sent = false
-    try { sent = sender?.({ requestId, sessionId, markerId, mode, line }) === true } catch { sent = false }
+    try { sent = sender?.({ requestId, sessionId, markerId, mode, line, ...(enterApart ? { enterApart: true } : {}) }) === true } catch { sent = false }
     if (!sent) {
       clearTimeout(timer)
       pending.delete(requestId)
@@ -333,12 +347,23 @@ function reportDropped(tell: Undelivered | null, sessionId: string, canvasId: st
   try { tell({ sessionId, canvasId, line, reason }) } catch { /* the window is gone */ }
 }
 
+/** 2.1.3-beta.19 section 6.1: a marker's Enter as its own write, for a tab
+ *  through the session helper on its machine (see ITS ENTER above), handed
+ *  the line the renderer has just typed alone. It types Enter once that line
+ *  has gone, and only while the run is still the one the line went to.
+ *  Resolves true when the Enter was typed, false when the run had ended. */
+export type ClaudeMarkerEnter = (typedLine: string) => Promise<boolean>
+
 /**
  * Hand one marker line to the session's chain: typed at Claude Code's ready,
  * empty prompt after every marker handed in before it (the queue's order is
  * kept). `runLive` says whether the run the marker was handed for is still
  * the session's terminal process. `canvasId` is the canvas the marker was
- * filed on, when the caller named one. A line the same as one still held for
+ * filed on, when the caller named one. `enter`, when given, types the
+ * marker's Enter as its own write after the renderer typed the line alone
+ * (see ITS ENTER above); the next marker of the session waits for it. Without
+ * it the renderer types the line and its Enter in one write, as before. A
+ * line the same as one still held for
  * the session and filed on the same canvas is collapsed into it; the same
  * line about another canvas is held and typed as its own marker. A marker
  * dropped untyped (see the rule above) is reported once, with its canvas, to
@@ -351,7 +376,7 @@ function reportDropped(tell: Undelivered | null, sessionId: string, canvasId: st
  * providers/claude/run-screen.ts, since 2.1.3-beta.18 section 4), which the
  * session input module's submitMarker asks for a Claude Code session only.
  */
-export function queueClaudeMarkerLine(sessionId: string, line: string, runLive: () => boolean, canvasId?: string): void {
+export function queueClaudeMarkerLine(sessionId: string, line: string, runLive: () => boolean, canvasId?: string, enter?: ClaudeMarkerEnter): void {
   let entry = chains.get(sessionId)
   if (!entry) {
     entry = { generation: 0, chain: Promise.resolve(), held: new Map(), typed: 0, givenBack: 0, turnsBegun: 0 }
@@ -390,7 +415,7 @@ export function queueClaudeMarkerLine(sessionId: string, line: string, runLive: 
     let result: ClaudeMarkerOutcome = 'gone'
     try {
       result = await typeClaudeMarkerWhenReady({
-        ask: (mode) => askClaudePrompt(sessionId, mode, line, markerId),
+        ask: (mode) => askClaudePrompt(sessionId, mode, line, markerId, enter !== undefined),
         live,
         sleep,
         now: () => Date.now(),
@@ -403,6 +428,11 @@ export function queueClaudeMarkerLine(sessionId: string, line: string, runLive: 
     if (result === 'typed') {
       mine.typed++
       logInfo(`[canvas-marker] ${sessionId}: a marker was typed at Claude Code's ready prompt${record.told ? ' as its session\'s markers were cleared (it was already reported as not sent, the session gone)' : ''}`)
+      if (enter) {
+        let entered = false
+        try { entered = await enter(line) } catch { entered = false }
+        if (!entered) logWarn(`[canvas-marker] ${sessionId}: a marker's line was typed alone, and its Enter was not: the run it went to ended first`)
+      }
       return
     }
     if (result === 'given-back') {

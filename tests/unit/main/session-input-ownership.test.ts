@@ -3,7 +3,8 @@
 // (src/main/session-input/) is where the main process decides, on its own
 // initiative, what goes into a session's terminal: the Watchdog's retry, an
 // Agent Canvas marker, Ask Conductor's question, a channel message and the quit keys. (A Claude Code marker the
-// Claude Code package hands to canvas/claude-marker-typing.ts, which has the renderer type it.)
+// Claude Code package hands to canvas/claude-marker-typing.ts, which has the renderer type it;
+// in a tab through the session helper the package types its Enter, 2.1.3-beta.19 section 6.1.)
 // Since 2.1.3-beta.10 (#333) it also types a command bar prompt button's
 // text, which the renderer asks for over pty:submitPrompt. Since 2.1.3-beta.10
 // section A2 the Watchdog's retry comes in through submitRetry, for both CLIs,
@@ -212,6 +213,8 @@ const ALLOWED: Record<string, Record<string, Allowed>> = {
     retryClaudeLine: { count: 3, why: "the Watchdog's retry into a Claude Code session: the leave key, the line and Enter in one write (the bytes submitLine typed); in a tab through the session helper on its machine, the line, then Enter as its own write (2.1.3-beta.18 fix round)", until: 'S13 (once main reads a Claude Code screen)' },
     sendClaudePrompt: { count: 2, why: "a prompt button's Send into a Claude Code session: the text, then Enter as its own write", until: 'S13 (once main reads a Claude Code screen)' },
     pasteClaudeImage: { count: 3, why: "an image into a Claude Code session (X1.2): the path as a bracketed paste, the sentence, then Enter, each its own write", until: 'stays' },
+    // 2.1.3-beta.19 section 6.1 (aicc_planning#440): new, not moved.
+    holdClaudeMarker: { count: 1, why: "a canvas marker's Enter in a tab through the session helper on its machine: the renderer types the line alone, and this types Enter as its own write once the line has gone, only while the run is still the one the line went to (every other tab: the renderer types the line and its Enter in one write, as before)", until: 'S13 (once main reads a Claude Code screen)' },
   },
   'src/main/session-helper/helper-pty.ts': {
     write: { count: 1, why: "the session helper's transport: a held terminal's input, as raw input frames, or into the direct terminal", until: 'stays' },
