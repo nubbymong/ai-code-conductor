@@ -94,7 +94,10 @@
 // renderer types the line alone, and once it answers typed the chain hands
 // the line to that Enter, which types Enter as its own write once the line
 // has gone, and only while the run is still the one the line went to. The
-// next marker of the session waits for it.
+// next marker of the session waits for it. When that run ends first (End or
+// close, Restart, a quit, Leave running), the line was typed and not sent:
+// the canvas is told it was not sent, the session gone (once, as any other
+// dropped marker).
 //
 // The renderer half is one main -> renderer request and one reply, id
 // correlated, with a timeout (as canvas-snapshot-broker.ts does): this module
@@ -431,7 +434,12 @@ export function queueClaudeMarkerLine(sessionId: string, line: string, runLive: 
       if (enter) {
         let entered = false
         try { entered = await enter(line) } catch { entered = false }
-        if (!entered) logWarn(`[canvas-marker] ${sessionId}: a marker's line was typed alone, and its Enter was not: the run it went to ended first`)
+        if (!entered) {
+          logWarn(`[canvas-marker] ${sessionId}: a marker's line was typed alone, and its Enter was not: the run it went to ended first`)
+          // Its held entry went in the finally above, so forgetClaudeMarkers
+          // cannot find it: the canvas is told here that it was not sent.
+          if (!record.told) { record.told = true; reportDropped(tell, sessionId, canvasId, line, DROP_REASON.gone) }
+        }
       }
       return
     }

@@ -27,6 +27,9 @@
 // Mutants this must catch: the marker member ignoring wholeWrites; the
 // renderer ignoring enterApart; the Enter typed into a run started meanwhile;
 // the split given to a tab that is not through the helper.
+// PR 763 fix round 7: when the run ends between the line and its Enter, the
+// canvas is told once that the note was not sent (session-gone). Red at
+// 643f0cf3: it was told nothing, and showed the note as sent.
 import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from 'vitest'
 import type { ClaudeMarkerAsk } from '../../../src/shared/types'
 
@@ -78,6 +81,8 @@ const CANVAS = 'c1c2c3c4c5c6c7c8c9c0d1d2'
 
 /** Every request main sent the renderer, in order. */
 let asks: ClaudeMarkerAsk[] = []
+/** The canvas wiring's not-delivered report, as a spy. */
+let undelivered = vi.fn()
 /** How many 'type' answers still to send late, after main stopped waiting. */
 let lateTypeAnswers = 0
 
@@ -99,6 +104,8 @@ beforeEach(() => {
   asks = []
   lateTypeAnswers = 0
   typing._resetClaudeMarkerTypingForTest()
+  undelivered = vi.fn()
+  typing.setClaudeMarkerUndelivered(undelivered)
   vi.useFakeTimers()
   // The renderer: answers from the session's screen (the ready, empty
   // prompt), one IPC hop later, and types through the port's write.
@@ -154,6 +161,8 @@ describe('a canvas marker into a Claude Code tab through the session helper: the
     expect(asks.map((a) => a.mode)).toEqual(['probe', 'type'])
     expect(asks.every((a) => a.enterApart === true)).toBe(true)
     expect(h.warns).toEqual([])
+    // Its Enter was typed: the canvas is told nothing.
+    expect(undelivered).not.toHaveBeenCalled()
   })
 
   it('a short line too: nothing in a helper tab rides with its Enter', async () => {
@@ -190,6 +199,10 @@ describe('a canvas marker into a Claude Code tab through the session helper: the
     expect(before.writes).toEqual([LINE])
     expect(after.writes).toEqual([])
     expect(h.warns.some((w) => w.includes('its Enter was not'))).toBe(true)
+    // The line was typed and not sent: the canvas is told so, once (PR 763
+    // fix round 7; at 643f0cf3 it was told nothing and showed the note sent).
+    expect(undelivered).toHaveBeenCalledTimes(1)
+    expect(undelivered).toHaveBeenCalledWith({ sessionId: id, canvasId: CANVAS, line: LINE, reason: 'session-gone' })
   })
 
   it('no Enter when the tab was closed while it waited', async () => {
@@ -204,6 +217,9 @@ describe('a canvas marker into a Claude Code tab through the session helper: the
     // Nothing was handed to the write port for the closed tab either: the app's port would hold it and replay it into the tab's next start.
     expect(orphanWrites).toEqual([])
     expect(h.warns.some((w) => w.includes('its Enter was not'))).toBe(true)
+    // The canvas is told the note was not sent, once.
+    expect(undelivered).toHaveBeenCalledTimes(1)
+    expect(undelivered).toHaveBeenCalledWith({ sessionId: id, canvasId: CANVAS, line: LINE, reason: 'session-gone' })
   })
 
   it('a type answer that came late: the line once, and one Enter once main reads it typed', async () => {

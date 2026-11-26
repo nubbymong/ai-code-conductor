@@ -76,7 +76,8 @@ async function sendClaudePrompt(text: string, opts: { enterDelayMs: number }, ty
  * same reading the status strip's controls type through
  * (canvas/claude-marker-typing.ts, which has the renderer type it), and only
  * into the run it was handed for. It answers nothing: a marker the chain
- * drops untyped is told to its canvas by the chain itself.
+ * drops untyped, or whose Enter below is not typed, is told to its canvas by
+ * the chain itself.
  *
  * The renderer types the line and its Enter in one write, but in a tab
  * through the session helper on its machine (`typing.wholeWrites`,
