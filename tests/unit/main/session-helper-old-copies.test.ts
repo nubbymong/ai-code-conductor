@@ -12,7 +12,7 @@
 //  2. a listing that fails, one that does not read, or no installed helper:
 //     nothing is removed, and the log says why;
 //  3. a user who never used the helper (no folder, or one with no version or
-//     staging folder): nothing is listed;
+//     staging folder and no kept or store folder): nothing is listed;
 //  4. a switch turned on while the listing is pending (a manager made then):
 //     nothing is removed once the manager exists, and its copy is placed and
 //     stays;
@@ -31,11 +31,15 @@
 //     start, then the helper folder, empty; one listing, one log line;
 //  8. no version folder, an empty kept and a lock-only store (what beta.18
 //     leaves): they go at one start; either alone goes too; the rest of the
-//     helper folder stays, and so does the folder;
+//     helper folder stays, and so does the folder; a store with nothing in it
+//     (its lock gone, the folder not: a removal that stopped half way) goes
+//     at the next start too;
 //  9. a store record, a kept record, the running mark or a listed holder:
 //     the empty kept and the lock-only store both stay, with a version
 //     folder there (it still goes) and without one (no listing is run, but
-//     for the listed holder, which only the listing shows);
+//     for the listed holder, which only the listing shows); so do both when
+//     a switch is turned on while the version folders go (stop() asked a
+//     third time, just before them);
 // 10. a kept or a store that holds anything else, or is a link: both stay,
 //     and with nothing else to remove no listing is run.
 //
@@ -169,9 +173,8 @@ describe('the start-up clean-up of old helper copies with both switches off', ()
     for (const line of logs) expect(line).toMatch(/could not be listed, so no old helper folder is removed/)
   })
 
-  it('3. a user who never used the helper: no folder, or one with no version or staging folder, lists nothing and removes nothing', async () => {
+  it('3. a user who never used the helper: no folder, or one with no version or staging folder and no kept or store folder, lists nothing and removes nothing', async () => {
     expect(await cleanUp()).toEqual([])
-    folder('store')
     folder('dev')
     folder('0.1.0-not-a-hash')
     writeFileSync(join(root, '0.1.0-aaaaaaaaaaaa'), 'a file, not a folder')
@@ -179,7 +182,7 @@ describe('the start-up clean-up of old helper copies with both switches off', ()
     expect(await cleanUp()).toEqual([])
     expect(helper.calls).toEqual([])
     expect(logs).toEqual([])
-    expect(names()).toEqual(['0.1.0-aaaaaaaaaaaa', '0.1.0-not-a-hash', 'bindings.json', 'dev', 'store'])
+    expect(names()).toEqual(['0.1.0-aaaaaaaaaaaa', '0.1.0-not-a-hash', 'bindings.json', 'dev'])
   })
 
   it('4. a switch turned on while the listing is pending: once the manager exists nothing is removed, and its copy is placed and stays', async () => {
@@ -249,7 +252,7 @@ describe('2.1.3-beta.19 (6.5): the empty kept folder and the lock-only store a r
     expect(existsSync(root)).toBe(false)
     expect(helper.calls).toEqual([{ file: bundled, args: ['list', '--store', join(root, 'store')] }])
     expect(logs).toHaveLength(1)
-    for (const name of ['.new-0123456789ab', '0.1.0-aaaaaaaaaaaa', 'kept (empty)', 'store (only its lock)', 'the helper folder itself']) expect(logs[0]).toContain(name)
+    for (const name of ['.new-0123456789ab', '0.1.0-aaaaaaaaaaaa', 'kept (empty)', 'store (no record)', 'the helper folder itself']) expect(logs[0]).toContain(name)
   })
 
   it('8. no version folder, an empty kept and a lock-only store (what beta.18 leaves): gone after one start; either alone goes too; the rest of the folder stays', async () => {
@@ -271,6 +274,19 @@ describe('2.1.3-beta.19 (6.5): the empty kept folder and the lock-only store a r
     expect(listCalls()).toHaveLength(3)
     expect(logs).toHaveLength(3)
     expect(logs[1]).not.toContain('the helper folder itself')
+  })
+
+  // A removal that took the lock and then could not take the folder (on
+  // Windows a holder still ending has the store as its working folder) leaves
+  // a store with nothing in it: the next start takes it, with an empty kept.
+  it('8. a store with nothing in it (its lock gone, the folder not) and an empty kept go at the next start', async () => {
+    folder('kept')
+    folder('store')
+    expect((await cleanUp()).sort()).toEqual(['kept', 'store'])
+    expect(existsSync(root)).toBe(false)
+    expect(listCalls()).toHaveLength(1)
+    expect(logs).toHaveLength(1)
+    expect(logs[0]).toContain('store (no record)')
   })
 
   // Each situation keeps both: what it puts there may need the store or its lock.
@@ -315,7 +331,18 @@ describe('2.1.3-beta.19 (6.5): the empty kept folder and the lock-only store a r
     expect(logs).toEqual([])
   })
 
-  it('10. a kept or a store holding anything else, or a link: both stay, and with nothing else to remove no listing is run', async () => {
+  it('9. a switch turned on while the version folders go (a manager made then): the empty kept and the lock-only store both stay', async () => {
+    leftovers()
+    folder('0.1.0-aaaaaaaaaaaa')
+    // Asked at the entry, after the listing, and just before kept and store: only the third answers true.
+    let asked = 0
+    expect(await cleanUp({ stop: () => ++asked > 2 })).toEqual(['0.1.0-aaaaaaaaaaaa'])
+    expect(asked).toBe(3)
+    expect(left()).toEqual({ kept: true, store: true, lock: true })
+    expect(logs).toHaveLength(1)
+  })
+
+  it('10.a kept or a store holding anything else, or a link: both stay, and with nothing else to remove no listing is run', async () => {
     const elsewhere = join(dir, 'elsewhere')
     mkdirSync(elsewhere)
     writeFileSync(join(elsewhere, '.lock'), '')

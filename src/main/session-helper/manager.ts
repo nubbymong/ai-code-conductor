@@ -122,8 +122,8 @@
  * folder no listed holder's version needs goes. A manager made later in that
  * run copies only once that has ended (deps.copyAfter). 2.1.3-beta.19 (plan
  * section 6.5, aicc_planning#440): with no holder listed, the empty kept
- * folder and the store holding only its lock that a run with a setting on
- * left go too, then the helper's folder if it is then empty.
+ * folder and the store holding nothing, or only its lock, that a run with a
+ * setting on left go too, then the helper's folder if it is then empty.
  *
  * 2.1.3-beta.18 (plan section 5, ADR-030 S12, aicc_planning#433): a held
  * Codex session's hook events go through its holder too (hookRoute, by its
@@ -2806,7 +2806,8 @@ export function crashMarkIn(root: string): boolean {
  * settings off, no running mark and no agent record makes no manager, so the
  * manager's clean-up of old version folders (bringUp) never runs and every
  * update would leave its copy behind. This one runs instead (app-wiring.ts),
- * only when the helper's folder holds a version or staging folder (folder
+ * only when the helper's folder holds a version or staging folder or, from
+ * 2.1.3-beta.19 (below), a kept or store folder that nothing needs (folder
  * reads only, so a user who never used the helper starts nothing): the installed
  * helper lists the holders (no copy is made and no holder is started), and
  * every version folder no listed holder's version needs goes, with the
@@ -2821,10 +2822,10 @@ export function crashMarkIn(root: string): boolean {
  * on leaves an empty kept folder and a store holding only its lock (beta.18's
  * post-publish check), so the start also runs for those (leftoversIn). After
  * the version folders, and only when the listing named no holder and `stop()`
- * still answers false: kept goes if it is empty and store if it holds only its
- * lock, each only while the other holds nothing else either and no running
- * mark is there (read again then), then the helper's folder if it is then
- * empty. Each folder goes with a plain folder removal, so one that is no
+ * still answers false: kept goes if it is empty and store if it holds nothing,
+ * or only its lock, each only while the other holds nothing else either and no
+ * running mark is there (read again then), then the helper's folder if it is
+ * then empty. Each folder goes with a plain folder removal, so one that is no
  * longer empty stays. The same log line names them.
  */
 export async function removeOldCopiesWithHelperOff(opts: { root: string; bundled: string; stop: () => boolean; log: (message: string) => void; platform?: NodeJS.Platform; exec?: SessionHelperDeps['exec'] }): Promise<string[]> {
@@ -2848,7 +2849,7 @@ export async function removeOldCopiesWithHelperOff(opts: { root: string; bundled
   // Synchronous from this check on: a manager made meanwhile (stop() true)
   // owns the folder, and nothing of its runs between the check and the removals.
   const left: { removed: string[]; rootGone: boolean } = held === 0 && !opts.stop() ? removeLeftovers(opts.root) : { removed: [], rootGone: false }
-  const said = [...removed, ...left.removed.map((name) => (name === KEPT ? `${KEPT} (empty)` : `${STORE} (only its lock)`))]
+  const said = [...removed, ...left.removed.map((name) => (name === KEPT ? `${KEPT} (empty)` : `${STORE} (no record)`))]
   if (left.rootGone) said.push('then the helper folder itself (empty)')
   if (said.length > 0) opts.log(`[session-helper] with both settings off, removed old helper folder(s): ${said.join(', ')}`)
   return [...removed, ...left.removed]
@@ -2866,11 +2867,14 @@ function oldCopiesIn(root: string): boolean {
 
 /**
  * 2.1.3-beta.19 (plan section 6.5): the folders a run with a setting on left
- * that nothing needs: kept when it is empty, store when it holds only its lock
- * (a plain file). None when the running mark is there, or when either one
- * holds anything else (a record, a temporary file, a folder) or is not a plain
- * folder (a link): then both stay, as anything there may need the other. Two
- * folder reads; no holder is asked.
+ * that nothing needs: kept when it is empty, store when it holds nothing, or
+ * only its lock (a plain file). A store with nothing in it is what a removal
+ * leaves that took the lock and could not take the folder (on Windows a holder
+ * still ending has the store as its working folder), so the next start takes
+ * it. None when the running mark is there, or when either one holds anything
+ * else (a record, a temporary file, a folder) or is not a plain folder (a
+ * link): then both stay, as anything there may need the other. Two folder
+ * reads; no holder is asked.
  */
 function leftoversIn(root: string): string[] {
   if (crashMarkIn(root)) return []
@@ -2878,9 +2882,9 @@ function leftoversIn(root: string): string[] {
   const store = plainFolderNames(path.join(root, STORE))
   if (kept === null || store === null) return []
   const keptEmpty = kept !== undefined && kept.length === 0
-  const storeLockOnly = store !== undefined && store.length === 1 && store[0] === STORE_LOCK && plainFile(path.join(root, STORE, STORE_LOCK))
-  if ((kept !== undefined && !keptEmpty) || (store !== undefined && !storeLockOnly)) return []
-  return [...(keptEmpty ? [KEPT] : []), ...(storeLockOnly ? [STORE] : [])]
+  const storeBare = store !== undefined && (store.length === 0 || (store.length === 1 && store[0] === STORE_LOCK && plainFile(path.join(root, STORE, STORE_LOCK))))
+  if ((kept !== undefined && !keptEmpty) || (store !== undefined && !storeBare)) return []
+  return [...(keptEmpty ? [KEPT] : []), ...(storeBare ? [STORE] : [])]
 }
 
 /** The names in a plain folder (not a link); undefined when nothing is
@@ -2910,13 +2914,14 @@ function plainFile(file: string): boolean {
 
 /** Removes what leftoversIn names now, then the helper's folder if it is then
  *  empty: each with a plain folder removal (a folder that is no longer empty
- *  stays), the store's lock just before its folder. What cannot go stays for
- *  the next start. */
+ *  stays), the store's lock, when it is there, just before its folder. What
+ *  cannot go stays, and the next start looks again: a store whose lock went
+ *  and whose folder did not holds nothing, which leftoversIn takes too. */
 function removeLeftovers(root: string): { removed: string[]; rootGone: boolean } {
   const removed: string[] = []
   for (const name of leftoversIn(root)) {
     try {
-      if (name === STORE) fs.unlinkSync(path.join(root, STORE, STORE_LOCK))
+      if (name === STORE) fs.rmSync(path.join(root, STORE, STORE_LOCK), { force: true })
       fs.rmdirSync(path.join(root, name))
       removed.push(name)
     } catch { /* in use, or no longer empty: the next start looks again */ }
