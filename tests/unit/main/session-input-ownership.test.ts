@@ -210,7 +210,7 @@ const ALLOWED: Record<string, Record<string, Allowed>> = {
   // Code package's run screen. Each types only through the typing its door
   // hands it (the write port), and only for a session the package runs.
   'src/main/providers/claude/run-screen.ts': {
-    retryClaudeLine: { count: 3, why: "the Watchdog's retry into a Claude Code session: the leave key, the line and Enter in one write (the bytes submitLine typed); in a tab through the session helper on its machine, the line, then Enter as its own write (2.1.3-beta.18 fix round)", until: 'S13 (once main reads a Claude Code screen)' },
+    retryClaudeLine: { count: 2, why: "the Watchdog's retry into a Claude Code session: the line, then Enter as its own write, each after the leave key on an SSH Persistent session (a tab through the session helper since the 2.1.3-beta.18 fix round, every tab since PR 763 fix round 9; until then the line and Enter in one write, the bytes submitLine typed)", until: 'S13 (once main reads a Claude Code screen)' },
     sendClaudePrompt: { count: 2, why: "a prompt button's Send into a Claude Code session: the text, then Enter as its own write", until: 'S13 (once main reads a Claude Code screen)' },
     pasteClaudeImage: { count: 3, why: "an image into a Claude Code session (X1.2): the path as a bracketed paste, the sentence, then Enter, each its own write", until: 'stays' },
     // 2.1.3-beta.19 section 6.1 (aicc_planning#440): new, not moved.

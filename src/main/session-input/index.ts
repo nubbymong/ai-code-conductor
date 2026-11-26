@@ -67,7 +67,8 @@
 // retry is typed, written at submitRetry, and nothing else said below. Since
 // the 2.1.3-beta.18 fix round a tab through the session helper on its machine
 // gets the retry's Enter as its own write (RunScreenTyping.wholeWrites),
-// written at submitRetry too.
+// written at submitRetry too, and since PR 763 fix round 9 every Claude Code
+// tab does.
 //
 // Each function's body moved here from the PTY manager as it was: nothing
 // typed, its order or its timing changed, and no queue, delay or check added,
@@ -241,15 +242,18 @@ export const RETRY_CODEX_READY_WAIT_MS = 5_000
  *   is typed: an incident that is over leaves the retry untyped (PR #746
  *   review).
  * - A Claude Code session's (on this computer, held by the session helper,
- *   or over SSH) is the leave key on an SSH Persistent session, then the
- *   line and Enter, in one write, and
- *   answers nothing. It is typed at once, as the Watchdog decides, so
- *   `stillWanted` has nothing to guard there. In a tab through the session
- *   helper on its machine (2.1.3-beta.18 fix round) the Enter is its own
- *   write PROMPT_ENTER_DELAY_MS after the line's last slice, and only while
- *   the run is still the one the line went to, as a prompt button's Send
- *   goes: there a line and its Enter in one write reach Claude Code as one
- *   read, and in a read of 64 characters or more the Enter stays in the text.
+ *   or over SSH) is the line, then Enter as its own write
+ *   PROMPT_ENTER_DELAY_MS after the line's last slice, and only while the run
+ *   is still the one the line went to, as a prompt button's Send goes; on an
+ *   SSH Persistent session each write starts with the leave key. It answers
+ *   nothing. It is typed at once, as the Watchdog decides, so `stillWanted`
+ *   has nothing to guard there; the same text asked again within 300 ms is
+ *   dropped. Claude Code takes a control character as a key only in a read
+ *   shorter than 64 characters, so a line and its Enter in one write that
+ *   reached it as one read stayed typed and unsent: first seen in a tab
+ *   through the session helper on its machine (split in the 2.1.3-beta.18
+ *   fix round), then on a local Windows tab (every tab split in PR 763 fix
+ *   round 9).
  * - A session whose provider has no retry rule (or no provider, or none
  *   registered) gets nothing typed, one log line, and the answer not
  *   delivered (`session-gone`), so the Watchdog logs it.

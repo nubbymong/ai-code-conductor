@@ -4,10 +4,13 @@
 // held by the session helper, or over SSH. These were the module's own
 // rules, typed for every session that was not Codex; they moved here as they
 // were (every byte, its order and its timing as the module typed them), and
-// the module now types them only for a session this package runs.
+// the module now types them only for a session this package runs. (Since PR
+// 763 fix round 9 the retry's Enter is its own write in every tab: see
+// retryClaudeLine.)
 //
-// Main reads no Claude Code screen (S13): `has` is false; open, feed, resize
-// and close do nothing (the PTY manager opens a pane for a Codex run only);
+// Main reads no Claude Code screen (S13): `has` is false; open, feed and
+// resize do nothing, and close only forgets the session's last retry (the
+// PTY manager opens a pane for a Codex run only);
 // there is no `submit`, and no Ask member (Ask Conductor runs on Codex).
 // Each member types only through the run its door hands it (RunScreenTyping,
 // the module's write port), never through the PTY manager.
@@ -19,30 +22,44 @@ import { PROMPT_ENTER_DELAY_MS } from '../../session-input/enter-delay'
 const PASTE_START = '\u001b[200~'
 const PASTE_END = '\u001b[201~'
 
+/** The same retry text asked again for a session within this long is
+ *  dropped (the window of the PTY manager's duplicate guard, which caught a
+ *  repeated line and Enter while they went in one write). */
+const RETRY_REPEAT_WINDOW_MS = 300
+/** Each session's last retry, for the repeat window (dropped at close). */
+const lastRetry = new Map<string, { text: string; at: number }>()
+
 /**
- * The Watchdog's retry: the line and Enter in one write, after the tmux
- * leave key on an SSH Persistent session (#85: the wheel opens tmux's
+ * The Watchdog's retry, typed at once, as the Watchdog decides: the line,
+ * then Enter as its own write `enterDelayMs` after the line's last slice
+ * went, and only while the run is still the one the line went to, as a
+ * prompt button's Send goes (below). On an SSH Persistent session both
+ * writes start with the tmux leave key (#85: the wheel opens tmux's
  * scrollback view there, and copy-mode would swallow the retry; outside it
- * the key does nothing), typed at once, as the Watchdog decides. It answers
- * nothing. These are the bytes the module's submitLine typed until
- * 2.1.3-beta.18 section 4, byte for byte, for every session but one.
+ * the key does nothing). It answers nothing.
  *
- * A tab through the session helper on its machine (`typing.wholeWrites`,
- * 2.1.3-beta.18 fix round) gets the line, then Enter as its own write
- * `enterDelayMs` after the line's last slice went, and only while the run is
- * still the one the line went to, as a prompt button's Send goes (below). The
- * holder there writes each write whole, so the line and its Enter in one
- * write reach Claude Code as one read, and Claude Code (2.1.332, measured)
- * takes a control character as a key only in a read shorter than 64
- * characters: a retry message of 63 characters or more was typed and not
- * sent. The line's write is made at once, so one that throws still throws to
- * the Watchdog; an Enter that cannot go is dropped, as the session is gone.
+ * Why the Enter goes apart: Claude Code (2.1.332 measured through the session
+ * helper, 2.1.330 on Windows) takes a control character as a key only in a
+ * read shorter than 64 characters, so a line and its Enter in one write that
+ * reached it as one read was typed and not sent. The 2.1.3-beta.18 fix round
+ * split a tab through the session helper on its machine (`typing.wholeWrites`,
+ * whose holder writes each write whole); PR 763 fix round 9 split every tab,
+ * after a local Windows tab took an 85-character retry message as one read
+ * (the 2.1.3-beta.19 release smoke re-read): three retries piled up unsent in
+ * its input box. Until then every other tab got the line and Enter in one
+ * write, the bytes the module's submitLine typed until 2.1.3-beta.18 section 4.
+ *
+ * The same text asked again within RETRY_REPEAT_WINDOW_MS is dropped: the
+ * line alone is not a submitted write, so the PTY manager's duplicate guard
+ * no longer sees it, and two lines then one Enter would send them joined.
+ * The line's write is made at once, so one that throws still throws to the
+ * Watchdog; an Enter that cannot go is dropped, as the session is gone.
  */
-function retryClaudeLine(text: string, opts: { enterDelayMs: number }, typing: RunScreenTyping): void {
-  if (!typing.wholeWrites) {
-    typing.write(`${typing.leave}${text}\r`)
-    return
-  }
+function retryClaudeLine(sessionId: string, text: string, opts: { enterDelayMs: number }, typing: RunScreenTyping): void {
+  const now = Date.now()
+  const last = lastRetry.get(sessionId)
+  if (last && last.text === text && now - last.at < RETRY_REPEAT_WINDOW_MS) return
+  lastRetry.set(sessionId, { text, at: now })
   const data = `${typing.leave}${text}`
   typing.write(data)
   void typing.settled(data, opts.enterDelayMs).then(() => {
@@ -131,9 +148,9 @@ export const CLAUDE_RUN_SCREEN: SessionRunScreen = {
   open: () => {},
   feed: () => {},
   resize: () => {},
-  close: () => {},
+  close: (sessionId) => { lastRetry.delete(sessionId) },
   has: () => false,
-  retry: (_sessionId, text, opts, typing) => retryClaudeLine(text, opts, typing),
+  retry: (sessionId, text, opts, typing) => retryClaudeLine(sessionId, text, opts, typing),
   prompt: (_sessionId, text, opts, typing) => sendClaudePrompt(text, opts, typing),
   marker: (sessionId, line, opts, typing) => holdClaudeMarker(sessionId, line, opts.canvasId, typing),
   image: (_sessionId, imagePath, sentence, opts, typing) => pasteClaudeImage(imagePath, sentence, opts, typing),

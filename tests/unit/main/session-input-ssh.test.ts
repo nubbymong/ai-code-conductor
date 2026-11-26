@@ -3,7 +3,13 @@
 // the retry into an SSH Persistent session (its Claude Code wrapped in tmux on
 // the host) goes in after tmux's leave key, so a pane the user scrolled up in
 // (tmux copy-mode, which swallows input) is left first and the retry reaches
-// Claude Code (#85). Any other SSH session gets the line and Enter only. The
+// Claude Code (#85). Any other SSH session gets the line and Enter only.
+// Since PR 763 fix round 9 the Enter is its own write, PROMPT_ENTER_DELAY_MS
+// after the line (the leave key in front of each on a wrapped session):
+// Claude Code takes a control character as a key only in a read shorter than
+// 64 characters, and a usual SSH tab goes through the same member as the
+// local tab the 2.1.3-beta.19 release smoke re-read found typing and never
+// sending. These cases are red on 38e0edcb, which wrote one write. The
 // rest of the retry is in session-input.test.ts; this half needs the SSH
 // flow's own mocks (as pty-manager-ssh-tmux.test.ts drives it): the real
 // spawnPty SSH branch, the real PTY manager's ports and the real Claude Code
@@ -39,7 +45,7 @@ vi.mock('electron', () => ({
 vi.mock('../../../src/main/watchdog/watchdog-manager', () => ({ getWatchdogManager: () => null }))
 
 const { spawnPty, getSshFlow, killPty, _getSshNonceForTest } = await import('../../../src/main/pty-manager')
-const { submitRetry } = await import('../../../src/main/session-input')
+const { submitRetry, PROMPT_ENTER_DELAY_MS } = await import('../../../src/main/session-input')
 const { registerProvider } = await import('../../../src/main/providers')
 const { ClaudeProvider } = await import('../../../src/main/providers/claude')
 const { TMUX_WHEEL_EXIT_KEY } = await import('../../../src/shared/tmux-wheel')
@@ -88,25 +94,30 @@ afterEach(() => {
 })
 
 describe('the Watchdog\'s retry into an SSH session (submitRetry)', () => {
-  it('an SSH Persistent session (Claude Code wrapped in tmux): the leave key, then exactly the line and Enter, as one write', () => {
+  it('an SSH Persistent session (Claude Code wrapped in tmux): the leave key and the line, then the leave key and Enter', async () => {
     const launch = launchClaude()
     expect(launch).toMatch(/new-session\s+-s\s+ccc-/)
     submitRetry(SID, 'continue')
-    expect(h.writes).toEqual([`${TMUX_WHEEL_EXIT_KEY}continue\r`])
+    expect(h.writes).toEqual([`${TMUX_WHEEL_EXIT_KEY}continue`])
+    await vi.advanceTimersByTimeAsync(PROMPT_ENTER_DELAY_MS)
+    expect(h.writes).toEqual([`${TMUX_WHEEL_EXIT_KEY}continue`, `${TMUX_WHEEL_EXIT_KEY}\r`])
   })
 
-  it('an SSH session that is not wrapped: exactly the line and Enter, no leave key', () => {
+  it('an SSH session that is not wrapped: exactly the line, then Enter, no leave key', async () => {
     const launch = launchClaude({ detachable: false })
     expect(launch).not.toMatch(/new-session\s+-s\s+ccc-/)
     submitRetry(SID, 'continue')
-    expect(h.writes).toEqual(['continue\r'])
+    expect(h.writes).toEqual(['continue'])
+    await vi.advanceTimersByTimeAsync(PROMPT_ENTER_DELAY_MS)
+    expect(h.writes).toEqual(['continue', '\r'])
   })
 
-  it('a repeat within 300 ms is suppressed on a wrapped session too', () => {
+  it('a repeat within 300 ms is dropped on a wrapped session too', async () => {
     launchClaude()
     submitRetry(SID, 'continue')
-    vi.advanceTimersByTime(100)
+    await vi.advanceTimersByTimeAsync(100)
     submitRetry(SID, 'continue')
-    expect(h.writes).toEqual([`${TMUX_WHEEL_EXIT_KEY}continue\r`])
+    await vi.advanceTimersByTimeAsync(PROMPT_ENTER_DELAY_MS)
+    expect(h.writes).toEqual([`${TMUX_WHEEL_EXIT_KEY}continue`, `${TMUX_WHEEL_EXIT_KEY}\r`])
   })
 })
