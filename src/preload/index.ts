@@ -626,7 +626,6 @@ export interface ElectronAPI {
     captureRectangle: () => Promise<string | null>
     captureWindow: (sourceId: string) => Promise<string | null>
     listWindows: () => Promise<Array<{ id: string; name: string; thumbnail: string }>>
-    listRecent: () => Promise<Array<{ filename: string; path: string; timestamp: number; thumbnail: string }>>
     cleanup: (maxAgeDays: number) => Promise<number>
   }
   webview: {
@@ -1341,7 +1340,6 @@ const electronAPI: ElectronAPI = {
     captureRectangle: () => ipcRenderer.invoke(IPC.SCREENSHOT_CAPTURE_RECTANGLE),
     captureWindow: (sourceId: string) => ipcRenderer.invoke(IPC.SCREENSHOT_CAPTURE_WINDOW, sourceId),
     listWindows: () => ipcRenderer.invoke(IPC.SCREENSHOT_LIST_WINDOWS),
-    listRecent: () => ipcRenderer.invoke(IPC.SCREENSHOT_LIST_RECENT),
     cleanup: (maxAgeDays: number) => ipcRenderer.invoke(IPC.SCREENSHOT_CLEANUP, maxAgeDays)
   },
   webview: {

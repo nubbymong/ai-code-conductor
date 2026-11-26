@@ -5,7 +5,7 @@
  * Tool categories:
  *   1. Vision (browser automation via CDP) -- requires a connected VisionManager.
  *      Tools return "vision not connected" if the manager is unavailable.
- *   2. Host file access (screenshots, storyboards) -- always available.
+ *   2. Host file access (image pastes and Snap captures) -- always available.
  *      Used for cross-session image transfer (works for local AND SSH sessions).
  *   3. Codex review (P6) -- always advertised; ACL'd per-CCC-session via the
  *      codexReviewOptedIn set, populated by pty-manager on Claude spawn when
@@ -1045,11 +1045,11 @@ export async function startMcpServer(
 
     // -- fetch_host_screenshot --
     // Returns an image from the host's screenshots dir as inline MCP image content.
-    // Used by snap, storyboard, and clipboard paste in BOTH local and SSH sessions.
+    // Used by Snap and image paste in BOTH local and SSH sessions.
     // SSH sessions reach the MCP server via the existing reverse tunnel.
     if (toolOn('hostTransfer')) server.tool(
       'fetch_host_screenshot',
-      'Fetch an image file from the Conductor host\'s screenshots directory and return it as inline image content. The Conductor app saves clipboard pastes, snap captures, and storyboard frames here so they can be viewed by Claude regardless of session type (local or SSH). Use the filename the user references (e.g. "clipboard-1234.jpg" or "screenshot-2026-04-08-...jpg").',
+      'Fetch an image file from the Conductor host\'s screenshots directory and return it as inline image content. The Conductor app saves image pastes and Snap captures here so they can be viewed by Claude regardless of session type (local or SSH). Use the filename the user references (e.g. "clipboard-1234.jpg" or "screenshot-2026-04-08-...jpg").',
       {
         filename: z.string().describe('Bare filename (no path separators) of an image in the Conductor screenshots directory')
       },

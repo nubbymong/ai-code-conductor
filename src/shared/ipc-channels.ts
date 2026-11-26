@@ -175,7 +175,6 @@ export const IPC = {
   SCREENSHOT_CAPTURE_RECTANGLE: 'screenshot:captureRectangle',
   SCREENSHOT_CAPTURE_WINDOW: 'screenshot:captureWindow',
   SCREENSHOT_LIST_WINDOWS: 'screenshot:listWindows',
-  SCREENSHOT_LIST_RECENT: 'screenshot:listRecent',
   SCREENSHOT_CLEANUP: 'screenshot:cleanup',
   // Snap's own overlay (src/main/snap/overlay.ts), its page only: the page asks
   // for its display's picture once (invoke), then answers once (send). Spelled
