@@ -235,6 +235,21 @@ rollback returns to the earlier beta's rows, and every row has a negative test.
   helper tab start, named by the provider package; the value is display text
   only, bounded to one line of 1 KiB with no control character, and shown only
   after the account label's display gate.
+- **Remote kept sessions** (from 2.1.3-beta.19, section 1.2). Three doors for
+  the app's window only (`machines:remote:sessions`; `endSession` with a device
+  id and an `rm` plus 30 hex helper session id; `endTab` with an app session id
+  and an optional device id), each input pattern-checked before any exec. The
+  renderer's session mark (`remoteVia`) keeps a tab off the usual SSH path, and
+  lets it skip the two checks made for a new session only (logind, and its
+  config under tmux), because its session is held already
+  (remote-helper/route.ts); every other check of the route still applies to it.
+  The start-up list deletes only private session folders, by a checked name,
+  whose holder has no record. A start uses a holder record only of the kind it
+  asked for, and attaches only to a launched until-ended holder. The Check's
+  sweep deletes only `~/.aicc/<did>/helper/<name>` folders whose name is
+  version-and-hash characters, never this build's, a staging folder or a link,
+  and only while the store holds no holder's record; a store that does not read
+  counts as held.
 - **Shared homes.** Each device id has its own marked folder, so clean-up and
   removal never cross devices or installs; other folders are only listed (3.9).
 - **Containers.** The facts come from the host's fixed script running the

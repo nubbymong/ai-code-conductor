@@ -212,6 +212,21 @@ file prints before those lines is dropped, up to 64 KiB. The section 15
 frames of one session ride one `ssh -T` bridge exec, not a `-tt` terminal plus
 a side connection (ADR-030 protocol change 16).
 
+From 2.1.3-beta.19 `hold` takes the holder kind K (`away` | `until-ended`):
+`away` runs `--away 120`, `until-ended` runs `--until-ended`. The app reads the
+record `hold` prints with `readRecord` and uses it only when its kind is the one
+asked for. `sessions` (section 1.2 with 6.3): through the launcher, list mode's
+one line printed as it is, then every private session folder whose holder has
+no record removed (`sweep`'s rule), then `AICC-RESULT swept <n>`; the app's
+start-up and Machines list. `probe` adds `logind-kill`, `logind-exclude` and
+`linger` (`loginctl show-session -p KillUserProcesses` / `KillExcludeUsers
+--value`; `loginctl show-user <user> -p Linger --value`; empty when not read).
+`sweep`: after list mode, every `helper/<version>-<hash12>` folder but this
+build's goes when the store holds no record (nor a `<sid>.json.<pid>.tmp` being
+written), by name and as a real folder, its file then the emptied folder; it
+prints `AICC-RESULT helpers <n>` before `swept <n>`. `sessions` never removes a
+helper folder.
+
 ## 5 Processes
 
 - Until R9 the old terminal path starts the CLI and `serve` owns the socket

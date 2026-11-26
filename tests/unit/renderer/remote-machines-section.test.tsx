@@ -136,7 +136,7 @@ describe('Linux machines on the Machines page', () => {
     install(state({ machines: [{ did: DID, label: 'Rocky', target: 'nick@rocky.lan:22', checked: false, lastCheck: { at: Date.now(), ok: false, detail: REMOTE_OTHER_HELPER }, helperVersion: '0.1.0', system: 'Linux x86-64', inUse: 0 }] }))
     await mount()
     const line = container.querySelector('[data-testid="remote-machine-state"]')?.textContent
-    expect(line).toBe('Not checked: this build of the app carries a different session helper file; press Check to install it; until then its tabs take the usual SSH path')
+    expect(line).toBe('Not checked: this build of the app carries a different session helper file; press Check to install it; until then a new tab there takes the usual SSH path, and a tab whose session the helper keeps there opens again after that Check and a Restart')
     expect(line).not.toMatch(/version/i)
     expect(container.querySelector('[data-testid="remote-machine-route"]')).toBeNull()
     expect(button('Check')?.disabled).toBe(false)

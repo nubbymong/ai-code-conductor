@@ -560,6 +560,9 @@ export class HelperPty implements IPty {
    * says so; else that start ends it. Only a terminal through a holder that
    * has been attached is let go of; any other (still starting, ending, over,
    * or the usual way) answers false and is left to kill() as before.
+   * 2.1.3-beta.19 section 1.2: a remote tab kept until it is ended is let go of
+   * the same way at every close, Restart, quit and update
+   * (remote-helper/session.ts RemoteHelperPty.kill); its holder has no away clock.
    */
   release(): boolean {
     if (this.inner || this.exited || this.ending || this.released || !this.record || !this.everAttached) return false

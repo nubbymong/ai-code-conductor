@@ -172,7 +172,9 @@ Rows are numbered so that "does not own" can name the owner.
   mode, no daemon), and the Machines page shows them with Re-attach and End. A
   host that needs a typed password is asked when the user opens it. A session
   already under tmux at the remote cutover stays on the old path until it
-  ends.
+  ends. From 2.1.3-beta.19 (section 1.2): a session already under tmux stays
+  on the old path until it ends, enforced by the registry tmux entry and the
+  open-tab checks.
 - **D14 Existing users and configs.** Every saved config shape maps to the new
   path automatically, with nothing re-entered, and the mapping is tested
   against real shapes. No screen is removed before its replacement is live and
@@ -530,8 +532,9 @@ machine records and the manifest only once the switch is saved on. The Machines 
 shows its Linux machines section with the switch on or off, and reads the manifest, the Linux
 helper and the records when it is opened (the first read makes the records file with this
 install's id). A machine holding another session
-helper than the app's reads not checked on its card, and its tabs take the usual SSH path,
-until Check installs the app's helper. 2.1.3-beta.18 section 2 (aicc_planning#430): the launch
+helper than the app's reads not checked on its card, and its new tabs take the usual SSH path,
+until Check installs the app's helper (from 2.1.3-beta.19 a tab whose session the helper keeps
+there starts nothing and names that step instead). 2.1.3-beta.18 section 2 (aicc_planning#430): the launch
 of such a tab comes from the tab's provider package (SessionProvider.remoteLaunch,
 providers/types.ts ProviderRemoteLaunch: hostReads, then launch giving the program, arguments,
 the CLI's own variables, the session's files and the status and hook keep-lists), asked through
@@ -539,6 +542,20 @@ the registry by the tab's provider id; core keeps ssh, the upload, routing, fram
 shell's -il wrapper, the host account's variables, LANG, TERM and COLORFGBG, and names no CLI
 flag or variable. The launch is the same, byte for byte (13,000-row characterisation against
 d0be048e).
+
+S25's second session kind (2.1.3-beta.19 section 1.2, aicc_planning#437): an SSH Persistent tab
+goes through the holder, kept until it is ended (hold --until-ended). The route admits it only
+when the machine's last Check read logind as not cleaning up at logout and the tab is not under
+tmux (its own last start on the usual path, a restored tab with no mark, a registry tmux entry,
+or an open usual-path tab). The saved record's remoteVia: helper marks it; a marked tab never
+takes the usual path. Close, quit and update let it go (term.detach); End sends term.end over
+its own link. A start's hold exit 3 plus list mode attaches to a launched until-ended holder and
+launches nothing; one still waiting for its launch, and a clock holder, are ended first. A hold
+whose record is of the other kind than asked is ended at once. List mode at start-up and on the
+Machines page lists kept sessions with Re-attach and End, and removes folders whose holder is
+gone (6.3). A Check's sweep removes the earlier helper folders only while the store holds no
+holder's record. The tab's first attach to its holder, launched or kept, arms its Session
+Watchdog (the fix round after the host line).
 
 Beta.18 (plan section 3.1, aicc_planning#431 and #433): the helper gains a status mode
 (`aicc-helper status`, a CLI's status line command) and a `status` capability: the holder keeps
