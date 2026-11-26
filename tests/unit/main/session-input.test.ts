@@ -161,10 +161,11 @@ vi.mock('electron', () => ({
 vi.mock('../../../src/main/debug-logger', () => ({ logInfo: (m: string) => { h.infos.push(m) }, logWarn: (m: string) => { h.infos.push(m) }, logError: () => {}, logDebug: () => {} }))
 vi.mock('../../../src/main/logging/logging-service', () => ({ getLogSupervisor: () => null, getTranscriptBinder: () => null }))
 vi.mock('../../../src/main/conductor-mcp-server', () => ({ getConductorMcpPort: () => 0, registerCodexReviewSession: () => {}, registerClaudeReviewSession: () => {}, unregisterCodexReviewSession: () => {}, releaseMcpSessionProvider: () => {} }))
-vi.mock('../../../src/main/providers', () => ({
+vi.mock('../../../src/main/providers', async () => (await import('../../helpers/codex-local-launch')).withCodexLocalLaunch(await (() => ({
   providerCapability: () => ({ enabled: true }),
   getProvider: (id: string) => (id === 'codex' ? codexProvider() : claudeProvider()),
-}))
+}))()))
+await (await import('../../helpers/codex-local-launch')).loadCodexLocalLaunch()
 vi.mock('../../../src/main/canvas/codex-canvas-launch', () => ({ prepareCodexCanvasLaunch: () => ({ designatedWorktree: null, guidance: null }) }))
 vi.mock('../../../src/main/canvas/claude-marker-typing', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../../src/main/canvas/claude-marker-typing')>()),

@@ -1,4 +1,8 @@
-import type { CodexOptions, LegacyVersion, PromptButtonResult, ProviderId, SshConfig, SshRuntime, StatuslineData, SubmitTextResult } from '../../shared/types'
+import type { BrowserWindow } from 'electron'
+import type { IPty, IPtyForkOptions } from 'node-pty'
+import type { CanvasSessionGuidance, CodexOptions, LegacyVersion, PromptButtonResult, ProviderId, SshConfig, SshRuntime, StatuslineData, SubmitTextResult } from '../../shared/types'
+import type { RealmOwnership } from '../../shared/providers'
+import type { AccountLease } from './core'
 
 export interface SpawnOptions {
   sessionId: string
@@ -285,6 +289,111 @@ export interface ProviderRemoteLaunch {
   statusLine?(payload: Readonly<Record<string, unknown>>): RemoteStatusLine | null
 }
 
+/** 2.1.3-beta.19 section 2 (aicc_planning#439): the launch pty:spawn prepared
+ *  for a session's account (src/main/pty-manager.ts CodexLaunch, by shape):
+ *  the lease on the account, the executable setup proved, the realm's
+ *  environment and where the realm writes its transcripts; main only. */
+export interface LocalAccountLaunch {
+  readonly lease: AccountLease
+  readonly executable: string
+  readonly env: Record<string, string>
+  readonly sessionsDir: string
+  readonly freshConversation?: boolean
+  readonly home?: string
+  readonly ownership?: RealmOwnership
+}
+
+/** The saved options a local launch reads, as pty:spawn hands them over.
+ *  `codexLaunch` is the account's launch, under the name pty:spawn gives it. */
+export interface LocalLaunchOptions {
+  readonly resume?: { uuid: string; cwd: string }
+  readonly useResumePicker?: boolean
+  readonly isAsk?: boolean
+  readonly askPrompt?: string
+  readonly codexOptions?: CodexOptions
+  readonly codexLaunch?: LocalAccountLaunch
+}
+
+/** What a local launch is given of its session: the window, the tab's id,
+ *  the provider the launch looked up in the registry (its id and its session
+ *  provider, the one the launch builds through), the saved options, the
+ *  configured folder resolved, and the terminal's size. */
+export interface LocalLaunchRequest {
+  readonly win: BrowserWindow
+  readonly sessionId: string
+  readonly id: ProviderId
+  readonly provider: SessionProvider
+  readonly options: LocalLaunchOptions | undefined
+  readonly resolvedCwd: string
+  readonly cols: number
+  readonly rows: number
+}
+
+/** A launch's hooks between their minting and their keeping (sessions/launch-bindings.ts CodexHooks, by shape). */
+export interface LocalLaunchHooks { hookFile: { hookFile: string; dispose(): void } | null; tokenMinted: boolean }
+
+/** The PTY manager's records and doors a local launch uses, as they stand at
+ *  2.1.3-beta.19: the launch bindings (sessions/launch-bindings.ts) in their
+ *  order, the per-session records pty-manager.ts keeps (several are Codex's
+ *  records, kept in core until they move with the local cutover), and its
+ *  spawn of an agent's terminal. Handed to the launch, never imported by it,
+ *  so no package reaches pty-manager.ts. */
+export interface LocalLaunchCore {
+  mintCodexHooks(sessionId: string, provider: SessionProvider): LocalLaunchHooks
+  keepCodexHooks(sessionId: string, hooks: LocalLaunchHooks, hooked: boolean): LocalLaunchHooks
+  bindCodexLease(sessionId: string, lease: AccountLease): void
+  bindCodexPane(binding: { sessionId: string; codexRun: IPty; runScreen: SessionRunScreen | undefined; cols: number; rows: number; write: (data: string) => void; writeColourAnswer: (bytes: string) => void }): { filter(data: string): string }
+  bindCodexLaunch(binding: {
+    win: BrowserWindow
+    sessionId: string
+    provider: SessionProvider
+    launch: { lease: AccountLease; sessionsDir: string }
+    codexCwd: string
+    codexSpawnTimestamp: number
+    built: Pick<ProviderSpawnCommand, 'resumeId' | 'resumePath' | 'pickFile' | 'pickFolder'> & Pick<TelemetryOptions, 'picked'>
+    resolvedCwd: string
+    codexCanvas: { designatedWorktree: string | null; guidance: CanvasSessionGuidance | null }
+    runProvider: ProviderId
+  }): void
+  readonly keptCodexConversations: Pick<Map<string, { uuid: string; cwd: string }>, 'get' | 'delete'>
+  readonly codexResumedById: Pick<Map<string, string>, 'set'>
+  keepCodexConversation(sessionId: string, conversation: { uuid: string; cwd: string }, accountId?: string, how?: { inferred: boolean }): void
+  readonly codexAskSessions: Pick<Set<string>, 'add' | 'delete'>
+  readonly ptySessions: ReadonlyMap<string, { ptyProcess: IPty }>
+  readonly codexLaunchLeases: Pick<Map<string, AccountLease>, 'get' | 'delete'>
+  readonly takenCodexLeases: Pick<WeakSet<AccountLease>, 'add'>
+  releaseCodexLeaseOnExit(proc: IPty, lease: AccountLease): void
+  closeRunScreens(sessionId: string): void
+  forgetCodexHooks(sessionId: string): void
+  dropGatewayToken(sessionId: string): void
+  codexConversationsOpenElsewhere(sessionId: string, accountId: string | undefined): string[]
+  typeAskQuestion(win: BrowserWindow, sessionId: string, question: string): Promise<unknown>
+  askLaunchFolderHolds(folder: string | undefined, launchFolder: string): boolean
+  spawnAgentPty(ctx: { sessionId: string; kind: ProviderId }, file: string, args: string[] | string, opts: IPtyForkOptions): IPty
+  noteAgentRunFolder(proc: IPty, sessionId: string, folder: string): void
+  codexRunWriters(codexRun: IPty): { write: (data: string) => void; writeColourAnswer: (bytes: string) => void }
+  watchBundledConptyEarlyExit(sessionId: string, proc: IPty): void
+}
+
+/** What a local launch started: the session's terminal, and when (taken
+ *  right before the spawn: the moment the session became not indexed, when
+ *  it launched so). */
+export interface LocalLaunchStarted {
+  readonly ptyProcess: IPty
+  readonly launchedAt: number
+}
+
+/** 2.1.3-beta.19 section 2 (aicc_planning#439): how a provider whose CLI is
+ *  the terminal's own program starts a local session (a `direct` launch,
+ *  src/main/pty-manager.ts launchStyleOf). The PTY manager asks the session's
+ *  provider for it through the registry and names no provider: it runs any
+ *  provider that has this group, and refuses one with none. `start` starts
+ *  the CLI from the account's launch and binds what its run needs; it throws
+ *  for a launch it refuses, having started nothing or ended what it started. */
+export interface ProviderLocalLaunch {
+  start(request: LocalLaunchRequest, core: LocalLaunchCore): LocalLaunchStarted
+}
+
 /** How a session's telemetry finds its transcript. `cwd`: the resolved
  *  working directory the PTY runs in, which Codex uses to claim a new
  *  rollout. `spawnTimestamp`: Date.now() captured immediately before
@@ -424,6 +533,11 @@ export interface SessionProvider {
    *  session on another machine through the session helper there. Absent:
    *  the provider's SSH tabs take the usual SSH path. */
   readonly remoteLaunch?: ProviderRemoteLaunch
+  /** Optional -- Codex only (2.1.3-beta.19 section 2): a local session whose
+   *  CLI is the terminal's own program. A provider with this group is
+   *  started by it (pty-manager.ts launchStyleOf); one with none is refused
+   *  unless its row is Claude Code's shell launch. */
+  readonly localLaunch?: ProviderLocalLaunch
   /** Optional -- both packages declare it (2.1.3-beta.18, ADR-030 S12): the
    *  kinds a held session's holder takes and its connections report; how
    *  they reach the holder is the app's hook route (Claude Code: its settings

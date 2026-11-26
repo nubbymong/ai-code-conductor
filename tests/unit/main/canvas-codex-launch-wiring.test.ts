@@ -50,7 +50,7 @@ vi.mock('electron', () => ({
 vi.mock('../../../src/main/debug-logger', () => ({ logInfo: () => {}, logWarn: () => {}, logError: () => {}, logDebug: () => {} }))
 vi.mock('../../../src/main/logging/logging-service', () => ({ getLogSupervisor: () => null, getTranscriptBinder: () => null }))
 vi.mock('../../../src/main/conductor-mcp-server', () => ({ getConductorMcpPort: () => h.port, registerCodexReviewSession: () => {}, registerClaudeReviewSession: () => {}, unregisterCodexReviewSession: () => {}, releaseMcpSessionProvider: () => {} }))
-vi.mock('../../../src/main/providers', async () => {
+vi.mock('../../../src/main/providers', async () => (await import('../../helpers/codex-local-launch')).withCodexLocalLaunch(await (async () => {
   const paths = await import('../../../src/main/providers/codex/realm-paths')
   return {
     providerCapability: () => ({ enabled: true }),
@@ -68,7 +68,8 @@ vi.mock('../../../src/main/providers', async () => {
       stagedSkillsDir: (home: string, resourcesDir: string) => paths.codexManagedRealmSkillsDir(home, resourcesDir),
     }),
   }
-})
+})()))
+await (await import('../../helpers/codex-local-launch')).loadCodexLocalLaunch()
 vi.mock('../../../src/main/providers/claude/spawn', () => ({ resolveClaudeBinary: () => ({ cmd: 'claude', source: 'system' }), resolveHostColorScheme: () => 'dark' }))
 vi.mock('../../../src/main/vision-manager', () => ({ isGlobalVisionRunning: () => false, getGlobalVisionConfig: () => null, teardownVisionSession: () => {} }))
 vi.mock('../../../src/main/canvas/canvas-plugin', async (importOriginal) => ({ ...(await importOriginal<typeof import('../../../src/main/canvas/canvas-plugin')>()), ensureCanvasPlugin: () => null }))

@@ -76,7 +76,7 @@ vi.mock('../../../src/main/conductor-mcp-server', () => ({
   releaseMcpSessionProvider: () => {},
   disposeCodexReviewUsage: () => {},
 }))
-vi.mock('../../../src/main/providers', () => ({
+vi.mock('../../../src/main/providers', async () => (await import('../../helpers/codex-local-launch')).withCodexLocalLaunch(await (() => ({
   providerCapability: () => ({ enabled: true }),
   getProvider: () => ({
     buildSpawnCommand: (opts: Record<string, unknown>) => {
@@ -88,7 +88,8 @@ vi.mock('../../../src/main/providers', () => ({
     prepareSessionHooks: () => null,
     ingestSessionTelemetry: () => ({ stop: () => {} }),
   }),
-}))
+}))()))
+await (await import('../../helpers/codex-local-launch')).loadCodexLocalLaunch()
 vi.mock('../../../src/main/providers/claude/spawn', () => ({
   resolveClaudeBinary: () => ({ cmd: 'claude', source: 'system' }),
   resolveHostColorScheme: () => 'dark',

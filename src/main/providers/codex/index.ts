@@ -1,12 +1,13 @@
 // Codex provider package: public entry point (WP1, design 7.1). Everything
 // outside this directory imports from here; the dependency-boundary test
 // holds the deep imports at zero.
-import type { SessionProvider, SessionRunScreen, SpawnOptions, TelemetrySource, HistorySession, ProviderSpawnCommand, TelemetryOptions, HeldToolLaunch, HeldToolLaunchAnswer, HeldToolRelay, ExitKey, ResumePick } from '../types'
+import type { SessionProvider, SessionRunScreen, SpawnOptions, TelemetrySource, HistorySession, ProviderSpawnCommand, TelemetryOptions, HeldToolLaunch, HeldToolLaunchAnswer, HeldToolRelay, ExitKey, ResumePick, ProviderLocalLaunch } from '../types'
 import type { LegacyVersion, StatuslineData } from '../../../shared/types'
 import type { AllowanceReading } from '../../../shared/usage-types'
 import type { ProviderCapabilities, AuthRealm, RealmUse } from '../../../shared/providers'
 import type { ProviderPackage, ProviderPricingOperations, RealmRef } from '../core'
 import { CODEX_ENABLEMENT } from './enablement'
+import { CODEX_LOCAL_LAUNCH } from './local-launch'
 import { resolveCodexBinary, resolveCodexBinaryAsync, buildCodexSpawn, codexHookDataDir, sweepStaleCodexPickFolders, warmNodeExeOnPosix } from './spawn'
 import { openCodexScreen, feedCodexScreen, resizeCodexScreen, closeCodexScreen, hasCodexScreen, submitCodexText, submitCodexImage } from './session-screen'
 import { codexDoorMembers } from './run-screen-doors'
@@ -217,6 +218,9 @@ export class CodexProvider implements SessionProvider {
   }
 
   readonly runScreen: SessionRunScreen = CODEX_RUN_SCREEN
+
+  /** 2.1.3-beta.19 section 2: its CLI as the terminal's own program (local-launch.ts). */
+  readonly localLaunch: ProviderLocalLaunch = CODEX_LOCAL_LAUNCH
 
   detectUiRunning(data: string): boolean {
     return detectCodexUi(data)

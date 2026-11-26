@@ -135,7 +135,7 @@ vi.mock('../../../src/main/conductor-mcp-server', () => ({
   unregisterCodexReviewSession: () => {},
   releaseMcpSessionProvider: (sid: string) => { h.released.push(sid) },
 }))
-vi.mock('../../../src/main/providers', () => ({
+vi.mock('../../../src/main/providers', async () => (await import('../../helpers/codex-local-launch')).withCodexLocalLaunch(await (() => ({
   providerCapability: () => ({ enabled: true }),
   tryGetProvider: (id: string) => ({
     statusPostUrl: (sid: string, _r: unknown, port: number) => `http://127.0.0.1:${port}/status?cccSessionId=${sid}&token=new-run`,
@@ -155,7 +155,8 @@ vi.mock('../../../src/main/providers', () => ({
     } : {}),
     ingestSessionTelemetry: (_sid: string, o: Record<string, unknown>) => { h.telemetry.push(o); return { stop: () => {} } },
   }),
-}))
+}))()))
+await (await import('../../helpers/codex-local-launch')).loadCodexLocalLaunch()
 vi.mock('../../../src/main/providers/claude/spawn', () => ({ resolveClaudeBinary: () => ({ cmd: 'claude', source: 'system' }), resolveHostColorScheme: () => 'dark' }))
 vi.mock('../../../src/main/vision-manager', () => ({ isGlobalVisionRunning: () => false, getGlobalVisionConfig: () => null, teardownVisionSession: () => {} }))
 vi.mock('../../../src/main/canvas/canvas-plugin', () => ({ ensureCanvasPlugin: () => null }))

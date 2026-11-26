@@ -68,7 +68,7 @@ vi.mock('../../../../src/main/hooks/index', () => ({ getGateway: () => null }))
 // Since 2.1.3-beta.18 section 4 the retry door types each session through its
 // provider's run screen: Claude Code's own, and Codex's door members built
 // here over whichever run screen a test hands out.
-vi.mock('../../../../src/main/providers', async () => {
+vi.mock('../../../../src/main/providers', async () => (await import('../../../helpers/codex-local-launch')).withCodexLocalLaunch(await (async () => {
   const { CLAUDE_RUN_SCREEN } = await import('../../../../src/main/providers/claude/run-screen')
   const { codexDoorMembers } = await import('../../../../src/main/providers/codex/run-screen-doors')
   return {
@@ -78,7 +78,8 @@ vi.mock('../../../../src/main/providers', async () => {
       return { runScreen: h.runScreen ? { ...h.runScreen, ...codexDoorMembers(h.runScreen as never) } : h.runScreen }
     },
   }
-})
+})()))
+await (await import('../../../helpers/codex-local-launch')).loadCodexLocalLaunch()
 
 const { WatchdogManager, clampAnsiChunk } = await import('../../../../src/main/watchdog/watchdog-manager')
 const input = await import('../../../../src/main/session-input')
