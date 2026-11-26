@@ -352,9 +352,9 @@ describe('a connection that drops while the terminal runs is attached again', ()
  * the frame before it; input typed during the wait sent ahead of the Enter; a
  * frame the flush sent kept in the queue and sent again.
  *
- * 2.1.3-beta.19 section 6.2 (aicc_planning#440): the wait is Claude Code's
- * rule, asked of the run's provider (its run screen's heldEnterWaitMs), so
- * these terminals run Claude Code, its run screen registered;
+ * 2.1.3-beta.19 section 6.2 (aicc_planning#440): the wait is the run's
+ * provider's own declaration (its run screen's heldEnterWaitMs), so these
+ * terminals run Claude Code, its run screen registered;
  * session-helper-enter-wait.test.ts holds a plain terminal, and a provider
  * that declares no wait, to none.
  */

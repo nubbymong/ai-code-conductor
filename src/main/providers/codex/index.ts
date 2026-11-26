@@ -52,6 +52,7 @@ import path from 'node:path'
 import { sweepStaleFolders } from '../../stale-folder-sweep'
 import { secureOwnerOnlyFolders, readOwnerOnlyFoldersWindows } from '../../owner-only-folders'
 import { logInfo, logWarn } from '../../debug-logger'
+import { PROMPT_ENTER_DELAY_MS } from '../../session-input/enter-delay'
 
 // WP2 Codex adapter: the CLI contract, install recipes, the allowlisted
 // subprocess environment, realm paths, the CLI runner and discovery.
@@ -149,6 +150,12 @@ const CODEX_RUN_SCREEN: SessionRunScreen = {
   close: (sessionId) => closeCodexScreen(sessionId),
   ...CODEX_SCREEN_PRIMITIVES,
   ...codexDoorMembers(CODEX_SCREEN_PRIMITIVES),
+  // A held terminal's lone Enter typed while it was detached goes this long
+  // after the frame before it at the attach again (2.1.3-beta.19 section
+  // 6.2): Codex never submits a text and its Enter that arrive as one write,
+  // and submits the text then Enter 300 ms later (PB3, 0.153.4 and 0.155.1);
+  // the holder writes frames that come back to back into one read.
+  heldEnterWaitMs: PROMPT_ENTER_DELAY_MS,
 }
 
 /** WP2 PR 4: Codex's model prices (pricing.ts), offered to Tokenomics through

@@ -1,16 +1,18 @@
 /**
- * 2.1.3-beta.19 section 6.2 (aicc_planning#440): only Claude Code's held
- * terminals wait before a queued lone Enter. Since beta.18's fix round a lone
- * Enter ('\r', or the tmux leave key then '\r') typed while a held terminal
- * was detached goes PROMPT_ENTER_DELAY_MS after the frame before it at the
- * attach again (session-helper/helper-pty.ts, flushQueued): the holder writes
- * frames that come back to back into one read, and Claude Code (2.1.332,
- * measured) takes a control character as a key only in a read shorter than 64
- * characters. Until this section every held terminal waited, a plain one and a
- * Codex one too. Now a provider's run screen declares the wait
- * (SessionRunScreen.heldEnterWaitMs: Claude Code's PROMPT_ENTER_DELAY_MS), the
- * terminal asks its run's provider, and a plain terminal or a provider that
- * declares none sends what was queued at once, as before that fix round.
+ * 2.1.3-beta.19 section 6.2 (aicc_planning#440): a held terminal waits before
+ * a queued lone Enter only when its provider declares that wait. Since
+ * beta.18's fix round a lone Enter ('\r', or the tmux leave key then '\r')
+ * typed while a held terminal was detached goes PROMPT_ENTER_DELAY_MS after
+ * the frame before it at the attach again (session-helper/helper-pty.ts,
+ * flushQueued): the holder writes frames that come back to back into one
+ * read, Claude Code (2.1.332, measured) takes a control character as a key
+ * only in a read shorter than 64 characters, and Codex never submits a text
+ * and its Enter that arrive as one write (PB3, 0.153.4 and 0.155.1). Until
+ * this section every held terminal waited, a plain one too. Now a provider's
+ * run screen declares the wait (SessionRunScreen.heldEnterWaitMs: Claude
+ * Code's and Codex's PROMPT_ENTER_DELAY_MS), the terminal asks its run's
+ * provider, and a plain terminal or a provider that declares none sends what
+ * was queued at once, as before that fix round.
  *
  * PURE: the real HelperPty and HolderConnection against the fake holder, in
  * memory, with the real Claude Code and Codex packages registered (Electron
@@ -21,12 +23,12 @@
  * key); session-helper-take-over.test.ts holds the manager's agent sessions
  * and take-overs to naming their provider.
  *
- * Red on cc36c7f3 (src/ reverted to it, this file as it is): the plain and
- * Codex terminals' Enter waited, the packages declared nothing, the remote
- * tab's terminal named no provider. Mutants this must catch (each run, each
- * red): the wait given to every provider; Claude Code's run screen declaring
- * none; a declared value that is not a positive number taken as the wait;
- * the remote tab's terminal not told its provider.
+ * Red on cc36c7f3 (src/ reverted to it, this file as it is): the plain
+ * terminal's Enter waited, the packages declared nothing, the remote tab's
+ * terminal named no provider. Mutants this must catch (each run, each red):
+ * the wait given to every terminal; Claude Code's run screen declaring none;
+ * Codex's run screen declaring none; a declared value that is not a positive
+ * number taken as the wait; the remote tab's terminal not told its provider.
  */
 import { describe, it, expect, vi, afterEach, beforeAll, afterAll } from 'vitest'
 import { mkdtempSync, rmSync } from 'fs'
@@ -161,12 +163,10 @@ async function requestThenEnter(provider?: ProviderId): Promise<{ sent: string[]
 }
 
 describe('the packages declare the wait a held terminal\'s queued lone Enter keeps', () => {
-  it('Claude Code\'s run screen declares PROMPT_ENTER_DELAY_MS (300 ms); Codex\'s declares none', () => {
+  it('Claude Code\'s and Codex\'s run screens declare PROMPT_ENTER_DELAY_MS (300 ms)', () => {
     expect(PROMPT_ENTER_DELAY_MS).toBe(300)
     expect(new ClaudeProvider().runScreen?.heldEnterWaitMs).toBe(PROMPT_ENTER_DELAY_MS)
-    const codex = new CodexProvider().runScreen
-    expect(codex).toBeDefined()
-    expect(codex?.heldEnterWaitMs).toBeUndefined()
+    expect(new CodexProvider().runScreen?.heldEnterWaitMs).toBe(PROMPT_ENTER_DELAY_MS)
   })
 })
 
@@ -185,16 +185,12 @@ describe('a request and its lone Enter typed while detached, at the attach again
     await untilTurns(() => Buffer.concat(h.input).toString('utf8') === `${REQUEST}\r`, 'both at the holder')
   })
 
-  it('a Codex terminal: both go at once, as for a plain terminal', async () => {
-    const { sent, h, p } = await requestThenEnter('codex')
-    expect(p.provider).toBe('codex')
-    expect(sent).toEqual([REQUEST, '\r'])
-    await untilTurns(() => Buffer.concat(h.input).toString('utf8') === `${REQUEST}\r`, 'both at the holder')
-  })
-
-  it('a Claude Code terminal: the request at once, the Enter as its own frame PROMPT_ENTER_DELAY_MS later', async () => {
-    const { sent, h, p } = await requestThenEnter('claude')
-    expect(p.provider).toBe('claude')
+  it.each([
+    ['Codex', 'codex'],
+    ['Claude Code', 'claude'],
+  ] as const)('a %s terminal: the request at once, the Enter as its own frame PROMPT_ENTER_DELAY_MS later', async (_name, provider) => {
+    const { sent, h, p } = await requestThenEnter(provider)
+    expect(p.provider).toBe(provider)
     expect(sent).toEqual([REQUEST])
     vi.advanceTimersByTime(PROMPT_ENTER_DELAY_MS - 1)
     await turns()
@@ -205,7 +201,7 @@ describe('a request and its lone Enter typed while detached, at the attach again
     await untilTurns(() => Buffer.concat(h.input).toString('utf8') === `${REQUEST}\r`, 'both at the holder')
   })
 
-  it('a Claude Code terminal over SSH Persistent: the tmux leave key then Enter waits too; a Codex one\'s goes at once', async () => {
+  it('a Claude Code terminal over SSH Persistent: the tmux leave key then Enter waits too', async () => {
     const leaveEnter = `${TMUX_WHEEL_EXIT_KEY}\r`
     const claude = await dropped('claude')
     claude.p.write(REQUEST)
@@ -217,14 +213,6 @@ describe('a request and its lone Enter typed while detached, at the attach again
     vi.advanceTimersByTime(PROMPT_ENTER_DELAY_MS)
     await turns()
     expect(claude.sent).toEqual([REQUEST, leaveEnter])
-    vi.useRealTimers()
-    const codex = await dropped('codex')
-    codex.p.write(REQUEST)
-    codex.p.write(leaveEnter)
-    codex.open()
-    await untilTurns(() => codex.sent.length > 0 && codex.p.isAttached, 'the Codex attach again')
-    await turns()
-    expect(codex.sent).toEqual([REQUEST, leaveEnter])
   })
 })
 

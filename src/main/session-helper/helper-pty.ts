@@ -835,17 +835,19 @@ export class HelperPty implements IPty {
   /**
    * What was typed while the terminal was not attached, on `conn`, in the
    * order typed (2.1.3-beta.18 fix round). For a provider whose run screen
-   * declares a wait (heldEnterWaitMs: Claude Code's, 2.1.3-beta.19 section
-   * 6.2), a frame that is a lone Enter ('\r', or the tmux leave key then
-   * '\r') goes that long after the frame before it, and what is typed
-   * meanwhile waits behind it (write), so the order holds. The holder writes
-   * frames that come back to back into one read of the program, and Claude
-   * Code (2.1.332, measured) takes a control character as a key only in a
-   * read shorter than 64 characters: an image request and its Enter typed
-   * during a link drop were typed and not sent once the link was back. A
-   * lone Enter first in line goes at once, and frames with no lone Enter
-   * among them go at once, as they always did; so does everything for a
-   * plain terminal and for a provider that declares no wait. A drop during
+   * declares a wait (heldEnterWaitMs: Claude Code's and Codex's,
+   * 2.1.3-beta.19 section 6.2), a frame that is a lone Enter ('\r', or the
+   * tmux leave key then '\r') goes that long after the frame before it, and
+   * what is typed meanwhile waits behind it (write), so the order holds. The
+   * holder writes frames that come back to back into one read of the
+   * program, and Claude Code (2.1.332, measured) takes a control character
+   * as a key only in a read shorter than 64 characters: an image request and
+   * its Enter typed during a link drop were typed and not sent once the link
+   * was back. Codex never submits a text and its Enter that arrive as one
+   * write (PB3, composer-submit.ts). A lone Enter first in line goes at
+   * once, and frames with no lone Enter among them go at once, as they
+   * always did; so does everything for a plain terminal and for a provider
+   * that declares no wait. A drop during
    * the wait leaves the rest queued for the attach again, the Enter first
    * (setDetached); an update's let-go sends it at once (release).
    */
