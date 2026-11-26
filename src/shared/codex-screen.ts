@@ -297,7 +297,9 @@ const TITLE_AFTER_FOLDER_RE = new RegExp(` ${MIDDLE_DOT} \\S`)
  *  with the title begun after its folder (a second " . " and a word), cut at
  *  the pane's edge (row two's first word, with the space the wrap took, would
  *  have passed the row's last cell: Codex's own rule, which every recording
- *  meets), and `second` is the rest of the title at the footer's own indent,
+ *  meets; the word is counted in code points, not cells, so a first word of
+ *  wide characters counts short and that wrap can stay refused), and
+ *  `second` is the rest of the title at the footer's own indent,
  *  and none of Codex's other rows (a footer of any model, a hint row, the
  *  warning row, a popup row). Neither row holds two spaces in a row past the
  *  indent (a row laid out in parts, not a title wrapped at a word). Not

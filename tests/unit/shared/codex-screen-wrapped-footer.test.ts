@@ -37,6 +37,9 @@
 //    did not wrap there after the same prompt: codex170-linux-after-reply);
 //  - a footer wrapped onto three rows or more, a wrap inside the folder or
 //    between the folder and the title: not recorded, so refused (below);
+//  - a row two whose first word is of wide characters: the reader counts it
+//    in code points, not cells, so it counts short and that wrap can stay
+//    refused (the safe side; not recorded);
 //  - a reply streaming on macOS: its wrapped screen reads ready, as Codex
 //    0.157.1's does with a footer of one row (aicc_planning#370; the corpus
 //    test lists both).
@@ -227,6 +230,31 @@ describe('Codex 0.170.0 and 0.172.0: the footer wrapped onto two rows (2.1.3-bet
       expect(codexTextTyped([...typedTop('p19 note'), ROW_ONE, two], 'p19 note'), what).toBe(false)
       expect(codexPastedContentShown([...typedTop('[Pasted Content 1200 chars]'), ROW_ONE, two], 1200), what).toBe(false)
     }
+  })
+
+  // The queue hint says a turn runs (on macOS it is the only sign, aicc_planning#370): no Enter over it.
+  it('a hint row is never the second row of a footer cut at the edge, and under the wrapped footer it stops the confirm readers: nothing typed is confirmed', () => {
+    const cases: ReadonlyArray<readonly [string, ScreenLine[]]> = [
+      ['the queue hint under a footer of one row', [ROW_ONE, QUEUE_HINT]],
+      ['the shortcuts hint under a footer of one row', [rowOneEndingAt(119), plain('  ? for shortcuts')]],
+      ['the rebound shortcuts hint under a footer of one row', [rowOneEndingAt(118), plain('  f6 for shortcuts')]],
+      ['the agents hint under a footer of one row', [rowOneEndingAt(119), AGENTS]],
+      ['the queue hint under the wrapped footer', [ROW_ONE, ROW_TWO, QUEUE_HINT]],
+      ['the agents hint under the wrapped footer', [ROW_ONE, ROW_TWO, AGENTS]],
+    ]
+    for (const [what, under] of cases) {
+      expect(codexTextTyped([...typedTop('p19 note'), ...under], 'p19 note', null, AT_REST), what).toBe(false)
+      expect(codexCommandTyped([...typedTop('/model'), ...under], '/model', null, AT_REST), what).toBe(false)
+      expect(codexPastedContentShown([...typedTop('[Pasted Content 1200 chars]'), ...under], 1200, null, AT_REST), what).toBe(false)
+    }
+    // The text typed while a reply streams is still read, so composer-submit can take it back.
+    expect(readCodexScreen([...typedTop('p19 note'), ROW_ONE, QUEUE_HINT], null, { title: AT_REST })).toEqual({ screen: 'busy', text: 'p19 note' })
+    expect(codexComposerDraft([...typedTop('p19 note'), ROW_ONE, ROW_TWO, QUEUE_HINT])).toBe('p19note')
+  })
+
+  it('a popup row or a footer of one row under the wrapped footer: a command typed over them is not confirmed', () => {
+    expect(codexCommandTyped([...typedTop('/model'), ROW_ONE, ROW_TWO, plain('  /model  choose what model and reasoning effort to use')], '/model', null, AT_REST)).toBe(false)
+    expect(codexCommandTyped([...typedTop('/model'), ROW_ONE, ROW_TWO, plain(`  p19-probe default ${DOT} /tmp/p19/work`)], '/model', null, AT_REST)).toBe(false)
   })
 
   it('row one cut at the edge means row two\'s first word with its space passes the last cell: at the edge it is read, one cell short it is not', () => {
