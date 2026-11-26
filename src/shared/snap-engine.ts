@@ -27,3 +27,17 @@ export function snapEngineFor(platform: string, saved: unknown): SnapEngine {
   if (platform !== 'win32') return 'previous'
   return savedSnapEngine(saved) ?? SNAP_ENGINE_DEFAULT_WINDOWS
 }
+
+/** A Snap press that captured nothing, and why, when the user should be told
+ *  (2.1.3-beta.19 fix round): the new Snap found no desktop to capture (its
+ *  helper's exit 3: a locked screen, a session with no screen, a service, an
+ *  elevation prompt). A cancelled press says nothing. */
+export interface SnapNotCaptured { notCaptured: 'no-desktop' }
+
+/** The one line shown where Snap was pressed when it found no desktop. */
+export const SNAP_NO_DESKTOP_TEXT = 'Snap could not capture: there is no desktop to capture in this Windows session.'
+
+/** True when a Snap answer is a press that captured nothing and says why. */
+export function isSnapNotCaptured(v: unknown): v is SnapNotCaptured {
+  return typeof v === 'object' && v !== null && (v as { notCaptured?: unknown }).notCaptured === 'no-desktop'
+}

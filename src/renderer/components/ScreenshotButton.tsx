@@ -3,6 +3,11 @@ import { useMagicButtonStore } from '../stores/magicButtonStore'
 import WindowPickerModal from './WindowPickerModal'
 import { ReservedLabel } from './command-bar/chips'
 import { sendImageToSession } from '../utils/imageTransfer'
+import { usePasteHintStore } from '../stores/pasteHintStore'
+import { SNAP_NO_DESKTOP_TEXT, isSnapNotCaptured } from '../../shared/snap-engine'
+
+/** How long the line a press that captured nothing stays up. */
+const SNAP_NOTE_MS = 6000
 
 interface Props {
   sessionId: string
@@ -73,9 +78,12 @@ export default function ScreenshotButton({ sessionId, sessionType }: Props) {
       // The new Snap pictures the screen as soon as it is asked: the menu's
       // close is drawn first, or the menu can be in the picture.
       await afterTwoFrames()
-      const path = await window.electronAPI.screenshot.captureRectangle()
-      if (path) {
-        sendImageToSession(sessionId, path, 'I just snapped a region of my screen — please view it.', sessionType)
+      const answer = await window.electronAPI.screenshot.captureRectangle()
+      if (typeof answer === 'string' && answer) {
+        sendImageToSession(sessionId, answer, 'I just snapped a region of my screen — please view it.', sessionType)
+      } else if (isSnapNotCaptured(answer)) {
+        // 2.1.3-beta.19 fix round: nothing opened, so say why, above the bar.
+        usePasteHintStore.getState().show(sessionId, SNAP_NO_DESKTOP_TEXT, SNAP_NOTE_MS)
       }
     } finally {
       setCapturing(false)

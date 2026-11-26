@@ -106,7 +106,8 @@ describe('the previous Snap\'s package is loaded by the first press that uses it
     const { captureRectangle } = await fresh()
     expect(await captureRectangle(win, windows, async () => ({ kind: 'saved', file: '/mock/resources/screenshots/s.jpg' }))).toBe('/mock/resources/screenshots/s.jpg')
     expect(await captureRectangle(win, windows, async () => ({ kind: 'cancelled' }))).toBeNull()
-    expect(await captureRectangle(win, windows, async () => ({ kind: 'no-desktop' }))).toBeNull()
+    // No desktop captures nothing and says why (2.1.3-beta.19 fix round), still never loading the package.
+    expect(await captureRectangle(win, windows, async () => ({ kind: 'no-desktop' }))).toEqual({ notCaptured: 'no-desktop' })
     expect(lib.loads).toBe(0)
   })
 

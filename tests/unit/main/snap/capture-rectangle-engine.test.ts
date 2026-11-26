@@ -66,8 +66,8 @@ describe('captureRectangle with the new Snap', () => {
     expect(lib.startCalls).toBe(0)
   })
 
-  it('exit 3 (no desktop to capture) answers nothing, and the package never starts', async () => {
-    expect(await captureRectangle(win, windows, engine({ kind: 'no-desktop' }))).toBeNull()
+  it('exit 3 (no desktop to capture) captures nothing and says why (2.1.3-beta.19 fix round: the press then tells the user), and the package never starts', async () => {
+    expect(await captureRectangle(win, windows, engine({ kind: 'no-desktop' }))).toEqual({ notCaptured: 'no-desktop' })
     expect(lib.startCalls).toBe(0)
   })
 

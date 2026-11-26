@@ -703,7 +703,8 @@ export interface ElectronAPI {
     captureGlyph: (payload: unknown) => Promise<{ ok: boolean; jsonPath?: string; imagePath?: string; error?: string }>
   }
   screenshot: {
-    captureRectangle: () => Promise<string | null>
+    /** The picture's file; a press that captured nothing and says why (no desktop to capture); or null. */
+    captureRectangle: () => Promise<string | { notCaptured: 'no-desktop' } | null>
     captureWindow: (sourceId: string) => Promise<string | null>
     listWindows: () => Promise<Array<{ id: string; name: string; thumbnail: string }>>
     cleanup: (maxAgeDays: number) => Promise<number>
