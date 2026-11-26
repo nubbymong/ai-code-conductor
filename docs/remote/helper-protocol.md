@@ -914,7 +914,9 @@ the hello proves it: the app connects, and the hello must carry the record's
 exit recorded first is never written over, and each write of `attached` says
 what is true at that moment.
 
-The store's lock file, `<store>/.lock`, is never removed. It is held with the
+The helper never removes the store's lock file, `<store>/.lock`; from
+2.1.3-beta.19 the app removes it, with the store, at a start with both helper
+settings off when the store holds nothing else (below). It is held with the
 OS's own file lock while a holder checks for a live holder of its session and
 writes its record, while list mode removes a stale record, and while a holder
 removes its own. So of two holders started for one session at the same moment
@@ -962,7 +964,11 @@ both helper settings off, no running mark and no agent record, when the
 helper's per-user folder holds a version or staging folder: from the install
 folder (a one-shot run, so no copy is made), and every version folder no
 listed record's `helper` names goes, with the staging folders; a listing that
-fails or does not read removes nothing.
+fails or does not read removes nothing. From 2.1.3-beta.19 that start also runs
+when the per-user folder holds an empty kept folder or a store holding no more
+than its lock, and, when the listing names no holder and no running mark is
+there, it removes those two and then the per-user folder if it is then empty;
+a record, a link or any other entry in either keeps both.
 
 **Reading one field (from 2.1.3-beta.19).** `aicc-helper field --file <path
 under home> --key <dotted key>` (macOS and Linux; on Windows it prints

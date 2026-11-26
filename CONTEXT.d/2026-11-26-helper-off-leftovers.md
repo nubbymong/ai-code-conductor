@@ -29,8 +29,9 @@ aicc_planning#440 (item 5), from beta.18's post-publish check.
 - **Changed on purpose.** A start that removes only a staging or version
   folder now also removes the helper's folder when it is then empty (beta.15's
   case 6 left it empty). The manager makes the folder again at its start.
-- **Tests.** tests/unit/main/session-helper-old-copies.test.ts cases 6 to 10
-  (18 tests). Mutants, each caught: the store's check dropped (a store with a
-  record goes), kept's emptiness check dropped, the running mark ignored, the
-  listed holder ignored, the third `stop()` check dropped, a store with
-  nothing in it not taken, and the lock's removal made unconditional again.
+- **Tests.** tests/unit/main/session-helper-old-copies.test.ts, 18 tests in the
+  file; cases 6 to 10 (13 of them) are this change's. Mutants, each caught:
+  the store's check dropped (a store with a record goes), kept's emptiness
+  check dropped, the running mark ignored, the listed holder ignored, the
+  third `stop()` check dropped, a store with nothing in it not taken, and the
+  lock's removal made unconditional again.

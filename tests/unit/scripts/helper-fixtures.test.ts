@@ -521,7 +521,7 @@ describe('helper fixtures: the local transport (section 15)', () => {
     expect(num('helper/src/holder.rs', 'INPUT_QUEUE_FRAMES')).toBe(64)
     expect(section).toContain('while at most 64 frames of typed input wait')
     expect(/pub const LOCK_FILE: &str = "\.lock";/.test(src('helper/src/store.rs'))).toBe(true)
-    expect(section).toContain('The store\'s lock file, `<store>/.lock`, is never removed.')
+    expect(section).toContain('The helper never removes the store\'s lock file, `<store>/.lock`;')
     expect(section).toContain('Each limit is for the whole frame')
     expect(num('helper/src/serve.rs', 'MAX_JSON_BEFORE_ACK')).toBe(4096)
     expect(num('helper/src/serve.rs', 'MAX_JSON_AFTER_LAUNCH')).toBe(64 * 1024)

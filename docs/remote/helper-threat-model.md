@@ -124,12 +124,17 @@ rollback returns to the earlier beta's rows, and every row has a negative test.
   agent record makes no copy; when the per-user folder holds a version or
   staging folder, the app runs the installed file itself once, for `list` (as
   it runs `version`), and removes every version folder whose version no
-  listed holder names, with the staging folders. A listing that fails or does
-  not read, or a settings file that cannot be read, removes nothing (from
-  2.1.3-beta.15). A holder's hello must name the nonce from its record, and the
-  app writes nothing to the endpoint before that hello has been read. This
-  catches a corrupted or swapped copy; like the remote case it does not stop
-  the same user, who can already run any program as themselves.
+  listed holder names, with the staging folders. From 2.1.3-beta.19 that start
+  also runs when the per-user folder holds an empty kept folder or a store
+  holding no more than its lock, and, when the listing names no holder and no
+  running mark is there, it removes those two and then the per-user folder if
+  it is then empty; a record, a link or any other entry in either keeps both.
+  A listing that fails or does not read, or a settings file that cannot be
+  read, removes nothing (from 2.1.3-beta.15). A holder's hello must name the
+  nonce from its record, and the app writes nothing to the endpoint before
+  that hello has been read. This catches a corrupted or swapped copy; like the
+  remote case it does not stop the same user, who can already run any program
+  as themselves.
 - **The bundled ConPTY on This computer (from 2.1.3-beta.7, the launch field
   `conpty`).** A launch may ask a holder on Windows for the bundled ConPTY.
   The holder then loads `conpty.dll` only from the `conpty` folder beside its

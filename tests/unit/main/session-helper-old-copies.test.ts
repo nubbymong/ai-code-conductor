@@ -39,7 +39,7 @@
 //     folder there (it still goes) and without one (no listing is run, but
 //     for the listed holder, which only the listing shows); so do both when
 //     a switch is turned on while the version folders go (stop() asked a
-//     third time, just before them);
+//     third time, just before kept and store);
 // 10. a kept or a store that holds anything else, or is a link: both stay,
 //     and with nothing else to remove no listing is run.
 //
@@ -342,7 +342,7 @@ describe('2.1.3-beta.19 (6.5): the empty kept folder and the lock-only store a r
     expect(logs).toHaveLength(1)
   })
 
-  it('10.a kept or a store holding anything else, or a link: both stay, and with nothing else to remove no listing is run', async () => {
+  it('10. a kept or a store holding anything else, or a link: both stay, and with nothing else to remove no listing is run', async () => {
     const elsewhere = join(dir, 'elsewhere')
     mkdirSync(elsewhere)
     writeFileSync(join(elsewhere, '.lock'), '')

@@ -14,12 +14,14 @@
 //! change 14) has no away clock: its `away` is null and it adds
 //! `"lifetime":"until-ended"` right after it. Any other mix does not read.
 //!
-//! The store's lock file (`.lock`, never removed) is held, with the OS's own
-//! file lock, while a holder checks for a live holder of its session and
-//! writes its record, while list mode removes a stale record, and while a
-//! holder removes its own. So two holders started for one session at the same
-//! moment cannot both write a record, and list mode never removes a record
-//! that a new holder put in place of the stale one it looked at.
+//! The store's lock file (`.lock`, which the helper never removes; from
+//! 2.1.3-beta.19 the app removes it with a store nothing needs, protocol
+//! section 15) is held, with the OS's own file lock, while a holder checks for
+//! a live holder of its session and writes its record, while list mode removes
+//! a stale record, and while a holder removes its own. So two holders started
+//! for one session at the same moment cannot both write a record, and list mode
+//! never removes a record that a new holder put in place of the stale one it
+//! looked at.
 
 use crate::hello::{valid_nonce, valid_sid};
 use crate::json::{self, Value};
