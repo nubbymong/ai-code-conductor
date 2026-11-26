@@ -1,8 +1,8 @@
 {
   "schema": "wp1-legacy-codex-ledger/2",
   "predicateDigest": "100a1233edebdc39a5f9004d3fba980a89ebb15b25872e52076386bc84b03153",
-  "manifestPathDigest": "028033b6ee55a89d691a691969e547b8210c96445a0394621abe0642f13afab5",
-  "manifestHead": "4cfc215b60cab7863657373d7027ee40b022e4f6",
+  "manifestPathDigest": "3e094608411585d82c45869b21d76f4b8198dd25c4c6552cbc3784a6283914a7",
+  "manifestHead": "be71ea439dd49113ea19dcad122795ade4698126",
   "dispositions": {
     "retain": "unchanged observable behaviour, characterization proof",
     "move": "moved behind a package boundary and/or adapted at the call site, regression proof (newPath when relocated)",
@@ -2228,7 +2228,7 @@
       ],
       "category": "LAUNCH",
       "disposition": "added",
-      "evidence": "new WP2 PR 4 P4.1 (row 51) module: a Codex session's canvas roots from the configured folder only, never a rollout's or a resume's, and its designated worktree (WP1.68); tests/unit/main/canvas-codex-roots-spawn.test.ts",
+      "evidence": "new WP2 PR 4 P4.1 (row 51) module: a Codex session's canvas roots from the configured folder only, never a rollout's or a resume's, and its designated worktree (WP1.68); tests/unit/main/canvas-codex-roots-spawn.test.ts; 2.1.3-beta.19 fix round after the host line (item CANVASROOTWARN): a configured folder inside the app's resources directory (the app's own help folder, Ask Conductor) is refused as before and logged as a line, not a warning; no provider name compared (WP1.68); tests/unit/main/canvas-resources-root-floor.test.ts, tests/unit/main/launch-bindings.test.ts",
       "note": ""
     },
     {
@@ -3386,7 +3386,7 @@
       ],
       "category": "TELEMETRY",
       "disposition": "replace",
-      "evidence": "WP1.68 rollout telemetry ADAPTED: tests/unit/providers/codex/telemetry.test.ts keeps every parsing case and gains a realm-sessions-dir case; WP2 commit 6g: the sessions folder is required, with no fallback to the ambient home (getCodexHome deleted); without one nothing is watched (WP1.68); tests/unit/providers/codex/telemetry.test.ts; WP2 P3 usage track MP2: the allowance is read from every token_count, the pre-response one (info null) included, through normaliseCodexRateLimits; plan_type typed on the snapshot, not under primary; updates carry usageBuckets labelled from window_minutes, rateLimitsAt (the event time) and the legacy rateLimitCurrent/Weekly from the validated reading only; an out-of-range reset time no longer throws and drops the update; the 30 s give-up sends usageUnavailable no-reading once (WP1.68); tests/unit/providers/codex/telemetry.test.ts; WP2 P3 usage track MP3 (owner decision 2026-09-27, docs/wp1/owner-decisions-2026-09-27.md): watchAndClaimRollout hands the validated allowance to an optional recorder, whose throw never stops the watch (WP1.68); tests/unit/providers/codex/telemetry.test.ts; WP2 P3 usage track, MP1/MP2 review fixes: the token mapper no longer copies raw rate limits (the fields come only from the validated allowance), and an event at the edge of the Date range no longer stops the status line (WP1.68); tests/unit/providers/codex/telemetry.test.ts; WP2 PR 3 P3.5 (row 38, parity): the claim re-reads its day folders on every poll (today and yesterday, by UTC and by local date), finds a resumed conversation's rollout by its id anywhere in the realm (name and session_meta agree) or the one the resume picker opened once it grows, never claims a sibling's new rollout on a resume by id, reads only bounded first lines, reports the claimed conversation id, and a picker launch waits for the user (WP1.68); tests/unit/providers/codex/telemetry-claim-anywhere.test.ts; WP2 PR 3 P3.5 fix round 1: the resume picker's every decision is what a picker launch claims (nothing before one), the pick is read only as a small regular file never through a link and dealt with once; a claimed rollout is read by size first and only what it gained, at a claim its head and tail; a conversation another session holds is not walked for again; the scan follows no link (WP1.68); tests/unit/providers/codex/telemetry-claim-anywhere.test.ts, tests/unit/providers/codex/telemetry-bounded-reads.test.ts; WP2 PR 3 P3.10: the exact claim from the session's own hook (a rollout of its realm in real day folders whose name and session_meta agree) confirms or corrects an inferred claim and follows a conversation switched inside the TUI; another session's hook proves an inferred claim wrong; a conversation another tab holds is read beside it, one keeper counting the running time (WP1.68); tests/unit/providers/codex/telemetry-exact-claim.test.ts, tests/unit/providers/codex/telemetry-claim-anywhere.test.ts; WP2 PR 3 P3.10 round 1 (ADR-009 pass 1, spec, quality and VM findings) (WP1.68): a hook's path with a stream name refused and a name keyed by the day folder's own spelling (A4); the no-claim deadline armed again after a refuted claim (Q4); tests/unit/providers/codex/telemetry-exact-claim.test.ts; WP2 PR 3 P3.12 (rows 31, 32, 65; logs and GitHub context; parity) (WP1.68): the watcher reports the rollout it claimed to onRollout (path, realm, exact, shared) and null when it lets it go; tests/unit/providers/codex/telemetry-rollout-report.test.ts; WP2 PR 3 P3.16a main track (WP1.68): a Restart while a large rollout's count runs never shows less than the run before, and a tab beside it shows the same; tests/unit/providers/codex/telemetry-duration.test.ts; WP2 PR 3 fixer 9 A2 (row 36): a running time that cannot be kept is warned of once per run while keeping keeps failing, and again after a keep that works (WP1.68); tests/unit/providers/codex/telemetry-settle-reject.test.ts",
+      "evidence": "WP1.68 rollout telemetry ADAPTED: tests/unit/providers/codex/telemetry.test.ts keeps every parsing case and gains a realm-sessions-dir case; WP2 commit 6g: the sessions folder is required, with no fallback to the ambient home (getCodexHome deleted); without one nothing is watched (WP1.68); tests/unit/providers/codex/telemetry.test.ts; WP2 P3 usage track MP2: the allowance is read from every token_count, the pre-response one (info null) included, through normaliseCodexRateLimits; plan_type typed on the snapshot, not under primary; updates carry usageBuckets labelled from window_minutes, rateLimitsAt (the event time) and the legacy rateLimitCurrent/Weekly from the validated reading only; an out-of-range reset time no longer throws and drops the update; the 30 s give-up sends usageUnavailable no-reading once (WP1.68); tests/unit/providers/codex/telemetry.test.ts; WP2 P3 usage track MP3 (owner decision 2026-09-27, docs/wp1/owner-decisions-2026-09-27.md): watchAndClaimRollout hands the validated allowance to an optional recorder, whose throw never stops the watch (WP1.68); tests/unit/providers/codex/telemetry.test.ts; WP2 P3 usage track, MP1/MP2 review fixes: the token mapper no longer copies raw rate limits (the fields come only from the validated allowance), and an event at the edge of the Date range no longer stops the status line (WP1.68); tests/unit/providers/codex/telemetry.test.ts; WP2 PR 3 P3.5 (row 38, parity): the claim re-reads its day folders on every poll (today and yesterday, by UTC and by local date), finds a resumed conversation's rollout by its id anywhere in the realm (name and session_meta agree) or the one the resume picker opened once it grows, never claims a sibling's new rollout on a resume by id, reads only bounded first lines, reports the claimed conversation id, and a picker launch waits for the user (WP1.68); tests/unit/providers/codex/telemetry-claim-anywhere.test.ts; WP2 PR 3 P3.5 fix round 1: the resume picker's every decision is what a picker launch claims (nothing before one), the pick is read only as a small regular file never through a link and dealt with once; a claimed rollout is read by size first and only what it gained, at a claim its head and tail; a conversation another session holds is not walked for again; the scan follows no link (WP1.68); tests/unit/providers/codex/telemetry-claim-anywhere.test.ts, tests/unit/providers/codex/telemetry-bounded-reads.test.ts; WP2 PR 3 P3.10: the exact claim from the session's own hook (a rollout of its realm in real day folders whose name and session_meta agree) confirms or corrects an inferred claim and follows a conversation switched inside the TUI; another session's hook proves an inferred claim wrong; a conversation another tab holds is read beside it, one keeper counting the running time (WP1.68); tests/unit/providers/codex/telemetry-exact-claim.test.ts, tests/unit/providers/codex/telemetry-claim-anywhere.test.ts; WP2 PR 3 P3.10 round 1 (ADR-009 pass 1, spec, quality and VM findings) (WP1.68): a hook's path with a stream name refused and a name keyed by the day folder's own spelling (A4); the no-claim deadline armed again after a refuted claim (Q4); tests/unit/providers/codex/telemetry-exact-claim.test.ts; WP2 PR 3 P3.12 (rows 31, 32, 65; logs and GitHub context; parity) (WP1.68): the watcher reports the rollout it claimed to onRollout (path, realm, exact, shared) and null when it lets it go; tests/unit/providers/codex/telemetry-rollout-report.test.ts; WP2 PR 3 P3.16a main track (WP1.68): a Restart while a large rollout's count runs never shows less than the run before, and a tab beside it shows the same; tests/unit/providers/codex/telemetry-duration.test.ts; WP2 PR 3 fixer 9 A2 (row 36): a running time that cannot be kept is warned of once per run while keeping keeps failing, and again after a keep that works (WP1.68); tests/unit/providers/codex/telemetry-settle-reject.test.ts; 2.1.3-beta.19 fix round after the host line (item CODEX172): a resumed conversation's hook from Codex 0.172.0 names its rollout in Windows' verbatim form (std::fs::canonicalize, measured in Codex's own source), so exactRollout checks the path without that prefix (withoutVerbatimPrefix); the realm containment is unchanged (WP1.68); tests/unit/providers/codex/telemetry-verbatim-rollout.test.ts",
       "note": "watchAndClaimRollout takes the sessions directory of the launch binding realm instead of getCodexHome(); MP2 rebuilt the rate-limit contract (replace); P3.5 rebuilt the claim (day folders on every poll, a resumed conversation by id or the picker's pick, the claimed id reported); token usage parsing and the realm rule unchanged",
       "adaptsTests": [
         "tests/unit/providers/codex/telemetry.test.ts"
@@ -8739,6 +8739,18 @@
       "note": "baseline pty:spawn strip suite; WP2 commit 4 added the codexLaunch case (re-dispositioned: it changed)"
     },
     {
+      "path": "tests/unit/main/pty-held-restart-resume.test.ts",
+      "predicates": [
+        "P04",
+        "P07",
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "new 2.1.3-beta.19 fix round test (item HELDRESTART): through the real spawnPty and killPty, with a fake node-pty and a fake transcript binder, a held Claude Code tab's Restart (its exit before its spawn) resumes its conversation, and a plain Restart, a close and a Codex session's Restart are unchanged; the Codex case spawns a Codex session with a made-up CODEX_HOME in the test's own temp folder (WP1.68); tests/unit/main/pty-held-restart-resume.test.ts",
+      "note": "created by the 2.1.3-beta.19 fix round after the host line; nothing started; the Codex case pins that no Claude resume target is read for a Codex session"
+    },
+    {
       "path": "tests/unit/main/pty-integrity-restart.test.ts",
       "predicates": [
         "P13"
@@ -9105,6 +9117,16 @@
       "note": "created by 2.1.3-beta.19 section 6.2; P07 and P13: it constructs the real CodexProvider and runs a Codex terminal; a fake holder in memory, no process starts"
     },
     {
+      "path": "tests/unit/main/session-helper-install.test.ts",
+      "predicates": [
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "2.1.3-beta.19 fix round (item CONPTY): the comment of its new case names the finding it covers (a new Codex session after an update was not held, because a running session held the bundled ConPTY's copy); the install code it tests compares no provider name (WP1.68); tests/unit/main/session-helper-install.test.ts",
+      "note": "P13: comment text only; the case copies made-up conpty.dll and OpenConsole.exe in its own temp folder"
+    },
+    {
       "path": "tests/unit/main/session-helper-manager.test.ts",
       "predicates": [
         "P13"
@@ -9113,6 +9135,16 @@
       "disposition": "added",
       "evidence": "2.1.3-beta.7 cases in a 2.1.3-beta.6 test (tests/unit/main/session-helper-manager.test.ts): a local Claude Code or Codex session through the session helper (spawnAgentPty), off by default and then exactly node-pty's spawn; on, the same program, folder and environment, a Codex npm line as the launch's exact command line and node-pty's bundled ConPTY as the helper's; after a crash the agent session is ended, never shown again, and a tab that starts meanwhile waits for that end (WP1.68)",
       "note": "created by 2.1.3-beta.6 (plan section B); a fake helper over in-memory streams and a mocked node-pty; no process starts"
+    },
+    {
+      "path": "tests/unit/main/session-helper-not-held-line.test.ts",
+      "predicates": [
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "new 2.1.3-beta.19 fix round test (item CONPTY): a tab the session helper could not hold says so in one line, a run of the app's own never does, and the manager asks for it for Claude Code, Codex and plain terminal tabs alike, by no provider name (WP1.68); tests/unit/main/session-helper-not-held-line.test.ts",
+      "note": "P13: its fixture names a Codex program path and the finding (a new Codex session); nothing started"
     },
     {
       "path": "tests/unit/main/session-helper-pty-site.test.ts",
@@ -10343,6 +10375,19 @@
       "disposition": "added",
       "evidence": "new 2.1.3-beta.5 test (tests/unit/providers/codex/telemetry-symlinked-folder.test.ts): a rollout that records the real folder of a symlinked session folder is claimed, and a folder that cannot be resolved is not (WP1.68)",
       "note": "created by the 2.1.3-beta.5 accounts and sessions track; the real-path lookup is a stand-in, no link and no Codex process"
+    },
+    {
+      "path": "tests/unit/providers/codex/telemetry-verbatim-rollout.test.ts",
+      "predicates": [
+        "P01",
+        "P04",
+        "P07",
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "new 2.1.3-beta.19 fix round test (item CODEX172): a resumed conversation's hook from Codex 0.172.0 names its rollout in Windows' verbatim form (std::fs::canonicalize); the same rollout is claimed exactly, and one outside the realm, or of another verbatim form, is still refused (WP1.68); tests/unit/providers/codex/telemetry-verbatim-rollout.test.ts",
+      "note": "created by the 2.1.3-beta.19 fix round after the host line; made-up realm and rollouts in the test's own temp folder"
     },
     {
       "path": "tests/unit/providers/codex/telemetry.test.ts",
