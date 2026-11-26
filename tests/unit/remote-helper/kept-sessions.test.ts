@@ -308,6 +308,20 @@ describe('an SSH Persistent tab through the session helper, kept until it is end
     forgetRemoteHelperTab(id)
   })
 
+  it('a kept tab whose start fails names the steps that reach it again, never the usual SSH path', async () => {
+    const id = 'kept-fail'
+    forgetRemoteHelperTab(id)
+    plugIn(signals().deps)
+    ssh.host = { answer: (c) => (c.script === 'reads' ? { stdout: result(c.values[0], {}) } : { code: 255, stderr: 'ssh: connect to host pi.lan port 22: Connection timed out' }) }
+    const pty = remoteHelperPty(win, id, { ssh: PERSISTENT }, 100, 30)!
+    let out = ''
+    pty.onData((d) => { out += d })
+    await until('the note', () => out.includes('could not start through the session helper'))
+    expect(out).toContain('Press Check on the Machines page, then Restart')
+    expect(out).not.toContain('usual SSH path')
+    forgetRemoteHelperTab(id)
+  })
+
   it('a link that stays down past every try lets go of it: no term.end, even when the link is back for the end', async () => {
     const id = 'kept-lost'
     const holder = holderFor(id)

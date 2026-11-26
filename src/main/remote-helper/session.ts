@@ -655,7 +655,12 @@ export class RemoteDriver implements HelperPtyDriver {
 
   direct(): IPty {
     const m = this.o.machine
-    return new NoticePty(`This tab could not start through the session helper on ${m.host}: ${this.why || 'it did not answer'}. Press Check on the Machines page, or turn the remote sessions switch off in Settings for the usual SSH path.`, this.o.spec.cols, this.o.spec.rows)
+    // A tab whose session the helper keeps never takes the usual path
+    // (2.1.3-beta.19): its note names only the steps that reach it again.
+    const next = this.untilEnded
+      ? 'Press Check on the Machines page, then Restart; a session it keeps there is listed on that page, with End.'
+      : 'Press Check on the Machines page, or turn the remote sessions switch off in Settings for the usual SSH path.'
+    return new NoticePty(`This tab could not start through the session helper on ${m.host}: ${this.why || 'it did not answer'}. ${next}`, this.o.spec.cols, this.o.spec.rows)
   }
 
   ending(sid: string, done: Promise<void>): void {
