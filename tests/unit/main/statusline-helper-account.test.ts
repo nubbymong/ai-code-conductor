@@ -15,7 +15,10 @@
  *   reasons are dropped, whatever the provider's mapping gave;
  * - one reading of an account serves every tab on it for 60 s: never asked
  *   twice;
- * - both are set again at each start (launch or attach).
+ * - both are set again at each start (launch or attach); end to end, each
+ *   start's field read (remote-helper/host-reads.ts readHostForStart, over a
+ *   fake ssh) reaches the strip through the tab's signals as the app wires
+ *   them, and section 1.2's join runs that test again on its attach path.
  *
  * PURE: electron and the fan-out's neighbours are mocked, as in
  * statusline-helper-status.test.ts; the account list and the usage read are
@@ -24,6 +27,9 @@
  */
 import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from 'vitest'
 import type { AccountUsage, UsageBucket } from '../../../src/shared/usage-types'
+import type { RemoteMachineRecord } from '../../../src/main/remote-helper/machines'
+import type { RemoteLaunchPlan } from '../../../src/main/remote-helper/session'
+import { DEFAULT_PROVIDER_ID } from '../../../src/shared/providers/ids'
 
 const h = vi.hoisted(() => ({
   dir: (() => {
@@ -47,6 +53,12 @@ const {
   dispatchHelperStatus, dispatchSSHStatuslineUpdate, setHelperAccount, endHelperAccount, _setHelperUsageDepsForTest,
   setStatuslineUsageSink, startStatuslineWatcher,
 } = await import('../../../src/main/statusline-watcher')
+// The start's read and the tab's signals, as the app wires them
+// (ipc/remote-machines-handlers.ts: account -> setHelperAccount).
+const { readHostForStart } = await import('../../../src/main/remote-helper/host-reads')
+const { RemoteSignals } = await import('../../../src/main/remote-helper/signals')
+const { claudeRemoteLaunch } = await import('../../../src/main/providers/claude/remote-launch')
+const { FakeSsh } = await import('../remote-helper/fake-ssh')
 
 const bucket = (label: string, group: string, percent: number): UsageBucket => ({ key: `${group}:${label}`, label, group, percent, resetsAt: '2026-11-27T10:00:00.000Z', severity: 'normal' })
 const BUCKETS = [bucket('5h', 'session', 12), bucket('Weekly', 'weekly', 40), bucket('Fable', 'weekly', 63)]
@@ -256,5 +268,65 @@ describe('set again at each start (launch or attach)', () => {
     sent = []
     dispatchHelperStatus('tab-remote', { model: 'Opus' })
     expect(sent).toEqual([{ sessionId: 'tab-remote', model: 'Opus' }])
+  })
+
+  // Section 3's re-attach test, run again at section 1.2's join with the
+  // second start made by 1.2's attach path (the contract: "the label and the
+  // bars' source are set again at each attach").
+  it('with a fake attach, a re-attached tab shows the label: each start\'s field read reaches the strip through the tab\'s signals, and sets the label and the bars\' source again', async () => {
+    const SHA = 'a'.repeat(64)
+    const machine: RemoteMachineRecord = {
+      did: '0123456789abcdef0123456789abcdef', host: 'rocky.lan', port: 22, user: 'nick', label: 'Rocky', addedAt: 1,
+      os: 'Linux', arch: 'x86_64', home: '/home/nick', shell: '/bin/bash', shellIsSh: true, claudePath: '/home/nick/.local/bin/claude',
+      path: '/usr/bin:/bin', lang: null, helper: { version: '0.1.0', sha256: SHA, folder: `0.1.0-${SHA.slice(0, 12)}` }, check: { at: 1, ok: true },
+    }
+    // What the host's Claude Code is signed in as at each start: the fake
+    // field mode prints it after the launcher's hash line, or nothing.
+    let hostAccount: string | null = 'me@example.com'
+    const asked: string[][] = []
+    const ssh = new FakeSsh({
+      answer: (c) => {
+        if (c.script !== 'field') return { code: 1 }
+        asked.push(c.values.slice(5))
+        return { stdout: `AICC-HASH ${c.values[0]} ok ${SHA}\n${hostAccount ? `${hostAccount}\n` : ''}`, code: 0 }
+      },
+    })
+    const tab = new RemoteSignals({
+      appPtyId: 'tab-remote', provider: DEFAULT_PROVIDER_ID, via: claudeRemoteLaunch, launch: { statusKeep: [], hookKeep: [] }, tools: false, log: () => {},
+      deps: { toolsServed: () => false, status: () => {}, event: () => {}, serve: () => false, ended: () => {}, account: (id, read) => setHelperAccount(id, read) },
+    })
+    // No host files named: the start reads the account's field alone.
+    const plan = { via: claudeRemoteLaunch, options: { reconnect: false, cwd: '/home/nick', settings: null, tools: false }, reads: [] } as unknown as RemoteLaunchPlan
+    const start = () => readHostForStart({ runner: ssh, machine, installId: 'f'.repeat(32), log: () => {}, signals: tab }, plan, 'rs-tab-remote')
+
+    // The launch.
+    await start()
+    await settle()
+    expect(asked).toEqual([['.claude.json', 'oauthAccount.emailAddress']])
+    expect(last()).toMatchObject({ sessionId: 'tab-remote', accountEmail: 'me@example.com', usageBuckets: BUCKETS })
+    expect(reads).toEqual(['profile-work'])
+
+    // An attach after the app was away: the host's Claude Code is now signed
+    // in as another account this computer holds.
+    hostAccount = 'home@example.com'
+    sent = []
+    await start()
+    await settle()
+    expect(asked).toHaveLength(2)
+    expect(sent[0]).toMatchObject({ sessionId: 'tab-remote', accountEmail: 'home@example.com' })
+    expect(last()).toMatchObject({ sessionId: 'tab-remote', accountEmail: 'home@example.com', usageBuckets: BUCKETS })
+    expect(reads).toEqual(['profile-work', 'profile-home'])
+    dispatchHelperStatus('tab-remote', { model: 'Opus' })
+    expect(last()).toMatchObject({ model: 'Opus', accountEmail: 'home@example.com' })
+
+    // Another attach, the host's Claude Code signed out: no label, and the
+    // earlier account's bars and extra usage cleared.
+    hostAccount = null
+    await start()
+    await settle()
+    expect(asked).toHaveLength(3)
+    expect(last().accountEmail).toBeUndefined()
+    expect(last()).toMatchObject({ remoteAccountNotShown: 'no-account', remoteUsageNotShown: 'own-sign-in', usageBuckets: [] })
+    expect(reads).toEqual(['profile-work', 'profile-home'])
   })
 })

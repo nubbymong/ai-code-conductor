@@ -30,6 +30,11 @@ describe('the modules the remote helper device check imports', () => {
     for (const m of SETUP_STAND_INS) vi.doUnmock(m)
     // The check can fail: the module that broke the device check does not load here.
     await expect(import('../../../src/main/update-watcher')).rejects.toThrow(/app/)
+    // 2.1.3-beta.19 section 3: the account read at a tab's start and the
+    // field script, which the live file runs itself as well.
+    const account = await Promise.all([import('../../../src/main/remote-helper/host-reads'), import('../../../src/main/remote-helper/scripts')])
+    expect(typeof account[0].readHostForStart).toBe('function')
+    expect(typeof account[1].scriptCommand).toBe('function')
     const modules = await Promise.all([
       import('../../../src/main/remote-helper'),
       import('../../../src/main/remote-helper/machines'),
@@ -54,8 +59,10 @@ describe('the modules the remote helper device check imports', () => {
     expect(imported).toEqual([
       '../../src/main/providers/claude/remote-launch',
       '../../src/main/remote-helper',
+      '../../src/main/remote-helper/host-reads',
       '../../src/main/remote-helper/machines',
       '../../src/main/remote-helper/manifest',
+      '../../src/main/remote-helper/scripts',
       '../../src/main/remote-helper/session',
       '../../src/main/remote-helper/ssh-exec',
     ])

@@ -25,7 +25,11 @@
  *
  * In order: Add (the question, then probe, upload by standard input, the hash
  * against the manifest, version, self-test); a second install's Remove
- * refused by the owner marker; a session holding the fake CLI through the
+ * refused by the owner marker; (2.1.3-beta.19 section 3) a tab's start
+ * reading its account through the helper's field mode beside its host reads,
+ * from a file of the run's own in the device folder: the string at the key,
+ * also with a $HOME reached through a link above it, a link followed,
+ * nothing for a missing key or file; a session holding the fake CLI through the
  * login shell on the launch a Claude Code tab gets from its provider package
  * (bytes in, output out, what the rc file exported, the package's CLI
  * variable and the terminal's light or dark scheme; from 2.1.3-beta.18, its
@@ -72,6 +76,8 @@ import { RemoteHelperPty, remoteLaunchSpec, remoteSessionId } from '../../src/ma
 import { remoteLaunchOf, type RemoteSignalDeps } from '../../src/main/remote-helper'
 import { claudeRemoteLaunch } from '../../src/main/providers/claude/remote-launch'
 import { readBundledLinuxHelper, type BundledLinuxHelper } from '../../src/main/remote-helper/manifest'
+import { fieldAnswerOf, readHostForStart, type HostAccountRead } from '../../src/main/remote-helper/host-reads'
+import { scriptCommand } from '../../src/main/remote-helper/scripts'
 
 const need = (name: string): string => {
   const v = process.env[name]
@@ -404,6 +410,59 @@ describe('remote helper on a real Linux host', () => {
     expect(r.ok).toBe(false)
     expect(r.message).toMatch(/another install/)
     expect(sshRun(`test -d "$HOME/.aicc/${machine.did}" && echo there`).out).toContain('there')
+  })
+
+  it('a tab\'s start reads its account through the helper\'s field mode, beside its host reads: the string at the key, a link followed, or nothing (2.1.3-beta.19 section 3)', async () => {
+    // A file of the run's own inside the device folder (never the account's
+    // own ~/.claude.json; Remove takes it with the folder), named to the read
+    // as a provider package names its file: a path relative to the home folder.
+    const file = `.aicc/${machine.did}/e2e-account.json`
+    const link = `.aicc/${machine.did}/e2e-account-link.json`
+    const sid = remoteSessionId('e2e-account')
+    const logs: string[] = []
+    const told: HostAccountRead[] = []
+    const readAs = async (f: string): Promise<HostAccountRead | undefined> => {
+      const via: typeof claudeRemoteLaunch = { ...claudeRemoteLaunch, accountField: () => ({ file: f, key: 'oauthAccount.emailAddress' }) }
+      const plan = remoteLaunchOf(via, machine, { model: 'e2e-model' }, null, () => true, sid, 100, 30)
+      const got = await readHostForStart({ runner, machine, installId: machines.installId(), log: (x) => { logs.push(x) }, signals: { account: (r) => { told.push(r) } } }, plan, sid)
+      return got.account
+    }
+    const write = (text: string): string => sshRun(`umask 077 && printf '%s' '${text}' > "$HOME/${file}" && echo made`).out.trim()
+    // A folder of the run's own in /tmp holding one link, to the folder above
+    // the home folder: a home reached through a link (/home a link to
+    // /data/home, say), so $HOME as written is not the home's real path.
+    let linkDir = ''
+    try {
+      expect(write('{"projects":{},"oauthAccount":{"emailAddress":"e2e@example.com","organizationName":"e2e"}}')).toBe('made')
+      expect(await readAs(file)).toEqual({ account: 'e2e@example.com' })
+      // The app's own field script with such a $HOME: the file goes to the
+      // field mode relative to $HOME, which it joins to $HOME as written, so
+      // the one string still comes back (the home's real path would not be
+      // inside that $HOME, and the field mode would print nothing).
+      linkDir = sshRun('umask 077; d=$(mktemp -d /tmp/aicc-e2e-home.XXXXXXXX) && ln -s "$(dirname "$HOME")" "$d/homes" && echo "$d"').out.trim().split('\n').pop() ?? ''
+      expect(linkDir).toMatch(/^\/tmp\/aicc-e2e-home\.[A-Za-z0-9]+$/)
+      const nonce = newNonce()
+      const cmd = scriptCommand('field', [nonce, machine.did, machines.installId(), machine.helper.folder, machine.helper.sha256, file, 'oauthAccount.emailAddress'])
+      const linked = sshRun(`HOME="${linkDir}/homes/$(basename "$HOME")"; export HOME; [ "$(cd "$HOME" && pwd -P)" != "$HOME" ] && echo linked; ${cmd}`)
+      note('account-field-linked-home', { out: linked.out, err: linked.err, code: linked.code })
+      expect(linked.out.split('\n')[0], linked.err).toBe('linked')
+      expect(linked.code, linked.err).toBe(0)
+      expect(fieldAnswerOf(linked.out, nonce)).toEqual({ value: 'e2e@example.com' })
+      // Followed as Claude Code follows it.
+      expect(sshRun(`ln -s "$HOME/${file}" "$HOME/${link}" && echo made`).out.trim()).toBe('made')
+      expect(await readAs(link)).toEqual({ account: 'e2e@example.com' })
+      // No such key, then no such file: nothing printed, so no account; neither is a read that did not answer.
+      expect(write('{"oauthAccount":{}}')).toBe('made')
+      expect(await readAs(file)).toEqual({ notShown: 'no-account' })
+      expect(sshRun(`rm -f -- "$HOME/${link}" "$HOME/${file}" && echo gone`).out.trim()).toBe('gone')
+      expect(await readAs(file)).toEqual({ notShown: 'no-account' })
+      note('account-field', { told, logs })
+      expect(told).toEqual([{ account: 'e2e@example.com' }, { account: 'e2e@example.com' }, { notShown: 'no-account' }, { notShown: 'no-account' }])
+      expect(logs.filter((l) => l.includes(`the account on ${target.host} was not read`))).toEqual([])
+    } finally {
+      sshRun(`rm -f -- "$HOME/${link}" "$HOME/${file}"`)
+      if (/^\/tmp\/aicc-e2e-home\.[A-Za-z0-9]+$/.test(linkDir)) sshRun(`rm -f -- '${linkDir}/homes'; rmdir -- '${linkDir}'`)
+    }
   })
 
   it('a session holds the fake CLI through the login shell: bytes in, output out, and what the rc file exported reaches it', async () => {
