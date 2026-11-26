@@ -104,6 +104,13 @@ export interface Session {
   /** Nothing will report this session's allowance (D3; Codex: no rollout was
    *  claimed): the footer says so instead of a placeholder. */
   usageUnavailable?: 'no-reading'
+  /** 2.1.3-beta.19 section 3 (aicc_planning#434): a tab through the session
+   *  helper whose account is not named, and why (the header's account pill).
+   *  Main's own, set from the tab's start; never persisted. */
+  remoteAccountNotShown?: import('../../shared/types').RemoteAccountNotShown
+  /** Such a tab's per-model weekly bars and extra usage are not shown, and
+   *  why (the strip says "not available"). Main's own; never persisted. */
+  remoteUsageNotShown?: import('../../shared/types').RemoteUsageNotShown
   /** Active-account email from the statusline bridge. Drives the coloured email chip.
    *  v1.5.9: no longer read by the renderer (the chip was removed). Field is kept so
    *  older saved state still hydrates without errors. */
@@ -430,6 +437,9 @@ export const STRUCTURAL_SESSION_FIELDS = [
   // the shell on exactly that one resolve tick (the VALUE is unchanged on every
   // telemetry tick, so no per-tick cascade returns).
   'accountEmail', 'sshRemoteAccount', 'accountColour',
+  // 2.1.3-beta.19 section 3: a helper tab's header says why it names no
+  // account, from one late tick, exactly as the account fields above.
+  'remoteAccountNotShown',
   // sshTmuxPersistent is the same masking class: the header's SshConnectionPill
   // reads it to caption SSH-Persistent vs plain SSH, and it lands on the same
   // late ssh:sessionInfo push as the account fields. Omitting it let a

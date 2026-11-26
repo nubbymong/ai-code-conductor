@@ -31,6 +31,8 @@ import { useRegistryStore } from '../stores/registryStore'
 import AiUsageChip from './github/AiUsageChip'
 import { typeIntoCodexComposer, type CodexTyping } from '../lib/codexComposer'
 import { typeAtClaudePrompt } from '../lib/claudePrompt'
+import type { RemoteUsageNotShown } from '../../shared/types'
+import { REMOTE_USAGE_NOT_SHOWN_TEXT } from '../lib/remoteHelperAccountText'
 
 interface SessionStatusStripProps {
   /** The PTY/session id for THIS terminal. Telemetry is read for this
@@ -62,6 +64,18 @@ const EMPTY_HIDDEN: string[] = []
  *  round 1, C1) or Claude Code's. This name and the note's test id
  *  (codex-command-note) predate the Claude notes; both now serve both CLIs. */
 export const CODEX_NOTE_MS = 6000
+
+/** 2.1.3-beta.19 section 3 (aicc_planning#434): the strip's note for a tab
+ *  through the session helper, in place of the per-model weekly bars and
+ *  extra usage it cannot show (main's reason, session.remoteUsageNotShown),
+ *  or nothing. Never an empty or zero bar. */
+function RemoteUsageNote({ why }: { why: RemoteUsageNotShown | undefined }) {
+  const text = why ? REMOTE_USAGE_NOT_SHOWN_TEXT[why] : undefined
+  if (!text) return null
+  return (
+    <span className="shrink-0" style={{ color: 'var(--text-muted)' }} title={text.title} data-testid="remote-usage-not-shown">{text.label}</span>
+  )
+}
 
 // SessionStatusStrip (v2 shell, UAT R2): the per-session telemetry + controls
 // band. Lives directly above the command rows, under the terminal -- the old
@@ -483,14 +497,15 @@ export default function SessionStatusStrip({ sessionId }: SessionStatusStripProp
             // Only for a session that should actually produce them -- a dead or
             // shell-only session never will, and a permanent shimmer there would
             // be a worse lie than showing nothing.
-            if (!awaitingStatusline) return null
+            if (!awaitingStatusline) return <RemoteUsageNote why={session.remoteUsageNotShown} />
             const pendingLabels = ['5h', 'Weekly'].filter((l) => !hiddenBuckets.includes(l))
-            if (pendingLabels.length === 0) return null
+            if (pendingLabels.length === 0) return <RemoteUsageNote why={session.remoteUsageNotShown} />
             return (
               <span className="flex items-center gap-3 shrink-0" data-testid="statusline-pending">
                 {pendingLabels.map((l) => (
                   <RateLimitBarPending key={l} label={l} />
                 ))}
+                <RemoteUsageNote why={session.remoteUsageNotShown} />
               </span>
             )
           }
@@ -509,6 +524,7 @@ export default function SessionStatusStrip({ sessionId }: SessionStatusStripProp
               {session.rateLimitExtra?.enabled && (
                 <span className="tabular-nums" style={{ color: 'var(--text-muted)' }}>extra: <span className={session.rateLimitExtra.utilization > 80 ? 'text-red' : ''}>${session.rateLimitExtra.usedUsd.toFixed(2)}</span>/${session.rateLimitExtra.limitUsd.toFixed(0)}</span>
               )}
+              <RemoteUsageNote why={session.remoteUsageNotShown} />
             </span>
           )
         })()}

@@ -24,7 +24,8 @@
  * text with no quote or backslash cannot write JSON, so these results are
  * words, not section 6's JSON; the helper's own commands (the self-test)
  * still print theirs. The launcher scripts (version, selftest, list, hold,
- * bridge) hash the helper's file before every start and print section 13's
+ * bridge, sweep and, from 2.1.3-beta.19, field) hash the helper's file before
+ * every start and print section 13's
  * `AICC-HASH <nonce> <state> <hex>` line, and run the helper only on `ok`.
  *
  * Layout (section 1): `~/.aicc/<did>/owner` (the marker),
@@ -200,6 +201,15 @@ const ONE_READ = [
   `n=$(wc -c < "$x"); n=$((n+0)); [ "$n" -le ${HOST_READ_MAX} ] || { sk $j size; return 0; }`,
   'r "f$j" ok "$(od -A n -v -t x1 "$x" | tr -d "[:space:]")"; }',
 ]
+
+/** 2.1.3-beta.19 section 3 (aicc_planning#434): a field read's file, a path
+ *  relative to the host user's home folder: plain names joined by `/`, none
+ *  of them `.` or `..`. */
+export const FIELD_FILE_RE = /^(?!\.\.?(?:\/|$))[A-Za-z0-9._-]{1,128}(?:\/(?!\.\.?(?:\/|$))[A-Za-z0-9._-]{1,128}){0,15}$/
+/** A field read's key: plain names joined by `.`. */
+export const FIELD_KEY_RE = /^[A-Za-z0-9_-]{1,64}(?:\.[A-Za-z0-9_-]{1,64}){0,15}$/
+/** The most a field read answers: the helper's field mode prints at most 1 KiB. */
+export const FIELD_VALUE_MAX = 1024
 
 /** A session's files as the `files` script takes them: `<name>:<size>` for
  *  each, joined by commas, in the order their bytes follow on standard input.
@@ -387,6 +397,22 @@ const SPECS = {
       'while read -r k p; do b=; hm=0; case "$k" in home) b=$h; hm=1;; cwd) b=$w;; checkout) if [ $kd = 0 ]; then kd=1; [ -n "$w" ] && cr; fi; b=$K;; esac; [ -n "$b" ] && [ -n "$p" ] && one $i "$b" "$p"; i=$((i+1)); done',
       'r end ok',
     ]),
+  },
+  /** 2.1.3-beta.19 section 3 (aicc_planning#434): `aicc-helper field` for
+   *  one string field of one file under the home folder (`Y`, the field
+   *  read's file; `Z`, its dotted key), through the launcher: after the hash
+   *  line the helper prints that string or nothing, and exits 0. File and
+   *  key come from the tab's provider package, never from a value a host
+   *  reported. `Y` goes as it is, relative to the home folder: the field
+   *  mode joins it to `$HOME` (helper/src/field.rs path_under), the same
+   *  `$HOME` the checks above found a real folder of the user's. Never
+   *  `$h/$Y`: `$h` is the home folder's real path, which differs from
+   *  `$HOME` where a folder above it is a link (/home a link to /data/home),
+   *  and the field mode takes an absolute path only inside `$HOME` as
+   *  written, so the read would print nothing there. Writes nothing. */
+  field: {
+    values: [FOLDER, HASH, { name: 'field file', re: FIELD_FILE_RE }, { name: 'field key', re: FIELD_KEY_RE }],
+    text: join(['N=$1; D=$2; I=$3; F=$4; H=$5; Y=$6; Z=$7', ...CHECKS, ...LAUNCH, 'exec "$P" field --file "$Y" --key "$Z" </dev/null']),
   },
   /** 2.1.3-beta.18 section 3.2: one session's own files, from standard input,
    *  into `sessions/<X>/` (made 0700 when missing), before its launch. `L` is

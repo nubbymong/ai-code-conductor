@@ -1,4 +1,5 @@
 import type { CodexOptions, LegacyVersion, PromptButtonResult, ProviderId, SshConfig, SshRuntime, StatuslineData, SubmitTextResult } from '../../shared/types'
+import type { AccountUsage } from '../../shared/usage-types'
 
 export interface SpawnOptions {
   sessionId: string
@@ -233,6 +234,30 @@ export interface RemoteHostRead {
   readonly path: string
 }
 
+/** 2.1.3-beta.19 section 3 (aicc_planning#434): one string field of a file
+ *  on the host, read through the session helper's field mode (`aicc-helper
+ *  field --file <path under home> --key <dotted key>`), never the file:
+ *  `file`, a path under the host user's home folder, plain names joined by
+ *  `/`, none of them `.` or `..`; `key`, the field's dotted path, plain names
+ *  joined by `.`. The helper answers the one string at that key or nothing. */
+export interface RemoteHostField {
+  readonly file: string
+  readonly key: string
+}
+
+/** 2.1.3-beta.19 section 3 (aicc_planning#434): where a helper tab's weekly
+ *  bars and extra usage come from, this computer's own reading of the account
+ *  the tab's start named, never the host: the provider's account profiles on
+ *  this computer, and one usage read of one of them. The provider package's,
+ *  as its account field is: core looks nothing up for a provider that gives
+ *  none (statusline-watcher.ts setHelperAccount). */
+export interface RemoteAccountUsage {
+  /** The provider's account profiles on this computer, with the email each is signed in as. */
+  profiles(): Promise<ReadonlyArray<{ id: string; accountEmail?: string }>>
+  /** One usage read of one of those profiles. */
+  usage(profileId: string): Promise<AccountUsage>
+}
+
 /** A host read as it came back: its text, or null when it was not read (not
  *  there, not a regular file, or over the bound; and for a `cwd` or
  *  `checkout` read, a link, not the host user's own, or open to others). A
@@ -277,6 +302,20 @@ export interface ProviderRemoteLaunch {
   hostReads(options: RemoteLaunchOptions, machine: RemoteLaunchMachine): readonly RemoteHostRead[]
   /** The launch. `reads`: what hostReads named, in its order, as read. */
   launch(options: RemoteLaunchOptions, machine: RemoteLaunchMachine, helper: RemoteHelperCommands, reads: readonly RemoteHostFile[]): RemoteLaunch
+  /** 2.1.3-beta.19 section 3 (aicc_planning#434): the host file field that
+   *  names the account the tab's CLI is signed in as, which the tab's status
+   *  line and header show (an email address, or nothing). Core reads it with
+   *  the host reads at every start of the tab, launch or attach
+   *  (remote-helper/host-reads.ts readHostForStart). Absent or null: no
+   *  account is read for the tab. */
+  accountField?(options: RemoteLaunchOptions, machine: RemoteLaunchMachine): RemoteHostField | null
+  /** 2.1.3-beta.19 section 3 (aicc_planning#434): the source of the tab's
+   *  weekly bars and extra usage for the account its account field named:
+   *  this computer's own reading of that account, when it holds it. Handed
+   *  with each start's account read; the same source each time, so one
+   *  reading serves every tab on an account. Absent: the tab shows no bars
+   *  of its own and says they are not available. */
+  accountUsage?(): RemoteAccountUsage
   /** The tab's status line from one status the CLI posted, already cut to
    *  the launch's `statusKeep` (2.1.3-beta.18 section 3.2). Untrusted input;
    *  a remote path in it is display text only, never a transcript path.
