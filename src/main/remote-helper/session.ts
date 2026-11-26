@@ -463,12 +463,15 @@ export class RemoteDriver implements HelperPtyDriver {
         // 2.1.3-beta.19: a holder that runs until it is ended keeps this tab's
         // session (a quit, an update, Leave running, a link that stayed down):
         // the tab attaches to it, and nothing is launched.
-        if (found && untilEnded(found)) {
+        if (found && untilEnded(found) && found.child !== 'waiting') {
           this.o.log(`[remote-helper] ${sid}: a session kept for this tab runs on ${host}; attaching to it, nothing is launched`)
           return { record: found, attach: true }
         }
         // A clock holder left for this tab's session (an app crash or update
-        // within its away clock): ended first, so two CLIs never run on one conversation.
+        // within its away clock): ended first, so two CLIs never run on one
+        // conversation. So is an until-ended one with nothing launched in it
+        // (an app that ended between its hold and its launch): it holds no
+        // session to come back to.
         if (found) { await this.endLeftover(found); continue }
         if (attempt === 0 && !abandoned()) { this.o.log(`[remote-helper] ${sid}: a holder runs for it, and list mode does not show it`); continue }
         this.failWith(`a session the app could not end still runs for this tab on ${host}`)

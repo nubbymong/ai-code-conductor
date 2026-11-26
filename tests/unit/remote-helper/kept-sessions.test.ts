@@ -268,13 +268,21 @@ describe('an SSH Persistent tab through the session helper, kept until it is end
     forgetRemoteHelperTab(id)
   })
 
-  it('a clock holder left for the session (beta.18\'s kind) is still ended first, and a new one started', async () => {
-    const id = 'kept-clock-left'
+  // 1.2b: an until-ended holder whose program was never launched (an app
+  // that ended between its hold and its launch, inside the 120 s such a
+  // holder waits for it) holds nothing to come back to: it is ended first, as
+  // a clock leftover is, never attached to with nothing launched.
+  for (const [what, id, untilEndedOld] of [
+    ['a clock holder left for the session (beta.18\'s kind)', 'kept-clock-left', false],
+    ['an until-ended holder left for the session with nothing launched in it', 'kept-waiting-left', true],
+  ] as const) it(`${what} is still ended first, and a new one started`, async () => {
     forgetRemoteHelperTab(id)
     plugIn(signals().deps)
     const old = holderFor(id)
-    old.launch = { t: 'term.launch' }
-    old.child = 'running'
+    if (!untilEndedOld) {
+      old.launch = { t: 'term.launch' }
+      old.child = 'running'
+    }
     const fresh = holderFor(id)
     let holds = 0
     ssh.host = {
@@ -286,7 +294,7 @@ describe('an SSH Persistent tab through the session helper, kept until it is end
           if (holds === 1) return { stdout: `AICC-HASH ${n} ok ${SHA}\n`, code: 3 }
           return { stdout: `AICC-HASH ${n} ok ${SHA}\n${JSON.stringify(linuxRecord(fresh))}\n` }
         }
-        if (c.script === 'list') return { stdout: `AICC-HASH ${n} ok ${SHA}\n${JSON.stringify({ v: 1, sessions: old.ended ? [] : [linuxRecord(old, false)], removed: 0, skipped: 0 })}\n` }
+        if (c.script === 'list') return { stdout: `AICC-HASH ${n} ok ${SHA}\n${JSON.stringify({ v: 1, sessions: old.ended ? [] : [linuxRecord(old, untilEndedOld)], removed: 0, skipped: 0 })}\n` }
         return { code: 1 }
       },
       bridge: () => (old.ended ? fresh.connect() : old.connect()),
