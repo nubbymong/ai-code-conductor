@@ -18,7 +18,10 @@
 // after-reply (2.1.3-beta.18 section 7.4, aicc_planning #427): 7.4's recording
 // hold on the same machine, with helper/probes/h74-scenarios.json, picked
 // GPT-6.1 Terra in Codex's own model picker for the session, then sent one
-// turn. Each recording names the CLI and its version, the
+// turn; and Codex 0.172.0's wrapped-after-reply (2.1.3-beta.19 section 4,
+// aicc_planning#436), the same hold's launch with P19's short prompt, after
+// which the footer wraps onto two rows (WRAP_STATES). Each recording names
+// the CLI and its version, the
 // system, the size, and holds the
 // chunks as node-pty handed them over (on macOS and Linux a character split
 // across two reads joins the second, as node-pty's own decoder does), with
@@ -65,7 +68,8 @@
 //     with its title, as the app's Codex readers do;
 //  6. (2.1.3-beta.18 section 7.4, aicc_planning#427) each Codex 0.172.0
 //     recording ends with one footer row naming GPT-6.1 Terra by its display
-//     name of two words ("GPT-6.1 Terra low"), and Codex's reader reads it
+//     name of two words ("GPT-6.1 Terra low"; on the wrapped after-replies,
+//     2.1.3-beta.19 section 4, the footer's first row), and Codex's reader reads it
 //     ready and empty with no model list (main's readers), with the model's id
 //     (gpt-6.1-terra, a hyphen where the footer has a space) alone and in a
 //     list (the renderer's rule), and not with a list that lacks the model.
@@ -125,7 +129,15 @@ const HINT_STATES = ['queue-hint', 'rebound-hint', 'agents-hint', 'warning-hint'
  *  footer (C7's recording hold, record only). */
 const DRAFT_STATES = ['warning-draft'] as const
 const CODEX_STATES = [...CLI_STATES, ...HINT_STATES, ...DRAFT_STATES] as const
-const STATES: Record<string, readonly string[]> = { claude: CLI_STATES, codex: CODEX_STATES, codex170: CODEX_STATES, codex172: CODEX_STATES, shell: ['after-output'] }
+/** 2.1.3-beta.19 section 4 (aicc_planning#436): Codex 0.172.0's screen after
+ *  P19's short prompt, whose thread title and folder do not fit in 120
+ *  columns, so its footer wraps onto a second row (2.1.3-beta.18 section 7.4's
+ *  hold, its tseq launch, record only). The hold named it after-reply, as it
+ *  named its launch with the long prompt (footer on one row), which the corpus
+ *  holds under that name; this one has its own. Codex 0.170.0's wrapped
+ *  screens keep their after-reply, mid-reply and queue-hint names. */
+const WRAP_STATES = ['wrapped-after-reply'] as const
+const STATES: Record<string, readonly string[]> = { claude: CLI_STATES, codex: CODEX_STATES, codex170: CODEX_STATES, codex172: [...CODEX_STATES, ...WRAP_STATES], shell: ['after-output'] }
 const PROGRAMS = Object.keys(STATES)
 const SYSTEMS = ['windows-bundled', 'windows-system', 'macos', 'linux'] as const
 /** The ConPTY each system's recordings ran under (null: not Windows). */
@@ -143,11 +155,12 @@ const VERSION: Record<string, string | null> = { claude: '2.1.328', codex: '0.15
  *  choice, which its reader knows by "Press enter to continue". The queue
  *  hint shows while a turn runs, with a draft in the composer: busy. The
  *  other hint rows are on an empty ready composer. The warning draft is a
- *  ready composer holding the draft the probe typed (DRAFT_STATES). */
+ *  ready composer holding the draft the probe typed (DRAFT_STATES). The
+ *  wrapped after-reply is an empty ready composer (WRAP_STATES). */
 const CODEX_EXPECTED: Record<string, string> = {
   'first-screen': 'blocked', ready: 'ready', 'mid-reply': 'busy', 'after-reply': 'ready',
   'queue-hint': 'busy', 'rebound-hint': 'ready', 'agents-hint': 'ready', 'warning-hint': 'ready',
-  'warning-draft': 'ready',
+  'warning-draft': 'ready', 'wrapped-after-reply': 'ready',
 }
 const EXPECTED: Record<string, Record<string, string>> = {
   claude: { 'first-screen': 'no-prompt', ready: 'ready', 'mid-reply': 'busy', 'after-reply': 'ready' },
@@ -157,7 +170,7 @@ const EXPECTED: Record<string, Record<string, string>> = {
   shell: { 'after-output': 'no-prompt' },
 }
 /** The states whose prompt holds nothing when they are read. */
-const EMPTY_PROMPT = ['ready', 'after-reply', 'rebound-hint', 'agents-hint', 'warning-hint']
+const EMPTY_PROMPT = ['ready', 'after-reply', 'rebound-hint', 'agents-hint', 'warning-hint', 'wrapped-after-reply']
 
 /** What the corpus does not hold, and why: a program's state on the systems
  *  named. The fragments CONTEXT.d/2026-11-19-screen-corpus.md and
@@ -171,8 +184,8 @@ interface LeftOut { program: string; state: string; systems: readonly string[]; 
 const HINT_ELSEWHERE = 'kept on one Windows system (the bundled ConPTY, which the app gives Codex sessions) and one other (macOS) by the order of keeping; P19\'s second run recorded the same row here too'
 const LEFT_OUT: LeftOut[] = [
   { program: 'codex', state: 'agents-hint', systems: SYSTEMS, why: 'not reached: Codex 0.157.1 does not draw the agents form of the hint row (P19\'s second run waited 60 s on every system; the screen showed the ready composer with "? for shortcuts")' },
-  { program: 'codex', state: 'after-reply', systems: ['linux'], why: 'over the 3 MiB corpus cap: last in the order of keeping (243,915 bytes; 173,132 were left then, 146,829 after 2.1.3-beta.17 C7 added its two warning drafts, 73,071 since 2.1.3-beta.18 section 7.4 added Codex 0.172.0\'s four recordings)' },
-  { program: 'codex170', state: 'first-screen', systems: SYSTEMS, why: 'not in the plan\'s order of keeping, so not added (P19\'s second run recorded it: the sign-in choice, as Codex 0.157.1\'s; the four are 56,262 bytes, and 173,132 bytes of the 3 MiB cap were left then, 146,829 after 2.1.3-beta.17 C7, 73,071 since 2.1.3-beta.18 section 7.4)' },
+  { program: 'codex', state: 'after-reply', systems: ['linux'], why: 'over the 3 MiB corpus cap: last in the order of keeping (243,915 bytes; 173,132 were left then, 146,829 after 2.1.3-beta.17 C7 added its two warning drafts, 73,071 after 2.1.3-beta.18 section 7.4 added Codex 0.172.0\'s four recordings, 31,173 since 2.1.3-beta.19 section 4 added its two wrapped after-replies)' },
+  { program: 'codex170', state: 'first-screen', systems: SYSTEMS, why: 'not in the plan\'s order of keeping, so not added (P19\'s second run recorded it: the sign-in choice, as Codex 0.157.1\'s; the four are 56,262 bytes, and 173,132 bytes of the 3 MiB cap were left then, 146,829 after 2.1.3-beta.17 C7, 73,071 after 2.1.3-beta.18 section 7.4, 31,173 since 2.1.3-beta.19 section 4)' },
   ...['queue-hint', 'rebound-hint', 'warning-hint'].map((state) => ({ program: 'codex', state, systems: ['windows-system', 'linux'], why: HINT_ELSEWHERE })),
   ...HINT_STATES.map((state) => ({ program: 'codex170', state, systems: ['windows-system', 'linux'], why: HINT_ELSEWHERE })),
   { program: 'codex', state: 'warning-draft', systems: ['macos', 'linux'], why: 'not recorded: 2.1.3-beta.17 C7\'s recording hold ran on the Windows test machine only (both ConPTYs, 3 runs each, the same row in every run)' },
@@ -182,6 +195,8 @@ const LEFT_OUT: LeftOut[] = [
   { program: 'codex172', state: 'first-screen', systems: SYSTEMS, why: 'not recorded: section 7.4\'s hold marks only the screens after GPT-6.1 Terra is picked, idle and after a turn (aicc_planning#427)' },
   { program: 'codex172', state: 'mid-reply', systems: SYSTEMS, why: 'not recorded: on GPT-6.1 Terra, Codex 0.172.0 sent each turn with no tools (all 36 requests of section 7.4\'s 18 runs), and P19\'s stand-in streams its reply only to a request that carries tools, so it answered with its one word at once and no reply streamed to mark' },
   ...[...HINT_STATES, ...DRAFT_STATES].map((state) => ({ program: 'codex172', state, systems: SYSTEMS, why: 'not recorded: each is a launch of its own, outside section 7.4\'s hold (idle and after a turn on GPT-6.1 Terra, aicc_planning#427); its ready and after-reply show the agents form of the hint row already' })),
+  // 2.1.3-beta.19 section 4 (aicc_planning#436): the wrapped after-reply on both ConPTYs only.
+  { program: 'codex172', state: 'wrapped-after-reply', systems: ['macos', 'linux'], why: 'not recorded: section 7.4\'s hold ran on the Windows test machine only; on Linux, whose temporary folder is shorter, Codex 0.170.0\'s footer did not wrap after the same prompt' },
 ]
 const leftOutFor = (n: { program: string; system: string; state: string }, rows: readonly LeftOut[] = LEFT_OUT): LeftOut | undefined =>
   rows.find((l) => l.program === n.program && l.state === n.state && l.systems.includes(n.system))
@@ -205,37 +220,32 @@ const strayLeftOut = (rows: readonly LeftOut[]): string[] =>
  *  were listed until the reader learned that row, and the count Codex keeps
  *  alone under the footer once a text is typed (aicc_planning#371, in
  *  2.1.3-beta.17 C7, tests/unit/shared/codex-screen-warning-row.test.ts).
+ *  The 5 where the thread title and the working folder do not fit in 120
+ *  columns, so Codex 0.170.0's footer wraps onto a second row (its macOS and
+ *  Windows screens after the prompt is sent; their temporary folders are
+ *  longer than Linux's), were listed until the reader learned the wrapped
+ *  footer, with Codex 0.172.0's two wrapped after-replies
+ *  (codex172-*-wrapped-after-reply) added beside them (aicc_planning#436, in
+ *  2.1.3-beta.19 section 4, tests/unit/shared/codex-screen-wrapped-footer.test.ts).
+ *  Four of them read their state now; the fifth, the macOS mid-reply, reads
+ *  ready, as Codex 0.157.1's does (below).
  *  These are left:
- *  - where the thread title and the working folder do not fit in 120 columns,
- *    Codex 0.170.0's footer wraps onto a second row (its macOS and Windows
- *    screens after the prompt is sent; their temporary folders are longer than
- *    Linux's), and a wrapped footer still reads unrecognised, whatever row is
- *    under it. Codex 0.172.0's footer wraps the same way after P19's short
- *    prompt (2.1.3-beta.18 section 7.4's hold, its tseq launch: the
- *    after-reply of both ConPTYs reads unrecognised); the corpus holds that
- *    hold's launch with P19's long prompt, whose footer fits in 120 columns,
- *    so its after-reply shows the model's two words with a thread title
- *    (case 6), and the wrap stays listed on the codex170 recordings below;
- *  - Codex 0.157.1's macOS mid-reply reads ready: no mid-reply screen holds an
- *    "esc to interrupt" row (Codex drew its working row once, after Enter, and
- *    not while the reply streamed), each ends in the same rows as its
- *    after-reply screen, and on macOS no title spinner says busy either
- *    (aicc_planning#370; until C7 its warning count made it read
- *    unrecognised).
+ *  - Codex 0.157.1's and 0.170.0's macOS mid-reply read ready: no mid-reply
+ *    screen holds an "esc to interrupt" row (Codex drew its working row once,
+ *    after Enter, and not while the reply streamed), each ends in the same
+ *    rows as its after-reply screen, and on macOS no title spinner says busy
+ *    either (aicc_planning#370; until C7 its warning count made 0.157.1's read
+ *    unrecognised, and until 2.1.3-beta.19 section 4 its wrapped footer made
+ *    0.170.0's read unrecognised).
  *  Since 2.1.3-beta.13 B2 (aicc_planning#370) the reader takes the window
  *  title too, and the Windows and Linux mid-reply and queue-hint screens read
  *  busy by its spinner (case 5), whatever their rows. */
 interface Misread { ticket: string; reads: string }
-const UNRECOGNISED: Misread = { ticket: 'aicc_planning#357', reads: 'unrecognised' }
+const STREAMING_READS_READY: Misread = { ticket: 'aicc_planning#370', reads: 'ready' }
 const KNOWN_MISREADS: Record<string, Misread> = {
-  ...Object.fromEntries([
-    // Codex 0.170.0 after a prompt on macOS and Windows: the footer wraps.
-    'codex170-macos-mid-reply',
-    'codex170-windows-bundled-after-reply', 'codex170-windows-system-after-reply', 'codex170-macos-after-reply',
-    'codex170-macos-queue-hint',
-  ].map((name) => [name, UNRECOGNISED])),
   // A reply streaming on macOS: no busy sign on screen or in the title.
-  'codex-macos-mid-reply': { ticket: 'aicc_planning#370', reads: 'ready' },
+  'codex-macos-mid-reply': STREAMING_READS_READY,
+  'codex170-macos-mid-reply': STREAMING_READS_READY,
 }
 
 /** B2 (case 5): the recordings whose output last set a title with Codex's
@@ -575,8 +585,8 @@ describe('the screen corpus (helper/fixtures/screens)', () => {
     const LISTS: ReadonlyArray<readonly string[] | null> = [null, ['gpt-6.1-terra'], ['gpt-6.1-sol', 'gpt-6.1-terra', 'gpt-5.5']]
     const WITHOUT = ['gpt-6.1-sol', 'gpt-5.5']
 
-    it('holds the hold\'s four recordings, idle and after a turn on both ConPTYs (a vacuous pass is no pass)', () => {
-      expect(TERRA).toEqual(['windows-bundled', 'windows-system'].flatMap((s) => ['after-reply', 'ready'].map((st) => `codex172-${s}-${st}`)))
+    it('holds the hold\'s six recordings, idle, after a turn and (2.1.3-beta.19 section 4) after a turn with the footer wrapped, on both ConPTYs (a vacuous pass is no pass)', () => {
+      expect(TERRA).toEqual(['windows-bundled', 'windows-system'].flatMap((s) => ['after-reply', 'ready', 'wrapped-after-reply'].map((st) => `codex172-${s}-${st}`)))
     })
 
     it.each(TERRA)('%s: one footer row names GPT-6.1 Terra; it reads ready and empty with no list and with the id, and not with a list that lacks it', async (name) => {

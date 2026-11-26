@@ -27,13 +27,14 @@
 // tests/unit/shared/codex-screen-warning-row.test.ts holds the rest. Still
 // refused: the count with another key than f2, beside the queue hint or alone
 // under an empty composer, any other row not recorded, two rows under the
-// footer, a row at another indent or above the footer, and every row under a
-// wrapped footer. Taken without a recording of the pair, each part being
-// recorded: the count beside the rebound hints ("f6 for shortcuts", both
-// forms) and a count above 2. Codex 0.170.0 adds the thread's title to its
-// footer once a prompt is sent, and the footer wraps when the folder and the
-// title do not fit: those recordings still read unrecognised (the corpus test
-// lists them).
+// footer, and a row at another indent or above the footer. Taken without a
+// recording of the pair, each part being recorded: the count beside the
+// rebound hints ("f6 for shortcuts", both forms) and a count above 2. Codex
+// 0.170.0 adds the thread's title to its footer once a prompt is sent, and the
+// footer wraps when the folder and the title do not fit: those recordings read
+// unrecognised until 2.1.3-beta.19 section 4 (aicc_planning#436) taught the
+// reader the wrapped footer in its recorded shape, with these rows under it
+// (tests/unit/shared/codex-screen-wrapped-footer.test.ts holds the rest).
 //
 // The screens are the bottom six rows of the last screen of each recording
 // (<name>.rows.json), copied as recorded, with the prompt glyph, the middle
@@ -104,7 +105,8 @@ const WARNING_SCREENS: Record<string, ScreenLine[]> = {
 }
 
 /** Codex 0.170.0's screens after a prompt where the footer wraps onto a
- *  second row: still unrecognised, whatever row is under them. */
+ *  second row: unrecognised until 2.1.3-beta.19 section 4 (#436); read since,
+ *  each with its row under the footer. */
 const WRAPPED: Record<string, ScreenLine[]> = {
   'codex170-windows-bundled-queue-hint': [blank(), plain(`${P} p19 queued draft`), blank(), plain(`  p19-probe default ${DOT} ~\\AppData\\Local\\Temp\\p19-9qw1BB\\codex-bundled-queue-1\\work ${DOT} p19 short: print the probe's short`), plain('  reply'), plain('  tab to queue message')],
   'codex170-macos-queue-hint': [blank(), plain(`${P} p19 queued draft`), blank(), plain(`  p19-probe default ${DOT} /private/var/folders/q2/p1t6rgxj5fj32g1dc7dmd49r0000gn/T/p19-yqcGCX/codex-pty-queue-1/work ${DOT} p19`), plain("  short: print the probe's short reply"), plain('  tab to queue message')],
@@ -196,10 +198,15 @@ describe("Codex's hint rows under the footer, as P19's second run recorded them 
     expect(readCodexScreen(three).screen).toBe('unrecognised')
   })
 
-  it('a two-row draft is not read over a wrapped footer, a row that was not recorded, the hint at another indent or two rows', () => {
-    const wrappedFooter = WRAPPED['codex170-macos-queue-hint'].slice(3)
+  it('a two-row draft is not read over a row that was not recorded, the hint at another indent or two rows; over a wrapped footer (#436) it is', () => {
+    // 2.1.3-beta.19 section 4 (#436): over the recorded wrapped footer and the
+    // queue hint, all of it, two rows; the screen reads unrecognised, as a
+    // two-row draft over a footer of one row does (above).
+    const overWrapped = twoRowDraft(WRAPPED['codex170-macos-queue-hint'].slice(3))
+    expect(codexComposerDraft(overWrapped)).toBe(NOTE.replace(/\s+/g, ''))
+    expect(codexComposerRows(overWrapped)).toBe(2)
+    expect(readCodexScreen(overWrapped).screen).toBe('unrecognised')
     for (const [what, under] of Object.entries({
-      'a wrapped footer': wrappedFooter,
       'a row not recorded': [footerRow(QUEUED), plain('  tab to queue')],
       'the queue hint with the warning count': [footerRow(QUEUED), plain(`  tab to queue message${' '.repeat(73)}${WARNING}`)],
       'the hint at 4': [footerRow(QUEUED), hint(4, 'tab to queue message')],
@@ -219,10 +226,11 @@ describe("Codex's hint rows under the footer, as P19's second run recorded them 
     expect(codexTextTyped(counted, NOTE)).toBe(true)
   })
 
-  it("the recorded screens whose footer wraps still read unrecognised, and what their composer holds is not read", () => {
+  it("the recorded screens whose footer wraps read their rows (#436): the queue hint busy with its draft, the rest ready and empty; read without the window title, which alone says busy while a reply streams", () => {
     for (const [name, screen] of Object.entries(WRAPPED)) {
-      expect(readCodexScreen(screen).screen, name).toBe('unrecognised')
-      expect(codexComposerDraft(screen), name).toBeNull()
+      const queued = name.endsWith('queue-hint')
+      expect(readCodexScreen(screen), name).toEqual(queued ? { screen: 'busy', text: 'p19 queued draft' } : { screen: 'ready', text: '' })
+      expect(codexComposerDraft(screen), name).toBe(queued ? 'p19queueddraft' : '')
     }
   })
 
@@ -271,11 +279,12 @@ describe("Codex's hint rows under the footer, as P19's second run recorded them 
     }
   })
 
-  it('each row under a wrapped footer reads unrecognised', () => {
+  it('each row under the recorded wrapped footer is read as under a footer of one row (#436), and twice it reads unrecognised', () => {
     const wrapped = WRAPPED['codex170-windows-bundled-after-reply']
     const twoRows = wrapped.slice(3, 5)
-    for (const [name, { screen }] of Object.entries(ACCEPTED)) {
-      expect(readCodexScreen([...composerPart(screen), ...twoRows, lastRow(screen)]).screen, name).toBe('unrecognised')
+    for (const [name, { screen, reads }] of Object.entries(ACCEPTED)) {
+      expect(readCodexScreen([...composerPart(screen), ...twoRows, lastRow(screen)]).screen, name).toBe(reads)
+      expect(readCodexScreen([...composerPart(screen), ...twoRows, lastRow(screen), lastRow(screen)]).screen, name).toBe('unrecognised')
     }
   })
 
