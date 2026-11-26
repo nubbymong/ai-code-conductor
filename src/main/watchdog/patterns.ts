@@ -639,9 +639,14 @@ const CARET_TEXT_ROW = /^\s*❯\s+\S/
 // that does draw gutters) — belt-and-braces beside the caret row above.
 const BOXED_DRAFT_ROW = /^\s*│\s*[>❯]\s*\S[^│]*│\s*$/
 // The bare ASCII prompt carrying text. Prose-shaped (a markdown blockquote
-// "> quoted line"), so it gates ONLY as the very last non-blank line — where a
-// live ASCII prompt sits and a blockquote never does.
+// "> quoted line"), so it gates only where the prompt is: as the very last
+// non-blank line (where a live ASCII prompt sits and a blockquote never
+// does), or as the first row of the live input box (PR 763 fix round 9:
+// Claude Code on Windows draws its caret as this ASCII `>`, inside the same
+// rules as the fancy one, with its footer below).
 const BARE_ASCII_DRAFT_ROW = /^\s*>\s+\S/
+// The row that opens the live input box: either prompt glyph.
+const LIVE_PROMPT_ROW = /^\s*[❯>]/
 
 export interface SendGateResult {
   ok: boolean
@@ -729,17 +734,31 @@ export function canSendNow(text: string, nonDimText?: string): SendGateResult {
   // message a retry answers sits in this window above the box: read as a
   // draft, it deferred every retry, and two of them read as a picker. A caret
   // row at column 0, not right under a rule, above the top rule of the
-  // bottom-most caret row framed by rules, is such a message: no keystroke
-  // reaches it. The framed row itself, and every row below its top rule, is
-  // read exactly as before, so a draft or a placeholder in the box (with no
-  // styled read) still refuses, and so does a picker drawn below it.
+  // live input box, is such a message: no keystroke reaches it. The box's
+  // rows, and every row below its top rule, are read exactly as before, so a
+  // draft or a placeholder in the box (with no styled read) still refuses,
+  // and so does a picker drawn below it.
+  //
+  // The live input box (PR 763 fix round 9): the bottom-most pair of rules in
+  // the window whose first row inside opens with a prompt glyph, the fancy
+  // caret or the ASCII `>` Claude Code draws on Windows (it prints each
+  // message you sent with that `>` too). Its rows are the prompt's row and
+  // any rows a long draft wraps onto. Read here before, but only as a single
+  // fancy caret row between two rules.
   const offset = lines.length - tail.length
   let liveInputTop = -1
-  for (let i = tail.length - 2; i >= 1; i--) {
-    if (RULE_ROW.test(tail[i - 1]) && /^\s*❯/.test(tail[i]) && RULE_ROW.test(tail[i + 1])) { liveInputTop = i - 1; break }
+  let liveInputBottom = -1
+  for (let b = tail.length - 1; b >= 2 && liveInputTop < 0; b--) {
+    if (!RULE_ROW.test(tail[b])) continue
+    let t = b - 1
+    while (t >= 0 && !RULE_ROW.test(tail[t])) t--
+    if (t >= 0 && b - t >= 2 && LIVE_PROMPT_ROW.test(tail[t + 1])) { liveInputTop = t; liveInputBottom = b }
   }
   const sentMessage = (i: number): boolean =>
     i < liveInputTop && USER_MESSAGE_ROW.test(tail[i]) && !(offset + i > 0 && RULE_ROW.test(lines[offset + i - 1]))
+  // Ink on a row of the live box after its prompt's row: a draft wrapped onto
+  // it (the styled read's non-dim cells; with none, any text: fail closed).
+  const wrappedRowHasInk = (i: number): boolean => /\S/.test(nonDimTail ? (nonDimTail[i] ?? '') : tail[i])
 
   let numberRows = 0
   let caretRowsRaw = 0
@@ -766,6 +785,20 @@ export function canSendNow(text: string, nonDimText?: string): SendGateResult {
   // render puts a bottom rule and a footer BELOW it, so it is never the last
   // line (the bug F1 exposed). Reported as 'draft' (the commoner case).
   if (caretRowsInk >= 1) return { ok: false, reason: 'draft' }
+
+  // The live input box (PR 763 fix round 9): its ASCII prompt's row with ink
+  // after the glyph, as Claude Code draws a draft on Windows, or ink on a row
+  // a draft wraps onto, under either glyph. Without this a Windows draft was
+  // never read (the bare ASCII rule below needs the last line, which the
+  // footer always is), and the retry was typed onto it and sent with it.
+  if (liveInputTop >= 0) {
+    const first = liveInputTop + 1
+    const l = tail[first]
+    if (BARE_ASCII_DRAFT_ROW.test(l) && contentHasInk(first, 'bare') && !isWorkingLine(l)) return { ok: false, reason: 'draft' }
+    for (let i = first + 1; i < liveInputBottom; i++) {
+      if (wrappedRowHasInk(i)) return { ok: false, reason: 'draft' }
+    }
+  }
 
   // The boxed form, anywhere in the window.
   for (let i = 0; i < tail.length; i++) {

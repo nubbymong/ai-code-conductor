@@ -876,3 +876,74 @@ describe('the send gate on Claude Code 2.1\'s own screen (W74)', () => {
     expect(detectSafeguard([SENT, FLAG, '', ...box('❯ ', MANUAL)].join('\n'), SAFEGUARD_PATTERNS)).toBe(true)
   })
 })
+
+// PR 763 fix round 9 (the 2.1.3-beta.19 release smoke re-read, its item 10):
+// on a local Windows tab (Claude Code 2.1.330) the Watchdog typed its retry
+// onto a draft the user had typed and not sent, and the two went as one
+// message ("zz draft c7 not sents32 hello w1"). Claude Code on Windows draws
+// its input caret, and each message you sent, as ASCII '>', not U+276F. The
+// gate read the fancy caret anywhere, but the bare '>' only as the last
+// non-blank line, so it could tell a markdown blockquote from the prompt;
+// the footer is always the last line, so a Windows draft was never read.
+// Now a '>' row that opens the live input box (the bottom-most box: a top
+// rule, the prompt's row and any rows a long draft wraps onto, a bottom
+// rule) is the prompt, and ink on it, or on a row it wraps onto, is a draft.
+// The cases that say "red on 38e0edcb" were answered otherwise there; the rest pin what
+// must not change (the W74 shapes above stay as they are).
+describe('the send gate on a Windows local tab: the ASCII prompt in its box (PR 763 fix round 9)', () => {
+  const RULE = '─'.repeat(41)
+  const AUTO = '  ⏵⏵ auto mode on'
+  const SENT = '> s32 hello w1'
+  const FLAG = '  ⎿  API Error: safeguards flagged this message (s32 flag c7)'
+
+  it('the Windows render of a draft refuses as a draft (red on 38e0edcb)', () => {
+    expect(canSendNow([RULE, '> zz draft', RULE, AUTO].join('\n'))).toEqual({ ok: false, reason: 'draft' })
+  })
+
+  it('the release smoke\'s shape: your message and the flag above, your draft in the box (red on 38e0edcb)', () => {
+    const pane = [SENT, FLAG, '', RULE, '> zz draft c7 not sent', RULE, AUTO].join('\n')
+    expect(canSendNow(pane)).toEqual({ ok: false, reason: 'draft' })
+    // The styled read of a local tab: the draft is not dim, so it still refuses.
+    expect(canSendNow(pane, pane)).toEqual({ ok: false, reason: 'draft' })
+  })
+
+  it('a draft that wraps onto a second row refuses, the ASCII prompt and the fancy one alike (red on 38e0edcb)', () => {
+    expect(canSendNow([SENT, FLAG, '', RULE, '> zz a draft long enough to wrap onto', '  a second row', RULE, AUTO].join('\n'))).toEqual({ ok: false, reason: 'draft' })
+    // Its first row empty (a line break typed first), its text on the next.
+    expect(canSendNow([SENT, FLAG, '', RULE, '> ', '  zz the draft', RULE, AUTO].join('\n'))).toEqual({ ok: false, reason: 'draft' })
+    expect(canSendNow([RULE, '❯ ', '  zz the draft', RULE, AUTO].join('\n'))).toEqual({ ok: false, reason: 'draft' })
+  })
+
+  it('a dim glyph over a non-dim draft still refuses (the glyph is found in the raw row) (red on 38e0edcb)', () => {
+    const raw = [SENT, FLAG, '', RULE, '> zz draft', RULE, AUTO].join('\n')
+    const nonDim = [SENT, FLAG, '', RULE, '  zz draft', RULE, AUTO].join('\n')
+    expect(canSendNow(raw, nonDim)).toEqual({ ok: false, reason: 'draft' })
+  })
+
+  it('the empty Windows prompt under your message and the flag is sendable', () => {
+    expect(canSendNow([SENT, FLAG, '', RULE, '> ', RULE, AUTO].join('\n'))).toEqual({ ok: true })
+    expect(canSendNow([SENT, FLAG, '', RULE, '>', RULE, AUTO].join('\n'))).toEqual({ ok: true })
+  })
+
+  it('a dim placeholder in the Windows prompt: sendable with the styled read, refused without it, fail closed (red on 38e0edcb)', () => {
+    const raw = [SENT, FLAG, '', RULE, '> Try "fix lint errors"', RULE, AUTO].join('\n')
+    const nonDim = [SENT, FLAG, '', RULE, '> ', RULE, AUTO].join('\n')
+    expect(canSendNow(raw, nonDim)).toEqual({ ok: true })
+    expect(canSendNow(raw)).toEqual({ ok: false, reason: 'draft' })
+  })
+
+  it('a blockquote between two markdown rules in the answer above the prompt is not the prompt', () => {
+    const pane = [RULE, '> the fix looks right to me', RULE, FLAG, '', RULE, '> ', RULE, AUTO].join('\n')
+    expect(canSendNow(pane)).toEqual({ ok: true })
+  })
+
+  it('the message you sent at column 0 above the box is not a draft, with either glyph in the box (red on 38e0edcb: a box with the ASCII prompt was not found)', () => {
+    expect(canSendNow(['❯ say hello', FLAG, '', RULE, '> ', RULE, AUTO].join('\n'))).toEqual({ ok: true })
+    expect(canSendNow([SENT, FLAG, '', RULE, '❯ ', RULE, AUTO].join('\n'))).toEqual({ ok: true })
+  })
+
+  it('a numbered Windows menu still reads as a menu', () => {
+    const pane = ['Do you want to run this command?', '> 1. Yes', '  2. No', RULE, AUTO].join('\n')
+    expect(canSendNow(pane)).toEqual({ ok: false, reason: 'menu' })
+  })
+})
