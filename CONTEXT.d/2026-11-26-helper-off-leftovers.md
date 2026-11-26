@@ -35,3 +35,6 @@ aicc_planning#440 (item 5), from beta.18's post-publish check.
   check dropped, the running mark ignored, the listed holder ignored, the
   third `stop()` check dropped, a store with nothing in it not taken, and the
   lock's removal made unconditional again.
+  Case 10 plants a junction in the test's own temp folder, so the file
+  carries the host quarantine header (added at the aggregate, where the
+  meta test first ran on it): CI and the test VM only.

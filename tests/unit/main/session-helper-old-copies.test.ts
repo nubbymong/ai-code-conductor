@@ -1,3 +1,5 @@
+// HOST QUARANTINE: plants a junction in its own temp folder (case 10, a store that is a link). [CI] [VM] only -- never run on the owner's machine.
+//
 // 2.1.3-beta.15 (plan section B1, aicc_planning#397): a start with both helper
 // switches off, no running mark and no agent record makes no manager, so the
 // manager's own clean-up of old version folders never ran, and every update
