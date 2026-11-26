@@ -103,7 +103,7 @@ export interface CodexHookFile { hookFile: string; dispose(): void }
 
 /** What a Codex launch holds of its hooks between mintCodexHooks and
  *  keepCodexHooks: the hook file, and whether the launch minted the session's
- *  gateway token. pty-manager.ts keeps both for its failed-launch path. */
+ *  gateway token. The launch (providers/codex/local-launch.ts) keeps both for its failed-launch path. */
 export interface CodexHooks { hookFile: CodexHookFile | null; tokenMinted: boolean }
 
 /** The per-session records and helpers of pty-manager.ts that a launch's

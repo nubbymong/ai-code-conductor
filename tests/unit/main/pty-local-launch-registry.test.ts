@@ -331,7 +331,7 @@ describe('how an assistant is started: Claude Code by its own row, any other by 
   })
 
   // Mutation to prove this can fail: take the row as it stands, whatever id it is under.
-  it('a third id given a copy of the Claude Code row has no way to start, and the two the app knows keep theirs', () => {
+  it('a third id given a copy of the Claude Code row has no way to start; Claude Code keeps its row, and the other assistant, with no row and no package registered here, still has none', () => {
     const widened = { ...LOCAL_LAUNCH_STYLE, third: LOCAL_LAUNCH_STYLE[CLAUDE] }
     expect(launchStyleOf('third', widened)).toBeUndefined()
     expect(launchStyleOf(CLAUDE, widened)).toBe(LOCAL_LAUNCH_STYLE[CLAUDE])

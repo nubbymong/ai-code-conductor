@@ -1232,7 +1232,7 @@ describe('the row that runs Claude Code\'s launch is Claude Code\'s alone (WP1.3
   // prove this can fail: let the second argument stay set once it was given.
   it('the lookup takes the rows as they are held only while the hook says so: the next rows are checked again, before the session is touched', () => {
     _setLocalLaunchStylesForTest({ ...LOCAL_LAUNCH_STYLE }, true)
-    // The app's own rows, taken as they are held, start each provider by its own row.
+    // The app's own rows, taken as they are held: Claude Code's row stays its own, and Codex, with no row, is looked up as the app looks it up and started by its package's local launch group.
     start(launch('a'))
     expect(h.ptys.map((pty) => pty.cmd)).toEqual(['/proven/a/codex'])
     _setLocalLaunchStylesForTest({ claude: LOCAL_LAUNCH_STYLE.claude, codex: LOCAL_LAUNCH_STYLE.claude })

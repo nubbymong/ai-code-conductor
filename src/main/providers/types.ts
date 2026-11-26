@@ -1,6 +1,6 @@
 import type { BrowserWindow } from 'electron'
 import type { IPty, IPtyForkOptions } from 'node-pty'
-import type { CanvasSessionGuidance, CodexOptions, LegacyVersion, PromptButtonResult, ProviderId, SshConfig, SshRuntime, StatuslineData, SubmitTextResult } from '../../shared/types'
+import type { CodexOptions, LegacyVersion, PromptButtonResult, ProviderId, SshConfig, SshRuntime, StatuslineData, SubmitTextResult } from '../../shared/types'
 import type { RealmOwnership } from '../../shared/providers'
 import type { AccountLease } from './core'
 
