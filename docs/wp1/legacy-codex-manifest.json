@@ -1,8 +1,8 @@
 {
   "schema": "wp1-legacy-codex-manifest/3",
-  "generatedAt": "2026-11-26T09:13:08.030Z",
-  "head": "43626028b927bbfb36d0f1922d823217dac4932b",
-  "tree": "28f4a904190eefa27c78bdabe8a7b37ee2c6cc71",
+  "generatedAt": "2026-11-26T11:21:25.009Z",
+  "head": "4cfc215b60cab7863657373d7027ee40b022e4f6",
+  "tree": "b3db064c12c015f63a8c58f59fcc1fd698ef5e7b",
   "scannedWorkingTree": false,
   "predicateDigest": "100a1233edebdc39a5f9004d3fba980a89ebb15b25872e52076386bc84b03153",
   "predicates": [
@@ -116,9 +116,9 @@
     "\\.(png|jpg|jpeg|gif|ico|icns|webp|svg|woff2?|ttf|otf|mp4|zip|asar|node|exe|dll|dylib|so|pdf)$",
     "^package-lock\\.json$"
   ],
-  "trackedFileCount": 3941,
-  "excludedFileCount": 634,
-  "scannedFileCount": 3307,
+  "trackedFileCount": 3950,
+  "excludedFileCount": 636,
+  "scannedFileCount": 3314,
   "unscopedFileCount": 15,
   "unscoped": [
     ".claude/settings.json",
@@ -139,8 +139,8 @@
   ],
   "unscopedMentions": [],
   "unreadable": [],
-  "matchedPathCount": 1128,
-  "pathDigest": "f44a12eb48a1f34bcaf338e02bf591a1be4bf50f5fedc9337aaa20bbc1aedd08",
+  "matchedPathCount": 1135,
+  "pathDigest": "028033b6ee55a89d691a691969e547b8210c96445a0394621abe0642f13afab5",
   "entries": [
     {
       "path": ".github/workflows/ci.yml",
@@ -1970,6 +1970,13 @@
       "lineCount": 1
     },
     {
+      "path": "src/main/providers/claude/lifecycle.ts",
+      "predicates": [
+        "P14"
+      ],
+      "lineCount": 10
+    },
+    {
       "path": "src/main/providers/claude/review-launch.ts",
       "predicates": [
         "P14"
@@ -2131,7 +2138,7 @@
         "P09",
         "P14"
       ],
-      "lineCount": 330
+      "lineCount": 334
     },
     {
       "path": "src/main/providers/codex/insights-exec.ts",
@@ -2156,6 +2163,25 @@
         "P14"
       ],
       "lineCount": 11
+    },
+    {
+      "path": "src/main/providers/codex/lifecycle.ts",
+      "predicates": [
+        "P01",
+        "P04",
+        "P14"
+      ],
+      "lineCount": 99
+    },
+    {
+      "path": "src/main/providers/codex/local-launch.ts",
+      "predicates": [
+        "P01",
+        "P04",
+        "P07",
+        "P14"
+      ],
+      "lineCount": 68
     },
     {
       "path": "src/main/providers/codex/mcp-config.ts",
@@ -2351,7 +2377,7 @@
         "P07",
         "P14"
       ],
-      "lineCount": 47
+      "lineCount": 82
     },
     {
       "path": "src/main/pty-input-guard.ts",
@@ -2368,7 +2394,7 @@
         "P07",
         "P14"
       ],
-      "lineCount": 361
+      "lineCount": 305
     },
     {
       "path": "src/main/sanitize-restored-spawn-options.ts",
@@ -2506,10 +2532,9 @@
     {
       "path": "src/main/sessions/launch-bindings.ts",
       "predicates": [
-        "P04",
         "P14"
       ],
-      "lineCount": 244
+      "lineCount": 139
     },
     {
       "path": "src/main/stale-folder-sweep.ts",
@@ -4695,6 +4720,16 @@
       "lineCount": 0
     },
     {
+      "path": "tests/fixtures/local-launch-characterisation.json",
+      "predicates": [
+        "P04",
+        "P07",
+        "P13"
+      ],
+      "lineCount": 484,
+      "truncated": true
+    },
+    {
       "path": "tests/fixtures/tokenomics/tk-db-v1.ts",
       "predicates": [
         "P13"
@@ -4715,6 +4750,15 @@
         "P13"
       ],
       "lineCount": 16
+    },
+    {
+      "path": "tests/helpers/provider-package-parts.ts",
+      "predicates": [
+        "P04",
+        "P08",
+        "P13"
+      ],
+      "lineCount": 9
     },
     {
       "path": "tests/integration/claude-conformance-ci.mjs",
@@ -5824,14 +5868,14 @@
         "P10",
         "P13"
       ],
-      "lineCount": 62
+      "lineCount": 60
     },
     {
       "path": "tests/unit/main/launch-bindings-kept.test.ts",
       "predicates": [
         "P13"
       ],
-      "lineCount": 50
+      "lineCount": 49
     },
     {
       "path": "tests/unit/main/launch-bindings-launch.test.ts",
@@ -5841,7 +5885,7 @@
         "P07",
         "P13"
       ],
-      "lineCount": 22
+      "lineCount": 23
     },
     {
       "path": "tests/unit/main/launch-bindings-take-over.test.ts",
@@ -5859,7 +5903,7 @@
         "P10",
         "P13"
       ],
-      "lineCount": 99
+      "lineCount": 101
     },
     {
       "path": "tests/unit/main/launch-lookups-off-main-thread.test.ts",
@@ -5874,6 +5918,24 @@
         "P13"
       ],
       "lineCount": 1
+    },
+    {
+      "path": "tests/unit/main/local-launch-characterisation.test.ts",
+      "predicates": [
+        "P04",
+        "P05",
+        "P07",
+        "P13"
+      ],
+      "lineCount": 55
+    },
+    {
+      "path": "tests/unit/main/local-launch-third-provider.test.ts",
+      "predicates": [
+        "P10",
+        "P13"
+      ],
+      "lineCount": 15
     },
     {
       "path": "tests/unit/main/logging-switch-wiring.test.ts",
@@ -6302,7 +6364,7 @@
       "predicates": [
         "P13"
       ],
-      "lineCount": 4
+      "lineCount": 9
     },
     {
       "path": "tests/unit/main/session-helper-take-over.test.ts",
