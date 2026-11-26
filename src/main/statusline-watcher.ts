@@ -209,7 +209,10 @@ function helperAccountFields(appPtyId: string): Partial<StatuslineData> {
       const extra = sanitiseRateLimitExtra(view.extra)
       if (buckets && buckets.length > 0) out.usageBuckets = buckets as StatuslineData['usageBuckets']
       else why = 'no-reading'
-      if (extra) out.rateLimitExtra = extra
+      // A figure the gate refuses switches the block off: the strip keeps
+      // the last extra usage it was given, so leaving it out would leave an
+      // earlier reading's block showing.
+      out.rateLimitExtra = extra ?? { ...EXTRA_USAGE_OFF }
     } else if (view) {
       why = view.why
     }

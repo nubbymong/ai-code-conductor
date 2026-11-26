@@ -192,6 +192,21 @@ describe('a helper tab\'s weekly bars and extra usage, from this computer', () =
     expect(shown[0].severity).toBeUndefined()
   })
 
+  it('the extra usage gate bounds this computer\'s reading too: a share that is not a finite number switches the block off, also over an earlier reading\'s, and the bars still show', async () => {
+    answer = async () => usageOk({ credits: { currency: 'USD', used: 5, limit: 20, remaining: 15, enabled: true } })
+    setHelperAccount('tab-remote', { account: 'me@example.com' })
+    await settle()
+    expect(last().rateLimitExtra).toEqual({ enabled: true, utilization: 25, usedUsd: 5, limitUsd: 20 })
+    // The next reading's share overflows (used over a limit near zero): the gate refuses it.
+    now += 61_000
+    answer = async () => usageOk({ credits: { currency: 'USD', used: 1e308, limit: 0.5, remaining: 0, enabled: true } })
+    dispatchHelperStatus('tab-remote', { model: 'Opus' })
+    await settle()
+    expect(reads).toEqual(['profile-work', 'profile-work'])
+    expect(last()).toMatchObject({ accountEmail: 'me@example.com', usageBuckets: BUCKETS, rateLimitExtra: { enabled: false, utilization: 0, usedUsd: 0, limitUsd: 0 } })
+    for (const s of sent) for (const v of Object.values((s.rateLimitExtra ?? {}) as Record<string, unknown>)) if (typeof v === 'number') expect(Number.isFinite(v)).toBe(true)
+  })
+
   it('one reading serves every tab on the account for 60 s: never asked twice', async () => {
     setHelperAccount('tab-a', { account: 'me@example.com' })
     setHelperAccount('tab-b', { account: 'ME@example.com' })
