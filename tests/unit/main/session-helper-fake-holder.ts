@@ -80,11 +80,103 @@
 import { randomBytes } from 'crypto'
 import * as fs from 'fs'
 import * as path from 'path'
-import { Duplex, PassThrough } from 'stream'
+import { Duplex, PassThrough, finished } from 'stream'
 import { FrameReader, encodeJsonFrame, encodeRawFrame, type HolderRecord } from '../../../src/main/session-helper/protocol'
 import type { ExecResult } from '../../../src/main/session-helper/manager'
 
 const hex = (bytes: number) => randomBytes(bytes).toString('hex')
+
+/** Node's own AbortError, which it does not export: an end destroyed with no
+ *  error destroys both its streams with one, as Node's does. */
+function abortError(): Error {
+  return Object.assign(new Error('The operation was aborted'), { name: 'AbortError', code: 'ABORT_ERR' })
+}
+
+/**
+ * One end of a connection: it reads what `r` carries and writes into `w`.
+ * These are Node's own steps for Duplex.from({ readable, writable }) of two
+ * Node streams (Node 24, lib/internal/streams/duplexify.js, _duplexify),
+ * written out because @types/node declares that form for web streams only,
+ * so the call did not type-check (TS2345). Same steps, same events: end()
+ * ends `w`; an error on either stream destroys the other and this end; this
+ * end's destroy destroys both, with an AbortError when it was given none.
+ */
+function joined(r: PassThrough, w: PassThrough): Duplex {
+  let ondrain: ((error?: Error | null) => void) | null = null
+  let onfinish: ((error?: Error | null) => void) | null = null
+  let onreadable: (() => void) | null = null
+  // undefined until the first stream ends, then null; a pending destroy's
+  // callback while one is under way.
+  let onclose: ((error?: Error | null) => void) | null | undefined
+  const onfinished = (err?: Error | null): void => {
+    const cb = onclose
+    onclose = null
+    if (cb) cb(err)
+    else if (err) d.destroy(err)
+  }
+  const read = (): void => {
+    for (;;) {
+      const buf: unknown = r.read()
+      if (buf === null) {
+        onreadable = read
+        return
+      }
+      if (!d.push(buf)) return
+    }
+  }
+  const d = new Duplex({
+    write(chunk, encoding, callback) {
+      if (w.write(chunk, encoding)) callback()
+      else ondrain = callback
+    },
+    final(callback) {
+      w.end()
+      onfinish = callback
+    },
+    read,
+    destroy(err, callback) {
+      const why = !err && onclose !== null ? abortError() : err
+      onreadable = null
+      ondrain = null
+      onfinish = null
+      if (onclose === null) {
+        callback(why)
+      } else {
+        onclose = callback
+        if (why && !w.destroyed) w.destroy(why)
+        if (why && !r.destroyed) r.destroy(why)
+      }
+    },
+  })
+  finished(w, (err) => {
+    if (err && !r.destroyed) r.destroy(err)
+    onfinished(err)
+  })
+  w.on('drain', () => {
+    if (!ondrain) return
+    const cb = ondrain
+    ondrain = null
+    cb()
+  })
+  w.on('finish', () => {
+    if (!onfinish) return
+    const cb = onfinish
+    onfinish = null
+    cb()
+  })
+  finished(r, (err) => {
+    if (err && !w.destroyed) w.destroy(err)
+    onfinished(err)
+  })
+  r.on('readable', () => {
+    if (!onreadable) return
+    const cb = onreadable
+    onreadable = null
+    cb()
+  })
+  r.on('end', () => { d.push(null) })
+  return d
+}
 
 /**
  * Two ends of one in-memory connection: the app's, then the holder's. The app
@@ -95,9 +187,9 @@ const hex = (bytes: number) => randomBytes(bytes).toString('hex')
 export function duplexPair(): [Duplex, Duplex] {
   const toB = new PassThrough()
   const toA = new PassThrough()
-  const holderEnd = Duplex.from({ readable: toB, writable: toA })
+  const holderEnd = joined(toB, toA)
   holderEnd.on('error', () => { /* the app let go */ })
-  return [Duplex.from({ readable: toA, writable: toB }), holderEnd]
+  return [joined(toA, toB), holderEnd]
 }
 
 type Json = Record<string, unknown>
