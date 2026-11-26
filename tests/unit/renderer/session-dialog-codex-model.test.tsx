@@ -97,8 +97,8 @@ describe("the Codex model list is the registry's catalogue (row 39)", () => {
   // P3.8 round 1 (J1): a new config starts as a new Claude config does: on the
   // first model of the list (Claude's is its newest Opus) at Default effort,
   // counting only the models every supported Codex lists. Since Codex 0.170.0
-  // (aicc_planning#347) the list starts with four models only 0.170.0 and
-  // 0.171.0 list, so a new config still starts on GPT-6-Astra.
+  // (aicc_planning#347) the list starts with four models only 0.170.0, 0.171.0
+  // and 0.172.0 list, so a new config still starts on GPT-6-Astra.
   it('offers Default and the Codex CLI catalogue; a new config starts on the first model every supported Codex lists, at Default effort, as a new Claude config does', () => {
     const onConfirm = newCodexConfig()
     expect(options(modelSel()).map((o) => o.value)).toEqual(['', 'gpt-6.2-sol', 'gpt-6.2-astra', 'gpt-6.1-terra', 'gpt-6.1-sol', 'gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'gpt-5.2'])

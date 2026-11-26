@@ -1,6 +1,6 @@
-# The newest tested Codex raised to 0.157.1, then to 0.170.0 and 0.171.0 (2.1.3-beta.11, aicc_planning#185, #347)
+# The newest tested Codex raised to 0.157.1, then to 0.170.0 and 0.171.0 (2.1.3-beta.11, aicc_planning#185, #347), then to 0.172.0 (2.1.3-beta.19, aicc_planning#436)
 
-The evidence for moving `CODEX_MAX_TESTED_VERSION` (`src/main/providers/codex/cli-contract.ts`) from 0.156.1 to 0.157.1, then to 0.170.0 ("Then 0.170.0", below), and then to 0.171.0 ("Then 0.171.0", at the end). The minimum (0.153.4) and the pinned version (0.155.1) did not move.
+The evidence for moving `CODEX_MAX_TESTED_VERSION` (`src/main/providers/codex/cli-contract.ts`) from 0.156.1 to 0.157.1, then to 0.170.0 ("Then 0.170.0", below), then to 0.171.0 ("Then 0.171.0"), and in 2.1.3-beta.19 to 0.172.0 ("Then 0.172.0", at the end). The minimum (0.153.4) and the pinned version (0.155.1) did not move.
 
 It is a file of its own, not new rows in `ci-matrix.md`: that file is the 2.1.1 record, bound by its sha256 to the WP1.30 evidence record taken at the 2.1.1 head (`tests/wp1/traceability.json`), and a row added there would re-sign that record at a head it was not taken at. The job, its checks and its columns are the ones `ci-matrix.md` describes ("The real-CLI conformance job").
 
@@ -72,6 +72,29 @@ A `workflow_dispatch` run of `ci.yml` on the scratch branch `scratch/b11-c4-code
 
 ### What it shows
 
-0.171.0 passed every check on all three systems and is the newest tested version. Versions between 0.170.0 and 0.171.0 were not run.
+0.171.0 passed every check on all three systems and became the newest tested version (until 0.172.0, below). Versions between 0.170.0 and 0.171.0 were not run.
 
 What CI cannot show: a Codex account's usage reading on 0.171.0 needs a signed-in account. 0.171.0's app-server schema was neither generated nor compared with 0.170.0's. The owner's test of the release checks the reading itself.
+
+## Then 0.172.0 (2.1.3-beta.19, aicc_planning#436)
+
+2.1.3-beta.19 raised `CODEX_MAX_TESTED_VERSION` from 0.171.0 to 0.172.0, on the code of its section 4, which reads the footer Codex 0.170.0 and 0.172.0 wrap onto two rows. The minimum and the pinned version did not move.
+
+### The run
+
+A `workflow_dispatch` run of `ci.yml` on the branch `fix/codex-two-row-footer` at cefc6d155bf8f154dba6be7341dc23e3672c039f (the section's frozen head), on 2026-11-26, with `codex_rc_version` 0.172.0 and `claude_rc_version` 2.1.332, attempt 1, no failed leg. Command: `gh workflow run ci.yml --ref fix/codex-two-row-footer -f codex_rc_version=0.172.0 -f claude_rc_version=2.1.332`. The decision line was the one above.
+
+| Run | OS | Version class | Version | Job | Detection | Flags | Model list | Features | Help | Flag-drift suite | Own home untouched |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| CI run 45756034358 (conclusion success) | Windows (win32-x64) | rc | 0.172.0 | 139694754254 | Both cases found, version 0.172.0, too-new under the range at that commit (up to 0.171.0); `codex.cmd` by PATH | Every flag defined, each in its subcommand help | 11 ids, the same as 0.171.0's in the same order; covered by the registry; no recorded list for 0.172.0 | 225 listed; the 14 the analysis turns off all named; the review, analysis and Insights runs' settings load | 15 captured; 0 differ | 5 passed | Yes |
+| CI run 45756034358 | macOS (darwin-arm64) | rc | 0.172.0 | 139694754092 | Both cases found, version 0.172.0; `codex.js` by PATH | Every flag defined | The same 11 ids; covered; no recorded list | 225 listed; the 14 all named; settings load | 15 captured; 0 differ | 5 passed | Yes |
+| CI run 45756034358 | Linux (linux-x64) | rc | 0.172.0 | 139694754081 | Both cases found, version 0.172.0; `codex.js` by PATH | Every flag defined | The same 11 ids; covered; no recorded list | 225 listed; the 14 all named; settings load | 15 captured; 0 differ | 5 passed | Yes |
+| CI run 45756034358 | Windows / macOS / Linux | minimum / pinned | 0.153.4 / 0.155.1 | 139694753979 / 139694754109; 139694754545 / 139694754102; 139694754219 / 139694754043 | Every step green, except one: on the pinned Windows leg (job 139694754109) the flag-drift suite did not run (6 skipped); the same leg ran it (5 passed) in the two earlier runs on this branch | | | | | | |
+
+The same run's Claude Code legs, 2.1.278 (minimum) and 2.1.332 (rc), on Windows, macOS and Linux, passed 4 of 4 each.
+
+### What it shows
+
+0.172.0 passed every check on all three systems and is the newest tested version. Versions between 0.171.0 and 0.172.0 were not run. The pinned Windows leg's skipped flag-drift suite is not a 0.172.0 check: the Windows rc leg ran the same suite on 0.172.0, 5 passed.
+
+What CI cannot show: a Codex account's usage reading on 0.172.0 needs a signed-in account. 0.172.0's app-server schema was neither generated nor compared with 0.171.0's. The owner's test of the release checks the reading itself.
