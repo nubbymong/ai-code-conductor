@@ -20,7 +20,7 @@ Plan 2.1.3-beta.19, section 5 (aicc_planning#435). Base: origin/beta at cc36c7f3
 - **Held by a test.** `tests/unit/renderer/screenshot-menu-removed.test.ts` reads `src` as text:
   no "storyboard" in code, strings or JSX text (comments and `changelog.ts` history aside), no
   trace of the list-recent chain, the menu and its helper gone.
-- **Not done, named.** Three more renderer components have no importer: `DebugPanel.tsx`,
-  `github/sections/AgentIntentSection.tsx` and `logs/ChatTranscript.tsx`; a fourth,
-  `SessionDialog/ProviderSegmentedControl.tsx`, is rendered only by its test. They are not this
-  ticket's chain and are left for the orchestrator to place.
+- **Not done, named.** Two more renderer components have no importer: `DebugPanel.tsx` and
+  `github/sections/AgentIntentSection.tsx`; two more, `logs/ChatTranscript.tsx` and
+  `SessionDialog/ProviderSegmentedControl.tsx`, are rendered only by their tests. They are not
+  this ticket's chain and are left for the orchestrator to place.
