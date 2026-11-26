@@ -56,7 +56,11 @@
  * asks list mode: one that runs until it is ended is attached to (its replay,
  * its newest status and its queued hook events, once), and nothing is
  * launched; a clock holder an earlier run left is ended first, as before. The
- * host reads run again at such an attach.
+ * host reads and the account field read (./host-reads.ts readHostForStart)
+ * run again at such an attach, so its label and the source of its weekly bars
+ * are set again (section 1.1's contract). The hold's record says the kind it
+ * started (protocol.ts readRecord); a holder of the other kind than the tab
+ * asked for is ended at once, and nothing is launched.
  *
  * Its status line, hook events and tools (2.1.3-beta.18 section 3.2): the
  * tab's connections ack `status`, `hooks` and `mcp`, and ./signals.ts routes
@@ -64,10 +68,12 @@
  * the session signals module (attention, the canvas turn boundary, the
  * Watchdog), each tool stream to the tool host as the tab's session, with no
  * credential, the tool set an SSH tab has (the image fetch tool an image
- * paste and Snap use included). What such a tab
- * does not have in this preview: the account label, the per-model weekly
- * buckets and extra usage on its status line (the helper reads no credential
- * and calls no network). Prompt buttons and broadcast type into it by the
+ * paste and Snap use included). Its account label comes from the account
+ * field each start reads on the host (./host-reads.ts readHostForStart), and
+ * its per-model weekly buckets and extra usage from this computer's own usage
+ * reading of that account, through the usage source its provider package
+ * hands (statusline-watcher.ts setHelperAccount); the helper reads no
+ * credential and calls no network. Prompt buttons and broadcast type into it by the
  * usual rule for a Claude Code tab.
  *
  * This file imports nothing of Electron.
