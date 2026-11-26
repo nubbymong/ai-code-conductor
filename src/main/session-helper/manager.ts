@@ -1913,7 +1913,7 @@ export class SessionHelperManager implements MachinesSource {
    */
   private async endUntilGone(record: HolderRecord): Promise<boolean> {
     const sid = record.session
-    const until = this.deps.now() + Math.min(record.away * 1000, AGENT_CLEAR_AWAY_CAP_MS) + AGENT_CLEAR_GRACE_MS
+    const until = this.deps.now() + (record.away === null ? AGENT_CLEAR_AWAY_CAP_MS : Math.min(record.away * 1000, AGENT_CLEAR_AWAY_CAP_MS)) + AGENT_CLEAR_GRACE_MS
     let said = false
     for (;;) {
       try {

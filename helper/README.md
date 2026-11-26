@@ -33,8 +33,9 @@ build are in `docs/remote/helper-threat-model.md` 3.10.
 | Holder | `src/holder.rs` | Holds one terminal and child; attach, detach, re-attach with replay; the newest attach replaces the older; ends the whole process tree |
 | Screen | `src/screen.rs` | The session's screen (from 2.1.3-beta.12): every byte of output after the ring, at the session's size with 200 lines of scrollback, through the `vt100` crate with a CSI parameter cut to 9999 first; read as the app's readers read xterm.js. `screen.read` and `screen.tail` answer from it, read-only, to a connection that acked `screen` (from 2.1.3-beta.13 a plain terminal's take-over asks `screen.read` once, for the holder's size; from 2.1.3-beta.14 a held Codex session's composer rule reads `screen.read`; nothing else in the app asks yet). It keeps the window title the output last set (OSC 0 or 2; from 2.1.3-beta.15 the first C1 control in the string ends it at U+009C and drops it at any other, as xterm.js does; the other control characters dropped; bounded), which `screen.read` answers only to a connection that acked `title` too (from 2.1.3-beta.14; a held Codex session's connections ask for it) |
 | Local transport | `src/transport/` | One endpoint per holder that only this user can reach: a named pipe on Windows, a Unix socket in a private folder elsewhere |
-| Holder process | `src/serve.rs`, `src/request.rs`, `src/detach.rs` | `hold`: the hello, the `term.*` messages, the away clock; started detached so it outlives the app |
-| Records and list | `src/store.rs`, `src/client.rs`, `src/pids.rs` | Each holder's record in the store folder; `list` finds every session and removes stale records |
+| Holder process | `src/serve.rs`, `src/request.rs`, `src/detach.rs` | `hold`: the hello, the `term.*` messages, the away clock, or none with `--until-ended` (from 2.1.3-beta.19); started detached so it outlives the app; on macOS and Linux it marks its socket and folder as used every hour and binds its socket again if a cleaner of /tmp takes it |
+| Records and list | `src/store.rs`, `src/client.rs`, `src/pids.rs` | Each holder's record in the store folder, in one of two shapes (a clock holder's, or an until-ended holder's); `list` finds every session and removes stale records |
+| Field mode | `src/field.rs` | macOS and Linux (from 2.1.3-beta.19). `field`: one string from a JSON file in the user's home folder, the file and the key given by the app's provider package, or nothing; exit 0 either way |
 | Start and end mode | `src/start.rs`, `src/winproc.rs` | Windows only. `start`: one program, by a drive-absolute path (never searched for, never a batch file), with no inherited handles, created suspended until its creation time is read; prints its pid and creation time and exits. `end`: ends that program and the processes under it, only while its pid still has that creation time, holding it open from the check to the end; prints `ended` or `left`. The app starts and ends the vision browser this way |
 | Console hosts | `src/consoles.rs` | Windows only. `console-hosts`: at the app's start, ends the console hosts the run before left when it was ended from outside (only that run's, by parent, creation time, user and program file), and names the process that started it for the app to record. `end-console-host` (from 2.1.3-beta.14): while the app runs, ends each console host of its terminals on Windows' own ConPTY that was made in the time it is given, is 6 s old or more, and is the console host of no running process. Each holds a host open from its check to its end |
 | Capture mode | `src/capture.rs` | Windows only (from 2.1.3-beta.14; macOS and Linux exit 4, not supported). `capture --out <folder>`: one 32-bit BMP of each whole display in physical pixels, each file made new, and one JSON line of each display's bounds and scale; exit 3 when it cannot see the screen (an SSH session, a locked screen). For Snap (ADR-030 D3, D4): from 2.1.3-beta.16 the app runs it for the new Snap on Windows, the default (`src/main/snap/`), with a 2 s bound; probe P21 measured it first |
@@ -58,8 +59,9 @@ app side for This computer is in `src/main/session-helper/`.
 aicc-helper version
 aicc-helper hello --nonce <32 hex> --session <sid> [--state new] [--sha256 <64 hex>]
 aicc-helper selftest [--nonce <32 hex>]
-aicc-helper hold --store <folder> --session <sid> [--label <text>] [--away <seconds>] [--ring-bytes <n>] [--detach]
+aicc-helper hold --store <folder> --session <sid> [--label <text>] [--away <seconds> | --until-ended] [--ring-bytes <n>] [--detach]
 aicc-helper list --store <folder>
+aicc-helper field --file <path under home> --key <dotted key>      (macOS and Linux)
 aicc-helper hook [--store <folder>] [--session <sid>]               (each left out: AICC_HELPER_STORE, AICC_HELPER_SESSION)
 aicc-helper status [--store <folder>] [--session <sid>]             (the same)
 aicc-helper mcp --store <folder> --session <sid>
@@ -73,8 +75,20 @@ aicc-helper capture --out <folder>                                 (Windows only
 
 `hold --detach` prints the holder's record as one JSON line once the holder
 listens; the app then connects to the record's endpoint, launches the program
-with `term.launch` and attaches with `term.attach`. `list` prints every session
-in the store, as protocol section 15 describes. `hook` is a CLI's command
+with `term.launch` and attaches with `term.attach`. With `--until-ended`
+(from 2.1.3-beta.19; not with `--away`) the holder has no away clock: with
+nobody attached it ends once its program has exited (before its first launch,
+after the default 120 s), at `term.end`, or with the machine; its record has
+`"away":null` and `"lifetime":"until-ended"` after it, and a clock holder's
+record is as before. `list` prints every session in the store, as protocol
+section 15 describes, an until-ended one with its `lifetime`. `field` (macOS
+and Linux, from 2.1.3-beta.19) prints the string at `--key` (object members
+named from the top, separated by dots) of the JSON file `--file` names, a
+path relative to `HOME` or absolute inside it, and one line end; or nothing.
+It follows a link, then reads only a regular file of the user's own of at most
+5 MiB, and prints only a string of 1 to 1024 bytes with no control
+character. It exits 0 either way, 2 on a command line it does not take, and
+prints nothing on Windows (`src/field.rs`). `hook` is a CLI's command
 hook: it passes the event on its standard input to the session's holder,
 always exits 0 and prints nothing (from 2.1.3-beta.8 a held Claude Code session
 runs it, behind the agent sessions' switch with the HTTP Hooks Gateway on). Its
@@ -92,8 +106,9 @@ is a tool server a CLI starts: standard output carries only the messages its
 stream brings and the answers it gives in the app's place while the app is away,
 and it exits 0 only when its standard input ends (from 2.1.3-beta.11 a held
 session's CLI starts it, behind the agent sessions' switch). In the debug build
-`cargo test` runs, a held call waits 4 s instead of 30 s, so the tests can wait
-one out. `bridge` (macOS and Linux, from 2.1.3-beta.17) carries one
+`cargo test` runs, a held call waits 4 s instead of 30 s, and a holder marks
+its socket and folder as used every 2 s instead of every hour, so the tests
+can wait one out. `bridge` (macOS and Linux, from 2.1.3-beta.17) carries one
 connection to a session's holder over its own standard input and output,
 byte for byte, so the app reaches a holder on another machine through one
 `ssh -T` exec and speaks the protocol to it end to end; it never reads or

@@ -8,7 +8,22 @@
 //! types, resizes, detaches, and ends it. The holder exits when the session is
 //! ended, or when the away clock runs out: `away` seconds with no connection
 //! attached to the terminal, counted from the holder's start and from every
-//! detach or dropped connection. Ending ends the whole process tree.
+//! detach or dropped connection. A holder that runs until it is ended
+//! (`hold --until-ended`, from 2.1.3-beta.19, `store::Lifetime`) has no away
+//! clock: with nobody attached it exits once its program has exited, and
+//! before its first launch as a holder of the default clock does
+//! (`due_to_end`). Every clock is monotonic (`Instant`), never the wall
+//! clock. Ending ends the whole process tree.
+//!
+//! The endpoint (macOS and Linux): the holder marks its socket and folder as
+//! used every `TOUCH_EVERY`, so a cleaner of old files in /tmp passes them
+//! by, and if one is taken all the same (a sweep, a removal by hand) it binds
+//! the same endpoint again on the clock's next tick, making the run folder
+//! again with its checks (`transport::prepare_run_dir`), and writes its record
+//! back if list mode removed it meanwhile (`keep_endpoint`). One it cannot bind
+//! (a file that is not its own in the way, a run folder of another user) is
+//! tried again on each tick; meanwhile a client's connect says why it cannot
+//! reach the holder (`transport::connect`).
 //!
 //! One thread ends the session: the first to set `State::ending`, which is
 //! set under the state lock only. The away clock decides under that lock as
@@ -116,7 +131,7 @@ use crate::pty::SpawnOptions;
 use crate::request::{self, Allowed, Launch, Refusal, Request, MAX_MCP_TO_APP};
 use crate::ring::RingError;
 use crate::screen;
-use crate::store::{self, Record};
+use crate::store::{self, Lifetime, Record};
 use crate::transport::{self, Listener, Stream};
 use std::collections::VecDeque;
 use std::io::{self, Read};
@@ -183,8 +198,15 @@ pub const MAX_JSON_BEFORE_ACK: usize = 4096;
 pub const MAX_JSON_AFTER_LAUNCH: usize = 65_536;
 /// How often the away clock and the record are looked at.
 const TICK: Duration = Duration::from_millis(250);
-/// How often the Unix socket and its folder are marked as used.
-const TOUCH_EVERY: Duration = Duration::from_secs(3600);
+/// How often the Unix socket and its folder are marked as used, in the build
+/// the installer ships: a cleaner of /tmp (systemd-tmpfiles takes entries
+/// untouched for 10 days on Debian) never finds them old.
+pub const TOUCH_EVERY_RELEASE: Duration = Duration::from_secs(3600);
+/// The same in a build with debug assertions, the one `cargo test` runs, so
+/// a test can wait one out.
+pub const TOUCH_EVERY_TEST: Duration = Duration::from_secs(2);
+/// How often the Unix socket and its folder are marked as used in this build.
+pub const TOUCH_EVERY: Duration = if cfg!(debug_assertions) { TOUCH_EVERY_TEST } else { TOUCH_EVERY_RELEASE };
 /// How long an end waits for a launch in progress to put its holder in place.
 const LAUNCH_WAIT: Duration = Duration::from_secs(30);
 
@@ -192,8 +214,27 @@ pub struct Options {
     pub store: PathBuf,
     pub sid: String,
     pub label: String,
-    pub away: Duration,
+    /// The away clock, or none (`hold --until-ended`).
+    pub lifetime: Lifetime,
     pub ring_bytes: usize,
+}
+
+/// Whether a holder nobody is attached to, and that is not launching, ends
+/// now (protocol section 15). `away_for` is how long nobody has been
+/// attached, read from the monotonic clock (`Instant`): a board with no
+/// clock battery can have a wrong wall time until NTP syncs, and no record's
+/// wall time is read here. A clock holder ends once that reaches its away
+/// time. An until-ended holder has no away clock: it ends once its program
+/// has exited (`exited`); before its first launch (`launched` false), with no
+/// program yet to keep, it ends as a holder with the default clock
+/// (`store::DEFAULT_AWAY_SECS`) does.
+pub fn due_to_end(lifetime: Lifetime, away_for: Option<Duration>, launched: bool, exited: bool) -> bool {
+    let after = |secs: u64| away_for.map_or(false, |t| t >= Duration::from_secs(secs));
+    match lifetime {
+        Lifetime::Away(secs) => after(secs),
+        Lifetime::UntilEnded if launched => exited,
+        Lifetime::UntilEnded => after(store::DEFAULT_AWAY_SECS),
+    }
 }
 
 /// The error `run` gives when a holder for the session is already running.
@@ -494,6 +535,12 @@ struct Serve {
     opts: Options,
     nonce: String,
     listener: Listener,
+    /// The socket bound again at the same endpoint once the first one's
+    /// file was taken (`keep_endpoint`, macOS and Linux): from then the one the
+    /// holder marks as used and removes at its end. Taken alone, never with
+    /// another lock held.
+    #[cfg(unix)]
+    rebound: Mutex<Option<Arc<Listener>>>,
     state: Mutex<State>,
     hooks: Mutex<Hooks>,
     tools: Mutex<Tools>,
@@ -1374,6 +1421,12 @@ impl Serve {
             store::remove(&self.opts.store, &self.opts.sid, std::process::id());
         }
         self.listener.remove();
+        #[cfg(unix)]
+        {
+            if let Some(l) = lock(&self.rebound).clone() {
+                l.remove();
+            }
+        }
         // Exiting closes every connection; each reads its last message first.
         let deadline = Instant::now() + transport::LINGER;
         for conn in &told {
@@ -1410,15 +1463,110 @@ impl Serve {
             }
             let expired = {
                 let mut st = lock(&self.state);
-                let away = st.away_since.map_or(false, |t| t.elapsed() >= self.opts.away);
-                away && st.attached.is_none() && !st.launching && self.claim_end(&mut st)
+                let launched = st.holder.is_some();
+                let exited = st.holder.as_ref().map_or(false, |h| h.exit_code().is_some());
+                let away_for = st.away_since.map(|t| t.elapsed());
+                st.attached.is_none() && !st.launching && due_to_end(self.opts.lifetime, away_for, launched, exited) && self.claim_end(&mut st)
             };
             if expired {
                 self.carry_out_end(None);
             }
+            #[cfg(unix)]
+            self.keep_endpoint();
             if last_touch.elapsed() >= TOUCH_EVERY {
-                self.listener.touch();
+                self.touch_endpoint();
                 last_touch = Instant::now();
+            }
+        }
+    }
+
+    /// Mark the endpoint as used now (`Listener::touch`): the socket bound
+    /// again, if there is one, else the first.
+    fn touch_endpoint(&self) {
+        #[cfg(unix)]
+        {
+            if let Some(l) = lock(&self.rebound).clone() {
+                l.touch();
+                return;
+            }
+        }
+        self.listener.touch();
+    }
+
+    /// Keep the endpoint this holder's (macOS and Linux): while its socket
+    /// file is the one bound, nothing; once it is gone (a cleaner of /tmp, a
+    /// removal by hand, its folder with it), bind the same endpoint again,
+    /// the run folder made again with its checks, take its connections on a
+    /// thread of its own, and write the record back if list mode removed it
+    /// meanwhile. The record names the same endpoint, so the app reaches the
+    /// holder as before. A bind that fails (a file that is not this holder's
+    /// in the way, a run folder of another user) is tried again on the next
+    /// tick.
+    #[cfg(unix)]
+    fn keep_endpoint(self: &Arc<Self>) {
+        let current = lock(&self.rebound).clone();
+        let bound = match &current {
+            Some(l) => l.still_bound(),
+            None => self.listener.still_bound(),
+        };
+        if bound || self.ending.load(Ordering::SeqCst) {
+            return;
+        }
+        let again = match Listener::bind_at(self.listener.endpoint()) {
+            Ok(l) => Arc::new(l),
+            Err(_) => return,
+        };
+        let serve = Arc::clone(self);
+        let on = Arc::clone(&again);
+        if thread::Builder::new().spawn(move || serve.accept_on(&on)).is_err() {
+            // No thread to take its connections: the socket goes with
+            // `again`, and the next tick tries again.
+            return;
+        }
+        // The socket it replaces keeps its thread, waiting on a file that
+        // is gone; nothing can reach it any more.
+        *lock(&self.rebound) = Some(again);
+        self.restore_record();
+    }
+
+    /// Write the record back if it is gone (list mode removes a record whose
+    /// socket it cannot find). Under the record's lock, then the store's (the
+    /// order an end takes them in); a record another holder wrote meanwhile
+    /// is left alone.
+    #[cfg(unix)]
+    fn restore_record(&self) {
+        let mut rec = lock(&self.record);
+        if self.ending.load(Ordering::SeqCst) {
+            return;
+        }
+        let _store = match store::lock(&self.opts.store) {
+            Ok(l) => l,
+            Err(_) => return,
+        };
+        if store::read(&self.opts.store, &self.opts.sid).is_none() {
+            rec.attached = lock(&self.state).attached.is_some();
+            let _ = store::write(&self.opts.store, &rec);
+        }
+    }
+
+    /// Take the connections that come on `listener`, each on a thread of
+    /// its own, for as long as the process runs.
+    fn accept_on(self: &Arc<Self>, listener: &Listener) -> ! {
+        loop {
+            match listener.accept() {
+                Ok(stream) => {
+                    if self.ending.load(Ordering::SeqCst) {
+                        continue;
+                    }
+                    let s = Arc::clone(self);
+                    // A connection no thread can be made for is closed (the
+                    // closure, and the stream in it, are dropped).
+                    if thread::Builder::new().spawn(move || s.serve_conn(stream)).is_err() {
+                        thread::sleep(Duration::from_millis(50));
+                    }
+                }
+                // A passing failure: wait a moment and listen again.
+                Err(_) => thread::sleep(Duration::from_millis(50)),
             }
         }
     }
@@ -1987,9 +2135,10 @@ pub fn run(opts: Options) -> io::Result<()> {
     if !store::valid_label(&opts.label) {
         return Err(invalid("the label is over 128 characters or holds a control character"));
     }
-    let away = opts.away.as_secs();
-    if !(1..=store::MAX_AWAY_SECS).contains(&away) {
-        return Err(invalid("away must be 1 to 86400 seconds"));
+    if let Lifetime::Away(away) = opts.lifetime {
+        if !(1..=store::MAX_AWAY_SECS).contains(&away) {
+            return Err(invalid("away must be 1 to 86400 seconds"));
+        }
     }
     store::prepare(&opts.store)?;
     // From the check to the written record under the store's lock: a second
@@ -2014,7 +2163,7 @@ pub fn run(opts: Options) -> io::Result<()> {
         nonce: nonce.clone(),
         helper: crate::VERSION.to_string(),
         started: store::now_ms(),
-        away,
+        lifetime: opts.lifetime,
         attached: false,
         child: "waiting".to_string(),
         code: None,
@@ -2025,6 +2174,8 @@ pub fn run(opts: Options) -> io::Result<()> {
         opts,
         nonce,
         listener,
+        #[cfg(unix)]
+        rebound: Mutex::new(None),
         state: Mutex::new(State {
             holder: None,
             launching: false,
@@ -2048,7 +2199,8 @@ pub fn run(opts: Options) -> io::Result<()> {
     });
     let clock = Arc::clone(&serve);
     if let Err(e) = thread::Builder::new().spawn(move || clock.clock()) {
-        // No away clock, no holder: its record goes, and its endpoint with
+        // No clock thread (the away clock, the exit, the endpoint), no
+        // holder: its record goes, and its endpoint with
         // the listener.
         store::remove(&serve.opts.store, &serve.opts.sid, std::process::id());
         return Err(e);
@@ -2059,23 +2211,7 @@ pub fn run(opts: Options) -> io::Result<()> {
         store::remove(&serve.opts.store, &serve.opts.sid, std::process::id());
         return Err(e);
     }
-    loop {
-        match serve.listener.accept() {
-            Ok(stream) => {
-                if serve.ending.load(Ordering::SeqCst) {
-                    continue;
-                }
-                let s = Arc::clone(&serve);
-                // A connection no thread can be made for is closed (the
-                // closure, and the stream in it, are dropped).
-                if thread::Builder::new().spawn(move || s.serve_conn(stream)).is_err() {
-                    thread::sleep(Duration::from_millis(50));
-                }
-            }
-            // A passing failure: wait a moment and listen again.
-            Err(_) => thread::sleep(Duration::from_millis(50)),
-        }
-    }
+    serve.accept_on(&serve.listener)
 }
 
 #[cfg(test)]
@@ -2415,11 +2551,43 @@ mod tests {
             nonce: String::new(),
             helper: "0.1.0".to_string(),
             started: 0,
-            away: 120,
+            lifetime: Lifetime::Away(120),
             attached: false,
             child: child.to_string(),
             code,
         }
+    }
+
+    /// The clock's decision (`due_to_end`): a clock holder ends at its away
+    /// time and not before; an until-ended holder never ends by time once
+    /// launched, however long nobody is attached (30 days here), and ends
+    /// once its program has exited; before its first launch it ends at the
+    /// default clock's time. Monotonic durations only.
+    #[test]
+    fn an_until_ended_holder_ends_with_its_program_and_never_by_time() {
+        let secs = Duration::from_secs;
+        let month = Some(secs(30 * 24 * 3600));
+        // A clock holder.
+        assert!(!due_to_end(Lifetime::Away(3), None, true, false), "attached a moment ago");
+        assert!(!due_to_end(Lifetime::Away(3), Some(secs(2)), true, false));
+        assert!(due_to_end(Lifetime::Away(3), Some(secs(3)), true, false));
+        assert!(due_to_end(Lifetime::Away(3), Some(secs(3)), false, false), "a clock holder never launched");
+        assert!(!due_to_end(Lifetime::Away(120), Some(secs(5)), true, true), "a clock holder waits for the app after its program exits");
+        // An until-ended holder, launched: never by time, at once after its program.
+        assert!(!due_to_end(Lifetime::UntilEnded, month, true, false), "an until-ended holder ran out like a clock holder");
+        assert!(!due_to_end(Lifetime::UntilEnded, Some(secs(store::MAX_AWAY_SECS + 1)), true, false));
+        assert!(due_to_end(Lifetime::UntilEnded, Some(Duration::ZERO), true, true), "an until-ended holder outlived its program");
+        assert!(due_to_end(Lifetime::UntilEnded, month, true, true));
+        // Not launched yet: the default clock.
+        assert!(!due_to_end(Lifetime::UntilEnded, Some(secs(store::DEFAULT_AWAY_SECS - 1)), false, false));
+        assert!(due_to_end(Lifetime::UntilEnded, Some(secs(store::DEFAULT_AWAY_SECS)), false, false));
+    }
+
+    #[test]
+    fn a_test_build_touches_the_endpoint_every_2_s_and_the_shipped_build_every_hour() {
+        assert_eq!(TOUCH_EVERY_RELEASE, Duration::from_secs(3600));
+        assert_eq!(TOUCH_EVERY_TEST, Duration::from_secs(2));
+        assert_eq!(TOUCH_EVERY, TOUCH_EVERY_TEST, "the tests run a build with debug assertions");
     }
 
     #[test]

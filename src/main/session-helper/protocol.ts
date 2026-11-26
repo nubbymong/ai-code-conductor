@@ -91,7 +91,13 @@ export const LABEL_MAX_CHARS = 128
 export const AWAY_MAX_SECS = 86400
 export const ENDPOINT_RANDOM_HEX: Record<HelperOs, number> = { windows: 32, unix: 16 }
 
+/** A holder's record with an away clock: today's fields (section 15). */
 export const RECORD_FIELDS = ['v', 'session', 'label', 'pid', 'endpoint', 'nonce', 'helper', 'started', 'away', 'attached', 'child', 'code'] as const
+/** The record of a holder that runs until it is ended (`hold --until-ended`,
+ *  from 2.1.3-beta.19): the same fields with `lifetime` after `away`, which
+ *  is null; `lifetime` has one value (helper/src/store.rs). */
+export const UNTIL_ENDED_RECORD_FIELDS = ['v', 'session', 'label', 'pid', 'endpoint', 'nonce', 'helper', 'started', 'away', 'lifetime', 'attached', 'child', 'code'] as const
+export const UNTIL_ENDED = 'until-ended'
 export const CHILD_STATES = ['waiting', 'running', 'exited'] as const
 export type ChildState = (typeof CHILD_STATES)[number]
 
@@ -640,7 +646,7 @@ export function endpointUid(endpoint: string): number | null {
   return m ? Number(m[1]) : null
 }
 
-export interface HolderRecord {
+interface HolderRecordFields {
   v: 1
   session: string
   label: string
@@ -649,18 +655,37 @@ export interface HolderRecord {
   nonce: string
   helper: string
   started: number
-  away: number
   attached: boolean
   child: ChildState
   code: number | null
 }
 
-/** A holder's record, read strictly (section 15): exactly its fields, each of
- *  its type and in range, and an endpoint of its own session. Null otherwise. */
+/** A holder with an away clock: today's record (`away` in seconds). */
+export interface ClockHolderRecord extends HolderRecordFields {
+  away: number
+  lifetime?: undefined
+}
+
+/** A holder that runs until it is ended (from 2.1.3-beta.19): no away clock.
+ *  It ends with its program, at `term.end`, or with the machine. */
+export interface UntilEndedHolderRecord extends HolderRecordFields {
+  away: null
+  lifetime: typeof UNTIL_ENDED
+}
+
+export type HolderRecord = ClockHolderRecord | UntilEndedHolderRecord
+
+/** A holder's record, read strictly (section 15): exactly the fields of one
+ *  of its two shapes (a clock holder's, or an until-ended holder's with
+ *  `away` null and `lifetime` "until-ended"), each of its type and in range,
+ *  and an endpoint of its own session. Null otherwise, any other mix of the
+ *  two shapes included. */
 export function readRecord(value: unknown, os: HelperOs): HolderRecord | null {
   if (!isObject(value)) return null
   const keys = Object.keys(value)
-  if (keys.length !== RECORD_FIELDS.length || !RECORD_FIELDS.every((k) => keys.includes(k))) return null
+  const untilEnded = keys.includes('lifetime')
+  const fields: readonly string[] = untilEnded ? UNTIL_ENDED_RECORD_FIELDS : RECORD_FIELDS
+  if (keys.length !== fields.length || !fields.every((k) => keys.includes(k))) return null
   const r = value
   if (r.v !== 1) return null
   if (typeof r.session !== 'string' || !SID_RE.test(r.session)) return null
@@ -670,7 +695,9 @@ export function readRecord(value: unknown, os: HelperOs): HolderRecord | null {
   if (typeof r.nonce !== 'string' || !NONCE_RE.test(r.nonce)) return null
   if (typeof r.helper !== 'string' || r.helper.length === 0 || chars(r.helper) > 64 || CONTROL.test(r.helper)) return null
   if (!isWhole(r.started)) return null
-  if (!Number.isInteger(r.away) || (r.away as number) < 1 || (r.away as number) > AWAY_MAX_SECS) return null
+  if (untilEnded) {
+    if (r.lifetime !== UNTIL_ENDED || r.away !== null) return null
+  } else if (!Number.isInteger(r.away) || (r.away as number) < 1 || (r.away as number) > AWAY_MAX_SECS) return null
   if (typeof r.attached !== 'boolean') return null
   if (typeof r.child !== 'string' || !(CHILD_STATES as readonly string[]).includes(r.child)) return null
   if (r.child === 'exited') {

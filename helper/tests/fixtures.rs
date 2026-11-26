@@ -725,6 +725,13 @@ fn records_and_listings_read_strictly_and_re_encode_to_the_same_bytes() {
     let first = items(records, "valid").iter().find(|c| applies(c)).expect("a valid record here");
     let rec = Record::from_value(first.get("record").expect("record")).expect("reads");
     assert_eq!(rec.to_value().keys().expect("an object"), fields);
+    // A record of a holder that runs until it is ended (from 2.1.3-beta.19):
+    // the same fields with `lifetime` after `away`, in that order.
+    let until_ended: Vec<&str> = items(&doc, "until_ended_record_fields").iter().map(|f| f.as_str().expect("field")).collect();
+    let held = items(records, "valid").iter().filter(|c| applies(c)).find(|c| c.get("record").and_then(|r| r.get("lifetime")).is_some()).expect("an until-ended record here");
+    let rec = Record::from_value(held.get("record").expect("record")).expect("reads");
+    assert_eq!(rec.lifetime, store::Lifetime::UntilEnded);
+    assert_eq!(rec.to_value().keys().expect("an object"), until_ended);
     let states: Vec<&str> = items(&doc, "child_states").iter().map(|s| s.as_str().expect("state")).collect();
     assert_eq!(states, store::CHILD_STATES.to_vec());
 }

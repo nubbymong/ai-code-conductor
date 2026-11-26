@@ -7,6 +7,13 @@
 //! record 0600. The format carries its own version (`v`); a file that is not
 //! a version 1 record is never removed by list mode, only counted as skipped.
 //!
+//! A record has one of two shapes, by its holder's lifetime (`Lifetime`). A
+//! holder with an away clock writes the twelve fields it always has, byte for
+//! byte (so 2.1.3-beta.18 and earlier still read it). A holder that runs
+//! until it is ended (`hold --until-ended`, from 2.1.3-beta.19, protocol
+//! change 14) has no away clock: its `away` is null and it adds
+//! `"lifetime":"until-ended"` right after it. Any other mix does not read.
+//!
 //! The store's lock file (`.lock`, never removed) is held, with the OS's own
 //! file lock, while a holder checks for a live holder of its session and
 //! writes its record, while list mode removes a stale record, and while a
@@ -36,6 +43,25 @@ pub const LOCK_FILE: &str = ".lock";
 pub const LOCK_WAIT: Duration = Duration::from_secs(10);
 
 const FIELDS: [&str; 12] = ["v", "session", "label", "pid", "endpoint", "nonce", "helper", "started", "away", "attached", "child", "code"];
+/// An until-ended holder's record: the same fields with `lifetime` after
+/// `away` (from 2.1.3-beta.19).
+const UNTIL_ENDED_FIELDS: [&str; 13] = ["v", "session", "label", "pid", "endpoint", "nonce", "helper", "started", "away", "lifetime", "attached", "child", "code"];
+/// The field an until-ended holder's record adds, and its one value.
+pub const LIFETIME_FIELD: &str = "lifetime";
+pub const UNTIL_ENDED: &str = "until-ended";
+
+/// How long a holder runs once nobody is attached to it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Lifetime {
+    /// The away clock, in seconds (1 to `MAX_AWAY_SECS`): the holder ends
+    /// once nobody has been attached for that long.
+    Away(u64),
+    /// No away clock (`hold --until-ended`, from 2.1.3-beta.19): the holder
+    /// ends with its program, at `term.end`, or with the machine. Before its
+    /// first launch, with no program yet to keep, it ends as a holder with
+    /// the default clock does (`serve::due_to_end`).
+    UntilEnded,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Record {
@@ -48,10 +74,12 @@ pub struct Record {
     pub nonce: String,
     /// The helper's version.
     pub helper: String,
-    /// When the holder started, in milliseconds since 1970 (UTC).
+    /// When the holder started, in milliseconds since 1970 (UTC), by the
+    /// wall clock. Nothing that ends a holder or removes its record reads it
+    /// alone (`holder_gone`; the away clock is monotonic, `serve.rs`).
     pub started: u64,
-    /// The away clock, in seconds.
-    pub away: u64,
+    /// The away clock, or none (`away` and `lifetime` in the record).
+    pub lifetime: Lifetime,
     pub attached: bool,
     pub child: String,
     /// The first process's exit code, once `child` is `exited`.
@@ -70,7 +98,7 @@ pub fn now_ms() -> u64 {
 
 impl Record {
     pub fn to_value(&self) -> Value {
-        Value::obj(vec![
+        let mut members = vec![
             ("v", Value::uint(RECORD_VERSION)),
             ("session", Value::str(&self.session)),
             ("label", Value::str(&self.label)),
@@ -79,25 +107,37 @@ impl Record {
             ("nonce", Value::str(&self.nonce)),
             ("helper", Value::str(&self.helper)),
             ("started", Value::uint(self.started)),
-            ("away", Value::uint(self.away)),
-            ("attached", Value::Bool(self.attached)),
-            ("child", Value::str(&self.child)),
-            ("code", match self.code {
+        ];
+        match self.lifetime {
+            Lifetime::Away(secs) => members.push(("away", Value::uint(secs))),
+            Lifetime::UntilEnded => {
+                members.push(("away", Value::Null));
+                members.push((LIFETIME_FIELD, Value::str(UNTIL_ENDED)));
+            }
+        }
+        members.push(("attached", Value::Bool(self.attached)));
+        members.push(("child", Value::str(&self.child)));
+        members.push((
+            "code",
+            match self.code {
                 Some(c) => Value::Num(c.to_string()),
                 None => Value::Null,
-            }),
-        ])
+            },
+        ));
+        Value::obj(members)
     }
 
     pub fn to_json(&self) -> String {
         self.to_value().to_json()
     }
 
-    /// Read a version 1 record strictly: every field present once, of its
-    /// type and in its range, and nothing else.
+    /// Read a version 1 record strictly: every field of one of its two
+    /// shapes present once, of its type and in its range, and nothing else.
     pub fn from_value(v: &Value) -> Result<Record, String> {
         let keys = v.keys().ok_or("not an object")?;
-        if keys.len() != FIELDS.len() || FIELDS.iter().any(|f| keys.iter().filter(|k| *k == f).count() != 1) {
+        let until_ended = keys.contains(&LIFETIME_FIELD);
+        let fields: &[&str] = if until_ended { &UNTIL_ENDED_FIELDS } else { &FIELDS };
+        if keys.len() != fields.len() || fields.iter().any(|f| keys.iter().filter(|k| *k == f).count() != 1) {
             return Err("the fields are not exactly the version 1 set".to_string());
         }
         if v.get("v").and_then(Value::as_u64) != Some(RECORD_VERSION) {
@@ -132,9 +172,19 @@ impl Record {
             Some(s) if s <= crate::request::MAX_SAFE_INTEGER => s,
             _ => return Err("started is not a time".to_string()),
         };
-        let away = match v.get("away").and_then(Value::as_u64) {
-            Some(a) if (1..=MAX_AWAY_SECS).contains(&a) => a,
-            _ => return Err("away is not 1 to 86400 seconds".to_string()),
+        let lifetime = if until_ended {
+            if v.get(LIFETIME_FIELD).and_then(Value::as_str) != Some(UNTIL_ENDED) {
+                return Err("lifetime is not until-ended".to_string());
+            }
+            if v.get("away") != Some(&Value::Null) {
+                return Err("an until-ended holder's away is not null".to_string());
+            }
+            Lifetime::UntilEnded
+        } else {
+            match v.get("away").and_then(Value::as_u64) {
+                Some(a) if (1..=MAX_AWAY_SECS).contains(&a) => Lifetime::Away(a),
+                _ => return Err("away is not 1 to 86400 seconds".to_string()),
+            }
         };
         let attached = v.get("attached").and_then(Value::as_bool).ok_or("attached is not true or false")?;
         let child = text("child")?;
@@ -149,7 +199,7 @@ impl Record {
             },
             _ => return Err("code must be null until the child exited, and a number after".to_string()),
         };
-        Ok(Record { session, label, pid, endpoint, nonce, helper, started, away, attached, child, code })
+        Ok(Record { session, label, pid, endpoint, nonce, helper, started, lifetime, attached, child, code })
     }
 }
 
@@ -443,7 +493,7 @@ mod tests {
             nonce: "0123456789abcdef0123456789abcdef".to_string(),
             helper: "0.1.0".to_string(),
             started: 1_763_251_200_000,
-            away: 120,
+            lifetime: Lifetime::Away(120),
             attached: false,
             child: "running".to_string(),
             code: None,
@@ -480,6 +530,72 @@ mod tests {
         let mut no_code = exited.to_json();
         no_code = no_code.replace("\"code\":-1073741510", "\"code\":null");
         assert!(Record::from_value(&json::parse(no_code.as_bytes()).unwrap()).is_err(), "exited without a code");
+    }
+
+    /// A holder with an away clock writes today's record, byte for byte: the
+    /// twelve fields in their order and nothing more, so a rollback to
+    /// 2.1.3-beta.18 still reads it.
+    #[test]
+    fn a_clock_record_keeps_todays_fields_byte_for_byte() {
+        let r = sample("store-0004");
+        let endpoint = r.endpoint.clone();
+        let want = format!(
+            "{{\"v\":1,\"session\":\"store-0004\",\"label\":\"Terminal 1\",\"pid\":{},\"endpoint\":{},\"nonce\":\"0123456789abcdef0123456789abcdef\",\"helper\":\"0.1.0\",\"started\":1763251200000,\"away\":120,\"attached\":false,\"child\":\"running\",\"code\":null}}",
+            r.pid,
+            Value::Str(endpoint).to_json()
+        );
+        assert_eq!(r.to_json(), want);
+        assert_eq!(r.to_value().keys().expect("an object"), FIELDS.to_vec());
+        assert!(r.to_value().get(LIFETIME_FIELD).is_none(), "a clock record carries the until-ended field");
+    }
+
+    /// An until-ended holder's record: `away` null and `lifetime` after it.
+    /// It reads back as written; every other mix of the two shapes does not.
+    #[test]
+    fn an_until_ended_record_reads_and_every_other_mix_is_refused() {
+        let mut r = sample("store-0005");
+        r.lifetime = Lifetime::UntilEnded;
+        let text = r.to_json();
+        assert!(text.contains("\"started\":1763251200000,\"away\":null,\"lifetime\":\"until-ended\",\"attached\":false,"), "{text}");
+        assert_eq!(r.to_value().keys().expect("an object"), UNTIL_ENDED_FIELDS.to_vec());
+        assert_eq!(Record::from_value(&json::parse(text.as_bytes()).unwrap()).unwrap(), r);
+        let clock = sample("store-0005").to_json();
+        for (what, change) in [
+            ("an away clock beside the until-ended field", text.replace("\"away\":null", "\"away\":120")),
+            ("no away clock and no until-ended field", clock.replace("\"away\":120", "\"away\":null")),
+            ("another lifetime", text.replace("\"until-ended\"", "\"clock\"")),
+            ("a lifetime that is not a string", text.replace("\"until-ended\"", "1")),
+            ("the until-ended field beside an away clock of 0", text.replace("\"away\":null", "\"away\":0")),
+            ("the until-ended field with no away", text.replace("\"away\":null,", "")),
+            ("the until-ended field twice", text.replace("\"lifetime\":\"until-ended\"", "\"lifetime\":\"until-ended\",\"lifetime\":\"until-ended\"")),
+            ("a lifetime on a clock record", clock.replace("\"away\":120", "\"away\":120,\"lifetime\":\"until-ended\"")),
+        ] {
+            let v = json::parse(change.as_bytes()).unwrap();
+            assert!(Record::from_value(&v).is_err(), "{what}: {change}");
+        }
+        // A listing holds either shape.
+        let listing = Listing { sessions: vec![sample("store-0006"), r.clone()], removed: 0, skipped: 0 };
+        assert_eq!(Listing::from_value(&json::parse(listing.to_json().as_bytes()).unwrap()).unwrap(), listing);
+    }
+
+    /// A board with no clock battery (most Raspberry Pis) can have a wrong
+    /// wall time until NTP syncs: a record written then may be years behind
+    /// or ahead. A holder that answers is never gone for its record's time,
+    /// on any OS; and on Linux, which reads no start time, a record whose
+    /// endpoint gives no clear answer is kept whatever its time.
+    #[test]
+    fn a_records_wall_time_alone_never_makes_a_live_holder_gone() {
+        let mut behind = sample("store-time-01");
+        behind.started = 0;
+        let mut ahead = sample("store-time-02");
+        // Ten years ahead.
+        ahead.started = now_ms() + 315_360_000_000;
+        for r in [&behind, &ahead] {
+            assert!(!holder_gone(r, |_| Probe::Live), "a holder that answers was taken for gone by its time {}", r.started);
+            if cfg!(target_os = "linux") {
+                assert!(!holder_gone(r, |_| Probe::Unknown), "Linux took a record for gone by its time {}", r.started);
+            }
+        }
     }
 
     #[test]

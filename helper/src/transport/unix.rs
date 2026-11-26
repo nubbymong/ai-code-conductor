@@ -526,6 +526,14 @@ impl Listener {
         }
     }
 
+    /// True while the file at the endpoint is the socket bound here (its
+    /// device and inode). A cleaner of /tmp, or a removal by hand, can take
+    /// it, or its folder, from a long session: the holder then binds the
+    /// endpoint again (`serve.rs`).
+    pub fn still_bound(&self) -> bool {
+        fs::symlink_metadata(&self.path).map_or(false, |md| (md.dev(), md.ino()) == self.id)
+    }
+
     /// Remove the socket file, if it is still the one we bound.
     pub fn remove(&self) {
         if let Ok(md) = fs::symlink_metadata(&self.path) {
@@ -915,7 +923,7 @@ mod tests {
             // A holder writes its record after it starts, as this one would:
             // a record older than its process is another process's.
             started: crate::store::now_ms(),
-            away: 120,
+            lifetime: crate::store::Lifetime::Away(120),
             attached: false,
             child: "waiting".to_string(),
             code: None,
@@ -961,7 +969,7 @@ mod tests {
             // Written after this process started, so no start-time rule
             // could take it for stale: only the refusal can.
             started: crate::store::now_ms(),
-            away: 120,
+            lifetime: crate::store::Lifetime::Away(120),
             attached: false,
             child: "running".to_string(),
             code: None,
