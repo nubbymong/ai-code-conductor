@@ -531,6 +531,43 @@ fn with_nobody_attached_an_until_ended_holder_keeps_the_newest_status_queues_hoo
     end(&kept.0);
 }
 
+/// The Raspberry Pi notes, 4: with sshd's `ClientAliveInterval 0` nothing
+/// tells the far side that a link died, so a bridge whose ssh link is lost
+/// keeps its connection to the holder open. The holder notices by itself: a
+/// connection with no frame from the app in 60 s (the app pings every 15 s)
+/// is dropped, and the session is kept, detached, for the next attach.
+#[test]
+fn a_connection_that_goes_silent_is_dropped_after_60_s_and_the_session_is_kept() {
+    let _serial = one_at_a_time();
+    let store = Folder::new("store-silent");
+    let work = Folder::new("work-silent");
+    let sid = "until-0012";
+    let kept = Held(hold(&store, sid, &["--until-ended"]));
+    let mut app = App::connect(&kept.0, &hello::LOCAL_CAPS);
+    let child = app.launch(&[FAKE], &work);
+    app.attach();
+    // The attach was the app's last frame: from here it sends nothing, and
+    // its connection stays open.
+    let silent = Instant::now();
+    app.wait_text("FAKE-CLI READY");
+    let until = silent + Duration::from_secs(80);
+    while app.pump(until) {}
+    let took = silent.elapsed();
+    assert!(took < Duration::from_secs(80), "a silent connection was kept for {took:?}");
+    assert!(took >= Duration::from_secs(50), "a silent connection was dropped after {took:?}, before the 60 s");
+    assert!(pids::alive(kept.0.pid()) && pids::alive(child), "the session was ended with the connection");
+    let deadline = Instant::now() + WAIT;
+    while record_file(&store, sid).and_then(|r| r.get("attached").and_then(Value::as_bool)) != Some(false) {
+        assert!(Instant::now() < deadline, "the record still says attached");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let mut again = App::connect(&kept.0, &hello::LOCAL_CAPS);
+    again.attach();
+    again.wait_text("FAKE-CLI READY");
+    drop(again);
+    end(&kept.0);
+}
+
 #[test]
 fn until_ended_and_an_away_clock_cannot_be_given_together() {
     let _serial = one_at_a_time();
