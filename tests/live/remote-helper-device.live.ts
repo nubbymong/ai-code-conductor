@@ -60,7 +60,8 @@
  * its own tab only; each closed tab's hook state ended once, for its own id;
  * a running tab's folder kept by its end's removal while its holder has a
  * record (`held`), and a Check that removes a session folder whose holder is
- * gone and keeps the running tab's;
+ * gone and keeps the running tab's; (2.1.3-beta.19 section 6.3) the list the
+ * app takes at start-up doing the same;
  * each closed tab's holder ended (term.end);
  * (2.1.3-beta.19 section 1.2, with section 1.1's helper) a 3 s clock session
  * ended by its clock, and an until-ended one that outlives it with no
@@ -906,6 +907,44 @@ describe('remote helper on a real Linux host', () => {
     await untilHost('the holder to end', `pgrep -f -- "--store $HOME/[.]aicc/${machine.did}/store" | wc -l`, '0')
     await untilHost('its folder to go', `test -e "${live}" && echo there || echo gone`, 'gone')
     expect(got.ended.filter((x) => x === id)).toEqual([id])
+  })
+
+  // 6.3 (2.1.3-beta.19, aicc_planning#437): the folder a quit leaves goes at
+  // the next start. The list the app takes at start-up (one exec per machine)
+  // removes a session folder whose holder is gone and keeps a running tab's.
+  it('6.3: the start-up list removes a session folder whose holder is gone, and keeps a running tab\'s (2.1.3-beta.19 section 6.3)', async () => {
+    const d = remoteFakeDir
+    expect(d).toMatch(/aicc-e2e\./)
+    const m: RemoteMachineRecord = { ...machine, claudePath: `${d}/aicc-fake-cli`, check: { at: Date.now(), ok: true } }
+    const id = 'e2e-tab-63'
+    inUse = 1
+    const plan = remoteLaunchOf(claudeRemoteLaunch, m, { model: 'e2e-model' }, null, () => true, remoteSessionId(id), 100, 30, true)
+    const pty = new RemoteHelperPty({ appPtyId: id, machine: m, installId: machines.installId(), runner, spec: plan.spec, plan, signals, log: sessionLog })
+    const live = plan.helper.folder
+    // A folder a quit left: a session id no tab of this run has, private, with
+    // a file in it, and no holder's record.
+    const stray = `${path.posix.dirname(live)}/${remoteSessionId('e2e-quit-left')}`
+    let out = ''
+    pty.onData((x) => { out += x })
+    try {
+      await until('the fake CLI\'s banner', () => out.includes('FAKE-CLI READY'))
+      const made = sshRun(`umask 077 && mkdir -m 700 "${stray}" && printf x > "${stray}/settings.json" && test ! -e "${plan.helper.store}/${remoteSessionId('e2e-quit-left')}.json" && echo made`)
+      expect(made.out.trim(), made.err).toBe('made')
+      const logs: string[] = []
+      const listed = await listKept({ runner, installId: machines.installId(), log: (x) => logs.push(x) }, machine)
+      note('start-up-list-63', { ok: listed.ok, logs })
+      expect(listed.ok, listed.ok ? '' : listed.why).toBe(true)
+      expect(logs).toContain(`[remote-helper] ${target.host}: removed 1 session folder(s) whose holder is gone`)
+      expect(sshRun(`test -e "${stray}" && echo there || echo gone; test -f "${live}/settings.json" && echo there || echo gone`).out.trim().split('\n')).toEqual(['gone', 'there'])
+      // The running tab is still served after the list.
+      pty.write('still\r')
+      await until('input after the list', () => out.includes('echo: still'))
+    } finally {
+      pty.kill()
+      await pty.ended
+      inUse = 0
+    }
+    await untilHost('its folder to go', `test -e "${live}" && echo there || echo gone`, 'gone')
   })
 
   // 2.1.3-beta.19 section 1.2 (aicc_planning#437): a session kept until it is

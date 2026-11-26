@@ -36,7 +36,10 @@
  * 3.2) `~/.aicc/<did>/sessions/<sid>/` (0700) holds one session's own files,
  * which its provider's launch gives (`files`): written before its launch,
  * removed at its end (`unsession`), and by the next Check once its holder is
- * gone (`sweep`). Nothing else is written outside `~/.aicc`.
+ * gone (`sweep`). From 2.1.3-beta.19 (section 6.3) the list of kept sessions
+ * the app takes at start-up and when the Machines page opens (`sessions`)
+ * removes them too, so a folder a quit leaves goes at the next start.
+ * Nothing else is written outside `~/.aicc`.
  */
 import { APP_PTY_ID_RE, HELPER_FOLDER_RE, NONCE_RE, SHA256_RE, SID_RE } from '../session-helper/protocol'
 
@@ -455,6 +458,27 @@ const SPECS = {
       'pv "$Q" || no session-folder-not-private',
       ...DELETE_SESSION_FOLDER,
       '[ -e "$Q" ] && no still-there',
+      'r end ok',
+    ]),
+  },
+  /** 2.1.3-beta.19 section 1.2 with 6.3: the sessions the helper keeps (list
+   *  mode's one line, printed as it is: the app reads it), then, as `sweep`
+   *  does, every session folder whose holder has no record goes, and one whose
+   *  holder runs is kept. The list the app takes at start-up and when the
+   *  Machines page opens: a folder a quit left goes at the next start. Through
+   *  the launcher. */
+  sessions: {
+    values: [FOLDER, HASH],
+    text: join([
+      'N=$1; D=$2; I=$3; F=$4; H=$5',
+      ...CHECKS,
+      ...LAUNCH,
+      '"$P" list --store "$A/store" </dev/null || exit $?',
+      'S=$A/sessions; c=0',
+      '[ -d "$S" ] && [ ! -L "$S" ] || { r swept 0; r end ok; exit 0; }',
+      'pv "$S" || no sessions-folder-not-private',
+      'for X in $(ls -A "$S"); do case "$X" in *[!A-Za-z0-9_-]*|"") continue;; esac; [ -e "$A/store/$X.json" ] && continue; pv "$S/$X" || continue; rm -rf -- "${A:?}/sessions/${X:?}" && c=$((c+1)); done',
+      'r swept $c',
       'r end ok',
     ]),
   },

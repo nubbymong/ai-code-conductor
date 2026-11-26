@@ -23,7 +23,7 @@ import { remoteSessionId } from '../../../src/main/remote-helper/session'
 import { routeSshTab } from '../../../src/main/remote-helper/route'
 import type { RemoteMachineRecord } from '../../../src/main/remote-helper/machines'
 
-const NAMES: ScriptName[] = ['probe', 'install', 'commit', 'discard', 'remove', 'version', 'selftest', 'list', 'hold', 'bridge', 'reads', 'files', 'unsession', 'sweep']
+const NAMES: ScriptName[] = ['probe', 'install', 'commit', 'discard', 'remove', 'version', 'selftest', 'list', 'hold', 'bridge', 'reads', 'files', 'unsession', 'sweep', 'sessions']
 const SHA = 'a'.repeat(64)
 const PI: RemoteMachineRecord = {
   did: '0123456789abcdef0123456789abcdef', host: 'pi.lan', port: 22, user: 'nick', label: 'Pi', addedAt: 1,

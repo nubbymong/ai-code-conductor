@@ -137,9 +137,11 @@ function host(holder: FakeHolder, o: { untilEnded?: boolean; holds?: (c: ExecCal
         if (holder.launch && !holder.ended) return { stdout: `AICC-HASH ${n} ok ${SHA}\n`, code: 3 }
         return { stdout: `AICC-HASH ${n} ok ${SHA}\n${JSON.stringify(linuxRecord(holder, o.untilEnded ?? true))}\n` }
       }
-      if (c.script === 'list') {
+      if (c.script === 'list' || c.script === 'sessions') {
         const sessions = holder.launch && !holder.ended ? [linuxRecord(holder, o.untilEnded ?? true)] : []
-        return { stdout: `AICC-HASH ${n} ok ${SHA}\n${JSON.stringify({ v: 1, sessions, removed: 0, skipped: 0 })}\n` }
+        const line = `AICC-HASH ${n} ok ${SHA}\n${JSON.stringify({ v: 1, sessions, removed: 0, skipped: 0 })}\n`
+        // The start-up and Machines list (6.3) prints its sweep after the line.
+        return { stdout: c.script === 'sessions' ? `${line}${result(n, { swept: '0' })}` : line }
       }
       if (c.script === 'files' || c.script === 'unsession') return { stdout: result(n, {}) }
       return { code: 1 }
@@ -339,7 +341,7 @@ describe('an SSH Persistent tab through the session helper, kept until it is end
 
 describe('list mode on the machines: the Machines rows and a left-running entry\'s liveness', () => {
   function listing(sessions: unknown[]) {
-    ssh.host = { answer: (c) => (c.script === 'list' ? { stdout: `AICC-HASH ${c.values[0]} ok ${SHA}\n${JSON.stringify({ v: 1, sessions, removed: 0, skipped: 0 })}\n` } : { code: 1 }) }
+    ssh.host = { answer: (c) => (c.script === 'sessions' ? { stdout: `AICC-HASH ${c.values[0]} ok ${SHA}\n${JSON.stringify({ v: 1, sessions, removed: 0, skipped: 0 })}\n${result(c.values[0], { swept: '0' })}` } : { code: 1 }) }
   }
   it('the rows: each listed session with its kind, its app session id (the holder\'s label), whether a tab is attached and whether its program runs', async () => {
     plugIn(signals().deps)
@@ -355,7 +357,7 @@ describe('list mode on the machines: the Machines rows and a left-running entry\
       { sid: kept.sid, appSessionId: 'row-kept', untilEnded: true, attached: false, running: true },
       { sid: clock.sid, appSessionId: 'row-clock', untilEnded: false, attached: false, running: false },
     ] })
-    expect(ssh.calls.map((c) => c.script)).toEqual(['list'])
+    expect(ssh.calls.map((c) => c.script)).toEqual(['sessions'])
   })
 
   it('a machine whose list does not read is listed with why, not as empty', async () => {

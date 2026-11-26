@@ -26,7 +26,9 @@
  * and the session id on the host: never an address, a port or a credential of
  * this computer. The folder goes at the session's end (`unsession`), and the
  * next Check removes any whose holder is gone (`sweep`); a quit does not wait
- * for the unsession exec, so a folder a quit leaves goes at that Check.
+ * for the unsession exec, so a folder a quit leaves goes at the next start's
+ * list of kept sessions (2.1.3-beta.19 section 6.3: ./kept.ts listKept), or
+ * at that Check. A session kept until it is ended keeps its folder.
  *
  * A dropped link (the ssh child ended, or a pong that never came) attaches
  * again from the last byte seen, with the holder's replay: HelperPty asks for
