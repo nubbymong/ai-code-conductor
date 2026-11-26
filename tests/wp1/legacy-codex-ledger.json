@@ -1,8 +1,8 @@
 {
   "schema": "wp1-legacy-codex-ledger/2",
   "predicateDigest": "100a1233edebdc39a5f9004d3fba980a89ebb15b25872e52076386bc84b03153",
-  "manifestPathDigest": "7709938a6fd1d7d2eb380277c2e45af4f66f99c4908a99a0a9266649fe4b5a14",
-  "manifestHead": "b73d5bc764587dea8fc937835c2b8142cdd23f55",
+  "manifestPathDigest": "2518ed21c7d48d567f0aec7f327d69cdfeb5813028511b1ddc7279f757c4c5af",
+  "manifestHead": "88b21cff0dd547865f1ef324fc8bcd901b52ac76",
   "dispositions": {
     "retain": "unchanged observable behaviour, characterization proof",
     "move": "moved behind a package boundary and/or adapted at the call site, regression proof (newPath when relocated)",
@@ -5719,6 +5719,16 @@
       "note": "new WP2 registry"
     },
     {
+      "path": "src/shared/remote-machines.ts",
+      "predicates": [
+        "P14"
+      ],
+      "category": "UI-ONLY",
+      "disposition": "added",
+      "evidence": "2.1.3-beta.17 remote step 1 module (not in the baseline tree 6bafcc33): the Linux machines' card and switch texts as the renderer sees them; 2.1.3-beta.19 section 1.2 (aicc_planning#437): the Machines card's route note (REMOTE_ROUTE_NOTE) names Codex among what the preview does not take through the session helper yet, and at 1.2's join the remote switch text (REMOTE_SWITCH_TEXT) does too; text only, no Codex behaviour changed, no provider name compared (WP1.68); tests/unit/renderer/remote-machines-section.test.tsx",
+      "note": "names Codex in 2.1.3-beta.19 section 1.2 (user text: what the preview lacks)"
+    },
+    {
       "path": "src/shared/sentinel-types.ts",
       "predicates": [
         "P14"
@@ -10500,6 +10510,17 @@
       "note": ""
     },
     {
+      "path": "tests/unit/remote-helper/kept-gone-exit-status-real.test.ts",
+      "predicates": [
+        "P04",
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "new 2.1.3-beta.19 section 1.2 test (aicc_planning#437, its second fix round): a real Node process stands in for ssh, closes its output, then exits 3; the bridge stream keeps that exit status, so a kept tab whose holder is gone says so at its first try; its child's HOME, USERPROFILE, APPDATA, LOCALAPPDATA, CLAUDE_CONFIG_DIR and CODEX_HOME all point at its own temp folder; no provider name compared (WP1.68); tests/unit/remote-helper/kept-gone-exit-status-real.test.ts",
+      "note": "P04 and P13: the child's CODEX_HOME isolation only; nothing of Codex started; HOST QUARANTINE (CI and VM only)"
+    },
+    {
       "path": "tests/unit/renderer/SessionRow.effort.test.tsx",
       "predicates": [
         "P13"
@@ -11084,6 +11105,17 @@
       "disposition": "replace",
       "evidence": "WP1.58: the page now has five sub-tool cards, the Claude review card included, and the \"Available\" case is about host transfer, since the review cards follow their own conditions (WP2 final fixes; WP1.6); adapted in place: tests/unit/renderer/conductor-mcp-page.test.ts; the header case pins \"Running on port 19333\" (WP2 final fixes)",
       "note": ""
+    },
+    {
+      "path": "tests/unit/renderer/config-row-persistent-title.test.tsx",
+      "predicates": [
+        "P05",
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "new 2.1.3-beta.19 section 1.2 test (aicc_planning#437, its second fix round and the join's recheck case): a saved SSH Persistent config's chip title names what keeps its sessions (the session helper, tmux, or either while nothing has decided), and another config's kept session does not name the helper on this row; no provider name compared (WP1.68); tests/unit/renderer/config-row-persistent-title.test.tsx",
+      "note": "P05 and P13: the settings stub's codexEnabled only"
     },
     {
       "path": "tests/unit/renderer/config-row-running.test.tsx",

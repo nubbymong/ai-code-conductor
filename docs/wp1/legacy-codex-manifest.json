@@ -1,9 +1,9 @@
 {
   "schema": "wp1-legacy-codex-manifest/3",
-  "generatedAt": "2026-11-26T13:45:20.887Z",
-  "head": "b73d5bc764587dea8fc937835c2b8142cdd23f55",
-  "tree": "3132e7f353cdd19620f408f5e374a2a84836305b",
-  "scannedWorkingTree": true,
+  "generatedAt": "2026-11-26T14:44:04.840Z",
+  "head": "88b21cff0dd547865f1ef324fc8bcd901b52ac76",
+  "tree": "7fa6b8d51ff027166568848f5a3eb208f477d31e",
+  "scannedWorkingTree": false,
   "predicateDigest": "100a1233edebdc39a5f9004d3fba980a89ebb15b25872e52076386bc84b03153",
   "predicates": [
     {
@@ -116,9 +116,9 @@
     "\\.(png|jpg|jpeg|gif|ico|icns|webp|svg|woff2?|ttf|otf|mp4|zip|asar|node|exe|dll|dylib|so|pdf)$",
     "^package-lock\\.json$"
   ],
-  "trackedFileCount": 3959,
-  "excludedFileCount": 636,
-  "scannedFileCount": 3323,
+  "trackedFileCount": 3979,
+  "excludedFileCount": 637,
+  "scannedFileCount": 3342,
   "unscopedFileCount": 15,
   "unscoped": [
     ".claude/settings.json",
@@ -139,8 +139,8 @@
   ],
   "unscopedMentions": [],
   "unreadable": [],
-  "matchedPathCount": 1140,
-  "pathDigest": "7709938a6fd1d7d2eb380277c2e45af4f66f99c4908a99a0a9266649fe4b5a14",
+  "matchedPathCount": 1143,
+  "pathDigest": "2518ed21c7d48d567f0aec7f327d69cdfeb5813028511b1ddc7279f757c4c5af",
   "entries": [
     {
       "path": ".github/workflows/ci.yml",
@@ -3909,6 +3909,13 @@
       "lineCount": 3
     },
     {
+      "path": "src/shared/remote-machines.ts",
+      "predicates": [
+        "P14"
+      ],
+      "lineCount": 2
+    },
+    {
       "path": "src/shared/sentinel-types.ts",
       "predicates": [
         "P14"
@@ -7353,6 +7360,14 @@
       "lineCount": 3
     },
     {
+      "path": "tests/unit/remote-helper/kept-gone-exit-status-real.test.ts",
+      "predicates": [
+        "P04",
+        "P13"
+      ],
+      "lineCount": 2
+    },
+    {
       "path": "tests/unit/renderer/SessionRow.effort.test.tsx",
       "predicates": [
         "P13"
@@ -7778,6 +7793,14 @@
         "P13"
       ],
       "lineCount": 5
+    },
+    {
+      "path": "tests/unit/renderer/config-row-persistent-title.test.tsx",
+      "predicates": [
+        "P05",
+        "P13"
+      ],
+      "lineCount": 2
     },
     {
       "path": "tests/unit/renderer/config-row-running.test.tsx",
