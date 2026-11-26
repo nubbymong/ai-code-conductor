@@ -22,7 +22,7 @@ import { endHelperHooks, helperHookEvent } from '../session-signals/hooks'
 import { dispatchHelperStatus } from '../statusline-watcher'
 import { setRemoteHelperDeps, remoteTabsOn, type RemoteSignalDeps } from '../remote-helper'
 import { RemoteMachines, fileStore } from '../remote-helper/machines'
-import { bundledHelperPaths, manifestEntry, readBundledLinuxHelper } from '../remote-helper/manifest'
+import { bundledHelperPaths, manifestSha256For, readBundledLinuxHelpers } from '../remote-helper/manifest'
 import { nodeSshRunner } from '../remote-helper/ssh-exec'
 import { MACHINES_NOT_APP, answer } from './machines-handlers'
 import { appWindowSender } from './trusted-sender'
@@ -37,7 +37,8 @@ import { appWindowSender } from './trusted-sender'
  *
  * registerRemoteMachinesHandlers also plugs remote step 1 into the PTY
  * manager (setRemoteHelperDeps): the machine records, the ssh runner and the
- * installer's Linux helper, and (2.1.3-beta.18, plan section 3.2) where a
+ * installer's Linux helpers (one per machine architecture from 2.1.3-beta.19,
+ * each machine compared with its own), and (2.1.3-beta.18, plan section 3.2) where a
  * tab's status line, hook events and tool streams go: the status strip's
  * ingest, the session signals module, and the tool host, which serves a
  * tab's tool streams as its session with no credential. Windows only:
@@ -83,23 +84,24 @@ function savedSettings(): Record<string, unknown> | null {
 
 export function registerRemoteMachinesHandlers(getWindow: () => BrowserWindow | null, platform: NodeJS.Platform = process.platform): void {
   const trusted = appWindowSender(getWindow)
-  const paths = bundledHelperPaths({ isPackaged: app.isPackaged, resourcesPath: process.resourcesPath, appPath: app.getAppPath() })
+  const where = { isPackaged: app.isPackaged, resourcesPath: process.resourcesPath, appPath: app.getAppPath() }
   const recordsFile = instanceRecordPath('remote-machines.json', { isPackaged: app.isPackaged, userData: () => app.getPath('userData') })
   let machines: RemoteMachines | null = null
   if (platform === 'win32' && recordsFile) {
     const runner = nodeSshRunner(() => sshProgram())
-    machines = new RemoteMachines({ runner, store: fileStore(recordsFile), bundled: () => readBundledLinuxHelper(paths), inUse: remoteTabsOn, log: logInfo })
-    // The manifest's hash, read once: the routing compares each machine's helper with it.
-    let manifestSha: string | null | undefined
-    const bundledSha256 = (): string | null => {
-      if (manifestSha === undefined) {
+    machines = new RemoteMachines({ runner, store: fileStore(recordsFile), bundled: () => readBundledLinuxHelpers(where), inUse: remoteTabsOn, log: logInfo })
+    // The manifest, read once: the routing compares each machine's helper with
+    // the entry of that machine's own architecture (2.1.3-beta.19).
+    let manifest: { json: unknown } | undefined
+    const bundledSha256 = (arch: string): string | null => {
+      if (manifest === undefined) {
         try {
-          manifestSha = manifestEntry(JSON.parse(readFileSync(paths.manifest, 'utf8')))?.sha256 ?? null
+          manifest = { json: JSON.parse(readFileSync(bundledHelperPaths(where).manifest, 'utf8')) }
         } catch {
-          manifestSha = null
+          manifest = { json: null }
         }
       }
-      return manifestSha
+      return manifestSha256For(manifest.json, arch)
     }
     setRemoteHelperDeps({
       platform, settings: savedSettings, machines, runner, bundledSha256,
@@ -118,12 +120,15 @@ export function registerRemoteMachinesHandlers(getWindow: () => BrowserWindow | 
     const m = machines
     if (!m) return none
     return answer('remote state', REMOTE_STATE_TIMEOUT_MS, async (): Promise<RemoteMachinesState> => {
-      const b = await readBundledLinuxHelper(paths)
+      const b = await readBundledLinuxHelpers(where)
+      const shaFor = (arch: string): string | null => (b.ok ? (b.helpers.find((h) => h.arch === arch)?.sha256 ?? null) : null)
       return {
         available: true,
         switchOn,
-        bundled: b.ok ? { ok: true, version: b.helper.version, size: b.helper.size, sha12: b.helper.sha256.slice(0, 12) } : { ok: false, why: b.why },
-        machines: m.views(b.ok ? b.helper.sha256 : null),
+        bundled: b.ok
+          ? { ok: true, version: b.helpers[0].version, files: b.helpers.map((h) => ({ arch: h.arch, size: h.size, sha12: h.sha256.slice(0, 12) })) }
+          : { ok: false, why: b.why },
+        machines: m.views(shaFor),
         candidates: m.candidates(readConfig('configs')),
       }
     }, (): RemoteMachinesState => ({ available: true, switchOn, bundled: { ok: false, why: REMOTE_STATE_UNREAD }, machines: [], candidates: [] }))

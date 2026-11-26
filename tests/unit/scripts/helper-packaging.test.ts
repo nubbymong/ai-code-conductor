@@ -23,6 +23,9 @@ import yaml from 'js-yaml'
  * and the manifest scripts/write-helper-manifest.mjs writes to
  * helper/target/helper-manifest/, as resources/helper/manifest.json. Each is a
  * folder entry with a one-file filter, so nothing else beside them ships.
+ * From 2.1.3-beta.19 (section 1.3) it also carries the arm64 static Linux
+ * helper the arm64 job's artifact puts in helper/target/helper-linux-musl-arm64/,
+ * as resources/helper/linux-arm64/aicc-helper, by a folder entry of its own.
  */
 
 const ROOT = resolve(__dirname, '../../..')
@@ -133,6 +136,9 @@ const HELPER_FILES = [
   'helper/target/x86_64-unknown-linux-musl/release/aicc-helper',
   'helper/target/x86_64-unknown-linux-musl/release/aicc-helper.d',
   'helper/target/helper-linux-musl/aicc-fake-cli',
+  'helper/target/aarch64-unknown-linux-musl/release/aicc-helper',
+  'helper/target/aarch64-unknown-linux-musl/release/aicc-helper.d',
+  'helper/target/helper-linux-musl-arm64/aicc-fake-cli',
   'helper/target/helper-manifest/manifest.json.tmp',
 ]
 
@@ -157,6 +163,7 @@ const SHIPPED = {
  */
 const WIN_LINUX = [
   { entry: { from: 'helper/target/helper-linux-musl', to: 'helper/linux-x64', filter: ['aicc-helper'] }, file: 'helper/target/helper-linux-musl/aicc-helper' },
+  { entry: { from: 'helper/target/helper-linux-musl-arm64', to: 'helper/linux-arm64', filter: ['aicc-helper'] }, file: 'helper/target/helper-linux-musl-arm64/aicc-helper' },
   { entry: { from: 'helper/target/helper-manifest', to: 'helper', filter: ['manifest.json'] }, file: 'helper/target/helper-manifest/manifest.json' },
 ] as const
 
@@ -211,8 +218,10 @@ describe('the installer ships the release session helper and nothing else of hel
     // Where the release job puts them is where the scripts read and write them.
     const src = readFileSync(resolve(ROOT, 'scripts/verify-bundled-helper.mjs'), 'utf-8')
     expect(src).toContain(`export const LINUX_HELPER_SOURCE = '${WIN_LINUX[0].file}'`)
-    expect(src).toContain(`export const MANIFEST_SOURCE = '${WIN_LINUX[1].file}'`)
+    expect(src).toContain(`export const LINUX_ARM64_HELPER_SOURCE = '${WIN_LINUX[1].file}'`)
+    expect(src).toContain(`export const MANIFEST_SOURCE = '${WIN_LINUX[2].file}'`)
     expect(src).toContain("export const LINUX_HELPER = 'linux-x64/aicc-helper'")
+    expect(src).toContain("export const LINUX_ARM64_HELPER = 'linux-arm64/aicc-helper'")
   })
 
   it('the Windows helper entry is one electron-builder signs: a folder, not a single file', () => {
@@ -343,8 +352,9 @@ describe('the installer ships the release session helper and nothing else of hel
     // branch only, that needs the Linux job building the static Linux helper.
     const win = ci.jobs['release-windows-installer']
     expect(win.if).toContain("startsWith(github.head_ref, 'release/')")
-    expect(win.needs).toBe('release-helper-linux')
+    expect(win.needs).toEqual(['release-helper-linux', 'release-helper-linux-arm64'])
     expect(ci.jobs['release-helper-linux'].if).toBe(win.if)
+    expect(ci.jobs['release-helper-linux-arm64'].if).toBe(win.if)
     const ws = win.steps
     const wat = (pred: (s: Step) => boolean, what: string) => {
       const i = ws.findIndex(pred)
@@ -355,11 +365,14 @@ describe('the installer ships the release session helper and nothing else of hel
     expect(ws[wbuild]['working-directory']).toBe('helper')
     const download = wat((s) => /^actions\/download-artifact@/.test(s.uses ?? ''), 'the Linux helper download')
     expect(ws[download].with).toEqual({ name: 'helper-linux-musl-installer', path: 'helper/target/helper-linux-musl' })
+    const armDownload = wat((s) => s.name === 'Download the static arm64 Linux helper', 'the arm64 Linux helper download')
+    expect(ws[armDownload].with).toEqual({ name: 'helper-linux-musl-arm64-installer', path: 'helper/target/helper-linux-musl-arm64' })
     const manifest = wat((s) => s.run?.trim() === 'node scripts/write-helper-manifest.mjs', 'the manifest')
     const wpack = wat((s) => s.run?.trim() === 'npx electron-builder --win --config.npmRebuild=false', 'the packaging')
     const wverify = wat((s) => s.run?.trim() === 'npm run verify:helper', 'the packaged check')
     expect(wbuild).toBeLessThan(wpack)
     expect(download).toBeLessThan(manifest)
+    expect(armDownload).toBeLessThan(manifest)
     expect(manifest).toBeLessThan(wpack)
     expect(wverify).toBeGreaterThan(wpack)
     // The job's own condition is the only one: every step of it runs.

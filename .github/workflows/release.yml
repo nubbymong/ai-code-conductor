@@ -223,9 +223,108 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+  # ── The arm64 static Linux helper (2.1.3-beta.19, section 1.3) ──
+  # The Windows installer also carries the arm64 static Linux helper
+  # (resources/helper/linux-arm64/aicc-helper), listed in the same manifest,
+  # so an arm64 machine can be added. This job builds it on GitHub's arm64
+  # runner with the arm64 Helper job's four steps word for word (ci.yml
+  # helper-linux-arm64: the native musl build with --locked, the static check
+  # for AArch64, one `version` run, the upload as helper-linux-musl-arm64),
+  # after the glibc debug build its static check must find not static.
+  # build-windows needs it as it needs helper-linux. No `if`: a dry run runs
+  # it too. It holds no secret and only reads the repository.
+  helper-linux-arm64:
+    name: Static arm64 Linux helper
+    needs: gate
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    env:
+      CARGO_TERM_COLOR: never
+      CARGO_INCREMENTAL: '0'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Install the pinned Rust toolchain
+        shell: bash
+        working-directory: helper
+        run: |
+          rustup show active-toolchain || rustup toolchain install
+          rustc --version
+          cargo --version
+
+      - name: Build the glibc debug helper the static check compares against
+        shell: bash
+        working-directory: helper
+        run: cargo build --locked --bin aicc-helper
+
+      - name: Build the static arm64 Linux helper
+        shell: bash
+        working-directory: helper
+        run: |
+          rustup target add aarch64-unknown-linux-musl
+          cargo build --locked --release --target aarch64-unknown-linux-musl --bin aicc-helper
+          mkdir -p target/helper-linux-musl-arm64
+          cp target/aarch64-unknown-linux-musl/release/aicc-helper target/helper-linux-musl-arm64/
+
+      - name: Check the arm64 Linux helper is static
+        shell: bash
+        working-directory: helper
+        run: |
+          # 0 static, 1 not static, 2 not an AArch64 ELF file or not read.
+          is_static() {
+            local hdr segs dyn
+            hdr=$(readelf --file-header --wide "$1") || return 2
+            grep -q 'Class:[[:space:]]*ELF64' <<<"$hdr" || return 2
+            grep -q 'Machine:[[:space:]]*AArch64' <<<"$hdr" || return 2
+            segs=$(readelf --program-headers --wide "$1") || return 2
+            dyn=$(readelf --dynamic --wide "$1") || return 2
+            grep -q 'INTERP' <<<"$segs" && return 1
+            grep -q '(NEEDED)' <<<"$dyn" && return 1
+            return 0
+          }
+          built=target/helper-linux-musl-arm64/aicc-helper
+          rc=0; is_static "$built" || rc=$?
+          file "$built"
+          echo "Static arm64 Linux helper: $(file -b "$built"), $(stat -c %s "$built") bytes." >> "$GITHUB_STEP_SUMMARY"
+          if [ "$rc" != 0 ]; then
+            echo "::error::$built is not a static AArch64 ELF program (check status $rc)"
+            exit 1
+          fi
+          rc=0; is_static target/debug/aicc-helper || rc=$?
+          if [ "$rc" != 1 ]; then
+            echo "::error::the check did not find the glibc debug build dynamic (check status $rc), so it proves nothing"
+            exit 1
+          fi
+          echo "static: $built; the check finds the glibc debug build dynamic, as it must"
+
+      - name: Run the arm64 Linux helper once
+        shell: bash
+        working-directory: helper
+        run: |
+          want="aicc-helper $(awk -F'"' '/^\[/ { p = ($0 == "[package]") } p && /^version = / { print $2; exit }' Cargo.toml)"
+          said=$(target/helper-linux-musl-arm64/aicc-helper version)
+          echo "The arm64 Linux helper ran here: $said" >> "$GITHUB_STEP_SUMMARY"
+          if [ "$said" != "$want" ]; then
+            echo "::error::target/helper-linux-musl-arm64/aicc-helper version says \"$said\", not \"$want\""
+            exit 1
+          fi
+          echo "ran: $said"
+
+      - name: Upload the static arm64 Linux helper
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: helper-linux-musl-arm64
+          path: helper/target/helper-linux-musl-arm64
+          if-no-files-found: error
+          retention-days: 14
+
   # ── Build Windows installer ──
   build-windows:
-    needs: [gate, ci-reuse, helper-linux]
+    needs: [gate, ci-reuse, helper-linux, helper-linux-arm64]
     # Pinned off windows-latest: the new vs2026 image breaks @electron/node-gyp
     # (no supported Visual Studio). Same pin as ci.yml — unpin together.
     runs-on: windows-2025
@@ -347,17 +446,24 @@ jobs:
       - name: Check the session helper carries its own C runtime
         run: node scripts/check-pe-imports.mjs helper/target/release/aicc-helper.exe
 
-      # The static Linux helper the installer carries for Linux machines
-      # (2.1.3-beta.17, remote step 1), from this run's helper-linux job, and
-      # the manifest of its hash, written before packaging. electron-builder
-      # signs aicc-helper.exe in the packaged folder, which changes its bytes,
-      # so the manifest lists the Linux helper only; it never changes, as only
+      # The static Linux helpers the installer carries for Linux machines
+      # (2.1.3-beta.17, remote step 1; arm64 from 2.1.3-beta.19), from this
+      # run's helper-linux and helper-linux-arm64 jobs, and the manifest of
+      # their hashes, written before packaging. electron-builder signs
+      # aicc-helper.exe in the packaged folder, which changes its bytes, so the
+      # manifest lists the Linux helpers only; they never change, as only
       # Windows programs are signed (scripts/write-helper-manifest.mjs).
       - name: Download the static Linux helper
         uses: actions/download-artifact@v8
         with:
           name: helper-linux-musl
           path: helper/target/helper-linux-musl
+
+      - name: Download the static arm64 Linux helper
+        uses: actions/download-artifact@v8
+        with:
+          name: helper-linux-musl-arm64
+          path: helper/target/helper-linux-musl-arm64
 
       - name: Write the session helper manifest
         run: node scripts/write-helper-manifest.mjs
@@ -444,8 +550,9 @@ jobs:
 
       # The package carries the session helper and nothing else of helper/
       # (scripts/verify-bundled-helper.mjs): a package without it fails here.
-      # On Windows that is the signed aicc-helper.exe, the static Linux helper
-      # and the manifest, whose hash must be the packaged Linux file's.
+      # On Windows that is the signed aicc-helper.exe, the two static Linux
+      # helpers (x86-64 and arm64) and the manifest, whose hashes must be the
+      # packaged Linux files'.
       - name: Verify the session helper is packaged
         run: npm run verify:helper
 

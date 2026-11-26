@@ -10,8 +10,11 @@ import {
   expectedEntries,
   findResourcesDirs,
   helperExeName,
+  LINUX_ARM64_HELPER,
+  LINUX_ARM64_HELPER_SOURCE,
   LINUX_HELPER,
   LINUX_HELPER_SOURCE,
+  LINUX_HELPERS,
   makeManifest,
   MANIFEST,
   MANIFEST_SOURCE,
@@ -28,8 +31,9 @@ import { escapeRegExp } from '../../helpers/escape-regexp'
 // (2.1.3-beta.6, plan section B), and on Windows that the packaged copy
 // carries its own C runtime (2.1.3-beta.8 section C4). From 2.1.3-beta.17
 // (A1, remote step 1) the Windows package also carries the static Linux
-// helper and its manifest. It is handed a fake folder and a fake `version`
-// run, so nothing starts here.
+// helper and its manifest; from 2.1.3-beta.19 (section 1.3, aicc_planning#438)
+// two of them, x86-64 and arm64, each checked for its own machine. It is
+// handed a fake folder and a fake `version` run, so nothing starts here.
 
 const ROOT = resolve(__dirname, '../../..')
 const RES = join('dist', 'win-unpacked', 'resources')
@@ -41,6 +45,8 @@ const WIN_STATIC = Buffer.from(buildPe({ imports: STATIC_HELPER }).bytes)
 const WIN_TODAY = Buffer.from(buildPe({ imports: TODAYS_HELPER }).bytes)
 /** A static-pie x86-64 program, as Rust's musl target links it (elf-image.ts). */
 const LINUX_STATIC = buildElf({ body: [1, 2, 3, 4] })
+/** A static-pie AArch64 program, as Rust's aarch64 musl target links it. */
+const ARM_STATIC = buildElf({ machine: 183, body: [5, 6, 7, 8] })
 
 function fakeFs(files: Record<string, Buffer>) {
   return {
@@ -65,17 +71,21 @@ function check(platform: 'win32' | 'darwin' | 'linux', files: Record<string, Buf
 const exe = (platform: 'win32' | 'darwin' | 'linux') => join(RES, 'helper', helperExeName(platform))
 const linuxHelper = join(RES, 'helper', 'linux-x64', 'aicc-helper')
 const linuxFolder = join(RES, 'helper', 'linux-x64')
+const armHelper = join(RES, 'helper', 'linux-arm64', 'aicc-helper')
+const armFolder = join(RES, 'helper', 'linux-arm64')
 const manifestFile = join(RES, 'helper', 'manifest.json')
 
-/** The manifest for `bytes`, as the writer writes it. */
-const manifestFor = (bytes: Buffer, version = '0.1.0') => Buffer.from(manifestText(makeManifest({ version, sha256: sha256Hex(bytes) })))
+/** The manifest for the two Linux helpers' bytes, as the writer writes it. */
+const manifestFor = (x64: Buffer, arm: Buffer = ARM_STATIC, version = '0.1.0') => Buffer.from(manifestText(makeManifest({ version, sha256: { [LINUX_HELPER]: sha256Hex(x64), [LINUX_ARM64_HELPER]: sha256Hex(arm) } })))
 
-/** A whole Windows package: the helper, the static Linux helper and its manifest, each as given. */
-function windowsPackage(over: { exe?: Buffer; linux?: Buffer | null; manifest?: Buffer | null; more?: Record<string, Buffer> } = {}) {
+/** A whole Windows package: the helper, the two static Linux helpers and their manifest, each as given. */
+function windowsPackage(over: { exe?: Buffer; linux?: Buffer | null; arm?: Buffer | null; manifest?: Buffer | null; more?: Record<string, Buffer> } = {}) {
   const linux = over.linux === undefined ? LINUX_STATIC : over.linux
+  const arm = over.arm === undefined ? ARM_STATIC : over.arm
   const files: Record<string, Buffer> = { [exe('win32')]: over.exe ?? WIN_STATIC }
   if (linux !== null) files[linuxHelper] = linux
-  const manifest = over.manifest === undefined ? manifestFor(linux ?? LINUX_STATIC) : over.manifest
+  if (arm !== null) files[armHelper] = arm
+  const manifest = over.manifest === undefined ? manifestFor(linux ?? LINUX_STATIC, arm ?? ARM_STATIC) : over.manifest
   if (manifest !== null) files[manifestFile] = manifest
   return { ...files, ...(over.more ?? {}) }
 }
@@ -91,13 +101,13 @@ describe('verify-bundled-helper: the installer carries the session helper', () =
       expect(problems, platform).toEqual([])
       expect(version).toHaveBeenCalledWith(exe(platform))
       // Only the Windows package's files are read whole: its helper's imports,
-      // the Linux helper and the manifest. The others are not PE images.
-      if (platform === 'win32') expect(read.mock.calls.map((c) => c[0]).sort()).toEqual([exe('win32'), linuxHelper, manifestFile].sort())
+      // the two Linux helpers and the manifest. The others are not PE images.
+      if (platform === 'win32') expect(read.mock.calls.map((c) => c[0]).sort()).toEqual([exe('win32'), linuxHelper, armHelper, manifestFile].sort())
       else expect(read).not.toHaveBeenCalled()
     }
     expect(helperExeName('win32')).toBe('aicc-helper.exe')
     expect(helperExeName('linux')).toBe('aicc-helper')
-    expect(expectedEntries('win32')).toEqual(['aicc-helper.exe', 'linux-x64', 'manifest.json'])
+    expect(expectedEntries('win32')).toEqual(['aicc-helper.exe', 'linux-x64', 'linux-arm64', 'manifest.json'])
     expect(expectedEntries('linux')).toEqual(['aicc-helper'])
     expect(expectedEntries('darwin')).toEqual(['aicc-helper'])
   })
@@ -194,14 +204,21 @@ describe('verify-bundled-helper: the installer carries the session helper', () =
 describe('verify-bundled-helper: the Windows package carries the static Linux helper and its manifest (2.1.3-beta.17)', () => {
   it('the paths are the ones the app reads and the release job writes', () => {
     expect(LINUX_HELPER).toBe('linux-x64/aicc-helper')
+    expect(LINUX_ARM64_HELPER).toBe('linux-arm64/aicc-helper')
     expect(MANIFEST).toBe('manifest.json')
     expect(LINUX_HELPER_SOURCE).toBe('helper/target/helper-linux-musl/aicc-helper')
+    expect(LINUX_ARM64_HELPER_SOURCE).toBe('helper/target/helper-linux-musl-arm64/aicc-helper')
     expect(MANIFEST_SOURCE).toBe('helper/target/helper-manifest/manifest.json')
+    // The table, in the manifest's order, each for its own ELF machine (x86-64 62, AArch64 183).
+    expect(LINUX_HELPERS).toEqual([
+      { path: LINUX_HELPER, source: LINUX_HELPER_SOURCE, machine: 62 },
+      { path: LINUX_ARM64_HELPER, source: LINUX_ARM64_HELPER_SOURCE, machine: 183 },
+    ])
   })
 
   it('no Linux helper, or more beside it, fails, and the Windows helper is not run', () => {
     const missing = check('win32', windowsPackage({ linux: null, manifest: manifestFor(LINUX_STATIC) }))
-    expect(missing.problems).toEqual([`${linuxFolder} is missing: the Windows package carries the static Linux helper there`])
+    expect(missing.problems).toEqual([`${linuxFolder} is missing: the Windows package carries the static x86-64 Linux helper there`])
     expect(missing.version).not.toHaveBeenCalled()
     const crowded = check('win32', windowsPackage({ more: { [join(linuxFolder, 'aicc-fake-cli')]: LINUX_STATIC } }))
     expect(crowded.problems).toEqual([`${linuxFolder} holds more than the Linux helper: aicc-fake-cli`])
@@ -223,6 +240,33 @@ describe('verify-bundled-helper: the Windows package carries the static Linux he
     }
   })
 
+  it('a package without the arm64 helper, or with one that is not a static AArch64 program, fails, and the Windows helper is not run (2.1.3-beta.19)', () => {
+    const missing = check('win32', windowsPackage({ arm: null, manifest: manifestFor(LINUX_STATIC) }))
+    expect(missing.problems).toEqual([`${armFolder} is missing: the Windows package carries the static AArch64 Linux helper there`])
+    expect(missing.version).not.toHaveBeenCalled()
+    // Without either: both are named.
+    const neither = check('win32', windowsPackage({ linux: null, arm: null, manifest: manifestFor(LINUX_STATIC) }))
+    expect(neither.problems).toEqual([
+      `${linuxFolder} is missing: the Windows package carries the static x86-64 Linux helper there`,
+      `${armFolder} is missing: the Windows package carries the static AArch64 Linux helper there`,
+    ])
+    const crowded = check('win32', windowsPackage({ more: { [join(armFolder, 'aicc-fake-cli')]: ARM_STATIC } }))
+    expect(crowded.problems).toEqual([`${armFolder} holds more than the Linux helper: aicc-fake-cli`])
+    for (const [wrong, why] of [
+      [LINUX_STATIC, 'is built for ELF machine 62, not AArch64 (183)'],
+      [buildElf({ machine: 183, needed: true }), 'names a shared library (a NEEDED entry), so it is not static'],
+      [buildElf({ machine: 183, interp: true }), 'names a program interpreter (an INTERP header), so it is not static'],
+      [buildElf({ machine: 183, cls: 1 }), 'is not a 64-bit ELF file'],
+    ] as const) {
+      const { problems, version } = check('win32', windowsPackage({ arm: wrong }))
+      expect(problems, why).toEqual([`${armHelper} ${why}`])
+      expect(version).not.toHaveBeenCalled()
+    }
+    // The two files swapped: each is refused in the other's place.
+    const swapped = check('win32', windowsPackage({ linux: ARM_STATIC, arm: LINUX_STATIC }))
+    expect(swapped.problems).toEqual([`${linuxHelper} is built for ELF machine 183, not x86-64 (62)`, `${armHelper} is built for ELF machine 62, not AArch64 (183)`])
+  })
+
   it('a manifest that is missing, holds another hash, or names the Windows helper fails, and the Windows helper is not run', () => {
     const none = check('win32', windowsPackage({ manifest: null }))
     expect(none.problems).toEqual([`${manifestFile} is missing or empty`])
@@ -230,7 +274,11 @@ describe('verify-bundled-helper: the Windows package carries the static Linux he
     // The hash of another Linux helper: the packaged one is not the one the manifest names.
     const other = buildElf({ body: [9, 9, 9, 9] })
     const wrongHash = check('win32', windowsPackage({ manifest: manifestFor(other) }))
-    expect(wrongHash.problems).toEqual([`${manifestFile} says sha256 ${sha256Hex(other)}, but the packaged Linux helper's is ${sha256Hex(LINUX_STATIC)}`])
+    expect(wrongHash.problems).toEqual([`${manifestFile} its entry 1 says sha256 ${sha256Hex(other)}, but the packaged linux-x64/aicc-helper's is ${sha256Hex(LINUX_STATIC)}`])
+    const otherArm = buildElf({ machine: 183, body: [8, 8] })
+    const wrongArm = check('win32', windowsPackage({ manifest: manifestFor(LINUX_STATIC, otherArm) }))
+    expect(wrongArm.problems).toEqual([`${manifestFile} its entry 2 says sha256 ${sha256Hex(otherArm)}, but the packaged linux-arm64/aicc-helper's is ${sha256Hex(ARM_STATIC)}`])
+    expect(wrongArm.version).not.toHaveBeenCalled()
     expect(wrongHash.version).not.toHaveBeenCalled()
     const winListed = { v: 1, files: [{ path: 'aicc-helper.exe', version: '0.1.0', sha256: sha256Hex(WIN_STATIC) }] }
     const named = check('win32', windowsPackage({ manifest: Buffer.from(JSON.stringify(winListed)) }))
@@ -246,47 +294,95 @@ describe('verify-bundled-helper: the Windows package carries the static Linux he
     expect(elfStaticProblems(buildElf({ interp: true, needed: true }))).toEqual(['names a program interpreter (an INTERP header), so it is not static', 'names a shared library (a NEEDED entry), so it is not static'])
     expect(elfStaticProblems(buildElf({ cls: 1 }))).toEqual(['is not a 64-bit ELF file'])
     expect(elfStaticProblems(buildElf({ machine: 183 }))).toEqual(['is built for ELF machine 183, not x86-64 (62)'])
+    // For the arm64 helper the machine is AArch64 (183), and the same rules hold.
+    expect(elfStaticProblems(ARM_STATIC, 183)).toEqual([])
+    expect(elfStaticProblems(buildElf({ machine: 183, dynamic: false }), 183)).toEqual([])
+    expect(elfStaticProblems(LINUX_STATIC, 183)).toEqual(['is built for ELF machine 62, not AArch64 (183)'])
+    expect(elfStaticProblems(buildElf({ machine: 183, needed: true }), 183)).toEqual(['names a shared library (a NEEDED entry), so it is not static'])
+    expect(elfStaticProblems(buildElf({ machine: 183, interp: true }), 183)).toEqual(['names a program interpreter (an INTERP header), so it is not static'])
     expect(elfStaticProblems(Buffer.from('not a program at all, but long enough to read a header from it............'))).toEqual(['is not an ELF file'])
     // Program headers that run past the end of the file.
     expect(elfStaticProblems(buildElf().subarray(0, 100))).toEqual(['has no program headers that can be read'])
   })
 
-  it('the manifest is exactly {v: 1, files: [{path, version, sha256}]}, its one entry the Linux helper', () => {
-    const sha256 = sha256Hex(LINUX_STATIC)
-    const good = { v: 1, files: [{ path: 'linux-x64/aicc-helper', version: '0.1.0', sha256 }] }
+  it('the manifest is exactly {v: 1, files: [{path, version, sha256}, {path, version, sha256}]}: the x86-64 helper, then the arm64 one', () => {
+    const x = sha256Hex(LINUX_STATIC)
+    const a = sha256Hex(ARM_STATIC)
+    const sha256 = { [LINUX_HELPER]: x, [LINUX_ARM64_HELPER]: a }
+    const one = { path: 'linux-x64/aicc-helper', version: '0.1.0', sha256: x }
+    const two = { path: 'linux-arm64/aicc-helper', version: '0.1.0', sha256: a }
+    const good = { v: 1, files: [one, two] }
     const problems = (m: unknown) => manifestProblems(typeof m === 'string' ? m : JSON.stringify(m), { expectedVersion: '0.1.0', sha256 })
     expect(problems(good)).toEqual([])
     expect(makeManifest({ version: '0.1.0', sha256 })).toEqual(good)
+    // A hash given for a path the table does not have is never listed; the order is the table's.
+    expect(makeManifest({ version: '0.1.0', sha256: { [LINUX_ARM64_HELPER]: a, 'darwin-arm64/aicc-helper': x, [LINUX_HELPER]: x } })).toEqual(good)
+    expect(makeManifest({ version: '0.1.0', sha256: { [LINUX_HELPER]: x } })).toEqual({ v: 1, files: [one] })
     expect(manifestText(good)).toBe(`${JSON.stringify(good, null, 2)}\n`)
     expect(problems('not json')).toEqual(['is not JSON'])
     expect(problems([good])).toEqual(['is not a JSON object'])
     expect(problems({ ...good, extra: 1 })).toEqual(['has the fields extra, files, v, not exactly v and files'])
     expect(problems({ ...good, v: 2 })).toEqual(['is version 2, not 1'])
     expect(problems({ v: 1, files: {} })).toEqual(['files is not a list'])
-    expect(problems({ v: 1, files: [] })).toEqual(['lists 0 files, not exactly one (the Linux helper)'])
-    expect(problems({ v: 1, files: [good.files[0], { ...good.files[0], path: 'darwin-arm64/aicc-helper' }] })).toEqual(['lists 2 files, not exactly one (the Linux helper)'])
-    expect(problems({ v: 1, files: [{ path: 'linux-x64/aicc-helper', version: '0.1.0' }] })).toEqual(['its entry has the fields path, version, not exactly path, version and sha256'])
-    expect(problems({ v: 1, files: [{ ...good.files[0], path: 'aicc-helper' }] })).toEqual(['names "aicc-helper", not linux-x64/aicc-helper'])
-    expect(problems({ v: 1, files: [{ ...good.files[0], version: '0.0.9' }] })).toEqual(['says version "0.0.9", not 0.1.0'])
-    expect(problems({ v: 1, files: [{ ...good.files[0], sha256: sha256.toUpperCase() }] })).toEqual(['has a sha256 that is not 64 lower-case hex characters'])
-    expect(problems({ v: 1, files: [{ ...good.files[0], sha256: '0'.repeat(64) }] })).toEqual([`says sha256 ${'0'.repeat(64)}, but the packaged Linux helper's is ${sha256}`])
-    // The Windows helper is refused wherever it is listed, beside the Linux helper too.
+    const count = (n: number) => [`lists ${n} files, not exactly 2 (the Linux helpers linux-x64/aicc-helper and linux-arm64/aicc-helper)`]
+    expect(problems({ v: 1, files: [] })).toEqual(count(0))
+    // A package's manifest without either helper fails.
+    expect(problems({ v: 1, files: [one] })).toEqual(count(1))
+    expect(problems({ v: 1, files: [two] })).toEqual(count(1))
+    expect(problems({ v: 1, files: [one, two, { ...one, path: 'darwin-arm64/aicc-helper' }] })).toEqual(count(3))
+    expect(problems({ v: 1, files: [{ path: 'linux-x64/aicc-helper', version: '0.1.0' }, two] })).toEqual(['its entry 1 has the fields path, version, not exactly path, version and sha256'])
+    expect(problems({ v: 1, files: [{ ...one, path: 'aicc-helper' }, two] })).toEqual(['its entry 1 names "aicc-helper", not linux-x64/aicc-helper'])
+    // In the other order, each entry is refused in the other's place.
+    expect(problems({ v: 1, files: [two, one] })).toEqual(['its entry 1 names "linux-arm64/aicc-helper", not linux-x64/aicc-helper', 'its entry 2 names "linux-x64/aicc-helper", not linux-arm64/aicc-helper'])
+    expect(problems({ v: 1, files: [one, { ...two, version: '0.0.9' }] })).toEqual(['its entry 2 says version "0.0.9", not 0.1.0'])
+    expect(problems({ v: 1, files: [one, { ...two, sha256: a.toUpperCase() }] })).toEqual(['its entry 2 has a sha256 that is not 64 lower-case hex characters'])
+    expect(problems({ v: 1, files: [{ ...one, sha256: '0'.repeat(64) }, two] })).toEqual([`its entry 1 says sha256 ${'0'.repeat(64)}, but the packaged linux-x64/aicc-helper's is ${x}`])
+    // The arm64 entry holding the x86-64 file's hash (one file in both places) fails.
+    expect(problems({ v: 1, files: [one, { ...two, sha256: x }] })).toEqual([`its entry 2 says sha256 ${x}, but the packaged linux-arm64/aicc-helper's is ${a}`])
+    // The Windows helper is refused wherever it is listed, beside the Linux helpers too.
     for (const path of ['aicc-helper.exe', 'resources/helper/aicc-helper.exe', 'AICC-HELPER.EXE']) {
-      expect(problems({ v: 1, files: [good.files[0], { ...good.files[0], path }] })[0], path).toMatch(/^lists the Windows helper/)
+      expect(problems({ v: 1, files: [one, two, { ...one, path }] })[0], path).toMatch(/^lists the Windows helper/)
     }
   })
 
-  it('the writer makes the manifest the check accepts, and refuses a Linux helper that is not static before anything is packaged', () => {
+  it('the writer makes the manifest the check accepts from both helpers, and refuses either one missing or not static for its own machine before anything is packaged', () => {
     const cargo = '[package]\nname = "aicc-helper"\nversion = "0.1.0"\n'
-    const made = helperManifest(LINUX_STATIC, cargo)
+    const both = { [LINUX_HELPER_SOURCE]: LINUX_STATIC, [LINUX_ARM64_HELPER_SOURCE]: ARM_STATIC }
+    const made = helperManifest(both, cargo)
     expect(made.problems).toEqual([])
-    expect(made.text).toBe(manifestText(makeManifest({ version: '0.1.0', sha256: sha256Hex(LINUX_STATIC) })))
-    expect(manifestProblems(made.text!, { expectedVersion: '0.1.0', sha256: sha256Hex(LINUX_STATIC) })).toEqual([])
+    const sha256 = { [LINUX_HELPER]: sha256Hex(LINUX_STATIC), [LINUX_ARM64_HELPER]: sha256Hex(ARM_STATIC) }
+    expect(made.text).toBe(manifestText(makeManifest({ version: '0.1.0', sha256 })))
+    expect(manifestProblems(made.text!, { expectedVersion: '0.1.0', sha256 })).toEqual([])
     // And the whole package with it passes.
     expect(check('win32', windowsPackage({ manifest: Buffer.from(made.text!) })).problems).toEqual([])
-    expect(helperManifest(buildElf({ needed: true }), cargo)).toEqual({ problems: [`${LINUX_HELPER_SOURCE} names a shared library (a NEEDED entry), so it is not static`] })
-    expect(helperManifest(null, cargo)).toEqual({ problems: [`${LINUX_HELPER_SOURCE} is missing or empty`] })
-    expect(helperManifest(Buffer.alloc(0), cargo)).toEqual({ problems: [`${LINUX_HELPER_SOURCE} is missing or empty`] })
-    expect(helperManifest(LINUX_STATIC, '[dependencies]\n')).toEqual({ problems: ['helper/Cargo.toml names no package version'] })
+    // A package needs both: by default either one missing stops it.
+    expect(helperManifest({ ...both, [LINUX_ARM64_HELPER_SOURCE]: null }, cargo)).toEqual({ problems: [`${LINUX_ARM64_HELPER_SOURCE} is missing or empty`] })
+    expect(helperManifest({ [LINUX_ARM64_HELPER_SOURCE]: ARM_STATIC }, cargo)).toEqual({ problems: [`${LINUX_HELPER_SOURCE} is missing or empty`] })
+    expect(helperManifest({ ...both, [LINUX_HELPER_SOURCE]: Buffer.alloc(0) }, cargo)).toEqual({ problems: [`${LINUX_HELPER_SOURCE} is missing or empty`] })
+    expect(helperManifest(null, cargo)).toEqual({ problems: [`${LINUX_HELPER_SOURCE} is missing or empty`, `${LINUX_ARM64_HELPER_SOURCE} is missing or empty`] })
+    // Each is checked for its own machine.
+    expect(helperManifest({ ...both, [LINUX_HELPER_SOURCE]: buildElf({ needed: true }) }, cargo)).toEqual({ problems: [`${LINUX_HELPER_SOURCE} names a shared library (a NEEDED entry), so it is not static`] })
+    expect(helperManifest({ ...both, [LINUX_ARM64_HELPER_SOURCE]: LINUX_STATIC }, cargo)).toEqual({ problems: [`${LINUX_ARM64_HELPER_SOURCE} is built for ELF machine 62, not AArch64 (183)`] })
+    expect(helperManifest({ [LINUX_HELPER_SOURCE]: ARM_STATIC, [LINUX_ARM64_HELPER_SOURCE]: LINUX_STATIC }, cargo)).toEqual({ problems: [`${LINUX_HELPER_SOURCE} is built for ELF machine 183, not x86-64 (62)`, `${LINUX_ARM64_HELPER_SOURCE} is built for ELF machine 62, not AArch64 (183)`] })
+    expect(helperManifest(both, '[dependencies]\n')).toEqual({ problems: ['helper/Cargo.toml names no package version'] })
+  })
+
+  it('a dev run and the remote helper device check (x86-64 only) list what they have: --only-present', () => {
+    const cargo = '[package]\nname = "aicc-helper"\nversion = "0.1.0"\n'
+    const x64Only = helperManifest({ [LINUX_HELPER_SOURCE]: LINUX_STATIC }, cargo, { onlyPresent: true })
+    expect(x64Only).toEqual({ problems: [], text: manifestText({ v: 1, files: [{ path: LINUX_HELPER, version: '0.1.0', sha256: sha256Hex(LINUX_STATIC) }] }) })
+    const armOnly = helperManifest({ [LINUX_ARM64_HELPER_SOURCE]: ARM_STATIC }, cargo, { onlyPresent: true })
+    expect(armOnly.text).toBe(manifestText({ v: 1, files: [{ path: LINUX_ARM64_HELPER, version: '0.1.0', sha256: sha256Hex(ARM_STATIC) }] }))
+    // Still at least one, and each one there still checked.
+    expect(helperManifest({}, cargo, { onlyPresent: true })).toEqual({ problems: [`no Linux helper is there: ${LINUX_HELPER_SOURCE}, ${LINUX_ARM64_HELPER_SOURCE}`] })
+    expect(helperManifest({ [LINUX_HELPER_SOURCE]: ARM_STATIC }, cargo, { onlyPresent: true })).toEqual({ problems: [`${LINUX_HELPER_SOURCE} is built for ELF machine 183, not x86-64 (62)`] })
+    // A package from such a manifest fails the packaged check.
+    expect(check('win32', windowsPackage({ manifest: Buffer.from(x64Only.text!) })).problems).toEqual([`${manifestFile} lists 1 files, not exactly 2 (the Linux helpers linux-x64/aicc-helper and linux-arm64/aicc-helper)`])
+  })
+
+  it('the writer takes --only-present and nothing else', () => {
+    const src = readFileSync(join(ROOT, 'scripts', 'write-helper-manifest.mjs'), 'utf8').replace(/\r\n/g, '\n')
+    expect(src).toContain("const unknown = flags.filter((f) => f !== '--only-present')")
+    expect(src).toContain("const onlyPresent = flags.includes('--only-present')")
   })
 })

@@ -554,20 +554,23 @@ jobs:
   # request from a release/* branch, the installer is packaged, checked and
   # uploaded by `release-windows-installer` only. The installer carries the
   # session helper, built and checked as in the macOS half, and the static
-  # Linux helper with its manifest (remote step 1), which only a Linux runner
-  # builds: `release-helper-linux` builds it with the Helper job's steps word
-  # for word, and the packaging job needs it. So neither the Build and native
-  # tests job nor `Test (windows-2025)` ever waits for a Linux build; neither
-  # job is a required check, no job needs the packaging job, and on a red run
-  # the installer can still be uploaded (`Test (windows-2025)` is what says
-  # whether the tree passed).
+  # Linux helpers with their manifest (remote step 1), which only Linux runners
+  # build: `release-helper-linux` builds the x86-64 one with the Helper job's
+  # steps word for word, `release-helper-linux-arm64` (from 2.1.3-beta.19) the
+  # arm64 one on GitHub's arm64 runner with the arm64 Helper job's steps word
+  # for word, and the packaging job needs both. So neither the Build and native
+  # tests job nor `Test (windows-2025)` ever waits for a Linux build; none of
+  # these jobs is a required check, no job needs the packaging job, and on a
+  # red run the installer can still be uploaded (`Test (windows-2025)` is what
+  # says whether the tree passed).
   #
-  # Both have the same condition: the Test jobs' pull-request rule, for a
-  # release/* source branch only (a push has no source branch). Neither reads
+  # All three have the same condition: the Test jobs' pull-request rule, for a
+  # release/* source branch only (a push has no source branch). None reads
   # the change scope (scripts/ci/change-scope.mjs): a documentation-only
   # release/* pull request packages the Windows installer too, where the macOS
-  # half in the test job is skipped with the suite. The artifact is named apart
-  # from the Helper job's helper-linux-musl, which the same run may upload too
+  # half in the test job is skipped with the suite. The artifacts are named
+  # apart from the Helper jobs' helper-linux-musl and helper-linux-musl-arm64,
+  # which the same run may upload too
   # (tests/unit/scripts/helper-release-job.test.ts).
   release-helper-linux:
     name: Static Linux helper (release/* test installer)
@@ -650,9 +653,106 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+  # The arm64 static Linux helper for the release/* test installer (2.1.3-beta.19,
+  # section 1.3): the arm64 Helper job's four steps word for word, on the same
+  # arm64 runner, after the glibc debug build its static check compares against.
+  release-helper-linux-arm64:
+    name: Static arm64 Linux helper (release/* test installer)
+    if: |
+      startsWith(github.head_ref, 'release/') &&
+      contains(github.event.pull_request.labels.*.name, 'ci-run') &&
+      github.event.action != 'unlabeled' &&
+      (github.event.action != 'labeled' || github.event.label.name == 'ci-run') &&
+      (github.event.action != 'edited' || github.event.changes.base.ref.from != '')
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    env:
+      CARGO_TERM_COLOR: never
+      CARGO_INCREMENTAL: '0'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Install the pinned Rust toolchain
+        shell: bash
+        working-directory: helper
+        run: |
+          rustup show active-toolchain || rustup toolchain install
+          rustc --version
+          cargo --version
+
+      - name: Build the glibc debug helper the static check compares against
+        shell: bash
+        working-directory: helper
+        run: cargo build --locked --bin aicc-helper
+
+      - name: Build the static arm64 Linux helper
+        shell: bash
+        working-directory: helper
+        run: |
+          rustup target add aarch64-unknown-linux-musl
+          cargo build --locked --release --target aarch64-unknown-linux-musl --bin aicc-helper
+          mkdir -p target/helper-linux-musl-arm64
+          cp target/aarch64-unknown-linux-musl/release/aicc-helper target/helper-linux-musl-arm64/
+
+      - name: Check the arm64 Linux helper is static
+        shell: bash
+        working-directory: helper
+        run: |
+          # 0 static, 1 not static, 2 not an AArch64 ELF file or not read.
+          is_static() {
+            local hdr segs dyn
+            hdr=$(readelf --file-header --wide "$1") || return 2
+            grep -q 'Class:[[:space:]]*ELF64' <<<"$hdr" || return 2
+            grep -q 'Machine:[[:space:]]*AArch64' <<<"$hdr" || return 2
+            segs=$(readelf --program-headers --wide "$1") || return 2
+            dyn=$(readelf --dynamic --wide "$1") || return 2
+            grep -q 'INTERP' <<<"$segs" && return 1
+            grep -q '(NEEDED)' <<<"$dyn" && return 1
+            return 0
+          }
+          built=target/helper-linux-musl-arm64/aicc-helper
+          rc=0; is_static "$built" || rc=$?
+          file "$built"
+          echo "Static arm64 Linux helper: $(file -b "$built"), $(stat -c %s "$built") bytes." >> "$GITHUB_STEP_SUMMARY"
+          if [ "$rc" != 0 ]; then
+            echo "::error::$built is not a static AArch64 ELF program (check status $rc)"
+            exit 1
+          fi
+          rc=0; is_static target/debug/aicc-helper || rc=$?
+          if [ "$rc" != 1 ]; then
+            echo "::error::the check did not find the glibc debug build dynamic (check status $rc), so it proves nothing"
+            exit 1
+          fi
+          echo "static: $built; the check finds the glibc debug build dynamic, as it must"
+
+      - name: Run the arm64 Linux helper once
+        shell: bash
+        working-directory: helper
+        run: |
+          want="aicc-helper $(awk -F'"' '/^\[/ { p = ($0 == "[package]") } p && /^version = / { print $2; exit }' Cargo.toml)"
+          said=$(target/helper-linux-musl-arm64/aicc-helper version)
+          echo "The arm64 Linux helper ran here: $said" >> "$GITHUB_STEP_SUMMARY"
+          if [ "$said" != "$want" ]; then
+            echo "::error::target/helper-linux-musl-arm64/aicc-helper version says \"$said\", not \"$want\""
+            exit 1
+          fi
+          echo "ran: $said"
+
+      - name: Upload the static arm64 Linux helper
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: helper-linux-musl-arm64-installer
+          path: helper/target/helper-linux-musl-arm64
+          if-no-files-found: error
+          retention-days: 14
+
   release-windows-installer:
     name: Windows test installer (release/* branches)
-    needs: release-helper-linux
+    needs: [release-helper-linux, release-helper-linux-arm64]
     if: |
       startsWith(github.head_ref, 'release/') &&
       contains(github.event.pull_request.labels.*.name, 'ci-run') &&
@@ -696,14 +796,20 @@ jobs:
       - name: Check the session helper carries its own C runtime (release/* branches only)
         run: node scripts/check-pe-imports.mjs helper/target/release/aicc-helper.exe
 
-      # The static Linux helper from the job above, and the manifest of its
-      # hash, written before packaging, as release.yml's build-windows does
-      # (scripts/write-helper-manifest.mjs).
+      # The static Linux helpers from the two jobs above, and the manifest of
+      # their hashes, written before packaging, as release.yml's build-windows
+      # does (scripts/write-helper-manifest.mjs).
       - name: Download the static Linux helper
         uses: actions/download-artifact@v8
         with:
           name: helper-linux-musl-installer
           path: helper/target/helper-linux-musl
+
+      - name: Download the static arm64 Linux helper
+        uses: actions/download-artifact@v8
+        with:
+          name: helper-linux-musl-arm64-installer
+          path: helper/target/helper-linux-musl-arm64
 
       - name: Write the session helper manifest
         run: node scripts/write-helper-manifest.mjs
@@ -1523,11 +1629,14 @@ jobs:
       # The manifest the Windows installer carries, written by the script the
       # packaging runs (A1's), which also refuses a helper that is not a static
       # x86-64 program. The check reads the helper through it, as the app does.
+      # This job builds the x86-64 helper only (the arm64 one is built and run
+      # by its own job), so the manifest lists what it has (--only-present), as
+      # a dev run's does.
       - name: Write the helper's manifest as for the installer
         shell: bash
         run: |
           set -euo pipefail
-          node scripts/write-helper-manifest.mjs
+          node scripts/write-helper-manifest.mjs --only-present
           cp helper/target/helper-manifest/manifest.json helper/target/remote-helper-e2e/manifest.json
 
       - name: Provision an ephemeral key-auth sshd
@@ -1643,7 +1752,8 @@ jobs:
   # static helper, checks it is static and uploads it (helper-linux-musl):
   # from 2.1.3-beta.17 the Windows installer carries that file for Linux
   # machines, built by release.yml's helper-linux job with these same steps,
-  # and a VM or dev package takes it from this artifact. Probe P7
+  # and a VM or dev package takes it from this artifact (the arm64 file, from
+  # 2.1.3-beta.19, comes from the helper-linux-arm64 job below). Probe P7
   # (helper/probes/p7-windows-survival.ps1) is answered (2026-11-15, ADR-030);
   # its script rides in the artifact as the record of how, and it drives
   # commands this build no longer has, so running it again needs a
@@ -1879,6 +1989,147 @@ jobs:
         with:
           name: helper-linux-musl
           path: helper/target/helper-linux-musl
+          if-no-files-found: error
+          retention-days: 14
+
+  # The session helper on arm64 Linux (2.1.3-beta.19, section 1.3,
+  # aicc_planning#438): from 2.1.3-beta.19 the Windows installer also carries
+  # an arm64 static Linux helper (resources/helper/linux-arm64/aicc-helper), so
+  # an arm64 machine, a Raspberry Pi 5 for one, can be added. This job runs on
+  # GitHub's arm64 runner (ubuntu-24.04-arm): it builds and tests the helper
+  # there as the Helper job does on the other three, then builds the release
+  # helper for aarch64-unknown-linux-musl natively, so no cross linker is
+  # needed and the file runs once here (`version`, which must name this crate's
+  # version). The static check is the Helper job's, for the AArch64 machine: no
+  # program interpreter and no shared library, so it runs on any arm64 Linux
+  # whatever its glibc (Debian 12 and 13 among them), and the same check must
+  # find this runner's glibc debug build dynamic. It uploads the file as
+  # helper-linux-musl-arm64. release.yml's helper-linux-arm64 job and the
+  # release/* test installer's arm64 job build it with these four steps word
+  # for word (tests/unit/scripts/helper-release-job.test.ts).
+  #
+  # Its condition, its in-job decision (scripts/ci/helper-scope.mjs) and its
+  # step conditions are the Helper job's, so a dispatch that names `helper`
+  # runs it too; like that job it is NOT a required check and nothing waits on
+  # it. It has no Cargo.lock step of its own: the Helper job's Linux leg
+  # uploads a generated lock and fails when none is committed, and every cargo
+  # step here runs with --locked, which fails without one.
+  helper-linux-arm64:
+    name: Helper (ubuntu-24.04-arm)
+    if: |
+      github.event_name == 'push' ||
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.helper == 'true') ||
+      (github.event_name == 'pull_request' &&
+       github.event.action != 'unlabeled' &&
+       (github.event.action != 'labeled' || github.event.label.name == 'ci-run') &&
+       (github.event.action != 'edited' || github.event.changes.base.ref.from != ''))
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    env:
+      CARGO_TERM_COLOR: never
+      CARGO_INCREMENTAL: '0'
+      RUST_BACKTRACE: '1'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+
+      - name: Decide whether the helper changed
+        id: scope
+        run: node scripts/ci/helper-scope.mjs
+
+      - name: Install the pinned Rust toolchain
+        if: steps.scope.outputs.helper != 'false'
+        shell: bash
+        working-directory: helper
+        run: |
+          rustup show active-toolchain || rustup toolchain install
+          rustc --version
+          cargo --version
+
+      - name: Build
+        if: steps.scope.outputs.helper != 'false'
+        shell: bash
+        working-directory: helper
+        run: cargo build --locked --all-targets
+
+      - name: Test
+        if: steps.scope.outputs.helper != 'false'
+        shell: bash
+        working-directory: helper
+        timeout-minutes: 15
+        run: cargo test --locked
+
+      - name: Build the static arm64 Linux helper
+        if: steps.scope.outputs.helper != 'false'
+        shell: bash
+        working-directory: helper
+        run: |
+          rustup target add aarch64-unknown-linux-musl
+          cargo build --locked --release --target aarch64-unknown-linux-musl --bin aicc-helper
+          mkdir -p target/helper-linux-musl-arm64
+          cp target/aarch64-unknown-linux-musl/release/aicc-helper target/helper-linux-musl-arm64/
+
+      # Static means: an AArch64 ELF file that names no program interpreter (no
+      # INTERP header) and no shared library (no NEEDED entry). It only reads
+      # the files, and must find the glibc debug build above dynamic.
+      - name: Check the arm64 Linux helper is static
+        if: steps.scope.outputs.helper != 'false'
+        shell: bash
+        working-directory: helper
+        run: |
+          # 0 static, 1 not static, 2 not an AArch64 ELF file or not read.
+          is_static() {
+            local hdr segs dyn
+            hdr=$(readelf --file-header --wide "$1") || return 2
+            grep -q 'Class:[[:space:]]*ELF64' <<<"$hdr" || return 2
+            grep -q 'Machine:[[:space:]]*AArch64' <<<"$hdr" || return 2
+            segs=$(readelf --program-headers --wide "$1") || return 2
+            dyn=$(readelf --dynamic --wide "$1") || return 2
+            grep -q 'INTERP' <<<"$segs" && return 1
+            grep -q '(NEEDED)' <<<"$dyn" && return 1
+            return 0
+          }
+          built=target/helper-linux-musl-arm64/aicc-helper
+          rc=0; is_static "$built" || rc=$?
+          file "$built"
+          echo "Static arm64 Linux helper: $(file -b "$built"), $(stat -c %s "$built") bytes." >> "$GITHUB_STEP_SUMMARY"
+          if [ "$rc" != 0 ]; then
+            echo "::error::$built is not a static AArch64 ELF program (check status $rc)"
+            exit 1
+          fi
+          rc=0; is_static target/debug/aicc-helper || rc=$?
+          if [ "$rc" != 1 ]; then
+            echo "::error::the check did not find the glibc debug build dynamic (check status $rc), so it proves nothing"
+            exit 1
+          fi
+          echo "static: $built; the check finds the glibc debug build dynamic, as it must"
+
+      # The file runs here, on the machine kind it is for: `version` must print
+      # this crate's version, read from helper/Cargo.toml's package section.
+      - name: Run the arm64 Linux helper once
+        if: steps.scope.outputs.helper != 'false'
+        shell: bash
+        working-directory: helper
+        run: |
+          want="aicc-helper $(awk -F'"' '/^\[/ { p = ($0 == "[package]") } p && /^version = / { print $2; exit }' Cargo.toml)"
+          said=$(target/helper-linux-musl-arm64/aicc-helper version)
+          echo "The arm64 Linux helper ran here: $said" >> "$GITHUB_STEP_SUMMARY"
+          if [ "$said" != "$want" ]; then
+            echo "::error::target/helper-linux-musl-arm64/aicc-helper version says \"$said\", not \"$want\""
+            exit 1
+          fi
+          echo "ran: $said"
+
+      - name: Upload the static arm64 Linux helper
+        if: steps.scope.outputs.helper != 'false'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: helper-linux-musl-arm64
+          path: helper/target/helper-linux-musl-arm64
           if-no-files-found: error
           retention-days: 14
 

@@ -20,7 +20,7 @@ import { REMOTE_OTHER_HELPER } from '../../../src/shared/remote-machines'
 import { FakeSsh, result, type ExecCall, type FakeAnswer } from './fake-ssh'
 
 const SHA = 'a'.repeat(64)
-const HELPER: BundledLinuxHelper = { file: '/x/linux-x64/aicc-helper', version: '0.1.0', sha256: SHA, size: 4096, folder: `0.1.0-${SHA.slice(0, 12)}` }
+const HELPER: BundledLinuxHelper = { arch: 'x86_64', path: 'linux-x64/aicc-helper', file: '/x/linux-x64/aicc-helper', version: '0.1.0', sha256: SHA, size: 4096, folder: `0.1.0-${SHA.slice(0, 12)}` }
 const BYTES = Buffer.alloc(4096, 7)
 
 const CONFIGS = [
@@ -63,7 +63,7 @@ function machines(ssh: FakeSsh, store: MachineStore = memoryStore(), bundled: ()
   return new RemoteMachines({
     runner: ssh,
     store,
-    bundled: async () => ({ ok: true, helper: bundled() }),
+    bundled: async () => ({ ok: true, helpers: [bundled()] }),
     readFile: async () => BYTES,
     inUse: () => inUse,
     log: (line) => { logs.push(line) },
@@ -267,11 +267,11 @@ describe('remote machines: Add', () => {
     expect(r.message).toMatch(/not checked/)
     const [rec] = m.list()
     expect(rec.check).toMatchObject({ ok: false, detail: 'its self-test failed (pty)' })
-    const route = routeSshTab({ platform: 'win32', switchOn: true, ssh: { host: 'rocky.lan', port: 22, username: 'nick', remotePath: '~', detachable: false }, shellOnly: false, machine: m.findByTarget({ host: 'rocky.lan', port: 22, username: 'nick' }), bundledSha256: SHA })
+    const route = routeSshTab({ platform: 'win32', switchOn: true, ssh: { host: 'rocky.lan', port: 22, username: 'nick', remotePath: '~', detachable: false }, shellOnly: false, machine: m.findByTarget({ host: 'rocky.lan', port: 22, username: 'nick' }), bundledSha256: () => SHA })
     expect(route).toEqual({ via: 'today', why: ROUTE_WHY.notChecked })
   })
 
-  it('a machine that is not Linux on x86-64 is not used, and nothing is uploaded to it', async () => {
+  it('a machine that is not Linux on x86-64 or arm64 is not used, and nothing is uploaded to it', async () => {
     const ssh = new FakeSsh(linuxHost({ probe: (c) => ({ stdout: result(c.values[0], { os: 'Darwin', arch: 'arm64', home: '/Users/n', shell: '/bin/zsh', path: '/usr/bin' }) }) }))
     const m = machines(ssh)
     const q = await m.prepare(CONFIGS, 'cfg-key')
@@ -394,17 +394,17 @@ describe('remote machines: Check', () => {
     if (!q.ok) throw new Error(q.message)
     await m.add(q.token)
     const at = m.list()[0].check.at
-    expect(m.views(SHA)[0]).toMatchObject({ checked: true, lastCheck: { at, ok: true } })
-    expect(m.views('b'.repeat(64))[0]).toMatchObject({ checked: false, lastCheck: { at, ok: false, detail: REMOTE_OTHER_HELPER } })
+    expect(m.views(() => SHA)[0]).toMatchObject({ checked: true, lastCheck: { at, ok: true } })
+    expect(m.views(() => 'b'.repeat(64))[0]).toMatchObject({ checked: false, lastCheck: { at, ok: false, detail: REMOTE_OTHER_HELPER } })
     // A build with no Linux helper: nothing to compare with (the page says the build has none).
-    expect(m.views(null)[0]).toMatchObject({ checked: true })
+    expect(m.views(() => null)[0]).toMatchObject({ checked: true })
     // The routing agrees: its tabs take the usual path until Check.
-    expect(routeSshTab({ platform: 'win32', switchOn: true, ssh: { host: 'rocky.lan', port: 22, username: 'nick', remotePath: '~', detachable: false }, shellOnly: false, machine: m.list()[0], bundledSha256: 'b'.repeat(64) })).toEqual({ via: 'today', why: ROUTE_WHY.oldHelper })
+    expect(routeSshTab({ platform: 'win32', switchOn: true, ssh: { host: 'rocky.lan', port: 22, username: 'nick', remotePath: '~', detachable: false }, shellOnly: false, machine: m.list()[0], bundledSha256: () => 'b'.repeat(64) })).toEqual({ via: 'today', why: ROUTE_WHY.oldHelper })
   })
 
   it('Check on a machine holding another helper installs this build\'s first (probe, install, commit, version, self-test), and the record takes its version, hash and folder', async () => {
     const NEW_SHA = 'c'.repeat(64)
-    const NEW: BundledLinuxHelper = { file: '/x/linux-x64/aicc-helper', version: '0.2.0', sha256: NEW_SHA, size: 4096, folder: `0.2.0-${NEW_SHA.slice(0, 12)}` }
+    const NEW: BundledLinuxHelper = { arch: 'x86_64', path: 'linux-x64/aicc-helper', file: '/x/linux-x64/aicc-helper', version: '0.2.0', sha256: NEW_SHA, size: 4096, folder: `0.2.0-${NEW_SHA.slice(0, 12)}` }
     let bundled = HELPER
     const ssh = new FakeSsh(linuxHost())
     const m = machines(ssh, memoryStore(), () => bundled)
@@ -425,8 +425,8 @@ describe('remote machines: Check', () => {
     expect(ssh.calls[2].values.slice(3)).toEqual([NEW.folder, ssh.calls[1].values[0]])
     expect(ssh.calls[3].values.slice(3)).toEqual([NEW.folder, NEW_SHA])
     expect(ssh.calls[5].values.slice(3)).toEqual([NEW.folder, NEW_SHA])
-    expect(m.list()[0].helper).toEqual({ version: '0.2.0', sha256: NEW_SHA, folder: NEW.folder })
-    expect(m.views(NEW_SHA)[0]).toMatchObject({ checked: true, helperVersion: '0.2.0' })
+    expect(m.list()[0].helper).toEqual({ path: 'linux-x64/aicc-helper', version: '0.2.0', sha256: NEW_SHA, folder: NEW.folder })
+    expect(m.views(() => NEW_SHA)[0]).toMatchObject({ checked: true, helperVersion: '0.2.0' })
   })
 
   it('a home folder that changed stops the machine until it is added again', async () => {

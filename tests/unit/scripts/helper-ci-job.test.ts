@@ -312,4 +312,144 @@ describe('ci.yml: the static Linux helper, on the Linux leg only', () => {
     const text = JSON.stringify(job.steps)
     expect(text).not.toMatch(/secrets\.|github\.token|GITHUB_TOKEN/)
   })
+
+  // The Pi's setup note 8 (no TCP listener): the helper's own source has no
+  // networking at all, checked on every Helper run; the arm64 job builds the same source.
+  it('the helper source is checked for networking types on every leg, once Cargo.lock is committed', () => {
+    const check = named('No networking in the helper source')
+    expect(check['working-directory']).toBe('helper')
+    expect(check.run).toContain("grep -rnE 'std::net|TcpStream|TcpListener|UdpSocket|ToSocketAddrs' src tests")
+    expect(check.run).toMatch(/exit 1/)
+    for (const os of OSES) expect(runs(check.name!, 'true', os), os).toBe(true)
+  })
+})
+
+/**
+ * The arm64 Helper job (2.1.3-beta.19, section 1.3, aicc_planning#438): on
+ * GitHub's arm64 runner it builds and tests the helper as the Helper job does,
+ * then builds the release helper for aarch64-unknown-linux-musl natively,
+ * checks it is a static AArch64 program, runs it once and uploads it as
+ * helper-linux-musl-arm64. Its condition, decision and step conditions are the
+ * Helper job's; release.yml and the release/* test installer build the file
+ * with its four steps word for word (helper-release-job.test.ts).
+ *
+ * Not checked here: that the build links on the runner, that readelf prints
+ * AArch64, or that the file runs (a dispatch shows those: the check step
+ * proves itself on the glibc debug build each run, and the run step fails
+ * unless the file prints this crate's version).
+ */
+describe('ci.yml: the arm64 Helper job', () => {
+  const arm = ci.jobs['helper-linux-arm64'] as Job & { 'runs-on'?: string; env?: Record<string, string> }
+  const ARM_OS = 'ubuntu-24.04-arm'
+  const armStep = (name: string) => {
+    const s = arm.steps.find((x) => x.name === name)
+    if (!s) throw new Error(`no step named "${name}"`)
+    return s
+  }
+  const armCtx = (helper: string | undefined): GhaContext => ({ github: { event_name: 'pull_request' }, runner: { os: 'Linux' }, steps: { scope: { outputs: helper === undefined ? {} : { helper } } } })
+  const ARM_FOUR = ['Build the static arm64 Linux helper', 'Check the arm64 Linux helper is static', 'Run the arm64 Linux helper once', 'Upload the static arm64 Linux helper']
+  /** A step as it does its work: everything but its condition. */
+  const work = (s: Step) => ({ name: s.name, uses: s.uses, with: s.with, shell: s.shell, run: s.run, wd: s['working-directory'] })
+
+  it('runs on GitHub\'s arm64 runner under a name that is no required check and no Test job, reading only, with the Helper job\'s environment', () => {
+    expect(arm, 'ci.yml has no helper-linux-arm64 job').toBeDefined()
+    expect(arm.name).toBe('Helper (ubuntu-24.04-arm)')
+    expect(arm['runs-on']).toBe(ARM_OS)
+    expect(REQUIRED_CHECKS).not.toContain(arm.name)
+    expect(arm.name!.startsWith('Test (')).toBe(false)
+    expect(arm.strategy).toBeUndefined()
+    expect(arm.needs).toBeUndefined()
+    expect(arm['continue-on-error']).toBeUndefined()
+    expect(arm.permissions).toEqual({ contents: 'read' })
+    expect(arm['timeout-minutes']).toBe(job['timeout-minutes'])
+    expect(arm.env).toEqual((job as Job & { env?: Record<string, string> }).env)
+    expect(JSON.stringify(arm.steps)).not.toMatch(/secrets\.|github\.token|GITHUB_TOKEN/)
+    for (const s of arm.steps) {
+      if (s.uses) expect(s.uses, s.uses).toMatch(/^[\w.-]+\/[\w.-]+@[0-9a-f]{40}$/)
+      expect(s['continue-on-error'], s.name).toBeUndefined()
+    }
+  })
+
+  it('starts exactly when the Helper job does: the same condition, so a dispatch that names helper runs it, and no other dispatch does', () => {
+    expect(arm.if).toBe(job.if)
+    expect(evalIf(arm.if, dispatch({ helper: 'true' }))).toBe(true)
+    expect(evalIf(arm.if, dispatch({}))).toBe(false)
+    for (const name of Object.keys(ci.on.workflow_dispatch.inputs).filter((n) => n !== 'helper')) {
+      const value = ci.on.workflow_dispatch.inputs[name].type === 'boolean' ? 'true' : 'set'
+      expect(evalIf(arm.if, dispatch({ [name]: value })), name).toBe(false)
+    }
+  })
+
+  it('checks out with the base and decides as the Helper job does; every later step is skipped by the literal helper=false only', () => {
+    const [checkout, scope, ...rest] = arm.steps
+    expect(checkout).toEqual(job.steps[0])
+    expect(scope).toEqual(job.steps[1])
+    expect(rest.length).toBe(7)
+    for (const s of rest) {
+      expect(s.if, `${s.name} has no condition`).toBeDefined()
+      expect(evalIf(s.if, armCtx('false')), s.name).toBe(false)
+      expect(evalIf(s.if, armCtx('true')), s.name).toBe(true)
+      expect(evalIf(s.if, armCtx(undefined)), s.name).toBe(true)
+    }
+  })
+
+  it('builds and tests the helper as the Helper job does, with --locked, then the four arm64 steps in order', () => {
+    for (const name of ['Install the pinned Rust toolchain', 'Build', 'Test']) expect(work(armStep(name)), name).toEqual(work(named(name)))
+    const minutes = (s: Step) => (s as Record<string, unknown>)['timeout-minutes']
+    expect(minutes(armStep('Test'))).toBe(minutes(named('Test')))
+    expect(minutes(armStep('Test'))).toBe(15)
+    const at = (name: string) => arm.steps.findIndex((s) => s.name === name)
+    expect(ARM_FOUR.map(at)).toEqual([at('Test') + 1, at('Test') + 2, at('Test') + 3, at('Test') + 4])
+    expect(at('Test')).toBe(at('Build') + 1)
+    for (const s of arm.steps) {
+      if (/^\s*(cargo|rustup|rustc)\b/m.test(s.run ?? '')) expect(s['working-directory'], s.name).toBe('helper')
+      for (const line of (s.run ?? '').split('\n')) if (/^\s*cargo (build|test|run|check|clippy)\b/.test(line)) expect(line, `${s.name}: ${line}`).toContain('--locked')
+    }
+  })
+
+  it('builds the release helper for aarch64-unknown-linux-musl, natively, into the folder the installer takes it from', () => {
+    const lines = (armStep('Build the static arm64 Linux helper').run ?? '').split('\n').map((l) => l.trim()).filter(Boolean)
+    expect(lines).toEqual([
+      'rustup target add aarch64-unknown-linux-musl',
+      'cargo build --locked --release --target aarch64-unknown-linux-musl --bin aicc-helper',
+      'mkdir -p target/helper-linux-musl-arm64',
+      'cp target/aarch64-unknown-linux-musl/release/aicc-helper target/helper-linux-musl-arm64/',
+    ])
+    // No cross linker and no other target: the runner is the machine kind.
+    expect(JSON.stringify(arm.steps)).not.toMatch(/x86_64|CARGO_TARGET_|linker|rust-lld|cross\b/)
+  })
+
+  it('the check is the Helper job\'s, for the AArch64 machine: it only reads, fails on an interpreter, a shared library or another machine, and must find the glibc debug build dynamic', () => {
+    const run = armStep('Check the arm64 Linux helper is static').run ?? ''
+    const x86 = named('Check the Linux helper is static').run ?? ''
+    // The same check with three words changed: the machine, its name and the file.
+    expect(run).toBe(x86
+      .replace("grep -q 'Machine:[[:space:]]*Advanced Micro Devices X86-64'", "grep -q 'Machine:[[:space:]]*AArch64'")
+      .replace('# 0 static, 1 not static, 2 not an x86-64 ELF file or not read.', '# 0 static, 1 not static, 2 not an AArch64 ELF file or not read.')
+      .replace('built=target/helper-linux-musl/aicc-helper', 'built=target/helper-linux-musl-arm64/aicc-helper')
+      .replace('echo "Static Linux helper:', 'echo "Static arm64 Linux helper:')
+      .replace('is not a static x86-64 ELF program', 'is not a static AArch64 ELF program'))
+    expect(run).toContain("grep -q 'Machine:[[:space:]]*AArch64' <<<\"$hdr\" || return 2")
+    expect(run).toMatch(/rc=0; is_static target\/debug\/aicc-helper \|\| rc=\$\?\n\s*if \[ "\$rc" != 1 \]; then\n[^\n]*\n\s*exit 1/)
+    const writes = run.match(/>>?\s*\S+/g) ?? []
+    for (const w of writes) expect(w).toMatch(/^>>\s*"\$GITHUB_STEP_SUMMARY"$/)
+    expect(run).not.toMatch(/(^|[\s;&|])(rm|mv|cp|chmod|chown|ln|tee|dd|install|strip|patchelf)\s/m)
+  })
+
+  it('runs the file once, and fails unless it prints this crate\'s version from helper/Cargo.toml\'s package section', () => {
+    const s = armStep('Run the arm64 Linux helper once')
+    expect(s['working-directory']).toBe('helper')
+    const run = s.run ?? ''
+    expect(run).toContain('said=$(target/helper-linux-musl-arm64/aicc-helper version)')
+    expect(run).toContain(`want="aicc-helper $(awk -F'"' '/^\\[/ { p = ($0 == "[package]") } p && /^version = / { print $2; exit }' Cargo.toml)"`)
+    expect(run).toMatch(/if \[ "\$said" != "\$want" \]; then\n[^\n]*\n\s*exit 1/)
+    expect(run).not.toMatch(/\$\{\{/)
+    for (const w of run.match(/>>?\s*\S+/g) ?? []) expect(w).toMatch(/^>>\s*"\$GITHUB_STEP_SUMMARY"$/)
+  })
+
+  it('uploads it as helper-linux-musl-arm64, a name of its own, with an action pinned by commit', () => {
+    const upload = armStep('Upload the static arm64 Linux helper')
+    expect(upload.uses).toBe(named('Upload the static Linux helper').uses)
+    expect(upload.with).toEqual({ name: 'helper-linux-musl-arm64', path: 'helper/target/helper-linux-musl-arm64', 'if-no-files-found': 'error', 'retention-days': 14 })
+  })
 })
