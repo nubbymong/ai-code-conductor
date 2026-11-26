@@ -541,7 +541,18 @@ export class RemoteDriver implements HelperPtyDriver {
     void whole.finally(() => { if (endings.get(sid) === whole) endings.delete(sid) })
   }
 
-  attachedChanged(): void { /* the Machines page reads tabs, not attaches, in this preview */ }
+  /** The tab's terminal attached to its holder at least once. */
+  private everAttached = false
+  /** Called once, at the tab's first attach to its holder: its CLI runs there
+   *  (launched by this start). The Watchdog arms then (2.1.3-beta.19 fix round). */
+  onFirstAttach: (() => void) | undefined
+
+  attachedChanged(_sid: string, attached: boolean): void {
+    // The Machines page reads tabs, not attaches, in this preview.
+    if (!attached || this.everAttached) return
+    this.everAttached = true
+    try { this.onFirstAttach?.() } catch { /* the app's own */ }
+  }
 
   log(message: string): void { this.o.log(message) }
 }
@@ -558,11 +569,13 @@ export class RemoteHelperPty implements IPty {
   private readonly inner: HelperPty
   private readonly driver: RemoteDriver
   private readonly data = new Emitter<string>()
+  private readonly running = new Emitter<void>()
 
   constructor(o: RemoteSessionOptions) {
     this.sid = remoteSessionId(o.appPtyId)
     this.machineDid = o.machine.did
     this.driver = new RemoteDriver(o)
+    this.driver.onFirstAttach = () => this.running.fire()
     const problem = checkLaunch(o.spec, 'unix')
     if (problem) throw new Error(`the launch cannot go through the session helper: ${problem.why}`)
     this.inner = new HelperPty({ sid: this.sid, label: o.appPtyId, spec: o.spec, driver: this.driver, redraw: 'nudge', ...(o.plan ? { provider: o.plan.provider } : {}) })
@@ -576,6 +589,10 @@ export class RemoteHelperPty implements IPty {
   set handleFlowControl(_v: boolean) { /* not used */ }
   get onData(): IEvent<string> { return this.data.event }
   get onExit(): IEvent<{ exitCode: number; signal?: number }> { return this.inner.onExit }
+  /** Fires once, at the tab's first attach to its holder: the CLI runs there
+   *  (the helper's own "it runs" signal; a usual SSH tab's is its
+   *  claude-running latch). */
+  get onRunning(): IEvent<void> { return this.running.event }
   /** The bridge exec's ssh process now, when there is one. */
   get linkPid(): number | undefined { return this.driver.linkPid }
   /** Settles once the session is over and its holder ended. */

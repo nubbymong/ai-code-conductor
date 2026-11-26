@@ -21,6 +21,7 @@ import { conductorToolsMasterOn } from '../conductor-tools-switch'
 import { endHelperHooks, helperHookEvent } from '../session-signals/hooks'
 import { dispatchHelperStatus, endHelperAccount, setHelperAccount } from '../statusline-watcher'
 import { setRemoteHelperDeps, remoteTabsOn, type RemoteSignalDeps } from '../remote-helper'
+import { remoteHelperWatchdog } from '../watchdog/remote-helper-tab'
 import { RemoteMachines, fileStore } from '../remote-helper/machines'
 import { bundledHelperPaths, manifestSha256For, readBundledLinuxHelpers } from '../remote-helper/manifest'
 import { nodeSshRunner } from '../remote-helper/ssh-exec'
@@ -115,6 +116,8 @@ export function registerRemoteMachinesHandlers(getWindow: () => BrowserWindow | 
       onOutput: (id, n) => { getPtyIntegrityMonitor()?.recordPtyData(id, n) },
       log: logInfo,
       signals: remoteSignals,
+      // 2.1.3-beta.19 fix round: its Session Watchdog, armed once its CLI runs in the holder.
+      watchdog: remoteHelperWatchdog,
     })
   }
   const refuse = (message: string): RemoteActionResult => ({ ok: false, message })

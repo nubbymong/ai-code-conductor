@@ -50,6 +50,20 @@ export interface RemoteHelperDeps {
   /** Where a tab's status line, hook events and tool streams go (2.1.3-beta.18
    *  section 3.2). Absent: a tab through the helper gets none of them. */
   signals?: RemoteSignalDeps
+  /** The Session Watchdog for a tab through the helper (2.1.3-beta.19 fix
+   *  round): armed once its CLI runs in its holder, fed what the tab is sent.
+   *  Absent: such a tab has none. */
+  watchdog?: RemoteWatchdogDeps
+}
+
+/** What a tab through the helper needs of the Session Watchdog
+ *  (watchdog/remote-helper-tab.ts gives it). */
+export interface RemoteWatchdogDeps {
+  /** The tab's CLI runs in its holder (its first attach): arm its Watchdog,
+   *  as a usual SSH tab's is armed at its claude-running latch. */
+  arm(sessionId: string, tab: { provider: ProviderId; shellOnly: boolean; ask: boolean; cols: number; rows: number }): void
+  /** What the tab was sent, as a usual tab's output feeds it. */
+  feed(sessionId: string, data: string): void
 }
 
 let deps: RemoteHelperDeps | null = null
@@ -90,6 +104,8 @@ export interface RemoteSpawnOptions {
   provider?: ProviderId
   ssh?: SSHOptions
   shellOnly?: boolean
+  /** An Ask Conductor tab: its Watchdog never arms (#266 MAJOR-5). */
+  isAsk?: boolean
   model?: string
   effortLevel?: string
   permissionMode?: string
@@ -224,7 +240,19 @@ export function remoteHelperPty(win: OutputWindow, sessionId: string, options: R
     // Counted as every other tab's output is (pty-manager's recordPtyData), so
     // the Services page's byte gap holds for this tab too.
     d.onOutput(sessionId, data.length)
+    try { d.watchdog?.feed(sessionId, data) } catch { /* the Watchdog's own */ }
     win.webContents.send(`pty:data:${sessionId}`, data)
+  })
+  // 2.1.3-beta.19 fix round: the Watchdog arms once the CLI runs in the
+  // holder (the tab's first attach), as an SSH tab's: the pane is drawn by
+  // the host, so its retry needs Claude Code's own chrome on screen.
+  pty.onRunning(() => {
+    if (over) return
+    try {
+      d.watchdog?.arm(sessionId, { provider: providerId, shellOnly: options.shellOnly === true, ask: options.isAsk === true, cols: pty.cols, rows: pty.rows })
+    } catch (err) {
+      d.log(`[remote-helper] ${sessionId}: the Watchdog could not be armed (${(err as Error).message})`)
+    }
   })
   pty.onExit(() => {
     over = true
