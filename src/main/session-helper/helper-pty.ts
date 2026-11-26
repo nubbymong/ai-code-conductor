@@ -198,12 +198,15 @@ export interface HelperPtyOptions {
  * The one line a tab shows when the session helper could not hold it and it
  * starts the usual way (2.1.3-beta.19 fix round: a new Codex session after an
  * update said so only in the log). The reason is the log's, up to its first
- * bracket (which holds paths and error text), plain characters only, without
- * a full stop of its own: a reason that is the helper's own sentence (its
- * set-up failed while the tab waited) would otherwise end in two.
+ * bracket or colon (after either come paths and error text), without a full
+ * stop of its own: a reason that is the helper's own sentence (its set-up
+ * failed while the tab waited) would otherwise end in two. It is named only
+ * when it is plain words (letters, spaces, commas, apostrophes; four words or
+ * more); anything else is left to the log (2.1.3-beta.19 fix round 5).
  */
 export function notHeldLine(why: string): string {
-  const reason = stripSpoofableText(String(why).replace(/^the helper could not hold it:\s*/, '').split(' (')[0], 160).trim().replace(/[\s.]+$/, '')
+  const head = stripSpoofableText(String(why).replace(/^the helper could not hold it:\s*/, '').split(/ \(|: /)[0], 160).trim().replace(/[\s.]+$/, '')
+  const reason = /^[A-Za-z][A-Za-z ,']*$/.test(head) && head.split(/\s+/).length >= 4 ? head : ''
   return `\r\n[Not held by the session helper${reason ? `: ${reason}` : ''}. This tab runs the usual way and ends when the app closes.]\r\n`
 }
 

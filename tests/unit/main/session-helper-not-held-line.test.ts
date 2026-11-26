@@ -69,6 +69,29 @@ describe('a tab the session helper could not hold says so in one line', () => {
     expect(notHeldLine('the helper could not hold it: The session helper copy on this computer does not match the one installed with the app, so nothing is started through it.  ')).not.toContain('..')
   })
 
+  // 2.1.3-beta.19 fix round 5: a reason whose detail is not in a bracket
+  // reached the tab raw (an error code and the user's folder path). The
+  // reason is cut at its first ' (' or ': ', and named only when it is plain
+  // words; anything else stays in the log.
+  it('a copy failure names its plain head only, never the file error or the folder path', () => {
+    const line = notHeldLine("the helper could not hold it: The session helper could not be copied into place: EPERM: operation not permitted, rename 'C:\\Users\\someone\\AppData\\Local\\AI Code Conductor\\helper\\.new-0a1b2c3d' -> 'C:\\Users\\someone\\AppData\\Local\\AI Code Conductor\\helper\\0.1.0-1edd29551e80'")
+    expect(line).toBe('\r\n[Not held by the session helper: The session helper could not be copied into place. This tab runs the usual way and ends when the app closes.]\r\n')
+    expect(line).not.toContain('EPERM')
+    expect(line).not.toContain('C:\\')
+  })
+
+  it('a holder that could not be reached names that, never the pipe it tried', () => {
+    const line = notHeldLine('the holder could not be reached: connect ENOENT \\\\.\\pipe\\aicc-x')
+    expect(line).toBe('\r\n[Not held by the session helper: the holder could not be reached. This tab runs the usual way and ends when the app closes.]\r\n')
+    expect(line).not.toContain('ENOENT')
+    expect(line).not.toContain('pipe')
+  })
+
+  it('a reason that is not plain words (the helper\'s own error line) is left to the log', () => {
+    expect(notHeldLine('the helper could not hold it: aicc-helper: the holder (process 1234) exited before it was ready (exit code: 1)'))
+      .toBe('\r\n[Not held by the session helper. This tab runs the usual way and ends when the app closes.]\r\n')
+  })
+
   it('a run of the app\'s own (no notHeldNote) gets no line: its output is the program\'s only', async () => {
     const { p, seen, direct } = terminal(async () => { throw new Error(WHY) }, {})
     await until(() => !p.throughHelper, 'the usual way')
