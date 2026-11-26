@@ -25,7 +25,9 @@
  *   REMOTE_HELPER_OTHER_BIN, REMOTE_HELPER_OTHER_MANIFEST
  *                           another build of the helper (the same source at
  *                           another version) and its manifest, for the attach
- *                           from a bridge of another build (2.1.3-beta.19)
+ *                           from a bridge of another build (2.1.3-beta.19);
+ *                           on the CI runner, when not given, the file builds
+ *                           it itself from helper/ with the job's toolchain
  *
  * In order: Add (the question, then probe, upload by standard input, the hash
  * against the manifest, version, self-test); a second install's Remove
@@ -70,12 +72,13 @@
  * (2.1.3-beta.19 section 1.2, with section 1.1's helper) a 3 s clock session
  * ended by its clock, and an until-ended one that outlives it with no
  * connection, stays listed as until-ended, attaches again with its replay
- * and launches nothing, takes a status, a hook event and a tool call, and is
+ * and launches nothing (the host reads and the account read run again),
+ * takes a status, a hook event and a tool call, and is
  * ended by End (term.end over a link of its own, then its folder); a list and
  * an attach to an until-ended holder from a bridge of another build (an app
- * update that changed the helper: REMOTE_HELPER_OTHER_BIN and
- * REMOTE_HELPER_OTHER_MANIFEST, a second build of the same source at another
- * version, installed by a Check as an update's would);
+ * update that changed the helper: a second build of the same source at another
+ * version, REMOTE_HELPER_OTHER_BIN and REMOTE_HELPER_OTHER_MANIFEST or, on the
+ * CI runner, built by this file, installed by a Check as an update's would);
  * Remove; nothing left under ~/.aicc and no helper process of the
  * run left. The test's own execs read only what their command prints (an rc
  * file prints first).
@@ -181,6 +184,52 @@ async function untilHost(what: string, command: string, want: string, ms = 10_00
   }
 }
 
+/** A folder of the run's own for the other build, removed in afterAll. */
+let otherWork = ''
+
+/**
+ * Another build of the helper, for the update that changed it (2.1.3-beta.19
+ * section 1.2): REMOTE_HELPER_OTHER_BIN and REMOTE_HELPER_OTHER_MANIFEST when
+ * given (a host line's artifacts). On the CI runner, built here when they are
+ * not: this checkout's helper/ source at another version (`<version>-e2e` in
+ * a copy of its Cargo.toml and Cargo.lock), with the toolchain and target the
+ * job installed and --locked, in a folder of the run's own, and its manifest
+ * written by the packaging's own writer (scripts/write-helper-manifest.mjs).
+ * Anywhere else it fails, never skips, without them.
+ */
+async function otherBuild(): Promise<{ manifest: string; file: string }> {
+  const given = { manifest: process.env.REMOTE_HELPER_OTHER_MANIFEST, file: process.env.REMOTE_HELPER_OTHER_BIN }
+  if (given.manifest && given.file) return { manifest: given.manifest, file: given.file }
+  if (!onRunner()) return { manifest: need('REMOTE_HELPER_OTHER_MANIFEST'), file: need('REMOTE_HELPER_OTHER_BIN') }
+  const src = path.join(__dirname, '../../helper')
+  otherWork = fs.mkdtempSync(path.join(process.env.RUNNER_TEMP || os.tmpdir(), 'aicc-other-build-'))
+  for (const f of ['Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml']) fs.copyFileSync(path.join(src, f), path.join(otherWork, f))
+  fs.cpSync(path.join(src, 'src'), path.join(otherWork, 'src'), { recursive: true })
+  const toml = fs.readFileSync(path.join(otherWork, 'Cargo.toml'), 'utf8')
+  const version = /^version = "([^"]+)"$/m.exec(toml)![1]
+  const bumped = `${version}-e2e`
+  const pkg = `\nversion = "${version}"\n`
+  const own = `name = "aicc-helper"\nversion = "${version}"\n`
+  const lock = fs.readFileSync(path.join(otherWork, 'Cargo.lock'), 'utf8')
+  // Exactly one of each: the package's own version line, and its entry in the lock.
+  expect([toml.split(pkg).length, lock.split(own).length]).toEqual([2, 2])
+  fs.writeFileSync(path.join(otherWork, 'Cargo.toml'), toml.replace(pkg, `\nversion = "${bumped}"\n`))
+  fs.writeFileSync(path.join(otherWork, 'Cargo.lock'), lock.replace(own, `name = "aicc-helper"\nversion = "${bumped}"\n`))
+  const built = spawnSync('cargo', ['build', '--locked', '--release', '--target', 'x86_64-unknown-linux-musl', '--bin', 'aicc-helper'], {
+    cwd: otherWork, env: { ...process.env, CARGO_TARGET_DIR: path.join(otherWork, 'target') }, encoding: 'utf8', timeout: 600_000, maxBuffer: 16 * 1024 * 1024,
+  })
+  note('other-build', { version: bumped, status: built.status, error: built.error?.message ?? null, stderr: String(built.stderr ?? '').slice(-4000) })
+  if (built.status !== 0) throw new Error(`the other build failed (${built.error?.message ?? `exit ${built.status}`}): ${String(built.stderr ?? '').slice(-600)}`)
+  const file = path.join(otherWork, 'target', 'x86_64-unknown-linux-musl', 'release', 'aicc-helper')
+  const { helperManifest } = await import('../../scripts/write-helper-manifest.mjs')
+  const { LINUX_HELPERS } = await import('../../scripts/verify-bundled-helper.mjs')
+  const made = helperManifest({ [LINUX_HELPERS[0].source]: fs.readFileSync(file) }, fs.readFileSync(path.join(otherWork, 'Cargo.toml'), 'utf8'), { onlyPresent: true })
+  if (made.problems.length > 0 || !made.text) throw new Error(`the other build's manifest was not written: ${made.problems.join('; ')}`)
+  const manifest = path.join(otherWork, 'manifest.json')
+  fs.writeFileSync(manifest, made.text)
+  return { manifest, file }
+}
+
 // ── a tab's status line, hook events and tool calls (2.1.3-beta.18 section 3.2) ──
 
 type StatusLine = Parameters<RemoteSignalDeps['status']>[1]
@@ -193,6 +242,8 @@ const got = {
   served: [] as Array<{ id: string; provider: string }>,
   /** Each tab whose run ended (its hook state goes), by id. */
   ended: [] as string[],
+  /** Each start's account read (2.1.3-beta.19 section 3), by tab. */
+  accounts: [] as Array<{ id: string; read: HostAccountRead }>,
 }
 /** The app's side of a tab, with no Electron: a status strip and a hook sink
  *  that keep what they are given, and a tool host that answers each call with
@@ -211,8 +262,10 @@ const signals: RemoteSignalDeps = {
     return true
   },
   ended: (id) => { got.ended.push(id) },
+  account: (id, read) => { got.accounts.push({ id, read }) },
 }
 const statusOf = (id: string) => got.status.filter((s) => s.id === id).map((s) => s.line)
+const accountsOf = (id: string) => got.accounts.filter((a) => a.id === id).map((a) => a.read)
 const eventsOf = (id: string) => got.events.filter((x) => x.id === id).map((x) => x.e)
 const servedFor = (id: string) => got.served.filter((s) => s.id === id)
 
@@ -361,6 +414,8 @@ beforeAll(async () => {
 
 afterAll(() => {
   for (const r of relaysLeft) r.kill()
+  // The other build's folder of the run's own (on the CI runner only).
+  if (otherWork && path.basename(otherWork).startsWith('aicc-other-build-')) fs.rmSync(otherWork, { recursive: true, force: true })
   if (remoteFakeDir && /^\/[A-Za-z0-9._/-]+\/aicc-e2e\.[A-Za-z0-9]+$/.test(remoteFakeDir)) {
     // A bridge the replay step stopped is let go first, whatever failed.
     if (stoppedBridge) sshRun(`kill -CONT ${stoppedBridge} 2>/dev/null; true`)
@@ -1061,12 +1116,18 @@ describe('remote helper on a real Linux host', () => {
       // A re-open: the start's hold exits 3, list mode names it until-ended,
       // and the tab attaches over a new bridge, launching nothing.
       inUse = 1
+      const readsBefore = accountsOf(id).length
       second = new RemoteHelperPty({ appPtyId: id, machine: m, installId: machines.installId(), runner, spec: plan.spec, plan, signals, log: sessionLog, kind: 'until-ended' })
       let again = ''
       second.onData((x) => { again += x })
       await until('the replay', () => again.includes('echo: before'))
       expect(second.attachedToKept).toBe(true)
       expect(sessionLogs).toContain(`[remote-helper] ${plan.helper.sid}: a session kept for this tab runs on ${target.host}; attaching to it, nothing is launched`)
+      // 1.1's contract: the attach ran the host reads and the field read again
+      // (section 3's readHostForStart), through this machine's real helper.
+      note('kept-account-reads', accountsOf(id))
+      expect(readsBefore).toBe(1)
+      expect(accountsOf(id)).toHaveLength(2)
       await until('the newest status', () => statusOf(id).length > statusBefore)
       expect(statusOf(id).at(-1)!.model).toBe('Kept 1')
       await until('the queued hook event', () => eventsOf(id).length === eventsBefore + 1)
@@ -1095,9 +1156,10 @@ describe('remote helper on a real Linux host', () => {
   })
 
   it('a list and an attach to an until-ended holder from a bridge of another build: an app update that changed the helper, after its Check (2.1.3-beta.19 section 1.2)', async () => {
-    const other = await readBundledLinuxHelper({ manifest: need('REMOTE_HELPER_OTHER_MANIFEST'), file: need('REMOTE_HELPER_OTHER_BIN') })
+    const other = await readBundledLinuxHelper(await otherBuild())
     if (!other.ok) throw new Error(`the other build and its manifest do not read: ${other.why}`)
     expect(other.helper.sha256).not.toBe(helper.sha256)
+    expect(other.helper.version).not.toBe(helper.version)
     note('other-helper', { version: other.helper.version, sha256: other.helper.sha256 })
     const d = remoteFakeDir
     const m: RemoteMachineRecord = { ...machine, claudePath: `${d}/aicc-fake-cli`, check: { at: Date.now(), ok: true } }
@@ -1139,6 +1201,7 @@ describe('remote helper on a real Linux host', () => {
       later.onData((x) => { again += x })
       await until('the replay through the other build', () => again.includes('echo: kept by the first build'))
       expect(later.attachedToKept).toBe(true)
+      expect(sessionLogs.filter((l) => l === `[remote-helper] ${plan.helper.sid}: a session kept for this tab runs on ${target.host}; attaching to it, nothing is launched`)).toHaveLength(1)
       later.write('through the other build\r')
       await until('input through the other build', () => again.includes('echo: through the other build'))
       expect(await later.end()).toEqual({ ok: true })

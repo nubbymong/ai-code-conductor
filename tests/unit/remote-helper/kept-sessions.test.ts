@@ -338,7 +338,7 @@ describe('an SSH Persistent tab through the session helper, kept until it is end
     const unsession = ssh.calls.find((c) => c.script === 'unsession')
     expect(unsession?.values.at(-1)).toBe(remoteSessionId(id))
     expect(s.ended).toContain(id)
-    await pty.ended
+    await (pty as RemoteHelperPty).ended
     forgetRemoteHelperTab(id)
   })
 
