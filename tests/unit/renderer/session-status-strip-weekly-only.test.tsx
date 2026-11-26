@@ -93,6 +93,13 @@ describe('the status strip decides each rate-limit window from its own field', (
     expect(container.textContent).not.toContain('--%')
   })
 
+  it('weekly only with no provider set: the title names Claude Code, as the strip treats an unset provider as Claude', () => {
+    localTab(WEEKLY_ONLY)
+    delete sessionState.sessions[0].provider
+    draw()
+    expect(notReported()?.getAttribute('title')).toBe('Claude Code reported no 5-hour window for this account')
+  })
+
   it('weekly only on a local tab reads the same (the strip is one for every kind of tab)', () => {
     localTab(WEEKLY_ONLY)
     draw()

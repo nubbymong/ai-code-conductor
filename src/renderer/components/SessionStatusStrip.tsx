@@ -139,7 +139,9 @@ export default function SessionStatusStrip({ sessionId }: SessionStatusStripProp
 
   const [openPicker, setOpenPicker] = useState<'model' | 'account' | null>(null)
   const [lastEffort, setLastEffort] = useState<string | null>(null)
-  const isClaude = (session?.provider ?? 'claude') === 'claude'
+  // An unset provider is Claude Code's, here and in the 5-hour window's title.
+  const providerId = session?.provider ?? 'claude'
+  const isClaude = providerId === 'claude'
   // Usage track MP6: a session of an account-attributed provider (Codex) is
   // billed by its registry account: the one it runs under, else the provider
   // default. An API-key account is billed per token and reports no allowance.
@@ -283,16 +285,15 @@ export default function SessionStatusStrip({ sessionId }: SessionStatusStripProp
   // band below is already inside `{statusLineEnabled ? ... }`, so a clause for
   // it would be unreachable -- verified by mutation: deleting it changes no test
   // result. The footer needs its own check because it has no such wrapper.
-  // Nothing has arrived means neither window: a weekly figure alone is the
-  // status line having spoken (2.1.3-beta.19 fix round 5).
+  // Its one use is the branch where neither window has arrived, so the weekly
+  // field needs no clause here (2.1.3-beta.19 fix round 5's review).
   const awaitingStatusline =
     !session.shellOnly &&
     session.status !== 'disconnected' &&
     session.usageUnavailable !== 'no-reading' &&
     !perToken &&
     (session.usageBuckets == null || session.usageBuckets.length === 0) &&
-    session.rateLimitCurrent == null &&
-    session.rateLimitWeekly == null
+    session.rateLimitCurrent == null
 
   const pct = session.contextPercent ?? 0
   // Context-meter thresholds: >85 danger, >=70 warning -- carried over from
@@ -521,7 +522,7 @@ export default function SessionStatusStrip({ sessionId }: SessionStatusStripProp
             <span className="flex items-center gap-3 shrink-0">
               {!hiddenBuckets.includes('5h') && (
                 session.rateLimitCurrent == null
-                  ? <RateLimitNotReported label="5h" title={`${(session.provider ? tryGetRendererProvider(session.provider)?.displayName : undefined) ?? 'The status line'} reported no 5-hour window for this account`} />
+                  ? <RateLimitNotReported label="5h" title={`${tryGetRendererProvider(providerId)?.displayName ?? 'The status line'} reported no 5-hour window for this account`} />
                   : session.rateLimitCurrentResets && bucketPastReset({ resetsAt: session.rateLimitCurrentResets }, Date.now())
                     ? <RateLimitBarNoReading label="5h" resetsAt={session.rateLimitCurrentResets} />
                     : <RateLimitBar label="5h" pct={session.rateLimitCurrent} resets={session.rateLimitCurrentResets} showReset={sl.showResetTime} />
