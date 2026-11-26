@@ -12,8 +12,9 @@
 //! (`hold --until-ended`, from 2.1.3-beta.19, `store::Lifetime`) has no away
 //! clock: with nobody attached it ends once its program has exited; until an
 //! app has attached for the first time, no sooner than the default 120 s
-//! after its start (`due_to_end`). Every clock is monotonic (`Instant`),
-//! never the wall clock. Ending ends the whole process tree.
+//! after its start, and one never launched ends at that time too
+//! (`due_to_end`). Every clock is monotonic (`Instant`), never the wall
+//! clock. Ending ends the whole process tree.
 //!
 //! The endpoint (macOS and Linux): the holder marks its socket and folder as
 //! used every `TOUCH_EVERY`, so a cleaner of old files in /tmp passes them

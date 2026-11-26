@@ -393,8 +393,17 @@ fn an_until_ended_holder_whose_program_exits_before_the_first_attach_waits_for_i
     let kept = Held(hold(&store, "until-0013", &["--until-ended"]));
     let mut app = App::connect(&kept.0, &hello::LOCAL_CAPS);
     app.launch(&[FAKE, "--sleep", "1"], &work);
-    // The program exits about 1 s in; the app's attach comes a second after.
-    std::thread::sleep(Duration::from_secs(2));
+    // The program exits about 1 s in. Wait for the holder to have seen it
+    // (its record says so on the clock tick that does), however long a
+    // runner takes to start and end a program, then two more ticks with
+    // nobody attached yet: the holder is still there for the first attach.
+    let deadline = Instant::now() + Duration::from_secs(15);
+    while record_file(&store, "until-0013").and_then(|r| r.get("child").and_then(Value::as_str).map(str::to_string)).as_deref() != Some("exited") {
+        assert!(Instant::now() < deadline, "the record never said the program had exited");
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    std::thread::sleep(Duration::from_millis(600));
+    assert!(pids::alive(kept.0.pid()), "the holder ended before the app's first attach");
     let id = app.id();
     let attached = app.call(msg("term.attach", id, vec![("from", Value::uint(0))]));
     assert_eq!(t_of(&attached), "term.attached", "{}", attached.to_json());

@@ -60,7 +60,8 @@ pub enum Lifetime {
     /// ends at `term.end`, with the machine, or with its program: with nobody
     /// attached it ends once its program has exited; until an app has
     /// attached for the first time, no sooner than the default 120 s after
-    /// its start (`serve::due_to_end`).
+    /// its start, and one never launched ends at that time too
+    /// (`serve::due_to_end`).
     UntilEnded,
 }
 
