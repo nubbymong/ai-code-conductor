@@ -33,10 +33,11 @@
  * `~/.aicc/<did>/store` (the holders' records; the helper makes it 0700). A
  * new file is written to `helper/.new-<nonce>/` first and moved into its
  * folder only once the app has compared its hash with the installer's
- * manifest (commit), or removed (discard). An earlier build's folder stays
- * after the Check that installs this build's (a kept session runs the helper
- * its launch named), until a later Check's `sweep` finds no holder's record
- * in the store (2.1.3-beta.19). From 2.1.3-beta.18 (plan section
+ * manifest (commit), or removed (discard). An earlier build's folder is not
+ * removed by the commit that installs this build's (a kept session runs the
+ * helper its launch named): a Check's `sweep` removes it once no holder has a
+ * record in the store, at that same Check when none is held then, else at a
+ * later one (2.1.3-beta.19). From 2.1.3-beta.18 (plan section
  * 3.2) `~/.aicc/<did>/sessions/<sid>/` (0700) holds one session's own files,
  * which its provider's launch gives (`files`): written before its launch,
  * removed at its end (`unsession`), and by the next Check once its holder is
@@ -149,7 +150,7 @@ const SWEEP_GONE_FOLDERS = [
 ]
 
 /** At a Check only (`sweep`, 2.1.3-beta.19): the helper folders of earlier
- *  builds (`helper/<version>-<hash12>/`, which the Check that installed this
+ *  builds (`helper/<version>-<hash12>/`, which the commit that installed this
  *  build's left in place) go, but only while the store holds no holder's
  *  record, nor one being written. A kept session's CLI runs the helper by the
  *  path its launch wrote (its status line, hooks and MCP server), so while any

@@ -138,7 +138,8 @@ describe('6.3: the list at start-up removes the folders whose holder is gone', (
     expect(at).toBeGreaterThan(t.indexOf('"$P" list --store "$A/store" </dev/null >/dev/null 2>&1'))
     expect(at).toBeLessThan(t.indexOf('S=$A/sessions; c=0'))
     // The scripts run with globbing off, so the store is read by ls, not by a glob.
-    expect(t.indexOf('set -f')).toBeLessThan(at)
+    expect(t.indexOf('; set -f; ')).toBeGreaterThan(0)
+    expect(t.indexOf('; set -f; ')).toBeLessThan(at)
     expect(t).not.toContain('/*.json')
     // The sweep's deletes: those two of an earlier helper folder, and the session folders'.
     expect(t.split('; ').filter((p) => /\brm(dir)?\b/.test(p))).toEqual([

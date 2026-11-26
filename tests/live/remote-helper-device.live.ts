@@ -87,7 +87,7 @@
  * run left. The test's own execs read only what their command prints (an rc
  * file prints first).
  */
-import { describe, it, expect, beforeAll, afterAll } from 'vitest'
+import { describe, it, expect, beforeAll, afterAll, onTestFinished } from 'vitest'
 import { spawn, spawnSync, type ChildProcess } from 'child_process'
 import * as fs from 'fs'
 import * as os from 'os'
@@ -171,6 +171,9 @@ const onRunner = (): boolean => process.env.GITHUB_ACTIONS === 'true' && (target
 const hookText = (word: string): string => JSON.stringify({ hooks: { Stop: [{ matcher: '', hooks: [{ type: 'command', command: `echo ${word}` }] }] } })
 
 let machines: RemoteMachines
+/** The machine list that last installed a helper there (the update case's),
+ *  whose record names the helper folder on the host now; Remove goes through it. */
+let current: RemoteMachines | undefined
 let machine: RemoteMachineRecord
 /** How many entries ~/.aicc held before the run (another install's folders stay). */
 let aiccBefore = '0'
@@ -188,9 +191,6 @@ async function untilHost(what: string, command: string, want: string, ms = 10_00
   }
 }
 
-/** A folder of the run's own for the other build, removed in afterAll. */
-let otherWork = ''
-
 /**
  * Another build of the helper, for the update that changed it (2.1.3-beta.19
  * section 1.2): REMOTE_HELPER_OTHER_BIN and REMOTE_HELPER_OTHER_MANIFEST when
@@ -206,30 +206,32 @@ async function otherBuild(): Promise<{ manifest: string; file: string }> {
   if (given.manifest && given.file) return { manifest: given.manifest, file: given.file }
   if (!onRunner()) return { manifest: need('REMOTE_HELPER_OTHER_MANIFEST'), file: need('REMOTE_HELPER_OTHER_BIN') }
   const src = path.join(__dirname, '../../helper')
-  otherWork = fs.mkdtempSync(path.join(process.env.RUNNER_TEMP || os.tmpdir(), 'aicc-other-build-'))
-  for (const f of ['Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml']) fs.copyFileSync(path.join(src, f), path.join(otherWork, f))
-  fs.cpSync(path.join(src, 'src'), path.join(otherWork, 'src'), { recursive: true })
-  const toml = fs.readFileSync(path.join(otherWork, 'Cargo.toml'), 'utf8')
+  const otherDir = fs.mkdtempSync(path.join(process.env.RUNNER_TEMP || os.tmpdir(), 'aicc-other-build-'))
+  // Removed when the test that asked for it ends: its Checks upload from it until then.
+  onTestFinished(() => { if (path.basename(otherDir).startsWith('aicc-other-build-')) fs.rmSync(otherDir, { recursive: true, force: true }) })
+  for (const f of ['Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml']) fs.copyFileSync(path.join(src, f), path.join(otherDir, f))
+  fs.cpSync(path.join(src, 'src'), path.join(otherDir, 'src'), { recursive: true })
+  const toml = fs.readFileSync(path.join(otherDir, 'Cargo.toml'), 'utf8')
   const version = /^version = "([^"]+)"$/m.exec(toml)![1]
   const bumped = `${version}-e2e`
   const pkg = `\nversion = "${version}"\n`
   const own = `name = "aicc-helper"\nversion = "${version}"\n`
-  const lock = fs.readFileSync(path.join(otherWork, 'Cargo.lock'), 'utf8')
+  const lock = fs.readFileSync(path.join(otherDir, 'Cargo.lock'), 'utf8')
   // Exactly one of each: the package's own version line, and its entry in the lock.
   expect([toml.split(pkg).length, lock.split(own).length]).toEqual([2, 2])
-  fs.writeFileSync(path.join(otherWork, 'Cargo.toml'), toml.replace(pkg, `\nversion = "${bumped}"\n`))
-  fs.writeFileSync(path.join(otherWork, 'Cargo.lock'), lock.replace(own, `name = "aicc-helper"\nversion = "${bumped}"\n`))
+  fs.writeFileSync(path.join(otherDir, 'Cargo.toml'), toml.replace(pkg, `\nversion = "${bumped}"\n`))
+  fs.writeFileSync(path.join(otherDir, 'Cargo.lock'), lock.replace(own, `name = "aicc-helper"\nversion = "${bumped}"\n`))
   const built = spawnSync('cargo', ['build', '--locked', '--release', '--target', 'x86_64-unknown-linux-musl', '--bin', 'aicc-helper'], {
-    cwd: otherWork, env: { ...process.env, CARGO_TARGET_DIR: path.join(otherWork, 'target') }, encoding: 'utf8', timeout: 600_000, maxBuffer: 16 * 1024 * 1024,
+    cwd: otherDir, env: { ...process.env, CARGO_TARGET_DIR: path.join(otherDir, 'target') }, encoding: 'utf8', timeout: 600_000, maxBuffer: 16 * 1024 * 1024,
   })
   note('other-build', { version: bumped, status: built.status, error: built.error?.message ?? null, stderr: String(built.stderr ?? '').slice(-4000) })
   if (built.status !== 0) throw new Error(`the other build failed (${built.error?.message ?? `exit ${built.status}`}): ${String(built.stderr ?? '').slice(-600)}`)
-  const file = path.join(otherWork, 'target', 'x86_64-unknown-linux-musl', 'release', 'aicc-helper')
+  const file = path.join(otherDir, 'target', 'x86_64-unknown-linux-musl', 'release', 'aicc-helper')
   const { helperManifest } = await import('../../scripts/write-helper-manifest.mjs')
   const { LINUX_HELPERS } = await import('../../scripts/verify-bundled-helper.mjs')
-  const made = helperManifest({ [LINUX_HELPERS[0].source]: fs.readFileSync(file) }, fs.readFileSync(path.join(otherWork, 'Cargo.toml'), 'utf8'), { onlyPresent: true })
+  const made = helperManifest({ [LINUX_HELPERS[0].source]: fs.readFileSync(file) }, fs.readFileSync(path.join(otherDir, 'Cargo.toml'), 'utf8'), { onlyPresent: true })
   if (made.problems.length > 0 || !made.text) throw new Error(`the other build's manifest was not written: ${made.problems.join('; ')}`)
-  const manifest = path.join(otherWork, 'manifest.json')
+  const manifest = path.join(otherDir, 'manifest.json')
   fs.writeFileSync(manifest, made.text)
   return { manifest, file }
 }
@@ -418,8 +420,6 @@ beforeAll(async () => {
 
 afterAll(() => {
   for (const r of relaysLeft) r.kill()
-  // The other build's folder of the run's own (on the CI runner only).
-  if (otherWork && path.basename(otherWork).startsWith('aicc-other-build-')) fs.rmSync(otherWork, { recursive: true, force: true })
   if (remoteFakeDir && /^\/[A-Za-z0-9._/-]+\/aicc-e2e\.[A-Za-z0-9]+$/.test(remoteFakeDir)) {
     // A bridge the replay step stopped is let go first, whatever failed.
     if (stoppedBridge) sshRun(`kill -CONT ${stoppedBridge} 2>/dev/null; true`)
@@ -1292,10 +1292,17 @@ describe('remote helper on a real Linux host', () => {
     expect(lsDevice('')).toEqual(top)
     expect(top).toEqual(expect.arrayContaining(['helper', 'owner', 'sessions', 'store']))
     expect(machineLogs.slice(logsBefore)).toContain(`[remote-helper] ${target.host}: removed 1 earlier helper folder(s), as no session is held there`)
+    current = updated
   })
 
   it('Remove takes it away: nothing of the run is left under ~/.aicc, and no helper process', async () => {
-    const r = await machines.remove(machine.did)
+    // Through the list whose record names the helper folder there now (the
+    // update case's second Check removed the first build's), so Remove's
+    // list-then-remove runs with a helper on the host.
+    const list = current ?? machines
+    const held = list.get(machine.did)!.helper.folder
+    expect(sshRun(`D=${machine.did}; test -f "$HOME/.aicc/$D/helper/${held}/aicc-helper" && echo there || echo gone`).out.trim()).toBe('there')
+    const r = await list.remove(machine.did)
     note('remove', r)
     expect(r.ok, r.message).toBe(true)
     // pgrep -f reads every process's command line: with the device folder's
