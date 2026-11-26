@@ -179,7 +179,8 @@ async function endKeptAndClose(sessionId: string): Promise<void> {
  *  reattach. Identical to a plain close (which, for a live SSH PTY, detaches),
  *  plus SSH Persistent (Phase 1): record the detached remote in the persisted
  *  registry BEFORE teardown so the resume surface can later offer to reattach it.
- *  Launching the config again does NOT consult this — that always starts new.
+ *  Launching the config again always starts new; from 2.1.3-beta.19 main reads this
+ *  registry's tmux entries then only to keep that new session on the usual SSH path.
  *  2.1.3-beta.19: a session the session helper keeps is recorded with mux
  *  'helper' and its machine; the close lets go of it (main's kill, no end). */
 export function leaveRunningAndClose(sessionId: string): void {

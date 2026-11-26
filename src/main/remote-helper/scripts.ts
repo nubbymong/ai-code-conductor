@@ -131,6 +131,20 @@ const DELETE_SESSION_FOLDER = [
   'rm -rf -- "${A:?}/sessions/${X:?}" || no cannot-remove',
 ]
 
+/** The sweep's guarded delete (2.1.3-beta.18 section 3.2; `sessions` and
+ *  `sweep` both end with it, 2.1.3-beta.19 section 6.3): every session folder
+ *  whose holder has no record goes, each a real folder of the user's, mode
+ *  0700, by a name of the session id's own characters; one whose holder runs
+ *  is kept. One copy, so the rule of which folder may go is set in one place. */
+const SWEEP_GONE_FOLDERS = [
+  'S=$A/sessions; c=0',
+  '[ -d "$S" ] && [ ! -L "$S" ] || { r swept 0; r end ok; exit 0; }',
+  'pv "$S" || no sessions-folder-not-private',
+  'for X in $(ls -A "$S"); do case "$X" in *[!A-Za-z0-9_-]*|"") continue;; esac; [ -e "$A/store/$X.json" ] && continue; pv "$S/$X" || continue; rm -rf -- "${A:?}/sessions/${X:?}" && c=$((c+1)); done',
+  'r swept $c',
+  'r end ok',
+]
+
 /** A file a launch reads on the host, at most (2.1.3-beta.18 section 3.2). */
 export const HOST_READ_MAX = 256 * 1024
 
@@ -506,12 +520,7 @@ const SPECS = {
       ...CHECKS,
       ...LAUNCH,
       '"$P" list --store "$A/store" </dev/null || exit $?',
-      'S=$A/sessions; c=0',
-      '[ -d "$S" ] && [ ! -L "$S" ] || { r swept 0; r end ok; exit 0; }',
-      'pv "$S" || no sessions-folder-not-private',
-      'for X in $(ls -A "$S"); do case "$X" in *[!A-Za-z0-9_-]*|"") continue;; esac; [ -e "$A/store/$X.json" ] && continue; pv "$S/$X" || continue; rm -rf -- "${A:?}/sessions/${X:?}" && c=$((c+1)); done',
-      'r swept $c',
-      'r end ok',
+      ...SWEEP_GONE_FOLDERS,
     ]),
   },
   /** 2.1.3-beta.18 section 3.2, at Check: list mode first (it removes the
@@ -524,17 +533,16 @@ const SPECS = {
       ...CHECKS,
       ...LAUNCH,
       '"$P" list --store "$A/store" </dev/null >/dev/null 2>&1',
-      'S=$A/sessions; c=0',
-      '[ -d "$S" ] && [ ! -L "$S" ] || { r swept 0; r end ok; exit 0; }',
-      'pv "$S" || no sessions-folder-not-private',
-      'for X in $(ls -A "$S"); do case "$X" in *[!A-Za-z0-9_-]*|"") continue;; esac; [ -e "$A/store/$X.json" ] && continue; pv "$S/$X" || continue; rm -rf -- "${A:?}/sessions/${X:?}" && c=$((c+1)); done',
-      'r swept $c',
-      'r end ok',
+      ...SWEEP_GONE_FOLDERS,
     ]),
   },
 } satisfies Record<string, ScriptSpec>
 
 export type ScriptName = keyof typeof SPECS
+
+/** Every fixed script's name, from the one table (the tests' lists read it,
+ *  so a script added there cannot be left out of them). */
+export const SCRIPT_NAMES = Object.keys(SPECS) as ScriptName[]
 
 /** A script's text holds no single quote, backslash or line end (section 4). */
 export function scriptTextProblem(text: string): string | null {

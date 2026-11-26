@@ -319,6 +319,20 @@ describe('remote machines: Remove', () => {
     expect(m.list()).toHaveLength(1)
   })
 
+  // 2.1.3-beta.19 section 1.2: closing the tab lets go of a session kept until
+  // it is ended, and no clock ends it, so the refusal names End on the card.
+  it('is refused while the helper there lists a session kept until it is ended, naming End on the card', async () => {
+    const { ssh, m, did } = await added()
+    ssh.host = linuxHost({ list: (c) => ({ stdout: `AICC-HASH ${c.values[0]} ok ${SHA}\n{"v":1,"sessions":[{"v":1,"session":"rm0123456789abcdef0123456789abcd","label":"tab","pid":4242,"endpoint":"/tmp/aicc-1000/rm0123456789abcdef0123456789abcd-0123456789abcdef.sock","nonce":"${'c'.repeat(32)}","helper":"0.1.0","started":1,"away":null,"lifetime":"until-ended","attached":false,"child":"running","code":null}],"removed":0,"skipped":0}\n` }) })
+    expect(await m.remove(did)).toEqual({
+      ok: false,
+      message: 'The session helper on this machine still holds a session. End it first: a session kept until it is ended is listed on this machine\'s card, with End; a plain SSH tab\'s ends when you close the tab, or two minutes after a lost connection.',
+    })
+    expect(ssh.scripts()).toEqual(['list'])
+    expect(m.list()).toHaveLength(1)
+    expect(MACHINE_TEXT.holds(2)).toBe('The session helper on this machine still holds 2 sessions. End them first: a session kept until it is ended is listed on this machine\'s card, with End; a plain SSH tab\'s ends when you close the tab, or two minutes after a lost connection.')
+  })
+
   it('lists, then runs the one removal script with this machine\'s device id and this install\'s id, and forgets it', async () => {
     const { ssh, m, did } = await added()
     const r = await m.remove(did)

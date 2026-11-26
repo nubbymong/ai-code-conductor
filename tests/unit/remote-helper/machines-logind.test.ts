@@ -69,10 +69,12 @@ describe('the record keeps what it read', () => {
     expect(m.views(() => SHA)[0].persistentNote).toContain('KillUserProcesses yes, Linger yes')
   })
 
-  it('nothing read (no loginctl): kept as not read, and the card asks for a Check', async () => {
+  // 2.1.3-beta.19 section 1.2: this build's Check read nothing, and no Check
+  // will read more there, so the card says why and asks for no Check.
+  it('nothing read (no loginctl): kept as not read, and the card says logind gave no answer, with no Check asked for', async () => {
     const { m, record } = await added({ 'logind-kill': '', 'logind-exclude': '', linger: '' })
     expect(record.logind).toEqual({ kill: '', exclude: '', linger: '' })
-    expect(m.views(() => SHA)[0].persistentNote).toContain('Press Check')
+    expect(m.views(() => SHA)[0].persistentNote).toBe('SSH Persistent tabs keep the usual SSH path here: its last check got no answer from logind (no loginctl there, or no logind).')
   })
 
   it('a value that is not one logind gives is kept as not read', async () => {

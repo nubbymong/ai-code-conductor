@@ -20,7 +20,7 @@ import { createHash } from 'crypto'
 import { RemoteMachines, MACHINE_TEXT, consentText, type MachineStore, type RemoteMachineRecord } from '../../../src/main/remote-helper/machines'
 import { LINUX_ARM64_HELPER_PATH, LINUX_HELPER_PATH, LINUX_HELPER_ROWS, linuxHelperRow, type BundledLinuxHelper } from '../../../src/main/remote-helper/manifest'
 import { routeSshTab, ROUTE_WHY } from '../../../src/main/remote-helper/route'
-import { LOGIND_READS, scriptText, type ScriptName } from '../../../src/main/remote-helper/scripts'
+import { LOGIND_READS, SCRIPT_NAMES, scriptText, type ScriptName } from '../../../src/main/remote-helper/scripts'
 import { REMOTE_OTHER_HELPER } from '../../../src/shared/remote-machines'
 import { FakeSsh, result, type ExecCall, type FakeAnswer } from './fake-ssh'
 
@@ -330,7 +330,10 @@ describe('the Pi\'s setup notes 3, 6, 7 and 8, as Add, Check and Remove run them
       expect(read).toMatch(/^r (logind-kill|logind-exclude|linger) "\$\(loginctl show-(session|user) (-p [A-Za-z]+ |"\$\(id -un\)" -p Linger )--value <\/dev\/null 2>\/dev\/null\)"$/)
       expect(scriptText('probe')).toContain(`; ${read}`)
     }
-    for (const name of USED) expect(withoutLogindReads(name), name).not.toMatch(/loginctl|enable-linger|terminate-(session|user)/)
+    // Every script the app has, not only the ones Add, Check and Remove run:
+    // hold, bridge, reads, field, files, unsession and sessions too.
+    expect(SCRIPT_NAMES).toEqual(expect.arrayContaining(['hold', 'bridge', 'reads', 'field', 'files', 'unsession', 'sessions']))
+    for (const name of SCRIPT_NAMES) expect(withoutLogindReads(name), name).not.toMatch(/loginctl|enable-linger|terminate-(session|user)/)
   })
 
   it('note 3: nothing relies on lingering: no systemd unit, no user runtime folder, no scheduler', () => {

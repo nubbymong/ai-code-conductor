@@ -76,6 +76,7 @@ export const ROUTE_WHY = {
   configUnderTmux: 'its config has a session under tmux (left running, or open in another tab); End it to move this config to the helper',
   cleanUpOn: 'its machine\'s logind ends your processes when you log out (KillUserProcesses), so an SSH Persistent session could not outlive its connection there',
   cleanUpUnknown: 'its machine\'s last check did not read whether logind ends your processes when you log out; press Check on the Machines page',
+  cleanUpUnread: 'its machine\'s last check got no answer from logind (no loginctl there, or no logind), so an SSH Persistent session keeps the usual SSH path',
   container: 'it runs Claude Code in a container',
   postCommand: 'it runs a post-connect command',
   password: 'it signs in with a password; the session helper uses key sign-in only in this preview',
@@ -122,6 +123,7 @@ export function routeSshTab(i: RouteInput): Route {
     const cleanUp = logoutCleanUp(i.machine)
     if (cleanUp === 'on') return today(ROUTE_WHY.cleanUpOn)
     if (cleanUp === 'unknown') return today(ROUTE_WHY.cleanUpUnknown)
+    if (cleanUp === 'unread') return today(ROUTE_WHY.cleanUpUnread)
   }
   return { via: 'helper', machine: i.machine, kind: persistent ? 'until-ended' : 'away' }
 }

@@ -90,17 +90,20 @@ export interface RemoteMachineRecord {
 /** Whether a machine's logind ends the user's processes at logout, as its
  *  last Check read it (2.1.3-beta.19 section 1.2): `on` when KillUserProcesses
  *  is yes and the user is not in KillExcludeUsers; `off` when it is no, or the
- *  user is excluded; `unknown` when it did not read. Only `off` lets an SSH
- *  Persistent tab's session outlive its connection there (route.ts). The
- *  user's Linger is read and shown, and decides nothing: a holder runs in the
- *  login's own scope, which KillUserProcesses ends whatever Linger says. */
-export type LogoutCleanUp = 'on' | 'off' | 'unknown'
+ *  user is excluded; `unknown` on a record no Check of this build wrote (no
+ *  logind field: a Check mends it); `unread` when this build's Check read
+ *  nothing (no loginctl there, or no logind: no Check changes it). Only `off`
+ *  lets an SSH Persistent tab's session outlive its connection there
+ *  (route.ts). The user's Linger is read and shown, and decides nothing: a
+ *  holder runs in the login's own scope, which KillUserProcesses ends whatever
+ *  Linger says. */
+export type LogoutCleanUp = 'on' | 'off' | 'unknown' | 'unread'
 export function logoutCleanUp(m: Pick<RemoteMachineRecord, 'logind' | 'user'>): LogoutCleanUp {
   const l = m.logind
   if (!l) return 'unknown'
   if (l.kill === 'no') return 'off'
   if (l.kill === 'yes') return l.exclude.split(/\s+/).includes(m.user) ? 'off' : 'on'
-  return 'unknown'
+  return 'unread'
 }
 
 /** The card's line for a machine where SSH Persistent tabs keep the usual
@@ -109,9 +112,9 @@ export function persistentNote(m: Pick<RemoteMachineRecord, 'logind' | 'user'>):
   const c = logoutCleanUp(m)
   if (c === 'off') return undefined
   const linger = m.logind?.linger === 'yes' || m.logind?.linger === 'no' ? `, Linger ${m.logind.linger}` : ''
-  return c === 'on'
-    ? `SSH Persistent tabs keep the usual SSH path here: its logind ends your processes when you log out (KillUserProcesses yes${linger}).`
-    : 'SSH Persistent tabs keep the usual SSH path here: its last check did not read whether logind ends your processes when you log out. Press Check.'
+  if (c === 'on') return `SSH Persistent tabs keep the usual SSH path here: its logind ends your processes when you log out (KillUserProcesses yes${linger}).`
+  if (c === 'unread') return 'SSH Persistent tabs keep the usual SSH path here: its last check got no answer from logind (no loginctl there, or no logind).'
+  return 'SSH Persistent tabs keep the usual SSH path here: its last check did not read whether logind ends your processes when you log out. Press Check.'
 }
 
 const LOGIND_WORD = /^(yes|no)$/
@@ -242,7 +245,7 @@ export const MACHINE_TEXT = {
   noHashTool: 'The machine has no sha256sum, shasum or openssl, so the helper file cannot be checked there. Nothing was left on it.',
   hashMismatch: (hex: string) => `The file on the machine did not match the installer's (SHA-256 ${hex.slice(0, 12)}), so it was removed and nothing was left on it.`,
   inUse: (n: number) => `${n === 1 ? 'A tab runs' : `${n} tabs run`} through the session helper on this machine. Close ${n === 1 ? 'it' : 'them'} first.`,
-  holds: (n: number) => `The session helper on this machine still holds ${n === 1 ? 'a session' : `${n} sessions`}. End ${n === 1 ? 'it' : 'them'} first (close the tab, or wait two minutes after a lost connection).`,
+  holds: (n: number) => `The session helper on this machine still holds ${n === 1 ? 'a session' : `${n} sessions`}. End ${n === 1 ? 'it' : 'them'} first: a session kept until it is ended is listed on this machine's card, with End; a plain SSH tab's ends when you close the tab, or two minutes after a lost connection.`,
 }
 
 /** The refusal words a script prints, as sentences. */

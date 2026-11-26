@@ -85,6 +85,22 @@ describe('6.3: the list at start-up removes the folders whose holder is gone', (
     expect(t).toContain('case "$X" in *[!A-Za-z0-9_-]*|"") continue;; esac')
   })
 
+  it('6.3: `sessions` and `sweep` end with the same guarded delete, word for word (one rule of which folder may go)', () => {
+    const tail = [
+      'S=$A/sessions; c=0',
+      '[ -d "$S" ] && [ ! -L "$S" ] || { r swept 0; r end ok; exit 0; }',
+      'pv "$S" || no sessions-folder-not-private',
+      'for X in $(ls -A "$S"); do case "$X" in *[!A-Za-z0-9_-]*|"") continue;; esac; [ -e "$A/store/$X.json" ] && continue; pv "$S/$X" || continue; rm -rf -- "${A:?}/sessions/${X:?}" && c=$((c+1)); done',
+      'r swept $c',
+      'r end ok',
+    ].join('; ')
+    expect(scriptText('sessions').endsWith(`; ${tail}`)).toBe(true)
+    expect(scriptText('sweep').endsWith(`; ${tail}`)).toBe(true)
+    // What comes before it differs only in list mode's line: `sessions` prints its listing.
+    expect(scriptText('sessions').slice(0, -tail.length)).toContain('"$P" list --store "$A/store" </dev/null || exit $?; ')
+    expect(scriptText('sweep').slice(0, -tail.length)).toContain('"$P" list --store "$A/store" </dev/null >/dev/null 2>&1; ')
+  })
+
   it('6.3: the list the app takes is that exec, and what it removed is logged once', async () => {
     plugIn()
     ssh.host = { answer: (c) => (c.script === 'sessions' ? { stdout: `AICC-HASH ${c.values[0]} ok ${SHA}\n{"v":1,"sessions":[],"removed":1,"skipped":0}\n${result(c.values[0], { swept: '2' })}` } : { code: 1 }) }

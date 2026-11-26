@@ -48,7 +48,9 @@ describe('route: an SSH Persistent tab, switch on', () => {
     ['its config has a tmux entry (or an open tab on the usual path)', { standing: { ...NEW, configUnderTmux: true } }, ROUTE_WHY.configUnderTmux],
     ['its own session last started on the usual path (a Restart, or a restored tab with no mark)', { standing: { ...NEW, sessionUnderTmux: true } }, ROUTE_WHY.sessionUnderTmux],
     ['logind ends the user\'s processes at logout (clean-up on)', { machine: { ...MACHINE, logind: { kill: 'yes', exclude: 'root', linger: 'yes' } } }, ROUTE_WHY.cleanUpOn],
-    ['logind was not read at the last Check (clean-up unreadable)', { machine: { ...MACHINE, logind: { kill: '', exclude: '', linger: '' } } }, ROUTE_WHY.cleanUpUnknown],
+    // This build's Check read nothing (no loginctl, or no logind): no Check
+    // changes that, so the reason never says to press Check.
+    ['logind was not read at the last Check (clean-up unreadable)', { machine: { ...MACHINE, logind: { kill: '', exclude: '', linger: '' } } }, ROUTE_WHY.cleanUpUnread],
     ['a record no Check of this build wrote (no logind at all)', { machine: { ...MACHINE, logind: undefined } }, ROUTE_WHY.cleanUpUnknown],
   ]
   for (const [name, over, why] of today) {
@@ -94,11 +96,13 @@ describe('route: a marked tab never takes the usual path', () => {
 })
 
 describe('logind as the last Check read it', () => {
-  const cases: Array<[RemoteMachineRecord['logind'], 'on' | 'off' | 'unknown']> = [
+  const cases: Array<[RemoteMachineRecord['logind'], 'on' | 'off' | 'unknown' | 'unread']> = [
     [{ kill: 'no', exclude: '', linger: '' }, 'off'],
     [{ kill: 'yes', exclude: 'root', linger: 'yes' }, 'on'],
     [{ kill: 'yes', exclude: 'root nick', linger: 'no' }, 'off'],
-    [{ kill: '', exclude: 'root', linger: 'no' }, 'unknown'],
+    // This build's Check wrote it and read nothing: 'unread' (no Check mends it).
+    [{ kill: '', exclude: 'root', linger: 'no' }, 'unread'],
+    // No Check of this build wrote it: 'unknown' (a Check mends it).
     [undefined, 'unknown'],
   ]
   for (const [logind, want] of cases) {
@@ -108,5 +112,11 @@ describe('logind as the last Check read it', () => {
     expect(persistentNote({ user: 'nick', logind: { kill: 'no', exclude: '', linger: 'no' } })).toBeUndefined()
     expect(persistentNote({ user: 'nick', logind: { kill: 'yes', exclude: 'root', linger: 'no' } })).toContain('KillUserProcesses yes, Linger no')
     expect(persistentNote({ user: 'nick', logind: undefined })).toContain('Press Check')
+  })
+  it('a Check that read nothing from logind is never told to press Check again', () => {
+    const note = persistentNote({ user: 'nick', logind: { kill: '', exclude: '', linger: '' } })
+    expect(note).toBe('SSH Persistent tabs keep the usual SSH path here: its last check got no answer from logind (no loginctl there, or no logind).')
+    expect(note).not.toContain('Press Check')
+    expect(ROUTE_WHY.cleanUpUnread).not.toMatch(/press Check/i)
   })
 })

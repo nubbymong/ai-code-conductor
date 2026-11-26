@@ -17,13 +17,15 @@
  *   and no script starts a listener.
  */
 import { describe, it, expect } from 'vitest'
-import { scriptText, type ScriptName } from '../../../src/main/remote-helper/scripts'
+import { SCRIPT_NAMES, scriptText, type ScriptName } from '../../../src/main/remote-helper/scripts'
 import { execArgv } from '../../../src/main/remote-helper/ssh-exec'
 import { remoteSessionId } from '../../../src/main/remote-helper/session'
 import { routeSshTab } from '../../../src/main/remote-helper/route'
 import type { RemoteMachineRecord } from '../../../src/main/remote-helper/machines'
 
-const NAMES: ScriptName[] = ['probe', 'install', 'commit', 'discard', 'remove', 'version', 'selftest', 'list', 'hold', 'bridge', 'reads', 'files', 'unsession', 'sweep', 'sessions']
+// Every script the app has, from its one table: a script added there (section
+// 3's `field`, which every helper tab start runs) is held to each note here.
+const NAMES: ScriptName[] = SCRIPT_NAMES
 const SHA = 'a'.repeat(64)
 const PI: RemoteMachineRecord = {
   did: '0123456789abcdef0123456789abcdef', host: 'pi.lan', port: 22, user: 'nick', label: 'Pi', addedAt: 1,
@@ -33,6 +35,9 @@ const PI: RemoteMachineRecord = {
 }
 
 describe('the Pi\'s note 3: no linger, no systemd --user, no /run/user', () => {
+  it('the notes are checked against every script, the field read included', () => {
+    expect(NAMES).toContain('field')
+  })
   it('an SSH Persistent tab goes through the helper, kept until it is ended, on a machine with Linger no and KillUserProcesses no', () => {
     expect(routeSshTab({ platform: 'win32', switchOn: true, ssh: { host: 'pi.lan', port: 22, username: 'nick', remotePath: '~' }, shellOnly: false, machine: PI, bundledSha256: () => SHA })).toMatchObject({ via: 'helper', kind: 'until-ended' })
   })
