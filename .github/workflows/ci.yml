@@ -1018,8 +1018,9 @@ jobs:
         id: homes
         run: node tests/integration/codex-conformance-ci.mjs homes onpath compat
 
-      # The flag-drift suite skips itself when no codex is on PATH: prove the
-      # install is the one PATH finds, so that suite cannot pass by skipping.
+      # Prove the install is the one PATH finds before the flag-drift suite
+      # runs against it. On this job that suite fails, never skips, when it
+      # finds no codex on PATH (CCC_CODEX_CONFORMANCE_KIND is set).
       - name: The installed CLI is the one on PATH
         shell: bash
         env:
