@@ -36,6 +36,7 @@ import type { RemoteUsageNotShown } from '../../shared/types'
 import { REMOTE_USAGE_NOT_SHOWN_TEXT } from '../lib/remoteHelperAccountText'
 import {
   STRIP_CLASS,
+  STRIP_TELEMETRY_CLASS,
   STRIP_MIDDLE_ROW_CLASS,
   REMOTE_USAGE_NOTE_CLASS,
   STRIP_CONTEXT_CLASS,
@@ -431,9 +432,11 @@ export default function SessionStatusStrip({ sessionId }: SessionStatusStripProp
           right-aligned. */}
       {statusLineEnabled ? (
       <>
-      <div
-        className={STRIP_MIDDLE_ROW_CLASS}
-      >
+      {/* PR 763 fix round 10: the text row, then the meters after it, not at
+          its end where its cut falls (session-strip-layout.ts says what gives
+          way, and in what order). */}
+      <div className={STRIP_TELEMETRY_CLASS}>
+      <div className={STRIP_MIDDLE_ROW_CLASS}>
         {/* Bug 6: for Claude the interactive Model pill (controls cluster, right)
             is the single home for the model + effort, so the read-only telemetry
             copy would double it. Codex has no model pill, so it keeps this. */}
@@ -483,6 +486,7 @@ export default function SessionStatusStrip({ sessionId }: SessionStatusStripProp
         {sl.showDuration && session.totalDurationMs != null && (
           <span className="tabular-nums shrink-0" style={{ color: 'var(--text-muted)' }}>{formatDuration(session.totalDurationMs)}</span>
         )}
+      </div>
         {sl.showRateLimits && (() => {
           // Dynamic buckets (5h, Weekly, Fable, future per-model) discovered
           // from the API's limits[]; the user's hidden set is filtered out.
@@ -556,8 +560,8 @@ export default function SessionStatusStrip({ sessionId }: SessionStatusStripProp
             chip clicks through to its popover, which deep-links to Settings per
             context: auth/scope prompts open the GitHub tab; the cap / plan /
             cycle config opens the Status Line tab (its new home, default). Lives
-            last in the telemetry zone so it shares the shrink budget and clips
-            first under overflow. */}
+            last in the telemetry zone, so the zone's clip at its right end, which
+            comes only once the text row has given way, takes it first. */}
         {sl.showCopilot && aiMeterEnabled && (
           <>
             <span

@@ -207,7 +207,9 @@ describe('the note is never clipped by the strip\'s middle row (text smoke #36)'
    * and the context meter's track is the one item in the row that gives way
    * (64 px down to 24 px) before the row is cut. jsdom lays nothing out, so
    * this pins the classes; tests/e2e/session-strip-1280.spec.ts measures
-   * them in the real app at 1280x768. Red on 38e0edcb.
+   * them in the real app at 1280x768. Red on 38e0edcb. Since PR 763 fix
+   * round 10 the row is the text row inside the strip's telemetry, and the
+   * meters follow it there (the next case).
    */
   it('at 1280 px: the note keeps three characters, the row is gap-2, and only the context track may shrink in the row', () => {
     helperTab({ inputTokens: 500, contextWindowSize: 1_000_000, contextPercent: 0, costUsd: 0.5159, linesAdded: 0, totalDurationMs: 77_000, usageBuckets: [], remoteUsageNotShown: 'no-reading', modelName: 'Opus 5.5' })
@@ -217,7 +219,10 @@ describe('the note is never clipped by the strip\'s middle row (text smoke #36)'
     expect(n).not.toBeNull()
     expect(n.classList.contains('min-w-[3ch]')).toBe(true)
     expect(n.classList.contains('min-w-0')).toBe(false)
-    const middle = n.parentElement!.querySelector(':scope > .overflow-hidden.min-w-0') as HTMLElement
+    const telemetry = n.parentElement!.querySelector(':scope > .overflow-hidden.min-w-0') as HTMLElement
+    expect(telemetry).not.toBeNull()
+    expect(telemetry.classList.contains('gap-2')).toBe(true)
+    const middle = telemetry.querySelector(':scope > .overflow-hidden.min-w-0') as HTMLElement
     expect(middle).not.toBeNull()
     expect(middle.classList.contains('gap-2')).toBe(true)
     expect(middle.classList.contains('gap-3')).toBe(false)
@@ -230,10 +235,77 @@ describe('the note is never clipped by the strip\'s middle row (text smoke #36)'
     expect(track.classList.contains('shrink-0')).toBe(false)
     expect(pct.textContent).toBe('0%')
     expect(pct.classList.contains('shrink-0')).toBe(true)
-    // Every other item of the row keeps its width, the meters among them.
+    // Every other item of the row keeps its width.
     const items = [...middle.children].filter((el) => el !== ctx) as HTMLElement[]
-    expect(items.length).toBeGreaterThanOrEqual(5)
+    expect(items.length).toBeGreaterThanOrEqual(4)
     for (const el of items) expect(el.classList.contains('shrink-0'), el.className).toBe(true)
-    expect(middle.contains(container.querySelector('[data-testid="statusline-pending"]') ?? container.querySelector('[aria-label="Weekly rate limit utilisation"]'))).toBe(true)
+    // The waiting meters follow the row, outside its cut.
+    const pending = container.querySelector('[data-testid="statusline-pending"]') as HTMLElement
+    expect(pending).not.toBeNull()
+    expect(middle.contains(pending)).toBe(false)
+    expect(middle.nextElementSibling).toBe(pending)
+  })
+
+  /**
+   * PR 763 fix round 10 (the second pass on fix round 9): fix round 9 sized
+   * the row to a fresh tab's waiting meters. Once the meters have readings,
+   * each adds its reset time ("resets 3:00 pm", "resets Nov 30 10:00 am"; on
+   * by default), about 230 px at 12 px text, and a working session's row
+   * about 60 px more; the row's cut, at its right end where the meters were,
+   * took the Weekly meter again at 1280, on a helper tab and on a local tab
+   * alike. Now the meters follow the text row inside the strip's telemetry,
+   * not in it, and give way only down to each meter's label, bar and
+   * percentage: the reset texts go first, in a grid column whose minimum is
+   * nothing, with an ellipsis and the time in the bar's title. jsdom lays
+   * nothing out, so this pins the classes; the e2e case at 1024 px measures
+   * them. Red on 9c11d407: the meters were the row's last item.
+   */
+  it('a helper tab whose meters have readings: the meters follow the text row, and only their reset texts may give way', () => {
+    helperTab({
+      inputTokens: 250_300, contextWindowSize: 1_000_000, contextPercent: 25, costUsd: 12.5159, linesAdded: 152, linesRemoved: 38, totalDurationMs: 8_040_000,
+      rateLimitCurrent: 12, rateLimitCurrentResets: '2026-11-26T19:00:00Z', rateLimitWeekly: 34, rateLimitWeeklyResets: '2026-11-30T10:00:00Z',
+      usageBuckets: [], remoteUsageNotShown: 'no-reading', modelName: 'Opus 5.5',
+    })
+    settingsState.settings.statusLine = { font: 'sans', fontSize: 11, showRateLimits: true, showResetTime: true, showTokens: true, showContextBar: true, showCost: true, showLinesChanged: true, showDuration: true }
+    draw()
+    const n = note()!
+    expect(n).not.toBeNull()
+    const telemetry = n.parentElement!.querySelector(':scope > .overflow-hidden.min-w-0') as HTMLElement
+    expect(telemetry).not.toBeNull()
+    for (const c of ['flex-auto', 'min-w-0', 'overflow-hidden']) expect(telemetry.classList.contains(c), c).toBe(true)
+    const middle = telemetry.querySelector(':scope > .overflow-hidden.min-w-0') as HTMLElement
+    expect(middle).not.toBeNull()
+    expect(middle.textContent).toContain('API eq $12.5159')
+    expect(middle.textContent).toContain('-38')
+    // The text row does not grow, so the meters follow its last item.
+    expect(middle.classList.contains('flex-initial')).toBe(true)
+    expect(middle.classList.contains('flex-auto')).toBe(false)
+    const weekly = container.querySelector('[aria-label="Weekly rate limit utilisation"]') as HTMLElement
+    expect(weekly).not.toBeNull()
+    // The meters are not in the row's cut: the item right after it.
+    expect(middle.contains(weekly)).toBe(false)
+    const meters = middle.nextElementSibling as HTMLElement
+    expect(meters).not.toBeNull()
+    expect(meters.contains(weekly)).toBe(true)
+    expect(meters.parentElement).toBe(telemetry)
+    // They shrink first inside the telemetry, never below their content's minimum, and no text in them wraps.
+    for (const c of ['shrink-[10]', 'whitespace-nowrap']) expect(meters.classList.contains(c), c).toBe(true)
+    for (const c of ['min-w-0', 'overflow-hidden', 'shrink-0']) expect(meters.classList.contains(c), c).toBe(false)
+    // Each meter: its label, bar and percentage keep their width; its reset
+    // text is the one part with a minimum of nothing, its time in the title.
+    const meterEls = [...meters.children] as HTMLElement[]
+    expect(meterEls.length).toBe(2)
+    for (const m of meterEls) {
+      const [label, bar, pctEl, reset] = [...m.children] as HTMLElement[]
+      for (const el of [label, bar, pctEl]) expect(el.classList.contains('shrink-0'), el.className).toBe(true)
+      expect(bar.getAttribute('role')).toBe('progressbar')
+      expect(pctEl.textContent).toMatch(/^\d+%$/)
+      for (const c of ['grid', 'grid-cols-[minmax(0,max-content)]', 'min-w-0']) expect(reset.classList.contains(c), c).toBe(true)
+      const text = reset.firstElementChild as HTMLElement
+      for (const c of ['min-w-0', 'truncate']) expect(text.classList.contains(c), c).toBe(true)
+      expect(text.textContent).toMatch(/^resets /)
+      expect(m.getAttribute('title')).toContain(text.textContent!)
+    }
+    expect(meterEls.map((m) => m.children[2].textContent)).toEqual(['12%', '34%'])
   })
 })

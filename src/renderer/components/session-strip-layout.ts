@@ -4,34 +4,53 @@
 // component and its stores. jsdom lays nothing out, so that check, in the real
 // app with the real stylesheet, is the one that measures them.
 
-/** The strip itself: the account, the middle row, a helper tab's note and
+/** The strip itself: the account, the telemetry, a helper tab's note and
  *  the controls, side by side. */
 export const STRIP_CLASS = 'min-h-7 shrink-0 flex items-center gap-3 px-3 text-xs border-t border-b'
 
 /**
- * The strip's middle row and the helper tab's note beside it (2.1.3-beta.19
+ * The strip's telemetry and the helper tab's note beside it (2.1.3-beta.19
  * release smoke: at 1280x768 the note kept its whole width and the row, cut
  * where the note began, showed the weekly meter as a lone "W"). In a flex
  * row, a `flex-1` item's basis is 0, so it only ever gets what the others
- * leave, and a note that does not shrink leaves it short. The row's basis is
- * its content (`flex-auto`), so when the strip is too narrow the space comes
- * off the items by how much each may shrink: the note may shrink a thousand
- * times as much as the row, with an ellipsis (`truncate`) and its reason
- * still in its title. So the note gives way first.
+ * leave, and a note that does not shrink leaves it short. The telemetry's
+ * basis is its content (`flex-auto`), so when the strip is too narrow the
+ * space comes off the items by how much each may shrink: the note may shrink
+ * a thousand times as much, with an ellipsis (`truncate`) and its reason
+ * still in its title. So the note gives way first, and stops at three
+ * characters (`min-w-[3ch]`, PR 763 fix round 9: an ellipsis and its title to
+ * hover).
  *
- * PR 763 fix round 9 (the release smoke re-read, its item 8): at 1280x768 the
- * note then shrank to nothing (it could not be seen or hovered) and the row
- * was still 15 px short, so the weekly meter lost its "%". Now the note stops
- * at three characters (`min-w-[3ch]`: an ellipsis and its title to hover),
- * the row's items sit 8 px apart (`gap-2`, was 12), and the context meter's
- * track gives way next (STRIP_CONTEXT_TRACK_CLASS), so the row is cut only
- * once that track is at its own minimum.
+ * PR 763 fix round 10: the meters are no longer the end of the row that is
+ * cut. Fix round 9 sized the row to a fresh tab's waiting meters; once they
+ * have readings, each adds its reset time ("resets Nov 30 10:00 am", on by
+ * default), and the cut, at the row's right end, took the Weekly meter again.
+ * The telemetry is now the text row (STRIP_MIDDLE_ROW_CLASS), then the meters
+ * (STRIP_METERS_CLASS), then the review count and the Copilot meter where a
+ * tab has them, in that order as before. Inside it the meters shrink ten times as much as
+ * the row but only down to their labels, bars and percentages: their reset
+ * texts give way (RATE_LIMIT_RESET_WRAP_CLASS). Then the row gives way, its
+ * context track first and then its text, cut at its right end. Only once the
+ * row is at nothing does the telemetry's own clip reach the meters, at its
+ * right end: without it, a strip too narrow for the account, the meters, the
+ * note and the controls (the sidebar at its widest, or an account with
+ * per-model bars) would push the controls out of the window.
  */
-export const STRIP_MIDDLE_ROW_CLASS = 'flex items-center gap-2 flex-auto min-w-0 overflow-hidden'
+export const STRIP_TELEMETRY_CLASS = 'flex items-center gap-2 flex-auto min-w-0 overflow-hidden'
 export const REMOTE_USAGE_NOTE_CLASS = 'min-w-[3ch] truncate shrink-[1000]'
 
 /**
- * The context meter in the middle row (PR 763 fix round 9): its wrapper draws
+ * The text row at the start of the telemetry: the model (where the strip
+ * shows it), the tokens, the context meter, the cost, the lines and the duration, 8 px apart
+ * (`gap-2`, PR 763 fix round 9, was 12). Its basis is its content and it
+ * does not grow (`flex-initial`), so the meters follow its last item; it may
+ * shrink to nothing and is cut at its right end. With every item turned off
+ * it draws nothing (`empty:hidden`), so no gap is left before the meters.
+ */
+export const STRIP_MIDDLE_ROW_CLASS = 'flex items-center gap-2 flex-initial min-w-0 overflow-hidden empty:hidden'
+
+/**
+ * The context meter in the text row (PR 763 fix round 9): its wrapper draws
  * no box of its own (`contents`), so its track and its percentage are items
  * of the row. The track is the one item there that may shrink, from 64 px to
  * 24 px (`min-w-6`), before the row is cut; the percentage beside it, and
@@ -41,5 +60,25 @@ export const STRIP_CONTEXT_CLASS = 'contents'
 export const STRIP_CONTEXT_TRACK_CLASS = 'w-16 min-w-6 h-1.5 rounded-full overflow-hidden'
 export const STRIP_CONTEXT_PCT_CLASS = 'tabular-nums shrink-0'
 
-/** The rate-limit meters in the middle row, as one item that keeps its width. */
-export const STRIP_METERS_CLASS = 'flex items-center gap-3 shrink-0'
+/**
+ * The rate-limit meters, after the text row (PR 763 fix round 10). They
+ * shrink ten times as much as the row (`shrink-[10]`), but with no `min-w-0`
+ * and no clip of their own a flex item never goes below its content's
+ * minimum, which is each meter's label, bar and percentage: the reset texts
+ * are the only part with a minimum of nothing. No text in them wraps
+ * (`whitespace-nowrap`): a label, "not reported" or the extra usage would
+ * otherwise break onto a second line once the meters shrink.
+ */
+export const STRIP_METERS_CLASS = 'flex items-center gap-3 shrink-[10] whitespace-nowrap'
+
+/**
+ * A meter's reset text (RateLimitBar, PR 763 fix round 10), the one part of
+ * a meter that gives way, with an ellipsis; the reset time stays in the
+ * bar's title. `min-w-0` on a flex item lets it shrink, but its parent's
+ * minimum still counts its whole text, so the meters could never have let it
+ * go. In a one-column grid whose column is `minmax(0, max-content)`, the
+ * column is the text's width when there is room and nothing at the grid's
+ * own minimum, so the text adds nothing to the meters' minimum.
+ */
+export const RATE_LIMIT_RESET_WRAP_CLASS = 'grid grid-cols-[minmax(0,max-content)] min-w-0'
+export const RATE_LIMIT_RESET_CLASS = 'min-w-0 truncate tabular-nums'
