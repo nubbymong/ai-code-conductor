@@ -94,7 +94,7 @@ export const MARKED_STEP = {
   end: 'End it on the Machines page',
   /** Its machine was removed since (2.1.3-beta.19 final-head review): no card
    *  is left to End it on, and no Check can mend it. */
-  removed: 'its machine is no longer on the Machines page, so this app cannot reach that session: close this tab and open its config again',
+  removed: 'close this tab and choose End, then open its config again',
 } as const
 
 export function routeSshTab(i: RouteInput): Route {

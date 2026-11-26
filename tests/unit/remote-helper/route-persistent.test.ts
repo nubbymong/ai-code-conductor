@@ -93,8 +93,16 @@ describe('route: a marked tab never takes the usual path', () => {
   })
 
   it('the step for a removed machine names no Machines page action: no card is left there', () => {
-    expect(MARKED_STEP.removed).toBe('its machine is no longer on the Machines page, so this app cannot reach that session: close this tab and open its config again')
+    expect(MARKED_STEP.removed).toBe('close this tab and choose End, then open its config again')
     expect(MARKED_STEP.removed).not.toMatch(/End it on|press Check/i)
+    // PR 763 fix round 7: the note's reason already says the machine is not
+    // added, so the step does not say it again (no second colon either), and
+    // it names End at the close question: Leave running would keep an entry
+    // for a machine the app cannot find, which is never pruned.
+    const note = `${ROUTE_WHY.notAdded}. Next: ${MARKED_STEP.removed}.`
+    expect(note.match(/Machines page/g)).toHaveLength(1)
+    expect(MARKED_STEP.removed).not.toContain(':')
+    expect(MARKED_STEP.removed).toMatch(/choose End/)
     // An unmarked tab is not told a step: it takes the usual path.
     expect(route({ machine: undefined })).toEqual({ via: 'today', why: ROUTE_WHY.notAdded })
   })
