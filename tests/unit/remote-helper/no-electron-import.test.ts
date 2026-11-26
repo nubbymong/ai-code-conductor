@@ -40,10 +40,13 @@ describe('the modules the remote helper device check imports', () => {
       // The tool links a remote tab shares with a held session on this
       // computer (3.2's fix round): signals.ts loads them under plain Node.
       import('../../../src/main/session-helper/tool-links'),
+      // 2.1.3-beta.19 section 1.2: list mode's kept sessions, read under plain Node by the live file.
+      import('../../../src/main/remote-helper/kept'),
     ])
     expect(typeof modules[0].remoteLaunchOf).toBe('function')
     expect(typeof modules[5].claudeRemoteLaunch.launch).toBe('function')
     expect(typeof modules[6].wireToolStreams).toBe('function')
+    expect(typeof modules[7].listKept).toBe('function')
   })
 
   it('the live file imports no other module of the app', async () => {
@@ -54,6 +57,7 @@ describe('the modules the remote helper device check imports', () => {
     expect(imported).toEqual([
       '../../src/main/providers/claude/remote-launch',
       '../../src/main/remote-helper',
+      '../../src/main/remote-helper/kept',
       '../../src/main/remote-helper/machines',
       '../../src/main/remote-helper/manifest',
       '../../src/main/remote-helper/session',
