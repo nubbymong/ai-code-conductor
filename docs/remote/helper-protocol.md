@@ -51,7 +51,14 @@ probe (ADR) must confirm. R5 fixtures fix field types, lengths and refusals.
   the folder once the holder's record is gone; at a Check, `sweep` removes
   any folder whose holder is gone. Such a session's app connection acks
   `status` and `hooks`, and `mcp` while the app serves its tools, beside
-  `local`.
+  `local`. From 2.1.3-beta.19 (section 3), beside `reads` at every start of
+  such a session, launch or attach, the `field` script runs the helper's
+  field mode through the launcher, `field --file <file> --key <key>`, the
+  file relative to the home folder as the field mode takes it (file and key
+  from the tab's provider package; Claude Code: `.claude.json` and
+  `oauthAccount.emailAddress`); its one string is the tab's account label
+  after the app's display gate, and a read with no answer leaves the tab
+  with no label and never fails the start.
 - **Session id (`sid`)**, chosen by the app: `^[A-Za-z0-9][A-Za-z0-9_-]{7,31}$`.
   Every socket bind and connect happens after a `chdir` into the session
   folder, by the name `s`, so a long home never meets the path limit.

@@ -10,8 +10,9 @@ and, since 2.1.3-beta.7, for local Claude Code sessions and the other agent
 sessions (each assistant's CLI in its tab) when the agent sessions' switch
 below it is on (`agentSessionsThroughHelper`). Both are off by default; the
 app side is `src/main/session-helper/`. From 2.1.3-beta.17 the Windows
-installer also carries the static Linux build (`resources/helper/linux-x64/aicc-helper`)
-and a manifest of its version and SHA-256 (`resources/helper/manifest.json`),
+installer also carries the static Linux build (`resources/helper/linux-x64/aicc-helper`),
+from 2.1.3-beta.19 the arm64 one too (`resources/helper/linux-arm64/aicc-helper`),
+and a manifest of their versions and SHA-256s (`resources/helper/manifest.json`),
 for the app to upload to a Linux machine (remote step 1). Nothing else here
 ships. It is a top-level folder on purpose, not under `src/` or `resources/`,
 so no packaging glob picks it up (`tests/unit/scripts/helper-packaging.test.ts`

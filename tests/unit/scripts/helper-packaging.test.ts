@@ -158,8 +158,9 @@ const SHIPPED = {
 } as const
 
 /**
- * The two more files the Windows package carries (2.1.3-beta.17): the static
- * Linux helper and the manifest, each by a folder entry with a one-file filter.
+ * The three more files the Windows package carries: the static Linux helper
+ * (x86-64, 2.1.3-beta.17), the arm64 one (2.1.3-beta.19) and the manifest, each
+ * by a folder entry with a one-file filter.
  */
 const WIN_LINUX = [
   { entry: { from: 'helper/target/helper-linux-musl', to: 'helper/linux-x64', filter: ['aicc-helper'] }, file: 'helper/target/helper-linux-musl/aicc-helper' },
@@ -194,7 +195,7 @@ describe('the installer ships the release session helper and nothing else of hel
     for (const [platform, want] of Object.entries(SHIPPED)) {
       const section = packagingEntries(pkg.build[platform]).filter((e) => e.list !== 'files')
       const helperEntries = section.filter((e) => normPath(e.value).startsWith('helper'))
-      // Windows: the helper, then the static Linux helper and its manifest.
+      // Windows: the helper, then the two static Linux helpers and their manifest.
       expect(helperEntries, platform).toHaveLength(platform === 'win' ? 1 + WIN_LINUX.length : 1)
       const raw = ([] as unknown[]).concat(pkg.build[platform].extraResources ?? []).find((x) => !!x && typeof x === 'object' && (x as { from?: string }).from === want.entry.from)
       expect(raw, platform).toEqual(want.entry)
@@ -203,7 +204,7 @@ describe('the installer ships the release session helper and nothing else of hel
     }
   })
 
-  it('the Windows package carries the static Linux helper and its manifest, each by a folder entry that takes its one file (2.1.3-beta.17)', () => {
+  it('the Windows package carries the two static Linux helpers and their manifest, each by a folder entry that takes its one file (2.1.3-beta.17; arm64 from 2.1.3-beta.19)', () => {
     const raw = ([] as unknown[]).concat(pkg.build.win.extraResources ?? [])
     expect(raw).toEqual([SHIPPED.win.entry, ...WIN_LINUX.map((w) => w.entry)])
     for (const want of WIN_LINUX) {

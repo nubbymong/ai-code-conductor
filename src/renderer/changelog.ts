@@ -50,7 +50,11 @@ export const changelog: ChangelogEntry[] = [
       'To go back to 2.1.3-beta.18, download its installer from the GitHub releases page and run it over this version.',
     ],
     changes: [
+      { type: 'feature', description: 'Machines: you can now add an arm64 Linux machine, such as a Raspberry Pi 5, as well as an x86-64 one. The installer carries a session helper for each, and the machine\'s own answer picks which file is sent.' },
+      { type: 'feature', description: 'A tab through the session helper on another machine now names the account it runs as. It shows the weekly limits by model and extra usage when this computer holds that account and has a current reading for it; otherwise it says they are not available and keeps the host\'s own five-hour and weekly bars.' },
       { type: 'fix', description: 'Sessions held by the session helper on a remote Linux machine stay reachable when a clean-up of /tmp removes their connection file.' },
+      { type: 'fix', description: 'In a narrow pane, a Codex 0.170.0 or 0.172.0 session now takes canvas notes, Ask Conductor questions, the app\'s own Codex commands, Watchdog retries and prompt buttons after its first prompt, when the conversation\'s title runs onto a second row under Codex\'s prompt. Before this fix, the app typed nothing there and the command bar said the prompt was not sent.' },
+      { type: 'fix', description: 'Codex up to version 0.172.0 now counts as tested. With such a Codex, the Set up Codex page, the Providers card and Sentinel no longer say it is newer than the versions this app was tested with, and a closed Codex account\'s usage card fetches a fresh reading instead of showing its last one. Before, Codex 0.172.0 got that notice.' },
     ],
   },
   {

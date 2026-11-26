@@ -34,7 +34,7 @@ footer's indent. The reader refused every such screen, so the app typed nothing 
   dropped under the wrapped footer. The reader was right on all three; two tests now pin them, each
   red under its mutant (an Enter pressed over a turn that runs, or over a popup). Row two's first
   word is counted in code points, not cells: a first word of wide characters counts short, so that
-  wrap stays refused (the safe side).
+  wrap can stay refused (the safe side).
 - **Not measured.** Codex 0.172.0 on macOS and Linux, Codex 0.170.0 on Linux (its footer did not
   wrap there after the same prompt), a footer on three rows or more. The tested-version raise
   (4.1.4) is the aggregate's, after its conformance run.

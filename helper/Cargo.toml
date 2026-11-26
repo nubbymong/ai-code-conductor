@@ -1,7 +1,8 @@
 # The Rust session helper (ADR-029, ADR-030). The installer ships only the release
 # build of aicc-helper (2.1.3-beta.6), copied to resources/helper/; from
 # 2.1.3-beta.17 the Windows installer also carries the static Linux build
-# (resources/helper/linux-x64/aicc-helper) and its hash manifest
+# (resources/helper/linux-x64/aicc-helper), from 2.1.3-beta.19 the arm64 one
+# (resources/helper/linux-arm64/aicc-helper), and their hash manifest
 # (resources/helper/manifest.json). `helper/` is a top-level folder on purpose,
 # outside `src/` and `resources/`, so no packaging glob picks up anything else
 # (tests/unit/scripts/helper-packaging.test.ts keeps that true).

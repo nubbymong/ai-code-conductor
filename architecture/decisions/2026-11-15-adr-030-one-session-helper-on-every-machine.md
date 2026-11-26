@@ -481,11 +481,17 @@ Remote step 1 (2.1.3-beta.17, plan sections A1 and A2, aicc_planning#410 and #41
 by default, behind a Settings switch, before P1 and P2 run. P1 (the status line through the
 helper) needs a status frame on the session's one stream, which beta.18 adds (S26: the helper's
 status mode and the `status` capability, section 3.1; routed to the tab's strip, section 3.2);
-P1 still gates any default. A helper tab's status line does not show the account label, the
-per-model weekly buckets or extra usage. The SSH shim reads and fetches these on the host with
-the host's token (statusline-gather.ts:71-96); the helper reads no credential and calls no
-network. Bringing the account label, the per-model weekly buckets and extra usage to a helper
-tab's status line is aicc_planning#434, and it gates any default, beside P1. P1 on Ubuntu 24.04
+P1 still gates any default. A helper tab's status line names its account and, where this
+computer holds that account, shows the per-model weekly buckets and extra usage (2.1.3-beta.19
+section 3, aicc_planning#434). At every start of the tab, launch or attach, the app reads one
+field of the host's ~/.claude.json (oauthAccount.emailAddress) through the helper's field mode,
+never the file, and passes it through the account label's display gate; the buckets and extra
+usage are this computer's own usage reading of that account (the Account usage page's figure),
+never the host's, through the usage source the provider package hands
+(ProviderRemoteLaunch.accountUsage), so the helper still reads no credential and calls no
+network. For an account this computer does not hold, none named, or a held account with no
+current reading (a stale one counts as none), the strip says not available. A usage read on the
+host with its token is not built. P1 on Ubuntu 24.04
 (the 2.1.3-beta.18 host line, section 3.2): the strip's first value came before Claude Code's
 ready prompt in all five runs (4 to 210 ms before it in the four timed). P1 on Rocky Linux 10.2
 is owed: the host did not answer its one 8 s try in 2.1.3-beta.18. P2 (saved passwords through
@@ -497,11 +503,14 @@ pipes byte for byte: no `ssh -tt` terminal and no `serve` side channel, so remot
 the local holders' one code path and no ConPTY sits on the remote terminal (protocol change 16;
 component row 3). S24, the helper half (A1): `aicc-helper bridge` (macOS and Linux) carries one
 holder connection over an `ssh -T` exec's standard input and output, byte for byte, and never
-reads a frame; the Windows installer carries the static Linux helper
-(`resources/helper/linux-x64/aicc-helper`) and `resources/helper/manifest.json` (`{v:1,
-files:[{path, version, sha256}]}`), written before packaging and listing the Linux helper only,
-because electron-builder signs `aicc-helper.exe` in the package. S24, the app half (A2; Windows
-app, Linux x86-64 hosts, key sign-in): a machine is added once on Machines from a saved SSH
+reads a frame; the Windows installer carries the static Linux helpers
+(`resources/helper/linux-x64/aicc-helper`, and from 2.1.3-beta.19
+`resources/helper/linux-arm64/aicc-helper`, built natively on GitHub's arm64 runner) and
+`resources/helper/manifest.json` (`{v:1, files:[{path, version, sha256}, {path, version,
+sha256}]}`, the x86-64 file first), written before packaging and listing the Linux helpers
+only, because electron-builder signs `aicc-helper.exe` in the package. S24, the app half (A2;
+Windows app, Linux x86-64 hosts and, from 2.1.3-beta.19, arm64 (aarch64) hosts, picked by a
+fixed table on `uname -m`, key sign-in): a machine is added once on Machines from a saved SSH
 config: a question naming the file, its size and SHA-256; the file uploaded on standard input
 into ~/.aicc/<did>; its SHA-256 there compared with the installer's manifest; version and
 self-test; a record of OS, architecture, home, login shell, the CLI's path and the PATH from one
@@ -754,9 +763,10 @@ its working row once, right after Enter, and not while the reply streamed. The r
 same beta (aicc_planning#357, plan 2.1.3-beta.12 C3) reads 12 of the 33; the other 21, a footer
 wrapped onto two rows (8) or a warning count at the right of the hint row (13), still read
 unrecognised and are listed in the corpus test as known misreads. Since 2.1.3-beta.17 C7
-(aicc_planning#371) the reader takes the warning count as well; the corpus test now lists 6
-known misreads: the 5 recordings whose Codex 0.170.0 footer wraps (#357) and Codex 0.157.1's
-macOS mid-reply, which reads ready (#370). Not measured: a signed-in account's
+(aicc_planning#371) the reader takes the warning count as well, and since 2.1.3-beta.19 section
+4 (aicc_planning#436) the footer wrapped onto two rows as recorded; the corpus test now lists 2
+known misreads: Codex 0.157.1's and Codex 0.170.0's macOS mid-reply, which read ready (#370).
+Not measured: a signed-in account's
 screens (whether a real model gives the warning, or a hint row A2 could not reach without an
 account), the holder's own PTY code, the app's real attach path, any size but 120 by 40.
 

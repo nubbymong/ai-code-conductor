@@ -23,14 +23,13 @@ import type { SshRuntime } from '../../../shared/types'
  * for its own statusline display — writing the sentinel there would either
  * be re-rendered visibly or stripped. /dev/tty bypasses Claude entirely.
  */
-// Claude Code now ships `rate_limits.five_hour` and `rate_limits.seven_day`
-// on the statusline stdin JSON (see https://code.claude.com/docs/en/statusline).
-// The shim used to read `~/.claude/.credentials.json` and call
-// api.anthropic.com/api/oauth/usage itself — that pulled in `https`, needed a
-// /tmp cache, and coupled us to the OAuth token format. Reading from stdin is
-// smaller, zero-network, and survives token-format changes. Trade-off: stdin
-// doesn't expose `extra_usage`, so SSH statuslines no longer show the extra
-// top-up bar (local sessions still do). Re-add via API later if needed.
+// Claude Code ships `rate_limits.five_hour` and `rate_limits.seven_day` on the
+// statusline stdin JSON (see https://code.claude.com/docs/en/statusline); stdin
+// wins where it has them. The embedded gather (statusline-gather.ts
+// SHIM_GATHER_JS) still reads the host's account email from ~/.claude.json and
+// fetches the usage endpoint with the host's own token (60 s cache in
+// ~/.claude) for the per-model weekly buckets and extra usage, which stdin
+// does not carry: an SSH status line shows the extra usage bar.
 // Delivery order (harmonise-remote): tier 0 is an HTTP POST of the status JSON
 // to the conductor MCP server's /status endpoint through the session's own SSH
 // reverse tunnel (CCC_STATUS_URL env / argv[3]) — no escape sequence, no PTY,

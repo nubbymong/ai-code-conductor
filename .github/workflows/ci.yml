@@ -34,9 +34,9 @@ on:
   # either job or of an input here is a change to the watch as well.
   workflow_dispatch:
     inputs:
-      # A dispatch that names `helper` also runs the Helper job (see its
-      # condition), so a helper/ branch is built and tested on all three systems
-      # before its pull request opens.
+      # A dispatch that names `helper` also runs the Helper job and the arm64
+      # Helper job (see their conditions), so a helper/ branch is built and tested
+      # on all three systems, and on arm64 Linux, before its pull request opens.
       helper:
         description: 'Also build and test the session helper (the Helper job) on Windows, macOS and Linux at this ref'
         type: boolean

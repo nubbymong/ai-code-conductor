@@ -48,11 +48,12 @@
  * the session signals module (attention, the canvas turn boundary, the
  * Watchdog), each tool stream to the tool host as the tab's session, with no
  * credential, the tool set an SSH tab has (the image fetch tool an image
- * paste and Snap use included). What such a tab
- * does not have in this preview: the account label, the per-model weekly
- * buckets and extra usage on its status line (the helper reads no credential
- * and calls no network). Prompt buttons and broadcast type into it by the
- * usual rule for a Claude Code tab.
+ * paste and Snap use included). Its account label comes from the account
+ * field each start reads on the host (./host-reads.ts readHostForStart), and
+ * its per-model weekly buckets and extra usage from this computer's own usage
+ * reading of that account (statusline-watcher.ts setHelperAccount); the
+ * helper reads no credential and calls no network. Prompt buttons and
+ * broadcast type into it by the usual rule for a Claude Code tab.
  *
  * This file imports nothing of Electron.
  */

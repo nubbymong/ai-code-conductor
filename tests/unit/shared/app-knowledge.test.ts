@@ -2570,7 +2570,9 @@ describe('the 2.1.3-beta.12 known issues', () => {
   const held = 'With Plain terminals through the session helper on, a terminal the helper holds keeps only the last 2 MiB of what it printed.'
   // 2.1.3-beta.18 section 7.4 (aicc_planning#427): Codex 0.172.0's footer wraps
   // the same way after a long first prompt (its recording hold read it), so the entry names it.
-  const twoRows = 'With Codex 0.170.0 or 0.172.0, the app types nothing into a Codex session after its first prompt while the line under Codex\'s prompt takes two rows.'
+  // 2.1.3-beta.19 section 4 (aicc_planning#436): the reader takes the title run onto a
+  // second row, so the entry names that and keeps only the shapes it still refuses.
+  const twoRows = 'With Codex 0.170.0 or 0.172.0, the app can type nothing into a Codex session after its first prompt while the line under Codex\'s prompt wraps.'
   const warningCount = 'While Codex shows a warning count on the line under its prompt'
   const movedKey = 'With Codex 0.157.1 or 0.170.0, when your Codex config moves the shortcuts key to a key other than F6, the app types nothing into a Codex session'
 
@@ -2600,6 +2602,8 @@ describe('the 2.1.3-beta.12 known issues', () => {
 
   it('the three Codex screens the reader still refuses each say what is not typed and give a workaround (aicc_planning#357)', () => {
     expect(para(twoRows)).toContain('Workaround: widen the pane, or use a shorter working folder.')
+    expect(para(twoRows)).toContain('The app reads it when the folder and the start of the title fit on the first row and the rest of the title takes one more row.')
+    expect(para(twoRows)).not.toContain('takes two rows')
     // Narrowed to macOS in 2.1.3-beta.13 (aicc_planning#370): the title spinner is the busy sign on Windows and Linux.
     expect(para('On macOS, text the app types into a Codex session while Codex writes a reply')).toContain('Workaround: send it again once the reply ends.')
     expect(para('Text the app types into a Codex session while Codex writes a reply')).toBeUndefined()

@@ -1,7 +1,8 @@
 #!/usr/bin/env node
-// The Helper (os) job builds and tests the Rust session helper (helper/), and
-// only when a change touches it. Like the Test jobs (scripts/ci/change-scope.mjs)
-// it decides INSIDE the job: the job always starts, on all three runners, runs
+// The Helper (os) job, and from 2.1.3-beta.19 the arm64 Helper job
+// (ci.yml helper-linux-arm64), build and test the Rust session helper (helper/),
+// and only when a change touches it. Like the Test jobs (scripts/ci/change-scope.mjs)
+// each decides INSIDE the job: the job always starts, on all its runners, runs
 // this right after checkout, and every later step is skipped by a step-level
 // `if` on the `helper` output. A job-level path filter is never used, so the
 // job always reports under its own name and can never leave a check waiting.

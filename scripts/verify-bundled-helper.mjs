@@ -242,7 +242,7 @@ function linuxHelperProblems(folder, { expectedVersion, fs }) {
  * What is wrong with the helper in one packaged resources folder: an empty
  * list when it is right. `fs` gives the folder's entries, a file's first
  * bytes and size, and a file's whole bytes (the Windows helper's imports, the
- * Linux helper and the manifest); `version` runs the packaged helper's
+ * Linux helpers and the manifest); `version` runs the packaged helper's
  * `version` command, only once everything else is right.
  */
 export function bundledHelperProblems(resourcesDir, opts) {

@@ -79,13 +79,21 @@ rollback returns to the earlier beta's rows, and every row has a negative test.
   Windows installer carries beside the Linux helper
   (`resources/helper/manifest.json`: the Linux helper's path, version and
   SHA-256), written by the release job before packaging and checked against
-  the packaged file by `npm run verify:helper`; it lists only the helper that
-  installer carries, never the Windows helper (signing changes its bytes).
+  the packaged file by `npm run verify:helper`; it lists only the Linux
+  helpers that installer carries (x86-64 and, from 2.1.3-beta.19, arm64),
+  never the Windows helper (signing changes its bytes).
 - **Remote step 1 (2.1.3-beta.17, Linux hosts, key sign-in).** The Linux
   helper goes to a host only after the user's yes, by standard input to a
   staging folder. The app compares its SHA-256 with the installer's
   manifest, which the app re-hashes before upload, and commits it only on a
-  match. The launcher hashes it again before every start and runs it only on
+  match. From 2.1.3-beta.19 the architecture the host's probe reports
+  (`uname -m`) only selects one row of a fixed table, by equality (x86_64:
+  linux-x64/aicc-helper; aarch64: linux-arm64/aicc-helper); any other is
+  refused before anything is sent, and the answer never forms a path. The Add
+  question names both files with their SHA-256, its one-time token holds both
+  hashes, and the file sent must be the one it named for that row. The app
+  also refuses a bundled file that is not built for its row's ELF machine. The
+  launcher hashes it again before every start and runs it only on
   the expected hash. Every script checks $HOME (absolute, a real folder,
   owned, not open to others) before it acts. Every script except probe and
   install also checks that ~/.aicc and the device folder are private and that
@@ -218,7 +226,10 @@ rollback returns to the earlier beta's rows, and every row has a negative test.
   `.` or `..` part); it follows a link as the CLI does, then reads only a
   regular file of the user's own, opened without waiting and checked again
   once open; it writes nothing and runs nothing. What it prints is data the
-  app checks again before showing it.
+  app checks again before showing it. The app reads one host field at each
+  helper tab start, named by the provider package; the value is display text
+  only, bounded to one line of 1 KiB with no control character, and shown only
+  after the account label's display gate.
 - **Shared homes.** Each device id has its own marked folder, so clean-up and
   removal never cross devices or installs; other folders are only listed (3.9).
 - **Containers.** The facts come from the host's fixed script running the
