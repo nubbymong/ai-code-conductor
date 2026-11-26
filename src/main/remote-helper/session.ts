@@ -544,6 +544,11 @@ export class RemoteDriver implements HelperPtyDriver {
   }
 
   async connect(record: HolderRecord): Promise<HolderConnection> {
+    // A kept session let go of (its link stayed down, or no holder was found
+    // for it) is ended only by End, over a link of its own (endKept): no link
+    // is tried here for the end the tab's give-up sends, which wrapRequests
+    // would refuse; it used to go through every try again.
+    if (this.keptLost && this.untilEnded && !this.endAsked) throw new FinalError('a session kept until it is ended was let go of: only End ends it')
     const again = this.connected.has(record.nonce)
     // A closed tab gets one try (its end, term.end); only a tab still open
     // waits out a dropped link.
@@ -640,8 +645,10 @@ export class RemoteDriver implements HelperPtyDriver {
       if (asks) this.signals?.connected(conn)
       return conn
     } catch (err) {
-      // ssh's exit status first (a bridge that found no holder exits 3, often
-      // just after its output ends), then ssh is ended if it still runs.
+      // ssh's exit status first (a bridge that found no holder exits 3; ssh
+      // gives it just after its output ends, and the stream, ended by that
+      // output's end, leaves ssh that moment: ssh-exec.ts EXIT_AFTER_OUTPUT_MS),
+      // then the stream goes, and with it ssh if it still runs.
       let timer: ReturnType<typeof setTimeout> | undefined
       const r = await Promise.race([opened.result, new Promise<null>((res) => { timer = setTimeout(() => res(null), 2000) })])
       if (timer) clearTimeout(timer)

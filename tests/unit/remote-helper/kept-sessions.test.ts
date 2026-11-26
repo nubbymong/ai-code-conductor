@@ -495,11 +495,13 @@ describe('an SSH Persistent tab through the session helper, kept until it is end
     pty.onData((d) => { out += d })
     await until('attached', () => first.launch !== null && first.attached !== null)
     // Its holder's tree ends on the machine: the link drops, and the attach
-    // again finds no holder (the bridge's exit 3).
+    // again finds no holder (the bridge's exit 3, after its output ends, as
+    // ssh gives it: the Rocky host line's finding 1).
     first.ended = true
     first.attached!.close()
     await until('the note', () => out.includes('is over: no session helper holds it there any more'))
     expect(out).not.toContain('The session runs on there')
+    expect(logs.filter((l) => l.includes(`${remoteSessionId(id)}: the link to`))).toEqual([])
     // The Restart: its terminal is over already, so no kill reaches it.
     forgetRemoteHelperTab(id, true)
     const second = holderFor(id)

@@ -7,7 +7,8 @@
  *
  * The bridge exec (A1's `bridge` mode) is answered by `bridge`, which a test
  * sets to hand back the holder's end of a connection (a FakeHolder's), after
- * the launcher's hash line, as the real bridge would.
+ * the launcher's hash line, as the real bridge would. A bridge that finds no
+ * holder ends as ssh does: its output closes first, its exit status after.
  */
 import { EventEmitter } from 'events'
 import { PassThrough, type Duplex } from 'stream'
@@ -58,6 +59,16 @@ export class FakeChild extends EventEmitter {
     this.finish(null, 'SIGTERM')
     return true
   }
+  /** As ssh ends once the host's side has ended: its standard output closes
+   *  first, and its exit status (the host's) comes a moment later
+   *  (2.1.3-beta.19 section 1.2, the Rocky host line's finding 1). Ended on
+   *  this computer meanwhile (kill), it keeps the kill's. */
+  finishAfterOutput(code: number, gapMs = 20): void {
+    if (this.exitCode !== null || this.signalCode !== null) return
+    this.stdout.end()
+    this.stderr.end()
+    setTimeout(() => this.finish(code), gapMs)
+  }
   finish(code: number | null, signal: string | null = null): void {
     if (this.exitCode !== null || this.signalCode !== null) return
     this.exitCode = code
@@ -104,7 +115,7 @@ export class FakeSsh implements SshRunner {
         if (cut) { child.finish(cut.code, cut.signal ?? null); return }
         const end = this.host.bridge?.(call, child) ?? null
         child.stdout.write(`some rc file text\nAICC-HASH ${nonce} ok ${values[4]}\n`)
-        if (!end) { child.finish(this.host.bridgeExit ?? 3); return }
+        if (!end) { child.finishAfterOutput(this.host.bridgeExit ?? 3); return }
         // The link going down cuts the holder's connection; that is not news.
         end.on('error', () => { /* the link went down */ })
         end.on('data', (b: Buffer) => child.stdout.write(b))

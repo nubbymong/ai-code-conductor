@@ -74,7 +74,9 @@
  * connection, stays listed as until-ended, attaches again with its replay
  * and launches nothing (the host reads and the account read run again),
  * takes a status, a hook event and a tool call, and is
- * ended by End (term.end over a link of its own, then its folder); a list and
+ * ended by End (term.end over a link of its own, then its folder); an
+ * until-ended one whose holder's tree is killed on the host, which the tab
+ * says is over at its first try and the list then names no more; a list and
  * an attach to an until-ended holder from a bridge of another build (an app
  * update that changed the helper: a second build of the same source at another
  * version, REMOTE_HELPER_OTHER_BIN and REMOTE_HELPER_OTHER_MANIFEST or, on the
@@ -1155,6 +1157,59 @@ describe('remote helper on a real Linux host', () => {
     // The bracket keeps this check's own command line from matching itself.
     await untilHost('the kept holder to end', `pgrep -f -- "--session [r]${plan.helper.sid.slice(1)}" | wc -l`, '0')
     await untilHost('its folder to go', `test -e "${plan.helper.folder}" && echo there || echo gone`, 'gone')
+  })
+
+  // 2.1.3-beta.19 section 1.2, the Rocky host line's finding 1: the holder's
+  // tree ended on the host as a restart would (the holder and its CLI killed
+  // at once). The tab's re-attach reaches the machine and its bridge finds no
+  // holder: the tab says the session is over at that first try (no "not back
+  // yet" line, no 95 s of tries); the list then names no such session, and
+  // its folder, record and socket go.
+  it('a kept session whose holder\'s tree is killed on the host: the tab says it is over at its first try, and the list then names no such session (2.1.3-beta.19 section 1.2)', async () => {
+    const d = remoteFakeDir
+    expect(d).toMatch(/aicc-e2e\./)
+    const m: RemoteMachineRecord = { ...machine, claudePath: `${d}/aicc-fake-cli`, check: { at: Date.now(), ok: true } }
+    const id = 'e2e-kept-killed'
+    inUse = 1
+    const plan = remoteLaunchOf(claudeRemoteLaunch, m, { model: 'e2e-model' }, null, () => true, remoteSessionId(id), 100, 30, true)
+    const sid = plan.helper.sid
+    const pty = new RemoteHelperPty({ appPtyId: id, machine: m, installId: machines.installId(), runner, spec: plan.spec, plan, signals, log: sessionLog, kind: 'until-ended' })
+    let out = ''
+    let exit: number | null = null
+    let shownAtExit = ''
+    pty.onData((x) => { out += x })
+    pty.onExit((e) => { exit = e.exitCode; shownAtExit = out })
+    try {
+      await until('the fake CLI\'s banner', () => out.includes('FAKE-CLI READY'))
+      // The holder's process id from its record; its CLI is its child.
+      const rec = JSON.parse(sshRun(`cat "$HOME/.aicc/${machine.did}/store/${sid}.json"`).out) as { pid: number }
+      expect(Number.isInteger(rec.pid) && rec.pid > 1).toBe(true)
+      const kids = sshRun(`pgrep -P ${rec.pid} || true`).out.trim().split(/\s+/).filter((p) => /^[0-9]+$/.test(p))
+      note('kept-killed-tree', { holder: rec.pid, children: kids })
+      expect(kids.length).toBeGreaterThan(0)
+      const logsBefore = sessionLogs.length
+      const killedAt = Date.now()
+      expect(sshRun(`kill -KILL ${rec.pid} ${kids.join(' ')} && echo killed`).out.trim()).toBe('killed')
+      await until('the tab\'s end', () => exit !== null, 30_000)
+      note('kept-killed-ms', Date.now() - killedAt)
+      expect(shownAtExit).toContain(`[This tab's session on ${target.host} is over: no session helper holds it there any more (it ended there, or the machine restarted). Restart starts a new session and resumes the conversation.]`)
+      expect(shownAtExit).not.toContain('The session runs on there')
+      // The bound: the first try after the drop got the machine's answer.
+      expect(sessionLogs.slice(logsBefore).filter((l) => l.includes(`${sid}: the link to`))).toEqual([])
+    } finally {
+      // Ends the holder if a check above failed before the kill; a gone one counts as ended.
+      await pty.end().catch(() => undefined)
+      inUse = 0
+    }
+    // The machine's side: list mode names no such session, and the start-up
+    // list removes its record, socket and folder.
+    const listed = await listKept({ runner, installId: machines.installId(), log: sessionLog }, machine)
+    expect(listed.ok, listed.ok ? '' : listed.why).toBe(true)
+    if (!listed.ok) return
+    expect(listed.sessions.some((s) => s.session === sid)).toBe(false)
+    await untilHost('its folder to go', `test -e "${plan.helper.folder}" && echo there || echo gone`, 'gone')
+    await untilHost('its record to go', `test -e "$HOME/.aicc/${machine.did}/store/${sid}.json" && echo there || echo gone`, 'gone')
+    await untilHost('no process of it', `pgrep -f -- "--session [r]${sid.slice(1)}" | wc -l`, '0')
   })
 
   it('a list and an attach to an until-ended holder from a bridge of another build: an app update that changed the helper, after its Check; the first build\'s folder stays while its holder has a record, and the next Check removes it (2.1.3-beta.19 section 1.2)', async () => {
