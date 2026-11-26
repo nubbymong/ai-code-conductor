@@ -1,8 +1,8 @@
 {
   "schema": "wp1-legacy-codex-manifest/3",
-  "generatedAt": "2026-11-26T12:43:27.564Z",
-  "head": "5d73fbef275773df7072966ff0312faa7a77d2a9",
-  "tree": "c7006e0dccb2124a23102b3546f05e7f5081a7e1",
+  "generatedAt": "2026-11-26T13:45:20.887Z",
+  "head": "b73d5bc764587dea8fc937835c2b8142cdd23f55",
+  "tree": "3132e7f353cdd19620f408f5e374a2a84836305b",
   "scannedWorkingTree": true,
   "predicateDigest": "100a1233edebdc39a5f9004d3fba980a89ebb15b25872e52076386bc84b03153",
   "predicates": [
@@ -139,8 +139,8 @@
   ],
   "unscopedMentions": [],
   "unreadable": [],
-  "matchedPathCount": 1139,
-  "pathDigest": "3e094608411585d82c45869b21d76f4b8198dd25c4c6552cbc3784a6283914a7",
+  "matchedPathCount": 1140,
+  "pathDigest": "7709938a6fd1d7d2eb380277c2e45af4f66f99c4908a99a0a9266649fe4b5a14",
   "entries": [
     {
       "path": ".github/workflows/ci.yml",
@@ -3764,7 +3764,7 @@
         "P12",
         "P14"
       ],
-      "lineCount": 176
+      "lineCount": 178
     },
     {
       "path": "src/shared/ask-conductor-provider.ts",
@@ -5252,6 +5252,13 @@
         "P13"
       ],
       "lineCount": 2
+    },
+    {
+      "path": "tests/unit/main/canvas-resources-root-floor.test.ts",
+      "predicates": [
+        "P13"
+      ],
+      "lineCount": 5
     },
     {
       "path": "tests/unit/main/canvas-resume-debt-r10.test.ts",
