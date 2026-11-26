@@ -7,7 +7,9 @@
 //! exit 0. On Windows it prints nothing.
 
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
+#[cfg(unix)]
+use std::path::Path;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
@@ -78,11 +80,13 @@ fn field(home: Option<&str>, args: &[&str]) -> Ran {
     (out.status.code(), String::from_utf8_lossy(&out.stdout).into_owned(), String::from_utf8_lossy(&out.stderr).into_owned())
 }
 
+#[cfg(unix)]
 fn in_home(home: &Folder, file: &str) -> Ran {
     field(Some(home.0.to_str().expect("a Unicode path")), &["--file", file, "--key", KEY])
 }
 
 /// Printed the value and one line end, nothing else, and exited 0.
+#[cfg(unix)]
 fn printed(ran: Ran, value: &str, what: &str) {
     assert_eq!(ran, (Some(0), format!("{value}\n"), String::new()), "{what}");
 }

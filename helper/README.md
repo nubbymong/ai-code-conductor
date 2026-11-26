@@ -77,8 +77,9 @@ aicc-helper capture --out <folder>                                 (Windows only
 listens; the app then connects to the record's endpoint, launches the program
 with `term.launch` and attaches with `term.attach`. With `--until-ended`
 (from 2.1.3-beta.19; not with `--away`) the holder has no away clock: with
-nobody attached it ends once its program has exited (before its first launch,
-after the default 120 s), at `term.end`, or with the machine; its record has
+nobody attached it ends once its program has exited; until an app has
+attached for the first time, no sooner than the default 120 s after its
+start. It also ends at `term.end`, or with the machine. Its record has
 `"away":null` and `"lifetime":"until-ended"` after it, and a clock holder's
 record is as before. `list` prints every session in the store, as protocol
 section 15 describes, an until-ended one with its `lifetime`. `field` (macOS

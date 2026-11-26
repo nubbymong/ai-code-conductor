@@ -57,9 +57,10 @@ pub enum Lifetime {
     /// once nobody has been attached for that long.
     Away(u64),
     /// No away clock (`hold --until-ended`, from 2.1.3-beta.19): the holder
-    /// ends with its program, at `term.end`, or with the machine. Before its
-    /// first launch, with no program yet to keep, it ends as a holder with
-    /// the default clock does (`serve::due_to_end`).
+    /// ends at `term.end`, with the machine, or with its program: with nobody
+    /// attached it ends once its program has exited; until an app has
+    /// attached for the first time, no sooner than the default 120 s after
+    /// its start (`serve::due_to_end`).
     UntilEnded,
 }
 
@@ -207,9 +208,10 @@ pub fn record_path(store: &Path, sid: &str) -> PathBuf {
     store.join(format!("{sid}.json"))
 }
 
+/// This process's effective user id.
 #[cfg(unix)]
 #[allow(unsafe_code)]
-fn euid() -> u32 {
+pub(crate) fn euid() -> u32 {
     unsafe { libc::geteuid() }
 }
 

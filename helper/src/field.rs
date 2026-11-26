@@ -55,7 +55,7 @@ pub fn run(file: &str, key: &str) -> Option<String> {
     {
         let home = std::env::var("HOME").ok()?;
         let path = path_under(&home, file)?;
-        read_field(&path, key, euid())
+        read_field(&path, key, crate::store::euid())
     }
     #[cfg(not(unix))]
     {
@@ -143,13 +143,6 @@ pub fn read_field(path: &Path, key: &str, me: u32) -> Option<String> {
         return None;
     }
     value_at(&crate::json::parse(&bytes).ok()?, key)
-}
-
-/// This process's effective user id.
-#[cfg(unix)]
-#[allow(unsafe_code)]
-fn euid() -> u32 {
-    unsafe { libc::geteuid() }
 }
 
 #[cfg(test)]
@@ -262,7 +255,7 @@ mod tests {
         use std::os::unix::fs::{symlink, PermissionsExt};
         use std::time::{Duration, Instant};
         let dir = folder("read");
-        let me = euid();
+        let me = crate::store::euid();
         let key = "oauthAccount.emailAddress";
         let file = dir.join("account.json");
         std::fs::write(&file, br#"{"oauthAccount":{"emailAddress":"a@b.c"}}"#).expect("write");

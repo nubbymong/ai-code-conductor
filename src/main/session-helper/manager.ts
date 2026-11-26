@@ -485,7 +485,8 @@ const ENDING_WAIT_MS = 5_000
 const AGENT_CLEAR_RETRY_MS = 2_000
 /** The longest an agent session's start waits for an earlier holder that does
  *  not answer: its away clock (it ends itself that long after the app let go
- *  of it), at most this much, and AGENT_CLEAR_GRACE_MS more. */
+ *  of it), at most this much, and AGENT_CLEAR_GRACE_MS more. A holder that
+ *  runs until it is ended has no away clock: the wait is this much. */
 const AGENT_CLEAR_AWAY_CAP_MS = 5 * 60_000
 const AGENT_CLEAR_GRACE_MS = 10_000
 /** A copy that could not be put in place is tried again by a terminal started this long after. */
@@ -1908,8 +1909,10 @@ export class SessionHelperManager implements MachinesSource {
    * End an agent session's earlier holder, and keep asking while the helper
    * still lists it: a holder that cannot be reached ends itself by its away
    * clock once the app let go of it, so this waits that long at most
-   * (AGENT_CLEAR_AWAY_CAP_MS at the most, and AGENT_CLEAR_GRACE_MS more).
-   * True once it ended or is gone.
+   * (AGENT_CLEAR_AWAY_CAP_MS at the most, and AGENT_CLEAR_GRACE_MS more). A
+   * holder that runs until it is ended (`away` null) has no away clock and
+   * never ends itself by time: for one this waits AGENT_CLEAR_AWAY_CAP_MS and
+   * AGENT_CLEAR_GRACE_MS, then gives up. True once it ended or is gone.
    */
   private async endUntilGone(record: HolderRecord): Promise<boolean> {
     const sid = record.session

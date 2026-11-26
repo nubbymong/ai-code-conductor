@@ -3,7 +3,9 @@
 //! transport, the way the app uses it for an SSH Persistent tab:
 //!
 //! - It has no away clock: with nobody attached it outlives a clock holder's
-//!   away time, and it ends with its program, or at `term.end`.
+//!   away time, and it ends with its program, or at `term.end`. A program
+//!   that exits before the app's first attach leaves it in place for that
+//!   attach.
 //! - Its record keeps today's fields with `away` null and
 //!   `"lifetime":"until-ended"` after it, and list mode prints it so; a clock
 //!   holder's record is today's, field for field.
@@ -25,7 +27,9 @@ use aicc_helper::json::{self, Value};
 use aicc_helper::pids;
 use std::fs;
 use std::io::{BufRead, Write};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
+#[cfg(unix)]
+use std::path::Path;
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::{mpsc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
@@ -361,17 +365,44 @@ fn an_until_ended_holder_ends_with_its_program_when_nobody_is_attached() {
     let store = Folder::new("store-program");
     let work = Folder::new("work-program");
     let kept = Held(hold(&store, "until-0003", &["--until-ended"]));
-    // A program that sleeps 2 s and exits, launched from a connection that
-    // never attaches.
+    // A program that sleeps 2 s and exits. The app attaches once and lets go
+    // before it exits, so nobody is attached when it does.
     let child = {
         let mut app = App::connect(&kept.0, &hello::LOCAL_CAPS);
-        app.launch(&[FAKE, "--sleep", "2"], &work)
+        let child = app.launch(&[FAKE, "--sleep", "2"], &work);
+        app.attach();
+        child
     };
     assert!(gone(child, WAIT), "the program did not exit");
     assert!(gone(kept.0.pid(), WAIT), "the until-ended holder outlived its program");
     assert!(record_file(&store, "until-0003").is_none(), "the record outlived the holder");
     #[cfg(unix)]
     assert!(!Path::new(&kept.0.text("endpoint")).exists(), "the socket outlived the holder");
+}
+
+/// The app sends `term.attach` once `term.launched` has come back, so over
+/// SSH a round trip lies between the two. A program that exits in that gap
+/// (a shell that cannot start it, a bad argument) leaves the holder in
+/// place for the app's first attach, which gives its exit code, as a clock
+/// holder's does; the holder ends once that connection lets go.
+#[test]
+fn an_until_ended_holder_whose_program_exits_before_the_first_attach_waits_for_it() {
+    let _serial = one_at_a_time();
+    let store = Folder::new("store-first-attach");
+    let work = Folder::new("work-first-attach");
+    let kept = Held(hold(&store, "until-0013", &["--until-ended"]));
+    let mut app = App::connect(&kept.0, &hello::LOCAL_CAPS);
+    app.launch(&[FAKE, "--sleep", "1"], &work);
+    // The program exits about 1 s in; the app's attach comes a second after.
+    std::thread::sleep(Duration::from_secs(2));
+    let id = app.id();
+    let attached = app.call(msg("term.attach", id, vec![("from", Value::uint(0))]));
+    assert_eq!(t_of(&attached), "term.attached", "{}", attached.to_json());
+    assert_eq!(attached.get("running"), Some(&Value::Bool(false)), "{}", attached.to_json());
+    assert_eq!(attached.get("code").and_then(Value::as_i64), Some(0), "{}", attached.to_json());
+    drop(app);
+    assert!(gone(kept.0.pid(), WAIT), "the until-ended holder outlived its program once the app let go");
+    assert!(record_file(&store, "until-0013").is_none(), "the record outlived the holder");
 }
 
 #[test]
@@ -633,9 +664,10 @@ fn an_idle_holders_socket_and_run_folder_are_marked_as_used_before_a_cleaner_of_
 
 /// The Raspberry Pi notes, 2: a socket taken all the same (a cleaner of /tmp
 /// that does not spare it, a removal by hand) is bound again at the same
-/// name within a few ticks, so the holder is still reached: list mode keeps
-/// its record and a connection reaches its program. The record names the
-/// same endpoint as before.
+/// name within a few ticks, so the holder is still reached: its record, which
+/// list mode removed meanwhile (it removes a record whose socket it cannot
+/// find), is written back, list mode keeps it, and a connection reaches its
+/// program. The record names the same endpoint as before.
 #[cfg(unix)]
 #[test]
 fn a_holder_whose_socket_was_taken_binds_it_again_and_is_still_reached() {
@@ -648,6 +680,10 @@ fn a_holder_whose_socket_was_taken_binds_it_again_and_is_still_reached() {
         let child = launch_and_let_go(&rec.0, &work);
         let socket = PathBuf::from(rec.0.text("endpoint"));
         let first = fs::symlink_metadata(&socket).expect("the socket").ino();
+        // The record first, then the socket: the other order races the
+        // holder's tick, which could bind again before the record is gone.
+        let record_path = store.0.join(format!("{sid}.json"));
+        fs::remove_file(&record_path).expect("take the record, as list mode does for a holder it cannot reach");
         fs::remove_file(&socket).expect("take the socket, as a sweep of /tmp does");
         let deadline = Instant::now() + WAIT;
         let again = loop {
@@ -659,6 +695,17 @@ fn a_holder_whose_socket_was_taken_binds_it_again_and_is_still_reached() {
         };
         assert_ne!(again.ino(), first, "{lifetime:?}: the same file");
         assert_eq!(again.mode() & 0o777, 0o600, "{lifetime:?}: the socket bound again is open to others");
+        // The record is written back once the socket is bound again.
+        let deadline = Instant::now() + WAIT;
+        let back = loop {
+            if let Some(v) = record_file(&store, sid) {
+                break Rec(v);
+            }
+            assert!(Instant::now() < deadline, "{lifetime:?}: the record was never written back");
+            std::thread::sleep(Duration::from_millis(50));
+        };
+        assert_eq!((back.pid(), back.text("endpoint")), (rec.0.pid(), rec.0.text("endpoint")), "{lifetime:?}: another holder's record");
+        assert_eq!(back.keys(), rec.0.keys(), "{lifetime:?}: the record written back has other fields");
         let listed = list(&store);
         assert!(listed.iter().any(|r| r.text("session") == sid && r.pid() == rec.0.pid() && r.text("endpoint") == rec.0.text("endpoint")), "{lifetime:?}: list mode lost the holder: {listed:?}");
         let mut app = App::connect(&rec.0, &hello::LOCAL_CAPS);

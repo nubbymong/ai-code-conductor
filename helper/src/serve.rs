@@ -10,10 +10,10 @@
 //! attached to the terminal, counted from the holder's start and from every
 //! detach or dropped connection. A holder that runs until it is ended
 //! (`hold --until-ended`, from 2.1.3-beta.19, `store::Lifetime`) has no away
-//! clock: with nobody attached it exits once its program has exited, and
-//! before its first launch as a holder of the default clock does
-//! (`due_to_end`). Every clock is monotonic (`Instant`), never the wall
-//! clock. Ending ends the whole process tree.
+//! clock: with nobody attached it ends once its program has exited; until an
+//! app has attached for the first time, no sooner than the default 120 s
+//! after its start (`due_to_end`). Every clock is monotonic (`Instant`),
+//! never the wall clock. Ending ends the whole process tree.
 //!
 //! The endpoint (macOS and Linux): the holder marks its socket and folder as
 //! used every `TOUCH_EVERY`, so a cleaner of old files in /tmp passes them
@@ -196,7 +196,9 @@ pub const MAX_JSON_BEFORE_ACK: usize = 4096;
 /// The most JSON a frame may hold once the session is launched or launching:
 /// only a launch is large, and there is one per holder.
 pub const MAX_JSON_AFTER_LAUNCH: usize = 65_536;
-/// How often the away clock and the record are looked at.
+/// How often the clock thread looks: the away clock (for a holder that runs
+/// until it is ended, its program's exit), the record and, on macOS and
+/// Linux, the endpoint.
 const TICK: Duration = Duration::from_millis(250);
 /// How often the Unix socket and its folder are marked as used, in the build
 /// the installer ships: a cleaner of /tmp (systemd-tmpfiles takes entries
@@ -224,15 +226,18 @@ pub struct Options {
 /// attached, read from the monotonic clock (`Instant`): a board with no
 /// clock battery can have a wrong wall time until NTP syncs, and no record's
 /// wall time is read here. A clock holder ends once that reaches its away
-/// time. An until-ended holder has no away clock: it ends once its program
-/// has exited (`exited`); before its first launch (`launched` false), with no
-/// program yet to keep, it ends as a holder with the default clock
-/// (`store::DEFAULT_AWAY_SECS`) does.
-pub fn due_to_end(lifetime: Lifetime, away_for: Option<Duration>, launched: bool, exited: bool) -> bool {
+/// time. An until-ended holder has no away clock: with nobody attached it
+/// ends once its program has exited (`exited`); until an app has attached
+/// for the first time (`attached_once` false), no sooner than the default
+/// 120 s after its start (`store::DEFAULT_AWAY_SECS`), so a program that
+/// exits between the launch and the app's first attach is still there to
+/// replay and to give its exit code. One never launched (`launched` false)
+/// has no program to keep and ends at that time too.
+pub fn due_to_end(lifetime: Lifetime, away_for: Option<Duration>, launched: bool, exited: bool, attached_once: bool) -> bool {
     let after = |secs: u64| away_for.map_or(false, |t| t >= Duration::from_secs(secs));
     match lifetime {
         Lifetime::Away(secs) => after(secs),
-        Lifetime::UntilEnded if launched => exited,
+        Lifetime::UntilEnded if launched => exited && (attached_once || after(store::DEFAULT_AWAY_SECS)),
         Lifetime::UntilEnded => after(store::DEFAULT_AWAY_SECS),
     }
 }
@@ -375,6 +380,8 @@ struct State {
     attach_gen: u64,
     /// Since when nobody has been attached; None while someone is.
     away_since: Option<Instant>,
+    /// Whether a connection has ever attached to the terminal (`due_to_end`).
+    attached_once: bool,
     /// Set once, by the thread that ends the session.
     ending: bool,
     /// `term.end` requests that came while another thread was ending the
@@ -1466,7 +1473,7 @@ impl Serve {
                 let launched = st.holder.is_some();
                 let exited = st.holder.as_ref().map_or(false, |h| h.exit_code().is_some());
                 let away_for = st.away_since.map(|t| t.elapsed());
-                st.attached.is_none() && !st.launching && due_to_end(self.opts.lifetime, away_for, launched, exited) && self.claim_end(&mut st)
+                st.attached.is_none() && !st.launching && due_to_end(self.opts.lifetime, away_for, launched, exited, st.attached_once) && self.claim_end(&mut st)
             };
             if expired {
                 self.carry_out_end(None);
@@ -1965,6 +1972,7 @@ impl Serve {
                             let old = st.attached.replace(Arc::clone(conn)).filter(|o| o.id != conn.id);
                             st.attach_gen += 1;
                             st.away_since = None;
+                            st.attached_once = true;
                             // Counted before the lock goes, so an end claimed
                             // after this waits for this forwarder's output.
                             let forwarding = a.exit_code.is_none().then(|| {
@@ -2183,6 +2191,7 @@ pub fn run(opts: Options) -> io::Result<()> {
             attached: None,
             attach_gen: 0,
             away_since: Some(Instant::now()),
+            attached_once: false,
             ending: false,
             enders: Vec::new(),
             ended: None,
@@ -2561,26 +2570,32 @@ mod tests {
     /// The clock's decision (`due_to_end`): a clock holder ends at its away
     /// time and not before; an until-ended holder never ends by time once
     /// launched, however long nobody is attached (30 days here), and ends
-    /// once its program has exited; before its first launch it ends at the
-    /// default clock's time. Monotonic durations only.
+    /// once its program has exited; until an app has attached for the first
+    /// time, no sooner than the default clock's time after its start; never
+    /// launched, at the default clock's time. Monotonic durations only.
     #[test]
     fn an_until_ended_holder_ends_with_its_program_and_never_by_time() {
         let secs = Duration::from_secs;
         let month = Some(secs(30 * 24 * 3600));
         // A clock holder.
-        assert!(!due_to_end(Lifetime::Away(3), None, true, false), "attached a moment ago");
-        assert!(!due_to_end(Lifetime::Away(3), Some(secs(2)), true, false));
-        assert!(due_to_end(Lifetime::Away(3), Some(secs(3)), true, false));
-        assert!(due_to_end(Lifetime::Away(3), Some(secs(3)), false, false), "a clock holder never launched");
-        assert!(!due_to_end(Lifetime::Away(120), Some(secs(5)), true, true), "a clock holder waits for the app after its program exits");
-        // An until-ended holder, launched: never by time, at once after its program.
-        assert!(!due_to_end(Lifetime::UntilEnded, month, true, false), "an until-ended holder ran out like a clock holder");
-        assert!(!due_to_end(Lifetime::UntilEnded, Some(secs(store::MAX_AWAY_SECS + 1)), true, false));
-        assert!(due_to_end(Lifetime::UntilEnded, Some(Duration::ZERO), true, true), "an until-ended holder outlived its program");
-        assert!(due_to_end(Lifetime::UntilEnded, month, true, true));
+        assert!(!due_to_end(Lifetime::Away(3), None, true, false, true), "attached a moment ago");
+        assert!(!due_to_end(Lifetime::Away(3), Some(secs(2)), true, false, true));
+        assert!(due_to_end(Lifetime::Away(3), Some(secs(3)), true, false, true));
+        assert!(due_to_end(Lifetime::Away(3), Some(secs(3)), false, false, false), "a clock holder never launched");
+        assert!(!due_to_end(Lifetime::Away(120), Some(secs(5)), true, true, true), "a clock holder waits for the app after its program exits");
+        // An until-ended holder, launched and attached since: never by time,
+        // at once after its program.
+        assert!(!due_to_end(Lifetime::UntilEnded, month, true, false, true), "an until-ended holder ran out like a clock holder");
+        assert!(!due_to_end(Lifetime::UntilEnded, Some(secs(store::MAX_AWAY_SECS + 1)), true, false, true));
+        assert!(due_to_end(Lifetime::UntilEnded, Some(Duration::ZERO), true, true, true), "an until-ended holder outlived its program");
+        assert!(due_to_end(Lifetime::UntilEnded, month, true, true, true));
+        // Launched, its program exited, and no app has attached yet: it waits
+        // for the app's first attach, up to the default clock's time.
+        assert!(!due_to_end(Lifetime::UntilEnded, Some(secs(1)), true, true, false), "the holder ended before the app's first attach");
+        assert!(due_to_end(Lifetime::UntilEnded, Some(secs(store::DEFAULT_AWAY_SECS)), true, true, false));
         // Not launched yet: the default clock.
-        assert!(!due_to_end(Lifetime::UntilEnded, Some(secs(store::DEFAULT_AWAY_SECS - 1)), false, false));
-        assert!(due_to_end(Lifetime::UntilEnded, Some(secs(store::DEFAULT_AWAY_SECS)), false, false));
+        assert!(!due_to_end(Lifetime::UntilEnded, Some(secs(store::DEFAULT_AWAY_SECS - 1)), false, false, false));
+        assert!(due_to_end(Lifetime::UntilEnded, Some(secs(store::DEFAULT_AWAY_SECS)), false, false, false));
     }
 
     #[test]
