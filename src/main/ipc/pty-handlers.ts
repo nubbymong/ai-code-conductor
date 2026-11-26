@@ -2,8 +2,7 @@ import { ipcMain, BrowserWindow, app } from 'electron'
 import { z } from 'zod'
 import { spawnPty, writePty, resizePty, killPty, getSshFlow, endSshRemoteDetailed, probeTmuxLive, holdsCodexLaunchLease, codexLaunchLeaseTaken, beginSpawnPreparation, isSessionWritable, isSessionLiveOrStarting, SSHOptions, SshEndTarget, getKeptCodexConversation, getKeptCodexConversationSource, codexRunEnded, codexConversationHeldElsewhere, endAgentRunsInFolder } from '../pty-manager'
 import type { CodexLaunch } from '../pty-manager'
-import { forgetRemoteHelperTab, isRemoteHelperTab } from '../remote-helper'
-import { SSH_THROUGH_HELPER } from '../../shared/remote-machines'
+import { forgetRemoteHelperTab, noteRestoredRemoteTabs, remoteHelperFlowState, remoteHelperLiveness } from '../remote-helper'
 import { handOffAskQuestion, submitPrompt, submitImage, type PromptButtonMode, type ImageSubmitResult } from '../session-input'
 import { ensureHelpWorkspace, helpWorkspaceDir } from '../help-workspace'
 import { ASK_HELP_FOLDER_FAILED } from '../../shared/ask-conductor-provider'
@@ -343,6 +342,11 @@ export const spawnOptionsSchema = z.object({
   // handler builds its options from the raw object and discards the parse
   // result, so a `.transform()` here would read as a sanitiser and do nothing.
   askPrompt: z.string().max(8000).optional(),
+  // 2.1.3-beta.19 section 1.2: the tab's saved mark, its session kept by the
+  // session helper until it is ended (session-persistence.ts SavedSession.remoteVia).
+  // It can only keep a tab off the usual SSH path (remote-helper/route.ts),
+  // never put one on a path its config does not take.
+  remoteVia: z.literal('helper').optional(),
   // Session kind flag: an Ask Conductor one-shot. Used only to keep a watchdog
   // off that ephemeral surface (#266 MAJOR-5); no spawn coordinate.
   isAsk: z.boolean().optional(),
@@ -839,6 +843,8 @@ export function registerPtyHandlers(getWindow: () => BrowserWindow | null): void
     cwd?: string
     cols?: number
     rows?: number
+    /** 2.1.3-beta.19: the tab's saved mark (spawnOptionsSchema.remoteVia). */
+    remoteVia?: 'helper'
     ssh?: RendererSSHOptions
     shellOnly?: boolean
     /** A Terminal only tab or a partner terminal (spawnOptionsSchema.plainTerminal). */
@@ -1415,7 +1421,8 @@ export function registerPtyHandlers(getWindow: () => BrowserWindow | null): void
     // 'restart' is a Restart's.
     killPty(sessionId, { reason: reason === 'restart' ? 'restart' : 'close' })
     // 2.1.3-beta.17 A2: a remote tab whose start failed is over already, so killPty does not reach it.
-    forgetRemoteHelperTab(sessionId)
+    // 2.1.3-beta.19: a Restart keeps the path the tab started on; a close forgets it.
+    forgetRemoteHelperTab(sessionId, reason === 'restart')
     sshClaudeLaunches.delete(sessionId)
     sshShellSessions.delete(sessionId)
     // #580: nothing left to deliver a queued canvas marker to. Logged loudly if
@@ -1438,6 +1445,8 @@ export function registerPtyHandlers(getWindow: () => BrowserWindow | null): void
     if (!fromApp(e)) return
     const parsed = tabsRestoredSchema.safeParse(tabs)
     if (parsed.success) keptTabsRestored(parsed.data)
+    // 2.1.3-beta.19: an SSH Persistent tab restored with no mark reads as tmux.
+    if (parsed.success) noteRestoredRemoteTabs(parsed.data.map((t) => t.id))
   })
   ipcMain.on(IPC.PTY_TAB_SHOWN, (e, id: unknown) => {
     if (!fromApp(e)) return
@@ -1496,7 +1505,8 @@ export function registerPtyHandlers(getWindow: () => BrowserWindow | null): void
   ipcMain.handle(IPC.SSH_FLOW_GET_STATE, async (_event, sessionId: string) => {
     sessionIdSchema.parse(sessionId)
     // 2.1.3-beta.17 A2: a tab through the session helper has no SSH flow, and the overlay is not shown for it.
-    return getSshFlow(sessionId)?.getState() ?? (isRemoteHelperTab(sessionId) ? { state: SSH_THROUGH_HELPER } : { state: 'connecting' })
+    // 2.1.3-beta.19: a kept tab's names the machine that keeps it.
+    return getSshFlow(sessionId)?.getState() ?? remoteHelperFlowState(sessionId) ?? { state: 'connecting' }
   })
 
   // SSH tmux enhancement (item 4): deliberately END a persistent remote session
@@ -1564,8 +1574,20 @@ export function registerPtyHandlers(getWindow: () => BrowserWindow | null): void
     // credential invalidation drops `<id>` when this config's host/username/port
     // is rewritten, so a redirected password is gone before this read. No extra
     // guard needed here.
+    // 2.1.3-beta.19 section 1.2: a session the session helper keeps (a
+    // 'helper' entry) is asked of its machine's list mode, one exec, not of
+    // tmux. Both halves must answer for the whole to be verified (fail-open).
+    const kept = new Set(registry.filter((e) => e.mux === 'helper').map((e) => e.sessionId))
+    const keptIds = sessionIds.filter((id) => kept.has(id))
+    const tmuxIds = sessionIds.filter((id) => !kept.has(id))
+    const target = { username: s.username, host: s.host, port: Number(s.port) }
+    const viaList = keptIds.length > 0 ? await remoteHelperLiveness(target, keptIds) : null
+    if (viaList && tmuxIds.length === 0) return viaList
     const password = loadCredential(configId) ?? undefined
-    return probeTmuxLive({ username: s.username, host: s.host, port: Number(s.port), password }, sessionIds)
+    const viaTmux = await probeTmuxLive({ ...target, password }, tmuxIds)
+    if (!viaList) return viaTmux
+    if (viaList.outcome !== 'verified' || viaTmux.outcome !== 'verified') return { outcome: 'unverified', liveSessionIds: [] }
+    return { outcome: 'verified', liveSessionIds: [...viaList.liveSessionIds, ...viaTmux.liveSessionIds] }
   })
 
   // SSH Persistent (resume liveness, TIER 1): is a host answering at all? No ssh,

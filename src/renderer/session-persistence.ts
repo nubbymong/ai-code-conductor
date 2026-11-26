@@ -61,6 +61,10 @@ export function buildSessionState(): SessionState {
           remoteOs: s.sshConfig.remoteOs,
         }
       : undefined,
+    // 2.1.3-beta.19 section 1.2: the tab's session is kept by the session
+    // helper (written at the start that went through it; absent otherwise,
+    // so a tab saved before beta.19 reads as tmux).
+    ...(s.sessionType === 'ssh' && s.remoteVia === 'helper' ? { remoteVia: 'helper' as const, ...(s.remoteDid ? { remoteDid: s.remoteDid } : {}) } : {}),
     machineName: s.machineName,
     githubIntegration: s.githubIntegration,
     // v1.5: provider-shape persistence. Codex sessions (P2.8+) carry
@@ -461,6 +465,8 @@ export async function restoreSavedSessions(
         partnerTerminalPath: saved.partnerTerminalPath,
         partnerElevated: saved.partnerElevated,
         sshConfig: saved.sshConfig,
+        // 2.1.3-beta.19: the mark comes back, so the tab attaches to its kept session.
+        ...(saved.sessionType === 'ssh' && saved.remoteVia === 'helper' ? { remoteVia: 'helper' as const, ...(typeof saved.remoteDid === 'string' ? { remoteDid: saved.remoteDid } : {}) } : {}),
         legacyVersion: claude?.legacyVersion ?? saved.legacyVersion,
         agentIds: claude?.agentIds ?? saved.agentIds,
         effortLevel: claude?.effortLevel ?? saved.effortLevel,
@@ -573,8 +579,10 @@ export async function restoreSavedSessions(
     // notice with Start new (rather than silently handing back a blank session
     // that looks like the one left running). Unverified hosts flag nothing.
     void (async () => {
+      // 2.1.3-beta.19: a tab kept by the session helper is not tmux's: its
+      // start attaches to its holder, and list mode answers for it.
       const persistentSsh = restoredSessions.filter(
-        (s) => s.sessionType === 'ssh' && !!s.sshConfig && s.sshConfig.detachable !== false && !!s.configId,
+        (s) => s.sessionType === 'ssh' && !!s.sshConfig && s.sshConfig.detachable !== false && !!s.configId && s.remoteVia !== 'helper',
       )
       if (persistentSsh.length === 0) return
       const gone = await deps.probeGoneSessions(persistentSsh.map((s) => ({ id: s.id, configId: s.configId })))

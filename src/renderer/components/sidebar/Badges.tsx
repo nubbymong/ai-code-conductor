@@ -98,11 +98,14 @@ export function SshBadge() {
 // persistent vs. plain SSH is legible at a glance in the list. The chain-link
 // glyph reads as "stays connected"; the green tint matches the header
 // persistence indicator.
-export function SshPersistentBadge() {
+export function SshPersistentBadge({ helper = false }: { helper?: boolean } = {}) {
   return (
     <div
       className="flex items-center justify-center h-4 px-1 gap-0.5 rounded shrink-0 bg-green/15 text-green"
-      title="Persistent SSH session — kept alive in tmux; a dropped connection reattaches"
+      // 2.1.3-beta.19 section 1.2: a session the session helper keeps names it.
+      title={helper
+        ? 'Persistent SSH session, kept by the session helper on its machine until you end it; a dropped connection or a quit reattaches'
+        : 'Persistent SSH session — kept alive in tmux; a dropped connection reattaches'}
       style={{ fontSize: '8px', fontWeight: 700, letterSpacing: '0.5px' }}
       data-testid="ssh-persistent-badge"
     >
@@ -188,9 +191,9 @@ export function SshContainerBadge({ container }: { container?: string }) {
  * surface that shows transport renders this, so ConfigRow, Quick Start, the
  * running-session cards and the startup page cannot drift apart again.
  */
-export function TransportBadge({ kind, container }: { kind: TransportBadgeKind; container?: string }) {
+export function TransportBadge({ kind, container, helper }: { kind: TransportBadgeKind; container?: string; helper?: boolean }) {
   if (kind === 'container') return <SshContainerBadge container={container} />
-  if (kind === 'persistent') return <SshPersistentBadge />
+  if (kind === 'persistent') return <SshPersistentBadge helper={helper} />
   if (kind === 'ssh') return <SshBadge />
   return null
 }

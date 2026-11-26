@@ -111,10 +111,11 @@ beforeEach(() => {
 afterEach(() => vi.restoreAllMocks())
 
 describe('registerRemoteMachinesHandlers', () => {
-  it('registers exactly the five machines:remote:* channels', () => {
+  it('registers exactly the eight machines:remote:* channels (2.1.3-beta.19 section 1.2: the kept sessions, End of one, End of a tab\'s own)', () => {
     register()
     expect([...handlers.keys()].sort()).toEqual([
       IPC.MACHINES_REMOTE_STATE, IPC.MACHINES_REMOTE_PREPARE, IPC.MACHINES_REMOTE_ADD, IPC.MACHINES_REMOTE_CHECK, IPC.MACHINES_REMOTE_REMOVE,
+      IPC.MACHINES_REMOTE_SESSIONS, IPC.MACHINES_REMOTE_END_SESSION, IPC.MACHINES_REMOTE_END_TAB,
     ].sort())
     expect([...handlers.keys()].every((c) => c.startsWith('machines:remote:'))).toBe(true)
   })

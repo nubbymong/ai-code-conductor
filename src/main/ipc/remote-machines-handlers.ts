@@ -10,6 +10,7 @@ import {
   type RemoteActionResult,
   type RemoteConsent,
   type RemoteMachinesState,
+  type RemoteSessionsState,
 } from '../../shared/remote-machines'
 import { readConfig } from '../config-manager'
 import { logInfo, logWarn } from '../debug-logger'
@@ -20,7 +21,8 @@ import { getConductorMcpPort, recordHeldToolSession, serveToolStream } from '../
 import { conductorToolsMasterOn } from '../conductor-tools-switch'
 import { endHelperHooks, helperHookEvent } from '../session-signals/hooks'
 import { dispatchHelperStatus } from '../statusline-watcher'
-import { setRemoteHelperDeps, remoteTabsOn, type RemoteSignalDeps } from '../remote-helper'
+import { setRemoteHelperDeps, remoteTabsOn, listRemoteSessions, endRemoteSession, endRemoteTab, type RemoteSignalDeps } from '../remote-helper'
+import { peekSessionState, readDetachedRemotesRegistry } from '../session-state'
 import { RemoteMachines, fileStore } from '../remote-helper/machines'
 import { bundledHelperPaths, manifestEntry, readBundledLinuxHelper } from '../remote-helper/manifest'
 import { nodeSshRunner } from '../remote-helper/ssh-exec'
@@ -71,6 +73,32 @@ export const REMOTE_NOT_AVAILABLE = 'Remote sessions through the session helper 
  *  offers no Add, and says so. */
 export const REMOTE_STATE_UNREAD = 'The Linux machines list did not load. Nothing on it was changed; the app\'s log says why.'
 const NOT_LISTED = 'That machine is not on this computer\'s list.'
+/** A helper session id, as End takes it. */
+const HELPER_SID_RE = /^rm[0-9a-f]{30}$/
+/** An app session id, as a tab's End takes it. */
+const APP_SESSION_ID_RE = /^[A-Za-z0-9_-]{1,128}$/
+/** How long after start-up the first list of kept sessions waits (2.1.3-beta.19
+ *  section 1.2): past the start's own work, never on its way. */
+export const STARTUP_SESSIONS_DELAY_MS = 5_000
+
+/**
+ * The machines whose kept sessions are listed while the switch is off
+ * (2.1.3-beta.19 section 1.2): those a left-running 'helper' entry or a saved
+ * tab's mark names. With none, nothing of the feature is read.
+ */
+export function keptMachineDids(): string[] {
+  const dids = new Set<string>()
+  for (const e of readDetachedRemotesRegistry()) if (e.mux === 'helper' && typeof e.did === 'string' && REMOTE_DID_RE.test(e.did)) dids.add(e.did)
+  let saved: ReturnType<typeof peekSessionState> = null
+  try { saved = peekSessionState() } catch { saved = null }
+  for (const s of saved?.sessions ?? []) if (s.remoteVia === 'helper' && typeof s.remoteDid === 'string' && REMOTE_DID_RE.test(s.remoteDid)) dids.add(s.remoteDid)
+  return [...dids]
+}
+
+/** The machines listed now: every added one while the switch is on, else keptMachineDids'. */
+function listedDids(): string[] | undefined {
+  return savedSettings()?.[REMOTE_SESSIONS_SETTING] === true ? undefined : keptMachineDids()
+}
 
 /** The saved settings; null when they do not read. */
 function savedSettings(): Record<string, unknown> | null {
@@ -107,7 +135,17 @@ export function registerRemoteMachinesHandlers(getWindow: () => BrowserWindow | 
       onOutput: (id, n) => { getPtyIntegrityMonitor()?.recordPtyData(id, n) },
       log: logInfo,
       signals: remoteSignals,
+      registry: readDetachedRemotesRegistry,
     })
+    // At start-up, once: list mode on each machine listed (no daemon, no polling).
+    const first = setTimeout(() => {
+      const dids = listedDids()
+      if (dids && dids.length === 0) return
+      void listRemoteSessions(dids).then((all) => {
+        for (const a of all) logInfo(a.ok ? `[remote-helper] start-up: ${a.sessions.length} session(s) on ${a.did.slice(0, 8)}` : `[remote-helper] start-up: the sessions on ${a.did.slice(0, 8)} were not listed (${a.why})`)
+      }).catch((err: Error) => logWarn(`[remote-helper] start-up: the sessions were not listed (${err.message})`))
+    }, STARTUP_SESSIONS_DELAY_MS)
+    first.unref?.()
   }
   const refuse = (message: string): RemoteActionResult => ({ ok: false, message })
 
@@ -151,6 +189,37 @@ export function registerRemoteMachinesHandlers(getWindow: () => BrowserWindow | 
     if (!m) return refuse(REMOTE_NOT_AVAILABLE)
     if (typeof did !== 'string' || !REMOTE_DID_RE.test(did)) return refuse(NOT_LISTED)
     return answer('remote check', REMOTE_ACTION_TIMEOUT_MS, () => m.check(did), () => refuse(MACHINES_NO_ANSWER))
+  })
+
+  // 2.1.3-beta.19 section 1.2: the sessions the helper keeps, one list exec per
+  // machine listed (every added one while the switch is on; with it off, only
+  // those a left-running entry or a saved tab names).
+  ipcMain.handle(IPC.MACHINES_REMOTE_SESSIONS, async (event): Promise<RemoteSessionsState> => {
+    if (!trusted(event)) { logWarn('[machines] remote sessions refused: not the app window'); return { machines: [] } }
+    if (!machines) return { machines: [] }
+    return answer('remote sessions', REMOTE_STATE_TIMEOUT_MS * 3, async (): Promise<RemoteSessionsState> => {
+      const dids = listedDids()
+      return { machines: dids && dids.length === 0 ? [] : await listRemoteSessions(dids) }
+    }, (): RemoteSessionsState => ({ machines: [] }))
+  })
+
+  // End on a machine's card: one kept session no open tab shows.
+  ipcMain.handle(IPC.MACHINES_REMOTE_END_SESSION, async (event, did: unknown, sid: unknown): Promise<RemoteActionResult> => {
+    if (!trusted(event)) { logWarn('[machines] remote end refused: not the app window'); return refuse(MACHINES_NOT_APP) }
+    if (!machines) return refuse(REMOTE_NOT_AVAILABLE)
+    if (typeof did !== 'string' || !REMOTE_DID_RE.test(did)) return refuse(NOT_LISTED)
+    if (typeof sid !== 'string' || !HELPER_SID_RE.test(sid)) return refuse('That is not a session the helper keeps.')
+    return answer('remote end', REMOTE_STATE_TIMEOUT_MS * 6, () => endRemoteSession(did, sid), () => refuse(MACHINES_NO_ANSWER))
+  })
+
+  // End of a tab's own kept session (the close question's End, or Remove of a
+  // session left running): the open tab's, else the one machine `did` keeps.
+  ipcMain.handle(IPC.MACHINES_REMOTE_END_TAB, async (event, sessionId: unknown, did: unknown): Promise<RemoteActionResult> => {
+    if (!trusted(event)) { logWarn('[machines] remote end refused: not the app window'); return refuse(MACHINES_NOT_APP) }
+    if (!machines) return refuse(REMOTE_NOT_AVAILABLE)
+    if (typeof sessionId !== 'string' || !APP_SESSION_ID_RE.test(sessionId)) return refuse('That is not a tab of this app.')
+    if (did !== undefined && (typeof did !== 'string' || !REMOTE_DID_RE.test(did))) return refuse(NOT_LISTED)
+    return answer('remote end', REMOTE_STATE_TIMEOUT_MS * 6, () => endRemoteTab(sessionId, did as string | undefined), () => refuse(MACHINES_NO_ANSWER))
   })
 
   ipcMain.handle(IPC.MACHINES_REMOTE_REMOVE, async (event, did: unknown): Promise<RemoteActionResult> => {

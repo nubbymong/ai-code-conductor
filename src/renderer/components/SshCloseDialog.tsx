@@ -47,13 +47,21 @@ export default function SshCloseDialog() {
           title={<>Close “{pending.label}”?</>}
           subtitle={<>
             This session is running <span style={{ color: 'var(--text-primary)', fontWeight: 500 }}>persistently</span> on the remote host
-            {pending.host ? <> (<span className="font-mono text-[11px]">{pending.host}</span>)</> : null}.
+            {pending.host ? <> (<span className="font-mono text-[11px]">{pending.host}</span>)</> : null}
+            {pending.helper ? <>, kept by the session helper there</> : null}.
           </>}
         />
         <DialogBody>
-          <p className="text-xs leading-relaxed" style={{ color: 'var(--text-secondary)' }}>
-            End it to stop the remote tmux session and clean up, or leave it running so you can
-            reattach later{pending.remoteAccount ? <> — signed in as <span className="font-mono">{pending.remoteAccount}</span></> : null}.
+          {/* 2.1.3-beta.19 section 1.2: a session the session helper keeps is
+              ended through the helper, not tmux; Leave running keeps it on
+              that machine, listed on the Machines page. */}
+          <p className="text-xs leading-relaxed" style={{ color: 'var(--text-secondary)' }} data-testid="ssh-close-body">
+            {pending.helper
+              ? <>End it to stop the session the session helper keeps there and clean up, or leave it running so you can
+                reattach later; the Machines page lists it</>
+              : <>End it to stop the remote tmux session and clean up, or leave it running so you can
+                reattach later</>}
+            {pending.remoteAccount ? <> — signed in as <span className="font-mono">{pending.remoteAccount}</span></> : null}.
           </p>
         </DialogBody>
         {/* "End remote session" kills the remote tmux session, so it leads on

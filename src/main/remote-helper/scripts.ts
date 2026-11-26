@@ -52,6 +52,13 @@ export const LABEL_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/
 /** The away clock a holder of a remote session gets (section 15's default). */
 export const REMOTE_AWAY_SECS = 120
 
+/** A holder's kind, as the hold script takes it (2.1.3-beta.19 section 1.2):
+ *  `away`, a plain SSH tab's, with the away clock (REMOTE_AWAY_SECS); or
+ *  `until-ended`, an SSH Persistent tab's, which no clock ends: it ends with
+ *  its CLI, at term.end, or with the host (section 1.1's `--until-ended`). */
+export type HolderKind = 'away' | 'until-ended'
+export const HOLDER_KIND_RE = /^(away|until-ended)$/
+
 // ── the parts ────────────────────────────────────────────────────────────────
 
 /** The checks every script makes first (the module comment). `N`, `D` and `I`
@@ -241,6 +248,13 @@ const SPECS = {
       'r shell "$S"',
       'r path "$PATH"',
       'r lang "${LANG:-}"',
+      // 2.1.3-beta.19 section 1.2: whether logind ends the user's processes at
+      // logout, read as helper/probes/p3-p6-linux.cjs reads it (the manager's
+      // KillUserProcesses and KillExcludeUsers, the user's Linger); empty when
+      // it does not read (no loginctl, or no logind).
+      'r logind-kill "$(loginctl show-session -p KillUserProcesses --value </dev/null 2>/dev/null)"',
+      'r logind-exclude "$(loginctl show-session -p KillExcludeUsers --value </dev/null 2>/dev/null)"',
+      'r linger "$(loginctl show-user "$(id -un)" -p Linger --value </dev/null 2>/dev/null)"',
       'r claude "$(command -v claude 2>/dev/null)"',
       // `$` alone, so the PATH and the lookup expand in the login shell, not here.
       'v="$"',
@@ -350,10 +364,18 @@ const SPECS = {
   },
   /** `aicc-helper hold --detach` for one session (section 15), through the
    *  launcher: it prints the holder's record, or exits 3 when a holder for
-   *  that session runs already. */
+   *  that session runs already. `K`, the holder's kind (2.1.3-beta.19 section
+   *  1.2, HolderKind): `away` gives today's away clock, `until-ended` none. */
   hold: {
-    values: [FOLDER, HASH, SESSION, { name: 'label', re: LABEL_RE }],
-    text: join(['N=$1; D=$2; I=$3; F=$4; H=$5; X=$6; L=$7', ...CHECKS, ...LAUNCH, `exec "$P" hold --store "$A/store" --session "$X" --label "$L" --away ${REMOTE_AWAY_SECS} --detach`]),
+    values: [FOLDER, HASH, SESSION, { name: 'label', re: LABEL_RE }, { name: 'holder kind', re: HOLDER_KIND_RE }],
+    text: join([
+      'N=$1; D=$2; I=$3; F=$4; H=$5; X=$6; L=$7; K=$8',
+      ...CHECKS,
+      'case "$K" in away|until-ended) ;; *) no bad-kind;; esac',
+      ...LAUNCH,
+      'if [ "$K" = until-ended ]; then exec "$P" hold --store "$A/store" --session "$X" --label "$L" --until-ended --detach; fi',
+      `exec "$P" hold --store "$A/store" --session "$X" --label "$L" --away ${REMOTE_AWAY_SECS} --detach`,
+    ]),
   },
   /** `aicc-helper bridge` for one session (A1's mode), through the launcher:
    *  after the hash line, standard input and output are the holder's

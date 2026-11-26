@@ -176,7 +176,9 @@ export default function RemoteResumableSection({ liveSessionIds, onRevealSession
    *  `ccc-<safeSid>` matches again and TerminalView spawns a reconnect. The
    *  registry entry is consumed by the resume — it is live now, not detached. */
   const resume = useCallback((entry: DetachedRemote, config: TerminalConfig) => {
-    const id = reattach(config, { sessionId: entry.sessionId, reconnect: true })
+    // 2.1.3-beta.19: a session the session helper keeps: the tab is marked, so
+    // it attaches to it (or, with the switch off, says so and starts nothing).
+    const id = reattach(config, { sessionId: entry.sessionId, reconnect: true, ...(entry.mux === 'helper' && entry.did ? { keptOn: entry.did } : {}) })
     if (!id) return
     dropEntry(entry.sessionId)
     onRevealSession(id)
@@ -211,7 +213,11 @@ export default function RemoteResumableSection({ liveSessionIds, onRevealSession
     // now dials a different host, main refuses the target anyway, and the real
     // remote would be left running with the user told nothing. The dialog says
     // where it is and how to end it there; Remove only forgets the card.
-    if (mightBeLive && pairing.kind !== 'retargeted') {
+    // 2.1.3-beta.19: one the session helper keeps is ended through it, on the
+    // machine its entry names (no config needed: the helper finds it by id).
+    if (mightBeLive && entry.mux === 'helper') {
+      try { void Promise.resolve(window.electronAPI?.machines?.remote?.endTab?.(entry.sessionId, entry.did)).catch(() => {}) } catch { /* the card still goes */ }
+    } else if (mightBeLive && pairing.kind !== 'retargeted') {
       const configId = pairing.kind === 'paired' ? pairing.config.id : entry.configId
       // Not awaited: main reads the target as the call arrives, and the result
       // only surfaces when it needs the user (the End notice). Best-effort: the

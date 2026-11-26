@@ -193,6 +193,8 @@ export interface ElectronAPI {
       cwd?: string
       cols?: number
       rows?: number
+      /** 2.1.3-beta.19: the tab's session is kept by the session helper (its saved mark). */
+      remoteVia?: 'helper'
       ssh?: {
         host: string
         port: number
@@ -288,9 +290,9 @@ export interface ElectronAPI {
     /** One-shot query of the current flow state, used to recover from
      * a missed initial push (renderer subscribes after main has already
      * emitted). */
-    getState: (sessionId: string) => Promise<{ state: string; info?: string }>
+    getState: (sessionId: string) => Promise<{ state: string; info?: string; kept?: { did: string } }>
     /** Subscribe to flow-state changes for a session. */
-    onFlowState: (sessionId: string, callback: (msg: { state: string; info?: string }) => void) => () => void
+    onFlowState: (sessionId: string, callback: (msg: { state: string; info?: string; kept?: { did: string } }) => void) => () => void
     /** SSH tmux enhancement (items 8/9/10): subscribe to per-session
      *  persistence + remote-account descriptors pushed by main. */
     onSessionInfo: (sessionId: string, callback: (msg: { tmuxPersistent?: boolean; remoteAccount?: string }) => void) => () => void
@@ -864,6 +866,10 @@ export interface ElectronAPI {
       add: (token: string) => Promise<import('../shared/remote-machines').RemoteActionResult>
       check: (did: string) => Promise<import('../shared/remote-machines').RemoteActionResult>
       remove: (did: string) => Promise<import('../shared/remote-machines').RemoteActionResult>
+      /** 2.1.3-beta.19 section 1.2: the sessions the helper keeps, End of one on a card, End of a tab's own. */
+      sessions: () => Promise<import('../shared/remote-machines').RemoteSessionsState>
+      endSession: (did: string, sid: string) => Promise<import('../shared/remote-machines').RemoteActionResult>
+      endTab: (sessionId: string, did?: string) => Promise<import('../shared/remote-machines').RemoteActionResult>
     }
   }
   cli: {
@@ -1105,7 +1111,7 @@ const electronAPI: ElectronAPI = {
       ipcRenderer.invoke(IPC.SSH_FLOW_SKIP, sessionId),
     getState: (sessionId: string) =>
       ipcRenderer.invoke(IPC.SSH_FLOW_GET_STATE, sessionId),
-    onFlowState: (sessionId: string, callback: (msg: { state: string; info?: string }) => void) =>
+    onFlowState: (sessionId: string, callback: (msg: { state: string; info?: string; kept?: { did: string } }) => void) =>
       onChannel(`${IPC.SSH_FLOW_STATE}:${sessionId}`, callback),
     onSessionInfo: (sessionId: string, callback: (msg: { tmuxPersistent?: boolean; remoteAccount?: string }) => void) =>
       onChannel(`${IPC.SSH_SESSION_INFO}:${sessionId}`, callback),
@@ -1459,6 +1465,12 @@ const electronAPI: ElectronAPI = {
         ipcRenderer.invoke(IPC.MACHINES_REMOTE_CHECK, did),
       remove: (did: string): Promise<import('../shared/remote-machines').RemoteActionResult> =>
         ipcRenderer.invoke(IPC.MACHINES_REMOTE_REMOVE, did),
+      sessions: (): Promise<import('../shared/remote-machines').RemoteSessionsState> =>
+        ipcRenderer.invoke(IPC.MACHINES_REMOTE_SESSIONS),
+      endSession: (did: string, sid: string): Promise<import('../shared/remote-machines').RemoteActionResult> =>
+        ipcRenderer.invoke(IPC.MACHINES_REMOTE_END_SESSION, did, sid),
+      endTab: (sessionId: string, did?: string): Promise<import('../shared/remote-machines').RemoteActionResult> =>
+        ipcRenderer.invoke(IPC.MACHINES_REMOTE_END_TAB, sessionId, did),
     },
   },
   cli: {

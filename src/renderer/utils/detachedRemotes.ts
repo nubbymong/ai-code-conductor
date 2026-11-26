@@ -17,7 +17,7 @@ import { detachedDestinationAgrees, effectiveRuntimeOf, normalizeSshPort } from 
 export type DetachableSession = Pick<
   Session,
   'id' | 'configId' | 'sessionType' | 'sshConfig' | 'sshRemoteAccount' | 'customName' | 'label'
->
+> & Partial<Pick<Session, 'remoteVia' | 'remoteDid'>>
 
 /** The TerminalConfig fields the match logic reads. */
 export type LaunchableConfig = Pick<TerminalConfig, 'id' | 'sessionType' | 'sshConfig'>
@@ -25,9 +25,11 @@ export type LaunchableConfig = Pick<TerminalConfig, 'id' | 'sessionType' | 'sshC
 /**
  * Build a registry entry from a session being LEFT RUNNING, or null when the
  * session is not an eligible remote (not SSH, or missing its ssh config). The
- * multiplexer is always 'tmux' for now — psmux (Windows) is not wired yet, so
+ * multiplexer is 'tmux' on the usual path — psmux (Windows) is not wired yet, so
  * the field is recorded as 'tmux' regardless of remoteOs (a Windows remote's
- * reattach is a known upstream gap and degrades to a fresh create either way).
+ * reattach is a known upstream gap and degrades to a fresh create either way);
+ * 'helper', with the machine's device id, for a session the session helper
+ * keeps until it is ended (2.1.3-beta.19 section 1.2: the tab's mark).
  *
  * The entry records the session's COMPLETE destination — host, user, port, path
  * and the runtime it actually ran under (#54) — so a later edit of the config it
@@ -46,7 +48,7 @@ export function buildDetachedRemote(session: DetachableSession | undefined | nul
     remotePath: ssh.remotePath,
     port: normalizeSshPort(ssh.port),
     runtime: effectiveRuntimeOf(ssh),
-    mux: 'tmux',
+    ...(session.remoteVia === 'helper' && session.remoteDid ? { mux: 'helper' as const, did: session.remoteDid } : { mux: 'tmux' as const }),
     accountEmail: session.sshRemoteAccount,
     label: session.customName?.trim() || session.label,
     detachedAt: now,

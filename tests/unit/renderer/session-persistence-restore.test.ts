@@ -388,3 +388,32 @@ describe('restoreSavedSessions -- the conversation target main carries (aicc_pla
     expect(targetOf(buildSessionState(), 'rune')).toEqual(none)
   })
 })
+
+describe('restoreSavedSessions -- a tab the session helper keeps (2.1.3-beta.19 section 1.2)', () => {
+  const DID = '0123456789abcdef0123456789abcdef'
+  const kept = (id: string): SavedSession => ({ ...ssh(id, {}), remoteVia: 'helper', remoteDid: DID })
+
+  it('comes back marked, and the tmux probe leaves it out: never flagged sshRemoteReattachGone, whatever the probe answers', async () => {
+    const d = deps()
+    // The host confirms every session it is asked about gone.
+    d.probeGoneSessions.mockImplementation(async (asked) => asked.map((x) => x.id))
+    await restoreSavedSessions(state([kept('ssh-kept'), ssh('ssh-tmux', {})]), ref(), d)
+    await vi.waitFor(() => expect(d.probeGoneSessions).toHaveBeenCalledTimes(1))
+    expect(d.probeGoneSessions).toHaveBeenCalledWith([{ id: 'ssh-tmux', configId: 'cfg-1' }])
+    await vi.waitFor(() => expect(useSessionStore.getState().getSession('ssh-tmux')?.sshRemoteReattachGone).toBe(true))
+    expect(useSessionStore.getState().getSession('ssh-kept')?.sshRemoteReattachGone).toBeUndefined()
+    expect(useSessionStore.getState().getSession('ssh-kept')).toMatchObject({ remoteVia: 'helper', remoteDid: DID })
+  })
+
+  it('with only kept tabs restored, the tmux probe does not run at all', async () => {
+    const d = deps()
+    await restoreSavedSessions(state([kept('ssh-kept-a'), kept('ssh-kept-b')]), ref(), d)
+    await new Promise((r) => setTimeout(r, 0))
+    expect(d.probeGoneSessions).not.toHaveBeenCalled()
+  })
+
+  it('the restored set written at once keeps the mark', async () => {
+    await restoreSavedSessions(state([kept('ssh-kept')]), ref(), deps())
+    expect(buildSessionState().sessions[0]).toMatchObject({ id: 'ssh-kept', remoteVia: 'helper', remoteDid: DID })
+  })
+})

@@ -258,6 +258,12 @@ export const IPC = {
   MACHINES_REMOTE_ADD: 'machines:remote:add',          // (token: string) -> RemoteActionResult
   MACHINES_REMOTE_CHECK: 'machines:remote:check',      // (did: string) -> RemoteActionResult
   MACHINES_REMOTE_REMOVE: 'machines:remote:remove',    // (did: string) -> RemoteActionResult
+  // 2.1.3-beta.19 section 1.2: the sessions the helper keeps (one list exec per machine), End of one by its
+  // machine and helper session id (the card), and End of a tab's own kept session by its app session id
+  // (the close question, or a session left running).
+  MACHINES_REMOTE_SESSIONS: 'machines:remote:sessions',      // -> RemoteSessionsState
+  MACHINES_REMOTE_END_SESSION: 'machines:remote:endSession', // (did: string, sid: string) -> RemoteActionResult
+  MACHINES_REMOTE_END_TAB: 'machines:remote:endTab',         // (sessionId: string) -> RemoteActionResult
 
   // CLI
   CLI_CHECK: 'cli:check',

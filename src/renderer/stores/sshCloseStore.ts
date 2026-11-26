@@ -25,6 +25,8 @@ interface PendingSshClose {
    *  remote they're ending. */
   remoteAccount?: string
   host?: string
+  /** 2.1.3-beta.19 section 1.2: the session helper keeps it, not tmux. */
+  helper?: boolean
 }
 
 interface SshCloseState {
@@ -74,13 +76,15 @@ export function requestCloseSession(sessionId: string): void {
   const session = store.sessions.find((s) => s.id === sessionId)
   // Only a session confirmed running inside a tmux persistence wrapper gets the
   // choice — a non-persistent SSH session's remote dies with the connection, so
-  // there is nothing to leave running or to end.
-  if (session && session.sessionType === 'ssh' && session.sshTmuxPersistent === true) {
+  // there is nothing to leave running or to end. 2.1.3-beta.19: so does one the
+  // session helper keeps until it is ended (its mark).
+  if (session && session.sessionType === 'ssh' && (session.sshTmuxPersistent === true || session.remoteVia === 'helper')) {
     useSshCloseStore.getState().request({
       sessionId,
       label: session.customName?.trim() || session.label,
       remoteAccount: session.sshRemoteAccount,
       host: session.sshConfig ? `${session.sshConfig.username}@${session.sshConfig.host}` : undefined,
+      ...(session.remoteVia === 'helper' ? { helper: true } : {}),
     })
     return
   }
@@ -125,6 +129,8 @@ export function endContainerSessionRemote(session: Session | undefined): void {
  *  effort: even if the End exec cannot be dispatched, the local tab still
  *  closes (the remote at worst detaches, exactly the pre-enhancement path). */
 export async function endRemoteAndClose(sessionId: string): Promise<void> {
+  const kept = useSessionStore.getState().sessions.find((s) => s.id === sessionId)
+  if (kept?.remoteVia === 'helper') { await endKeptAndClose(sessionId); return }
   endRemoteAndReport(sessionId, sessionId)
   // SSH Persistent (Phase 1 lifecycle): the remote is being ended, so drop any
   // left-running registry entry for this id — it must never be offered for
@@ -140,11 +146,42 @@ export async function endRemoteAndClose(sessionId: string): Promise<void> {
   if (hadEntry) void persistSessionState()
 }
 
+/**
+ * End for a session the session helper keeps (2.1.3-beta.19 section 1.2):
+ * main ends it over a link of its own (term.end, then its folder), the open
+ * tab's or, with none, the one its machine keeps; then the tab closes. One
+ * that was not ended (its machine did not answer) is left running and
+ * recorded as such, so it is still offered, and End can be tried again.
+ */
+async function endKeptAndClose(sessionId: string): Promise<void> {
+  const session = useSessionStore.getState().sessions.find((s) => s.id === sessionId)
+  let ended = false
+  try {
+    const r = await window.electronAPI?.machines?.remote?.endTab?.(sessionId, session?.remoteDid)
+    ended = r?.ok === true
+  } catch {
+    ended = false
+  }
+  const registry = useDetachedRemotesStore.getState()
+  registry.remove(sessionId)
+  if (!ended) {
+    const entry = buildDetachedRemote(session, Date.now())
+    if (entry) registry.add(entry)
+  }
+  killSessionPty(sessionId)
+  forgetSessionBrowserProfile(sessionId)
+  useSessionStore.getState().removeSession(sessionId)
+  useSshCloseStore.getState().clear()
+  void persistSessionState()
+}
+
 /** "Leave running": detach only — the remote tmux session survives for a later
  *  reattach. Identical to a plain close (which, for a live SSH PTY, detaches),
  *  plus SSH Persistent (Phase 1): record the detached remote in the persisted
  *  registry BEFORE teardown so the resume surface can later offer to reattach it.
- *  Launching the config again does NOT consult this — that always starts new. */
+ *  Launching the config again does NOT consult this — that always starts new.
+ *  2.1.3-beta.19: a session the session helper keeps is recorded with mux
+ *  'helper' and its machine; the close lets go of it (main's kill, no end). */
 export function leaveRunningAndClose(sessionId: string): void {
   // Capture the entry while the session is still in the store. Non-SSH / config-
   // less sessions yield null (buildDetachedRemote guards), so this is a no-op for

@@ -222,6 +222,14 @@ export interface SavedSession {
   partnerTerminalPath?: string
   partnerElevated?: boolean
   sshConfig?: SshConfig
+  /** 2.1.3-beta.19 section 1.2: 'helper' when this SSH Persistent tab's
+   *  session is kept by the session helper on its machine until it is ended,
+   *  written at the start that went through the helper (so a crash keeps it).
+   *  Absent otherwise, so every tab saved before beta.19 reads as tmux. A
+   *  tab so marked never starts on the usual SSH path. */
+  remoteVia?: 'helper'
+  /** The device id of the machine that keeps it, with remoteVia. */
+  remoteDid?: string
   machineName?: string
   githubIntegration?: import('./github-types').SessionGitHubIntegration
   // Provider discriminator + sub-options
@@ -291,9 +299,13 @@ export interface DetachedRemote {
    *  runtime (a legacy docker post-command is recorded as the container it
    *  names). Absent on pre-#54 entries. */
   runtime?: SshRuntime
-  /** Multiplexer holding the session alive. Always 'tmux' today (psmux is the
-   *  Windows-only path and is NOT wired yet — the field is recorded for it). */
-  mux: 'tmux' | 'psmux'
+  /** Multiplexer holding the session alive: 'tmux' on the usual SSH path
+   *  (psmux is the Windows-only path and is NOT wired yet — the field is
+   *  recorded for it); 'helper' for an SSH Persistent session the session
+   *  helper keeps until it is ended (2.1.3-beta.19 section 1.2), with `did`. */
+  mux: 'tmux' | 'psmux' | 'helper'
+  /** With mux 'helper': the device id of the machine whose helper keeps it. */
+  did?: string
   /** Remote Claude account (oauthAccount.emailAddress), when known. Descriptor. */
   accountEmail?: string
   /** Display label at detach time (customName || config label). */

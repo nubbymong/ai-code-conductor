@@ -70,6 +70,49 @@ export interface RemoteMachineRecord {
   lang: string | null
   helper: { version: string; sha256: string; folder: string }
   check: { at: number; ok: boolean; detail?: string }
+  /** What the last Check read of logind (2.1.3-beta.19 section 1.2): its
+   *  KillUserProcesses and the user's Linger (`yes`, `no`, or '' when it did
+   *  not read) and its KillExcludeUsers (user names). Absent on a record no
+   *  Check of this build wrote: read as not known (logoutCleanUp). */
+  logind?: { kill: string; exclude: string; linger: string }
+}
+
+/** Whether a machine's logind ends the user's processes at logout, as its
+ *  last Check read it (2.1.3-beta.19 section 1.2): `on` when KillUserProcesses
+ *  is yes and the user is not in KillExcludeUsers; `off` when it is no, or the
+ *  user is excluded; `unknown` when it did not read. Only `off` lets an SSH
+ *  Persistent tab's session outlive its connection there (route.ts). The
+ *  user's Linger is read and shown, and decides nothing: a holder runs in the
+ *  login's own scope, which KillUserProcesses ends whatever Linger says. */
+export type LogoutCleanUp = 'on' | 'off' | 'unknown'
+export function logoutCleanUp(m: Pick<RemoteMachineRecord, 'logind' | 'user'>): LogoutCleanUp {
+  const l = m.logind
+  if (!l) return 'unknown'
+  if (l.kill === 'no') return 'off'
+  if (l.kill === 'yes') return l.exclude.split(/\s+/).includes(m.user) ? 'off' : 'on'
+  return 'unknown'
+}
+
+/** The card's line for a machine where SSH Persistent tabs keep the usual
+ *  path (logind), or undefined where they may go through the helper. */
+export function persistentNote(m: Pick<RemoteMachineRecord, 'logind' | 'user'>): string | undefined {
+  const c = logoutCleanUp(m)
+  if (c === 'off') return undefined
+  const linger = m.logind?.linger === 'yes' || m.logind?.linger === 'no' ? `, Linger ${m.logind.linger}` : ''
+  return c === 'on'
+    ? `SSH Persistent tabs keep the usual SSH path here: its logind ends your processes when you log out (KillUserProcesses yes${linger}).`
+    : 'SSH Persistent tabs keep the usual SSH path here: its last check did not read whether logind ends your processes when you log out. Press Check.'
+}
+
+const LOGIND_WORD = /^(yes|no)$/
+const LOGIND_USERS = /^[A-Za-z0-9_.@ -]{0,1024}$/
+/** What a probe or a saved record says of logind, read strictly. */
+function readLogind(kill: unknown, exclude: unknown, linger: unknown): { kill: string; exclude: string; linger: string } {
+  return {
+    kill: typeof kill === 'string' && LOGIND_WORD.test(kill) ? kill : '',
+    exclude: typeof exclude === 'string' && LOGIND_USERS.test(exclude) ? exclude.trim() : '',
+    linger: typeof linger === 'string' && LOGIND_WORD.test(linger) ? linger : '',
+  }
 }
 
 interface RecordsFile {
@@ -157,6 +200,7 @@ function readRecord(v: unknown): RemoteMachineRecord | null {
     path: p, lang: typeof r.lang === 'string' && LANG_RE.test(r.lang) ? r.lang : null,
     helper: { version: helper.version, sha256: helper.sha256, folder: helper.folder },
     check: { at: check.at, ok: check.ok, ...(typeof check.detail === 'string' ? { detail: check.detail.slice(0, 300) } : {}) },
+    ...(r.logind && typeof r.logind === 'object' ? { logind: readLogind((r.logind as Record<string, unknown>).kill, (r.logind as Record<string, unknown>).exclude, (r.logind as Record<string, unknown>).linger) } : {}),
   }
 }
 
@@ -297,6 +341,7 @@ export class RemoteMachines {
       return {
         did: m.did, label: m.label, target: `${m.user}@${m.host}:${m.port}`, checked: lastCheck.ok, lastCheck,
         helperVersion: m.helper.version, system: `${m.os} ${m.arch}`, inUse: this.deps.inUse(m.did),
+        ...(persistentNote(m) ? { persistentNote: persistentNote(m) } : {}),
       }
     })
   }
@@ -503,6 +548,7 @@ export class RemoteMachines {
       lang: typeof lang === 'string' && LANG_RE.test(lang) ? lang : null,
       helper: { version: helper.version, sha256: helper.sha256, folder: helper.folder },
       check: { at: this.now(), ok: checked.ok, ...(checked.ok ? {} : { detail: checked.why }) },
+      logind: readLogind(probe.values.get('logind-kill'), probe.values.get('logind-exclude'), probe.values.get('linger')),
     }
     if (checked.ok && !claudePath) record.check = { at: record.check.at, ok: false, detail: 'Claude Code was not found on it (not on the PATH of its login shell)' }
     return { ok: true, record }
