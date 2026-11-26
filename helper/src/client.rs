@@ -193,7 +193,7 @@ mod tests {
             nonce: "0123456789abcdef0123456789abcdef".to_string(),
             helper: "0.1.0".to_string(),
             started: 0,
-            away: 120,
+            lifetime: crate::store::Lifetime::Away(120),
             attached: false,
             child: "waiting".to_string(),
             code: None,
