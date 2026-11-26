@@ -109,7 +109,7 @@ import { logInfo } from '../debug-logger'
 import { PasteQueue } from '../paste-queue'
 import { runChunkedWrite, WRITE_CHUNK_SIZE, WRITE_CHUNK_DELAY } from '../pty-chunked-write'
 import { isRemoteHelperTab } from '../remote-helper'
-import { PROMPT_ENTER_DELAY_MS } from './enter-delay'
+import { PROMPT_ENTER_DELAY_MS, REPEAT_WINDOW_MS } from './enter-delay'
 
 /** What the PTY manager lends this module, registered when it loads. */
 export interface SessionInputPorts {
@@ -281,8 +281,9 @@ export function submitRetry(sessionId: string, text: string, stillWanted?: () =>
 export { PROMPT_ENTER_DELAY_MS }
 /** #333: the same text pressed again for a session within this long is
  *  dropped (the window of writePty's duplicate guard, which a write that does
- *  not end in Enter no longer reaches). */
-export const PROMPT_REPEAT_WINDOW_MS = 300
+ *  not end in Enter no longer reaches). Set in ./enter-delay.ts, the one
+ *  value Claude Code's run screen drops a repeated retry by too. */
+export const PROMPT_REPEAT_WINDOW_MS = REPEAT_WINDOW_MS
 /** #333: how long a Codex session's prompt button waits for Codex's ready,
  *  empty composer before it answers busy. */
 export const PROMPT_CODEX_READY_WAIT_MS = 5_000

@@ -17,16 +17,14 @@
 import type { RunScreenImageResult, RunScreenTyping, SessionRunScreen } from '../types'
 import type { PromptButtonResult } from '../../../shared/types'
 import { queueClaudeMarkerLine } from '../../canvas/claude-marker-typing'
-import { PROMPT_ENTER_DELAY_MS } from '../../session-input/enter-delay'
+import { PROMPT_ENTER_DELAY_MS, REPEAT_WINDOW_MS } from '../../session-input/enter-delay'
 
 const PASTE_START = '\u001b[200~'
 const PASTE_END = '\u001b[201~'
 
-/** The same retry text asked again for a session within this long is
- *  dropped (the window of the PTY manager's duplicate guard, which caught a
- *  repeated line and Enter while they went in one write). */
-const RETRY_REPEAT_WINDOW_MS = 300
-/** Each session's last retry, for the repeat window (dropped at close). */
+/** Each session's last retry, for the repeat window (REPEAT_WINDOW_MS, the
+ *  window of the PTY manager's duplicate guard, which caught a repeated line
+ *  and Enter while they went in one write; dropped at close). */
 const lastRetry = new Map<string, { text: string; at: number }>()
 
 /**
@@ -49,7 +47,7 @@ const lastRetry = new Map<string, { text: string; at: number }>()
  * its input box. Until then every other tab got the line and Enter in one
  * write, the bytes the module's submitLine typed until 2.1.3-beta.18 section 4.
  *
- * The same text asked again within RETRY_REPEAT_WINDOW_MS is dropped: the
+ * The same text asked again within REPEAT_WINDOW_MS is dropped: the
  * line alone is not a submitted write, so the PTY manager's duplicate guard
  * no longer sees it, and two lines then one Enter would send them joined.
  * The line's write is made at once, so one that throws still throws to the
@@ -58,7 +56,7 @@ const lastRetry = new Map<string, { text: string; at: number }>()
 function retryClaudeLine(sessionId: string, text: string, opts: { enterDelayMs: number }, typing: RunScreenTyping): void {
   const now = Date.now()
   const last = lastRetry.get(sessionId)
-  if (last && last.text === text && now - last.at < RETRY_REPEAT_WINDOW_MS) return
+  if (last && last.text === text && now - last.at < REPEAT_WINDOW_MS) return
   lastRetry.set(sessionId, { text, at: now })
   const data = `${typing.leave}${text}`
   typing.write(data)

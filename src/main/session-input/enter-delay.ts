@@ -13,3 +13,10 @@
  *  (Claude Code's and Codex's run screens' heldEnterWaitMs;
  *  session-helper/helper-pty.ts asks the run's provider). */
 export const PROMPT_ENTER_DELAY_MS = 300
+
+/** #333: the same text asked again for a session within this long is
+ *  dropped: a prompt button's press (index.ts, PROMPT_REPEAT_WINDOW_MS) and,
+ *  since PR 763 fix round 9, the Watchdog's retry in Claude Code's run screen
+ *  (the window of the PTY manager's duplicate guard, which a line without its
+ *  Enter no longer reaches). One value, so a test of either reads it. */
+export const REPEAT_WINDOW_MS = 300
