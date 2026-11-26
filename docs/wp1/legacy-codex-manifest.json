@@ -1,8 +1,8 @@
 {
   "schema": "wp1-legacy-codex-manifest/3",
-  "generatedAt": "2026-11-26T14:44:04.840Z",
-  "head": "88b21cff0dd547865f1ef324fc8bcd901b52ac76",
-  "tree": "7fa6b8d51ff027166568848f5a3eb208f477d31e",
+  "generatedAt": "2026-11-26T15:58:38.359Z",
+  "head": "9a1be3d468669c3fe2a0ab93bd048030ee0c2051",
+  "tree": "fa6c5fb8eb2d977d10f90ea00106ec809b48d605",
   "scannedWorkingTree": false,
   "predicateDigest": "100a1233edebdc39a5f9004d3fba980a89ebb15b25872e52076386bc84b03153",
   "predicates": [
@@ -116,9 +116,9 @@
     "\\.(png|jpg|jpeg|gif|ico|icns|webp|svg|woff2?|ttf|otf|mp4|zip|asar|node|exe|dll|dylib|so|pdf)$",
     "^package-lock\\.json$"
   ],
-  "trackedFileCount": 3979,
+  "trackedFileCount": 3981,
   "excludedFileCount": 637,
-  "scannedFileCount": 3342,
+  "scannedFileCount": 3344,
   "unscopedFileCount": 15,
   "unscoped": [
     ".claude/settings.json",
@@ -139,8 +139,8 @@
   ],
   "unscopedMentions": [],
   "unreadable": [],
-  "matchedPathCount": 1143,
-  "pathDigest": "2518ed21c7d48d567f0aec7f327d69cdfeb5813028511b1ddc7279f757c4c5af",
+  "matchedPathCount": 1145,
+  "pathDigest": "6b94ce5ca2c08d4c10604a7b82dce193f9feaf029242ecd8fdbd83f8622aef23",
   "entries": [
     {
       "path": ".github/workflows/ci.yml",
@@ -7471,6 +7471,14 @@
       "lineCount": 35
     },
     {
+      "path": "tests/unit/renderer/ai-usage-popover-weekly-only.test.tsx",
+      "predicates": [
+        "P05",
+        "P13"
+      ],
+      "lineCount": 2
+    },
+    {
       "path": "tests/unit/renderer/alt-v-image-route.test.tsx",
       "predicates": [
         "P13"
@@ -8453,6 +8461,13 @@
         "P13"
       ],
       "lineCount": 5
+    },
+    {
+      "path": "tests/unit/renderer/session-status-strip-weekly-only.test.tsx",
+      "predicates": [
+        "P13"
+      ],
+      "lineCount": 1
     },
     {
       "path": "tests/unit/renderer/session-status-strip.test.ts",

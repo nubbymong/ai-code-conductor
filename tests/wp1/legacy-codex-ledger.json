@@ -1,8 +1,8 @@
 {
   "schema": "wp1-legacy-codex-ledger/2",
   "predicateDigest": "100a1233edebdc39a5f9004d3fba980a89ebb15b25872e52076386bc84b03153",
-  "manifestPathDigest": "2518ed21c7d48d567f0aec7f327d69cdfeb5813028511b1ddc7279f757c4c5af",
-  "manifestHead": "88b21cff0dd547865f1ef324fc8bcd901b52ac76",
+  "manifestPathDigest": "6b94ce5ca2c08d4c10604a7b82dce193f9feaf029242ecd8fdbd83f8622aef23",
+  "manifestHead": "9a1be3d468669c3fe2a0ab93bd048030ee0c2051",
   "dispositions": {
     "retain": "unchanged observable behaviour, characterization proof",
     "move": "moved behind a package boundary and/or adapted at the call site, regression proof (newPath when relocated)",
@@ -10663,6 +10663,17 @@
       "note": "created by WP2 PR 3 P3.16b follow-up; the P05 hits are the settings fixture (codexEnabled)"
     },
     {
+      "path": "tests/unit/renderer/ai-usage-popover-weekly-only.test.tsx",
+      "predicates": [
+        "P05",
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "new 2.1.3-beta.19 fix round 5 test (after join 7): the AI usage popover's rate windows decide each window from its own field; a weekly-only Claude Code session shows its weekly row and a 5-hour row that says not reported, not the no-telemetry line; no provider name compared (WP1.68); tests/unit/renderer/ai-usage-popover-weekly-only.test.tsx",
+      "note": "P05 and P13: the settings fixture's codexEnabled only"
+    },
+    {
       "path": "tests/unit/renderer/alt-v-image-route.test.tsx",
       "predicates": [
         "P13"
@@ -12017,6 +12028,16 @@
       "disposition": "replace",
       "evidence": "existing test retained unchanged; must stay green on the merge candidate (WP1.33); listed in docs/wp1/baseline-test-inventory.json; WP1.33 mapping: one case adapted and renamed for WP2 PR 3 P3.8 (row 61): with the status line off a Codex strip keeps its controls (Compact, Restart), as a Claude strip does, instead of collapsing; the other cases are unchanged; tests/unit/renderer/session-status-strip-surface.test.tsx",
       "note": "re-dispositioned in WP2 PR 3 P3.8 (was retain)"
+    },
+    {
+      "path": "tests/unit/renderer/session-status-strip-weekly-only.test.tsx",
+      "predicates": [
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "new 2.1.3-beta.19 fix round 5 test (after join 7): the status strip decides each rate-limit window from its own field; a weekly figure alone shows the Weekly bar with its reset and the 5-hour window as not reported, never waiting, on a helper tab and a local tab; neither field waits; both show both; its one Codex line stands in for the strip's Codex review usage hook (useCodexReviewUsage), as the other strip tests do; no provider name compared (WP1.68); tests/unit/renderer/session-status-strip-weekly-only.test.tsx",
+      "note": "P13: the useCodexReviewUsage mock only"
     },
     {
       "path": "tests/unit/renderer/session-status-strip.test.ts",
