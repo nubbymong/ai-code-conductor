@@ -11,6 +11,7 @@ import WebviewPane from './components/WebviewPane'
 import AgentCanvasPane from './components/AgentCanvasPane'
 import LogsPane from './components/LogsPane'
 import { PaneFade } from './components/PaneFade'
+import { terminalPaneStyle, useTerminalSizeWaitStore } from './components/terminal/coveredPane'
 import { useWebviewStore } from './stores/webviewStore'
 import { usePaneOcclusionStore, useOccludesNativePanes } from './stores/paneOcclusionStore'
 import { useExcalidrawStore } from './stores/excalidrawStore'
@@ -380,6 +381,9 @@ export default function App() {
   const webviewBySession = useWebviewStore((s) => s.bySessionId)
   const excalidrawBySession = useExcalidrawStore((s) => s.bySessionId)
   const logsBySession = useLogsStore((s) => s.bySessionId)
+  // 2.1.3-beta.19 fix round: terminal views waiting for a size to start in
+  // (a Restart with another pane in front): terminal/coveredPane.ts.
+  const sizeWaits = useTerminalSizeWaitStore((s) => s.waiting)
   const activeSession = sessions.find((s) => s.id === activeSessionId)
   const hasRestoredRef = useRef(false)
   // ADR-009 (Lens C, R7; round 3 Codex finding 4): the saved-state recovery is
@@ -1119,6 +1123,11 @@ export default function App() {
               // Priority: logs > webview > excalidraw > partner > claude. Logs
               // sits TOP so an open log view isn't suppressed by Draw/Web/Partner.
               const altPaneShowing = isShowingLogs || isShowingWebview || isShowingExcalidraw
+              // A terminal the pane in front covers, whose view waits for a size
+              // to start in (a Restart pressed there): laid out behind that pane,
+              // invisible, so it starts at once (terminal/coveredPane.ts).
+              const mainStartsBehind = altPaneShowing && !isShowingPartner && sizeWaits[session.id] === true
+              const partnerStartsBehind = altPaneShowing && isShowingPartner && sizeWaits[partnerPtyId] === true
               return (
                 <div
                   key={session.id + '-' + session.createdAt}
@@ -1126,6 +1135,7 @@ export default function App() {
                   style={{
                     display: session.id === activeSessionId ? 'flex' : 'none',
                     minHeight: 0,
+                    ...(mainStartsBehind || partnerStartsBehind ? { position: 'relative' as const } : {}),
                   }}
                 >
                   {/* W23: the way back from the canvas fades in, the same
@@ -1135,10 +1145,7 @@ export default function App() {
                   <PaneFade
                     covered={isShowingExcalidraw}
                     className="relative flex-1 flex flex-col"
-                    style={{
-                      display: isShowingPartner || altPaneShowing ? 'none' : 'flex',
-                      minHeight: 0,
-                    }}
+                    style={terminalPaneStyle({ shown: !isShowingPartner && !altPaneShowing, startsBehind: mainStartsBehind })}
                   >
                     <TerminalView
                       key={session.id + '-main-' + session.createdAt}
@@ -1174,10 +1181,7 @@ export default function App() {
                     <PaneFade
                       covered={isShowingExcalidraw}
                       className="flex-1 flex flex-col"
-                      style={{
-                        display: isShowingPartner && !altPaneShowing ? 'flex' : 'none',
-                        minHeight: 0,
-                      }}
+                      style={terminalPaneStyle({ shown: isShowingPartner && !altPaneShowing, startsBehind: partnerStartsBehind })}
                     >
                       {/* The partner's identity strip (which terminal, and #86
                           WHERE it runs: this PC, or the SSH session's host) and

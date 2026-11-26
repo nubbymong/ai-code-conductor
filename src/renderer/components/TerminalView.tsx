@@ -71,6 +71,7 @@ import { reconcileRefusedMultiSpawn } from '../utils/refusedMultiSpawn'
 import { isConfigLaunchBlocked, useLaunchGateSettings, restartLaunchRefusal } from '../hooks/useLaunchConfig'
 import { useConfigStore } from '../stores/configStore'
 import { generateId } from '../utils/id'
+import { useTerminalSizeWaitStore } from './terminal/coveredPane'
 
 // Re-export for consumers
 export { killSessionPty } from '../ptyTracker'
@@ -713,6 +714,9 @@ export default function TerminalView({ sessionId, configId, cwd, shellOnly, elev
 
       const rect = container.getBoundingClientRect()
       if (rect.width === 0 || rect.height === 0) {
+        // 2.1.3-beta.19 fix round: waiting for a size; with another pane in
+        // front, App lays this pane out behind it (terminal/coveredPane.ts).
+        useTerminalSizeWaitStore.getState().set(sessionId, true)
         requestAnimationFrame(initTerminal)
         return
       }
@@ -1036,6 +1040,7 @@ export default function TerminalView({ sessionId, configId, cwd, shellOnly, elev
       const fitAndSpawn = () => {
         if (disposed || !fitAddon || !term) return
         if (!paneHasSize()) {
+          useTerminalSizeWaitStore.getState().set(sessionId, true)
           requestAnimationFrame(fitAndSpawn)
           return
         }
@@ -1046,6 +1051,8 @@ export default function TerminalView({ sessionId, configId, cwd, shellOnly, elev
           return
         }
         try { fitAddon.fit() } catch { /* ignore */ }
+        // Fitted at its pane's size: it waits no more (terminal/coveredPane.ts).
+        useTerminalSizeWaitStore.getState().set(sessionId, false)
         // Seed the integrity geometry from the initial (font-aware) fit so the
         // first throttled report carries the real cols/rows instead of 0 — and
         // so the ResizeObserver's "changed" guard has a correct baseline.
@@ -2011,6 +2018,7 @@ export default function TerminalView({ sessionId, configId, cwd, shellOnly, elev
     return () => {
       disposed = true
       cancelFontWait?.()
+      useTerminalSizeWaitStore.getState().set(sessionId, false)
       // A launch confirm this view asked (an unverified sign-in) goes with it:
       // nothing spawns from a torn-down view, and a remount asks afresh.
       useLaunchAckStore.getState().withdraw(sessionId)
