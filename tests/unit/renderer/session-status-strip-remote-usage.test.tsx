@@ -7,6 +7,12 @@
  * available" with the reason, beside the five-hour and weekly figures the
  * host's own status line gives. Never an empty or zero bar for a missing
  * source. The harness is session-status-strip-surface.test.tsx's.
+ *
+ * The clock is pinned (PR 763 fix round 7): the strip draws a window's bar
+ * only while its reset is still ahead of Date.now(), and the 1280 px case
+ * names a fixed weekly reset, so with the real clock it would go red after
+ * 2026-11-30T09:00Z (session-status-strip-weekly-only.test.tsx went red so
+ * at 20:22Z on 2026-11-26). Only Date is faked.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { createElement } from 'react'
@@ -42,7 +48,12 @@ const { default: SessionStatusStrip } = await import('../../../src/renderer/comp
 let container: HTMLDivElement
 let root: Root
 
+/** The time these readings were taken at: before every reset they name. */
+const READ_AT = new Date('2026-11-26T15:00:00.000Z')
+
 beforeEach(() => {
+  vi.useFakeTimers({ toFake: ['Date'] })
+  vi.setSystemTime(READ_AT)
   ;(globalThis as any).window.electronAPI = { pty: { write: vi.fn() } }
   container = document.createElement('div')
   document.body.appendChild(container)
@@ -57,6 +68,7 @@ beforeEach(() => {
 afterEach(() => {
   act(() => { root.unmount() })
   container.remove()
+  vi.useRealTimers()
 })
 
 const note = () => container.querySelector('[data-testid="remote-usage-not-shown"]') as HTMLElement | null

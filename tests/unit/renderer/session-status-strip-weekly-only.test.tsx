@@ -11,6 +11,13 @@
  * waiting meters show only while neither field has arrived. The same strip
  * serves local, SSH and helper tabs. The harness is
  * session-status-strip-remote-usage.test.tsx's.
+ *
+ * The clock is pinned (PR 763 fix round 7). The strip draws a window's bar
+ * only while its reset is still ahead of Date.now() (a passed one is drawn
+ * as no reading), and these readings name fixed resets. With the real
+ * clock, "both fields" went red once 2026-11-26T20:00Z had passed (CI at
+ * 20:22Z), and every weekly case would have gone red after 2026-11-30T03:00Z.
+ * Only Date is faked: the strip's timers run as they do in the app.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { createElement } from 'react'
@@ -45,7 +52,12 @@ const { composeRendererProviders } = await import('../../../src/renderer/provide
 let container: HTMLDivElement
 let root: Root
 
+/** The time these readings were taken at: before every reset they name. */
+const READ_AT = new Date('2026-11-26T15:00:00.000Z')
+
 beforeEach(() => {
+  vi.useFakeTimers({ toFake: ['Date'] })
+  vi.setSystemTime(READ_AT)
   composeRendererProviders()
   ;(globalThis as any).window.electronAPI = { pty: { write: vi.fn() } }
   container = document.createElement('div')
@@ -58,6 +70,7 @@ beforeEach(() => {
 afterEach(() => {
   act(() => { root.unmount() })
   container.remove()
+  vi.useRealTimers()
 })
 
 /** The Pi helper tab's reading: a weekly figure and its reset, nothing else. */
