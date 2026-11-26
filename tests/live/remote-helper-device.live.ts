@@ -145,7 +145,7 @@ let inUse = 0
 const machineLogs: string[] = []
 function machinesWith(store: MachineStore): RemoteMachines {
   installs++
-  return new RemoteMachines({ runner, store, bundled: async () => ({ ok: true, helper }), inUse: () => inUse, log: (m) => { machineLogs.push(m); note(`log-${installs}-${Object.keys(readings).length}`, m) } })
+  return new RemoteMachines({ runner, store, bundled: async () => ({ ok: true, helpers: [helper] }), inUse: () => inUse, log: (m) => { machineLogs.push(m); note(`log-${installs}-${Object.keys(readings).length}`, m) } })
 }
 
 /** The CI job's own runner (a localhost sshd on GitHub's Linux runner): the

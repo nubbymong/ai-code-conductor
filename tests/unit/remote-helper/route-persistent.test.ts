@@ -25,7 +25,7 @@ const PLAIN: SSHOptions = { ...PERSISTENT, detachable: false }
 const NEW: PersistentStanding = { marked: false, sessionUnderTmux: false, configUnderTmux: false }
 const MARKED: PersistentStanding = { marked: true, sessionUnderTmux: false, configUnderTmux: false }
 
-const route = (o: Partial<RouteInput> = {}) => routeSshTab({ platform: 'win32', switchOn: true, ssh: PERSISTENT, shellOnly: false, machine: MACHINE, bundledSha256: SHA, standing: NEW, ...o })
+const route = (o: Partial<RouteInput> = {}) => routeSshTab({ platform: 'win32', switchOn: true, ssh: PERSISTENT, shellOnly: false, machine: MACHINE, bundledSha256: () => SHA, standing: NEW, ...o })
 
 describe('route: an SSH Persistent tab, switch on', () => {
   it('goes through the helper, kept until it is ended, on a machine whose logind does not end processes at logout', () => {
@@ -74,7 +74,7 @@ describe('route: a marked tab never takes the usual path', () => {
     ['the switch off', { switchOn: false }, ROUTE_WHY.off, MARKED_STEP.switchOff],
     ['another helper on its machine (an update that changed it)', { machine: { ...MACHINE, helper: { ...MACHINE.helper, sha256: 'b'.repeat(64) } } }, ROUTE_WHY.oldHelper, MARKED_STEP.check],
     ['a failed Check', { machine: { ...MACHINE, check: { at: 1, ok: false, detail: 'x' } } }, ROUTE_WHY.notChecked, MARKED_STEP.check],
-    ['no helper in this build', { bundledSha256: null }, ROUTE_WHY.noHelper, MARKED_STEP.check],
+    ['no helper in this build', { bundledSha256: () => null }, ROUTE_WHY.noHelper, MARKED_STEP.check],
     ['its machine not added', { machine: undefined }, ROUTE_WHY.notAdded, MARKED_STEP.end],
     ['a post-connect command added since', { ssh: { ...PERSISTENT, postCommand: 'cd /srv' } }, ROUTE_WHY.postCommand, MARKED_STEP.end],
   ]

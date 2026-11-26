@@ -30,8 +30,9 @@ import yaml from 'js-yaml'
  * close-in-beta-on-promotion.yml), which run the repository's own scripts and
  * no test of the app; whether a job passes on that Node (CI shows it); and the
  * jobs of these two files that run no npm ci and have no setup-node step
- * (ci.yml desktop-gate, test-windows, probe-p21, helper, pr-numbers,
- * release-helper-linux; release.yml helper-linux), which run only the
+ * (ci.yml desktop-gate, test-windows, probe-p21, helper, helper-linux-arm64,
+ * pr-numbers, release-helper-linux, release-helper-linux-arm64; release.yml
+ * helper-linux, helper-linux-arm64), which run only the
  * repository's scripts, or no Node at all, on the runner's own Node.
  */
 

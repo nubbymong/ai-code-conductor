@@ -41,7 +41,7 @@ export interface RemoteMachineView {
   /** When it was last checked (ms since the epoch), and what that said. */
   lastCheck: { at: number; ok: boolean; detail?: string }
   helperVersion: string
-  /** For example "Linux x86_64". */
+  /** For example "Linux x86_64" or "Linux aarch64". */
   system: string
   /** How many open tabs go through the helper there now. */
   inUse: number
@@ -94,8 +94,9 @@ export interface RemoteMachinesState {
   available: boolean
   /** The switch, as saved. */
   switchOn: boolean
-  /** The Linux helper this build carries, or why there is none. */
-  bundled: { ok: true; version: string; size: number; sha12: string } | { ok: false; why: string }
+  /** The Linux helpers this build carries (one per machine architecture,
+   *  x86_64 and aarch64 in a package), or why there is none. */
+  bundled: { ok: true; version: string; files: Array<{ arch: string; size: number; sha12: string }> } | { ok: false; why: string }
   machines: RemoteMachineView[]
   candidates: RemoteAddCandidate[]
 }

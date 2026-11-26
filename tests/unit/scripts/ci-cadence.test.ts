@@ -471,8 +471,9 @@ describe('ci.yml: a docs-only change skips the suite on Windows and macOS, and t
     for (const [id, job] of [['test-windows-part', part], ['test-windows-build', build]] as Array<[string, Job]>) expect(python(job), id).toEqual([])
     expect(python(test)).toHaveLength(2)
     // The Windows test installer is packaged in a job of its own (from
-    // 2.1.3-beta.17), which needs the static Linux helper's job: the same
-    // rules as the build job for native code, with no Python.
+    // 2.1.3-beta.17), which needs the static Linux helpers' jobs (the arm64
+    // one from 2.1.3-beta.19): the same rules as the build job for native
+    // code, with no Python.
     const installer = ci.jobs['release-windows-installer']
     expect(python(installer)).toEqual([])
     expect(installer.steps.find((s) => s.name === 'Package Windows installer (release/* branches only)')!.run).toContain('--config.npmRebuild=false')
@@ -480,7 +481,7 @@ describe('ci.yml: a docs-only change skips the suite on Windows and macOS, and t
     expect(build.steps.find((s) => s.name === 'Install dependencies')!.run).toBe('npm ci --ignore-scripts')
     // The installers: macOS in the test job, Windows in its own job, each on a release/* branch only.
     const fromRelease = (ctx: GhaContext): GhaContext => ({ ...ctx, github: { ...(ctx.github as Record<string, unknown>), head_ref: 'release/v2.1.3' } })
-    for (const id of ['release-windows-installer', 'release-helper-linux']) {
+    for (const id of ['release-windows-installer', 'release-helper-linux', 'release-helper-linux-arm64']) {
       expect(runs(id, fromRelease(pr('synchronize', { labels: ['ci-run'] }))), `${id}: a release/* PR with ci-run`).toBe(true)
       expect(runs(id, fromRelease(pr('labeled', { labels: ['ci-run'], label: 'ci-run' }))), `${id}: ci-run added to a release/* PR`).toBe(true)
       expect(runs(id, pr('synchronize', { labels: ['ci-run'] })), `${id}: another branch`).toBe(false)
@@ -494,7 +495,7 @@ describe('ci.yml: a docs-only change skips the suite on Windows and macOS, and t
     for (const [id, job] of Object.entries(ci.jobs)) {
       if (id !== 'release-windows-installer') expect(([] as unknown[]).concat(job.needs ?? []), id).not.toContain('release-windows-installer')
     }
-    expect(installer.needs).toBe('release-helper-linux')
+    expect(installer.needs).toEqual(['release-helper-linux', 'release-helper-linux-arm64'])
     for (const name of ['Package Windows installer (release/* branches only)', 'Verify native modules unpacked (release/* branches only)', 'Upload Windows installer']) {
       expect(build.steps.some((s) => s.name === name), `build: ${name}`).toBe(false)
     }
@@ -663,8 +664,8 @@ describe('release.yml: a beta release reuses green CI for the same tree; a stabl
 
   it('the two jobs that run the suite wait for the lookup, and skip the suite on beta only, on the literal true only', () => {
     for (const id of ['build-windows', 'build-linux']) {
-      // build-windows also needs the static Linux helper it packages (2.1.3-beta.17).
-      expect(release.jobs[id].needs, id).toEqual(id === 'build-windows' ? ['gate', 'ci-reuse', 'helper-linux'] : ['gate', 'ci-reuse'])
+      // build-windows also needs the static Linux helpers it packages (2.1.3-beta.17; arm64 from 2.1.3-beta.19).
+      expect(release.jobs[id].needs, id).toEqual(id === 'build-windows' ? ['gate', 'ci-reuse', 'helper-linux', 'helper-linux-arm64'] : ['gate', 'ci-reuse'])
       const steps = suiteStepsOf(id)
       expect(steps.map((s) => s.name), id).toEqual(['Run tests'])
       const cond = steps[0].if

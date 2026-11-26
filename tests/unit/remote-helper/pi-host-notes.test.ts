@@ -34,7 +34,7 @@ const PI: RemoteMachineRecord = {
 
 describe('the Pi\'s note 3: no linger, no systemd --user, no /run/user', () => {
   it('an SSH Persistent tab goes through the helper, kept until it is ended, on a machine with Linger no and KillUserProcesses no', () => {
-    expect(routeSshTab({ platform: 'win32', switchOn: true, ssh: { host: 'pi.lan', port: 22, username: 'nick', remotePath: '~' }, shellOnly: false, machine: PI, bundledSha256: SHA })).toMatchObject({ via: 'helper', kind: 'until-ended' })
+    expect(routeSshTab({ platform: 'win32', switchOn: true, ssh: { host: 'pi.lan', port: 22, username: 'nick', remotePath: '~' }, shellOnly: false, machine: PI, bundledSha256: () => SHA })).toMatchObject({ via: 'helper', kind: 'until-ended' })
   })
   for (const name of NAMES) {
     it(`${name}: asks for no linger, starts no systemd unit, and uses no /run/user`, () => {

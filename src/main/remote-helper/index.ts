@@ -50,8 +50,9 @@ export interface RemoteHelperDeps {
   settings: () => Record<string, unknown> | null
   machines: RemoteMachines
   runner: SshRunner
-  /** The SHA-256 the installer's manifest gives the Linux helper; null: none. */
-  bundledSha256: () => string | null
+  /** The SHA-256 the installer's manifest gives the Linux helper for an
+   *  architecture (the machine's own); null: none for it. */
+  bundledSha256: (arch: string) => string | null
   /** The system's dark preference (Electron's nativeTheme), for the theme 'system'. */
   systemPrefersDark: () => boolean
   /** What the tab was sent, for the PTY integrity count: the session id and the text's length. */
@@ -264,7 +265,7 @@ export function remoteHelperPty(win: OutputWindow, sessionId: string, options: R
   // The switch first: while it is off, the machine records and the manifest
   // are not asked for (a dormant feature makes no file and fails no spawn).
   if (settings?.remoteSessionsThroughHelper !== true) {
-    const r = routeSshTab({ platform: d.platform, switchOn: false, ssh, shellOnly: options.shellOnly === true, machine: undefined, bundledSha256: null, standing: { marked, sessionUnderTmux: false, configUnderTmux: false } })
+    const r = routeSshTab({ platform: d.platform, switchOn: false, ssh, shellOnly: options.shellOnly === true, machine: undefined, bundledSha256: () => null, standing: { marked, sessionUnderTmux: false, configUnderTmux: false } })
     // Remembered all the same: a tab started on the usual path while the
     // switch was off stays there when it is turned on.
     return r.via === 'nothing' ? startsNothing(r) : usualPath(ROUTE_WHY.off)
@@ -284,7 +285,7 @@ export function remoteHelperPty(win: OutputWindow, sessionId: string, options: R
       ssh,
       shellOnly: options.shellOnly === true,
       machine: d.machines.findByTarget(ssh),
-      bundledSha256: d.bundledSha256(),
+      bundledSha256: d.bundledSha256,
       ...(standing ? { standing } : {}),
     })
   } catch (err) {
