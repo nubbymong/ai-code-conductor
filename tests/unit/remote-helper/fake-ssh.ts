@@ -137,3 +137,75 @@ export class FakeSsh implements SshRunner {
 export function result(nonce: string, lines: Record<string, string>, end = 'ok'): string {
   return `${Object.entries(lines).map(([k, v]) => `AICC-RESULT ${nonce} ${k} ${v}`).join('\n')}${Object.keys(lines).length ? '\n' : ''}AICC-RESULT ${nonce} end ${end}\n`
 }
+
+/**
+ * One machine's device folder (`~/.aicc/<did>`), as the paths under it (a
+ * folder with nothing in it is `<path>/`), for the cases that read what a
+ * Check or a Remove leaves there (2.1.3-beta.19: the earlier builds' helper
+ * folders). `answer` changes it as the install, commit, sweep and remove
+ * scripts do and answers as they print; any other script gets null. The
+ * sweep removes the earlier builds' folders only when its own text carries
+ * that step (scripts.ts SWEEP_EARLIER_HELPERS, its `r helpers` line), by the
+ * rule that text states. The real scripts' run on sh is
+ * tests/live/remote-helper-device.live.ts's.
+ */
+export class DeviceTree {
+  readonly paths: Set<string>
+  constructor(paths: string[]) { this.paths = new Set(paths) }
+  /** The names directly in `dir` (`''` for the device folder itself). */
+  names(dir: string): string[] {
+    const at = dir === '' ? '' : `${dir}/`
+    const out = new Set<string>()
+    for (const p of this.paths) if (p.startsWith(at) && p.length > at.length) out.add(p.slice(at.length).split('/')[0])
+    return [...out].sort()
+  }
+  private drop(prefix: string): void {
+    for (const p of [...this.paths]) if (p === prefix || p.startsWith(`${prefix}/`)) this.paths.delete(p)
+  }
+  answer(c: ExecCall): FakeAnswer | null {
+    const n = c.values[0]
+    switch (c.script) {
+      case 'install': {
+        this.paths.add(`helper/.new-${n}/aicc-helper`)
+        return null
+      }
+      case 'commit': {
+        const [, , , folder, staged] = c.values
+        this.drop(`helper/${folder}`)
+        this.drop(`helper/.new-${staged}`)
+        this.paths.add(`helper/${folder}/aicc-helper`)
+        return { stdout: result(n, {}) }
+      }
+      case 'sweep': {
+        const folder = c.values[3]
+        const lines: Record<string, string> = {}
+        if (/; r helpers \$h; /.test(scriptText('sweep'))) {
+          let h = 0
+          const held = this.names('store').some((x) => /\.json$|\.json\./.test(x))
+          if (!held) {
+            for (const v of this.names('helper')) {
+              if (v === folder || v.startsWith('.') || !/^[0-9A-Za-z.-]+$/.test(v)) continue
+              this.paths.delete(`helper/${v}/aicc-helper`)
+              // rmdir: only a folder left empty goes.
+              if (this.names(`helper/${v}`).length === 0) { this.paths.delete(`helper/${v}/`); h++ }
+            }
+          }
+          lines.helpers = String(h)
+        }
+        let swept = 0
+        for (const x of this.names('sessions')) {
+          if (this.paths.has(`store/${x}.json`)) continue
+          this.drop(`sessions/${x}`)
+          swept++
+        }
+        lines.swept = String(swept)
+        return { stdout: `AICC-HASH ${n} ok ${c.values[4]}\n${result(n, lines)}` }
+      }
+      case 'remove': {
+        this.paths.clear()
+        return { stdout: result(n, {}) }
+      }
+      default: return null
+    }
+  }
+}

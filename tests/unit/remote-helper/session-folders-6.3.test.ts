@@ -13,7 +13,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
-import { scriptText } from '../../../src/main/remote-helper/scripts'
+import { SCRIPT_NAMES, scriptText } from '../../../src/main/remote-helper/scripts'
 import { listKept } from '../../../src/main/remote-helper/kept'
 import { forgetRemoteHelperTab, listRemoteSessions, remoteHelperPty, setRemoteHelperDeps } from '../../../src/main/remote-helper'
 import { registerProvider } from '../../../src/main/providers'
@@ -96,7 +96,8 @@ describe('6.3: the list at start-up removes the folders whose holder is gone', (
     ].join('; ')
     expect(scriptText('sessions').endsWith(`; ${tail}`)).toBe(true)
     expect(scriptText('sweep').endsWith(`; ${tail}`)).toBe(true)
-    // What comes before it differs only in list mode's line: `sessions` prints its listing.
+    // What comes before it differs in list mode's line (`sessions` prints its
+    // listing) and in the earlier builds' helper folders, which `sweep` alone removes.
     expect(scriptText('sessions').slice(0, -tail.length)).toContain('"$P" list --store "$A/store" </dev/null || exit $?; ')
     expect(scriptText('sweep').slice(0, -tail.length)).toContain('"$P" list --store "$A/store" </dev/null >/dev/null 2>&1; ')
   })
@@ -106,9 +107,46 @@ describe('6.3: the list at start-up removes the folders whose holder is gone', (
   // ~/.aicc/<did>/helper/<folder of the build that launched it>/aicc-helper
   // (remote-launch.ts, from session.ts remoteHelperCommands' helperPath), and
   // an attach writes no file (session.ts prepare). So a Check that installs
-  // another helper must leave the earlier folder while a session may use it.
-  it('a Check that installs another helper removes no helper folder but the one it replaces: a kept session runs the helper its launch named', () => {
-    expect(scriptText('commit').split('; ').filter((p) => /\brm(dir)?\b/.test(p))).toEqual(['rm -f -- "$Q/aicc-helper"', 'rmdir -- "$Q" || no cannot-replace'])
+  // another helper must leave the earlier folder while a session may use it:
+  // the commit replaces only its own folder, and the Check's sweep removes the
+  // earlier builds' folders only when the store holds no holder's record
+  // (2.1.3-beta.19). The start-up list never removes one.
+  it('the commit of another helper replaces only its own folder, and no script but the Check\'s sweep and Remove deletes a helper folder: a kept session runs the helper its launch named', () => {
+    const rms = (t: string) => t.split('; ').filter((p) => /\brm(dir)?\b/.test(p))
+    expect(rms(scriptText('commit'))).toEqual(['rm -f -- "$Q/aicc-helper"', 'rmdir -- "$Q" || no cannot-replace'])
+    // The start-up list (`sessions`), and every other script but the sweep, name no helper folder to delete.
+    expect(SCRIPT_NAMES).toContain('sessions')
+    for (const name of SCRIPT_NAMES.filter((n) => n !== 'sweep')) {
+      expect(rms(scriptText(name)).filter((p) => p.includes('/helper/')), name).toEqual([])
+    }
+    expect(rms(scriptText('sweep')).filter((p) => p.includes('/helper/'))).toHaveLength(2)
+  })
+
+  // Run as the scripts read on the real sh in tests/live/remote-helper-device.live.ts
+  // (the update case); machines.test.ts drives a Check through it on DeviceTree.
+  it('with a holder\'s record in the store the earlier builds\' helper folders stay; with none they go, never this build\'s, a staging folder, a link or another name (the Check\'s sweep only)', () => {
+    const t = scriptText('sweep')
+    const step = [
+      'h=0; k=0; l=',
+      'if [ -e "$A/store" ] || [ -L "$A/store" ]; then { [ -d "$A/store" ] && [ ! -L "$A/store" ] && l=$(ls -A "$A/store"); } || k=1; fi',
+      'for R in $l; do case "$R" in *.json|*.json.*) k=1;; esac; done',
+      'if [ "$k" = 0 ]; then for V in $(ls -A "$A/helper"); do [ "$V" = "$F" ] && continue; case "$V" in .*|*[!0-9A-Za-z.-]*|"") continue;; esac; [ -d "$A/helper/$V" ] && [ ! -L "$A/helper/$V" ] || continue; rm -f -- "${A:?}/helper/${V:?}/aicc-helper"; rmdir -- "${A:?}/helper/${V:?}" 2>/dev/null && h=$((h+1)); done; fi',
+      'r helpers $h',
+    ].join('; ')
+    // After list mode (it drops the records of holders that are gone), before the session folders.
+    const at = t.indexOf(step)
+    expect(at).toBeGreaterThan(t.indexOf('"$P" list --store "$A/store" </dev/null >/dev/null 2>&1'))
+    expect(at).toBeLessThan(t.indexOf('S=$A/sessions; c=0'))
+    // The scripts run with globbing off, so the store is read by ls, not by a glob.
+    expect(t.indexOf('set -f')).toBeLessThan(at)
+    expect(t).not.toContain('/*.json')
+    // The sweep's deletes: those two of an earlier helper folder, and the session folders'.
+    expect(t.split('; ').filter((p) => /\brm(dir)?\b/.test(p))).toEqual([
+      'rm -f -- "${A:?}/helper/${V:?}/aicc-helper"',
+      'rmdir -- "${A:?}/helper/${V:?}" 2>/dev/null && h=$((h+1))',
+      'rm -rf -- "${A:?}/sessions/${X:?}" && c=$((c+1))',
+    ])
+    expect(scriptText('sessions')).not.toContain('r helpers')
   })
 
   it('6.3: the list the app takes is that exec, and what it removed is logged once', async () => {

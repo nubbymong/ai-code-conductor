@@ -590,7 +590,9 @@ export class RemoteMachines {
     }
     // 4. version and self-test, through the launcher
     const checked = await this.selfCheck(target, did, install, helper)
-    // 5. at a Check, the session folders whose holder is gone (2.1.3-beta.18 section 3.2)
+    // 5. at a Check, the session folders whose holder is gone (2.1.3-beta.18
+    // section 3.2), and the earlier builds' helper folders while no holder
+    // has a record (2.1.3-beta.19)
     if (checked.ok && !a.first) await this.sweep(target, did, install, helper)
     const record: RemoteMachineRecord = {
       did, host: target.host, port: target.port, user: target.user, label: a.label, addedAt: a.addedAt,
@@ -620,13 +622,18 @@ export class RemoteMachines {
 
   /** The session folders a tab's end could not remove (its link was down, the
    *  app quit first): each one whose holder is gone goes, after list mode
-   *  removes the records of holders that are gone. One log line; a failure
-   *  changes nothing of the Check's answer. */
+   *  removes the records of holders that are gone. From 2.1.3-beta.19 the
+   *  earlier builds' helper folders go first, when no holder has a record
+   *  (scripts.ts SWEEP_EARLIER_HELPERS); this build's folder never. One log
+   *  line for each count above 0; a failure changes nothing of the Check's
+   *  answer. */
   private async sweep(target: SshTarget, did: string, install: string, helper: BundledLinuxHelper): Promise<void> {
     const nonce = newNonce()
     const r = await runScript(this.deps.runner, target, 'sweep', [nonce, did, install, helper.folder, helper.sha256]).catch((): ExecResult => ({ code: null, stdout: '', stderr: '', timedOut: false }))
     const failed = sshFailure(r)
     const res = failed ? null : readScriptResult(r.stdout, nonce)
+    const helpers = res?.values.get('helpers') ?? ''
+    if (/^[1-9][0-9]{0,5}$/.test(helpers)) this.deps.log(`[remote-helper] ${target.host}: removed ${helpers} earlier helper folder(s), as no session is held there`)
     const swept = res?.values.get('swept') ?? ''
     if (!res?.ok) this.deps.log(`[remote-helper] ${target.host}: its session folders were not checked (${failed ?? (res ? refusalText(res.refused) : 'no answer')})`)
     else if (/^[1-9][0-9]{0,5}$/.test(swept)) this.deps.log(`[remote-helper] ${target.host}: removed ${swept} session folder(s) whose holder is gone`)

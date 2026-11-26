@@ -78,7 +78,9 @@
  * an attach to an until-ended holder from a bridge of another build (an app
  * update that changed the helper: a second build of the same source at another
  * version, REMOTE_HELPER_OTHER_BIN and REMOTE_HELPER_OTHER_MANIFEST or, on the
- * CI runner, built by this file, installed by a Check as an update's would);
+ * CI runner, built by this file, installed by a Check as an update's would),
+ * the first build's helper folder kept by that Check while its holder has a
+ * record, and removed by the next Check once none has (2.1.3-beta.19);
  * Remove; nothing left under ~/.aicc and no helper process of the
  * run left. The test's own execs read only what their command prints (an rc
  * file prints first).
@@ -1155,7 +1157,7 @@ describe('remote helper on a real Linux host', () => {
     await untilHost('its folder to go', `test -e "${plan.helper.folder}" && echo there || echo gone`, 'gone')
   })
 
-  it('a list and an attach to an until-ended holder from a bridge of another build: an app update that changed the helper, after its Check (2.1.3-beta.19 section 1.2)', async () => {
+  it('a list and an attach to an until-ended holder from a bridge of another build: an app update that changed the helper, after its Check; the first build\'s folder stays while its holder has a record, and the next Check removes it (2.1.3-beta.19 section 1.2)', async () => {
     const other = await readBundledLinuxHelper(await otherBuild())
     if (!other.ok) throw new Error(`the other build and its manifest do not read: ${other.why}`)
     expect(other.helper.sha256).not.toBe(helper.sha256)
@@ -1170,6 +1172,9 @@ describe('remote helper on a real Linux host', () => {
     let out = ''
     first.onData((x) => { out += x })
     let later: RemoteHelperPty | undefined
+    // The device folder's own entries, and its helper/ folder's, as ls lists them.
+    const lsDevice = (sub: string) => sshRun(`D=${machine.did}; ls -A "$HOME/.aicc/$D${sub}"`).out.trim().split('\n').filter(Boolean).sort()
+    let updated: RemoteMachines | undefined
     try {
       await until('the fake CLI\'s banner', () => out.includes('FAKE-CLI READY'))
       first.write('kept by the first build\r')
@@ -1180,12 +1185,19 @@ describe('remote helper on a real Linux host', () => {
       // the kept holder still runs from; nothing is ended.
       const store = memoryStore()
       store.write({ v: 1, installId: machines.installId(), machines: machines.list() })
-      const updated = new RemoteMachines({ runner, store, bundled: async () => ({ ok: true, helpers: [other.helper] }), inUse: () => 0, log: (x) => { machineLogs.push(x) } })
+      updated = new RemoteMachines({ runner, store, bundled: async () => ({ ok: true, helpers: [other.helper] }), inUse: () => 0, log: (x) => { machineLogs.push(x) } })
+      const logsBefore = machineLogs.length
       const checked = await updated.check(machine.did)
-      note('other-check', checked)
+      note('other-check', { checked, logs: machineLogs.slice(logsBefore) })
       expect(checked.ok, checked.message).toBe(true)
       const after = updated.get(machine.did)!
       expect(after.helper.sha256).toBe(other.helper.sha256)
+      // The first build's folder stays beside the other's while its kept
+      // holder has a record in the store (2.1.3-beta.19).
+      const both = lsDevice('/helper')
+      note('helper-folders-while-held', { helper: both, store: lsDevice('/store') })
+      expect(both).toEqual([helper.folder, other.helper.folder].sort())
+      expect(machineLogs.slice(logsBefore).filter((l) => l.includes('helper folder'))).toEqual([])
       // The other build's list names the first build's until-ended holder.
       const listed = await listKept({ runner, installId: machines.installId(), log: sessionLog }, after)
       expect(listed.ok, listed.ok ? '' : listed.why).toBe(true)
@@ -1211,6 +1223,20 @@ describe('remote helper on a real Linux host', () => {
       inUse = 0
     }
     await untilHost('the kept holder to end', `pgrep -f -- "--session [r]${plan.helper.sid.slice(1)}" | wc -l`, '0')
+    // With that holder ended and no record left (list mode drops a gone
+    // holder's), the next Check removes the earlier build's folder, and only
+    // it: this build's folder, the owner marker, store/ and sessions/ stay
+    // (2.1.3-beta.19). Remove, next, still takes everything.
+    if (!updated) throw new Error('the update\'s Check did not run')
+    const top = lsDevice('')
+    const logsBefore = machineLogs.length
+    const rechecked = await updated.check(machine.did)
+    note('helper-folders-after-end', { rechecked, logs: machineLogs.slice(logsBefore), helper: lsDevice('/helper'), store: lsDevice('/store'), top: lsDevice('') })
+    expect(rechecked.ok, rechecked.message).toBe(true)
+    expect(lsDevice('/helper')).toEqual([other.helper.folder])
+    expect(lsDevice('')).toEqual(top)
+    expect(top).toEqual(expect.arrayContaining(['helper', 'owner', 'sessions', 'store']))
+    expect(machineLogs.slice(logsBefore)).toContain(`[remote-helper] ${target.host}: removed 1 earlier helper folder(s), as no session is held there`)
   })
 
   it('Remove takes it away: nothing of the run is left under ~/.aicc, and no helper process', async () => {

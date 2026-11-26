@@ -33,7 +33,10 @@
  * `~/.aicc/<did>/store` (the holders' records; the helper makes it 0700). A
  * new file is written to `helper/.new-<nonce>/` first and moved into its
  * folder only once the app has compared its hash with the installer's
- * manifest (commit), or removed (discard). From 2.1.3-beta.18 (plan section
+ * manifest (commit), or removed (discard). An earlier build's folder stays
+ * after the Check that installs this build's (a kept session runs the helper
+ * its launch named), until a later Check's `sweep` finds no holder's record
+ * in the store (2.1.3-beta.19). From 2.1.3-beta.18 (plan section
  * 3.2) `~/.aicc/<did>/sessions/<sid>/` (0700) holds one session's own files,
  * which its provider's launch gives (`files`): written before its launch,
  * removed at its end (`unsession`), and by the next Check once its holder is
@@ -143,6 +146,26 @@ const SWEEP_GONE_FOLDERS = [
   'for X in $(ls -A "$S"); do case "$X" in *[!A-Za-z0-9_-]*|"") continue;; esac; [ -e "$A/store/$X.json" ] && continue; pv "$S/$X" || continue; rm -rf -- "${A:?}/sessions/${X:?}" && c=$((c+1)); done',
   'r swept $c',
   'r end ok',
+]
+
+/** At a Check only (`sweep`, 2.1.3-beta.19): the helper folders of earlier
+ *  builds (`helper/<version>-<hash12>/`, which the Check that installed this
+ *  build's left in place) go, but only while the store holds no holder's
+ *  record, nor one being written. A kept session's CLI runs the helper by the
+ *  path its launch wrote (its status line, hooks and MCP server), so while any
+ *  holder has a record none goes, and a later Check takes them; list mode has
+ *  just removed the records of holders that are gone. Never this build's
+ *  folder (`F`), a staging `.new-*` folder, a link, or a name of other
+ *  characters, and nothing outside `helper/`; a folder holding more than its
+ *  helper file loses that file and stays. The scripts run with globbing off
+ *  (`set -f`), so the store is read by `ls`, and a store that is not a real
+ *  folder, or does not read, counts as holding a record. */
+const SWEEP_EARLIER_HELPERS = [
+  'h=0; k=0; l=',
+  'if [ -e "$A/store" ] || [ -L "$A/store" ]; then { [ -d "$A/store" ] && [ ! -L "$A/store" ] && l=$(ls -A "$A/store"); } || k=1; fi',
+  'for R in $l; do case "$R" in *.json|*.json.*) k=1;; esac; done',
+  'if [ "$k" = 0 ]; then for V in $(ls -A "$A/helper"); do [ "$V" = "$F" ] && continue; case "$V" in .*|*[!0-9A-Za-z.-]*|"") continue;; esac; [ -d "$A/helper/$V" ] && [ ! -L "$A/helper/$V" ] || continue; rm -f -- "${A:?}/helper/${V:?}/aicc-helper"; rmdir -- "${A:?}/helper/${V:?}" 2>/dev/null && h=$((h+1)); done; fi',
+  'r helpers $h',
 ]
 
 /** A file a launch reads on the host, at most (2.1.3-beta.18 section 3.2). */
@@ -524,8 +547,11 @@ const SPECS = {
     ]),
   },
   /** 2.1.3-beta.18 section 3.2, at Check: list mode first (it removes the
-   *  records of holders that are gone), then every session folder whose
-   *  holder has no record goes. Through the launcher. */
+   *  records of holders that are gone), then, from 2.1.3-beta.19, the earlier
+   *  builds' helper folders when no holder has a record
+   *  (SWEEP_EARLIER_HELPERS), then every session folder whose holder has no
+   *  record goes. Through the launcher. Only a Check runs it: the start-up
+   *  list (`sessions`) never removes a helper folder. */
   sweep: {
     values: [FOLDER, HASH],
     text: join([
@@ -533,6 +559,7 @@ const SPECS = {
       ...CHECKS,
       ...LAUNCH,
       '"$P" list --store "$A/store" </dev/null >/dev/null 2>&1',
+      ...SWEEP_EARLIER_HELPERS,
       ...SWEEP_GONE_FOLDERS,
     ]),
   },
