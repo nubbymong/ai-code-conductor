@@ -20,7 +20,7 @@ import { createHash } from 'crypto'
 import { RemoteMachines, MACHINE_TEXT, consentText, type MachineStore, type RemoteMachineRecord } from '../../../src/main/remote-helper/machines'
 import { LINUX_ARM64_HELPER_PATH, LINUX_HELPER_PATH, LINUX_HELPER_ROWS, linuxHelperRow, type BundledLinuxHelper } from '../../../src/main/remote-helper/manifest'
 import { routeSshTab, ROUTE_WHY } from '../../../src/main/remote-helper/route'
-import { scriptText, type ScriptName } from '../../../src/main/remote-helper/scripts'
+import { LOGIND_READS, scriptText, type ScriptName } from '../../../src/main/remote-helper/scripts'
 import { REMOTE_OTHER_HELPER } from '../../../src/shared/remote-machines'
 import { FakeSsh, result, type ExecCall, type FakeAnswer } from './fake-ssh'
 
@@ -223,7 +223,7 @@ describe('Check, the cards and the routing use the entry of the machine\'s own a
     const asked: string[] = []
     const both = (arch: string) => { asked.push(arch); return bundledFor([X64, ARM])(arch) }
     const [rec] = m.list()
-    expect(route(rec, both)).toEqual({ via: 'helper', machine: rec })
+    expect(route(rec, both)).toEqual({ via: 'helper', machine: rec, kind: 'away' })
     expect(asked).toEqual(['aarch64'])
     expect(m.views(both)[0]).toMatchObject({ checked: true })
     // The same machine holding the x86-64 file's hash (as a wrong install would).
@@ -236,7 +236,7 @@ describe('Check, the cards and the routing use the entry of the machine\'s own a
 
   it('an x86_64 machine is compared with the x86-64 entry only', () => {
     const rec = { did: 'a'.repeat(32), host: 'arm.lan', port: 22, user: 'dev', label: 'x', addedAt: 1, os: 'Linux', arch: 'x86_64', home: '/home/dev', shell: '/bin/bash', shellIsSh: true, claudePath: '/usr/bin/claude', path: '/usr/bin', lang: null, helper: { path: LINUX_HELPER_PATH, version: '0.1.0', sha256: X64_SHA, folder: X64.folder }, check: { at: 1, ok: true } }
-    expect(route(rec, bundledFor([X64, ARM]))).toEqual({ via: 'helper', machine: rec })
+    expect(route(rec, bundledFor([X64, ARM]))).toEqual({ via: 'helper', machine: rec, kind: 'away' })
     expect(route({ ...rec, helper: { ...rec.helper, sha256: ARM_SHA } }, bundledFor([X64, ARM]))).toEqual({ via: 'today', why: ROUTE_WHY.oldHelper })
     // A build with no helper for that architecture sends the tab the usual way.
     expect(route(rec, bundledFor([ARM]))).toEqual({ via: 'today', why: ROUTE_WHY.noHelper })
@@ -313,12 +313,32 @@ describe('the Pi\'s setup notes 3, 6, 7 and 8, as Add, Check and Remove run them
     expect(scriptText('remove')).toContain('pv "/tmp/aicc-$u" && rmdir -- "/tmp/aicc-$u" 2>/dev/null')
   })
 
+  // 2.1.3-beta.19 section 1.2: the probe asks logind whether it ends the
+  // user's processes at logout (LOGIND_READS: three show-session and
+  // show-user reads, one of them labelled logind-kill). Those three are taken
+  // out first, and only from the probe; every other loginctl, kill or linger
+  // word in any script still fails notes 3 and 7.
+  const withoutLogindReads = (name: ScriptName): string => {
+    let text = scriptText(name)
+    if (name === 'probe') for (const read of LOGIND_READS) text = text.split(`; ${read}`).join('')
+    return text
+  }
+
+  it('the probe\'s logind reads only ask, and no other script names loginctl', () => {
+    expect(LOGIND_READS).toHaveLength(3)
+    for (const read of LOGIND_READS) {
+      expect(read).toMatch(/^r (logind-kill|logind-exclude|linger) "\$\(loginctl show-(session|user) (-p [A-Za-z]+ |"\$\(id -un\)" -p Linger )--value <\/dev\/null 2>\/dev\/null\)"$/)
+      expect(scriptText('probe')).toContain(`; ${read}`)
+    }
+    for (const name of USED) expect(withoutLogindReads(name), name).not.toMatch(/loginctl|enable-linger|terminate-(session|user)/)
+  })
+
   it('note 3: nothing relies on lingering: no systemd unit, no user runtime folder, no scheduler', () => {
-    for (const name of USED) expect(scriptText(name), name).not.toMatch(/systemctl|systemd-run|loginctl|XDG_RUNTIME_DIR|\/run\/user|crontab|\bnohup\b|\bat\b -|\bdisown\b/)
+    for (const name of USED) expect(withoutLogindReads(name), name).not.toMatch(/systemctl|systemd-run|loginctl|XDG_RUNTIME_DIR|\/run\/user|crontab|\bnohup\b|\bat\b -|\bdisown\b/)
   })
 
   it('note 7: no tmux and no other process is touched: nothing is ended, listed or adopted by name', () => {
-    for (const name of USED) expect(scriptText(name), name).not.toMatch(/\b(tmux|screen|kill|pkill|killall|pgrep|pidof|ps|fuser)\b/)
+    for (const name of USED) expect(withoutLogindReads(name), name).not.toMatch(/\b(tmux|screen|kill|pkill|killall|pgrep|pidof|ps|fuser)\b/)
   })
 
   it('note 8: no listener and no forwarding: every exec is one ssh with every forwarding cleared, and no script opens a port', async () => {

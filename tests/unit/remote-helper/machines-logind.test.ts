@@ -13,7 +13,7 @@ import { scriptText } from '../../../src/main/remote-helper/scripts'
 import { FakeSsh, result, type ExecCall, type FakeAnswer } from './fake-ssh'
 
 const SHA = 'a'.repeat(64)
-const HELPER: BundledLinuxHelper = { file: '/x/linux-x64/aicc-helper', version: '0.1.0', sha256: SHA, size: 4096, folder: `0.1.0-${SHA.slice(0, 12)}` }
+const HELPER: BundledLinuxHelper = { arch: 'x86_64', path: 'linux-x64/aicc-helper', file: '/x/linux-x64/aicc-helper', version: '0.1.0', sha256: SHA, size: 4096, folder: `0.1.0-${SHA.slice(0, 12)}` }
 const CONFIGS = [{ id: 'cfg-key', label: 'Ubuntu', sessionType: 'ssh', sshConfig: { host: 'ubuntu.lan', port: 22, username: 'nick' } }]
 
 function host(logind: Record<string, string>) {
@@ -39,7 +39,7 @@ function memoryStore(): MachineStore & { value: unknown } {
 }
 
 async function added(logind: Record<string, string>, store = memoryStore()) {
-  const m = new RemoteMachines({ runner: new FakeSsh(host(logind)), store, bundled: async () => ({ ok: true, helper: HELPER }), readFile: async () => Buffer.alloc(4096, 7), inUse: () => 0, log: () => {} })
+  const m = new RemoteMachines({ runner: new FakeSsh(host(logind)), store, bundled: async () => ({ ok: true, helpers: [HELPER] }), readFile: async () => Buffer.alloc(4096, 7), inUse: () => 0, log: () => {} })
   const q = await m.prepare(CONFIGS, 'cfg-key')
   if (!q.ok) throw new Error(q.message)
   const r = await m.add(q.token)
@@ -60,19 +60,19 @@ describe('the record keeps what it read', () => {
   it('KillUserProcesses no, Linger no (the owner\'s Raspberry Pi 5\'s defaults): kept, and the card has no note', async () => {
     const { m, record } = await added({ 'logind-kill': 'no', 'logind-exclude': 'root', linger: 'no' })
     expect(record.logind).toEqual({ kill: 'no', exclude: 'root', linger: 'no' })
-    expect(m.views(SHA)[0].persistentNote).toBeUndefined()
+    expect(m.views(() => SHA)[0].persistentNote).toBeUndefined()
   })
 
   it('KillUserProcesses yes: kept, and the card says SSH Persistent keeps the usual path, and why', async () => {
     const { m, record } = await added({ 'logind-kill': 'yes', 'logind-exclude': 'root', linger: 'yes' })
     expect(record.logind).toEqual({ kill: 'yes', exclude: 'root', linger: 'yes' })
-    expect(m.views(SHA)[0].persistentNote).toContain('KillUserProcesses yes, Linger yes')
+    expect(m.views(() => SHA)[0].persistentNote).toContain('KillUserProcesses yes, Linger yes')
   })
 
   it('nothing read (no loginctl): kept as not read, and the card asks for a Check', async () => {
     const { m, record } = await added({ 'logind-kill': '', 'logind-exclude': '', linger: '' })
     expect(record.logind).toEqual({ kill: '', exclude: '', linger: '' })
-    expect(m.views(SHA)[0].persistentNote).toContain('Press Check')
+    expect(m.views(() => SHA)[0].persistentNote).toContain('Press Check')
   })
 
   it('a value that is not one logind gives is kept as not read', async () => {
@@ -82,11 +82,11 @@ describe('the record keeps what it read', () => {
 
   it('a saved record keeps it across a read, and one from beta.18 (none) reads with none', async () => {
     const { store } = await added({ 'logind-kill': 'no', 'logind-exclude': 'root', linger: 'no' })
-    const again = new RemoteMachines({ runner: new FakeSsh(host({})), store, bundled: async () => ({ ok: true, helper: HELPER }), inUse: () => 0, log: () => {} })
+    const again = new RemoteMachines({ runner: new FakeSsh(host({})), store, bundled: async () => ({ ok: true, helpers: [HELPER] }), inUse: () => 0, log: () => {} })
     expect(again.list()[0].logind).toEqual({ kill: 'no', exclude: 'root', linger: 'no' })
     const old = store.value as { machines: Array<Record<string, unknown>> }
     delete old.machines[0].logind
     expect(again.list()[0].logind).toBeUndefined()
-    expect(again.views(SHA)[0].persistentNote).toContain('Press Check')
+    expect(again.views(() => SHA)[0].persistentNote).toContain('Press Check')
   })
 })

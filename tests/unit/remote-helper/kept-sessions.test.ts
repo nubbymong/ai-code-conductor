@@ -30,6 +30,7 @@ import { claudeRemoteLaunch } from '../../../src/main/providers/claude/remote-la
 import { endRemoteSession, endRemoteTab, forgetRemoteHelperTab, listRemoteSessions, remoteHelperFlowState, remoteHelperLiveness, remoteHelperPty, setRemoteHelperDeps, type RemoteSignalDeps } from '../../../src/main/remote-helper'
 import { RemoteHelperPty, remoteLaunchSpec, remoteSessionId } from '../../../src/main/remote-helper/session'
 import { readHolderListing, readHolderRecord } from '../../../src/main/remote-helper/kept'
+import type { HostAccountRead } from '../../../src/main/remote-helper/host-reads'
 import type { RemoteMachineRecord, RemoteMachines } from '../../../src/main/remote-helper/machines'
 import type { HelperToolLink } from '../../../src/main/session-helper/manager'
 import type { HookEventFrame, HolderRecord } from '../../../src/main/session-helper/protocol'
@@ -46,7 +47,7 @@ const SHA = 'a'.repeat(64)
 const MACHINE: RemoteMachineRecord = {
   did: '0123456789abcdef0123456789abcdef', host: 'pi.lan', port: 22, user: 'nick', label: 'Pi', addedAt: 1,
   os: 'Linux', arch: 'aarch64', home: '/home/nick', shell: '/bin/bash', shellIsSh: true, claudePath: '/home/nick/.local/bin/claude',
-  path: '/home/nick/.local/bin:/usr/bin:/bin', lang: null, helper: { version: '0.1.0', sha256: SHA, folder: `0.1.0-${SHA.slice(0, 12)}` }, check: { at: 1, ok: true },
+  path: '/home/nick/.local/bin:/usr/bin:/bin', lang: null, helper: { path: 'linux-arm64/aicc-helper', version: '0.1.0', sha256: SHA, folder: `0.1.0-${SHA.slice(0, 12)}` }, check: { at: 1, ok: true },
   logind: { kill: 'no', exclude: 'root', linger: 'no' },
 }
 /** A config that never chose a Connection: SSH Persistent. */
@@ -74,14 +75,16 @@ function signals() {
   const events: Array<[string, HookEventFrame]> = []
   const served: Array<{ id: string; link: HelperToolLink }> = []
   const ended: string[] = []
+  const accounts: Array<[string, HostAccountRead]> = []
   const deps: RemoteSignalDeps = {
     toolsServed: () => true,
     status: (id, line) => { status.push([id, line]) },
     event: (id, e) => { events.push([id, e]) },
     serve: (id, _p, link) => { served.push({ id, link }); return true },
     ended: (id) => { ended.push(id) },
+    account: (id, read) => { accounts.push([id, read]) },
   }
-  return { deps, status, events, served, ended }
+  return { deps, status, events, served, ended, accounts }
 }
 
 function plugIn(deps: RemoteSignalDeps, machine: RemoteMachineRecord = MACHINE): void {
@@ -126,11 +129,13 @@ function sendStatus(h: FakeHolder, seq: number, payload: Record<string, unknown>
  * it is launched; from then on a hold exits 3, as a holder for that session
  * runs, and list mode lists it, until it has ended.
  */
-function host(holder: FakeHolder, o: { untilEnded?: boolean; holds?: (c: ExecCall) => FakeAnswer | undefined } = {}) {
+function host(holder: FakeHolder, o: { untilEnded?: boolean; holds?: (c: ExecCall) => FakeAnswer | undefined; account?: () => string } = {}) {
   ssh.host = {
     answer: (c) => {
       const n = c.values[0]
       if (c.script === 'reads') return { stdout: result(n, {}) }
+      // Section 1.1's field mode through the launcher (section 3's account read).
+      if (c.script === 'field') return { stdout: `AICC-HASH ${n} ok ${SHA}\n${(o.account ?? (() => 'nick@example.com'))()}\n` }
       if (c.script === 'hold') {
         const own = o.holds?.(c)
         if (own) return own
@@ -217,7 +222,8 @@ describe('an SSH Persistent tab through the session helper, kept until it is end
     const s = signals()
     plugIn(s.deps)
     const holder = holderFor(id)
-    host(holder)
+    let account = 'nick@example.com'
+    host(holder, { account: () => account })
     let shown = ''
     const first = remoteHelperPty(win, id, { ssh: PERSISTENT }, 100, 30)!
     first.onData((d) => { shown += d })
@@ -230,6 +236,8 @@ describe('an SSH Persistent tab through the session helper, kept until it is end
     holder.output('WHILE AWAY\r\n')
     holder.hookEvent('Notification', { hook_event_name: 'Notification', message: 'waiting' })
     const before = ssh.calls.length
+    // The host's CLI signed in as another account meanwhile.
+    account = 'home@example.com'
     // The next start: the restored tab, its saved mark with its spawn.
     forgetRemoteHelperTab(id)
     let again = ''
@@ -238,7 +246,10 @@ describe('an SSH Persistent tab through the session helper, kept until it is end
     await until('attached again', () => holder.attached !== null)
     await until('the replay', () => again.includes('WHILE AWAY'))
     expect(launches(holder)).toBe(1)
-    expect(ssh.calls.slice(before).map((c) => c.script)).toEqual(['reads', 'hold', 'list', 'bridge'])
+    // 1.1's contract: the host reads and the field read run at every start,
+    // launch or attach (section 3's readHostForStart), so the label is set again.
+    expect(ssh.calls.slice(before).map((c) => c.script)).toEqual(['reads', 'field', 'hold', 'list', 'bridge'])
+    expect(s.accounts).toEqual([[id, { account: 'nick@example.com' }], [id, { account: 'home@example.com' }]])
     expect((second as RemoteHelperPty).attachedToKept).toBe(true)
     // The queued hook event comes once, as this tab's.
     await until('the hook event', () => s.events.length === 1)

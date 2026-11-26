@@ -229,6 +229,18 @@ export const FILES_LAYOUT_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}:(0|[1-9][0-9]{0
 
 const join = (parts: readonly string[]): string => parts.join('; ')
 
+/** 2.1.3-beta.19 section 1.2: the probe's three reads of whether logind ends
+ *  the user's processes at logout, as helper/probes/p3-p6-linux.cjs reads it
+ *  (the manager's KillUserProcesses and KillExcludeUsers, the user's Linger);
+ *  each prints '' when it does not read (no loginctl, or no logind). They
+ *  only ask (show-session, show-user): no script sets a linger or ends a
+ *  session, and no other script names loginctl. */
+export const LOGIND_READS: readonly string[] = [
+  'r logind-kill "$(loginctl show-session -p KillUserProcesses --value </dev/null 2>/dev/null)"',
+  'r logind-exclude "$(loginctl show-session -p KillExcludeUsers --value </dev/null 2>/dev/null)"',
+  'r linger "$(loginctl show-user "$(id -un)" -p Linger --value </dev/null 2>/dev/null)"',
+]
+
 // ── the scripts ──────────────────────────────────────────────────────────────
 
 /** What a script takes, in order, after its nonce, device id and install id. */
@@ -261,13 +273,7 @@ const SPECS = {
       'r shell "$S"',
       'r path "$PATH"',
       'r lang "${LANG:-}"',
-      // 2.1.3-beta.19 section 1.2: whether logind ends the user's processes at
-      // logout, read as helper/probes/p3-p6-linux.cjs reads it (the manager's
-      // KillUserProcesses and KillExcludeUsers, the user's Linger); empty when
-      // it does not read (no loginctl, or no logind).
-      'r logind-kill "$(loginctl show-session -p KillUserProcesses --value </dev/null 2>/dev/null)"',
-      'r logind-exclude "$(loginctl show-session -p KillExcludeUsers --value </dev/null 2>/dev/null)"',
-      'r linger "$(loginctl show-user "$(id -un)" -p Linger --value </dev/null 2>/dev/null)"',
+      ...LOGIND_READS,
       'r claude "$(command -v claude 2>/dev/null)"',
       // `$` alone, so the PATH and the lookup expand in the login shell, not here.
       'v="$"',
