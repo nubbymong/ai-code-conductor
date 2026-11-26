@@ -160,6 +160,10 @@ export default function RemoteMachinesSection({ active = true }: { active?: bool
     return () => { mounted.current = false }
   }, [])
   useEffect(() => { if (active) void refresh() }, [active, refresh])
+  // Leaving the page clears the last action's notice (2.1.3-beta.19 release
+  // smoke: an Add's notice still sat under the card 7 minutes and other pages
+  // later). The page stays mounted while another tab is in front.
+  useEffect(() => { if (!active) setNotice(null) }, [active])
 
   const act = async (work: () => Promise<RemoteActionResult>) => {
     setBusy(true)

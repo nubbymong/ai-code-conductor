@@ -110,7 +110,8 @@ describe('Add takes the helper of the machine\'s own architecture', () => {
     const ssh = new FakeSsh(host('aarch64'))
     const { m, readFile } = machines(ssh)
     const r = await addOn(m)
-    expect(r).toEqual({ ok: true, message: 'Added arm.lan. Its self-test passed.' })
+    // Named as its card names it: the label, then user@host:port (2.1.3-beta.19 release smoke).
+    expect(r).toEqual({ ok: true, message: 'Added Arm board (dev@arm.lan:22). Its self-test passed.' })
     expect(ssh.scripts()).toEqual(['probe', 'install', 'commit', 'version', 'selftest'])
     // Only the arm64 file is read and sent, exactly its bytes, with its size.
     expect(readFile.mock.calls.map((c) => c[0])).toEqual([ARM.file])
@@ -250,7 +251,7 @@ describe('Check, the cards and the routing use the entry of the machine\'s own a
     const did = m.list()[0].did
     ssh.calls.length = 0
     readFile.mockClear()
-    expect(await m.check(did)).toEqual({ ok: true, message: 'arm.lan passed its check.' })
+    expect(await m.check(did)).toEqual({ ok: true, message: 'Arm board (dev@arm.lan:22) passed its check.' })
     expect(ssh.scripts()).toEqual(['probe', 'version', 'selftest', 'sweep'])
     expect(readFile).not.toHaveBeenCalled()
     // After an update that changed the arm64 helper: Check installs this build's.
@@ -258,7 +259,7 @@ describe('Check, the cards and the routing use the entry of the machine\'s own a
     f.machines[0].helper = { ...f.machines[0].helper, sha256: 'c'.repeat(64), folder: `0.0.9-${'c'.repeat(12)}` }
     ssh.calls.length = 0
     // Its answer says this build's helper was put there (2.1.3-beta.19 text smoke #33).
-    expect(await m.check(did)).toEqual({ ok: true, message: 'arm.lan: this build\'s session helper is installed there, and it passed its check.' })
+    expect(await m.check(did)).toEqual({ ok: true, message: 'Arm board (dev@arm.lan:22): this build\'s session helper is installed there, and it passed its check.' })
     expect(ssh.scripts()).toEqual(['probe', 'install', 'commit', 'version', 'selftest', 'sweep'])
     expect(readFile.mock.calls.map((c) => c[0])).toEqual([ARM.file])
     expect(ssh.calls[1].stdin.equals(ARM_BYTES)).toBe(true)

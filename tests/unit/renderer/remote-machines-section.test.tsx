@@ -15,7 +15,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import { act } from 'react'
 import { readFileSync } from 'fs'
 import { resolve } from 'path'
-import { REMOTE_OTHER_HELPER, REMOTE_ROUTE_NOTE, REMOTE_SESSIONS_SETTING, type RemoteMachinesState } from '../../../src/shared/remote-machines'
+import { REMOTE_OTHER_HELPER, REMOTE_ROUTE_NOTE, REMOTE_SESSIONS_SETTING, REMOTE_SWITCH_TEXT, type RemoteMachinesState } from '../../../src/shared/remote-machines'
 import { DEFAULT_SETTINGS } from '../../../src/renderer/stores/settingsStore'
 
 ;(globalThis as any).IS_REACT_ACT_ENVIRONMENT = true
@@ -164,6 +164,26 @@ describe('Linux machines on the Machines page', () => {
     expect(notice()).toBe('')
   })
 
+  // 2.1.3-beta.19 release smoke (j03-kept-left.png): an Add's notice still sat
+  // under the card 7 minutes and other pages later. The page stays mounted
+  // while another tab is in front, so leaving it clears the notice.
+  it('leaving the page clears the last action\'s notice', async () => {
+    const m = { did: DID, label: 'Rocky', target: 'nick@rocky.lan:22', checked: true, lastCheck: { at: Date.now(), ok: true }, helperVersion: '0.1.0', system: 'Linux x86-64', inUse: 0 }
+    install(state({ machines: [m] }))
+    await mount()
+    const notice = () => container.querySelector('[data-testid="remote-notice"]')?.textContent
+    await click(button('Check'))
+    expect(notice()).toBe('rocky.lan passed its check.')
+    // Another page in front: the section is kept, with active false.
+    await act(async () => { root.render(<RemoteMachinesSection active={false} />) })
+    await settle()
+    expect(notice()).toBe('')
+    // Back on the page: no old answer comes back.
+    await act(async () => { root.render(<RemoteMachinesSection active />) })
+    await settle()
+    expect(notice()).toBe('')
+  })
+
   it('Remove is not offered while a tab runs through the helper there', async () => {
     install(state({ machines: [{ did: DID, label: 'Rocky', target: 'nick@rocky.lan:22', checked: true, lastCheck: { at: Date.now(), ok: true }, helperVersion: '0.1.0', system: 'Linux x86-64', inUse: 1 }] }))
     await mount()
@@ -196,6 +216,23 @@ describe('the remote sessions switch in Settings', () => {
     expect(block).toContain('checked={settings.remoteSessionsThroughHelper === true}')
     expect(block).toContain('onChange={(e) => save({ remoteSessionsThroughHelper: e.target.checked })}')
     expect(block).toContain('{REMOTE_SWITCH_TEXT}')
+  })
+
+  // 2.1.3-beta.19 release smoke (f01-switch-on.png): the text was one
+  // 16-line paragraph, with what the preview lacks buried in its second-to-last
+  // line. Four short paragraphs now, shown apart on the Settings page.
+  it('its text is four short paragraphs, the last one saying what the preview does not take yet, shown apart', () => {
+    const parts = REMOTE_SWITCH_TEXT.split('\n\n')
+    expect(parts).toHaveLength(4)
+    expect(parts[0]).toMatch(/^Preview, off by default\. A Claude Code tab /)
+    expect(parts[1]).toMatch(/^Its status line, its hooks /)
+    expect(parts[2]).toMatch(/^A tab whose Connection is SSH /)
+    expect(parts[3]).toMatch(/^Not through the helper yet: /)
+    for (const p of parts) expect(p).not.toMatch(/\n|^\s|\s$/)
+    const page = readFileSync(resolve(__dirname, '../../../src/renderer/components/SettingsPage.tsx'), 'utf8').replace(/\r\n/g, '\n')
+    const remote = page.indexOf('data-testid="setting-remote-sessions-helper"')
+    const block = page.slice(remote, page.indexOf('</label>', remote))
+    expect(block).toMatch(/<span className="[^"]*\bwhitespace-pre-line\b[^"]*" data-testid="remote-switch-text">\{REMOTE_SWITCH_TEXT\}<\/span>/)
   })
 })
 

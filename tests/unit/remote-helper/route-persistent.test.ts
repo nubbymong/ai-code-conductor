@@ -77,7 +77,9 @@ describe('route: a marked tab never takes the usual path', () => {
     ['another helper on its machine (an update that changed it)', { machine: { ...MACHINE, helper: { ...MACHINE.helper, sha256: 'b'.repeat(64) } } }, ROUTE_WHY.oldHelper, MARKED_STEP.check],
     ['a failed Check', { machine: { ...MACHINE, check: { at: 1, ok: false, detail: 'x' } } }, ROUTE_WHY.notChecked, MARKED_STEP.check],
     ['no helper in this build', { bundledSha256: () => null }, ROUTE_WHY.noHelper, MARKED_STEP.check],
-    ['its machine not added', { machine: undefined }, ROUTE_WHY.notAdded, MARKED_STEP.end],
+    // Removed since its session was kept: no card is left to End it on
+    // (2.1.3-beta.19 final-head review), so the step is to close the tab.
+    ['its machine not added (removed since)', { machine: undefined }, ROUTE_WHY.notAdded, MARKED_STEP.removed],
     ['a post-connect command added since', { ssh: { ...PERSISTENT, postCommand: 'cd /srv' } }, ROUTE_WHY.postCommand, MARKED_STEP.end],
   ]
   for (const [name, over, why, step] of nothing) {
@@ -88,6 +90,13 @@ describe('route: a marked tab never takes the usual path', () => {
 
   it('the tmux and logind checks are for new sessions: a marked one is held already and goes through the helper', () => {
     expect(route({ standing: { marked: true, sessionUnderTmux: true, configUnderTmux: true }, machine: { ...MACHINE, logind: { kill: 'yes', exclude: '', linger: 'no' } } })).toMatchObject({ via: 'helper', kind: 'until-ended' })
+  })
+
+  it('the step for a removed machine names no Machines page action: no card is left there', () => {
+    expect(MARKED_STEP.removed).toBe('its machine is no longer on the Machines page, so this app cannot reach that session: close this tab and open its config again')
+    expect(MARKED_STEP.removed).not.toMatch(/End it on|press Check/i)
+    // An unmarked tab is not told a step: it takes the usual path.
+    expect(route({ machine: undefined })).toEqual({ via: 'today', why: ROUTE_WHY.notAdded })
   })
 
   it('an unmarked tab with the switch off takes the usual path, as before', () => {

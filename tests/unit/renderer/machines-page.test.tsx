@@ -451,6 +451,19 @@ describe('Machines page: Refresh and the actions', () => {
     expect(byTestId('machines-notice')?.textContent).toBe('Attached build watcher to the app.')
   })
 
+  // 2.1.3-beta.19 release smoke: a notice stayed under the card after the
+  // page was left. The page is kept mounted while another tab is in front.
+  it('leaving the page clears the last action\'s notice', async () => {
+    showTab.mockClear()
+    install(status({}, [held({ id: 'left-over', attached: false, tabOpen: false })]))
+    bridge.reattach.mockResolvedValueOnce({ ok: true, tab: { id: 'newtab0123456789abcdef01', label: 'build watcher', open: true, partner: false } })
+    await open()
+    await click(byLabel('Re-attach build watcher'))
+    expect(byTestId('machines-notice')?.textContent).toBe('Attached build watcher to the app.')
+    await open(false)
+    expect(byTestId('machines-notice')?.textContent).toBe('')
+  })
+
   it('Re-attach whose tab cannot be shown says so', async () => {
     showTab.mockClear()
     showTab.mockReturnValueOnce(false)

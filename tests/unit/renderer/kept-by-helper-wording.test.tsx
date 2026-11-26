@@ -50,6 +50,18 @@ describe('the close question', () => {
     expect(container.querySelector('[data-testid="ssh-close-body"]')?.textContent).toContain('the Machines page lists it')
     expect(text).not.toContain('tmux')
   })
+  // 2.1.3-beta.19 release smoke (j01-leave-running-question.png): the body
+  // read "the session the session helper keeps there", and at 440 px the three
+  // footer buttons overflowed the panel's right padding.
+  it('for a kept tab says plainly what End does, in a panel wide enough for its three buttons', () => {
+    ssh.pending = { sessionId: 'kept-1', label: 'Pi', host: 'nick@pi.lan', helper: true }
+    act(() => { root.render(<SshCloseDialog />) })
+    const body = (container.querySelector('[data-testid="ssh-close-body"]')?.textContent ?? '').replace(/\s+/g, ' ')
+    expect(body).toBe('End it to stop the session and remove its folder there, or leave it running so you can reattach later; the Machines page lists it.')
+    const panel = container.querySelector('[role="dialog"]')
+    expect(panel?.className).toContain('w-[480px]')
+    expect(panel?.className).not.toContain('w-[440px]')
+  })
   it('for a tmux tab keeps its words', () => {
     ssh.pending = { sessionId: 'tmux-1', label: 'Pi', host: 'nick@pi.lan' }
     act(() => { root.render(<SshCloseDialog />) })

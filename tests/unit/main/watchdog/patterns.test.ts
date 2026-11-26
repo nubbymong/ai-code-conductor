@@ -792,3 +792,87 @@ describe('hasActiveMonitors (RC8 — monitor sessions never sleep)', () => {
     expect(hasActiveMonitors('x\n\x1b[2m⏵⏵ auto mode on · 2 monitors · ← for agents\x1b[0m')).toBe(true)
   })
 })
+
+// 2.1.3-beta.19 release smoke, W74 (Claude Code 2.1.332 in a tab through the
+// session helper on Rocky Linux 10.2 (x86-64)): after a flagged answer the
+// Watchdog logged "the input box carries the user's unsubmitted draft" every
+// 10 s over an empty prompt, and in manual mode "the remote pane is not
+// showing Claude", and never typed its retry. Claude Code 2.1 prints each
+// message you sent at column 0 behind the same caret its input uses, so the
+// message the retry answers is in the send gate's window, above the box; and
+// its footer outside auto mode is "⏸ manual mode on", which no footer signal
+// knew. These are the shapes, read from the raw text as an SSH tab's gate
+// reads them (no styled read).
+describe('the send gate on Claude Code 2.1\'s own screen (W74)', () => {
+  const RULE = '─'.repeat(41)
+  const SENT = '❯ say hello'
+  const FLAG = '  ⎿  API Error: safeguards flagged this message (s32 flag w1)'
+  const AUTO = '  ⏵⏵ auto mode on'
+  const MANUAL = '  ⏸ manual mode on'
+  const box = (row = '❯ ', footer = AUTO) => [RULE, row, RULE, footer]
+
+  it('the message you sent above an empty prompt is not a draft: the retry may be typed', () => {
+    expect(canSendNow([SENT, FLAG, '', ...box()].join('\n'))).toEqual({ ok: true })
+  })
+
+  it('two messages you sent (the first retry, then a second flag) are not a picker either', () => {
+    const pane = [SENT, FLAG, '', '❯ continue', FLAG, '', ...box()].join('\n')
+    expect(canSendNow(pane)).toEqual({ ok: true })
+  })
+
+  it('a draft in the prompt still refuses, with your message above it', () => {
+    expect(canSendNow([SENT, FLAG, '', ...box('❯ half a thought')].join('\n'))).toEqual({ ok: false, reason: 'draft' })
+  })
+
+  it('text in the prompt with no styled read still refuses (a placeholder cannot be told from a draft): fail closed', () => {
+    expect(canSendNow([SENT, FLAG, '', ...box('❯ Try "fix lint errors"')].join('\n')).ok).toBe(false)
+  })
+
+  it('with the styled read, your message above and a dim placeholder in the prompt: sendable', () => {
+    const raw = [SENT, FLAG, '', ...box('❯ Try "fix lint errors"')].join('\n')
+    const nonDim = [SENT, FLAG, '', ...box('❯ ')].join('\n')
+    expect(canSendNow(raw, nonDim)).toEqual({ ok: true })
+  })
+
+  it('a picker or a draft BELOW the empty prompt\'s top rule still refuses', () => {
+    const picker = [SENT, FLAG, RULE, '❯ ', RULE, 'Review the proposed auto-mode setup?', '❯ Looks good — save it', RULE].join('\n')
+    expect(canSendNow(picker).ok).toBe(false)
+  })
+
+  it('with no live prompt on screen (a picker in its place), a caret row with text still refuses', () => {
+    const oneRow = [SENT, FLAG, 'Review the proposed auto-mode setup?', '❯ Looks good — save it', RULE].join('\n')
+    expect(canSendNow(oneRow).ok).toBe(false)
+  })
+
+  it('a caret row right under a rule is read as a prompt, not as a message you sent: it still refuses', () => {
+    const pane = [RULE, '❯ an old prompt row', RULE, FLAG, '', ...box()].join('\n')
+    expect(canSendNow(pane)).toEqual({ ok: false, reason: 'draft' })
+  })
+
+  it('an indented caret row above the prompt (not at column 0) is not a message you sent: it still refuses', () => {
+    const pane = ['  ❯ Looks good — save it', FLAG, '', ...box()].join('\n')
+    expect(canSendNow(pane)).toEqual({ ok: false, reason: 'draft' })
+  })
+
+  it('a numbered menu above the prompt still counts as a menu', () => {
+    const pane = ['Do you want to run this command?', '❯ 1. Yes', '  2. No', ...box()].join('\n')
+    expect(canSendNow(pane)).toEqual({ ok: false, reason: 'menu' })
+  })
+
+  it('the footer outside auto mode is Claude Code\'s own: manual mode, and plan mode', () => {
+    expect(hasClaudeInputChrome([SENT, FLAG, '', ...box('❯ ', MANUAL)].join('\n'))).toBe(true)
+    expect(hasClaudeInputChrome([SENT, FLAG, '', ...box('❯ ', '  ⏸ plan mode on (shift+tab to cycle)')].join('\n'))).toBe(true)
+    // In manual mode the message you sent above is not a draft either.
+    expect(canSendNow([SENT, FLAG, '', ...box('❯ ', MANUAL)].join('\n'))).toEqual({ ok: true })
+  })
+
+  it('the words alone do not vouch: mid-line, or without the glyph', () => {
+    expect(hasClaudeInputChrome(['$ grep -n "⏸ manual mode on" src/footer.ts', 'src/footer.ts:3: label: "⏸ manual mode on"'].join('\n'))).toBe(false)
+    expect(hasClaudeInputChrome('Claude Code is now in manual mode on this host')).toBe(false)
+    expect(hasClaudeInputChrome('manual mode on')).toBe(false)
+  })
+
+  it('the manual mode footer is chrome: the flag above the prompt is still found in the current turn', () => {
+    expect(detectSafeguard([SENT, FLAG, '', ...box('❯ ', MANUAL)].join('\n'), SAFEGUARD_PATTERNS)).toBe(true)
+  })
+})

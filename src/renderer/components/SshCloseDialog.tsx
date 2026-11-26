@@ -41,7 +41,9 @@ export default function SshCloseDialog() {
 
   return (
     <DialogOverlay position="absolute" z={WINDOW_CLOSE_Z} testId="ssh-close-dialog">
-      <DialogPanel width="w-[440px]" labelledBy="ssh-close-heading" panelRef={panelRef}>
+      {/* 480 px: at 440 the three footer buttons overflowed the panel's right
+          padding (2.1.3-beta.19 release smoke). */}
+      <DialogPanel width="w-[480px]" labelledBy="ssh-close-heading" panelRef={panelRef}>
         <DialogHeader
           titleId="ssh-close-heading"
           title={<>Close “{pending.label}”?</>}
@@ -57,8 +59,8 @@ export default function SshCloseDialog() {
               that machine, listed on the Machines page. */}
           <p className="text-xs leading-relaxed" style={{ color: 'var(--text-secondary)' }} data-testid="ssh-close-body">
             {pending.helper
-              ? <>End it to stop the session the session helper keeps there and clean up, or leave it running so you can
-                reattach later; the Machines page lists it</>
+              ? <>End it to stop the session and remove its folder there, or leave it running so you can reattach
+                later; the Machines page lists it</>
               : <>End it to stop the remote tmux session and clean up, or leave it running so you can
                 reattach later</>}
             {pending.remoteAccount ? <> — signed in as <span className="font-mono">{pending.remoteAccount}</span></> : null}.

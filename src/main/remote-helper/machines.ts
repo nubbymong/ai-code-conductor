@@ -117,6 +117,13 @@ export function persistentNote(m: Pick<RemoteMachineRecord, 'logind' | 'user'>):
   return 'SSH Persistent tabs keep the usual SSH path here: its last check did not read whether logind ends your processes when you log out. Press Check.'
 }
 
+/** A machine as its card names it (2.1.3-beta.19 release smoke): its label,
+ *  then user@host:port. The notices of an Add, a Check, a Remove and an End
+ *  name it so, not by its bare address. */
+export function machineName(m: Pick<RemoteMachineRecord, 'label' | 'user' | 'host' | 'port'>): string {
+  return `${hostText(m.label, 200) ?? `${m.user}@${m.host}`} (${m.user}@${m.host}:${m.port})`
+}
+
 const LOGIND_WORD = /^(yes|no)$/
 const LOGIND_USERS = /^[A-Za-z0-9_.@ -]{0,1024}$/
 /** What a probe or a saved record says of logind, read strictly. */
@@ -453,7 +460,8 @@ export class RemoteMachines {
       f.machines = [...f.machines.filter((m) => m.did !== did), made.record]
       this.save(f)
       this.deps.log(`[remote-helper] added ${key} (${did.slice(0, 8)}): ${made.record.check.ok ? 'checked' : `not checked: ${made.record.check.detail ?? ''}`}`)
-      return { ok: true, message: made.record.check.ok ? `Added ${p.target.host}. Its self-test passed.` : `Added ${p.target.host}, but it is not checked: ${made.record.check.detail}. Press Check to try again, or Remove.` }
+      const name = machineName(made.record)
+      return { ok: true, message: made.record.check.ok ? `Added ${name}. Its self-test passed.` : `Added ${name}, but it is not checked: ${made.record.check.detail}. Press Check to try again, or Remove.` }
     } finally {
       this.busy.delete(key)
     }
@@ -476,8 +484,9 @@ export class RemoteMachines {
       this.save(f)
       this.deps.log(`[remote-helper] checked ${key} (${m.did.slice(0, 8)}): ${record.check.ok ? 'passed' : `failed: ${record.check.detail ?? ''}`}`)
       // 2.1.3-beta.19 text smoke (#33): a Check that put this build's helper there says so.
-      if (record.check.ok) return { ok: true, message: made.ok && made.installed ? `${m.host}: this build's session helper is installed there, and it passed its check.` : `${m.host} passed its check.` }
-      return { ok: false, message: `${m.host} did not pass its check: ${record.check.detail}` }
+      const name = machineName(m)
+      if (record.check.ok) return { ok: true, message: made.ok && made.installed ? `${name}: this build's session helper is installed there, and it passed its check.` : `${name} passed its check.` }
+      return { ok: false, message: `${name} did not pass its check: ${record.check.detail}` }
     } finally {
       this.busy.delete(key)
     }
@@ -509,7 +518,7 @@ export class RemoteMachines {
     f.machines = f.machines.filter((x) => x.did !== m.did)
     this.save(f)
     this.deps.log(`[remote-helper] removed ${m.user}@${m.host}:${m.port} (${m.did.slice(0, 8)})`)
-    return { ok: true, message: `Removed the session helper from ${m.host}.` }
+    return { ok: true, message: `Removed the session helper from ${machineName(m)}.` }
   }
 
   private async runRemove(target: SshTarget, did: string, install: string): Promise<RemoteActionResult> {

@@ -66,6 +66,21 @@ const EMPTY_HIDDEN: string[] = []
  *  (codex-command-note) predate the Claude notes; both now serve both CLIs. */
 export const CODEX_NOTE_MS = 6000
 
+/**
+ * The strip's middle row and the helper tab's note beside it (2.1.3-beta.19
+ * release smoke: at 1280x768 the note kept its whole width and the row, cut
+ * where the note began, showed the weekly meter as a lone "W"). In a flex
+ * row, a `flex-1` item's basis is 0, so it only ever gets what the others
+ * leave, and a note that does not shrink leaves it short. The row's basis is
+ * its content (`flex-auto`), so when the strip is too narrow the space comes
+ * off the items by how much each may shrink: the note may shrink a thousand
+ * times as much as the row, down to nothing (`min-w-0`), with an ellipsis
+ * (`truncate`) and its reason still in its title. So the note gives way
+ * first, and the row is cut only once the note is gone.
+ */
+export const STRIP_MIDDLE_ROW_CLASS = 'flex items-center gap-3 flex-auto min-w-0 overflow-hidden'
+export const REMOTE_USAGE_NOTE_CLASS = 'min-w-0 truncate shrink-[1000]'
+
 /** 2.1.3-beta.19 section 3 (aicc_planning#434): the strip's note for a tab
  *  through the session helper, in place of the per-model weekly bars and
  *  extra usage it cannot show (main's reason, session.remoteUsageNotShown),
@@ -74,7 +89,7 @@ function RemoteUsageNote({ why }: { why: RemoteUsageNotShown | undefined }) {
   const text = why ? REMOTE_USAGE_NOT_SHOWN_TEXT[why] : undefined
   if (!text) return null
   return (
-    <span className="shrink-0" style={{ color: 'var(--text-muted)' }} title={text.title} data-testid="remote-usage-not-shown">{text.label}</span>
+    <span className={REMOTE_USAGE_NOTE_CLASS} style={{ color: 'var(--text-muted)' }} title={text.title} data-testid="remote-usage-not-shown">{text.label}</span>
   )
 }
 
@@ -423,7 +438,7 @@ export default function SessionStatusStrip({ sessionId }: SessionStatusStripProp
       {statusLineEnabled ? (
       <>
       <div
-        className="flex items-center gap-3 flex-1 min-w-0 overflow-hidden"
+        className={STRIP_MIDDLE_ROW_CLASS}
       >
         {/* Bug 6: for Claude the interactive Model pill (controls cluster, right)
             is the single home for the model + effort, so the read-only telemetry

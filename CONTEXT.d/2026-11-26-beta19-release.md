@@ -6,7 +6,8 @@ at their frozen heads with real merge commits onto one branch from beta
 tested Codex to 0.172.0); 6.1 and 6.5; 6.2; 6.4; 2 (joined before 1.2, as
 1.2's fix round touched section 2's file); and 1.2 with 6.3, last. Each join
 but 6.4's (which owed none) had one commit for its owed user text and docs
-(plan rule 38). Five fix rounds ran on the aggregate, the first before any host line;
+(plan rule 38). Six fix rounds ran on the aggregate, the first before any host line,
+the sixth after the final-head review and the release smoke;
 PR #763's comments hold each cause and its evidence. The release commit is the version
 bump, the changelog entry's highlights line, beta.18's date and the release
 surface sweep. Section 2 dropped its part 2.1.4, the plan's one droppable part of it:
@@ -57,3 +58,21 @@ readings were taken with. ADR-030 now records P1 on Rocky Linux 10.2
 (x86-64) and on the owner's Raspberry Pi 5 (arm64) as measured by section
 1.2's lines, and aicc_planning#434 as a gate on any default beside P1.
 pty-manager.ts stays at 7,517 lines, its cap.
+
+**The sixth fix round (after the release smoke).** The Session Watchdog never
+typed its retry into a helper tab on Claude Code 2.1.332: Claude Code 2.1
+prints each message you sent at column 0 behind the caret its input uses, so
+the message a retry answers sat in the send gate's 14-line window above the
+empty prompt and read as an unsent draft (two of them as a picker), and the
+footer outside auto mode ("⏸ manual mode on", "⏸ plan mode on") was no
+footer the SSH gate knew. A caret row at column 0, not right under a rule,
+above the bottom-most caret row framed by rules, is now read as a message you
+sent; the framed row and every row below it are read as before. The same
+gate serves a usual SSH tab, so it had both gaps too (read from the code; not
+measured). Also: a kept tab whose machine was removed is told to close the
+tab, and its End closes it with no left-running entry; the Machines notices
+name a machine as its card does and clear when the page is left; the remote
+switch text is four paragraphs; the close question is 480 px wide; the
+strip's middle row has its content as its basis, so a helper tab's note gives
+way before the weekly meter; the rollback warning says to End kept sessions
+first; the Restart known issue names Connection SSH only.

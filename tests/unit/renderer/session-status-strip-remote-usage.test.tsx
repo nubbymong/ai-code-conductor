@@ -138,7 +138,6 @@ describe('the note is never clipped by the strip\'s middle row (text smoke #36)'
     draw()
     const n = note()!
     expect(n).not.toBeNull()
-    expect(n.classList.contains('shrink-0')).toBe(true)
     // Not inside any clipping row.
     for (let el = n.parentElement; el && el !== container; el = el.parentElement) {
       expect(el.classList.contains('overflow-hidden') && el.classList.contains('min-w-0'), `clipped by ${el.className}`).toBe(false)
@@ -150,5 +149,38 @@ describe('the note is never clipped by the strip\'s middle row (text smoke #36)'
     expect(middle!.contains(n)).toBe(false)
     expect(n.textContent).toBe('Model limits: not available')
     expect(n.textContent!.length).toBeLessThanOrEqual(27)
+  })
+
+  /**
+   * 2.1.3-beta.19 release smoke (g04-header-rocky.png, o06 and q04 on the
+   * owner's Raspberry Pi 5 (arm64)): at 1280x768, with the host's weekly figure
+   * and no 5-hour one, the note kept its whole width and the middle row was
+   * cut where the note began: "5h: not reported  W  Model limits: not
+   * available". The row was `flex-1` (a basis of 0: it gets only what the
+   * others leave) beside a note that did not shrink. Now the row's basis is
+   * its content (`flex-auto`) and the note may shrink a thousand times as
+   * much, to nothing, with an ellipsis and its reason in its title: when the
+   * strip is too narrow the note gives way first, and the weekly meter keeps
+   * its width. jsdom lays nothing out, so this pins the classes that decide it.
+   */
+  it('a helper tab at 1280 px with a weekly figure only: the weekly bar beside the note, and the note gives way first', () => {
+    helperTab({ rateLimitWeekly: 75, rateLimitWeeklyResets: '2026-11-30T09:00:00Z', usageBuckets: [], remoteUsageNotShown: 'own-sign-in', modelName: 'Opus 5.5' })
+    draw()
+    const n = note()!
+    expect(n).not.toBeNull()
+    expect(container.querySelector('[data-testid="rate-limit-not-reported"]')?.textContent).toBe('5h:not reported')
+    expect(bars()).toEqual(['Weekly rate limit utilisation'])
+    const middle = n.parentElement!.querySelector(':scope > .overflow-hidden.min-w-0') as HTMLElement
+    expect(middle).not.toBeNull()
+    expect(middle.contains(container.querySelector('[aria-label="Weekly rate limit utilisation"]'))).toBe(true)
+    // The row's basis is its content: never flex-1's 0.
+    expect(middle.classList.contains('flex-auto')).toBe(true)
+    expect(middle.classList.contains('flex-1')).toBe(false)
+    // The note shrinks first and furthest, with an ellipsis; its reason stays in its title.
+    for (const c of ['min-w-0', 'truncate', 'shrink-[1000]']) expect(n.classList.contains(c), c).toBe(true)
+    expect(n.classList.contains('shrink-0')).toBe(false)
+    expect(n.getAttribute('title')).toMatch(/^Not available: this machine uses its own sign-in\./)
+    // Nothing else beside the row takes the space it needs: every other child of the strip's row is shrink-0.
+    for (const el of [...n.parentElement!.children]) if (el !== middle && el !== n) expect((el as HTMLElement).classList.contains('shrink-0') || el.getAttribute('aria-hidden') === 'true', (el as HTMLElement).className).toBe(true)
   })
 })

@@ -49,6 +49,12 @@ const WORKING_PATTERNS: RegExp[] = [
 ]
 const isWorkingLine = (l: string): boolean => WORKING_PATTERNS.some((p) => p.test(l))
 
+// Claude Code 2.1's mode footer outside auto mode (2.1.3-beta.19 release smoke,
+// W74: "⏸ manual mode on" on 2.1.332; "⏸ plan mode on" in plan mode), as its
+// auto mode footer is "⏵⏵ auto mode on". Anchored to the line's start and the
+// full words, so prose that names a mode does not match.
+const MODE_FOOTER_PAUSED = /^\s*⏸[\uFE0E\uFE0F]?\s+(?:manual|plan) mode on\b/
+
 // --- Chrome-aware tail ---
 // Claude Code renders UI chrome BELOW the meaningful content: the input box, the footer
 // (model/usage/version), key hints, the todo/task widget, the status spinner
@@ -77,6 +83,7 @@ const CHROME_LINE: RegExp[] = [
   // banner back in. The glyph is the discriminator.
   /^\s*[❯>]\s*$/, // empty input prompt (bare, unboxed)
   /^\s*⏵⏵/, // mode footer ("⏵⏵ auto mode on…", "⏵⏵ accept edits…")
+  MODE_FOOTER_PAUSED, // mode footer outside auto mode ("⏸ manual mode on")
   /Allowed by auto mode/i, // "Allowed by auto mode" permission notice (anchored to
   // the full phrase — bare /auto mode/ matched prose like
   // "auto mode is enabled in your settings"; the footer
@@ -713,13 +720,34 @@ export function canSendNow(text: string, nonDimText?: string): SendGateResult {
     return /\S/.test(masked.slice(start, end))
   }
 
+  // A message you sent, in Claude Code's history above its live input
+  // (2.1.3-beta.19 release smoke, W74). The unboxed input is a top rule, the
+  // caret row and a bottom rule, drawn while the input has the focus (a
+  // permission prompt, a picker or a selector takes its place). The history
+  // prints each message you sent as the same caret and its text at column 0
+  // (USER_MESSAGE_ROW, the current-turn rule's), so after a short answer the
+  // message a retry answers sits in this window above the box: read as a
+  // draft, it deferred every retry, and two of them read as a picker. A caret
+  // row at column 0, not right under a rule, above the top rule of the
+  // bottom-most caret row framed by rules, is such a message: no keystroke
+  // reaches it. The framed row itself, and every row below its top rule, is
+  // read exactly as before, so a draft or a placeholder in the box (with no
+  // styled read) still refuses, and so does a picker drawn below it.
+  const offset = lines.length - tail.length
+  let liveInputTop = -1
+  for (let i = tail.length - 2; i >= 1; i--) {
+    if (RULE_ROW.test(tail[i - 1]) && /^\s*❯/.test(tail[i]) && RULE_ROW.test(tail[i + 1])) { liveInputTop = i - 1; break }
+  }
+  const sentMessage = (i: number): boolean =>
+    i < liveInputTop && USER_MESSAGE_ROW.test(tail[i]) && !(offset + i > 0 && RULE_ROW.test(lines[offset + i - 1]))
+
   let numberRows = 0
   let caretRowsRaw = 0
   let caretRowsInk = 0
   for (let i = 0; i < tail.length; i++) {
     const l = tail[i]
     if (MENU_NUMBER_ROW.test(l)) numberRows++
-    if (CARET_TEXT_ROW.test(l)) {
+    if (CARET_TEXT_ROW.test(l) && !sentMessage(i)) {
       caretRowsRaw++
       if (contentHasInk(i, 'caret')) caretRowsInk++
     }
@@ -790,6 +818,7 @@ export function canSendNow(text: string, nonDimText?: string): SendGateResult {
 // own shell); the cases this closes are the accidental ones.
 const CLAUDE_FOOTER_SIGNALS: RegExp[] = [
   /^\s*⏵⏵/, // the mode footer ("⏵⏵ accept edits on …")
+  MODE_FOOTER_PAUSED, // the footer outside auto mode ("⏸ manual mode on", "⏸ plan mode on")
   /^\s*\?\s+for\s+shortcuts\b/i, // the shortcuts footer hint — line-anchored (as
   // CHROME_LINE has it) so a `git show`/`rg` line that merely CONTAINS the phrase
   // mid-line does not vouch (adversarial pass, final round MINOR).

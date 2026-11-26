@@ -39,7 +39,7 @@ import { listKept, machineSessions } from './kept'
 import type { HolderKind } from './scripts'
 import { HOST_READS_MAX, hostReadProblem, sessionFilesInput } from './session-files'
 import type { RemoteSignalDeps } from './signals'
-import type { RemoteMachineRecord, RemoteMachines } from './machines'
+import { machineName, type RemoteMachineRecord, type RemoteMachines } from './machines'
 import type { SshRunner } from './ssh-exec'
 
 export type { RemoteSignalDeps } from './signals'
@@ -431,7 +431,11 @@ export async function endRemoteSession(did: string, sid: string): Promise<Remote
   const d = deps
   if (!d) return { ok: false, message: 'Remote sessions through the session helper are not available here.' }
   const m = d.machines.get(did)
-  if (!m) return { ok: false, message: 'That machine is not on this computer\'s list.' }
+  // A machine removed since keeps no session this app can reach: Remove is
+  // refused while its helper lists one (machines.ts remove). So there is
+  // nothing to end, and a close's End closes the tab and records no
+  // left-running entry for it (2.1.3-beta.19 final-head review).
+  if (!m) return { ok: true, message: 'That machine is no longer on this computer\'s list, so nothing is kept there for this app to end.' }
   for (const p of openTabs.values()) if (p.sid === sid) return { ok: false, message: 'A tab shows that session. Close it there and choose End.' }
   const listed = await listKept({ runner: d.runner, installId: d.machines.installId(), log: d.log }, m)
   if (!listed.ok) return { ok: false, message: `Nothing was ended: ${listed.why}.` }
@@ -440,7 +444,7 @@ export async function endRemoteSession(did: string, sid: string): Promise<Remote
   const driver = RemoteDriver.forEnd({ appPtyId: rec.label, machine: m, installId: d.machines.installId(), runner: d.runner, log: d.log, ...(d.signals ? { signals: d.signals } : {}) })
   const r = await driver.endKept(rec)
   d.log(`[remote-helper] ${sid}: ${r.ok ? 'ended' : `not ended (${r.why})`} on ${m.host} from the Machines page`)
-  return r.ok ? { ok: true, message: `Ended the session on ${m.host}.` } : { ok: false, message: `The session on ${m.host} was not ended: ${r.why}.` }
+  return r.ok ? { ok: true, message: `Ended the session on ${machineName(m)}.` } : { ok: false, message: `The session on ${machineName(m)} was not ended: ${r.why}.` }
 }
 
 /**

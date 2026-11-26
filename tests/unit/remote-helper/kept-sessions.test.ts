@@ -631,6 +631,32 @@ describe('list mode on the machines: the Machines rows and a left-running entry\
     expect(await remoteHelperLiveness({ host: 'pi.lan', port: 22, username: 'nick' }, ['live-kept'])).toEqual({ outcome: 'unverified', liveSessionIds: [] })
   })
 
+  // 2.1.3-beta.19 final-head review: a kept tab whose machine was removed
+  // since (Remove is refused while its helper lists a session, so it keeps
+  // none this app can reach). The close question's End, and End on a card,
+  // answer that nothing is kept there: the tab then closes and records no
+  // left-running entry for a session nothing can reach. Nothing is run.
+  it('End for a machine no longer on the list answers ok, saying nothing is kept there, and runs no exec', async () => {
+    const id = 'kept-removed-machine'
+    forgetRemoteHelperTab(id)
+    plugIn(signals().deps)
+    setRemoteHelperDeps({
+      platform: 'win32',
+      settings: () => ({ remoteSessionsThroughHelper: true }),
+      machines: { findByTarget: () => undefined, get: () => undefined, list: () => [], installId: () => INSTALL } as unknown as RemoteMachines,
+      runner: ssh,
+      bundledSha256: () => SHA,
+      systemPrefersDark: () => true,
+      onOutput: () => {},
+      log: (m) => logs.push(m),
+    })
+    const card = await endRemoteSession(MACHINE.did, remoteSessionId(id))
+    expect(card).toEqual({ ok: true, message: 'That machine is no longer on this computer\'s list, so nothing is kept there for this app to end.' })
+    // The close question's End of a tab with no open terminal goes the same way.
+    expect((await endRemoteTab(id, MACHINE.did)).ok).toBe(true)
+    expect(ssh.calls).toHaveLength(0)
+  })
+
   it('End on a card is refused for a session a tab shows (End it from its tab)', async () => {
     const id = 'kept-card-open'
     forgetRemoteHelperTab(id)

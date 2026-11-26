@@ -651,7 +651,7 @@ export default function SettingsPage({ initialTab, onNavigateToSessions, onUpdat
                     />
                     <span>
                       Remote sessions through the session helper (Linux, preview)
-                      <span className="block text-[10px] text-[var(--text-muted)]">{REMOTE_SWITCH_TEXT}</span>
+                      <span className="block text-[10px] text-[var(--text-muted)] whitespace-pre-line" data-testid="remote-switch-text">{REMOTE_SWITCH_TEXT}</span>
                     </span>
                   </label>
                 )}

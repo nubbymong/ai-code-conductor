@@ -336,7 +336,8 @@ describe('remote machines: Remove', () => {
   it('lists, then runs the one removal script with this machine\'s device id and this install\'s id, and forgets it', async () => {
     const { ssh, m, did } = await added()
     const r = await m.remove(did)
-    expect(r.ok).toBe(true)
+    // Named as its card names it: the label, then user@host:port (2.1.3-beta.19 release smoke).
+    expect(r).toEqual({ ok: true, message: 'Removed the session helper from Rocky (nick@rocky.lan:22).' })
     expect(ssh.scripts()).toEqual(['list', 'remove'])
     expect(ssh.calls[1].values.slice(1)).toEqual([did, m.installId()])
     expect(m.list()).toEqual([])
@@ -558,7 +559,7 @@ describe('remote machines: no ssh on this computer', () => {
     const did = m.list()[0].did
     const c = await m.check(did)
     expect(c.ok).toBe(false)
-    expect(c.message).toMatch(/did not pass its check: rocky\.lan could not be reached: ssh could not be started on this computer/)
+    expect(c.message).toMatch(/^Rocky \(nick@rocky\.lan:22\) did not pass its check: rocky\.lan could not be reached: ssh could not be started on this computer/)
     expect(c.message).not.toMatch(/bin\/sh/)
     expect(logged()).toHaveLength(1)
     const r = await m.remove(did)

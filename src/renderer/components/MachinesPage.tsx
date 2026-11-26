@@ -281,6 +281,11 @@ export default function MachinesPage({ active = true }: { active?: boolean }) {
   useEffect(() => {
     if (active) void refresh()
   }, [active, refresh])
+  // Leaving the page clears the last action's notice, as the Linux machines
+  // section's does (2.1.3-beta.19 release smoke).
+  useEffect(() => {
+    if (!active) setNotice(null)
+  }, [active])
 
   useEffect(() => {
     if (busy === null && focusListWhenDone.current) {

@@ -115,6 +115,29 @@ const FLAGGED = [
   '  ? for shortcuts',
 ].join('\r\n')
 
+/**
+ * The same flag as Claude Code 2.1 draws it (2.1.3-beta.19 release smoke,
+ * W74, Claude Code 2.1.332 on Rocky Linux 10.2 (x86-64)): the message you
+ * sent at column 0 behind the caret, the stand-in's answer under it, then
+ * the unboxed input (a rule, the empty caret row, a rule) and the mode
+ * footer: "⏵⏵ auto mode on", or "⏸ manual mode on" outside auto mode. The
+ * Watchdog read the sent message as an unsent draft in auto mode, and the
+ * manual mode footer as a pane that was not Claude Code's, so no retry was
+ * ever typed in either.
+ */
+const RULE = String.fromCharCode(0x2500).repeat(100)
+const flaggedOn21 = (footer: string): string => [
+  `${String.fromCharCode(0x276f)} say hello`,
+  `  ${String.fromCharCode(0x23bf)}  API Error: safeguards flagged this message (s32 flag w1)`,
+  '',
+  RULE,
+  `${String.fromCharCode(0x276f)} `,
+  RULE,
+  footer,
+].join('\r\n')
+const AUTO_FOOTER = `  ${String.fromCharCode(0x23f5, 0x23f5)} auto mode on`
+const MANUAL_FOOTER = `  ${String.fromCharCode(0x23f8)} manual mode on`
+
 beforeEach(() => {
   store = fs.mkdtempSync(path.join(os.tmpdir(), 'rh-watchdog-'))
   H.logs.length = 0
@@ -274,4 +297,41 @@ describe('the Watchdog of a tab through the session helper on another machine', 
     tab!.kill()
     await until('the holder to end', () => holder.ended)
   })
+
+  for (const [mode, footer] of [['auto mode', AUTO_FOOTER], ['manual mode', MANUAL_FOOTER]] as const) {
+    it(`on Claude Code 2.1's own screen in ${mode} (the message you sent above the empty prompt): the retry is typed once, at its first tick`, async () => {
+      const id = `wd-21-${mode.replace(' ', '-')}`
+      let clock = 1_000_000
+      const timers: Array<() => void> = []
+      const typed: string[] = []
+      let tab: ReturnType<typeof remoteHelperPty> = null
+      const manager = new WatchdogManager({
+        getWindow: () => win as never,
+        isSessionAlive: () => true,
+        send: (_sid, text) => { tab?.write(`${text}\r`) },
+        getStalls: () => 0,
+        now: () => clock,
+        setTimer: (cb) => { timers.push(cb); return 0 as unknown as ReturnType<typeof setTimeout> },
+        clearTimer: () => {},
+      })
+      setWatchdogManagerForTest(manager)
+      const { remoteHelperWatchdog } = await import('../../../src/main/watchdog/remote-helper-tab')
+      plugIn(remoteHelperWatchdog)
+      const holder = new FakeHolder(remoteSessionId(id), id, store)
+      holder.onTyped = (b) => { typed.push(b.toString('utf8')) }
+      answering(holder)
+      tab = remoteHelperPty(win, id, { ssh: SSH_TAB }, 100, 30)
+      await until('the arm', () => manager.isActive(id))
+      holder.output(flaggedOn21(footer))
+      const stateOf = () => manager.getStates().find((s) => s.sessionId === id)
+      await until('the safeguard state', () => stateOf()?.status === 'safeguard', 3000)
+      clock += 60_000
+      for (const run of timers.splice(0)) run()
+      await until('the retry typed into the holder', () => typed.join('').includes('continue\r'))
+      expect(typed.join('').split('continue\r')).toHaveLength(2)
+      expect(H.logs.filter((l) => l.includes(`[watchdog:${id}] Retry deferred`))).toEqual([])
+      tab!.kill()
+      await until('the holder to end', () => holder.ended)
+    })
+  }
 })

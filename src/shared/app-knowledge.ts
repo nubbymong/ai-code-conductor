@@ -258,7 +258,7 @@ A Terminal only SSH config with an After connecting, run command is asked first,
 
 Quitting types into a terminal only where the app started the assistant. An SSH tab where you pressed Skip and started Claude by hand is closed when you quit and is not sent /exit, because the app did not start that Claude. In the other direction, the app sees an assistant it started end only in the moment after launch, so one you ended later by hand (/exit, then something else started in the same tab) can still be sent the exit keys when you quit. Workaround: type /exit in a tab yourself before you quit when you want that Claude to end cleanly.
 
-Remote sessions through the session helper (preview): Restart on such a tab starts a new conversation. Workaround: type /resume in the tab to pick the earlier conversation up.
+Remote sessions through the session helper (preview): Restart on a tab whose Connection is SSH starts a new conversation (an SSH Persistent tab keeps its conversation). Workaround: type /resume in the tab to pick the earlier conversation up.
 
 Remote sessions through the session helper (preview): a key with a passphrase works only while the ssh agent holds it, and the Windows OpenSSH Authentication Agent service is off by default. Workaround: start that service and run ssh-add for the key once, or use a key without a passphrase for that machine.
 

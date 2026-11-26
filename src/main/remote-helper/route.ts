@@ -92,6 +92,9 @@ export const MARKED_STEP = {
   switchOff: 'turn the switch on, or End it on the Machines page',
   check: 'press Check on the Machines page, then Restart',
   end: 'End it on the Machines page',
+  /** Its machine was removed since (2.1.3-beta.19 final-head review): no card
+   *  is left to End it on, and no Check can mend it. */
+  removed: 'its machine is no longer on the Machines page, so this app cannot reach that session: close this tab and open its config again',
 } as const
 
 export function routeSshTab(i: RouteInput): Route {
@@ -112,7 +115,7 @@ export function routeSshTab(i: RouteInput): Route {
   if (ssh.postCommand && ssh.postCommand.trim()) return today(ROUTE_WHY.postCommand)
   if (ssh.password) return today(ROUTE_WHY.password)
   if (ssh.remoteOs === 'windows') return today(ROUTE_WHY.windowsHost)
-  if (!i.machine) return today(ROUTE_WHY.notAdded)
+  if (!i.machine) return today(ROUTE_WHY.notAdded, MARKED_STEP.removed)
   if (!i.machine.check.ok) return today(ROUTE_WHY.notChecked, MARKED_STEP.check)
   const bundled = i.bundledSha256(i.machine.arch)
   if (!bundled) return today(ROUTE_WHY.noHelper, MARKED_STEP.check)
