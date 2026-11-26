@@ -173,8 +173,8 @@ export default function RemoteMachinesSection({ active = true }: { active?: bool
             onChange={(e) => setPicked(e.target.value)}
           >
             {state.candidates.length === 0 && <option value="">No SSH config to add</option>}
-            {/* Every one added already: say so, not an empty box (text smoke #34). */}
-            {state.candidates.length > 0 && addable.length === 0 && <option value="">Every saved SSH config with key sign-in is added already</option>}
+            {/* None left to add (each added already, or not addable in this preview): say so, not an empty box (text smoke #34). */}
+            {state.candidates.length > 0 && addable.length === 0 && <option value="">No saved SSH config left to add: each one is added already, or cannot be added in this preview</option>}
             {state.candidates.map((c) => (
               <option key={c.configId} value={c.configId} disabled={!c.addable} title={c.why}>
                 {c.label} ({c.target}){c.addable ? '' : ` - ${c.why}`}

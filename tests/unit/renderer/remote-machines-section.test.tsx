@@ -202,8 +202,8 @@ describe('the remote sessions switch in Settings', () => {
 // 2.1.3-beta.19 text smoke (#34): with every saved SSH config added, the list
 // was an empty greyed box beside a greyed Add (select value '', selectedIndex
 // -1, all three options disabled '... - Added already.'). It says so now.
-describe('the Add list when every saved SSH config is added already', () => {
-  it('shows one line that says so, not an empty box; Add stays off', async () => {
+describe('the Add list when no saved SSH config is left to add', () => {
+  it('every one added already: one line that says so, not an empty box; Add stays off', async () => {
     install(state({ candidates: [
       { configId: 'cfg-a', label: 'Rocky', target: 'nick@rocky.lan:22', addable: false, why: 'Added already.' },
       { configId: 'cfg-b', label: 'Ubuntu', target: 'nick@ubuntu.lan:22', addable: false, why: 'Added already.' },
@@ -211,13 +211,26 @@ describe('the Add list when every saved SSH config is added already', () => {
     await mount()
     const select = container.querySelector('select[aria-label="Saved SSH config to add"]') as HTMLSelectElement
     expect(select.value).toBe('')
-    expect(select.selectedOptions[0]?.textContent).toBe('Every saved SSH config with key sign-in is added already')
+    expect(select.selectedOptions[0]?.textContent).toBe('No saved SSH config left to add: each one is added already, or cannot be added in this preview')
     expect(button('Add a Linux machine')?.disabled).toBe(true)
+  })
+
+  // Second pass: a config is also left out for a password sign-in, a remote OS set to Windows or a
+  // target the helper does not take (machines.ts candidates), so the line names both cases.
+  it('one added and one with key sign-in to a Windows host: the same line, true for both', async () => {
+    install(state({ candidates: [
+      { configId: 'cfg-a', label: 'Rocky', target: 'nick@rocky.lan:22', addable: false, why: 'Added already.' },
+      { configId: 'cfg-w', label: 'Win box', target: 'nick@win.lan:22', addable: false, why: 'Its remote OS is set to Windows. This preview adds Linux machines only.' },
+    ] }))
+    await mount()
+    const select = container.querySelector('select[aria-label="Saved SSH config to add"]') as HTMLSelectElement
+    expect(select.selectedOptions[0]?.textContent).toBe('No saved SSH config left to add: each one is added already, or cannot be added in this preview')
+    expect(container.textContent).not.toContain('Every saved SSH config')
   })
 
   it('a list with one config still to add does not show that line', async () => {
     install(state())
     await mount()
-    expect(container.textContent).not.toContain('is added already')
+    expect(container.textContent).not.toContain('No saved SSH config left to add')
   })
 })
