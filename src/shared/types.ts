@@ -407,7 +407,6 @@ export const REMOTE_ACCOUNT_NOT_SHOWN: readonly RemoteAccountNotShown[] = ['no-a
  *  or this computer holds the account and has no usage reading for it
  *  (`no-reading`). */
 export type RemoteUsageNotShown = 'own-sign-in' | 'no-reading'
-export const REMOTE_USAGE_NOT_SHOWN: readonly RemoteUsageNotShown[] = ['own-sign-in', 'no-reading']
 
 export interface StatuslineData {
   sessionId: string

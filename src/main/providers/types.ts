@@ -1,4 +1,5 @@
 import type { CodexOptions, LegacyVersion, PromptButtonResult, ProviderId, SshConfig, SshRuntime, StatuslineData, SubmitTextResult } from '../../shared/types'
+import type { AccountUsage } from '../../shared/usage-types'
 
 export interface SpawnOptions {
   sessionId: string
@@ -244,6 +245,19 @@ export interface RemoteHostField {
   readonly key: string
 }
 
+/** 2.1.3-beta.19 section 3 (aicc_planning#434): where a helper tab's weekly
+ *  bars and extra usage come from, this computer's own reading of the account
+ *  the tab's start named, never the host: the provider's account profiles on
+ *  this computer, and one usage read of one of them. The provider package's,
+ *  as its account field is: core looks nothing up for a provider that gives
+ *  none (statusline-watcher.ts setHelperAccount). */
+export interface RemoteAccountUsage {
+  /** The provider's account profiles on this computer, with the email each is signed in as. */
+  profiles(): Promise<ReadonlyArray<{ id: string; accountEmail?: string }>>
+  /** One usage read of one of those profiles. */
+  usage(profileId: string): Promise<AccountUsage>
+}
+
 /** A host read as it came back: its text, or null when it was not read (not
  *  there, not a regular file, or over the bound; and for a `cwd` or
  *  `checkout` read, a link, not the host user's own, or open to others). A
@@ -295,6 +309,13 @@ export interface ProviderRemoteLaunch {
    *  (remote-helper/host-reads.ts readHostForStart). Absent or null: no
    *  account is read for the tab. */
   accountField?(options: RemoteLaunchOptions, machine: RemoteLaunchMachine): RemoteHostField | null
+  /** 2.1.3-beta.19 section 3 (aicc_planning#434): the source of the tab's
+   *  weekly bars and extra usage for the account its account field named:
+   *  this computer's own reading of that account, when it holds it. Handed
+   *  with each start's account read; the same source each time, so one
+   *  reading serves every tab on an account. Absent: the tab shows no bars
+   *  of its own and says they are not available. */
+  accountUsage?(): RemoteAccountUsage
   /** The tab's status line from one status the CLI posted, already cut to
    *  the launch's `statusKeep` (2.1.3-beta.18 section 3.2). Untrusted input;
    *  a remote path in it is display text only, never a transcript path.

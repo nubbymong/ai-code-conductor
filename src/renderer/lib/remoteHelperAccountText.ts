@@ -23,7 +23,7 @@ export const REMOTE_USAGE_NOT_SHOWN_TEXT: Readonly<Record<RemoteUsageNotShown, {
     title: 'Not available: this machine uses its own sign-in. The weekly limits by model and the extra usage are read on this computer, which does not hold the account this tab runs as.',
   },
   'no-reading': {
-    label: 'Model limits: not available (no reading yet)',
-    title: 'Not available: this computer holds the account this tab runs as, and has no usage reading for it yet.',
+    label: 'Model limits: not available (no current reading)',
+    title: 'Not available: this computer holds the account this tab runs as, and has no current usage reading for it.',
   },
 }

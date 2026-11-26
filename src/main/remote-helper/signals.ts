@@ -42,7 +42,7 @@ import type { HookEventFrame } from '../session-helper/protocol'
 import type { HostAccountRead } from './host-reads'
 import { wireToolStreams, type HelperToolLink } from '../session-helper/tool-links'
 import type { ProviderId } from '../../shared/providers/ids'
-import type { ProviderRemoteLaunch, RemoteLaunch, RemoteStatusLine } from '../providers/types'
+import type { ProviderRemoteLaunch, RemoteAccountUsage, RemoteLaunch, RemoteStatusLine } from '../providers/types'
 import { keepFields } from './session-files'
 
 /** What a remote tab's status line, hook events and tool streams need of the app. */
@@ -61,10 +61,12 @@ export interface RemoteSignalDeps {
   serve(appPtyId: string, provider: ProviderId, link: HelperToolLink): boolean
   /** 2.1.3-beta.19 section 3 (aicc_planning#434): the account one start of
    *  the tab read on its host, launch or attach (statusline-watcher.ts
-   *  setHelperAccount: the label through the display gate, and the source of
-   *  the weekly bars and extra usage, this computer's own usage read of that
-   *  account). Absent: the tab names no account. */
-  account?(appPtyId: string, read: HostAccountRead): void
+   *  setHelperAccount: the label through the display gate), and `usage`, the
+   *  source of the weekly bars and extra usage: the provider package's
+   *  (ProviderRemoteLaunch.accountUsage, this computer's own usage read of
+   *  that account), undefined when it gives none, so nothing is looked up.
+   *  Absent: the tab names no account. */
+  account?(appPtyId: string, read: HostAccountRead, usage: RemoteAccountUsage | undefined): void
   /** The tab's session is over and its holder ended: its hook state goes
    *  (session-signals/hooks.ts endHelperHooks: its feed ring, and its overflow
    *  and lost-event marks). Once per run, before a Restart's run starts. */
@@ -109,10 +111,11 @@ export class RemoteSignals {
     }
   }
 
-  /** The account a start of the tab read on its host (./host-reads.ts), for the app's side. */
+  /** The account a start of the tab read on its host (./host-reads.ts), for
+   *  the app's side, with the provider package's usage source for it. */
   account(read: HostAccountRead): void {
     try {
-      this.o.deps.account?.(this.o.appPtyId, read)
+      this.o.deps.account?.(this.o.appPtyId, read, this.o.via.accountUsage?.())
     } catch (err) {
       this.o.log(`[remote-helper] ${this.o.appPtyId}: the account read did not reach the tab (${(err as Error).message})`)
     }

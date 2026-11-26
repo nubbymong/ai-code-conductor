@@ -58,8 +58,9 @@ const remoteSignals: RemoteSignalDeps = {
   },
   // 2.1.3-beta.19 section 3 (aicc_planning#434): the account each start read
   // on the host: the tab's label, and its weekly bars and extra usage from
-  // this computer's own reading of that account.
-  account: (appPtyId, read) => setHelperAccount(appPtyId, read),
+  // this computer's own reading of that account, through the provider
+  // package's usage source (none: nothing is looked up).
+  account: (appPtyId, read, usage) => setHelperAccount(appPtyId, read, usage),
   // The tab's run is over: its hook state goes, as a held session's does
   // (session-helper/app-wiring.ts), so a Restart's feed starts empty; and its
   // account and usage source.

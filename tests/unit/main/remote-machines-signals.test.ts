@@ -11,7 +11,8 @@
 //  - the tab's end ends its hook state there (endHelperHooks), and its
 //    account and usage source (endHelperAccount, 2.1.3-beta.19 section 3);
 //  - the account a start read goes to the status strip's helper account
-//    (setHelperAccount, 2.1.3-beta.19 section 3, aicc_planning#434);
+//    (setHelperAccount, 2.1.3-beta.19 section 3, aicc_planning#434), with
+//    the provider package's usage source for it, as it came;
 //  - the tools are served only while the built-in tools are on and their
 //    server has a port.
 //
@@ -24,6 +25,7 @@ const h = vi.hoisted(() => ({
   port: 0,
   master: false,
   deps: [] as Array<Record<string, any>>,
+  usages: [] as unknown[],
 }))
 
 vi.mock('../../../src/main/config-manager', () => ({ readConfig: () => ({ remoteSessionsThroughHelper: true }) }))
@@ -48,7 +50,7 @@ vi.mock('../../../src/main/session-signals/hooks', () => ({
 }))
 vi.mock('../../../src/main/statusline-watcher', () => ({
   dispatchHelperStatus: (id: string, line: Record<string, unknown>) => { h.calls.push(`status ${id} ${JSON.stringify(line)}`) },
-  setHelperAccount: (id: string, read: Record<string, unknown>) => { h.calls.push(`account ${id} ${JSON.stringify(read)}`) },
+  setHelperAccount: (id: string, read: Record<string, unknown>, usage: unknown) => { h.calls.push(`account ${id} ${JSON.stringify(read)}`); h.usages.push(usage) },
   endHelperAccount: (id: string) => { h.calls.push(`end account ${id}`) },
 }))
 
@@ -59,6 +61,7 @@ const win = { isDestroyed: () => false, webContents: { mainFrame: {} } } as neve
 beforeEach(() => {
   h.calls = []
   h.deps = []
+  h.usages = []
   h.port = 0
   h.master = false
 })
@@ -68,7 +71,7 @@ function signals() {
   expect(h.deps).toHaveLength(1)
   const s = h.deps[0].signals
   expect(s).toBeDefined()
-  return s as { toolsServed(): boolean; status(id: string, l: unknown): void; event(id: string, e: unknown): void; serve(id: string, p: string, link: unknown): boolean; ended(id: string): void; account(id: string, read: unknown): void }
+  return s as { toolsServed(): boolean; status(id: string, l: unknown): void; event(id: string, e: unknown): void; serve(id: string, p: string, link: unknown): boolean; ended(id: string): void; account(id: string, read: unknown, usage: unknown): void }
 }
 
 describe('the app\'s side of a helper tab', () => {
@@ -97,9 +100,14 @@ describe('the app\'s side of a helper tab', () => {
   it('the account a start read on the host goes to the status strip helper account, for the tab only (2.1.3-beta.19 section 3)', () => {
     const s = signals()
     expect(typeof s.account).toBe('function')
-    s.account('tab-remote', { account: 'me@example.com' })
-    s.account('tab-remote', { notShown: 'not-read' })
+    // The provider package's usage source goes on as it came, and none as none.
+    const source = { profiles: async () => [], usage: async () => { throw new Error('not asked') } }
+    s.account('tab-remote', { account: 'me@example.com' }, source)
+    s.account('tab-remote', { notShown: 'not-read' }, undefined)
     expect(h.calls).toEqual(['account tab-remote {"account":"me@example.com"}', 'account tab-remote {"notShown":"not-read"}'])
+    expect(h.usages).toHaveLength(2)
+    expect(h.usages[0]).toBe(source)
+    expect(h.usages[1]).toBeUndefined()
   })
 
   it('the tools are served only while the built-in tools are on and their server has a port', () => {

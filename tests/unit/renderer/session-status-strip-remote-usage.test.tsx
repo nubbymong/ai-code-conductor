@@ -79,10 +79,10 @@ describe('a helper tab\'s per-model weekly bars and extra usage', () => {
     expect(container.textContent).not.toContain('extra:')
   })
 
-  it('held, with no reading yet: "not available (no reading yet)", never a zero bar', () => {
+  it('held, with no current reading: "not available (no current reading)", never a zero bar', () => {
     helperTab({ rateLimitCurrent: 30, usageBuckets: [], remoteUsageNotShown: 'no-reading', rateLimitExtra: { enabled: false, utilization: 0, usedUsd: 0, limitUsd: 0 } })
     draw()
-    expect(note()?.textContent).toBe('Model limits: not available (no reading yet)')
+    expect(note()?.textContent).toBe('Model limits: not available (no current reading)')
     expect(container.textContent).not.toContain('extra:')
     expect(container.textContent).not.toMatch(/\b0%/)
   })

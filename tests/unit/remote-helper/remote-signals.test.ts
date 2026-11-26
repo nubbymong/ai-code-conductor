@@ -72,15 +72,16 @@ function signals(tools = true) {
   const served: Array<{ id: string; provider: string; link: HelperToolLink }> = []
   const ended: string[] = []
   const accounts: Array<[string, unknown]> = []
+  const usages: unknown[] = []
   const deps: RemoteSignalDeps = {
     toolsServed: () => tools,
     status: (id, line) => { status.push([id, line]) },
     event: (id, e) => { events.push([id, e]) },
     serve: (id, p, link) => { served.push({ id, provider: p, link }); return true },
     ended: (id) => { ended.push(id) },
-    account: (id, read) => { accounts.push([id, read]) },
+    account: (id, read, usage) => { accounts.push([id, read]); usages.push(usage) },
   }
-  return { deps, status, events, served, ended, accounts }
+  return { deps, status, events, served, ended, accounts, usages }
 }
 
 function plugIn(deps: RemoteSignalDeps | undefined): void {
@@ -213,6 +214,10 @@ describe('a helper tab\'s own files on its host', () => {
     // as, read beside the settings files, reached the app once, for this tab.
     expect(ssh.calls[1].values.slice(5)).toEqual(['.claude.json', 'oauthAccount.emailAddress'])
     expect(s.accounts).toEqual([[id, { account: 'nick@example.com' }]])
+    // With the provider package's usage source for its bars: Claude Code's own.
+    expect(s.usages).toHaveLength(1)
+    expect(s.usages[0]).toBe(claudeRemoteLaunch.accountUsage?.())
+    expect(s.usages[0]).toBeDefined()
     pty!.kill()
     await until('the holder to end', () => holder.ended)
   })

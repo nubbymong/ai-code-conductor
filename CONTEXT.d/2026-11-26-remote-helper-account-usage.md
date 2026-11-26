@@ -27,16 +27,24 @@ same function, so the label and the bars' source are set again at each
 attach.
 
 The bars and extra usage come from this computer, never the host
-(statusline-watcher.ts setHelperAccount, usage/remote-tab-usage.ts). The label
-passes sanitiseRemoteAccountEmail. For an account this computer holds (an
-account profile with that email, compared case-blind), the Account usage
-page's figure (fetchAccountUsage: a running session's own status line figure
-when one reports it, else its own read), read at most once per 60 s per
+(statusline-watcher.ts setHelperAccount, usage/remote-tab-usage.ts), through
+the usage source the provider package hands with the account read
+(ProviderRemoteLaunch.accountUsage, as its accountField is; Claude Code's: its
+account profiles and fetchAccountUsage). A provider that gives none has
+nothing looked up and shows "not available", and one source's reading never
+serves another's tab, so a second provider touches no core file for this. The
+label passes sanitiseRemoteAccountEmail. For an account this computer holds
+(one of that source's account profiles with that email, compared case-blind),
+the Account usage page's figure (fetchAccountUsage: a running session's own
+status line figure when one reports it, else its own read), read at most once per 60 s per
 account however many tabs and status ticks ask, through sanitiseUsageBuckets
 and sanitiseRateLimitExtra, and joined to each of the tab's status frames. For
 one it does not hold (or no account named), the strip says "Model limits: not
-available (own sign-in)"; a held account with no reading says "(no reading
-yet)". Never an empty or zero bar: before the reading lands no bars are sent.
+available (own sign-in)"; a held account with no current reading says "(no
+current reading)": a reading the page marks stale (an idle session's last
+tick, or the last fetch before a token lapsed) is none, and credits of an
+earlier fetch beside a running session's figure draw no extra usage block.
+Never an empty or zero bar: before the reading lands no bars are sent.
 A host frame's usage buckets, extra usage, account label and the two new
 not-shown reasons are dropped; the reasons are main's alone (the sanitiser
 drops them from every payload). The header names the account as today's SSH

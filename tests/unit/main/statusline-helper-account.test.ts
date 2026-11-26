@@ -13,6 +13,9 @@
  *   never an empty or zero bar for a source that is missing;
  * - a host frame's usage buckets, extra usage, account label and not-shown
  *   reasons are dropped, whatever the provider's mapping gave;
+ * - the bars' source is the tab's provider package's (its accountUsage,
+ *   handed with each start's read): a provider that gives none has nothing
+ *   looked up, and one source's reading never serves another's tab;
  * - one reading of an account serves every tab on it for 60 s: never asked
  *   twice;
  * - both are set again at each start (launch or attach); end to end, each
@@ -22,13 +25,15 @@
  *
  * PURE: electron and the fan-out's neighbours are mocked, as in
  * statusline-helper-status.test.ts; the account list and the usage read are
- * stand-ins (_setHelperUsageDepsForTest); a real temp resources folder is made
- * for the watcher and removed after.
+ * a stand-in usage source, handed as the provider package's (setHelperAccount's
+ * third argument); a real temp resources folder is made for the watcher and
+ * removed after.
  */
 import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from 'vitest'
 import type { AccountUsage, UsageBucket } from '../../../src/shared/usage-types'
 import type { RemoteMachineRecord } from '../../../src/main/remote-helper/machines'
 import type { RemoteLaunchPlan } from '../../../src/main/remote-helper/session'
+import type { RemoteAccountUsage } from '../../../src/main/providers/types'
 import { DEFAULT_PROVIDER_ID } from '../../../src/shared/providers/ids'
 
 const h = vi.hoisted(() => ({
@@ -50,7 +55,7 @@ vi.mock('../../../src/main/providers', () => {
 vi.mock('../../../src/main/debug-logger', () => ({ logWarn: () => {}, logInfo: () => {}, logError: () => {}, logDebug: () => {} }))
 
 const {
-  dispatchHelperStatus, dispatchSSHStatuslineUpdate, setHelperAccount, endHelperAccount, _setHelperUsageDepsForTest,
+  dispatchHelperStatus, dispatchSSHStatuslineUpdate, setHelperAccount, endHelperAccount, _resetHelperUsageForTest,
   setStatuslineUsageSink, startStatuslineWatcher,
 } = await import('../../../src/main/statusline-watcher')
 // The start's read and the tab's signals, as the app wires them
@@ -68,31 +73,40 @@ const usageOk = (over: Partial<AccountUsage> = {}): AccountUsage => ({
 
 let sent: Array<Record<string, unknown>> = []
 const fakeWin = { isDestroyed: () => false, webContents: { send: (_ch: string, payload: Record<string, unknown>) => { sent.push(payload) } } }
-let usageSink: string[] = []
+let usageSink: Array<{ id: string; transcriptPath: unknown }> = []
 let stopWatcher: (() => void) | null = null
 let profiles: Array<{ id: string; accountEmail?: string }> = []
 let reads: string[] = []
 let answer: (id: string) => Promise<AccountUsage> = async () => usageOk()
 let now = 1_000_000
+let profilesAsked = 0
+/** The provider package's usage source, as a stand-in: this computer's account list and its usage read. */
+const SOURCE: RemoteAccountUsage = {
+  profiles: async () => { profilesAsked++; return profiles },
+  usage: (id) => { reads.push(id); return answer(id) },
+}
 
 const settle = async () => { for (let i = 0; i < 6; i++) await new Promise((r) => setImmediate(r)) }
 const last = (): Record<string, unknown> => sent[sent.length - 1]
 
+/** Fresh usage readers and tab map, as each test starts with. */
+const RESET_USAGE = () => _resetHelperUsageForTest({ now: () => now })
+
 beforeEach(() => {
-  sent = []; usageSink = []; reads = []
+  sent = []; usageSink = []; reads = []; profilesAsked = 0
   profiles = [{ id: 'profile-work', accountEmail: 'Me@Example.com' }, { id: 'profile-home', accountEmail: 'home@example.com' }]
   answer = async () => usageOk()
   now = 1_000_000
-  _setHelperUsageDepsForTest({ profiles: async () => profiles, usage: (id) => { reads.push(id); return answer(id) } }, { now: () => now })
+  RESET_USAGE()
   stopWatcher = startStatuslineWatcher(() => fakeWin as never)
-  setStatuslineUsageSink((sessionId) => { usageSink.push(sessionId) })
+  setStatuslineUsageSink((sessionId, _buckets, _hasCredits, transcriptPath) => { usageSink.push({ id: sessionId, transcriptPath }) })
 })
-afterEach(() => { stopWatcher?.(); stopWatcher = null; _setHelperUsageDepsForTest(null) })
+afterEach(() => { stopWatcher?.(); stopWatcher = null; _resetHelperUsageForTest() })
 afterAll(() => { try { require('node:fs').rmSync(h.dir, { recursive: true, force: true }) } catch { /* best effort */ } })
 
 describe('a helper tab\'s account label', () => {
   it('the label from the read reaches the strip at once, as the tab\'s own, and rides every status frame', async () => {
-    setHelperAccount('tab-remote', { account: 'me@example.com' })
+    setHelperAccount('tab-remote', { account: 'me@example.com' }, SOURCE)
     expect(sent[0]).toMatchObject({ sessionId: 'tab-remote', accountEmail: 'me@example.com' })
     expect(sent[0].remoteAccountNotShown).toBeUndefined()
     await settle()
@@ -105,15 +119,15 @@ describe('a helper tab\'s account label', () => {
   it('the display gate refuses what is not plainly an email: no label, and the reason instead', () => {
     for (const bad of ['not an email', 'me@example.com\u202e', `${'a'.repeat(250)}@example.com`, '<b>me@example.com</b>', '']) {
       sent = []
-      setHelperAccount('tab-remote', { account: bad })
+      setHelperAccount('tab-remote', { account: bad }, SOURCE)
       expect(sent[0].accountEmail, bad).toBeUndefined()
       expect(sent[0].remoteAccountNotShown, bad).toBe('no-account')
     }
   })
 
   it('a read that named none, or did not answer, says which', () => {
-    setHelperAccount('tab-a', { notShown: 'no-account' })
-    setHelperAccount('tab-b', { notShown: 'not-read' })
+    setHelperAccount('tab-a', { notShown: 'no-account' }, SOURCE)
+    setHelperAccount('tab-b', { notShown: 'not-read' }, SOURCE)
     expect(sent.map((s) => [s.sessionId, s.remoteAccountNotShown, s.accountEmail])).toEqual([['tab-a', 'no-account', undefined], ['tab-b', 'not-read', undefined]])
   })
 })
@@ -121,7 +135,7 @@ describe('a helper tab\'s account label', () => {
 describe('a helper tab\'s weekly bars and extra usage, from this computer', () => {
   it('bars for an account this computer holds: its own usage reading of that account, and its extra usage', async () => {
     answer = async () => usageOk({ credits: { currency: 'USD', used: 5, limit: 20, remaining: 15, enabled: true } })
-    setHelperAccount('tab-remote', { account: 'me@example.com' })
+    setHelperAccount('tab-remote', { account: 'me@example.com' }, SOURCE)
     // Never a zero bar while the reading comes: no bars at all until it lands.
     expect(sent[0].usageBuckets).toBeUndefined()
     expect(sent[0].remoteUsageNotShown).toBeUndefined()
@@ -130,20 +144,40 @@ describe('a helper tab\'s weekly bars and extra usage, from this computer', () =
     expect(last()).toMatchObject({ sessionId: 'tab-remote', accountEmail: 'me@example.com', usageBuckets: BUCKETS, rateLimitExtra: { enabled: true, utilization: 25, usedUsd: 5, limitUsd: 20 } })
     expect(last().remoteUsageNotShown).toBeUndefined()
     // A host frame carries the same, from this computer's reading.
-    dispatchHelperStatus('tab-remote', { model: 'Opus' })
+    dispatchHelperStatus('tab-remote', { model: 'Opus', transcriptPath: '/home/nick/.claude/projects/x/y.jsonl' })
     expect(last()).toMatchObject({ model: 'Opus', usageBuckets: BUCKETS })
-    // The remote tab has no profile here: the usage sink files nothing (its sink resolves the profile and stores nothing for an SSH tab).
-    expect(usageSink.every((id) => id === 'tab-remote')).toBe(true)
+    // The fan-out offers the tab's bars to the usage sink with no transcript path, so it files nothing (account-usage.ts recordLiveUsageForSession files a figure only for a transcript in the profile's folder).
+    expect(usageSink.length).toBeGreaterThan(0)
+    expect(usageSink.every((c) => c.id === 'tab-remote' && c.transcriptPath === undefined)).toBe(true)
   })
 
   it('an account with no extra usage switched on shows no extra usage block', async () => {
-    setHelperAccount('tab-remote', { account: 'me@example.com' })
+    setHelperAccount('tab-remote', { account: 'me@example.com' }, SOURCE)
     await settle()
     expect(last().rateLimitExtra).toEqual({ enabled: false, utilization: 0, usedUsd: 0, limitUsd: 0 })
   })
 
+  it('a reading the page marks stale is no reading: the host\'s own five-hour and weekly bars show beside the note', async () => {
+    // An idle session's last tick, and the last fetch before a token lapsed.
+    for (const over of [{ stale: true, inSession: true }, { stale: true }]) {
+      RESET_USAGE()
+      answer = async () => usageOk(over)
+      setHelperAccount('tab-remote', { account: 'me@example.com' }, SOURCE)
+      await settle()
+      dispatchHelperStatus('tab-remote', { rateLimitCurrent: 30, rateLimitWeekly: 40 })
+      expect(last(), JSON.stringify(over)).toMatchObject({ rateLimitCurrent: 30, rateLimitWeekly: 40, remoteUsageNotShown: 'no-reading', usageBuckets: [] })
+    }
+  })
+
+  it('credits of an earlier fetch beside a running session\'s figure are not this reading\'s: the bars show, and no extra usage block', async () => {
+    answer = async () => usageOk({ inSession: true, creditsFetchedAt: 1, credits: { currency: 'USD', used: 5, limit: 20, remaining: 15, enabled: true } })
+    setHelperAccount('tab-remote', { account: 'me@example.com' }, SOURCE)
+    await settle()
+    expect(last()).toMatchObject({ usageBuckets: BUCKETS, rateLimitExtra: { enabled: false, utilization: 0, usedUsd: 0, limitUsd: 0 } })
+  })
+
   it('"not available" for an account this computer does not hold, and nothing is read', async () => {
-    setHelperAccount('tab-remote', { account: 'stranger@example.com' })
+    setHelperAccount('tab-remote', { account: 'stranger@example.com' }, SOURCE)
     await settle()
     expect(reads).toEqual([])
     expect(last()).toMatchObject({ sessionId: 'tab-remote', accountEmail: 'stranger@example.com', remoteUsageNotShown: 'own-sign-in', usageBuckets: [] })
@@ -153,7 +187,7 @@ describe('a helper tab\'s weekly bars and extra usage, from this computer', () =
   })
 
   it('no account named: "not available" too, and nothing is read', async () => {
-    setHelperAccount('tab-remote', { notShown: 'no-account' })
+    setHelperAccount('tab-remote', { notShown: 'no-account' }, SOURCE)
     await settle()
     expect(reads).toEqual([])
     expect(last()).toMatchObject({ remoteAccountNotShown: 'no-account', remoteUsageNotShown: 'own-sign-in', usageBuckets: [] })
@@ -162,7 +196,7 @@ describe('a helper tab\'s weekly bars and extra usage, from this computer', () =
   it('never an empty or zero bar for a missing source: a held account with no reading says "not available", no reading yet sends no bars', async () => {
     let release: (u: AccountUsage) => void = () => {}
     answer = () => new Promise<AccountUsage>((r) => { release = r })
-    setHelperAccount('tab-remote', { account: 'me@example.com' })
+    setHelperAccount('tab-remote', { account: 'me@example.com' }, SOURCE)
     await settle()
     dispatchHelperStatus('tab-remote', { model: 'Opus' })
     for (const s of sent) {
@@ -181,11 +215,11 @@ describe('a helper tab\'s weekly bars and extra usage, from this computer', () =
     for (const s of sent) for (const b of (s.usageBuckets as UsageBucket[] | undefined) ?? []) expect(b.percent).toBeGreaterThan(0)
   })
 
-  it('the bucket gate bounds this computer\'s reading too: at most 32 bars, and an over-long label is dropped', async () => {
+  it('the bucket gate bounds this computer\'s reading too: at most 32 bars, and an over-long string in a bar is dropped', async () => {
     const many = Array.from({ length: 40 }, (_, i) => bucket(`Model ${i}`, 'weekly', 10))
     many[0] = { ...many[0], severity: 'x'.repeat(300) }
     answer = async () => usageOk({ buckets: many })
-    setHelperAccount('tab-remote', { account: 'me@example.com' })
+    setHelperAccount('tab-remote', { account: 'me@example.com' }, SOURCE)
     await settle()
     const shown = last().usageBuckets as Array<Record<string, unknown>>
     expect(shown).toHaveLength(32)
@@ -194,7 +228,7 @@ describe('a helper tab\'s weekly bars and extra usage, from this computer', () =
 
   it('the extra usage gate bounds this computer\'s reading too: a share that is not a finite number switches the block off, also over an earlier reading\'s, and the bars still show', async () => {
     answer = async () => usageOk({ credits: { currency: 'USD', used: 5, limit: 20, remaining: 15, enabled: true } })
-    setHelperAccount('tab-remote', { account: 'me@example.com' })
+    setHelperAccount('tab-remote', { account: 'me@example.com' }, SOURCE)
     await settle()
     expect(last().rateLimitExtra).toEqual({ enabled: true, utilization: 25, usedUsd: 5, limitUsd: 20 })
     // The next reading's share overflows (used over a limit near zero): the gate refuses it.
@@ -208,8 +242,8 @@ describe('a helper tab\'s weekly bars and extra usage, from this computer', () =
   })
 
   it('one reading serves every tab on the account for 60 s: never asked twice', async () => {
-    setHelperAccount('tab-a', { account: 'me@example.com' })
-    setHelperAccount('tab-b', { account: 'ME@example.com' })
+    setHelperAccount('tab-a', { account: 'me@example.com' }, SOURCE)
+    setHelperAccount('tab-b', { account: 'ME@example.com' }, SOURCE)
     await settle()
     for (let i = 0; i < 5; i++) { dispatchHelperStatus('tab-a', { model: 'Opus' }); dispatchHelperStatus('tab-b', { model: 'Opus' }) }
     await settle()
@@ -226,6 +260,38 @@ describe('a helper tab\'s weekly bars and extra usage, from this computer', () =
   })
 })
 
+describe('the bars\' source is the provider package\'s', () => {
+  it('a tab whose provider gives no usage source names an email this computer holds: nothing is looked up, and the strip says "not available"', async () => {
+    const { accountUsage: _none, ...noSource } = claudeRemoteLaunch
+    const tab = new RemoteSignals({
+      appPtyId: 'tab-remote', provider: DEFAULT_PROVIDER_ID, via: noSource, launch: { statusKeep: [], hookKeep: [] }, tools: false, log: () => {},
+      deps: { toolsServed: () => false, status: () => {}, event: () => {}, serve: () => false, ended: () => {}, account: (id, read, usage) => setHelperAccount(id, read, usage) },
+    })
+    tab.account({ account: 'me@example.com' })
+    await settle()
+    dispatchHelperStatus('tab-remote', { model: 'Opus', rateLimitCurrent: 30 })
+    await settle()
+    expect(reads).toEqual([])
+    expect(profilesAsked).toBe(0)
+    expect(last()).toMatchObject({ accountEmail: 'me@example.com', rateLimitCurrent: 30, remoteUsageNotShown: 'own-sign-in', usageBuckets: [] })
+  })
+
+  it('one source\'s reading never serves another\'s tab, even for the same profile id', async () => {
+    const other: RemoteAccountUsage = {
+      profiles: async () => [{ id: 'profile-work', accountEmail: 'me@example.com' }],
+      usage: async (id) => { reads.push(`other:${id}`); return usageOk({ buckets: [bucket('Other', 'weekly', 9)] }) },
+    }
+    setHelperAccount('tab-a', { account: 'me@example.com' }, SOURCE)
+    setHelperAccount('tab-b', { account: 'me@example.com' }, other)
+    await settle()
+    expect(reads.sort()).toEqual(['other:profile-work', 'profile-work'])
+    dispatchHelperStatus('tab-a', { model: 'Opus' })
+    expect(last()).toMatchObject({ sessionId: 'tab-a', usageBuckets: BUCKETS })
+    dispatchHelperStatus('tab-b', { model: 'Opus' })
+    expect(last()).toMatchObject({ sessionId: 'tab-b', usageBuckets: [bucket('Other', 'weekly', 9)] })
+  })
+})
+
 describe('a host frame gives none of them', () => {
   it('a host frame\'s usage buckets, extra usage, account label and not-shown reasons are dropped', async () => {
     dispatchHelperStatus('tab-plain', {
@@ -239,7 +305,7 @@ describe('a host frame gives none of them', () => {
     expect(sent).toEqual([{ sessionId: 'tab-plain', model: 'Opus' }])
     expect(usageSink).toEqual([])
     // With the tab's own account read, the frame's still go nowhere: the tab's own win.
-    setHelperAccount('tab-plain', { account: 'stranger@example.com' })
+    setHelperAccount('tab-plain', { account: 'stranger@example.com' }, SOURCE)
     await settle()
     dispatchHelperStatus('tab-plain', { model: 'Opus', usageBuckets: [bucket('Fable', 'weekly', 99)], accountEmail: 'host-said@example.com' })
     expect(last()).toMatchObject({ accountEmail: 'stranger@example.com', usageBuckets: [], remoteUsageNotShown: 'own-sign-in' })
@@ -254,10 +320,10 @@ describe('a host frame gives none of them', () => {
 describe('set again at each start (launch or attach)', () => {
   it('a re-attach to another account: the new label, and the earlier account\'s bars and extra usage cleared', async () => {
     answer = async () => usageOk({ credits: { currency: 'USD', used: 5, limit: 20, remaining: 15, enabled: true } })
-    setHelperAccount('tab-remote', { account: 'me@example.com' })
+    setHelperAccount('tab-remote', { account: 'me@example.com' }, SOURCE)
     await settle()
     expect(last().usageBuckets).toEqual(BUCKETS)
-    setHelperAccount('tab-remote', { account: 'stranger@example.com' })
+    setHelperAccount('tab-remote', { account: 'stranger@example.com' }, SOURCE)
     await settle()
     expect(last()).toMatchObject({ accountEmail: 'stranger@example.com', usageBuckets: [], rateLimitExtra: { enabled: false }, remoteUsageNotShown: 'own-sign-in' })
   })
@@ -265,9 +331,9 @@ describe('set again at each start (launch or attach)', () => {
   it('a late reading from an earlier start is not taken', async () => {
     let release: (u: AccountUsage) => void = () => {}
     answer = () => new Promise<AccountUsage>((r) => { release = r })
-    setHelperAccount('tab-remote', { account: 'me@example.com' })
+    setHelperAccount('tab-remote', { account: 'me@example.com' }, SOURCE)
     await settle()
-    setHelperAccount('tab-remote', { notShown: 'no-account' })
+    setHelperAccount('tab-remote', { notShown: 'no-account' }, SOURCE)
     await settle()
     const count = sent.length
     release(usageOk())
@@ -277,7 +343,7 @@ describe('set again at each start (launch or attach)', () => {
   })
 
   it('the tab\'s end: its account and usage source go', async () => {
-    setHelperAccount('tab-remote', { account: 'me@example.com' })
+    setHelperAccount('tab-remote', { account: 'me@example.com' }, SOURCE)
     await settle()
     endHelperAccount('tab-remote')
     sent = []
@@ -295,6 +361,8 @@ describe('set again at each start (launch or attach)', () => {
       os: 'Linux', arch: 'x86_64', home: '/home/nick', shell: '/bin/bash', shellIsSh: true, claudePath: '/home/nick/.local/bin/claude',
       path: '/usr/bin:/bin', lang: null, helper: { version: '0.1.0', sha256: SHA, folder: `0.1.0-${SHA.slice(0, 12)}` }, check: { at: 1, ok: true },
     }
+    // Each account's own bars, so the attach's bars are told from the launch's.
+    answer = async (id) => usageOk({ buckets: id === 'profile-home' ? [bucket('Sonnet', 'weekly', 7)] : BUCKETS })
     // What the host's Claude Code is signed in as at each start: the fake
     // field mode prints it after the launcher's hash line, or nothing.
     let hostAccount: string | null = 'me@example.com'
@@ -307,8 +375,8 @@ describe('set again at each start (launch or attach)', () => {
       },
     })
     const tab = new RemoteSignals({
-      appPtyId: 'tab-remote', provider: DEFAULT_PROVIDER_ID, via: claudeRemoteLaunch, launch: { statusKeep: [], hookKeep: [] }, tools: false, log: () => {},
-      deps: { toolsServed: () => false, status: () => {}, event: () => {}, serve: () => false, ended: () => {}, account: (id, read) => setHelperAccount(id, read) },
+      appPtyId: 'tab-remote', provider: DEFAULT_PROVIDER_ID, via: { ...claudeRemoteLaunch, accountUsage: () => SOURCE }, launch: { statusKeep: [], hookKeep: [] }, tools: false, log: () => {},
+      deps: { toolsServed: () => false, status: () => {}, event: () => {}, serve: () => false, ended: () => {}, account: (id, read, usage) => setHelperAccount(id, read, usage) },
     })
     // No host files named: the start reads the account's field alone.
     const plan = { via: claudeRemoteLaunch, options: { reconnect: false, cwd: '/home/nick', settings: null, tools: false }, reads: [] } as unknown as RemoteLaunchPlan
@@ -329,7 +397,7 @@ describe('set again at each start (launch or attach)', () => {
     await settle()
     expect(asked).toHaveLength(2)
     expect(sent[0]).toMatchObject({ sessionId: 'tab-remote', accountEmail: 'home@example.com' })
-    expect(last()).toMatchObject({ sessionId: 'tab-remote', accountEmail: 'home@example.com', usageBuckets: BUCKETS })
+    expect(last()).toMatchObject({ sessionId: 'tab-remote', accountEmail: 'home@example.com', usageBuckets: [bucket('Sonnet', 'weekly', 7)] })
     expect(reads).toEqual(['profile-work', 'profile-home'])
     dispatchHelperStatus('tab-remote', { model: 'Opus' })
     expect(last()).toMatchObject({ model: 'Opus', accountEmail: 'home@example.com' })
