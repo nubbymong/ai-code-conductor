@@ -113,7 +113,7 @@ describe('two Linux helpers: each machine is compared with its own architecture\
   it('the cards: an aarch64 machine holding the arm64 entry\'s hash reads this build\'s helper; holding the x86-64 entry\'s it reads another', async () => {
     registerRemoteMachinesHandlers(() => win, 'win32')
     const s = (await call(IPC.MACHINES_REMOTE_STATE)) as RemoteMachinesState
-    expect(s.machines.map((m) => [m.did, m.checked, m.system])).toEqual([[ARM_DID, true, 'Linux aarch64'], [X64_DID, true, 'Linux x86_64']])
+    expect(s.machines.map((m) => [m.did, m.checked, m.system])).toEqual([[ARM_DID, true, 'Linux arm64'], [X64_DID, true, 'Linux x86-64']])
     expect(s.bundled).toEqual({ ok: true, version: VERSION, files: [{ arch: 'x86_64', size: X64.length, sha12: sha(X64).slice(0, 12) }, { arch: 'aarch64', size: ARM.length, sha12: sha(ARM).slice(0, 12) }] })
     h.stored = { v: 1, installId: 'f'.repeat(32), machines: [record(ARM_DID, 'aarch64', sha(X64)), record(X64_DID, 'x86_64', sha(ARM))] }
     const t = (await call(IPC.MACHINES_REMOTE_STATE)) as RemoteMachinesState

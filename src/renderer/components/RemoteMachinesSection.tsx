@@ -41,7 +41,8 @@ function MachineCard({ m, switchOn, busy, onCheck, onRemove, onAsk }: {
             {m.checked ? `Checked at ${when(m.lastCheck.at)}` : `Not checked: ${m.lastCheck.detail ?? 'its last check failed'}`}
             {m.inUse > 0 ? ` · ${m.inUse === 1 ? 'a tab runs' : `${m.inUse} tabs run`} through the helper here` : ''}
           </div>
-          {switchOn && <div className="text-[11px] mt-1" style={{ color: 'var(--text-muted)' }} data-testid="remote-machine-route">{REMOTE_ROUTE_NOTE}</div>}
+          {/* Only a checked machine's tabs go through the helper: until Check, the usual SSH path (text smoke #32). */}
+          {switchOn && m.checked && <div className="text-[11px] mt-1" style={{ color: 'var(--text-muted)' }} data-testid="remote-machine-route">{REMOTE_ROUTE_NOTE}</div>}
         </div>
         {!confirming && (
           <div className="flex items-center gap-1.5 shrink-0">
@@ -172,6 +173,8 @@ export default function RemoteMachinesSection({ active = true }: { active?: bool
             onChange={(e) => setPicked(e.target.value)}
           >
             {state.candidates.length === 0 && <option value="">No SSH config to add</option>}
+            {/* Every one added already: say so, not an empty box (text smoke #34). */}
+            {state.candidates.length > 0 && addable.length === 0 && <option value="">Every saved SSH config with key sign-in is added already</option>}
             {state.candidates.map((c) => (
               <option key={c.configId} value={c.configId} disabled={!c.addable} title={c.why}>
                 {c.label} ({c.target}){c.addable ? '' : ` - ${c.why}`}

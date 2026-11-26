@@ -291,3 +291,52 @@ describe('a tab through the session helper: its account from its start\'s read',
     expect(q('[data-testid="session-pill-claudecode"]')).toBeNull()
   })
 })
+
+// 2.1.3-beta.19 text smoke (#38, #39, #40), on a tab through the session
+// helper: its account pill said "(signed in on the remote host)" though the
+// label is read from one field of Claude Code's config file there (the Rocky
+// line saw it while the host said 'Not logged in'); its SSH pill said a
+// dropped connection ends it (Settings says it comes back within two
+// minutes); and its claude.ai and Claude Code pills, which are this
+// computer's sign-in for that account, did not say so.
+describe('a tab through the session helper: its pills say what they read (text smoke #38, #39, #40)', () => {
+  const HELPER = 'through-helper'
+  const ssh = (state: string) => {
+    ;(globalThis as any).window.electronAPI.ssh = {
+      getState: vi.fn(async () => ({ state })),
+      onFlowState: vi.fn(() => () => {}),
+    }
+  }
+  const settle = async () => { for (let i = 0; i < 4; i++) await act(async () => { await Promise.resolve() }) }
+  const mapped = () => {
+    useAccountProfilesStore.setState({ profiles: [{ id: 'profile-ssh', name: 'Work', accountEmail: 'remote@x.com' } as any] })
+    useAccountAuthStore.setState({ byProfile: { 'profile-ssh': { cliAuthed: false, web: 'expired', loading: false, fetchedAt: 1 } } })
+  }
+  const title = (id: string) => (q(`[data-testid="${id}"]`) as HTMLElement | null)?.getAttribute('title')
+
+  it('the helper tab: the connection pill says a dropped link comes back; the account pill names the config field; the sign-in pills are this computer\'s', async () => {
+    ssh(HELPER)
+    mapped()
+    render(sshNoIdentity({ accountEmail: 'remote@x.com' }))
+    await settle()
+    expect(title('ssh-connection-pill')).toBe('Remote session over SSH through the session helper on its machine: a dropped connection comes back within two minutes with what you missed; closing the tab ends it.')
+    expect(title('session-pill-account')).toBe("Remote Claude account: remote@x.com (the account Claude Code's config names on the remote host)")
+    expect(title('session-pill-claudeai')).toBe('claude.ai web session for this account on this computer')
+    expect(title('session-pill-claudecode')).toBe('Claude Code sign-in for this account on this computer; the remote machine signs in by itself')
+  })
+
+  it('today\'s SSH tab keeps its connection words; a local tab keeps its sign-in words', async () => {
+    ssh('claude-running')
+    mapped()
+    render(sshNoIdentity({ accountEmail: 'remote@x.com' }))
+    await settle()
+    expect(title('ssh-connection-pill')).toBe('Remote session over SSH; a dropped connection ends it and reconnecting resumes via --continue.')
+    act(() => { root.unmount() })
+    root = createRoot(container)
+    useAccountAuthStore.setState({ byProfile: { 'profile-ssh': { cliAuthed: true, web: 'active', loading: false, fetchedAt: 1 } } })
+    render(makeSession({ provider: 'claude', profileId: 'profile-ssh' }))
+    await settle()
+    expect(title('session-pill-claudeai')).toBe("claude.ai web session for this session's account")
+    expect(title('session-pill-claudecode')).toBe("Claude Code sign-in for this session's account")
+  })
+})

@@ -123,7 +123,8 @@ describe('Add takes the helper of the machine\'s own architecture', () => {
     const [rec] = m.list()
     expect(rec).toMatchObject({ os: 'Linux', arch: 'aarch64', helper: { path: 'linux-arm64/aicc-helper', version: '0.1.0', sha256: ARM_SHA, folder: ARM.folder }, check: { ok: true } })
     // Its card reads this build's helper, and says the system it is.
-    expect(m.views(bundledFor([X64, ARM]))[0]).toMatchObject({ checked: true, system: 'Linux aarch64' })
+    // The card names the architecture as the consent does (2.1.3-beta.19 text smoke #31).
+    expect(m.views(bundledFor([X64, ARM]))[0]).toMatchObject({ checked: true, system: 'Linux arm64' })
   })
 
   it('a machine answering x86_64 gets linux-x64/aicc-helper, as before', async () => {
@@ -256,7 +257,8 @@ describe('Check, the cards and the routing use the entry of the machine\'s own a
     const f = store.value as { machines: RemoteMachineRecord[] }
     f.machines[0].helper = { ...f.machines[0].helper, sha256: 'c'.repeat(64), folder: `0.0.9-${'c'.repeat(12)}` }
     ssh.calls.length = 0
-    expect((await m.check(did)).ok).toBe(true)
+    // Its answer says this build's helper was put there (2.1.3-beta.19 text smoke #33).
+    expect(await m.check(did)).toEqual({ ok: true, message: 'arm.lan: this build\'s session helper is installed there, and it passed its check.' })
     expect(ssh.scripts()).toEqual(['probe', 'install', 'commit', 'version', 'selftest', 'sweep'])
     expect(readFile.mock.calls.map((c) => c[0])).toEqual([ARM.file])
     expect(ssh.calls[1].stdin.equals(ARM_BYTES)).toBe(true)
@@ -272,7 +274,7 @@ describe('Check, the cards and the routing use the entry of the machine\'s own a
     const { m } = machines(new FakeSsh(host('x86_64')), () => [X64, ARM], store)
     const [rec] = m.list()
     expect(rec).toMatchObject({ arch: 'x86_64', helper: { path: 'linux-x64/aicc-helper', sha256: X64_SHA } })
-    expect(m.views(bundledFor([X64, ARM]))[0]).toMatchObject({ checked: true, system: 'Linux x86_64' })
+    expect(m.views(bundledFor([X64, ARM]))[0]).toMatchObject({ checked: true, system: 'Linux x86-64' })
   })
 })
 

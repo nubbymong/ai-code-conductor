@@ -72,17 +72,18 @@ describe('a helper tab\'s per-model weekly bars and extra usage', () => {
   it('an account this computer does not hold: the host\'s five-hour and weekly bars, then "not available" with the reason', () => {
     helperTab({ rateLimitCurrent: 30, rateLimitWeekly: 40, usageBuckets: [], remoteUsageNotShown: 'own-sign-in' })
     draw()
-    expect(note()?.textContent).toBe('Model limits: not available (own sign-in)')
+    expect(note()?.textContent).toBe('Model limits: not available')
     expect(note()?.getAttribute('title')).toMatch(/^Not available: this machine uses its own sign-in\./)
     expect(bars()).toEqual(['5h rate limit utilisation', 'Weekly rate limit utilisation'])
     // No extra usage block, and no bar of any per-model limit.
     expect(container.textContent).not.toContain('extra:')
   })
 
-  it('held, with no current reading: "not available (no current reading)", never a zero bar', () => {
+  it('held, with no current reading: "not available", the reason in its title, never a zero bar', () => {
     helperTab({ rateLimitCurrent: 30, usageBuckets: [], remoteUsageNotShown: 'no-reading', rateLimitExtra: { enabled: false, utilization: 0, usedUsd: 0, limitUsd: 0 } })
     draw()
-    expect(note()?.textContent).toBe('Model limits: not available (no current reading)')
+    expect(note()?.textContent).toBe('Model limits: not available')
+    expect(note()?.getAttribute('title')).toMatch(/has no current usage reading for it\.$/)
     expect(container.textContent).not.toContain('extra:')
     expect(container.textContent).not.toMatch(/\b0%/)
   })
@@ -115,5 +116,39 @@ describe('a helper tab\'s per-model weekly bars and extra usage', () => {
     helperTab({ rateLimitCurrent: 30 })
     draw()
     expect(note()).toBeNull()
+  })
+})
+
+/**
+ * 2.1.3-beta.19 text smoke (#36): at 1280x768 with the sidebar open the note
+ * showed only its first 7 px (an "M" between "Weekly: --%" and the model
+ * pill): it sat inside the strip's middle row, which is flex-1, min-w-0 and
+ * overflow-hidden (it clips what does not fit), at x 1036 of a row ending at
+ * 1043, needing 263 px. It is now a shrink-0 sibling AFTER that row, so the
+ * row gives way and the note keeps its whole width inside the strip, at any
+ * window width; and its label is short, its reason in the title.
+ *
+ * jsdom lays nothing out, so this pins the structure that decides it: in a
+ * flex row, a shrink-0 child is never narrower than its content, and only the
+ * min-w-0 overflow-hidden sibling before it is clipped.
+ */
+describe('the note is never clipped by the strip\'s middle row (text smoke #36)', () => {
+  it('a helper tab at 1280 px: the note is a shrink-0 child of the strip after the clipped row, not inside it; its label is short', () => {
+    helperTab({ rateLimitCurrent: 30, rateLimitWeekly: 40, usageBuckets: [], remoteUsageNotShown: 'no-reading', modelName: 'Opus 5.5' })
+    draw()
+    const n = note()!
+    expect(n).not.toBeNull()
+    expect(n.classList.contains('shrink-0')).toBe(true)
+    // Not inside any clipping row.
+    for (let el = n.parentElement; el && el !== container; el = el.parentElement) {
+      expect(el.classList.contains('overflow-hidden') && el.classList.contains('min-w-0'), `clipped by ${el.className}`).toBe(false)
+    }
+    // Its own parent is the strip's row, beside the clipped middle row, which comes before it.
+    const middle = n.parentElement!.querySelector(':scope > .overflow-hidden.min-w-0')
+    expect(middle).not.toBeNull()
+    expect(middle!.compareDocumentPosition(n) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(middle!.contains(n)).toBe(false)
+    expect(n.textContent).toBe('Model limits: not available')
+    expect(n.textContent!.length).toBeLessThanOrEqual(27)
   })
 })

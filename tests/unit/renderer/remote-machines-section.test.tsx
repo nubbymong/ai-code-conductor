@@ -118,7 +118,8 @@ describe('Linux machines on the Machines page', () => {
     const remote = install(state({ machines: [m] }))
     await mount()
     expect(container.querySelector('[data-testid="remote-machine-state"]')?.textContent).toContain('Not checked: its self-test failed (pty)')
-    expect(container.querySelector('[data-testid="remote-machine-route"]')?.textContent).toBe(REMOTE_ROUTE_NOTE)
+    // Not checked: its tabs take the usual SSH path, so the line that they go through the helper is not shown (text smoke #32).
+    expect(container.querySelector('[data-testid="remote-machine-route"]')).toBeNull()
     await click(button('Check'))
     expect(remote.check).toHaveBeenCalledWith(DID)
     await click(button('Remove'))
@@ -135,8 +136,9 @@ describe('Linux machines on the Machines page', () => {
     install(state({ machines: [{ did: DID, label: 'Rocky', target: 'nick@rocky.lan:22', checked: false, lastCheck: { at: Date.now(), ok: false, detail: REMOTE_OTHER_HELPER }, helperVersion: '0.1.0', system: 'Linux x86_64', inUse: 0 }] }))
     await mount()
     const line = container.querySelector('[data-testid="remote-machine-state"]')?.textContent
-    expect(line).toBe('Not checked: this build of the app carries a different session helper file; press Check to install it')
+    expect(line).toBe('Not checked: this build of the app carries a different session helper file; press Check to install it; until then its tabs take the usual SSH path')
     expect(line).not.toMatch(/version/i)
+    expect(container.querySelector('[data-testid="remote-machine-route"]')).toBeNull()
     expect(button('Check')?.disabled).toBe(false)
   })
 
@@ -148,6 +150,8 @@ describe('Linux machines on the Machines page', () => {
     const remote = install(state({ machines: [m] }))
     await mount()
     const notice = () => container.querySelector('[data-testid="remote-notice"]')?.textContent
+    // A checked machine with the switch on says its tabs go through the helper (text smoke #32).
+    expect(container.querySelector('[data-testid="remote-machine-route"]')?.textContent).toBe(REMOTE_ROUTE_NOTE)
     await click(button('Check'))
     expect(notice()).toBe('rocky.lan passed its check.')
     await click(button('Remove'))
@@ -192,5 +196,28 @@ describe('the remote sessions switch in Settings', () => {
     expect(block).toContain('checked={settings.remoteSessionsThroughHelper === true}')
     expect(block).toContain('onChange={(e) => save({ remoteSessionsThroughHelper: e.target.checked })}')
     expect(block).toContain('{REMOTE_SWITCH_TEXT}')
+  })
+})
+
+// 2.1.3-beta.19 text smoke (#34): with every saved SSH config added, the list
+// was an empty greyed box beside a greyed Add (select value '', selectedIndex
+// -1, all three options disabled '... - Added already.'). It says so now.
+describe('the Add list when every saved SSH config is added already', () => {
+  it('shows one line that says so, not an empty box; Add stays off', async () => {
+    install(state({ candidates: [
+      { configId: 'cfg-a', label: 'Rocky', target: 'nick@rocky.lan:22', addable: false, why: 'Added already.' },
+      { configId: 'cfg-b', label: 'Ubuntu', target: 'nick@ubuntu.lan:22', addable: false, why: 'Added already.' },
+    ] }))
+    await mount()
+    const select = container.querySelector('select[aria-label="Saved SSH config to add"]') as HTMLSelectElement
+    expect(select.value).toBe('')
+    expect(select.selectedOptions[0]?.textContent).toBe('Every saved SSH config with key sign-in is added already')
+    expect(button('Add a Linux machine')?.disabled).toBe(true)
+  })
+
+  it('a list with one config still to add does not show that line', async () => {
+    install(state())
+    await mount()
+    expect(container.textContent).not.toContain('is added already')
   })
 })

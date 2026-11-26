@@ -188,6 +188,11 @@ export interface SavedConfigLike {
   }
 }
 
+/** A machine's architecture as the app names it to the user (as the consent
+ *  and Add's refusal do): x86-64 and arm64, not Linux's own x86_64 and
+ *  aarch64 (2.1.3-beta.19 text smoke #31); any other as the host reports it. */
+const ARCH_NAME: Readonly<Record<string, string>> = { x86_64: 'x86-64', aarch64: 'arm64' }
+
 /** Plain sentences of the flow. */
 export const MACHINE_TEXT = {
   noConsent: 'Nothing was sent: the question was not answered, or it was asked more than ten minutes ago. Press Add again.',
@@ -335,7 +340,7 @@ export class RemoteMachines {
       const lastCheck = other ? { at: m.check.at, ok: false, detail: REMOTE_OTHER_HELPER } : m.check
       return {
         did: m.did, label: m.label, target: `${m.user}@${m.host}:${m.port}`, checked: lastCheck.ok, lastCheck,
-        helperVersion: m.helper.version, system: `${m.os} ${m.arch}`, inUse: this.deps.inUse(m.did),
+        helperVersion: m.helper.version, system: `${m.os} ${ARCH_NAME[m.arch] ?? m.arch}`, inUse: this.deps.inUse(m.did),
       }
     })
   }
@@ -422,7 +427,9 @@ export class RemoteMachines {
       f.machines = f.machines.map((x) => (x.did === m.did ? record : x))
       this.save(f)
       this.deps.log(`[remote-helper] checked ${key} (${m.did.slice(0, 8)}): ${record.check.ok ? 'passed' : `failed: ${record.check.detail ?? ''}`}`)
-      return record.check.ok ? { ok: true, message: `${m.host} passed its check.` } : { ok: false, message: `${m.host} did not pass its check: ${record.check.detail}` }
+      // 2.1.3-beta.19 text smoke (#33): a Check that put this build's helper there says so.
+      if (record.check.ok) return { ok: true, message: made.ok && made.installed ? `${m.host}: this build's session helper is installed there, and it passed its check.` : `${m.host} passed its check.` }
+      return { ok: false, message: `${m.host} did not pass its check: ${record.check.detail}` }
     } finally {
       this.busy.delete(key)
     }
@@ -477,7 +484,7 @@ export class RemoteMachines {
    * first connection (a host key not known yet is kept); a failure then
    * removes what this Add made.
    */
-  private async provision(a: { did: string; target: SshTarget; label: string; helpers: readonly BundledLinuxHelper[]; offered?: Partial<Record<LinuxArch, string>>; first: boolean; addedAt: number; known?: RemoteMachineRecord }): Promise<{ ok: true; record: RemoteMachineRecord } | { ok: false; message: string }> {
+  private async provision(a: { did: string; target: SshTarget; label: string; helpers: readonly BundledLinuxHelper[]; offered?: Partial<Record<LinuxArch, string>>; first: boolean; addedAt: number; known?: RemoteMachineRecord }): Promise<{ ok: true; record: RemoteMachineRecord; installed: boolean } | { ok: false; message: string }> {
     const { did, target } = a
     const install = this.installId()
     const fail = async (message: string, cleanUp: boolean): Promise<{ ok: false; message: string }> => {
@@ -553,7 +560,7 @@ export class RemoteMachines {
       check: { at: this.now(), ok: checked.ok, ...(checked.ok ? {} : { detail: checked.why }) },
     }
     if (checked.ok && !claudePath) record.check = { at: record.check.at, ok: false, detail: 'Claude Code was not found on it (not on the PATH of its login shell)' }
-    return { ok: true, record }
+    return { ok: true, record, installed: !inPlace }
   }
 
   /** sshFailure; an ssh that never started also logs the error its start got. */

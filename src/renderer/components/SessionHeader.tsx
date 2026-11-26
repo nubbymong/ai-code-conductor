@@ -319,6 +319,8 @@ function SessionGitHubPill({ session }: { session: Session }) {
  */
 function SshConnectionPill({ session }: { session: Session }) {
   const ssh = session.sshConfig
+  // A tab through the session helper on its machine (text smoke #39): its own title.
+  const throughHelper = useThroughHelper(session.id, session.sessionType === 'ssh' && !!ssh)
   if (!ssh) return null
   const kind = resolveTransportBadge({
     isSsh: session.sessionType === 'ssh',
@@ -337,7 +339,9 @@ function SshConnectionPill({ session }: { session: Session }) {
           ? containerBadgeTitle(container)
           : persistent
             ? 'This remote session runs inside tmux — a dropped connection stays alive and reconnecting resumes it in place.'
-            : 'Remote session over SSH; a dropped connection ends it and reconnecting resumes via --continue.'
+            : throughHelper
+              ? 'Remote session over SSH through the session helper on its machine: a dropped connection comes back within two minutes with what you missed; closing the tab ends it.'
+              : 'Remote session over SSH; a dropped connection ends it and reconnecting resumes via --continue.'
       }
       testId="ssh-connection-pill"
     >
@@ -422,8 +426,10 @@ function WatchdogPill({ session }: { session: Session }) {
  * leading separator + the GitHub pill, or null).
  */
 function AccountAuthPillSet({
-  accountLabel, accountTone, accountTitle, status, profileId, refresh, gitHubTail, watchdogPill,
+  accountLabel, accountTone, accountTitle, status, profileId, refresh, gitHubTail, watchdogPill, remote = false,
 }: {
+  /** An SSH tab: the two sign-in pills are this computer's sign-in for its account (text smoke #40). */
+  remote?: boolean
   accountLabel: React.ReactNode
   accountTone: string
   accountTitle: string
@@ -469,14 +475,16 @@ function AccountAuthPillSet({
         label="claude.ai"
         tone={aiTone}
         word={aiWord}
-        title={`claude.ai web session for this session's account${errorSuffix}`}
+        title={remote ? `claude.ai web session for this account on this computer${errorSuffix}` : `claude.ai web session for this session's account${errorSuffix}`}
         testId="session-pill-claudeai"
       />
       <HeaderPill
         label="Claude Code"
         tone={codeOff ? 'var(--text-muted)' : codeTone}
         word={codeOff ? codeOff.word : codeWord}
-        title={codeOff ? `Claude Code sign-in for this session's account was not checked: ${codeOff.reason}` : `Claude Code sign-in for this session's account${errorSuffix}`}
+        title={remote
+          ? (codeOff ? `Claude Code sign-in for this account on this computer was not checked: ${codeOff.reason}` : `Claude Code sign-in for this account on this computer; the remote machine signs in by itself${errorSuffix}`)
+          : codeOff ? `Claude Code sign-in for this session's account was not checked: ${codeOff.reason}` : `Claude Code sign-in for this session's account${errorSuffix}`}
         testId="session-pill-claudecode"
       >
         <button
@@ -643,13 +651,14 @@ function SessionAuthPills({ session }: { session: Session }) {
       theme,
     )
     const accountTitle = reportedEmail
-      ? `Remote Claude account: ${remoteEmail} (signed in on the remote host)`
+      ? `Remote Claude account: ${remoteEmail} (the account Claude Code's config names on the remote host)`
       : `Launch account: ${idEmail || remoteName} (the remote host has not reported its signed-in account yet)`
     // Mapped to a local profile → the full local pill set, driven by that
     // profile's auth status. The account pill keeps its remote name/tone/title.
     if (sshProfileId) {
       return (
         <AccountAuthPillSet
+          remote
           accountLabel={remoteName}
           accountTone={remoteTone}
           accountTitle={accountTitle}

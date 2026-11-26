@@ -25,7 +25,7 @@ export const REMOTE_ROUTE_NOTE =
  *  one. The file is compared by its SHA-256, so it can differ under the same
  *  version number (2.1.3-beta.18 to beta.19: 0.1.0 both), and the line never
  *  says another version (nor a newer one: an older app can carry it too). */
-export const REMOTE_OTHER_HELPER = 'this build of the app carries a different session helper file; press Check to install it'
+export const REMOTE_OTHER_HELPER = 'this build of the app carries a different session helper file; press Check to install it; until then its tabs take the usual SSH path'
 
 /** One added machine, for its card. */
 export interface RemoteMachineView {
@@ -42,7 +42,7 @@ export interface RemoteMachineView {
   /** When it was last checked (ms since the epoch), and what that said. */
   lastCheck: { at: number; ok: boolean; detail?: string }
   helperVersion: string
-  /** For example "Linux x86_64" or "Linux aarch64". */
+  /** For example "Linux x86-64" or "Linux arm64" (as the consent names them). */
   system: string
   /** How many open tabs go through the helper there now. */
   inUse: number

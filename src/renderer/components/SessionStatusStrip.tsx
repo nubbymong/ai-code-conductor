@@ -416,6 +416,7 @@ export default function SessionStatusStrip({ sessionId }: SessionStatusStripProp
           With the master switch off, a bare spacer keeps the controls cluster
           right-aligned. */}
       {statusLineEnabled ? (
+      <>
       <div
         className="flex items-center gap-3 flex-1 min-w-0 overflow-hidden"
       >
@@ -497,15 +498,14 @@ export default function SessionStatusStrip({ sessionId }: SessionStatusStripProp
             // Only for a session that should actually produce them -- a dead or
             // shell-only session never will, and a permanent shimmer there would
             // be a worse lie than showing nothing.
-            if (!awaitingStatusline) return <RemoteUsageNote why={session.remoteUsageNotShown} />
+            if (!awaitingStatusline) return null
             const pendingLabels = ['5h', 'Weekly'].filter((l) => !hiddenBuckets.includes(l))
-            if (pendingLabels.length === 0) return <RemoteUsageNote why={session.remoteUsageNotShown} />
+            if (pendingLabels.length === 0) return null
             return (
               <span className="flex items-center gap-3 shrink-0" data-testid="statusline-pending">
                 {pendingLabels.map((l) => (
                   <RateLimitBarPending key={l} label={l} />
                 ))}
-                <RemoteUsageNote why={session.remoteUsageNotShown} />
               </span>
             )
           }
@@ -524,7 +524,6 @@ export default function SessionStatusStrip({ sessionId }: SessionStatusStripProp
               {session.rateLimitExtra?.enabled && (
                 <span className="tabular-nums" style={{ color: 'var(--text-muted)' }}>extra: <span className={session.rateLimitExtra.utilization > 80 ? 'text-red' : ''}>${session.rateLimitExtra.usedUsd.toFixed(2)}</span>/${session.rateLimitExtra.limitUsd.toFixed(0)}</span>
               )}
-              <RemoteUsageNote why={session.remoteUsageNotShown} />
             </span>
           )
         })()}
@@ -555,6 +554,14 @@ export default function SessionStatusStrip({ sessionId }: SessionStatusStripProp
           </>
         )}
       </div>
+      {/* 2.1.3-beta.19 text smoke (#36): a helper tab's note in place of the
+          per-model weekly bars is a sibling AFTER the clipped row, never in it:
+          inside, at 1280 px only its first letter showed. Shown where the
+          rate-limit meters are on and no per-model bars are shown. */}
+      {sl.showRateLimits && !(session.usageBuckets && session.usageBuckets.length > 0) && (
+        <RemoteUsageNote why={session.remoteUsageNotShown} />
+      )}
+      </>
       ) : (
         <div className="flex-1" aria-hidden />
       )}
