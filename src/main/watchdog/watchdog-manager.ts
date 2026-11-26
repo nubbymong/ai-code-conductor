@@ -252,10 +252,11 @@ export interface WatchdogHostOptions {
   isSessionAlive: (sessionId: string) => boolean
   /** Submit the retry into the session, for every CLI. The host wires this to
    *  the session input module's submitRetry (2.1.3-beta.10 section A2): a
-   *  Claude Code session's is writePty(text + '\r'), with tmux's leave key
-   *  first on an SSH Persistent session, so the retry actually submits; the
-   *  text is already sanitized to a single control-char-free line (config.ts),
-   *  so the lone appended '\r' is the only submit and cannot be broken out of.
+   *  Claude Code session's is writePty(text), then writePty('\r') as its own
+   *  write (PR 763 fix round 9), each with tmux's leave key first on an SSH
+   *  Persistent session, so the retry actually submits; the text is already
+   *  sanitized to a single control-char-free line (config.ts), so the lone
+   *  '\r' is the only submit and cannot be broken out of.
    *  A Codex session's goes through the Codex composer rule, which answers
    *  whether it was delivered: an answer of not delivered is logged, with its
    *  reason. `stillWanted` says whether the incident the retry was sent for
@@ -713,9 +714,19 @@ export class WatchdogManager {
   }
 
   /** Re-read settings after a save (#266 MAJOR-2): unticking the feature must
-   *  tear down RUNNING watchdogs, not only stop future ones arming. */
+   *  tear down RUNNING watchdogs, not only stop future ones arming. Left on,
+   *  each running watchdog takes the saved retry message for its next retry
+   *  (PR 763 fix round 9: it was read only when a tab's watchdog started, so
+   *  a tab already open kept typing the old message), threaded as at a start
+   *  (threadedWatchdogConfig: the pattern lists stay compiled-in). */
   applySettings(): void {
-    if (readWatchdogSettings().enabled === true) return
+    const settings = readWatchdogSettings()
+    if (settings.enabled === true) {
+      if (this.entries.size === 0) return
+      const config = threadedWatchdogConfig(settings)
+      for (const entry of this.entries.values()) entry.wd.setRetryMessages(config)
+      return
+    }
     if (this.entries.size === 0) return
     logInfo('[watchdog] disabled in settings — tearing down running watchdogs')
     this.disposeAll()

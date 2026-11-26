@@ -13,6 +13,7 @@ interface FakeWatchdog {
   tick: ReturnType<typeof vi.fn>
   handleHookEvent: ReturnType<typeof vi.fn>
   setChecks: ReturnType<typeof vi.fn>
+  setRetryMessages: ReturnType<typeof vi.fn>
   dispose: ReturnType<typeof vi.fn>
   getState: ReturnType<typeof vi.fn>
 }
@@ -26,6 +27,7 @@ vi.mock('../../../../src/main/watchdog/session-watchdog', () => {
     tick = vi.fn()
     handleHookEvent = vi.fn()
     setChecks = vi.fn()
+    setRetryMessages = vi.fn()
     dispose = vi.fn()
     getState = vi.fn(() => ({
       sessionId: this.sessionId,
@@ -755,5 +757,42 @@ describe('WatchdogManager.setSessionChecks (#605)', () => {
     const mgr = new WatchdogManager(host)
     mgr.startWatchdog('s1', { provider: 'claude' })
     expect(mgr.setSessionChecks('s1', { rateLimit: false })).toBe(false)
+  })
+})
+
+// PR 763 fix round 9 (the 2.1.3-beta.19 release smoke re-read): the retry
+// message was read once, when a tab's watchdog started, so a message changed
+// in Settings never reached a tab already open: it kept typing the old text.
+// A save now hands the saved message to every running watchdog, for its next
+// retry. Red on 38e0edcb: the running watchdogs were told nothing.
+describe('WatchdogManager.applySettings: a changed retry message reaches the running watchdogs (PR 763 fix round 9)', () => {
+  it('every running watchdog gets the saved message, threaded as at its start', () => {
+    const { host } = makeHost()
+    const mgr = new WatchdogManager(host)
+    mgr.startWatchdog('s1', { provider: 'claude' })
+    mgr.startWatchdog('s2', { provider: 'claude', ssh: true })
+    watchdogSettings = { enabled: true, retryMessage: 'carry on from where you stopped', safeguard: { retryMessage: 'try that again', patterns: ['x'] } }
+    mgr.applySettings()
+    expect(instances).toHaveLength(2)
+    for (const wd of instances) {
+      expect(wd.setRetryMessages).toHaveBeenCalledTimes(1)
+      const handed = wd.setRetryMessages.mock.calls[0][0]
+      expect(handed).toMatchObject({ retryMessage: 'carry on from where you stopped', safeguard: { retryMessage: 'try that again' } })
+      // The pattern lists stay compiled-in, as at a watchdog's start.
+      expect(handed.safeguard.patterns).toBeUndefined()
+    }
+    expect(mgr.isActive('s1')).toBe(true)
+    expect(mgr.isActive('s2')).toBe(true)
+  })
+
+  it('turned off, the running watchdogs are torn down as before, and told nothing', () => {
+    const { host } = makeHost()
+    const mgr = new WatchdogManager(host)
+    mgr.startWatchdog('s1', { provider: 'claude' })
+    watchdogSettings = { enabled: false, retryMessage: 'carry on' }
+    mgr.applySettings()
+    expect(instances[0].setRetryMessages).not.toHaveBeenCalled()
+    expect(instances[0].dispose).toHaveBeenCalled()
+    expect(mgr.isActive('s1')).toBe(false)
   })
 })

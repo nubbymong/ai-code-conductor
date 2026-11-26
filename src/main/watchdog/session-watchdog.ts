@@ -260,6 +260,23 @@ export class SessionWatchdog {
   }
 
   /**
+   * The retry messages saved in Settings since this watchdog started (PR 763
+   * fix round 9): the manager hands the saved config on each save, and the
+   * next retry of each kind types its message, resolved and sanitized exactly
+   * as at the start (resolveWatchdogConfig: a block's own message wins for its
+   * kind, an empty one falls back). Until then the message was read only when
+   * the tab's watchdog started, so a tab already open kept typing the old one.
+   * Nothing else in the config or the state moves.
+   */
+  setRetryMessages(config?: unknown): void {
+    if (this.disposed) return
+    const next = resolveWatchdogConfig(config)
+    this.config.retryMessage = next.retryMessage
+    this.config.overload.retryMessage = next.overload.retryMessage
+    this.config.safeguard.retryMessage = next.safeguard.retryMessage
+  }
+
+  /**
    * #605: switch individual checks on/off for THIS session, in real time.
    *
    * A check switched OFF while its own incident is live drops the session back
