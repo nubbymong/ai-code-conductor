@@ -107,7 +107,7 @@ vi.mock('../../src/main/conductor-mcp-server', () => ({
   releaseMcpSessionProvider: () => {},
   disposeCodexReviewUsage: () => {},
 }))
-vi.mock('../../src/main/providers', async () => (await import('../helpers/codex-local-launch')).withCodexLocalLaunch(await (() => ({
+vi.mock('../../src/main/providers', async () => (await import('../helpers/provider-package-parts')).withProviderPackageParts(await (() => ({
   providerCapability: () => ({ enabled: true }),
   getProvider: () => ({
     resolveBinary: () => ({ cmd: 'claude', source: 'system' }), // WP2 PR 4: the local launch resolves Claude through the provider
@@ -141,7 +141,7 @@ vi.mock('../../src/main/providers', async () => (await import('../helpers/codex-
     },
   }),
 }))()))
-await (await import('../helpers/codex-local-launch')).loadCodexLocalLaunch()
+await (await import('../helpers/provider-package-parts')).loadProviderPackageParts()
 vi.mock('../../src/main/providers/claude/spawn', () => ({
   resolveClaudeBinary: () => ({ cmd: 'claude', source: 'system' }),
   resolveHostColorScheme: () => 'dark',

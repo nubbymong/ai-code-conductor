@@ -332,46 +332,59 @@ export interface LocalLaunchRequest {
 /** A launch's hooks between their minting and their keeping (sessions/launch-bindings.ts CodexHooks, by shape). */
 export interface LocalLaunchHooks { hookFile: { hookFile: string; dispose(): void } | null; tokenMinted: boolean }
 
-/** The PTY manager's records and doors a local launch uses, as they stand at
- *  2.1.3-beta.19: the launch bindings (sessions/launch-bindings.ts) in their
- *  order, the per-session records pty-manager.ts keeps (several are Codex's
- *  records, kept in core until they move with the local cutover), and its
- *  spawn of an agent's terminal. Handed to the launch, never imported by it,
- *  so no package reaches pty-manager.ts. */
-export interface LocalLaunchCore {
-  mintCodexHooks(sessionId: string, provider: SessionProvider): LocalLaunchHooks
-  keepCodexHooks(sessionId: string, hooks: LocalLaunchHooks, hooked: boolean): LocalLaunchHooks
+/** 2.1.3-beta.19 section 2 (aicc_planning#439): the PTY manager's
+ *  per-session records and the launch bindings' doors a provider's lifecycle
+ *  object uses (sessions/launch-bindings.ts LaunchBindingPorts and its
+ *  helpers, by shape). Several are Codex's records, kept in core until they
+ *  move with the local cutover. Handed to the object, never imported by it,
+ *  so no package reaches pty-manager.ts or the launch bindings. */
+export interface LifecycleCore {
+  readonly ptySessions: ReadonlyMap<string, { ptyProcess: IPty }>
+  readonly codexHookFiles: Map<string, { hookFile: string; dispose(): void }>
+  readonly codexHookedLaunches: Set<string>
+  readonly codexLaunchLeases: Map<string, AccountLease>
+  readonly codexAskSessions: Set<string>
+  readonly codexTelemetrySources: Map<string, TelemetrySource>
+  readonly notIndexedSessions: Map<string, { since: number; provider: ProviderId }>
+  readonly codexContextRollouts: Map<string, { path: string; sessionsDir: string }>
+  readonly keptCodexConversations: Pick<Map<string, { uuid: string }>, 'delete' | 'get'>
+  readonly lastCodexHookRollout: Pick<Map<string, unknown>, 'delete'>
+  readonly claudeTranscripts: Pick<Map<string, string>, 'delete' | 'get'>
+  noteGatewayToken(sessionId: string, codex: boolean): void
+  dropGatewayToken(sessionId: string): void
+  keepCodexConversation(sessionId: string, conversation: { uuid: string; cwd: string }, accountId?: string, how?: { inferred: boolean }): void
+  markCodexConversationUncertain(uuid: string): void
+  clearCodexDoubtFromHook(uuid: string): void
+  noteCodexContextRollout(sessionId: string, rollout: { path: string; sessionsDir: string } | null): void
+  endSessionNotIndexed(sessionId: string, now: number, opts?: { coversStay?: boolean }): void
+  noteCodexFolder(sessionId: string, cwd: string): void
+  codexRunWriters(codexRun: IPty): { write: (data: string) => void; writeColourAnswer: (bytes: string) => void }
   bindCodexLease(sessionId: string, lease: AccountLease): void
   bindCodexPane(binding: { sessionId: string; codexRun: IPty; runScreen: SessionRunScreen | undefined; cols: number; rows: number; write: (data: string) => void; writeColourAnswer: (bytes: string) => void }): { filter(data: string): string }
-  bindCodexLaunch(binding: {
-    win: BrowserWindow
-    sessionId: string
-    provider: SessionProvider
-    launch: { lease: AccountLease; sessionsDir: string }
-    codexCwd: string
-    codexSpawnTimestamp: number
-    built: Pick<ProviderSpawnCommand, 'resumeId' | 'resumePath' | 'pickFile' | 'pickFolder'> & Pick<TelemetryOptions, 'picked'>
-    resolvedCwd: string
-    codexCanvas: { designatedWorktree: string | null; guidance: CanvasSessionGuidance | null }
-    runProvider: ProviderId
-  }): void
+  /** B1e (aicc_planning#423): a gateway token the kill before a take-over
+   *  kept for a session served while its tab was not shown is settled:
+   *  `replaced` when the take-over wrote its own over it. */
+  settleServedToken(sessionId: string, replaced?: boolean): void
+}
+
+/** The PTY manager's records and doors a local launch uses besides its
+ *  provider's lifecycle core: the hooks' minting and keeping, its records of
+ *  resumed conversations and leases, Ask Conductor's question, and its spawn
+ *  of an agent's terminal. Handed to the launch, never imported by it. */
+export interface LocalLaunchCore extends LifecycleCore {
+  mintCodexHooks(sessionId: string, provider: SessionProvider): LocalLaunchHooks
+  keepCodexHooks(sessionId: string, hooks: LocalLaunchHooks, hooked: boolean): LocalLaunchHooks
   readonly keptCodexConversations: Pick<Map<string, { uuid: string; cwd: string }>, 'get' | 'delete'>
   readonly codexResumedById: Pick<Map<string, string>, 'set'>
-  keepCodexConversation(sessionId: string, conversation: { uuid: string; cwd: string }, accountId?: string, how?: { inferred: boolean }): void
-  readonly codexAskSessions: Pick<Set<string>, 'add' | 'delete'>
-  readonly ptySessions: ReadonlyMap<string, { ptyProcess: IPty }>
-  readonly codexLaunchLeases: Pick<Map<string, AccountLease>, 'get' | 'delete'>
   readonly takenCodexLeases: Pick<WeakSet<AccountLease>, 'add'>
   releaseCodexLeaseOnExit(proc: IPty, lease: AccountLease): void
   closeRunScreens(sessionId: string): void
   forgetCodexHooks(sessionId: string): void
-  dropGatewayToken(sessionId: string): void
   codexConversationsOpenElsewhere(sessionId: string, accountId: string | undefined): string[]
   typeAskQuestion(win: BrowserWindow, sessionId: string, question: string): Promise<unknown>
   askLaunchFolderHolds(folder: string | undefined, launchFolder: string): boolean
   spawnAgentPty(ctx: { sessionId: string; kind: ProviderId }, file: string, args: string[] | string, opts: IPtyForkOptions): IPty
   noteAgentRunFolder(proc: IPty, sessionId: string, folder: string): void
-  codexRunWriters(codexRun: IPty): { write: (data: string) => void; writeColourAnswer: (bytes: string) => void }
   watchBundledConptyEarlyExit(sessionId: string, proc: IPty): void
 }
 
@@ -392,6 +405,85 @@ export interface LocalLaunchStarted {
  *  for a launch it refuses, having started nothing or ended what it started. */
 export interface ProviderLocalLaunch {
   start(request: LocalLaunchRequest, core: LocalLaunchCore): LocalLaunchStarted
+}
+
+/** A kept session as the session helper's record gives it to a take-over
+ *  (sessions/kept-launches.ts KeptSessionFacts, by shape). */
+export interface LifecycleKeptSession {
+  readonly conversation: string | null
+  readonly account: string | null
+  readonly hookFolder: string | null
+  readonly pick?: ResumePick
+  readonly folder: string | null
+  readonly at: number
+  readonly hooks?: 'holder'
+}
+
+/** A kept session served while its tab is not shown (sessions/kept-launches.ts KeptUnseen, by shape). */
+export interface LifecycleKeptUnseen {
+  readonly sessionId: string
+  readonly provider: ProviderId
+  readonly hookFolder: string | null
+  readonly pick?: ResumePick
+  readonly folder: string | null
+  readonly hooks?: 'holder'
+}
+
+/** The restored tab's launch a take-over replaces (sessions/launch-bindings.ts
+ *  KeptTakeOverBinding, by shape): the provider the launch looked up, the
+ *  configured folder resolved, the terminal's size, and what pty:spawn
+ *  prepared (an account launch's lease and sessions folder, the account a
+ *  launch names, an Ask Conductor launch). */
+export interface LifecycleTakeOver {
+  readonly win: BrowserWindow
+  readonly sessionId: string
+  readonly launch: { readonly id: ProviderId; readonly provider: SessionProvider }
+  readonly resolvedCwd: string
+  readonly cols: number
+  readonly rows: number
+  readonly codexLaunch?: { lease: AccountLease; sessionsDir: string }
+  readonly profileId?: string
+  readonly isAsk?: boolean
+}
+
+/** A provider's part of what the release of a kept session records of it
+ *  (sessions/kept-launches.ts KeptLaunchFacts): what it knows, each field
+ *  absent or null when it does not. */
+export interface LifecycleFacts {
+  readonly conversation?: string | null
+  readonly account?: string | null
+  readonly hookFolder?: string | null
+  readonly pick?: ResumePick
+}
+
+/** 2.1.3-beta.19 section 2 (aicc_planning#439): what the app makes around a
+ *  provider's local session and drops when it ends, the provider's own part
+ *  (S2 of the seam audit). The launch bindings (sessions/launch-bindings.ts)
+ *  ask the session's provider for it through the registry, never by its
+ *  name: the take-over of a kept session, its serving while its tab is not
+ *  shown, the first part of its teardown and its description for keeping.
+ *  `bind` is what a launch binds once its process has started; its input is
+ *  the provider's own launch's, and only that launch calls it (its local
+ *  launch group, its take-over, or Claude Code's shell launch, kept in core
+ *  until the local cutover). */
+export interface ProviderLifecycle<Bind = unknown> {
+  bind(binding: Bind, core: LifecycleCore): void
+  /** The account a take-over asks the session helper for: null, no take-over
+   *  (the launch was not prepared for one); no `account`, any; else that one
+   *  (null: the provider's default account). */
+  keptAccount(take: LifecycleTakeOver): { readonly account?: string | null } | null
+  /** The bindings of a kept CLI that runs, in place of a launch's, before its
+   *  holder is attached. Answers the account profile the session runs on, for
+   *  the launch it replaces (undefined: none, or the default account). */
+  takeOver(take: LifecycleTakeOver, proc: IPty, kept: LifecycleKeptSession, launchCwd: string, core: LifecycleCore): string | undefined
+  /** Its tool calls served while its tab is not shown: the registrations from
+   *  the tab's configured folder, and what reaches this run of its hooks. */
+  serveUnseen(kept: LifecycleKeptUnseen, provider: SessionProvider, resolvedCwd: string, core: LifecycleCore): void
+  /** The teardown's first part (every kill and exit): what the provider's own
+   *  launch holds for the session goes. A no-op when it holds nothing. */
+  unbind(sessionId: string, core: LifecycleCore): void
+  /** What it knows of the session, for its release by an app update. */
+  describe(sessionId: string, core: LifecycleCore): LifecycleFacts
 }
 
 /** How a session's telemetry finds its transcript. `cwd`: the resolved
@@ -538,6 +630,12 @@ export interface SessionProvider {
    *  started by it (pty-manager.ts launchStyleOf); one with none is refused
    *  unless its row is Claude Code's shell launch. */
   readonly localLaunch?: ProviderLocalLaunch
+  /** Optional -- both packages declare it (2.1.3-beta.19 section 2): what
+   *  the app makes around the provider's local session and drops when it
+   *  ends (bind, take over, serve while not shown, unbind, describe). A
+   *  provider with none: its kept sessions are not taken over or served, and
+   *  its sessions' teardown asks every registered provider's. */
+  readonly lifecycle?: ProviderLifecycle
   /** Optional -- both packages declare it (2.1.3-beta.18, ADR-030 S12): the
    *  kinds a held session's holder takes and its connections report; how
    *  they reach the holder is the app's hook route (Claude Code: its settings

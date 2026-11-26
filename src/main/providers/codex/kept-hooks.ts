@@ -14,7 +14,7 @@
 // to the gateway (its record has no `hooks: 'holder'` mark: one 2.1.3-beta.17
 // or earlier kept, or one whose launch did not send them through its holder);
 // a session whose forwarder runs the session helper's hook mode needs no file
-// (launch-bindings.ts codexTakeOver).
+// (lifecycle.ts codexTakeOver).
 import * as fs from 'fs'
 import * as path from 'path'
 import { atomicWriteFileSync } from '../../atomic-write'

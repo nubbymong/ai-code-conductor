@@ -19,7 +19,8 @@ import { TEST_TMP_ROOT } from '../../helpers/test-tmp'
 vi.mock('../../../src/main/pty-manager', () => ({
   spawnPty: vi.fn(), killPty: vi.fn(), getSshFlow: vi.fn(), writePty: vi.fn(), resizePty: vi.fn(), endSshRemote: vi.fn(),
 }))
-vi.mock('../../../src/main/providers', () => ({ registerProvider: vi.fn() }))
+vi.mock('../../../src/main/providers', async () => (await import('../../helpers/provider-package-parts')).withProviderPackageParts(await (() => ({ registerProvider: vi.fn() }))()))
+await (await import('../../helpers/provider-package-parts')).loadProviderPackageParts()
 vi.mock('../../../src/main/providers/claude', () => ({ ClaudeProvider: class {} }))
 vi.mock('../../../src/main/statusline-watcher', () => ({ startStatuslineWatcher: vi.fn() }))
 vi.mock('../../../src/main/conductor-mcp-server', () => ({ startConductorMcpServer: vi.fn(), stopConductorMcpServer: vi.fn() }))

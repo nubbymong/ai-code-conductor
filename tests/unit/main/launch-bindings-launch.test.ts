@@ -68,7 +68,7 @@ vi.mock('../../../src/main/conductor-mcp-server', () => ({
   unregisterCodexReviewSession: () => {},
   releaseMcpSessionProvider: () => {},
 }))
-vi.mock('../../../src/main/providers', async () => (await import('../../helpers/codex-local-launch')).withCodexLocalLaunch(await (() => ({
+vi.mock('../../../src/main/providers', async () => (await import('../../helpers/provider-package-parts')).withProviderPackageParts(await (() => ({
   providerCapability: () => ({ enabled: true }),
   getProvider: (id: string) => ({
     resolveBinary: () => ({ cmd: 'claude', source: 'system' }),
@@ -77,10 +77,11 @@ vi.mock('../../../src/main/providers', async () => (await import('../../helpers/
       return { cmd: opts.realmLaunch.executable, args: [], env: { ...opts.realmLaunch.env }, hooksInstalled: !!opts.codexHooks }
     },
     ...(id === 'codex' ? { prepareSessionHooks: (sid: string) => ({ hookFile: `/tmp/codex-hooks/x/${sid}/hook.json`, dispose: () => {} }) } : {}),
-    ingestSessionTelemetry: () => ({ stop: () => {} }),
+    // 2.1.3-beta.19 section 2: the Codex lifecycle's bind subscribes it (its bind is the package's now, not this module's).
+    ingestSessionTelemetry: () => { h.journal.push('ingestSessionTelemetry'); return { stop: () => {} } },
   }),
 }))()))
-await (await import('../../helpers/codex-local-launch')).loadCodexLocalLaunch()
+await (await import('../../helpers/provider-package-parts')).loadProviderPackageParts()
 vi.mock('../../../src/main/providers/claude/spawn', () => ({ resolveClaudeBinary: () => ({ cmd: 'claude', source: 'system' }), resolveHostColorScheme: () => 'dark' }))
 vi.mock('../../../src/main/vision-manager', () => ({ isGlobalVisionRunning: () => false, getGlobalVisionConfig: () => null, teardownVisionSession: () => {} }))
 vi.mock('../../../src/main/canvas/canvas-plugin', () => ({ ensureCanvasPlugin: () => null }))
@@ -147,8 +148,8 @@ const codexLaunch = () => ({
   env: { PATH: '/usr/bin', CODEX_HOME: '/res/codex-realms/b1' },
   sessionsDir: '/res/codex-realms/b1/sessions',
 })
-const TEARDOWN = ['unbindCodexLease', 'unbindLaunchTelemetry', 'unbindLaunchRegistrations']
-const BINDINGS = new Set(['mintCodexHooks', 'keepCodexHooks', 'bindCodexLease', 'bindCodexPane', 'bindCodexLaunch', 'bindClaudeLaunch', 'bindLoggingRun', 'unbindLaunchFiles', ...TEARDOWN, 'spawn', 'captureClaudeAccount'])
+const TEARDOWN = ['unbindLaunchProvider', 'unbindLaunchTelemetry', 'unbindLaunchRegistrations']
+const BINDINGS = new Set(['mintCodexHooks', 'keepCodexHooks', 'bindCodexLease', 'bindCodexPane', 'ingestSessionTelemetry', 'bindLoggingRun', 'unbindLaunchFiles', ...TEARDOWN, 'spawn', 'captureClaudeAccount'])
 const seen = (): string[] => h.journal.filter((n) => BINDINGS.has(n))
 const exitLast = (): void => { const p = h.ptys.at(-1)!; for (const cb of [...p.exit]) cb({ exitCode: 0 }) }
 
@@ -169,12 +170,14 @@ describe('pty-manager.ts and the launch bindings module', () => {
   it('a Claude Code launch: its bindings once, after its process has started, then its logging run', () => {
     spawnPty(fakeWin, CLAUDE_SID, { cwd: os.tmpdir() } as never)
     // The spawn opens with the teardown of whatever the id had (killPty), then the launch.
-    expect(seen()).toEqual([...TEARDOWN, 'spawn', 'bindClaudeLaunch', 'captureClaudeAccount', 'bindLoggingRun'])
+    // Its bindings are Claude Code's lifecycle object's (2.1.3-beta.19 section 2): its account capture shows them.
+    expect(seen()).toEqual([...TEARDOWN, 'spawn', 'captureClaudeAccount', 'bindLoggingRun'])
   })
 
   it('a Codex launch: its hooks before the command, its lease before the spawn, its pane and conversation after it, then its logging run', () => {
     spawnPty(fakeWin, CODEX_SID, { cwd: os.tmpdir(), provider: 'codex', codexOptions: { permissionsPreset: 'read-only' }, codexLaunch: codexLaunch() } as never)
-    expect(seen()).toEqual([...TEARDOWN, 'mintCodexHooks', 'keepCodexHooks', 'bindCodexLease', 'spawn', 'bindCodexPane', 'bindCodexLaunch', 'bindLoggingRun'])
+    // Its conversation's bindings are the Codex lifecycle object's bind: its telemetry subscription shows them.
+    expect(seen()).toEqual([...TEARDOWN, 'mintCodexHooks', 'keepCodexHooks', 'bindCodexLease', 'spawn', 'bindCodexPane', 'ingestSessionTelemetry', 'bindLoggingRun'])
   })
 
   it('a session\'s own exit: its files once, then the teardown\'s three parts in order', () => {

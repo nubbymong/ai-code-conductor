@@ -47,7 +47,7 @@ vi.mock('../../../src/main/logging/logging-service', () => ({ getLogSupervisor: 
 vi.mock('../../../src/main/conductor-mcp-server', () => ({ getConductorMcpPort: () => 0, registerCodexReviewSession: () => {}, registerClaudeReviewSession: () => {}, unregisterCodexReviewSession: () => {}, releaseMcpSessionProvider: () => {} }))
 // Since 2.1.3-beta.18 section 4 the doors reach the run screen's submit
 // through the Codex package's door members, built here over the fake one.
-vi.mock('../../../src/main/providers', async () => (await import('../../helpers/codex-local-launch')).withCodexLocalLaunch(await (async () => {
+vi.mock('../../../src/main/providers', async () => (await import('../../helpers/provider-package-parts')).withProviderPackageParts(await (async () => {
   const { codexDoorMembers } = await import('../../../src/main/providers/codex/run-screen-doors')
   const withDoors = (p: Record<string, unknown> | undefined): Record<string, unknown> | undefined => {
     const rs = p?.runScreen as Record<string, unknown> | undefined
@@ -55,7 +55,7 @@ vi.mock('../../../src/main/providers', async () => (await import('../../helpers/
   }
   return { providerCapability: () => ({ enabled: true }), getProvider: () => withDoors(h.provider) }
 })()))
-await (await import('../../helpers/codex-local-launch')).loadCodexLocalLaunch()
+await (await import('../../helpers/provider-package-parts')).loadProviderPackageParts()
 vi.mock('../../../src/main/canvas/codex-canvas-launch', () => ({
   prepareCodexCanvasLaunch: (input: Record<string, unknown>) => { h.canvasInputs.push(input); return { designatedWorktree: null, guidance: null } },
 }))

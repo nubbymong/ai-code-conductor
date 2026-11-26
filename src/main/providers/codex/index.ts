@@ -8,6 +8,7 @@ import type { ProviderCapabilities, AuthRealm, RealmUse } from '../../../shared/
 import type { ProviderPackage, ProviderPricingOperations, RealmRef } from '../core'
 import { CODEX_ENABLEMENT } from './enablement'
 import { CODEX_LOCAL_LAUNCH } from './local-launch'
+import { CODEX_LIFECYCLE } from './lifecycle'
 import { resolveCodexBinary, resolveCodexBinaryAsync, buildCodexSpawn, codexHookDataDir, sweepStaleCodexPickFolders, warmNodeExeOnPosix } from './spawn'
 import { openCodexScreen, feedCodexScreen, resizeCodexScreen, closeCodexScreen, hasCodexScreen, submitCodexText, submitCodexImage } from './session-screen'
 import { codexDoorMembers } from './run-screen-doors'
@@ -221,6 +222,8 @@ export class CodexProvider implements SessionProvider {
 
   /** 2.1.3-beta.19 section 2: its CLI as the terminal's own program (local-launch.ts). */
   readonly localLaunch: ProviderLocalLaunch = CODEX_LOCAL_LAUNCH
+  /** 2.1.3-beta.19 section 2: what the app makes around a local session and drops when it ends (lifecycle.ts). */
+  readonly lifecycle = CODEX_LIFECYCLE
 
   detectUiRunning(data: string): boolean {
     return detectCodexUi(data)

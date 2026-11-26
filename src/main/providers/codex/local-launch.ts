@@ -6,7 +6,8 @@
 // request) and its records and doors (`core`, src/main/providers/types.ts
 // LocalLaunchCore), which the first lines below unpack under the names the
 // body has always used. What the branch assigned in the PTY manager (the
-// session's terminal, and when its process was started) is the answer.
+// session's terminal, and when its process was started) is the answer. Its
+// bind after the start is its package's lifecycle object's (2.1.3, lifecycle.ts).
 import type * as pty from 'node-pty'
 import { nativeTheme } from 'electron'
 import { logInfo, logWarn } from '../../debug-logger'
@@ -21,6 +22,7 @@ import { getWatchdogManager } from '../../watchdog/watchdog-manager'
 import { stripSpoofableText } from '../../../shared/safe-text'
 import { resolveHostColorScheme } from '../host-color-scheme'
 import type { LocalLaunchCore, LocalLaunchRequest, LocalLaunchStarted, ProviderLocalLaunch, SpawnOptions } from '../types'
+import { CODEX_LIFECYCLE } from './lifecycle'
 
 /** A path as a log line names it (pty-manager.ts's own rule). */
 const describePathForLog = (p: string): string => stripSpoofableText(p, 300)
@@ -28,7 +30,7 @@ const describePathForLog = (p: string): string => stripSpoofableText(p, 300)
 function startCodexLocalLaunch(localLaunch: LocalLaunchRequest, core: LocalLaunchCore): LocalLaunchStarted {
   const { win, sessionId, options, resolvedCwd, cols, rows } = localLaunch
   const {
-    mintCodexHooks, keepCodexHooks, bindCodexLease, bindCodexPane, bindCodexLaunch,
+    mintCodexHooks, keepCodexHooks, bindCodexLease, bindCodexPane,
     keptCodexConversations, codexResumedById, keepCodexConversation, codexAskSessions, ptySessions, codexLaunchLeases, takenCodexLeases,
     releaseCodexLeaseOnExit, closeRunScreens, forgetCodexHooks, dropGatewayToken, codexConversationsOpenElsewhere, typeAskQuestion,
     askLaunchFolderHolds, spawnAgentPty, noteAgentRunFolder, codexRunWriters, watchBundledConptyEarlyExit,
@@ -38,9 +40,9 @@ function startCodexLocalLaunch(localLaunch: LocalLaunchRequest, core: LocalLaunc
   // Codex local session — spawn `codex` directly. Codex itself owns the
   // REPL, so there is no shell-wrap-then-cd-then-launch dance like Claude
   // requires. cwd is propagated through pty.spawn options.
-  // The branch is chosen by the provider's row in LOCAL_LAUNCH_STYLE, not
-  // by its name. shellOnly falls through to the branch below so the user
-  // gets a plain shell, regardless of provider selection.
+  // The PTY manager chooses it by the provider's package (its local launch
+  // group), not by its name. shellOnly takes the PTY manager's other branch,
+  // so the user gets a plain shell, regardless of provider selection.
   //
   // WP2 (plan A10): it runs ONLY in its account's realm, from the launch
   // pty:spawn prepared -- the executable setup proved and the realm's
@@ -238,7 +240,7 @@ function startCodexLocalLaunch(localLaunch: LocalLaunchRequest, core: LocalLaunc
     if (options?.isAsk === true) codexAskSessions.add(sessionId)
     else codexAskSessions.delete(sessionId)
     if (askQuestion && !built.askPromptOnArgv) setImmediate(() => { void typeAskQuestion(win, sessionId, askQuestion) })
-    bindCodexLaunch({ win, sessionId, provider, launch, codexCwd, codexSpawnTimestamp, built, resolvedCwd, codexCanvas, runProvider: 'codex' })
+    CODEX_LIFECYCLE.bind({ win, sessionId, provider, launch, codexCwd, codexSpawnTimestamp, built, resolvedCwd, codexCanvas, runProvider: 'codex' }, core)
   } catch (err) {
     // P3.10: a launch that failed keeps no hook file or hooked mark, and
     // (round 1, B2) no gateway token it minted.

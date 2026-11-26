@@ -88,7 +88,7 @@ import { getWatchdogManager } from './watchdog/watchdog-manager'
 import { clearCodexIdleAttention } from './codex-idle-attention'
 import { SSH_ATTENTION_OSC_PREFIX, SSH_ATTENTION_MAX_PAYLOAD, parseSshAttentionPayload, deliverRemoteAttention } from './ssh-attention'
 import type { HookEvent } from '../shared/hook-types'
-import { setLaunchBindingPorts, mintCodexHooks, keepCodexHooks, bindCodexLease, bindCodexPane, bindCodexLaunch, bindClaudeLaunch, bindLoggingRun, unbindLaunchFiles, unbindCodexLease, unbindLaunchTelemetry, unbindLaunchRegistrations, takeOverKeptLaunch, removeFailedLaunchFiles, keepServedToken, keptForItsTab, type KeptSessionTakenOver } from './sessions/launch-bindings'
+import { setLaunchBindingPorts, lifecycleCore, noteLaunchProvider, mintCodexHooks, keepCodexHooks, bindCodexLease, bindCodexPane, bindLoggingRun, unbindLaunchFiles, unbindLaunchProvider, unbindLaunchTelemetry, unbindLaunchRegistrations, takeOverKeptLaunch, removeFailedLaunchFiles, keepServedToken, keptForItsTab, type KeptSessionTakenOver } from './sessions/launch-bindings'
 
 import * as path from 'path'
 import * as fs from 'fs'
@@ -6533,7 +6533,8 @@ function spawnPtyResolved(
       // ADR-009 round 1 (PR 4): where this run works, until it has ended.
       noteAgentRunFolder(ptyProcess, sessionId, claudeCwd)
 
-      bindClaudeLaunch({ sessionId, resolvedProfileId, claudeCwd, resolvedCwd, designatedWorktree })
+      // 2.1.3-beta.19 section 2: its bindings, by Claude Code's lifecycle object.
+      provider.lifecycle?.bind({ sessionId, resolvedProfileId, claudeCwd, resolvedCwd, designatedWorktree }, lifecycleCore())
 
       // Explicitly cd to the project directory, then launch Claude.
       // The cd is critical — it ensures Claude sees the correct project directory
@@ -6785,6 +6786,8 @@ function spawnPtyResolved(
   // null for a terminal tab and for SSH). An SSH session's turns true only
   // when the flow types the launch line (writeClaudeCmd).
   ptySessions.set(sessionId, { ptyProcess, sessionId, agent: options?.shellOnly ? null : (options?.provider ?? 'claude'), appStartedCli: localLaunch !== null })
+  // 2.1.3-beta.19 section 2: whose lifecycle object its teardown's first part asks.
+  if (localLaunch) noteLaunchProvider(sessionId, localLaunch.id)
   // P3.15 rounds 3 and 4 (K1, P4): every session's PTY, of every kind: an
   // error on its input or its output never quits the app.
   guardSessionPty(win, sessionId, ptyProcess)
@@ -7082,16 +7085,16 @@ setLaunchBindingPorts({
   ptySessions, codexHookFiles, codexHookedLaunches, codexLaunchLeases, takenCodexLeases, codexAskSessions, codexTelemetrySources, indexedRuns, codexGatewayTokens,
   notIndexedSessions, codexContextRollouts, keptCodexConversations, lastCodexHookRollout, claudeTranscripts, claudeFolders, codexFolders,
   noteGatewayToken, dropGatewayToken, forgetCodexHooks, keepCodexConversation, markCodexConversationUncertain, clearCodexDoubtFromHook,
-  noteCodexContextRollout, endSessionNotIndexed, noteCodexFolder, savedConfigLoggingOff, noteClaudeFolder, noteClaudeTranscript, markSessionNotIndexed, noteAgentRunFolder, codexRunWriters, launchStyleOf,
+  noteCodexContextRollout, endSessionNotIndexed, noteCodexFolder, savedConfigLoggingOff, noteClaudeFolder, noteClaudeTranscript, markSessionNotIndexed, noteAgentRunFolder, codexRunWriters,
   closeCodexRunScreen: (sessionId) => closeRunScreens(sessionId),
 })
 /** 2.1.3-beta.19 section 2: what a provider's local launch group is handed
- *  (SessionProvider.localLaunch): the launch bindings and this module's
- *  records and doors, so no package imports this module. */
+ *  (SessionProvider.localLaunch): its lifecycle core (the launch bindings'),
+ *  and this module's records and doors a launch uses, so no package imports
+ *  this module. */
 const localLaunchCore: LocalLaunchCore = {
-  mintCodexHooks, keepCodexHooks, bindCodexLease, bindCodexPane, bindCodexLaunch, keptCodexConversations, codexResumedById, keepCodexConversation, codexAskSessions, ptySessions,
-  codexLaunchLeases, takenCodexLeases, releaseCodexLeaseOnExit, closeRunScreens, forgetCodexHooks, dropGatewayToken, codexConversationsOpenElsewhere, typeAskQuestion, askLaunchFolderHolds,
-  spawnAgentPty, noteAgentRunFolder, codexRunWriters, watchBundledConptyEarlyExit,
+  ...lifecycleCore(), bindCodexLease, bindCodexPane, mintCodexHooks, keepCodexHooks, keptCodexConversations, codexResumedById, takenCodexLeases, releaseCodexLeaseOnExit,
+  closeRunScreens, forgetCodexHooks, codexConversationsOpenElsewhere, typeAskQuestion, askLaunchFolderHolds, spawnAgentPty, noteAgentRunFolder, watchBundledConptyEarlyExit,
 }
 
 export function writePty(sessionId: string, data: string): void {
@@ -7207,7 +7210,7 @@ function cleanupSessionResources(sessionId: string): void {
     shellOnlyProfileHolds.delete(sessionId)
     profileHold()
   }
-  unbindCodexLease(sessionId)
+  unbindLaunchProvider(sessionId)
   // P3.16 (M5): the integrity monitor's count of the PTY this ends starts again
   // (round 1, N8: quietly, with no "session ended" event; the session's own
   // exit ends the record). A Restart (and every respawn: spawnPty runs killPty
