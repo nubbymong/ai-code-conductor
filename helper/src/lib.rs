@@ -13,6 +13,7 @@ pub mod client;
 pub mod cmdline;
 pub mod consoles;
 pub mod detach;
+pub mod field;
 pub mod frame;
 pub mod hello;
 pub mod holder;

@@ -116,7 +116,7 @@ fn record(sid: &str, endpoint: &str) -> Record {
         nonce: NONCE.to_string(),
         helper: "0.1.0".to_string(),
         started: store::now_ms(),
-        away: 120,
+        lifetime: aicc_helper::store::Lifetime::Away(120),
         attached: false,
         child: "running".to_string(),
         code: None,
