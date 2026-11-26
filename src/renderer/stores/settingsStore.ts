@@ -409,11 +409,12 @@ export interface AppSettings {
    *  (absent/false). After a crash it is ended and its tab resumes the
    *  conversation. Applies to sessions started after the change. */
   agentSessionsThroughHelper?: boolean
-  /** 2.1.3-beta.17 (preview, Windows): a Claude Code tab whose saved config's
-   *  Connection is SSH (not SSH Persistent), with key sign-in, no post-connect
-   *  command and no container, to a Linux machine added and checked on the
-   *  Machines page, runs through the session helper there. OFF by default
-   *  (absent/false); main reads it at each SSH spawn (remote-helper/). */
+  /** 2.1.3-beta.17 (preview, Windows): a Claude Code tab whose saved config
+   *  signs in by key, with no post-connect command and no container, to a
+   *  Linux machine added and checked on the Machines page, runs through the
+   *  session helper there; from 2.1.3-beta.19 an SSH Persistent one too, kept
+   *  there until it is ended (remote-helper/route.ts says when). OFF by
+   *  default (absent/false); main reads it at each SSH spawn (remote-helper/). */
   remoteSessionsThroughHelper?: boolean
   /** 2.1.3-beta.10 (#333): what a command bar prompt button does, in every
    *  session, on this computer and over SSH: 'send' types the prompt and sends

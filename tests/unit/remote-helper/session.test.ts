@@ -84,7 +84,8 @@ describe('remote session: the launch', () => {
     expect(t.pty.pid).toBe(0)
     // The hold exec names the helper folder, hash and session; the bridge too.
     expect(ssh.scripts()).toEqual(['hold', 'bridge'])
-    expect(ssh.calls[0].values.slice(1)).toEqual([MACHINE.did, INSTALL, MACHINE.helper.folder, SHA, sid, 'tab-launch'])
+    // 2.1.3-beta.19: the holder's kind; a plain SSH tab's has the away clock.
+    expect(ssh.calls[0].values.slice(1)).toEqual([MACHINE.did, INSTALL, MACHINE.helper.folder, SHA, sid, 'tab-launch', 'away'])
     expect(ssh.calls[1].values.slice(3)).toEqual([MACHINE.helper.folder, SHA, sid])
     holder.output('FAKE-CLI READY\r\n')
     await until('output', () => t.out().includes('FAKE-CLI READY'))

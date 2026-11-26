@@ -152,8 +152,11 @@ describe('pty-manager SSH branch: the usual path is unchanged for every tab that
 
   const cases: Array<[string, SSHOptions, boolean, RemoteMachineRecord | null, string]> = [
     ['the switch off', SSH_TAB, false, MACHINE, ROUTE_WHY.off],
-    ['SSH Persistent (no detachable value)', { ...SSH_TAB, detachable: undefined }, true, MACHINE, ROUTE_WHY.persistent],
-    ['SSH Persistent (detachable true)', { ...SSH_TAB, detachable: true }, true, MACHINE, ROUTE_WHY.persistent],
+    // 2.1.3-beta.19 section 1.2: SSH Persistent goes through the helper only on
+    // a machine whose last Check read logind as not cleaning up at logout.
+    ['SSH Persistent (no detachable value) on a machine whose logind was not read', { ...SSH_TAB, detachable: undefined }, true, MACHINE, ROUTE_WHY.cleanUpUnknown],
+    ['SSH Persistent (detachable true) on a machine whose logind was not read', { ...SSH_TAB, detachable: true }, true, MACHINE, ROUTE_WHY.cleanUpUnknown],
+    ['SSH Persistent on a machine whose logind ends the user\'s processes at logout', { ...SSH_TAB, detachable: true }, true, { ...MACHINE, logind: { kill: 'yes', exclude: 'root', linger: 'no' } }, ROUTE_WHY.cleanUpOn],
     ['a container', { ...SSH_TAB, runtime: { type: 'container', container: 'dev' } }, true, MACHINE, ROUTE_WHY.container],
     ['a legacy docker post-command', { ...SSH_TAB, postCommand: 'sudo docker exec -it dev bash' }, true, MACHINE, ROUTE_WHY.container],
     ['a post-connect command', { ...SSH_TAB, postCommand: 'cd /srv && source env' }, true, MACHINE, ROUTE_WHY.postCommand],
@@ -166,6 +169,8 @@ describe('pty-manager SSH branch: the usual path is unchanged for every tab that
 
   for (const [name, tab, switchOn, machine, why] of cases) {
     it(`${name}: node-pty gets the same file, argv and options as with no remote helper, and the log says why`, () => {
+      // Each case is a new tab (2.1.3-beta.19: main remembers a tab's last path until it is closed).
+      forgetRemoteHelperTab('route-plain')
       setRemoteHelperDeps(null)
       const before = spawnSsh('route-plain', tab)
       expect(before, 'the usual path reached node-pty').not.toBeNull()

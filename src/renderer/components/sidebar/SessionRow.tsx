@@ -231,9 +231,10 @@ export default function SessionRow({ session, isActive, needsAttention, isRenami
           kind={resolveTransportBadge({
             isSsh: session.sessionType === 'ssh',
             ssh: session.sshConfig,
-            persistent: session.sshTmuxPersistent === true,
+            persistent: session.sshTmuxPersistent === true || session.remoteVia === 'helper',
           })}
           container={containerNameOf(session.sshConfig)}
+          keeper={session.remoteVia === 'helper' ? 'helper' : 'tmux'}
         />
         {/* Moon BESIDE the type badge (variant B): the type mark stays — the
             moon is additional Watchdog state, not a replacement identity. The

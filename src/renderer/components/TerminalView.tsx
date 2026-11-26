@@ -28,6 +28,7 @@ import { useAccountGateStore, GATE_CANCELLED } from '../stores/accountGateStore'
 import { forgetSessionBrowserProfile } from '../stores/sshCloseStore'
 import { hasSpawned, markSpawned, clearSpawned, killSessionPty, isCurrentSpawn } from '../ptyTracker'
 import { spentCommand } from '../utils/commandTerminal'
+import { markKeptByHelper } from '../utils/keptByHelper'
 import { listenForSpawnEnd, reportSpawnEnd } from '../utils/spawnEndNotice'
 import { carryNote, terminalNoteLine } from '../utils/launchNote'
 import { sessionProviderAccount } from '../utils/accountChip'
@@ -333,6 +334,8 @@ export default function TerminalView({ sessionId, configId, cwd, shellOnly, elev
   useEffect(() => {
     if (!ssh) return
     return window.electronAPI.ssh.onFlowState(sessionId, (msg) => {
+      // 2.1.3-beta.19: a session the session helper keeps until it is ended: the tab is marked.
+      if (msg.kept) { markKeptByHelper(sessionId, msg.kept.did); return }
       if (msg.state !== 'claude-running') return
       // #242 tier 5: latch "this session has reached claude-running at
       // least once" so a LATER respawn (Restart after a dropped
@@ -1294,7 +1297,7 @@ export default function TerminalView({ sessionId, configId, cwd, shellOnly, elev
             const plainTerminal = shellOnly === true && !ssh && !session?.needsLogin && !session?.transient
             exitHold.begin()
             window.electronAPI.pty
-              .spawn(sessionId, { cwd, cols, rows, ssh: sshWithReconnect, shellOnly, plainTerminal, elevated, terminalOptions, configId, configLabel, useResumePicker, legacyVersion, effortLevel, permissionMode, extraArgs, disableAutoMemory, enableCodexReview, loggingEnabled, model, provider, codexOptions, profileId: resolvedProfileId, resume, askPrompt, isAsk: session?.kind === 'ask', ...account })
+              .spawn(sessionId, { cwd, cols, rows, ssh: sshWithReconnect, remoteVia: ssh && session?.remoteVia === 'helper' ? 'helper' : undefined, shellOnly, plainTerminal, elevated, terminalOptions, configId, configLabel, useResumePicker, legacyVersion, effortLevel, permissionMode, extraArgs, disableAutoMemory, enableCodexReview, loggingEnabled, model, provider, codexOptions, profileId: resolvedProfileId, resume, askPrompt, isAsk: session?.kind === 'ask', ...account })
               .then((result) => {
                 const nothingStarted = !!result && typeof result === 'object' && result.started === false
                 // WP2: main refused the launch because its provider is off

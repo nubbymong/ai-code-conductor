@@ -80,6 +80,52 @@ export interface RemoteMachineRecord {
    *  machine's architecture), version, SHA-256 and folder. */
   helper: { path: string; version: string; sha256: string; folder: string }
   check: { at: number; ok: boolean; detail?: string }
+  /** What the last Check read of logind (2.1.3-beta.19 section 1.2): its
+   *  KillUserProcesses and the user's Linger (`yes`, `no`, or '' when it did
+   *  not read) and its KillExcludeUsers (user names). Absent on a record no
+   *  Check of this build wrote: read as not known (logoutCleanUp). */
+  logind?: { kill: string; exclude: string; linger: string }
+}
+
+/** Whether a machine's logind ends the user's processes at logout, as its
+ *  last Check read it (2.1.3-beta.19 section 1.2): `on` when KillUserProcesses
+ *  is yes and the user is not in KillExcludeUsers; `off` when it is no, or the
+ *  user is excluded; `unknown` on a record no Check of this build wrote (no
+ *  logind field: a Check mends it); `unread` when this build's Check read
+ *  nothing (no loginctl there, or no logind: no Check changes it). Only `off`
+ *  lets an SSH Persistent tab's session outlive its connection there
+ *  (route.ts). The user's Linger is read and shown, and decides nothing: a
+ *  holder runs in the login's own scope, which KillUserProcesses ends whatever
+ *  Linger says. */
+export type LogoutCleanUp = 'on' | 'off' | 'unknown' | 'unread'
+export function logoutCleanUp(m: Pick<RemoteMachineRecord, 'logind' | 'user'>): LogoutCleanUp {
+  const l = m.logind
+  if (!l) return 'unknown'
+  if (l.kill === 'no') return 'off'
+  if (l.kill === 'yes') return l.exclude.split(/\s+/).includes(m.user) ? 'off' : 'on'
+  return 'unread'
+}
+
+/** The card's line for a machine where SSH Persistent tabs keep the usual
+ *  path (logind), or undefined where they may go through the helper. */
+export function persistentNote(m: Pick<RemoteMachineRecord, 'logind' | 'user'>): string | undefined {
+  const c = logoutCleanUp(m)
+  if (c === 'off') return undefined
+  const linger = m.logind?.linger === 'yes' || m.logind?.linger === 'no' ? `, Linger ${m.logind.linger}` : ''
+  if (c === 'on') return `SSH Persistent tabs keep the usual SSH path here: its logind ends your processes when you log out (KillUserProcesses yes${linger}).`
+  if (c === 'unread') return 'SSH Persistent tabs keep the usual SSH path here: its last check got no answer from logind (no loginctl there, or no logind).'
+  return 'SSH Persistent tabs keep the usual SSH path here: its last check did not read whether logind ends your processes when you log out. Press Check.'
+}
+
+const LOGIND_WORD = /^(yes|no)$/
+const LOGIND_USERS = /^[A-Za-z0-9_.@ -]{0,1024}$/
+/** What a probe or a saved record says of logind, read strictly. */
+function readLogind(kill: unknown, exclude: unknown, linger: unknown): { kill: string; exclude: string; linger: string } {
+  return {
+    kill: typeof kill === 'string' && LOGIND_WORD.test(kill) ? kill : '',
+    exclude: typeof exclude === 'string' && LOGIND_USERS.test(exclude) ? exclude.trim() : '',
+    linger: typeof linger === 'string' && LOGIND_WORD.test(linger) ? linger : '',
+  }
 }
 
 interface RecordsFile {
@@ -171,6 +217,7 @@ function readRecord(v: unknown): RemoteMachineRecord | null {
     path: p, lang: typeof r.lang === 'string' && LANG_RE.test(r.lang) ? r.lang : null,
     helper: { path: file, version: helper.version, sha256: helper.sha256, folder: helper.folder },
     check: { at: check.at, ok: check.ok, ...(typeof check.detail === 'string' ? { detail: check.detail.slice(0, 300) } : {}) },
+    ...(r.logind && typeof r.logind === 'object' ? { logind: readLogind((r.logind as Record<string, unknown>).kill, (r.logind as Record<string, unknown>).exclude, (r.logind as Record<string, unknown>).linger) } : {}),
   }
 }
 
@@ -203,7 +250,7 @@ export const MACHINE_TEXT = {
   noHashTool: 'The machine has no sha256sum, shasum or openssl, so the helper file cannot be checked there. Nothing was left on it.',
   hashMismatch: (hex: string) => `The file on the machine did not match the installer's (SHA-256 ${hex.slice(0, 12)}), so it was removed and nothing was left on it.`,
   inUse: (n: number) => `${n === 1 ? 'A tab runs' : `${n} tabs run`} through the session helper on this machine. Close ${n === 1 ? 'it' : 'them'} first.`,
-  holds: (n: number) => `The session helper on this machine still holds ${n === 1 ? 'a session' : `${n} sessions`}. End ${n === 1 ? 'it' : 'them'} first (close the tab, or wait two minutes after a lost connection).`,
+  holds: (n: number) => `The session helper on this machine still holds ${n === 1 ? 'a session' : `${n} sessions`}. End ${n === 1 ? 'it' : 'them'} first: a session kept until it is ended is listed on this machine's card, with End; a plain SSH tab's ends when you close the tab, or two minutes after a lost connection.`,
 }
 
 /** The refusal words a script prints, as sentences. */
@@ -341,6 +388,7 @@ export class RemoteMachines {
       return {
         did: m.did, label: m.label, target: `${m.user}@${m.host}:${m.port}`, checked: lastCheck.ok, lastCheck,
         helperVersion: m.helper.version, system: `${m.os} ${ARCH_NAME[m.arch] ?? m.arch}`, inUse: this.deps.inUse(m.did),
+        ...(persistentNote(m) ? { persistentNote: persistentNote(m) } : {}),
       }
     })
   }
@@ -549,7 +597,9 @@ export class RemoteMachines {
     }
     // 4. version and self-test, through the launcher
     const checked = await this.selfCheck(target, did, install, helper)
-    // 5. at a Check, the session folders whose holder is gone (2.1.3-beta.18 section 3.2)
+    // 5. at a Check, the session folders whose holder is gone (2.1.3-beta.18
+    // section 3.2), and the earlier builds' helper folders while no holder
+    // has a record (2.1.3-beta.19)
     if (checked.ok && !a.first) await this.sweep(target, did, install, helper)
     const record: RemoteMachineRecord = {
       did, host: target.host, port: target.port, user: target.user, label: a.label, addedAt: a.addedAt,
@@ -558,6 +608,7 @@ export class RemoteMachines {
       lang: typeof lang === 'string' && LANG_RE.test(lang) ? lang : null,
       helper: { path: helper.path, version: helper.version, sha256: helper.sha256, folder: helper.folder },
       check: { at: this.now(), ok: checked.ok, ...(checked.ok ? {} : { detail: checked.why }) },
+      logind: readLogind(probe.values.get('logind-kill'), probe.values.get('logind-exclude'), probe.values.get('linger')),
     }
     if (checked.ok && !claudePath) record.check = { at: record.check.at, ok: false, detail: 'Claude Code was not found on it (not on the PATH of its login shell)' }
     return { ok: true, record, installed: !inPlace }
@@ -578,13 +629,18 @@ export class RemoteMachines {
 
   /** The session folders a tab's end could not remove (its link was down, the
    *  app quit first): each one whose holder is gone goes, after list mode
-   *  removes the records of holders that are gone. One log line; a failure
-   *  changes nothing of the Check's answer. */
+   *  removes the records of holders that are gone. From 2.1.3-beta.19 the
+   *  earlier builds' helper folders go first, when no holder has a record
+   *  (scripts.ts SWEEP_EARLIER_HELPERS); this build's folder never. One log
+   *  line for each count above 0; a failure changes nothing of the Check's
+   *  answer. */
   private async sweep(target: SshTarget, did: string, install: string, helper: BundledLinuxHelper): Promise<void> {
     const nonce = newNonce()
     const r = await runScript(this.deps.runner, target, 'sweep', [nonce, did, install, helper.folder, helper.sha256]).catch((): ExecResult => ({ code: null, stdout: '', stderr: '', timedOut: false }))
     const failed = sshFailure(r)
     const res = failed ? null : readScriptResult(r.stdout, nonce)
+    const helpers = res?.values.get('helpers') ?? ''
+    if (/^[1-9][0-9]{0,5}$/.test(helpers)) this.deps.log(`[remote-helper] ${target.host}: removed ${helpers} earlier helper folder(s), as no session is held there`)
     const swept = res?.values.get('swept') ?? ''
     if (!res?.ok) this.deps.log(`[remote-helper] ${target.host}: its session folders were not checked (${failed ?? (res ? refusalText(res.refused) : 'no answer')})`)
     else if (/^[1-9][0-9]{0,5}$/.test(swept)) this.deps.log(`[remote-helper] ${target.host}: removed ${swept} session folder(s) whose holder is gone`)

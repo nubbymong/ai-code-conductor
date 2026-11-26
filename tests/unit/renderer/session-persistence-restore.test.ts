@@ -9,7 +9,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import type { SessionState, SavedSession, DetachedRemote } from '../../../src/shared/types'
 import { IDENTITY_COLOR_KEYS } from '../../../src/shared/identity-colors'
 
-const save = vi.fn(async () => true)
+// Typed with its argument, so a case reads what was written (save.mock.calls[n][0]).
+const save = vi.fn(async (_state: SessionState) => true)
 // aicc_planning#104: the save-time resume-target lookup, set per case (null:
 // the lookup finds nothing).
 type Target = { uuid: string; cwd: string } | null
@@ -25,7 +26,7 @@ const tabsToldRestored: Array<{ tabs: Array<{ id: string; cwd?: string }>; inSto
   pty: { tabsRestored: (tabs: Array<{ id: string; cwd?: string }>) => { tabsToldRestored.push({ tabs: structuredClone(tabs), inStore: useSessionStore.getState().sessions.map((s) => s.id) }) } },
 }
 
-const { restoreSavedSessions, buildSessionState, buildSessionStateWithResumeTargets } = await import('../../../src/renderer/session-persistence')
+const { restoreSavedSessions, buildSessionState, buildSessionStateWithResumeTargets, hydrateDetachedFromSavedState } = await import('../../../src/renderer/session-persistence')
 const { useSessionStore } = await import('../../../src/renderer/stores/sessionStore')
 const { useAccountGateStore } = await import('../../../src/renderer/stores/accountGateStore')
 const { useSettingsStore, DEFAULT_SETTINGS } = await import('../../../src/renderer/stores/settingsStore')
@@ -386,5 +387,74 @@ describe('restoreSavedSessions -- the conversation target main carries (aicc_pla
     lookup = async () => T2
     expect(targetOf(await buildSessionStateWithResumeTargets(), 'rune')).toEqual(T2)
     expect(targetOf(buildSessionState(), 'rune')).toEqual(none)
+  })
+})
+
+describe('restoreSavedSessions -- a tab the session helper keeps (2.1.3-beta.19 section 1.2)', () => {
+  const DID = '0123456789abcdef0123456789abcdef'
+  const kept = (id: string): SavedSession => ({ ...ssh(id, {}), remoteVia: 'helper', remoteDid: DID })
+
+  it('comes back marked, and the tmux probe leaves it out: never flagged sshRemoteReattachGone, whatever the probe answers', async () => {
+    const d = deps()
+    // The host confirms every session it is asked about gone.
+    d.probeGoneSessions.mockImplementation(async (asked) => asked.map((x) => x.id))
+    await restoreSavedSessions(state([kept('ssh-kept'), ssh('ssh-tmux', {})]), ref(), d)
+    await vi.waitFor(() => expect(d.probeGoneSessions).toHaveBeenCalledTimes(1))
+    expect(d.probeGoneSessions).toHaveBeenCalledWith([{ id: 'ssh-tmux', configId: 'cfg-1' }])
+    await vi.waitFor(() => expect(useSessionStore.getState().getSession('ssh-tmux')?.sshRemoteReattachGone).toBe(true))
+    expect(useSessionStore.getState().getSession('ssh-kept')?.sshRemoteReattachGone).toBeUndefined()
+    expect(useSessionStore.getState().getSession('ssh-kept')).toMatchObject({ remoteVia: 'helper', remoteDid: DID })
+  })
+
+  it('with only kept tabs restored, the tmux probe does not run at all', async () => {
+    const d = deps()
+    await restoreSavedSessions(state([kept('ssh-kept-a'), kept('ssh-kept-b')]), ref(), d)
+    await new Promise((r) => setTimeout(r, 0))
+    expect(d.probeGoneSessions).not.toHaveBeenCalled()
+  })
+
+  it('the restored set written at once keeps the mark', async () => {
+    await restoreSavedSessions(state([kept('ssh-kept')]), ref(), deps())
+    expect(buildSessionState().sessions[0]).toMatchObject({ id: 'ssh-kept', remoteVia: 'helper', remoteDid: DID })
+  })
+
+  // A tab left running whose session the helper keeps is a 'helper' entry with
+  // its device id. It used to be dropped at hydrate, and the restore's own save
+  // then wrote the registry back without it: after a quit, no waiting session,
+  // no resume card, and no Re-attach on the Machines row.
+  const leftKept: DetachedRemote = { ...remote, sessionId: 'left-kept', mux: 'helper', did: DID }
+
+  it('a left-running helper entry is still in the store after the restore, and in the state the restore saves back', async () => {
+    await restoreSavedSessions(state([saved({ id: 'a' })], { detachedRemotes: [remote, leftKept] }), ref(), deps())
+    expect(useDetachedRemotesStore.getState().entries).toEqual([remote, leftKept])
+    expect(save).toHaveBeenCalledTimes(1)
+    const written = save.mock.calls[0][0] as unknown as SessionState
+    expect(written.detachedRemotes).toEqual([remote, leftKept])
+  })
+
+  // D13: a restored unmarked SSH Persistent tab not on screen spawns only once
+  // shown, so main is told its config at the restore, to keep a new tab of
+  // that config off the helper meanwhile.
+  it('main is told the config of each restored SSH Persistent tab with no mark (tmuxConfigId), and of no other tab', async () => {
+    tabsToldRestored.length = 0
+    await restoreSavedSessions(state([
+      ssh('ssh-tmux', {}, 'cfg0tmux'),
+      { ...ssh('ssh-kept', {}, 'cfg0kept'), remoteVia: 'helper', remoteDid: DID },
+      ssh('ssh-plain', { detachable: false }, 'cfg0plain'),
+      ssh('ssh-noconfig', {}, null),
+      saved({ id: 'local-a', configId: 'cfg0local' }),
+    ]), ref(), deps())
+    expect(tabsToldRestored[0].tabs).toEqual([
+      { id: 'ssh-tmux', tmuxConfigId: 'cfg0tmux' },
+      { id: 'ssh-kept' },
+      { id: 'ssh-plain' },
+      { id: 'ssh-noconfig' },
+      { id: 'local-a', cwd: 'C:/work' },
+    ])
+  })
+
+  it('a left-running helper entry survives the boot path that restores no tabs (hydrateDetachedFromSavedState)', () => {
+    expect(hydrateDetachedFromSavedState({ detachedRemotes: [leftKept] })).toBe(1)
+    expect(useDetachedRemotesStore.getState().entries).toEqual([leftKept])
   })
 })

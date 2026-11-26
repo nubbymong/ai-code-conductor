@@ -220,6 +220,8 @@ export interface ElectronAPI {
       cwd?: string
       cols?: number
       rows?: number
+      /** 2.1.3-beta.19: the tab's session is kept by the session helper (its saved mark). */
+      remoteVia?: 'helper'
       ssh?: {
         host: string
         port: number
@@ -316,8 +318,10 @@ export interface ElectronAPI {
      *  starting now: a session an update kept for a restored tab not on
      *  screen waits for that tab until it is shown (B1d: each restored tab
      *  with a local agent tab's configured folder, for the canvas roots its
-     *  kept session is served with meanwhile). */
-    tabsRestored: (tabs: Array<{ id: string; cwd?: string }>) => void
+     *  kept session is served with meanwhile; 2.1.3-beta.19: a restored SSH
+     *  Persistent tab with no mark with its config id, which main then reads
+     *  as under tmux before the tab spawns). */
+    tabsRestored: (tabs: Array<{ id: string; cwd?: string; tmuxConfigId?: string }>) => void
     tabShown: (sessionId: string) => void
     onData: (sessionId: string, callback: (data: string) => void) => () => void
     onExit: (sessionId: string, callback: (exitCode: number) => void) => () => void
@@ -333,8 +337,8 @@ export interface ElectronAPI {
     runPostCommand: (sessionId: string) => Promise<void>
     launchClaude: (sessionId: string) => Promise<void | import('../../shared/providers').ProviderLaunchRefused>
     skip: (sessionId: string) => Promise<void>
-    getState: (sessionId: string) => Promise<{ state: string; info?: string }>
-    onFlowState: (sessionId: string, callback: (msg: { state: string; info?: string }) => void) => () => void
+    getState: (sessionId: string) => Promise<{ state: string; info?: string; kept?: { did: string } }>
+    onFlowState: (sessionId: string, callback: (msg: { state: string; info?: string; kept?: { did: string } }) => void) => () => void
     onSessionInfo: (sessionId: string, callback: (msg: { tmuxPersistent?: boolean; remoteAccount?: string }) => void) => () => void
     /** END a remote session. A bare id for a LIVE one (main holds its spawn
      *  target); `{ sessionId, configId }` for a DETACHED one, which main
@@ -826,6 +830,10 @@ export interface ElectronAPI {
       add: (token: string) => Promise<import('../../shared/remote-machines').RemoteActionResult>
       check: (did: string) => Promise<import('../../shared/remote-machines').RemoteActionResult>
       remove: (did: string) => Promise<import('../../shared/remote-machines').RemoteActionResult>
+      /** 2.1.3-beta.19 section 1.2: the sessions the helper keeps, End of one on a card, End of a tab's own. */
+      sessions: () => Promise<import('../../shared/remote-machines').RemoteSessionsState>
+      endSession: (did: string, sid: string) => Promise<import('../../shared/remote-machines').RemoteActionResult>
+      endTab: (sessionId: string, did?: string) => Promise<import('../../shared/remote-machines').RemoteActionResult>
     }
   }
   cli: {

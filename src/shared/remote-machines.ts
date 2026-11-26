@@ -15,9 +15,11 @@ export const REMOTE_SWITCH_TEXT =
   'Preview, off by default. A Claude Code tab whose saved config\'s Connection is SSH (not SSH Persistent), with key sign-in, no post-connect command and no container, to a Linux machine you added and checked on the Machines page, runs through the session helper there: nothing is typed into the host\'s shell to set it up or start it, and a dropped connection comes back within two minutes with what you missed. Its status line, its hooks (the attention mark, the Watchdog) and the Conductor\'s tools (the Agent Canvas, the browser, and image paste and Snap) go through the helper too, and no address or token of this computer is sent to the host: the session\'s own settings go in ~/.aicc on that machine and are removed when you close or restart the tab; ones left by quitting the app or by a dropped connection are removed at the next Check on the Machines page. Its status line does not show the account, the per-model weekly limits or extra usage yet. Prompt buttons and broadcast type into it as into any Claude Code tab. Closing the tab or quitting ends its session, and Restart on such a tab starts a new conversation (type /resume there to pick the earlier one up). Every other SSH tab, and every tab while this is off, runs the usual way. Applies to tabs opened after the change.'
 
 /** Which tabs go through the helper, and why another does not (plan finding
- *  5): the machine's card says it in one line while the switch is on. */
+ *  5; 2.1.3-beta.19 section 1.2: SSH Persistent too, until it is ended): the
+ *  machine's card says it while the switch is on, with what the preview
+ *  still lacks. */
 export const REMOTE_ROUTE_NOTE =
-  'A Claude Code tab whose saved config has Connection set to SSH, with key sign-in, no post-connect command and no container, runs through the session helper here. SSH Persistent (the default for a config that never chose), a post-connect command, a container or a password sign-in keep the usual SSH path.'
+  'A Claude Code tab whose saved config uses key sign-in, no post-connect command and no container runs through the session helper here. With Connection set to SSH it ends when you close it. SSH Persistent (the default for a config that never chose) runs until you end it: close it and choose Leave running, quit the app, or lose the connection, and it waits here for you. A config with a session still under tmux keeps the usual SSH path until that session is ended. Not through the helper yet: password sign-in, containers, post-connect commands, macOS and Windows machines, and Codex.'
 
 /** A machine's card reads not checked, with this line, while the machine
  *  holds another session helper file than this build of the app carries
@@ -46,6 +48,37 @@ export interface RemoteMachineView {
   system: string
   /** How many open tabs go through the helper there now. */
   inUse: number
+  /** Why SSH Persistent tabs keep the usual SSH path there (2.1.3-beta.19
+   *  section 1.2: its logind ends a user's processes at logout, or its last
+   *  check did not read that); absent where they may go through the helper. */
+  persistentNote?: string
+}
+
+/** One session the session helper keeps on a machine, as list mode reads it
+ *  (2.1.3-beta.19 section 1.2), for the machine's card. */
+export interface RemoteKeptSession {
+  /** The helper's session id: what End takes. */
+  sid: string
+  /** The app session id its holder was started for (the holder's label),
+   *  or null when the label names none. */
+  appSessionId: string | null
+  /** Kept until it is ended (an SSH Persistent tab's); false: its away
+   *  clock ends it two minutes after its tab goes (a plain SSH tab's). */
+  untilEnded: boolean
+  /** A tab is attached to it now. */
+  attached: boolean
+  /** Its program still runs. */
+  running: boolean
+}
+
+/** One machine's sessions, from one list exec, or why they were not read. */
+export type RemoteMachineSessions =
+  | { did: string; ok: true; sessions: RemoteKeptSession[] }
+  | { did: string; ok: false; why: string }
+
+/** Every added machine's sessions (the Machines page, at start-up and when it opens). */
+export interface RemoteSessionsState {
+  machines: RemoteMachineSessions[]
 }
 
 /** A saved SSH config the Add list offers, and whether it can be added. */

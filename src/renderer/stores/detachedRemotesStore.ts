@@ -1,9 +1,12 @@
 import { create } from 'zustand'
 import type { DetachedRemote } from '../../shared/types'
+import { REMOTE_DID_RE } from '../../shared/remote-machines'
 
 /**
  * SSH Persistent — "Resume a Running Session" (Phase 1): the in-memory registry
- * of remote tmux sessions the user LEFT RUNNING.
+ * of remote sessions the user LEFT RUNNING: tmux ones on the usual SSH path, and
+ * (2.1.3-beta.19 section 1.2) ones the session helper keeps until they are
+ * ended, each with its machine's device id (`mux: 'helper'`, `did`).
  *
  * Hydrated from session-state.json on restore (App.tsx) and folded back into it
  * by buildSessionState (session-persistence.ts), so an entry survives an app
@@ -48,7 +51,9 @@ function isUsableDetachedRemote(value: unknown): value is DetachedRemote {
     typeof e.host === 'string' && e.host.length > 0 &&
     typeof e.username === 'string' && e.username.length > 0 &&
     typeof e.remotePath === 'string' &&
-    (e.mux === 'tmux' || e.mux === 'psmux') &&
+    // A 'helper' entry is nothing without the machine whose helper keeps it.
+    (e.mux === 'tmux' || e.mux === 'psmux' || (e.mux === 'helper' && typeof e.did === 'string' && REMOTE_DID_RE.test(e.did))) &&
+    (e.did === undefined || typeof e.did === 'string') &&
     typeof e.label === 'string' &&
     typeof e.detachedAt === 'number' && Number.isFinite(e.detachedAt) &&
     (e.configId === undefined || typeof e.configId === 'string') &&

@@ -50,7 +50,7 @@ export const IPC = {
   PTY_EXIT: 'pty:exit',   // Suffixed with :sessionId at runtime
   PTY_REPLAY_AT_HOLDER_SIZE: 'pty:replayAtHolderSize',   // main -> renderer, suffixed with :sessionId at runtime: ReplayAtHolderSize, just before that replay on pty:data (aicc_planning#392)
   PTY_INTEGRITY_REPORT: 'pty:integrityReport',   // renderer -> main per-session byte/resize report
-  PTY_TABS_RESTORED: 'pty:tabsRestored',   // renderer -> main: { id, cwd? }[], the tabs Resume restored, a local agent tab with its folder (aicc_planning#423)
+  PTY_TABS_RESTORED: 'pty:tabsRestored',   // renderer -> main: { id, cwd?, tmuxConfigId? }[], the tabs Resume restored, a local agent tab with its folder (aicc_planning#423), an unmarked SSH Persistent tab with its config id (2.1.3-beta.19)
   PTY_TAB_SHOWN: 'pty:tabShown',   // renderer -> main: string, a tab shown and starting now (aicc_planning#423)
 
   // SSH connection-flow controller (manual mode user-gated stages).
@@ -257,6 +257,12 @@ export const IPC = {
   MACHINES_REMOTE_ADD: 'machines:remote:add',          // (token: string) -> RemoteActionResult
   MACHINES_REMOTE_CHECK: 'machines:remote:check',      // (did: string) -> RemoteActionResult
   MACHINES_REMOTE_REMOVE: 'machines:remote:remove',    // (did: string) -> RemoteActionResult
+  // 2.1.3-beta.19 section 1.2: the sessions the helper keeps (one list exec per machine), End of one by its
+  // machine and helper session id (the card), and End of a tab's own kept session by its app session id
+  // (the close question, or a session left running).
+  MACHINES_REMOTE_SESSIONS: 'machines:remote:sessions',      // -> RemoteSessionsState
+  MACHINES_REMOTE_END_SESSION: 'machines:remote:endSession', // (did: string, sid: string) -> RemoteActionResult
+  MACHINES_REMOTE_END_TAB: 'machines:remote:endTab',         // (sessionId: string, did?: string) -> RemoteActionResult
 
   // CLI
   CLI_CHECK: 'cli:check',

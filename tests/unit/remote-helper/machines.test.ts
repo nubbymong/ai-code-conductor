@@ -17,7 +17,7 @@ import { RemoteMachines, MACHINE_TEXT, RECORDS_UNREAD, fileStore, type MachineSt
 import type { BundledLinuxHelper } from '../../../src/main/remote-helper/manifest'
 import { routeSshTab, ROUTE_WHY } from '../../../src/main/remote-helper/route'
 import { REMOTE_OTHER_HELPER } from '../../../src/shared/remote-machines'
-import { FakeSsh, result, type ExecCall, type FakeAnswer } from './fake-ssh'
+import { DeviceTree, FakeSsh, result, type ExecCall, type FakeAnswer } from './fake-ssh'
 
 const SHA = 'a'.repeat(64)
 const HELPER: BundledLinuxHelper = { arch: 'x86_64', path: 'linux-x64/aicc-helper', file: '/x/linux-x64/aicc-helper', version: '0.1.0', sha256: SHA, size: 4096, folder: `0.1.0-${SHA.slice(0, 12)}` }
@@ -319,6 +319,20 @@ describe('remote machines: Remove', () => {
     expect(m.list()).toHaveLength(1)
   })
 
+  // 2.1.3-beta.19 section 1.2: closing the tab lets go of a session kept until
+  // it is ended, and no clock ends it, so the refusal names End on the card.
+  it('is refused while the helper there lists a session kept until it is ended, naming End on the card', async () => {
+    const { ssh, m, did } = await added()
+    ssh.host = linuxHost({ list: (c) => ({ stdout: `AICC-HASH ${c.values[0]} ok ${SHA}\n{"v":1,"sessions":[{"v":1,"session":"rm0123456789abcdef0123456789abcd","label":"tab","pid":4242,"endpoint":"/tmp/aicc-1000/rm0123456789abcdef0123456789abcd-0123456789abcdef.sock","nonce":"${'c'.repeat(32)}","helper":"0.1.0","started":1,"away":null,"lifetime":"until-ended","attached":false,"child":"running","code":null}],"removed":0,"skipped":0}\n` }) })
+    expect(await m.remove(did)).toEqual({
+      ok: false,
+      message: 'The session helper on this machine still holds a session. End it first: a session kept until it is ended is listed on this machine\'s card, with End; a plain SSH tab\'s ends when you close the tab, or two minutes after a lost connection.',
+    })
+    expect(ssh.scripts()).toEqual(['list'])
+    expect(m.list()).toHaveLength(1)
+    expect(MACHINE_TEXT.holds(2)).toBe('The session helper on this machine still holds 2 sessions. End them first: a session kept until it is ended is listed on this machine\'s card, with End; a plain SSH tab\'s ends when you close the tab, or two minutes after a lost connection.')
+  })
+
   it('lists, then runs the one removal script with this machine\'s device id and this install\'s id, and forgets it', async () => {
     const { ssh, m, did } = await added()
     const r = await m.remove(did)
@@ -431,6 +445,66 @@ describe('remote machines: Check', () => {
     expect(ssh.calls[5].values.slice(3)).toEqual([NEW.folder, NEW_SHA])
     expect(m.list()[0].helper).toEqual({ path: 'linux-x64/aicc-helper', version: '0.2.0', sha256: NEW_SHA, folder: NEW.folder })
     expect(m.views(() => NEW_SHA)[0]).toMatchObject({ checked: true, helperVersion: '0.2.0' })
+  })
+
+  // 2.1.3-beta.19 (the host lines after an update: helper/0.1.0-<earlier hash>
+  // stayed beside this build's folder until Remove). A kept session runs the
+  // helper its launch named, so the earlier folder goes only at a Check that
+  // finds no holder's record on the machine.
+  it('after an update, the earlier build\'s helper folder stays while a holder has a record and goes at a Check that finds none; this build\'s folder, sessions/, store/ and the owner stay; Remove still takes everything', async () => {
+    const NEW_SHA = 'c'.repeat(64)
+    const NEW: BundledLinuxHelper = { ...HELPER, version: '0.2.0', sha256: NEW_SHA, folder: `0.2.0-${NEW_SHA.slice(0, 12)}` }
+    let bundled = HELPER
+    const ssh = new FakeSsh(linuxHost())
+    const m = machines(ssh, memoryStore(), () => bundled)
+    const q = await m.prepare(CONFIGS, 'cfg-key')
+    if (!q.ok) throw new Error(q.message)
+    await m.add(q.token)
+    const did = m.list()[0].did
+    const SID = 'rm0123456789abcdef0123456789abcd'
+    // The machine: this install's marker, the first build's helper, a kept
+    // session (its record and its folder), the store's lock, a staging folder
+    // an upload left, and a folder of a name no helper folder has.
+    const tree = new DeviceTree(['owner', `helper/${HELPER.folder}/aicc-helper`, 'helper/.new-0123abcd/aicc-helper', 'helper/notes_1/', 'sessions/', `sessions/${SID}/settings.json`, 'store/', 'store/.lock', `store/${SID}.json`])
+    const updated = linuxHost({
+      install: (c) => ({ stdout: result(c.values[0], { hash: NEW_SHA }) }),
+      version: (c) => ({ stdout: `AICC-HASH ${c.values[0]} ok ${NEW_SHA}\naicc-helper 0.2.0\n` }),
+    })
+    ssh.host = { answer: (c) => tree.answer(c) ?? updated.answer(c) }
+    bundled = NEW
+    // The update's Check, while the kept session's holder has its record: both folders stay.
+    ssh.calls.length = 0
+    logs = []
+    expect((await m.check(did)).ok).toBe(true)
+    expect(ssh.scripts()).toEqual(['probe', 'install', 'commit', 'version', 'selftest', 'sweep'])
+    expect(tree.names('helper')).toEqual(['.new-0123abcd', HELPER.folder, NEW.folder, 'notes_1'])
+    expect(tree.names(`sessions/${SID}`)).toEqual(['settings.json'])
+    expect(logs.filter((l) => l.includes('helper folder'))).toEqual([])
+    // Its holder ends (list mode drops its record); the next Check finds none.
+    tree.paths.delete(`store/${SID}.json`)
+    ssh.calls.length = 0
+    logs = []
+    expect((await m.check(did)).ok).toBe(true)
+    expect(ssh.scripts()).toEqual(['probe', 'version', 'selftest', 'sweep'])
+    expect(ssh.calls[3].values.slice(3)).toEqual([NEW.folder, NEW_SHA])
+    expect(tree.names('helper')).toEqual(['.new-0123abcd', NEW.folder, 'notes_1'])
+    expect(tree.names('')).toEqual(['helper', 'owner', 'sessions', 'store'])
+    expect(tree.names('store')).toEqual(['.lock'])
+    expect(logs.filter((l) => l.includes('folder'))).toEqual([
+      '[remote-helper] rocky.lan: removed 1 earlier helper folder(s), as no session is held there',
+      '[remote-helper] rocky.lan: removed 1 session folder(s) whose holder is gone',
+    ])
+    // A Check with nothing earlier left removes nothing and logs no helper line.
+    logs = []
+    expect((await m.check(did)).ok).toBe(true)
+    expect(tree.names('helper')).toEqual(['.new-0123abcd', NEW.folder, 'notes_1'])
+    expect(logs.filter((l) => l.includes('folder'))).toEqual([])
+    // Remove still takes everything.
+    ssh.calls.length = 0
+    expect((await m.remove(did)).ok).toBe(true)
+    expect(ssh.scripts()).toEqual(['list', 'remove'])
+    expect([...tree.paths]).toEqual([])
+    expect(m.list()).toEqual([])
   })
 
   it('a home folder that changed stops the machine until it is added again', async () => {

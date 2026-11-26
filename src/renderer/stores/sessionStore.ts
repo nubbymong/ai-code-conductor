@@ -215,6 +215,14 @@ export interface Session {
    *  never persisted (not in session-persistence's allowlist); cleared on dismiss
    *  / Start new. undefined = not gone (or not yet/ever probed). */
   sshRemoteReattachGone?: boolean
+  /** 2.1.3-beta.19 section 1.2: 'helper' once main says this SSH Persistent
+   *  tab's session is kept by the session helper on its machine until it is
+   *  ended (its flow state's `kept`), with that machine's device id. Saved
+   *  (session-persistence.ts), so a restore or a crash keeps it: such a tab
+   *  never starts on the usual SSH path, its close asks Leave running or End,
+   *  and the restore's tmux probe leaves it out. */
+  remoteVia?: 'helper'
+  remoteDid?: string
   /** SSH tmux enhancement (item 10): the Claude account the REMOTE session is
    *  signed in as (oauthAccount.emailAddress from the remote ~/.claude.json),
    *  read off the nonce'd setup sentinel. DESCRIPTOR ONLY -- never a
@@ -447,6 +455,9 @@ export const STRUCTURAL_SESSION_FIELDS = [
   // change, so the header kept promising "SSH-Persistent" while the
   // self-subscribing sidebar showed the truth.
   'sshTmuxPersistent',
+  // 2.1.3-beta.19: the persistence chip names the helper for a kept tab, and the
+  // mark lands on one late tick (the start's flow state), as the fields above.
+  'remoteVia',
 ] as const
 
 /**

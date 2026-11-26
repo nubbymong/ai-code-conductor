@@ -12,7 +12,7 @@ import { resolveAccountName, resolveAccountNameByEmail, middleTruncateEmail } fr
 import { chipColourKeyForEmail } from '../utils/accountChip'
 import { useProviderAccountsStore } from '../stores/providerAccountsStore'
 import { BrandMark } from './BrandMark'
-import { ContainerGlyph, containerBadgeTitle, ProviderMark } from './sidebar/Badges'
+import { ContainerGlyph, containerBadgeTitle, PERSISTENT_TITLE, ProviderMark } from './sidebar/Badges'
 import { containerNameOf, resolveTransportBadge } from './sidebar/transportBadge'
 import { useRestartSession } from '../hooks/useRestartSession'
 import { RowMenu } from './ui/RowMenu'
@@ -310,8 +310,9 @@ function SessionGitHubPill({ session }: { session: Session }) {
  * and the separate persistent / not-persistent pills. THREE kinds now (phase 6,
  * the same truth table the sidebar badges read): the teal container mark when
  * claude runs a hop deeper inside a container, green "SSH-Persistent" when the
- * session is tmux-wrapped (a dropped connection stays alive and reconnecting
- * resumes it in place), neutral "SSH" otherwise. The kind slot is exclusive --
+ * session is tmux-wrapped or kept by the session helper until it is ended (a
+ * dropped connection leaves it running and reconnecting comes back to it; the
+ * title says which), neutral "SSH" otherwise. The kind slot is exclusive --
  * a container session is never tmux-wrapped (main forces persistence off), so
  * the old separate container pill beside an "SSH" one said one thing twice.
  * The address (user@host) reads inline in EVERY kind, at a glance, not only on
@@ -322,10 +323,11 @@ function SshConnectionPill({ session }: { session: Session }) {
   // A tab through the session helper on its machine (text smoke #39): its own title.
   const throughHelper = useThroughHelper(session.id, session.sessionType === 'ssh' && !!ssh)
   if (!ssh) return null
+  const keptByHelper = session.remoteVia === 'helper'
   const kind = resolveTransportBadge({
     isSsh: session.sessionType === 'ssh',
     ssh,
-    persistent: session.sshTmuxPersistent === true,
+    persistent: session.sshTmuxPersistent === true || keptByHelper,
   })
   const container = kind === 'container' ? containerNameOf(ssh) : undefined
   const persistent = kind === 'persistent'
@@ -338,7 +340,9 @@ function SshConnectionPill({ session }: { session: Session }) {
         kind === 'container'
           ? containerBadgeTitle(container)
           : persistent
-            ? 'This remote session runs inside tmux — a dropped connection stays alive and reconnecting resumes it in place.'
+            ? keptByHelper
+              ? PERSISTENT_TITLE.helper
+              : 'This remote session runs inside tmux — a dropped connection stays alive and reconnecting resumes it in place.'
             : throughHelper
               ? 'Remote session over SSH through the session helper on its machine: a dropped connection comes back within two minutes with what you missed; closing the tab ends it.'
               : 'Remote session over SSH; a dropped connection ends it and reconnecting resumes via --continue.'

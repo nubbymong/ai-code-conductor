@@ -24,8 +24,8 @@
  * text with no quote or backslash cannot write JSON, so these results are
  * words, not section 6's JSON; the helper's own commands (the self-test)
  * still print theirs. The launcher scripts (version, selftest, list, hold,
- * bridge, sweep and, from 2.1.3-beta.19, field) hash the helper's file before
- * every start and print section 13's
+ * bridge, sweep and, from 2.1.3-beta.19, field and sessions) hash the helper's
+ * file before every start and print section 13's
  * `AICC-HASH <nonce> <state> <hex>` line, and run the helper only on `ok`.
  *
  * Layout (section 1): `~/.aicc/<did>/owner` (the marker),
@@ -33,11 +33,18 @@
  * `~/.aicc/<did>/store` (the holders' records; the helper makes it 0700). A
  * new file is written to `helper/.new-<nonce>/` first and moved into its
  * folder only once the app has compared its hash with the installer's
- * manifest (commit), or removed (discard). From 2.1.3-beta.18 (plan section
+ * manifest (commit), or removed (discard). An earlier build's folder is not
+ * removed by the commit that installs this build's (a kept session runs the
+ * helper its launch named): a Check's `sweep` removes it once no holder has a
+ * record in the store, at that same Check when none is held then, else at a
+ * later one (2.1.3-beta.19). From 2.1.3-beta.18 (plan section
  * 3.2) `~/.aicc/<did>/sessions/<sid>/` (0700) holds one session's own files,
  * which its provider's launch gives (`files`): written before its launch,
  * removed at its end (`unsession`), and by the next Check once its holder is
- * gone (`sweep`). Nothing else is written outside `~/.aicc`.
+ * gone (`sweep`). From 2.1.3-beta.19 (section 6.3) the list of kept sessions
+ * the app takes at start-up and when the Machines page opens (`sessions`)
+ * removes them too, so a folder a quit leaves goes at the next start.
+ * Nothing else is written outside `~/.aicc`.
  */
 import { APP_PTY_ID_RE, HELPER_FOLDER_RE, NONCE_RE, SHA256_RE, SID_RE } from '../session-helper/protocol'
 
@@ -52,6 +59,13 @@ export const LABEL_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/
 
 /** The away clock a holder of a remote session gets (section 15's default). */
 export const REMOTE_AWAY_SECS = 120
+
+/** A holder's kind, as the hold script takes it (2.1.3-beta.19 section 1.2):
+ *  `away`, a plain SSH tab's, with the away clock (REMOTE_AWAY_SECS); or
+ *  `until-ended`, an SSH Persistent tab's, which no clock ends: it ends with
+ *  its CLI, at term.end, or with the host (section 1.1's `--until-ended`). */
+export type HolderKind = 'away' | 'until-ended'
+export const HOLDER_KIND_RE = /^(away|until-ended)$/
 
 // ── the parts ────────────────────────────────────────────────────────────────
 
@@ -119,6 +133,40 @@ const DELETE_DEVICE_FOLDER = [
  *  empty, once it is found a real folder of the user's, mode 0700. */
 const DELETE_SESSION_FOLDER = [
   'rm -rf -- "${A:?}/sessions/${X:?}" || no cannot-remove',
+]
+
+/** The sweep's guarded delete (2.1.3-beta.18 section 3.2; `sessions` and
+ *  `sweep` both end with it, 2.1.3-beta.19 section 6.3): every session folder
+ *  whose holder has no record goes, each a real folder of the user's, mode
+ *  0700, by a name of the session id's own characters; one whose holder runs
+ *  is kept. One copy, so the rule of which folder may go is set in one place. */
+const SWEEP_GONE_FOLDERS = [
+  'S=$A/sessions; c=0',
+  '[ -d "$S" ] && [ ! -L "$S" ] || { r swept 0; r end ok; exit 0; }',
+  'pv "$S" || no sessions-folder-not-private',
+  'for X in $(ls -A "$S"); do case "$X" in *[!A-Za-z0-9_-]*|"") continue;; esac; [ -e "$A/store/$X.json" ] && continue; pv "$S/$X" || continue; rm -rf -- "${A:?}/sessions/${X:?}" && c=$((c+1)); done',
+  'r swept $c',
+  'r end ok',
+]
+
+/** At a Check only (`sweep`, 2.1.3-beta.19): the helper folders of earlier
+ *  builds (`helper/<version>-<hash12>/`, which the commit that installed this
+ *  build's left in place) go, but only while the store holds no holder's
+ *  record, nor one being written. A kept session's CLI runs the helper by the
+ *  path its launch wrote (its status line, hooks and MCP server), so while any
+ *  holder has a record none goes, and a later Check takes them; list mode has
+ *  just removed the records of holders that are gone. Never this build's
+ *  folder (`F`), a staging `.new-*` folder, a link, or a name of other
+ *  characters, and nothing outside `helper/`; a folder holding more than its
+ *  helper file loses that file and stays. The scripts run with globbing off
+ *  (`set -f`), so the store is read by `ls`, and a store that is not a real
+ *  folder, or does not read, counts as holding a record. */
+const SWEEP_EARLIER_HELPERS = [
+  'h=0; k=0; l=',
+  'if [ -e "$A/store" ] || [ -L "$A/store" ]; then { [ -d "$A/store" ] && [ ! -L "$A/store" ] && l=$(ls -A "$A/store"); } || k=1; fi',
+  'for R in $l; do case "$R" in *.json|*.json.*) k=1;; esac; done',
+  'if [ "$k" = 0 ]; then for V in $(ls -A "$A/helper"); do [ "$V" = "$F" ] && continue; case "$V" in .*|*[!0-9A-Za-z.-]*|"") continue;; esac; [ -d "$A/helper/$V" ] && [ ! -L "$A/helper/$V" ] || continue; rm -f -- "${A:?}/helper/${V:?}/aicc-helper"; rmdir -- "${A:?}/helper/${V:?}" 2>/dev/null && h=$((h+1)); done; fi',
+  'r helpers $h',
 ]
 
 /** A file a launch reads on the host, at most (2.1.3-beta.18 section 3.2). */
@@ -219,6 +267,18 @@ export const FILES_LAYOUT_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}:(0|[1-9][0-9]{0
 
 const join = (parts: readonly string[]): string => parts.join('; ')
 
+/** 2.1.3-beta.19 section 1.2: the probe's three reads of whether logind ends
+ *  the user's processes at logout, as helper/probes/p3-p6-linux.cjs reads it
+ *  (the manager's KillUserProcesses and KillExcludeUsers, the user's Linger);
+ *  each prints '' when it does not read (no loginctl, or no logind). They
+ *  only ask (show-session, show-user): no script sets a linger or ends a
+ *  session, and no other script names loginctl. */
+export const LOGIND_READS: readonly string[] = [
+  'r logind-kill "$(loginctl show-session -p KillUserProcesses --value </dev/null 2>/dev/null)"',
+  'r logind-exclude "$(loginctl show-session -p KillExcludeUsers --value </dev/null 2>/dev/null)"',
+  'r linger "$(loginctl show-user "$(id -un)" -p Linger --value </dev/null 2>/dev/null)"',
+]
+
 // ── the scripts ──────────────────────────────────────────────────────────────
 
 /** What a script takes, in order, after its nonce, device id and install id. */
@@ -251,6 +311,7 @@ const SPECS = {
       'r shell "$S"',
       'r path "$PATH"',
       'r lang "${LANG:-}"',
+      ...LOGIND_READS,
       'r claude "$(command -v claude 2>/dev/null)"',
       // `$` alone, so the PATH and the lookup expand in the login shell, not here.
       'v="$"',
@@ -360,10 +421,18 @@ const SPECS = {
   },
   /** `aicc-helper hold --detach` for one session (section 15), through the
    *  launcher: it prints the holder's record, or exits 3 when a holder for
-   *  that session runs already. */
+   *  that session runs already. `K`, the holder's kind (2.1.3-beta.19 section
+   *  1.2, HolderKind): `away` gives today's away clock, `until-ended` none. */
   hold: {
-    values: [FOLDER, HASH, SESSION, { name: 'label', re: LABEL_RE }],
-    text: join(['N=$1; D=$2; I=$3; F=$4; H=$5; X=$6; L=$7', ...CHECKS, ...LAUNCH, `exec "$P" hold --store "$A/store" --session "$X" --label "$L" --away ${REMOTE_AWAY_SECS} --detach`]),
+    values: [FOLDER, HASH, SESSION, { name: 'label', re: LABEL_RE }, { name: 'holder kind', re: HOLDER_KIND_RE }],
+    text: join([
+      'N=$1; D=$2; I=$3; F=$4; H=$5; X=$6; L=$7; K=$8',
+      ...CHECKS,
+      'case "$K" in away|until-ended) ;; *) no bad-kind;; esac',
+      ...LAUNCH,
+      'if [ "$K" = until-ended ]; then exec "$P" hold --store "$A/store" --session "$X" --label "$L" --until-ended --detach; fi',
+      `exec "$P" hold --store "$A/store" --session "$X" --label "$L" --away ${REMOTE_AWAY_SECS} --detach`,
+    ]),
   },
   /** `aicc-helper bridge` for one session (A1's mode), through the launcher:
    *  after the hash line, standard input and output are the holder's
@@ -462,9 +531,28 @@ const SPECS = {
       'r end ok',
     ]),
   },
+  /** 2.1.3-beta.19 section 1.2 with 6.3: the sessions the helper keeps (list
+   *  mode's one line, printed as it is: the app reads it), then, as `sweep`
+   *  does, every session folder whose holder has no record goes, and one whose
+   *  holder runs is kept. The list the app takes at start-up and when the
+   *  Machines page opens: a folder a quit left goes at the next start. Through
+   *  the launcher. */
+  sessions: {
+    values: [FOLDER, HASH],
+    text: join([
+      'N=$1; D=$2; I=$3; F=$4; H=$5',
+      ...CHECKS,
+      ...LAUNCH,
+      '"$P" list --store "$A/store" </dev/null || exit $?',
+      ...SWEEP_GONE_FOLDERS,
+    ]),
+  },
   /** 2.1.3-beta.18 section 3.2, at Check: list mode first (it removes the
-   *  records of holders that are gone), then every session folder whose
-   *  holder has no record goes. Through the launcher. */
+   *  records of holders that are gone), then, from 2.1.3-beta.19, the earlier
+   *  builds' helper folders when no holder has a record
+   *  (SWEEP_EARLIER_HELPERS), then every session folder whose holder has no
+   *  record goes. Through the launcher. Only a Check runs it: the start-up
+   *  list (`sessions`) never removes a helper folder. */
   sweep: {
     values: [FOLDER, HASH],
     text: join([
@@ -472,17 +560,17 @@ const SPECS = {
       ...CHECKS,
       ...LAUNCH,
       '"$P" list --store "$A/store" </dev/null >/dev/null 2>&1',
-      'S=$A/sessions; c=0',
-      '[ -d "$S" ] && [ ! -L "$S" ] || { r swept 0; r end ok; exit 0; }',
-      'pv "$S" || no sessions-folder-not-private',
-      'for X in $(ls -A "$S"); do case "$X" in *[!A-Za-z0-9_-]*|"") continue;; esac; [ -e "$A/store/$X.json" ] && continue; pv "$S/$X" || continue; rm -rf -- "${A:?}/sessions/${X:?}" && c=$((c+1)); done',
-      'r swept $c',
-      'r end ok',
+      ...SWEEP_EARLIER_HELPERS,
+      ...SWEEP_GONE_FOLDERS,
     ]),
   },
 } satisfies Record<string, ScriptSpec>
 
 export type ScriptName = keyof typeof SPECS
+
+/** Every fixed script's name, from the one table (the tests' lists read it,
+ *  so a script added there cannot be left out of them). */
+export const SCRIPT_NAMES = Object.keys(SPECS) as ScriptName[]
 
 /** A script's text holds no single quote, backslash or line end (section 4). */
 export function scriptTextProblem(text: string): string | null {
