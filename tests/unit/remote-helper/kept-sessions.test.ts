@@ -382,16 +382,84 @@ describe('an SSH Persistent tab through the session helper, kept until it is end
     const spec = remoteLaunchSpec(MACHINE, { program: MACHINE.claudePath!, args: [], env: {} }, {}, '~', 100, 30)
     const pty = new RemoteHelperPty({ appPtyId: id, machine: MACHINE, installId: INSTALL, runner: ssh2, spec, kind: 'until-ended', log: (m) => logs.push(m), reconnectDelaysMs: [10, 10], sleep: (ms) => new Promise((r) => setTimeout(r, ms)) })
     let exit: number | null = null
-    pty.onExit((e) => { exit = e.exitCode })
+    let shown = ''
+    let shownAtExit = ''
+    pty.onData((d) => { shown += d })
+    pty.onExit((e) => { exit = e.exitCode; shownAtExit = shown })
     await until('attached', () => holder.attached !== null)
     // The link drops on the holder's side.
     holder.attached!.close()
     await until('given up', () => exit !== null)
+    // The tab says, before its exit, that its session runs on and how to reach it.
+    expect(shownAtExit).toContain('[This tab is no longer attached to its session on pi.lan (the link stayed down, or another tab took it). The session runs on there, kept by the session helper: Restart attaches to it again, and the Machines page lists it, with End.]')
     // Time for any end it might send over the link that is back.
     await until('the link back', () => bridges >= 5, 3000).catch(() => { /* no try made: no end either */ })
     await new Promise((r) => setTimeout(r, 100))
     expect(holder.endsAsked).toBe(0)
     expect(holder.ended).toBe(false)
+  })
+
+  // End asked while the tab's start still finds its holder (the tab is in
+  // openTabs already): the answer waits for that start. It used to answer ok
+  // with nothing ended, so the close dropped the left-running entry while the
+  // kept session ran on.
+  it('End asked before the hold answers, the host then not answering: not ended, and the answer says so', async () => {
+    const id = 'kept-end-early-down'
+    forgetRemoteHelperTab(id)
+    plugIn(signals().deps)
+    let ending: ReturnType<typeof endRemoteTab> | undefined
+    ssh.host = {
+      answer: (c) => {
+        if (c.script === 'reads') return { stdout: result(c.values[0], {}) }
+        if (c.script === 'hold') ending ??= endRemoteTab(id)
+        return { code: 255, stderr: 'ssh: connect to host pi.lan port 22: Connection timed out' }
+      },
+    }
+    remoteHelperPty(win, id, { ssh: PERSISTENT }, 100, 30)
+    await until('End asked', () => ending !== undefined)
+    const r = await ending!
+    expect(r.ok).toBe(false)
+    expect(r.message).toContain('The session was not ended: pi.lan could not be reached')
+    expect(ssh.scripts()).not.toContain('unsession')
+    forgetRemoteHelperTab(id)
+  })
+
+  it('End asked before the hold answers, a kept holder listed: one term.end, the unsession exec, then ok', async () => {
+    const id = 'kept-end-early-up'
+    forgetRemoteHelperTab(id)
+    const s = signals()
+    plugIn(s.deps)
+    const holder = holderFor(id)
+    holder.launch = { t: 'term.launch' }
+    holder.child = 'running'
+    host(holder)
+    const base = ssh.host.answer
+    // What had been done when End answered.
+    let ending: Promise<{ ok: boolean; endsAsked: number; ended: boolean; unsession: string | undefined; hookStateGone: boolean }> | undefined
+    ssh.host = {
+      ...ssh.host,
+      answer: (c) => {
+        if (c.script === 'hold') {
+          ending ??= endRemoteTab(id).then((r) => ({
+            ok: r.ok, endsAsked: holder.endsAsked, ended: holder.ended,
+            unsession: ssh.calls.find((x) => x.script === 'unsession')?.values.at(-1), hookStateGone: s.ended.includes(id),
+          }))
+        }
+        return base(c)
+      },
+    }
+    remoteHelperPty(win, id, { ssh: PERSISTENT }, 100, 30)
+    await until('End asked', () => ending !== undefined)
+    // Answered once the end was done, not before.
+    expect(await ending!).toEqual({ ok: true, endsAsked: 1, ended: true, unsession: remoteSessionId(id), hookStateGone: true })
+    // Nothing else reaches for it (no terminal is made for a start End
+    // already ends: End's own link is the one bridge), and nothing is launched.
+    await new Promise((res) => setTimeout(res, 50))
+    expect(holder.endsAsked).toBe(1)
+    expect(ssh.scripts().filter((x) => x === 'bridge')).toHaveLength(1)
+    expect(ssh.scripts().filter((x) => x === 'unsession')).toHaveLength(1)
+    expect(launches(holder)).toBe(0)
+    forgetRemoteHelperTab(id)
   })
 })
 

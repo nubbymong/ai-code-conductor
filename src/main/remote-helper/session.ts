@@ -432,7 +432,8 @@ export class RemoteDriver implements HelperPtyDriver {
   }
 
   /** The session's own folder goes (the `unsession` exec), once its holder
-   *  ended. Never throws; one that is not removed is the next Check's. */
+   *  ended. Never throws; one that is not removed goes at the next start's
+   *  list of kept sessions, or at the next Check. */
   private async removeFolder(sid: string): Promise<void> {
     const host = this.o.machine.host
     try {
@@ -440,9 +441,9 @@ export class RemoteDriver implements HelperPtyDriver {
       const r = await runScript(this.o.runner, this.target, 'unsession', [nonce, this.o.machine.did, this.o.installId, sid])
       const failed = sshFailure(r)
       const result = failed ? null : readScriptResult(r.stdout, nonce)
-      if (!result?.ok) this.o.log(`[remote-helper] ${sid}: the session's folder on ${host} was not removed (${failed ?? (result ? refusalText(result.refused) : 'no answer')}); the next Check removes it`)
+      if (!result?.ok) this.o.log(`[remote-helper] ${sid}: the session's folder on ${host} was not removed (${failed ?? (result ? refusalText(result.refused) : 'no answer')}); the next start's list of kept sessions, or the next Check, removes it`)
     } catch (err) {
-      this.o.log(`[remote-helper] ${sid}: the session's folder on ${host} was not removed (${(err as Error).message}); the next Check removes it`)
+      this.o.log(`[remote-helper] ${sid}: the session's folder on ${host} was not removed (${(err as Error).message}); the next start's list of kept sessions, or the next Check, removes it`)
     }
   }
 
@@ -721,6 +722,9 @@ export class RemoteHelperPty implements IPty {
   private early: { input: Array<string | Buffer>; bytes: number; size?: { cols: number; rows: number }; killed: boolean } = { input: [], bytes: 0, killed: false }
   /** The holder the start found, once it is known. */
   private held: HeldStart | undefined
+  /** The start's find of its holder, settled: the holder it found, or why it
+   *  failed. End asked before it settles waits for it (end()). */
+  private readonly preparing: Promise<HeldStart | Error>
   private exited = false
 
   constructor(private readonly o: RemoteSessionOptions) {
@@ -730,22 +734,27 @@ export class RemoteHelperPty implements IPty {
     const problem = checkLaunch(o.spec, 'unix')
     if (problem) throw new Error(`the launch cannot go through the session helper: ${problem.why}`)
     this.endedP = new Promise<void>((r) => { this.resolveEnded = r })
-    void this.driver.prepare(this.sid, o.appPtyId, () => this.early.killed && !this.driver.endAsked)
-      .then((held) => this.started(held), (err: Error) => this.startFailed(err))
+    const prepared = this.driver.prepare(this.sid, o.appPtyId, () => this.early.killed && !this.driver.endAsked)
+    this.preparing = prepared.then((held) => held, (err: unknown) => (err instanceof Error ? err : new Error(String(err))))
+    void prepared.then((held) => this.started(held), (err: Error) => this.startFailed(err))
   }
 
   /** The holder was found: the HelperPty that shows it is made. */
   private started(held: HeldStart): void {
     this.held = held
-    // Closed while it started: a kept session stays as it was; a holder this
-    // start made (no program in it yet) is ended through its HelperPty.
-    if (this.early.killed && held.attach && !this.driver.endAsked) { this.finishEarly(0); return }
+    // Closed while it started: with End asked, end() ends the holder itself,
+    // whatever its kind, so no terminal is made for it; else a kept session
+    // stays as it was, and a holder this start made (no program in it yet)
+    // is ended through its HelperPty.
+    if (this.early.killed && (this.driver.endAsked || held.attach)) { this.finishEarly(0); return }
     this.driver.setPrepared({ record: held.record })
     this.make(held.attach ? held.record : undefined)
   }
 
   private startFailed(err: Error): void {
-    if (this.early.killed && !this.driver.endAsked) { this.finishEarly(0); return }
+    // Closed while it started: nothing to show (End asked meanwhile answers
+    // this error: end()).
+    if (this.early.killed) { this.finishEarly(0); return }
     this.driver.setPrepared({ error: err })
     this.make(undefined)
   }
@@ -756,8 +765,13 @@ export class RemoteHelperPty implements IPty {
     inner.onData((d) => this.data.fire(d))
     inner.onExit((e) => {
       // A link that stayed down past every try: a kept session is let go of,
-      // never ended (the Restart attaches again).
-      if (e.exitCode === LOST_EXIT_CODE) this.driver.keptLost = true
+      // never ended (the Restart attaches again), and the tab says so.
+      if (e.exitCode === LOST_EXIT_CODE) {
+        this.driver.keptLost = true
+        if (this.untilEnded && !this.driver.endAsked) {
+          this.data.fire(`\r\n[This tab is no longer attached to its session on ${this.o.machine.host} (the link stayed down, or another tab took it). The session runs on there, kept by the session helper: Restart attaches to it again, and the Machines page lists it, with End.]\r\n`)
+        }
+      }
       this.exited = true
       this.exit.fire(e)
     })
@@ -826,7 +840,9 @@ export class RemoteHelperPty implements IPty {
    * End (2.1.3-beta.19 section 1.2): the session is ended, whatever its kind,
    * by term.end over a link of its own, then its folder goes; the terminal
    * is let go of first, so nothing else is sent to the holder. Answers what
-   * the end did.
+   * the end did. Asked while the start still finds its holder, it waits for
+   * that start: the holder it found is ended here; a start that failed ended
+   * nothing, and the answer says why (a session kept there runs on).
    */
   async end(): Promise<{ ok: true } | { ok: false; why: string }> {
     this.driver.endAsked = true
@@ -839,7 +855,9 @@ export class RemoteHelperPty implements IPty {
     } else {
       this.early.killed = true
     }
-    if (!record) return { ok: true }
-    return this.driver.endKept(record)
+    if (record) return this.driver.endKept(record)
+    const found = await this.preparing
+    if (found instanceof Error) return { ok: false, why: found.message }
+    return this.driver.endKept(found.record)
   }
 }
