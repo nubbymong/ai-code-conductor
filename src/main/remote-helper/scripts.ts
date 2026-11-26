@@ -203,8 +203,8 @@ const ONE_READ = [
 ]
 
 /** 2.1.3-beta.19 section 3 (aicc_planning#434): a field read's file, a path
- *  under the host user's home folder: plain names joined by `/`, none of
- *  them `.` or `..`. */
+ *  relative to the host user's home folder: plain names joined by `/`, none
+ *  of them `.` or `..`. */
 export const FIELD_FILE_RE = /^(?!\.\.?(?:\/|$))[A-Za-z0-9._-]{1,128}(?:\/(?!\.\.?(?:\/|$))[A-Za-z0-9._-]{1,128}){0,15}$/
 /** A field read's key: plain names joined by `.`. */
 export const FIELD_KEY_RE = /^[A-Za-z0-9_-]{1,64}(?:\.[A-Za-z0-9_-]{1,64}){0,15}$/
@@ -401,13 +401,18 @@ const SPECS = {
   /** 2.1.3-beta.19 section 3 (aicc_planning#434): `aicc-helper field` for
    *  one string field of one file under the home folder (`Y`, the field
    *  read's file; `Z`, its dotted key), through the launcher: after the hash
-   *  line the helper prints that string or nothing, and exits 0. The path is
-   *  built from the home folder's real path here, never from a value a host
-   *  reported; file and key come from the tab's provider package. Writes
-   *  nothing. */
+   *  line the helper prints that string or nothing, and exits 0. File and
+   *  key come from the tab's provider package, never from a value a host
+   *  reported. `Y` goes as it is, relative to the home folder: the field
+   *  mode joins it to `$HOME` (helper/src/field.rs path_under), the same
+   *  `$HOME` the checks above found a real folder of the user's. Never
+   *  `$h/$Y`: `$h` is the home folder's real path, which differs from
+   *  `$HOME` where a folder above it is a link (/home a link to /data/home),
+   *  and the field mode takes an absolute path only inside `$HOME` as
+   *  written, so the read would print nothing there. Writes nothing. */
   field: {
     values: [FOLDER, HASH, { name: 'field file', re: FIELD_FILE_RE }, { name: 'field key', re: FIELD_KEY_RE }],
-    text: join(['N=$1; D=$2; I=$3; F=$4; H=$5; Y=$6; Z=$7', ...CHECKS, ...LAUNCH, 'exec "$P" field --file "$h/$Y" --key "$Z" </dev/null']),
+    text: join(['N=$1; D=$2; I=$3; F=$4; H=$5; Y=$6; Z=$7', ...CHECKS, ...LAUNCH, 'exec "$P" field --file "$Y" --key "$Z" </dev/null']),
   },
   /** 2.1.3-beta.18 section 3.2: one session's own files, from standard input,
    *  into `sessions/<X>/` (made 0700 when missing), before its launch. `L` is

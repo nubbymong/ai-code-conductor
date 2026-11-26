@@ -1,15 +1,23 @@
-## 2026-11-26 -- remote: a helper tab names its account, and shows weekly limits and extra usage where this computer holds the account (3a)
+## 2026-11-26 -- remote: a helper tab names its account, and shows weekly limits and extra usage where this computer holds the account (3a, 3b)
 
 2.1.3-beta.19 section 3 (aicc_planning#434), step 3a: built against section
 1.1's field mode contract with a fake field mode in the unit tests; step 3b
-merges 1.1's frozen head and its real field mode.
+merged 1.1's frozen head (feat/helper-until-ended-holder at d0c31e35) and
+its real field mode.
 
 The label. Every start of a tab through the session helper, launch or attach,
 runs one function, remote-helper/host-reads.ts readHostForStart: the
 provider's host reads (the `reads` exec, as in beta.18) and, beside them, one
 exec of the helper's field mode (the new `field` script: `aicc-helper field
---file "$h/<file>" --key <key>`, through the launcher, the helper's hash
-checked first). File and key come from the provider package
+--file <file> --key <key>`, through the launcher, the helper's hash checked
+first). The file goes relative to the home folder, as the field mode takes
+it (helper/src/field.rs path_under joins it to `$HOME`); 3a's `"$h/<file>"`
+(the home's real path) printed nothing where a folder above the home is a
+link, since the field mode takes an absolute path only inside `$HOME` as
+written. The device check (tests/live/remote-helper-device.live.ts, the
+remote-helper-e2e job) reads a file of its own through the real helper: the
+value, a link followed, a missing key or file, and a `$HOME` reached through
+a link above it. File and key come from the provider package
 (ProviderRemoteLaunch.accountField; Claude Code: `oauthAccount.emailAddress` of
 `~/.claude.json`, the field the usual SSH status line reads). The answer is
 the host's and untrusted: one line of at most 1 KiB with no control character,

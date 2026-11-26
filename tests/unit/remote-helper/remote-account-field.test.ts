@@ -10,8 +10,9 @@
  * compiled into the script.
  *
  * - the `field` script runs that mode through the launcher (the helper's hash
- *   checked first), on a path built from the home folder's real path, and
- *   takes only plain names and a dotted key;
+ *   checked first), on the file's path relative to the home folder, as the
+ *   field mode takes it (section 1.1's helper/src/field.rs path_under joins
+ *   it to `$HOME`), and takes only plain names and a dotted key;
  * - readHostForStart, the one function every start runs: the host reads and
  *   the account field side by side; the account goes to the tab; a read that
  *   does not answer is "not read" and never fails the start; a host read
@@ -83,10 +84,14 @@ beforeEach(() => {
 })
 
 describe('the field script (the helper\'s field mode, through the launcher)', () => {
-  it('runs the field mode on a path built from the home folder\'s real path, after the helper\'s hash check, and writes nothing', () => {
+  it('runs the field mode on the file\'s path relative to the home folder, after the helper\'s hash check, and writes nothing', () => {
     const t = scriptText('field')
     expect(t).not.toMatch(/['\\\r\n]/)
-    expect(t).toContain('exec "$P" field --file "$h/$Y" --key "$Z" </dev/null')
+    expect(t).toContain('exec "$P" field --file "$Y" --key "$Z" </dev/null')
+    // Never the home folder's real path ($h): where a folder above the home is
+    // a link it is not $HOME as written, and the field mode takes an absolute
+    // path only inside $HOME, so it would print nothing (field.rs path_under).
+    expect(t).not.toContain('--file "$h/')
     expect(t.indexOf('echo "AICC-HASH $N ok $x"')).toBeLessThan(t.indexOf('exec "$P" field'))
     expect(t).toContain('[ "$x" = "$H" ] || { echo "AICC-HASH $N mismatch $x"; exit 97; }')
     expect(t).toContain('mk || no not-this-install')
