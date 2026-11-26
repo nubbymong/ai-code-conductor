@@ -310,8 +310,9 @@ function SessionGitHubPill({ session }: { session: Session }) {
  * and the separate persistent / not-persistent pills. THREE kinds now (phase 6,
  * the same truth table the sidebar badges read): the teal container mark when
  * claude runs a hop deeper inside a container, green "SSH-Persistent" when the
- * session is tmux-wrapped (a dropped connection stays alive and reconnecting
- * resumes it in place), neutral "SSH" otherwise. The kind slot is exclusive --
+ * session is tmux-wrapped or kept by the session helper until it is ended (a
+ * dropped connection leaves it running and reconnecting comes back to it; the
+ * title says which), neutral "SSH" otherwise. The kind slot is exclusive --
  * a container session is never tmux-wrapped (main forces persistence off), so
  * the old separate container pill beside an "SSH" one said one thing twice.
  * The address (user@host) reads inline in EVERY kind, at a glance, not only on
@@ -320,10 +321,11 @@ function SessionGitHubPill({ session }: { session: Session }) {
 function SshConnectionPill({ session }: { session: Session }) {
   const ssh = session.sshConfig
   if (!ssh) return null
+  const keptByHelper = session.remoteVia === 'helper'
   const kind = resolveTransportBadge({
     isSsh: session.sessionType === 'ssh',
     ssh,
-    persistent: session.sshTmuxPersistent === true,
+    persistent: session.sshTmuxPersistent === true || keptByHelper,
   })
   const container = kind === 'container' ? containerNameOf(ssh) : undefined
   const persistent = kind === 'persistent'
@@ -336,7 +338,9 @@ function SshConnectionPill({ session }: { session: Session }) {
         kind === 'container'
           ? containerBadgeTitle(container)
           : persistent
-            ? 'This remote session runs inside tmux — a dropped connection stays alive and reconnecting resumes it in place.'
+            ? keptByHelper
+              ? 'This remote session is kept by the session helper on its machine until you end it: a dropped connection or a quit leaves it running, and reconnecting attaches to it again.'
+              : 'This remote session runs inside tmux — a dropped connection stays alive and reconnecting resumes it in place.'
             : 'Remote session over SSH; a dropped connection ends it and reconnecting resumes via --continue.'
       }
       testId="ssh-connection-pill"

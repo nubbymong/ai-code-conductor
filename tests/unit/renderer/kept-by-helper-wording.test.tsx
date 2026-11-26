@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
 /**
  * The words a tab kept by the session helper gets (plan 2.1.3-beta.19 section
- * 1.2): the close question and the persistence chip name the helper, not
- * tmux; a tmux tab's keep their words.
+ * 1.2): the close question, the persistence chip and the header's connection
+ * pill name the helper, not tmux; a tmux tab's keep their words.
  */
 import React from 'react'
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
@@ -21,8 +21,13 @@ vi.mock('../../../src/renderer/stores/sshCloseStore', () => ({
   leaveRunningAndClose: () => {},
 }))
 
+vi.mock('../../../src/renderer/hooks/useThemeController', () => ({ useResolvedTheme: () => 'dark' }))
+vi.mock('../../../src/renderer/hooks/useTypography', () => ({ useRegionTypography: () => ({}) }))
+
 const { default: SshCloseDialog } = await import('../../../src/renderer/components/SshCloseDialog')
 const { TransportBadge } = await import('../../../src/renderer/components/sidebar/Badges')
+const { default: SessionHeader } = await import('../../../src/renderer/components/SessionHeader')
+import type { Session } from '../../../src/renderer/stores/sessionStore'
 
 let container: HTMLDivElement
 let root: Root
@@ -59,5 +64,43 @@ describe('the persistence chip', () => {
     const titles = [...container.querySelectorAll('[data-testid="ssh-persistent-badge"]')].map((b) => b.getAttribute('title'))
     expect(titles[0]).toContain('kept by the session helper on its machine until you end it')
     expect(titles[1]).toContain('tmux')
+  })
+})
+
+describe("the header's connection pill", () => {
+  const sshTab = (over: Partial<Session>): Session => ({
+    id: 'kept-h', label: 'Pi', workingDirectory: '~/work', model: 'sonnet', color: '#ff0000', status: 'idle',
+    createdAt: 0, sessionType: 'ssh', configId: 'cfg-pi', provider: 'claude',
+    sshConfig: { host: 'pi.lan', port: 22, username: 'nick', remotePath: '~/work' },
+    ...over,
+  }) as Session
+  const pill = () => container.querySelector('[data-testid="ssh-connection-pill"]')
+  beforeEach(() => {
+    // The header's auth pills read this on mount; answer it so it never errors.
+    ;(globalThis as any).window.electronAPI = {
+      accountWeb: { status: vi.fn(async () => ({ ok: true, cli: { authenticated: false }, web: { status: 'none' } })) },
+    }
+  })
+
+  it('for a kept tab reads SSH-Persistent and names the helper, not tmux', () => {
+    act(() => { root.render(<SessionHeader session={sshTab({ remoteVia: 'helper' })} />) })
+    expect(pill()?.textContent).toContain('SSH-Persistent')
+    expect(pill()?.textContent).toContain('nick@pi.lan')
+    const title = pill()?.getAttribute('title') ?? ''
+    expect(title).toContain('kept by the session helper on its machine until you end it')
+    expect(title).toContain('a dropped connection or a quit leaves it running')
+    expect(title).not.toContain('tmux')
+    expect(title).not.toContain('ends it and')
+    expect(container.querySelector('[data-testid="ssh-persistent-pill"]')).not.toBeNull()
+  })
+
+  it('for a tmux tab keeps the tmux title, and a plain SSH tab keeps SSH', () => {
+    act(() => { root.render(<SessionHeader session={sshTab({ sshTmuxPersistent: true })} />) })
+    expect(pill()?.textContent).toContain('SSH-Persistent')
+    expect(pill()?.getAttribute('title')).toContain('runs inside tmux')
+    expect(pill()?.getAttribute('title')).not.toContain('session helper')
+    act(() => { root.render(<SessionHeader session={sshTab({})} />) })
+    expect(pill()?.textContent).not.toContain('SSH-Persistent')
+    expect(pill()?.getAttribute('title')).toContain('a dropped connection ends it')
   })
 })

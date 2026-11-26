@@ -20,7 +20,8 @@
  *   when the link comes back for the end; an attach again that finds no
  *   holder says the session is over there;
  * - a Restart launches with --continue only when the tab has a conversation
- *   to come back to (it showed its session), never after a first start that failed;
+ *   to come back to (it showed its session, or a restore brought it back),
+ *   never after a first start that failed;
  * - the two record shapes read, and every other mix is refused.
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
@@ -30,7 +31,7 @@ import * as path from 'path'
 import type { RemoteStatusLine, SessionProvider } from '../../../src/main/providers/types'
 import { registerProvider } from '../../../src/main/providers'
 import { claudeRemoteLaunch } from '../../../src/main/providers/claude/remote-launch'
-import { endRemoteSession, endRemoteTab, forgetRemoteHelperTab, listRemoteSessions, remoteHelperFlowState, remoteHelperLiveness, remoteHelperPty, setRemoteHelperDeps, type RemoteSignalDeps } from '../../../src/main/remote-helper'
+import { endRemoteSession, endRemoteTab, forgetRemoteHelperTab, listRemoteSessions, noteRestoredRemoteTabs, remoteHelperFlowState, remoteHelperLiveness, remoteHelperPty, setRemoteHelperDeps, type RemoteSignalDeps } from '../../../src/main/remote-helper'
 import { RemoteHelperPty, remoteLaunchSpec, remoteSessionId } from '../../../src/main/remote-helper/session'
 import { untilEnded } from '../../../src/main/remote-helper/kept'
 import { readListing, readRecord } from '../../../src/main/session-helper/protocol'
@@ -506,6 +507,23 @@ describe('an SSH Persistent tab through the session helper, kept until it is end
     remoteHelperPty(win, id, { ssh: PERSISTENT }, 100, 30)
     await until('the new launch', () => second.launch !== null && second.attached !== null)
     expect((second.launch as { argv: string[] }).argv).toContain('--continue')
+    await endRemoteTab(id)
+    forgetRemoteHelperTab(id)
+  })
+
+  // A tab the app restores after its kept session ended (the machine
+  // restarted while the app was closed) has a conversation to come back to,
+  // though it never showed its session this run.
+  it('a restored marked tab whose kept session is gone launches again on its conversation: --continue', async () => {
+    const id = 'kept-restored-gone'
+    forgetRemoteHelperTab(id)
+    plugIn(signals().deps)
+    noteRestoredRemoteTabs([{ id }])
+    const holder = holderFor(id)
+    host(holder)
+    remoteHelperPty(win, id, { ssh: PERSISTENT, remoteVia: 'helper' }, 100, 30)
+    await until('the launch', () => holder.launch !== null && holder.attached !== null)
+    expect((holder.launch as { argv: string[] }).argv).toContain('--continue')
     await endRemoteTab(id)
     forgetRemoteHelperTab(id)
   })
