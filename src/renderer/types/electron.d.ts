@@ -708,7 +708,6 @@ export interface ElectronAPI {
     captureRectangle: () => Promise<string | null>
     captureWindow: (sourceId: string) => Promise<string | null>
     listWindows: () => Promise<Array<{ id: string; name: string; thumbnail: string }>>
-    listRecent: () => Promise<Array<{ filename: string; path: string; timestamp: number; thumbnail: string }>>
     cleanup: (maxAgeDays: number) => Promise<number>
   }
   webview: {

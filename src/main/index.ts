@@ -1146,7 +1146,7 @@ if (!gotTheLock) {
     void endRecordedVisionBrowser()
 
     // Start the Conductor MCP server unconditionally so the fetch_host_screenshot
-    // tool is available for image transfer (snap, storyboard, clipboard paste)
+    // tool is available for image transfer (Snap, image paste)
     // in BOTH local and SSH sessions, regardless of whether browser vision is enabled.
     // P7.2: resolve port from build mode (dev binds 19433, prod 19333) so dev
     // + prod can coexist on the same machine without EADDRINUSE. The

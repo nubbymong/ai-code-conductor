@@ -60,7 +60,7 @@
  * the session signals module (attention, the canvas turn boundary, the
  * Watchdog), each tool stream to the tool host as the tab's session, with no
  * credential, the tool set an SSH tab has (the image fetch tool an image
- * paste, Snap and the screenshot storyboard use included). What such a tab
+ * paste and Snap use included). What such a tab
  * does not have in this preview: the account label, the per-model weekly
  * buckets and extra usage on its status line (the helper reads no credential
  * and calls no network). Prompt buttons and broadcast type into it by the

@@ -4,7 +4,6 @@ import {
   captureRectangle,
   captureWindow,
   listWindows,
-  listRecentScreenshots,
   cleanupOldScreenshots,
   saveSnapPicture,
 } from '../screenshot-capture'
@@ -48,10 +47,6 @@ export function registerScreenshotHandlers(getWindow: () => BrowserWindow | null
 
   ipcMain.handle('screenshot:listWindows', async () => {
     return listWindows(getWindow())
-  })
-
-  ipcMain.handle('screenshot:listRecent', async () => {
-    return listRecentScreenshots()
   })
 
   ipcMain.handle('screenshot:cleanup', async (_event, maxAgeDays: number) => {

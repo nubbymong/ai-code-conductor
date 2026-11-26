@@ -291,18 +291,16 @@ describe('remote session: the end', () => {
 })
 
 describe('remote session: an image paste', () => {
-  it('the app\'s own image request and the storyboard\'s line are typed as they are: the tab has the image fetch tool (2.1.3-beta.18 section 3.2)', async () => {
+  it('the app\'s own image request is typed as it is: the tab has the image fetch tool (2.1.3-beta.18 section 3.2)', async () => {
     const sid = remoteSessionId('tab-image')
     const holder = new FakeHolder(sid, 'tab-image', store)
     const ssh = new FakeSsh({ answer: (c) => (c.script === 'hold' ? holdAnswer(c, holder) : { code: 1 }), bridge: () => holder.connect() })
     const t = tab(ssh, 'tab-image')
     await until('attached', () => holder.attached !== null)
-    // The app's own request, as the renderer writes it (the same function), and the storyboard's line.
+    // The app's own request, as the renderer writes it (the same function).
     const request = `${composeFetchHostScreenshotPrompt('a.png', 'I just pasted an image, please view it.')}\r`
-    const frames = 'Frames (use mcp__conductor__fetch_host_screenshot for each):\n'
     t.pty.write(request)
-    t.pty.write(frames)
-    await until('both typed', () => Buffer.concat(holder.input).toString() === request + frames)
+    await until('typed', () => Buffer.concat(holder.input).toString() === request)
     expect(t.out()).not.toMatch(/nothing was typed/)
     t.pty.kill()
     await t.pty.ended
