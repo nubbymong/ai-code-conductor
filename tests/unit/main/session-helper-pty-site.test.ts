@@ -8,10 +8,13 @@ import { resolve } from 'path'
 // starts go through spawnAgentPty, with the arguments they had; SSH sessions
 // keep node-pty's spawn as they are. This reads the source, so a second call
 // of either, one moved out of its branch, or a change to what they are
-// given, fails here.
+// given, fails here. 2.1.3-beta.19 section 2: the Codex start moved, unchanged,
+// into the Codex package's local launch group (providers/codex/local-launch.ts),
+// which the PTY manager hands its spawnAgentPty (localLaunchCore).
 
 const ROOT = resolve(__dirname, '../../..')
 const src = readFileSync(resolve(ROOT, 'src/main/pty-manager.ts'), 'utf8').replace(/\r\n/g, '\n')
+const codexLaunch = readFileSync(resolve(ROOT, 'src/main/providers/codex/local-launch.ts'), 'utf8').replace(/\r\n/g, '\n')
 
 describe('pty-manager: where the session helper can start a terminal', () => {
   it('spawnPlainPty is called once, in the shell-only branch, with the elevated flag from both places it can come from and the renderer\'s plain mark', () => {
@@ -62,16 +65,19 @@ describe('pty-manager: where the session helper can start a terminal', () => {
   })
 
   it('both agent session starts go through spawnAgentPty, with the same arguments as before; the SSH start stays node-pty\'s own', () => {
-    // 2.1.3-beta.7 (plan section A3): the two agent spawns, and only they.
-    expect(src.match(/spawnAgentPty\(/g)).toHaveLength(2)
+    // 2.1.3-beta.7 (plan section A3): the two agent spawns, and only they:
+    // Claude Code's here, Codex's in its package, through this one's spawn.
+    expect(src.match(/spawnAgentPty\(/g)).toHaveLength(1)
+    expect(codexLaunch.match(/spawnAgentPty\(/g)).toHaveLength(1)
+    expect(src).toMatch(/const localLaunchCore: LocalLaunchCore = \{[^}]*\bspawnAgentPty,/)
     expect(src.match(/pty\.spawn\(spawnCmd/g)).toBeNull()
     // The Claude Code start: the shell its launch line is typed into, as before.
     expect(src).toMatch(/claudeLaunchedAt = Date\.now\(\)\n\s+ptyProcess = spawnAgentPty\(\{ sessionId, kind: 'claude' \}, spawnCmd, spawnArgs, \{\n\s+name: 'xterm-256color',\n\s+cols,\n\s+rows,\n\s+cwd: claudeCwd,\n\s+env: finalSpawnEnv,\n\s+useConpty: true\n\s+\}\)/)
     // The Codex start: its exact command line when there is one, and the
     // ConPTY choice's own options (spawnCodexPty is called with the bundled
     // options, then the system ones when node-pty throws).
-    expect(src).toContain("      const spawnCodexPty = (conptyOptions: ConptySpawnOptions): pty.IPty => spawnAgentPty({ sessionId, kind: 'codex' }, spawnCmd, commandLine ?? spawnArgs, {\n        name: 'xterm-256color',\n        cols,\n        rows,\n        cwd: codexCwd,\n        env: spawnEnv,\n        ...conptyOptions,\n      })\n")
-    expect(src.match(/spawnCodexPty\(/g)).toHaveLength(2)
+    expect(codexLaunch).toContain("    const spawnCodexPty = (conptyOptions: ConptySpawnOptions): pty.IPty => spawnAgentPty({ sessionId, kind: 'codex' }, spawnCmd, commandLine ?? spawnArgs, {\n      name: 'xterm-256color',\n      cols,\n      rows,\n      cwd: codexCwd,\n      env: spawnEnv,\n      ...conptyOptions,\n    })\n")
+    expect(codexLaunch.match(/spawnCodexPty\(/g)).toHaveLength(2)
     // SSH: node-pty's own, untouched.
     expect(src.match(/pty\.spawn\(sshBin/g)).toHaveLength(1)
     expect(src).toContain("import { spawnAgentPty, spawnPlainPty, whenHeldKnown } from './session-helper/manager'\n")

@@ -135,7 +135,7 @@ vi.mock('../../../src/main/conductor-mcp-server', () => ({
   unregisterCodexReviewSession: () => {},
   releaseMcpSessionProvider: (sid: string) => { h.released.push(sid) },
 }))
-vi.mock('../../../src/main/providers', () => ({
+vi.mock('../../../src/main/providers', async () => (await import('../../helpers/provider-package-parts')).withProviderPackageParts(await (() => ({
   providerCapability: () => ({ enabled: true }),
   tryGetProvider: (id: string) => ({
     statusPostUrl: (sid: string, _r: unknown, port: number) => `http://127.0.0.1:${port}/status?cccSessionId=${sid}&token=new-run`,
@@ -155,7 +155,8 @@ vi.mock('../../../src/main/providers', () => ({
     } : {}),
     ingestSessionTelemetry: (_sid: string, o: Record<string, unknown>) => { h.telemetry.push(o); return { stop: () => {} } },
   }),
-}))
+}))()))
+await (await import('../../helpers/provider-package-parts')).loadProviderPackageParts()
 vi.mock('../../../src/main/providers/claude/spawn', () => ({ resolveClaudeBinary: () => ({ cmd: 'claude', source: 'system' }), resolveHostColorScheme: () => 'dark' }))
 vi.mock('../../../src/main/vision-manager', () => ({ isGlobalVisionRunning: () => false, getGlobalVisionConfig: () => null, teardownVisionSession: () => {} }))
 vi.mock('../../../src/main/canvas/canvas-plugin', () => ({ ensureCanvasPlugin: () => null }))
@@ -264,8 +265,8 @@ const codexLaunch = () => ({
   env: { PATH: '/usr/bin', CODEX_HOME: '/res/codex-realms/b1' },
   sessionsDir: '/res/codex-realms/b1/sessions',
 })
-const TEARDOWN = ['unbindCodexLease', 'unbindLaunchTelemetry', 'unbindLaunchRegistrations']
-const WATCHED = new Set(['mintCodexHooks', 'keepCodexHooks', 'bindCodexLease', 'bindCodexPane', 'bindCodexLaunch', 'bindClaudeLaunch', 'bindLoggingRun', 'unbindLaunchFiles', ...TEARDOWN, 'spawn', 'recordHeldToolSession', 'gatewaySecret', 'injectHooks', 'writeSettings', 'writeMcpConfig', 'noteKeptLaunchStatusLine'])
+const TEARDOWN = ['unbindLaunchProvider', 'unbindLaunchTelemetry', 'unbindLaunchRegistrations']
+const WATCHED = new Set(['mintCodexHooks', 'keepCodexHooks', 'bindCodexLease', 'bindCodexPane', 'bindLoggingRun', 'unbindLaunchFiles', ...TEARDOWN, 'spawn', 'recordHeldToolSession', 'gatewaySecret', 'injectHooks', 'writeSettings', 'writeMcpConfig', 'noteKeptLaunchStatusLine'])
 const seen = (): string[] => h.journal.filter((n) => WATCHED.has(n) || n.startsWith('captureClaudeAccount'))
 const tick = (ms = 0) => new Promise((r) => setTimeout(r, ms))
 
@@ -338,7 +339,7 @@ describe('pty-manager.ts: a restored tab takes over the session an update kept r
     keepFor(CLAUDE_SID)
     spawnPty(fakeWin, CLAUDE_SID, { cwd: os.tmpdir() } as never)
     expect(asked).toEqual([{ sessionId: CLAUDE_SID, provider: 'claude', size: { cols: 120, rows: 30 } }])
-    // bindClaudeLaunch runs inside the module (its account capture shows it).
+    // Its bindings run in Claude Code's lifecycle object (2.1.3-beta.19 section 2; its account capture shows them).
     expect(seen()).toEqual([...TEARDOWN, 'recordHeldToolSession', 'noteKeptLaunchStatusLine', 'captureClaudeAccount:default', 'bindLoggingRun'])
     expect(h.records).toEqual([[CLAUDE_SID, 'claude']])
     // No launch line, past the 300 ms a launch types it at.
@@ -493,7 +494,7 @@ describe('pty-manager.ts: a restored tab takes over the session an update kept r
     keepFor('cl0000000000000000000099')
     spawnPty(fakeWin, CLAUDE_SID, { cwd: os.tmpdir() } as never)
     expect(asked.map((a) => a.sessionId)).toEqual([CLAUDE_SID])
-    expect(seen()).toEqual([...TEARDOWN, 'spawn', 'bindClaudeLaunch', 'captureClaudeAccount:default', 'writeSettings', 'gatewaySecret', 'injectHooks', 'writeMcpConfig', 'bindLoggingRun'])
+    expect(seen()).toEqual([...TEARDOWN, 'spawn', 'captureClaudeAccount:default', 'writeSettings', 'gatewaySecret', 'injectHooks', 'writeMcpConfig', 'bindLoggingRun'])
   })
 
   it('a Codex tab the helper keeps a session for (B1.2), on the account its launch is prepared on: no spawn, no new hook folder; its kept hook file written again with this run\'s port and a new token, its lease, its conversation and its telemetry by the saved conversation; its exit removes the kept folder', () => {
@@ -559,7 +560,9 @@ describe('pty-manager.ts: a restored tab takes over the session an update kept r
     keepFor(CODEX_SID, LAUNCH_FOLDER, { account: 'acct-other' })
     spawnPty(fakeWin, CODEX_SID, { cwd: os.tmpdir(), provider: 'codex', codexOptions: { permissionsPreset: 'read-only' }, codexLaunch: codexLaunch() } as never)
     expect(asked.map((a) => a.account)).toEqual(['acct-b1'])
-    expect(seen()).toEqual([...TEARDOWN, 'mintCodexHooks', 'gatewaySecret', 'keepCodexHooks', 'bindCodexLease', 'spawn', 'bindCodexPane', 'bindCodexLaunch', 'bindLoggingRun'])
+    expect(seen()).toEqual([...TEARDOWN, 'mintCodexHooks', 'gatewaySecret', 'keepCodexHooks', 'bindCodexLease', 'spawn', 'bindCodexPane', 'bindLoggingRun'])
+    // Its conversation's bindings, the Codex lifecycle object's bind (2.1.3-beta.19 section 2): its telemetry.
+    expect(h.telemetry).toHaveLength(1)
   })
 })
 

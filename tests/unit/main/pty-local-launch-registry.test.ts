@@ -8,9 +8,10 @@
 // registered for the log under the provider the lookup found. A terminal tab
 // starts no assistant, so it is not asked and still opens.
 //
-// How each assistant is started is its own row of a table, and the Claude Code
-// row is Claude Code's alone: any other id that carried a copy of it is
-// refused, not started the way Claude Code is. Whether an assistant's sessions
+// Claude Code is started by its own row of a table, and that row is Claude
+// Code's alone: any other id that carried a copy of it is refused, not started
+// the way Claude Code is. Any other assistant has no row and is started by its
+// package's local launch group (2.1.3-beta.19 section 2). Whether an assistant's sessions
 // start on this computer is the accounts service's answer (its `session.launch`
 // declaration on this platform, with the experimental ones the owner enabled),
 // so the PTY manager and the service cannot disagree; with no service to ask,
@@ -313,23 +314,28 @@ describe('a declaration marked experimental starts sessions only once the owner 
   })
 })
 
-describe('how an assistant is started is its own row, and the Claude Code row is Claude Code\'s alone', () => {
-  it('every provider id the app knows has a row, and exactly Claude Code has the Claude Code row', () => {
-    expect(Object.keys(LOCAL_LAUNCH_STYLE).sort()).toEqual([...PROVIDER_IDS].sort())
-    for (const id of PROVIDER_IDS) expect(launchStyleOf(id), id).toBeDefined()
+describe('how an assistant is started: Claude Code by its own row, any other by its package\'s local launch group', () => {
+  // 2.1.3-beta.19 section 2 (aicc_planning#439): the rows hold Claude Code's
+  // shell launch alone; every other assistant has no row and is direct when
+  // its registered package has a local launch group (the other assistant is
+  // not registered here: tests/unit/main/local-launch-third-provider.test.ts).
+  it('Claude Code has the one row, its shell launch; the other assistant has none, and with no package registered no way to start', () => {
+    expect(Object.keys(LOCAL_LAUNCH_STYLE)).toEqual([CLAUDE])
+    expect(launchStyleOf(CLAUDE)).toBe('claude-shell')
+    expect(launchStyleOf(OTHER)).toBeUndefined()
     expect(PROVIDER_IDS.filter((id) => launchStyleOf(id) === 'claude-shell')).toEqual([CLAUDE])
   })
 
-  it('an id with no row has no way to start', () => {
+  it('an id with no row and no package has no way to start', () => {
     for (const id of ['elsewhere', '', 'toString', '__proto__', undefined, null, 7]) expect(launchStyleOf(id), String(id)).toBeUndefined()
   })
 
   // Mutation to prove this can fail: take the row as it stands, whatever id it is under.
-  it('a third id given a copy of the Claude Code row has no way to start, and the two the app knows keep theirs', () => {
+  it('a third id given a copy of the Claude Code row has no way to start; Claude Code keeps its row, and the other assistant, with no row and no package registered here, still has none', () => {
     const widened = { ...LOCAL_LAUNCH_STYLE, third: LOCAL_LAUNCH_STYLE[CLAUDE] }
     expect(launchStyleOf('third', widened)).toBeUndefined()
     expect(launchStyleOf(CLAUDE, widened)).toBe(LOCAL_LAUNCH_STYLE[CLAUDE])
-    expect(launchStyleOf(OTHER, widened)).toBe(LOCAL_LAUNCH_STYLE[OTHER])
+    expect(launchStyleOf(OTHER, widened), 'no row, and no package registered for it here').toBeUndefined()
   })
 })
 

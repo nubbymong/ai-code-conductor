@@ -59,9 +59,10 @@ vi.mock('../../../src/main/canvas/canvas-marker-delivery', () => ({ forgetCanvas
 vi.mock('../../../src/main/canvas/codex-canvas-roots', () => ({ registerCodexCanvasRoots: () => {} }))
 vi.mock('../../../src/main/canvas/codex-guidance', () => ({ noteCodexSessionGuidance: () => {}, forgetCodexSessionGuidance: (sid: string) => h.rec('forgetCodexSessionGuidance')(sid) }))
 // The provider registry: one provider that removes a kept hook folder.
-vi.mock('../../../src/main/providers', () => ({
+vi.mock('../../../src/main/providers', async () => (await import('../../helpers/provider-package-parts')).withProviderPackageParts(await (() => ({
   tryGetProvider: (id: string) => (h.folderRemover ? { removeSessionHookFolder: (dir: string) => h.rec('removeSessionHookFolder')(id, dir) } : {}),
-}))
+}))()))
+await (await import('../../helpers/provider-package-parts')).loadProviderPackageParts()
 
 const lb = await import('../../../src/main/sessions/launch-bindings')
 const seam = await import('../../../src/main/sessions/kept-launches')
@@ -140,7 +141,7 @@ function launched(sid: string): void {
 /** The session's end as pty-manager.ts runs it: its exit's file unbind, then the teardown's three. */
 function end(sid: string): void {
   lb.unbindLaunchFiles(sid)
-  lb.unbindCodexLease(sid)
+  lb.unbindLaunchProvider(sid)
   lb.unbindLaunchTelemetry(sid)
   lb.unbindLaunchRegistrations(sid)
 }

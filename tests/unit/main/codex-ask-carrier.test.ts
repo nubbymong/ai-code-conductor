@@ -56,14 +56,15 @@ vi.mock('../../../src/main/logging/logging-service', () => ({ getLogSupervisor: 
 vi.mock('../../../src/main/conductor-mcp-server', () => ({ getConductorMcpPort: () => 0, registerCodexReviewSession: () => {}, registerClaudeReviewSession: () => {}, unregisterCodexReviewSession: () => {}, releaseMcpSessionProvider: () => {} }))
 // Since 2.1.3-beta.18 section 4 the Ask door reaches the run screen through
 // the Codex package's door members, built here over the provider's fake one.
-vi.mock('../../../src/main/providers', async () => {
+vi.mock('../../../src/main/providers', async () => (await import('../../helpers/provider-package-parts')).withProviderPackageParts(await (async () => {
   const { codexDoorMembers } = await import('../../../src/main/providers/codex/run-screen-doors')
   const withDoors = (p: Record<string, unknown> | undefined): Record<string, unknown> | undefined => {
     const rs = p?.runScreen as Record<string, unknown> | undefined
     return rs ? { ...p, runScreen: { ...rs, ...codexDoorMembers(rs as never) } } : p
   }
   return { providerCapability: () => ({ enabled: true }), getProvider: () => withDoors(h.provider) }
-})
+})()))
+await (await import('../../helpers/provider-package-parts')).loadProviderPackageParts()
 vi.mock('../../../src/main/canvas/codex-canvas-launch', () => ({ prepareCodexCanvasLaunch: () => ({ designatedWorktree: null, guidance: null }) }))
 vi.mock('../../../src/main/providers/claude/spawn', () => ({ resolveClaudeBinary: () => ({ cmd: 'claude', source: 'system' }), resolveHostColorScheme: () => 'dark' }))
 vi.mock('../../../src/main/vision-manager', () => ({ isGlobalVisionRunning: () => false, getGlobalVisionConfig: () => null, teardownVisionSession: () => {} }))

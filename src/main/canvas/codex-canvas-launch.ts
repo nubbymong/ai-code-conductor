@@ -1,5 +1,5 @@
 // What a Codex launch needs for the Agent Canvas (WP2 PR 4, P4.1, row 51),
-// decided in one place so the Codex branch of pty-manager.ts stays small:
+// decided in one place so Codex's local launch (providers/codex/local-launch.ts) stays small:
 //  - the worktree CCC designates for the session (CCC_SESSION_WORKTREE), as a
 //    Claude session's (codex-canvas-roots.ts);
 //  - the skills, in the account's own skills folder (codex-guidance.ts): a

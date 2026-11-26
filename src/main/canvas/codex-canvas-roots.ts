@@ -1,7 +1,7 @@
 // A Codex session's Agent Canvas serving roots (WP2 PR 4, P4.1, row 51).
 //
 // The same roots, by the same rule, as an interactive Claude session's
-// (pty-manager.ts, the Claude branch, after "The Agent Canvas serving
+// (providers/claude/lifecycle.ts registerClaudeLaunchTools, after "The Agent Canvas serving
 // allowlist rides the same decision"): the CONFIGURED project directory,
 // `resolveCwd(options.cwd)`, through `isHomeOrAncestor` and the store's own
 // floors, and the worktree CCC designates for the session from that same

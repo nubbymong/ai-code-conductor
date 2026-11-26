@@ -24,13 +24,11 @@ import { spawnAgentPty, spawnPlainPty, whenHeldKnown } from './session-helper/ma
 import type { SSHOptions } from './ssh-options'
 import { remoteHelperPty } from './remote-helper'
 import { setSessionInputPorts, askQuestion as typeAskQuestion, closeRunScreens, resizeRunScreens, cancelPastes, sendExitKeys } from './session-input'
-import { IPC } from '../shared/ipc-channels'
-import { askConductorProjectDocMaxBytes } from './help-workspace'
 import { resolveRunningClaudeInfo } from '../shared/ssh-tmux-persistence'
 import { buildTmuxStageCommand, type TmuxStageTarget } from './ssh-tmux-stage'
 import { buildTmuxPushCommand, buildArchProbeCommandBracketed, parseArchProbeSentinel, PUSH_ACCUMULATOR_VAR } from './ssh-tmux-push'
 import * as os from 'os'
-import { execSync, execFile } from 'child_process'
+import { execFile } from 'child_process'
 import { logPtyOutput, isDebugModeEnabled } from './debug-capture'
 import { openNotIndexedWindow, closeNotIndexedWindow, releaseNotIndexedWindow, keepNotIndexedWindow, closeHeldNotIndexedWindow, conversationKey } from './logging/indexing-gaps'
 import { claudeFolderKey, claudeProjectsRootKey, normaliseClaudeFolder } from './logging/claude-folder-key'
@@ -43,11 +41,11 @@ import { ensureCompanionDir, nodeFsCompanionDeps } from './logging/companion-dir
 import { forgetSessionName } from './logging/session-name-sidecar'
 import { logInfo, logDebug, logError, logWarn } from './debug-logger'
 import { checkDeployedScript } from './script-folders'
-import { bundledConptyChoice, bundledConptyFailed, SYSTEM_CONPTY_OPTIONS, BUNDLED_EARLY_EXIT_MS, type ConptySpawnOptions } from './bundled-conpty'
+import { bundledConptyFailed, BUNDLED_EARLY_EXIT_MS } from './bundled-conpty'
 import { guardPtyIo, PTY_IO_FAILED_GRACE_MS, PTY_IO_FAILED_TEXT, type PtyIoSide } from './pty-input-guard'
 import { processGone } from './process-alive'
 import { writeCliSetupPty, getResourcesDirectory } from './ipc/setup-handlers'
-import { isGlobalVisionRunning, getGlobalVisionConfig, teardownVisionSession } from './vision-manager'
+import { teardownVisionSession } from './vision-manager'
 import { getConductorMcpPort, issueMcpSessionToken } from './conductor-mcp-server'
 import { conductorToolsMasterOn } from './conductor-tools-switch'
 import { buildSshArgs, buildSshExecArgs } from './ssh-args'
@@ -56,7 +54,7 @@ import { partnerFolderLine, partnerPromptTail, isPartnerShellPrompt, partnerRece
 import { resolveHostColorScheme, colorFgBgEnvToken } from './providers/host-color-scheme'
 import { getProvider, providerCapability } from './providers'
 import { isSshCapable } from './providers/types'
-import type { TelemetrySource, SpawnOptions, SshCapableProvider, SessionProvider } from './providers/types'
+import type { TelemetrySource, SshCapableProvider, SessionProvider, ProviderLocalLaunch, LocalLaunchCore } from './providers/types'
 import { resolveCwd, isHomeOrAncestor } from './path-utils'
 import { AGENTS_ENV, agentsEnvValue, agentsRef, buildTerminalLaunchLine } from './terminal-launch-line'
 import { findOnWindowsPathAsync } from './windows-programs'
@@ -72,7 +70,6 @@ import { unregisterCodexReviewSession, releaseMcpSessionProvider } from './condu
 import { ensureCanvasPlugin } from './canvas/canvas-plugin'
 import { designatedWorktreeDir } from './canvas/canvas-worktree'
 import { forgetSessionForCanvas, setCanvasCodexConversationLookup } from './canvas/canvas-session-link'
-import { prepareCodexCanvasLaunch } from './canvas/codex-canvas-launch'
 import { disposeSession as disposeCodexReviewUsage } from './codex-review-usage'
 import { getProfileConfigDir, setupProfileLinks, getPrimaryProfileId, isValidProfileId, backupProfileHomeToCanonical, syncPrimaryCredentialsWithGlobal, withProfileHome, checkProfileCredentialFolders, assertAccountActive, MANAGED_LAUNCH_REFUSAL, refusalSentenceOrMessage } from './account-profiles'
 export { withProfileHome } from './account-profiles'
@@ -90,7 +87,7 @@ import { getWatchdogManager } from './watchdog/watchdog-manager'
 import { clearCodexIdleAttention } from './codex-idle-attention'
 import { SSH_ATTENTION_OSC_PREFIX, SSH_ATTENTION_MAX_PAYLOAD, parseSshAttentionPayload, deliverRemoteAttention } from './ssh-attention'
 import type { HookEvent } from '../shared/hook-types'
-import { setLaunchBindingPorts, mintCodexHooks, keepCodexHooks, bindCodexLease, bindCodexPane, bindCodexLaunch, bindClaudeLaunch, bindLoggingRun, unbindLaunchFiles, unbindCodexLease, unbindLaunchTelemetry, unbindLaunchRegistrations, takeOverKeptLaunch, removeFailedLaunchFiles, keepServedToken, keptForItsTab, type KeptSessionTakenOver } from './sessions/launch-bindings'
+import { setLaunchBindingPorts, lifecycleCore, noteLaunchProvider, mintCodexHooks, keepCodexHooks, bindCodexLease, bindCodexPane, bindLoggingRun, unbindLaunchFiles, unbindLaunchProvider, unbindLaunchTelemetry, unbindLaunchRegistrations, takeOverKeptLaunch, removeFailedLaunchFiles, keepServedToken, keptForItsTab, type KeptSessionTakenOver } from './sessions/launch-bindings'
 
 import * as path from 'path'
 import * as fs from 'fs'
@@ -2297,7 +2294,9 @@ function assertGatedDirectory(
  * How spawnPty starts a provider's local session.
  *
  * `direct` runs the provider's CLI as the PTY's own program (it owns its
- * screen), from the launch pty:spawn prepared for it.
+ * screen), from the launch pty:spawn prepared for it, by the provider's own
+ * package: its local launch group (SessionProvider.localLaunch, 2.1.3-beta.19
+ * section 2). A provider whose registered package has that group is direct.
  *
  * `claude-shell` is Claude Code's own launch and no other provider's: a shell
  * is opened and Claude Code's launch line is typed into it, by code that is
@@ -2311,15 +2310,17 @@ export type LocalLaunchStyle = 'direct' | 'claude-shell'
 const CLAUDE_SHELL_PROVIDER: ProviderId = 'claude'
 
 /**
- * Each provider's row. One per provider id: an id added to the list without
- * a row here does not compile, and an id with no row at run time is refused
- * (localLaunchOf), never started the way another provider is.
+ * The rows: Claude Code's shell launch, until the local cutover. Every other
+ * provider has no row and is started by its package's local launch group, or
+ * refused when its package has none (localLaunchOf), never started the way
+ * another provider is.
  */
-export const LOCAL_LAUNCH_STYLE: Readonly<Record<ProviderId, LocalLaunchStyle>> = Object.freeze({ claude: 'claude-shell', codex: 'direct' })
+export const LOCAL_LAUNCH_STYLE: Readonly<Partial<Record<ProviderId, LocalLaunchStyle>>> = Object.freeze({ claude: 'claude-shell' })
 
 let localLaunchStyles: Readonly<Record<string, LocalLaunchStyle>> = LOCAL_LAUNCH_STYLE
 /** Test-only, never set by the app: the lookup takes a row as the rows hold
- *  it, in place of launchStyleOf's answer. */
+ *  it, in place of launchStyleOf's answer (an id with no row is looked up as
+ *  the app looks it up). */
 let lookupTakesRowsAsHeld = false
 /**
  * Test-only: the rows launches are looked up in (null restores the app's own).
@@ -2338,15 +2339,22 @@ export function _setLocalLaunchStylesForTest(rows: Readonly<Record<string, Local
 
 /**
  * How `id` is started on this computer by the rows in `rows` (the app's own
- * when absent), or undefined when they hold no way to start it: no row of its
- * own, a row that is not a style, or the `claude-shell` row under an id that
- * is not Claude Code's. Pure.
+ * when absent), or undefined when there is no way to start it. A row names
+ * Claude Code's shell launch, under Claude Code's id alone: any other row is
+ * no way to start its id (a row never hands over a package's group). With no
+ * row of its own, `direct` when its registered package has a local launch
+ * group, else none. Reads the rows and the registry only.
  */
 export function launchStyleOf(id: unknown, rows: Readonly<Record<string, LocalLaunchStyle>> = localLaunchStyles): LocalLaunchStyle | undefined {
-  if (typeof id !== 'string' || !Object.hasOwn(rows, id)) return undefined
+  if (typeof id !== 'string') return undefined
+  if (!Object.hasOwn(rows, id)) return isProviderId(id) && hasLocalLaunchGroup(id) ? 'direct' : undefined
   const style: unknown = rows[id]
-  if (style === 'claude-shell') return id === CLAUDE_SHELL_PROVIDER ? style : undefined
-  return style === 'direct' ? style : undefined
+  return style === 'claude-shell' && id === CLAUDE_SHELL_PROVIDER ? style : undefined
+}
+
+/** Whether `id`'s registered package has a local launch group (SessionProvider.localLaunch). */
+function hasLocalLaunchGroup(id: ProviderId): boolean {
+  try { return getProvider(id).localLaunch !== undefined } catch { return false }
 }
 
 /**
@@ -2367,11 +2375,13 @@ function notStartable(requested: unknown): Error {
   return new Error(`This session's assistant ("${stripSpoofableText(String(requested), 60)}") is not one this app can start. Nothing was started.`)
 }
 
-/** The provider a local launch starts, and how spawnPty starts it. */
+/** The provider a local launch starts, and how spawnPty starts it: `local`,
+ *  its package's local launch group when no row names its launch. */
 interface LocalLaunch {
   id: ProviderId
   provider: SessionProvider
   style: LocalLaunchStyle
+  local?: ProviderLocalLaunch
 }
 
 /**
@@ -2391,14 +2401,13 @@ function localLaunchOf(requested: unknown): LocalLaunch {
   if (!isProviderId(requested)) throw notStartable(requested)
   let provider: SessionProvider
   try { provider = getProvider(requested) } catch { throw notStartable(requested) }
-  const style = lookupTakesRowsAsHeld
-    ? (Object.hasOwn(localLaunchStyles, requested) ? localLaunchStyles[requested] : undefined)
-    : launchStyleOf(requested)
+  const rowed = Object.hasOwn(localLaunchStyles, requested)
+  const style = lookupTakesRowsAsHeld && rowed ? localLaunchStyles[requested] : launchStyleOf(requested)
   if (!style) throw notStartable(requested)
   if (!startsSessionsHere(requested)) {
     throw new Error(`${stripSpoofableText(String(provider.displayName || requested), 60)} cannot start sessions on this computer. Nothing was started.`)
   }
-  return { id: requested, provider, style }
+  return { id: requested, provider, style, ...(rowed || !provider.localLaunch ? {} : { local: provider.localLaunch }) }
 }
 
 /**
@@ -6022,230 +6031,14 @@ function spawnPtyResolved(
   } else if (localLaunch && (takenOver = takeOverKeptLaunch({ win, sessionId, launch: localLaunch, resolvedCwd, cols, rows, codexLaunch: options?.codexLaunch, profileId: options?.profileId, isAsk: options?.isAsk === true }))) {
     ({ ptyProcess, launchCwd: effectiveLaunchCwd, conversation: resumeUuidForBind, profileId: resolvedProfileId, since: claudeLaunchedAt } = takenOver); codexLaunchedAt = claudeLaunchedAt
     if (options?.provider === undefined) options = { ...options, provider: localLaunch.id } // as the Claude Code branch does: its options name the provider looked up
-  } else if (localLaunch?.style === 'direct') {
-    // Codex local session — spawn `codex` directly. Codex itself owns the
-    // REPL, so there is no shell-wrap-then-cd-then-launch dance like Claude
-    // requires. cwd is propagated through pty.spawn options.
-    // The branch is chosen by the provider's row in LOCAL_LAUNCH_STYLE, not
-    // by its name. shellOnly falls through to the branch below so the user
-    // gets a plain shell, regardless of provider selection.
-    //
-    // WP2 (plan A10): it runs ONLY in its account's realm, from the launch
-    // pty:spawn prepared -- the executable setup proved and the realm's
-    // environment. There is no other way to start one: no second resolution
-    // of the executable, and never the ambient home.
-    const launch = options?.codexLaunch
-    if (!launch) {
-      throw new Error('A Codex session needs its account: choose a Codex account for this session.')
-    }
-    // Copilot review on PR #31 (p9.15): buildSpawnCommand or pty.spawn can
-    // throw before onExit is wired up (binary missing, ConPTY init failure,
-    // node-pty resolver miss). A spawn that failed releases its lease, and
-    // ends a PTY it had already started, so no Codex runs unheld.
-    let started: pty.IPty | undefined
-    // P3.10 (rows 43, 46, 47, 63): the app's hooks for this launch, when the
-    // Hooks gateway is on and listening -- as the Claude branch's injectHooks:
-    // a token minted for the session, and the file that hands it to the hook
-    // (never a command line). The previous launch's are gone with its
-    // resources (killPty above).
-    let hookFile: { hookFile: string; dispose(): void } | null = null
-    // Round 1 (B2): whether this launch minted the session's gateway token,
-    // which goes again whenever nothing will use it.
-    let tokenMinted = false
-    try {
-      const provider = localLaunch.provider
-      ;({ hookFile, tokenMinted } = mintCodexHooks(sessionId, provider))
-      // P3.5 (rows 34, 35): the conversation to resume exactly, as the Claude
-      // branch does -- a restored tab's persisted one (options.resume), else,
-      // on a Restart, the one the tab is on (kept across the kill). "Restart
-      // and pick a conversation" (the picker) is never overridden by the kept
-      // one. The builder resumes it only when its rollout is in this launch's
-      // realm, checks the id again, and says where the CLI starts.
-      // P3.6: a respawn onto another account from a conversation whose claim
-      // was not certain resumes none (`freshConversation`, main only).
-      let resumeTarget = options?.resume ?? (options?.useResumePicker || launch.freshConversation === true ? undefined : keptCodexConversations.get(sessionId))
-      // P4.3 review RASK-1: an Ask launch resumes only a conversation of the
-      // help folder it starts in, and starts the CLI there (askLaunchFolderHolds).
-      if (options?.isAsk === true && resumeTarget) {
-        const held = askLaunchFolderHolds(resumeTarget.cwd, resolvedCwd)
-        if (!held) logInfo(`[pty-manager] Ask ${sessionId}: its conversation ran in another folder; started afresh in the help folder`)
-        resumeTarget = held ? { uuid: resumeTarget.uuid, cwd: resolvedCwd } : undefined
-      }
-      // ADR-009 round 1 (PR 4): an opening question is honoured only on a
-      // launch made as Ask Conductor; on any other it is ignored, and the log
-      // says so in a fixed sentence (never the question).
-      const askQuestion = options?.isAsk === true ? options?.askPrompt : undefined
-      if (options?.askPrompt && options?.isAsk !== true) logWarn(`[pty-manager] Codex ${sessionId}: an opening question on a launch that is not Ask Conductor's is ignored`)
-      // WP2 PR 4, P4.1 (row 51): the Agent Canvas for this launch, as a Claude
-      // session has it (canvas/codex-canvas-launch.ts): the worktree CCC
-      // designates from the CONFIGURED folder, and the skills in the account's
-      // own skills folder (a managed realm's, or this computer's own Codex
-      // folder: question 5, answered C), which every route lists.
-      // The built-in tools switch, through the one checked read: off while the
-      // settings cannot be read (conductor-tools-switch.ts).
-      const codexToolsOn = conductorToolsMasterOn() && getConductorMcpPort() > 0
-      const codexCanvas = prepareCodexCanvasLaunch({
-        sessionId,
-        configuredCwd: resolvedCwd,
-        home: launch.home ?? launch.env.CODEX_HOME ?? '',
-        managedSkillsDirFor: (home, resourcesDir) => provider.stagedSkillsDir?.(home, resourcesDir) ?? null,
-        toolsOn: codexToolsOn,
-        ...(launch.ownership ? { ownership: launch.ownership } : {}),
-      })
-      const codexSpawnOptions: SpawnOptions = {
-        sessionId,
-        provider: 'codex',
-        // The configured directory, resolved: where an exact resume falls
-        // back to when the conversation's own directory does not hold.
-        cwd: resolvedCwd,
-        cols,
-        rows,
-        useResumePicker: options?.useResumePicker,
-        codexOptions: options?.codexOptions,
-        realmLaunch: { executable: launch.executable, env: launch.env, sessionsDir: launch.sessionsDir },
-        ...(resumeTarget ? { resume: { uuid: resumeTarget.uuid, cwd: resumeTarget.cwd } } : {}),
-        // Same light/dark signal the local Claude spawn gets (book item 34).
-        hostColorScheme: resolveHostColorScheme(
-          readConfig<{ theme?: string }>('settings')?.theme,
-          nativeTheme.shouldUseDarkColors,
-        ),
-        ...(hookFile ? { codexHooks: { hookFile: hookFile.hookFile } } : {}),
-        // Round 1 (V2): for the picker, the conversations other tabs are on.
-        ...(options?.useResumePicker ? { codexOpenElsewhere: codexConversationsOpenElsewhere(sessionId, launch.lease.accountId) } : {}),
-        // WP2 PR 4, P4.3 (row 53): Ask Conductor's opening question (argv
-        // after `--` on the direct route's fresh launch; otherwise typed
-        // through the run screen below), and on every Ask launch the scope of the
-        // help folder's AGENTS.md (its byte bound, no parent folder's).
-        ...(askQuestion ? { askPrompt: askQuestion } : {}),
-        ...(options?.isAsk === true ? { askProjectDocMaxBytes: askConductorProjectDocMaxBytes() } : {}),
-      }
-      const built = provider.buildSpawnCommand(codexSpawnOptions)
-      const { cmd: spawnCmd, args: spawnArgs, env: spawnEnv, commandLine } = built
-      const hooked = built.hooksInstalled === true && !!hookFile
-      ;({ hookFile, tokenMinted } = keepCodexHooks(sessionId, { hookFile, tokenMinted }, hooked))
-      // Round 1 (S4): the conversation this launch resumed by id keeps its doubt.
-      if (built.resumeId) codexResumedById.set(sessionId, built.resumeId.toLowerCase())
-      logInfo(`[pty-manager] Codex hooks for ${sessionId}: ${hooked ? 'on' : 'off (the Hooks gateway is off or not listening, or the hook could not be given on this launch)'}`)
-      // Where the CLI runs: the resumed conversation's own directory, else the configured one.
-      const codexCwd = built.cwd || resolvedCwd
-      // The tab is on the conversation it resumes; a launch that resumes
-      // nothing (the picker, a fresh start) lets the kept one go until the
-      // status line claims the next.
-      if (built.resumeId) keepCodexConversation(sessionId, { uuid: built.resumeId, cwd: codexCwd }, launch.lease.accountId, { inferred: false })
-      else keptCodexConversations.delete(sessionId)
-      // Said, never silent: the conversation's rollout does not record the
-      // directory this session kept, so it resumes in the configured one.
-      if (built.resumeId && built.resumeCwdMismatch) {
-        logWarn(`[pty-manager] Codex resume for ${sessionId}: no rollout of ${built.resumeId} records the directory the session kept; resuming in ${describePathForLog(codexCwd)}`)
-      }
-      // P3.15 (row 71): on Windows a local Codex session runs under node-pty's
-      // bundled ConPTY (its conpty.dll and the OpenConsole.exe beside it, the
-      // console host Windows Terminal ships). The ConPTY built into Windows
-      // repaints Codex's screen in place, so the terminal kept no scrollback
-      // and the wheel did nothing; the bundled one passes Codex's scrolling
-      // through. The system ConPTY when the bundled files are missing (said in
-      // the launch line, with the folder it was looked for in when bundled, and
-      // once in bundled-conpty.ts). Claude sessions, plain terminals and SSH
-      // sessions keep the system ConPTY, as before.
-      const conpty = bundledConptyChoice()
-      const conptyNote = conpty.kind === 'bundled' ? ` conpty=bundled (${describePathForLog(conpty.dir)})`
-        : conpty.kind === 'system' ? ` conpty=system (${describePathForLog(conpty.reason)})` : ''
-      // The builder's log line (long or private values named by length); a
-      // builder that gives none: no argument is logged.
-      logInfo(`[pty-manager] Launching Codex PTY: ${spawnCmd} ${built.logLine ?? '(arguments not logged)'} cwd=${describePathForLog(codexCwd)} (resume=${built.resumeId ?? 'none'})${conptyNote}`)
-      // WP2 PR 4, P4.1: the worktree CCC designates for the session, told to
-      // its guard as a Claude session's is (ADR-016). Any inherited hint goes
-      // first, in every spelling (Windows names are case-insensitive), and
-      // none is set when the session designates none.
-      for (const k of Object.keys(spawnEnv)) if (k.toUpperCase() === 'CCC_SESSION_WORKTREE') delete (spawnEnv as Record<string, string>)[k]
-      if (codexCanvas.designatedWorktree) (spawnEnv as Record<string, string>).CCC_SESSION_WORKTREE = codexCanvas.designatedWorktree
-      // Capture timestamp before spawn so the watch-and-claim window starts no later than PTY launch.
-      const codexSpawnTimestamp = Date.now()
-      codexLaunchedAt = codexSpawnTimestamp
-      // The lease is this session's from here: the killPty above has already
-      // released the previous spawn's (or will, once its process has ended).
-      bindCodexLease(sessionId, launch.lease)
-      // A cmd.exe line goes verbatim (see buildSpawnCommand's `commandLine`).
-      // The ConPTY options are the choice's own; nothing else differs between
-      // the bundled and the system ConPTY.
-      const spawnCodexPty = (conptyOptions: ConptySpawnOptions): pty.IPty => spawnAgentPty({ sessionId, kind: 'codex' }, spawnCmd, commandLine ?? spawnArgs, {
-        name: 'xterm-256color',
-        cols,
-        rows,
-        cwd: codexCwd,
-        env: spawnEnv,
-        ...conptyOptions,
-      })
-      let onBundledConpty = conpty.kind === 'bundled'
-      try {
-        ptyProcess = started = spawnCodexPty(conpty.options)
-      } catch (err) {
-        // P3.15 round 1 (F1): the bundled files can be there and still fail as
-        // the session starts (blocked or damaged, OpenConsole.exe unable to
-        // start). node-pty's startProcess then throws before Codex is started
-        // (Codex is created later, in node-pty's connect). A throw after
-        // startProcess (opening the console's input pipe) could in theory leave
-        // that connect pending and start a Codex no one sees; not seen, and not
-        // handled here. The session starts on the system ConPTY, and the rest
-        // of the run uses it. A start that fails there too is not the bundled
-        // ConPTY's fault (a missing executable): the first error goes on and
-        // the choice stays.
-        if (conpty.kind !== 'bundled') throw err
-        try { ptyProcess = started = spawnCodexPty(SYSTEM_CONPTY_OPTIONS) } catch { throw err }
-        onBundledConpty = false
-        bundledConptyFailed(String((err as Error)?.message ?? err))
-        logInfo(`[pty-manager] Codex PTY for ${sessionId}: the bundled ConPTY failed to start; started on the system ConPTY`)
-      }
-      if (onBundledConpty) watchBundledConptyEarlyExit(sessionId, started)
-      // ADR-009 round 1 (PR 4): where this run works, until it has ended.
-      noteAgentRunFolder(started, sessionId, codexCwd)
-      // WP2 PR 4, P4.1: main's own reading of this run's screen, for the
-      // submit primitive (the package's runScreen), fed below through the
-      // Watchdog's CSI clamp.
-      const codexRun = started
-      const runScreen = provider.runScreen
-      const colorQueries = bindCodexPane({ sessionId, codexRun, runScreen, cols, rows, ...codexRunWriters(codexRun) })
-      ptyProcess.onData((rawData) => {
-        if (win.isDestroyed()) return
-        if (ptySessions.get(sessionId)?.ptyProcess !== ptyProcess) return // rc.15 review R9
-        const data = colorQueries.filter(rawData)
-        if (data === '') return
-        getPtyIntegrityMonitor()?.recordPtyData(sessionId, data.length)
-        // P3.10 (rows 43, 46): the Watchdog's pane and silence clock, as a
-        // Claude session's; a no-op until the session arms one (off by default).
-        getWatchdogManager()?.feedData(sessionId, data)
-        runScreen?.feed(sessionId, data)
-        win.webContents.send(`pty:data:${sessionId}`, data)
-      })
-      // WP2 PR 4, P4.3 (row 53): an Ask session takes later questions through
-      // its run screen (handOffAskQuestion). A question this launch did not carry
-      // on argv (the npm .cmd route, an exact resume, the picker, a question
-      // argv may not hold) is typed there at Codex's first ready, empty
-      // composer, never into its trust or sandbox screens; scheduled for once
-      // spawnPty has registered this run (below the provider branches).
-      if (options?.isAsk === true) codexAskSessions.add(sessionId)
-      else codexAskSessions.delete(sessionId)
-      if (askQuestion && !built.askPromptOnArgv) setImmediate(() => { void typeAskQuestion(win, sessionId, askQuestion) })
-      bindCodexLaunch({ win, sessionId, provider, launch, codexCwd, codexSpawnTimestamp, built, resolvedCwd, codexCanvas, runProvider: 'codex' })
-    } catch (err) {
-      // P3.10: a launch that failed keeps no hook file or hooked mark, and
-      // (round 1, B2) no gateway token it minted.
-      closeRunScreens(sessionId)
-      codexAskSessions.delete(sessionId)
-      if (hookFile) { try { hookFile.dispose() } catch { /* best-effort */ } }
-      forgetCodexHooks(sessionId)
-      if (tokenMinted) dropGatewayToken(sessionId)
-      if (codexLaunchLeases.get(sessionId) === launch.lease) codexLaunchLeases.delete(sessionId)
-      if (started) {
-        // A PTY that started: its lease goes when its process does.
-        takenCodexLeases.add(launch.lease)
-        releaseCodexLeaseOnExit(started, launch.lease)
-        try { started.kill() } catch { /* already gone */ }
-      } else {
-        launch.lease.release()
-      }
-      throw err
-    }
+  } else if (localLaunch?.local) {
+    // 2.1.3-beta.19 section 2 (aicc_planning#439): a provider whose CLI is the
+    // terminal's own program starts by its package's local launch group
+    // (SessionProvider.localLaunch; localLaunchOf gives it to an id no row
+    // names, whose package has one). This branch names no provider: the
+    // group is the session's own provider's, given the provider the lookup
+    // found, and this run's records and doors (localLaunchCore).
+    ;({ ptyProcess, launchedAt: codexLaunchedAt } = localLaunch.local.start({ win, sessionId, id: localLaunch.id, provider: localLaunch.provider, options, resolvedCwd, cols, rows }, localLaunchCore))
   } else {
     // Local session — delegate binary + env construction to the provider.
     // The post-spawn shell-write (cd + claude command) stays here; only the
@@ -6253,10 +6046,11 @@ function spawnPtyResolved(
     // Reached by a session whose row is `claude-shell`, which is Claude Code
     // and no other provider (launchStyleOf), with the provider the registry
     // holds for it, and by a terminal tab, which starts no provider: its shell
-    // is the one the Claude Code package builds, as before. Every other id was
-    // refused by the lookup before anything of the session was touched
-    // (localLaunchOf). The branch says the same of itself: what follows is
-    // Claude Code's launch, so a launch of any other style or id stops here.
+    // is the one the Claude Code package builds, as before. Every other id took
+    // its package's local launch group above, or was refused by the lookup
+    // before anything of the session was touched (localLaunchOf). The branch
+    // says the same of itself: what follows is Claude Code's launch, so a
+    // launch of any other style or id stops here.
     if (localLaunch && (localLaunch.style !== 'claude-shell' || localLaunch.id !== CLAUDE_SHELL_PROVIDER)) throw notStartable(localLaunch.id)
     // A session that names no provider starts Claude Code (the lookup's
     // answer for it). From here on its options name the provider that was
@@ -6281,7 +6075,7 @@ function spawnPtyResolved(
       claudeSpawnSettings?.theme,
       nativeTheme.shouldUseDarkColors,
     )
-    // Review R-3: as the Codex branch, an opening question is honoured only on
+    // Review R-3: as Codex's local launch, an opening question is honoured only on
     // a launch made as Ask Conductor (pty:spawn drops it first); on any other
     // it is ignored, and the log says so in a fixed sentence.
     const claudeAskPrompt = options?.isAsk === true ? options?.askPrompt : undefined
@@ -6505,7 +6299,7 @@ function spawnPtyResolved(
     // root, a settings read), and a throw here used to leave the process just
     // started running untracked: no session entry, no exit handler, never
     // killed. It is now ended, with what this spawn had taken, and the throw
-    // goes on to the caller as before (the Codex branch does the same).
+    // goes on to the caller as before (Codex's local launch does the same).
     let localStarted: pty.IPty | undefined
     try {
     if (shellOnly) {
@@ -6693,7 +6487,7 @@ function spawnPtyResolved(
       // rebuilt; a conversation that ran in another folder is not resumed
       // (claude --resume finds a conversation only from its own folder).
       // Checked for every resume, the same spelling included (PR 4 final VM
-      // run): the folder holds by its real path, as the Codex branch's does.
+      // run): the folder holds by its real path, as Codex's local launch's does.
       if (options?.isAsk === true && (resumeUuid !== undefined || claudeCwd !== resolvedCwd)) {
         if (resumeUuid !== undefined && !askLaunchFolderHolds(claudeCwd, resolvedCwd)) {
           logInfo(`[pty] Ask ${sessionId}: its conversation ran in another folder; started afresh in the help folder`)
@@ -6738,7 +6532,8 @@ function spawnPtyResolved(
       // ADR-009 round 1 (PR 4): where this run works, until it has ended.
       noteAgentRunFolder(ptyProcess, sessionId, claudeCwd)
 
-      bindClaudeLaunch({ sessionId, resolvedProfileId, claudeCwd, resolvedCwd, designatedWorktree })
+      // 2.1.3-beta.19 section 2: its bindings, by Claude Code's lifecycle object.
+      provider.lifecycle?.bind({ sessionId, resolvedProfileId, claudeCwd, resolvedCwd, designatedWorktree }, lifecycleCore())
 
       // Explicitly cd to the project directory, then launch Claude.
       // The cd is critical — it ensures Claude sees the correct project directory
@@ -6990,6 +6785,8 @@ function spawnPtyResolved(
   // null for a terminal tab and for SSH). An SSH session's turns true only
   // when the flow types the launch line (writeClaudeCmd).
   ptySessions.set(sessionId, { ptyProcess, sessionId, agent: options?.shellOnly ? null : (options?.provider ?? 'claude'), appStartedCli: localLaunch !== null })
+  // 2.1.3-beta.19 section 2: whose lifecycle object its teardown's first part asks.
+  if (localLaunch) noteLaunchProvider(sessionId, localLaunch.id)
   // P3.15 rounds 3 and 4 (K1, P4): every session's PTY, of every kind: an
   // error on its input or its output never quits the app.
   guardSessionPty(win, sessionId, ptyProcess)
@@ -7287,9 +7084,17 @@ setLaunchBindingPorts({
   ptySessions, codexHookFiles, codexHookedLaunches, codexLaunchLeases, takenCodexLeases, codexAskSessions, codexTelemetrySources, indexedRuns, codexGatewayTokens,
   notIndexedSessions, codexContextRollouts, keptCodexConversations, lastCodexHookRollout, claudeTranscripts, claudeFolders, codexFolders,
   noteGatewayToken, dropGatewayToken, forgetCodexHooks, keepCodexConversation, markCodexConversationUncertain, clearCodexDoubtFromHook,
-  noteCodexContextRollout, endSessionNotIndexed, noteCodexFolder, savedConfigLoggingOff, noteClaudeFolder, noteClaudeTranscript, markSessionNotIndexed, noteAgentRunFolder, codexRunWriters, launchStyleOf,
+  noteCodexContextRollout, endSessionNotIndexed, noteCodexFolder, savedConfigLoggingOff, noteClaudeFolder, noteClaudeTranscript, markSessionNotIndexed, noteAgentRunFolder, codexRunWriters,
   closeCodexRunScreen: (sessionId) => closeRunScreens(sessionId),
 })
+/** 2.1.3-beta.19 section 2: what a provider's local launch group is handed
+ *  (SessionProvider.localLaunch): its lifecycle core (the launch bindings'),
+ *  and this module's records and doors a launch uses, so no package imports
+ *  this module. */
+const localLaunchCore: LocalLaunchCore = {
+  ...lifecycleCore(), bindCodexLease, bindCodexPane, mintCodexHooks, keepCodexHooks, keptCodexConversations, codexResumedById, takenCodexLeases, releaseCodexLeaseOnExit,
+  closeRunScreens, forgetCodexHooks, codexConversationsOpenElsewhere, typeAskQuestion, askLaunchFolderHolds, spawnAgentPty, noteAgentRunFolder, watchBundledConptyEarlyExit,
+}
 
 export function writePty(sessionId: string, data: string): void {
   // Focus-report chunks (RC8): xterm emits the DECSET-1004 focus events
@@ -7404,7 +7209,7 @@ function cleanupSessionResources(sessionId: string): void {
     shellOnlyProfileHolds.delete(sessionId)
     profileHold()
   }
-  unbindCodexLease(sessionId)
+  unbindLaunchProvider(sessionId)
   // P3.16 (M5): the integrity monitor's count of the PTY this ends starts again
   // (round 1, N8: quietly, with no "session ended" event; the session's own
   // exit ends the record). A Restart (and every respawn: spawnPty runs killPty

@@ -59,7 +59,7 @@ vi.mock('../../../src/main/conductor-mcp-server', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../../src/main/conductor-mcp-server')>()),
   getConductorMcpPort: () => 0,
 }))
-vi.mock('../../../src/main/providers', () => ({
+vi.mock('../../../src/main/providers', async () => (await import('../../helpers/provider-package-parts')).withProviderPackageParts(await (() => ({
   providerCapability: () => ({ enabled: true }),
   getProvider: () => ({
     resolveBinary: () => ({ cmd: 'claude', source: 'system' }),
@@ -73,7 +73,8 @@ vi.mock('../../../src/main/providers', () => ({
     runScreen: { open: () => {}, feed: () => {}, resize: () => {}, close: () => {} },
   }),
   tryGetProvider: () => null,
-}))
+}))()))
+await (await import('../../helpers/provider-package-parts')).loadProviderPackageParts()
 vi.mock('../../../src/main/providers/claude/spawn', () => ({ resolveClaudeBinary: () => ({ cmd: 'claude', source: 'system' }), resolveHostColorScheme: () => 'dark' }))
 vi.mock('../../../src/main/vision-manager', () => ({ isGlobalVisionRunning: () => false, getGlobalVisionConfig: () => null, teardownVisionSession: () => {} }))
 vi.mock('../../../src/main/canvas/canvas-plugin', () => ({ ensureCanvasPlugin: () => null }))

@@ -1,0 +1,4968 @@
+{
+  "launch: managed account, fresh, bundled ConPTY, hooks gateway off, tools off": {
+    "launched": [
+      [
+        "unregisterCodexReviewSession",
+        "<sid>"
+      ],
+      [
+        "releaseMcpSessionProvider",
+        "<sid>"
+      ],
+      [
+        "pane close",
+        "<sid>"
+      ],
+      [
+        "build",
+        {
+          "codexOptions": {
+            "permissionsPreset": "read-only"
+          },
+          "cols": 120,
+          "cwd": "<root>/project",
+          "hostColorScheme": "dark",
+          "provider": "codex",
+          "realmLaunch": {
+            "env": {
+              "CODEX_HOME": "<root>/realms/managed",
+              "PATH": "/usr/bin"
+            },
+            "executable": "<root>/bin/codex.exe",
+            "sessionsDir": "<root>/realms/managed/sessions"
+          },
+          "rows": 30,
+          "sessionId": "<sid>",
+          "useResumePicker": "<undefined>"
+        }
+      ],
+      [
+        "log",
+        "[pty-manager] Codex hooks for <sid>: off (the Hooks gateway is off or not listening, or the hook could not be given on this launch)"
+      ],
+      [
+        "log",
+        "[pty-manager] Launching Codex PTY: <root>/bin/codex.exe --sandbox read-only cwd=<root>/project (resume=none) conpty=bundled (/bundled-conpty)"
+      ],
+      [
+        "spawn",
+        {
+          "args": [
+            "--sandbox",
+            "read-only"
+          ],
+          "cols": 120,
+          "conpty": {
+            "useConptyDll": true
+          },
+          "cwd": "<root>/project",
+          "env": {
+            "CLAUDE_MULTI_SESSION_ID": "<sid>",
+            "CODEX_HOME": "<root>/realms/managed",
+            "PATH": "/usr/bin"
+          },
+          "file": "<root>/bin/codex.exe",
+          "kind": "codex",
+          "name": "xterm-256color",
+          "rows": 30
+        }
+      ],
+      [
+        "pane open",
+        {
+          "clamp": true,
+          "cols": 120,
+          "current": true,
+          "held": false,
+          "rows": 30,
+          "sid": "<sid>"
+        }
+      ],
+      [
+        "telemetry",
+        {
+          "callbacks": [
+            "function",
+            "function",
+            "function",
+            "function"
+          ],
+          "cwd": "<root>/project",
+          "sessionsDir": "<root>/realms/managed/sessions",
+          "sid": "<sid>",
+          "spawnTimestamp": "<t>"
+        }
+      ],
+      [
+        "registerClaudeReviewSession",
+        {
+          "cwd": "<root>/project",
+          "sid": "<sid>"
+        }
+      ]
+    ],
+    "after": {
+      "holdsLease": true,
+      "kept": null,
+      "threw": null
+    },
+    "unbound": [
+      [
+        "kill",
+        1
+      ],
+      [
+        "telemetry stop",
+        null
+      ],
+      [
+        "unregisterCodexReviewSession",
+        "<sid>"
+      ],
+      [
+        "releaseMcpSessionProvider",
+        "<sid>"
+      ],
+      [
+        "pane close",
+        "<sid>"
+      ]
+    ]
+  },
+  "launch: hooks gateway on and listening, tools on and served": {
+    "launched": [
+      [
+        "unregisterCodexReviewSession",
+        "<sid>"
+      ],
+      [
+        "releaseMcpSessionProvider",
+        "<sid>"
+      ],
+      [
+        "pane close",
+        "<sid>"
+      ],
+      [
+        "gateway token",
+        "<sid>"
+      ],
+      [
+        "prepareSessionHooks",
+        {
+          "port": 4545,
+          "sid": "<sid>"
+        }
+      ],
+      [
+        "build",
+        {
+          "codexHooks": {
+            "hookFile": "<root>/hooks/<sid>/hook.json"
+          },
+          "codexOptions": {
+            "permissionsPreset": "read-only"
+          },
+          "cols": 120,
+          "cwd": "<root>/project",
+          "hostColorScheme": "dark",
+          "provider": "codex",
+          "realmLaunch": {
+            "env": {
+              "CODEX_HOME": "<root>/realms/managed",
+              "PATH": "/usr/bin"
+            },
+            "executable": "<root>/bin/codex.exe",
+            "sessionsDir": "<root>/realms/managed/sessions"
+          },
+          "rows": 30,
+          "sessionId": "<sid>",
+          "useResumePicker": "<undefined>"
+        }
+      ],
+      [
+        "log",
+        "[pty-manager] Codex hooks for <sid>: on"
+      ],
+      [
+        "log",
+        "[pty-manager] Launching Codex PTY: <root>/bin/codex.exe --sandbox read-only cwd=<root>/project (resume=none) conpty=bundled (/bundled-conpty)"
+      ],
+      [
+        "spawn",
+        {
+          "args": [
+            "--sandbox",
+            "read-only"
+          ],
+          "cols": 120,
+          "conpty": {
+            "useConptyDll": true
+          },
+          "cwd": "<root>/project",
+          "env": {
+            "CLAUDE_MULTI_SESSION_ID": "<sid>",
+            "CODEX_HOME": "<root>/realms/managed",
+            "PATH": "/usr/bin"
+          },
+          "file": "<root>/bin/codex.exe",
+          "kind": "codex",
+          "name": "xterm-256color",
+          "rows": 30
+        }
+      ],
+      [
+        "pane open",
+        {
+          "clamp": true,
+          "cols": 120,
+          "current": true,
+          "held": false,
+          "rows": 30,
+          "sid": "<sid>"
+        }
+      ],
+      [
+        "telemetry",
+        {
+          "callbacks": [
+            "function",
+            "function",
+            "function",
+            "function"
+          ],
+          "cwd": "<root>/project",
+          "sessionsDir": "<root>/realms/managed/sessions",
+          "sid": "<sid>",
+          "spawnTimestamp": "<t>"
+        }
+      ],
+      [
+        "registerClaudeReviewSession",
+        {
+          "cwd": "<root>/project",
+          "sid": "<sid>"
+        }
+      ]
+    ],
+    "after": {
+      "holdsLease": true,
+      "kept": null,
+      "threw": null
+    },
+    "unbound": [
+      [
+        "gateway drop",
+        "<sid>"
+      ],
+      [
+        "kill",
+        1
+      ],
+      [
+        "telemetry stop",
+        null
+      ],
+      [
+        "hook file dispose",
+        "<sid>"
+      ],
+      [
+        "unregisterCodexReviewSession",
+        "<sid>"
+      ],
+      [
+        "releaseMcpSessionProvider",
+        "<sid>"
+      ],
+      [
+        "pane close",
+        "<sid>"
+      ]
+    ]
+  },
+  "launch: hooks gateway on, the hook file not written": {
+    "launched": [
+      [
+        "unregisterCodexReviewSession",
+        "<sid>"
+      ],
+      [
+        "releaseMcpSessionProvider",
+        "<sid>"
+      ],
+      [
+        "pane close",
+        "<sid>"
+      ],
+      [
+        "gateway token",
+        "<sid>"
+      ],
+      [
+        "prepareSessionHooks",
+        {
+          "port": 4545,
+          "sid": "<sid>"
+        }
+      ],
+      [
+        "build",
+        {
+          "codexOptions": {
+            "permissionsPreset": "read-only"
+          },
+          "cols": 120,
+          "cwd": "<root>/project",
+          "hostColorScheme": "dark",
+          "provider": "codex",
+          "realmLaunch": {
+            "env": {
+              "CODEX_HOME": "<root>/realms/managed",
+              "PATH": "/usr/bin"
+            },
+            "executable": "<root>/bin/codex.exe",
+            "sessionsDir": "<root>/realms/managed/sessions"
+          },
+          "rows": 30,
+          "sessionId": "<sid>",
+          "useResumePicker": "<undefined>"
+        }
+      ],
+      [
+        "gateway drop",
+        "<sid>"
+      ],
+      [
+        "log",
+        "[pty-manager] Codex hooks for <sid>: off (the Hooks gateway is off or not listening, or the hook could not be given on this launch)"
+      ],
+      [
+        "log",
+        "[pty-manager] Launching Codex PTY: <root>/bin/codex.exe --sandbox read-only cwd=<root>/project (resume=none) conpty=bundled (/bundled-conpty)"
+      ],
+      [
+        "spawn",
+        {
+          "args": [
+            "--sandbox",
+            "read-only"
+          ],
+          "cols": 120,
+          "conpty": {
+            "useConptyDll": true
+          },
+          "cwd": "<root>/project",
+          "env": {
+            "CLAUDE_MULTI_SESSION_ID": "<sid>",
+            "CODEX_HOME": "<root>/realms/managed",
+            "PATH": "/usr/bin"
+          },
+          "file": "<root>/bin/codex.exe",
+          "kind": "codex",
+          "name": "xterm-256color",
+          "rows": 30
+        }
+      ],
+      [
+        "pane open",
+        {
+          "clamp": true,
+          "cols": 120,
+          "current": true,
+          "held": false,
+          "rows": 30,
+          "sid": "<sid>"
+        }
+      ],
+      [
+        "telemetry",
+        {
+          "callbacks": [
+            "function",
+            "function",
+            "function",
+            "function"
+          ],
+          "cwd": "<root>/project",
+          "sessionsDir": "<root>/realms/managed/sessions",
+          "sid": "<sid>",
+          "spawnTimestamp": "<t>"
+        }
+      ],
+      [
+        "registerClaudeReviewSession",
+        {
+          "cwd": "<root>/project",
+          "sid": "<sid>"
+        }
+      ]
+    ],
+    "after": {
+      "holdsLease": true,
+      "kept": null,
+      "threw": null
+    },
+    "unbound": [
+      [
+        "kill",
+        1
+      ],
+      [
+        "telemetry stop",
+        null
+      ],
+      [
+        "unregisterCodexReviewSession",
+        "<sid>"
+      ],
+      [
+        "releaseMcpSessionProvider",
+        "<sid>"
+      ],
+      [
+        "pane close",
+        "<sid>"
+      ]
+    ]
+  },
+  "launch: hooks gateway on, the launch cannot carry hooks": {
+    "launched": [
+      [
+        "unregisterCodexReviewSession",
+        "<sid>"
+      ],
+      [
+        "releaseMcpSessionProvider",
+        "<sid>"
+      ],
+      [
+        "pane close",
+        "<sid>"
+      ],
+      [
+        "gateway token",
+        "<sid>"
+      ],
+      [
+        "prepareSessionHooks",
+        {
+          "port": 4545,
+          "sid": "<sid>"
+        }
+      ],
+      [
+        "build",
+        {
+          "codexHooks": {
+            "hookFile": "<root>/hooks/<sid>/hook.json"
+          },
+          "codexOptions": {
+            "permissionsPreset": "read-only"
+          },
+          "cols": 120,
+          "cwd": "<root>/project",
+          "hostColorScheme": "dark",
+          "provider": "codex",
+          "realmLaunch": {
+            "env": {
+              "CODEX_HOME": "<root>/realms/managed",
+              "PATH": "/usr/bin"
+            },
+            "executable": "<root>/bin/codex.exe",
+            "sessionsDir": "<root>/realms/managed/sessions"
+          },
+          "rows": 30,
+          "sessionId": "<sid>",
+          "useResumePicker": "<undefined>"
+        }
+      ],
+      [
+        "hook file dispose",
+        "<sid>"
+      ],
+      [
+        "gateway drop",
+        "<sid>"
+      ],
+      [
+        "log",
+        "[pty-manager] Codex hooks for <sid>: off (the Hooks gateway is off or not listening, or the hook could not be given on this launch)"
+      ],
+      [
+        "log",
+        "[pty-manager] Launching Codex PTY: <root>/bin/codex.exe --sandbox read-only cwd=<root>/project (resume=none) conpty=bundled (/bundled-conpty)"
+      ],
+      [
+        "spawn",
+        {
+          "args": [
+            "--sandbox",
+            "read-only"
+          ],
+          "cols": 120,
+          "conpty": {
+            "useConptyDll": true
+          },
+          "cwd": "<root>/project",
+          "env": {
+            "CLAUDE_MULTI_SESSION_ID": "<sid>",
+            "CODEX_HOME": "<root>/realms/managed",
+            "PATH": "/usr/bin"
+          },
+          "file": "<root>/bin/codex.exe",
+          "kind": "codex",
+          "name": "xterm-256color",
+          "rows": 30
+        }
+      ],
+      [
+        "pane open",
+        {
+          "clamp": true,
+          "cols": 120,
+          "current": true,
+          "held": false,
+          "rows": 30,
+          "sid": "<sid>"
+        }
+      ],
+      [
+        "telemetry",
+        {
+          "callbacks": [
+            "function",
+            "function",
+            "function",
+            "function"
+          ],
+          "cwd": "<root>/project",
+          "sessionsDir": "<root>/realms/managed/sessions",
+          "sid": "<sid>",
+          "spawnTimestamp": "<t>"
+        }
+      ],
+      [
+        "registerClaudeReviewSession",
+        {
+          "cwd": "<root>/project",
+          "sid": "<sid>"
+        }
+      ]
+    ],
+    "after": {
+      "holdsLease": true,
+      "kept": null,
+      "threw": null
+    },
+    "unbound": [
+      [
+        "kill",
+        1
+      ],
+      [
+        "telemetry stop",
+        null
+      ],
+      [
+        "unregisterCodexReviewSession",
+        "<sid>"
+      ],
+      [
+        "releaseMcpSessionProvider",
+        "<sid>"
+      ],
+      [
+        "pane close",
+        "<sid>"
+      ]
+    ]
+  },
+  "launch: this computer's own sign-in (no app-managed home)": {
+    "launched": [
+      [
+        "unregisterCodexReviewSession",
+        "<sid>"
+      ],
+      [
+        "releaseMcpSessionProvider",
+        "<sid>"
+      ],
+      [
+        "pane close",
+        "<sid>"
+      ],
+      [
+        "build",
+        {
+          "codexOptions": {
+            "permissionsPreset": "read-only"
+          },
+          "cols": 120,
+          "cwd": "<root>/project",
+          "hostColorScheme": "dark",
+          "provider": "codex",
+          "realmLaunch": {
+            "env": {
+              "CODEX_HOME": "<root>/realms/own",
+              "PATH": "/usr/bin"
+            },
+            "executable": "<root>/bin/codex.exe",
+            "sessionsDir": "<root>/realms/own/sessions"
+          },
+          "rows": 30,
+          "sessionId": "<sid>",
+          "useResumePicker": "<undefined>"
+        }
+      ],
+      [
+        "log",
+        "[pty-manager] Codex hooks for <sid>: off (the Hooks gateway is off or not listening, or the hook could not be given on this launch)"
+      ],
+      [
+        "log",
+        "[pty-manager] Launching Codex PTY: <root>/bin/codex.exe --sandbox read-only cwd=<root>/project (resume=none) conpty=bundled (/bundled-conpty)"
+      ],
+      [
+        "spawn",
+        {
+          "args": [
+            "--sandbox",
+            "read-only"
+          ],
+          "cols": 120,
+          "conpty": {
+            "useConptyDll": true
+          },
+          "cwd": "<root>/project",
+          "env": {
+            "CLAUDE_MULTI_SESSION_ID": "<sid>",
+            "CODEX_HOME": "<root>/realms/own",
+            "PATH": "/usr/bin"
+          },
+          "file": "<root>/bin/codex.exe",
+          "kind": "codex",
+          "name": "xterm-256color",
+          "rows": 30
+        }
+      ],
+      [
+        "pane open",
+        {
+          "clamp": true,
+          "cols": 120,
+          "current": true,
+          "held": false,
+          "rows": 30,
+          "sid": "<sid>"
+        }
+      ],
+      [
+        "telemetry",
+        {
+          "callbacks": [
+            "function",
+            "function",
+            "function",
+            "function"
+          ],
+          "cwd": "<root>/project",
+          "sessionsDir": "<root>/realms/own/sessions",
+          "sid": "<sid>",
+          "spawnTimestamp": "<t>"
+        }
+      ],
+      [
+        "registerClaudeReviewSession",
+        {
+          "cwd": "<root>/project",
+          "sid": "<sid>"
+        }
+      ]
+    ],
+    "after": {
+      "holdsLease": true,
+      "kept": null,
+      "threw": null
+    },
+    "unbound": [
+      [
+        "kill",
+        1
+      ],
+      [
+        "telemetry stop",
+        null
+      ],
+      [
+        "unregisterCodexReviewSession",
+        "<sid>"
+      ],
+      [
+        "releaseMcpSessionProvider",
+        "<sid>"
+      ],
+      [
+        "pane close",
+        "<sid>"
+      ]
+    ]
+  },
+  "launch: an account with no home and no ownership recorded": {
+    "launched": [
+      [
+        "unregisterCodexReviewSession",
+        "<sid>"
+      ],
+      [
+        "releaseMcpSessionProvider",
+        "<sid>"
+      ],
+      [
+        "pane close",
+        "<sid>"
+      ],
+      [
+        "build",
+        {
+          "codexOptions": {
+            "permissionsPreset": "read-only"
+          },
+          "cols": 120,
+          "cwd": "<root>/project",
+          "hostColorScheme": "dark",
+          "provider": "codex",
+          "realmLaunch": {
+            "env": {
+              "CODEX_HOME": "<root>/realms/bare",
+              "PATH": "/usr/bin"
+            },
+            "executable": "<root>/bin/codex.exe",
+            "sessionsDir": "<root>/realms/bare/sessions"
+          },
+          "rows": 30,
+          "sessionId": "<sid>",
+          "useResumePicker": "<undefined>"
+        }
+      ],
+      [
+        "log",
+        "[pty-manager] Codex hooks for <sid>: off (the Hooks gateway is off or not listening, or the hook could not be given on this launch)"
+      ],
+      [
+        "log",
+        "[pty-manager] Launching Codex PTY: <root>/bin/codex.exe --sandbox read-only cwd=<root>/project (resume=none) conpty=bundled (/bundled-conpty)"
+      ],
+      [
+        "spawn",
+        {
+          "args": [
+            "--sandbox",
+            "read-only"
+          ],
+          "cols": 120,
+          "conpty": {
+            "useConptyDll": true
+          },
+          "cwd": "<root>/project",
+          "env": {
+            "CLAUDE_MULTI_SESSION_ID": "<sid>",
+            "CODEX_HOME": "<root>/realms/bare",
+            "PATH": "/usr/bin"
+          },
+          "file": "<root>/bin/codex.exe",
+          "kind": "codex",
+          "name": "xterm-256color",
+          "rows": 30
+        }
+      ],
+      [
+        "pane open",
+        {
+          "clamp": true,
+          "cols": 120,
+          "current": true,
+          "held": false,
+          "rows": 30,
+          "sid": "<sid>"
+        }
+      ],
+      [
+        "telemetry",
+        {
+          "callbacks": [
+            "function",
+            "function",
+            "function",
+            "function"
+          ],
+          "cwd": "<root>/project",
+          "sessionsDir": "<root>/realms/bare/sessions",
+          "sid": "<sid>",
+          "spawnTimestamp": "<t>"
+        }
+      ],
+      [
+        "registerClaudeReviewSession",
+        {
+          "cwd": "<root>/project",
+          "sid": "<sid>"
+        }
+      ]
+    ],
+    "after": {
+      "holdsLease": true,
+      "kept": null,
+      "threw": null
+    },
+    "unbound": [
+      [
+        "kill",
+        1
+      ],
+      [
+        "telemetry stop",
+        null
+      ],
+      [
+        "unregisterCodexReviewSession",
+        "<sid>"
+      ],
+      [
+        "releaseMcpSessionProvider",
+        "<sid>"
+      ],
+      [
+        "pane close",
+        "<sid>"
+      ]
+    ]
+  },
+  "launch: exact resume of a restored tab's conversation, found in the realm": {
+    "launched": [
+      [
+        "unregisterCodexReviewSession",
+        "<sid>"
+      ],
+      [
+        "releaseMcpSessionProvider",
+        "<sid>"
+      ],
+      [
+        "pane close",
+        "<sid>"
+      ],
+      [
+        "build",
+        {
+          "codexOptions": {
+            "permissionsPreset": "read-only"
+          },
+          "cols": 120,
+          "cwd": "<root>/project",
+          "hostColorScheme": "dark",
+          "provider": "codex",
+          "realmLaunch": {
+            "env": {
+              "CODEX_HOME": "<root>/realms/managed",
+              "PATH": "/usr/bin"
+            },
+            "executable": "<root>/bin/codex.exe",
+            "sessionsDir": "<root>/realms/managed/sessions"
+          },
+          "resume": {
+            "cwd": "<root>/elsewhere",
+            "uuid": "0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b"
+          },
+          "rows": 30,
+          "sessionId": "<sid>",
+          "useResumePicker": "<undefined>"
+        }
+      ],
+      [
+        "log",
+        "[pty-manager] Codex hooks for <sid>: off (the Hooks gateway is off or not listening, or the hook could not be given on this launch)"
+      ],
+      [
+        "log",
+        "[pty-manager] Launching Codex PTY: <root>/bin/codex.exe --sandbox read-only cwd=<root>/elsewhere (resume=0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b) conpty=bundled (/bundled-conpty)"
+      ],
+      [
+        "spawn",
+        {
+          "args": [
+            "--sandbox",
+            "read-only"
+          ],
+          "cols": 120,
+          "conpty": {
+            "useConptyDll": true
+          },
+          "cwd": "<root>/elsewhere",
+          "env": {
+            "CLAUDE_MULTI_SESSION_ID": "<sid>",
+            "CODEX_HOME": "<root>/realms/managed",
+            "PATH": "/usr/bin"
+          },
+          "file": "<root>/bin/codex.exe",
+          "kind": "codex",
+          "name": "xterm-256color",
+          "rows": 30
+        }
+      ],
+      [
+        "pane open",
+        {
+          "clamp": true,
+          "cols": 120,
+          "current": true,
+          "held": false,
+          "rows": 30,
+          "sid": "<sid>"
+        }
+      ],
+      [
+        "telemetry",
+        {
+          "callbacks": [
+            "function",
+            "function",
+            "function",
+            "function"
+          ],
+          "cwd": "<root>/elsewhere",
+          "resumeId": "0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b",
+          "resumePath": "<root>/realms/managed/sessions/rollout-0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b.jsonl",
+          "sessionsDir": "<root>/realms/managed/sessions",
+          "sid": "<sid>",
+          "spawnTimestamp": "<t>"
+        }
+      ],
+      [
+        "registerClaudeReviewSession",
+        {
+          "cwd": "<root>/project",
+          "sid": "<sid>"
+        }
+      ]
+    ],
+    "after": {
+      "holdsLease": true,
+      "kept": {
+        "cwd": "<root>/elsewhere",
+        "uuid": "0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b"
+      },
+      "threw": null
+    },
+    "unbound": [
+      [
+        "kill",
+        1
+      ],
+      [
+        "telemetry stop",
+        null
+      ],
+      [
+        "unregisterCodexReviewSession",
+        "<sid>"
+      ],
+      [
+        "releaseMcpSessionProvider",
+        "<sid>"
+      ],
+      [
+        "pane close",
+        "<sid>"
+      ]
+    ]
+  },
+  "launch: exact resume whose rollout does not record the kept folder": {
+    "launched": [
+      [
+        "unregisterCodexReviewSession",
+        "<sid>"
+      ],
+      [
+        "releaseMcpSessionProvider",
+        "<sid>"
+      ],
+      [
+        "pane close",
+        "<sid>"
+      ],
+      [
+        "build",
+        {
+          "codexOptions": {
+            "permissionsPreset": "read-only"
+          },
+          "cols": 120,
+          "cwd": "<root>/project",
+          "hostColorScheme": "dark",
+          "provider": "codex",
+          "realmLaunch": {
+            "env": {
+              "CODEX_HOME": "<root>/realms/managed",
+              "PATH": "/usr/bin"
+            },
+            "executable": "<root>/bin/codex.exe",
+            "sessionsDir": "<root>/realms/managed/sessions"
+          },
+          "resume": {
+            "cwd": "<root>/elsewhere",
+            "uuid": "0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b"
+          },
+          "rows": 30,
+          "sessionId": "<sid>",
+          "useResumePicker": "<undefined>"
+        }
+      ],
+      [
+        "log",
+        "[pty-manager] Codex hooks for <sid>: off (the Hooks gateway is off or not listening, or the hook could not be given on this launch)"
+      ],
+      [
+        "log",
+        "[pty-manager] Codex resume for <sid>: no rollout of 0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b records the directory the session kept; resuming in <root>/elsewhere"
+      ],
+      [
+        "log",
+        "[pty-manager] Launching Codex PTY: <root>/bin/codex.exe --sandbox read-only cwd=<root>/elsewhere (resume=0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b) conpty=bundled (/bundled-conpty)"
+      ],
+      [
+        "spawn",
+        {
+          "args": [
+            "--sandbox",
+            "read-only"
+          ],
+          "cols": 120,
+          "conpty": {
+            "useConptyDll": true
+          },
+          "cwd": "<root>/elsewhere",
+          "env": {
+            "CLAUDE_MULTI_SESSION_ID": "<sid>",
+            "CODEX_HOME": "<root>/realms/managed",
+            "PATH": "/usr/bin"
+          },
+          "file": "<root>/bin/codex.exe",
+          "kind": "codex",
+          "name": "xterm-256color",
+          "rows": 30
+        }
+      ],
+      [
+        "pane open",
+        {
+          "clamp": true,
+          "cols": 120,
+          "current": true,
+          "held": false,
+          "rows": 30,
+          "sid": "<sid>"
+        }
+      ],
+      [
+        "telemetry",
+        {
+          "callbacks": [
+            "function",
+            "function",
+            "function",
+            "function"
+          ],
+          "cwd": "<root>/elsewhere",
+          "resumeId": "0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b",
+          "resumePath": "<root>/realms/managed/sessions/rollout-0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b.jsonl",
+          "sessionsDir": "<root>/realms/managed/sessions",
+          "sid": "<sid>",
+          "spawnTimestamp": "<t>"
+        }
+      ],
+      [
+        "registerClaudeReviewSession",
+        {
+          "cwd": "<root>/project",
+          "sid": "<sid>"
+        }
+      ]
+    ],
+    "after": {
+      "holdsLease": true,
+      "kept": {
+        "cwd": "<root>/elsewhere",
+        "uuid": "0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b"
+      },
+      "threw": null
+    },
+    "unbound": [
+      [
+        "kill",
+        1
+      ],
+      [
+        "telemetry stop",
+        null
+      ],
+      [
+        "unregisterCodexReviewSession",
+        "<sid>"
+      ],
+      [
+        "releaseMcpSessionProvider",
+        "<sid>"
+      ],
+      [
+        "pane close",
+        "<sid>"
+      ]
+    ]
+  },
+  "launch: exact resume not found in the realm": {
+    "launched": [
+      [
+        "unregisterCodexReviewSession",
+        "<sid>"
+      ],
+      [
+        "releaseMcpSessionProvider",
+        "<sid>"
+      ],
+      [
+        "pane close",
+        "<sid>"
+      ],
+      [
+        "build",
+        {
+          "codexOptions": {
+            "permissionsPreset": "read-only"
+          },
+          "cols": 120,
+          "cwd": "<root>/project",
+          "hostColorScheme": "dark",
+          "provider": "codex",
+          "realmLaunch": {
+            "env": {
+              "CODEX_HOME": "<root>/realms/managed",
+              "PATH": "/usr/bin"
+            },
+            "executable": "<root>/bin/codex.exe",
+            "sessionsDir": "<root>/realms/managed/sessions"
+          },
+          "resume": {
+            "cwd": "<root>/elsewhere",
+            "uuid": "0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b"
+          },
+          "rows": 30,
+          "sessionId": "<sid>",
+          "useResumePicker": "<undefined>"
+        }
+      ],
+      [
+        "log",
+        "[pty-manager] Codex hooks for <sid>: off (the Hooks gateway is off or not listening, or the hook could not be given on this launch)"
+      ],
+      [
+        "log",
+        "[pty-manager] Launching Codex PTY: <root>/bin/codex.exe --sandbox read-only cwd=<root>/project (resume=none) conpty=bundled (/bundled-conpty)"
+      ],
+      [
+        "spawn",
+        {
+          "args": [
+            "--sandbox",
+            "read-only"
+          ],
+          "cols": 120,
+          "conpty": {
+            "useConptyDll": true
+          },
+          "cwd": "<root>/project",
+          "env": {
+            "CLAUDE_MULTI_SESSION_ID": "<sid>",
+            "CODEX_HOME": "<root>/realms/managed",
+            "PATH": "/usr/bin"
+          },
+          "file": "<root>/bin/codex.exe",
+          "kind": "codex",
+          "name": "xterm-256color",
+          "rows": 30
+        }
+      ],
+      [
+        "pane open",
+        {
+          "clamp": true,
+          "cols": 120,
+          "current": true,
+          "held": false,
+          "rows": 30,
+          "sid": "<sid>"
+        }
+      ],
+      [
+        "telemetry",
+        {
+          "callbacks": [
+            "function",
+            "function",
+            "function",
+            "function"
+          ],
+          "cwd": "<root>/project",
+          "sessionsDir": "<root>/realms/managed/sessions",
+          "sid": "<sid>",
+          "spawnTimestamp": "<t>"
+        }
+      ],
+      [
+        "registerClaudeReviewSession",
+        {
+          "cwd": "<root>/project",
+          "sid": "<sid>"
+        }
+      ]
+    ],
+    "after": {
+      "holdsLease": true,
+      "kept": null,
+      "threw": null
+    },
+    "unbound": [
+      [
+        "kill",
+        1
+      ],
+      [
+        "telemetry stop",
+        null
+      ],
+      [
+        "unregisterCodexReviewSession",
+        "<sid>"
+      ],
+      [
+        "releaseMcpSessionProvider",
+        "<sid>"
+      ],
+      [
+        "pane close",
+        "<sid>"
+      ]
+    ]
+  },
+  "launch: a fresh conversation asked by the account launch (carry not certain)": {
+    "launched": [
+      [
+        "unregisterCodexReviewSession",
+        "<sid>"
+      ],
+      [
+        "releaseMcpSessionProvider",
+        "<sid>"
+      ],
+      [
+        "pane close",
+        "<sid>"
+      ],
+      [
+        "build",
+        {
+          "codexOptions": {
+            "permissionsPreset": "read-only"
+          },
+          "cols": 120,
+          "cwd": "<root>/project",
+          "hostColorScheme": "dark",
+          "provider": "codex",
+          "realmLaunch": {
+            "env": {
+              "CODEX_HOME": "<root>/realms/managed",
+              "PATH": "/usr/bin"
+            },
+            "executable": "<root>/bin/codex.exe",
+            "sessionsDir": "<root>/realms/managed/sessions"
+          },
+          "resume": {
+            "cwd": "<root>/elsewhere",
+            "uuid": "0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b"
+          },
+          "rows": 30,
+          "sessionId": "<sid>",
+          "useResumePicker": "<undefined>"
+        }
+      ],
+      [
+        "log",
+        "[pty-manager] Codex hooks for <sid>: off (the Hooks gateway is off or not listening, or the hook could not be given on this launch)"
+      ],
+      [
+        "log",
+        "[pty-manager] Launching Codex PTY: <root>/bin/codex.exe --sandbox read-only cwd=<root>/elsewhere (resume=0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b) conpty=bundled (/bundled-conpty)"
+      ],
+      [
+        "spawn",
+        {
+          "args": [
+            "--sandbox",
+            "read-only"
+          ],
+          "cols": 120,
+          "conpty": {
+            "useConptyDll": true
+          },
+          "cwd": "<root>/elsewhere",
+          "env": {
+            "CLAUDE_MULTI_SESSION_ID": "<sid>",
+            "CODEX_HOME": "<root>/realms/managed",
+            "PATH": "/usr/bin"
+          },
+          "file": "<root>/bin/codex.exe",
+          "kind": "codex",
+          "name": "xterm-256color",
+          "rows": 30
+        }
+      ],
+      [
+        "pane open",
+        {
+          "clamp": true,
+          "cols": 120,
+          "current": true,
+          "held": false,
+          "rows": 30,
+          "sid": "<sid>"
+        }
+      ],
+      [
+        "telemetry",
+        {
+          "callbacks": [
+            "function",
+            "function",
+            "function",
+            "function"
+          ],
+          "cwd": "<root>/elsewhere",
+          "resumeId": "0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b",
+          "resumePath": "<root>/realms/managed/sessions/rollout-0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b.jsonl",
+          "sessionsDir": "<root>/realms/managed/sessions",
+          "sid": "<sid>",
+          "spawnTimestamp": "<t>"
+        }
+      ],
+      [
+        "registerClaudeReviewSession",
+        {
+          "cwd": "<root>/project",
+          "sid": "<sid>"
+        }
+      ]
+    ],
+    "after": {
+      "holdsLease": true,
+      "kept": {
+        "cwd": "<root>/elsewhere",
+        "uuid": "0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b"
+      },
+      "threw": null
+    },
+    "unbound": [
+      [
+        "kill",
+        1
+      ],
+      [
+        "telemetry stop",
+        null
+      ],
+      [
+        "unregisterCodexReviewSession",
+        "<sid>"
+      ],
+      [
+        "releaseMcpSessionProvider",
+        "<sid>"
+      ],
+      [
+        "pane close",
+        "<sid>"
+      ]
+    ]
+  },
+  "launch: the resume list with a pick file": {
+    "launched": [
+      [
+        "unregisterCodexReviewSession",
+        "<sid>"
+      ],
+      [
+        "releaseMcpSessionProvider",
+        "<sid>"
+      ],
+      [
+        "pane close",
+        "<sid>"
+      ],
+      [
+        "build",
+        {
+          "codexOpenElsewhere": [],
+          "codexOptions": {
+            "permissionsPreset": "read-only"
+          },
+          "cols": 120,
+          "cwd": "<root>/project",
+          "hostColorScheme": "dark",
+          "provider": "codex",
+          "realmLaunch": {
+            "env": {
+              "CODEX_HOME": "<root>/realms/managed",
+              "PATH": "/usr/bin"
+            },
+            "executable": "<root>/bin/codex.exe",
+            "sessionsDir": "<root>/realms/managed/sessions"
+          },
+          "rows": 30,
+          "sessionId": "<sid>",
+          "useResumePicker": true
+        }
+      ],
+      [
+        "log",
+        "[pty-manager] Codex hooks for <sid>: off (the Hooks gateway is off or not listening, or the hook could not be given on this launch)"
+      ],
+      [
+        "log",
+        "[pty-manager] Launching Codex PTY: <root>/bin/codex.exe --sandbox read-only cwd=<root>/project (resume=none) conpty=bundled (/bundled-conpty)"
+      ],
+      [
+        "spawn",
+        {
+          "args": [
+            "--sandbox",
+            "read-only"
+          ],
+          "cols": 120,
+          "conpty": {
+            "useConptyDll": true
+          },
+          "cwd": "<root>/project",
+          "env": {
+            "CLAUDE_MULTI_SESSION_ID": "<sid>",
+            "CODEX_HOME": "<root>/realms/managed",
+            "PATH": "/usr/bin"
+          },
+          "file": "<root>/bin/codex.exe",
+          "kind": "codex",
+          "name": "xterm-256color",
+          "rows": 30
+        }
+      ],
+      [
+        "pane open",
+        {
+          "clamp": true,
+          "cols": 120,
+          "current": true,
+          "held": false,
+          "rows": 30,
+          "sid": "<sid>"
+        }
+      ],
+      [
+        "telemetry",
+        {
+          "callbacks": [
+            "function",
+            "function",
+            "function",
+            "function"
+          ],
+          "cwd": "<root>/project",
+          "pickFile": "<root>/pick/pick.json",
+          "pickFolder": {
+            "id": "pick-folder",
+            "real": "<root>/pick"
+          },
+          "sessionsDir": "<root>/realms/managed/sessions",
+          "sid": "<sid>",
+          "spawnTimestamp": "<t>"
+        }
+      ],
+      [
+        "registerClaudeReviewSession",
+        {
+          "cwd": "<root>/project",
+          "sid": "<sid>"
+        }
+      ]
+    ],
+    "after": {
+      "holdsLease": true,
+      "kept": null,
+      "threw": null
+    },
+    "unbound": [
+      [
+        "kill",
+        1
+      ],
+      [
+        "telemetry stop",
+        null
+      ],
+      [
+        "unregisterCodexReviewSession",
+        "<sid>"
+      ],
+      [
+        "releaseMcpSessionProvider",
+        "<sid>"
+      ],
+      [
+        "pane close",
+        "<sid>"
+      ]
+    ]
+  },
+  "launch: the resume list with no pick file": {
+    "launched": [
+      [
+        "unregisterCodexReviewSession",
+        "<sid>"
+      ],
+      [
+        "releaseMcpSessionProvider",
+        "<sid>"
+      ],
+      [
+        "pane close",
+        "<sid>"
+      ],
+      [
+        "build",
+        {
+          "codexOpenElsewhere": [],
+          "codexOptions": {
+            "permissionsPreset": "read-only"
+          },
+          "cols": 120,
+          "cwd": "<root>/project",
+          "hostColorScheme": "dark",
+          "provider": "codex",
+          "realmLaunch": {
+            "env": {
+              "CODEX_HOME": "<root>/realms/managed",
+              "PATH": "/usr/bin"
+            },
+            "executable": "<root>/bin/codex.exe",
+            "sessionsDir": "<root>/realms/managed/sessions"
+          },
+          "rows": 30,
+          "sessionId": "<sid>",
+          "useResumePicker": true
+        }
+      ],
+      [
+        "log",
+        "[pty-manager] Codex hooks for <sid>: off (the Hooks gateway is off or not listening, or the hook could not be given on this launch)"
+      ],
+      [
+        "log",
+        "[pty-manager] Launching Codex PTY: <root>/bin/codex.exe --sandbox read-only cwd=<root>/project (resume=none) conpty=bundled (/bundled-conpty)"
+      ],
+      [
+        "spawn",
+        {
+          "args": [
+            "--sandbox",
+            "read-only"
+          ],
+          "cols": 120,
+          "conpty": {
+            "useConptyDll": true
+          },
+          "cwd": "<root>/project",
+          "env": {
+            "CLAUDE_MULTI_SESSION_ID": "<sid>",
+            "CODEX_HOME": "<root>/realms/managed",
+            "PATH": "/usr/bin"
+          },
+          "file": "<root>/bin/codex.exe",
+          "kind": "codex",
+          "name": "xterm-256color",
+          "rows": 30
+        }
+      ],
+      [
+        "pane open",
+        {
+          "clamp": true,
+          "cols": 120,
+          "current": true,
+          "held": false,
+          "rows": 30,
+          "sid": "<sid>"
+        }
+      ],
+      [
+        "telemetry",
+        {
+          "callbacks": [
+            "function",
+            "function",
+            "function",
+            "function"
+          ],
+          "cwd": "<root>/project",
+          "sessionsDir": "<root>/realms/managed/sessions",
+          "sid": "<sid>",
+          "spawnTimestamp": "<t>"
+        }
+      ],
+      [
+        "registerClaudeReviewSession",
+        {
+          "cwd": "<root>/project",
+          "sid": "<sid>"
+        }
+      ]
+    ],
+    "after": {
+      "holdsLease": true,
+      "kept": null,
+      "threw": null
+    },
+    "unbound": [
+      [
+        "kill",
+        1
+      ],
+      [
+        "telemetry stop",
+        null
+      ],
+      [
+        "unregisterCodexReviewSession",
+        "<sid>"
+      ],
+      [
+        "releaseMcpSessionProvider",
+        "<sid>"
+      ],
+      [
+        "pane close",
+        "<sid>"
+      ]
+    ]
+  },
+  "launch: Ask Conductor, its question on argv": {
+    "launched": [
+      [
+        "unregisterCodexReviewSession",
+        "<sid>"
+      ],
+      [
+        "releaseMcpSessionProvider",
+        "<sid>"
+      ],
+      [
+        "pane close",
+        "<sid>"
+      ],
+      [
+        "build",
+        {
+          "askProjectDocMaxBytes": 218222,
+          "askPrompt": "How do I add a machine?",
+          "codexOptions": {
+            "permissionsPreset": "read-only"
+          },
+          "cols": 120,
+          "cwd": "<root>/project",
+          "hostColorScheme": "dark",
+          "provider": "codex",
+          "realmLaunch": {
+            "env": {
+              "CODEX_HOME": "<root>/realms/managed",
+              "PATH": "/usr/bin"
+            },
+            "executable": "<root>/bin/codex.exe",
+            "sessionsDir": "<root>/realms/managed/sessions"
+          },
+          "rows": 30,
+          "sessionId": "<sid>",
+          "useResumePicker": "<undefined>"
+        }
+      ],
+      [
+        "log",
+        "[pty-manager] Codex hooks for <sid>: off (the Hooks gateway is off or not listening, or the hook could not be given on this launch)"
+      ],
+      [
+        "log",
+        "[pty-manager] Launching Codex PTY: <root>/bin/codex.exe --sandbox read-only cwd=<root>/project (resume=none) conpty=bundled (/bundled-conpty)"
+      ],
+      [
+        "spawn",
+        {
+          "args": [
+            "--sandbox",
+            "read-only"
+          ],
+          "cols": 120,
+          "conpty": {
+            "useConptyDll": true
+          },
+          "cwd": "<root>/project",
+          "env": {
+            "CLAUDE_MULTI_SESSION_ID": "<sid>",
+            "CODEX_HOME": "<root>/realms/managed",
+            "PATH": "/usr/bin"
+          },
+          "file": "<root>/bin/codex.exe",
+          "kind": "codex",
+          "name": "xterm-256color",
+          "rows": 30
+        }
+      ],
+      [
+        "pane open",
+        {
+          "clamp": true,
+          "cols": 120,
+          "current": true,
+          "held": false,
+          "rows": 30,
+          "sid": "<sid>"
+        }
+      ],
+      [
+        "telemetry",
+        {
+          "callbacks": [
+            "function",
+            "function",
+            "function",
+            "function"
+          ],
+          "cwd": "<root>/project",
+          "sessionsDir": "<root>/realms/managed/sessions",
+          "sid": "<sid>",
+          "spawnTimestamp": "<t>"
+        }
+      ],
+      [
+        "registerClaudeReviewSession",
+        {
+          "cwd": "<root>/project",
+          "sid": "<sid>"
+        }
+      ]
+    ],
+    "after": {
+      "holdsLease": true,
+      "kept": null,
+      "threw": null
+    },
+    "unbound": [
+      [
+        "kill",
+        1
+      ],
+      [
+        "telemetry stop",
+        null
+      ],
+      [
+        "unregisterCodexReviewSession",
+        "<sid>"
+      ],
+      [
+        "releaseMcpSessionProvider",
+        "<sid>"
+      ],
+      [
+        "pane close",
+        "<sid>"
+      ]
+    ]
+  },
+  "launch: Ask Conductor, its question typed at the first ready composer": {
+    "launched": [
+      [
+        "unregisterCodexReviewSession",
+        "<sid>"
+      ],
+      [
+        "releaseMcpSessionProvider",
+        "<sid>"
+      ],
+      [
+        "pane close",
+        "<sid>"
+      ],
+      [
+        "build",
+        {
+          "askProjectDocMaxBytes": 218222,
+          "askPrompt": "How do I add a machine?",
+          "codexOptions": {
+            "permissionsPreset": "read-only"
+          },
+          "cols": 120,
+          "cwd": "<root>/project",
+          "hostColorScheme": "dark",
+          "provider": "codex",
+          "realmLaunch": {
+            "env": {
+              "CODEX_HOME": "<root>/realms/managed",
+              "PATH": "/usr/bin"
+            },
+            "executable": "<root>/bin/codex.exe",
+            "sessionsDir": "<root>/realms/managed/sessions"
+          },
+          "rows": 30,
+          "sessionId": "<sid>",
+          "useResumePicker": "<undefined>"
+        }
+      ],
+      [
+        "log",
+        "[pty-manager] Codex hooks for <sid>: off (the Hooks gateway is off or not listening, or the hook could not be given on this launch)"
+      ],
+      [
+        "log",
+        "[pty-manager] Launching Codex PTY: <root>/bin/codex.exe --sandbox read-only cwd=<root>/project (resume=none) conpty=bundled (/bundled-conpty)"
+      ],
+      [
+        "spawn",
+        {
+          "args": [
+            "--sandbox",
+            "read-only"
+          ],
+          "cols": 120,
+          "conpty": {
+            "useConptyDll": true
+          },
+          "cwd": "<root>/project",
+          "env": {
+            "CLAUDE_MULTI_SESSION_ID": "<sid>",
+            "CODEX_HOME": "<root>/realms/managed",
+            "PATH": "/usr/bin"
+          },
+          "file": "<root>/bin/codex.exe",
+          "kind": "codex",
+          "name": "xterm-256color",
+          "rows": 30
+        }
+      ],
+      [
+        "pane open",
+        {
+          "clamp": true,
+          "cols": 120,
+          "current": true,
+          "held": false,
+          "rows": 30,
+          "sid": "<sid>"
+        }
+      ],
+      [
+        "telemetry",
+        {
+          "callbacks": [
+            "function",
+            "function",
+            "function",
+            "function"
+          ],
+          "cwd": "<root>/project",
+          "sessionsDir": "<root>/realms/managed/sessions",
+          "sid": "<sid>",
+          "spawnTimestamp": "<t>"
+        }
+      ],
+      [
+        "registerClaudeReviewSession",
+        {
+          "cwd": "<root>/project",
+          "sid": "<sid>"
+        }
+      ],
+      [
+        "askQuestion",
+        {
+          "question": "How do I add a machine?",
+          "sid": "<sid>"
+        }
+      ]
+    ],
+    "after": {
+      "holdsLease": true,
+      "kept": null,
+      "threw": null
+    },
+    "unbound": [
+      [
+        "kill",
+        1
+      ],
+      [
+        "telemetry stop",
+        null
+      ],
+      [
+        "unregisterCodexReviewSession",
+        "<sid>"
+      ],
+      [
+        "releaseMcpSessionProvider",
+        "<sid>"
+      ],
+      [
+        "pane close",
+        "<sid>"
+      ]
+    ]
+  },
+  "launch: Ask Conductor resuming a conversation of another folder": {
+    "launched": [
+      [
+        "unregisterCodexReviewSession",
+        "<sid>"
+      ],
+      [
+        "releaseMcpSessionProvider",
+        "<sid>"
+      ],
+      [
+        "pane close",
+        "<sid>"
+      ],
+      [
+        "log",
+        "[pty-manager] Ask <sid>: its conversation ran in another folder; started afresh in the help folder"
+      ],
+      [
+        "build",
+        {
+          "askProjectDocMaxBytes": 218222,
+          "codexOptions": {
+            "permissionsPreset": "read-only"
+          },
+          "cols": 120,
+          "cwd": "<root>/project",
+          "hostColorScheme": "dark",
+          "provider": "codex",
+          "realmLaunch": {
+            "env": {
+              "CODEX_HOME": "<root>/realms/managed",
+              "PATH": "/usr/bin"
+            },
+            "executable": "<root>/bin/codex.exe",
+            "sessionsDir": "<root>/realms/managed/sessions"
+          },
+          "rows": 30,
+          "sessionId": "<sid>",
+          "useResumePicker": "<undefined>"
+        }
+      ],
+      [
+        "log",
+        "[pty-manager] Codex hooks for <sid>: off (the Hooks gateway is off or not listening, or the hook could not be given on this launch)"
+      ],
+      [
+        "log",
+        "[pty-manager] Launching Codex PTY: <root>/bin/codex.exe --sandbox read-only cwd=<root>/project (resume=none) conpty=bundled (/bundled-conpty)"
+      ],
+      [
+        "spawn",
+        {
+          "args": [
+            "--sandbox",
+            "read-only"
+          ],
+          "cols": 120,
+          "conpty": {
+            "useConptyDll": true
+          },
+          "cwd": "<root>/project",
+          "env": {
+            "CLAUDE_MULTI_SESSION_ID": "<sid>",
+            "CODEX_HOME": "<root>/realms/managed",
+            "PATH": "/usr/bin"
+          },
+          "file": "<root>/bin/codex.exe",
+          "kind": "codex",
+          "name": "xterm-256color",
+          "rows": 30
+        }
+      ],
+      [
+        "pane open",
+        {
+          "clamp": true,
+          "cols": 120,
+          "current": true,
+          "held": false,
+          "rows": 30,
+          "sid": "<sid>"
+        }
+      ],
+      [
+        "telemetry",
+        {
+          "callbacks": [
+            "function",
+            "function",
+            "function",
+            "function"
+          ],
+          "cwd": "<root>/project",
+          "sessionsDir": "<root>/realms/managed/sessions",
+          "sid": "<sid>",
+          "spawnTimestamp": "<t>"
+        }
+      ],
+      [
+        "registerClaudeReviewSession",
+        {
+          "cwd": "<root>/project",
+          "sid": "<sid>"
+        }
+      ]
+    ],
+    "after": {
+      "holdsLease": true,
+      "kept": null,
+      "threw": null
+    },
+    "unbound": [
+      [
+        "kill",
+        1
+      ],
+      [
+        "telemetry stop",
+        null
+      ],
+      [
+        "unregisterCodexReviewSession",
+        "<sid>"
+      ],
+      [
+        "releaseMcpSessionProvider",
+        "<sid>"
+      ],
+      [
+        "pane close",
+        "<sid>"
+      ]
+    ]
+  },
+  "launch: Ask Conductor resuming a conversation of its own folder": {
+    "launched": [
+      [
+        "unregisterCodexReviewSession",
+        "<sid>"
+      ],
+      [
+        "releaseMcpSessionProvider",
+        "<sid>"
+      ],
+      [
+        "pane close",
+        "<sid>"
+      ],
+      [
+        "build",
+        {
+          "askProjectDocMaxBytes": 218222,
+          "codexOptions": {
+            "permissionsPreset": "read-only"
+          },
+          "cols": 120,
+          "cwd": "<root>/project",
+          "hostColorScheme": "dark",
+          "provider": "codex",
+          "realmLaunch": {
+            "env": {
+              "CODEX_HOME": "<root>/realms/managed",
+              "PATH": "/usr/bin"
+            },
+            "executable": "<root>/bin/codex.exe",
+            "sessionsDir": "<root>/realms/managed/sessions"
+          },
+          "resume": {
+            "cwd": "<root>/project",
+            "uuid": "0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b"
+          },
+          "rows": 30,
+          "sessionId": "<sid>",
+          "useResumePicker": "<undefined>"
+        }
+      ],
+      [
+        "log",
+        "[pty-manager] Codex hooks for <sid>: off (the Hooks gateway is off or not listening, or the hook could not be given on this launch)"
+      ],
+      [
+        "log",
+        "[pty-manager] Launching Codex PTY: <root>/bin/codex.exe --sandbox read-only cwd=<root>/project (resume=0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b) conpty=bundled (/bundled-conpty)"
+      ],
+      [
+        "spawn",
+        {
+          "args": [
+            "--sandbox",
+            "read-only"
+          ],
+          "cols": 120,
+          "conpty": {
+            "useConptyDll": true
+          },
+          "cwd": "<root>/project",
+          "env": {
+            "CLAUDE_MULTI_SESSION_ID": "<sid>",
+            "CODEX_HOME": "<root>/realms/managed",
+            "PATH": "/usr/bin"
+          },
+          "file": "<root>/bin/codex.exe",
+          "kind": "codex",
+          "name": "xterm-256color",
+          "rows": 30
+        }
+      ],
+      [
+        "pane open",
+        {
+          "clamp": true,
+          "cols": 120,
+          "current": true,
+          "held": false,
+          "rows": 30,
+          "sid": "<sid>"
+        }
+      ],
+      [
+        "telemetry",
+        {
+          "callbacks": [
+            "function",
+            "function",
+            "function",
+            "function"
+          ],
+          "cwd": "<root>/project",
+          "resumeId": "0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b",
+          "resumePath": "<root>/realms/managed/sessions/rollout-0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b.jsonl",
+          "sessionsDir": "<root>/realms/managed/sessions",
+          "sid": "<sid>",
+          "spawnTimestamp": "<t>"
+        }
+      ],
+      [
+        "registerClaudeReviewSession",
+        {
+          "cwd": "<root>/project",
+          "sid": "<sid>"
+        }
+      ]
+    ],
+    "after": {
+      "holdsLease": true,
+      "kept": {
+        "cwd": "<root>/project",
+        "uuid": "0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b"
+      },
+      "threw": null
+    },
+    "unbound": [
+      [
+        "kill",
+        1
+      ],
+      [
+        "telemetry stop",
+        null
+      ],
+      [
+        "unregisterCodexReviewSession",
+        "<sid>"
+      ],
+      [
+        "releaseMcpSessionProvider",
+        "<sid>"
+      ],
+      [
+        "pane close",
+        "<sid>"
+      ]
+    ]
+  },
+  "launch: an opening question on a launch that is not Ask Conductor's": {
+    "launched": [
+      [
+        "unregisterCodexReviewSession",
+        "<sid>"
+      ],
+      [
+        "releaseMcpSessionProvider",
+        "<sid>"
+      ],
+      [
+        "pane close",
+        "<sid>"
+      ],
+      [
+        "log",
+        "[pty-manager] Codex <sid>: an opening question on a launch that is not Ask Conductor's is ignored"
+      ],
+      [
+        "build",
+        {
+          "codexOptions": {
+            "permissionsPreset": "read-only"
+          },
+          "cols": 120,
+          "cwd": "<root>/project",
+          "hostColorScheme": "dark",
+          "provider": "codex",
+          "realmLaunch": {
+            "env": {
+              "CODEX_HOME": "<root>/realms/managed",
+              "PATH": "/usr/bin"
+            },
+            "executable": "<root>/bin/codex.exe",
+            "sessionsDir": "<root>/realms/managed/sessions"
+          },
+          "rows": 30,
+          "sessionId": "<sid>",
+          "useResumePicker": "<undefined>"
+        }
+      ],
+      [
+        "log",
+        "[pty-manager] Codex hooks for <sid>: off (the Hooks gateway is off or not listening, or the hook could not be given on this launch)"
+      ],
+      [
+        "log",
+        "[pty-manager] Launching Codex PTY: <root>/bin/codex.exe --sandbox read-only cwd=<root>/project (resume=none) conpty=bundled (/bundled-conpty)"
+      ],
+      [
+        "spawn",
+        {
+          "args": [
+            "--sandbox",
+            "read-only"
+          ],
+          "cols": 120,
+          "conpty": {
+            "useConptyDll": true
+          },
+          "cwd": "<root>/project",
+          "env": {
+            "CLAUDE_MULTI_SESSION_ID": "<sid>",
+            "CODEX_HOME": "<root>/realms/managed",
+            "PATH": "/usr/bin"
+          },
+          "file": "<root>/bin/codex.exe",
+          "kind": "codex",
+          "name": "xterm-256color",
+          "rows": 30
+        }
+      ],
+      [
+        "pane open",
+        {
+          "clamp": true,
+          "cols": 120,
+          "current": true,
+          "held": false,
+          "rows": 30,
+          "sid": "<sid>"
+        }
+      ],
+      [
+        "telemetry",
+        {
+          "callbacks": [
+            "function",
+            "function",
+            "function",
+            "function"
+          ],
+          "cwd": "<root>/project",
+          "sessionsDir": "<root>/realms/managed/sessions",
+          "sid": "<sid>",
+          "spawnTimestamp": "<t>"
+        }
+      ],
+      [
+        "registerClaudeReviewSession",
+        {
+          "cwd": "<root>/project",
+          "sid": "<sid>"
+        }
+      ]
+    ],
+    "after": {
+      "holdsLease": true,
+      "kept": null,
+      "threw": null
+    },
+    "unbound": [
+      [
+        "kill",
+        1
+      ],
+      [
+        "telemetry stop",
+        null
+      ],
+      [
+        "unregisterCodexReviewSession",
+        "<sid>"
+      ],
+      [
+        "releaseMcpSessionProvider",
+        "<sid>"
+      ],
+      [
+        "pane close",
+        "<sid>"
+      ]
+    ]
+  },
+  "launch: held by the session helper": {
+    "launched": [
+      [
+        "unregisterCodexReviewSession",
+        "<sid>"
+      ],
+      [
+        "releaseMcpSessionProvider",
+        "<sid>"
+      ],
+      [
+        "pane close",
+        "<sid>"
+      ],
+      [
+        "build",
+        {
+          "codexOptions": {
+            "permissionsPreset": "read-only"
+          },
+          "cols": 120,
+          "cwd": "<root>/project",
+          "hostColorScheme": "dark",
+          "provider": "codex",
+          "realmLaunch": {
+            "env": {
+              "CODEX_HOME": "<root>/realms/managed",
+              "PATH": "/usr/bin"
+            },
+            "executable": "<root>/bin/codex.exe",
+            "sessionsDir": "<root>/realms/managed/sessions"
+          },
+          "rows": 30,
+          "sessionId": "<sid>",
+          "useResumePicker": "<undefined>"
+        }
+      ],
+      [
+        "log",
+        "[pty-manager] Codex hooks for <sid>: off (the Hooks gateway is off or not listening, or the hook could not be given on this launch)"
+      ],
+      [
+        "log",
+        "[pty-manager] Launching Codex PTY: <root>/bin/codex.exe --sandbox read-only cwd=<root>/project (resume=none) conpty=bundled (/bundled-conpty)"
+      ],
+      [
+        "spawn",
+        {
+          "args": [
+            "--sandbox",
+            "read-only"
+          ],
+          "cols": 120,
+          "conpty": {
+            "useConptyDll": true
+          },
+          "cwd": "<root>/project",
+          "env": {
+            "CLAUDE_MULTI_SESSION_ID": "<sid>",
+            "CODEX_HOME": "<root>/realms/managed",
+            "PATH": "/usr/bin"
+          },
+          "file": "<root>/bin/codex.exe",
+          "kind": "codex",
+          "name": "xterm-256color",
+          "rows": 30
+        }
+      ],
+      [
+        "pane open",
+        {
+          "clamp": true,
+          "cols": 120,
+          "current": true,
+          "held": true,
+          "rows": 30,
+          "sid": "<sid>"
+        }
+      ],
+      [
+        "telemetry",
+        {
+          "callbacks": [
+            "function",
+            "function",
+            "function",
+            "function"
+          ],
+          "cwd": "<root>/project",
+          "sessionsDir": "<root>/realms/managed/sessions",
+          "sid": "<sid>",
+          "spawnTimestamp": "<t>"
+        }
+      ],
+      [
+        "registerClaudeReviewSession",
+        {
+          "cwd": "<root>/project",
+          "sid": "<sid>"
+        }
+      ]
+    ],
+    "after": {
+      "holdsLease": true,
+      "kept": null,
+      "threw": null
+    },
+    "unbound": [
+      [
+        "kill",
+        1
+      ],
+      [
+        "telemetry stop",
+        null
+      ],
+      [
+        "unregisterCodexReviewSession",
+        "<sid>"
+      ],
+      [
+        "releaseMcpSessionProvider",
+        "<sid>"
+      ],
+      [
+        "pane close",
+        "<sid>"
+      ]
+    ]
+  },
+  "launch: the npm .cmd route through cmd.exe": {
+    "launched": [
+      [
+        "unregisterCodexReviewSession",
+        "<sid>"
+      ],
+      [
+        "releaseMcpSessionProvider",
+        "<sid>"
+      ],
+      [
+        "pane close",
+        "<sid>"
+      ],
+      [
+        "build",
+        {
+          "codexOptions": {
+            "permissionsPreset": "read-only"
+          },
+          "cols": 120,
+          "cwd": "<root>/project",
+          "hostColorScheme": "dark",
+          "provider": "codex",
+          "realmLaunch": {
+            "env": {
+              "CODEX_HOME": "<root>/realms/managed",
+              "PATH": "/usr/bin"
+            },
+            "executable": "<root>/bin/codex.exe",
+            "sessionsDir": "<root>/realms/managed/sessions"
+          },
+          "rows": 30,
+          "sessionId": "<sid>",
+          "useResumePicker": "<undefined>"
+        }
+      ],
+      [
+        "log",
+        "[pty-manager] Codex hooks for <sid>: off (the Hooks gateway is off or not listening, or the hook could not be given on this launch)"
+      ],
+      [
+        "log",
+        "[pty-manager] Launching Codex PTY: C:/Windows/System32/cmd.exe via cmd.exe cwd=<root>/project (resume=none) conpty=bundled (/bundled-conpty)"
+      ],
+      [
+        "spawn",
+        {
+          "args": "/d /s /c \"\"<root>/bin/codex.exe\" --sandbox read-only\"",
+          "cols": 120,
+          "conpty": {
+            "useConptyDll": true
+          },
+          "cwd": "<root>/project",
+          "env": {
+            "CLAUDE_MULTI_SESSION_ID": "<sid>",
+            "CODEX_HOME": "<root>/realms/managed",
+            "PATH": "/usr/bin"
+          },
+          "file": "C:/Windows/System32/cmd.exe",
+          "kind": "codex",
+          "name": "xterm-256color",
+          "rows": 30
+        }
+      ],
+      [
+        "pane open",
+        {
+          "clamp": true,
+          "cols": 120,
+          "current": true,
+          "held": false,
+          "rows": 30,
+          "sid": "<sid>"
+        }
+      ],
+      [
+        "telemetry",
+        {
+          "callbacks": [
+            "function",
+            "function",
+            "function",
+            "function"
+          ],
+          "cwd": "<root>/project",
+          "sessionsDir": "<root>/realms/managed/sessions",
+          "sid": "<sid>",
+          "spawnTimestamp": "<t>"
+        }
+      ],
+      [
+        "registerClaudeReviewSession",
+        {
+          "cwd": "<root>/project",
+          "sid": "<sid>"
+        }
+      ]
+    ],
+    "after": {
+      "holdsLease": true,
+      "kept": null,
+      "threw": null
+    },
+    "unbound": [
+      [
+        "kill",
+        1
+      ],
+      [
+        "telemetry stop",
+        null
+      ],
+      [
+        "unregisterCodexReviewSession",
+        "<sid>"
+      ],
+      [
+        "releaseMcpSessionProvider",
+        "<sid>"
+      ],
+      [
+        "pane close",
+        "<sid>"
+      ]
+    ]
+  },
+  "launch: the bundled ConPTY fails to start: the system one": {
+    "launched": [
+      [
+        "unregisterCodexReviewSession",
+        "<sid>"
+      ],
+      [
+        "releaseMcpSessionProvider",
+        "<sid>"
+      ],
+      [
+        "pane close",
+        "<sid>"
+      ],
+      [
+        "build",
+        {
+          "codexOptions": {
+            "permissionsPreset": "read-only"
+          },
+          "cols": 120,
+          "cwd": "<root>/project",
+          "hostColorScheme": "dark",
+          "provider": "codex",
+          "realmLaunch": {
+            "env": {
+              "CODEX_HOME": "<root>/realms/managed",
+              "PATH": "/usr/bin"
+            },
+            "executable": "<root>/bin/codex.exe",
+            "sessionsDir": "<root>/realms/managed/sessions"
+          },
+          "rows": 30,
+          "sessionId": "<sid>",
+          "useResumePicker": "<undefined>"
+        }
+      ],
+      [
+        "log",
+        "[pty-manager] Codex hooks for <sid>: off (the Hooks gateway is off or not listening, or the hook could not be given on this launch)"
+      ],
+      [
+        "log",
+        "[pty-manager] Launching Codex PTY: <root>/bin/codex.exe --sandbox read-only cwd=<root>/project (resume=none) conpty=bundled (/bundled-conpty)"
+      ],
+      [
+        "spawn",
+        {
+          "args": [
+            "--sandbox",
+            "read-only"
+          ],
+          "cols": 120,
+          "conpty": {
+            "useConptyDll": true
+          },
+          "cwd": "<root>/project",
+          "env": {
+            "CLAUDE_MULTI_SESSION_ID": "<sid>",
+            "CODEX_HOME": "<root>/realms/managed",
+            "PATH": "/usr/bin"
+          },
+          "file": "<root>/bin/codex.exe",
+          "kind": "codex",
+          "name": "xterm-256color",
+          "rows": 30
+        }
+      ],
+      [
+        "spawn",
+        {
+          "args": [
+            "--sandbox",
+            "read-only"
+          ],
+          "cols": 120,
+          "conpty": {
+            "useConptyDll": false
+          },
+          "cwd": "<root>/project",
+          "env": {
+            "CLAUDE_MULTI_SESSION_ID": "<sid>",
+            "CODEX_HOME": "<root>/realms/managed",
+            "PATH": "/usr/bin"
+          },
+          "file": "<root>/bin/codex.exe",
+          "kind": "codex",
+          "name": "xterm-256color",
+          "rows": 30
+        }
+      ],
+      [
+        "bundledConptyFailed",
+        "the bundled console host did not start"
+      ],
+      [
+        "log",
+        "[pty-manager] Codex PTY for <sid>: the bundled ConPTY failed to start; started on the system ConPTY"
+      ],
+      [
+        "pane open",
+        {
+          "clamp": true,
+          "cols": 120,
+          "current": true,
+          "held": false,
+          "rows": 30,
+          "sid": "<sid>"
+        }
+      ],
+      [
+        "telemetry",
+        {
+          "callbacks": [
+            "function",
+            "function",
+            "function",
+            "function"
+          ],
+          "cwd": "<root>/project",
+          "sessionsDir": "<root>/realms/managed/sessions",
+          "sid": "<sid>",
+          "spawnTimestamp": "<t>"
+        }
+      ],
+      [
+        "registerClaudeReviewSession",
+        {
+          "cwd": "<root>/project",
+          "sid": "<sid>"
+        }
+      ]
+    ],
+    "after": {
+      "holdsLease": true,
+      "kept": null,
+      "threw": null
+    },
+    "unbound": [
+      [
+        "kill",
+        1
+      ],
+      [
+        "telemetry stop",
+        null
+      ],
+      [
+        "unregisterCodexReviewSession",
+        "<sid>"
+      ],
+      [
+        "releaseMcpSessionProvider",
+        "<sid>"
+      ],
+      [
+        "pane close",
+        "<sid>"
+      ]
+    ]
+  },
+  "launch: the system ConPTY chosen": {
+    "launched": [
+      [
+        "unregisterCodexReviewSession",
+        "<sid>"
+      ],
+      [
+        "releaseMcpSessionProvider",
+        "<sid>"
+      ],
+      [
+        "pane close",
+        "<sid>"
+      ],
+      [
+        "build",
+        {
+          "codexOptions": {
+            "permissionsPreset": "read-only"
+          },
+          "cols": 120,
+          "cwd": "<root>/project",
+          "hostColorScheme": "dark",
+          "provider": "codex",
+          "realmLaunch": {
+            "env": {
+              "CODEX_HOME": "<root>/realms/managed",
+              "PATH": "/usr/bin"
+            },
+            "executable": "<root>/bin/codex.exe",
+            "sessionsDir": "<root>/realms/managed/sessions"
+          },
+          "rows": 30,
+          "sessionId": "<sid>",
+          "useResumePicker": "<undefined>"
+        }
+      ],
+      [
+        "log",
+        "[pty-manager] Codex hooks for <sid>: off (the Hooks gateway is off or not listening, or the hook could not be given on this launch)"
+      ],
+      [
+        "log",
+        "[pty-manager] Launching Codex PTY: <root>/bin/codex.exe --sandbox read-only cwd=<root>/project (resume=none) conpty=system (the bundled files are missing)"
+      ],
+      [
+        "spawn",
+        {
+          "args": [
+            "--sandbox",
+            "read-only"
+          ],
+          "cols": 120,
+          "conpty": {
+            "useConptyDll": false
+          },
+          "cwd": "<root>/project",
+          "env": {
+            "CLAUDE_MULTI_SESSION_ID": "<sid>",
+            "CODEX_HOME": "<root>/realms/managed",
+            "PATH": "/usr/bin"
+          },
+          "file": "<root>/bin/codex.exe",
+          "kind": "codex",
+          "name": "xterm-256color",
+          "rows": 30
+        }
+      ],
+      [
+        "pane open",
+        {
+          "clamp": true,
+          "cols": 120,
+          "current": true,
+          "held": false,
+          "rows": 30,
+          "sid": "<sid>"
+        }
+      ],
+      [
+        "telemetry",
+        {
+          "callbacks": [
+            "function",
+            "function",
+            "function",
+            "function"
+          ],
+          "cwd": "<root>/project",
+          "sessionsDir": "<root>/realms/managed/sessions",
+          "sid": "<sid>",
+          "spawnTimestamp": "<t>"
+        }
+      ],
+      [
+        "registerClaudeReviewSession",
+        {
+          "cwd": "<root>/project",
+          "sid": "<sid>"
+        }
+      ]
+    ],
+    "after": {
+      "holdsLease": true,
+      "kept": null,
+      "threw": null
+    },
+    "unbound": [
+      [
+        "kill",
+        1
+      ],
+      [
+        "telemetry stop",
+        null
+      ],
+      [
+        "unregisterCodexReviewSession",
+        "<sid>"
+      ],
+      [
+        "releaseMcpSessionProvider",
+        "<sid>"
+      ],
+      [
+        "pane close",
+        "<sid>"
+      ]
+    ]
+  },
+  "launch: no ConPTY choice (not Windows)": {
+    "launched": [
+      [
+        "unregisterCodexReviewSession",
+        "<sid>"
+      ],
+      [
+        "releaseMcpSessionProvider",
+        "<sid>"
+      ],
+      [
+        "pane close",
+        "<sid>"
+      ],
+      [
+        "build",
+        {
+          "codexOptions": {
+            "permissionsPreset": "read-only"
+          },
+          "cols": 120,
+          "cwd": "<root>/project",
+          "hostColorScheme": "dark",
+          "provider": "codex",
+          "realmLaunch": {
+            "env": {
+              "CODEX_HOME": "<root>/realms/managed",
+              "PATH": "/usr/bin"
+            },
+            "executable": "<root>/bin/codex.exe",
+            "sessionsDir": "<root>/realms/managed/sessions"
+          },
+          "rows": 30,
+          "sessionId": "<sid>",
+          "useResumePicker": "<undefined>"
+        }
+      ],
+      [
+        "log",
+        "[pty-manager] Codex hooks for <sid>: off (the Hooks gateway is off or not listening, or the hook could not be given on this launch)"
+      ],
+      [
+        "log",
+        "[pty-manager] Launching Codex PTY: <root>/bin/codex.exe --sandbox read-only cwd=<root>/project (resume=none)"
+      ],
+      [
+        "spawn",
+        {
+          "args": [
+            "--sandbox",
+            "read-only"
+          ],
+          "cols": 120,
+          "conpty": {},
+          "cwd": "<root>/project",
+          "env": {
+            "CLAUDE_MULTI_SESSION_ID": "<sid>",
+            "CODEX_HOME": "<root>/realms/managed",
+            "PATH": "/usr/bin"
+          },
+          "file": "<root>/bin/codex.exe",
+          "kind": "codex",
+          "name": "xterm-256color",
+          "rows": 30
+        }
+      ],
+      [
+        "pane open",
+        {
+          "clamp": true,
+          "cols": 120,
+          "current": true,
+          "held": false,
+          "rows": 30,
+          "sid": "<sid>"
+        }
+      ],
+      [
+        "telemetry",
+        {
+          "callbacks": [
+            "function",
+            "function",
+            "function",
+            "function"
+          ],
+          "cwd": "<root>/project",
+          "sessionsDir": "<root>/realms/managed/sessions",
+          "sid": "<sid>",
+          "spawnTimestamp": "<t>"
+        }
+      ],
+      [
+        "registerClaudeReviewSession",
+        {
+          "cwd": "<root>/project",
+          "sid": "<sid>"
+        }
+      ]
+    ],
+    "after": {
+      "holdsLease": true,
+      "kept": null,
+      "threw": null
+    },
+    "unbound": [
+      [
+        "kill",
+        1
+      ],
+      [
+        "telemetry stop",
+        null
+      ],
+      [
+        "unregisterCodexReviewSession",
+        "<sid>"
+      ],
+      [
+        "releaseMcpSessionProvider",
+        "<sid>"
+      ],
+      [
+        "pane close",
+        "<sid>"
+      ]
+    ]
+  },
+  "launch: both ConPTYs fail: nothing runs, the lease goes": {
+    "launched": [
+      [
+        "unregisterCodexReviewSession",
+        "<sid>"
+      ],
+      [
+        "releaseMcpSessionProvider",
+        "<sid>"
+      ],
+      [
+        "pane close",
+        "<sid>"
+      ],
+      [
+        "gateway token",
+        "<sid>"
+      ],
+      [
+        "prepareSessionHooks",
+        {
+          "port": 4545,
+          "sid": "<sid>"
+        }
+      ],
+      [
+        "build",
+        {
+          "codexHooks": {
+            "hookFile": "<root>/hooks/<sid>/hook.json"
+          },
+          "codexOptions": {
+            "permissionsPreset": "read-only"
+          },
+          "cols": 120,
+          "cwd": "<root>/project",
+          "hostColorScheme": "dark",
+          "provider": "codex",
+          "realmLaunch": {
+            "env": {
+              "CODEX_HOME": "<root>/realms/managed",
+              "PATH": "/usr/bin"
+            },
+            "executable": "<root>/bin/codex.exe",
+            "sessionsDir": "<root>/realms/managed/sessions"
+          },
+          "rows": 30,
+          "sessionId": "<sid>",
+          "useResumePicker": "<undefined>"
+        }
+      ],
+      [
+        "log",
+        "[pty-manager] Codex hooks for <sid>: on"
+      ],
+      [
+        "log",
+        "[pty-manager] Launching Codex PTY: <root>/bin/codex.exe --sandbox read-only cwd=<root>/project (resume=none) conpty=bundled (/bundled-conpty)"
+      ],
+      [
+        "spawn",
+        {
+          "args": [
+            "--sandbox",
+            "read-only"
+          ],
+          "cols": 120,
+          "conpty": {
+            "useConptyDll": true
+          },
+          "cwd": "<root>/project",
+          "env": {
+            "CLAUDE_MULTI_SESSION_ID": "<sid>",
+            "CODEX_HOME": "<root>/realms/managed",
+            "PATH": "/usr/bin"
+          },
+          "file": "<root>/bin/codex.exe",
+          "kind": "codex",
+          "name": "xterm-256color",
+          "rows": 30
+        }
+      ],
+      [
+        "spawn",
+        {
+          "args": [
+            "--sandbox",
+            "read-only"
+          ],
+          "cols": 120,
+          "conpty": {
+            "useConptyDll": false
+          },
+          "cwd": "<root>/project",
+          "env": {
+            "CLAUDE_MULTI_SESSION_ID": "<sid>",
+            "CODEX_HOME": "<root>/realms/managed",
+            "PATH": "/usr/bin"
+          },
+          "file": "<root>/bin/codex.exe",
+          "kind": "codex",
+          "name": "xterm-256color",
+          "rows": 30
+        }
+      ],
+      [
+        "pane close",
+        "<sid>"
+      ],
+      [
+        "hook file dispose",
+        "<sid>"
+      ],
+      [
+        "gateway drop",
+        "<sid>"
+      ],
+      [
+        "lease release",
+        "managed"
+      ]
+    ],
+    "after": {
+      "holdsLease": false,
+      "kept": null,
+      "threw": "the bundled console host did not start"
+    },
+    "unbound": [
+      [
+        "unregisterCodexReviewSession",
+        "<sid>"
+      ],
+      [
+        "releaseMcpSessionProvider",
+        "<sid>"
+      ],
+      [
+        "pane close",
+        "<sid>"
+      ]
+    ]
+  },
+  "launch: a folder \".\" (home fallback)": {
+    "launched": [
+      [
+        "unregisterCodexReviewSession",
+        "<sid>"
+      ],
+      [
+        "releaseMcpSessionProvider",
+        "<sid>"
+      ],
+      [
+        "pane close",
+        "<sid>"
+      ],
+      [
+        "build",
+        {
+          "codexOptions": {
+            "permissionsPreset": "read-only"
+          },
+          "cols": 120,
+          "cwd": "<home>",
+          "hostColorScheme": "dark",
+          "provider": "codex",
+          "realmLaunch": {
+            "env": {
+              "CODEX_HOME": "<root>/realms/managed",
+              "PATH": "/usr/bin"
+            },
+            "executable": "<root>/bin/codex.exe",
+            "sessionsDir": "<root>/realms/managed/sessions"
+          },
+          "rows": 30,
+          "sessionId": "<sid>",
+          "useResumePicker": "<undefined>"
+        }
+      ],
+      [
+        "log",
+        "[pty-manager] Codex hooks for <sid>: off (the Hooks gateway is off or not listening, or the hook could not be given on this launch)"
+      ],
+      [
+        "log",
+        "[pty-manager] Launching Codex PTY: <root>/bin/codex.exe --sandbox read-only cwd=<home> (resume=none) conpty=bundled (/bundled-conpty)"
+      ],
+      [
+        "spawn",
+        {
+          "args": [
+            "--sandbox",
+            "read-only"
+          ],
+          "cols": 120,
+          "conpty": {
+            "useConptyDll": true
+          },
+          "cwd": "<home>",
+          "env": {
+            "CLAUDE_MULTI_SESSION_ID": "<sid>",
+            "CODEX_HOME": "<root>/realms/managed",
+            "PATH": "/usr/bin"
+          },
+          "file": "<root>/bin/codex.exe",
+          "kind": "codex",
+          "name": "xterm-256color",
+          "rows": 30
+        }
+      ],
+      [
+        "pane open",
+        {
+          "clamp": true,
+          "cols": 120,
+          "current": true,
+          "held": false,
+          "rows": 30,
+          "sid": "<sid>"
+        }
+      ],
+      [
+        "telemetry",
+        {
+          "callbacks": [
+            "function",
+            "function",
+            "function",
+            "function"
+          ],
+          "cwd": "<home>",
+          "sessionsDir": "<root>/realms/managed/sessions",
+          "sid": "<sid>",
+          "spawnTimestamp": "<t>"
+        }
+      ],
+      [
+        "log",
+        "[pty] claude_review NOT registered for <sid>: the project directory resolves to (or above) the home directory. Set a real project directory to enable review."
+      ],
+      [
+        "log",
+        "[pty] canvas serving root NOT registered for Codex session <sid>: the configured project directory resolves to (or above) the home directory (workingDirectory is '.', empty, a stale path, or points at home)."
+      ]
+    ],
+    "after": {
+      "holdsLease": true,
+      "kept": null,
+      "threw": null
+    },
+    "unbound": [
+      [
+        "kill",
+        1
+      ],
+      [
+        "telemetry stop",
+        null
+      ],
+      [
+        "unregisterCodexReviewSession",
+        "<sid>"
+      ],
+      [
+        "releaseMcpSessionProvider",
+        "<sid>"
+      ],
+      [
+        "pane close",
+        "<sid>"
+      ]
+    ]
+  },
+  "launch: no folder": {
+    "launched": [
+      [
+        "unregisterCodexReviewSession",
+        "<sid>"
+      ],
+      [
+        "releaseMcpSessionProvider",
+        "<sid>"
+      ],
+      [
+        "pane close",
+        "<sid>"
+      ],
+      [
+        "build",
+        {
+          "codexOptions": {
+            "permissionsPreset": "read-only"
+          },
+          "cols": 120,
+          "cwd": "<home>",
+          "hostColorScheme": "dark",
+          "provider": "codex",
+          "realmLaunch": {
+            "env": {
+              "CODEX_HOME": "<root>/realms/managed",
+              "PATH": "/usr/bin"
+            },
+            "executable": "<root>/bin/codex.exe",
+            "sessionsDir": "<root>/realms/managed/sessions"
+          },
+          "rows": 30,
+          "sessionId": "<sid>",
+          "useResumePicker": "<undefined>"
+        }
+      ],
+      [
+        "log",
+        "[pty-manager] Codex hooks for <sid>: off (the Hooks gateway is off or not listening, or the hook could not be given on this launch)"
+      ],
+      [
+        "log",
+        "[pty-manager] Launching Codex PTY: <root>/bin/codex.exe --sandbox read-only cwd=<home> (resume=none) conpty=bundled (/bundled-conpty)"
+      ],
+      [
+        "spawn",
+        {
+          "args": [
+            "--sandbox",
+            "read-only"
+          ],
+          "cols": 120,
+          "conpty": {
+            "useConptyDll": true
+          },
+          "cwd": "<home>",
+          "env": {
+            "CLAUDE_MULTI_SESSION_ID": "<sid>",
+            "CODEX_HOME": "<root>/realms/managed",
+            "PATH": "/usr/bin"
+          },
+          "file": "<root>/bin/codex.exe",
+          "kind": "codex",
+          "name": "xterm-256color",
+          "rows": 30
+        }
+      ],
+      [
+        "pane open",
+        {
+          "clamp": true,
+          "cols": 120,
+          "current": true,
+          "held": false,
+          "rows": 30,
+          "sid": "<sid>"
+        }
+      ],
+      [
+        "telemetry",
+        {
+          "callbacks": [
+            "function",
+            "function",
+            "function",
+            "function"
+          ],
+          "cwd": "<home>",
+          "sessionsDir": "<root>/realms/managed/sessions",
+          "sid": "<sid>",
+          "spawnTimestamp": "<t>"
+        }
+      ],
+      [
+        "log",
+        "[pty] claude_review NOT registered for <sid>: the project directory resolves to (or above) the home directory. Set a real project directory to enable review."
+      ],
+      [
+        "log",
+        "[pty] canvas serving root NOT registered for Codex session <sid>: the configured project directory resolves to (or above) the home directory (workingDirectory is '.', empty, a stale path, or points at home)."
+      ]
+    ],
+    "after": {
+      "holdsLease": true,
+      "kept": null,
+      "threw": null
+    },
+    "unbound": [
+      [
+        "kill",
+        1
+      ],
+      [
+        "telemetry stop",
+        null
+      ],
+      [
+        "unregisterCodexReviewSession",
+        "<sid>"
+      ],
+      [
+        "releaseMcpSessionProvider",
+        "<sid>"
+      ],
+      [
+        "pane close",
+        "<sid>"
+      ]
+    ]
+  },
+  "launch: a folder that does not exist": {
+    "launched": [
+      [
+        "unregisterCodexReviewSession",
+        "<sid>"
+      ],
+      [
+        "releaseMcpSessionProvider",
+        "<sid>"
+      ],
+      [
+        "pane close",
+        "<sid>"
+      ],
+      [
+        "build",
+        {
+          "codexOptions": {
+            "permissionsPreset": "read-only"
+          },
+          "cols": 120,
+          "cwd": "<home>",
+          "hostColorScheme": "dark",
+          "provider": "codex",
+          "realmLaunch": {
+            "env": {
+              "CODEX_HOME": "<root>/realms/managed",
+              "PATH": "/usr/bin"
+            },
+            "executable": "<root>/bin/codex.exe",
+            "sessionsDir": "<root>/realms/managed/sessions"
+          },
+          "rows": 30,
+          "sessionId": "<sid>",
+          "useResumePicker": "<undefined>"
+        }
+      ],
+      [
+        "log",
+        "[pty-manager] Codex hooks for <sid>: off (the Hooks gateway is off or not listening, or the hook could not be given on this launch)"
+      ],
+      [
+        "log",
+        "[pty-manager] Launching Codex PTY: <root>/bin/codex.exe --sandbox read-only cwd=<home> (resume=none) conpty=bundled (/bundled-conpty)"
+      ],
+      [
+        "spawn",
+        {
+          "args": [
+            "--sandbox",
+            "read-only"
+          ],
+          "cols": 120,
+          "conpty": {
+            "useConptyDll": true
+          },
+          "cwd": "<home>",
+          "env": {
+            "CLAUDE_MULTI_SESSION_ID": "<sid>",
+            "CODEX_HOME": "<root>/realms/managed",
+            "PATH": "/usr/bin"
+          },
+          "file": "<root>/bin/codex.exe",
+          "kind": "codex",
+          "name": "xterm-256color",
+          "rows": 30
+        }
+      ],
+      [
+        "pane open",
+        {
+          "clamp": true,
+          "cols": 120,
+          "current": true,
+          "held": false,
+          "rows": 30,
+          "sid": "<sid>"
+        }
+      ],
+      [
+        "telemetry",
+        {
+          "callbacks": [
+            "function",
+            "function",
+            "function",
+            "function"
+          ],
+          "cwd": "<home>",
+          "sessionsDir": "<root>/realms/managed/sessions",
+          "sid": "<sid>",
+          "spawnTimestamp": "<t>"
+        }
+      ],
+      [
+        "log",
+        "[pty] claude_review NOT registered for <sid>: the project directory resolves to (or above) the home directory. Set a real project directory to enable review."
+      ],
+      [
+        "log",
+        "[pty] canvas serving root NOT registered for Codex session <sid>: the configured project directory resolves to (or above) the home directory (workingDirectory is '.', empty, a stale path, or points at home)."
+      ]
+    ],
+    "after": {
+      "holdsLease": true,
+      "kept": null,
+      "threw": null
+    },
+    "unbound": [
+      [
+        "kill",
+        1
+      ],
+      [
+        "telemetry stop",
+        null
+      ],
+      [
+        "unregisterCodexReviewSession",
+        "<sid>"
+      ],
+      [
+        "releaseMcpSessionProvider",
+        "<sid>"
+      ],
+      [
+        "pane close",
+        "<sid>"
+      ]
+    ]
+  },
+  "launch: extra arguments and a model in the saved options": {
+    "launched": [
+      [
+        "unregisterCodexReviewSession",
+        "<sid>"
+      ],
+      [
+        "releaseMcpSessionProvider",
+        "<sid>"
+      ],
+      [
+        "pane close",
+        "<sid>"
+      ],
+      [
+        "build",
+        {
+          "codexOptions": {
+            "extraArgs": "--search -c a=b",
+            "model": "gpt-x",
+            "permissionsPreset": "standard",
+            "reasoningEffort": "high"
+          },
+          "cols": 120,
+          "cwd": "<root>/project",
+          "hostColorScheme": "dark",
+          "provider": "codex",
+          "realmLaunch": {
+            "env": {
+              "CODEX_HOME": "<root>/realms/managed",
+              "PATH": "/usr/bin"
+            },
+            "executable": "<root>/bin/codex.exe",
+            "sessionsDir": "<root>/realms/managed/sessions"
+          },
+          "rows": 30,
+          "sessionId": "<sid>",
+          "useResumePicker": "<undefined>"
+        }
+      ],
+      [
+        "log",
+        "[pty-manager] Codex hooks for <sid>: off (the Hooks gateway is off or not listening, or the hook could not be given on this launch)"
+      ],
+      [
+        "log",
+        "[pty-manager] Launching Codex PTY: <root>/bin/codex.exe --sandbox read-only --search -c a=b cwd=<root>/project (resume=none) conpty=bundled (/bundled-conpty)"
+      ],
+      [
+        "spawn",
+        {
+          "args": [
+            "--sandbox",
+            "read-only",
+            "--search",
+            "-c",
+            "a=b"
+          ],
+          "cols": 120,
+          "conpty": {
+            "useConptyDll": true
+          },
+          "cwd": "<root>/project",
+          "env": {
+            "CLAUDE_MULTI_SESSION_ID": "<sid>",
+            "CODEX_HOME": "<root>/realms/managed",
+            "PATH": "/usr/bin"
+          },
+          "file": "<root>/bin/codex.exe",
+          "kind": "codex",
+          "name": "xterm-256color",
+          "rows": 30
+        }
+      ],
+      [
+        "pane open",
+        {
+          "clamp": true,
+          "cols": 120,
+          "current": true,
+          "held": false,
+          "rows": 30,
+          "sid": "<sid>"
+        }
+      ],
+      [
+        "telemetry",
+        {
+          "callbacks": [
+            "function",
+            "function",
+            "function",
+            "function"
+          ],
+          "cwd": "<root>/project",
+          "sessionsDir": "<root>/realms/managed/sessions",
+          "sid": "<sid>",
+          "spawnTimestamp": "<t>"
+        }
+      ],
+      [
+        "registerClaudeReviewSession",
+        {
+          "cwd": "<root>/project",
+          "sid": "<sid>"
+        }
+      ]
+    ],
+    "after": {
+      "holdsLease": true,
+      "kept": null,
+      "threw": null
+    },
+    "unbound": [
+      [
+        "kill",
+        1
+      ],
+      [
+        "telemetry stop",
+        null
+      ],
+      [
+        "unregisterCodexReviewSession",
+        "<sid>"
+      ],
+      [
+        "releaseMcpSessionProvider",
+        "<sid>"
+      ],
+      [
+        "pane close",
+        "<sid>"
+      ]
+    ]
+  },
+  "launch: no account launch: refused, nothing started": {
+    "launched": [
+      [
+        "unregisterCodexReviewSession",
+        "<sid>"
+      ],
+      [
+        "releaseMcpSessionProvider",
+        "<sid>"
+      ],
+      [
+        "pane close",
+        "<sid>"
+      ]
+    ],
+    "after": {
+      "holdsLease": false,
+      "kept": null,
+      "threw": "A Codex session needs its account: choose a Codex account for this session."
+    },
+    "unbound": [
+      [
+        "unregisterCodexReviewSession",
+        "<sid>"
+      ],
+      [
+        "releaseMcpSessionProvider",
+        "<sid>"
+      ],
+      [
+        "pane close",
+        "<sid>"
+      ]
+    ]
+  },
+  "launch: its own exit (natural end)": {
+    "launched": [
+      [
+        "unregisterCodexReviewSession",
+        "<sid>"
+      ],
+      [
+        "releaseMcpSessionProvider",
+        "<sid>"
+      ],
+      [
+        "pane close",
+        "<sid>"
+      ],
+      [
+        "gateway token",
+        "<sid>"
+      ],
+      [
+        "prepareSessionHooks",
+        {
+          "port": 4545,
+          "sid": "<sid>"
+        }
+      ],
+      [
+        "build",
+        {
+          "codexHooks": {
+            "hookFile": "<root>/hooks/<sid>/hook.json"
+          },
+          "codexOptions": {
+            "permissionsPreset": "read-only"
+          },
+          "cols": 120,
+          "cwd": "<root>/project",
+          "hostColorScheme": "dark",
+          "provider": "codex",
+          "realmLaunch": {
+            "env": {
+              "CODEX_HOME": "<root>/realms/managed",
+              "PATH": "/usr/bin"
+            },
+            "executable": "<root>/bin/codex.exe",
+            "sessionsDir": "<root>/realms/managed/sessions"
+          },
+          "rows": 30,
+          "sessionId": "<sid>",
+          "useResumePicker": "<undefined>"
+        }
+      ],
+      [
+        "log",
+        "[pty-manager] Codex hooks for <sid>: on"
+      ],
+      [
+        "log",
+        "[pty-manager] Launching Codex PTY: <root>/bin/codex.exe --sandbox read-only cwd=<root>/project (resume=none) conpty=bundled (/bundled-conpty)"
+      ],
+      [
+        "spawn",
+        {
+          "args": [
+            "--sandbox",
+            "read-only"
+          ],
+          "cols": 120,
+          "conpty": {
+            "useConptyDll": true
+          },
+          "cwd": "<root>/project",
+          "env": {
+            "CLAUDE_MULTI_SESSION_ID": "<sid>",
+            "CODEX_HOME": "<root>/realms/managed",
+            "PATH": "/usr/bin"
+          },
+          "file": "<root>/bin/codex.exe",
+          "kind": "codex",
+          "name": "xterm-256color",
+          "rows": 30
+        }
+      ],
+      [
+        "pane open",
+        {
+          "clamp": true,
+          "cols": 120,
+          "current": true,
+          "held": false,
+          "rows": 30,
+          "sid": "<sid>"
+        }
+      ],
+      [
+        "telemetry",
+        {
+          "callbacks": [
+            "function",
+            "function",
+            "function",
+            "function"
+          ],
+          "cwd": "<root>/project",
+          "sessionsDir": "<root>/realms/managed/sessions",
+          "sid": "<sid>",
+          "spawnTimestamp": "<t>"
+        }
+      ],
+      [
+        "registerClaudeReviewSession",
+        {
+          "cwd": "<root>/project",
+          "sid": "<sid>"
+        }
+      ]
+    ],
+    "after": {
+      "holdsLease": true,
+      "kept": null,
+      "threw": null
+    },
+    "unbound": [
+      [
+        "bundledConptyFailed",
+        "a Codex session under it ended within 5 s with nothing on screen"
+      ],
+      [
+        "gateway drop",
+        "<sid>"
+      ],
+      [
+        "remove settings file",
+        "<sid>"
+      ],
+      [
+        "remove mcp file",
+        "<sid>"
+      ],
+      [
+        "remove status-url file",
+        "<sid>"
+      ],
+      [
+        "unregisterCodexReviewSession",
+        "<sid>"
+      ],
+      [
+        "lease release",
+        "managed"
+      ],
+      [
+        "telemetry stop",
+        null
+      ],
+      [
+        "hook file dispose",
+        "<sid>"
+      ],
+      [
+        "unregisterCodexReviewSession",
+        "<sid>"
+      ],
+      [
+        "releaseMcpSessionProvider",
+        "<sid>"
+      ],
+      [
+        "pane close",
+        "<sid>"
+      ],
+      [
+        "clearClaudeAccount",
+        "<sid>"
+      ],
+      [
+        "stopWatchingAccountIdentity",
+        "<sid>"
+      ]
+    ]
+  },
+  "launch: a Restart resumes the conversation the tab is on": {
+    "launched": [
+      [
+        "kill",
+        1
+      ],
+      [
+        "telemetry stop",
+        null
+      ],
+      [
+        "unregisterCodexReviewSession",
+        "<sid>"
+      ],
+      [
+        "releaseMcpSessionProvider",
+        "<sid>"
+      ],
+      [
+        "pane close",
+        "<sid>"
+      ],
+      [
+        "build",
+        {
+          "codexOptions": {
+            "permissionsPreset": "read-only"
+          },
+          "cols": 120,
+          "cwd": "<root>/project",
+          "hostColorScheme": "dark",
+          "provider": "codex",
+          "realmLaunch": {
+            "env": {
+              "CODEX_HOME": "<root>/realms/managed",
+              "PATH": "/usr/bin"
+            },
+            "executable": "<root>/bin/codex.exe",
+            "sessionsDir": "<root>/realms/managed/sessions"
+          },
+          "resume": {
+            "cwd": "<root>/project",
+            "uuid": "0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b"
+          },
+          "rows": 30,
+          "sessionId": "<sid>",
+          "useResumePicker": "<undefined>"
+        }
+      ],
+      [
+        "log",
+        "[pty-manager] Codex hooks for <sid>: off (the Hooks gateway is off or not listening, or the hook could not be given on this launch)"
+      ],
+      [
+        "log",
+        "[pty-manager] Launching Codex PTY: <root>/bin/codex.exe --sandbox read-only cwd=<root>/project (resume=0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b) conpty=bundled (/bundled-conpty)"
+      ],
+      [
+        "spawn",
+        {
+          "args": [
+            "--sandbox",
+            "read-only"
+          ],
+          "cols": 120,
+          "conpty": {
+            "useConptyDll": true
+          },
+          "cwd": "<root>/project",
+          "env": {
+            "CLAUDE_MULTI_SESSION_ID": "<sid>",
+            "CODEX_HOME": "<root>/realms/managed",
+            "PATH": "/usr/bin"
+          },
+          "file": "<root>/bin/codex.exe",
+          "kind": "codex",
+          "name": "xterm-256color",
+          "rows": 30
+        }
+      ],
+      [
+        "pane open",
+        {
+          "clamp": true,
+          "cols": 120,
+          "current": true,
+          "held": false,
+          "rows": 30,
+          "sid": "<sid>"
+        }
+      ],
+      [
+        "telemetry",
+        {
+          "callbacks": [
+            "function",
+            "function",
+            "function",
+            "function"
+          ],
+          "cwd": "<root>/project",
+          "resumeId": "0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b",
+          "resumePath": "<root>/realms/managed/sessions/rollout-0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b.jsonl",
+          "sessionsDir": "<root>/realms/managed/sessions",
+          "sid": "<sid>",
+          "spawnTimestamp": "<t>"
+        }
+      ],
+      [
+        "registerClaudeReviewSession",
+        {
+          "cwd": "<root>/project",
+          "sid": "<sid>"
+        }
+      ]
+    ],
+    "after": {
+      "kept": {
+        "cwd": "<root>/project",
+        "uuid": "0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b"
+      }
+    },
+    "unbound": [
+      [
+        "kill",
+        2
+      ],
+      [
+        "telemetry stop",
+        null
+      ],
+      [
+        "unregisterCodexReviewSession",
+        "<sid>"
+      ],
+      [
+        "releaseMcpSessionProvider",
+        "<sid>"
+      ],
+      [
+        "pane close",
+        "<sid>"
+      ]
+    ]
+  },
+  "launch: the resume list (\"Restart and pick\") does not take the kept conversation": {
+    "launched": [
+      [
+        "kill",
+        1
+      ],
+      [
+        "telemetry stop",
+        null
+      ],
+      [
+        "unregisterCodexReviewSession",
+        "<sid>"
+      ],
+      [
+        "releaseMcpSessionProvider",
+        "<sid>"
+      ],
+      [
+        "pane close",
+        "<sid>"
+      ],
+      [
+        "build",
+        {
+          "codexOpenElsewhere": [],
+          "codexOptions": {
+            "permissionsPreset": "read-only"
+          },
+          "cols": 120,
+          "cwd": "<root>/project",
+          "hostColorScheme": "dark",
+          "provider": "codex",
+          "realmLaunch": {
+            "env": {
+              "CODEX_HOME": "<root>/realms/managed",
+              "PATH": "/usr/bin"
+            },
+            "executable": "<root>/bin/codex.exe",
+            "sessionsDir": "<root>/realms/managed/sessions"
+          },
+          "rows": 30,
+          "sessionId": "<sid>",
+          "useResumePicker": true
+        }
+      ],
+      [
+        "log",
+        "[pty-manager] Codex hooks for <sid>: off (the Hooks gateway is off or not listening, or the hook could not be given on this launch)"
+      ],
+      [
+        "log",
+        "[pty-manager] Launching Codex PTY: <root>/bin/codex.exe --sandbox read-only cwd=<root>/project (resume=none) conpty=bundled (/bundled-conpty)"
+      ],
+      [
+        "spawn",
+        {
+          "args": [
+            "--sandbox",
+            "read-only"
+          ],
+          "cols": 120,
+          "conpty": {
+            "useConptyDll": true
+          },
+          "cwd": "<root>/project",
+          "env": {
+            "CLAUDE_MULTI_SESSION_ID": "<sid>",
+            "CODEX_HOME": "<root>/realms/managed",
+            "PATH": "/usr/bin"
+          },
+          "file": "<root>/bin/codex.exe",
+          "kind": "codex",
+          "name": "xterm-256color",
+          "rows": 30
+        }
+      ],
+      [
+        "pane open",
+        {
+          "clamp": true,
+          "cols": 120,
+          "current": true,
+          "held": false,
+          "rows": 30,
+          "sid": "<sid>"
+        }
+      ],
+      [
+        "telemetry",
+        {
+          "callbacks": [
+            "function",
+            "function",
+            "function",
+            "function"
+          ],
+          "cwd": "<root>/project",
+          "sessionsDir": "<root>/realms/managed/sessions",
+          "sid": "<sid>",
+          "spawnTimestamp": "<t>"
+        }
+      ],
+      [
+        "registerClaudeReviewSession",
+        {
+          "cwd": "<root>/project",
+          "sid": "<sid>"
+        }
+      ]
+    ],
+    "after": {
+      "kept": null
+    },
+    "unbound": [
+      [
+        "kill",
+        2
+      ],
+      [
+        "telemetry stop",
+        null
+      ],
+      [
+        "unregisterCodexReviewSession",
+        "<sid>"
+      ],
+      [
+        "releaseMcpSessionProvider",
+        "<sid>"
+      ],
+      [
+        "pane close",
+        "<sid>"
+      ]
+    ]
+  },
+  "take-over: Codex, its hook events on the gateway: the kept hook file written again": {
+    "launched": [
+      [
+        "unregisterCodexReviewSession",
+        "<sid>"
+      ],
+      [
+        "releaseMcpSessionProvider",
+        "<sid>"
+      ],
+      [
+        "pane close",
+        "<sid>"
+      ],
+      [
+        "recordHeldToolSession",
+        {
+          "provider": "codex",
+          "sid": "<sid>"
+        }
+      ],
+      [
+        "gateway token",
+        "<sid>"
+      ],
+      [
+        "rewriteSessionHooks",
+        {
+          "dir": "<root>/hooks/kept-folder",
+          "port": 4545,
+          "sid": "<sid>"
+        }
+      ],
+      [
+        "log",
+        "[pty-manager] Codex hooks for <sid>: on, its kept hook file written again"
+      ],
+      [
+        "pane open",
+        {
+          "clamp": true,
+          "cols": 120,
+          "current": true,
+          "held": true,
+          "rows": 30,
+          "sid": "<sid>"
+        }
+      ],
+      [
+        "telemetry",
+        {
+          "callbacks": [
+            "function",
+            "function",
+            "function",
+            "function"
+          ],
+          "cwd": "<root>/elsewhere",
+          "resumeId": "0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b",
+          "sessionsDir": "<root>/realms/managed/sessions",
+          "sid": "<sid>",
+          "spawnTimestamp": "<t>"
+        }
+      ],
+      [
+        "registerClaudeReviewSession",
+        {
+          "cwd": "<root>/project",
+          "sid": "<sid>"
+        }
+      ],
+      [
+        "log",
+        "[pty] <sid>: took over the session the last update kept running, with no launch (conversation 0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b)"
+      ]
+    ],
+    "after": {
+      "asked": [
+        {
+          "account": [
+            "acct-managed"
+          ],
+          "provider": "codex",
+          "sid": "<sid>",
+          "size": {
+            "cols": 120,
+            "rows": 30
+          }
+        }
+      ],
+      "holdsLease": true,
+      "kept": {
+        "cwd": "<root>/elsewhere",
+        "uuid": "0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b"
+      },
+      "threw": null
+    },
+    "unbound": [
+      [
+        "gateway drop",
+        "<sid>"
+      ],
+      [
+        "kill",
+        "kept 1"
+      ],
+      [
+        "telemetry stop",
+        null
+      ],
+      [
+        "kept hook file dispose",
+        "<sid>"
+      ],
+      [
+        "unregisterCodexReviewSession",
+        "<sid>"
+      ],
+      [
+        "releaseMcpSessionProvider",
+        "<sid>"
+      ],
+      [
+        "pane close",
+        "<sid>"
+      ]
+    ]
+  },
+  "take-over: Codex, its hook events through its holder": {
+    "launched": [
+      [
+        "unregisterCodexReviewSession",
+        "<sid>"
+      ],
+      [
+        "releaseMcpSessionProvider",
+        "<sid>"
+      ],
+      [
+        "pane close",
+        "<sid>"
+      ],
+      [
+        "recordHeldToolSession",
+        {
+          "provider": "codex",
+          "sid": "<sid>"
+        }
+      ],
+      [
+        "removeSessionHookFolder",
+        "<root>/hooks/kept-folder"
+      ],
+      [
+        "log",
+        "[pty-manager] Codex hooks for <sid>: on, through its holder (its launch sent them there), so its hook file is not written again"
+      ],
+      [
+        "pane open",
+        {
+          "clamp": true,
+          "cols": 120,
+          "current": true,
+          "held": true,
+          "rows": 30,
+          "sid": "<sid>"
+        }
+      ],
+      [
+        "telemetry",
+        {
+          "callbacks": [
+            "function",
+            "function",
+            "function",
+            "function"
+          ],
+          "cwd": "<root>/project",
+          "resumeId": "0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b",
+          "sessionsDir": "<root>/realms/managed/sessions",
+          "sid": "<sid>",
+          "spawnTimestamp": "<t>"
+        }
+      ],
+      [
+        "registerClaudeReviewSession",
+        {
+          "cwd": "<root>/project",
+          "sid": "<sid>"
+        }
+      ],
+      [
+        "log",
+        "[pty] <sid>: took over the session the last update kept running, with no launch (conversation 0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b)"
+      ]
+    ],
+    "after": {
+      "asked": [
+        {
+          "account": [
+            "acct-managed"
+          ],
+          "provider": "codex",
+          "sid": "<sid>",
+          "size": {
+            "cols": 120,
+            "rows": 30
+          }
+        }
+      ],
+      "holdsLease": true,
+      "kept": {
+        "cwd": "<root>/project",
+        "uuid": "0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b"
+      },
+      "threw": null
+    },
+    "unbound": [
+      [
+        "kill",
+        "kept 1"
+      ],
+      [
+        "telemetry stop",
+        null
+      ],
+      [
+        "unregisterCodexReviewSession",
+        "<sid>"
+      ],
+      [
+        "releaseMcpSessionProvider",
+        "<sid>"
+      ],
+      [
+        "pane close",
+        "<sid>"
+      ]
+    ]
+  },
+  "take-over: Codex through the resume list, its pick kept": {
+    "launched": [
+      [
+        "unregisterCodexReviewSession",
+        "<sid>"
+      ],
+      [
+        "releaseMcpSessionProvider",
+        "<sid>"
+      ],
+      [
+        "pane close",
+        "<sid>"
+      ],
+      [
+        "recordHeldToolSession",
+        {
+          "provider": "codex",
+          "sid": "<sid>"
+        }
+      ],
+      [
+        "log",
+        "[pty-manager] Codex hooks for <sid>: off (its launch had none, the Hooks gateway is off or not listening, or its hook file could not be written again)"
+      ],
+      [
+        "pane open",
+        {
+          "clamp": true,
+          "cols": 120,
+          "current": true,
+          "held": true,
+          "rows": 30,
+          "sid": "<sid>"
+        }
+      ],
+      [
+        "telemetry",
+        {
+          "callbacks": [
+            "function",
+            "function",
+            "function",
+            "function"
+          ],
+          "cwd": "<root>/project",
+          "pickFile": "<root>/pick.json",
+          "pickFolder": {
+            "id": "p",
+            "real": "p"
+          },
+          "picked": {
+            "id": "0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b"
+          },
+          "sessionsDir": "<root>/realms/managed/sessions",
+          "sid": "<sid>",
+          "spawnTimestamp": "<t>"
+        }
+      ],
+      [
+        "registerClaudeReviewSession",
+        {
+          "cwd": "<root>/project",
+          "sid": "<sid>"
+        }
+      ],
+      [
+        "log",
+        "[pty] <sid>: took over the session the last update kept running, with no launch (conversation none)"
+      ]
+    ],
+    "after": {
+      "asked": [
+        {
+          "account": [
+            "acct-managed"
+          ],
+          "provider": "codex",
+          "sid": "<sid>",
+          "size": {
+            "cols": 120,
+            "rows": 30
+          }
+        }
+      ],
+      "holdsLease": true,
+      "kept": null,
+      "threw": null
+    },
+    "unbound": [
+      [
+        "kill",
+        "kept 1"
+      ],
+      [
+        "telemetry stop",
+        null
+      ],
+      [
+        "unregisterCodexReviewSession",
+        "<sid>"
+      ],
+      [
+        "releaseMcpSessionProvider",
+        "<sid>"
+      ],
+      [
+        "pane close",
+        "<sid>"
+      ]
+    ]
+  },
+  "take-over: Codex with no prepared launch: not taken over, launched as before": {
+    "launched": [
+      [
+        "unregisterCodexReviewSession",
+        "<sid>"
+      ],
+      [
+        "releaseMcpSessionProvider",
+        "<sid>"
+      ],
+      [
+        "pane close",
+        "<sid>"
+      ]
+    ],
+    "after": {
+      "asked": [],
+      "holdsLease": false,
+      "kept": null,
+      "threw": "A Codex session needs its account: choose a Codex account for this session."
+    },
+    "unbound": [
+      [
+        "unregisterCodexReviewSession",
+        "<sid>"
+      ],
+      [
+        "releaseMcpSessionProvider",
+        "<sid>"
+      ],
+      [
+        "pane close",
+        "<sid>"
+      ]
+    ]
+  },
+  "take-over: Claude Code on a named account, its status line address file there": {
+    "launched": [
+      [
+        "unregisterCodexReviewSession",
+        "<sid>"
+      ],
+      [
+        "releaseMcpSessionProvider",
+        "<sid>"
+      ],
+      [
+        "pane close",
+        "<sid>"
+      ],
+      [
+        "recordHeldToolSession",
+        {
+          "provider": "claude",
+          "sid": "<sid>"
+        }
+      ],
+      [
+        "noteKeptLaunchStatusLine",
+        "<sid>"
+      ],
+      [
+        "write status-url file",
+        {
+          "sid": "<sid>",
+          "url": "http://127.0.0.1:4646/status/<sid>"
+        }
+      ],
+      [
+        "captureClaudeAccount",
+        {
+          "profile": "prof-1",
+          "sid": "<sid>"
+        }
+      ],
+      [
+        "pushAccountIdentity",
+        "<sid>"
+      ],
+      [
+        "startWatchingAccountIdentity",
+        {
+          "profile": "prof-1",
+          "sid": "<sid>"
+        }
+      ],
+      [
+        "registerCodexReviewSession",
+        {
+          "cwd": "<root>/elsewhere",
+          "sid": "<sid>"
+        }
+      ],
+      [
+        "log",
+        "[pty] <sid>: took over the session the last update kept running, with no launch (conversation 0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b)"
+      ]
+    ],
+    "after": {
+      "asked": [
+        {
+          "account": [
+            "prof-1"
+          ],
+          "provider": "claude",
+          "sid": "<sid>",
+          "size": {
+            "cols": 120,
+            "rows": 30
+          }
+        }
+      ],
+      "holdsLease": false,
+      "kept": null,
+      "threw": null
+    },
+    "unbound": [
+      [
+        "kill",
+        "kept 1"
+      ],
+      [
+        "unregisterCodexReviewSession",
+        "<sid>"
+      ],
+      [
+        "releaseMcpSessionProvider",
+        "<sid>"
+      ],
+      [
+        "pane close",
+        "<sid>"
+      ]
+    ]
+  },
+  "take-over: Claude Code on the default account, no status line file": {
+    "launched": [
+      [
+        "unregisterCodexReviewSession",
+        "<sid>"
+      ],
+      [
+        "releaseMcpSessionProvider",
+        "<sid>"
+      ],
+      [
+        "pane close",
+        "<sid>"
+      ],
+      [
+        "recordHeldToolSession",
+        {
+          "provider": "claude",
+          "sid": "<sid>"
+        }
+      ],
+      [
+        "noteKeptLaunchStatusLine",
+        "<sid>"
+      ],
+      [
+        "captureClaudeAccount",
+        {
+          "profile": null,
+          "sid": "<sid>"
+        }
+      ],
+      [
+        "pushAccountIdentity",
+        "<sid>"
+      ],
+      [
+        "startWatchingAccountIdentity",
+        {
+          "profile": null,
+          "sid": "<sid>"
+        }
+      ],
+      [
+        "registerCodexReviewSession",
+        {
+          "cwd": "<root>/project",
+          "sid": "<sid>"
+        }
+      ],
+      [
+        "log",
+        "[pty] <sid>: took over the session the last update kept running, with no launch (conversation none)"
+      ]
+    ],
+    "after": {
+      "asked": [
+        {
+          "account": [
+            "<undefined>"
+          ],
+          "provider": "claude",
+          "sid": "<sid>",
+          "size": {
+            "cols": 120,
+            "rows": 30
+          }
+        }
+      ],
+      "holdsLease": false,
+      "kept": null,
+      "threw": null
+    },
+    "unbound": [
+      [
+        "kill",
+        "kept 1"
+      ],
+      [
+        "unregisterCodexReviewSession",
+        "<sid>"
+      ],
+      [
+        "releaseMcpSessionProvider",
+        "<sid>"
+      ],
+      [
+        "pane close",
+        "<sid>"
+      ]
+    ]
+  },
+  "serve: Codex, its hook folder kept: the hook file written again": {
+    "launched": [
+      [
+        "recordHeldToolSession",
+        {
+          "provider": "codex",
+          "sid": "<sid>"
+        }
+      ],
+      [
+        "gateway token",
+        "<sid>"
+      ],
+      [
+        "rewriteSessionHooks",
+        {
+          "dir": "<root>/hooks/kept-folder",
+          "port": 4545,
+          "sid": "<sid>"
+        }
+      ],
+      [
+        "registerClaudeReviewSession",
+        {
+          "cwd": "<root>/project",
+          "sid": "<sid>"
+        }
+      ],
+      [
+        "log",
+        "[pty] <sid>: the session kept for this tab is served its Conductor tools while its tab is not shown"
+      ]
+    ],
+    "after": {
+      "served": true
+    },
+    "unbound": [
+      [
+        "unregisterCodexReviewSession",
+        "<sid>"
+      ],
+      [
+        "releaseMcpSessionProvider",
+        "<sid>"
+      ],
+      [
+        "pane close",
+        "<sid>"
+      ],
+      [
+        "gateway drop",
+        "<sid>"
+      ]
+    ]
+  },
+  "serve: Codex, its hook events through its holder": {
+    "launched": [
+      [
+        "recordHeldToolSession",
+        {
+          "provider": "codex",
+          "sid": "<sid>"
+        }
+      ],
+      [
+        "registerClaudeReviewSession",
+        {
+          "cwd": "<root>/project",
+          "sid": "<sid>"
+        }
+      ],
+      [
+        "log",
+        "[pty] <sid>: the session kept for this tab is served its Conductor tools while its tab is not shown"
+      ]
+    ],
+    "after": {
+      "served": true
+    },
+    "unbound": [
+      [
+        "unregisterCodexReviewSession",
+        "<sid>"
+      ],
+      [
+        "releaseMcpSessionProvider",
+        "<sid>"
+      ],
+      [
+        "pane close",
+        "<sid>"
+      ],
+      [
+        "gateway drop",
+        "<sid>"
+      ]
+    ]
+  },
+  "serve: Claude Code, launched in another folder": {
+    "launched": [
+      [
+        "recordHeldToolSession",
+        {
+          "provider": "claude",
+          "sid": "<sid>"
+        }
+      ],
+      [
+        "registerCodexReviewSession",
+        {
+          "cwd": "<root>/elsewhere",
+          "sid": "<sid>"
+        }
+      ],
+      [
+        "log",
+        "[pty] <sid>: the session kept for this tab is served its Conductor tools while its tab is not shown"
+      ]
+    ],
+    "after": {
+      "served": true
+    },
+    "unbound": [
+      [
+        "unregisterCodexReviewSession",
+        "<sid>"
+      ],
+      [
+        "releaseMcpSessionProvider",
+        "<sid>"
+      ],
+      [
+        "pane close",
+        "<sid>"
+      ],
+      [
+        "gateway drop",
+        "<sid>"
+      ]
+    ]
+  },
+  "serve: the tool host not serving: nothing": {
+    "launched": [],
+    "after": {
+      "served": false
+    },
+    "unbound": []
+  },
+  "describe: a Codex session with a claimed conversation, hooks and a pick": {
+    "launched": [],
+    "after": {
+      "account": "acct-managed",
+      "conversation": "0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b",
+      "hookFolder": "<root>/hooks/<sid>",
+      "pick": {
+        "file": "pick.json",
+        "folder": {
+          "id": "p",
+          "real": "p"
+        }
+      }
+    },
+    "unbound": [
+      [
+        "gateway drop",
+        "<sid>"
+      ],
+      [
+        "kill",
+        1
+      ],
+      [
+        "telemetry stop",
+        null
+      ],
+      [
+        "hook file dispose",
+        "<sid>"
+      ],
+      [
+        "unregisterCodexReviewSession",
+        "<sid>"
+      ],
+      [
+        "releaseMcpSessionProvider",
+        "<sid>"
+      ],
+      [
+        "pane close",
+        "<sid>"
+      ]
+    ]
+  },
+  "describe: a session this run knows nothing of": {
+    "launched": [],
+    "after": {
+      "account": null,
+      "conversation": null,
+      "hookFolder": null
+    },
+    "unbound": []
+  }
+}

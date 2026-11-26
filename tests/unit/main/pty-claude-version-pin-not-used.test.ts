@@ -84,7 +84,7 @@ vi.mock('../../../src/main/spawn-claude-command', async (importOriginal) => {
 vi.mock('../../../src/main/logging/logging-service', () => ({ getLogSupervisor: () => null, getTranscriptBinder: () => null }))
 vi.mock('../../../src/main/conductor-mcp-server', async (importOriginal) => ({ ...(await importOriginal<typeof import('../../../src/main/conductor-mcp-server')>()), getConductorMcpPort: () => 0 }))
 // The provider's resolveBinary is the real resolveClaudeBinary.
-vi.mock('../../../src/main/providers', async () => {
+vi.mock('../../../src/main/providers', async () => (await import('../../helpers/provider-package-parts')).withProviderPackageParts(await (async () => {
   const { resolveClaudeBinary } = await import('../../../src/main/providers/claude/spawn')
   return {
     providerCapability: () => ({ enabled: true }),
@@ -94,7 +94,8 @@ vi.mock('../../../src/main/providers', async () => {
       ingestSessionTelemetry: () => ({ stop: () => {} }),
     }),
   }
-})
+})()))
+await (await import('../../helpers/provider-package-parts')).loadProviderPackageParts()
 vi.mock('../../../src/main/vision-manager', () => ({ isGlobalVisionRunning: () => false, getGlobalVisionConfig: () => null, teardownVisionSession: () => {} }))
 vi.mock('../../../src/main/canvas/canvas-plugin', () => ({ ensureCanvasPlugin: () => h.files.plugin }))
 vi.mock('../../../src/main/hooks', () => ({ getGateway: () => null, isExactBindSourceActive: () => true }))
