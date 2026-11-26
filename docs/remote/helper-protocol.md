@@ -607,7 +607,7 @@ capability adds the messages below. Fixtures: `helper/fixtures/local.json`.
 **Starting a holder.** The app runs
 
 ```
-aicc-helper hold --store <folder> --session <sid> [--label <text>] [--away <seconds>] [--ring-bytes <n>] --detach
+aicc-helper hold --store <folder> --session <sid> [--label <text>] [--away <seconds> | --until-ended] [--ring-bytes <n>] --detach
 ```
 
 and reads one line from stdout: the holder's record (below). Exit 0 means the
@@ -616,7 +616,9 @@ already running; it is left alone, and the app connects to it. Anything else
 failed, with a message on stderr, within 15 s; a holder that fails before it
 is ready says why, and `--detach` passes that on. `hold` without `--detach`
 exits the same way. `--away` is 1 to 86400 seconds, default 120;
-`--ring-bytes` 1 KiB to 64 MiB, default 2 MiB; a label is at most 128
+`--until-ended` (from 2.1.3-beta.19, protocol change 14) is given in place of
+`--away`, never beside it (exit 2), and starts a holder with no away clock
+(below); `--ring-bytes` 1 KiB to 64 MiB, default 2 MiB; a label is at most 128
 characters, none of them a control character. Each option is given at most
 once; an unknown one fails. `--detach` makes the store folder if it is missing
 (and checks it, as below), then starts the holder in it, with the store named
@@ -856,7 +858,12 @@ makes no window, and uses no PowerShell and no WMI. Its window-manager DLLs
   the moment it exists (it is bound under a umask of 0177). The holder serves
   a connection only when the peer's user id is its own (`SO_PEERCRED` on
   Linux, `getpeereid` on macOS; any other Unix serves none); one that is not is
-  closed before a byte is written.
+  closed before a byte is written. The holder marks the socket and its folder
+  as used every hour, so a cleaner of `/tmp` (systemd-tmpfiles takes entries
+  untouched for 10 days) passes them by; if the socket is taken all the same,
+  the holder binds the same name again within a quarter of a second, making
+  the folder again with the same checks, and writes its record back if list
+  mode removed it meanwhile.
 - **What a client checks before it writes anything.** On Unix, with `lstat`
   (no link is followed): the folder is a folder, the user owns it, and its
   mode has no bit for the group or others (`mode & 0o077` is 0); the socket is
@@ -869,7 +876,9 @@ makes no window, and uses no PowerShell and no WMI. Its window-manager DLLs
 
 **The record.** `<store>/<sid>.json`, written whole (a temporary
 `<sid>.json.<pid>.tmp`, then a rename), 0600 in a 0700 store on Unix. Exactly
-these fields, in this order:
+these fields, in this order; the record of a holder that runs until it is
+ended (from 2.1.3-beta.19) adds `lifetime` right after `away`, and its `away`
+is `null`:
 
 | Field | Meaning |
 | --- | --- |
@@ -880,14 +889,16 @@ these fields, in this order:
 | `nonce` | 32 lower-case hex: what the holder's hello carries |
 | `helper` | the helper's version |
 | `started` | when the holder started, milliseconds since 1970 (UTC) |
-| `away` | the away clock, in seconds |
+| `away` | the away clock, in seconds; `null` for a holder that runs until it is ended |
+| `lifetime` | only in an until-ended holder's record: `until-ended` |
 | `attached` | whether a connection is attached to the terminal |
 | `child` | `waiting` (nothing launched), `running` or `exited` |
 | `code` | `null`, then the program's exit code once `child` is `exited` |
 
 Each field's range: `session` matches the session id pattern; `label` as
 above; `pid` 1 to 2^32 - 1; `helper` 1 to 64 characters, none a control
-character; `started` 0 to 2^53 - 1; `away` 1 to 86400; `code` a whole number
+character; `started` 0 to 2^53 - 1; `away` 1 to 86400, or `null` beside
+`lifetime` `until-ended` (no other mix of the two shapes reads); `code` a whole number
 from -2^31 to 2^32 - 1 (a Windows exit code is unsigned). A reader refuses a
 record with any other field set, a field of another type or out of range, or
 an endpoint that is not its session's. The record says where to connect; only
@@ -936,7 +947,8 @@ not use this rule. It gives a start only as ticks after the boot, and the boot
 time moves with every change to the clock, so after the clock is set forward a
 live holder could read as started after its own record. It does not need the
 rule either: a crashed holder's socket there is refused or missing, and both
-are stale. A missing store lists nothing and is not made.
+are stale. A missing store lists nothing and is not made. An until-ended
+holder's record is listed with its `lifetime`.
 The app uses list mode at start-up, to attach every held terminal again, and
 for the Machines page. From 2.1.3-beta.15 it also runs it once at a start with
 both helper settings off, no running mark and no agent record, when the
@@ -944,6 +956,19 @@ helper's per-user folder holds a version or staging folder: from the install
 folder (a one-shot run, so no copy is made), and every version folder no
 listed record's `helper` names goes, with the staging folders; a listing that
 fails or does not read removes nothing.
+
+**Reading one field (from 2.1.3-beta.19).** `aicc-helper field --file <path
+under home> --key <dotted key>` (macOS and Linux; on Windows it prints
+nothing) prints the string at the key and one line end, or nothing, and exits
+0; it exits 2 on a command line it does not take. The path is relative to
+`HOME`, or absolute inside it, every part a plain name; `HOME` is absolute and
+not `/`. The file is opened as Claude Code opens it, a link followed, and must
+then be a regular file of the user's own of at most 5 MiB; it is opened
+without waiting and checked again once open. The key names object members
+from the top, separated by dots: 1 to 16 parts, at most 256 bytes, no control
+character; a member named twice on the way gives nothing. The value is a
+string of 1 to 1024 bytes with no control character. It writes nothing. The
+app's provider package names the file and the key.
 
 **A connection.** The holder first writes its hello line, then a line end:
 `caps` is `["core","local"]` in a holder from before hook events,
@@ -1136,6 +1161,15 @@ stream messages carry no id: a refusal of one has no `re`.
   clock runs out either stops it or gets `not-found`, never `term.attached` and
   then the end. A holder that ends this way removes its record and its
   endpoint, as `term.end` does.
+- **Until it is ended (from 2.1.3-beta.19, protocol change 14).** A holder
+  started with `--until-ended` has no away clock. With nobody attached it ends
+  once its program has exited; until an app has attached for the first time,
+  no sooner than the default 120 s after its start, and one never launched
+  ends at that time too. An app attached at the exit is told (`term.exit`),
+  and the holder ends when that app lets go. It also ends at `term.end`, or
+  with the machine. While nobody is attached it keeps the newest status,
+  queues hook events and keeps a relay's stream, as any holder does. Every
+  clock is monotonic, never the wall clock.
 
 **Hook events (capability `hooks`, from 2.1.3-beta.8).** This local `hooks` is
 only `hook.event` and `event` on a holder's own endpoint; the remote `hooks`

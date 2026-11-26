@@ -18,8 +18,8 @@
 //     imports either.
 // Not checked here: the image door (image-transfer-*.test.ts, session.test.ts
 // "an image paste"), which this change leaves as it was.
-// Not checked either: files under src that are not .ts or .tsx (css, html,
-// json, txt).
+// Not checked either: files under src that are not .ts or .tsx (cjs, css,
+// html, json, svg, txt).
 import { describe, it, expect } from 'vitest'
 import { existsSync, readFileSync, readdirSync } from 'fs'
 import { join, resolve, sep } from 'path'

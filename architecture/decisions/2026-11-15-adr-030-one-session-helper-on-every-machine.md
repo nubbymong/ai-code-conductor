@@ -235,7 +235,7 @@ cut over.
 | Canvas rendering of project files | The project folder and the session worktree | None; inline content only | Unchanged (declared exception 3) |
 | Image paste | Focus outside the terminal: the app saves the image and types the path. Focus in the terminal: the CLI pastes it itself | Claude: a prompt asking the agent to call a tool. Plain and partner terminals: a hint only | D5: the app takes the key wherever the focus is; identical local and remote, for every session kind |
 | Snap | A third-party overlay and native add-on; rectangle and window capture | The same capture, then the tool prompt route | The helper's capture mode and our overlay; whole screen or a rectangle (D3, D4); delivered as an image paste |
-| Recent images and storyboard | Recent lists the newest files of the shared folder; a storyboard names files for the agent to fetch | The same | Per session only (parked question Q6) |
+| Recent images and storyboard | None. The Recent menu was rendered nowhere and it alone sent a storyboard; the menu, its sender and the screenshot:listRecent chain were deleted in 2.1.3-beta.19 (aicc_planning#435) | None | None planned |
 | Other file kinds and drag and drop | None | None | Not in 2.1.3 (D5) |
 | Partner terminal | A second shell PTY in main | A second ssh terminal that types a `cd` line | A second holder in the session's folder on the same machine; image paste reaches it (D6) |
 | Ask Conductor hand-off | A one-shot help session on the app machine | Not applicable | A launch spec and `submit`, on the app machine only |
@@ -286,6 +286,15 @@ slice's adversarial pass.
     StopFailure, cleaned and capped like the other labels.
 14. **Session lifetime.** The launch spec carries a lifetime kind and the
     holder runs the away clock; list mode is used on This computer too.
+    From 2.1.3-beta.19 `hold --until-ended` gives the second kind: a holder
+    with no away clock. With nobody attached it ends once its program has
+    exited; until an app has attached for the first time, no sooner than the
+    default 120 s after its start, and one never launched ends at that time
+    too. It also ends at `term.end`, or with the machine. Its record carries
+    `"away":null` and `"lifetime":"until-ended"` and list mode prints it; a
+    clock holder's record is unchanged. The same build adds the field mode,
+    one string from a JSON file under the home, which the account label of
+    aicc_planning#434 reads.
 15. **Host platforms.** Windows hosts, with the user's local application data
     folder as the install root, PowerShell one-shot commands and a named pipe
     on the host. Not a frame change; numbered so a reference to it is exact.
@@ -976,9 +985,10 @@ a picture larger than 1024 by 768, a held session on the real CLI, macOS and Lin
 None blocks beta 4. Each default stands until the owner is asked, before the
 slice named.
 
-- **Q6** What replaces the shared screenshots folder for Recent images,
-  storyboards and vision screenshots? Default: per session only, deleted when
-  the session ends. (Before local image paste.)
+- **Q6** What replaces the shared screenshots folder for vision screenshots?
+  Default: per session only, deleted when the session ends. (Before local image
+  paste.) Recent images and storyboards left this question in 2.1.3-beta.19:
+  the menu behind both was deleted (aicc_planning#435).
 - **Q7** Is Codex on remote machines part of 2.1.3? Default: no. The helper is
   the same for every CLI, so it is one provider slice later. (Before remote
   sessions through the helper.)

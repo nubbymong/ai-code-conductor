@@ -208,6 +208,17 @@ rollback returns to the earlier beta's rows, and every row has a negative test.
   0700 folder checked the same way, holding nothing secret (protocol 13).
 - The helper listens on no port, network or loopback. The session socket sits
   in its 0700 folder; its owner checks the peer's user id on every connection.
+  The holder marks the socket and its folder as used every hour and binds the
+  socket again at the same name if a cleaner of /tmp takes it, the folder's
+  owner, mode and link checks made again; a folder another user made first is
+  refused, never used.
+- **The field mode** (from 2.1.3-beta.19). `aicc-helper field` reads one
+  string of at most 1 KiB, with no control character, from one JSON file of at
+  most 5 MiB that the app's provider package names by a path under `$HOME` (no
+  `.` or `..` part); it follows a link as the CLI does, then reads only a
+  regular file of the user's own, opened without waiting and checked again
+  once open; it writes nothing and runs nothing. What it prints is data the
+  app checks again before showing it.
 - **Shared homes.** Each device id has its own marked folder, so clean-up and
   removal never cross devices or installs; other folders are only listed (3.9).
 - **Containers.** The facts come from the host's fixed script running the
