@@ -547,7 +547,7 @@ function Reference() {
       {secs.map((s) => (
         <article key={s.id} data-ux-id={`ref-${s.id}`} className="rounded-2xl p-5 mb-4" style={{ background: 'var(--surface-raised)', border: '1px solid var(--border-subtle)' }}>
           <h3 className="text-[15px] font-semibold mb-1.5" style={{ color: 'var(--text-primary)' }}>{s.title}</h3>
-          <p className="text-[13px] leading-relaxed max-w-[86ch]" style={{ color: 'var(--text-secondary)' }}>{s.body}</p>
+          <p className="text-[13px] leading-relaxed max-w-[86ch] whitespace-pre-line" style={{ color: 'var(--text-secondary)' }}>{s.body}</p>
         </article>
       ))}
     </div>
@@ -571,7 +571,7 @@ function SearchResults({ steps, knowledge, query, onClear, onOpenExplained }: { 
       {knowledge.map((s) => (
         <article key={s.id} className="rounded-2xl p-5 mb-4" style={{ background: 'var(--surface-raised)', border: '1px solid var(--border-subtle)' }}>
           <h3 className="text-[15px] font-semibold mb-1.5" style={{ color: 'var(--text-primary)' }}>{s.title}</h3>
-          <p className="text-[13px] leading-relaxed max-w-[86ch]" style={{ color: 'var(--text-secondary)' }}>{s.body}</p>
+          <p className="text-[13px] leading-relaxed max-w-[86ch] whitespace-pre-line" style={{ color: 'var(--text-secondary)' }}>{s.body}</p>
         </article>
       ))}
     </div>

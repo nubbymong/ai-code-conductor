@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import type { LedgerRecord } from '../../shared/channel-types'
 import { useSessionStore } from './sessionStore'
+import { usePaneOcclusionStore } from './paneOcclusionStore'
 
 interface ChannelState {
   ledger: LedgerRecord[]
@@ -23,7 +24,9 @@ export function setupChannelListeners(): () => void {
   const offA = window.electronAPI.channels.onAttention(({ sessionId, needsAttention }) => {
     const ss = useSessionStore.getState()
     // Don't raise on the session you're already looking at; clears always apply.
-    if (needsAttention && ss.activeSessionId === sessionId) return
+    // 2.1.3-beta.19 text smoke (#41): the last session looked at is not looked
+    // at while a page tab (Machines, Settings, ...) is in front of it.
+    if (needsAttention && ss.activeSessionId === sessionId && usePaneOcclusionStore.getState().activeView === 'sessions') return
     ss.updateSession(sessionId, { needsAttention })
   })
   // Handshake so main knows the renderer's channel listeners are mounted.
