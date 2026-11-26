@@ -1,9 +1,9 @@
 {
   "schema": "wp1-legacy-codex-manifest/3",
-  "generatedAt": "2026-11-26T11:21:25.009Z",
-  "head": "4cfc215b60cab7863657373d7027ee40b022e4f6",
-  "tree": "b3db064c12c015f63a8c58f59fcc1fd698ef5e7b",
-  "scannedWorkingTree": false,
+  "generatedAt": "2026-11-26T12:43:27.564Z",
+  "head": "5d73fbef275773df7072966ff0312faa7a77d2a9",
+  "tree": "c7006e0dccb2124a23102b3546f05e7f5081a7e1",
+  "scannedWorkingTree": true,
   "predicateDigest": "100a1233edebdc39a5f9004d3fba980a89ebb15b25872e52076386bc84b03153",
   "predicates": [
     {
@@ -116,9 +116,9 @@
     "\\.(png|jpg|jpeg|gif|ico|icns|webp|svg|woff2?|ttf|otf|mp4|zip|asar|node|exe|dll|dylib|so|pdf)$",
     "^package-lock\\.json$"
   ],
-  "trackedFileCount": 3950,
+  "trackedFileCount": 3959,
   "excludedFileCount": 636,
-  "scannedFileCount": 3314,
+  "scannedFileCount": 3323,
   "unscopedFileCount": 15,
   "unscoped": [
     ".claude/settings.json",
@@ -139,8 +139,8 @@
   ],
   "unscopedMentions": [],
   "unreadable": [],
-  "matchedPathCount": 1135,
-  "pathDigest": "028033b6ee55a89d691a691969e547b8210c96445a0394621abe0642f13afab5",
+  "matchedPathCount": 1139,
+  "pathDigest": "3e094608411585d82c45869b21d76f4b8198dd25c4c6552cbc3784a6283914a7",
   "entries": [
     {
       "path": ".github/workflows/ci.yml",
@@ -2313,7 +2313,7 @@
         "P07",
         "P14"
       ],
-      "lineCount": 65
+      "lineCount": 68
     },
     {
       "path": "src/main/providers/codex/ui-detection.ts",
@@ -2491,7 +2491,7 @@
       "predicates": [
         "P14"
       ],
-      "lineCount": 2
+      "lineCount": 3
     },
     {
       "path": "src/main/session-helper/manager.ts",
@@ -6089,6 +6089,15 @@
       "lineCount": 29
     },
     {
+      "path": "tests/unit/main/pty-held-restart-resume.test.ts",
+      "predicates": [
+        "P04",
+        "P07",
+        "P13"
+      ],
+      "lineCount": 9
+    },
+    {
       "path": "tests/unit/main/pty-integrity-restart.test.ts",
       "predicates": [
         "P13"
@@ -6353,11 +6362,25 @@
       "lineCount": 13
     },
     {
+      "path": "tests/unit/main/session-helper-install.test.ts",
+      "predicates": [
+        "P13"
+      ],
+      "lineCount": 1
+    },
+    {
       "path": "tests/unit/main/session-helper-manager.test.ts",
       "predicates": [
         "P13"
       ],
       "lineCount": 104
+    },
+    {
+      "path": "tests/unit/main/session-helper-not-held-line.test.ts",
+      "predicates": [
+        "P13"
+      ],
+      "lineCount": 6
     },
     {
       "path": "tests/unit/main/session-helper-pty-site.test.ts",
@@ -7238,6 +7261,16 @@
         "P13"
       ],
       "lineCount": 6
+    },
+    {
+      "path": "tests/unit/providers/codex/telemetry-verbatim-rollout.test.ts",
+      "predicates": [
+        "P01",
+        "P04",
+        "P07",
+        "P13"
+      ],
+      "lineCount": 14
     },
     {
       "path": "tests/unit/providers/codex/telemetry.test.ts",
