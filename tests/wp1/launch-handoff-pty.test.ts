@@ -20,9 +20,9 @@
 // cases here put the REAL accounts service over the REAL Claude Code and
 // Codex packages behind that question, on each platform the app runs on, so
 // the answer a Codex launch gets is the Codex package's own `session.launch`
-// declaration and not a stand-in's. They also hold the line between the two
-// launch rows at a launch: the row that runs Claude Code's launch is Claude
-// Code's alone.
+// declaration and not a stand-in's. They also hold the line at a launch: the
+// row that runs Claude Code's launch is Claude Code's alone (Codex has no row
+// since 2.1.3-beta.19 section 2: its package's local launch group starts it).
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import * as os from 'os'
 import * as path from 'path'

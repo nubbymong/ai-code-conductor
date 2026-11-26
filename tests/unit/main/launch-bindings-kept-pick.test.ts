@@ -373,7 +373,7 @@ describe('a kept session that is kept no longer', () => {
 
   it('a take-over whose bindings fail before its watcher starts: the folder goes', () => {
     const pick = pickFolder()
-    // The pane binding throws (a stand-in failure), before bindCodexLaunch.
+    // The pane binding throws (a stand-in failure), before the Codex lifecycle's bind.
     const broken = makePorts()
     broken.codexRunWriters = () => { throw new Error('the stand-in writers failed') }
     lb.setLaunchBindingPorts(broken as unknown as Ports)
