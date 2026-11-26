@@ -31,11 +31,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - With remote sessions through the session helper on (a preview, off by default), the Session Watchdog now watches a Claude Code tab on a Linux machine you added, as it does a usual SSH tab: it shows its pill there and types its retry after a usage limit, an overload or a safeguard flag.
 - With Claude Code and Codex sessions through the session helper on, Restart on a held Claude Code tab now carries on with its conversation, as on any other tab; before, it showed the list of earlier conversations.
 - With Codex 0.172.0 on Windows, the app reads which conversation a resumed Codex session is on from the session's own hook events, as it does for a new one; before, it set them aside, with a warning in its log.
-- On Windows, with Claude Code and Codex sessions through the session helper on, a session started after an update that kept another one running is held by the helper again; before, it ran the usual way. A tab the helper cannot hold now says so in one line.
+- On Windows, with Claude Code and Codex sessions through the session helper on, a session started after an update that kept another one running is held by the helper again; before, it ran the usual way. A tab the helper tried to hold and could not now says so in one line, before its program's output.
 - Restart pressed while the Agent Canvas, the logs or the browser is in front of a tab's terminal now starts the session at once; before, it waited until the terminal was shown again.
 - On Windows, a Snap press with no desktop to capture (a locked screen, or a session with no screen) now says so above the command bar; before, nothing happened.
 - A session that asks for you while a page such as Machines or Settings is in front now marks its tab and its card, also when it is the session you looked at last.
-- The Feature Guide's Reference shows each known issue as a paragraph of its own again.
+- The Feature Guide's Reference now shows each known issue as a paragraph of its own; before, the whole list ran together as one paragraph.
 
 ## [2.1.3-beta.18] - 2026-11-26
 
