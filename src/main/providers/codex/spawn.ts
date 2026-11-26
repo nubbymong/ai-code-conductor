@@ -605,8 +605,9 @@ export const CODEX_DAEMON_AUTO_START_OFF = 'features.daemon_auto_start=false'
 /** Whether a `-c` entry leaves Codex free to use its shared background
  *  server: the keys `config_exclusion` allows (codex-rs/tui/src/
  *  daemon_startup.rs; the same shape at every tag from rust-v0.156.0 to
- *  rust-v0.171.0, and any `features.<name>` is allowed at the newest, so no
- *  older tag allows more). Any other key makes Codex run embedded. */
+ *  rust-v0.171.0, and any `features.<name>` is allowed at rust-v0.171.0, the
+ *  newest read, so no older tag allows more). Any other key makes Codex run
+ *  embedded. */
 function codexOverrideKeepsServer(entry: string): boolean {
   const eq = entry.indexOf('=')
   const key = (eq < 0 ? entry : entry.slice(0, eq)).trim()
