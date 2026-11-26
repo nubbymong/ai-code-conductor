@@ -76,12 +76,12 @@ import { createHash } from 'crypto'
 import type { IDisposable, IEvent, IPty } from 'node-pty'
 import { HolderConnection, HolderError } from '../session-helper/connection'
 import { HelperPty, LOST_EXIT_CODE, NothingStartedError, type HelperPtyDriver } from '../session-helper/helper-pty'
-import { checkLaunch, type HolderRecord, type LaunchSpec } from '../session-helper/protocol'
+import { checkLaunch, readListing, readRecord, type HolderRecord, type LaunchSpec } from '../session-helper/protocol'
 import { stripSpoofableText } from '../../shared/safe-text'
 import type { ProviderId } from '../../shared/providers/ids'
 import type { ProviderRemoteLaunch, RemoteHelperCommands, RemoteHostRead, RemoteLaunch, RemoteLaunchOptions } from '../providers/types'
 import { holderLabel, type HolderKind } from './scripts'
-import { readHolderListing, readHolderRecord, type KeptRecord } from './kept'
+import { untilEnded } from './kept'
 import { afterHashLine, exitText, localSshEnd, newNonce, notStartedLogLine, openScriptStream, readHashLine, readScriptResult, runScript, sshFailure, type SshRunner, type SshTarget } from './ssh-exec'
 import { sessionFilesInput } from './session-files'
 import { readHostForStart } from './host-reads'
@@ -457,33 +457,40 @@ export class RemoteDriver implements HelperPtyDriver {
         // 2.1.3-beta.19: a holder that runs until it is ended keeps this tab's
         // session (a quit, an update, Leave running, a link that stayed down):
         // the tab attaches to it, and nothing is launched.
-        if (found?.lifetime === 'until-ended') {
+        if (found && untilEnded(found)) {
           this.o.log(`[remote-helper] ${sid}: a session kept for this tab runs on ${host}; attaching to it, nothing is launched`)
-          return { record: found.record, attach: true }
+          return { record: found, attach: true }
         }
         // A clock holder left for this tab's session (an app crash or update
         // within its away clock): ended first, so two CLIs never run on one conversation.
-        if (found) { await this.endLeftover(found.record); continue }
+        if (found) { await this.endLeftover(found); continue }
         if (attempt === 0 && !abandoned()) { this.o.log(`[remote-helper] ${sid}: a holder runs for it, and list mode does not show it`); continue }
         this.failWith(`a session the app could not end still runs for this tab on ${host}`)
       }
       if (r.code !== 0) this.failWith(`the session helper on ${host} could not start a holder (${exitText(r)}: ${r.stderr.trim().slice(0, 200)})`)
       const line = afterHashLine(r.stdout, nonce).split(/\r?\n/).find((l) => l.startsWith('{'))
-      let held: KeptRecord | null = null
-      try { held = line ? readHolderRecord(JSON.parse(line)) : null } catch { held = null }
-      if (!held || held.record.session !== sid) this.failWith(`the session helper on ${host} started a holder whose record does not read`)
-      return { record: held.record, attach: false }
+      let held: HolderRecord | null = null
+      try { held = line ? readRecord(JSON.parse(line), 'unix') : null } catch { held = null }
+      if (!held || held.session !== sid) this.failWith(`the session helper on ${host} started a holder whose record does not read`)
+      // The kind it was asked for, by its record: a holder of the other kind
+      // (one that would end by a clock the tab was told it has not, or one
+      // that would never end by itself) is ended at once, and nothing is launched.
+      if (untilEnded(held) !== (this.o.kind === 'until-ended')) {
+        await this.endHolder(held)
+        this.failWith(`the session helper on ${host} started a holder of another kind than this tab asked for; press Check on the Machines page`)
+      }
+      return { record: held, attach: false }
     }
     this.failWith(`a holder for this tab could not be started on ${host}`)
   }
 
   /** The holder that runs for `sid`, by list mode; null when list mode does not show it. */
-  private async leftover(sid: string): Promise<KeptRecord | null> {
+  private async leftover(sid: string): Promise<HolderRecord | null> {
     const nonce = newNonce()
     const r = await runScript(this.o.runner, this.target, 'list', this.values(nonce))
     const line = readHashLine(r.stdout, nonce)?.state === 'ok' ? afterHashLine(r.stdout, nonce).split(/\r?\n/).find((l) => l.startsWith('{')) : undefined
-    const listing = line ? readHolderListing(line) : null
-    return listing?.sessions.find((s) => s.record.session === sid) ?? null
+    const listing = line ? readListing(line, 'unix') : null
+    return listing?.sessions.find((s) => s.session === sid) ?? null
   }
 
   /** The clock holder a crash or an update left for this tab's session: ended. */

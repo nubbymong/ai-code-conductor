@@ -47,11 +47,14 @@ describe('the modules the remote helper device check imports', () => {
       import('../../../src/main/session-helper/tool-links'),
       // 2.1.3-beta.19 section 1.2: list mode's kept sessions, read under plain Node by the live file.
       import('../../../src/main/remote-helper/kept'),
+      // And section 1.1's record reader the live file reads a holder's record with.
+      import('../../../src/main/session-helper/protocol'),
     ])
     expect(typeof modules[0].remoteLaunchOf).toBe('function')
     expect(typeof modules[5].claudeRemoteLaunch.launch).toBe('function')
     expect(typeof modules[6].wireToolStreams).toBe('function')
     expect(typeof modules[7].listKept).toBe('function')
+    expect(typeof modules[8].readRecord).toBe('function')
   })
 
   it('the live file imports no other module of the app', async () => {
@@ -69,6 +72,8 @@ describe('the modules the remote helper device check imports', () => {
       '../../src/main/remote-helper/scripts',
       '../../src/main/remote-helper/session',
       '../../src/main/remote-helper/ssh-exec',
+      // 2.1.3-beta.19 section 1.2: the holder records' two shapes, read by section 1.1's reader.
+      '../../src/main/session-helper/protocol',
     ])
   })
 })

@@ -91,7 +91,8 @@ import { RemoteHelperPty, remoteLaunchSpec, remoteSessionId } from '../../src/ma
 import { remoteLaunchOf, type RemoteSignalDeps } from '../../src/main/remote-helper'
 import { claudeRemoteLaunch } from '../../src/main/providers/claude/remote-launch'
 import { readBundledLinuxHelper, type BundledLinuxHelper } from '../../src/main/remote-helper/manifest'
-import { listKept, readHolderRecord } from '../../src/main/remote-helper/kept'
+import { listKept, untilEnded } from '../../src/main/remote-helper/kept'
+import { readRecord } from '../../src/main/session-helper/protocol'
 import { fieldAnswerOf, readHostForStart, type HostAccountRead } from '../../src/main/remote-helper/host-reads'
 import { scriptCommand } from '../../src/main/remote-helper/scripts'
 
@@ -1020,7 +1021,9 @@ describe('remote helper on a real Linux host', () => {
     const held = sshRun(`"${bin}" hold --store "${dev}/store" --session ${clockSid} --label e2e-clock-3s --away 3 --detach`)
     expect(held.code, held.err).toBe(0)
     const clockLine = held.out.split('\n').find((l) => l.startsWith('{'))
-    expect(readHolderRecord(JSON.parse(clockLine ?? 'null'))?.lifetime).toBe('clock')
+    const clockRecord = readRecord(JSON.parse(clockLine ?? 'null'), 'unix')
+    // The record its detached start printed: the holder runs, of the clock kind.
+    expect(clockRecord && [clockRecord.session, untilEnded(clockRecord), clockRecord.away]).toEqual([clockSid, false, 3])
     // The until-ended kind, an SSH Persistent tab's, on the fake CLI.
     const m: RemoteMachineRecord = { ...machine, claudePath: `${d}/aicc-fake-cli`, check: { at: Date.now(), ok: true } }
     const id = 'e2e-kept-1'
@@ -1045,10 +1048,10 @@ describe('remote helper on a real Linux host', () => {
       const listed = await listKept({ runner, installId: machines.installId(), log: sessionLog }, machine)
       expect(listed.ok, listed.ok ? '' : listed.why).toBe(true)
       if (!listed.ok) return
-      note('kept-listing', listed.sessions.map((s) => ({ sid: s.record.session, lifetime: s.lifetime, attached: s.record.attached, child: s.record.child })))
-      expect(listed.sessions.some((s) => s.record.session === clockSid)).toBe(false)
-      const kept = listed.sessions.find((s) => s.record.session === plan.helper.sid)
-      expect([kept?.lifetime, kept?.record.attached, kept?.record.child]).toEqual(['until-ended', false, 'running'])
+      note('kept-listing', listed.sessions.map((s) => ({ sid: s.session, lifetime: s.lifetime ?? null, away: s.away, attached: s.attached, child: s.child })))
+      expect(listed.sessions.some((s) => s.session === clockSid)).toBe(false)
+      const kept = listed.sessions.find((s) => s.session === plan.helper.sid)
+      expect([kept?.lifetime, kept?.away, kept?.attached, kept?.child]).toEqual(['until-ended', null, false, 'running'])
       // While nothing is attached: a status and a hook event (kept, and queued).
       const cmd = tabCommands(plan.helper.folder)
       const statusBefore = statusOf(id).length
@@ -1115,7 +1118,7 @@ describe('remote helper on a real Linux host', () => {
       // the kept holder still runs from; nothing is ended.
       const store = memoryStore()
       store.write({ v: 1, installId: machines.installId(), machines: machines.list() })
-      const updated = new RemoteMachines({ runner, store, bundled: async () => ({ ok: true, helper: other.helper }), inUse: () => 0, log: (x) => { machineLogs.push(x) } })
+      const updated = new RemoteMachines({ runner, store, bundled: async () => ({ ok: true, helpers: [other.helper] }), inUse: () => 0, log: (x) => { machineLogs.push(x) } })
       const checked = await updated.check(machine.did)
       note('other-check', checked)
       expect(checked.ok, checked.message).toBe(true)
@@ -1125,9 +1128,9 @@ describe('remote helper on a real Linux host', () => {
       const listed = await listKept({ runner, installId: machines.installId(), log: sessionLog }, after)
       expect(listed.ok, listed.ok ? '' : listed.why).toBe(true)
       if (!listed.ok) return
-      const kept = listed.sessions.find((s) => s.record.session === plan.helper.sid)
+      const kept = listed.sessions.find((s) => s.session === plan.helper.sid)
       expect(kept?.lifetime).toBe('until-ended')
-      expect(kept?.record.helper).toBe(helper.version)
+      expect(kept?.helper).toBe(helper.version)
       // And its bridge attaches to it: the replay, and input to the same CLI.
       const m2: RemoteMachineRecord = { ...after, claudePath: `${d}/aicc-fake-cli`, check: { at: Date.now(), ok: true } }
       const plan2 = remoteLaunchOf(claudeRemoteLaunch, m2, { model: 'e2e-model' }, null, () => true, remoteSessionId(id), 100, 30, true)

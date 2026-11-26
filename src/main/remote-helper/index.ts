@@ -384,10 +384,10 @@ export async function endRemoteSession(did: string, sid: string): Promise<Remote
   for (const p of openTabs.values()) if (p.sid === sid) return { ok: false, message: 'A tab shows that session. Close it there and choose End.' }
   const listed = await listKept({ runner: d.runner, installId: d.machines.installId(), log: d.log }, m)
   if (!listed.ok) return { ok: false, message: `Nothing was ended: ${listed.why}.` }
-  const rec = listed.sessions.find((s) => s.record.session === sid)
+  const rec = listed.sessions.find((s) => s.session === sid)
   if (!rec) return { ok: true, message: 'That session had ended already.' }
-  const driver = RemoteDriver.forEnd({ appPtyId: rec.record.label, machine: m, installId: d.machines.installId(), runner: d.runner, log: d.log, ...(d.signals ? { signals: d.signals } : {}) })
-  const r = await driver.endKept(rec.record)
+  const driver = RemoteDriver.forEnd({ appPtyId: rec.label, machine: m, installId: d.machines.installId(), runner: d.runner, log: d.log, ...(d.signals ? { signals: d.signals } : {}) })
+  const r = await driver.endKept(rec)
   d.log(`[remote-helper] ${sid}: ${r.ok ? 'ended' : `not ended (${r.why})`} on ${m.host} from the Machines page`)
   return r.ok ? { ok: true, message: `Ended the session on ${m.host}.` } : { ok: false, message: `The session on ${m.host} was not ended: ${r.why}.` }
 }
@@ -422,6 +422,6 @@ export async function remoteHelperLiveness(target: { host: string; port: number;
   if (!m) return unverified
   const listed = await listKept({ runner: d.runner, installId: d.machines.installId(), log: d.log }, m)
   if (!listed.ok) return unverified
-  const held = new Set(listed.sessions.map((s) => s.record.session))
+  const held = new Set(listed.sessions.map((s) => s.session))
   return { outcome: 'verified', liveSessionIds: sessionIds.filter((id) => held.has(remoteSessionId(id))) }
 }

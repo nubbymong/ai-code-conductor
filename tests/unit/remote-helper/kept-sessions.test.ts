@@ -29,7 +29,8 @@ import { registerProvider } from '../../../src/main/providers'
 import { claudeRemoteLaunch } from '../../../src/main/providers/claude/remote-launch'
 import { endRemoteSession, endRemoteTab, forgetRemoteHelperTab, listRemoteSessions, remoteHelperFlowState, remoteHelperLiveness, remoteHelperPty, setRemoteHelperDeps, type RemoteSignalDeps } from '../../../src/main/remote-helper'
 import { RemoteHelperPty, remoteLaunchSpec, remoteSessionId } from '../../../src/main/remote-helper/session'
-import { readHolderListing, readHolderRecord } from '../../../src/main/remote-helper/kept'
+import { untilEnded } from '../../../src/main/remote-helper/kept'
+import { readListing, readRecord } from '../../../src/main/session-helper/protocol'
 import type { HostAccountRead } from '../../../src/main/remote-helper/host-reads'
 import type { RemoteMachineRecord, RemoteMachines } from '../../../src/main/remote-helper/machines'
 import type { HelperToolLink } from '../../../src/main/session-helper/manager'
@@ -299,6 +300,28 @@ describe('an SSH Persistent tab through the session helper, kept until it is end
     forgetRemoteHelperTab(id)
   })
 
+  // 2.1.3-beta.19 section 1.2b: the record a hold prints says the kind it
+  // started; a holder of the other kind is never used.
+  for (const [what, ssh0, kept] of [
+    ['an SSH Persistent tab whose hold starts a clock holder', PERSISTENT, false],
+    ['a plain SSH tab whose hold starts an until-ended holder', { ...PERSISTENT, detachable: false }, true],
+  ] as const) {
+    it(`${what}: that holder is ended at once, nothing is launched, and the start says why`, async () => {
+      const id = `kept-kind-${kept ? 'until' : 'clock'}`
+      forgetRemoteHelperTab(id)
+      plugIn(signals().deps)
+      const holder = holderFor(id)
+      host(holder, { untilEnded: kept })
+      remoteHelperPty(win, id, { ssh: ssh0 }, 100, 30)
+      await until('the holder ended', () => holder.ended)
+      expect(holder.endsAsked).toBe(1)
+      expect(launches(holder)).toBe(0)
+      await until('the reason', () => logs.some((l) => l.includes('started a holder of another kind than this tab asked for')))
+      expect(ssh.scripts()).not.toContain('files')
+      forgetRemoteHelperTab(id)
+    })
+  }
+
   it('End sends term.end over a link of its own, then its folder goes and the app\'s hook state for the tab', async () => {
     const id = 'kept-end'
     forgetRemoteHelperTab(id)
@@ -417,15 +440,17 @@ describe('list mode on the machines: the Machines rows and a left-running entry\
   })
 })
 
-describe('the two record shapes (section 1.1\'s contract), read strictly', () => {
+describe('the two record shapes (section 1.1\'s contract), read strictly by protocol.ts', () => {
   const base = { v: 1, session: 'rm0123456789abcdef0123456789abcd', label: 'tab-1', pid: 4242, endpoint: '/tmp/aicc-1000/rm0123456789abcdef0123456789abcd-0123456789abcdef.sock', nonce: '0123456789abcdef0123456789abcdef', helper: '0.1.0', started: 1, attached: false, child: 'running', code: null }
   it('a clock record has today\'s fields and reads as the clock kind', () => {
-    expect(readHolderRecord({ ...base, away: 120 })?.lifetime).toBe('clock')
+    const r = readRecord({ ...base, away: 120 }, 'unix')
+    expect(r?.away).toBe(120)
+    expect(r && untilEnded(r)).toBe(false)
   })
   it('an until-ended record (away null, lifetime until-ended) reads as the until-ended kind', () => {
-    const r = readHolderRecord({ ...base, away: null, lifetime: 'until-ended' })
-    expect(r?.lifetime).toBe('until-ended')
-    expect(r?.record.session).toBe(base.session)
+    const r = readRecord({ ...base, away: null, lifetime: 'until-ended' }, 'unix')
+    expect(r && untilEnded(r)).toBe(true)
+    expect(r?.session).toBe(base.session)
   })
   const refused: Array<[string, Record<string, unknown>]> = [
     ['a lifetime with an away clock', { ...base, away: 120, lifetime: 'until-ended' }],
@@ -434,11 +459,11 @@ describe('the two record shapes (section 1.1\'s contract), read strictly', () =>
     ['an until-ended record with a field off', { ...base, away: null, lifetime: 'until-ended', pid: 0 }],
     ['an until-ended record with an extra field', { ...base, away: null, lifetime: 'until-ended', extra: 1 }],
   ]
-  for (const [name, value] of refused) it(`refuses ${name}`, () => { expect(readHolderRecord(value)).toBeNull() })
+  for (const [name, value] of refused) it(`refuses ${name}`, () => { expect(readRecord(value, 'unix')).toBeNull() })
   it('list mode\'s line with both kinds reads; one record off refuses the line', () => {
     const line = (sessions: unknown[]) => JSON.stringify({ v: 1, sessions, removed: 0, skipped: 0 })
-    const both = readHolderListing(line([{ ...base, away: 120 }, { ...base, session: 'rmffffffffffffffffffffffffffffff', endpoint: '/tmp/aicc-1000/rmffffffffffffffffffffffffffffff-0123456789abcdef.sock', away: null, lifetime: 'until-ended' }]))
-    expect(both?.sessions.map((s) => s.lifetime)).toEqual(['clock', 'until-ended'])
-    expect(readHolderListing(line([{ ...base, away: null }]))).toBeNull()
+    const both = readListing(line([{ ...base, away: 120 }, { ...base, session: 'rmffffffffffffffffffffffffffffff', endpoint: '/tmp/aicc-1000/rmffffffffffffffffffffffffffffff-0123456789abcdef.sock', away: null, lifetime: 'until-ended' }]), 'unix')
+    expect(both?.sessions.map(untilEnded)).toEqual([false, true])
+    expect(readListing(line([{ ...base, away: null }]), 'unix')).toBeNull()
   })
 })
