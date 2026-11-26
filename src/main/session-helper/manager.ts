@@ -1249,7 +1249,7 @@ export class SessionHelperManager implements MachinesSource {
     // the holder asks for the screen reads and their title.
     const screen = this.deps.screens?.[ctx.kind] === true
     const driver: HelperPtyDriver = { ...this.driver(direct, true, spec.conpty === 'bundled', cleared, hooks, tools, screen, screen), ...own }
-    const wrapper = this.track(new HelperPty({ sid, label: ctx.sessionId, spec, driver, redraw: this.redrawFor(spec) }), ctx.sessionId)
+    const wrapper = this.track(new HelperPty({ sid, label: ctx.sessionId, spec, driver, redraw: this.redrawFor(spec), provider: ctx.kind }), ctx.sessionId)
     if (hooks) void wrapper.ended.then(() => hooks.ended())
     if (tools) this.agentRoutes.set(wrapper, { kind: ctx.kind, tools, ...(hooks ? { hooks } : {}) })
     return wrapper
@@ -1318,7 +1318,7 @@ export class SessionHelperManager implements MachinesSource {
     // do; the screen's title too for a provider whose composer rule reads it.
     // Its `direct` starts nothing: it only says the session was ended.
     const driver: HelperPtyDriver = { ...this.driver(direct, false, false, undefined, hooks, tools, true, this.deps.screens?.[ctx.kind] === true), startsNothing: true }
-    const wrapper = this.track(new HelperPty({ sid, label: ctx.sessionId, spec, adopt: record, driver, redraw: this.redrawFor(spec) }), ctx.sessionId)
+    const wrapper = this.track(new HelperPty({ sid, label: ctx.sessionId, spec, adopt: record, driver, redraw: this.redrawFor(spec), provider: ctx.kind }), ctx.sessionId)
     if (hooks) void wrapper.ended.then(() => hooks.ended())
     // Its routes, for the next update to keep it again.
     if (tools) this.agentRoutes.set(wrapper, { kind: ctx.kind, tools, ...(hooks ? { hooks } : {}) })

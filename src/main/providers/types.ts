@@ -628,6 +628,14 @@ export interface SessionRunScreen {
    *  out first, when any were, because the prompt would drop them. Logs the
    *  question by its length only. Never rejects. */
   ask?(sessionId: string, question: string, opts: { readyWaitMs: number; removed: (count: number) => void }): Promise<SubmitTextResult>
+  /** 2.1.3-beta.19 section 6.2 (aicc_planning#440): how long, in ms, a lone
+   *  Enter typed while one of this provider's held terminals was detached
+   *  waits behind the frame before it once the terminal is attached again
+   *  (session-helper/helper-pty.ts, flushQueued), so the CLI reads them
+   *  apart: the holder writes frames that come back to back into one read.
+   *  Absent, or not a positive number: what was queued goes at once, as for
+   *  a plain terminal. */
+  readonly heldEnterWaitMs?: number
 }
 
 /** 2.1.3-beta.18 section 4 (aicc_planning#432): what a door of the session
