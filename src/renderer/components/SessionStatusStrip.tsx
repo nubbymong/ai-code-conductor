@@ -34,6 +34,15 @@ import { typeIntoCodexComposer, type CodexTyping } from '../lib/codexComposer'
 import { typeAtClaudePrompt } from '../lib/claudePrompt'
 import type { RemoteUsageNotShown } from '../../shared/types'
 import { REMOTE_USAGE_NOT_SHOWN_TEXT } from '../lib/remoteHelperAccountText'
+import {
+  STRIP_CLASS,
+  STRIP_MIDDLE_ROW_CLASS,
+  REMOTE_USAGE_NOTE_CLASS,
+  STRIP_CONTEXT_CLASS,
+  STRIP_CONTEXT_TRACK_CLASS,
+  STRIP_CONTEXT_PCT_CLASS,
+  STRIP_METERS_CLASS,
+} from './session-strip-layout' // why each class is what it is: there (the 1280x768 layout check builds from them)
 
 interface SessionStatusStripProps {
   /** The PTY/session id for THIS terminal. Telemetry is read for this
@@ -65,21 +74,6 @@ const EMPTY_HIDDEN: string[] = []
  *  round 1, C1) or Claude Code's. This name and the note's test id
  *  (codex-command-note) predate the Claude notes; both now serve both CLIs. */
 export const CODEX_NOTE_MS = 6000
-
-/**
- * The strip's middle row and the helper tab's note beside it (2.1.3-beta.19
- * release smoke: at 1280x768 the note kept its whole width and the row, cut
- * where the note began, showed the weekly meter as a lone "W"). In a flex
- * row, a `flex-1` item's basis is 0, so it only ever gets what the others
- * leave, and a note that does not shrink leaves it short. The row's basis is
- * its content (`flex-auto`), so when the strip is too narrow the space comes
- * off the items by how much each may shrink: the note may shrink a thousand
- * times as much as the row, down to nothing (`min-w-0`), with an ellipsis
- * (`truncate`) and its reason still in its title. So the note gives way
- * first, and the row is cut only once the note is gone.
- */
-export const STRIP_MIDDLE_ROW_CLASS = 'flex items-center gap-3 flex-auto min-w-0 overflow-hidden'
-export const REMOTE_USAGE_NOTE_CLASS = 'min-w-0 truncate shrink-[1000]'
 
 /** 2.1.3-beta.19 section 3 (aicc_planning#434): the strip's note for a tab
  *  through the session helper, in place of the per-model weekly bars and
@@ -264,7 +258,7 @@ export default function SessionStatusStrip({ sessionId }: SessionStatusStripProp
   if (session.shellOnly) {
     return (
       <div
-        className="min-h-7 shrink-0 flex items-center gap-3 px-3 text-xs border-t border-b"
+        className={STRIP_CLASS}
         style={{ background: 'var(--surface-raised)', color: 'var(--text-on-chrome)', borderColor: 'var(--border-subtle)' }}
       >
         <div className="flex-1" aria-hidden />
@@ -370,7 +364,7 @@ export default function SessionStatusStrip({ sessionId }: SessionStatusStripProp
 
   return (
     <div
-      className="min-h-7 shrink-0 flex items-center gap-3 px-3 text-xs border-t border-b"
+      className={STRIP_CLASS}
       style={{ background: 'var(--surface-raised)', color: 'var(--text-on-chrome)', borderColor: 'var(--border-subtle)', ...statusType }}
     >
       {/* Account — ALWAYS the far-left item of the strip (owner UX, live testing
@@ -467,11 +461,11 @@ export default function SessionStatusStrip({ sessionId }: SessionStatusStripProp
           <span className="tabular-nums shrink-0">{formatTokens(session.inputTokens)} / {formatTokens(session.contextWindowSize)}</span>
         )}
         {sl.showContextBar && session.contextPercent != null && (
-          <span className="flex items-center gap-1.5 shrink-0">
-            <span className="w-16 h-1.5 rounded-full overflow-hidden" style={{ background: 'var(--surface-sunken)' }}>
+          <span className={STRIP_CONTEXT_CLASS} data-testid="strip-context">
+            <span className={STRIP_CONTEXT_TRACK_CLASS} style={{ background: 'var(--surface-sunken)' }}>
               <span className="block h-full rounded-full" style={{ width: `${pct}%`, background: ctxColor }} />
             </span>
-            <span className="tabular-nums">{Math.round(pct)}%</span>
+            <span className={STRIP_CONTEXT_PCT_CLASS}>{Math.round(pct)}%</span>
           </span>
         )}
         {sl.showCost && session.costUsd != null && (
@@ -498,7 +492,7 @@ export default function SessionStatusStrip({ sessionId }: SessionStatusStripProp
           if (session.usageBuckets && session.usageBuckets.length > 0) {
             if (shown.length === 0 && !validExtraUsage(session.rateLimitExtra)) return null
             return (
-              <span className="flex items-center gap-3 shrink-0">
+              <span className={STRIP_METERS_CLASS}>
                 {shown.map((b) => (
                   bucketPastReset(b, Date.now())
                     ? <RateLimitBarNoReading key={b.key} label={b.label} resetsAt={b.resetsAt} />
@@ -526,7 +520,7 @@ export default function SessionStatusStrip({ sessionId }: SessionStatusStripProp
             const pendingLabels = ['5h', 'Weekly'].filter((l) => !hiddenBuckets.includes(l))
             if (pendingLabels.length === 0) return null
             return (
-              <span className="flex items-center gap-3 shrink-0" data-testid="statusline-pending">
+              <span className={STRIP_METERS_CLASS} data-testid="statusline-pending">
                 {pendingLabels.map((l) => (
                   <RateLimitBarPending key={l} label={l} />
                 ))}
@@ -534,7 +528,7 @@ export default function SessionStatusStrip({ sessionId }: SessionStatusStripProp
             )
           }
           return (
-            <span className="flex items-center gap-3 shrink-0">
+            <span className={STRIP_METERS_CLASS}>
               {!hiddenBuckets.includes('5h') && (
                 session.rateLimitCurrent == null
                   ? <RateLimitNotReported label="5h" title={`${tryGetRendererProvider(providerId)?.displayName ?? 'The status line'} reported no 5-hour window for this account`} />

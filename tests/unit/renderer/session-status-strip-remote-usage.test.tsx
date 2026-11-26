@@ -188,11 +188,52 @@ describe('the note is never clipped by the strip\'s middle row (text smoke #36)'
     // The row's basis is its content: never flex-1's 0.
     expect(middle.classList.contains('flex-auto')).toBe(true)
     expect(middle.classList.contains('flex-1')).toBe(false)
-    // The note shrinks first and furthest, with an ellipsis; its reason stays in its title.
-    for (const c of ['min-w-0', 'truncate', 'shrink-[1000]']) expect(n.classList.contains(c), c).toBe(true)
+    // The note shrinks first and furthest, with an ellipsis; its reason stays
+    // in its title. Since PR 763 fix round 9 it stops at three characters.
+    for (const c of ['min-w-[3ch]', 'truncate', 'shrink-[1000]']) expect(n.classList.contains(c), c).toBe(true)
     expect(n.classList.contains('shrink-0')).toBe(false)
     expect(n.getAttribute('title')).toMatch(/^Not available: this machine uses its own sign-in\./)
     // Nothing else beside the row takes the space it needs: every other child of the strip's row is shrink-0.
     for (const el of [...n.parentElement!.children]) if (el !== middle && el !== n) expect((el as HTMLElement).classList.contains('shrink-0') || el.getAttribute('aria-hidden') === 'true', (el as HTMLElement).className).toBe(true)
+  })
+
+  /**
+   * PR 763 fix round 9 (the 2.1.3-beta.19 release smoke re-read, its item 8;
+   * j01-strip-zoom.png): at the default 1280x768 window, on an SSH Persistent
+   * tab through the helper, the note shrank to 0 px (it could be neither seen
+   * nor hovered) and the row was still 15 px short (628 px for 643), so the
+   * weekly meter showed "Weekly: [bar] --", its "%" cut off. Now the note
+   * stops at three characters, the row's items sit 8 px apart (gap-2, was 12),
+   * and the context meter's track is the one item in the row that gives way
+   * (64 px down to 24 px) before the row is cut. jsdom lays nothing out, so
+   * this pins the classes; tests/e2e/session-strip-1280.spec.ts measures
+   * them in the real app at 1280x768. Red on 38e0edcb.
+   */
+  it('at 1280 px: the note keeps three characters, the row is gap-2, and only the context track may shrink in the row', () => {
+    helperTab({ inputTokens: 500, contextWindowSize: 1_000_000, contextPercent: 0, costUsd: 0.5159, linesAdded: 0, totalDurationMs: 77_000, usageBuckets: [], remoteUsageNotShown: 'no-reading', modelName: 'Opus 5.5' })
+    settingsState.settings.statusLine = { font: 'sans', fontSize: 11, showRateLimits: true, showTokens: true, showContextBar: true, showCost: true, showLinesChanged: true, showDuration: true }
+    draw()
+    const n = note()!
+    expect(n).not.toBeNull()
+    expect(n.classList.contains('min-w-[3ch]')).toBe(true)
+    expect(n.classList.contains('min-w-0')).toBe(false)
+    const middle = n.parentElement!.querySelector(':scope > .overflow-hidden.min-w-0') as HTMLElement
+    expect(middle).not.toBeNull()
+    expect(middle.classList.contains('gap-2')).toBe(true)
+    expect(middle.classList.contains('gap-3')).toBe(false)
+    // The context meter draws no box of its own: its track and percentage are the row's items.
+    const ctx = middle.querySelector(':scope > [data-testid="strip-context"]') as HTMLElement
+    expect(ctx).not.toBeNull()
+    expect(ctx.classList.contains('contents')).toBe(true)
+    const [track, pct] = [...ctx.children] as HTMLElement[]
+    for (const c of ['w-16', 'min-w-6']) expect(track.classList.contains(c), c).toBe(true)
+    expect(track.classList.contains('shrink-0')).toBe(false)
+    expect(pct.textContent).toBe('0%')
+    expect(pct.classList.contains('shrink-0')).toBe(true)
+    // Every other item of the row keeps its width, the meters among them.
+    const items = [...middle.children].filter((el) => el !== ctx) as HTMLElement[]
+    expect(items.length).toBeGreaterThanOrEqual(5)
+    for (const el of items) expect(el.classList.contains('shrink-0'), el.className).toBe(true)
+    expect(middle.contains(container.querySelector('[data-testid="statusline-pending"]') ?? container.querySelector('[aria-label="Weekly rate limit utilisation"]'))).toBe(true)
   })
 })
