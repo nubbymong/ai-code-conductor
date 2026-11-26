@@ -35,7 +35,8 @@ import { claudeFolderKey, claudeProjectsRootKey, normaliseClaudeFolder } from '.
 import { codexFolderKey } from './logging/codex-folder-key'
 import { getLogSupervisor, getTranscriptBinder } from './logging/logging-service'
 import { getCodexLogBinder } from './logging/codex-log-binder'
-import { resolveResumeTargetFromTranscript, claudeProjectDirName, UUID_RE, canonicalizeTranscriptPath } from './logging/transcript-discovery'
+import { claudeProjectDirName, UUID_RE, canonicalizeTranscriptPath } from './logging/transcript-discovery'
+import { captureResumeTarget, noteKillForResume } from './restart-resume-target'
 import { buildClaudeLaunchCommand, claudeAgentsObject, claudeLaunchProgram, resolveResumeLaunch, recoverOrphanResumeLaunch, buildResumeTranscriptPath, quoteArgForShell, modelFlag, expandResumeTargetCwd, parseWorktreePaths } from './spawn-claude-command'
 import { ensureCompanionDir, nodeFsCompanionDeps } from './logging/companion-dir'
 import { forgetSessionName } from './logging/session-name-sidecar'
@@ -63,7 +64,7 @@ import { windowsPathFolderIsFullyQualified } from './providers/windows-path-name
 import { isShFamilyShell, localSessionShell } from './login-shell'
 import { dispatchSSHStatuslineUpdate, cleanupStatusFile } from './statusline-watcher'
 import { forgetSession } from './background-context'
-import { getGateway, isExactBindSourceActive } from './hooks'
+import { getGateway } from './hooks'
 import { injectHooks } from './hooks/session-hooks-writer'
 import { writeLocalSessionSettings, writeLocalSessionMcpConfig } from './hooks/per-session-settings'
 import { unregisterCodexReviewSession, releaseMcpSessionProvider } from './conductor-mcp-server'
@@ -2822,43 +2823,13 @@ function spawnPtyResolved(
   restartKills.delete(sessionId)
   logInfo(`[pty] Spawning PTY for session ${sessionId} (ssh=${!!options?.ssh}, shellOnly=${!!options?.shellOnly}, cwd=${options?.cwd ? describePathForLog(options.cwd) : 'default'})`)
 
-  // T8b (bug #5): in-session Restart / Switch-account REUSE this sessionId and
-  // call spawnPty synchronously after killing the old PTY. The old run's
-  // endRun() (which clears the binder's per-session bind) fires ASYNC, after we
-  // return — so READ the live conversation's resume target HERE, before
-  // killPty, while the binder still holds it. Only for Claude non-shell, non-SSH
-  // sessions (the binder only tracks Claude transcripts). Fail-open: any miss
-  // leaves no entry and the spawn falls back to existing behaviour.
-  // NOTE: stored into lastResumeTarget AFTER killPty (which clears the map), so
-  // a fresh capture survives its own kill instead of being wiped by it.
-  let capturedResumeTarget: { uuid: string; cwd: string } | null = null
-  if (!options?.ssh && !options?.shellOnly && (options?.provider ?? 'claude') === 'claude') {
-    try {
-      // #480: resume ONLY from an EXACT (authenticated) bind. The previous
-      // getLatestTranscriptPath() also returned heuristic binds — a newest-file
-      // scan of the shared per-repo transcript folder — which resumed a SIBLING
-      // card's conversation when several cards ran in one repo. An exact-only
-      // capture means "resume the conversation the hook confirmed for THIS
-      // session, or start fresh"; a fresh start beats reopening a stranger.
-      const binder = getTranscriptBinder()
-      let latest = binder?.getExactResumeTarget(sessionId) ?? null
-      // Hooks-off fallback: when no EXACT source can ever arrive (hooks disabled
-      // or gateway down), fall back to the heuristic bind and WARN. In that
-      // degraded config there is no authenticated source, so best-effort resume
-      // beats never resuming — but it can cross if cards share a repo folder.
-      if (!latest && !isExactBindSourceActive()) {
-        latest = binder?.getLatestTranscriptPath(sessionId) ?? null
-        if (latest) {
-          logWarn(`[pty] #480 hooks-off resume fallback for ${sessionId}: hooks inactive, using heuristic bind ${latest} (best-effort; may cross if multiple cards share this repo)`)
-        }
-      }
-      if (latest) {
-        capturedResumeTarget = resolveResumeTargetFromTranscript(latest)
-      }
-    } catch (err) {
-      logWarn(`[pty] T8b resume-target capture failed for ${sessionId}: ${(err as Error)?.message ?? err}`)
-    }
-  }
+  // T8b (bug #5): a Restart / Switch account reuses this id. The live
+  // conversation's resume target is read HERE, before killPty, while the binder
+  // still holds it, else the one the Restart's kill read (a held session's exit
+  // clears the bind before this spawn): restart-resume-target.ts. Only for
+  // Claude non-shell, non-SSH sessions. Stored into lastResumeTarget AFTER
+  // killPty (which clears the map), so a fresh capture survives its own kill.
+  const capturedResumeTarget = captureResumeTarget(sessionId, !options?.ssh && !options?.shellOnly && (options?.provider ?? 'claude') === 'claude')
 
   killPty(sessionId)
 
@@ -7290,6 +7261,7 @@ export const RESTART_KILLS_MAX = 512
 export interface KillPtyOptions { reason?: 'restart' | 'close' }
 
 export function killPty(sessionId: string, opts: KillPtyOptions = {}): void {
+  noteKillForResume(sessionId, opts.reason) // T8b: a Restart's kill reads the conversation first (restart-resume-target.ts)
   if (opts.reason === 'restart') {
     restartKills.delete(sessionId)
     restartKills.add(sessionId)
