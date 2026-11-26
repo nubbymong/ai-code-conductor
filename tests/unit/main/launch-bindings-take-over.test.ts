@@ -570,7 +570,7 @@ describe('pty-manager.ts: a restored tab takes over the session an update kept r
  * aicc_planning#423, B1d (review:B1c findings 1 and 2): while its restored
  * tab is not shown, the session kept for it is served its Conductor tool
  * calls (serveKeptLaunchUnseen): the tool host's record and the review and
- * canvas registrations, by the way its provider's sessions start, and a Codex
+ * canvas registrations, by its provider's lifecycle object, and a Codex
  * session's hook file written again with a new token so its hook events reach
  * this run; nothing of its account, telemetry, logging run or conversation.
  * The take-over's own teardown clears it and binds again; a session kept no

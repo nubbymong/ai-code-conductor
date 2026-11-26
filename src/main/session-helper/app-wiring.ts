@@ -102,7 +102,7 @@ async function cleanUpOldCopies(): Promise<void> {
  *    holder runs, with the hook mode's variables in its environment, which
  *    the forwarder runs the hook mode from; each event waits in its holder
  *    while no app takes it. keptOnGateway is true because that provider's
- *    take-over writes its hook file again (Codex: launch-bindings.ts
+ *    take-over writes its hook file again (Codex: providers/codex/lifecycle.ts
  *    codexTakeOver), so a session of it whose hook events stay on the hooks
  *    gateway is still kept at an app update. A provider added here with
  *    'launch' must have such a take-over, or its kept sessions lose their

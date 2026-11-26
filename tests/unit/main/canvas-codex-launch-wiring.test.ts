@@ -1,6 +1,6 @@
 // [host] WP2 PR 4, P4.1 review (A-3, A-2, RA-1) and section 10 question 5,
-// answered C by the owner on 2026-10-04: the Codex branch of the REAL
-// spawnPty wired to the REAL canvas launch (canvas/codex-canvas-launch.ts),
+// answered C by the owner on 2026-10-04: Codex's local launch
+// (providers/codex/local-launch.ts), run by the REAL spawnPty, wired to the REAL canvas launch (canvas/codex-canvas-launch.ts),
 // the real realm staging and the real copy into this computer's own Codex
 // folder, with the built-in tools reaching the launch (the conductor server
 // listening). The rest of main is mocked, as canvas-codex-roots-spawn.test.ts

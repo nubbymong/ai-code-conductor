@@ -577,6 +577,18 @@ provider whose CLI it runs (the manager's agent sessions and take-overs, a remot
 launch plan) and asks the registry; a plain terminal and a provider that declares none send
 what was queued at once.
 
+2.1.3-beta.19 section 2 (aicc_planning#439; seam audit S1's local half and S2; component rows 3
+and 14): a local session of a provider whose CLI is the terminal's own program starts by its
+package's local launch group (SessionProvider.localLaunch). The Codex package holds the launch
+the PTY manager's direct branch held, moved unchanged; the PTY manager names no provider,
+starts any provider whose package has the group and refuses one with none, and its rows keep
+Claude Code's shell launch alone until the local cutover. What the app makes around a local
+session and drops when it ends is each package's lifecycle object (SessionProvider.lifecycle:
+bind, the account a take-over asks for, take over, serve while not shown, unbind, describe);
+the take-over, the serving, the teardown's first part and the description ask the session's
+provider's object, never its name or launch style. The teardown's telemetry and registration
+parts stay core's, with the records they clean, until the local cutover.
+
 P7 result (2026-11-15, Windows test machine, the skeleton holder from #685 and a silent
 install of 2.1.3-beta.4): yes. A detached holder is not in a job object, and it and its
 console child survive the app process tree being ended and the installer running; a

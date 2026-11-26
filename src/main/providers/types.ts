@@ -440,8 +440,15 @@ export interface LocalLaunchStarted {
  *  src/main/pty-manager.ts launchStyleOf). The PTY manager asks the session's
  *  provider for it through the registry and names no provider: it runs any
  *  provider that has this group, and refuses one with none. `start` starts
- *  the CLI from the account's launch and binds what its run needs; it throws
- *  for a launch it refuses, having started nothing or ended what it started. */
+ *  the CLI itself (it hands the PTY manager no program to start: Codex's body
+ *  moved here unchanged, its spawn included), so it owes what the PTY
+ *  manager's own branches do for a session: the terminal started through
+ *  `core.spawnAgentPty`; its data sent to the window on `pty:data:<session id>`
+ *  only while `core.ptySessions` holds this terminal for the session, counted
+ *  by the PTY integrity monitor and fed to the Watchdog first; what its run
+ *  needs bound (its lifecycle object's `bind`); and, for a launch it refuses
+ *  or that fails, a throw having started nothing, or having ended what it
+ *  started and let go of what it took. */
 export interface ProviderLocalLaunch {
   start(request: LocalLaunchRequest, core: LocalLaunchCore): LocalLaunchStarted
 }

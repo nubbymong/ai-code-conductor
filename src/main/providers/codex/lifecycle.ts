@@ -161,7 +161,7 @@ function registerCodexLaunchTools(binding: Pick<CodexLaunchBinding, 'sessionId' 
   // its configured project directory, never home or above it (the
   // codex_review rule, #188) -- and never the directory a resumed
   // conversation's rollout names (P3.5), which is transcript content, the
-  // same line the Agent Canvas root holds in the Claude branch. Whether the tool is
+  // same line the Agent Canvas root holds for a Claude Code session (providers/claude/lifecycle.ts). Whether the tool is
   // offered is decided per MCP connection; killPty's unregister (run
   // before every spawn) clears this, so a respawn re-decides.
   if (isHomeOrAncestor(resolvedCwd)) {

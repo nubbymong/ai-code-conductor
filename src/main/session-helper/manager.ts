@@ -370,7 +370,7 @@ export interface HelperHookDeps {
   byLaunch?: true
   /** 2.1.3-beta.18: a session of this provider whose hook events stay on the
    *  hooks gateway may still be kept at an app update (keepable), because its
-   *  take-over writes its hook file again (Codex: launch-bindings.ts
+   *  take-over writes its hook file again (Codex: providers/codex/lifecycle.ts
    *  codexTakeOver); its hook events go through its holder after a take-over
    *  only when its kept record says its launch sent them there (KeptRecord
    *  `hooks`). Absent (Claude Code): kept only with its hook events through

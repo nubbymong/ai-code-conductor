@@ -7054,7 +7054,6 @@ function writeChunked(sessionId: string, ptyProcess: pty.IPty, data: string): vo
 // Only writes that end in \r or \n are considered — those are "submitted" payloads:
 //   - Command button clicks (`fullCommand + '\r'`)
 //   - Screenshot path sends (`path + '\r'`)
-//   - Storyboard line-by-line output
 //   - Right-click paste of multi-line text
 //
 // Individual keystrokes and escape sequences (arrow keys, function keys, Unicode chars,
