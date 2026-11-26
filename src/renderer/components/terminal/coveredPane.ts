@@ -37,6 +37,28 @@ export const useTerminalSizeWaitStore = create<TerminalSizeWaitState>((set) => (
 }))
 
 /**
+ * The size each terminal last had while it was on screen, by its PTY id
+ * (2.1.3-beta.19 fix round, second pass). A terminal that starts behind a
+ * pane in front is not active, so it has no WebGL renderer and fits on the
+ * DOM renderer's wider cell: 93 columns in an 824 px pane where the shown
+ * terminal fits 103 (aicc_planning#374). It starts at the size it last had
+ * on screen instead, the size the user comes back to, so it is not resized
+ * when it is shown again. Kept here, outside the view, because a Restart
+ * remounts the view and keeps the PTY id.
+ */
+const shownSizes = new Map<string, { cols: number; rows: number }>()
+
+/** Note a terminal's size while it is on screen. */
+export function noteShownSize(ptyId: string, cols: number, rows: number): void {
+  if (cols > 0 && rows > 0) shownSizes.set(ptyId, { cols, rows })
+}
+
+/** The size a terminal last had on screen, or undefined when it never was. */
+export function lastShownSize(ptyId: string): { cols: number; rows: number } | undefined {
+  return shownSizes.get(ptyId)
+}
+
+/**
  * A session's terminal pane: shown; laid out behind the pane in front
  * (`startsBehind`: it is the terminal that pane covers, and its view waits for
  * a size to start in); or hidden. The session's own wrapper is `position:

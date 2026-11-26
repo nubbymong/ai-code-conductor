@@ -71,7 +71,7 @@ import { reconcileRefusedMultiSpawn } from '../utils/refusedMultiSpawn'
 import { isConfigLaunchBlocked, useLaunchGateSettings, restartLaunchRefusal } from '../hooks/useLaunchConfig'
 import { useConfigStore } from '../stores/configStore'
 import { generateId } from '../utils/id'
-import { useTerminalSizeWaitStore } from './terminal/coveredPane'
+import { useTerminalSizeWaitStore, noteShownSize, lastShownSize } from './terminal/coveredPane'
 
 // Re-export for consumers
 export { killSessionPty } from '../ptyTracker'
@@ -1051,12 +1051,24 @@ export default function TerminalView({ sessionId, configId, cwd, shellOnly, elev
           return
         }
         try { fitAddon.fit() } catch { /* ignore */ }
+        // Fitted behind a pane in front (it waited for a size and is not on
+        // screen): no WebGL renderer, so the fit is the DOM renderer's narrower
+        // one. It takes the size it last had on screen, when it had one, so it
+        // starts at the size the user comes back to (terminal/coveredPane.ts).
+        const waitedBehind = useTerminalSizeWaitStore.getState().waiting[sessionId] === true && !isActiveRef.current
+        const shownSize = waitedBehind ? lastShownSize(sessionId) : undefined
+        if (shownSize && (shownSize.cols !== term.cols || shownSize.rows !== term.rows)) {
+          try { term.resize(shownSize.cols, shownSize.rows) } catch { /* ignore */ }
+        }
         // Fitted at its pane's size: it waits no more (terminal/coveredPane.ts).
         useTerminalSizeWaitStore.getState().set(sessionId, false)
         // Seed the integrity geometry from the initial (font-aware) fit so the
         // first throttled report carries the real cols/rows instead of 0 — and
         // so the ResizeObserver's "changed" guard has a correct baseline.
-        if (term.cols > 0 && term.rows > 0) { lastSentCols = term.cols; lastSentRows = term.rows }
+        if (term.cols > 0 && term.rows > 0) {
+          lastSentCols = term.cols; lastSentRows = term.rows
+          if (isActiveRef.current) noteShownSize(sessionId, term.cols, term.rows)
+        }
 
         if (!hasSpawned(sessionId) && !adoptedStartEnded) {
           // aicc_planning#423: shown and starting now (or asking which account
@@ -1731,6 +1743,7 @@ export default function TerminalView({ sessionId, configId, cwd, shellOnly, elev
         if (cols > 0 && rows > 0) {
           lastSentCols = cols
           lastSentRows = rows
+          if (isActiveRef.current) noteShownSize(sessionId, cols, rows)
           ptyResizeCount += 1
           noteActivityGrace(sessionId)
           // aicc_planning#394: the console's paint at the tab's size follows.
@@ -1871,6 +1884,7 @@ export default function TerminalView({ sessionId, configId, cwd, shellOnly, elev
             if (cols > 0 && rows > 0 && (cols !== lastSentCols || rows !== lastSentRows)) {
               lastSentCols = cols
               lastSentRows = rows
+              if (isActiveRef.current) noteShownSize(sessionId, cols, rows)
               ptyResizeCount += 1
               // ConPTY repaints the pane on resize — redraw output, not
               // activity. Grace the pill so it doesn't flash (RC8); the main

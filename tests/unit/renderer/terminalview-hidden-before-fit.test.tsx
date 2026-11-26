@@ -55,6 +55,7 @@ const H = vi.hoisted(() => {
     scrollToBottom = () => {}
     constructor(opts?: any) { this.options = { ...(opts ?? {}) }; MockTerminal.last = this }
     open(el: HTMLElement) { this.element = el }
+    resize(cols: number, rows: number) { this.cols = cols; this.rows = rows }
     loadAddon(addon: unknown) { if (addon instanceof MockWebgl) H.webglLoaded = true }
     onData() { return { dispose() {} } }
     onScroll() { return { dispose() {} } }
@@ -437,31 +438,74 @@ describe('a Restart while another pane is in front of the terminal starts at onc
     return { ...AREA, top: 0, left: 0, right: AREA.width, bottom: AREA.height, x: 0, y: 0, toJSON() { return {} } } as DOMRect
   }
 
-  it('the canvas in front: the remounted view starts at once at its pane\'s size, behind the canvas, which stays in front; then its pane is hidden again', async () => {
-    const covered = await loadCoveredPane().catch(() => null)
-    /** App's session pane with the Agent Canvas open: its terminal's pane, then the canvas. */
-    function SessionWithCanvas(): React.ReactElement {
-      const waiting = covered ? covered.useTerminalSizeWaitStore((s) => s.waiting['s-1'] === true) : false
-      const style: React.CSSProperties = covered ? covered.terminalPaneStyle({ shown: false, startsBehind: waiting }) : { display: 'none', minHeight: 0 }
-      return React.createElement('div', { style: waiting ? { position: 'relative' } : {} },
-        React.createElement('div', { 'data-testid': 'terminal-pane', style },
-          React.createElement(TerminalView as any, { sessionId: 's-1', cwd: 'C:/proj', isActive: false, shellOnly: true })),
-        React.createElement('div', { 'data-testid': 'canvas-pane' }, 'the Agent Canvas'))
+  type CoveredPane = typeof import('../../../src/renderer/components/terminal/coveredPane')
+  /** App's session pane with the Agent Canvas open: its terminal's pane, then the canvas. */
+  function SessionWithCanvas({ covered, id }: { covered: CoveredPane | null; id: string }): React.ReactElement {
+    const waiting = covered ? covered.useTerminalSizeWaitStore((s) => s.waiting[id] === true) : false
+    const style: React.CSSProperties = covered ? covered.terminalPaneStyle({ shown: false, startsBehind: waiting }) : { display: 'none', minHeight: 0 }
+    return React.createElement('div', { style: waiting ? { position: 'relative' } : {} },
+      React.createElement('div', { 'data-testid': 'terminal-pane', style },
+        React.createElement(TerminalView as any, { sessionId: id, cwd: 'C:/proj', isActive: false, shellOnly: true })),
+      React.createElement('div', { 'data-testid': 'canvas-pane' }, 'the Agent Canvas'))
+  }
+  const shellRecord = (id: string) => ({ id, label: 'shell', workingDirectory: 'C:/proj', color: '#89b4fa', sessionType: 'local', provider: 'claude', shellOnly: true })
+  const twelveFrames = async () => {
+    for (let i = 0; i < 12; i++) {
+      await act(async () => { frame(); await microtasks() })
     }
+  }
+
+  it('the canvas in front, a terminal never shown: the remounted view starts at once at its pane\'s size, behind the canvas, which stays in front; then its pane is hidden again', async () => {
+    const covered = await loadCoveredPane().catch(() => null)
     const real = Element.prototype.getBoundingClientRect
     Element.prototype.getBoundingClientRect = laidOut
     try {
-      H.sessionState.sessions = [{ id: 's-1', label: 'shell', workingDirectory: 'C:/proj', color: '#89b4fa', sessionType: 'local', provider: 'claude', shellOnly: true }]
-      act(() => { root.render(React.createElement(SessionWithCanvas)) })
-      for (let i = 0; i < 12; i++) {
-        await act(async () => { frame(); await microtasks() })
-      }
+      // An id no other test showed: no size on screen is known for it.
+      H.sessionState.sessions = [shellRecord('s-never-shown')]
+      act(() => { root.render(React.createElement(SessionWithCanvas, { covered, id: 's-never-shown' })) })
+      await twelveFrames()
       // Started, at the pane's own size (the DOM renderer's cell: 93 columns in 824 px), not 80x24.
       expect(spawnedSizes()).toEqual([[93, 27]])
       // The canvas is still in front, and the terminal's pane is hidden again once it started.
       const pane = container.querySelector('[data-testid="terminal-pane"]') as HTMLElement
       expect(pane.style.display).toBe('none')
       expect(container.querySelector('[data-testid="canvas-pane"]')).not.toBeNull()
+    } finally {
+      Element.prototype.getBoundingClientRect = real
+    }
+  })
+
+  /**
+   * Second pass (RESTARTCANVAS): the view behind the canvas is not active, so
+   * it has no WebGL renderer and fits on the DOM renderer's cell, 93 columns
+   * where the shown terminal fits 103. It starts at the size it last had on
+   * screen, so it is not resized when it is shown again.
+   */
+  it('a terminal last shown at 103x27, restarted behind the canvas: it starts at 103x27, the size it is shown at again, not the DOM renderer\'s 93 columns', async () => {
+    const covered = await loadCoveredPane().catch(() => null)
+    const real = Element.prototype.getBoundingClientRect
+    Element.prototype.getBoundingClientRect = laidOut
+    try {
+      H.sessionState.sessions = [shellRecord('s-shown')]
+      // On screen first, with its WebGL renderer: started at 103x27.
+      act(() => {
+        root.render(React.createElement('div', { key: 'shown' },
+          React.createElement(TerminalView as any, { sessionId: 's-shown', cwd: 'C:/proj', isActive: true, shellOnly: true })))
+      })
+      await twelveFrames()
+      expect(spawnedSizes()).toEqual([[103, 27]])
+      // Restart with the canvas in front: its PTY ends (the tracker forgets
+      // it) and the view is mounted again, behind the canvas.
+      H.spawned.delete('s-shown')
+      spawn.mockClear()
+      resize.mockClear()
+      act(() => { root.render(React.createElement(SessionWithCanvas, { key: 'restarted', covered, id: 's-shown' })) })
+      await twelveFrames()
+      expect(H.webglLoaded, 'the view behind the canvas draws on the DOM renderer').toBe(false)
+      expect(spawnedSizes()).toEqual([[103, 27]])
+      expect(resize.mock.calls, 'no other size reaches main').toEqual([])
+      const pane = container.querySelector('[data-testid="terminal-pane"]') as HTMLElement
+      expect(pane.style.display).toBe('none')
     } finally {
       Element.prototype.getBoundingClientRect = real
     }
