@@ -15,8 +15,10 @@
  * (helper-pty.ts write, sendInput), and the holder writes each frame to the
  * program's terminal whole (helper/src/holder.rs, the input thread), so the
  * request and its CR, written together (about 175 characters), reached Claude
- * Code as one read. A marker line is under 64 characters, so its CR was the
- * Enter. Today's SSH tab sends the same one write through ConPTY and ssh.exe
+ * Code as one read. That marker's line and its CR were under 64 characters, so its CR was the
+ * Enter (one of 63 characters or more would not have sent itself; since
+ * 2.1.3-beta.19 section 6.1 a marker's Enter is its own write in a helper
+ * tab). Today's SSH tab sends the same one write through ConPTY and ssh.exe
  * and submits; how they split it was not measured.
  *
  * The fix: for a tab main says goes through the helper (ssh.getState answers

@@ -9,7 +9,8 @@
 // each write as one read. The renderer typed a marker's line and its Enter in
 // one write (answerClaudeMarkerAsk, src/renderer/lib/claudePrompt.ts), and the
 // Claude Code package's marker member did not read RunScreenTyping.wholeWrites,
-// so a marker of 63 characters or more was typed and not sent there.
+// so a marker of 63 characters or more was typed and not sent there (none has
+// reached that yet: an approval line is 59 to 61 characters, v1 to v999).
 //
 // The fix: for a helper tab the marker's requests say enterApart, the renderer
 // types the line alone, and the package types Enter as its own write
@@ -61,14 +62,16 @@ class FakeRun {
   write(data: string): void { this.writes.push(data) }
 }
 const runs = new Map<string, FakeRun>()
+/** What the write port was handed for a session with no run. The app's port (writePty) holds such a write and replays it into the tab's next start. */
+let orphanWrites: Array<[string, string]> = []
 
 let n = 0
 const fresh = (): string => `helpermarker${++n}`
 const startRun = (sessionId: string): FakeRun => { const r = new FakeRun(); runs.set(sessionId, r); return r }
 
-/** A 70-character marker line: an approval line is 60 to 62 characters
- *  today, and anything of 63 or more reached Claude Code with its Enter as
- *  one read of 64 or more. */
+/** A 70-character marker line: an approval line is 59 to 61 characters
+ *  today (versions v1 to v999; 60 to 62 with its Enter), and anything of 63
+ *  or more reached Claude Code with its Enter as one read of 64 or more. */
 const LINE = 'Approved v2 on the canvas · canvas_version_verdict recorded · round 2!'
 const SHORT = 'Review #3 — 5 notes · canvas_review R3'
 const CANVAS = 'c1c2c3c4c5c6c7c8c9c0d1d2'
@@ -80,7 +83,7 @@ let lateTypeAnswers = 0
 
 beforeAll(() => {
   input.setSessionInputPorts({
-    write: (sessionId, data) => { runs.get(sessionId)?.write(data) },
+    write: (sessionId, data) => { const r = runs.get(sessionId); if (r) r.write(data); else orphanWrites.push([sessionId, data]) },
     run: (sessionId) => runs.get(sessionId) as never,
     tmuxWrapped: (sessionId) => h.wrapped.has(sessionId),
     providerOf: () => 'claude',
@@ -92,6 +95,7 @@ beforeEach(() => {
   h.helperTabs.clear()
   h.wrapped.clear()
   h.warns = []
+  orphanWrites = []
   asks = []
   lateTypeAnswers = 0
   typing._resetClaudeMarkerTypingForTest()
@@ -197,6 +201,9 @@ describe('a canvas marker into a Claude Code tab through the session helper: the
     runs.delete(id)
     await vi.advanceTimersByTimeAsync(10_000)
     expect(run.writes).toEqual([LINE])
+    // Nothing was handed to the write port for the closed tab either: the app's port would hold it and replay it into the tab's next start.
+    expect(orphanWrites).toEqual([])
+    expect(h.warns.some((w) => w.includes('its Enter was not'))).toBe(true)
   })
 
   it('a type answer that came late: the line once, and one Enter once main reads it typed', async () => {
