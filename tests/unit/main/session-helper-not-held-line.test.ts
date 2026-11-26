@@ -64,6 +64,11 @@ describe('a tab the session helper could not hold says so in one line', () => {
     expect(seen[0]).not.toContain('C:\\')
   })
 
+  it('a reason that is already a sentence (the helper\'s own, when its set-up failed while the tab waited) ends in one full stop, not two', () => {
+    expect(notHeldLine('the helper could not hold it: The session helper is not part of this installation.')).toBe('\r\n[Not held by the session helper: The session helper is not part of this installation. This tab runs the usual way and ends when the app closes.]\r\n')
+    expect(notHeldLine('the helper could not hold it: The session helper copy on this computer does not match the one installed with the app, so nothing is started through it.  ')).not.toContain('..')
+  })
+
   it('a run of the app\'s own (no notHeldNote) gets no line: its output is the program\'s only', async () => {
     const { p, seen, direct } = terminal(async () => { throw new Error(WHY) }, {})
     await until(() => !p.throughHelper, 'the usual way')
