@@ -108,7 +108,9 @@ describe('useStatuslineSubscription -- account identity (Phase 3 harmonise-remot
 
 // aicc_planning#292: the "no reading" mark (D3) is sent once, and readings can
 // still arrive after it. A reading is what the strip's placeholder rule reads:
-// a non-empty bucket list or a current rate limit figure.
+// a non-empty bucket list, a 5-hour figure or a weekly figure (2.1.3-beta.19
+// fix round 5: Claude Code can report the weekly window alone, and the strip
+// shows it).
 describe('useStatuslineSubscription -- the "no reading" mark', () => {
   const bucket = { key: 'k/300:', label: '5h', group: 'session', percent: 40, resetsAt: '', severity: 'normal' }
   const mark = () => useSessionStore.getState().sessions[0].usageUnavailable
@@ -130,11 +132,19 @@ describe('useStatuslineSubscription -- the "no reading" mark', () => {
     expect(useSessionStore.getState().sessions[0].rateLimitCurrent).toBe(0)
   })
 
-  it('the mark and no readings: it stays (an empty bucket list, a weekly figure alone, other fields)', () => {
+  it('the mark first, then a late weekly figure alone: the mark is cleared', () => {
+    renderHook(() => useStatuslineSubscription('s1'))
+    act(() => { cb!({ sessionId: 's1', usageUnavailable: 'no-reading' }) })
+    act(() => { cb!({ sessionId: 's1', rateLimitWeekly: 68, rateLimitWeeklyResets: '2026-11-30T03:00:00.000Z' }) })
+    expect(mark()).toBeUndefined()
+    expect(useSessionStore.getState().sessions[0].rateLimitWeekly).toBe(68)
+  })
+
+  it('the mark and no readings: it stays (an empty bucket list, other fields)', () => {
     renderHook(() => useStatuslineSubscription('s1'))
     act(() => { cb!({ sessionId: 's1', usageUnavailable: 'no-reading' }) })
     act(() => { cb!({ sessionId: 's1', usageBuckets: [] }) })
-    act(() => { cb!({ sessionId: 's1', rateLimitWeekly: 12, contextUsedPercent: 30 }) })
+    act(() => { cb!({ sessionId: 's1', contextUsedPercent: 30 }) })
     expect(mark()).toBe('no-reading')
   })
 

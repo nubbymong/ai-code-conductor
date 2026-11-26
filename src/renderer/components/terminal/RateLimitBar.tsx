@@ -79,6 +79,21 @@ export function RateLimitBarNoReading({ label, resetsAt, compact }: { label: str
   )
 }
 
+/**
+ * A window the status line left out of a report that gave another one (the
+ * weekly window with no 5-hour one, 2.1.3-beta.19 fix round 5): nothing is on
+ * its way, so it says so in words. No meter and no "--%", which read as
+ * waiting.
+ */
+export function RateLimitNotReported({ label, title }: { label: string; title: string }) {
+  return (
+    <span className="flex items-center gap-1.5" title={title} data-testid="rate-limit-not-reported">
+      <span className="text-subtext0 opacity-60">{`${label}:`}</span>
+      <span className="text-subtext0 opacity-60">not reported</span>
+    </span>
+  )
+}
+
 // aicc_planning#304: the bar below is memoized, so it renders only when its
 // props change. Its reset text also depends on today's date (formatResetTime
 // drops the date for a reset later today), so every bar also checks the local

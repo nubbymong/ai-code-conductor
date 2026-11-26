@@ -68,6 +68,7 @@ export const changelog: ChangelogEntry[] = [
       { type: 'fix', description: 'On Windows, with Claude Code and Codex sessions through the session helper on, a session started after an update that kept another one running is held by the helper again; before, it ran the usual way. A tab the helper tried to hold and could not now says so in one line, before its program\'s output.' },
       { type: 'fix', description: 'Restart pressed while the Agent Canvas, the logs or the browser is in front of a tab\'s terminal now starts the session at once; before, it waited until the terminal was shown again.' },
       { type: 'fix', description: 'On Windows, a Snap press with no desktop to capture (a locked screen, or a session with no screen) now says so above the command bar; before, nothing happened.' },
+      { type: 'fix', description: 'When Claude Code reports a weekly limit and no 5-hour one, a session\'s status line now shows the weekly figure and its reset, and the 5-hour meter says not reported; before, both meters showed as waiting for the status line. The usage popover the Copilot meter opens reads the same way.' },
       { type: 'fix', description: 'A session that asks for you while a page such as Machines or Settings is in front now marks its tab and its card, also when it is the session you looked at last.' },
       { type: 'fix', description: 'The Feature Guide\'s Reference now shows each known issue as a paragraph of its own; before, the whole list ran together as one paragraph.' },
     ],

@@ -47,8 +47,9 @@ export function useStatuslineSubscription(sessionId: string) {
       // reading can still arrive after it (aicc_planning#292: the CLI's own
       // session hook can name the session's rollout after the 30 s deadline),
       // so an update that carries a reading clears it. A reading is what the strip's placeholder rule reads: a
-      // non-empty bucket list or a current rate limit figure.
-      const hasReading = (data.usageBuckets != null && data.usageBuckets.length > 0) || data.rateLimitCurrent != null
+      // non-empty bucket list, a 5-hour figure or a weekly figure (2.1.3-beta.19
+      // fix round 5: Claude Code can report the weekly window alone).
+      const hasReading = (data.usageBuckets != null && data.usageBuckets.length > 0) || data.rateLimitCurrent != null || data.rateLimitWeekly != null
       if (hasReading) updates.usageUnavailable = undefined
       else if (data.usageUnavailable) updates.usageUnavailable = data.usageUnavailable
       // 2.1.3-beta.19 section 3 (aicc_planning#434): a tab through the session

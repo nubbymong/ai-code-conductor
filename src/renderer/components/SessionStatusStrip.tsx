@@ -2,7 +2,8 @@ import React, { useState, useMemo, useRef, useEffect } from 'react'
 import { useSessionStore, type Session } from '../stores/sessionStore'
 import { useSettingsStore, DEFAULT_STATUS_LINE } from '../stores/settingsStore'
 import { usesCodex } from '../onboarding/provider-choice'
-import { RateLimitBar, RateLimitBarPending, RateLimitBarNoReading } from './terminal/RateLimitBar'
+import { RateLimitBar, RateLimitBarPending, RateLimitBarNoReading, RateLimitNotReported } from './terminal/RateLimitBar'
+import { tryGetRendererProvider } from '../providers/core'
 import { bucketPastReset } from '../../shared/usage-labels'
 import { useRenderAtNextReset } from '../hooks/useRenderAtNextReset'
 import { useProviderAccountsStore } from '../stores/providerAccountsStore'
@@ -282,13 +283,16 @@ export default function SessionStatusStrip({ sessionId }: SessionStatusStripProp
   // band below is already inside `{statusLineEnabled ? ... }`, so a clause for
   // it would be unreachable -- verified by mutation: deleting it changes no test
   // result. The footer needs its own check because it has no such wrapper.
+  // Nothing has arrived means neither window: a weekly figure alone is the
+  // status line having spoken (2.1.3-beta.19 fix round 5).
   const awaitingStatusline =
     !session.shellOnly &&
     session.status !== 'disconnected' &&
     session.usageUnavailable !== 'no-reading' &&
     !perToken &&
     (session.usageBuckets == null || session.usageBuckets.length === 0) &&
-    session.rateLimitCurrent == null
+    session.rateLimitCurrent == null &&
+    session.rateLimitWeekly == null
 
   const pct = session.contextPercent ?? 0
   // Context-meter thresholds: >85 danger, >=70 warning -- carried over from
@@ -490,7 +494,11 @@ export default function SessionStatusStrip({ sessionId }: SessionStatusStripProp
               </span>
             )
           }
-          if (session.rateLimitCurrent == null) {
+          // Each window from its own field (2.1.3-beta.19 fix round 5): Claude
+          // Code can report the weekly window and no 5-hour one. Only while
+          // neither has arrived do both wait; once one has, the status line
+          // has spoken, and a window it left out is not reported, not coming.
+          if (session.rateLimitCurrent == null && session.rateLimitWeekly == null) {
             // Nothing has been reported yet. Rendering null here is what made a
             // cold session look broken: the statusline is written by a detached
             // child process and can trail the terminal by several seconds, so
@@ -512,9 +520,11 @@ export default function SessionStatusStrip({ sessionId }: SessionStatusStripProp
           return (
             <span className="flex items-center gap-3 shrink-0">
               {!hiddenBuckets.includes('5h') && (
-                session.rateLimitCurrentResets && bucketPastReset({ resetsAt: session.rateLimitCurrentResets }, Date.now())
-                  ? <RateLimitBarNoReading label="5h" resetsAt={session.rateLimitCurrentResets} />
-                  : <RateLimitBar label="5h" pct={session.rateLimitCurrent} resets={session.rateLimitCurrentResets} showReset={sl.showResetTime} />
+                session.rateLimitCurrent == null
+                  ? <RateLimitNotReported label="5h" title={`${(session.provider ? tryGetRendererProvider(session.provider)?.displayName : undefined) ?? 'The status line'} reported no 5-hour window for this account`} />
+                  : session.rateLimitCurrentResets && bucketPastReset({ resetsAt: session.rateLimitCurrentResets }, Date.now())
+                    ? <RateLimitBarNoReading label="5h" resetsAt={session.rateLimitCurrentResets} />
+                    : <RateLimitBar label="5h" pct={session.rateLimitCurrent} resets={session.rateLimitCurrentResets} showReset={sl.showResetTime} />
               )}
               {session.rateLimitWeekly != null && !hiddenBuckets.includes('Weekly') && (
                 session.rateLimitWeeklyResets && bucketPastReset({ resetsAt: session.rateLimitWeeklyResets }, Date.now())
