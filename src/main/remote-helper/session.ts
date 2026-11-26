@@ -782,7 +782,8 @@ export class RemoteHelperPty implements IPty {
   }
 
   private make(adopt: HolderRecord | undefined): void {
-    const inner = new HelperPty({ sid: this.sid, label: this.o.appPtyId, spec: this.o.spec, driver: this.driver, redraw: 'nudge', ...(adopt ? { adopt } : {}) })
+    // Its provider (the launch plan's) decides a queued lone Enter's wait (2.1.3-beta.19 section 6.2).
+    const inner = new HelperPty({ sid: this.sid, label: this.o.appPtyId, spec: this.o.spec, driver: this.driver, redraw: 'nudge', ...(adopt ? { adopt } : {}), ...(this.o.plan ? { provider: this.o.plan.provider } : {}) })
     this.inner = inner
     inner.onData((d) => this.data.fire(d))
     inner.onExit((e) => {
