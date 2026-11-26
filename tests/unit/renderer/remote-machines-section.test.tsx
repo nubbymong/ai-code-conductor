@@ -27,7 +27,7 @@ const DID = 'd'.repeat(32)
 const state = (over: Partial<RemoteMachinesState> = {}): RemoteMachinesState => ({
   available: true,
   switchOn: true,
-  bundled: { ok: true, version: '0.1.0', size: 3_000_000, sha12: 'abcdef012345' },
+  bundled: { ok: true, version: '0.1.0', files: [{ arch: 'x86_64', size: 3_000_000, sha12: 'abcdef012345' }, { arch: 'aarch64', size: 2_800_000, sha12: '0123456789ab' }] },
   machines: [],
   candidates: [
     { configId: 'cfg-key', label: 'Rocky', target: 'nick@rocky.lan:22', addable: true },

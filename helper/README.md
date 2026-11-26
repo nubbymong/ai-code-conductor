@@ -179,16 +179,30 @@ On Linux the Helper job also builds the release helper for
 whatever its glibc, checks with `readelf` that it names no program interpreter
 and no shared library, and uploads it as the `helper-linux-musl` artifact. It
 was first for the remote probes P3 and P6 (`probes/README.md`). From
-2.1.3-beta.17 the Windows installer carries it: `release.yml`'s `helper-linux`
-job builds it with the same three steps, `build-windows` puts it at
-`target/helper-linux-musl/aicc-helper`, and `node scripts/write-helper-manifest.mjs`
-writes `target/helper-manifest/manifest.json` before packaging. The manifest
-lists the Linux file only, as `{"v":1,"files":[{"path":"linux-x64/aicc-helper","version":"<this crate's>","sha256":"<64 hex>"}]}`
-with the path relative to `resources/helper/`: electron-builder signs
+2.1.3-beta.19 a second job, `Helper (ubuntu-24.04-arm)`, does the same for
+arm64 on GitHub's arm64 runner: it builds and tests the crate there, builds
+the release helper for `aarch64-unknown-linux-musl` natively (no cross
+linker), checks it the same way for the AArch64 machine, runs it once
+(`version`), and uploads it as the `helper-linux-musl-arm64` artifact. From
+2.1.3-beta.17 the Windows installer carries the x86-64 file, and from
+2.1.3-beta.19 the arm64 one beside it: `release.yml`'s `helper-linux` and
+`helper-linux-arm64` jobs build them with the same steps, `build-windows`
+puts them at `target/helper-linux-musl/aicc-helper` and
+`target/helper-linux-musl-arm64/aicc-helper`, and
+`node scripts/write-helper-manifest.mjs` writes
+`target/helper-manifest/manifest.json` before packaging. The manifest lists
+the Linux files only, the x86-64 one first, as
+`{"v":1,"files":[{"path":"linux-x64/aicc-helper","version":"<this crate's>","sha256":"<64 hex>"},{"path":"linux-arm64/aicc-helper","version":"<this crate's>","sha256":"<64 hex>"}]}`
+with each path relative to `resources/helper/`: electron-builder signs
 `aicc-helper.exe` in the package, which changes its bytes after any hash
-written before. A Windows package made on a VM or a dev PC takes the file from
-the head's `helper-linux-musl` artifact the same way; without it, the manifest
-step and `npm run verify:helper` fail.
+written before. A Windows package made on a VM or a dev PC takes the files
+from the head's `helper-linux-musl` and `helper-linux-musl-arm64` artifacts
+the same way; without either, the manifest step and `npm run verify:helper`
+fail. A dev run of the app that has only one of them writes its manifest with
+`node scripts/write-helper-manifest.mjs --only-present`, and can then add only
+that kind of machine. The app picks the file by the machine's `uname -m`
+through a fixed table (`x86_64` and `aarch64`); any other is refused, and the
+host's answer never forms a path.
 
 ## Dependencies
 

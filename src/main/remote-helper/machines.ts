@@ -5,12 +5,17 @@
  * Add, on a saved SSH config with key sign-in, in this order, each step only
  * once the one before it passed:
  *   1. prepare: nothing reaches the machine. The app checks its own Linux
- *      helper against the installer's manifest and hands the renderer the
- *      question to ask (file, size, SHA-256, where it goes) with a one-time
- *      token. No token, no upload: Add takes only a token prepare made, once,
- *      within ten minutes.
- *   2. probe: what the host is (Linux x86-64 only), its home and login shell,
- *      and where `claude` is, through one `-il` lookup (P6's fallback).
+ *      helpers against the installer's manifest and hands the renderer the
+ *      question to ask (each file it may send, x86-64 and arm64, with its
+ *      size and SHA-256, and where it goes) with a one-time token that holds
+ *      those hashes. No token, no upload: Add takes only a token prepare
+ *      made, once, within ten minutes.
+ *   2. probe: what the host is (Linux on x86-64 or arm64 only), its home and
+ *      login shell, and where `claude` is, through one `-il` lookup (P6's
+ *      fallback). Its `uname -m` answer only selects a row of the fixed table
+ *      (manifest.ts LINUX_HELPER_ROWS: x86_64 or aarch64) and never forms a
+ *      path; the file of that row is the one sent, and on Add it must be the
+ *      one the question named for that row.
  *   3. install: the file goes on standard input into a new temporary folder,
  *      is set 0700 and hashed there; the app compares that hash with the
  *      manifest's. Equal: commit moves it into its folder. Not equal (or no
@@ -19,12 +24,15 @@
  *   4. `version` and `selftest --nonce`, through the launcher, which hashes
  *      the file again before each start.
  *   5. the record: OS, architecture, home, login shell, the CLI's path and
- *      the PATH from the `-il` lookup, the helper's version, hash and folder,
- *      and the check. A failed self-test leaves the machine added but not
- *      checked: no tab goes through the helper there until a Check passes.
+ *      the PATH from the `-il` lookup, the helper's file (its manifest path),
+ *      version, hash and folder, and the check. A failed self-test leaves the
+ *      machine added but not checked: no tab goes through the helper there
+ *      until a Check passes.
  *
  * Check runs the probe, version and self-test again (and installs this
- * build's helper first when the machine has another). Remove is refused while
+ * build's helper for the machine's architecture first when the machine has
+ * another). Every compare of a machine's helper with this build's uses the
+ * manifest entry of that machine's architecture. Remove is refused while
  * a tab runs through the helper there or the helper lists a session; then one
  * fixed script deletes `~/.aicc/<did>` after reading its owner marker
  * (scripts.ts).
@@ -45,7 +53,7 @@ import {
   afterHashLine, newNonce, notStartedLogLine, readHashLine, readScriptResult, runScript, sshFailure, targetProblem,
   type ExecResult, type SshRunner, type SshTarget,
 } from './ssh-exec'
-import type { BundledLinuxHelper } from './manifest'
+import { LINUX_HELPER_ROWS, linuxHelperRow, type BundledLinuxHelper, type LinuxArch } from './manifest'
 import type { RemoteActionResult, RemoteAddCandidate, RemoteConsent, RemoteMachineView } from '../../shared/remote-machines'
 import { REMOTE_OTHER_HELPER, REMOTE_TOKEN_RE } from '../../shared/remote-machines'
 
@@ -68,7 +76,9 @@ export interface RemoteMachineRecord {
   /** The PATH a session's CLI starts with: the `-il` lookup's, else the exec's. */
   path: string
   lang: string | null
-  helper: { version: string; sha256: string; folder: string }
+  /** The helper installed there: its file (its manifest path, the row of the
+   *  machine's architecture), version, SHA-256 and folder. */
+  helper: { path: string; version: string; sha256: string; folder: string }
   check: { at: number; ok: boolean; detail?: string }
 }
 
@@ -147,15 +157,19 @@ function readRecord(v: unknown): RemoteMachineRecord | null {
   const shell = hostPath(r.shell, 4096)
   const p = hostText(r.path, 32767)
   if (!home || !shell || !p) return null
+  // A record from before 2.1.3-beta.19 has no architecture's file named: its
+  // architecture (x86_64 when it has none) gives the row.
+  const arch = hostText(r.arch, 64) ?? 'x86_64'
+  const file = LINUX_HELPER_ROWS.find((row) => row.path === helper.path)?.path ?? linuxHelperRow(arch)?.path ?? LINUX_HELPER_ROWS[0].path
   return {
     did: r.did, host: r.host as string, port: r.port as number, user: r.user as string,
     label: hostText(r.label, 200) ?? `${r.user}@${r.host}`,
     addedAt: typeof r.addedAt === 'number' ? r.addedAt : 0,
-    os: hostText(r.os, 64) ?? 'Linux', arch: hostText(r.arch, 64) ?? 'x86_64',
+    os: hostText(r.os, 64) ?? 'Linux', arch,
     home, shell, shellIsSh: r.shellIsSh === true,
     claudePath: r.claudePath === null ? null : hostPath(r.claudePath, 4096),
     path: p, lang: typeof r.lang === 'string' && LANG_RE.test(r.lang) ? r.lang : null,
-    helper: { version: helper.version, sha256: helper.sha256, folder: helper.folder },
+    helper: { path: file, version: helper.version, sha256: helper.sha256, folder: helper.folder },
     check: { at: check.at, ok: check.ok, ...(typeof check.detail === 'string' ? { detail: check.detail.slice(0, 300) } : {}) },
   }
 }
@@ -178,7 +192,9 @@ export interface SavedConfigLike {
 export const MACHINE_TEXT = {
   noConsent: 'Nothing was sent: the question was not answered, or it was asked more than ten minutes ago. Press Add again.',
   notFound: 'That machine is not on this computer\'s list.',
-  notLinux: (os: string, arch: string) => `It is ${os} on ${arch}. This preview adds Linux x86-64 machines only.`,
+  notLinux: (os: string, arch: string) => `It is ${os} on ${arch}. This preview adds Linux x86-64 or arm64 machines only.`,
+  noArchHelper: (name: string) => `This build of the app carries no session helper for Linux ${name} machines, so nothing was installed on it.`,
+  changed: 'The app\'s Linux helper changed after the question was asked, so nothing was sent. Press Add again.',
   noHashTool: 'The machine has no sha256sum, shasum or openssl, so the helper file cannot be checked there. Nothing was left on it.',
   hashMismatch: (hex: string) => `The file on the machine did not match the installer's (SHA-256 ${hex.slice(0, 12)}), so it was removed and nothing was left on it.`,
   inUse: (n: number) => `${n === 1 ? 'A tab runs' : `${n} tabs run`} through the session helper on this machine. Close ${n === 1 ? 'it' : 'them'} first.`,
@@ -228,8 +244,9 @@ export function refusalText(word: string | null): string {
 export interface MachinesDeps {
   runner: SshRunner
   store: MachineStore
-  /** This build's Linux helper, checked against its manifest. */
-  bundled: () => Promise<{ ok: true; helper: BundledLinuxHelper } | { ok: false; why: string }>
+  /** This build's Linux helpers, one per architecture it carries, each checked
+   *  against its manifest (manifest.ts readBundledLinuxHelpers). */
+  bundled: () => Promise<{ ok: true; helpers: BundledLinuxHelper[] } | { ok: false; why: string }>
   /** The helper file's bytes, for the upload. */
   readFile?: (file: string) => Promise<Buffer>
   /** How many open tabs go through the helper on this machine. */
@@ -239,12 +256,32 @@ export interface MachinesDeps {
   random?: () => string
 }
 
-/** A prepared Add: what the user was asked about, until its token is used. */
+/** A prepared Add: what the user was asked about, until its token is used.
+ *  `offered`: the SHA-256 of each file the question named, by architecture. */
 interface Pending {
   target: SshTarget
   label: string
-  sha256: string
+  offered: Partial<Record<LinuxArch, string>>
   expires: number
+}
+
+/** The question asked before anything is sent: each file this build may send,
+ *  with its size and the first 12 of its SHA-256; the machine's own answer
+ *  picks one. */
+export function consentText(target: string, helpers: readonly BundledLinuxHelper[]): string {
+  const name = (h: BundledLinuxHelper) => linuxHelperRow(h.arch)?.name ?? h.arch
+  const files = helpers.map((h) => `${name(h)} (${(h.size / (1024 * 1024)).toFixed(1)} MB, SHA-256 ${h.sha256.slice(0, 12)})`)
+  const which = files.length > 1
+    ? `${files.join(' or ')}, whichever the machine says it is`
+    : `${files[0]} (this build carries no other, so only a Linux ${name(helpers[0])} machine can be added)`
+  return `Install the session helper on ${target}? One file, ${which}, into ~/.aicc in your account there. No root, no service: nothing runs when no session uses it. Remove takes it away.`
+}
+
+/** The SHA-256 of each helper, by architecture. */
+function hashesOf(helpers: readonly BundledLinuxHelper[]): Partial<Record<LinuxArch, string>> {
+  const out: Partial<Record<LinuxArch, string>> = {}
+  for (const h of helpers) out[h.arch] = h.sha256
+  return out
 }
 
 export const CONSENT_TTL_MS = 10 * 60_000
@@ -287,12 +324,14 @@ export class RemoteMachines {
     return this.list().find((m) => m.host === t.host && m.port === t.port && m.user === t.username)
   }
 
-  /** The cards. `bundledSha256`: the SHA-256 of this build's Linux helper (null:
-   *  none). A machine holding another reads not checked, and says Check
-   *  updates it, as the routing sends its tabs the usual way (route.ts). */
-  views(bundledSha256: string | null): RemoteMachineView[] {
+  /** The cards. `bundledSha256`: the SHA-256 of this build's Linux helper for
+   *  an architecture (null: none for it), asked with each machine's own. A
+   *  machine holding another reads not checked, and says Check updates it, as
+   *  the routing sends its tabs the usual way (route.ts). */
+  views(bundledSha256: (arch: string) => string | null): RemoteMachineView[] {
     return this.list().map((m) => {
-      const other = bundledSha256 !== null && m.helper.sha256 !== bundledSha256
+      const want = bundledSha256(m.arch)
+      const other = want !== null && m.helper.sha256 !== want
       const lastCheck = other ? { at: m.check.at, ok: false, detail: REMOTE_OTHER_HELPER } : m.check
       return {
         did: m.did, label: m.label, target: `${m.user}@${m.host}:${m.port}`, checked: lastCheck.ok, lastCheck,
@@ -334,12 +373,8 @@ export class RemoteMachines {
     const target: SshTarget = { host: s.host as string, port: s.port as number, user: s.username as string }
     for (const [k, p] of this.pending) if (p.expires <= this.now()) this.pending.delete(k)
     const token = this.rand()
-    this.pending.set(token, { target, label: cand.label, sha256: b.helper.sha256, expires: this.now() + CONSENT_TTL_MS })
-    const mb = (b.helper.size / (1024 * 1024)).toFixed(1)
-    return {
-      ok: true, token, target: cand.target,
-      text: `Install the session helper on ${cand.target}? One file, ${mb} MB, SHA-256 ${b.helper.sha256.slice(0, 12)}, into ~/.aicc in your account there. No root, no service: nothing runs when no session uses it. Remove takes it away.`,
-    }
+    this.pending.set(token, { target, label: cand.label, offered: hashesOf(b.helpers), expires: this.now() + CONSENT_TTL_MS })
+    return { ok: true, token, target: cand.target, text: consentText(cand.target, b.helpers) }
   }
 
   /** Steps 2 to 5, on the token prepare made (the user's yes). */
@@ -354,9 +389,12 @@ export class RemoteMachines {
     try {
       const b = await this.deps.bundled()
       if (!b.ok) return { ok: false, message: b.why }
-      if (b.helper.sha256 !== p.sha256) return { ok: false, message: 'The app\'s Linux helper changed after the question was asked. Press Add again.' }
+      // Every file the question named must still be this build's, before the
+      // machine is reached; the one sent is then the probe's row's (provision).
+      const now = hashesOf(b.helpers)
+      for (const [arch, sha256] of Object.entries(p.offered)) if (now[arch as LinuxArch] !== sha256) return { ok: false, message: MACHINE_TEXT.changed }
       const did = this.rand()
-      const made = await this.provision({ did, target: p.target, label: p.label, helper: b.helper, first: true, addedAt: this.now() })
+      const made = await this.provision({ did, target: p.target, label: p.label, helpers: b.helpers, offered: p.offered, first: true, addedAt: this.now() })
       if (!made.ok) return made
       const f = this.load()
       f.machines = [...f.machines.filter((m) => m.did !== did), made.record]
@@ -368,7 +406,7 @@ export class RemoteMachines {
     }
   }
 
-  /** Check: probe, version and self-test again (and this build's helper first, when the machine has another). */
+  /** Check: probe, version and self-test again (and this build's helper for its architecture first, when the machine has another). */
   async check(did: unknown): Promise<RemoteActionResult> {
     const m = typeof did === 'string' && DID_RE.test(did) ? this.get(did) : undefined
     if (!m) return { ok: false, message: MACHINE_TEXT.notFound }
@@ -378,7 +416,7 @@ export class RemoteMachines {
     try {
       const b = await this.deps.bundled()
       if (!b.ok) return { ok: false, message: b.why }
-      const made = await this.provision({ did: m.did, target: { host: m.host, port: m.port, user: m.user }, label: m.label, helper: b.helper, first: false, addedAt: m.addedAt, known: m })
+      const made = await this.provision({ did: m.did, target: { host: m.host, port: m.port, user: m.user }, label: m.label, helpers: b.helpers, first: false, addedAt: m.addedAt, known: m })
       const f = this.load()
       const record = made.ok ? made.record : { ...m, check: { at: this.now(), ok: false, detail: made.message } }
       f.machines = f.machines.map((x) => (x.did === m.did ? record : x))
@@ -431,12 +469,16 @@ export class RemoteMachines {
   }
 
   /**
-   * Probe, install when the machine lacks this helper, version and self-test.
-   * `first`: the machine's first connection (a host key not known yet is
-   * kept); a failure then removes what this Add made.
+   * Probe, install when the machine lacks this build's helper for its
+   * architecture, version and self-test. `helpers`: this build's, one per
+   * architecture it carries; the probe's answer picks one through the fixed
+   * table. `offered`: on Add, the hashes the question named, by architecture
+   * (the file sent must be the one named for its row). `first`: the machine's
+   * first connection (a host key not known yet is kept); a failure then
+   * removes what this Add made.
    */
-  private async provision(a: { did: string; target: SshTarget; label: string; helper: BundledLinuxHelper; first: boolean; addedAt: number; known?: RemoteMachineRecord }): Promise<{ ok: true; record: RemoteMachineRecord } | { ok: false; message: string }> {
-    const { did, target, helper } = a
+  private async provision(a: { did: string; target: SshTarget; label: string; helpers: readonly BundledLinuxHelper[]; offered?: Partial<Record<LinuxArch, string>>; first: boolean; addedAt: number; known?: RemoteMachineRecord }): Promise<{ ok: true; record: RemoteMachineRecord } | { ok: false; message: string }> {
+    const { did, target } = a
     const install = this.installId()
     const fail = async (message: string, cleanUp: boolean): Promise<{ ok: false; message: string }> => {
       if (cleanUp) {
@@ -455,7 +497,13 @@ export class RemoteMachines {
     if (!probe.ok) return { ok: false, message: `${target.host} was not used: ${refusalText(probe.refused)}.` }
     const os = hostText(probe.values.get('os'), 64) ?? 'unknown'
     const arch = hostText(probe.values.get('arch'), 64) ?? 'unknown'
-    if (os !== 'Linux' || arch !== 'x86_64') return { ok: false, message: MACHINE_TEXT.notLinux(os, arch) }
+    // The host's answer only selects a row of the fixed table, by equality;
+    // the file is the row's, never a path made from the answer.
+    const row = os === 'Linux' ? linuxHelperRow(arch) : null
+    if (!row) return { ok: false, message: MACHINE_TEXT.notLinux(os, arch) }
+    const helper = a.helpers.find((h) => h.arch === row.arch && h.path === row.path)
+    if (!helper) return { ok: false, message: MACHINE_TEXT.noArchHelper(row.name) }
+    if (a.offered && a.offered[row.arch] !== helper.sha256) return { ok: false, message: MACHINE_TEXT.changed }
     const home = hostPath(probe.values.get('home'))
     const shell = hostPath(probe.values.get('shell'), 4096)
     if (!home || !shell) return { ok: false, message: `${target.host} gave a home folder or login shell the session helper does not take.` }
@@ -498,10 +546,10 @@ export class RemoteMachines {
     if (checked.ok && !a.first) await this.sweep(target, did, install, helper)
     const record: RemoteMachineRecord = {
       did, host: target.host, port: target.port, user: target.user, label: a.label, addedAt: a.addedAt,
-      os, arch, home, shell, shellIsSh, claudePath,
+      os, arch: row.arch, home, shell, shellIsSh, claudePath,
       path: shellIsSh && ilPath ? ilPath : execPath,
       lang: typeof lang === 'string' && LANG_RE.test(lang) ? lang : null,
-      helper: { version: helper.version, sha256: helper.sha256, folder: helper.folder },
+      helper: { path: helper.path, version: helper.version, sha256: helper.sha256, folder: helper.folder },
       check: { at: this.now(), ok: checked.ok, ...(checked.ok ? {} : { detail: checked.why }) },
     }
     if (checked.ok && !claudePath) record.check = { at: record.check.at, ok: false, detail: 'Claude Code was not found on it (not on the PATH of its login shell)' }

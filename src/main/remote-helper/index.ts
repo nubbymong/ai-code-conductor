@@ -39,8 +39,9 @@ export interface RemoteHelperDeps {
   settings: () => Record<string, unknown> | null
   machines: RemoteMachines
   runner: SshRunner
-  /** The SHA-256 the installer's manifest gives the Linux helper; null: none. */
-  bundledSha256: () => string | null
+  /** The SHA-256 the installer's manifest gives the Linux helper for an
+   *  architecture (the machine's own); null: none for it. */
+  bundledSha256: (arch: string) => string | null
   /** The system's dark preference (Electron's nativeTheme), for the theme 'system'. */
   systemPrefersDark: () => boolean
   /** What the tab was sent, for the PTY integrity count: the session id and the text's length. */
@@ -180,7 +181,7 @@ export function remoteHelperPty(win: OutputWindow, sessionId: string, options: R
       ssh,
       shellOnly: options.shellOnly === true,
       machine: d.machines.findByTarget(ssh),
-      bundledSha256: d.bundledSha256(),
+      bundledSha256: d.bundledSha256,
     })
   } catch (err) {
     return usual(`the session helper's records could not be read (${(err as Error).message})`)

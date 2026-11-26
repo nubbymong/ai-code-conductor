@@ -29,8 +29,10 @@ export interface RouteInput {
   shellOnly: boolean
   /** The machine added for this tab's host, port and user, if any. */
   machine: RemoteMachineRecord | undefined
-  /** The SHA-256 of this build's Linux helper, from its manifest; null when it has none. */
-  bundledSha256: string | null
+  /** The SHA-256 of this build's Linux helper for an architecture, from its
+   *  manifest; null when it has none for it. Asked with the machine's own
+   *  architecture (2.1.3-beta.19: x86_64 and aarch64 each have their own). */
+  bundledSha256: (arch: string) => string | null
 }
 
 /** Why each tab takes the usual path, as the log line says it. */
@@ -45,7 +47,7 @@ export const ROUTE_WHY = {
   windowsHost: 'its remote OS is Windows; the session helper runs on Linux machines only in this preview',
   notAdded: 'its machine is not added on the Machines page',
   notChecked: 'its machine did not pass its last check on the Machines page; press Check there',
-  noHelper: 'this build of the app carries no Linux session helper',
+  noHelper: 'this build of the app carries no Linux session helper for its machine\'s architecture',
   oldHelper: 'its machine has another version of the session helper; press Check on the Machines page to update it',
 } as const
 
@@ -62,7 +64,8 @@ export function routeSshTab(i: RouteInput): Route {
   if (ssh.remoteOs === 'windows') return today(ROUTE_WHY.windowsHost)
   if (!i.machine) return today(ROUTE_WHY.notAdded)
   if (!i.machine.check.ok) return today(ROUTE_WHY.notChecked)
-  if (!i.bundledSha256) return today(ROUTE_WHY.noHelper)
-  if (i.machine.helper.sha256 !== i.bundledSha256) return today(ROUTE_WHY.oldHelper)
+  const bundled = i.bundledSha256(i.machine.arch)
+  if (!bundled) return today(ROUTE_WHY.noHelper)
+  if (i.machine.helper.sha256 !== bundled) return today(ROUTE_WHY.oldHelper)
   return { via: 'helper', machine: i.machine }
 }
