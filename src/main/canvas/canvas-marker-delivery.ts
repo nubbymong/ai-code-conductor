@@ -190,11 +190,13 @@ export function deliverCanvasMarker(sessionId: string, line: string, canvasId?: 
  *
  *  ORDER. The canvas is told in the order the decisions were filed, so a user
  *  who retypes the notices from the top sends them in that order. Every
- *  marker held at Claude Code's prompt was filed before every marker the
- *  queue holds: the queue hands nothing on while it holds any, and a marker
- *  given back to it takes the markers behind it along (canvas-marker-queue.ts,
- *  holdAgain). So the prompt's are told first, at once and in the order handed
- *  in, then the queue's, in the order held. Idempotent: a second call finds
+ *  marker held at Claude Code's prompt (a helper tab's marker whose line is
+ *  typed and whose Enter is not yet among them) was filed before every marker
+ *  the queue holds: the queue hands nothing on while it holds any, and a
+ *  marker given back to it takes the markers behind it along
+ *  (canvas-marker-queue.ts, holdAgain). So the prompt's are told first, at
+ *  once and in the order handed in (the one waiting for its Enter first), then
+ *  the queue's, in the order held. Idempotent: a second call finds
  *  nothing. */
 export function forgetCanvasMarkers(sessionId: string): void {
   forgetClaudeMarkers(sessionId)

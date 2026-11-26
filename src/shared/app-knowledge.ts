@@ -260,7 +260,7 @@ Quitting types into a terminal only where the app started the assistant. An SSH 
 
 Remote sessions through the session helper (preview): Restart on a tab whose Connection is SSH starts a new conversation (an SSH Persistent tab keeps its conversation). Workaround: type /resume in the tab to pick the earlier conversation up.
 
-Remote sessions through the session helper (preview): an Agent Canvas note sent just as you close, quit or restart an SSH Persistent tab can stay typed, unsent, at that session's prompt, and the canvas says it was not sent. Workaround: when the tab is back, press Enter to send that line, or clear it and send the note again from the canvas.
+Remote sessions through the session helper (preview): an Agent Canvas note sent just as you close, quit or restart an SSH Persistent tab can stay typed, unsent, at that session's prompt. After a close or a restart the canvas says it was not sent; after a quit it says nothing. Workaround: when the tab is back, press Enter there to send that line; type it into the session yourself, as the canvas suggests, only when it is not already at the prompt.
 
 Remote sessions through the session helper (preview): a key with a passphrase works only while the ssh agent holds it, and the Windows OpenSSH Authentication Agent service is off by default. Workaround: start that service and run ssh-add for the key once, or use a key without a passphrase for that machine.
 

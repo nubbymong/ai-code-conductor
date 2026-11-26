@@ -245,6 +245,24 @@ describe('a canvas marker into a Claude Code tab through the session helper: the
     await vi.advanceTimersByTimeAsync(20_000)
     expect(run.writes).toEqual([LINE, '\r', SHORT, '\r'])
   })
+
+  // PR 763 fix round 8: the marker waiting for its Enter is told first when
+  // the session's markers are cleared in that gap (a close, Leave running or
+  // Restart), before every marker filed after it. Red at 2069d4e2: the canvas
+  // was told [SHORT, LINE].
+  it('a clear in the Enter gap tells the canvas in the order filed', async () => {
+    const id = fresh()
+    h.helperTabs.add(id)
+    startRun(id)
+    input.submitMarker(id, LINE, CANVAS)
+    input.submitMarker(id, SHORT, CANVAS)
+    await vi.advanceTimersByTimeAsync(TYPED_AFTER_MS + 100)
+    runs.delete(id)
+    typing.forgetClaudeMarkers(id)
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(undelivered.mock.calls.map(([u]) => u.line)).toEqual([LINE, SHORT])
+    expect(undelivered).toHaveBeenCalledTimes(2)
+  })
 })
 
 describe('every other Claude Code tab keeps the marker\'s line and its Enter in one write, byte for byte', () => {

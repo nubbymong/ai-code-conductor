@@ -297,11 +297,14 @@ interface HeldMarker {
  *  each keyed by its line and the canvas it was filed on (heldKey); how many
  *  markers have been typed; how many have been given back to the queue; how
  *  many turns the queue has seen begin; and a generation that clearing the
- *  session's markers moves on. */
+ *  session's markers moves on. `entering` is the marker whose line is typed
+ *  and whose Enter (a helper tab's, see ITS ENTER above) is not yet: it has
+ *  left `held`, and forgetClaudeMarkers tells it first. */
 interface SessionChain {
   generation: number
   chain: Promise<unknown>
   held: Map<string, HeldMarker>
+  entering: HeldMarker | null
   typed: number
   givenBack: number
   turnsBegun: number
@@ -382,7 +385,7 @@ export type ClaudeMarkerEnter = (typedLine: string) => Promise<boolean>
 export function queueClaudeMarkerLine(sessionId: string, line: string, runLive: () => boolean, canvasId?: string, enter?: ClaudeMarkerEnter): void {
   let entry = chains.get(sessionId)
   if (!entry) {
-    entry = { generation: 0, chain: Promise.resolve(), held: new Map(), typed: 0, givenBack: 0, turnsBegun: 0 }
+    entry = { generation: 0, chain: Promise.resolve(), held: new Map(), entering: null, typed: 0, givenBack: 0, turnsBegun: 0 }
     chains.set(sessionId, entry)
   }
   const mine = entry
@@ -433,11 +436,16 @@ export function queueClaudeMarkerLine(sessionId: string, line: string, runLive: 
       logInfo(`[canvas-marker] ${sessionId}: a marker was typed at Claude Code's ready prompt${record.told ? ' as its session\'s markers were cleared (it was already reported as not sent, the session gone)' : ''}`)
       if (enter) {
         let entered = false
+        // Its held entry went in the finally above: while its Enter waits,
+        // forgetClaudeMarkers finds it here, and tells it before the markers
+        // filed after it.
+        mine.entering = record
         try { entered = await enter(line) } catch { entered = false }
+        if (mine.entering === record) mine.entering = null
         if (!entered) {
           logWarn(`[canvas-marker] ${sessionId}: a marker's line was typed alone, and its Enter was not: the run it went to ended first`)
-          // Its held entry went in the finally above, so forgetClaudeMarkers
-          // cannot find it: the canvas is told here that it was not sent.
+          // Told here only when forgetClaudeMarkers has not told it already
+          // (the run ended without its markers being cleared).
           if (!record.told) { record.told = true; reportDropped(tell, sessionId, canvasId, line, DROP_REASON.gone) }
         }
       }
@@ -471,8 +479,9 @@ export function noteClaudeMarkerTurnBegun(sessionId: string): void {
 }
 
 /** The session's run ended, or its markers were cleared: every marker still
- *  held for it is reported as not sent (the session gone) at once, in the
- *  order handed in, and then stops at its next check, asking the renderer
+ *  held for it, the one whose line is typed and whose Enter is not yet (a
+ *  helper tab's) first, is reported as not sent (the session gone) at once,
+ *  in the order handed in, and then stops at its next check, asking the renderer
  *  for nothing more and reporting nothing more (a type request already sent
  *  may still be answered, even typed: see the header). Synchronous, so the
  *  caller (forgetCanvasMarkers) can tell these before the markers its queue
@@ -483,7 +492,11 @@ export function forgetClaudeMarkers(sessionId: string): void {
   if (!entry) return
   entry.generation++
   chains.delete(sessionId)
-  const still = [...entry.held.values()]
+  // The marker waiting for its Enter (a helper tab's) was filed before every
+  // marker still held, so it is told first: the canvas hears them in the
+  // order filed. The loop marks it told, so its Enter branch never tells it
+  // twice.
+  const still = [...(entry.entering && !entry.entering.told ? [entry.entering] : []), ...entry.held.values()]
   if (still.length === 0) return
   logWarn(`[canvas-marker] ${sessionId}: ${still.length} held marker(s) for Claude Code dropped, untyped: ${DROP_WORDS.gone}`)
   for (const marker of still) {
