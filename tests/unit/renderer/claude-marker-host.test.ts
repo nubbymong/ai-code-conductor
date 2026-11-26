@@ -6,7 +6,9 @@
 // src/shared/claude-screen.ts, the same gate the status strip's Compact,
 // model and effort controls type through. Only the ready, empty prompt reads
 // ready; the line and its Enter are typed in one write, once: a marker already
-// typed reads as typed again and is never typed twice.
+// typed reads as typed again and is never typed twice. A request that says
+// enterApart (a tab through the session helper, 2.1.3-beta.19 section 6.1,
+// aicc_planning#440) has the line typed alone: main types its Enter.
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import * as fs from 'fs'
 import * as path from 'path'
@@ -137,6 +139,31 @@ describe('a marker already typed is never typed twice', () => {
   })
 })
 
+describe('a request that says enterApart (a tab through the session helper): the line alone, main types its Enter', () => {
+  it('types the line alone at the ready prompt, once, and reads it typed again after', () => {
+    expect(ask('type', { enterApart: true })).toEqual({ requestId: 'r1', ok: true })
+    expect(writes).toEqual([['s1', LINE]])
+    timers.forEach((fn) => fn())
+    expect(ask('probe', { enterApart: true })).toEqual({ requestId: 'r1', ok: true })
+    expect(ask('type', { enterApart: true })).toEqual({ requestId: 'r1', ok: true })
+    expect(writes).toEqual([['s1', LINE]])
+  })
+
+  it('is gated as every marker is: nothing typed on a screen that is not the ready, empty prompt', () => {
+    screen = S.BUSY
+    expect(ask('probe', { enterApart: true })?.ok).toBe(false)
+    expect(ask('type', { enterApart: true })?.ok).toBe(false)
+    expect(writes).toEqual([])
+  })
+
+  it('false, or absent, is the line and its Enter in one write, as before', () => {
+    expect(ask('type', { enterApart: false })?.ok).toBe(true)
+    timers.forEach((fn) => fn())
+    expect(ask('type', { markerId: 'm2' })?.ok).toBe(true)
+    expect(writes).toEqual([['s1', `${LINE}\r`], ['s1', `${LINE}\r`]])
+  })
+})
+
 describe('a request that is not well formed types nothing', () => {
   it('answers nothing without a request id', () => {
     expect(answerClaudeMarkerAsk(null, deps())).toBeNull()
@@ -157,6 +184,9 @@ describe('a request that is not well formed types nothing', () => {
     ['a blank line', { line: '   ' }],
     ['a line past the bound', { line: 'x'.repeat(CANVAS_MARKER_MAX_LINE + 1) }],
     ['a line that is not text', { line: 42 }],
+    ['an enterApart that is text', { enterApart: 'true' }],
+    ['an enterApart that is a number', { enterApart: 1 }],
+    ['an enterApart that is null', { enterApart: null }],
   ] as Array<[string, Record<string, unknown>]>) {
     it(`refuses ${name}`, () => {
       expect(ask('type', over)).toEqual({ requestId: 'r1', ok: false, reason: CLAUDE_MARKER_REFUSED })

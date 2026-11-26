@@ -707,8 +707,9 @@ export interface CanvasMarkerUndelivered {
 
 /** What main asks the renderer about a Claude Code session's prompt, for a
  *  canvas marker (src/main/canvas/claude-marker-typing.ts): 'probe' reads it
- *  and types nothing; 'type' types the line and its Enter only if it reads
- *  ready and empty then. */
+ *  and types nothing; 'type' types the line and its Enter (the line alone
+ *  when the request says `enterApart`) only if it reads ready and empty
+ *  then. */
 export type ClaudeMarkerMode = 'probe' | 'type'
 
 /** One such request (main -> renderer, canvas:claudeMarkerAsk). */
@@ -722,6 +723,13 @@ export interface ClaudeMarkerAsk {
   mode: ClaudeMarkerMode
   /** The marker line, without its Enter. */
   line: string
+  /** 2.1.3-beta.19 section 6.1: true for a tab through the session helper on
+   *  its machine (RunScreenTyping.wholeWrites). A 'type' then types the line
+   *  alone, and main types its Enter as its own write once the line has gone
+   *  (providers/claude/run-screen.ts). Absent for every other session: the
+   *  line and its Enter in one write, as before. A value that is not a
+   *  boolean makes the request not well formed. */
+  enterApart?: boolean
 }
 
 /** The renderer's answer (canvas:claudeMarkerAnswer). `ok`: for a probe, the
