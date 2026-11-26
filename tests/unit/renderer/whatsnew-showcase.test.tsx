@@ -668,6 +668,7 @@ describe('since tags: pinned, parseable, and curated for the newest release', ()
     'Across the app / Snap, its own overlay.': '2.1.3-beta.16',
     'Sessions / Send a prompt to every session.': '2.1.3-beta.17',
     'Sessions / Remote sessions preview.': '2.1.3-beta.17',
+    'Sessions / Raspberry Pi and arm64 machines.': '2.1.3-beta.19',
     'Accounts & usage / Codex accounts.': '2.1.1-beta.2',
     'Accounts & usage / Switch mid-session.': '2.1.0-beta.16',
     'Accounts & usage / claude.ai in the app.': '2.1.0-beta.16',
@@ -718,6 +719,13 @@ describe('since tags: pinned, parseable, and curated for the newest release', ()
     for (const t of ['New models, no update.', 'Fable 5.2.', 'A Machines page.', 'Snap, its own overlay.', 'Send a prompt to every session.', 'Remote sessions preview.']) {
       expect(at18, t).toContain(t)
     }
+    // 2.1.3-beta.19 text smoke (#2): beta.18 to beta.19 read only beta.18's six lines.
+    // beta.19 adds its own (7 lines in all for someone coming from 2.1.2).
+    const at19 = titlesAt(view, '2.1.3-beta.19')
+    expect(at19).toContain('Raspberry Pi and arm64 machines.')
+    expect(at19).toHaveLength(7)
+    expect(at18).not.toContain('Raspberry Pi and arm64 machines.')
+    expect(titlesAt({ ...view, anchor: '2.1.3-beta.18' }, '2.1.3-beta.19')).toEqual(['Raspberry Pi and arm64 machines.'])
     // The remote preview runs Claude Code only: with Claude Code off it goes.
     expect(titlesAt({ ...view, withClaude: false }, '2.1.3-beta.18')).not.toContain('Remote sessions preview.')
     // A build never tells a line newer than itself: beta.16 had the Snap

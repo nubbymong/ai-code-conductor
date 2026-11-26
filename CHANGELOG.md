@@ -18,8 +18,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - To go back to 2.1.3-beta.18, download its installer from the GitHub releases page and run it over this version.
 
 ### Added
-- Machines: you can now add an arm64 Linux machine, such as a Raspberry Pi 5, as well as an x86-64 one. The installer carries a session helper for each, and the machine's own answer picks which file is sent.
-- A tab through the session helper on another machine now names the account it runs as. It shows the weekly limits by model and extra usage when this computer holds that account and has a current reading for it; otherwise it says they are not available and keeps the host's own five-hour and weekly bars.
+- On Windows, the Machines page can now add an arm64 Linux machine, such as a Raspberry Pi 5, as well as an x86-64 one, for the remote sessions preview (off by default). The installer carries a session helper for each, and the machine's own answer picks which file is sent.
+- On Windows, a Claude Code tab through the session helper on a Linux machine you added (the remote sessions preview, off by default) now names the account it runs as. It shows the weekly limits by model and extra usage when this computer holds that account and has a current reading for it; otherwise it says they are not available and keeps the host's own five-hour and weekly bars.
 
 ### Fixed
 - Sessions held by the session helper on a remote Linux machine stay reachable when a clean-up of /tmp removes their connection file.
@@ -28,6 +28,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - With remote sessions through the session helper on (a preview, off by default), a canvas decision line typed into a Claude Code tab on a Linux machine is now sent whatever its length. Before, a line of 63 characters or more would have been left typed at the prompt (an approval line is 59 to 61 characters today).
 - With both helper switches off, a start now also removes the empty kept folder and the store folder (holding nothing, or only its lock) that an earlier run with the helper on left in the helper's folder, then that folder if it is then empty.
 - Plain terminals through the session helper again send an Enter you typed during a reconnect straight away; Claude Code and Codex sessions keep the short wait they need.
+- With remote sessions through the session helper on (a preview, off by default), the Session Watchdog now watches a Claude Code tab on a Linux machine you added, as it does a usual SSH tab: it shows its pill there and types its retry after a usage limit, an overload or a safeguard flag.
+- With Claude Code and Codex sessions through the session helper on, Restart on a held Claude Code tab now carries on with its conversation, as on any other tab; before, it showed the list of earlier conversations.
+- With Codex 0.172.0 on Windows, the app reads which conversation a resumed Codex session is on from the session's own hook events, as it does for a new one; before, it set them aside, with a warning in its log.
+- On Windows, with Claude Code and Codex sessions through the session helper on, a session started after an update that kept another one running is held by the helper again; before, it ran the usual way. A tab the helper cannot hold now says so in one line.
+- Restart pressed while the Agent Canvas, the logs or the browser is in front of a tab's terminal now starts the session at once; before, it waited until the terminal was shown again.
+- On Windows, a Snap press with no desktop to capture (a locked screen, or a session with no screen) now says so above the command bar; before, nothing happened.
+- A session that asks for you while a page such as Machines or Settings is in front now marks its tab and its card, also when it is the session you looked at last.
+- The Feature Guide's Reference shows each known issue as a paragraph of its own again.
 
 ## [2.1.3-beta.18] - 2026-11-26
 

@@ -229,15 +229,18 @@ describe('sectionsFor — which highlights the upgrade page shows, by anchor', (
   it('shows exactly the 2.1.3 lines to someone coming from 2.1.2', () => {
     // The 2.1.3-beta.18 release smoke added the line's own features (each
     // tagged with its first build) beside the two beta.1 lines.
-    expect(titlesFor('2.1.2')).toEqual(['New models, no update.', 'Fable 5.2.', 'A Machines page.', 'Snap, its own overlay.', 'Send a prompt to every session.', 'Remote sessions preview.'])
+    // 2.1.3-beta.19's text smoke (#2) added its own line: someone going from
+    // beta.18 to beta.19 read only beta.18's six lines.
+    expect(titlesFor('2.1.2')).toEqual(['New models, no update.', 'Fable 5.2.', 'A Machines page.', 'Snap, its own overlay.', 'Send a prompt to every session.', 'Remote sessions preview.', 'Raspberry Pi and arm64 machines.'])
   })
 
   it('nothing curated since the anchor gives nothing: the page then shows its fixes line, never an older set', () => {
     // The beta.2 rule fell back to the NEWEST set on a line with none of its
     // own, which is the owner's complaint again on the next patch (O1 verdict).
-    // The anchor is the newest curated tag (2.1.3-beta.17 since the beta.18
-    // release smoke's lines).
-    expect(titlesFor('2.1.3-beta.17')).toEqual([])
+    // The anchor is the newest curated tag (2.1.3-beta.19 since its text
+    // smoke's line; 2.1.3-beta.17 before it).
+    expect(titlesFor('2.1.3-beta.19')).toEqual([])
+    expect(titlesFor('2.1.3-beta.17')).toEqual(['Raspberry Pi and arm64 machines.'])
     expect(titlesFor('2.2.0')).toEqual([])
   })
 

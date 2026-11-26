@@ -243,6 +243,7 @@ const SECTIONS_213: WhatsNewSection[] = [
     items: [
       { since: '2.1.3-beta.17', upgradeOnly: true, title: 'Send a prompt to every session.', desc: 'A Global prompt button can go to every open session; each press asks first: All, or the ones you pick.' },
       { since: '2.1.3-beta.17', upgradeOnly: true, title: 'Remote sessions preview.', desc: 'On Windows, off by default: a Claude Code SSH tab runs through the session helper, with status line and tools.', needsClaude: true },
+      { since: '2.1.3-beta.19', upgradeOnly: true, title: 'Raspberry Pi and arm64 machines.', desc: 'On Windows, the remote sessions preview adds arm64 Linux machines too, and its tabs name their account.', needsClaude: true },
     ],
   },
 ]

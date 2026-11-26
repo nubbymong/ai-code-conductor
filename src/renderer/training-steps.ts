@@ -678,7 +678,7 @@ export const trainingSteps: TrainingStep[] = [
       'A Claude Code or Codex session has **End** only. After a crash it is ended, reading **Being ended** until it is gone, and its tab resumes the conversation. On Windows, **Save sessions** at an update keeps it running: resume your sessions within five minutes of the new version opening and its tab shows the same session again',
       'With **Claude Code and Codex sessions through the session helper** on, an Insights report for a Claude Code account runs inside the helper too, and is listed as **Insights report** while it runs, with **End** only',
       'SSH tabs and their partner terminals, a terminal run as administrator, and the tabs the app opens for a sign-in or to install or update a program start as before',
-      'On Windows, the Machines page also lists the Linux machines you added for remote sessions through the session helper (preview), with Add, Check and Remove',
+      'On Windows, the Machines page also lists the Linux machines (x86-64 or arm64, a Raspberry Pi included) you added for remote sessions through the session helper (preview), with Add, Check and Remove',
       'The page reads when you open it, when you come back to its tab and on **Refresh**',
     ],
     howToTrigger: [
