@@ -2574,6 +2574,14 @@ describe.skipIf(!MAKENSIS)('installer.nsh behavioural probe: the app check close
   // the call left (installer-branding-guard.test.ts pins that). This probe
   // does the same open and end, then inserts the macro. Compiled here, not in
   // beforeAll, so a missing macro fails only these cases.
+  //
+  // The probe's two waits (the exit code, then the signal that the process is
+  // gone) share ONE budget, `budgetMs` in the ini (30,000 when it is absent),
+  // measured with GetTickCount: the signal wait gets what is left, never less
+  // than 0. Apart, each had 30 s, together 60 s, which is what spawnSync and a
+  // case allow, so a copy that never exited ended in a spawn timeout with no
+  // log of why (aicc_planning#440). Test harness only: build/installer.nsh is
+  // not changed.
   const whyProbe = () => join(awork, 'probe-why.exe')
   const wcfg = () => join(awork, 'probe-why.ini')
   const wlog = () => join(awork, 'probe-why.log')
@@ -2593,6 +2601,11 @@ InstallDir "$TEMP\\ccc-nsis-probe-unused"
 !include "LogicLib.nsh"
 
 Var cccProbeLog
+Var whyBudget
+Var whyStart
+Var whyNow
+Var whyElapsed
+Var whyLeft
 
 !macro CccProbeDetail TEXT
   FileWrite $cccProbeLog "detail=\${TEXT}$\\r$\\n"
@@ -2604,6 +2617,10 @@ Section "probe"
   ReadINIStr $3 "${cfg}" "why" "pid"
   ReadINIStr $4 "${cfg}" "why" "rights"
   ReadINIStr $5 "${cfg}" "why" "waitExit"
+  ReadINIStr $whyBudget "${cfg}" "why" "budgetMs"
+  \${If} $whyBudget == ""
+    StrCpy $whyBudget 30000
+  \${EndIf}
   ClearErrors
   FileOpen $cccProbeLog "${log}" w
   StrCpy $8 0
@@ -2612,22 +2629,36 @@ Section "probe"
   \${EndIf}
   FileWrite $cccProbeLog "opened=$8$\\r$\\n"
   \${If} $5 == "1"
-    ; Until it has exited by itself, through the handle held: up to 30 s.
-    StrCpy $6 0
+    ; The one budget both waits share, measured from here. The time elapsed is always the difference of two tick counts, which stays right when the count wraps (about every 49 days) or reads as a negative number.
+    System::Call 'kernel32::GetTickCount() i .s'
+    Pop $whyStart
+    ; Until it has exited by itself, through the handle held, or the budget is spent.
     \${Do}
       System::Call 'kernel32::GetExitCodeProcess(p r8, *i .r1) i .r2'
       \${If} $2 == 0
       \${OrIf} $1 != 259
-      \${OrIf} $6 >= 300
+        \${ExitDo}
+      \${EndIf}
+      System::Call 'kernel32::GetTickCount() i .s'
+      Pop $whyNow
+      IntOp $whyElapsed $whyNow - $whyStart
+      \${If} $whyElapsed >= $whyBudget
         \${ExitDo}
       \${EndIf}
       Sleep 100
-      IntOp $6 $6 + 1
     \${Loop}
     FileWrite $cccProbeLog "exitcode=$1$\\r$\\n"
-    ; Windows sets the exit code before it signals the process object, and TerminateProcess fails only once the process has terminated (ExitProcess and TerminateProcess docs), so wait for the signal too, through a second, SYNCHRONIZE-only handle ($8 keeps the pid this process's).
+    ; Windows sets the exit code before it signals the process object, and TerminateProcess fails only once the process has terminated (ExitProcess and TerminateProcess docs), so wait for the signal too, through a second, SYNCHRONIZE-only handle ($8 keeps the pid this process's), for what is left of the budget and never less than 0 (258, WAIT_TIMEOUT, when that is not enough).
     System::Call 'kernel32::OpenProcess(i 0x00100000, i 0, i $3) p .r9'
-    System::Call 'kernel32::WaitForSingleObject(p r9, i 30000) i .r0'
+    System::Call 'kernel32::GetTickCount() i .s'
+    Pop $whyNow
+    IntOp $whyElapsed $whyNow - $whyStart
+    IntOp $whyLeft $whyBudget - $whyElapsed
+    \${If} $whyLeft < 0
+      StrCpy $whyLeft 0
+    \${EndIf}
+    FileWrite $cccProbeLog "left=$whyLeft$\\r$\\n"
+    System::Call 'kernel32::WaitForSingleObject(p r9, i $whyLeft) i .r0'
     FileWrite $cccProbeLog "signaled=$0$\\r$\\n"
     \${If} $9 != 0
       System::Call 'kernel32::CloseHandle(p r9)'
@@ -2658,13 +2689,22 @@ SectionEnd
     }
   }
 
-  /** Open `pid` with `rights` ("none": no handle at all), wait for it to exit (exit code set, then process object signaled) when `waitExit`, end it, and read why that failed. */
-  function runWhy(cfg: { pid: number; rights: string; waitExit: boolean }) {
+  /**
+   * Open `pid` with `rights` ("none": no handle at all), wait for it to exit
+   * (exit code set, then process object signaled) when `waitExit`, end it, and
+   * read why that failed. `budgetMs` is the one bound the two waits share (the
+   * probe takes 30,000 when it is left out). A probe that does not finish
+   * fails with what it had logged, never with the spawn error alone.
+   */
+  function runWhy(cfg: { pid: number; rights: string; waitExit: boolean; budgetMs?: number }) {
     compileWhy()
-    writeFileSync(wcfg(), ['[why]', `pid=${cfg.pid}`, `rights=${cfg.rights}`, `waitExit=${cfg.waitExit ? 1 : 0}`, ''].join('\r\n'))
+    writeFileSync(wcfg(), ['[why]', `pid=${cfg.pid}`, `rights=${cfg.rights}`, `waitExit=${cfg.waitExit ? 1 : 0}`, ...(cfg.budgetMs === undefined ? [] : [`budgetMs=${cfg.budgetMs}`]), ''].join('\r\n'))
     rmSync(wlog(), { force: true })
     const run = spawnSync(whyProbe(), [], { encoding: 'utf-8', stdio: 'pipe', timeout: 60_000 })
-    if (run.error) throw run.error
+    if (run.error) {
+      const partial = existsSync(wlog()) ? readFileSync(wlog(), 'utf-8') : '(it had written no log)'
+      throw new Error(`the why probe did not finish: ${run.error.message}\nits log so far:\n${partial}`)
+    }
     const log = readFileSync(wlog(), 'utf-8')
     const out: Record<string, string> = {}
     for (const line of log.split(/\r?\n/)) {
@@ -2684,12 +2724,35 @@ SectionEnd
     const copy = await startCopy(join(awork, 'why-exited'), 'why-exits.exe', 'exit-soon')
     const { out, details, log } = runWhy({ pid: copy.pid, rights: '0x1001', waitExit: true })
     expect(Number(out.opened), log).not.toBe(0)
-    expect(out.exitcode, 'it exited by itself before the end').not.toBe('259')
+    expect(out.exitcode, `it exited by itself before the end\n${log}`).not.toBe('259')
     // 0 is WAIT_OBJECT_0: Windows had finished ending it, not only set its exit code.
     expect(out.signaled, `it had fully exited before the end\n${log}`).toBe('0')
     expect(out.terminated, log).toBe('0')
     expect(details, log).toEqual([`Could not end process ${copy.pid}: it had already exited.`])
     expect(await waitGone(copy.pid)).toBe(true)
+  }, 60_000)
+
+  it('a copy that never exits spends one shared budget on both waits, and the log says what each read', async () => {
+    // The copy has no window and idles for minutes, so nothing ends it but the
+    // probe's own end. With a 2 s budget the exit-code wait ends at the
+    // budget still reading STILL_ACTIVE (259), the signal wait is then given
+    // what is left, which is 0 ms, and it times out (258, WAIT_TIMEOUT).
+    // Apart, each wait had its own 30 s, 60 s together, which is the spawn's
+    // and this case's whole timeout: the probe ended in a spawn timeout with
+    // nothing logged. There is no wall-clock assert here beyond that
+    // timeout: `left` is the budget the signal wait was given, and it is 0
+    // only when the first wait had spent all of it.
+    compileWhy()
+    const copy = await startCopy(join(awork, 'why-never-exits'), 'why-never-exits.exe', false)
+    try {
+      const { out, log } = runWhy({ pid: copy.pid, rights: '0x1001', waitExit: true, budgetMs: 2000 })
+      expect(out.done, log).toBe('1')
+      expect(out.exitcode, `the copy never exits, so its exit code reads STILL_ACTIVE\n${log}`).toBe('259')
+      expect(out.left, `the signal wait gets what is left of the budget, and nothing is left\n${log}`).toBe('0')
+      expect(out.signaled, `the signal wait timed out\n${log}`).toBe('258')
+    } finally {
+      await endAll([copy.pid])
+    }
   }, 60_000)
 
   it('an end that is refused while the copy still runs says access was denied, after about half a second', async () => {
