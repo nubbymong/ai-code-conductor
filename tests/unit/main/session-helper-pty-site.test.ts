@@ -34,7 +34,8 @@ describe('pty-manager: where the session helper can start a terminal', () => {
   it('only a Terminal only tab or a partner terminal is marked plain: the app\'s own sign-in, command and first-run install terminals are not', () => {
     const view = readFileSync(resolve(ROOT, 'src/renderer/components/TerminalView.tsx'), 'utf8').replace(/\r\n/g, '\n')
     expect(view).toContain('const plainTerminal = shellOnly === true && !ssh && !session?.needsLogin && !session?.transient\n')
-    expect(view).toMatch(/\.spawn\(sessionId, \{ cwd, cols, rows, ssh: sshWithReconnect, shellOnly, plainTerminal, /)
+    // 2.1.3-beta.19 section 1.2: an SSH tab's saved mark (remoteVia) goes with its spawn, before shellOnly.
+    expect(view).toMatch(/\.spawn\(sessionId, \{ cwd, cols, rows, ssh: sshWithReconnect, remoteVia: ssh && session\?\.remoteVia === 'helper' \? 'helper' : undefined, shellOnly, plainTerminal, /)
     // The first-run install terminal spawns on its own and never asks for it.
     const setup = readFileSync(resolve(ROOT, 'src/renderer/components/SetupDialog.tsx'), 'utf8')
     expect(setup).toContain('window.electronAPI.pty.spawn(')
