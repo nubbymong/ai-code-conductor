@@ -400,6 +400,10 @@ describe('remote machines: Check', () => {
     expect(m.views(() => null)[0]).toMatchObject({ checked: true })
     // The routing agrees: its tabs take the usual path until Check.
     expect(routeSshTab({ platform: 'win32', switchOn: true, ssh: { host: 'rocky.lan', port: 22, username: 'nick', remotePath: '~', detachable: false }, shellOnly: false, machine: m.list()[0], bundledSha256: () => 'b'.repeat(64) })).toEqual({ via: 'today', why: ROUTE_WHY.oldHelper })
+    // The compare is by the file's SHA-256: here the machine's helper and the
+    // build's are both 0.1.0, so neither line may claim another version.
+    expect(m.list()[0].helper.version).toBe('0.1.0')
+    expect(`${REMOTE_OTHER_HELPER} | ${ROUTE_WHY.oldHelper}`).not.toMatch(/version/i)
   })
 
   it('Check on a machine holding another helper installs this build\'s first (probe, install, commit, version, self-test), and the record takes its version, hash and folder', async () => {

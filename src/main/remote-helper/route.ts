@@ -48,7 +48,7 @@ export const ROUTE_WHY = {
   notAdded: 'its machine is not added on the Machines page',
   notChecked: 'its machine did not pass its last check on the Machines page; press Check there',
   noHelper: 'this build of the app carries no Linux session helper for its machine\'s architecture',
-  oldHelper: 'its machine has another version of the session helper; press Check on the Machines page to update it',
+  oldHelper: 'its machine has a different session helper file from the one this build carries; press Check on the Machines page to install it',
 } as const
 
 export function routeSshTab(i: RouteInput): Route {

@@ -20,9 +20,12 @@ export const REMOTE_ROUTE_NOTE =
   'A Claude Code tab whose saved config has Connection set to SSH, with key sign-in, no post-connect command and no container, runs through the session helper here. SSH Persistent (the default for a config that never chose), a post-connect command, a container or a password sign-in keep the usual SSH path.'
 
 /** A machine's card reads not checked, with this line, while the machine
- *  holds another session helper than this build of the app carries (after an
- *  update): its tabs take the usual path until Check installs this one. */
-export const REMOTE_OTHER_HELPER = 'this build of the app carries another version of the session helper; press Check to update it'
+ *  holds another session helper file than this build of the app carries
+ *  (after an update): its tabs take the usual path until Check installs this
+ *  one. The file is compared by its SHA-256, so it can differ under the same
+ *  version number (2.1.3-beta.18 to beta.19: 0.1.0 both), and the line never
+ *  says another version (nor a newer one: an older app can carry it too). */
+export const REMOTE_OTHER_HELPER = 'this build of the app carries a different session helper file; press Check to install it'
 
 /** One added machine, for its card. */
 export interface RemoteMachineView {

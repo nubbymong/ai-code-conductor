@@ -127,11 +127,16 @@ describe('Linux machines on the Machines page', () => {
     expect(remote.remove).toHaveBeenCalledWith(DID)
   })
 
-  it('a machine holding another helper than this build\'s says Check updates it', async () => {
+  // The Raspberry Pi line of 2.1.3-beta.19 (the owner's Raspberry Pi 5 (arm64)
+  // and Ubuntu 24.04 (x86-64)): after the update the card said "another
+  // version" beside 0.1.0, the version both builds' helpers carry; the file is
+  // compared by its SHA-256, so the line names the file, never a version.
+  it('a machine holding another helper file than this build\'s says Check installs this one, and never claims another version', async () => {
     install(state({ machines: [{ did: DID, label: 'Rocky', target: 'nick@rocky.lan:22', checked: false, lastCheck: { at: Date.now(), ok: false, detail: REMOTE_OTHER_HELPER }, helperVersion: '0.1.0', system: 'Linux x86_64', inUse: 0 }] }))
     await mount()
     const line = container.querySelector('[data-testid="remote-machine-state"]')?.textContent
-    expect(line).toBe('Not checked: this build of the app carries another version of the session helper; press Check to update it')
+    expect(line).toBe('Not checked: this build of the app carries a different session helper file; press Check to install it')
+    expect(line).not.toMatch(/version/i)
     expect(button('Check')?.disabled).toBe(false)
   })
 
