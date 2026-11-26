@@ -33,8 +33,8 @@ vi.mock('../../../src/main/session-signals/hooks', () => ({ onHookEvent: () => (
 import type { SessionProvider } from '../../../src/main/providers/types'
 import { registerProvider } from '../../../src/main/providers'
 import { claudeRemoteLaunch } from '../../../src/main/providers/claude/remote-launch'
-import { remoteHelperPty, setRemoteHelperDeps, type RemoteHelperDeps } from '../../../src/main/remote-helper'
-import { remoteSessionId } from '../../../src/main/remote-helper/session'
+import { endRemoteTab, forgetRemoteHelperTab, remoteHelperPty, setRemoteHelperDeps, type RemoteHelperDeps } from '../../../src/main/remote-helper'
+import { RemoteHelperPty, remoteSessionId } from '../../../src/main/remote-helper/session'
 import type { RemoteMachineRecord, RemoteMachines } from '../../../src/main/remote-helper/machines'
 import type { HolderRecord } from '../../../src/main/session-helper/protocol'
 import { DEFAULT_PROVIDER_ID } from '../../../src/shared/providers/ids'
@@ -166,6 +166,72 @@ describe('the Watchdog of a tab through the session helper on another machine', 
     await new Promise((r) => setTimeout(r, 300))
     expect(holder.attached).toBeNull()
     expect(arms).toEqual([])
+  })
+
+  // 2.1.3-beta.19 section 1.2's join: an SSH Persistent tab kept by the
+  // helper. Its re-open (the restored tab after a quit, Re-attach, a Restart)
+  // launches nothing: it attaches to the CLI the holder kept, and that first
+  // attach is the same "the CLI runs" signal, so the Watchdog arms there too.
+  it('an SSH Persistent tab re-opened onto the session the helper kept is armed at its first attach to it, with nothing launched', async () => {
+    const id = 'wd-kept'
+    forgetRemoteHelperTab(id)
+    const arms: Array<[string, unknown]> = []
+    plugIn(undefined)
+    // A machine whose last Check read that logind does not end the user's
+    // processes at logout: an SSH Persistent tab goes through the helper there.
+    const kept: RemoteMachineRecord = { ...MACHINE, helper: { ...MACHINE.helper, path: 'linux-x64/aicc-helper' }, logind: { kill: 'no', exclude: 'root', linger: 'no' } }
+    setRemoteHelperDeps({
+      platform: 'win32',
+      settings: () => ({ remoteSessionsThroughHelper: true }),
+      machines: { findByTarget: () => kept, get: () => kept, list: () => [kept], installId: () => INSTALL } as unknown as RemoteMachines,
+      runner: ssh,
+      bundledSha256: () => SHA,
+      systemPrefersDark: () => true,
+      onOutput: () => {},
+      log: (m) => H.logs.push(m),
+      watchdog: { arm: (sid, tab) => { arms.push([sid, tab]) }, feed: () => {} },
+    })
+    const holder = new FakeHolder(remoteSessionId(id), id, store)
+    // Section 1.1's until-ended record on Linux; once launched, a hold for the
+    // session exits 3 and list mode names it, as on a real machine.
+    const record = () => ({ ...holder.record(), endpoint: `/tmp/aicc-1000/${holder.sid}-0123456789abcdef.sock`, away: null, lifetime: 'until-ended' })
+    ssh.host = {
+      answer: (c) => {
+        const n = c.values[0]
+        if (c.script === 'reads') return { stdout: result(n, {}) }
+        if (c.script === 'field') return { stdout: `AICC-HASH ${n} ok ${SHA}\n` }
+        if (c.script === 'hold') {
+          if (holder.launch && !holder.ended) return { stdout: `AICC-HASH ${n} ok ${SHA}\n`, code: 3 }
+          return { stdout: `AICC-HASH ${n} ok ${SHA}\n${JSON.stringify(record())}\n` }
+        }
+        if (c.script === 'list' || c.script === 'sessions') {
+          const sessions = holder.launch && !holder.ended ? [record()] : []
+          return { stdout: `AICC-HASH ${n} ok ${SHA}\n${JSON.stringify({ v: 1, sessions, removed: 0, skipped: 0 })}\n` }
+        }
+        if (c.script === 'files' || c.script === 'unsession') return { stdout: result(n, {}) }
+        return { code: 1 }
+      },
+      bridge: () => (holder.ended ? null : holder.connect()),
+    }
+    const persistent: SSHOptions = { ...SSH_TAB, detachable: true }
+    // The first start launches the CLI and arms once; a quit lets go of it.
+    const first = remoteHelperPty(win, id, { ssh: persistent }, 100, 30)!
+    await until('the first attach', () => holder.attached !== null)
+    await until('the first arm', () => arms.length === 1)
+    first.kill()
+    await until('let go', () => holder.attached === null)
+    expect(holder.endsAsked).toBe(0)
+    arms.length = 0
+    // The next start: the restored tab, with its saved mark.
+    forgetRemoteHelperTab(id)
+    const second = remoteHelperPty(win, id, { ssh: persistent, remoteVia: 'helper' }, 120, 40)!
+    await until('the attach to the kept session', () => holder.attached !== null)
+    await until('the arm at that attach', () => arms.length > 0)
+    expect((second as RemoteHelperPty).attachedToKept).toBe(true)
+    expect(holder.requests.filter((r) => r.t === 'term.launch')).toHaveLength(1)
+    expect(arms).toEqual([[id, { provider: DEFAULT_PROVIDER_ID, shellOnly: false, ask: false, cols: 120, rows: 40 }]])
+    await endRemoteTab(id)
+    forgetRemoteHelperTab(id)
   })
 
   it('end to end: a safeguard-flagged answer gets the Watchdog pill state and its retry, typed into the holder', async () => {

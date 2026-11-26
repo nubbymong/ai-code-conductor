@@ -58,6 +58,7 @@ vi.mock('../../../src/renderer/hooks/useThemeController', () => ({ useResolvedTh
 
 const { MultiSpawnStartupPage, groupConfigsForStartup } =
   await import('../../../src/renderer/components/MultiSpawnStartupPage')
+const { PERSISTENT_TITLE } = await import('../../../src/renderer/components/sidebar/Badges')
 const { decideMultiSpawnIntro, markMultiSpawnIntroSeen } =
   await import('../../../src/renderer/onboarding/multi-spawn-intro-gate')
 const { multiSpawnStartupRowState, resolveStartupRowSave, resumingSessionCount } =
@@ -488,6 +489,13 @@ describe('MultiSpawnStartupPage — the real page', () => {
     expect(row.querySelector('[data-testid="type-badge-claude"]')).toBeTruthy()
     expect(row.querySelector('[data-testid="ssh-persistent-badge"]')).toBeTruthy()
     expect(row.querySelector('[data-testid="ssh-reattach-badge"]')!.textContent).toContain('1')
+  })
+
+  it('a row\'s SSH-Persistent chip names what keeps its config\'s sessions, as its Saved row does (2.1.3-beta.19 section 1.2)', () => {
+    CONFIG.configs = [sshCfg('pi')]
+    DETACHED.entries = [remote('det-1', 'pi', { mux: 'helper', did: '0123456789abcdef0123456789abcdef' })]
+    render()
+    expect(rowEl('pi').querySelector('[data-testid="ssh-persistent-badge"]')!.getAttribute('title')).toBe(PERSISTENT_TITLE.helper)
   })
 
   // Phase 6: the page inherits the sidebar's three-way transport chip, so a

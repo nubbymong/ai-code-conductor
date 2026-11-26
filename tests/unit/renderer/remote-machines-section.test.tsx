@@ -114,7 +114,7 @@ describe('Linux machines on the Machines page', () => {
   })
 
   it('a card says whether the machine is checked and which configs run through the helper, Check checks it, Remove asks first', async () => {
-    const m = { did: DID, label: 'Rocky', target: 'nick@rocky.lan:22', checked: false, lastCheck: { at: Date.now(), ok: false, detail: 'its self-test failed (pty)' }, helperVersion: '0.1.0', system: 'Linux x86_64', inUse: 0 }
+    const m = { did: DID, label: 'Rocky', target: 'nick@rocky.lan:22', checked: false, lastCheck: { at: Date.now(), ok: false, detail: 'its self-test failed (pty)' }, helperVersion: '0.1.0', system: 'Linux x86-64', inUse: 0 }
     const remote = install(state({ machines: [m] }))
     await mount()
     expect(container.querySelector('[data-testid="remote-machine-state"]')?.textContent).toContain('Not checked: its self-test failed (pty)')
@@ -133,7 +133,7 @@ describe('Linux machines on the Machines page', () => {
   // version" beside 0.1.0, the version both builds' helpers carry; the file is
   // compared by its SHA-256, so the line names the file, never a version.
   it('a machine holding another helper file than this build\'s says Check installs this one, and never claims another version', async () => {
-    install(state({ machines: [{ did: DID, label: 'Rocky', target: 'nick@rocky.lan:22', checked: false, lastCheck: { at: Date.now(), ok: false, detail: REMOTE_OTHER_HELPER }, helperVersion: '0.1.0', system: 'Linux x86_64', inUse: 0 }] }))
+    install(state({ machines: [{ did: DID, label: 'Rocky', target: 'nick@rocky.lan:22', checked: false, lastCheck: { at: Date.now(), ok: false, detail: REMOTE_OTHER_HELPER }, helperVersion: '0.1.0', system: 'Linux x86-64', inUse: 0 }] }))
     await mount()
     const line = container.querySelector('[data-testid="remote-machine-state"]')?.textContent
     expect(line).toBe('Not checked: this build of the app carries a different session helper file; press Check to install it; until then its tabs take the usual SSH path')
@@ -146,7 +146,7 @@ describe('Linux machines on the Machines page', () => {
   // opened under the green notice of the machine's Add five minutes before,
   // so the page showed an old answer beside a new question.
   it('opening the Remove question clears the last action\'s notice', async () => {
-    const m = { did: DID, label: 'Rocky', target: 'nick@rocky.lan:22', checked: true, lastCheck: { at: Date.now(), ok: true }, helperVersion: '0.1.0', system: 'Linux x86_64', inUse: 0 }
+    const m = { did: DID, label: 'Rocky', target: 'nick@rocky.lan:22', checked: true, lastCheck: { at: Date.now(), ok: true }, helperVersion: '0.1.0', system: 'Linux x86-64', inUse: 0 }
     const remote = install(state({ machines: [m] }))
     await mount()
     const notice = () => container.querySelector('[data-testid="remote-notice"]')?.textContent
@@ -165,7 +165,7 @@ describe('Linux machines on the Machines page', () => {
   })
 
   it('Remove is not offered while a tab runs through the helper there', async () => {
-    install(state({ machines: [{ did: DID, label: 'Rocky', target: 'nick@rocky.lan:22', checked: true, lastCheck: { at: Date.now(), ok: true }, helperVersion: '0.1.0', system: 'Linux x86_64', inUse: 1 }] }))
+    install(state({ machines: [{ did: DID, label: 'Rocky', target: 'nick@rocky.lan:22', checked: true, lastCheck: { at: Date.now(), ok: true }, helperVersion: '0.1.0', system: 'Linux x86-64', inUse: 1 }] }))
     await mount()
     expect(button('Remove')?.disabled).toBe(true)
     expect(container.querySelector('[data-testid="remote-machine-state"]')?.textContent).toContain('a tab runs through the helper here')

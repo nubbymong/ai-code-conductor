@@ -1201,8 +1201,9 @@ describe('remote helper on a real Linux host', () => {
       await pty.end().catch(() => undefined)
       inUse = 0
     }
-    // The machine's side: list mode names no such session, and the start-up
-    // list removes its record, socket and folder.
+    // The machine's side: list mode names no such session, and its record goes.
+    // Its folder went with the End above (a holder already gone counts as ended,
+    // then its folder is removed); the start-up list removing one is the 6.3 case's.
     const listed = await listKept({ runner, installId: machines.installId(), log: sessionLog }, machine)
     expect(listed.ok, listed.ok ? '' : listed.why).toBe(true)
     if (!listed.ok) return

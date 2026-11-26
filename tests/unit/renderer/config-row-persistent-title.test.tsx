@@ -104,6 +104,16 @@ describe('a saved SSH Persistent config row\'s chip title', () => {
     expect(t).not.toContain('—')
   })
 
+  it('another config\'s kept session, open or left running on another machine, does not name the helper on this row', () => {
+    SETTINGS.settings.remoteSessionsThroughHelper = false
+    useSessionStore.setState({ sessions: [{ ...tab('helper'), id: 'tab-other', configId: 'cfg-other' }] })
+    expect(title()).toBe(TMUX_TITLE)
+    useSessionStore.setState({ sessions: [] })
+    // Another host too: the matcher falls back to the destination by design.
+    useDetachedRemotesStore.setState({ entries: [{ ...entry('helper'), sessionId: 'left-other', configId: 'cfg-other', host: 'other.lan' }] })
+    expect(title()).toBe(TMUX_TITLE)
+  })
+
   it('the rule itself: a helper mark wins; the switch off or a usual-path session is tmux; nothing decided is either', () => {
     expect(persistentKeeperOf({ switchOn: false, openTabs: [], leftRunning: ['helper'] })).toBe('helper')
     expect(persistentKeeperOf({ switchOn: true, openTabs: [undefined, 'helper'], leftRunning: [] })).toBe('helper')
