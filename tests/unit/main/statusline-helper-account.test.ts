@@ -53,6 +53,10 @@ vi.mock('../../../src/main/providers', () => {
   return { getProvider: () => provider, tryGetProvider: () => provider }
 })
 vi.mock('../../../src/main/debug-logger', () => ({ logWarn: () => {}, logInfo: () => {}, logError: () => {}, logDebug: () => {} }))
+// Claude Code's own account list and usage read on this computer: what its package's usage source asks (providers/claude/remote-launch.ts CLAUDE_ACCOUNT_USAGE), and what core asked for every helper tab before the source was the package's. It holds me@example.com too, so a look-up for a tab handed no source would show its bars.
+const core = vi.hoisted(() => ({ profiles: 0, usage: [] as unknown[][] }))
+vi.mock('../../../src/main/account-profiles', () => ({ listProfiles: () => { core.profiles++; return [{ id: 'profile-core', name: 'Core', accountEmail: 'me@example.com' }] } }))
+vi.mock('../../../src/main/usage/account-usage', () => ({ fetchAccountUsage: async (...args: unknown[]) => { core.usage.push(args); return { profileId: 'profile-core', email: 'me@example.com', name: 'Core', isPrimary: false, active: true, status: 'ok', fetchedAt: 1, buckets: [{ key: 'weekly:Core', label: 'Core', group: 'weekly', percent: 5, resetsAt: '2026-11-27T10:00:00.000Z', severity: 'normal' }] } } }))
 
 const {
   dispatchHelperStatus, dispatchSSHStatuslineUpdate, setHelperAccount, endHelperAccount, _resetHelperUsageForTest,
@@ -93,7 +97,7 @@ const last = (): Record<string, unknown> => sent[sent.length - 1]
 const RESET_USAGE = () => _resetHelperUsageForTest({ now: () => now })
 
 beforeEach(() => {
-  sent = []; usageSink = []; reads = []; profilesAsked = 0
+  sent = []; usageSink = []; reads = []; profilesAsked = 0; core.profiles = 0; core.usage = []
   profiles = [{ id: 'profile-work', accountEmail: 'Me@Example.com' }, { id: 'profile-home', accountEmail: 'home@example.com' }]
   answer = async () => usageOk()
   now = 1_000_000
@@ -273,7 +277,18 @@ describe('the bars\' source is the provider package\'s', () => {
     await settle()
     expect(reads).toEqual([])
     expect(profilesAsked).toBe(0)
+    // Nor through Claude Code's own account list and usage read, which hold that email here.
+    expect(core).toEqual({ profiles: 0, usage: [] })
     expect(last()).toMatchObject({ accountEmail: 'me@example.com', rateLimitCurrent: 30, remoteUsageNotShown: 'own-sign-in', usageBuckets: [] })
+  })
+
+  it('Claude Code\'s own source asks its account profiles on this computer and the Account usage page\'s read of one, the same object at every start', async () => {
+    const source = claudeRemoteLaunch.accountUsage?.()
+    expect(source).toBeDefined()
+    expect(claudeRemoteLaunch.accountUsage?.()).toBe(source)
+    expect(await source!.profiles()).toEqual([{ id: 'profile-core', name: 'Core', accountEmail: 'me@example.com' }])
+    expect(await source!.usage('profile-core')).toMatchObject({ profileId: 'profile-core', status: 'ok' })
+    expect(core).toEqual({ profiles: 1, usage: [['profile-core']] })
   })
 
   it('one source\'s reading never serves another\'s tab, even for the same profile id', async () => {
