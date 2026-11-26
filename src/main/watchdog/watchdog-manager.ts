@@ -188,6 +188,11 @@ const DEFAULT_SILENCE_WINDOW_MS = 120_000
 // stays accurate.
 export const ACTIVATION_GRACE_MS = 1_000
 
+// How long after the last settings save the running watchdogs take its retry
+// message (PR 763 fix round 10, applySettings): the Retry message field saves
+// on each keystroke, and no partial text is handed over.
+export const RETRY_MESSAGE_SETTLE_MS = 1_500
+
 export interface WatchdogSessionInfo {
   provider?: string
   ssh?: boolean
@@ -423,6 +428,8 @@ function extractStopFailureError(payload: Record<string, unknown>): string | und
 export class WatchdogManager {
   private entries = new Map<string, Entry>()
   private tickTimer: ReturnType<typeof setTimeout> | null = null
+  /** The pending hand-over of a saved retry message (applySettings). */
+  private retryPushTimer: ReturnType<typeof setTimeout> | null = null
   private hookUnsub: (() => void) | null = null
 
   // Injected deps (real timers / stall reader by default).
@@ -718,18 +725,45 @@ export class WatchdogManager {
    *  each running watchdog takes the saved retry message for its next retry
    *  (PR 763 fix round 9: it was read only when a tab's watchdog started, so
    *  a tab already open kept typing the old message), threaded as at a start
-   *  (threadedWatchdogConfig: the pattern lists stay compiled-in). */
+   *  (threadedWatchdogConfig: the pattern lists stay compiled-in).
+   *
+   *  PR 763 fix round 10: not at once. Settings' Retry message field saves
+   *  on each keystroke, so a push at each save handed a retry that fired
+   *  mid-edit the partial text: "/" and "/c" on the way to "/compact", and
+   *  Enter at Claude Code's command list runs the highlighted command. One
+   *  timer, armed again by each save, pushes RETRY_MESSAGE_SETTLE_MS after
+   *  the last one, with the settings read again then. */
   applySettings(): void {
     const settings = readWatchdogSettings()
     if (settings.enabled === true) {
-      if (this.entries.size === 0) return
-      const config = threadedWatchdogConfig(settings)
-      for (const entry of this.entries.values()) entry.wd.setRetryMessages(config)
+      this.clearRetryPush()
+      this.retryPushTimer = this.setTimer(() => {
+        this.retryPushTimer = null
+        const settled = readWatchdogSettings()
+        if (settled.enabled !== true) return
+        const config = threadedWatchdogConfig(settled)
+        for (const [sessionId, entry] of this.entries) {
+          try {
+            entry.wd.setRetryMessages(config)
+          } catch (err) {
+            logError(`[watchdog] setRetryMessages threw for ${sessionId}`, err)
+          }
+        }
+      }, RETRY_MESSAGE_SETTLE_MS)
+      this.retryPushTimer.unref?.()
       return
     }
+    this.clearRetryPush()
     if (this.entries.size === 0) return
     logInfo('[watchdog] disabled in settings — tearing down running watchdogs')
     this.disposeAll()
+  }
+
+  private clearRetryPush(): void {
+    if (this.retryPushTimer) {
+      this.clearTimer(this.retryPushTimer)
+      this.retryPushTimer = null
+    }
   }
 
   stopWatchdog(sessionId: string): void {
@@ -747,6 +781,7 @@ export class WatchdogManager {
   }
 
   disposeAll(): void {
+    this.clearRetryPush()
     for (const sessionId of [...this.entries.keys()]) this.stopWatchdog(sessionId)
     if (this.hookUnsub) {
       this.hookUnsub()

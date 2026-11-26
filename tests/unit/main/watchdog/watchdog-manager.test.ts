@@ -73,7 +73,7 @@ vi.mock('../../../../src/main/session-signals/hooks', () => ({
   onHookEvent: (cb: (e: any) => void) => gatewayReturn.subscribe(cb),
 }))
 
-const { WatchdogManager, clampAnsiChunk } = await import('../../../../src/main/watchdog/watchdog-manager')
+const { WatchdogManager, clampAnsiChunk, RETRY_MESSAGE_SETTLE_MS } = await import('../../../../src/main/watchdog/watchdog-manager')
 const { CLAUDE_DETECTORS, CODEX_DETECTORS } = await import('../../../../src/main/watchdog/detectors')
 const { IPC } = await import('../../../../src/shared/ipc-channels')
 
@@ -773,6 +773,8 @@ describe('WatchdogManager.applySettings: a changed retry message reaches the run
     mgr.startWatchdog('s2', { provider: 'claude', ssh: true })
     watchdogSettings = { enabled: true, retryMessage: 'carry on from where you stopped', safeguard: { retryMessage: 'try that again', patterns: ['x'] } }
     mgr.applySettings()
+    // Since PR 763 fix round 10, once the saves have settled (the next describe).
+    vi.advanceTimersByTime(RETRY_MESSAGE_SETTLE_MS)
     expect(instances).toHaveLength(2)
     for (const wd of instances) {
       expect(wd.setRetryMessages).toHaveBeenCalledTimes(1)
@@ -794,5 +796,65 @@ describe('WatchdogManager.applySettings: a changed retry message reaches the run
     expect(instances[0].setRetryMessages).not.toHaveBeenCalled()
     expect(instances[0].dispose).toHaveBeenCalled()
     expect(mgr.isActive('s1')).toBe(false)
+  })
+})
+
+// PR 763 fix round 10 (the second pass on fix round 9): Settings' Retry
+// message field saves on each keystroke, and fix round 9 pushed at each save,
+// so a retry that fired mid-edit typed the partial text into every open tab:
+// "/" and "/c" on the way to "/compact", where Enter at Claude Code's command
+// list runs the highlighted command. One push now, RETRY_MESSAGE_SETTLE_MS
+// after the last save, with the settings read again then. Red on 9c11d407:
+// each save pushed at once, "/c" first.
+describe('WatchdogManager.applySettings: the retry message is handed over once the saves settle (PR 763 fix round 10)', () => {
+  it('two saves 200 ms apart ("/c", then "/compact") push once, with "/compact", 1500 ms after the last save', () => {
+    const { host } = makeHost()
+    const mgr = new WatchdogManager(host)
+    mgr.startWatchdog('s1', { provider: 'claude' })
+    mgr.startWatchdog('s2', { provider: 'claude', ssh: true })
+    watchdogSettings = { enabled: true, retryMessage: '/c' }
+    mgr.applySettings()
+    vi.advanceTimersByTime(200)
+    watchdogSettings = { enabled: true, retryMessage: '/compact' }
+    mgr.applySettings()
+    // Nothing reaches a running watchdog while the field is being edited.
+    vi.advanceTimersByTime(1_499)
+    for (const wd of instances) expect(wd.setRetryMessages).not.toHaveBeenCalled()
+    vi.advanceTimersByTime(1)
+    for (const wd of instances) {
+      expect(wd.setRetryMessages).toHaveBeenCalledTimes(1)
+      expect(wd.setRetryMessages.mock.calls[0][0]).toMatchObject({ retryMessage: '/compact' })
+    }
+    // And nothing more after it.
+    vi.advanceTimersByTime(10_000)
+    for (const wd of instances) expect(wd.setRetryMessages).toHaveBeenCalledTimes(1)
+    expect(RETRY_MESSAGE_SETTLE_MS).toBe(1_500)
+  })
+
+  it('the push reads the settings when it fires: turned off meanwhile, the watchdogs are torn down and told nothing', () => {
+    const { host } = makeHost()
+    const mgr = new WatchdogManager(host)
+    mgr.startWatchdog('s1', { provider: 'claude' })
+    watchdogSettings = { enabled: true, retryMessage: '/c' }
+    mgr.applySettings()
+    vi.advanceTimersByTime(500)
+    watchdogSettings = { enabled: false, retryMessage: '/compact' }
+    mgr.applySettings()
+    vi.advanceTimersByTime(5_000)
+    expect(instances[0].setRetryMessages).not.toHaveBeenCalled()
+    expect(instances[0].dispose).toHaveBeenCalled()
+    expect(mgr.isActive('s1')).toBe(false)
+  })
+
+  it('a pending push is dropped with the watchdogs (disposeAll)', () => {
+    const { host } = makeHost()
+    const mgr = new WatchdogManager(host)
+    mgr.startWatchdog('s1', { provider: 'claude' })
+    watchdogSettings = { enabled: true, retryMessage: 'carry on' }
+    mgr.applySettings()
+    mgr.disposeAll()
+    vi.advanceTimersByTime(5_000)
+    expect(instances[0].setRetryMessages).not.toHaveBeenCalled()
+    expect(vi.getTimerCount()).toBe(0)
   })
 })
