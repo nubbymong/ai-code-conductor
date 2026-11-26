@@ -540,14 +540,25 @@ export async function restoreSavedSessions(
     // its view passes it to pty.spawn), for the canvas roots that session is
     // served its Conductor tools with meanwhile. Main refuses a list with a
     // folder over 4096 characters, so one longer is left out (none is real).
-    const restoredTabs = restoredSessions.map((s) => ({ id: s.id, ...(s.sessionType === 'local' && !s.shellOnly && s.workingDirectory && s.workingDirectory.length <= 4096 ? { cwd: s.workingDirectory } : {}) }))
+    // 2.1.3-beta.19 section 1.2: an SSH Persistent tab with no mark comes back
+    // on tmux, so it names its config (`tmuxConfigId`), which main then reads
+    // as under tmux before this tab spawns (it spawns only once shown): a new
+    // tab of that config meanwhile keeps the usual path too. An id main's
+    // config id pattern refuses is left out (none is real).
+    const restoredTabs = restoredSessions.map((s) => ({
+      id: s.id,
+      ...(s.sessionType === 'local' && !s.shellOnly && s.workingDirectory && s.workingDirectory.length <= 4096 ? { cwd: s.workingDirectory } : {}),
+      ...(s.sessionType === 'ssh' && s.sshConfig && s.sshConfig.detachable !== false && s.remoteVia !== 'helper' && typeof s.configId === 'string' && /^[A-Za-z0-9]{1,64}$/.test(s.configId) ? { tmuxConfigId: s.configId } : {}),
+    }))
     try { window.electronAPI.pty?.tabsRestored?.(restoredTabs) } catch { /* each kept session keeps its time limit */ }
     // SSH Persistent (Phase 1): rehydrate the left-running registry from the
     // same persisted file BEFORE the save below (which folds it back in via
     // buildSessionState). App-restart restore is otherwise UNCHANGED — the
-    // sessions that were open reattach by keeping their id; the registry only
-    // feeds the resume surface + the amber re-attachable counter, never the
-    // launch path (a config launch always starts new).
+    // sessions that were open reattach by keeping their id; the registry
+    // feeds the resume surface + the amber re-attachable counter. A config
+    // launch always starts new; from 2.1.3-beta.19 main reads the registry's
+    // tmux entries at an SSH Persistent launch only to pick its path
+    // (remote-helper/index.ts configUnderTmux).
     useDetachedRemotesStore.getState().hydrate(savedState.detachedRemotes)
     // SSH Persistent (resume liveness, tier 1): ONE initial reachability pass
     // over the distinct hosts we just rehydrated, so a box that is off at

@@ -344,8 +344,10 @@ export const spawnOptionsSchema = z.object({
   askPrompt: z.string().max(8000).optional(),
   // 2.1.3-beta.19 section 1.2: the tab's saved mark, its session kept by the
   // session helper until it is ended (session-persistence.ts SavedSession.remoteVia).
-  // It can only keep a tab off the usual SSH path (remote-helper/route.ts),
-  // never put one on a path its config does not take.
+  // It keeps a tab off the usual SSH path, and lets it skip the two checks made
+  // for a new session only (logind, and its config under tmux), because its
+  // session is held already (remote-helper/route.ts); every other check of the
+  // route still applies to it.
   remoteVia: z.literal('helper').optional(),
   // Session kind flag: an Ask Conductor one-shot. Used only to keep a watchdog
   // off that ephemeral surface (#266 MAJOR-5); no spawn coordinate.
@@ -729,8 +731,11 @@ const sessionGuidanceSchema = z.object({ sessionId: z.string().regex(/^[A-Za-z0-
 /** aicc_planning#423: `pty:tabsRestored`'s payload: the tabs Resume restored,
  *  each its id and (B1d) a local agent tab's configured folder, a bounded
  *  string as pty:spawn's resume folder is (main resolves it as a launch's
- *  folder: resolveCwd, then the canvas store's own floors). */
-const tabsRestoredSchema = z.array(z.object({ id: sessionIdSchema, cwd: z.string().min(1).max(4096).optional() }).strict()).max(1000)
+ *  folder: resolveCwd, then the canvas store's own floors). 2.1.3-beta.19
+ *  section 1.2: a restored SSH Persistent tab with no mark with its config's
+ *  id (`tmuxConfigId`), so that config reads as under tmux before the tab
+ *  spawns (remote-helper/index.ts noteRestoredRemoteTabs). */
+const tabsRestoredSchema = z.array(z.object({ id: sessionIdSchema, cwd: z.string().min(1).max(4096).optional(), tmuxConfigId: configIdSchema.optional() }).strict()).max(1000)
 
 /** WP2 PR 4, P4.3: `askConductor:handOff`'s payload: the Ask session and the
  *  question, bounded as the pty:spawn schema bounds askPrompt. */
@@ -1444,9 +1449,10 @@ export function registerPtyHandlers(getWindow: () => BrowserWindow | null): void
   ipcMain.on(IPC.PTY_TABS_RESTORED, (e, tabs: unknown) => {
     if (!fromApp(e)) return
     const parsed = tabsRestoredSchema.safeParse(tabs)
-    if (parsed.success) keptTabsRestored(parsed.data)
-    // 2.1.3-beta.19: an SSH Persistent tab restored with no mark reads as tmux.
-    if (parsed.success) noteRestoredRemoteTabs(parsed.data.map((t) => t.id))
+    if (parsed.success) keptTabsRestored(parsed.data.map(({ id, cwd }) => (cwd === undefined ? { id } : { id, cwd })))
+    // 2.1.3-beta.19: an SSH Persistent tab restored with no mark reads as
+    // tmux, and so does its config, from now on (not only once it spawns).
+    if (parsed.success) noteRestoredRemoteTabs(parsed.data)
   })
   ipcMain.on(IPC.PTY_TAB_SHOWN, (e, id: unknown) => {
     if (!fromApp(e)) return

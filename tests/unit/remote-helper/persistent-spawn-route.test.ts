@@ -141,7 +141,7 @@ describe('switch on: an SSH Persistent tab', () => {
     forgetRemoteHelperTab('psr-restored')
     const before = usualOf('psr-restored', PERSISTENT, { configId: 'cfg-ubuntu' })
     plugIn(true)
-    noteRestoredRemoteTabs(['psr-restored'])
+    noteRestoredRemoteTabs([{ id: 'psr-restored' }])
     expect(spawnSsh('psr-restored', PERSISTENT, { configId: 'cfg-ubuntu' })).toEqual(before)
     expect(ssh.calls).toHaveLength(0)
     expect(logs).toContain(`[remote-helper] psr-restored: the usual SSH path, because ${ROUTE_WHY.sessionUnderTmux}`)
@@ -169,7 +169,7 @@ describe('switch on: an SSH Persistent tab', () => {
     forgetRemoteHelperTab('psr-open-b')
     const before = usualOf('psr-open-b', PERSISTENT, { configId: 'cfg-ubuntu' })
     plugIn(true)
-    noteRestoredRemoteTabs(['psr-open-a'])
+    noteRestoredRemoteTabs([{ id: 'psr-open-a' }])
     expect(spawnSsh('psr-open-a', PERSISTENT, { configId: 'cfg-ubuntu' })).not.toBeNull()
     logs = []
     expect(spawnSsh('psr-open-b', PERSISTENT, { configId: 'cfg-ubuntu' })).toEqual(before)
@@ -179,6 +179,25 @@ describe('switch on: an SSH Persistent tab', () => {
     forgetRemoteHelperTab('psr-open-b')
     expect(spawnSsh('psr-open-c', PERSISTENT, { configId: 'cfg-ubuntu' })).toBeNull()
     forgetRemoteHelperTab('psr-open-c')
+  })
+
+  // D13: a restored unmarked tab not on screen spawns only once shown, so main
+  // learns its config at the restore (tmuxConfigId), not at its spawn.
+  it('a new tab of a config whose restored unmarked tab has not spawned yet takes the usual path, and goes through the helper once that tab is closed', () => {
+    forgetRemoteHelperTab('psr-unshown')
+    forgetRemoteHelperTab('psr-unshown-new')
+    const before = usualOf('psr-unshown-new', PERSISTENT, { configId: 'cfg-ubuntu' })
+    plugIn(true)
+    noteRestoredRemoteTabs([{ id: 'psr-unshown', tmuxConfigId: 'cfg-ubuntu' }])
+    logs = []
+    expect(spawnSsh('psr-unshown-new', PERSISTENT, { configId: 'cfg-ubuntu' })).toEqual(before)
+    expect(ssh.calls).toHaveLength(0)
+    expect(logs).toContain(`[remote-helper] psr-unshown-new: the usual SSH path, because ${ROUTE_WHY.configUnderTmux}`)
+    // The restored tab is closed without ever being shown.
+    forgetRemoteHelperTab('psr-unshown')
+    forgetRemoteHelperTab('psr-unshown-new')
+    expect(spawnSsh('psr-unshown-next', PERSISTENT, { configId: 'cfg-ubuntu' })).toBeNull()
+    forgetRemoteHelperTab('psr-unshown-next')
   })
 
   const entries: Array<[string, DetachedRemote]> = [
@@ -221,8 +240,9 @@ describe('a marked tab never starts on the usual path', () => {
       expect(ssh.calls).toHaveLength(0)
       expect(logs).toContain(`[remote-helper] psr-marked: nothing started, because its session is kept by the session helper and ${why}`)
       expect(logs.some((l) => l.includes('the usual SSH path'))).toBe(false)
+      // The step is framed as the next thing to do (End does not open it).
       await until(() => (shown.get('psr-marked') ?? '').includes(step))
-      expect(shown.get('psr-marked')).toContain(why)
+      expect(shown.get('psr-marked')).toContain(`it cannot be opened now: ${why}. Next: ${step}.`)
       forgetRemoteHelperTab('psr-marked')
     })
   }

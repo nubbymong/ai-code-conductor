@@ -266,8 +266,10 @@ export interface ElectronAPI {
      *  starting now: a session an update kept for a restored tab not on
      *  screen waits for that tab until it is shown (B1d: each restored tab
      *  with a local agent tab's configured folder, for the canvas roots its
-     *  kept session is served with meanwhile). */
-    tabsRestored: (tabs: Array<{ id: string; cwd?: string }>) => void
+     *  kept session is served with meanwhile; 2.1.3-beta.19: a restored SSH
+     *  Persistent tab with no mark with its config id, which main then reads
+     *  as under tmux before the tab spawns). */
+    tabsRestored: (tabs: Array<{ id: string; cwd?: string; tmuxConfigId?: string }>) => void
     tabShown: (sessionId: string) => void
     onData: (sessionId: string, callback: (data: string) => void) => () => void
     onExit: (sessionId: string, callback: (exitCode: number) => void) => () => void

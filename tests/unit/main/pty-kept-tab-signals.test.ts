@@ -96,6 +96,11 @@ describe('pty:tabsRestored and pty:tabShown: from the app\'s window only, and on
     expect(told).toEqual([['restored', [{ id: TAB, cwd: 'C:\\Users\\someone\\project' }, { id: OTHER }]]])
   })
 
+  it('2.1.3-beta.19: a restored SSH Persistent tab with no mark names its config (tmuxConfigId); the helper\'s kept launches get the id and folder only', () => {
+    restored(fromApp, [{ id: TAB, tmuxConfigId: 'cfg0123abc' }, { id: OTHER, cwd: 'C:\\x' }])
+    expect(told).toEqual([['restored', [{ id: TAB }, { id: OTHER, cwd: 'C:\\x' }]]])
+  })
+
   it('a folder at the bound (4096 characters) reads', () => {
     restored(fromApp, [{ id: TAB, cwd: 'C'.repeat(4096) }])
     expect(told).toEqual([['restored', [{ id: TAB, cwd: 'C'.repeat(4096) }]]])
@@ -123,6 +128,8 @@ describe('pty:tabsRestored and pty:tabShown: from the app\'s window only, and on
     ['a list with an empty folder', [{ id: TAB, cwd: '' }]],
     ['a list with a folder longer than 4096 characters', [{ id: TAB, cwd: 'C'.repeat(4097) }]],
     ['a list with a field it does not name', [{ id: TAB, cwd: 'C:\\x', root: 'C:\\' }]],
+    ['a list with a config id outside the config id pattern', [{ id: TAB, tmuxConfigId: '../cfg' }]],
+    ['a list with a config id that is not a string', [{ id: TAB, tmuxConfigId: 7 }]],
     ['a list longer than any app makes', Array.from({ length: 1001 }, () => ({ id: TAB }))],
   ])('pty:tabsRestored with %s: dropped', (_what, payload) => {
     restored(fromApp, payload)

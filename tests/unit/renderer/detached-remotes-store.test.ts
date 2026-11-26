@@ -174,3 +174,44 @@ describe('hydrate — the #54 destination fields', () => {
     expect(useDetachedRemotesStore.getState().entries).toEqual(original)
   })
 })
+
+// 2.1.3-beta.19 section 1.2: a session the session helper keeps until it is
+// ended is left running as a 'helper' entry with its machine's device id. The
+// predicate used to accept only 'tmux' or 'psmux', so both boot paths dropped
+// it at hydrate and the restore's own save wrote the file back without it.
+describe('hydrate — a session the session helper keeps', () => {
+  const DID = '0123456789abcdef0123456789abcdef'
+  const helper = (over: Partial<DetachedRemote> = {}): DetachedRemote => entry({ sessionId: 'kept-1', mux: 'helper', did: DID, ...over })
+
+  it('a helper entry with its device id survives hydrate', () => {
+    const kept = helper()
+    useDetachedRemotesStore.getState().hydrate([kept, entry({ sessionId: 'tmux-1' })])
+    expect(useDetachedRemotesStore.getState().entries).toEqual([kept, entry({ sessionId: 'tmux-1' })])
+  })
+
+  it('survives buildSessionState, the JSON save/load and hydrate again', async () => {
+    const { buildSessionState } = await import('../../../src/renderer/session-persistence')
+    const kept = helper()
+    useDetachedRemotesStore.getState().add(kept)
+    const back = JSON.parse(JSON.stringify(buildSessionState())) as SessionState
+    expect(back.detachedRemotes).toEqual([kept])
+    useDetachedRemotesStore.getState().hydrate([])
+    useDetachedRemotesStore.getState().hydrate(back.detachedRemotes)
+    expect(useDetachedRemotesStore.getState().entries).toEqual([kept])
+  })
+
+  it('a helper entry with no device id, or a malformed one, is dropped; a tmux entry with a non-string did too', () => {
+    const noDid = { ...helper() } as Record<string, unknown>
+    delete noDid.did
+    const bad: unknown[] = [
+      noDid,
+      helper({ did: '' }),
+      helper({ did: 'ABCDEF0123456789ABCDEF0123456789' }),          // upper case: not a device id
+      helper({ did: `${DID}0` }),                                     // 33 characters
+      helper({ did: 'not-a-device-id' }),
+      { ...helper(), did: 42 },
+      { ...entry(), did: 7 },
+    ]
+    expect(sanitizeRestoredDetachedRemotes(bad)).toEqual([])
+  })
+})

@@ -122,9 +122,17 @@ export function forgetRemoteHelperTab(sessionId: string, restart = false): void 
 }
 
 /** The tabs a restore brought back (pty:tabsRestored, 2.1.3-beta.19): an SSH
- *  Persistent one that starts with no mark takes the usual path. */
-export function noteRestoredRemoteTabs(ids: readonly string[]): void {
-  for (const id of ids) restoredTabs.add(id)
+ *  Persistent one that starts with no mark takes the usual path. One the
+ *  renderer names with `tmuxConfigId` (a restored SSH Persistent tab with no
+ *  mark) puts its config under tmux at once, before it spawns: a restored tab
+ *  not on screen spawns only once shown, and a new tab of that config
+ *  meanwhile must not take the helper (D13: one config, one path). A forged
+ *  value can only keep a config on the usual path. */
+export function noteRestoredRemoteTabs(tabs: ReadonlyArray<{ id: string; tmuxConfigId?: string }>): void {
+  for (const t of tabs) {
+    restoredTabs.add(t.id)
+    if (t.tmuxConfigId !== undefined) todayTabs.set(t.id, t.tmuxConfigId)
+  }
 }
 
 /** The flow state main answers for a tab through the helper (its catch-up):
@@ -187,7 +195,8 @@ export function remoteTerminalEnv(settings: Readonly<Record<string, unknown>> | 
  * the launch again before the holder starts: ./session.ts). Throws, saying
  * why, when a host read or a session file the launch names cannot be given to
  * the host, or the launch names a variable the session helper's launch sets
- * itself; the tab then takes the usual path.
+ * itself; the tab then takes the usual path, or, when it is marked as kept
+ * by the helper, starts nothing and says the step.
  */
 export function remoteLaunchOf(via: ProviderRemoteLaunch, m: RemoteMachineRecord, options: RemoteSpawnOptions, settings: Readonly<Record<string, unknown>> | null, systemPrefersDark: () => boolean, sid: string, cols: number, rows: number, tools = false, resumes = false): RemoteLaunchPlan {
   const remotePath = options.ssh?.remotePath
@@ -221,10 +230,12 @@ export function remoteLaunchOf(via: ProviderRemoteLaunch, m: RemoteMachineRecord
 /**
  * The SSH branch's one question: this tab through the session helper, or the
  * usual path (null)? One log line either way. Nothing here throws into the
- * spawn: records that do not read send the tab the usual way.
+ * spawn: records that do not read send the tab the usual way, or, for a tab
+ * marked as kept by the helper, start nothing and say the step (2.1.3-beta.19).
  */
 export function remoteHelperPty(win: OutputWindow, sessionId: string, options: RemoteSpawnOptions, cols: number, rows: number): IPty | null {
-  // Each start decides afresh; only one through the helper is remembered.
+  // Each start asks the route again; what it keeps from the last one is the
+  // tab's path (lastPath) and its mark, so a tab stays on the path it started on.
   startedThroughHelper.delete(sessionId)
   const d = deps
   const ssh = options.ssh
@@ -244,7 +255,7 @@ export function remoteHelperPty(win: OutputWindow, sessionId: string, options: R
   const marked = persistent && (options.remoteVia === 'helper' || lastPath.get(sessionId) === 'kept')
   const startsNothing = (r: Extract<Route, { via: 'nothing' }>): IPty => {
     d.log(`[remote-helper] ${sessionId}: nothing started, because its session is kept by the session helper and ${r.why}`)
-    const note = new NoticePty(`This tab's session is kept by the session helper on its machine, and it cannot be opened now: ${r.why}. To open it, ${r.step}.`, cols, rows)
+    const note = new NoticePty(`This tab's session is kept by the session helper on its machine, and it cannot be opened now: ${r.why}. Next: ${r.step}.`, cols, rows)
     startedThroughHelper.set(sessionId, note)
     // Its note reaches the tab as a helper tab's output does (counted the same way).
     note.onData((data) => {
