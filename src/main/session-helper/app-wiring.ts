@@ -69,10 +69,13 @@ const bundledPath = (): string => bundledHelperPath({ isPackaged: app.isPackaged
 /**
  * The start-up clean-up of old helper copies (2.1.3-beta.15, plan section B1,
  * aicc_planning#397), begun by a start with both settings off: null when
- * none began. A manager made later in the same run (a setting turned on)
- * makes its copy only once this has ended (its copyAfter), which alone keeps
- * that copy in every order; the clean-up also begins no removal once a
- * manager exists (asked before its listing and once after). Never rejects.
+ * none began. From 2.1.3-beta.19 (plan section 6.5, aicc_planning#440) it
+ * also removes the empty kept folder and the store holding nothing, or only
+ * its lock, that a run with a setting on left. A manager made later in the
+ * same run (a setting turned on) makes its copy only once this has ended (its
+ * copyAfter), which alone keeps that copy in every order; the clean-up also
+ * begins no removal once a manager exists (asked before its listing, once
+ * after, and again before the kept and store folders). Never rejects.
  */
 let oldCopiesCleanUp: Promise<void> | null = null
 
@@ -176,10 +179,12 @@ function ensureManager(): SessionHelperManager {
  * all the same, carrying nothing new, to end those agent sessions before
  * their tabs start their CLIs again (and keep a crash's plain terminals for
  * their tabs). Both off with none of those: the old helper copies an earlier
- * run left are removed (2.1.3-beta.15, cleanUpOldCopies). With the agent
- * sessions' setting on, a session an update kept running whose tab is in
- * the saved file this start restores from is kept for that tab to take over
- * (2.1.3-beta.17, S16 step 5).
+ * run left are removed (2.1.3-beta.15, cleanUpOldCopies), with the empty kept
+ * folder and the store holding nothing, or only its lock, that a run with a
+ * setting on left (2.1.3-beta.19).
+ * With the agent sessions' setting on, a session an update kept running whose
+ * tab is in the saved file this start restores from is kept for that tab to
+ * take over (2.1.3-beta.17, S16 step 5).
  */
 export function initSessionHelper(onChange: () => void): void {
   notify = onChange

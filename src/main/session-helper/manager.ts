@@ -120,7 +120,10 @@
  * removes the old helper copies instead (removeOldCopiesWithHelperOff): the
  * installed helper lists the holders once, and every version or staging
  * folder no listed holder's version needs goes. A manager made later in that
- * run copies only once that has ended (deps.copyAfter).
+ * run copies only once that has ended (deps.copyAfter). 2.1.3-beta.19 (plan
+ * section 6.5, aicc_planning#440): with no holder listed, the empty kept
+ * folder and the store holding nothing, or only its lock, that a run with a
+ * setting on left go too, then the helper's folder if it is then empty.
  *
  * 2.1.3-beta.18 (plan section 5, ADR-030 S12, aicc_planning#433): a held
  * Codex session's hook events go through its holder too (hookRoute, by its
@@ -497,6 +500,10 @@ const MARKER = 'app-running.json'
 const BINDINGS = 'bindings.json'
 /** The folder of the records of agent sessions an update kept running (S16 step 4). */
 const KEPT = 'kept'
+/** The holders' store (protocol section 15), and the lock file the helper
+ *  makes in it and never removes (helper/src/store.rs LOCK_FILE). */
+const STORE = 'store'
+const STORE_LOCK = '.lock'
 /** How long a start keeps a session an update kept running for its restored
  *  tab to take over (S16 step 5) while no restored tab waits for it unseen:
  *  from the start until Resume restores its tab (the resume prompt left open,
@@ -755,7 +762,7 @@ export class SessionHelperManager implements MachinesSource {
   constructor(deps: SessionHelperDeps) {
     this.os = helperOs(deps.platform)
     this.root = deps.root
-    this.store = path.join(deps.root, 'store')
+    this.store = path.join(deps.root, STORE)
     this.deps = {
       exec: execHelper,
       spawnDirect: spawnWithNodePty,
@@ -2802,35 +2809,53 @@ export function crashMarkIn(root: string): boolean {
  * settings off, no running mark and no agent record makes no manager, so the
  * manager's clean-up of old version folders (bringUp) never runs and every
  * update would leave its copy behind. This one runs instead (app-wiring.ts),
- * only when the helper's folder holds a version or staging folder (one folder
- * read, so a user who never used the helper starts nothing): the installed
+ * only when the helper's folder holds a version or staging folder or, from
+ * 2.1.3-beta.19 (below), a kept or store folder that nothing needs (folder
+ * reads only, so a user who never used the helper starts nothing): the installed
  * helper lists the holders (no copy is made and no holder is started), and
  * every version folder no listed holder's version needs goes, with the
  * staging folders a failed copy left (removeOldVersionFolders, with no current
  * folder). A listing that fails removes nothing, and so does `stop()`
  * answering true once the listing is back (a setting turned on meanwhile: the
  * manager owns the folder from then, and waits for this to end before it
- * copies, deps.copyAfter). One log line names what went. Answers the folders
- * removed.
+ * copies, deps.copyAfter). One log line names what went. Answers the names
+ * removed from the helper's folder.
+ *
+ * 2.1.3-beta.19 (plan section 6.5, aicc_planning#440): a run with a setting
+ * on leaves an empty kept folder and a store holding only its lock (beta.18's
+ * post-publish check), so the start also runs for those (leftoversIn). After
+ * the version folders, and only when the listing named no holder and `stop()`
+ * still answers false: kept goes if it is empty and store if it holds nothing,
+ * or only its lock, each only while the other holds nothing else either and no
+ * running mark is there (read again then), then the helper's folder if it is
+ * then empty. Each folder goes with a plain folder removal, so one that is no
+ * longer empty stays. The same log line names them.
  */
 export async function removeOldCopiesWithHelperOff(opts: { root: string; bundled: string; stop: () => boolean; log: (message: string) => void; platform?: NodeJS.Platform; exec?: SessionHelperDeps['exec'] }): Promise<string[]> {
-  if (!oldCopiesIn(opts.root) || opts.stop()) return []
+  if ((!oldCopiesIn(opts.root) && leftoversIn(opts.root).length === 0) || opts.stop()) return []
   let versions: Set<string>
+  let held: number
   try {
     if (!fs.statSync(opts.bundled).isFile()) throw new Error('the installed helper is not a file')
-    const r = await (opts.exec ?? execHelper)(opts.bundled, ['list', '--store', path.join(opts.root, 'store')], LIST_TIMEOUT_MS)
+    const r = await (opts.exec ?? execHelper)(opts.bundled, ['list', '--store', path.join(opts.root, STORE)], LIST_TIMEOUT_MS)
     if (r.code !== 0) throw new Error(firstLine(r.stderr) || `the helper exited with ${r.code}`)
     const listing = readListing(lastLine(r.stdout), helperOs(opts.platform))
     if (!listing) throw new Error('the helper answered a listing that does not read')
     versions = new Set(listing.sessions.map((s) => s.helper))
+    held = listing.sessions.length
   } catch (err) {
     opts.log(`[session-helper] with both settings off, the held terminals could not be listed, so no old helper folder is removed: ${message(err)}`)
     return []
   }
   if (opts.stop()) return []
   const removed = await removeOldVersionFolders(opts.root, null, versions)
-  if (removed.length > 0) opts.log(`[session-helper] with both settings off, removed old helper folder(s): ${removed.join(', ')}`)
-  return removed
+  // Synchronous from this check on: a manager made meanwhile (stop() true)
+  // owns the folder, and nothing of its runs between the check and the removals.
+  const left: { removed: string[]; rootGone: boolean } = held === 0 && !opts.stop() ? removeLeftovers(opts.root) : { removed: [], rootGone: false }
+  const said = [...removed, ...left.removed.map((name) => (name === KEPT ? `${KEPT} (empty)` : `${STORE} (no record)`))]
+  if (left.rootGone) said.push('then the helper folder itself (empty)')
+  if (said.length > 0) opts.log(`[session-helper] with both settings off, removed old helper folder(s): ${said.join(', ')}`)
+  return [...removed, ...left.removed]
 }
 
 /** True when the helper's folder holds a version folder or a staging folder
@@ -2841,6 +2866,77 @@ function oldCopiesIn(root: string): boolean {
   } catch {
     return false
   }
+}
+
+/**
+ * 2.1.3-beta.19 (plan section 6.5): the folders a run with a setting on left
+ * that nothing needs: kept when it is empty, store when it holds nothing, or
+ * only its lock (a plain file). A store with nothing in it is what a removal
+ * leaves that took the lock and could not take the folder (on Windows a holder
+ * still ending has the store as its working folder), so the next start takes
+ * it. None when the running mark is there, or when either one holds anything
+ * else (a record, a temporary file, a folder) or is not a plain folder (a
+ * link): then both stay, as anything there may need the other. Two folder
+ * reads; no holder is asked.
+ */
+function leftoversIn(root: string): string[] {
+  if (crashMarkIn(root)) return []
+  const kept = plainFolderNames(path.join(root, KEPT))
+  const store = plainFolderNames(path.join(root, STORE))
+  if (kept === null || store === null) return []
+  const keptEmpty = kept !== undefined && kept.length === 0
+  const storeBare = store !== undefined && (store.length === 0 || (store.length === 1 && store[0] === STORE_LOCK && plainFile(path.join(root, STORE, STORE_LOCK))))
+  if ((kept !== undefined && !keptEmpty) || (store !== undefined && !storeBare)) return []
+  return [...(keptEmpty ? [KEPT] : []), ...(storeBare ? [STORE] : [])]
+}
+
+/** The names in a plain folder (not a link); undefined when nothing is
+ *  there, null when it is not a plain folder or does not read. */
+function plainFolderNames(dir: string): string[] | null | undefined {
+  let st: fs.Stats
+  try {
+    st = fs.lstatSync(dir)
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code === 'ENOENT' ? undefined : null
+  }
+  if (!st.isDirectory()) return null
+  try {
+    return fs.readdirSync(dir)
+  } catch {
+    return null
+  }
+}
+
+function plainFile(file: string): boolean {
+  try {
+    return fs.lstatSync(file).isFile()
+  } catch {
+    return false
+  }
+}
+
+/** Removes what leftoversIn names now, then the helper's folder if it is then
+ *  empty: each with a plain folder removal (a folder that is no longer empty
+ *  stays), the store's lock, when it is there, just before its folder. What
+ *  cannot go stays, and the next start looks again: a store whose lock went
+ *  and whose folder did not holds nothing, which leftoversIn takes too. */
+function removeLeftovers(root: string): { removed: string[]; rootGone: boolean } {
+  const removed: string[] = []
+  for (const name of leftoversIn(root)) {
+    try {
+      if (name === STORE) fs.rmSync(path.join(root, STORE, STORE_LOCK), { force: true })
+      fs.rmdirSync(path.join(root, name))
+      removed.push(name)
+    } catch { /* in use, or no longer empty: the next start looks again */ }
+  }
+  let rootGone = false
+  try {
+    if (fs.readdirSync(root).length === 0) {
+      fs.rmdirSync(root)
+      rootGone = true
+    }
+  } catch { /* gone already, or in use */ }
+  return { removed, rootGone }
 }
 
 /** Why the running mark was left: "update" when an app update let go of the
@@ -2865,7 +2961,7 @@ function markReason(marker: string): 'update' | null {
  * not, so the start that ends it also removes what it left.
  */
 export function agentRecordsIn(root: string, platform?: NodeJS.Platform): boolean {
-  return readStore(path.join(root, 'store'), helperOs(platform)).some((r) => heldIdKind(r.session) === 'agent') || readKeptStore(root, helperOs(platform)).length > 0
+  return readStore(path.join(root, STORE), helperOs(platform)).some((r) => heldIdKind(r.session) === 'agent') || readKeptStore(root, helperOs(platform)).length > 0
 }
 
 /**
