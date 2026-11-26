@@ -38,7 +38,8 @@ export function registerCodexCanvasRoots(sessionId: string, configuredCwd: strin
   } else if (!registerCanvasUatRoot(sessionId, configuredCwd)) {
     const reason = canvasRootRefusalReason(sessionId, configuredCwd)
     const explanation = reason ? describeCanvasRootRefusal(reason, configuredCwd) : 'the canvas store refused it.'
-    logWarn(`[pty] canvas serving root NOT registered for Codex session ${sessionId} (${reason ?? 'unknown'}): ${explanation}`)
+    // Inside the resources directory: the app's own help folder (Ask Conductor), refused by design: not a warning.
+    ;(reason === 'inside-resources-dir' ? logInfo : logWarn)(`[pty] canvas serving root NOT registered for Codex session ${sessionId} (${reason ?? 'unknown'}): ${explanation}`)
     setCanvasRootRefusal(sessionId, explanation)
   }
   if (designatedWorktree) {

@@ -135,7 +135,9 @@ function registerClaudeLaunchTools(binding: Pick<ClaudeLaunchBinding, 'sessionId
     // floor exists for.
     const reason = canvasRootRefusalReason(sessionId, resolvedCwd)
     const explanation = reason ? describeCanvasRootRefusal(reason, resolvedCwd) : 'the canvas store refused it.'
-    logWarn(`[pty] canvas serving root NOT registered for ${sessionId} (${reason ?? 'unknown'}): ${explanation}`)
+    // A folder inside the resources directory is the app's own help folder
+    // (Ask Conductor): refused by design, so a line of the log, not a warning.
+    ;(reason === 'inside-resources-dir' ? logInfo : logWarn)(`[pty] canvas serving root NOT registered for ${sessionId} (${reason ?? 'unknown'}): ${explanation}`)
     setCanvasRootRefusal(sessionId, explanation)
   }
 

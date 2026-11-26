@@ -249,3 +249,31 @@ describe('an unresolvable resources directory does not take the floor down with 
     expect(store.registerCanvasUatRoot(SID, ghost)).toBe(false)
   })
 })
+
+/**
+ * 2.1.3-beta.19 fix round, item CANVASROOTWARN: every Ask Conductor launch
+ * logged a WARNING that "the app's own resources directory ... is inside it,
+ * or is it" for the app's own help folder, which is INSIDE the resources
+ * directory, not the other way round. A folder inside it is its own refusal
+ * now, worded as it is (and logged as a line, not a warning: launch-bindings.test.ts).
+ */
+describe('a folder inside the resources directory (the app\'s own help folder) is refused, and worded as it is', () => {
+  it('the help folder: refused as inside the resources directory, never as holding it', () => {
+    const help = path.join(resources, 'help')
+    fs.mkdirSync(help)
+    expect(store.registerCanvasUatRoot(SID, help)).toBe(false)
+    expect(store.canvasRootRefusalReason(SID, help)).toBe('inside-resources-dir')
+    const words = store.describeCanvasRootRefusal('inside-resources-dir', help)
+    expect(words).toContain(help)
+    expect(words).toContain("because it is inside the app's own resources directory")
+    expect(words).not.toContain('is inside it, or is it')
+    expect(words).toMatch(/Point this session at a project folder outside the resources directory/)
+  })
+
+  it('the resources directory itself, and a folder holding it, keep their own words', () => {
+    const parent = path.dirname(resources)
+    expect(store.canvasRootRefusalReason(SID, resources)).toBe('resources-dir')
+    expect(store.canvasRootRefusalReason(SID, parent)).not.toBe('inside-resources-dir')
+    expect(store.describeCanvasRootRefusal('resources-dir', resources)).toContain('is inside it, or is it')
+  })
+})
