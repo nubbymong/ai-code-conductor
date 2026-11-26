@@ -91,7 +91,7 @@ describe('a helper tab\'s account label', () => {
   })
 
   it('the display gate refuses what is not plainly an email: no label, and the reason instead', () => {
-    for (const bad of ['not an email', 'me@example.com‮', `${'a'.repeat(250)}@example.com`, '<b>me@example.com</b>', '']) {
+    for (const bad of ['not an email', 'me@example.com\u202e', `${'a'.repeat(250)}@example.com`, '<b>me@example.com</b>', '']) {
       sent = []
       setHelperAccount('tab-remote', { account: bad })
       expect(sent[0].accountEmail, bad).toBeUndefined()
