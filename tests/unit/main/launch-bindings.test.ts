@@ -81,6 +81,8 @@ vi.mock('../../../src/main/canvas/canvas-store', () => ({
   canvasRootRefusalReason: () => h.refusalReason,
   describeCanvasRootRefusal: (reason: string) => `refused as ${reason}.`,
   setCanvasRootRefusal: (sid: string, text: string) => h.rec('setCanvasRootRefusal')(sid, text),
+  // The app's own help folder, by its one spelling (help-workspace.ts helpWorkspaceDir of '/res').
+  isAppHelpFolder: (dir: string) => dir === '/res/help',
 }))
 vi.mock('../../../src/main/canvas/canvas-marker-delivery', () => ({ forgetCanvasMarkers: (sid: string) => h.rec('forgetCanvasMarkers')(sid) }))
 vi.mock('../../../src/main/canvas/codex-canvas-roots', () => ({ registerCodexCanvasRoots: (sid: string, cwd: string, wt: string | null) => h.rec('registerCodexCanvasRoots')(sid, cwd, wt) }))
@@ -322,14 +324,21 @@ describe('a Claude Code launch binds each thing once, in the order pty-manager.t
     CLAUDE_LIFECYCLE.bind({ sessionId: CL, resolvedProfileId: undefined, claudeCwd: '/proj/a', resolvedCwd: '/proj/a', designatedWorktree: null }, lb.lifecycleCore())
     expect(h.calls.slice(-2)).toEqual([`registerCanvasUatRoot ${CL} /proj/a`, `setCanvasRootRefusal ${CL} refused as resources-dir.`])
     expect(h.warns).toEqual([`[pty] canvas serving root NOT registered for ${CL} (resources-dir): refused as resources-dir.`])
-    // 2.1.3-beta.19 fix round: a folder INSIDE the resources directory is the app's own help folder (Ask
-    // Conductor), refused by design: one line of the log, not a warning.
+    // 2.1.3-beta.19 fix round: the app's own help folder (Ask Conductor), inside the resources directory,
+    // is refused by design: one line of the log, not a warning.
     h.calls.length = 0; h.warns.length = 0; h.infos.length = 0
     h.refusalReason = 'inside-resources-dir'
     CLAUDE_LIFECYCLE.bind({ sessionId: CL, resolvedProfileId: undefined, claudeCwd: '/res/help', resolvedCwd: '/res/help', designatedWorktree: null }, lb.lifecycleCore())
     expect(h.calls.slice(-1)).toEqual([`setCanvasRootRefusal ${CL} refused as inside-resources-dir.`])
     expect(h.warns).toEqual([])
     expect(h.infos).toContain(`[pty] canvas serving root NOT registered for ${CL} (inside-resources-dir): refused as inside-resources-dir.`)
+    // Second pass: any other folder inside the resources directory (a user's session in <resources>/CONFIG,
+    // the case the #371 floor was added for) is refused as before, and still warns.
+    h.calls.length = 0; h.warns.length = 0; h.infos.length = 0
+    CLAUDE_LIFECYCLE.bind({ sessionId: CL, resolvedProfileId: undefined, claudeCwd: '/res/CONFIG', resolvedCwd: '/res/CONFIG', designatedWorktree: null }, lb.lifecycleCore())
+    expect(h.calls.slice(-1)).toEqual([`setCanvasRootRefusal ${CL} refused as inside-resources-dir.`])
+    expect(h.warns).toEqual([`[pty] canvas serving root NOT registered for ${CL} (inside-resources-dir): refused as inside-resources-dir.`])
+    expect(h.infos.filter((l) => l.includes('canvas serving root'))).toEqual([])
   })
 })
 

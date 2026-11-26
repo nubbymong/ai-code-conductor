@@ -19,7 +19,7 @@ import { designatedWorktreeDir } from '../../canvas/canvas-worktree'
 import { getLocalSessionStatusUrlPath, writeLocalSessionStatusUrl, removeLocalSessionStatusUrl, noteKeptLaunchStatusLine } from '../../hooks/per-session-settings'
 import { captureClaudeAccount, getClaudeProfileId, pushAccountIdentity, startWatchingAccountIdentity } from '../../claude-account-identity'
 import { registerCodexReviewSession, getConductorMcpPort } from '../../conductor-mcp-server'
-import { registerCanvasUatRoot, designateCanvasWorktreeRoot, canvasRootRefusalReason, describeCanvasRootRefusal, setCanvasRootRefusal } from '../../canvas/canvas-store'
+import { registerCanvasUatRoot, designateCanvasWorktreeRoot, canvasRootRefusalReason, describeCanvasRootRefusal, setCanvasRootRefusal, isAppHelpFolder } from '../../canvas/canvas-store'
 
 /** A Claude Code launch's account capture and registrations, from the launch. */
 export interface ClaudeLaunchBinding {
@@ -135,9 +135,9 @@ function registerClaudeLaunchTools(binding: Pick<ClaudeLaunchBinding, 'sessionId
     // floor exists for.
     const reason = canvasRootRefusalReason(sessionId, resolvedCwd)
     const explanation = reason ? describeCanvasRootRefusal(reason, resolvedCwd) : 'the canvas store refused it.'
-    // A folder inside the resources directory is the app's own help folder
-    // (Ask Conductor): refused by design, so a line of the log, not a warning.
-    ;(reason === 'inside-resources-dir' ? logInfo : logWarn)(`[pty] canvas serving root NOT registered for ${sessionId} (${reason ?? 'unknown'}): ${explanation}`)
+    // The app's own help folder (Ask Conductor) is refused by design: a line
+    // of the log; any other folder inside the resources directory still warns.
+    ;(reason === 'inside-resources-dir' && isAppHelpFolder(resolvedCwd) ? logInfo : logWarn)(`[pty] canvas serving root NOT registered for ${sessionId} (${reason ?? 'unknown'}): ${explanation}`)
     setCanvasRootRefusal(sessionId, explanation)
   }
 

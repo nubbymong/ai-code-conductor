@@ -23,10 +23,16 @@ import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
 
-const h = vi.hoisted(() => ({ resourcesDir: '' }))
+const h = vi.hoisted(() => ({ resourcesDir: '', infos: [] as string[], warns: [] as string[] }))
 
 vi.mock('../../../src/main/ipc/setup-handlers', () => ({
   getResourcesDirectory: () => h.resourcesDir,
+}))
+// The log lines, read by the help folder's case below; everything else is the real logger.
+vi.mock('../../../src/main/debug-logger', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../../src/main/debug-logger')>()),
+  logInfo: (...args: unknown[]) => { h.infos.push(args.map(String).join(' ')) },
+  logWarn: (...args: unknown[]) => { h.warns.push(args.map(String).join(' ')) },
 }))
 
 const store = await import('../../../src/main/canvas/canvas-store')
@@ -255,7 +261,9 @@ describe('an unresolvable resources directory does not take the floor down with 
  * logged a WARNING that "the app's own resources directory ... is inside it,
  * or is it" for the app's own help folder, which is INSIDE the resources
  * directory, not the other way round. A folder inside it is its own refusal
- * now, worded as it is (and logged as a line, not a warning: launch-bindings.test.ts).
+ * now, worded as it is. Only the help folder is logged as a line, not a
+ * warning (second pass: below, and launch-bindings.test.ts); any other folder
+ * inside it, a user's session in <resources>/CONFIG for one, still warns.
  */
 describe('a folder inside the resources directory (the app\'s own help folder) is refused, and worded as it is', () => {
   it('the help folder: refused as inside the resources directory, never as holding it', () => {
@@ -275,5 +283,41 @@ describe('a folder inside the resources directory (the app\'s own help folder) i
     expect(store.canvasRootRefusalReason(SID, resources)).toBe('resources-dir')
     expect(store.canvasRootRefusalReason(SID, parent)).not.toBe('inside-resources-dir')
     expect(store.describeCanvasRootRefusal('resources-dir', resources)).toContain('is inside it, or is it')
+  })
+
+  it('isAppHelpFolder answers for the resources directory\'s help folder only: never another folder inside it, a folder under the help folder, the directory itself or a folder outside', () => {
+    const help = path.join(resources, 'help')
+    const config = path.join(resources, 'CONFIG')
+    fs.mkdirSync(help)
+    fs.mkdirSync(config)
+    expect(store.isAppHelpFolder(help)).toBe(true)
+    expect(store.isAppHelpFolder(help + path.sep)).toBe(true)
+    expect(store.isAppHelpFolder(config)).toBe(false)
+    expect(store.isAppHelpFolder(path.join(help, 'sub'))).toBe(false)
+    expect(store.isAppHelpFolder(resources)).toBe(false)
+    expect(store.isAppHelpFolder(tmp('ccc-proj-'))).toBe(false)
+    h.resourcesDir = ''
+    expect(store.isAppHelpFolder(help), 'no resources directory this run: nothing is the help folder').toBe(false)
+  })
+
+  it('a Codex session: the help folder is refused as one line of the log; <resources>/CONFIG is refused and still warns', async () => {
+    const { registerCodexCanvasRoots } = await import('../../../src/main/canvas/codex-canvas-roots')
+    const help = path.join(resources, 'help')
+    const config = path.join(resources, 'CONFIG')
+    fs.mkdirSync(help)
+    fs.mkdirSync(config)
+    h.infos.length = 0; h.warns.length = 0
+    registerCodexCanvasRoots(SID, help, null)
+    expect(h.warns).toEqual([])
+    const lines = h.infos.filter((l) => l.includes('canvas serving root NOT registered'))
+    expect(lines).toHaveLength(1)
+    expect(lines[0]).toContain('(inside-resources-dir)')
+    h.infos.length = 0; h.warns.length = 0
+    registerCodexCanvasRoots(SID, config, null)
+    expect(h.infos.filter((l) => l.includes('canvas serving root NOT registered'))).toEqual([])
+    expect(h.warns).toHaveLength(1)
+    expect(h.warns[0]).toContain('canvas serving root NOT registered for Codex session')
+    expect(h.warns[0]).toContain('(inside-resources-dir)')
+    expect(store.canvasRootRefusalFor(SID)).toContain("because it is inside the app's own resources directory")
   })
 })

@@ -48,6 +48,7 @@ import {
   type CanvasVersionVerdict,
 } from '../../shared/canvas'
 import { atomicWriteSecure, mkdirSecure } from '../account-profiles'
+import { helpWorkspaceDir } from '../help-workspace'
 import { deriveInstallKey } from '../install-secret'
 import { getResourcesDirectory } from '../ipc/setup-handlers'
 import { isHomeOrAncestor } from '../path-utils'
@@ -305,6 +306,32 @@ export function canvasRootCheck(
 /** Just the reason, for callers that only have to explain themselves. */
 export function canvasRootRefusalReason(sessionId: string, baseDir: string): CanvasRootRefusal | null {
   return canvasRootCheck(sessionId, baseDir).refusal
+}
+
+/**
+ * Whether `dir` is the app's own help folder, where Ask Conductor runs: the
+ * resources directory's help folder, by the one spelling help-workspace.ts
+ * gives it (2.1.3-beta.19 fix round, second pass). Its launches are refused
+ * as inside the resources directory by design, so their callers log that as a
+ * line; any other folder inside the resources directory still warns.
+ */
+export function isAppHelpFolder(dir: string): boolean {
+  if (typeof dir !== 'string' || dir.length === 0) return false
+  let configured: string
+  try {
+    configured = getResourcesDirectory()
+  } catch {
+    return false
+  }
+  if (typeof configured !== 'string' || configured.length === 0) return false
+  const real = (p: string): string => {
+    try {
+      return fs.realpathSync.native(path.resolve(p))
+    } catch {
+      return path.resolve(p) // not on disk; the lexical answer still holds
+    }
+  }
+  return sameFsPath(real(helpWorkspaceDir(configured)), real(dir))
 }
 
 /**

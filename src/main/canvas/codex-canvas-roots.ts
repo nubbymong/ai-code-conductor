@@ -14,7 +14,7 @@
 import { isHomeOrAncestor } from '../path-utils'
 import { designatedWorktreeDir } from './canvas-worktree'
 import {
-  registerCanvasUatRoot, designateCanvasWorktreeRoot, canvasRootRefusalReason, describeCanvasRootRefusal, setCanvasRootRefusal,
+  registerCanvasUatRoot, designateCanvasWorktreeRoot, canvasRootRefusalReason, describeCanvasRootRefusal, setCanvasRootRefusal, isAppHelpFolder,
 } from './canvas-store'
 import { logInfo, logWarn } from '../debug-logger'
 
@@ -38,8 +38,8 @@ export function registerCodexCanvasRoots(sessionId: string, configuredCwd: strin
   } else if (!registerCanvasUatRoot(sessionId, configuredCwd)) {
     const reason = canvasRootRefusalReason(sessionId, configuredCwd)
     const explanation = reason ? describeCanvasRootRefusal(reason, configuredCwd) : 'the canvas store refused it.'
-    // Inside the resources directory: the app's own help folder (Ask Conductor), refused by design: not a warning.
-    ;(reason === 'inside-resources-dir' ? logInfo : logWarn)(`[pty] canvas serving root NOT registered for Codex session ${sessionId} (${reason ?? 'unknown'}): ${explanation}`)
+    // The app's own help folder (Ask Conductor) is refused by design: a line of the log; any other folder inside the resources directory still warns.
+    ;(reason === 'inside-resources-dir' && isAppHelpFolder(configuredCwd) ? logInfo : logWarn)(`[pty] canvas serving root NOT registered for Codex session ${sessionId} (${reason ?? 'unknown'}): ${explanation}`)
     setCanvasRootRefusal(sessionId, explanation)
   }
   if (designatedWorktree) {
