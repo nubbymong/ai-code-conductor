@@ -8,8 +8,9 @@
 //! aicc-helper version
 //! aicc-helper hello --nonce <32 hex> --session <sid> [--state <state>] [--sha256 <64 hex>]
 //! aicc-helper selftest [--nonce <32 hex>]
-//! aicc-helper hold --store <folder> --session <sid> [--label <text>] [--away <seconds>] [--ring-bytes N] [--detach]
+//! aicc-helper hold --store <folder> --session <sid> [--label <text>] [--away <seconds> | --until-ended] [--ring-bytes N] [--detach]
 //! aicc-helper list --store <folder>
+//! aicc-helper field --file <path under home> --key <dotted key>     (macOS and Linux)
 //! aicc-helper hook [--store <folder>] [--session <sid>]      (each left out: AICC_HELPER_STORE, AICC_HELPER_SESSION)
 //! aicc-helper status [--store <folder>] [--session <sid>]    (the same)
 //! aicc-helper mcp --store <folder> --session <sid>
@@ -25,8 +26,13 @@
 //! holder as a process of its own, in the store folder, waits until it has
 //! written its record, prints that record as one JSON line and exits. `hold`
 //! exits 3 when a holder for the session is already running, with or without
-//! `--detach`. `list` prints every session in the store as one JSON line,
-//! removing the records of holders that are gone. `hook` passes one hook
+//! `--detach`. With `--until-ended` (from 2.1.3-beta.19; not with `--away`)
+//! the holder has no away clock: it ends with its program, at `term.end`, or
+//! with the machine, and its record says so (`"away":null`,
+//! `"lifetime":"until-ended"`, `store.rs`). `list` prints every session in
+//! the store as one JSON line, removing the records of holders that are
+//! gone. `field` prints one string from a JSON file in the user's home
+//! folder, or nothing, and exits 0 (`field.rs`). `hook` passes one hook
 //! event, read from standard input, to the session's holder; it always exits
 //! 0 and prints nothing (`hook.rs`). `status` passes one status line update,
 //! read from standard input, to the session's holder, the same way: it
@@ -45,8 +51,8 @@
 use aicc_helper::hello::{self, Hello, CAPS};
 use aicc_helper::ring::DEFAULT_RING_BYTES;
 use aicc_helper::serve::{self, Options};
-use aicc_helper::store::{self, DEFAULT_AWAY_SECS, MAX_AWAY_SECS};
-use aicc_helper::{client, detach, hook, relay, selftest, status, VERSION};
+use aicc_helper::store::{self, Lifetime, DEFAULT_AWAY_SECS, MAX_AWAY_SECS};
+use aicc_helper::{client, detach, field, hook, relay, selftest, status, VERSION};
 use std::ffi::OsString;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -54,7 +60,7 @@ use std::process::ExitCode;
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
-const USAGE: &str = "usage: aicc-helper <version | hello | selftest | hold | list | hook | status | mcp | bridge | start | end | console-hosts | end-console-host | capture> [options]";
+const USAGE: &str = "usage: aicc-helper <version | hello | selftest | hold | list | field | hook | status | mcp | bridge | start | end | console-hosts | end-console-host | capture> [options]";
 /// The ring is 1 KiB to 64 MiB; the protocol's default is 2 MiB.
 const MIN_RING_BYTES: usize = 1024;
 const MAX_RING_BYTES: usize = 64 * 1024 * 1024;
@@ -148,6 +154,12 @@ fn main() -> ExitCode {
     // never a panic.
     if raw.first().map_or(false, |c| c.as_os_str() == "bridge") {
         return cmd_bridge(&raw[1..]);
+    }
+    // The field mode too (one string from a JSON file in the user's home
+    // folder, field.rs): an argument that is not Unicode is a usage error
+    // (2), never a panic.
+    if raw.first().map_or(false, |c| c.as_os_str() == "field") {
+        return cmd_field(&raw[1..]);
     }
     let args: Vec<String> = std::env::args().skip(1).collect();
     let command = match args.first() {
@@ -266,7 +278,7 @@ fn end_children_with_selftest() {
 }
 
 fn cmd_hold(args: &[String]) -> ExitCode {
-    let a = match Args::parse(args, &["--store", "--session", "--label", "--away", "--ring-bytes"], &["--detach"]) {
+    let a = match Args::parse(args, &["--store", "--session", "--label", "--away", "--ring-bytes"], &["--detach", "--until-ended"]) {
         Ok(a) => a,
         Err(e) => return usage(&e),
     };
@@ -283,10 +295,17 @@ fn cmd_hold(args: &[String]) -> ExitCode {
     if !store::valid_label(&label) {
         return usage("--label is over 128 characters or holds a control character");
     }
-    let away = match a.number::<u64>("--away", DEFAULT_AWAY_SECS) {
-        Ok(v) if (1..=MAX_AWAY_SECS).contains(&v) => v,
-        Ok(_) => return usage("--away must be 1 to 86400 seconds"),
-        Err(e) => return usage(&e),
+    let lifetime = if a.flag("--until-ended") {
+        if a.get("--away").is_some() {
+            return usage("--until-ended and --away cannot be given together");
+        }
+        Lifetime::UntilEnded
+    } else {
+        match a.number::<u64>("--away", DEFAULT_AWAY_SECS) {
+            Ok(v) if (1..=MAX_AWAY_SECS).contains(&v) => Lifetime::Away(v),
+            Ok(_) => return usage("--away must be 1 to 86400 seconds"),
+            Err(e) => return usage(&e),
+        }
     };
     let ring_bytes = match a.number::<usize>("--ring-bytes", DEFAULT_RING_BYTES) {
         Ok(v) if (MIN_RING_BYTES..=MAX_RING_BYTES).contains(&v) => v,
@@ -295,14 +314,14 @@ fn cmd_hold(args: &[String]) -> ExitCode {
     };
 
     if a.flag("--detach") {
-        return detached(&store_dir, &sid, &label, away, ring_bytes);
+        return detached(&store_dir, &sid, &label, lifetime, ring_bytes);
     }
     // The holder runs for as long as its session, so it keeps nothing open
     // that was handed down to it. On Windows its starter hands it nothing
     // but its standard error (`detach.rs`).
     #[cfg(unix)]
     detach::close_inherited_descriptors();
-    let opts = Options { store: store_dir, sid, label, away: Duration::from_secs(away), ring_bytes };
+    let opts = Options { store: store_dir, sid, label, lifetime, ring_bytes };
     match serve::run(opts) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) if serve::already_running(&e) => {
@@ -315,7 +334,7 @@ fn cmd_hold(args: &[String]) -> ExitCode {
 
 /// Start the same holder as a process of its own and report it once its
 /// record is written.
-fn detached(store_dir: &Path, sid: &str, label: &str, away: u64, ring_bytes: usize) -> ExitCode {
+fn detached(store_dir: &Path, sid: &str, label: &str, lifetime: Lifetime, ring_bytes: usize) -> ExitCode {
     let exe = match std::env::current_exe() {
         Ok(p) => p,
         Err(e) => return fail(&format!("cannot find this program: {e}")),
@@ -330,7 +349,7 @@ fn detached(store_dir: &Path, sid: &str, label: &str, away: u64, ring_bytes: usi
     if let Err(e) = store::prepare(&store_dir) {
         return fail(&format!("the store {} cannot be used: {e}", store_dir.display()));
     }
-    let again: Vec<String> = vec![
+    let mut again: Vec<String> = vec![
         "hold".to_string(),
         "--store".to_string(),
         store_dir.to_string_lossy().into_owned(),
@@ -338,11 +357,16 @@ fn detached(store_dir: &Path, sid: &str, label: &str, away: u64, ring_bytes: usi
         sid.to_string(),
         "--label".to_string(),
         label.to_string(),
-        "--away".to_string(),
-        away.to_string(),
-        "--ring-bytes".to_string(),
-        ring_bytes.to_string(),
     ];
+    match lifetime {
+        Lifetime::Away(secs) => {
+            again.push("--away".to_string());
+            again.push(secs.to_string());
+        }
+        Lifetime::UntilEnded => again.push("--until-ended".to_string()),
+    }
+    again.push("--ring-bytes".to_string());
+    again.push(ring_bytes.to_string());
     // No other thread of this process starts a child while this runs, as
     // `spawn_detached` needs on Windows: the reader below starts after it.
     let started = match detach::spawn_detached(&exe, &again, &store_dir) {
@@ -482,6 +506,31 @@ fn cmd_bridge(raw: &[OsString]) -> ExitCode {
 #[cfg(windows)]
 fn cmd_bridge(_raw: &[OsString]) -> ExitCode {
     fail("bridge runs on macOS and Linux only")
+}
+
+/// The field mode (`field.rs`): the value and one line end on standard
+/// output, or nothing, and exit 0; exit 2 on a command line it does not
+/// take, an argument that is not Unicode included. It writes with writeln!,
+/// so a closed standard output is no panic.
+fn cmd_field(raw: &[OsString]) -> ExitCode {
+    let args: Vec<String> = match raw.iter().map(|a| a.to_str().map(str::to_string)).collect::<Option<Vec<String>>>() {
+        Some(args) => args,
+        None => return usage("field takes Unicode arguments only"),
+    };
+    let a = match Args::parse(&args, &["--file", "--key"], &[]) {
+        Ok(a) => a,
+        Err(e) => return usage(&e),
+    };
+    let (file, key) = match (a.get("--file"), a.get("--key")) {
+        (Some(file), Some(key)) => (file, key),
+        _ => return usage("field needs --file and --key"),
+    };
+    if let Some(value) = field::run(file, key) {
+        let mut out = std::io::stdout().lock();
+        let _ = writeln!(out, "{value}");
+        let _ = out.flush();
+    }
+    ExitCode::SUCCESS
 }
 
 fn cmd_list(args: &[String]) -> ExitCode {
