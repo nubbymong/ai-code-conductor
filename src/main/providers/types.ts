@@ -233,6 +233,17 @@ export interface RemoteHostRead {
   readonly path: string
 }
 
+/** 2.1.3-beta.19 section 3 (aicc_planning#434): one string field of a file
+ *  on the host, read through the session helper's field mode (`aicc-helper
+ *  field --file <path under home> --key <dotted key>`), never the file:
+ *  `file`, a path under the host user's home folder, plain names joined by
+ *  `/`, none of them `.` or `..`; `key`, the field's dotted path, plain names
+ *  joined by `.`. The helper answers the one string at that key or nothing. */
+export interface RemoteHostField {
+  readonly file: string
+  readonly key: string
+}
+
 /** A host read as it came back: its text, or null when it was not read (not
  *  there, not a regular file, or over the bound; and for a `cwd` or
  *  `checkout` read, a link, not the host user's own, or open to others). A
@@ -277,6 +288,13 @@ export interface ProviderRemoteLaunch {
   hostReads(options: RemoteLaunchOptions, machine: RemoteLaunchMachine): readonly RemoteHostRead[]
   /** The launch. `reads`: what hostReads named, in its order, as read. */
   launch(options: RemoteLaunchOptions, machine: RemoteLaunchMachine, helper: RemoteHelperCommands, reads: readonly RemoteHostFile[]): RemoteLaunch
+  /** 2.1.3-beta.19 section 3 (aicc_planning#434): the host file field that
+   *  names the account the tab's CLI is signed in as, which the tab's status
+   *  line and header show (an email address, or nothing). Core reads it with
+   *  the host reads at every start of the tab, launch or attach
+   *  (remote-helper/host-reads.ts readHostForStart). Absent or null: no
+   *  account is read for the tab. */
+  accountField?(options: RemoteLaunchOptions, machine: RemoteLaunchMachine): RemoteHostField | null
   /** The tab's status line from one status the CLI posted, already cut to
    *  the launch's `statusKeep` (2.1.3-beta.18 section 3.2). Untrusted input;
    *  a remote path in it is display text only, never a transcript path.

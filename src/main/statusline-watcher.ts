@@ -42,7 +42,9 @@ export type { StatuslineData } from '../shared/types'
 // The two status sinks live with the fan-out in the session signals module;
 // re-exported here for the code that sets them from this module.
 export { setTranscriptPathSink, setStatuslineUsageSink } from './session-signals/status'
-import type { StatuslineData } from '../shared/types'
+import { REMOTE_ACCOUNT_NOT_SHOWN, type RemoteAccountNotShown, type RemoteUsageNotShown, type StatuslineData } from '../shared/types'
+import type { AccountUsage } from '../shared/usage-types'
+import { EXTRA_USAGE_OFF, RemoteTabUsageReader, heldProfileFor } from './usage/remote-tab-usage'
 
 /** The boot heal of a legacy global statusLine stanza, kept here for its boot
  *  caller and done by the Claude package through the registry. Throws while
@@ -119,12 +121,167 @@ export function dispatchSSHStatuslineUpdate(json: string, fromSessionId?: string
  * (docs/remote/helper-protocol.md, payload allow-lists), whatever the mapping
  * gave. Then the shape filter every payload passes (sanitiseSentinelPayload)
  * and the same fan-out.
+ *
+ * 2.1.3-beta.19 section 3 (aicc_planning#434): nor does the host's frame give
+ * the account label, the extra usage or the not-shown reasons: the label is
+ * the tab's start's account read and the bars and extra usage are this
+ * computer's own reading of that account (setHelperAccount), joined to each
+ * frame here, each through its own gate. A frame of a tab whose account this
+ * computer holds also asks for that reading again once it is due.
  */
 export function dispatchHelperStatus(appPtyId: string, line: Readonly<Record<string, unknown>>): void {
   if (!sshDispatchWindow) return
-  const { transcriptPath: _path, usageBuckets: _buckets, ...shown } = line
+  const {
+    transcriptPath: _path, usageBuckets: _buckets, rateLimitExtra: _extra, accountEmail: _account,
+    remoteAccountNotShown: _accountWhy, remoteUsageNotShown: _usageWhy, ...shown
+  } = line
   const data = sanitiseSentinelPayload({ ...shown, sessionId: appPtyId })
-  if (data) deliverStatus(data, sshDispatchWindow)
+  if (!data) return
+  deliverStatus({ ...data, ...helperAccountFields(appPtyId) }, sshDispatchWindow)
+  refreshHelperUsageIfDue(appPtyId)
+}
+
+// ── 2.1.3-beta.19 section 3 (aicc_planning#434): a helper tab's account ──
+//
+// Every start of a tab through the session helper, launch or attach, reads
+// the one host field that names the account its CLI is signed in as
+// (remote-helper/host-reads.ts readHostForStart) and hands it here
+// (setHelperAccount, through ipc/remote-machines-handlers.ts). The label goes
+// through the display gate every account label passes
+// (sanitiseRemoteAccountEmail). The weekly bars and extra usage come from
+// this computer, never the host: for an account it holds (an account profile
+// with that email), this computer's own usage reading of it
+// (usage/remote-tab-usage.ts, the Account usage page's figure), through the
+// bucket and extra usage gates (sanitiseUsageBuckets, sanitiseRateLimitExtra);
+// for one it does not hold, the strip says "not available" with the reason.
+// Both are set again at each start, and ride every status frame of the tab.
+
+/** The account read a start of the tab gave (remote-helper/host-reads.ts HostAccountRead). */
+export type HelperAccountRead = { account: string } | { notShown: RemoteAccountNotShown }
+
+interface HelperAccount {
+  /** Which start set it: an older start's late usage reading is not taken. */
+  gen: number
+  email?: string
+  accountNotShown?: RemoteAccountNotShown
+  /** The account profile on this computer with that email, when it holds one. */
+  profileId?: string
+  /** Why no bars are shown, when this computer holds no such account. */
+  usageNotShown?: RemoteUsageNotShown
+}
+
+const helperAccounts = new Map<string, HelperAccount>()
+let helperAccountGen = 0
+
+/** What a helper tab's usage needs of the app: its account list and the usage read. */
+export interface HelperUsageDeps {
+  profiles(): Promise<ReadonlyArray<{ id: string; accountEmail?: string }>>
+  usage(profileId: string): Promise<AccountUsage>
+}
+
+/** The app's own, loaded when first asked: the account graph stays out of this module's load. */
+const appUsageDeps: HelperUsageDeps = {
+  profiles: async () => (await import('./account-profiles')).listProfiles(),
+  usage: async (profileId) => (await import('./usage/account-usage')).fetchAccountUsage(profileId),
+}
+let helperUsageDeps: HelperUsageDeps = appUsageDeps
+let helperUsage = new RemoteTabUsageReader({ usage: (id) => helperUsageDeps.usage(id) })
+
+/** Test seam: the account list and usage read, the clock, and a fresh reader and tab map. */
+export function _setHelperUsageDepsForTest(d: HelperUsageDeps | null, opts: { now?: () => number; maxAgeMs?: number } = {}): void {
+  helperUsageDeps = d ?? appUsageDeps
+  helperUsage = new RemoteTabUsageReader({ usage: (id) => helperUsageDeps.usage(id), ...opts })
+  helperAccounts.clear()
+}
+
+/** The account fields a helper tab's strip and header show, each already through its gate. */
+function helperAccountFields(appPtyId: string): Partial<StatuslineData> {
+  const st = helperAccounts.get(appPtyId)
+  if (!st) return {}
+  const out: Partial<StatuslineData> = {}
+  if (st.email) out.accountEmail = st.email
+  else if (st.accountNotShown) out.remoteAccountNotShown = st.accountNotShown
+  let why: RemoteUsageNotShown | undefined = st.usageNotShown
+  if (st.profileId) {
+    const view = helperUsage.newest(st.profileId)
+    if (view?.shown) {
+      const buckets = sanitiseUsageBuckets(view.buckets)
+      const extra = sanitiseRateLimitExtra(view.extra)
+      if (buckets && buckets.length > 0) out.usageBuckets = buckets as StatuslineData['usageBuckets']
+      else why = 'no-reading'
+      if (extra) out.rateLimitExtra = extra
+    } else if (view) {
+      why = view.why
+    }
+    // No reading yet: nothing, so no empty or zero bar shows while it comes.
+  }
+  if (why) {
+    out.remoteUsageNotShown = why
+    // An earlier start's bars and extra usage (another account) are cleared.
+    out.usageBuckets = []
+    out.rateLimitExtra = { ...EXTRA_USAGE_OFF }
+  }
+  return out
+}
+
+/** The tab's account fields alone, at once (before its first status frame). */
+function deliverHelperAccount(appPtyId: string): void {
+  if (!sshDispatchWindow || !helperAccounts.has(appPtyId)) return
+  deliverStatus({ sessionId: appPtyId, ...helperAccountFields(appPtyId) }, sshDispatchWindow)
+}
+
+/** One usage reading of a held account's tab; delivered when it lands, if that start still stands. */
+async function readHelperUsage(appPtyId: string, gen: number): Promise<void> {
+  const st = helperAccounts.get(appPtyId)
+  if (!st?.profileId || st.gen !== gen) return
+  await helperUsage.read(st.profileId)
+  if (helperAccounts.get(appPtyId)?.gen !== gen) return
+  deliverHelperAccount(appPtyId)
+}
+
+function refreshHelperUsageIfDue(appPtyId: string): void {
+  const st = helperAccounts.get(appPtyId)
+  if (!st?.profileId || !helperUsage.due(st.profileId)) return
+  void readHelperUsage(appPtyId, st.gen).catch(() => { /* a reading that fails shows not available */ })
+}
+
+/**
+ * The account one start of a tab through the session helper read on its
+ * host, launch or attach (remote-helper/signals.ts RemoteSignals.account):
+ * sets the tab's label and the source of its weekly bars and extra usage
+ * again, delivers the label at once, and reads the usage of an account this
+ * computer holds.
+ */
+export function setHelperAccount(appPtyId: string, read: HelperAccountRead): void {
+  const gen = ++helperAccountGen
+  const email = read && 'account' in read ? sanitiseRemoteAccountEmail(read.account) : undefined
+  const st: HelperAccount = { gen }
+  if (email) st.email = email
+  else st.accountNotShown = read && 'notShown' in read && REMOTE_ACCOUNT_NOT_SHOWN.includes(read.notShown) ? read.notShown : 'no-account'
+  // No account named: this computer cannot hold it; the tab's machine uses its own sign-in.
+  if (!email) st.usageNotShown = 'own-sign-in'
+  helperAccounts.set(appPtyId, st)
+  deliverHelperAccount(appPtyId)
+  if (!email) return
+  void (async () => {
+    let profiles: ReadonlyArray<{ id: string; accountEmail?: string }> = []
+    try { profiles = await helperUsageDeps.profiles() } catch { profiles = [] }
+    const now = helperAccounts.get(appPtyId)
+    if (!now || now.gen !== gen) return
+    const id = heldProfileFor(email, profiles)
+    if (!id) {
+      now.usageNotShown = 'own-sign-in'
+      deliverHelperAccount(appPtyId)
+      return
+    }
+    now.profileId = id
+    await readHelperUsage(appPtyId, gen)
+  })().catch(() => { /* a reading that fails shows not available */ })
+}
+
+/** The tab's run is over (its holder ended): its account and usage source go. */
+export function endHelperAccount(appPtyId: string): void {
+  helperAccounts.delete(appPtyId)
 }
 
 /**
@@ -194,6 +351,9 @@ function sanitiseSentinelPayload(v: unknown): StatuslineData | null {
   const out: Record<string, unknown> = { sessionId }
   for (const [key, val] of Object.entries(src)) {
     if (key === 'sessionId') continue
+    // A helper tab's not-shown reasons are main's own (setHelperAccount),
+    // never a payload's: whatever a host or a file says of them is dropped.
+    if (key === 'remoteAccountNotShown' || key === 'remoteUsageNotShown') continue
     // The remote account label. The OSC/setup-sentinel path has always run this
     // through a strict display validator (parseSetupAccountSentinel,
     // pty-manager.ts); this path copied it verbatim -- any length, any codepoint

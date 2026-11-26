@@ -166,3 +166,49 @@ describe('useStatuslineSubscription -- fast mode', () => {
     expect(useSessionStore.getState().sessions[0].fastMode).toBe(true)
   })
 })
+
+// 2.1.3-beta.19 section 3 (aicc_planning#434): a tab through the session
+// helper. Main says why it names no account, or shows no per-model bars; the
+// store keeps exactly one of the label and the reason, each start setting it
+// again, and bars that arrive clear the usage reason.
+describe('useStatuslineSubscription -- a helper tab\'s account and usage reasons', () => {
+  const helperTab = () => useSessionStore.setState({
+    sessions: [{ id: 's1', label: 'a', workingDirectory: '/', model: 'opus', color: '#fff', status: 'idle', createdAt: 0, sessionType: 'ssh' } as any],
+    activeSessionId: 's1',
+  })
+  const s1 = () => useSessionStore.getState().sessions[0]
+  const fable = { key: 'weekly:Fable', label: 'Fable', group: 'weekly', percent: 63, resetsAt: '', severity: 'normal' }
+
+  it('a start that named no account: the reason, and an earlier start\'s label goes', () => {
+    helperTab()
+    renderHook(() => useStatuslineSubscription('s1'))
+    act(() => { cb!({ sessionId: 's1', accountEmail: 'me@example.com' }) })
+    expect(s1().accountEmail).toBe('me@example.com')
+    act(() => { cb!({ sessionId: 's1', remoteAccountNotShown: 'no-account' }) })
+    expect(s1().remoteAccountNotShown).toBe('no-account')
+    expect(s1().accountEmail).toBeUndefined()
+    // The next start named one: the label, and the reason goes.
+    act(() => { cb!({ sessionId: 's1', accountEmail: 'other@example.com' }) })
+    expect(s1().accountEmail).toBe('other@example.com')
+    expect(s1().remoteAccountNotShown).toBeUndefined()
+  })
+
+  it('the usage reason is kept until bars arrive, and a tick without either leaves it', () => {
+    helperTab()
+    renderHook(() => useStatuslineSubscription('s1'))
+    act(() => { cb!({ sessionId: 's1', remoteUsageNotShown: 'own-sign-in', usageBuckets: [] }) })
+    expect(s1().remoteUsageNotShown).toBe('own-sign-in')
+    expect(s1().usageBuckets).toEqual([])
+    act(() => { cb!({ sessionId: 's1', rateLimitCurrent: 30 }) })
+    expect(s1().remoteUsageNotShown).toBe('own-sign-in')
+    act(() => { cb!({ sessionId: 's1', usageBuckets: [fable] }) })
+    expect(s1().remoteUsageNotShown).toBeUndefined()
+    expect(s1().usageBuckets).toEqual([fable])
+  })
+
+  it('a local session takes no account reason', () => {
+    renderHook(() => useStatuslineSubscription('s1'))
+    act(() => { cb!({ sessionId: 's1', remoteAccountNotShown: 'not-read' }) })
+    expect(s1().remoteAccountNotShown).toBeUndefined()
+  })
+})

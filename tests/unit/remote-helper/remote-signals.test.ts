@@ -71,14 +71,16 @@ function signals(tools = true) {
   const events: Array<[string, HookEventFrame]> = []
   const served: Array<{ id: string; provider: string; link: HelperToolLink }> = []
   const ended: string[] = []
+  const accounts: Array<[string, unknown]> = []
   const deps: RemoteSignalDeps = {
     toolsServed: () => tools,
     status: (id, line) => { status.push([id, line]) },
     event: (id, e) => { events.push([id, e]) },
     serve: (id, p, link) => { served.push({ id, provider: p, link }); return true },
     ended: (id) => { ended.push(id) },
+    account: (id, read) => { accounts.push([id, read]) },
   }
-  return { deps, status, events, served, ended }
+  return { deps, status, events, served, ended, accounts }
 }
 
 function plugIn(deps: RemoteSignalDeps | undefined): void {
@@ -108,6 +110,8 @@ function answering(holder: FakeHolder, o: { reads?: Record<string, string>; file
     answer: (c) => {
       const n = c.values[0]
       if (c.script === 'reads') return { stdout: `rc file text\n${result(n, o.reads ?? {})}` }
+      // The helper's field mode (2.1.3-beta.19 section 3): the account the host's Claude Code is signed in as.
+      if (c.script === 'field') return { stdout: `AICC-HASH ${n} ok ${SHA}\nnick@example.com\n` }
       if (c.script === 'hold') return { stdout: `AICC-HASH ${n} ok ${SHA}\n${JSON.stringify(linuxRecord(holder))}\n` }
       if (c.script === 'files') return o.files ? o.files(c) : { stdout: result(n, {}) }
       if (c.script === 'unsession') { o.unsession?.(c); return { stdout: result(n, {}) } }
@@ -177,13 +181,13 @@ describe('a helper tab\'s own files on its host', () => {
     const pty = remoteHelperPty(win, id, { ssh: SSH_TAB }, 100, 30)
     expect(pty).not.toBeNull()
     await until('the launch', () => holder.launch !== null && holder.attached !== null)
-    expect(ssh.scripts()).toEqual(['reads', 'hold', 'files', 'bridge'])
+    expect(ssh.scripts()).toEqual(['reads', 'field', 'hold', 'files', 'bridge'])
     // The reads: the session folder, then the four settings files Claude Code reads, as data on standard input.
     expect(ssh.calls[0].values.slice(1)).toEqual([MACHINE.did, INSTALL])
     expect(ssh.calls[0].stdin.toString()).toBe('/home/nick/work\nhome .claude/settings.json\ncwd .claude/settings.json\ncwd .claude/settings.local.json\ncheckout .claude/settings.local.json\n')
     // The files: the session's id and the layout on the command line, the bytes on standard input.
     const sid = remoteSessionId(id)
-    const files = ssh.calls[2]
+    const files = ssh.calls.find((c) => c.script === 'files')!
     expect(files.values.slice(1, 4)).toEqual([MACHINE.did, INSTALL, sid])
     const written = filesOf(files)
     expect([...written.keys()]).toEqual(['settings.json', 'mcp.json'])
@@ -205,6 +209,10 @@ describe('a helper tab\'s own files on its host', () => {
     expect(h.folder).toBe(`/home/nick/.aicc/${MACHINE.did}/sessions/${sid}`)
     // Its connection asks for the status line, hook events and tool streams.
     expect(holder.attached!.ackedCaps).toEqual(expect.arrayContaining(['core', 'local', 'hooks', 'mcp', 'status']))
+    // 2.1.3-beta.19 section 3: the account its host's Claude Code is signed in
+    // as, read beside the settings files, reached the app once, for this tab.
+    expect(ssh.calls[1].values.slice(5)).toEqual(['.claude.json', 'oauthAccount.emailAddress'])
+    expect(s.accounts).toEqual([[id, { account: 'nick@example.com' }]])
     pty!.kill()
     await until('the holder to end', () => holder.ended)
   })
@@ -229,7 +237,7 @@ describe('a helper tab\'s own files on its host', () => {
     })
     const pty = remoteHelperPty(win, id, { ssh: SSH_TAB }, 100, 30)
     await until('the launch', () => holder.launch !== null)
-    const settings = JSON.parse(filesOf(ssh.calls[2]).get('settings.json')!)
+    const settings = JSON.parse(filesOf(ssh.calls.find((c) => c.script === 'files')!).get('settings.json')!)
     const own = settings.hooks.Stop[1]
     expect(own.hooks[0].command).toContain(' hook --store ')
     expect(settings.hooks.PreToolUse).toEqual([user, project, local, root, own])
@@ -250,7 +258,7 @@ describe('a helper tab\'s own files on its host', () => {
     answering(holder, { reads: { f0: 'skip size', f1: 'skip link', f2: 'skip owner', f3: 'ok zz' } })
     const pty = remoteHelperPty(win, id, { ssh: SSH_TAB }, 100, 30)
     await until('the launch', () => holder.launch !== null)
-    const settings = JSON.parse(filesOf(ssh.calls[2]).get('settings.json')!)
+    const settings = JSON.parse(filesOf(ssh.calls.find((c) => c.script === 'files')!).get('settings.json')!)
     for (const kind of NINE) expect(settings.hooks[kind]).toHaveLength(1)
     const sid = remoteSessionId(id)
     expect(logs.filter((l) => l.includes('was not read'))).toEqual([
@@ -270,7 +278,7 @@ describe('a helper tab\'s own files on its host', () => {
     answering(holder)
     const pty = remoteHelperPty(win, id, { ssh: SSH_TAB }, 100, 30)
     await until('the launch', () => holder.launch !== null && holder.attached !== null)
-    expect([...filesOf(ssh.calls[2]).keys()]).toEqual(['settings.json'])
+    expect([...filesOf(ssh.calls.find((c) => c.script === 'files')!).keys()]).toEqual(['settings.json'])
     expect((holder.launch as { argv: string[] }).argv).not.toContain('--mcp-config')
     expect(holder.attached!.ackedCaps).not.toContain('mcp')
     expect(holder.attached!.ackedCaps).toEqual(expect.arrayContaining(['hooks', 'status']))
@@ -526,7 +534,7 @@ describe('the status line, hook events and tool streams of a helper tab', () => 
     const pty = remoteHelperPty(win, id, { ssh: SSH_TAB }, 100, 30)
     await until('attached', () => holder.attached !== null)
     expect(holder.attached!.ackedCaps).toEqual(['core', 'local'])
-    expect(ssh.scripts()).toEqual(['reads', 'hold', 'files', 'bridge'])
+    expect(ssh.scripts()).toEqual(['reads', 'field', 'hold', 'files', 'bridge'])
     pty!.kill()
     await until('the holder to end', () => holder.ended)
   })

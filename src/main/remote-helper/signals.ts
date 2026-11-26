@@ -18,6 +18,11 @@
  * - Tool calls: the CLI's `conductor` tool server is the helper's relay; each
  *   stream it opens comes as `mcp.open` on the tab's connection (it acked
  *   `mcp`) and is served by the tool host for the tab, with no credential.
+ * - The account (2.1.3-beta.19 section 3, aicc_planning#434): every start of
+ *   the tab, launch or attach, reads the one host field that names the
+ *   account its CLI is signed in as (./host-reads.ts readHostForStart), and
+ *   the answer goes to the app's side for the tab's id: its label, and the
+ *   source of its weekly bars and extra usage, set again at each start.
  *
  * A dropped link attaches again: the holder sends the newest status once on
  * the new connection's ack and the events it queued meanwhile, and gives the
@@ -34,6 +39,7 @@
  */
 import type { HolderConnection } from '../session-helper/connection'
 import type { HookEventFrame } from '../session-helper/protocol'
+import type { HostAccountRead } from './host-reads'
 import { wireToolStreams, type HelperToolLink } from '../session-helper/tool-links'
 import type { ProviderId } from '../../shared/providers/ids'
 import type { ProviderRemoteLaunch, RemoteLaunch, RemoteStatusLine } from '../providers/types'
@@ -53,6 +59,12 @@ export interface RemoteSignalDeps {
    *  (conductor-mcp-server.ts recordHeldToolSession, then serveToolStream).
    *  False when it was refused: the link is closed then. */
   serve(appPtyId: string, provider: ProviderId, link: HelperToolLink): boolean
+  /** 2.1.3-beta.19 section 3 (aicc_planning#434): the account one start of
+   *  the tab read on its host, launch or attach (statusline-watcher.ts
+   *  setHelperAccount: the label through the display gate, and the source of
+   *  the weekly bars and extra usage, this computer's own usage read of that
+   *  account). Absent: the tab names no account. */
+  account?(appPtyId: string, read: HostAccountRead): void
   /** The tab's session is over and its holder ended: its hook state goes
    *  (session-signals/hooks.ts endHelperHooks: its feed ring, and its overflow
    *  and lost-event marks). Once per run, before a Restart's run starts. */
@@ -94,6 +106,15 @@ export class RemoteSignals {
       hooks: this.launch.hookKeep.length > 0,
       mcp: this.o.tools,
       status: this.launch.statusKeep.length > 0 && typeof this.o.via.statusLine === 'function',
+    }
+  }
+
+  /** The account a start of the tab read on its host (./host-reads.ts), for the app's side. */
+  account(read: HostAccountRead): void {
+    try {
+      this.o.deps.account?.(this.o.appPtyId, read)
+    } catch (err) {
+      this.o.log(`[remote-helper] ${this.o.appPtyId}: the account read did not reach the tab (${(err as Error).message})`)
     }
   }
 
