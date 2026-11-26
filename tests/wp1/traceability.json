@@ -583,7 +583,7 @@
       "evidenceRecords": [
         {
           "artifact": "docs/wp1/evidence/ci-matrix.md",
-          "sha256": "10efd24d348b7bf4b76dbdafe2342a23ad09be0120ba17982195a359fc985b73",
+          "sha256": "ec0417b0f6bf680f145805135f70b6b0984ab3392834c1f7e9675705d3e6cb48",
           "head": "d1525759a7a42d941beeff601af3415fddd8afdd",
           "actor": "the CI evidence agent (Claude Code), GitHub API reads",
           "at": "2026-10-13T14:49:34Z",

@@ -569,6 +569,14 @@ run screen of the session's own provider (SessionRunScreen's retry, prompt, mark
 members); Claude Code's typing rules moved into the Claude Code package unchanged; a provider
 with no member for a door takes nothing there; codexRunScreen is gone.
 
+2.1.3-beta.19 section 6.2 (aicc_planning#440; component rows 3 and 14): a held terminal's lone
+Enter typed while it was detached waits behind the frame before it at the attach again only
+when the run's provider's run screen declares that wait (SessionRunScreen.heldEnterWaitMs;
+Claude Code's and Codex's declare 300 ms, PROMPT_ENTER_DELAY_MS). HelperPty is told the
+provider whose CLI it runs (the manager's agent sessions and take-overs, a remote tab from its
+launch plan) and asks the registry; a plain terminal and a provider that declares none send
+what was queued at once.
+
 P7 result (2026-11-15, Windows test machine, the skeleton holder from #685 and a silent
 install of 2.1.3-beta.4): yes. A detached holder is not in a job object, and it and its
 console child survive the app process tree being ended and the installer running; a

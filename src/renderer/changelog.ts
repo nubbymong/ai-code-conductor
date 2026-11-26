@@ -57,6 +57,7 @@ export const changelog: ChangelogEntry[] = [
       { type: 'fix', description: 'Codex up to version 0.172.0 now counts as tested. With such a Codex, the Set up Codex page, the Providers card and Sentinel no longer say it is newer than the versions this app was tested with, and a closed Codex account\'s usage card fetches a fresh reading instead of showing its last one. Before, Codex 0.172.0 got that notice.' },
       { type: 'fix', description: 'With remote sessions through the session helper on (a preview, off by default), a canvas decision line typed into a Claude Code tab on a Linux machine is now sent whatever its length. Before, a line of 63 characters or more would have been left typed at the prompt (an approval line is 59 to 61 characters today).' },
       { type: 'fix', description: 'With both helper switches off, a start now also removes the empty kept folder and the store folder (holding nothing, or only its lock) that an earlier run with the helper on left in the helper\'s folder, then that folder if it is then empty.' },
+      { type: 'fix', description: 'Plain terminals through the session helper again send an Enter you typed during a reconnect straight away; Claude Code and Codex sessions keep the short wait they need.' },
     ],
   },
   {
