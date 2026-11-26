@@ -10,8 +10,10 @@ import { SSH_THROUGH_HELPER } from '../../shared/remote-machines'
  * while not asked (`enabled` false), unknown, or with no such bridge.
  *
  * 2.1.3-beta.18 release smoke: the session header reads it, because such a tab
- * never reports its account yet, so its loading pills never had anything to
- * wait for.
+ * then reported no account, so its loading pills never had anything to wait
+ * for. 2.1.3-beta.19 section 3 (aicc_planning#434): such a tab names the
+ * account its start read on its machine, or main says why there is none, and
+ * the header reads this to say so.
  */
 export function useThroughHelper(sessionId: string, enabled: boolean): boolean {
   // Keyed by the session it was read for, so a header that moves to another

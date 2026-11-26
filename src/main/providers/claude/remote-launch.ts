@@ -24,7 +24,7 @@
 // plain Node too (tests/live/remote-helper-device.live.ts).
 import { concatHookMaps, helperHooksBlockFor, helperStatusCommand } from '../../hooks/helper-hook-commands'
 import { HELPER_HOOK_KINDS } from '../../session-helper/protocol'
-import type { ProviderRemoteLaunch, RemoteHelperCommands, RemoteHostFile, RemoteHostRead, RemoteLaunch, RemoteLaunchMachine, RemoteLaunchOptions, RemoteStatusLine } from '../types'
+import type { ProviderRemoteLaunch, RemoteAccountUsage, RemoteHelperCommands, RemoteHostField, RemoteHostFile, RemoteHostRead, RemoteLaunch, RemoteLaunchMachine, RemoteLaunchOptions, RemoteStatusLine } from '../types'
 
 /** Where the CLI is started when the machine's check found none. */
 const REMOTE_CLI_FALLBACK = '/usr/local/bin/claude'
@@ -76,6 +76,25 @@ export const CLAUDE_HOST_READS: readonly RemoteHostRead[] = [
   { from: 'cwd', path: '.claude/settings.local.json' },
   { from: 'checkout', path: '.claude/settings.local.json' },
 ]
+
+/** 2.1.3-beta.19 section 3 (aicc_planning#434): the account the host's
+ *  Claude Code is signed in as, for the tab's status line and header: the
+ *  one field the usual SSH status line reads on the host
+ *  (statusline-gather.ts SHIM_GATHER_JS: `oauthAccount.emailAddress` of
+ *  `~/.claude.json`), read through the session helper's field mode, never
+ *  the file. Core reads it at every start of the tab, launch or attach. */
+export const CLAUDE_ACCOUNT_FIELD: RemoteHostField = { file: '.claude.json', key: 'oauthAccount.emailAddress' }
+
+/** 2.1.3-beta.19 section 3: the weekly bars and extra usage of a tab whose
+ *  account field named an account this computer holds: its Claude Code
+ *  account profiles (account-profiles.ts listProfiles) and the Account usage
+ *  page's read of one (usage/account-usage.ts fetchAccountUsage). Both load
+ *  when first asked, so this file still loads in plain Node. One object for
+ *  every start, so one reading serves every tab on an account. */
+const CLAUDE_ACCOUNT_USAGE: RemoteAccountUsage = Object.freeze({
+  profiles: async () => (await import('../../account-profiles')).listProfiles(),
+  usage: async (profileId: string) => (await import('../../usage/account-usage')).fetchAccountUsage(profileId),
+})
 
 /** One settings file's text as an object; null for a file not read, not
  *  JSON, or of another shape. Data only: nothing in it is run here. */
@@ -179,11 +198,13 @@ const resetsAt = (v: unknown): string => (typeof v === 'number' && Number.isFini
  * The tab's status line from one status, already cut to CLAUDE_STATUS_KEEP:
  * the fields the usual SSH status line shim builds (providers/claude/
  * ssh-shim.ts), with the model's id beside its name as the local bridge
- * gives it. No transcript path and no usage buckets: a remote path is display
- * text, never the transcript binder's, and the account label, the per-model
- * weekly buckets and extra usage are not fetched for such a tab (the helper
- * reads no credential and calls no network). Null when the status holds
- * nothing to show.
+ * gives it. No transcript path, no account label, no usage buckets and no
+ * extra usage: a remote path is display text, never the transcript binder's;
+ * the label comes from the account field read at the tab's start
+ * (CLAUDE_ACCOUNT_FIELD), and the per-model weekly buckets and extra usage
+ * from this computer's own usage read of that account, never from the host
+ * (2.1.3-beta.19 section 3, aicc_planning#434: statusline-watcher.ts
+ * setHelperAccount). Null when the status holds nothing to show.
  */
 export function claudeRemoteStatusLine(payload: Readonly<Record<string, unknown>>): RemoteStatusLine | null {
   const m = obj(payload.model)
@@ -227,6 +248,8 @@ function sessionFileArgs(helper: RemoteHelperCommands, tools: boolean): string[]
 
 export const claudeRemoteLaunch: ProviderRemoteLaunch = {
   hostReads: () => CLAUDE_HOST_READS,
+  accountField: () => CLAUDE_ACCOUNT_FIELD,
+  accountUsage: () => CLAUDE_ACCOUNT_USAGE,
   launch: (o: RemoteLaunchOptions, m: RemoteLaunchMachine, helper: RemoteHelperCommands, reads: readonly RemoteHostFile[]): RemoteLaunch => ({
     program: m.claudePath ?? REMOTE_CLI_FALLBACK,
     args: [...sessionFileArgs(helper, o.tools), ...claudeRemoteArgs(o)],

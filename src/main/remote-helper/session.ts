@@ -19,7 +19,11 @@
  *
  * Its own files (2.1.3-beta.18 section 3.2): before the hold, one exec reads
  * the host files the provider names (its hostReads: for Claude Code, the
- * settings files whose hooks the session keeps), as data; after the hold and
+ * settings files whose hooks the session keeps), as data, and beside it
+ * (2.1.3-beta.19 section 3) one exec of the helper's field mode reads the
+ * field that names the account the CLI is signed in as (its accountField),
+ * for the tab's status line and header: ./host-reads.ts readHostForStart,
+ * which every start of the tab runs, launch or attach; after the hold and
  * before the launch, one exec writes the files the provider's launch gives
  * into the session's own folder there (`~/.aicc/<did>/sessions/<sid>/`,
  * 0700), contents on standard input. They name the helper's path, its store
@@ -75,11 +79,12 @@ import { HelperPty, LOST_EXIT_CODE, NothingStartedError, type HelperPtyDriver } 
 import { checkLaunch, type HolderRecord, type LaunchSpec } from '../session-helper/protocol'
 import { stripSpoofableText } from '../../shared/safe-text'
 import type { ProviderId } from '../../shared/providers/ids'
-import type { ProviderRemoteLaunch, RemoteHelperCommands, RemoteHostFile, RemoteHostRead, RemoteLaunch, RemoteLaunchOptions } from '../providers/types'
-import { HOST_READ_MAX, holderLabel, type HolderKind } from './scripts'
+import type { ProviderRemoteLaunch, RemoteHelperCommands, RemoteHostRead, RemoteLaunch, RemoteLaunchOptions } from '../providers/types'
+import { holderLabel, type HolderKind } from './scripts'
 import { readHolderListing, readHolderRecord, type KeptRecord } from './kept'
-import { EXEC_STDOUT_MAX, afterHashLine, exitText, localSshEnd, newNonce, notStartedLogLine, openScriptStream, readHashLine, readScriptResult, runScript, sshFailure, type SshRunner, type SshTarget } from './ssh-exec'
-import { hostReadsInput, hostReadsOf, sessionFilesInput } from './session-files'
+import { afterHashLine, exitText, localSshEnd, newNonce, notStartedLogLine, openScriptStream, readHashLine, readScriptResult, runScript, sshFailure, type SshRunner, type SshTarget } from './ssh-exec'
+import { sessionFilesInput } from './session-files'
+import { readHostForStart } from './host-reads'
 import { RemoteSignals, type RemoteSignalDeps } from './signals'
 import { refusalText, type RemoteMachineRecord } from './machines'
 
@@ -139,10 +144,6 @@ export interface RemoteLaunchPlan {
   readonly first: RemoteLaunch
   readonly spec: LaunchSpec
 }
-
-/** The most standard output a host read's exec keeps: every file at its
- *  bound as hex, and room for its lines. */
-const hostReadsStdoutMax = (reads: number): number => Math.max(EXEC_STDOUT_MAX, reads * HOST_READ_MAX * 2 + 64 * 1024)
 
 /**
  * What the CLI is started with on the host: the provider's program,
@@ -362,33 +363,19 @@ export class RemoteDriver implements HelperPtyDriver {
   }
 
   /**
-   * The launch asked with what the `reads` exec read on the host (each read
-   * null when the provider names none, or the exec did not take it: one log
-   * line each). Throws, saying why, when the host could not be reached, the
-   * exec refused, or the launch's program, arguments or variables are not the
-   * ones its spec was built from.
+   * The launch asked with what this start read on the host (readHostForStart:
+   * the host files, each null when the provider names none or the exec did
+   * not take it, one log line each; and the account field, which goes to the
+   * tab's status line and header). Throws, saying why, when the host could
+   * not be reached, the exec refused, or the launch's program, arguments or
+   * variables are not the ones its spec was built from.
    */
   private async launchWithReads(plan: RemoteLaunchPlan, sid: string): Promise<RemoteLaunch> {
-    const host = this.o.machine.host
-    let files: RemoteHostFile[] = plan.reads.map((r) => ({ from: r.from, path: r.path, content: null }))
-    if (plan.reads.length > 0) {
-      let stdin: Buffer
-      try {
-        stdin = hostReadsInput(plan.options.cwd, plan.reads)
-      } catch (err) {
-        this.failWith(`the session's settings files on ${host} cannot be read: ${(err as Error).message}`)
-      }
-      const nonce = newNonce()
-      const r = await runScript(this.o.runner, this.target, 'reads', [nonce, this.o.machine.did, this.o.installId], { stdin, stdoutMax: hostReadsStdoutMax(plan.reads.length) })
-      if (r.notStarted) this.o.log(notStartedLogLine(host, r.stderr))
-      const failed = sshFailure(r)
-      if (failed) this.failWith(`${host} could not be reached: ${failed}`)
-      const result = readScriptResult(r.stdout, nonce)
-      if (!result) this.failWith(`${host} did not answer the session helper's read of the session's settings files`)
-      if (!result.ok) this.failWith(`the session's settings files on ${host} were not read: ${refusalText(result.refused)}; press Check on the Machines page`)
-      const answer = hostReadsOf(result, plan.reads)
-      for (const s of answer.skipped) this.o.log(`[remote-helper] ${sid}: ${s.read.from} ${s.read.path} on ${host} was not read (${s.why}), so nothing it sets is in the session's settings`)
-      files = answer.files
+    let files: Awaited<ReturnType<typeof readHostForStart>>['files']
+    try {
+      files = (await readHostForStart({ runner: this.o.runner, machine: this.o.machine, installId: this.o.installId, log: this.o.log, ...(this.signals ? { signals: this.signals } : {}) }, plan, sid)).files
+    } catch (err) {
+      this.failWith((err as Error).message)
     }
     let launch: RemoteLaunch
     try {

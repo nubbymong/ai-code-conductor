@@ -116,6 +116,10 @@ export function useRestartSession(
         // it. Clear them like the rateLimit* siblings.
         usageBuckets: undefined,
         usageUnavailable: undefined,
+        // 2.1.3-beta.19 section 3: a helper tab's not-shown reasons are its
+        // run's; the next start reads its account again.
+        remoteAccountNotShown: undefined,
+        remoteUsageNotShown: undefined,
         // #266 MAJOR-4: the watchdog badge (waiting/gave-up) belongs to the
         // PREVIOUS run's watcher, which the restart tears down; main pushes a
         // fresh 'monitoring' state when the new run arms one.

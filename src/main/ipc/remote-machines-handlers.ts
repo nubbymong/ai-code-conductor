@@ -20,7 +20,7 @@ import { instanceRecordPath } from '../session-helper/install'
 import { getConductorMcpPort, recordHeldToolSession, serveToolStream } from '../conductor-mcp-server'
 import { conductorToolsMasterOn } from '../conductor-tools-switch'
 import { endHelperHooks, helperHookEvent } from '../session-signals/hooks'
-import { dispatchHelperStatus } from '../statusline-watcher'
+import { dispatchHelperStatus, endHelperAccount, setHelperAccount } from '../statusline-watcher'
 import { setRemoteHelperDeps, remoteTabsOn, listRemoteSessions, endRemoteSession, endRemoteTab, type RemoteSignalDeps } from '../remote-helper'
 import { peekSessionState, readDetachedRemotesRegistry } from '../session-state'
 import { RemoteMachines, fileStore } from '../remote-helper/machines'
@@ -59,9 +59,15 @@ const remoteSignals: RemoteSignalDeps = {
     recordHeldToolSession(appPtyId, provider)
     return serveToolStream(appPtyId, link)
   },
+  // 2.1.3-beta.19 section 3 (aicc_planning#434): the account each start read
+  // on the host: the tab's label, and its weekly bars and extra usage from
+  // this computer's own reading of that account, through the provider
+  // package's usage source (none: nothing is looked up).
+  account: (appPtyId, read, usage) => setHelperAccount(appPtyId, read, usage),
   // The tab's run is over: its hook state goes, as a held session's does
-  // (session-helper/app-wiring.ts), so a Restart's feed starts empty.
-  ended: (appPtyId) => endHelperHooks(appPtyId),
+  // (session-helper/app-wiring.ts), so a Restart's feed starts empty; and its
+  // account and usage source.
+  ended: (appPtyId) => { endHelperHooks(appPtyId); endHelperAccount(appPtyId) },
 }
 
 /** How long main waits on each door: an Add uploads a file of a few MB and

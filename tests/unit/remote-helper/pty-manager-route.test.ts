@@ -271,8 +271,9 @@ describe('pty-manager SSH branch: a tab that goes through the session helper', (
     expect(isRemoteHelperTab('route-helper')).toBe(true)
     expect(logs.some((l) => l.startsWith('[remote-helper] route-helper: through the session helper on nick@rocky.lan:22'))).toBe(true)
     await until(() => ssh.calls.length > 0)
-    // The fake host refuses every connection: the start stops at its first exec.
-    expect(ssh.scripts()).toEqual(['reads'])
+    // The fake host refuses every connection: the start stops at its first
+    // execs, the host reads and, beside them, the account field (2.1.3-beta.19 section 3).
+    expect(ssh.scripts()).toEqual(['reads', 'field'])
     // Started again and closed while it starts: killPty reaches it, and it is forgotten.
     expect(spawnSsh('route-helper', SSH_TAB)).toBeNull()
     expect(isRemoteHelperTab('route-helper')).toBe(true)
@@ -350,7 +351,7 @@ describe('a tab through the session helper: what goes to its host, and what it t
     expect(launch.argv?.slice(4, 9)).toEqual([MACHINE.claudePath, '--settings', `${folder}/settings.json`, '--mcp-config', `${folder}/mcp.json`])
     expect((launch.argv ?? []).join(' ')).not.toMatch(/--append-system-prompt|statusline|localhost|127\.0\.0\.1|token/i)
     expect(Object.keys(launch.env ?? {}).filter((k) => /TOKEN|SECRET|KEY|^CCC_|^ANTHROPIC/i.test(k))).toEqual([])
-    expect(ssh.scripts()).toEqual(['reads', 'hold', 'files', 'bridge'])
+    expect(ssh.scripts()).toEqual(['reads', 'field', 'hold', 'files', 'bridge'])
     // The app's light theme reaches the CLI, as on the usual SSH launch line.
     expect(launch.env?.COLORFGBG).toBe('0;15')
     // A prompt button (Send) types by the usual rule for a Claude Code tab: its text, then Enter.

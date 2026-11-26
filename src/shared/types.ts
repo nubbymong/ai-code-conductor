@@ -408,6 +408,18 @@ export interface RateLimitExtra {
   limitUsd: number
 }
 
+/** Why a tab through the session helper names no account (2.1.3-beta.19
+ *  section 3): Claude Code on its machine names none in the field the app
+ *  reads (`no-account`), or that read did not answer (`not-read`). */
+export type RemoteAccountNotShown = 'no-account' | 'not-read'
+export const REMOTE_ACCOUNT_NOT_SHOWN: readonly RemoteAccountNotShown[] = ['no-account', 'not-read']
+
+/** Why such a tab shows no per-model weekly bars or extra usage: its machine
+ *  uses its own sign-in, which this computer does not hold (`own-sign-in`),
+ *  or this computer holds the account and has no usage reading for it
+ *  (`no-reading`). */
+export type RemoteUsageNotShown = 'own-sign-in' | 'no-reading'
+
 export interface StatuslineData {
   sessionId: string
   model?: string
@@ -447,6 +459,16 @@ export interface StatuslineData {
   /** Sent once when nothing will report this session's allowance: 'no-reading'
    *  (Codex: no rollout was claimed within 30 s). D3 of the usage UX. */
   usageUnavailable?: 'no-reading'
+  /** 2.1.3-beta.19 section 3 (aicc_planning#434): a tab through the session
+   *  helper on another machine whose account is not named, and why (the
+   *  header's account pill says so). Set by main for such a tab alone, from
+   *  its start's account read (statusline-watcher.ts setHelperAccount); the
+   *  sanitiser drops it from every other payload. */
+  remoteAccountNotShown?: RemoteAccountNotShown
+  /** 2.1.3-beta.19 section 3: such a tab's per-model weekly bars and extra
+   *  usage are not shown, and why (the strip says "not available" with it).
+   *  Set and dropped as `remoteAccountNotShown` is. */
+  remoteUsageNotShown?: RemoteUsageNotShown
   /** Active-account email surfaced by the bridge script. Renderer displays it left of the model name. */
   accountEmail?: string
   /** Pre-computed by main process via `colourForEmail()` as an identity-palette KEY;

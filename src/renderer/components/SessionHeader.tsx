@@ -19,6 +19,7 @@ import { RowMenu } from './ui/RowMenu'
 import { ASK_LABEL } from '../lib/askConductor'
 import { sshAuthGiveUpMemory } from '../stores/sshAuthGiveUp'
 import { useThroughHelper } from '../hooks/useThroughHelper'
+import { REMOTE_ACCOUNT_NOT_SHOWN_LABEL, REMOTE_ACCOUNT_NOT_SHOWN_TITLE } from '../lib/remoteHelperAccountText'
 
 declare const __APP_VERSION__: string
 
@@ -553,8 +554,9 @@ function SessionAuthPills({ session }: { session: Session }) {
   const status = useAccountAuthStore((s) => (profileId ? s.byProfile[profileId] : undefined))
   const claudeOffNow = useClaudeOff()
   // A tab through the session helper on its machine (the remote sessions
-  // preview) does not report its account yet (its status line has no account:
-  // aicc_planning#434), so its loading pills would wait for nothing.
+  // preview): its account comes from the field its start reads on that
+  // machine (2.1.3-beta.19 section 3, aicc_planning#434), or main says why
+  // there is none.
   const throughHelper = useThroughHelper(session.id, isSshClaude)
 
   React.useEffect(() => {
@@ -607,18 +609,20 @@ function SessionAuthPills({ session }: { session: Session }) {
     // inheriting whatever was left of the first one's 20s timer. A session that
     // already gave up once renders the fallback immediately on remount
     // (sshAuthGiveUpMemory) — re-activation must not re-arm the shimmer.
-    // A tab through the session helper has nothing to wait for (its account is
-    // not reported through the helper yet), so it says so at once instead of
-    // the loading pills (2.1.3-beta.18 release smoke: 20 s of them, then
-    // nothing). An account that does arrive takes the branches below.
-    if (!remoteEmail && !sshProfileId && throughHelper) {
+    // A tab through the session helper names its account from the field its
+    // start read on its machine (2.1.3-beta.19 section 3, aicc_planning#434):
+    // the branches below, as today's SSH tab. When that start named none,
+    // main says why and this pill says so at once, never loading pills that
+    // wait for nothing (2.1.3-beta.18 release smoke: 20 s of them, then
+    // nothing). Until the start's read lands, the loading pills below.
+    if (!remoteEmail && !sshProfileId && throughHelper && session.remoteAccountNotShown && REMOTE_ACCOUNT_NOT_SHOWN_TITLE[session.remoteAccountNotShown]) {
       return (
         <>
           <HeaderPill
-            label="Account not shown through the helper yet"
+            label={REMOTE_ACCOUNT_NOT_SHOWN_LABEL}
             tone="var(--text-muted)"
-            title="This tab runs through the session helper on its machine. Its account, and the claude.ai and Claude Code sign-ins, are not shown through the helper yet."
-            testId="session-pill-account-not-shown"
+            title={REMOTE_ACCOUNT_NOT_SHOWN_TITLE[session.remoteAccountNotShown]}
+            testId="session-pill-account-not-available"
           />
           <WatchdogPill session={session} />
           {gitHubTail}

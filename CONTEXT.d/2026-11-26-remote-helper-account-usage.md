@@ -1,0 +1,58 @@
+## 2026-11-26 -- remote: a helper tab names its account, and shows weekly limits and extra usage where this computer holds the account (3a, 3b)
+
+2.1.3-beta.19 section 3 (aicc_planning#434), step 3a: built against section
+1.1's field mode contract with a fake field mode in the unit tests; step 3b
+merged 1.1's frozen head (feat/helper-until-ended-holder at d0c31e35) and
+its real field mode.
+
+The label. Every start of a tab through the session helper, launch or attach,
+runs one function, remote-helper/host-reads.ts readHostForStart: the
+provider's host reads (the `reads` exec, as in beta.18) and, beside them, one
+exec of the helper's field mode (the new `field` script: `aicc-helper field
+--file <file> --key <key>`, through the launcher, the helper's hash checked
+first). The file goes relative to the home folder, as the field mode takes
+it (helper/src/field.rs path_under joins it to `$HOME`); 3a's `"$h/<file>"`
+(the home's real path) printed nothing where a folder above the home is a
+link, since the field mode takes an absolute path only inside `$HOME` as
+written. The device check (tests/live/remote-helper-device.live.ts, the
+remote-helper-e2e job) reads a file of its own through the real helper: the
+value, a link followed, a missing key or file, and a `$HOME` reached through
+a link above it. File and key come from the provider package
+(ProviderRemoteLaunch.accountField; Claude Code: `oauthAccount.emailAddress` of
+`~/.claude.json`, the field the usual SSH status line reads). The answer is
+the host's and untrusted: one line of at most 1 KiB with no control character,
+or nothing; anything else is "not read". A host read that fails still fails
+the start; the account read never does. Section 1.2's attach path calls the
+same function, so the label and the bars' source are set again at each
+attach.
+
+The bars and extra usage come from this computer, never the host
+(statusline-watcher.ts setHelperAccount, usage/remote-tab-usage.ts), through
+the usage source the provider package hands with the account read
+(ProviderRemoteLaunch.accountUsage, as its accountField is; Claude Code's: its
+account profiles and fetchAccountUsage). A provider that gives none has
+nothing looked up and shows "not available", and one source's reading never
+serves another's tab, so a second provider touches no core file for this. The
+label passes sanitiseRemoteAccountEmail. For an account this computer holds
+(one of that source's account profiles with that email, compared case-blind),
+the Account usage page's figure (fetchAccountUsage: a running session's own
+status line figure when one reports it, else its own read), read at most once per 60 s per
+account however many tabs and status ticks ask, through sanitiseUsageBuckets
+and sanitiseRateLimitExtra, and joined to each of the tab's status frames. For
+one it does not hold (or no account named), the strip says "Model limits: not
+available (own sign-in)"; a held account with no current reading says "(no
+current reading)": a reading the page marks stale (an idle session's last
+tick, or the last fetch before a token lapsed) is none, and credits of an
+earlier fetch beside a running session's figure draw no extra usage block.
+Never an empty or zero bar: before the reading lands no bars are sent.
+A host frame's usage buckets, extra usage, account label and the two new
+not-shown reasons are dropped; the reasons are main's alone (the sanitiser
+drops them from every payload). The header names the account as today's SSH
+tab does; when the start named none it shows "Account not available" with the
+reason in its title.
+
+Not built: a usage read on the host with its token. 3.1.1's payload read: not
+measured (the Ubuntu host's Claude Code was not signed in on 2026-11-26), so
+CLAUDE_STATUS_KEEP is unchanged. No Token account kind exists in the app at
+this base (AccountProfile has no sign-in kind), so a Token-signed host is one
+this computer does not hold.
