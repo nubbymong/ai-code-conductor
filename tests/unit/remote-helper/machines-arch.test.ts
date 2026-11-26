@@ -71,7 +71,7 @@ beforeEach(() => { logs = [] })
 
 /** The machine list with this build's helpers (`helpers()`, asked at each use)
  *  and the file reader watched: it hands out only the two files there are. */
-function machines(ssh: FakeSsh, helpers: () => BundledLinuxHelper[] = () => [X64, ARM], store: MachineStore = memoryStore()) {
+function machines(ssh: FakeSsh, helpers: () => BundledLinuxHelper[] = () => [X64, ARM], store: MachineStore & { value: unknown } = memoryStore()) {
   const files: Record<string, Buffer> = { [X64.file]: X64_BYTES, [ARM.file]: ARM_BYTES }
   const readFile = vi.fn(async (file: string) => {
     const b = files[file]
