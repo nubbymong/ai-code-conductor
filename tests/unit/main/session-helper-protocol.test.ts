@@ -37,6 +37,9 @@ import {
   readMcpClose,
   readMcpOpen,
   readRecord,
+  RECORD_FIELDS,
+  UNTIL_ENDED,
+  UNTIL_ENDED_RECORD_FIELDS,
   readScreenLines,
   readScreenRows,
   MOUSE_ENCODING_WORDS,
@@ -158,6 +161,40 @@ describe('session helper protocol: records, listings and endpoints (section 15)'
       for (const v of local.records.valid.filter((x: { os?: HelperOs }) => appliesOn(x, os))) expect(readRecord(v.record, os), `${os} ${v.name}`).not.toBeNull()
       for (const v of local.records.invalid.filter((x: { os?: HelperOs }) => appliesOn(x, os))) expect(readRecord(v.record, os), `${os} ${v.name}`).toBeNull()
     }
+  })
+
+  // 2.1.3-beta.19 (protocol change 14): a holder that runs until it is ended
+  // writes `away` null and `"lifetime":"until-ended"` after it; a clock
+  // holder's record is today's. The app reads exactly those two shapes, so a
+  // record from 2.1.3-beta.18's helper still reads, and no mix of the two does.
+  it('records: the clock shape and the until-ended shape read, every other mix is refused', () => {
+    const clock = { ...local.records.valid[0].record }
+    expect(Object.keys(clock)).toEqual([...RECORD_FIELDS])
+    const held = readRecord(clock, 'unix')
+    expect(held).not.toBeNull()
+    expect(held?.away).toBe(clock.away)
+    expect(held?.lifetime).toBeUndefined()
+    const untilEnded = { ...clock, away: null, lifetime: UNTIL_ENDED }
+    const kept = readRecord(untilEnded, 'unix')
+    expect(kept, 'the until-ended shape').not.toBeNull()
+    expect(kept?.away).toBeNull()
+    expect(kept?.lifetime).toBe('until-ended')
+    expect([...UNTIL_ENDED_RECORD_FIELDS]).toEqual(local.until_ended_record_fields)
+    expect([...RECORD_FIELDS]).toEqual(local.record_fields)
+    const { away: _away, ...noAway } = untilEnded
+    const mixes: Array<[string, Record<string, unknown>]> = [
+      ['an away clock beside the until-ended lifetime', { ...untilEnded, away: 120 }],
+      ['no away clock and no lifetime', { ...clock, away: null }],
+      ['a lifetime on a clock record', { ...clock, lifetime: UNTIL_ENDED }],
+      ['a lifetime of clock', { ...clock, lifetime: 'clock' }],
+      ['another lifetime with no away clock', { ...untilEnded, lifetime: 'forever' }],
+      ['a lifetime that is not a string', { ...untilEnded, lifetime: true }],
+      ['an away of 0 beside the lifetime', { ...untilEnded, away: 0 }],
+      ['the lifetime with no away field', noAway],
+      ['an until-ended record with an extra field', { ...untilEnded, x: 1 }],
+      ['an away clock of 0', { ...clock, away: 0 }],
+    ]
+    for (const [name, record] of mixes) expect(readRecord(record, 'unix'), name).toBeNull()
   })
 
   it('listings: strict, every record valid', () => {

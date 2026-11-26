@@ -43,6 +43,21 @@
     "child",
     "code"
   ],
+  "until_ended_record_fields": [
+    "v",
+    "session",
+    "label",
+    "pid",
+    "endpoint",
+    "nonce",
+    "helper",
+    "started",
+    "away",
+    "lifetime",
+    "attached",
+    "child",
+    "code"
+  ],
   "child_states": [
     "waiting",
     "running",
@@ -1163,6 +1178,44 @@
           "child": "exited",
           "code": 4294967295
         }
+      },
+      {
+        "name": "a session held until it is ended (no away clock, from 2.1.3-beta.19)",
+        "os": "unix",
+        "record": {
+          "v": 1,
+          "session": "sess-0001",
+          "label": "Terminal 1",
+          "pid": 4242,
+          "endpoint": "/tmp/aicc-1000/sess-0001-0123456789abcdef.sock",
+          "nonce": "0123456789abcdef0123456789abcdef",
+          "helper": "0.1.0",
+          "started": 1763251200000,
+          "away": null,
+          "lifetime": "until-ended",
+          "attached": false,
+          "child": "running",
+          "code": null
+        }
+      },
+      {
+        "name": "a Windows session held until it is ended, its program exited",
+        "os": "windows",
+        "record": {
+          "v": 1,
+          "session": "sess-0001",
+          "label": "Terminal 1",
+          "pid": 4242,
+          "endpoint": "\\\\.\\pipe\\aicc-helper-sess-0001-0123456789abcdef0123456789abcdef",
+          "nonce": "0123456789abcdef0123456789abcdef",
+          "helper": "0.1.0",
+          "started": 1763251200000,
+          "away": null,
+          "lifetime": "until-ended",
+          "attached": true,
+          "child": "exited",
+          "code": 0
+        }
       }
     ],
     "invalid": [
@@ -1561,6 +1614,137 @@
           "child": "exited",
           "code": 1.5
         }
+      },
+      {
+        "name": "an away clock beside the until-ended lifetime",
+        "os": "unix",
+        "record": {
+          "v": 1,
+          "session": "sess-0001",
+          "label": "Terminal 1",
+          "pid": 4242,
+          "endpoint": "/tmp/aicc-1000/sess-0001-0123456789abcdef.sock",
+          "nonce": "0123456789abcdef0123456789abcdef",
+          "helper": "0.1.0",
+          "started": 1763251200000,
+          "away": 120,
+          "lifetime": "until-ended",
+          "attached": false,
+          "child": "running",
+          "code": null
+        }
+      },
+      {
+        "name": "no away clock and no lifetime",
+        "os": "unix",
+        "record": {
+          "v": 1,
+          "session": "sess-0001",
+          "label": "Terminal 1",
+          "pid": 4242,
+          "endpoint": "/tmp/aicc-1000/sess-0001-0123456789abcdef.sock",
+          "nonce": "0123456789abcdef0123456789abcdef",
+          "helper": "0.1.0",
+          "started": 1763251200000,
+          "away": null,
+          "attached": false,
+          "child": "running",
+          "code": null
+        }
+      },
+      {
+        "name": "a lifetime other than until-ended",
+        "os": "unix",
+        "record": {
+          "v": 1,
+          "session": "sess-0001",
+          "label": "Terminal 1",
+          "pid": 4242,
+          "endpoint": "/tmp/aicc-1000/sess-0001-0123456789abcdef.sock",
+          "nonce": "0123456789abcdef0123456789abcdef",
+          "helper": "0.1.0",
+          "started": 1763251200000,
+          "away": null,
+          "lifetime": "forever",
+          "attached": false,
+          "child": "running",
+          "code": null
+        }
+      },
+      {
+        "name": "a lifetime of clock beside an away clock",
+        "os": "unix",
+        "record": {
+          "v": 1,
+          "session": "sess-0001",
+          "label": "Terminal 1",
+          "pid": 4242,
+          "endpoint": "/tmp/aicc-1000/sess-0001-0123456789abcdef.sock",
+          "nonce": "0123456789abcdef0123456789abcdef",
+          "helper": "0.1.0",
+          "started": 1763251200000,
+          "away": 120,
+          "lifetime": "clock",
+          "attached": false,
+          "child": "running",
+          "code": null
+        }
+      },
+      {
+        "name": "the until-ended lifetime with no away field",
+        "os": "unix",
+        "record": {
+          "v": 1,
+          "session": "sess-0001",
+          "label": "Terminal 1",
+          "pid": 4242,
+          "endpoint": "/tmp/aicc-1000/sess-0001-0123456789abcdef.sock",
+          "nonce": "0123456789abcdef0123456789abcdef",
+          "helper": "0.1.0",
+          "started": 1763251200000,
+          "lifetime": "until-ended",
+          "attached": false,
+          "child": "running",
+          "code": null
+        }
+      },
+      {
+        "name": "a lifetime that is not a string",
+        "os": "unix",
+        "record": {
+          "v": 1,
+          "session": "sess-0001",
+          "label": "Terminal 1",
+          "pid": 4242,
+          "endpoint": "/tmp/aicc-1000/sess-0001-0123456789abcdef.sock",
+          "nonce": "0123456789abcdef0123456789abcdef",
+          "helper": "0.1.0",
+          "started": 1763251200000,
+          "away": null,
+          "lifetime": true,
+          "attached": false,
+          "child": "running",
+          "code": null
+        }
+      },
+      {
+        "name": "an until-ended session with an exit code while running",
+        "os": "unix",
+        "record": {
+          "v": 1,
+          "session": "sess-0001",
+          "label": "Terminal 1",
+          "pid": 4242,
+          "endpoint": "/tmp/aicc-1000/sess-0001-0123456789abcdef.sock",
+          "nonce": "0123456789abcdef0123456789abcdef",
+          "helper": "0.1.0",
+          "started": 1763251200000,
+          "away": null,
+          "lifetime": "until-ended",
+          "attached": false,
+          "child": "running",
+          "code": 0
+        }
       }
     ]
   },
@@ -1574,6 +1758,11 @@
         "name": "two sessions, one stale record removed",
         "os": "unix",
         "line": "{\"v\":1,\"sessions\":[{\"v\":1,\"session\":\"sess-0001\",\"label\":\"Terminal 1\",\"pid\":4242,\"endpoint\":\"/tmp/aicc-1000/sess-0001-0123456789abcdef.sock\",\"nonce\":\"0123456789abcdef0123456789abcdef\",\"helper\":\"0.1.0\",\"started\":1763251200000,\"away\":120,\"attached\":false,\"child\":\"running\",\"code\":null},{\"v\":1,\"session\":\"sess-0002\",\"label\":\"Terminal 1\",\"pid\":4242,\"endpoint\":\"/tmp/aicc-1000/sess-0002-fedcba9876543210.sock\",\"nonce\":\"0123456789abcdef0123456789abcdef\",\"helper\":\"0.1.0\",\"started\":1763251260000,\"away\":120,\"attached\":false,\"child\":\"exited\",\"code\":0}],\"removed\":1,\"skipped\":2}"
+      },
+      {
+        "name": "a session with an away clock and one held until it is ended",
+        "os": "unix",
+        "line": "{\"v\":1,\"sessions\":[{\"v\":1,\"session\":\"sess-0001\",\"label\":\"Terminal 1\",\"pid\":4242,\"endpoint\":\"/tmp/aicc-1000/sess-0001-0123456789abcdef.sock\",\"nonce\":\"0123456789abcdef0123456789abcdef\",\"helper\":\"0.1.0\",\"started\":1763251200000,\"away\":120,\"attached\":false,\"child\":\"running\",\"code\":null},{\"v\":1,\"session\":\"sess-0002\",\"label\":\"Terminal 2\",\"pid\":4243,\"endpoint\":\"/tmp/aicc-1000/sess-0002-fedcba9876543210.sock\",\"nonce\":\"fedcba9876543210fedcba9876543210\",\"helper\":\"0.1.0\",\"started\":1763251260000,\"away\":null,\"lifetime\":\"until-ended\",\"attached\":false,\"child\":\"running\",\"code\":null}],\"removed\":0,\"skipped\":0}"
       }
     ],
     "invalid": [
@@ -1593,6 +1782,11 @@
         "name": "a session that does not read",
         "os": "unix",
         "line": "{\"v\":1,\"sessions\":[{\"v\":1,\"session\":\"sess-0001\",\"label\":\"Terminal 1\",\"pid\":4242,\"endpoint\":\"/tmp/aicc-1000/sess-0001-0123456789abcdef.sock\",\"nonce\":\"0123456789abcdef0123456789abcdef\",\"helper\":\"0.1.0\",\"started\":1763251200000,\"away\":0,\"attached\":true,\"child\":\"running\",\"code\":null}],\"removed\":0,\"skipped\":0}"
+      },
+      {
+        "name": "a session held until it is ended that keeps an away clock",
+        "os": "unix",
+        "line": "{\"v\":1,\"sessions\":[{\"v\":1,\"session\":\"sess-0001\",\"label\":\"Terminal 1\",\"pid\":4242,\"endpoint\":\"/tmp/aicc-1000/sess-0001-0123456789abcdef.sock\",\"nonce\":\"0123456789abcdef0123456789abcdef\",\"helper\":\"0.1.0\",\"started\":1763251200000,\"away\":120,\"lifetime\":\"until-ended\",\"attached\":false,\"child\":\"running\",\"code\":null}],\"removed\":0,\"skipped\":0}"
       }
     ]
   },

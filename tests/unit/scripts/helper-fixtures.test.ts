@@ -350,9 +350,14 @@ function refEndpoint(e: string, sid: string, os: Os): boolean {
   return !!m && m[2].startsWith(`${sid}-`) && random.test(m[2].slice(sid.length + 1))
 }
 
+// A record has two shapes: a clock holder's (record_fields), and, from
+// 2.1.3-beta.19, an until-ended holder's (until_ended_record_fields: `away`
+// null and `lifetime` "until-ended"). No other mix reads.
 function refRecord(r: any, os: Os): boolean {
   if (r === null || typeof r !== 'object' || Array.isArray(r)) return false
-  if (!sameKeys(Object.keys(r), local.record_fields)) return false
+  const untilEnded = Object.keys(r).includes('lifetime')
+  if (!sameKeys(Object.keys(r), untilEnded ? local.until_ended_record_fields : local.record_fields)) return false
+  if (untilEnded && (r.lifetime !== 'until-ended' || r.away !== null)) return false
   if (r.v !== 1) return false
   if (typeof r.session !== 'string' || !new RegExp(limits.sid_pattern).test(r.session)) return false
   if (typeof r.label !== 'string' || chars(r.label) > L.label_chars || CONTROL.test(r.label)) return false
@@ -361,7 +366,7 @@ function refRecord(r: any, os: Os): boolean {
   if (typeof r.nonce !== 'string' || !new RegExp(limits.nonce_pattern).test(r.nonce)) return false
   if (typeof r.helper !== 'string' || r.helper.length === 0 || chars(r.helper) > 64 || CONTROL.test(r.helper)) return false
   if (!isOffset(r.started)) return false
-  if (!Number.isInteger(r.away) || r.away < 1 || r.away > L.away_max_secs) return false
+  if (!untilEnded && (!Number.isInteger(r.away) || r.away < 1 || r.away > L.away_max_secs)) return false
   if (typeof r.attached !== 'boolean' || !local.child_states.includes(r.child)) return false
   // An exit code is the OS's: signed on Unix, either reading of 32 bits on Windows.
   if (r.child === 'exited') return Number.isInteger(r.code) && r.code >= -(2 ** 31) && r.code <= 2 ** 32 - 1
@@ -409,7 +414,7 @@ describe('helper fixtures: the local transport (section 15)', () => {
     for (const os of OSES) {
       for (const v of local.records.valid.filter((x: { os?: Os }) => appliesOn(x, os))) {
         expect(refRecord(v.record, os), `${os}: ${v.name}`).toBe(true)
-        expect(Object.keys(v.record), v.name).toEqual(local.record_fields)
+        expect(Object.keys(v.record), v.name).toEqual('lifetime' in v.record ? local.until_ended_record_fields : local.record_fields)
       }
       for (const v of local.records.invalid.filter((x: { os?: Os }) => appliesOn(x, os))) expect(refRecord(v.record, os), `${os}: ${v.name}`).toBe(false)
       for (const v of local.listing.valid.filter((x: { os?: Os }) => appliesOn(x, os))) {

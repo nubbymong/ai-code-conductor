@@ -526,6 +526,14 @@ impl Listener {
         }
     }
 
+    /// True while the file at the endpoint is the socket bound here (its
+    /// device and inode). A cleaner of /tmp, or a removal by hand, can take
+    /// it, or its folder, from a long session: the holder then binds the
+    /// endpoint again (`serve.rs`).
+    pub fn still_bound(&self) -> bool {
+        fs::symlink_metadata(&self.path).map_or(false, |md| (md.dev(), md.ino()) == self.id)
+    }
+
     /// Remove the socket file, if it is still the one we bound.
     pub fn remove(&self) {
         if let Ok(md) = fs::symlink_metadata(&self.path) {
@@ -848,6 +856,24 @@ mod tests {
         fs::remove_file(&file).unwrap();
     }
 
+    /// Another local user can make /tmp/aicc-<uid> first in a shared /tmp
+    /// (the Raspberry Pi notes, 5): a run folder that is not this user's is
+    /// refused, by a holder and by a client, and left as it is. /usr, which
+    /// root owns, stands in for it; run as root this case cannot be made.
+    #[test]
+    fn a_run_folder_of_another_user_is_refused_and_left_as_it_is() {
+        if euid() == 0 {
+            return;
+        }
+        let theirs = Path::new("/usr");
+        let before = fs::symlink_metadata(theirs).unwrap().mode();
+        let e = prepare_run_dir(theirs).expect_err("another user's folder was taken for the run folder");
+        assert!(e.to_string().contains("belongs to another user"), "{e}");
+        let e = check_dir(theirs).expect_err("a client took another user's folder");
+        assert!(e.to_string().contains("belongs to another user"), "{e}");
+        assert_eq!(fs::symlink_metadata(theirs).unwrap().mode(), before, "its mode was changed");
+    }
+
     #[test]
     fn an_endpoint_outside_the_run_folder_is_refused() {
         let elsewhere = std::env::temp_dir().join("aicc-elsewhere-sess-0001-0123456789abcdef.sock");
@@ -915,7 +941,7 @@ mod tests {
             // A holder writes its record after it starts, as this one would:
             // a record older than its process is another process's.
             started: crate::store::now_ms(),
-            away: 120,
+            lifetime: crate::store::Lifetime::Away(120),
             attached: false,
             child: "waiting".to_string(),
             code: None,
@@ -961,7 +987,7 @@ mod tests {
             // Written after this process started, so no start-time rule
             // could take it for stale: only the refusal can.
             started: crate::store::now_ms(),
-            away: 120,
+            lifetime: crate::store::Lifetime::Away(120),
             attached: false,
             child: "running".to_string(),
             code: None,
