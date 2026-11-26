@@ -14,6 +14,7 @@
 import type { RunScreenImageResult, RunScreenTyping, SessionRunScreen } from '../types'
 import type { PromptButtonResult } from '../../../shared/types'
 import { queueClaudeMarkerLine } from '../../canvas/claude-marker-typing'
+import { PROMPT_ENTER_DELAY_MS } from '../../session-input/enter-delay'
 
 const PASTE_START = '\u001b[200~'
 const PASTE_END = '\u001b[201~'
@@ -76,9 +77,28 @@ async function sendClaudePrompt(text: string, opts: { enterDelayMs: number }, ty
  * (canvas/claude-marker-typing.ts, which has the renderer type it), and only
  * into the run it was handed for. It answers nothing: a marker the chain
  * drops untyped is told to its canvas by the chain itself.
+ *
+ * The renderer types the line and its Enter in one write, but in a tab
+ * through the session helper on its machine (`typing.wholeWrites`,
+ * 2.1.3-beta.19 section 6.1), for the reason the retry's Enter goes apart
+ * there (above): a marker line of 63 characters or more was typed and not
+ * sent (an approval line is 59 to 61 characters today, 60 to 62 with its
+ * Enter, for versions v1 to v999, so none has reached that yet). There the
+ * renderer types the line alone, and this types Enter as its own write
+ * PROMPT_ENTER_DELAY_MS after the line's last slice went (the gap the door
+ * gives the retry's and a prompt button's Enter), and only while the run is
+ * still the one the line went to.
  */
 function holdClaudeMarker(sessionId: string, line: string, canvasId: string | undefined, typing: RunScreenTyping): void {
-  queueClaudeMarkerLine(sessionId, line, () => typing.live(), canvasId)
+  const enter = typing.wholeWrites
+    ? async (typedLine: string): Promise<boolean> => {
+      await typing.settled(typedLine, PROMPT_ENTER_DELAY_MS)
+      if (!typing.live()) return false
+      typing.write(`${typing.leave}\r`)
+      return true
+    }
+    : undefined
+  queueClaudeMarkerLine(sessionId, line, () => typing.live(), canvasId, enter)
 }
 
 /**
