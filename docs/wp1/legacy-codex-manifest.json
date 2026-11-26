@@ -1,9 +1,9 @@
 {
   "schema": "wp1-legacy-codex-manifest/3",
-  "generatedAt": "2026-11-25T11:01:44.726Z",
-  "head": "082a119bb8d1ea79f0e5628df5a86aff250d60aa",
-  "tree": "6ab2f486b4b11594e19f18b092726671942ffdb4",
-  "scannedWorkingTree": true,
+  "generatedAt": "2026-11-26T06:37:57.213Z",
+  "head": "ee961de6c7582f4036d28de54045c75e86919f41",
+  "tree": "d04c517de804caf56160bc2e7be7fc6101ac6c0f",
+  "scannedWorkingTree": false,
   "predicateDigest": "100a1233edebdc39a5f9004d3fba980a89ebb15b25872e52076386bc84b03153",
   "predicates": [
     {
@@ -116,9 +116,9 @@
     "\\.(png|jpg|jpeg|gif|ico|icns|webp|svg|woff2?|ttf|otf|mp4|zip|asar|node|exe|dll|dylib|so|pdf)$",
     "^package-lock\\.json$"
   ],
-  "trackedFileCount": 3901,
-  "excludedFileCount": 625,
-  "scannedFileCount": 3276,
+  "trackedFileCount": 3936,
+  "excludedFileCount": 631,
+  "scannedFileCount": 3305,
   "unscopedFileCount": 15,
   "unscoped": [
     ".claude/settings.json",
@@ -139,8 +139,8 @@
   ],
   "unscopedMentions": [],
   "unreadable": [],
-  "matchedPathCount": 1119,
-  "pathDigest": "d2ef3dedfbe24913f62b91565adb3b170e2efecd943bc1525f33f9ad88b1f3d5",
+  "matchedPathCount": 1125,
+  "pathDigest": "8264dc447b53caffc7e964534f857900be4604cfffef5776f1104611dbd3afa2",
   "entries": [
     {
       "path": ".github/workflows/ci.yml",
@@ -218,14 +218,14 @@
       "predicates": [
         "P12"
       ],
-      "lineCount": 3
+      "lineCount": 8
     },
     {
       "path": "docs/remote/helper-threat-model.md",
       "predicates": [
         "P12"
       ],
-      "lineCount": 4
+      "lineCount": 6
     },
     {
       "path": "docs/wp2/completion-plan.md",
@@ -998,6 +998,22 @@
       "lineCount": 9
     },
     {
+      "path": "helper/fixtures/screens/codex172-windows-bundled-wrapped-after-reply.json",
+      "predicates": [
+        "P01",
+        "P14"
+      ],
+      "lineCount": 14
+    },
+    {
+      "path": "helper/fixtures/screens/codex172-windows-bundled-wrapped-after-reply.rows.json",
+      "predicates": [
+        "P01",
+        "P14"
+      ],
+      "lineCount": 9
+    },
+    {
       "path": "helper/fixtures/screens/codex172-windows-system-after-reply.json",
       "predicates": [
         "P01",
@@ -1023,6 +1039,22 @@
     },
     {
       "path": "helper/fixtures/screens/codex172-windows-system-ready.rows.json",
+      "predicates": [
+        "P01",
+        "P14"
+      ],
+      "lineCount": 9
+    },
+    {
+      "path": "helper/fixtures/screens/codex172-windows-system-wrapped-after-reply.json",
+      "predicates": [
+        "P01",
+        "P14"
+      ],
+      "lineCount": 12
+    },
+    {
+      "path": "helper/fixtures/screens/codex172-windows-system-wrapped-after-reply.rows.json",
       "predicates": [
         "P01",
         "P14"
@@ -1158,7 +1190,7 @@
         "P01",
         "P14"
       ],
-      "lineCount": 19
+      "lineCount": 21
     },
     {
       "path": "resources/codex-pricing.json",
@@ -3693,7 +3725,7 @@
         "P12",
         "P14"
       ],
-      "lineCount": 172
+      "lineCount": 176
     },
     {
       "path": "src/shared/ask-conductor-provider.ts",
@@ -3738,7 +3770,7 @@
         "P01",
         "P14"
       ],
-      "lineCount": 90
+      "lineCount": 108
     },
     {
       "path": "src/shared/container-command.ts",
@@ -8262,6 +8294,13 @@
       "lineCount": 3
     },
     {
+      "path": "tests/unit/renderer/session-status-strip-remote-usage.test.tsx",
+      "predicates": [
+        "P13"
+      ],
+      "lineCount": 1
+    },
+    {
       "path": "tests/unit/renderer/session-status-strip-surface.test.tsx",
       "predicates": [
         "P13"
@@ -8540,7 +8579,7 @@
         "P05",
         "P13"
       ],
-      "lineCount": 122
+      "lineCount": 123
     },
     {
       "path": "tests/unit/renderer/window-close-dialogs.test.tsx",
@@ -8785,7 +8824,7 @@
         "P04",
         "P13"
       ],
-      "lineCount": 437,
+      "lineCount": 443,
       "truncated": true
     },
     {
@@ -8810,7 +8849,7 @@
         "P01",
         "P13"
       ],
-      "lineCount": 108
+      "lineCount": 113
     },
     {
       "path": "tests/unit/shared/codex-screen-shortcuts-hint.test.ts",
@@ -8818,7 +8857,7 @@
         "P01",
         "P13"
       ],
-      "lineCount": 38
+      "lineCount": 39
     },
     {
       "path": "tests/unit/shared/codex-screen-title.test.ts",
@@ -8835,6 +8874,14 @@
         "P13"
       ],
       "lineCount": 86
+    },
+    {
+      "path": "tests/unit/shared/codex-screen-wrapped-footer.test.ts",
+      "predicates": [
+        "P01",
+        "P13"
+      ],
+      "lineCount": 101
     },
     {
       "path": "tests/unit/shared/extra-args.test.ts",
@@ -8863,7 +8910,7 @@
       "predicates": [
         "P13"
       ],
-      "lineCount": 97
+      "lineCount": 100
     },
     {
       "path": "tests/unit/status-ingest.test.ts",

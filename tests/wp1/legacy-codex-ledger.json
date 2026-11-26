@@ -1,8 +1,8 @@
 {
   "schema": "wp1-legacy-codex-ledger/2",
   "predicateDigest": "100a1233edebdc39a5f9004d3fba980a89ebb15b25872e52076386bc84b03153",
-  "manifestPathDigest": "d2ef3dedfbe24913f62b91565adb3b170e2efecd943bc1525f33f9ad88b1f3d5",
-  "manifestHead": "082a119bb8d1ea79f0e5628df5a86aff250d60aa",
+  "manifestPathDigest": "8264dc447b53caffc7e964534f857900be4604cfffef5776f1104611dbd3afa2",
+  "manifestHead": "ee961de6c7582f4036d28de54045c75e86919f41",
   "dispositions": {
     "retain": "unchanged observable behaviour, characterization proof",
     "move": "moved behind a package boundary and/or adapted at the call site, regression proof (newPath when relocated)",
@@ -1491,6 +1491,28 @@
       "note": "written by the test with SCREEN_CORPUS_WRITE=1; fixture data, no Codex code path"
     },
     {
+      "path": "helper/fixtures/screens/codex172-windows-bundled-wrapped-after-reply.json",
+      "predicates": [
+        "P01",
+        "P14"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "ADR-030 screen corpus (2.1.3-beta.19 section 4, aicc_planning#436, beta.18 section 7.4's recording hold with probe P19's recorder, its short-prompt launch, run 1): a recording of Codex 0.172.0's real screen whose footer wraps onto two rows, on GPT-6.1 Terra, taken with no account; fixture data read by tests only, never shipped; no legacy Codex code path; listed in the repository-wide legacy Codex manifest, zero unmatched at the merge gate (WP1.67), tests/unit/shared/screen-corpus.test.ts",
+      "note": "fixture data: the chunks Codex wrote, with the state and key marks; no Codex code path"
+    },
+    {
+      "path": "helper/fixtures/screens/codex172-windows-bundled-wrapped-after-reply.rows.json",
+      "predicates": [
+        "P01",
+        "P14"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "ADR-030 screen corpus (2.1.3-beta.19 section 4, aicc_planning#436, beta.18 section 7.4's recording hold with probe P19's recorder, its short-prompt launch, run 1): a recording of Codex 0.172.0's real screen whose footer wraps onto two rows, on GPT-6.1 Terra, taken with no account; fixture data read by tests only, never shipped; no legacy Codex code path; listed in the repository-wide legacy Codex manifest, zero unmatched at the merge gate (WP1.67), tests/unit/shared/screen-corpus.test.ts",
+      "note": "written by the test with SCREEN_CORPUS_WRITE=1; fixture data, no Codex code path"
+    },
+    {
       "path": "helper/fixtures/screens/codex172-windows-system-after-reply.json",
       "predicates": [
         "P01",
@@ -1532,6 +1554,28 @@
       "category": "TEST",
       "disposition": "added",
       "evidence": "ADR-030 screen corpus (2.1.3-beta.18 section 7.4, aicc_planning#427, 7.4's recording hold with probe P19's recorder): a recording of Codex 0.172.0's real screen on GPT-6.1 Terra, picked in Codex's own model picker, taken with no account (a stand-in model on the same machine), or the rows @xterm/headless gives for it; fixture data read by tests only, never shipped; no legacy Codex code path; listed in the repository-wide legacy Codex manifest, zero unmatched at the merge gate (WP1.67), tests/unit/shared/screen-corpus.test.ts",
+      "note": "written by the test with SCREEN_CORPUS_WRITE=1; fixture data, no Codex code path"
+    },
+    {
+      "path": "helper/fixtures/screens/codex172-windows-system-wrapped-after-reply.json",
+      "predicates": [
+        "P01",
+        "P14"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "ADR-030 screen corpus (2.1.3-beta.19 section 4, aicc_planning#436, beta.18 section 7.4's recording hold with probe P19's recorder, its short-prompt launch, run 1): a recording of Codex 0.172.0's real screen whose footer wraps onto two rows, on GPT-6.1 Terra, taken with no account; fixture data read by tests only, never shipped; no legacy Codex code path; listed in the repository-wide legacy Codex manifest, zero unmatched at the merge gate (WP1.67), tests/unit/shared/screen-corpus.test.ts",
+      "note": "fixture data: the chunks Codex wrote, with the state and key marks; no Codex code path"
+    },
+    {
+      "path": "helper/fixtures/screens/codex172-windows-system-wrapped-after-reply.rows.json",
+      "predicates": [
+        "P01",
+        "P14"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "ADR-030 screen corpus (2.1.3-beta.19 section 4, aicc_planning#436, beta.18 section 7.4's recording hold with probe P19's recorder, its short-prompt launch, run 1): a recording of Codex 0.172.0's real screen whose footer wraps onto two rows, on GPT-6.1 Terra, taken with no account; fixture data read by tests only, never shipped; no legacy Codex code path; listed in the repository-wide legacy Codex manifest, zero unmatched at the merge gate (WP1.67), tests/unit/shared/screen-corpus.test.ts",
       "note": "written by the test with SCREEN_CORPUS_WRITE=1; fixture data, no Codex code path"
     },
     {
@@ -5481,7 +5525,7 @@
       ],
       "category": "UI-ONLY",
       "disposition": "added",
-      "evidence": "new WP2 PR 3 P3.10 module (src/shared/codex-screen.ts): the pure reading of a Codex pane shared by the renderer's typed commands and main's Watchdog, moved byte-identically from the renderer (screenRegistry's readXtermScreen, codexComposer's reading); Codex's hook review screens read as blocking (WP1.68); tests/unit/renderer/codex-screen-hooks-review.test.ts, tests/unit/renderer/codex-composer.test.ts, tests/unit/renderer/screen-registry.test.ts; WP2 PR 3 P3.15 round 1 (the spec, code-quality and ADR-009 lens findings, and the VM re-check) (WP1.68): codexTextTyped reads text typed at the composer over its wrapped rows (indented under the text), with nothing in the way and the footer last; tests/unit/renderer/codex-image-paste.test.ts; WP2 PR 4 P4.1: the MCP approval form and the sandbox menu title read as blocked, two new readers (WP1.68); tests/unit/renderer/codex-screen-p41.test.ts; WP2 PR 4 P4.3 carrier (row 53, fc460f8f): codexPromptKeeps, the text Codex's prompt keeps and how many characters outside the BMP it would drop (WP1.68); tests/unit/main/codex-ask-carrier.test.ts; 2.1.3-beta.10 section C5 (aicc_planning #349): Codex 0.157.1's one shortcuts hint row under the footer (\"? for shortcuts\", at the footer's indent) reads as the footer alone did, ready or busy; any other row, a second hint row or a wrapped footer still reads unrecognised (WP1.68); tests/unit/shared/codex-screen-shortcuts-hint.test.ts; 2.1.3-beta.12 section C3 (aicc_planning #357): the other rows probe P19's second run recorded under the footer (Codex 0.170.0's agents row, the shortcuts key rebound to F6, the queue hint) read as the footer alone did, the queue hint busy, and the composer's draft and height are read over them, a draft Codex wraps onto more rows over the queue hint too; a warning count at the right of the row, any row not recorded, two rows, another indent or a wrapped footer still reads unrecognised (WP1.68); tests/unit/shared/codex-screen-hint-rows.test.ts; 2.1.3-beta.17 section C7 (aicc_planning #371): Codex's warning count at the right of the row under the footer reads with the hint row it sits beside, and the count alone under a draft is read by the draft and height readers and taken by the readers that confirm a typed text (codexTextTyped, codexCommandTyped, codexPastedContentShown), so composer-submit presses Enter or takes its text back (WP1.68); tests/unit/shared/codex-screen-warning-row.test.ts; 2.1.3-beta.17 section C8 (aicc_planning #416): the footer's model is matched in either case (Codex 0.157.1 shows gpt-5.5 as GPT-5.5) (WP1.68); tests/unit/shared/codex-screen-footer-model.test.ts",
+      "evidence": "new WP2 PR 3 P3.10 module (src/shared/codex-screen.ts): the pure reading of a Codex pane shared by the renderer's typed commands and main's Watchdog, moved byte-identically from the renderer (screenRegistry's readXtermScreen, codexComposer's reading); Codex's hook review screens read as blocking (WP1.68); tests/unit/renderer/codex-screen-hooks-review.test.ts, tests/unit/renderer/codex-composer.test.ts, tests/unit/renderer/screen-registry.test.ts; WP2 PR 3 P3.15 round 1 (the spec, code-quality and ADR-009 lens findings, and the VM re-check) (WP1.68): codexTextTyped reads text typed at the composer over its wrapped rows (indented under the text), with nothing in the way and the footer last; tests/unit/renderer/codex-image-paste.test.ts; WP2 PR 4 P4.1: the MCP approval form and the sandbox menu title read as blocked, two new readers (WP1.68); tests/unit/renderer/codex-screen-p41.test.ts; WP2 PR 4 P4.3 carrier (row 53, fc460f8f): codexPromptKeeps, the text Codex's prompt keeps and how many characters outside the BMP it would drop (WP1.68); tests/unit/main/codex-ask-carrier.test.ts; 2.1.3-beta.10 section C5 (aicc_planning #349): Codex 0.157.1's one shortcuts hint row under the footer (\"? for shortcuts\", at the footer's indent) reads as the footer alone did, ready or busy; any other row, a second hint row or a wrapped footer still reads unrecognised (WP1.68); tests/unit/shared/codex-screen-shortcuts-hint.test.ts; 2.1.3-beta.12 section C3 (aicc_planning #357): the other rows probe P19's second run recorded under the footer (Codex 0.170.0's agents row, the shortcuts key rebound to F6, the queue hint) read as the footer alone did, the queue hint busy, and the composer's draft and height are read over them, a draft Codex wraps onto more rows over the queue hint too; a warning count at the right of the row, any row not recorded, two rows, another indent or a wrapped footer still reads unrecognised (WP1.68); tests/unit/shared/codex-screen-hint-rows.test.ts; 2.1.3-beta.17 section C7 (aicc_planning #371): Codex's warning count at the right of the row under the footer reads with the hint row it sits beside, and the count alone under a draft is read by the draft and height readers and taken by the readers that confirm a typed text (codexTextTyped, codexCommandTyped, codexPastedContentShown), so composer-submit presses Enter or takes its text back (WP1.68); tests/unit/shared/codex-screen-warning-row.test.ts; 2.1.3-beta.17 section C8 (aicc_planning #416): the footer's model is matched in either case (Codex 0.157.1 shows gpt-5.5 as GPT-5.5) (WP1.68); tests/unit/shared/codex-screen-footer-model.test.ts; 2.1.3-beta.19 section 4 (aicc_planning#436): the footer Codex 0.170.0 and 0.172.0 wrap onto two rows is read in its recorded shape as a footer of one row (state, draft, height and the three confirm readers); any other wrap still reads unrecognised (WP1.68), tests/unit/shared/codex-screen-wrapped-footer.test.ts",
       "note": "created by WP2 PR 3 P3.10; no Node import, used by main and renderer"
     },
     {
@@ -11755,6 +11799,16 @@
       "note": ""
     },
     {
+      "path": "tests/unit/renderer/session-status-strip-remote-usage.test.tsx",
+      "predicates": [
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "new 2.1.3-beta.19 section 3 (aicc_planning#434) test (tests/unit/renderer/session-status-strip-remote-usage.test.tsx): a helper tab's strip says why its model limits are not shown (own sign-in, no reading yet), shows this computer's bars and extra usage for a held account, and never draws an empty or zero bar; its one Codex line stands in for the strip's Codex review usage hook (useCodexReviewUsage), as the other strip tests do; listed in the repository-wide legacy Codex manifest, zero unmatched at the merge gate (WP1.67)",
+      "note": ""
+    },
+    {
       "path": "tests/unit/renderer/session-status-strip-surface.test.tsx",
       "predicates": [
         "P13"
@@ -12531,7 +12585,7 @@
       ],
       "category": "TEST",
       "disposition": "added",
-      "evidence": "new 2.1.3-beta.12 section C3 test (tests/unit/shared/codex-screen-hint-rows.test.ts): the recorded Codex 0.157.1 and 0.170.0 screens with each hint row the reader takes under the footer read their state (ready, the queue hint busy), a draft wrapped onto two rows is read over the queue hint, and the screens with a warning count at the right of the row, each row twice, at another indent, above the footer or under a wrapped footer, and any row not recorded, read unrecognised (WP1.68); 2.1.3-beta.17 section C7 (aicc_planning #371): the recorded screens with the warning count at the right of the row read ready, a two-row draft over the count alone is read, and the count beside a hint Codex draws at rest reads ready; the count beside the queue hint or alone under an empty composer still reads unrecognised (WP1.68)",
+      "evidence": "new 2.1.3-beta.12 section C3 test (tests/unit/shared/codex-screen-hint-rows.test.ts): the recorded Codex 0.157.1 and 0.170.0 screens with each hint row the reader takes under the footer read their state (ready, the queue hint busy), a draft wrapped onto two rows is read over the queue hint, and the screens with a warning count at the right of the row, each row twice, at another indent, above the footer or under a wrapped footer, and any row not recorded, read unrecognised (WP1.68); 2.1.3-beta.17 section C7 (aicc_planning #371): the recorded screens with the warning count at the right of the row read ready, a two-row draft over the count alone is read, and the count beside a hint Codex draws at rest reads ready; the count beside the queue hint or alone under an empty composer still reads unrecognised (WP1.68); 2.1.3-beta.19 section 4 (aicc_planning#436): the footer Codex 0.170.0 and 0.172.0 wrap onto two rows is read in its recorded shape as a footer of one row (state, draft, height and the three confirm readers); any other wrap still reads unrecognised (WP1.68), tests/unit/shared/codex-screen-wrapped-footer.test.ts",
       "note": "created by 2.1.3-beta.12 section C3; pure rows, nothing started"
     },
     {
@@ -12542,7 +12596,7 @@
       ],
       "category": "TEST",
       "disposition": "added",
-      "evidence": "new 2.1.3-beta.10 section C5 test (tests/unit/shared/codex-screen-shortcuts-hint.test.ts): the four recorded Codex 0.157.1 ready screens (probe P19) read ready with the shortcuts hint row under the footer, a turn running reads busy, Plan mode is still read from the footer, and any other row under the footer, two hint rows or a wrapped footer read unrecognised (WP1.68); 2.1.3-beta.12 section C3 (aicc_planning #357): the queue hint and Codex 0.170.0's agents row leave its list of refused rows, read now and pinned in tests/unit/shared/codex-screen-hint-rows.test.ts (WP1.68)",
+      "evidence": "new 2.1.3-beta.10 section C5 test (tests/unit/shared/codex-screen-shortcuts-hint.test.ts): the four recorded Codex 0.157.1 ready screens (probe P19) read ready with the shortcuts hint row under the footer, a turn running reads busy, Plan mode is still read from the footer, and any other row under the footer, two hint rows or a wrapped footer read unrecognised (WP1.68); 2.1.3-beta.12 section C3 (aicc_planning #357): the queue hint and Codex 0.170.0's agents row leave its list of refused rows, read now and pinned in tests/unit/shared/codex-screen-hint-rows.test.ts (WP1.68); 2.1.3-beta.19 section 4 (aicc_planning#436): the footer Codex 0.170.0 and 0.172.0 wrap onto two rows is read in its recorded shape as a footer of one row (state, draft, height and the three confirm readers); any other wrap still reads unrecognised (WP1.68), tests/unit/shared/codex-screen-wrapped-footer.test.ts",
       "note": "created by 2.1.3-beta.10 section C5; pure rows, nothing started"
     },
     {
@@ -12566,6 +12620,17 @@
       "disposition": "added",
       "evidence": "new 2.1.3-beta.17 section C7 test (tests/unit/shared/codex-screen-warning-row.test.ts, aicc_planning#371): Codex's warning count at the right of the hint row reads as the hint row alone did, the count alone under a draft (C7's recordings) is read and confirmed by codexTextTyped, codexCommandTyped and codexPastedContentShown, a count that is not Codex's, not at the right edge, beside the queue hint or alone under an empty composer is refused, and composer-submit and the renderer's typing press Enter once over the recorded screens (WP1.68)",
       "note": "created by 2.1.3-beta.17 section C7; pure rows and fakes, nothing started"
+    },
+    {
+      "path": "tests/unit/shared/codex-screen-wrapped-footer.test.ts",
+      "predicates": [
+        "P01",
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "new 2.1.3-beta.19 section 4 test (tests/unit/shared/codex-screen-wrapped-footer.test.ts, aicc_planning#436): the recorded Codex 0.170.0 and 0.172.0 screens whose footer wraps onto two rows read their state, draft and height, and a command, a text and a paste placeholder typed over the wrapped footer are confirmed. These read unrecognised and confirm nothing: a second row not of the recorded shape; one of Codex's own rows (a footer, a popup row, a hint row) under a footer row cut at the edge; a hint row, a popup row or a footer under the wrapped footer; a wrapped footer among other rows (WP1.68)",
+      "note": "created by 2.1.3-beta.19 section 4; pure rows, nothing started"
     },
     {
       "path": "tests/unit/shared/extra-args.test.ts",
@@ -12605,7 +12670,7 @@
       ],
       "category": "TEST",
       "disposition": "added",
-      "evidence": "new 2.1.3-beta.11 A2 test (ADR-030 screen corpus), extended by 2.1.3-beta.12 A2 (probe P19's second run: Codex 0.170.0 and the hint rows): the rows xterm.js gives for each recording of Claude Code, Codex and the default shell equal the committed rows, each reader reads the state in the recording's name, and the files hold their names, versions, sizes and no personal text; it reads Codex's screen with the shared reader and drives no Codex code path (WP1.67); tests/unit/shared/screen-corpus.test.ts; 2.1.3-beta.12 section C3 (aicc_planning #357): its known misreads lose each recording the reader now reads; those left, all unrecognised, are Codex 0.170.0's wrapped footers and the screens that end in a warning count at the right of the hint row, the mid-reply ones among them (WP1.67); tests/unit/shared/codex-screen-hint-rows.test.ts; 2.1.3-beta.17 section C7 (aicc_planning #371): Codex's warning-draft state (two recordings of C7's hold) reads ready with the draft the probe typed; its known misreads lose the 8 recordings with the warning count at the right of the hint row, and Codex 0.157.1's macOS mid-reply is listed reading ready on aicc_planning#370 (WP1.67); tests/unit/shared/codex-screen-warning-row.test.ts",
+      "evidence": "new 2.1.3-beta.11 A2 test (ADR-030 screen corpus), extended by 2.1.3-beta.12 A2 (probe P19's second run: Codex 0.170.0 and the hint rows): the rows xterm.js gives for each recording of Claude Code, Codex and the default shell equal the committed rows, each reader reads the state in the recording's name, and the files hold their names, versions, sizes and no personal text; it reads Codex's screen with the shared reader and drives no Codex code path (WP1.67); tests/unit/shared/screen-corpus.test.ts; 2.1.3-beta.12 section C3 (aicc_planning #357): its known misreads lose each recording the reader now reads; those left, all unrecognised, are Codex 0.170.0's wrapped footers and the screens that end in a warning count at the right of the hint row, the mid-reply ones among them (WP1.67); tests/unit/shared/codex-screen-hint-rows.test.ts; 2.1.3-beta.17 section C7 (aicc_planning #371): Codex's warning-draft state (two recordings of C7's hold) reads ready with the draft the probe typed; its known misreads lose the 8 recordings with the warning count at the right of the hint row, and Codex 0.157.1's macOS mid-reply is listed reading ready on aicc_planning#370 (WP1.67); tests/unit/shared/codex-screen-warning-row.test.ts; 2.1.3-beta.19 section 4 (aicc_planning#436): Codex 0.170.0's wrapped footers leave its known misreads (2 left, both on #370: Codex 0.157.1's and Codex 0.170.0's macOS mid-reply, which read ready), and two wrapped Codex 0.172.0 recordings join it as wrapped-after-reply (WP1.67)",
       "note": "reads helper/fixtures/screens only"
     },
     {
