@@ -399,6 +399,7 @@ fn an_until_ended_holder_whose_program_exits_before_the_first_attach_waits_for_i
     // nobody attached yet: the holder is still there for the first attach.
     let deadline = Instant::now() + Duration::from_secs(15);
     while record_file(&store, "until-0013").and_then(|r| r.get("child").and_then(Value::as_str).map(str::to_string)).as_deref() != Some("exited") {
+        assert!(pids::alive(kept.0.pid()), "the holder ended before the app's first attach");
         assert!(Instant::now() < deadline, "the record never said the program had exited");
         std::thread::sleep(Duration::from_millis(100));
     }
