@@ -5,7 +5,9 @@
 // Conductor's question on Codex (askQuestion, handOffAskQuestion), and nowhere
 // else. A Claude Code marker is the one main does not type itself: the
 // Claude Code package hands it to canvas/claude-marker-typing.ts, which has
-// the renderer type it at main's request.
+// the renderer type it at main's request (in a tab through the session helper
+// on its machine the renderer types the line alone, and the package types its
+// Enter through the write port: 2.1.3-beta.19 section 6.1).
 // tests/unit/main/session-input-ownership.test.ts holds every other place in
 // main that types into a session to a shrinking allow-list.
 //
@@ -580,7 +582,10 @@ export function submitImage(sessionId: string, imagePath: string, sentence: stri
  * the chain drops untyped (held past its bound, its run ended) is told to
  * its canvas by the chain itself. `canvasId`, the canvas the marker was
  * filed on when the caller named one, goes with the line, so the same words
- * filed on two canvases stay two markers.
+ * filed on two canvases stay two markers. In a tab through the session
+ * helper on its machine (RunScreenTyping.wholeWrites, 2.1.3-beta.19 section
+ * 6.1) its Enter is its own write, PROMPT_ENTER_DELAY_MS after the line, and
+ * only while the run is still the one the line went to, as the retry's is.
  *
  * Since 2.1.3-beta.18 section 4 each of those is the marker member of the
  * run screen of the provider that runs the session, handed the marker

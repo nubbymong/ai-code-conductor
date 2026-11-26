@@ -1091,7 +1091,9 @@ if (!gotTheLock) {
       // 2.1.3-beta.10 A2, 2.1.3-beta.18 section 4: each session's retry is the
       // retry member of its own provider's run screen (session-input
       // submitRetry): a Claude Code session's is the tmux leave key on an SSH
-      // Persistent session, then the line and Enter in one write, and answers
+      // Persistent session, then the line and Enter in one write (in a tab
+      // through the session helper on its machine, the Enter as its own
+      // write, 2.1.3-beta.18 fix round), and answers
       // nothing; a Codex session's goes through the Codex composer rule, which
       // answers, and is typed only while its incident is still on (stillWanted).
       send: (sessionId, text, stillWanted) => submitRetry(sessionId, text, stillWanted),

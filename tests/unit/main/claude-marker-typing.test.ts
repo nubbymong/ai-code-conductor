@@ -284,6 +284,16 @@ describe('the request to the renderer', () => {
     expect(await first).toBeNull()
   })
 
+  it('says enterApart only when asked to (2.1.3-beta.19 section 6.1): every other request is as before, field for field', () => {
+    const sent: ClaudeMarkerAsk[] = []
+    T.setClaudeMarkerSender((ask) => { sent.push(ask); return true })
+    void T.askClaudePrompt('s1', 'type', 'Approved v2', 'm1')
+    void T.askClaudePrompt('s1', 'type', 'Approved v2', 'm1', false)
+    void T.askClaudePrompt('s1', 'type', 'Approved v2', 'm1', true)
+    expect(sent.map((a) => 'enterApart' in a)).toEqual([false, false, true])
+    expect(sent[2].enterApart).toBe(true)
+  })
+
   it('no sender, a sender with no window, or a sender that throws: null, at once', async () => {
     expect(await T.askClaudePrompt('s1', 'probe', 'x', 'm1')).toBeNull()
     T.setClaudeMarkerSender(() => false)
@@ -360,6 +370,47 @@ describe('queueClaudeMarkerLine', () => {
     expect(idsOf('two').size).toBe(1)
     expect([...idsOf('one')][0]).not.toBe([...idsOf('two')][0])
     expect(r.asks.filter((a) => a.line === 'one').length).toBeGreaterThan(2)
+  })
+
+  it('2.1.3-beta.19 section 6.1: with an Enter of its own, every request says enterApart, the Enter is handed the line once typed, and the next marker waits for it', async () => {
+    vi.useFakeTimers()
+    const r = renderer()
+    const entered: string[] = []
+    const enter = (typedLine: string): Promise<boolean> => new Promise((resolve) => {
+      setTimeout(() => { entered.push(typedLine); resolve(true) }, 2_000)
+    })
+    T.queueClaudeMarkerLine('s1', 'one', () => true, 'canvasA', enter)
+    T.queueClaudeMarkerLine('s1', 'two', () => true, 'canvasA', enter)
+    await vi.advanceTimersByTimeAsync(3_000)
+    // Held: no Enter for a marker not typed.
+    expect(entered).toEqual([])
+    r.ready = true
+    // The next read, the second-read wait, then the type.
+    await vi.advanceTimersByTimeAsync(T.CLAUDE_MARKER_POLL_MS + T.CLAUDE_MARKER_SECOND_READ_MS + 200)
+    expect(r.typed).toEqual(['s1:one'])
+    // The next marker is not asked to type until the first one's Enter went.
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(entered).toEqual([])
+    expect(r.typed).toEqual(['s1:one'])
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(entered).toEqual(['one', 'two'])
+    expect(r.typed).toEqual(['s1:one', 's1:two'])
+    expect(r.asks.length).toBeGreaterThan(2)
+    expect(r.asks.every((a) => a.enterApart === true)).toBe(true)
+  })
+
+  it('2.1.3-beta.19 section 6.1: without one, no request says enterApart; an Enter that throws or finds the run gone ends that marker only', async () => {
+    vi.useFakeTimers()
+    const r = renderer()
+    r.ready = true
+    T.queueClaudeMarkerLine('s1', 'plain', () => true)
+    T.queueClaudeMarkerLine('s1', 'throws', () => true, undefined, () => Promise.reject(new Error('gone')))
+    T.queueClaudeMarkerLine('s1', 'run gone', () => true, undefined, () => Promise.resolve(false))
+    T.queueClaudeMarkerLine('s1', 'after', () => true)
+    await vi.advanceTimersByTimeAsync(20_000)
+    expect(r.typed).toEqual(['s1:plain', 's1:throws', 's1:run gone', 's1:after'])
+    expect(r.asks.filter((a) => a.line === 'plain' || a.line === 'after').some((a) => 'enterApart' in a)).toBe(false)
+    expect(r.asks.filter((a) => a.line === 'throws' || a.line === 'run gone').every((a) => a.enterApart === true)).toBe(true)
   })
 
   it('collapses a line the same as one still held for the session, and types a later one again', async () => {
