@@ -17,7 +17,10 @@
  * - a clock holder left for the session is still ended first, as today;
  * - End sends term.end over a link of its own, then its folder goes;
  * - a link that stays down past every try lets go of it: no term.end, even
- *   when the link comes back for the end;
+ *   when the link comes back for the end; an attach again that finds no
+ *   holder says the session is over there;
+ * - a Restart launches with --continue only when the tab has a conversation
+ *   to come back to (it showed its session), never after a first start that failed;
  * - the two record shapes read, and every other mix is refused.
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
@@ -397,6 +400,114 @@ describe('an SSH Persistent tab through the session helper, kept until it is end
     await new Promise((r) => setTimeout(r, 100))
     expect(holder.endsAsked).toBe(0)
     expect(holder.ended).toBe(false)
+  })
+
+  // Fix round 2: an attach again that finds no holder (the bridge's exit 3)
+  // means the session is over on the machine; the tab says that, not that it
+  // runs on there (the plan's Ubuntu host line: the tab says the session
+  // ended and a Restart resumes the conversation).
+  it('an attach again that finds no holder says the session is over, never that it runs on there', async () => {
+    const id = 'kept-gone'
+    const holder = holderFor(id)
+    let bridges = 0
+    const ssh2 = new FakeSsh({
+      answer: (c) => {
+        const n = c.values[0]
+        if (c.script === 'hold') return { stdout: `AICC-HASH ${n} ok ${SHA}\n${JSON.stringify(linuxRecord(holder))}\n` }
+        return { stdout: result(n, {}) }
+      },
+      // The first bridge attaches; every later one finds no holder (exit 3).
+      bridge: () => (++bridges === 1 ? holder.connect() : null),
+    })
+    const spec = remoteLaunchSpec(MACHINE, { program: MACHINE.claudePath!, args: [], env: {} }, {}, '~', 100, 30)
+    const pty = new RemoteHelperPty({ appPtyId: id, machine: MACHINE, installId: INSTALL, runner: ssh2, spec, kind: 'until-ended', log: (m) => logs.push(m), reconnectDelaysMs: [10, 10], sleep: (ms) => new Promise((r) => setTimeout(r, ms)) })
+    let exit: number | null = null
+    let shown = ''
+    let shownAtExit = ''
+    pty.onData((d) => { shown += d })
+    pty.onExit((e) => { exit = e.exitCode; shownAtExit = shown })
+    await until('attached', () => holder.attached !== null)
+    // The holder's tree ends on the machine: the link drops and no holder is left.
+    holder.attached!.close()
+    await until('given up', () => exit !== null)
+    expect(shownAtExit).toContain(`[This tab's session on pi.lan is over: no session helper holds it there any more (it ended there, or the machine restarted). Restart starts a new session and resumes the conversation.]`)
+    expect(shownAtExit).not.toContain('The session runs on there')
+    expect(bridges).toBeGreaterThanOrEqual(2)
+    expect(holder.endsAsked).toBe(0)
+  })
+
+  // Fix round 2: --continue only for a marked tab that has a conversation of
+  // its own to come back to. A tab whose first start failed had none.
+  it('a marked tab whose first start failed starts fresh at its Restart: no --continue', async () => {
+    const id = 'kept-first-fail'
+    forgetRemoteHelperTab(id)
+    plugIn(signals().deps)
+    // The first start: the hold gets no answer.
+    const pty = remoteHelperPty(win, id, { ssh: PERSISTENT }, 100, 30)!
+    let out = ''
+    pty.onData((d) => { out += d })
+    await until('the note', () => out.includes('could not start through the session helper'))
+    pty.kill()
+    forgetRemoteHelperTab(id, true)
+    // The host answers now; the Restart carries the tab's mark.
+    const holder = holderFor(id)
+    host(holder)
+    remoteHelperPty(win, id, { ssh: PERSISTENT, remoteVia: 'helper' }, 100, 30)
+    await until('the launch', () => holder.launch !== null && holder.attached !== null)
+    expect((holder.launch as { argv: string[] }).argv).not.toContain('--continue')
+    await endRemoteTab(id)
+    forgetRemoteHelperTab(id)
+  })
+
+  it('a marked tab that showed its session, whose kept session then ended, launches again on its conversation: --continue', async () => {
+    const id = 'kept-shown-gone'
+    forgetRemoteHelperTab(id)
+    plugIn(signals().deps)
+    const first = holderFor(id)
+    host(first)
+    const pty = remoteHelperPty(win, id, { ssh: PERSISTENT }, 100, 30)!
+    await until('attached', () => first.launch !== null && first.attached !== null)
+    expect((first.launch as { argv: string[] }).argv).not.toContain('--continue')
+    // A Restart lets go of it; meanwhile its holder ended on the machine.
+    pty.kill()
+    await until('let go', () => first.attached === null)
+    forgetRemoteHelperTab(id, true)
+    await endRemoteSession(MACHINE.did, remoteSessionId(id))
+    expect(first.ended).toBe(true)
+    const second = holderFor(id)
+    host(second)
+    remoteHelperPty(win, id, { ssh: PERSISTENT }, 100, 30)
+    await until('the new launch', () => second.launch !== null && second.attached !== null)
+    expect((second.launch as { argv: string[] }).argv).toContain('--continue')
+    await endRemoteTab(id)
+    forgetRemoteHelperTab(id)
+  })
+
+  it('a kept tab whose session ended on the machine while it showed it says so, and its Restart launches again on its conversation (--continue)', async () => {
+    const id = 'kept-over-restart'
+    forgetRemoteHelperTab(id)
+    plugIn(signals().deps)
+    const first = holderFor(id)
+    host(first)
+    const pty = remoteHelperPty(win, id, { ssh: PERSISTENT }, 100, 30)!
+    let out = ''
+    pty.onData((d) => { out += d })
+    await until('attached', () => first.launch !== null && first.attached !== null)
+    // Its holder's tree ends on the machine: the link drops, and the attach
+    // again finds no holder (the bridge's exit 3).
+    first.ended = true
+    first.attached!.close()
+    await until('the note', () => out.includes('is over: no session helper holds it there any more'))
+    expect(out).not.toContain('The session runs on there')
+    // The Restart: its terminal is over already, so no kill reaches it.
+    forgetRemoteHelperTab(id, true)
+    const second = holderFor(id)
+    host(second)
+    remoteHelperPty(win, id, { ssh: PERSISTENT }, 100, 30)
+    await until('the new launch', () => second.launch !== null && second.attached !== null)
+    expect((second.launch as { argv: string[] }).argv).toContain('--continue')
+    await endRemoteTab(id)
+    forgetRemoteHelperTab(id)
   })
 
   // End asked while the tab's start still finds its holder (the tab is in

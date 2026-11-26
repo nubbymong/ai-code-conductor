@@ -24,8 +24,8 @@
  * text with no quote or backslash cannot write JSON, so these results are
  * words, not section 6's JSON; the helper's own commands (the self-test)
  * still print theirs. The launcher scripts (version, selftest, list, hold,
- * bridge, sweep and, from 2.1.3-beta.19, field) hash the helper's file before
- * every start and print section 13's
+ * bridge, sweep and, from 2.1.3-beta.19, field and sessions) hash the helper's
+ * file before every start and print section 13's
  * `AICC-HASH <nonce> <state> <hex>` line, and run the helper only on `ok`.
  *
  * Layout (section 1): `~/.aicc/<did>/owner` (the marker),

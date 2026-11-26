@@ -51,11 +51,13 @@
  * --until-ended`, ./kept.ts): closing the tab, a quit and an app update let go
  * of it (HelperPty.release: a term.detach, never a term.end, and no exit keys);
  * so does a link that stays down past the tries above (a Restart attaches
- * again). Only End ends it (endKept: term.end over a link of its own, then
- * its folder). A start whose hold finds a holder for its session (exit 3)
- * asks list mode: one that runs until it is ended is attached to (its replay,
- * its newest status and its queued hook events, once), and nothing is
- * launched; a clock holder an earlier run left is ended first, as before. The
+ * again; an attach again that finds no holder means the session is over
+ * there, and the tab says so). Only End ends it (endKept: term.end over a
+ * link of its own, then its folder). A start whose hold finds a holder for its
+ * session (exit 3) asks list mode: one that runs until it is ended is
+ * attached to (its replay, its newest status and its queued hook events,
+ * once), and nothing is launched; a clock holder an earlier run left, or an
+ * until-ended one with nothing launched in it, is ended first. The
  * host reads and the account field read (./host-reads.ts readHostForStart)
  * run again at such an attach, so its label and the source of its weekly bars
  * are set again (section 1.1's contract). The hold's record says the kind it
@@ -285,11 +287,14 @@ export class RemoteDriver implements HelperPtyDriver {
   private adopted = false
   /** The tab was attached to its holder at least once. */
   private everAttached = false
-  /** End was asked for (the close question's, or a Restart's own): the
-   *  holder may be ended from here. */
+  /** The tab's terminal attached to its holder at least once. */
+  get wasAttached(): boolean { return this.everAttached }
+  /** End was asked for (the close question's End, Remove of a session left running, or End on its machine's card): the holder may be ended from here. */
   endAsked = false
   /** The link stayed down past every try: the kept session is let go of. */
   keptLost = false
+  /** The tab's attach again found no holder for its session (the bridge's exit 3): it is over on the machine. */
+  keptGone = false
 
   constructor(private readonly o: RemoteSessionOptions) {
     this.target = { host: o.machine.host, port: o.machine.port, user: o.machine.user }
@@ -503,7 +508,7 @@ export class RemoteDriver implements HelperPtyDriver {
     return listing?.sessions.find((s) => s.session === sid) ?? null
   }
 
-  /** The clock holder a crash or an update left for this tab's session: ended. */
+  /** A holder an earlier run left for this tab's session that is not attached to: a clock holder (a crash or an update within its away clock), or an until-ended one with nothing launched in it. Ended. */
   private async endLeftover(rec: HolderRecord): Promise<void> {
     this.o.log(`[remote-helper] ${rec.session}: a holder an earlier run left for this tab is ended first`)
     let conn: HolderConnection | undefined
@@ -553,6 +558,7 @@ export class RemoteDriver implements HelperPtyDriver {
         return conn
       } catch (err) {
         last = err as Error
+        if (err instanceof GoneError) this.keptGone = true
         if (err instanceof FinalError) break
         // The reason says which side ended (ssh-exec.ts openScriptStream): the
         // ssh link on this computer, or the helper on the machine.
@@ -765,11 +771,15 @@ export class RemoteHelperPty implements IPty {
     inner.onData((d) => this.data.fire(d))
     inner.onExit((e) => {
       // A link that stayed down past every try: a kept session is let go of,
-      // never ended (the Restart attaches again), and the tab says so.
+      // never ended (the Restart attaches again), and the tab says so. One
+      // whose attach again found no holder is over on the machine: the tab
+      // says that instead (its Restart starts a new session on the conversation).
       if (e.exitCode === LOST_EXIT_CODE) {
         this.driver.keptLost = true
         if (this.untilEnded && !this.driver.endAsked) {
-          this.data.fire(`\r\n[This tab is no longer attached to its session on ${this.o.machine.host} (the link stayed down, or another tab took it). The session runs on there, kept by the session helper: Restart attaches to it again, and the Machines page lists it, with End.]\r\n`)
+          this.data.fire(this.driver.keptGone
+            ? `\r\n[This tab's session on ${this.o.machine.host} is over: no session helper holds it there any more (it ended there, or the machine restarted). Restart starts a new session and resumes the conversation.]\r\n`
+            : `\r\n[This tab is no longer attached to its session on ${this.o.machine.host} (the link stayed down, or another tab took it). The session runs on there, kept by the session helper: Restart attaches to it again, and the Machines page lists it, with End.]\r\n`)
         }
       }
       this.exited = true
@@ -779,7 +789,7 @@ export class RemoteHelperPty implements IPty {
     const { input, size, killed } = this.early
     this.early = { input: [], bytes: 0, killed: false }
     if (size) inner.resize(size.cols, size.rows)
-    for (const d of input) inner.write(d)
+    for (const d of input) this.write(d)
     if (killed) this.kill()
   }
 
@@ -807,6 +817,8 @@ export class RemoteHelperPty implements IPty {
   get untilEnded(): boolean { return (this.o.kind ?? 'away') === 'until-ended' || this.held?.attach === true }
   /** The start attached to a session kept for this tab (nothing launched). */
   get attachedToKept(): boolean { return this.held?.attach === true }
+  /** The tab showed its session at least once. */
+  get everShown(): boolean { return this.driver.wasAttached }
 
   write(data: string | Buffer): void {
     if (this.inner) { this.inner.write(data); return }

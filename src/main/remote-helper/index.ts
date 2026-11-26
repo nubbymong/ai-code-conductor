@@ -94,6 +94,8 @@ const restoredTabs = new Set<string>()
 /** The machine that keeps each kept tab's session, by app session id, for
  *  the flow state's catch-up. */
 const keptOn = new Map<string, string>()
+/** The kept tabs whose terminal attached at least once this run, by app session id, until the tab is closed: only such a tab, one a restore brought back, or one opened by Re-attach launches again on its conversation when its kept session is gone; a tab whose first start failed starts fresh. */
+const keptShown = new Set<string>()
 
 /** How many open tabs go through the helper on machine `did` (Remove waits for none). */
 export function remoteTabsOn(did: string): number {
@@ -119,6 +121,7 @@ export function forgetRemoteHelperTab(sessionId: string, restart = false): void 
   todayTabs.delete(sessionId)
   restoredTabs.delete(sessionId)
   keptOn.delete(sessionId)
+  keptShown.delete(sessionId)
 }
 
 /** The tabs a restore brought back (pty:tabsRestored, 2.1.3-beta.19): an SSH
@@ -207,7 +210,9 @@ export function remoteLaunchOf(via: ProviderRemoteLaunch, m: RemoteMachineRecord
     extraArgs: options.extraArgs,
     disableAutoMemory: options.disableAutoMemory,
     // `resumes`: a marked tab whose kept session is gone launches again on
-    // its conversation (2.1.3-beta.19), as a reconnect does.
+    // its conversation (2.1.3-beta.19), as a reconnect does: one whose
+    // terminal attached this run, one a restore brought back, or one opened
+    // by Re-attach (remoteHelperPty); a tab whose first start failed starts fresh.
     reconnect: !!options.ssh?.reconnect || resumes,
     cwd: remoteCwd(remotePath, m.home),
     settings,
@@ -253,6 +258,9 @@ export function remoteHelperPty(win: OutputWindow, sessionId: string, options: R
   const persistent = ssh.detachable !== false
   // A tab's mark (2.1.3-beta.19): its saved record's, or its last start's this run.
   const marked = persistent && (options.remoteVia === 'helper' || lastPath.get(sessionId) === 'kept')
+  // Launched again on its conversation when its kept session is gone: only a
+  // marked tab that showed its session this run, was restored, or is a Re-attach.
+  const resumes = marked && (keptShown.has(sessionId) || restoredTabs.has(sessionId) || ssh.reconnect === true)
   const startsNothing = (r: Extract<Route, { via: 'nothing' }>): IPty => {
     d.log(`[remote-helper] ${sessionId}: nothing started, because its session is kept by the session helper and ${r.why}`)
     const note = new NoticePty(`This tab's session is kept by the session helper on its machine, and it cannot be opened now: ${r.why}. Next: ${r.step}.`, cols, rows)
@@ -320,7 +328,7 @@ export function remoteHelperPty(win: OutputWindow, sessionId: string, options: R
     // The app's tools go to the tab only while it serves them (asked once, at the start).
     let tools = false
     try { tools = d.signals?.toolsServed() === true } catch { tools = false }
-    const plan = remoteLaunchOf(provider.remoteLaunch, m, { ...options, provider: providerId }, settings, d.systemPrefersDark, remoteSessionId(sessionId), cols, rows, tools, marked)
+    const plan = remoteLaunchOf(provider.remoteLaunch, m, { ...options, provider: providerId }, settings, d.systemPrefersDark, remoteSessionId(sessionId), cols, rows, tools, resumes)
     pty = new RemoteHelperPty({
       appPtyId: sessionId,
       machine: m,
@@ -357,6 +365,9 @@ export function remoteHelperPty(win: OutputWindow, sessionId: string, options: R
     win.webContents.send(`pty:data:${sessionId}`, data)
   })
   pty.onExit(() => {
+    // An exit of its own (a link given up on); a killed one was counted at its
+    // kill, and a close's exit comes after the close forgot the tab.
+    if (!over && pty.untilEnded && pty.everShown) keptShown.add(sessionId)
     over = true
     if (openTabs.get(sessionId) === pty) openTabs.delete(sessionId)
   })
@@ -366,6 +377,7 @@ export function remoteHelperPty(win: OutputWindow, sessionId: string, options: R
     over = true
     if (openTabs.get(sessionId) === pty) openTabs.delete(sessionId)
     if (startedThroughHelper.get(sessionId) === pty) startedThroughHelper.delete(sessionId)
+    if (pty.untilEnded && pty.everShown) keptShown.add(sessionId)
     kill(signal)
   }
   return pty

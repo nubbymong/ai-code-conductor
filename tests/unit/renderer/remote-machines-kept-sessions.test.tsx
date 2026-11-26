@@ -3,7 +3,8 @@
 // The sessions a machine's helper keeps, on its Machines card (plan
 // 2.1.3-beta.19 section 1.2; aicc_planning#437), over a fake bridge: each
 // listed session is a row; one with a config the app holds offers Re-attach
-// and End, one with none End only, one a tab shows neither; with the switch
+// and End, one with none End only, one an attached tab shows neither, one an
+// open tab is not attached to End only; with the switch
 // off a kept session is still listed and can be ended, and Re-attach says the
 // switch is off and opens nothing; End sends the machine and the helper's
 // session id, and drops a left-running entry once it is ended; a machine
@@ -29,13 +30,14 @@ const SID_B = `rm${'b'.repeat(30)}`
 const SID_C = `rm${'c'.repeat(30)}`
 const machine = { did: DID, label: 'Pi', target: 'nick@pi.lan:22', checked: true, lastCheck: { at: 1, ok: true }, helperVersion: '0.1.0', system: 'Linux aarch64', inUse: 0 }
 const state = (over: Partial<RemoteMachinesState> = {}): RemoteMachinesState => ({
-  available: true, switchOn: true, bundled: { ok: true, version: '0.1.0', size: 3_000_000, sha12: 'abcdef012345' }, machines: [machine], candidates: [], ...over,
+  available: true, switchOn: true, bundled: { ok: true, version: '0.1.0', files: [{ arch: 'aarch64', size: 3_000_000, sha12: 'abcdef012345' }] }, machines: [machine], candidates: [], ...over,
 })
-const listed: RemoteSessionsState = { machines: [{ did: DID, ok: true, sessions: [
+const rows = [
   { sid: SID_A, appSessionId: 'left-1', untilEnded: true, attached: false, running: true },
   { sid: SID_B, appSessionId: 'orphan-1', untilEnded: true, attached: false, running: true },
   { sid: SID_C, appSessionId: 'open-1', untilEnded: true, attached: true, running: true },
-] }] }
+]
+const listed: RemoteSessionsState = { machines: [{ did: DID, ok: true, sessions: rows }] }
 
 let container: HTMLDivElement
 let root: Root
@@ -83,6 +85,27 @@ describe('a machine card\'s kept sessions', () => {
     expect(buttonIn(rowOf(SID_B), 'End')).toBeDefined()
     expect(rowOf(SID_C)?.textContent).toContain('open in a tab')
     expect(buttonIn(rowOf(SID_C), 'End')).toBeUndefined()
+  })
+
+  // Fix round 2: a tab open on a kept session it is not attached to (a
+  // restored marked tab with the switch off, a start that failed, a link that
+  // stayed down) is told to End it on this page, so its row offers End.
+  it('a row whose open tab is not attached to it offers End and no Re-attach; one an attached tab shows still offers neither', async () => {
+    const SID_D = `rm${'e'.repeat(30)}`
+    useSessionStore.setState({ sessions: [{ id: 'open-1', label: 'Open tab', sessionType: 'ssh' }, { id: 'open-2', label: 'Unattached tab', sessionType: 'ssh' }] as never, activeSessionId: null })
+    const remote = install(state(), { machines: [{ did: DID, ok: true, sessions: [
+      ...rows,
+      { sid: SID_D, appSessionId: 'open-2', untilEnded: true, attached: false, running: true },
+    ] }] })
+    await mount()
+    expect(rowOf(SID_D)?.textContent).toContain('open in a tab that is not attached to it')
+    expect(buttonIn(rowOf(SID_D), 'Re-attach')).toBeUndefined()
+    expect(buttonIn(rowOf(SID_D), 'End')).toBeDefined()
+    expect(buttonIn(rowOf(SID_C), 'End')).toBeUndefined()
+    expect(buttonIn(rowOf(SID_C), 'Re-attach')).toBeUndefined()
+    await act(async () => { buttonIn(rowOf(SID_D), 'End')!.click() })
+    await settle()
+    expect(remote.endSession).toHaveBeenCalledWith(DID, SID_D)
   })
 
   it('with the switch off: still listed and ended from here; Re-attach says the switch is off and opens nothing', async () => {

@@ -4,18 +4,19 @@ import type { TerminalConfig } from '../stores/configStore'
 import { pairDetachedEntry } from './detachedRemotes'
 
 /** One kept session's row on its machine's card (2.1.3-beta.19 section 1.2):
- *  its name, whether a tab shows it, and the saved config Re-attach opens it
- *  through (none: End only). */
+ *  its name, whether a tab is open on it, and the saved config Re-attach opens
+ *  it through (none: End only). */
 export interface KeptRow {
   session: RemoteKeptSession
   label: string
-  /** A tab of this app shows it now: it is closed there, not here. */
+  /** A tab of this app is open on it now: never Re-attach here; End here only
+   *  while that tab is not attached to it (one attached is ended from its tab). */
   open: boolean
   config: TerminalConfig | undefined
 }
 
 /** The rows for a machine's listed sessions: a left-running entry names the
- *  session and pairs it with its config; an open tab shows it. */
+ *  session and pairs it with its config; a tab of this app open on it marks it open. */
 export function keptRows(sessions: readonly RemoteKeptSession[], entries: readonly DetachedRemote[], configs: TerminalConfig[], openIds: ReadonlySet<string>, openLabels: ReadonlyMap<string, string>): KeptRow[] {
   return sessions.map((s) => {
     const id = s.appSessionId

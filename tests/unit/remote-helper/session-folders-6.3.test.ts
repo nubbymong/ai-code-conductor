@@ -101,6 +101,16 @@ describe('6.3: the list at start-up removes the folders whose holder is gone', (
     expect(scriptText('sweep').slice(0, -tail.length)).toContain('"$P" list --store "$A/store" </dev/null >/dev/null 2>&1; ')
   })
 
+  // A kept session's CLI runs the helper by the path its launch wrote: its
+  // settings.json (status line and hook commands) and mcp.json name
+  // ~/.aicc/<did>/helper/<folder of the build that launched it>/aicc-helper
+  // (remote-launch.ts, from session.ts remoteHelperCommands' helperPath), and
+  // an attach writes no file (session.ts prepare). So a Check that installs
+  // another helper must leave the earlier folder while a session may use it.
+  it('a Check that installs another helper removes no helper folder but the one it replaces: a kept session runs the helper its launch named', () => {
+    expect(scriptText('commit').split('; ').filter((p) => /\brm(dir)?\b/.test(p))).toEqual(['rm -f -- "$Q/aicc-helper"', 'rmdir -- "$Q" || no cannot-replace'])
+  })
+
   it('6.3: the list the app takes is that exec, and what it removed is logged once', async () => {
     plugIn()
     ssh.host = { answer: (c) => (c.script === 'sessions' ? { stdout: `AICC-HASH ${c.values[0]} ok ${SHA}\n{"v":1,"sessions":[],"removed":1,"skipped":0}\n${result(c.values[0], { swept: '2' })}` } : { code: 1 }) }

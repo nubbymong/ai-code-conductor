@@ -31,7 +31,7 @@ function KeptSessions({ rows, switchOn, busy, onReattach, onEnd }: {
         <li key={r.session.sid} className="flex items-center gap-2 flex-wrap text-[11px]" data-testid="remote-kept-session" data-sid={r.session.sid}>
           <span className="flex-1 min-w-[10rem] truncate" style={{ color: 'var(--text-primary)' }} title={r.label}>{r.label}</span>
           <span style={{ color: 'var(--text-secondary)' }}>
-            {r.open ? 'open in a tab' : r.session.untilEnded ? 'kept until you end it' : 'ends two minutes after its tab went'}
+            {r.open ? (r.session.attached ? 'open in a tab' : 'open in a tab that is not attached to it') : r.session.untilEnded ? 'kept until you end it' : 'ends two minutes after its tab went'}
             {r.session.running ? '' : ', its program has ended'}
           </span>
           {!r.open && r.session.untilEnded && r.config && (
@@ -45,7 +45,7 @@ function KeptSessions({ rows, switchOn, busy, onReattach, onEnd }: {
               Re-attach
             </DialogButton>
           )}
-          {!r.open && (
+          {(!r.open || !r.session.attached) && (
             <DialogButton variant="danger" disabled={busy} onClick={() => onEnd(r)} data-testid="remote-kept-end">End</DialogButton>
           )}
         </li>
