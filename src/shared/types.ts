@@ -403,9 +403,10 @@ export type RemoteAccountNotShown = 'no-account' | 'not-read'
 export const REMOTE_ACCOUNT_NOT_SHOWN: readonly RemoteAccountNotShown[] = ['no-account', 'not-read']
 
 /** Why such a tab shows no per-model weekly bars or extra usage: its machine
- *  uses its own sign-in, which this computer does not hold (`own-sign-in`),
- *  or this computer holds the account and has no usage reading for it
- *  (`no-reading`). */
+ *  uses its own sign-in, which this computer does not hold, or its provider
+ *  gives no usage source (`own-sign-in`); or this computer holds the account
+ *  and has no current usage reading for it (`no-reading`: none that answered,
+ *  or one the Account usage page marks stale). */
 export type RemoteUsageNotShown = 'own-sign-in' | 'no-reading'
 
 export interface StatuslineData {
