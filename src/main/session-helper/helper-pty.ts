@@ -113,6 +113,10 @@ export interface HelperPtyDriver {
    *  session an update kept running, 2.1.3-beta.17), so the log says nothing
    *  is started, never that it starts the usual way. */
   startsNothing?: true
+  /** True: a tab (not a run of the app's own): when it starts the usual way
+   *  after all, it says so in one plain line before its program's output
+   *  (notHeldLine; 2.1.3-beta.19 fix round), not only in the log. */
+  notHeldNote?: true
   /** This terminal is ending; the next holder for the same session waits for it. */
   ending(sid: string, done: Promise<void>): void
   /** This terminal is attached to its tab, or no longer is. */
@@ -188,6 +192,17 @@ export interface HelperPtyOptions {
    *  detached asks that provider's run screen how long a lone Enter waits
    *  (heldEnterWaitMs, 2.1.3-beta.19 section 6.2). */
   provider?: ProviderId
+}
+
+/**
+ * The one line a tab shows when the session helper could not hold it and it
+ * starts the usual way (2.1.3-beta.19 fix round: a new Codex session after an
+ * update said so only in the log). The reason is the log's, up to its first
+ * bracket (which holds paths and error text), plain characters only.
+ */
+export function notHeldLine(why: string): string {
+  const reason = stripSpoofableText(String(why).replace(/^the helper could not hold it:\s*/, '').split(' (')[0], 160).trim()
+  return `\r\n[Not held by the session helper${reason ? `: ${reason}` : ''}. This tab runs the usual way and ends when the app closes.]\r\n`
 }
 
 /** An exit code for a terminal whose holder could no longer be reached. */
@@ -1433,6 +1448,8 @@ export class HelperPty implements IPty {
     }
     this.inner = inner
     this.guardInner(inner)
+    // A tab says it is not held, in one line before its program's output.
+    if (this.driver.notHeldNote && !nothing && !this.driver.startsNothing) this.dataEmitter.fire(notHeldLine(why))
     inner.onData((d) => this.dataEmitter.fire(d))
     inner.onExit((e) => { this.finish(e.exitCode, e.signal); this.resolveEnded() })
     if (this.sizeChanged) inner.resize(this.size.cols, this.size.rows)

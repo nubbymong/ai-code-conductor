@@ -1149,7 +1149,8 @@ export class SessionHelperManager implements MachinesSource {
       return direct()
     }
     this.pinOwnId(ctx.sessionId, sid)
-    return this.track(new HelperPty({ sid, label: ctx.sessionId, spec, driver: this.plainDriver(direct, true), redraw: this.redrawFor(spec) }), ctx.sessionId)
+    // A tab: one that starts the usual way after all says so (notHeldNote).
+    return this.track(new HelperPty({ sid, label: ctx.sessionId, spec, driver: { ...this.plainDriver(direct, true), notHeldNote: true }, redraw: this.redrawFor(spec) }), ctx.sessionId)
   }
 
   /**
@@ -1256,7 +1257,9 @@ export class SessionHelperManager implements MachinesSource {
     // B2: a provider whose composer rule reads its held session's screen from
     // the holder asks for the screen reads and their title.
     const screen = this.deps.screens?.[ctx.kind] === true
-    const driver: HelperPtyDriver = { ...this.driver(direct, true, spec.conpty === 'bundled', cleared, hooks, tools, screen, screen), ...own }
+    // A tab (never a run of the app's own, whose output is read): one that
+    // starts the usual way after all says so (notHeldNote).
+    const driver: HelperPtyDriver = { ...this.driver(direct, true, spec.conpty === 'bundled', cleared, hooks, tools, screen, screen), ...own, ...(ctx.run === true ? {} : { notHeldNote: true as const }) }
     const wrapper = this.track(new HelperPty({ sid, label: ctx.sessionId, spec, driver, redraw: this.redrawFor(spec), provider: ctx.kind }), ctx.sessionId)
     if (hooks) void wrapper.ended.then(() => hooks.ended())
     if (tools) this.agentRoutes.set(wrapper, { kind: ctx.kind, tools, ...(hooks ? { hooks } : {}) })
