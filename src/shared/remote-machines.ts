@@ -46,6 +46,10 @@ export interface RemoteMachineView {
   did: string
   /** The saved config's name it was added from. */
   label: string
+  /** How its notices name it (main's machineName): its label, then
+   *  `user@host:port`; its Remove question names it so too (PR 763 fix
+   *  round 9). */
+  name: string
   /** `user@host:port`. */
   target: string
   /** Its last check passed and it holds this build's helper: tabs may go

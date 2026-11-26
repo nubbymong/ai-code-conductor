@@ -112,7 +112,7 @@ function MachineCard({ m, switchOn, busy, onCheck, onRemove, onAsk, kept, keptWh
       <KeptSessions rows={kept} switchOn={switchOn} busy={busy} onReattach={onReattach} onEnd={onEnd} />
       {confirming && (
         <div role="group" aria-label={`Confirm removing ${m.label}`} className="flex items-center gap-2 flex-wrap rounded-md px-2.5 py-2" style={{ background: 'color-mix(in srgb, var(--status-danger) 9%, transparent)', border: '1px solid color-mix(in srgb, var(--status-danger) 40%, transparent)' }}>
-          <span className="text-xs flex-1 min-w-[12rem]" style={{ color: 'var(--text-primary)' }}>Remove the session helper from {m.target}? Its folder in ~/.aicc there is deleted.</span>
+          <span className="text-xs flex-1 min-w-[12rem]" style={{ color: 'var(--text-primary)' }}>Remove the session helper from {m.name}? Its folder in ~/.aicc there is deleted.</span>
           <DialogButton variant="danger-solid" onClick={() => { setConfirming(false); onRemove() }} disabled={busy}>Remove</DialogButton>
           <DialogButton variant="ghost" onClick={() => setConfirming(false)} disabled={busy}>Keep it</DialogButton>
         </div>

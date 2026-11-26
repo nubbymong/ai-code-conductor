@@ -28,7 +28,7 @@ const DID = 'd'.repeat(32)
 const SID_A = `rm${'a'.repeat(30)}`
 const SID_B = `rm${'b'.repeat(30)}`
 const SID_C = `rm${'c'.repeat(30)}`
-const machine = { did: DID, label: 'Pi', target: 'nick@pi.lan:22', checked: true, lastCheck: { at: 1, ok: true }, helperVersion: '0.1.0', system: 'Linux arm64', inUse: 0 }
+const machine = { did: DID, label: 'Pi', name: 'Pi (nick@pi.lan:22)', target: 'nick@pi.lan:22', checked: true, lastCheck: { at: 1, ok: true }, helperVersion: '0.1.0', system: 'Linux arm64', inUse: 0 }
 const state = (over: Partial<RemoteMachinesState> = {}): RemoteMachinesState => ({
   available: true, switchOn: true, bundled: { ok: true, version: '0.1.0', files: [{ arch: 'aarch64', size: 3_000_000, sha12: 'abcdef012345' }] }, machines: [machine], candidates: [], ...over,
 })

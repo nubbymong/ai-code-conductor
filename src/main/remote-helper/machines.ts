@@ -119,7 +119,8 @@ export function persistentNote(m: Pick<RemoteMachineRecord, 'logind' | 'user'>):
 
 /** A machine as its card names it (2.1.3-beta.19 release smoke): its label,
  *  then user@host:port. The notices of an Add, a Check, a Remove and an End
- *  name it so, not by its bare address. */
+ *  name it so, not by its bare address, and so does its card's Remove
+ *  question (the view's name, PR 763 fix round 9). */
 export function machineName(m: Pick<RemoteMachineRecord, 'label' | 'user' | 'host' | 'port'>): string {
   return `${hostText(m.label, 200) ?? `${m.user}@${m.host}`} (${m.user}@${m.host}:${m.port})`
 }
@@ -393,7 +394,7 @@ export class RemoteMachines {
       const other = want !== null && m.helper.sha256 !== want
       const lastCheck = other ? { at: m.check.at, ok: false, detail: REMOTE_OTHER_HELPER } : m.check
       return {
-        did: m.did, label: m.label, target: `${m.user}@${m.host}:${m.port}`, checked: lastCheck.ok, lastCheck,
+        did: m.did, label: m.label, name: machineName(m), target: `${m.user}@${m.host}:${m.port}`, checked: lastCheck.ok, lastCheck,
         helperVersion: m.helper.version, system: `${m.os} ${ARCH_NAME[m.arch] ?? m.arch}`, inUse: this.deps.inUse(m.did),
         ...(persistentNote(m) ? { persistentNote: persistentNote(m) } : {}),
       }

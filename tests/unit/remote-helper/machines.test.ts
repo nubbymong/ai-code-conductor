@@ -410,6 +410,9 @@ describe('remote machines: Check', () => {
     await m.add(q.token)
     const at = m.list()[0].check.at
     expect(m.views(() => SHA)[0]).toMatchObject({ checked: true, lastCheck: { at, ok: true } })
+    // PR 763 fix round 9: the card's name, for its Remove question, is the
+    // notices' (machineName): its label, then user@host:port. Red on 38e0edcb.
+    expect(m.views(() => SHA)[0].name).toBe('Rocky (nick@rocky.lan:22)')
     expect(m.views(() => 'b'.repeat(64))[0]).toMatchObject({ checked: false, lastCheck: { at, ok: false, detail: REMOTE_OTHER_HELPER } })
     // A build with no Linux helper: nothing to compare with (the page says the build has none).
     expect(m.views(() => null)[0]).toMatchObject({ checked: true })
