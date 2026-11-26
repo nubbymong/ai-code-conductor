@@ -20,13 +20,30 @@
 //     clean-up that removes this build's folder never removes the copy made
 //     in the same run;
 //  6. a staging folder alone (a failed copy, then both switches off) is
-//     enough to start the clean-up, and it goes.
+//     enough to start the clean-up, and it goes, then the helper folder,
+//     empty (2.1.3-beta.19).
+//
+// 2.1.3-beta.19 (plan section 6.5, aicc_planning#440): a run with a switch on
+// leaves an empty kept folder and a store holding only its lock (beta.18's
+// post-publish check), and the clean-up removed version and staging folders
+// only. The cases:
+//  7. version folders, an empty kept and a lock-only store: all go at one
+//     start, then the helper folder, empty; one listing, one log line;
+//  8. no version folder, an empty kept and a lock-only store (what beta.18
+//     leaves): they go at one start; either alone goes too; the rest of the
+//     helper folder stays, and so does the folder;
+//  9. a store record, a kept record, the running mark or a listed holder:
+//     the empty kept and the lock-only store both stay, with a version
+//     folder there (it still goes) and without one (no listing is run, but
+//     for the listed holder, which only the listing shows);
+// 10. a kept or a store that holds anything else, or is a link: both stay,
+//     and with nothing else to remove no listing is run.
 //
 // Not checked here: the manager's clean-up with a switch on (bringUp), which
 // is as before (session-helper-manager.test.ts, session-helper-install.test.ts).
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { createHash } from 'crypto'
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'fs'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 
@@ -205,10 +222,120 @@ describe('the start-up clean-up of old helper copies with both switches off', ()
     expect(names()).toContain(THIS_BUILD)
   })
 
-  it('6. a staging folder alone is enough: the holders are listed once, and the folder goes', async () => {
+  it('6. a staging folder alone is enough: the holders are listed once, and the folder goes, then the helper folder, empty', async () => {
     folder('.new-0123456789ab')
     expect(await cleanUp()).toEqual(['.new-0123456789ab'])
     expect(listCalls()).toHaveLength(1)
-    expect(names()).toEqual([])
+    expect(existsSync(root)).toBe(false)
+  })
+})
+
+describe('2.1.3-beta.19 (6.5): the empty kept folder and the lock-only store a run with a switch on left, at a start with both switches off', () => {
+  const LOCK = join('store', '.lock')
+  /** What beta.18 leaves (its post-publish check): kept, empty, and store holding only its lock (0 bytes). */
+  const leftovers = () => {
+    folder('kept')
+    folder('store')
+    writeFileSync(join(root, LOCK), '')
+  }
+  const left = () => ({ kept: existsSync(join(root, 'kept')), store: existsSync(join(root, 'store')), lock: existsSync(join(root, LOCK)) })
+  const KEPT_SID = 'ag0123456789abcdef0123456789abcd'
+
+  it('7. version folders, an empty kept and a lock-only store: all gone after one start, then the helper folder, empty; one listing and one log line naming them', async () => {
+    folder('0.1.0-aaaaaaaaaaaa')
+    folder('.new-0123456789ab')
+    leftovers()
+    expect((await cleanUp()).sort()).toEqual(['.new-0123456789ab', '0.1.0-aaaaaaaaaaaa', 'kept', 'store'])
+    expect(existsSync(root)).toBe(false)
+    expect(helper.calls).toEqual([{ file: bundled, args: ['list', '--store', join(root, 'store')] }])
+    expect(logs).toHaveLength(1)
+    for (const name of ['.new-0123456789ab', '0.1.0-aaaaaaaaaaaa', 'kept (empty)', 'store (only its lock)', 'the helper folder itself']) expect(logs[0]).toContain(name)
+  })
+
+  it('8. no version folder, an empty kept and a lock-only store (what beta.18 leaves): gone after one start; either alone goes too; the rest of the folder stays', async () => {
+    leftovers()
+    expect((await cleanUp()).sort()).toEqual(['kept', 'store'])
+    expect(existsSync(root)).toBe(false)
+    expect(listCalls()).toHaveLength(1)
+
+    leftovers()
+    writeFileSync(join(root, 'bindings.json'), '{}')
+    rmSync(join(root, 'kept'), { recursive: true })
+    expect(await cleanUp()).toEqual(['store'])
+    expect(names()).toEqual(['bindings.json'])
+
+    leftovers()
+    rmSync(join(root, 'store'), { recursive: true })
+    expect(await cleanUp()).toEqual(['kept'])
+    expect(names()).toEqual(['bindings.json'])
+    expect(listCalls()).toHaveLength(3)
+    expect(logs).toHaveLength(3)
+    expect(logs[1]).not.toContain('the helper folder itself')
+  })
+
+  // Each situation keeps both: what it puts there may need the store or its lock.
+  const needs: Array<[string, () => string]> = [
+    ['a store record (a plain terminal\'s, not listed)', () => {
+      const h = new FakeHolder(heldSessionId('fedcba9876543210fedcba98'), 'fedcba9876543210fedcba98', join(root, 'store'))
+      h.writeRecord()
+      return join(root, 'store', `${h.sid}.json`)
+    }],
+    ['a kept record', () => {
+      writeFileSync(join(root, 'kept', `${KEPT_SID}.json`), JSON.stringify({ v: 1, session: KEPT_SID }))
+      return join(root, 'kept', `${KEPT_SID}.json`)
+    }],
+    ['the running mark', () => {
+      writeFileSync(join(root, 'app-running.json'), JSON.stringify({ v: 1, pid: 1, at: 0 }))
+      return join(root, 'app-running.json')
+    }],
+  ]
+  for (const [what, make] of needs) {
+    for (const withVersion of [true, false]) {
+      it(`9. ${what}${withVersion ? ', with a version folder' : ', with no version folder'}: the empty kept and the lock-only store both stay`, async () => {
+        leftovers()
+        const made = make()
+        if (withVersion) folder('0.1.0-aaaaaaaaaaaa')
+        expect(await cleanUp()).toEqual(withVersion ? ['0.1.0-aaaaaaaaaaaa'] : [])
+        expect(left()).toEqual({ kept: true, store: true, lock: true })
+        expect(existsSync(made)).toBe(true)
+        // A start with nothing to remove runs no exec.
+        expect(listCalls()).toHaveLength(withVersion ? 1 : 0)
+        expect(logs).toHaveLength(withVersion ? 1 : 0)
+      })
+    }
+  }
+
+  it('9. a listed holder (only the listing shows it): the empty kept and the lock-only store both stay', async () => {
+    leftovers()
+    const h = new FakeHolder(heldSessionId('0123456789abcdef01234567'), '0123456789abcdef01234567', join(root, 'store'))
+    helper.holders.set(h.sid, h)
+    expect(await cleanUp()).toEqual([])
+    expect(left()).toEqual({ kept: true, store: true, lock: true })
+    expect(listCalls()).toHaveLength(1)
+    expect(logs).toEqual([])
+  })
+
+  it('10. a kept or a store holding anything else, or a link: both stay, and with nothing else to remove no listing is run', async () => {
+    const elsewhere = join(dir, 'elsewhere')
+    mkdirSync(elsewhere)
+    writeFileSync(join(elsewhere, '.lock'), '')
+    const cases: Array<[string, () => void]> = [
+      ['a folder in kept', () => folder(join('kept', 'x'))],
+      ['a temporary file in store', () => writeFileSync(join(root, 'store', 'pt0123.json.12.tmp'), '')],
+      ['a folder named .lock', () => { rmSync(join(root, LOCK)); folder(LOCK) }],
+      ['a store that is a link', () => { rmSync(join(root, 'store'), { recursive: true }); symlinkSync(elsewhere, join(root, 'store'), 'junction') }],
+    ]
+    for (const [what, make] of cases) {
+      leftovers()
+      make()
+      const before = names()
+      expect(await cleanUp(), what).toEqual([])
+      expect(names(), what).toEqual(before)
+      expect(existsSync(join(root, 'kept')), what).toBe(true)
+      rmSync(root, { recursive: true })
+    }
+    expect(existsSync(join(elsewhere, '.lock'))).toBe(true)
+    expect(helper.calls).toEqual([])
+    expect(logs).toEqual([])
   })
 })
