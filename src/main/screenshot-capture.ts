@@ -392,47 +392,6 @@ export async function listWindows(mainWindow: BrowserWindow | null = null, permi
 }
 
 /**
- * List recent screenshots with thumbnails.
- */
-export async function listRecentScreenshots(): Promise<Array<{
-  filename: string
-  path: string
-  timestamp: number
-  thumbnail: string
-}>> {
-  ensureDir()
-  try {
-    const dir = getScreenshotsDir()
-    const files = readdirSync(dir)
-      .filter(f => f.startsWith('screenshot-') && (f.endsWith('.jpg') || f.endsWith('.png')))
-
-    const entries = files.map(f => {
-      const fullPath = join(dir, f)
-      const stat = statSync(fullPath)
-      return { filename: f, path: fullPath, timestamp: stat.mtimeMs }
-    })
-
-    entries.sort((a, b) => b.timestamp - a.timestamp)
-
-    return entries.slice(0, 20).map(entry => {
-      try {
-        const img = nativeImage.createFromPath(entry.path)
-        const resized = img.resize({ width: 120, height: 90 })
-        return {
-          ...entry,
-          thumbnail: resized.toPNG().toString('base64')
-        }
-      } catch {
-        return { ...entry, thumbnail: '' }
-      }
-    })
-  } catch (err) {
-    console.error('[screenshot] listRecentScreenshots error:', err)
-    return []
-  }
-}
-
-/**
  * Delete screenshots older than maxAgeDays.
  */
 export async function cleanupOldScreenshots(maxAgeDays: number): Promise<number> {
