@@ -179,6 +179,19 @@ const { createClaudePackage } = await import('../../../src/main/providers/claude
 const { createCodexPackage } = await import('../../../src/main/providers/codex')
 const { setKeptTakeOver, setKeptLaunchCheck, serveKeptLaunch, unserveKeptLaunch, describeKeptLaunch } = await import('../../../src/main/sessions/kept-launches')
 const { HelperPty } = await import('../../../src/main/session-helper/helper-pty')
+const { askConductorProjectDocMaxBytes } = await import('../../../src/main/help-workspace')
+
+/** An Ask launch's project_doc_max_bytes is the size of the AGENTS.md the help
+ *  folder holds plus a margin (help-workspace.ts askConductorProjectDocMaxBytes):
+ *  the whole user guide on Windows, the preamble alone elsewhere, so the number
+ *  differs by system and grows with the guide. It is recorded as this name when
+ *  it is exactly that function's number, so the record holds on every system
+ *  and after any guide edit; any other number is recorded as it is and fails
+ *  the case. (The record at cc36c7f3 held 218222, the Windows number then.) */
+const ASK_DOC_SIZE = '<askConductorProjectDocMaxBytes()>'
+function askDocSized(opts: Rec): Rec {
+  return opts.askProjectDocMaxBytes === askConductorProjectDocMaxBytes() ? { ...opts, askProjectDocMaxBytes: ASK_DOC_SIZE } : opts
+}
 
 /** `real` with the members in `over` in place of its own (its prototype, its
  *  own members and anything a later step adds to it kept). */
@@ -208,7 +221,7 @@ function register(): void {
   })
   const codexSession = standIn(codex.session, {
     buildSpawnCommand: (opts: Rec) => {
-      rec('build', opts)
+      rec('build', askDocSized(opts))
       const launch = opts.realmLaunch as { executable: string; env: Record<string, string>; sessionsDir: string }
       const env: Record<string, string> = { ...launch.env, CLAUDE_MULTI_SESSION_ID: String(opts.sessionId) }
       const resume = opts.resume as { uuid: string; cwd: string } | undefined

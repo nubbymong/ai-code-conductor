@@ -1677,7 +1677,7 @@
       [
         "build",
         {
-          "askProjectDocMaxBytes": 218222,
+          "askProjectDocMaxBytes": "<askConductorProjectDocMaxBytes()>",
           "askPrompt": "How do I add a machine?",
           "codexOptions": {
             "permissionsPreset": "read-only"
@@ -1809,7 +1809,7 @@
       [
         "build",
         {
-          "askProjectDocMaxBytes": 218222,
+          "askProjectDocMaxBytes": "<askConductorProjectDocMaxBytes()>",
           "askPrompt": "How do I add a machine?",
           "codexOptions": {
             "permissionsPreset": "read-only"
@@ -1952,7 +1952,7 @@
       [
         "build",
         {
-          "askProjectDocMaxBytes": 218222,
+          "askProjectDocMaxBytes": "<askConductorProjectDocMaxBytes()>",
           "codexOptions": {
             "permissionsPreset": "read-only"
           },
@@ -2083,7 +2083,7 @@
       [
         "build",
         {
-          "askProjectDocMaxBytes": 218222,
+          "askProjectDocMaxBytes": "<askConductorProjectDocMaxBytes()>",
           "codexOptions": {
             "permissionsPreset": "read-only"
           },
