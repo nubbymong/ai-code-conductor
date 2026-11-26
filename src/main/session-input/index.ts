@@ -272,7 +272,8 @@ export function submitRetry(sessionId: string, text: string, stillWanted?: () =>
 
 /** #333: how long a prompt button's Enter follows the last slice of its text
  *  (the delay the renderer's Codex rule uses, codexComposer.ts). Set in
- *  ./enter-delay.ts, which the session helper's terminal reads too. */
+ *  ./enter-delay.ts, which the Claude Code and Codex packages' run screens
+ *  read too (the wait their held terminals' queued lone Enter keeps). */
 export { PROMPT_ENTER_DELAY_MS }
 /** #333: the same text pressed again for a session within this long is
  *  dropped (the window of writePty's duplicate guard, which a write that does

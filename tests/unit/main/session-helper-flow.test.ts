@@ -34,7 +34,7 @@
  * started at. tests/unit/main/session-helper-held-screen.test.ts carries the
  * recorded console streams.
  */
-import { describe, it, expect, vi, afterEach } from 'vitest'
+import { describe, it, expect, vi, afterEach, beforeAll, afterAll } from 'vitest'
 import { Terminal } from '@xterm/headless'
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, rmdirSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
@@ -50,6 +50,11 @@ import { SessionHelperManager } from '../../../src/main/session-helper/manager'
 import { FakeHelper, FakeHolder, duplexPair, type ConnEvent } from './session-helper-fake-holder'
 import { PROMPT_ENTER_DELAY_MS } from '../../../src/main/session-input/enter-delay'
 import { TMUX_WHEEL_EXIT_KEY } from '../../../src/shared/tmux-wheel'
+import { registerProvider } from '../../../src/main/providers'
+import { _resetProviderRegistryForTest } from '../../../src/main/providers/core/registry'
+import { CLAUDE_RUN_SCREEN } from '../../../src/main/providers/claude/run-screen'
+import type { SessionProvider } from '../../../src/main/providers/types'
+import type { ProviderId } from '../../../src/shared/providers/ids'
 
 // The managers below are given their own usual-way spawn; node-pty itself is never loaded.
 vi.mock('node-pty', () => ({ spawn: () => { throw new Error('node-pty is not used in this file') } }))
@@ -111,6 +116,8 @@ function rig(o: {
   spec?: Partial<LaunchSpec>
   /** The redraw after a replay from the middle (the manager's choice); the terminal's default when absent. */
   redraw?: RedrawWay
+  /** The provider whose CLI it runs (the manager's for an agent session); a plain terminal when absent. */
+  provider?: ProviderId
   before?: (h: FakeHolder) => void
   connect?: (record: HolderRecord, open: (record: HolderRecord) => Promise<HolderConnection>) => Promise<HolderConnection>
 } = {}): Rig {
@@ -156,6 +163,7 @@ function rig(o: {
     spec: { argv: ['C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe'], cwd: 'C:\\Users\\someone', env: { Path: 'C:\\Windows' }, cols: o.cols ?? 80, rows: o.rows ?? 24, ...o.spec },
     ...(o.adopt ? { adopt: h.record() } : {}),
     ...(o.redraw ? { redraw: o.redraw } : {}),
+    ...(o.provider ? { provider: o.provider } : {}),
     driver,
   })
   const seen: string[] = []
@@ -343,8 +351,16 @@ describe('a connection that drops while the terminal runs is attached again', ()
  * Mutants this must catch (each run, each red): the lone Enter flushed with
  * the frame before it; input typed during the wait sent ahead of the Enter; a
  * frame the flush sent kept in the queue and sent again.
+ *
+ * 2.1.3-beta.19 section 6.2 (aicc_planning#440): the wait is the run's
+ * provider's own declaration (its run screen's heldEnterWaitMs), so these
+ * terminals run Claude Code, its run screen registered;
+ * session-helper-enter-wait.test.ts holds a plain terminal, and a provider
+ * that declares no wait, to none.
  */
-describe('input typed while detached: a lone Enter goes PROMPT_ENTER_DELAY_MS after the frame before it at the attach again', () => {
+describe('input typed while detached: a lone Enter goes PROMPT_ENTER_DELAY_MS after the frame before it at the attach again (a Claude Code terminal)', () => {
+  beforeAll(() => { registerProvider({ id: 'claude', runScreen: CLAUDE_RUN_SCREEN } as unknown as SessionProvider) })
+  afterAll(() => { _resetProviderRegistryForTest() })
   const REQUEST = `Please use the fetch_host_screenshot tool to fetch ${'x'.repeat(100)} and look at it.`
   /** Let the streams run a while, firing only the timers due now. */
   const turns = async (k = 40): Promise<void> => {
@@ -363,6 +379,7 @@ describe('input typed while detached: a lone Enter goes PROMPT_ENTER_DELAY_MS af
     const gate = { wait: null as Promise<void> | null, open: () => {} }
     const sent: string[] = []
     const r = rig({
+      provider: 'claude',
       connect: async (record, openConn) => {
         if (gate.wait) await gate.wait
         const c = await openConn(record)

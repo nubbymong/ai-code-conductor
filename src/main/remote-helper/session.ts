@@ -565,7 +565,7 @@ export class RemoteHelperPty implements IPty {
     this.driver = new RemoteDriver(o)
     const problem = checkLaunch(o.spec, 'unix')
     if (problem) throw new Error(`the launch cannot go through the session helper: ${problem.why}`)
-    this.inner = new HelperPty({ sid: this.sid, label: o.appPtyId, spec: o.spec, driver: this.driver, redraw: 'nudge' })
+    this.inner = new HelperPty({ sid: this.sid, label: o.appPtyId, spec: o.spec, driver: this.driver, redraw: 'nudge', ...(o.plan ? { provider: o.plan.provider } : {}) })
     this.inner.onData((d) => this.data.fire(d))
   }
 

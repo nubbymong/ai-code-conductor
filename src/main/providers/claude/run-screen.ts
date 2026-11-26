@@ -136,4 +136,12 @@ export const CLAUDE_RUN_SCREEN: SessionRunScreen = {
   prompt: (_sessionId, text, opts, typing) => sendClaudePrompt(text, opts, typing),
   marker: (sessionId, line, opts, typing) => holdClaudeMarker(sessionId, line, opts.canvasId, typing),
   image: (_sessionId, imagePath, sentence, opts, typing) => pasteClaudeImage(imagePath, sentence, opts, typing),
+  // A held terminal's lone Enter typed while it was detached goes this long
+  // after the frame before it at the attach again (2.1.3-beta.18 fix round;
+  // since 2.1.3-beta.19 section 6.2, aicc_planning#440, each provider's own
+  // declaration): Claude Code (2.1.332, measured) takes a control character
+  // as a key only in a read shorter than 64 characters, so an image request
+  // and its Enter queued during a link drop were typed and not sent once the
+  // link was back.
+  heldEnterWaitMs: PROMPT_ENTER_DELAY_MS,
 }
