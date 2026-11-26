@@ -1,8 +1,8 @@
 {
   "schema": "wp1-legacy-codex-manifest/3",
-  "generatedAt": "2026-11-26T06:37:57.213Z",
-  "head": "ee961de6c7582f4036d28de54045c75e86919f41",
-  "tree": "d04c517de804caf56160bc2e7be7fc6101ac6c0f",
+  "generatedAt": "2026-11-26T09:13:08.030Z",
+  "head": "43626028b927bbfb36d0f1922d823217dac4932b",
+  "tree": "28f4a904190eefa27c78bdabe8a7b37ee2c6cc71",
   "scannedWorkingTree": false,
   "predicateDigest": "100a1233edebdc39a5f9004d3fba980a89ebb15b25872e52076386bc84b03153",
   "predicates": [
@@ -116,9 +116,9 @@
     "\\.(png|jpg|jpeg|gif|ico|icns|webp|svg|woff2?|ttf|otf|mp4|zip|asar|node|exe|dll|dylib|so|pdf)$",
     "^package-lock\\.json$"
   ],
-  "trackedFileCount": 3936,
-  "excludedFileCount": 631,
-  "scannedFileCount": 3305,
+  "trackedFileCount": 3941,
+  "excludedFileCount": 634,
+  "scannedFileCount": 3307,
   "unscopedFileCount": 15,
   "unscoped": [
     ".claude/settings.json",
@@ -139,8 +139,8 @@
   ],
   "unscopedMentions": [],
   "unreadable": [],
-  "matchedPathCount": 1125,
-  "pathDigest": "8264dc447b53caffc7e964534f857900be4604cfffef5776f1104611dbd3afa2",
+  "matchedPathCount": 1128,
+  "pathDigest": "f44a12eb48a1f34bcaf338e02bf591a1be4bf50f5fedc9337aaa20bbc1aedd08",
   "entries": [
     {
       "path": ".github/workflows/ci.yml",
@@ -2131,7 +2131,7 @@
         "P09",
         "P14"
       ],
-      "lineCount": 329
+      "lineCount": 330
     },
     {
       "path": "src/main/providers/codex/insights-exec.ts",
@@ -2461,6 +2461,13 @@
       "lineCount": 1
     },
     {
+      "path": "src/main/session-helper/helper-pty.ts",
+      "predicates": [
+        "P14"
+      ],
+      "lineCount": 2
+    },
+    {
       "path": "src/main/session-helper/manager.ts",
       "predicates": [
         "P14"
@@ -2468,11 +2475,18 @@
       "lineCount": 36
     },
     {
+      "path": "src/main/session-input/enter-delay.ts",
+      "predicates": [
+        "P14"
+      ],
+      "lineCount": 2
+    },
+    {
       "path": "src/main/session-input/index.ts",
       "predicates": [
         "P14"
       ],
-      "lineCount": 61
+      "lineCount": 62
     },
     {
       "path": "src/main/session-resume-enrich.ts",
@@ -4724,7 +4738,7 @@
         "P09",
         "P13"
       ],
-      "lineCount": 31
+      "lineCount": 68
     },
     {
       "path": "tests/integration/codex-cli-compat-env.ts",
@@ -4733,7 +4747,7 @@
         "P04",
         "P13"
       ],
-      "lineCount": 11
+      "lineCount": 28
     },
     {
       "path": "tests/integration/codex-cli-compat.test.ts",
@@ -4742,7 +4756,7 @@
         "P04",
         "P13"
       ],
-      "lineCount": 35
+      "lineCount": 39
     },
     {
       "path": "tests/integration/codex-conformance-ci.mjs",
@@ -6269,6 +6283,14 @@
       "lineCount": 1
     },
     {
+      "path": "tests/unit/main/session-helper-enter-wait.test.ts",
+      "predicates": [
+        "P07",
+        "P13"
+      ],
+      "lineCount": 13
+    },
+    {
       "path": "tests/unit/main/session-helper-manager.test.ts",
       "predicates": [
         "P13"
@@ -6287,7 +6309,7 @@
       "predicates": [
         "P13"
       ],
-      "lineCount": 30
+      "lineCount": 32
     },
     {
       "path": "tests/unit/main/session-helper-update-keep.test.ts",
