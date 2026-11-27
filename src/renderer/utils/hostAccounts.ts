@@ -307,6 +307,11 @@ export function adoptableIds(acc: Pick<HostMachineAccounts, 'elsewhere'> | undef
 /** This computer's account profiles, as these names need them. */
 export type HostNamedProfile = Pick<AccountProfile, 'id' | 'accountEmail' | 'name'>
 
+/** Round 6 (R6-1): an account with no name, alias or email, where its name
+ *  falls in the middle of a sentence (Adopt's hover text, confirm and next
+ *  step). 'That account' stays only where the name starts the sentence. */
+export const NAMELESS_ACCOUNT = 'an account with no name'
+
 /** Round 4 (R4-5): an account of this computer by name, as Adopt's confirm
  *  and the notice name it: its profile's name, else its alias, else its
  *  email; `fallback` when it has none of them or is not one of `profiles`.
@@ -325,7 +330,7 @@ export function hostAccountNamer(profiles: readonly HostNamedProfile[], aliases:
  *  Adopt takes on that machine (`acc`, its last read), named as the confirm
  *  it opens names them. */
 export function adoptTitleOn(machine: string, acc: Pick<HostMachineAccounts, 'elsewhere'> | undefined, profiles: readonly HostNamedProfile[], aliases: Record<string, string> | undefined): string {
-  return adoptButtonTitle(machine, adoptableIds(acc, new Set(profiles.map((p) => p.id))).map(hostAccountNamer(profiles, aliases)))
+  return adoptButtonTitle(machine, adoptableIds(acc, new Set(profiles.map((p) => p.id))).map(hostAccountNamer(profiles, aliases, NAMELESS_ACCOUNT)))
 }
 
 /** Asked from a tab's notice: the tab, the account it asked for, and why it

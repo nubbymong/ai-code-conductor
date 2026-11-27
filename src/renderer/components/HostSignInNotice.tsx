@@ -19,7 +19,7 @@
 // for a sign-in is over.
 import React, { useEffect, useRef, useState } from 'react'
 import { useHostAccountsStore, listenHostAccounts, type HostAdoptAsk, type HostNotice, type HostRun } from '../stores/hostAccountsStore'
-import { adoptableIds, adoptConfirmText, adoptNextText, hostAccountNamer } from '../utils/hostAccounts'
+import { adoptableIds, adoptConfirmText, adoptNextText, hostAccountNamer, NAMELESS_ACCOUNT } from '../utils/hostAccounts'
 import { useSessionStore } from '../stores/sessionStore'
 import { useAccountProfilesStore } from '../stores/accountProfilesStore'
 import { useSettingsStore } from '../stores/settingsStore'
@@ -35,7 +35,7 @@ import {
 const MIDDOT = String.fromCharCode(0xb7)
 
 /** The words of the notice, by why it asks (frame 2). Exported for its test. */
-export function hostNoticeText(n: Pick<HostNotice, 'kind' | 'state' | 'identity' | 'machineName' | 'elsewhere' | 'adoptable'>, who: string): {
+export function hostNoticeText(n: Pick<HostNotice, 'kind' | 'state' | 'identity' | 'machineName' | 'elsewhere' | 'adoptable'>, who: string, whoMid: string = who): {
   title: string
   question: string
   why: string
@@ -64,7 +64,7 @@ export function hostNoticeText(n: Pick<HostNotice, 'kind' | 'state' | 'identity'
       : n.elsewhere
         ? 'That computer signs it in and out there, so it cannot be signed in from here.'
         : n.state === 'someone-else'
-          ? `${m} keeps its own sign-ins. Signing ${who} in again there replaces that one.`
+          ? `${m} keeps its own sign-ins. Signing ${whoMid} in again there replaces that one.`
           : `${m} keeps its own sign-ins.`,
     signInHint: `Runs Claude Code's own sign-in in a session on ${m}. It stays signed in there, so Remote Control works on ${m}. ${launch ? 'This session starts once it is signed in.' : 'The session moves to it once it is signed in.'}`,
     otherLabel: launch ? 'Or start it on another account' : 'Or switch to another account',
@@ -73,11 +73,12 @@ export function hostNoticeText(n: Pick<HostNotice, 'kind' | 'state' | 'identity'
   }
 }
 
-/** Round 4 (R4-5): the one naming the cards' Adopt hover text uses too. */
-function useAccountName(): (profileId: string) => string {
+/** Round 4 (R4-5): the one naming the cards' Adopt hover text uses too.
+ *  Round 6 (R6-1): `fallback` for a name that falls mid-sentence. */
+function useAccountName(fallback?: string): (profileId: string) => string {
   const profiles = useAccountProfilesStore((s) => s.profiles)
   const aliases = useSettingsStore((s) => s.settings.accountAliases)
-  return hostAccountNamer(profiles, aliases)
+  return hostAccountNamer(profiles, aliases, fallback)
 }
 
 /** Round 1 (MINOR-4): a dialog gives the keyboard focus back to where it
@@ -96,6 +97,7 @@ function NoticeDialog({ notice }: { notice: HostNotice }) {
   const profiles = useAccountProfilesStore((s) => s.profiles)
   const machines = useHostAccountsStore((s) => s.machines)
   const nameOf = useAccountName()
+  const nameMid = useAccountName('that account')
   useReturnFocus()
   const close = () => useHostAccountsStore.getState().closeNotice(notice.sessionId)
   // Cancel: nothing starts, or the tab stays on its account; it waits for nothing.
@@ -111,7 +113,7 @@ function NoticeDialog({ notice }: { notice: HostNotice }) {
   if (!session) return null
 
   const who = nameOf(notice.profileId)
-  const text = hostNoticeText(notice, who)
+  const text = hostNoticeText(notice, who, nameMid(notice.profileId))
   const tabName = session.customName?.trim() || session.label || 'this session'
 
   const signIn = () => {
@@ -245,7 +247,7 @@ function HostRunner({ run }: { run: HostRun }) {
  */
 function AdoptDialog({ ask }: { ask: HostAdoptAsk }) {
   useReturnFocus()
-  const nameOf = useAccountName()
+  const nameOf = useAccountName(NAMELESS_ACCOUNT)
   const [busy, setBusy] = useState(false)
   const store = () => useHostAccountsStore.getState()
   const cancel = () => store().askAdopt(null)

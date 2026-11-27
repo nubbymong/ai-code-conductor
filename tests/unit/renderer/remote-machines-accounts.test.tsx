@@ -149,7 +149,7 @@ describe('a folder that may be this computer\'s own from an earlier install', ()
     install({ read })
     await mount()
     const want = adoptTitleOn('Rocky', read, profiles, useSettingsStore.getState().settings.accountAliases)
-    expect(want).toBe("Asks first, then makes the folders for Personal and That account on Rocky this computer's again. They carry another install's mark and may be this computer's own from an earlier install.")
+    expect(want).toBe("Asks first, then makes the folders for Personal and an account with no name on Rocky this computer's again. They carry another install's mark and may be this computer's own from an earlier install.")
     for (const who of ['Personal', 'Account']) {
       expect((row(who)?.querySelector('[data-testid="remote-account-adopt"]') as HTMLElement).title).toBe(want)
     }

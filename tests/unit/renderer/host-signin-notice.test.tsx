@@ -39,7 +39,7 @@ vi.mock('../../../src/renderer/session-persistence', async () => {
   }
 })
 
-const { default: HostSignInNotice } = await import('../../../src/renderer/components/HostSignInNotice')
+const { default: HostSignInNotice, hostNoticeText } = await import('../../../src/renderer/components/HostSignInNotice')
 const { useSwitchAccount } = await import('../../../src/renderer/hooks/useSwitchAccount')
 const { useSessionStore } = await import('../../../src/renderer/stores/sessionStore')
 const { useConfigStore } = await import('../../../src/renderer/stores/configStore')
@@ -485,6 +485,30 @@ describe('a folder that may be this computer\'s own from an earlier install', ()
     // (R4-3, round 4: named).
     expect(byTest('host-signin-message')?.textContent).toContain('Adopted Personal: its folder there is this computer\'s now. Restart a tab on Personal to start it there.')
     expect(remote.accounts.mock.calls.length).toBeGreaterThan(before)
+  })
+
+  // R6-1 (round 6): an account with no name, alias or email reads as
+  // "an account with no name" where its name falls mid-sentence: Adopt's
+  // confirm and its next step. "That account" stays where it starts one.
+  it('an account with no name: Adopt names it mid-sentence in lower case', async () => {
+    const remote = (window as any).electronAPI.machines.remote
+    useAccountProfilesStore.setState({ profiles: [...useAccountProfilesStore.getState().profiles, { id: 'p9', name: '', accountEmail: '', active: true } as never] })
+    remote.accountsAdopt.mockResolvedValueOnce({ ok: true, message: "Adopted 1 account: its folder there is this computer's now.", adopted: ['p9'] })
+    await mount(<HostSignInNotice />)
+    await act(async () => { useHostAccountsStore.getState().askAdopt({ did: DID, machineName: 'Rocky', profileIds: ['p9'] }) })
+    await settle()
+    expect(byTest('host-adopt-confirm')?.textContent).toContain("Adopt an account with no name on Rocky? Its folder there carries another install's mark.")
+    await click(byTest('host-adopt-run'))
+    expect(byTest('host-signin-message')?.textContent).toContain('Restart a tab on an account with no name to start it there.')
+    expect(byTest('host-signin-message')?.textContent).not.toContain('That account')
+  })
+
+  it('the notice: a name that starts a sentence keeps its capital; mid-sentence it is lower case', () => {
+    const n = { kind: 'launch' as const, state: 'someone-else' as const, identity: 'other@x.io', machineName: 'Rocky', elsewhere: false, adoptable: false }
+    const t = hostNoticeText(n, 'That account', 'that account')
+    expect(t.question).toBe('That account on Rocky is signed in as other@x.io, so that sign-in is not used.')
+    expect(t.why).toBe('Rocky keeps its own sign-ins. Signing that account in again there replaces that one.')
+    expect(hostNoticeText(n, 'Personal').why).toBe('Rocky keeps its own sign-ins. Signing Personal in again there replaces that one.')
   })
 
   it('from the notice, the result names the tab to Restart; nothing adopted: no Restart line', async () => {
