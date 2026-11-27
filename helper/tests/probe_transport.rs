@@ -383,7 +383,7 @@ fn a_detached_holder_is_listed_launched_attached_again_and_ended() {
     assert_eq!(rec.session, sid);
     assert_eq!(rec.label, "Test terminal");
     assert_eq!(rec.child, "waiting");
-    assert_eq!(rec.away, 60);
+    assert_eq!(rec.lifetime, aicc_helper::store::Lifetime::Away(60));
     assert!(!rec.attached);
     assert!(transport::valid_endpoint(&rec.endpoint, sid), "endpoint {:?}", rec.endpoint);
     assert!(pids::alive(rec.pid), "hold --detach returned, and its holder is not running");
@@ -584,7 +584,7 @@ fn list_removes_records_whose_holder_is_gone_and_skips_unreadable_ones() {
         nonce: NONCE.to_string(),
         helper: aicc_helper::VERSION.to_string(),
         started: store::now_ms(),
-        away: 120,
+        lifetime: aicc_helper::store::Lifetime::Away(120),
         attached: false,
         child: "running".to_string(),
         code: None,

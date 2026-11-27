@@ -20,6 +20,7 @@ import { useDetachedLivenessStore } from '../../stores/livenessStore'
 import { useHostReachabilityStore } from '../../stores/hostReachability'
 import { matchDetachedRemotes } from '../../utils/detachedRemotes'
 import { verifiedLiveCount } from '../../utils/detachedRemotesLiveness'
+import { usePersistentKeeper } from '../../hooks/usePersistentKeeper'
 
 interface QuickStartPanelProps {
   configs: TerminalConfig[]
@@ -74,6 +75,9 @@ export default function QuickStartPanel({
   // Tier-1 host reachability: demote-only, so an entry on a host that stopped
   // answering drops out of the count (see hostReachability.ts).
   const hostReach = useHostReachabilityStore((s) => s.byHost)
+  // What keeps each pin's persistent sessions, for its chip's title: the same
+  // rule as the Saved rows (2.1.3-beta.19 section 1.2).
+  const keeperOf = usePersistentKeeper()
 
   const items = quickStartConfigs(configs)
   // Nothing pinned at all: no strip, no empty state — Quick Start is opt-in
@@ -217,6 +221,7 @@ export default function QuickStartPanel({
                 persistent: configIsPersistent(config.sshConfig),
               })}
               container={containerNameOf(config.sshConfig)}
+              keeper={keeperOf(config)}
             />
             {config.sessionType === 'ssh' && <SshReattachBadge count={verifiedLiveCount(matchDetachedRemotes(detachedEntries, config), livenessMap, hostReach)} />}
             {/* A Multi Spawn pin's start button IS the ×N control — one launch

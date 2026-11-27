@@ -81,10 +81,11 @@ vi.mock('../../src/main/ipc/setup-handlers', () => ({ getResourcesDirectory: () 
 vi.mock('../../src/main/debug-logger', () => ({ logInfo: () => {}, logWarn: () => {}, logError: () => {}, logDebug: () => {} }))
 vi.mock('../../src/main/logging/logging-service', () => ({ getLogSupervisor: () => null, getTranscriptBinder: () => null }))
 vi.mock('../../src/main/conductor-mcp-server', async (importOriginal) => ({ ...(await importOriginal<typeof import('../../src/main/conductor-mcp-server')>()), getConductorMcpPort: () => 0 }))
-vi.mock('../../src/main/providers', () => ({
+vi.mock('../../src/main/providers', async () => (await import('../helpers/provider-package-parts')).withProviderPackageParts(await (() => ({
   providerCapability: () => ({ enabled: true }),
   getProvider: () => ({ resolveBinary: () => ({ cmd: 'claude', source: 'system' }), buildSpawnCommand: () => ({ cmd: 'sh', args: [], env: { ...h.providerEnv } }), ingestSessionTelemetry: () => ({ stop: () => {} }) }),
-}))
+}))()))
+await (await import('../helpers/provider-package-parts')).loadProviderPackageParts()
 vi.mock('../../src/main/vision-manager', () => ({ isGlobalVisionRunning: () => false, getGlobalVisionConfig: () => null, teardownVisionSession: () => {} }))
 vi.mock('../../src/main/canvas/canvas-plugin', () => ({ ensureCanvasPlugin: () => null }))
 vi.mock('../../src/main/hooks', () => ({ getGateway: () => null, isExactBindSourceActive: () => true }))

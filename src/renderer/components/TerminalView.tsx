@@ -28,6 +28,7 @@ import { useAccountGateStore, GATE_CANCELLED } from '../stores/accountGateStore'
 import { forgetSessionBrowserProfile } from '../stores/sshCloseStore'
 import { hasSpawned, markSpawned, clearSpawned, killSessionPty, isCurrentSpawn } from '../ptyTracker'
 import { spentCommand } from '../utils/commandTerminal'
+import { markKeptByHelper } from '../utils/keptByHelper'
 import { listenForSpawnEnd, reportSpawnEnd } from '../utils/spawnEndNotice'
 import { carryNote, terminalNoteLine } from '../utils/launchNote'
 import { sessionProviderAccount } from '../utils/accountChip'
@@ -71,6 +72,7 @@ import { reconcileRefusedMultiSpawn } from '../utils/refusedMultiSpawn'
 import { isConfigLaunchBlocked, useLaunchGateSettings, restartLaunchRefusal } from '../hooks/useLaunchConfig'
 import { useConfigStore } from '../stores/configStore'
 import { generateId } from '../utils/id'
+import { useTerminalSizeWaitStore, noteShownSize, lastShownSize } from './terminal/coveredPane'
 
 // Re-export for consumers
 export { killSessionPty } from '../ptyTracker'
@@ -332,6 +334,8 @@ export default function TerminalView({ sessionId, configId, cwd, shellOnly, elev
   useEffect(() => {
     if (!ssh) return
     return window.electronAPI.ssh.onFlowState(sessionId, (msg) => {
+      // 2.1.3-beta.19: a session the session helper keeps until it is ended: the tab is marked.
+      if (msg.kept) { markKeptByHelper(sessionId, msg.kept.did); return }
       if (msg.state !== 'claude-running') return
       // #242 tier 5: latch "this session has reached claude-running at
       // least once" so a LATER respawn (Restart after a dropped
@@ -713,6 +717,9 @@ export default function TerminalView({ sessionId, configId, cwd, shellOnly, elev
 
       const rect = container.getBoundingClientRect()
       if (rect.width === 0 || rect.height === 0) {
+        // 2.1.3-beta.19 fix round: waiting for a size; with another pane in
+        // front, App lays this pane out behind it (terminal/coveredPane.ts).
+        useTerminalSizeWaitStore.getState().set(sessionId, true)
         requestAnimationFrame(initTerminal)
         return
       }
@@ -1036,6 +1043,7 @@ export default function TerminalView({ sessionId, configId, cwd, shellOnly, elev
       const fitAndSpawn = () => {
         if (disposed || !fitAddon || !term) return
         if (!paneHasSize()) {
+          useTerminalSizeWaitStore.getState().set(sessionId, true)
           requestAnimationFrame(fitAndSpawn)
           return
         }
@@ -1046,10 +1054,24 @@ export default function TerminalView({ sessionId, configId, cwd, shellOnly, elev
           return
         }
         try { fitAddon.fit() } catch { /* ignore */ }
+        // Fitted behind a pane in front (it waited for a size and is not on
+        // screen): no WebGL renderer, so the fit is the DOM renderer's narrower
+        // one. It takes the size it last had on screen, when it had one, so it
+        // starts at the size the user comes back to (terminal/coveredPane.ts).
+        const waitedBehind = useTerminalSizeWaitStore.getState().waiting[sessionId] === true && !isActiveRef.current
+        const shownSize = waitedBehind ? lastShownSize(sessionId) : undefined
+        if (shownSize && (shownSize.cols !== term.cols || shownSize.rows !== term.rows)) {
+          try { term.resize(shownSize.cols, shownSize.rows) } catch { /* ignore */ }
+        }
+        // Fitted at its pane's size: it waits no more (terminal/coveredPane.ts).
+        useTerminalSizeWaitStore.getState().set(sessionId, false)
         // Seed the integrity geometry from the initial (font-aware) fit so the
         // first throttled report carries the real cols/rows instead of 0 — and
         // so the ResizeObserver's "changed" guard has a correct baseline.
-        if (term.cols > 0 && term.rows > 0) { lastSentCols = term.cols; lastSentRows = term.rows }
+        if (term.cols > 0 && term.rows > 0) {
+          lastSentCols = term.cols; lastSentRows = term.rows
+          if (isActiveRef.current) noteShownSize(sessionId, term.cols, term.rows)
+        }
 
         if (!hasSpawned(sessionId) && !adoptedStartEnded) {
           // aicc_planning#423: shown and starting now (or asking which account
@@ -1275,7 +1297,7 @@ export default function TerminalView({ sessionId, configId, cwd, shellOnly, elev
             const plainTerminal = shellOnly === true && !ssh && !session?.needsLogin && !session?.transient
             exitHold.begin()
             window.electronAPI.pty
-              .spawn(sessionId, { cwd, cols, rows, ssh: sshWithReconnect, shellOnly, plainTerminal, elevated, terminalOptions, configId, configLabel, useResumePicker, legacyVersion, effortLevel, permissionMode, extraArgs, disableAutoMemory, enableCodexReview, loggingEnabled, model, provider, codexOptions, profileId: resolvedProfileId, resume, askPrompt, isAsk: session?.kind === 'ask', ...account })
+              .spawn(sessionId, { cwd, cols, rows, ssh: sshWithReconnect, remoteVia: ssh && session?.remoteVia === 'helper' ? 'helper' : undefined, shellOnly, plainTerminal, elevated, terminalOptions, configId, configLabel, useResumePicker, legacyVersion, effortLevel, permissionMode, extraArgs, disableAutoMemory, enableCodexReview, loggingEnabled, model, provider, codexOptions, profileId: resolvedProfileId, resume, askPrompt, isAsk: session?.kind === 'ask', ...account })
               .then((result) => {
                 const nothingStarted = !!result && typeof result === 'object' && result.started === false
                 // WP2: main refused the launch because its provider is off
@@ -1724,6 +1746,7 @@ export default function TerminalView({ sessionId, configId, cwd, shellOnly, elev
         if (cols > 0 && rows > 0) {
           lastSentCols = cols
           lastSentRows = rows
+          if (isActiveRef.current) noteShownSize(sessionId, cols, rows)
           ptyResizeCount += 1
           noteActivityGrace(sessionId)
           // aicc_planning#394: the console's paint at the tab's size follows.
@@ -1864,6 +1887,7 @@ export default function TerminalView({ sessionId, configId, cwd, shellOnly, elev
             if (cols > 0 && rows > 0 && (cols !== lastSentCols || rows !== lastSentRows)) {
               lastSentCols = cols
               lastSentRows = rows
+              if (isActiveRef.current) noteShownSize(sessionId, cols, rows)
               ptyResizeCount += 1
               // ConPTY repaints the pane on resize — redraw output, not
               // activity. Grace the pill so it doesn't flash (RC8); the main
@@ -2011,6 +2035,7 @@ export default function TerminalView({ sessionId, configId, cwd, shellOnly, elev
     return () => {
       disposed = true
       cancelFontWait?.()
+      useTerminalSizeWaitStore.getState().set(sessionId, false)
       // A launch confirm this view asked (an unverified sign-in) goes with it:
       // nothing spawns from a torn-down view, and a remount asks afresh.
       useLaunchAckStore.getState().withdraw(sessionId)

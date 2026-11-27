@@ -95,6 +95,7 @@ owner decision and a new ADR.
    supported versions": a read is tried only when discovery proved the CLI and
    its version classifies as `supported` (`classifyCodexVersion`, 0.153.4
    to 0.156.1 when this was decided, 0.153.4 to 0.171.0 from 2.1.3-beta.11,
+   0.153.4 to 0.172.0 from 2.1.3-beta.19,
    `cli-contract.ts`). A `too-new` CLI, a `too-old` one or an `unknown`
    version is never read; it shows
    the last-seen reading. The executable discovery proved is captured when
@@ -154,6 +155,7 @@ therefore accept unknown extra fields and must not require the new ones.
 0.157.1 was checked for drift only when this was decided; it joined the tested range in 2.1.3-beta.11 (aicc_planning#185, CI run 44530382595) and is read from then on (bound 5).
 0.170.0 joined the tested range in the same beta (aicc_planning#347, CI run 44547276658) and is read from then on. It was not run with `generate-json-schema` (no Codex is installed outside CI and the VM); instead the schema bundle Codex commits at each release tag (`codex-rs/app-server-protocol/schema/json/codex_app_server_protocol.schemas.json`) was compared between rust-v0.157.1 and rust-v0.170.0 for every definition the five messages use: identical, except an optional `requiredHumanApproval` initialize capability (it needs `experimentalApi`, which the read does not ask for) and three more `PlanType` values (`promax`, `sci`, `sci_plus`), which the same beta names (aicc_planning#348, `src/shared/usage-types.ts`). A plan the app does not know is kept as no plan, with the limits still read (`rate-limits.ts`).
 0.171.0 joined it in the same beta too (CI run 44688602365, every conformance leg green on all three systems on the code that made 0.170.0 tested) and is read from then on. Its schema was neither generated nor compared with 0.170.0's; the owner's test of the release checks the reading itself.
+0.172.0 joined it in 2.1.3-beta.19 (aicc_planning#436, CI run 45756034358, every conformance leg green on all three systems on the two-row footer head cefc6d15) and is read from then on. Its schema was neither generated nor compared with 0.171.0's; the owner's test of the release checks the reading itself.
 
 A real read on 0.153.4 and 0.155.1 with a signed-in account was made on the
 test VM (MP8, 2026-09-27, at 81ed64a8 and again at fa2907e7; the VM journal

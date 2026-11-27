@@ -48,6 +48,7 @@ import {
   type CanvasVersionVerdict,
 } from '../../shared/canvas'
 import { atomicWriteSecure, mkdirSecure } from '../account-profiles'
+import { helpWorkspaceDir } from '../help-workspace'
 import { deriveInstallKey } from '../install-secret'
 import { getResourcesDirectory } from '../ipc/setup-handlers'
 import { isHomeOrAncestor } from '../path-utils'
@@ -188,20 +189,30 @@ function contains(a: string, b: string): boolean {
  * credential store over HTTP" without anyone deciding to.
  */
 function isResourcesDirOrAround(p: string): boolean {
+  return resourcesDirRelation(p) !== null
+}
+
+/** Where `p` is against the app's resources directory: it, inside it (the
+ *  app's own help folder, where Ask Conductor runs, is), holding it, or
+ *  neither (null). */
+function resourcesDirRelation(p: string): 'is' | 'inside' | 'holds' | null {
   let configured: string
   try {
     configured = getResourcesDirectory()
   } catch {
-    return false // not resolvable this run — the other floors still apply
+    return null // not resolvable this run — the other floors still apply
   }
-  if (typeof configured !== 'string' || configured.length === 0) return false
+  if (typeof configured !== 'string' || configured.length === 0) return null
   let res: string
   try {
     res = fs.realpathSync.native(configured)
   } catch {
     res = path.resolve(configured) // not on disk yet; the lexical answer still holds
   }
-  return sameFsPath(res, p) || contains(res, p) || contains(p, res)
+  if (sameFsPath(res, p)) return 'is'
+  if (contains(res, p)) return 'inside'
+  if (contains(p, res)) return 'holds'
+  return null
 }
 
 /**
@@ -253,6 +264,10 @@ export type CanvasRootRefusal =
   | 'volume-root'
   | 'dot-dir-under-home'
   | 'resources-dir'
+  /** Inside the app's resources directory: the app's own help folder, where
+   *  Ask Conductor runs, is (2.1.3-beta.19 fix round: worded apart from
+   *  'resources-dir', the resources directory itself or a folder holding it). */
+  | 'inside-resources-dir'
 
 /**
  * The refusal, plus the RESOLVED path when there is none.
@@ -282,13 +297,41 @@ export function canvasRootCheck(
   if (isHomeOrAncestor(real)) return { refusal: 'home-or-ancestor' }
   if (isVolumeRoot(real)) return { refusal: 'volume-root' }
   if (isDotDirUnderHome(real)) return { refusal: 'dot-dir-under-home' }
-  if (isResourcesDirOrAround(real)) return { refusal: 'resources-dir' }
+  const around = resourcesDirRelation(real)
+  if (around === 'inside') return { refusal: 'inside-resources-dir' }
+  if (around !== null) return { refusal: 'resources-dir' }
   return { refusal: null, real }
 }
 
 /** Just the reason, for callers that only have to explain themselves. */
 export function canvasRootRefusalReason(sessionId: string, baseDir: string): CanvasRootRefusal | null {
   return canvasRootCheck(sessionId, baseDir).refusal
+}
+
+/**
+ * Whether `dir` is the app's own help folder, where Ask Conductor runs: the
+ * resources directory's help folder, by the one spelling help-workspace.ts
+ * gives it (2.1.3-beta.19 fix round, second pass). Its launches are refused
+ * as inside the resources directory by design, so their callers log that as a
+ * line; any other folder inside the resources directory still warns.
+ */
+export function isAppHelpFolder(dir: string): boolean {
+  if (typeof dir !== 'string' || dir.length === 0) return false
+  let configured: string
+  try {
+    configured = getResourcesDirectory()
+  } catch {
+    return false
+  }
+  if (typeof configured !== 'string' || configured.length === 0) return false
+  const real = (p: string): string => {
+    try {
+      return fs.realpathSync.native(path.resolve(p))
+    } catch {
+      return path.resolve(p) // not on disk; the lexical answer still holds
+    }
+  }
+  return sameFsPath(real(helpWorkspaceDir(configured)), real(dir))
 }
 
 /**
@@ -306,6 +349,8 @@ export function describeCanvasRootRefusal(reason: CanvasRootRefusal, rawDir: str
   switch (reason) {
     case 'resources-dir':
       return `the canvas cannot serve ${dir} because the app's own resources directory (which holds your saved credentials and accounts) is inside it, or is it. Point this session at a project folder that does not contain the resources directory, or move the resources directory somewhere else in Settings.`
+    case 'inside-resources-dir':
+      return `the canvas cannot serve ${dir} because it is inside the app's own resources directory (which holds your saved credentials and accounts), as the app's own help folder is. Point this session at a project folder outside the resources directory.`
     case 'home-or-ancestor':
       return `the canvas cannot serve ${dir} because it is your home directory or a folder above it. Set this session's working directory to the specific project folder.`
     case 'volume-root':

@@ -29,8 +29,16 @@ vi.mock('../../../src/main/pty-manager', () => ({
   endSshRemote: vi.fn(), probeTmuxLive: vi.fn(),
 }))
 const helperTab = vi.fn((_id: string) => false)
+/** The machine that keeps a kept tab's session (2.1.3-beta.19 section 1.2), by app session id. */
+const keptOn = new Map<string, string>()
+// Since section 1.2 the SSH flow door asks remoteHelperFlowState (a kept tab's
+// answer names its machine); stood in for here by the same rule.
 vi.mock('../../../src/main/remote-helper', () => ({
-  isRemoteHelperTab: (id: string) => helperTab(id),
+  remoteHelperFlowState: (id: string) => {
+    if (!helperTab(id)) return null
+    const did = keptOn.get(id)
+    return did ? { state: 'through-helper', kept: { did } } : { state: 'through-helper' }
+  },
   forgetRemoteHelperTab: (id: string) => { order.push(`forget ${id}`) },
 }))
 vi.mock('../../../src/main/debug-capture', () => ({ logUserInput: vi.fn(), isDebugModeEnabled: () => false }))
@@ -93,6 +101,10 @@ describe('ssh:flow:getState and a tab through the session helper', () => {
       sshFlow.mockImplementation(() => undefined)
       expect(await getState({}, 'tab-remote')).toEqual({ state: 'through-helper' })
       expect(helperTab).toHaveBeenCalledWith('tab-remote')
+      // A kept tab's answer names the machine that keeps it (2.1.3-beta.19 section 1.2).
+      keptOn.set('tab-kept', '0123456789abcdef0123456789abcdef')
+      expect(await getState({}, 'tab-kept')).toEqual({ state: 'through-helper', kept: { did: '0123456789abcdef0123456789abcdef' } })
+      keptOn.clear()
       helperTab.mockImplementation(() => false)
       expect(await getState({}, 'tab-usual')).toEqual({ state: 'connecting' })
       // A flow of its own wins, whatever the helper says.

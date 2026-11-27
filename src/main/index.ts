@@ -1077,8 +1077,8 @@ if (!gotTheLock) {
     registerHooksHandlers(getGateway()!)   // B1: handlers get whatever gateway backs the singleton
     // Session Watchdog (#235): wired after the gateway singleton exists so its
     // StopFailure subscription binds immediately. send() submits a Claude Code
-    // session's retry the way the launch path does — writePty(text + '\r') —
-    // the proven way to submit into the Claude TUI, and a Codex session's by
+    // session's retry as the text, then '\r' as its own write (PR 763 fix
+    // round 9: one write of 64 characters or more stayed unsent), and a Codex session's by
     // the Codex composer rule (session-input submitRetry). (The channel-bus
     // paste envelope does NOT submit: formatTier1 ends at the bracketed-paste
     // close with no trailing Enter, so it only drafts. A bracketed paste with a
@@ -1090,8 +1090,10 @@ if (!gotTheLock) {
       isSessionAlive: isSessionWritable,
       // 2.1.3-beta.10 A2, 2.1.3-beta.18 section 4: each session's retry is the
       // retry member of its own provider's run screen (session-input
-      // submitRetry): a Claude Code session's is the tmux leave key on an SSH
-      // Persistent session, then the line and Enter in one write, and answers
+      // submitRetry): a Claude Code session's is the line, then the Enter as
+      // its own write (since PR 763 fix round 9; before it, in a tab through
+      // the session helper only), each after the tmux leave key on an SSH
+      // Persistent session, and answers
       // nothing; a Codex session's goes through the Codex composer rule, which
       // answers, and is typed only while its incident is still on (stillWanted).
       send: (sessionId, text, stillWanted) => submitRetry(sessionId, text, stillWanted),
@@ -1146,7 +1148,7 @@ if (!gotTheLock) {
     void endRecordedVisionBrowser()
 
     // Start the Conductor MCP server unconditionally so the fetch_host_screenshot
-    // tool is available for image transfer (snap, storyboard, clipboard paste)
+    // tool is available for image transfer (Snap, image paste)
     // in BOTH local and SSH sessions, regardless of whether browser vision is enabled.
     // P7.2: resolve port from build mode (dev binds 19433, prod 19333) so dev
     // + prod can coexist on the same machine without EADDRINUSE. The

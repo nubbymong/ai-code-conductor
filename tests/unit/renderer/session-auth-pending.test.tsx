@@ -204,10 +204,12 @@ describe('SSH account pending shimmer (SshAuthPending)', () => {
 
 // 2.1.3-beta.18 release smoke (crop-helper-header-pills.png, k-question-a2.png
 // against d-today-ccshow.png): a Claude Code tab through the session helper on
-// a Linux machine never reports its account (the status line does not carry
-// it yet), so its header showed the three loading pills for 20 s and then
-// nothing, where today's SSH tab shows its account. It now says so at once.
-describe('a tab through the session helper (no account through the helper yet)', () => {
+// a Linux machine never reported its account, so its header showed the three
+// loading pills for 20 s and then nothing. 2.1.3-beta.19 section 3
+// (aicc_planning#434): every start of such a tab reads the account on its
+// machine, so the header names it as today's SSH tab does; when the start
+// named none, main says why and the header says so at once.
+describe('a tab through the session helper: its account from its start\'s read', () => {
   const HELPER = 'through-helper'
   let pushes: Array<(msg: { state: string; info?: string }) => void>
   const ssh = (state: string | null) => {
@@ -219,45 +221,122 @@ describe('a tab through the session helper (no account through the helper yet)',
   }
   const settle = async () => { for (let i = 0; i < 4; i++) await act(async () => { await Promise.resolve() }) }
 
-  it('shows one plain account pill that says the account is not shown, never the loading pills', async () => {
+  it('a start that named no account: one plain pill that says so and why, never the loading pills', async () => {
     ssh(HELPER)
-    render(sshNoIdentity())
+    render(sshNoIdentity({ remoteAccountNotShown: 'no-account' }))
     await settle()
     expect(q('[data-testid="session-auth-pending"]')).toBeNull()
     expect(container.querySelectorAll('[data-testid="session-auth-skeleton"]').length).toBe(0)
-    const pill = q('[data-testid="session-pill-account-not-shown"]') as HTMLElement | null
-    expect(pill?.textContent).toBe('Account not shown through the helper yet')
-    expect(pill?.getAttribute('title')).toContain('session helper')
+    const pill = q('[data-testid="session-pill-account-not-available"]') as HTMLElement | null
+    expect(pill?.textContent).toBe('Account not available')
+    expect(pill?.getAttribute('title')).toContain('names no account')
     // No sign-in pills: nothing about this tab's sign-in is known here.
     expect(q('[data-testid="session-pill-claudeai"]')).toBeNull()
     expect(q('[data-testid="session-pill-claudecode"]')).toBeNull()
   })
 
+  it('a read that did not answer says to press Check', async () => {
+    ssh(HELPER)
+    render(sshNoIdentity({ remoteAccountNotShown: 'not-read' }))
+    await settle()
+    const pill = q('[data-testid="session-pill-account-not-available"]') as HTMLElement | null
+    expect(pill?.textContent).toBe('Account not available')
+    expect(pill?.getAttribute('title')).toContain('Press Check on the Machines page')
+  })
+
+  it('before its start\'s read lands, the loading pills: the read comes before the session starts', async () => {
+    ssh(HELPER)
+    render(sshNoIdentity())
+    await settle()
+    expect(q('[data-testid="session-auth-pending"]')).not.toBeNull()
+    expect(q('[data-testid="session-pill-account-not-available"]')).toBeNull()
+  })
+
   it('follows main\'s push: a tab started through the helper after the header mounted', async () => {
     ssh('connecting')
-    render(sshNoIdentity())
+    render(sshNoIdentity({ remoteAccountNotShown: 'no-account' }))
     await settle()
     expect(q('[data-testid="session-auth-pending"]')).not.toBeNull()
     act(() => { for (const p of pushes) p({ state: HELPER }) })
     expect(q('[data-testid="session-auth-pending"]')).toBeNull()
-    expect(q('[data-testid="session-pill-account-not-shown"]')).not.toBeNull()
+    expect(q('[data-testid="session-pill-account-not-available"]')).not.toBeNull()
   })
 
-  it('today\'s SSH tab with no identity yet still shows the loading pills', async () => {
+  it('today\'s SSH tab with no identity yet still shows the loading pills, whatever a reason says', async () => {
     ssh('claude-running')
-    render(sshNoIdentity())
+    render(sshNoIdentity({ remoteAccountNotShown: 'no-account' }))
     await settle()
     expect(q('[data-testid="session-auth-pending"]')).not.toBeNull()
-    expect(q('[data-testid="session-pill-account-not-shown"]')).toBeNull()
+    expect(q('[data-testid="session-pill-account-not-available"]')).toBeNull()
   })
 
-  it('an account that does arrive wins: the usual pills', async () => {
+  it('the account its start read: the usual pills, as today\'s SSH tab (mapped to a local profile: the full set)', async () => {
     ssh(HELPER)
     useAccountProfilesStore.setState({ profiles: [{ id: 'profile-ssh', name: 'Work', accountEmail: 'remote@x.com' } as any] })
     useAccountAuthStore.setState({ byProfile: { 'profile-ssh': { cliAuthed: true, web: 'active', loading: false, fetchedAt: 1 } } })
     render(sshNoIdentity({ accountEmail: 'remote@x.com' }))
     await settle()
-    expect(q('[data-testid="session-pill-account-not-shown"]')).toBeNull()
+    expect(q('[data-testid="session-pill-account-not-available"]')).toBeNull()
     expect(q('[data-testid="session-pill-account"]')).not.toBeNull()
+    expect(q('[data-testid="session-pill-claudecode"]')).not.toBeNull()
+  })
+
+  it('an account this computer does not hold: the account pill alone, named from the read', async () => {
+    ssh(HELPER)
+    render(sshNoIdentity({ accountEmail: 'stranger@example.com' }))
+    await settle()
+    const pill = q('[data-testid="session-pill-account"]') as HTMLElement | null
+    expect(pill).not.toBeNull()
+    expect(pill?.getAttribute('title')).toContain('stranger@example.com')
+    expect(q('[data-testid="session-pill-claudecode"]')).toBeNull()
+  })
+})
+
+// 2.1.3-beta.19 text smoke (#38, #39, #40), on a tab through the session
+// helper: its account pill said "(signed in on the remote host)" though the
+// label is read from one field of Claude Code's config file there (the Rocky
+// line saw it while the host said 'Not logged in'); its SSH pill said a
+// dropped connection ends it (Settings says it comes back within two
+// minutes); and its claude.ai and Claude Code pills, which are this
+// computer's sign-in for that account, did not say so.
+describe('a tab through the session helper: its pills say what they read (text smoke #38, #39, #40)', () => {
+  const HELPER = 'through-helper'
+  const ssh = (state: string) => {
+    ;(globalThis as any).window.electronAPI.ssh = {
+      getState: vi.fn(async () => ({ state })),
+      onFlowState: vi.fn(() => () => {}),
+    }
+  }
+  const settle = async () => { for (let i = 0; i < 4; i++) await act(async () => { await Promise.resolve() }) }
+  const mapped = () => {
+    useAccountProfilesStore.setState({ profiles: [{ id: 'profile-ssh', name: 'Work', accountEmail: 'remote@x.com' } as any] })
+    useAccountAuthStore.setState({ byProfile: { 'profile-ssh': { cliAuthed: false, web: 'expired', loading: false, fetchedAt: 1 } } })
+  }
+  const title = (id: string) => (q(`[data-testid="${id}"]`) as HTMLElement | null)?.getAttribute('title')
+
+  it('the helper tab: the connection pill says a dropped link comes back; the account pill names the config field; the sign-in pills are this computer\'s', async () => {
+    ssh(HELPER)
+    mapped()
+    render(sshNoIdentity({ accountEmail: 'remote@x.com' }))
+    await settle()
+    expect(title('ssh-connection-pill')).toBe('Remote session over SSH through the session helper on its machine: a dropped connection comes back within two minutes with what you missed; closing the tab ends it.')
+    expect(title('session-pill-account')).toBe("Remote Claude account: remote@x.com (the account Claude Code's config names on the remote host)")
+    expect(title('session-pill-claudeai')).toBe('claude.ai web session for this account on this computer')
+    expect(title('session-pill-claudecode')).toBe('Claude Code sign-in for this account on this computer; the remote machine signs in by itself')
+  })
+
+  it('today\'s SSH tab keeps its connection words; a local tab keeps its sign-in words', async () => {
+    ssh('claude-running')
+    mapped()
+    render(sshNoIdentity({ accountEmail: 'remote@x.com' }))
+    await settle()
+    expect(title('ssh-connection-pill')).toBe('Remote session over SSH; a dropped connection ends it and reconnecting resumes via --continue.')
+    act(() => { root.unmount() })
+    root = createRoot(container)
+    useAccountAuthStore.setState({ byProfile: { 'profile-ssh': { cliAuthed: true, web: 'active', loading: false, fetchedAt: 1 } } })
+    render(makeSession({ provider: 'claude', profileId: 'profile-ssh' }))
+    await settle()
+    expect(title('session-pill-claudeai')).toBe("claude.ai web session for this session's account")
+    expect(title('session-pill-claudecode')).toBe("Claude Code sign-in for this session's account")
   })
 })

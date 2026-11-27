@@ -2,7 +2,10 @@
 // shortcuts hint, "? for shortcuts", on the row under the footer of an empty
 // composer. The reader takes exactly that one row as part of the footer's
 // place, so the footer stays its anchor; any other row under the footer, a
-// second hint row, or a wrapped footer still reads unrecognised (round 2, WW).
+// second hint row, or a footer wrapped inside its folder still reads
+// unrecognised (round 2, WW; the one wrap the reader takes, the thread's title
+// wrapped onto a second row, is aicc_planning#436's,
+// tests/unit/shared/codex-screen-wrapped-footer.test.ts).
 //
 // Where the row comes from (Codex's TUI source at the rust-v0.157.1 tag):
 // bottom_pane/footer.rs, left_side_line, draws the key "?" then " for
@@ -113,7 +116,7 @@ describe("Codex 0.157.1's shortcuts hint under the footer (C5, #349)", () => {
     expect(readCodexScreen([...base, footer4, HINT]).screen).toBe('unrecognised')
   })
 
-  it('a wrapped footer reads unrecognised, with or without the hint row under it', () => {
+  it('a footer wrapped inside its folder reads unrecognised, with or without the hint row under it', () => {
     const wrapped = [plain(`  p19-probe default ${DOT} C:\\Users\\alex\\projects\\a-very-long`), plain('-folder-name')]
     const base = LINUX.slice(0, -2)
     expect(readCodexScreen([...base, ...wrapped]).screen).toBe('unrecognised')

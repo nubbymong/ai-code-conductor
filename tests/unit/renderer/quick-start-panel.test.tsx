@@ -28,6 +28,8 @@ vi.mock('../../../src/renderer/hooks/useLaunchConfig', async (importOriginal) =>
 }))
 
 const { default: QuickStartPanel } = await import('../../../src/renderer/components/sidebar/QuickStartPanel')
+const { useDetachedRemotesStore } = await import('../../../src/renderer/stores/detachedRemotesStore')
+const { PERSISTENT_TITLE } = await import('../../../src/renderer/components/sidebar/Badges')
 
 const cfg = (id: string, over: Record<string, unknown> = {}) => ({
   id, label: id, workingDirectory: `/x/${id}`, color: '', sessionType: 'local', provider: 'claude', pinned: true, ...over,
@@ -181,6 +183,16 @@ describe('the #462 restyle — session-card language, no loud fill', () => {
     expect(a.querySelector('[data-testid="ssh-persistent-badge"]')).toBeTruthy()
     expect(b.querySelector('[data-testid="ssh-badge"]')).toBeTruthy()
     expect(b.querySelector('[data-testid="ssh-persistent-badge"]')).toBeNull()
+  })
+
+  it('a pin\'s SSH-Persistent chip names what keeps its sessions, as its Saved row does (2.1.3-beta.19 section 1.2)', () => {
+    const chip = () => container.querySelector('[data-testid="ssh-persistent-badge"]')!.getAttribute('title')
+    render({ configs: [sshPin('a', {})] })
+    expect(chip()).toBe(PERSISTENT_TITLE.tmux)
+    useDetachedRemotesStore.setState({ entries: [{ sessionId: 'left', configId: 'a', host: 'h', username: 'u', remotePath: '~', port: 22, mux: 'helper', did: '0123456789abcdef0123456789abcdef', label: 'a', detachedAt: 1 } as any] })
+    render({ configs: [sshPin('a', {})] })
+    expect(chip()).toBe(PERSISTENT_TITLE.helper)
+    useDetachedRemotesStore.setState({ entries: [] })
   })
 
   // Phase 6 row anatomy: identity dot FAR LEFT, then the type badge.

@@ -12,13 +12,14 @@ import { resolveAccountName, resolveAccountNameByEmail, middleTruncateEmail } fr
 import { chipColourKeyForEmail } from '../utils/accountChip'
 import { useProviderAccountsStore } from '../stores/providerAccountsStore'
 import { BrandMark } from './BrandMark'
-import { ContainerGlyph, containerBadgeTitle, ProviderMark } from './sidebar/Badges'
+import { ContainerGlyph, containerBadgeTitle, PERSISTENT_TITLE, ProviderMark } from './sidebar/Badges'
 import { containerNameOf, resolveTransportBadge } from './sidebar/transportBadge'
 import { useRestartSession } from '../hooks/useRestartSession'
 import { RowMenu } from './ui/RowMenu'
 import { ASK_LABEL } from '../lib/askConductor'
 import { sshAuthGiveUpMemory } from '../stores/sshAuthGiveUp'
 import { useThroughHelper } from '../hooks/useThroughHelper'
+import { REMOTE_ACCOUNT_NOT_SHOWN_LABEL, REMOTE_ACCOUNT_NOT_SHOWN_TITLE } from '../lib/remoteHelperAccountText'
 
 declare const __APP_VERSION__: string
 
@@ -309,8 +310,9 @@ function SessionGitHubPill({ session }: { session: Session }) {
  * and the separate persistent / not-persistent pills. THREE kinds now (phase 6,
  * the same truth table the sidebar badges read): the teal container mark when
  * claude runs a hop deeper inside a container, green "SSH-Persistent" when the
- * session is tmux-wrapped (a dropped connection stays alive and reconnecting
- * resumes it in place), neutral "SSH" otherwise. The kind slot is exclusive --
+ * session is tmux-wrapped or kept by the session helper until it is ended (a
+ * dropped connection leaves it running and reconnecting comes back to it; the
+ * title says which), neutral "SSH" otherwise. The kind slot is exclusive --
  * a container session is never tmux-wrapped (main forces persistence off), so
  * the old separate container pill beside an "SSH" one said one thing twice.
  * The address (user@host) reads inline in EVERY kind, at a glance, not only on
@@ -318,11 +320,14 @@ function SessionGitHubPill({ session }: { session: Session }) {
  */
 function SshConnectionPill({ session }: { session: Session }) {
   const ssh = session.sshConfig
+  // A tab through the session helper on its machine (text smoke #39): its own title.
+  const throughHelper = useThroughHelper(session.id, session.sessionType === 'ssh' && !!ssh)
   if (!ssh) return null
+  const keptByHelper = session.remoteVia === 'helper'
   const kind = resolveTransportBadge({
     isSsh: session.sessionType === 'ssh',
     ssh,
-    persistent: session.sshTmuxPersistent === true,
+    persistent: session.sshTmuxPersistent === true || keptByHelper,
   })
   const container = kind === 'container' ? containerNameOf(ssh) : undefined
   const persistent = kind === 'persistent'
@@ -335,8 +340,12 @@ function SshConnectionPill({ session }: { session: Session }) {
         kind === 'container'
           ? containerBadgeTitle(container)
           : persistent
-            ? 'This remote session runs inside tmux — a dropped connection stays alive and reconnecting resumes it in place.'
-            : 'Remote session over SSH; a dropped connection ends it and reconnecting resumes via --continue.'
+            ? keptByHelper
+              ? PERSISTENT_TITLE.helper
+              : 'This remote session runs inside tmux — a dropped connection stays alive and reconnecting resumes it in place.'
+            : throughHelper
+              ? 'Remote session over SSH through the session helper on its machine: a dropped connection comes back within two minutes with what you missed; closing the tab ends it.'
+              : 'Remote session over SSH; a dropped connection ends it and reconnecting resumes via --continue.'
       }
       testId="ssh-connection-pill"
     >
@@ -421,8 +430,10 @@ function WatchdogPill({ session }: { session: Session }) {
  * leading separator + the GitHub pill, or null).
  */
 function AccountAuthPillSet({
-  accountLabel, accountTone, accountTitle, status, profileId, refresh, gitHubTail, watchdogPill,
+  accountLabel, accountTone, accountTitle, status, profileId, refresh, gitHubTail, watchdogPill, remote = false,
 }: {
+  /** An SSH tab: the two sign-in pills are this computer's sign-in for its account (text smoke #40). */
+  remote?: boolean
   accountLabel: React.ReactNode
   accountTone: string
   accountTitle: string
@@ -468,14 +479,16 @@ function AccountAuthPillSet({
         label="claude.ai"
         tone={aiTone}
         word={aiWord}
-        title={`claude.ai web session for this session's account${errorSuffix}`}
+        title={remote ? `claude.ai web session for this account on this computer${errorSuffix}` : `claude.ai web session for this session's account${errorSuffix}`}
         testId="session-pill-claudeai"
       />
       <HeaderPill
         label="Claude Code"
         tone={codeOff ? 'var(--text-muted)' : codeTone}
         word={codeOff ? codeOff.word : codeWord}
-        title={codeOff ? `Claude Code sign-in for this session's account was not checked: ${codeOff.reason}` : `Claude Code sign-in for this session's account${errorSuffix}`}
+        title={remote
+          ? (codeOff ? `Claude Code sign-in for this account on this computer was not checked: ${codeOff.reason}` : `Claude Code sign-in for this account on this computer; the remote machine signs in by itself${errorSuffix}`)
+          : codeOff ? `Claude Code sign-in for this session's account was not checked: ${codeOff.reason}` : `Claude Code sign-in for this session's account${errorSuffix}`}
         testId="session-pill-claudecode"
       >
         <button
@@ -553,8 +566,9 @@ function SessionAuthPills({ session }: { session: Session }) {
   const status = useAccountAuthStore((s) => (profileId ? s.byProfile[profileId] : undefined))
   const claudeOffNow = useClaudeOff()
   // A tab through the session helper on its machine (the remote sessions
-  // preview) does not report its account yet (its status line has no account:
-  // aicc_planning#434), so its loading pills would wait for nothing.
+  // preview): its account comes from the field its start reads on that
+  // machine (2.1.3-beta.19 section 3, aicc_planning#434), or main says why
+  // there is none.
   const throughHelper = useThroughHelper(session.id, isSshClaude)
 
   React.useEffect(() => {
@@ -607,18 +621,20 @@ function SessionAuthPills({ session }: { session: Session }) {
     // inheriting whatever was left of the first one's 20s timer. A session that
     // already gave up once renders the fallback immediately on remount
     // (sshAuthGiveUpMemory) — re-activation must not re-arm the shimmer.
-    // A tab through the session helper has nothing to wait for (its account is
-    // not reported through the helper yet), so it says so at once instead of
-    // the loading pills (2.1.3-beta.18 release smoke: 20 s of them, then
-    // nothing). An account that does arrive takes the branches below.
-    if (!remoteEmail && !sshProfileId && throughHelper) {
+    // A tab through the session helper names its account from the field its
+    // start read on its machine (2.1.3-beta.19 section 3, aicc_planning#434):
+    // the branches below, as today's SSH tab. When that start named none,
+    // main says why and this pill says so at once, never loading pills that
+    // wait for nothing (2.1.3-beta.18 release smoke: 20 s of them, then
+    // nothing). Until the start's read lands, the loading pills below.
+    if (!remoteEmail && !sshProfileId && throughHelper && session.remoteAccountNotShown && REMOTE_ACCOUNT_NOT_SHOWN_TITLE[session.remoteAccountNotShown]) {
       return (
         <>
           <HeaderPill
-            label="Account not shown through the helper yet"
+            label={REMOTE_ACCOUNT_NOT_SHOWN_LABEL}
             tone="var(--text-muted)"
-            title="This tab runs through the session helper on its machine. Its account, and the claude.ai and Claude Code sign-ins, are not shown through the helper yet."
-            testId="session-pill-account-not-shown"
+            title={REMOTE_ACCOUNT_NOT_SHOWN_TITLE[session.remoteAccountNotShown]}
+            testId="session-pill-account-not-available"
           />
           <WatchdogPill session={session} />
           {gitHubTail}
@@ -639,13 +655,14 @@ function SessionAuthPills({ session }: { session: Session }) {
       theme,
     )
     const accountTitle = reportedEmail
-      ? `Remote Claude account: ${remoteEmail} (signed in on the remote host)`
+      ? `Remote Claude account: ${remoteEmail} (the account Claude Code's config names on the remote host)`
       : `Launch account: ${idEmail || remoteName} (the remote host has not reported its signed-in account yet)`
     // Mapped to a local profile → the full local pill set, driven by that
     // profile's auth status. The account pill keeps its remote name/tone/title.
     if (sshProfileId) {
       return (
         <AccountAuthPillSet
+          remote
           accountLabel={remoteName}
           accountTone={remoteTone}
           accountTitle={accountTitle}

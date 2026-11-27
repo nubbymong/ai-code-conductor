@@ -7,6 +7,7 @@ import type { ProviderCapabilities } from '../../../shared/providers'
 import type { ProviderPackage } from '../core'
 import { HELPER_HOOK_KINDS } from '../../session-helper/protocol'
 import { resolveClaudeBinary, buildClaudeLocalSpawn } from './spawn'
+import { CLAUDE_LIFECYCLE } from './lifecycle'
 import {
   getRemoteSetupCommand, remoteSessionSettingsPath, remoteSessionMcpConfigPath,
   buildRemoteSessionCleanupCommand, buildWindowsRemoteSessionCleanupCommand, buildTmuxBinPatchCommand, buildRemoteTmuxKillCommand, buildContainerKillCommand,
@@ -90,6 +91,8 @@ export class ClaudeProvider implements SshCapableProvider {
   readonly exitKeys = CLAUDE_EXIT_KEYS
   /** 2.1.3-beta.18 section 2: a session on another machine through the session helper there. */
   readonly remoteLaunch = claudeRemoteLaunch
+  /** 2.1.3-beta.19 section 2: what the app makes around a local session and drops when it ends (lifecycle.ts). */
+  readonly lifecycle = CLAUDE_LIFECYCLE
   /** 2.1.3-beta.18 section 4 (aicc_planning#432): how the session input
    *  module's doors type into a Claude Code session (run-screen.ts). */
   readonly runScreen = CLAUDE_RUN_SCREEN

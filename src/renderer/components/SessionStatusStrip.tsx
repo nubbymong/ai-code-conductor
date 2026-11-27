@@ -2,7 +2,8 @@ import React, { useState, useMemo, useRef, useEffect } from 'react'
 import { useSessionStore, type Session } from '../stores/sessionStore'
 import { useSettingsStore, DEFAULT_STATUS_LINE } from '../stores/settingsStore'
 import { usesCodex } from '../onboarding/provider-choice'
-import { RateLimitBar, RateLimitBarPending, RateLimitBarNoReading } from './terminal/RateLimitBar'
+import { RateLimitBar, RateLimitBarPending, RateLimitBarNoReading, RateLimitNotReported } from './terminal/RateLimitBar'
+import { tryGetRendererProvider } from '../providers/core'
 import { bucketPastReset } from '../../shared/usage-labels'
 import { useRenderAtNextReset } from '../hooks/useRenderAtNextReset'
 import { useProviderAccountsStore } from '../stores/providerAccountsStore'
@@ -31,6 +32,19 @@ import { useRegistryStore } from '../stores/registryStore'
 import AiUsageChip from './github/AiUsageChip'
 import { typeIntoCodexComposer, type CodexTyping } from '../lib/codexComposer'
 import { typeAtClaudePrompt } from '../lib/claudePrompt'
+import type { RemoteUsageNotShown } from '../../shared/types'
+import { REMOTE_USAGE_NOT_SHOWN_TEXT } from '../lib/remoteHelperAccountText'
+import {
+  STRIP_CLASS,
+  STRIP_TELEMETRY_CLASS,
+  STRIP_MIDDLE_ROW_CLASS,
+  REMOTE_USAGE_NOTE_CLASS,
+  STRIP_CONTEXT_CLASS,
+  STRIP_CONTEXT_TRACK_CLASS,
+  STRIP_CONTEXT_PCT_CLASS,
+  STRIP_METERS_CLASS,
+  STRIP_TAIL_CLASS,
+} from './session-strip-layout' // why each class is what it is: there (the 1280x768 layout check builds from them)
 
 interface SessionStatusStripProps {
   /** The PTY/session id for THIS terminal. Telemetry is read for this
@@ -62,6 +76,18 @@ const EMPTY_HIDDEN: string[] = []
  *  round 1, C1) or Claude Code's. This name and the note's test id
  *  (codex-command-note) predate the Claude notes; both now serve both CLIs. */
 export const CODEX_NOTE_MS = 6000
+
+/** 2.1.3-beta.19 section 3 (aicc_planning#434): the strip's note for a tab
+ *  through the session helper, in place of the per-model weekly bars and
+ *  extra usage it cannot show (main's reason, session.remoteUsageNotShown),
+ *  or nothing. Never an empty or zero bar. */
+function RemoteUsageNote({ why }: { why: RemoteUsageNotShown | undefined }) {
+  const text = why ? REMOTE_USAGE_NOT_SHOWN_TEXT[why] : undefined
+  if (!text) return null
+  return (
+    <span className={REMOTE_USAGE_NOTE_CLASS} style={{ color: 'var(--text-muted)' }} title={text.title} data-testid="remote-usage-not-shown">{text.label}</span>
+  )
+}
 
 // SessionStatusStrip (v2 shell, UAT R2): the per-session telemetry + controls
 // band. Lives directly above the command rows, under the terminal -- the old
@@ -124,7 +150,9 @@ export default function SessionStatusStrip({ sessionId }: SessionStatusStripProp
 
   const [openPicker, setOpenPicker] = useState<'model' | 'account' | null>(null)
   const [lastEffort, setLastEffort] = useState<string | null>(null)
-  const isClaude = (session?.provider ?? 'claude') === 'claude'
+  // An unset provider is Claude Code's, here and in the 5-hour window's title.
+  const providerId = session?.provider ?? 'claude'
+  const isClaude = providerId === 'claude'
   // Usage track MP6: a session of an account-attributed provider (Codex) is
   // billed by its registry account: the one it runs under, else the provider
   // default. An API-key account is billed per token and reports no allowance.
@@ -232,7 +260,7 @@ export default function SessionStatusStrip({ sessionId }: SessionStatusStripProp
   if (session.shellOnly) {
     return (
       <div
-        className="min-h-7 shrink-0 flex items-center gap-3 px-3 text-xs border-t border-b"
+        className={STRIP_CLASS}
         style={{ background: 'var(--surface-raised)', color: 'var(--text-on-chrome)', borderColor: 'var(--border-subtle)' }}
       >
         <div className="flex-1" aria-hidden />
@@ -268,6 +296,8 @@ export default function SessionStatusStrip({ sessionId }: SessionStatusStripProp
   // band below is already inside `{statusLineEnabled ? ... }`, so a clause for
   // it would be unreachable -- verified by mutation: deleting it changes no test
   // result. The footer needs its own check because it has no such wrapper.
+  // Its one use is the branch where neither window has arrived, so the weekly
+  // field needs no clause here (2.1.3-beta.19 fix round 5's review).
   const awaitingStatusline =
     !session.shellOnly &&
     session.status !== 'disconnected' &&
@@ -336,7 +366,7 @@ export default function SessionStatusStrip({ sessionId }: SessionStatusStripProp
 
   return (
     <div
-      className="min-h-7 shrink-0 flex items-center gap-3 px-3 text-xs border-t border-b"
+      className={STRIP_CLASS}
       style={{ background: 'var(--surface-raised)', color: 'var(--text-on-chrome)', borderColor: 'var(--border-subtle)', ...statusType }}
     >
       {/* Account — ALWAYS the far-left item of the strip (owner UX, live testing
@@ -402,9 +432,12 @@ export default function SessionStatusStrip({ sessionId }: SessionStatusStripProp
           With the master switch off, a bare spacer keeps the controls cluster
           right-aligned. */}
       {statusLineEnabled ? (
-      <div
-        className="flex items-center gap-3 flex-1 min-w-0 overflow-hidden"
-      >
+      <>
+      {/* PR 763 fix round 10: the text row, then the meters after it, not at
+          its end where its cut falls (session-strip-layout.ts says what gives
+          way, and in what order). */}
+      <div className={STRIP_TELEMETRY_CLASS}>
+      <div className={STRIP_MIDDLE_ROW_CLASS}>
         {/* Bug 6: for Claude the interactive Model pill (controls cluster, right)
             is the single home for the model + effort, so the read-only telemetry
             copy would double it. Codex has no model pill, so it keeps this. */}
@@ -432,11 +465,11 @@ export default function SessionStatusStrip({ sessionId }: SessionStatusStripProp
           <span className="tabular-nums shrink-0">{formatTokens(session.inputTokens)} / {formatTokens(session.contextWindowSize)}</span>
         )}
         {sl.showContextBar && session.contextPercent != null && (
-          <span className="flex items-center gap-1.5 shrink-0">
-            <span className="w-16 h-1.5 rounded-full overflow-hidden" style={{ background: 'var(--surface-sunken)' }}>
+          <span className={STRIP_CONTEXT_CLASS} data-testid="strip-context">
+            <span className={STRIP_CONTEXT_TRACK_CLASS} style={{ background: 'var(--surface-sunken)' }}>
               <span className="block h-full rounded-full" style={{ width: `${pct}%`, background: ctxColor }} />
             </span>
-            <span className="tabular-nums">{Math.round(pct)}%</span>
+            <span className={STRIP_CONTEXT_PCT_CLASS}>{Math.round(pct)}%</span>
           </span>
         )}
         {sl.showCost && session.costUsd != null && (
@@ -454,6 +487,7 @@ export default function SessionStatusStrip({ sessionId }: SessionStatusStripProp
         {sl.showDuration && session.totalDurationMs != null && (
           <span className="tabular-nums shrink-0" style={{ color: 'var(--text-muted)' }}>{formatDuration(session.totalDurationMs)}</span>
         )}
+      </div>
         {sl.showRateLimits && (() => {
           // Dynamic buckets (5h, Weekly, Fable, future per-model) discovered
           // from the API's limits[]; the user's hidden set is filtered out.
@@ -463,7 +497,7 @@ export default function SessionStatusStrip({ sessionId }: SessionStatusStripProp
           if (session.usageBuckets && session.usageBuckets.length > 0) {
             if (shown.length === 0 && !validExtraUsage(session.rateLimitExtra)) return null
             return (
-              <span className="flex items-center gap-3 shrink-0">
+              <span className={STRIP_METERS_CLASS}>
                 {shown.map((b) => (
                   bucketPastReset(b, Date.now())
                     ? <RateLimitBarNoReading key={b.key} label={b.label} resetsAt={b.resetsAt} />
@@ -475,7 +509,11 @@ export default function SessionStatusStrip({ sessionId }: SessionStatusStripProp
               </span>
             )
           }
-          if (session.rateLimitCurrent == null) {
+          // Each window from its own field (2.1.3-beta.19 fix round 5): Claude
+          // Code can report the weekly window and no 5-hour one. Only while
+          // neither has arrived do both wait; once one has, the status line
+          // has spoken, and a window it left out is not reported, not coming.
+          if (session.rateLimitCurrent == null && session.rateLimitWeekly == null) {
             // Nothing has been reported yet. Rendering null here is what made a
             // cold session look broken: the statusline is written by a detached
             // child process and can trail the terminal by several seconds, so
@@ -487,7 +525,7 @@ export default function SessionStatusStrip({ sessionId }: SessionStatusStripProp
             const pendingLabels = ['5h', 'Weekly'].filter((l) => !hiddenBuckets.includes(l))
             if (pendingLabels.length === 0) return null
             return (
-              <span className="flex items-center gap-3 shrink-0" data-testid="statusline-pending">
+              <span className={STRIP_METERS_CLASS} data-testid="statusline-pending">
                 {pendingLabels.map((l) => (
                   <RateLimitBarPending key={l} label={l} />
                 ))}
@@ -495,11 +533,13 @@ export default function SessionStatusStrip({ sessionId }: SessionStatusStripProp
             )
           }
           return (
-            <span className="flex items-center gap-3 shrink-0">
+            <span className={STRIP_METERS_CLASS}>
               {!hiddenBuckets.includes('5h') && (
-                session.rateLimitCurrentResets && bucketPastReset({ resetsAt: session.rateLimitCurrentResets }, Date.now())
-                  ? <RateLimitBarNoReading label="5h" resetsAt={session.rateLimitCurrentResets} />
-                  : <RateLimitBar label="5h" pct={session.rateLimitCurrent} resets={session.rateLimitCurrentResets} showReset={sl.showResetTime} />
+                session.rateLimitCurrent == null
+                  ? <RateLimitNotReported label="5h" title={`${tryGetRendererProvider(providerId)?.displayName ?? 'The status line'} reported no 5-hour window for this account`} />
+                  : session.rateLimitCurrentResets && bucketPastReset({ resetsAt: session.rateLimitCurrentResets }, Date.now())
+                    ? <RateLimitBarNoReading label="5h" resetsAt={session.rateLimitCurrentResets} />
+                    : <RateLimitBar label="5h" pct={session.rateLimitCurrent} resets={session.rateLimitCurrentResets} showReset={sl.showResetTime} />
               )}
               {session.rateLimitWeekly != null && !hiddenBuckets.includes('Weekly') && (
                 session.rateLimitWeeklyResets && bucketPastReset({ resetsAt: session.rateLimitWeeklyResets }, Date.now())
@@ -512,33 +552,43 @@ export default function SessionStatusStrip({ sessionId }: SessionStatusStripProp
             </span>
           )
         })()}
-        {codexReview && codexReview.reviewCount > 0 && (
-          <span className="tabular-nums shrink-0" style={{ color: 'var(--text-muted)' }}>review {codexReview.reviewCount}</span>
-        )}
-        {/* Copilot AI-credit meter -- the per-session home for the meter. Gated
-            on BOTH the statusLine toggle AND the meter-enabled flag so the
-            separator never dangles when the chip itself would render null. The
-            chip clicks through to its popover, which deep-links to Settings per
-            context: auth/scope prompts open the GitHub tab; the cap / plan /
-            cycle config opens the Status Line tab (its new home, default). Lives
-            last in the telemetry zone so it shares the shrink budget and clips
-            first under overflow. */}
-        {sl.showCopilot && aiMeterEnabled && (
-          <>
-            <span
-              data-copilot-separator
-              className="w-px self-stretch my-1.5 mx-0.5 shrink-0"
-              style={{ background: 'var(--border-subtle)' }}
-              aria-hidden
-            />
-            <AiUsageChip
-              onOpenSettings={(tab = 'statusline') =>
-                window.dispatchEvent(new CustomEvent('app:openSettings', { detail: { tab } }))
-              }
-            />
-          </>
-        )}
+        <span className={STRIP_TAIL_CLASS}>
+          {codexReview && codexReview.reviewCount > 0 && (
+            <span className="tabular-nums shrink-0" style={{ color: 'var(--text-muted)' }}>review {codexReview.reviewCount}</span>
+          )}
+          {/* Copilot AI-credit meter -- the per-session home for the meter. Gated
+              on BOTH the statusLine toggle AND the meter-enabled flag so the
+              separator never dangles when the chip itself would render null. The
+              chip clicks through to its popover, which deep-links to Settings per
+              context: auth/scope prompts open the GitHub tab; the cap / plan /
+              cycle config opens the Status Line tab (its new home, default). Lives
+              last in the telemetry zone, in a tail that gives way first
+              (STRIP_TAIL_CLASS), before the meters' reset texts and the text row. */}
+          {sl.showCopilot && aiMeterEnabled && (
+            <>
+              <span
+                data-copilot-separator
+                className="w-px self-stretch my-1.5 mx-0.5 shrink-0"
+                style={{ background: 'var(--border-subtle)' }}
+                aria-hidden
+              />
+              <AiUsageChip
+                onOpenSettings={(tab = 'statusline') =>
+                  window.dispatchEvent(new CustomEvent('app:openSettings', { detail: { tab } }))
+                }
+              />
+            </>
+          )}
+        </span>
       </div>
+      {/* 2.1.3-beta.19 text smoke (#36): a helper tab's note in place of the
+          per-model weekly bars is a sibling AFTER the clipped row, never in it:
+          inside, at 1280 px only its first letter showed. Shown where the
+          rate-limit meters are on and no per-model bars are shown. */}
+      {sl.showRateLimits && !(session.usageBuckets && session.usageBuckets.length > 0) && (
+        <RemoteUsageNote why={session.remoteUsageNotShown} />
+      )}
+      </>
       ) : (
         <div className="flex-1" aria-hidden />
       )}

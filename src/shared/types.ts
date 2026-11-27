@@ -222,6 +222,14 @@ export interface SavedSession {
   partnerTerminalPath?: string
   partnerElevated?: boolean
   sshConfig?: SshConfig
+  /** 2.1.3-beta.19 section 1.2: 'helper' when this SSH Persistent tab's
+   *  session is kept by the session helper on its machine until it is ended,
+   *  written at the start that went through the helper (so a crash keeps it).
+   *  Absent otherwise, so every tab saved before beta.19 reads as tmux. A
+   *  tab so marked never starts on the usual SSH path. */
+  remoteVia?: 'helper'
+  /** The device id of the machine that keeps it, with remoteVia. */
+  remoteDid?: string
   machineName?: string
   githubIntegration?: import('./github-types').SessionGitHubIntegration
   // Provider discriminator + sub-options
@@ -291,9 +299,13 @@ export interface DetachedRemote {
    *  runtime (a legacy docker post-command is recorded as the container it
    *  names). Absent on pre-#54 entries. */
   runtime?: SshRuntime
-  /** Multiplexer holding the session alive. Always 'tmux' today (psmux is the
-   *  Windows-only path and is NOT wired yet — the field is recorded for it). */
-  mux: 'tmux' | 'psmux'
+  /** Multiplexer holding the session alive: 'tmux' on the usual SSH path
+   *  (psmux is the Windows-only path and is NOT wired yet — the field is
+   *  recorded for it); 'helper' for an SSH Persistent session the session
+   *  helper keeps until it is ended (2.1.3-beta.19 section 1.2), with `did`. */
+  mux: 'tmux' | 'psmux' | 'helper'
+  /** With mux 'helper': the device id of the machine whose helper keeps it. */
+  did?: string
   /** Remote Claude account (oauthAccount.emailAddress), when known. Descriptor. */
   accountEmail?: string
   /** Display label at detach time (customName || config label). */
@@ -396,6 +408,19 @@ export interface RateLimitExtra {
   limitUsd: number
 }
 
+/** Why a tab through the session helper names no account (2.1.3-beta.19
+ *  section 3): Claude Code on its machine names none in the field the app
+ *  reads (`no-account`), or that read did not answer (`not-read`). */
+export type RemoteAccountNotShown = 'no-account' | 'not-read'
+export const REMOTE_ACCOUNT_NOT_SHOWN: readonly RemoteAccountNotShown[] = ['no-account', 'not-read']
+
+/** Why such a tab shows no per-model weekly bars or extra usage: its machine
+ *  uses its own sign-in, which this computer does not hold, or its provider
+ *  gives no usage source (`own-sign-in`); or this computer holds the account
+ *  and has no current usage reading for it (`no-reading`: none that answered,
+ *  or one the Account usage page marks stale). */
+export type RemoteUsageNotShown = 'own-sign-in' | 'no-reading'
+
 export interface StatuslineData {
   sessionId: string
   model?: string
@@ -435,6 +460,16 @@ export interface StatuslineData {
   /** Sent once when nothing will report this session's allowance: 'no-reading'
    *  (Codex: no rollout was claimed within 30 s). D3 of the usage UX. */
   usageUnavailable?: 'no-reading'
+  /** 2.1.3-beta.19 section 3 (aicc_planning#434): a tab through the session
+   *  helper on another machine whose account is not named, and why (the
+   *  header's account pill says so). Set by main for such a tab alone, from
+   *  its start's account read (statusline-watcher.ts setHelperAccount); the
+   *  sanitiser drops it from every other payload. */
+  remoteAccountNotShown?: RemoteAccountNotShown
+  /** 2.1.3-beta.19 section 3: such a tab's per-model weekly bars and extra
+   *  usage are not shown, and why (the strip says "not available" with it).
+   *  Set and dropped as `remoteAccountNotShown` is. */
+  remoteUsageNotShown?: RemoteUsageNotShown
   /** Active-account email surfaced by the bridge script. Renderer displays it left of the model name. */
   accountEmail?: string
   /** Pre-computed by main process via `colourForEmail()` as an identity-palette KEY;
@@ -685,8 +720,9 @@ export interface CanvasMarkerUndelivered {
 
 /** What main asks the renderer about a Claude Code session's prompt, for a
  *  canvas marker (src/main/canvas/claude-marker-typing.ts): 'probe' reads it
- *  and types nothing; 'type' types the line and its Enter only if it reads
- *  ready and empty then. */
+ *  and types nothing; 'type' types the line and its Enter (the line alone
+ *  when the request says `enterApart`) only if it reads ready and empty
+ *  then. */
 export type ClaudeMarkerMode = 'probe' | 'type'
 
 /** One such request (main -> renderer, canvas:claudeMarkerAsk). */
@@ -700,6 +736,13 @@ export interface ClaudeMarkerAsk {
   mode: ClaudeMarkerMode
   /** The marker line, without its Enter. */
   line: string
+  /** 2.1.3-beta.19 section 6.1: true for a tab through the session helper on
+   *  its machine (RunScreenTyping.wholeWrites). A 'type' then types the line
+   *  alone, and main types its Enter as its own write once the line has gone
+   *  (providers/claude/run-screen.ts). Absent for every other session: the
+   *  line and its Enter in one write, as before. A value that is not a
+   *  boolean makes the request not well formed. */
+  enterApart?: boolean
 }
 
 /** The renderer's answer (canvas:claudeMarkerAnswer). `ok`: for a probe, the

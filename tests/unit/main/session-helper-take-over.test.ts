@@ -209,6 +209,10 @@ async function updated(): Promise<{ hc: FakeHolder; ho: FakeHolder; stream: numb
   const m1 = await startedWith(makeManager())
   const claude = spawnAgentPty(claudeTab(CLAUDE_TAB), SHELL, [], agentOpts())
   const other = spawnAgentPty(otherTab(OTHER_TAB), SHELL, [], agentOpts())
+  // 2.1.3-beta.19 section 6.2: a held agent session names its provider, which
+  // helper-pty.ts asks how long a queued lone Enter waits.
+  expect(claude).toHaveProperty('provider', 'claude')
+  expect(other).toHaveProperty('provider', 'codex')
   await until(() => freshAttached(claudeSid, undefined) && freshAttached(otherSid, undefined), 'both sessions to attach')
   const hc = helper.holders.get(claudeSid)!
   const ho = helper.holders.get(otherSid)!
@@ -259,6 +263,8 @@ describe('the next start after an update: a restored tab takes its kept session 
     // The restored tab's launch asks for it, as launch-bindings.ts does.
     const taken = takeKeptSession(CLAUDE_TAB, 'claude', SIZE)
     expect(taken).not.toBeNull()
+    // 2.1.3-beta.19 section 6.2: the take-over names its provider too.
+    expect(taken!.pty).toHaveProperty('provider', 'claude')
     // `at`: when the update let go of it, read back from its record (the take-over's not-indexed windows open from it).
     expect(taken!.kept).toMatchObject({ conversation: CONV, account: 'profile-mt4okz66-147e4a', hookFolder: null, folder: CWD, at: expect.any(Number) })
     expect(taken!.kept.at).toBeGreaterThanOrEqual(beforeRelease)
@@ -486,6 +492,7 @@ describe('a Codex session an update kept running (B1.2)', () => {
     expect(keptOnDisk()).toEqual([`${claudeSid}.json`, `${otherSid}.json`].sort())
     const taken = takeKeptSession(OTHER_TAB, 'codex', SIZE, 'acct-7')
     expect(taken).not.toBeNull()
+    expect(taken!.pty).toHaveProperty('provider', 'codex')
     expect(taken!.kept).toMatchObject({ conversation: OTHER_CONV, account: 'acct-7', hookFolder: HOOK_FOLDER, folder: CWD, at: expect.any(Number) })
     expect(taken!.kept.at).toBeGreaterThanOrEqual(beforeRelease)
     expect(taken!.kept.at).toBeLessThanOrEqual(afterRelease)

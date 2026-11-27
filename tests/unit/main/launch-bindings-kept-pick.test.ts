@@ -85,7 +85,8 @@ vi.mock('../../../src/main/canvas/codex-canvas-roots', () => ({ registerCodexCan
 vi.mock('../../../src/main/canvas/codex-guidance', () => ({ noteCodexSessionGuidance: () => {}, forgetCodexSessionGuidance: () => {} }))
 // The provider registry: the real Codex provider, built below.
 const reg = vi.hoisted(() => ({ codex: null as unknown }))
-vi.mock('../../../src/main/providers', () => ({ tryGetProvider: (id: string) => (id === 'codex' ? reg.codex : undefined) }))
+vi.mock('../../../src/main/providers', async () => (await import('../../helpers/provider-package-parts')).withProviderPackageParts(await (() => ({ tryGetProvider: (id: string) => (id === 'codex' ? reg.codex : undefined) }))()))
+await (await import('../../helpers/provider-package-parts')).loadProviderPackageParts()
 
 const lb = await import('../../../src/main/sessions/launch-bindings')
 const seam = await import('../../../src/main/sessions/kept-launches')
@@ -192,17 +193,17 @@ function rollout(id: string, at: number, cwd = project): void {
 /** A launch through the resume list, as pty-manager.ts binds it (the watcher is the real one). */
 function launchedThroughList(sid: string, pick: { file: string; folder: { id: string; real: string } }): void {
   lb.bindCodexLease(sid, lease() as never)
-  lb.bindCodexLaunch({
+  provider.lifecycle.bind({
     win: fakeWin, sessionId: sid, provider: provider as never, launch: { lease: lease() as never, sessionsDir: sessions },
     codexCwd: project, codexSpawnTimestamp: Date.now(), built: { pickFile: pick.file, pickFolder: pick.folder },
     resolvedCwd: project, codexCanvas: { designatedWorktree: null, guidance: null }, runProvider: 'codex',
-  })
+  }, lb.lifecycleCore())
 }
 
 /** The session's end as pty-manager.ts runs it at a kill: its files, then the teardown's three. */
 function end(sid: string): void {
   lb.unbindLaunchFiles(sid)
-  lb.unbindCodexLease(sid)
+  lb.unbindLaunchProvider(sid)
   lb.unbindLaunchTelemetry(sid)
   lb.unbindLaunchRegistrations(sid)
 }
@@ -372,7 +373,7 @@ describe('a kept session that is kept no longer', () => {
 
   it('a take-over whose bindings fail before its watcher starts: the folder goes', () => {
     const pick = pickFolder()
-    // The pane binding throws (a stand-in failure), before bindCodexLaunch.
+    // The pane binding throws (a stand-in failure), before the Codex lifecycle's bind.
     const broken = makePorts()
     broken.codexRunWriters = () => { throw new Error('the stand-in writers failed') }
     lb.setLaunchBindingPorts(broken as unknown as Ports)

@@ -367,12 +367,23 @@ export function afterHashLine(stdout: string, nonce: string): string {
   return nl < 0 ? '' : stdout.slice(nl + 1)
 }
 
+/** How long ssh has to exit by itself once the host's side has ended, before
+ *  a destroyed ExecStream ends it. */
+export const EXIT_AFTER_OUTPUT_MS = 2_000
+
 /**
  * A stream over one long exec's pipes (the bridge, plan section A2): what the
  * host prints before the launcher's `AICC-HASH <nonce> ok` line (rc files) is
  * dropped, up to PREAMBLE_MAX bytes, and the bytes after that line are the
  * holder's own (its hello line first, then section 15's frames). Writing goes
- * to ssh's standard input; ending it ends that input; destroying it ends ssh.
+ * to ssh's standard input; ending it ends that input; destroying it ends ssh,
+ * but once the host's side has ended only after EXIT_AFTER_OUTPUT_MS: ssh
+ * closes its output when the host's side ends and exits with the host's
+ * status a moment later, and that status says what the host said (a
+ * bridge's 3: no holder for the session). The stream ends itself at that
+ * output's end, and used to end ssh with it before its exit, so a re-attach
+ * that found no holder read as a link not back yet (2.1.3-beta.19 section
+ * 1.2, the Rocky host line's finding 1).
  */
 export class ExecStream extends Duplex {
   private passed = false
@@ -437,7 +448,16 @@ export class ExecStream extends Duplex {
 
   override _destroy(err: Error | null, cb: (e?: Error | null) => void): void {
     try { this.child.stdin?.destroy() } catch { /* gone */ }
-    try { if (this.child.exitCode === null && this.child.signalCode === null) this.child.kill() } catch { /* gone */ }
+    const child = this.child
+    const running = () => child.exitCode === null && child.signalCode === null
+    const end = () => { try { if (running()) child.kill() } catch { /* gone */ } }
+    if (this.ended && running()) {
+      const timer = setTimeout(end, EXIT_AFTER_OUTPUT_MS)
+      timer.unref?.()
+      child.once('close', () => clearTimeout(timer))
+    } else {
+      end()
+    }
     cb(err)
   }
 }

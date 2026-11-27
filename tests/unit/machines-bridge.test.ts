@@ -75,6 +75,17 @@ describe('Machines preload bridge', () => {
 
   it('offers no push: the page reads on open, on Refresh and after each action', () => {
     expect(Object.keys(api.machines).sort()).toEqual(['endSession', 'reattach', 'remote', 'runSelfTest', 'status'])
-    expect(Object.keys(api.machines.remote).sort()).toEqual(['add', 'check', 'prepare', 'remove', 'state'])
+    // 2.1.3-beta.19 section 1.2: the kept sessions (asked, never pushed), End of one, End of a tab's own.
+    expect(Object.keys(api.machines.remote).sort()).toEqual(['add', 'check', 'endSession', 'endTab', 'prepare', 'remove', 'sessions', 'state'])
+  })
+
+  it('2.1.3-beta.19: the kept sessions and both Ends go to their own channels, with what they are given', async () => {
+    el.ipcRenderer.invoke.mockResolvedValue({ machines: [] })
+    await api.machines.remote.sessions()
+    expect(el.ipcRenderer.invoke).toHaveBeenLastCalledWith(IPC.MACHINES_REMOTE_SESSIONS)
+    await api.machines.remote.endSession('d'.repeat(32), 'rm' + 'c'.repeat(30))
+    expect(el.ipcRenderer.invoke).toHaveBeenLastCalledWith(IPC.MACHINES_REMOTE_END_SESSION, 'd'.repeat(32), 'rm' + 'c'.repeat(30))
+    await api.machines.remote.endTab('kept-1', 'd'.repeat(32))
+    expect(el.ipcRenderer.invoke).toHaveBeenLastCalledWith(IPC.MACHINES_REMOTE_END_TAB, 'kept-1', 'd'.repeat(32))
   })
 })

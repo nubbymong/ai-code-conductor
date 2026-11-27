@@ -1,8 +1,8 @@
 {
   "schema": "wp1-legacy-codex-ledger/2",
   "predicateDigest": "100a1233edebdc39a5f9004d3fba980a89ebb15b25872e52076386bc84b03153",
-  "manifestPathDigest": "d2ef3dedfbe24913f62b91565adb3b170e2efecd943bc1525f33f9ad88b1f3d5",
-  "manifestHead": "082a119bb8d1ea79f0e5628df5a86aff250d60aa",
+  "manifestPathDigest": "6b94ce5ca2c08d4c10604a7b82dce193f9feaf029242ecd8fdbd83f8622aef23",
+  "manifestHead": "9a1be3d468669c3fe2a0ab93bd048030ee0c2051",
   "dispositions": {
     "retain": "unchanged observable behaviour, characterization proof",
     "move": "moved behind a package boundary and/or adapted at the call site, regression proof (newPath when relocated)",
@@ -1491,6 +1491,28 @@
       "note": "written by the test with SCREEN_CORPUS_WRITE=1; fixture data, no Codex code path"
     },
     {
+      "path": "helper/fixtures/screens/codex172-windows-bundled-wrapped-after-reply.json",
+      "predicates": [
+        "P01",
+        "P14"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "ADR-030 screen corpus (2.1.3-beta.19 section 4, aicc_planning#436, beta.18 section 7.4's recording hold with probe P19's recorder, its short-prompt launch, run 1): a recording of Codex 0.172.0's real screen whose footer wraps onto two rows, on GPT-6.1 Terra, taken with no account; fixture data read by tests only, never shipped; no legacy Codex code path; listed in the repository-wide legacy Codex manifest, zero unmatched at the merge gate (WP1.67), tests/unit/shared/screen-corpus.test.ts",
+      "note": "fixture data: the chunks Codex wrote, with the state and key marks; no Codex code path"
+    },
+    {
+      "path": "helper/fixtures/screens/codex172-windows-bundled-wrapped-after-reply.rows.json",
+      "predicates": [
+        "P01",
+        "P14"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "ADR-030 screen corpus (2.1.3-beta.19 section 4, aicc_planning#436, beta.18 section 7.4's recording hold with probe P19's recorder, its short-prompt launch, run 1): a recording of Codex 0.172.0's real screen whose footer wraps onto two rows, on GPT-6.1 Terra, taken with no account; fixture data read by tests only, never shipped; no legacy Codex code path; listed in the repository-wide legacy Codex manifest, zero unmatched at the merge gate (WP1.67), tests/unit/shared/screen-corpus.test.ts",
+      "note": "written by the test with SCREEN_CORPUS_WRITE=1; fixture data, no Codex code path"
+    },
+    {
       "path": "helper/fixtures/screens/codex172-windows-system-after-reply.json",
       "predicates": [
         "P01",
@@ -1532,6 +1554,28 @@
       "category": "TEST",
       "disposition": "added",
       "evidence": "ADR-030 screen corpus (2.1.3-beta.18 section 7.4, aicc_planning#427, 7.4's recording hold with probe P19's recorder): a recording of Codex 0.172.0's real screen on GPT-6.1 Terra, picked in Codex's own model picker, taken with no account (a stand-in model on the same machine), or the rows @xterm/headless gives for it; fixture data read by tests only, never shipped; no legacy Codex code path; listed in the repository-wide legacy Codex manifest, zero unmatched at the merge gate (WP1.67), tests/unit/shared/screen-corpus.test.ts",
+      "note": "written by the test with SCREEN_CORPUS_WRITE=1; fixture data, no Codex code path"
+    },
+    {
+      "path": "helper/fixtures/screens/codex172-windows-system-wrapped-after-reply.json",
+      "predicates": [
+        "P01",
+        "P14"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "ADR-030 screen corpus (2.1.3-beta.19 section 4, aicc_planning#436, beta.18 section 7.4's recording hold with probe P19's recorder, its short-prompt launch, run 1): a recording of Codex 0.172.0's real screen whose footer wraps onto two rows, on GPT-6.1 Terra, taken with no account; fixture data read by tests only, never shipped; no legacy Codex code path; listed in the repository-wide legacy Codex manifest, zero unmatched at the merge gate (WP1.67), tests/unit/shared/screen-corpus.test.ts",
+      "note": "fixture data: the chunks Codex wrote, with the state and key marks; no Codex code path"
+    },
+    {
+      "path": "helper/fixtures/screens/codex172-windows-system-wrapped-after-reply.rows.json",
+      "predicates": [
+        "P01",
+        "P14"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "ADR-030 screen corpus (2.1.3-beta.19 section 4, aicc_planning#436, beta.18 section 7.4's recording hold with probe P19's recorder, its short-prompt launch, run 1): a recording of Codex 0.172.0's real screen whose footer wraps onto two rows, on GPT-6.1 Terra, taken with no account; fixture data read by tests only, never shipped; no legacy Codex code path; listed in the repository-wide legacy Codex manifest, zero unmatched at the merge gate (WP1.67), tests/unit/shared/screen-corpus.test.ts",
       "note": "written by the test with SCREEN_CORPUS_WRITE=1; fixture data, no Codex code path"
     },
     {
@@ -2184,7 +2228,7 @@
       ],
       "category": "LAUNCH",
       "disposition": "added",
-      "evidence": "new WP2 PR 4 P4.1 (row 51) module: a Codex session's canvas roots from the configured folder only, never a rollout's or a resume's, and its designated worktree (WP1.68); tests/unit/main/canvas-codex-roots-spawn.test.ts",
+      "evidence": "new WP2 PR 4 P4.1 (row 51) module: a Codex session's canvas roots from the configured folder only, never a rollout's or a resume's, and its designated worktree (WP1.68); tests/unit/main/canvas-codex-roots-spawn.test.ts; 2.1.3-beta.19 fix round after the host line (item CANVASROOTWARN): a configured folder inside the app's resources directory (the app's own help folder, Ask Conductor) is refused as before and logged as a line, not a warning; no provider name compared (WP1.68); tests/unit/main/canvas-resources-root-floor.test.ts, tests/unit/main/launch-bindings.test.ts; 2.1.3-beta.19 fix round, second pass (item CANVASROOTWARN): only the app's own help folder (isAppHelpFolder in canvas-store.ts, by help-workspace.ts helpWorkspaceDir) is logged as a line; any other folder inside the resources directory is refused as before and still warns; no provider name compared (WP1.68); tests/unit/main/canvas-resources-root-floor.test.ts",
       "note": ""
     },
     {
@@ -2862,6 +2906,16 @@
       "note": "provider-id filter inside the Claude package"
     },
     {
+      "path": "src/main/providers/claude/lifecycle.ts",
+      "predicates": [
+        "P14"
+      ],
+      "category": "LAUNCH",
+      "disposition": "added",
+      "evidence": "new 2.1.3-beta.19 section 2 module (src/main/providers/claude/lifecycle.ts, aicc_planning#439): the Claude Code package's lifecycle object; bindClaudeLaunch, registerClaudeLaunchTools and claudeTakeOver moved unchanged from sessions/launch-bindings.ts, with the Claude Code halves of the serving and the description (WP1.68); tests/unit/main/local-launch-characterisation.test.ts, tests/unit/main/launch-bindings.test.ts, tests/unit/main/launch-bindings-take-over.test.ts",
+      "note": "reached from the Claude Code package's entry point (lifecycle); the P14 hits are moved comments and the codex_review registration"
+    },
+    {
       "path": "src/main/providers/claude/review-launch.ts",
       "predicates": [
         "P14"
@@ -3094,7 +3148,7 @@
       ],
       "category": "LAUNCH",
       "disposition": "move",
-      "evidence": "CodexProvider class contract pinned by tests/wp1/codex-characterization.test.ts C2 (WP1.54); entry-point rule tests/wp1/dependency-boundaries.test.ts (WP1.66); WP2 final fixes: CodexProvider.resolveBinary and resumeCommand, which nothing called, refuse instead of resolving the codex on PATH (not used for Codex: launches go through the managed launch; C2 inverted), and cli.discovery and install.recipes are declared supported, what the package implements; realm.isolated stays unknown because the contract backs it with realms.realmEnvPatch, which Codex does not expose (WP1.17, WP1.18); tests/unit/providers/codex/spawn.test.ts, tests/wp1/provider-conformance.test.ts; WP2 P3 usage track MP3 (owner decision 2026-09-27, docs/wp1/owner-decisions-2026-09-27.md): the wired package exposes the usage port (account.usage supported, unknown unwired) and CodexProvider records each session's allowance by its sessions folder (WP1.41); tests/wp1/provider-conformance.test.ts; tests/unit/providers/codex/telemetry.test.ts; WP2 P3 usage track MP3 round-1 review fixes: the usage port uses the checked sessions folder, and a session opens and releases its realm's live figure (WP1.68); tests/unit/providers/codex/telemetry.test.ts; tests/unit/main/provider-account-usage.test.ts; WP2 P3 usage track MP3 round-2 review fixes: exports the lookup that tells unavailable from no reading, and the day-entry and timeout bounds (WP1.68); tests/unit/providers/codex/usage-last-seen.test.ts; WP2 P3 usage track MP7 (owner decision 2026-09-27, docs/wp1/owner-decisions-2026-09-27.md, the scoped WP1.41 exception; ADR-022): exports the app-server client and the read result type (WP1.41); tests/unit/providers/codex/app-server-client.test.ts; WP2 P3 usage track MP8 (owner decision 2026-09-27, docs/wp1/owner-decisions-2026-09-27.md, the scoped WP1.41 exception; ADR-022): wires the port's read to the auth operations and keys the verdict cache on the proven executable (codexExecutableKey) (WP1.41); tests/unit/main/codex-usage-read.test.ts; WP2 P3 usage track MP9 round 1 (review fixes: B-F1, B-F2, Q-1 to Q-5): the usage index reads a realm's sessions folder held to the canonical-home check (WP1.2); tests/wp1/codex-auth-adapter.test.ts; WP2 PR 3 P3.5: the session telemetry passes the resumed id, the pick file and the claim listener to the watcher (WP1.68); tests/unit/providers/codex/spawn-resume.test.ts; WP2 PR 3 P3.6 (row 22): the realm folders get the conversation carry (conversation-carry.ts), replaceable only by a test (WP1.28); tests/wp1/conversation-carry-service.test.ts; WP2 PR 3 P3.9 (rows 39, 42): the package's setup operations state the supported range and read the proven CLI's model list (model-catalogue.ts), with test ports that never replace the proof (WP1.17, WP1.49); tests/unit/providers/codex/model-catalogue.test.ts; WP2 PR 3 P3.9 round 1: the model list read's empty home is made by codexModelsScratchHome, which first sweeps homes an earlier read left behind (own prefix, real folders, an hour old) (WP1.17); tests/unit/providers/codex/models-scratch-home.test.ts; WP2 PR 3 P3.9 round 2: exports the leftover and scope names of the runner and the reviewer (WP1.17); tests/wp1/cli-discovery.test.ts; WP2 PR 3 P3.9 round 3: exports the run records and observation bounds of the runner (WP1.17); tests/wp1/cli-discovery.test.ts; WP2 PR 3 P3.9 round 4: exports codexChainAlone and CodexObserveReason (WP1.17); tests/wp1/cli-discovery.test.ts; WP2 PR 3 P3.10: the package deploys the hook forwarder, sweeps stale hook folders and offers prepareSessionHooks (a per-launch owner-only hook file); its telemetry source passes the exact claim and the refute through (WP1.68); tests/unit/providers/codex/hooks.test.ts, tests/unit/main/pty-codex-hooks.test.ts; WP2 PR 3 P3.10 round 1 (ADR-009 pass 1, spec, quality and VM findings) (WP1.68): the hook root in this install's data folder, owner-only by the app's folder rule, and the plain-path copy staged at boot (A5, V3); tests/unit/providers/codex/hooks.test.ts; WP2 PR 3 P3.10 round 2 (the round 1 re-review and the VM re-check) (WP1.68): a plain-path copy that could not be made is logged at boot (R7); tests/unit/providers/codex/spawn-hooks.test.ts; WP2 PR 3 P3.10 round 3 (the round 2 re-review and VM re-check) (WP1.68): a hook folder that cannot be made the user's is logged at boot and at a launch (F3); tests/unit/providers/codex/spawn-hooks.test.ts; WP2 PR 3 P3.10 rounds 3b and 4 (the hook wrapper and the picker resolve their helpers from fixed locations; the hook folders prepared asynchronously and read back; approval pairing; the Watchdog episode) (WP1.68): the provider's deploy copies the scripts only; prepareHookFolders prepares the hook folders and says when a preparation leaves sessions without hooks; prepareSessionHooks uses only the prepared root; tests/unit/providers/codex/spawn-hooks.test.ts; WP2 PR 3 P3.12 (rows 31, 32, 65; logs and GitHub context; parity) (WP1.68): passes onRollout to the watcher; tests/unit/providers/codex/spawn-resume.test.ts; WP2 PR 4 P4.4: launch.accountFolders wired to the auth operations (WP1.68); tests/unit/main/account-folders-service.test.ts; WP2 PR 4 P4.5 (row 57): background in the launch kinds and the agent-run port (WP1.46); tests/unit/main/codex-background-launch.test.ts, tests/wp1/provider-conformance.test.ts; WP2 PR 4 lane A round 2 (9e200c0a, the provider port; no behaviour change): the CodexProvider members pty-manager reaches the package through (launchRoute, stagedSkillsDir, runScreen), committed by lane A directly (RBND-1, recorded in the plan's P4.1 record) (WP1.55); tests/unit/main/pty-codex-provider-port.test.ts, tests/wp1/dependency-boundaries.test.ts; WP2 PR 4 owner answers (2026-10-04) (be38c516: removeLegacyMcpServerConfig and the pricing operations on the package; integration round 3: launchRoute removed, no consumer left) (WP1.55); tests/unit/providers/provider-entry-routing.test.ts, tests/unit/providers/codex/spawn-canvas.test.ts; WP2 PR 4 owner answers review fix pass (FA's patch, integrated by FI): the header says the dependency-boundary test holds the deep imports at zero (WP1.55); tests/wp1/dependency-boundaries.test.ts; WP2 PR 4 P4.7 fix pass 1: the package offers the Insights port (insights, createCodexInsightsOperations) that the Insights runner reaches through the registry (WP1.55); tests/wp1/provider-conformance.test.ts, tests/wp1/dependency-boundaries.test.ts; 2.1.3-beta.14 (aicc_planning#358, the code half: the dormant permission hold deleted) (WP1.68): the two marker constants are no longer exported; tests/unit/hooks/permission-hold-gone.test.ts; 2.1.3-beta.17 section C6 (aicc_planning#415): the run screen offers submitImage (submitCodexImage) beside submit (WP1.68); tests/unit/main/session-input-codex-image.test.ts; 2.1.3-beta.18 section 5 (aicc_planning#433, ADR-030 S12): a held Codex session's hook events through its holder (WP1.68); tests/unit/main/session-helper-codex-hooks.test.ts, tests/unit/scripts/codex-hook-forwarder-helper.test.ts",
+      "evidence": "CodexProvider class contract pinned by tests/wp1/codex-characterization.test.ts C2 (WP1.54); entry-point rule tests/wp1/dependency-boundaries.test.ts (WP1.66); WP2 final fixes: CodexProvider.resolveBinary and resumeCommand, which nothing called, refuse instead of resolving the codex on PATH (not used for Codex: launches go through the managed launch; C2 inverted), and cli.discovery and install.recipes are declared supported, what the package implements; realm.isolated stays unknown because the contract backs it with realms.realmEnvPatch, which Codex does not expose (WP1.17, WP1.18); tests/unit/providers/codex/spawn.test.ts, tests/wp1/provider-conformance.test.ts; WP2 P3 usage track MP3 (owner decision 2026-09-27, docs/wp1/owner-decisions-2026-09-27.md): the wired package exposes the usage port (account.usage supported, unknown unwired) and CodexProvider records each session's allowance by its sessions folder (WP1.41); tests/wp1/provider-conformance.test.ts; tests/unit/providers/codex/telemetry.test.ts; WP2 P3 usage track MP3 round-1 review fixes: the usage port uses the checked sessions folder, and a session opens and releases its realm's live figure (WP1.68); tests/unit/providers/codex/telemetry.test.ts; tests/unit/main/provider-account-usage.test.ts; WP2 P3 usage track MP3 round-2 review fixes: exports the lookup that tells unavailable from no reading, and the day-entry and timeout bounds (WP1.68); tests/unit/providers/codex/usage-last-seen.test.ts; WP2 P3 usage track MP7 (owner decision 2026-09-27, docs/wp1/owner-decisions-2026-09-27.md, the scoped WP1.41 exception; ADR-022): exports the app-server client and the read result type (WP1.41); tests/unit/providers/codex/app-server-client.test.ts; WP2 P3 usage track MP8 (owner decision 2026-09-27, docs/wp1/owner-decisions-2026-09-27.md, the scoped WP1.41 exception; ADR-022): wires the port's read to the auth operations and keys the verdict cache on the proven executable (codexExecutableKey) (WP1.41); tests/unit/main/codex-usage-read.test.ts; WP2 P3 usage track MP9 round 1 (review fixes: B-F1, B-F2, Q-1 to Q-5): the usage index reads a realm's sessions folder held to the canonical-home check (WP1.2); tests/wp1/codex-auth-adapter.test.ts; WP2 PR 3 P3.5: the session telemetry passes the resumed id, the pick file and the claim listener to the watcher (WP1.68); tests/unit/providers/codex/spawn-resume.test.ts; WP2 PR 3 P3.6 (row 22): the realm folders get the conversation carry (conversation-carry.ts), replaceable only by a test (WP1.28); tests/wp1/conversation-carry-service.test.ts; WP2 PR 3 P3.9 (rows 39, 42): the package's setup operations state the supported range and read the proven CLI's model list (model-catalogue.ts), with test ports that never replace the proof (WP1.17, WP1.49); tests/unit/providers/codex/model-catalogue.test.ts; WP2 PR 3 P3.9 round 1: the model list read's empty home is made by codexModelsScratchHome, which first sweeps homes an earlier read left behind (own prefix, real folders, an hour old) (WP1.17); tests/unit/providers/codex/models-scratch-home.test.ts; WP2 PR 3 P3.9 round 2: exports the leftover and scope names of the runner and the reviewer (WP1.17); tests/wp1/cli-discovery.test.ts; WP2 PR 3 P3.9 round 3: exports the run records and observation bounds of the runner (WP1.17); tests/wp1/cli-discovery.test.ts; WP2 PR 3 P3.9 round 4: exports codexChainAlone and CodexObserveReason (WP1.17); tests/wp1/cli-discovery.test.ts; WP2 PR 3 P3.10: the package deploys the hook forwarder, sweeps stale hook folders and offers prepareSessionHooks (a per-launch owner-only hook file); its telemetry source passes the exact claim and the refute through (WP1.68); tests/unit/providers/codex/hooks.test.ts, tests/unit/main/pty-codex-hooks.test.ts; WP2 PR 3 P3.10 round 1 (ADR-009 pass 1, spec, quality and VM findings) (WP1.68): the hook root in this install's data folder, owner-only by the app's folder rule, and the plain-path copy staged at boot (A5, V3); tests/unit/providers/codex/hooks.test.ts; WP2 PR 3 P3.10 round 2 (the round 1 re-review and the VM re-check) (WP1.68): a plain-path copy that could not be made is logged at boot (R7); tests/unit/providers/codex/spawn-hooks.test.ts; WP2 PR 3 P3.10 round 3 (the round 2 re-review and VM re-check) (WP1.68): a hook folder that cannot be made the user's is logged at boot and at a launch (F3); tests/unit/providers/codex/spawn-hooks.test.ts; WP2 PR 3 P3.10 rounds 3b and 4 (the hook wrapper and the picker resolve their helpers from fixed locations; the hook folders prepared asynchronously and read back; approval pairing; the Watchdog episode) (WP1.68): the provider's deploy copies the scripts only; prepareHookFolders prepares the hook folders and says when a preparation leaves sessions without hooks; prepareSessionHooks uses only the prepared root; tests/unit/providers/codex/spawn-hooks.test.ts; WP2 PR 3 P3.12 (rows 31, 32, 65; logs and GitHub context; parity) (WP1.68): passes onRollout to the watcher; tests/unit/providers/codex/spawn-resume.test.ts; WP2 PR 4 P4.4: launch.accountFolders wired to the auth operations (WP1.68); tests/unit/main/account-folders-service.test.ts; WP2 PR 4 P4.5 (row 57): background in the launch kinds and the agent-run port (WP1.46); tests/unit/main/codex-background-launch.test.ts, tests/wp1/provider-conformance.test.ts; WP2 PR 4 lane A round 2 (9e200c0a, the provider port; no behaviour change): the CodexProvider members pty-manager reaches the package through (launchRoute, stagedSkillsDir, runScreen), committed by lane A directly (RBND-1, recorded in the plan's P4.1 record) (WP1.55); tests/unit/main/pty-codex-provider-port.test.ts, tests/wp1/dependency-boundaries.test.ts; WP2 PR 4 owner answers (2026-10-04) (be38c516: removeLegacyMcpServerConfig and the pricing operations on the package; integration round 3: launchRoute removed, no consumer left) (WP1.55); tests/unit/providers/provider-entry-routing.test.ts, tests/unit/providers/codex/spawn-canvas.test.ts; WP2 PR 4 owner answers review fix pass (FA's patch, integrated by FI): the header says the dependency-boundary test holds the deep imports at zero (WP1.55); tests/wp1/dependency-boundaries.test.ts; WP2 PR 4 P4.7 fix pass 1: the package offers the Insights port (insights, createCodexInsightsOperations) that the Insights runner reaches through the registry (WP1.55); tests/wp1/provider-conformance.test.ts, tests/wp1/dependency-boundaries.test.ts; 2.1.3-beta.14 (aicc_planning#358, the code half: the dormant permission hold deleted) (WP1.68): the two marker constants are no longer exported; tests/unit/hooks/permission-hold-gone.test.ts; 2.1.3-beta.17 section C6 (aicc_planning#415): the run screen offers submitImage (submitCodexImage) beside submit (WP1.68); tests/unit/main/session-input-codex-image.test.ts; 2.1.3-beta.18 section 5 (aicc_planning#433, ADR-030 S12): a held Codex session's hook events through its holder (WP1.68); tests/unit/main/session-helper-codex-hooks.test.ts, tests/unit/scripts/codex-hook-forwarder-helper.test.ts; 2.1.3-beta.19 section 6.2 (aicc_planning#440): the run screen declares heldEnterWaitMs (PROMPT_ENTER_DELAY_MS), the wait a held Codex terminal's queued lone Enter keeps behind the frame before it (PB3) (WP1.68); tests/unit/main/session-helper-enter-wait.test.ts",
       "note": "becomes the Codex package public entry point; CodexProvider (session parity surface) retained for the runtime work package, its two PATH lookups refused; auth/setup/realm operations exported alongside"
     },
     {
@@ -3129,6 +3183,31 @@
       "disposition": "added",
       "evidence": "new 2.1.3-beta.17 section B1.2 module (src/main/providers/codex/kept-hooks.ts, S16 step 5, aicc_planning#412): the hook.json of a Codex session an app update kept running, written again in its own per-launch folder of this install's prepared hook root with this run's port and a token minted for the take-over; any other folder refused (WP1.68); tests/unit/providers/codex/kept-hooks.test.ts",
       "note": "created by 2.1.3-beta.17 section B1.2"
+    },
+    {
+      "path": "src/main/providers/codex/lifecycle.ts",
+      "predicates": [
+        "P01",
+        "P04",
+        "P14"
+      ],
+      "category": "LAUNCH",
+      "disposition": "added",
+      "evidence": "new 2.1.3-beta.19 section 2 module (src/main/providers/codex/lifecycle.ts, aicc_planning#439): the Codex package's lifecycle object; bindCodexLaunch, registerCodexLaunchTools, codexTakeOver and rewriteKeptCodexHooks moved unchanged from sessions/launch-bindings.ts, with the Codex halves of the serving, the unbind (its account lease) and the description (WP1.68); tests/unit/main/local-launch-characterisation.test.ts, tests/unit/main/launch-bindings.test.ts, tests/unit/main/launch-bindings-take-over.test.ts, tests/unit/main/launch-bindings-kept-pick.test.ts",
+      "note": "reached from the Codex package's entry point (lifecycle); the P04 hit is the moved comment saying a managed account never writes to ~/.codex"
+    },
+    {
+      "path": "src/main/providers/codex/local-launch.ts",
+      "predicates": [
+        "P01",
+        "P04",
+        "P07",
+        "P14"
+      ],
+      "category": "LAUNCH",
+      "disposition": "added",
+      "evidence": "new 2.1.3-beta.19 section 2 module (src/main/providers/codex/local-launch.ts, aicc_planning#439): the Codex package's local launch group, pty-manager.ts's direct branch body at cc36c7f3 moved unchanged; the PTY manager hands it the session and its records and doors (LocalLaunchCore) and names no provider (WP1.68); tests/unit/main/local-launch-characterisation.test.ts, tests/unit/main/local-launch-third-provider.test.ts, tests/wp1/launch-handoff-pty.test.ts",
+      "note": "reached from the Codex package's entry point (localLaunch); starts the CLI only from the account launch pty:spawn prepared"
     },
     {
       "path": "src/main/providers/codex/mcp-config.ts",
@@ -3307,7 +3386,7 @@
       ],
       "category": "TELEMETRY",
       "disposition": "replace",
-      "evidence": "WP1.68 rollout telemetry ADAPTED: tests/unit/providers/codex/telemetry.test.ts keeps every parsing case and gains a realm-sessions-dir case; WP2 commit 6g: the sessions folder is required, with no fallback to the ambient home (getCodexHome deleted); without one nothing is watched (WP1.68); tests/unit/providers/codex/telemetry.test.ts; WP2 P3 usage track MP2: the allowance is read from every token_count, the pre-response one (info null) included, through normaliseCodexRateLimits; plan_type typed on the snapshot, not under primary; updates carry usageBuckets labelled from window_minutes, rateLimitsAt (the event time) and the legacy rateLimitCurrent/Weekly from the validated reading only; an out-of-range reset time no longer throws and drops the update; the 30 s give-up sends usageUnavailable no-reading once (WP1.68); tests/unit/providers/codex/telemetry.test.ts; WP2 P3 usage track MP3 (owner decision 2026-09-27, docs/wp1/owner-decisions-2026-09-27.md): watchAndClaimRollout hands the validated allowance to an optional recorder, whose throw never stops the watch (WP1.68); tests/unit/providers/codex/telemetry.test.ts; WP2 P3 usage track, MP1/MP2 review fixes: the token mapper no longer copies raw rate limits (the fields come only from the validated allowance), and an event at the edge of the Date range no longer stops the status line (WP1.68); tests/unit/providers/codex/telemetry.test.ts; WP2 PR 3 P3.5 (row 38, parity): the claim re-reads its day folders on every poll (today and yesterday, by UTC and by local date), finds a resumed conversation's rollout by its id anywhere in the realm (name and session_meta agree) or the one the resume picker opened once it grows, never claims a sibling's new rollout on a resume by id, reads only bounded first lines, reports the claimed conversation id, and a picker launch waits for the user (WP1.68); tests/unit/providers/codex/telemetry-claim-anywhere.test.ts; WP2 PR 3 P3.5 fix round 1: the resume picker's every decision is what a picker launch claims (nothing before one), the pick is read only as a small regular file never through a link and dealt with once; a claimed rollout is read by size first and only what it gained, at a claim its head and tail; a conversation another session holds is not walked for again; the scan follows no link (WP1.68); tests/unit/providers/codex/telemetry-claim-anywhere.test.ts, tests/unit/providers/codex/telemetry-bounded-reads.test.ts; WP2 PR 3 P3.10: the exact claim from the session's own hook (a rollout of its realm in real day folders whose name and session_meta agree) confirms or corrects an inferred claim and follows a conversation switched inside the TUI; another session's hook proves an inferred claim wrong; a conversation another tab holds is read beside it, one keeper counting the running time (WP1.68); tests/unit/providers/codex/telemetry-exact-claim.test.ts, tests/unit/providers/codex/telemetry-claim-anywhere.test.ts; WP2 PR 3 P3.10 round 1 (ADR-009 pass 1, spec, quality and VM findings) (WP1.68): a hook's path with a stream name refused and a name keyed by the day folder's own spelling (A4); the no-claim deadline armed again after a refuted claim (Q4); tests/unit/providers/codex/telemetry-exact-claim.test.ts; WP2 PR 3 P3.12 (rows 31, 32, 65; logs and GitHub context; parity) (WP1.68): the watcher reports the rollout it claimed to onRollout (path, realm, exact, shared) and null when it lets it go; tests/unit/providers/codex/telemetry-rollout-report.test.ts; WP2 PR 3 P3.16a main track (WP1.68): a Restart while a large rollout's count runs never shows less than the run before, and a tab beside it shows the same; tests/unit/providers/codex/telemetry-duration.test.ts; WP2 PR 3 fixer 9 A2 (row 36): a running time that cannot be kept is warned of once per run while keeping keeps failing, and again after a keep that works (WP1.68); tests/unit/providers/codex/telemetry-settle-reject.test.ts",
+      "evidence": "WP1.68 rollout telemetry ADAPTED: tests/unit/providers/codex/telemetry.test.ts keeps every parsing case and gains a realm-sessions-dir case; WP2 commit 6g: the sessions folder is required, with no fallback to the ambient home (getCodexHome deleted); without one nothing is watched (WP1.68); tests/unit/providers/codex/telemetry.test.ts; WP2 P3 usage track MP2: the allowance is read from every token_count, the pre-response one (info null) included, through normaliseCodexRateLimits; plan_type typed on the snapshot, not under primary; updates carry usageBuckets labelled from window_minutes, rateLimitsAt (the event time) and the legacy rateLimitCurrent/Weekly from the validated reading only; an out-of-range reset time no longer throws and drops the update; the 30 s give-up sends usageUnavailable no-reading once (WP1.68); tests/unit/providers/codex/telemetry.test.ts; WP2 P3 usage track MP3 (owner decision 2026-09-27, docs/wp1/owner-decisions-2026-09-27.md): watchAndClaimRollout hands the validated allowance to an optional recorder, whose throw never stops the watch (WP1.68); tests/unit/providers/codex/telemetry.test.ts; WP2 P3 usage track, MP1/MP2 review fixes: the token mapper no longer copies raw rate limits (the fields come only from the validated allowance), and an event at the edge of the Date range no longer stops the status line (WP1.68); tests/unit/providers/codex/telemetry.test.ts; WP2 PR 3 P3.5 (row 38, parity): the claim re-reads its day folders on every poll (today and yesterday, by UTC and by local date), finds a resumed conversation's rollout by its id anywhere in the realm (name and session_meta agree) or the one the resume picker opened once it grows, never claims a sibling's new rollout on a resume by id, reads only bounded first lines, reports the claimed conversation id, and a picker launch waits for the user (WP1.68); tests/unit/providers/codex/telemetry-claim-anywhere.test.ts; WP2 PR 3 P3.5 fix round 1: the resume picker's every decision is what a picker launch claims (nothing before one), the pick is read only as a small regular file never through a link and dealt with once; a claimed rollout is read by size first and only what it gained, at a claim its head and tail; a conversation another session holds is not walked for again; the scan follows no link (WP1.68); tests/unit/providers/codex/telemetry-claim-anywhere.test.ts, tests/unit/providers/codex/telemetry-bounded-reads.test.ts; WP2 PR 3 P3.10: the exact claim from the session's own hook (a rollout of its realm in real day folders whose name and session_meta agree) confirms or corrects an inferred claim and follows a conversation switched inside the TUI; another session's hook proves an inferred claim wrong; a conversation another tab holds is read beside it, one keeper counting the running time (WP1.68); tests/unit/providers/codex/telemetry-exact-claim.test.ts, tests/unit/providers/codex/telemetry-claim-anywhere.test.ts; WP2 PR 3 P3.10 round 1 (ADR-009 pass 1, spec, quality and VM findings) (WP1.68): a hook's path with a stream name refused and a name keyed by the day folder's own spelling (A4); the no-claim deadline armed again after a refuted claim (Q4); tests/unit/providers/codex/telemetry-exact-claim.test.ts; WP2 PR 3 P3.12 (rows 31, 32, 65; logs and GitHub context; parity) (WP1.68): the watcher reports the rollout it claimed to onRollout (path, realm, exact, shared) and null when it lets it go; tests/unit/providers/codex/telemetry-rollout-report.test.ts; WP2 PR 3 P3.16a main track (WP1.68): a Restart while a large rollout's count runs never shows less than the run before, and a tab beside it shows the same; tests/unit/providers/codex/telemetry-duration.test.ts; WP2 PR 3 fixer 9 A2 (row 36): a running time that cannot be kept is warned of once per run while keeping keeps failing, and again after a keep that works (WP1.68); tests/unit/providers/codex/telemetry-settle-reject.test.ts; 2.1.3-beta.19 fix round after the host line (item CODEX172): a resumed conversation's hook from Codex 0.172.0 names its rollout in Windows' verbatim form (std::fs::canonicalize, measured in Codex's own source), so exactRollout checks the path without that prefix (withoutVerbatimPrefix); the realm containment is unchanged (WP1.68); tests/unit/providers/codex/telemetry-verbatim-rollout.test.ts",
       "note": "watchAndClaimRollout takes the sessions directory of the launch binding realm instead of getCodexHome(); MP2 rebuilt the rate-limit contract (replace); P3.5 rebuilt the claim (day folders on every poll, a resumed conversation by id or the picker's pick, the claimed id reported); token usage parsing and the realm rule unchanged",
       "adaptsTests": [
         "tests/unit/providers/codex/telemetry.test.ts"
@@ -3431,7 +3510,7 @@
       ],
       "category": "LAUNCH",
       "disposition": "replace",
-      "evidence": "Claude env shape pinned by tests/wp1/claude-characterization.test.ts C1 and tests/unit/pty-spawn-env.test.ts (both retained as protection, WP1.54); binding/lease behaviour by tests/wp1/launch-handoff.test.ts and tests/wp1/consumer-leases.test.ts (WP1.38, WP1.42, WP1.46); WP2 commit 6g: the Codex spawn identity re-export removed with codex-spawn-identity.ts (tests/wp1/legacy-codex-retired.test.ts, WP1.57); the WP2 final fixes changed comments only (the codex_review registration comment states the per-connection conditions main offers the tool on, and the End comment names the quoted tmux target it kills); the WP2 T24 fix, not Codex code, changed End: endSshRemoteDetailed resolves a detailed result, reads its target the moment it is called, and reads the End sudo marker from the exec output to report container-needs-sudo when a rootful container's sudo needs a password End does not hold (tests/unit/main/ssh-end-remote-password.test.ts); WP2 PR 3 P3.5 (rows 34, 35; parity): the Codex branch resumes a restored session's persisted conversation or, on a Restart, the one the session kept across the kill (never over the picker), starts where the builder says, and keeps the conversation the status line claims, bounded (WP1.38); tests/unit/main/codex-resume-launch.test.ts; WP2 PR 3 P3.6 (row 22): the kept Codex conversation records the account of the launch that resumed or claimed it (getKeptCodexConversationSource), which a Switch account carries it from; session:save still gets the conversation only (WP1.42); tests/unit/main/codex-resume-launch.test.ts; WP2 PR 3 P3.8 (row 40): type-only, the Codex effort union gains max and ultra (the compiled output is unchanged) (WP1.68); tests/unit/main/codex-effort-allowlist.test.ts; WP2 PR 3 P3.8 round 1 (row 69): type-only, the preset union gains plan (the compiled output is unchanged) (WP1.68); tests/unit/main/codex-effort-allowlist.test.ts; WP2 PR 3 P3.10: a Codex launch gets its hook file and gateway registration before the builder, keeps whether its realm's hooks are heard, takes the exact claim from its own hook (never a Claude sink), arms the Watchdog for a local Codex session, and a local spawn that throws after its process started ends that process (the C item); no SSH path changed (WP1.38); tests/unit/main/pty-codex-hooks.test.ts, tests/wp1/launch-handoff-pty.test.ts; WP2 PR 3 P3.10 round 1 (ADR-009 pass 1, spec, quality and VM findings) (WP1.68): a hook's path is a Codex one for as long as the Codex launch's gateway token is registered (B1); a token nothing will use goes (B2); only a conversation a session's Codex started proves another's inferred claim wrong (B4); the transcript route tested (B5); unconfirmed keyed to the session's own hooks, and a live resume by id keeps its doubt (S4); the idle mark and a released path go with the run (Q1, Q3); the picker told which conversations other tabs are on (V2); tests/unit/main/pty-codex-hooks.test.ts, tests/wp1/launch-handoff-pty.test.ts; WP2 PR 3 P3.10 round 2 (the round 1 re-review and the VM re-check) (WP1.68): a killed Codex session's gateway token goes at the kill, its Codex record at the exit (R8); the picker told only of tabs on the same account (R10); tests/unit/main/pty-codex-hooks.test.ts; WP2 PR 3 P3.10 rounds 3b and 4 (the hook wrapper and the picker resolve their helpers from fixed locations; the hook folders prepared asynchronously and read back; approval pairing; the Watchdog episode) (WP1.68): the Codex launch asks prepareSessionHooks for the prepared hook folder, with no folder rule; tests/unit/main/pty-codex-hooks.test.ts; WP2 PR 3 P3.11 (row 62, extra CLI arguments; parity) (WP1.68): the inline codexOptions type gains extraArgs, typing only; tests/unit/providers/codex/spawn-extra-args.test.ts; WP2 PR 3 P3.12 (rows 31, 32, 65; logs and GitHub context; parity) (WP1.68): a local Codex run is recorded (the same gate as Claude's), its watcher's claims reach the Codex log binder after runStart, Claude's transcript discovery is never armed for it, the binder is told at exit; the GitHub Session Context record; no SSH path changes (a Codex session over SSH is refused before spawn); tests/unit/main/pty-codex-logs.test.ts; WP2 PR 3 P3.13 (row 72) (WP1.60): one read-only export, isSessionLiveOrStarting, for the one-at-a-time rule; no SSH path changes; tests/unit/main/codex-multi-spawn-leases.test.ts; WP2 PR 3 P3.15 (row 71): the local Codex spawn on Windows asks node-pty for its bundled ConPTY (useConptyDll, bundledConptyChoice in bundled-conpty.ts) when conpty.dll and OpenConsole.exe are beside the native module node-pty loads, else the system ConPTY, and its launch line says which; the Claude, plain-terminal and SSH spawns are unchanged (WP1.68); tests/unit/main/pty-conpty-per-provider.test.ts, tests/unit/main/bundled-conpty.test.ts, tests/unit/ssh-spawn-callsite.test.ts; WP2 PR 3 P3.15 round 1 (the spec, code-quality and ADR-009 lens findings, and the VM re-check) (WP1.68): the local Codex spawn takes its ConPTY options from the choice only; a synchronous throw under the bundled ConPTY starts the same launch once more on the system ConPTY and, only when that succeeds, turns the choice to the system one (bundledConptyFailed); the launch line names the bundled folder; the Claude, plain-terminal and SSH spawns are unchanged; tests/unit/main/pty-conpty-per-provider.test.ts, tests/unit/ssh-spawn-callsite.test.ts; WP2 PR 3 P3.15 round 2 (the round 1 spec, code-quality and ADR-009 pass 2 findings) (WP1.68): an exit with no known code is logged as unknown and ends the run as exited; a Codex PTY under the bundled ConPTY that ends within 5 s having drawn nothing, and that the app did not end, makes the next launch use the system ConPTY (no relaunch); the fallback assigns the started PTY before reporting; tests/unit/main/pty-conpty-per-provider.test.ts, tests/unit/main/pty-codex-logs.test.ts; WP2 PR 3 P3.15 round 3 (the VM blocker at 98455d52: a write EAGAIN on a PTY input pipe quit the app) (WP1.68): every session's PTY, and the End and liveness helper PTYs, get an error listener on node-pty's Windows input socket (guardPtyInput in pty-input-guard.ts): a failed write never quits the app, is logged once, and a session that has not ended by itself within 3 s is ended with a line in its terminal; no Codex-specific change; tests/unit/main/pty-conpty-per-provider.test.ts, tests/unit/main/pty-input-guard.test.ts, tests/unit/main/ssh-end-remote-password.test.ts; WP2 PR 3 P3.16a main track, M1 (WP1.68): a local Claude session not indexed marks the conversation it is on (its hooks' and status line's transcript, or its exact resume at launch) from the moment it became not indexed; a killed one's window closes when its exit is reported or the grace passes; a switch-off marks either assistant; tests/unit/main/pty-codex-logs.test.ts, tests/unit/main/tokenomics-attribution.test.ts; WP2 PR 3 P3.16a main track round 1 (WP1.68): a Claude session not indexed marks its projects folder until it names a transcript, keeps every transcript it names marked until it ends, takes only a <uuid>.jsonl in its own folder, and is marked only when the switches and rules leave its run out; a killed session's windows close from its exit handler; the per-spawn teardown restarts the integrity count quietly (N1 to N4, N8); tests/unit/main/pty-codex-logs.test.ts, tests/unit/main/pty-integrity-restart.test.ts, tests/unit/main/pty-spawn-waits-for-refresh.test.ts; WP2 PR 3 P3.15 round 4 (the rounds 2-3 reviews and the P3.16a ADR-009 lenses) (WP1.68): every session's PTY and the End and liveness helper PTYs are guarded on their output too (node-pty's output error handler throws without a listener of the app's own), logged once a side, the session ended once after the grace; tests/unit/main/pty-conpty-per-provider.test.ts, tests/unit/main/pty-ssh-io-guard.test.ts, tests/unit/main/ssh-end-remote-password.test.ts; WP2 PR 3 P3.16a main track round 2 (WP1.68): a Claude session not indexed names its projects folder as Claude Code does (claudeProjectDirName: the real path on Linux and macOS, the 200-character cut and hash), as do the resume launch's folder lookups; it takes a <uuid>.jsonl directly in another project's folder under the projects root too, and past its cap covers each name by its folder's window, opened again, or one on the projects root (Q1 to Q3); a Restart's kill restarts the integrity count at its exit instead of ending the session, and a close with no process left ends it (Q5); tests/unit/main/pty-codex-logs.test.ts, tests/unit/main/pty-integrity-restart.test.ts; WP2 PR 3 fixer 3 (P3.16a round 2 reviews and ADR-009 pass 3) (WP1.68): every spawn clears the session's Restart mark in spawnPtyResolved, so a launch main prepares first (a Codex session, or a pinned Claude Code version installed first) ends as any other after a Restart (F2); no Codex-specific change; tests/unit/main/pty-integrity-restart.test.ts; WP2 PR 3 fixer 3, F6 (WP1.68): comments only, the folder Claude Code names is the launch folder's real path on Windows too (claudeProjectDirName); no Codex-specific change; tests/unit/logging/transcript-discovery.test.ts; WP2 PR 3 PR-level ADR-009 round 1 (WP1.68): each local Codex launch's realm and folder are recorded, and a Codex session not indexed holds a cover window on them until it ends; a claim let go closes only its conversation's window (C1); a Claude session not indexed past the record's cap is covered by its folder's window (C2); tests/unit/main/pty-codex-logs.test.ts; WP2 PR 4 P4.1: the Codex branch registers canvas roots and the worktree, passes the guidance, feeds the headless pane; writeCanvasMarkerLine (WP1.68); tests/unit/main/canvas-codex-roots-spawn.test.ts, tests/unit/main/canvas-marker-codex-delivery.test.ts; WP2 PR 4 P4.3 re-review (RASK-1, 56200cd5): an Ask launch runs in the help folder pty:spawn hands it, and a resumed Ask conversation is held to that folder on both branches; P4.1 re-review RA-1 (the realm skills on the master switch only) and RA-5 cleanups (WP1.68); tests/unit/main/ask-launch-folder.test.ts, tests/unit/main/canvas-codex-launch-wiring.test.ts; WP2 PR 4 lane A round 2 (9e200c0a, the provider port; no behaviour change): the Codex package reached only through getProvider('codex') (WP1.55); tests/unit/main/pty-codex-provider-port.test.ts; WP2 PR 4 P4.3 carrier (row 53, fc460f8f): a question not on the launch line typed through the run's submit primitive at Codex's first ready composer, waiting up to 300 s, the characters outside the BMP removed first with the removed notice, and not-delivered raised (WP1.68); tests/unit/main/codex-ask-carrier.test.ts; WP2 PR 4 ADR-009 round 1 (63968ba0): changed by the pass's fixes (WP1.68); tests/unit/main/ask-help-folder-runs.test.ts, tests/unit/main/codex-ask-carrier.test.ts; WP2 PR 4 VM checkpoint fixes (aa581eda), review fixes (758cb407): changed by those fixes (WP1.68); tests/unit/main/canvas-codex-launch-wiring.test.ts; WP2 PR 4 review fixes (988e02a0): changed by those fixes (WP1.68); tests/unit/main/canvas-codex-launch-wiring.test.ts; WP2 PR 4 (c1c34f1f): changed by those commits (WP1.68); tests/unit/main/canvas-codex-launch-wiring.test.ts; WP2 PR 4 owner answers (2026-10-04) (be38c516: the routed imports and their call sites only, behaviour unchanged; integration round 3: the local Codex branch hands the canvas launch no route, version, start folders or environment and records what the launch carried whatever route it took; CodexLaunch.cliVersion removed) (WP1.55, WP1.68); tests/unit/main/canvas-codex-launch-wiring.test.ts, tests/unit/main/pty-codex-provider-port.test.ts, tests/unit/providers/provider-entry-routing.test.ts; WP2 PR 4 fix pass 13 (cdde4930): cleanupSessionResources releases the session's MCP provider record beside unregisterCodexReviewSession (the import on line 71 and lines 6833-6836; the SSH branch unchanged) (WP1.68); tests/unit/main/pty-mcp-provider-revive.test.ts",
+      "evidence": "Claude env shape pinned by tests/wp1/claude-characterization.test.ts C1 and tests/unit/pty-spawn-env.test.ts (both retained as protection, WP1.54); binding/lease behaviour by tests/wp1/launch-handoff.test.ts and tests/wp1/consumer-leases.test.ts (WP1.38, WP1.42, WP1.46); WP2 commit 6g: the Codex spawn identity re-export removed with codex-spawn-identity.ts (tests/wp1/legacy-codex-retired.test.ts, WP1.57); the WP2 final fixes changed comments only (the codex_review registration comment states the per-connection conditions main offers the tool on, and the End comment names the quoted tmux target it kills); the WP2 T24 fix, not Codex code, changed End: endSshRemoteDetailed resolves a detailed result, reads its target the moment it is called, and reads the End sudo marker from the exec output to report container-needs-sudo when a rootful container's sudo needs a password End does not hold (tests/unit/main/ssh-end-remote-password.test.ts); WP2 PR 3 P3.5 (rows 34, 35; parity): the Codex branch resumes a restored session's persisted conversation or, on a Restart, the one the session kept across the kill (never over the picker), starts where the builder says, and keeps the conversation the status line claims, bounded (WP1.38); tests/unit/main/codex-resume-launch.test.ts; WP2 PR 3 P3.6 (row 22): the kept Codex conversation records the account of the launch that resumed or claimed it (getKeptCodexConversationSource), which a Switch account carries it from; session:save still gets the conversation only (WP1.42); tests/unit/main/codex-resume-launch.test.ts; WP2 PR 3 P3.8 (row 40): type-only, the Codex effort union gains max and ultra (the compiled output is unchanged) (WP1.68); tests/unit/main/codex-effort-allowlist.test.ts; WP2 PR 3 P3.8 round 1 (row 69): type-only, the preset union gains plan (the compiled output is unchanged) (WP1.68); tests/unit/main/codex-effort-allowlist.test.ts; WP2 PR 3 P3.10: a Codex launch gets its hook file and gateway registration before the builder, keeps whether its realm's hooks are heard, takes the exact claim from its own hook (never a Claude sink), arms the Watchdog for a local Codex session, and a local spawn that throws after its process started ends that process (the C item); no SSH path changed (WP1.38); tests/unit/main/pty-codex-hooks.test.ts, tests/wp1/launch-handoff-pty.test.ts; WP2 PR 3 P3.10 round 1 (ADR-009 pass 1, spec, quality and VM findings) (WP1.68): a hook's path is a Codex one for as long as the Codex launch's gateway token is registered (B1); a token nothing will use goes (B2); only a conversation a session's Codex started proves another's inferred claim wrong (B4); the transcript route tested (B5); unconfirmed keyed to the session's own hooks, and a live resume by id keeps its doubt (S4); the idle mark and a released path go with the run (Q1, Q3); the picker told which conversations other tabs are on (V2); tests/unit/main/pty-codex-hooks.test.ts, tests/wp1/launch-handoff-pty.test.ts; WP2 PR 3 P3.10 round 2 (the round 1 re-review and the VM re-check) (WP1.68): a killed Codex session's gateway token goes at the kill, its Codex record at the exit (R8); the picker told only of tabs on the same account (R10); tests/unit/main/pty-codex-hooks.test.ts; WP2 PR 3 P3.10 rounds 3b and 4 (the hook wrapper and the picker resolve their helpers from fixed locations; the hook folders prepared asynchronously and read back; approval pairing; the Watchdog episode) (WP1.68): the Codex launch asks prepareSessionHooks for the prepared hook folder, with no folder rule; tests/unit/main/pty-codex-hooks.test.ts; WP2 PR 3 P3.11 (row 62, extra CLI arguments; parity) (WP1.68): the inline codexOptions type gains extraArgs, typing only; tests/unit/providers/codex/spawn-extra-args.test.ts; WP2 PR 3 P3.12 (rows 31, 32, 65; logs and GitHub context; parity) (WP1.68): a local Codex run is recorded (the same gate as Claude's), its watcher's claims reach the Codex log binder after runStart, Claude's transcript discovery is never armed for it, the binder is told at exit; the GitHub Session Context record; no SSH path changes (a Codex session over SSH is refused before spawn); tests/unit/main/pty-codex-logs.test.ts; WP2 PR 3 P3.13 (row 72) (WP1.60): one read-only export, isSessionLiveOrStarting, for the one-at-a-time rule; no SSH path changes; tests/unit/main/codex-multi-spawn-leases.test.ts; WP2 PR 3 P3.15 (row 71): the local Codex spawn on Windows asks node-pty for its bundled ConPTY (useConptyDll, bundledConptyChoice in bundled-conpty.ts) when conpty.dll and OpenConsole.exe are beside the native module node-pty loads, else the system ConPTY, and its launch line says which; the Claude, plain-terminal and SSH spawns are unchanged (WP1.68); tests/unit/main/pty-conpty-per-provider.test.ts, tests/unit/main/bundled-conpty.test.ts, tests/unit/ssh-spawn-callsite.test.ts; WP2 PR 3 P3.15 round 1 (the spec, code-quality and ADR-009 lens findings, and the VM re-check) (WP1.68): the local Codex spawn takes its ConPTY options from the choice only; a synchronous throw under the bundled ConPTY starts the same launch once more on the system ConPTY and, only when that succeeds, turns the choice to the system one (bundledConptyFailed); the launch line names the bundled folder; the Claude, plain-terminal and SSH spawns are unchanged; tests/unit/main/pty-conpty-per-provider.test.ts, tests/unit/ssh-spawn-callsite.test.ts; WP2 PR 3 P3.15 round 2 (the round 1 spec, code-quality and ADR-009 pass 2 findings) (WP1.68): an exit with no known code is logged as unknown and ends the run as exited; a Codex PTY under the bundled ConPTY that ends within 5 s having drawn nothing, and that the app did not end, makes the next launch use the system ConPTY (no relaunch); the fallback assigns the started PTY before reporting; tests/unit/main/pty-conpty-per-provider.test.ts, tests/unit/main/pty-codex-logs.test.ts; WP2 PR 3 P3.15 round 3 (the VM blocker at 98455d52: a write EAGAIN on a PTY input pipe quit the app) (WP1.68): every session's PTY, and the End and liveness helper PTYs, get an error listener on node-pty's Windows input socket (guardPtyInput in pty-input-guard.ts): a failed write never quits the app, is logged once, and a session that has not ended by itself within 3 s is ended with a line in its terminal; no Codex-specific change; tests/unit/main/pty-conpty-per-provider.test.ts, tests/unit/main/pty-input-guard.test.ts, tests/unit/main/ssh-end-remote-password.test.ts; WP2 PR 3 P3.16a main track, M1 (WP1.68): a local Claude session not indexed marks the conversation it is on (its hooks' and status line's transcript, or its exact resume at launch) from the moment it became not indexed; a killed one's window closes when its exit is reported or the grace passes; a switch-off marks either assistant; tests/unit/main/pty-codex-logs.test.ts, tests/unit/main/tokenomics-attribution.test.ts; WP2 PR 3 P3.16a main track round 1 (WP1.68): a Claude session not indexed marks its projects folder until it names a transcript, keeps every transcript it names marked until it ends, takes only a <uuid>.jsonl in its own folder, and is marked only when the switches and rules leave its run out; a killed session's windows close from its exit handler; the per-spawn teardown restarts the integrity count quietly (N1 to N4, N8); tests/unit/main/pty-codex-logs.test.ts, tests/unit/main/pty-integrity-restart.test.ts, tests/unit/main/pty-spawn-waits-for-refresh.test.ts; WP2 PR 3 P3.15 round 4 (the rounds 2-3 reviews and the P3.16a ADR-009 lenses) (WP1.68): every session's PTY and the End and liveness helper PTYs are guarded on their output too (node-pty's output error handler throws without a listener of the app's own), logged once a side, the session ended once after the grace; tests/unit/main/pty-conpty-per-provider.test.ts, tests/unit/main/pty-ssh-io-guard.test.ts, tests/unit/main/ssh-end-remote-password.test.ts; WP2 PR 3 P3.16a main track round 2 (WP1.68): a Claude session not indexed names its projects folder as Claude Code does (claudeProjectDirName: the real path on Linux and macOS, the 200-character cut and hash), as do the resume launch's folder lookups; it takes a <uuid>.jsonl directly in another project's folder under the projects root too, and past its cap covers each name by its folder's window, opened again, or one on the projects root (Q1 to Q3); a Restart's kill restarts the integrity count at its exit instead of ending the session, and a close with no process left ends it (Q5); tests/unit/main/pty-codex-logs.test.ts, tests/unit/main/pty-integrity-restart.test.ts; WP2 PR 3 fixer 3 (P3.16a round 2 reviews and ADR-009 pass 3) (WP1.68): every spawn clears the session's Restart mark in spawnPtyResolved, so a launch main prepares first (a Codex session, or a pinned Claude Code version installed first) ends as any other after a Restart (F2); no Codex-specific change; tests/unit/main/pty-integrity-restart.test.ts; WP2 PR 3 fixer 3, F6 (WP1.68): comments only, the folder Claude Code names is the launch folder's real path on Windows too (claudeProjectDirName); no Codex-specific change; tests/unit/logging/transcript-discovery.test.ts; WP2 PR 3 PR-level ADR-009 round 1 (WP1.68): each local Codex launch's realm and folder are recorded, and a Codex session not indexed holds a cover window on them until it ends; a claim let go closes only its conversation's window (C1); a Claude session not indexed past the record's cap is covered by its folder's window (C2); tests/unit/main/pty-codex-logs.test.ts; WP2 PR 4 P4.1: the Codex branch registers canvas roots and the worktree, passes the guidance, feeds the headless pane; writeCanvasMarkerLine (WP1.68); tests/unit/main/canvas-codex-roots-spawn.test.ts, tests/unit/main/canvas-marker-codex-delivery.test.ts; WP2 PR 4 P4.3 re-review (RASK-1, 56200cd5): an Ask launch runs in the help folder pty:spawn hands it, and a resumed Ask conversation is held to that folder on both branches; P4.1 re-review RA-1 (the realm skills on the master switch only) and RA-5 cleanups (WP1.68); tests/unit/main/ask-launch-folder.test.ts, tests/unit/main/canvas-codex-launch-wiring.test.ts; WP2 PR 4 lane A round 2 (9e200c0a, the provider port; no behaviour change): the Codex package reached only through getProvider('codex') (WP1.55); tests/unit/main/pty-codex-provider-port.test.ts; WP2 PR 4 P4.3 carrier (row 53, fc460f8f): a question not on the launch line typed through the run's submit primitive at Codex's first ready composer, waiting up to 300 s, the characters outside the BMP removed first with the removed notice, and not-delivered raised (WP1.68); tests/unit/main/codex-ask-carrier.test.ts; WP2 PR 4 ADR-009 round 1 (63968ba0): changed by the pass's fixes (WP1.68); tests/unit/main/ask-help-folder-runs.test.ts, tests/unit/main/codex-ask-carrier.test.ts; WP2 PR 4 VM checkpoint fixes (aa581eda), review fixes (758cb407): changed by those fixes (WP1.68); tests/unit/main/canvas-codex-launch-wiring.test.ts; WP2 PR 4 review fixes (988e02a0): changed by those fixes (WP1.68); tests/unit/main/canvas-codex-launch-wiring.test.ts; WP2 PR 4 (c1c34f1f): changed by those commits (WP1.68); tests/unit/main/canvas-codex-launch-wiring.test.ts; WP2 PR 4 owner answers (2026-10-04) (be38c516: the routed imports and their call sites only, behaviour unchanged; integration round 3: the local Codex branch hands the canvas launch no route, version, start folders or environment and records what the launch carried whatever route it took; CodexLaunch.cliVersion removed) (WP1.55, WP1.68); tests/unit/main/canvas-codex-launch-wiring.test.ts, tests/unit/main/pty-codex-provider-port.test.ts, tests/unit/providers/provider-entry-routing.test.ts; WP2 PR 4 fix pass 13 (cdde4930): cleanupSessionResources releases the session's MCP provider record beside unregisterCodexReviewSession (the import on line 71 and lines 6833-6836; the SSH branch unchanged) (WP1.68); tests/unit/main/pty-mcp-provider-revive.test.ts; 2.1.3-beta.19 section 2 (aicc_planning#439): the direct branch's body moved unchanged into the Codex package's local launch group (providers/codex/local-launch.ts); the branch left names no provider and refuses a provider with no group; a provider is direct by its package's group, the rows keep Claude Code's shell launch alone; the teardown's first part is unbindLaunchProvider (WP1.68); tests/unit/main/local-launch-characterisation.test.ts, tests/unit/main/local-launch-third-provider.test.ts, tests/unit/main/pty-local-launch-registry.test.ts",
       "note": "WP2 commit 4: the Codex branch runs only from the prepared launch (executable, realm env with CODEX_HOME, sessions folder) and holds its account lease until its process ends; the binding and lease are taken in pty:spawn through the accounts service. The Claude branch is unchanged (withProfileHome); running Claude sessions are counted for a Claude switch-off. Codex identity capture removed"
     },
     {
@@ -3561,6 +3640,16 @@
       "note": "comment text only"
     },
     {
+      "path": "src/main/session-helper/helper-pty.ts",
+      "predicates": [
+        "P14"
+      ],
+      "category": "OTHER",
+      "disposition": "added",
+      "evidence": "2.1.3-beta.19 section 6.2 (aicc_planning#440): the doc of flushQueued names the run screens that declare the wait a held terminal's queued lone Enter keeps (Claude Code's and Codex's) and says why Codex needs it (PB3); the terminal compares no provider name and asks its run's provider through the registry (WP1.68); tests/unit/main/session-helper-enter-wait.test.ts",
+      "note": "comment text only"
+    },
+    {
       "path": "src/main/session-helper/manager.ts",
       "predicates": [
         "P14"
@@ -3569,6 +3658,16 @@
       "disposition": "added",
       "evidence": "2.1.3-beta.11 section B2: comments and log reasons for a held Codex session's launch in its relay form; the route asks the provider's own tool functions and compares no provider name (WP1.68); tests/unit/main/session-helper-manager.test.ts; 2.1.3-beta.18 section 5 (aicc_planning#433, ADR-030 S12): a held Codex session's hook events through its holder (WP1.68); tests/unit/main/session-helper-codex-hooks.test.ts, tests/unit/scripts/codex-hook-forwarder-helper.test.ts",
       "note": "comment and log text only"
+    },
+    {
+      "path": "src/main/session-input/enter-delay.ts",
+      "predicates": [
+        "P14"
+      ],
+      "category": "OTHER",
+      "disposition": "added",
+      "evidence": "2.1.3-beta.19 section 6.2 (aicc_planning#440): its comments say the Codex package's run screen reads PROMPT_ENTER_DELAY_MS too, as the wait its held terminals' queued lone Enter keeps; the module holds that constant only (WP1.68); tests/unit/main/session-helper-enter-wait.test.ts",
+      "note": "comment text only"
     },
     {
       "path": "src/main/session-input/index.ts",
@@ -3604,13 +3703,12 @@
     {
       "path": "src/main/sessions/launch-bindings.ts",
       "predicates": [
-        "P04",
         "P14"
       ],
       "category": "OTHER",
       "disposition": "added",
-      "evidence": "new 2.1.3-beta.13 section B1 module (S16 step 3, aicc_planning#375): a launch's bindings, their bodies moved unchanged from pty-manager.ts and called where they were: a Codex launch's hook token and file, its account lease, its pane and colour answers, its rollout telemetry, log binder and registrations; a Claude Code launch's account capture and registrations; the logging run; and their part of the session's exit and teardown (WP1.68); tests/unit/main/launch-bindings.test.ts, tests/unit/main/launch-bindings-launch.test.ts, tests/unit/main/pty-codex-hooks.test.ts, tests/unit/main/pty-codex-color-replies.test.ts; 2.1.3-beta.18 section 5 (aicc_planning#433, ADR-030 S12): a held Codex session's hook events through its holder (WP1.68); tests/unit/main/session-helper-codex-hooks.test.ts, tests/unit/scripts/codex-hook-forwarder-helper.test.ts",
-      "note": "created by 2.1.3-beta.13 section B1; the P14 hits are the Codex launch's bindings moved from pty-manager.ts, and the one P04 hit is a moved comment saying a managed account never writes to ~/.codex; no Codex home is resolved here"
+      "evidence": "new 2.1.3-beta.13 section B1 module (S16 step 3, aicc_planning#375): a launch's bindings, their bodies moved unchanged from pty-manager.ts and called where they were: a Codex launch's hook token and file, its account lease, its pane and colour answers, its rollout telemetry, log binder and registrations; a Claude Code launch's account capture and registrations; the logging run; and their part of the session's exit and teardown (WP1.68); tests/unit/main/launch-bindings.test.ts, tests/unit/main/launch-bindings-launch.test.ts, tests/unit/main/pty-codex-hooks.test.ts, tests/unit/main/pty-codex-color-replies.test.ts; 2.1.3-beta.18 section 5 (aicc_planning#433, ADR-030 S12): a held Codex session's hook events through its holder (WP1.68); tests/unit/main/session-helper-codex-hooks.test.ts, tests/unit/scripts/codex-hook-forwarder-helper.test.ts; 2.1.3-beta.19 section 2 (aicc_planning#439): the provider halves moved into each package's lifecycle object (providers/codex/lifecycle.ts, providers/claude/lifecycle.ts); the take-over, the serving, the teardown's first part (unbindLaunchProvider) and the description ask the session's provider's object (WP1.68); tests/unit/main/local-launch-third-provider.test.ts, tests/unit/main/local-launch-characterisation.test.ts",
+      "note": "created by 2.1.3-beta.13 section B1; the P14 hits are the Codex launch's bindings moved from pty-manager.ts (2.1.3-beta.19 section 2 moved the provider halves into each package's lifecycle object, with the one P04 comment); no Codex home is resolved here"
     },
     {
       "path": "src/main/stale-folder-sweep.ts",
@@ -5481,7 +5579,7 @@
       ],
       "category": "UI-ONLY",
       "disposition": "added",
-      "evidence": "new WP2 PR 3 P3.10 module (src/shared/codex-screen.ts): the pure reading of a Codex pane shared by the renderer's typed commands and main's Watchdog, moved byte-identically from the renderer (screenRegistry's readXtermScreen, codexComposer's reading); Codex's hook review screens read as blocking (WP1.68); tests/unit/renderer/codex-screen-hooks-review.test.ts, tests/unit/renderer/codex-composer.test.ts, tests/unit/renderer/screen-registry.test.ts; WP2 PR 3 P3.15 round 1 (the spec, code-quality and ADR-009 lens findings, and the VM re-check) (WP1.68): codexTextTyped reads text typed at the composer over its wrapped rows (indented under the text), with nothing in the way and the footer last; tests/unit/renderer/codex-image-paste.test.ts; WP2 PR 4 P4.1: the MCP approval form and the sandbox menu title read as blocked, two new readers (WP1.68); tests/unit/renderer/codex-screen-p41.test.ts; WP2 PR 4 P4.3 carrier (row 53, fc460f8f): codexPromptKeeps, the text Codex's prompt keeps and how many characters outside the BMP it would drop (WP1.68); tests/unit/main/codex-ask-carrier.test.ts; 2.1.3-beta.10 section C5 (aicc_planning #349): Codex 0.157.1's one shortcuts hint row under the footer (\"? for shortcuts\", at the footer's indent) reads as the footer alone did, ready or busy; any other row, a second hint row or a wrapped footer still reads unrecognised (WP1.68); tests/unit/shared/codex-screen-shortcuts-hint.test.ts; 2.1.3-beta.12 section C3 (aicc_planning #357): the other rows probe P19's second run recorded under the footer (Codex 0.170.0's agents row, the shortcuts key rebound to F6, the queue hint) read as the footer alone did, the queue hint busy, and the composer's draft and height are read over them, a draft Codex wraps onto more rows over the queue hint too; a warning count at the right of the row, any row not recorded, two rows, another indent or a wrapped footer still reads unrecognised (WP1.68); tests/unit/shared/codex-screen-hint-rows.test.ts; 2.1.3-beta.17 section C7 (aicc_planning #371): Codex's warning count at the right of the row under the footer reads with the hint row it sits beside, and the count alone under a draft is read by the draft and height readers and taken by the readers that confirm a typed text (codexTextTyped, codexCommandTyped, codexPastedContentShown), so composer-submit presses Enter or takes its text back (WP1.68); tests/unit/shared/codex-screen-warning-row.test.ts; 2.1.3-beta.17 section C8 (aicc_planning #416): the footer's model is matched in either case (Codex 0.157.1 shows gpt-5.5 as GPT-5.5) (WP1.68); tests/unit/shared/codex-screen-footer-model.test.ts",
+      "evidence": "new WP2 PR 3 P3.10 module (src/shared/codex-screen.ts): the pure reading of a Codex pane shared by the renderer's typed commands and main's Watchdog, moved byte-identically from the renderer (screenRegistry's readXtermScreen, codexComposer's reading); Codex's hook review screens read as blocking (WP1.68); tests/unit/renderer/codex-screen-hooks-review.test.ts, tests/unit/renderer/codex-composer.test.ts, tests/unit/renderer/screen-registry.test.ts; WP2 PR 3 P3.15 round 1 (the spec, code-quality and ADR-009 lens findings, and the VM re-check) (WP1.68): codexTextTyped reads text typed at the composer over its wrapped rows (indented under the text), with nothing in the way and the footer last; tests/unit/renderer/codex-image-paste.test.ts; WP2 PR 4 P4.1: the MCP approval form and the sandbox menu title read as blocked, two new readers (WP1.68); tests/unit/renderer/codex-screen-p41.test.ts; WP2 PR 4 P4.3 carrier (row 53, fc460f8f): codexPromptKeeps, the text Codex's prompt keeps and how many characters outside the BMP it would drop (WP1.68); tests/unit/main/codex-ask-carrier.test.ts; 2.1.3-beta.10 section C5 (aicc_planning #349): Codex 0.157.1's one shortcuts hint row under the footer (\"? for shortcuts\", at the footer's indent) reads as the footer alone did, ready or busy; any other row, a second hint row or a wrapped footer still reads unrecognised (WP1.68); tests/unit/shared/codex-screen-shortcuts-hint.test.ts; 2.1.3-beta.12 section C3 (aicc_planning #357): the other rows probe P19's second run recorded under the footer (Codex 0.170.0's agents row, the shortcuts key rebound to F6, the queue hint) read as the footer alone did, the queue hint busy, and the composer's draft and height are read over them, a draft Codex wraps onto more rows over the queue hint too; a warning count at the right of the row, any row not recorded, two rows, another indent or a wrapped footer still reads unrecognised (WP1.68); tests/unit/shared/codex-screen-hint-rows.test.ts; 2.1.3-beta.17 section C7 (aicc_planning #371): Codex's warning count at the right of the row under the footer reads with the hint row it sits beside, and the count alone under a draft is read by the draft and height readers and taken by the readers that confirm a typed text (codexTextTyped, codexCommandTyped, codexPastedContentShown), so composer-submit presses Enter or takes its text back (WP1.68); tests/unit/shared/codex-screen-warning-row.test.ts; 2.1.3-beta.17 section C8 (aicc_planning #416): the footer's model is matched in either case (Codex 0.157.1 shows gpt-5.5 as GPT-5.5) (WP1.68); tests/unit/shared/codex-screen-footer-model.test.ts; 2.1.3-beta.19 section 4 (aicc_planning#436): the footer Codex 0.170.0 and 0.172.0 wrap onto two rows is read in its recorded shape as a footer of one row (state, draft, height and the three confirm readers); any other wrap still reads unrecognised (WP1.68), tests/unit/shared/codex-screen-wrapped-footer.test.ts",
       "note": "created by WP2 PR 3 P3.10; no Node import, used by main and renderer"
     },
     {
@@ -5619,6 +5717,16 @@
       "disposition": "added",
       "evidence": "provider-neutral registry names the Codex realm kind and grammar; no legacy Codex code path; covered by tests/wp1/account-registry-uniqueness.test.ts (WP1.45); WP2 P3 usage track MP8 (owner decision 2026-09-27, docs/wp1/owner-decisions-2026-09-27.md, the scoped WP1.41 exception; ADR-022): recordAccountPlan, provider-neutral (WP1.45); tests/wp1/identity-registry.test.ts; WP2 PR 4 fix pass 13 (d3700924): a linked legacy record that is present but cannot be stored keeps its account, link and open conflicts as they were (WP1.45); tests/wp1/migration-claude.test.ts",
       "note": "new WP2 registry"
+    },
+    {
+      "path": "src/shared/remote-machines.ts",
+      "predicates": [
+        "P14"
+      ],
+      "category": "UI-ONLY",
+      "disposition": "added",
+      "evidence": "2.1.3-beta.17 remote step 1 module (not in the baseline tree 6bafcc33): the Linux machines' card and switch texts as the renderer sees them; 2.1.3-beta.19 section 1.2 (aicc_planning#437): the Machines card's route note (REMOTE_ROUTE_NOTE) names Codex among what the preview does not take through the session helper yet, and at 1.2's join the remote switch text (REMOTE_SWITCH_TEXT) does too; text only, no Codex behaviour changed, no provider name compared (WP1.68); tests/unit/renderer/remote-machines-section.test.tsx",
+      "note": "names Codex in 2.1.3-beta.19 section 1.2 (user text: what the preview lacks)"
     },
     {
       "path": "src/shared/sentinel-types.ts",
@@ -6743,6 +6851,18 @@
       "note": ""
     },
     {
+      "path": "tests/fixtures/local-launch-characterisation.json",
+      "predicates": [
+        "P04",
+        "P07",
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "new 2.1.3-beta.19 section 2 record (aicc_planning#439): the 2.1.1 characterisation's values at cc36c7f3, read by tests/unit/main/local-launch-characterisation.test.ts (WP1.68)",
+      "note": "created by 2.1.3-beta.19 section 2; paths normalised to <root>, <home> and <sid>"
+    },
+    {
       "path": "tests/fixtures/tokenomics/tk-db-v1.ts",
       "predicates": [
         "P13"
@@ -6772,6 +6892,18 @@
       "disposition": "added",
       "evidence": "new WP2 PR 4 lane ISO (2026-10-04) test helper (3c50f66f): the home guard every vitest run loads first; it names CODEX_HOME and .codex only to capture the real ones as protected roots and to point the variable at an isolated folder; tests never act on a real home (WP1.33); tests/unit/test-isolation/home-guard.test.ts",
       "note": "created by WP2 PR 4 (lane ISO): enforced test isolation"
+    },
+    {
+      "path": "tests/helpers/provider-package-parts.ts",
+      "predicates": [
+        "P04",
+        "P08",
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "new 2.1.3-beta.19 section 2 helper (aicc_planning#439): a test that stands the provider registry in gives its stand-in providers the Codex package's local launch group and lifecycle object and the Claude Code package's lifecycle object, loaded at the test's top level (WP1.68); tests/unit/main/codex-resume-launch.test.ts, tests/wp1/launch-handoff-pty.test.ts",
+      "note": "created by 2.1.3-beta.19 section 2"
     },
     {
       "path": "tests/integration/claude-conformance-ci.mjs",
@@ -7465,6 +7597,16 @@
       "disposition": "retain",
       "evidence": "existing test retained unchanged; must stay green on the merge candidate (WP1.33); listed in docs/wp1/baseline-test-inventory.json",
       "note": ""
+    },
+    {
+      "path": "tests/unit/main/canvas-resources-root-floor.test.ts",
+      "predicates": [
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "replace",
+      "evidence": "existing test retained; must stay green on the merge candidate (WP1.33); listed in docs/wp1/baseline-test-inventory.json; WP1.33 mapping: the 2.1.3-beta.19 fix round, second pass (item CANVASROOTWARN), added the help folder cases (isAppHelpFolder on a real folder tree, and a Codex session's two cases through the real registerCodexCanvasRoots: the app's own help folder is refused as a line of the log, <resources>/CONFIG is refused and still warns) and a log-line capture over the real logger; the other cases are unchanged; tests/unit/main/canvas-resources-root-floor.test.ts",
+      "note": "matched since the 2.1.3-beta.19 fix round, second pass (was not matched); P13: the Codex case only, nothing started"
     },
     {
       "path": "tests/unit/main/canvas-resume-debt-r10.test.ts",
@@ -8388,6 +8530,30 @@
       "note": "created by WP2 PR 3 P3.13; nothing mocked but the logger"
     },
     {
+      "path": "tests/unit/main/local-launch-characterisation.test.ts",
+      "predicates": [
+        "P04",
+        "P05",
+        "P07",
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "new 2.1.3-beta.19 section 2 test (aicc_planning#439, step 2.1.1): through the real spawnPty, registry and packages, what a local Codex launch, a take-over, the serving of a kept session, its description and each unbind do, recorded at cc36c7f3 in tests/fixtures/local-launch-characterisation.json and equal after the moves (WP1.68)",
+      "note": "created by 2.1.3-beta.19 section 2; made-up realm paths in the test's own temp folder; nothing started"
+    },
+    {
+      "path": "tests/unit/main/local-launch-third-provider.test.ts",
+      "predicates": [
+        "P10",
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "new 2.1.3-beta.19 section 2 test (aicc_planning#439, tests/unit/main/local-launch-third-provider.test.ts): a stand-in third provider registered as a package only starts its own program by its local launch group, and its take-over, serving and unbind call its own lifecycle object, never Claude Code's or Codex's (WP1.68)",
+      "note": "created by 2.1.3-beta.19 section 2; the provider id list mocked to add the stand-in; nothing started"
+    },
+    {
       "path": "tests/unit/main/logging-switch-wiring.test.ts",
       "predicates": [
         "P13"
@@ -8591,6 +8757,18 @@
       "disposition": "replace",
       "evidence": "existing pty:spawn strip suite; WP2 commit 4 added the codexLaunch case: a renderer-sent launch is stripped and a Codex spawn with no accounts service is refused (WP1.38, WP1.42; tests/wp1/launch-handoff.test.ts, tests/wp1/launch-handoff-pty.test.ts); WP2 provider-off enforcement (main refuses every launch of a provider that is off; WP1.60 enable/disable): the suite gained a mock of the launch gate answering on; the refusal is tested in tests/unit/main/pty-spawn-provider-off.test.ts; WP2 PR 4 P4.1: the Codex launch now carries its home and CLI version (WP1.33); tests/unit/main/pty-handlers-command-secrets.test.ts",
       "note": "baseline pty:spawn strip suite; WP2 commit 4 added the codexLaunch case (re-dispositioned: it changed)"
+    },
+    {
+      "path": "tests/unit/main/pty-held-restart-resume.test.ts",
+      "predicates": [
+        "P04",
+        "P07",
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "new 2.1.3-beta.19 fix round test (item HELDRESTART): through the real spawnPty and killPty, with a fake node-pty and a fake transcript binder, a held Claude Code tab's Restart (its exit before its spawn) resumes its conversation, and a plain Restart, a close and a Codex session's Restart are unchanged; the Codex case spawns a Codex session with a made-up CODEX_HOME in the test's own temp folder (WP1.68); tests/unit/main/pty-held-restart-resume.test.ts",
+      "note": "created by the 2.1.3-beta.19 fix round after the host line; nothing started; the Codex case pins that no Claude resume target is read for a Codex session"
     },
     {
       "path": "tests/unit/main/pty-integrity-restart.test.ts",
@@ -8948,6 +9126,27 @@
       "note": "names Codex only in its header comment"
     },
     {
+      "path": "tests/unit/main/session-helper-enter-wait.test.ts",
+      "predicates": [
+        "P07",
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "new 2.1.3-beta.19 section 6.2 (aicc_planning#440) test (tests/unit/main/session-helper-enter-wait.test.ts): a held terminal's queued lone Enter waits only as long as its run's provider's run screen declares; a plain terminal's goes at once (WP1.68)",
+      "note": "created by 2.1.3-beta.19 section 6.2; P07 and P13: it constructs the real CodexProvider and runs a Codex terminal; a fake holder in memory, no process starts"
+    },
+    {
+      "path": "tests/unit/main/session-helper-install.test.ts",
+      "predicates": [
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "2.1.3-beta.19 fix round (item CONPTY): the comment of its new case names the finding it covers (a new Codex session after an update was not held, because a running session held the bundled ConPTY's copy); the install code it tests compares no provider name (WP1.68); tests/unit/main/session-helper-install.test.ts",
+      "note": "P13: comment text only; the case copies made-up conpty.dll and OpenConsole.exe in its own temp folder"
+    },
+    {
       "path": "tests/unit/main/session-helper-manager.test.ts",
       "predicates": [
         "P13"
@@ -8956,6 +9155,16 @@
       "disposition": "added",
       "evidence": "2.1.3-beta.7 cases in a 2.1.3-beta.6 test (tests/unit/main/session-helper-manager.test.ts): a local Claude Code or Codex session through the session helper (spawnAgentPty), off by default and then exactly node-pty's spawn; on, the same program, folder and environment, a Codex npm line as the launch's exact command line and node-pty's bundled ConPTY as the helper's; after a crash the agent session is ended, never shown again, and a tab that starts meanwhile waits for that end (WP1.68)",
       "note": "created by 2.1.3-beta.6 (plan section B); a fake helper over in-memory streams and a mocked node-pty; no process starts"
+    },
+    {
+      "path": "tests/unit/main/session-helper-not-held-line.test.ts",
+      "predicates": [
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "new 2.1.3-beta.19 fix round test (item CONPTY): a tab the session helper could not hold says so in one line, a run of the app's own never does, and the manager asks for it for Claude Code, Codex and plain terminal tabs alike, by no provider name (WP1.68); tests/unit/main/session-helper-not-held-line.test.ts",
+      "note": "P13: its fixture names a Codex program path and the finding (a new Codex session); nothing started"
     },
     {
       "path": "tests/unit/main/session-helper-pty-site.test.ts",
@@ -10188,6 +10397,19 @@
       "note": "created by the 2.1.3-beta.5 accounts and sessions track; the real-path lookup is a stand-in, no link and no Codex process"
     },
     {
+      "path": "tests/unit/providers/codex/telemetry-verbatim-rollout.test.ts",
+      "predicates": [
+        "P01",
+        "P04",
+        "P07",
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "new 2.1.3-beta.19 fix round test (item CODEX172): a resumed conversation's hook from Codex 0.172.0 names its rollout in Windows' verbatim form (std::fs::canonicalize); the same rollout is claimed exactly, and one outside the realm, or of another verbatim form, is still refused (WP1.68); tests/unit/providers/codex/telemetry-verbatim-rollout.test.ts",
+      "note": "created by the 2.1.3-beta.19 fix round after the host line; made-up realm and rollouts in the test's own temp folder"
+    },
+    {
       "path": "tests/unit/providers/codex/telemetry.test.ts",
       "predicates": [
         "P01",
@@ -10286,6 +10508,17 @@
       "disposition": "retain",
       "evidence": "existing test retained unchanged; must stay green on the merge candidate (WP1.33); listed in docs/wp1/baseline-test-inventory.json",
       "note": ""
+    },
+    {
+      "path": "tests/unit/remote-helper/kept-gone-exit-status-real.test.ts",
+      "predicates": [
+        "P04",
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "new 2.1.3-beta.19 section 1.2 test (aicc_planning#437, its second fix round): a real Node process stands in for ssh, closes its output, then exits 3; the bridge stream keeps that exit status, so a kept tab whose holder is gone says so at its first try; its child's HOME, USERPROFILE, APPDATA, LOCALAPPDATA, CLAUDE_CONFIG_DIR and CODEX_HOME all point at its own temp folder; no provider name compared (WP1.68); tests/unit/remote-helper/kept-gone-exit-status-real.test.ts",
+      "note": "P04 and P13: the child's CODEX_HOME isolation only; nothing of Codex started; HOST QUARANTINE (CI and VM only)"
     },
     {
       "path": "tests/unit/renderer/SessionRow.effort.test.tsx",
@@ -10428,6 +10661,17 @@
       "disposition": "added",
       "evidence": "new WP2 PR 3 P3.16b follow-up test (parity row 14; OD27 M1 D5): the AI usage popover has no Codex section while Codex is off or not set up, shows the one muted D5 line in place of its Claude section while Claude Code is off, keeps both sections with both on, and re-renders when a switch flips while it is open (WP1.2, WP1.60 enable/disable); tests/unit/renderer/ai-usage-popover-provider-off.test.tsx",
       "note": "created by WP2 PR 3 P3.16b follow-up; the P05 hits are the settings fixture (codexEnabled)"
+    },
+    {
+      "path": "tests/unit/renderer/ai-usage-popover-weekly-only.test.tsx",
+      "predicates": [
+        "P05",
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "new 2.1.3-beta.19 fix round 5 test (after join 7): the AI usage popover's rate windows decide each window from its own field; a weekly-only Claude Code session shows its weekly row and a 5-hour row that says not reported, not the no-telemetry line; no provider name compared (WP1.68); tests/unit/renderer/ai-usage-popover-weekly-only.test.tsx",
+      "note": "P05 and P13: the settings fixture's codexEnabled only"
     },
     {
       "path": "tests/unit/renderer/alt-v-image-route.test.tsx",
@@ -10872,6 +11116,17 @@
       "disposition": "replace",
       "evidence": "WP1.58: the page now has five sub-tool cards, the Claude review card included, and the \"Available\" case is about host transfer, since the review cards follow their own conditions (WP2 final fixes; WP1.6); adapted in place: tests/unit/renderer/conductor-mcp-page.test.ts; the header case pins \"Running on port 19333\" (WP2 final fixes)",
       "note": ""
+    },
+    {
+      "path": "tests/unit/renderer/config-row-persistent-title.test.tsx",
+      "predicates": [
+        "P05",
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "new 2.1.3-beta.19 section 1.2 test (aicc_planning#437, its second fix round and the join's recheck case): a saved SSH Persistent config's chip title names what keeps its sessions (the session helper, tmux, or either while nothing has decided), and another config's kept session does not name the helper on this row; no provider name compared (WP1.68); tests/unit/renderer/config-row-persistent-title.test.tsx",
+      "note": "P05 and P13: the settings stub's codexEnabled only"
     },
     {
       "path": "tests/unit/renderer/config-row-running.test.tsx",
@@ -11755,6 +12010,16 @@
       "note": ""
     },
     {
+      "path": "tests/unit/renderer/session-status-strip-remote-usage.test.tsx",
+      "predicates": [
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "new 2.1.3-beta.19 section 3 (aicc_planning#434) test (tests/unit/renderer/session-status-strip-remote-usage.test.tsx): a helper tab's strip says why its model limits are not shown (own sign-in, no reading yet), shows this computer's bars and extra usage for a held account, and never draws an empty or zero bar; its one Codex line stands in for the strip's Codex review usage hook (useCodexReviewUsage), as the other strip tests do; listed in the repository-wide legacy Codex manifest, zero unmatched at the merge gate (WP1.67)",
+      "note": ""
+    },
+    {
       "path": "tests/unit/renderer/session-status-strip-surface.test.tsx",
       "predicates": [
         "P13"
@@ -11763,6 +12028,16 @@
       "disposition": "replace",
       "evidence": "existing test retained unchanged; must stay green on the merge candidate (WP1.33); listed in docs/wp1/baseline-test-inventory.json; WP1.33 mapping: one case adapted and renamed for WP2 PR 3 P3.8 (row 61): with the status line off a Codex strip keeps its controls (Compact, Restart), as a Claude strip does, instead of collapsing; the other cases are unchanged; tests/unit/renderer/session-status-strip-surface.test.tsx",
       "note": "re-dispositioned in WP2 PR 3 P3.8 (was retain)"
+    },
+    {
+      "path": "tests/unit/renderer/session-status-strip-weekly-only.test.tsx",
+      "predicates": [
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "new 2.1.3-beta.19 fix round 5 test (after join 7): the status strip decides each rate-limit window from its own field; a weekly figure alone shows the Weekly bar with its reset and the 5-hour window as not reported, never waiting, on a helper tab and a local tab; neither field waits; both show both; its one Codex line stands in for the strip's Codex review usage hook (useCodexReviewUsage), as the other strip tests do; no provider name compared (WP1.68); tests/unit/renderer/session-status-strip-weekly-only.test.tsx",
+      "note": "P13: the useCodexReviewUsage mock only"
     },
     {
       "path": "tests/unit/renderer/session-status-strip.test.ts",
@@ -12531,7 +12806,7 @@
       ],
       "category": "TEST",
       "disposition": "added",
-      "evidence": "new 2.1.3-beta.12 section C3 test (tests/unit/shared/codex-screen-hint-rows.test.ts): the recorded Codex 0.157.1 and 0.170.0 screens with each hint row the reader takes under the footer read their state (ready, the queue hint busy), a draft wrapped onto two rows is read over the queue hint, and the screens with a warning count at the right of the row, each row twice, at another indent, above the footer or under a wrapped footer, and any row not recorded, read unrecognised (WP1.68); 2.1.3-beta.17 section C7 (aicc_planning #371): the recorded screens with the warning count at the right of the row read ready, a two-row draft over the count alone is read, and the count beside a hint Codex draws at rest reads ready; the count beside the queue hint or alone under an empty composer still reads unrecognised (WP1.68)",
+      "evidence": "new 2.1.3-beta.12 section C3 test (tests/unit/shared/codex-screen-hint-rows.test.ts): the recorded Codex 0.157.1 and 0.170.0 screens with each hint row the reader takes under the footer read their state (ready, the queue hint busy), a draft wrapped onto two rows is read over the queue hint, and the screens with a warning count at the right of the row, each row twice, at another indent, above the footer or under a wrapped footer, and any row not recorded, read unrecognised (WP1.68); 2.1.3-beta.17 section C7 (aicc_planning #371): the recorded screens with the warning count at the right of the row read ready, a two-row draft over the count alone is read, and the count beside a hint Codex draws at rest reads ready; the count beside the queue hint or alone under an empty composer still reads unrecognised (WP1.68); 2.1.3-beta.19 section 4 (aicc_planning#436): the footer Codex 0.170.0 and 0.172.0 wrap onto two rows is read in its recorded shape as a footer of one row (state, draft, height and the three confirm readers); any other wrap still reads unrecognised (WP1.68), tests/unit/shared/codex-screen-wrapped-footer.test.ts",
       "note": "created by 2.1.3-beta.12 section C3; pure rows, nothing started"
     },
     {
@@ -12542,7 +12817,7 @@
       ],
       "category": "TEST",
       "disposition": "added",
-      "evidence": "new 2.1.3-beta.10 section C5 test (tests/unit/shared/codex-screen-shortcuts-hint.test.ts): the four recorded Codex 0.157.1 ready screens (probe P19) read ready with the shortcuts hint row under the footer, a turn running reads busy, Plan mode is still read from the footer, and any other row under the footer, two hint rows or a wrapped footer read unrecognised (WP1.68); 2.1.3-beta.12 section C3 (aicc_planning #357): the queue hint and Codex 0.170.0's agents row leave its list of refused rows, read now and pinned in tests/unit/shared/codex-screen-hint-rows.test.ts (WP1.68)",
+      "evidence": "new 2.1.3-beta.10 section C5 test (tests/unit/shared/codex-screen-shortcuts-hint.test.ts): the four recorded Codex 0.157.1 ready screens (probe P19) read ready with the shortcuts hint row under the footer, a turn running reads busy, Plan mode is still read from the footer, and any other row under the footer, two hint rows or a wrapped footer read unrecognised (WP1.68); 2.1.3-beta.12 section C3 (aicc_planning #357): the queue hint and Codex 0.170.0's agents row leave its list of refused rows, read now and pinned in tests/unit/shared/codex-screen-hint-rows.test.ts (WP1.68); 2.1.3-beta.19 section 4 (aicc_planning#436): the footer Codex 0.170.0 and 0.172.0 wrap onto two rows is read in its recorded shape as a footer of one row (state, draft, height and the three confirm readers); any other wrap still reads unrecognised (WP1.68), tests/unit/shared/codex-screen-wrapped-footer.test.ts",
       "note": "created by 2.1.3-beta.10 section C5; pure rows, nothing started"
     },
     {
@@ -12566,6 +12841,17 @@
       "disposition": "added",
       "evidence": "new 2.1.3-beta.17 section C7 test (tests/unit/shared/codex-screen-warning-row.test.ts, aicc_planning#371): Codex's warning count at the right of the hint row reads as the hint row alone did, the count alone under a draft (C7's recordings) is read and confirmed by codexTextTyped, codexCommandTyped and codexPastedContentShown, a count that is not Codex's, not at the right edge, beside the queue hint or alone under an empty composer is refused, and composer-submit and the renderer's typing press Enter once over the recorded screens (WP1.68)",
       "note": "created by 2.1.3-beta.17 section C7; pure rows and fakes, nothing started"
+    },
+    {
+      "path": "tests/unit/shared/codex-screen-wrapped-footer.test.ts",
+      "predicates": [
+        "P01",
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "new 2.1.3-beta.19 section 4 test (tests/unit/shared/codex-screen-wrapped-footer.test.ts, aicc_planning#436): the recorded Codex 0.170.0 and 0.172.0 screens whose footer wraps onto two rows read their state, draft and height, and a command, a text and a paste placeholder typed over the wrapped footer are confirmed. These read unrecognised and confirm nothing: a second row not of the recorded shape; one of Codex's own rows (a footer, a popup row, a hint row) under a footer row cut at the edge; a hint row, a popup row or a footer under the wrapped footer; a wrapped footer among other rows (WP1.68)",
+      "note": "created by 2.1.3-beta.19 section 4; pure rows, nothing started"
     },
     {
       "path": "tests/unit/shared/extra-args.test.ts",
@@ -12605,7 +12891,7 @@
       ],
       "category": "TEST",
       "disposition": "added",
-      "evidence": "new 2.1.3-beta.11 A2 test (ADR-030 screen corpus), extended by 2.1.3-beta.12 A2 (probe P19's second run: Codex 0.170.0 and the hint rows): the rows xterm.js gives for each recording of Claude Code, Codex and the default shell equal the committed rows, each reader reads the state in the recording's name, and the files hold their names, versions, sizes and no personal text; it reads Codex's screen with the shared reader and drives no Codex code path (WP1.67); tests/unit/shared/screen-corpus.test.ts; 2.1.3-beta.12 section C3 (aicc_planning #357): its known misreads lose each recording the reader now reads; those left, all unrecognised, are Codex 0.170.0's wrapped footers and the screens that end in a warning count at the right of the hint row, the mid-reply ones among them (WP1.67); tests/unit/shared/codex-screen-hint-rows.test.ts; 2.1.3-beta.17 section C7 (aicc_planning #371): Codex's warning-draft state (two recordings of C7's hold) reads ready with the draft the probe typed; its known misreads lose the 8 recordings with the warning count at the right of the hint row, and Codex 0.157.1's macOS mid-reply is listed reading ready on aicc_planning#370 (WP1.67); tests/unit/shared/codex-screen-warning-row.test.ts",
+      "evidence": "new 2.1.3-beta.11 A2 test (ADR-030 screen corpus), extended by 2.1.3-beta.12 A2 (probe P19's second run: Codex 0.170.0 and the hint rows): the rows xterm.js gives for each recording of Claude Code, Codex and the default shell equal the committed rows, each reader reads the state in the recording's name, and the files hold their names, versions, sizes and no personal text; it reads Codex's screen with the shared reader and drives no Codex code path (WP1.67); tests/unit/shared/screen-corpus.test.ts; 2.1.3-beta.12 section C3 (aicc_planning #357): its known misreads lose each recording the reader now reads; those left, all unrecognised, are Codex 0.170.0's wrapped footers and the screens that end in a warning count at the right of the hint row, the mid-reply ones among them (WP1.67); tests/unit/shared/codex-screen-hint-rows.test.ts; 2.1.3-beta.17 section C7 (aicc_planning #371): Codex's warning-draft state (two recordings of C7's hold) reads ready with the draft the probe typed; its known misreads lose the 8 recordings with the warning count at the right of the hint row, and Codex 0.157.1's macOS mid-reply is listed reading ready on aicc_planning#370 (WP1.67); tests/unit/shared/codex-screen-warning-row.test.ts; 2.1.3-beta.19 section 4 (aicc_planning#436): Codex 0.170.0's wrapped footers leave its known misreads (2 left, both on #370: Codex 0.157.1's and Codex 0.170.0's macOS mid-reply, which read ready), and two wrapped Codex 0.172.0 recordings join it as wrapped-after-reply (WP1.67)",
       "note": "reads helper/fixtures/screens only"
     },
     {

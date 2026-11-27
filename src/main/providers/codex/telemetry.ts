@@ -807,6 +807,24 @@ function realFolderChain(sessionsDir: string, dir: string): boolean {
 }
 
 /**
+ * A rollout path as Codex 0.172.0's hook names a RESUMED conversation's on
+ * Windows, without the verbatim prefix (2.1.3-beta.19 fix round). From
+ * 0.172.0 a resumed thread's live rollout path, which a hook's transcript_path
+ * is (codex-rs/core/src/session/mod.rs hook_transcript_path), is
+ * `std::fs::canonicalize` of the rollout (thread-store/src/local/helpers.rs
+ * scoped_rollout_path), and on Windows that answers `\\?\C:\...` (or
+ * `\\?\UNC\server\share\...`): the same file, four characters more. Only those
+ * two forms lose the prefix, and only on Windows; anything else is returned as
+ * it is, so the containment checks that follow see it as it was given.
+ */
+export function withoutVerbatimPrefix(p: string, platform: NodeJS.Platform = process.platform): string {
+  if (platform !== 'win32') return p
+  if (/^\\\\\?\\UNC\\/i.test(p)) return `\\\\${p.slice(8)}`
+  if (/^\\\\\?\\[A-Za-z]:\\/.test(p)) return p.slice(4)
+  return p
+}
+
+/**
  * Watch and claim the Codex rollout file for a spawned session.
  *
  * Algorithm:
@@ -1498,9 +1516,13 @@ export function watchAndClaimRollout(
    *  file of the folder); and the name is the day folder's own spelling of
    *  it, so a name spelled in another case (the id in capitals, on a file
    *  system that ignores case) is the same rollout, read and counted under
-   *  one key, never a second. */
-  function exactRollout(rolloutPath: string): { path: string; meta: RolloutSessionMeta } | null {
-    if (typeof rolloutPath !== 'string' || !rolloutPath || rolloutPath.length > 4096 || /[\x00-\x1f\x7f]/.test(rolloutPath)) return null
+   *  one key, never a second. 2.1.3-beta.19 fix round: a resumed
+   *  conversation's hook from Codex 0.172.0 names the rollout in Windows'
+   *  verbatim form (withoutVerbatimPrefix); every check below runs on the
+   *  path without that prefix. */
+  function exactRollout(named: string): { path: string; meta: RolloutSessionMeta } | null {
+    if (typeof named !== 'string' || !named || named.length > 4096 || /[\x00-\x1f\x7f]/.test(named)) return null
+    const rolloutPath = withoutVerbatimPrefix(named)
     if (!isAbsolute(rolloutPath)) return null
     if ((/^[A-Za-z]:/.test(rolloutPath) ? rolloutPath.slice(2) : rolloutPath).includes(':')) return null
     const rel = relative(sessionsDir, rolloutPath)

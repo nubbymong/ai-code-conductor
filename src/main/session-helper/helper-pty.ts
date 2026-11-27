@@ -96,7 +96,8 @@ import { ReplayQueryFilter } from './replay-queries'
 import { PTY_IO_FAILED_GRACE_MS, PTY_IO_FAILED_TEXT, guardPtyIo } from '../pty-input-guard'
 import type { ReplayAtHolderSize } from '../../shared/replay-at-holder-size'
 import { TMUX_WHEEL_EXIT_KEY } from '../../shared/tmux-wheel'
-import { PROMPT_ENTER_DELAY_MS } from '../session-input/enter-delay'
+import type { ProviderId } from '../../shared/providers/ids'
+import { tryGetProvider } from '../providers'
 
 export interface HelperPtyDriver {
   /** Start a holder for `sid` and answer its record. Throws when the helper
@@ -112,6 +113,10 @@ export interface HelperPtyDriver {
    *  session an update kept running, 2.1.3-beta.17), so the log says nothing
    *  is started, never that it starts the usual way. */
   startsNothing?: true
+  /** True: a tab (not a run of the app's own): when it starts the usual way
+   *  after all, it says so in one plain line before its program's output
+   *  (notHeldLine; 2.1.3-beta.19 fix round), not only in the log. */
+  notHeldNote?: true
   /** This terminal is ending; the next holder for the same session waits for it. */
   ending(sid: string, done: Promise<void>): void
   /** This terminal is attached to its tab, or no longer is. */
@@ -181,6 +186,28 @@ export interface HelperPtyOptions {
    *  session-helper manager gives 'same-size' to a launch on the console
    *  built into Windows (2.1.3-beta.13, plan section A4). */
   redraw?: RedrawWay
+  /** The provider whose CLI the terminal runs (an agent session, a run of
+   *  the app's own, a tab through the session helper on its machine); absent
+   *  for a plain terminal. The attach's flush of what was typed while it was
+   *  detached asks that provider's run screen how long a lone Enter waits
+   *  (heldEnterWaitMs, 2.1.3-beta.19 section 6.2). */
+  provider?: ProviderId
+}
+
+/**
+ * The one line a tab shows when the session helper could not hold it and it
+ * starts the usual way (2.1.3-beta.19 fix round: a new Codex session after an
+ * update said so only in the log). The reason is the log's, up to its first
+ * bracket or colon (after either come paths and error text), without a full
+ * stop of its own: a reason that is the helper's own sentence (its set-up
+ * failed while the tab waited) would otherwise end in two. It is named only
+ * when it is plain words (letters, spaces, commas, apostrophes; four words or
+ * more); anything else is left to the log (2.1.3-beta.19 fix round 5).
+ */
+export function notHeldLine(why: string): string {
+  const head = stripSpoofableText(String(why).replace(/^the helper could not hold it:\s*/, '').split(/ \(|: /)[0], 160).trim().replace(/[\s.]+$/, '')
+  const reason = /^[A-Za-z][A-Za-z ,']*$/.test(head) && head.split(/\s+/).length >= 4 ? head : ''
+  return `\r\n[Not held by the session helper${reason ? `: ${reason}` : ''}. This tab runs the usual way and ends when the app closes.]\r\n`
 }
 
 /** An exit code for a terminal whose holder could no longer be reached. */
@@ -291,6 +318,8 @@ export class HelperPty implements IPty {
   readonly label: string
   /** How its program is asked to redraw after a replay from the middle. */
   readonly redrawWay: RedrawWay
+  /** The provider whose CLI it runs; undefined for a plain terminal. */
+  readonly provider: ProviderId | undefined
   handleFlowControl = false
 
   private readonly spec: LaunchSpec
@@ -307,8 +336,9 @@ export class HelperPty implements IPty {
   private size: { cols: number; rows: number }
   private queued: Buffer[] = []
   private queuedBytes = 0
-  /** The attach's flush of the queued input waits before a lone Enter
-   *  (flushQueued): until it goes, what is typed waits behind it. */
+  /** The attach's flush of the queued input waits before a lone Enter, for a
+   *  provider that declares that wait (flushQueued): until it goes, what is
+   *  typed waits behind it. */
   private flushWait: ReturnType<typeof setTimeout> | undefined
   private sizeChanged = false
   private attached = false
@@ -399,6 +429,7 @@ export class HelperPty implements IPty {
     this.driver = opts.driver
     this.record = opts.adopt
     this.redrawWay = opts.redraw ?? 'nudge'
+    this.provider = opts.provider
     this.size = { cols: opts.spec.cols, rows: opts.spec.rows }
     this.bornSize = { ...this.size }
     this.bornAt = this.now()
@@ -532,6 +563,9 @@ export class HelperPty implements IPty {
    * says so; else that start ends it. Only a terminal through a holder that
    * has been attached is let go of; any other (still starting, ending, over,
    * or the usual way) answers false and is left to kill() as before.
+   * 2.1.3-beta.19 section 1.2: a remote tab kept until it is ended is let go of
+   * the same way at every close, Restart, quit and update
+   * (remote-helper/session.ts RemoteHelperPty.kill); its holder has no away clock.
    */
   release(): boolean {
     if (this.inner || this.exited || this.ending || this.released || !this.record || !this.everAttached) return false
@@ -823,25 +857,32 @@ export class HelperPty implements IPty {
 
   /**
    * What was typed while the terminal was not attached, on `conn`, in the
-   * order typed (2.1.3-beta.18 fix round). A frame that is a lone Enter ('\r',
-   * or the tmux leave key then '\r') goes PROMPT_ENTER_DELAY_MS after the
-   * frame before it, and what is typed meanwhile waits behind it (write), so
-   * the order holds. The holder writes frames that come back to back into one
-   * read of the program, and Claude Code (2.1.332, measured) takes a control
-   * character as a key only in a read shorter than 64 characters: an image
-   * request and its Enter typed during a link drop were typed and not sent
-   * once the link was back. A lone Enter first in line goes at once, and
-   * frames with no lone Enter among them go at once, as they always did. A
-   * drop during the wait leaves the rest queued for the attach again, the
-   * Enter first (setDetached); an update's let-go sends it at once (release).
+   * order typed (2.1.3-beta.18 fix round). For a provider whose run screen
+   * declares a wait (heldEnterWaitMs: Claude Code's and Codex's,
+   * 2.1.3-beta.19 section 6.2), a frame that is a lone Enter ('\r', or the
+   * tmux leave key then '\r') goes that long after the frame before it, and
+   * what is typed meanwhile waits behind it (write), so the order holds. The
+   * holder writes frames that come back to back into one read of the
+   * program, and Claude Code (2.1.332, measured) takes a control character
+   * as a key only in a read shorter than 64 characters: an image request and
+   * its Enter typed during a link drop were typed and not sent once the link
+   * was back. Codex never submits a text and its Enter that arrive as one
+   * write (PB3, composer-submit.ts). A lone Enter first in line goes at
+   * once, and frames with no lone Enter among them go at once, as they
+   * always did; so does everything for a plain terminal and for a provider
+   * that declares no wait. A drop during
+   * the wait leaves the rest queued for the attach again, the Enter first
+   * (setDetached); an update's let-go sends it at once (release).
    */
   private flushQueued(conn: HolderConnection): void {
+    // The provider is asked only when a lone Enter waits behind a frame.
+    const waitMs = this.queued.some((b, k) => k > 0 && isLoneEnter(b)) ? this.enterWaitMs() : 0
     const queued = this.queued
     this.queued = []
     this.queuedBytes = 0
     let i = 0
     for (; i < queued.length; i++) {
-      if (conn.isClosed || (i > 0 && isLoneEnter(queued[i]))) break
+      if (conn.isClosed || (waitMs > 0 && i > 0 && isLoneEnter(queued[i]))) break
       conn.sendInput(queued[i])
     }
     if (i === queued.length) return
@@ -854,7 +895,23 @@ export class HelperPty implements IPty {
       this.flushWait = undefined
       if (this.exited || this.released || this.inner || this.conn !== conn || !this.attached || conn.isClosed) return
       this.flushQueued(conn)
-    }, PROMPT_ENTER_DELAY_MS)
+    }, waitMs)
+  }
+
+  /** How long a queued lone Enter waits at the attach: what the run's
+   *  provider's run screen declares (heldEnterWaitMs), read from the
+   *  registered provider when the flush needs it; 0 (no wait) for a plain
+   *  terminal, a provider not registered, one that declares none or no
+   *  positive number, and a lookup that throws: the flush goes on either way. */
+  private enterWaitMs(): number {
+    if (!this.provider) return 0
+    let ms: unknown
+    try {
+      ms = tryGetProvider(this.provider)?.runScreen?.heldEnterWaitMs
+    } catch {
+      return 0
+    }
+    return typeof ms === 'number' && Number.isFinite(ms) && ms > 0 ? ms : 0
   }
 
   /** No flush waits before a lone Enter from here on: what it held stays queued. */
@@ -1399,6 +1456,8 @@ export class HelperPty implements IPty {
     }
     this.inner = inner
     this.guardInner(inner)
+    // A tab says it is not held, in one line before its program's output.
+    if (this.driver.notHeldNote && !nothing && !this.driver.startsNothing) this.dataEmitter.fire(notHeldLine(why))
     inner.onData((d) => this.dataEmitter.fire(d))
     inner.onExit((e) => { this.finish(e.exitCode, e.signal); this.resolveEnded() })
     if (this.sizeChanged) inner.resize(this.size.cols, this.size.rows)

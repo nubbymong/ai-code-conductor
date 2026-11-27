@@ -8,7 +8,7 @@
  * variables; and what a host's rc files print before the marked lines is
  * dropped, up to 64 KiB.
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { EventEmitter } from 'events'
 import { PassThrough } from 'stream'
 import type { ChildProcess } from 'child_process'
@@ -29,7 +29,7 @@ beforeEach(() => {
   cp.spawn.mockReset().mockImplementation((file: string) => { throw new Error(`no process in this test: ${file}`) })
 })
 import {
-  ExecStream, PREAMBLE_MAX, execArgv, markedLines, nodeSshRunner, notStartedLogLine, openScriptStream, parseSshVersion, readHashLine, readScriptResult, runScript, sshEnv, sshFailure, targetProblem,
+  EXIT_AFTER_OUTPUT_MS, ExecStream, PREAMBLE_MAX, execArgv, markedLines, nodeSshRunner, notStartedLogLine, openScriptStream, parseSshVersion, readHashLine, readScriptResult, runScript, sshEnv, sshFailure, targetProblem,
   type SshRunner,
 } from '../../../src/main/remote-helper/ssh-exec'
 import { scriptCommand, scriptText, holderLabel, type ScriptName } from '../../../src/main/remote-helper/scripts'
@@ -245,6 +245,41 @@ describe('ssh exec: the bridge stream', () => {
     const e2 = new Promise<Error>((r) => s2.on('error', r))
     bad.stdout.write(`AICC-HASH ${N} mismatch ${'b'.repeat(64)}\n`)
     expect((await e2).message).toMatch(/hash check \(mismatch\)/)
+  })
+})
+
+// 2.1.3-beta.19 section 1.2, recheck of its fix round 2 (finding 0): when a
+// destroyed bridge stream ends ssh. With the host's side up, at once; once
+// the host's side has ended, ssh gets EXIT_AFTER_OUTPUT_MS to exit by itself
+// (so a bridge's exit 3, no holder, is read), and is ended only then.
+class Slow extends EventEmitter {
+  stdin = new PassThrough(); stdout = new PassThrough()
+  exitCode: number | null = null; signalCode: string | null = null; kills = 0
+  kill() { if (this.exitCode !== null || this.signalCode !== null) return false; this.kills++; this.signalCode = 'SIGTERM'; this.emit('close', null, 'SIGTERM'); return true }
+  exit(code: number) { this.exitCode = code; this.emit('close', code, null) }
+}
+const closed = (s: ExecStream) => new Promise<void>((r) => s.once('close', () => r()))
+describe('ssh exec: when a destroyed bridge stream ends ssh', () => {
+  afterEach(() => { vi.useRealTimers() })
+  it('the host\'s side still up: ssh is ended at once', () => {
+    const c = new Slow()
+    new ExecStream(c as unknown as ChildProcess, N, () => {}).destroy()
+    expect(c.kills).toBe(1)
+  })
+  it('the host\'s side ended: ssh has EXIT_AFTER_OUTPUT_MS to exit by itself, and is ended only then', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    const c = new Slow(); const s = new ExecStream(c as unknown as ChildProcess, N, () => {}); s.resume()
+    c.stdout.end(`AICC-HASH ${N} ok ${SHA}\n`); await closed(s)
+    expect(c.kills).toBe(0)
+    vi.advanceTimersByTime(EXIT_AFTER_OUTPUT_MS - 1); expect(c.kills).toBe(0)
+    vi.advanceTimersByTime(1); expect(c.kills).toBe(1)
+  })
+  it('the host\'s side ended and ssh exits by itself within that time: it is never ended', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    const c = new Slow(); const s = new ExecStream(c as unknown as ChildProcess, N, () => {}); s.resume()
+    c.stdout.end(`AICC-HASH ${N} ok ${SHA}\n`); await closed(s)
+    c.exit(3); expect(vi.getTimerCount()).toBe(0)
+    vi.advanceTimersByTime(EXIT_AFTER_OUTPUT_MS); expect(c.kills).toBe(0)
   })
 })
 

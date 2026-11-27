@@ -41,11 +41,13 @@ export const PTY_MANAGER = 'src/main/pty-manager.ts'
 /**
  * The most lines pty-manager.ts may have. It started at the file's length on
  * beta when this check was added (ADR-030 states that starting value) and was
- * last lowered by remote step 1 (2.1.3-beta.17 A2, aicc_planning#411), which
- * moved SSHOptions into src/main/ssh-options.ts. Lower it, never raise it,
- * whenever a PR shortens the file.
+ * last lowered by the 2.1.3-beta.19 fix round after the host line, which moved
+ * a Restart's resume-target read into restart-resume-target.ts (before it,
+ * section 2, aicc_planning#439, moved a provider's direct launch into its
+ * package's local launch group). Lower it, never raise it, whenever a PR
+ * shortens the file.
  */
-export const PTY_MANAGER_LINE_CAP = 7741
+export const PTY_MANAGER_LINE_CAP = 7517
 /** The PR label that lets pty-manager.ts grow past the cap. */
 export const OVERRIDE_LABEL = 'cap-override'
 

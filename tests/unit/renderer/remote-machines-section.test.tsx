@@ -15,7 +15,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import { act } from 'react'
 import { readFileSync } from 'fs'
 import { resolve } from 'path'
-import { REMOTE_OTHER_HELPER, REMOTE_ROUTE_NOTE, REMOTE_SESSIONS_SETTING, type RemoteMachinesState } from '../../../src/shared/remote-machines'
+import { REMOTE_OTHER_HELPER, REMOTE_ROUTE_NOTE, REMOTE_SESSIONS_SETTING, REMOTE_SWITCH_TEXT, type RemoteMachinesState } from '../../../src/shared/remote-machines'
 import { DEFAULT_SETTINGS } from '../../../src/renderer/stores/settingsStore'
 
 ;(globalThis as any).IS_REACT_ACT_ENVIRONMENT = true
@@ -27,7 +27,7 @@ const DID = 'd'.repeat(32)
 const state = (over: Partial<RemoteMachinesState> = {}): RemoteMachinesState => ({
   available: true,
   switchOn: true,
-  bundled: { ok: true, version: '0.1.0', size: 3_000_000, sha12: 'abcdef012345' },
+  bundled: { ok: true, version: '0.1.0', files: [{ arch: 'x86_64', size: 3_000_000, sha12: 'abcdef012345' }, { arch: 'aarch64', size: 2_800_000, sha12: '0123456789ab' }] },
   machines: [],
   candidates: [
     { configId: 'cfg-key', label: 'Rocky', target: 'nick@rocky.lan:22', addable: true },
@@ -114,11 +114,12 @@ describe('Linux machines on the Machines page', () => {
   })
 
   it('a card says whether the machine is checked and which configs run through the helper, Check checks it, Remove asks first', async () => {
-    const m = { did: DID, label: 'Rocky', target: 'nick@rocky.lan:22', checked: false, lastCheck: { at: Date.now(), ok: false, detail: 'its self-test failed (pty)' }, helperVersion: '0.1.0', system: 'Linux x86_64', inUse: 0 }
+    const m = { did: DID, label: 'Rocky', name: 'Rocky (nick@rocky.lan:22)', target: 'nick@rocky.lan:22', checked: false, lastCheck: { at: Date.now(), ok: false, detail: 'its self-test failed (pty)' }, helperVersion: '0.1.0', system: 'Linux x86-64', inUse: 0 }
     const remote = install(state({ machines: [m] }))
     await mount()
     expect(container.querySelector('[data-testid="remote-machine-state"]')?.textContent).toContain('Not checked: its self-test failed (pty)')
-    expect(container.querySelector('[data-testid="remote-machine-route"]')?.textContent).toBe(REMOTE_ROUTE_NOTE)
+    // Not checked: its tabs take the usual SSH path, so the line that they go through the helper is not shown (text smoke #32).
+    expect(container.querySelector('[data-testid="remote-machine-route"]')).toBeNull()
     await click(button('Check'))
     expect(remote.check).toHaveBeenCalledWith(DID)
     await click(button('Remove'))
@@ -127,11 +128,17 @@ describe('Linux machines on the Machines page', () => {
     expect(remote.remove).toHaveBeenCalledWith(DID)
   })
 
-  it('a machine holding another helper than this build\'s says Check updates it', async () => {
-    install(state({ machines: [{ did: DID, label: 'Rocky', target: 'nick@rocky.lan:22', checked: false, lastCheck: { at: Date.now(), ok: false, detail: REMOTE_OTHER_HELPER }, helperVersion: '0.1.0', system: 'Linux x86_64', inUse: 0 }] }))
+  // The Raspberry Pi line of 2.1.3-beta.19 (the owner's Raspberry Pi 5 (arm64)
+  // and Ubuntu 24.04 (x86-64)): after the update the card said "another
+  // version" beside 0.1.0, the version both builds' helpers carry; the file is
+  // compared by its SHA-256, so the line names the file, never a version.
+  it('a machine holding another helper file than this build\'s says Check installs this one, and never claims another version', async () => {
+    install(state({ machines: [{ did: DID, label: 'Rocky', name: 'Rocky (nick@rocky.lan:22)', target: 'nick@rocky.lan:22', checked: false, lastCheck: { at: Date.now(), ok: false, detail: REMOTE_OTHER_HELPER }, helperVersion: '0.1.0', system: 'Linux x86-64', inUse: 0 }] }))
     await mount()
     const line = container.querySelector('[data-testid="remote-machine-state"]')?.textContent
-    expect(line).toBe('Not checked: this build of the app carries another version of the session helper; press Check to update it')
+    expect(line).toBe('Not checked: this build of the app carries a different session helper file; press Check to install it; until then a new tab there takes the usual SSH path, and a tab whose session the helper keeps there opens again after that Check and a Restart')
+    expect(line).not.toMatch(/version/i)
+    expect(container.querySelector('[data-testid="remote-machine-route"]')).toBeNull()
     expect(button('Check')?.disabled).toBe(false)
   })
 
@@ -139,10 +146,12 @@ describe('Linux machines on the Machines page', () => {
   // opened under the green notice of the machine's Add five minutes before,
   // so the page showed an old answer beside a new question.
   it('opening the Remove question clears the last action\'s notice', async () => {
-    const m = { did: DID, label: 'Rocky', target: 'nick@rocky.lan:22', checked: true, lastCheck: { at: Date.now(), ok: true }, helperVersion: '0.1.0', system: 'Linux x86_64', inUse: 0 }
+    const m = { did: DID, label: 'Rocky', name: 'Rocky (nick@rocky.lan:22)', target: 'nick@rocky.lan:22', checked: true, lastCheck: { at: Date.now(), ok: true }, helperVersion: '0.1.0', system: 'Linux x86-64', inUse: 0 }
     const remote = install(state({ machines: [m] }))
     await mount()
     const notice = () => container.querySelector('[data-testid="remote-notice"]')?.textContent
+    // A checked machine with the switch on says its tabs go through the helper (text smoke #32).
+    expect(container.querySelector('[data-testid="remote-machine-route"]')?.textContent).toBe(REMOTE_ROUTE_NOTE)
     await click(button('Check'))
     expect(notice()).toBe('rocky.lan passed its check.')
     await click(button('Remove'))
@@ -155,8 +164,43 @@ describe('Linux machines on the Machines page', () => {
     expect(notice()).toBe('')
   })
 
+  // PR 763 fix round 9 (the 2.1.3-beta.19 release smoke re-read, its item 5):
+  // the four notices name a machine as its label, then user@host:port
+  // (machines.ts machineName), but the Remove question still named only
+  // user@host:port. It now names it the same way, from the card's name, which
+  // main builds with that same helper. Red on 38e0edcb: the question read
+  // "Remove the session helper from nick@rocky.lan:22?".
+  it('the Remove question names the machine as the notices do: its label, then user@host:port', async () => {
+    const m = { did: DID, label: 'Rocky', name: 'Rocky (nick@rocky.lan:22)', target: 'nick@rocky.lan:22', checked: true, lastCheck: { at: Date.now(), ok: true }, helperVersion: '0.1.0', system: 'Linux x86-64', inUse: 0 }
+    install(state({ machines: [m] }))
+    await mount()
+    await click(button('Remove'))
+    const question = container.querySelector('[aria-label="Confirm removing Rocky"]')
+    expect(question?.querySelector('span')?.textContent).toBe('Remove the session helper from Rocky (nick@rocky.lan:22)? Its folder in ~/.aicc there is deleted.')
+  })
+
+  // 2.1.3-beta.19 release smoke (j03-kept-left.png): an Add's notice still sat
+  // under the card 7 minutes and other pages later. The page stays mounted
+  // while another tab is in front, so leaving it clears the notice.
+  it('leaving the page clears the last action\'s notice', async () => {
+    const m = { did: DID, label: 'Rocky', name: 'Rocky (nick@rocky.lan:22)', target: 'nick@rocky.lan:22', checked: true, lastCheck: { at: Date.now(), ok: true }, helperVersion: '0.1.0', system: 'Linux x86-64', inUse: 0 }
+    install(state({ machines: [m] }))
+    await mount()
+    const notice = () => container.querySelector('[data-testid="remote-notice"]')?.textContent
+    await click(button('Check'))
+    expect(notice()).toBe('rocky.lan passed its check.')
+    // Another page in front: the section is kept, with active false.
+    await act(async () => { root.render(<RemoteMachinesSection active={false} />) })
+    await settle()
+    expect(notice()).toBe('')
+    // Back on the page: no old answer comes back.
+    await act(async () => { root.render(<RemoteMachinesSection active />) })
+    await settle()
+    expect(notice()).toBe('')
+  })
+
   it('Remove is not offered while a tab runs through the helper there', async () => {
-    install(state({ machines: [{ did: DID, label: 'Rocky', target: 'nick@rocky.lan:22', checked: true, lastCheck: { at: Date.now(), ok: true }, helperVersion: '0.1.0', system: 'Linux x86_64', inUse: 1 }] }))
+    install(state({ machines: [{ did: DID, label: 'Rocky', name: 'Rocky (nick@rocky.lan:22)', target: 'nick@rocky.lan:22', checked: true, lastCheck: { at: Date.now(), ok: true }, helperVersion: '0.1.0', system: 'Linux x86-64', inUse: 1 }] }))
     await mount()
     expect(button('Remove')?.disabled).toBe(true)
     expect(container.querySelector('[data-testid="remote-machine-state"]')?.textContent).toContain('a tab runs through the helper here')
@@ -187,5 +231,58 @@ describe('the remote sessions switch in Settings', () => {
     expect(block).toContain('checked={settings.remoteSessionsThroughHelper === true}')
     expect(block).toContain('onChange={(e) => save({ remoteSessionsThroughHelper: e.target.checked })}')
     expect(block).toContain('{REMOTE_SWITCH_TEXT}')
+  })
+
+  // 2.1.3-beta.19 release smoke (f01-switch-on.png): the text was one
+  // 16-line paragraph, with what the preview lacks buried in its second-to-last
+  // line. Four short paragraphs now, shown apart on the Settings page.
+  it('its text is four short paragraphs, the last one saying what the preview does not take yet, shown apart', () => {
+    const parts = REMOTE_SWITCH_TEXT.split('\n\n')
+    expect(parts).toHaveLength(4)
+    expect(parts[0]).toMatch(/^Preview, off by default\. A Claude Code tab /)
+    expect(parts[1]).toMatch(/^Its status line, its hooks /)
+    expect(parts[2]).toMatch(/^A tab whose Connection is SSH /)
+    expect(parts[3]).toMatch(/^Not through the helper yet: /)
+    for (const p of parts) expect(p).not.toMatch(/\n|^\s|\s$/)
+    const page = readFileSync(resolve(__dirname, '../../../src/renderer/components/SettingsPage.tsx'), 'utf8').replace(/\r\n/g, '\n')
+    const remote = page.indexOf('data-testid="setting-remote-sessions-helper"')
+    const block = page.slice(remote, page.indexOf('</label>', remote))
+    expect(block).toMatch(/<span className="[^"]*\bwhitespace-pre-line\b[^"]*" data-testid="remote-switch-text">\{REMOTE_SWITCH_TEXT\}<\/span>/)
+  })
+})
+
+// 2.1.3-beta.19 text smoke (#34): with every saved SSH config added, the list
+// was an empty greyed box beside a greyed Add (select value '', selectedIndex
+// -1, all three options disabled '... - Added already.'). It says so now.
+describe('the Add list when no saved SSH config is left to add', () => {
+  it('every one added already: one line that says so, not an empty box; Add stays off', async () => {
+    install(state({ candidates: [
+      { configId: 'cfg-a', label: 'Rocky', target: 'nick@rocky.lan:22', addable: false, why: 'Added already.' },
+      { configId: 'cfg-b', label: 'Ubuntu', target: 'nick@ubuntu.lan:22', addable: false, why: 'Added already.' },
+    ] }))
+    await mount()
+    const select = container.querySelector('select[aria-label="Saved SSH config to add"]') as HTMLSelectElement
+    expect(select.value).toBe('')
+    expect(select.selectedOptions[0]?.textContent).toBe('No saved SSH config left to add: each one is added already, or cannot be added in this preview')
+    expect(button('Add a Linux machine')?.disabled).toBe(true)
+  })
+
+  // Second pass: a config is also left out for a password sign-in, a remote OS set to Windows or a
+  // target the helper does not take (machines.ts candidates), so the line names both cases.
+  it('one added and one with key sign-in to a Windows host: the same line, true for both', async () => {
+    install(state({ candidates: [
+      { configId: 'cfg-a', label: 'Rocky', target: 'nick@rocky.lan:22', addable: false, why: 'Added already.' },
+      { configId: 'cfg-w', label: 'Win box', target: 'nick@win.lan:22', addable: false, why: 'Its remote OS is set to Windows. This preview adds Linux machines only.' },
+    ] }))
+    await mount()
+    const select = container.querySelector('select[aria-label="Saved SSH config to add"]') as HTMLSelectElement
+    expect(select.selectedOptions[0]?.textContent).toBe('No saved SSH config left to add: each one is added already, or cannot be added in this preview')
+    expect(container.textContent).not.toContain('Every saved SSH config')
+  })
+
+  it('a list with one config still to add does not show that line', async () => {
+    install(state())
+    await mount()
+    expect(container.textContent).not.toContain('No saved SSH config left to add')
   })
 })

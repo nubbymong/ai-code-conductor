@@ -17,10 +17,10 @@ import { RemoteMachines, MACHINE_TEXT, RECORDS_UNREAD, fileStore, type MachineSt
 import type { BundledLinuxHelper } from '../../../src/main/remote-helper/manifest'
 import { routeSshTab, ROUTE_WHY } from '../../../src/main/remote-helper/route'
 import { REMOTE_OTHER_HELPER } from '../../../src/shared/remote-machines'
-import { FakeSsh, result, type ExecCall, type FakeAnswer } from './fake-ssh'
+import { DeviceTree, FakeSsh, result, type ExecCall, type FakeAnswer } from './fake-ssh'
 
 const SHA = 'a'.repeat(64)
-const HELPER: BundledLinuxHelper = { file: '/x/linux-x64/aicc-helper', version: '0.1.0', sha256: SHA, size: 4096, folder: `0.1.0-${SHA.slice(0, 12)}` }
+const HELPER: BundledLinuxHelper = { arch: 'x86_64', path: 'linux-x64/aicc-helper', file: '/x/linux-x64/aicc-helper', version: '0.1.0', sha256: SHA, size: 4096, folder: `0.1.0-${SHA.slice(0, 12)}` }
 const BYTES = Buffer.alloc(4096, 7)
 
 const CONFIGS = [
@@ -63,7 +63,7 @@ function machines(ssh: FakeSsh, store: MachineStore = memoryStore(), bundled: ()
   return new RemoteMachines({
     runner: ssh,
     store,
-    bundled: async () => ({ ok: true, helper: bundled() }),
+    bundled: async () => ({ ok: true, helpers: [bundled()] }),
     readFile: async () => BYTES,
     inUse: () => inUse,
     log: (line) => { logs.push(line) },
@@ -267,11 +267,11 @@ describe('remote machines: Add', () => {
     expect(r.message).toMatch(/not checked/)
     const [rec] = m.list()
     expect(rec.check).toMatchObject({ ok: false, detail: 'its self-test failed (pty)' })
-    const route = routeSshTab({ platform: 'win32', switchOn: true, ssh: { host: 'rocky.lan', port: 22, username: 'nick', remotePath: '~', detachable: false }, shellOnly: false, machine: m.findByTarget({ host: 'rocky.lan', port: 22, username: 'nick' }), bundledSha256: SHA })
+    const route = routeSshTab({ platform: 'win32', switchOn: true, ssh: { host: 'rocky.lan', port: 22, username: 'nick', remotePath: '~', detachable: false }, shellOnly: false, machine: m.findByTarget({ host: 'rocky.lan', port: 22, username: 'nick' }), bundledSha256: () => SHA })
     expect(route).toEqual({ via: 'today', why: ROUTE_WHY.notChecked })
   })
 
-  it('a machine that is not Linux on x86-64 is not used, and nothing is uploaded to it', async () => {
+  it('a machine that is not Linux on x86-64 or arm64 is not used, and nothing is uploaded to it', async () => {
     const ssh = new FakeSsh(linuxHost({ probe: (c) => ({ stdout: result(c.values[0], { os: 'Darwin', arch: 'arm64', home: '/Users/n', shell: '/bin/zsh', path: '/usr/bin' }) }) }))
     const m = machines(ssh)
     const q = await m.prepare(CONFIGS, 'cfg-key')
@@ -319,10 +319,25 @@ describe('remote machines: Remove', () => {
     expect(m.list()).toHaveLength(1)
   })
 
+  // 2.1.3-beta.19 section 1.2: closing the tab lets go of a session kept until
+  // it is ended, and no clock ends it, so the refusal names End on the card.
+  it('is refused while the helper there lists a session kept until it is ended, naming End on the card', async () => {
+    const { ssh, m, did } = await added()
+    ssh.host = linuxHost({ list: (c) => ({ stdout: `AICC-HASH ${c.values[0]} ok ${SHA}\n{"v":1,"sessions":[{"v":1,"session":"rm0123456789abcdef0123456789abcd","label":"tab","pid":4242,"endpoint":"/tmp/aicc-1000/rm0123456789abcdef0123456789abcd-0123456789abcdef.sock","nonce":"${'c'.repeat(32)}","helper":"0.1.0","started":1,"away":null,"lifetime":"until-ended","attached":false,"child":"running","code":null}],"removed":0,"skipped":0}\n` }) })
+    expect(await m.remove(did)).toEqual({
+      ok: false,
+      message: 'The session helper on this machine still holds a session. End it first: a session kept until it is ended is listed on this machine\'s card, with End; a plain SSH tab\'s ends when you close the tab, or two minutes after a lost connection.',
+    })
+    expect(ssh.scripts()).toEqual(['list'])
+    expect(m.list()).toHaveLength(1)
+    expect(MACHINE_TEXT.holds(2)).toBe('The session helper on this machine still holds 2 sessions. End them first: a session kept until it is ended is listed on this machine\'s card, with End; a plain SSH tab\'s ends when you close the tab, or two minutes after a lost connection.')
+  })
+
   it('lists, then runs the one removal script with this machine\'s device id and this install\'s id, and forgets it', async () => {
     const { ssh, m, did } = await added()
     const r = await m.remove(did)
-    expect(r.ok).toBe(true)
+    // Named as its card names it: the label, then user@host:port (2.1.3-beta.19 release smoke).
+    expect(r).toEqual({ ok: true, message: 'Removed the session helper from Rocky (nick@rocky.lan:22).' })
     expect(ssh.scripts()).toEqual(['list', 'remove'])
     expect(ssh.calls[1].values.slice(1)).toEqual([did, m.installId()])
     expect(m.list()).toEqual([])
@@ -394,17 +409,24 @@ describe('remote machines: Check', () => {
     if (!q.ok) throw new Error(q.message)
     await m.add(q.token)
     const at = m.list()[0].check.at
-    expect(m.views(SHA)[0]).toMatchObject({ checked: true, lastCheck: { at, ok: true } })
-    expect(m.views('b'.repeat(64))[0]).toMatchObject({ checked: false, lastCheck: { at, ok: false, detail: REMOTE_OTHER_HELPER } })
+    expect(m.views(() => SHA)[0]).toMatchObject({ checked: true, lastCheck: { at, ok: true } })
+    // PR 763 fix round 9: the card's name, for its Remove question, is the
+    // notices' (machineName): its label, then user@host:port. Red on 38e0edcb.
+    expect(m.views(() => SHA)[0].name).toBe('Rocky (nick@rocky.lan:22)')
+    expect(m.views(() => 'b'.repeat(64))[0]).toMatchObject({ checked: false, lastCheck: { at, ok: false, detail: REMOTE_OTHER_HELPER } })
     // A build with no Linux helper: nothing to compare with (the page says the build has none).
-    expect(m.views(null)[0]).toMatchObject({ checked: true })
+    expect(m.views(() => null)[0]).toMatchObject({ checked: true })
     // The routing agrees: its tabs take the usual path until Check.
-    expect(routeSshTab({ platform: 'win32', switchOn: true, ssh: { host: 'rocky.lan', port: 22, username: 'nick', remotePath: '~', detachable: false }, shellOnly: false, machine: m.list()[0], bundledSha256: 'b'.repeat(64) })).toEqual({ via: 'today', why: ROUTE_WHY.oldHelper })
+    expect(routeSshTab({ platform: 'win32', switchOn: true, ssh: { host: 'rocky.lan', port: 22, username: 'nick', remotePath: '~', detachable: false }, shellOnly: false, machine: m.list()[0], bundledSha256: () => 'b'.repeat(64) })).toEqual({ via: 'today', why: ROUTE_WHY.oldHelper })
+    // The compare is by the file's SHA-256: here the machine's helper and the
+    // build's are both 0.1.0, so neither line may claim another version.
+    expect(m.list()[0].helper.version).toBe('0.1.0')
+    expect(`${REMOTE_OTHER_HELPER} | ${ROUTE_WHY.oldHelper}`).not.toMatch(/version/i)
   })
 
   it('Check on a machine holding another helper installs this build\'s first (probe, install, commit, version, self-test), and the record takes its version, hash and folder', async () => {
     const NEW_SHA = 'c'.repeat(64)
-    const NEW: BundledLinuxHelper = { file: '/x/linux-x64/aicc-helper', version: '0.2.0', sha256: NEW_SHA, size: 4096, folder: `0.2.0-${NEW_SHA.slice(0, 12)}` }
+    const NEW: BundledLinuxHelper = { arch: 'x86_64', path: 'linux-x64/aicc-helper', file: '/x/linux-x64/aicc-helper', version: '0.2.0', sha256: NEW_SHA, size: 4096, folder: `0.2.0-${NEW_SHA.slice(0, 12)}` }
     let bundled = HELPER
     const ssh = new FakeSsh(linuxHost())
     const m = machines(ssh, memoryStore(), () => bundled)
@@ -425,8 +447,68 @@ describe('remote machines: Check', () => {
     expect(ssh.calls[2].values.slice(3)).toEqual([NEW.folder, ssh.calls[1].values[0]])
     expect(ssh.calls[3].values.slice(3)).toEqual([NEW.folder, NEW_SHA])
     expect(ssh.calls[5].values.slice(3)).toEqual([NEW.folder, NEW_SHA])
-    expect(m.list()[0].helper).toEqual({ version: '0.2.0', sha256: NEW_SHA, folder: NEW.folder })
-    expect(m.views(NEW_SHA)[0]).toMatchObject({ checked: true, helperVersion: '0.2.0' })
+    expect(m.list()[0].helper).toEqual({ path: 'linux-x64/aicc-helper', version: '0.2.0', sha256: NEW_SHA, folder: NEW.folder })
+    expect(m.views(() => NEW_SHA)[0]).toMatchObject({ checked: true, helperVersion: '0.2.0' })
+  })
+
+  // 2.1.3-beta.19 (the host lines after an update: helper/0.1.0-<earlier hash>
+  // stayed beside this build's folder until Remove). A kept session runs the
+  // helper its launch named, so the earlier folder goes only at a Check that
+  // finds no holder's record on the machine.
+  it('after an update, the earlier build\'s helper folder stays while a holder has a record and goes at a Check that finds none; this build\'s folder, sessions/, store/ and the owner stay; Remove still takes everything', async () => {
+    const NEW_SHA = 'c'.repeat(64)
+    const NEW: BundledLinuxHelper = { ...HELPER, version: '0.2.0', sha256: NEW_SHA, folder: `0.2.0-${NEW_SHA.slice(0, 12)}` }
+    let bundled = HELPER
+    const ssh = new FakeSsh(linuxHost())
+    const m = machines(ssh, memoryStore(), () => bundled)
+    const q = await m.prepare(CONFIGS, 'cfg-key')
+    if (!q.ok) throw new Error(q.message)
+    await m.add(q.token)
+    const did = m.list()[0].did
+    const SID = 'rm0123456789abcdef0123456789abcd'
+    // The machine: this install's marker, the first build's helper, a kept
+    // session (its record and its folder), the store's lock, a staging folder
+    // an upload left, and a folder of a name no helper folder has.
+    const tree = new DeviceTree(['owner', `helper/${HELPER.folder}/aicc-helper`, 'helper/.new-0123abcd/aicc-helper', 'helper/notes_1/', 'sessions/', `sessions/${SID}/settings.json`, 'store/', 'store/.lock', `store/${SID}.json`])
+    const updated = linuxHost({
+      install: (c) => ({ stdout: result(c.values[0], { hash: NEW_SHA }) }),
+      version: (c) => ({ stdout: `AICC-HASH ${c.values[0]} ok ${NEW_SHA}\naicc-helper 0.2.0\n` }),
+    })
+    ssh.host = { answer: (c) => tree.answer(c) ?? updated.answer(c) }
+    bundled = NEW
+    // The update's Check, while the kept session's holder has its record: both folders stay.
+    ssh.calls.length = 0
+    logs = []
+    expect((await m.check(did)).ok).toBe(true)
+    expect(ssh.scripts()).toEqual(['probe', 'install', 'commit', 'version', 'selftest', 'sweep'])
+    expect(tree.names('helper')).toEqual(['.new-0123abcd', HELPER.folder, NEW.folder, 'notes_1'])
+    expect(tree.names(`sessions/${SID}`)).toEqual(['settings.json'])
+    expect(logs.filter((l) => l.includes('helper folder'))).toEqual([])
+    // Its holder ends (list mode drops its record); the next Check finds none.
+    tree.paths.delete(`store/${SID}.json`)
+    ssh.calls.length = 0
+    logs = []
+    expect((await m.check(did)).ok).toBe(true)
+    expect(ssh.scripts()).toEqual(['probe', 'version', 'selftest', 'sweep'])
+    expect(ssh.calls[3].values.slice(3)).toEqual([NEW.folder, NEW_SHA])
+    expect(tree.names('helper')).toEqual(['.new-0123abcd', NEW.folder, 'notes_1'])
+    expect(tree.names('')).toEqual(['helper', 'owner', 'sessions', 'store'])
+    expect(tree.names('store')).toEqual(['.lock'])
+    expect(logs.filter((l) => l.includes('folder'))).toEqual([
+      '[remote-helper] rocky.lan: removed 1 earlier helper folder(s), as no session is held there',
+      '[remote-helper] rocky.lan: removed 1 session folder(s) whose holder is gone',
+    ])
+    // A Check with nothing earlier left removes nothing and logs no helper line.
+    logs = []
+    expect((await m.check(did)).ok).toBe(true)
+    expect(tree.names('helper')).toEqual(['.new-0123abcd', NEW.folder, 'notes_1'])
+    expect(logs.filter((l) => l.includes('folder'))).toEqual([])
+    // Remove still takes everything.
+    ssh.calls.length = 0
+    expect((await m.remove(did)).ok).toBe(true)
+    expect(ssh.scripts()).toEqual(['list', 'remove'])
+    expect([...tree.paths]).toEqual([])
+    expect(m.list()).toEqual([])
   })
 
   it('a home folder that changed stops the machine until it is added again', async () => {
@@ -480,7 +562,7 @@ describe('remote machines: no ssh on this computer', () => {
     const did = m.list()[0].did
     const c = await m.check(did)
     expect(c.ok).toBe(false)
-    expect(c.message).toMatch(/did not pass its check: rocky\.lan could not be reached: ssh could not be started on this computer/)
+    expect(c.message).toMatch(/^Rocky \(nick@rocky\.lan:22\) did not pass its check: rocky\.lan could not be reached: ssh could not be started on this computer/)
     expect(c.message).not.toMatch(/bin\/sh/)
     expect(logged()).toHaveLength(1)
     const r = await m.remove(did)

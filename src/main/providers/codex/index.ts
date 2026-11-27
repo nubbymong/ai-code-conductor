@@ -1,12 +1,14 @@
 // Codex provider package: public entry point (WP1, design 7.1). Everything
 // outside this directory imports from here; the dependency-boundary test
 // holds the deep imports at zero.
-import type { SessionProvider, SessionRunScreen, SpawnOptions, TelemetrySource, HistorySession, ProviderSpawnCommand, TelemetryOptions, HeldToolLaunch, HeldToolLaunchAnswer, HeldToolRelay, ExitKey, ResumePick } from '../types'
+import type { SessionProvider, SessionRunScreen, SpawnOptions, TelemetrySource, HistorySession, ProviderSpawnCommand, TelemetryOptions, HeldToolLaunch, HeldToolLaunchAnswer, HeldToolRelay, ExitKey, ResumePick, ProviderLocalLaunch } from '../types'
 import type { LegacyVersion, StatuslineData } from '../../../shared/types'
 import type { AllowanceReading } from '../../../shared/usage-types'
 import type { ProviderCapabilities, AuthRealm, RealmUse } from '../../../shared/providers'
 import type { ProviderPackage, ProviderPricingOperations, RealmRef } from '../core'
 import { CODEX_ENABLEMENT } from './enablement'
+import { CODEX_LOCAL_LAUNCH } from './local-launch'
+import { CODEX_LIFECYCLE } from './lifecycle'
 import { resolveCodexBinary, resolveCodexBinaryAsync, buildCodexSpawn, codexHookDataDir, sweepStaleCodexPickFolders, warmNodeExeOnPosix } from './spawn'
 import { openCodexScreen, feedCodexScreen, resizeCodexScreen, closeCodexScreen, hasCodexScreen, submitCodexText, submitCodexImage } from './session-screen'
 import { codexDoorMembers } from './run-screen-doors'
@@ -52,6 +54,7 @@ import path from 'node:path'
 import { sweepStaleFolders } from '../../stale-folder-sweep'
 import { secureOwnerOnlyFolders, readOwnerOnlyFoldersWindows } from '../../owner-only-folders'
 import { logInfo, logWarn } from '../../debug-logger'
+import { PROMPT_ENTER_DELAY_MS } from '../../session-input/enter-delay'
 
 // WP2 Codex adapter: the CLI contract, install recipes, the allowlisted
 // subprocess environment, realm paths, the CLI runner and discovery.
@@ -149,6 +152,12 @@ const CODEX_RUN_SCREEN: SessionRunScreen = {
   close: (sessionId) => closeCodexScreen(sessionId),
   ...CODEX_SCREEN_PRIMITIVES,
   ...codexDoorMembers(CODEX_SCREEN_PRIMITIVES),
+  // A held terminal's lone Enter typed while it was detached goes this long
+  // after the frame before it at the attach again (2.1.3-beta.19 section
+  // 6.2): Codex never submits a text and its Enter that arrive as one write,
+  // and submits the text then Enter 300 ms later (PB3, 0.153.4 and 0.155.1);
+  // the holder writes frames that come back to back into one read.
+  heldEnterWaitMs: PROMPT_ENTER_DELAY_MS,
 }
 
 /** WP2 PR 4: Codex's model prices (pricing.ts), offered to Tokenomics through
@@ -217,6 +226,11 @@ export class CodexProvider implements SessionProvider {
   }
 
   readonly runScreen: SessionRunScreen = CODEX_RUN_SCREEN
+
+  /** 2.1.3-beta.19 section 2: its CLI as the terminal's own program (local-launch.ts). */
+  readonly localLaunch: ProviderLocalLaunch = CODEX_LOCAL_LAUNCH
+  /** 2.1.3-beta.19 section 2: what the app makes around a local session and drops when it ends (lifecycle.ts). */
+  readonly lifecycle = CODEX_LIFECYCLE
 
   detectUiRunning(data: string): boolean {
     return detectCodexUi(data)

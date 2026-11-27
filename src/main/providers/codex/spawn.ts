@@ -592,7 +592,8 @@ export const CMD_EXE_LINE_MAX = 8_191
  *  this feature is on (codex-rs/tui/src/startup_orchestration.rs, the
  *  `daemon_exclusion.filter(|_| auto_start_daemon)` step, rust-v0.156.0 to
  *  rust-v0.171.0): with it off the launch runs embedded, as before, and
- *  without the warning. Read at every supported tag: 0.156.0 to 0.171.0 know
+ *  without the warning. Read at the tags 0.153.4 to 0.171.0 (0.172.0's, the
+ *  newest tested since 2.1.3-beta.19, was not read): 0.156.0 to 0.171.0 know
  *  the key; 0.153.4 to 0.155.1 have no such server start and no such warning,
  *  and only log a feature key they do not know (codex-rs/features/src/lib.rs
  *  `apply_map`), except under `--strict-config`, where they refuse it
@@ -604,8 +605,9 @@ export const CODEX_DAEMON_AUTO_START_OFF = 'features.daemon_auto_start=false'
 /** Whether a `-c` entry leaves Codex free to use its shared background
  *  server: the keys `config_exclusion` allows (codex-rs/tui/src/
  *  daemon_startup.rs; the same shape at every tag from rust-v0.156.0 to
- *  rust-v0.171.0, and any `features.<name>` is allowed at the newest, so no
- *  older tag allows more). Any other key makes Codex run embedded. */
+ *  rust-v0.171.0, and any `features.<name>` is allowed at rust-v0.171.0, the
+ *  newest read, so no older tag allows more). Any other key makes Codex run
+ *  embedded. */
 function codexOverrideKeepsServer(entry: string): boolean {
   const eq = entry.indexOf('=')
   const key = (eq < 0 ? entry : entry.slice(0, eq)).trim()

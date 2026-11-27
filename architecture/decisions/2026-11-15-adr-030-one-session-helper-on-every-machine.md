@@ -172,7 +172,13 @@ Rows are numbered so that "does not own" can name the owner.
   mode, no daemon), and the Machines page shows them with Re-attach and End. A
   host that needs a typed password is asked when the user opens it. A session
   already under tmux at the remote cutover stays on the old path until it
-  ends.
+  ends. From 2.1.3-beta.19 (section 1.2): a session already under tmux stays
+  on the old path until it ends, enforced by the registry tmux entry and the
+  open-tab checks. An SSH Persistent tab through the helper is held by an
+  until-ended holder (S25's second kind, `hold --until-ended`): with nobody
+  attached it ends once its program has exited; until an app has attached for
+  the first time, no sooner than the default 120 s after its start. It also
+  ends at `term.end`, or with the machine.
 - **D14 Existing users and configs.** Every saved config shape maps to the new
   path automatically, with nothing re-entered, and the mapping is tested
   against real shapes. No screen is removed before its replacement is live and
@@ -235,7 +241,7 @@ cut over.
 | Canvas rendering of project files | The project folder and the session worktree | None; inline content only | Unchanged (declared exception 3) |
 | Image paste | Focus outside the terminal: the app saves the image and types the path. Focus in the terminal: the CLI pastes it itself | Claude: a prompt asking the agent to call a tool. Plain and partner terminals: a hint only | D5: the app takes the key wherever the focus is; identical local and remote, for every session kind |
 | Snap | A third-party overlay and native add-on; rectangle and window capture | The same capture, then the tool prompt route | The helper's capture mode and our overlay; whole screen or a rectangle (D3, D4); delivered as an image paste |
-| Recent images and storyboard | Recent lists the newest files of the shared folder; a storyboard names files for the agent to fetch | The same | Per session only (parked question Q6) |
+| Recent images and storyboard | None. The Recent menu was rendered nowhere and it alone sent a storyboard; the menu, its sender and the screenshot:listRecent chain were deleted in 2.1.3-beta.19 (aicc_planning#435) | None | None planned |
 | Other file kinds and drag and drop | None | None | Not in 2.1.3 (D5) |
 | Partner terminal | A second shell PTY in main | A second ssh terminal that types a `cd` line | A second holder in the session's folder on the same machine; image paste reaches it (D6) |
 | Ask Conductor hand-off | A one-shot help session on the app machine | Not applicable | A launch spec and `submit`, on the app machine only |
@@ -286,6 +292,15 @@ slice's adversarial pass.
     StopFailure, cleaned and capped like the other labels.
 14. **Session lifetime.** The launch spec carries a lifetime kind and the
     holder runs the away clock; list mode is used on This computer too.
+    From 2.1.3-beta.19 `hold --until-ended` gives the second kind: a holder
+    with no away clock. With nobody attached it ends once its program has
+    exited; until an app has attached for the first time, no sooner than the
+    default 120 s after its start, and one never launched ends at that time
+    too. It also ends at `term.end`, or with the machine. Its record carries
+    `"away":null` and `"lifetime":"until-ended"` and list mode prints it; a
+    clock holder's record is unchanged. The same build adds the field mode,
+    one string from a JSON file under the home, which the account label of
+    aicc_planning#434 reads.
 15. **Host platforms.** Windows hosts, with the user's local application data
     folder as the install root, PowerShell one-shot commands and a named pipe
     on the host. Not a frame change; numbered so a reference to it is exact.
@@ -472,14 +487,26 @@ Remote step 1 (2.1.3-beta.17, plan sections A1 and A2, aicc_planning#410 and #41
 by default, behind a Settings switch, before P1 and P2 run. P1 (the status line through the
 helper) needs a status frame on the session's one stream, which beta.18 adds (S26: the helper's
 status mode and the `status` capability, section 3.1; routed to the tab's strip, section 3.2);
-P1 still gates any default. A helper tab's status line does not show the account label, the
-per-model weekly buckets or extra usage. The SSH shim reads and fetches these on the host with
-the host's token (statusline-gather.ts:71-96); the helper reads no credential and calls no
-network. Bringing the account label, the per-model weekly buckets and extra usage to a helper
-tab's status line is aicc_planning#434, and it gates any default, beside P1. P1 on Ubuntu 24.04
+P1 still gates any default, and beside it aicc_planning#434: the account label, the per-model
+weekly buckets and extra usage reach a helper tab before any default. From 2.1.3-beta.19
+(section 3) a helper tab's status line names its account and, where this computer holds that
+account, shows the per-model weekly buckets and extra usage. At every start of the tab, launch or attach, the app reads one
+field of the host's ~/.claude.json (oauthAccount.emailAddress) through the helper's field mode,
+never the file, and passes it through the account label's display gate; the buckets and extra
+usage are this computer's own usage reading of that account (the Account usage page's figure),
+never the host's, through the usage source the provider package hands
+(ProviderRemoteLaunch.accountUsage), so the helper still reads no credential and calls no
+network. For an account this computer does not hold, none named, or a held account with no
+current reading (a stale one counts as none), the strip says not available. A usage read on the
+host with its token is not built. P1 on Ubuntu 24.04
 (the 2.1.3-beta.18 host line, section 3.2): the strip's first value came before Claude Code's
 ready prompt in all five runs (4 to 210 ms before it in the four timed). P1 on Rocky Linux 10.2
-is owed: the host did not answer its one 8 s try in 2.1.3-beta.18. P2 (saved passwords through
+(x86-64) (2.1.3-beta.19 section 1.2's host line, SSH Persistent through the holder, Claude Code
+2.1.332): the first status update (the account label, read at launch) came before the ready
+prompt in all four runs, 953 to 2,781 ms before it, and the first with Claude Code's own values
+from 196 ms before it to 8 ms after it. On the owner's Raspberry Pi 5 (arm64) (the same
+section's Pi line, four runs): 3,429 to 4,621 ms before it, and Claude Code's own values 250 to
+470 ms after it. P2 (saved passwords through
 askpass) gates password hosts; step 1 takes key sign-in only, so a config with a saved password
 keeps the usual SSH path. Decided for step 1: a session's terminal and the helper's messages
 ride ONE `ssh -T` exec per session, the helper's `bridge` mode (`bridge --store
@@ -488,11 +515,14 @@ pipes byte for byte: no `ssh -tt` terminal and no `serve` side channel, so remot
 the local holders' one code path and no ConPTY sits on the remote terminal (protocol change 16;
 component row 3). S24, the helper half (A1): `aicc-helper bridge` (macOS and Linux) carries one
 holder connection over an `ssh -T` exec's standard input and output, byte for byte, and never
-reads a frame; the Windows installer carries the static Linux helper
-(`resources/helper/linux-x64/aicc-helper`) and `resources/helper/manifest.json` (`{v:1,
-files:[{path, version, sha256}]}`), written before packaging and listing the Linux helper only,
-because electron-builder signs `aicc-helper.exe` in the package. S24, the app half (A2; Windows
-app, Linux x86-64 hosts, key sign-in): a machine is added once on Machines from a saved SSH
+reads a frame; the Windows installer carries the static Linux helpers
+(`resources/helper/linux-x64/aicc-helper`, and from 2.1.3-beta.19
+`resources/helper/linux-arm64/aicc-helper`, built natively on GitHub's arm64 runner) and
+`resources/helper/manifest.json` (`{v:1, files:[{path, version, sha256}, {path, version,
+sha256}]}`, the x86-64 file first), written before packaging and listing the Linux helpers
+only, because electron-builder signs `aicc-helper.exe` in the package. S24, the app half (A2;
+Windows app, Linux x86-64 hosts and, from 2.1.3-beta.19, arm64 (aarch64) hosts, picked by a
+fixed table on `uname -m`, key sign-in): a machine is added once on Machines from a saved SSH
 config: a question naming the file, its size and SHA-256; the file uploaded on standard input
 into ~/.aicc/<did>; its SHA-256 there compared with the installer's manifest; version and
 self-test; a record of OS, architecture, home, login shell, the CLI's path and the PATH from one
@@ -512,8 +542,9 @@ machine records and the manifest only once the switch is saved on. The Machines 
 shows its Linux machines section with the switch on or off, and reads the manifest, the Linux
 helper and the records when it is opened (the first read makes the records file with this
 install's id). A machine holding another session
-helper than the app's reads not checked on its card, and its tabs take the usual SSH path,
-until Check installs the app's helper. 2.1.3-beta.18 section 2 (aicc_planning#430): the launch
+helper than the app's reads not checked on its card, and its new tabs take the usual SSH path,
+until Check installs the app's helper (from 2.1.3-beta.19 a tab whose session the helper keeps
+there starts nothing and names that step instead). 2.1.3-beta.18 section 2 (aicc_planning#430): the launch
 of such a tab comes from the tab's provider package (SessionProvider.remoteLaunch,
 providers/types.ts ProviderRemoteLaunch: hostReads, then launch giving the program, arguments,
 the CLI's own variables, the session's files and the status and hook keep-lists), asked through
@@ -521,6 +552,20 @@ the registry by the tab's provider id; core keeps ssh, the upload, routing, fram
 shell's -il wrapper, the host account's variables, LANG, TERM and COLORFGBG, and names no CLI
 flag or variable. The launch is the same, byte for byte (13,000-row characterisation against
 d0be048e).
+
+S25's second session kind (2.1.3-beta.19 section 1.2, aicc_planning#437): an SSH Persistent tab
+goes through the holder, kept until it is ended (hold --until-ended). The route admits it only
+when the machine's last Check read logind as not cleaning up at logout and the tab is not under
+tmux (its own last start on the usual path, a restored tab with no mark, a registry tmux entry,
+or an open usual-path tab). The saved record's remoteVia: helper marks it; a marked tab never
+takes the usual path. Close, quit and update let it go (term.detach); End sends term.end over
+its own link. A start's hold exit 3 plus list mode attaches to a launched until-ended holder and
+launches nothing; one still waiting for its launch, and a clock holder, are ended first. A hold
+whose record is of the other kind than asked is ended at once. List mode at start-up and on the
+Machines page lists kept sessions with Re-attach and End, and removes folders whose holder is
+gone (6.3). A Check's sweep removes the earlier helper folders only while the store holds no
+holder's record. The tab's first attach to its holder, launched or kept, arms its Session
+Watchdog (the fix round after the host line).
 
 Beta.18 (plan section 3.1, aicc_planning#431 and #433): the helper gains a status mode
 (`aicc-helper status`, a CLI's status line command) and a `status` capability: the holder keeps
@@ -550,6 +595,26 @@ input doors (Watchdog retry, prompt button, image, canvas marker, Ask hand-off) 
 run screen of the session's own provider (SessionRunScreen's retry, prompt, marker, image and ask
 members); Claude Code's typing rules moved into the Claude Code package unchanged; a provider
 with no member for a door takes nothing there; codexRunScreen is gone.
+
+2.1.3-beta.19 section 6.2 (aicc_planning#440; component rows 3 and 14): a held terminal's lone
+Enter typed while it was detached waits behind the frame before it at the attach again only
+when the run's provider's run screen declares that wait (SessionRunScreen.heldEnterWaitMs;
+Claude Code's and Codex's declare 300 ms, PROMPT_ENTER_DELAY_MS). HelperPty is told the
+provider whose CLI it runs (the manager's agent sessions and take-overs, a remote tab from its
+launch plan) and asks the registry; a plain terminal and a provider that declares none send
+what was queued at once.
+
+2.1.3-beta.19 section 2 (aicc_planning#439; seam audit S1's local half and S2; component rows 3
+and 14): a local session of a provider whose CLI is the terminal's own program starts by its
+package's local launch group (SessionProvider.localLaunch). The Codex package holds the launch
+the PTY manager's direct branch held, moved unchanged; the PTY manager names no provider,
+starts any provider whose package has the group and refuses one with none, and its rows keep
+Claude Code's shell launch alone until the local cutover. What the app makes around a local
+session and drops when it ends is each package's lifecycle object (SessionProvider.lifecycle:
+bind, the account a take-over asks for, take over, serve while not shown, unbind, describe);
+the take-over, the serving, the teardown's first part and the description ask the session's
+provider's object, never its name or launch style. The teardown's telemetry and registration
+parts stay core's, with the records they clean, until the local cutover.
 
 P7 result (2026-11-15, Windows test machine, the skeleton holder from #685 and a silent
 install of 2.1.3-beta.4): yes. A detached holder is not in a job object, and it and its
@@ -745,9 +810,10 @@ its working row once, right after Enter, and not while the reply streamed. The r
 same beta (aicc_planning#357, plan 2.1.3-beta.12 C3) reads 12 of the 33; the other 21, a footer
 wrapped onto two rows (8) or a warning count at the right of the hint row (13), still read
 unrecognised and are listed in the corpus test as known misreads. Since 2.1.3-beta.17 C7
-(aicc_planning#371) the reader takes the warning count as well; the corpus test now lists 6
-known misreads: the 5 recordings whose Codex 0.170.0 footer wraps (#357) and Codex 0.157.1's
-macOS mid-reply, which reads ready (#370). Not measured: a signed-in account's
+(aicc_planning#371) the reader takes the warning count as well, and since 2.1.3-beta.19 section
+4 (aicc_planning#436) the footer wrapped onto two rows as recorded; the corpus test now lists 2
+known misreads: Codex 0.157.1's and Codex 0.170.0's macOS mid-reply, which read ready (#370).
+Not measured: a signed-in account's
 screens (whether a real model gives the warning, or a hint row A2 could not reach without an
 account), the holder's own PTY code, the app's real attach path, any size but 120 by 40.
 
@@ -976,9 +1042,10 @@ a picture larger than 1024 by 768, a held session on the real CLI, macOS and Lin
 None blocks beta 4. Each default stands until the owner is asked, before the
 slice named.
 
-- **Q6** What replaces the shared screenshots folder for Recent images,
-  storyboards and vision screenshots? Default: per session only, deleted when
-  the session ends. (Before local image paste.)
+- **Q6** What replaces the shared screenshots folder for vision screenshots?
+  Default: per session only, deleted when the session ends. (Before local image
+  paste.) Recent images and storyboards left this question in 2.1.3-beta.19:
+  the menu behind both was deleted (aicc_planning#435).
 - **Q7** Is Codex on remote machines part of 2.1.3? Default: no. The helper is
   the same for every CLI, so it is one provider slice later. (Before remote
   sessions through the helper.)

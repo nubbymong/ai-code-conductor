@@ -2,7 +2,7 @@
 // reaches the Codex package only through the registered provider, never by
 // importing it. Through the REAL spawnPty (the rest of main mocked, as
 // canvas-codex-roots-spawn.test.ts does), a fake registered Codex provider
-// shows what the Codex branch takes from it:
+// shows what Codex's local launch (providers/codex/local-launch.ts) takes from it:
 //  - no launch route for the canvas launch: the skills are in the account's
 //    own skills folder, which every route lists (section 10 question 5,
 //    answered C), so the route is neither asked for nor handed on;
@@ -47,14 +47,15 @@ vi.mock('../../../src/main/logging/logging-service', () => ({ getLogSupervisor: 
 vi.mock('../../../src/main/conductor-mcp-server', () => ({ getConductorMcpPort: () => 0, registerCodexReviewSession: () => {}, registerClaudeReviewSession: () => {}, unregisterCodexReviewSession: () => {}, releaseMcpSessionProvider: () => {} }))
 // Since 2.1.3-beta.18 section 4 the doors reach the run screen's submit
 // through the Codex package's door members, built here over the fake one.
-vi.mock('../../../src/main/providers', async () => {
+vi.mock('../../../src/main/providers', async () => (await import('../../helpers/provider-package-parts')).withProviderPackageParts(await (async () => {
   const { codexDoorMembers } = await import('../../../src/main/providers/codex/run-screen-doors')
   const withDoors = (p: Record<string, unknown> | undefined): Record<string, unknown> | undefined => {
     const rs = p?.runScreen as Record<string, unknown> | undefined
     return rs?.submit ? { ...p, runScreen: { ...rs, ...codexDoorMembers(rs as never) } } : p
   }
   return { providerCapability: () => ({ enabled: true }), getProvider: () => withDoors(h.provider) }
-})
+})()))
+await (await import('../../helpers/provider-package-parts')).loadProviderPackageParts()
 vi.mock('../../../src/main/canvas/codex-canvas-launch', () => ({
   prepareCodexCanvasLaunch: (input: Record<string, unknown>) => { h.canvasInputs.push(input); return { designatedWorktree: null, guidance: null } },
 }))
@@ -100,7 +101,7 @@ const start = (): void => {
 }
 const launchLine = (): string | undefined => [...h.infos].reverse().find((l) => l.includes('Launching Codex PTY'))
 
-/** A registered Codex provider with every member the Codex branch reads. */
+/** A registered Codex provider with every member Codex's local launch reads. */
 function fullProvider(): Record<string, unknown> {
   return {
     buildSpawnCommand: () => ({ cmd: '/proven/codex', args: ['--sandbox', 'workspace-write', 'SECRETARG'], env: {}, logLine: '--sandbox workspace-write <redacted>' }),

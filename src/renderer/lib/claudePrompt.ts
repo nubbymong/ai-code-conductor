@@ -17,7 +17,10 @@
  * for the line to be typed; this answers from the session's own screen
  * (answerClaudeMarkerAsk), and main keeps the marker held until it is typed
  * or its two-minute bound passes (then the canvas is told it was not sent).
- * A marker already typed reads as typed again and is never typed twice.
+ * A marker already typed reads as typed again and is never typed twice. A
+ * marker's line and its Enter go in one write too, but into a tab through the
+ * session helper on its machine (the request's `enterApart`, 2.1.3-beta.19
+ * section 6.1): there this types the line alone and main types its Enter.
  */
 import { readClaudeScreen } from '../../shared/claude-screen'
 import { CLAUDE_MARKER_REFUSED, canvasMarkerLineOk } from '../../shared/canvas-marker-line'
@@ -64,7 +67,8 @@ export interface ClaudeTyping {
 }
 
 /**
- * Type `line` (a slash command and its newline) into the session's Claude
+ * Type `line` (a slash command or a canvas marker, and its newline; a marker
+ * for a tab through the session helper comes without it) into the session's Claude
  * Code prompt when, and only when, the live screen shows that prompt ready and
  * empty, and no line was typed into the session in the last CLAUDE_SETTLE_MS.
  * Otherwise types nothing and says why.
@@ -126,7 +130,9 @@ const idOk = (v: unknown): v is string => typeof v === 'string' && v.length > 0 
  * the session's live screen. 'probe': whether Claude Code's prompt reads
  * ready and empty, nothing typed. 'type': the line and its Enter typed, in one
  * write, only if it reads so now (typeAtClaudePrompt, which also keeps the
- * line out of a session another line was just typed into). A marker already
+ * line out of a session another line was just typed into); with `enterApart`
+ * (a tab through the session helper, 2.1.3-beta.19 section 6.1) the line
+ * alone, and main types its Enter as its own write. A marker already
  * typed (its answer reached main after main stopped waiting) reads as typed
  * for either mode and is not typed again. A request that is not well formed
  * types nothing and answers CLAUDE_MARKER_REFUSED; null when it cannot even
@@ -137,7 +143,8 @@ export function answerClaudeMarkerAsk(raw: unknown, deps: ClaudePromptDeps = def
   const ask = raw as Record<string, unknown>
   if (!idOk(ask.requestId)) return null
   const requestId = ask.requestId
-  if (!idOk(ask.sessionId) || !idOk(ask.markerId) || (ask.mode !== 'probe' && ask.mode !== 'type') || !canvasMarkerLineOk(ask.line)) {
+  if (!idOk(ask.sessionId) || !idOk(ask.markerId) || (ask.mode !== 'probe' && ask.mode !== 'type') || !canvasMarkerLineOk(ask.line)
+    || (ask.enterApart !== undefined && typeof ask.enterApart !== 'boolean')) {
     return { requestId, ok: false, reason: CLAUDE_MARKER_REFUSED }
   }
   const typedMarkers = deps.typedMarkers ?? typedMarkerIds
@@ -147,7 +154,7 @@ export function answerClaudeMarkerAsk(raw: unknown, deps: ClaudePromptDeps = def
     const refusal = claudePromptRefusal(ask.sessionId, deps)
     return refusal ? { requestId, ok: false, reason: refusal } : { requestId, ok: true }
   }
-  const typing = typeAtClaudePrompt(ask.sessionId, ask.line + MARKER_ENTER, deps)
+  const typing = typeAtClaudePrompt(ask.sessionId, ask.enterApart === true ? ask.line : ask.line + MARKER_ENTER, deps)
   if (!typing.typed) return { requestId, ok: false, reason: typing.reason }
   rememberTyped(typedMarkers, key)
   return { requestId, ok: true }

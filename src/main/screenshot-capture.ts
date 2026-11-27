@@ -10,6 +10,7 @@ import { getResourcesDirectory } from './ipc/setup-handlers'
 import { isReapableImageFile } from './clipboard-file'
 import { logInfo, logWarn } from './debug-logger'
 import { screenCaptureAllowed, type ScreenPermissionDeps } from './screenshot-permission'
+import type { SnapNotCaptured } from '../shared/snap-engine'
 
 function getScreenshotsDir(): string { return join(getResourcesDirectory(), 'screenshots') }
 
@@ -222,9 +223,10 @@ export type NewSnapOutcome =
  * handler on Windows unless Previous is chosen (src/shared/snap-engine.ts: the
  * default is the new one): it runs first, and when it answers `previous`
  * (anything it could not do, or a throw) the previous Snap takes the press.
- * Cancelled, or no desktop to capture (exit 3): nothing.
+ * Cancelled: nothing. No desktop to capture (exit 3): nothing captured, and
+ * the answer says so (2.1.3-beta.19 fix round), so the press tells the user.
  */
-export async function captureRectangle(mainWindow: BrowserWindow, permission?: ScreenPermissionDeps, newEngine?: () => Promise<NewSnapOutcome>): Promise<string | null> {
+export async function captureRectangle(mainWindow: BrowserWindow, permission?: ScreenPermissionDeps, newEngine?: () => Promise<NewSnapOutcome>): Promise<string | SnapNotCaptured | null> {
   if (captureInProgress) return null
   captureInProgress = true
   try {
@@ -238,6 +240,7 @@ export async function captureRectangle(mainWindow: BrowserWindow, permission?: S
         outcome = { kind: 'previous', why: 'an error' }
       }
       if (outcome.kind === 'saved') return outcome.file
+      if (outcome.kind === 'no-desktop') return { notCaptured: 'no-desktop' }
       if (outcome.kind !== 'previous') return null
     }
     return await runRectangleCapture()
@@ -387,47 +390,6 @@ export async function listWindows(mainWindow: BrowserWindow | null = null, permi
       }))
   } catch (err) {
     console.error('[screenshot] listWindows error:', err)
-    return []
-  }
-}
-
-/**
- * List recent screenshots with thumbnails.
- */
-export async function listRecentScreenshots(): Promise<Array<{
-  filename: string
-  path: string
-  timestamp: number
-  thumbnail: string
-}>> {
-  ensureDir()
-  try {
-    const dir = getScreenshotsDir()
-    const files = readdirSync(dir)
-      .filter(f => f.startsWith('screenshot-') && (f.endsWith('.jpg') || f.endsWith('.png')))
-
-    const entries = files.map(f => {
-      const fullPath = join(dir, f)
-      const stat = statSync(fullPath)
-      return { filename: f, path: fullPath, timestamp: stat.mtimeMs }
-    })
-
-    entries.sort((a, b) => b.timestamp - a.timestamp)
-
-    return entries.slice(0, 20).map(entry => {
-      try {
-        const img = nativeImage.createFromPath(entry.path)
-        const resized = img.resize({ width: 120, height: 90 })
-        return {
-          ...entry,
-          thumbnail: resized.toPNG().toString('base64')
-        }
-      } catch {
-        return { ...entry, thumbnail: '' }
-      }
-    })
-  } catch (err) {
-    console.error('[screenshot] listRecentScreenshots error:', err)
     return []
   }
 }

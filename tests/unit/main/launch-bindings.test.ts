@@ -17,7 +17,7 @@ const h = vi.hoisted(() => {
   const rec = (name: string) => (...args: unknown[]): void => { calls.push([name, ...args.map(show)].join(' ')) }
   return {
     calls, rec,
-    listening: true, prepareThrows: false, registers: true, canvasRefuses: false,
+    listening: true, prepareThrows: false, registers: true, canvasRefuses: false, refusalReason: 'resources-dir',
     home: '/home/u',
     account: null as null | { email: string },
     infos: [] as string[], warns: [] as string[], errors: [] as string[],
@@ -78,9 +78,11 @@ vi.mock('../../../src/main/canvas/canvas-store', () => ({
   registerCanvasUatRoot: (sid: string, cwd: string) => { h.rec('registerCanvasUatRoot')(sid, cwd); return !h.canvasRefuses },
   revokeCanvasUatRoots: (sid: string) => h.rec('revokeCanvasUatRoots')(sid),
   designateCanvasWorktreeRoot: (sid: string, wt: string) => { h.rec('designateCanvasWorktreeRoot')(sid, wt); return true },
-  canvasRootRefusalReason: () => 'resources-dir',
+  canvasRootRefusalReason: () => h.refusalReason,
   describeCanvasRootRefusal: (reason: string) => `refused as ${reason}.`,
   setCanvasRootRefusal: (sid: string, text: string) => h.rec('setCanvasRootRefusal')(sid, text),
+  // The app's own help folder, by its one spelling (help-workspace.ts helpWorkspaceDir of '/res').
+  isAppHelpFolder: (dir: string) => dir === '/res/help',
 }))
 vi.mock('../../../src/main/canvas/canvas-marker-delivery', () => ({ forgetCanvasMarkers: (sid: string) => h.rec('forgetCanvasMarkers')(sid) }))
 vi.mock('../../../src/main/canvas/codex-canvas-roots', () => ({ registerCodexCanvasRoots: (sid: string, cwd: string, wt: string | null) => h.rec('registerCodexCanvasRoots')(sid, cwd, wt) }))
@@ -90,6 +92,9 @@ vi.mock('../../../src/main/canvas/codex-guidance', () => ({
 }))
 
 const lb = await import('../../../src/main/sessions/launch-bindings')
+// 2.1.3-beta.19 section 2: each launch's bind is its package's lifecycle object's, and a Codex lease's unbind the Codex one's.
+const { CODEX_LIFECYCLE } = await import('../../../src/main/providers/codex/lifecycle')
+const { CLAUDE_LIFECYCLE } = await import('../../../src/main/providers/claude/lifecycle')
 type Ports = Parameters<typeof lb.setLaunchBindingPorts>[0]
 
 const SID = 'cx0000000000000000000001'
@@ -155,17 +160,17 @@ const run = { pid: 1 }
 const guidance = { line: 'skills' }
 
 function codexLaunch(): void {
-  lb.bindCodexLaunch({
+  CODEX_LIFECYCLE.bind({
     win: win as never, sessionId: SID, provider: provider as never,
     launch: { lease: lease as never, sessionsDir: '/realm/sessions' },
     codexCwd: '/proj/run', codexSpawnTimestamp: 1000, built: { resumeId: ID },
     resolvedCwd: '/proj/a', codexCanvas: { designatedWorktree: '/wt/a', guidance: guidance as never }, runProvider: 'codex',
-  })
+  }, lb.lifecycleCore())
 }
 
 beforeEach(() => {
   h.calls.length = 0; h.infos.length = 0; h.warns.length = 0; h.errors.length = 0
-  h.listening = true; h.prepareThrows = false; h.registers = true; h.canvasRefuses = false; h.account = null
+  h.listening = true; h.prepareThrows = false; h.registers = true; h.canvasRefuses = false; h.refusalReason = 'resources-dir'; h.account = null
   telemetry = null; sent.length = 0; destroyed = false
   ports = makePorts()
   lb.setLaunchBindingPorts(ports as unknown as Ports)
@@ -278,10 +283,10 @@ describe('a Codex launch binds each thing once, in the order pty-manager.ts made
   })
 
   it('a project folder at or above home registers no review, with the same log line', () => {
-    lb.bindCodexLaunch({
+    CODEX_LIFECYCLE.bind({
       win: win as never, sessionId: SID, provider: provider as never, launch: { lease: lease as never, sessionsDir: '/realm/sessions' },
       codexCwd: '/proj/run', codexSpawnTimestamp: 1000, built: {}, resolvedCwd: h.home, codexCanvas: { designatedWorktree: null, guidance: null }, runProvider: 'codex',
-    })
+    }, lb.lifecycleCore())
     expect(h.calls.some((c) => c.startsWith('registerClaudeReviewSession'))).toBe(false)
     expect(h.calls.at(-2)).toBe(`registerCodexCanvasRoots ${SID} ${h.home} null`)
     expect(h.calls.at(-1)).toBe(`forgetCodexSessionGuidance ${SID}`)
@@ -291,7 +296,7 @@ describe('a Codex launch binds each thing once, in the order pty-manager.ts made
 
 describe('a Claude Code launch binds each thing once, in the order pty-manager.ts made them', () => {
   it('the account and its watch, the review, the canvas root and the designated worktree, with the same log line', () => {
-    lb.bindClaudeLaunch({ sessionId: CL, resolvedProfileId: 'prof-1', claudeCwd: '/proj/resumed', resolvedCwd: '/proj/a', designatedWorktree: '/wt/a' })
+    CLAUDE_LIFECYCLE.bind({ sessionId: CL, resolvedProfileId: 'prof-1', claudeCwd: '/proj/resumed', resolvedCwd: '/proj/a', designatedWorktree: '/wt/a' }, lb.lifecycleCore())
     expect(h.calls).toEqual([
       `captureClaudeAccount ${CL} prof-1`,
       `pushAccountIdentity ${CL}`,
@@ -305,7 +310,7 @@ describe('a Claude Code launch binds each thing once, in the order pty-manager.t
   })
 
   it('a home folder registers neither the review nor the canvas root; a root the store refuses names its floor', () => {
-    lb.bindClaudeLaunch({ sessionId: CL, resolvedProfileId: undefined, claudeCwd: h.home, resolvedCwd: h.home, designatedWorktree: null })
+    CLAUDE_LIFECYCLE.bind({ sessionId: CL, resolvedProfileId: undefined, claudeCwd: h.home, resolvedCwd: h.home, designatedWorktree: null }, lb.lifecycleCore())
     expect(h.calls).toEqual([
       `captureClaudeAccount ${CL} undefined`, `pushAccountIdentity ${CL}`, `startWatchingAccountIdentity ${CL} undefined`,
       `setCanvasRootRefusal ${CL} refused as home-or-ancestor.`,
@@ -316,9 +321,24 @@ describe('a Claude Code launch binds each thing once, in the order pty-manager.t
     ])
     h.calls.length = 0; h.warns.length = 0
     h.canvasRefuses = true
-    lb.bindClaudeLaunch({ sessionId: CL, resolvedProfileId: undefined, claudeCwd: '/proj/a', resolvedCwd: '/proj/a', designatedWorktree: null })
+    CLAUDE_LIFECYCLE.bind({ sessionId: CL, resolvedProfileId: undefined, claudeCwd: '/proj/a', resolvedCwd: '/proj/a', designatedWorktree: null }, lb.lifecycleCore())
     expect(h.calls.slice(-2)).toEqual([`registerCanvasUatRoot ${CL} /proj/a`, `setCanvasRootRefusal ${CL} refused as resources-dir.`])
     expect(h.warns).toEqual([`[pty] canvas serving root NOT registered for ${CL} (resources-dir): refused as resources-dir.`])
+    // 2.1.3-beta.19 fix round: the app's own help folder (Ask Conductor), inside the resources directory,
+    // is refused by design: one line of the log, not a warning.
+    h.calls.length = 0; h.warns.length = 0; h.infos.length = 0
+    h.refusalReason = 'inside-resources-dir'
+    CLAUDE_LIFECYCLE.bind({ sessionId: CL, resolvedProfileId: undefined, claudeCwd: '/res/help', resolvedCwd: '/res/help', designatedWorktree: null }, lb.lifecycleCore())
+    expect(h.calls.slice(-1)).toEqual([`setCanvasRootRefusal ${CL} refused as inside-resources-dir.`])
+    expect(h.warns).toEqual([])
+    expect(h.infos).toContain(`[pty] canvas serving root NOT registered for ${CL} (inside-resources-dir): refused as inside-resources-dir.`)
+    // Second pass: any other folder inside the resources directory (a user's session in <resources>/CONFIG,
+    // the case the #371 floor was added for) is refused as before, and still warns.
+    h.calls.length = 0; h.warns.length = 0; h.infos.length = 0
+    CLAUDE_LIFECYCLE.bind({ sessionId: CL, resolvedProfileId: undefined, claudeCwd: '/res/CONFIG', resolvedCwd: '/res/CONFIG', designatedWorktree: null }, lb.lifecycleCore())
+    expect(h.calls.slice(-1)).toEqual([`setCanvasRootRefusal ${CL} refused as inside-resources-dir.`])
+    expect(h.warns).toEqual([`[pty] canvas serving root NOT registered for ${CL} (inside-resources-dir): refused as inside-resources-dir.`])
+    expect(h.infos.filter((l) => l.includes('canvas serving root'))).toEqual([])
   })
 })
 
@@ -375,8 +395,8 @@ describe('a session\'s end drops what its launch bound, once each, in order', ()
     ports.codexTelemetrySources.set(OTHER, other)
     for (const m of [ports.notIndexedSessions, ports.claudeTranscripts, ports.claudeFolders, ports.codexFolders]) m.set(SID, {} as never)
     ports.codexAskSessions.add(SID)
-    lb.unbindCodexLease(SID)
-    lb.unbindCodexLease(SID)
+    CODEX_LIFECYCLE.unbind(SID, lb.lifecycleCore())
+    CODEX_LIFECYCLE.unbind(SID, lb.lifecycleCore())
     expect(h.calls).toEqual(['lease.release'])
     expect(ports.codexLaunchLeases.has(SID)).toBe(false)
     h.calls.length = 0

@@ -209,8 +209,10 @@ script's header, written before measuring.
   (aicc_planning#427) ran the same recorder with `h74-scenarios.json` on
   Codex 0.172.0: GPT-6.1 Terra picked in Codex's own `/model` picker for the
   session, the idle composer, then one turn, every mark record only. Run 1 of
-  its long-prompt launch is the screen corpus's `codex172` program (ready and
-  after-reply on both ConPTYs).
+  its long-prompt launch is the screen corpus's `codex172` ready and
+  after-reply on both ConPTYs; run 1 of its short-prompt launch, whose footer
+  wraps onto two rows, is its wrapped-after-reply on both ConPTYs
+  (2.1.3-beta.19 section 4, aicc_planning#436).
 - **The console hosts, on Windows.** After each program's end its console
   hosts are counted 1, 2, 5, 10, 30 and 60 s after node-pty reported the exit,
   before anything of that run is stopped, while the next run goes on.

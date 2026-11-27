@@ -7,7 +7,8 @@
  *
  * The bridge exec (A1's `bridge` mode) is answered by `bridge`, which a test
  * sets to hand back the holder's end of a connection (a FakeHolder's), after
- * the launcher's hash line, as the real bridge would.
+ * the launcher's hash line, as the real bridge would. A bridge that finds no
+ * holder ends as ssh does: its output closes first, its exit status after.
  */
 import { EventEmitter } from 'events'
 import { PassThrough, type Duplex } from 'stream'
@@ -29,7 +30,7 @@ export interface FakeAnswer {
   code?: number
 }
 
-const NAMES: ScriptName[] = ['probe', 'install', 'commit', 'discard', 'remove', 'version', 'selftest', 'list', 'hold', 'bridge', 'reads', 'files', 'unsession', 'sweep']
+const NAMES: ScriptName[] = ['probe', 'install', 'commit', 'discard', 'remove', 'version', 'selftest', 'list', 'hold', 'bridge', 'reads', 'files', 'unsession', 'sweep', 'sessions', 'field']
 
 /** Which script and values a command line runs. */
 export function parseCommand(command: string): { script: ScriptName; values: string[] } {
@@ -57,6 +58,16 @@ export class FakeChild extends EventEmitter {
     this.killed = true
     this.finish(null, 'SIGTERM')
     return true
+  }
+  /** As ssh ends once the host's side has ended: its standard output closes
+   *  first, and its exit status (the host's) comes a moment later
+   *  (2.1.3-beta.19 section 1.2, the Rocky host line's finding 1). Ended on
+   *  this computer meanwhile (kill), it keeps the kill's. */
+  finishAfterOutput(code: number, gapMs = 20): void {
+    if (this.exitCode !== null || this.signalCode !== null) return
+    this.stdout.end()
+    this.stderr.end()
+    setTimeout(() => this.finish(code), gapMs)
   }
   finish(code: number | null, signal: string | null = null): void {
     if (this.exitCode !== null || this.signalCode !== null) return
@@ -104,7 +115,7 @@ export class FakeSsh implements SshRunner {
         if (cut) { child.finish(cut.code, cut.signal ?? null); return }
         const end = this.host.bridge?.(call, child) ?? null
         child.stdout.write(`some rc file text\nAICC-HASH ${nonce} ok ${values[4]}\n`)
-        if (!end) { child.finish(this.host.bridgeExit ?? 3); return }
+        if (!end) { child.finishAfterOutput(this.host.bridgeExit ?? 3); return }
         // The link going down cuts the holder's connection; that is not news.
         end.on('error', () => { /* the link went down */ })
         end.on('data', (b: Buffer) => child.stdout.write(b))
@@ -136,4 +147,76 @@ export class FakeSsh implements SshRunner {
 /** A result line block for a script answer. */
 export function result(nonce: string, lines: Record<string, string>, end = 'ok'): string {
   return `${Object.entries(lines).map(([k, v]) => `AICC-RESULT ${nonce} ${k} ${v}`).join('\n')}${Object.keys(lines).length ? '\n' : ''}AICC-RESULT ${nonce} end ${end}\n`
+}
+
+/**
+ * One machine's device folder (`~/.aicc/<did>`), as the paths under it (a
+ * folder with nothing in it is `<path>/`), for the cases that read what a
+ * Check or a Remove leaves there (2.1.3-beta.19: the earlier builds' helper
+ * folders). `answer` changes it as the install, commit, sweep and remove
+ * scripts do and answers as they print; any other script gets null. The
+ * sweep removes the earlier builds' folders only when its own text carries
+ * that step (scripts.ts SWEEP_EARLIER_HELPERS, its `r helpers` line), by the
+ * rule that text states. The real scripts' run on sh is
+ * tests/live/remote-helper-device.live.ts's.
+ */
+export class DeviceTree {
+  readonly paths: Set<string>
+  constructor(paths: string[]) { this.paths = new Set(paths) }
+  /** The names directly in `dir` (`''` for the device folder itself). */
+  names(dir: string): string[] {
+    const at = dir === '' ? '' : `${dir}/`
+    const out = new Set<string>()
+    for (const p of this.paths) if (p.startsWith(at) && p.length > at.length) out.add(p.slice(at.length).split('/')[0])
+    return [...out].sort()
+  }
+  private drop(prefix: string): void {
+    for (const p of [...this.paths]) if (p === prefix || p.startsWith(`${prefix}/`)) this.paths.delete(p)
+  }
+  answer(c: ExecCall): FakeAnswer | null {
+    const n = c.values[0]
+    switch (c.script) {
+      case 'install': {
+        this.paths.add(`helper/.new-${n}/aicc-helper`)
+        return null
+      }
+      case 'commit': {
+        const [, , , folder, staged] = c.values
+        this.drop(`helper/${folder}`)
+        this.drop(`helper/.new-${staged}`)
+        this.paths.add(`helper/${folder}/aicc-helper`)
+        return { stdout: result(n, {}) }
+      }
+      case 'sweep': {
+        const folder = c.values[3]
+        const lines: Record<string, string> = {}
+        if (/; r helpers \$h; /.test(scriptText('sweep'))) {
+          let h = 0
+          const held = this.names('store').some((x) => /\.json$|\.json\./.test(x))
+          if (!held) {
+            for (const v of this.names('helper')) {
+              if (v === folder || v.startsWith('.') || !/^[0-9A-Za-z.-]+$/.test(v)) continue
+              this.paths.delete(`helper/${v}/aicc-helper`)
+              // rmdir: only a folder left empty goes.
+              if (this.names(`helper/${v}`).length === 0) { this.paths.delete(`helper/${v}/`); h++ }
+            }
+          }
+          lines.helpers = String(h)
+        }
+        let swept = 0
+        for (const x of this.names('sessions')) {
+          if (this.paths.has(`store/${x}.json`)) continue
+          this.drop(`sessions/${x}`)
+          swept++
+        }
+        lines.swept = String(swept)
+        return { stdout: `AICC-HASH ${n} ok ${c.values[4]}\n${result(n, lines)}` }
+      }
+      case 'remove': {
+        this.paths.clear()
+        return { stdout: result(n, {}) }
+      }
+      default: return null
+    }
+  }
 }

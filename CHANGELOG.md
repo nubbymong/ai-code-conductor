@@ -9,7 +9,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > `src/renderer/changelog.ts`. After editing that file, run `npm run changelog`
 > (CI enforces that this file is in sync via `npm run changelog:check`).
 
-## [2.1.3-beta.18] - 2026-11-26
+## [2.1.3-beta.19] - 2026-11-27
+
+### Warnings
+- This beta series begins moving the app's background services, and over the next betas your sessions, onto one helper per machine. If you want a quiet build, stay on the stable release.
+- On Windows, choosing Save sessions at an update keeps the terminals the session helper holds running only if the new version opens within two minutes of the old one closing. The installer's pages count toward those two minutes, so finish the installer promptly.
+- On Windows, Snap takes its picture with the app's own capture and overlay by default. If a press cannot take a picture, the earlier Snap opens for that press; to use the earlier Snap every time, choose Settings, Custom Commands, Snap, Snap on Windows: Previous.
+- To go back to 2.1.3-beta.18, download its installer from the GitHub releases page and run it over this version. If you used the remote sessions preview, first End every session a machine keeps for an SSH Persistent tab (Machines page): 2.1.3-beta.18 cannot list or end one, and would start that tab again on the usual SSH path beside it.
+
+> On Windows, the remote sessions preview (off by default) now adds arm64 Linux machines, such as a Raspberry Pi, as well as x86-64 ones; keeps an SSH Persistent tab on its machine until you end it, through a quit or an update; and names a helper tab's account on its status line, with its weekly limits by model and extra usage when this computer holds that account and has a current reading for it. In a narrow pane, a Codex 0.170.0 or 0.172.0 session now takes prompt buttons and canvas notes after its first prompt when its title wraps onto a second row, and Codex up to 0.172.0 counts as tested.
+
+### Added
+- On Windows, the Machines page can now add an arm64 Linux machine, such as a Raspberry Pi 5, as well as an x86-64 one, for the remote sessions preview (off by default). The installer carries a session helper for each, and the machine's own answer picks which file is sent.
+- On Windows, a Claude Code tab through the session helper on a Linux machine you added (the remote sessions preview, off by default) now names the account it runs as. It shows the weekly limits by model and extra usage when this computer holds that account and has a current reading for it; otherwise it says they are not available and keeps the host's own five-hour and weekly bars.
+- On Windows, SSH Persistent tabs can run through the session helper too (preview, still off by default): on a Linux machine whose logind does not end your processes at logout, the session is kept on the machine until you end it. Close it with Leave running, quit or update the app, and the next start brings it back where it was, with its status line, the hook events it missed and its tools; End ends it. The Machines page lists each machine's kept sessions with Re-attach and End, also while the switch is off. A config with a session still under tmux stays on the usual SSH path until that session ends.
+- An SSH Persistent tab whose kept session has ended on its machine (for example after the machine restarts) says so at once and offers Restart, which starts a new session on the same conversation. A saved config's SSH-Persistent badge names the session helper when the helper keeps its sessions.
+
+### Fixed
+- Sessions held by the session helper on a remote Linux machine stay reachable when a clean-up of /tmp removes their connection file.
+- Session settings a quit left on a Linux machine are removed at the next start, not only at the next Check.
+- A Check on a remote machine now removes the session helper an earlier version of the app left there, when no tab runs there through the helper and no session is kept there.
+- In a narrow pane, a Codex 0.170.0 or 0.172.0 session now takes canvas notes, Ask Conductor questions, the app's own Codex commands, Watchdog retries and prompt buttons after its first prompt, when the conversation's title runs onto a second row under Codex's prompt. Before this fix, the app typed nothing there and the command bar said the prompt was not sent.
+- Codex up to version 0.172.0 now counts as tested. With such a Codex, the Set up Codex page, the Providers card and Sentinel no longer say it is newer than the versions this app was tested with, and a closed Codex account's usage card fetches a fresh reading instead of showing its last one. Before, Codex 0.172.0 got that notice.
+- With remote sessions through the session helper on (a preview, off by default), a canvas decision line typed into a Claude Code tab on a Linux machine is now sent whatever its length. Before, a line of 63 characters or more would have been left typed at the prompt (an approval line is 59 to 61 characters today).
+- With both helper switches off, a start now also removes the empty kept folder and the store folder (holding nothing, or only its lock) that an earlier run with the helper on left in the helper's folder, then that folder if it is then empty.
+- Plain terminals through the session helper again send an Enter you typed during a reconnect straight away; Claude Code and Codex sessions keep the short wait they need.
+- With remote sessions through the session helper on (a preview, off by default), the Session Watchdog now watches a Claude Code tab on a Linux machine you added, as it does a usual SSH tab: it shows its pill there and types its retry after a usage limit, an overload or a safeguard flag.
+- The Session Watchdog now types its retry into an SSH tab whose screen still shows the message you sent above Claude Code's empty prompt, and into one in manual or plan mode. Before, it read that message as an unsent draft, or the manual or plan mode footer as a screen that was not Claude Code's, and kept waiting.
+- The Session Watchdog now sends its retry whatever the length of your retry message in a Claude Code tab on this computer or over SSH, as it already did in a tab through the session helper on a Linux machine; before, a message of 63 characters or more could be typed there and not sent, and each retry added to it. In a Claude Code session on Windows it also waits while you have a message typed and not sent; before, it typed its retry onto yours and sent the two as one.
+- A retry message changed in Settings now reaches the sessions already running, from their next retry; before, only sessions started after the change used it.
+- With Claude Code and Codex sessions through the session helper on, Restart on a held Claude Code tab now carries on with its conversation, as on any other tab; before, it showed the list of earlier conversations.
+- With Codex 0.172.0 on Windows, the app reads which conversation a resumed Codex session is on from the session's own hook events, as it does for a new one; before, it set them aside, with a warning in its log.
+- On Windows, with Claude Code and Codex sessions through the session helper on, a session started after an update that kept another one running is held by the helper again; before, it ran the usual way. A tab the helper tried to hold and could not now says so in one line, before its program's output.
+- Restart pressed while the Agent Canvas, the logs or the browser is in front of a tab's terminal now starts the session at once; before, it waited until the terminal was shown again.
+- On Windows, a Snap press with no desktop to capture (a locked screen, or a session with no screen) now says so above the command bar; before, nothing happened.
+- When Claude Code reports a weekly limit and no 5-hour one, a session's status line now shows the weekly figure and its reset, and the 5-hour meter says not reported; before, both meters showed as waiting for the status line. The usage popover the Copilot meter opens reads the same way.
+- In a narrow window, a session's status line now gives these up before it cuts any rate-limit meter's label, bar or percentage: the Copilot meter, where shown, goes first, then the reset times shorten (the full time is in the meter's tooltip), then the token, cost, lines and time figures. Before, the weekly meter could be cut off at the end of the line while those still showed.
+- A session that asks for you while a page such as Machines or Settings is in front now marks its tab and its card, also when it is the session you looked at last.
+- The Feature Guide's Reference now shows each known issue as a paragraph of its own; before, the whole list ran together as one paragraph.
+
+## [2.1.3-beta.18] - 2026-11-25
 
 ### Warnings
 - This beta series begins moving the app's background services, and over the next betas your sessions, onto one helper per machine. If you want a quiet build, stay on the stable release.
@@ -2229,6 +2268,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Tab attention indicators for waiting prompts
 - Context usage tracking via statusline API
 
+[2.1.3-beta.19]: https://github.com/nubbymong/ai-code-conductor/releases/tag/v2.1.3-beta.19
 [2.1.3-beta.18]: https://github.com/nubbymong/ai-code-conductor/releases/tag/v2.1.3-beta.18
 [2.1.3-beta.17]: https://github.com/nubbymong/ai-code-conductor/releases/tag/v2.1.3-beta.17
 [2.1.3-beta.16]: https://github.com/nubbymong/ai-code-conductor/releases/tag/v2.1.3-beta.16

@@ -5,7 +5,7 @@
     "comparisons": 270,
     "rederivations": 91,
     "lookups": 20,
-    "launchStyleTests": 6,
+    "launchStyleTests": 2,
     "remoteCliTerms": 0
   },
   "files": {
@@ -81,7 +81,7 @@
       "comparisons": 18,
       "rederivations": 15,
       "lookups": 4,
-      "launchStyleTests": 4
+      "launchStyleTests": 2
     },
     "src/main/sanitize-restored-spawn-options.ts": {
       "comparisons": 2
@@ -104,9 +104,6 @@
     },
     "src/main/session-signals/status.ts": {
       "lookups": 1
-    },
-    "src/main/sessions/launch-bindings.ts": {
-      "launchStyleTests": 2
     },
     "src/main/statusline-watcher.ts": {
       "lookups": 1

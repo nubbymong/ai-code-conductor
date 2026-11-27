@@ -1,6 +1,7 @@
 import React from 'react'
 import { formatResetTime } from '../../utils/terminalFormatting'
 import { shortBucketLabel } from '../../../shared/usage-labels'
+import { RATE_LIMIT_RESET_WRAP_CLASS, RATE_LIMIT_RESET_CLASS } from '../session-strip-layout'
 
 // Slim contiguous bar instead of a row of dots. Easier to scan in
 // peripheral vision and uses less horizontal space — UX audit 2026-04-25
@@ -75,6 +76,21 @@ export function RateLimitBarNoReading({ label, resetsAt, compact }: { label: str
         aria-label={`${label} rate limit utilisation, no reading since its reset`}
       />
       {!compact && <span className="text-subtext0 tabular-nums opacity-60">--%</span>}
+    </span>
+  )
+}
+
+/**
+ * A window the status line left out of a report that gave another one (the
+ * weekly window with no 5-hour one, 2.1.3-beta.19 fix round 5): nothing is on
+ * its way, so it says so in words. No meter and no "--%", which read as
+ * waiting.
+ */
+export function RateLimitNotReported({ label, title }: { label: string; title: string }) {
+  return (
+    <span className="flex items-center gap-1.5" title={title} data-testid="rate-limit-not-reported">
+      <span className="text-subtext0 opacity-60">{`${label}:`}</span>
+      <span className="text-subtext0 opacity-60">not reported</span>
     </span>
   )
 }
@@ -154,14 +170,17 @@ function RateLimitBar({ label, pct, resets, showReset, compact }: { label: strin
     compact ? `${pctText} used` : '',
     resets ? `resets ${formatResetTime(resets)}` : '',
   ].filter(Boolean).join(' — ')
+  // PR 763 fix round 10: the label, the bar and the percentage keep their
+  // width; the reset text alone gives way, with an ellipsis, its time still
+  // in the title (session-strip-layout.ts says why it sits in a grid).
   return (
     <span
       className="flex items-center gap-1.5"
       title={title}
     >
-      <span className="text-subtext0">{compact ? shortBucketLabel(label) : `${label}:`}</span>
+      <span className="text-subtext0 shrink-0">{compact ? shortBucketLabel(label) : `${label}:`}</span>
       <span
-        className="inline-block bg-surface1 rounded-sm overflow-hidden"
+        className="inline-block bg-surface1 rounded-sm overflow-hidden shrink-0"
         style={{ width: compact ? '46px' : '64px', height: '6px' }}
         role="progressbar"
         aria-valuenow={clamped}
@@ -174,9 +193,11 @@ function RateLimitBar({ label, pct, resets, showReset, compact }: { label: strin
           style={{ width: `${clamped}%`, backgroundColor: color }}
         />
       </span>
-      {!compact && <span className="text-subtext0 tabular-nums">{pctText}</span>}
+      {!compact && <span className="text-subtext0 tabular-nums shrink-0">{pctText}</span>}
       {showReset && resets && (
-        <span className="tabular-nums" style={{ color: 'var(--text-muted)' }}>resets {formatResetTime(resets)}</span>
+        <span className={RATE_LIMIT_RESET_WRAP_CLASS}>
+          <span className={RATE_LIMIT_RESET_CLASS} style={{ color: 'var(--text-muted)' }}>resets {formatResetTime(resets)}</span>
+        </span>
       )}
     </span>
   )

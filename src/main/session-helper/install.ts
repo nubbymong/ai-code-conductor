@@ -185,16 +185,48 @@ export async function installHelperCopy(opts: { bundled: string; root: string; v
   const exe = path.join(folder, HELPER_EXE_NAME(platform))
   const placed = async (): Promise<InstalledHelper> => {
     checkedCopy = { exe, sha256: opts.sha256 }
-    return {
-      exe, folder, sha256: opts.sha256, version: opts.version,
-      conpty: await installConptyCopy({ source: opts.conptySource, folder, platform }),
-      conptySource: opts.conptySource,
-    }
+    let held: Readonly<Record<string, string>> | undefined
+    const conpty = await installConptyCopy({ source: opts.conptySource, folder, platform, onHeld: (h) => { held = h } })
+    const own = held ? await besideHeldConpty(opts, platform, held) : null
+    return own ?? { exe, folder, sha256: opts.sha256, version: opts.version, conpty, conptySource: opts.conptySource }
   }
   if (await copyMatches(exe, opts.sha256)) return placed()
   await makeCopy(opts.bundled, opts.root, folder, exe, platform)
   if (await copyMatches(exe, opts.sha256)) return placed()
   throw new InstallError('The session helper copy on this computer does not match the one installed with the app, so nothing is started through it.', 'mismatch')
+}
+
+/**
+ * 2.1.3-beta.19 fix round: a running session holds the bundled ConPTY's copy
+ * beside the helper, and this build's ConPTY differs from it (an update with a
+ * held session from before it still running: two builds' OpenConsole.exe
+ * differ), so that copy cannot be replaced now. The holder loads its ConPTY
+ * only from the `conpty` folder beside its own program, so the helper and this
+ * build's ConPTY go in a version folder of their own, named by the ConPTY's
+ * bytes too (`<version>-<12 hex>`, as every version folder), and a new
+ * terminal on the bundled ConPTY is held from there. The held copy is left as
+ * it is; the clean-up of old version folders keeps both while a holder of
+ * their version runs and removes the one not current once none does
+ * (removeOldVersionFolders). A later start with nothing holding the old copy
+ * replaces it as before. Null when that folder cannot be made or does not
+ * check: the bundled ConPTY is unavailable then, as before.
+ */
+async function besideHeldConpty(opts: { bundled: string; root: string; version: string; sha256: string; conptySource?: string | null }, platform: NodeJS.Platform, held: Readonly<Record<string, string>>): Promise<InstalledHelper | null> {
+  const key = createHash('sha256').update(['aicc-conpty-beside', opts.sha256, ...CONPTY_FILES.map((n) => held[n] ?? '')].join('\0')).digest('hex')
+  const folder = path.join(opts.root, versionFolderName(opts.version, key))
+  const exe = path.join(folder, HELPER_EXE_NAME(platform))
+  try {
+    if (!(await copyMatches(exe, opts.sha256))) {
+      await makeCopy(opts.bundled, opts.root, folder, exe, platform)
+      if (!(await copyMatches(exe, opts.sha256))) return null
+    }
+    const conpty = await installConptyCopy({ source: opts.conptySource, folder, platform, expected: held })
+    if (!conpty.available) return null
+    checkedCopy = { exe, sha256: opts.sha256 }
+    return { exe, folder, sha256: opts.sha256, version: opts.version, conpty, conptySource: opts.conptySource }
+  } catch {
+    return null
+  }
 }
 
 const conptyUnavailable = (reason: string): ConptyCopy => ({ available: false, reason })
@@ -204,8 +236,10 @@ const conptyUnavailable = (reason: string): ConptyCopy => ({ available: false, r
  * helper's version folder (or keep the copies there that match) and check
  * them. Never throws: anything that goes wrong makes only the bundled ConPTY
  * unavailable. `expected` holds the hashes taken at start, when there are any.
+ * `onHeld` hears the hashes it wanted to put in place when a running session
+ * holds the copy there (the copy is unavailable then).
  */
-async function installConptyCopy(opts: { source: string | null | undefined; folder: string; platform: NodeJS.Platform; expected?: Readonly<Record<string, string>> }): Promise<ConptyCopy> {
+async function installConptyCopy(opts: { source: string | null | undefined; folder: string; platform: NodeJS.Platform; expected?: Readonly<Record<string, string>>; onHeld?: (sha256: Readonly<Record<string, string>>) => void }): Promise<ConptyCopy> {
   if (opts.platform !== 'win32') return conptyUnavailable('the bundled ConPTY is for Windows only')
   if (opts.source === undefined) return conptyUnavailable('the bundled ConPTY was not asked for')
   if (opts.source === null) return conptyUnavailable("node-pty's bundled ConPTY was not found")
@@ -225,7 +259,10 @@ async function installConptyCopy(opts: { source: string | null | undefined; fold
     const copy: ConptyCopy = { available: true, dir, source, sha256 }
     if (await conptyCopyMatches(dir, sha256)) return copy
     const inUse = await makeConptyCopy(source, opts.folder, dir)
-    if (inUse) return inUse
+    if (inUse) {
+      opts.onHeld?.(sha256)
+      return inUse
+    }
     if (await conptyCopyMatches(dir, sha256)) return copy
     return conptyUnavailable("the bundled ConPTY's copy on this computer does not match the one installed with the app")
   } catch (err) {

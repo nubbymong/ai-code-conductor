@@ -13,22 +13,33 @@
  * (setRemoteHelperDeps, from ipc/remote-machines-handlers.ts at start-up)
  * every tab takes the usual path.
  *
+ * 2.1.3-beta.19 section 1.2: an SSH Persistent tab goes through the helper
+ * too, kept there until it is ended (route.ts). Main remembers each SSH tab's
+ * last path by app session id for the run, and is told which tabs a restore
+ * brought back (noteRestoredRemoteTabs); a tab's saved mark comes with its
+ * spawn (`remoteVia`). Such a tab's flow state names the machine that keeps
+ * it (`kept`), so the renderer marks its saved record at once. A marked tab
+ * the helper cannot take now starts nothing and says the step.
+ *
  * This file imports nothing of Electron: the window is given as the little it
  * needs.
  */
 import type { IPty } from 'node-pty'
 import { IPC } from '../../shared/ipc-channels'
-import { SSH_THROUGH_HELPER } from '../../shared/remote-machines'
+import { SSH_THROUGH_HELPER, type RemoteActionResult, type RemoteMachineSessions } from '../../shared/remote-machines'
+import type { DetachedRemote, DetachedRemoteLiveness } from '../../shared/types'
 import { DEFAULT_PROVIDER_ID, type ProviderId } from '../../shared/providers/ids'
 import { tryGetProvider } from '../providers'
 import { colorFgBgValue, resolveHostColorScheme } from '../providers/host-color-scheme'
 import type { ProviderRemoteLaunch, RemoteHostFile, RemoteLaunchOptions } from '../providers/types'
 import type { SSHOptions } from '../ssh-options'
-import { ROUTE_WHY, routeSshTab, type Route } from './route'
-import { RemoteHelperPty, remoteCwd, remoteHelperCommands, remoteLaunchSpec, remoteSessionId, type RemoteLaunchPlan } from './session'
+import { ROUTE_WHY, routeSshTab, type PersistentStanding, type Route } from './route'
+import { NoticePty, RemoteDriver, RemoteHelperPty, remoteCwd, remoteHelperCommands, remoteLaunchSpec, remoteSessionId, type RemoteLaunchPlan } from './session'
+import { listKept, machineSessions } from './kept'
+import type { HolderKind } from './scripts'
 import { HOST_READS_MAX, hostReadProblem, sessionFilesInput } from './session-files'
 import type { RemoteSignalDeps } from './signals'
-import type { RemoteMachineRecord, RemoteMachines } from './machines'
+import { machineName, type RemoteMachineRecord, type RemoteMachines } from './machines'
 import type { SshRunner } from './ssh-exec'
 
 export type { RemoteSignalDeps } from './signals'
@@ -39,8 +50,9 @@ export interface RemoteHelperDeps {
   settings: () => Record<string, unknown> | null
   machines: RemoteMachines
   runner: SshRunner
-  /** The SHA-256 the installer's manifest gives the Linux helper; null: none. */
-  bundledSha256: () => string | null
+  /** The SHA-256 the installer's manifest gives the Linux helper for an
+   *  architecture (the machine's own); null: none for it. */
+  bundledSha256: (arch: string) => string | null
   /** The system's dark preference (Electron's nativeTheme), for the theme 'system'. */
   systemPrefersDark: () => boolean
   /** What the tab was sent, for the PTY integrity count: the session id and the text's length. */
@@ -49,6 +61,24 @@ export interface RemoteHelperDeps {
   /** Where a tab's status line, hook events and tool streams go (2.1.3-beta.18
    *  section 3.2). Absent: a tab through the helper gets none of them. */
   signals?: RemoteSignalDeps
+  /** The Session Watchdog for a tab through the helper (2.1.3-beta.19 fix
+   *  round): armed once its CLI runs in its holder, fed what the tab is sent.
+   *  Absent: such a tab has none. */
+  watchdog?: RemoteWatchdogDeps
+  /** The left-running registry as saved (session-state.ts
+   *  readDetachedRemotesRegistry), read at an SSH Persistent tab's start for
+   *  its config's tmux entries (2.1.3-beta.19). Absent: none. */
+  registry?: () => readonly DetachedRemote[]
+}
+
+/** What a tab through the helper needs of the Session Watchdog
+ *  (watchdog/remote-helper-tab.ts gives it). */
+export interface RemoteWatchdogDeps {
+  /** The tab's CLI runs in its holder (its first attach): arm its Watchdog,
+   *  as a usual SSH tab's is armed at its claude-running latch. */
+  arm(sessionId: string, tab: { provider: ProviderId; shellOnly: boolean; ask: boolean; cols: number; rows: number }): void
+  /** What the tab was sent, as a usual tab's output feeds it. */
+  feed(sessionId: string, data: string): void
 }
 
 let deps: RemoteHelperDeps | null = null
@@ -61,8 +91,25 @@ export function setRemoteHelperDeps(d: RemoteHelperDeps | null): void {
 const openTabs = new Map<string, RemoteHelperPty>()
 /** Each tab whose latest start went through the helper, by app session id,
  *  until it is closed or started again: a start that failed at once (its
- *  terminal over, out of openTabs) still has no SSH flow. */
-const startedThroughHelper = new Map<string, RemoteHelperPty>()
+ *  terminal over, out of openTabs) still has no SSH flow. A marked tab that
+ *  started nothing is here too (its note is its terminal). */
+const startedThroughHelper = new Map<string, IPty>()
+/** 2.1.3-beta.19: each SSH tab's last path this run, by app session id,
+ *  until the tab is closed: `kept` through the helper until it is ended (an
+ *  SSH Persistent tab's), `clock` through it with the away clock, `today`
+ *  the usual path. */
+const lastPath = new Map<string, 'kept' | 'clock' | 'today'>()
+/** The SSH Persistent tabs whose last start took the usual path, by app
+ *  session id, with their config's id: their config is under tmux. */
+const todayTabs = new Map<string, string | undefined>()
+/** The tabs the last restore brought back (their saved mark, if any, comes
+ *  with their spawn): one with no mark reads as tmux. */
+const restoredTabs = new Set<string>()
+/** The machine that keeps each kept tab's session, by app session id, for
+ *  the flow state's catch-up. */
+const keptOn = new Map<string, string>()
+/** The kept tabs whose terminal attached at least once this run, by app session id, until the tab is closed: only such a tab, one a restore brought back, or one opened by Re-attach launches again on its conversation when its kept session is gone; a tab whose first start failed starts fresh. */
+const keptShown = new Set<string>()
 
 /** How many open tabs go through the helper on machine `did` (Remove waits for none). */
 export function remoteTabsOn(did: string): number {
@@ -78,9 +125,51 @@ export function isRemoteHelperTab(sessionId: string): boolean {
   return startedThroughHelper.has(sessionId)
 }
 
-/** The tab was closed (the renderer's kill door): its start is forgotten. */
-export function forgetRemoteHelperTab(sessionId: string): void {
+/** The tab was closed or restarted (the renderer's kill door): its start is
+ *  forgotten. A close also forgets its path (2.1.3-beta.19); a Restart keeps
+ *  it, so the tab starts again on the path it started on. */
+export function forgetRemoteHelperTab(sessionId: string, restart = false): void {
   startedThroughHelper.delete(sessionId)
+  if (restart) return
+  lastPath.delete(sessionId)
+  todayTabs.delete(sessionId)
+  restoredTabs.delete(sessionId)
+  keptOn.delete(sessionId)
+  keptShown.delete(sessionId)
+}
+
+/** The tabs a restore brought back (pty:tabsRestored, 2.1.3-beta.19): an SSH
+ *  Persistent one that starts with no mark takes the usual path. One the
+ *  renderer names with `tmuxConfigId` (a restored SSH Persistent tab with no
+ *  mark) puts its config under tmux at once, before it spawns: a restored tab
+ *  not on screen spawns only once shown, and a new tab of that config
+ *  meanwhile must not take the helper (D13: one config, one path). A forged
+ *  value can only keep a config on the usual path. */
+export function noteRestoredRemoteTabs(tabs: ReadonlyArray<{ id: string; tmuxConfigId?: string }>): void {
+  for (const t of tabs) {
+    restoredTabs.add(t.id)
+    if (t.tmuxConfigId !== undefined) todayTabs.set(t.id, t.tmuxConfigId)
+  }
+}
+
+/** The flow state main answers for a tab through the helper (its catch-up):
+ *  with the machine that keeps it, for a kept tab. */
+export function remoteHelperFlowState(sessionId: string): { state: string; kept?: { did: string } } | null {
+  if (!startedThroughHelper.has(sessionId)) return null
+  const did = keptOn.get(sessionId)
+  return did ? { state: SSH_THROUGH_HELPER, kept: { did } } : { state: SSH_THROUGH_HELPER }
+}
+
+/** The left-running entries that hold a config under tmux: a tmux one (or
+ *  one from before the field had another value) for this config, by its id,
+ *  or by its host, user and port when the entry has no config id. */
+function configUnderTmux(d: RemoteHelperDeps, configId: string | undefined, ssh: SSHOptions, sessionId: string): boolean {
+  for (const [id, cfg] of todayTabs) if (id !== sessionId && configId !== undefined && cfg === configId) return true
+  let entries: readonly DetachedRemote[] = []
+  try { entries = d.registry?.() ?? [] } catch { entries = [] }
+  return entries.some((e) => e.mux !== 'helper' && (configId !== undefined && e.configId !== undefined
+    ? e.configId === configId
+    : e.host === ssh.host && e.username === ssh.username && (e.port ?? 22) === ssh.port))
 }
 
 /** The spawn options this reads: pty-manager's own, structurally. */
@@ -89,11 +178,17 @@ export interface RemoteSpawnOptions {
   provider?: ProviderId
   ssh?: SSHOptions
   shellOnly?: boolean
+  /** An Ask Conductor tab: its Watchdog never arms (#266 MAJOR-5). */
+  isAsk?: boolean
   model?: string
   effortLevel?: string
   permissionMode?: string
   extraArgs?: string
   disableAutoMemory?: boolean
+  /** The saved config the tab was started from (2.1.3-beta.19: its tmux state). */
+  configId?: string
+  /** The tab's saved mark (2.1.3-beta.19): its session is kept by the helper. */
+  remoteVia?: 'helper'
 }
 
 /** What a window must offer for the tab's output. */
@@ -119,9 +214,10 @@ export function remoteTerminalEnv(settings: Readonly<Record<string, unknown>> | 
  * the launch again before the holder starts: ./session.ts). Throws, saying
  * why, when a host read or a session file the launch names cannot be given to
  * the host, or the launch names a variable the session helper's launch sets
- * itself; the tab then takes the usual path.
+ * itself; the tab then takes the usual path, or, when it is marked as kept
+ * by the helper, starts nothing and says the step.
  */
-export function remoteLaunchOf(via: ProviderRemoteLaunch, m: RemoteMachineRecord, options: RemoteSpawnOptions, settings: Readonly<Record<string, unknown>> | null, systemPrefersDark: () => boolean, sid: string, cols: number, rows: number, tools = false): RemoteLaunchPlan {
+export function remoteLaunchOf(via: ProviderRemoteLaunch, m: RemoteMachineRecord, options: RemoteSpawnOptions, settings: Readonly<Record<string, unknown>> | null, systemPrefersDark: () => boolean, sid: string, cols: number, rows: number, tools = false, resumes = false): RemoteLaunchPlan {
   const remotePath = options.ssh?.remotePath
   const launchOptions: RemoteLaunchOptions = {
     model: options.model,
@@ -129,7 +225,11 @@ export function remoteLaunchOf(via: ProviderRemoteLaunch, m: RemoteMachineRecord
     permissionMode: options.permissionMode,
     extraArgs: options.extraArgs,
     disableAutoMemory: options.disableAutoMemory,
-    reconnect: !!options.ssh?.reconnect,
+    // `resumes`: a marked tab whose kept session is gone launches again on
+    // its conversation (2.1.3-beta.19), as a reconnect does: one whose
+    // terminal attached this run, one a restore brought back, or one opened
+    // by Re-attach (remoteHelperPty); a tab whose first start failed starts fresh.
+    reconnect: !!options.ssh?.reconnect || resumes,
     cwd: remoteCwd(remotePath, m.home),
     settings,
     tools,
@@ -151,10 +251,12 @@ export function remoteLaunchOf(via: ProviderRemoteLaunch, m: RemoteMachineRecord
 /**
  * The SSH branch's one question: this tab through the session helper, or the
  * usual path (null)? One log line either way. Nothing here throws into the
- * spawn: records that do not read send the tab the usual way.
+ * spawn: records that do not read send the tab the usual way, or, for a tab
+ * marked as kept by the helper, start nothing and say the step (2.1.3-beta.19).
  */
 export function remoteHelperPty(win: OutputWindow, sessionId: string, options: RemoteSpawnOptions, cols: number, rows: number): IPty | null {
-  // Each start decides afresh; only one through the helper is remembered.
+  // Each start asks the route again; what it keeps from the last one is the
+  // tab's path (lastPath) and its mark, so a tab stays on the path it started on.
   startedThroughHelper.delete(sessionId)
   const d = deps
   const ssh = options.ssh
@@ -169,34 +271,80 @@ export function remoteHelperPty(win: OutputWindow, sessionId: string, options: R
   } catch {
     settings = null
   }
+  const persistent = ssh.detachable !== false
+  // A tab's mark (2.1.3-beta.19): its saved record's, or its last start's this run.
+  const marked = persistent && (options.remoteVia === 'helper' || lastPath.get(sessionId) === 'kept')
+  // Launched again on its conversation when its kept session is gone: only a
+  // marked tab that showed its session this run, was restored, or is a Re-attach.
+  const resumes = marked && (keptShown.has(sessionId) || restoredTabs.has(sessionId) || ssh.reconnect === true)
+  const startsNothing = (r: Extract<Route, { via: 'nothing' }>): IPty => {
+    d.log(`[remote-helper] ${sessionId}: nothing started, because its session is kept by the session helper and ${r.why}`)
+    const note = new NoticePty(`This tab's session is kept by the session helper on its machine, and it cannot be opened now: ${r.why}. Next: ${r.step}.`, cols, rows)
+    startedThroughHelper.set(sessionId, note)
+    // Its note reaches the tab as a helper tab's output does (counted the same way).
+    note.onData((data) => {
+      if (win.isDestroyed()) return
+      d.onOutput(sessionId, data.length)
+      win.webContents.send(`pty:data:${sessionId}`, data)
+    })
+    if (!win.isDestroyed()) win.webContents.send(`${IPC.SSH_FLOW_STATE}:${sessionId}`, { state: SSH_THROUGH_HELPER })
+    return note
+  }
+  const usualPath = (why: string): null => {
+    if (persistent) {
+      lastPath.set(sessionId, 'today')
+      todayTabs.set(sessionId, options.configId)
+    }
+    return usual(why)
+  }
   // The switch first: while it is off, the machine records and the manifest
   // are not asked for (a dormant feature makes no file and fails no spawn).
-  if (settings?.remoteSessionsThroughHelper !== true) return usual(ROUTE_WHY.off)
+  if (settings?.remoteSessionsThroughHelper !== true) {
+    const r = routeSshTab({ platform: d.platform, switchOn: false, ssh, shellOnly: options.shellOnly === true, machine: undefined, bundledSha256: () => null, standing: { marked, sessionUnderTmux: false, configUnderTmux: false } })
+    // Remembered all the same: a tab started on the usual path while the
+    // switch was off stays there when it is turned on.
+    return r.via === 'nothing' ? startsNothing(r) : usualPath(ROUTE_WHY.off)
+  }
   let route: Route
   try {
+    const standing: PersistentStanding | undefined = persistent
+      ? {
+          marked,
+          sessionUnderTmux: lastPath.get(sessionId) === 'today' || (restoredTabs.has(sessionId) && options.remoteVia !== 'helper'),
+          configUnderTmux: !marked && configUnderTmux(d, options.configId, ssh, sessionId),
+        }
+      : undefined
     route = routeSshTab({
       platform: d.platform,
       switchOn: true,
       ssh,
       shellOnly: options.shellOnly === true,
       machine: d.machines.findByTarget(ssh),
-      bundledSha256: d.bundledSha256(),
+      bundledSha256: d.bundledSha256,
+      ...(standing ? { standing } : {}),
     })
   } catch (err) {
-    return usual(`the session helper's records could not be read (${(err as Error).message})`)
+    return marked
+      ? startsNothing({ via: 'nothing', why: `the session helper's records could not be read (${(err as Error).message})`, step: 'press Check on the Machines page, then Restart' })
+      : usualPath(`the session helper's records could not be read (${(err as Error).message})`)
   }
-  if (route.via === 'today') return usual(route.why)
+  if (route.via === 'nothing') return startsNothing(route)
+  if (route.via === 'today') return usualPath(route.why)
   const m = route.machine
+  const kind: HolderKind = route.kind
   // The launch is the tab's provider's, asked through the registry by its id.
   const providerId = options.provider ?? DEFAULT_PROVIDER_ID
   const provider = tryGetProvider(providerId)
-  if (!provider?.remoteLaunch) return usual(`its provider (${provider?.displayName ?? providerId}) has no launch through the session helper`)
+  if (!provider?.remoteLaunch) {
+    const why = `its provider (${provider?.displayName ?? providerId}) has no launch through the session helper`
+    return marked ? startsNothing({ via: 'nothing', why, step: 'End it on the Machines page' }) : usualPath(why)
+  }
   let pty: RemoteHelperPty
   try {
     // The app's tools go to the tab only while it serves them (asked once, at the start).
     let tools = false
     try { tools = d.signals?.toolsServed() === true } catch { tools = false }
-    const plan = remoteLaunchOf(provider.remoteLaunch, m, { ...options, provider: providerId }, settings, d.systemPrefersDark, remoteSessionId(sessionId), cols, rows, tools)
+    const plan = remoteLaunchOf(provider.remoteLaunch, m, { ...options, provider: providerId }, settings, d.systemPrefersDark, remoteSessionId(sessionId), cols, rows, tools, resumes)
     pty = new RemoteHelperPty({
       appPtyId: sessionId,
       machine: m,
@@ -204,28 +352,50 @@ export function remoteHelperPty(win: OutputWindow, sessionId: string, options: R
       runner: d.runner,
       spec: plan.spec,
       plan,
+      kind,
       ...(d.signals ? { signals: d.signals } : {}),
       log: d.log,
     })
   } catch (err) {
-    return usual((err as Error).message)
+    const why = (err as Error).message
+    return marked ? startsNothing({ via: 'nothing', why, step: 'press Check on the Machines page, then Restart' }) : usualPath(why)
   }
-  d.log(`[remote-helper] ${sessionId}: through the session helper on ${m.user}@${m.host}:${m.port} (${m.did.slice(0, 8)}), session ${pty.sid}`)
+  d.log(`[remote-helper] ${sessionId}: through the session helper on ${m.user}@${m.host}:${m.port} (${m.did.slice(0, 8)}), session ${pty.sid}${kind === 'until-ended' ? ', kept until it is ended' : ''}`)
   openTabs.set(sessionId, pty)
   startedThroughHelper.set(sessionId, pty)
+  if (persistent) todayTabs.delete(sessionId)
+  lastPath.set(sessionId, kind === 'until-ended' ? 'kept' : 'clock')
+  if (kind === 'until-ended') keptOn.set(sessionId, m.did)
+  else keptOn.delete(sessionId)
   // The tab's SSH flow overlay hides now, also over a card the usual path
   // left on it (a Restart after the switch went on); its catch-up poll reads
-  // the same from isRemoteHelperTab.
-  if (!win.isDestroyed()) win.webContents.send(`${IPC.SSH_FLOW_STATE}:${sessionId}`, { state: SSH_THROUGH_HELPER })
+  // the same from isRemoteHelperTab. A kept tab's names its machine, so the
+  // renderer marks its saved record at this start (a crash keeps the mark).
+  if (!win.isDestroyed()) win.webContents.send(`${IPC.SSH_FLOW_STATE}:${sessionId}`, kind === 'until-ended' ? { state: SSH_THROUGH_HELPER, kept: { did: m.did } } : { state: SSH_THROUGH_HELPER })
   let over = false
   pty.onData((data) => {
     if (over || win.isDestroyed()) return
     // Counted as every other tab's output is (pty-manager's recordPtyData), so
     // the Services page's byte gap holds for this tab too.
     d.onOutput(sessionId, data.length)
+    try { d.watchdog?.feed(sessionId, data) } catch { /* the Watchdog's own */ }
     win.webContents.send(`pty:data:${sessionId}`, data)
   })
+  // 2.1.3-beta.19 fix round: the Watchdog arms once the CLI runs in the
+  // holder (the tab's first attach), as an SSH tab's: the pane is drawn by
+  // the host, so its retry needs Claude Code's own chrome on screen.
+  pty.onRunning(() => {
+    if (over) return
+    try {
+      d.watchdog?.arm(sessionId, { provider: providerId, shellOnly: options.shellOnly === true, ask: options.isAsk === true, cols: pty.cols, rows: pty.rows })
+    } catch (err) {
+      d.log(`[remote-helper] ${sessionId}: the Watchdog could not be armed (${(err as Error).message})`)
+    }
+  })
   pty.onExit(() => {
+    // An exit of its own (a link given up on); a killed one was counted at its
+    // kill, and a close's exit comes after the close forgot the tab.
+    if (!over && pty.untilEnded && pty.everShown) keptShown.add(sessionId)
     over = true
     if (openTabs.get(sessionId) === pty) openTabs.delete(sessionId)
   })
@@ -235,7 +405,78 @@ export function remoteHelperPty(win: OutputWindow, sessionId: string, options: R
     over = true
     if (openTabs.get(sessionId) === pty) openTabs.delete(sessionId)
     if (startedThroughHelper.get(sessionId) === pty) startedThroughHelper.delete(sessionId)
+    if (pty.untilEnded && pty.everShown) keptShown.add(sessionId)
     kill(signal)
   }
   return pty
+}
+
+/** One machine's sessions, by list mode (2.1.3-beta.19 section 1.2). */
+async function sessionsOn(d: RemoteHelperDeps, m: RemoteMachineRecord): Promise<RemoteMachineSessions> {
+  return machineSessions(m.did, await listKept({ runner: d.runner, installId: d.machines.installId(), log: d.log }, m))
+}
+
+/** The sessions the helper keeps on each machine named (all of them when
+ *  `dids` is absent): one list exec per machine, at once. */
+export async function listRemoteSessions(dids?: readonly string[]): Promise<RemoteMachineSessions[]> {
+  const d = deps
+  if (!d) return []
+  const machines = d.machines.list().filter((m) => !dids || dids.includes(m.did))
+  return Promise.all(machines.map((m) => sessionsOn(d, m)))
+}
+
+/** End on the Machines card: one kept session, by its machine and the
+ *  helper's session id, that no open tab holds. */
+export async function endRemoteSession(did: string, sid: string): Promise<RemoteActionResult> {
+  const d = deps
+  if (!d) return { ok: false, message: 'Remote sessions through the session helper are not available here.' }
+  const m = d.machines.get(did)
+  // A machine removed since keeps no session this app can reach: Remove is
+  // refused while its helper lists one (machines.ts remove). So there is
+  // nothing to end, and a close's End closes the tab and records no
+  // left-running entry for it (2.1.3-beta.19 final-head review).
+  if (!m) return { ok: true, message: 'That machine is no longer on this computer\'s list, so nothing is kept there for this app to end.' }
+  for (const p of openTabs.values()) if (p.sid === sid) return { ok: false, message: 'A tab shows that session. Close it there and choose End.' }
+  const listed = await listKept({ runner: d.runner, installId: d.machines.installId(), log: d.log }, m)
+  if (!listed.ok) return { ok: false, message: `Nothing was ended: ${listed.why}.` }
+  const rec = listed.sessions.find((s) => s.session === sid)
+  if (!rec) return { ok: true, message: 'That session had ended already.' }
+  const driver = RemoteDriver.forEnd({ appPtyId: rec.label, machine: m, installId: d.machines.installId(), runner: d.runner, log: d.log, ...(d.signals ? { signals: d.signals } : {}) })
+  const r = await driver.endKept(rec)
+  d.log(`[remote-helper] ${sid}: ${r.ok ? 'ended' : `not ended (${r.why})`} on ${m.host} from the Machines page`)
+  return r.ok ? { ok: true, message: `Ended the session on ${machineName(m)}.` } : { ok: false, message: `The session on ${machineName(m)} was not ended: ${r.why}.` }
+}
+
+/**
+ * End of a tab's own kept session, by its app session id (the close
+ * question's End, or Remove of a session left running): the open tab's, or,
+ * with none open, the one on machine `did` (the left-running entry's).
+ */
+export async function endRemoteTab(sessionId: string, did?: string): Promise<RemoteActionResult> {
+  const open = openTabs.get(sessionId)
+  if (open) {
+    const r = await open.end()
+    return r.ok ? { ok: true, message: 'Ended.' } : { ok: false, message: `The session was not ended: ${r.why}.` }
+  }
+  if (!did) return { ok: false, message: 'No machine keeps that session.' }
+  return endRemoteSession(did, remoteSessionId(sessionId))
+}
+
+/**
+ * A left-running entry's liveness by list mode (2.1.3-beta.19 section 1.2),
+ * for the config `target` reaches: 'verified' with the app session ids whose
+ * holder list mode names, or 'unverified' when the machine is not added or
+ * list mode did not answer (fail-open: nothing is pruned).
+ */
+export async function remoteHelperLiveness(target: { host: string; port: number; username: string }, sessionIds: readonly string[]): Promise<DetachedRemoteLiveness> {
+  const d = deps
+  const unverified: DetachedRemoteLiveness = { outcome: 'unverified', liveSessionIds: [] }
+  if (!d) return unverified
+  let m: RemoteMachineRecord | undefined
+  try { m = d.machines.findByTarget(target) } catch { m = undefined }
+  if (!m) return unverified
+  const listed = await listKept({ runner: d.runner, installId: d.machines.installId(), log: d.log }, m)
+  if (!listed.ok) return unverified
+  const held = new Set(listed.sessions.map((s) => s.session))
+  return { outcome: 'verified', liveSessionIds: sessionIds.filter((id) => held.has(remoteSessionId(id))) }
 }

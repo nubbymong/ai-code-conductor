@@ -22,7 +22,6 @@ vi.mock('../../../../src/main/screenshot-capture', () => ({
   captureRectangle: (...args: unknown[]) => captureRectangle(...args),
   captureWindow: vi.fn(),
   listWindows: vi.fn(),
-  listRecentScreenshots: vi.fn(),
   cleanupOldScreenshots: vi.fn(),
   saveSnapPicture: vi.fn(),
 }))

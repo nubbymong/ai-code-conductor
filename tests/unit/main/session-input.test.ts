@@ -11,13 +11,16 @@
 // Claude Code cases are the earlier submitLine assertions, re-pointed.
 //
 //  - submitRetry (the Watchdog's retry; 2.1.3-beta.10 section A2): a Claude
-//    Code session's is exactly what submitLine wrote for it before, and it
-//    answers nothing: the line and Enter, into a local session and into one
-//    the session helper holds (its writes become the helper's raw input
-//    frames); a repeat within 300 ms is suppressed and a line over 256 bytes
-//    is chunked, as writePty does for every submit; an SSH Persistent
+//    Code session's answers nothing: since PR 763 fix round 9 the line, then
+//    Enter as its own write PROMPT_ENTER_DELAY_MS after the line's last slice
+//    (until then the line and Enter in one write, what submitLine wrote),
+//    into a local session and into one the session helper holds (its writes
+//    become the helper's raw input frames); the same text again within
+//    300 ms is dropped, and a line over 256 bytes is chunked, as writePty
+//    does for every write, its Enter after the last slice; an SSH Persistent
 //    session's (over fake ports: a fresh copy of the module, the session
-//    wrapped in tmux) is the leave key, the line and Enter in one write. The
+//    wrapped in tmux) is the leave key and the line, then the leave key and
+//    Enter. These retry cases are red on 38e0edcb, which wrote one write. The
 //    SSH flow's own proof that such a session is wrapped, and the retry's
 //    leave key in it, is session-input-ssh.test.ts. (submitLine, which these
 //    cases were first written against, is gone since 2.1.3-beta.18 section 4:
@@ -161,10 +164,11 @@ vi.mock('electron', () => ({
 vi.mock('../../../src/main/debug-logger', () => ({ logInfo: (m: string) => { h.infos.push(m) }, logWarn: (m: string) => { h.infos.push(m) }, logError: () => {}, logDebug: () => {} }))
 vi.mock('../../../src/main/logging/logging-service', () => ({ getLogSupervisor: () => null, getTranscriptBinder: () => null }))
 vi.mock('../../../src/main/conductor-mcp-server', () => ({ getConductorMcpPort: () => 0, registerCodexReviewSession: () => {}, registerClaudeReviewSession: () => {}, unregisterCodexReviewSession: () => {}, releaseMcpSessionProvider: () => {} }))
-vi.mock('../../../src/main/providers', () => ({
+vi.mock('../../../src/main/providers', async () => (await import('../../helpers/provider-package-parts')).withProviderPackageParts(await (() => ({
   providerCapability: () => ({ enabled: true }),
   getProvider: (id: string) => (id === 'codex' ? codexProvider() : claudeProvider()),
-}))
+}))()))
+await (await import('../../helpers/provider-package-parts')).loadProviderPackageParts()
 vi.mock('../../../src/main/canvas/codex-canvas-launch', () => ({ prepareCodexCanvasLaunch: () => ({ designatedWorktree: null, guidance: null }) }))
 vi.mock('../../../src/main/canvas/claude-marker-typing', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../../src/main/canvas/claude-marker-typing')>()),
@@ -240,7 +244,7 @@ doors.claude = (await import('../../../src/main/providers/claude/run-screen')).C
 doors.codexDoorMembers = (await import('../../../src/main/providers/codex/run-screen-doors')).codexDoorMembers
 
 const { spawnPty, killPty, gracefulExitPty, isSessionWritable } = await import('../../../src/main/pty-manager')
-const { submitRetry, RETRY_CODEX_READY_WAIT_MS, submitMarker, askQuestion, handOffAskQuestion, ASK_READY_WAIT_MS, setSessionInputPorts, pasteEnvelope, sendExitKeys } = await import('../../../src/main/session-input')
+const { submitRetry, PROMPT_ENTER_DELAY_MS, RETRY_CODEX_READY_WAIT_MS, submitMarker, askQuestion, handOffAskQuestion, ASK_READY_WAIT_MS, setSessionInputPorts, pasteEnvelope, sendExitKeys } = await import('../../../src/main/session-input')
 type Run = Parameters<typeof sendExitKeys>[1]
 const { MARKER_FALLBACK_FLUSH_MS } = await import('../../../src/main/canvas/canvas-marker-queue')
 const { IPC } = await import('../../../src/shared/ipc-channels')
@@ -304,53 +308,68 @@ afterAll(() => {
   if (h.resources) { try { fs.rmSync(h.resources, { recursive: true, force: true }) } catch { /* best effort */ } }
 })
 
-describe('submitRetry: the Watchdog\'s retry into a Claude Code session is the line and Enter in one write', () => {
-  it('a local session: exactly the line and Enter, once, and no answer', async () => {
+describe('submitRetry: the Watchdog\'s retry into a Claude Code session is the line, then Enter as its own write', () => {
+  it('a local session: exactly the line, then Enter PROMPT_ENTER_DELAY_MS later, once each, and no answer', async () => {
     const term = await claudeSession()
+    vi.useFakeTimers()
     expect(submitRetry(SID, 'continue')).toBeUndefined()
-    expect(term.writes).toEqual(['continue\r'])
+    expect(term.writes).toEqual(['continue'])
+    await vi.advanceTimersByTimeAsync(PROMPT_ENTER_DELAY_MS - 1)
+    expect(term.writes).toEqual(['continue'])
+    await vi.advanceTimersByTimeAsync(1)
+    expect(term.writes).toEqual(['continue', '\r'])
+    await vi.advanceTimersByTimeAsync(2_000)
+    expect(term.writes).toEqual(['continue', '\r'])
     expect(h.submits).toEqual([])
   })
 
-  it('a session the helper holds: exactly the line and Enter, as one raw input frame, and nothing outside the helper', async () => {
+  it('a session the helper holds: the line, then Enter, as two raw input frames, and nothing outside the helper', async () => {
     const id = nextSid()
     const helper = new h.FakeHelperPty()
     h.held.set(id, helper)
     const ptysBefore = h.ptys.length
     await claudeSession(id)
     helper.frames.length = 0
+    vi.useFakeTimers()
     submitRetry(id, 'continue')
-    expect(helper.frames.map((f) => f.toString('utf8'))).toEqual(['continue\r'])
+    await vi.advanceTimersByTimeAsync(PROMPT_ENTER_DELAY_MS)
+    expect(helper.frames.map((f) => f.toString('utf8'))).toEqual(['continue', '\r'])
     expect(h.ptys.length).toBe(ptysBefore)
     expect(h.submits).toEqual([])
   })
 
-  it('a repeat within 300 ms is suppressed, as every submit is; after it, the line goes again', async () => {
+  it('the same text again within 300 ms is dropped; after it, the line goes again', async () => {
     const term = await claudeSession()
     vi.useFakeTimers()
     submitRetry(SID, 'continue')
-    vi.advanceTimersByTime(299)
+    await vi.advanceTimersByTimeAsync(299)
     submitRetry(SID, 'continue')
-    expect(term.writes).toEqual(['continue\r'])
-    vi.advanceTimersByTime(2)
+    await vi.advanceTimersByTimeAsync(1)
+    expect(term.writes).toEqual(['continue', '\r'])
+    await vi.advanceTimersByTimeAsync(1)
     submitRetry(SID, 'continue')
-    expect(term.writes).toEqual(['continue\r', 'continue\r'])
+    await vi.advanceTimersByTimeAsync(PROMPT_ENTER_DELAY_MS)
+    expect(term.writes).toEqual(['continue', '\r', 'continue', '\r'])
   })
 
-  it('a line over 256 bytes goes in 256-byte slices, 12 ms apart, whole and in order', async () => {
+  it('a line over 256 bytes goes in 256-byte slices, 12 ms apart, whole and in order, its Enter after the last slice', async () => {
     const term = await claudeSession()
     vi.useFakeTimers()
     const line = 'x'.repeat(600)
     submitRetry(SID, line)
     expect(term.writes).toEqual(['x'.repeat(256)])
-    vi.advanceTimersByTime(12)
+    await vi.advanceTimersByTimeAsync(12)
     expect(term.writes).toHaveLength(2)
-    vi.advanceTimersByTime(12)
-    expect(term.writes).toEqual(['x'.repeat(256), 'x'.repeat(256), `${'x'.repeat(88)}\r`])
+    await vi.advanceTimersByTimeAsync(12)
+    expect(term.writes).toEqual(['x'.repeat(256), 'x'.repeat(256), 'x'.repeat(88)])
+    await vi.advanceTimersByTimeAsync(PROMPT_ENTER_DELAY_MS - 1)
+    expect(term.writes).toHaveLength(3)
+    await vi.advanceTimersByTimeAsync(1)
+    expect(term.writes).toEqual(['x'.repeat(256), 'x'.repeat(256), 'x'.repeat(88), '\r'])
     expect(term.writes.join('')).toBe(`${line}\r`)
   })
 
-  it('an SSH Persistent session (wrapped in tmux): the leave key, then exactly the line and Enter, as one write', async () => {
+  it('an SSH Persistent session (wrapped in tmux): the leave key and the line, then the leave key and Enter', async () => {
     // A fresh copy of the module over fake ports: this file's sessions are
     // local, and the SSH flow that wraps one needs its own mocks
     // (session-input-ssh.test.ts).
@@ -358,12 +377,16 @@ describe('submitRetry: the Watchdog\'s retry into a Claude Code session is the l
     const fresh = await import('../../../src/main/session-input')
     const { TMUX_WHEEL_EXIT_KEY } = await import('../../../src/shared/tmux-wheel')
     const writes: Array<[string, string]> = []
+    const run = {} as never
     fresh.setSessionInputPorts({
       write: (sessionId, data) => { writes.push([sessionId, data]) },
-      run: () => undefined, tmuxWrapped: () => true, providerOf: () => 'claude', isAskSession: () => false,
+      run: () => run, tmuxWrapped: () => true, providerOf: () => 'claude', isAskSession: () => false,
     })
+    vi.useFakeTimers()
     expect(fresh.submitRetry('sshp', 'continue')).toBeUndefined()
-    expect(writes).toEqual([['sshp', `${TMUX_WHEEL_EXIT_KEY}continue\r`]])
+    expect(writes).toEqual([['sshp', `${TMUX_WHEEL_EXIT_KEY}continue`]])
+    await vi.advanceTimersByTimeAsync(fresh.PROMPT_ENTER_DELAY_MS)
+    expect(writes).toEqual([['sshp', `${TMUX_WHEEL_EXIT_KEY}continue`], ['sshp', `${TMUX_WHEEL_EXIT_KEY}\r`]])
     expect(h.submits).toEqual([])
   })
 })
@@ -768,8 +791,10 @@ describe('the ports: registered once, by the PTY manager, when it loads', () => 
     expect(() => setSessionInputPorts(other)).toThrow(/already registered/)
     // The first ports' providerOf reads the session as Claude Code's, so the
     // retry is its line and Enter, into its own terminal.
+    vi.useFakeTimers()
     submitRetry(SID, 'continue')
-    expect(term.writes).toEqual(['continue\r'])
+    await vi.advanceTimersByTimeAsync(PROMPT_ENTER_DELAY_MS)
+    expect(term.writes).toEqual(['continue', '\r'])
     expect(redirected).toEqual([])
   })
 

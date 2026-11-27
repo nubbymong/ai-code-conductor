@@ -16,7 +16,7 @@ export default function HostTransferSubTool() {
       icon={transferIcon}
       statusLabel="Available"
       statusColor="green"
-      description="Used by snap, storyboard, and clipboard paste over SSH to ferry images from the host into the session."
+      description="Used by Snap and image paste over SSH to ferry images from the host into the session."
       toolList={['fetch_host_screenshot']}
     />
   )

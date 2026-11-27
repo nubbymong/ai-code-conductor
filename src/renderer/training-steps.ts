@@ -678,7 +678,7 @@ export const trainingSteps: TrainingStep[] = [
       'A Claude Code or Codex session has **End** only. After a crash it is ended, reading **Being ended** until it is gone, and its tab resumes the conversation. On Windows, **Save sessions** at an update keeps it running: resume your sessions within five minutes of the new version opening and its tab shows the same session again',
       'With **Claude Code and Codex sessions through the session helper** on, an Insights report for a Claude Code account runs inside the helper too, and is listed as **Insights report** while it runs, with **End** only',
       'SSH tabs and their partner terminals, a terminal run as administrator, and the tabs the app opens for a sign-in or to install or update a program start as before',
-      'On Windows, the Machines page also lists the Linux machines you added for remote sessions through the session helper (preview), with Add, Check and Remove',
+      'On Windows, the Machines page also lists the Linux machines (x86-64 or arm64, a Raspberry Pi included) you added for remote sessions through the session helper (preview), with Add, Check and Remove, and the sessions each one keeps for an SSH Persistent tab, with Re-attach and End',
       'The page reads when you open it, when you come back to its tab and on **Refresh**',
     ],
     howToTrigger: [
@@ -796,7 +796,7 @@ export const trainingSteps: TrainingStep[] = [
       'Every preference you can set lives here, organised in a left rail. Sandboxed renderer + signed updates + zod-validated IPC keep the app safe; the visible knobs let you tune everything else.',
     highlights: [
       'General -- default working dir, machine name, update channel, security toggles, and the Tokenomics switch (the usage index can be switched off)',
-      'General, under Terminal -- previews, each off by default. **Plain terminals through the session helper** keeps local Terminal only tabs and local partner terminals running on Windows if the app crashes, or through an update when you choose **Save sessions**. **Claude Code and Codex sessions through the session helper** runs local Claude Code and Codex sessions inside the helper. The **Machines** page shows the helper and what it holds. On Windows a third preview, **Remote sessions through the session helper**, runs a Claude Code SSH tab to a Linux machine you added on the Machines page through the helper there, with its status line, its hooks and the Conductor\'s tools',
+      'General, under Terminal -- previews, each off by default. **Plain terminals through the session helper** keeps local Terminal only tabs and local partner terminals running on Windows if the app crashes, or through an update when you choose **Save sessions**. **Claude Code and Codex sessions through the session helper** runs local Claude Code and Codex sessions inside the helper. The **Machines** page shows the helper and what it holds. On Windows a third preview, **Remote sessions through the session helper**, runs a Claude Code SSH tab to a Linux machine you added on the Machines page through the helper there, with its status line, its hooks and the Conductor\'s tools, and keeps an SSH Persistent tab there until you end it, through a quit or an update',
       'Accounts -- the Providers card (Claude Code and Codex on or off) and every Claude and Codex account',
       'Status Line -- toggle each element of the in-terminal status bar + font + size',
       'Shortcuts -- rebind every keyboard shortcut',

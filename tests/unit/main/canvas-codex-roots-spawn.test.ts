@@ -54,7 +54,7 @@ const STALE_WT = path.join('F:', 'stale-outer', 'ccc-wt', 'deadbeefdead')
 // the PTY manager reaches it only through the registry. Since 2.1.3-beta.18
 // section 4 the doors reach its submit through the Codex package's door
 // members, built here over it.
-vi.mock('../../../src/main/providers', async () => {
+vi.mock('../../../src/main/providers', async () => (await import('../../helpers/provider-package-parts')).withProviderPackageParts(await (async () => {
   const screen = await import('../../../src/main/providers/codex/session-screen')
   const { codexDoorMembers } = await import('../../../src/main/providers/codex/run-screen-doors')
   const base = { has: screen.hasCodexScreen, submit: screen.submitCodexText }
@@ -73,7 +73,8 @@ vi.mock('../../../src/main/providers', async () => {
     },
     ingestSessionTelemetry: (_sid: string, opts: Record<string, unknown>) => { h.telemetry.push(opts); return { stop: () => {} } },
   }) }
-})
+})()))
+await (await import('../../helpers/provider-package-parts')).loadProviderPackageParts()
 vi.mock('../../../src/main/providers/claude/spawn', () => ({ resolveClaudeBinary: () => ({ cmd: 'claude', source: 'system' }), resolveHostColorScheme: () => 'dark' }))
 vi.mock('../../../src/main/vision-manager', () => ({ isGlobalVisionRunning: () => false, getGlobalVisionConfig: () => null, teardownVisionSession: () => {} }))
 vi.mock('../../../src/main/canvas/canvas-plugin', async (importOriginal) => ({ ...(await importOriginal<typeof import('../../../src/main/canvas/canvas-plugin')>()), ensureCanvasPlugin: () => null }))

@@ -452,7 +452,7 @@ export default function SettingsPage({ initialTab, onNavigateToSessions, onUpdat
                   />
                   <span>
                     Session Watchdog (auto-retry on rate limit / overload)
-                    <span className="block text-[10px] text-[var(--text-muted)]">Auto-types a retry message into a session's terminal after a rate-limit reset, an overload/server-error backoff, or a flagged-safeguard clears. Off by default. Applies to newly launched sessions.</span>
+                    <span className="block text-[10px] text-[var(--text-muted)]">Auto-types a retry message into a session's terminal after a rate-limit reset, an overload/server-error backoff, or a flagged-safeguard clears. Off by default. Turning it on applies to newly launched sessions.</span>
                   </span>
                 </label>
                 {settings.watchdog?.enabled === true && (
@@ -502,6 +502,7 @@ export default function SettingsPage({ initialTab, onNavigateToSessions, onUpdat
                         onChange={(e) => save({ watchdog: { ...DEFAULT_WATCHDOG_SETTINGS, ...(settings.watchdog || {}), retryMessage: e.target.value } })}
                         className="bg-crust/60 border border-surface0/80 rounded-lg px-3 py-2 text-sm text-text w-64 focus-ring-strong focus:border-blue/50 transition-colors"
                       />
+                      <span className="block text-[10px] text-[var(--text-muted)]">A change reaches running sessions at their next retry.</span>
                     </Field>
                     <Field label="Max retries">
                       <input
@@ -651,7 +652,7 @@ export default function SettingsPage({ initialTab, onNavigateToSessions, onUpdat
                     />
                     <span>
                       Remote sessions through the session helper (Linux, preview)
-                      <span className="block text-[10px] text-[var(--text-muted)]">{REMOTE_SWITCH_TEXT}</span>
+                      <span className="block text-[10px] text-[var(--text-muted)] whitespace-pre-line" data-testid="remote-switch-text">{REMOTE_SWITCH_TEXT}</span>
                     </span>
                   </label>
                 )}

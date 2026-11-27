@@ -20,9 +20,9 @@
 // cases here put the REAL accounts service over the REAL Claude Code and
 // Codex packages behind that question, on each platform the app runs on, so
 // the answer a Codex launch gets is the Codex package's own `session.launch`
-// declaration and not a stand-in's. They also hold the line between the two
-// launch rows at a launch: the row that runs Claude Code's launch is Claude
-// Code's alone.
+// declaration and not a stand-in's. They also hold the line at a launch: the
+// row that runs Claude Code's launch is Claude Code's alone (Codex has no row
+// since 2.1.3-beta.19 section 2: its package's local launch group starts it).
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import * as os from 'os'
 import * as path from 'path'
@@ -107,7 +107,7 @@ vi.mock('../../src/main/conductor-mcp-server', () => ({
   releaseMcpSessionProvider: () => {},
   disposeCodexReviewUsage: () => {},
 }))
-vi.mock('../../src/main/providers', () => ({
+vi.mock('../../src/main/providers', async () => (await import('../helpers/provider-package-parts')).withProviderPackageParts(await (() => ({
   providerCapability: () => ({ enabled: true }),
   getProvider: () => ({
     resolveBinary: () => ({ cmd: 'claude', source: 'system' }), // WP2 PR 4: the local launch resolves Claude through the provider
@@ -140,7 +140,8 @@ vi.mock('../../src/main/providers', () => ({
       return { stop: () => {} }
     },
   }),
-}))
+}))()))
+await (await import('../helpers/provider-package-parts')).loadProviderPackageParts()
 vi.mock('../../src/main/providers/claude/spawn', () => ({
   resolveClaudeBinary: () => ({ cmd: 'claude', source: 'system' }),
   resolveHostColorScheme: () => 'dark',
@@ -1231,7 +1232,7 @@ describe('the row that runs Claude Code\'s launch is Claude Code\'s alone (WP1.3
   // prove this can fail: let the second argument stay set once it was given.
   it('the lookup takes the rows as they are held only while the hook says so: the next rows are checked again, before the session is touched', () => {
     _setLocalLaunchStylesForTest({ ...LOCAL_LAUNCH_STYLE }, true)
-    // The app's own rows, taken as they are held, start each provider by its own row.
+    // The app's own rows, taken as they are held: Claude Code's row stays its own, and Codex, with no row, is looked up as the app looks it up and started by its package's local launch group.
     start(launch('a'))
     expect(h.ptys.map((pty) => pty.cmd)).toEqual(['/proven/a/codex'])
     _setLocalLaunchStylesForTest({ claude: LOCAL_LAUNCH_STYLE.claude, codex: LOCAL_LAUNCH_STYLE.claude })

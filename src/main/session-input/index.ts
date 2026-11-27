@@ -5,7 +5,9 @@
 // Conductor's question on Codex (askQuestion, handOffAskQuestion), and nowhere
 // else. A Claude Code marker is the one main does not type itself: the
 // Claude Code package hands it to canvas/claude-marker-typing.ts, which has
-// the renderer type it at main's request.
+// the renderer type it at main's request (in a tab through the session helper
+// on its machine the renderer types the line alone, and the package types its
+// Enter through the write port: 2.1.3-beta.19 section 6.1).
 // tests/unit/main/session-input-ownership.test.ts holds every other place in
 // main that types into a session to a shrinking allow-list.
 //
@@ -65,7 +67,8 @@
 // retry is typed, written at submitRetry, and nothing else said below. Since
 // the 2.1.3-beta.18 fix round a tab through the session helper on its machine
 // gets the retry's Enter as its own write (RunScreenTyping.wholeWrites),
-// written at submitRetry too.
+// written at submitRetry too, and since PR 763 fix round 9 every Claude Code
+// tab does.
 //
 // Each function's body moved here from the PTY manager as it was: nothing
 // typed, its order or its timing changed, and no queue, delay or check added,
@@ -106,7 +109,7 @@ import { logInfo } from '../debug-logger'
 import { PasteQueue } from '../paste-queue'
 import { runChunkedWrite, WRITE_CHUNK_SIZE, WRITE_CHUNK_DELAY } from '../pty-chunked-write'
 import { isRemoteHelperTab } from '../remote-helper'
-import { PROMPT_ENTER_DELAY_MS } from './enter-delay'
+import { PROMPT_ENTER_DELAY_MS, REPEAT_WINDOW_MS } from './enter-delay'
 
 /** What the PTY manager lends this module, registered when it loads. */
 export interface SessionInputPorts {
@@ -239,15 +242,18 @@ export const RETRY_CODEX_READY_WAIT_MS = 5_000
  *   is typed: an incident that is over leaves the retry untyped (PR #746
  *   review).
  * - A Claude Code session's (on this computer, held by the session helper,
- *   or over SSH) is the leave key on an SSH Persistent session, then the
- *   line and Enter, in one write, and
- *   answers nothing. It is typed at once, as the Watchdog decides, so
- *   `stillWanted` has nothing to guard there. In a tab through the session
- *   helper on its machine (2.1.3-beta.18 fix round) the Enter is its own
- *   write PROMPT_ENTER_DELAY_MS after the line's last slice, and only while
- *   the run is still the one the line went to, as a prompt button's Send
- *   goes: there a line and its Enter in one write reach Claude Code as one
- *   read, and in a read of 64 characters or more the Enter stays in the text.
+ *   or over SSH) is the line, then Enter as its own write
+ *   PROMPT_ENTER_DELAY_MS after the line's last slice, and only while the run
+ *   is still the one the line went to, as a prompt button's Send goes; on an
+ *   SSH Persistent session each write starts with the leave key. It answers
+ *   nothing. It is typed at once, as the Watchdog decides, so `stillWanted`
+ *   has nothing to guard there; the same text asked again within 300 ms is
+ *   dropped. Claude Code takes a control character as a key only in a read
+ *   shorter than 64 characters, so a line and its Enter in one write that
+ *   reached it as one read stayed typed and unsent: first seen in a tab
+ *   through the session helper on its machine (split in the 2.1.3-beta.18
+ *   fix round), then on a local Windows tab (every tab split in PR 763 fix
+ *   round 9).
  * - A session whose provider has no retry rule (or no provider, or none
  *   registered) gets nothing typed, one log line, and the answer not
  *   delivered (`session-gone`), so the Watchdog logs it.
@@ -270,12 +276,14 @@ export function submitRetry(sessionId: string, text: string, stillWanted?: () =>
 
 /** #333: how long a prompt button's Enter follows the last slice of its text
  *  (the delay the renderer's Codex rule uses, codexComposer.ts). Set in
- *  ./enter-delay.ts, which the session helper's terminal reads too. */
+ *  ./enter-delay.ts, which the Claude Code and Codex packages' run screens
+ *  read too (the wait their held terminals' queued lone Enter keeps). */
 export { PROMPT_ENTER_DELAY_MS }
 /** #333: the same text pressed again for a session within this long is
  *  dropped (the window of writePty's duplicate guard, which a write that does
- *  not end in Enter no longer reaches). */
-export const PROMPT_REPEAT_WINDOW_MS = 300
+ *  not end in Enter no longer reaches). Set in ./enter-delay.ts, the one
+ *  value Claude Code's run screen drops a repeated retry by too. */
+export const PROMPT_REPEAT_WINDOW_MS = REPEAT_WINDOW_MS
 /** #333: how long a Codex session's prompt button waits for Codex's ready,
  *  empty composer before it answers busy. */
 export const PROMPT_CODEX_READY_WAIT_MS = 5_000
@@ -580,7 +588,10 @@ export function submitImage(sessionId: string, imagePath: string, sentence: stri
  * the chain drops untyped (held past its bound, its run ended) is told to
  * its canvas by the chain itself. `canvasId`, the canvas the marker was
  * filed on when the caller named one, goes with the line, so the same words
- * filed on two canvases stay two markers.
+ * filed on two canvases stay two markers. In a tab through the session
+ * helper on its machine (RunScreenTyping.wholeWrites, 2.1.3-beta.19 section
+ * 6.1) its Enter is its own write, PROMPT_ENTER_DELAY_MS after the line, and
+ * only while the run is still the one the line went to, as the retry's is.
  *
  * Since 2.1.3-beta.18 section 4 each of those is the marker member of the
  * run screen of the provider that runs the session, handed the marker

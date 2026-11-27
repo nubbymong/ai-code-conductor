@@ -145,7 +145,9 @@ describe('ci.yml: the Remote helper e2e job only reads, runs its file once, and 
     const write = step('Write the helper\'s manifest as for the installer')
     const lines = String(write.run).trim().split('\n').map((l) => l.trim())
     expect(lines).toContain('set -euo pipefail')
-    expect(lines).toContain('node scripts/write-helper-manifest.mjs')
+    // It builds the x86-64 helper only, so the manifest lists what it has (2.1.3-beta.19: a package lists both).
+    expect(lines).toContain('node scripts/write-helper-manifest.mjs --only-present')
+    expect(lines.filter((l) => l.includes('write-helper-manifest'))).toHaveLength(1)
     expect(lines).toContain('cp helper/target/helper-manifest/manifest.json helper/target/remote-helper-e2e/manifest.json')
     expect(String(write.run)).not.toMatch(/\|\||continue-on-error|true\b/)
     expect(MANIFEST_SOURCE).toBe('helper/target/helper-manifest/manifest.json')

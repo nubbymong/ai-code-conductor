@@ -980,7 +980,7 @@ export default function Sidebar({ currentView, onViewChange, collapsed, onShowAc
         key={session.id}
         session={session}
         isActive={activeSessionId === session.id && currentView === 'sessions'}
-        needsAttention={!!session.needsAttention && activeSessionId !== session.id}
+        needsAttention={!!session.needsAttention && !(activeSessionId === session.id && currentView === 'sessions')}
         isRenaming={renamingSessionId === session.id}
         renameValue={sessionRenameValue}
         renameRef={sessionRenameRef}

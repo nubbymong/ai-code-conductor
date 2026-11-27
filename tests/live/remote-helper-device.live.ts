@@ -22,10 +22,20 @@
  *                           a line printed by ~/.bashrc, and AICC_RC_MARK and a
  *                           `claude` on PATH that only an interactive login shell sees
  *   REMOTE_HELPER_OUT       a folder for the readings (optional)
+ *   REMOTE_HELPER_OTHER_BIN, REMOTE_HELPER_OTHER_MANIFEST
+ *                           another build of the helper (the same source at
+ *                           another version) and its manifest, for the attach
+ *                           from a bridge of another build (2.1.3-beta.19);
+ *                           on the CI runner, when not given, the file builds
+ *                           it itself from helper/ with the job's toolchain
  *
  * In order: Add (the question, then probe, upload by standard input, the hash
  * against the manifest, version, self-test); a second install's Remove
- * refused by the owner marker; a session holding the fake CLI through the
+ * refused by the owner marker; (2.1.3-beta.19 section 3) a tab's start
+ * reading its account through the helper's field mode beside its host reads,
+ * from a file of the run's own in the device folder: the string at the key,
+ * also with a $HOME reached through a link above it, a link followed,
+ * nothing for a missing key or file; a session holding the fake CLI through the
  * login shell on the launch a Claude Code tab gets from its provider package
  * (bytes in, output out, what the rc file exported, the package's CLI
  * variable and the terminal's light or dark scheme; from 2.1.3-beta.18, its
@@ -56,12 +66,28 @@
  * its own tab only; each closed tab's hook state ended once, for its own id;
  * a running tab's folder kept by its end's removal while its holder has a
  * record (`held`), and a Check that removes a session folder whose holder is
- * gone and keeps the running tab's;
- * each closed tab's holder ended (term.end); Remove; nothing left under ~/.aicc and no helper process of the
+ * gone and keeps the running tab's; (2.1.3-beta.19 section 6.3) the list the
+ * app takes at start-up doing the same;
+ * each closed tab's holder ended (term.end);
+ * (2.1.3-beta.19 section 1.2, with section 1.1's helper) a 3 s clock session
+ * ended by its clock, and an until-ended one that outlives it with no
+ * connection, stays listed as until-ended, attaches again with its replay
+ * and launches nothing (the host reads and the account read run again),
+ * takes a status, a hook event and a tool call, and is
+ * ended by End (term.end over a link of its own, then its folder); an
+ * until-ended one whose holder's tree is killed on the host, which the tab
+ * says is over at its first try and the list then names no more; a list and
+ * an attach to an until-ended holder from a bridge of another build (an app
+ * update that changed the helper: a second build of the same source at another
+ * version, REMOTE_HELPER_OTHER_BIN and REMOTE_HELPER_OTHER_MANIFEST or, on the
+ * CI runner, built by this file, installed by a Check as an update's would),
+ * the first build's helper folder kept by that Check while its holder has a
+ * record, and removed by the next Check once none has (2.1.3-beta.19);
+ * Remove; nothing left under ~/.aicc and no helper process of the
  * run left. The test's own execs read only what their command prints (an rc
  * file prints first).
  */
-import { describe, it, expect, beforeAll, afterAll } from 'vitest'
+import { describe, it, expect, beforeAll, afterAll, onTestFinished } from 'vitest'
 import { spawn, spawnSync, type ChildProcess } from 'child_process'
 import * as fs from 'fs'
 import * as os from 'os'
@@ -72,6 +98,10 @@ import { RemoteHelperPty, remoteLaunchSpec, remoteSessionId } from '../../src/ma
 import { remoteLaunchOf, type RemoteSignalDeps } from '../../src/main/remote-helper'
 import { claudeRemoteLaunch } from '../../src/main/providers/claude/remote-launch'
 import { readBundledLinuxHelper, type BundledLinuxHelper } from '../../src/main/remote-helper/manifest'
+import { listKept, untilEnded } from '../../src/main/remote-helper/kept'
+import { readRecord } from '../../src/main/session-helper/protocol'
+import { fieldAnswerOf, readHostForStart, type HostAccountRead } from '../../src/main/remote-helper/host-reads'
+import { scriptCommand } from '../../src/main/remote-helper/scripts'
 
 const need = (name: string): string => {
   const v = process.env[name]
@@ -129,7 +159,7 @@ let inUse = 0
 const machineLogs: string[] = []
 function machinesWith(store: MachineStore): RemoteMachines {
   installs++
-  return new RemoteMachines({ runner, store, bundled: async () => ({ ok: true, helper }), inUse: () => inUse, log: (m) => { machineLogs.push(m); note(`log-${installs}-${Object.keys(readings).length}`, m) } })
+  return new RemoteMachines({ runner, store, bundled: async () => ({ ok: true, helpers: [helper] }), inUse: () => inUse, log: (m) => { machineLogs.push(m); note(`log-${installs}-${Object.keys(readings).length}`, m) } })
 }
 
 /** The CI job's own runner (a localhost sshd on GitHub's Linux runner): the
@@ -141,6 +171,9 @@ const onRunner = (): boolean => process.env.GITHUB_ACTIONS === 'true' && (target
 const hookText = (word: string): string => JSON.stringify({ hooks: { Stop: [{ matcher: '', hooks: [{ type: 'command', command: `echo ${word}` }] }] } })
 
 let machines: RemoteMachines
+/** The machine list that last installed a helper there (the update case's),
+ *  whose record names the helper folder on the host now; Remove goes through it. */
+let current: RemoteMachines | undefined
 let machine: RemoteMachineRecord
 /** How many entries ~/.aicc held before the run (another install's folders stay). */
 let aiccBefore = '0'
@@ -158,6 +191,51 @@ async function untilHost(what: string, command: string, want: string, ms = 10_00
   }
 }
 
+/**
+ * Another build of the helper, for the update that changed it (2.1.3-beta.19
+ * section 1.2): REMOTE_HELPER_OTHER_BIN and REMOTE_HELPER_OTHER_MANIFEST when
+ * given (a host line's artifacts). On the CI runner, built here when they are
+ * not: this checkout's helper/ source at another version (`<version>-e2e` in
+ * a copy of its Cargo.toml and Cargo.lock), with the toolchain and target the
+ * job installed and --locked, in a folder of the run's own, and its manifest
+ * written by the packaging's own writer (scripts/write-helper-manifest.mjs).
+ * Anywhere else it fails, never skips, without them.
+ */
+async function otherBuild(): Promise<{ manifest: string; file: string }> {
+  const given = { manifest: process.env.REMOTE_HELPER_OTHER_MANIFEST, file: process.env.REMOTE_HELPER_OTHER_BIN }
+  if (given.manifest && given.file) return { manifest: given.manifest, file: given.file }
+  if (!onRunner()) return { manifest: need('REMOTE_HELPER_OTHER_MANIFEST'), file: need('REMOTE_HELPER_OTHER_BIN') }
+  const src = path.join(__dirname, '../../helper')
+  const otherDir = fs.mkdtempSync(path.join(process.env.RUNNER_TEMP || os.tmpdir(), 'aicc-other-build-'))
+  // Removed when the test that asked for it ends: its Checks upload from it until then.
+  onTestFinished(() => { if (path.basename(otherDir).startsWith('aicc-other-build-')) fs.rmSync(otherDir, { recursive: true, force: true }) })
+  for (const f of ['Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml']) fs.copyFileSync(path.join(src, f), path.join(otherDir, f))
+  fs.cpSync(path.join(src, 'src'), path.join(otherDir, 'src'), { recursive: true })
+  const toml = fs.readFileSync(path.join(otherDir, 'Cargo.toml'), 'utf8')
+  const version = /^version = "([^"]+)"$/m.exec(toml)![1]
+  const bumped = `${version}-e2e`
+  const pkg = `\nversion = "${version}"\n`
+  const own = `name = "aicc-helper"\nversion = "${version}"\n`
+  const lock = fs.readFileSync(path.join(otherDir, 'Cargo.lock'), 'utf8')
+  // Exactly one of each: the package's own version line, and its entry in the lock.
+  expect([toml.split(pkg).length, lock.split(own).length]).toEqual([2, 2])
+  fs.writeFileSync(path.join(otherDir, 'Cargo.toml'), toml.replace(pkg, `\nversion = "${bumped}"\n`))
+  fs.writeFileSync(path.join(otherDir, 'Cargo.lock'), lock.replace(own, `name = "aicc-helper"\nversion = "${bumped}"\n`))
+  const built = spawnSync('cargo', ['build', '--locked', '--release', '--target', 'x86_64-unknown-linux-musl', '--bin', 'aicc-helper'], {
+    cwd: otherDir, env: { ...process.env, CARGO_TARGET_DIR: path.join(otherDir, 'target') }, encoding: 'utf8', timeout: 600_000, maxBuffer: 16 * 1024 * 1024,
+  })
+  note('other-build', { version: bumped, status: built.status, error: built.error?.message ?? null, stderr: String(built.stderr ?? '').slice(-4000) })
+  if (built.status !== 0) throw new Error(`the other build failed (${built.error?.message ?? `exit ${built.status}`}): ${String(built.stderr ?? '').slice(-600)}`)
+  const file = path.join(otherDir, 'target', 'x86_64-unknown-linux-musl', 'release', 'aicc-helper')
+  const { helperManifest } = await import('../../scripts/write-helper-manifest.mjs')
+  const { LINUX_HELPERS } = await import('../../scripts/verify-bundled-helper.mjs')
+  const made = helperManifest({ [LINUX_HELPERS[0].source]: fs.readFileSync(file) }, fs.readFileSync(path.join(otherDir, 'Cargo.toml'), 'utf8'), { onlyPresent: true })
+  if (made.problems.length > 0 || !made.text) throw new Error(`the other build's manifest was not written: ${made.problems.join('; ')}`)
+  const manifest = path.join(otherDir, 'manifest.json')
+  fs.writeFileSync(manifest, made.text)
+  return { manifest, file }
+}
+
 // ── a tab's status line, hook events and tool calls (2.1.3-beta.18 section 3.2) ──
 
 type StatusLine = Parameters<RemoteSignalDeps['status']>[1]
@@ -170,6 +248,8 @@ const got = {
   served: [] as Array<{ id: string; provider: string }>,
   /** Each tab whose run ended (its hook state goes), by id. */
   ended: [] as string[],
+  /** Each start's account read (2.1.3-beta.19 section 3), by tab. */
+  accounts: [] as Array<{ id: string; read: HostAccountRead }>,
 }
 /** The app's side of a tab, with no Electron: a status strip and a hook sink
  *  that keep what they are given, and a tool host that answers each call with
@@ -188,8 +268,10 @@ const signals: RemoteSignalDeps = {
     return true
   },
   ended: (id) => { got.ended.push(id) },
+  account: (id, read) => { got.accounts.push({ id, read }) },
 }
 const statusOf = (id: string) => got.status.filter((s) => s.id === id).map((s) => s.line)
+const accountsOf = (id: string) => got.accounts.filter((a) => a.id === id).map((a) => a.read)
 const eventsOf = (id: string) => got.events.filter((x) => x.id === id).map((x) => x.e)
 const servedFor = (id: string) => got.served.filter((s) => s.id === id)
 
@@ -404,6 +486,59 @@ describe('remote helper on a real Linux host', () => {
     expect(r.ok).toBe(false)
     expect(r.message).toMatch(/another install/)
     expect(sshRun(`test -d "$HOME/.aicc/${machine.did}" && echo there`).out).toContain('there')
+  })
+
+  it('a tab\'s start reads its account through the helper\'s field mode, beside its host reads: the string at the key, a link followed, or nothing (2.1.3-beta.19 section 3)', async () => {
+    // A file of the run's own inside the device folder (never the account's
+    // own ~/.claude.json; Remove takes it with the folder), named to the read
+    // as a provider package names its file: a path relative to the home folder.
+    const file = `.aicc/${machine.did}/e2e-account.json`
+    const link = `.aicc/${machine.did}/e2e-account-link.json`
+    const sid = remoteSessionId('e2e-account')
+    const logs: string[] = []
+    const told: HostAccountRead[] = []
+    const readAs = async (f: string): Promise<HostAccountRead | undefined> => {
+      const via: typeof claudeRemoteLaunch = { ...claudeRemoteLaunch, accountField: () => ({ file: f, key: 'oauthAccount.emailAddress' }) }
+      const plan = remoteLaunchOf(via, machine, { model: 'e2e-model' }, null, () => true, sid, 100, 30)
+      const got = await readHostForStart({ runner, machine, installId: machines.installId(), log: (x) => { logs.push(x) }, signals: { account: (r) => { told.push(r) } } }, plan, sid)
+      return got.account
+    }
+    const write = (text: string): string => sshRun(`umask 077 && printf '%s' '${text}' > "$HOME/${file}" && echo made`).out.trim()
+    // A folder of the run's own in /tmp holding one link, to the folder above
+    // the home folder: a home reached through a link (/home a link to
+    // /data/home, say), so $HOME as written is not the home's real path.
+    let linkDir = ''
+    try {
+      expect(write('{"projects":{},"oauthAccount":{"emailAddress":"e2e@example.com","organizationName":"e2e"}}')).toBe('made')
+      expect(await readAs(file)).toEqual({ account: 'e2e@example.com' })
+      // The app's own field script with such a $HOME: the file goes to the
+      // field mode relative to $HOME, which it joins to $HOME as written, so
+      // the one string still comes back (the home's real path would not be
+      // inside that $HOME, and the field mode would print nothing).
+      linkDir = sshRun('umask 077; d=$(mktemp -d /tmp/aicc-e2e-home.XXXXXXXX) && ln -s "$(dirname "$HOME")" "$d/homes" && echo "$d"').out.trim().split('\n').pop() ?? ''
+      expect(linkDir).toMatch(/^\/tmp\/aicc-e2e-home\.[A-Za-z0-9]+$/)
+      const nonce = newNonce()
+      const cmd = scriptCommand('field', [nonce, machine.did, machines.installId(), machine.helper.folder, machine.helper.sha256, file, 'oauthAccount.emailAddress'])
+      const linked = sshRun(`HOME="${linkDir}/homes/$(basename "$HOME")"; export HOME; [ "$(cd "$HOME" && pwd -P)" != "$HOME" ] && echo linked; ${cmd}`)
+      note('account-field-linked-home', { out: linked.out, err: linked.err, code: linked.code })
+      expect(linked.out.split('\n')[0], linked.err).toBe('linked')
+      expect(linked.code, linked.err).toBe(0)
+      expect(fieldAnswerOf(linked.out, nonce)).toEqual({ value: 'e2e@example.com' })
+      // Followed as Claude Code follows it.
+      expect(sshRun(`ln -s "$HOME/${file}" "$HOME/${link}" && echo made`).out.trim()).toBe('made')
+      expect(await readAs(link)).toEqual({ account: 'e2e@example.com' })
+      // No such key, then no such file: nothing printed, so no account; neither is a read that did not answer.
+      expect(write('{"oauthAccount":{}}')).toBe('made')
+      expect(await readAs(file)).toEqual({ notShown: 'no-account' })
+      expect(sshRun(`rm -f -- "$HOME/${link}" "$HOME/${file}" && echo gone`).out.trim()).toBe('gone')
+      expect(await readAs(file)).toEqual({ notShown: 'no-account' })
+      note('account-field', { told, logs })
+      expect(told).toEqual([{ account: 'e2e@example.com' }, { account: 'e2e@example.com' }, { notShown: 'no-account' }, { notShown: 'no-account' }])
+      expect(logs.filter((l) => l.includes(`the account on ${target.host} was not read`))).toEqual([])
+    } finally {
+      sshRun(`rm -f -- "$HOME/${link}" "$HOME/${file}"`)
+      if (/^\/tmp\/aicc-e2e-home\.[A-Za-z0-9]+$/.test(linkDir)) sshRun(`rm -f -- '${linkDir}/homes'; rmdir -- '${linkDir}'`)
+    }
   })
 
   it('a session holds the fake CLI through the login shell: bytes in, output out, and what the rc file exported reaches it', async () => {
@@ -893,8 +1028,282 @@ describe('remote helper on a real Linux host', () => {
     expect(got.ended.filter((x) => x === id)).toEqual([id])
   })
 
+  // 6.3 (2.1.3-beta.19, aicc_planning#437): the folder a quit leaves goes at
+  // the next start. The list the app takes at start-up (one exec per machine)
+  // removes a session folder whose holder is gone and keeps a running tab's.
+  it('6.3: the start-up list removes a session folder whose holder is gone, and keeps a running tab\'s (2.1.3-beta.19 section 6.3)', async () => {
+    const d = remoteFakeDir
+    expect(d).toMatch(/aicc-e2e\./)
+    const m: RemoteMachineRecord = { ...machine, claudePath: `${d}/aicc-fake-cli`, check: { at: Date.now(), ok: true } }
+    const id = 'e2e-tab-63'
+    inUse = 1
+    const plan = remoteLaunchOf(claudeRemoteLaunch, m, { model: 'e2e-model' }, null, () => true, remoteSessionId(id), 100, 30, true)
+    const pty = new RemoteHelperPty({ appPtyId: id, machine: m, installId: machines.installId(), runner, spec: plan.spec, plan, signals, log: sessionLog })
+    const live = plan.helper.folder
+    // A folder a quit left: a session id no tab of this run has, private, with
+    // a file in it, and no holder's record.
+    const stray = `${path.posix.dirname(live)}/${remoteSessionId('e2e-quit-left')}`
+    let out = ''
+    pty.onData((x) => { out += x })
+    try {
+      await until('the fake CLI\'s banner', () => out.includes('FAKE-CLI READY'))
+      const made = sshRun(`umask 077 && mkdir -m 700 "${stray}" && printf x > "${stray}/settings.json" && test ! -e "${plan.helper.store}/${remoteSessionId('e2e-quit-left')}.json" && echo made`)
+      expect(made.out.trim(), made.err).toBe('made')
+      const logs: string[] = []
+      const listed = await listKept({ runner, installId: machines.installId(), log: (x) => logs.push(x) }, machine)
+      note('start-up-list-63', { ok: listed.ok, logs })
+      expect(listed.ok, listed.ok ? '' : listed.why).toBe(true)
+      expect(logs).toContain(`[remote-helper] ${target.host}: removed 1 session folder(s) whose holder is gone`)
+      expect(sshRun(`test -e "${stray}" && echo there || echo gone; test -f "${live}/settings.json" && echo there || echo gone`).out.trim().split('\n')).toEqual(['gone', 'there'])
+      // The running tab is still served after the list.
+      pty.write('still\r')
+      await until('input after the list', () => out.includes('echo: still'))
+    } finally {
+      pty.kill()
+      await pty.ended
+      inUse = 0
+    }
+    await untilHost('its folder to go', `test -e "${live}" && echo there || echo gone`, 'gone')
+  })
+
+  // 2.1.3-beta.19 section 1.2 (aicc_planning#437): a session kept until it is
+  // ended, by section 1.1's helper (`hold --until-ended`), as an SSH
+  // Persistent tab's is.
+  it('a 3 s clock session ends by its clock; an until-ended one outlives it with no connection, stays listed, attaches again with its replay and launches nothing, takes a status, a hook event and a tool call, and End ends it (2.1.3-beta.19 section 1.2)', async () => {
+    const d = remoteFakeDir
+    expect(d).toMatch(/aicc-e2e\./)
+    note('logind', machine.logind)
+    const dev = `$HOME/.aicc/${machine.did}`
+    const bin = `${dev}/helper/${machine.helper.folder}/aicc-helper`
+    // The clock kind, beta.18's: a holder with a 3 s away clock and no connection.
+    const clockSid = remoteSessionId('e2e-clock-3s')
+    const held = sshRun(`"${bin}" hold --store "${dev}/store" --session ${clockSid} --label e2e-clock-3s --away 3 --detach`)
+    expect(held.code, held.err).toBe(0)
+    const clockLine = held.out.split('\n').find((l) => l.startsWith('{'))
+    const clockRecord = readRecord(JSON.parse(clockLine ?? 'null'), 'unix')
+    // The record its detached start printed: the holder runs, of the clock kind.
+    expect(clockRecord && [clockRecord.session, untilEnded(clockRecord), clockRecord.away]).toEqual([clockSid, false, 3])
+    // The until-ended kind, an SSH Persistent tab's, on the fake CLI.
+    const m: RemoteMachineRecord = { ...machine, claudePath: `${d}/aicc-fake-cli`, check: { at: Date.now(), ok: true } }
+    const id = 'e2e-kept-1'
+    inUse = 1
+    const plan = remoteLaunchOf(claudeRemoteLaunch, m, { model: 'e2e-model' }, null, () => true, remoteSessionId(id), 100, 30, true)
+    const first = new RemoteHelperPty({ appPtyId: id, machine: m, installId: machines.installId(), runner, spec: plan.spec, plan, signals, log: sessionLog, kind: 'until-ended' })
+    let out = ''
+    first.onData((x) => { out += x })
+    let second: RemoteHelperPty | undefined
+    const relays: Relay[] = []
+    try {
+      await until('the fake CLI\'s banner', () => out.includes('FAKE-CLI READY'))
+      first.write('before\r')
+      await until('the echo', () => out.includes('echo: before'))
+      // Let go, as Leave running and a quit do: no term.end.
+      first.kill()
+      await first.ended
+      inUse = 0
+      // Past the clock holder's 3 s with no connection: it has ended; the kept
+      // one runs on, listed as until-ended, with nothing attached.
+      await new Promise((r) => setTimeout(r, 6000))
+      const listed = await listKept({ runner, installId: machines.installId(), log: sessionLog }, machine)
+      expect(listed.ok, listed.ok ? '' : listed.why).toBe(true)
+      if (!listed.ok) return
+      note('kept-listing', listed.sessions.map((s) => ({ sid: s.session, lifetime: s.lifetime ?? null, away: s.away, attached: s.attached, child: s.child })))
+      expect(listed.sessions.some((s) => s.session === clockSid)).toBe(false)
+      const kept = listed.sessions.find((s) => s.session === plan.helper.sid)
+      expect([kept?.lifetime, kept?.away, kept?.attached, kept?.child]).toEqual(['until-ended', null, false, 'running'])
+      // While nothing is attached: a status and a hook event (kept, and queued).
+      const cmd = tabCommands(plan.helper.folder)
+      const statusBefore = statusOf(id).length
+      const eventsBefore = eventsOf(id).length
+      post(cmd.status, statusPayload('Kept', 1))
+      post(cmd.hook('Stop'), { hook_event_name: 'Stop', session_id: 'not-this-tab' })
+      // A re-open: the start's hold exits 3, list mode names it until-ended,
+      // and the tab attaches over a new bridge, launching nothing.
+      inUse = 1
+      const readsBefore = accountsOf(id).length
+      second = new RemoteHelperPty({ appPtyId: id, machine: m, installId: machines.installId(), runner, spec: plan.spec, plan, signals, log: sessionLog, kind: 'until-ended' })
+      let again = ''
+      second.onData((x) => { again += x })
+      await until('the replay', () => again.includes('echo: before'))
+      expect(second.attachedToKept).toBe(true)
+      expect(sessionLogs).toContain(`[remote-helper] ${plan.helper.sid}: a session kept for this tab runs on ${target.host}; attaching to it, nothing is launched`)
+      // 1.1's contract: the attach ran the host reads and the field read again
+      // (section 3's readHostForStart), through this machine's real helper.
+      note('kept-account-reads', accountsOf(id))
+      expect(readsBefore).toBe(1)
+      expect(accountsOf(id)).toHaveLength(2)
+      await until('the newest status', () => statusOf(id).length > statusBefore)
+      expect(statusOf(id).at(-1)!.model).toBe('Kept 1')
+      await until('the queued hook event', () => eventsOf(id).length === eventsBefore + 1)
+      // A tool call after the re-attach, served as the tab's.
+      const r = new Relay(cmd.conductor)
+      relays.push(r)
+      relaysLeft.push(r)
+      r.call(1, 'kept')
+      await until('the tool answer', () => r.answerTo(1).length === 1)
+      expect(r.answerTo(1)).toEqual([`served for ${id} as claude: kept`])
+      // One CLI: input reaches the one that was kept.
+      second.write('after\r')
+      await until('input after the re-attach', () => again.includes('echo: after'))
+      expect(await r.end()).toBe(0)
+      // End: term.end over a link of its own, then its folder.
+      expect(await second.end()).toEqual({ ok: true })
+    } finally {
+      for (const r of relays) r.kill()
+      first.kill()
+      if (second) await second.end().catch(() => undefined)
+      inUse = 0
+    }
+    // The bracket keeps this check's own command line from matching itself.
+    await untilHost('the kept holder to end', `pgrep -f -- "--session [r]${plan.helper.sid.slice(1)}" | wc -l`, '0')
+    await untilHost('its folder to go', `test -e "${plan.helper.folder}" && echo there || echo gone`, 'gone')
+  })
+
+  // 2.1.3-beta.19 section 1.2, the Rocky host line's finding 1: the holder's
+  // tree ended on the host as a restart would (the holder and its CLI killed
+  // at once). The tab's re-attach reaches the machine and its bridge finds no
+  // holder: the tab says the session is over at that first try (no "not back
+  // yet" line, no 95 s of tries); the list then names no such session, and
+  // its folder, record and socket go.
+  it('a kept session whose holder\'s tree is killed on the host: the tab says it is over at its first try, and the list then names no such session (2.1.3-beta.19 section 1.2)', async () => {
+    const d = remoteFakeDir
+    expect(d).toMatch(/aicc-e2e\./)
+    const m: RemoteMachineRecord = { ...machine, claudePath: `${d}/aicc-fake-cli`, check: { at: Date.now(), ok: true } }
+    const id = 'e2e-kept-killed'
+    inUse = 1
+    const plan = remoteLaunchOf(claudeRemoteLaunch, m, { model: 'e2e-model' }, null, () => true, remoteSessionId(id), 100, 30, true)
+    const sid = plan.helper.sid
+    const pty = new RemoteHelperPty({ appPtyId: id, machine: m, installId: machines.installId(), runner, spec: plan.spec, plan, signals, log: sessionLog, kind: 'until-ended' })
+    let out = ''
+    let exit: number | null = null
+    let shownAtExit = ''
+    pty.onData((x) => { out += x })
+    pty.onExit((e) => { exit = e.exitCode; shownAtExit = out })
+    try {
+      await until('the fake CLI\'s banner', () => out.includes('FAKE-CLI READY'))
+      // The holder's process id from its record; its CLI is its child.
+      const rec = JSON.parse(sshRun(`cat "$HOME/.aicc/${machine.did}/store/${sid}.json"`).out) as { pid: number }
+      expect(Number.isInteger(rec.pid) && rec.pid > 1).toBe(true)
+      const kids = sshRun(`pgrep -P ${rec.pid} || true`).out.trim().split(/\s+/).filter((p) => /^[0-9]+$/.test(p))
+      note('kept-killed-tree', { holder: rec.pid, children: kids })
+      expect(kids.length).toBeGreaterThan(0)
+      const logsBefore = sessionLogs.length
+      const killedAt = Date.now()
+      expect(sshRun(`kill -KILL ${rec.pid} ${kids.join(' ')} && echo killed`).out.trim()).toBe('killed')
+      await until('the tab\'s end', () => exit !== null, 30_000)
+      note('kept-killed-ms', Date.now() - killedAt)
+      expect(shownAtExit).toContain(`[This tab's session on ${target.host} is over: no session helper holds it there any more (it ended there, or the machine restarted). Restart starts a new session and resumes the conversation.]`)
+      expect(shownAtExit).not.toContain('The session runs on there')
+      // The bound: the first try after the drop got the machine's answer.
+      expect(sessionLogs.slice(logsBefore).filter((l) => l.includes(`${sid}: the link to`))).toEqual([])
+    } finally {
+      // Ends the holder if a check above failed before the kill; a gone one counts as ended.
+      await pty.end().catch(() => undefined)
+      inUse = 0
+    }
+    // The machine's side: list mode names no such session, and its record goes.
+    // Its folder went with the End above (a holder already gone counts as ended,
+    // then its folder is removed); the start-up list removing one is the 6.3 case's.
+    const listed = await listKept({ runner, installId: machines.installId(), log: sessionLog }, machine)
+    expect(listed.ok, listed.ok ? '' : listed.why).toBe(true)
+    if (!listed.ok) return
+    expect(listed.sessions.some((s) => s.session === sid)).toBe(false)
+    await untilHost('its folder to go', `test -e "${plan.helper.folder}" && echo there || echo gone`, 'gone')
+    await untilHost('its record to go', `test -e "$HOME/.aicc/${machine.did}/store/${sid}.json" && echo there || echo gone`, 'gone')
+    await untilHost('no process of it', `pgrep -f -- "--session [r]${sid.slice(1)}" | wc -l`, '0')
+  })
+
+  it('a list and an attach to an until-ended holder from a bridge of another build: an app update that changed the helper, after its Check; the first build\'s folder stays while its holder has a record, and the next Check removes it (2.1.3-beta.19 section 1.2)', async () => {
+    const other = await readBundledLinuxHelper(await otherBuild())
+    if (!other.ok) throw new Error(`the other build and its manifest do not read: ${other.why}`)
+    expect(other.helper.sha256).not.toBe(helper.sha256)
+    expect(other.helper.version).not.toBe(helper.version)
+    note('other-helper', { version: other.helper.version, sha256: other.helper.sha256 })
+    const d = remoteFakeDir
+    const m: RemoteMachineRecord = { ...machine, claudePath: `${d}/aicc-fake-cli`, check: { at: Date.now(), ok: true } }
+    const id = 'e2e-kept-2'
+    inUse = 1
+    const plan = remoteLaunchOf(claudeRemoteLaunch, m, { model: 'e2e-model' }, null, () => true, remoteSessionId(id), 100, 30, true)
+    const first = new RemoteHelperPty({ appPtyId: id, machine: m, installId: machines.installId(), runner, spec: plan.spec, plan, signals, log: sessionLog, kind: 'until-ended' })
+    let out = ''
+    first.onData((x) => { out += x })
+    let later: RemoteHelperPty | undefined
+    // The device folder's own entries, and its helper/ folder's, as ls lists them.
+    const lsDevice = (sub: string) => sshRun(`D=${machine.did}; ls -A "$HOME/.aicc/$D${sub}"`).out.trim().split('\n').filter(Boolean).sort()
+    let updated: RemoteMachines | undefined
+    try {
+      await until('the fake CLI\'s banner', () => out.includes('FAKE-CLI READY'))
+      first.write('kept by the first build\r')
+      await until('the echo', () => out.includes('echo: kept by the first build'))
+      first.kill()
+      await first.ended
+      // The update's Check: the other build installed beside the first, which
+      // the kept holder still runs from; nothing is ended.
+      const store = memoryStore()
+      store.write({ v: 1, installId: machines.installId(), machines: machines.list() })
+      updated = new RemoteMachines({ runner, store, bundled: async () => ({ ok: true, helpers: [other.helper] }), inUse: () => 0, log: (x) => { machineLogs.push(x) } })
+      const logsBefore = machineLogs.length
+      const checked = await updated.check(machine.did)
+      note('other-check', { checked, logs: machineLogs.slice(logsBefore) })
+      expect(checked.ok, checked.message).toBe(true)
+      const after = updated.get(machine.did)!
+      expect(after.helper.sha256).toBe(other.helper.sha256)
+      // The first build's folder stays beside the other's while its kept
+      // holder has a record in the store (2.1.3-beta.19).
+      const both = lsDevice('/helper')
+      note('helper-folders-while-held', { helper: both, store: lsDevice('/store') })
+      expect(both).toEqual([helper.folder, other.helper.folder].sort())
+      expect(machineLogs.slice(logsBefore).filter((l) => l.includes('helper folder'))).toEqual([])
+      // The other build's list names the first build's until-ended holder.
+      const listed = await listKept({ runner, installId: machines.installId(), log: sessionLog }, after)
+      expect(listed.ok, listed.ok ? '' : listed.why).toBe(true)
+      if (!listed.ok) return
+      const kept = listed.sessions.find((s) => s.session === plan.helper.sid)
+      expect(kept?.lifetime).toBe('until-ended')
+      expect(kept?.helper).toBe(helper.version)
+      // And its bridge attaches to it: the replay, and input to the same CLI.
+      const m2: RemoteMachineRecord = { ...after, claudePath: `${d}/aicc-fake-cli`, check: { at: Date.now(), ok: true } }
+      const plan2 = remoteLaunchOf(claudeRemoteLaunch, m2, { model: 'e2e-model' }, null, () => true, remoteSessionId(id), 100, 30, true)
+      later = new RemoteHelperPty({ appPtyId: id, machine: m2, installId: machines.installId(), runner, spec: plan2.spec, plan: plan2, signals, log: sessionLog, kind: 'until-ended' })
+      let again = ''
+      later.onData((x) => { again += x })
+      await until('the replay through the other build', () => again.includes('echo: kept by the first build'))
+      expect(later.attachedToKept).toBe(true)
+      expect(sessionLogs.filter((l) => l === `[remote-helper] ${plan.helper.sid}: a session kept for this tab runs on ${target.host}; attaching to it, nothing is launched`)).toHaveLength(1)
+      later.write('through the other build\r')
+      await until('input through the other build', () => again.includes('echo: through the other build'))
+      expect(await later.end()).toEqual({ ok: true })
+    } finally {
+      first.kill()
+      if (later) await later.end().catch(() => undefined)
+      inUse = 0
+    }
+    await untilHost('the kept holder to end', `pgrep -f -- "--session [r]${plan.helper.sid.slice(1)}" | wc -l`, '0')
+    // With that holder ended and no record left (list mode drops a gone
+    // holder's), the next Check removes the earlier build's folder, and only
+    // it: this build's folder, the owner marker, store/ and sessions/ stay
+    // (2.1.3-beta.19). Remove, next, still takes everything.
+    if (!updated) throw new Error('the update\'s Check did not run')
+    const top = lsDevice('')
+    const logsBefore = machineLogs.length
+    const rechecked = await updated.check(machine.did)
+    note('helper-folders-after-end', { rechecked, logs: machineLogs.slice(logsBefore), helper: lsDevice('/helper'), store: lsDevice('/store'), top: lsDevice('') })
+    expect(rechecked.ok, rechecked.message).toBe(true)
+    expect(lsDevice('/helper')).toEqual([other.helper.folder])
+    expect(lsDevice('')).toEqual(top)
+    expect(top).toEqual(expect.arrayContaining(['helper', 'owner', 'sessions', 'store']))
+    expect(machineLogs.slice(logsBefore)).toContain(`[remote-helper] ${target.host}: removed 1 earlier helper folder(s), as no session is held there`)
+    current = updated
+  })
+
   it('Remove takes it away: nothing of the run is left under ~/.aicc, and no helper process', async () => {
-    const r = await machines.remove(machine.did)
+    // Through the list whose record names the helper folder there now (the
+    // update case's second Check removed the first build's), so Remove's
+    // list-then-remove runs with a helper on the host.
+    const list = current ?? machines
+    const held = list.get(machine.did)!.helper.folder
+    expect(sshRun(`D=${machine.did}; test -f "$HOME/.aicc/$D/helper/${held}/aicc-helper" && echo there || echo gone`).out.trim()).toBe('there')
+    const r = await list.remove(machine.did)
     note('remove', r)
     expect(r.ok, r.message).toBe(true)
     // pgrep -f reads every process's command line: with the device folder's

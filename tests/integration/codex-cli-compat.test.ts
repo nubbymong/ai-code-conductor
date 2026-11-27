@@ -1,9 +1,9 @@
 // HOST QUARANTINE: this file starts the real `codex` found on PATH (when one is
 // there), so it runs in CI and on the VM, never on the owner's workstation.
 import { describe, it, expect } from 'vitest'
-import { execFileSync, spawnSync } from 'node:child_process'
+import { spawnSync } from 'node:child_process'
 import { codexCommandLine } from '../../src/main/providers/codex'
-import { compatProbeEnv, withCompatHome } from './codex-cli-compat-env'
+import { compatProbeEnv, findCodexOnPath, noCodexFailure, withCompatHome } from './codex-cli-compat-env'
 
 /**
  * P7.7.9 -- CI flag-drift integration test.
@@ -15,9 +15,12 @@ import { compatProbeEnv, withCompatHome } from './codex-cli-compat-env'
  * the `review` operation of src/main/providers/codex/cli-runner.ts, run by
  * src/main/providers/codex/review.ts) is still listed in `codex exec --help`.
  *
- * Behaviour when codex is not on PATH: SKIP (do not fail). CI runners
- * without Codex installed pass this suite trivially -- the regression
- * signal fires on dev machines + the pre-release smoke environment.
+ * Behaviour when codex is not on PATH: SKIP on a runner or machine that has
+ * none to test (the unit legs, a developer machine). On a CI conformance leg
+ * (CCC_CODEX_CONFORMANCE_KIND set), which installed one first, FAIL: a skip
+ * there would read as a green step over a failed install or look-up
+ * (codex-cli-compat-env.ts noCodexFailure). The look-up reads the PATH
+ * folders, with no process and no time limit (findCodexOnPath).
  *
  * PR 4 VM checkpoint (F4): the run of codex gets a fresh, empty Codex folder
  * of its own (CODEX_HOME), under the app's allowlisted Codex environment, so
@@ -26,17 +29,6 @@ import { compatProbeEnv, withCompatHome } from './codex-cli-compat-env'
  * the run by its own temp-folder prefix (codex-cli-compat-env.ts, checked
  * without starting anything by codex-cli-compat-env.test.ts).
  */
-
-function codexOnPath(): string | null {
-  try {
-    const which = process.platform === 'win32' ? 'where' : 'which'
-    const out = execFileSync(which, ['codex'], { encoding: 'utf-8', timeout: 3_000 })
-    const first = out.split('\n')[0].trim()
-    return first || null
-  } catch {
-    return null
-  }
-}
 
 type HelpResult = { ok: true; text: string } | { ok: false; reason: string }
 
@@ -60,7 +52,10 @@ function codexExecHelp(): HelpResult {
   })
 }
 
-const haveCodex = codexOnPath() !== null
+const codexFound = findCodexOnPath(process.env.PATH)
+const haveCodex = codexFound !== null
+// Set only on a CI conformance leg with no codex found: the suite fails there.
+const mustNotSkip = noCodexFailure(codexFound, process.env)
 const maybeIt = haveCodex ? it : it.skip
 
 describe('integration: codex CLI flag compatibility', () => {
@@ -109,7 +104,9 @@ describe('integration: codex CLI flag compatibility', () => {
     expect(helpText).not.toMatch(/--ask-for-approval/)
   })
 
-  if (!haveCodex) {
+  if (mustNotSkip) {
+    it('codex is on PATH on a CI conformance leg', () => { expect.fail(mustNotSkip) })
+  } else if (!haveCodex) {
     it.skip('codex not on PATH -- skipping flag-drift suite', () => { /* skipped */ })
   }
 })

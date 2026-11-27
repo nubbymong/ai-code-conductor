@@ -19,24 +19,50 @@
  *
  * Its own files (2.1.3-beta.18 section 3.2): before the hold, one exec reads
  * the host files the provider names (its hostReads: for Claude Code, the
- * settings files whose hooks the session keeps), as data; after the hold and
+ * settings files whose hooks the session keeps), as data, and beside it
+ * (2.1.3-beta.19 section 3) one exec of the helper's field mode reads the
+ * field that names the account the CLI is signed in as (its accountField),
+ * for the tab's status line and header: ./host-reads.ts readHostForStart,
+ * which every start of the tab runs, launch or attach; after the hold and
  * before the launch, one exec writes the files the provider's launch gives
  * into the session's own folder there (`~/.aicc/<did>/sessions/<sid>/`,
  * 0700), contents on standard input. They name the helper's path, its store
  * and the session id on the host: never an address, a port or a credential of
  * this computer. The folder goes at the session's end (`unsession`), and the
  * next Check removes any whose holder is gone (`sweep`); a quit does not wait
- * for the unsession exec, so a folder a quit leaves goes at that Check.
+ * for the unsession exec, so a folder a quit leaves goes at the next start's
+ * list of kept sessions (2.1.3-beta.19 section 6.3: ./kept.ts listKept), or
+ * at that Check. A session kept until it is ended keeps its folder.
  *
  * A dropped link (the ssh child ended, or a pong that never came) attaches
  * again from the last byte seen, with the holder's replay: HelperPty asks for
  * a new connection, and this driver tries a new bridge exec after 1, 2, 4, 8,
  * 16, 32 and 32 s (section 11's 1 to 16 s, then two tries more: 95 s of
- * waiting in all, inside the holder's two-minute away clock), never after a
+ * waiting in all, inside a plain SSH tab's holder's two-minute away clock; a
+ * kept session's holder has none), never after a
  * sign-in or host key failure, a hash mismatch, or a
- * bridge that finds no holder. A closed tab or a quit ends the session
- * (`term.end`), as a plain SSH session ends then (D13); a tab closed just as
- * its link drops sends its end once more, over a link of its own.
+ * bridge that finds no holder. A plain SSH tab (its holder has the away
+ * clock) ends its session when it is closed or the app quits (`term.end`), as
+ * a plain SSH session ends then (D13); a tab closed just as its link drops
+ * sends its end once more, over a link of its own.
+ *
+ * An SSH Persistent tab (2.1.3-beta.19 section 1.2; ADR-030 S25's second
+ * kind, D13, D19) has a holder that runs until it is ended (`hold
+ * --until-ended`, ./kept.ts): closing the tab, a quit and an app update let go
+ * of it (HelperPty.release: a term.detach, never a term.end, and no exit keys);
+ * so does a link that stays down past the tries above (a Restart attaches
+ * again; an attach again that finds no holder means the session is over
+ * there, and the tab says so). Only End ends it (endKept: term.end over a
+ * link of its own, then its folder). A start whose hold finds a holder for its
+ * session (exit 3) asks list mode: one that runs until it is ended is
+ * attached to (its replay, its newest status and its queued hook events,
+ * once), and nothing is launched; a clock holder an earlier run left, or an
+ * until-ended one with nothing launched in it, is ended first. The
+ * host reads and the account field read (./host-reads.ts readHostForStart)
+ * run again at such an attach, so its label and the source of its weekly bars
+ * are set again (section 1.1's contract). The hold's record says the kind it
+ * started (protocol.ts readRecord); a holder of the other kind than the tab
+ * asked for is ended at once, and nothing is launched.
  *
  * Its status line, hook events and tools (2.1.3-beta.18 section 3.2): the
  * tab's connections ack `status`, `hooks` and `mcp`, and ./signals.ts routes
@@ -44,10 +70,12 @@
  * the session signals module (attention, the canvas turn boundary, the
  * Watchdog), each tool stream to the tool host as the tab's session, with no
  * credential, the tool set an SSH tab has (the image fetch tool an image
- * paste, Snap and the screenshot storyboard use included). What such a tab
- * does not have in this preview: the account label, the per-model weekly
- * buckets and extra usage on its status line (the helper reads no credential
- * and calls no network). Prompt buttons and broadcast type into it by the
+ * paste and Snap use included). Its account label comes from the account
+ * field each start reads on the host (./host-reads.ts readHostForStart), and
+ * its per-model weekly buckets and extra usage from this computer's own usage
+ * reading of that account, through the usage source its provider package
+ * hands (statusline-watcher.ts setHelperAccount); the helper reads no
+ * credential and calls no network. Prompt buttons and broadcast type into it by the
  * usual rule for a Claude Code tab.
  *
  * This file imports nothing of Electron.
@@ -55,14 +83,16 @@
 import { createHash } from 'crypto'
 import type { IDisposable, IEvent, IPty } from 'node-pty'
 import { HolderConnection, HolderError } from '../session-helper/connection'
-import { HelperPty, NothingStartedError, type HelperPtyDriver } from '../session-helper/helper-pty'
+import { HelperPty, LOST_EXIT_CODE, NothingStartedError, type HelperPtyDriver } from '../session-helper/helper-pty'
 import { checkLaunch, readListing, readRecord, type HolderRecord, type LaunchSpec } from '../session-helper/protocol'
 import { stripSpoofableText } from '../../shared/safe-text'
 import type { ProviderId } from '../../shared/providers/ids'
-import type { ProviderRemoteLaunch, RemoteHelperCommands, RemoteHostFile, RemoteHostRead, RemoteLaunch, RemoteLaunchOptions } from '../providers/types'
-import { HOST_READ_MAX, holderLabel } from './scripts'
-import { EXEC_STDOUT_MAX, afterHashLine, exitText, localSshEnd, newNonce, notStartedLogLine, openScriptStream, readHashLine, readScriptResult, runScript, sshFailure, type SshRunner, type SshTarget } from './ssh-exec'
-import { hostReadsInput, hostReadsOf, sessionFilesInput } from './session-files'
+import type { ProviderRemoteLaunch, RemoteHelperCommands, RemoteHostRead, RemoteLaunch, RemoteLaunchOptions } from '../providers/types'
+import { holderLabel, type HolderKind } from './scripts'
+import { untilEnded } from './kept'
+import { afterHashLine, exitText, localSshEnd, newNonce, notStartedLogLine, openScriptStream, readHashLine, readScriptResult, runScript, sshFailure, type SshRunner, type SshTarget } from './ssh-exec'
+import { sessionFilesInput } from './session-files'
+import { readHostForStart } from './host-reads'
 import { RemoteSignals, type RemoteSignalDeps } from './signals'
 import { refusalText, type RemoteMachineRecord } from './machines'
 
@@ -72,7 +102,7 @@ export function remoteSessionId(appPtyId: string): string {
   return `rm${createHash('sha256').update(`aicc-remote-session\0${appPtyId}`, 'utf8').digest('hex').slice(0, 30)}`
 }
 
-/** The waits between tries for a dropped link: section 11's 1, 2, 4, 8, 16 s, then 32 s twice; 95 s in all, inside the two-minute away clock. */
+/** The waits between tries for a dropped link: section 11's 1, 2, 4, 8, 16 s, then 32 s twice; 95 s in all, inside a plain SSH tab's two-minute away clock. */
 export const RECONNECT_DELAYS_MS = [1000, 2000, 4000, 8000, 16000, 32000, 32000]
 /** How long a bridge exec may take to pass its hash line, and the hello after it. */
 export const BRIDGE_OPEN_MS = 30_000
@@ -122,10 +152,6 @@ export interface RemoteLaunchPlan {
   readonly first: RemoteLaunch
   readonly spec: LaunchSpec
 }
-
-/** The most standard output a host read's exec keeps: every file at its
- *  bound as hex, and room for its lines. */
-const hostReadsStdoutMax = (reads: number): number => Math.max(EXEC_STDOUT_MAX, reads * HOST_READ_MAX * 2 + 64 * 1024)
 
 /**
  * What the CLI is started with on the host: the provider's program,
@@ -204,6 +230,16 @@ async function afterEnding(sid: string): Promise<void> {
 
 /** An error that no new try will mend: no reconnect after it (section 11). */
 class FinalError extends Error {}
+/** The bridge found no holder for the session (exit 3): it is gone. */
+class GoneError extends FinalError {}
+
+/** What a start of a tab's session found: a holder it started (`attach`
+ *  false: its launch follows), or one that runs until it is ended, kept for
+ *  this tab's session (`attach` true: attached to, nothing launched). */
+export interface HeldStart {
+  record: HolderRecord
+  attach: boolean
+}
 
 export interface RemoteSessionOptions {
   appPtyId: string
@@ -222,6 +258,9 @@ export interface RemoteSessionOptions {
   /** The back-off for a dropped link; tests shorten it. */
   reconnectDelaysMs?: readonly number[]
   sleep?: (ms: number) => Promise<void>
+  /** The holder's kind (2.1.3-beta.19 section 1.2): `away` (a plain SSH
+   *  tab's; the default) or `until-ended` (an SSH Persistent tab's). */
+  kind?: HolderKind
 }
 
 /** HelperPty's driver for a remote tab: every step is an exec over ssh. */
@@ -240,6 +279,22 @@ export class RemoteDriver implements HelperPtyDriver {
   private readonly signals: RemoteSignals | undefined
   /** Set once the session's files were sent to the host: its end removes the folder. */
   private filesSent = false
+  /** The start prepare() made, for HelperPty's hold to take (once). */
+  private prepared: { record: HolderRecord } | { error: Error } | undefined
+  /** This tab's holder runs until it is ended, its own or one it attached to. */
+  private untilEnded: boolean
+  /** The start attached to a holder kept for this tab's session. */
+  private adopted = false
+  /** The tab was attached to its holder at least once. */
+  private everAttached = false
+  /** The tab's terminal attached to its holder at least once. */
+  get wasAttached(): boolean { return this.everAttached }
+  /** End was asked for (the close question's End, Remove of a session left running, or End on its machine's card): the holder may be ended from here. */
+  endAsked = false
+  /** The link stayed down past every try: the kept session is let go of. */
+  keptLost = false
+  /** The tab's attach again found no holder for its session (the bridge's exit 3): it is over on the machine. */
+  keptGone = false
 
   constructor(private readonly o: RemoteSessionOptions) {
     this.target = { host: o.machine.host, port: o.machine.port, user: o.machine.user }
@@ -248,6 +303,20 @@ export class RemoteDriver implements HelperPtyDriver {
     if (plan && o.signals) {
       this.signals = new RemoteSignals({ appPtyId: o.appPtyId, provider: plan.provider, via: plan.via, launch: plan.first, tools: plan.options.tools, deps: o.signals, log: o.log })
     }
+    this.untilEnded = o.kind === 'until-ended'
+  }
+
+  /** A driver that only ends one kept session (End on the Machines card). */
+  static forEnd(o: Pick<RemoteSessionOptions, 'appPtyId' | 'machine' | 'installId' | 'runner' | 'log' | 'signals'>): RemoteDriver {
+    const spec: LaunchSpec = { argv: ['aicc-end'], cwd: o.machine.home, env: {}, cols: 80, rows: 24 }
+    return new RemoteDriver({ ...o, spec, kind: 'until-ended' })
+  }
+
+  /** The tab's session runs on past this tab: the holder is not ended from
+   *  here (it runs until it is ended, End was not asked for, and the tab let
+   *  go of it, or attached to it and has not shown it yet). */
+  private keepsRunning(): boolean {
+    return this.untilEnded && !this.endAsked && (this.keptLost || (this.adopted && !this.everAttached))
   }
 
   private values(nonce: string, ...rest: string[]): string[] {
@@ -265,48 +334,59 @@ export class RemoteDriver implements HelperPtyDriver {
    * any), then the holder is started, then the session's own files are
    * written (when the launch gives any), all before HelperPty sends the
    * launch. A start that fails after its holder started ends that holder.
+   * A start that finds a holder kept for this tab's session until it is
+   * ended (2.1.3-beta.19) attaches to it: the reads still run, and its files,
+   * written at its launch, are not written again (its end removes them).
    */
-  async hold(sid: string, label: string, abandoned: () => boolean): Promise<HolderRecord> {
+  async prepare(sid: string, label: string, abandoned: () => boolean): Promise<HeldStart> {
     await afterEnding(sid)
     const plan = this.o.plan
     const launch = plan ? await this.launchWithReads(plan, sid) : undefined
     if (abandoned()) throw new NothingStartedError('the tab was closed while it started')
-    const record = await this.startHolder(sid, label, abandoned)
+    const held = await this.startHolder(sid, label, abandoned)
+    if (held.attach) {
+      this.adopted = true
+      this.untilEnded = true
+    }
     if (launch) {
       this.signals?.launched(launch)
-      if (launch.files.length > 0) await this.writeFiles(sid, record, launch)
+      if (held.attach) this.filesSent = launch.files.length > 0
+      else if (launch.files.length > 0) await this.writeFiles(sid, held.record, launch)
     }
-    return record
+    return held
+  }
+
+  /** What prepare() made, for HelperPty's hold to take. */
+  setPrepared(p: { record: HolderRecord } | { error: Error }): void { this.prepared = p }
+
+  /** HelperPty's start: the holder prepare() started (RemoteHelperPty always
+   *  prepares first, so an attach never reaches a launch). */
+  async hold(sid: string, label: string, abandoned: () => boolean): Promise<HolderRecord> {
+    const p = this.prepared
+    this.prepared = undefined
+    if (p) {
+      if ('error' in p) throw p.error
+      return p.record
+    }
+    const held = await this.prepare(sid, label, abandoned)
+    if (held.attach) throw new NothingStartedError('a session kept for this tab was found after its start began')
+    return held.record
   }
 
   /**
-   * The launch asked with what the `reads` exec read on the host (each read
-   * null when the provider names none, or the exec did not take it: one log
-   * line each). Throws, saying why, when the host could not be reached, the
-   * exec refused, or the launch's program, arguments or variables are not the
-   * ones its spec was built from.
+   * The launch asked with what this start read on the host (readHostForStart:
+   * the host files, each null when the provider names none or the exec did
+   * not take it, one log line each; and the account field, which goes to the
+   * tab's status line and header). Throws, saying why, when the host could
+   * not be reached, the exec refused, or the launch's program, arguments or
+   * variables are not the ones its spec was built from.
    */
   private async launchWithReads(plan: RemoteLaunchPlan, sid: string): Promise<RemoteLaunch> {
-    const host = this.o.machine.host
-    let files: RemoteHostFile[] = plan.reads.map((r) => ({ from: r.from, path: r.path, content: null }))
-    if (plan.reads.length > 0) {
-      let stdin: Buffer
-      try {
-        stdin = hostReadsInput(plan.options.cwd, plan.reads)
-      } catch (err) {
-        this.failWith(`the session's settings files on ${host} cannot be read: ${(err as Error).message}`)
-      }
-      const nonce = newNonce()
-      const r = await runScript(this.o.runner, this.target, 'reads', [nonce, this.o.machine.did, this.o.installId], { stdin, stdoutMax: hostReadsStdoutMax(plan.reads.length) })
-      if (r.notStarted) this.o.log(notStartedLogLine(host, r.stderr))
-      const failed = sshFailure(r)
-      if (failed) this.failWith(`${host} could not be reached: ${failed}`)
-      const result = readScriptResult(r.stdout, nonce)
-      if (!result) this.failWith(`${host} did not answer the session helper's read of the session's settings files`)
-      if (!result.ok) this.failWith(`the session's settings files on ${host} were not read: ${refusalText(result.refused)}; press Check on the Machines page`)
-      const answer = hostReadsOf(result, plan.reads)
-      for (const s of answer.skipped) this.o.log(`[remote-helper] ${sid}: ${s.read.from} ${s.read.path} on ${host} was not read (${s.why}), so nothing it sets is in the session's settings`)
-      files = answer.files
+    let files: Awaited<ReturnType<typeof readHostForStart>>['files']
+    try {
+      files = (await readHostForStart({ runner: this.o.runner, machine: this.o.machine, installId: this.o.installId, log: this.o.log, ...(this.signals ? { signals: this.signals } : {}) }, plan, sid)).files
+    } catch (err) {
+      this.failWith((err as Error).message)
     }
     let launch: RemoteLaunch
     try {
@@ -350,14 +430,15 @@ export class RemoteDriver implements HelperPtyDriver {
       conn = await this.connectOnce(record, false)
       await conn.request({ t: 'term.end' })
     } catch (err) {
-      this.o.log(`[remote-helper] ${record.session}: the holder started for this tab could not be ended (${(err as Error).message}); its away clock ends it`)
+      this.o.log(`[remote-helper] ${record.session}: the holder started for this tab could not be ended (${(err as Error).message}); ${this.untilEnded ? 'the Machines page lists it, with End' : 'its away clock ends it'}`)
     } finally {
       conn?.close()
     }
   }
 
   /** The session's own folder goes (the `unsession` exec), once its holder
-   *  ended. Never throws; one that is not removed is the next Check's. */
+   *  ended. Never throws; one that is not removed goes at the next start's
+   *  list of kept sessions, or at the next Check. */
   private async removeFolder(sid: string): Promise<void> {
     const host = this.o.machine.host
     try {
@@ -365,18 +446,18 @@ export class RemoteDriver implements HelperPtyDriver {
       const r = await runScript(this.o.runner, this.target, 'unsession', [nonce, this.o.machine.did, this.o.installId, sid])
       const failed = sshFailure(r)
       const result = failed ? null : readScriptResult(r.stdout, nonce)
-      if (!result?.ok) this.o.log(`[remote-helper] ${sid}: the session's folder on ${host} was not removed (${failed ?? (result ? refusalText(result.refused) : 'no answer')}); the next Check removes it`)
+      if (!result?.ok) this.o.log(`[remote-helper] ${sid}: the session's folder on ${host} was not removed (${failed ?? (result ? refusalText(result.refused) : 'no answer')}); the next start's list of kept sessions, or the next Check, removes it`)
     } catch (err) {
-      this.o.log(`[remote-helper] ${sid}: the session's folder on ${host} was not removed (${(err as Error).message}); the next Check removes it`)
+      this.o.log(`[remote-helper] ${sid}: the session's folder on ${host} was not removed (${(err as Error).message}); the next start's list of kept sessions, or the next Check, removes it`)
     }
   }
 
-  private async startHolder(sid: string, label: string, abandoned: () => boolean): Promise<HolderRecord> {
+  private async startHolder(sid: string, label: string, abandoned: () => boolean): Promise<HeldStart> {
     const host = this.o.machine.host
     for (let attempt = 0; attempt < 2; attempt++) {
       if (abandoned()) throw new NothingStartedError('the tab was closed while it started')
       const nonce = newNonce()
-      const r = await runScript(this.o.runner, this.target, 'hold', this.values(nonce, sid, holderLabel(label)))
+      const r = await runScript(this.o.runner, this.target, 'hold', this.values(nonce, sid, holderLabel(label), this.o.kind ?? 'away'))
       const failed = sshFailure(r)
       if (r.notStarted) this.o.log(notStartedLogLine(host, r.stderr))
       if (failed) this.failWith(`${host} could not be reached: ${failed}`)
@@ -384,42 +465,90 @@ export class RemoteDriver implements HelperPtyDriver {
       if (!hash) this.failWith(`${host} did not answer the session helper (is it still added? press Check on the Machines page)`)
       if (hash.state !== 'ok') this.failWith(`the session helper file on ${host} did not pass its hash check (${hash.state}); press Check on the Machines page`)
       if (r.code === 3) {
-        // A holder left for this tab's session (an app crash or update within
-        // its away clock): ended first, so two CLIs never run on one conversation.
-        if (attempt === 0 && !abandoned()) { await this.endLeftover(sid); continue }
+        const found = attempt === 0 && !abandoned() ? await this.leftover(sid) : null
+        // 2.1.3-beta.19: a holder that runs until it is ended keeps this tab's
+        // session (a quit, an update, Leave running, a link that stayed down):
+        // the tab attaches to it, and nothing is launched.
+        if (found && untilEnded(found) && found.child !== 'waiting') {
+          this.o.log(`[remote-helper] ${sid}: a session kept for this tab runs on ${host}; attaching to it, nothing is launched`)
+          return { record: found, attach: true }
+        }
+        // A clock holder left for this tab's session (an app crash or update
+        // within its away clock): ended first, so two CLIs never run on one
+        // conversation. So is an until-ended one with nothing launched in it
+        // (an app that ended between its hold and its launch): it holds no
+        // session to come back to.
+        if (found) { await this.endLeftover(found); continue }
+        if (attempt === 0 && !abandoned()) { this.o.log(`[remote-helper] ${sid}: a holder runs for it, and list mode does not show it`); continue }
         this.failWith(`a session the app could not end still runs for this tab on ${host}`)
       }
       if (r.code !== 0) this.failWith(`the session helper on ${host} could not start a holder (${exitText(r)}: ${r.stderr.trim().slice(0, 200)})`)
       const line = afterHashLine(r.stdout, nonce).split(/\r?\n/).find((l) => l.startsWith('{'))
-      let record: HolderRecord | null = null
-      try { record = line ? readRecord(JSON.parse(line), 'unix') : null } catch { record = null }
-      if (!record || record.session !== sid) this.failWith(`the session helper on ${host} started a holder whose record does not read`)
-      return record
+      let held: HolderRecord | null = null
+      try { held = line ? readRecord(JSON.parse(line), 'unix') : null } catch { held = null }
+      if (!held || held.session !== sid) this.failWith(`the session helper on ${host} started a holder whose record does not read`)
+      // The kind it was asked for, by its record: a holder of the other kind
+      // (one that would end by a clock the tab was told it has not, or one
+      // that would never end by itself) is ended at once, and nothing is launched.
+      if (untilEnded(held) !== (this.o.kind === 'until-ended')) {
+        await this.endHolder(held)
+        this.failWith(`the session helper on ${host} started a holder of another kind than this tab asked for; press Check on the Machines page`)
+      }
+      return { record: held, attach: false }
     }
     this.failWith(`a holder for this tab could not be started on ${host}`)
   }
 
-  /** The holder a crash or an update left for `sid`: found by list mode, then ended. */
-  private async endLeftover(sid: string): Promise<void> {
+  /** The holder that runs for `sid`, by list mode; null when list mode does not show it. */
+  private async leftover(sid: string): Promise<HolderRecord | null> {
     const nonce = newNonce()
     const r = await runScript(this.o.runner, this.target, 'list', this.values(nonce))
     const line = readHashLine(r.stdout, nonce)?.state === 'ok' ? afterHashLine(r.stdout, nonce).split(/\r?\n/).find((l) => l.startsWith('{')) : undefined
     const listing = line ? readListing(line, 'unix') : null
-    const rec = listing?.sessions.find((s) => s.session === sid)
-    if (!rec) { this.o.log(`[remote-helper] ${sid}: a holder runs for it, and list mode does not show it`); return }
-    this.o.log(`[remote-helper] ${sid}: a holder an earlier run left for this tab is ended first`)
+    return listing?.sessions.find((s) => s.session === sid) ?? null
+  }
+
+  /** A holder an earlier run left for this tab's session that is not attached to: a clock holder (a crash or an update within its away clock), or an until-ended one with nothing launched in it. Ended. */
+  private async endLeftover(rec: HolderRecord): Promise<void> {
+    this.o.log(`[remote-helper] ${rec.session}: a holder an earlier run left for this tab is ended first`)
     let conn: HolderConnection | undefined
     try {
       conn = await this.connectOnce(rec)
       await conn.request({ t: 'term.end' })
     } catch (err) {
-      this.o.log(`[remote-helper] ${sid}: the earlier holder could not be ended: ${(err as Error).message}`)
+      this.o.log(`[remote-helper] ${rec.session}: the earlier holder could not be ended: ${(err as Error).message}`)
     } finally {
       conn?.close()
     }
   }
 
+  /**
+   * End (2.1.3-beta.19 section 1.2): a kept session ended over a link of its
+   * own (term.end), then its folder (unsession) and the app's hook state for
+   * its tab. A holder already gone counts as ended. Never throws.
+   */
+  async endKept(record: HolderRecord): Promise<{ ok: true } | { ok: false; why: string }> {
+    this.endAsked = true
+    let conn: HolderConnection | undefined
+    try {
+      conn = await this.connectOnce(record, false)
+      await conn.request({ t: 'term.end' })
+    } catch (err) {
+      if (!(err instanceof GoneError)) return { ok: false, why: (err as Error).message }
+    } finally {
+      conn?.close()
+    }
+    await this.removeFolder(record.session)
+    try { this.o.signals?.ended(this.o.appPtyId) } catch { /* the app's own */ }
+    return { ok: true }
+  }
+
   async connect(record: HolderRecord): Promise<HolderConnection> {
+    // A kept session let go of (its link stayed down, or no holder was found
+    // for it) is ended only by End, over a link of its own (endKept): no link
+    // is tried here for the end the tab's give-up sends, which wrapRequests
+    // would refuse; it used to go through every try again.
+    if (this.keptLost && this.untilEnded && !this.endAsked) throw new FinalError('a session kept until it is ended was let go of: only End ends it')
     const again = this.connected.has(record.nonce)
     // A closed tab gets one try (its end, term.end); only a tab still open
     // waits out a dropped link.
@@ -434,6 +563,7 @@ export class RemoteDriver implements HelperPtyDriver {
         return conn
       } catch (err) {
         last = err as Error
+        if (err instanceof GoneError) this.keptGone = true
         if (err instanceof FinalError) break
         // The reason says which side ended (ssh-exec.ts openScriptStream): the
         // ssh link on this computer, or the helper on the machine.
@@ -462,6 +592,9 @@ export class RemoteDriver implements HelperPtyDriver {
   private wrapRequests(conn: HolderConnection, record: HolderRecord): void {
     const request = conn.request.bind(conn)
     conn.request = async (msg, onReply) => {
+      // A session kept until it is ended is ended only by End (2.1.3-beta.19):
+      // not by a link given up on, nor by a take-over whose attach failed.
+      if (msg.t === 'term.end' && this.keepsRunning()) throw new Error('a session kept until it is ended is ended only by End')
       try {
         return await request(msg, onReply)
       } catch (err) {
@@ -512,13 +645,15 @@ export class RemoteDriver implements HelperPtyDriver {
       if (asks) this.signals?.connected(conn)
       return conn
     } catch (err) {
-      // ssh's exit status first (a bridge that found no holder exits 3, often
-      // just after its output ends), then ssh is ended if it still runs.
+      // ssh's exit status first (a bridge that found no holder exits 3; ssh
+      // gives it just after its output ends, and the stream, ended by that
+      // output's end, leaves ssh that moment: ssh-exec.ts EXIT_AFTER_OUTPUT_MS),
+      // then the stream goes, and with it ssh if it still runs.
       let timer: ReturnType<typeof setTimeout> | undefined
       const r = await Promise.race([opened.result, new Promise<null>((res) => { timer = setTimeout(() => res(null), 2000) })])
       if (timer) clearTimeout(timer)
       opened.stream.destroy()
-      if (r?.code === 3) throw new FinalError(`no holder runs for this tab on ${this.o.machine.host} any more`)
+      if (r?.code === 3) throw new GoneError(`no holder runs for this tab on ${this.o.machine.host} any more`)
       // Any other exit of the bridge before its hello is named, so the tab's
       // note says it; a usage error (2: a helper without the mode) is not
       // tried again, and exit 1 may be. An exit no remote command gives
@@ -537,7 +672,12 @@ export class RemoteDriver implements HelperPtyDriver {
 
   direct(): IPty {
     const m = this.o.machine
-    return new NoticePty(`This tab could not start through the session helper on ${m.host}: ${this.why || 'it did not answer'}. Press Check on the Machines page, or turn the remote sessions switch off in Settings for the usual SSH path.`, this.o.spec.cols, this.o.spec.rows)
+    // A tab whose session the helper keeps never takes the usual path
+    // (2.1.3-beta.19): its note names only the steps that reach it again.
+    const next = this.untilEnded
+      ? 'Press Check on the Machines page, then Restart; a session it keeps there is listed on that page, with End.'
+      : 'Press Check on the Machines page, or turn the remote sessions switch off in Settings for the usual SSH path.'
+    return new NoticePty(`This tab could not start through the session helper on ${m.host}: ${this.why || 'it did not answer'}. ${next}`, this.o.spec.cols, this.o.spec.rows)
   }
 
   ending(sid: string, done: Promise<void>): void {
@@ -546,65 +686,211 @@ export class RemoteDriver implements HelperPtyDriver {
     // computer go), then the session's own folder, when its files were sent;
     // a new holder for the same id (a Restart, which reuses the tab's id)
     // waits for all of it.
+    // A session kept until it is ended and only let go of keeps its folder.
     const whole = done.catch(() => { /* ended either way */ })
       .then(() => { try { this.o.signals?.ended(this.o.appPtyId) } catch { /* the app's own */ } })
-      .then(() => (this.filesSent ? this.removeFolder(sid) : undefined))
+      .then(() => (this.filesSent && !this.keepsRunning() ? this.removeFolder(sid) : undefined))
     endings.set(sid, whole)
     void whole.finally(() => { if (endings.get(sid) === whole) endings.delete(sid) })
   }
 
-  attachedChanged(): void { /* the Machines page reads tabs, not attaches, in this preview */ }
+  /** Called once, at the tab's first attach to its holder: its CLI runs there
+   *  (launched by this start, or kept there and attached to). The Watchdog arms
+   *  then (2.1.3-beta.19 fix round). */
+  onFirstAttach: (() => void) | undefined
+
+  attachedChanged(_sid: string, attached: boolean): void {
+    // The Machines page reads tabs and list mode, not attaches; a kept
+    // session shown once may be ended from here only by End.
+    if (!attached || this.everAttached) return
+    this.everAttached = true
+    try { this.onFirstAttach?.() } catch { /* the app's own */ }
+  }
 
   log(message: string): void { this.o.log(message) }
 }
+
+/** Input a tab typed while its start was still finding its holder, at most. */
+const EARLY_INPUT_MAX = 1024 * 1024
 
 /**
  * The tab's terminal: a HelperPty over the remote driver, shaped as node-pty's
  * IPty. Its pid is 0: the holder's and the CLI's are the host's, and must
  * never be taken for a process on this computer.
+ *
+ * Its start first finds its holder (the driver's prepare: the host reads, the
+ * hold, the session's files), and only then makes the HelperPty: one that
+ * launches in the holder it started, or (2.1.3-beta.19) one that takes over
+ * a holder kept for this tab's session until it is ended, which launches
+ * nothing. What the tab typed or sized meanwhile goes to it once it is made.
+ *
+ * A tab whose holder runs until it is ended is let go of when it is closed,
+ * at a quit or an app update (kill: HelperPty.release), and ended only by
+ * end(): End's term.end over a link of its own.
  */
 export class RemoteHelperPty implements IPty {
   readonly pid = 0
   readonly sid: string
   readonly machineDid: string
-  private readonly inner: HelperPty
+  private inner: HelperPty | undefined
   private readonly driver: RemoteDriver
   private readonly data = new Emitter<string>()
+  private readonly running = new Emitter<void>()
+  private readonly exit = new Emitter<{ exitCode: number; signal?: number }>()
+  private readonly endedP: Promise<void>
+  private resolveEnded!: () => void
+  /** Before the HelperPty is made: what the tab typed, its last size, and a close. */
+  private early: { input: Array<string | Buffer>; bytes: number; size?: { cols: number; rows: number }; killed: boolean } = { input: [], bytes: 0, killed: false }
+  /** The holder the start found, once it is known. */
+  private held: HeldStart | undefined
+  /** The start's find of its holder, settled: the holder it found, or why it
+   *  failed. End asked before it settles waits for it (end()). */
+  private readonly preparing: Promise<HeldStart | Error>
+  private exited = false
 
-  constructor(o: RemoteSessionOptions) {
+  constructor(private readonly o: RemoteSessionOptions) {
     this.sid = remoteSessionId(o.appPtyId)
     this.machineDid = o.machine.did
     this.driver = new RemoteDriver(o)
+    this.driver.onFirstAttach = () => this.running.fire()
     const problem = checkLaunch(o.spec, 'unix')
     if (problem) throw new Error(`the launch cannot go through the session helper: ${problem.why}`)
-    this.inner = new HelperPty({ sid: this.sid, label: o.appPtyId, spec: o.spec, driver: this.driver, redraw: 'nudge' })
-    this.inner.onData((d) => this.data.fire(d))
+    this.endedP = new Promise<void>((r) => { this.resolveEnded = r })
+    const prepared = this.driver.prepare(this.sid, o.appPtyId, () => this.early.killed && !this.driver.endAsked)
+    this.preparing = prepared.then((held) => held, (err: unknown) => (err instanceof Error ? err : new Error(String(err))))
+    void prepared.then((held) => this.started(held), (err: Error) => this.startFailed(err))
   }
 
-  get cols(): number { return this.inner.cols }
-  get rows(): number { return this.inner.rows }
+  /** The holder was found: the HelperPty that shows it is made. */
+  private started(held: HeldStart): void {
+    this.held = held
+    // Closed while it started: with End asked, end() ends the holder itself,
+    // whatever its kind, so no terminal is made for it; else a kept session
+    // stays as it was, and a holder this start made (no program in it yet)
+    // is ended through its HelperPty.
+    if (this.early.killed && (this.driver.endAsked || held.attach)) { this.finishEarly(0); return }
+    this.driver.setPrepared({ record: held.record })
+    this.make(held.attach ? held.record : undefined)
+  }
+
+  private startFailed(err: Error): void {
+    // Closed while it started: nothing to show (End asked meanwhile answers
+    // this error: end()).
+    if (this.early.killed) { this.finishEarly(0); return }
+    this.driver.setPrepared({ error: err })
+    this.make(undefined)
+  }
+
+  private make(adopt: HolderRecord | undefined): void {
+    // Its provider (the launch plan's) decides a queued lone Enter's wait (2.1.3-beta.19 section 6.2).
+    const inner = new HelperPty({ sid: this.sid, label: this.o.appPtyId, spec: this.o.spec, driver: this.driver, redraw: 'nudge', ...(adopt ? { adopt } : {}), ...(this.o.plan ? { provider: this.o.plan.provider } : {}) })
+    this.inner = inner
+    inner.onData((d) => this.data.fire(d))
+    inner.onExit((e) => {
+      // A link that stayed down past every try: a kept session is let go of,
+      // never ended (the Restart attaches again), and the tab says so. One
+      // whose attach again found no holder is over on the machine: the tab
+      // says that instead (its Restart starts a new session on the conversation).
+      if (e.exitCode === LOST_EXIT_CODE) {
+        this.driver.keptLost = true
+        if (this.untilEnded && !this.driver.endAsked) {
+          this.data.fire(this.driver.keptGone
+            ? `\r\n[This tab's session on ${this.o.machine.host} is over: no session helper holds it there any more (it ended there, or the machine restarted). Restart starts a new session and resumes the conversation.]\r\n`
+            : `\r\n[This tab is no longer attached to its session on ${this.o.machine.host} (the link stayed down, or another tab took it). The session runs on there, kept by the session helper: Restart attaches to it again, and the Machines page lists it, with End.]\r\n`)
+        }
+      }
+      this.exited = true
+      this.exit.fire(e)
+    })
+    void inner.ended.then(() => this.resolveEnded())
+    const { input, size, killed } = this.early
+    this.early = { input: [], bytes: 0, killed: false }
+    if (size) inner.resize(size.cols, size.rows)
+    for (const d of input) this.write(d)
+    if (killed) this.kill()
+  }
+
+  private finishEarly(exitCode: number): void {
+    if (this.exited) return
+    this.exited = true
+    this.exit.fire({ exitCode })
+    this.resolveEnded()
+  }
+
+  get cols(): number { return this.inner?.cols ?? this.early.size?.cols ?? this.o.spec.cols }
+  get rows(): number { return this.inner?.rows ?? this.early.size?.rows ?? this.o.spec.rows }
   get process(): string { return 'ssh' }
   get handleFlowControl(): boolean { return false }
   set handleFlowControl(_v: boolean) { /* not used */ }
   get onData(): IEvent<string> { return this.data.event }
-  get onExit(): IEvent<{ exitCode: number; signal?: number }> { return this.inner.onExit }
+  get onExit(): IEvent<{ exitCode: number; signal?: number }> { return this.exit.event }
+  /** Fires once, at the tab's first attach to its holder: the CLI runs there
+   *  (the helper's own "it runs" signal; a usual SSH tab's is its
+   *  claude-running latch), launched by this start or kept there and attached to. */
+  get onRunning(): IEvent<void> { return this.running.event }
   /** The bridge exec's ssh process now, when there is one. */
   get linkPid(): number | undefined { return this.driver.linkPid }
-  /** Settles once the session is over and its holder ended. */
-  get ended(): Promise<void> { return this.inner.ended }
-  get throughHelper(): boolean { return this.inner.throughHelper }
+  /** Settles once the session is over, or let go of. */
+  get ended(): Promise<void> { return this.endedP }
+  get throughHelper(): boolean { return this.inner?.throughHelper ?? true }
+  /** The holder runs until it is ended (an SSH Persistent tab's, or one this
+   *  tab attached to): closing the tab lets go of it. */
+  get untilEnded(): boolean { return (this.o.kind ?? 'away') === 'until-ended' || this.held?.attach === true }
+  /** The start attached to a session kept for this tab (nothing launched). */
+  get attachedToKept(): boolean { return this.held?.attach === true }
+  /** The tab showed its session at least once. */
+  get everShown(): boolean { return this.driver.wasAttached }
 
   write(data: string | Buffer): void {
-    this.inner.write(data)
+    if (this.inner) { this.inner.write(data); return }
+    const n = typeof data === 'string' ? Buffer.byteLength(data) : data.length
+    if (this.early.bytes + n > EARLY_INPUT_MAX) return
+    this.early.input.push(data)
+    this.early.bytes += n
   }
 
-  resize(cols: number, rows: number): void { this.inner.resize(cols, rows) }
-  clear(): void { this.inner.clear() }
-  pause(): void { this.inner.pause() }
-  resume(): void { this.inner.resume() }
+  resize(cols: number, rows: number): void {
+    if (this.inner) this.inner.resize(cols, rows)
+    else this.early.size = { cols, rows }
+  }
+  clear(): void { this.inner?.clear() }
+  pause(): void { this.inner?.pause() }
+  resume(): void { this.inner?.resume() }
 
+  /** A close, a Restart, a quit or an update. A holder that runs until it is
+   *  ended is let go of (no term.end); any other ends its session. */
   kill(signal?: string): void {
     this.driver.closed = true
-    this.inner.kill(signal)
+    const inner = this.inner
+    if (!inner) { this.early.killed = true; return }
+    if (this.untilEnded && !this.driver.endAsked && inner.release()) {
+      this.o.log(`[remote-helper] ${this.sid}: let go of; its session runs on until it is ended`)
+    }
+    inner.kill(signal)
+  }
+
+  /**
+   * End (2.1.3-beta.19 section 1.2): the session is ended, whatever its kind,
+   * by term.end over a link of its own, then its folder goes; the terminal
+   * is let go of first, so nothing else is sent to the holder. Answers what
+   * the end did. Asked while the start still finds its holder, it waits for
+   * that start: the holder it found is ended here; a start that failed ended
+   * nothing, and the answer says why (a session kept there runs on).
+   */
+  async end(): Promise<{ ok: true } | { ok: false; why: string }> {
+    this.driver.endAsked = true
+    this.driver.closed = true
+    const inner = this.inner
+    const record = inner?.heldRecord ?? this.held?.record
+    if (inner) {
+      inner.release()
+      inner.kill()
+    } else {
+      this.early.killed = true
+    }
+    if (record) return this.driver.endKept(record)
+    const found = await this.preparing
+    if (found instanceof Error) return { ok: false, why: found.message }
+    return this.driver.endKept(found.record)
   }
 }

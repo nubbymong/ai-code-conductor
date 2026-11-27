@@ -182,6 +182,10 @@ export interface LaunchSessionOptions {
   /** Force SSHOptions.reconnect for this spawn (via sshReachedClaudeRunning, the
    *  field TerminalView reads to compute reconnect). */
   reconnect?: boolean
+  /** 2.1.3-beta.19 section 1.2: the session is kept by the session helper on
+   *  this machine (a 'helper' entry's device id): the tab is marked, so its
+   *  spawn attaches to it and never takes the usual SSH path. */
+  keptOn?: string
 }
 
 /**
@@ -256,6 +260,10 @@ export function buildLaunchSession(config: TerminalConfig, opts?: LaunchSessionO
   // here makes the resumed spawn a reconnect — attach reattaches the live claude,
   // and if the remote session is gone the fresh-create branch adds `--continue`.
   if (opts?.reconnect) session.sshReachedClaudeRunning = true
+  if (opts?.keptOn && session.sessionType === 'ssh') {
+    session.remoteVia = 'helper'
+    session.remoteDid = opts.keptOn
+  }
   return session
 }
 

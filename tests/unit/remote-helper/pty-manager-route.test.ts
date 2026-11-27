@@ -152,8 +152,11 @@ describe('pty-manager SSH branch: the usual path is unchanged for every tab that
 
   const cases: Array<[string, SSHOptions, boolean, RemoteMachineRecord | null, string]> = [
     ['the switch off', SSH_TAB, false, MACHINE, ROUTE_WHY.off],
-    ['SSH Persistent (no detachable value)', { ...SSH_TAB, detachable: undefined }, true, MACHINE, ROUTE_WHY.persistent],
-    ['SSH Persistent (detachable true)', { ...SSH_TAB, detachable: true }, true, MACHINE, ROUTE_WHY.persistent],
+    // 2.1.3-beta.19 section 1.2: SSH Persistent goes through the helper only on
+    // a machine whose last Check read logind as not cleaning up at logout.
+    ['SSH Persistent (no detachable value) on a machine whose logind was not read', { ...SSH_TAB, detachable: undefined }, true, MACHINE, ROUTE_WHY.cleanUpUnknown],
+    ['SSH Persistent (detachable true) on a machine whose logind was not read', { ...SSH_TAB, detachable: true }, true, MACHINE, ROUTE_WHY.cleanUpUnknown],
+    ['SSH Persistent on a machine whose logind ends the user\'s processes at logout', { ...SSH_TAB, detachable: true }, true, { ...MACHINE, logind: { kill: 'yes', exclude: 'root', linger: 'no' } }, ROUTE_WHY.cleanUpOn],
     ['a container', { ...SSH_TAB, runtime: { type: 'container', container: 'dev' } }, true, MACHINE, ROUTE_WHY.container],
     ['a legacy docker post-command', { ...SSH_TAB, postCommand: 'sudo docker exec -it dev bash' }, true, MACHINE, ROUTE_WHY.container],
     ['a post-connect command', { ...SSH_TAB, postCommand: 'cd /srv && source env' }, true, MACHINE, ROUTE_WHY.postCommand],
@@ -166,6 +169,8 @@ describe('pty-manager SSH branch: the usual path is unchanged for every tab that
 
   for (const [name, tab, switchOn, machine, why] of cases) {
     it(`${name}: node-pty gets the same file, argv and options as with no remote helper, and the log says why`, () => {
+      // Each case is a new tab (2.1.3-beta.19: main remembers a tab's last path until it is closed).
+      forgetRemoteHelperTab('route-plain')
       setRemoteHelperDeps(null)
       const before = spawnSsh('route-plain', tab)
       expect(before, 'the usual path reached node-pty').not.toBeNull()
@@ -266,8 +271,9 @@ describe('pty-manager SSH branch: a tab that goes through the session helper', (
     expect(isRemoteHelperTab('route-helper')).toBe(true)
     expect(logs.some((l) => l.startsWith('[remote-helper] route-helper: through the session helper on nick@rocky.lan:22'))).toBe(true)
     await until(() => ssh.calls.length > 0)
-    // The fake host refuses every connection: the start stops at its first exec.
-    expect(ssh.scripts()).toEqual(['reads'])
+    // The fake host refuses every connection: the start stops at its first
+    // execs, the host reads and, beside them, the account field (2.1.3-beta.19 section 3).
+    expect(ssh.scripts()).toEqual(['reads', 'field'])
     // Started again and closed while it starts: killPty reaches it, and it is forgotten.
     expect(spawnSsh('route-helper', SSH_TAB)).toBeNull()
     expect(isRemoteHelperTab('route-helper')).toBe(true)
@@ -345,7 +351,7 @@ describe('a tab through the session helper: what goes to its host, and what it t
     expect(launch.argv?.slice(4, 9)).toEqual([MACHINE.claudePath, '--settings', `${folder}/settings.json`, '--mcp-config', `${folder}/mcp.json`])
     expect((launch.argv ?? []).join(' ')).not.toMatch(/--append-system-prompt|statusline|localhost|127\.0\.0\.1|token/i)
     expect(Object.keys(launch.env ?? {}).filter((k) => /TOKEN|SECRET|KEY|^CCC_|^ANTHROPIC/i.test(k))).toEqual([])
-    expect(ssh.scripts()).toEqual(['reads', 'hold', 'files', 'bridge'])
+    expect(ssh.scripts()).toEqual(['reads', 'field', 'hold', 'files', 'bridge'])
     // The app's light theme reaches the CLI, as on the usual SSH launch line.
     expect(launch.env?.COLORFGBG).toBe('0;15')
     // A prompt button (Send) types by the usual rule for a Claude Code tab: its text, then Enter.

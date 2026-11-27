@@ -1031,3 +1031,67 @@ describe('SessionWatchdog — SSH send hardening (requireClaudeChrome)', () => {
     expect(hasClaudeInputChrome).not.toHaveBeenCalled()
   })
 })
+
+// PR 763 fix round 9 (the 2.1.3-beta.19 release smoke re-read): a running
+// watchdog kept the retry message it started with. setRetryMessages takes the
+// saved one (the manager hands it on each save), resolved and sanitized as at
+// the start, for the next retry of each kind; nothing else in its state moves.
+// Red on 38e0edcb, which had no setRetryMessages.
+describe('SessionWatchdog.setRetryMessages (PR 763 fix round 9)', () => {
+  it('the next safeguard retry types the message saved since the last one', () => {
+    const t = makeAdapter()
+    const wd = new SessionWatchdog('s1', t.adapter, { safeguard: { maxRetries: 3, retryDelaySeconds: 8 } })
+    detectSafeguard.mockReturnValue(true)
+    t.setTail('safeguards flagged this message')
+    wd.feed()
+    t.setNow(8_001)
+    wd.tick()
+    expect(t.sent).toEqual(['continue'])
+    wd.setRetryMessages({ retryMessage: 'carry on from where you stopped' })
+    expect(wd.getState().safeguardAttempts).toBe(1)
+    t.setNow(16_002)
+    wd.tick()
+    expect(t.sent).toEqual(['continue', 'carry on from where you stopped'])
+    expect(wd.getState().safeguardAttempts).toBe(2)
+  })
+
+  it('the next usage-limit retry too, and a block\'s own message still wins for its kind', () => {
+    const t = makeAdapter()
+    const wd = new SessionWatchdog('s1', t.adapter)
+    wd.setRetryMessages({ retryMessage: 'carry on', safeguard: { retryMessage: 'try that again' } })
+    isRateLimited.mockReturnValue(true)
+    findRateLimitMessage.mockReturnValue('resets 3pm')
+    calculateWaitMs.mockReturnValue(60_000)
+    t.setTail('You have hit your limit, resets 3pm')
+    wd.feed()
+    t.setNow(60_001)
+    wd.tick()
+    expect(t.sent).toEqual(['carry on'])
+    const fresh = makeAdapter()
+    const sg = new SessionWatchdog('s2', fresh.adapter)
+    sg.setRetryMessages({ retryMessage: 'carry on', safeguard: { retryMessage: 'try that again' } })
+    isRateLimited.mockReturnValue(false)
+    detectSafeguard.mockReturnValue(true)
+    fresh.setTail('safeguards flagged this message')
+    sg.feed()
+    fresh.setNow(9_000)
+    sg.tick()
+    expect(fresh.sent).toEqual(['try that again'])
+  })
+
+  it('a message with control characters is sanitized, and an empty one keeps the default', () => {
+    const t = makeAdapter()
+    const wd = new SessionWatchdog('s1', t.adapter, { safeguard: { maxRetries: 3, retryDelaySeconds: 8 } })
+    wd.setRetryMessages({ retryMessage: 'go\r\n on\u001b[201~' })
+    detectSafeguard.mockReturnValue(true)
+    t.setTail('safeguards flagged this message')
+    wd.feed()
+    t.setNow(8_001)
+    wd.tick()
+    expect(t.sent).toEqual(['go on[201~'])
+    wd.setRetryMessages({ retryMessage: '' })
+    t.setNow(16_002)
+    wd.tick()
+    expect(t.sent).toEqual(['go on[201~', 'continue'])
+  })
+})

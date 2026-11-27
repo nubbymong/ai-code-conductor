@@ -15,6 +15,7 @@ import {
 import { markMultiSpawnIntroSeen } from '../onboarding/multi-spawn-intro-gate'
 import { resolveIdentityColor, bucketLegacyColorToKey } from '../../shared/identity-colors'
 import { useResolvedTheme } from '../hooks/useThemeController'
+import { usePersistentKeeper } from '../hooks/usePersistentKeeper'
 import { SessionTypeBadge, SshReattachBadge, TransportBadge } from './sidebar/Badges'
 import { configIsPersistent, containerNameOf, resolveTransportBadge } from './sidebar/transportBadge'
 import { DialogOverlay, DialogPanel, DialogBody, DialogFooter, DialogButton, DialogCallout } from './ui/Dialog'
@@ -166,6 +167,7 @@ function StartupConfigRow({ config, state, checked, onToggle }: RowProps) {
     ssh: config.sshConfig,
     persistent: configIsPersistent(config.sshConfig),
   })
+  const keeperOf = usePersistentKeeper()
 
   return (
     <div
@@ -178,7 +180,7 @@ function StartupConfigRow({ config, state, checked, onToggle }: RowProps) {
       <span className="w-2 h-2 rounded-[3px] shrink-0" style={{ backgroundColor: chipColour }} aria-hidden />
       <SessionTypeBadge kind={typeKind} />
       <span className="text-xs truncate flex-1 min-w-0" style={{ color: 'var(--text-primary)' }}>{config.label}</span>
-      <TransportBadge kind={transport} container={containerNameOf(config.sshConfig)} />
+      <TransportBadge kind={transport} container={containerNameOf(config.sshConfig)} keeper={keeperOf(config)} />
       {config.sessionType === 'ssh' && <SshReattachBadge count={reattachCount} />}
       {state.auto && (
         <span

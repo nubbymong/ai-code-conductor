@@ -123,3 +123,28 @@ describe('Snap, Rectangle: the menu closes before the capture is asked (aicc_pla
     expect(snapButton().disabled).toBe(false)
   })
 })
+
+// 2.1.3-beta.19 fix round, item SNAPNODESK (Rocky line, outside finding 4):
+// a press with no desktop to capture ('[snap] new engine: no desktop to
+// capture (exit 3) ... nothing captured') opened nothing and told nobody. It
+// now says so in one plain line where Snap was pressed: the hint above the
+// command bar (PasteHint); a cancelled press still says nothing.
+describe('Snap, Rectangle: a press with no desktop to capture says so', () => {
+  it('shows one plain line for this session, sends nothing; a cancelled press shows none', async () => {
+    const { usePasteHintStore } = await import('../../../src/renderer/stores/pasteHintStore')
+    usePasteHintStore.getState().clear('s1')
+    captureRectangle.mockResolvedValue({ notCaptured: 'no-desktop' })
+    await openMenuAndPressRectangle()
+    await act(async () => { runFrame() })
+    await act(async () => { runFrame() })
+    expect(sendImageToSession).not.toHaveBeenCalled()
+    expect(usePasteHintStore.getState().hints.s1).toBe('Snap could not capture: there is no desktop to capture in this Windows session.')
+    expect(snapButton().disabled).toBe(false)
+    usePasteHintStore.getState().clear('s1')
+    captureRectangle.mockResolvedValue(null)
+    await openMenuAndPressRectangle()
+    await act(async () => { runFrame() })
+    await act(async () => { runFrame() })
+    expect(usePasteHintStore.getState().hints.s1).toBeUndefined()
+  })
+})

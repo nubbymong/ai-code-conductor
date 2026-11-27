@@ -30,8 +30,11 @@ function usd(n: number): string {
 
 // A 5h / 7d rate-limit window pair, read from a session's statusline telemetry.
 // Shared by the Codex and Claude provider sections so both render identically.
+// Each window from its own field (2.1.3-beta.19 fix round 5): a status line can
+// give the weekly window and no 5-hour one, so only a session with neither has
+// no telemetry, and a window left out of a report says not reported.
 function RateWindows({ session }: { session: Session | null }) {
-  if (!session || session.rateLimitCurrent == null) {
+  if (!session || (session.rateLimitCurrent == null && session.rateLimitWeekly == null)) {
     return (
       <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
         no session telemetry this run
@@ -46,9 +49,11 @@ function RateWindows({ session }: { session: Session | null }) {
       <div className="flex items-center justify-between gap-2">
         <span>
           5h window{' '}
-          <span style={{ color: 'var(--text-primary)' }}>{Math.round(session.rateLimitCurrent)}%</span>
+          {session.rateLimitCurrent == null
+            ? <span style={{ color: 'var(--text-muted)' }}>not reported</span>
+            : <span style={{ color: 'var(--text-primary)' }}>{Math.round(session.rateLimitCurrent)}%</span>}
         </span>
-        {session.rateLimitCurrentResets && (
+        {session.rateLimitCurrent != null && session.rateLimitCurrentResets && (
           <span style={{ color: 'var(--text-muted)' }}>
             resets {formatResetTime(session.rateLimitCurrentResets)}
           </span>

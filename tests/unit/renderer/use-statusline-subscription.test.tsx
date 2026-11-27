@@ -108,7 +108,9 @@ describe('useStatuslineSubscription -- account identity (Phase 3 harmonise-remot
 
 // aicc_planning#292: the "no reading" mark (D3) is sent once, and readings can
 // still arrive after it. A reading is what the strip's placeholder rule reads:
-// a non-empty bucket list or a current rate limit figure.
+// a non-empty bucket list, a 5-hour figure or a weekly figure (2.1.3-beta.19
+// fix round 5: Claude Code can report the weekly window alone, and the strip
+// shows it).
 describe('useStatuslineSubscription -- the "no reading" mark', () => {
   const bucket = { key: 'k/300:', label: '5h', group: 'session', percent: 40, resetsAt: '', severity: 'normal' }
   const mark = () => useSessionStore.getState().sessions[0].usageUnavailable
@@ -130,11 +132,19 @@ describe('useStatuslineSubscription -- the "no reading" mark', () => {
     expect(useSessionStore.getState().sessions[0].rateLimitCurrent).toBe(0)
   })
 
-  it('the mark and no readings: it stays (an empty bucket list, a weekly figure alone, other fields)', () => {
+  it('the mark first, then a late weekly figure alone: the mark is cleared', () => {
+    renderHook(() => useStatuslineSubscription('s1'))
+    act(() => { cb!({ sessionId: 's1', usageUnavailable: 'no-reading' }) })
+    act(() => { cb!({ sessionId: 's1', rateLimitWeekly: 68, rateLimitWeeklyResets: '2026-11-30T03:00:00.000Z' }) })
+    expect(mark()).toBeUndefined()
+    expect(useSessionStore.getState().sessions[0].rateLimitWeekly).toBe(68)
+  })
+
+  it('the mark and no readings: it stays (an empty bucket list, other fields)', () => {
     renderHook(() => useStatuslineSubscription('s1'))
     act(() => { cb!({ sessionId: 's1', usageUnavailable: 'no-reading' }) })
     act(() => { cb!({ sessionId: 's1', usageBuckets: [] }) })
-    act(() => { cb!({ sessionId: 's1', rateLimitWeekly: 12, contextUsedPercent: 30 }) })
+    act(() => { cb!({ sessionId: 's1', contextUsedPercent: 30 }) })
     expect(mark()).toBe('no-reading')
   })
 
@@ -164,5 +174,51 @@ describe('useStatuslineSubscription -- fast mode', () => {
     act(() => { cb!({ sessionId: 's1', fastMode: true }) })
     act(() => { cb!({ sessionId: 's1', contextUsedPercent: 50 }) })
     expect(useSessionStore.getState().sessions[0].fastMode).toBe(true)
+  })
+})
+
+// 2.1.3-beta.19 section 3 (aicc_planning#434): a tab through the session
+// helper. Main says why it names no account, or shows no per-model bars; the
+// store keeps exactly one of the label and the reason, each start setting it
+// again, and bars that arrive clear the usage reason.
+describe('useStatuslineSubscription -- a helper tab\'s account and usage reasons', () => {
+  const helperTab = () => useSessionStore.setState({
+    sessions: [{ id: 's1', label: 'a', workingDirectory: '/', model: 'opus', color: '#fff', status: 'idle', createdAt: 0, sessionType: 'ssh' } as any],
+    activeSessionId: 's1',
+  })
+  const s1 = () => useSessionStore.getState().sessions[0]
+  const fable = { key: 'weekly:Fable', label: 'Fable', group: 'weekly', percent: 63, resetsAt: '', severity: 'normal' }
+
+  it('a start that named no account: the reason, and an earlier start\'s label goes', () => {
+    helperTab()
+    renderHook(() => useStatuslineSubscription('s1'))
+    act(() => { cb!({ sessionId: 's1', accountEmail: 'me@example.com' }) })
+    expect(s1().accountEmail).toBe('me@example.com')
+    act(() => { cb!({ sessionId: 's1', remoteAccountNotShown: 'no-account' }) })
+    expect(s1().remoteAccountNotShown).toBe('no-account')
+    expect(s1().accountEmail).toBeUndefined()
+    // The next start named one: the label, and the reason goes.
+    act(() => { cb!({ sessionId: 's1', accountEmail: 'other@example.com' }) })
+    expect(s1().accountEmail).toBe('other@example.com')
+    expect(s1().remoteAccountNotShown).toBeUndefined()
+  })
+
+  it('the usage reason is kept until bars arrive, and a tick without either leaves it', () => {
+    helperTab()
+    renderHook(() => useStatuslineSubscription('s1'))
+    act(() => { cb!({ sessionId: 's1', remoteUsageNotShown: 'own-sign-in', usageBuckets: [] }) })
+    expect(s1().remoteUsageNotShown).toBe('own-sign-in')
+    expect(s1().usageBuckets).toEqual([])
+    act(() => { cb!({ sessionId: 's1', rateLimitCurrent: 30 }) })
+    expect(s1().remoteUsageNotShown).toBe('own-sign-in')
+    act(() => { cb!({ sessionId: 's1', usageBuckets: [fable] }) })
+    expect(s1().remoteUsageNotShown).toBeUndefined()
+    expect(s1().usageBuckets).toEqual([fable])
+  })
+
+  it('a local session takes no account reason', () => {
+    renderHook(() => useStatuslineSubscription('s1'))
+    act(() => { cb!({ sessionId: 's1', remoteAccountNotShown: 'not-read' }) })
+    expect(s1().remoteAccountNotShown).toBeUndefined()
   })
 })

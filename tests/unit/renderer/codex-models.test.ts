@@ -11,8 +11,8 @@ const reg = baselineJson as unknown as ModelRegistry
 
 // A new config starts on the first model of the list that every supported
 // Codex lists (P3.8 round 1, J1, as a new Claude config starts on the first
-// row of Claude's). GPT-6.2-Sol heads the list but only Codex 0.170.0 and
-// 0.171.0 list it, so a new config on an older supported Codex would start on
+// row of Claude's). GPT-6.2-Sol heads the list but only Codex 0.170.0, 0.171.0
+// and 0.172.0 list it, so a new config on an older supported Codex would start on
 // a model that CLI does not offer.
 describe('codexNewConfigModel', () => {
   it('starts on the first model every supported Codex lists, not one only the newest versions list', () => {

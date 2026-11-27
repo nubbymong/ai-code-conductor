@@ -10,12 +10,13 @@ import { describe, it, expect, afterEach } from 'vitest'
 import { createHash } from 'crypto'
 import { closeSync, constants, existsSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
-import { join, sep } from 'path'
+import { basename, dirname, join, sep } from 'path'
 import { chooseConpty } from '../../../src/main/bundled-conpty'
 import {
   BUSY_WAIT_MS, CONPTY_FILES, CONPTY_FOLDER, bundledConptySource, checkedConpty, checkedHelperCopySync, copyMatches, helperRootDir, installHelperCopy, removeOldVersionFolders, retryWhileBusy,
   _forgetCheckedHelperCopyForTest,
 } from '../../../src/main/session-helper/install'
+import { HELPER_FOLDER_RE } from '../../../src/main/session-helper/protocol'
 
 const failure = (code: string) => Object.assign(new Error(`${code}: the file is in use`), { code })
 /** libuv's UV_FS_O_EXLOCK on Windows: open a file with no sharing at all. */
@@ -267,9 +268,12 @@ describe('the bundled ConPTY beside the helper copy', () => {
       const began = Date.now()
       const checked = await checkedConpty(info)
       expect(checked.available ? '' : checked.reason).toContain('in use by a running session')
-      // At a start too.
+      // A start is not held up either: it does not wait for the held copy, and
+      // (2.1.3-beta.19 fix round) puts this build's ConPTY with the helper in a
+      // version folder of its own beside it, so the bundled ConPTY is available there.
       const start = await installHelperCopy({ ...opts, conptySource: source })
-      expect(start.conpty.available ? '' : start.conpty.reason).toContain('in use by a running session')
+      expect(start.conpty.available).toBe(true)
+      expect(start.folder).not.toBe(info.folder)
       expect(Date.now() - began).toBeLessThan(BUSY_WAIT_MS / 2)
       expect(await copyMatches(start.exe, start.sha256)).toBe(true)
     } finally {
@@ -279,6 +283,51 @@ describe('the bundled ConPTY beside the helper copy', () => {
     expect(await checkedConpty(info)).toEqual(info.conpty)
     expect(readFileSync(join(info.folder, 'conpty', 'OpenConsole.exe'), 'utf8')).toBe('MZ node-pty OpenConsole.exe')
     expect(leftovers(info.folder)).toEqual([])
+  }, 30_000)
+
+  // 2.1.3-beta.19 fix round, item CONPTY (published beta.18 control): after an
+  // update that kept sessions, with a held Claude Code tab running, a NEW Codex
+  // tab was not held: the earlier build's OpenConsole.exe beside the helper
+  // differs from the new app's (two signed releases differ the same way), and a
+  // running session holds that copy, so it could not be replaced ('EPERM ...
+  // unlink ...\conpty\conpty.dll'). This build's ConPTY now goes with the helper
+  // into a version folder of its own, named by the ConPTY's bytes too.
+  it.skipIf(process.platform !== 'win32')('an update whose ConPTY differs while a running session holds the earlier copy: the new copy goes in a version folder of its own, so a new terminal is held; once nothing holds the old copy, the usual folder again', async () => {
+    const { source, root, opts } = setUp()
+    // The earlier build's copy, which a held session of that build has loaded.
+    const earlier = await installHelperCopy({ ...opts, conptySource: source })
+    const fd = openSync(join(earlier.folder, 'conpty', 'conpty.dll'), constants.O_RDONLY | EXCLUSIVE_OPEN)
+    let beside = ''
+    try {
+      // The new build: node-pty's OpenConsole.exe is another build's.
+      writeFileSync(join(source, 'OpenConsole.exe'), 'MZ the new build of OpenConsole.exe')
+      const start = await installHelperCopy({ ...opts, conptySource: source })
+      expect(start.conpty.available).toBe(true)
+      beside = start.folder
+      expect(beside).not.toBe(earlier.folder)
+      // A version folder of the same version, as every other: the clean-up of old folders knows it.
+      expect(HELPER_FOLDER_RE.exec(basename(beside))?.[1]).toBe('0.1.0')
+      expect(dirname(beside)).toBe(root)
+      expect(await copyMatches(start.exe, start.sha256)).toBe(true)
+      for (const f of CONPTY_FILES) expect(readFileSync(join(beside, 'conpty', f), 'utf8')).toBe(readFileSync(join(source, f), 'utf8'))
+      expect(await checkedConpty(start)).toEqual(start.conpty)
+      // The held copy is not replaced.
+      expect(existsSync(join(earlier.folder, 'conpty', 'conpty.dll'))).toBe(true)
+      // A second start while it is still held finds the same folder of its own.
+      expect((await installHelperCopy({ ...opts, conptySource: source })).folder).toBe(beside)
+      expect(leftovers(root)).toEqual([])
+    } finally {
+      closeSync(fd)
+    }
+    // Nothing holds the earlier copy any more: a start replaces it in the usual folder.
+    const later = await installHelperCopy({ ...opts, conptySource: source })
+    expect(later.folder).toBe(earlier.folder)
+    expect(later.conpty.available).toBe(true)
+    expect(readFileSync(join(later.folder, 'conpty', 'OpenConsole.exe'), 'utf8')).toBe('MZ the new build of OpenConsole.exe')
+    // The clean-up of old version folders (2.1.3-beta.19 section 6.5's too): the
+    // folder of its own is kept while a holder of its version runs, and goes once none does.
+    expect(await removeOldVersionFolders(root, later.folder, new Set(['0.1.0']))).toEqual([])
+    expect(await removeOldVersionFolders(root, later.folder, new Set())).toEqual([basename(beside)])
   }, 30_000)
 
   it('a copy that no longer matches, or is gone, is copied again before it is used', async () => {

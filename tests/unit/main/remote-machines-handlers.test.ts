@@ -21,7 +21,7 @@ const h = vi.hoisted(() => {
   const SHA = 'a'.repeat(64)
   return {
     SHA,
-    HELPER: { file: '/x/linux-x64/aicc-helper', version: '0.1.0', sha256: SHA, size: 4096, folder: `0.1.0-${SHA.slice(0, 12)}` },
+    HELPER: { arch: 'x86_64' as const, path: 'linux-x64/aicc-helper', file: '/x/linux-x64/aicc-helper', version: '0.1.0', sha256: SHA, size: 4096, folder: `0.1.0-${SHA.slice(0, 12)}` },
     settings: null as Record<string, unknown> | null,
     configs: [] as unknown[],
     stored: null as unknown,
@@ -47,7 +47,7 @@ vi.mock('../../../src/main/remote-helper/ssh-exec', async (importOriginal) => ({
 }))
 vi.mock('../../../src/main/remote-helper/manifest', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../../src/main/remote-helper/manifest')>()),
-  readBundledLinuxHelper: async () => ({ ok: true, helper: h.HELPER }),
+  readBundledLinuxHelpers: async () => ({ ok: true, helpers: [h.HELPER] }),
 }))
 
 const { registerRemoteMachinesHandlers, REMOTE_NOT_AVAILABLE, REMOTE_STATE_UNREAD } = await import('../../../src/main/ipc/remote-machines-handlers')
@@ -111,10 +111,11 @@ beforeEach(() => {
 afterEach(() => vi.restoreAllMocks())
 
 describe('registerRemoteMachinesHandlers', () => {
-  it('registers exactly the five machines:remote:* channels', () => {
+  it('registers exactly the eight machines:remote:* channels (2.1.3-beta.19 section 1.2: the kept sessions, End of one, End of a tab\'s own)', () => {
     register()
     expect([...handlers.keys()].sort()).toEqual([
       IPC.MACHINES_REMOTE_STATE, IPC.MACHINES_REMOTE_PREPARE, IPC.MACHINES_REMOTE_ADD, IPC.MACHINES_REMOTE_CHECK, IPC.MACHINES_REMOTE_REMOVE,
+      IPC.MACHINES_REMOTE_SESSIONS, IPC.MACHINES_REMOTE_END_SESSION, IPC.MACHINES_REMOTE_END_TAB,
     ].sort())
     expect([...handlers.keys()].every((c) => c.startsWith('machines:remote:'))).toBe(true)
   })
