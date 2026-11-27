@@ -288,6 +288,12 @@ export function adoptConfirmText(machine: string, names: readonly string[]): str
   return `Adopt ${joinNames(names)} on ${machine}? ${one ? 'Its folder' : 'Their folders'} there ${one ? 'carries' : 'carry'} another install's mark. If ${one ? 'it is' : 'they are'} this computer's own from an earlier install of the app, Adopt makes ${one ? 'it' : 'them'} this computer's again; nothing is signed in, out or removed. If ${one ? 'it is' : 'they are'} the app's on another computer, do not adopt ${one ? 'it' : 'them'}.`
 }
 
+/** Round 3 (R3-3): the Adopt button's hover text: every folder it adopts on that machine. */
+export function adoptButtonTitle(machine: string, names: readonly string[]): string {
+  const one = names.length === 1
+  return `Asks first, then adopts ${joinNames(names)} on ${machine}: ${one ? 'its folder' : 'their folders'} there ${one ? 'carries' : 'carry'} another install's mark.`
+}
+
 /** Round 2 (R2-1): the folders on machine `acc` that Adopt may take: those
  *  its last read named as another install's, for accounts this computer
  *  holds (`held`), in the machine's order. */

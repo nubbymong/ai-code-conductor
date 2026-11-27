@@ -143,6 +143,8 @@ export interface HostAdoptAsk {
   did: string
   machineName: string
   profileIds: string[]
+  /** Round 3 (R3-2): asked from a tab's notice: the tab its result names to Restart. */
+  tabLabel?: string
 }
 
 let loading: Promise<void> | null = null
@@ -290,10 +292,12 @@ export function resetHostAccountsStore(): void {
 /** The notice a launch refusal asks (frame 2), or null: a refusal for a
  *  machine whose accounts could not be read says so in its tab and asks
  *  nothing here (its choices would not hold: nothing is known there). */
-export function noticeOfRefusal(sessionId: string, r: HostLaunchRefusal, label?: string, more: Pick<HostNotice, 'carry' | 'elsewhere'> = {}): HostNotice | null {
+export function noticeOfRefusal(sessionId: string, r: HostLaunchRefusal, label?: string, more: Pick<HostNotice, 'carry' | 'elsewhere' | 'adoptable'> = {}): HostNotice | null {
   // Round 2 (R2-1): main names the folder as another install's that may be
-  // this computer's own; its folder there is another's either way.
-  const adoptable = r.adoptable === true
+  // this computer's own; its folder there is another's either way. Round 3
+  // (R3-1): one rule with the cards: not when the machine's read says not
+  // every such folder there is this computer's (`more.adoptable` false).
+  const adoptable = r.adoptable === true && more.adoptable !== false
   if (r.state !== 'not-signed-in' && r.state !== 'someone-else') return null
   return {
     kind: 'launch',
@@ -327,6 +331,8 @@ export function handleHostAccountNotice(n: HostAccountNotice): void {
     const notice = noticeOfRefusal(n.sessionId, n.refusal, m ? machineLabel(m) : undefined, {
       carry: startCarried(n.sessionId) || kept,
       elsewhere: hostElsewhere(store.byDid[n.refusal?.did ?? ''], n.refusal?.profileId ?? ''),
+      // Round 3 (R3-1): the machine's read decides as the cards decide.
+      ...(store.byDid[n.refusal?.did ?? '']?.readAt != null && store.byDid[n.refusal?.did ?? '']?.mayBeEarlierInstall !== true ? { adoptable: false } : {}),
     })
     if (notice) store.openNotice(notice)
     return

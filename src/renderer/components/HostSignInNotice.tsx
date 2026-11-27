@@ -154,7 +154,7 @@ function NoticeDialog({ notice }: { notice: HostNotice }) {
     const more = acc?.mayBeEarlierInstall === true ? adoptableIds(acc, held) : []
     store.dropWaits(notice.sessionId)
     close()
-    store.askAdopt({ did: notice.did, machineName: notice.machineName, profileIds: [...new Set([notice.profileId, ...more])] })
+    store.askAdopt({ did: notice.did, machineName: notice.machineName, profileIds: [...new Set([notice.profileId, ...more])], tabLabel: tabName })
   }
 
   return (
@@ -256,6 +256,8 @@ function AdoptDialog({ ask }: { ask: HostAdoptAsk }) {
       if (typeof remote?.accountsAdopt === 'function') {
         const r = await remote.accountsAdopt({ did: ask.did, profileIds: ask.profileIds })
         text = r.message || (r.ok ? 'Adopted.' : 'Nothing was adopted.')
+        // Round 3 (R3-2): what to do next: a tab starts on an adopted folder at its next start.
+        if (r.adopted.length > 0) text += ask.tabLabel ? ` Restart ${ask.tabLabel} to start it there.` : ' Restart a tab on that account to start it there.'
       }
     } catch { /* text says the app did not answer */ }
     store().askAdopt(null)

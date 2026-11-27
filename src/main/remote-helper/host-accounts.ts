@@ -359,8 +359,16 @@ export function accountBinding(accounts: HostMachineAccounts, profileId: string,
     const as = identity ? `as ${stripSpoofableText(identity, 254)}, another account` : 'as an account it does not name'
     return { refused: { ...base, state: 'someone-else', ...(identity ? { identity } : {}), text: `${who} on ${name} is signed in ${as}, so this tab started nothing. Sign it out on the Machines page, then sign it in again as ${who}.` } }
   }
-  if (accounts.elsewhere?.includes(profileId)) {
+  // Phase 5 round 3 (R3-1): one rule for Adopt, here, in Adopt itself and on
+  // every renderer surface: only while EVERY folder there with another
+  // install's mark is for one of this computer's accounts
+  // (mayBeEarlierInstall). One for an account it does not hold shows another
+  // computer's app uses that login, so this one is taken as that computer's.
+  if (accounts.elsewhere?.includes(profileId) && accounts.mayBeEarlierInstall === true) {
     return { refused: { ...base, state: 'not-signed-in', adoptable: true, text: `${who}'s folder on ${name} carries another install's mark, so this tab started nothing. It may be this computer's own from an earlier install of the app: if so, choose Adopt on the machine's card on the Machines page; if it is the app's on another computer, start this tab on an account signed in there.` } }
+  }
+  if (accounts.elsewhere?.includes(profileId)) {
+    return { refused: { ...base, state: 'not-signed-in', text: `${who}'s folder on ${name} is used by the app on another computer, so this tab started nothing. Start this tab on an account signed in there, or sign ${who} in there from that computer.` } }
   }
   const missing = a ? '' : ' (that account is not on this computer any more)'
   return { refused: { ...base, state: 'not-signed-in', text: `${who} is not signed in on ${name}${missing}, so this tab started nothing. Sign it in on that machine from the Machines page, or start this tab on an account that is signed in there.` } }
@@ -539,10 +547,14 @@ export async function adoptAccountFolders(ctx: HostAccountsContext, m: RemoteMac
   let profiles: readonly HostProfile[]
   try { profiles = await via.profiles() } catch { return { ok: false, message: "This computer's accounts could not be read, so nothing was adopted.", adopted: [] } }
   const held = new Set(profiles.filter((p) => ACCOUNT_PROFILE_RE.test(p.id)).map((p) => p.id))
-  const elsewhere = new Set(machineAccounts(m.did, profiles).elsewhere ?? [])
+  const last = machineAccounts(m.did, profiles)
+  const elsewhere = new Set(last.elsewhere ?? [])
   const ids = [...new Set(profileIds)]
   const not = ids.filter((id) => !ACCOUNT_PROFILE_RE.test(id) || !held.has(id) || !elsewhere.has(id))
   if (ids.length === 0 || not.length > 0) return { ok: false, message: "Nothing was adopted: only a folder the machine's last read names as another install's, for one of this computer's accounts, can be adopted.", adopted: [] }
+  // Phase 5 round 3 (R3-1): the one rule (accountBinding): not while a folder
+  // there with another install's mark is for an account this computer does not hold.
+  if (last.mayBeEarlierInstall !== true) return { ok: false, message: "Nothing was adopted: not every folder there with another install's mark is for one of this computer's accounts, so they are taken as the app's on another computer.", adopted: [] }
   const adopted: string[] = []
   const failed: string[] = []
   for (const id of ids) {

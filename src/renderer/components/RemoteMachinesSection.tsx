@@ -16,7 +16,7 @@ import type { ProviderId } from '../../shared/providers'
 import { ProviderMark } from './sidebar/Badges'
 import { PROVIDER_NAMES } from '../provider-names'
 import {
-  adoptableIds, earlierInstallStayText, elsewhereStayText, hostEarlierInstall, hostElsewhere, machineAccountLine, machineLabel, oldMarkerStayText, machineOwnSignOutText, removeListing, removeNotAnsweringText, sessionMachine, signInOnTitle,
+  adoptButtonTitle, adoptableIds, earlierInstallStayText, elsewhereStayText, hostEarlierInstall, hostElsewhere, machineAccountLine, machineLabel, oldMarkerStayText, machineOwnSignOutText, removeListing, removeNotAnsweringText, sessionMachine, signInOnTitle,
   type HostLineTone,
 } from '../utils/hostAccounts'
 import { openHostSignInTab } from '../utils/hostSignIn'
@@ -76,7 +76,7 @@ function HowAccountsSignIn({ label }: { label: string }) {
 
 /** One account's row in "Accounts here": the provider mark, the account and
  *  its provider, its sign-in there, and Sign in on that machine or Sign out. */
-function AccountHereRow({ who, line, label, busy, switchOn, tabOpen, onSignIn, onSignOut, onAdopt }: {
+function AccountHereRow({ who, line, label, busy, switchOn, tabOpen, onSignIn, onSignOut, onAdopt, adoptTitle }: {
   who: string
   line: ReturnType<typeof machineAccountLine>
   label: string
@@ -87,6 +87,8 @@ function AccountHereRow({ who, line, label, busy, switchOn, tabOpen, onSignIn, o
   onSignOut: () => void
   /** Round 2 (R2-1): Adopt the machine's folders that may be this computer's own (asks first). */
   onAdopt: () => void
+  /** Round 3 (R3-3): the Adopt button's hover text, naming what it adopts there. */
+  adoptTitle?: string
 }) {
   return (
     <div className="grid grid-cols-[16px_minmax(0,150px)_minmax(0,1fr)_auto] gap-2 items-baseline py-1.5 text-xs border-t first:border-t-0" style={{ borderColor: 'var(--border-subtle)' }} data-testid="remote-account-row" data-who={who}>
@@ -133,7 +135,7 @@ function AccountHereRow({ who, line, label, busy, switchOn, tabOpen, onSignIn, o
           className="inline-flex items-center rounded-md border px-2 py-0.5 text-[11.5px] font-medium whitespace-nowrap disabled:opacity-40 disabled:cursor-not-allowed focus-ring"
           style={{ borderColor: 'var(--border-strong)', color: 'var(--text-secondary)' }}
           disabled={busy}
-          title={`Asks first: makes the folders on ${label} that may be this computer's own from an earlier install this computer's again`}
+          title={adoptTitle}
           onClick={onAdopt}
           data-testid="remote-account-adopt"
         >
@@ -267,6 +269,7 @@ function MachineCard({ m, switchOn, busy, onCheck, onRemove, onAsk, kept, keptWh
         who={p.name}
         line={machineAccountLine(a, label, p.name, { why, elsewhere: hostElsewhere(accounts?.read, p.id), earlierInstall: hostEarlierInstall(accounts?.read, p.id) })}
         onAdopt={() => accounts?.onAdopt()}
+        adoptTitle={adoptButtonTitle(label, adoptableIds(accounts?.read, new Set(accounts?.profiles.map((x) => x.id) ?? [])).map(nameOf))}
         label={label}
         busy={busy}
         switchOn={switchOn}

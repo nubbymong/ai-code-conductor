@@ -112,11 +112,14 @@ describe('a Claude Code card\'s "On machines" (frame 1)', () => {
       lines: [{ machine: ROCKY, line: cardMachineLine(at('not-signed-in'), 'Rocky', { elsewhere: true, earlierInstall: true }) }],
       onSignIn: vi.fn(),
       onAdopt,
+      adoptTitle: () => "Asks first, then adopts Personal and Spare on Rocky: their folders there carry another install's mark.",
     }
     const r = render(<AccountCard row={row()} theme="dark" onSignIn={vi.fn()} machines={m} />)
     expect(lines(r.container)[1]).toMatchObject({ name: 'Rocky', state: 'May be this computer\'s own from an earlier installIts folder on Rocky carries another install\'s mark', button: null })
     const adopt = r.container.querySelector('[data-testid="account-usage-machine-adopt"]') as HTMLElement
     expect(adopt.textContent).toBe('Adopt')
+    // R3-3 (round 3): its hover text names every folder it adopts there.
+    expect(adopt.title).toBe("Asks first, then adopts Personal and Spare on Rocky: their folders there carry another install's mark.")
     act(() => { adopt.click() })
     expect(onAdopt).toHaveBeenCalledWith(ROCKY)
     r.unmount()

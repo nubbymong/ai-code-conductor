@@ -100,7 +100,7 @@ import { stripSpoofableText } from '../../shared/safe-text'
 import type { ProviderId } from '../../shared/providers/ids'
 import type { ProviderRemoteLaunch, RemoteAccounts, RemoteHelperCommands, RemoteHostFile, RemoteHostRead, RemoteLaunch, RemoteLaunchOptions } from '../providers/types'
 import type { HostAccountNotice, HostLaunchRefusal } from '../../shared/host-accounts'
-import { accountBinding, prepareAccountFolder, readMachineAccounts, type HostProfile } from './host-accounts'
+import { accountBinding, machineAccounts, prepareAccountFolder, readMachineAccounts, type HostProfile } from './host-accounts'
 import { holderLabel, type HolderKind } from './scripts'
 import { untilEnded } from './kept'
 import { afterHashLine, exitText, localSshEnd, newNonce, notStartedLogLine, openScriptStream, readHashLine, readScriptResult, runScript, sshFailure, type SshRunner, type SshTarget } from './ssh-exec'
@@ -484,7 +484,17 @@ export class RemoteDriver implements HelperPtyDriver {
     if (a.signIn) {
       const made = await prepareAccountFolder(ctx, m, a.via, a.profileId, 'make', 'keep')
       // Round 2 (R1): a folder there with another install's mark is never made over by a sign-in.
-      if (!made.ok && made.refused === 'account-folder-elsewhere') this.failWith(`the account's folder on ${m.host} carries another install's mark, and nothing of it was changed. It may be this computer's own from an earlier install of the app: if so, choose Adopt on the machine's card on the Machines page`)
+      // Phase 5 round 3 (R3-1): what it says follows the one Adopt rule, from
+      // the machine's last read (no exec): Adopt only while every such folder
+      // there is for this computer's accounts.
+      if (!made.ok && made.refused === 'account-folder-elsewhere') {
+        let last: ReturnType<typeof machineAccounts> | null = null
+        try { last = machineAccounts(m.did, await a.via.profiles()) } catch { last = null }
+        const named = !!last && last.readAt !== null && (last.elsewhere ?? []).includes(a.profileId)
+        if (named && last?.mayBeEarlierInstall === true) this.failWith(`the account's folder on ${m.host} carries another install's mark, and nothing of it was changed. It may be this computer's own from an earlier install of the app: if so, choose Adopt on the machine's card on the Machines page`)
+        if (named) this.failWith(`the account's folder on ${m.host} is used by the app on another computer, and nothing of it was changed. Sign it in there from that computer, or start a tab on an account signed in there`)
+        this.failWith(`the account's folder on ${m.host} carries another install's mark, and nothing of it was changed. Press Check on the Machines page: if the machine's card then says it may be this computer's own from an earlier install, choose Adopt on the machine's card; if it is the app's on another computer, sign it in there from that computer`)
+      }
       if (!made.ok) this.failWith(`the account's folder could not be made on ${m.host}: ${made.why}`)
       this.boundTo = 'folder'
       return null

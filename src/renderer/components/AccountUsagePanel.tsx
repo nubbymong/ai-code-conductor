@@ -32,7 +32,7 @@ import {
   ACCOUNT_USAGE_MACHINES_CLASS, ACCOUNT_USAGE_MACHINE_ROW_CLASS, ACCOUNT_USAGE_MACHINE_NAME_CLASS, ACCOUNT_USAGE_MACHINE_STATE_CLASS, ACCOUNT_USAGE_MACHINE_BUTTON_CLASS,
 } from './account-usage-layout'
 import { useHostAccountsStore } from '../stores/hostAccountsStore'
-import { adoptableIds, cardMachineLine, hostEarlierInstall, hostElsewhere, machineLabel, signInOnTitle, toSignInCount, type HostLineTone, type HostMachineRef, type HostSignInLine } from '../utils/hostAccounts'
+import { adoptButtonTitle, adoptableIds, cardMachineLine, hostEarlierInstall, hostElsewhere, machineLabel, signInOnTitle, toSignInCount, type HostLineTone, type HostMachineRef, type HostSignInLine } from '../utils/hostAccounts'
 import { openHostSignInTab } from '../utils/hostSignIn'
 
 /** D5 (usage UX, approved as drawn): the one line the page shows for Claude
@@ -449,6 +449,10 @@ export default function AccountUsagePanel({ onClose, onReauthNavigate, onOpenTok
           did: m.did, machineName: machineLabel(m),
           profileIds: adoptableIds(hostByDid[m.did], new Set((profiles ?? []).map((p) => p.id))),
         }),
+        adoptTitle: (m) => adoptButtonTitle(machineLabel(m), adoptableIds(hostByDid[m.did], new Set((profiles ?? []).map((p) => p.id))).map((id) => {
+          const p = (profiles ?? []).find((x) => x.id === id)
+          return (p ? claudeCardName(identityOf(snapshot, accountForLegacyId(snapshot, CLAUDE, p.id)), p.accountEmail || null, p.name).title : id)
+        })),
       }
     : undefined
 
@@ -1056,6 +1060,8 @@ export interface CardMachines {
   onSignIn: (machine: HostMachineRef) => void
   /** Round 2 (R2-1): Adopt that machine's folders that may be this computer's own. */
   onAdopt?: (machine: HostMachineRef) => void
+  /** Round 3 (R3-3): the Adopt button's hover text, naming what it adopts there. */
+  adoptTitle?: (machine: HostMachineRef) => string
 }
 
 const DOT_STYLE: Record<HostLineTone, React.CSSProperties> = {
@@ -1066,7 +1072,7 @@ const DOT_STYLE: Record<HostLineTone, React.CSSProperties> = {
 
 /** One machine's row: its dot and name, its state (and a second line), and
  *  "Sign in on <machine>" where the account is not signed in there. */
-function MachineRow({ name, line, onSignIn, onAdopt }: { name: string; line: HostSignInLine; onSignIn?: () => void; onAdopt?: () => void }) {
+function MachineRow({ name, line, onSignIn, onAdopt, adoptTitle }: { name: string; line: HostSignInLine; onSignIn?: () => void; onAdopt?: () => void; adoptTitle?: string }) {
   return (
     <div className={ACCOUNT_USAGE_MACHINE_ROW_CLASS} title={line.title} data-testid="account-usage-machine" data-machine={name} data-tone={line.tone}>
       <span className={ACCOUNT_USAGE_MACHINE_NAME_CLASS}>
@@ -1083,7 +1089,7 @@ function MachineRow({ name, line, onSignIn, onAdopt }: { name: string; line: Hos
         </button>
       )}
       {onAdopt && (
-        <button type="button" className={ACCOUNT_USAGE_MACHINE_BUTTON_CLASS} title={`Asks first: makes ${name}'s folder for this account this computer's again, if it is this computer's own from an earlier install`} onClick={onAdopt} data-testid="account-usage-machine-adopt">
+        <button type="button" className={ACCOUNT_USAGE_MACHINE_BUTTON_CLASS} title={adoptTitle} onClick={onAdopt} data-testid="account-usage-machine-adopt">
           Adopt
         </button>
       )}
@@ -1103,7 +1109,7 @@ function MachineLines({ machines, signedInHere, why }: { machines: CardMachines;
       <div className="text-[0.625rem] uppercase tracking-[0.06em] font-semibold mb-px" style={{ color: MUTED }}>On machines</div>
       <MachineRow name="This computer" line={here} />
       {machines.lines.map(({ machine, line }) => (
-        <MachineRow key={machine.did} name={machineLabel(machine)} line={line} onSignIn={line.action === 'sign-in' ? () => machines.onSignIn(machine) : undefined} onAdopt={line.action === 'adopt' && machines.onAdopt ? () => machines.onAdopt?.(machine) : undefined} />
+        <MachineRow key={machine.did} name={machineLabel(machine)} line={line} onSignIn={line.action === 'sign-in' ? () => machines.onSignIn(machine) : undefined} onAdopt={line.action === 'adopt' && machines.onAdopt ? () => machines.onAdopt?.(machine) : undefined} adoptTitle={machines.adoptTitle?.(machine)} />
       ))}
     </div>
   )

@@ -438,6 +438,8 @@ describe('a folder that may be this computer\'s own from an earlier install', ()
     refusal: { did: DID, machineName: 'Rocky (nick@rocky.lan:22)', profileId: 'p2', state: 'not-signed-in', adoptable: true, signedInThere: ['p1'], text: '' },
   })
   it('the notice says so and offers Adopt (no Sign in); another account and Cancel stay', async () => {
+    // The machine's read, as main sends it with such a refusal: every such folder is this computer's.
+    useHostAccountsStore.getState().setAccounts({ machines: [{ ...read('signed-in-here', 'not-signed-in'), elsewhere: ['p2'], mayBeEarlierInstall: true }] })
     await mount(<HostSignInNotice />)
     await push(adoptable())
     expect(byTest('host-signin-question')?.textContent).toBe('Personal\'s folder on Rocky carries another install\'s mark.')
@@ -445,8 +447,21 @@ describe('a folder that may be this computer\'s own from an earlier install', ()
     expect(byTest('host-signin-here')).toBeNull()
     expect(byTest('host-signin-use-other')).not.toBeNull()
     await click(byTest('host-signin-adopt'))
-    expect(useHostAccountsStore.getState().adoptAsk).toEqual({ did: DID, machineName: 'Rocky', profileIds: ['p2'] })
+    expect(useHostAccountsStore.getState().adoptAsk).toEqual({ did: DID, machineName: 'Rocky', profileIds: ['p2'], tabLabel: 'web-app' })
     expect(byTest('host-signin-question')).toBeNull()
+  })
+
+  // R3-1 (round 3): one rule for Adopt. Only some folders there with another
+  // install's mark are this computer's accounts' (the machine's read says
+  // mayBeEarlierInstall false): the notice offers no Adopt, even when a
+  // refusal is marked adoptable, and says the folder is another computer's.
+  it('only some such folders are this computer\'s: no Adopt; it says another computer\'s', async () => {
+    useHostAccountsStore.getState().setAccounts({ machines: [{ ...read('signed-in-here', 'not-signed-in'), elsewhere: ['p2', 'zz9'], mayBeEarlierInstall: false }] })
+    await mount(<HostSignInNotice />)
+    await push(adoptable())
+    expect(byTest('host-signin-adopt')).toBeNull()
+    expect(byTest('host-signin-here')).toBeNull()
+    expect(byTest('host-signin-question')?.textContent).toBe('Personal\'s folder on Rocky is used by the app on another computer.')
   })
 
   it('Adopt asks first, naming the accounts; Cancel runs nothing; Adopt runs it, says what it did, and reads the machines again', async () => {
@@ -465,8 +480,24 @@ describe('a folder that may be this computer\'s own from an earlier install', ()
     const before = remote.accounts.mock.calls.length
     await click(byTest('host-adopt-run'))
     expect(remote.accountsAdopt).toHaveBeenCalledWith({ did: DID, profileIds: ['p2'] })
-    expect(byTest('host-signin-message')?.textContent).toContain('Adopted Personal: its folder there is this computer\'s now.')
+    // R3-2 (round 3): it says what to do next: Restart a tab on that account.
+    expect(byTest('host-signin-message')?.textContent).toContain('Adopted Personal: its folder there is this computer\'s now. Restart a tab on that account to start it there.')
     expect(remote.accounts.mock.calls.length).toBeGreaterThan(before)
+  })
+
+  it('from the notice, the result names the tab to Restart; nothing adopted: no Restart line', async () => {
+    const remote = (window as any).electronAPI.machines.remote
+    await mount(<HostSignInNotice />)
+    await act(async () => { useHostAccountsStore.getState().askAdopt({ did: DID, machineName: 'Rocky', profileIds: ['p2'], tabLabel: 'web-app' }) })
+    await settle()
+    await click(byTest('host-adopt-run'))
+    expect(byTest('host-signin-message')?.textContent).toContain('this computer\'s now. Restart web-app to start it there.')
+    await click([...document.querySelectorAll('button')].find((b) => b.textContent === 'OK') ?? null)
+    remote.accountsAdopt.mockResolvedValueOnce({ ok: false, message: 'Nothing was adopted: not every folder there with another install\'s mark is for one of this computer\'s accounts, so they are taken as the app\'s on another computer.', adopted: [] })
+    await act(async () => { useHostAccountsStore.getState().askAdopt({ did: DID, machineName: 'Rocky', profileIds: ['p2'], tabLabel: 'web-app' }) })
+    await settle()
+    await click(byTest('host-adopt-run'))
+    expect(byTest('host-signin-message')?.textContent).not.toContain('Restart')
   })
 })
 

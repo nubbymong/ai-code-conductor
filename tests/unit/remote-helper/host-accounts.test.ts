@@ -571,10 +571,19 @@ describe('round 2 (R1): folders of an earlier build, and of an earlier install',
     expect('refused' in b && b.refused.text).toMatch(/earlier install of the app: if so, choose Adopt/)
     tree.folders.set('profile-stranger', signedIn('stranger@example.com'))
     tree.owner.set('profile-stranger', OTHER_INSTALL)
-    expect((await readMachineAccounts(ctx(), MACHINE, VIA)).mayBeEarlierInstall).toBe(false)
+    const theirs = await readMachineAccounts(ctx(), MACHINE, VIA)
+    expect(theirs.mayBeEarlierInstall).toBe(false)
+    // Phase 5 round 3 (R3-1): one rule everywhere. With a folder there for an
+    // account this computer does not hold, another computer's app uses that
+    // login, so this account's folder is taken as that computer's: the
+    // refusal offers no Adopt and says so.
+    const c = accountBinding(theirs, 'profile-personal', MACHINE, 'Rocky', PROFILES)
+    expect(c).toMatchObject({ refused: { state: 'not-signed-in' } })
+    expect('refused' in c && c.refused.adoptable).toBeUndefined()
+    expect('refused' in c && c.refused.text).toBe('Personal\'s folder on Rocky is used by the app on another computer, so this tab started nothing. Start this tab on an account signed in there, or sign Personal in there from that computer.')
   })
 
-  it('(b) Adopt runs only on the ids the last read named as another install\'s and this computer holds; it changes only their markers', async () => {
+  it('(b) Adopt runs only on the ids the last read named as another install\'s and this computer holds, and only while every such folder is this computer\'s; it changes only their markers', async () => {
     tree.folders.set('profile-personal', signedIn('personal@example.com'))
     tree.owner.set('profile-personal', OTHER_INSTALL)
     tree.folders.set('profile-stranger', signedIn('stranger@example.com'))
@@ -582,20 +591,25 @@ describe('round 2 (R1): folders of an earlier build, and of an earlier install',
     tree.folders.set('profile-side', signedIn('side@example.com'))
     await readMachineAccounts(ctx(), MACHINE, VIA)
     const before = ssh.calls.length
-    for (const ids of [[], ['profile-stranger'], ['profile-side'], ['profile-personal', 'profile-stranger'], ['../x']]) {
+    // R3-1: with the stranger's folder there, Personal's is another computer's too: not adopted.
+    for (const ids of [[], ['profile-stranger'], ['profile-side'], ['profile-personal', 'profile-stranger'], ['../x'], ['profile-personal']]) {
       const r = await adoptAccountFolders(ctx(), MACHINE, VIA, ids)
       expect(r, JSON.stringify(ids)).toMatchObject({ ok: false, adopted: [] })
     }
+    expect((await adoptAccountFolders(ctx(), MACHINE, VIA, ['profile-personal'])).message).toBe('Nothing was adopted: not every folder there with another install\'s mark is for one of this computer\'s accounts, so they are taken as the app\'s on another computer.')
     expect(ssh.calls.length).toBe(before)
+    tree.folders.delete('profile-stranger')
+    tree.owner.delete('profile-stranger')
+    await readMachineAccounts(ctx(), MACHINE, VIA)
+    const from = ssh.calls.length
     const r = await adoptAccountFolders(ctx(), MACHINE, VIA, ['profile-personal'])
     expect(r).toMatchObject({ ok: true, adopted: ['profile-personal'] })
     expect(r.message).toMatch(/^Adopted Personal: its folder there is this computer's now\./)
-    expect(ssh.calls.slice(before).map((c) => [c.script, ...c.values.slice(3, 5)])).toEqual([['account', 'profile-personal', 'adopt'], ['accounts', FOLDER, SHA]])
+    expect(ssh.calls.slice(from).map((c) => [c.script, ...c.values.slice(3, 5)])).toEqual([['account', 'profile-personal', 'adopt'], ['accounts', FOLDER, SHA]])
     expect(tree.ownerOf('profile-personal')).toBe(INSTALL)
-    expect(tree.ownerOf('profile-stranger')).toBe(OTHER_INSTALL)
-    expect([...tree.folders.keys()]).toEqual(['profile-personal', 'profile-stranger', 'profile-side'])
+    expect([...tree.folders.keys()]).toEqual(['profile-personal', 'profile-side'])
     const after = machineAccounts(MACHINE.did, PROFILES)
     expect(after.accounts.find((a) => a.profileId === 'profile-personal')?.state).toBe('signed-in-here')
-    expect(after.elsewhere).toEqual(['profile-stranger'])
+    expect(after.elsewhere).toEqual([])
   })
 })

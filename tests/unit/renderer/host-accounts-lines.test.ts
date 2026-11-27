@@ -10,7 +10,7 @@ import { describe, it, expect } from 'vitest'
 import {
   cardMachineLine, machineAccountLine, switchMachineMark, sessionMachine, signInConfigFor, sshTarget,
   removeListing, removeNotAnsweringText, machineOwnSignOutText, toSignInCount, joinNames, hostLaunchable, signInOnTitle,
-  elsewhereStayText, hostElsewhere, hostEarlierInstall, earlierInstallStayText, oldMarkerStayText, adoptConfirmText,
+  elsewhereStayText, hostElsewhere, hostEarlierInstall, earlierInstallStayText, oldMarkerStayText, adoptConfirmText, adoptButtonTitle,
 } from '../../../src/renderer/utils/hostAccounts'
 import type { HostMachineAccounts, HostSignInFacts } from '../../../src/shared/host-accounts'
 import type { TerminalConfig } from '../../../src/renderer/stores/configStore'
@@ -247,6 +247,11 @@ describe('a folder that may be this computer\'s own from an earlier install', ()
   it('Adopt asks first, naming the accounts and what it does and does not do', () => {
     expect(adoptConfirmText('Rocky', ['Personal'])).toBe('Adopt Personal on Rocky? Its folder there carries another install\'s mark. If it is this computer\'s own from an earlier install of the app, Adopt makes it this computer\'s again; nothing is signed in, out or removed. If it is the app\'s on another computer, do not adopt it.')
     expect(adoptConfirmText('Rocky', ['Personal', 'Spare'])).toContain('Adopt Personal and Spare on Rocky? Their folders there carry')
+  })
+  // R3-3 (round 3): the Adopt button's hover text names every folder it adopts on that machine.
+  it('the Adopt button names what it adopts', () => {
+    expect(adoptButtonTitle('Rocky', ['Personal'])).toBe("Asks first, then adopts Personal on Rocky: its folder there carries another install's mark.")
+    expect(adoptButtonTitle('Rocky', ['Personal', 'Spare'])).toBe("Asks first, then adopts Personal and Spare on Rocky: their folders there carry another install's mark.")
   })
 })
 
