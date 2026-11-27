@@ -332,6 +332,12 @@ export function isAppVisionBrowser(
 }
 
 // === Windows: one PowerShell call per question ===
+//
+// Each script names every cmdlet it runs with its module (CimCmdlets,
+// Microsoft.PowerShell.Utility, ...Management, ...Core), so Windows
+// PowerShell 5.1 loads that module by name. A cmdlet named bare makes it look
+// through every module on its module path first, which with no module
+// analysis cache yet (a new user profile) can take many seconds.
 
 function powershellPath(ports: OwnerPorts): string | null {
   return isWindowsAbsolute(ports.systemRoot)
@@ -344,7 +350,7 @@ function taskkillPath(ports: OwnerPorts): string | null {
 }
 
 const FACTS_OUTPUT = [
-  '$json = ConvertTo-Json -InputObject @($out) -Compress',
+  '$json = Microsoft.PowerShell.Utility\\ConvertTo-Json -InputObject @($out) -Compress',
   '[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($json))',
 ]
 
@@ -358,7 +364,7 @@ const FACTS_OUTPUT = [
 export const WINDOWS_BROWSERS_SCRIPT = [
   "$ErrorActionPreference = 'Stop'",
   '$out = @()',
-  "foreach ($p in @(Get-CimInstance -ClassName Win32_Process -Filter 'Name=''chrome.exe'' OR Name=''msedge.exe''')) {",
+  "foreach ($p in @(CimCmdlets\\Get-CimInstance -ClassName Win32_Process -Filter 'Name=''chrome.exe'' OR Name=''msedge.exe''')) {",
   '  try {',
   '    $cmd = [string]$p.CommandLine',
   "    if ($p.CreationDate -and ($cmd -like '*remote-debugging-port*')) {",
@@ -378,7 +384,7 @@ export function windowsFactsOfPidScript(pid: number): string {
     '$out = @()',
     'foreach ($id in $ids) {',
     '  try {',
-    "    $p = Get-CimInstance -ClassName Win32_Process -Filter ('ProcessId=' + [uint32]$id)",
+    "    $p = CimCmdlets\\Get-CimInstance -ClassName Win32_Process -Filter ('ProcessId=' + [uint32]$id)",
     '    if ($p) { $out += [pscustomobject]@{ pid = [int64]$p.ProcessId; name = [string]$p.Name; commandLine = [string]$p.CommandLine; created = [string]$p.CreationDate.ToFileTimeUtc() } }',
     '  } catch { }',
     '}',
@@ -393,9 +399,9 @@ export function windowsEndScript(pid: number, created: string): string {
   if (!WINDOWS_CREATED_RE.test(created)) throw new Error('invalid creation time')
   return [
     "$ErrorActionPreference = 'Stop'",
-    `$p = Get-CimInstance -ClassName Win32_Process -Filter 'ProcessId=${pid}'`,
+    `$p = CimCmdlets\\Get-CimInstance -ClassName Win32_Process -Filter 'ProcessId=${pid}'`,
     `if ($p -and ([string]$p.CreationDate.ToFileTimeUtc()) -eq '${created}') {`,
-    `  & (Join-Path ([Environment]::SystemDirectory) 'taskkill.exe') /PID ${pid} /T /F | Out-Null`,
+    `  & (Microsoft.PowerShell.Management\\Join-Path ([Environment]::SystemDirectory) 'taskkill.exe') /PID ${pid} /T /F | Microsoft.PowerShell.Core\\Out-Null`,
     "  'ended'",
     "} else { 'left' }",
   ].join('\n')

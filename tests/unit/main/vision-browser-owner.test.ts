@@ -444,11 +444,11 @@ describe('ending a verified process on Windows', () => {
     expect(calls[0].sync).toBe(false)
     expect(calls[0].timeoutMs).toBe(OWNER_QUERY_TIMEOUT_MS)
     const script = scriptOf(calls[0])
-    expect(script).toContain("Get-CimInstance -ClassName Win32_Process -Filter 'ProcessId=4242'")
+    expect(script).toContain("$p = CimCmdlets\\Get-CimInstance -ClassName Win32_Process -Filter 'ProcessId=4242'")
     // taskkill runs only inside the branch taken when the creation time matches.
     expect(script).toMatch(new RegExp(
       "if \\(\\$p -and \\(\\[string\\]\\$p\\.CreationDate\\.ToFileTimeUtc\\(\\)\\) -eq '" + CREATED + "'\\) \\{\\n" +
-      "  & \\(Join-Path \\(\\[Environment\\]::SystemDirectory\\) 'taskkill\\.exe'\\) /PID 4242 /T /F \\| Out-Null\\n" +
+      "  & \\(Microsoft\\.PowerShell\\.Management\\\\Join-Path \\(\\[Environment\\]::SystemDirectory\\) 'taskkill\\.exe'\\) /PID 4242 /T /F \\| Microsoft\\.PowerShell\\.Core\\\\Out-Null\\n" +
       "  'ended'\\n\\} else \\{ 'left' \\}$",
     ))
     expect(script.match(/taskkill/g)).toHaveLength(1)

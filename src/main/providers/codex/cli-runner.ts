@@ -517,8 +517,12 @@ export function parsePosixProcessTable(text: string): CodexProcessEntry[] {
 }
 
 /** A constant query with no double quote in it: passed as plain -Command
- *  text (an encoded command is what endpoint protection flags). */
-export const WINDOWS_PROCESS_QUERY = "Get-CimInstance Win32_Process | ForEach-Object { $c = 0; if ($_.CreationDate) { $c = $_.CreationDate.ToFileTimeUtc() }; '{0},{1},{2},{3}' -f $_.ProcessId, $_.ParentProcessId, $c, $_.Name }"
+ *  text (an encoded command is what endpoint protection flags). Each cmdlet
+ *  is named with its module (CimCmdlets, Microsoft.PowerShell.Core), so
+ *  Windows PowerShell 5.1 loads that module by name and never looks through
+ *  every module on its module path for it, which with no module analysis
+ *  cache yet (a new user profile) can take many seconds. */
+export const WINDOWS_PROCESS_QUERY = "CimCmdlets\\Get-CimInstance Win32_Process | Microsoft.PowerShell.Core\\ForEach-Object { $c = 0; if ($_.CreationDate) { $c = $_.CreationDate.ToFileTimeUtc() }; '{0},{1},{2},{3}' -f $_.ProcessId, $_.ParentProcessId, $c, $_.Name }"
 /** How long reading the process table may take at kill time. */
 export const CODEX_PROCESS_TABLE_TIMEOUT_MS = 8000
 /** How long the EARLY read (see CodexKillTree.prime) may take: it runs in the

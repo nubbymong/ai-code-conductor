@@ -452,13 +452,16 @@ const b64 = (s: string): string => Buffer.from(s, 'utf8').toString('base64')
 const printed = (answer: string): string => `Loading personal and system profiles took 912ms.\r\n${BEGIN}${b64(answer)}${END}`
 
 /** The PATH filter the fixed command applies after the profile, before Get-Command. */
-const PATH_FILTER = "$env:PATH = (@($env:PATH -split ';') | Where-Object { $_.Trim() -match '^\\x22?[A-Za-z]:[\\\\/]' -and $_ -notmatch '%' }) -join ';'"
+const PATH_FILTER = "$env:PATH = (@($env:PATH -split ';') | Microsoft.PowerShell.Core\\Where-Object { $_.Trim() -match '^\\x22?[A-Za-z]:[\\\\/]' -and $_ -notmatch '%' }) -join ';'"
 
-/** The fixed command, exactly: nothing in it comes from outside the app. */
+/** The fixed command, exactly: nothing in it comes from outside the app. After
+ *  the profile it loads a module only for a command named with its module,
+ *  and names each cmdlet with its module (see powerShellProfileLookupCommand). */
 const EXPECTED_COMMAND = "$ErrorActionPreference = 'SilentlyContinue'; "
+  + "$PSModuleAutoLoadingPreference = 'ModuleQualified'; "
   + `${PATH_FILTER}; `
   + "$found = ''; "
-  + "foreach ($name in @('claude.exe','claude.cmd','claude.bat')) { $c = Get-Command -Name $name -CommandType Application | Select-Object -First 1; if ($c) { $found = [string]$c.Source; break } }; "
+  + "foreach ($name in @('claude.exe','claude.cmd','claude.bat')) { $c = Microsoft.PowerShell.Core\\Get-Command -Name $name -CommandType Application | Microsoft.PowerShell.Utility\\Select-Object -First 1; if ($c) { $found = [string]$c.Source; break } }; "
   + "[Console]::Out.Write('__CCC_PROGRAM_BEGIN__' + [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($found)) + '__CCC_PROGRAM_END__')"
 
 describe('a program only the PowerShell profile puts on PATH (findWithPowerShellProfile)', () => {

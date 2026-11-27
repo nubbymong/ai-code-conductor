@@ -57,7 +57,7 @@ import { getProvider, providerCapability } from './providers'
 import { isSshCapable } from './providers/types'
 import type { TelemetrySource, SshCapableProvider, SessionProvider, ProviderLocalLaunch, LocalLaunchCore } from './providers/types'
 import { resolveCwd, isHomeOrAncestor } from './path-utils'
-import { AGENTS_ENV, agentsEnvValue, agentsRef, buildTerminalLaunchLine } from './terminal-launch-line'
+import { AGENTS_ENV, PS_SET_LOCATION, agentsEnvValue, agentsRef, buildTerminalLaunchLine } from './terminal-launch-line'
 import { findOnWindowsPathAsync } from './windows-programs'
 import { sshProgram } from './ssh-program'
 import { windowsPathFolderIsFullyQualified } from './providers/windows-path-names'
@@ -6305,8 +6305,11 @@ function spawnPtyResolved(
       // before any binary runs. -LiteralPath because Set-Location otherwise
       // treats its argument as a WILDCARD: a real directory named `proj[1m]`
       // never matches, and the session silently starts in the wrong place.
+      // The cmdlet is named with its module (PS_SET_LOCATION), as the Claude
+      // Code launch line names it, so the line makes no look through the
+      // module path for it.
       const cdCmd = isWin
-        ? `Set-Location -LiteralPath ${quoteArgForShell(resolvedCwd, true)}`
+        ? `${PS_SET_LOCATION} -LiteralPath ${quoteArgForShell(resolvedCwd, true)}`
         : `cd ${quoteArgForShell(resolvedCwd, false)} 2>/dev/null; clear`
       // Off Windows the line above is sh syntax, quoted the sh way: it is typed
       // only into a sh-family shell. The tab's shell is the user's own login
