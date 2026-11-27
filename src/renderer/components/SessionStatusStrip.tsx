@@ -12,6 +12,7 @@ import { canSwitchAccountForSession } from '../utils/sessionLaunch'
 import { useCodexReviewUsage } from '../hooks/useCodexReviewUsage'
 import { useRestartSession } from '../hooks/useRestartSession'
 import { useSwitchAccount } from '../hooks/useSwitchAccount'
+import { useHelperTabHost } from '../hooks/useHelperTabHost'
 import { useResolvedTheme } from '../hooks/useThemeController'
 import { useRegionTypography } from '../hooks/useTypography'
 import { useAccountProfilesStore } from '../stores/accountProfilesStore'
@@ -136,12 +137,15 @@ export default function SessionStatusStrip({ sessionId }: SessionStatusStripProp
   // P3.6 (row 22): one list for every provider (utils/switchAccountItems).
   // Only the list, the chip and its colour are read from the account list
   // (hooks/useAccountChip): a change elsewhere in it re-renders nothing here.
-  const switchItems = useSwitchAccountItems(session, { profiles, aliases: accountAliases })
+  // 2.1.3-beta.20 section 5 (frame 3): a tab through the session helper
+  // switches too, its list marking each account's sign-in on its machine.
+  const helperTab = useHelperTabHost(session)
+  const switchItems = useSwitchAccountItems(session, { profiles, aliases: accountAliases }, helperTab.host)
   // P3.6 (row 20): a session that runs under a registry account (Codex) shows
   // that account's identity chip, by the footer's label rule.
   const providerChip = useProviderAccountChip(session)
   const emailColourKey = useEmailChipColourKey(session?.accountEmail, { profiles, overrides: accountColourOverrides }, session?.accountColour)
-  const canSwitchAccount = canSwitchAccountForSession({ provider: session?.provider, isSsh: !!session?.sshConfig, shellOnly: !!session?.shellOnly, profileCount: profiles.length, providerAccountCount: switchItems.length })
+  const canSwitchAccount = canSwitchAccountForSession({ provider: session?.provider, isSsh: !!session?.sshConfig, viaHelper: helperTab.viaHelper, shellOnly: !!session?.shellOnly, profileCount: profiles.length, providerAccountCount: switchItems.length })
   const registry = useRegistryStore((s) => s.registry)
   // Copilot AI-credit meter gate. The chip self-gates on githubAiUsageEnabled
   // (returns null when off), so we read the same flag here to avoid rendering

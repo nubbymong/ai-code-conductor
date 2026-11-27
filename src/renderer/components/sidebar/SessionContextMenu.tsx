@@ -376,6 +376,9 @@ export default function SessionContextMenu({
                       <span className="truncate">
                         {item.label}
                         {item.state && <span style={{ color: 'var(--text-muted)' }}>{` ${MIDDOT} ${item.state}`}</span>}
+                        {/* 2.1.3-beta.20 section 5 (frame 3): a helper tab's
+                            list marks each account's sign-in on its machine. */}
+                        {item.machine && <span style={{ color: item.machine.warn ? 'var(--status-warning)' : 'var(--text-muted)' }} data-testid="switch-account-machine">{` ${MIDDOT} ${item.machine.text}`}</span>}
                       </span>
                       {item.detail && <span className="truncate" style={{ fontSize: 10, lineHeight: '13px', color: 'var(--text-muted)' }}>{item.detail}</span>}
                     </span>

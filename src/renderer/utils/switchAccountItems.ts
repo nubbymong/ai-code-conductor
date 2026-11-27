@@ -18,6 +18,8 @@ import { resolveAccountName, middleTruncateEmail } from '../../shared/account-ch
 import { accountDisplayName, selectProviderAccounts } from '../stores/providerAccountsStore'
 import { launchNeedsAcknowledgement } from './launchAccount'
 import { sessionProviderAccount } from './accountChip'
+import type { HostMachineAccounts } from '../../shared/host-accounts'
+import { switchMachineMark, type HostSwitchMark } from './hostAccounts'
 
 const MIDDOT = String.fromCharCode(0xb7)
 
@@ -38,17 +40,31 @@ export interface SwitchAccountItem {
   active: boolean
   /** Listed but not offered. Never the current account. */
   disabled: boolean
+  /** 2.1.3-beta.20 section 5 (frame 3): on a tab through the session helper,
+   *  the account's sign-in on that machine (utils/hostAccounts
+   *  switchMachineMark). `needsSignIn`: picking it opens the not-signed-in
+   *  notice instead of switching. */
+  machine?: HostSwitchMark
 }
 
 /** One line for a row that has room for one (the strip's popup): the
- *  address, and the state after a middle dot. */
-export function switchItemHint(item: Pick<SwitchAccountItem, 'detail' | 'state'>): string {
-  if (!item.state) return item.detail
-  return item.detail ? `${item.detail} ${MIDDOT} ${item.state}` : item.state
+ *  address, and the state after a middle dot, and the account's sign-in on
+ *  a helper tab's machine after another. */
+export function switchItemHint(item: Pick<SwitchAccountItem, 'detail' | 'state' | 'machine'>): string {
+  const parts = [item.detail, item.state, item.machine?.text].filter((p): p is string => !!p)
+  return parts.join(` ${MIDDOT} `)
+}
+
+/** The tab's machine and its accounts' last read, for a tab through the
+ *  session helper (2.1.3-beta.20 section 5). */
+export interface SwitchHostSource {
+  machineName: string
+  accounts: HostMachineAccounts | undefined
 }
 
 /** The accounts a session's Switch account offers, in its provider's own
- *  order. None for a session of no provider. */
+ *  order. None for a session of no provider. `host`: a helper tab's machine,
+ *  whose last read marks each account's sign-in there. */
 export function switchAccountItems(
   session: { provider?: ProviderId; profileId?: string; providerAccountId?: string } | null | undefined,
   sources: {
@@ -56,6 +72,7 @@ export function switchAccountItems(
     aliases: Record<string, string> | undefined
     snapshot: AccountsSnapshot | null
   },
+  host?: SwitchHostSource,
 ): SwitchAccountItem[] {
   if (!session) return []
   const provider = session.provider ?? 'claude'
@@ -63,14 +80,16 @@ export function switchAccountItems(
     return sources.profiles.map((p) => {
       const current = p.id === session.profileId
       const inactive = !isAccountActive(p as AccountProfile)
+      const machine = host ? switchMachineMark(host.accounts?.accounts.find((a) => a.profileId === p.id), host.machineName) : undefined
       return {
         value: p.id,
         label: resolveAccountName(p.accountEmail, p.name, sources.aliases),
         detail: middleTruncateEmail(p.accountEmail),
-        title: p.accountEmail,
+        title: machine?.title ?? p.accountEmail,
         ...(inactive ? { state: 'inactive' as const } : {}),
         active: current,
         disabled: inactive && !current,
+        ...(machine ? { machine } : {}),
       }
     })
   }

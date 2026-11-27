@@ -46,10 +46,19 @@ export function shouldGateAccountChoice(opts: {
  * 22): a Codex session switches among the Codex accounts (its registry
  * accounts, archived ones left out: `providerAccountCount`), also local only
  * in this release; Claude's profiles never count for it.
+ *
+ * 2.1.3-beta.20 section 5: a Claude tab through the session helper
+ * (`viaHelper`, isHelperTab) switches too: each account signs in on that
+ * machine in a folder of its own, and the tab's launch there runs on the
+ * account it names (remote-helper/host-accounts.ts). Today's plain SSH path
+ * still never switches (its CLI runs on the host's one login), nor does a
+ * shell-only pane.
  */
 export function canSwitchAccountForSession(opts: {
   provider?: ProviderId
   isSsh?: boolean
+  /** The SSH tab runs through the session helper (isHelperTab). */
+  viaHelper?: boolean
   profileCount: number
   /** How many accounts a Switch account would list for a session of a
    *  provider other than Claude Code (utils/switchAccountItems). */
@@ -61,8 +70,13 @@ export function canSwitchAccountForSession(opts: {
   shellOnly?: boolean
 }): boolean {
   const provider = opts.provider ?? 'claude'
-  if (opts.shellOnly || opts.isSsh) return false
-  if (provider !== 'claude') return (opts.providerAccountCount ?? 0) >= 2
+  if (opts.shellOnly) return false
+  if (opts.isSsh && opts.viaHelper !== true) return false
+  // Only Claude Code tabs run through the session helper in this release.
+  if (provider !== 'claude') return !opts.isSsh && (opts.providerAccountCount ?? 0) >= 2
+  // A helper tab is on a Linux machine through this computer's Windows-only
+  // helper, so the macOS rule below does not apply to it.
+  if (opts.isSsh) return opts.profileCount >= 2
   // macOS: Claude Code keeps its live OAuth token in the login Keychain,
   // which per-profile HOME redirection cannot isolate — switching would
   // relabel the session while every API call kept using the shared token
@@ -72,6 +86,22 @@ export function canSwitchAccountForSession(opts: {
   // own folder.)
   if (typeof window !== 'undefined' && window.electronPlatform === 'darwin') return false
   return opts.profileCount >= 2
+}
+
+/**
+ * 2.1.3-beta.20 section 5: a tab through the session helper, whose account is
+ * one of this computer's (signed in on its machine in a folder of its own):
+ * an SSH tab the helper keeps (its saved mark, `remoteVia`), or one main says
+ * runs through the helper now (`throughHelper`, useThroughHelper). Never a
+ * shell-only pane or a sign-in tab (`remoteAccountSignIn`): neither runs a
+ * session on an account.
+ */
+export function isHelperTab(
+  session: { sessionType?: string; shellOnly?: boolean; remoteVia?: 'helper'; remoteAccountSignIn?: boolean } | null | undefined,
+  throughHelper: boolean,
+): boolean {
+  if (!session || session.sessionType !== 'ssh' || session.shellOnly || session.remoteAccountSignIn) return false
+  return session.remoteVia === 'helper' || throughHelper
 }
 
 /**
@@ -89,8 +119,10 @@ export function canSwitchAccountForSession(opts: {
  *
  * Returns undefined for a local / shell-only / non-Claude session, or an SSH
  * session whose remote account has no matching local profile. Account SWITCHING
- * stays disabled for SSH regardless (see canSwitchAccountForSession) — switching
- * respawns under a different LOCAL profile, which cannot change the remote's.
+ * stays disabled on today's SSH path regardless (see canSwitchAccountForSession):
+ * there, switching respawns under a different LOCAL profile, which cannot
+ * change the remote's. A tab through the session helper switches (2.1.3-beta.20
+ * section 5): each account signs in on its machine in a folder of its own.
  */
 export function sshMappedProfileId(
   session: {

@@ -1,6 +1,7 @@
 // tests/unit/renderer/session-launch.test.ts
 import { describe, it, expect } from 'vitest'
-import { shouldGateAccountChoice, canSwitchAccountForSession, sshMappedProfileId, formatSpawnError, resolveResumeAccountMode, shouldPredetermineRestoredAccount, sessionAgentName, resumedSessionOwnAccount } from '../../../src/renderer/utils/sessionLaunch'
+import { shouldGateAccountChoice, canSwitchAccountForSession, isHelperTab, sshMappedProfileId, formatSpawnError, resolveResumeAccountMode, shouldPredetermineRestoredAccount, sessionAgentName, resumedSessionOwnAccount } from '../../../src/renderer/utils/sessionLaunch'
+import { PROVIDER_IDS } from '../../../src/shared/providers/ids'
 import fs from 'node:fs'
 import path from 'node:path'
 
@@ -132,6 +133,38 @@ describe('canSwitchAccountForSession', () => {
   })
   it('refuses shell-only panes (the add-account /login shell must never switch profile)', () => {
     expect(canSwitchAccountForSession({ provider: 'claude', shellOnly: true, profileCount: 2 })).toBe(false)
+  })
+
+  // 2.1.3-beta.20 section 5: a tab through the session helper resolves and
+  // switches its account as a local tab does (each account's own folder on
+  // the machine). Today's plain SSH path and shell-only panes still never do.
+  it('allows a Claude tab through the session helper with >= 2 profiles', () => {
+    expect(canSwitchAccountForSession({ provider: 'claude', isSsh: true, viaHelper: true, profileCount: 2 })).toBe(true)
+    expect(canSwitchAccountForSession({ isSsh: true, viaHelper: true, profileCount: 3 })).toBe(true)
+  })
+  it('still refuses today\'s plain SSH tab, whatever the profile count', () => {
+    expect(canSwitchAccountForSession({ provider: 'claude', isSsh: true, viaHelper: false, profileCount: 5 })).toBe(false)
+    expect(canSwitchAccountForSession({ provider: 'claude', isSsh: true, profileCount: 5 })).toBe(false)
+  })
+  it('still refuses a shell-only pane through the helper, another provider\'s tab, or one account only', () => {
+    const other = PROVIDER_IDS.find((p) => p !== 'claude')!
+    expect(canSwitchAccountForSession({ provider: 'claude', isSsh: true, viaHelper: true, shellOnly: true, profileCount: 3 })).toBe(false)
+    expect(canSwitchAccountForSession({ provider: other, isSsh: true, viaHelper: true, profileCount: 3, providerAccountCount: 3 })).toBe(false)
+    expect(canSwitchAccountForSession({ provider: 'claude', isSsh: true, viaHelper: true, profileCount: 1 })).toBe(false)
+  })
+})
+
+describe('isHelperTab (2.1.3-beta.20 section 5)', () => {
+  it('an SSH tab kept by the helper, or one main says runs through it now', () => {
+    expect(isHelperTab({ sessionType: 'ssh', remoteVia: 'helper' }, false)).toBe(true)
+    expect(isHelperTab({ sessionType: 'ssh' }, true)).toBe(true)
+  })
+  it('not today\'s plain SSH tab, a local tab, a shell-only pane or a sign-in tab', () => {
+    expect(isHelperTab({ sessionType: 'ssh' }, false)).toBe(false)
+    expect(isHelperTab({ sessionType: 'local' }, true)).toBe(false)
+    expect(isHelperTab({ sessionType: 'ssh', shellOnly: true, remoteVia: 'helper' }, true)).toBe(false)
+    expect(isHelperTab({ sessionType: 'ssh', remoteAccountSignIn: true }, true)).toBe(false)
+    expect(isHelperTab(null, true)).toBe(false)
   })
 })
 

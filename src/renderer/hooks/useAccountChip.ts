@@ -37,11 +37,14 @@ export function useEmailChipColourKey(email: string | undefined, sources: Omit<C
 }
 
 /** The Switch account list for a session (see switchAccountItems), read as
- *  its own text so an unchanged list is the same list. */
+ *  its own text so an unchanged list is the same list. `host`: a helper
+ *  tab's machine (2.1.3-beta.20 section 5), whose last read marks each
+ *  account's sign-in there. */
 export function useSwitchAccountItems(
   session: Parameters<typeof switchAccountItems>[0],
   sources: Omit<Parameters<typeof switchAccountItems>[1], 'snapshot'>,
+  host?: Parameters<typeof switchAccountItems>[2],
 ): SwitchAccountItem[] {
-  const key = useProviderAccountsStore((s) => JSON.stringify(switchAccountItems(session, { ...sources, snapshot: s.snapshot })))
+  const key = useProviderAccountsStore((s) => JSON.stringify(switchAccountItems(session, { ...sources, snapshot: s.snapshot }, host)))
   return useMemo(() => JSON.parse(key) as SwitchAccountItem[], [key])
 }
