@@ -115,9 +115,13 @@ rather than pretending otherwise.
 everything else in your settings still run, and a session can read and write
 whatever you can. A hook you configure runs under whichever account the session
 uses, so treat it as shared across accounts. Isolation also stops at this
-machine: an SSH session uses the remote's own login. And CCC never holds or
-refreshes a login token itself: Claude Code signs in from the account's own
-stored login exactly as it does in a normal terminal.
+machine: a usual SSH session uses the remote's own login, and a Claude Code tab
+through the session helper (preview) uses its account's own sign-in on that
+machine. CCC does not sign an account in for you: Claude Code signs in from the
+account's own stored login exactly as it does in a normal terminal. The one
+exception is renewal: for a Claude Code account that nothing is using, the
+Usage page renews a sign-in that is still valid, at the address Claude Code
+itself uses (PRIVACY.md lists it).
 
 ## Choosing your assistants (Claude Code and Codex)
 

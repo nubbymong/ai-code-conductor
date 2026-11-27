@@ -117,9 +117,8 @@ probe (ADR) must confirm. R5 fixtures fix field types, lengths and refusals.
   `~/.claude.json` and `~/.claude/.credentials.json`, and an account's own
   folder holds both files). The Claude package names these keys
   (`CLAUDE_REMOTE_ACCOUNTS`, `src/main/providers/claude/remote-launch.ts`),
-  and the helper itself never reads a token. A key with a part named
-  `accessToken` or `refreshToken`, in any case, is refused by name whatever
-  the list says. A key off the list is a command line the mode does not
+  and the helper itself never prints a token: it refuses any key with a part
+  named `accessToken` or `refreshToken`, in any case, whatever the list says. A key off the list is a command line the mode does not
   take: exit 2, nothing read.
 - **Session id (`sid`)**, chosen by the app: `^[A-Za-z0-9][A-Za-z0-9_-]{7,31}$`.
   Every socket bind and connect happens after a `chdir` into the session

@@ -71,17 +71,18 @@ effort, and every result names what ran.
    variable comes before `--effort` and the choice would not run. When no
    model is chosen and `ANTHROPIC_MODEL` names one, a chosen effort must be
    one that model supports.
-6. **Every result says what ran.** The footer, and a log line before and
-   after the run, name the model, the effort and where each came from:
-   `caller`, `default` or `environment`. Codex's model is the one on its argv,
-   or "the reviewer account's default model, not named" when there is none.
-   Claude Code's model is the one its result reports (its model usage); when
-   it reports several, the footer lists them all as reported, and when it
-   reports none, the footer says the model was requested and is not
-   confirmed (for the default, only "not confirmed"). A value nothing confirms is said as requested, not confirmed:
-   Claude Code's effort (its result does not report one), and Codex's effort
-   when no model is named (it was checked against no model's levels). A
-   reviewer that never started names no model. The app never guesses.
+6. **Every result says what ran.** The footer, and a log line before and after
+   the run, name the model, the effort and where each came from: `caller`,
+   `default` or `environment`. Codex's model is the one on its argv, or "the
+   reviewer account's default model, not named" when there is none. Claude
+   Code's model is the one its result reports (its model usage); when it
+   reports several, the footer lists them all as reported, and when it reports
+   none, the footer says the model was requested and is not confirmed (for the
+   default, only "not confirmed"). A value nothing confirms is said as
+   requested, not confirmed: Claude Code's effort (its result does not report
+   one), and Codex's effort when no model is named (it was checked against no
+   model's levels). A reviewer that never started names no model. The app
+   never guesses.
 7. **No cap on cost (Q2).** A caller may choose the most expensive model and
    effort. One review runs per session at a time, for 5 minutes unless the
    caller asks for longer (`timeoutSeconds`, 30 to 900 seconds), and the
