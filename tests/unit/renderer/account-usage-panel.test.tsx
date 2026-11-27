@@ -15,7 +15,7 @@ import React from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { act } from 'react'
 import { AccountCard, CodexAccountCard, codexCreditsText, PARKED_LINE } from '../../../src/renderer/components/AccountUsagePanel'
-import type { AccountUsage, UsageBucket } from '../../../src/shared/usage-types'
+import { USAGE_DETAIL_RENEWING, type AccountUsage, type UsageBucket } from '../../../src/shared/usage-types'
 import type { AccountView, ProviderAccountUsageView } from '../../../src/shared/providers'
 import { resolveIdentityColor } from '../../../src/shared/identity-colors'
 import { formatResetTime } from '../../../src/renderer/utils/terminalFormatting'
@@ -131,10 +131,10 @@ describe('AccountCard: identity, D2 and ages (usage track MP4)', () => {
   afterEach(() => { vi.useRealTimers() })
 
   // MP4 review F5: the canvas Errors state, exactly as the component words it.
-  // #445: signed in with no usable token is the Refreshing state now: the app
+  // nubbymong/aicc_planning#445: signed in with no usable token is the Refreshing state now: the app
   // renews the sign-in by itself.
   it('an account signed in with no usable token is Refreshing; one whose read failed says so exactly', () => {
-    const signedIn = render(<AccountCard row={row({ status: 'error', detail: 'signed in' })} theme="dark" onSignIn={vi.fn()} now={NOW} />)
+    const signedIn = render(<AccountCard row={row({ status: 'error', detail: USAGE_DETAIL_RENEWING })} theme="dark" onSignIn={vi.fn()} now={NOW} />)
     expect(q(signedIn.container, 'account-usage-state-pill')?.textContent).toBe('Refreshing…')
     expect(q(signedIn.container, 'account-usage-card-foot')?.textContent).toBe('Renewing its sign-in by itself')
     expect(signedIn.container.textContent).not.toMatch(/open a session|Couldn't load/)
@@ -200,7 +200,7 @@ describe('AccountCard: an account a running session uses', () => {
     r.unmount()
   })
 
-  // #445 (the mockup): a current figure is live from its open session, In use.
+  // nubbymong/aicc_planning#445 (the mockup): a current figure is live from its open session, In use.
   it('a current figure reads "Live from its open session", In use', () => {
     const r = render(<AccountCard row={row({ buckets: [bucket('Weekly', 5, at(9, 0, 30))], stale: false, inSession: true, fetchedAt: NOW - 10_000 })} theme="dark" onSignIn={vi.fn()} now={NOW} />)
     expect(r.container.textContent).toContain('Live from its open session')
@@ -328,7 +328,7 @@ describe('CodexAccountCard (usage track MP4)', () => {
     r.unmount()
   })
 
-  // #445 (the mockup's signed-out card): the reason, when it was last read and
+  // nubbymong/aicc_planning#445 (the mockup's signed-out card): the reason, when it was last read and
   // the Sign in again button; no bars from a sign-in that no longer works.
   it('a signed-out account offers "Sign in again" and says when it was last read', () => {
     const onSignInAgain = vi.fn()
@@ -452,7 +452,7 @@ describe('the credits row (P3.14)', () => {
       r.unmount()
     })
 
-    // #445 (the mockup's signed-out card): no bars, so no credits under them.
+    // nubbymong/aicc_planning#445 (the mockup's signed-out card): no bars, so no credits under them.
     it('a signed-out account shows no credits row, only "Sign in again"', () => {
       const r = cxCard({ account: { lastKnownAuthState: 'signed-out' }, view: withCredits({ hasCredits: true, unlimited: false, balance: 1250 }, { status: 'not-signed-in', source: 'last-seen', readingAt: NOW - 3_600_000 }) })
       expect(creditsRow(r.container)).toBeNull()
@@ -569,6 +569,13 @@ describe('the card states (aicc_planning#445)', () => {
     const odd = render(<AccountCard row={okRow({ isPrimary: true })} auth={auth({ subscriptionType: 'mystery' })} theme="dark" onSignIn={vi.fn()} now={NOW} />)
     expect(Array.from(odd.container.querySelectorAll('[data-testid="account-usage-pill"]')).map((p) => p.textContent)).toEqual(['Primary'])
     odd.unmount()
+  })
+
+  // Review F5: the usage tier the stored sign-in carries beside its plan.
+  it('a Max plan names its usage tier, as the mockup does', () => {
+    const r = render(<AccountCard row={okRow()} auth={auth({ subscriptionType: 'max', rateLimitTier: 'default_claude_max_20x' })} theme="dark" onSignIn={vi.fn()} now={NOW} />)
+    expect(Array.from(r.container.querySelectorAll('[data-testid="account-usage-pill"]')).map((p) => p.textContent)).toEqual(['Max 20x'])
+    r.unmount()
   })
 
   it('Refreshing: the spinner pill, the last reading dimmed, and the foot says it renews itself', () => {

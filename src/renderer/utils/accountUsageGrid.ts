@@ -6,7 +6,7 @@
 // per card with `usageRowEntry` (a Claude Code profile's reading) or
 // `accountViewEntry` (a registry account's provider-neutral view) and draws
 // what `arrangeCards` gives back.
-import type { AccountUsage, UsageBucket } from '../../shared/usage-types'
+import { USAGE_DETAIL_RENEWING, type AccountUsage, type UsageBucket } from '../../shared/usage-types'
 import type { ProfileAuthInfo } from '../../shared/account-auth'
 import type { AccountView, ProviderAccountUsageView, ProviderId } from '../../shared/providers'
 import { isProviderId } from '../../shared/providers/ids'
@@ -139,8 +139,9 @@ function accessTokenLapsed(auth: ProfileAuthInfo | undefined, now: number): bool
  * (usage/account-usage.ts), not here.
  *
  * Refreshing: signed in, but the reading could not be taken fresh because
- * the sign-in is being renewed: the refresh hint (signed in, no usable token),
- * or a kept figure while the short-lived token has lapsed. A kept figure for
+ * the sign-in is being renewed: main's renewing hint (its detail is the shared
+ * USAGE_DETAIL_RENEWING, compared exactly), or a kept figure while the
+ * short-lived token has lapsed. A kept figure for
  * any other reason (a rate limit, the network) stays an ordinary card that
  * says it could not refresh.
  */
@@ -154,7 +155,7 @@ export function usageRowState(
   if (row.status === 'needs-login') return 'sign-in'
   if (row.status === 'ok' && usedUpWindow(row.buckets, opts.now)) return 'out'
   if (row.inSession) return 'in-use'
-  if (row.status === 'error' && typeof row.detail === 'string' && row.detail.startsWith('signed in')) return 'refreshing'
+  if (row.status === 'error' && row.detail === USAGE_DETAIL_RENEWING) return 'refreshing'
   if (row.status === 'ok' && row.stale && accessTokenLapsed(opts.auth, opts.now)) return 'refreshing'
   if (row.status === 'ok' && row.buckets.length > 0) return 'ready'
   return 'unread'

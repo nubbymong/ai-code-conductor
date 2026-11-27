@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { resolveUsageOutcome, parseRefreshResponse, classifyTokenAnswer, type RawResult } from '../../src/main/usage/account-usage'
-import type { AccountUsage, UsageBucket } from '../../src/shared/usage-types'
+import { USAGE_DETAIL_RENEWING, type AccountUsage, type UsageBucket } from '../../src/shared/usage-types'
 
 const base: AccountUsage = {
   profileId: 'p1', email: 'a@b.c', name: 'A', isPrimary: false,
@@ -179,5 +179,12 @@ describe('resolveUsageOutcome: Sign in again only when the user must sign in', (
     const r = resolveUsageOutcome(base, { signedIn: true, tokenUsable: false }, undefined)
     expect(r.detail).toMatch(/^signed in/)
     expect(r.detail).not.toMatch(/open a session/)
+  })
+
+  // nubbymong/aicc_planning#445 (review F6): the Account usage page reads its
+  // Refreshing from this detail, so both sides use one shared constant.
+  it("the Refreshing hint's detail is the shared constant the page reads, for a lapsed token and a 401 alike", () => {
+    expect(resolveUsageOutcome(base, { signedIn: true, tokenUsable: false }, undefined).detail).toBe(USAGE_DETAIL_RENEWING)
+    expect(resolveUsageOutcome(base, { signedIn: true, tokenUsable: true, fetch: fail(401) }, undefined).detail).toBe(USAGE_DETAIL_RENEWING)
   })
 })

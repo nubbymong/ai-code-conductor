@@ -12,7 +12,7 @@ import {
   sortEntries, bandEntries, bandOf, mostRoom, mostRoomDetail, countStates, arrangeCards, roomWindow,
   type UsageGridEntry, type UsageCardState,
 } from '../../../src/renderer/utils/accountUsageGrid'
-import type { AccountUsage, UsageBucket } from '../../../src/shared/usage-types'
+import { USAGE_DETAIL_RENEWING, type AccountUsage, type UsageBucket } from '../../../src/shared/usage-types'
 import type { ProfileAuthInfo } from '../../../src/shared/account-auth'
 import type { ProviderAccountUsageView, ProviderId } from '../../../src/shared/providers'
 
@@ -122,8 +122,15 @@ describe('a Claude Code card\'s state, from the verdicts the app already has', (
   })
 
   it('Refreshing: signed in with no usable token, or a kept figure while its short-lived token has lapsed', () => {
-    expect(usageRowState(row({ status: 'error', detail: 'signed in — open a session to refresh', buckets: [] }), rowOpts())).toBe('refreshing')
+    expect(usageRowState(row({ status: 'error', detail: USAGE_DETAIL_RENEWING, buckets: [] }), rowOpts())).toBe('refreshing')
     expect(usageRowState(row({ stale: true }), rowOpts({ auth: auth() }))).toBe('refreshing')
+  })
+
+  // Review F6: Refreshing is main's shared constant exactly, not any detail
+  // that happens to start the same way.
+  it('only the shared renewing detail is Refreshing; another error detail is not', () => {
+    expect(usageRowState(row({ status: 'error', detail: 'signed in — open a session to refresh', buckets: [] }), rowOpts())).toBe('unread')
+    expect(usageRowState(row({ status: 'error', detail: `${USAGE_DETAIL_RENEWING} later`, buckets: [] }), rowOpts())).toBe('unread')
   })
 
   it('a kept figure for any other reason is an ordinary card, not Refreshing', () => {
