@@ -1320,14 +1320,7 @@ export async function startOwnerOnlyCredentialFolders(
   startStepsPending = settled
   let readyAfterSteps: CredentialFolderRule | null = null
   try {
-    try {
-      const active = credentialFolderRule()
-      if (active) {
-        await checkListedProfileHomes(active)
-        if (startStepsMayMakeAccount()) await prepareReadyHome(active)
-        else readyAfterSteps = active
-      }
-    } catch { /* no verdict: every write refuses as pending */ }
+    try { readyAfterSteps = await checkFoldersBeforeSteps() } catch { /* no verdict: every write refuses as pending */ }
     await steps()
   } finally {
     if (startStepsPending === settled) startStepsPending = null
@@ -1341,6 +1334,21 @@ export async function startOwnerOnlyCredentialFolders(
       void run.then(() => { if (readyHomeAfterSteps === run) readyHomeAfterSteps = null })
     }
   }
+}
+
+/** The start's checks before its profile steps: every listed profile's
+ *  sign-in folders, and the ready home too when the steps may make an
+ *  account. Answers the rule to check the ready home with after the steps,
+ *  or null (no rule on, or the ready home already checked). An async
+ *  function, so the steps always run after the start call has returned, also
+ *  with no rule on (macOS, Linux), as they did when the start awaited
+ *  checkEveryProfileCredentialFolders. */
+async function checkFoldersBeforeSteps(): Promise<CredentialFolderRule | null> {
+  const active = credentialFolderRule()
+  if (!active) return null
+  await checkListedProfileHomes(active)
+  if (startStepsMayMakeAccount()) { await prepareReadyHome(active); return null }
+  return active
 }
 
 /** The start's check of the ready home made after its profile steps, while it runs. */
