@@ -1662,14 +1662,21 @@ describe('surfaces for the Codex review fix and the last 2.1.1-beta.3 text', () 
   it('the Feature Guide says what each reviewer is sent and that the Codex reviewer runs no commands', () => {
     const cr = body('code-review')
     expect(cr).toContain('The app sends the reviewer the change itself: the git diff of the uncommitted changes to tracked files, or of a range you name. For files you name, the Codex reviewer is sent their content, and the Claude reviewer reads them in the project. A change larger than 512 KB is refused, never cut.')
-    expect(cr).toContain("The Codex reviewer runs no commands and cannot read or change files: it reviews what it is sent, plus the project's AGENTS.md if there is one, which Codex loads by itself. It runs on the reviewer account's default Codex model. The Claude reviewer can also read other files in the project.")
+    expect(cr).toContain("The Codex reviewer runs no commands and cannot read or change files: it reviews what it is sent, plus the project's AGENTS.md if there is one, which Codex loads by itself. The Claude reviewer can also read other files in the project.")
     expect(cr).not.toMatch(/Codex reviewer (reads|runs git)/)
   })
 
   // 2.1.3-beta.8: a Codex review passes no model, so the card names none.
-  it("the Feature Guide says a Codex review runs on the reviewer account's default Codex model, and names no model", () => {
+  // nubbymong/aicc_planning#446: the asking session can choose the model and
+  // the effort; unset, the defaults below; every review names what it ran on.
+  it("the Feature Guide says what a review runs on: the asking session's choice from the reviewer's lists, else the defaults, and that every review names it; it names no model", () => {
     const cr = body('code-review')
-    expect(cr).toContain("It runs on the reviewer account's default Codex model.")
+    expect(cr).toContain('The session that asks for a review can choose the model and the effort it runs on, from the models and levels that reviewer offers')
+    expect(cr).toContain('Any other choice is refused with the list of what it can choose, and nothing runs.')
+    expect(cr).toContain("Left unset, a Codex review runs on the first model your installed Codex lists, or on the reviewer account's default Codex model when the app could not read that list, at medium effort.")
+    expect(cr).toContain("A Claude review left unset runs on Claude Code's own default model and effort for the reviewer account, or on the ones ANTHROPIC_MODEL and CLAUDE_CODE_EFFORT_LEVEL set in the app's environment; while CLAUDE_CODE_EFFORT_LEVEL is set, a chosen effort is refused, because Claude Code would not use it.")
+    expect(cr).toContain("Every review ends with a line that names the model and the effort it ran on, and where each came from: the asking session's choice, the default, or the app's environment.")
+    expect(cr).toContain('or says the model is not confirmed when Claude Code reports none.')
     expect(cr).not.toMatch(/gpt/i)
   })
 
