@@ -128,8 +128,9 @@ describe('a folder that may be this computer\'s own from an earlier install', ()
     await mount()
     expect(row('Personal')?.querySelector('[data-testid="remote-account-state"]')?.textContent).toBe('May be this computer\'s own from an earlier installIts folder on Rocky carries another install\'s mark. If it is this computer\'s own, Adopt makes it so again; if it is the app\'s on another computer, leave it.')
     expect(row('Personal')?.querySelector('[data-testid="remote-account-signin"]')).toBeNull()
-    // R3-3 (round 3): its hover text names what it adopts there.
-    expect((row('Personal')?.querySelector('[data-testid="remote-account-adopt"]') as HTMLElement).title).toBe("Asks first, then adopts Personal on Rocky: its folder there carries another install's mark.")
+    // R3-3 (round 3): its hover text names what it adopts there (R4-6,
+    // round 4: and what Adopt does).
+    expect((row('Personal')?.querySelector('[data-testid="remote-account-adopt"]') as HTMLElement).title).toBe("Asks first, then makes the folder for Personal on Rocky this computer's again. It carries another install's mark and may be this computer's own from an earlier install.")
     await click(row('Personal')?.querySelector('[data-testid="remote-account-adopt"]'))
     expect(useHostAccountsStore.getState().adoptAsk).toEqual({ did: DID, machineName: 'Rocky', profileIds: ['p2'] })
   })

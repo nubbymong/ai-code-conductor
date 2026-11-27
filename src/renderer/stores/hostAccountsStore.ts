@@ -2,7 +2,7 @@ import { create } from 'zustand'
 import type { HostAccountNotice, HostAccountsState, HostLaunchRefusal, HostMachineAccounts } from '../../shared/host-accounts'
 import type { RemoteMachineView, RemoteMachinesState } from '../../shared/remote-machines'
 import { useSessionStore } from './sessionStore'
-import { hostElsewhere, hostLaunchable, machineLabel } from '../utils/hostAccounts'
+import { hostElsewhere, hostLaunchable, machineLabel, type AdoptTab } from '../utils/hostAccounts'
 
 /**
  * 2.1.3-beta.20 section 5 (Accounts across machines): each Linux machine's
@@ -143,8 +143,10 @@ export interface HostAdoptAsk {
   did: string
   machineName: string
   profileIds: string[]
-  /** Round 3 (R3-2): asked from a tab's notice: the tab its result names to Restart. */
-  tabLabel?: string
+  /** Round 3 (R3-2), round 4 (R4-1, R4-3): asked from a tab's notice: the
+   *  tab, the account it asked for and why it asked; its result names the
+   *  tab's next step only once that account was adopted (adoptNextText). */
+  tab?: AdoptTab
 }
 
 let loading: Promise<void> | null = null

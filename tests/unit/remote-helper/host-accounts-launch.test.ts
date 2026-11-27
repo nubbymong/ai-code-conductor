@@ -23,7 +23,7 @@ import { join } from 'path'
 import type { IPty } from 'node-pty'
 import type { RemoteAccounts, SessionProvider } from '../../../src/main/providers/types'
 import { registerProvider } from '../../../src/main/providers'
-import { accountsLeftText, adoptRemoteAccounts, forgetRemoteHelperTab, remoteAccountsState, remoteHelperPty, setRemoteHelperDeps, signOutForRemove, signOutRemoteAccount } from '../../../src/main/remote-helper'
+import { accountsLeftText, adoptRemoteAccounts, forgetRemoteHelperTab, readRemoteAccounts, remoteAccountsState, remoteHelperPty, setRemoteHelperDeps, signOutForRemove, signOutRemoteAccount } from '../../../src/main/remote-helper'
 import { CLAUDE_REMOTE_ACCOUNTS, claudeRemoteLaunch } from '../../../src/main/providers/claude/remote-launch'
 import { CLAUDE_RUN_SCREEN } from '../../../src/main/providers/claude/run-screen'
 import { remoteSessionId } from '../../../src/main/remote-helper/session'
@@ -549,6 +549,44 @@ describe('round 2 (R1): Remove and a launch name folders of an earlier build or 
     await until(() => shown(id).includes('could not start'))
     expect(shown(id)).toMatch(/carries another install's mark, and nothing of it was changed/)
     expect(shown(id)).toMatch(/choose Adopt on the machine's card/)
+    expect(ownerOf('profile-personal')).toBe(OTHER_INSTALL)
+    expect(launchOf()).toBeNull()
+    forgetRemoteHelperTab(id)
+  })
+})
+
+// Phase 5 round 4 (R4-2): a sign-in tab's note on a folder with another
+// install's mark follows the one Adopt rule, from the machine's last read:
+// read the machine first (as a Check does), then start the sign-in tab.
+describe('round 4 (R4-2): a sign-in tab\'s note follows the machine\'s last read', () => {
+  const note = (text: string) => `[This tab could not start through the session helper on rocky.lan: ${text}]`
+
+  it('every such folder there is for this computer\'s accounts: the note offers Adopt', async () => {
+    owners.set('profile-personal', OTHER_INSTALL)
+    const [read] = await readRemoteAccounts([MACHINE.did])
+    expect(read).toMatchObject({ elsewhere: ['profile-personal'], mayBeEarlierInstall: true })
+    const id = 'signin-earlier'
+    start(id, { profileId: 'profile-personal', remoteAccountSignIn: true })
+    await until(() => shown(id).includes('could not start'))
+    expect(shown(id)).toContain(note('the account\'s folder on rocky.lan carries another install\'s mark, and nothing of it was changed. It may be this computer\'s own from an earlier install of the app: if so, choose Adopt on the machine\'s card on the Machines page. Press Check on the Machines page, then choose Sign in on this machine again.'))
+    expect(ownerOf('profile-personal')).toBe(OTHER_INSTALL)
+    expect(launchOf()).toBeNull()
+    forgetRemoteHelperTab(id)
+  })
+
+  it('another such folder there is for an account this computer does not hold: the note says another computer\'s, and offers no Adopt', async () => {
+    owners.set('profile-personal', OTHER_INSTALL)
+    folders.set('profile-theirs', signedIn('theirs@example.com'))
+    owners.set('profile-theirs', OTHER_INSTALL)
+    const [read] = await readRemoteAccounts([MACHINE.did])
+    expect(read).toMatchObject({ elsewhere: ['profile-personal', 'profile-theirs'], mayBeEarlierInstall: false })
+    const id = 'signin-theirs'
+    start(id, { profileId: 'profile-personal', remoteAccountSignIn: true })
+    await until(() => shown(id).includes('could not start'))
+    // Its own steps only: a sign-in from here cannot help, so the note adds no Sign in on this machine.
+    expect(shown(id)).toContain(note('the account\'s folder on rocky.lan is used by the app on another computer, and nothing of it was changed. Sign it in there from that computer, or start a tab on an account signed in there.'))
+    expect(shown(id)).not.toMatch(/Adopt/)
+    expect(shown(id)).not.toMatch(/Sign in on this machine/)
     expect(ownerOf('profile-personal')).toBe(OTHER_INSTALL)
     expect(launchOf()).toBeNull()
     forgetRemoteHelperTab(id)

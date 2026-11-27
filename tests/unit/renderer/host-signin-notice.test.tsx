@@ -447,7 +447,8 @@ describe('a folder that may be this computer\'s own from an earlier install', ()
     expect(byTest('host-signin-here')).toBeNull()
     expect(byTest('host-signin-use-other')).not.toBeNull()
     await click(byTest('host-signin-adopt'))
-    expect(useHostAccountsStore.getState().adoptAsk).toEqual({ did: DID, machineName: 'Rocky', profileIds: ['p2'], tabLabel: 'web-app' })
+    // R4-1, R4-3 (round 4): the tab, the account it asked for, and why it asked.
+    expect(useHostAccountsStore.getState().adoptAsk).toEqual({ did: DID, machineName: 'Rocky', profileIds: ['p2'], tab: { label: 'web-app', profileId: 'p2', kind: 'launch' } })
     expect(byTest('host-signin-question')).toBeNull()
   })
 
@@ -480,24 +481,79 @@ describe('a folder that may be this computer\'s own from an earlier install', ()
     const before = remote.accounts.mock.calls.length
     await click(byTest('host-adopt-run'))
     expect(remote.accountsAdopt).toHaveBeenCalledWith({ did: DID, profileIds: ['p2'] })
-    // R3-2 (round 3): it says what to do next: Restart a tab on that account.
-    expect(byTest('host-signin-message')?.textContent).toContain('Adopted Personal: its folder there is this computer\'s now. Restart a tab on that account to start it there.')
+    // R3-2 (round 3): it says what to do next: Restart a tab on that account
+    // (R4-3, round 4: named).
+    expect(byTest('host-signin-message')?.textContent).toContain('Adopted Personal: its folder there is this computer\'s now. Restart a tab on Personal to start it there.')
     expect(remote.accounts.mock.calls.length).toBeGreaterThan(before)
   })
 
   it('from the notice, the result names the tab to Restart; nothing adopted: no Restart line', async () => {
     const remote = (window as any).electronAPI.machines.remote
     await mount(<HostSignInNotice />)
-    await act(async () => { useHostAccountsStore.getState().askAdopt({ did: DID, machineName: 'Rocky', profileIds: ['p2'], tabLabel: 'web-app' }) })
+    await act(async () => { useHostAccountsStore.getState().askAdopt({ did: DID, machineName: 'Rocky', profileIds: ['p2'], tab: { label: 'web-app', profileId: 'p2', kind: 'launch' } }) })
     await settle()
     await click(byTest('host-adopt-run'))
     expect(byTest('host-signin-message')?.textContent).toContain('this computer\'s now. Restart web-app to start it there.')
     await click([...document.querySelectorAll('button')].find((b) => b.textContent === 'OK') ?? null)
     remote.accountsAdopt.mockResolvedValueOnce({ ok: false, message: 'Nothing was adopted: not every folder there with another install\'s mark is for one of this computer\'s accounts, so they are taken as the app\'s on another computer.', adopted: [] })
-    await act(async () => { useHostAccountsStore.getState().askAdopt({ did: DID, machineName: 'Rocky', profileIds: ['p2'], tabLabel: 'web-app' }) })
+    await act(async () => { useHostAccountsStore.getState().askAdopt({ did: DID, machineName: 'Rocky', profileIds: ['p2'], tab: { label: 'web-app', profileId: 'p2', kind: 'launch' } }) })
     await settle()
     await click(byTest('host-adopt-run'))
     expect(byTest('host-signin-message')?.textContent).not.toContain('Restart')
+  })
+
+  // R4-1 (round 4): Adopt from a Switch Account's notice. The switch did not
+  // happen, so the tab still runs on its old account and a Restart starts it
+  // there again: the result says to switch it again, never to Restart it.
+  it('from a switch\'s notice: the result says to switch the tab again, not to Restart it', async () => {
+    const remote = (window as any).electronAPI.machines.remote
+    const there = { ...read('signed-in-here', 'not-signed-in'), elsewhere: ['p2'], mayBeEarlierInstall: true }
+    remote.accounts.mockResolvedValue({ machines: [there] })
+    useHostAccountsStore.getState().setAccounts({ machines: [there] })
+    const kept = tab({ id: 'tab-2', profileId: 'p1', remoteVia: 'helper', remoteDid: DID })
+    useSessionStore.setState({ sessions: [kept] })
+    let fn: ((id: string, p: string | undefined) => void) | null = null
+    await mount(<><HostSignInNotice /><SwitchHarness session={kept} onReady={(f) => { fn = f }} /></>)
+    await act(async () => { fn!(kept.id, 'p2') })
+    await settle()
+    expect(dialog()?.textContent).toContain('Switch account')
+    expect(byTest('host-signin-question')?.textContent).toBe('Personal\'s folder on Rocky carries another install\'s mark.')
+    await click(byTest('host-signin-adopt'))
+    expect(useHostAccountsStore.getState().adoptAsk).toEqual({ did: DID, machineName: 'Rocky', profileIds: ['p2'], tab: { label: 'web-app', profileId: 'p2', kind: 'switch' } })
+    await click(byTest('host-adopt-run'))
+    expect(remote.accountsAdopt).toHaveBeenCalledWith({ did: DID, profileIds: ['p2'] })
+    expect(byTest('host-signin-message')?.textContent).toContain('Adopted Personal: its folder there is this computer\'s now. Switch web-app to Personal again to move it there.')
+    expect(byTest('host-signin-message')?.textContent).not.toContain('Restart')
+    // Nothing started or switched on its own: the tab is still on its old account.
+    expect(restartSpy).not.toHaveBeenCalled()
+    expect(useSessionStore.getState().sessions[0].profileId).toBe('p1')
+  })
+
+  // R4-3 (round 4): from a notice, Adopt also asks for the machine's other
+  // adoptable folders. The tab is named only when its own account was
+  // adopted: with only another one adopted, a start of the tab would be
+  // refused again, so the plain line names the account adopted.
+  it('from the notice, the tab\'s own account not adopted: the tab is not named', async () => {
+    const remote = (window as any).electronAPI.machines.remote
+    remote.accountsAdopt.mockResolvedValueOnce({ ok: false, message: 'Adopted Work: its folder there is this computer\'s now. Not adopted: Personal: it did not answer.', adopted: ['p1'] })
+    await mount(<HostSignInNotice />)
+    await act(async () => { useHostAccountsStore.getState().askAdopt({ did: DID, machineName: 'Rocky', profileIds: ['p2', 'p1'], tab: { label: 'web-app', profileId: 'p2', kind: 'launch' } }) })
+    await settle()
+    await click(byTest('host-adopt-run'))
+    expect(byTest('host-signin-message')?.textContent).toContain('Not adopted: Personal: it did not answer. Restart a tab on Work to start it there.')
+    expect(byTest('host-signin-message')?.textContent).not.toContain('web-app')
+  })
+
+  // R4-4 (round 4): several accounts adopted (from a card or a Machines row):
+  // the next step says one of those accounts.
+  it('several accounts adopted: the next step says a tab on one of those accounts', async () => {
+    const remote = (window as any).electronAPI.machines.remote
+    remote.accountsAdopt.mockResolvedValueOnce({ ok: true, message: 'Adopted Work, Personal: their folders there are this computer\'s now.', adopted: ['p1', 'p2'] })
+    await mount(<HostSignInNotice />)
+    await act(async () => { useHostAccountsStore.getState().askAdopt({ did: DID, machineName: 'Rocky', profileIds: ['p1', 'p2'] }) })
+    await settle()
+    await click(byTest('host-adopt-run'))
+    expect(byTest('host-signin-message')?.textContent).toContain('Adopted Work, Personal: their folders there are this computer\'s now. Restart a tab on one of those accounts, Work or Personal, to start it there.')
   })
 })
 

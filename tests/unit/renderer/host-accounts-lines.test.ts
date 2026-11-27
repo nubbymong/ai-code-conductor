@@ -11,6 +11,7 @@ import {
   cardMachineLine, machineAccountLine, switchMachineMark, sessionMachine, signInConfigFor, sshTarget,
   removeListing, removeNotAnsweringText, machineOwnSignOutText, toSignInCount, joinNames, hostLaunchable, signInOnTitle,
   elsewhereStayText, hostElsewhere, hostEarlierInstall, earlierInstallStayText, oldMarkerStayText, adoptConfirmText, adoptButtonTitle,
+  hostAccountName, adoptTitleOn, adoptNextText,
 } from '../../../src/renderer/utils/hostAccounts'
 import type { HostMachineAccounts, HostSignInFacts } from '../../../src/shared/host-accounts'
 import type { TerminalConfig } from '../../../src/renderer/stores/configStore'
@@ -249,9 +250,43 @@ describe('a folder that may be this computer\'s own from an earlier install', ()
     expect(adoptConfirmText('Rocky', ['Personal', 'Spare'])).toContain('Adopt Personal and Spare on Rocky? Their folders there carry')
   })
   // R3-3 (round 3): the Adopt button's hover text names every folder it adopts on that machine.
-  it('the Adopt button names what it adopts', () => {
-    expect(adoptButtonTitle('Rocky', ['Personal'])).toBe("Asks first, then adopts Personal on Rocky: its folder there carries another install's mark.")
-    expect(adoptButtonTitle('Rocky', ['Personal', 'Spare'])).toBe("Asks first, then adopts Personal and Spare on Rocky: their folders there carry another install's mark.")
+  // R4-6 (round 4): and says what Adopt does with them, not only the button's label again.
+  it('the Adopt button names what it adopts, and what Adopt does', () => {
+    expect(adoptButtonTitle('Rocky', ['Personal'])).toBe("Asks first, then makes the folder for Personal on Rocky this computer's again. It carries another install's mark and may be this computer's own from an earlier install.")
+    expect(adoptButtonTitle('Rocky', ['Personal', 'Spare'])).toBe("Asks first, then makes the folders for Personal and Spare on Rocky this computer's again. They carry another install's mark and may be this computer's own from an earlier install.")
+  })
+  // R4-5 (round 4): the hover text names the accounts as Adopt's confirm
+  // names them (the profile's name, else its alias, else its email), so the
+  // two always match; R4-7: one helper, the card's and the row's.
+  it('the hover text names the accounts as the confirm does', () => {
+    const profiles = [
+      { id: 'p2', name: 'Personal', accountEmail: 'p@x.io' },
+      { id: 'p3', name: '', accountEmail: 's@x.io' },
+      { id: 'p4', name: '', accountEmail: 'n@x.io' },
+    ]
+    const nameOf = hostAccountName(profiles, { 's@x.io': 'Spare' })
+    expect(['p2', 'p3', 'p4', 'p9'].map(nameOf)).toEqual(['Personal', 'Spare', 'n@x.io', 'That account'])
+    const acc = { ...read(true), elsewhere: ['p2', 'p3', 'zz9'] }
+    expect(adoptTitleOn('Rocky', acc, profiles, { 's@x.io': 'Spare' })).toBe("Asks first, then makes the folders for Personal and Spare on Rocky this computer's again. They carry another install's mark and may be this computer's own from an earlier install.")
+  })
+  // R4-1, R4-3, R4-4 (round 4): Adopt's next step names the tab only when its
+  // own account was adopted, by why it asked (a start: Restart it; a switch:
+  // Switch it again); else a tab on the account adopted, or on one of them.
+  // The accounts are named: main's answer may name one it did not adopt.
+  it('Adopt\'s next step', () => {
+    const nameOf = (id: string) => ({ p2: 'Personal', p3: 'Spare', p4: 'Work' } as Record<string, string>)[id] ?? id
+    const launch = { label: 'web-app', profileId: 'p2', kind: 'launch' as const }
+    const sw = { ...launch, kind: 'switch' as const }
+    expect(adoptNextText([], nameOf, launch)).toBe('')
+    expect(adoptNextText([], nameOf)).toBe('')
+    expect(adoptNextText(['p2'], nameOf, launch)).toBe('Restart web-app to start it there.')
+    expect(adoptNextText(['p2', 'p3'], nameOf, launch)).toBe('Restart web-app to start it there.')
+    expect(adoptNextText(['p2'], nameOf, sw)).toBe('Switch web-app to Personal again to move it there.')
+    expect(adoptNextText(['p3'], nameOf, launch)).toBe('Restart a tab on Spare to start it there.')
+    expect(adoptNextText(['p3'], nameOf, sw)).toBe('Restart a tab on Spare to start it there.')
+    expect(adoptNextText(['p3', 'p4'], nameOf, launch)).toBe('Restart a tab on one of those accounts, Spare or Work, to start it there.')
+    expect(adoptNextText(['p2'], nameOf)).toBe('Restart a tab on Personal to start it there.')
+    expect(adoptNextText(['p2', 'p3', 'p4'], nameOf)).toBe('Restart a tab on one of those accounts, Personal, Spare or Work, to start it there.')
   })
 })
 

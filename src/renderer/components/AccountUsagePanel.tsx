@@ -32,7 +32,7 @@ import {
   ACCOUNT_USAGE_MACHINES_CLASS, ACCOUNT_USAGE_MACHINE_ROW_CLASS, ACCOUNT_USAGE_MACHINE_NAME_CLASS, ACCOUNT_USAGE_MACHINE_STATE_CLASS, ACCOUNT_USAGE_MACHINE_BUTTON_CLASS,
 } from './account-usage-layout'
 import { useHostAccountsStore } from '../stores/hostAccountsStore'
-import { adoptButtonTitle, adoptableIds, cardMachineLine, hostEarlierInstall, hostElsewhere, machineLabel, signInOnTitle, toSignInCount, type HostLineTone, type HostMachineRef, type HostSignInLine } from '../utils/hostAccounts'
+import { adoptTitleOn, adoptableIds, cardMachineLine, hostEarlierInstall, hostElsewhere, machineLabel, signInOnTitle, toSignInCount, type HostLineTone, type HostMachineRef, type HostSignInLine } from '../utils/hostAccounts'
 import { openHostSignInTab } from '../utils/hostSignIn'
 
 /** D5 (usage UX, approved as drawn): the one line the page shows for Claude
@@ -188,6 +188,8 @@ export default function AccountUsagePanel({ onClose, onReauthNavigate, onOpenTok
   const codexOn = useSettingsStore((s) => usesCodex(s.settings))
   const savedSort = useSettingsStore((s) => s.settings.accountUsageSort)
   const savedProvider = useSettingsStore((s) => s.settings.accountUsageProvider)
+  // Round 4 (R4-5): Adopt's hover text names accounts as its confirm does.
+  const aliases = useSettingsStore((s) => s.settings.accountAliases)
   const snapshot = useProviderAccountsStore((s) => s.snapshot)
   const codexAccounts = useMemo(() => selectProviderAccounts(snapshot, CODEX), [snapshot])
   // 2.1.3-beta.20 section 5 (frame 1): each Linux machine's last read of the
@@ -449,10 +451,8 @@ export default function AccountUsagePanel({ onClose, onReauthNavigate, onOpenTok
           did: m.did, machineName: machineLabel(m),
           profileIds: adoptableIds(hostByDid[m.did], new Set((profiles ?? []).map((p) => p.id))),
         }),
-        adoptTitle: (m) => adoptButtonTitle(machineLabel(m), adoptableIds(hostByDid[m.did], new Set((profiles ?? []).map((p) => p.id))).map((id) => {
-          const p = (profiles ?? []).find((x) => x.id === id)
-          return (p ? claudeCardName(identityOf(snapshot, accountForLegacyId(snapshot, CLAUDE, p.id)), p.accountEmail || null, p.name).title : id)
-        })),
+        // Round 4 (R4-5): it names the accounts as the confirm it opens does.
+        adoptTitle: (m) => adoptTitleOn(machineLabel(m), hostByDid[m.did], profiles ?? [], aliases),
       }
     : undefined
 

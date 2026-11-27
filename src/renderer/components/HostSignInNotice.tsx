@@ -19,12 +19,11 @@
 // for a sign-in is over.
 import React, { useEffect, useRef, useState } from 'react'
 import { useHostAccountsStore, listenHostAccounts, type HostAdoptAsk, type HostNotice, type HostRun } from '../stores/hostAccountsStore'
-import { adoptableIds, adoptConfirmText } from '../utils/hostAccounts'
+import { adoptableIds, adoptConfirmText, adoptNextText, hostAccountName } from '../utils/hostAccounts'
 import { useSessionStore } from '../stores/sessionStore'
 import { useAccountProfilesStore } from '../stores/accountProfilesStore'
 import { useSettingsStore } from '../stores/settingsStore'
 import { useRestartSession } from '../hooks/useRestartSession'
-import { resolveAccountName } from '../../shared/account-chip-color'
 import { isAccountActive } from '../../shared/account-types'
 import { openHostSignInTab } from '../utils/hostSignIn'
 import { switchHelperTabAccount } from '../utils/helperSwitch'
@@ -74,14 +73,11 @@ export function hostNoticeText(n: Pick<HostNotice, 'kind' | 'state' | 'identity'
   }
 }
 
+/** Round 4 (R4-5): the one naming the cards' Adopt hover text uses too. */
 function useAccountName(): (profileId: string) => string {
   const profiles = useAccountProfilesStore((s) => s.profiles)
   const aliases = useSettingsStore((s) => s.settings.accountAliases)
-  return (id) => {
-    const p = profiles.find((x) => x.id === id)
-    if (!p) return 'That account'
-    return resolveAccountName(p.accountEmail, p.name, aliases) || p.accountEmail || p.name || 'That account'
-  }
+  return hostAccountName(profiles, aliases)
 }
 
 /** Round 1 (MINOR-4): a dialog gives the keyboard focus back to where it
@@ -154,7 +150,13 @@ function NoticeDialog({ notice }: { notice: HostNotice }) {
     const more = acc?.mayBeEarlierInstall === true ? adoptableIds(acc, held) : []
     store.dropWaits(notice.sessionId)
     close()
-    store.askAdopt({ did: notice.did, machineName: notice.machineName, profileIds: [...new Set([notice.profileId, ...more])], tabLabel: tabName })
+    // Round 4 (R4-1, R4-3): the tab's next step depends on why it asked (a
+    // refused start: Restart it; a Switch Account that did not happen: switch
+    // it again), and holds only once its own account was adopted.
+    store.askAdopt({
+      did: notice.did, machineName: notice.machineName, profileIds: [...new Set([notice.profileId, ...more])],
+      tab: { label: tabName, profileId: notice.profileId, kind: notice.kind },
+    })
   }
 
   return (
@@ -256,8 +258,9 @@ function AdoptDialog({ ask }: { ask: HostAdoptAsk }) {
       if (typeof remote?.accountsAdopt === 'function') {
         const r = await remote.accountsAdopt({ did: ask.did, profileIds: ask.profileIds })
         text = r.message || (r.ok ? 'Adopted.' : 'Nothing was adopted.')
-        // Round 3 (R3-2): what to do next: a tab starts on an adopted folder at its next start.
-        if (r.adopted.length > 0) text += ask.tabLabel ? ` Restart ${ask.tabLabel} to start it there.` : ' Restart a tab on that account to start it there.'
+        // Round 3 (R3-2), round 4 (R4-1, R4-3, R4-4): what to do next.
+        const next = adoptNextText(r.adopted, nameOf, ask.tab)
+        if (next) text += ` ${next}`
       }
     } catch { /* text says the app did not answer */ }
     store().askAdopt(null)

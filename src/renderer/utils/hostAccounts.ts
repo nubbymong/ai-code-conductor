@@ -12,6 +12,8 @@
 // sign in on machines in this release, so nothing here names anything else.
 import type { HostAccountSignIn, HostMachineAccounts, HostSignInState } from '../../shared/host-accounts'
 import { HOST_LAUNCHABLE_STATES } from '../../shared/host-accounts'
+import type { AccountProfile } from '../../shared/account-types'
+import { resolveAccountName } from '../../shared/account-chip-color'
 import type { SshConfig } from '../../shared/types'
 import type { TerminalConfig } from '../stores/configStore'
 
@@ -288,10 +290,11 @@ export function adoptConfirmText(machine: string, names: readonly string[]): str
   return `Adopt ${joinNames(names)} on ${machine}? ${one ? 'Its folder' : 'Their folders'} there ${one ? 'carries' : 'carry'} another install's mark. If ${one ? 'it is' : 'they are'} this computer's own from an earlier install of the app, Adopt makes ${one ? 'it' : 'them'} this computer's again; nothing is signed in, out or removed. If ${one ? 'it is' : 'they are'} the app's on another computer, do not adopt ${one ? 'it' : 'them'}.`
 }
 
-/** Round 3 (R3-3): the Adopt button's hover text: every folder it adopts on that machine. */
+/** Round 3 (R3-3): the Adopt button's hover text: every folder it adopts on
+ *  that machine. Round 4 (R4-6): and what Adopt does with them. */
 export function adoptButtonTitle(machine: string, names: readonly string[]): string {
   const one = names.length === 1
-  return `Asks first, then adopts ${joinNames(names)} on ${machine}: ${one ? 'its folder' : 'their folders'} there ${one ? 'carries' : 'carry'} another install's mark.`
+  return `Asks first, then makes ${one ? 'the folder' : 'the folders'} for ${joinNames(names)} on ${machine} this computer's again. ${one ? 'It carries' : 'They carry'} another install's mark and may be this computer's own from an earlier install.`
 }
 
 /** Round 2 (R2-1): the folders on machine `acc` that Adopt may take: those
@@ -299,6 +302,52 @@ export function adoptButtonTitle(machine: string, names: readonly string[]): str
  *  holds (`held`), in the machine's order. */
 export function adoptableIds(acc: Pick<HostMachineAccounts, 'elsewhere'> | undefined, held: ReadonlySet<string>): string[] {
   return (acc?.elsewhere ?? []).filter((id) => held.has(id))
+}
+
+/** This computer's account profiles, as these names need them. */
+export type HostNamedProfile = Pick<AccountProfile, 'id' | 'accountEmail' | 'name'>
+
+/** Round 4 (R4-5): an account of this computer by name, as Adopt's confirm
+ *  and the notice name it: its profile's name, else its alias, else its email. */
+export function hostAccountName(profiles: readonly HostNamedProfile[], aliases: Record<string, string> | undefined): (profileId: string) => string {
+  return (id) => {
+    const p = profiles.find((x) => x.id === id)
+    if (!p) return 'That account'
+    return resolveAccountName(p.accountEmail, p.name, aliases) || p.accountEmail || p.name || 'That account'
+  }
+}
+
+/** Round 4 (R4-5, R4-7): the Adopt button's hover text on an account card:
+ *  every folder Adopt takes on that machine (`acc`, its last read), named as
+ *  the confirm it opens names them. */
+export function adoptTitleOn(machine: string, acc: Pick<HostMachineAccounts, 'elsewhere'> | undefined, profiles: readonly HostNamedProfile[], aliases: Record<string, string> | undefined): string {
+  return adoptButtonTitle(machine, adoptableIds(acc, new Set(profiles.map((p) => p.id))).map(hostAccountName(profiles, aliases)))
+}
+
+/** Asked from a tab's notice: the tab, the account it asked for, and why it
+ *  asked (its start was refused, or its Switch Account did not happen). */
+export interface AdoptTab {
+  label: string
+  profileId: string
+  kind: 'launch' | 'switch'
+}
+
+/**
+ * Round 3 (R3-2), round 4 (R4-1, R4-3, R4-4): what to do once Adopt adopted
+ * `adopted` (profile ids; none: nothing). A tab starts on an adopted folder
+ * at its next start. Asked from a tab's notice and its own account adopted:
+ * Restart it (its start was refused), or switch it again (its switch did not
+ * happen, and a Restart starts it on its old account). Otherwise a tab on an
+ * account adopted, named: main's answer may also name one not adopted.
+ */
+export function adoptNextText(adopted: readonly string[], nameOf: (profileId: string) => string, tab?: AdoptTab): string {
+  if (adopted.length === 0) return ''
+  if (tab && adopted.includes(tab.profileId)) {
+    return tab.kind === 'launch' ? `Restart ${tab.label} to start it there.` : `Switch ${tab.label} to ${nameOf(tab.profileId)} again to move it there.`
+  }
+  const names = adopted.map(nameOf)
+  if (names.length === 1) return `Restart a tab on ${names[0]} to start it there.`
+  return `Restart a tab on one of those accounts, ${names.slice(0, -1).join(', ')} or ${names[names.length - 1]}, to start it there.`
 }
 
 /** Remove's listing for machine `acc` (undefined: never read). `nameOf`
