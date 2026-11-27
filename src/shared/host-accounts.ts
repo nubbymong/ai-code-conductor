@@ -88,7 +88,8 @@ export interface HostAccountSignIn {
 
 /** One machine's accounts, from its last read (section 3.1.6: at Check, at
  *  the start-up list, at the end of a sign-in tab, and at each launch of a
- *  helper tab; one exec per machine, never polled). */
+ *  helper tab on an account; and a sign-out reads it before and after, to
+ *  decide and then to show the result; one exec per read, never polled). */
 export interface HostMachineAccounts {
   /** The machine's device id (RemoteMachineView.did). */
   did: string
@@ -106,8 +107,15 @@ export interface HostMachineAccounts {
   /** Every Claude Code account this computer holds, in its accounts' order. */
   accounts: HostAccountSignIn[]
   /** Account folders on the machine for profile ids this computer no longer
-   *  holds (an account removed here): Remove signs them out too. */
+   *  holds (an account removed here), made by this computer: Remove signs
+   *  them out too. */
   others: string[]
+  /** 2.1.3-beta.20 fix round (MAJOR-1): account folders the app on another
+   *  computer made on this host login (two computers of the user on one
+   *  machine, or a shared login), by profile id. This computer never reads,
+   *  signs out or removes them; Remove names them as used by another
+   *  computer. Absent: none (or a shape from before this field). */
+  elsewhere?: string[]
 }
 
 /** Every added machine's accounts (MACHINES_REMOTE_ACCOUNTS: the last reads,

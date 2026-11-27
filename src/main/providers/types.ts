@@ -215,8 +215,10 @@ export interface RemoteLaunchOptions {
   readonly configDir?: string
   /** 2.1.3-beta.20 section 3.1.4: a sign-in tab. The launch runs the CLI's
    *  own sign-in in `configDir` instead of a session, for the account of
-   *  `email` when this computer knows it. */
-  readonly signIn?: { readonly email?: string }
+   *  `email` when this computer knows it, by the account's own sign-in
+   *  `method` as this computer records it (the provider package checks it
+   *  against the CLI's choices). */
+  readonly signIn?: { readonly email?: string; readonly method?: string }
 }
 
 /** The machine a remote launch runs on, as its last check on the Machines

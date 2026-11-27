@@ -102,7 +102,7 @@ import { listKept, untilEnded } from '../../src/main/remote-helper/kept'
 import { readRecord } from '../../src/main/session-helper/protocol'
 import { fieldAnswerOf, readHostForStart, type HostAccountRead } from '../../src/main/remote-helper/host-reads'
 import { scriptCommand } from '../../src/main/remote-helper/scripts'
-import { accountFolder, prepareAccountFolder, readMachineAccounts, signOutOnMachine } from '../../src/main/remote-helper/host-accounts'
+import { accountFolder, prepareAccountFolder, readMachineAccounts, signOutListOnMachine, signOutOnMachine } from '../../src/main/remote-helper/host-accounts'
 
 const need = (name: string): string => {
   const v = process.env[name]
@@ -1315,13 +1315,16 @@ describe('remote helper on a real Linux host', () => {
     const via = { ...CLAUDE_REMOTE_ACCOUNTS, profiles: async () => [{ id: a, accountEmail: 'e2e-a@example.com', name: 'E2E A' }, { id: b, accountEmail: 'e2e-b@example.com', name: 'E2E B' }] }
     const folderA = accountFolder(machine, a)
     const folderB = accountFolder(machine, b)
+    const c = `profile-e2e-${tag}-c`
+    const folderC = accountFolder(machine, c)
     const secret = `e2e-not-a-token-${tag}`
     try {
       for (const id of [a, b]) expect(await prepareAccountFolder(ctx, rec, via, id, 'make', 'keep'), id).toEqual({ ok: true, own: [] })
       const shape = sshRun(`stat -c '%a %u' "${folderA}" "$HOME/.aicc/accounts"; id -u; cat "${folderA}/.aicc-account"; for n in projects memory agents skills commands plugins CLAUDE.md; do readlink "${folderA}/$n"; done`).out.trim().split('\n')
       note('account-folder', shape)
       const uid = shape[2]
-      expect(shape.slice(0, 4)).toEqual([`700 ${uid}`, `700 ${uid}`, uid, `aicc-account 1 ${a}`])
+      // The marker names the profile id and this install (2.1.3-beta.20 fix round, MAJOR-1).
+      expect(shape.slice(0, 4)).toEqual([`700 ${uid}`, `700 ${uid}`, uid, `aicc-account 1 ${a} ${list.installId()}`])
       expect(shape.slice(4)).toEqual(['projects', 'memory', 'agents', 'skills', 'commands', 'plugins', 'CLAUDE.md'].map((n) => `${machine.home}/.claude/${n}`))
       // A's stand-in sign-in, holding a token the read must never print.
       const write = sshRun(`umask 077 && printf '%s' '{"oauthAccount":{"emailAddress":"e2e-a@example.com"}}' > "${folderA}/.claude.json" && printf '%s' '{"claudeAiOauth":{"accessToken":"${secret}","refreshToken":"${secret}","expiresAt":1764000000000,"subscriptionType":"max"}}' > "${folderA}/.credentials.json" && echo made`)
@@ -1363,9 +1366,21 @@ describe('remote helper on a real Linux host', () => {
       expect(await signOutOnMachine(ctx, rec, via, { profileId: a })).toEqual({ ok: true, logout: null, removed: false, gone: true })
       expect(await signOutOnMachine(ctx, rec, via, { profileId: b })).toMatchObject({ ok: true, removed: true })
       expect(await prepareAccountFolder(ctx, rec, via, a, 'refresh', null)).toMatchObject({ ok: false, gone: true })
+      // 2.1.3-beta.20 fix round (MAJOR-1): a folder another install made on
+      // this login (its marker names that install) is named, never signed out
+      // or removed, by Remove's sign-out, even when its id is on the list;
+      // and a sign-in here does not make it over.
+      const madeC = sshRun(`umask 077 && mkdir -p "${folderC}" && printf '%s' 'aicc-account 1 ${c} ${'e'.repeat(32)}' > "${folderC}/.aicc-account" && echo made`)
+      expect(madeC.out.trim(), madeC.err).toBe('made')
+      const listed = await signOutListOnMachine(ctx, rec, via, [c])
+      note('sign-out-list-elsewhere', listed)
+      expect(listed).toEqual({ ok: true, deviceGone: false, folders: [], left: [], elsewhere: [c] })
+      expect(sshRun(`test -d "${folderC}" && echo there || echo gone`).out.trim()).toBe('there')
+      expect(await prepareAccountFolder(ctx, rec, via, c, 'make', 'keep')).toMatchObject({ ok: false })
+      expect((await readMachineAccounts(ctx, rec, via)).elsewhere).toEqual([c])
     } finally {
-      // Whatever a failed step left: only the run's own two folders, by their marker's name.
-      for (const f of [folderA, folderB]) sshRun(`test -f "${f}/.aicc-account" && rm -rf -- "${f}"`)
+      // Whatever a failed step left: only the run's own folders, by their marker's name.
+      for (const f of [folderA, folderB, folderC]) sshRun(`test -f "${f}/.aicc-account" && rm -rf -- "${f}"`)
       sshRun('rmdir -- "$HOME/.aicc/accounts" 2>/dev/null; true')
     }
   })

@@ -37,6 +37,7 @@
 import { concatHookMaps, helperHooksBlockFor, helperStatusCommand } from '../../hooks/helper-hook-commands'
 import { HELPER_HOOK_KINDS } from '../../session-helper/protocol'
 import { SHARED_DIR_NAMES } from '../../../shared/account-folder'
+import { DEFAULT_CLI_AUTH_METHOD, isCliAuthMethod } from '../../../shared/account-web-session'
 import { sanitizeClaudeManagedSettings } from './managed-launch'
 import type { ProviderRemoteLaunch, RemoteAccounts, RemoteAccountUsage, RemoteHelperCommands, RemoteHostField, RemoteHostFile, RemoteHostRead, RemoteLaunch, RemoteLaunchMachine, RemoteLaunchOptions, RemoteStatusLine } from '../types'
 
@@ -153,11 +154,15 @@ export const CLAUDE_REMOTE_ACCOUNTS: RemoteAccounts = Object.freeze({
   settingsCopy: (reads: readonly RemoteHostFile[]) => ({ name: 'settings.json', content: claudeAccountSettingsText(reads) }),
 })
 
-/** The CLI's own sign-in (claude-cli-auth.ts claudeAuthCommand's words):
- *  `claude auth login --claudeai`, with `--email` for an address-shaped
- *  email, so the sign-in page asks for that account. */
-export function claudeSignInArgs(email: string | undefined): string[] {
-  const args = ['auth', 'login', '--claudeai']
+/** The CLI's own sign-in, in the words claude-cli-auth.ts claudeAuthCommand
+ *  gives a sign-in on this computer: `claude auth login --<method>`, the
+ *  account's own method (2.1.3-beta.20 fix round, MINOR-5: a Claude
+ *  subscription, the Anthropic Console or single sign-on; the default for
+ *  one never told otherwise, and for anything that is not one of the CLI's
+ *  choices), with `--email` for an address-shaped email, so the sign-in page
+ *  asks for that account. */
+export function claudeSignInArgs(email: string | undefined, method?: string): string[] {
+  const args = ['auth', 'login', `--${isCliAuthMethod(method) ? method : DEFAULT_CLI_AUTH_METHOD}`]
   if (email && /^[^\s"'`;&|<>$()\\]+@[^\s"'`;&|<>$()\\]+$/.test(email) && email.length <= 254) args.push('--email', email)
   return args
 }
@@ -334,7 +339,7 @@ function sessionFileArgs(helper: RemoteHelperCommands, tools: boolean): string[]
  *  for a sign-in with no account folder: it would sign in the host's own. */
 function claudeSignInLaunch(o: RemoteLaunchOptions, m: RemoteLaunchMachine): RemoteLaunch {
   if (!o.configDir) throw new Error('a sign-in on the host needs the account\'s own folder there')
-  return { program: m.claudePath ?? REMOTE_CLI_FALLBACK, args: claudeSignInArgs(o.signIn?.email), env: claudeRemoteEnv(o), files: [], statusKeep: [], hookKeep: [] }
+  return { program: m.claudePath ?? REMOTE_CLI_FALLBACK, args: claudeSignInArgs(o.signIn?.email, o.signIn?.method), env: claudeRemoteEnv(o), files: [], statusKeep: [], hookKeep: [] }
 }
 
 export const claudeRemoteLaunch: ProviderRemoteLaunch = {

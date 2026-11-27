@@ -50,7 +50,7 @@ import type { ProviderRemoteLaunch, RemoteAccounts, RemoteHostFile, RemoteLaunch
 import type { SSHOptions } from '../ssh-options'
 import { ROUTE_WHY, routeSshTab, type PersistentStanding, type Route } from './route'
 import { NoticePty, RemoteDriver, RemoteHelperPty, remoteCwd, remoteHelperCommands, remoteLaunchSpec, remoteSessionId, type RemoteLaunchPlan, type RemoteTabAccount } from './session'
-import { accountFolder, accountName, hostAccountsState, machineAccounts, readMachineAccounts, signOutAllOnMachine, signOutOnMachine, type HostProfile } from './host-accounts'
+import { accountFolder, accountName, hostAccountsState, machineAccounts, readMachineAccounts, signOutListOnMachine, signOutOnMachine, type HostProfile } from './host-accounts'
 import { ACCOUNT_PROFILE_RE } from './scripts'
 import { listKept, machineSessions } from './kept'
 import type { HolderKind } from './scripts'
@@ -86,10 +86,12 @@ export interface RemoteHelperDeps {
    *  readDetachedRemotesRegistry), read at an SSH Persistent tab's start for
    *  its config's tmux entries (2.1.3-beta.19). Absent: none. */
   registry?: () => readonly DetachedRemote[]
-  /** 2.1.3-beta.20 section 3.1.4: the email this computer holds for an
-   *  account, read when a sign-in tab starts (so the CLI's sign-in asks for
-   *  that account). Absent, or undefined: none is named. */
-  profileEmail?: (profileId: string) => string | undefined
+  /** 2.1.3-beta.20 section 3.1.4: what this computer holds of an account
+   *  for its sign-in, read when a sign-in tab starts: its email (so the CLI's
+   *  sign-in asks for that account) and its sign-in method (fix round,
+   *  MINOR-5: as this computer's own sign-in of it uses). Absent, or a field
+   *  left out: none is named, and the method is the CLI's default. */
+  profileSignIn?: (profileId: string) => { email?: string; method?: string }
 }
 
 /** What a tab through the helper needs of the Session Watchdog
@@ -530,9 +532,10 @@ function signInPty(win: OutputWindow, sessionId: string, options: RemoteSpawnOpt
   if (!remote || !via) return signInNotStarted(win, sessionId, 'its provider\'s accounts do not sign in on other machines', cols, rows)
   let pty: RemoteHelperPty
   try {
-    let email: string | undefined
-    try { email = d.profileEmail?.(profileId) } catch { email = undefined }
-    const plan = remoteLaunchOf(remote, m, { ...options, provider: providerId, ssh: { ...ssh, reconnect: false } }, settings, d.systemPrefersDark, remoteSessionId(sessionId), cols, rows, false, false, { configDir: accountFolder(m, profileId), signIn: email ? { email } : {} })
+    let held: { email?: string; method?: string } = {}
+    try { held = d.profileSignIn?.(profileId) ?? {} } catch { held = {} }
+    const signIn = { ...(held.email ? { email: held.email } : {}), ...(held.method ? { method: held.method } : {}) }
+    const plan = remoteLaunchOf(remote, m, { ...options, provider: providerId, ssh: { ...ssh, reconnect: false } }, settings, d.systemPrefersDark, remoteSessionId(sessionId), cols, rows, false, false, { configDir: accountFolder(m, profileId), signIn })
     pty = new RemoteHelperPty({ appPtyId: sessionId, machine: m, installId: d.machines.installId(), runner: d.runner, spec: plan.spec, plan, kind: 'away', account: { profileId, via, signIn: true }, log: d.log })
   } catch (err) {
     return signInNotStarted(win, sessionId, (err as Error).message, cols, rows)
@@ -604,14 +607,19 @@ function signOutExitText(code: number | null): string {
 const END_IT_THERE = 'in your Claude account settings on claude.ai'
 
 /**
- * Section 3.1.8: Sign out on a machine. The machine is read first (one
- * exec): an account with a folder there is signed out by the CLI's own
- * sign-out in that folder, and the folder goes (only it); an account signed
- * in as the machine's own sign-in is signed out only with
- * `confirmMachineOwn` (Q5: the renderer asks first, naming it as the
- * machine's own sign-in), and its `~/.claude` stays. Refused while a tab on
- * that account runs through the helper there. The machine is read again
- * after it, and the answer carries the account's state then.
+ * Section 3.1.8: Sign out on a machine. Refused while a tab on that account
+ * runs through the helper there, and (2.1.3-beta.20 fix round, MINOR-3)
+ * while the helper keeps a session there that no open tab shows (a tab
+ * closed with Leave running, or one inside its away clock): such a session's
+ * CLI may run in that account's folder, and its account is not known here.
+ * Then the machine is read (one exec), and the account's state decides
+ * (MINOR-4): signed in as the machine's own sign-in, it is signed out only
+ * with `confirmMachineOwn` (Q5: the renderer asks first, naming it as the
+ * machine's own sign-in), its `~/.claude` stays, and a folder of it left
+ * there goes too; signed in in its own folder (as itself or as another
+ * account), or a folder of it left with no sign-in, the CLI's own sign-out
+ * runs in that folder and the folder goes (only it). The machine is read
+ * again after it, and the answer carries the account's state then.
  */
 export async function signOutRemoteAccount(req: HostSignOutRequest): Promise<HostSignOutResult> {
   const d = deps
@@ -621,8 +629,18 @@ export async function signOutRemoteAccount(req: HostSignOutRequest): Promise<Hos
   if (!m) return { ok: false, message: 'That machine is not on this computer\'s list.' }
   if (!ACCOUNT_PROFILE_RE.test(req.profileId)) return { ok: false, message: 'That is not an account of this computer.' }
   const name = machineName(m)
+  // Open tabs on another account are known not to use this one's folder.
+  const otherTabs = new Set<string>()
   for (const p of openTabs.values()) {
-    if (p.machineDid === m.did && p.profileId === req.profileId) return { ok: false, message: `A tab on that account runs on ${name}. Close it, then sign out.` }
+    if (p.machineDid !== m.did) continue
+    if (p.profileId === req.profileId) return { ok: false, message: `A tab on that account runs on ${name}. Close it, then sign out.` }
+    otherTabs.add(p.sid)
+  }
+  const kept = await listKept({ runner: d.runner, installId: d.machines.installId(), log: d.log }, m)
+  if (!kept.ok) return { ok: false, message: `Nothing was signed out: the sessions on ${name} could not be listed (${kept.why}).` }
+  const unknown = kept.sessions.filter((s) => !otherTabs.has(s.session))
+  if (unknown.length > 0) {
+    return { ok: false, message: `The session helper keeps ${unknown.length === 1 ? 'a session' : `${unknown.length} sessions`} on ${name} that no open tab shows (a tab closed with Leave running, or one closed in the last two minutes), and it may run on that account. Nothing was signed out: end ${unknown.length === 1 ? 'it' : 'them'} on the Machines page, or wait for a closed tab's session to end, then sign out.` }
   }
   let profiles: readonly HostProfile[] = []
   try { profiles = await a.via.profiles() } catch { profiles = [] }
@@ -632,34 +650,45 @@ export async function signOutRemoteAccount(req: HostSignOutRequest): Promise<Hos
   if (!before.ok) return { ok: false, message: `Nothing was signed out: the accounts on ${name} could not be read (${before.why ?? 'no answer'}).`, state: 'not-read' }
   const acc = before.accounts.find((x) => x.profileId === req.profileId)
   const folder = acc?.folder === true || before.others.includes(req.profileId)
-  if (!folder && acc?.state !== 'machine-own') return { ok: true, message: `${who} is not signed in on ${name}.`, state: acc?.state ?? 'not-signed-in' }
-  if (!folder && req.confirmMachineOwn !== true) {
+  const machineOwn = acc?.state === 'machine-own'
+  if (!machineOwn && !folder) return { ok: true, message: `${who} is not signed in on ${name}.`, state: acc?.state ?? 'not-signed-in' }
+  if (machineOwn && req.confirmMachineOwn !== true) {
     return { ok: false, needsConfirm: 'machine-own', state: 'machine-own', message: `${who} is signed in on ${name} by that machine's own sign-in (its ~/.claude), so signing it out signs out Claude Code there for everything that uses that sign-in.` }
   }
-  const run = await signOutOnMachine(ctx, m, a.via, folder ? { profileId: req.profileId } : 'own')
+  const run = await signOutOnMachine(ctx, m, a.via, machineOwn ? 'own' : { profileId: req.profileId })
+  // The machine's own sign-in out, a folder of the account left there goes too.
+  const stray = machineOwn && folder && run.ok ? await signOutOnMachine(ctx, m, a.via, { profileId: req.profileId }) : null
   const after = await readMachineAccounts(ctx, m, a.via)
   const state = after.accounts.find((x) => x.profileId === req.profileId)?.state
   const withState = state ? { state } : {}
-  d.log(`[remote-helper] sign-out of ${req.profileId}${folder ? '' : ' (the machine\'s own sign-in)'} on ${m.host}: ${run.ok ? `logout ${run.logout ?? 'none'}, folder ${run.ok && run.removed ? 'removed' : 'kept'}` : run.why}`)
+  d.log(`[remote-helper] sign-out of ${req.profileId}${machineOwn ? ' (the machine\'s own sign-in)' : ''} on ${m.host}: ${run.ok ? `logout ${run.logout ?? 'none'}, folder ${run.removed ? 'removed' : 'kept'}` : run.why}${stray ? `; its folder left there: ${stray.ok ? (stray.removed || stray.gone ? 'removed' : 'kept') : stray.why}` : ''}`)
   if (!run.ok) return { ok: false, message: `${who} was not signed out on ${name}: ${run.why}.`, ...withState }
   if (run.gone) return { ok: true, message: `${who} was not signed in on ${name} any more.`, signedOutWithService: false, ...withState }
   const told = run.logout === 0
-  if (folder) {
+  if (!machineOwn) {
     return told
       ? { ok: true, message: `Signed ${who} out on ${name}, and removed its folder there.`, signedOutWithService: true, ...withState }
       : { ok: run.removed, message: `Removed ${who}'s sign-in from ${name}. Claude Code's sign-out there did not finish (${signOutExitText(run.logout)}), so to end that sign-in everywhere, sign it out ${END_IT_THERE}.`, signedOutWithService: false, ...withState }
   }
+  const strayText = stray && !stray.ok ? ` A folder of ${who} left there was not removed: ${stray.why}.` : stray ? ` A folder of ${who} left there was removed too.` : ''
   return told
-    ? { ok: true, message: `Signed out ${name}'s own sign-in (${who}).`, signedOutWithService: true, ...withState }
-    : { ok: false, message: `${name}'s own sign-in (${who}) was not signed out: Claude Code's sign-out there did not finish (${signOutExitText(run.logout)}). Run "claude auth logout" there, or end that sign-in ${END_IT_THERE}.`, signedOutWithService: false, ...withState }
+    ? { ok: !stray || stray.ok, message: `Signed out ${name}'s own sign-in (${who}).${strayText}`, signedOutWithService: true, ...withState }
+    : { ok: false, message: `${name}'s own sign-in (${who}) was not signed out: Claude Code's sign-out there did not finish (${signOutExitText(run.logout)}). Run "claude auth logout" there, or end that sign-in ${END_IT_THERE}.${strayText}`, signedOutWithService: false, ...withState }
 }
 
 /**
- * Section 3.1.8: Remove's sign-outs, while the machine answers. Every
- * account folder there that the app made (this computer's accounts and any
- * others) is signed out by the CLI's own sign-out and removed, in one exec
- * that needs no read first; the machine's own sign-in is left as it is. The
- * first folder that cannot be removed stops Remove, and the answer says which.
+ * Section 3.1.8: Remove's sign-outs, while the machine answers (2.1.3-beta.20
+ * fix round, MAJOR-1 and MAJOR-2). The account folders of this computer
+ * there, named one by one (each of its accounts, and its folders of accounts
+ * it no longer holds that the last read found), are signed out by the CLI's
+ * own sign-out and removed, in one exec that needs no read first; only a
+ * folder holding this install's marker is touched. A folder the app on
+ * another computer made there is left, and the answer says so, as it names
+ * any of this computer's folders left (an account removed here that no read
+ * found). The machine's own sign-in is left as it is. The first folder that
+ * cannot be removed stops Remove, and the answer says which. With the device
+ * folder already gone there, nothing is signed out and Remove goes on as
+ * before, naming what is still signed in there.
  */
 export async function signOutForRemove(m: RemoteMachineRecord): Promise<{ ok: boolean; message: string }> {
   const d = deps
@@ -669,17 +698,27 @@ export async function signOutForRemove(m: RemoteMachineRecord): Promise<{ ok: bo
   let profiles: readonly HostProfile[] = []
   try { profiles = await a.via.profiles() } catch { profiles = [] }
   const nameOf = (id: string): string => accountName(profiles.find((p) => p.id === id), id)
-  const run = await signOutAllOnMachine(accountsCtx(d), m, a.via)
+  const ids = [...profiles.map((p) => p.id), ...machineAccounts(m.did, profiles).others]
+  const run = await signOutListOnMachine(accountsCtx(d), m, a.via, ids)
   const done = run.folders.filter((f) => f.removed && f.logout === 0).map((f) => nameOf(f.profileId))
   const untold = run.folders.filter((f) => f.removed && f.logout !== 0).map((f) => nameOf(f.profileId))
-  d.log(`[remote-helper] Remove's sign-outs on ${m.host}: ${run.folders.map((f) => `${f.profileId} logout ${f.logout ?? 'none'}${f.removed ? ', removed' : ''}`).join('; ') || 'none'}${run.ok ? '' : `; stopped: ${run.why}`}`)
+  d.log(`[remote-helper] Remove's sign-outs on ${m.host}: ${run.folders.map((f) => `${f.profileId} logout ${f.logout ?? 'none'}${f.removed ? ', removed' : ''}`).join('; ') || 'none'}${run.ok ? `${run.deviceGone ? '; its device folder was gone' : ''}${run.left.length ? `; left ${run.left.join(', ')}` : ''}${run.elsewhere.length ? `; another computer's: ${run.elsewhere.join(', ')}` : ''}` : `; stopped: ${run.why}`}`)
   if (!run.ok) {
     const before = [...done, ...untold]
     return { ok: false, message: `Nothing more was removed: the accounts signed in on ${name} could not all be signed out (${run.why ?? 'no answer'}).${before.length ? ` Signed out first: ${before.join(', ')}.` : ''}` }
   }
+  if (run.deviceGone) return { ok: true, message: (await accountsLeftText(m)).trim() }
   const parts: string[] = []
   if (done.length) parts.push(`Signed out ${done.join(', ')} there first.`)
   if (untold.length) parts.push(`Removed the sign-ins of ${untold.join(', ')} from it; Claude Code's sign-out there did not finish for ${untold.length === 1 ? 'it' : 'them'}, so end ${untold.length === 1 ? 'that sign-in' : 'those sign-ins'} ${END_IT_THERE}.`)
+  if (run.left.length) {
+    const one = run.left.length === 1
+    parts.push(`${run.left.map(nameOf).join(', ')} (${one ? 'an account' : 'accounts'} this computer no longer holds) ${one ? 'stays' : 'stay'} signed in there: sign ${one ? 'it' : 'them'} out there, or end ${one ? 'that sign-in' : 'those sign-ins'} ${END_IT_THERE}.`)
+  }
+  if (run.elsewhere.length) {
+    const one = run.elsewhere.length === 1
+    parts.push(`${one ? 'One account folder' : `${run.elsewhere.length} account folders`} there ${one ? 'is' : 'are'} used by the app on another computer, and ${one ? 'was' : 'were'} left as ${one ? 'it is' : 'they are'}.`)
+  }
   return { ok: true, message: parts.join(' ') }
 }
 

@@ -52,8 +52,10 @@
  * CLI's config folder for that account: its sign-in files are its own, and
  * the provider's shared folders and files are links into the CLI's own
  * folder in the home folder (`~/.claude`), never anywhere else. A marker
- * (`.aicc-account`, `aicc-account 1 <profile id>`) says the app made it; no
- * script reads or removes a folder there without it. `account` makes or
+ * (`.aicc-account`, `aicc-account 1 <profile id> <install id>`) says which
+ * install of the app made it; no script reads or removes a folder there
+ * without this install's, and another computer's is left as it is
+ * (2.1.3-beta.20 fix round, MAJOR-1). `account` makes or
  * refreshes one (its links, and its settings copy from standard input),
  * `accounts` reads every sign-in there and the machine's own through the
  * helper's field mode (only the fields on its list), and `signout` runs the
@@ -298,18 +300,26 @@ export const CONFIG_VAR_RE = /^[A-Z][A-Z0-9_]{0,63}$/
 /** The CLI's program name, and its words joined by commas (at most 8). */
 export const CLI_WORD_RE = /^[a-z][a-z0-9-]{0,63}$/
 export const CLI_WORDS_RE = /^[a-z][a-z0-9-]{0,63}(?:,[a-z][a-z0-9-]{0,63}){0,7}$/
+/** `signout`'s profile ids: `-` (none), or 1 to 64 account folder names
+ *  joined by commas (Remove names each it signs out). */
+export const ACCOUNT_IDS_RE = /^(-|[a-z0-9][a-z0-9-]{0,127}(?:,[a-z0-9][a-z0-9-]{0,127}){0,63})$/
 /** `account`'s settings copy: `keep` (left as it is: a sign-in), `0` (none:
  *  removed) or its size in bytes (at most 7 digits; the copy comes from a
  *  host read of at most HOST_READ_MAX bytes). */
 export const ACCOUNT_SETTINGS_RE = /^(keep|0|[1-9][0-9]{0,6})$/
-/** The marker line an account folder holds. */
-export const accountMarker = (profileId: string): string => `aicc-account 1 ${profileId}`
+/** The marker line an account folder holds: the profile id and the install
+ *  that made it (2.1.3-beta.20 fix round, MAJOR-1: two computers of one user
+ *  may sign in on the same host login; each touches only its own folders). */
+export const accountMarker = (profileId: string, installId: string): string => `aicc-account 1 ${profileId} ${installId}`
 
 /** `am <folder> <profile id>`: the folder is a real folder of the user's,
- *  mode 0700, holding the app's marker for that profile id (a regular file,
- *  not a link). */
+ *  mode 0700, holding this install's marker for that profile id (a regular
+ *  file, not a link; `I` is this install's id). `ao <folder> <profile id>`:
+ *  it holds the app's marker for that profile id, by any install: with `am`
+ *  false, the folder is another computer's, left as it is. */
 const ACCOUNT_MARK = [
-  'am() { pv "$1" && [ -f "$1/.aicc-account" ] && [ ! -L "$1/.aicc-account" ] && [ "$(head -c 200 "$1/.aicc-account" 2>/dev/null)" = "aicc-account 1 $2" ]; }',
+  'am() { pv "$1" && [ -f "$1/.aicc-account" ] && [ ! -L "$1/.aicc-account" ] && [ "$(head -c 200 "$1/.aicc-account" 2>/dev/null)" = "aicc-account 1 $2 $I" ]; }',
+  'ao() { pv "$1" && [ -f "$1/.aicc-account" ] && [ ! -L "$1/.aicc-account" ] && case "$(head -c 200 "$1/.aicc-account" 2>/dev/null)" in "aicc-account 1 $2 "*) return 0;; esac; return 1; }',
 ]
 
 /** Sign out's one delete (section 3.1.8): one account's folder, by the
@@ -631,7 +641,10 @@ const SPECS = {
    *  by the script: after a line `AICC-FIELD <N> <own or profile id> <id or
    *  cr>`, the helper's one JSON object, or nothing when the file is not
    *  read. File names and keys are the provider package's; a profile id is
-   *  a folder name of the app's shape, read from the folder. Writes nothing. */
+   *  a folder name of the app's shape, read from the folder. A folder whose
+   *  marker names another install (the app on another computer signed in on
+   *  this host login) is not read: `AICC-FIELD <N> <profile id> elsewhere`.
+   *  Writes nothing. */
   accounts: {
     values: [FOLDER, HASH, { name: 'own identity file', re: FIELD_FILE_RE }, { name: 'own credentials file', re: FIELD_FILE_RE }, { name: 'identity file name', re: PLAIN_NAME_RE }, { name: 'credentials file name', re: PLAIN_NAME_RE }, { name: 'identity keys', re: FIELD_KEYS_RE }, { name: 'credentials keys', re: FIELD_KEYS_RE }],
     text: join([
@@ -645,7 +658,7 @@ const SPECS = {
       'fr own id "$Y" "$Z"',
       'fr own cr "$V" "$K"',
       'B=$HOME/.aicc/accounts',
-      'if [ -e "$B" ] || [ -L "$B" ]; then pv "$B" || no accounts-folder-not-private; for X in $(ls -A "$B"); do case "$X" in [!a-z0-9]*|*[!a-z0-9-]*|"") continue;; esac; [ ${#X} -le 128 ] || continue; am "$B/$X" "$X" || continue; fr "$X" id ".aicc/accounts/$X/$J" "$Z"; fr "$X" cr ".aicc/accounts/$X/$C" "$K"; done; fi',
+      'if [ -e "$B" ] || [ -L "$B" ]; then pv "$B" || no accounts-folder-not-private; for X in $(ls -A "$B"); do case "$X" in [!a-z0-9]*|*[!a-z0-9-]*|"") continue;; esac; [ ${#X} -le 128 ] || continue; am "$B/$X" "$X" || { ao "$B/$X" "$X" && echo "AICC-FIELD $N $X elsewhere"; continue; }; fr "$X" id ".aicc/accounts/$X/$J" "$Z"; fr "$X" cr ".aicc/accounts/$X/$C" "$K"; done; fi',
       'r end ok',
     ]),
   },
@@ -677,7 +690,7 @@ const SPECS = {
       'B=$HOME/.aicc/accounts; Q=$B/$P; G=$HOME/$R',
       'if [ ! -e "$B" ] && [ ! -L "$B" ]; then [ "$M" = make ] || { r gone yes; r end ok; exit 0; }; mkdir "$B" || no cannot-make-accounts-folder; fi',
       'pv "$B" || no accounts-folder-not-private',
-      'if [ -e "$Q" ] || [ -L "$Q" ]; then am "$Q" "$P" || no account-folder-not-the-apps; else [ "$M" = make ] || { r gone yes; r end ok; exit 0; }; mkdir "$Q" || no cannot-make-account-folder; echo "aicc-account 1 $P" > "$Q/.aicc-account" || no cannot-write-marker; fi',
+      'if [ -e "$Q" ] || [ -L "$Q" ]; then am "$Q" "$P" || { ao "$Q" "$P" && no account-folder-elsewhere; no account-folder-not-the-apps; }; else [ "$M" = make ] || { r gone yes; r end ok; exit 0; }; mkdir "$Q" || no cannot-make-account-folder; echo "aicc-account 1 $P $I" > "$Q/.aicc-account" || no cannot-write-marker; fi',
       'if [ ! -e "$G" ] && [ ! -L "$G" ]; then mkdir "$G" || no cannot-make-shared-folder; fi',
       '[ -d "$G" ] || no shared-folder-not-a-folder',
       'set -- $(ls -ldnL "$G" 2>/dev/null); [ "$3" = "$u" ] || no shared-folder-not-yours',
@@ -699,22 +712,31 @@ const SPECS = {
    *  the user's, 0700, holding the app's marker for `P`; it goes whatever the
    *  sign-out answered, so the sign-in is not left on the machine (`out <P>
    *  <exit status>` says whether the service was told; `removed <P>` that the
-   *  folder went). A folder that is not there answers `gone`. `all` (Remove):
-   *  the same for every folder there that holds the app's marker, needing no
-   *  read first; the first that cannot be removed stops it. `own` (Q5, after
-   *  the app asked): the CLI's own sign-out of the machine's own sign-in, the
+   *  folder went). A folder that is not there answers `gone`; one made by
+   *  the app on another computer (its marker names another install) is
+   *  refused, `account-folder-elsewhere`. `list` (Remove): the same for each
+   *  profile id `P` names (commas between), each only when its folder holds
+   *  this install's marker, needing no read first; the first that cannot be
+   *  removed stops it; then each folder left there is named: this install's
+   *  that the list did not name (`left <id>`) and another computer's
+   *  (`elsewhere <id>`), all left as they are. With the device folder already
+   *  gone, `list` signs nothing out and answers `device gone`, and Remove goes
+   *  on as before (2.1.3-beta.20 fix round, MAJOR-2). `own` (Q5, after the
+   *  app asked): the CLI's own sign-out of the machine's own sign-in, the
    *  variable unset, and nothing removed (`logout <exit status>`). The CLI
    *  runs through the user's login shell when that is of the sh family (its
    *  PATH, as a session's launch has it), within 60 s where `timeout` is
    *  there; its output is not read. */
   signout: {
-    values: [{ name: 'kind', re: /^(folder|own|all)$/ }, { name: 'profile id', re: /^(-|[a-z0-9][a-z0-9-]{0,127})$/ }, { name: 'config variable', re: CONFIG_VAR_RE }, { name: 'program', re: CLI_WORD_RE }, { name: 'words', re: CLI_WORDS_RE }],
+    values: [{ name: 'kind', re: /^(folder|own|list)$/ }, { name: 'profile ids', re: ACCOUNT_IDS_RE }, { name: 'config variable', re: CONFIG_VAR_RE }, { name: 'program', re: CLI_WORD_RE }, { name: 'words', re: CLI_WORDS_RE }],
     text: join([
       'N=$1; D=$2; I=$3; O=$4; P=$5; E=$6; X=$7; W=$8',
       ...CHECKS,
+      'if [ "$O" = list ] && [ ! -e "$A" ] && [ ! -L "$A" ]; then r device gone; r end ok; exit 0; fi',
       ...EXISTING,
       ...ACCOUNT_MARK,
-      'case "$O" in folder|own|all) ;; *) no bad-kind;; esac',
+      'case "$O" in folder|own|list) ;; *) no bad-kind;; esac',
+      'case "$P" in *[!a-z0-9,-]*|"") no bad-profile;; esac',
       'case "$E" in [!A-Z]*|*[!A-Z0-9_]*|"") no bad-variable;; esac',
       'case "$X" in [!a-z]*|*[!a-z0-9-]*|"") no bad-program;; esac',
       'case "$W" in *[!a-z0-9,-]*|"") no bad-words;; esac',
@@ -726,11 +748,15 @@ const SPECS = {
       'o=$IFS; IFS=,; set -- $W; IFS=$o',
       'B=$HOME/.aicc/accounts',
       'if [ "$O" = own ]; then unset "$E"; lo "$@"; r logout $?; r end ok; exit 0; fi',
-      'if [ "$O" = all ]; then [ -e "$B" ] || [ -L "$B" ] || { r end ok; exit 0; }; pv "$B" || no accounts-folder-not-private; L=$(ls -A "$B"); else case "$P" in [!a-z0-9]*|*[!a-z0-9-]*|"") no bad-profile;; esac; [ -e "$B/$P" ] || [ -L "$B/$P" ] || { r gone yes; r end ok; exit 0; }; pv "$B" || no accounts-folder-not-private; am "$B/$P" "$P" || no account-folder-not-the-apps; L=$P; fi',
+      'if [ ! -e "$B" ] && [ ! -L "$B" ]; then [ "$O" = folder ] && r gone yes; r end ok; exit 0; fi',
+      'pv "$B" || no accounts-folder-not-private',
+      'if [ "$O" = folder ]; then case "$P" in [!a-z0-9]*|*[!a-z0-9-]*) no bad-profile;; esac; [ -e "$B/$P" ] || [ -L "$B/$P" ] || { r gone yes; r end ok; exit 0; }; am "$B/$P" "$P" || { ao "$B/$P" "$P" && no account-folder-elsewhere; no account-folder-not-the-apps; }; fi',
+      'L=$(printf "%s" "$P" | tr "," " ")',
       'for P in $L; do case "$P" in [!a-z0-9]*|*[!a-z0-9-]*|"") continue;; esac; Q=$B/$P; am "$Q" "$P" || continue; export "$E=$Q"; lo "$@"; r out "$P" $?',
       ...DELETE_ACCOUNT_FOLDER,
       '[ -e "$Q" ] && no still-there',
       'r removed "$P"; done',
+      'if [ "$O" = list ]; then for P in $(ls -A "$B"); do case "$P" in [!a-z0-9]*|*[!a-z0-9-]*|"") continue;; esac; if am "$B/$P" "$P"; then r left "$P"; elif ao "$B/$P" "$P"; then r elsewhere "$P"; fi; done; fi',
       'r end ok',
     ]),
   },

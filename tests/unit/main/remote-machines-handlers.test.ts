@@ -312,3 +312,16 @@ describe('the accounts doors (2.1.3-beta.20 section 3)', () => {
     expect((h.stored as { machines: unknown[] }).machines).toEqual([])
   })
 })
+
+// 2.1.3-beta.20 fix round (NIT-10): Remove and Sign out wait as long as their
+// execs may run, so their answer never says "no answer" while they still run.
+describe('the accounts doors wait for their execs (NIT-10)', () => {
+  it('Remove waits past its list, its sign-outs and its removal; Sign out past its list, reads and two sign-outs', async () => {
+    const handlersModule = await import('../../../src/main/ipc/remote-machines-handlers')
+    const { EXEC_TIMEOUT_MS } = await import('../../../src/main/remote-helper/ssh-exec')
+    const { REMOVE_SIGN_OUT_EXEC_MS, SIGN_OUT_EXEC_MS } = await import('../../../src/main/remote-helper/host-accounts')
+    expect(handlersModule.REMOTE_REMOVE_TIMEOUT_MS).toBeGreaterThan(2 * EXEC_TIMEOUT_MS + REMOVE_SIGN_OUT_EXEC_MS)
+    expect(handlersModule.REMOTE_SIGN_OUT_TIMEOUT_MS).toBeGreaterThan(3 * EXEC_TIMEOUT_MS + 2 * SIGN_OUT_EXEC_MS)
+    expect(REMOVE_SIGN_OUT_EXEC_MS).toBeGreaterThan(handlersModule.REMOTE_ACTION_TIMEOUT_MS)
+  })
+})

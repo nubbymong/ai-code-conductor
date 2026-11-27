@@ -12,7 +12,9 @@
  * the helper's field mode, which prints only the fields on its list: the
  * account, plan, tier and expiry, never a token), at Check, at the start-up
  * list, at the end of a sign-in tab and at each launch of a helper tab on an
- * account (section 3.1.6); nothing polls. What a read found is kept per
+ * account (section 3.1.6), and before and after a sign-out (to decide, then
+ * to show the result); nothing polls. An attach to a session kept for a tab
+ * reads too, for display only: it never stops the attach. What a read found is kept per
  * machine for the run, and each account's state is worked out from it and
  * this computer's accounts when asked (`machineAccounts`), so an account
  * added since reads right without a new exec.
@@ -51,11 +53,14 @@ export interface HostAccountsContext {
 /** One of this computer's accounts, as the provider package lists it. */
 export type HostProfile = { id: string; accountEmail?: string; name?: string }
 
-/** What one read found: the machine's own sign-in (null: none) and each
- *  account folder's there that holds the app's marker, by profile id. */
+/** What one read found: the machine's own sign-in (null: none), each
+ *  account folder's there that holds this install's marker, by profile id,
+ *  and the folders the app on another computer made there (`elsewhere`:
+ *  not read, never touched). */
 export interface SignInsRead {
   own: HostSignInFacts | null
   folders: Map<string, HostSignInFacts>
+  elsewhere: Set<string>
 }
 
 /** The machine a script runs on, as ssh reaches it. */
@@ -112,15 +117,19 @@ function objectLine(line: string | undefined): Record<string, unknown> | null {
  * helper's object for that file, or nothing. A slot that is not `own` or a
  * profile id of the app's shape, a part that is not `id` or `cr`, and a
  * header seen twice are left out. The machine's own sign-in is null when
- * neither of its files named anything.
+ * neither of its files named anything. `AICC-FIELD <nonce> <profile id>
+ * elsewhere`: that folder is another computer's (its marker names another
+ * install), and nothing of it is read.
  */
 export function readSignIns(stdout: string, nonce: string, keys: RemoteAccounts['keys']): SignInsRead {
   const prefix = `AICC-FIELD ${nonce} `
   const lines = afterHashLine(stdout, nonce).split(/\r?\n/)
   const got = new Map<string, { id?: Record<string, unknown> | null; cr?: Record<string, unknown> | null }>()
+  const elsewhere = new Set<string>()
   for (let i = 0; i < lines.length; i++) {
     if (!lines[i].startsWith(prefix)) continue
     const [slot, part, more] = lines[i].slice(prefix.length).split(' ')
+    if (more === undefined && part === 'elsewhere' && ACCOUNT_PROFILE_RE.test(slot ?? '')) { elsewhere.add(slot); continue }
     if (more !== undefined || (slot !== 'own' && !ACCOUNT_PROFILE_RE.test(slot ?? '')) || (part !== 'id' && part !== 'cr')) continue
     const entry = got.get(slot) ?? {}
     if (entry[part] !== undefined) continue
@@ -130,8 +139,8 @@ export function readSignIns(stdout: string, nonce: string, keys: RemoteAccounts[
   const ownRead = got.get('own')
   const own = ownRead ? factsOf(ownRead.id ?? null, ownRead.cr ?? null, keys) : null
   const folders = new Map<string, HostSignInFacts>()
-  for (const [slot, e] of got) if (slot !== 'own') folders.set(slot, factsOf(e.id ?? null, e.cr ?? null, keys))
-  return { own: own && (own.identity !== null || own.credentials) ? own : null, folders }
+  for (const [slot, e] of got) if (slot !== 'own' && !elsewhere.has(slot)) folders.set(slot, factsOf(e.id ?? null, e.cr ?? null, keys))
+  return { own: own && (own.identity !== null || own.credentials) ? own : null, folders, elsewhere }
 }
 
 /** The two emails name the same account (compared as the account chips compare them). */
@@ -190,26 +199,32 @@ export function _resetHostAccountsForTest(): void {
  * now (`profiles`, in their order; an id of another shape is left out).
  * Never read this run: every account `not-read`, `readAt` null. A read that
  * did not answer: every account `not-read`, with `why`; an account's folder
- * as the last read that answered found it.
+ * as the last read that answered found it. `others`: this install's folders
+ * of accounts this computer no longer holds; `elsewhere` (2.1.3-beta.20 fix
+ * round, MAJOR-1): the folders the app on another computer made there,
+ * which this computer never signs out or removes.
  */
 export function machineAccounts(did: string, profiles: readonly HostProfile[]): HostMachineAccounts {
   const accounts = profiles.filter((p) => ACCOUNT_PROFILE_RE.test(p.id))
   const held = new Set(accounts.map((p) => p.id))
   const last = lastRead.get(did)
-  if (!last) return { did, readAt: null, ok: false, own: null, accounts: accounts.map((p) => ({ profileId: p.id, state: 'not-read', facts: null, folder: false })), others: [] }
+  if (!last) return { did, readAt: null, ok: false, own: null, accounts: accounts.map((p) => ({ profileId: p.id, state: 'not-read', facts: null, folder: false })), others: [], elsewhere: [] }
   if ('why' in last) {
-    const known = lastAnswer.get(did)?.read.folders
+    const answered = lastAnswer.get(did)?.read
+    const known = answered?.folders
     return {
       did, readAt: last.at, ok: false, why: last.why, own: null,
       accounts: accounts.map((p) => ({ profileId: p.id, state: 'not-read', facts: null, folder: known?.has(p.id) ?? false })),
       others: known ? [...known.keys()].filter((id) => !held.has(id)).sort() : [],
+      elsewhere: answered ? [...answered.elsewhere].sort() : [],
     }
   }
-  const { own, folders } = last.read
+  const { own, folders, elsewhere } = last.read
   return {
     did, readAt: last.at, ok: true, own,
     accounts: accounts.map((p) => ({ profileId: p.id, ...signInStateOf(p.accountEmail, folders.get(p.id), own) })),
     others: [...folders.keys()].filter((id) => !held.has(id)).sort(),
+    elsewhere: [...elsewhere].sort(),
   }
 }
 
@@ -296,16 +311,21 @@ export function accountName(p: HostProfile | undefined, profileId: string): stri
  * read at this launch. Signed in in its own folder: the folder. Signed in as
  * the machine's own sign-in: the machine's own folder. Otherwise the tab
  * starts nothing, and the refusal says why and lists the accounts that are
- * signed in there (the notice's other choice).
+ * signed in there (the notice's other choice). `profiles` null: this
+ * computer's accounts did not read, which the refusal says as such
+ * (2.1.3-beta.20 fix round, NIT-11), never as an account gone.
  */
-export function accountBinding(accounts: HostMachineAccounts, profileId: string, m: Pick<RemoteMachineRecord, 'home' | 'did'>, name: string, profiles: readonly HostProfile[]): AccountBinding {
+export function accountBinding(accounts: HostMachineAccounts, profileId: string, m: Pick<RemoteMachineRecord, 'home' | 'did'>, name: string, profiles: readonly HostProfile[] | null): AccountBinding {
   const a = accounts.accounts.find((x) => x.profileId === profileId)
   if (a?.state === 'signed-in-here') return { via: 'folder', configDir: accountFolder(m, profileId) }
   if (a?.state === 'machine-own') return { via: 'own' }
-  const profile = profiles.find((p) => p.id === profileId)
+  const profile = profiles?.find((p) => p.id === profileId)
   const who = accountName(profile, profileId)
   const signedInThere = accounts.accounts.filter((x) => x.state === 'signed-in-here' || x.state === 'machine-own').map((x) => x.profileId)
   const base = { did: m.did, machineName: name, profileId, signedInThere }
+  if (profiles === null) {
+    return { refused: { ...base, state: 'not-read', text: 'This computer\'s accounts could not be read, so this tab started nothing. Restart it to try again.' } }
+  }
   if (!accounts.ok) {
     return { refused: { ...base, state: 'not-read', text: `The accounts on ${name} could not be read (${accounts.why ?? 'no answer'}), so this tab started nothing. Press Check on the Machines page, then Restart.` } }
   }
@@ -384,14 +404,36 @@ export function folderSignOuts(stdout: string, nonce: string): FolderSignOut[] {
   return out
 }
 
-/** One `signout` exec: the folders it signed out (and removed), or why it
- *  stopped, with those it did before. */
-async function runSignOut(ctx: HostAccountsContext, m: RemoteMachineRecord, via: RemoteAccounts, kind: 'folder' | 'own' | 'all', profileId: string): Promise<{ ok: true; values: Map<string, string>; folders: FolderSignOut[] } | { ok: false; why: string; folders: FolderSignOut[] }> {
+/** How long one sign-out exec may take: the CLI's own sign-out has 60 s
+ *  there (`timeout`), and the exec a little more. */
+export const SIGN_OUT_EXEC_MS = 90_000
+/** How long Remove's sign-out exec may take (2.1.3-beta.20 fix round,
+ *  NIT-10): one sign-out after another for each of this computer's folders
+ *  there. The Remove door waits longer than this, its list exec and its
+ *  removal together (ipc/remote-machines-handlers.ts REMOTE_REMOVE_TIMEOUT_MS). */
+export const REMOVE_SIGN_OUT_EXEC_MS = 600_000
+
+/** The words a `list` exec names each folder it left with: this install's
+ *  that the list did not name (`left`), and another computer's
+ *  (`elsewhere`). */
+export function leftFolders(stdout: string, nonce: string, key: 'left' | 'elsewhere'): string[] {
+  const out: string[] = []
+  for (const line of markedLines(stdout, 'AICC-RESULT', nonce)) {
+    const [k, id, more] = line.split(' ')
+    if (k === key && more === undefined && ACCOUNT_PROFILE_RE.test(id ?? '') && !out.includes(id)) out.push(id)
+  }
+  return out
+}
+
+type SignOutExec = { ok: true; values: Map<string, string>; folders: FolderSignOut[]; left: string[]; elsewhere: string[] } | { ok: false; why: string; folders: FolderSignOut[] }
+
+/** One `signout` exec: the folders it signed out (and removed), and the
+ *  ones it left; or why it stopped, with those it did before. */
+async function runSignOut(ctx: HostAccountsContext, m: RemoteMachineRecord, via: RemoteAccounts, kind: 'folder' | 'own' | 'list', profileIds: string): Promise<SignOutExec> {
   try {
     const nonce = newNonce()
-    const values = [nonce, m.did, ctx.installId, kind, profileId, via.configVar, via.signOut.program, via.signOut.args.join(',')]
-    // The CLI's sign-out has 60 s there for each folder; the exec, a little more.
-    const r = await runScript(ctx.runner, targetOf(m), 'signout', values, { timeoutMs: kind === 'all' ? 600_000 : 90_000 })
+    const values = [nonce, m.did, ctx.installId, kind, profileIds, via.configVar, via.signOut.program, via.signOut.args.join(',')]
+    const r = await runScript(ctx.runner, targetOf(m), 'signout', values, { timeoutMs: kind === 'list' ? REMOVE_SIGN_OUT_EXEC_MS : SIGN_OUT_EXEC_MS })
     if (r.notStarted) ctx.log(notStartedLogLine(m.host, r.stderr))
     const failed = sshFailure(r)
     if (failed) return { ok: false, why: `${m.host} could not be reached: ${failed}`, folders: [] }
@@ -399,7 +441,7 @@ async function runSignOut(ctx: HostAccountsContext, m: RemoteMachineRecord, via:
     const result = readScriptResult(r.stdout, nonce)
     if (!result) return { ok: false, why: `${m.host} did not say whether it signed out`, folders }
     if (!result.ok) return { ok: false, why: `${m.host} stopped the sign-out: ${refusalText(result.refused)}`, folders }
-    return { ok: true, values: result.values, folders }
+    return { ok: true, values: result.values, folders, left: leftFolders(r.stdout, nonce, 'left'), elsewhere: leftFolders(r.stdout, nonce, 'elsewhere') }
   } catch (err) {
     return { ok: false, why: (err as Error).message, folders: [] }
   }
@@ -421,12 +463,31 @@ export async function signOutOnMachine(ctx: HostAccountsContext, m: RemoteMachin
   return { ok: true, logout: f?.logout ?? null, removed: f?.removed ?? false, gone: false }
 }
 
-/** Section 3.1.8, Remove: every account folder on machine `m` that holds the
- *  app's marker, signed out and removed in one exec, with no read first (a
- *  machine whose helper is not this build's is removed too). Never throws. */
-export async function signOutAllOnMachine(ctx: HostAccountsContext, m: RemoteMachineRecord, via: RemoteAccounts): Promise<{ ok: boolean; why?: string; folders: FolderSignOut[] }> {
-  const run = await runSignOut(ctx, m, via, 'all', '-')
-  return run.ok ? { ok: true, folders: run.folders } : { ok: false, why: run.why, folders: run.folders }
+/** What Remove's sign-out did: each folder it signed out; the folders it
+ *  left (this install's it was not given, and another computer's); and
+ *  `deviceGone`, the device folder was not there, so nothing was signed out
+ *  and Remove goes on as before (2.1.3-beta.20 fix round, MAJOR-2). */
+export type RemoveSignOut =
+  | { ok: true; deviceGone: boolean; folders: FolderSignOut[]; left: string[]; elsewhere: string[] }
+  | { ok: false; why: string; folders: FolderSignOut[] }
+
+/** Most profile ids one `list` exec names (ACCOUNT_IDS_RE). */
+const MAX_LIST_IDS = 64
+
+/**
+ * Section 3.1.8, Remove (2.1.3-beta.20 fix round, MAJOR-1): the account
+ * folders on machine `m` that `profileIds` names (this computer's accounts,
+ * and its folders of accounts it no longer holds), each only when its
+ * folder holds this install's marker, signed out and removed in one exec,
+ * with no read first (a machine whose helper is not this build's is removed
+ * too). A folder another computer's app made there is never touched, and is
+ * named in the answer. Never throws.
+ */
+export async function signOutListOnMachine(ctx: HostAccountsContext, m: RemoteMachineRecord, via: RemoteAccounts, profileIds: readonly string[]): Promise<RemoveSignOut> {
+  const ids = [...new Set(profileIds.filter((id) => ACCOUNT_PROFILE_RE.test(id)))].slice(0, MAX_LIST_IDS)
+  const run = await runSignOut(ctx, m, via, 'list', ids.length > 0 ? ids.join(',') : '-')
+  if (!run.ok) return { ok: false, why: run.why, folders: run.folders }
+  return { ok: true, deviceGone: run.values.get('device') === 'gone', folders: run.folders, left: run.left, elsewhere: run.elsewhere }
 }
 
 /** The states a launch may start on. */
