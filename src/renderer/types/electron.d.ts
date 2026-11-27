@@ -849,6 +849,8 @@ export interface ElectronAPI {
       onAccountsChanged: (cb: (m: import('../../shared/host-accounts').HostMachineAccounts) => void) => () => void
       /** A helper tab's account notice: it started nothing for its account, or a sign-in tab ended. */
       onAccountNotice: (cb: (n: import('../../shared/host-accounts').HostAccountNotice) => void) => () => void
+      /** Round 2 (R1): Adopt, the user's own choice: folders that read as another install's, for this computer's accounts, made this computer's again. */
+      accountsAdopt: (req: import('../../shared/host-accounts').HostAdoptRequest) => Promise<import('../../shared/host-accounts').HostAdoptResult>
     }
   }
   cli: {
