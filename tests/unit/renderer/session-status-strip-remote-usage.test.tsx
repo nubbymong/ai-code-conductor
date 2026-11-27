@@ -142,7 +142,7 @@ describe('a helper tab\'s per-model weekly bars and extra usage', () => {
  *
  * jsdom lays nothing out, so this pins the structure that decides it: in a
  * flex row, a shrink-0 child is never narrower than its content, and only the
- * min-w-0 overflow-hidden sibling before it is clipped.
+ * min-w-0 clipping sibling before it is clipped.
  */
 describe('the note is never clipped by the strip\'s middle row (text smoke #36)', () => {
   it('a helper tab at 1280 px: the note is a shrink-0 child of the strip after the clipped row, not inside it; its label is short', () => {
@@ -152,10 +152,10 @@ describe('the note is never clipped by the strip\'s middle row (text smoke #36)'
     expect(n).not.toBeNull()
     // Not inside any clipping row.
     for (let el = n.parentElement; el && el !== container; el = el.parentElement) {
-      expect(el.classList.contains('overflow-hidden') && el.classList.contains('min-w-0'), `clipped by ${el.className}`).toBe(false)
+      expect((el.classList.contains('overflow-hidden') || el.classList.contains('overflow-x-clip')) && el.classList.contains('min-w-0'), `clipped by ${el.className}`).toBe(false)
     }
     // Its own parent is the strip's row, beside the clipped middle row, which comes before it.
-    const middle = n.parentElement!.querySelector(':scope > .overflow-hidden.min-w-0')
+    const middle = n.parentElement!.querySelector(':scope > .overflow-x-clip.min-w-0')
     expect(middle).not.toBeNull()
     expect(middle!.compareDocumentPosition(n) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
     expect(middle!.contains(n)).toBe(false)
@@ -182,7 +182,7 @@ describe('the note is never clipped by the strip\'s middle row (text smoke #36)'
     expect(n).not.toBeNull()
     expect(container.querySelector('[data-testid="rate-limit-not-reported"]')?.textContent).toBe('5h:not reported')
     expect(bars()).toEqual(['Weekly rate limit utilisation'])
-    const middle = n.parentElement!.querySelector(':scope > .overflow-hidden.min-w-0') as HTMLElement
+    const middle = n.parentElement!.querySelector(':scope > .overflow-x-clip.min-w-0') as HTMLElement
     expect(middle).not.toBeNull()
     expect(middle.contains(container.querySelector('[aria-label="Weekly rate limit utilisation"]'))).toBe(true)
     // The row's basis is its content: never flex-1's 0.
@@ -219,7 +219,7 @@ describe('the note is never clipped by the strip\'s middle row (text smoke #36)'
     expect(n).not.toBeNull()
     expect(n.classList.contains('min-w-[3ch]')).toBe(true)
     expect(n.classList.contains('min-w-0')).toBe(false)
-    const telemetry = n.parentElement!.querySelector(':scope > .overflow-hidden.min-w-0') as HTMLElement
+    const telemetry = n.parentElement!.querySelector(':scope > .overflow-x-clip.min-w-0') as HTMLElement
     expect(telemetry).not.toBeNull()
     expect(telemetry.classList.contains('gap-2')).toBe(true)
     const middle = telemetry.querySelector(':scope > .overflow-hidden.min-w-0') as HTMLElement
@@ -270,9 +270,9 @@ describe('the note is never clipped by the strip\'s middle row (text smoke #36)'
     draw()
     const n = note()!
     expect(n).not.toBeNull()
-    const telemetry = n.parentElement!.querySelector(':scope > .overflow-hidden.min-w-0') as HTMLElement
+    const telemetry = n.parentElement!.querySelector(':scope > .overflow-x-clip.min-w-0') as HTMLElement
     expect(telemetry).not.toBeNull()
-    for (const c of ['flex-auto', 'min-w-0', 'overflow-hidden']) expect(telemetry.classList.contains(c), c).toBe(true)
+    for (const c of ['flex-auto', 'min-w-0', 'overflow-x-clip']) expect(telemetry.classList.contains(c), c).toBe(true)
     const middle = telemetry.querySelector(':scope > .overflow-hidden.min-w-0') as HTMLElement
     expect(middle).not.toBeNull()
     expect(middle.textContent).toContain('API eq $12.5159')
@@ -314,13 +314,20 @@ describe('the note is never clipped by the strip\'s middle row (text smoke #36)'
  * PR 763 fix round 11 (the recheck of fix rounds 9 and 10): fix round 10 left
  * the review count and the Copilot meter as shrink-0 items of the telemetry,
  * after the meters, so the whole text row gave way before either lost a
- * pixel (a headless probe of the same rules: at a 1024 px strip, a local tab
- * with readings and the Copilot meter kept 3 px of its row, the 137 px chip
- * whole). Before fix round 10 they were the row's last items and were cut
- * first. Now they sit in one tail after the meters that gives way first
- * inside the telemetry. jsdom lays nothing out, so this pins the classes;
- * the fourth case of tests/e2e/session-strip-1280.spec.ts measures them.
- * Red on 4798802: the chip's telemetry item was its own shrink-0 root.
+ * pixel (a headless probe of the 1280 px e2e spec's markup with the app's
+ * CSS and font: at a 1024 px strip with the release smoke's controls, a
+ * local tab with readings and the Copilot meter kept 164.5 px of its
+ * 416.6 px row, the 153.3 px chip whole). Before fix round 10 they were the
+ * row's last items and were cut first. Now they sit in one tail after the
+ * meters that gives way first inside the telemetry. jsdom lays nothing out,
+ * so this pins the classes; the fourth case of
+ * tests/e2e/session-strip-1280.spec.ts measures them. Red on 4798802: the
+ * chip's telemetry item was its own shrink-0 root. Fix round 12: the tail
+ * has no clip of its own, so where it does not shrink the chip's 2 px focus
+ * ring is drawn whole; where it does, the telemetry's clip cuts it, and that
+ * clip is `overflow-x-clip`, no scroll container, so keyboard focus on a
+ * hidden chip cannot scroll the row out of view (it scrolled 166 px with
+ * `overflow-hidden` in the e2e spec's frame). Red on 58e27cba.
  */
 describe('the Copilot meter gives way first inside the telemetry (PR 763 fix round 11)', () => {
   /** A local tab (no note) with readings, and the Copilot meter on. */
@@ -334,17 +341,22 @@ describe('the Copilot meter gives way first inside the telemetry (PR 763 fix rou
     settingsState.settings.statusLine = { font: 'sans', fontSize: 11, showRateLimits: true, showResetTime: true, showTokens: true, showContextBar: true, showCost: true, showLinesChanged: true, showDuration: true, showCopilot }
   }
 
-  it('a local tab with readings: the chip and its separator are in a tail after the meters that shrinks first, to nothing, cut', () => {
+  it('a local tab with readings: the chip and its separator are in a tail after the meters that shrinks first, to nothing, with no clip of its own', () => {
     localTabWithCopilot(true)
     draw()
     expect(note()).toBeNull()
     const chip = container.querySelector('[data-ai-usage-chip]') as HTMLElement
     expect(chip).not.toBeNull()
-    const telemetry = chip.closest('.flex-auto.min-w-0.overflow-hidden') as HTMLElement
+    const telemetry = chip.closest('.flex-auto.min-w-0') as HTMLElement
     expect(telemetry).not.toBeNull()
+    // The telemetry clips across, as no scroll container: focus cannot scroll it.
+    expect(telemetry.classList.contains('overflow-x-clip')).toBe(true)
+    expect(telemetry.classList.contains('overflow-hidden')).toBe(false)
     const tail = [...telemetry.children].find((el) => el.contains(chip)) as HTMLElement
-    for (const c of ['shrink-[1000]', 'min-w-0', 'overflow-hidden']) expect(tail.classList.contains(c), c).toBe(true)
+    for (const c of ['shrink-[1000]', 'min-w-0']) expect(tail.classList.contains(c), c).toBe(true)
     expect(tail.classList.contains('shrink-0')).toBe(false)
+    // No clip of its own: it would cut the chip's focus ring when there is room.
+    expect(tail.classList.contains('overflow-hidden')).toBe(false)
     expect(tail.contains(container.querySelector('[data-copilot-separator]'))).toBe(true)
     // After the meters, and the telemetry's last item.
     const weekly = container.querySelector('[aria-label="Weekly rate limit utilisation"]') as HTMLElement
@@ -360,7 +372,7 @@ describe('the Copilot meter gives way first inside the telemetry (PR 763 fix rou
     draw()
     expect(container.querySelector('[data-ai-usage-chip]')).toBeNull()
     const weekly = container.querySelector('[aria-label="Weekly rate limit utilisation"]') as HTMLElement
-    const telemetry = weekly.closest('.flex-auto.min-w-0.overflow-hidden') as HTMLElement
+    const telemetry = weekly.closest('.flex-auto.min-w-0.overflow-x-clip') as HTMLElement
     expect(telemetry).not.toBeNull()
     const tail = telemetry.lastElementChild as HTMLElement
     expect(tail.contains(weekly)).toBe(false)

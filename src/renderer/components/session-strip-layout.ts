@@ -37,8 +37,17 @@ export const STRIP_CLASS = 'min-h-7 shrink-0 flex items-center gap-3 px-3 text-x
  * right end: without it, a strip too narrow for the account, the meters, the
  * note and the controls (the sidebar at its widest, or an account with
  * per-model bars) would push the controls out of the window.
+ *
+ * PR 763 fix round 12: that clip is `overflow-x-clip`, not `overflow-hidden`.
+ * The tail has no clip of its own now, so its hidden content reaches the
+ * telemetry; `overflow-hidden` made the telemetry a scroll container, and
+ * keyboard focus on a hidden Copilot chip scrolled it 166 px (a headless
+ * probe of the 1280 px e2e spec's frame at a 1024 px strip), out of view of
+ * the row's first figures, and it stayed so after the focus left. A clip is
+ * no scroll container, so focus cannot scroll it; and it cuts nothing above
+ * or below, so the chip's focus ring is whole when there is room.
  */
-export const STRIP_TELEMETRY_CLASS = 'flex items-center gap-2 flex-auto min-w-0 overflow-hidden'
+export const STRIP_TELEMETRY_CLASS = 'flex items-center gap-2 flex-auto min-w-0 overflow-x-clip'
 export const REMOTE_USAGE_NOTE_CLASS = 'min-w-[3ch] truncate shrink-[1000]'
 
 /**
@@ -78,15 +87,18 @@ export const STRIP_METERS_CLASS = 'flex items-center gap-3 shrink-[10] whitespac
  * Copilot meter, after the meters. Before fix round 10 they were the text
  * row's last items, so the row's cut took them first; fix round 10 moved
  * them out of the row, and as shrink-0 items of the telemetry the whole text
- * row then gave way before either lost a pixel (at a 1024 px strip, a local
- * tab with readings and the Copilot meter kept 3 px of its row). In this
- * tail they give way first inside the telemetry again: it may shrink a
- * thousand times as much as the row (`shrink-[1000]`), to nothing
- * (`min-w-0`), cut at its right end (`overflow-hidden`), before the meters'
- * reset texts and the text row. With neither shown it draws nothing
+ * row then gave way before either lost a pixel (in the 1280 px e2e spec's
+ * frame, a 1024 px strip with the release smoke's controls, a local tab with
+ * readings and the Copilot meter kept 164.5 px of its 416.6 px row, the
+ * 153.3 px chip whole). In this tail they give way first inside the
+ * telemetry again: it may shrink a thousand times as much as the row
+ * (`shrink-[1000]`), to nothing (`min-w-0`), its content cut by the
+ * telemetry's own clip, which a shrunk tail always ends at (no clip of its
+ * own, so the chip's focus ring is not cut when there is room), before the
+ * meters' reset texts and the text row. With neither shown it draws nothing
  * (`empty:hidden`), so no gap is left after the meters.
  */
-export const STRIP_TAIL_CLASS = 'flex items-center gap-2 min-w-0 overflow-hidden shrink-[1000] empty:hidden'
+export const STRIP_TAIL_CLASS = 'flex items-center gap-2 min-w-0 shrink-[1000] empty:hidden'
 
 /**
  * A meter's reset text (RateLimitBar, PR 763 fix round 10), the one part of

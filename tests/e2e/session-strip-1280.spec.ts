@@ -43,6 +43,15 @@
  * headless Chromium probe of this markup with the app's own Tailwind CSS and
  * Inter, not the app: the controls 212.9 px, the old row 164.5 px with the
  * 153.3 px chip whole, the row now 330.8 px with the chip hidden.)
+ *
+ * PR 763 fix round 12: the tail has no clip of its own. With room, the
+ * chip's root ends the tail, so a clip there cut the button's 2 px focus
+ * ring (`.focus-ring:focus-visible`); the fourth case's roomy reading now
+ * asserts the nearest clip past the chip, across and up and down, leaves
+ * those 2 px. And the telemetry's clip is `overflow-x-clip`, no scroll
+ * container: with `overflow-hidden`, focus on the hidden chip at 1024 px
+ * scrolled the telemetry 166 px (the probe), so the fourth case focuses the
+ * chip and asserts the telemetry did not scroll.
  */
 import { test, expect } from '@playwright/test'
 import { launchIsolatedApp, closeIsolatedApp, IsolatedApp } from './helpers/electron-app'
@@ -118,8 +127,8 @@ const NOW: Classes = {
   tail: STRIP_TAIL_CLASS,
   bar: 'now',
 }
-/** The classes the strip drew with on 4798802, fix round 10: today's, with the Copilot meter a shrink-0 item of the telemetry, after the meters. */
-const ROUND_10: Classes = { ...NOW, tail: null }
+/** The classes the strip drew with on 4798802, fix round 10: today's, with the Copilot meter a shrink-0 item of the telemetry, after the meters, and the telemetry's clip `overflow-hidden` (fix round 12 made it `overflow-x-clip`). */
+const ROUND_10: Classes = { ...NOW, telemetry: 'flex items-center gap-2 flex-auto min-w-0 overflow-hidden', tail: null }
 
 /** What the strip shows beside the shape's row and meters: a helper tab's note, the Copilot meter. */
 interface Parts { note: boolean; copilot: boolean }
@@ -143,8 +152,15 @@ interface Reading {
   noteLeft: number; noteWidth: number
   /** The Copilot chip's edges and width; NaN where the strip has no chip. */
   chipLeft: number; chipRight: number; chipWidth: number
+  chipTop: number; chipBottom: number
+  /** The right edge of the chip's nearest ancestor that clips (its overflow-x not visible); NaN where the strip has no chip. */
+  clipRight: number
+  /** The top and bottom of the chip's nearest ancestor that clips up and down (its overflow-y not visible); minus and plus Infinity where none does, NaN where the strip has no chip. */
+  clipTop: number; clipBottom: number
   /** Each reset text's drawn and whole widths (none for waiting meters). */
   resets: Array<{ client: number; scroll: number }>
+  /** How far the telemetry scrolled once the chip's button took the focus (0 where it has no chip, and where it cannot scroll). */
+  zoneScrollOnFocus: number
 }
 
 async function measure(c: Classes, shape: Shape, stripWidth: number, controls: number, parts: Parts = HELPER_TAB): Promise<Reading> {
@@ -206,6 +222,11 @@ async function measure(c: Classes, shape: Shape, stripWidth: number, controls: n
     const note = noteEl ? noteEl.getBoundingClientRect() : null
     const chipEl = host.querySelector('[data-probe-chip]') as HTMLElement | null
     const chip = chipEl ? chipEl.getBoundingClientRect() : null
+    let clipEl: HTMLElement | null = chipEl ? chipEl.parentElement : null
+    while (clipEl && getComputedStyle(clipEl).overflowX === 'visible') clipEl = clipEl.parentElement
+    let clipYEl: HTMLElement | null = chipEl ? chipEl.parentElement : null
+    while (clipYEl && getComputedStyle(clipYEl).overflowY === 'visible') clipYEl = clipYEl.parentElement
+    const clipY = clipYEl ? clipYEl.getBoundingClientRect() : null
     const reading = {
       content: kids[kids.length - 1].getBoundingClientRect().right - kids[0].getBoundingClientRect().left,
       rowRight: r.right,
@@ -222,11 +243,20 @@ async function measure(c: Classes, shape: Shape, stripWidth: number, controls: n
       chipLeft: chip ? chip.left : Number.NaN,
       chipRight: chip ? chip.right : Number.NaN,
       chipWidth: chip ? chip.width : Number.NaN,
+      chipTop: chip ? chip.top : Number.NaN,
+      chipBottom: chip ? chip.bottom : Number.NaN,
+      clipRight: clipEl ? clipEl.getBoundingClientRect().right : Number.NaN,
+      clipTop: !chip ? Number.NaN : clipY ? clipY.top : Number.NEGATIVE_INFINITY,
+      clipBottom: !chip ? Number.NaN : clipY ? clipY.bottom : Number.POSITIVE_INFINITY,
       trackWidth: (host.querySelector('[data-probe-track]') as HTMLElement).getBoundingClientRect().width,
       resets: [...host.querySelectorAll('[data-probe-reset]')].map((el) => ({ client: (el as HTMLElement).clientWidth, scroll: (el as HTMLElement).scrollWidth })),
     }
+    // Last, as it may scroll: keyboard focus on the chip's button, as a Tab would give it.
+    const button = chipEl ? chipEl.querySelector('button') : null
+    if (button) button.focus()
+    const zoneScrollOnFocus = zone.scrollLeft
     host.remove()
-    return reading
+    return { ...reading, zoneScrollOnFocus }
   }, { c, shape, strip: STRIP_CLASS, stripWidth, account: ACCOUNT_WIDTH, controls, resetWrap: RATE_LIMIT_RESET_WRAP_CLASS, reset: RATE_LIMIT_RESET_CLASS, parts })
 }
 
@@ -311,6 +341,11 @@ test.describe('the status strip of a helper tab at 1280x768', () => {
     const roomy = await measure(NOW, 'working', 4000, 0, LOCAL_TAB_WITH_COPILOT)
     expect(roomy.chipWidth).toBeGreaterThan(100)
     expect(roomy.chipRight).toBeLessThanOrEqual(roomy.zoneRight + 0.5)
+    // The nearest clip past the chip leaves room for its button's 2 px focus
+    // ring, across and up and down.
+    expect(roomy.clipRight, 'the chip\'s focus ring is not cut when there is room').toBeGreaterThanOrEqual(roomy.chipRight + 2)
+    expect(roomy.clipTop, 'the ring\'s top is not cut').toBeLessThanOrEqual(roomy.chipTop - 2)
+    expect(roomy.clipBottom, 'the ring\'s bottom is not cut').toBeGreaterThanOrEqual(roomy.chipBottom + 2)
 
     // The fault, with the classes of 4798802: the chip keeps its whole width
     // while the text row has lost more than the chip's width.
@@ -327,5 +362,7 @@ test.describe('the status strip of a helper tab at 1280x768', () => {
     expect(now.rowWidth, 'the text row keeps its first items').toBeGreaterThan(100)
     expect(now.rowWidth, 'the text row keeps the space the chip held').toBeGreaterThan(round10.rowWidth + round10.chipWidth - 1)
     expect(now.weeklyPctRight, 'the Weekly "%" is not clipped by the telemetry').toBeLessThanOrEqual(now.zoneRight + 0.5)
+    // Keyboard focus on the hidden chip does not scroll the row out of view.
+    expect(now.zoneScrollOnFocus, 'the telemetry did not scroll to the focused chip').toBe(0)
   })
 })
