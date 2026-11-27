@@ -551,9 +551,12 @@ describe('a folder that may be this computer\'s own from an earlier install', ()
   })
 
   it('final review round 4 (F4-1): an adoptable refusal for an account this computer no longer holds offers no Adopt and no Sign in', async () => {
+    // As if the machine read said Adopt may apply (it never does for an account not held): the notice still offers none.
+    useHostAccountsStore.getState().setAccounts({ machines: [{ ...read('signed-in-here', 'not-signed-in'), elsewhere: ['p7'], mayBeEarlierInstall: true }] })
     await mount(<HostSignInNotice />)
     const base = refused('tab-1', 'not-signed-in')
     await push(base.kind === 'launch-refused' ? { ...base, refusal: { ...base.refusal, profileId: 'p7', adoptable: true } as never } : base)
+    expect(useHostAccountsStore.getState().notices[0]?.adoptable).toBe(true)
     expect(byTest('host-signin-here')).toBeNull()
     expect(byTest('host-signin-adopt')).toBeNull()
     expect(byTest('host-signin-question')?.textContent).toBe('This tab is on an account no longer on this computer.')
