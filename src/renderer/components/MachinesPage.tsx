@@ -6,6 +6,9 @@ import type { ProviderId } from '../../shared/providers'
 import { showHeldTerminalTab } from '../utils/heldTerminalTab'
 import { PROVIDER_NAMES } from '../provider-names'
 import RemoteMachinesSection from './RemoteMachinesSection'
+import { useHostAccountsStore } from '../stores/hostAccountsStore'
+import { useAccountProfilesStore } from '../stores/accountProfilesStore'
+import { thisComputerAccountsLine } from '../utils/hostAccounts'
 
 // The Machines page (2.1.3-beta.6, plan section C): the This computer card.
 // It shows what the session helper is doing and the terminals it holds, and
@@ -243,6 +246,10 @@ export default function MachinesPage({ active = true }: { active?: boolean }) {
   const [confirmEndId, setConfirmEndId] = useState<string | null>(null)
   const [notice, setNotice] = useState<Notice | null>(null)
   const [ranSelfTest, setRanSelfTest] = useState<SelfTestResult | undefined>(undefined)
+  // 2.1.3-beta.20 section 5 (frame 4): this computer's "Accounts here", while
+  // Linux machines can be added (the section below read them).
+  const hostAvailable = useHostAccountsStore((s) => s.available)
+  const accountCount = useAccountProfilesStore((s) => s.profiles.length)
 
   const mounted = useRef(true)
   // Newest read wins: an answer that arrives after a later read began is dropped.
@@ -431,6 +438,13 @@ export default function MachinesPage({ active = true }: { active?: boolean }) {
                   </DialogButton>
                 </dd>
               </dl>
+
+              {hostAvailable && accountCount > 0 && (
+                <div data-testid="machines-accounts-here">
+                  <h3 className="text-[10px] uppercase tracking-wider font-semibold mb-2" style={{ color: 'var(--text-muted)' }}>Accounts here</h3>
+                  <p className="text-xs" style={{ color: 'var(--text-secondary)' }}>{thisComputerAccountsLine(accountCount)}</p>
+                </div>
+              )}
 
               <div>
                 <h3
