@@ -25,6 +25,7 @@ import * as fs from 'node:fs'
 import * as nodeOs from 'node:os'
 import * as path from 'node:path'
 import type { AccountProfile } from '../../src/shared/account-types'
+import { USAGE_DETAIL_DUPLICATE, USAGE_DETAIL_EXPIRED, USAGE_DETAIL_NOT_SIGNED_IN, USAGE_DETAIL_WRONG_ACCOUNT } from '../../src/shared/usage-types'
 
 const h = vi.hoisted(() => ({
   root: '',
@@ -178,6 +179,14 @@ describe('the app renews a lapsed sign-in at the address Claude Code itself uses
     expect(o.subscriptionType).toBe('max') // every other field kept
   })
 
+  it('an answer that returns the SAME refresh token with no expiry keeps the expiry still in force', async () => {
+    h.tokenAnswer = { status: 200, body: JSON.stringify({ access_token: 'at-test-NEW', refresh_token: SPENT, expires_in: 3600 }) }
+    await fetchAccountUsage(P)
+    expect(oauthOf(P).accessToken).toBe('at-test-NEW')
+    expect(oauthOf(P).refreshToken).toBe(SPENT)
+    expect(oauthOf(P).refreshTokenExpiresAt).toBe(OLD_REFRESH_EXPIRY)
+  })
+
   it('an answer with no refresh_token_expires_in drops the spent token\'s expiry rather than keep counting it down', async () => {
     await fetchAccountUsage(P)
     expect(oauthOf(P).refreshToken).toBe(NEW_RT)
@@ -195,7 +204,7 @@ describe('each answer of the token address, by its status, to the card\'s state'
     h.tokenAnswer = { status: 400, body: JSON.stringify({ error: 'invalid_grant', error_description: 'Refresh token expired' }) }
     const r = await fetchAccountUsage(P)
     expect(r.status).toBe('needs-login')
-    expect(r.detail).toBe('session expired')
+    expect(r.detail).toBe(USAGE_DETAIL_EXPIRED)
     expect(h.requests).toEqual([TOKEN_AT])
     lapsedStays()
   })
@@ -321,6 +330,29 @@ describe('the primary account renews through `claude auth status`, never through
     expectRefreshing(r)
   })
 
+  it('`claude auth status` says the primary is NOT signed in and its token stays lapsed: Sign in again (expired)', async () => {
+    setClaudeCliRenewal(async () => ({ authenticated: false, source: 'cli-status' }))
+    const r = await fetchAccountUsage(PRIMARY)
+    expect(r.status).toBe('needs-login')
+    expect(r.detail).toBe(USAGE_DETAIL_EXPIRED)
+    expect(h.requests).toEqual([])
+  })
+
+  it('a signed-out answer that is not the CLI\'s own (not checked, or the file fallback) is not an expiry', async () => {
+    for (const answer of [{ authenticated: false, notChecked: 'Claude Code is off' }, { authenticated: false, source: 'credential-file' }, null, 'no']) {
+      setClaudeCliRenewal(async () => answer)
+      expectRefreshing(await fetchAccountUsage(PRIMARY))
+    }
+  })
+
+  it('the CLI says signed out but the token is usable after it: read as renewed', async () => {
+    setClaudeCliRenewal(async (id: string) => {
+      writeCreds(id, { expiresAt: Date.now() + 3_600_000 })
+      return { authenticated: false, source: 'cli-status' }
+    })
+    expect((await fetchAccountUsage(PRIMARY)).status).toBe('ok')
+  })
+
   it('a status route that throws: Refreshing, nothing sent', async () => {
     setClaudeCliRenewal(async () => { throw new Error('the CLI did not answer') })
     expectRefreshing(await fetchAccountUsage(PRIMARY))
@@ -370,12 +402,18 @@ describe('an account whose sign-in folder has no owner-only verdict yet renews t
     expect(h.calls).toEqual([])
   })
 
+  it('a not-yet-checked folder\'s CLI saying signed out is not taken as expired (the next read renews it through the app)', async () => {
+    h.folder = { ok: false, message: 'not checked yet' }
+    setClaudeCliRenewal(async () => ({ authenticated: false, source: 'cli-status' }))
+    expectRefreshing(await fetchAccountUsage(P))
+  })
+
   it('the CLI found no sign-in left: Sign in again (missing)', async () => {
     h.folder = { ok: false, message: 'not checked yet' }
     setClaudeCliRenewal(async (id: string) => { fs.rmSync(credsPath(id)) })
     const r = await fetchAccountUsage(P)
     expect(r.status).toBe('needs-login')
-    expect(r.detail).toBe('not signed in')
+    expect(r.detail).toBe(USAGE_DETAIL_NOT_SIGNED_IN)
   })
 
   it('a refused folder: neither route runs and nothing is written', async () => {
@@ -397,38 +435,46 @@ describe('an account whose sign-in folder has no owner-only verdict yet renews t
   })
 })
 
+const DUP = { kind: 'duplicate' as const, account: 'b@example.test', profileIds: ['profile-mren09-000009'] }
+const WRONG = { kind: 'wrong-account' as const, signedInAs: 'c@example.test', labelledAs: 'b@example.test' }
+
 describe('a duplicate or wrong-account sign-in is asked to sign in again, and is not renewed', () => {
   it('signed in to the same account as another profile: needs-login, no POST, no usage read', async () => {
-    setClaudeSignInProblem((id) => (id === P ? 'duplicate' : null))
+    setClaudeSignInProblem((id) => (id === P ? DUP : null))
     const r = await fetchAccountUsage(P)
     expect(r.status).toBe('needs-login')
-    expect(r.detail).toBe('duplicate account')
+    expect(r.detail).toBe(USAGE_DETAIL_DUPLICATE)
+    // The card names the twin and the account from the reading itself.
+    expect(r.signInProblem).toEqual(DUP)
     expect(h.requests).toEqual([])
     expect(oauthOf(P).refreshToken).toBe(SPENT)
   })
 
   it('signed in as a different account than its label: needs-login, nothing sent', async () => {
-    setClaudeSignInProblem(() => 'wrong-account')
+    setClaudeSignInProblem(() => WRONG)
     writeCreds(P, { expiresAt: Date.now() + 3_600_000 })
     const r = await fetchAccountUsage(P)
     expect(r.status).toBe('needs-login')
-    expect(r.detail).toBe('wrong account')
+    expect(r.detail).toBe(USAGE_DETAIL_WRONG_ACCOUNT)
+    expect(r.signInProblem).toEqual(WRONG)
     expect(h.requests).toEqual([])
   })
 
   it('a check that throws or answers nothing known is no problem: renewed as before', async () => {
     setClaudeSignInProblem(() => { throw new Error('unreadable') })
     expect((await fetchAccountUsage(P)).status).toBe('ok')
-    setClaudeSignInProblem(() => 'something else' as never)
-    writeCreds(P)
-    expect((await fetchAccountUsage(P)).status).toBe('ok')
+    for (const odd of ['duplicate', { kind: 'duplicate' }, { kind: 'duplicate', account: 'x', profileIds: [] }, { kind: 'wrong-account', signedInAs: 'a' }, { kind: 'other' }]) {
+      setClaudeSignInProblem(() => odd as never)
+      writeCreds(P)
+      expect((await fetchAccountUsage(P)).status).toBe('ok')
+    }
   })
 
   it('a profile with no sign-in at all says not signed in, before any identity check', async () => {
-    setClaudeSignInProblem(() => 'duplicate')
+    setClaudeSignInProblem(() => DUP)
     fs.rmSync(credsPath(P))
     const r = await fetchAccountUsage(P)
     expect(r.status).toBe('needs-login')
-    expect(r.detail).toBe('not signed in')
+    expect(r.detail).toBe(USAGE_DETAIL_NOT_SIGNED_IN)
   })
 })

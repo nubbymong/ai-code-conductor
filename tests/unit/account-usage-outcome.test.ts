@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { resolveUsageOutcome, parseRefreshResponse, classifyTokenAnswer, type RawResult } from '../../src/main/usage/account-usage'
-import { USAGE_DETAIL_RENEWING, type AccountUsage, type UsageBucket } from '../../src/shared/usage-types'
+import { USAGE_DETAIL_RENEWING, USAGE_DETAIL_DUPLICATE, USAGE_DETAIL_EXPIRED, USAGE_DETAIL_NOT_SIGNED_IN, USAGE_DETAIL_WRONG_ACCOUNT, type AccountUsage, type UsageBucket } from '../../src/shared/usage-types'
 
 const base: AccountUsage = {
   profileId: 'p1', email: 'a@b.c', name: 'A', isPrimary: false,
@@ -16,7 +16,7 @@ describe('resolveUsageOutcome — account panel state matrix', () => {
   it('signed OUT -> needs-login (the ONLY Sign in case)', () => {
     const r = resolveUsageOutcome(base, { signedIn: false, tokenUsable: false }, undefined)
     expect(r.status).toBe('needs-login')
-    expect(r.detail).toBe('not signed in')
+    expect(r.detail).toBe(USAGE_DETAIL_NOT_SIGNED_IN)
   })
 
   it('signed in + unusable token + no cache -> soft refresh hint, NOT Sign in', () => {
@@ -162,17 +162,19 @@ describe('resolveUsageOutcome: Sign in again only when the user must sign in', (
   it('an expired sign-in is needs-login (session expired), even with a cached figure', () => {
     const r = resolveUsageOutcome(base, { signedIn: true, tokenUsable: false, expired: true }, cached)
     expect(r.status).toBe('needs-login')
-    expect(r.detail).toBe('session expired')
+    expect(r.detail).toBe(USAGE_DETAIL_EXPIRED)
     expect(r.buckets).toEqual([])
   })
 
   it('a duplicate or wrong-account sign-in is needs-login, with its reason', () => {
-    expect(resolveUsageOutcome(base, { signedIn: true, tokenUsable: true, signInProblem: 'duplicate' }, cached)).toMatchObject({ status: 'needs-login', detail: 'duplicate account' })
-    expect(resolveUsageOutcome(base, { signedIn: true, tokenUsable: true, signInProblem: 'wrong-account' }, cached)).toMatchObject({ status: 'needs-login', detail: 'wrong account' })
+    const dup = { kind: 'duplicate' as const, account: 'a@b.c', profileIds: ['p2'] }
+    const wrong = { kind: 'wrong-account' as const, signedInAs: 'z@b.c', labelledAs: 'a@b.c' }
+    expect(resolveUsageOutcome(base, { signedIn: true, tokenUsable: true, signInProblem: dup }, cached)).toMatchObject({ status: 'needs-login', detail: USAGE_DETAIL_DUPLICATE, signInProblem: dup, buckets: [] })
+    expect(resolveUsageOutcome(base, { signedIn: true, tokenUsable: true, signInProblem: wrong }, cached)).toMatchObject({ status: 'needs-login', detail: USAGE_DETAIL_WRONG_ACCOUNT, signInProblem: wrong, buckets: [] })
   })
 
   it('no sign-in at all is still the not-signed-in reason first', () => {
-    expect(resolveUsageOutcome(base, { signedIn: false, tokenUsable: false, expired: true, signInProblem: 'duplicate' }, cached).detail).toBe('not signed in')
+    expect(resolveUsageOutcome(base, { signedIn: false, tokenUsable: false, expired: true, signInProblem: { kind: 'duplicate', account: 'a@b.c', profileIds: ['p2'] } }, cached).detail).toBe(USAGE_DETAIL_NOT_SIGNED_IN)
   })
 
   it('a lapsed token that is to be renewed again says Refreshing (signed in), never "open a session"', () => {
@@ -186,5 +188,16 @@ describe('resolveUsageOutcome: Sign in again only when the user must sign in', (
   it("the Refreshing hint's detail is the shared constant the page reads, for a lapsed token and a 401 alike", () => {
     expect(resolveUsageOutcome(base, { signedIn: true, tokenUsable: false }, undefined).detail).toBe(USAGE_DETAIL_RENEWING)
     expect(resolveUsageOutcome(base, { signedIn: true, tokenUsable: true, fetch: fail(401) }, undefined).detail).toBe(USAGE_DETAIL_RENEWING)
+  })
+})
+
+// nubbymong/aicc_planning#444 review P4-1: main and the page share the details
+// by constant, so neither can reword one alone.
+describe('the needs-login details are the shared constants', () => {
+  it('each is a distinct, plain value', () => {
+    const all = [USAGE_DETAIL_NOT_SIGNED_IN, USAGE_DETAIL_EXPIRED, USAGE_DETAIL_DUPLICATE, USAGE_DETAIL_WRONG_ACCOUNT, USAGE_DETAIL_RENEWING]
+    expect(new Set(all).size).toBe(all.length)
+    expect(USAGE_DETAIL_EXPIRED).toBe('session expired')
+    expect(USAGE_DETAIL_NOT_SIGNED_IN).toBe('not signed in')
   })
 })

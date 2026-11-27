@@ -30,7 +30,7 @@ import { isProfileInUseByLiveSession, getClaudeProfileId, sessionsOnProfile } fr
 import { noteProfileRefreshInFlight } from '../profile-consumers'
 import { parseUsage } from './usage-buckets'
 import { loadSnapshots, saveSnapshots, type UsageSnapshot } from './usage-snapshots'
-import { USAGE_DETAIL_RENEWING, type AccountUsage, type UsageBucket, type CreditsInfo } from '../../shared/usage-types'
+import { USAGE_DETAIL_RENEWING, USAGE_DETAIL_NOT_SIGNED_IN, USAGE_DETAIL_EXPIRED, USAGE_DETAIL_DUPLICATE, USAGE_DETAIL_WRONG_ACCOUNT, usageSignInProblem, type UsageSignInProblem, type AccountUsage, type UsageBucket, type CreditsInfo } from '../../shared/usage-types'
 import { logWarn, logInfo } from '../debug-logger'
 
 export type { AccountUsage } from '../../shared/usage-types'
@@ -178,10 +178,8 @@ export async function fetchWithRetry(
 // NO live session exists for the profile (so it can't race Claude Code's own refresh
 // and rotate the token out from under a running session).
 
-/** Where Claude Code itself renews a sign-in (its TOKEN_URL, with the same
- *  client id): the app's renewal posts here too. The old console address
- *  answered the app's renewals with refusals the app could not tell apart
- *  from an expired sign-in (nubbymong/aicc_planning#444). */
+/** The app's renewal posts where Claude Code itself does (its TOKEN_URL),
+ *  with the same client id (nubbymong/aicc_planning#444). */
 const TOKEN_HOST = 'platform.claude.com'
 const TOKEN_PATH = '/v1/oauth/token'
 /** An answer larger than this is not read further (it then reads as one that
@@ -309,9 +307,10 @@ export function parseRefreshResponse(
  *  a folder replaced meanwhile is not written into.
  *
  *  The refresh token's expiry is the new token's (refreshTokenExpiresAt from
- *  the answer). An answer that names none leaves no expiry rather than the
- *  spent token's, which would count down, and turn red, for a token no longer
- *  in use (nubbymong/aicc_planning#444). */
+ *  the answer). An answer that rotates the token and names no expiry leaves
+ *  none rather than the spent token's, which would count down, and turn red,
+ *  for a token no longer in use; one that hands back the same refresh token
+ *  keeps the expiry in force (nubbymong/aicc_planning#444). */
 async function writeRefreshedCreds(
   credsPath: string,
   spentRefreshToken: string,
@@ -332,7 +331,9 @@ async function writeRefreshedCreds(
       }
       const oauth: Record<string, unknown> = { ...(c.claudeAiOauth ?? {}), accessToken: t.accessToken, refreshToken: t.refreshToken, expiresAt: t.expiresAt }
       if (t.refreshTokenExpiresAt !== undefined) oauth.refreshTokenExpiresAt = t.refreshTokenExpiresAt
-      else delete oauth.refreshTokenExpiresAt
+      // A rotated token with no expiry named: the spent one's date is not its.
+      // The same refresh token handed back: the expiry in force is still its own.
+      else if (t.refreshToken !== spentRefreshToken) delete oauth.refreshTokenExpiresAt
       c.claudeAiOauth = oauth
       atomicWriteSecure(credsPath, JSON.stringify(c, null, 2), 0o600)
       // This path had no re-assert, unlike account-profiles' writeCredentialFile.
@@ -584,7 +585,7 @@ async function inSessionUsage(base: AccountUsage, profileId: string, isPrimary: 
   }
   if (figure && now - figure.fetchedAt <= LIVE_USAGE_MAX_AGE_MS) return show(figure, false)
   const creds = await readProfileToken(profileId, isPrimary)
-  if (!creds.signedIn) return { ...base, status: 'needs-login', detail: 'not signed in' }
+  if (!creds.signedIn) return { ...base, status: 'needs-login', detail: USAGE_DETAIL_NOT_SIGNED_IN }
   if (figure) return show(figure, true)
   return { ...base, status: 'waiting', inSession: true, detail: "waiting for this account's session" }
 }
@@ -603,30 +604,28 @@ export function _resetLiveUsageForTest(): void { liveUsageByProfile.clear() }
  *  snapshots. Without it the once-per-process hydrate keeps the first test's view. */
 export function _resetSnapshotsForTest(): void { lastGoodUsage.clear(); snapshotsLoaded = false }
 
-/** Why a profile that holds a sign-in must still be signed in again: it is
- *  signed in to the same account as another profile (each renewal in one
- *  spends the other's refresh token), or to a different account than its label. */
-export type SignInProblem = 'duplicate' | 'wrong-account'
-
 /** Pure decision: given the account's signed-in state, whether its token was
  *  usable, the fetch result (if we made one), and any cached usage, produce the
  *  AccountUsage to show. Exported + pure so the whole state matrix is unit-tested.
  *
  *  `needs-login` (the card's "Sign in again") means the user must sign in, and
  *  is set only for: no sign-in at all; a sign-in the service refused as expired
- *  or revoked (`expired`); a duplicate or wrong-account profile
- *  (`signInProblem`). Every other way a fresh figure did not load is the
+ *  or revoked, or a primary Claude Code says is signed out (`expired`); a
+ *  duplicate or wrong-account profile (`signInProblem`), each with its shared
+ *  detail constant (shared/usage-types.ts). Every other way a fresh figure did not load is the
  *  signed-in hint (detail "signed in, refreshing") or the last figure, stale:
  *  the card's Refreshing, tried again on the next read. */
 export function resolveUsageOutcome(
   base: AccountUsage,
-  input: { signedIn: boolean; tokenUsable: boolean; fetch?: RawResult; expired?: boolean; signInProblem?: SignInProblem },
+  input: { signedIn: boolean; tokenUsable: boolean; fetch?: RawResult; expired?: boolean; signInProblem?: UsageSignInProblem },
   cached: { buckets: UsageBucket[]; credits?: CreditsInfo; fetchedAt: number } | undefined,
 ): AccountUsage {
-  if (!input.signedIn) return { ...base, status: 'needs-login', detail: 'not signed in' }
-  if (input.signInProblem === 'duplicate') return { ...base, status: 'needs-login', detail: 'duplicate account' }
-  if (input.signInProblem === 'wrong-account') return { ...base, status: 'needs-login', detail: 'wrong account' }
-  if (input.expired) return { ...base, status: 'needs-login', detail: 'session expired' }
+  if (!input.signedIn) return { ...base, status: 'needs-login', detail: USAGE_DETAIL_NOT_SIGNED_IN }
+  // The card names the accounts (signInProblem) and offers the sign-in that
+  // clears it: as its own account for a duplicate, as its label otherwise.
+  if (input.signInProblem?.kind === 'duplicate') return { ...base, status: 'needs-login', detail: USAGE_DETAIL_DUPLICATE, signInProblem: input.signInProblem }
+  if (input.signInProblem?.kind === 'wrong-account') return { ...base, status: 'needs-login', detail: USAGE_DETAIL_WRONG_ACCOUNT, signInProblem: input.signInProblem }
+  if (input.expired) return { ...base, status: 'needs-login', detail: USAGE_DETAIL_EXPIRED }
 
   const staleOr = (fallback: AccountUsage): AccountUsage =>
     cached
@@ -689,20 +688,19 @@ export function setClaudeCliRenewal(renew: ((profileId: string) => Promise<unkno
   cliRenewal = renew
 }
 
-/** Which profiles are signed in to the same account as another, or to a
- *  different account than their label: set by main to the cross-check the
- *  page's banners read (account-auth-info.ts readAllProfileAuthInfo), so main
- *  and the page agree. Unset, or an answer that throws, is no problem. */
-let signInProblem: ((profileId: string) => SignInProblem | null) | null = null
+/** Which profiles must sign in again although they hold a sign-in: one
+ *  signed in to the same account as another active, signed-in profile, or to a
+ *  different account than its label. Set by main to readClaudeSignInProblem
+ *  (account-auth-info.ts), built on the cross-check the page's banners read.
+ *  Unset, an answer that throws, or one of the wrong shape, is no problem. */
+let signInProblem: ((profileId: string) => UsageSignInProblem | null) | null = null
 
-export function setClaudeSignInProblem(check: ((profileId: string) => SignInProblem | null) | null): void {
+export function setClaudeSignInProblem(check: ((profileId: string) => UsageSignInProblem | null) | null): void {
   signInProblem = check
 }
 
-function signInProblemOf(profileId: string): SignInProblem | null {
-  let p: unknown
-  try { p = signInProblem ? signInProblem(profileId) : null } catch { p = null }
-  return p === 'duplicate' || p === 'wrong-account' ? p : null
+function signInProblemOf(profileId: string): UsageSignInProblem | null {
+  try { return usageSignInProblem(signInProblem ? signInProblem(profileId) : null) } catch { return null }
 }
 
 /** A token within 60 s of its expiry is treated as unusable, so a request that
@@ -732,25 +730,50 @@ function renewalRoute(isPrimary: boolean, credsPath: string): 'app' | 'cli' | nu
   return folder.message === CREDENTIAL_FOLDER_REFUSAL ? null : 'cli'
 }
 
+/** Whether an answer of the CLI renewal is Claude Code's own `auth status`
+ *  saying the account is not signed in (readClaudeCliAuth: `source`
+ *  'cli-status', `authenticated` false). An answer from the credential-file
+ *  fallback, a "not checked" one, or anything else is not. */
+function cliSaysSignedOut(answer: unknown): boolean {
+  if (!answer || typeof answer !== 'object') return false
+  const a = answer as { authenticated?: unknown; source?: unknown }
+  return a.source === 'cli-status' && a.authenticated === false
+}
+
 /**
  * Renew a lapsed sign-in through Claude Code itself (cliRenewal), then read
  * the credentials file again. For the primary its sign-in is first brought in
  * step with the user's own ~/.claude (a fresher token there is used, and the
  * CLI never spends a refresh token that one already replaced), and afterwards
  * the renewed one goes back there, so Claude Code outside the app stays signed
- * in. Null when no route is set: nothing ran.
+ * in. `cliSignedOut`: Claude Code's own answer was "not signed in". Null when
+ * no route is set: nothing ran.
+ *
+ * Residual window (nubbymong/aicc_planning#444 review; owed to the pre-stable
+ * ADR-009 pass): after the first sync the profile and ~/.claude hold the same
+ * refresh token. Once `auth status` renews it in the profile's home, ~/.claude
+ * holds the spent one until the second sync, which runs as soon as the CLI
+ * returns: normally well under a second, at most its 10 s limit. A Claude Code
+ * outside the app that renews from ~/.claude in that window, or at the same
+ * moment as the CLI here, spends the same token and can lose its sign-in. It is
+ * the exposure a session on the primary already has (its start and end sync
+ * the same way). Not narrowed further by syncing while the CLI runs: a file
+ * caught mid-write there could let the older global copy win the freshest-wins
+ * sync and overwrite the renewed token.
  */
-async function renewThroughCli(profileId: string, isPrimary: boolean): Promise<StoredCreds | null> {
+async function renewThroughCli(profileId: string, isPrimary: boolean): Promise<{ creds: StoredCreds; cliSignedOut: boolean } | null> {
   const renew = cliRenewal
   if (!renew) return null
   if (isPrimary) {
     syncPrimarySignIn()
     const synced = await readProfileToken(profileId, true)
-    if (!synced.signedIn || tokenUsableNow(synced)) return synced
+    if (!synced.signedIn || tokenUsableNow(synced)) return { creds: synced, cliSignedOut: false }
   }
-  try { await renew(profileId) } catch { /* the CLI did not answer: nothing renewed */ }
+  let answer: unknown
+  try { answer = await renew(profileId) } catch { answer = undefined /* the CLI did not answer: nothing renewed */ }
+  // Straight back into ~/.claude, before anything else runs (see above).
   if (isPrimary) syncPrimarySignIn()
-  return readProfileToken(profileId, isPrimary)
+  return { creds: await readProfileToken(profileId, isPrimary), cliSignedOut: cliSaysSignedOut(answer) }
 }
 
 /** An account's `off` result: names from the profile list only, nothing read. */
@@ -903,9 +926,11 @@ export async function fetchAccountUsage(profileId: string, opts?: { noRefresh?: 
   //    file), which `claude` runs OUTSIDE CCC read — rotating under them strands
   //    every external terminal. Claude Code renews it instead (`claude auth
   //    status`, renewThroughCli), with its sign-in synced with the global one
-  //    before and after, as a session on the primary is. Non-primary profiles
-  //    live in CCC-managed isolated homes, so their only consumers are things
-  //    CCC knows about, and the live-session guard below covers them.
+  //    before and after, as a session on the primary is (renewThroughCli names
+  //    the short window that leaves, owed to the pre-stable ADR-009 pass).
+  //    Non-primary profiles live in CCC-managed isolated homes, so their only
+  //    consumers are things CCC knows about, and the live-session guard below
+  //    covers them.
   //  - isProfileInUseByLiveSession covers interactive sessions (the identity
   //    maps) AND every registered consumer in profile-consumers.ts: the
   //    `claude auth status` probe (#258), and since #48 the headless spawner,
@@ -936,7 +961,8 @@ export async function fetchAccountUsage(profileId: string, opts?: { noRefresh?: 
         expired = refreshed.expired
       }
     } else if (route === 'cli') {
-      const after = await renewThroughCli(profileId, isPrimary)
+      const renewal = await renewThroughCli(profileId, isPrimary)
+      const after = renewal?.creds
       if (after && !after.signedIn) {
         // Claude Code found no sign-in left in the account's home.
         signedIn = false
@@ -944,6 +970,12 @@ export async function fetchAccountUsage(profileId: string, opts?: { noRefresh?: 
         token = after.token
         expiresAt = after.expiresAt
         tokenUsable = true
+      } else if (renewal?.cliSignedOut && isPrimary) {
+        // Claude Code itself says the primary is not signed in and its token
+        // is still lapsed: nothing renews it, so the user must sign in. A
+        // folder with no verdict yet is not judged here: the next read renews
+        // it through the app's own POST, whose answer is the one read.
+        expired = true
       }
     }
   }

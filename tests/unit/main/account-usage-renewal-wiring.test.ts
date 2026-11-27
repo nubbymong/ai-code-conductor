@@ -43,9 +43,9 @@ describe('the usage page renewal routes are wired at start', () => {
     expect(arg.replace(/\s+/g, '')).toBe('(profileId)=>readClaudeCliAuth(profileId)')
   })
 
-  it('the sign-in problem check is the panel\'s own cross-check, quiet', () => {
+  it('the sign-in problem check is the blocking one (active, signed-in twins only), from the panel\'s own cross-check', () => {
     const arg = argsOf(index, 'setClaudeSignInProblem')
-    expect(arg.replace(/\s+/g, '')).toBe('(profileId)=>signInProblemOf(readAllProfileAuthInfo({quiet:true}),profileId)')
+    expect(arg.replace(/\s+/g, '')).toBe('(profileId)=>readClaudeSignInProblem(profileId)')
   })
 
   it('both are set beside the usage page\'s other start seam, before the usage handlers', () => {
