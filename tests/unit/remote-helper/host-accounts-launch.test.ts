@@ -82,6 +82,8 @@ let switchOn: boolean
 let methods: Record<string, string>
 /** Folders whose CLI sign-out there does not finish (it exits 1); the folder still goes. */
 let untold: Set<string>
+/** Final review round 3 (F3-1): Remove's list stops after this many folders (null: it does not). */
+let stopListAfter: number | null
 const INSTALL = 'f'.repeat(32)
 const OTHER_INSTALL = 'e'.repeat(32)
 /** The owner of a folder with the marker of the builds before the install id was in it. */
@@ -140,9 +142,12 @@ function answer(c: ExecCall): FakeAnswer {
       }
       const named = kind === 'list' ? (id === '-' ? [] : id.split(',')) : [id]
       const lines: string[] = []
+      let removed = 0
       for (const x of named) {
         if (!folders.has(x) || (ownerOf(x) !== install && ownerOf(x) !== OLD)) continue
+        if (kind === 'list' && stopListAfter !== null && removed === stopListAfter) return { stdout: `${lines.join('\n')}\nAICC-RESULT ${n} end refused account-folder-busy\n` }
         folders.delete(x)
+        removed++
         lines.push(`AICC-RESULT ${n} out ${x} ${untold.has(x) ? 1 : 0}`, `AICC-RESULT ${n} removed ${x}`)
       }
       if (kind === 'list') for (const x of folders.keys()) lines.push(`AICC-RESULT ${n} ${ownerOf(x) === install ? 'left' : ownerOf(x) === OLD ? 'old' : 'elsewhere'} ${x}`)
@@ -207,6 +212,7 @@ beforeEach(() => {
   deviceGone = false
   methods = {}
   untold = new Set()
+  stopListAfter = null
   extraProfiles = []
   aliases = undefined
   sent = []
@@ -601,6 +607,29 @@ describe('final review round 3 (F3-1): folders of accounts this computer no long
     const r = await list.remove(MACHINE.did)
     expect(r.ok, r.message).toBe(true)
     expect(r.message).toBe(`Removed the session helper from ${ROCKY}. 2 accounts no longer on this computer stay signed in on ${ROCKY} until you sign them out there, or end those sign-ins ${END}.`)
+  })
+
+  it('Remove that stops: what it signed out first is named and counted as the rest', async () => {
+    plugIn()
+    const list = realMachines()
+    folders.clear()
+    for (const id of ['profile-personal', 'profile-blank', 'profile-gone', 'profile-gone2']) folders.set(id, signedIn(`${id}@example.com`))
+    await readRemoteAccounts([MACHINE.did])
+    stopListAfter = 3
+    const r = await list.remove(MACHINE.did)
+    expect(r.ok).toBe(false)
+    expect(r.message).toMatch(/^Nothing more was removed: the accounts signed in on Rocky \(nick@rocky\.lan:22\) could not all be signed out \(.+\)\. Signed out first: Personal, an account with no name and an account no longer on this computer\.$/)
+    expect([...folders.keys()]).toEqual(['profile-gone2'])
+  })
+
+  it('Remove: folders of another install all for this computer\'s accounts are named and joined by "and"', async () => {
+    plugIn()
+    const list = realMachines()
+    owners.set('profile-personal', OTHER_INSTALL)
+    owners.set('profile-blank', OTHER_INSTALL)
+    const r = await list.remove(MACHINE.did)
+    expect(r.ok, r.message).toBe(true)
+    expect(r.message).toContain(' Personal and an account with no name: their folders there carry another install\'s mark, and may be this computer\'s own from an earlier install of the app; they were left as they are.')
   })
 
   it('Remove: a folder of this install that no read found is named so, and left', async () => {
