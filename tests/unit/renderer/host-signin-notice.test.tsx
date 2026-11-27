@@ -511,6 +511,14 @@ describe('a folder that may be this computer\'s own from an earlier install', ()
     expect(hostNoticeText(n, 'Personal').why).toBe('Rocky keeps its own sign-ins. Signing Personal in again there replaces that one.')
   })
 
+  it('the notice for an account with no name: "That account" starts the question, "that account" sits mid-sentence', async () => {
+    useAccountProfilesStore.setState({ profiles: [{ id: 'p1', name: 'Work', accountEmail: 'w@x.io', active: true } as never, { id: 'p2', name: '', accountEmail: '', active: true } as never] })
+    await mount(<HostSignInNotice />)
+    await push(refused('tab-1', 'someone-else'))
+    expect(byTest('host-signin-question')?.textContent).toMatch(/^That account on Rocky is signed in as /)
+    expect(byTest('host-signin-why')?.textContent).toBe('Rocky keeps its own sign-ins. Signing that account in again there replaces that one.')
+  })
+
   it('from the notice, the result names the tab to Restart; nothing adopted: no Restart line', async () => {
     const remote = (window as any).electronAPI.machines.remote
     await mount(<HostSignInNotice />)

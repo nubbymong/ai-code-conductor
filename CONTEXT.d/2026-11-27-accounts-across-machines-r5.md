@@ -27,3 +27,9 @@
   account" on the card and in the confirm. The three now match.
 - Each new regression test goes red under a mutant that brings its bug
   back.
+- Round 6 (R6-1, the round 5 recheck's one NIT): an account with no name,
+  alias or email read "That account" in the middle of Adopt's sentences
+  ("Adopt Personal and That account on Rocky?"). Adopt's hover text,
+  confirm and next step now say "an account with no name", and the
+  notice's "Signing <name> in again" says "that account". "That account"
+  stays where the name starts a sentence. Four mutants, all red.
