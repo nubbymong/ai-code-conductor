@@ -605,11 +605,36 @@ describe('round 2 (R1): folders of an earlier build, and of an earlier install',
     const r = await adoptAccountFolders(ctx(), MACHINE, VIA, ['profile-personal'])
     expect(r).toMatchObject({ ok: true, adopted: ['profile-personal'] })
     expect(r.message).toMatch(/^Adopted Personal: its folder there is this computer's now\./)
+    expect('notAdopted' in r).toBe(false)
     expect(ssh.calls.slice(from).map((c) => [c.script, ...c.values.slice(3, 5)])).toEqual([['account', 'profile-personal', 'adopt'], ['accounts', FOLDER, SHA]])
     expect(tree.ownerOf('profile-personal')).toBe(INSTALL)
     expect([...tree.folders.keys()]).toEqual(['profile-personal', 'profile-side'])
     const after = machineAccounts(MACHINE.did, PROFILES)
     expect(after.accounts.find((a) => a.profileId === 'profile-personal')?.state).toBe('signed-in-here')
     expect(after.elsewhere).toEqual([])
+  })
+
+  // Final review, round 1 (F-4): Adopt's answer as the renderer's dialog
+  // reads it: the ids adopted and, for each id not adopted, main's reason
+  // (the dialog names both by this computer's rule). Main's own sentence,
+  // the log's, names an account with no name or email by its profile id.
+  // The renderer's mocks (host-signin-notice.test.tsx) copy this shape.
+  it('(c) a partial Adopt answers each id it did not adopt with its reason', async () => {
+    const via: RemoteAccounts = { ...VIA, profiles: async () => [...PROFILES, { id: 'profile-blank' }] }
+    tree.folders.set('profile-personal', signedIn('personal@example.com'))
+    tree.owner.set('profile-personal', OTHER_INSTALL)
+    tree.folders.set('profile-blank', signedIn('blank@example.com'))
+    tree.owner.set('profile-blank', OTHER_INSTALL)
+    await readMachineAccounts(ctx(), MACHINE, via)
+    // Its folder goes before Adopt runs there.
+    tree.folders.delete('profile-blank')
+    tree.owner.delete('profile-blank')
+    const r = await adoptAccountFolders(ctx(), MACHINE, via, ['profile-personal', 'profile-blank'])
+    expect(r).toEqual({
+      ok: false,
+      message: "Adopted Personal: its folder there is this computer's now. Not adopted: profile-blank: the account's folder on rocky.lan is not there any more.",
+      adopted: ['profile-personal'],
+      notAdopted: [{ profileId: 'profile-blank', why: "the account's folder on rocky.lan is not there any more" }],
+    })
   })
 })

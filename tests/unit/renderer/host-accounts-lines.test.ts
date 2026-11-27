@@ -11,7 +11,7 @@ import {
   cardMachineLine, machineAccountLine, switchMachineMark, sessionMachine, signInConfigFor, sshTarget,
   removeListing, removeNotAnsweringText, machineOwnSignOutText, toSignInCount, joinNames, hostLaunchable, signInOnTitle,
   elsewhereStayText, hostElsewhere, hostEarlierInstall, earlierInstallStayText, oldMarkerStayText, adoptConfirmText, adoptButtonTitle,
-  hostAccountNamer, adoptTitleOn, adoptNextText, NAMELESS_ACCOUNT, sentenceStart, ownStaysText,
+  hostAccountNamer, adoptTitleOn, adoptNextText, NAMELESS_ACCOUNT, sentenceStart, ownStaysText, adoptResultText,
 } from '../../../src/renderer/utils/hostAccounts'
 import type { HostMachineAccounts, HostSignInFacts } from '../../../src/shared/host-accounts'
 import type { TerminalConfig } from '../../../src/renderer/stores/configStore'
@@ -324,6 +324,29 @@ describe('the app\'s words for an account, at the start of a sentence (F-3)', ()
     expect(machineOwnSignOutText('Rocky', NAMELESS_ACCOUNT)).toMatch(/^An account with no name is signed in on Rocky by that machine's own sign-in/)
     expect(ownStaysText(NAMELESS_ACCOUNT, 'Rocky')).toBe('An account with no name is signed in there by Rocky\'s own sign-in, which Remove leaves as it is.')
     expect(ownStaysText('Shared', 'Rocky')).toBe('Shared is signed in there by Rocky\'s own sign-in, which Remove leaves as it is.')
+  })
+})
+
+// Final review, round 1 (F-4): Adopt's result names the accounts by this
+// computer's rule (hostAccountNamer), not main's (name, else email, else the
+// profile id). Main's answer gives the ids adopted and, for each one it did
+// not adopt, its reason; a refusal before anything ran is main's own sentence.
+describe('Adopt\'s result (F-4)', () => {
+  const nameOf = hostAccountNamer([{ id: 'p1', name: 'Work', accountEmail: 'w@x.io' }, { id: 'p9', name: '', accountEmail: '' }], undefined, NAMELESS_ACCOUNT)
+  const gone = "the account's folder on rocky.lan is not there any more"
+  it('says what was adopted, and what was not with main\'s reason, in this computer\'s names', () => {
+    expect(adoptResultText({ ok: true, message: "Adopted p9: its folder there is this computer's now.", adopted: ['p9'] }, nameOf)).toBe("Adopted an account with no name: its folder there is this computer's now.")
+    expect(adoptResultText({ ok: true, message: "Adopted Work, p9: their folders there are this computer's now.", adopted: ['p1', 'p9'] }, nameOf)).toBe("Adopted Work and an account with no name: their folders there are this computer's now.")
+    expect(adoptResultText({ ok: false, message: `Adopted Work: its folder there is this computer's now. Not adopted: p9: ${gone}.`, adopted: ['p1'], notAdopted: [{ profileId: 'p9', why: gone }] }, nameOf))
+      .toBe(`Adopted Work: its folder there is this computer's now. Not adopted: an account with no name: ${gone}.`)
+    expect(adoptResultText({ ok: false, message: `Not adopted: Work: ${gone}; p9: ${gone}.`, adopted: [], notAdopted: [{ profileId: 'p1', why: gone }, { profileId: 'p9', why: gone }] }, nameOf))
+      .toBe(`Not adopted: Work: ${gone}; an account with no name: ${gone}.`)
+  })
+  it('nothing was tried: main\'s own sentence', () => {
+    expect(adoptResultText({ ok: false, message: 'Nothing was adopted: not every folder there with another install\'s mark is for one of this computer\'s accounts.', adopted: [] }, nameOf))
+      .toBe('Nothing was adopted: not every folder there with another install\'s mark is for one of this computer\'s accounts.')
+    expect(adoptResultText({ ok: true, message: '', adopted: [] }, nameOf)).toBe('Adopted.')
+    expect(adoptResultText({ ok: false, message: '', adopted: [] }, nameOf)).toBe('Nothing was adopted.')
   })
 })
 

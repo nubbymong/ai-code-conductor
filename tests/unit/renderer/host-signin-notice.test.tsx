@@ -50,6 +50,8 @@ const DID = 'a'.repeat(32)
 const ROCKY = { did: DID, label: 'Rocky', name: 'Rocky (nick@rocky.lan:22)', target: 'nick@rocky.lan:22', checked: true, lastCheck: { at: 1, ok: true }, helperVersion: '0.1.0', system: 'Linux x86-64', inUse: 0 }
 const STATE: RemoteMachinesState = { available: true, switchOn: true, bundled: { ok: true, version: '0.1.0', files: [] }, machines: [ROCKY], candidates: [] }
 const SSH = { host: 'rocky.lan', port: 22, username: 'nick', remotePath: '~/src/web-app' }
+/** Main's reason for a folder Adopt did not adopt (prepareAccountFolder). */
+const GONE = "the account's folder on rocky.lan is not there any more"
 const read = (p1: string, p2: string): HostMachineAccounts => ({
   did: DID, readAt: 1, ok: true, own: null, others: [],
   accounts: [
@@ -490,16 +492,20 @@ describe('a folder that may be this computer\'s own from an earlier install', ()
   // R6-1 (round 6): an account with no name, alias or email reads as
   // "an account with no name" where its name falls mid-sentence: Adopt's
   // confirm and its next step. "That account" stays where it starts one.
+  // Final review (F-4): and its result. Main's answer is mocked as main
+  // writes it (host-accounts.test.ts, Adopt), naming such an account by its
+  // profile id; the dialog names it by this computer's rule instead.
   it('an account with no name: Adopt names it mid-sentence in lower case', async () => {
     const remote = (window as any).electronAPI.machines.remote
     useAccountProfilesStore.setState({ profiles: [...useAccountProfilesStore.getState().profiles, { id: 'p9', name: '', accountEmail: '', active: true } as never] })
-    remote.accountsAdopt.mockResolvedValueOnce({ ok: true, message: "Adopted 1 account: its folder there is this computer's now.", adopted: ['p9'] })
+    remote.accountsAdopt.mockResolvedValueOnce({ ok: true, message: "Adopted p9: its folder there is this computer's now.", adopted: ['p9'] })
     await mount(<HostSignInNotice />)
     await act(async () => { useHostAccountsStore.getState().askAdopt({ did: DID, machineName: 'Rocky', profileIds: ['p9'] }) })
     await settle()
     expect(byTest('host-adopt-confirm')?.textContent).toContain("Adopt an account with no name on Rocky? Its folder there carries another install's mark.")
     await click(byTest('host-adopt-run'))
-    expect(byTest('host-signin-message')?.textContent).toContain('Restart a tab on an account with no name to start it there.')
+    expect(byTest('host-signin-message')?.textContent).toContain("Adopted an account with no name: its folder there is this computer's now. Restart a tab on an account with no name to start it there.")
+    expect(byTest('host-signin-message')?.textContent).not.toContain('p9')
     expect(byTest('host-signin-message')?.textContent).not.toContain('That account')
   })
 
@@ -567,17 +573,32 @@ describe('a folder that may be this computer\'s own from an earlier install', ()
   // refused again, so the plain line names the account adopted.
   it('from the notice, the tab\'s own account not adopted: the tab is not named', async () => {
     const remote = (window as any).electronAPI.machines.remote
-    remote.accountsAdopt.mockResolvedValueOnce({ ok: false, message: 'Adopted Work: its folder there is this computer\'s now. Not adopted: Personal: it did not answer.', adopted: ['p1'] })
+    remote.accountsAdopt.mockResolvedValueOnce({ ok: false, message: `Adopted Work: its folder there is this computer's now. Not adopted: Personal: ${GONE}.`, adopted: ['p1'], notAdopted: [{ profileId: 'p2', why: GONE }] })
     await mount(<HostSignInNotice />)
     await act(async () => { useHostAccountsStore.getState().askAdopt({ did: DID, machineName: 'Rocky', profileIds: ['p2', 'p1'], tab: { label: 'web-app', profileId: 'p2', kind: 'launch' } }) })
     await settle()
     await click(byTest('host-adopt-run'))
-    expect(byTest('host-signin-message')?.textContent).toContain('Not adopted: Personal: it did not answer. Restart a tab on Work to start it there.')
+    expect(byTest('host-signin-message')?.textContent).toContain(`Not adopted: Personal: ${GONE}. Restart a tab on Work to start it there.`)
     expect(byTest('host-signin-message')?.textContent).not.toContain('web-app')
   })
 
+  // Final review (F-4): an account main did not adopt is named by this
+  // computer's rule too, with main's reason; main's answer names one with no
+  // name or email by its profile id.
+  it('an account with no name that was not adopted: named as the confirm names it, with main\'s reason', async () => {
+    const remote = (window as any).electronAPI.machines.remote
+    useAccountProfilesStore.setState({ profiles: [...useAccountProfilesStore.getState().profiles, { id: 'p9', name: '', accountEmail: '', active: true } as never] })
+    remote.accountsAdopt.mockResolvedValueOnce({ ok: false, message: `Adopted Work: its folder there is this computer's now. Not adopted: p9: ${GONE}.`, adopted: ['p1'], notAdopted: [{ profileId: 'p9', why: GONE }] })
+    await mount(<HostSignInNotice />)
+    await act(async () => { useHostAccountsStore.getState().askAdopt({ did: DID, machineName: 'Rocky', profileIds: ['p1', 'p9'] }) })
+    await settle()
+    await click(byTest('host-adopt-run'))
+    expect(byTest('host-signin-message')?.querySelector('p')?.textContent).toBe(`Adopted Work: its folder there is this computer's now. Not adopted: an account with no name: ${GONE}. Restart a tab on Work to start it there.`)
+  })
+
   // R4-4 (round 4): several accounts adopted (from a card or a Machines row):
-  // the next step says one of those accounts.
+  // the next step says one of those accounts. Final review (F-4): main's
+  // answer lists them with commas; the dialog names them as its confirm does.
   it('several accounts adopted: the next step says a tab on one of those accounts', async () => {
     const remote = (window as any).electronAPI.machines.remote
     remote.accountsAdopt.mockResolvedValueOnce({ ok: true, message: 'Adopted Work, Personal: their folders there are this computer\'s now.', adopted: ['p1', 'p2'] })
@@ -585,7 +606,7 @@ describe('a folder that may be this computer\'s own from an earlier install', ()
     await act(async () => { useHostAccountsStore.getState().askAdopt({ did: DID, machineName: 'Rocky', profileIds: ['p1', 'p2'] }) })
     await settle()
     await click(byTest('host-adopt-run'))
-    expect(byTest('host-signin-message')?.textContent).toContain('Adopted Work, Personal: their folders there are this computer\'s now. Restart a tab on one of those accounts, Work or Personal, to start it there.')
+    expect(byTest('host-signin-message')?.textContent).toContain('Adopted Work and Personal: their folders there are this computer\'s now. Restart a tab on one of those accounts, Work or Personal, to start it there.')
   })
 })
 

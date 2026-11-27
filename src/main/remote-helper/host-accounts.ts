@@ -556,14 +556,23 @@ export async function adoptAccountFolders(ctx: HostAccountsContext, m: RemoteMac
   // there with another install's mark is for an account this computer does not hold.
   if (last.mayBeEarlierInstall !== true) return { ok: false, message: "Nothing was adopted: not every folder there with another install's mark is for one of this computer's accounts, so they are taken as the app's on another computer.", adopted: [] }
   const adopted: string[] = []
-  const failed: string[] = []
+  // Final review (F-4): each id not adopted with its reason, for the
+  // renderer's dialog, which names the accounts by its own rule.
+  const notAdopted: Array<{ profileId: string; why: string }> = []
   for (const id of ids) {
     const r = await prepareAccountFolder(ctx, m, via, id, 'adopt', 'keep')
     if (r.ok) adopted.push(id)
-    else failed.push(`${accountName(profiles.find((p) => p.id === id), id)}: ${r.why}`)
+    else notAdopted.push({ profileId: id, why: r.why })
   }
   await readMachineAccounts(ctx, m, via)
-  const names = adopted.map((id) => accountName(profiles.find((p) => p.id === id), id))
+  const nameOf = (id: string) => accountName(profiles.find((p) => p.id === id), id)
+  const names = adopted.map(nameOf)
   const done = names.length ? `Adopted ${names.join(', ')}: ${names.length === 1 ? 'its folder' : 'their folders'} there ${names.length === 1 ? 'is' : 'are'} this computer's now.` : ''
-  return { ok: failed.length === 0, message: [done, failed.length ? `Not adopted: ${failed.join('; ')}.` : ''].filter(Boolean).join(' '), adopted }
+  const failed = notAdopted.map((x) => `${nameOf(x.profileId)}: ${x.why}`)
+  return {
+    ok: notAdopted.length === 0,
+    message: [done, failed.length ? `Not adopted: ${failed.join('; ')}.` : ''].filter(Boolean).join(' '),
+    adopted,
+    ...(notAdopted.length ? { notAdopted } : {}),
+  }
 }

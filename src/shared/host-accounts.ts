@@ -143,8 +143,16 @@ export interface HostAdoptRequest {
  *  and a plain sentence. */
 export interface HostAdoptResult {
   ok: boolean
+  /** Main's sentence. Shown as it is only when Adopt ran on nothing (a
+   *  refusal); otherwise the dialog writes its own from `adopted` and
+   *  `notAdopted` (final review F-4), and this one is the log's. */
   message: string
   adopted: string[]
+  /** Final review (F-4): each id Adopt ran on and did not adopt, with main's
+   *  reason. The dialog names the accounts by this computer's naming rule,
+   *  which main does not have (main names one with no name or email by its
+   *  profile id). Absent when every id was adopted. */
+  notAdopted?: Array<{ profileId: string; why: string }>
 }
 
 /** Every added machine's accounts (MACHINES_REMOTE_ACCOUNTS: the last reads,

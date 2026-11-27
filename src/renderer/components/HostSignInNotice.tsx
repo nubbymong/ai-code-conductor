@@ -19,7 +19,7 @@
 // for a sign-in is over.
 import React, { useEffect, useRef, useState } from 'react'
 import { useHostAccountsStore, listenHostAccounts, type HostAdoptAsk, type HostNotice, type HostRun } from '../stores/hostAccountsStore'
-import { adoptableIds, adoptConfirmText, adoptNextText, hostAccountNamer, NAMELESS_ACCOUNT } from '../utils/hostAccounts'
+import { adoptableIds, adoptConfirmText, adoptNextText, adoptResultText, hostAccountNamer, NAMELESS_ACCOUNT } from '../utils/hostAccounts'
 import { useSessionStore } from '../stores/sessionStore'
 import { useAccountProfilesStore } from '../stores/accountProfilesStore'
 import { useSettingsStore } from '../stores/settingsStore'
@@ -259,7 +259,9 @@ function AdoptDialog({ ask }: { ask: HostAdoptAsk }) {
     try {
       if (typeof remote?.accountsAdopt === 'function') {
         const r = await remote.accountsAdopt({ did: ask.did, profileIds: ask.profileIds })
-        text = r.message || (r.ok ? 'Adopted.' : 'Nothing was adopted.')
+        // Final review (F-4): what it did, naming the accounts as the confirm
+        // above and the next step below do; main's reasons for any not adopted.
+        text = adoptResultText(r, nameOf)
         // Round 3 (R3-2), round 4 (R4-1, R4-3, R4-4): what to do next.
         const next = adoptNextText(r.adopted, nameOf, ask.tab)
         if (next) text += ` ${next}`
