@@ -489,6 +489,12 @@ export class RemoteDriver implements HelperPtyDriver {
     const m = this.o.machine
     const ctx = { runner: this.o.runner, installId: this.o.installId, log: this.o.log }
     if (a.signIn) {
+      // Final review round 4 (F4-1): a sign-in tab for an account this
+      // computer no longer holds makes no folder and signs nothing in there:
+      // the app could never start a tab on it.
+      let heldNow: readonly HostProfile[] | null
+      try { heldNow = await a.via.profiles() } catch { heldNow = null }
+      if (heldNow && !heldNow.some((p) => p.id === a.profileId)) this.failWith('its account is no longer on this computer, so nothing was made or signed in there. Start a tab on an account signed in there', true)
       const made = await prepareAccountFolder(ctx, m, a.via, a.profileId, 'make', 'keep')
       // Round 2 (R1): a folder there with another install's mark is never made over by a sign-in.
       // Phase 5 round 3 (R3-1): what it says follows the one Adopt rule, from

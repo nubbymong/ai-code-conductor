@@ -29,8 +29,8 @@ import { resolveAccountName } from './account-chip-color'
 export const NAMELESS_ACCOUNT = 'an account with no name'
 
 /** Final review round 2 (F2-1): the one naming rule for an account of this
- *  computer, in the renderer (hostAccountNamer) and in main
- *  (remote-helper/host-accounts.ts accountName) alike: its profile's name,
+ *  computer, in the renderer and in main alike (hostAccountNamer here; main's
+ *  remote-helper/host-accounts.ts accountNamer wraps it): its profile's name,
  *  else its alias (the app's settings, by its email), else its email; ''
  *  when it has none of them (blank ones count as none). */
 export function hostProfileName(p: { accountEmail?: string; name?: string }, aliases: Readonly<Record<string, string>> | undefined): string {

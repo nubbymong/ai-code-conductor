@@ -254,7 +254,9 @@ export interface RemoveListing {
    *  this computer's own from an earlier install (they stay; Adopt first). */
   earlier: string[]
   /** Round 2 (R2-1): folders an earlier build made there for accounts this
-   *  computer does not hold, by profile id as main names them (they stay). */
+   *  computer does not hold (they stay). Final review round 4 (F4-2): kept
+   *  only to count them (oldMarkerStayText(n)), as main counts them; no
+   *  surface names them by profile id. */
   oldMarker: string[]
 }
 

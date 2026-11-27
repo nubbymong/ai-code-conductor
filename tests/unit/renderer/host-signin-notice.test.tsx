@@ -541,9 +541,29 @@ describe('a folder that may be this computer\'s own from an earlier install', ()
     await mount(<HostSignInNotice />)
     const base = refused('tab-1', 'not-signed-in')
     await push(base.kind === 'launch-refused' ? { ...base, refusal: { ...base.refusal, profileId: 'p7' } } : base)
-    expect(byTest('host-signin-question')?.textContent).toMatch(/^An account no longer on this computer is not signed in on Rocky/)
+    // Final review round 4 (F4-1): nothing signs it in or adopts it from here.
+    expect(byTest('host-signin-question')?.textContent).toBe('This tab is on an account no longer on this computer.')
+    expect(byTest('host-signin-why')?.textContent).toBe('Start it on an account that is signed in on Rocky.')
+    expect(byTest('host-signin-here')).toBeNull()
+    expect(byTest('host-signin-adopt')).toBeNull()
     const option = byTest('host-signin-other-select')?.querySelector('option')?.textContent ?? ''
     expect(option).toMatch(/^An account with no name . signed in on Rocky/)
+  })
+
+  it('final review round 4 (F4-1): an adoptable refusal for an account this computer no longer holds offers no Adopt and no Sign in', async () => {
+    await mount(<HostSignInNotice />)
+    const base = refused('tab-1', 'not-signed-in')
+    await push(base.kind === 'launch-refused' ? { ...base, refusal: { ...base.refusal, profileId: 'p7', adoptable: true } as never } : base)
+    expect(byTest('host-signin-here')).toBeNull()
+    expect(byTest('host-signin-adopt')).toBeNull()
+    expect(byTest('host-signin-question')?.textContent).toBe('This tab is on an account no longer on this computer.')
+  })
+
+  it('final review round 4 (F4-1): the notice text for a switch to an account no longer on this computer', () => {
+    const n = { kind: 'switch' as const, state: 'not-signed-in' as const, machineName: 'Rocky', elsewhere: false, adoptable: false }
+    const t = hostNoticeText(n, NOT_HELD_ACCOUNT, false)
+    expect(t.question).toBe('That account is no longer on this computer.')
+    expect(t.why).toBe('Switch to an account that is signed in on Rocky.')
   })
 
   it('from the notice, the result names the tab to Restart; nothing adopted: no Restart line', async () => {
@@ -620,8 +640,10 @@ describe('a folder that may be this computer\'s own from an earlier install', ()
   })
 
   // R4-4 (round 4): several accounts adopted (from a card or a Machines row):
-  // the next step says one of those accounts. Final review (F-4): main's
-  // answer lists them with commas; the dialog names them as its confirm does.
+  // the next step says one of those accounts. Final review (F-4): the mock
+  // gives main's sentence with commas on purpose, as a sentinel, so the test
+  // proves the dialog writes its own sentence, naming them as its confirm
+  // does. Since round 3 main joins with "and" too.
   it('several accounts adopted: the next step says a tab on one of those accounts', async () => {
     const remote = (window as any).electronAPI.machines.remote
     remote.accountsAdopt.mockResolvedValueOnce({ ok: true, message: 'Adopted Work, Personal: their folders there are this computer\'s now.', adopted: ['p1', 'p2'] })

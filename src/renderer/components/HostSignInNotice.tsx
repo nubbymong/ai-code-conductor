@@ -39,7 +39,7 @@ const MIDDOT = String.fromCharCode(0xb7)
  *  Final review round 3 (F3-1): it takes a capital where it starts one
  *  (sentenceStart), and the app's own words for it no possessive
  *  (folderOfStart), as main's note in the tab says it. */
-export function hostNoticeText(n: Pick<HostNotice, 'kind' | 'state' | 'identity' | 'machineName' | 'elsewhere' | 'adoptable'>, name: string): {
+export function hostNoticeText(n: Pick<HostNotice, 'kind' | 'state' | 'identity' | 'machineName' | 'elsewhere' | 'adoptable'>, name: string, held = true): {
   title: string
   question: string
   why: string
@@ -52,6 +52,20 @@ export function hostNoticeText(n: Pick<HostNotice, 'kind' | 'state' | 'identity'
   const launch = n.kind === 'launch'
   const who = sentenceStart(name)
   const folder = folderOfStart(name)
+  // Final review round 4 (F4-1): an account this computer no longer holds is
+  // never signed in or adopted from here; the notice says so, as main's note
+  // in the tab does, and offers only the accounts signed in there.
+  if (!held) {
+    return {
+      title: launch ? 'Start session' : 'Switch account',
+      question: launch ? 'This tab is on an account no longer on this computer.' : 'That account is no longer on this computer.',
+      why: launch ? `Start it on an account that is signed in on ${m}.` : `Switch to an account that is signed in on ${m}.`,
+      signInHint: '',
+      otherLabel: launch ? 'Start it on another account' : 'Switch to another account',
+      otherAfter: launch ? 'The session starts on that account.' : 'The session moves to that account, with its conversation.',
+      cancelTitle: launch ? 'Do not start this session' : 'Keep the current account',
+    }
+  }
   return {
     title: launch ? 'Start session' : 'Switch account',
     // Round 2 (R2-1): main's refusal names the folder as another install's
@@ -118,7 +132,8 @@ function NoticeDialog({ notice }: { notice: HostNotice }) {
   const [problem, setProblem] = useState<string | null>(null)
   if (!session) return null
 
-  const text = hostNoticeText(notice, nameOf(notice.profileId))
+  const held = profiles.some((p) => p.id === notice.profileId)
+  const text = hostNoticeText(notice, nameOf(notice.profileId), held)
   const tabName = session.customName?.trim() || session.label || 'this session'
 
   const signIn = () => {
@@ -180,13 +195,13 @@ function NoticeDialog({ notice }: { notice: HostNotice }) {
         <DialogBody>
           <p className="text-[12.5px] leading-snug" style={{ color: 'var(--text-primary)' }} data-testid="host-signin-question">{text.question}</p>
           <p className="text-[11.5px] leading-snug mt-1.5" style={{ color: 'var(--text-muted)' }} data-testid="host-signin-why">{text.why}</p>
-          {!notice.elsewhere && (
+          {!notice.elsewhere && held && (
             <div className="flex flex-col gap-1 mt-3">
               <DialogButton variant="primary" size="md" block onClick={signIn} testId="host-signin-here">Sign in on {notice.machineName}</DialogButton>
               <p className="text-[11.5px] leading-snug mx-0.5 mt-0.5 mb-2" style={{ color: 'var(--text-muted)' }}>{text.signInHint}</p>
             </div>
           )}
-          {notice.adoptable && (
+          {notice.adoptable && held && (
             <div className="flex flex-col gap-1 mt-3">
               <DialogButton variant="secondary" size="md" block onClick={adopt} testId="host-signin-adopt">Adopt on {notice.machineName}</DialogButton>
               <p className="text-[11.5px] leading-snug mx-0.5 mt-0.5 mb-2" style={{ color: 'var(--text-muted)' }}>Asks first, naming the folders. Only their marks change: nothing is signed in, out or removed.</p>

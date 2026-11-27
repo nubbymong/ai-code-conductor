@@ -302,6 +302,22 @@ describe('a launch on an account (3.1.7): the config\'s account decides', () => 
 })
 
 describe('a sign-in tab (3.1.4)', () => {
+  // Final review round 4 (F4-1): an account this computer no longer holds is
+  // never given a folder or a sign-in on the machine.
+  it('for an account this computer no longer holds makes nothing there and says so', async () => {
+    const id = 'signin-not-held'
+    start(id, { profileId: 'profile-notheld', remoteAccountSignIn: true })
+    await until(() => shown(id).includes('could not start'))
+    expect(shown(id)).toContain(signInNote('its account is no longer on this computer, so nothing was made or signed in there. Start a tab on an account signed in there.'))
+    expect(ssh.scripts()).not.toContain('account')
+    expect(folders.has('profile-notheld')).toBe(false)
+    expect(launchOf()).toBeNull()
+    forgetRemoteHelperTab(id)
+    // Its end reads the machine as any sign-in tab does; the renderer has no wait on an account it does not hold.
+    await until(() => notices().some((x) => x.kind === 'sign-in-ended'))
+    expect(folders.has('profile-notheld')).toBe(false)
+  })
+
   it('makes the account\'s folder, runs the CLI\'s own sign-in in it, and its end reads the machine and tells the renderer', async () => {
     folders.delete('profile-personal')
     const id = 'signin-tab'
