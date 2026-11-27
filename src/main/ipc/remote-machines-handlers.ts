@@ -22,6 +22,11 @@ import { conductorToolsMasterOn } from '../conductor-tools-switch'
 import { endHelperHooks, helperHookEvent } from '../session-signals/hooks'
 import { dispatchHelperStatus, endHelperAccount, setHelperAccount } from '../statusline-watcher'
 import { setRemoteHelperDeps, remoteTabsOn, listRemoteSessions, endRemoteSession, endRemoteTab, type RemoteSignalDeps } from '../remote-helper'
+import { accountsLeftText, readRemoteAccounts, remoteAccountsState, signOutForRemove, signOutRemoteAccount } from '../remote-helper'
+import { forgetHostAccounts, setHostAccountsListener } from '../remote-helper/host-accounts'
+import { listProfiles } from '../account-profiles'
+import { isValidProfileId } from '../../shared/profile-id'
+import type { HostAccountsState, HostSignOutResult } from '../../shared/host-accounts'
 import { remoteHelperWatchdog } from '../watchdog/remote-helper-tab'
 import { peekSessionState, readDetachedRemotesRegistry } from '../session-state'
 import { RemoteMachines, fileStore } from '../remote-helper/machines'
@@ -124,7 +129,16 @@ export function registerRemoteMachinesHandlers(getWindow: () => BrowserWindow | 
   let machines: RemoteMachines | null = null
   if (platform === 'win32' && recordsFile) {
     const runner = nodeSshRunner(() => sshProgram())
-    machines = new RemoteMachines({ runner, store: fileStore(recordsFile), bundled: () => readBundledLinuxHelpers(where), inUse: remoteTabsOn, log: logInfo })
+    machines = new RemoteMachines({
+      runner, store: fileStore(recordsFile), bundled: () => readBundledLinuxHelpers(where), inUse: remoteTabsOn, log: logInfo,
+      // 2.1.3-beta.20 section 3.1.8: Remove signs out each account signed in there first, or names where to end each.
+      signOutAccounts: signOutForRemove, accountsLeft: accountsLeftText, forgotten: forgetHostAccounts,
+    })
+    // 2.1.3-beta.20 section 3.1.6: each read of a machine's accounts reaches the renderer as it lands.
+    setHostAccountsListener((m) => {
+      const win = getWindow()
+      if (win && !win.isDestroyed()) win.webContents.send(IPC.MACHINES_REMOTE_ACCOUNTS_CHANGED, m)
+    })
     // The manifest, read once: the routing compares each machine's helper with
     // the entry of that machine's own architecture (2.1.3-beta.19).
     let manifest: { json: unknown } | undefined
@@ -147,6 +161,8 @@ export function registerRemoteMachinesHandlers(getWindow: () => BrowserWindow | 
       // 2.1.3-beta.19 fix round: its Session Watchdog, armed once its CLI runs in the holder.
       watchdog: remoteHelperWatchdog,
       registry: readDetachedRemotesRegistry,
+      // 2.1.3-beta.20 section 3.1.4: a sign-in tab names its account's email to the CLI's sign-in.
+      profileEmail: (id) => (isValidProfileId(id) ? listProfiles().find((p) => p.id === id)?.accountEmail || undefined : undefined),
     })
     // At start-up, once: list mode on each machine listed (no daemon, no polling).
     const first = setTimeout(() => {
@@ -155,6 +171,10 @@ export function registerRemoteMachinesHandlers(getWindow: () => BrowserWindow | 
       void listRemoteSessions(dids).then((all) => {
         for (const a of all) logInfo(a.ok ? `[remote-helper] start-up: ${a.sessions.length} session(s) on ${a.did.slice(0, 8)}` : `[remote-helper] start-up: the sessions on ${a.did.slice(0, 8)} were not listed (${a.why})`)
       }).catch((err: Error) => logWarn(`[remote-helper] start-up: the sessions were not listed (${err.message})`))
+      // 2.1.3-beta.20 section 3.1.6: with the switch on, the start-up list reads each machine's accounts too (one exec per machine).
+      if (dids === undefined) {
+        void readRemoteAccounts().catch((err: Error) => logWarn(`[remote-helper] start-up: the machines' accounts were not read (${err.message})`))
+      }
     }, STARTUP_SESSIONS_DELAY_MS)
     first.unref?.()
   }
@@ -202,7 +222,31 @@ export function registerRemoteMachinesHandlers(getWindow: () => BrowserWindow | 
     const m = machines
     if (!m) return refuse(REMOTE_NOT_AVAILABLE)
     if (typeof did !== 'string' || !REMOTE_DID_RE.test(did)) return refuse(NOT_LISTED)
-    return answer('remote check', REMOTE_ACTION_TIMEOUT_MS, () => m.check(did), () => refuse(MACHINES_NO_ANSWER))
+    return answer('remote check', REMOTE_ACTION_TIMEOUT_MS, async () => {
+      const r = await m.check(did)
+      // 2.1.3-beta.20 section 3.1.6: a Check that passed reads the machine's accounts (the push carries them).
+      if (r.ok) void readRemoteAccounts([did]).catch((err: Error) => logWarn(`[remote-helper] the accounts after a Check were not read (${err.message})`))
+      return r
+    }, () => refuse(MACHINES_NO_ANSWER))
+  })
+
+  // 2.1.3-beta.20 section 3: each machine's accounts as its last read found them (no exec).
+  ipcMain.handle(IPC.MACHINES_REMOTE_ACCOUNTS, async (event): Promise<HostAccountsState> => {
+    if (!trusted(event)) { logWarn('[machines] remote accounts refused: not the app window'); return { machines: [] } }
+    if (!machines) return { machines: [] }
+    return answer('remote accounts', REMOTE_STATE_TIMEOUT_MS, () => remoteAccountsState(), (): HostAccountsState => ({ machines: [] }))
+  })
+
+  // 2.1.3-beta.20 section 3.1.8: Sign out of one account on one machine (the machine's own sign-in only once confirmed).
+  ipcMain.handle(IPC.MACHINES_REMOTE_ACCOUNT_SIGN_OUT, async (event, req: unknown): Promise<HostSignOutResult> => {
+    if (!trusted(event)) { logWarn('[machines] remote sign-out refused: not the app window'); return refuse(MACHINES_NOT_APP) }
+    if (!machines) return refuse(REMOTE_NOT_AVAILABLE)
+    const r = (req && typeof req === 'object' ? req : {}) as Record<string, unknown>
+    if (typeof r.did !== 'string' || !REMOTE_DID_RE.test(r.did)) return refuse(NOT_LISTED)
+    if (!isValidProfileId(r.profileId)) return refuse('That is not an account of this computer.')
+    if (r.confirmMachineOwn !== undefined && typeof r.confirmMachineOwn !== 'boolean') return refuse('That sign-out was not asked for as the app asks it.')
+    const ask = { did: r.did, profileId: r.profileId, ...(r.confirmMachineOwn === true ? { confirmMachineOwn: true } : {}) }
+    return answer('remote sign-out', REMOTE_ACTION_TIMEOUT_MS, () => signOutRemoteAccount(ask), () => refuse(MACHINES_NO_ANSWER))
   })
 
   // 2.1.3-beta.19 section 1.2: the sessions the helper keeps, one list exec per
@@ -236,11 +280,13 @@ export function registerRemoteMachinesHandlers(getWindow: () => BrowserWindow | 
     return answer('remote end', REMOTE_STATE_TIMEOUT_MS * 6, () => endRemoteTab(sessionId, did as string | undefined), () => refuse(MACHINES_NO_ANSWER))
   })
 
-  ipcMain.handle(IPC.MACHINES_REMOTE_REMOVE, async (event, did: unknown): Promise<RemoteActionResult> => {
+  ipcMain.handle(IPC.MACHINES_REMOTE_REMOVE, async (event, did: unknown, opts: unknown): Promise<RemoteActionResult> => {
     if (!trusted(event)) { logWarn('[machines] remote remove refused: not the app window'); return refuse(MACHINES_NOT_APP) }
     const m = machines
     if (!m) return refuse(REMOTE_NOT_AVAILABLE)
     if (typeof did !== 'string' || !REMOTE_DID_RE.test(did)) return refuse(NOT_LISTED)
-    return answer('remote remove', REMOTE_ACTION_TIMEOUT_MS, () => m.remove(did), () => refuse(MACHINES_NO_ANSWER))
+    // 2.1.3-beta.20 section 3.1.8: `forget`, only as `true`; anything else is Remove as before.
+    const forget = !!opts && typeof opts === 'object' && (opts as Record<string, unknown>).forget === true
+    return answer('remote remove', REMOTE_ACTION_TIMEOUT_MS, () => m.remove(did, forget ? { forget: true } : {}), () => refuse(MACHINES_NO_ANSWER))
   })
 }
