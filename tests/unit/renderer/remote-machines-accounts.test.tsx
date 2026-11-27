@@ -194,6 +194,16 @@ describe('a folder that may be this computer\'s own from an earlier install', ()
     expect(listing?.textContent).toContain('These accounts are signed in there and are signed out first:')
     expect(button('Sign out and remove')).toBeDefined()
   })
+
+  // Final review round 3 (F3-1): a read that names an account this computer's
+  // list no longer has (removed since) names it as main would, not as "an
+  // account of this computer".
+  it('a read naming an account no longer on this computer: Remove names it so', async () => {
+    install({ read: { ...READ, accounts: [...READ.accounts, { profileId: 'p8', state: 'signed-in-here', facts: facts('x@x.io'), folder: true }] } })
+    await mount()
+    await click(button('Remove'))
+    expect([...(q('[data-testid="remote-remove-listing"]')?.querySelectorAll('li') ?? [])].map((li) => li.textContent)).toEqual(['Work', 'an account no longer on this computer'])
+  })
 })
 
 describe('an account with no name, in a Machines card\'s sentences (final review F-3)', () => {
