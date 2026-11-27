@@ -263,6 +263,25 @@ describe('a canvas marker into a Claude Code tab through the session helper: the
     expect(undelivered.mock.calls.map(([u]) => u.line)).toEqual([LINE, SHORT])
     expect(undelivered).toHaveBeenCalledTimes(2)
   })
+
+  // PR 763 fix round 11: once a note's Enter went, the note is no longer the
+  // one waiting for its Enter, so a later close, Leave running or Restart
+  // tells the canvas nothing about it (it was sent). Red with the clear after
+  // the Enter (claude-marker-typing.ts, `mine.entering = null`) removed: the
+  // canvas was told [LINE], session-gone, and its notice would have asked
+  // for the sent note to be typed again.
+  it('a clear after a note\'s Enter went tells the canvas nothing about it', async () => {
+    const id = fresh()
+    h.helperTabs.add(id)
+    const run = startRun(id)
+    input.submitMarker(id, LINE, CANVAS)
+    await vi.advanceTimersByTimeAsync(TYPED_AFTER_MS + input.PROMPT_ENTER_DELAY_MS + 100)
+    expect(run.writes).toEqual([LINE, '\r'])
+    runs.delete(id)
+    typing.forgetClaudeMarkers(id)
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(undelivered).not.toHaveBeenCalled()
+  })
 })
 
 describe('every other Claude Code tab keeps the marker\'s line and its Enter in one write, byte for byte', () => {
