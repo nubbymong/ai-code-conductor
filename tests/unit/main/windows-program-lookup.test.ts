@@ -345,11 +345,11 @@ describe('only the launch walks PATH on the event loop, and not while the CLI ch
     const check = h.handlers.get(IPC.CLI_CHECK)!
     expect(await check()).toBe(true)
     await new Promise((r) => setTimeout(r, 0))
-    expect(spawnClaudeCommand.buildClaudeLaunchCommand(fresh)).toBe("Set-Location -LiteralPath 'C:\\work'; $env:CCC_CLAUDE_BIN = 'C:\\Tools\\claude.exe'; & 'C:\\Tools\\node.exe' 'C:\\res\\scripts\\resume-picker.js'; exit")
+    expect(spawnClaudeCommand.buildClaudeLaunchCommand(fresh)).toBe("Microsoft.PowerShell.Management\\Set-Location -LiteralPath 'C:\\work'; $env:CCC_CLAUDE_BIN = 'C:\\Tools\\claude.exe'; & 'C:\\Tools\\node.exe' 'C:\\res\\scripts\\resume-picker.js'; exit")
     have('C:\\Tools\\claude.exe', ...relativeNode)
     expect(await check()).toBe(true)
     await new Promise((r) => setTimeout(r, 0))
-    expect(spawnClaudeCommand.buildClaudeLaunchCommand(fresh)).toBe("Set-Location -LiteralPath 'C:\\work'; & 'C:\\Tools\\claude.exe'; exit")
+    expect(spawnClaudeCommand.buildClaudeLaunchCommand(fresh)).toBe("Microsoft.PowerShell.Management\\Set-Location -LiteralPath 'C:\\work'; & 'C:\\Tools\\claude.exe'; exit")
     expect(h.syncWalks).toEqual([])
     onlyAbsoluteAsked()
   })

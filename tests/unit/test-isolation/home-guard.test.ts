@@ -1447,6 +1447,9 @@ describe('the pure checker (simulated roots, any host)', () => {
       'pushd C:\\Users\\alice\\.claude',
       'Set-Location C:\\Users; rm -r alice',
       'Set-Location -Path C:\\Users\\alice',
+      // Named with its module, as the app's own Windows launch line names it.
+      "Microsoft.PowerShell.Management\\Set-Location -LiteralPath 'C:\\Users\\alice'; & 'claude'; exit",
+      'Microsoft.PowerShell.Management\\Push-Location C:\\Users',
       'Push-Location C:\\Users',
       'cd /c/Users/alice && rm x',
       'cd/d "C:\\Users" && rmdir /s alice',

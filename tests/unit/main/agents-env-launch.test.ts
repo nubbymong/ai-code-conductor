@@ -276,15 +276,15 @@ describe('the Windows launch line names the variable, never the templates', () =
   it('on every route: direct, resume picker, picker fallback, exact resume, Ask', () => {
     const s = ` --settings '${SETTINGS}'`
     expect(buildClaudeLaunchCommand({ ...BASE, platform: 'win32', agentsFromEnv: true }))
-      .toBe(`${LEAD}Set-Location -LiteralPath 'C:/work'; & '${EXE}' --agents \${env:CCC_AGENTS}${s}; exit`)
+      .toBe(`${LEAD}Microsoft.PowerShell.Management\\Set-Location -LiteralPath 'C:/work'; & '${EXE}' --agents \${env:CCC_AGENTS}${s}; exit`)
     expect(buildClaudeLaunchCommand({ ...BASE, platform: 'win32', agentsFromEnv: true, useResumePicker: true, pickerScript: PICKER, userArgs: '--verbose' }))
-      .toBe(`${LEAD}Set-Location -LiteralPath 'C:/work'; $env:CCC_CLAUDE_BIN = '${EXE}'; ${NODE_RUN} '${PICKER}' --agents \${env:CCC_AGENTS}${s} '--verbose'; exit`)
+      .toBe(`${LEAD}Microsoft.PowerShell.Management\\Set-Location -LiteralPath 'C:/work'; $env:CCC_CLAUDE_BIN = '${EXE}'; ${NODE_RUN} '${PICKER}' --agents \${env:CCC_AGENTS}${s} '--verbose'; exit`)
     expect(buildClaudeLaunchCommand({ ...BASE, platform: 'win32', agentsFromEnv: true, useResumePicker: true, pickerScript: null }))
-      .toBe(`${LEAD}Set-Location -LiteralPath 'C:/work'; & '${EXE}' --agents \${env:CCC_AGENTS}${s}; exit`)
+      .toBe(`${LEAD}Microsoft.PowerShell.Management\\Set-Location -LiteralPath 'C:/work'; & '${EXE}' --agents \${env:CCC_AGENTS}${s}; exit`)
     expect(buildClaudeLaunchCommand({ ...BASE, platform: 'win32', agentsFromEnv: true, useResumePicker: true, pickerScript: PICKER, resumeUuid: UUID }))
-      .toBe(`${LEAD}Set-Location -LiteralPath 'C:/work'; & '${EXE}' --resume ${UUID} --agents \${env:CCC_AGENTS}${s}; exit`)
+      .toBe(`${LEAD}Microsoft.PowerShell.Management\\Set-Location -LiteralPath 'C:/work'; & '${EXE}' --resume ${UUID} --agents \${env:CCC_AGENTS}${s}; exit`)
     expect(buildClaudeLaunchCommand({ ...BASE, platform: 'win32', agentsFromEnv: true, askPrompt: true }))
-      .toBe(`${LEAD}Set-Location -LiteralPath 'C:/work'; & '${EXE}' --agents \${env:CCC_AGENTS}${s} -- $env:CCC_ASK_PROMPT; exit`)
+      .toBe(`${LEAD}Microsoft.PowerShell.Management\\Set-Location -LiteralPath 'C:/work'; & '${EXE}' --agents \${env:CCC_AGENTS}${s} -- $env:CCC_ASK_PROMPT; exit`)
   })
 
   it('carries no template text even when a caller hands the flag text over', () => {
@@ -293,8 +293,8 @@ describe('the Windows launch line names the variable, never the templates', () =
   })
 
   it('a Windows line without templates is byte-identical to before', () => {
-    expect(buildClaudeLaunchCommand({ ...BASE, platform: 'win32' })).toBe(`Set-Location -LiteralPath 'C:/work'; & '${EXE}' --settings '${SETTINGS}'; exit`)
-    expect(buildClaudeLaunchCommand({ ...BASE, platform: 'win32', agentsFromEnv: false })).toBe(`Set-Location -LiteralPath 'C:/work'; & '${EXE}' --settings '${SETTINGS}'; exit`)
+    expect(buildClaudeLaunchCommand({ ...BASE, platform: 'win32' })).toBe(`Microsoft.PowerShell.Management\\Set-Location -LiteralPath 'C:/work'; & '${EXE}' --settings '${SETTINGS}'; exit`)
+    expect(buildClaudeLaunchCommand({ ...BASE, platform: 'win32', agentsFromEnv: false })).toBe(`Microsoft.PowerShell.Management\\Set-Location -LiteralPath 'C:/work'; & '${EXE}' --settings '${SETTINGS}'; exit`)
   })
 
   it('off Windows the templates stay on the line, single-quoted, byte-identical to before', () => {
@@ -428,7 +428,7 @@ describe('a Windows line whose program would be handed too long a command line i
    *  name node.exe, as before: it is in no command line the picker hands on.
    *  Nor the statements that set the session's lookup again before a
    *  launcher (LAUNCHER_PROGRAM_LOOKUP), which are for PowerShell alone. */
-  const runOf = (line: string): string => line.slice(`${LEAD}Set-Location -LiteralPath 'C:/work'; `.length, -'; exit'.length).replace(/^\$env:CCC_CLAUDE_BIN = '[^']*'; /, '').replace(LAUNCHER_PROGRAM_LOOKUP, '').replace(`${NODE_RUN} `, 'node.exe ')
+  const runOf = (line: string): string => line.slice(`${LEAD}Microsoft.PowerShell.Management\\Set-Location -LiteralPath 'C:/work'; `.length, -'; exit'.length).replace(/^\$env:CCC_CLAUDE_BIN = '[^']*'; /, '').replace(LAUNCHER_PROGRAM_LOOKUP, '').replace(`${NODE_RUN} `, 'node.exe ')
 
   it('the limit is that of the program the line starts: 32766 for an .exe, 8191 (cmd.exe) for the rest', () => {
     expect(windowsCommandLineLimit(EXE)).toBe(32_766)

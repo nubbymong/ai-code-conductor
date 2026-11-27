@@ -109,6 +109,18 @@
 // every program it starts, and Windows PowerShell then cannot load the
 // cmdlets the read uses (Get-Acl: "found in the module
 // 'Microsoft.PowerShell.Security', but the module could not be loaded").
+//
+// The one script names each cmdlet it runs with its module
+// (Microsoft.PowerShell.Utility\New-Object, ...\ConvertTo-Json), so Windows
+// PowerShell loads that module by name. A cmdlet named bare makes Windows
+// PowerShell 5.1 first look through every module on its module path for it,
+// and it puts Program Files\WindowsPowerShell\Modules on that path ahead of
+// its own folder whatever it is given. With no module analysis cache yet (a
+// new user profile; the GitHub Windows runner, whose Program Files holds the
+// AWS, Microsoft Graph and SQL Server modules) that first look took 21.6 to
+// 27.4 s in Snap e2e run 46040073797, so each start-up call ran to its time
+// limit and was asked again; named with its module, the first cmdlet returned
+// in 210 to 270 ms there and the call ended in about 1 s.
 import { execFile } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
@@ -248,7 +260,7 @@ export function runWindowsPowerShell(script: string, extraEnv: Record<string, st
 export const OWNER_ONLY_SCRIPT = [
   "$ErrorActionPreference = 'Stop'",
   '$user = [Security.Principal.WindowsIdentity]::GetCurrent().User',
-  "$system = New-Object Security.Principal.SecurityIdentifier '" + OWNER_ONLY_SYSTEM_SID + "'",
+  "$system = Microsoft.PowerShell.Utility\\New-Object Security.Principal.SecurityIdentifier '" + OWNER_ONLY_SYSTEM_SID + "'",
   "$inherit = [Security.AccessControl.InheritanceFlags]'ContainerInherit, ObjectInherit'",
   "$none = [Security.AccessControl.PropagationFlags]'None'",
   "$allow = [Security.AccessControl.AccessControlType]'Allow'",
@@ -319,14 +331,14 @@ export const OWNER_ONLY_SCRIPT = [
   // root) lacks it, even for the folder's own owner; the rights write below
   // needs only WRITE_DAC, which an owner always has.
   '    if ($was -ne $user.Value) {',
-  '      $o = New-Object Security.AccessControl.DirectorySecurity',
+  '      $o = Microsoft.PowerShell.Utility\\New-Object Security.AccessControl.DirectorySecurity',
   '      $o.SetOwner($user)',
   '      [IO.Directory]::SetAccessControl($d, $o)',
   '    }',
-  '    $s = New-Object Security.AccessControl.DirectorySecurity',
+  '    $s = Microsoft.PowerShell.Utility\\New-Object Security.AccessControl.DirectorySecurity',
   '    $s.SetAccessRuleProtection($true, $false)',
-  '    $s.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule($user, $full, $inherit, $none, $allow)))',
-  '    $s.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule($system, $full, $inherit, $none, $allow)))',
+  '    $s.AddAccessRule((Microsoft.PowerShell.Utility\\New-Object Security.AccessControl.FileSystemAccessRule($user, $full, $inherit, $none, $allow)))',
+  '    $s.AddAccessRule((Microsoft.PowerShell.Utility\\New-Object Security.AccessControl.FileSystemAccessRule($system, $full, $inherit, $none, $allow)))',
   '    [IO.Directory]::SetAccessControl($d, $s)',
   "    $a = [IO.Directory]::GetAccessControl($d, [Security.AccessControl.AccessControlSections]'Owner, Access')",
   '    $r.owner = $a.GetOwner([Security.Principal.SecurityIdentifier]).Value',
@@ -342,7 +354,7 @@ export const OWNER_ONLY_SCRIPT = [
   // where it may be. Every entry read comes back; a failure here refuses
   // this folder, not the folders below it.
   '    if ($walk) {',
-  '    $inside = New-Object Collections.Generic.List[object]',
+  '    $inside = Microsoft.PowerShell.Utility\\New-Object Collections.Generic.List[object]',
   '    $r.inside = $inside',
   '    try {',
   '      $refused = 0',
@@ -380,7 +392,7 @@ export const OWNER_ONLY_SCRIPT = [
   '        $taken = $false',
   '        if (-not $okOwner.ContainsKey($own) -and -not $cred -and ($isDir -or (OneName $p))) {',
   '          try {',
-  '            $w = if ($isDir) { New-Object Security.AccessControl.DirectorySecurity } else { New-Object Security.AccessControl.FileSecurity }',
+  '            $w = if ($isDir) { Microsoft.PowerShell.Utility\\New-Object Security.AccessControl.DirectorySecurity } else { Microsoft.PowerShell.Utility\\New-Object Security.AccessControl.FileSecurity }',
   '            $w.SetOwner($user)',
   '            if ($isDir) { [IO.Directory]::SetAccessControl($p, $w) } else { [IO.File]::SetAccessControl($p, $w) }',
   '            $a = if ($isDir) { [IO.Directory]::GetAccessControl($p, $both) } else { [IO.File]::GetAccessControl($p, $both) }',
@@ -417,10 +429,10 @@ export const OWNER_ONLY_SCRIPT = [
   '  }',
   '  $out += [pscustomobject]$r',
   '}',
-  '$json = [pscustomobject]@{ user = $user.Value; folders = @($out) } | ConvertTo-Json -Compress -Depth 10',
+  '$json = [pscustomobject]@{ user = $user.Value; folders = @($out) } | Microsoft.PowerShell.Utility\\ConvertTo-Json -Compress -Depth 10',
   // Round 5 (G1): the answer in ASCII only, every other character written as
   // a JSON escape, so no console encoding can change it on the way back.
-  '$sb = New-Object Text.StringBuilder',
+  '$sb = Microsoft.PowerShell.Utility\\New-Object Text.StringBuilder',
   "foreach ($c in $json.ToCharArray()) { $n = [int]$c; if ($n -gt 126) { [void]$sb.Append('\\u').Append($n.ToString('x4')) } else { [void]$sb.Append($c) } }",
   '$sb.ToString()',
 ].join('\n')
