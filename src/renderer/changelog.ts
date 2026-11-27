@@ -42,7 +42,7 @@ export interface ChangelogEntry {
 export const changelog: ChangelogEntry[] = [
   {
     version: '2.1.3-beta.19',
-    date: '2026-11-26',
+    date: '2026-11-27',
     highlights: 'On Windows, the remote sessions preview (off by default) now adds arm64 Linux machines, such as a Raspberry Pi, as well as x86-64 ones; keeps an SSH Persistent tab on its machine until you end it, through a quit or an update; and names a helper tab\'s account on its status line, with its weekly limits by model and extra usage when this computer holds that account and has a current reading for it. In a narrow pane, a Codex 0.170.0 or 0.172.0 session now takes prompt buttons and canvas notes after its first prompt when its title wraps onto a second row, and Codex up to 0.172.0 counts as tested.',
     warnings: [
       'This beta series begins moving the app\'s background services, and over the next betas your sessions, onto one helper per machine. If you want a quiet build, stay on the stable release.',
