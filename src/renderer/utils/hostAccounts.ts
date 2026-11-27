@@ -27,8 +27,9 @@ export interface HostSignInLine {
   sub?: string
   /** Hover text for the line. */
   title?: string
-  /** The line's button: Sign in on that machine, or Sign out there. */
-  action?: 'sign-in' | 'sign-out'
+  /** The line's button: Sign in on that machine, Sign out there, or (round
+   *  2, R2-1) Adopt a folder that may be this computer's own. */
+  action?: 'sign-in' | 'sign-out' | 'adopt'
   /** The text is drawn muted (not signed in, not read). */
   muted: boolean
 }
@@ -72,16 +73,31 @@ export function hostElsewhere(acc: Pick<HostMachineAccounts, 'elsewhere'> | unde
   return !!acc?.elsewhere?.includes(profileId)
 }
 
+/**
+ * Round 2 (R2-1): the account's folder there carries another install's mark,
+ * and every such folder on that machine is named by one of this computer's
+ * accounts (phase 3 round 2's `mayBeEarlierInstall`), so it may be this
+ * computer's own from an earlier install of the app. The lines say so and
+ * offer Adopt (the user's own choice; main's MACHINES_REMOTE_ACCOUNTS_ADOPT).
+ */
+export function hostEarlierInstall(acc: Pick<HostMachineAccounts, 'elsewhere' | 'mayBeEarlierInstall'> | undefined, profileId: string): boolean {
+  return acc?.mayBeEarlierInstall === true && hostElsewhere(acc, profileId)
+}
+
 /** What the lines know of the account there besides its read state. */
 export interface HostLineOptions {
   /** Its folder there is the app on another computer's (hostElsewhere). */
   elsewhere?: boolean
+  /** Round 2 (R2-1): and it may be this computer's own (hostEarlierInstall). */
+  earlierInstall?: boolean
   /** Why the machine's last read did not answer. */
   why?: string
 }
 
 /** The words for an account whose folder there another computer uses. */
 export const ELSEWHERE_TEXT = 'Used by the app on another computer'
+/** Round 2 (R2-1): the words for one that may be this computer's own. */
+export const EARLIER_INSTALL_TEXT = 'May be this computer\'s own from an earlier install'
 
 /** Its folder there blocks a sign-in from here: not signed in there (the
  *  machine's own sign-in as the account still starts it). */
@@ -92,10 +108,12 @@ const blockedElsewhere = (a: Pick<HostAccountSignIn, 'state'> | undefined, opts:
  * An account card's line for one machine (frame 1, "On machines"): signed in
  * there (its own folder, or the machine's own sign-in, which says so), not
  * signed in with "Sign in on <machine>", signed in as another account (never
- * used; signing in again there replaces it), used by the app on another
- * computer (no Sign in), or not read since the app started.
+ * used; signing in again there replaces it), a folder that may be this
+ * computer's own from an earlier install (Adopt), used by the app on another
+ * computer (nothing offered), or not read since the app started.
  */
 export function cardMachineLine(a: Pick<HostAccountSignIn, 'state' | 'facts'> | undefined, machine: string, opts: HostLineOptions = {}): HostSignInLine {
+  if (blockedElsewhere(a, opts) && opts.earlierInstall) return { tone: 'warn', text: EARLIER_INSTALL_TEXT, sub: `Its folder on ${machine} carries another install's mark`, action: 'adopt', muted: false }
   if (blockedElsewhere(a, opts)) return { tone: 'none', text: ELSEWHERE_TEXT, sub: `Its folder on ${machine} is another computer's, which signs it in there`, muted: true }
   switch (a?.state) {
     case 'signed-in-here':
@@ -127,6 +145,13 @@ export function cardMachineLine(a: Pick<HostAccountSignIn, 'state' | 'facts'> | 
  * is the account's name on this computer.
  */
 export function machineAccountLine(a: Pick<HostAccountSignIn, 'state' | 'facts'> | undefined, machine: string, who: string, opts: HostLineOptions = {}): HostSignInLine {
+  if (blockedElsewhere(a, opts) && opts.earlierInstall) {
+    return {
+      tone: 'warn', text: EARLIER_INSTALL_TEXT,
+      sub: `Its folder on ${machine} carries another install's mark. If it is this computer's own, Adopt makes it so again; if it is the app's on another computer, leave it.`,
+      action: 'adopt', muted: false,
+    }
+  }
   if (blockedElsewhere(a, opts)) return { tone: 'none', text: ELSEWHERE_TEXT, sub: `Its folder on ${machine} was made by the app on another computer, which signs it in and out there.`, muted: true }
   const why = opts.why
   switch (a?.state) {
@@ -165,6 +190,7 @@ export interface HostSwitchMark {
  */
 export function switchMachineMark(a: Pick<HostAccountSignIn, 'state'> | undefined, machine: string, opts: HostLineOptions = {}): HostSwitchMark | undefined {
   if (hostLaunchable(a?.state)) return { text: `signed in on ${machine}`, warn: false, needsSignIn: false }
+  if (blockedElsewhere(a, opts) && opts.earlierInstall) return { text: `may be this computer's own on ${machine}`, warn: true, needsSignIn: true, title: `Its folder on ${machine} carries another install's mark, and may be this computer's own from an earlier install. Choosing it asks how this session goes on.` }
   if (blockedElsewhere(a, opts)) return { text: `used by the app on another computer on ${machine}`, warn: true, needsSignIn: true, title: `Its folder on ${machine} is used by the app on another computer. Choosing it asks how this session goes on.` }
   if (a?.state === 'not-signed-in') return { text: `not signed in on ${machine}`, warn: true, needsSignIn: true, title: `Not signed in on ${machine}. Choosing it asks how to sign in there.` }
   if (a?.state === 'someone-else') return { text: `signed in as another account on ${machine}`, warn: true, needsSignIn: true, title: `Signed in on ${machine} as another account. Choosing it asks how to sign in there.` }
@@ -220,6 +246,12 @@ export interface RemoveListing {
   read: boolean
   /** Account folders there the app on another computer made: Remove leaves them. */
   elsewhere: number
+  /** Round 2 (R2-1): the names of the accounts whose folders there may be
+   *  this computer's own from an earlier install (they stay; Adopt first). */
+  earlier: string[]
+  /** Round 2 (R2-1): folders an earlier build made there for accounts this
+   *  computer does not hold, by profile id as main names them (they stay). */
+  oldMarker: string[]
 }
 
 /** How many account folders on a machine belong to accounts this computer no longer holds, as words. */
@@ -234,10 +266,39 @@ export function elsewhereStayText(n: number): string {
     : `${n} account folders there are used by the app on another computer and stay.`
 }
 
+/** Round 2 (R2-1): Remove's sentence for folders that may be this computer's
+ *  own from an earlier install, in main's words (its Remove answer), with the
+ *  step that works before Remove: Adopt on this card. */
+export function earlierInstallStayText(names: readonly string[]): string {
+  const one = names.length === 1
+  return `${names.join(', ')}: ${one ? 'its folder' : 'their folders'} there ${one ? 'carries' : 'carry'} another install's mark, and may be this computer's own from an earlier install of the app; Remove leaves ${one ? 'it as it is' : 'them as they are'}. To sign ${one ? 'it' : 'them'} out from here, choose Adopt on this card first.`
+}
+
+/** Round 2 (R2-1): Remove's sentence for the folders an earlier build made
+ *  there for accounts this computer does not hold, named as main names them. */
+export function oldMarkerStayText(ids: readonly string[]): string {
+  const one = ids.length === 1
+  return `${ids.join(', ')} (${one ? 'a folder' : 'folders'} an earlier build of the app made there, for ${one ? 'an account' : 'accounts'} this computer does not hold) ${one ? 'stays' : 'stay'} signed in there as ${one ? 'it is' : 'they are'}.`
+}
+
+/** Round 2 (R2-1): the confirm before Adopt, naming the accounts and what
+ *  Adopt does and does not do (only their folders' marks change). */
+export function adoptConfirmText(machine: string, names: readonly string[]): string {
+  const one = names.length === 1
+  return `Adopt ${joinNames(names)} on ${machine}? ${one ? 'Its folder' : 'Their folders'} there ${one ? 'carries' : 'carry'} another install's mark. If ${one ? 'it is' : 'they are'} this computer's own from an earlier install of the app, Adopt makes ${one ? 'it' : 'them'} this computer's again; nothing is signed in, out or removed. If ${one ? 'it is' : 'they are'} the app's on another computer, do not adopt ${one ? 'it' : 'them'}.`
+}
+
+/** Round 2 (R2-1): the folders on machine `acc` that Adopt may take: those
+ *  its last read named as another install's, for accounts this computer
+ *  holds (`held`), in the machine's order. */
+export function adoptableIds(acc: Pick<HostMachineAccounts, 'elsewhere'> | undefined, held: ReadonlySet<string>): string[] {
+  return (acc?.elsewhere ?? []).filter((id) => held.has(id))
+}
+
 /** Remove's listing for machine `acc` (undefined: never read). `nameOf`
  *  names an account of this computer. */
 export function removeListing(acc: HostMachineAccounts | undefined, nameOf: (profileId: string) => string): RemoveListing {
-  if (!acc || acc.readAt === null) return { signedIn: [], own: null, read: false, elsewhere: 0 }
+  if (!acc || acc.readAt === null) return { signedIn: [], own: null, read: false, elsewhere: 0, earlier: [], oldMarker: [] }
   // A read that did not answer keeps each account's folder as the last one
   // that did found it (machineAccounts), so a folder there is listed.
   const signedIn = acc.accounts
@@ -245,7 +306,14 @@ export function removeListing(acc: HostMachineAccounts | undefined, nameOf: (pro
     .map((a) => ({ key: a.profileId, name: nameOf(a.profileId) }))
   if (acc.others.length > 0) signedIn.push({ key: 'others', name: othersName(acc.others.length) })
   const own = acc.ok ? acc.accounts.find((a) => a.state === 'machine-own') : undefined
-  return { signedIn, own: own ? nameOf(own.profileId) : null, read: true, elsewhere: acc.elsewhere?.length ?? 0 }
+  const elsewhere = acc.elsewhere ?? []
+  const earlier = acc.mayBeEarlierInstall === true ? elsewhere.map(nameOf) : []
+  return {
+    signedIn, own: own ? nameOf(own.profileId) : null, read: true,
+    elsewhere: earlier.length > 0 ? 0 : elsewhere.length,
+    earlier,
+    oldMarker: [...(acc.oldMarker ?? [])],
+  }
 }
 
 /** Names joined as a sentence lists them: "A", "A and B", "A, B and C". */

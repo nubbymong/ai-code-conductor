@@ -23,7 +23,7 @@ const { default: RemoteMachinesSection } = await import('../../../src/renderer/c
 const { useSessionStore } = await import('../../../src/renderer/stores/sessionStore')
 const { useConfigStore } = await import('../../../src/renderer/stores/configStore')
 const { useAccountProfilesStore } = await import('../../../src/renderer/stores/accountProfilesStore')
-const { resetHostAccountsStore } = await import('../../../src/renderer/stores/hostAccountsStore')
+const { resetHostAccountsStore, useHostAccountsStore } = await import('../../../src/renderer/stores/hostAccountsStore')
 
 const DID = 'd'.repeat(32)
 const ROCKY = { did: DID, label: 'Rocky', name: 'Rocky (nick@rocky.lan:22)', target: 'nick@rocky.lan:22', checked: true, lastCheck: { at: Date.now(), ok: true }, helperVersion: '0.1.0', system: 'Linux x86-64', inUse: 0 }
@@ -115,6 +115,31 @@ describe('an account whose folder there is another computer\'s', () => {
     expect(row('Personal')?.querySelector('[data-testid="remote-account-signout"]')).toBeNull()
     await click(button('Remove'))
     expect(q('[data-testid="remote-remove-listing"]')?.textContent).toContain('2 account folders there are used by the app on another computer and stay.')
+    expect(q('[data-testid="remote-account-adopt"]')).toBeNull()
+  })
+})
+
+// R2-1 (round 2): every folder there with another install's mark is named by
+// one of this computer's accounts (main's mayBeEarlierInstall): the row says
+// it may be this computer's own and offers Adopt, which asks first.
+describe('a folder that may be this computer\'s own from an earlier install', () => {
+  it('its row says so and offers Adopt, which asks (naming the accounts) before anything runs', async () => {
+    install({ read: { ...READ, elsewhere: ['p2'], mayBeEarlierInstall: true } })
+    await mount()
+    expect(row('Personal')?.querySelector('[data-testid="remote-account-state"]')?.textContent).toBe('May be this computer\'s own from an earlier installIts folder on Rocky carries another install\'s mark. If it is this computer\'s own, Adopt makes it so again; if it is the app\'s on another computer, leave it.')
+    expect(row('Personal')?.querySelector('[data-testid="remote-account-signin"]')).toBeNull()
+    await click(row('Personal')?.querySelector('[data-testid="remote-account-adopt"]'))
+    expect(useHostAccountsStore.getState().adoptAsk).toEqual({ did: DID, machineName: 'Rocky', profileIds: ['p2'] })
+  })
+
+  it('Remove names those folders as main does, and the old-marker folders it leaves', async () => {
+    install({ read: { ...READ, elsewhere: ['p2'], mayBeEarlierInstall: true, oldMarker: ['zz9'] } })
+    await mount()
+    await click(button('Remove'))
+    const text = q('[data-testid="remote-remove-listing"]')?.textContent ?? ''
+    expect(text).toContain('Personal: its folder there carries another install\'s mark, and may be this computer\'s own from an earlier install of the app; Remove leaves it as it is. To sign it out from here, choose Adopt on this card first.')
+    expect(text).toContain('zz9 (a folder an earlier build of the app made there, for an account this computer does not hold) stays signed in there as it is.')
+    expect(text).not.toContain('used by the app on another computer')
   })
 })
 

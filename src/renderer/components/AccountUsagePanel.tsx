@@ -32,7 +32,7 @@ import {
   ACCOUNT_USAGE_MACHINES_CLASS, ACCOUNT_USAGE_MACHINE_ROW_CLASS, ACCOUNT_USAGE_MACHINE_NAME_CLASS, ACCOUNT_USAGE_MACHINE_STATE_CLASS, ACCOUNT_USAGE_MACHINE_BUTTON_CLASS,
 } from './account-usage-layout'
 import { useHostAccountsStore } from '../stores/hostAccountsStore'
-import { cardMachineLine, hostElsewhere, machineLabel, signInOnTitle, toSignInCount, type HostLineTone, type HostMachineRef, type HostSignInLine } from '../utils/hostAccounts'
+import { adoptableIds, cardMachineLine, hostEarlierInstall, hostElsewhere, machineLabel, signInOnTitle, toSignInCount, type HostLineTone, type HostMachineRef, type HostSignInLine } from '../utils/hostAccounts'
 import { openHostSignInTab } from '../utils/hostSignIn'
 
 /** D5 (usage UX, approved as drawn): the one line the page shows for Claude
@@ -442,8 +442,13 @@ export default function AccountUsagePanel({ onClose, onReauthNavigate, onOpenTok
   // Each Claude Code card's lines, one per added machine, from its last read.
   const machineLinesFor = (profileId: string): CardMachines | undefined => hostShown
     ? {
-        lines: hostMachines.map((m) => ({ machine: m, line: cardMachineLine(hostByDid[m.did]?.accounts.find((a) => a.profileId === profileId), machineLabel(m), { elsewhere: hostElsewhere(hostByDid[m.did], profileId) }) })),
+        lines: hostMachines.map((m) => ({ machine: m, line: cardMachineLine(hostByDid[m.did]?.accounts.find((a) => a.profileId === profileId), machineLabel(m), { elsewhere: hostElsewhere(hostByDid[m.did], profileId), earlierInstall: hostEarlierInstall(hostByDid[m.did], profileId) }) })),
         onSignIn: (m) => onSignInOn(m, profileId),
+        // Round 2 (R2-1): Adopt asks first (the notice host), naming the folders.
+        onAdopt: (m) => useHostAccountsStore.getState().askAdopt({
+          did: m.did, machineName: machineLabel(m),
+          profileIds: adoptableIds(hostByDid[m.did], new Set((profiles ?? []).map((p) => p.id))),
+        }),
       }
     : undefined
 
@@ -1049,6 +1054,8 @@ function creditsText(c: NonNullable<AccountUsage['credits']>): string {
 export interface CardMachines {
   lines: Array<{ machine: HostMachineRef; line: HostSignInLine }>
   onSignIn: (machine: HostMachineRef) => void
+  /** Round 2 (R2-1): Adopt that machine's folders that may be this computer's own. */
+  onAdopt?: (machine: HostMachineRef) => void
 }
 
 const DOT_STYLE: Record<HostLineTone, React.CSSProperties> = {
@@ -1059,7 +1066,7 @@ const DOT_STYLE: Record<HostLineTone, React.CSSProperties> = {
 
 /** One machine's row: its dot and name, its state (and a second line), and
  *  "Sign in on <machine>" where the account is not signed in there. */
-function MachineRow({ name, line, onSignIn }: { name: string; line: HostSignInLine; onSignIn?: () => void }) {
+function MachineRow({ name, line, onSignIn, onAdopt }: { name: string; line: HostSignInLine; onSignIn?: () => void; onAdopt?: () => void }) {
   return (
     <div className={ACCOUNT_USAGE_MACHINE_ROW_CLASS} title={line.title} data-testid="account-usage-machine" data-machine={name} data-tone={line.tone}>
       <span className={ACCOUNT_USAGE_MACHINE_NAME_CLASS}>
@@ -1075,6 +1082,11 @@ function MachineRow({ name, line, onSignIn }: { name: string; line: HostSignInLi
           Sign in on {name}
         </button>
       )}
+      {onAdopt && (
+        <button type="button" className={ACCOUNT_USAGE_MACHINE_BUTTON_CLASS} title={`Asks first: makes ${name}'s folder for this account this computer's again, if it is this computer's own from an earlier install`} onClick={onAdopt} data-testid="account-usage-machine-adopt">
+          Adopt
+        </button>
+      )}
     </div>
   )
 }
@@ -1082,14 +1094,16 @@ function MachineRow({ name, line, onSignIn }: { name: string; line: HostSignInLi
 /** The card's "On machines" block: this computer first (signed in, unless
  *  the card asks to sign in again), then each added machine. Lend from this
  *  computer is not built yet, so no line says lent. */
-function MachineLines({ machines, signedInHere }: { machines: CardMachines; signedInHere: boolean }) {
-  const here: HostSignInLine = signedInHere ? { tone: 'ok', text: 'Signed in', muted: false } : { tone: 'none', text: 'Sign in again', muted: true }
+function MachineLines({ machines, signedInHere, why }: { machines: CardMachines; signedInHere: boolean; why?: string }) {
+  // P4-9 (phase 4 review): a card that asks to sign in again here says why on
+  // this computer's line, as its reason above does.
+  const here: HostSignInLine = signedInHere ? { tone: 'ok', text: 'Signed in', muted: false } : { tone: 'none', text: why ?? 'Not signed in', muted: true }
   return (
     <div className={ACCOUNT_USAGE_MACHINES_CLASS} data-testid="account-usage-machines">
       <div className="text-[0.625rem] uppercase tracking-[0.06em] font-semibold mb-px" style={{ color: MUTED }}>On machines</div>
       <MachineRow name="This computer" line={here} />
       {machines.lines.map(({ machine, line }) => (
-        <MachineRow key={machine.did} name={machineLabel(machine)} line={line} onSignIn={line.action === 'sign-in' ? () => machines.onSignIn(machine) : undefined} />
+        <MachineRow key={machine.did} name={machineLabel(machine)} line={line} onSignIn={line.action === 'sign-in' ? () => machines.onSignIn(machine) : undefined} onAdopt={line.action === 'adopt' && machines.onAdopt ? () => machines.onAdopt?.(machine) : undefined} />
       ))}
     </div>
   )
@@ -1272,7 +1286,7 @@ export function AccountCard({
           <>
             <p className="text-[0.78125rem] text-red" data-testid="account-usage-signin-reason">{why.reason}</p>
             <p className="text-[0.78125rem] text-subtext0">{why.note}</p>
-            {machines && <MachineLines machines={machines} signedInHere={false} />}
+            {machines && <MachineLines machines={machines} signedInHere={false} why={why.reason} />}
             <div className="mt-auto flex items-center justify-between gap-2">
               <span className="text-[0.6875rem]" style={{ color: MUTED }}>{typeof lastReadingAt === 'number' ? `Last reading ${age(lastReadingAt)}` : ''}</span>
               <button

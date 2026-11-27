@@ -18,7 +18,8 @@
 // account notices (stores/hostAccountsStore), and runs the tabs whose wait
 // for a sign-in is over.
 import React, { useEffect, useRef, useState } from 'react'
-import { useHostAccountsStore, listenHostAccounts, type HostNotice, type HostRun } from '../stores/hostAccountsStore'
+import { useHostAccountsStore, listenHostAccounts, type HostAdoptAsk, type HostNotice, type HostRun } from '../stores/hostAccountsStore'
+import { adoptableIds, adoptConfirmText } from '../utils/hostAccounts'
 import { useSessionStore } from '../stores/sessionStore'
 import { useAccountProfilesStore } from '../stores/accountProfilesStore'
 import { useSettingsStore } from '../stores/settingsStore'
@@ -35,7 +36,7 @@ import {
 const MIDDOT = String.fromCharCode(0xb7)
 
 /** The words of the notice, by why it asks (frame 2). Exported for its test. */
-export function hostNoticeText(n: Pick<HostNotice, 'kind' | 'state' | 'identity' | 'machineName' | 'elsewhere'>, who: string): {
+export function hostNoticeText(n: Pick<HostNotice, 'kind' | 'state' | 'identity' | 'machineName' | 'elsewhere' | 'adoptable'>, who: string): {
   title: string
   question: string
   why: string
@@ -48,18 +49,24 @@ export function hostNoticeText(n: Pick<HostNotice, 'kind' | 'state' | 'identity'
   const launch = n.kind === 'launch'
   return {
     title: launch ? 'Start session' : 'Switch account',
-    // Round 1 (MINOR-2): its folder there is the app on another computer's,
-    // which main never signs in from here: no Sign in is offered.
-    question: n.elsewhere
-      ? `${who}'s folder on ${m} is used by the app on another computer.`
-      : n.state === 'someone-else'
-        ? `${who} on ${m} is signed in as ${n.identity || 'another account'}, so that sign-in is not used.`
-        : `${who} is not signed in on ${m}.`,
-    why: n.elsewhere
-      ? 'That computer signs it in and out there, so it cannot be signed in from here.'
-      : n.state === 'someone-else'
-        ? `${m} keeps its own sign-ins. Signing ${who} in again there replaces that one.`
-        : `${m} keeps its own sign-ins.`,
+    // Round 2 (R2-1): main's refusal names the folder as another install's
+    // that may be this computer's own (its tab says it in these words): Adopt.
+    // Round 1 (MINOR-2): otherwise its folder there is the app on another
+    // computer's, which main never signs in from here: nothing is offered.
+    question: n.adoptable
+      ? `${who}'s folder on ${m} carries another install's mark.`
+      : n.elsewhere
+        ? `${who}'s folder on ${m} is used by the app on another computer.`
+        : n.state === 'someone-else'
+          ? `${who} on ${m} is signed in as ${n.identity || 'another account'}, so that sign-in is not used.`
+          : `${who} is not signed in on ${m}.`,
+    why: n.adoptable
+      ? 'It may be this computer\'s own from an earlier install of the app: if so, Adopt makes it this computer\'s again. If it is the app\'s on another computer, start this session on an account signed in there.'
+      : n.elsewhere
+        ? 'That computer signs it in and out there, so it cannot be signed in from here.'
+        : n.state === 'someone-else'
+          ? `${m} keeps its own sign-ins. Signing ${who} in again there replaces that one.`
+          : `${m} keeps its own sign-ins.`,
     signInHint: `Runs Claude Code's own sign-in in a session on ${m}. It stays signed in there, so Remote Control works on ${m}. ${launch ? 'This session starts once it is signed in.' : 'The session moves to it once it is signed in.'}`,
     otherLabel: launch ? 'Or start it on another account' : 'Or switch to another account',
     otherAfter: launch ? 'The session starts on that account.' : 'The session moves to that account, with its conversation.',
@@ -137,6 +144,18 @@ function NoticeDialog({ notice }: { notice: HostNotice }) {
     // a new one. The switch drops any wait the tab had.
     switchHelperTabAccount(session, other, restart, { carry: notice.carry === true })
   }
+  // Round 2 (R2-1): Adopt the account's folder there (and, when the machine
+  // says every such folder may be this computer's own, all of them): the
+  // notice host asks first, naming them.
+  const adopt = () => {
+    const store = useHostAccountsStore.getState()
+    const held = new Set(profiles.map((p) => p.id))
+    const acc = store.byDid[notice.did]
+    const more = acc?.mayBeEarlierInstall === true ? adoptableIds(acc, held) : []
+    store.dropWaits(notice.sessionId)
+    close()
+    store.askAdopt({ did: notice.did, machineName: notice.machineName, profileIds: [...new Set([notice.profileId, ...more])] })
+  }
 
   return (
     <DialogOverlay z="z-[60]" dim={0.5} testId="host-signin-notice">
@@ -156,6 +175,12 @@ function NoticeDialog({ notice }: { notice: HostNotice }) {
             <div className="flex flex-col gap-1 mt-3">
               <DialogButton variant="primary" size="md" block onClick={signIn} testId="host-signin-here">Sign in on {notice.machineName}</DialogButton>
               <p className="text-[11.5px] leading-snug mx-0.5 mt-0.5 mb-2" style={{ color: 'var(--text-muted)' }}>{text.signInHint}</p>
+            </div>
+          )}
+          {notice.adoptable && (
+            <div className="flex flex-col gap-1 mt-3">
+              <DialogButton variant="secondary" size="md" block onClick={adopt} testId="host-signin-adopt">Adopt on {notice.machineName}</DialogButton>
+              <p className="text-[11.5px] leading-snug mx-0.5 mt-0.5 mb-2" style={{ color: 'var(--text-muted)' }}>Asks first, naming the folders. Only their marks change: nothing is signed in, out or removed.</p>
             </div>
           )}
           {problem && <p className="text-xs mb-2" role="alert" style={{ color: 'var(--status-danger)' }} data-testid="host-signin-problem">{problem}</p>}
@@ -210,6 +235,47 @@ function HostRunner({ run }: { run: HostRun }) {
   return null
 }
 
+/**
+ * Round 2 (R2-1): Adopt, asked first (from a machine's card, an account's
+ * card or the notice): it names the accounts and what Adopt does and does
+ * not do. Adopt runs phase 3's MACHINES_REMOTE_ACCOUNTS_ADOPT, says what it
+ * did, and reads the machines' accounts again (main read the machine after it).
+ */
+function AdoptDialog({ ask }: { ask: HostAdoptAsk }) {
+  useReturnFocus()
+  const nameOf = useAccountName()
+  const [busy, setBusy] = useState(false)
+  const store = () => useHostAccountsStore.getState()
+  const cancel = () => store().askAdopt(null)
+  useDialogEscape(cancel, !busy)
+  const run = async () => {
+    const remote = window.electronAPI?.machines?.remote
+    setBusy(true)
+    let text = 'The app did not answer, so nothing was adopted.'
+    try {
+      if (typeof remote?.accountsAdopt === 'function') {
+        const r = await remote.accountsAdopt({ did: ask.did, profileIds: ask.profileIds })
+        text = r.message || (r.ok ? 'Adopted.' : 'Nothing was adopted.')
+      }
+    } catch { /* text says the app did not answer */ }
+    store().askAdopt(null)
+    store().showMessage({ title: `Adopt on ${ask.machineName}`, text })
+    await store().load()
+  }
+  return (
+    <DialogOverlay z="z-[60]" dim={0.5} testId="host-adopt-confirm">
+      <DialogPanel width="w-[440px]" ariaLabel={`Adopt on ${ask.machineName}`}>
+        <DialogHeader title={`Adopt on ${ask.machineName}`} />
+        <DialogBody><p className="text-[12.5px] leading-snug" style={{ color: 'var(--text-primary)' }}>{adoptConfirmText(ask.machineName, ask.profileIds.map(nameOf))}</p></DialogBody>
+        <DialogFooter>
+          <DialogButton variant="secondary" onClick={cancel} disabled={busy} testId="host-adopt-cancel" autoFocus>Cancel</DialogButton>
+          <DialogButton variant="primary" onClick={() => { void run() }} disabled={busy} testId="host-adopt-run">{busy ? 'Adopting...' : 'Adopt'}</DialogButton>
+        </DialogFooter>
+      </DialogPanel>
+    </DialogOverlay>
+  )
+}
+
 function MessageDialog({ title, text }: { title: string; text: string }) {
   useReturnFocus()
   const close = () => useHostAccountsStore.getState().showMessage(null)
@@ -235,11 +301,13 @@ export default function HostSignInNotice({ suppressed = false }: { suppressed?: 
   const notice = useHostAccountsStore((s) => s.notices[0] ?? null)
   const runs = useHostAccountsStore((s) => s.runs)
   const message = useHostAccountsStore((s) => s.message)
+  const adoptAsk = useHostAccountsStore((s) => s.adoptAsk)
   return (
     <>
       {runs.map((r) => <HostRunner key={r.id} run={r} />)}
       {!suppressed && notice && <NoticeDialog key={`${notice.sessionId}:${notice.kind}:${notice.profileId}`} notice={notice} />}
-      {!suppressed && !notice && message && <MessageDialog title={message.title} text={message.text} />}
+      {!suppressed && !notice && adoptAsk && <AdoptDialog ask={adoptAsk} />}
+      {!suppressed && !notice && !adoptAsk && message && <MessageDialog title={message.title} text={message.text} />}
     </>
   )
 }

@@ -16,7 +16,7 @@ import type { ProviderId } from '../../shared/providers'
 import { ProviderMark } from './sidebar/Badges'
 import { PROVIDER_NAMES } from '../provider-names'
 import {
-  elsewhereStayText, hostElsewhere, machineAccountLine, machineLabel, machineOwnSignOutText, removeListing, removeNotAnsweringText, sessionMachine, signInOnTitle,
+  adoptableIds, earlierInstallStayText, elsewhereStayText, hostEarlierInstall, hostElsewhere, machineAccountLine, machineLabel, oldMarkerStayText, machineOwnSignOutText, removeListing, removeNotAnsweringText, sessionMachine, signInOnTitle,
   type HostLineTone,
 } from '../utils/hostAccounts'
 import { openHostSignInTab } from '../utils/hostSignIn'
@@ -76,7 +76,7 @@ function HowAccountsSignIn({ label }: { label: string }) {
 
 /** One account's row in "Accounts here": the provider mark, the account and
  *  its provider, its sign-in there, and Sign in on that machine or Sign out. */
-function AccountHereRow({ who, line, label, busy, switchOn, tabOpen, onSignIn, onSignOut }: {
+function AccountHereRow({ who, line, label, busy, switchOn, tabOpen, onSignIn, onSignOut, onAdopt }: {
   who: string
   line: ReturnType<typeof machineAccountLine>
   label: string
@@ -85,6 +85,8 @@ function AccountHereRow({ who, line, label, busy, switchOn, tabOpen, onSignIn, o
   tabOpen: boolean
   onSignIn: () => void
   onSignOut: () => void
+  /** Round 2 (R2-1): Adopt the machine's folders that may be this computer's own (asks first). */
+  onAdopt: () => void
 }) {
   return (
     <div className="grid grid-cols-[16px_minmax(0,150px)_minmax(0,1fr)_auto] gap-2 items-baseline py-1.5 text-xs border-t first:border-t-0" style={{ borderColor: 'var(--border-subtle)' }} data-testid="remote-account-row" data-who={who}>
@@ -123,6 +125,19 @@ function AccountHereRow({ who, line, label, busy, switchOn, tabOpen, onSignIn, o
           data-testid="remote-account-signout"
         >
           Sign out
+        </button>
+      )}
+      {line.action === 'adopt' && (
+        <button
+          type="button"
+          className="inline-flex items-center rounded-md border px-2 py-0.5 text-[11.5px] font-medium whitespace-nowrap disabled:opacity-40 disabled:cursor-not-allowed focus-ring"
+          style={{ borderColor: 'var(--border-strong)', color: 'var(--text-secondary)' }}
+          disabled={busy}
+          title={`Asks first: makes the folders on ${label} that may be this computer's own from an earlier install this computer's again`}
+          onClick={onAdopt}
+          data-testid="remote-account-adopt"
+        >
+          Adopt
         </button>
       )}
       {!line.action && <span />}
@@ -197,6 +212,8 @@ interface CardAccounts {
   onSignIn: (profileId: string) => void
   /** `confirmMachineOwn`: the user confirmed signing out the machine's own sign-in. */
   onSignOut: (profileId: string, confirmMachineOwn: boolean) => Promise<'done' | 'confirm'>
+  /** Round 2 (R2-1): Adopt the machine's folders that may be this computer's own (asks first). */
+  onAdopt: () => void
 }
 
 function MachineCard({ m, switchOn, busy, onCheck, onRemove, onAsk, kept, keptWhy, onReattach, onEnd, accounts }: {
@@ -248,7 +265,8 @@ function MachineCard({ m, switchOn, busy, onCheck, onRemove, onAsk, kept, keptWh
       <AccountHereRow
         key={p.id}
         who={p.name}
-        line={machineAccountLine(a, label, p.name, { why, elsewhere: hostElsewhere(accounts?.read, p.id) })}
+        line={machineAccountLine(a, label, p.name, { why, elsewhere: hostElsewhere(accounts?.read, p.id), earlierInstall: hostEarlierInstall(accounts?.read, p.id) })}
+        onAdopt={() => accounts?.onAdopt()}
         label={label}
         busy={busy}
         switchOn={switchOn}
@@ -312,10 +330,13 @@ function MachineCard({ m, switchOn, busy, onCheck, onRemove, onAsk, kept, keptWh
               Then the session helper and its folder in ~/.aicc are deleted.
               {/* Round 1 (MINOR-2): folders the app on another computer made there stay. */}
               {listing.elsewhere > 0 && <> {elsewhereStayText(listing.elsewhere)}</>}
+              {/* Round 2 (R2-1): folders that may be this computer's own, and an earlier build's for accounts it does not hold, in main's words. */}
+              {listing.earlier.length > 0 && <> {earlierInstallStayText(listing.earlier)}</>}
+              {listing.oldMarker.length > 0 && <> {oldMarkerStayText(listing.oldMarker)}</>}
             </div>
           ) : (
             <span className="text-xs flex-1 min-w-[12rem]" style={{ color: 'var(--text-primary)' }}>
-              Remove the session helper from {m.name}? Its folder in ~/.aicc there is deleted.{listing.own ? ` ${listing.own} is signed in there by ${label}'s own sign-in, which Remove leaves as it is.` : ''}{listing.elsewhere > 0 ? ` ${elsewhereStayText(listing.elsewhere)}` : ''}
+              Remove the session helper from {m.name}? Its folder in ~/.aicc there is deleted.{listing.own ? ` ${listing.own} is signed in there by ${label}'s own sign-in, which Remove leaves as it is.` : ''}{listing.elsewhere > 0 ? ` ${elsewhereStayText(listing.elsewhere)}` : ''}{listing.earlier.length > 0 ? ` ${earlierInstallStayText(listing.earlier)}` : ''}{listing.oldMarker.length > 0 ? ` ${oldMarkerStayText(listing.oldMarker)}` : ''}
             </span>
           )}
           <DialogButton variant="danger-solid" onClick={() => { void remove(false) }} disabled={busy}>{listing.signedIn.length > 0 ? 'Sign out and remove' : 'Remove'}</DialogButton>
@@ -445,6 +466,11 @@ export default function RemoteMachinesSection({ active = true }: { active?: bool
         profiles: accountList,
         // A tab on that account runs on this machine (Sign out waits for it; main refuses it too).
         tabOn: (profileId) => openSessions.some((s) => s.sessionType === 'ssh' && !s.shellOnly && !s.ptyExited && s.profileId === profileId && sessionMachine(s, [m]) !== undefined),
+        // Round 2 (R2-1): the notice host asks first, naming the folders main may adopt.
+        onAdopt: () => {
+          setNotice(null)
+          useHostAccountsStore.getState().askAdopt({ did: m.did, machineName: machineLabel(m), profileIds: adoptableIds(hostByDid[m.did], new Set(profiles.map((p) => p.id))) })
+        },
         onSignIn: (profileId) => {
           setNotice(null)
           const r = openHostSignInTab(m, profileId)

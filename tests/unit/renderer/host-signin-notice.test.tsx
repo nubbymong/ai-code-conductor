@@ -106,6 +106,7 @@ beforeEach(() => {
       onAccountsChanged: vi.fn(() => () => {}),
       onAccountNotice: vi.fn((cb: (n: HostAccountNotice) => void) => { notify = cb; return () => { notify = null } }),
       endTab,
+      accountsAdopt: vi.fn(async () => ({ ok: true, message: 'Adopted Personal: its folder there is this computer\'s now.', adopted: ['p2'] })),
     } },
     pty: { kill: vi.fn() },
   }
@@ -399,6 +400,73 @@ describe('the wait for a sign-in is the sign-in tab\'s own, and is dropped on ev
     expect(useHostAccountsStore.getState().waiting).toEqual([])
     await push(ended(signIn))
     expect(restartSpy).not.toHaveBeenCalled()
+  })
+
+  // R1-N1 (round 2): `claude auth login` exits on success and main reads the
+  // machine before it sends the sign-in's end; a finished sign-in tab closed
+  // in those seconds keeps the wait until the grace ends.
+  it('a finished sign-in tab closed before its end arrives: the tab still goes on, once', async () => {
+    const signIn = await signInFromNotice()
+    await act(async () => { useSessionStore.getState().updateSession(signIn, { ptyExited: true }) })
+    await settle()
+    await act(async () => { useSessionStore.getState().removeSession(signIn) })
+    await settle()
+    expect(useHostAccountsStore.getState().waiting).toHaveLength(1)
+    await push(ended(signIn))
+    await push(ended(signIn))
+    expect(restartSpy).toHaveBeenCalledTimes(1)
+    expect(restartSpy).toHaveBeenCalledWith({ profileId: 'p2' })
+  })
+
+  it('a finished sign-in tab closed, and no end within the grace: the wait goes', async () => {
+    const signIn = await signInFromNotice()
+    await act(async () => { useSessionStore.getState().updateSession(signIn, { ptyExited: true }) })
+    await settle()
+    await act(async () => { useSessionStore.getState().removeSession(signIn) })
+    await settle()
+    pruneHostWaits(Date.now() + SIGN_IN_END_GRACE_MS + 1_000)
+    expect(useHostAccountsStore.getState().waiting).toEqual([])
+  })
+})
+
+// R2-1 (round 2): main's refusal says the account's folder there carries
+// another install's mark and may be this computer's own (`adoptable`): the
+// notice says so in main's words and offers Adopt, which asks first.
+describe('a folder that may be this computer\'s own from an earlier install', () => {
+  const adoptable = (): HostAccountNotice => ({
+    kind: 'launch-refused', sessionId: 'tab-1',
+    refusal: { did: DID, machineName: 'Rocky (nick@rocky.lan:22)', profileId: 'p2', state: 'not-signed-in', adoptable: true, signedInThere: ['p1'], text: '' },
+  })
+  it('the notice says so and offers Adopt (no Sign in); another account and Cancel stay', async () => {
+    await mount(<HostSignInNotice />)
+    await push(adoptable())
+    expect(byTest('host-signin-question')?.textContent).toBe('Personal\'s folder on Rocky carries another install\'s mark.')
+    expect(byTest('host-signin-why')?.textContent).toBe('It may be this computer\'s own from an earlier install of the app: if so, Adopt makes it this computer\'s again. If it is the app\'s on another computer, start this session on an account signed in there.')
+    expect(byTest('host-signin-here')).toBeNull()
+    expect(byTest('host-signin-use-other')).not.toBeNull()
+    await click(byTest('host-signin-adopt'))
+    expect(useHostAccountsStore.getState().adoptAsk).toEqual({ did: DID, machineName: 'Rocky', profileIds: ['p2'] })
+    expect(byTest('host-signin-question')).toBeNull()
+  })
+
+  it('Adopt asks first, naming the accounts; Cancel runs nothing; Adopt runs it, says what it did, and reads the machines again', async () => {
+    const remote = (window as any).electronAPI.machines.remote
+    await mount(<HostSignInNotice />)
+    await act(async () => { useHostAccountsStore.getState().askAdopt({ did: DID, machineName: 'Rocky', profileIds: ['p2'] }) })
+    await settle()
+    const dlg = byTest('host-adopt-confirm')
+    expect(dlg?.textContent).toContain('Adopt Personal on Rocky? Its folder there carries another install\'s mark.')
+    expect(document.activeElement?.textContent).toBe('Cancel')
+    await click(byTest('host-adopt-cancel'))
+    expect(remote.accountsAdopt).not.toHaveBeenCalled()
+    expect(byTest('host-adopt-confirm')).toBeNull()
+    await act(async () => { useHostAccountsStore.getState().askAdopt({ did: DID, machineName: 'Rocky', profileIds: ['p2'] }) })
+    await settle()
+    const before = remote.accounts.mock.calls.length
+    await click(byTest('host-adopt-run'))
+    expect(remote.accountsAdopt).toHaveBeenCalledWith({ did: DID, profileIds: ['p2'] })
+    expect(byTest('host-signin-message')?.textContent).toContain('Adopted Personal: its folder there is this computer\'s now.')
+    expect(remote.accounts.mock.calls.length).toBeGreaterThan(before)
   })
 })
 

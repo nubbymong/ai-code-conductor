@@ -15,7 +15,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import { act } from 'react'
 import { AccountCard, MACHINES_FOOT_LINE, type CardMachines } from '../../../src/renderer/components/AccountUsagePanel'
 import { cardMachineLine } from '../../../src/renderer/utils/hostAccounts'
-import type { AccountUsage } from '../../../src/shared/usage-types'
+import { USAGE_DETAIL_DUPLICATE, type AccountUsage } from '../../../src/shared/usage-types'
 import type { HostAccountSignIn } from '../../../src/shared/host-accounts'
 
 ;(globalThis as any).IS_REACT_ACT_ENVIRONMENT = true
@@ -85,7 +85,7 @@ describe('a Claude Code card\'s "On machines" (frame 1)', () => {
   it('a card that asks to sign in again here says so on this computer\'s line', () => {
     const r = render(<AccountCard row={row({ status: 'needs-login' })} theme="dark" onSignIn={vi.fn()} machines={machines()} />)
     expect(r.container.querySelector('[data-testid="account-usage-signin-reason"]')).not.toBeNull()
-    expect(lines(r.container)[0]).toEqual({ name: 'This computer', tone: 'none', state: 'Sign in again', button: null })
+    expect(lines(r.container)[0]).toEqual({ name: 'This computer', tone: 'none', state: 'Not signed in', button: null })
     expect(lines(r.container)[1]).toMatchObject({ name: 'Rocky', button: 'Sign in on Rocky' })
     r.unmount()
   })
@@ -102,5 +102,33 @@ describe('a Claude Code card\'s "On machines" (frame 1)', () => {
   it('the foot\'s machines line says where a sign-in is kept, and never says lent', () => {
     expect(MACHINES_FOOT_LINE).toBe('Accounts you add in Settings › Accounts are on every machine. Signed in on a machine: the sign-in is kept on that machine.')
     expect(MACHINES_FOOT_LINE).not.toMatch(/lent|lend/i)
+  })
+
+  // R2-1 (round 2): a folder there that may be this computer's own from an
+  // earlier install: the line says so and offers Adopt, which asks first.
+  it('a folder that may be this computer\'s own: says so, with Adopt for that machine', () => {
+    const onAdopt = vi.fn()
+    const m: CardMachines = {
+      lines: [{ machine: ROCKY, line: cardMachineLine(at('not-signed-in'), 'Rocky', { elsewhere: true, earlierInstall: true }) }],
+      onSignIn: vi.fn(),
+      onAdopt,
+    }
+    const r = render(<AccountCard row={row()} theme="dark" onSignIn={vi.fn()} machines={m} />)
+    expect(lines(r.container)[1]).toMatchObject({ name: 'Rocky', state: 'May be this computer\'s own from an earlier installIts folder on Rocky carries another install\'s mark', button: null })
+    const adopt = r.container.querySelector('[data-testid="account-usage-machine-adopt"]') as HTMLElement
+    expect(adopt.textContent).toBe('Adopt')
+    act(() => { adopt.click() })
+    expect(onAdopt).toHaveBeenCalledWith(ROCKY)
+    r.unmount()
+  })
+
+  // P4-9 (phase 4 review): this computer's line says what the card says is
+  // wrong here, not a plain "Sign in again".
+  it('a card that asks to sign in again says why on this computer\'s line', () => {
+    const dup = { kind: 'duplicate' as const, account: 'p@x.io', profileIds: ['p9'] }
+    const r = render(<AccountCard row={row({ status: 'needs-login', detail: USAGE_DETAIL_DUPLICATE, signInProblem: dup })} nameOf={(id) => (id === 'p9' ? 'Work' : undefined)} theme="dark" onSignIn={vi.fn()} machines={machines()} />)
+    expect(r.container.querySelector('[data-testid="account-usage-signin-reason"]')?.textContent).toBe('Signed in to the same account as Work')
+    expect(lines(r.container)[0]).toEqual({ name: 'This computer', tone: 'none', state: 'Signed in to the same account as Work', button: null })
+    r.unmount()
   })
 })

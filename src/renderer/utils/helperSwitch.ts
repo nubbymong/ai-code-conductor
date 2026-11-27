@@ -24,7 +24,7 @@ import { useAccountProfilesStore } from '../stores/accountProfilesStore'
 import { useHostAccountsStore } from '../stores/hostAccountsStore'
 import { isAccountActive } from '../../shared/account-types'
 import { persistLastUsedAccount } from '../session-persistence'
-import { hostElsewhere, hostLaunchable, machineLabel, sessionMachine } from './hostAccounts'
+import { hostEarlierInstall, hostElsewhere, hostLaunchable, machineLabel, sessionMachine } from './hostAccounts'
 
 /** Tabs whose switch is ending their kept session: a second pick meanwhile is ignored. */
 const switching = new Set<string>()
@@ -71,6 +71,8 @@ export function switchHelperTabAccount(
       signedInThere: acc.accounts.filter((a) => hostLaunchable(a.state) && a.profileId !== nextId && a.profileId !== session.profileId).map((a) => a.profileId),
       carry: opts.carry !== false,
       ...(hostElsewhere(acc, nextId) ? { elsewhere: true } : {}),
+      // Round 2 (R2-1): it may be this computer's own: the notice offers Adopt.
+      ...(hostEarlierInstall(acc, nextId) ? { adoptable: true } : {}),
     })
     return 'notice'
   }

@@ -10,7 +10,7 @@ import { describe, it, expect } from 'vitest'
 import {
   cardMachineLine, machineAccountLine, switchMachineMark, sessionMachine, signInConfigFor, sshTarget,
   removeListing, removeNotAnsweringText, machineOwnSignOutText, toSignInCount, joinNames, hostLaunchable, signInOnTitle,
-  elsewhereStayText, hostElsewhere,
+  elsewhereStayText, hostElsewhere, hostEarlierInstall, earlierInstallStayText, oldMarkerStayText, adoptConfirmText,
 } from '../../../src/renderer/utils/hostAccounts'
 import type { HostMachineAccounts, HostSignInFacts } from '../../../src/shared/host-accounts'
 import type { TerminalConfig } from '../../../src/renderer/stores/configStore'
@@ -127,7 +127,7 @@ describe('Remove\'s question lists the accounts signed in there (frame 4)', () =
   })
   const names = (l: { signedIn: Array<{ name: string }> }) => l.signedIn.map((x) => x.name)
   it('lists each account with a sign-in of its own there, and names the machine\'s own sign-in apart', () => {
-    expect(removeListing(acc(), nameOf)).toEqual({ signedIn: [{ key: 'p1', name: 'Work' }], own: 'Personal', read: true, elsewhere: 0 })
+    expect(removeListing(acc(), nameOf)).toEqual({ signedIn: [{ key: 'p1', name: 'Work' }], own: 'Personal', read: true, elsewhere: 0, earlier: [], oldMarker: [] })
   })
   it('a folder signed in as another account is signed out too; folders of removed accounts are counted', () => {
     const l = removeListing(acc({ accounts: [{ profileId: 'p3', state: 'someone-else', facts: facts('o@x.io'), folder: true }], others: ['p9', 'p8'] }), nameOf)
@@ -151,7 +151,7 @@ describe('Remove\'s question lists the accounts signed in there (frame 4)', () =
     expect(elsewhereStayText(2)).toBe('2 account folders there are used by the app on another computer and stay.')
   })
   it('never read since the app started: nothing listed, and it says so', () => {
-    expect(removeListing(undefined, nameOf)).toEqual({ signedIn: [], own: null, read: false, elsewhere: 0 })
+    expect(removeListing(undefined, nameOf)).toEqual({ signedIn: [], own: null, read: false, elsewhere: 0, earlier: [], oldMarker: [] })
     expect(removeListing(acc({ readAt: null }), nameOf).read).toBe(false)
   })
   it('a last read that did not answer: the folders the last answer found are listed', () => {
@@ -159,10 +159,10 @@ describe('Remove\'s question lists the accounts signed in there (frame 4)', () =
       { profileId: 'p1', state: 'not-read', facts: null, folder: true },
       { profileId: 'p2', state: 'not-read', facts: null, folder: false },
     ] }), nameOf)
-    expect(l).toEqual({ signedIn: [{ key: 'p1', name: 'Work' }], own: null, read: true, elsewhere: 0 })
+    expect(l).toEqual({ signedIn: [{ key: 'p1', name: 'Work' }], own: null, read: true, elsewhere: 0, earlier: [], oldMarker: [] })
   })
   it('the machine did not answer: what stays signed in there, where to end it, and that the folder stays', () => {
-    const l = (n: string[], read = true) => ({ signedIn: n.map((name) => ({ key: name, name })), own: null, read, elsewhere: 0 })
+    const l = (n: string[], read = true) => ({ signedIn: n.map((name) => ({ key: name, name })), own: null, read, elsewhere: 0, earlier: [], oldMarker: [] })
     expect(removeNotAnsweringText('Pi', l(['Work']))).toBe(
       'Pi did not answer, so nothing can be signed out there now. Work stays signed in on Pi until you sign it out there, or end that sign-in in your Claude account settings on claude.ai. The app forgets Pi; its folder in ~/.aicc stays.')
     expect(removeNotAnsweringText('Pi', l(['Work', 'Personal']))).toContain('Work and Personal stay signed in on Pi until you sign them out there, or end those sign-ins')
@@ -198,6 +198,55 @@ describe('an account whose folder there is the app on another computer\'s', () =
     expect(hostElsewhere(acc, 'p1')).toBe(false)
     expect(hostElsewhere({ ...acc, elsewhere: undefined }, 'p2')).toBe(false)
     expect(hostElsewhere(undefined, 'p2')).toBe(false)
+  })
+})
+
+// R2-1 (round 2): phase 3's round 2 says, by `mayBeEarlierInstall`, that every
+// folder there carrying another install's mark is named by one of this
+// computer's accounts, so they may be its own from an earlier install. Then
+// the lines say so and offer Adopt (the user's own choice), in main's words;
+// only when it is false do they say "another computer" with nothing offered.
+describe('a folder that may be this computer\'s own from an earlier install', () => {
+  const read = (may: boolean) => ({ did: DID, readAt: 1, ok: true, own: null, others: [], accounts: [], elsewhere: ['p2'], mayBeEarlierInstall: may }) as HostMachineAccounts
+  it('hostEarlierInstall: its folder is another install\'s and the machine may be this computer\'s own', () => {
+    expect(hostEarlierInstall(read(true), 'p2')).toBe(true)
+    expect(hostEarlierInstall(read(false), 'p2')).toBe(false)
+    expect(hostEarlierInstall(read(true), 'p1')).toBe(false)
+    expect(hostEarlierInstall(undefined, 'p2')).toBe(false)
+  })
+  it('the card, the Machines row and the Switch Account list say so, with Adopt', () => {
+    const o = { elsewhere: true, earlierInstall: true }
+    expect(cardMachineLine({ state: 'not-signed-in', facts: null }, 'Rocky', o)).toEqual({
+      tone: 'warn', text: 'May be this computer\'s own from an earlier install', sub: 'Its folder on Rocky carries another install\'s mark', action: 'adopt', muted: false,
+    })
+    expect(machineAccountLine({ state: 'not-signed-in', facts: null }, 'Rocky', 'Personal', o)).toEqual({
+      tone: 'warn', text: 'May be this computer\'s own from an earlier install',
+      sub: 'Its folder on Rocky carries another install\'s mark. If it is this computer\'s own, Adopt makes it so again; if it is the app\'s on another computer, leave it.',
+      action: 'adopt', muted: false,
+    })
+    expect(switchMachineMark({ state: 'not-signed-in' }, 'Rocky', o)).toEqual({
+      text: 'may be this computer\'s own on Rocky', warn: true, needsSignIn: true,
+      title: 'Its folder on Rocky carries another install\'s mark, and may be this computer\'s own from an earlier install. Choosing it asks how this session goes on.',
+    })
+    // Not adoptable: the plain "another computer" words, with nothing offered.
+    expect(cardMachineLine({ state: 'not-signed-in', facts: null }, 'Rocky', { elsewhere: true, earlierInstall: false }).action).toBeUndefined()
+    expect(machineAccountLine({ state: 'not-signed-in', facts: null }, 'Rocky', 'Personal', { elsewhere: true }).text).toBe('Used by the app on another computer')
+  })
+  it('Remove names them as main does, and the old-marker folders main leaves', () => {
+    const nameOf = (id: string) => ({ p2: 'Personal', p3: 'Spare' } as Record<string, string>)[id] ?? id
+    const l = removeListing({ ...read(true), elsewhere: ['p2', 'p3'], oldMarker: ['zz9'] }, nameOf)
+    expect(l.earlier).toEqual(['Personal', 'Spare'])
+    expect(l.elsewhere).toBe(0)
+    expect(l.oldMarker).toEqual(['zz9'])
+    expect(removeListing({ ...read(false), elsewhere: ['p2', 'x8'] }, nameOf)).toMatchObject({ earlier: [], elsewhere: 2 })
+    expect(earlierInstallStayText(['Personal'])).toBe('Personal: its folder there carries another install\'s mark, and may be this computer\'s own from an earlier install of the app; Remove leaves it as it is. To sign it out from here, choose Adopt on this card first.')
+    expect(earlierInstallStayText(['Personal', 'Spare'])).toBe('Personal, Spare: their folders there carry another install\'s mark, and may be this computer\'s own from an earlier install of the app; Remove leaves them as they are. To sign them out from here, choose Adopt on this card first.')
+    expect(oldMarkerStayText(['zz9'])).toBe('zz9 (a folder an earlier build of the app made there, for an account this computer does not hold) stays signed in there as it is.')
+    expect(oldMarkerStayText(['zz9', 'zz8'])).toBe('zz9, zz8 (folders an earlier build of the app made there, for accounts this computer does not hold) stay signed in there as they are.')
+  })
+  it('Adopt asks first, naming the accounts and what it does and does not do', () => {
+    expect(adoptConfirmText('Rocky', ['Personal'])).toBe('Adopt Personal on Rocky? Its folder there carries another install\'s mark. If it is this computer\'s own from an earlier install of the app, Adopt makes it this computer\'s again; nothing is signed in, out or removed. If it is the app\'s on another computer, do not adopt it.')
+    expect(adoptConfirmText('Rocky', ['Personal', 'Spare'])).toContain('Adopt Personal and Spare on Rocky? Their folders there carry')
   })
 })
 

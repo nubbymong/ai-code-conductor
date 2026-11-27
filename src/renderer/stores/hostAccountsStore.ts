@@ -46,6 +46,9 @@ export interface HostNotice {
   /** Round 1 (MINOR-2): the account's folder there is the app on another
    *  computer's, so no Sign in there is offered. */
   elsewhere?: boolean
+  /** Round 2 (R2-1): and it may be this computer's own from an earlier
+   *  install (main's refusal `adoptable`): the notice offers Adopt. */
+  adoptable?: boolean
 }
 
 /** What a tab does once a sign-in on its machine ends signed in: start again
@@ -109,6 +112,9 @@ interface HostAccountsStore {
   /** A plain answer the notice host shows (a Switch Account that could not
    *  go ahead), or null. */
   message: { title: string; text: string } | null
+  /** Round 2 (R2-1): Adopt asked for (a machine card, an account card, the
+   *  notice): the notice host asks first, naming the accounts. */
+  adoptAsk: HostAdoptAsk | null
 
   /** The machines (once per run unless `force`) and their last reads. */
   load: (opts?: { force?: boolean }) => Promise<void>
@@ -128,6 +134,15 @@ interface HostAccountsStore {
   signInEnded: (signInTabId: string, did: string, profileId: string, launchable: boolean) => void
   takeRun: (id: number) => void
   showMessage: (m: { title: string; text: string } | null) => void
+  askAdopt: (a: HostAdoptAsk | null) => void
+}
+
+/** Round 2 (R2-1): an Adopt to ask about: the machine, its short name, and
+ *  the folders (by this computer's profile ids) Adopt would take. */
+export interface HostAdoptAsk {
+  did: string
+  machineName: string
+  profileIds: string[]
 }
 
 let loading: Promise<void> | null = null
@@ -158,6 +173,7 @@ const INITIAL = {
   waiting: [] as HostWaiting[],
   runs: [] as HostRun[],
   message: null as { title: string; text: string } | null,
+  adoptAsk: null as HostAdoptAsk | null,
 }
 
 export const useHostAccountsStore = create<HostAccountsStore>((set, get) => ({
@@ -221,6 +237,8 @@ export const useHostAccountsStore = create<HostAccountsStore>((set, get) => ({
   takeRun: (id) => set((s) => ({ runs: s.runs.filter((r) => r.id !== id) })),
 
   showMessage: (message) => set({ message }),
+
+  askAdopt: (adoptAsk) => set({ adoptAsk }),
 }))
 
 /**
@@ -240,7 +258,10 @@ export function pruneHostWaits(now = Date.now()): void {
     const tab = sessions.find((s) => s.id === w.sessionId)
     const signIn = sessions.find((s) => s.id === w.signInTabId)
     const endBy = w.endBy ?? (signIn?.ptyExited ? now + SIGN_IN_END_GRACE_MS : undefined)
-    const holds = !!tab && tab.createdAt === w.createdAt && !!signIn && now < w.until && !(endBy !== undefined && now > endBy)
+    // Round 2 (R1-N1): a finished sign-in tab closed before main's read after
+    // it answers keeps the wait until the grace ends; one closed before it
+    // finished (no end seen) drops it.
+    const holds = !!tab && tab.createdAt === w.createdAt && (!!signIn || endBy !== undefined) && now < w.until && !(endBy !== undefined && now > endBy)
     if (!holds) { changed = true; continue }
     if (endBy !== w.endBy) changed = true
     waiting.push(endBy !== w.endBy ? { ...w, endBy } : w)
@@ -270,6 +291,9 @@ export function resetHostAccountsStore(): void {
  *  machine whose accounts could not be read says so in its tab and asks
  *  nothing here (its choices would not hold: nothing is known there). */
 export function noticeOfRefusal(sessionId: string, r: HostLaunchRefusal, label?: string, more: Pick<HostNotice, 'carry' | 'elsewhere'> = {}): HostNotice | null {
+  // Round 2 (R2-1): main names the folder as another install's that may be
+  // this computer's own; its folder there is another's either way.
+  const adoptable = r.adoptable === true
   if (r.state !== 'not-signed-in' && r.state !== 'someone-else') return null
   return {
     kind: 'launch',
@@ -282,7 +306,8 @@ export function noticeOfRefusal(sessionId: string, r: HostLaunchRefusal, label?:
     ...(r.identity ? { identity: r.identity } : {}),
     signedInThere: r.signedInThere.filter((id) => id !== r.profileId),
     ...(more.carry ? { carry: true } : {}),
-    ...(more.elsewhere ? { elsewhere: true } : {}),
+    ...(more.elsewhere || adoptable ? { elsewhere: true } : {}),
+    ...(adoptable ? { adoptable: true } : {}),
   }
 }
 
