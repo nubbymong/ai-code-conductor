@@ -139,6 +139,15 @@ Rows are numbered so that "does not own" can name the owner.
   - Central Codex accounts on a remote host wait for their own probe. Until it
     passes, Codex there uses the host's sign-in.
   - Token or Standard as the default kind is decided after the probes.
+  - 2026-11-27, from 2.1.3-beta.20: sign in on this machine ships first.
+    Each Claude Code account of this computer signs in once on a Linux
+    machine, by the CLI's own sign-in in a helper tab there, into the
+    account's own folder on that machine (`~/.aicc/accounts/<profile id>/`,
+    owner-only); the sign-in stays on that machine and nothing is copied
+    between machines. Lending an account from this computer (the Token kind
+    above, nubbymong/aicc_planning#443) comes next and is not in this beta, so
+    the Machines card offers one way to sign in and no Lend. Codex accounts do
+    not sign in on machines yet.
 - **D8 SSH post-connect command.** Saved configs are unchanged. The helper
   runs the command in the session's own terminal through the host's login
   shell, then starts the CLI in the same shell, so the folder, the environment

@@ -32,6 +32,8 @@ const CLAUDE_ONLY = [
   'tip.container-runtime', 'tip.multi-account', 'tip.config-edit-guard',
   // 2.1.1-beta.3: Claude Code found through the PowerShell profile; SSH (Claude only) attention.
   'tip.claude-powershell-profile', 'tip.remote-attention',
+  // 2.1.3-beta.20: only Claude Code accounts sign in on a machine, and Switch Account on a helper tab is Claude Code's.
+  'tip.remote-account-sign-in', 'tip.switch-account-helper-tab',
 ]
 const CODEX_ONLY = [
   'tip.codex-sessions', 'tip.codex-accounts-reviewer', 'tip.codex-restart-pick', 'tip.codex-check-sign-in', 'tip.codex-chatgpt-sign-in',

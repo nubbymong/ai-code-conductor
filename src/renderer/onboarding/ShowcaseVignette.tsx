@@ -241,24 +241,22 @@ function AskConductorVignette() {
   )
 }
 
-/** The 2.1.1 usage page: a section per assistant, each account apart. With
- *  Claude Code off (P3.4) it draws the Codex section alone: nothing about
+/** The usage page as one list of accounts (2.1.3-beta.20: one grid with a
+ *  provider filter, not a section per assistant), each account apart. With
+ *  Claude Code off (P3.4) it draws the Codex accounts alone: nothing about
  *  Claude Code shows to a Codex-only user. */
 function UsageVignette({ claudeOn }: { claudeOn: boolean }) {
   return (
     <div className="sv-mini" aria-hidden data-ux-id="showcase-art-usage">
       <div className="sv-tb"><span className="sv-tl" /><span className="sv-tl" /><span className="sv-tl" /></div>
       <div className="sv-panel-body">
+        <div className="sv-pn-h sv-pn-neutral">Account usage</div>
         {claudeOn && (
-          <>
-            <div className="sv-pn-h sv-pn-neutral">Claude Code</div>
-            <div className="sv-acct"><span className="sv-acct-dot" style={{ background: 'var(--ob)' }} />work<span className="sv-meter"><i style={{ width: '62%' }} /></span>62%</div>
-          </>
+          <div className="sv-acct"><span className="sv-acct-dot" style={{ background: 'var(--ob)' }} />Claude Code work<span className="sv-meter"><i style={{ width: '62%' }} /></span>62%</div>
         )}
-        <div className="sv-pn-h sv-pn-neutral">Codex</div>
-        <div className="sv-acct"><span className="sv-acct-dot" style={{ background: 'var(--status-success)' }} />work@example, 5-hour<span className="sv-meter"><i style={{ width: '40%' }} /></span>40%</div>
-        <div className="sv-acct"><span className="sv-acct-dot" style={{ background: 'var(--status-success)' }} />work@example, weekly<span className="sv-meter"><i style={{ width: '22%' }} /></span>22%</div>
-        <div className="sv-acct"><span className="sv-acct-dot" style={{ background: 'var(--status-warning)' }} />review-bot key<span className="sv-meter" />per token</div>
+        <div className="sv-acct"><span className="sv-acct-dot" style={{ background: 'var(--status-success)' }} />Codex work@example, 5-hour<span className="sv-meter"><i style={{ width: '40%' }} /></span>40%</div>
+        <div className="sv-acct"><span className="sv-acct-dot" style={{ background: 'var(--status-success)' }} />Codex work@example, weekly<span className="sv-meter"><i style={{ width: '22%' }} /></span>22%</div>
+        <div className="sv-acct"><span className="sv-acct-dot" style={{ background: 'var(--status-warning)' }} />Codex review-bot key<span className="sv-meter" />per token</div>
         <div className="sv-wd-chip"><span className="sv-wd-dot" /> Each account apart, never merged</div>
       </div>
     </div>

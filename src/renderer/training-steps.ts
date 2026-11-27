@@ -121,7 +121,8 @@ export const trainingSteps: TrainingStep[] = [
       '**Per-session isolation** -- each session gets its own private home, so two sessions on different accounts never cross over',
       'Your **primary** account (the one captured on first run) is protected and can never be deleted',
       'Memory, settings, and history stay **shared** across all accounts',
-      'The **Usage page** (the person icon on the rail, once you have two or more accounts) shows the 5-hour and weekly limits of every account of each assistant that is on, in a section per assistant when both are; the usage strip at the foot shows one pill per person, grouped by provider',
+      'The **Usage page** (the person icon on the rail, once you have two or more accounts) shows every account at once as one grid of cards, each bar saying what is left; sort by 5h left, Weekly left or Name, and with both assistants on, show one of them. The usage strip at the foot shows one pill per person, grouped by provider',
+      'A Claude account that is still signed in **renews itself**: its card says Refreshing meanwhile, and **Sign in again**, with the reason, only when you must',
     ],
     howToTrigger: [
       { label: 'Choose at launch', value: 'Start a session → account dialog' },
@@ -136,7 +137,7 @@ export const trainingSteps: TrainingStep[] = [
       'Add accounts by running **/login** in a session, or from Settings, Accounts',
       'Each session is **isolated** -- signing in to one never touches the others or your default',
       'Name and colour each account in **Settings, Accounts**; memory and history stay shared',
-      'Every account\'s limits on one **Usage page**, Claude Code and Codex side by side when both are on',
+      'Every account\'s limits on one **Usage page** grid, Claude Code and Codex side by side when both are on',
     ],
     // No dedicated account-picker capture exists yet. (Future capture:
     // step-accounts.jpg / the launch-time account picker.)
@@ -304,6 +305,7 @@ export const trainingSteps: TrainingStep[] = [
       "Ask the other assistant for a second opinion. A Claude session can ask for a Codex review, and a Codex session can ask for a Claude review. Each review is a separate, one-off, read-only reviewer in the asking session's project, on your reviewer account; it never uses one of your open sessions.",
     highlights: [
       'From a Claude session, ask for a **Codex review**; from a Codex session, ask for a **Claude review**',
+      'The session that asks can choose the **model** and the **effort** from what that reviewer offers, and a choice it does not offer is refused with the list. Every review ends with a line naming the model and effort it ran on, and where each came from',
       'Reviews use the **reviewer default**, or the default account when none is set -- choose it with **Make reviewer** in Settings, Accounts',
       'Each direction has **its own switch** in Settings, General, Built-in Tools, naming the account reviews will use and, when a review cannot run, why',
       'Codex reviews run on a Codex account added in this app; a sign-in that must be confirmed at each launch cannot review',
@@ -679,6 +681,7 @@ export const trainingSteps: TrainingStep[] = [
       'With **Claude Code and Codex sessions through the session helper** on, an Insights report for a Claude Code account runs inside the helper too, and is listed as **Insights report** while it runs, with **End** only',
       'SSH tabs and their partner terminals, a terminal run as administrator, and the tabs the app opens for a sign-in or to install or update a program start as before',
       'On Windows, the Machines page also lists the Linux machines (x86-64 or arm64, a Raspberry Pi included) you added for remote sessions through the session helper (preview), with Add, Check and Remove, and the sessions each one keeps for an SSH Persistent tab, with Re-attach and End',
+      'On Windows, each Linux machine\'s card also has **How accounts sign in here** and **Accounts here** (a preview, for Claude Code accounts only: Codex accounts do not sign in on machines yet): **Sign in on that machine** runs Claude Code\'s own sign-in there and the sign-in stays on that machine, **Sign out** ends it, **Check** reads who is signed in, and **Remove** signs the accounts out first. A Claude Code tab through the helper starts on its config\'s account, a notice offers a way on when that account is not signed in there, and **Switch Account** works on the tab',
       'The page reads when you open it, when you come back to its tab and on **Refresh**',
     ],
     howToTrigger: [
@@ -686,6 +689,7 @@ export const trainingSteps: TrainingStep[] = [
       { label: 'Switch on', value: 'Settings -> General -> Plain terminals through the session helper' },
       { label: 'Sessions', value: 'Settings -> General -> Claude Code and Codex sessions through the session helper' },
       { label: 'Remote', value: 'On Windows: Settings -> General -> Remote sessions through the session helper (Linux, preview)' },
+      { label: 'Accounts', value: 'On Windows: Machines -> a Linux machine\'s card -> Accounts here' },
       { label: 'Services', value: 'Title bar -> Services pill -> Session helper' },
     ],
     proTip:
