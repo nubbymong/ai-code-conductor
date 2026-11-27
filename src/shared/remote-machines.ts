@@ -124,6 +124,16 @@ export type RemoteConsent =
   | { ok: true; token: string; target: string; text: string }
   | { ok: false; message: string }
 
+/** 2.1.3-beta.20 section 3.1.8: Remove's options. Remove signs out each
+ *  account signed in on the machine while it answers, then removes the
+ *  helper. `forget`: the machine did not answer and the user chose to remove
+ *  it anyway; the app forgets it without reaching it (its `~/.aicc` stays,
+ *  and the answer names the accounts still signed in there and where to end
+ *  each). */
+export interface RemoteRemoveOptions {
+  forget?: boolean
+}
+
 /** What an Add, a Check or a Remove did, in a plain sentence. */
 export interface RemoteActionResult {
   ok: boolean

@@ -263,6 +263,14 @@ export const IPC = {
   MACHINES_REMOTE_SESSIONS: 'machines:remote:sessions',      // -> RemoteSessionsState
   MACHINES_REMOTE_END_SESSION: 'machines:remote:endSession', // (did: string, sid: string) -> RemoteActionResult
   MACHINES_REMOTE_END_TAB: 'machines:remote:endTab',         // (sessionId: string, did?: string) -> RemoteActionResult
+  // 2.1.3-beta.20 section 3 (Sign in on this machine; shapes in shared/host-accounts.ts): each machine's
+  // accounts as its last read found them (no exec), a sign-out on a machine, and two pushes: a machine's
+  // accounts after each read, and a helper tab's account notice (it started nothing; a sign-in tab ended).
+  // MACHINES_REMOTE_REMOVE takes (did, opts?: RemoteRemoveOptions) from this beta.
+  MACHINES_REMOTE_ACCOUNTS: 'machines:remote:accounts',                 // -> HostAccountsState
+  MACHINES_REMOTE_ACCOUNT_SIGN_OUT: 'machines:remote:accountSignOut',   // (req: HostSignOutRequest) -> HostSignOutResult
+  MACHINES_REMOTE_ACCOUNTS_CHANGED: 'machines:remote:accountsChanged',  // main -> renderer: HostMachineAccounts
+  REMOTE_ACCOUNT_NOTICE: 'remote:accountNotice',                        // main -> renderer: HostAccountNotice
 
   // CLI
   CLI_CHECK: 'cli:check',
