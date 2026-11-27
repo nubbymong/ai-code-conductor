@@ -54,6 +54,26 @@ export interface ProfileAuthInfo {
   duplicateOfProfileIds?: string[]
 }
 
+// The plans a Claude sign-in's `subscriptionType` names, as the Account usage
+// page's plan pill says them (nubbymong/aicc_planning#445). An unknown value
+// shows no pill rather than a raw word (as planLabelFor does for ChatGPT plans).
+const SUBSCRIPTION_LABELS: Readonly<Record<string, string>> = Object.freeze({
+  free: 'Free',
+  pro: 'Pro',
+  max: 'Max',
+  team: 'Team',
+  enterprise: 'Enterprise',
+})
+
+/** The plan pill's text for a profile's `subscriptionType`, or null when it is
+ *  missing or not one this build knows. Case and surrounding spaces do not
+ *  matter. */
+export function subscriptionPlanLabel(subscriptionType: unknown): string | null {
+  if (typeof subscriptionType !== 'string') return null
+  const key = subscriptionType.trim().toLowerCase()
+  return Object.prototype.hasOwnProperty.call(SUBSCRIPTION_LABELS, key) ? SUBSCRIPTION_LABELS[key] : null
+}
+
 export type AuthWindowTone = 'expired' | 'critical' | 'warning' | 'ok' | 'unknown'
 
 export interface AuthWindow {

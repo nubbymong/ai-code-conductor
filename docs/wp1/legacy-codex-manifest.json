@@ -1,9 +1,9 @@
 {
   "schema": "wp1-legacy-codex-manifest/3",
-  "generatedAt": "2026-11-26T15:58:38.359Z",
-  "head": "9a1be3d468669c3fe2a0ab93bd048030ee0c2051",
-  "tree": "fa6c5fb8eb2d977d10f90ea00106ec809b48d605",
-  "scannedWorkingTree": false,
+  "generatedAt": "2026-11-27T08:58:39.542Z",
+  "head": "5a64d4a0e0c2767562c6ccc651240486d19e11c9",
+  "tree": "c4da9981902882e6f11f1db1991454dfbb40a776",
+  "scannedWorkingTree": true,
   "predicateDigest": "100a1233edebdc39a5f9004d3fba980a89ebb15b25872e52076386bc84b03153",
   "predicates": [
     {
@@ -116,9 +116,9 @@
     "\\.(png|jpg|jpeg|gif|ico|icns|webp|svg|woff2?|ttf|otf|mp4|zip|asar|node|exe|dll|dylib|so|pdf)$",
     "^package-lock\\.json$"
   ],
-  "trackedFileCount": 3981,
-  "excludedFileCount": 637,
-  "scannedFileCount": 3344,
+  "trackedFileCount": 3987,
+  "excludedFileCount": 638,
+  "scannedFileCount": 3349,
   "unscopedFileCount": 15,
   "unscoped": [
     ".claude/settings.json",
@@ -139,8 +139,8 @@
   ],
   "unscopedMentions": [],
   "unreadable": [],
-  "matchedPathCount": 1145,
-  "pathDigest": "6b94ce5ca2c08d4c10604a7b82dce193f9feaf029242ecd8fdbd83f8622aef23",
+  "matchedPathCount": 1146,
+  "pathDigest": "eabbf3d4702fb9cdc27782f56cd974a829432e62cbb1dd1d6189fba640147f3c",
   "entries": [
     {
       "path": ".github/workflows/ci.yml",
@@ -2685,7 +2685,7 @@
       "predicates": [
         "P11"
       ],
-      "lineCount": 77
+      "lineCount": 84
     },
     {
       "path": "src/renderer/components/AccountsPanel.tsx",
@@ -7383,18 +7383,25 @@
       "lineCount": 16
     },
     {
+      "path": "tests/unit/renderer/account-usage-grid.test.ts",
+      "predicates": [
+        "P13"
+      ],
+      "lineCount": 12
+    },
+    {
       "path": "tests/unit/renderer/account-usage-panel-streaming.test.tsx",
       "predicates": [
         "P13"
       ],
-      "lineCount": 62
+      "lineCount": 67
     },
     {
       "path": "tests/unit/renderer/account-usage-panel.test.tsx",
       "predicates": [
         "P13"
       ],
-      "lineCount": 25
+      "lineCount": 30
     },
     {
       "path": "tests/unit/renderer/accounts-identity-lifecycle.test.tsx",
