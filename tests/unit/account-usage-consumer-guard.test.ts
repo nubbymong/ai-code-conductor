@@ -52,7 +52,7 @@ const { fetchAccountUsage } = await import('../../src/main/usage/account-usage')
 const { acquireProfileConsumer, _resetProfileConsumersForTest } = await import('../../src/main/profile-consumers')
 const { isProfileInUseByLiveSession } = await import('../../src/main/claude-account-identity')
 
-const REFRESH_HOST = 'console.anthropic.com'
+const REFRESH_HOST = 'platform.claude.com'
 const PROFILE = 'profile-x-1'
 
 function writeLapsedCreds(): void {

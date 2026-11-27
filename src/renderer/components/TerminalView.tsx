@@ -31,6 +31,7 @@ import { spentCommand } from '../utils/commandTerminal'
 import { markKeptByHelper } from '../utils/keptByHelper'
 import { listenForSpawnEnd, reportSpawnEnd } from '../utils/spawnEndNotice'
 import { carryNote, terminalNoteLine } from '../utils/launchNote'
+import { signInBannerText } from '../utils/signInBanner'
 import { sessionProviderAccount } from '../utils/accountChip'
 import { switchOrigin, forgetSwitchOrigin } from '../utils/switchOrigin'
 import SshFlowOverlay from './SshFlowOverlay'
@@ -2154,8 +2155,8 @@ export default function TerminalView({ sessionId, configId, cwd, shellOnly, elev
       data-terminal-active={isActive ? '' : undefined}
     >
       {needsLogin && (
-        <div className="bg-blue/10 border-b border-blue/30 text-lavender text-xs px-3 py-1.5 shrink-0">
-          Setting up a new account. Run claude, type /login, and choose the account. We&apos;ll detect it automatically.
+        <div className="bg-blue/10 border-b border-blue/30 text-lavender text-xs px-3 py-1.5 shrink-0" data-testid="sign-in-banner">
+          {signInBannerText(session?.signInAgain === true)}
         </div>
       )}
       {switchNote && (

@@ -8,7 +8,7 @@
 // the rotation branch outright.
 //
 // The observable is the network: the refresh grant is a POST to
-// console.anthropic.com/v1/oauth/token. With noRefresh it is never sent; without
+// platform.claude.com/v1/oauth/token. With noRefresh it is never sent; without
 // it (a lapsed, signed-in, non-primary token, no live consumer) it IS.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import * as fs from 'fs'
@@ -57,7 +57,7 @@ vi.mock('https', () => {
 
 const { fetchAccountUsage } = await import('../../src/main/usage/account-usage')
 
-const REFRESH_HOST = 'console.anthropic.com'
+const REFRESH_HOST = 'platform.claude.com'
 
 function writeLapsedCreds(): void {
   const dir = path.join(tmpHome, '.claude')

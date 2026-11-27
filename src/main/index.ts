@@ -27,7 +27,9 @@ import {
 } from './canvas/ccc-ux-protocol'
 
 import { startStatuslineWatcher, setTranscriptPathSink, setStatuslineUsageSink, healGlobalStatusline } from './statusline-watcher'
-import { recordLiveUsageForSession, setClaudeAccountDataAllowed, setLiveUsageTranscriptProfile, setLiveUsageSessionReports } from './usage/account-usage'
+import { recordLiveUsageForSession, setClaudeAccountDataAllowed, setClaudeCliRenewal, setClaudeSignInProblem, setLiveUsageTranscriptProfile, setLiveUsageSessionReports } from './usage/account-usage'
+import { readClaudeCliAuth } from './account-web/claude-cli-auth'
+import { readAllProfileAuthInfo, signInProblemOf } from './account-auth-info'
 import { sessionLaunchedWithoutAppStatusLine } from './hooks/per-session-settings'
 import { getProvider, providerMembers } from './providers'
 import { composeProviders, flushPendingProviderCliKills } from './providers/compose'
@@ -586,6 +588,13 @@ if (!gotTheLock) {
     // (no credential, refresh or request) while it is switched off, by the
     // same rule. Set here, before the usage handlers are registered below.
     setClaudeAccountDataAllowed(() => providerProbeRefusal('claude') === null)
+    // nubbymong/aicc_planning#444: the page renews the primary account's
+    // lapsed sign-in, and one whose sign-in folder has no verdict yet, through
+    // Claude Code's own `claude auth status` (no window, a 10 s limit; never
+    // `claude -p`), and asks a duplicate or wrong-account profile to sign in
+    // again by the same cross-check the page's banners read.
+    setClaudeCliRenewal((profileId) => readClaudeCliAuth(profileId))
+    setClaudeSignInProblem((profileId) => signInProblemOf(readAllProfileAuthInfo({ quiet: true }), profileId))
 
     // Take a daily safety snapshot of the CONFIG directory BEFORE anything
     // writes to it (deploy/config below, window/handlers later, IPC saves

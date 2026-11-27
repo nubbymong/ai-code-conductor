@@ -31,7 +31,7 @@ vi.mock('../../src/main/claude-account-identity', () => ({
 }))
 vi.mock('../../src/main/usage/usage-snapshots', () => ({ loadSnapshots: () => new Map(), saveSnapshots: () => {} }))
 
-const REFRESH = 'console.anthropic.com/v1/oauth/token'
+const REFRESH = 'platform.claude.com/v1/oauth/token'
 const requests: string[] = []
 /** Runs while the token refresh is answered (a test may change the folder then). */
 let duringRefresh: () => void = () => {}

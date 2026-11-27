@@ -126,6 +126,25 @@ describe('useReauthAccount completion', () => {
   })
 })
 
+// nubbymong/aicc_planning#444: the tab is a re-auth of an existing account, so
+// its banner says so (signInAgain), not "Setting up a new account".
+describe('a re-auth tab is marked as one', () => {
+  it('the session it opens carries signInAgain beside needsLogin', async () => {
+    vi.useFakeTimers()
+    useSessionStore.setState({ sessions: [], activeSessionId: null, isRestoring: false } as never)
+    useAccountProfilesStore.setState({ profiles: [{ id: 'profile-aaa111', name: 'Work', accountEmail: 'work@corp.com', createdAt: 1 }] } as never)
+    credentialStampMock.mockReset()
+    credentialStampMock.mockResolvedValue({ ok: true, stamp: '100:50', signedIn: true })
+    api.accountProfiles.credentialStamp = credentialStampMock
+    const { result, unmount } = renderHook(() => useReauthAccount())
+    await act(async () => { result.current({ id: 'profile-aaa111', name: 'Work' }); for (let i = 0; i < 4; i++) await Promise.resolve() })
+    expect(session()?.needsLogin).toBe(true)
+    expect(session()?.signInAgain).toBe(true)
+    unmount()
+    vi.useRealTimers()
+  })
+})
+
 describe('an abandoned re-auth tab still stops polling', () => {
   it('after the attempt backstop, no further identity/stamp reads happen even though the login stayed pending', async () => {
     vi.useFakeTimers()

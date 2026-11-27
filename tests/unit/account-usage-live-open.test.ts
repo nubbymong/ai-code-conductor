@@ -18,7 +18,7 @@
 //
 // The observable is the network: an account a session uses issues no request
 // at all; a closed account issues a GET to api.anthropic.com and, with a
-// lapsed token, a refresh POST to console.anthropic.com.
+// lapsed token, a refresh POST to platform.claude.com.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import * as fs from 'fs'
 import * as os from 'os'
@@ -94,7 +94,7 @@ const transcriptOf = (sessionId: string, profileId = profileBySession.get(sessio
 const fakeFolderRule = (transcriptPath: string) => /^\/profiles\/([^/]+)\/projects\/[^/]+\/[^/]+\.jsonl$/.exec(transcriptPath)?.[1]
 
 const USAGE_HOST = 'api.anthropic.com'
-const REFRESH_HOST = 'console.anthropic.com'
+const REFRESH_HOST = 'platform.claude.com'
 
 const profile = (over: Partial<AccountProfile>): AccountProfile => ({
   id: 'profile-x-1', name: 'Acct', accountEmail: 'x@example.com', createdAt: 0, ...over,
