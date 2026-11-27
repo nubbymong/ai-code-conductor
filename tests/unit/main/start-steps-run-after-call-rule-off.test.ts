@@ -2,7 +2,8 @@
 // on Linux), the start's profile steps still run after the start call has
 // returned, never inside it: a caller that asks at once sees them pending,
 // and a step that throws at once settles the wait only after the call has
-// returned. So it was while the start awaited checkEveryProfileCredentialFolders;
+// returned. So it was while the start awaited the check of every profile and
+// the ready home in one call (_checkEveryProfileCredentialFoldersForTest now);
 // the ready-home order change once ran them inside the call there, and the
 // owner-only credentials suite's pending test went red on Linux (CI run
 // 46044250727).

@@ -1341,8 +1341,9 @@ export async function startOwnerOnlyCredentialFolders(
  *  account. Answers the rule to check the ready home with after the steps,
  *  or null (no rule on, or the ready home already checked). An async
  *  function, so the steps always run after the start call has returned, also
- *  with no rule on (macOS, Linux), as they did when the start awaited
- *  checkEveryProfileCredentialFolders. */
+ *  with no rule on (macOS, Linux), as they did when the start awaited the
+ *  check of every profile and the ready home in one call
+ *  (_checkEveryProfileCredentialFoldersForTest now). */
 async function checkFoldersBeforeSteps(): Promise<CredentialFolderRule | null> {
   const active = credentialFolderRule()
   if (!active) return null
@@ -1400,13 +1401,15 @@ export function startProfileStepsPending(): boolean {
   return startStepsPending !== null
 }
 
-/** Every listed profile's sign-in folders checked (those without a verdict),
- *  then a checked home made ready for the next new profile. Never rejects.
- *  No start path calls it since the start checks the ready home after its
- *  profile steps when they make no account (startOwnerOnlyCredentialFolders);
- *  kept for the tests that check every profile and the ready home in one
- *  call, and for any later caller that needs both. */
-export async function checkEveryProfileCredentialFolders(): Promise<void> {
+/** Test seam: every listed profile's sign-in folders checked (those without
+ *  a verdict), then a checked home made ready for the next new profile.
+ *  Never rejects. Nothing in the app calls it: the start checks the ready
+ *  home after its profile steps when they make no account, and before them
+ *  only when they may make one (startOwnerOnlyCredentialFolders), so a start
+ *  path wired to this instead would hold a first tab for the ready home
+ *  again. The tests that check every profile and the ready home in one call
+ *  use it. */
+export async function _checkEveryProfileCredentialFoldersForTest(): Promise<void> {
   const rule = credentialFolderRule()
   if (!rule) return
   await checkListedProfileHomes(rule)
