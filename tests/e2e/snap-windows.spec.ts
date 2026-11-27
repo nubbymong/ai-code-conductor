@@ -126,10 +126,15 @@
  * and, in 46028075097, ran to its 30 s limit and was asked once more, so the
  * stand-in never started within TAB_MS (as in run 46023467484). The tab's own
  * PowerShell gave its first output 289 ms after its spawn and the stand-in
- * started 0.9 s after the spawn. Since then that check runs after the steps when
- * they make no account (account-profiles.ts startOwnerOnlyCredentialFolders),
- * and the tab waits only for the scripts folders, at most 5 s
- * (SCRIPT_FOLDERS_LAUNCH_WAIT_MS).
+ * started 0.9 s after the spawn. Since then that check runs after the steps
+ * when they make no account (account-profiles.ts
+ * startOwnerOnlyCredentialFolders), and the tab is held only for the scripts
+ * folders, at most 5 s (SCRIPT_FOLDERS_LAUNCH_WAIT_MS). Its own PowerShell
+ * still runs the launch line only once the start's owner-only PowerShell
+ * calls have ended: run 46031920492 read its first output 530 ms after the
+ * spawn and the stand-in 7 ms after both calls ended, 10.4 s after they
+ * began; run 46030823339, on a slower runner, 20.2 s from the tab to the
+ * stand-in, within TAB_MS.
  * With X1.2 in (the beta.16 aggregate, run 45304028588 on 5a2f0f41), a
  * picture's sentence follows its paste by 1.5 s and its Enter by 2.2 s, and a
  * picture pressed meanwhile waited behind the one before it: 82 to 1818 ms
