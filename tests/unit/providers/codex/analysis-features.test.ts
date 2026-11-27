@@ -77,9 +77,9 @@ describe("the review run's disabled features", () => {
 })
 
 // 2.1.3-beta.8: a review runs on the reviewer account's default Codex model.
-// nubbymong/aicc_planning#446: that is still the constant; a model is added
-// (codexReviewArgs, below) only when the caller chose one or the installed
-// Codex's list names its first.
+// nubbymong/aicc_planning#446: that is still the constant, and still the
+// review with no model chosen; a model is added (codexReviewArgs, below) only
+// when the caller chose one.
 describe('the review run names no model (2.1.3-beta.8)', () => {
   it('its argv has no -m or --model, and no override picks a model', () => {
     const args = argvOf('review')

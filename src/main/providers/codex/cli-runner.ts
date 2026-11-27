@@ -6,7 +6,8 @@
 // adds to its constant (ADR-031, nubbymong/aicc_planning#446): a review's
 // argv is the `review` constant plus two allow-listed values, its model and
 // its reasoning effort, each one whole argv element from a fixed list main
-// checked, checked again here (codexReviewArgs) and held to PLAIN_ARG.
+// checked, its form checked again here (codexReviewArgs) and held to
+// PLAIN_ARG.
 //
 // A Windows `.cmd` shim (what `npm install -g` puts on PATH) cannot be spawned
 // without a shell since the CVE-2024-27980 fix, so it goes through cmd.exe
@@ -83,8 +84,8 @@ const ARGS: Readonly<Record<CodexCliOperation, readonly string[]>> = {
   // medium reasoning effort (model_reasoning_effort=medium), so its depth
   // stays what it was. The config's agents setting is off too
   // (agents.enabled=false), as in the analysis and Insights runs below.
-  // nubbymong/aicc_planning#446: this is the review with nothing chosen; a
-  // chosen (or readable default) model and a chosen effort are added by
+  // nubbymong/aicc_planning#446: this is the review with nothing chosen,
+  // word for word; a chosen model and a chosen effort are added by
   // codexReviewArgs below, and nothing else of it moves.
   'review': [
     'exec', '--json', '--ephemeral', '--skip-git-repo-check', '--ignore-user-config', '--ignore-rules', '--disable', 'hooks', '--sandbox', 'read-only',
@@ -217,10 +218,11 @@ export const CODEX_REVIEW_DEFAULT_EFFORT = 'medium'
  *  values. `model` adds `-m <id>` just before the effort override, and
  *  `effort` is that override's level (medium when absent); every other
  *  element is the constant's, in its order. Main has already taken each
- *  value from its allow-list (codex-review-mcp-tool.ts); this checks them
- *  again as codexAgentArgs does (a model id that can never read as a flag, a
- *  level of the CLI's own), so a value from anywhere else starts nothing.
- *  PLAIN_ARG then holds every element (cliCommandLine). */
+ *  value from its allow-list (codex-review-mcp-tool.ts); this checks their
+ *  form again as codexAgentArgs does (a model id that can never read as a
+ *  flag, a level of the CLI's own), so a value of any other form starts
+ *  nothing. Which models may run is main's list, not this check. PLAIN_ARG
+ *  then holds every element (cliCommandLine). */
 export function codexReviewArgs(choice: { model?: unknown; effort?: unknown } = {}): string[] | { refused: string } {
   const { model, effort } = choice
   if (model !== undefined && !isCodexModelId(model)) return { refused: 'the model is not one this app passes to Codex' }

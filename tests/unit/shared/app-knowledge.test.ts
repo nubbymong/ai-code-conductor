@@ -1673,10 +1673,14 @@ describe('surfaces for the Codex review fix and the last 2.1.1-beta.3 text', () 
     const cr = body('code-review')
     expect(cr).toContain('The session that asks for a review can choose the model and the effort it runs on, from the models and levels that reviewer offers')
     expect(cr).toContain('Any other choice is refused with the list of what it can choose, and nothing runs.')
-    expect(cr).toContain("Left unset, a Codex review runs on the first model your installed Codex lists, or on the reviewer account's default Codex model when the app could not read that list, at medium effort.")
+    // Review round 1 (M1): a Codex review left unset names no model, as before.
+    expect(cr).toContain("Left unset, a Codex review runs on the reviewer account's default Codex model, as before, at medium effort.")
+    expect(cr).not.toMatch(/first model your installed Codex lists/)
     expect(cr).toContain("A Claude review left unset runs on Claude Code's own default model and effort for the reviewer account, or on the ones ANTHROPIC_MODEL and CLAUDE_CODE_EFFORT_LEVEL set in the app's environment; while CLAUDE_CODE_EFFORT_LEVEL is set, a chosen effort is refused, because Claude Code would not use it.")
     expect(cr).toContain("Every review ends with a line that names the model and the effort it ran on, and where each came from: the asking session's choice, the default, or the app's environment.")
-    expect(cr).toContain('or says the model is not confirmed when Claude Code reports none.')
+    // Review round 1 (m1, n3): what nothing confirms is said as requested.
+    expect(cr).toContain("Where nothing confirms a value, the line says it was requested, not confirmed: a Claude review's effort (Claude Code does not report it), a Claude review's model when Claude Code reports none, and a Codex review's effort when no model was chosen.")
+    expect(cr).toContain("A Codex review with no model chosen says its model is the account's default, not named. When Claude Code reports more than one model, the line lists them all.")
     expect(cr).not.toMatch(/gpt/i)
   })
 

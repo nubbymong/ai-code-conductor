@@ -20,14 +20,15 @@ vi.mock('../../../src/main/codex-review-usage', () => ({
 // mock needed here. (Source under test calls logInfo through that module.)
 
 import { runCodexReview, runClaudeReview, registerCodexReviewTool, registerClaudeReviewTool, abortSessionReviews, cancelReviewRequest, MAX_REVIEWS_PER_SESSION, buildClaudePrompt, buildCodexPrompt, defaultReviewDeps, defaultClaudeReviewDeps,
-  codexReviewModels, codexReviewEfforts, codexReviewDefaultModel, claudeReviewModels, claudeReviewEfforts, DEFAULT_CODEX_REVIEW_EFFORT } from '../../../src/main/codex-review-mcp-tool'
+  codexReviewModels, codexReviewEfforts, claudeReviewModels, claudeReviewEfforts, DEFAULT_CODEX_REVIEW_EFFORT } from '../../../src/main/codex-review-mcp-tool'
 import type { ReviewToolDeps } from '../../../src/main/codex-review-mcp-tool'
 import { REVIEW_DIFF_MAX_BYTES, REVIEW_FILE_LINE_BYTES, produceReviewFiles } from '../../../src/main/review-diff'
 import type { ReviewFile, ReviewFilesDeps } from '../../../src/main/review-diff'
 import { mergeRegistry, withInstalledCodexModels } from '../../../src/shared/model-registry'
 import type { ModelRegistry } from '../../../src/shared/model-registry'
 import { logInfo } from '../../../src/main/debug-logger'
-import { CODEX_REVIEW_DEFAULT_EFFORT, CODEX_REVIEW_EFFORTS, CODEX_AGENT_EFFORTS } from '../../../src/main/providers/codex'
+import { CODEX_REVIEW_DEFAULT_EFFORT, CODEX_REVIEW_EFFORTS, CODEX_AGENT_EFFORTS, codexCommandLine, createCodexReviewOperations } from '../../../src/main/providers/codex'
+import { EventEmitter } from 'node:events'
 import { CODEX_EFFORTS } from '../../../src/main/sanitize-restored-spawn-options'
 import registryJson from '../../../resources/model-registry.json'
 
@@ -928,7 +929,7 @@ describe('nubbymong/aicc_planning#446: the caller chooses the review model and e
       expect(runInput().model).toBe('gpt-7-nova')
       h.run.mockClear(); h.diff.mockClear(); h.prepareLaunch.mockClear()
       const r = await runCodexReview({ cccSessionId: 'sess-allowed', mode: 'working', model: 'gpt-5.2' }, sets, gitCwd, deps(INSTALLED))
-      expect(r).toEqual({ isError: true, text: 'Codex review refused: model "gpt-5.2" is not one a Codex review runs on here. Choose one of: gpt-7-nova, gpt-6.2-sol; or leave model unset for gpt-7-nova.' })
+      expect(r).toEqual({ isError: true, text: 'Codex review refused: model "gpt-5.2" is not one a Codex review runs on here. Choose one of: gpt-7-nova, gpt-6.2-sol; or leave model unset for the reviewer account\'s default model.' })
       nothingRan()
     })
 
@@ -973,32 +974,76 @@ describe('nubbymong/aicc_planning#446: the caller chooses the review model and e
       expect(await runCodexReview({ cccSessionId: 'sess-allowed', mode: 'working', model: 'gpt-7-nova', effort: 'xhigh' }, sets, gitCwd, deps(INSTALLED))).toEqual({
         isError: true, text: 'Codex review refused: effort "xhigh" is not one gpt-7-nova runs. Choose one of: low, medium, high; or leave effort unset for medium.',
       })
-      // No model chosen: the default the installed list names decides.
-      expect((await runCodexReview({ cccSessionId: 'sess-allowed', mode: 'working', effort: 'ultra' }, sets, gitCwd, deps(INSTALLED))).text).toContain('is not one gpt-7-nova runs.')
       nothingRan()
     })
 
-    it('names a readable default model explicitly (-m), and says so; with no list read it passes none and says the model was not named', async () => {
-      expect(codexReviewDefaultModel(INSTALLED)).toBe('gpt-7-nova')
-      const r = await runCodexReview({ cccSessionId: 'sess-allowed', mode: 'working' }, sets, gitCwd, deps(INSTALLED))
-      expect(runInput(0)).toMatchObject({ model: 'gpt-7-nova', effort: DEFAULT_CODEX_REVIEW_EFFORT })
-      expect(r.text).toBe(`1. A finding.\n\n\n---\nCodex review on gpt-7-nova (default), effort medium (default)${FOOT}`)
-      expect(codexReviewDefaultModel(BUNDLED)).toBeNull()
-      const bare = await runCodexReview({ cccSessionId: 'sess-allowed', mode: 'working' }, sets, gitCwd, deps())
-      expect('model' in runInput(1)).toBe(false)
-      expect(runInput(1).effort).toBe('medium')
-      expect(bare.text).toBe(`1. A finding.\n\n\n---\nCodex review on the reviewer account's default model, not named (default), effort medium (default)${FOOT}`)
+    // Review round 1 (M1): the installed list is the catalogue built into the
+    // binary, read signed out, not the account's own list, so its first
+    // model is no account's known default. With no model chosen the review
+    // names none, and runs exactly as 2.1.3-beta.19 did.
+    it("with no model chosen the spawned argv is 2.1.3-beta.19's, word for word, whether or not the installed list has been read", async () => {
+      const beta19 = codexCommandLine('/usr/bin/codex', 'review', 'linux', {})
+      if ('refused' in beta19) throw new Error(beta19.refused)
+      for (const registry of [BUNDLED, INSTALLED]) {
+        const spawned: string[][] = []
+        const runDeps = {
+          platform: 'linux' as const,
+          spawn: (_file: string, args: readonly string[]) => {
+            spawned.push([...args])
+            const child = Object.assign(new EventEmitter(), { pid: 4242, stdout: new EventEmitter(), stderr: new EventEmitter(), stdin: { end: vi.fn(), on: vi.fn() } })
+            queueMicrotask(() => {
+              child.stdout.emit('data', `${JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text: '1. A finding.' } })}\n`)
+              child.emit('close', 0)
+            })
+            return child
+          },
+          killTree: () => {},
+        }
+        h.prepareLaunch.mockResolvedValue({ ok: true, lease: { release: h.release }, binding: { providerAccountId: 'acct-1', authRealmId: 'realm-1' }, realmOnly: false, reviewer: 'reviewer-default', executable: '/usr/bin/codex', env: { PATH: '/usr/bin' } })
+        const reviewer = createCodexReviewOperations({ platform: 'linux', runDeps: () => runDeps as never })
+        const r = await runCodexReview({ cccSessionId: 'sess-allowed', mode: 'working' }, sets, gitCwd, deps(registry, { reviewer: () => reviewer }))
+        expect(spawned, registry.installedCodex ? 'installed list read' : 'no list').toEqual([beta19.args])
+        expect(r.text).toContain("\n---\nCodex review on the reviewer account's default model, not named (default), effort medium (default; requested, not confirmed) -- 1 message used. Usage data unavailable.")
+      }
     })
 
-    it('the log line, a failure and a timeout name the model and the effort and their sources too', async () => {
+    it('with no model chosen the run gets none, whichever list is read; the effort, checked against no model, is said as requested, any Codex level allowed', async () => {
+      for (const [i, registry] of [BUNDLED, INSTALLED].entries()) {
+        const r = await runCodexReview({ cccSessionId: 'sess-allowed', mode: 'working' }, sets, gitCwd, deps(registry))
+        expect('model' in runInput(i)).toBe(false)
+        expect(runInput(i).effort).toBe(DEFAULT_CODEX_REVIEW_EFFORT)
+        expect(r.text).toBe(`1. A finding.\n\n\n---\nCodex review on the reviewer account's default model, not named (default), effort medium (default; requested, not confirmed)${FOOT}`)
+      }
+      const ultra = await runCodexReview({ cccSessionId: 'sess-allowed', mode: 'working', effort: 'ultra' }, sets, gitCwd, deps(INSTALLED))
+      expect('model' in runInput(2)).toBe(false)
+      expect(runInput(2).effort).toBe('ultra')
+      expect(ultra.text).toContain("Codex review on the reviewer account's default model, not named (default), effort ultra (caller; requested, not confirmed)")
+      // A model named on the argv runs, at a level checked against its own: said as what ran.
+      expect((await runCodexReview({ cccSessionId: 'sess-allowed', mode: 'working', model: 'gpt-7-nova', effort: 'high' }, sets, gitCwd, deps(INSTALLED))).text)
+        .toContain('Codex review on gpt-7-nova (caller), effort high (caller) -- 1 message used')
+    })
+
+    it('a log line before the run and one after it, a failure and a timeout name the model and the effort and their sources', async () => {
+      const logs = () => vi.mocked(logInfo).mock.calls.map((c) => String(c[0])).filter((l) => l.startsWith('[codex-review]'))
       await runCodexReview({ cccSessionId: 'sess-allowed', mode: 'working', model: 'gpt-6.1-sol', effort: 'high' }, sets, gitCwd, deps())
-      expect(vi.mocked(logInfo).mock.calls.map((c) => String(c[0])).find((l) => l.startsWith('[codex-review]'))).toMatch(/reviewer account acct-1 \(reviewer-default\), on gpt-6\.1-sol \(caller\), effort high \(caller\)$/)
+      expect(logs()).toHaveLength(2)
+      expect(logs()[0]).toMatch(/reviewer account acct-1 \(reviewer-default\), on gpt-6\.1-sol \(caller\), effort high \(caller\)$/)
+      expect(logs()[1]).toBe('[codex-review] session sess-allowed: reviewed, on gpt-6.1-sol (caller), effort high (caller)')
       h.run.mockResolvedValueOnce({ ok: false, code: 'failed', message: 'Codex exited with code 1.' })
       expect((await runCodexReview({ cccSessionId: 'sess-allowed', mode: 'working', model: 'gpt-6.1-sol', effort: 'high' }, sets, gitCwd, deps())).text)
         .toBe('Codex review failed: Codex exited with code 1.\n\n---\nCodex review on gpt-6.1-sol (caller), effort high (caller) -- 1 message used. Usage data unavailable.')
+      expect(logs()[3]).toBe('[codex-review] session sess-allowed: ended (failed), on gpt-6.1-sol (caller), effort high (caller)')
       h.run.mockResolvedValueOnce({ ok: false, code: 'timed-out', message: 'The review timed out.' })
       expect((await runCodexReview({ cccSessionId: 'sess-allowed', mode: 'working', effort: 'max' }, sets, gitCwd, deps())).text)
-        .toContain("timed out after 5 minutes (on the reviewer account's default model, not named (default), effort max (caller)).")
+        .toContain("timed out after 5 minutes (on the reviewer account's default model, not named (default), effort max (caller; requested, not confirmed)).")
+    })
+
+    it('a reviewer that never started names no model: not in its footer, its timeout text or the log line after it', async () => {
+      const logs = () => vi.mocked(logInfo).mock.calls.map((c) => String(c[0])).filter((l) => l.startsWith('[codex-review]'))
+      h.run.mockResolvedValueOnce({ ok: false, code: 'not-started', message: 'Codex could not be started: the model is not one this app passes to Codex.' })
+      expect((await runCodexReview({ cccSessionId: 'sess-allowed', mode: 'working', model: 'gpt-6.1-sol', effort: 'high' }, sets, gitCwd, deps())).text)
+        .toBe('Codex review failed: Codex could not be started: the model is not one this app passes to Codex.\n\n---\nCodex review -- 1 message used. Usage data unavailable.')
+      expect(logs()[1]).toBe('[codex-review] session sess-allowed: ended (not-started), nothing started')
     })
   })
 
@@ -1052,19 +1097,23 @@ describe('nubbymong/aicc_planning#446: the caller chooses the review model and e
     it('the footer in each source: caller, default and environment; the model as Claude Code reports it, else not confirmed', async () => {
       // caller, nothing reported
       const caller = await runClaudeReview({ cccSessionId: 'sess-allowed', mode: 'working', model: 'opus', effort: 'high' }, sets, gitCwd, claudeDeps())
-      expect(caller.text).toBe(`1. A finding.\n\n\n---\nClaude review on opus (caller; requested, not confirmed), effort high (caller)${FOOT}`)
+      // Claude Code reports no effort: a named level is always said as requested (review round 1, m1).
+      expect(caller.text).toBe(`1. A finding.\n\n\n---\nClaude review on opus (caller; requested, not confirmed), effort high (caller; requested, not confirmed)${FOOT}`)
       // caller, reported by Claude Code's result
       h.run.mockResolvedValueOnce({ ok: true, text: '1. A finding.\n', usage: { inputTokens: 1200, cachedInputTokens: 200, outputTokens: 80 }, reportedModels: ['claude-opus-5-5'] })
       expect((await runClaudeReview({ cccSessionId: 'sess-allowed', mode: 'working', model: 'opus' }, sets, gitCwd, claudeDeps())).text)
         .toBe(`1. A finding.\n\n\n---\nClaude review on opus (caller; Claude Code reports claude-opus-5-5), effort Claude Code's default (default)${FOOT}`)
-      // default, reported
+      // default, several reported: listed as reported, none picked (review round 1, n3)
       h.run.mockResolvedValueOnce({ ok: true, text: '1. A finding.\n', usage: { inputTokens: 1200, cachedInputTokens: 200, outputTokens: 80 }, reportedModels: ['claude-opus-5-5', 'claude-haiku-5-5'] })
       expect((await runClaudeReview({ cccSessionId: 'sess-allowed', mode: 'working' }, sets, gitCwd, claudeDeps())).text)
-        .toBe(`1. A finding.\n\n\n---\nClaude review on Claude Code's default model for the account (default; Claude Code reports claude-opus-5-5, claude-haiku-5-5), effort Claude Code's default (default)${FOOT}`)
+        .toBe(`1. A finding.\n\n\n---\nClaude review on Claude Code's default model for the account (default; Claude Code reports several models: claude-opus-5-5, claude-haiku-5-5), effort Claude Code's default (default)${FOOT}`)
+      // the log line after the run carries what Claude Code reported (review round 1, n1)
+      expect(vi.mocked(logInfo).mock.calls.map((c) => String(c[0])).filter((l) => l.startsWith('[claude-review]')).at(-1))
+        .toBe("[claude-review] session sess-allowed: reviewed, on Claude Code's default model for the account (default; Claude Code reports several models: claude-opus-5-5, claude-haiku-5-5), effort Claude Code's default (default)")
       // environment: kept (owner decision Q1), not put on the argv, and said
       withEnv({ ANTHROPIC_MODEL: 'claude-sonnet-5-5', CLAUDE_CODE_EFFORT_LEVEL: 'max' })
       const env = await runClaudeReview({ cccSessionId: 'sess-allowed', mode: 'working' }, sets, gitCwd, claudeDeps())
-      expect(env.text).toBe(`1. A finding.\n\n\n---\nClaude review on claude-sonnet-5-5 (environment; requested, not confirmed), effort max (environment)${FOOT}`)
+      expect(env.text).toBe(`1. A finding.\n\n\n---\nClaude review on claude-sonnet-5-5 (environment; requested, not confirmed), effort max (environment; requested, not confirmed)${FOOT}`)
       const last = runInput(h.run.mock.calls.length - 1)
       expect('model' in last).toBe(false)
       expect('effort' in last).toBe(false)
@@ -1075,7 +1124,7 @@ describe('nubbymong/aicc_planning#446: the caller chooses the review model and e
       withEnv({ ANTHROPIC_MODEL: 'claude-sonnet-5-5' })
       const r = await runClaudeReview({ cccSessionId: 'sess-allowed', mode: 'working', model: 'opus', effort: 'high' }, sets, gitCwd, claudeDeps())
       expect(runInput(0)).toMatchObject({ model: 'opus', effort: 'high' })
-      expect(r.text).toContain('Claude review on opus (caller; requested, not confirmed), effort high (caller)')
+      expect(r.text).toContain('Claude review on opus (caller; requested, not confirmed), effort high (caller; requested, not confirmed)')
       withEnv({ CLAUDE_CODE_EFFORT_LEVEL: 'low' })
       expect(await runClaudeReview({ cccSessionId: 'sess-allowed', mode: 'working', effort: 'high' }, sets, gitCwd, claudeDeps())).toEqual({
         isError: true, text: "Claude review refused: effort cannot be chosen here, because this app's environment sets CLAUDE_CODE_EFFORT_LEVEL (low), which Claude Code puts before --effort. Leave effort unset, and the review runs at the level it sets.",
@@ -1117,11 +1166,13 @@ describe('nubbymong/aicc_planning#446: the caller chooses the review model and e
       return { model: seen.find((d) => d.startsWith('Optional: the ') && d.includes(' model the review runs on'))!, effort: seen.find((d) => /^Optional: the (reasoning effort|effort level)/.test(d))!, tool: tools[0] }
     }
     const codex = described(registerCodexReviewTool, BUNDLED)
-    expect(codex.model).toBe(`Optional: the Codex model the review runs on, one of: ${codexReviewModels(BUNDLED).join(', ')}. Unset: the reviewer account's default Codex model. Any other value is refused with the list.`)
+    expect(codex.model).toBe(`Optional: the Codex model the review runs on, one of: ${codexReviewModels(BUNDLED).join(', ')}. Unset: the reviewer account's default Codex model, which the review does not name. Any other value is refused with the list.`)
     expect(codex.effort).toBe('Optional: the reasoning effort, one of: low, medium, high, xhigh, max, ultra, where the chosen model runs it. Unset: medium. Any other value is refused with the list.')
     expect(codex.tool).toContain('Optional model and effort choose the Codex model and the reasoning effort it runs on: each lists the values it takes, and any other value is refused with that list')
     expect(codex.tool).toContain('a footer naming the model and the effort it ran on and where each came from (caller or default)')
-    expect(described(registerCodexReviewTool, INSTALLED).model).toBe("Optional: the Codex model the review runs on, one of: gpt-7-nova, gpt-6.2-sol. Unset: gpt-7-nova, the first model of the installed Codex's own list. Any other value is refused with the list.")
+    // Review round 1 (M1, m2): the parameter and the tool description agree on what unset means.
+    expect(described(registerCodexReviewTool, INSTALLED).model).toBe("Optional: the Codex model the review runs on, one of: gpt-7-nova, gpt-6.2-sol. Unset: the reviewer account's default Codex model, which the review does not name. Any other value is refused with the list.")
+    expect(codex.tool).toContain("unset, it runs on the reviewer account's default model at medium effort")
     const claude = described(registerClaudeReviewTool, BUNDLED)
     expect(claude.model).toContain(`one of: ${claudeReviewModels(BUNDLED).join(', ')}.`)
     expect(claude.model).toContain('opus[1m]')

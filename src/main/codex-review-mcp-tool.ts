@@ -195,14 +195,12 @@ export function codexReviewModels(registry: ModelRegistry): string[] {
   return [...new Set(buildModelPickerRows(registry, 'codex').map((r) => r.value).filter((v) => isCodexModelId(v)))]
 }
 
-/** The model a Codex review with none chosen names on its argv: the first
- *  model of the installed Codex's own list, in that list's order (the model
- *  a new Codex config starts on). Null when that list has not been read: the
- *  review then passes no model, and its footer says the model is not named. */
-export function codexReviewDefaultModel(registry: ModelRegistry): string | null {
-  if (!registry.installedCodex) return null
-  return codexReviewModels(registry)[0] ?? null
-}
+// A Codex review with no model chosen names none (review round 1): it runs on
+// the reviewer account's own default, as in 2.1.3-beta.19. The installed
+// Codex's list is the catalogue built into the binary, read in an empty home
+// with no sign-in (model-catalogue.ts), not the list Codex refreshes for the
+// account, so its first model is not known to be that account's default.
+// Naming the default needs a read of the account's own list.
 
 /** The efforts a Codex review on `model` may run at (null: a model this app
  *  cannot name, which takes any of Codex's levels): CODEX_EFFORTS less
@@ -232,11 +230,10 @@ export function claudeReviewEfforts(registry: ModelRegistry, model: string | nul
 /** codex_review's model and effort, from its allow-lists. */
 export function chooseCodexReview(args: { model?: string; effort?: string }, registry: ModelRegistry): ReviewPickResult {
   const models = codexReviewModels(registry)
-  const fallback = codexReviewDefaultModel(registry)
-  let model: ReviewChoiceValue = { name: fallback, source: 'default' }
+  let model: ReviewChoiceValue = { name: null, source: 'default' }
   if (args.model !== undefined) {
     if (!models.includes(args.model)) {
-      return { refused: `Codex review refused: model ${quoted(args.model)} is not one a Codex review runs on here. Choose one of: ${listText(models)}; or leave model unset for ${fallback ?? "the reviewer account's default model"}.` }
+      return { refused: `Codex review refused: model ${quoted(args.model)} is not one a Codex review runs on here. Choose one of: ${listText(models)}; or leave model unset for the reviewer account's default model.` }
     }
     model = { name: args.model, source: 'caller' }
   }
@@ -311,29 +308,42 @@ export function claudeReviewEnvironment(pick: ReviewPick, env: Readonly<Record<s
   return { argv: pick.argv, model, effort }
 }
 
+/** Said of a value nothing confirms: what was asked for, not what ran. */
+const UNCONFIRMED = 'requested, not confirmed'
+
 /** What a Codex review ran on, in the footer's and the log line's words.
- *  The model on its argv is the model that runs. */
+ *  The model on its argv is the model that runs, and an effort checked
+ *  against that model's own levels is the one it runs at. With no model
+ *  named, the effort was checked against none, and the CLI may clamp it:
+ *  it is said as requested, not as what ran. */
 export function codexRanOn(pick: ReviewPick): string {
-  const model = pick.model.name !== null ? `${pick.model.name} (${pick.model.source})` : `the reviewer account's default model, not named (${pick.model.source})`
-  return `${model}, effort ${pick.effort.name ?? DEFAULT_CODEX_REVIEW_EFFORT} (${pick.effort.source})`
+  const effort = `effort ${pick.effort.name ?? DEFAULT_CODEX_REVIEW_EFFORT} (${pick.effort.source}`
+  if (pick.model.name !== null) return `${pick.model.name} (${pick.model.source}), ${effort})`
+  return `the reviewer account's default model, not named (${pick.model.source}), ${effort}; ${UNCONFIRMED})`
 }
 
 /** What a Claude review ran on. `reported`: the models Claude Code's result
- *  names (undefined: it named none); null before the run (the log line), when
- *  nothing can be confirmed yet. Never a guess: without a report the footer
- *  says the model is not confirmed. */
+ *  names (undefined: it named none); null before the run, when nothing can be
+ *  confirmed yet. Never a guess: without a report the model is said not to
+ *  be confirmed, and with several the footer lists them as reported, not
+ *  picking one. Claude Code reports no effort, so a named level is always
+ *  said as requested. */
 export function claudeRanOn(pick: ReviewPick, reported: readonly string[] | undefined | null): string {
   const name = pick.model.name ?? (pick.model.source === 'environment' ? `the model ${CLAUDE_MODEL_VARIABLE} names` : "Claude Code's default model for the account")
-  const confirmed = reported === null ? '' : reported && reported.length > 0 ? `; Claude Code reports ${reported.join(', ')}` : pick.model.source === 'default' ? '; not confirmed' : '; requested, not confirmed'
-  const effort = pick.effort.name ?? (pick.effort.source === 'environment' ? `the level ${CLAUDE_EFFORT_VARIABLE} names` : "Claude Code's default")
-  return `${name} (${pick.model.source}${confirmed}), effort ${effort} (${pick.effort.source})`
+  const confirmed = reported === null ? ''
+    : reported && reported.length > 1 ? `; Claude Code reports several models: ${reported.join(', ')}`
+      : reported && reported.length === 1 ? `; Claude Code reports ${reported[0]}`
+        : pick.model.source === 'default' ? '; not confirmed' : `; ${UNCONFIRMED}`
+  const effort = pick.effort.name !== null ? `${pick.effort.name} (${pick.effort.source}; ${UNCONFIRMED})`
+    : pick.effort.source === 'environment' ? `the level ${CLAUDE_EFFORT_VARIABLE} names (${pick.effort.source}; ${UNCONFIRMED})`
+      : `Claude Code's default (${pick.effort.source})`
+  return `${name} (${pick.model.source}${confirmed}), effort ${effort}`
 }
 
 /** The parameter descriptions that list what codex_review takes. */
 export function codexReviewChoiceText(registry: ModelRegistry): { model: string; effort: string } {
-  const fallback = codexReviewDefaultModel(registry)
   return {
-    model: `Optional: the Codex model the review runs on, one of: ${listText(codexReviewModels(registry))}. Unset: ${fallback ? `${fallback}, the first model of the installed Codex's own list` : "the reviewer account's default Codex model"}. Any other value is refused with the list.`,
+    model: `Optional: the Codex model the review runs on, one of: ${listText(codexReviewModels(registry))}. Unset: the reviewer account's default Codex model, which the review does not name. Any other value is refused with the list.`,
     effort: `Optional: the reasoning effort, one of: ${listText(codexReviewEfforts(registry, null))}, where the chosen model runs it. Unset: ${DEFAULT_CODEX_REVIEW_EFFORT}. Any other value is refused with the list.`,
   }
 }
@@ -346,8 +356,9 @@ export function claudeReviewChoiceText(registry: ModelRegistry): { model: string
   }
 }
 
-function formatFooter(usage: ReviewUsage | undefined, name: string, ranOn: string): string {
-  const head = `\n\n---\n${name} review on ${ranOn}`
+/** `ranOn` null: the reviewer never started, so the footer names no model. */
+function formatFooter(usage: ReviewUsage | undefined, name: string, ranOn: string | null): string {
+  const head = ranOn === null ? `\n\n---\n${name} review` : `\n\n---\n${name} review on ${ranOn}`
   if (!usage) return `${head} -- 1 message used. Usage data unavailable.`
   return `${head} -- 1 message used -- ${usage.inputTokens} input tokens (${usage.cachedInputTokens} cached), ${usage.outputTokens} output tokens.`
 }
@@ -691,7 +702,11 @@ async function runReview(
         ...pick.argv,
       })
       if (out && out.killSettled instanceof Promise) kill = out.killSettled
-      const ranOn = spec.ranOn(pick, out?.reportedModels)
+      // A reviewer that never started ran on no model: its footer names none.
+      const started = !(out && !out.ok && out.code === 'not-started')
+      const ranOn = started ? spec.ranOn(pick, out?.reportedModels) : null
+      // After the run, with what the CLI reported (the line above could not have it).
+      logInfo(`[${spec.providerId}-review] session ${cccSessionId}: ${out?.ok ? 'reviewed' : `ended (${out?.code ?? 'no result'})`}${ranOn !== null ? `, on ${ranOn}` : ', nothing started'}`)
 
       // 6. Usage, whatever the outcome (a failed turn still used quota).
       if (out.usage && spec.onUsage) spec.onUsage(cccSessionId, out.usage)
@@ -700,7 +715,7 @@ async function runReview(
       if (!out.ok) {
         if (out.code === 'cancelled') return { isError: true, text: `${name} review was cancelled.` }
         if (out.code === 'timed-out') {
-          return { isError: true, text: `${name} review timed out after ${formatTimeoutForMessage(timeoutMs)} (on ${ranOn}). Try a smaller scope (e.g. mode: "paths") or raise timeoutSeconds (max ${TIMEOUT_SECONDS_MAX}).` }
+          return { isError: true, text: `${name} review timed out after ${formatTimeoutForMessage(timeoutMs)}${ranOn !== null ? ` (on ${ranOn})` : ''}. Try a smaller scope (e.g. mode: "paths") or raise timeoutSeconds (max ${TIMEOUT_SECONDS_MAX}).` }
         }
         return { isError: true, text: `${name} review failed: ${out.message}${formatFooter(out.usage, name, ranOn)}` }
       }

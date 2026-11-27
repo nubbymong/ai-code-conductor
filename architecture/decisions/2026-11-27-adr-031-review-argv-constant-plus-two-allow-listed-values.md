@@ -54,24 +54,31 @@ effort, and every result names what ran.
    `.cmd` shim route the line reaches cmd.exe verbatim, so the allow-list is
    the control there and `PLAIN_ARG` stays the backstop. Each value is always
    one whole argv element.
-4. **Defaults.** With nothing chosen, a review runs as it did in
-   2.1.3-beta.19, with one addition: when the installed Codex's list has been
-   read, a Codex review names its first model explicitly with `-m`, so the
-   model the review asked for is the model that ran. Without that list it
-   passes no model, as before.
+4. **Defaults.** With nothing chosen, a review runs exactly as it did in
+   2.1.3-beta.19: its argv is the constant, word for word. A Codex review with
+   no model chosen passes no `-m`. The installed Codex's list is not used to
+   name a default: it is the catalogue built into the binary, read in an empty
+   home with no sign-in, not the list Codex refreshes for the reviewer
+   account, so its first model is not known to be that account's default.
+   Naming the account's default needs a read of the account's own list, which
+   this decision leaves for later.
 5. **The environment is kept and reported (Q1).** `ANTHROPIC_MODEL` and
    `CLAUDE_CODE_EFFORT_LEVEL` in the app's environment stay in the Claude
    reviewer's environment. A Claude review with no model chosen runs on
    `ANTHROPIC_MODEL` when it is set; `--model` comes before it. A chosen
    effort is refused while `CLAUDE_CODE_EFFORT_LEVEL` is set, because that
    variable comes before `--effort` and the choice would not run.
-6. **Every result says what ran.** The footer and the log line name the
-   model, the effort and where each came from: `caller`, `default` or
-   `environment`. Codex's model is the one on its argv, or "the reviewer
-   account's default model, not named" when there is none. Claude Code's model
-   is the one its result reports (its model usage) or, when it reports none,
-   the footer says it was requested and is not confirmed. The app never
-   guesses.
+6. **Every result says what ran.** The footer, and a log line before and
+   after the run, name the model, the effort and where each came from:
+   `caller`, `default` or `environment`. Codex's model is the one on its argv,
+   or "the reviewer account's default model, not named" when there is none.
+   Claude Code's model is the one its result reports (its model usage); when
+   it reports several, the footer lists them all as reported, and when it
+   reports none, the footer says the model was requested and is not
+   confirmed. A value nothing confirms is said as requested, not confirmed:
+   Claude Code's effort (its result does not report one), and Codex's effort
+   when no model is named (it was checked against no model's levels). A
+   reviewer that never started names no model. The app never guesses.
 7. **No cap on cost (Q2).** A caller may choose the most expensive model and
    effort. One review runs per session at a time, within 30 to 900 seconds,
    and the footer shows the choice. Whether that is enough is judged in the

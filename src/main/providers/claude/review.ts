@@ -53,8 +53,9 @@ export const CLAUDE_REVIEW_EFFORT_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,31}$/
 
 /** A review's argv (ADR-031): CLAUDE_REVIEW_ARGS, then `--model <id>` and
  *  `--effort <level>` for the values main took from its allow-list
- *  (codex-review-mcp-tool.ts), each checked again here, so a value from
- *  anywhere else starts nothing. The command-line rules (PLAIN_ARG) then hold
+ *  (codex-review-mcp-tool.ts), each one's form checked again here, so a value
+ *  of any other form starts nothing. Which models and levels may run is
+ *  main's list, not this check. The command-line rules (PLAIN_ARG) then hold
  *  every element. */
 export function claudeReviewArgs(choice: { model?: unknown; effort?: unknown } = {}): string[] | { refused: string } {
   const { model, effort } = choice
