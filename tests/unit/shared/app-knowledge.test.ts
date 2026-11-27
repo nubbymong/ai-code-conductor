@@ -2735,3 +2735,32 @@ describe('the 2.1.3-beta.15 sweep', () => {
     }
   })
 })
+
+// 2.1.3-beta.20 final review, round 1.
+describe('the 2.1.3-beta.20 final review', () => {
+  const root = path.resolve(__dirname, '..', '..', '..')
+  const flat = (...p: string[]) => fs.readFileSync(path.join(root, ...p), 'utf8').replace(/\s+/g, ' ')
+  const body = (id: string) => APP_KNOWLEDGE_SECTIONS.find((x) => x.id === id)!.body
+
+  // F-1: Adopt's result says the next step by where Adopt was chosen
+  // (adoptNextText): a Restart after a Switch Account notice would start the
+  // tab on its old account, so the Feature Guide says the same three steps.
+  it('after Adopt, the next step follows where it was chosen, as its result says (F-1)', () => {
+    const machines = body('machines')
+    expect(machines).toContain('After Adopt, the next step depends on where you chose it. From a refused start, Restart the tab. From a Switch Account notice, switch the tab to that account again, because a Restart starts it on its old account. From a card, restart a tab on that account.')
+    expect(machines).not.toContain('After Adopt, Restart the tab.')
+  })
+
+  // F-2: a sign-in is renewed by the Usage page, and by a helper tab's status
+  // line (at most once a minute), for an account nothing on THIS computer uses.
+  it('renewal names both of its triggers, for an account nothing on this computer is using (F-2)', () => {
+    const guide = flat('docs', 'USER_GUIDE.md')
+    expect(guide).toContain('The one exception is renewal: for a Claude Code account that nothing on this computer is using, the Usage page renews a sign-in that is still valid, at the address Claude Code itself uses (PRIVACY.md lists it). So does a Claude Code tab through the session helper (preview) when it reads that account\'s limits for its status line, at most once a minute.')
+    const known = body('known-issues')
+    expect(known).toContain('The one exception is renewal: for a Claude Code account that nothing on this computer is using, the Usage page renews a sign-in that is still valid, at the address Claude Code itself uses (see Multiple Claude accounts). So does a Claude Code tab through the session helper (preview) when it reads that account\'s limits for its status line, at most once a minute.')
+    for (const said of [guide, known]) expect(said).not.toContain('for a Claude Code account that nothing is using')
+    const privacy = flat('PRIVACY.md')
+    expect(privacy).toContain('| `platform.claude.com` | Renews a Claude Code sign-in that is still valid, at the address Claude Code itself uses, so the Usage page, and in the remote sessions preview the status line of a Claude Code tab through the session helper, can read the account\'s allowance without a terminal.')
+    expect(privacy).not.toContain('so the Usage page can read the account\'s allowance')
+  })
+})

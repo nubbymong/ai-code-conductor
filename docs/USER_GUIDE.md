@@ -119,9 +119,11 @@ machine: a usual SSH session uses the remote's own login, and a Claude Code tab
 through the session helper (preview) uses its account's own sign-in on that
 machine. CCC does not sign an account in for you: Claude Code signs in from the
 account's own stored login exactly as it does in a normal terminal. The one
-exception is renewal: for a Claude Code account that nothing is using, the
-Usage page renews a sign-in that is still valid, at the address Claude Code
-itself uses (PRIVACY.md lists it).
+exception is renewal: for a Claude Code account that nothing on this computer is
+using, the Usage page renews a sign-in that is still valid, at the address
+Claude Code itself uses (PRIVACY.md lists it). So does a Claude Code tab through
+the session helper (preview) when it reads that account's limits for its status
+line, at most once a minute.
 
 ## Choosing your assistants (Claude Code and Codex)
 
