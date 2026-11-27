@@ -144,7 +144,13 @@
  * showed, where the bare names left it unstarted after 30 s. Each app here
  * runs with a fresh, empty module analysis cache (PSModuleAnalysisCachePath,
  * coldPowerShellEnv), so every run reads that cold start, whatever an earlier
- * app on the runner left in the runner's own cache.
+ * app on the runner left in the runner's own cache. Not raised, and not
+ * answered by the fix: under the diagnosis's harder condition (thousands of
+ * generated modules as well), the first app on a runner can wait on
+ * something other than the CPU. In 46049854244 its first Windows
+ * PowerShells sat at 3 to 9% CPU for about 11 s, and the stand-in started
+ * 17.6 s after the Snap button showed. Run 46046004682 did not start it
+ * within TAB_MS; that run wrote no times.
  * With X1.2 in (the beta.16 aggregate, run 45304028588 on 5a2f0f41), a
  * picture's sentence follows its paste by 1.5 s and its Enter by 2.2 s, and a
  * picture pressed meanwhile waited behind the one before it: 82 to 1818 ms
