@@ -746,8 +746,9 @@ function cliSaysSignedOut(answer: unknown): boolean {
  * step with the user's own ~/.claude (a fresher token there is used, and the
  * CLI never spends a refresh token that one already replaced), and afterwards
  * the renewed one goes back there, so Claude Code outside the app stays signed
- * in. `cliSignedOut`: Claude Code's own answer was "not signed in". Null when
- * no route is set: nothing ran.
+ * in. `cliSignedOut`: Claude Code's own answer was "not signed in", for the
+ * sign-in the app then reads (the profile's own file, not ~/.claude's). Null
+ * when no route is set: nothing ran.
  *
  * Residual window (nubbymong/aicc_planning#444 review; owed to the pre-stable
  * ADR-009 pass): after the first sync the profile and ~/.claude hold the same
@@ -773,7 +774,13 @@ async function renewThroughCli(profileId: string, isPrimary: boolean): Promise<{
   try { answer = await renew(profileId) } catch { answer = undefined /* the CLI did not answer: nothing renewed */ }
   // Straight back into ~/.claude, before anything else runs (see above).
   if (isPrimary) syncPrimarySignIn()
-  return { creds: await readProfileToken(profileId, isPrimary), cliSignedOut: cliSaysSignedOut(answer) }
+  const creds = await readProfileToken(profileId, isPrimary)
+  // `auth status` ran in the profile's own home, so its "not signed in" is
+  // about that home only. With no credentials file there the primary's read
+  // falls back to ~/.claude, whose sign-in the CLI never saw: its answer is
+  // then not taken as the account signing out (review P4-8).
+  const ownFile = path.join(getProfileConfigDir(profileId), '.claude', '.credentials.json')
+  return { creds, cliSignedOut: creds.credsPath === ownFile && cliSaysSignedOut(answer) }
 }
 
 /** An account's `off` result: names from the profile list only, nothing read. */

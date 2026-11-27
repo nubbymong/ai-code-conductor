@@ -338,6 +338,22 @@ describe('the primary account renews through `claude auth status`, never through
     expect(h.requests).toEqual([])
   })
 
+  // Review P4-8: with no credentials file in the primary's own home, the app
+  // reads ~/.claude's sign-in, but `auth status` ran in the empty profile home:
+  // its "not signed in" says nothing about ~/.claude's sign-in.
+  it('the CLI says signed out but the sign-in read is ~/.claude\'s (the profile home has none): Refreshing, not expired', async () => {
+    fs.rmSync(credsPath(PRIMARY))
+    const globalCreds = path.join(h.root, 'not-the-real-home', '.claude', '.credentials.json')
+    fs.mkdirSync(path.dirname(globalCreds), { recursive: true })
+    fs.writeFileSync(globalCreds, JSON.stringify({ claudeAiOauth: { accessToken: 'at-test-GLOBAL', refreshToken: SPENT, expiresAt: 1 } }))
+    const renew = vi.fn(async () => ({ authenticated: false, source: 'cli-status' }))
+    setClaudeCliRenewal(renew)
+    const r = await fetchAccountUsage(PRIMARY)
+    expect(renew).toHaveBeenCalledTimes(1)
+    expect(r.status).not.toBe('needs-login')
+    expectRefreshing(r)
+  })
+
   it('a signed-out answer that is not the CLI\'s own (not checked, or the file fallback) is not an expiry', async () => {
     for (const answer of [{ authenticated: false, notChecked: 'Claude Code is off' }, { authenticated: false, source: 'credential-file' }, null, 'no']) {
       setClaudeCliRenewal(async () => answer)
