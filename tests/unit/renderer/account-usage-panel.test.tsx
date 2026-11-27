@@ -15,7 +15,7 @@ import React from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { act } from 'react'
 import { AccountCard, CodexAccountCard, codexCreditsText, PARKED_LINE } from '../../../src/renderer/components/AccountUsagePanel'
-import { USAGE_DETAIL_RENEWING, type AccountUsage, type UsageBucket } from '../../../src/shared/usage-types'
+import { USAGE_DETAIL_RENEWING, USAGE_DETAIL_DUPLICATE, USAGE_DETAIL_EXPIRED, USAGE_DETAIL_WRONG_ACCOUNT, type AccountUsage, type UsageBucket } from '../../../src/shared/usage-types'
 import type { AccountView, ProviderAccountUsageView } from '../../../src/shared/providers'
 import { resolveIdentityColor } from '../../../src/shared/identity-colors'
 import { formatResetTime } from '../../../src/renderer/utils/terminalFormatting'
@@ -633,6 +633,59 @@ describe('the card states (aicc_planning#445)', () => {
     const r = render(<AccountCard row={row({ status: 'needs-login', detail: 'not signed in' })} theme="dark" onSignIn={vi.fn()} now={NOW} />)
     expect(q(r.container, 'account-usage-signin-reason')?.textContent).toBe('Not signed in')
     expect(r.container.textContent).toContain('This account has no sign-in stored')
+    r.unmount()
+  })
+
+  // nubbymong/aicc_planning#444 review P4-1: each reason main gives for Sign in
+  // again is named on the card, with an action that can clear it.
+  const clickText = (c: HTMLElement, text: string) => {
+    const b = Array.from(c.querySelectorAll('button')).find((x) => x.textContent === text) as HTMLElement | undefined
+    expect(b, `a "${text}" button`).toBeDefined()
+    act(() => { b!.dispatchEvent(new MouseEvent('click', { bubbles: true })) })
+  }
+
+  it('Sign in again, duplicate: names the profile on the same account and offers signing in as its own account', () => {
+    const onSignIn = vi.fn()
+    const dup = { kind: 'duplicate' as const, account: 'x@example.com', profileIds: ['profile-y-2'] }
+    const r = render(<AccountCard row={row({ status: 'needs-login', detail: USAGE_DETAIL_DUPLICATE, signInProblem: dup })} auth={auth({ duplicateOfProfileIds: ['profile-y-2'] })} nameOf={(id) => (id === 'profile-y-2' ? 'Work' : undefined)} theme="dark" onSignIn={onSignIn} now={NOW} />)
+    expect(card(r.container).getAttribute('data-state')).toBe('sign-in')
+    expect(q(r.container, 'account-usage-signin-reason')?.textContent).toBe('Signed in to the same account as Work')
+    expect(r.container.textContent).toContain('x@example.com')
+    expect(r.container.textContent).toMatch(/as its own account/)
+    // Not the missing or expired wording: it is signed in.
+    expect(r.container.textContent).not.toMatch(/Not signed in|no sign-in stored|ran out/)
+    // Signing in as the same account again cannot clear it.
+    expect(buttonTexts(r.container)).not.toContain('Sign in again')
+    clickText(r.container, 'Sign in as its own account')
+    expect(onSignIn).toHaveBeenCalledTimes(1)
+    r.unmount()
+  })
+
+  it('Sign in again, duplicate of several or unnamed profiles: says how many, or "another profile"', () => {
+    const two = render(<AccountCard row={row({ status: 'needs-login', detail: USAGE_DETAIL_DUPLICATE, signInProblem: { kind: 'duplicate', account: 'x@example.com', profileIds: ['a', 'b'] } })} nameOf={(id) => ({ a: 'Work', b: 'Home' } as Record<string, string>)[id]} theme="dark" onSignIn={vi.fn()} now={NOW} />)
+    expect(q(two.container, 'account-usage-signin-reason')?.textContent).toBe('Signed in to the same account as Work and Home')
+    two.unmount()
+    const unnamed = render(<AccountCard row={row({ status: 'needs-login', detail: USAGE_DETAIL_DUPLICATE })} theme="dark" onSignIn={vi.fn()} now={NOW} />)
+    expect(q(unnamed.container, 'account-usage-signin-reason')?.textContent).toBe('Signed in to the same account as another profile')
+    unnamed.unmount()
+  })
+
+  it('Sign in again, wrong account: names the account it is on and the one it is labelled, and signs in as that one', () => {
+    const onSignIn = vi.fn()
+    const wrong = { kind: 'wrong-account' as const, signedInAs: 'other@example.com', labelledAs: 'x@example.com' }
+    const r = render(<AccountCard row={row({ status: 'needs-login', detail: USAGE_DETAIL_WRONG_ACCOUNT, signInProblem: wrong })} auth={auth({ identityMismatch: true, accountEmail: 'x@example.com', oauthEmail: 'other@example.com' })} theme="dark" onSignIn={onSignIn} now={NOW} />)
+    expect(q(r.container, 'account-usage-signin-reason')?.textContent).toBe('Signed in as other@example.com, labelled x@example.com')
+    expect(r.container.textContent).toContain('Sign it in again as x@example.com')
+    expect(r.container.textContent).not.toMatch(/Not signed in|no sign-in stored|ran out/)
+    clickText(r.container, 'Sign in again')
+    expect(onSignIn).toHaveBeenCalledTimes(1)
+    r.unmount()
+  })
+
+  it('Sign in again, expired by the service\'s answer alone (no expiry stored): "Sign-in expired"', () => {
+    const r = render(<AccountCard row={row({ status: 'needs-login', detail: USAGE_DETAIL_EXPIRED })} theme="dark" onSignIn={vi.fn()} now={NOW} />)
+    expect(q(r.container, 'account-usage-signin-reason')?.textContent).toBe('Sign-in expired')
+    expect(r.container.textContent).toContain('Its long-lived sign-in ran out')
     r.unmount()
   })
 

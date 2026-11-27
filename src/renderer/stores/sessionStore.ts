@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import type { ProviderId, CodexOptions, TerminalOptions, SshRuntime } from '../../shared/types'
 import type { IdentityColorKey } from '../../shared/identity-colors'
+import type { UsageSignInProblem } from '../../shared/usage-types'
 import { sshAuthGiveUpMemory } from './sshAuthGiveUp'
 import { forgetSwitchOrigin } from '../utils/switchOrigin'
 
@@ -194,6 +195,10 @@ export interface Session {
    *  again rather than setting up a new one (signInBanner.ts). Ephemeral,
    *  like needsLogin: not persisted. */
   signInAgain?: boolean
+  /** With signInAgain: the reason the Account usage card gave (a duplicate or
+   *  wrong-account profile), so the banner names the account to choose.
+   *  Ephemeral, like needsLogin. */
+  signInProblem?: UsageSignInProblem
   /** #242 tier 5: true once this SSH session's flow state has reached
    *  `claude-running` at least once. Set by TerminalView's flow-state
    *  subscription, read at the NEXT spawn to compute SSHOptions.reconnect

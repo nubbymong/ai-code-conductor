@@ -2156,7 +2156,7 @@ export default function TerminalView({ sessionId, configId, cwd, shellOnly, elev
     >
       {needsLogin && (
         <div className="bg-blue/10 border-b border-blue/30 text-lavender text-xs px-3 py-1.5 shrink-0" data-testid="sign-in-banner">
-          {signInBannerText(session?.signInAgain === true)}
+          {signInBannerText(session?.signInAgain === true, session?.signInProblem)}
         </div>
       )}
       {switchNote && (

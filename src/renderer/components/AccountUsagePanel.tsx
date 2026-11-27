@@ -8,7 +8,7 @@ import PageFrame from './PageFrame'
 import { ProviderMark } from './sidebar/Badges'
 import { RowMenu, type MenuItem } from './ui/RowMenu'
 import { describeAuthWindow, subscriptionPlanLabel, type AuthWindowTone, type ProfileAuthInfo } from '../../shared/account-auth'
-import type { AccountUsage, AllowanceCredits, UsageBucket } from '../../shared/usage-types'
+import { USAGE_DETAIL_DUPLICATE, USAGE_DETAIL_EXPIRED, USAGE_DETAIL_WRONG_ACCOUNT, usageSignInProblem, type AccountUsage, type AllowanceCredits, type UsageBucket, type UsageSignInProblem } from '../../shared/usage-types'
 import { bucketPastReset, isModelBucket, relAgo } from '../../shared/usage-labels'
 import { isAccountActive, type AccountProfile } from '../../shared/account-types'
 import type { AccountsSnapshot, AccountView, ProviderAccountUsageView, ProviderId } from '../../shared/providers'
@@ -51,6 +51,13 @@ export const RENEWAL_LINE = 'An account whose reading is old renews its own sign
 export const UNAVAILABLE_LINE = 'Couldn’t load this account’s usage.'
 const EXPIRED_NOTE = 'Its long-lived sign-in ran out, so Claude Code needs you to sign in once.'
 const MISSING_NOTE = 'This account has no sign-in stored, so Claude Code needs you to sign in once.'
+/** nubbymong/aicc_planning#444 review P4-1: what a duplicate or wrong-account
+ *  card says under its reason, and the button that clears it. */
+const duplicateNote = (account: string | null) =>
+  `Both are signed in to ${account ?? 'one account'}, so each renewal in one spends the other's sign-in. Sign this profile in as its own account.`
+const wrongAccountNote = (labelledAs: string | null) =>
+  labelledAs ? `Sign it in again as ${labelledAs}, the account it is labelled with.` : 'Sign it in again as the account it is labelled with.'
+const DUPLICATE_ACTION = 'Sign in as its own account'
 const SIGNED_OUT_NOTE = 'It needs signing in again before its usage can be read.'
 const RENEWING_LINE = 'Renewing its sign-in by itself'
 /** 2.1.3-beta.20 section 5 (frame 1): the foot's line while Linux machines
@@ -413,8 +420,11 @@ export default function AccountUsagePanel({ onClose, onReauthNavigate, onOpenTok
   }, [claudeOff, profiles, usageByProfile, authInfo, lastOkAt])
   useEffect(() => { memory.views = codexOn ? codexViews : {} }, [codexOn, codexViews])
 
-  const onSignIn = (profileId: string, name: string) => {
-    reauth({ id: profileId, name }, () => void refreshOne(profileId))
+  const onSignIn = (profileId: string, name: string, problem?: UsageSignInProblem | null) => {
+    // The card's reason travels with the tab, so its banner names the account
+    // to choose (nubbymong/aicc_planning#444); none, none passed.
+    if (problem) reauth({ id: profileId, name }, () => void refreshOne(profileId), problem)
+    else reauth({ id: profileId, name }, () => void refreshOne(profileId))
     onReauthNavigate()
     onClose()
   }
@@ -466,6 +476,18 @@ export default function AccountUsagePanel({ onClose, onReauthNavigate, onOpenTok
   // Every card, in the list's own order (Claude Code's profiles, then each
   // Codex account), with the entry the grid places it by.
   const cards: Array<{ entry: UsageGridEntry; render: (best: boolean) => React.ReactNode }> = []
+  // Each Claude Code profile's name for a duplicate card, which names the
+  // profiles on the same account: the identity's or the profile's own name
+  // before the email, which a duplicate shares.
+  const claudeTitles = new Map<string, string>()
+  for (const p of claudeOff ? [] : profiles ?? []) {
+    const r = usageByProfile[p.id]
+    const email = r?.email || p.accountEmail || null
+    const named = claudeCardName(identityOf(snapshot, accountForLegacyId(snapshot, CLAUDE, p.id)), email, '')
+    const title = (named.hasName ? named.title : '') || p.name?.trim() || email
+    if (title) claudeTitles.set(p.id, title)
+  }
+  const claudeTitleOf = (id: string) => claudeTitles.get(id)
   if (!claudeOff) {
     for (const p of profiles ?? []) {
       const row = usageByProfile[p.id]
@@ -490,9 +512,10 @@ export default function AccountUsagePanel({ onClose, onReauthNavigate, onOpenTok
             sort={sort}
             lastReadingAt={lastOkAt[p.id]}
             providerName={providerName(CLAUDE)}
-            onSignIn={() => onSignIn(p.id, row?.name || p.name)}
+            onSignIn={() => onSignIn(p.id, row?.name || p.name, row?.status === 'needs-login' ? usageSignInProblem(row.signInProblem) : null)}
             onReadAgain={() => void refreshOne(p.id)}
             machines={machineLinesFor(p.id)}
+            nameOf={claudeTitleOf}
           />
         ),
       })
@@ -1089,6 +1112,47 @@ function signInNowDetail(days: number | null): string {
  * login shell for an account the user parked bypasses the switcher's own
  * active-guard) and is never read.
  */
+/**
+ * Why a Claude Code card must sign in again, from its reading's own detail
+ * (the shared constants main sets, nubbymong/aicc_planning#444): its red
+ * reason line, the note under it and the button's words.
+ * - a duplicate names the profiles on the same account; its button signs this
+ *   one in as its own account (signing in as the same account cannot clear it);
+ * - a wrong account names the account it is on and the one it is labelled;
+ * - an expired sign-in (the service's answer, or the stored expiry passed)
+ *   gives the day when it is known;
+ * - otherwise no sign-in is stored.
+ */
+function signInWhy(row: AccountUsage, auth: ProfileAuthInfo | undefined, now: number, nameOf?: (profileId: string) => string | undefined): { reason: string; note: string; action: string } {
+  const problem: UsageSignInProblem | null = usageSignInProblem(row.signInProblem)
+  if (row.detail === USAGE_DETAIL_DUPLICATE) {
+    const ids = problem?.kind === 'duplicate' ? problem.profileIds : []
+    const names = ids.map((id) => nameOf?.(id)).filter((n): n is string => !!n)
+    const who = names.length === 0 || names.length < ids.length
+      ? (ids.length > 1 ? `${ids.length} other profiles` : 'another profile')
+      : names.length === 1 ? names[0] : `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`
+    return {
+      reason: `Signed in to the same account as ${who}`,
+      note: duplicateNote(problem?.kind === 'duplicate' ? problem.account : null),
+      action: DUPLICATE_ACTION,
+    }
+  }
+  if (row.detail === USAGE_DETAIL_WRONG_ACCOUNT) {
+    const wrong = problem?.kind === 'wrong-account' ? problem : null
+    return {
+      reason: wrong ? `Signed in as ${wrong.signedInAs}, labelled ${wrong.labelledAs}` : 'Signed in as a different account than its label',
+      note: wrongAccountNote(wrong?.labelledAs ?? null),
+      action: 'Sign in again',
+    }
+  }
+  const expiry = auth?.refreshTokenExpiresAt
+  const expiredAt = typeof expiry === 'number' && Number.isFinite(expiry) && expiry > 0 && expiry <= now ? expiry : null
+  if (row.detail === USAGE_DETAIL_EXPIRED || expiredAt !== null) {
+    return { reason: expiredAt !== null ? `Sign-in expired on ${dayOf(expiredAt)}` : 'Sign-in expired', note: EXPIRED_NOTE, action: 'Sign in again' }
+  }
+  return { reason: 'Not signed in', note: MISSING_NOTE, action: 'Sign in again' }
+}
+
 export function AccountCard({
   row,
   profile,
@@ -1104,9 +1168,13 @@ export function AccountCard({
   onSignIn,
   onReadAgain,
   machines,
+  nameOf,
 }: {
   /** The account's reading; absent until it arrives. */
   row?: AccountUsage
+  /** Another profile's name as the page shows it (a duplicate card names the
+   *  profiles on the same account); absent, or no name, says "another profile". */
+  nameOf?: (profileId: string) => string | undefined
   /** The saved profile the card is drawn from before its reading. */
   profile?: AccountProfile
   auth?: ProfileAuthInfo
@@ -1199,15 +1267,11 @@ export function AccountCard({
       {state === 'off' && <p className="text-[0.78125rem]" style={{ color: MUTED }}>Claude Code is off: nothing is read for this account.</p>}
 
       {state === 'sign-in' && row && (() => {
-        const expiry = auth?.refreshTokenExpiresAt
-        const expiredAt = typeof expiry === 'number' && Number.isFinite(expiry) && expiry > 0 && expiry <= now ? expiry : null
-        const expired = row.detail === 'session expired' || expiredAt !== null
+        const why = signInWhy(row, auth, now, nameOf)
         return (
           <>
-            <p className="text-[0.78125rem] text-red" data-testid="account-usage-signin-reason">
-              {expired ? (expiredAt !== null ? `Sign-in expired on ${dayOf(expiredAt)}` : 'Sign-in expired') : 'Not signed in'}
-            </p>
-            <p className="text-[0.78125rem] text-subtext0">{expired ? EXPIRED_NOTE : MISSING_NOTE}</p>
+            <p className="text-[0.78125rem] text-red" data-testid="account-usage-signin-reason">{why.reason}</p>
+            <p className="text-[0.78125rem] text-subtext0">{why.note}</p>
             {machines && <MachineLines machines={machines} signedInHere={false} />}
             <div className="mt-auto flex items-center justify-between gap-2">
               <span className="text-[0.6875rem]" style={{ color: MUTED }}>{typeof lastReadingAt === 'number' ? `Last reading ${age(lastReadingAt)}` : ''}</span>
@@ -1216,7 +1280,7 @@ export function AccountCard({
                 onClick={onSignIn}
                 className="text-[0.78125rem] font-semibold px-3 py-1.5 rounded-lg bg-blue text-crust hover:bg-blue/90 transition-colors shrink-0 focus-ring"
               >
-                Sign in again
+                {why.action}
               </button>
             </div>
           </>

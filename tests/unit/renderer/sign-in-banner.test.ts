@@ -24,3 +24,31 @@ describe('signInBannerText', () => {
     for (const t of [signInBannerText(true), signInBannerText(false)]) expect(t).not.toMatch(/[–—]/)
   })
 })
+
+// nubbymong/aicc_planning#444 review P4-1: a duplicate is cleared by signing
+// this profile in as its own account, never "this same account" (that keeps
+// the duplicate); a wrong-account profile by signing in as its label.
+describe('signInBannerText with the reason the card gave', () => {
+  it('a duplicate: names the shared account and asks for this profile\'s own, not that one', () => {
+    const text = signInBannerText(true, { kind: 'duplicate', account: 'shared@example.test', profileIds: ['p2'] })
+    expect(text).toContain('shared@example.test')
+    expect(text).toMatch(/the account this profile is for/)
+    expect(text).toMatch(/not shared@example\.test/)
+    expect(text).not.toMatch(/this same account/)
+  })
+
+  it('a wrong account: names both and asks for the labelled one', () => {
+    const text = signInBannerText(true, { kind: 'wrong-account', signedInAs: 'other@example.test', labelledAs: 'mine@example.test' })
+    expect(text).toMatch(/labelled mine@example\.test/)
+    expect(text).toMatch(/signed in as other@example\.test/)
+    expect(text).toMatch(/choose mine@example\.test/)
+    expect(text).not.toMatch(/this same account/)
+  })
+
+  it('no dashes standing in for punctuation in either', () => {
+    for (const t of [
+      signInBannerText(true, { kind: 'duplicate', account: 'a@example.test', profileIds: ['p2'] }),
+      signInBannerText(true, { kind: 'wrong-account', signedInAs: 'a@example.test', labelledAs: 'b@example.test' }),
+    ]) expect(t).not.toMatch(/[\u2013\u2014]/)
+  })
+})

@@ -143,6 +143,17 @@ describe('a re-auth tab is marked as one', () => {
     unmount()
     vi.useRealTimers()
   })
+
+  it('the reason the card gave travels with the tab, for its banner', async () => {
+    vi.useFakeTimers()
+    useSessionStore.setState({ sessions: [], activeSessionId: null, isRestoring: false } as never)
+    const dup = { kind: 'duplicate' as const, account: 'work@corp.com', profileIds: ['profile-bbb222'] }
+    const { result, unmount } = renderHook(() => useReauthAccount())
+    await act(async () => { result.current({ id: 'profile-aaa111', name: 'Work' }, undefined, dup); for (let i = 0; i < 4; i++) await Promise.resolve() })
+    expect(session()?.signInProblem).toEqual(dup)
+    unmount()
+    vi.useRealTimers()
+  })
 })
 
 describe('an abandoned re-auth tab still stops polling', () => {

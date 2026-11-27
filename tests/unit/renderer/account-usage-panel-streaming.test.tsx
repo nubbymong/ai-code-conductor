@@ -262,6 +262,20 @@ describe('AccountUsagePanel — every card at once, meters animating until each 
     expect(onClose).toHaveBeenCalledTimes(1)
   })
 
+  // nubbymong/aicc_planning#444 review P4-1: the sign-in tab is told why, so
+  // its banner says which account to choose (not the duplicate's own).
+  it('a duplicate card\'s "Sign in as its own account" opens the sign-in with its reason, named by the other card', async () => {
+    list.mockResolvedValue([profile('a'), profile('b', { name: 'Work' })])
+    await mount()
+    const dup = { kind: 'duplicate' as const, account: 'shared@x.com', profileIds: ['b'] }
+    latest().emit({ ...usage('a', 0), status: 'needs-login', buckets: [], detail: 'duplicate account', signInProblem: dup })
+    latest().emit(usage('b', 30)); latest().done(); await flush()
+    const a = cards().find((c) => c.getAttribute('data-account-key') === 'claude:a')!
+    expect(a.querySelector('[data-testid="account-usage-signin-reason"]')?.textContent).toBe('Signed in to the same account as Work')
+    await click(Array.from(a.querySelectorAll('button')).find((b) => b.textContent === 'Sign in as its own account')!)
+    expect(reauth).toHaveBeenCalledWith({ id: 'a', name: 'a' }, expect.any(Function), dup)
+  })
+
   it('a card\'s "Read usage again" animates that card alone while it reads', async () => {
     list.mockResolvedValue([profile('a'), profile('b')])
     await mount()
