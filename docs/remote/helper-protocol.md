@@ -113,7 +113,11 @@ probe (ADR) must confirm. R5 fixtures fix field types, lengths and refusals.
   `ALLOWED_KEYS`: `oauthAccount.emailAddress` (the account a sign-in names,
   in `.claude.json`), `claudeAiOauth.subscriptionType`,
   `claudeAiOauth.rateLimitTier` and `claudeAiOauth.expiresAt` (its plan,
-  tier and expiry, in `.credentials.json`). A key with a part named
+  tier and expiry, in `.credentials.json`; the machine's own sign-in is
+  `~/.claude.json` and `~/.claude/.credentials.json`, and an account's own
+  folder holds both files). The Claude package names these keys
+  (`CLAUDE_REMOTE_ACCOUNTS`, `src/main/providers/claude/remote-launch.ts`),
+  and the helper itself never reads a token. A key with a part named
   `accessToken` or `refreshToken`, in any case, is refused by name whatever
   the list says. A key off the list is a command line the mode does not
   take: exit 2, nothing read.
@@ -1055,6 +1059,21 @@ from the top, separated by dots: 1 to 16 parts, at most 256 bytes, no control
 character; a member named twice on the way gives nothing. The value is a
 string of 1 to 1024 bytes with no control character. It writes nothing. The
 app's provider package names the file and the key.
+
+**Reading several fields (from 2.1.3-beta.20).** `aicc-helper field --file
+<path under home> --keys <dotted key>[,<dotted key>...]` reads the same file
+once and prints one JSON object and one line end, or nothing. It takes 1 to 8
+keys, each once; the object holds each key it found, in the order given, as
+its string (1 to 1024 bytes, no control character) or its integer (digits
+only, 0 to 2^53 - 1, so the app reads it exactly), and is `{}` when the file
+holds none of them. Nothing is printed, with exit 0, when the file is
+missing, is not a regular file of the user's own (another user's, a folder, a
+FIFO), is over 5 MiB or is not JSON. Both `--key` and `--keys` read only the
+keys on the helper's own list, and refuse a key with a part named
+`accessToken` or `refreshToken` (in any case) by name first, so the helper
+itself never prints a token. A key off the list, a key given twice or more
+than 8 keys is a command line it does not take: exit 2, nothing read. The
+keys for Claude Code are listed under "Field mode's keys" in section 1.
 
 **A connection.** The holder first writes its hello line, then a line end:
 `caps` is `["core","local"]` in a holder from before hook events,
