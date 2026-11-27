@@ -120,7 +120,11 @@
 // AWS, Microsoft Graph and SQL Server modules) that first look took 21.6 to
 // 27.4 s in Snap e2e run 46040073797, so each start-up call ran to its time
 // limit and was asked again; named with its module, the first cmdlet returned
-// in 210 to 270 ms there and the call ended in about 1 s.
+// in 210 to 270 ms there, and the call took 2.6 s inside Windows PowerShell
+// (3.3 s as the app saw it). Later runs read 1.1 to 1.9 s, but on the first
+// app of a slow runner, at low CPU, one call still took 13.6 s (run
+// 46049854244). The module look is gone; that wait is not the CPU, and
+// CONTEXT.d/2026-11-27-b20-snap-d1.md records what was measured of it.
 import { execFile } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'

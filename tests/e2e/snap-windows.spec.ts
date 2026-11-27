@@ -132,25 +132,38 @@
  * Route two, the tab's own: its Windows PowerShell began the launch line
  * about 1.1 s after it was written, and the line's Set-Location then waited
  * for that PowerShell's own look (each Windows PowerShell looks on its own:
- * one started 2 s after another ended 2.3 to 2.6 s after it). In 46028075097 and 46040073797 the start's calls ran to their 30 s
- * limit and were asked again, and the stand-in never started within TAB_MS
- * (as in run 46023467484). Since then the ready home is checked after the
- * steps when they make no account (account-profiles.ts
- * startOwnerOnlyCredentialFolders), and the launch line and the owner-only
- * script name each cmdlet with its module (terminal-launch-line.ts
- * PS_SET_LOCATION, owner-only-folders.ts), which makes no look: in
- * 46040073797 the tab's folder change took 36 to 43 ms, the start's calls
- * about 1 s, and the stand-in started 1.7 to 3.0 s after the Snap button
+ * one started 2 s after another ended 2.3 to 2.6 s after it). In
+ * 46028075097 and 46040073797 the start's calls ran to their 30 s limit and
+ * were asked again, and the stand-in never started within TAB_MS (as in run
+ * 46023467484). Since then the ready home is checked after the steps when
+ * they make no account (account-profiles.ts startOwnerOnlyCredentialFolders),
+ * and the launch line and the owner-only script name each cmdlet with its
+ * module (terminal-launch-line.ts PS_SET_LOCATION, owner-only-folders.ts),
+ * which makes no look: in 46040073797 the tab's folder change took 36 to
+ * 43 ms, the start's calls 2.6 s inside Windows PowerShell (3.3 s as main
+ * saw them), and the stand-in started 1.7 to 3.0 s after the Snap button
  * showed, where the bare names left it unstarted after 30 s. Each app here
  * runs with a fresh, empty module analysis cache (PSModuleAnalysisCachePath,
  * coldPowerShellEnv), so every run reads that cold start, whatever an earlier
  * app on the runner left in the runner's own cache. Not raised, and not
- * answered by the fix: under the diagnosis's harder condition (thousands of
- * generated modules as well), the first app on a runner can wait on
- * something other than the CPU. In 46049854244 its first Windows
- * PowerShells sat at 3 to 9% CPU for about 11 s, and the stand-in started
- * 17.6 s after the Snap button showed. Run 46046004682 did not start it
- * within TAB_MS; that run wrote no times.
+ * answered by the fix: the first app on a runner can still wait on something
+ * other than the CPU (the runner's disk, where it was sampled). Under the
+ * diagnosis's harder condition
+ * (thousands of generated modules as well), in 46049854244 the first app's
+ * owner-only calls sat at 3 to 9% CPU for about 11 s after their first
+ * cmdlet and took 13.6 s as main saw them, past the 5 s the tab waits for
+ * the scripts folders, so the tab took the direct claude.cmd line; its
+ * PowerShell began that line 7.4 s after it was written, its folder change
+ * took 4.4 s, and the stand-in started 17.6 s after the Snap button showed.
+ * Run 46046004682 (no times) did the same up to the line, then showed
+ * nothing after it within TAB_MS. In 46059519266 (diagnosis, every app timed
+ * and sampled, a throwaway first app) a runner process outside the app ran
+ * one burst of disk work during the first app only (about one CPU and 3,000
+ * to 13,000 operations a second for 8 s, C: 0 to 7% idle): that app's
+ * folder change took 2.1 s and its owner-only JSON step 0.6 to 0.8 s, both
+ * calls released in the same millisecond, against 36 to 50 ms and 20 to
+ * 60 ms in the seven apps after it, which all passed D1 in 2.3 to 2.9 s,
+ * with or without 24,000 files written just before them.
  * With X1.2 in (the beta.16 aggregate, run 45304028588 on 5a2f0f41), a
  * picture's sentence follows its paste by 1.5 s and its Enter by 2.2 s, and a
  * picture pressed meanwhile waited behind the one before it: 82 to 1818 ms
