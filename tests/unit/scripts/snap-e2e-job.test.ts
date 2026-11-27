@@ -201,3 +201,37 @@ describe('ci.yml: the Snap e2e job only reads, runs Playwright once per test, an
     for (const s of job.steps) expect((s as { 'timeout-minutes'?: unknown })['timeout-minutes'], String(s.name)).toBeUndefined()
   })
 })
+
+// nubbymong/aicc_planning#445 (review F2): the same dispatch runs the Account
+// usage page's layout spec against the built app, after the Snap check and
+// whatever it answered, with retries off, and fails on a retried or flaky test
+// as the Snap check does; its report goes into the folder that is uploaded.
+describe('ci.yml: the Snap e2e dispatch also runs the Account usage layout spec', () => {
+  const LAYOUT_SPEC = 'tests/e2e/account-usage-grid.spec.ts'
+
+  it('runs that one spec with retries off and one worker, after the app is built, whatever the Snap check answered', () => {
+    const run = step('Run the Account usage layout check')
+    const cmd = String(run.run).trim()
+    expect(cmd.startsWith(`npx playwright test ${LAYOUT_SPEC} `), cmd).toBe(true)
+    expect(cmd.split(/\s+/)).toContain('--retries=0')
+    expect(cmd.split(/\s+/)).toContain('--workers=1')
+    expect(cmd.match(/--retries\b/g)).toHaveLength(1)
+    expect(cmd).not.toMatch(/--repeat-each|--last-failed|\|\||continue-on-error/)
+    expect(cmd).toMatch(/--reporter=\S*\bjson\b/)
+    expect(run.if).toBe('${{ !cancelled() }}')
+    expect(names().indexOf('Build the app')).toBeLessThan(names().indexOf('Run the Account usage layout check'))
+    expect(names().indexOf('Run the Snap end-to-end check')).toBeLessThan(names().indexOf('Run the Account usage layout check'))
+    expect(read(LAYOUT_SPEC)).toContain('ACCOUNT_USAGE_GRID_CLASS')
+  })
+
+  it('fails the job when its report shows a retried, flaky or failed test, and uploads that report', () => {
+    const run = step('Run the Account usage layout check')
+    const check = step('Fail a layout run Playwright retried or reported flaky')
+    expect(String(check.run).trim()).toBe('node scripts/ci/playwright-no-retry.mjs "$REPORT"')
+    expect(check.if).toBe('${{ !cancelled() }}')
+    expect(check.env?.REPORT).toBe(run.env?.PLAYWRIGHT_JSON_OUTPUT_NAME)
+    expect(String(run.env?.PLAYWRIGHT_JSON_OUTPUT_NAME).startsWith(`${String(step('Run the Snap end-to-end check').env?.SNAP_E2E_OUT)}/`)).toBe(true)
+    expect(run.env?.PLAYWRIGHT_JSON_OUTPUT_NAME).not.toBe(step('Run the Snap end-to-end check').env?.PLAYWRIGHT_JSON_OUTPUT_NAME)
+    expect(names().indexOf('Fail a layout run Playwright retried or reported flaky')).toBeLessThan(names().indexOf('Upload the readings and the report'))
+  })
+})

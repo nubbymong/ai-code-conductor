@@ -184,6 +184,10 @@ export interface ElectronAPI {
     /** Usage track MP3: the labels Claude Code's accounts have reported, from
      *  cached figures only (no network, no credential read). */
     knownLabels: () => Promise<string[]>
+    /** nubbymong/aicc_planning#445: each profile's newest figure, marked
+     *  stale, for the Account usage page's first drawing. Cached figures only
+     *  (no network, no credential read). Optional: an older preload has none. */
+    lastKnown?: () => Promise<import('../../shared/usage-types').AccountUsage[]>
   }
   window: {
     minimize: () => void

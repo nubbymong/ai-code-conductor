@@ -175,3 +175,17 @@ describe('a stream is over only when its end marker arrives (MP8 round 2)', () =
     expect(args[3][1]).toEqual({ accountId: 'acct-1' })
   })
 })
+
+// nubbymong/aicc_planning#445 (review F1): the page's last readings at its
+// first opening, on a channel of their own, asking nothing of main.
+describe('preload accountUsage.lastKnown', () => {
+  it('invokes the last-known channel with no argument and hands back what main answered', async () => {
+    const { IPC } = await import('../../src/shared/ipc-channels')
+    el.setInvoke(async () => [{ profileId: 'p1' }])
+    const lastKnown = (el.exposed.electronAPI as { accountUsage: { lastKnown: () => Promise<unknown> } }).accountUsage.lastKnown
+    expect(await lastKnown()).toEqual([{ profileId: 'p1' }])
+    expect(el.ipcRenderer.invoke).toHaveBeenCalledTimes(1)
+    expect(el.ipcRenderer.invoke.mock.calls[0]).toEqual([IPC.ACCOUNT_USAGE_LAST_KNOWN])
+    expect(el.ipcRenderer.on).not.toHaveBeenCalled()
+  })
+})

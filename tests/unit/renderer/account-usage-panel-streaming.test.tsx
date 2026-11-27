@@ -39,6 +39,8 @@ const fetchAllStream = vi.fn((onResult: (u: AccountUsage) => void) => new Promis
   streams.push({ emit: (u) => act(() => onResult(u)), done: () => resolve(), reject: (e) => reject(e) })
 }))
 const fetchOne = vi.fn(async (_id: string): Promise<AccountUsage | null> => null)
+/** Main's read-only last readings (review F1): each profile's newest figure, stale. */
+const lastKnown = vi.fn(async (): Promise<AccountUsage[]> => [])
 /** The provider-neutral usage stream (MP3), driven the same way. */
 interface ProviderStreamCtl { emit: (v: ProviderAccountUsageView) => void; done: (r?: ProviderUsageStreamResult) => void; reject: (e: unknown) => void }
 const providerStreams: ProviderStreamCtl[] = []
@@ -54,13 +56,14 @@ Object.defineProperty(window, 'electronAPI', {
   writable: true, configurable: true,
   value: {
     accountProfiles: { list, authInfo },
-    accountUsage: { fetchAllStream, fetchOne },
+    accountUsage: { fetchAllStream, fetchOne, lastKnown },
     providerAccounts: { usageStream, usageOne, usageStreamStop },
     config: { save: configSave },
   },
 })
 
-const { default: AccountUsagePanel, FOCUS_REFRESH_MS, forgetAccountUsagePage, RENEWAL_LINE } = await import('../../../src/renderer/components/AccountUsagePanel')
+const { default: AccountUsagePanel, FOCUS_REFRESH_MS, SETTLE_CAP_MS, forgetAccountUsagePage, RENEWAL_LINE } = await import('../../../src/renderer/components/AccountUsagePanel')
+const LAYOUT = await import('../../../src/renderer/components/account-usage-layout')
 const { useSettingsStore, DEFAULT_SETTINGS } = await import('../../../src/renderer/stores/settingsStore')
 const { useProviderAccountsStore } = await import('../../../src/renderer/stores/providerAccountsStore')
 const { choiceSettings } = await import('../../../src/renderer/onboarding/provider-choice')
@@ -99,8 +102,8 @@ async function pickMenu(card: Element, key: string) {
 beforeEach(() => {
   list.mockReset(); authInfo.mockReset(); fetchAllStream.mockClear(); fetchOne.mockReset(); streams.length = 0
   usageStream.mockClear(); usageOne.mockClear(); usageStreamStop.mockClear(); providerStreams.length = 0
-  configSave.mockClear(); reauth.mockClear()
-  authInfo.mockResolvedValue([]); fetchOne.mockResolvedValue(null)
+  configSave.mockClear(); reauth.mockClear(); lastKnown.mockReset()
+  authInfo.mockResolvedValue([]); fetchOne.mockResolvedValue(null); lastKnown.mockResolvedValue([])
   forgetAccountUsagePage()
   container = document.createElement('div'); document.body.appendChild(container); root = createRoot(container)
 })
@@ -298,6 +301,75 @@ describe('AccountUsagePanel — every card at once, meters animating until each 
   })
 })
 
+// Review F1: the first opening after a start draws every card from main's
+// last readings (usage-snapshots.json and the live cache), not fresh: the
+// meters still animate until each fresh reading lands.
+describe('the first opening draws each card from its last known reading (aicc_planning#445)', () => {
+  const old = (profileId: string, percent: number, ageMs: number): AccountUsage => ({ ...usage(profileId, percent), stale: true, fetchedAt: Date.now() - ageMs })
+
+  it('every card shows its last known figure at once, its meters animating until the fresh one lands', async () => {
+    lastKnown.mockResolvedValue([old('a', 30, 3 * 3_600_000)])
+    list.mockResolvedValue([profile('a'), profile('b')])
+    await mount()
+    expect(lastKnown).toHaveBeenCalledTimes(1)
+    expect(container.textContent).toContain('70% left')
+    // Not fresh: both cards still read, a's last reading dimmed.
+    expect(loading()).toHaveLength(2)
+    expect(cards()[0].querySelector('[data-testid="account-usage-card-foot"]')?.textContent).toBe('Last reading 3 h ago · reading again')
+    latest().emit(usage('a', 10)); await flush()
+    expect(container.textContent).toContain('90% left')
+    expect(container.textContent).not.toContain('70% left')
+    expect(loading()).toHaveLength(1)
+    latest().done()
+  })
+
+  it('a last known figure never replaces a newer reading this run already has', async () => {
+    lastKnown.mockResolvedValue([old('a', 30, 3 * 3_600_000)])
+    list.mockResolvedValue([profile('a')])
+    await mount()
+    latest().emit(usage('a', 10)); latest().done(); await flush()
+    await refresh(); await flush()
+    expect(container.textContent).toContain('90% left')
+    expect(container.textContent).not.toContain('70% left')
+    latest().done()
+  })
+
+  it('a card that must sign in again says when it was last read, from the last known figure', async () => {
+    lastKnown.mockResolvedValue([old('a', 30, 6 * 86_400_000)])
+    list.mockResolvedValue([profile('a')])
+    await mount()
+    latest().emit({ ...usage('a', 0), status: 'needs-login', buckets: [], detail: 'session expired' }); latest().done(); await flush()
+    expect(cards()[0].getAttribute('data-state')).toBe('sign-in')
+    expect(container.textContent).toContain('Last reading 6 days ago')
+  })
+
+  it('a main process with no last readings (an older one) draws the cards as before', async () => {
+    lastKnown.mockRejectedValue(new Error('no handler'))
+    list.mockResolvedValue([profile('a')])
+    await mount()
+    expect(cards()).toHaveLength(1)
+    expect(loading()).toHaveLength(1)
+    latest().emit(usage('a', 10)); latest().done(); await flush()
+    expect(container.textContent).toContain('90% left')
+  })
+})
+
+// Review F4: the e2e layout spec measures a probe built from the layout
+// constants; these pin that the page itself draws with them.
+describe('the page draws with the layout constants the e2e spec measures (aicc_planning#445)', () => {
+  it("the body, each band's grid, each card and each name carry them", async () => {
+    list.mockResolvedValue([profile('a'), profile('b')])
+    await mount()
+    latest().emit(usage('a', 10)); latest().emit(usage('b', 80)); latest().done(); await flush()
+    expect(one('account-usage-body')?.className).toBe(LAYOUT.ACCOUNT_USAGE_BODY_CLASS)
+    const grids = Array.from(container.querySelectorAll('section[data-testid^="account-usage-band-"] > div'))
+    expect(grids.length).toBeGreaterThan(0)
+    for (const g of grids) expect(g.className).toBe(LAYOUT.ACCOUNT_USAGE_GRID_CLASS)
+    for (const c of cards()) expect(c.className.startsWith(`${LAYOUT.ACCOUNT_USAGE_CARD_CLASS} `)).toBe(true)
+    for (const n of Array.from(all('account-usage-name'))) expect(n.className).toBe(LAYOUT.ACCOUNT_USAGE_NAME_CLASS)
+  })
+})
+
 describe('settle, then sort (aicc_planning#445)', () => {
   it('nothing reorders while the readings arrive; once they settle the cards sort and band', async () => {
     list.mockResolvedValue([profile('a'), profile('b'), profile('c')])
@@ -356,6 +428,39 @@ describe('settle, then sort (aicc_planning#445)', () => {
   })
 })
 
+// Review F8: one stream that never ends must not hold back every card's
+// place for ever: once nothing has arrived for SETTLE_CAP_MS, the cards are
+// sorted by what has arrived.
+describe('a stream that never ends (aicc_planning#445, review F8)', () => {
+  it('sorts by what arrived once nothing more has come for the cap, and not before', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    list.mockResolvedValue([profile('a'), profile('b')])
+    await mount()
+    latest().emit(usage('a', 80)); latest().emit(usage('b', 10))
+    await flush()
+    // The stream never finishes.
+    await act(async () => { vi.advanceTimersByTime(SETTLE_CAP_MS - 1_000) })
+    expect(order()).toEqual(['claude:a', 'claude:b'])
+    expect(bandIds()).toEqual([])
+    await act(async () => { vi.advanceTimersByTime(1_000) })
+    expect(order()).toEqual(['claude:b', 'claude:a'])
+    expect(bandIds()).toEqual(['account-usage-band-most', 'account-usage-band-some'])
+  })
+
+  it('each new reading starts the wait again', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    list.mockResolvedValue([profile('a'), profile('b'), profile('c')])
+    await mount()
+    latest().emit(usage('a', 80)); await flush()
+    await act(async () => { vi.advanceTimersByTime(SETTLE_CAP_MS - 1_000) })
+    latest().emit(usage('b', 10)); await flush()
+    await act(async () => { vi.advanceTimersByTime(SETTLE_CAP_MS - 1_000) })
+    expect(bandIds()).toEqual([])
+    await act(async () => { vi.advanceTimersByTime(1_000) })
+    expect(bandIds()).not.toEqual([])
+  })
+})
+
 describe('the sort and the provider filter, kept per viewer (aicc_planning#445)', () => {
   it('the sort applies at once and is saved; the page opens on the saved sort', async () => {
     list.mockResolvedValue([profile('a'), profile('b')])
@@ -404,6 +509,7 @@ describe('AccountUsagePanel with Claude Code off (D5)', () => {
     await mount()
     expect(authInfo).not.toHaveBeenCalled()
     expect(fetchAllStream).not.toHaveBeenCalled()
+    expect(lastKnown).not.toHaveBeenCalled()
     expect(container.textContent).toContain('Claude Code is off. Turn it on in Settings, Accounts to see its accounts.')
     expect(skeletons()).toHaveLength(0)
     expect(cards()).toHaveLength(0)

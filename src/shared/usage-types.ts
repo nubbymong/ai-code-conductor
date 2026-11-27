@@ -142,6 +142,13 @@ export function planLabelFor(planType: unknown): string | null {
 // uses it (aicc_planning#378), so the card waits for the session.
 export type AccountUsageStatus = 'ok' | 'needs-login' | 'error' | 'inactive' | 'off' | 'waiting'
 
+/** The `detail` of an `error` reading whose account is signed in and whose
+ *  fresh figure did not load because its sign-in is being renewed: the
+ *  Account usage card's Refreshing (nubbymong/aicc_planning#445). Main sets it
+ *  (usage/account-usage.ts, resolveUsageOutcome) and the page compares with
+ *  it exactly, so neither side can reword it alone. */
+export const USAGE_DETAIL_RENEWING = 'signed in, refreshing'
+
 export interface AccountUsage {
   profileId: string
   email: string | null

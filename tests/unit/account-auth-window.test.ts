@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { authFailureStillApplies, describeAuthWindow } from '../../src/shared/account-auth'
+import { authFailureStillApplies, describeAuthWindow, subscriptionPlanLabel } from '../../src/shared/account-auth'
 
 // #203: `.credentials.json` carries TWO expiries and conflating them produces a
 // wrong, alarming UI. Measured on real profiles:
@@ -192,5 +192,30 @@ describe('authFailureStillApplies', () => {
       expect(authFailureStillApplies(RUN_AT, { credentialsUpdatedAt: NOW }, undefined)).toBe(false)
       expect(authFailureStillApplies(RUN_AT, { credentialsUpdatedAt: RUN_AT - HOUR }, undefined)).toBe(true)
     })
+  })
+})
+
+// nubbymong/aicc_planning#445 (the plan pill; review F5): the plan a Claude
+// sign-in names, with its usage tier where the sign-in carries one.
+describe('subscriptionPlanLabel', () => {
+  it('names the known plans, whatever their case or spaces, and no pill for an unknown one', () => {
+    expect(subscriptionPlanLabel('pro')).toBe('Pro')
+    expect(subscriptionPlanLabel(' MAX ')).toBe('Max')
+    expect(subscriptionPlanLabel('team')).toBe('Team')
+    expect(subscriptionPlanLabel('enterprise')).toBe('Enterprise')
+    for (const bad of [undefined, null, '', 'mystery', 7]) expect(subscriptionPlanLabel(bad)).toBeNull()
+  })
+
+  it('a Max plan with a 5x or 20x usage tier says so, as the mockup does', () => {
+    expect(subscriptionPlanLabel('max', 'default_claude_max_20x')).toBe('Max 20x')
+    expect(subscriptionPlanLabel('max', 'default_claude_max_5x')).toBe('Max 5x')
+  })
+
+  it("a tier it does not know, or one on another plan, leaves the plan's own name", () => {
+    expect(subscriptionPlanLabel('max', 'default_claude_ai')).toBe('Max')
+    expect(subscriptionPlanLabel('max', 'max_20x; rm')).toBe('Max')
+    expect(subscriptionPlanLabel('max', 12)).toBe('Max')
+    expect(subscriptionPlanLabel('pro', 'default_claude_max_20x')).toBe('Pro')
+    expect(subscriptionPlanLabel(undefined, 'default_claude_max_20x')).toBeNull()
   })
 })

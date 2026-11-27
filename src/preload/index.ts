@@ -157,6 +157,10 @@ export interface ElectronAPI {
     /** The bucket labels of the saved and live figures (Settings). Cached
      *  data only: no network, no credential read. */
     knownLabels: () => Promise<string[]>
+    /** Each profile's newest figure, marked stale (the Account usage page's
+     *  cards at their first drawing). Cached data only: no network, no
+     *  credential read. */
+    lastKnown: () => Promise<import('../shared/usage-types').AccountUsage[]>
   }
   window: {
     minimize: () => void
@@ -1060,6 +1064,7 @@ const electronAPI: ElectronAPI = {
     },
     fetchOne: (id: string, opts?: { noRefresh?: boolean }) => ipcRenderer.invoke(IPC.ACCOUNT_USAGE_FETCH_ONE, { id, noRefresh: opts?.noRefresh }),
     knownLabels: () => ipcRenderer.invoke(IPC.ACCOUNT_USAGE_KNOWN_LABELS),
+    lastKnown: () => ipcRenderer.invoke(IPC.ACCOUNT_USAGE_LAST_KNOWN),
   },
   window: {
     minimize: () => ipcRenderer.send(IPC.WINDOW_MINIMIZE),

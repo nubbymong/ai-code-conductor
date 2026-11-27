@@ -57,6 +57,9 @@ export function readProfileAuthInfo(profileId: string, accountEmail?: string): P
     expiresAt: positiveNumber(creds.expiresAt),
     refreshTokenExpiresAt: positiveNumber(creds.refreshTokenExpiresAt),
     subscriptionType: typeof creds.subscriptionType === 'string' ? creds.subscriptionType : undefined,
+    // The plan's usage tier ("Max 20x" on the Account usage page,
+    // nubbymong/aicc_planning#445): display text, not a secret.
+    ...(typeof creds.rateLimitTier === 'string' ? { rateLimitTier: creds.rateLimitTier } : {}),
     credentialsUpdatedAt
   }
 }

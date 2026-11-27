@@ -524,6 +524,10 @@ export const IPC = {
   // Usage track MP3: the bucket labels of the saved and live figures, for the
   // Settings toggles. Cached data only: no network and no credential read.
   ACCOUNT_USAGE_KNOWN_LABELS: 'accountUsage:knownLabels',
+  // nubbymong/aicc_planning#445: each active profile's newest figure, marked
+  // stale, so the Account usage page draws every card at once with its last
+  // reading. Takes no input. Cached data only: no network, no credential read.
+  ACCOUNT_USAGE_LAST_KNOWN: 'accountUsage:lastKnown',
 
   // Reliable per-session account identity (main -> renderer push at spawn; renderer pull on mount)
   ACCOUNT_IDENTITY_UPDATE: 'identity:accountUpdate',

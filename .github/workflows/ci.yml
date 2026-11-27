@@ -68,7 +68,7 @@ on:
         required: false
         default: false
       snap_e2e:
-        description: 'Run the Snap end-to-end check (snap-e2e) on the Windows runner: the built app, its Snap button and the helper''s capture mode on the runner''s own desktop, plus one capture from a basic-user token; the readings are uploaded'
+        description: 'Run the Snap end-to-end check (snap-e2e) on the Windows runner: the built app, its Snap button and the helper''s capture mode on the runner''s own desktop, plus one capture from a basic-user token, then the Account usage page''s layout check in the same built app; the readings are uploaded'
         type: boolean
         required: false
         default: false
@@ -1377,6 +1377,24 @@ jobs:
         shell: bash
         env:
           REPORT: ${{ runner.temp }}/snap-e2e/playwright-report.json
+        run: node scripts/ci/playwright-no-retry.mjs "$REPORT"
+
+      # nubbymong/aicc_planning#445: the Account usage page's layout (its grid's
+      # columns at four page widths, measured in the built app with its real
+      # stylesheet), whatever the Snap check answered. Same rules: retries off,
+      # and a retried or flaky test fails the job.
+      - name: Run the Account usage layout check
+        if: ${{ !cancelled() }}
+        shell: bash
+        env:
+          PLAYWRIGHT_JSON_OUTPUT_NAME: ${{ runner.temp }}/snap-e2e/account-usage-report.json
+        run: npx playwright test tests/e2e/account-usage-grid.spec.ts --retries=0 --workers=1 --reporter=list,json
+
+      - name: Fail a layout run Playwright retried or reported flaky
+        if: ${{ !cancelled() }}
+        shell: bash
+        env:
+          REPORT: ${{ runner.temp }}/snap-e2e/account-usage-report.json
         run: node scripts/ci/playwright-no-retry.mjs "$REPORT"
 
       - name: Upload the readings and the report

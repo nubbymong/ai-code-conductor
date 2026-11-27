@@ -25,7 +25,7 @@ import { readAllProfileAuthInfo, readProfileAuthInfo, signInProblemOf } from '..
 
 function seed(
   id: string,
-  opts: { oauthEmail?: string; refreshToken?: string; expiresAt?: number; refreshTokenExpiresAt?: number; noCreds?: boolean } = {}
+  opts: { oauthEmail?: string; refreshToken?: string; expiresAt?: number; refreshTokenExpiresAt?: number; noCreds?: boolean; rateLimitTier?: unknown } = {}
 ): void {
   const home = join(h.root, id)
   mkdirSync(join(home, '.claude'), { recursive: true })
@@ -38,7 +38,8 @@ function seed(
           refreshToken: opts.refreshToken ?? 'r'.repeat(20),
           expiresAt: opts.expiresAt ?? 1785800025758,
           refreshTokenExpiresAt: opts.refreshTokenExpiresAt ?? 1787000000000,
-          subscriptionType: 'team'
+          subscriptionType: 'team',
+          ...(opts.rateLimitTier !== undefined ? { rateLimitTier: opts.rateLimitTier } : {}),
         }
       })
     )
@@ -66,6 +67,17 @@ describe('readProfileAuthInfo', () => {
     expect(info.refreshTokenExpiresAt).toBe(222)
     expect(info.subscriptionType).toBe('team')
     expect(info.oauthEmail).toBe('a@example.com')
+  })
+
+  // nubbymong/aicc_planning#445 (review F5): the usage tier beside the plan
+  // (the Account usage page's "Max 20x"); a value that is not a string is none.
+  it('reads the usage tier beside the plan, and only a string', () => {
+    seed('p1', { rateLimitTier: 'default_claude_max_20x' })
+    expect(readProfileAuthInfo('p1').rateLimitTier).toBe('default_claude_max_20x')
+    seed('p2', { rateLimitTier: 20 })
+    expect(readProfileAuthInfo('p2').rateLimitTier).toBeUndefined()
+    seed('p3')
+    expect(readProfileAuthInfo('p3').rateLimitTier).toBeUndefined()
   })
 
   it('flags missing credentials instead of throwing', () => {

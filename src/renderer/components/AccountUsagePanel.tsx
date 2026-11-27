@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback, useRef, useMemo } from 'react'
+import React, { useEffect, useLayoutEffect, useState, useCallback, useRef, useMemo } from 'react'
 import { useReauthAccount } from '../hooks/useReauthAccount'
 import { resolveAccountColourKey } from '../../shared/account-chip-color'
 import { resolveIdentityColor, type IdentityColorKey } from '../../shared/identity-colors'
@@ -64,6 +64,11 @@ const CODEX: ProviderId = 'codex'
 
 /** A window focus reloads the page's Codex views at most this often. */
 export const FOCUS_REFRESH_MS = 60_000
+
+/** nubbymong/aicc_planning#445 (review F8): once no reading has arrived for
+ *  this long while a stream still runs, the cards are sorted by what has
+ *  arrived, so one stream that never ends cannot hold every card's place. */
+export const SETTLE_CAP_MS = 20_000
 
 /** How often an open page re-renders so its ages move on ("just now", then
  *  "1 min ago"): ages are in whole minutes, so a reading never shows more
@@ -248,13 +253,36 @@ export default function AccountUsagePanel({ onClose, onReauthNavigate, onOpenTok
     setLoadError(false)
     setStreaming(true)
     try {
-      const [profs, auth] = await Promise.all([
+      const [profs, auth, last] = await Promise.all([
         window.electronAPI.accountProfiles.list(),
         window.electronAPI.accountProfiles.authInfo().catch(() => [] as ProfileAuthInfo[]),
+        // nubbymong/aicc_planning#445: each profile's last known figure, kept
+        // in main (no network, no credential read), so every card is drawn
+        // at once with its last reading. An older main process has none.
+        Promise.resolve()
+          .then(() => window.electronAPI.accountUsage.lastKnown?.() ?? [])
+          .catch(() => [] as AccountUsage[]),
       ])
       if (claudeGen.current !== gen) return // a newer load took over
       setProfiles(profs)
       setAuthInfo(Object.fromEntries(auth.map((a) => [a.profileId, a])))
+      // A card with no reading yet takes its last known one, NOT fresh: its
+      // meters still animate until the stream's reading lands. A reading this
+      // run already has is newer and is kept.
+      const known = (Array.isArray(last) ? last : []).filter((u): u is AccountUsage =>
+        !!u && typeof u.profileId === 'string' && u.status === 'ok' && Array.isArray(u.buckets) && typeof u.fetchedAt === 'number')
+      if (known.length > 0) {
+        setUsageByProfile((prev) => {
+          const next = { ...prev }
+          for (const u of known) if (!next[u.profileId]) next[u.profileId] = u
+          return next
+        })
+        setLastOkAt((prev) => {
+          const next = { ...prev }
+          for (const u of known) if (u.buckets.length > 0 && !((next[u.profileId] ?? -Infinity) >= u.fetchedAt)) next[u.profileId] = u.fetchedAt
+          return next
+        })
+      }
       // Stream each account's usage in as it resolves (plan P3): an OPEN account
       // snaps in instantly from its live figure (no call), a CLOSED one fills in
       // as its staggered call lands.
@@ -509,12 +537,30 @@ export default function AccountUsagePanel({ onClose, onReauthNavigate, onOpenTok
   // readings arriving now, so nothing moves while a load runs.
   const claudeSettled = claudeOff || (profiles !== null && !streaming)
   const settled = claudeSettled && !codexStreaming
-  const basisRef = useRef<UsageGridEntry[] | null>(memory.basis)
-  if (settled) basisRef.current = entries
-  useEffect(() => { memory.basis = basisRef.current })
+  // Review F8: a stream that never ends holds no card's place for ever. Each
+  // reading that arrives starts the wait again; once nothing has arrived for
+  // SETTLE_CAP_MS the cards are placed by what has.
+  const [stalled, setStalled] = useState(false)
+  useEffect(() => {
+    setStalled(false)
+    if (settled) return
+    const t = setTimeout(() => setStalled(true), SETTLE_CAP_MS)
+    return () => clearTimeout(t)
+  }, [settled, usageByProfile, codexViews])
+  const placeNow = settled || stalled
+  // The basis is set after the render that settled (review F10: render stays
+  // pure), before the browser paints, so no unsorted frame shows.
+  const [basis, setBasis] = useState<UsageGridEntry[] | null>(() => memory.basis)
+  const entriesKey = JSON.stringify(entries)
+  useLayoutEffect(() => {
+    if (!placeNow) return
+    const settledEntries = JSON.parse(entriesKey) as UsageGridEntry[]
+    setBasis(settledEntries)
+    memory.basis = settledEntries
+  }, [placeNow, entriesKey])
 
   const live = filterEntries(entries, filter)
-  const arrangement = arrangeCards(live, basisRef.current ? filterEntries(basisRef.current, filter) : null, sort)
+  const arrangement = arrangeCards(live, basis ? filterEntries(basis, filter) : null, sort)
   const placed = arrangement.bands.flatMap((b) => b.entries)
   const bestKey = arrangement.best?.key ?? null
   const cardOf = (e: UsageGridEntry) => cardByKey.get(e.key)?.render(e.key === bestKey) ?? null
@@ -1100,7 +1146,7 @@ export function AccountCard({
   // Computed at render; the calculation itself is pure and lives in shared/
   // so main and renderer cannot disagree about what a credential state means.
   const window_ = auth && !quiet ? describeAuthWindow(auth, now) : null
-  const plan = quiet ? null : subscriptionPlanLabel(auth?.subscriptionType)
+  const plan = quiet ? null : subscriptionPlanLabel(auth?.subscriptionType, auth?.rateLimitTier)
   const duplicates = auth?.duplicateOfProfileIds ?? []
   const ok = row?.status === 'ok' ? row : null
   const usedUp = ok ? usedUpWindow(ok.buckets, now) : null

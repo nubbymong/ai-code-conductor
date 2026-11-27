@@ -30,7 +30,7 @@ import { isProfileInUseByLiveSession, getClaudeProfileId, sessionsOnProfile } fr
 import { noteProfileRefreshInFlight } from '../profile-consumers'
 import { parseUsage } from './usage-buckets'
 import { loadSnapshots, saveSnapshots, type UsageSnapshot } from './usage-snapshots'
-import type { AccountUsage, UsageBucket, CreditsInfo } from '../../shared/usage-types'
+import { USAGE_DETAIL_RENEWING, type AccountUsage, type UsageBucket, type CreditsInfo } from '../../shared/usage-types'
 import { logWarn, logInfo } from '../debug-logger'
 
 export type { AccountUsage } from '../../shared/usage-types'
@@ -634,9 +634,9 @@ export function resolveUsageOutcome(
       : fallback
 
   // The app renews a lapsed sign-in itself (or Claude Code does, for the
-  // primary): nothing for the user to open. "signed in" leads the detail, the
-  // prefix the page reads as Refreshing.
-  const refreshHint: AccountUsage = { ...base, status: 'error', detail: 'signed in, refreshing' }
+  // primary): nothing for the user to open. The detail is the shared constant
+  // the page reads as Refreshing (nubbymong/aicc_planning#445).
+  const refreshHint: AccountUsage = { ...base, status: 'error', detail: USAGE_DETAIL_RENEWING }
 
   // Signed in but no usable token, or we never fetched -> can't fetch live; show
   // last-known usage, else the refreshing hint. Never "Sign in".
@@ -789,6 +789,42 @@ export function knownUsageLabels(): string[] {
   }
   for (const snap of lastGoodUsage.values()) add(snap.buckets)
   for (const live of liveUsageByProfile.values()) add(live.buckets)
+  return out
+}
+
+/**
+ * Each active profile's newest figure, as the Account usage page draws its
+ * cards at once before their fresh reads land (nubbymong/aicc_planning#445):
+ * the figure its sessions last delivered, or the last one fetched
+ * (usage-snapshots.json), whichever is newer (newestFigure), marked stale and
+ * with its own time. Read-only: no credential file, no token refresh, no
+ * request, and only the profile list's own names (no home is read). With
+ * Claude Code switched off (D5) nothing is read and the answer is none; a
+ * parked profile is never read, so it has none here either.
+ */
+export function lastKnownUsage(): AccountUsage[] {
+  if (!claudeAccountDataAllowed()) return []
+  hydrateSnapshots()
+  const out: AccountUsage[] = []
+  for (const p of listProfiles()) {
+    if (!isAccountActive(p)) continue
+    const figure = newestFigure(p.id)
+    if (!figure) continue
+    const row: AccountUsage = {
+      profileId: p.id,
+      email: p.accountEmail || null,
+      name: p.name || 'Account',
+      isPrimary: !!p.isPrimary,
+      active: true,
+      status: 'ok',
+      stale: true,
+      buckets: figure.buckets,
+      fetchedAt: figure.fetchedAt,
+    }
+    if (figure.credits) row.credits = figure.credits
+    if (figure.creditsFetchedAt !== undefined) row.creditsFetchedAt = figure.creditsFetchedAt
+    out.push(row)
+  }
   return out
 }
 
