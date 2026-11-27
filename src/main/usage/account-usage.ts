@@ -12,11 +12,18 @@
 // account still shows live usage without opening a session. That refresh is
 // heavily guarded (below) because refresh tokens ROTATE — a careless refresh that
 // raced Claude Code's own refresh, or failed to persist, would log the account out.
-// We surface a "Sign in" prompt ONLY when an account has no credentials at all.
+// The primary account, and an account whose sign-in folder has no owner-only
+// verdict yet, are renewed by Claude Code itself instead (`claude auth status`,
+// setClaudeCliRenewal). The card asks the user to sign in again ("Sign in
+// again", needs-login) only when that is the one way back: no sign-in at all,
+// a refresh token the service refused as expired or revoked (invalid_grant), a
+// profile signed in to the same account as another, or to a different account
+// than its label (nubbymong/aicc_planning#444). Anything else that kept a fresh
+// figure from loading is tried again on the next read (the card: Refreshing).
 import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
-import { listProfiles, getProfileConfigDir, readProfileAccountEmail, atomicWriteSecure, hardenCredentialFile, credentialFoldersVerdict } from '../account-profiles'
+import { listProfiles, getProfileConfigDir, readProfileAccountEmail, atomicWriteSecure, hardenCredentialFile, credentialFoldersVerdict, CREDENTIAL_FOLDER_REFUSAL, syncPrimaryCredentialsWithGlobal } from '../account-profiles'
 import { isAccountActive } from '../../shared/account-types'
 import type { AccountProfile } from '../../shared/account-types'
 import { isProfileInUseByLiveSession, getClaudeProfileId, sessionsOnProfile } from '../claude-account-identity'
@@ -171,15 +178,58 @@ export async function fetchWithRetry(
 // NO live session exists for the profile (so it can't race Claude Code's own refresh
 // and rotate the token out from under a running session).
 
-/** POST console.anthropic.com/v1/oauth/token with a refresh_token grant. */
-async function postTokenRefresh(refreshToken: string): Promise<{ ok: true; data: unknown } | { ok: false }> {
+/** Where Claude Code itself renews a sign-in (its TOKEN_URL, with the same
+ *  client id): the app's renewal posts here too. The old console address
+ *  answered the app's renewals with refusals the app could not tell apart
+ *  from an expired sign-in (nubbymong/aicc_planning#444). */
+const TOKEN_HOST = 'platform.claude.com'
+const TOKEN_PATH = '/v1/oauth/token'
+/** An answer larger than this is not read further (it then reads as one that
+ *  cannot be parsed, and is tried again). A real one is a few hundred bytes. */
+const TOKEN_BODY_MAX = 64 * 1024
+
+/** What the token address answered, read by its HTTP status alone and, for a
+ *  400 or 401, its OAuth `error` code alone. The body itself is never kept,
+ *  returned or logged, except a 2xx's parsed data, which holds the new tokens.
+ *  - `renewed`: a 2xx with a JSON body (parseRefreshResponse checks its tokens);
+ *  - `expired`: a 400 or 401 whose error is invalid_grant, the service's answer
+ *    for a refresh token that has expired or been revoked: the user must sign in;
+ *  - `retry`: anything else (a redirect, a server error, a network failure or
+ *    time-out, another refusal, a body that cannot be parsed). Not proof the
+ *    sign-in is gone: tried again on the next read, never shown as expired. */
+export type TokenAnswer =
+  | { kind: 'renewed'; data: unknown }
+  | { kind: 'expired'; httpStatus: number }
+  | { kind: 'retry'; httpStatus: number | null }
+
+/** Pure: classify one answer of the token address (see TokenAnswer). `httpStatus`
+ *  null is a network failure or a time-out. Exported for the tests. */
+export function classifyTokenAnswer(httpStatus: number | null, body: string): TokenAnswer {
+  if (httpStatus === null) return { kind: 'retry', httpStatus: null }
+  if (httpStatus >= 200 && httpStatus < 300) {
+    try { return { kind: 'renewed', data: JSON.parse(body) } } catch { return { kind: 'retry', httpStatus } }
+  }
+  if (httpStatus === 400 || httpStatus === 401) {
+    let code: unknown
+    try {
+      const parsed: unknown = JSON.parse(body)
+      code = parsed && typeof parsed === 'object' ? (parsed as { error?: unknown }).error : undefined
+    } catch { code = undefined }
+    if (code === 'invalid_grant') return { kind: 'expired', httpStatus }
+  }
+  return { kind: 'retry', httpStatus }
+}
+
+/** POST the token address (TOKEN_HOST) with a refresh_token grant. The refresh
+ *  token travels only in the TLS body. */
+async function postTokenRefresh(refreshToken: string): Promise<TokenAnswer> {
   const https = await import('https')
   const payload = JSON.stringify({ grant_type: 'refresh_token', refresh_token: refreshToken, client_id: OAUTH_CLIENT_ID })
   return new Promise((resolve) => {
     const req = https.request(
       {
-        hostname: 'console.anthropic.com',
-        path: '/v1/oauth/token',
+        hostname: TOKEN_HOST,
+        path: TOKEN_PATH,
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -191,38 +241,56 @@ async function postTokenRefresh(refreshToken: string): Promise<{ ok: true; data:
       },
       (res) => {
         let body = ''
-        res.on('data', (c) => (body += c))
+        let overflow = false
+        res.on('data', (c) => {
+          if (overflow) return
+          body += c
+          if (body.length > TOKEN_BODY_MAX) { overflow = true; body = '' }
+        })
         res.on('end', () => {
-          const s = res.statusCode ?? 0
-          if (s >= 200 && s < 300) {
-            try { resolve({ ok: true, data: JSON.parse(body) }) } catch { resolve({ ok: false }) }
-          } else {
-            resolve({ ok: false })
-          }
+          const status = typeof res.statusCode === 'number' ? res.statusCode : null
+          // An answer too large to read is one that cannot be parsed: retried.
+          resolve(overflow ? { kind: 'retry', httpStatus: status } : classifyTokenAnswer(status, body))
         })
       },
     )
-    req.on('error', () => resolve({ ok: false }))
-    req.on('timeout', () => { req.destroy(); resolve({ ok: false }) })
+    req.on('error', () => resolve({ kind: 'retry', httpStatus: null }))
+    req.on('timeout', () => { req.destroy(); resolve({ kind: 'retry', httpStatus: null }) })
     req.write(payload)
     req.end()
   })
 }
 
+/** The fields a renewal persists. `refreshTokenExpiresAt` is the NEW refresh
+ *  token's expiry (epoch ms), present only when the answer names one. */
+export interface RefreshedTokens {
+  accessToken: string
+  refreshToken: string
+  expiresAt: number
+  refreshTokenExpiresAt?: number
+}
+
 /** Pure parse of a token-refresh response into the fields we persist. Exported +
  *  `now` injectable for testing. Returns null unless BOTH new tokens are present
- *  (a rotation that dropped the refresh token would be unsafe to persist). */
+ *  (a rotation that dropped the refresh token would be unsafe to persist).
+ *  `refresh_token_expires_in` (seconds) becomes refreshTokenExpiresAt, the
+ *  date the "Forced sign-in in N days" countdown reads (shared/account-auth.ts),
+ *  so after the app's renewal it counts down for the new token, as after the
+ *  CLI's own. */
 export function parseRefreshResponse(
   data: unknown,
   now: number = Date.now(),
-): { accessToken: string; refreshToken: string; expiresAt: number } | null {
+): RefreshedTokens | null {
   if (!data || typeof data !== 'object') return null
   const o = data as Record<string, unknown>
   const accessToken = typeof o.access_token === 'string' && o.access_token.length > 0 ? o.access_token : null
   const refreshToken = typeof o.refresh_token === 'string' && o.refresh_token.length > 0 ? o.refresh_token : null
   const expiresIn = typeof o.expires_in === 'number' ? o.expires_in : null
   if (!accessToken || !refreshToken) return null
-  return { accessToken, refreshToken, expiresAt: expiresIn ? now + expiresIn * 1000 : 0 }
+  const out: RefreshedTokens = { accessToken, refreshToken, expiresAt: expiresIn ? now + expiresIn * 1000 : 0 }
+  const refreshIn = o.refresh_token_expires_in
+  if (typeof refreshIn === 'number' && Number.isFinite(refreshIn) && refreshIn > 0) out.refreshTokenExpiresAt = now + refreshIn * 1000
+  return out
 }
 
 /** Atomically write refreshed tokens back into the credentials file, preserving
@@ -238,11 +306,16 @@ export function parseRefreshResponse(
  *
  *  Written only while the folder that holds the file still has a passing
  *  owner-only verdict in this run (the one checked before the refresh began):
- *  a folder replaced meanwhile is not written into. */
+ *  a folder replaced meanwhile is not written into.
+ *
+ *  The refresh token's expiry is the new token's (refreshTokenExpiresAt from
+ *  the answer). An answer that names none leaves no expiry rather than the
+ *  spent token's, which would count down, and turn red, for a token no longer
+ *  in use (nubbymong/aicc_planning#444). */
 async function writeRefreshedCreds(
   credsPath: string,
   spentRefreshToken: string,
-  t: { accessToken: string; refreshToken: string; expiresAt: number },
+  t: RefreshedTokens,
 ): Promise<boolean> {
   for (let attempt = 0; attempt < 3; attempt++) {
     if (!credentialFoldersVerdict([path.dirname(credsPath)]).ok) {
@@ -257,7 +330,10 @@ async function writeRefreshedCreds(
         logWarn('[account-usage] credentials rotated by another writer during refresh — keeping theirs, discarding ours')
         return false
       }
-      c.claudeAiOauth = { ...(c.claudeAiOauth ?? {}), accessToken: t.accessToken, refreshToken: t.refreshToken, expiresAt: t.expiresAt }
+      const oauth: Record<string, unknown> = { ...(c.claudeAiOauth ?? {}), accessToken: t.accessToken, refreshToken: t.refreshToken, expiresAt: t.expiresAt }
+      if (t.refreshTokenExpiresAt !== undefined) oauth.refreshTokenExpiresAt = t.refreshTokenExpiresAt
+      else delete oauth.refreshTokenExpiresAt
+      c.claudeAiOauth = oauth
       atomicWriteSecure(credsPath, JSON.stringify(c, null, 2), 0o600)
       // This path had no re-assert, unlike account-profiles' writeCredentialFile.
       // Keep the two credential writers symmetric so neither is a lone weak point.
@@ -271,28 +347,58 @@ async function writeRefreshedCreds(
   return false
 }
 
+/** What one renewal came to: the new access token, or none, and whether the
+ *  service said the sign-in itself has expired (the only failure that asks
+ *  the user to sign in again). */
+type Renewal =
+  | { ok: true; accessToken: string; expiresAt: number }
+  | { ok: false; expired: boolean }
+
 /** Per-profile in-flight guard so two concurrent fetches (fetchAll + a manual
  *  refreshOne) never double-refresh the same account and rotate twice. */
-const refreshInFlight = new Map<string, Promise<{ accessToken: string; expiresAt: number } | null>>()
+const refreshInFlight = new Map<string, Promise<Renewal>>()
 
-/** Mint + persist a fresh access token for a profile. Returns the new access
- *  token/expiry, or null on any failure (in which case credentials are untouched
- *  — a failed refresh NEVER logs the account out). */
-async function refreshProfileToken(profileId: string, refreshToken: string, credsPath: string): Promise<{ accessToken: string; expiresAt: number } | null> {
+/** The refresh token the credentials file holds now, or null when it cannot
+ *  be read (never logged). */
+function refreshTokenNowIn(credsPath: string): string | null {
+  try {
+    const c = JSON.parse(fs.readFileSync(credsPath, 'utf8')) as { claudeAiOauth?: { refreshToken?: unknown } }
+    const rt = c.claudeAiOauth?.refreshToken
+    return typeof rt === 'string' && rt.length > 0 ? rt : null
+  } catch { return null }
+}
+
+/** Mint + persist a fresh access token for a profile. On any failure the
+ *  credentials are untouched (a failed refresh NEVER logs the account out);
+ *  `expired` is set only for the service's invalid_grant on the very refresh
+ *  token the file still holds: one another writer replaced meanwhile is theirs,
+ *  live, and the answer is only about the spent one. */
+async function refreshProfileToken(profileId: string, refreshToken: string, credsPath: string): Promise<Renewal> {
   const existing = refreshInFlight.get(profileId)
   if (existing) return existing
-  const run = (async () => {
+  const run = (async (): Promise<Renewal> => {
     const res = await postTokenRefresh(refreshToken)
-    if (!res.ok) { logWarn(`[account-usage] token refresh rejected for profile=${profileId}`); return null }
+    if (res.kind === 'expired') {
+      if (refreshTokenNowIn(credsPath) !== refreshToken) {
+        logWarn(`[account-usage] token refresh refused for profile=${profileId} after another writer renewed it; keeping theirs`)
+        return { ok: false, expired: false }
+      }
+      logWarn(`[account-usage] sign-in expired for profile=${profileId} (http=${res.httpStatus} invalid_grant); it must be signed in again`)
+      return { ok: false, expired: true }
+    }
+    if (res.kind === 'retry') {
+      logWarn(`[account-usage] token refresh not completed for profile=${profileId} (http=${res.httpStatus ?? 'none'}); tried again on the next read`)
+      return { ok: false, expired: false }
+    }
     const parsed = parseRefreshResponse(res.data)
-    if (!parsed) { logWarn(`[account-usage] token refresh response unparseable for profile=${profileId}`); return null }
+    if (!parsed) { logWarn(`[account-usage] token refresh response unparseable for profile=${profileId}`); return { ok: false, expired: false } }
     // Persist the ROTATED tokens immediately (a Claude spawning right now re-reads
     // this file for its own refresh, so landing the new lineage fast is what keeps
     // it signed in). writeRefreshedCreds aborts instead when ANOTHER writer rotated
     // mid-flight — their sign-in is newer than our rotation, keep theirs.
-    if (!(await writeRefreshedCreds(credsPath, refreshToken, parsed))) return null
+    if (!(await writeRefreshedCreds(credsPath, refreshToken, parsed))) return { ok: false, expired: false }
     logInfo(`[account-usage] refreshed access token for profile=${profileId}`)
-    return { accessToken: parsed.accessToken, expiresAt: parsed.expiresAt }
+    return { ok: true, accessToken: parsed.accessToken, expiresAt: parsed.expiresAt }
   })()
   refreshInFlight.set(profileId, run)
   // #49: publish the rotation so a consumer that starts NOW (a session, a
@@ -497,31 +603,48 @@ export function _resetLiveUsageForTest(): void { liveUsageByProfile.clear() }
  *  snapshots. Without it the once-per-process hydrate keeps the first test's view. */
 export function _resetSnapshotsForTest(): void { lastGoodUsage.clear(); snapshotsLoaded = false }
 
+/** Why a profile that holds a sign-in must still be signed in again: it is
+ *  signed in to the same account as another profile (each renewal in one
+ *  spends the other's refresh token), or to a different account than its label. */
+export type SignInProblem = 'duplicate' | 'wrong-account'
+
 /** Pure decision: given the account's signed-in state, whether its token was
  *  usable, the fetch result (if we made one), and any cached usage, produce the
- *  AccountUsage to show. Exported + pure so the whole state matrix is unit-tested. */
+ *  AccountUsage to show. Exported + pure so the whole state matrix is unit-tested.
+ *
+ *  `needs-login` (the card's "Sign in again") means the user must sign in, and
+ *  is set only for: no sign-in at all; a sign-in the service refused as expired
+ *  or revoked (`expired`); a duplicate or wrong-account profile
+ *  (`signInProblem`). Every other way a fresh figure did not load is the
+ *  signed-in hint (detail "signed in, refreshing") or the last figure, stale:
+ *  the card's Refreshing, tried again on the next read. */
 export function resolveUsageOutcome(
   base: AccountUsage,
-  input: { signedIn: boolean; tokenUsable: boolean; fetch?: RawResult },
+  input: { signedIn: boolean; tokenUsable: boolean; fetch?: RawResult; expired?: boolean; signInProblem?: SignInProblem },
   cached: { buckets: UsageBucket[]; credits?: CreditsInfo; fetchedAt: number } | undefined,
 ): AccountUsage {
-  // Genuinely signed out (no credentials at all) is the ONLY "Sign in" case.
   if (!input.signedIn) return { ...base, status: 'needs-login', detail: 'not signed in' }
+  if (input.signInProblem === 'duplicate') return { ...base, status: 'needs-login', detail: 'duplicate account' }
+  if (input.signInProblem === 'wrong-account') return { ...base, status: 'needs-login', detail: 'wrong account' }
+  if (input.expired) return { ...base, status: 'needs-login', detail: 'session expired' }
 
   const staleOr = (fallback: AccountUsage): AccountUsage =>
     cached
       ? { ...base, status: 'ok', stale: true, buckets: cached.buckets, credits: cached.credits, fetchedAt: cached.fetchedAt }
       : fallback
 
-  const refreshHint: AccountUsage = { ...base, status: 'error', detail: 'signed in — open a session to refresh' }
+  // The app renews a lapsed sign-in itself (or Claude Code does, for the
+  // primary): nothing for the user to open. "signed in" leads the detail, the
+  // prefix the page reads as Refreshing.
+  const refreshHint: AccountUsage = { ...base, status: 'error', detail: 'signed in, refreshing' }
 
   // Signed in but no usable token, or we never fetched -> can't fetch live; show
-  // last-known usage, else a soft refresh hint. Never "Sign in".
+  // last-known usage, else the refreshing hint. Never "Sign in".
   if (!input.tokenUsable || !input.fetch) return staleOr(refreshHint)
 
   const res = input.fetch
   if (!res.ok) {
-    // A 401/403 on a signed-in account means the token lapsed just now -> soft refresh.
+    // A 401/403 on a signed-in account means the token lapsed just now -> refreshing.
     if (res.httpStatus === 401 || res.httpStatus === 403) return staleOr(refreshHint)
     // 429-after-retries / network error -> last-known if we have it, else the error.
     return staleOr({ ...base, status: 'error', detail: res.httpStatus ? `HTTP ${res.httpStatus}` : 'network error' })
@@ -546,6 +669,88 @@ export function setClaudeAccountDataAllowed(allowed: () => boolean): void {
  *  (the Account usage page and the credential state it and Insights show). */
 export function claudeAccountDataAllowed(): boolean {
   try { return usageAllowed() === true } catch { return false }
+}
+
+/** How a lapsed sign-in the app does not renew itself is renewed: the primary
+ *  account's (its sign-in is kept in step with the user's own ~/.claude, which
+ *  Claude Code outside the app also uses) and one whose sign-in folder has no
+ *  owner-only verdict yet in this run (the first open after a start). Main sets
+ *  it to readClaudeCliAuth: Claude Code's own `claude auth status` in the
+ *  account's home, with no window and no shell, a 10 s limit, the account held
+ *  while it runs and any renewal under way waited for. Never `claude -p`, which
+ *  bills a model call. Injected for the same reason as setClaudeAccountDataAllowed
+ *  (that module's launch graph must not load here). Unset, those accounts are
+ *  not renewed by the page (the card says Refreshing; a terminal in the account
+ *  renews it, as before). Its answer is not read: the credentials file is,
+ *  afterwards. */
+let cliRenewal: ((profileId: string) => Promise<unknown>) | null = null
+
+export function setClaudeCliRenewal(renew: ((profileId: string) => Promise<unknown>) | null): void {
+  cliRenewal = renew
+}
+
+/** Which profiles are signed in to the same account as another, or to a
+ *  different account than their label: set by main to the cross-check the
+ *  page's banners read (account-auth-info.ts readAllProfileAuthInfo), so main
+ *  and the page agree. Unset, or an answer that throws, is no problem. */
+let signInProblem: ((profileId: string) => SignInProblem | null) | null = null
+
+export function setClaudeSignInProblem(check: ((profileId: string) => SignInProblem | null) | null): void {
+  signInProblem = check
+}
+
+function signInProblemOf(profileId: string): SignInProblem | null {
+  let p: unknown
+  try { p = signInProblem ? signInProblem(profileId) : null } catch { p = null }
+  return p === 'duplicate' || p === 'wrong-account' ? p : null
+}
+
+/** A token within 60 s of its expiry is treated as unusable, so a request that
+ *  would 401 is not spent. */
+function tokenUsableNow(creds: Pick<StoredCreds, 'token' | 'expiresAt'>): boolean {
+  return !!creds.token && !(creds.expiresAt > 0 && creds.expiresAt < Date.now() + 60_000)
+}
+
+/** The primary's sign-in brought in step with the user's own ~/.claude
+ *  (syncPrimaryCredentialsWithGlobal: freshest wins, both sides checked to be
+ *  the primary account), as a session on the primary does at its start and its
+ *  end. Best-effort. */
+function syncPrimarySignIn(): void {
+  try { syncPrimaryCredentialsWithGlobal() } catch { /* best-effort, as at a session's start and end */ }
+}
+
+/** Which way a lapsed sign-in is renewed: the app's own POST for an account
+ *  whose sign-in folder passed the owner-only check this run; Claude Code's
+ *  `claude auth status` for the primary and for a folder with no verdict yet;
+ *  none for a refused folder. The primary's folder is not asked here: its
+ *  credentials file may be the global one, and the status probe checks the
+ *  account's own folders before it runs. */
+function renewalRoute(isPrimary: boolean, credsPath: string): 'app' | 'cli' | null {
+  if (isPrimary) return 'cli'
+  const folder = credentialFoldersVerdict([path.dirname(credsPath)])
+  if (folder.ok) return 'app'
+  return folder.message === CREDENTIAL_FOLDER_REFUSAL ? null : 'cli'
+}
+
+/**
+ * Renew a lapsed sign-in through Claude Code itself (cliRenewal), then read
+ * the credentials file again. For the primary its sign-in is first brought in
+ * step with the user's own ~/.claude (a fresher token there is used, and the
+ * CLI never spends a refresh token that one already replaced), and afterwards
+ * the renewed one goes back there, so Claude Code outside the app stays signed
+ * in. Null when no route is set: nothing ran.
+ */
+async function renewThroughCli(profileId: string, isPrimary: boolean): Promise<StoredCreds | null> {
+  const renew = cliRenewal
+  if (!renew) return null
+  if (isPrimary) {
+    syncPrimarySignIn()
+    const synced = await readProfileToken(profileId, true)
+    if (!synced.signedIn || tokenUsableNow(synced)) return synced
+  }
+  try { await renew(profileId) } catch { /* the CLI did not answer: nothing renewed */ }
+  if (isPrimary) syncPrimarySignIn()
+  return readProfileToken(profileId, isPrimary)
 }
 
 /** An account's `off` result: names from the profile list only, nothing read. */
@@ -588,8 +793,9 @@ export function knownUsageLabels(): string[] {
 }
 
 /**
- * Fetch usage for one profile. Signed-out -> needs-login; signed-in but not
- * fetchable -> last-known (stale) or a soft refresh hint; success -> fresh.
+ * Fetch usage for one profile. Signed-out, expired, duplicate or wrong-account ->
+ * needs-login; signed-in but not fetchable -> last-known (stale) or the
+ * refreshing hint; success -> fresh.
  * Auto-refreshes a lapsed token (guarded) so idle accounts still show live usage.
  * An account a running session uses is not fetched at all: it shows that
  * session's figure (inSessionUsage).
@@ -637,23 +843,33 @@ export async function fetchAccountUsage(profileId: string, opts?: { noRefresh?: 
   if (hasRunningSession(profileId)) return inSessionUsage(base, profileId, isPrimary)
 
   const creds = await readProfileToken(profileId, isPrimary)
+  let signedIn = creds.signedIn
   let token = creds.token
   let expiresAt = creds.expiresAt
   // 60s skew guard: a token within 60s of expiry is treated as unusable so we
   // don't burn a request that will 401.
-  let tokenUsable = !!token && !(expiresAt > 0 && expiresAt < Date.now() + 60_000)
+  let tokenUsable = tokenUsableNow(creds)
+
+  // A profile signed in to the same account as another, or to a different
+  // account than its label, must be signed in again (as its own account): no
+  // renewal (a renewal in one duplicate spends the other's refresh token) and
+  // no request. A profile with no sign-in at all says that first.
+  const problem = signedIn ? signInProblemOf(profileId) : null
+  if (problem) return resolveUsageOutcome(base, { signedIn, tokenUsable: false, signInProblem: problem }, undefined)
 
   // Auto-refresh a lapsed token so an idle-but-signed-in account still shows live
   // usage without opening a session. GUARDS (all must hold): signed in, we have a
   // refresh token + the creds path to write back, the token is actually lapsed,
-  // NOT the primary profile, and no live session is using this profile. Refresh
-  // tokens rotate (single-use), so a careless refresh here logs the account out:
-  //  - PRIMARY is excluded outright: its credentials are shared with the global
-  //    ~/.claude (credsPath can literally BE the global file), which `claude` runs
-  //    OUTSIDE CCC read — rotating under them strands every external terminal.
-  //    Non-primary profiles live in CCC-managed isolated homes, so their only
-  //    consumers are things CCC knows about, and the live-session guard below
-  //    covers them.
+  // and no live session is using this profile. Refresh tokens rotate
+  // (single-use), so a careless refresh here logs the account out:
+  //  - The PRIMARY is never renewed by the app's own POST: its credentials are
+  //    shared with the global ~/.claude (credsPath can literally BE the global
+  //    file), which `claude` runs OUTSIDE CCC read — rotating under them strands
+  //    every external terminal. Claude Code renews it instead (`claude auth
+  //    status`, renewThroughCli), with its sign-in synced with the global one
+  //    before and after, as a session on the primary is. Non-primary profiles
+  //    live in CCC-managed isolated homes, so their only consumers are things
+  //    CCC knows about, and the live-session guard below covers them.
   //  - isProfileInUseByLiveSession covers interactive sessions (the identity
   //    maps) AND every registered consumer in profile-consumers.ts: the
   //    `claude auth status` probe (#258), and since #48 the headless spawner,
@@ -664,30 +880,47 @@ export async function fetchAccountUsage(profileId: string, opts?: { noRefresh?: 
   //    its in-flight promise (noteProfileRefreshInFlight) and a consumer that
   //    starts mid-rotation waits for it (waitForProfileRefresh) before reading
   //    the credential file.
-  //  - The refresh rewrites the account's sign-in, so it runs only when the
+  //  - The app's POST rewrites the account's sign-in, so it runs only when the
   //    folder that holds it has passed the app's owner-only check in this run
   //    (credentialFoldersVerdict, which only reads the verdict; with none yet it
-  //    starts the check, so a later fetch may refresh). Refused or not yet
-  //    checked: no token is spent and nothing is written; the card falls back
-  //    as with noRefresh.
-  if (!opts?.noRefresh && !tokenUsable && creds.signedIn && creds.refreshToken && creds.credsPath && !isPrimary && !isProfileInUseByLiveSession(profileId) && credentialFoldersVerdict([path.dirname(creds.credsPath)]).ok) {
-    const refreshed = await refreshProfileToken(profileId, creds.refreshToken, creds.credsPath)
-    if (refreshed) {
-      token = refreshed.accessToken
-      expiresAt = refreshed.expiresAt
-      tokenUsable = true
+  //    starts the check). A refused folder: no token is spent and nothing is
+  //    written; the card falls back as with noRefresh. A folder with no verdict
+  //    yet (the first open after a start) is renewed by Claude Code instead,
+  //    which waits for the check itself before it runs in the account's home.
+  let expired = false
+  if (!opts?.noRefresh && !tokenUsable && signedIn && creds.refreshToken && creds.credsPath && !isProfileInUseByLiveSession(profileId)) {
+    const route = renewalRoute(isPrimary, creds.credsPath)
+    if (route === 'app') {
+      const refreshed = await refreshProfileToken(profileId, creds.refreshToken, creds.credsPath)
+      if (refreshed.ok) {
+        token = refreshed.accessToken
+        expiresAt = refreshed.expiresAt
+        tokenUsable = true
+      } else {
+        expired = refreshed.expired
+      }
+    } else if (route === 'cli') {
+      const after = await renewThroughCli(profileId, isPrimary)
+      if (after && !after.signedIn) {
+        // Claude Code found no sign-in left in the account's home.
+        signedIn = false
+      } else if (after && tokenUsableNow(after)) {
+        token = after.token
+        expiresAt = after.expiresAt
+        tokenUsable = true
+      }
     }
   }
 
   let fetched: RawResult | undefined
-  if (creds.signedIn && tokenUsable && token) {
+  if (signedIn && tokenUsable && token) {
     fetched = await fetchWithRetry(() => fetchUsageRaw(token))
     if (!fetched.ok && fetched.httpStatus && fetched.httpStatus !== 401 && fetched.httpStatus !== 403) {
       logWarn(`[account-usage] fetch failed profile=${profileId} http=${fetched.httpStatus}`)
     }
   }
 
-  const result = resolveUsageOutcome(base, { signedIn: creds.signedIn, tokenUsable, fetch: fetched }, lastGoodUsage.get(profileId))
+  const result = resolveUsageOutcome(base, { signedIn, tokenUsable, fetch: fetched, expired }, lastGoodUsage.get(profileId))
   if (result.status === 'ok' && !result.stale) {
     lastGoodUsage.set(profileId, { buckets: result.buckets, credits: result.credits, fetchedAt: result.fetchedAt })
     saveSnapshots(lastGoodUsage)
