@@ -16,7 +16,7 @@ import type { ProviderId } from '../../shared/providers'
 import { ProviderMark } from './sidebar/Badges'
 import { PROVIDER_NAMES } from '../provider-names'
 import {
-  machineAccountLine, machineLabel, machineOwnSignOutText, removeListing, removeNotAnsweringText, sessionMachine, signInOnTitle,
+  elsewhereStayText, hostElsewhere, machineAccountLine, machineLabel, machineOwnSignOutText, removeListing, removeNotAnsweringText, sessionMachine, signInOnTitle,
   type HostLineTone,
 } from '../utils/hostAccounts'
 import { openHostSignInTab } from '../utils/hostSignIn'
@@ -48,15 +48,15 @@ const DOT_STYLE: Record<HostLineTone, React.CSSProperties> = {
   none: { background: 'transparent', border: '1.5px solid var(--text-muted)' },
 }
 
-/** "How accounts sign in here" (frame 4): one way in this release. */
+/** "How accounts sign in here" (frame 4): one way in this release, drawn as
+ *  the mockup's chosen option but as static text (round 1, NIT-5: a radio
+ *  group of one that the keyboard cannot reach is announced as a control). */
 function HowAccountsSignIn({ label }: { label: string }) {
   return (
     <div data-testid="remote-machine-how">
       <p className="text-[10px] uppercase tracking-wider font-semibold mb-2" style={{ color: 'var(--text-muted)' }}>How accounts sign in here</p>
-      <div role="radiogroup" aria-label={`How accounts sign in on ${label}`} className="grid sm:grid-cols-2 gap-2">
+      <div className="grid sm:grid-cols-2 gap-2">
         <div
-          role="radio"
-          aria-checked="true"
           className="text-left rounded-lg px-2.5 py-2 flex gap-2.5 items-start border"
           style={{ borderColor: 'color-mix(in srgb, var(--brand) 50%, transparent)', background: 'color-mix(in srgb, var(--brand) 10%, transparent)' }}
           data-testid="remote-machine-how-signin"
@@ -248,7 +248,7 @@ function MachineCard({ m, switchOn, busy, onCheck, onRemove, onAsk, kept, keptWh
       <AccountHereRow
         key={p.id}
         who={p.name}
-        line={machineAccountLine(a, label, p.name, why)}
+        line={machineAccountLine(a, label, p.name, { why, elsewhere: hostElsewhere(accounts?.read, p.id) })}
         label={label}
         busy={busy}
         switchOn={switchOn}
@@ -307,13 +307,15 @@ function MachineCard({ m, switchOn, busy, onCheck, onRemove, onAsk, kept, keptWh
           {listing.signedIn.length > 0 ? (
             <div className="text-xs flex-1 min-w-[12rem] leading-[1.45]" style={{ color: 'var(--text-primary)' }} data-testid="remote-remove-listing">
               Remove {m.name}? {listing.signedIn.length === 1 ? 'This account is' : 'These accounts are'} signed in there and {listing.signedIn.length === 1 ? 'is' : 'are'} signed out first:
-              <ul className="list-disc my-1 ml-4">{listing.signedIn.map((n) => <li key={n}>{n}</li>)}</ul>
+              <ul className="list-disc my-1 ml-4">{listing.signedIn.map((x) => <li key={x.key}>{x.name}</li>)}</ul>
               {listing.own && <>{listing.own} is signed in there by {label}&apos;s own sign-in, which Remove leaves as it is. </>}
               Then the session helper and its folder in ~/.aicc are deleted.
+              {/* Round 1 (MINOR-2): folders the app on another computer made there stay. */}
+              {listing.elsewhere > 0 && <> {elsewhereStayText(listing.elsewhere)}</>}
             </div>
           ) : (
             <span className="text-xs flex-1 min-w-[12rem]" style={{ color: 'var(--text-primary)' }}>
-              Remove the session helper from {m.name}? Its folder in ~/.aicc there is deleted.{listing.own ? ` ${listing.own} is signed in there by ${label}'s own sign-in, which Remove leaves as it is.` : ''}
+              Remove the session helper from {m.name}? Its folder in ~/.aicc there is deleted.{listing.own ? ` ${listing.own} is signed in there by ${label}'s own sign-in, which Remove leaves as it is.` : ''}{listing.elsewhere > 0 ? ` ${elsewhereStayText(listing.elsewhere)}` : ''}
             </span>
           )}
           <DialogButton variant="danger-solid" onClick={() => { void remove(false) }} disabled={busy}>{listing.signedIn.length > 0 ? 'Sign out and remove' : 'Remove'}</DialogButton>

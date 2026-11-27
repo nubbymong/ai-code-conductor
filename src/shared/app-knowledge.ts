@@ -310,7 +310,7 @@ This release is tested with Codex up to version 0.172.0. With a newer Codex inst
 
 A Codex usage figure moves only when Codex reports one. After a limit window resets, an idle Codex session, its pill in the usage strip and its card on the Usage page say no reading since until the session's next turn. For an account with no session open, opening the Usage page or pressing Refresh checks it again.
 
-If Codex cannot check a closed account's allowance (the account is signed out, the computer is offline, or the installed Codex is a version this app has not been tested with), the card shows the last reading from that account's latest session, with its time. To get a fresh figure, open a session on the account, or sign it in again and use Retry.
+If Codex cannot check a closed account's allowance (the account is signed out, the computer is offline, or the installed Codex is a version this app has not been tested with), the card shows the last reading from that account's latest session, with its time. To get a fresh figure, open a session on the account, or sign it in again and choose Read usage again in its card's menu.
 
 After going back to an earlier version of the app and updating again, the Codex usage recorded while on the earlier version is listed as Not recorded in the Tokenomics Account filter. The totals are right; only its account is missing, and nothing needs doing.
 

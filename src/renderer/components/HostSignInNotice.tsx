@@ -35,7 +35,7 @@ import {
 const MIDDOT = String.fromCharCode(0xb7)
 
 /** The words of the notice, by why it asks (frame 2). Exported for its test. */
-export function hostNoticeText(n: Pick<HostNotice, 'kind' | 'state' | 'identity' | 'machineName'>, who: string): {
+export function hostNoticeText(n: Pick<HostNotice, 'kind' | 'state' | 'identity' | 'machineName' | 'elsewhere'>, who: string): {
   title: string
   question: string
   why: string
@@ -48,12 +48,18 @@ export function hostNoticeText(n: Pick<HostNotice, 'kind' | 'state' | 'identity'
   const launch = n.kind === 'launch'
   return {
     title: launch ? 'Start session' : 'Switch account',
-    question: n.state === 'someone-else'
-      ? `${who} on ${m} is signed in as ${n.identity || 'another account'}, so that sign-in is not used.`
-      : `${who} is not signed in on ${m}.`,
-    why: n.state === 'someone-else'
-      ? `${m} keeps its own sign-ins. Signing ${who} in again there replaces that one.`
-      : `${m} keeps its own sign-ins.`,
+    // Round 1 (MINOR-2): its folder there is the app on another computer's,
+    // which main never signs in from here: no Sign in is offered.
+    question: n.elsewhere
+      ? `${who}'s folder on ${m} is used by the app on another computer.`
+      : n.state === 'someone-else'
+        ? `${who} on ${m} is signed in as ${n.identity || 'another account'}, so that sign-in is not used.`
+        : `${who} is not signed in on ${m}.`,
+    why: n.elsewhere
+      ? 'That computer signs it in and out there, so it cannot be signed in from here.'
+      : n.state === 'someone-else'
+        ? `${m} keeps its own sign-ins. Signing ${who} in again there replaces that one.`
+        : `${m} keeps its own sign-ins.`,
     signInHint: `Runs Claude Code's own sign-in in a session on ${m}. It stays signed in there, so Remote Control works on ${m}. ${launch ? 'This session starts once it is signed in.' : 'The session moves to it once it is signed in.'}`,
     otherLabel: launch ? 'Or start it on another account' : 'Or switch to another account',
     otherAfter: launch ? 'The session starts on that account.' : 'The session moves to that account, with its conversation.',
@@ -71,14 +77,27 @@ function useAccountName(): (profileId: string) => string {
   }
 }
 
+/** Round 1 (MINOR-4): a dialog gives the keyboard focus back to where it
+ *  was when it opened (read before its own autoFocus moves it). */
+function useReturnFocus(): void {
+  const before = useRef<Element | null>(typeof document === 'undefined' ? null : document.activeElement)
+  useEffect(() => () => {
+    const el = before.current as HTMLElement | null
+    if (el && el.isConnected && typeof el.focus === 'function') el.focus()
+  }, [])
+}
+
 function NoticeDialog({ notice }: { notice: HostNotice }) {
   const session = useSessionStore((s) => s.sessions.find((x) => x.id === notice.sessionId) ?? null)
   const { restart } = useRestartSession(session, false)
   const profiles = useAccountProfilesStore((s) => s.profiles)
   const machines = useHostAccountsStore((s) => s.machines)
   const nameOf = useAccountName()
+  useReturnFocus()
   const close = () => useHostAccountsStore.getState().closeNotice(notice.sessionId)
-  useDialogEscape(close)
+  // Cancel: nothing starts, or the tab stays on its account; it waits for nothing.
+  const cancel = () => { useHostAccountsStore.getState().dropWaits(notice.sessionId); close() }
+  useDialogEscape(cancel)
   // The machine's card (its saved SSH config is found from it).
   useEffect(() => { void useHostAccountsStore.getState().load() }, [])
   // A tab closed meanwhile: nothing to ask about.
@@ -97,16 +116,26 @@ function NoticeDialog({ notice }: { notice: HostNotice }) {
     if (!machine) { setProblem(`${notice.machineName} is not on the Machines page's list any more.`); return }
     const r = openHostSignInTab(machine, notice.profileId)
     if (!r.ok) { setProblem(r.why); return }
-    useHostAccountsStore.getState().waitForSignIn({ sessionId: notice.sessionId, did: notice.did, profileId: notice.profileId, mode: notice.kind === 'launch' ? 'restart' : 'switch' })
+    // Round 1 (MAJOR-1): the tab waits for THIS sign-in tab, while it is the
+    // run it is now (a Restart or a Switch meanwhile drops the wait).
+    useHostAccountsStore.getState().waitForSignIn({
+      sessionId: notice.sessionId,
+      createdAt: session.createdAt,
+      signInTabId: r.sessionId,
+      did: notice.did,
+      profileId: notice.profileId,
+      mode: notice.kind === 'launch' ? 'restart' : 'switch',
+      carry: notice.carry === true,
+    })
     close()
   }
   const useOther = () => {
     if (!other) return
-    // A tab that ran (a switch, a kept session, a tab that reached its CLI)
-    // carries its conversation; a new tab starts a new one.
-    const carry = notice.kind === 'switch' || session.remoteVia === 'helper' || session.sshReachedClaudeRunning === true
     close()
-    switchHelperTabAccount(session, other, restart, { carry })
+    // Round 1 (MINOR-3): it carries the conversation when the notice does (a
+    // switch, a refused start that carried it, a kept tab); a new tab starts
+    // a new one. The switch drops any wait the tab had.
+    switchHelperTabAccount(session, other, restart, { carry: notice.carry === true })
   }
 
   return (
@@ -123,10 +152,12 @@ function NoticeDialog({ notice }: { notice: HostNotice }) {
         <DialogBody>
           <p className="text-[12.5px] leading-snug" style={{ color: 'var(--text-primary)' }} data-testid="host-signin-question">{text.question}</p>
           <p className="text-[11.5px] leading-snug mt-1.5" style={{ color: 'var(--text-muted)' }} data-testid="host-signin-why">{text.why}</p>
-          <div className="flex flex-col gap-1 mt-3">
-            <DialogButton variant="primary" size="md" block onClick={signIn} testId="host-signin-here">Sign in on {notice.machineName}</DialogButton>
-            <p className="text-[11.5px] leading-snug mx-0.5 mt-0.5 mb-2" style={{ color: 'var(--text-muted)' }}>{text.signInHint}</p>
-          </div>
+          {!notice.elsewhere && (
+            <div className="flex flex-col gap-1 mt-3">
+              <DialogButton variant="primary" size="md" block onClick={signIn} testId="host-signin-here">Sign in on {notice.machineName}</DialogButton>
+              <p className="text-[11.5px] leading-snug mx-0.5 mt-0.5 mb-2" style={{ color: 'var(--text-muted)' }}>{text.signInHint}</p>
+            </div>
+          )}
           {problem && <p className="text-xs mb-2" role="alert" style={{ color: 'var(--status-danger)' }} data-testid="host-signin-problem">{problem}</p>}
           {others.length > 0 && (
             <div className="mt-1.5 pt-3 border-t" style={{ borderColor: 'var(--border-subtle)' }} data-testid="host-signin-other">
@@ -149,7 +180,8 @@ function NoticeDialog({ notice }: { notice: HostNotice }) {
           )}
         </DialogBody>
         <DialogFooter>
-          <DialogButton variant="secondary" onClick={close} title={text.cancelTitle} testId="host-signin-cancel">Cancel</DialogButton>
+          {/* Round 1 (MINOR-4): focus starts on Cancel, as LaunchAckConfirm's. */}
+          <DialogButton variant="secondary" onClick={cancel} title={text.cancelTitle} testId="host-signin-cancel" autoFocus>Cancel</DialogButton>
         </DialogFooter>
       </DialogPanel>
     </DialogOverlay>
@@ -157,7 +189,8 @@ function NoticeDialog({ notice }: { notice: HostNotice }) {
 }
 
 /** A tab whose wait for a sign-in is over: it starts again, or switches, on
- *  that account, once. */
+ *  that account, once, and only while it is still the run that waited (and,
+ *  to start again, still on that account). */
 function HostRunner({ run }: { run: HostRun }) {
   const session = useSessionStore((s) => s.sessions.find((x) => x.id === run.sessionId) ?? null)
   const { restart } = useRestartSession(session, false)
@@ -166,14 +199,19 @@ function HostRunner({ run }: { run: HostRun }) {
     if (done.current) return
     done.current = true
     useHostAccountsStore.getState().takeRun(run.id)
-    if (!session) return
-    if (run.mode === 'restart') restart({ profileId: run.profileId })
-    else switchHelperTabAccount(session, run.profileId, restart)
+    if (!session || session.createdAt !== run.createdAt) return
+    if (run.mode === 'restart') {
+      if (session.profileId !== run.profileId) return
+      restart(run.carry ? { profileId: run.profileId, carryConversation: true } : { profileId: run.profileId })
+    } else {
+      switchHelperTabAccount(session, run.profileId, restart, { carry: run.carry })
+    }
   })
   return null
 }
 
 function MessageDialog({ title, text }: { title: string; text: string }) {
+  useReturnFocus()
   const close = () => useHostAccountsStore.getState().showMessage(null)
   useDialogEscape(close)
   return (
@@ -181,7 +219,7 @@ function MessageDialog({ title, text }: { title: string; text: string }) {
       <DialogPanel width="w-[420px]" ariaLabel={title}>
         <DialogHeader title={title} />
         <DialogBody><p className="text-[12.5px] leading-snug" style={{ color: 'var(--text-primary)' }}>{text}</p></DialogBody>
-        <DialogFooter><DialogButton variant="primary" onClick={close}>OK</DialogButton></DialogFooter>
+        <DialogFooter><DialogButton variant="primary" onClick={close} autoFocus>OK</DialogButton></DialogFooter>
       </DialogPanel>
     </DialogOverlay>
   )
