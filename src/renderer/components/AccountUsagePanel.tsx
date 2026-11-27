@@ -27,7 +27,13 @@ import {
   mainWindow, percentLeft, roomWindow, usedUpWindow,
   type UsageSortKey, type UsageProviderFilter, type UsageCardState, type UsageGridEntry, type UsageBand,
 } from '../utils/accountUsageGrid'
-import { ACCOUNT_USAGE_BODY_CLASS, ACCOUNT_USAGE_GRID_CLASS, ACCOUNT_USAGE_CARD_CLASS, ACCOUNT_USAGE_NAME_CLASS } from './account-usage-layout'
+import {
+  ACCOUNT_USAGE_BODY_CLASS, ACCOUNT_USAGE_GRID_CLASS, ACCOUNT_USAGE_CARD_CLASS, ACCOUNT_USAGE_NAME_CLASS,
+  ACCOUNT_USAGE_MACHINES_CLASS, ACCOUNT_USAGE_MACHINE_ROW_CLASS, ACCOUNT_USAGE_MACHINE_NAME_CLASS, ACCOUNT_USAGE_MACHINE_STATE_CLASS, ACCOUNT_USAGE_MACHINE_BUTTON_CLASS,
+} from './account-usage-layout'
+import { useHostAccountsStore } from '../stores/hostAccountsStore'
+import { cardMachineLine, machineLabel, signInOnTitle, toSignInCount, type HostLineTone, type HostMachineRef, type HostSignInLine } from '../utils/hostAccounts'
+import { openHostSignInTab } from '../utils/hostSignIn'
 
 /** D5 (usage UX, approved as drawn): the one line the page shows for Claude
  *  Code while it is switched off. */
@@ -47,6 +53,9 @@ const EXPIRED_NOTE = 'Its long-lived sign-in ran out, so Claude Code needs you t
 const MISSING_NOTE = 'This account has no sign-in stored, so Claude Code needs you to sign in once.'
 const SIGNED_OUT_NOTE = 'It needs signing in again before its usage can be read.'
 const RENEWING_LINE = 'Renewing its sign-in by itself'
+/** 2.1.3-beta.20 section 5 (frame 1): the foot's line while Linux machines
+ *  are added. Lend from this computer is not built yet, so it is not named. */
+export const MACHINES_FOOT_LINE = 'Accounts you add in Settings › Accounts are on every machine. Signed in on a machine: the sign-in is kept on that machine.'
 
 // The providers the page shows cards for, in the order they show. The page
 // asks for a provider's accounts and usage by its id; it never branches on it.
@@ -169,6 +178,14 @@ export default function AccountUsagePanel({ onClose, onReauthNavigate, onOpenTok
   const savedProvider = useSettingsStore((s) => s.settings.accountUsageProvider)
   const snapshot = useProviderAccountsStore((s) => s.snapshot)
   const codexAccounts = useMemo(() => selectProviderAccounts(snapshot, CODEX), [snapshot])
+  // 2.1.3-beta.20 section 5 (frame 1): each Linux machine's last read of the
+  // accounts there (no exec), for the Claude Code cards' "On machines" block.
+  // Shown while the helper switch is on and a machine is added.
+  const hostMachines = useHostAccountsStore((s) => s.machines)
+  const hostByDid = useHostAccountsStore((s) => s.byDid)
+  const hostShown = useHostAccountsStore((s) => s.available && s.switchOn && s.machines.length > 0)
+  const [hostProblem, setHostProblem] = useState<string | null>(null)
+  useEffect(() => { void useHostAccountsStore.getState().load() }, [])
   // The account list drives the cards (a local read, so it resolves at once;
   // the last list shown, while it does). null = not resolved and none shown
   // before (a placeholder card or two show meanwhile).
@@ -372,6 +389,24 @@ export default function AccountUsagePanel({ onClose, onReauthNavigate, onOpenTok
     onClose()
   }
 
+  // 2.1.3-beta.20 section 5: "Sign in on <machine>" opens a sign-in tab there
+  // (Claude Code's own sign-in, kept on that machine), as Sign in again opens
+  // one here; a machine no saved SSH config reaches says why on the page.
+  const onSignInOn = (machine: HostMachineRef, profileId: string) => {
+    const r = openHostSignInTab(machine, profileId)
+    if (!r.ok) { setHostProblem(r.why); return }
+    setHostProblem(null)
+    onReauthNavigate()
+    onClose()
+  }
+  // Each Claude Code card's lines, one per added machine, from its last read.
+  const machineLinesFor = (profileId: string): CardMachines | undefined => hostShown
+    ? {
+        lines: hostMachines.map((m) => ({ machine: m, line: cardMachineLine(hostByDid[m.did]?.accounts.find((a) => a.profileId === profileId), machineLabel(m)) })),
+        onSignIn: (m) => onSignInOn(m, profileId),
+      }
+    : undefined
+
   // A signed-out Codex account signs in again from Settings, Accounts.
   const openAccountsSettings = () => {
     window.dispatchEvent(new CustomEvent('app:openSettings', { detail: { tab: 'accounts' } }))
@@ -427,6 +462,7 @@ export default function AccountUsagePanel({ onClose, onReauthNavigate, onOpenTok
             providerName={providerName(CLAUDE)}
             onSignIn={() => onSignIn(p.id, row?.name || p.name)}
             onReadAgain={() => void refreshOne(p.id)}
+            machines={machineLinesFor(p.id)}
           />
         ),
       })
@@ -486,6 +522,11 @@ export default function AccountUsagePanel({ onClose, onReauthNavigate, onOpenTok
   const anyLoading = !settled
 
   const countLabel = live.length > 0 ? `${live.length} account${live.length === 1 ? '' : 's'}` : undefined
+  // 2.1.3-beta.20 section 5 (frame 1): how many Claude Code accounts are not
+  // signed in on a machine, once per machine (a parked account is not counted).
+  const machineSignIns = hostShown && !claudeOff && filterShows(filter, CLAUDE)
+    ? toSignInCount(hostMachines, hostByDid, new Set((profiles ?? []).filter((p) => isAccountActive(p)).map((p) => p.id)))
+    : 0
 
   const actions = (
     <>
@@ -510,7 +551,7 @@ export default function AccountUsagePanel({ onClose, onReauthNavigate, onOpenTok
       )}
       <button
         type="button"
-        onClick={() => void load()}
+        onClick={() => { void load(); void useHostAccountsStore.getState().load() }}
         className="text-xs px-2 min-h-6 rounded hover:text-text hover:bg-surface0 transition-colors focus-ring"
         style={{ color: MUTED }}
         title="Read every account again"
@@ -538,12 +579,16 @@ export default function AccountUsagePanel({ onClose, onReauthNavigate, onOpenTok
         {loadError && (
           <p className="text-[0.8125rem] mb-3" style={{ color: MUTED }} data-testid="account-usage-load-error">{'Couldn’t load account usage. Use Refresh to try again.'}</p>
         )}
+        {hostProblem && (
+          <p className="text-[0.8125rem] mb-3 text-red" role="alert" data-testid="account-usage-host-problem">{hostProblem}</p>
+        )}
         {(live.length > 0 || placeholders > 0) && (
           <UsageSummary
             best={arrangement.best}
             room={roomWindow(sort)}
             placed={placed}
             reading={arrangement.bands.length === 0}
+            machineSignIns={machineSignIns}
           />
         )}
         {arrangement.bands.map((band) => <Band key={band.id} band={band}>{band.entries.map(cardOf)}</Band>)}
@@ -560,6 +605,7 @@ export default function AccountUsagePanel({ onClose, onReauthNavigate, onOpenTok
             ? <button type="button" onClick={onOpenTokenomics} className="text-blue hover:underline focus-ring rounded">Tokenomics</button>
             : 'Tokenomics'}.
           {!claudeOff && (<><br />{RENEWAL_LINE}</>)}
+          {!claudeOff && hostShown && (<><br /><span data-testid="account-usage-foot-machines">{MACHINES_FOOT_LINE}</span></>)}
         </p>
       </div>
     </PageFrame>
@@ -600,11 +646,19 @@ function Segmented<T extends string>({ label, showLabel, options, value, onChang
 
 // The line above the bands: the account with the most room, and how many
 // cards are in each state. Before the first settle it says the page is reading.
-function UsageSummary({ best, room, placed, reading }: { best: UsageGridEntry | null; room: '5h' | 'weekly'; placed: UsageGridEntry[]; reading: boolean }) {
+function UsageSummary({ best, room, placed, reading, machineSignIns = 0 }: {
+  best: UsageGridEntry | null
+  room: '5h' | 'weekly'
+  placed: UsageGridEntry[]
+  reading: boolean
+  /** 2.1.3-beta.20 section 5 (frame 1): Claude Code accounts not signed in on
+   *  an added machine, once per machine. */
+  machineSignIns?: number
+}) {
   const counts = countStates(placed)
   const parts: React.ReactNode[] = []
   const count = (n: number, what: string, key: string) => {
-    if (n > 0) parts.push(<span key={key}><i className="not-italic font-semibold text-text">{n}</i> {what}</span>)
+    if (n > 0) parts.push(<span key={key} data-testid={`account-usage-count-${key}`}><i className="not-italic font-semibold text-text">{n}</i> {what}</span>)
   }
   if (!reading) {
     count(counts.ready, 'ready', 'ready')
@@ -612,6 +666,7 @@ function UsageSummary({ best, room, placed, reading }: { best: UsageGridEntry | 
     count(counts.out, counts.firstBack ? (counts.out === 1 ? `out until ${formatResetTime(counts.firstBack)}` : `out, the first back at ${formatResetTime(counts.firstBack)}`) : 'out', 'out')
     count(counts.signIn, 'to sign in', 'sign-in')
     count(counts.parked, 'parked', 'parked')
+    count(machineSignIns, 'to sign in on a machine', 'machine-sign-in')
   }
   const tone = best ? 'border-green/25 bg-green/[0.06]' : 'border-surface1 bg-surface0/20'
   return (
@@ -918,6 +973,57 @@ function creditsText(c: NonNullable<AccountUsage['credits']>): string {
   return `${fmtMoney(c.used, c.currency)} used`
 }
 
+/** 2.1.3-beta.20 section 5 (frame 1): a Claude Code card's lines for each
+ *  added machine, and its "Sign in on <machine>". */
+export interface CardMachines {
+  lines: Array<{ machine: HostMachineRef; line: HostSignInLine }>
+  onSignIn: (machine: HostMachineRef) => void
+}
+
+const DOT_STYLE: Record<HostLineTone, React.CSSProperties> = {
+  ok: { background: 'var(--status-success)' },
+  warn: { background: 'var(--status-warning)' },
+  none: { background: 'transparent', border: '1.5px solid var(--text-muted)' },
+}
+
+/** One machine's row: its dot and name, its state (and a second line), and
+ *  "Sign in on <machine>" where the account is not signed in there. */
+function MachineRow({ name, line, onSignIn }: { name: string; line: HostSignInLine; onSignIn?: () => void }) {
+  return (
+    <div className={ACCOUNT_USAGE_MACHINE_ROW_CLASS} title={line.title} data-testid="account-usage-machine" data-machine={name} data-tone={line.tone}>
+      <span className={ACCOUNT_USAGE_MACHINE_NAME_CLASS}>
+        <span className="w-[7px] h-[7px] rounded-full shrink-0 box-border" style={DOT_STYLE[line.tone]} aria-hidden="true" />
+        <span className="truncate" title={name}>{name}</span>
+      </span>
+      <span className={ACCOUNT_USAGE_MACHINE_STATE_CLASS} data-testid="account-usage-machine-state">
+        <span className={line.muted ? 'text-overlay1' : undefined}>{line.text}</span>
+        {line.sub && <small className="block text-[0.65625rem]" style={{ color: MUTED }} data-testid="account-usage-machine-sub">{line.sub}</small>}
+      </span>
+      {onSignIn && (
+        <button type="button" className={ACCOUNT_USAGE_MACHINE_BUTTON_CLASS} title={signInOnTitle(name)} onClick={onSignIn} data-testid="account-usage-machine-signin">
+          Sign in on {name}
+        </button>
+      )}
+    </div>
+  )
+}
+
+/** The card's "On machines" block: this computer first (signed in, unless
+ *  the card asks to sign in again), then each added machine. Lend from this
+ *  computer is not built yet, so no line says lent. */
+function MachineLines({ machines, signedInHere }: { machines: CardMachines; signedInHere: boolean }) {
+  const here: HostSignInLine = signedInHere ? { tone: 'ok', text: 'Signed in', muted: false } : { tone: 'none', text: 'Sign in again', muted: true }
+  return (
+    <div className={ACCOUNT_USAGE_MACHINES_CLASS} data-testid="account-usage-machines">
+      <div className="text-[0.625rem] uppercase tracking-[0.06em] font-semibold mb-px" style={{ color: MUTED }}>On machines</div>
+      <MachineRow name="This computer" line={here} />
+      {machines.lines.map(({ machine, line }) => (
+        <MachineRow key={machine.did} name={machineLabel(machine)} line={line} onSignIn={line.action === 'sign-in' ? () => machines.onSignIn(machine) : undefined} />
+      ))}
+    </div>
+  )
+}
+
 /** The "Sign in again now" item's line: what it resets and what it opens. */
 function signInNowDetail(days: number | null): string {
   const countdown = typeof days === 'number' && days > 0 ? `the ${days}-day forced sign-in countdown` : 'the forced sign-in countdown'
@@ -949,6 +1055,7 @@ export function AccountCard({
   providerName = PROVIDER_NAMES[CLAUDE],
   onSignIn,
   onReadAgain,
+  machines,
 }: {
   /** The account's reading; absent until it arrives. */
   row?: AccountUsage
@@ -971,6 +1078,9 @@ export function AccountCard({
   providerName?: string
   onSignIn: () => void
   onReadAgain?: () => void
+  /** 2.1.3-beta.20 section 5 (frame 1): its lines for each added machine;
+   *  absent while no machine is added (or the helper switch is off). */
+  machines?: CardMachines
 }) {
   const id = row?.profileId ?? profile?.id ?? ''
   const email = row?.email || profile?.accountEmail || null
@@ -1050,6 +1160,7 @@ export function AccountCard({
               {expired ? (expiredAt !== null ? `Sign-in expired on ${dayOf(expiredAt)}` : 'Sign-in expired') : 'Not signed in'}
             </p>
             <p className="text-[0.78125rem] text-subtext0">{expired ? EXPIRED_NOTE : MISSING_NOTE}</p>
+            {machines && <MachineLines machines={machines} signedInHere={false} />}
             <div className="mt-auto flex items-center justify-between gap-2">
               <span className="text-[0.6875rem]" style={{ color: MUTED }}>{typeof lastReadingAt === 'number' ? `Last reading ${age(lastReadingAt)}` : ''}</span>
               <button
@@ -1106,6 +1217,8 @@ export function AccountCard({
                     ? <p className="text-[0.78125rem]" style={{ color: MUTED }} data-testid="account-usage-unavailable">{UNAVAILABLE_LINE}</p>
                     : null
       )}
+
+      {!quiet && state !== 'sign-in' && machines && <MachineLines machines={machines} signedInHere />}
 
       {!quiet && state !== 'sign-in' && (
         <CardFoot

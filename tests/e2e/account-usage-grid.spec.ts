@@ -30,6 +30,11 @@ import {
   ACCOUNT_USAGE_CARD_CLASS,
   ACCOUNT_USAGE_NAME_CLASS,
   ACCOUNT_USAGE_CARD_MIN_PX,
+  ACCOUNT_USAGE_MACHINES_CLASS,
+  ACCOUNT_USAGE_MACHINE_ROW_CLASS,
+  ACCOUNT_USAGE_MACHINE_NAME_CLASS,
+  ACCOUNT_USAGE_MACHINE_STATE_CLASS,
+  ACCOUNT_USAGE_MACHINE_BUTTON_CLASS,
 } from '../../src/renderer/components/account-usage-layout'
 
 let ctx: IsolatedApp
@@ -131,5 +136,68 @@ test.describe('the Account usage grid (aicc_planning#445)', () => {
     expect(r.overGrid).toBeLessThanOrEqual(0.5)
     expect(r.sideways).toBeLessThanOrEqual(0)
     expect(r.nameOverflow).toBeLessThanOrEqual(0)
+  })
+})
+
+/** 2.1.3-beta.20 section 5 (the approved mockup "Accounts across machines",
+ *  frame 1): a card's "On machines" rows, measured in one card at `width`:
+ *  how far the widest row's right edge, and its Sign in button's, pass the
+ *  card's content box (0 or less: none), and whether the page scrolls
+ *  sideways. One row carries a long machine name, in its name column and in
+ *  its button; `buttonStyle` replaces the button's class (the fault case). */
+async function measureMachines(width: number, buttonStyle?: string): Promise<{ rowOver: number; buttonOver: number; sideways: number }> {
+  return page.evaluate(({ width, body, grid, card, machines, row, name, state, button, buttonStyle }) => {
+    document.querySelectorAll('[data-probe="account-usage-machines"]').forEach((n) => n.remove())
+    const host = document.createElement('div')
+    host.setAttribute('data-probe', 'account-usage-machines')
+    host.className = body
+    host.style.cssText = `position:fixed;left:0;top:0;width:${width}px;max-height:100vh;overflow:auto;box-sizing:border-box;z-index:99999;background:var(--surface-stage);`
+    const long = 'a-machine-with-a-very-long-unbroken-name-for-the-lab-rack'
+    const btn = (m: string) => buttonStyle
+      ? `<button style="${buttonStyle}" data-probe-button>Sign in on ${m}</button>`
+      : `<button class="${button}" data-probe-button>Sign in on ${m}</button>`
+    const line = (m: string, text: string, withButton: boolean) =>
+      `<div class="${row}" data-probe-row><span class="${name}"><span class="w-[7px] h-[7px] rounded-full shrink-0"></span><span class="truncate">${m}</span></span>` +
+      `<span class="${state}">${text}</span>${withButton ? btn(m) : ''}</div>`
+    host.innerHTML = `<section><div class="${grid}"><article class="${card} border-surface0/70" data-probe-card>` +
+      `<div class="${machines}"><div>On machines</div>${line('This computer', 'Signed in', false)}${line('Rocky', 'Not signed in', true)}${line(long, 'Not signed in', true)}${line('Pi', 'Signed in on Pi<small class="block">Its own sign-in, found when Pi was checked</small>', false)}</div>` +
+      `</article></div></section>`
+    document.body.appendChild(host)
+    const cardEl = host.querySelector('[data-probe-card]') as HTMLElement
+    const cs = getComputedStyle(cardEl)
+    const inner = cardEl.getBoundingClientRect().right - parseFloat(cs.paddingRight) - parseFloat(cs.borderRightWidth)
+    const rows = [...host.querySelectorAll('[data-probe-row]')] as HTMLElement[]
+    const buttons = [...host.querySelectorAll('[data-probe-button]')] as HTMLElement[]
+    const reading = {
+      rowOver: Math.max(...rows.map((r) => r.getBoundingClientRect().right)) - inner,
+      buttonOver: Math.max(...buttons.map((b) => b.getBoundingClientRect().right)) - inner,
+      sideways: host.scrollWidth - host.clientWidth,
+    }
+    host.remove()
+    return reading
+  }, {
+    width, body: ACCOUNT_USAGE_BODY_CLASS, grid: ACCOUNT_USAGE_GRID_CLASS, card: ACCOUNT_USAGE_CARD_CLASS,
+    machines: ACCOUNT_USAGE_MACHINES_CLASS, row: ACCOUNT_USAGE_MACHINE_ROW_CLASS, name: ACCOUNT_USAGE_MACHINE_NAME_CLASS,
+    state: ACCOUNT_USAGE_MACHINE_STATE_CLASS, button: ACCOUNT_USAGE_MACHINE_BUTTON_CLASS, buttonStyle,
+  })
+}
+
+test.describe('a card\'s "On machines" rows (2.1.3-beta.20 section 5)', () => {
+  for (const [width, what] of [
+    [1280, 'the mockup\'s 1280 px frame'],
+    [468, 'the mockup\'s narrowest frame'],
+    [300, 'narrower than one card'],
+  ] as const) {
+    test(`at ${width} px (${what}) every row, and its Sign in button, stays inside its card`, async () => {
+      const r = await measureMachines(width)
+      expect(r.rowOver).toBeLessThanOrEqual(0.5)
+      expect(r.buttonOver).toBeLessThanOrEqual(0.5)
+      expect(r.sideways).toBeLessThanOrEqual(0)
+    })
+  }
+
+  test('the fault first: a button that never shrinks or cuts its long name passes its card', async () => {
+    const fault = await measureMachines(300, 'white-space:nowrap;flex:none;font-size:12px;padding:1px 8px')
+    expect(fault.buttonOver).toBeGreaterThan(0)
   })
 })
