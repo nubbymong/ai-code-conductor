@@ -63,12 +63,40 @@ export function signInOnTitle(machine: string): string {
 }
 
 /**
+ * The account's folder on that machine was made by the app on another
+ * computer (phase 3's `elsewhere`, round 1: two of the user's computers on one
+ * host login, or a shared one). This computer never reads, signs in, signs
+ * out or removes it, so no surface offers Sign in there for it.
+ */
+export function hostElsewhere(acc: Pick<HostMachineAccounts, 'elsewhere'> | undefined, profileId: string): boolean {
+  return !!acc?.elsewhere?.includes(profileId)
+}
+
+/** What the lines know of the account there besides its read state. */
+export interface HostLineOptions {
+  /** Its folder there is the app on another computer's (hostElsewhere). */
+  elsewhere?: boolean
+  /** Why the machine's last read did not answer. */
+  why?: string
+}
+
+/** The words for an account whose folder there another computer uses. */
+export const ELSEWHERE_TEXT = 'Used by the app on another computer'
+
+/** Its folder there blocks a sign-in from here: not signed in there (the
+ *  machine's own sign-in as the account still starts it). */
+const blockedElsewhere = (a: Pick<HostAccountSignIn, 'state'> | undefined, opts: HostLineOptions): boolean =>
+  opts.elsewhere === true && a?.state === 'not-signed-in'
+
+/**
  * An account card's line for one machine (frame 1, "On machines"): signed in
  * there (its own folder, or the machine's own sign-in, which says so), not
  * signed in with "Sign in on <machine>", signed in as another account (never
- * used; signing in again there replaces it), or not read since the app started.
+ * used; signing in again there replaces it), used by the app on another
+ * computer (no Sign in), or not read since the app started.
  */
-export function cardMachineLine(a: Pick<HostAccountSignIn, 'state' | 'facts'> | undefined, machine: string): HostSignInLine {
+export function cardMachineLine(a: Pick<HostAccountSignIn, 'state' | 'facts'> | undefined, machine: string, opts: HostLineOptions = {}): HostSignInLine {
+  if (blockedElsewhere(a, opts)) return { tone: 'none', text: ELSEWHERE_TEXT, sub: `Its folder on ${machine} is another computer's, which signs it in there`, muted: true }
   switch (a?.state) {
     case 'signed-in-here':
       return { tone: 'ok', text: `Signed in on ${machine}`, muted: false }
@@ -95,9 +123,12 @@ export function cardMachineLine(a: Pick<HostAccountSignIn, 'state' | 'facts'> | 
  * A row of a machine's "Accounts here" (frame 4): Sign out where the account
  * is signed in there (the machine's own sign-in too: that one asks first, Q5),
  * Sign in on that machine where it is not, and nothing while the machine was
- * not read. `who` is the account's name on this computer.
+ * not read or while its folder there is the app on another computer's. `who`
+ * is the account's name on this computer.
  */
-export function machineAccountLine(a: Pick<HostAccountSignIn, 'state' | 'facts'> | undefined, machine: string, who: string, why?: string): HostSignInLine {
+export function machineAccountLine(a: Pick<HostAccountSignIn, 'state' | 'facts'> | undefined, machine: string, who: string, opts: HostLineOptions = {}): HostSignInLine {
+  if (blockedElsewhere(a, opts)) return { tone: 'none', text: ELSEWHERE_TEXT, sub: `Its folder on ${machine} was made by the app on another computer, which signs it in and out there.`, muted: true }
+  const why = opts.why
   switch (a?.state) {
     case 'signed-in-here':
       return { tone: 'ok', text: `Signed in on ${machine}`, action: 'sign-out', muted: false }
@@ -132,8 +163,9 @@ export interface HostSwitchMark {
  * account. None while the machine was not read (the switch's launch reads it,
  * and says why when it starts nothing).
  */
-export function switchMachineMark(a: Pick<HostAccountSignIn, 'state'> | undefined, machine: string): HostSwitchMark | undefined {
+export function switchMachineMark(a: Pick<HostAccountSignIn, 'state'> | undefined, machine: string, opts: HostLineOptions = {}): HostSwitchMark | undefined {
   if (hostLaunchable(a?.state)) return { text: `signed in on ${machine}`, warn: false, needsSignIn: false }
+  if (blockedElsewhere(a, opts)) return { text: `used by the app on another computer on ${machine}`, warn: true, needsSignIn: true, title: `Its folder on ${machine} is used by the app on another computer. Choosing it asks how this session goes on.` }
   if (a?.state === 'not-signed-in') return { text: `not signed in on ${machine}`, warn: true, needsSignIn: true, title: `Not signed in on ${machine}. Choosing it asks how to sign in there.` }
   if (a?.state === 'someone-else') return { text: `signed in as another account on ${machine}`, warn: true, needsSignIn: true, title: `Signed in on ${machine} as another account. Choosing it asks how to sign in there.` }
   return undefined
@@ -179,12 +211,15 @@ export function signInConfigFor(machine: Pick<HostMachineRef, 'target' | 'label'
  *  the machine's own sign-in (which Remove leaves as it is), and whether the
  *  machine was read at all since the app started. */
 export interface RemoveListing {
-  /** Names of the accounts signed in there in a folder of their own. */
-  signedIn: string[]
+  /** The accounts signed in there in a folder of their own: each keyed by
+   *  its account (two accounts may share a name), with its name. */
+  signedIn: Array<{ key: string; name: string }>
   /** The account the machine's own sign-in is, or null. */
   own: string | null
   /** The machine was read since the app started. */
   read: boolean
+  /** Account folders there the app on another computer made: Remove leaves them. */
+  elsewhere: number
 }
 
 /** How many account folders on a machine belong to accounts this computer no longer holds, as words. */
@@ -192,18 +227,25 @@ function othersName(n: number): string {
   return n === 1 ? 'an account no longer on this computer' : `${n} accounts no longer on this computer`
 }
 
+/** Remove's sentence for the folders another computer's app uses there, which stay. */
+export function elsewhereStayText(n: number): string {
+  return n === 1
+    ? 'One account folder there is used by the app on another computer and stays.'
+    : `${n} account folders there are used by the app on another computer and stay.`
+}
+
 /** Remove's listing for machine `acc` (undefined: never read). `nameOf`
  *  names an account of this computer. */
 export function removeListing(acc: HostMachineAccounts | undefined, nameOf: (profileId: string) => string): RemoveListing {
-  if (!acc || acc.readAt === null) return { signedIn: [], own: null, read: false }
+  if (!acc || acc.readAt === null) return { signedIn: [], own: null, read: false, elsewhere: 0 }
   // A read that did not answer keeps each account's folder as the last one
   // that did found it (machineAccounts), so a folder there is listed.
   const signedIn = acc.accounts
     .filter((a) => a.folder && (acc.ok ? a.state === 'signed-in-here' || a.state === 'someone-else' : true))
-    .map((a) => nameOf(a.profileId))
-  if (acc.others.length > 0) signedIn.push(othersName(acc.others.length))
+    .map((a) => ({ key: a.profileId, name: nameOf(a.profileId) }))
+  if (acc.others.length > 0) signedIn.push({ key: 'others', name: othersName(acc.others.length) })
   const own = acc.ok ? acc.accounts.find((a) => a.state === 'machine-own') : undefined
-  return { signedIn, own: own ? nameOf(own.profileId) : null, read: true }
+  return { signedIn, own: own ? nameOf(own.profileId) : null, read: true, elsewhere: acc.elsewhere?.length ?? 0 }
 }
 
 /** Names joined as a sentence lists them: "A", "A and B", "A, B and C". */
@@ -228,7 +270,7 @@ export function removeNotAnsweringText(machine: string, listing: RemoveListing):
   const n = listing.signedIn.length
   if (n === 0) return `${head} ${tail}`
   const one = n === 1
-  return `${head} ${joinNames(listing.signedIn)} ${one ? 'stays' : 'stay'} signed in on ${machine} until you sign ${one ? 'it' : 'them'} out there, or end ${one ? 'that sign-in' : 'those sign-ins'} ${END_SIGN_IN_THERE}. ${tail}`
+  return `${head} ${joinNames(listing.signedIn.map((x) => x.name))} ${one ? 'stays' : 'stay'} signed in on ${machine} until you sign ${one ? 'it' : 'them'} out there, or end ${one ? 'that sign-in' : 'those sign-ins'} ${END_SIGN_IN_THERE}. ${tail}`
 }
 
 /**

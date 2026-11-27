@@ -94,14 +94,17 @@ export function canSwitchAccountForSession(opts: {
  * an SSH tab the helper keeps (its saved mark, `remoteVia`), or one main says
  * runs through the helper now (`throughHelper`, useThroughHelper). Never a
  * shell-only pane or a sign-in tab (`remoteAccountSignIn`): neither runs a
- * session on an account.
+ * session on an account. The saved mark counts only while the Connection is
+ * SSH Persistent, as main counts it (remote-helper/index.ts: `marked` is
+ * persistent and remoteVia): a kept tab whose config was set to SSH since
+ * goes the usual way unless main says otherwise.
  */
 export function isHelperTab(
-  session: { sessionType?: string; shellOnly?: boolean; remoteVia?: 'helper'; remoteAccountSignIn?: boolean } | null | undefined,
+  session: { sessionType?: string; shellOnly?: boolean; remoteVia?: 'helper'; remoteAccountSignIn?: boolean; sshConfig?: { detachable?: boolean } } | null | undefined,
   throughHelper: boolean,
 ): boolean {
   if (!session || session.sessionType !== 'ssh' || session.shellOnly || session.remoteAccountSignIn) return false
-  return session.remoteVia === 'helper' || throughHelper
+  return (session.remoteVia === 'helper' && session.sshConfig?.detachable !== false) || throughHelper
 }
 
 /**

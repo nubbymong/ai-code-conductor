@@ -19,7 +19,7 @@ import { accountDisplayName, selectProviderAccounts } from '../stores/providerAc
 import { launchNeedsAcknowledgement } from './launchAccount'
 import { sessionProviderAccount } from './accountChip'
 import type { HostMachineAccounts } from '../../shared/host-accounts'
-import { switchMachineMark, type HostSwitchMark } from './hostAccounts'
+import { hostElsewhere, switchMachineMark, type HostSwitchMark } from './hostAccounts'
 
 const MIDDOT = String.fromCharCode(0xb7)
 
@@ -80,7 +80,7 @@ export function switchAccountItems(
     return sources.profiles.map((p) => {
       const current = p.id === session.profileId
       const inactive = !isAccountActive(p as AccountProfile)
-      const machine = host ? switchMachineMark(host.accounts?.accounts.find((a) => a.profileId === p.id), host.machineName) : undefined
+      const machine = host ? switchMachineMark(host.accounts?.accounts.find((a) => a.profileId === p.id), host.machineName, { elsewhere: hostElsewhere(host.accounts, p.id) }) : undefined
       return {
         value: p.id,
         label: resolveAccountName(p.accountEmail, p.name, sources.aliases),

@@ -166,6 +166,16 @@ describe('isHelperTab (2.1.3-beta.20 section 5)', () => {
     expect(isHelperTab({ sessionType: 'ssh', remoteAccountSignIn: true }, true)).toBe(false)
     expect(isHelperTab(null, true)).toBe(false)
   })
+  // NIT-6 (round 1): main counts a saved mark only on an SSH Persistent tab
+  // (marked = persistent && remoteVia), so a kept tab whose Connection was
+  // changed to SSH is not a helper tab by its mark alone.
+  it('the kept mark counts only while the Connection is SSH Persistent', () => {
+    expect(isHelperTab({ sessionType: 'ssh', remoteVia: 'helper', sshConfig: { detachable: false } }, false)).toBe(false)
+    expect(isHelperTab({ sessionType: 'ssh', remoteVia: 'helper', sshConfig: { detachable: true } }, false)).toBe(true)
+    expect(isHelperTab({ sessionType: 'ssh', remoteVia: 'helper', sshConfig: {} }, false)).toBe(true)
+    // Main saying it runs through the helper now still counts.
+    expect(isHelperTab({ sessionType: 'ssh', sshConfig: { detachable: false } }, true)).toBe(true)
+  })
 })
 
 describe('sshMappedProfileId (harmonise-remote: SSH → local profile)', () => {

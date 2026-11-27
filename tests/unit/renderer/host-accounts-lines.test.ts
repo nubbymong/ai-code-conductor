@@ -10,6 +10,7 @@ import { describe, it, expect } from 'vitest'
 import {
   cardMachineLine, machineAccountLine, switchMachineMark, sessionMachine, signInConfigFor, sshTarget,
   removeListing, removeNotAnsweringText, machineOwnSignOutText, toSignInCount, joinNames, hostLaunchable, signInOnTitle,
+  elsewhereStayText, hostElsewhere,
 } from '../../../src/renderer/utils/hostAccounts'
 import type { HostMachineAccounts, HostSignInFacts } from '../../../src/shared/host-accounts'
 import type { TerminalConfig } from '../../../src/renderer/stores/configStore'
@@ -64,7 +65,7 @@ describe('a machine\'s "Accounts here" row (frame 4)', () => {
   })
   it('not read: no button; says why the last read did not answer, or to press Check', () => {
     expect(machineAccountLine({ state: 'not-read', facts: null }, 'Rocky', 'Work')).toEqual({ tone: 'none', text: 'Not read yet', sub: 'Press Check to read it.', muted: true })
-    expect(machineAccountLine({ state: 'not-read', facts: null }, 'Rocky', 'Work', 'rocky.lan could not be reached').sub).toBe('Its last read did not answer: rocky.lan could not be reached')
+    expect(machineAccountLine({ state: 'not-read', facts: null }, 'Rocky', 'Work', { why: 'rocky.lan could not be reached' }).sub).toBe('Its last read did not answer: rocky.lan could not be reached')
   })
 })
 
@@ -124,16 +125,33 @@ describe('Remove\'s question lists the accounts signed in there (frame 4)', () =
     ],
     ...over,
   })
+  const names = (l: { signedIn: Array<{ name: string }> }) => l.signedIn.map((x) => x.name)
   it('lists each account with a sign-in of its own there, and names the machine\'s own sign-in apart', () => {
-    expect(removeListing(acc(), nameOf)).toEqual({ signedIn: ['Work'], own: 'Personal', read: true })
+    expect(removeListing(acc(), nameOf)).toEqual({ signedIn: [{ key: 'p1', name: 'Work' }], own: 'Personal', read: true, elsewhere: 0 })
   })
   it('a folder signed in as another account is signed out too; folders of removed accounts are counted', () => {
     const l = removeListing(acc({ accounts: [{ profileId: 'p3', state: 'someone-else', facts: facts('o@x.io'), folder: true }], others: ['p9', 'p8'] }), nameOf)
-    expect(l.signedIn).toEqual(['Spare', '2 accounts no longer on this computer'])
-    expect(removeListing(acc({ accounts: [], others: ['p9'] }), nameOf).signedIn).toEqual(['an account no longer on this computer'])
+    expect(names(l)).toEqual(['Spare', '2 accounts no longer on this computer'])
+    expect(names(removeListing(acc({ accounts: [], others: ['p9'] }), nameOf))).toEqual(['an account no longer on this computer'])
+  })
+  // NIT-7 (round 1): two accounts may share a name; each item keys by its account, not its name.
+  it('each item keys by its account, so two accounts of one name are two items', () => {
+    const same = (id: string) => (id === 'p1' || id === 'p3' ? 'Work' : id)
+    const l = removeListing(acc({ accounts: [
+      { profileId: 'p1', state: 'signed-in-here', facts: facts('w@x.io'), folder: true },
+      { profileId: 'p3', state: 'signed-in-here', facts: facts('w2@x.io'), folder: true },
+    ] }), same)
+    expect(l.signedIn).toEqual([{ key: 'p1', name: 'Work' }, { key: 'p3', name: 'Work' }])
+    expect(new Set(l.signedIn.map((x) => x.key)).size).toBe(2)
+  })
+  // MINOR-2 (round 1): folders the app on another computer made there stay, and the question says so.
+  it('counts the folders used by the app on another computer, which Remove leaves', () => {
+    expect(removeListing(acc({ elsewhere: ['p2', 'x9'] }), nameOf).elsewhere).toBe(2)
+    expect(elsewhereStayText(1)).toBe('One account folder there is used by the app on another computer and stays.')
+    expect(elsewhereStayText(2)).toBe('2 account folders there are used by the app on another computer and stay.')
   })
   it('never read since the app started: nothing listed, and it says so', () => {
-    expect(removeListing(undefined, nameOf)).toEqual({ signedIn: [], own: null, read: false })
+    expect(removeListing(undefined, nameOf)).toEqual({ signedIn: [], own: null, read: false, elsewhere: 0 })
     expect(removeListing(acc({ readAt: null }), nameOf).read).toBe(false)
   })
   it('a last read that did not answer: the folders the last answer found are listed', () => {
@@ -141,15 +159,45 @@ describe('Remove\'s question lists the accounts signed in there (frame 4)', () =
       { profileId: 'p1', state: 'not-read', facts: null, folder: true },
       { profileId: 'p2', state: 'not-read', facts: null, folder: false },
     ] }), nameOf)
-    expect(l).toEqual({ signedIn: ['Work'], own: null, read: true })
+    expect(l).toEqual({ signedIn: [{ key: 'p1', name: 'Work' }], own: null, read: true, elsewhere: 0 })
   })
   it('the machine did not answer: what stays signed in there, where to end it, and that the folder stays', () => {
-    expect(removeNotAnsweringText('Pi', { signedIn: ['Work'], own: null, read: true })).toBe(
+    const l = (n: string[], read = true) => ({ signedIn: n.map((name) => ({ key: name, name })), own: null, read, elsewhere: 0 })
+    expect(removeNotAnsweringText('Pi', l(['Work']))).toBe(
       'Pi did not answer, so nothing can be signed out there now. Work stays signed in on Pi until you sign it out there, or end that sign-in in your Claude account settings on claude.ai. The app forgets Pi; its folder in ~/.aicc stays.')
-    expect(removeNotAnsweringText('Pi', { signedIn: ['Work', 'Personal'], own: null, read: true })).toContain('Work and Personal stay signed in on Pi until you sign them out there, or end those sign-ins')
-    expect(removeNotAnsweringText('Pi', { signedIn: [], own: null, read: true })).toBe('Pi did not answer, so nothing can be signed out there now. The app forgets Pi; its folder in ~/.aicc stays.')
-    expect(removeNotAnsweringText('Pi', { signedIn: [], own: null, read: false })).toContain('The app has not read which accounts are signed in on Pi since it started')
+    expect(removeNotAnsweringText('Pi', l(['Work', 'Personal']))).toContain('Work and Personal stay signed in on Pi until you sign them out there, or end those sign-ins')
+    expect(removeNotAnsweringText('Pi', l([]))).toBe('Pi did not answer, so nothing can be signed out there now. The app forgets Pi; its folder in ~/.aicc stays.')
+    expect(removeNotAnsweringText('Pi', l([], false))).toContain('The app has not read which accounts are signed in on Pi since it started')
     expect(joinNames(['A', 'B', 'C'])).toBe('A, B and C')
+  })
+})
+
+// MINOR-2 (round 1): an account of this computer whose folder on that machine
+// the app on another computer made (phase 3's `elsewhere`): main never reads,
+// signs in or signs out that folder, so no surface offers Sign in there.
+describe('an account whose folder there is the app on another computer\'s', () => {
+  it('the card, the Machines row and the Switch Account list say so, and offer no Sign in', () => {
+    const card = cardMachineLine({ state: 'not-signed-in', facts: null }, 'Rocky', { elsewhere: true })
+    expect(card).toEqual({ tone: 'none', text: 'Used by the app on another computer', sub: 'Its folder on Rocky is another computer\'s, which signs it in there', muted: true })
+    const here = machineAccountLine({ state: 'not-signed-in', facts: null }, 'Rocky', 'Personal', { elsewhere: true })
+    expect(here).toEqual({ tone: 'none', text: 'Used by the app on another computer', sub: 'Its folder on Rocky was made by the app on another computer, which signs it in and out there.', muted: true })
+    expect(here.action).toBeUndefined()
+    expect(switchMachineMark({ state: 'not-signed-in' }, 'Rocky', { elsewhere: true })).toEqual({
+      text: 'used by the app on another computer on Rocky', warn: true, needsSignIn: true,
+      title: 'Its folder on Rocky is used by the app on another computer. Choosing it asks how this session goes on.',
+    })
+  })
+  it('the machine\'s own sign-in as that account still starts it, and says so', () => {
+    expect(cardMachineLine({ state: 'machine-own', facts: facts('p@x.io') }, 'Rocky', { elsewhere: true }).text).toBe('Signed in on Rocky')
+    expect(machineAccountLine({ state: 'machine-own', facts: facts('p@x.io') }, 'Rocky', 'Personal', { elsewhere: true }).action).toBe('sign-out')
+    expect(switchMachineMark({ state: 'machine-own' }, 'Rocky', { elsewhere: true })?.needsSignIn).toBe(false)
+  })
+  it('hostElsewhere reads the machine\'s list', () => {
+    const acc = { did: DID, readAt: 1, ok: true, own: null, others: [], accounts: [], elsewhere: ['p2'] } as HostMachineAccounts
+    expect(hostElsewhere(acc, 'p2')).toBe(true)
+    expect(hostElsewhere(acc, 'p1')).toBe(false)
+    expect(hostElsewhere({ ...acc, elsewhere: undefined }, 'p2')).toBe(false)
+    expect(hostElsewhere(undefined, 'p2')).toBe(false)
   })
 })
 

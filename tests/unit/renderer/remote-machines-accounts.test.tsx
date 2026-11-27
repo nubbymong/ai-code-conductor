@@ -98,12 +98,23 @@ describe('a machine card says how accounts sign in there (frame 4)', () => {
     await mount()
     const how = q('[data-testid="remote-machine-how"]')
     expect(how?.textContent).toContain('How accounts sign in here')
-    const radios = [...(how?.querySelectorAll('[role="radio"]') ?? [])]
-    expect(radios).toHaveLength(1)
-    expect(radios[0].getAttribute('aria-checked')).toBe('true')
-    expect(radios[0].textContent).toBe('Sign in on this machineEach account signs in once on Rocky and stays signed in there. Remote Control works.')
-    expect(how?.querySelector('[role="radiogroup"]')?.getAttribute('aria-label')).toBe('How accounts sign in on Rocky')
+    expect(q('[data-testid="remote-machine-how-signin"]')?.textContent).toBe('Sign in on this machineEach account signs in once on Rocky and stays signed in there. Remote Control works.')
+    // NIT-5 (round 1): one way is static text, not a radio group the keyboard cannot reach.
+    expect(how?.querySelectorAll('[role="radio"], [role="radiogroup"]')).toHaveLength(0)
     expect(container.textContent).not.toMatch(/lend/i)
+  })
+})
+
+// MINOR-2 (round 1): an account whose folder there the app on another computer made.
+describe('an account whose folder there is another computer\'s', () => {
+  it('its row says so and offers no Sign in; Remove says such folders stay', async () => {
+    install({ read: { ...READ, elsewhere: ['p2', 'zz9'] } })
+    await mount()
+    expect(row('Personal')?.querySelector('[data-testid="remote-account-state"]')?.textContent).toBe('Used by the app on another computerIts folder on Rocky was made by the app on another computer, which signs it in and out there.')
+    expect(row('Personal')?.querySelector('[data-testid="remote-account-signin"]')).toBeNull()
+    expect(row('Personal')?.querySelector('[data-testid="remote-account-signout"]')).toBeNull()
+    await click(button('Remove'))
+    expect(q('[data-testid="remote-remove-listing"]')?.textContent).toContain('2 account folders there are used by the app on another computer and stay.')
   })
 })
 

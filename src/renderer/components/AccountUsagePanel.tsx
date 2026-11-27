@@ -32,7 +32,7 @@ import {
   ACCOUNT_USAGE_MACHINES_CLASS, ACCOUNT_USAGE_MACHINE_ROW_CLASS, ACCOUNT_USAGE_MACHINE_NAME_CLASS, ACCOUNT_USAGE_MACHINE_STATE_CLASS, ACCOUNT_USAGE_MACHINE_BUTTON_CLASS,
 } from './account-usage-layout'
 import { useHostAccountsStore } from '../stores/hostAccountsStore'
-import { cardMachineLine, machineLabel, signInOnTitle, toSignInCount, type HostLineTone, type HostMachineRef, type HostSignInLine } from '../utils/hostAccounts'
+import { cardMachineLine, hostElsewhere, machineLabel, signInOnTitle, toSignInCount, type HostLineTone, type HostMachineRef, type HostSignInLine } from '../utils/hostAccounts'
 import { openHostSignInTab } from '../utils/hostSignIn'
 
 /** D5 (usage UX, approved as drawn): the one line the page shows for Claude
@@ -432,7 +432,7 @@ export default function AccountUsagePanel({ onClose, onReauthNavigate, onOpenTok
   // Each Claude Code card's lines, one per added machine, from its last read.
   const machineLinesFor = (profileId: string): CardMachines | undefined => hostShown
     ? {
-        lines: hostMachines.map((m) => ({ machine: m, line: cardMachineLine(hostByDid[m.did]?.accounts.find((a) => a.profileId === profileId), machineLabel(m)) })),
+        lines: hostMachines.map((m) => ({ machine: m, line: cardMachineLine(hostByDid[m.did]?.accounts.find((a) => a.profileId === profileId), machineLabel(m), { elsewhere: hostElsewhere(hostByDid[m.did], profileId) }) })),
         onSignIn: (m) => onSignInOn(m, profileId),
       }
     : undefined
