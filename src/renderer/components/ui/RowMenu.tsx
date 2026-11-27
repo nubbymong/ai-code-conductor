@@ -11,6 +11,9 @@ export interface MenuItem {
   onSelect: () => void
   /** Draw a rule above this item. */
   separated?: boolean
+  /** A smaller line under the label: what the item does, when the label
+   *  alone does not say (the Account usage page's "Sign in again now"). */
+  detail?: string
 }
 
 const MENU_GAP = 4
@@ -25,7 +28,7 @@ const MENU_MIN_WIDTH = 188
  * it is open; scrolling or resizing closes it rather than leaving it
  * floating away from its row.
  */
-export function RowMenu({ items, label, testId, itemTestId, disabled, trigger }: {
+export function RowMenu({ items, label, testId, itemTestId, disabled, trigger, width }: {
   items: MenuItem[]
   /** Names both the trigger and the menu for assistive technology. */
   label: string
@@ -36,6 +39,9 @@ export function RowMenu({ items, label, testId, itemTestId, disabled, trigger }:
   /** A labelled trigger ("Restart" and a caret) in place of the "...". The
    *  menu, its placement and its keyboard handling are the same. */
   trigger?: React.ReactNode
+  /** A fixed menu width in px, so items with a `detail` wrap rather than
+   *  widen the menu. Absent: as wide as its longest label. */
+  width?: number
 }) {
   const [open, setOpen] = useState(false)
   const [pos, setPos] = useState<{ top: number; right: number } | null>(null)
@@ -148,6 +154,7 @@ export function RowMenu({ items, label, testId, itemTestId, disabled, trigger }:
           className="fixed z-[60] rounded-[9px] border p-1 shadow-xl"
           style={{
             minWidth: MENU_MIN_WIDTH,
+            ...(width ? { width } : {}),
             top: pos?.top ?? 0,
             right: pos?.right ?? 0,
             // Measured before it is shown: invisible until placed.
@@ -175,6 +182,9 @@ export function RowMenu({ items, label, testId, itemTestId, disabled, trigger }:
                 data-testid={itemTestId?.(item.key)}
               >
                 {item.label}
+                {item.detail && (
+                  <span className="block text-[11px] leading-snug mt-px" style={{ color: 'var(--text-muted)' }}>{item.detail}</span>
+                )}
               </button>
             </React.Fragment>
           ))}
