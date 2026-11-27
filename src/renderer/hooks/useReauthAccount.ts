@@ -11,7 +11,9 @@ import type { AccountProfile } from '../../shared/account-types'
 // poll until /login rewrites the account's credentials — but targets the
 // existing profileId instead of creating a new one. A full fresh login writes a
 // complete credential set into that account's isolated home, so it sidesteps
-// the rotating-refresh-token hazard of a silent refresh entirely.
+// the rotating-refresh-token hazard of a silent refresh entirely. Starting
+// claude in the tab also renews a sign-in that is still valid, which rewrites
+// the credentials too and so completes the poll (nubbymong/aicc_planning#444).
 const POLL_MS = 4000
 const MAX_ATTEMPTS = 300 // ~20 min backstop; the session-gone check is the real bound
 
@@ -107,6 +109,8 @@ export function useReauthAccount(): (profile: Pick<AccountProfile, 'id' | 'name'
       provider: 'claude',
       profileId: profile.id,
       needsLogin: true,
+      // The banner speaks of this account, not a new one (signInBanner.ts).
+      signInAgain: true,
     })
     pollForReauth(profile.id, sessionId, onDone ?? (() => {}))
     return sessionId

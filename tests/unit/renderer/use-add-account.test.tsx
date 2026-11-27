@@ -121,6 +121,8 @@ describe('useAddAccount', () => {
     expect(sess.profileId).toBe('profile-work')
     expect(sess.shellOnly).toBe(true)
     expect(sess.needsLogin).toBe(true)
+    // A new account's tab, not a re-auth: the banner says it is setting one up.
+    expect(sess.signInAgain).toBeUndefined()
   })
 
   it('clears needsLogin + updates label once refreshIdentity resolves an email', async () => {

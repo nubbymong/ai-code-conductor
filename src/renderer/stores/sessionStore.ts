@@ -189,6 +189,11 @@ export interface Session {
   /** True only for an in-progress add-account login shell; drives the /login
    *  guidance banner. Cleared once the account is detected. */
   needsLogin?: boolean
+  /** Set beside needsLogin by a re-auth of an EXISTING account
+   *  (useReauthAccount), so the banner speaks of signing that account in
+   *  again rather than setting up a new one (signInBanner.ts). Ephemeral,
+   *  like needsLogin: not persisted. */
+  signInAgain?: boolean
   /** #242 tier 5: true once this SSH session's flow state has reached
    *  `claude-running` at least once. Set by TerminalView's flow-state
    *  subscription, read at the NEXT spawn to compute SSHOptions.reconnect
