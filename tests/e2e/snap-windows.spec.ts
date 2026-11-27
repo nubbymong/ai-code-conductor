@@ -118,23 +118,33 @@
  * 71 ms, the file to its path typed 13 to 63 ms (OVERLAY_MS bounds each), and
  * the stand-in started on the tab's terminal 11.2 s after the tab's Snap
  * button showed, within TAB_MS: under three times that reading, not ten, and
- * not raised. That time was read as PowerShell's cold start, then the launch
- * line; it was not (diagnosis runs 46026344825 and 46028075097, main's log
- * with times): the tab, started on no account, was held for the start's
- * profile steps, which waited for the owner-only check of the home kept ready
- * for the next new account, one Windows PowerShell call that took 8.4 s there
- * and, in 46028075097, ran to its 30 s limit and was asked once more, so the
- * stand-in never started within TAB_MS (as in run 46023467484). The tab's own
- * PowerShell gave its first output 289 ms after its spawn and the stand-in
- * started 0.9 s after the spawn. Since then that check runs after the steps
- * when they make no account (account-profiles.ts
- * startOwnerOnlyCredentialFolders), and the tab is held only for the scripts
- * folders, at most 5 s (SCRIPT_FOLDERS_LAUNCH_WAIT_MS). Its own PowerShell
- * still runs the launch line only once the start's owner-only PowerShell
- * calls have ended: run 46031920492 read its first output 530 ms after the
- * spawn and the stand-in 7 ms after both calls ended, 10.4 s after they
- * began; run 46030823339, on a slower runner, 20.2 s from the tab to the
- * stand-in, within TAB_MS.
+ * not raised. That time was Windows PowerShell's cold start, reaching the tab
+ * by two routes (diagnosis runs 46026344825, 46028075097 and 46040073797:
+ * main's log, and times written by each Windows PowerShell itself with no
+ * command). The first time Windows PowerShell 5.1 runs a cmdlet named bare,
+ * it looks through every module on its module path for it, and with no
+ * module analysis cache yet, as on the runner, that look took 21.6 to 27.4 s
+ * in 46040073797 (the start's calls took 8.4 s on a faster runner,
+ * 46026344825). The start's owner-only calls named New-Object bare, and the
+ * tab's launch line named Set-Location bare. Route one, the app's: the tab,
+ * started on no account, was held for the start's profile steps, which waited
+ * for the owner-only check of the home kept ready for the next new account.
+ * Route two, the tab's own: its Windows PowerShell began the launch line
+ * about 1.1 s after it was written, and the line's Set-Location then waited
+ * for that PowerShell's own look (each Windows PowerShell looks on its own:
+ * one started 2 s after another ended 2.3 to 2.6 s after it). In 46028075097 and 46040073797 the start's calls ran to their 30 s
+ * limit and were asked again, and the stand-in never started within TAB_MS
+ * (as in run 46023467484). Since then the ready home is checked after the
+ * steps when they make no account (account-profiles.ts
+ * startOwnerOnlyCredentialFolders), and the launch line and the owner-only
+ * script name each cmdlet with its module (terminal-launch-line.ts
+ * PS_SET_LOCATION, owner-only-folders.ts), which makes no look: in
+ * 46040073797 the tab's folder change took 36 to 43 ms, the start's calls
+ * about 1 s, and the stand-in started 1.7 to 3.0 s after the Snap button
+ * showed, where the bare names left it unstarted after 30 s. Each app here
+ * runs with a fresh, empty module analysis cache (PSModuleAnalysisCachePath,
+ * coldPowerShellEnv), so every run reads that cold start, whatever an earlier
+ * app on the runner left in the runner's own cache.
  * With X1.2 in (the beta.16 aggregate, run 45304028588 on 5a2f0f41), a
  * picture's sentence follows its paste by 1.5 s and its Enter by 2.2 s, and a
  * picture pressed meanwhile waited behind the one before it: 82 to 1818 ms
@@ -260,6 +270,16 @@ function installStandInClaude(dir: string): string {
   return dir
 }
 const standInDir = (dataDir: string) => path.join(dataDir, 'stand-in-claude')
+/** A fresh, empty module analysis cache for one app and every Windows
+ *  PowerShell it starts (Windows PowerShell 5.1 reads and writes the file
+ *  PSModuleAnalysisCachePath names): each app meets Windows PowerShell's cold
+ *  start, as on a new user profile, whatever an earlier app on the runner
+ *  left in the runner's own cache (see TIMEOUTS above). */
+function coldPowerShellEnv(dataDir: string): Record<string, string> {
+  const dir = path.join(dataDir, 'ps-module-analysis-cache')
+  fs.mkdirSync(dir, { recursive: true })
+  return { PSModuleAnalysisCachePath: path.join(dir, 'ModuleAnalysisCache') }
+}
 const typedText = (): string => {
   try { return fs.readFileSync(path.join(standInDir(ctx!.dataDir), 'typed.txt'), 'utf8') } catch { return '' }
 }
@@ -795,6 +815,7 @@ test.describe('Snap on Windows', () => {
       env: (dataDir) => ({
         PATH: pathWith(installStandInClaude(standInDir(dataDir))),
         CCC_E2E_SNAP_HELPER: HELPER,
+        ...coldPowerShellEnv(dataDir),
       }),
     })
     readings.launchMs = Math.round(performance.now() - started)
@@ -1280,6 +1301,7 @@ test.describe('Snap into a Codex tab on Windows while Codex shows its warning co
         CODEX_HOME: (() => { const d = path.join(dataDir, 'codex-home'); fs.mkdirSync(d, { recursive: true }); return d })(),
         CCC_E2E_SNAP_HELPER: HELPER,
         ...DEAD_PROXY,
+        ...coldPowerShellEnv(dataDir),
       }),
     })
     readings.codexLaunchMs = Math.round(performance.now() - started)
