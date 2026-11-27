@@ -117,8 +117,19 @@
  * overlay on screen 218 to 378 ms after the press, Enter to the file 32 to
  * 71 ms, the file to its path typed 13 to 63 ms (OVERLAY_MS bounds each), and
  * the stand-in started on the tab's terminal 11.2 s after the tab's Snap
- * button showed (PowerShell's cold start, then the launch line), within
- * TAB_MS: under three times that reading, not ten, and not raised.
+ * button showed, within TAB_MS: under three times that reading, not ten, and
+ * not raised. That time was read as PowerShell's cold start, then the launch
+ * line; it was not (diagnosis runs 46026344825 and 46028075097, main's log
+ * with times): the tab, started on no account, was held for the start's
+ * profile steps, which waited for the owner-only check of the home kept ready
+ * for the next new account, one Windows PowerShell call that took 8.4 s there
+ * and, in 46028075097, ran to its 30 s limit and was asked once more, so the
+ * stand-in never started within TAB_MS (as in run 46023467484). The tab's own
+ * PowerShell gave its first output 289 ms after its spawn and the stand-in
+ * started 0.9 s after the spawn. Since then that check runs after the steps when
+ * they make no account (account-profiles.ts startOwnerOnlyCredentialFolders),
+ * and the tab waits only for the scripts folders, at most 5 s
+ * (SCRIPT_FOLDERS_LAUNCH_WAIT_MS).
  * With X1.2 in (the beta.16 aggregate, run 45304028588 on 5a2f0f41), a
  * picture's sentence follows its paste by 1.5 s and its Enter by 2.2 s, and a
  * picture pressed meanwhile waited behind the one before it: 82 to 1818 ms
