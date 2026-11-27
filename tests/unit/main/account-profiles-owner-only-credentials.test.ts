@@ -55,7 +55,7 @@ import {
   _setRootsForTest, _setCredentialFolderRuleForTest, getProfileConfigDir, getAccountIdentityDir, getProfilesRoot,
   copyCredentialFile, writeCanonicalIdentity, withProfileHome, profileRealmLaunch, credentialFoldersVerdict,
   checkProfileCredentialFolders, checkEveryProfileCredentialFolders, startOwnerOnlyCredentialFolders,
-  startProfileStepsSettled, startProfileStepsPending, profileCredentialFoldersChecked,
+  startProfileStepsSettled, startProfileStepsPending, profileCredentialFoldersChecked, _readyHomeAfterStepsSettledForTest,
   upsertProfile, setPrimaryProfile, syncPrimaryCredentialsWithGlobal, sharedRoot, captureGlobalLogin,
   restoreProfileHomeFromCanonical, listProfiles, cleanupSessionHomes, getSessionHomesRoot, SHARED_DIR_NAMES,
   CREDENTIAL_FOLDER_REFUSAL, CREDENTIAL_FOLDER_PENDING, CREDENTIAL_FOLDER_UNCHECKED, MANAGED_LAUNCH_REFUSAL,
@@ -169,7 +169,13 @@ beforeEach(() => {
   fs.writeFileSync(src, NEW_CREDENTIAL)
 })
 
-afterEach(() => {
+afterEach(async () => {
+  // The start's ready-home check after its profile steps (account-profiles.ts
+  // startOwnerOnlyCredentialFolders, when the steps make no account) is not
+  // awaited by the start: it ends here, inside this test, so none of its
+  // Windows PowerShell calls is read as the next test's.
+  await startProfileStepsSettled()
+  await _readyHomeAfterStepsSettledForTest()
   _setCredentialFolderRuleForTest(null)
   _setRootsForTest(null)
   _resetProviderRegistryForTest()

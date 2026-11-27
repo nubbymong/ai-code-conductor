@@ -1332,21 +1332,40 @@ export async function startOwnerOnlyCredentialFolders(
   } finally {
     if (startStepsPending === settled) startStepsPending = null
     settle()
-    // Never rejects; started after the wait has settled, so nothing waits for it.
-    if (readyAfterSteps) { try { void prepareReadyHome(readyAfterSteps) } catch { /* no home ready: a new profile is checked after it is made */ } }
+    // Started after the wait has settled, so nothing waits for it; kept only
+    // so a test can wait for it to end (_readyHomeAfterStepsSettledForTest).
+    if (readyAfterSteps) {
+      const after = readyAfterSteps
+      const run = (async () => { try { await prepareReadyHome(after) } catch { /* no home ready: a new profile is checked after it is made */ } })()
+      readyHomeAfterSteps = run
+      void run.then(() => { if (readyHomeAfterSteps === run) readyHomeAfterSteps = null })
+    }
   }
+}
+
+/** The start's check of the ready home made after its profile steps, while it runs. */
+let readyHomeAfterSteps: Promise<void> | null = null
+
+/** Test seam: resolves once the start's check of the ready home that runs
+ *  after its profile steps has ended; at once when none runs. Never rejects.
+ *  A suite whose next test reads every Windows PowerShell call waits for it,
+ *  so none of that check's calls is read as the next test's. */
+export function _readyHomeAfterStepsSettledForTest(): Promise<void> {
+  return readyHomeAfterSteps ?? Promise.resolve()
 }
 
 /** Whether the start's profile steps may make an account: the first-run
  *  capture (first-run-accounts.ts runFirstRunCapture) makes one only when the
- *  account list reads, names no primary account, and this computer's own
+ *  account list reads, names no primary account (the first entry marked
+ *  primary has an id, read as the capture reads it), and this computer's own
  *  sign-in names an account (readOwnSignIn, as captureGlobalLogin reads it).
  *  A list that does not read counts as may, so the home is made ready first
- *  as before. */
+ *  as before: the capture then does nothing, so this only keeps the older,
+ *  slower order for that rare start. */
 function startStepsMayMakeAccount(): boolean {
   const top = readProfilesFile()
   if (!top) return true
-  if (top.profiles.some((p) => isProfileRecord(p) && p.isPrimary && p.id)) return false
+  if (top.profiles.filter(isProfileRecord).find((p) => p.isPrimary)?.id) return false
   return readOwnSignIn() !== null
 }
 
@@ -1374,7 +1393,11 @@ export function startProfileStepsPending(): boolean {
 }
 
 /** Every listed profile's sign-in folders checked (those without a verdict),
- *  then a checked home made ready for the next new profile. Never rejects. */
+ *  then a checked home made ready for the next new profile. Never rejects.
+ *  No start path calls it since the start checks the ready home after its
+ *  profile steps when they make no account (startOwnerOnlyCredentialFolders);
+ *  kept for the tests that check every profile and the ready home in one
+ *  call, and for any later caller that needs both. */
 export async function checkEveryProfileCredentialFolders(): Promise<void> {
   const rule = credentialFolderRule()
   if (!rule) return

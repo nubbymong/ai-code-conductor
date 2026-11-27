@@ -72,8 +72,8 @@ beforeEach(() => {
 })
 
 afterEach(async () => {
-  // Let a ready-home check started after the steps end inside this test's folder.
-  await new Promise((r) => setTimeout(r, 30))
+  // A ready-home check started after the steps ends inside this test's folder.
+  await ap._readyHomeAfterStepsSettledForTest()
   ap._setCredentialFolderRuleForTest(null)
   ap._setRootsForTest(null)
   // TEST CLEANUP GUARD: this suite's own temp folder only.
@@ -125,5 +125,51 @@ describe('at start the ready home is checked before the profile steps only when 
     release()
     await start
     expect(seen).toEqual([{ step: 'steps', readyChecked: true }])
+  })
+
+  // Mutation to prove this can fail: read the primary as any primary entry
+  // with an id (`some(... p.isPrimary && p.id)`), not as the capture reads it.
+  it('a primary read as the first-run capture reads it: the first entry marked primary has no id, so the capture may make an account, and the steps wait for the ready home', async () => {
+    ownSignIn()
+    fs.mkdirSync(ap.getProfilesRoot(), { recursive: true })
+    fs.writeFileSync(path.join(ap.getProfilesRoot(), 'profiles.json'), JSON.stringify({ profiles: [
+      { name: 'no id', accountEmail: '', createdAt: 1, isPrimary: true },
+      { id: P, name: 'A', accountEmail: 'own@example.test', createdAt: 2, isPrimary: true },
+    ] }))
+    const { rule, release } = heldReadyRule()
+    ap._setCredentialFolderRuleForTest(rule)
+    const start = ap.startOwnerOnlyCredentialFolders(() => {}, rule)
+    expect(await settlesWithin(start, 300)).toBe(false)
+    release()
+    await start
+  })
+
+  // Mutation to prove this can fail: count a list that does not read as no
+  // account to make (`if (!top) return false`).
+  it('an account list that does not read counts as may: the ready home is checked first, as before', async () => {
+    fs.mkdirSync(ap.getProfilesRoot(), { recursive: true })
+    fs.writeFileSync(path.join(ap.getProfilesRoot(), 'profiles.json'), '{ not json')
+    const { rule, release, askedReady } = heldReadyRule()
+    ap._setCredentialFolderRuleForTest(rule)
+    const order: string[] = []
+    const start = ap.startOwnerOnlyCredentialFolders(() => { order.push('steps') }, rule)
+    expect(await settlesWithin(start, 300)).toBe(false)
+    expect(askedReady()).toBe(true)
+    expect(order).toEqual([])
+    release()
+    await start
+    expect(order).toEqual(['steps'])
+  })
+
+  it('the start\'s ready-home check after the steps can be waited for, and settles once it has ended', async () => {
+    const { rule, release, askedReady } = heldReadyRule()
+    ap._setCredentialFolderRuleForTest(rule)
+    await ap.startOwnerOnlyCredentialFolders(() => {}, rule)
+    expect(askedReady()).toBe(true)
+    const waited = ap._readyHomeAfterStepsSettledForTest()
+    expect(await settlesWithin(waited, 200)).toBe(false)
+    release()
+    await waited
+    expect(ap.credentialFoldersVerdict(readySet()).ok).toBe(true)
   })
 })
