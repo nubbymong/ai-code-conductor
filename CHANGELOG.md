@@ -44,7 +44,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Restart pressed while the Agent Canvas, the logs or the browser is in front of a tab's terminal now starts the session at once; before, it waited until the terminal was shown again.
 - On Windows, a Snap press with no desktop to capture (a locked screen, or a session with no screen) now says so above the command bar; before, nothing happened.
 - When Claude Code reports a weekly limit and no 5-hour one, a session's status line now shows the weekly figure and its reset, and the 5-hour meter says not reported; before, both meters showed as waiting for the status line. The usage popover the Copilot meter opens reads the same way.
-- In a narrow window, a session's status line now keeps each rate-limit meter's label, bar and percentage: the Copilot meter, where shown, gives way first, then the reset times shorten (the full time is in the meter's tooltip), then the token, cost, lines and time figures. Before, the weekly meter could be cut off at the end of the line.
+- In a narrow window, a session's status line now gives these up before it cuts any rate-limit meter's label, bar or percentage: the Copilot meter, where shown, goes first, then the reset times shorten (the full time is in the meter's tooltip), then the token, cost, lines and time figures. Before, the weekly meter could be cut off at the end of the line while those still showed.
 - A session that asks for you while a page such as Machines or Settings is in front now marks its tab and its card, also when it is the session you looked at last.
 - The Feature Guide's Reference now shows each known issue as a paragraph of its own; before, the whole list ran together as one paragraph.
 
