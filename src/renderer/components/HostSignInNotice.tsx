@@ -167,9 +167,9 @@ function NoticeDialog({ notice }: { notice: HostNotice }) {
   // notice host asks first, naming them.
   const adopt = () => {
     const store = useHostAccountsStore.getState()
-    const held = new Set(profiles.map((p) => p.id))
+    const heldIds = new Set(profiles.map((p) => p.id))
     const acc = store.byDid[notice.did]
-    const more = acc?.mayBeEarlierInstall === true ? adoptableIds(acc, held) : []
+    const more = acc?.mayBeEarlierInstall === true ? adoptableIds(acc, heldIds) : []
     store.dropWaits(notice.sessionId)
     close()
     // Round 4 (R4-1, R4-3): the tab's next step depends on why it asked (a
