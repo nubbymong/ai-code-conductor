@@ -64,8 +64,13 @@ probe (ADR) must confirm. R5 fixtures fix field types, lengths and refusals.
   its own, `~/.aicc/accounts/<profile id>/` (0700; beside the device
   folders, as an account's sign-in is the machine user's, not one
   install's), holding the marker `.aicc-account` (`aicc-account 1 <profile
-  id>`, a regular file): no script reads or removes such a folder without
-  it. The folder is the CLI's config folder for that account
+  id> <install id>`, a regular file): no script reads or removes such a
+  folder without this install's marker. A folder whose marker names another
+  install (the app on another computer of the user, or on a shared login,
+  signed in on the same host login) is that computer's: `accounts` names it
+  `AICC-FIELD <nonce> <profile id> elsewhere` and reads nothing of it, and
+  `account` and `signout` refuse it (`account-folder-elsewhere`). The folder
+  is the CLI's config folder for that account
   (`CLAUDE_CONFIG_DIR`): its sign-in files (`.credentials.json`,
   `.claude.json`) are its own, the shared folders (projects, memory, agents,
   skills, commands, plugins) and `CLAUDE.md` are links into `~/.claude`
@@ -78,11 +83,17 @@ probe (ADR) must confirm. R5 fixtures fix field types, lengths and refusals.
   helper's field mode with `--keys` (below), printing `AICC-FIELD <nonce>
   <own or profile id> <id or cr>` before each answer; `signout` runs the
   CLI's own `claude auth logout` with `CLAUDE_CONFIG_DIR` set to one
-  account's folder and then removes that folder only (`folder`), every
-  marked folder there (`all`, for Remove), or the machine's own sign-in
-  with the variable unset and nothing removed (`own`, only after the user
-  confirmed it). The app reads at Check, at the start-up list, at the end
-  of a sign-in tab and at each launch of a tab on an account; nothing polls.
+  account's folder and then removes that folder only (`folder`), each
+  folder of this install's that a comma list of profile ids names (`list`,
+  for Remove: then it names the folders it left, this install's that the
+  list did not name, `left <id>`, and another computer's, `elsewhere <id>`;
+  with the device folder already gone it signs nothing out and answers
+  `device gone`, and Remove goes on), or the machine's own sign-in with the
+  variable unset and nothing removed (`own`, only after the user confirmed
+  it). The app reads at Check, at the start-up list, at the end of a
+  sign-in tab, at each launch of a tab on an account, and before and after
+  a sign-out; nothing polls. An attach to a session kept for a tab reads
+  too, for the tab's account state only: it never stops the attach.
 - **Field mode's keys** (`helper/src/field.rs`, from 2.1.3-beta.20).
   `field --file <file> --keys <k1,k2,...>` reads 1 to 8 keys of one JSON
   file under the home folder and prints one JSON object of the keys it

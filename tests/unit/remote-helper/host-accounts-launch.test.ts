@@ -23,12 +23,12 @@ import { join } from 'path'
 import type { IPty } from 'node-pty'
 import type { RemoteAccounts, SessionProvider } from '../../../src/main/providers/types'
 import { registerProvider } from '../../../src/main/providers'
-import { forgetRemoteHelperTab, remoteAccountsState, remoteHelperPty, setRemoteHelperDeps, signOutRemoteAccount } from '../../../src/main/remote-helper'
+import { accountsLeftText, forgetRemoteHelperTab, remoteAccountsState, remoteHelperPty, setRemoteHelperDeps, signOutForRemove, signOutRemoteAccount } from '../../../src/main/remote-helper'
 import { CLAUDE_REMOTE_ACCOUNTS, claudeRemoteLaunch } from '../../../src/main/providers/claude/remote-launch'
 import { CLAUDE_RUN_SCREEN } from '../../../src/main/providers/claude/run-screen'
 import { remoteSessionId } from '../../../src/main/remote-helper/session'
-import { _resetHostAccountsForTest, type HostProfile } from '../../../src/main/remote-helper/host-accounts'
-import type { RemoteMachineRecord, RemoteMachines } from '../../../src/main/remote-helper/machines'
+import { _resetHostAccountsForTest, forgetHostAccounts, type HostProfile } from '../../../src/main/remote-helper/host-accounts'
+import { RemoteMachines, type RemoteMachineRecord } from '../../../src/main/remote-helper/machines'
 import type { SSHOptions } from '../../../src/main/ssh-options'
 import { IPC } from '../../../src/shared/ipc-channels'
 import type { HostAccountNotice } from '../../../src/shared/host-accounts'
@@ -63,43 +63,82 @@ const signedIn = (email: string): SignIn => ({ id: { [K.identity]: email }, cr: 
 
 let own: SignIn
 let folders: Map<string, SignIn>
+/** The install each folder's marker names; this test's own unless set. */
+let owners: Map<string, string>
+/** The records list mode prints: the sessions the helper keeps there. */
+let kept: Array<Record<string, unknown>>
+/** The device folder is gone there (an earlier Remove from elsewhere, or deleted by hand). */
+let deviceGone: boolean
 let ssh: FakeSsh
 let holder: FakeHolder
 let store = ''
 let sent: Array<[string, unknown]>
 let logs: string[]
 let switchOn: boolean
+let methods: Record<string, string>
+const INSTALL = 'f'.repeat(32)
+const OTHER_INSTALL = 'e'.repeat(32)
 const win = { webContents: { send: (ch: string, d: unknown) => { sent.push([ch, d]) } }, isDestroyed: () => false }
+const ownerOf = (id: string): string => owners.get(id) ?? INSTALL
 
-function accountsOut(n: string): string {
+function accountsOut(n: string, install: string): string {
   const lines = [`AICC-HASH ${n} ok ${SHA}`]
   const field = (slot: string, part: string, obj?: Record<string, unknown>) => { lines.push(`AICC-FIELD ${n} ${slot} ${part}`); if (obj) lines.push(JSON.stringify(obj)) }
   field('own', 'id', own.id)
   field('own', 'cr', own.cr)
-  for (const [id, f] of folders) { field(id, 'id', f.id); field(id, 'cr', f.cr) }
+  for (const [id, f] of folders) {
+    if (ownerOf(id) !== install) { lines.push(`AICC-FIELD ${n} ${id} elsewhere`); continue }
+    field(id, 'id', f.id)
+    field(id, 'cr', f.cr)
+  }
   return `${lines.join('\n')}\nAICC-RESULT ${n} end ok\n`
 }
 
-/** The fake host: the account scripts change `folders` as the real ones do; the rest as a host with one holder. */
+/** A holder record as list mode prints it on Linux, kept until it is ended. */
+function keptRecord(h: FakeHolder): Record<string, unknown> {
+  return { ...h.record(), endpoint: `/tmp/aicc-1000/${h.sid}-0123456789abcdef.sock`, away: null, lifetime: 'until-ended' }
+}
+
+/** The fake host: the account scripts change `folders` as the real ones do (each folder this install's or another's, by its marker); the rest as a host with one holder. */
 function answer(c: ExecCall): FakeAnswer {
   const n = c.values[0]
+  const install = c.values[2]
   switch (c.script) {
-    case 'accounts': return { stdout: accountsOut(n) }
+    case 'accounts': return { stdout: accountsOut(n, install) }
     case 'account': {
       const [, , , id, mode] = c.values
+      if (folders.has(id) && ownerOf(id) !== install) return { stdout: result(n, {}, 'refused account-folder-elsewhere') }
       if (!folders.has(id)) {
         if (mode !== 'make') return { stdout: result(n, { gone: 'yes' }) }
         folders.set(id, {})
+        owners.set(id, install)
       }
       return { stdout: result(n, {}) }
     }
     case 'signout': {
       const [, , , kind, id] = c.values
+      if (kind === 'list' && deviceGone) return { stdout: result(n, { device: 'gone' }) }
       if (kind === 'own') { own = {}; return { stdout: result(n, { logout: '0' }) } }
-      if (!folders.has(id)) return { stdout: result(n, { gone: 'yes' }) }
-      folders.delete(id)
-      return { stdout: `AICC-RESULT ${n} out ${id} 0\nAICC-RESULT ${n} removed ${id}\nAICC-RESULT ${n} end ok\n` }
+      if (kind === 'folder') {
+        if (!folders.has(id)) return { stdout: result(n, { gone: 'yes' }) }
+        if (ownerOf(id) !== install) return { stdout: result(n, {}, 'refused account-folder-elsewhere') }
+      }
+      const named = kind === 'list' ? (id === '-' ? [] : id.split(',')) : [id]
+      const lines: string[] = []
+      for (const x of named) {
+        if (!folders.has(x) || ownerOf(x) !== install) continue
+        folders.delete(x)
+        lines.push(`AICC-RESULT ${n} out ${x} 0`, `AICC-RESULT ${n} removed ${x}`)
+      }
+      if (kind === 'list') for (const x of folders.keys()) lines.push(`AICC-RESULT ${n} ${ownerOf(x) === install ? 'left' : 'elsewhere'} ${x}`)
+      return { stdout: `${lines.join('\n')}${lines.length ? '\n' : ''}AICC-RESULT ${n} end ok\n` }
     }
+    case 'list': case 'sessions': {
+      if (deviceGone) return { stdout: result(n, {}, 'refused device-folder-not-private') }
+      const line = `AICC-HASH ${n} ok ${SHA}\n${JSON.stringify({ v: 1, sessions: kept, removed: 0, skipped: 0 })}\n`
+      return { stdout: c.script === 'sessions' ? `${line}${result(n, { swept: '0' })}` : line }
+    }
+    case 'remove': return { stdout: deviceGone ? result(n, { gone: 'yes' }) : result(n, {}) }
     case 'hold': return { stdout: `AICC-HASH ${n} ok ${SHA}\n${JSON.stringify({ ...holder.record(), endpoint: `/tmp/aicc-1000/${holder.sid}-0123456789abcdef.sock` })}\n` }
     case 'field': return { stdout: `AICC-HASH ${n} ok ${SHA}\n`, code: 0 }
     case 'reads': return { stdout: result(n, { f0: `ok ${Buffer.from(JSON.stringify({ apiKeyHelper: '/bin/key', theme: 'dark' })).toString('hex')}` }) }
@@ -108,18 +147,18 @@ function answer(c: ExecCall): FakeAnswer {
   }
 }
 
-function plugIn(): void {
+function plugIn(machines?: RemoteMachines): void {
   ssh = new FakeSsh({ answer, bridge: () => holder.connect() })
   setRemoteHelperDeps({
     platform: 'win32',
     settings: () => ({ remoteSessionsThroughHelper: switchOn }),
-    machines: { findByTarget: () => MACHINE, get: () => MACHINE, list: () => [MACHINE], installId: () => 'f'.repeat(32) } as unknown as RemoteMachines,
+    machines: machines ?? ({ findByTarget: () => MACHINE, get: () => MACHINE, list: () => [MACHINE], installId: () => INSTALL } as unknown as RemoteMachines),
     runner: ssh,
     bundledSha256: () => SHA,
     systemPrefersDark: () => true,
     onOutput: () => {},
     log: (m) => logs.push(m),
-    profileEmail: (id) => PROFILES.find((p) => p.id === id)?.accountEmail,
+    profileSignIn: (id) => ({ email: PROFILES.find((p) => p.id === id)?.accountEmail, ...(methods[id] ? { method: methods[id] } : {}) }),
   })
 }
 
@@ -148,6 +187,10 @@ beforeEach(() => {
   store = mkdtempSync(join(tmpdir(), 'rh-acct-'))
   own = signedIn('work@example.com')
   folders = new Map([['profile-personal', signedIn('personal@example.com')], ['profile-side', signedIn('someone@example.org')]])
+  owners = new Map()
+  kept = []
+  deviceGone = false
+  methods = {}
   sent = []
   logs = []
   switchOn = true
@@ -275,7 +318,7 @@ describe('Sign out at the app\'s door (3.1.8, Q5)', () => {
     const r = await signOutRemoteAccount({ did: MACHINE.did, profileId: 'profile-personal' })
     expect(r).toMatchObject({ ok: true, signedOutWithService: true, state: 'not-signed-in' })
     expect([...folders.keys()]).toEqual(['profile-side'])
-    expect(ssh.scripts()).toEqual(['accounts', 'signout', 'accounts'])
+    expect(ssh.scripts()).toEqual(['sessions', 'accounts', 'signout', 'accounts'])
     // Work is the machine's own sign-in: nothing runs until the user confirms.
     const ask = await signOutRemoteAccount({ did: MACHINE.did, profileId: 'profile-work' })
     expect(ask).toMatchObject({ ok: false, needsConfirm: 'machine-own', state: 'machine-own' })
@@ -303,6 +346,151 @@ describe('Sign out at the app\'s door (3.1.8, Q5)', () => {
     expect(r.message).toMatch(/Close it, then sign out/)
     expect(folders.has('profile-personal')).toBe(true)
     pty.kill()
+    forgetRemoteHelperTab(id)
+  })
+
+  it('MINOR-3: refused while the helper keeps a session there that no open tab shows; an open tab on another account does not stop it', async () => {
+    const away = new FakeHolder(remoteSessionId('left-running'), 'left-running', store)
+    kept = [keptRecord(away)]
+    const r = await signOutRemoteAccount({ did: MACHINE.did, profileId: 'profile-personal' })
+    expect(r.ok).toBe(false)
+    expect(r.message).toMatch(/no open tab shows/)
+    expect(ssh.scripts()).toEqual(['sessions'])
+    expect(folders.has('profile-personal')).toBe(true)
+    // A tab on Work (the machine's own sign-in) is open there: its holder is listed, and is known not to use Personal's folder.
+    kept = []
+    const id = 'acct-work-open'
+    const pty = start(id, { profileId: 'profile-work' })
+    await until(() => launchOf() !== null)
+    kept = [keptRecord(holder)]
+    const ok = await signOutRemoteAccount({ did: MACHINE.did, profileId: 'profile-personal' })
+    expect(ok).toMatchObject({ ok: true, state: 'not-signed-in' })
+    expect(folders.has('profile-personal')).toBe(false)
+    pty.kill()
+    forgetRemoteHelperTab(id)
+  })
+
+  it('MINOR-4: the machine\'s own sign-in with a folder of the account left there asks first, then signs the machine\'s own out and removes that folder too', async () => {
+    folders.set('profile-work', { id: { [K.identity]: 'work@example.com' } })
+    const ask = await signOutRemoteAccount({ did: MACHINE.did, profileId: 'profile-work' })
+    expect(ask).toMatchObject({ ok: false, needsConfirm: 'machine-own', state: 'machine-own' })
+    expect(ssh.scripts().filter((s) => s === 'signout')).toEqual([])
+    expect(folders.has('profile-work')).toBe(true)
+    const done = await signOutRemoteAccount({ did: MACHINE.did, profileId: 'profile-work', confirmMachineOwn: true })
+    expect(done).toMatchObject({ ok: true, signedOutWithService: true, state: 'not-signed-in' })
+    expect(done.message).toMatch(/own sign-in \(Work\)\. A folder of Work left there was removed too/)
+    expect(ssh.calls.filter((c) => c.script === 'signout').map((c) => c.values.slice(3, 5))).toEqual([['own', '-'], ['folder', 'profile-work']])
+    expect(folders.has('profile-work')).toBe(false)
+    expect(own).toEqual({})
+  })
+})
+
+/** The machine list itself, its records in memory, with Remove's account steps wired as main wires them. */
+function realMachines(): RemoteMachines {
+  let stored: unknown = { v: 1, installId: INSTALL, machines: [MACHINE] }
+  // The fake ssh plugIn makes below, whichever it is when an exec runs.
+  const runner = {
+    spawn: ((...a: Parameters<FakeSsh['spawn']>) => ssh.spawn(...a)) as FakeSsh['spawn'],
+    version: () => ssh.version(),
+    sshPath: () => ssh.sshPath(),
+    env: () => ssh.env(),
+  }
+  const list = new RemoteMachines({
+    runner,
+    store: { read: () => stored, write: (v: unknown) => { stored = JSON.parse(JSON.stringify(v)) } },
+    bundled: async () => ({ ok: false, why: 'none in this test' }),
+    inUse: () => 0,
+    log: (m) => logs.push(m),
+    signOutAccounts: signOutForRemove,
+    accountsLeft: accountsLeftText,
+    forgotten: forgetHostAccounts,
+  })
+  plugIn(list)
+  return list
+}
+
+describe('Remove, with its account steps (3.1.8; fix round MAJOR-1 and MAJOR-2)', () => {
+  it('MAJOR-1: signs out only this computer\'s folders, each named; another computer\'s folder on the same login stays, and the answer says so', async () => {
+    plugIn()
+    const list = realMachines()
+    folders.set('profile-theirs', signedIn('theirs@example.com'))
+    owners.set('profile-theirs', OTHER_INSTALL)
+    const r = await list.remove(MACHINE.did)
+    expect(r.ok, r.message).toBe(true)
+    expect(ssh.scripts()).toEqual(['list', 'signout', 'remove'])
+    expect(ssh.calls[1].values.slice(3, 5)).toEqual(['list', 'profile-work,profile-personal,profile-side'])
+    expect([...folders.keys()]).toEqual(['profile-theirs'])
+    expect(r.message).toMatch(/Signed out Personal, Side there first\./)
+    expect(r.message).toMatch(/One account folder there is used by the app on another computer, and was left as it is\./)
+    expect(list.list()).toEqual([])
+  })
+
+  it('MAJOR-2: a machine whose device folder is already gone is removed as beta.19 removed it, naming what stays signed in there', async () => {
+    plugIn()
+    const list = realMachines()
+    deviceGone = true
+    const r = await list.remove(MACHINE.did)
+    expect(r.ok, r.message).toBe(true)
+    expect(ssh.scripts()).toEqual(['list', 'signout', 'remove'])
+    expect(r.message).toMatch(/^Removed the session helper from Rocky/)
+    expect(r.message).toMatch(/has not read which accounts are signed in/)
+    expect(list.list()).toEqual([])
+    expect([...folders.keys()]).toEqual(['profile-personal', 'profile-side'])
+  })
+})
+
+describe('fix round: the sign-in method, a kept session\'s attach, and the notes (MINOR-5, NIT-8, NIT-11)', () => {
+  it('MINOR-5: a sign-in tab signs in by the account\'s own method', async () => {
+    methods['profile-personal'] = 'sso'
+    folders.delete('profile-personal')
+    const id = 'signin-sso'
+    start(id, { profileId: 'profile-personal', remoteAccountSignIn: true })
+    await until(() => launchOf() !== null)
+    expect(launchOf()?.argv?.slice(4)).toEqual(['/usr/local/bin/claude', 'auth', 'login', '--sso', '--email', 'personal@example.com'])
+    holder.exitChild(0)
+    await until(() => notices().length === 1)
+    forgetRemoteHelperTab(id)
+  })
+
+  it('NIT-8: an attach to a session kept for the tab is never stopped by its account\'s read: it attaches and launches nothing, with no notice', async () => {
+    const persistent: RemoteMachineRecord = { ...MACHINE, logind: { kill: 'no', exclude: '', linger: 'no' } }
+    plugIn({ findByTarget: () => persistent, get: () => persistent, list: () => [persistent], installId: () => INSTALL } as unknown as RemoteMachines)
+    const id = 'kept-unsigned'
+    holder = new FakeHolder(remoteSessionId(id), id, store)
+    holder.launch = { t: 'term.launch' }
+    holder.child = 'running'
+    kept = [keptRecord(holder)]
+    const pty = remoteHelperPty(win, id, { ssh: { ...SSH_TAB, detachable: true }, profileId: 'profile-unsigned' }, 100, 30) as IPty
+    expect(pty).not.toBeNull()
+    await until(() => holder.attaches > 0)
+    expect(ssh.scripts()).toEqual(['accounts', 'list', 'bridge'])
+    expect(notices()).toEqual([])
+    expect(holder.launch).toEqual({ t: 'term.launch' })
+    pty.kill()
+    forgetRemoteHelperTab(id)
+  })
+
+  it('NIT-8: with no kept session to attach to, the same read still starts nothing', async () => {
+    const persistent: RemoteMachineRecord = { ...MACHINE, logind: { kill: 'no', exclude: '', linger: 'no' } }
+    plugIn({ findByTarget: () => persistent, get: () => persistent, list: () => [persistent], installId: () => INSTALL } as unknown as RemoteMachines)
+    const id = 'kept-none'
+    holder = new FakeHolder(remoteSessionId(id), id, store)
+    remoteHelperPty(win, id, { ssh: { ...SSH_TAB, detachable: true }, profileId: 'profile-unsigned' }, 100, 30)
+    await until(() => notices().length === 1)
+    expect(ssh.scripts()).toEqual(['accounts', 'list'])
+    expect(notices()[0]).toMatchObject({ kind: 'launch-refused', refusal: { state: 'not-signed-in' } })
+    forgetRemoteHelperTab(id)
+  })
+
+  it('NIT-11: a sign-in tab that could not start names its own next step, never the usual SSH path', async () => {
+    owners.set('profile-personal', OTHER_INSTALL)
+    const id = 'signin-elsewhere'
+    start(id, { profileId: 'profile-personal', remoteAccountSignIn: true })
+    await until(() => shown(id).includes('could not start'))
+    expect(shown(id)).toMatch(/made by the app on another computer/)
+    expect(shown(id)).toMatch(/choose Sign in on this machine again/)
+    expect(shown(id)).not.toMatch(/usual SSH path/)
+    expect(launchOf()).toBeNull()
     forgetRemoteHelperTab(id)
   })
 })

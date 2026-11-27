@@ -299,6 +299,7 @@ const REFUSED: Record<string, string> = {
   'cannot-make-accounts-folder': '~/.aicc/accounts could not be made there',
   'cannot-make-account-folder': 'the account\'s folder could not be made there',
   'account-folder-not-the-apps': 'a folder there has the account\'s name but was not made by the app',
+  'account-folder-elsewhere': 'the account\'s folder there was made by the app on another computer, which signs it in and out itself',
   'account-folder-not-private': 'the account\'s folder there is not a private folder of yours',
   'cannot-write-marker': 'the account\'s folder could not be marked as the app\'s',
   'cannot-make-shared-folder': 'a shared folder in ~/.claude could not be made there',

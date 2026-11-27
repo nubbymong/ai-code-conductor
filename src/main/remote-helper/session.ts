@@ -384,7 +384,26 @@ export class RemoteDriver implements HelperPtyDriver {
    */
   async prepare(sid: string, label: string, abandoned: () => boolean): Promise<HeldStart> {
     await afterEnding(sid)
-    if (this.o.account) await this.bindAccount(this.o.account)
+    if (this.o.account) {
+      const refused = await this.bindAccount(this.o.account)
+      if (refused) {
+        // 2.1.3-beta.20 fix round (NIT-8): an attach starts no CLI. A session
+        // kept for this tab runs on with the sign-in it started with, so its
+        // account's read only names its state (the read went to the
+        // renderer) and never stops the attach; a launch it does stop.
+        const kept = this.untilEnded && !abandoned() ? await this.keptFor(sid) : null
+        if (!kept) this.refuseForAccount(this.o.account, refused)
+        this.o.log(`[remote-helper] ${sid}: a session kept for this tab runs on ${this.o.machine.host}; attaching to it, nothing is launched (its account reads ${refused.state} there)`)
+        const first = this.current.plan?.first
+        if (first) {
+          this.signals?.launched(first)
+          this.filesSent = first.files.length > 0
+        }
+        this.adopted = true
+        this.untilEnded = true
+        return { record: kept, attach: true }
+      }
+    }
     if (abandoned()) throw new NothingStartedError('the tab was closed while it started')
     const plan = this.current.plan
     const read = plan ? await this.launchWithReads(plan, sid) : undefined
@@ -454,35 +473,51 @@ export class RemoteDriver implements HelperPtyDriver {
    * as it is) and reads nothing. Any other tab on an account reads the
    * machine's sign-ins (one exec) and starts on the account's own folder when
    * it is signed in there, on the machine's own sign-in when that is the
-   * account (its launch is `own`), and otherwise starts nothing: its note
-   * says why, and so does the renderer's notice. A folder signed in as
-   * another account is never used.
+   * account (its launch is `own`), and otherwise answers why it may not
+   * launch (prepare then starts nothing, unless a session kept for this tab
+   * runs there to attach to). A folder signed in as another account is
+   * never used.
    */
-  private async bindAccount(a: RemoteTabAccount): Promise<void> {
+  private async bindAccount(a: RemoteTabAccount): Promise<HostLaunchRefusal | null> {
     const m = this.o.machine
     const ctx = { runner: this.o.runner, installId: this.o.installId, log: this.o.log }
     if (a.signIn) {
       const made = await prepareAccountFolder(ctx, m, a.via, a.profileId, 'make', 'keep')
       if (!made.ok) this.failWith(`the account's folder could not be made on ${m.host}: ${made.why}`)
       this.boundTo = 'folder'
-      return
+      return null
     }
     const accounts = await readMachineAccounts(ctx, m, a.via)
-    let profiles: readonly HostProfile[] = []
-    try { profiles = await a.via.profiles() } catch { profiles = [] }
+    let profiles: readonly HostProfile[] | null
+    try { profiles = await a.via.profiles() } catch { profiles = null }
     const bound = accountBinding(accounts, a.profileId, m, machineName(m), profiles)
-    if ('refused' in bound) {
-      this.accountRefused = bound.refused
-      this.o.log(`[remote-helper] ${this.o.appPtyId}: nothing started, because its account is ${bound.refused.state} on ${m.host}`)
-      try { a.notice?.({ kind: 'launch-refused', sessionId: this.o.appPtyId, refusal: bound.refused }) } catch { /* the app's own */ }
-      this.why = bound.refused.text
-      throw new FinalError(bound.refused.text)
-    }
+    if ('refused' in bound) return bound.refused
     if (bound.via === 'own') {
       if (!a.own) this.failWith('its account is the machine\'s own sign-in there, and no launch on that was made')
       this.current = { plan: a.own.plan, spec: a.own.spec }
     }
     this.boundTo = bound.via
+    return null
+  }
+
+  /** The tab starts nothing for its account: its note, and the renderer's notice, say why. */
+  private refuseForAccount(a: RemoteTabAccount, refused: HostLaunchRefusal): never {
+    this.accountRefused = refused
+    this.o.log(`[remote-helper] ${this.o.appPtyId}: nothing started, because its account is ${refused.state} on ${this.o.machine.host}`)
+    try { a.notice?.({ kind: 'launch-refused', sessionId: this.o.appPtyId, refusal: refused }) } catch { /* the app's own */ }
+    this.why = refused.text
+    throw new FinalError(refused.text)
+  }
+
+  /** The holder list mode shows for `sid` that runs until it is ended and has
+   *  launched its program: a session kept for this tab, to attach to. */
+  private async keptFor(sid: string): Promise<HolderRecord | null> {
+    try {
+      const found = await this.leftover(sid)
+      return found && untilEnded(found) && found.child !== 'waiting' ? found : null
+    } catch {
+      return null
+    }
   }
 
   /** The account's own folder brought up to date before a launch on it
@@ -779,9 +814,13 @@ export class RemoteDriver implements HelperPtyDriver {
     if (this.accountRefused) return new NoticePty(this.accountRefused.text, this.o.spec.cols, this.o.spec.rows)
     // A tab whose session the helper keeps never takes the usual path
     // (2.1.3-beta.19): its note names only the steps that reach it again.
-    const next = this.untilEnded
-      ? 'Press Check on the Machines page, then Restart; a session it keeps there is listed on that page, with End.'
-      : 'Press Check on the Machines page, or turn the remote sessions switch off in Settings for the usual SSH path.'
+    // A sign-in tab neither (2.1.3-beta.20 fix round, NIT-11): the usual
+    // path signs nothing in.
+    const next = this.o.account?.signIn
+      ? 'Press Check on the Machines page, then choose Sign in on this machine again.'
+      : this.untilEnded
+        ? 'Press Check on the Machines page, then Restart; a session it keeps there is listed on that page, with End.'
+        : 'Press Check on the Machines page, or turn the remote sessions switch off in Settings for the usual SSH path.'
     return new NoticePty(`This tab could not start through the session helper on ${m.host}: ${this.why || 'it did not answer'}. ${next}`, this.o.spec.cols, this.o.spec.rows)
   }
 

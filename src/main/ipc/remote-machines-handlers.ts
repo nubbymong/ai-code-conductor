@@ -23,15 +23,16 @@ import { endHelperHooks, helperHookEvent } from '../session-signals/hooks'
 import { dispatchHelperStatus, endHelperAccount, setHelperAccount } from '../statusline-watcher'
 import { setRemoteHelperDeps, remoteTabsOn, listRemoteSessions, endRemoteSession, endRemoteTab, type RemoteSignalDeps } from '../remote-helper'
 import { accountsLeftText, readRemoteAccounts, remoteAccountsState, signOutForRemove, signOutRemoteAccount } from '../remote-helper'
-import { forgetHostAccounts, setHostAccountsListener } from '../remote-helper/host-accounts'
+import { REMOVE_SIGN_OUT_EXEC_MS, SIGN_OUT_EXEC_MS, forgetHostAccounts, setHostAccountsListener } from '../remote-helper/host-accounts'
 import { listProfiles } from '../account-profiles'
+import { getAuthMethod } from '../account-web/session-store'
 import { isValidProfileId } from '../../shared/profile-id'
 import type { HostAccountsState, HostSignOutResult } from '../../shared/host-accounts'
 import { remoteHelperWatchdog } from '../watchdog/remote-helper-tab'
 import { peekSessionState, readDetachedRemotesRegistry } from '../session-state'
 import { RemoteMachines, fileStore } from '../remote-helper/machines'
 import { bundledHelperPaths, manifestSha256For, readBundledLinuxHelpers } from '../remote-helper/manifest'
-import { nodeSshRunner } from '../remote-helper/ssh-exec'
+import { EXEC_TIMEOUT_MS, nodeSshRunner } from '../remote-helper/ssh-exec'
 import { MACHINES_NOT_APP, answer } from './machines-handlers'
 import { appWindowSender } from './trusted-sender'
 
@@ -80,6 +81,14 @@ const remoteSignals: RemoteSignalDeps = {
  *  runs five more execs; a Check may upload too. */
 export const REMOTE_STATE_TIMEOUT_MS = 10_000
 export const REMOTE_ACTION_TIMEOUT_MS = 300_000
+/** 2.1.3-beta.20 fix round (NIT-10): Remove waits for its list exec, its
+ *  sign-out of each of this computer's account folders there, and its
+ *  removal, so the answer never says "no answer" while Remove still runs. */
+export const REMOTE_REMOVE_TIMEOUT_MS = EXEC_TIMEOUT_MS + REMOVE_SIGN_OUT_EXEC_MS + EXEC_TIMEOUT_MS + 60_000
+/** A sign-out waits for its list of kept sessions, its read before, its one
+ *  or two sign-outs (the machine's own sign-in and a folder left there) and
+ *  its read after. */
+export const REMOTE_SIGN_OUT_TIMEOUT_MS = 3 * EXEC_TIMEOUT_MS + 2 * SIGN_OUT_EXEC_MS + 60_000
 export const REMOTE_NOT_AVAILABLE = 'Remote sessions through the session helper run from Windows only in this preview.'
 /** The state's answer on Windows when the list did not load (its records file
  *  does not read, or no answer in time): the section stays, lists nothing and
@@ -161,8 +170,14 @@ export function registerRemoteMachinesHandlers(getWindow: () => BrowserWindow | 
       // 2.1.3-beta.19 fix round: its Session Watchdog, armed once its CLI runs in the holder.
       watchdog: remoteHelperWatchdog,
       registry: readDetachedRemotesRegistry,
-      // 2.1.3-beta.20 section 3.1.4: a sign-in tab names its account's email to the CLI's sign-in.
-      profileEmail: (id) => (isValidProfileId(id) ? listProfiles().find((p) => p.id === id)?.accountEmail || undefined : undefined),
+      // 2.1.3-beta.20 section 3.1.4: a sign-in tab names its account's email to the
+      // CLI's sign-in, by the account's own method (fix round, MINOR-5), as a sign-in
+      // on this computer does (account-web/claude-cli-auth.ts claudeAuthCommand).
+      profileSignIn: (id) => {
+        if (!isValidProfileId(id)) return {}
+        const email = listProfiles().find((p) => p.id === id)?.accountEmail || undefined
+        return { ...(email ? { email } : {}), method: getAuthMethod(id) }
+      },
     })
     // At start-up, once: list mode on each machine listed (no daemon, no polling).
     const first = setTimeout(() => {
@@ -246,7 +261,7 @@ export function registerRemoteMachinesHandlers(getWindow: () => BrowserWindow | 
     if (!isValidProfileId(r.profileId)) return refuse('That is not an account of this computer.')
     if (r.confirmMachineOwn !== undefined && typeof r.confirmMachineOwn !== 'boolean') return refuse('That sign-out was not asked for as the app asks it.')
     const ask = { did: r.did, profileId: r.profileId, ...(r.confirmMachineOwn === true ? { confirmMachineOwn: true } : {}) }
-    return answer('remote sign-out', REMOTE_ACTION_TIMEOUT_MS, () => signOutRemoteAccount(ask), () => refuse(MACHINES_NO_ANSWER))
+    return answer('remote sign-out', REMOTE_SIGN_OUT_TIMEOUT_MS, () => signOutRemoteAccount(ask), () => refuse(MACHINES_NO_ANSWER))
   })
 
   // 2.1.3-beta.19 section 1.2: the sessions the helper keeps, one list exec per
@@ -287,6 +302,6 @@ export function registerRemoteMachinesHandlers(getWindow: () => BrowserWindow | 
     if (typeof did !== 'string' || !REMOTE_DID_RE.test(did)) return refuse(NOT_LISTED)
     // 2.1.3-beta.20 section 3.1.8: `forget`, only as `true`; anything else is Remove as before.
     const forget = !!opts && typeof opts === 'object' && (opts as Record<string, unknown>).forget === true
-    return answer('remote remove', REMOTE_ACTION_TIMEOUT_MS, () => m.remove(did, forget ? { forget: true } : {}), () => refuse(MACHINES_NO_ANSWER))
+    return answer('remote remove', REMOTE_REMOVE_TIMEOUT_MS, () => m.remove(did, forget ? { forget: true } : {}), () => refuse(MACHINES_NO_ANSWER))
   })
 }

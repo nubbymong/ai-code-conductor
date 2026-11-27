@@ -20,10 +20,10 @@ import { readFileSync } from 'fs'
 import { resolve } from 'path'
 import {
   _resetHostAccountsForTest, accountBinding, accountFolder, accountsValues, factsOf, folderSignOuts, machineAccounts, prepareAccountFolder,
-  readMachineAccounts, readSignIns, setHostAccountsListener, signInStateOf, signOutAllOnMachine, signOutOnMachine, settingsInput, type HostProfile,
+  readMachineAccounts, readSignIns, setHostAccountsListener, signInStateOf, signOutListOnMachine, signOutOnMachine, settingsInput, type HostProfile,
 } from '../../../src/main/remote-helper/host-accounts'
-import { ACCOUNT_PROFILE_RE, PLAIN_NAMES_RE, scriptCommand, scriptText } from '../../../src/main/remote-helper/scripts'
-import { CLAUDE_REMOTE_ACCOUNTS, claudeAccountField, claudeAccountSettingsText, claudeRemoteEnv } from '../../../src/main/providers/claude/remote-launch'
+import { ACCOUNT_PROFILE_RE, PLAIN_NAMES_RE, accountMarker, scriptCommand, scriptText } from '../../../src/main/remote-helper/scripts'
+import { CLAUDE_REMOTE_ACCOUNTS, claudeAccountField, claudeAccountSettingsText, claudeRemoteEnv, claudeSignInArgs } from '../../../src/main/providers/claude/remote-launch'
 import { SHARED_DIR_NAMES } from '../../../src/shared/account-folder'
 import { SHARED_DIR_NAMES as PROFILE_SHARED_DIR_NAMES } from '../../../src/main/account-profiles'
 import type { RemoteAccounts } from '../../../src/main/providers/types'
@@ -56,7 +56,7 @@ const signedIn = (email: string, plan = 'max'): SignIn => ({
 })
 
 /** The `accounts` exec's output, as the script prints it after the launcher's hash line. */
-function accountsOut(nonce: string, own: SignIn, folders: Record<string, SignIn>): string {
+function accountsOut(nonce: string, own: SignIn, folders: Record<string, SignIn>, elsewhere: readonly string[] = []): string {
   const lines = ['rc text from the login', `AICC-HASH ${nonce} ok ${SHA}`]
   const field = (slot: string, part: 'id' | 'cr', obj: Record<string, unknown> | null | undefined) => {
     lines.push(`AICC-FIELD ${nonce} ${slot} ${part}`)
@@ -65,39 +65,62 @@ function accountsOut(nonce: string, own: SignIn, folders: Record<string, SignIn>
   field('own', 'id', own.id)
   field('own', 'cr', own.cr)
   for (const [id, f] of Object.entries(folders)) { field(id, 'id', f.id); field(id, 'cr', f.cr) }
+  for (const id of elsewhere) lines.push(`AICC-FIELD ${nonce} ${id} elsewhere`)
   lines.push(`AICC-RESULT ${nonce} end ok`)
   return `${lines.join('\n')}\n`
 }
 
+/** Another computer's install (its app signed in on the same host login). */
+const OTHER_INSTALL = 'e'.repeat(32)
+
 /**
- * A fake host's account folders, as the scripts change them: `accounts`
- * prints every folder's and the machine's own sign-in; `account` makes a
- * folder (make) or answers gone (refresh, none there); `signout` signs out
- * the folder it is named (and removes only it), every folder (all), or the
- * machine's own sign-in (own). The scripts' own text is checked below.
+ * A fake host's account folders, as the scripts change them, each with the
+ * install its marker names (`owner`; this test's install unless set):
+ * `accounts` prints the machine's own sign-in and every folder of the
+ * asking install's, and names another install's `elsewhere`; `account` makes
+ * a folder (make) or answers gone (refresh, none there); `signout` signs out
+ * the folder it is named (and removes only it), each folder of the asking
+ * install's that its list names (list: then names this install's left and
+ * another's), or the machine's own sign-in (own). With the device folder gone
+ * (`deviceGone`), `list` answers `device gone`. The scripts' own text is
+ * checked below.
  */
 class AccountsHost {
   own: SignIn = {}
   folders = new Map<string, SignIn>()
+  owner = new Map<string, string>()
   logout = 0
+  deviceGone = false
+  ownerOf(id: string): string { return this.owner.get(id) ?? INSTALL }
   answer(c: ExecCall): FakeAnswer | null {
     const n = c.values[0]
-    if (c.script === 'accounts') return { stdout: accountsOut(n, this.own, Object.fromEntries(this.folders)) }
+    const install = c.values[2]
+    const mine = [...this.folders].filter(([id]) => this.ownerOf(id) === install)
+    if (c.script === 'accounts') return { stdout: accountsOut(n, this.own, Object.fromEntries(mine), [...this.folders.keys()].filter((id) => this.ownerOf(id) !== install)) }
     if (c.script === 'account') {
       const [, , , id, mode] = c.values
+      if (this.folders.has(id) && this.ownerOf(id) !== install) return { stdout: result(n, {}, 'refused account-folder-elsewhere') }
       if (!this.folders.has(id)) {
         if (mode !== 'make') return { stdout: result(n, { gone: 'yes' }) }
         this.folders.set(id, {})
+        this.owner.set(id, install)
       }
       return { stdout: result(n, {}) }
     }
     if (c.script === 'signout') {
       const [, , , kind, id] = c.values
+      if (kind === 'list' && this.deviceGone) return { stdout: result(n, { device: 'gone' }) }
       if (kind === 'own') { this.own = {}; return { stdout: result(n, { logout: String(this.logout) }) } }
-      const ids = kind === 'all' ? [...this.folders.keys()] : [id]
       if (kind === 'folder' && !this.folders.has(id)) return { stdout: result(n, { gone: 'yes' }) }
+      if (kind === 'folder' && this.ownerOf(id) !== install) return { stdout: result(n, {}, 'refused account-folder-elsewhere') }
+      const named = kind === 'list' ? (id === '-' ? [] : id.split(',')) : [id]
       const lines: string[] = []
-      for (const x of ids) { this.folders.delete(x); lines.push(`AICC-RESULT ${n} out ${x} ${this.logout}`, `AICC-RESULT ${n} removed ${x}`) }
+      for (const x of named) {
+        if (!this.folders.has(x) || this.ownerOf(x) !== install) continue
+        this.folders.delete(x)
+        lines.push(`AICC-RESULT ${n} out ${x} ${this.logout}`, `AICC-RESULT ${n} removed ${x}`)
+      }
+      if (kind === 'list') for (const x of this.folders.keys()) lines.push(`AICC-RESULT ${n} ${this.ownerOf(x) === install ? 'left' : 'elsewhere'} ${x}`)
       return { stdout: `${lines.join('\n')}${lines.length ? '\n' : ''}AICC-RESULT ${n} end ok\n` }
     }
     return null
@@ -243,11 +266,12 @@ describe('the read takes the fields on the helper\'s list, never a secret (3.1.2
     expect(t).not.toMatch(/['\\\r\n]/)
     expect(t).toContain('fr() { echo "AICC-FIELD $N $1 $2"; "$P" field --file "$3" --keys "$4" </dev/null 2>/dev/null; }')
     expect(t.indexOf('echo "AICC-HASH $N ok $x"')).toBeLessThan(t.indexOf('fr own id'))
-    expect(t).toContain('am "$B/$X" "$X" || continue')
-    expect(t).toContain('aicc-account 1 $2')
+    expect(t).toContain('am "$B/$X" "$X" || { ao "$B/$X" "$X" && echo "AICC-FIELD $N $X elsewhere"; continue; }')
+    expect(t).toContain('aicc-account 1 $2 $I')
     // It reads: no file is written, moved, linked or removed, and no file's bytes are printed by the script itself.
     expect(t).not.toMatch(/\brm\b|mkdir|chmod|\bmv\b|\bln\b|>\s*"|\bod\b/)
-    expect(t.match(/\bhead\b[^;)]*/g)).toEqual(['head -c 200 "$1/.aicc-account" 2>/dev/null'])
+    // The marker only (am and ao each read it).
+    expect(t.match(/\bhead\b[^;)]*/g)).toEqual(['head -c 200 "$1/.aicc-account" 2>/dev/null', 'head -c 200 "$1/.aicc-account" 2>/dev/null'])
     // A key list with a space or a quote, or a file that leaves home, is refused before ssh starts.
     const ok = [FOLDER, SHA, '.claude.json', '.claude/.credentials.json', '.claude.json', '.credentials.json', 'oauthAccount.emailAddress', 'a.b,c.d']
     expect(() => scriptCommand('accounts', ['0'.repeat(32), MACHINE.did, INSTALL, ...ok])).not.toThrow()
@@ -284,6 +308,21 @@ describe('the launch\'s binding (3.1.7): the config\'s account decides', () => {
     expect(accountBinding(acc, 'profile-unknown', MACHINE, 'Rocky', PROFILES)).toMatchObject({ refused: { state: 'not-signed-in' } })
     ssh.host = { answer: () => ({ code: 255, stderr: 'Connection timed out' }) }
     expect(accountBinding(await read(), 'profile-personal', MACHINE, 'Rocky', PROFILES)).toMatchObject({ refused: { state: 'not-read', signedInThere: [] } })
+  })
+
+  it('NIT-11: this computer\'s accounts that did not read are said as such, never as an account gone', async () => {
+    const acc = await read()
+    const b = accountBinding(acc, 'profile-fresh', MACHINE, 'Rocky', null)
+    expect(b).toMatchObject({ refused: { state: 'not-read' } })
+    expect('refused' in b && b.refused.text).toMatch(/^This computer's accounts could not be read/)
+    expect('refused' in b && b.refused.text).not.toMatch(/not on this computer any more/)
+  })
+
+  it('MINOR-5: the sign-in tab uses the account\'s own sign-in method, as this computer\'s does; anything else is the default', () => {
+    expect(claudeSignInArgs('a@example.com', 'sso')).toEqual(['auth', 'login', '--sso', '--email', 'a@example.com'])
+    expect(claudeSignInArgs(undefined, 'console')).toEqual(['auth', 'login', '--console'])
+    expect(claudeSignInArgs(undefined, 'claudeai')).toEqual(['auth', 'login', '--claudeai'])
+    for (const bad of [undefined, '', 'SSO', 'sso --x', '--sso', 'api-key']) expect(claudeSignInArgs(undefined, bad), String(bad)).toEqual(['auth', 'login', '--claudeai'])
   })
 
   it('the account\'s folder is under the home folder the check read, by its profile id only', () => {
@@ -393,18 +432,78 @@ describe('Sign out (3.1.8): the CLI\'s own sign-out in that folder, then only th
     expect([...tree.folders.keys()]).toEqual(['profile-work', 'profile-side'])
   })
 
-  it('Remove\'s sign-out of every folder there reads each folder\'s line, and one that stops says so', async () => {
+  it('Remove\'s sign-out names each folder it signs out; another computer\'s is never touched and is named; one that stops says so', async () => {
     tree.folders.set('profile-work', signedIn('work@example.com'))
     tree.folders.set('profile-old', signedIn('old@example.com'))
-    const all = await signOutAllOnMachine(ctx(), MACHINE, VIA)
-    expect(all).toEqual({ ok: true, folders: [{ profileId: 'profile-work', logout: 0, removed: true }, { profileId: 'profile-old', logout: 0, removed: true }] })
-    expect(tree.folders.size).toBe(0)
+    tree.folders.set('profile-unlisted', signedIn('unlisted@example.com'))
+    tree.folders.set('profile-theirs', signedIn('theirs@example.com'))
+    tree.owner.set('profile-theirs', OTHER_INSTALL)
+    const run = await signOutListOnMachine(ctx(), MACHINE, VIA, ['profile-work', 'profile-old', 'profile-theirs', '../x', 'profile-work'])
+    expect(ssh.calls[0].values.slice(3, 5)).toEqual(['list', 'profile-work,profile-old,profile-theirs'])
+    expect(run).toEqual({
+      ok: true, deviceGone: false,
+      folders: [{ profileId: 'profile-work', logout: 0, removed: true }, { profileId: 'profile-old', logout: 0, removed: true }],
+      left: ['profile-unlisted'], elsewhere: ['profile-theirs'],
+    })
+    expect([...tree.folders.keys()]).toEqual(['profile-unlisted', 'profile-theirs'])
     const n = '3'.repeat(32)
     expect(folderSignOuts([`AICC-RESULT ${n} out profile-a 0`, `AICC-RESULT ${n} removed profile-a`, `AICC-RESULT ${n} out profile-b 1`, `AICC-RESULT ${n} out ../x 0`, `AICC-RESULT ${n} end refused cannot-remove`].join('\n'), n))
       .toEqual([{ profileId: 'profile-a', logout: 0, removed: true }, { profileId: 'profile-b', logout: 1, removed: false }])
     ssh.host = { answer: (c) => ({ stdout: `AICC-RESULT ${c.values[0]} out profile-a 0\nAICC-RESULT ${c.values[0]} end refused cannot-remove\n` }) }
-    const stopped = await signOutAllOnMachine(ctx(), MACHINE, VIA)
+    const stopped = await signOutListOnMachine(ctx(), MACHINE, VIA, ['profile-a'])
     expect(stopped).toMatchObject({ ok: false, folders: [{ profileId: 'profile-a', logout: 0, removed: false }] })
-    expect(stopped.why).toMatch(/could not be removed/)
+    expect(!stopped.ok && stopped.why).toMatch(/could not be removed/)
+    // No id at all goes as `-`.
+    ssh.host = { answer: (c) => tree.answer(c) ?? { code: 1 } }
+    await signOutListOnMachine(ctx(), MACHINE, VIA, [])
+    expect(ssh.calls.at(-1)?.values[4]).toBe('-')
+  })
+
+  it('MAJOR-2: with the device folder already gone, Remove\'s sign-out signs nothing out and answers so, for Remove to go on', async () => {
+    tree.folders.set('profile-work', signedIn('work@example.com'))
+    tree.deviceGone = true
+    expect(await signOutListOnMachine(ctx(), MACHINE, VIA, ['profile-work'])).toEqual({ ok: true, deviceGone: true, folders: [], left: [], elsewhere: [] })
+    expect(tree.folders.has('profile-work')).toBe(true)
+    // The script's own pass-through: before the device folder's checks, `list` only.
+    const t = scriptText('signout')
+    const gone = t.indexOf('if [ "$O" = list ] && [ ! -e "$A" ] && [ ! -L "$A" ]; then r device gone; r end ok; exit 0; fi')
+    expect(gone).toBeGreaterThan(-1)
+    expect(gone).toBeLessThan(t.indexOf('pv "$HOME/.aicc" || no aicc-folder-not-private'))
+    expect(gone).toBeGreaterThan(t.indexOf('A=$HOME/.aicc/$D'))
+  })
+
+  it('MAJOR-1: a folder is this install\'s by its marker, which names the profile id and this install; another\'s is read as elsewhere and never signed out, removed or made over', () => {
+    expect(accountMarker('profile-a', INSTALL)).toBe(`aicc-account 1 profile-a ${INSTALL}`)
+    for (const name of ['accounts', 'account', 'signout'] as const) {
+      const t = scriptText(name)
+      expect(t, name).toContain('am() { pv "$1" && [ -f "$1/.aicc-account" ] && [ ! -L "$1/.aicc-account" ] && [ "$(head -c 200 "$1/.aicc-account" 2>/dev/null)" = "aicc-account 1 $2 $I" ]; }')
+      expect(t, name).toContain('ao() {')
+    }
+    expect(scriptText('account')).toContain('echo "aicc-account 1 $P $I" > "$Q/.aicc-account"')
+    expect(scriptText('account')).toContain('am "$Q" "$P" || { ao "$Q" "$P" && no account-folder-elsewhere; no account-folder-not-the-apps; }')
+    expect(scriptText('accounts')).toContain('am "$B/$X" "$X" || { ao "$B/$X" "$X" && echo "AICC-FIELD $N $X elsewhere"; continue; }')
+    const t = scriptText('signout')
+    // Only the ids it is given, each by this install's marker; the folders left are only named.
+    expect(t).toContain('L=$(printf "%s" "$P" | tr "," " ")')
+    expect(t).not.toMatch(/L=\$\(ls/)
+    expect(t).toContain('if am "$B/$P" "$P"; then r left "$P"; elif ao "$B/$P" "$P"; then r elsewhere "$P"; fi')
+    expect(() => scriptCommand('signout', ['0'.repeat(32), MACHINE.did, INSTALL, 'all', '-', 'CLAUDE_CONFIG_DIR', 'claude', 'auth,logout'])).toThrow()
+    expect(() => scriptCommand('signout', ['0'.repeat(32), MACHINE.did, INSTALL, 'list', 'profile-a,profile-b', 'CLAUDE_CONFIG_DIR', 'claude', 'auth,logout'])).not.toThrow()
+    for (const bad of ['profile-a,../x', 'profile-a,,profile-b', ',profile-a', 'profile-a,', 'a b']) {
+      expect(() => scriptCommand('signout', ['0'.repeat(32), MACHINE.did, INSTALL, 'list', bad, 'CLAUDE_CONFIG_DIR', 'claude', 'auth,logout']), bad).toThrow()
+    }
+  })
+
+  it('MAJOR-1: the read names another computer\'s folder as elsewhere, not as one of this computer\'s', async () => {
+    tree.folders.set('profile-personal', signedIn('personal@example.com'))
+    tree.folders.set('profile-theirs', signedIn('theirs@example.com'))
+    tree.owner.set('profile-theirs', OTHER_INSTALL)
+    tree.folders.set('profile-side', signedIn('side@example.com'))
+    tree.owner.set('profile-side', OTHER_INSTALL)
+    const got = await readMachineAccounts(ctx(), MACHINE, VIA)
+    expect(got.others).toEqual([])
+    expect(got.elsewhere).toEqual(['profile-side', 'profile-theirs'])
+    expect(got.accounts.find((a) => a.profileId === 'profile-side')).toMatchObject({ state: 'not-signed-in', folder: false })
+    expect(got.accounts.find((a) => a.profileId === 'profile-personal')?.state).toBe('signed-in-here')
   })
 })
