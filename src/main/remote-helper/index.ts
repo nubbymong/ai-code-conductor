@@ -50,7 +50,8 @@ import type { ProviderRemoteLaunch, RemoteAccounts, RemoteHostFile, RemoteLaunch
 import type { SSHOptions } from '../ssh-options'
 import { ROUTE_WHY, routeSshTab, type PersistentStanding, type Route } from './route'
 import { NoticePty, RemoteDriver, RemoteHelperPty, remoteCwd, remoteHelperCommands, remoteLaunchSpec, remoteSessionId, type RemoteLaunchPlan, type RemoteTabAccount } from './session'
-import { accountFolder, accountName, adoptAccountFolders, hostAccountsState, machineAccounts, readMachineAccounts, signOutListOnMachine, signOutOnMachine, type HostProfile } from './host-accounts'
+import { accountAliasesOf, accountFolder, accountName, adoptAccountFolders, hostAccountsState, machineAccounts, readMachineAccounts, signOutListOnMachine, signOutOnMachine, type HostProfile } from './host-accounts'
+import { sentenceStart } from '../../shared/host-accounts'
 import { ACCOUNT_PROFILE_RE } from './scripts'
 import { listKept, machineSessions } from './kept'
 import type { HolderKind } from './scripts'
@@ -403,7 +404,7 @@ export function remoteHelperPty(win: OutputWindow, sessionId: string, options: R
     let account: RemoteTabAccount | undefined
     if (accounts && profileId) {
       const own = launchOn()
-      account = { profileId, via: accounts, signIn: false, own: { plan: own, spec: own.spec }, notice: (n) => sendNotice(win, n) }
+      account = { profileId, via: accounts, signIn: false, own: { plan: own, spec: own.spec }, notice: (n) => sendNotice(win, n), aliases: accountAliasesOf(settings) }
     }
     pty = new RemoteHelperPty({
       appPtyId: sessionId,
@@ -606,6 +607,13 @@ function signOutExitText(code: number | null): string {
 /** Where to end a sign-in the app could not sign out with the service. */
 const END_IT_THERE = 'in your Claude account settings on claude.ai'
 
+/** Final review round 2 (F2-1): the account aliases the saved settings hold
+ *  now, so main's answers name accounts as the renderer does; none when the
+ *  settings do not read. */
+function aliasesNow(d: RemoteHelperDeps): Record<string, string> | undefined {
+  try { return accountAliasesOf(d.settings()) } catch { return undefined }
+}
+
 /**
  * Section 3.1.8: Sign out on a machine. Refused while a tab on that account
  * runs through the helper there, and (2.1.3-beta.20 fix round, MINOR-3)
@@ -644,16 +652,20 @@ export async function signOutRemoteAccount(req: HostSignOutRequest): Promise<Hos
   }
   let profiles: readonly HostProfile[] = []
   try { profiles = await a.via.profiles() } catch { profiles = [] }
-  const who = accountName(profiles.find((p) => p.id === req.profileId), req.profileId)
+  // Final review round 2 (F2-1): the Machines page shows this answer word for
+  // word, so the account is named as its card names it, with a capital where
+  // that starts a sentence.
+  const who = accountName(profiles.find((p) => p.id === req.profileId), req.profileId, aliasesNow(d))
+  const Who = sentenceStart(who)
   const ctx = accountsCtx(d)
   const before = await readMachineAccounts(ctx, m, a.via)
   if (!before.ok) return { ok: false, message: `Nothing was signed out: the accounts on ${name} could not be read (${before.why ?? 'no answer'}).`, state: 'not-read' }
   const acc = before.accounts.find((x) => x.profileId === req.profileId)
   const folder = acc?.folder === true || before.others.includes(req.profileId)
   const machineOwn = acc?.state === 'machine-own'
-  if (!machineOwn && !folder) return { ok: true, message: `${who} is not signed in on ${name}.`, state: acc?.state ?? 'not-signed-in' }
+  if (!machineOwn && !folder) return { ok: true, message: `${Who} is not signed in on ${name}.`, state: acc?.state ?? 'not-signed-in' }
   if (machineOwn && req.confirmMachineOwn !== true) {
-    return { ok: false, needsConfirm: 'machine-own', state: 'machine-own', message: `${who} is signed in on ${name} by that machine's own sign-in (its ~/.claude), so signing it out signs out Claude Code there for everything that uses that sign-in.` }
+    return { ok: false, needsConfirm: 'machine-own', state: 'machine-own', message: `${Who} is signed in on ${name} by that machine's own sign-in (its ~/.claude), so signing it out signs out Claude Code there for everything that uses that sign-in.` }
   }
   const run = await signOutOnMachine(ctx, m, a.via, machineOwn ? 'own' : { profileId: req.profileId })
   // The machine's own sign-in out, a folder of the account left there goes too.
@@ -662,13 +674,13 @@ export async function signOutRemoteAccount(req: HostSignOutRequest): Promise<Hos
   const state = after.accounts.find((x) => x.profileId === req.profileId)?.state
   const withState = state ? { state } : {}
   d.log(`[remote-helper] sign-out of ${req.profileId}${machineOwn ? ' (the machine\'s own sign-in)' : ''} on ${m.host}: ${run.ok ? `logout ${run.logout ?? 'none'}, folder ${run.removed ? 'removed' : 'kept'}` : run.why}${stray ? `; its folder left there: ${stray.ok ? (stray.removed || stray.gone ? 'removed' : 'kept') : stray.why}` : ''}`)
-  if (!run.ok) return { ok: false, message: `${who} was not signed out on ${name}: ${run.why}.`, ...withState }
-  if (run.gone) return { ok: true, message: `${who} was not signed in on ${name} any more.`, signedOutWithService: false, ...withState }
+  if (!run.ok) return { ok: false, message: `${Who} was not signed out on ${name}: ${run.why}.`, ...withState }
+  if (run.gone) return { ok: true, message: `${Who} was not signed in on ${name} any more.`, signedOutWithService: false, ...withState }
   const told = run.logout === 0
   if (!machineOwn) {
     return told
       ? { ok: true, message: `Signed ${who} out on ${name}, and removed its folder there.`, signedOutWithService: true, ...withState }
-      : { ok: run.removed, message: `Removed ${who}'s sign-in from ${name}. Claude Code's sign-out there did not finish (${signOutExitText(run.logout)}), so to end that sign-in everywhere, sign it out ${END_IT_THERE}.`, signedOutWithService: false, ...withState }
+      : { ok: run.removed, message: `Removed the sign-in of ${who} from ${name}. Claude Code's sign-out there did not finish (${signOutExitText(run.logout)}), so to end that sign-in everywhere, sign it out ${END_IT_THERE}.`, signedOutWithService: false, ...withState }
   }
   const strayText = stray && !stray.ok ? ` A folder of ${who} left there was not removed: ${stray.why}.` : stray ? ` A folder of ${who} left there was removed too.` : ''
   return told
@@ -697,7 +709,10 @@ export async function signOutForRemove(m: RemoteMachineRecord): Promise<{ ok: bo
   const name = machineName(m)
   let profiles: readonly HostProfile[] = []
   try { profiles = await a.via.profiles() } catch { profiles = [] }
-  const nameOf = (id: string): string => accountName(profiles.find((p) => p.id === id), id)
+  // Final review round 2 (F2-1): named as the machine's card names them (the
+  // page shows this answer as its notice); sentenceStart where a name starts a sentence.
+  const aliases = aliasesNow(d)
+  const nameOf = (id: string): string => accountName(profiles.find((p) => p.id === id), id, aliases)
   const ids = [...profiles.map((p) => p.id), ...machineAccounts(m.did, profiles).others]
   const run = await signOutListOnMachine(accountsCtx(d), m, a.via, ids)
   const done = run.folders.filter((f) => f.removed && f.logout === 0).map((f) => nameOf(f.profileId))
@@ -710,23 +725,23 @@ export async function signOutForRemove(m: RemoteMachineRecord): Promise<{ ok: bo
   if (run.deviceGone) return { ok: true, message: (await accountsLeftText(m)).trim() }
   const parts: string[] = []
   if (done.length) parts.push(`Signed out ${done.join(', ')} there first.`)
-  if (untold.length) parts.push(`Removed the sign-ins of ${untold.join(', ')} from it; Claude Code's sign-out there did not finish for ${untold.length === 1 ? 'it' : 'them'}, so end ${untold.length === 1 ? 'that sign-in' : 'those sign-ins'} ${END_IT_THERE}.`)
+  if (untold.length) parts.push(`Removed the ${untold.length === 1 ? 'sign-in' : 'sign-ins'} of ${untold.join(', ')} from it; Claude Code's sign-out there did not finish for ${untold.length === 1 ? 'it' : 'them'}, so end ${untold.length === 1 ? 'that sign-in' : 'those sign-ins'} ${END_IT_THERE}.`)
   if (run.left.length) {
     const one = run.left.length === 1
-    parts.push(`${run.left.map(nameOf).join(', ')} (${one ? 'an account' : 'accounts'} this computer no longer holds) ${one ? 'stays' : 'stay'} signed in there: sign ${one ? 'it' : 'them'} out there, or end ${one ? 'that sign-in' : 'those sign-ins'} ${END_IT_THERE}.`)
+    parts.push(`${sentenceStart(run.left.map(nameOf).join(', '))} (${one ? 'an account' : 'accounts'} this computer no longer holds) ${one ? 'stays' : 'stay'} signed in there: sign ${one ? 'it' : 'them'} out there, or end ${one ? 'that sign-in' : 'those sign-ins'} ${END_IT_THERE}.`)
   }
   // Round 2 (R1): a folder with the marker of the builds before the install id
   // was in it, for an account this computer does not hold, is left and named.
   if (run.old.length) {
     const one = run.old.length === 1
-    parts.push(`${run.old.map(nameOf).join(', ')} (${one ? 'a folder' : 'folders'} an earlier build of the app made there, for ${one ? 'an account' : 'accounts'} this computer does not hold) ${one ? 'stays' : 'stay'} signed in there as ${one ? 'it is' : 'they are'}: sign ${one ? 'it' : 'them'} out there, or end ${one ? 'that sign-in' : 'those sign-ins'} ${END_IT_THERE}.`)
+    parts.push(`${sentenceStart(run.old.map(nameOf).join(', '))} (${one ? 'a folder' : 'folders'} an earlier build of the app made there, for ${one ? 'an account' : 'accounts'} this computer does not hold) ${one ? 'stays' : 'stay'} signed in there as ${one ? 'it is' : 'they are'}: sign ${one ? 'it' : 'them'} out there, or end ${one ? 'that sign-in' : 'those sign-ins'} ${END_IT_THERE}.`)
   }
   if (run.elsewhere.length) {
     const one = run.elsewhere.length === 1
     const held = new Set(profiles.map((p) => p.id))
     // Round 2 (R1): every one named by this computer's accounts: most likely its own from an earlier install whose id was lost.
     parts.push(run.elsewhere.every((id) => held.has(id))
-      ? `${run.elsewhere.map(nameOf).join(', ')}: ${one ? 'its folder' : 'their folders'} there ${one ? 'carries' : 'carry'} another install's mark, and may be this computer's own from an earlier install of the app; ${one ? 'it was' : 'they were'} left as ${one ? 'it is' : 'they are'}. To sign ${one ? 'it' : 'them'} out from here, add the machine again and choose Adopt on its card; or sign ${one ? 'it' : 'them'} out on that machine.`
+      ? `${sentenceStart(run.elsewhere.map(nameOf).join(', '))}: ${one ? 'its folder' : 'their folders'} there ${one ? 'carries' : 'carry'} another install's mark, and may be this computer's own from an earlier install of the app; ${one ? 'it was' : 'they were'} left as ${one ? 'it is' : 'they are'}. To sign ${one ? 'it' : 'them'} out from here, add the machine again and choose Adopt on its card; or sign ${one ? 'it' : 'them'} out on that machine.`
       : `${one ? 'One account folder' : `${run.elsewhere.length} account folders`} there ${one ? 'is' : 'are'} used by the app on another computer, and ${one ? 'was' : 'were'} left as ${one ? 'it is' : 'they are'}.`)
   }
   return { ok: true, message: parts.join(' ') }
@@ -745,7 +760,8 @@ export async function adoptRemoteAccounts(req: HostAdoptRequest): Promise<HostAd
   if (!d || !a) return { ok: false, message: 'Remote sessions through the session helper are not available here.', adopted: [] }
   const m = d.machines.get(req.did)
   if (!m) return { ok: false, message: "That machine is not on this computer's list.", adopted: [] }
-  const r = await adoptAccountFolders(accountsCtx(d), m, a.via, req.profileIds)
+  const r = await adoptAccountFolders(accountsCtx(d), m, a.via, req.profileIds, aliasesNow(d))
+  // Final review round 2 (F2-2): main's sentence reaches the log only when some id was not adopted.
   d.log(`[remote-helper] Adopt on ${m.host}: ${r.adopted.length ? r.adopted.join(', ') : 'none'}${r.ok ? '' : ` (${r.message})`}`)
   return r
 }
@@ -761,10 +777,13 @@ export async function accountsLeftText(m: RemoteMachineRecord): Promise<string> 
   const acc = machineAccounts(m.did, profiles)
   const name = machineName(m)
   if (acc.readAt === null) return ` The app has not read which accounts are signed in on ${name} since it started; any signed in there stay signed in until you sign them out there, or end those sign-ins ${END_IT_THERE}.`
-  const names = [...acc.accounts.filter((x) => x.folder).map((x) => accountName(profiles.find((p) => p.id === x.profileId), x.profileId)), ...acc.others]
+  // Final review round 2 (F2-1): named as the machine's card names them.
+  const d = deps
+  const aliases = d ? aliasesNow(d) : undefined
+  const names = [...acc.accounts.filter((x) => x.folder).map((x) => accountName(profiles.find((p) => p.id === x.profileId), x.profileId, aliases)), ...acc.others]
   if (names.length === 0) return ''
   const one = names.length === 1
-  return ` ${names.join(', ')} ${one ? 'stays' : 'stay'} signed in on ${name} until you sign ${one ? 'it' : 'them'} out there, or end ${one ? 'that sign-in' : 'those sign-ins'} ${END_IT_THERE}.`
+  return ` ${sentenceStart(names.join(', '))} ${one ? 'stays' : 'stay'} signed in on ${name} until you sign ${one ? 'it' : 'them'} out there, or end ${one ? 'that sign-in' : 'those sign-ins'} ${END_IT_THERE}.`
 }
 
 /** One machine's sessions, by list mode (2.1.3-beta.19 section 1.2). */

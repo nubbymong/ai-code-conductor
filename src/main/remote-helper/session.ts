@@ -259,6 +259,9 @@ export interface RemoteTabAccount {
   own?: { plan: RemoteLaunchPlan; spec: LaunchSpec }
   /** The tab started nothing for its account: where the renderer is told. */
   notice?: (n: HostAccountNotice) => void
+  /** Final review round 2 (F2-1): the app's account aliases (host-accounts.ts
+   *  accountAliasesOf), so its refusal names the account as the renderer does. */
+  aliases?: Readonly<Record<string, string>>
 }
 /** The bridge found no holder for the session (exit 3): it is gone. */
 class GoneError extends FinalError {}
@@ -511,7 +514,7 @@ export class RemoteDriver implements HelperPtyDriver {
     const accounts = await readMachineAccounts(ctx, m, a.via)
     let profiles: readonly HostProfile[] | null
     try { profiles = await a.via.profiles() } catch { profiles = null }
-    const bound = accountBinding(accounts, a.profileId, m, machineName(m), profiles)
+    const bound = accountBinding(accounts, a.profileId, m, machineName(m), profiles, a.aliases)
     if ('refused' in bound) return bound.refused
     if (bound.via === 'own') {
       if (!a.own) this.failWith('its account is the machine\'s own sign-in there, and no launch on that was made')

@@ -47,7 +47,11 @@ const PROFILES: HostProfile[] = [
   { id: 'profile-personal', accountEmail: 'personal@example.com', name: 'Personal' },
   { id: 'profile-side', accountEmail: 'side@example.com', name: 'Side' },
 ]
-const VIA: RemoteAccounts = { ...CLAUDE_REMOTE_ACCOUNTS, profiles: async () => PROFILES }
+/** Final review, round 2 (F2-1): accounts a test adds to this computer's,
+ *  and the account aliases the app's settings hold. */
+let extraProfiles: HostProfile[] = []
+let aliases: Record<string, string> | undefined
+const VIA: RemoteAccounts = { ...CLAUDE_REMOTE_ACCOUNTS, profiles: async () => [...PROFILES, ...extraProfiles] }
 const K = CLAUDE_REMOTE_ACCOUNTS.keys
 const provider = {
   id: 'claude', displayName: 'Claude', resolveBinary: () => null, buildSpawnCommand: () => ({ cmd: '', args: [], env: {} }),
@@ -76,6 +80,8 @@ let sent: Array<[string, unknown]>
 let logs: string[]
 let switchOn: boolean
 let methods: Record<string, string>
+/** Folders whose CLI sign-out there does not finish (it exits 1); the folder still goes. */
+let untold: Set<string>
 const INSTALL = 'f'.repeat(32)
 const OTHER_INSTALL = 'e'.repeat(32)
 /** The owner of a folder with the marker of the builds before the install id was in it. */
@@ -137,7 +143,7 @@ function answer(c: ExecCall): FakeAnswer {
       for (const x of named) {
         if (!folders.has(x) || (ownerOf(x) !== install && ownerOf(x) !== OLD)) continue
         folders.delete(x)
-        lines.push(`AICC-RESULT ${n} out ${x} 0`, `AICC-RESULT ${n} removed ${x}`)
+        lines.push(`AICC-RESULT ${n} out ${x} ${untold.has(x) ? 1 : 0}`, `AICC-RESULT ${n} removed ${x}`)
       }
       if (kind === 'list') for (const x of folders.keys()) lines.push(`AICC-RESULT ${n} ${ownerOf(x) === install ? 'left' : ownerOf(x) === OLD ? 'old' : 'elsewhere'} ${x}`)
       return { stdout: `${lines.join('\n')}${lines.length ? '\n' : ''}AICC-RESULT ${n} end ok\n` }
@@ -160,7 +166,7 @@ function plugIn(machines?: RemoteMachines): void {
   ssh = new FakeSsh({ answer, bridge: () => holder.connect() })
   setRemoteHelperDeps({
     platform: 'win32',
-    settings: () => ({ remoteSessionsThroughHelper: switchOn }),
+    settings: () => ({ remoteSessionsThroughHelper: switchOn, ...(aliases ? { accountAliases: aliases } : {}) }),
     machines: machines ?? ({ findByTarget: () => MACHINE, get: () => MACHINE, list: () => [MACHINE], installId: () => INSTALL } as unknown as RemoteMachines),
     runner: ssh,
     bundledSha256: () => SHA,
@@ -200,6 +206,9 @@ beforeEach(() => {
   kept = []
   deviceGone = false
   methods = {}
+  untold = new Set()
+  extraProfiles = []
+  aliases = undefined
   sent = []
   logs = []
   switchOn = true
@@ -445,6 +454,88 @@ describe('Remove, with its account steps (3.1.8; fix round MAJOR-1 and MAJOR-2)'
     expect(r.message).toMatch(/has not read which accounts are signed in/)
     expect(list.list()).toEqual([])
     expect([...folders.keys()]).toEqual(['profile-personal', 'profile-side'])
+  })
+})
+
+// Final review, round 2 (F2-1): the Machines page shows main's answers to a
+// row's Sign out and to Remove word for word as its notice
+// (RemoteMachinesSection.tsx), so main names each account of this computer
+// as the card does: its name, else its alias (the app's settings), else its
+// email, else "an account with no name", with a capital where that starts a
+// sentence. A tab's note names it so too. Only a folder of an account this
+// computer does not hold is named by its profile id.
+describe('final review round 2 (F2-1): main\'s answers name accounts as the Machines card does', () => {
+  const ROCKY = 'Rocky (nick@rocky.lan:22)'
+  const END = 'in your Claude account settings on claude.ai'
+  beforeEach(() => {
+    extraProfiles = [{ id: 'profile-blank' }, { id: 'profile-lab', accountEmail: 'Lab@Example.com' }]
+    aliases = { 'lab@example.com': 'Lab' }
+    folders.set('profile-blank', signedIn('blank@example.com'))
+    folders.set('profile-lab', signedIn('lab@example.com'))
+  })
+
+  it('a row\'s Sign out: an account with no name, and one known by its alias', async () => {
+    expect((await signOutRemoteAccount({ did: MACHINE.did, profileId: 'profile-blank' })).message).toBe(`Signed an account with no name out on ${ROCKY}, and removed its folder there.`)
+    expect((await signOutRemoteAccount({ did: MACHINE.did, profileId: 'profile-blank' })).message).toBe(`An account with no name is not signed in on ${ROCKY}.`)
+    untold.add('profile-lab')
+    expect((await signOutRemoteAccount({ did: MACHINE.did, profileId: 'profile-lab' })).message).toBe(`Removed the sign-in of Lab from ${ROCKY}. Claude Code's sign-out there did not finish (it exited 1), so to end that sign-in everywhere, sign it out ${END}.`)
+  })
+
+  it('Remove: the accounts it signed out, and the one whose sign-out there did not finish', async () => {
+    plugIn()
+    const list = realMachines()
+    untold.add('profile-lab')
+    const r = await list.remove(MACHINE.did)
+    expect(r.ok, r.message).toBe(true)
+    expect(r.message).toBe(`Removed the session helper from ${ROCKY}. Signed out Personal, Side, an account with no name there first. Removed the sign-in of Lab from it; Claude Code's sign-out there did not finish for it, so end that sign-in ${END}.`)
+  })
+
+  it('Remove: a sentence that an account with no name starts takes a capital', async () => {
+    plugIn()
+    const list = realMachines()
+    owners.set('profile-blank', OTHER_INSTALL)
+    const r = await list.remove(MACHINE.did)
+    expect(r.ok, r.message).toBe(true)
+    expect(r.message).toContain(' An account with no name: its folder there carries another install\'s mark, and may be this computer\'s own from an earlier install of the app; it was left as it is.')
+  })
+
+  it('Remove, the device folder already gone: what stays signed in there, by the last read', async () => {
+    plugIn()
+    const list = realMachines()
+    folders.delete('profile-personal')
+    folders.delete('profile-side')
+    await readRemoteAccounts([MACHINE.did])
+    deviceGone = true
+    const r = await list.remove(MACHINE.did)
+    expect(r.ok, r.message).toBe(true)
+    expect(r.message).toBe(`Removed the session helper from ${ROCKY}. An account with no name, Lab stay signed in on ${ROCKY} until you sign them out there, or end those sign-ins ${END}.`)
+  })
+
+  it('a tab on an account not signed in there: its note names it by its alias, and one with no name with a capital', async () => {
+    folders.delete('profile-lab')
+    folders.delete('profile-blank')
+    start('f2-lab', { profileId: 'profile-lab' })
+    await until(() => notices().length === 1 && shown('f2-lab').includes('started nothing'))
+    const lab = notices()[0]
+    expect(lab.kind === 'launch-refused' && lab.refusal.text).toMatch(/^Lab is not signed in on /)
+    forgetRemoteHelperTab('f2-lab')
+    start('f2-blank', { profileId: 'profile-blank' })
+    await until(() => notices().length === 2 && shown('f2-blank').includes('started nothing'))
+    const blank = notices()[1]
+    expect(blank.kind === 'launch-refused' && blank.refusal.text).toMatch(/^An account with no name is not signed in on /)
+    forgetRemoteHelperTab('f2-blank')
+  })
+
+  // F2-2: main's Adopt sentence reaches the app log only when some id was not adopted.
+  it('Adopt: main\'s sentence, which the app log keeps when some id was not adopted, names them so too', async () => {
+    owners.set('profile-lab', OTHER_INSTALL)
+    owners.set('profile-blank', OTHER_INSTALL)
+    await readRemoteAccounts([MACHINE.did])
+    folders.delete('profile-blank')
+    const r = await adoptRemoteAccounts({ did: MACHINE.did, profileIds: ['profile-lab', 'profile-blank'] })
+    expect(r).toMatchObject({ ok: false, adopted: ['profile-lab'], notAdopted: [{ profileId: 'profile-blank' }] })
+    expect(r.message).toBe('Adopted Lab: its folder there is this computer\'s now. Not adopted: an account with no name: the account\'s folder on rocky.lan is not there any more.')
+    expect(logs).toContain(`[remote-helper] Adopt on rocky.lan: profile-lab (${r.message})`)
   })
 })
 

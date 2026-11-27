@@ -19,6 +19,31 @@
  * lands in these shapes. Nothing here names a path on this computer, a
  * process id or a credential.
  */
+import { resolveAccountName } from './account-chip-color'
+
+/** Round 6 (R6-1): an account of this computer with no name, alias or
+ *  email, where its name falls in the middle of a sentence. Final review
+ *  round 2 (F2-1): here, so main's answers (Sign out, Remove, Adopt, a tab's
+ *  note) name it as the renderer's do; a sentence it starts takes a capital
+ *  (sentenceStart). */
+export const NAMELESS_ACCOUNT = 'an account with no name'
+
+/** Final review round 2 (F2-1): the one naming rule for an account of this
+ *  computer, in the renderer (hostAccountNamer) and in main
+ *  (remote-helper/host-accounts.ts accountName) alike: its profile's name,
+ *  else its alias (the app's settings, by its email), else its email; ''
+ *  when it has none of them (blank ones count as none). */
+export function hostProfileName(p: { accountEmail?: string; name?: string }, aliases: Readonly<Record<string, string>> | undefined): string {
+  return resolveAccountName(p.accountEmail ?? '', p.name, aliases).trim()
+}
+
+/** Final review, round 1 (F-3): a name that starts a sentence. The app's own
+ *  words for an account it cannot name (NAMELESS_ACCOUNT, "an account no
+ *  longer on this computer", "an account of this computer") take a capital
+ *  there; a user's own name or email is never changed. */
+export function sentenceStart(name: string): string {
+  return name.startsWith('an account ') ? `A${name.slice(1)}` : name
+}
 
 /**
  * One account's sign-in on one machine, as the machine's last read found it.
@@ -145,13 +170,15 @@ export interface HostAdoptResult {
   ok: boolean
   /** Main's sentence. Shown as it is only when Adopt ran on nothing (a
    *  refusal); otherwise the dialog writes its own from `adopted` and
-   *  `notAdopted` (final review F-4), and this one is the log's. */
+   *  `notAdopted` (final review F-4). Final review round 2 (F2-2): then main's
+   *  sentence goes to the app log only when some id was not adopted. */
   message: string
   adopted: string[]
   /** Final review (F-4): each id Adopt ran on and did not adopt, with main's
-   *  reason. The dialog names the accounts by this computer's naming rule,
-   *  which main does not have (main names one with no name or email by its
-   *  profile id). Absent when every id was adopted. */
+   *  reason. The dialog names the accounts by this computer's naming rule
+   *  (hostProfileName), with the aliases it holds now; main names them by
+   *  the same rule from the saved settings (round 2, F2-1). Absent when
+   *  every id was adopted. */
   notAdopted?: Array<{ profileId: string; why: string }>
 }
 

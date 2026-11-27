@@ -11,9 +11,8 @@
 // Lend from this computer is not built yet, and only Claude Code accounts
 // sign in on machines in this release, so nothing here names anything else.
 import type { HostAccountSignIn, HostAdoptResult, HostMachineAccounts, HostSignInState } from '../../shared/host-accounts'
-import { HOST_LAUNCHABLE_STATES } from '../../shared/host-accounts'
+import { HOST_LAUNCHABLE_STATES, NAMELESS_ACCOUNT, hostProfileName, sentenceStart } from '../../shared/host-accounts'
 import type { AccountProfile } from '../../shared/account-types'
-import { resolveAccountName } from '../../shared/account-chip-color'
 import type { SshConfig } from '../../shared/types'
 import type { TerminalConfig } from '../stores/configStore'
 
@@ -261,13 +260,10 @@ function othersName(n: number): string {
   return n === 1 ? 'an account no longer on this computer' : `${n} accounts no longer on this computer`
 }
 
-/** Final review, round 1 (F-3): a name that starts a sentence. The app's own
- *  words for an account it cannot name (NAMELESS_ACCOUNT, othersName, "an
- *  account of this computer") take a capital there; a user's own name or
- *  email is never changed. */
-export function sentenceStart(name: string): string {
-  return name.startsWith('an account ') ? `A${name.slice(1)}` : name
-}
+/** Final review, round 1 (F-3): a name that starts a sentence (othersName's
+ *  words too). Round 2 (F2-1): in shared/host-accounts.ts, which main's
+ *  answers use as well; these lines and their tests take it from here. */
+export { sentenceStart }
 
 /** Remove's sentence for the account the machine's own sign-in is, which
  *  Remove leaves as it is. */
@@ -326,19 +322,22 @@ export type HostNamedProfile = Pick<AccountProfile, 'id' | 'accountEmail' | 'nam
  *  and next step). The notice keeps 'That account' where the name starts its
  *  sentence. Final review (F-3): a Machines card's sentences name it so too,
  *  with a capital where it starts one (sentenceStart); its row reads
- *  'Account'. */
-export const NAMELESS_ACCOUNT = 'an account with no name'
+ *  'Account'. Round 2 (F2-1): in shared/host-accounts.ts, so main's answers
+ *  that the card shows as its notice (Sign out, Remove) name it so as well. */
+export { NAMELESS_ACCOUNT }
 
 /** Round 4 (R4-5): an account of this computer by name, as Adopt's confirm
  *  and the notice name it: its profile's name, else its alias, else its
  *  email; `fallback` when it has none of them or is not one of `profiles`.
  *  Round 5 (R5-2): the one copy of this rule; the sign-in tab's name
- *  (hostSignIn.ts hostAccountName) calls it over the stores. */
+ *  (hostSignIn.ts hostAccountName) calls it over the stores. Final review
+ *  round 2 (F2-1): the rule itself is shared (hostProfileName), and main
+ *  names accounts by it too. */
 export function hostAccountNamer(profiles: readonly HostNamedProfile[], aliases: Record<string, string> | undefined, fallback = 'That account'): (profileId: string) => string {
   return (id) => {
     const p = profiles.find((x) => x.id === id)
     if (!p) return fallback
-    return resolveAccountName(p.accountEmail, p.name, aliases) || p.accountEmail || p.name || fallback
+    return hostProfileName(p, aliases) || fallback
   }
 }
 
@@ -379,9 +378,9 @@ export function adoptNextText(adopted: readonly string[], nameOf: (profileId: st
 /**
  * Final review (F-4): what Adopt did, as its dialog says it. The accounts
  * adopted and those not adopted (with main's reason) are named by `nameOf`,
- * this computer's naming rule, as Adopt's confirm and next step name them;
- * main has no aliases and names an account with no name or email by its
- * profile id. When Adopt ran on nothing, main's own sentence (a refusal).
+ * this computer's naming rule, as Adopt's confirm and next step name them,
+ * with the aliases the renderer holds now (main reads them from the saved
+ * settings). When Adopt ran on nothing, main's own sentence (a refusal).
  */
 export function adoptResultText(r: Pick<HostAdoptResult, 'ok' | 'message' | 'adopted' | 'notAdopted'>, nameOf: (profileId: string) => string): string {
   const not = r.notAdopted ?? []

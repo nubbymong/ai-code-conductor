@@ -327,6 +327,24 @@ describe('the launch\'s binding (3.1.7): the config\'s account decides', () => {
     expect('refused' in b && b.refused.text).not.toMatch(/not on this computer any more/)
   })
 
+  // Final review, round 2 (F2-1): main names an account of this computer as
+  // the renderer does (shared hostProfileName): its name, else its alias,
+  // else its email, else "an account with no name", with a capital where that
+  // starts a sentence; its profile id only for one this computer does not hold.
+  it('F2-1: an account with no name, and one known by its alias, are named as the renderer names them', async () => {
+    const profiles: HostProfile[] = [...PROFILES, { id: 'profile-blank' }, { id: 'profile-lab', accountEmail: 'Lab@Example.com', name: '  ' }]
+    const acc = await readMachineAccounts(ctx(), MACHINE, { ...VIA, profiles: async () => profiles })
+    const aliases = { 'lab@example.com': 'Lab' }
+    const text = (id: string, a?: Record<string, string>): string => {
+      const b = accountBinding(acc, id, MACHINE, 'Rocky', profiles, a)
+      return 'refused' in b ? b.refused.text : ''
+    }
+    expect(text('profile-blank')).toBe('An account with no name is not signed in on Rocky, so this tab started nothing. Sign it in on that machine from the Machines page, or start this tab on an account that is signed in there.')
+    expect(text('profile-lab', aliases)).toMatch(/^Lab is not signed in on Rocky, so/)
+    expect(text('profile-lab')).toMatch(/^Lab@Example\.com is not signed in on Rocky, so/)
+    expect(text('profile-gone')).toMatch(/^profile-gone is not signed in on Rocky \(that account is not on this computer any more\)/)
+  })
+
   it('MINOR-5: the sign-in tab uses the account\'s own sign-in method, as this computer\'s does; anything else is the default', () => {
     expect(claudeSignInArgs('a@example.com', 'sso')).toEqual(['auth', 'login', '--sso', '--email', 'a@example.com'])
     expect(claudeSignInArgs(undefined, 'console')).toEqual(['auth', 'login', '--console'])
@@ -616,24 +634,29 @@ describe('round 2 (R1): folders of an earlier build, and of an earlier install',
 
   // Final review, round 1 (F-4): Adopt's answer as the renderer's dialog
   // reads it: the ids adopted and, for each id not adopted, main's reason
-  // (the dialog names both by this computer's rule). Main's own sentence,
-  // the log's, names an account with no name or email by its profile id.
-  // The renderer's mocks (host-signin-notice.test.tsx) copy this shape.
+  // (the dialog names both by this computer's rule). Main's own sentence
+  // reaches the app log only when some id was not adopted (index.ts
+  // adoptRemoteAccounts); final review round 2 (F2-1): it names accounts by
+  // the renderer's rule too (its name, else its alias, else its email, else
+  // "an account with no name"). The renderer's mocks
+  // (host-signin-notice.test.tsx) copy this shape.
   it('(c) a partial Adopt answers each id it did not adopt with its reason', async () => {
-    const via: RemoteAccounts = { ...VIA, profiles: async () => [...PROFILES, { id: 'profile-blank' }] }
+    const via: RemoteAccounts = { ...VIA, profiles: async () => [...PROFILES, { id: 'profile-blank' }, { id: 'profile-lab', accountEmail: 'lab@example.com' }] }
     tree.folders.set('profile-personal', signedIn('personal@example.com'))
     tree.owner.set('profile-personal', OTHER_INSTALL)
+    tree.folders.set('profile-lab', signedIn('lab@example.com'))
+    tree.owner.set('profile-lab', OTHER_INSTALL)
     tree.folders.set('profile-blank', signedIn('blank@example.com'))
     tree.owner.set('profile-blank', OTHER_INSTALL)
     await readMachineAccounts(ctx(), MACHINE, via)
     // Its folder goes before Adopt runs there.
     tree.folders.delete('profile-blank')
     tree.owner.delete('profile-blank')
-    const r = await adoptAccountFolders(ctx(), MACHINE, via, ['profile-personal', 'profile-blank'])
+    const r = await adoptAccountFolders(ctx(), MACHINE, via, ['profile-personal', 'profile-lab', 'profile-blank'], { 'lab@example.com': 'Lab' })
     expect(r).toEqual({
       ok: false,
-      message: "Adopted Personal: its folder there is this computer's now. Not adopted: profile-blank: the account's folder on rocky.lan is not there any more.",
-      adopted: ['profile-personal'],
+      message: "Adopted Personal, Lab: their folders there are this computer's now. Not adopted: an account with no name: the account's folder on rocky.lan is not there any more.",
+      adopted: ['profile-personal', 'profile-lab'],
       notAdopted: [{ profileId: 'profile-blank', why: "the account's folder on rocky.lan is not there any more" }],
     })
   })
