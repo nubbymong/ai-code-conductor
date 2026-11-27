@@ -1,0 +1,207 @@
+// src/renderer/components/HostSignInNotice.tsx
+//
+// 2.1.3-beta.20 section 5, frame 2 of the approved mockup ("Before a session
+// starts on a machine without that sign-in"), beside AccountLaunchGate: a
+// helper tab whose account is not signed in on its machine starts nothing
+// there (main's launch-refused notice, phase 3), and a Switch Account to such
+// an account switches nothing (utils/helperSwitch); either way this asks how
+// the tab signs in there:
+//  - Sign in on <machine>: a sign-in tab runs Claude Code's own sign-in there
+//    (utils/hostSignIn), and once it ends signed in the tab goes on (it
+//    starts, or switches) on that account;
+//  - another account signed in there, when there is one;
+//  - Cancel: nothing starts, or the tab stays on its account.
+// Every machine signs in on itself (Q7): Lend from this computer is not built
+// yet, so it is not offered here, not even greyed.
+//
+// Mounted once at the app root: it also listens for each machine's reads and
+// account notices (stores/hostAccountsStore), and runs the tabs whose wait
+// for a sign-in is over.
+import React, { useEffect, useRef, useState } from 'react'
+import { useHostAccountsStore, listenHostAccounts, type HostNotice, type HostRun } from '../stores/hostAccountsStore'
+import { useSessionStore } from '../stores/sessionStore'
+import { useAccountProfilesStore } from '../stores/accountProfilesStore'
+import { useSettingsStore } from '../stores/settingsStore'
+import { useRestartSession } from '../hooks/useRestartSession'
+import { resolveAccountName } from '../../shared/account-chip-color'
+import { isAccountActive } from '../../shared/account-types'
+import { openHostSignInTab } from '../utils/hostSignIn'
+import { switchHelperTabAccount } from '../utils/helperSwitch'
+import {
+  DialogOverlay, DialogPanel, DialogHeader, DialogBody, DialogFooter, DialogButton,
+  DIALOG_INPUT_CLASS, DIALOG_INPUT_STYLE, useDialogEscape,
+} from './ui/Dialog'
+
+const MIDDOT = String.fromCharCode(0xb7)
+
+/** The words of the notice, by why it asks (frame 2). Exported for its test. */
+export function hostNoticeText(n: Pick<HostNotice, 'kind' | 'state' | 'identity' | 'machineName'>, who: string): {
+  title: string
+  question: string
+  why: string
+  signInHint: string
+  otherLabel: string
+  otherAfter: string
+  cancelTitle: string
+} {
+  const m = n.machineName
+  const launch = n.kind === 'launch'
+  return {
+    title: launch ? 'Start session' : 'Switch account',
+    question: n.state === 'someone-else'
+      ? `${who} on ${m} is signed in as ${n.identity || 'another account'}, so that sign-in is not used.`
+      : `${who} is not signed in on ${m}.`,
+    why: n.state === 'someone-else'
+      ? `${m} keeps its own sign-ins. Signing ${who} in again there replaces that one.`
+      : `${m} keeps its own sign-ins.`,
+    signInHint: `Runs Claude Code's own sign-in in a session on ${m}. It stays signed in there, so Remote Control works on ${m}. ${launch ? 'This session starts once it is signed in.' : 'The session moves to it once it is signed in.'}`,
+    otherLabel: launch ? 'Or start it on another account' : 'Or switch to another account',
+    otherAfter: launch ? 'The session starts on that account.' : 'The session moves to that account, with its conversation.',
+    cancelTitle: launch ? 'Do not start this session' : 'Keep the current account',
+  }
+}
+
+function useAccountName(): (profileId: string) => string {
+  const profiles = useAccountProfilesStore((s) => s.profiles)
+  const aliases = useSettingsStore((s) => s.settings.accountAliases)
+  return (id) => {
+    const p = profiles.find((x) => x.id === id)
+    if (!p) return 'That account'
+    return resolveAccountName(p.accountEmail, p.name, aliases) || p.accountEmail || p.name || 'That account'
+  }
+}
+
+function NoticeDialog({ notice }: { notice: HostNotice }) {
+  const session = useSessionStore((s) => s.sessions.find((x) => x.id === notice.sessionId) ?? null)
+  const { restart } = useRestartSession(session, false)
+  const profiles = useAccountProfilesStore((s) => s.profiles)
+  const machines = useHostAccountsStore((s) => s.machines)
+  const nameOf = useAccountName()
+  const close = () => useHostAccountsStore.getState().closeNotice(notice.sessionId)
+  useDialogEscape(close)
+  // The machine's card (its saved SSH config is found from it).
+  useEffect(() => { void useHostAccountsStore.getState().load() }, [])
+  // A tab closed meanwhile: nothing to ask about.
+  useEffect(() => { if (!session) close() })
+  const others = notice.signedInThere.filter((id) => profiles.some((p) => p.id === id && isAccountActive(p)))
+  const [other, setOther] = useState(others[0] ?? '')
+  const [problem, setProblem] = useState<string | null>(null)
+  if (!session) return null
+
+  const who = nameOf(notice.profileId)
+  const text = hostNoticeText(notice, who)
+  const tabName = session.customName?.trim() || session.label || 'this session'
+
+  const signIn = () => {
+    const machine = machines.find((m) => m.did === notice.did)
+    if (!machine) { setProblem(`${notice.machineName} is not on the Machines page's list any more.`); return }
+    const r = openHostSignInTab(machine, notice.profileId)
+    if (!r.ok) { setProblem(r.why); return }
+    useHostAccountsStore.getState().waitForSignIn({ sessionId: notice.sessionId, did: notice.did, profileId: notice.profileId, mode: notice.kind === 'launch' ? 'restart' : 'switch' })
+    close()
+  }
+  const useOther = () => {
+    if (!other) return
+    // A tab that ran (a switch, a kept session, a tab that reached its CLI)
+    // carries its conversation; a new tab starts a new one.
+    const carry = notice.kind === 'switch' || session.remoteVia === 'helper' || session.sshReachedClaudeRunning === true
+    close()
+    switchHelperTabAccount(session, other, restart, { carry })
+  }
+
+  return (
+    <DialogOverlay z="z-[60]" dim={0.5} testId="host-signin-notice">
+      <DialogPanel width="w-[440px]" ariaLabel={notice.kind === 'launch' ? 'Choose how this session signs in' : 'Choose how this session switches account'}>
+        <DialogHeader
+          title={text.title}
+          subtitle={<>
+            Choose how{' '}
+            <span style={{ color: 'var(--text-primary)', fontWeight: 500 }}>{tabName}</span>
+            {' '}signs in on {notice.machineName}
+          </>}
+        />
+        <DialogBody>
+          <p className="text-[12.5px] leading-snug" style={{ color: 'var(--text-primary)' }} data-testid="host-signin-question">{text.question}</p>
+          <p className="text-[11.5px] leading-snug mt-1.5" style={{ color: 'var(--text-muted)' }} data-testid="host-signin-why">{text.why}</p>
+          <div className="flex flex-col gap-1 mt-3">
+            <DialogButton variant="primary" size="md" block onClick={signIn} testId="host-signin-here">Sign in on {notice.machineName}</DialogButton>
+            <p className="text-[11.5px] leading-snug mx-0.5 mt-0.5 mb-2" style={{ color: 'var(--text-muted)' }}>{text.signInHint}</p>
+          </div>
+          {problem && <p className="text-xs mb-2" role="alert" style={{ color: 'var(--status-danger)' }} data-testid="host-signin-problem">{problem}</p>}
+          {others.length > 0 && (
+            <div className="mt-1.5 pt-3 border-t" style={{ borderColor: 'var(--border-subtle)' }} data-testid="host-signin-other">
+              <label className="block text-[11.5px] mb-1" style={{ color: 'var(--text-secondary)' }} htmlFor="host-signin-other-select">{text.otherLabel}</label>
+              <div className="flex items-center gap-2">
+                <select
+                  id="host-signin-other-select"
+                  value={other}
+                  onChange={(e) => setOther(e.target.value)}
+                  className={DIALOG_INPUT_CLASS.replace('w-full', 'flex-1 min-w-0')}
+                  style={DIALOG_INPUT_STYLE}
+                  data-testid="host-signin-other-select"
+                >
+                  {others.map((id) => <option key={id} value={id}>{`${nameOf(id)} ${MIDDOT} signed in on ${notice.machineName}`}</option>)}
+                </select>
+                <DialogButton variant="secondary" onClick={useOther} disabled={!other} testId="host-signin-use-other">Use this account</DialogButton>
+              </div>
+              <p className="text-[11.5px] leading-snug mt-1.5" style={{ color: 'var(--text-muted)' }}>{text.otherAfter}</p>
+            </div>
+          )}
+        </DialogBody>
+        <DialogFooter>
+          <DialogButton variant="secondary" onClick={close} title={text.cancelTitle} testId="host-signin-cancel">Cancel</DialogButton>
+        </DialogFooter>
+      </DialogPanel>
+    </DialogOverlay>
+  )
+}
+
+/** A tab whose wait for a sign-in is over: it starts again, or switches, on
+ *  that account, once. */
+function HostRunner({ run }: { run: HostRun }) {
+  const session = useSessionStore((s) => s.sessions.find((x) => x.id === run.sessionId) ?? null)
+  const { restart } = useRestartSession(session, false)
+  const done = useRef(false)
+  useEffect(() => {
+    if (done.current) return
+    done.current = true
+    useHostAccountsStore.getState().takeRun(run.id)
+    if (!session) return
+    if (run.mode === 'restart') restart({ profileId: run.profileId })
+    else switchHelperTabAccount(session, run.profileId, restart)
+  })
+  return null
+}
+
+function MessageDialog({ title, text }: { title: string; text: string }) {
+  const close = () => useHostAccountsStore.getState().showMessage(null)
+  useDialogEscape(close)
+  return (
+    <DialogOverlay z="z-[60]" dim={0.5} testId="host-signin-message">
+      <DialogPanel width="w-[420px]" ariaLabel={title}>
+        <DialogHeader title={title} />
+        <DialogBody><p className="text-[12.5px] leading-snug" style={{ color: 'var(--text-primary)' }}>{text}</p></DialogBody>
+        <DialogFooter><DialogButton variant="primary" onClick={close}>OK</DialogButton></DialogFooter>
+      </DialogPanel>
+    </DialogOverlay>
+  )
+}
+
+/**
+ * The app root's host: the listeners, the runners, and the head notice
+ * (`suppressed` while a boot gate owns the screen, as AccountLaunchGate: the
+ * queue waits, unanswered).
+ */
+export default function HostSignInNotice({ suppressed = false }: { suppressed?: boolean }) {
+  useEffect(() => listenHostAccounts(), [])
+  const notice = useHostAccountsStore((s) => s.notices[0] ?? null)
+  const runs = useHostAccountsStore((s) => s.runs)
+  const message = useHostAccountsStore((s) => s.message)
+  return (
+    <>
+      {runs.map((r) => <HostRunner key={r.id} run={r} />)}
+      {!suppressed && notice && <NoticeDialog key={`${notice.sessionId}:${notice.kind}:${notice.profileId}`} notice={notice} />}
+      {!suppressed && !notice && message && <MessageDialog title={message.title} text={message.text} />}
+    </>
+  )
+}
