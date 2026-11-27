@@ -345,6 +345,20 @@ describe('the launch\'s binding (3.1.7): the config\'s account decides', () => {
     expect(text('profile-gone')).toMatch(/^profile-gone is not signed in on Rocky \(that account is not on this computer any more\)/)
   })
 
+  it('F2-1: an account with no name starts its sentences with a capital, and the app\'s words for it take no possessive', async () => {
+    const profiles: HostProfile[] = [...PROFILES, { id: 'profile-blank' }]
+    const via: RemoteAccounts = { ...VIA, profiles: async () => profiles }
+    const text = (acc: HostMachineAccounts): string => {
+      const b = accountBinding(acc, 'profile-blank', MACHINE, 'Rocky', profiles)
+      return 'refused' in b ? b.refused.text : ''
+    }
+    // An account this computer knows no email for: its folder signed in reads someone-else.
+    tree.folders.set('profile-blank', signedIn('blank@example.com'))
+    expect(text(await readMachineAccounts(ctx(), MACHINE, via))).toMatch(/^An account with no name on Rocky is signed in as blank@example\.com, another account, so this tab started nothing\. Sign it out on the Machines page, then sign it in again as an account with no name\.$/)
+    tree.owner.set('profile-blank', OTHER_INSTALL)
+    expect(text(await readMachineAccounts(ctx(), MACHINE, via))).toMatch(/^The folder of an account with no name on Rocky carries another install's mark, so this tab started nothing\./)
+  })
+
   it('MINOR-5: the sign-in tab uses the account\'s own sign-in method, as this computer\'s does; anything else is the default', () => {
     expect(claudeSignInArgs('a@example.com', 'sso')).toEqual(['auth', 'login', '--sso', '--email', 'a@example.com'])
     expect(claudeSignInArgs(undefined, 'console')).toEqual(['auth', 'login', '--console'])
