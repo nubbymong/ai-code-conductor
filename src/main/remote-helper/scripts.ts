@@ -316,10 +316,23 @@ export const accountMarker = (profileId: string, installId: string): string => `
  *  mode 0700, holding this install's marker for that profile id (a regular
  *  file, not a link; `I` is this install's id). `ao <folder> <profile id>`:
  *  it holds the app's marker for that profile id, by any install: with `am`
- *  false, the folder is another computer's, left as it is. */
+ *  false, the folder is another computer's (or this computer's from an
+ *  earlier install whose id was lost), left as it is unless the user adopts
+ *  it (`account adopt`). `aw <folder> <profile id>`: it holds the marker of
+ *  the 2.1.3-beta.20 builds before the install id was in it (`aicc-account 1
+ *  <profile id>`); a folder so marked whose profile id the app names (one of
+ *  this computer's accounts) is taken as this computer's, and `account`
+ *  rewrites its marker (round 2, R1). */
 const ACCOUNT_MARK = [
   'am() { pv "$1" && [ -f "$1/.aicc-account" ] && [ ! -L "$1/.aicc-account" ] && [ "$(head -c 200 "$1/.aicc-account" 2>/dev/null)" = "aicc-account 1 $2 $I" ]; }',
   'ao() { pv "$1" && [ -f "$1/.aicc-account" ] && [ ! -L "$1/.aicc-account" ] && case "$(head -c 200 "$1/.aicc-account" 2>/dev/null)" in "aicc-account 1 $2 "*) return 0;; esac; return 1; }',
+  'aw() { pv "$1" && [ -f "$1/.aicc-account" ] && [ ! -L "$1/.aicc-account" ] && [ "$(head -c 200 "$1/.aicc-account" 2>/dev/null)" = "aicc-account 1 $2" ]; }',
+]
+
+/** `mw <profile id> <folder>`: writes this install's marker, by a staging file
+ *  moved over it; `account` only, so the read and the sign-out write no marker. */
+const MARK_WRITE = [
+  'mw() { echo "aicc-account 1 $1 $I" > "$2/.aicc-account.$N" && mv -f -- "$2/.aicc-account.$N" "$2/.aicc-account"; }',
 ]
 
 /** Sign out's one delete (section 3.1.8): one account's folder, by the
@@ -644,7 +657,9 @@ const SPECS = {
    *  a folder name of the app's shape, read from the folder. A folder whose
    *  marker names another install (the app on another computer signed in on
    *  this host login) is not read: `AICC-FIELD <N> <profile id> elsewhere`.
-   *  Writes nothing. */
+   *  One with the marker of the builds before the install id was in it is
+   *  read, after `AICC-FIELD <N> <profile id> old` (the app takes it as this
+   *  computer's when the id is one of its accounts). Writes nothing. */
   accounts: {
     values: [FOLDER, HASH, { name: 'own identity file', re: FIELD_FILE_RE }, { name: 'own credentials file', re: FIELD_FILE_RE }, { name: 'identity file name', re: PLAIN_NAME_RE }, { name: 'credentials file name', re: PLAIN_NAME_RE }, { name: 'identity keys', re: FIELD_KEYS_RE }, { name: 'credentials keys', re: FIELD_KEYS_RE }],
     text: join([
@@ -658,7 +673,7 @@ const SPECS = {
       'fr own id "$Y" "$Z"',
       'fr own cr "$V" "$K"',
       'B=$HOME/.aicc/accounts',
-      'if [ -e "$B" ] || [ -L "$B" ]; then pv "$B" || no accounts-folder-not-private; for X in $(ls -A "$B"); do case "$X" in [!a-z0-9]*|*[!a-z0-9-]*|"") continue;; esac; [ ${#X} -le 128 ] || continue; am "$B/$X" "$X" || { ao "$B/$X" "$X" && echo "AICC-FIELD $N $X elsewhere"; continue; }; fr "$X" id ".aicc/accounts/$X/$J" "$Z"; fr "$X" cr ".aicc/accounts/$X/$C" "$K"; done; fi',
+      'if [ -e "$B" ] || [ -L "$B" ]; then pv "$B" || no accounts-folder-not-private; for X in $(ls -A "$B"); do case "$X" in [!a-z0-9]*|*[!a-z0-9-]*|"") continue;; esac; [ ${#X} -le 128 ] || continue; am "$B/$X" "$X" || { aw "$B/$X" "$X" && echo "AICC-FIELD $N $X old"; } || { ao "$B/$X" "$X" && echo "AICC-FIELD $N $X elsewhere"; continue; }; fr "$X" id ".aicc/accounts/$X/$J" "$Z"; fr "$X" cr ".aicc/accounts/$X/$C" "$K"; done; fi',
       'r end ok',
     ]),
   },
@@ -673,24 +688,33 @@ const SPECS = {
    *  and reported (`own <name>`). Its settings copy `T`: `keep` leaves it,
    *  `0` removes it, a size reads exactly that many bytes from standard input
    *  into a staging file moved over it (a link there is replaced, never
-   *  written through). Its sign-in files are the CLI's own, never written. */
+   *  written through). Its sign-in files are the CLI's own, never written.
+   *  The app names only its own accounts' profile ids here, so a folder with
+   *  the marker of the builds before the install id was in it is this
+   *  computer's: its marker is rewritten (`adopted old`). One with another
+   *  install's marker is refused (`account-folder-elsewhere`), but for
+   *  `adopt`, the user's own choice on the machine's card (round 2, R1: this
+   *  computer's folder from an earlier install whose id was lost): then only
+   *  its marker is rewritten (`adopted elsewhere`), and nothing else changes. */
   account: {
-    values: [{ name: 'profile id', re: ACCOUNT_PROFILE_RE }, { name: 'mode', re: /^(make|refresh)$/ }, { name: 'home config folder', re: PLAIN_NAME_RE }, { name: 'linked folders', re: PLAIN_NAMES_RE }, { name: 'linked files', re: PLAIN_NAMES_RE }, { name: 'settings file name', re: PLAIN_NAME_RE }, { name: 'settings copy', re: ACCOUNT_SETTINGS_RE }],
+    values: [{ name: 'profile id', re: ACCOUNT_PROFILE_RE }, { name: 'mode', re: /^(make|refresh|adopt)$/ }, { name: 'home config folder', re: PLAIN_NAME_RE }, { name: 'linked folders', re: PLAIN_NAMES_RE }, { name: 'linked files', re: PLAIN_NAMES_RE }, { name: 'settings file name', re: PLAIN_NAME_RE }, { name: 'settings copy', re: ACCOUNT_SETTINGS_RE }],
     text: join([
       'N=$1; D=$2; I=$3; P=$4; M=$5; R=$6; L=$7; E=$8; T=$9; S=${10}',
       ...CHECKS,
       ...EXISTING,
       ...ACCOUNT_MARK,
+      ...MARK_WRITE,
       'umask 077',
       'case "$P" in [!a-z0-9]*|*[!a-z0-9-]*|"") no bad-profile;; esac',
-      'case "$M" in make|refresh) ;; *) no bad-mode;; esac',
+      'case "$M" in make|refresh|adopt) ;; *) no bad-mode;; esac',
       'case "$S" in keep) ;; *[!0-9]*|"") no bad-size;; esac',
       'case "$R" in */*|.|..|"") no bad-home-folder;; esac',
       'case "$T" in */*|.*|"") no bad-settings-name;; esac',
       'B=$HOME/.aicc/accounts; Q=$B/$P; G=$HOME/$R',
       'if [ ! -e "$B" ] && [ ! -L "$B" ]; then [ "$M" = make ] || { r gone yes; r end ok; exit 0; }; mkdir "$B" || no cannot-make-accounts-folder; fi',
       'pv "$B" || no accounts-folder-not-private',
-      'if [ -e "$Q" ] || [ -L "$Q" ]; then am "$Q" "$P" || { ao "$Q" "$P" && no account-folder-elsewhere; no account-folder-not-the-apps; }; else [ "$M" = make ] || { r gone yes; r end ok; exit 0; }; mkdir "$Q" || no cannot-make-account-folder; echo "aicc-account 1 $P $I" > "$Q/.aicc-account" || no cannot-write-marker; fi',
+      'if [ -e "$Q" ] || [ -L "$Q" ]; then if am "$Q" "$P"; then :; elif aw "$Q" "$P"; then mw "$P" "$Q" || no cannot-write-marker; r adopted old; elif ao "$Q" "$P"; then [ "$M" = adopt ] || no account-folder-elsewhere; mw "$P" "$Q" || no cannot-write-marker; r adopted elsewhere; else no account-folder-not-the-apps; fi; else [ "$M" = make ] || { r gone yes; r end ok; exit 0; }; mkdir "$Q" || no cannot-make-account-folder; mw "$P" "$Q" || no cannot-write-marker; fi',
+      '[ "$M" = adopt ] && { r end ok; exit 0; }',
       'if [ ! -e "$G" ] && [ ! -L "$G" ]; then mkdir "$G" || no cannot-make-shared-folder; fi',
       '[ -d "$G" ] || no shared-folder-not-a-folder',
       'set -- $(ls -ldnL "$G" 2>/dev/null); [ "$3" = "$u" ] || no shared-folder-not-yours',
@@ -716,10 +740,12 @@ const SPECS = {
    *  the app on another computer (its marker names another install) is
    *  refused, `account-folder-elsewhere`. `list` (Remove): the same for each
    *  profile id `P` names (commas between), each only when its folder holds
-   *  this install's marker, needing no read first; the first that cannot be
-   *  removed stops it; then each folder left there is named: this install's
-   *  that the list did not name (`left <id>`) and another computer's
-   *  (`elsewhere <id>`), all left as they are. With the device folder already
+   *  this install's marker (or the marker of the builds before the install id
+   *  was in it: the app names only its own accounts' ids), needing no read
+   *  first; the first that cannot be removed stops it; then each folder left
+   *  there is named: this install's that the list did not name (`left <id>`),
+   *  one with the old marker it did not name (`old <id>`), and another
+   *  computer's (`elsewhere <id>`), all left as they are. With the device folder already
    *  gone, `list` signs nothing out and answers `device gone`, and Remove goes
    *  on as before (2.1.3-beta.20 fix round, MAJOR-2). `own` (Q5, after the
    *  app asked): the CLI's own sign-out of the machine's own sign-in, the
@@ -750,13 +776,13 @@ const SPECS = {
       'if [ "$O" = own ]; then unset "$E"; lo "$@"; r logout $?; r end ok; exit 0; fi',
       'if [ ! -e "$B" ] && [ ! -L "$B" ]; then [ "$O" = folder ] && r gone yes; r end ok; exit 0; fi',
       'pv "$B" || no accounts-folder-not-private',
-      'if [ "$O" = folder ]; then case "$P" in [!a-z0-9]*|*[!a-z0-9-]*) no bad-profile;; esac; [ -e "$B/$P" ] || [ -L "$B/$P" ] || { r gone yes; r end ok; exit 0; }; am "$B/$P" "$P" || { ao "$B/$P" "$P" && no account-folder-elsewhere; no account-folder-not-the-apps; }; fi',
+      'if [ "$O" = folder ]; then case "$P" in [!a-z0-9]*|*[!a-z0-9-]*) no bad-profile;; esac; [ -e "$B/$P" ] || [ -L "$B/$P" ] || { r gone yes; r end ok; exit 0; }; am "$B/$P" "$P" || aw "$B/$P" "$P" || { ao "$B/$P" "$P" && no account-folder-elsewhere; no account-folder-not-the-apps; }; fi',
       'L=$(printf "%s" "$P" | tr "," " ")',
-      'for P in $L; do case "$P" in [!a-z0-9]*|*[!a-z0-9-]*|"") continue;; esac; Q=$B/$P; am "$Q" "$P" || continue; export "$E=$Q"; lo "$@"; r out "$P" $?',
+      'for P in $L; do case "$P" in [!a-z0-9]*|*[!a-z0-9-]*|"") continue;; esac; Q=$B/$P; am "$Q" "$P" || aw "$Q" "$P" || continue; export "$E=$Q"; lo "$@"; r out "$P" $?',
       ...DELETE_ACCOUNT_FOLDER,
       '[ -e "$Q" ] && no still-there',
       'r removed "$P"; done',
-      'if [ "$O" = list ]; then for P in $(ls -A "$B"); do case "$P" in [!a-z0-9]*|*[!a-z0-9-]*|"") continue;; esac; if am "$B/$P" "$P"; then r left "$P"; elif ao "$B/$P" "$P"; then r elsewhere "$P"; fi; done; fi',
+      'if [ "$O" = list ]; then for P in $(ls -A "$B"); do case "$P" in [!a-z0-9]*|*[!a-z0-9-]*|"") continue;; esac; if am "$B/$P" "$P"; then r left "$P"; elif aw "$B/$P" "$P"; then r old "$P"; elif ao "$B/$P" "$P"; then r elsewhere "$P"; fi; done; fi',
       'r end ok',
     ]),
   },

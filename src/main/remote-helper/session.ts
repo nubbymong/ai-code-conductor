@@ -483,6 +483,8 @@ export class RemoteDriver implements HelperPtyDriver {
     const ctx = { runner: this.o.runner, installId: this.o.installId, log: this.o.log }
     if (a.signIn) {
       const made = await prepareAccountFolder(ctx, m, a.via, a.profileId, 'make', 'keep')
+      // Round 2 (R1): a folder there with another install's mark is never made over by a sign-in.
+      if (!made.ok && made.refused === 'account-folder-elsewhere') this.failWith(`the account's folder on ${m.host} carries another install's mark, and nothing of it was changed. It may be this computer's own from an earlier install of the app: if so, choose Adopt on the machine's card on the Machines page`)
       if (!made.ok) this.failWith(`the account's folder could not be made on ${m.host}: ${made.why}`)
       this.boundTo = 'folder'
       return null

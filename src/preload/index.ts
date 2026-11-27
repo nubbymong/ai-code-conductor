@@ -887,6 +887,8 @@ export interface ElectronAPI {
       onAccountsChanged: (cb: (m: import('../shared/host-accounts').HostMachineAccounts) => void) => () => void
       /** A helper tab's account notice: it started nothing for its account, or a sign-in tab ended. */
       onAccountNotice: (cb: (n: import('../shared/host-accounts').HostAccountNotice) => void) => () => void
+      /** Round 2 (R1): Adopt, the user's own choice: folders that read as another install's, for this computer's accounts, made this computer's again. */
+      accountsAdopt: (req: import('../shared/host-accounts').HostAdoptRequest) => Promise<import('../shared/host-accounts').HostAdoptResult>
     }
   }
   cli: {
@@ -1494,6 +1496,8 @@ const electronAPI: ElectronAPI = {
         ipcRenderer.invoke(IPC.MACHINES_REMOTE_ACCOUNT_SIGN_OUT, req),
       onAccountsChanged: (cb: (m: import('../shared/host-accounts').HostMachineAccounts) => void) => onChannel(IPC.MACHINES_REMOTE_ACCOUNTS_CHANGED, cb),
       onAccountNotice: (cb: (n: import('../shared/host-accounts').HostAccountNotice) => void) => onChannel(IPC.REMOTE_ACCOUNT_NOTICE, cb),
+      accountsAdopt: (req: import('../shared/host-accounts').HostAdoptRequest): Promise<import('../shared/host-accounts').HostAdoptResult> =>
+        ipcRenderer.invoke(IPC.MACHINES_REMOTE_ACCOUNTS_ADOPT, req),
     },
   },
   cli: {

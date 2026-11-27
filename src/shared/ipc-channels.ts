@@ -271,6 +271,8 @@ export const IPC = {
   MACHINES_REMOTE_ACCOUNT_SIGN_OUT: 'machines:remote:accountSignOut',   // (req: HostSignOutRequest) -> HostSignOutResult
   MACHINES_REMOTE_ACCOUNTS_CHANGED: 'machines:remote:accountsChanged',  // main -> renderer: HostMachineAccounts
   REMOTE_ACCOUNT_NOTICE: 'remote:accountNotice',                        // main -> renderer: HostAccountNotice
+  // Round 2 (R1): Adopt, the user's own choice to make folders that read as another computer's this computer's again.
+  MACHINES_REMOTE_ACCOUNTS_ADOPT: 'machines:remote:accountsAdopt',      // (req: HostAdoptRequest) -> HostAdoptResult
 
   // CLI
   CLI_CHECK: 'cli:check',

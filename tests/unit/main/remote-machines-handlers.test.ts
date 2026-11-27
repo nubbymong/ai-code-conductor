@@ -116,7 +116,7 @@ describe('registerRemoteMachinesHandlers', () => {
     expect([...handlers.keys()].sort()).toEqual([
       IPC.MACHINES_REMOTE_STATE, IPC.MACHINES_REMOTE_PREPARE, IPC.MACHINES_REMOTE_ADD, IPC.MACHINES_REMOTE_CHECK, IPC.MACHINES_REMOTE_REMOVE,
       IPC.MACHINES_REMOTE_SESSIONS, IPC.MACHINES_REMOTE_END_SESSION, IPC.MACHINES_REMOTE_END_TAB,
-      IPC.MACHINES_REMOTE_ACCOUNTS, IPC.MACHINES_REMOTE_ACCOUNT_SIGN_OUT,
+      IPC.MACHINES_REMOTE_ACCOUNTS, IPC.MACHINES_REMOTE_ACCOUNT_SIGN_OUT, IPC.MACHINES_REMOTE_ACCOUNTS_ADOPT,
     ].sort())
     expect([...handlers.keys()].every((c) => c.startsWith('machines:remote:'))).toBe(true)
   })
@@ -323,5 +323,23 @@ describe('the accounts doors wait for their execs (NIT-10)', () => {
     expect(handlersModule.REMOTE_REMOVE_TIMEOUT_MS).toBeGreaterThan(2 * EXEC_TIMEOUT_MS + REMOVE_SIGN_OUT_EXEC_MS)
     expect(handlersModule.REMOTE_SIGN_OUT_TIMEOUT_MS).toBeGreaterThan(3 * EXEC_TIMEOUT_MS + 2 * SIGN_OUT_EXEC_MS)
     expect(REMOVE_SIGN_OUT_EXEC_MS).toBeGreaterThan(handlersModule.REMOTE_ACTION_TIMEOUT_MS)
+  })
+})
+
+// Round 2 (R1): Adopt answers only the app window, and takes a device id and
+// 1 to 64 profile ids of this computer's shape, nothing else, before
+// anything is asked.
+describe('the Adopt door (round 2, R1)', () => {
+  it('asked by anything but the app window, or with values of another shape, adopts nothing and starts no ssh', async () => {
+    register()
+    for (const stranger of strangers) {
+      expect(await handlers.get(IPC.MACHINES_REMOTE_ACCOUNTS_ADOPT)!(stranger, { did: DID, profileIds: ['profile-a'] })).toEqual({ ok: false, message: MACHINES_NOT_APP, adopted: [] })
+    }
+    for (const req of [undefined, null, 'x', {}, { did: 'ABC', profileIds: ['profile-a'] }, { did: DID }, { did: DID, profileIds: [] }, { did: DID, profileIds: 'profile-a' }, { did: DID, profileIds: ['../x'] }, { did: DID, profileIds: ['profile-a', 7] }, { did: DID, profileIds: Array.from({ length: 65 }, (_, i) => `profile-${i}`) }]) {
+      const r = await call(IPC.MACHINES_REMOTE_ACCOUNTS_ADOPT, req)
+      expect(r.ok, JSON.stringify(req)).toBe(false)
+      expect(r.adopted).toEqual([])
+    }
+    expect(ssh.calls).toHaveLength(0)
   })
 })
