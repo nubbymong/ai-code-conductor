@@ -305,6 +305,9 @@ export class RemoteDriver implements HelperPtyDriver {
   /** `direct` starts no program: it only says why (a NoticePty). */
   readonly startsNothing = true as const
   private why = ''
+  /** Phase 5 round 4 (R4-2): a `why` that names its own next steps, so its
+   *  note adds none (set with it, by failWith). */
+  private whySteps: string | undefined
   private readonly connected = new Set<string>()
   private readonly target: SshTarget
   private readonly sleep: (ms: number) => Promise<void>
@@ -368,8 +371,9 @@ export class RemoteDriver implements HelperPtyDriver {
     return [nonce, m.did, this.o.installId, m.helper.folder, m.helper.sha256, ...rest]
   }
 
-  private failWith(why: string): never {
+  private failWith(why: string, ownSteps = false): never {
     this.why = why
+    this.whySteps = ownSteps ? why : undefined
     throw new Error(why)
   }
 
@@ -491,9 +495,14 @@ export class RemoteDriver implements HelperPtyDriver {
         let last: ReturnType<typeof machineAccounts> | null = null
         try { last = machineAccounts(m.did, await a.via.profiles()) } catch { last = null }
         const named = !!last && last.readAt !== null && (last.elsewhere ?? []).includes(a.profileId)
-        if (named && last?.mayBeEarlierInstall === true) this.failWith(`the account's folder on ${m.host} carries another install's mark, and nothing of it was changed. It may be this computer's own from an earlier install of the app: if so, choose Adopt on the machine's card on the Machines page`)
-        if (named) this.failWith(`the account's folder on ${m.host} is used by the app on another computer, and nothing of it was changed. Sign it in there from that computer, or start a tab on an account signed in there`)
-        this.failWith(`the account's folder on ${m.host} carries another install's mark, and nothing of it was changed. Press Check on the Machines page: if the machine's card then says it may be this computer's own from an earlier install, choose Adopt on the machine's card; if it is the app's on another computer, sign it in there from that computer`)
+        // Round 4 (R4-2), round 5 (R5-1): each of these notes names its own
+        // steps only, so none gets the generic "Press Check ... Sign in on
+        // this machine again" after it. After Adopt the next step is Sign in
+        // again, with no Check: the Adopt dialog reads the machine again.
+        if (named && last?.mayBeEarlierInstall === true) this.failWith(`the account's folder on ${m.host} carries another install's mark, and nothing of it was changed. It may be this computer's own from an earlier install of the app: if so, choose Adopt on the machine's card on the Machines page, then choose Sign in on this machine again`, true)
+        // A sign-in from here cannot help, so this one names no Sign in on this machine.
+        if (named) this.failWith(`the account's folder on ${m.host} is used by the app on another computer, and nothing of it was changed. Sign it in there from that computer, or start a tab on an account signed in there`, true)
+        this.failWith(`the account's folder on ${m.host} carries another install's mark, and nothing of it was changed. Press Check on the Machines page: if the machine's card then says it may be this computer's own from an earlier install, choose Adopt on the machine's card, then Sign in on this machine again; if it is the app's on another computer, sign it in there from that computer`, true)
       }
       if (!made.ok) this.failWith(`the account's folder could not be made on ${m.host}: ${made.why}`)
       this.boundTo = 'folder'
@@ -827,13 +836,17 @@ export class RemoteDriver implements HelperPtyDriver {
     // A tab whose session the helper keeps never takes the usual path
     // (2.1.3-beta.19): its note names only the steps that reach it again.
     // A sign-in tab neither (2.1.3-beta.20 fix round, NIT-11): the usual
-    // path signs nothing in.
-    const next = this.o.account?.signIn
-      ? 'Press Check on the Machines page, then choose Sign in on this machine again.'
-      : this.untilEnded
-        ? 'Press Check on the Machines page, then Restart; a session it keeps there is listed on that page, with End.'
-        : 'Press Check on the Machines page, or turn the remote sessions switch off in Settings for the usual SSH path.'
-    return new NoticePty(`This tab could not start through the session helper on ${m.host}: ${this.why || 'it did not answer'}. ${next}`, this.o.spec.cols, this.o.spec.rows)
+    // path signs nothing in. Phase 5 rounds 4 and 5 (R4-2, R5-1): a why that
+    // names its own steps (every note on a folder with another install's
+    // mark) gets no others.
+    const next = this.why !== '' && this.why === this.whySteps
+      ? ''
+      : this.o.account?.signIn
+        ? 'Press Check on the Machines page, then choose Sign in on this machine again.'
+        : this.untilEnded
+          ? 'Press Check on the Machines page, then Restart; a session it keeps there is listed on that page, with End.'
+          : 'Press Check on the Machines page, or turn the remote sessions switch off in Settings for the usual SSH path.'
+    return new NoticePty(`This tab could not start through the session helper on ${m.host}: ${this.why || 'it did not answer'}.${next ? ` ${next}` : ''}`, this.o.spec.cols, this.o.spec.rows)
   }
 
   ending(sid: string, done: Promise<void>): void {
