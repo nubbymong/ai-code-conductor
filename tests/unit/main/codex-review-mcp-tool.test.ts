@@ -19,10 +19,16 @@ vi.mock('../../../src/main/codex-review-usage', () => ({
 // debug-logger is already mocked globally in tests/unit/setup.ts; no per-file
 // mock needed here. (Source under test calls logInfo through that module.)
 
-import { runCodexReview, runClaudeReview, registerCodexReviewTool, registerClaudeReviewTool, abortSessionReviews, cancelReviewRequest, MAX_REVIEWS_PER_SESSION, buildClaudePrompt, buildCodexPrompt, defaultReviewDeps, defaultClaudeReviewDeps } from '../../../src/main/codex-review-mcp-tool'
+import { runCodexReview, runClaudeReview, registerCodexReviewTool, registerClaudeReviewTool, abortSessionReviews, cancelReviewRequest, MAX_REVIEWS_PER_SESSION, buildClaudePrompt, buildCodexPrompt, defaultReviewDeps, defaultClaudeReviewDeps,
+  codexReviewModels, codexReviewEfforts, codexReviewDefaultModel, claudeReviewModels, claudeReviewEfforts, DEFAULT_CODEX_REVIEW_EFFORT } from '../../../src/main/codex-review-mcp-tool'
 import type { ReviewToolDeps } from '../../../src/main/codex-review-mcp-tool'
 import { REVIEW_DIFF_MAX_BYTES, REVIEW_FILE_LINE_BYTES, produceReviewFiles } from '../../../src/main/review-diff'
 import type { ReviewFile, ReviewFilesDeps } from '../../../src/main/review-diff'
+import { mergeRegistry, withInstalledCodexModels } from '../../../src/shared/model-registry'
+import type { ModelRegistry } from '../../../src/shared/model-registry'
+import { logInfo } from '../../../src/main/debug-logger'
+import { CODEX_REVIEW_DEFAULT_EFFORT, CODEX_REVIEW_EFFORTS, CODEX_AGENT_EFFORTS } from '../../../src/main/providers/codex'
+import { CODEX_EFFORTS } from '../../../src/main/sanitize-restored-spawn-options'
 import registryJson from '../../../resources/model-registry.json'
 
 const optedIn = new Set<string>(['sess-allowed'])
@@ -715,7 +721,7 @@ describe('claude_review tool (WP2 5b)', () => {
 
   it('runs on the Claude reviewer launch, the change from main in the prompt between nonce markers, the account\'s realm passed on', async () => {
     const r = await runClaudeReview({ cccSessionId: 'sess-allowed', mode: 'range', range: 'HEAD~1..HEAD', focus: 'races' }, sets, gitCwd, claudeDeps())
-    expect(r).toEqual({ isError: false, text: '1. A finding.\n\n\n---\nClaude review -- 1 message used -- 1200 input tokens (200 cached), 80 output tokens.' })
+    expect(r).toEqual({ isError: false, text: "1. A finding.\n\n\n---\nClaude review on Claude Code's default model for the account (default; not confirmed), effort Claude Code's default (default) -- 1 message used -- 1200 input tokens (200 cached), 80 output tokens." })
     expect(diff).toHaveBeenCalledWith({ cwd: gitCwd, mode: 'range', range: 'HEAD~1..HEAD', signal: expect.any(AbortSignal) })
     // The diff runs under the review's own stop: a cancel or the session's end stops git too.
     expect((diff.mock.calls[0][0] as { signal: AbortSignal }).signal).toBe((h.run.mock.calls[0][0] as { signal: AbortSignal }).signal)
@@ -787,7 +793,7 @@ describe('claude_review tool (WP2 5b)', () => {
     expect((await runClaudeReview({ cccSessionId: 'sess-allowed', mode: 'working' }, sets, gitCwd, claudeDeps())).text).toBe('Claude review is unavailable: Claude is turned off in Settings.')
     expect((await runClaudeReview({ cccSessionId: 'sess-nope', mode: 'working' }, sets, gitCwd, claudeDeps())).text).toContain('local Codex sessions')
     h.run.mockResolvedValueOnce({ ok: false, code: 'failed', message: 'Claude Code exited with code 1.' })
-    expect((await runClaudeReview({ cccSessionId: 'sess-allowed', mode: 'working' }, sets, gitCwd, claudeDeps())).text).toBe('Claude review failed: Claude Code exited with code 1.\n\n---\nClaude review -- 1 message used. Usage data unavailable.')
+    expect((await runClaudeReview({ cccSessionId: 'sess-allowed', mode: 'working' }, sets, gitCwd, claudeDeps())).text).toBe("Claude review failed: Claude Code exited with code 1.\n\n---\nClaude review on Claude Code's default model for the account (default; not confirmed), effort Claude Code's default (default) -- 1 message used. Usage data unavailable.")
   })
 
   it('the registered tool is claude_review, bound to the transport\'s session, and passes the cancel through', async () => {
@@ -846,5 +852,280 @@ describe('a review request cancelled from another connection (WP2 5b)', () => {
     // Settled: the request is forgotten.
     expect(cancelReviewRequest('sess-allowed', 7)).toBe(false)
     expect(h.release).toHaveBeenCalledTimes(1)
+  })
+})
+
+// nubbymong/aicc_planning#446: the asking agent chooses the model and the
+// effort a review runs on, from allow-lists main reads from the model
+// registry when the review runs; anything else is refused with the list,
+// before anything is read, leased or run. Every result names the model and
+// the effort and where each came from: caller, default or environment.
+describe('nubbymong/aicc_planning#446: the caller chooses the review model and effort, and the result names what ran', () => {
+  const BUNDLED = mergeRegistry(registryJson as unknown as ModelRegistry, null)
+  const INSTALLED = withInstalledCodexModels(BUNDLED, {
+    version: '0.170.0',
+    models: [
+      { id: 'gpt-7-nova', label: 'GPT-7 Nova', efforts: ['low', 'medium', 'high'] },
+      { id: 'gpt-6.2-sol', label: 'GPT-6.2-Sol', efforts: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'] },
+    ],
+  })
+  const all = (registryJson as { models: { id: string; family: string; aliases?: string[]; pickable?: boolean }[] }).models
+  const codexFamily = all.find((m) => m.id === 'codex-family')?.family
+  const FOOT = ' -- 1 message used -- 1200 input tokens (200 cached), 80 output tokens.'
+  // Values a prompt-injected caller might send: a flag, a second flag inside
+  // the value, the characters cmd.exe or a shell reads, a line break, a name
+  // the list does not hold, an empty one, another spelling of a listed one.
+  const HOSTILE = ['-m', '--profile=x', '-c', 'gpt-6.1-sol --yolo', 'gpt 6', 'gpt"6', '"', 'gpt%PATH%', '%COMSPEC%', 'a&b', '&calc', 'gpt^x', 'gpt|x', 'gpt\n-c', '\n', 'gpt-6.1-sol\n', 'unknown-model', '', 'GPT-6.1-SOL', ' gpt-6.1-sol']
+  const HOSTILE_CLAUDE = ['-p', '--model', '--settings=x', '-opus', 'opus --dangerously-skip-permissions', 'opus"', 'opus%PATH%', 'opus&calc', 'opus^x', 'opus\n--effort', 'opus ', 'unknown-model', '', 'OPUS', 'opus[2m]', 'opus-4-8', 'Opus 4.8']
+  const HOSTILE_EFFORT = ['none', 'minimal', 'turbo', '-c', '--effort', 'high ', 'high\n', 'high&x', '%high%', '"high"', 'HIGH', '']
+  let gitCwd: string
+  let h: Harness
+  const sets = new Set<string>(['sess-allowed'])
+  const deps = (registry: ModelRegistry = BUNDLED, over: Partial<ReviewToolDeps> = {}): ReviewToolDeps => ({ ...h.deps, registry: () => registry, platform: 'linux', ...over })
+  const runInput = (i = 0) => h.run.mock.calls[i][0] as Record<string, unknown>
+  const nothingRan = () => {
+    expect(h.diff).not.toHaveBeenCalled()
+    expect(h.files).not.toHaveBeenCalled()
+    expect(h.prepareLaunch).not.toHaveBeenCalled()
+    expect(h.run).not.toHaveBeenCalled()
+  }
+  const withEnv = (env: Record<string, string>) => h.prepareLaunch.mockResolvedValue({
+    ok: true, lease: { release: h.release }, binding: { providerAccountId: 'acct-1', authRealmId: 'realm-1' }, realmOnly: false, reviewer: 'reviewer-default',
+    executable: 'C:/proven/claude.exe', env: { PATH: '/usr/bin', ...env },
+  })
+  beforeEach(() => {
+    testResourcesDir = mkdtempSync(join(tmpdir(), 'ccc-review-choice-'))
+    gitCwd = mkdtempSync(join(tmpdir(), 'ccc-review-choice-git-'))
+    mkdirSync(join(gitCwd, '.git'))
+    recordReview.mockReset()
+    vi.mocked(logInfo).mockClear()
+    h = makeDeps()
+  })
+  afterEach(() => {
+    abortSessionReviews('sess-allowed')
+    rmSync(testResourcesDir, { recursive: true, force: true })
+    rmSync(gitCwd, { recursive: true, force: true })
+  })
+
+  describe('codex_review', () => {
+    it("takes the Codex picker's models: the registry's Codex models while the installed list is unread, each one run as the review's model", async () => {
+      const models = codexReviewModels(BUNDLED)
+      const fromJson = all.filter((m) => m.family === codexFamily && m.pickable !== false).map((m) => m.id)
+      expect(models).toEqual(fromJson)
+      expect(models.length).toBeGreaterThan(5)
+      for (const [i, m] of models.entries()) {
+        const r = await runCodexReview({ cccSessionId: 'sess-allowed', mode: 'working', model: m }, sets, gitCwd, deps())
+        expect(r.isError, m).toBe(false)
+        expect(runInput(i).model, m).toBe(m)
+        expect(runInput(i).effort, m).toBe('medium')
+        expect(r.text, m).toContain(`\n---\nCodex review on ${m} (caller), effort medium (default)${FOOT}`)
+      }
+    })
+
+    it("takes the installed Codex's own list once it is read: a registry model that list does not name is refused", async () => {
+      expect(codexReviewModels(INSTALLED)).toEqual(['gpt-7-nova', 'gpt-6.2-sol'])
+      expect((await runCodexReview({ cccSessionId: 'sess-allowed', mode: 'working', model: 'gpt-7-nova' }, sets, gitCwd, deps(INSTALLED))).isError).toBe(false)
+      expect(runInput().model).toBe('gpt-7-nova')
+      h.run.mockClear(); h.diff.mockClear(); h.prepareLaunch.mockClear()
+      const r = await runCodexReview({ cccSessionId: 'sess-allowed', mode: 'working', model: 'gpt-5.2' }, sets, gitCwd, deps(INSTALLED))
+      expect(r).toEqual({ isError: true, text: 'Codex review refused: model "gpt-5.2" is not one a Codex review runs on here. Choose one of: gpt-7-nova, gpt-6.2-sol; or leave model unset for gpt-7-nova.' })
+      nothingRan()
+    })
+
+    it('refuses any other model with the list, before anything is read, leased or run, in every mode', async () => {
+      const list = codexReviewModels(BUNDLED).join(', ')
+      for (const v of HOSTILE) {
+        for (const args of [{ mode: 'working' }, { mode: 'range', range: 'a..b' }, { mode: 'paths', paths: ['a.ts'] }]) {
+          const r = await runCodexReview({ cccSessionId: 'sess-allowed', ...args, model: v }, sets, gitCwd, deps())
+          expect(r.isError, JSON.stringify(v)).toBe(true)
+          expect(r.text, JSON.stringify(v)).toMatch(/^Codex review refused: model "/)
+          expect(r.text, JSON.stringify(v)).toContain(`Choose one of: ${list}; or leave model unset for the reviewer account's default model.`)
+          // The refused value is quoted: a line break in it is never a line of the reply.
+          expect(r.text, JSON.stringify(v)).not.toContain('\n')
+        }
+      }
+      nothingRan()
+    })
+
+    it("takes Codex's efforts less none, each one the chosen model runs; refuses any other with the list, before anything runs", async () => {
+      const efforts = codexReviewEfforts(BUNDLED, 'gpt-6.1-sol')
+      expect(efforts).toEqual(['low', 'medium', 'high', 'xhigh', 'max', 'ultra'])
+      for (const [i, e] of efforts.entries()) {
+        const r = await runCodexReview({ cccSessionId: 'sess-allowed', mode: 'working', model: 'gpt-6.1-sol', effort: e }, sets, gitCwd, deps())
+        expect(r.isError, e).toBe(false)
+        expect(runInput(i).effort, e).toBe(e)
+        expect(r.text, e).toContain(`Codex review on gpt-6.1-sol (caller), effort ${e} (caller)${FOOT}`)
+      }
+      h.run.mockClear(); h.diff.mockClear(); h.prepareLaunch.mockClear()
+      for (const v of HOSTILE_EFFORT) {
+        const r = await runCodexReview({ cccSessionId: 'sess-allowed', mode: 'working', model: 'gpt-6.1-sol', effort: v }, sets, gitCwd, deps())
+        expect(r.text, JSON.stringify(v)).toMatch(/^Codex review refused: effort "/)
+        expect(r.text, JSON.stringify(v)).toContain('is not one gpt-6.1-sol runs. Choose one of: low, medium, high, xhigh, max, ultra; or leave effort unset for medium.')
+        expect(r.text).not.toContain('\n')
+      }
+      nothingRan()
+    })
+
+    it('refuses an effort the chosen model cannot run, naming the levels it can', async () => {
+      expect(await runCodexReview({ cccSessionId: 'sess-allowed', mode: 'working', model: 'gpt-6-luna', effort: 'ultra' }, sets, gitCwd, deps())).toEqual({
+        isError: true, text: 'Codex review refused: effort "ultra" is not one gpt-6-luna runs. Choose one of: low, medium, high, xhigh, max; or leave effort unset for medium.',
+      })
+      expect(await runCodexReview({ cccSessionId: 'sess-allowed', mode: 'working', model: 'gpt-7-nova', effort: 'xhigh' }, sets, gitCwd, deps(INSTALLED))).toEqual({
+        isError: true, text: 'Codex review refused: effort "xhigh" is not one gpt-7-nova runs. Choose one of: low, medium, high; or leave effort unset for medium.',
+      })
+      // No model chosen: the default the installed list names decides.
+      expect((await runCodexReview({ cccSessionId: 'sess-allowed', mode: 'working', effort: 'ultra' }, sets, gitCwd, deps(INSTALLED))).text).toContain('is not one gpt-7-nova runs.')
+      nothingRan()
+    })
+
+    it('names a readable default model explicitly (-m), and says so; with no list read it passes none and says the model was not named', async () => {
+      expect(codexReviewDefaultModel(INSTALLED)).toBe('gpt-7-nova')
+      const r = await runCodexReview({ cccSessionId: 'sess-allowed', mode: 'working' }, sets, gitCwd, deps(INSTALLED))
+      expect(runInput(0)).toMatchObject({ model: 'gpt-7-nova', effort: DEFAULT_CODEX_REVIEW_EFFORT })
+      expect(r.text).toBe(`1. A finding.\n\n\n---\nCodex review on gpt-7-nova (default), effort medium (default)${FOOT}`)
+      expect(codexReviewDefaultModel(BUNDLED)).toBeNull()
+      const bare = await runCodexReview({ cccSessionId: 'sess-allowed', mode: 'working' }, sets, gitCwd, deps())
+      expect('model' in runInput(1)).toBe(false)
+      expect(runInput(1).effort).toBe('medium')
+      expect(bare.text).toBe(`1. A finding.\n\n\n---\nCodex review on the reviewer account's default model, not named (default), effort medium (default)${FOOT}`)
+    })
+
+    it('the log line, a failure and a timeout name the model and the effort and their sources too', async () => {
+      await runCodexReview({ cccSessionId: 'sess-allowed', mode: 'working', model: 'gpt-6.1-sol', effort: 'high' }, sets, gitCwd, deps())
+      expect(vi.mocked(logInfo).mock.calls.map((c) => String(c[0])).find((l) => l.startsWith('[codex-review]'))).toMatch(/reviewer account acct-1 \(reviewer-default\), on gpt-6\.1-sol \(caller\), effort high \(caller\)$/)
+      h.run.mockResolvedValueOnce({ ok: false, code: 'failed', message: 'Codex exited with code 1.' })
+      expect((await runCodexReview({ cccSessionId: 'sess-allowed', mode: 'working', model: 'gpt-6.1-sol', effort: 'high' }, sets, gitCwd, deps())).text)
+        .toBe('Codex review failed: Codex exited with code 1.\n\n---\nCodex review on gpt-6.1-sol (caller), effort high (caller) -- 1 message used. Usage data unavailable.')
+      h.run.mockResolvedValueOnce({ ok: false, code: 'timed-out', message: 'The review timed out.' })
+      expect((await runCodexReview({ cccSessionId: 'sess-allowed', mode: 'working', effort: 'max' }, sets, gitCwd, deps())).text)
+        .toContain("timed out after 5 minutes (on the reviewer account's default model, not named (default), effort max (caller)).")
+    })
+  })
+
+  describe('claude_review', () => {
+    const claudeDeps = (registry: ModelRegistry = BUNDLED, over: Partial<ReviewToolDeps> = {}) => deps(registry, { diff: h.diff as never, ...over })
+
+    it("takes each Claude model id and alias of the registry, each one run as the review's model; never a pattern or a label", async () => {
+      const models = claudeReviewModels(BUNDLED)
+      const fromJson = all.filter((m) => m.family !== codexFamily).flatMap((m) => [m.id, ...(m.aliases ?? [])])
+      expect([...models].sort()).toEqual([...new Set(fromJson)].sort())
+      for (const [i, m] of models.entries()) {
+        const r = await runClaudeReview({ cccSessionId: 'sess-allowed', mode: 'working', model: m }, sets, gitCwd, claudeDeps())
+        expect(r.isError, m).toBe(false)
+        expect(runInput(i).model, m).toBe(m)
+        expect('effort' in runInput(i), m).toBe(false)
+      }
+    })
+
+    it('refuses any other model with the list, before anything is read, leased or run', async () => {
+      const list = claudeReviewModels(BUNDLED).join(', ')
+      for (const v of HOSTILE_CLAUDE) {
+        const r = await runClaudeReview({ cccSessionId: 'sess-allowed', mode: 'working', model: v }, sets, gitCwd, claudeDeps())
+        expect(r.isError, JSON.stringify(v)).toBe(true)
+        expect(r.text, JSON.stringify(v)).toMatch(/^Claude review refused: model "/)
+        expect(r.text, JSON.stringify(v)).toContain(`Choose one of: ${list}; or leave model unset for Claude Code's default for the reviewer account.`)
+        expect(r.text).not.toContain('\n')
+      }
+      nothingRan()
+    })
+
+    it("takes the registry's Claude levels the chosen model supports; refuses any other with the levels it supports", async () => {
+      expect(claudeReviewEfforts(BUNDLED, 'claude-opus-4-8')).toEqual(['low', 'medium', 'high', 'xhigh', 'max', 'ultracode'])
+      for (const [i, e] of claudeReviewEfforts(BUNDLED, 'claude-opus-4-8').entries()) {
+        const r = await runClaudeReview({ cccSessionId: 'sess-allowed', mode: 'working', model: 'claude-opus-4-8', effort: e }, sets, gitCwd, claudeDeps())
+        expect(r.isError, e).toBe(false)
+        expect(runInput(i)).toMatchObject({ model: 'claude-opus-4-8', effort: e })
+      }
+      h.run.mockClear(); h.diff.mockClear(); h.prepareLaunch.mockClear()
+      expect(await runClaudeReview({ cccSessionId: 'sess-allowed', mode: 'working', model: 'claude-opus-4-5', effort: 'max' }, sets, gitCwd, claudeDeps())).toEqual({
+        isError: true, text: 'Claude review refused: effort "max" is not one claude-opus-4-5 supports. Choose one of: low, medium, high; or leave effort unset for Claude Code\'s default.',
+      })
+      for (const v of HOSTILE_EFFORT) {
+        const r = await runClaudeReview({ cccSessionId: 'sess-allowed', mode: 'working', effort: v }, sets, gitCwd, claudeDeps())
+        expect(r.text, JSON.stringify(v)).toMatch(/^Claude review refused: effort "/)
+        expect(r.text, JSON.stringify(v)).toContain("is not one Claude Code's default model supports. Choose one of: low, medium, high, xhigh, max, ultracode;")
+        expect(r.text).not.toContain('\n')
+      }
+      nothingRan()
+    })
+
+    it('the footer in each source: caller, default and environment; the model as Claude Code reports it, else not confirmed', async () => {
+      // caller, nothing reported
+      const caller = await runClaudeReview({ cccSessionId: 'sess-allowed', mode: 'working', model: 'opus', effort: 'high' }, sets, gitCwd, claudeDeps())
+      expect(caller.text).toBe(`1. A finding.\n\n\n---\nClaude review on opus (caller; requested, not confirmed), effort high (caller)${FOOT}`)
+      // caller, reported by Claude Code's result
+      h.run.mockResolvedValueOnce({ ok: true, text: '1. A finding.\n', usage: { inputTokens: 1200, cachedInputTokens: 200, outputTokens: 80 }, reportedModels: ['claude-opus-5-5'] })
+      expect((await runClaudeReview({ cccSessionId: 'sess-allowed', mode: 'working', model: 'opus' }, sets, gitCwd, claudeDeps())).text)
+        .toBe(`1. A finding.\n\n\n---\nClaude review on opus (caller; Claude Code reports claude-opus-5-5), effort Claude Code's default (default)${FOOT}`)
+      // default, reported
+      h.run.mockResolvedValueOnce({ ok: true, text: '1. A finding.\n', usage: { inputTokens: 1200, cachedInputTokens: 200, outputTokens: 80 }, reportedModels: ['claude-opus-5-5', 'claude-haiku-5-5'] })
+      expect((await runClaudeReview({ cccSessionId: 'sess-allowed', mode: 'working' }, sets, gitCwd, claudeDeps())).text)
+        .toBe(`1. A finding.\n\n\n---\nClaude review on Claude Code's default model for the account (default; Claude Code reports claude-opus-5-5, claude-haiku-5-5), effort Claude Code's default (default)${FOOT}`)
+      // environment: kept (owner decision Q1), not put on the argv, and said
+      withEnv({ ANTHROPIC_MODEL: 'claude-sonnet-5-5', CLAUDE_CODE_EFFORT_LEVEL: 'max' })
+      const env = await runClaudeReview({ cccSessionId: 'sess-allowed', mode: 'working' }, sets, gitCwd, claudeDeps())
+      expect(env.text).toBe(`1. A finding.\n\n\n---\nClaude review on claude-sonnet-5-5 (environment; requested, not confirmed), effort max (environment)${FOOT}`)
+      const last = runInput(h.run.mock.calls.length - 1)
+      expect('model' in last).toBe(false)
+      expect('effort' in last).toBe(false)
+      expect(last.env).toMatchObject({ ANTHROPIC_MODEL: 'claude-sonnet-5-5', CLAUDE_CODE_EFFORT_LEVEL: 'max' })
+    })
+
+    it('a chosen model comes before ANTHROPIC_MODEL; a chosen effort is refused while CLAUDE_CODE_EFFORT_LEVEL is set (it would not run), and the lease goes', async () => {
+      withEnv({ ANTHROPIC_MODEL: 'claude-sonnet-5-5' })
+      const r = await runClaudeReview({ cccSessionId: 'sess-allowed', mode: 'working', model: 'opus', effort: 'high' }, sets, gitCwd, claudeDeps())
+      expect(runInput(0)).toMatchObject({ model: 'opus', effort: 'high' })
+      expect(r.text).toContain('Claude review on opus (caller; requested, not confirmed), effort high (caller)')
+      withEnv({ CLAUDE_CODE_EFFORT_LEVEL: 'low' })
+      expect(await runClaudeReview({ cccSessionId: 'sess-allowed', mode: 'working', effort: 'high' }, sets, gitCwd, claudeDeps())).toEqual({
+        isError: true, text: "Claude review refused: effort cannot be chosen here, because this app's environment sets CLAUDE_CODE_EFFORT_LEVEL (low), which Claude Code puts before --effort. Leave effort unset, and the review runs at the level it sets.",
+      })
+      // An effort the model the environment names does not support.
+      withEnv({ ANTHROPIC_MODEL: 'claude-opus-4-5' })
+      expect(await runClaudeReview({ cccSessionId: 'sess-allowed', mode: 'working', effort: 'max' }, sets, gitCwd, claudeDeps())).toEqual({
+        isError: true, text: 'Claude review refused: effort "max" is not one claude-opus-4-5 supports (this app\'s environment sets ANTHROPIC_MODEL). Choose one of: low, medium, high; or leave effort unset for Claude Code\'s default.',
+      })
+      expect(h.run).toHaveBeenCalledTimes(1)
+      expect(h.release).toHaveBeenCalledTimes(3)
+    })
+
+    it('reads the environment as the CLI does: any spelling on Windows, the exact name elsewhere; a value it cannot show is named by its variable', async () => {
+      withEnv({ anthropic_model: 'claude-sonnet-5-5' })
+      expect((await runClaudeReview({ cccSessionId: 'sess-allowed', mode: 'working' }, sets, gitCwd, claudeDeps(BUNDLED, { platform: 'win32' }))).text).toContain('Claude review on claude-sonnet-5-5 (environment;')
+      expect((await runClaudeReview({ cccSessionId: 'sess-allowed', mode: 'working' }, sets, gitCwd, claudeDeps(BUNDLED, { platform: 'linux' }))).text).toContain("Claude review on Claude Code's default model for the account (default; not confirmed)")
+      withEnv({ ANTHROPIC_MODEL: 'x y\nz', CLAUDE_CODE_EFFORT_LEVEL: '' })
+      expect((await runClaudeReview({ cccSessionId: 'sess-allowed', mode: 'working' }, sets, gitCwd, claudeDeps())).text)
+        .toContain("Claude review on the model ANTHROPIC_MODEL names (environment; requested, not confirmed), effort Claude Code's default (default)")
+    })
+  })
+
+  it("main's Codex efforts and default are the package's: CODEX_EFFORTS less none, as a cloud agent passes them, and medium", () => {
+    expect(DEFAULT_CODEX_REVIEW_EFFORT).toBe(CODEX_REVIEW_DEFAULT_EFFORT)
+    expect([...CODEX_REVIEW_EFFORTS]).toEqual(CODEX_EFFORTS.filter((e) => e !== 'none'))
+    expect([...CODEX_REVIEW_EFFORTS]).toEqual([...CODEX_AGENT_EFFORTS])
+    // What main offers is never more than what the package builds an argv with.
+    for (const m of [null, ...codexReviewModels(BUNDLED)]) for (const e of codexReviewEfforts(BUNDLED, m)) expect(CODEX_REVIEW_EFFORTS).toContain(e)
+  })
+
+  it('each tool lists the values it takes, from the registry as it stands when the tool is offered', () => {
+    const described = (register: typeof registerCodexReviewTool, registry: ModelRegistry) => {
+      const seen: string[] = []
+      const tools: string[] = []
+      const server = { tool: (_n: string, desc: string) => { tools.push(desc) } }
+      const chain: any = new Proxy(function () { return chain }, { get: (_t, k) => (k === 'describe' ? (d: string) => { seen.push(d); return chain } : chain), apply: () => chain })
+      register(server, chain, () => sets, () => gitCwd, () => 'sess-allowed', deps(registry))
+      return { model: seen.find((d) => d.startsWith('Optional: the ') && d.includes(' model the review runs on'))!, effort: seen.find((d) => /^Optional: the (reasoning effort|effort level)/.test(d))!, tool: tools[0] }
+    }
+    const codex = described(registerCodexReviewTool, BUNDLED)
+    expect(codex.model).toBe(`Optional: the Codex model the review runs on, one of: ${codexReviewModels(BUNDLED).join(', ')}. Unset: the reviewer account's default Codex model. Any other value is refused with the list.`)
+    expect(codex.effort).toBe('Optional: the reasoning effort, one of: low, medium, high, xhigh, max, ultra, where the chosen model runs it. Unset: medium. Any other value is refused with the list.')
+    expect(codex.tool).toContain('Optional model and effort choose the Codex model and the reasoning effort it runs on: each lists the values it takes, and any other value is refused with that list')
+    expect(codex.tool).toContain('a footer naming the model and the effort it ran on and where each came from (caller or default)')
+    expect(described(registerCodexReviewTool, INSTALLED).model).toBe("Optional: the Codex model the review runs on, one of: gpt-7-nova, gpt-6.2-sol. Unset: gpt-7-nova, the first model of the installed Codex's own list. Any other value is refused with the list.")
+    const claude = described(registerClaudeReviewTool, BUNDLED)
+    expect(claude.model).toContain(`one of: ${claudeReviewModels(BUNDLED).join(', ')}.`)
+    expect(claude.model).toContain('opus[1m]')
+    expect(claude.effort).toContain('one of: low, medium, high, xhigh, max, ultracode, where the chosen model supports it.')
+    expect(claude.tool).toContain('where each came from (caller, default or environment; the model as Claude Code reports it, or marked not confirmed)')
   })
 })
