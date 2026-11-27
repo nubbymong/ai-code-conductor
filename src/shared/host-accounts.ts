@@ -19,6 +19,82 @@
  * lands in these shapes. Nothing here names a path on this computer, a
  * process id or a credential.
  */
+import { resolveAccountName } from './account-chip-color'
+
+/** Round 6 (R6-1): an account of this computer with no name, alias or
+ *  email, where its name falls in the middle of a sentence. Final review
+ *  round 2 (F2-1): here, so main's answers (Sign out, Remove, Adopt, a tab's
+ *  note) name it as the renderer's do; a sentence it starts takes a capital
+ *  (sentenceStart). */
+export const NAMELESS_ACCOUNT = 'an account with no name'
+
+/** Final review round 2 (F2-1): the one naming rule for an account of this
+ *  computer, in the renderer and in main alike (hostAccountNamer here; main's
+ *  remote-helper/host-accounts.ts accountNamer wraps it): its profile's name,
+ *  else its alias (the app's settings, by its email), else its email; ''
+ *  when it has none of them (blank ones count as none). */
+export function hostProfileName(p: { accountEmail?: string; name?: string }, aliases: Readonly<Record<string, string>> | undefined): string {
+  return resolveAccountName(p.accountEmail ?? '', p.name, aliases).trim()
+}
+
+/** Final review round 3 (F3-1): a profile id this computer does not hold (an
+ *  account removed here, whose folder may still be on a machine), as every
+ *  sentence names it, in main and the renderer alike; never by its profile
+ *  id. Several are counted (notHeldName). */
+export const NOT_HELD_ACCOUNT = 'an account no longer on this computer'
+
+/** Final review round 3 (F3-1): `n` accounts this computer does not hold, as
+ *  one name: NOT_HELD_ACCOUNT, or "2 accounts no longer on this computer". */
+export function notHeldName(n: number): string {
+  return n === 1 ? NOT_HELD_ACCOUNT : `${n} accounts no longer on this computer`
+}
+
+/** Final review, round 1 (F-3): a name that starts a sentence. The app's own
+ *  words for an account it cannot name (NAMELESS_ACCOUNT, NOT_HELD_ACCOUNT)
+ *  take a capital there; a user's own name or email is never changed. */
+export function sentenceStart(name: string): string {
+  return name.startsWith('an account ') ? `A${name.slice(1)}` : name
+}
+
+/** Final review round 3 (F3-1): the folder of an account named `name`, where
+ *  it starts a sentence: "Work's folder"; the app's own words for an account
+ *  take no possessive ("The folder of an account with no name"). */
+export function folderOfStart(name: string): string {
+  return name.startsWith('an account ') ? `The folder of ${name}` : `${name}'s folder`
+}
+
+/** Names joined as a sentence lists them: "A", "A and B", "A, B and C" (or,
+ *  with `word` 'or', "A, B or C"). Final review round 3 (F3-1): here, so
+ *  main's answers and the renderer's lines join every list by this one rule. */
+export function joinNames(names: readonly string[], word: 'and' | 'or' = 'and'): string {
+  if (names.length <= 1) return names[0] ?? ''
+  return `${names.slice(0, -1).join(', ')} ${word} ${names[names.length - 1]}`
+}
+
+/** A profile of this computer, as names need it. */
+export type HostNamedProfile = { id: string; accountEmail?: string; name?: string }
+
+/** Final review round 3 (F3-1): how a sentence names an account by its
+ *  profile id, in main and the renderer alike. One of `profiles` by
+ *  hostProfileName, else `nameless` (NAMELESS_ACCOUNT unless a label asks
+ *  for its own word); an id that is not one of them, NOT_HELD_ACCOUNT. */
+export function hostAccountNamer(profiles: readonly HostNamedProfile[], aliases: Readonly<Record<string, string>> | undefined, nameless: string = NAMELESS_ACCOUNT): (profileId: string) => string {
+  return (id) => {
+    const p = profiles.find((x) => x.id === id)
+    if (!p) return NOT_HELD_ACCOUNT
+    return hostProfileName(p, aliases) || nameless
+  }
+}
+
+/** Final review round 3 (F3-1): accounts by profile id, as one list in a
+ *  sentence: each one this computer holds (`held`) by `nameOf`, in order,
+ *  then those it does not hold counted as one name (notHeldName), joined by
+ *  joinNames; `count`, how many accounts that is (for "stays" or "stay"). */
+export function namedAccounts(ids: readonly string[], nameOf: (profileId: string) => string, held: (profileId: string) => boolean): { text: string; count: number } {
+  const names = ids.filter(held).map(nameOf)
+  const notHeld = ids.length - names.length
+  return { text: joinNames(notHeld > 0 ? [...names, notHeldName(notHeld)] : names), count: ids.length }
+}
 
 /**
  * One account's sign-in on one machine, as the machine's last read found it.
@@ -143,8 +219,18 @@ export interface HostAdoptRequest {
  *  and a plain sentence. */
 export interface HostAdoptResult {
   ok: boolean
+  /** Main's sentence. Shown as it is only when Adopt ran on nothing (a
+   *  refusal); otherwise the dialog writes its own from `adopted` and
+   *  `notAdopted` (final review F-4). Final review round 2 (F2-2): then main's
+   *  sentence goes to the app log only when some id was not adopted. */
   message: string
   adopted: string[]
+  /** Final review (F-4): each id Adopt ran on and did not adopt, with main's
+   *  reason. The dialog names the accounts by this computer's naming rule
+   *  (hostProfileName), with the aliases it holds now; main names them by
+   *  the same rule from the saved settings (round 2, F2-1). Absent when
+   *  every id was adopted. */
+  notAdopted?: Array<{ profileId: string; why: string }>
 }
 
 /** Every added machine's accounts (MACHINES_REMOTE_ACCOUNTS: the last reads,

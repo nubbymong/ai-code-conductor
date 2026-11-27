@@ -10,10 +10,9 @@
 // Every machine signs in on itself (Q7, parked to nubbymong/aicc_planning#443):
 // Lend from this computer is not built yet, and only Claude Code accounts
 // sign in on machines in this release, so nothing here names anything else.
-import type { HostAccountSignIn, HostMachineAccounts, HostSignInState } from '../../shared/host-accounts'
-import { HOST_LAUNCHABLE_STATES } from '../../shared/host-accounts'
+import type { HostAccountSignIn, HostAdoptResult, HostMachineAccounts, HostSignInState } from '../../shared/host-accounts'
+import { HOST_LAUNCHABLE_STATES, NAMELESS_ACCOUNT, NOT_HELD_ACCOUNT, folderOfStart, hostAccountNamer, joinNames, notHeldName, sentenceStart } from '../../shared/host-accounts'
 import type { AccountProfile } from '../../shared/account-types'
-import { resolveAccountName } from '../../shared/account-chip-color'
 import type { SshConfig } from '../../shared/types'
 import type { TerminalConfig } from '../stores/configStore'
 
@@ -240,8 +239,11 @@ export function signInConfigFor(machine: Pick<HostMachineRef, 'target' | 'label'
  *  machine was read at all since the app started. */
 export interface RemoveListing {
   /** The accounts signed in there in a folder of their own: each keyed by
-   *  its account (two accounts may share a name), with its name. */
-  signedIn: Array<{ key: string; name: string }>
+   *  its account (two accounts may share a name), with its name. Final
+   *  review round 3 (F3-1): one item names the folders of accounts this
+   *  computer no longer holds, counted (`count`, how many accounts it is;
+   *  absent: one). */
+  signedIn: Array<{ key: string; name: string; count?: number }>
   /** The account the machine's own sign-in is, or null. */
   own: string | null
   /** The machine was read since the app started. */
@@ -252,13 +254,30 @@ export interface RemoveListing {
    *  this computer's own from an earlier install (they stay; Adopt first). */
   earlier: string[]
   /** Round 2 (R2-1): folders an earlier build made there for accounts this
-   *  computer does not hold, by profile id as main names them (they stay). */
+   *  computer does not hold (they stay). Final review round 4 (F4-2): kept
+   *  only to count them (oldMarkerStayText(n)), as main counts them; no
+   *  surface names them by profile id. */
   oldMarker: string[]
 }
 
-/** How many account folders on a machine belong to accounts this computer no longer holds, as words. */
-function othersName(n: number): string {
-  return n === 1 ? 'an account no longer on this computer' : `${n} accounts no longer on this computer`
+/** Final review, round 1 (F-3): a name that starts a sentence (the words for
+ *  accounts this computer no longer holds too). Round 2 (F2-1): in
+ *  shared/host-accounts.ts, which main's answers use as well; these lines and
+ *  their tests take it from here. Round 3 (F3-1): so are the words for an
+ *  account this computer does not hold (NOT_HELD_ACCOUNT, notHeldName), a
+ *  folder's possessive (folderOfStart) and how lists join (joinNames). */
+export { sentenceStart, NOT_HELD_ACCOUNT, notHeldName, folderOfStart, joinNames }
+
+/** Final review round 3 (F3-1): how many accounts Remove's listing names
+ *  (its counted item for accounts no longer on this computer counts each). */
+export function listingCount(listing: Pick<RemoveListing, 'signedIn'>): number {
+  return listing.signedIn.reduce((n, x) => n + (x.count ?? 1), 0)
+}
+
+/** Remove's sentence for the account the machine's own sign-in is, which
+ *  Remove leaves as it is. */
+export function ownStaysText(own: string, machine: string): string {
+  return `${sentenceStart(own)} is signed in there by ${machine}'s own sign-in, which Remove leaves as it is.`
 }
 
 /** Remove's sentence for the folders another computer's app uses there, which stay. */
@@ -273,14 +292,16 @@ export function elsewhereStayText(n: number): string {
  *  step that works before Remove: Adopt on this card. */
 export function earlierInstallStayText(names: readonly string[]): string {
   const one = names.length === 1
-  return `${names.join(', ')}: ${one ? 'its folder' : 'their folders'} there ${one ? 'carries' : 'carry'} another install's mark, and may be this computer's own from an earlier install of the app; Remove leaves ${one ? 'it as it is' : 'them as they are'}. To sign ${one ? 'it' : 'them'} out from here, choose Adopt on this card first.`
+  return `${sentenceStart(joinNames(names))}: ${one ? 'its folder' : 'their folders'} there ${one ? 'carries' : 'carry'} another install's mark, and may be this computer's own from an earlier install of the app; Remove leaves ${one ? 'it as it is' : 'them as they are'}. To sign ${one ? 'it' : 'them'} out from here, choose Adopt on this card first.`
 }
 
-/** Round 2 (R2-1): Remove's sentence for the folders an earlier build made
- *  there for accounts this computer does not hold, named as main names them. */
-export function oldMarkerStayText(ids: readonly string[]): string {
-  const one = ids.length === 1
-  return `${ids.join(', ')} (${one ? 'a folder' : 'folders'} an earlier build of the app made there, for ${one ? 'an account' : 'accounts'} this computer does not hold) ${one ? 'stays' : 'stay'} signed in there as ${one ? 'it is' : 'they are'}.`
+/** Round 2 (R2-1): Remove's sentence for the `n` folders an earlier build
+ *  made there for accounts this computer does not hold, named as main names
+ *  them. Final review round 3 (F3-1): counted as every surface names such
+ *  accounts (notHeldName), never by their profile ids. */
+export function oldMarkerStayText(n: number): string {
+  const one = n === 1
+  return `${one ? 'The folder' : 'The folders'} an earlier build of the app made there for ${notHeldName(n)} ${one ? 'stays' : 'stay'} signed in there as ${one ? 'it is' : 'they are'}.`
 }
 
 /** Round 2 (R2-1): the confirm before Adopt, naming the accounts and what
@@ -308,22 +329,22 @@ export function adoptableIds(acc: Pick<HostMachineAccounts, 'elsewhere'> | undef
 export type HostNamedProfile = Pick<AccountProfile, 'id' | 'accountEmail' | 'name'>
 
 /** Round 6 (R6-1): an account with no name, alias or email, where its name
- *  falls in the middle of a sentence (Adopt's hover text, confirm and next
- *  step). 'That account' stays only where the name starts the sentence. */
-export const NAMELESS_ACCOUNT = 'an account with no name'
+ *  falls in the middle of a sentence. Final review (F-3): a Machines card's
+ *  sentences name it so too, with a capital where it starts one
+ *  (sentenceStart); its row reads 'Account'. Round 2 (F2-1): in
+ *  shared/host-accounts.ts, so main's answers that the card shows as its
+ *  notice (Sign out, Remove) name it so as well. Round 3 (F3-1): and the
+ *  notice and the sign-in tab's name, which said 'That account'. */
+export { NAMELESS_ACCOUNT }
 
 /** Round 4 (R4-5): an account of this computer by name, as Adopt's confirm
  *  and the notice name it: its profile's name, else its alias, else its
- *  email; `fallback` when it has none of them or is not one of `profiles`.
- *  Round 5 (R5-2): the one copy of this rule; the sign-in tab's name
- *  (hostSignIn.ts hostAccountName) calls it over the stores. */
-export function hostAccountNamer(profiles: readonly HostNamedProfile[], aliases: Record<string, string> | undefined, fallback = 'That account'): (profileId: string) => string {
-  return (id) => {
-    const p = profiles.find((x) => x.id === id)
-    if (!p) return fallback
-    return resolveAccountName(p.accountEmail, p.name, aliases) || p.accountEmail || p.name || fallback
-  }
-}
+ *  email; NAMELESS_ACCOUNT (or a row's own word) when it has none of them,
+ *  and NOT_HELD_ACCOUNT when it is not one of `profiles`. Round 5 (R5-2):
+ *  the one copy of this rule; the sign-in tab's name (hostSignIn.ts
+ *  hostAccountName) calls it over the stores. Final review round 3 (F3-1):
+ *  in shared/host-accounts.ts, and main names accounts by it too. */
+export { hostAccountNamer }
 
 /** Round 4 (R4-5, R4-7), round 5 (R5-3): the Adopt button's hover text, on
  *  an account card and on a machine's Accounts here row alike: every folder
@@ -356,7 +377,23 @@ export function adoptNextText(adopted: readonly string[], nameOf: (profileId: st
   }
   const names = adopted.map(nameOf)
   if (names.length === 1) return `Restart a tab on ${names[0]} to start it there.`
-  return `Restart a tab on one of those accounts, ${names.slice(0, -1).join(', ')} or ${names[names.length - 1]}, to start it there.`
+  return `Restart a tab on one of those accounts, ${joinNames(names, 'or')}, to start it there.`
+}
+
+/**
+ * Final review (F-4): what Adopt did, as its dialog says it. The accounts
+ * adopted and those not adopted (with main's reason) are named by `nameOf`,
+ * this computer's naming rule, as Adopt's confirm and next step name them,
+ * with the aliases the renderer holds now (main reads them from the saved
+ * settings). When Adopt ran on nothing, main's own sentence (a refusal).
+ */
+export function adoptResultText(r: Pick<HostAdoptResult, 'ok' | 'message' | 'adopted' | 'notAdopted'>, nameOf: (profileId: string) => string): string {
+  const not = r.notAdopted ?? []
+  if (r.adopted.length === 0 && not.length === 0) return r.message || (r.ok ? 'Adopted.' : 'Nothing was adopted.')
+  const one = r.adopted.length === 1
+  const done = r.adopted.length > 0 ? `Adopted ${joinNames(r.adopted.map(nameOf))}: ${one ? 'its folder' : 'their folders'} there ${one ? 'is' : 'are'} this computer's now.` : ''
+  const failed = not.length > 0 ? `Not adopted: ${not.map((x) => `${nameOf(x.profileId)}: ${x.why}`).join('; ')}.` : ''
+  return [done, failed].filter(Boolean).join(' ')
 }
 
 /** Remove's listing for machine `acc` (undefined: never read). `nameOf`
@@ -365,10 +402,10 @@ export function removeListing(acc: HostMachineAccounts | undefined, nameOf: (pro
   if (!acc || acc.readAt === null) return { signedIn: [], own: null, read: false, elsewhere: 0, earlier: [], oldMarker: [] }
   // A read that did not answer keeps each account's folder as the last one
   // that did found it (machineAccounts), so a folder there is listed.
-  const signedIn = acc.accounts
+  const signedIn: RemoveListing['signedIn'] = acc.accounts
     .filter((a) => a.folder && (acc.ok ? a.state === 'signed-in-here' || a.state === 'someone-else' : true))
     .map((a) => ({ key: a.profileId, name: nameOf(a.profileId) }))
-  if (acc.others.length > 0) signedIn.push({ key: 'others', name: othersName(acc.others.length) })
+  if (acc.others.length > 0) signedIn.push({ key: 'others', name: notHeldName(acc.others.length), count: acc.others.length })
   const own = acc.ok ? acc.accounts.find((a) => a.state === 'machine-own') : undefined
   const elsewhere = acc.elsewhere ?? []
   const earlier = acc.mayBeEarlierInstall === true ? elsewhere.map(nameOf) : []
@@ -378,12 +415,6 @@ export function removeListing(acc: HostMachineAccounts | undefined, nameOf: (pro
     earlier,
     oldMarker: [...(acc.oldMarker ?? [])],
   }
-}
-
-/** Names joined as a sentence lists them: "A", "A and B", "A, B and C". */
-export function joinNames(names: readonly string[]): string {
-  if (names.length <= 1) return names[0] ?? ''
-  return `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`
 }
 
 /** Where to end a sign-in the app could not sign out (main's END_IT_THERE). */
@@ -399,10 +430,12 @@ export function removeNotAnsweringText(machine: string, listing: RemoveListing):
   const head = `${machine} did not answer, so nothing can be signed out there now.`
   const tail = `The app forgets ${machine}; its folder in ~/.aicc stays.`
   if (!listing.read) return `${head} The app has not read which accounts are signed in on ${machine} since it started; any signed in there stay signed in until you sign them out there, or end those sign-ins ${END_SIGN_IN_THERE}. ${tail}`
-  const n = listing.signedIn.length
+  // Final review round 3 (F3-1): "stays" or "stay" by the accounts named, as
+  // main's accountsLeftText says it.
+  const n = listingCount(listing)
   if (n === 0) return `${head} ${tail}`
   const one = n === 1
-  return `${head} ${joinNames(listing.signedIn.map((x) => x.name))} ${one ? 'stays' : 'stay'} signed in on ${machine} until you sign ${one ? 'it' : 'them'} out there, or end ${one ? 'that sign-in' : 'those sign-ins'} ${END_SIGN_IN_THERE}. ${tail}`
+  return `${head} ${sentenceStart(joinNames(listing.signedIn.map((x) => x.name)))} ${one ? 'stays' : 'stay'} signed in on ${machine} until you sign ${one ? 'it' : 'them'} out there, or end ${one ? 'that sign-in' : 'those sign-ins'} ${END_SIGN_IN_THERE}. ${tail}`
 }
 
 /**
@@ -411,7 +444,7 @@ export function removeNotAnsweringText(machine: string, listing: RemoveListing):
  * that signing it out signs Claude Code out there for everything that uses it.
  */
 export function machineOwnSignOutText(machine: string, who: string): string {
-  return `${who} is signed in on ${machine} by that machine's own sign-in (its ~/.claude), not one the app made. Signing it out signs Claude Code out on ${machine} for everything that uses that sign-in.`
+  return `${sentenceStart(who)} is signed in on ${machine} by that machine's own sign-in (its ~/.claude), not one the app made. Signing it out signs Claude Code out on ${machine} for everything that uses that sign-in.`
 }
 
 /** What This computer's card on the Machines page says of its accounts

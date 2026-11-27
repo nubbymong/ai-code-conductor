@@ -327,6 +327,41 @@ describe('the launch\'s binding (3.1.7): the config\'s account decides', () => {
     expect('refused' in b && b.refused.text).not.toMatch(/not on this computer any more/)
   })
 
+  // Final review, round 2 (F2-1): main names an account of this computer as
+  // the renderer does (shared hostProfileName): its name, else its alias,
+  // else its email, else "an account with no name", with a capital where that
+  // starts a sentence. Round 3 (F3-1): one this computer does not hold is
+  // "an account no longer on this computer", never its profile id; (F3-3) an
+  // email of spaces only counts as none.
+  it('F2-1: an account with no name, and one known by its alias, are named as the renderer names them', async () => {
+    const profiles: HostProfile[] = [...PROFILES, { id: 'profile-blank' }, { id: 'profile-lab', accountEmail: 'Lab@Example.com', name: '  ' }, { id: 'profile-space', accountEmail: '  ' }]
+    const acc = await readMachineAccounts(ctx(), MACHINE, { ...VIA, profiles: async () => profiles })
+    const aliases = { 'lab@example.com': 'Lab' }
+    const text = (id: string, a?: Record<string, string>): string => {
+      const b = accountBinding(acc, id, MACHINE, 'Rocky', profiles, a)
+      return 'refused' in b ? b.refused.text : ''
+    }
+    expect(text('profile-blank')).toBe('An account with no name is not signed in on Rocky, so this tab started nothing. Sign it in on that machine from the Machines page, or start this tab on an account that is signed in there.')
+    expect(text('profile-lab', aliases)).toMatch(/^Lab is not signed in on Rocky, so/)
+    expect(text('profile-lab')).toMatch(/^Lab@Example\.com is not signed in on Rocky, so/)
+    expect(text('profile-space')).toBe('An account with no name is not signed in on Rocky, so this tab started nothing. Sign it in on that machine from the Machines page, or start this tab on an account that is signed in there.')
+    expect(text('profile-gone')).toBe('This tab is on an account no longer on this computer, so it started nothing. Start it on an account that is signed in on Rocky.')
+  })
+
+  it('F2-1: an account with no name starts its sentences with a capital, and the app\'s words for it take no possessive', async () => {
+    const profiles: HostProfile[] = [...PROFILES, { id: 'profile-blank' }]
+    const via: RemoteAccounts = { ...VIA, profiles: async () => profiles }
+    const text = (acc: HostMachineAccounts): string => {
+      const b = accountBinding(acc, 'profile-blank', MACHINE, 'Rocky', profiles)
+      return 'refused' in b ? b.refused.text : ''
+    }
+    // An account this computer knows no email for: its folder signed in reads someone-else.
+    tree.folders.set('profile-blank', signedIn('blank@example.com'))
+    expect(text(await readMachineAccounts(ctx(), MACHINE, via))).toMatch(/^An account with no name on Rocky is signed in as blank@example\.com, another account, so this tab started nothing\. Sign it out on the Machines page, then sign it in again as an account with no name\.$/)
+    tree.owner.set('profile-blank', OTHER_INSTALL)
+    expect(text(await readMachineAccounts(ctx(), MACHINE, via))).toMatch(/^The folder of an account with no name on Rocky carries another install's mark, so this tab started nothing\./)
+  })
+
   it('MINOR-5: the sign-in tab uses the account\'s own sign-in method, as this computer\'s does; anything else is the default', () => {
     expect(claudeSignInArgs('a@example.com', 'sso')).toEqual(['auth', 'login', '--sso', '--email', 'a@example.com'])
     expect(claudeSignInArgs(undefined, 'console')).toEqual(['auth', 'login', '--console'])
@@ -605,11 +640,41 @@ describe('round 2 (R1): folders of an earlier build, and of an earlier install',
     const r = await adoptAccountFolders(ctx(), MACHINE, VIA, ['profile-personal'])
     expect(r).toMatchObject({ ok: true, adopted: ['profile-personal'] })
     expect(r.message).toMatch(/^Adopted Personal: its folder there is this computer's now\./)
+    expect('notAdopted' in r).toBe(false)
     expect(ssh.calls.slice(from).map((c) => [c.script, ...c.values.slice(3, 5)])).toEqual([['account', 'profile-personal', 'adopt'], ['accounts', FOLDER, SHA]])
     expect(tree.ownerOf('profile-personal')).toBe(INSTALL)
     expect([...tree.folders.keys()]).toEqual(['profile-personal', 'profile-side'])
     const after = machineAccounts(MACHINE.did, PROFILES)
     expect(after.accounts.find((a) => a.profileId === 'profile-personal')?.state).toBe('signed-in-here')
     expect(after.elsewhere).toEqual([])
+  })
+
+  // Final review, round 1 (F-4): Adopt's answer as the renderer's dialog
+  // reads it: the ids adopted and, for each id not adopted, main's reason
+  // (the dialog names both by this computer's rule). Main's own sentence
+  // reaches the app log only when some id was not adopted (index.ts
+  // adoptRemoteAccounts); final review round 2 (F2-1): it names accounts by
+  // the renderer's rule too (its name, else its alias, else its email, else
+  // "an account with no name"). The renderer's mocks
+  // (host-signin-notice.test.tsx) copy this shape.
+  it('(c) a partial Adopt answers each id it did not adopt with its reason', async () => {
+    const via: RemoteAccounts = { ...VIA, profiles: async () => [...PROFILES, { id: 'profile-blank' }, { id: 'profile-lab', accountEmail: 'lab@example.com' }] }
+    tree.folders.set('profile-personal', signedIn('personal@example.com'))
+    tree.owner.set('profile-personal', OTHER_INSTALL)
+    tree.folders.set('profile-lab', signedIn('lab@example.com'))
+    tree.owner.set('profile-lab', OTHER_INSTALL)
+    tree.folders.set('profile-blank', signedIn('blank@example.com'))
+    tree.owner.set('profile-blank', OTHER_INSTALL)
+    await readMachineAccounts(ctx(), MACHINE, via)
+    // Its folder goes before Adopt runs there.
+    tree.folders.delete('profile-blank')
+    tree.owner.delete('profile-blank')
+    const r = await adoptAccountFolders(ctx(), MACHINE, via, ['profile-personal', 'profile-lab', 'profile-blank'], { 'lab@example.com': 'Lab' })
+    expect(r).toEqual({
+      ok: false,
+      message: "Adopted Personal and Lab: their folders there are this computer's now. Not adopted: an account with no name: the account's folder on rocky.lan is not there any more.",
+      adopted: ['profile-personal', 'profile-lab'],
+      notAdopted: [{ profileId: 'profile-blank', why: "the account's folder on rocky.lan is not there any more" }],
+    })
   })
 })

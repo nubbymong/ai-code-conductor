@@ -32,7 +32,7 @@ import {
   ACCOUNT_USAGE_MACHINES_CLASS, ACCOUNT_USAGE_MACHINE_ROW_CLASS, ACCOUNT_USAGE_MACHINE_NAME_CLASS, ACCOUNT_USAGE_MACHINE_STATE_CLASS, ACCOUNT_USAGE_MACHINE_BUTTON_CLASS,
 } from './account-usage-layout'
 import { useHostAccountsStore } from '../stores/hostAccountsStore'
-import { adoptTitleOn, adoptableIds, cardMachineLine, hostEarlierInstall, hostElsewhere, machineLabel, signInOnTitle, toSignInCount, type HostLineTone, type HostMachineRef, type HostSignInLine } from '../utils/hostAccounts'
+import { adoptTitleOn, adoptableIds, cardMachineLine, hostEarlierInstall, hostElsewhere, joinNames, machineLabel, signInOnTitle, toSignInCount, type HostLineTone, type HostMachineRef, type HostSignInLine } from '../utils/hostAccounts'
 import { openHostSignInTab } from '../utils/hostSignIn'
 
 /** D5 (usage UX, approved as drawn): the one line the page shows for Claude
@@ -1150,7 +1150,7 @@ function signInWhy(row: AccountUsage, auth: ProfileAuthInfo | undefined, now: nu
     const names = ids.map((id) => nameOf?.(id)).filter((n): n is string => !!n)
     const who = names.length === 0 || names.length < ids.length
       ? (ids.length > 1 ? `${ids.length} other profiles` : 'another profile')
-      : names.length === 1 ? names[0] : `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`
+      : joinNames(names)
     return {
       reason: `Signed in to the same account as ${who}`,
       note: duplicateNote(problem?.kind === 'duplicate' ? problem.account : null),

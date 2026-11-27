@@ -35,7 +35,7 @@
  */
 import type { RemoteAccounts } from '../providers/types'
 import type { HostAccountSignIn, HostAccountsState, HostAdoptResult, HostLaunchRefusal, HostMachineAccounts, HostSignInFacts, HostSignInState } from '../../shared/host-accounts'
-import { HOST_ACCOUNTS_FOLDER } from '../../shared/host-accounts'
+import { HOST_ACCOUNTS_FOLDER, NOT_HELD_ACCOUNT, folderOfStart, hostAccountNamer, joinNames, sentenceStart } from '../../shared/host-accounts'
 import { canonicaliseEmail } from '../../shared/account-chip-color'
 import { stripSpoofableText } from '../../shared/safe-text'
 import { ACCOUNT_PROFILE_RE, HOST_READ_MAX } from './scripts'
@@ -325,10 +325,29 @@ export type AccountBinding =
   | { via: 'own' }
   | { refused: HostLaunchRefusal }
 
-/** An account's name in a notice: its name on this computer, else its email, else its id. */
-export function accountName(p: HostProfile | undefined, profileId: string): string {
-  const name = p?.name?.trim() || p?.accountEmail?.trim()
-  return stripSpoofableText(name || profileId, 120)
+/** The account aliases the app's settings hold (Settings, Accounts: a name
+ *  for an account, keyed by its email), as the renderer names accounts by
+ *  them; undefined when there are none. Only string values are kept. */
+export function accountAliasesOf(settings: Readonly<Record<string, unknown>> | null | undefined): Record<string, string> | undefined {
+  const raw = settings?.accountAliases
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined
+  const out: Record<string, string> = Object.create(null)
+  for (const [k, v] of Object.entries(raw)) if (typeof v === 'string') out[k] = v
+  return out
+}
+
+/**
+ * How main's answers name an account by its profile id. Final review round 2
+ * (F2-1): by the renderer's rule, since the Machines page shows main's
+ * answers word for word: its name on this computer, else its alias
+ * (`aliases`, accountAliasesOf), else its email, else NAMELESS_ACCOUNT, for
+ * which a sentence it starts takes a capital (sentenceStart). Round 3
+ * (F3-1): the one shared namer (hostAccountNamer), so an id this computer
+ * does not hold reads NOT_HELD_ACCOUNT, never its profile id.
+ */
+export function accountNamer(profiles: readonly HostProfile[], aliases?: Readonly<Record<string, string>>): (profileId: string) => string {
+  const nameOf = hostAccountNamer(profiles, aliases)
+  return (id) => stripSpoofableText(nameOf(id), 120)
 }
 
 /**
@@ -338,14 +357,18 @@ export function accountName(p: HostProfile | undefined, profileId: string): stri
  * starts nothing, and the refusal says why and lists the accounts that are
  * signed in there (the notice's other choice). `profiles` null: this
  * computer's accounts did not read, which the refusal says as such
- * (2.1.3-beta.20 fix round, NIT-11), never as an account gone.
+ * (2.1.3-beta.20 fix round, NIT-11), never as an account gone. `aliases`:
+ * the app's account aliases (accountAliasesOf), so the account is named as
+ * the renderer names it (final review round 2, F2-1).
  */
-export function accountBinding(accounts: HostMachineAccounts, profileId: string, m: Pick<RemoteMachineRecord, 'home' | 'did'>, name: string, profiles: readonly HostProfile[] | null): AccountBinding {
+export function accountBinding(accounts: HostMachineAccounts, profileId: string, m: Pick<RemoteMachineRecord, 'home' | 'did'>, name: string, profiles: readonly HostProfile[] | null, aliases?: Readonly<Record<string, string>>): AccountBinding {
   const a = accounts.accounts.find((x) => x.profileId === profileId)
   if (a?.state === 'signed-in-here') return { via: 'folder', configDir: accountFolder(m, profileId) }
   if (a?.state === 'machine-own') return { via: 'own' }
-  const profile = profiles?.find((p) => p.id === profileId)
-  const who = accountName(profile, profileId)
+  const who = accountNamer(profiles ?? [], aliases)(profileId)
+  const Who = sentenceStart(who)
+  // "Work's folder"; the app's own words for an account take no possessive.
+  const whoseFolder = folderOfStart(who)
   const signedInThere = accounts.accounts.filter((x) => x.state === 'signed-in-here' || x.state === 'machine-own').map((x) => x.profileId)
   const base = { did: m.did, machineName: name, profileId, signedInThere }
   if (profiles === null) {
@@ -354,10 +377,15 @@ export function accountBinding(accounts: HostMachineAccounts, profileId: string,
   if (!accounts.ok) {
     return { refused: { ...base, state: 'not-read', text: `The accounts on ${name} could not be read (${accounts.why ?? 'no answer'}), so this tab started nothing. Press Check on the Machines page, then Restart.` } }
   }
+  // Final review round 3 (F3-1): named as every surface names an account this
+  // computer does not hold, never by its profile id; nothing here signs it in.
+  if (!profiles.some((p) => p.id === profileId)) {
+    return { refused: { ...base, state: 'not-signed-in', text: `This tab is on ${NOT_HELD_ACCOUNT}, so it started nothing. Start it on an account that is signed in on ${name}.` } }
+  }
   if (a?.state === 'someone-else') {
     const identity = a.facts?.identity ?? null
     const as = identity ? `as ${stripSpoofableText(identity, 254)}, another account` : 'as an account it does not name'
-    return { refused: { ...base, state: 'someone-else', ...(identity ? { identity } : {}), text: `${who} on ${name} is signed in ${as}, so this tab started nothing. Sign it out on the Machines page, then sign it in again as ${who}.` } }
+    return { refused: { ...base, state: 'someone-else', ...(identity ? { identity } : {}), text: `${Who} on ${name} is signed in ${as}, so this tab started nothing. Sign it out on the Machines page, then sign it in again as ${who}.` } }
   }
   // Phase 5 round 3 (R3-1): one rule for Adopt, here, in Adopt itself and on
   // every renderer surface: only while EVERY folder there with another
@@ -365,13 +393,12 @@ export function accountBinding(accounts: HostMachineAccounts, profileId: string,
   // (mayBeEarlierInstall). One for an account it does not hold shows another
   // computer's app uses that login, so this one is taken as that computer's.
   if (accounts.elsewhere?.includes(profileId) && accounts.mayBeEarlierInstall === true) {
-    return { refused: { ...base, state: 'not-signed-in', adoptable: true, text: `${who}'s folder on ${name} carries another install's mark, so this tab started nothing. It may be this computer's own from an earlier install of the app: if so, choose Adopt on the machine's card on the Machines page; if it is the app's on another computer, start this tab on an account signed in there.` } }
+    return { refused: { ...base, state: 'not-signed-in', adoptable: true, text: `${whoseFolder} on ${name} carries another install's mark, so this tab started nothing. It may be this computer's own from an earlier install of the app: if so, choose Adopt on the machine's card on the Machines page; if it is the app's on another computer, start this tab on an account signed in there.` } }
   }
   if (accounts.elsewhere?.includes(profileId)) {
-    return { refused: { ...base, state: 'not-signed-in', text: `${who}'s folder on ${name} is used by the app on another computer, so this tab started nothing. Start this tab on an account signed in there, or sign ${who} in there from that computer.` } }
+    return { refused: { ...base, state: 'not-signed-in', text: `${whoseFolder} on ${name} is used by the app on another computer, so this tab started nothing. Start this tab on an account signed in there, or sign ${who} in there from that computer.` } }
   }
-  const missing = a ? '' : ' (that account is not on this computer any more)'
-  return { refused: { ...base, state: 'not-signed-in', text: `${who} is not signed in on ${name}${missing}, so this tab started nothing. Sign it in on that machine from the Machines page, or start this tab on an account that is signed in there.` } }
+  return { refused: { ...base, state: 'not-signed-in', text: `${Who} is not signed in on ${name}, so this tab started nothing. Sign it in on that machine from the Machines page, or start this tab on an account that is signed in there.` } }
 }
 
 /** The settings copy as `account` takes it: `keep`, `0` (none) or its size,
@@ -541,9 +568,9 @@ export const launchable = (s: HostSignInState): boolean => s === 'signed-in-here
  * of this computer's accounts gets this install's marker on its folder
  * (`account adopt`, one exec each); nothing is signed in, out or removed.
  * Any other id is refused before anything runs. The machine is read again
- * after it. Never throws.
+ * after it. Never throws. `aliases`: as accountNamer takes them (F2-1).
  */
-export async function adoptAccountFolders(ctx: HostAccountsContext, m: RemoteMachineRecord, via: RemoteAccounts, profileIds: readonly string[]): Promise<HostAdoptResult> {
+export async function adoptAccountFolders(ctx: HostAccountsContext, m: RemoteMachineRecord, via: RemoteAccounts, profileIds: readonly string[], aliases?: Readonly<Record<string, string>>): Promise<HostAdoptResult> {
   let profiles: readonly HostProfile[]
   try { profiles = await via.profiles() } catch { return { ok: false, message: "This computer's accounts could not be read, so nothing was adopted.", adopted: [] } }
   const held = new Set(profiles.filter((p) => ACCOUNT_PROFILE_RE.test(p.id)).map((p) => p.id))
@@ -556,14 +583,23 @@ export async function adoptAccountFolders(ctx: HostAccountsContext, m: RemoteMac
   // there with another install's mark is for an account this computer does not hold.
   if (last.mayBeEarlierInstall !== true) return { ok: false, message: "Nothing was adopted: not every folder there with another install's mark is for one of this computer's accounts, so they are taken as the app's on another computer.", adopted: [] }
   const adopted: string[] = []
-  const failed: string[] = []
+  // Final review (F-4): each id not adopted with its reason, for the
+  // renderer's dialog, which names the accounts by its own rule.
+  const notAdopted: Array<{ profileId: string; why: string }> = []
   for (const id of ids) {
     const r = await prepareAccountFolder(ctx, m, via, id, 'adopt', 'keep')
     if (r.ok) adopted.push(id)
-    else failed.push(`${accountName(profiles.find((p) => p.id === id), id)}: ${r.why}`)
+    else notAdopted.push({ profileId: id, why: r.why })
   }
   await readMachineAccounts(ctx, m, via)
-  const names = adopted.map((id) => accountName(profiles.find((p) => p.id === id), id))
-  const done = names.length ? `Adopted ${names.join(', ')}: ${names.length === 1 ? 'its folder' : 'their folders'} there ${names.length === 1 ? 'is' : 'are'} this computer's now.` : ''
-  return { ok: failed.length === 0, message: [done, failed.length ? `Not adopted: ${failed.join('; ')}.` : ''].filter(Boolean).join(' '), adopted }
+  const nameOf = accountNamer(profiles, aliases)
+  const names = adopted.map(nameOf)
+  const done = names.length ? `Adopted ${joinNames(names)}: ${names.length === 1 ? 'its folder' : 'their folders'} there ${names.length === 1 ? 'is' : 'are'} this computer's now.` : ''
+  const failed = notAdopted.map((x) => `${nameOf(x.profileId)}: ${x.why}`)
+  return {
+    ok: notAdopted.length === 0,
+    message: [done, failed.length ? `Not adopted: ${failed.join('; ')}.` : ''].filter(Boolean).join(' '),
+    adopted,
+    ...(notAdopted.length ? { notAdopted } : {}),
+  }
 }
