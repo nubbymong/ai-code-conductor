@@ -13,14 +13,15 @@ import { join } from 'path'
 // the label-vs-home divergence disappears while the duplication remains. Both
 // checks are therefore required, and these tests pin that.
 
-const h = vi.hoisted(() => ({ root: '', profiles: [] as Array<{ id: string; accountEmail: string }> }))
+const h = vi.hoisted(() => ({ root: '', profiles: [] as Array<{ id: string; accountEmail: string }>, warned: [] as string[] }))
 
 vi.mock('../../src/main/account-profiles', () => ({
   getProfileConfigDir: (id: string) => join(h.root, id),
   listProfiles: () => h.profiles
 }))
+vi.mock('../../src/main/debug-logger', () => ({ logWarn: (m: string) => { h.warned.push(m) } }))
 
-import { readAllProfileAuthInfo, readProfileAuthInfo } from '../../src/main/account-auth-info'
+import { readAllProfileAuthInfo, readProfileAuthInfo, signInProblemOf } from '../../src/main/account-auth-info'
 
 function seed(
   id: string,
@@ -180,5 +181,58 @@ describe('readAllProfileAuthInfo identity cross-check', () => {
     const infos = readAllProfileAuthInfo()
     expect(infos).toHaveLength(1)
     expect(infos[0].credentialsMissing).toBe(true)
+  })
+})
+
+// nubbymong/aicc_planning#444: the Account usage page asks for a sign-in again
+// for a duplicate or wrong-account profile, read from the same cross-check the
+// page's banners use, so main and the page agree.
+describe('signInProblemOf', () => {
+  beforeEach(() => {
+    h.root = mkdtempSync(join(tmpdir(), 'auth-info-'))
+    h.profiles = []
+    h.warned.length = 0
+  })
+  afterEach(() => {
+    try { rmSync(h.root, { recursive: true, force: true }) } catch { /* ignore */ }
+  })
+
+  it('a profile whose home is the same account as another is a duplicate (before a mismatch)', () => {
+    h.profiles = [
+      { id: 'p1', accountEmail: 'one@example.test' },
+      { id: 'p2', accountEmail: 'two@example.test' }
+    ]
+    seed('p1', { oauthEmail: 'two@example.test' })
+    seed('p2', { oauthEmail: 'two@example.test' })
+    const infos = readAllProfileAuthInfo({ quiet: true })
+    expect(signInProblemOf(infos, 'p1')).toBe('duplicate')
+    expect(signInProblemOf(infos, 'p2')).toBe('duplicate')
+  })
+
+  it('a profile signed in as a different account than its label is the wrong account', () => {
+    h.profiles = [{ id: 'p1', accountEmail: 'one@example.test' }]
+    seed('p1', { oauthEmail: 'other@example.test' })
+    expect(signInProblemOf(readAllProfileAuthInfo({ quiet: true }), 'p1')).toBe('wrong-account')
+  })
+
+  it('a profile on its own account, or one not listed, has no problem', () => {
+    h.profiles = [{ id: 'p1', accountEmail: 'one@example.test' }]
+    seed('p1', { oauthEmail: 'one@example.test' })
+    const infos = readAllProfileAuthInfo({ quiet: true })
+    expect(signInProblemOf(infos, 'p1')).toBeNull()
+    expect(signInProblemOf(infos, 'nope')).toBeNull()
+  })
+
+  it('quiet: the check the usage page makes once per account logs nothing; the panel read still warns', () => {
+    h.profiles = [
+      { id: 'p1', accountEmail: 'two@example.test' },
+      { id: 'p2', accountEmail: 'two@example.test' }
+    ]
+    seed('p1', { oauthEmail: 'two@example.test' })
+    seed('p2', { oauthEmail: 'two@example.test' })
+    readAllProfileAuthInfo({ quiet: true })
+    expect(h.warned).toEqual([])
+    readAllProfileAuthInfo()
+    expect(h.warned).toHaveLength(1)
   })
 })

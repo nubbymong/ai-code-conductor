@@ -69,8 +69,12 @@ export function readProfileAuthInfo(profileId: string, accountEmail?: string): P
  * account means each refresh rotates the token out from under the other.
  * Duplicates are matched on the HOME's identity, not the label, because the label
  * is the thing that gets silently rewritten.
+ *
+ * `quiet` leaves out the duplicate warning: the Account usage page asks once
+ * per account it reads (signInProblemOf), and the panel's own read already
+ * logs it.
  */
-export function readAllProfileAuthInfo(): ProfileAuthInfo[] {
+export function readAllProfileAuthInfo(opts: { quiet?: boolean } = {}): ProfileAuthInfo[] {
   const profiles = listProfiles()
   const infos = profiles.map((p) => readProfileAuthInfo(p.id, p.accountEmail))
 
@@ -93,7 +97,7 @@ export function readAllProfileAuthInfo(): ProfileAuthInfo[] {
   }
   for (const [identity, ids] of byIdentity) {
     if (ids.length < 2) continue
-    logWarn(
+    if (!opts.quiet) logWarn(
       `[account-auth] ${ids.length} profiles resolve to ${identity} (${ids.join(', ')}) — ` +
       'each refresh will invalidate the others'
     )
@@ -104,4 +108,20 @@ export function readAllProfileAuthInfo(): ProfileAuthInfo[] {
   }
 
   return infos
+}
+
+/**
+ * Why a profile must be signed in again although it holds a sign-in, from the
+ * cross-check above (nubbymong/aicc_planning#444): 'duplicate' when another
+ * profile's home is the same account (each renewal in one spends the other's
+ * refresh token), else 'wrong-account' when its home is a different account
+ * than its label; null otherwise, or for a profile not in `infos`. The same
+ * order as the Account usage page's banners, so the card and its banner agree.
+ */
+export function signInProblemOf(infos: readonly ProfileAuthInfo[], profileId: string): 'duplicate' | 'wrong-account' | null {
+  const info = infos.find((i) => i.profileId === profileId)
+  if (!info) return null
+  if (info.duplicateOfProfileIds && info.duplicateOfProfileIds.length > 0) return 'duplicate'
+  if (info.identityMismatch) return 'wrong-account'
+  return null
 }
