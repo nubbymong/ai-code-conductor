@@ -1374,7 +1374,7 @@ describe('remote helper on a real Linux host', () => {
       expect(madeC.out.trim(), madeC.err).toBe('made')
       const listed = await signOutListOnMachine(ctx, rec, via, [c])
       note('sign-out-list-elsewhere', listed)
-      expect(listed).toEqual({ ok: true, deviceGone: false, folders: [], left: [], elsewhere: [c] })
+      expect(listed).toEqual({ ok: true, deviceGone: false, folders: [], left: [], elsewhere: [c], old: [] })
       expect(sshRun(`test -d "${folderC}" && echo there || echo gone`).out.trim()).toBe('there')
       expect(await prepareAccountFolder(ctx, rec, via, c, 'make', 'keep')).toMatchObject({ ok: false })
       expect((await readMachineAccounts(ctx, rec, via)).elsewhere).toEqual([c])
