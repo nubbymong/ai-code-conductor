@@ -27,7 +27,9 @@ export const STRIP_CLASS = 'min-h-7 shrink-0 flex items-center gap-3 px-3 text-x
  * default), and the cut, at the row's right end, took the Weekly meter again.
  * The telemetry is now the text row (STRIP_MIDDLE_ROW_CLASS), then the meters
  * (STRIP_METERS_CLASS), then the review count and the Copilot meter where a
- * tab has them, in that order as before. Inside it the meters shrink ten times as much as
+ * tab has them, in that order as before, in a tail of their own
+ * (STRIP_TAIL_CLASS, PR 763 fix round 11). Inside it that tail gives way
+ * first, down to nothing. The meters shrink ten times as much as
  * the row but only down to their labels, bars and percentages: their reset
  * texts give way (RATE_LIMIT_RESET_WRAP_CLASS). Then the row gives way, its
  * context track first and then its text, cut at its right end. Only once the
@@ -70,6 +72,21 @@ export const STRIP_CONTEXT_PCT_CLASS = 'tabular-nums shrink-0'
  * otherwise break onto a second line once the meters shrink.
  */
 export const STRIP_METERS_CLASS = 'flex items-center gap-3 shrink-[10] whitespace-nowrap'
+
+/**
+ * The telemetry's tail (PR 763 fix round 11): the review count and the
+ * Copilot meter, after the meters. Before fix round 10 they were the text
+ * row's last items, so the row's cut took them first; fix round 10 moved
+ * them out of the row, and as shrink-0 items of the telemetry the whole text
+ * row then gave way before either lost a pixel (at a 1024 px strip, a local
+ * tab with readings and the Copilot meter kept 3 px of its row). In this
+ * tail they give way first inside the telemetry again: it may shrink a
+ * thousand times as much as the row (`shrink-[1000]`), to nothing
+ * (`min-w-0`), cut at its right end (`overflow-hidden`), before the meters'
+ * reset texts and the text row. With neither shown it draws nothing
+ * (`empty:hidden`), so no gap is left after the meters.
+ */
+export const STRIP_TAIL_CLASS = 'flex items-center gap-2 min-w-0 overflow-hidden shrink-[1000] empty:hidden'
 
 /**
  * A meter's reset text (RateLimitBar, PR 763 fix round 10), the one part of

@@ -30,6 +30,19 @@
  * 9's classes (9c11d407) the Weekly "%" is cut, which is asserted first; now
  * the meters follow the text row, the reset texts give way, and the Weekly
  * "%" ends before the note, which keeps a width.
+ *
+ * PR 763 fix round 11 (the recheck of fix rounds 9 and 10): fix round 10 left
+ * the review count and the Copilot meter as shrink-0 items of the telemetry,
+ * after the meters, so the text row gave way before either lost a pixel;
+ * before fix round 10 they were the row's last items and were cut first. The
+ * fourth case, a local tab (no note) with readings and the Copilot meter, at
+ * the same 1024 px and controls: with fix round 10's classes (4798802) the
+ * row has lost more than the chip's whole width while the chip is whole,
+ * which is asserted first; now the chip's tail gives way first, the row keeps
+ * the space the chip held, and the Weekly "%" ends within the telemetry. (A
+ * headless Chromium probe of this markup with the app's own Tailwind CSS and
+ * Inter, not the app: the controls 212.9 px, the old row 164.5 px with the
+ * 153.3 px chip whole, the row now 330.8 px with the chip hidden.)
  */
 import { test, expect } from '@playwright/test'
 import { launchIsolatedApp, closeIsolatedApp, IsolatedApp } from './helpers/electron-app'
@@ -42,6 +55,7 @@ import {
   STRIP_CONTEXT_TRACK_CLASS,
   STRIP_CONTEXT_PCT_CLASS,
   STRIP_METERS_CLASS,
+  STRIP_TAIL_CLASS,
   RATE_LIMIT_RESET_WRAP_CLASS,
   RATE_LIMIT_RESET_CLASS,
 } from '../../src/renderer/components/session-strip-layout'
@@ -62,6 +76,8 @@ interface Classes {
   /** The telemetry around the text row and the meters; null where the meters were the row's last item. */
   telemetry: string | null
   row: string; note: string; ctx: string; track: string; pct: string; meters: string
+  /** The tail around the Copilot meter, after the meters (fix round 11); null where the meter was an item of the telemetry, or of the row before fix round 10. */
+  tail: string | null
   /** A meter with a reading as RateLimitBar draws it: 'old' before fix round 10, 'now' with its parts kept whole and its reset in a grid. */
   bar: 'old' | 'now'
 }
@@ -75,6 +91,7 @@ const BEFORE: Classes = {
   track: 'w-16 h-1.5 rounded-full overflow-hidden',
   pct: 'tabular-nums',
   meters: 'flex items-center gap-3 shrink-0',
+  tail: null,
   bar: 'old',
 }
 /** The classes the strip drew with on 9c11d407, fix round 9. */
@@ -86,6 +103,7 @@ const ROUND_9: Classes = {
   track: 'w-16 min-w-6 h-1.5 rounded-full overflow-hidden',
   pct: 'tabular-nums shrink-0',
   meters: 'flex items-center gap-3 shrink-0',
+  tail: null,
   bar: 'old',
 }
 /** The classes the strip draws with now. */
@@ -97,8 +115,16 @@ const NOW: Classes = {
   track: STRIP_CONTEXT_TRACK_CLASS,
   pct: STRIP_CONTEXT_PCT_CLASS,
   meters: STRIP_METERS_CLASS,
+  tail: STRIP_TAIL_CLASS,
   bar: 'now',
 }
+/** The classes the strip drew with on 4798802, fix round 10: today's, with the Copilot meter a shrink-0 item of the telemetry, after the meters. */
+const ROUND_10: Classes = { ...NOW, tail: null }
+
+/** What the strip shows beside the shape's row and meters: a helper tab's note, the Copilot meter. */
+interface Parts { note: boolean; copilot: boolean }
+const HELPER_TAB: Parts = { note: true, copilot: false }
+const LOCAL_TAB_WITH_COPILOT: Parts = { note: false, copilot: true }
 
 /** The release smoke's fresh tab (meters waiting), or a working session with readings and reset times. */
 type Shape = 'smoke' | 'working'
@@ -112,13 +138,17 @@ const SHORTFALL = 15
 interface Reading {
   content: number; rowRight: number; rowClient: number; rowScroll: number; rowWidth: number
   zoneRight: number; zoneClient: number; zoneScroll: number
-  weeklyRight: number; weeklyPctRight: number; noteLeft: number; noteWidth: number; trackWidth: number
+  weeklyRight: number; weeklyPctRight: number; trackWidth: number
+  /** The note's left edge and width; NaN where the strip has no note. */
+  noteLeft: number; noteWidth: number
+  /** The Copilot chip's edges and width; NaN where the strip has no chip. */
+  chipLeft: number; chipRight: number; chipWidth: number
   /** Each reset text's drawn and whole widths (none for waiting meters). */
   resets: Array<{ client: number; scroll: number }>
 }
 
-async function measure(c: Classes, shape: Shape, stripWidth: number, controls: number): Promise<Reading> {
-  return page.evaluate(({ c, shape, strip, stripWidth, account, controls, resetWrap, reset }) => {
+async function measure(c: Classes, shape: Shape, stripWidth: number, controls: number, parts: Parts = HELPER_TAB): Promise<Reading> {
+  return page.evaluate(({ c, shape, strip, stripWidth, account, controls, resetWrap, reset, parts }) => {
     document.querySelectorAll('[data-probe="strip-1280"]').forEach((n) => n.remove())
     const host = document.createElement('div')
     host.setAttribute('data-probe', 'strip-1280')
@@ -150,14 +180,21 @@ async function measure(c: Classes, shape: Shape, stripWidth: number, controls: n
     const meters = `<span class="${c.meters}">${shape === 'smoke'
       ? waiting('5h') + waiting('Weekly')
       : live('5h', '12%', '3:00 pm') + live('Weekly', '34%', 'Nov 30 10:00 am')}</span>`
+    // The Copilot meter's separator and AiUsageChip's markup with a reading and a cap set.
+    const copilot = parts.copilot
+      ? `<span class="w-px self-stretch my-1.5 mx-0.5 shrink-0" style="background:var(--border-subtle)"></span>` +
+        `<span class="relative flex items-center shrink-0" data-probe-chip><button type="button" class="flex items-center gap-1 rounded px-1.5 py-0.5 tabular-nums" style="border:1px solid var(--border-subtle)">` +
+        `<span>Copilot 8.1k/20k</span><span class="inline-block rounded-sm overflow-hidden shrink-0" style="width:40px;height:6px"></span></button></span>`
+      : ''
+    const tail = c.tail === null ? copilot : `<span class="${c.tail}">${copilot}</span>`
     const telemetry = c.telemetry === null
-      ? `<div class="${c.row}" data-probe-row data-probe-zone>${rowItems}${meters}</div>`
-      : `<div class="${c.telemetry}" data-probe-zone><div class="${c.row}" data-probe-row>${rowItems}</div>${meters}</div>`
+      ? `<div class="${c.row}" data-probe-row data-probe-zone>${rowItems}${meters}${tail}</div>`
+      : `<div class="${c.telemetry}" data-probe-zone><div class="${c.row}" data-probe-row>${rowItems}</div>${meters}${tail}</div>`
     host.innerHTML = `
       <div class="${strip}" style="width:${stripWidth}px;box-sizing:border-box">
         <span class="flex items-center gap-1 shrink-0" style="width:${account}px"></span>
         ${telemetry}
-        <span class="${c.note}" data-probe-note title="Not available">Model limits: not available</span>
+        ${parts.note ? `<span class="${c.note}" data-probe-note title="Not available">Model limits: not available</span>` : ''}
         <div class="flex items-center gap-1 shrink-0" style="width:${controls}px"></div>
       </div>`
     document.body.appendChild(host)
@@ -165,7 +202,10 @@ async function measure(c: Classes, shape: Shape, stripWidth: number, controls: n
     const zone = host.querySelector('[data-probe-zone]') as HTMLElement
     const kids = row.children
     const r = row.getBoundingClientRect()
-    const note = (host.querySelector('[data-probe-note]') as HTMLElement).getBoundingClientRect()
+    const noteEl = host.querySelector('[data-probe-note]') as HTMLElement | null
+    const note = noteEl ? noteEl.getBoundingClientRect() : null
+    const chipEl = host.querySelector('[data-probe-chip]') as HTMLElement | null
+    const chip = chipEl ? chipEl.getBoundingClientRect() : null
     const reading = {
       content: kids[kids.length - 1].getBoundingClientRect().right - kids[0].getBoundingClientRect().left,
       rowRight: r.right,
@@ -177,14 +217,17 @@ async function measure(c: Classes, shape: Shape, stripWidth: number, controls: n
       zoneScroll: zone.scrollWidth,
       weeklyRight: (host.querySelector('[data-probe-weekly]') as HTMLElement).getBoundingClientRect().right,
       weeklyPctRight: (host.querySelector('[data-probe-weekly-pct]') as HTMLElement).getBoundingClientRect().right,
-      noteLeft: note.left,
-      noteWidth: note.width,
+      noteLeft: note ? note.left : Number.NaN,
+      noteWidth: note ? note.width : Number.NaN,
+      chipLeft: chip ? chip.left : Number.NaN,
+      chipRight: chip ? chip.right : Number.NaN,
+      chipWidth: chip ? chip.width : Number.NaN,
       trackWidth: (host.querySelector('[data-probe-track]') as HTMLElement).getBoundingClientRect().width,
       resets: [...host.querySelectorAll('[data-probe-reset]')].map((el) => ({ client: (el as HTMLElement).clientWidth, scroll: (el as HTMLElement).scrollWidth })),
     }
     host.remove()
     return reading
-  }, { c, shape, strip: STRIP_CLASS, stripWidth, account: ACCOUNT_WIDTH, controls, resetWrap: RATE_LIMIT_RESET_WRAP_CLASS, reset: RATE_LIMIT_RESET_CLASS })
+  }, { c, shape, strip: STRIP_CLASS, stripWidth, account: ACCOUNT_WIDTH, controls, resetWrap: RATE_LIMIT_RESET_WRAP_CLASS, reset: RATE_LIMIT_RESET_CLASS, parts })
 }
 
 /**
@@ -258,5 +301,31 @@ test.describe('the status strip of a helper tab at 1280x768', () => {
     expect(roomy.trackWidth).toBe(64)
     expect(roomy.rowScroll).toBeLessThanOrEqual(roomy.rowClient + 1)
     expect(roomy.weeklyRight).toBeLessThanOrEqual(roomy.noteLeft + 0.5)
+  })
+
+  test('a local tab with the Copilot meter: the meter gives way first, before the reset texts and the text row', async () => {
+    test.setTimeout(60_000)
+    const controls = await smokeControls()
+    expect(controls).toBeGreaterThan(0)
+    // With room: the row and the chip whole, the chip within the telemetry.
+    const roomy = await measure(NOW, 'working', 4000, 0, LOCAL_TAB_WITH_COPILOT)
+    expect(roomy.chipWidth).toBeGreaterThan(100)
+    expect(roomy.chipRight).toBeLessThanOrEqual(roomy.zoneRight + 0.5)
+
+    // The fault, with the classes of 4798802: the chip keeps its whole width
+    // while the text row has lost more than the chip's width.
+    const round10 = await measure(ROUND_10, 'working', STRIP_WIDTH, controls, LOCAL_TAB_WITH_COPILOT)
+    expect(round10.chipWidth, 'fix round 10\'s chip keeps its whole width').toBeCloseTo(roomy.chipWidth, 0)
+    expect(round10.chipRight, 'fix round 10\'s chip is not cut by the telemetry').toBeLessThanOrEqual(round10.zoneRight + 0.5)
+    expect(round10.rowWidth, 'fix round 10\'s text row gave way first, by more than the chip\'s width').toBeLessThan(roomy.rowWidth - roomy.chipWidth)
+
+    // Now, at the same width: the chip's tail gave way first, down to
+    // nothing, so the chip starts at or past the telemetry's right edge, and
+    // the text row keeps the space the chip held.
+    const now = await measure(NOW, 'working', STRIP_WIDTH, controls, LOCAL_TAB_WITH_COPILOT)
+    expect(now.chipLeft, 'the chip gave way first').toBeGreaterThanOrEqual(now.zoneRight - 0.5)
+    expect(now.rowWidth, 'the text row keeps its first items').toBeGreaterThan(100)
+    expect(now.rowWidth, 'the text row keeps the space the chip held').toBeGreaterThan(round10.rowWidth + round10.chipWidth - 1)
+    expect(now.weeklyPctRight, 'the Weekly "%" is not clipped by the telemetry').toBeLessThanOrEqual(now.zoneRight + 0.5)
   })
 })

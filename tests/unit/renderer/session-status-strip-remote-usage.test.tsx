@@ -309,3 +309,62 @@ describe('the note is never clipped by the strip\'s middle row (text smoke #36)'
     expect(meterEls.map((m) => m.children[2].textContent)).toEqual(['12%', '34%'])
   })
 })
+
+/**
+ * PR 763 fix round 11 (the recheck of fix rounds 9 and 10): fix round 10 left
+ * the review count and the Copilot meter as shrink-0 items of the telemetry,
+ * after the meters, so the whole text row gave way before either lost a
+ * pixel (a headless probe of the same rules: at a 1024 px strip, a local tab
+ * with readings and the Copilot meter kept 3 px of its row, the 137 px chip
+ * whole). Before fix round 10 they were the row's last items and were cut
+ * first. Now they sit in one tail after the meters that gives way first
+ * inside the telemetry. jsdom lays nothing out, so this pins the classes;
+ * the fourth case of tests/e2e/session-strip-1280.spec.ts measures them.
+ * Red on 4798802: the chip's telemetry item was its own shrink-0 root.
+ */
+describe('the Copilot meter gives way first inside the telemetry (PR 763 fix round 11)', () => {
+  /** A local tab (no note) with readings, and the Copilot meter on. */
+  const localTabWithCopilot = (showCopilot: boolean) => {
+    sessionState.sessions = [{
+      id: 's1', provider: 'claude', status: 'working',
+      inputTokens: 250_300, contextWindowSize: 1_000_000, contextPercent: 25, costUsd: 12.5159, linesAdded: 152, linesRemoved: 38, totalDurationMs: 8_040_000,
+      rateLimitCurrent: 12, rateLimitCurrentResets: '2026-11-26T19:00:00Z', rateLimitWeekly: 34, rateLimitWeeklyResets: '2026-11-30T10:00:00Z',
+    }]
+    settingsState.settings.githubAiUsageEnabled = true
+    settingsState.settings.statusLine = { font: 'sans', fontSize: 11, showRateLimits: true, showResetTime: true, showTokens: true, showContextBar: true, showCost: true, showLinesChanged: true, showDuration: true, showCopilot }
+  }
+
+  it('a local tab with readings: the chip and its separator are in a tail after the meters that shrinks first, to nothing, cut', () => {
+    localTabWithCopilot(true)
+    draw()
+    expect(note()).toBeNull()
+    const chip = container.querySelector('[data-ai-usage-chip]') as HTMLElement
+    expect(chip).not.toBeNull()
+    const telemetry = chip.closest('.flex-auto.min-w-0.overflow-hidden') as HTMLElement
+    expect(telemetry).not.toBeNull()
+    const tail = [...telemetry.children].find((el) => el.contains(chip)) as HTMLElement
+    for (const c of ['shrink-[1000]', 'min-w-0', 'overflow-hidden']) expect(tail.classList.contains(c), c).toBe(true)
+    expect(tail.classList.contains('shrink-0')).toBe(false)
+    expect(tail.contains(container.querySelector('[data-copilot-separator]'))).toBe(true)
+    // After the meters, and the telemetry's last item.
+    const weekly = container.querySelector('[aria-label="Weekly rate limit utilisation"]') as HTMLElement
+    const meters = [...telemetry.children].find((el) => el.contains(weekly)) as HTMLElement
+    expect(meters).toBeDefined()
+    expect(meters).not.toBe(tail)
+    expect(meters.compareDocumentPosition(tail) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(telemetry.lastElementChild).toBe(tail)
+  })
+
+  it('with neither the review count nor the Copilot meter shown, the tail is empty and draws nothing', () => {
+    localTabWithCopilot(false)
+    draw()
+    expect(container.querySelector('[data-ai-usage-chip]')).toBeNull()
+    const weekly = container.querySelector('[aria-label="Weekly rate limit utilisation"]') as HTMLElement
+    const telemetry = weekly.closest('.flex-auto.min-w-0.overflow-hidden') as HTMLElement
+    expect(telemetry).not.toBeNull()
+    const tail = telemetry.lastElementChild as HTMLElement
+    expect(tail.contains(weekly)).toBe(false)
+    expect(tail.childNodes.length).toBe(0)
+    expect(tail.classList.contains('empty:hidden')).toBe(true)
+  })
+})

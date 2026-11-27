@@ -43,6 +43,7 @@ import {
   STRIP_CONTEXT_TRACK_CLASS,
   STRIP_CONTEXT_PCT_CLASS,
   STRIP_METERS_CLASS,
+  STRIP_TAIL_CLASS,
 } from './session-strip-layout' // why each class is what it is: there (the 1280x768 layout check builds from them)
 
 interface SessionStatusStripProps {
@@ -551,32 +552,34 @@ export default function SessionStatusStrip({ sessionId }: SessionStatusStripProp
             </span>
           )
         })()}
-        {codexReview && codexReview.reviewCount > 0 && (
-          <span className="tabular-nums shrink-0" style={{ color: 'var(--text-muted)' }}>review {codexReview.reviewCount}</span>
-        )}
-        {/* Copilot AI-credit meter -- the per-session home for the meter. Gated
-            on BOTH the statusLine toggle AND the meter-enabled flag so the
-            separator never dangles when the chip itself would render null. The
-            chip clicks through to its popover, which deep-links to Settings per
-            context: auth/scope prompts open the GitHub tab; the cap / plan /
-            cycle config opens the Status Line tab (its new home, default). Lives
-            last in the telemetry zone, so the zone's clip at its right end, which
-            comes only once the text row has given way, takes it first. */}
-        {sl.showCopilot && aiMeterEnabled && (
-          <>
-            <span
-              data-copilot-separator
-              className="w-px self-stretch my-1.5 mx-0.5 shrink-0"
-              style={{ background: 'var(--border-subtle)' }}
-              aria-hidden
-            />
-            <AiUsageChip
-              onOpenSettings={(tab = 'statusline') =>
-                window.dispatchEvent(new CustomEvent('app:openSettings', { detail: { tab } }))
-              }
-            />
-          </>
-        )}
+        <span className={STRIP_TAIL_CLASS}>
+          {codexReview && codexReview.reviewCount > 0 && (
+            <span className="tabular-nums shrink-0" style={{ color: 'var(--text-muted)' }}>review {codexReview.reviewCount}</span>
+          )}
+          {/* Copilot AI-credit meter -- the per-session home for the meter. Gated
+              on BOTH the statusLine toggle AND the meter-enabled flag so the
+              separator never dangles when the chip itself would render null. The
+              chip clicks through to its popover, which deep-links to Settings per
+              context: auth/scope prompts open the GitHub tab; the cap / plan /
+              cycle config opens the Status Line tab (its new home, default). Lives
+              last in the telemetry zone, in a tail that gives way first
+              (STRIP_TAIL_CLASS), before the meters' reset texts and the text row. */}
+          {sl.showCopilot && aiMeterEnabled && (
+            <>
+              <span
+                data-copilot-separator
+                className="w-px self-stretch my-1.5 mx-0.5 shrink-0"
+                style={{ background: 'var(--border-subtle)' }}
+                aria-hidden
+              />
+              <AiUsageChip
+                onOpenSettings={(tab = 'statusline') =>
+                  window.dispatchEvent(new CustomEvent('app:openSettings', { detail: { tab } }))
+                }
+              />
+            </>
+          )}
+        </span>
       </div>
       {/* 2.1.3-beta.19 text smoke (#36): a helper tab's note in place of the
           per-model weekly bars is a sibling AFTER the clipped row, never in it:
