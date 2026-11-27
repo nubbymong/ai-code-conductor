@@ -22,6 +22,7 @@ import { codexCommandLine, cliCommandLine, codexShellEnv, runCodexCli, discoverC
 import { codexChainPids, parseWindowsProcessTable, parsePosixProcessTable, parseLinuxStat, makeCodexProcessLister, CODEX_KILL_SETTLE_MS, CODEX_PROCESS_TABLE_TIMEOUT_MS, CODEX_TASKKILL_TIMEOUT_MS, CODEX_KILL_WORST_MS, flushPendingCodexKills, WINDOWS_PROCESS_QUERY } from '../../src/main/providers/codex'
 import type { CodexDiscoveryDeps, CodexRunResult, CodexRunDeps, CodexProcessEntry } from '../../src/main/providers/codex'
 import { createCodexReviewOperations, createCodexExecEventReader, parseCodexExecEvents, REVIEW_MAX_TEXT } from '../../src/main/providers/codex'
+import { codexReviewArgs, CODEX_REVIEW_EFFORTS, CODEX_REVIEW_DEFAULT_EFFORT } from '../../src/main/providers/codex'
 import { harness, addCodexAccount } from './accounts-harness'
 
 describe('codex --version', () => {
@@ -1489,6 +1490,83 @@ describe('the Codex reviewer (WP2 5a)', () => {
         expect(done, how).toBe(true)
       }
     } finally { vi.useRealTimers() }
+  })
+})
+
+// nubbymong/aicc_planning#446 (ADR-031): a review's argv is the `review`
+// constant plus two allow-listed values, the model (`-m <id>`, just before
+// the effort override) and the reasoning effort (that override's level).
+// Main has already taken each from its allow-list; the package checks them
+// again, and a value outside them starts nothing, on either route.
+describe('the Codex reviewer: a chosen model and effort (nubbymong/aicc_planning#446)', () => {
+  const at = REVIEW_ARGV.indexOf('model_reasoning_effort=medium')
+  const chosen = (model: string | undefined, effort: string) => [...REVIEW_ARGV.slice(0, at - 1), ...(model ? ['-m', model] : []), '-c', `model_reasoning_effort=${effort}`, ...REVIEW_ARGV.slice(at + 1)]
+  const input = (over: Record<string, unknown> = {}) => ({
+    executable: 'C:\\Tools\\codex.exe', cwd: 'D:\\proj', prompt: 'Review this.', timeoutMs: 1000,
+    env: { PATH: 'C:\\Windows', SystemRoot: 'C:\\Windows', CODEX_HOME: 'C:\\res\\codex-realms\\r1' },
+    ...over,
+  })
+
+  it('nothing chosen is the constant, word for word; a choice adds -m and sets the level, and the rest is the constant unchanged', () => {
+    expect(at).toBeGreaterThan(10)
+    expect(codexReviewArgs()).toEqual(REVIEW_ARGV)
+    expect(codexReviewArgs({})).toEqual(REVIEW_ARGV)
+    const cmd = codexCommandLine('/usr/bin/codex', 'review', 'linux', {})
+    expect('refused' in cmd ? null : cmd.args).toEqual(REVIEW_ARGV)
+    expect(CODEX_REVIEW_DEFAULT_EFFORT).toBe('medium')
+    for (const effort of CODEX_REVIEW_EFFORTS) {
+      const args = codexReviewArgs({ model: 'gpt-6.1-sol', effort }) as string[]
+      expect(args).toEqual(chosen('gpt-6.1-sol', effort))
+      // Take the two values out again: what is left is the constant, byte for byte.
+      const back = [...args]
+      back.splice(back.indexOf('-m'), 2)
+      back[back.indexOf(`model_reasoning_effort=${effort}`)] = 'model_reasoning_effort=medium'
+      expect(back).toEqual(REVIEW_ARGV)
+      expect(args.filter((a) => a === '-m')).toHaveLength(1)
+      expect(args.filter((a) => a.startsWith('model_reasoning_effort='))).toHaveLength(1)
+    }
+    expect(codexReviewArgs({ model: 'gpt-6.1-sol' })).toEqual(chosen('gpt-6.1-sol', 'medium'))
+    expect(codexReviewArgs({ effort: 'high' })).toEqual(chosen(undefined, 'high'))
+    expect([...CODEX_REVIEW_EFFORTS]).toEqual(['minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'])
+  })
+
+  it('runs the chosen values on the direct route and through a Windows shim, each its own argv element; the request stays on stdin', async () => {
+    const { deps, spawned } = fakeDeps()
+    void createCodexReviewOperations({ platform: 'win32', runDeps: () => deps }).run(input({ model: 'gpt-6.1-sol', effort: 'high' }) as never)
+    void createCodexReviewOperations({ platform: 'win32', runDeps: () => deps }).run(input({ executable: 'C:\\npm\\codex.cmd', model: 'gpt-6.1-sol', effort: 'xhigh' }) as never)
+    void createCodexReviewOperations({ platform: 'linux', runDeps: () => deps }).run(input({ executable: '/usr/bin/codex', cwd: '/proj', env: { CODEX_HOME: '/h' }, effort: 'low' }) as never)
+    expect(spawned).toHaveLength(3)
+    expect(spawned[0].args).toEqual(chosen('gpt-6.1-sol', 'high'))
+    expect(spawned[0].opts).toMatchObject({ shell: false, windowsVerbatimArguments: false })
+    expect(spawned[1].file).toBe('C:\\Windows\\System32\\cmd.exe')
+    expect(spawned[1].args).toEqual(['/d', '/v:off', '/s', '/c', '""C:\\npm\\codex.cmd" ' + chosen('gpt-6.1-sol', 'xhigh').join(' ') + '"'])
+    expect(spawned[2].args).toEqual(chosen(undefined, 'low'))
+    for (const s of spawned) expect(s.child.stdin!.end).toHaveBeenCalledWith('Review this.')
+  })
+
+  it('a value outside the lists starts nothing, on the direct route and through a Windows shim', async () => {
+    const models = ['-m', '--profile=x', '-c', 'gpt 6', 'gpt"6', 'gpt%PATH%', 'a&b', 'gpt^x', 'gpt\n-c', '', 'x'.repeat(65), 7, null]
+    const efforts = ['none', 'turbo', '-c', '--yolo', 'high ', 'high\n', '%high%', 'high&x', '"high"', 'HIGH', '', 3, null]
+    for (const executable of ['C:\\Tools\\codex.exe', 'C:\\npm\\codex.cmd']) {
+      const { deps, spawned } = fakeDeps()
+      const review = createCodexReviewOperations({ platform: 'win32', runDeps: () => deps })
+      for (const model of models) {
+        expect(await review.run(input({ executable, model }) as never), `${executable} ${JSON.stringify(model)}`).toEqual({ ok: false, code: 'not-started', message: 'Codex could not be started: the model is not one this app passes to Codex.' })
+      }
+      for (const effort of efforts) {
+        expect(await review.run(input({ executable, effort }) as never), `${executable} ${JSON.stringify(effort)}`).toEqual({ ok: false, code: 'not-started', message: 'Codex could not be started: the reasoning effort is not one Codex takes.' })
+      }
+      expect(spawned).toHaveLength(0)
+    }
+  })
+
+  it('a text-only analysis runs on the default model and effort: one asked for with either starts nothing', async () => {
+    const { deps, spawned } = fakeDeps()
+    const review = createCodexReviewOperations({ platform: 'win32', runDeps: () => deps })
+    for (const over of [{ model: 'gpt-6.1-sol' }, { effort: 'high' }]) {
+      expect(await review.run(input({ purpose: 'analysis', ...over }) as never)).toMatchObject({ ok: false, code: 'not-started' })
+    }
+    expect(spawned).toHaveLength(0)
   })
 })
 

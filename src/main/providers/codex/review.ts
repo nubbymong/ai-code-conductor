@@ -17,7 +17,7 @@
 // events and can be large), so no output cap can cut the reply off.
 import type { ProviderReviewOperations, ReviewRunInput, ReviewRunResult, ReviewUsage } from '../core'
 import { reviewerEnv, finishReview, redactFailure as redact, redactHead, clip, WINDOW, MARGIN, MAX_MESSAGE, REVIEW_MAX_TEXT } from '../review-support'
-import { codexCommandLine, codexShellEnv, runCodexCli } from './cli-runner'
+import { codexCommandLine, codexReviewCommandLine, codexShellEnv, runCodexCli } from './cli-runner'
 import type { CodexRunDeps } from './cli-runner'
 import { ANALYSIS_UNREACHABLE_WORDS } from '../../../shared/sentinel-analysis-contract'
 
@@ -148,8 +148,17 @@ export function createCodexReviewOperations(deps: { platform?: NodeJS.Platform; 
       const win32 = platform === 'win32'
       const env = reviewerEnv(input.env, platform)
       // P3.9 round 1: a text-only analysis runs its own constant argv (no
-      // tools, no instructions from the folder; cli-runner.ts, `analysis`).
-      const cmd = codexCommandLine(input.executable, input.purpose === 'analysis' ? 'analysis' : 'review', platform, codexShellEnv(env, platform))
+      // tools, no instructions from the folder; cli-runner.ts, `analysis`),
+      // on Codex's own default model and effort: one asked for with either
+      // starts nothing. A review is the `review` constant plus the two
+      // allow-listed values main chose (ADR-031, nubbymong/aicc_planning#446).
+      const analysis = input.purpose === 'analysis'
+      if (analysis && (input.model !== undefined || input.effort !== undefined)) {
+        return { ok: false, code: 'not-started', message: 'Codex could not be started: a text-only analysis runs on the default model and effort.' }
+      }
+      const cmd = analysis
+        ? codexCommandLine(input.executable, 'analysis', platform, codexShellEnv(env, platform))
+        : codexReviewCommandLine(input.executable, { model: input.model, effort: input.effort }, platform, codexShellEnv(env, platform))
       if ('refused' in cmd) return { ok: false, code: 'not-started', message: `Codex could not be started: ${cmd.refused}.` }
       // cmd.exe cannot use a network path as its current directory: it would
       // start the shim in the Windows folder and Codex would review that.
