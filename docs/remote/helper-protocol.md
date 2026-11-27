@@ -59,6 +59,45 @@ probe (ADR) must confirm. R5 fixtures fix field types, lengths and refusals.
   `oauthAccount.emailAddress`); its one string is the tab's account label
   after the app's display gate, and a read with no answer leaves the tab
   with no label and never fails the start.
+- **Accounts signed in on the machine** (2.1.3-beta.20 section 3, Sign in
+  on this machine). Each account of the app signed in there has a folder of
+  its own, `~/.aicc/accounts/<profile id>/` (0700; beside the device
+  folders, as an account's sign-in is the machine user's, not one
+  install's), holding the marker `.aicc-account` (`aicc-account 1 <profile
+  id>`, a regular file): no script reads or removes such a folder without
+  it. The folder is the CLI's config folder for that account
+  (`CLAUDE_CONFIG_DIR`): its sign-in files (`.credentials.json`,
+  `.claude.json`) are its own, the shared folders (projects, memory, agents,
+  skills, commands, plugins) and `CLAUDE.md` are links into `~/.claude`
+  only, and `settings.json` is the app's sanitised copy of
+  `~/.claude/settings.json`. Three fixed scripts: `account` makes the
+  folder at a sign-in (`make`) or brings its links and settings copy up to
+  date at a launch on it (`refresh`, which makes nothing and answers `gone`
+  for a folder that is not there); `accounts`, through the launcher, reads
+  every sign-in there and the machine's own in one exec, each file by the
+  helper's field mode with `--keys` (below), printing `AICC-FIELD <nonce>
+  <own or profile id> <id or cr>` before each answer; `signout` runs the
+  CLI's own `claude auth logout` with `CLAUDE_CONFIG_DIR` set to one
+  account's folder and then removes that folder only (`folder`), every
+  marked folder there (`all`, for Remove), or the machine's own sign-in
+  with the variable unset and nothing removed (`own`, only after the user
+  confirmed it). The app reads at Check, at the start-up list, at the end
+  of a sign-in tab and at each launch of a tab on an account; nothing polls.
+- **Field mode's keys** (`helper/src/field.rs`, from 2.1.3-beta.20).
+  `field --file <file> --keys <k1,k2,...>` reads 1 to 8 keys of one JSON
+  file under the home folder and prints one JSON object of the keys it
+  found, in the order given, each a string (1 to 1024 bytes, no control
+  character) or an integer of 0 to 2^53 - 1; `{}` when it found none;
+  nothing when the file is not a regular file of the user's own (missing,
+  another user's, a folder, a FIFO, over 5 MiB, not JSON). `--key` keeps its
+  one-string output. Both read only the keys on the helper's own list,
+  `ALLOWED_KEYS`: `oauthAccount.emailAddress` (the account a sign-in names,
+  in `.claude.json`), `claudeAiOauth.subscriptionType`,
+  `claudeAiOauth.rateLimitTier` and `claudeAiOauth.expiresAt` (its plan,
+  tier and expiry, in `.credentials.json`). A key with a part named
+  `accessToken` or `refreshToken`, in any case, is refused by name whatever
+  the list says. A key off the list is a command line the mode does not
+  take: exit 2, nothing read.
 - **Session id (`sid`)**, chosen by the app: `^[A-Za-z0-9][A-Za-z0-9_-]{7,31}$`.
   Every socket bind and connect happens after a `chdir` into the session
   folder, by the name `s`, so a long home never meets the path limit.

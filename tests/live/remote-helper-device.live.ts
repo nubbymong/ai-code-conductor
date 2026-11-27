@@ -96,12 +96,13 @@ import { RemoteMachines, type MachineStore, type RemoteMachineRecord } from '../
 import { nodeSshRunner, execArgv, sshEnv, newNonce, readScriptResult, runScript, type SshRunner, type SshTarget } from '../../src/main/remote-helper/ssh-exec'
 import { RemoteHelperPty, remoteLaunchSpec, remoteSessionId } from '../../src/main/remote-helper/session'
 import { remoteLaunchOf, type RemoteSignalDeps } from '../../src/main/remote-helper'
-import { claudeRemoteLaunch } from '../../src/main/providers/claude/remote-launch'
+import { CLAUDE_REMOTE_ACCOUNTS, claudeRemoteLaunch } from '../../src/main/providers/claude/remote-launch'
 import { readBundledLinuxHelper, type BundledLinuxHelper } from '../../src/main/remote-helper/manifest'
 import { listKept, untilEnded } from '../../src/main/remote-helper/kept'
 import { readRecord } from '../../src/main/session-helper/protocol'
 import { fieldAnswerOf, readHostForStart, type HostAccountRead } from '../../src/main/remote-helper/host-reads'
 import { scriptCommand } from '../../src/main/remote-helper/scripts'
+import { accountFolder, prepareAccountFolder, readMachineAccounts, signOutOnMachine } from '../../src/main/remote-helper/host-accounts'
 
 const need = (name: string): string => {
   const v = process.env[name]
@@ -1294,6 +1295,79 @@ describe('remote helper on a real Linux host', () => {
     expect(top).toEqual(expect.arrayContaining(['helper', 'owner', 'sessions', 'store']))
     expect(machineLogs.slice(logsBefore)).toContain(`[remote-helper] ${target.host}: removed 1 earlier helper folder(s), as no session is held there`)
     current = updated
+  })
+
+  // 2.1.3-beta.20 section 3 (Sign in on this machine), with stand-in account
+  // folders of the run's own (their sign-in files hold no real sign-in): the
+  // folder made 0700 with the app's marker and its links into ~/.claude only;
+  // one read of every sign-in through the helper's field mode, which never
+  // prints a token; a launch on it with the folder as the CLI's config folder;
+  // and Sign out removing its own folder only. The CLI's own sign-out may not
+  // be there (the CI runner has no claude): the folder goes all the same.
+  it('a stand-in account folder: made with links into ~/.claude only, read without its token, launched on as the CLI\'s config folder, and signed out alone (2.1.3-beta.20 section 3)', async () => {
+    // The machine as its list holds it now (the update case's Check put the other build there).
+    const list = current ?? machines
+    const rec = list.get(machine.did)!
+    const tag = newNonce().slice(0, 8)
+    const a = `profile-e2e-${tag}-a`
+    const b = `profile-e2e-${tag}-b`
+    const ctx = { runner, installId: list.installId(), log: (x: string) => { sessionLog(x) } }
+    const via = { ...CLAUDE_REMOTE_ACCOUNTS, profiles: async () => [{ id: a, accountEmail: 'e2e-a@example.com', name: 'E2E A' }, { id: b, accountEmail: 'e2e-b@example.com', name: 'E2E B' }] }
+    const folderA = accountFolder(machine, a)
+    const folderB = accountFolder(machine, b)
+    const secret = `e2e-not-a-token-${tag}`
+    try {
+      for (const id of [a, b]) expect(await prepareAccountFolder(ctx, rec, via, id, 'make', 'keep'), id).toEqual({ ok: true, own: [] })
+      const shape = sshRun(`stat -c '%a %u' "${folderA}" "$HOME/.aicc/accounts"; id -u; cat "${folderA}/.aicc-account"; for n in projects memory agents skills commands plugins CLAUDE.md; do readlink "${folderA}/$n"; done`).out.trim().split('\n')
+      note('account-folder', shape)
+      const uid = shape[2]
+      expect(shape.slice(0, 4)).toEqual([`700 ${uid}`, `700 ${uid}`, uid, `aicc-account 1 ${a}`])
+      expect(shape.slice(4)).toEqual(['projects', 'memory', 'agents', 'skills', 'commands', 'plugins', 'CLAUDE.md'].map((n) => `${machine.home}/.claude/${n}`))
+      // A's stand-in sign-in, holding a token the read must never print.
+      const write = sshRun(`umask 077 && printf '%s' '{"oauthAccount":{"emailAddress":"e2e-a@example.com"}}' > "${folderA}/.claude.json" && printf '%s' '{"claudeAiOauth":{"accessToken":"${secret}","refreshToken":"${secret}","expiresAt":1764000000000,"subscriptionType":"max"}}' > "${folderA}/.credentials.json" && echo made`)
+      expect(write.out.trim(), write.err).toBe('made')
+      const nonce = newNonce()
+      const raw = await runScript(runner, target, 'accounts', [nonce, rec.did, list.installId(), rec.helper.folder, rec.helper.sha256, '.claude.json', '.claude/.credentials.json', '.claude.json', '.credentials.json', 'oauthAccount.emailAddress', 'claudeAiOauth.subscriptionType,claudeAiOauth.rateLimitTier,claudeAiOauth.expiresAt'])
+      note('accounts-read', raw.stdout)
+      expect(raw.stdout).not.toContain(secret)
+      expect(readScriptResult(raw.stdout, nonce)?.ok, raw.stdout).toBe(true)
+      const read = await readMachineAccounts(ctx, rec, via)
+      expect(read.ok, read.why).toBe(true)
+      expect(read.accounts.find((x) => x.profileId === a)).toMatchObject({ state: 'signed-in-here', folder: true, facts: { identity: 'e2e-a@example.com', plan: 'max', expiresAt: 1764000000000 } })
+      expect(read.accounts.find((x) => x.profileId === b)).toMatchObject({ state: 'not-signed-in', folder: true })
+      // A refresh writes its settings copy (a link there replaced, never written through).
+      expect(sshRun(`ln -s /dev/null "${folderA}/settings.json" && echo made`).out.trim()).toBe('made')
+      expect(await prepareAccountFolder(ctx, rec, via, a, 'refresh', '{"theme":"dark"}\n')).toEqual({ ok: true, own: [] })
+      expect(sshRun(`test -L "${folderA}/settings.json" && echo link || cat "${folderA}/settings.json"`).out.trim()).toBe('{"theme":"dark"}')
+      // A launch on it: the fake CLI sees the folder as its config folder.
+      if (remoteFakeDir) {
+        const m: RemoteMachineRecord = { ...rec, claudePath: `${remoteFakeDir}/aicc-fake-cli`, check: { at: Date.now(), ok: true } }
+        const plan = remoteLaunchOf(claudeRemoteLaunch, m, { model: 'e2e-model' }, null, () => true, remoteSessionId('e2e-acct'), 100, 30, false, false, { configDir: folderA })
+        const pty = new RemoteHelperPty({ appPtyId: 'e2e-acct', machine: m, installId: list.installId(), runner, spec: plan.spec, plan, log: sessionLog })
+        let out = ''
+        pty.onData((d) => { out += d })
+        try {
+          await until('the fake CLI\'s banner', () => out.includes('FAKE-CLI READY'))
+          pty.write('env CLAUDE_CONFIG_DIR\r')
+          await until('its config folder', () => out.includes(`env CLAUDE_CONFIG_DIR=${folderA}`))
+        } finally {
+          pty.kill()
+          await pty.ended
+        }
+      }
+      // Sign out: A's folder goes, B's stays; then B's.
+      const outA = await signOutOnMachine(ctx, rec, via, { profileId: a })
+      note('sign-out-a', outA)
+      expect(outA).toMatchObject({ ok: true, removed: true, gone: false })
+      expect(sshRun(`test -e "${folderA}" && echo there || echo gone; test -d "${folderB}" && echo there || echo gone`).out.trim().split('\n')).toEqual(['gone', 'there'])
+      expect(await signOutOnMachine(ctx, rec, via, { profileId: a })).toEqual({ ok: true, logout: null, removed: false, gone: true })
+      expect(await signOutOnMachine(ctx, rec, via, { profileId: b })).toMatchObject({ ok: true, removed: true })
+      expect(await prepareAccountFolder(ctx, rec, via, a, 'refresh', null)).toMatchObject({ ok: false, gone: true })
+    } finally {
+      // Whatever a failed step left: only the run's own two folders, by their marker's name.
+      for (const f of [folderA, folderB]) sshRun(`test -f "${f}/.aicc-account" && rm -rf -- "${f}"`)
+      sshRun('rmdir -- "$HOME/.aicc/accounts" 2>/dev/null; true')
+    }
   })
 
   it('Remove takes it away: nothing of the run is left under ~/.aicc, and no helper process', async () => {

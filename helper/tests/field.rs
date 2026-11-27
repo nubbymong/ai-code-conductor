@@ -4,7 +4,9 @@
 //! at the key of a JSON file in the home folder it is given (`HOME`) and one
 //! line end, or nothing at all, and exit 0 whatever the file holds; exit 2 on
 //! a command line it does not take. Nothing ever goes to standard error on
-//! exit 0. On Windows it prints nothing.
+//! exit 0. On Windows it prints nothing. From 2.1.3-beta.20 (section 3.1.2)
+//! `--keys` prints one JSON object of several keys of the file, and every key
+//! must be on the field mode's list: a sign-in's secrets never are.
 
 use std::fs;
 use std::path::PathBuf;
@@ -108,9 +110,97 @@ fn the_string_at_the_key_is_printed_from_a_path_relative_to_home_or_absolute_ins
     home.dir("sub");
     home.file("sub/account.json", ACCOUNT);
     printed(in_home(&home, "sub/account.json"), "a@b.c", "a file in a folder in home");
-    printed(field(Some(home.0.to_str().expect("a Unicode path")), &["--file", ".claude.json", "--key", "oauthAccount.accountUuid"]), "u", "another key");
-    // The provider package names the key: none is compiled in.
-    nothing(field(Some(home.0.to_str().expect("a Unicode path")), &["--file", ".claude.json", "--key", "numStartups"]), "a number is not a string");
+    // The provider package names the key, from the field mode's list
+    // (2.1.3-beta.20): a key off it is a command line it does not take.
+    refused(field(Some(home.0.to_str().expect("a Unicode path")), &["--file", ".claude.json", "--key", "oauthAccount.accountUuid"]), "a key off the list");
+    refused(field(Some(home.0.to_str().expect("a Unicode path")), &["--file", ".claude.json", "--key", "numStartups"]), "a key off the list");
+}
+
+/// Exited 2, printed nothing on standard output, and said why on standard error.
+fn refused(ran: Ran, what: &str) {
+    let (code, stdout, stderr) = ran;
+    assert_eq!(code, Some(2), "{what}: {stderr}");
+    assert!(stdout.is_empty(), "{what}: {stdout}");
+    assert!(stderr.contains("aicc-helper:"), "{what}: {stderr}");
+}
+
+const CREDENTIALS: &[u8] = br#"{"claudeAiOauth":{"accessToken":"secret-access","refreshToken":"secret-refresh","expiresAt":1764000000000,"scopes":["user:inference"],"subscriptionType":"max","rateLimitTier":"default_claude_max_20x"}}"#;
+
+/// 2.1.3-beta.20 section 3.1.2: a sign-in's secrets are never read, by
+/// `--key` or `--keys`, in any case, beside a key on the list or alone; nor
+/// is any key off the list. Nothing is read: standard output stays empty
+/// even with a file that holds them.
+#[test]
+fn secret_keys_and_keys_off_the_list_exit_2_and_print_nothing() {
+    let home = Folder::new("secret");
+    let home_arg = home.0.to_str().expect("a Unicode path").to_string();
+    home.file(".credentials.json", CREDENTIALS);
+    for key in ["claudeAiOauth.accessToken", "claudeAiOauth.refreshToken", "claudeAiOauth.AccessToken", "claudeAiOauth.REFRESHTOKEN", "claudeAiOauth.scopes", "claudeAiOauth"] {
+        let both = format!("claudeAiOauth.subscriptionType,{key}");
+        refused(field(Some(home_arg.as_str()), &["--file", ".credentials.json", "--key", key]), key);
+        refused(field(Some(home_arg.as_str()), &["--file", ".credentials.json", "--keys", key]), key);
+        refused(field(Some(home_arg.as_str()), &["--file", ".credentials.json", "--keys", both.as_str()]), key);
+    }
+    let nine = vec!["claudeAiOauth.expiresAt"; 9].join(",");
+    for keys in ["", ",", "claudeAiOauth.expiresAt,", "claudeAiOauth.expiresAt,claudeAiOauth.expiresAt", nine.as_str()] {
+        refused(field(Some(home_arg.as_str()), &["--file", ".credentials.json", "--keys", keys]), keys);
+    }
+    refused(field(Some(home_arg.as_str()), &["--file", ".credentials.json", "--key", KEY, "--keys", KEY]), "--key and --keys together");
+}
+
+/// `--keys`: one JSON object and one line end, each key found in the order
+/// given, strings as `--key` takes them and integers of 0 to 2^53 - 1;
+/// `{}` for a file that holds none of them.
+#[cfg(unix)]
+#[test]
+fn several_keys_print_one_object_of_strings_and_integers() {
+    let home = Folder::new("keys");
+    let home_arg = home.0.to_str().expect("a Unicode path").to_string();
+    home.dir(".claude");
+    home.file(".claude/.credentials.json", CREDENTIALS);
+    let ran = field(Some(home_arg.as_str()), &["--file", ".claude/.credentials.json", "--keys", "claudeAiOauth.subscriptionType,claudeAiOauth.rateLimitTier,claudeAiOauth.expiresAt"]);
+    assert!(!ran.1.contains("secret"), "{}", ran.1);
+    assert_eq!(
+        ran,
+        (Some(0), "{\"claudeAiOauth.subscriptionType\":\"max\",\"claudeAiOauth.rateLimitTier\":\"default_claude_max_20x\",\"claudeAiOauth.expiresAt\":1764000000000}\n".to_string(), String::new()),
+        "the plan, tier and expiry"
+    );
+    home.file(".claude.json", ACCOUNT);
+    assert_eq!(
+        field(Some(home_arg.as_str()), &["--file", ".claude.json", "--keys", "oauthAccount.emailAddress,claudeAiOauth.expiresAt"]),
+        (Some(0), "{\"oauthAccount.emailAddress\":\"a@b.c\"}\n".to_string(), String::new()),
+        "a key the file does not hold is left out"
+    );
+    home.file("empty.json", b"{\"claudeAiOauth\":{}}");
+    assert_eq!(field(Some(home_arg.as_str()), &["--file", "empty.json", "--keys", "claudeAiOauth.expiresAt"]), (Some(0), "{}\n".to_string(), String::new()), "none of the keys");
+    home.file("odd.json", br#"{"claudeAiOauth":{"expiresAt":9007199254740992,"subscriptionType":7,"rateLimitTier":"a\"b"}}"#);
+    assert_eq!(
+        field(Some(home_arg.as_str()), &["--file", "odd.json", "--keys", "claudeAiOauth.expiresAt,claudeAiOauth.subscriptionType,claudeAiOauth.rateLimitTier"]),
+        (Some(0), "{\"claudeAiOauth.subscriptionType\":7,\"claudeAiOauth.rateLimitTier\":\"a\\\"b\"}\n".to_string(), String::new()),
+        "an integer past 2^53 - 1 is left out; a quote is escaped"
+    );
+}
+
+/// `--keys` reads its file as `--key` does: a missing file, another user's,
+/// or anything but a regular file prints nothing at all (not `{}`).
+#[cfg(unix)]
+#[test]
+fn several_keys_of_a_missing_or_another_users_file_print_nothing() {
+    use std::os::unix::fs::{symlink, MetadataExt};
+    let home = Folder::new("keys-nothing");
+    let home_arg = home.0.to_str().expect("a Unicode path").to_string();
+    let keys = "oauthAccount.emailAddress,claudeAiOauth.expiresAt";
+    nothing(field(Some(home_arg.as_str()), &["--file", ".claude.json", "--keys", keys]), "a file that is not there");
+    let mine = fs::metadata(&home.0).expect("the home folder").uid();
+    if fs::metadata("/etc/hosts").expect("/etc/hosts").uid() != mine {
+        symlink("/etc/hosts", home.0.join("hosts.json")).expect("a link");
+        nothing(field(Some(home_arg.as_str()), &["--file", "hosts.json", "--keys", keys]), "another user's file");
+    }
+    home.dir("folder.json");
+    nothing(field(Some(home_arg.as_str()), &["--file", "folder.json", "--keys", keys]), "a folder");
+    home.file("text.json", b"not JSON");
+    nothing(field(Some(home_arg.as_str()), &["--file", "text.json", "--keys", keys]), "a file that is not JSON");
+    nothing(field(Some(home_arg.as_str()), &["--file", "../outside.json", "--keys", keys]), "a path out of home");
 }
 
 #[cfg(unix)]
@@ -130,8 +220,10 @@ fn anything_but_the_string_prints_nothing_and_exits_0() {
     let home = Folder::new("nothing");
     let home_arg = home.0.to_str().expect("a Unicode path").to_string();
     home.file(".claude.json", ACCOUNT);
-    nothing(field(Some(home_arg.as_str()), &["--file", ".claude.json", "--key", "oauthAccount.missing"]), "a missing key");
-    nothing(field(Some(home_arg.as_str()), &["--file", ".claude.json", "--key", "oauthAccount"]), "an object");
+    home.file("no-email.json", br#"{"oauthAccount":{"accountUuid":"u"}}"#);
+    nothing(in_home(&home, "no-email.json"), "a missing key");
+    home.file("object.json", br#"{"oauthAccount":{"emailAddress":{"a":"b"}}}"#);
+    nothing(in_home(&home, "object.json"), "an object");
     nothing(in_home(&home, "missing.json"), "a file that is not there");
     home.file("text.json", b"oauthAccount.emailAddress = a@b.c");
     nothing(in_home(&home, "text.json"), "a file that is not JSON");
@@ -206,4 +298,5 @@ fn on_windows_the_field_mode_prints_nothing_and_exits_0() {
     let home = Folder::new("windows");
     home.file(".claude.json", ACCOUNT);
     nothing(field(Some(home.0.to_str().expect("a Unicode path")), &["--file", ".claude.json", "--key", KEY]), "Windows");
+    nothing(field(Some(home.0.to_str().expect("a Unicode path")), &["--file", ".claude.json", "--keys", KEY]), "Windows, several keys");
 }

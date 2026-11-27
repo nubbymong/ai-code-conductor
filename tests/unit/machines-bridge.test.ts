@@ -73,10 +73,30 @@ describe('Machines preload bridge', () => {
     expect(await api.machines.endSession('x')).toBe(answer)
   })
 
-  it('offers no push: the page reads on open, on Refresh and after each action', () => {
+  it('offers no push but the two of the machines\' accounts: the page reads on open, on Refresh and after each action', () => {
     expect(Object.keys(api.machines).sort()).toEqual(['endSession', 'reattach', 'remote', 'runSelfTest', 'status'])
     // 2.1.3-beta.19 section 1.2: the kept sessions (asked, never pushed), End of one, End of a tab's own.
-    expect(Object.keys(api.machines.remote).sort()).toEqual(['add', 'check', 'endSession', 'endTab', 'prepare', 'remove', 'sessions', 'state'])
+    // 2.1.3-beta.20 section 3: the machines' accounts (asked), a sign-out, and two pushes: a machine's
+    // accounts after each read, and a helper tab's account notice.
+    expect(Object.keys(api.machines.remote).sort()).toEqual(['accountSignOut', 'accounts', 'add', 'check', 'endSession', 'endTab', 'onAccountNotice', 'onAccountsChanged', 'prepare', 'remove', 'sessions', 'state'])
+  })
+
+  it('2.1.3-beta.20: the accounts and a sign-out go to their own channels with what they are given; Remove passes its options only when given; the pushes listen on their own channels', async () => {
+    el.ipcRenderer.invoke.mockResolvedValue({ machines: [] })
+    await api.machines.remote.accounts()
+    expect(el.ipcRenderer.invoke).toHaveBeenLastCalledWith(IPC.MACHINES_REMOTE_ACCOUNTS)
+    const req = { did: 'd'.repeat(32), profileId: 'profile-a', confirmMachineOwn: true }
+    await api.machines.remote.accountSignOut(req)
+    expect(el.ipcRenderer.invoke).toHaveBeenLastCalledWith(IPC.MACHINES_REMOTE_ACCOUNT_SIGN_OUT, req)
+    await api.machines.remote.remove('d'.repeat(32), { forget: true })
+    expect(el.ipcRenderer.invoke).toHaveBeenLastCalledWith(IPC.MACHINES_REMOTE_REMOVE, 'd'.repeat(32), { forget: true })
+    el.ipcRenderer.on.mockClear()
+    const off1 = api.machines.remote.onAccountsChanged(() => {})
+    const off2 = api.machines.remote.onAccountNotice(() => {})
+    expect(el.ipcRenderer.on.mock.calls.map((c: unknown[]) => c[0])).toEqual([IPC.MACHINES_REMOTE_ACCOUNTS_CHANGED, IPC.REMOTE_ACCOUNT_NOTICE])
+    off1()
+    off2()
+    expect(el.ipcRenderer.removeListener).toHaveBeenCalledTimes(2)
   })
 
   it('2.1.3-beta.19: the kept sessions and both Ends go to their own channels, with what they are given', async () => {

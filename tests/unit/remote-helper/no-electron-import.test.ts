@@ -49,12 +49,15 @@ describe('the modules the remote helper device check imports', () => {
       import('../../../src/main/remote-helper/kept'),
       // And section 1.1's record reader the live file reads a holder's record with.
       import('../../../src/main/session-helper/protocol'),
+      // 2.1.3-beta.20 section 3: an account's folder, its read and its sign-out, run by the live file too.
+      import('../../../src/main/remote-helper/host-accounts'),
     ])
     expect(typeof modules[0].remoteLaunchOf).toBe('function')
     expect(typeof modules[5].claudeRemoteLaunch.launch).toBe('function')
     expect(typeof modules[6].wireToolStreams).toBe('function')
     expect(typeof modules[7].listKept).toBe('function')
     expect(typeof modules[8].readRecord).toBe('function')
+    expect(typeof modules[9].readMachineAccounts).toBe('function')
   })
 
   it('the live file imports no other module of the app', async () => {
@@ -65,6 +68,7 @@ describe('the modules the remote helper device check imports', () => {
     expect(imported).toEqual([
       '../../src/main/providers/claude/remote-launch',
       '../../src/main/remote-helper',
+      '../../src/main/remote-helper/host-accounts',
       '../../src/main/remote-helper/host-reads',
       '../../src/main/remote-helper/kept',
       '../../src/main/remote-helper/machines',

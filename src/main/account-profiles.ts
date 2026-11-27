@@ -34,8 +34,11 @@ import type { ProjectGateResult } from '../shared/providers'
 
 // Shared-directory names junctioned from a profile back to the shared root.
 // Identity files (.credentials.json, .claude.json, statsig, telemetry, caches)
-// are deliberately NOT here -- they stay private per profile.
-export const SHARED_DIR_NAMES = ['projects', 'memory', 'agents', 'skills', 'commands', 'plugins'] as const
+// are deliberately NOT here -- they stay private per profile. One list for
+// this computer and for the machines an account signs in on (2.1.3-beta.20
+// section 3.1.3): it lives in shared/account-folder.ts.
+import { SHARED_DIR_NAMES } from '../shared/account-folder'
+export { SHARED_DIR_NAMES }
 
 // Profile ids are CCC-generated, lowercase-alphanumeric + hyphen. Validating is
 // the primary defense against a malicious/buggy renderer-supplied id (e.g.

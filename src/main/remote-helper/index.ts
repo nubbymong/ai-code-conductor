@@ -21,20 +21,37 @@
  * it (`kept`), so the renderer marks its saved record at once. A marked tab
  * the helper cannot take now starts nothing and says the step.
  *
+ * 2.1.3-beta.20 section 3 (Sign in on this machine): a tab whose config
+ * names an account (`profileId`) starts on that account's sign-in on the
+ * machine, as ./session.ts reads it at the launch: its own folder there, the
+ * machine's own sign-in when that is the account, or nothing, with the
+ * renderer told why (REMOTE_ACCOUNT_NOTICE). A sign-in tab
+ * (`remoteAccountSignIn`, with its account) runs the CLI's own sign-in in the
+ * account's folder there; it only ever goes through the helper (never the
+ * usual path), as a plain SSH tab (the away clock), and its end reads the
+ * machine again. The Machines page's accounts (each machine's last read, no
+ * exec) and a sign-out on a machine are this file's too
+ * (remoteAccountsState, signOutRemoteAccount), and so are Check's and the
+ * start-up list's reads (readRemoteAccounts) and Remove's sign-outs
+ * (signOutForRemove).
+ *
  * This file imports nothing of Electron: the window is given as the little it
  * needs.
  */
 import type { IPty } from 'node-pty'
 import { IPC } from '../../shared/ipc-channels'
 import { SSH_THROUGH_HELPER, type RemoteActionResult, type RemoteMachineSessions } from '../../shared/remote-machines'
+import type { HostAccountNotice, HostAccountsState, HostMachineAccounts, HostSignOutRequest, HostSignOutResult } from '../../shared/host-accounts'
 import type { DetachedRemote, DetachedRemoteLiveness } from '../../shared/types'
-import { DEFAULT_PROVIDER_ID, type ProviderId } from '../../shared/providers/ids'
+import { DEFAULT_PROVIDER_ID, PROVIDER_IDS, type ProviderId } from '../../shared/providers/ids'
 import { tryGetProvider } from '../providers'
 import { colorFgBgValue, resolveHostColorScheme } from '../providers/host-color-scheme'
-import type { ProviderRemoteLaunch, RemoteHostFile, RemoteLaunchOptions } from '../providers/types'
+import type { ProviderRemoteLaunch, RemoteAccounts, RemoteHostFile, RemoteLaunchOptions } from '../providers/types'
 import type { SSHOptions } from '../ssh-options'
 import { ROUTE_WHY, routeSshTab, type PersistentStanding, type Route } from './route'
-import { NoticePty, RemoteDriver, RemoteHelperPty, remoteCwd, remoteHelperCommands, remoteLaunchSpec, remoteSessionId, type RemoteLaunchPlan } from './session'
+import { NoticePty, RemoteDriver, RemoteHelperPty, remoteCwd, remoteHelperCommands, remoteLaunchSpec, remoteSessionId, type RemoteLaunchPlan, type RemoteTabAccount } from './session'
+import { accountFolder, accountName, hostAccountsState, machineAccounts, readMachineAccounts, signOutAllOnMachine, signOutOnMachine, type HostProfile } from './host-accounts'
+import { ACCOUNT_PROFILE_RE } from './scripts'
 import { listKept, machineSessions } from './kept'
 import type { HolderKind } from './scripts'
 import { HOST_READS_MAX, hostReadProblem, sessionFilesInput } from './session-files'
@@ -69,6 +86,10 @@ export interface RemoteHelperDeps {
    *  readDetachedRemotesRegistry), read at an SSH Persistent tab's start for
    *  its config's tmux entries (2.1.3-beta.19). Absent: none. */
   registry?: () => readonly DetachedRemote[]
+  /** 2.1.3-beta.20 section 3.1.4: the email this computer holds for an
+   *  account, read when a sign-in tab starts (so the CLI's sign-in asks for
+   *  that account). Absent, or undefined: none is named. */
+  profileEmail?: (profileId: string) => string | undefined
 }
 
 /** What a tab through the helper needs of the Session Watchdog
@@ -189,6 +210,25 @@ export interface RemoteSpawnOptions {
   configId?: string
   /** The tab's saved mark (2.1.3-beta.19): its session is kept by the helper. */
   remoteVia?: 'helper'
+  /** 2.1.3-beta.20 section 3.1.7: the config's account (a profile id of this
+   *  computer). Through the helper, it decides which sign-in the tab runs on
+   *  there; absent, the machine's own sign-in, as before. */
+  profileId?: string
+  /** 2.1.3-beta.20 section 3.1.4 (shared/host-accounts.ts
+   *  HOST_SIGN_IN_SPAWN_FIELD): a sign-in tab for `profileId` on the tab's
+   *  machine. */
+  remoteAccountSignIn?: boolean
+}
+
+/** 2.1.3-beta.20 section 3: the provider whose accounts sign in on hosts
+ *  (the first registered one with remote accounts; Claude Code in this
+ *  release), or null. */
+export function remoteAccountsProvider(): { provider: ProviderId; via: RemoteAccounts } | null {
+  for (const id of PROVIDER_IDS) {
+    const via = tryGetProvider(id)?.remoteLaunch?.accounts?.()
+    if (via) return { provider: id, via }
+  }
+  return null
 }
 
 /** What a window must offer for the tab's output. */
@@ -217,9 +257,12 @@ export function remoteTerminalEnv(settings: Readonly<Record<string, unknown>> | 
  * itself; the tab then takes the usual path, or, when it is marked as kept
  * by the helper, starts nothing and says the step.
  */
-export function remoteLaunchOf(via: ProviderRemoteLaunch, m: RemoteMachineRecord, options: RemoteSpawnOptions, settings: Readonly<Record<string, unknown>> | null, systemPrefersDark: () => boolean, sid: string, cols: number, rows: number, tools = false, resumes = false): RemoteLaunchPlan {
+export function remoteLaunchOf(via: ProviderRemoteLaunch, m: RemoteMachineRecord, options: RemoteSpawnOptions, settings: Readonly<Record<string, unknown>> | null, systemPrefersDark: () => boolean, sid: string, cols: number, rows: number, tools = false, resumes = false, account: Pick<RemoteLaunchOptions, 'configDir' | 'signIn'> = {}): RemoteLaunchPlan {
   const remotePath = options.ssh?.remotePath
   const launchOptions: RemoteLaunchOptions = {
+    // 2.1.3-beta.20 section 3: the account's own folder on the host, and a sign-in tab's sign-in.
+    ...(account.configDir ? { configDir: account.configDir } : {}),
+    ...(account.signIn ? { signIn: account.signIn } : {}),
     model: options.model,
     effortLevel: options.effortLevel,
     permissionMode: options.permissionMode,
@@ -260,6 +303,8 @@ export function remoteHelperPty(win: OutputWindow, sessionId: string, options: R
   startedThroughHelper.delete(sessionId)
   const d = deps
   const ssh = options.ssh
+  // 2.1.3-beta.20 section 3.1.4: a sign-in tab never takes the usual path.
+  if (ssh && options.remoteAccountSignIn === true) return signInPty(win, sessionId, options, ssh, cols, rows)
   if (!d || !ssh) return null
   const usual = (why: string): null => {
     d.log(`[remote-helper] ${sessionId}: the usual SSH path, because ${why}`)
@@ -339,12 +384,25 @@ export function remoteHelperPty(win: OutputWindow, sessionId: string, options: R
     const why = `its provider (${provider?.displayName ?? providerId}) has no launch through the session helper`
     return marked ? startsNothing({ via: 'nothing', why, step: 'End it on the Machines page' }) : usualPath(why)
   }
+  const remote = provider.remoteLaunch
   let pty: RemoteHelperPty
   try {
     // The app's tools go to the tab only while it serves them (asked once, at the start).
     let tools = false
     try { tools = d.signals?.toolsServed() === true } catch { tools = false }
-    const plan = remoteLaunchOf(provider.remoteLaunch, m, { ...options, provider: providerId }, settings, d.systemPrefersDark, remoteSessionId(sessionId), cols, rows, tools, resumes)
+    const launchOn = (account: Pick<RemoteLaunchOptions, 'configDir'> = {}): RemoteLaunchPlan =>
+      remoteLaunchOf(remote, m, { ...options, provider: providerId }, settings, d.systemPrefersDark, remoteSessionId(sessionId), cols, rows, tools, resumes, account)
+    // 2.1.3-beta.20 section 3.1.7: the config's account decides. Its launch
+    // on its own folder there, and the same on the machine's own sign-in;
+    // the start's read of the machine picks one, or starts nothing.
+    const accounts = remote.accounts?.()
+    const profileId = typeof options.profileId === 'string' && ACCOUNT_PROFILE_RE.test(options.profileId) ? options.profileId : undefined
+    const plan = accounts && profileId ? launchOn({ configDir: accountFolder(m, profileId) }) : launchOn()
+    let account: RemoteTabAccount | undefined
+    if (accounts && profileId) {
+      const own = launchOn()
+      account = { profileId, via: accounts, signIn: false, own: { plan: own, spec: own.spec }, notice: (n) => sendNotice(win, n) }
+    }
     pty = new RemoteHelperPty({
       appPtyId: sessionId,
       machine: m,
@@ -354,6 +412,7 @@ export function remoteHelperPty(win: OutputWindow, sessionId: string, options: R
       plan,
       kind,
       ...(d.signals ? { signals: d.signals } : {}),
+      ...(account ? { account } : {}),
       log: d.log,
     })
   } catch (err) {
@@ -409,6 +468,236 @@ export function remoteHelperPty(win: OutputWindow, sessionId: string, options: R
     kill(signal)
   }
   return pty
+}
+
+// ── 2.1.3-beta.20 section 3: Sign in on this machine ──────────────────────
+
+/** A helper tab's account notice, to the renderer (REMOTE_ACCOUNT_NOTICE). */
+function sendNotice(win: OutputWindow, n: HostAccountNotice): void {
+  if (!win.isDestroyed()) win.webContents.send(IPC.REMOTE_ACCOUNT_NOTICE, n)
+}
+
+/** Where the account execs run. */
+const accountsCtx = (d: RemoteHelperDeps) => ({ runner: d.runner, installId: d.machines.installId(), log: d.log })
+
+/** A sign-in tab that cannot start: a note that says why, never the usual
+ *  path (which would start a session, not a sign-in). */
+function signInNotStarted(win: OutputWindow, sessionId: string, why: string, cols: number, rows: number): IPty {
+  const d = deps
+  d?.log(`[remote-helper] ${sessionId}: the sign-in tab started nothing, because ${why}`)
+  const note = new NoticePty(`Sign in on this machine did not start: ${why}.`, cols, rows)
+  startedThroughHelper.set(sessionId, note)
+  note.onData((data) => {
+    if (win.isDestroyed()) return
+    d?.onOutput(sessionId, data.length)
+    win.webContents.send(`pty:data:${sessionId}`, data)
+  })
+  if (!win.isDestroyed()) win.webContents.send(`${IPC.SSH_FLOW_STATE}:${sessionId}`, { state: SSH_THROUGH_HELPER })
+  return note
+}
+
+/**
+ * Section 3.1.4: a sign-in tab. The CLI's own sign-in runs in the account's
+ * folder on the tab's machine (made at its start: scripts.ts `account
+ * make`), through the session helper as a plain SSH tab (the away clock, no
+ * tmux, no mark), with no status line, hooks or tools. It never takes the
+ * usual path: when the helper cannot take it, it starts nothing and says
+ * why. Its end (the sign-in done, given up, or the tab closed) reads the
+ * machine again and tells the renderer the account's state there: signed in
+ * as the account, signed in as another (marked, never used, Sign out
+ * offered), or not signed in.
+ */
+function signInPty(win: OutputWindow, sessionId: string, options: RemoteSpawnOptions, ssh: SSHOptions, cols: number, rows: number): IPty {
+  const d = deps
+  if (!d) return signInNotStarted(win, sessionId, ROUTE_WHY.platform, cols, rows)
+  const profileId = options.profileId
+  if (typeof profileId !== 'string' || !ACCOUNT_PROFILE_RE.test(profileId)) return signInNotStarted(win, sessionId, 'no account of this computer was named for it', cols, rows)
+  let settings: Record<string, unknown> | null
+  try { settings = d.settings() } catch { settings = null }
+  if (settings?.remoteSessionsThroughHelper !== true) return signInNotStarted(win, sessionId, `${ROUTE_WHY.off}; turn it on in Settings, General, first`, cols, rows)
+  let route: Route
+  try {
+    // As a plain SSH tab: the sign-in ends with its tab, and no tmux question applies.
+    route = routeSshTab({ platform: d.platform, switchOn: true, ssh: { ...ssh, detachable: false }, shellOnly: false, machine: d.machines.findByTarget(ssh), bundledSha256: d.bundledSha256 })
+  } catch (err) {
+    return signInNotStarted(win, sessionId, `the session helper's records could not be read (${(err as Error).message})`, cols, rows)
+  }
+  if (route.via !== 'helper') return signInNotStarted(win, sessionId, route.why, cols, rows)
+  const m = route.machine
+  const providerId = options.provider ?? DEFAULT_PROVIDER_ID
+  const remote = tryGetProvider(providerId)?.remoteLaunch
+  const via = remote?.accounts?.()
+  if (!remote || !via) return signInNotStarted(win, sessionId, 'its provider\'s accounts do not sign in on other machines', cols, rows)
+  let pty: RemoteHelperPty
+  try {
+    let email: string | undefined
+    try { email = d.profileEmail?.(profileId) } catch { email = undefined }
+    const plan = remoteLaunchOf(remote, m, { ...options, provider: providerId, ssh: { ...ssh, reconnect: false } }, settings, d.systemPrefersDark, remoteSessionId(sessionId), cols, rows, false, false, { configDir: accountFolder(m, profileId), signIn: email ? { email } : {} })
+    pty = new RemoteHelperPty({ appPtyId: sessionId, machine: m, installId: d.machines.installId(), runner: d.runner, spec: plan.spec, plan, kind: 'away', account: { profileId, via, signIn: true }, log: d.log })
+  } catch (err) {
+    return signInNotStarted(win, sessionId, (err as Error).message, cols, rows)
+  }
+  d.log(`[remote-helper] ${sessionId}: the sign-in of ${profileId} on ${m.user}@${m.host}:${m.port} (${m.did.slice(0, 8)}) through the session helper, session ${pty.sid}`)
+  openTabs.set(sessionId, pty)
+  startedThroughHelper.set(sessionId, pty)
+  if (!win.isDestroyed()) win.webContents.send(`${IPC.SSH_FLOW_STATE}:${sessionId}`, { state: SSH_THROUGH_HELPER })
+  let over = false
+  pty.onData((data) => {
+    if (over || win.isDestroyed()) return
+    d.onOutput(sessionId, data.length)
+    win.webContents.send(`pty:data:${sessionId}`, data)
+  })
+  let readAfter = false
+  pty.onExit(() => {
+    over = true
+    if (openTabs.get(sessionId) === pty) openTabs.delete(sessionId)
+    if (readAfter) return
+    readAfter = true
+    // Its end reads the machine again (section 3.1.6), whatever ended it.
+    void readMachineAccounts(accountsCtx(d), m, via).then((acc) => {
+      const a = acc.accounts.find((x) => x.profileId === profileId)
+      const state = a?.state ?? 'not-read'
+      d.log(`[remote-helper] ${sessionId}: after the sign-in of ${profileId} on ${m.host}, it reads ${state}`)
+      sendNotice(win, { kind: 'sign-in-ended', sessionId, did: m.did, profileId, state, ...(state === 'someone-else' && a?.facts?.identity ? { identity: a.facts.identity } : {}) })
+    })
+  })
+  const kill = pty.kill.bind(pty)
+  pty.kill = (signal?: string) => {
+    over = true
+    if (openTabs.get(sessionId) === pty) openTabs.delete(sessionId)
+    if (startedThroughHelper.get(sessionId) === pty) startedThroughHelper.delete(sessionId)
+    kill(signal)
+  }
+  return pty
+}
+
+/** Every added machine's accounts, as their last reads found them (no exec):
+ *  the Machines page and the account cards (MACHINES_REMOTE_ACCOUNTS). */
+export async function remoteAccountsState(): Promise<HostAccountsState> {
+  const d = deps
+  const a = remoteAccountsProvider()
+  if (!d || !a) return { machines: [] }
+  let profiles: readonly HostProfile[] = []
+  try { profiles = await a.via.profiles() } catch { profiles = [] }
+  return hostAccountsState(d.machines.list().map((m) => m.did), profiles)
+}
+
+/** Section 3.1.6: a read of each machine named (all of them when absent),
+ *  one exec per machine, at once: after a Check that passed, and at the
+ *  start-up list. Each read goes to the listener as it lands. */
+export async function readRemoteAccounts(dids?: readonly string[]): Promise<HostMachineAccounts[]> {
+  const d = deps
+  const a = remoteAccountsProvider()
+  if (!d || !a) return []
+  const machines = d.machines.list().filter((m) => !dids || dids.includes(m.did))
+  return Promise.all(machines.map((m) => readMachineAccounts(accountsCtx(d), m, a.via)))
+}
+
+/** How a sign-out's exit status reads. */
+function signOutExitText(code: number | null): string {
+  if (code === 127) return 'Claude Code was not found there'
+  if (code === 124) return 'it did not finish within 60 s'
+  return code === null ? 'it gave no exit status' : `it exited ${code}`
+}
+
+/** Where to end a sign-in the app could not sign out with the service. */
+const END_IT_THERE = 'in your Claude account settings on claude.ai'
+
+/**
+ * Section 3.1.8: Sign out on a machine. The machine is read first (one
+ * exec): an account with a folder there is signed out by the CLI's own
+ * sign-out in that folder, and the folder goes (only it); an account signed
+ * in as the machine's own sign-in is signed out only with
+ * `confirmMachineOwn` (Q5: the renderer asks first, naming it as the
+ * machine's own sign-in), and its `~/.claude` stays. Refused while a tab on
+ * that account runs through the helper there. The machine is read again
+ * after it, and the answer carries the account's state then.
+ */
+export async function signOutRemoteAccount(req: HostSignOutRequest): Promise<HostSignOutResult> {
+  const d = deps
+  const a = remoteAccountsProvider()
+  if (!d || !a) return { ok: false, message: 'Remote sessions through the session helper are not available here.' }
+  const m = d.machines.get(req.did)
+  if (!m) return { ok: false, message: 'That machine is not on this computer\'s list.' }
+  if (!ACCOUNT_PROFILE_RE.test(req.profileId)) return { ok: false, message: 'That is not an account of this computer.' }
+  const name = machineName(m)
+  for (const p of openTabs.values()) {
+    if (p.machineDid === m.did && p.profileId === req.profileId) return { ok: false, message: `A tab on that account runs on ${name}. Close it, then sign out.` }
+  }
+  let profiles: readonly HostProfile[] = []
+  try { profiles = await a.via.profiles() } catch { profiles = [] }
+  const who = accountName(profiles.find((p) => p.id === req.profileId), req.profileId)
+  const ctx = accountsCtx(d)
+  const before = await readMachineAccounts(ctx, m, a.via)
+  if (!before.ok) return { ok: false, message: `Nothing was signed out: the accounts on ${name} could not be read (${before.why ?? 'no answer'}).`, state: 'not-read' }
+  const acc = before.accounts.find((x) => x.profileId === req.profileId)
+  const folder = acc?.folder === true || before.others.includes(req.profileId)
+  if (!folder && acc?.state !== 'machine-own') return { ok: true, message: `${who} is not signed in on ${name}.`, state: acc?.state ?? 'not-signed-in' }
+  if (!folder && req.confirmMachineOwn !== true) {
+    return { ok: false, needsConfirm: 'machine-own', state: 'machine-own', message: `${who} is signed in on ${name} by that machine's own sign-in (its ~/.claude), so signing it out signs out Claude Code there for everything that uses that sign-in.` }
+  }
+  const run = await signOutOnMachine(ctx, m, a.via, folder ? { profileId: req.profileId } : 'own')
+  const after = await readMachineAccounts(ctx, m, a.via)
+  const state = after.accounts.find((x) => x.profileId === req.profileId)?.state
+  const withState = state ? { state } : {}
+  d.log(`[remote-helper] sign-out of ${req.profileId}${folder ? '' : ' (the machine\'s own sign-in)'} on ${m.host}: ${run.ok ? `logout ${run.logout ?? 'none'}, folder ${run.ok && run.removed ? 'removed' : 'kept'}` : run.why}`)
+  if (!run.ok) return { ok: false, message: `${who} was not signed out on ${name}: ${run.why}.`, ...withState }
+  if (run.gone) return { ok: true, message: `${who} was not signed in on ${name} any more.`, signedOutWithService: false, ...withState }
+  const told = run.logout === 0
+  if (folder) {
+    return told
+      ? { ok: true, message: `Signed ${who} out on ${name}, and removed its folder there.`, signedOutWithService: true, ...withState }
+      : { ok: run.removed, message: `Removed ${who}'s sign-in from ${name}. Claude Code's sign-out there did not finish (${signOutExitText(run.logout)}), so to end that sign-in everywhere, sign it out ${END_IT_THERE}.`, signedOutWithService: false, ...withState }
+  }
+  return told
+    ? { ok: true, message: `Signed out ${name}'s own sign-in (${who}).`, signedOutWithService: true, ...withState }
+    : { ok: false, message: `${name}'s own sign-in (${who}) was not signed out: Claude Code's sign-out there did not finish (${signOutExitText(run.logout)}). Run "claude auth logout" there, or end that sign-in ${END_IT_THERE}.`, signedOutWithService: false, ...withState }
+}
+
+/**
+ * Section 3.1.8: Remove's sign-outs, while the machine answers. Every
+ * account folder there that the app made (this computer's accounts and any
+ * others) is signed out by the CLI's own sign-out and removed, in one exec
+ * that needs no read first; the machine's own sign-in is left as it is. The
+ * first folder that cannot be removed stops Remove, and the answer says which.
+ */
+export async function signOutForRemove(m: RemoteMachineRecord): Promise<{ ok: boolean; message: string }> {
+  const d = deps
+  const a = remoteAccountsProvider()
+  if (!d || !a) return { ok: true, message: '' }
+  const name = machineName(m)
+  let profiles: readonly HostProfile[] = []
+  try { profiles = await a.via.profiles() } catch { profiles = [] }
+  const nameOf = (id: string): string => accountName(profiles.find((p) => p.id === id), id)
+  const run = await signOutAllOnMachine(accountsCtx(d), m, a.via)
+  const done = run.folders.filter((f) => f.removed && f.logout === 0).map((f) => nameOf(f.profileId))
+  const untold = run.folders.filter((f) => f.removed && f.logout !== 0).map((f) => nameOf(f.profileId))
+  d.log(`[remote-helper] Remove's sign-outs on ${m.host}: ${run.folders.map((f) => `${f.profileId} logout ${f.logout ?? 'none'}${f.removed ? ', removed' : ''}`).join('; ') || 'none'}${run.ok ? '' : `; stopped: ${run.why}`}`)
+  if (!run.ok) {
+    const before = [...done, ...untold]
+    return { ok: false, message: `Nothing more was removed: the accounts signed in on ${name} could not all be signed out (${run.why ?? 'no answer'}).${before.length ? ` Signed out first: ${before.join(', ')}.` : ''}` }
+  }
+  const parts: string[] = []
+  if (done.length) parts.push(`Signed out ${done.join(', ')} there first.`)
+  if (untold.length) parts.push(`Removed the sign-ins of ${untold.join(', ')} from it; Claude Code's sign-out there did not finish for ${untold.length === 1 ? 'it' : 'them'}, so end ${untold.length === 1 ? 'that sign-in' : 'those sign-ins'} ${END_IT_THERE}.`)
+  return { ok: true, message: parts.join(' ') }
+}
+
+/** Section 3.1.8: a machine that does not answer keeps what is signed in
+ *  there. The accounts its last answered read found there, and where to end
+ *  each; '' when it found none (or it was never read this run, which says so). */
+export async function accountsLeftText(m: RemoteMachineRecord): Promise<string> {
+  const a = remoteAccountsProvider()
+  if (!a) return ''
+  let profiles: readonly HostProfile[] = []
+  try { profiles = await a.via.profiles() } catch { profiles = [] }
+  const acc = machineAccounts(m.did, profiles)
+  const name = machineName(m)
+  if (acc.readAt === null) return ` The app has not read which accounts are signed in on ${name} since it started; any signed in there stay signed in until you sign them out there, or end those sign-ins ${END_IT_THERE}.`
+  const names = [...acc.accounts.filter((x) => x.folder).map((x) => accountName(profiles.find((p) => p.id === x.profileId), x.profileId)), ...acc.others]
+  if (names.length === 0) return ''
+  const one = names.length === 1
+  return ` ${names.join(', ')} ${one ? 'stays' : 'stay'} signed in on ${name} until you sign ${one ? 'it' : 'them'} out there, or end ${one ? 'that sign-in' : 'those sign-ins'} ${END_IT_THERE}.`
 }
 
 /** One machine's sessions, by list mode (2.1.3-beta.19 section 1.2). */
