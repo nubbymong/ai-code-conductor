@@ -6305,9 +6305,6 @@ function spawnPtyResolved(
       // before any binary runs. -LiteralPath because Set-Location otherwise
       // treats its argument as a WILDCARD: a real directory named `proj[1m]`
       // never matches, and the session silently starts in the wrong place.
-      // The cmdlet is named with its module (PS_SET_LOCATION), as the Claude
-      // Code launch line names it, so the line makes no look through the
-      // module path for it.
       const cdCmd = isWin
         ? `${PS_SET_LOCATION} -LiteralPath ${quoteArgForShell(resolvedCwd, true)}`
         : `cd ${quoteArgForShell(resolvedCwd, false)} 2>/dev/null; clear`
