@@ -7,7 +7,7 @@
 import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { codexCommandLine } from '../../../../src/main/providers/codex'
+import { codexCommandLine, codexReviewArgs } from '../../../../src/main/providers/codex'
 import registryJson from '../../../../resources/model-registry.json'
 
 const features = (version: string) => {
@@ -77,6 +77,9 @@ describe("the review run's disabled features", () => {
 })
 
 // 2.1.3-beta.8: a review runs on the reviewer account's default Codex model.
+// nubbymong/aicc_planning#446: that is still the constant; a model is added
+// (codexReviewArgs, below) only when the caller chose one or the installed
+// Codex's list names its first.
 describe('the review run names no model (2.1.3-beta.8)', () => {
   it('its argv has no -m or --model, and no override picks a model', () => {
     const args = argvOf('review')
@@ -86,6 +89,23 @@ describe('the review run names no model (2.1.3-beta.8)', () => {
     expect(args.some((a) => /^--model=/.test(a))).toBe(false)
     expect(overridesIn(args).filter((o) => /^model=/.test(o))).toEqual([])
     expect(args.join(' ')).not.toMatch(/gpt/i)
+  })
+})
+
+// nubbymong/aicc_planning#446 (ADR-031): a review with a model and an effort
+// chosen adds `-m <id>` and sets the level; its config overrides are still
+// exactly the constant's three (the spelling Codex would otherwise ignore),
+// and every feature it turns off is the constant's.
+describe('a review with a chosen model and effort (nubbymong/aicc_planning#446)', () => {
+  it("keeps exactly its three config overrides, the level chosen, and the constant's disabled features", () => {
+    for (const effort of ['low', 'high', 'ultra']) {
+      const args = codexReviewArgs({ model: 'gpt-6.1-sol', effort }) as string[]
+      expect([...overridesIn(args)].sort()).toEqual(['agents.enabled=false', `model_reasoning_effort=${effort}`, 'web_search=disabled'])
+      expect(disabledIn(args)).toEqual(disabledIn(argvOf('review')))
+      expect(args.filter((a) => a === '-m')).toHaveLength(1)
+      expect(args[args.indexOf('-m') + 1]).toBe('gpt-6.1-sol')
+      expect(args.at(-1)).toBe('-')
+    }
   })
 })
 

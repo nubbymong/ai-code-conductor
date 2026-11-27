@@ -24,12 +24,17 @@
 // message, the result last) -- `type: "result"`,
 // `subtype` ("success" or "error_*"), `is_error`, `result` (the reply, or the
 // failure text when is_error), `errors` (on the error subtypes) and `usage`
-// (input, cache creation, cache read and output tokens).
+// (input, cache creation, cache read and output tokens). When the result
+// carries `modelUsage` (by model name), its names are what the review's
+// footer says answered (nubbymong/aicc_planning#446); without it the footer
+// says the model is not confirmed.
 import type { ProviderReviewOperations, ReviewRunInput, ReviewRunResult, ReviewUsage, RealmRef } from '../core'
 import { reviewerEnv, finishReview, redactFailure, redactHead, clip, WINDOW, MARGIN, MAX_MESSAGE } from '../review-support'
 
-/** The reviewer's argv: a constant, so no request text reaches a command
- *  line. Each switch is verified against the pinned CLI's --help. */
+/** The reviewer's argv with nothing chosen: a constant, so no request text
+ *  reaches a command line. Each switch is verified against the pinned CLI's
+ *  --help. A review's argv is this constant plus two allow-listed values
+ *  (ADR-031, nubbymong/aicc_planning#446; claudeReviewArgs). */
 export const CLAUDE_REVIEW_ARGS: readonly string[] = Object.freeze([
   '-p',
   '--restricted',
@@ -38,6 +43,29 @@ export const CLAUDE_REVIEW_ARGS: readonly string[] = Object.freeze([
   '--output-format', 'json',
   '--no-session-persistence',
 ])
+
+/** A model name as a review's argv takes it: an id or alias of the model
+ *  registry's form (`opus`, `opus[1m]`, `claude-opus-4-8`), bounded, its first
+ *  character a letter or digit so it can never read as a flag. */
+export const CLAUDE_REVIEW_MODEL_RE = /^[A-Za-z0-9][A-Za-z0-9._[\]-]{0,63}$/
+/** An effort level as a review's argv takes it (`high`, `ultracode`). */
+export const CLAUDE_REVIEW_EFFORT_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,31}$/
+
+/** A review's argv (ADR-031): CLAUDE_REVIEW_ARGS, then `--model <id>` and
+ *  `--effort <level>` for the values main took from its allow-list
+ *  (codex-review-mcp-tool.ts), each checked again here, so a value from
+ *  anywhere else starts nothing. The command-line rules (PLAIN_ARG) then hold
+ *  every element. */
+export function claudeReviewArgs(choice: { model?: unknown; effort?: unknown } = {}): string[] | { refused: string } {
+  const { model, effort } = choice
+  if (model !== undefined && (typeof model !== 'string' || !CLAUDE_REVIEW_MODEL_RE.test(model))) return { refused: 'the model is not one this app passes to Claude Code' }
+  if (effort !== undefined && (typeof effort !== 'string' || !CLAUDE_REVIEW_EFFORT_RE.test(effort))) return { refused: 'the effort is not one Claude Code takes' }
+  return [
+    ...CLAUDE_REVIEW_ARGS,
+    ...(model !== undefined ? ['--model', model as string] : []),
+    ...(effort !== undefined ? ['--effort', effort as string] : []),
+  ]
+}
 
 /** How the composition root runs a Claude process: the CLI runner and its
  *  command-line rules, handed in so this package imports no other one (R2). */
@@ -100,9 +128,28 @@ export interface ClaudeResultOutcome {
   text: string | null
   usage?: ReviewUsage
   error?: string
+  /** nubbymong/aicc_planning#446: the models the result names as having
+   *  answered (the keys of its `modelUsage`), each a plain model name;
+   *  absent when it names none this app can show. */
+  models?: string[]
 }
 
 const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : 0)
+
+/** A model name the result reports, as the footer may show it. */
+const REPORTED_MODEL_RE = /^[A-Za-z0-9][A-Za-z0-9._:/[\]-]{0,99}$/
+/** The most model names read from one result. */
+export const CLAUDE_REVIEW_MAX_REPORTED_MODELS = 8
+
+/** The models a result's `modelUsage` names (an object keyed by model name),
+ *  in its order: only plain names, at most CLAUDE_REVIEW_MAX_REPORTED_MODELS;
+ *  undefined when it names none. Never a guess: a result without the field
+ *  reports no model. */
+function readModels(mu: unknown): string[] | undefined {
+  if (!mu || typeof mu !== 'object' || Array.isArray(mu)) return undefined
+  const out = Object.keys(mu).filter((k) => REPORTED_MODEL_RE.test(k)).slice(0, CLAUDE_REVIEW_MAX_REPORTED_MODELS)
+  return out.length > 0 ? out : undefined
+}
 
 /** The pinned CLI's usage, in the reviewer contract's terms: every input
  *  token (fresh, cache writes and cache reads), of which cached are the
@@ -133,7 +180,8 @@ export function parseClaudeResult(stdout: string): ClaudeResultOutcome | null {
     if (!ev || typeof ev !== 'object' || (ev as Record<string, unknown>).type !== 'result') continue
     const e = ev as Record<string, unknown>
     const usage = readUsage(e.usage)
-    const withUsage = usage ? { usage } : {}
+    const models = readModels(e.modelUsage)
+    const withUsage = { ...(usage ? { usage } : {}), ...(models ? { models } : {}) }
     if (e.subtype === 'success' && e.is_error === false && typeof e.result === 'string') return { text: e.result, ...withUsage }
     const errors = Array.isArray(e.errors) ? e.errors.filter((x): x is string => typeof x === 'string' && x.trim() !== '').join('; ') : ''
     const error = errors || (typeof e.result === 'string' && e.result.trim() ? e.result : `the run ended without a review (${typeof e.subtype === 'string' ? e.subtype : 'no result'})`)
@@ -152,7 +200,9 @@ export function createClaudeReviewOperations(deps: ClaudeReviewDeps): ProviderRe
       if (input.purpose !== undefined && input.purpose !== 'review') return { ok: false, code: 'not-started', message: 'Claude Code reviews do not run a text-only analysis.' }
       const win32 = platform === 'win32'
       const env = reviewerEnv(input.env, platform)
-      const cmd = deps.commandLine(input.executable, CLAUDE_REVIEW_ARGS, platform, deps.shellEnv(env, platform))
+      const args = claudeReviewArgs({ model: input.model, effort: input.effort })
+      if (!Array.isArray(args)) return { ok: false, code: 'not-started', message: `Claude Code could not be started: ${args.refused}.` }
+      const cmd = deps.commandLine(input.executable, args, platform, deps.shellEnv(env, platform))
       if ('refused' in cmd) return { ok: false, code: 'not-started', message: `Claude Code could not be started: ${cmd.refused}.` }
       // cmd.exe cannot use a network path as its current directory: it would
       // start the shim in the Windows folder and Claude would review that.
@@ -200,7 +250,9 @@ export function createClaudeReviewOperations(deps: ClaudeReviewDeps): ProviderRe
         )
         if (r && r.killSettled instanceof Promise) kill = r.killSettled
         const out = overflow ? null : parseClaudeResult(stdout)
-        const usage = out?.usage ? { usage: out.usage } : {}
+        // The models the result names travel with its usage: whatever the
+        // outcome, the footer says what answered, or that nothing said so.
+        const usage = { ...(out?.usage ? { usage: out.usage } : {}), ...(out?.models ? { reportedModels: out.models } : {}) }
         const pending = kill ? { killSettled: kill } : {}
         if (r.stopped === 'cancel' || input.signal?.aborted) return { ...cancelled, ...usage, ...pending }
         if (r.timedOut || r.stopped === 'deadline') return { ok: false, code: 'timed-out', message: 'The review timed out.', ...usage, ...pending }

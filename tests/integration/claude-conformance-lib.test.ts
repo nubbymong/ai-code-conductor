@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import yaml from 'js-yaml'
 import { evalIf, evalValue } from '../helpers/gha-expr'
-import { CLAUDE_REVIEW_ARGS } from '../../src/main/providers/claude/review'
+import { CLAUDE_REVIEW_ARGS, claudeReviewArgs } from '../../src/main/providers/claude/review'
 import { CLAUDE_MIN_MANAGED_CLI_VERSION } from '../../src/main/providers/claude/managed-launch'
 import { CLI_AUTH_METHODS } from '../../src/shared/account-web-session'
 import { PERMISSION_MODES } from '../../src/renderer/lib/claude-cli-options'
@@ -35,6 +35,7 @@ const MAIN_HELP = [
   'non-interactive output',
   '',
   'Options:',
+  '  --effort <level>                      Effort level for the current session',
   '  --model <model>                       Model for the current session.',
   '  --no-session-persistence              Don\'t save sessions to disk; they can\'t',
   '                                        be resumed (only works with --print)',
@@ -125,7 +126,7 @@ describe('reading the help of claude', () => {
   })
 
   it('lists the switches a help declares, and the lines that name a word, for the log of a run that goes red', () => {
-    expect(declaredSwitches(MAIN_HELP)).toEqual(['--model', '--no-session-persistence', '--output-format', '--permission-mode', '-p', '--print', '--restricted', '--strict-mcp-config', '--tools', '-h', '--help'])
+    expect(declaredSwitches(MAIN_HELP)).toEqual(['--effort', '--model', '--no-session-persistence', '--output-format', '--permission-mode', '-p', '--print', '--restricted', '--strict-mcp-config', '--tools', '-h', '--help'])
     expect(declaredSwitches(LOGIN_HELP)).toEqual(['--claudeai', '--console', '--email', '-h', '--help', '--sso'])
     expect(declaredSwitches('')).toEqual([])
     // The lines that name a word, case aside, trimmed with runs of spaces made one, and bounded.
@@ -162,6 +163,18 @@ describe('what is expected of claude, from the app', () => {
     const noJson = MAIN_HELP.replace('(choices: "text", "json",', '(choices: "text",')
     expect(reviewerFlagProblems(noJson, CLAUDE_REVIEW_ARGS)).toEqual(['claude --help lists --output-format, but json is no longer one of its choices (text, stream-json)'])
     expect(reviewerFlagProblems('', CLAUDE_REVIEW_ARGS)).toHaveLength(flags.length)
+  })
+
+  // nubbymong/aicc_planning#446 (ADR-031): the CI job checks the reviewer's
+  // command line with a model and an effort chosen, so the two switches they
+  // add are checked against the real CLI's help too.
+  it('with a model and an effort chosen, the switches checked are the constant\'s, then --model and --effort', () => {
+    const chosen = claudeReviewArgs({ model: 'opus', effort: 'high' }) as string[]
+    expect(flagsOfArgs(chosen)).toEqual([...flags, '--model', '--effort'])
+    expect(reviewerFlagProblems(MAIN_HELP, chosen)).toEqual([])
+    const noEffort = MAIN_HELP.replace('  --effort <level>                      Effort level for the current session\n', '')
+    expect(reviewerFlagProblems(noEffort, chosen)).toEqual(['claude --help no longer lists --effort'])
+    expect(reviewerFlagProblems(noEffort, CLAUDE_REVIEW_ARGS)).toEqual([])
   })
 
   it('names each choice a switch no longer offers', () => {
