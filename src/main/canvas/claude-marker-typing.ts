@@ -498,7 +498,10 @@ export function forgetClaudeMarkers(sessionId: string): void {
   // twice.
   const still = [...(entry.entering && !entry.entering.told ? [entry.entering] : []), ...entry.held.values()]
   if (still.length === 0) return
-  logWarn(`[canvas-marker] ${sessionId}: ${still.length} held marker(s) for Claude Code dropped, untyped: ${DROP_WORDS.gone}`)
+  // The first may be the one whose line was typed and whose Enter was not:
+  // the log says so, as the known issue for a line left typed does.
+  const typedFirst = still[0] !== undefined && still[0] === entry.entering
+  logWarn(`[canvas-marker] ${sessionId}: ${still.length} marker(s) for Claude Code dropped, not sent${typedFirst ? ' (the first typed, its Enter not)' : ', untyped'}: ${DROP_WORDS.gone}`)
   for (const marker of still) {
     // Marked before it is told, so nothing the report does can tell it twice.
     marker.told = true
