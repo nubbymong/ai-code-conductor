@@ -26,6 +26,10 @@ export interface ProfileAuthInfo {
   /** Refresh-token expiry, epoch ms. THIS is what forces an interactive login. */
   refreshTokenExpiresAt?: number
   subscriptionType?: string
+  /** The plan's usage tier beside it (`claudeAiOauth.rateLimitTier`, for
+   *  example `default_claude_max_20x`): the plan pill's "Max 20x". Not a
+   *  secret; display only (subscriptionPlanLabel). */
+  rateLimitTier?: string
   /**
    * When the credentials file was last written, epoch ms. This is how a past
    * failure gets retired: a run that failed authentication is only still relevant
@@ -65,13 +69,24 @@ const SUBSCRIPTION_LABELS: Readonly<Record<string, string>> = Object.freeze({
   enterprise: 'Enterprise',
 })
 
+/** A Max tier as `rateLimitTier` names it: `<anything>_max_<n>x`, n 1 to 3 digits. */
+const MAX_TIER = /^[a-z0-9_]*_max_(\d{1,3})x$/
+
 /** The plan pill's text for a profile's `subscriptionType`, or null when it is
  *  missing or not one this build knows. Case and surrounding spaces do not
- *  matter. */
-export function subscriptionPlanLabel(subscriptionType: unknown): string | null {
+ *  matter. A Max plan whose `rateLimitTier` names its multiple says it, as
+ *  the approved mockup does ("Max 20x"); any other tier leaves the plan's
+ *  own name. */
+export function subscriptionPlanLabel(subscriptionType: unknown, rateLimitTier?: unknown): string | null {
   if (typeof subscriptionType !== 'string') return null
   const key = subscriptionType.trim().toLowerCase()
-  return Object.prototype.hasOwnProperty.call(SUBSCRIPTION_LABELS, key) ? SUBSCRIPTION_LABELS[key] : null
+  if (!Object.prototype.hasOwnProperty.call(SUBSCRIPTION_LABELS, key)) return null
+  const label = SUBSCRIPTION_LABELS[key]
+  if (key === 'max' && typeof rateLimitTier === 'string') {
+    const tier = MAX_TIER.exec(rateLimitTier.trim().toLowerCase())
+    if (tier) return `${label} ${Number(tier[1])}x`
+  }
+  return label
 }
 
 export type AuthWindowTone = 'expired' | 'critical' | 'warning' | 'ok' | 'unknown'
