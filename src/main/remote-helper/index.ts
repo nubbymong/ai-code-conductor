@@ -41,7 +41,7 @@
 import type { IPty } from 'node-pty'
 import { IPC } from '../../shared/ipc-channels'
 import { SSH_THROUGH_HELPER, type RemoteActionResult, type RemoteMachineSessions } from '../../shared/remote-machines'
-import type { HostAccountNotice, HostAccountsState, HostMachineAccounts, HostSignOutRequest, HostSignOutResult } from '../../shared/host-accounts'
+import type { HostAccountNotice, HostAccountsState, HostAdoptRequest, HostAdoptResult, HostMachineAccounts, HostSignOutRequest, HostSignOutResult } from '../../shared/host-accounts'
 import type { DetachedRemote, DetachedRemoteLiveness } from '../../shared/types'
 import { DEFAULT_PROVIDER_ID, PROVIDER_IDS, type ProviderId } from '../../shared/providers/ids'
 import { tryGetProvider } from '../providers'
@@ -50,7 +50,7 @@ import type { ProviderRemoteLaunch, RemoteAccounts, RemoteHostFile, RemoteLaunch
 import type { SSHOptions } from '../ssh-options'
 import { ROUTE_WHY, routeSshTab, type PersistentStanding, type Route } from './route'
 import { NoticePty, RemoteDriver, RemoteHelperPty, remoteCwd, remoteHelperCommands, remoteLaunchSpec, remoteSessionId, type RemoteLaunchPlan, type RemoteTabAccount } from './session'
-import { accountFolder, accountName, hostAccountsState, machineAccounts, readMachineAccounts, signOutListOnMachine, signOutOnMachine, type HostProfile } from './host-accounts'
+import { accountFolder, accountName, adoptAccountFolders, hostAccountsState, machineAccounts, readMachineAccounts, signOutListOnMachine, signOutOnMachine, type HostProfile } from './host-accounts'
 import { ACCOUNT_PROFILE_RE } from './scripts'
 import { listKept, machineSessions } from './kept'
 import type { HolderKind } from './scripts'
@@ -715,11 +715,39 @@ export async function signOutForRemove(m: RemoteMachineRecord): Promise<{ ok: bo
     const one = run.left.length === 1
     parts.push(`${run.left.map(nameOf).join(', ')} (${one ? 'an account' : 'accounts'} this computer no longer holds) ${one ? 'stays' : 'stay'} signed in there: sign ${one ? 'it' : 'them'} out there, or end ${one ? 'that sign-in' : 'those sign-ins'} ${END_IT_THERE}.`)
   }
+  // Round 2 (R1): a folder with the marker of the builds before the install id
+  // was in it, for an account this computer does not hold, is left and named.
+  if (run.old.length) {
+    const one = run.old.length === 1
+    parts.push(`${run.old.map(nameOf).join(', ')} (${one ? 'a folder' : 'folders'} an earlier build of the app made there, for ${one ? 'an account' : 'accounts'} this computer does not hold) ${one ? 'stays' : 'stay'} signed in there as ${one ? 'it is' : 'they are'}: sign ${one ? 'it' : 'them'} out there, or end ${one ? 'that sign-in' : 'those sign-ins'} ${END_IT_THERE}.`)
+  }
   if (run.elsewhere.length) {
     const one = run.elsewhere.length === 1
-    parts.push(`${one ? 'One account folder' : `${run.elsewhere.length} account folders`} there ${one ? 'is' : 'are'} used by the app on another computer, and ${one ? 'was' : 'were'} left as ${one ? 'it is' : 'they are'}.`)
+    const held = new Set(profiles.map((p) => p.id))
+    // Round 2 (R1): every one named by this computer's accounts: most likely its own from an earlier install whose id was lost.
+    parts.push(run.elsewhere.every((id) => held.has(id))
+      ? `${run.elsewhere.map(nameOf).join(', ')}: ${one ? 'its folder' : 'their folders'} there ${one ? 'carries' : 'carry'} another install's mark, and may be this computer's own from an earlier install of the app; ${one ? 'it was' : 'they were'} left as ${one ? 'it is' : 'they are'}. To sign ${one ? 'it' : 'them'} out from here, add the machine again and choose Adopt on its card; or sign ${one ? 'it' : 'them'} out on that machine.`
+      : `${one ? 'One account folder' : `${run.elsewhere.length} account folders`} there ${one ? 'is' : 'are'} used by the app on another computer, and ${one ? 'was' : 'were'} left as ${one ? 'it is' : 'they are'}.`)
   }
   return { ok: true, message: parts.join(' ') }
+}
+
+/**
+ * Round 2 (R1): Adopt on a machine's card, the user's own choice: folders
+ * the machine's last read names as another install's, for accounts this
+ * computer holds (its own from an earlier install whose id was lost, most
+ * likely), get this install's marker; nothing is signed in, out or removed.
+ * Any other id is refused before anything runs (adoptAccountFolders).
+ */
+export async function adoptRemoteAccounts(req: HostAdoptRequest): Promise<HostAdoptResult> {
+  const d = deps
+  const a = remoteAccountsProvider()
+  if (!d || !a) return { ok: false, message: 'Remote sessions through the session helper are not available here.', adopted: [] }
+  const m = d.machines.get(req.did)
+  if (!m) return { ok: false, message: "That machine is not on this computer's list.", adopted: [] }
+  const r = await adoptAccountFolders(accountsCtx(d), m, a.via, req.profileIds)
+  d.log(`[remote-helper] Adopt on ${m.host}: ${r.adopted.length ? r.adopted.join(', ') : 'none'}${r.ok ? '' : ` (${r.message})`}`)
+  return r
 }
 
 /** Section 3.1.8: a machine that does not answer keeps what is signed in

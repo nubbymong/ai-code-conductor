@@ -34,7 +34,7 @@
  * This file imports nothing of Electron.
  */
 import type { RemoteAccounts } from '../providers/types'
-import type { HostAccountSignIn, HostAccountsState, HostLaunchRefusal, HostMachineAccounts, HostSignInFacts, HostSignInState } from '../../shared/host-accounts'
+import type { HostAccountSignIn, HostAccountsState, HostAdoptResult, HostLaunchRefusal, HostMachineAccounts, HostSignInFacts, HostSignInState } from '../../shared/host-accounts'
 import { HOST_ACCOUNTS_FOLDER } from '../../shared/host-accounts'
 import { canonicaliseEmail } from '../../shared/account-chip-color'
 import { stripSpoofableText } from '../../shared/safe-text'
@@ -61,6 +61,9 @@ export interface SignInsRead {
   own: HostSignInFacts | null
   folders: Map<string, HostSignInFacts>
   elsewhere: Set<string>
+  /** Round 2 (R1): the folders among `folders` with the marker of the
+   *  builds before the install id was in it. */
+  old: Set<string>
 }
 
 /** The machine a script runs on, as ssh reaches it. */
@@ -126,10 +129,12 @@ export function readSignIns(stdout: string, nonce: string, keys: RemoteAccounts[
   const lines = afterHashLine(stdout, nonce).split(/\r?\n/)
   const got = new Map<string, { id?: Record<string, unknown> | null; cr?: Record<string, unknown> | null }>()
   const elsewhere = new Set<string>()
+  const old = new Set<string>()
   for (let i = 0; i < lines.length; i++) {
     if (!lines[i].startsWith(prefix)) continue
     const [slot, part, more] = lines[i].slice(prefix.length).split(' ')
     if (more === undefined && part === 'elsewhere' && ACCOUNT_PROFILE_RE.test(slot ?? '')) { elsewhere.add(slot); continue }
+    if (more === undefined && part === 'old' && ACCOUNT_PROFILE_RE.test(slot ?? '')) { old.add(slot); continue }
     if (more !== undefined || (slot !== 'own' && !ACCOUNT_PROFILE_RE.test(slot ?? '')) || (part !== 'id' && part !== 'cr')) continue
     const entry = got.get(slot) ?? {}
     if (entry[part] !== undefined) continue
@@ -140,7 +145,8 @@ export function readSignIns(stdout: string, nonce: string, keys: RemoteAccounts[
   const own = ownRead ? factsOf(ownRead.id ?? null, ownRead.cr ?? null, keys) : null
   const folders = new Map<string, HostSignInFacts>()
   for (const [slot, e] of got) if (slot !== 'own' && !elsewhere.has(slot)) folders.set(slot, factsOf(e.id ?? null, e.cr ?? null, keys))
-  return { own: own && (own.identity !== null || own.credentials) ? own : null, folders, elsewhere }
+  for (const slot of old) if (!folders.has(slot)) old.delete(slot)
+  return { own: own && (own.identity !== null || own.credentials) ? own : null, folders, elsewhere, old }
 }
 
 /** The two emails name the same account (compared as the account chips compare them). */
@@ -208,23 +214,42 @@ export function machineAccounts(did: string, profiles: readonly HostProfile[]): 
   const accounts = profiles.filter((p) => ACCOUNT_PROFILE_RE.test(p.id))
   const held = new Set(accounts.map((p) => p.id))
   const last = lastRead.get(did)
-  if (!last) return { did, readAt: null, ok: false, own: null, accounts: accounts.map((p) => ({ profileId: p.id, state: 'not-read', facts: null, folder: false })), others: [], elsewhere: [] }
+  if (!last) return { did, readAt: null, ok: false, own: null, accounts: accounts.map((p) => ({ profileId: p.id, state: 'not-read', facts: null, folder: false })), others: [], elsewhere: [], mayBeEarlierInstall: false, oldMarker: [] }
   if ('why' in last) {
     const answered = lastAnswer.get(did)?.read
     const known = answered?.folders
     return {
       did, readAt: last.at, ok: false, why: last.why, own: null,
       accounts: accounts.map((p) => ({ profileId: p.id, state: 'not-read', facts: null, folder: known?.has(p.id) ?? false })),
-      others: known ? [...known.keys()].filter((id) => !held.has(id)).sort() : [],
-      elsewhere: answered ? [...answered.elsewhere].sort() : [],
+      ...foldersElsewhere(answered, held),
     }
   }
-  const { own, folders, elsewhere } = last.read
+  const { own, folders } = last.read
   return {
     did, readAt: last.at, ok: true, own,
     accounts: accounts.map((p) => ({ profileId: p.id, ...signInStateOf(p.accountEmail, folders.get(p.id), own) })),
-    others: [...folders.keys()].filter((id) => !held.has(id)).sort(),
-    elsewhere: [...elsewhere].sort(),
+    ...foldersElsewhere(last.read, held),
+  }
+}
+
+/**
+ * A read's folders that are not one of this computer's accounts' (round 2,
+ * R1): `others`, this install's folders of accounts it no longer holds;
+ * `oldMarker`, folders with the marker of the builds before the install id
+ * was in it, for ids this computer does not hold (one for an id it holds is
+ * its own, and reads as that account's); `elsewhere`, another install's,
+ * with `mayBeEarlierInstall` when every one of them is named by an id this
+ * computer holds (its own from an earlier install whose id was lost, most
+ * likely: Adopt is offered, on the user's choice only).
+ */
+export function foldersElsewhere(read: SignInsRead | undefined, held: ReadonlySet<string>): Pick<HostMachineAccounts, 'others' | 'elsewhere' | 'mayBeEarlierInstall' | 'oldMarker'> {
+  if (!read) return { others: [], elsewhere: [], mayBeEarlierInstall: false, oldMarker: [] }
+  const elsewhere = [...read.elsewhere].sort()
+  return {
+    others: [...read.folders.keys()].filter((id) => !held.has(id) && !read.old.has(id)).sort(),
+    elsewhere,
+    mayBeEarlierInstall: elsewhere.length > 0 && elsewhere.every((id) => held.has(id)),
+    oldMarker: [...read.old].filter((id) => !held.has(id)).sort(),
   }
 }
 
@@ -334,6 +359,9 @@ export function accountBinding(accounts: HostMachineAccounts, profileId: string,
     const as = identity ? `as ${stripSpoofableText(identity, 254)}, another account` : 'as an account it does not name'
     return { refused: { ...base, state: 'someone-else', ...(identity ? { identity } : {}), text: `${who} on ${name} is signed in ${as}, so this tab started nothing. Sign it out on the Machines page, then sign it in again as ${who}.` } }
   }
+  if (accounts.elsewhere?.includes(profileId)) {
+    return { refused: { ...base, state: 'not-signed-in', adoptable: true, text: `${who}'s folder on ${name} carries another install's mark, so this tab started nothing. It may be this computer's own from an earlier install of the app: if so, choose Adopt on the machine's card on the Machines page; if it is the app's on another computer, start this tab on an account signed in there.` } }
+  }
   const missing = a ? '' : ' (that account is not on this computer any more)'
   return { refused: { ...base, state: 'not-signed-in', text: `${who} is not signed in on ${name}${missing}, so this tab started nothing. Sign it in on that machine from the Machines page, or start this tab on an account that is signed in there.` } }
 }
@@ -355,7 +383,7 @@ export function settingsInput(settings: string | null | 'keep'): { value: string
  * the CLI's own folder (the provider's links) and its settings copy. Never
  * throws.
  */
-export async function prepareAccountFolder(ctx: HostAccountsContext, m: RemoteMachineRecord, via: RemoteAccounts, profileId: string, mode: 'make' | 'refresh', settings: string | null | 'keep'): Promise<{ ok: true; own: string[] } | { ok: false; why: string; gone?: true }> {
+export async function prepareAccountFolder(ctx: HostAccountsContext, m: RemoteMachineRecord, via: RemoteAccounts, profileId: string, mode: 'make' | 'refresh' | 'adopt', settings: string | null | 'keep'): Promise<{ ok: true; own: string[]; adopted?: 'old' | 'elsewhere' } | { ok: false; why: string; gone?: true; refused?: string }> {
   try {
     const { value, stdin } = settingsInput(settings)
     const name = via.settingsCopy([]).name
@@ -367,11 +395,17 @@ export async function prepareAccountFolder(ctx: HostAccountsContext, m: RemoteMa
     if (failed) return { ok: false, why: `${m.host} could not be reached: ${failed}` }
     const result = readScriptResult(r.stdout, nonce)
     if (!result) return { ok: false, why: `${m.host} did not answer the session helper's write of the account's folder` }
-    if (!result.ok) return { ok: false, why: `the account's folder on ${m.host} was not ${mode === 'make' ? 'made' : 'brought up to date'}: ${refusalText(result.refused)}` }
+    if (!result.ok) return { ok: false, why: `the account's folder on ${m.host} was not ${mode === 'make' ? 'made' : mode === 'adopt' ? 'adopted' : 'brought up to date'}: ${refusalText(result.refused)}`, ...(result.refused ? { refused: result.refused } : {}) }
     if (result.values.get('gone') === 'yes') return { ok: false, why: `the account's folder on ${m.host} is not there any more`, gone: true }
     // `own <name>`: a real folder or file where a link goes, left as it is.
     const own = r.stdout.split(/\r?\n/).filter((l) => l.startsWith(`AICC-RESULT ${nonce} own `)).map((l) => l.slice(`AICC-RESULT ${nonce} own `.length))
     for (const n of own) ctx.log(`[remote-helper] ${profileId}: its folder on ${m.host} keeps its own ${stripSpoofableText(n, 128)}, not a link to ~/${via.links.home}`)
+    // Round 2 (R1): its marker rewritten as this install's: one of the builds before the install id was in it, or (Adopt) another install's.
+    const adopted = result.values.get('adopted')
+    if (adopted === 'old' || adopted === 'elsewhere') {
+      ctx.log(`[remote-helper] ${profileId}: its folder on ${m.host} is marked as this install's now (it had ${adopted === 'old' ? 'the marker of an earlier build' : "another install's marker"})`)
+      return { ok: true, own, adopted }
+    }
     return { ok: true, own }
   } catch (err) {
     return { ok: false, why: (err as Error).message }
@@ -416,7 +450,7 @@ export const REMOVE_SIGN_OUT_EXEC_MS = 600_000
 /** The words a `list` exec names each folder it left with: this install's
  *  that the list did not name (`left`), and another computer's
  *  (`elsewhere`). */
-export function leftFolders(stdout: string, nonce: string, key: 'left' | 'elsewhere'): string[] {
+export function leftFolders(stdout: string, nonce: string, key: 'left' | 'old' | 'elsewhere'): string[] {
   const out: string[] = []
   for (const line of markedLines(stdout, 'AICC-RESULT', nonce)) {
     const [k, id, more] = line.split(' ')
@@ -425,7 +459,7 @@ export function leftFolders(stdout: string, nonce: string, key: 'left' | 'elsewh
   return out
 }
 
-type SignOutExec = { ok: true; values: Map<string, string>; folders: FolderSignOut[]; left: string[]; elsewhere: string[] } | { ok: false; why: string; folders: FolderSignOut[] }
+type SignOutExec = { ok: true; values: Map<string, string>; folders: FolderSignOut[]; left: string[]; old: string[]; elsewhere: string[] } | { ok: false; why: string; folders: FolderSignOut[] }
 
 /** One `signout` exec: the folders it signed out (and removed), and the
  *  ones it left; or why it stopped, with those it did before. */
@@ -441,7 +475,7 @@ async function runSignOut(ctx: HostAccountsContext, m: RemoteMachineRecord, via:
     const result = readScriptResult(r.stdout, nonce)
     if (!result) return { ok: false, why: `${m.host} did not say whether it signed out`, folders }
     if (!result.ok) return { ok: false, why: `${m.host} stopped the sign-out: ${refusalText(result.refused)}`, folders }
-    return { ok: true, values: result.values, folders, left: leftFolders(r.stdout, nonce, 'left'), elsewhere: leftFolders(r.stdout, nonce, 'elsewhere') }
+    return { ok: true, values: result.values, folders, left: leftFolders(r.stdout, nonce, 'left'), old: leftFolders(r.stdout, nonce, 'old'), elsewhere: leftFolders(r.stdout, nonce, 'elsewhere') }
   } catch (err) {
     return { ok: false, why: (err as Error).message, folders: [] }
   }
@@ -468,7 +502,7 @@ export async function signOutOnMachine(ctx: HostAccountsContext, m: RemoteMachin
  *  `deviceGone`, the device folder was not there, so nothing was signed out
  *  and Remove goes on as before (2.1.3-beta.20 fix round, MAJOR-2). */
 export type RemoveSignOut =
-  | { ok: true; deviceGone: boolean; folders: FolderSignOut[]; left: string[]; elsewhere: string[] }
+  | { ok: true; deviceGone: boolean; folders: FolderSignOut[]; left: string[]; old: string[]; elsewhere: string[] }
   | { ok: false; why: string; folders: FolderSignOut[] }
 
 /** Most profile ids one `list` exec names (ACCOUNT_IDS_RE). */
@@ -487,8 +521,37 @@ export async function signOutListOnMachine(ctx: HostAccountsContext, m: RemoteMa
   const ids = [...new Set(profileIds.filter((id) => ACCOUNT_PROFILE_RE.test(id)))].slice(0, MAX_LIST_IDS)
   const run = await runSignOut(ctx, m, via, 'list', ids.length > 0 ? ids.join(',') : '-')
   if (!run.ok) return { ok: false, why: run.why, folders: run.folders }
-  return { ok: true, deviceGone: run.values.get('device') === 'gone', folders: run.folders, left: run.left, elsewhere: run.elsewhere }
+  return { ok: true, deviceGone: run.values.get('device') === 'gone', folders: run.folders, left: run.left, old: run.old, elsewhere: run.elsewhere }
 }
 
 /** The states a launch may start on. */
 export const launchable = (s: HostSignInState): boolean => s === 'signed-in-here' || s === 'machine-own'
+
+/**
+ * Round 2 (R1): Adopt, the user's own choice on a machine's card. Each of
+ * `profileIds` that the machine's last read named `elsewhere` and that is one
+ * of this computer's accounts gets this install's marker on its folder
+ * (`account adopt`, one exec each); nothing is signed in, out or removed.
+ * Any other id is refused before anything runs. The machine is read again
+ * after it. Never throws.
+ */
+export async function adoptAccountFolders(ctx: HostAccountsContext, m: RemoteMachineRecord, via: RemoteAccounts, profileIds: readonly string[]): Promise<HostAdoptResult> {
+  let profiles: readonly HostProfile[]
+  try { profiles = await via.profiles() } catch { return { ok: false, message: "This computer's accounts could not be read, so nothing was adopted.", adopted: [] } }
+  const held = new Set(profiles.filter((p) => ACCOUNT_PROFILE_RE.test(p.id)).map((p) => p.id))
+  const elsewhere = new Set(machineAccounts(m.did, profiles).elsewhere ?? [])
+  const ids = [...new Set(profileIds)]
+  const not = ids.filter((id) => !ACCOUNT_PROFILE_RE.test(id) || !held.has(id) || !elsewhere.has(id))
+  if (ids.length === 0 || not.length > 0) return { ok: false, message: "Nothing was adopted: only a folder the machine's last read names as another install's, for one of this computer's accounts, can be adopted.", adopted: [] }
+  const adopted: string[] = []
+  const failed: string[] = []
+  for (const id of ids) {
+    const r = await prepareAccountFolder(ctx, m, via, id, 'adopt', 'keep')
+    if (r.ok) adopted.push(id)
+    else failed.push(`${accountName(profiles.find((p) => p.id === id), id)}: ${r.why}`)
+  }
+  await readMachineAccounts(ctx, m, via)
+  const names = adopted.map((id) => accountName(profiles.find((p) => p.id === id), id))
+  const done = names.length ? `Adopted ${names.join(', ')}: ${names.length === 1 ? 'its folder' : 'their folders'} there ${names.length === 1 ? 'is' : 'are'} this computer's now.` : ''
+  return { ok: failed.length === 0, message: [done, failed.length ? `Not adopted: ${failed.join('; ')}.` : ''].filter(Boolean).join(' '), adopted }
+}

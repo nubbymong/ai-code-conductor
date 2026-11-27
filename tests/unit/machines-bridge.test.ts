@@ -78,7 +78,7 @@ describe('Machines preload bridge', () => {
     // 2.1.3-beta.19 section 1.2: the kept sessions (asked, never pushed), End of one, End of a tab's own.
     // 2.1.3-beta.20 section 3: the machines' accounts (asked), a sign-out, and two pushes: a machine's
     // accounts after each read, and a helper tab's account notice.
-    expect(Object.keys(api.machines.remote).sort()).toEqual(['accountSignOut', 'accounts', 'add', 'check', 'endSession', 'endTab', 'onAccountNotice', 'onAccountsChanged', 'prepare', 'remove', 'sessions', 'state'])
+    expect(Object.keys(api.machines.remote).sort()).toEqual(['accountSignOut', 'accounts', 'accountsAdopt', 'add', 'check', 'endSession', 'endTab', 'onAccountNotice', 'onAccountsChanged', 'prepare', 'remove', 'sessions', 'state'])
   })
 
   it('2.1.3-beta.20: the accounts and a sign-out go to their own channels with what they are given; Remove passes its options only when given; the pushes listen on their own channels', async () => {
@@ -88,6 +88,11 @@ describe('Machines preload bridge', () => {
     const req = { did: 'd'.repeat(32), profileId: 'profile-a', confirmMachineOwn: true }
     await api.machines.remote.accountSignOut(req)
     expect(el.ipcRenderer.invoke).toHaveBeenLastCalledWith(IPC.MACHINES_REMOTE_ACCOUNT_SIGN_OUT, req)
+    await api.machines.remote.remove('d'.repeat(32), { forget: true })
+    expect(el.ipcRenderer.invoke).toHaveBeenLastCalledWith(IPC.MACHINES_REMOTE_REMOVE, 'd'.repeat(32), { forget: true })
+    const adopt = { did: 'd'.repeat(32), profileIds: ['profile-a'] }
+    await api.machines.remote.accountsAdopt(adopt)
+    expect(el.ipcRenderer.invoke).toHaveBeenLastCalledWith(IPC.MACHINES_REMOTE_ACCOUNTS_ADOPT, adopt)
     await api.machines.remote.remove('d'.repeat(32), { forget: true })
     expect(el.ipcRenderer.invoke).toHaveBeenLastCalledWith(IPC.MACHINES_REMOTE_REMOVE, 'd'.repeat(32), { forget: true })
     el.ipcRenderer.on.mockClear()

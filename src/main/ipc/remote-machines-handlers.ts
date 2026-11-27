@@ -22,12 +22,12 @@ import { conductorToolsMasterOn } from '../conductor-tools-switch'
 import { endHelperHooks, helperHookEvent } from '../session-signals/hooks'
 import { dispatchHelperStatus, endHelperAccount, setHelperAccount } from '../statusline-watcher'
 import { setRemoteHelperDeps, remoteTabsOn, listRemoteSessions, endRemoteSession, endRemoteTab, type RemoteSignalDeps } from '../remote-helper'
-import { accountsLeftText, readRemoteAccounts, remoteAccountsState, signOutForRemove, signOutRemoteAccount } from '../remote-helper'
+import { accountsLeftText, adoptRemoteAccounts, readRemoteAccounts, remoteAccountsState, signOutForRemove, signOutRemoteAccount } from '../remote-helper'
 import { REMOVE_SIGN_OUT_EXEC_MS, SIGN_OUT_EXEC_MS, forgetHostAccounts, setHostAccountsListener } from '../remote-helper/host-accounts'
 import { listProfiles } from '../account-profiles'
 import { getAuthMethod } from '../account-web/session-store'
 import { isValidProfileId } from '../../shared/profile-id'
-import type { HostAccountsState, HostSignOutResult } from '../../shared/host-accounts'
+import type { HostAccountsState, HostAdoptResult, HostSignOutResult } from '../../shared/host-accounts'
 import { remoteHelperWatchdog } from '../watchdog/remote-helper-tab'
 import { peekSessionState, readDetachedRemotesRegistry } from '../session-state'
 import { RemoteMachines, fileStore } from '../remote-helper/machines'
@@ -253,6 +253,19 @@ export function registerRemoteMachinesHandlers(getWindow: () => BrowserWindow | 
   })
 
   // 2.1.3-beta.20 section 3.1.8: Sign out of one account on one machine (the machine's own sign-in only once confirmed).
+  // Round 2 (R1): Adopt, the user's own choice on a machine's card: a device id and 1 to 64 profile ids of this computer's shape, nothing else.
+  ipcMain.handle(IPC.MACHINES_REMOTE_ACCOUNTS_ADOPT, async (event, req: unknown): Promise<HostAdoptResult> => {
+    const no = (message: string): HostAdoptResult => ({ ok: false, message, adopted: [] })
+    if (!trusted(event)) { logWarn('[machines] remote adopt refused: not the app window'); return no(MACHINES_NOT_APP) }
+    if (!machines) return no(REMOTE_NOT_AVAILABLE)
+    const r = (req && typeof req === 'object' ? req : {}) as Record<string, unknown>
+    if (typeof r.did !== 'string' || !REMOTE_DID_RE.test(r.did)) return no(NOT_LISTED)
+    const ids = r.profileIds
+    if (!Array.isArray(ids) || ids.length === 0 || ids.length > 64 || !ids.every((id) => isValidProfileId(id))) return no('Those are not accounts of this computer.')
+    const ask = { did: r.did, profileIds: ids as string[] }
+    return answer('remote adopt', REMOTE_ACTION_TIMEOUT_MS, () => adoptRemoteAccounts(ask), () => no(MACHINES_NO_ANSWER))
+  })
+
   ipcMain.handle(IPC.MACHINES_REMOTE_ACCOUNT_SIGN_OUT, async (event, req: unknown): Promise<HostSignOutResult> => {
     if (!trusted(event)) { logWarn('[machines] remote sign-out refused: not the app window'); return refuse(MACHINES_NOT_APP) }
     if (!machines) return refuse(REMOTE_NOT_AVAILABLE)

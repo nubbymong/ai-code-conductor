@@ -116,6 +116,35 @@ export interface HostMachineAccounts {
    *  signs out or removes them; Remove names them as used by another
    *  computer. Absent: none (or a shape from before this field). */
   elsewhere?: string[]
+  /** Round 2 (R1): every `elsewhere` folder is named by a profile id this
+   *  computer holds, so they may be this computer's own from an earlier
+   *  install of the app (its records lost, so its install id changed). The
+   *  card says so and offers Adopt (MACHINES_REMOTE_ACCOUNTS_ADOPT), which
+   *  runs only on the user's own choice; nothing adopts them by itself. */
+  mayBeEarlierInstall?: boolean
+  /** Round 2 (R1): folders with the marker of the 2.1.3-beta.20 builds
+   *  before the install id was in it, for profile ids this computer does not
+   *  hold. Left as they are; Remove names them. (One for an account this
+   *  computer holds is taken as its own, and its marker is rewritten.) */
+  oldMarker?: string[]
+}
+
+/** Round 2 (R1): Adopt on a machine's card (MACHINES_REMOTE_ACCOUNTS_ADOPT):
+ *  the user's own choice to make folders that read as another computer's
+ *  (`elsewhere`) this computer's own again, by profile ids this computer
+ *  holds and the machine's last read named there. Only their markers
+ *  change: nothing is signed in, out or removed. */
+export interface HostAdoptRequest {
+  did: string
+  profileIds: string[]
+}
+
+/** What Adopt did: the profile ids whose folders are this computer's now,
+ *  and a plain sentence. */
+export interface HostAdoptResult {
+  ok: boolean
+  message: string
+  adopted: string[]
 }
 
 /** Every added machine's accounts (MACHINES_REMOTE_ACCOUNTS: the last reads,
@@ -145,6 +174,10 @@ export interface HostLaunchRefusal {
    *  (`signed-in-here` or `machine-own`): the notice's "start it on another
    *  account" list. Empty when none is, or the machine was not read. */
   signedInThere: string[]
+  /** Round 2 (R1): the account's folder there reads as another computer's,
+   *  and may be this computer's own from an earlier install: the notice may
+   *  offer Adopt (only on the user's choice). */
+  adoptable?: true
   /** The plain sentence the tab shows in its terminal. */
   text: string
 }

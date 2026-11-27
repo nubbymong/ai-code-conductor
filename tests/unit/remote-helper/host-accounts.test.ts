@@ -20,7 +20,7 @@ import { readFileSync } from 'fs'
 import { resolve } from 'path'
 import {
   _resetHostAccountsForTest, accountBinding, accountFolder, accountsValues, factsOf, folderSignOuts, machineAccounts, prepareAccountFolder,
-  readMachineAccounts, readSignIns, setHostAccountsListener, signInStateOf, signOutListOnMachine, signOutOnMachine, settingsInput, type HostProfile,
+  adoptAccountFolders, readMachineAccounts, readSignIns, setHostAccountsListener, signInStateOf, signOutListOnMachine, signOutOnMachine, settingsInput, type HostProfile,
 } from '../../../src/main/remote-helper/host-accounts'
 import { ACCOUNT_PROFILE_RE, PLAIN_NAMES_RE, accountMarker, scriptCommand, scriptText } from '../../../src/main/remote-helper/scripts'
 import { CLAUDE_REMOTE_ACCOUNTS, claudeAccountField, claudeAccountSettingsText, claudeRemoteEnv, claudeSignInArgs } from '../../../src/main/providers/claude/remote-launch'
@@ -56,7 +56,7 @@ const signedIn = (email: string, plan = 'max'): SignIn => ({
 })
 
 /** The `accounts` exec's output, as the script prints it after the launcher's hash line. */
-function accountsOut(nonce: string, own: SignIn, folders: Record<string, SignIn>, elsewhere: readonly string[] = []): string {
+function accountsOut(nonce: string, own: SignIn, folders: Record<string, SignIn>, elsewhere: readonly string[] = [], old: readonly string[] = []): string {
   const lines = ['rc text from the login', `AICC-HASH ${nonce} ok ${SHA}`]
   const field = (slot: string, part: 'id' | 'cr', obj: Record<string, unknown> | null | undefined) => {
     lines.push(`AICC-FIELD ${nonce} ${slot} ${part}`)
@@ -64,7 +64,7 @@ function accountsOut(nonce: string, own: SignIn, folders: Record<string, SignIn>
   }
   field('own', 'id', own.id)
   field('own', 'cr', own.cr)
-  for (const [id, f] of Object.entries(folders)) { field(id, 'id', f.id); field(id, 'cr', f.cr) }
+  for (const [id, f] of Object.entries(folders)) { if (old.includes(id)) lines.push(`AICC-FIELD ${nonce} ${id} old`); field(id, 'id', f.id); field(id, 'cr', f.cr) }
   for (const id of elsewhere) lines.push(`AICC-FIELD ${nonce} ${id} elsewhere`)
   lines.push(`AICC-RESULT ${nonce} end ok`)
   return `${lines.join('\n')}\n`
@@ -72,6 +72,8 @@ function accountsOut(nonce: string, own: SignIn, folders: Record<string, SignIn>
 
 /** Another computer's install (its app signed in on the same host login). */
 const OTHER_INSTALL = 'e'.repeat(32)
+/** The owner of a folder with the marker of the builds before the install id was in it. */
+const OLD = 'old'
 
 /**
  * A fake host's account folders, as the scripts change them, each with the
@@ -95,32 +97,39 @@ class AccountsHost {
   answer(c: ExecCall): FakeAnswer | null {
     const n = c.values[0]
     const install = c.values[2]
-    const mine = [...this.folders].filter(([id]) => this.ownerOf(id) === install)
-    if (c.script === 'accounts') return { stdout: accountsOut(n, this.own, Object.fromEntries(mine), [...this.folders.keys()].filter((id) => this.ownerOf(id) !== install)) }
+    const mine = [...this.folders].filter(([id]) => this.ownerOf(id) === install || this.ownerOf(id) === OLD)
+    const old = [...this.folders.keys()].filter((id) => this.ownerOf(id) === OLD)
+    if (c.script === 'accounts') return { stdout: accountsOut(n, this.own, Object.fromEntries(mine), [...this.folders.keys()].filter((id) => this.ownerOf(id) !== install && this.ownerOf(id) !== OLD), old) }
     if (c.script === 'account') {
       const [, , , id, mode] = c.values
-      if (this.folders.has(id) && this.ownerOf(id) !== install) return { stdout: result(n, {}, 'refused account-folder-elsewhere') }
+      let adopted: string | undefined
+      if (this.folders.has(id) && this.ownerOf(id) === OLD) { this.owner.set(id, install); adopted = 'old' }
+      if (this.folders.has(id) && this.ownerOf(id) !== install) {
+        if (mode !== 'adopt') return { stdout: result(n, {}, 'refused account-folder-elsewhere') }
+        this.owner.set(id, install)
+        adopted = 'elsewhere'
+      }
       if (!this.folders.has(id)) {
         if (mode !== 'make') return { stdout: result(n, { gone: 'yes' }) }
         this.folders.set(id, {})
         this.owner.set(id, install)
       }
-      return { stdout: result(n, {}) }
+      return { stdout: result(n, adopted ? { adopted } : {}) }
     }
     if (c.script === 'signout') {
       const [, , , kind, id] = c.values
       if (kind === 'list' && this.deviceGone) return { stdout: result(n, { device: 'gone' }) }
       if (kind === 'own') { this.own = {}; return { stdout: result(n, { logout: String(this.logout) }) } }
       if (kind === 'folder' && !this.folders.has(id)) return { stdout: result(n, { gone: 'yes' }) }
-      if (kind === 'folder' && this.ownerOf(id) !== install) return { stdout: result(n, {}, 'refused account-folder-elsewhere') }
+      if (kind === 'folder' && this.ownerOf(id) !== install && this.ownerOf(id) !== OLD) return { stdout: result(n, {}, 'refused account-folder-elsewhere') }
       const named = kind === 'list' ? (id === '-' ? [] : id.split(',')) : [id]
       const lines: string[] = []
       for (const x of named) {
-        if (!this.folders.has(x) || this.ownerOf(x) !== install) continue
+        if (!this.folders.has(x) || (this.ownerOf(x) !== install && this.ownerOf(x) !== OLD)) continue
         this.folders.delete(x)
         lines.push(`AICC-RESULT ${n} out ${x} ${this.logout}`, `AICC-RESULT ${n} removed ${x}`)
       }
-      if (kind === 'list') for (const x of this.folders.keys()) lines.push(`AICC-RESULT ${n} ${this.ownerOf(x) === install ? 'left' : 'elsewhere'} ${x}`)
+      if (kind === 'list') for (const x of this.folders.keys()) lines.push(`AICC-RESULT ${n} ${this.ownerOf(x) === install ? 'left' : this.ownerOf(x) === OLD ? 'old' : 'elsewhere'} ${x}`)
       return { stdout: `${lines.join('\n')}${lines.length ? '\n' : ''}AICC-RESULT ${n} end ok\n` }
     }
     return null
@@ -266,12 +275,12 @@ describe('the read takes the fields on the helper\'s list, never a secret (3.1.2
     expect(t).not.toMatch(/['\\\r\n]/)
     expect(t).toContain('fr() { echo "AICC-FIELD $N $1 $2"; "$P" field --file "$3" --keys "$4" </dev/null 2>/dev/null; }')
     expect(t.indexOf('echo "AICC-HASH $N ok $x"')).toBeLessThan(t.indexOf('fr own id'))
-    expect(t).toContain('am "$B/$X" "$X" || { ao "$B/$X" "$X" && echo "AICC-FIELD $N $X elsewhere"; continue; }')
+    expect(t).toContain('am "$B/$X" "$X" || { aw "$B/$X" "$X" && echo "AICC-FIELD $N $X old"; } || { ao "$B/$X" "$X" && echo "AICC-FIELD $N $X elsewhere"; continue; }')
     expect(t).toContain('aicc-account 1 $2 $I')
     // It reads: no file is written, moved, linked or removed, and no file's bytes are printed by the script itself.
     expect(t).not.toMatch(/\brm\b|mkdir|chmod|\bmv\b|\bln\b|>\s*"|\bod\b/)
     // The marker only (am and ao each read it).
-    expect(t.match(/\bhead\b[^;)]*/g)).toEqual(['head -c 200 "$1/.aicc-account" 2>/dev/null', 'head -c 200 "$1/.aicc-account" 2>/dev/null'])
+    expect(t.match(/\bhead\b[^;)]*/g)).toEqual(['head -c 200 "$1/.aicc-account" 2>/dev/null', 'head -c 200 "$1/.aicc-account" 2>/dev/null', 'head -c 200 "$1/.aicc-account" 2>/dev/null'])
     // A key list with a space or a quote, or a file that leaves home, is refused before ssh starts.
     const ok = [FOLDER, SHA, '.claude.json', '.claude/.credentials.json', '.claude.json', '.credentials.json', 'oauthAccount.emailAddress', 'a.b,c.d']
     expect(() => scriptCommand('accounts', ['0'.repeat(32), MACHINE.did, INSTALL, ...ok])).not.toThrow()
@@ -397,7 +406,7 @@ describe('Sign out (3.1.8): the CLI\'s own sign-out in that folder, then only th
     expect(t.match(/rm -rf[^;]*/g)).toEqual(['rm -rf -- "${B:?}/${P:?}" || no cannot-remove'])
     expect(t).toContain('B=$HOME/.aicc/accounts')
     const del = t.indexOf('rm -rf')
-    const loop = t.lastIndexOf('for P in $L; do case "$P" in [!a-z0-9]*|*[!a-z0-9-]*|"") continue;; esac; Q=$B/$P; am "$Q" "$P" || continue;', del)
+    const loop = t.lastIndexOf('for P in $L; do case "$P" in [!a-z0-9]*|*[!a-z0-9-]*|"") continue;; esac; Q=$B/$P; am "$Q" "$P" || aw "$Q" "$P" || continue;', del)
     expect(loop).toBeGreaterThan(-1)
     expect(loop).toBeLessThan(del)
     // The sign-out runs first, in that folder: its config variable set to it.
@@ -443,7 +452,7 @@ describe('Sign out (3.1.8): the CLI\'s own sign-out in that folder, then only th
     expect(run).toEqual({
       ok: true, deviceGone: false,
       folders: [{ profileId: 'profile-work', logout: 0, removed: true }, { profileId: 'profile-old', logout: 0, removed: true }],
-      left: ['profile-unlisted'], elsewhere: ['profile-theirs'],
+      left: ['profile-unlisted'], old: [], elsewhere: ['profile-theirs'],
     })
     expect([...tree.folders.keys()]).toEqual(['profile-unlisted', 'profile-theirs'])
     const n = '3'.repeat(32)
@@ -462,7 +471,7 @@ describe('Sign out (3.1.8): the CLI\'s own sign-out in that folder, then only th
   it('MAJOR-2: with the device folder already gone, Remove\'s sign-out signs nothing out and answers so, for Remove to go on', async () => {
     tree.folders.set('profile-work', signedIn('work@example.com'))
     tree.deviceGone = true
-    expect(await signOutListOnMachine(ctx(), MACHINE, VIA, ['profile-work'])).toEqual({ ok: true, deviceGone: true, folders: [], left: [], elsewhere: [] })
+    expect(await signOutListOnMachine(ctx(), MACHINE, VIA, ['profile-work'])).toEqual({ ok: true, deviceGone: true, folders: [], left: [], old: [], elsewhere: [] })
     expect(tree.folders.has('profile-work')).toBe(true)
     // The script's own pass-through: before the device folder's checks, `list` only.
     const t = scriptText('signout')
@@ -479,14 +488,15 @@ describe('Sign out (3.1.8): the CLI\'s own sign-out in that folder, then only th
       expect(t, name).toContain('am() { pv "$1" && [ -f "$1/.aicc-account" ] && [ ! -L "$1/.aicc-account" ] && [ "$(head -c 200 "$1/.aicc-account" 2>/dev/null)" = "aicc-account 1 $2 $I" ]; }')
       expect(t, name).toContain('ao() {')
     }
-    expect(scriptText('account')).toContain('echo "aicc-account 1 $P $I" > "$Q/.aicc-account"')
-    expect(scriptText('account')).toContain('am "$Q" "$P" || { ao "$Q" "$P" && no account-folder-elsewhere; no account-folder-not-the-apps; }')
-    expect(scriptText('accounts')).toContain('am "$B/$X" "$X" || { ao "$B/$X" "$X" && echo "AICC-FIELD $N $X elsewhere"; continue; }')
+    expect(scriptText('account')).toContain('mw() { echo "aicc-account 1 $1 $I" > "$2/.aicc-account.$N" && mv -f -- "$2/.aicc-account.$N" "$2/.aicc-account"; }')
+    expect(scriptText('account')).toContain('mkdir "$Q" || no cannot-make-account-folder; mw "$P" "$Q" || no cannot-write-marker')
+    expect(scriptText('account')).toContain('elif ao "$Q" "$P"; then [ "$M" = adopt ] || no account-folder-elsewhere; mw "$P" "$Q"')
+    expect(scriptText('accounts')).toContain('{ ao "$B/$X" "$X" && echo "AICC-FIELD $N $X elsewhere"; continue; }')
     const t = scriptText('signout')
     // Only the ids it is given, each by this install's marker; the folders left are only named.
     expect(t).toContain('L=$(printf "%s" "$P" | tr "," " ")')
     expect(t).not.toMatch(/L=\$\(ls/)
-    expect(t).toContain('if am "$B/$P" "$P"; then r left "$P"; elif ao "$B/$P" "$P"; then r elsewhere "$P"; fi')
+    expect(t).toContain('if am "$B/$P" "$P"; then r left "$P"; elif aw "$B/$P" "$P"; then r old "$P"; elif ao "$B/$P" "$P"; then r elsewhere "$P"; fi')
     expect(() => scriptCommand('signout', ['0'.repeat(32), MACHINE.did, INSTALL, 'all', '-', 'CLAUDE_CONFIG_DIR', 'claude', 'auth,logout'])).toThrow()
     expect(() => scriptCommand('signout', ['0'.repeat(32), MACHINE.did, INSTALL, 'list', 'profile-a,profile-b', 'CLAUDE_CONFIG_DIR', 'claude', 'auth,logout'])).not.toThrow()
     for (const bad of ['profile-a,../x', 'profile-a,,profile-b', ',profile-a', 'profile-a,', 'a b']) {
@@ -505,5 +515,87 @@ describe('Sign out (3.1.8): the CLI\'s own sign-out in that folder, then only th
     expect(got.elsewhere).toEqual(['profile-side', 'profile-theirs'])
     expect(got.accounts.find((a) => a.profileId === 'profile-side')).toMatchObject({ state: 'not-signed-in', folder: false })
     expect(got.accounts.find((a) => a.profileId === 'profile-personal')?.state).toBe('signed-in-here')
+  })
+})
+
+// Round 2 (R1): two kinds of folder that used to block an account's sign-in
+// there for good: one with the marker of the 2.1.3-beta.20 builds before the
+// install id was in it, and this computer's own after its install id changed
+// (its records lost). The first is this computer's when its id is one of
+// this computer's accounts; the second is said as such and adopted only on
+// the user's own choice. Another computer's folder is never signed out or
+// removed without that choice.
+describe('round 2 (R1): folders of an earlier build, and of an earlier install', () => {
+  it('the old marker is the marker with no install id, exactly; only for an id the app names is its marker rewritten, by a staging file', () => {
+    for (const name of ['accounts', 'account', 'signout'] as const) {
+      expect(scriptText(name), name).toContain('aw() { pv "$1" && [ -f "$1/.aicc-account" ] && [ ! -L "$1/.aicc-account" ] && [ "$(head -c 200 "$1/.aicc-account" 2>/dev/null)" = "aicc-account 1 $2" ]; }')
+    }
+    const t = scriptText('account')
+    expect(t).toContain('then if am "$Q" "$P"; then :; elif aw "$Q" "$P"; then mw "$P" "$Q" || no cannot-write-marker; r adopted old; elif ao "$Q" "$P"; then [ "$M" = adopt ] || no account-folder-elsewhere; mw "$P" "$Q" || no cannot-write-marker; r adopted elsewhere; else no account-folder-not-the-apps; fi')
+    // Adopt changes only the marker: it ends before the links and the settings copy.
+    expect(t.indexOf('[ "$M" = adopt ] && { r end ok; exit 0; }')).toBeLessThan(t.indexOf('lk() {'))
+    expect(() => scriptCommand('account', ['0'.repeat(32), MACHINE.did, INSTALL, 'profile-a', 'adopt', '.claude', 'projects', 'CLAUDE.md', 'settings.json', 'keep'])).not.toThrow()
+    // The read names an old-marker folder and still reads it; Remove's list signs one out only when it names it, and names the rest.
+    expect(scriptText('accounts')).toContain('{ aw "$B/$X" "$X" && echo "AICC-FIELD $N $X old"; }')
+    expect(scriptText('signout')).toContain('Q=$B/$P; am "$Q" "$P" || aw "$Q" "$P" || continue;')
+  })
+
+  it('(a) an old-marker folder of one of this computer\'s accounts reads as that account\'s and is adopted at its next refresh; one of an account it does not hold is named, never another of its own', async () => {
+    tree.folders.set('profile-personal', signedIn('personal@example.com'))
+    tree.owner.set('profile-personal', OLD)
+    tree.folders.set('profile-gone', signedIn('gone@example.com'))
+    tree.owner.set('profile-gone', OLD)
+    const got = await readMachineAccounts(ctx(), MACHINE, VIA)
+    expect(got.accounts.find((a) => a.profileId === 'profile-personal')).toMatchObject({ state: 'signed-in-here', folder: true })
+    expect(got.oldMarker).toEqual(['profile-gone'])
+    expect(got.others).toEqual([])
+    expect(got.elsewhere).toEqual([])
+    const refreshed = await prepareAccountFolder(ctx(), MACHINE, VIA, 'profile-personal', 'refresh', null)
+    expect(refreshed).toEqual({ ok: true, own: [], adopted: 'old' })
+    expect(tree.ownerOf('profile-personal')).toBe(INSTALL)
+    // Remove names it and leaves it: its id is not on this computer's list.
+    const run = await signOutListOnMachine(ctx(), MACHINE, VIA, ['profile-personal'])
+    expect(run).toMatchObject({ ok: true, old: ['profile-gone'], folders: [{ profileId: 'profile-personal', removed: true }] })
+    expect([...tree.folders.keys()]).toEqual(['profile-gone'])
+  })
+
+  it('(b) folders of another install all named by this computer\'s accounts may be its own from an earlier install; one other name and they are another computer\'s', async () => {
+    tree.folders.set('profile-personal', signedIn('personal@example.com'))
+    tree.owner.set('profile-personal', OTHER_INSTALL)
+    tree.folders.set('profile-side', signedIn('side@example.com'))
+    tree.owner.set('profile-side', OTHER_INSTALL)
+    const ours = await readMachineAccounts(ctx(), MACHINE, VIA)
+    expect(ours).toMatchObject({ elsewhere: ['profile-personal', 'profile-side'], mayBeEarlierInstall: true })
+    const b = accountBinding(ours, 'profile-personal', MACHINE, 'Rocky', PROFILES)
+    expect(b).toMatchObject({ refused: { state: 'not-signed-in', adoptable: true } })
+    expect('refused' in b && b.refused.text).toMatch(/earlier install of the app: if so, choose Adopt/)
+    tree.folders.set('profile-stranger', signedIn('stranger@example.com'))
+    tree.owner.set('profile-stranger', OTHER_INSTALL)
+    expect((await readMachineAccounts(ctx(), MACHINE, VIA)).mayBeEarlierInstall).toBe(false)
+  })
+
+  it('(b) Adopt runs only on the ids the last read named as another install\'s and this computer holds; it changes only their markers', async () => {
+    tree.folders.set('profile-personal', signedIn('personal@example.com'))
+    tree.owner.set('profile-personal', OTHER_INSTALL)
+    tree.folders.set('profile-stranger', signedIn('stranger@example.com'))
+    tree.owner.set('profile-stranger', OTHER_INSTALL)
+    tree.folders.set('profile-side', signedIn('side@example.com'))
+    await readMachineAccounts(ctx(), MACHINE, VIA)
+    const before = ssh.calls.length
+    for (const ids of [[], ['profile-stranger'], ['profile-side'], ['profile-personal', 'profile-stranger'], ['../x']]) {
+      const r = await adoptAccountFolders(ctx(), MACHINE, VIA, ids)
+      expect(r, JSON.stringify(ids)).toMatchObject({ ok: false, adopted: [] })
+    }
+    expect(ssh.calls.length).toBe(before)
+    const r = await adoptAccountFolders(ctx(), MACHINE, VIA, ['profile-personal'])
+    expect(r).toMatchObject({ ok: true, adopted: ['profile-personal'] })
+    expect(r.message).toMatch(/^Adopted Personal: its folder there is this computer's now\./)
+    expect(ssh.calls.slice(before).map((c) => [c.script, ...c.values.slice(3, 5)])).toEqual([['account', 'profile-personal', 'adopt'], ['accounts', FOLDER, SHA]])
+    expect(tree.ownerOf('profile-personal')).toBe(INSTALL)
+    expect(tree.ownerOf('profile-stranger')).toBe(OTHER_INSTALL)
+    expect([...tree.folders.keys()]).toEqual(['profile-personal', 'profile-stranger', 'profile-side'])
+    const after = machineAccounts(MACHINE.did, PROFILES)
+    expect(after.accounts.find((a) => a.profileId === 'profile-personal')?.state).toBe('signed-in-here')
+    expect(after.elsewhere).toEqual(['profile-stranger'])
   })
 })

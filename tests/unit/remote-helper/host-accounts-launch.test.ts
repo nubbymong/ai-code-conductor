@@ -23,7 +23,7 @@ import { join } from 'path'
 import type { IPty } from 'node-pty'
 import type { RemoteAccounts, SessionProvider } from '../../../src/main/providers/types'
 import { registerProvider } from '../../../src/main/providers'
-import { accountsLeftText, forgetRemoteHelperTab, remoteAccountsState, remoteHelperPty, setRemoteHelperDeps, signOutForRemove, signOutRemoteAccount } from '../../../src/main/remote-helper'
+import { accountsLeftText, adoptRemoteAccounts, forgetRemoteHelperTab, remoteAccountsState, remoteHelperPty, setRemoteHelperDeps, signOutForRemove, signOutRemoteAccount } from '../../../src/main/remote-helper'
 import { CLAUDE_REMOTE_ACCOUNTS, claudeRemoteLaunch } from '../../../src/main/providers/claude/remote-launch'
 import { CLAUDE_RUN_SCREEN } from '../../../src/main/providers/claude/run-screen'
 import { remoteSessionId } from '../../../src/main/remote-helper/session'
@@ -78,6 +78,8 @@ let switchOn: boolean
 let methods: Record<string, string>
 const INSTALL = 'f'.repeat(32)
 const OTHER_INSTALL = 'e'.repeat(32)
+/** The owner of a folder with the marker of the builds before the install id was in it. */
+const OLD = 'old'
 const win = { webContents: { send: (ch: string, d: unknown) => { sent.push([ch, d]) } }, isDestroyed: () => false }
 const ownerOf = (id: string): string => owners.get(id) ?? INSTALL
 
@@ -87,7 +89,8 @@ function accountsOut(n: string, install: string): string {
   field('own', 'id', own.id)
   field('own', 'cr', own.cr)
   for (const [id, f] of folders) {
-    if (ownerOf(id) !== install) { lines.push(`AICC-FIELD ${n} ${id} elsewhere`); continue }
+    if (ownerOf(id) === OLD) lines.push(`AICC-FIELD ${n} ${id} old`)
+    else if (ownerOf(id) !== install) { lines.push(`AICC-FIELD ${n} ${id} elsewhere`); continue }
     field(id, 'id', f.id)
     field(id, 'cr', f.cr)
   }
@@ -107,13 +110,19 @@ function answer(c: ExecCall): FakeAnswer {
     case 'accounts': return { stdout: accountsOut(n, install) }
     case 'account': {
       const [, , , id, mode] = c.values
-      if (folders.has(id) && ownerOf(id) !== install) return { stdout: result(n, {}, 'refused account-folder-elsewhere') }
+      let adopted: string | undefined
+      if (folders.has(id) && ownerOf(id) === OLD) { owners.set(id, install); adopted = 'old' }
+      if (folders.has(id) && ownerOf(id) !== install) {
+        if (mode !== 'adopt') return { stdout: result(n, {}, 'refused account-folder-elsewhere') }
+        owners.set(id, install)
+        adopted = 'elsewhere'
+      }
       if (!folders.has(id)) {
         if (mode !== 'make') return { stdout: result(n, { gone: 'yes' }) }
         folders.set(id, {})
         owners.set(id, install)
       }
-      return { stdout: result(n, {}) }
+      return { stdout: result(n, adopted ? { adopted } : {}) }
     }
     case 'signout': {
       const [, , , kind, id] = c.values
@@ -121,16 +130,16 @@ function answer(c: ExecCall): FakeAnswer {
       if (kind === 'own') { own = {}; return { stdout: result(n, { logout: '0' }) } }
       if (kind === 'folder') {
         if (!folders.has(id)) return { stdout: result(n, { gone: 'yes' }) }
-        if (ownerOf(id) !== install) return { stdout: result(n, {}, 'refused account-folder-elsewhere') }
+        if (ownerOf(id) !== install && ownerOf(id) !== OLD) return { stdout: result(n, {}, 'refused account-folder-elsewhere') }
       }
       const named = kind === 'list' ? (id === '-' ? [] : id.split(',')) : [id]
       const lines: string[] = []
       for (const x of named) {
-        if (!folders.has(x) || ownerOf(x) !== install) continue
+        if (!folders.has(x) || (ownerOf(x) !== install && ownerOf(x) !== OLD)) continue
         folders.delete(x)
         lines.push(`AICC-RESULT ${n} out ${x} 0`, `AICC-RESULT ${n} removed ${x}`)
       }
-      if (kind === 'list') for (const x of folders.keys()) lines.push(`AICC-RESULT ${n} ${ownerOf(x) === install ? 'left' : 'elsewhere'} ${x}`)
+      if (kind === 'list') for (const x of folders.keys()) lines.push(`AICC-RESULT ${n} ${ownerOf(x) === install ? 'left' : ownerOf(x) === OLD ? 'old' : 'elsewhere'} ${x}`)
       return { stdout: `${lines.join('\n')}${lines.length ? '\n' : ''}AICC-RESULT ${n} end ok\n` }
     }
     case 'list': case 'sessions': {
@@ -487,9 +496,60 @@ describe('fix round: the sign-in method, a kept session\'s attach, and the notes
     const id = 'signin-elsewhere'
     start(id, { profileId: 'profile-personal', remoteAccountSignIn: true })
     await until(() => shown(id).includes('could not start'))
-    expect(shown(id)).toMatch(/made by the app on another computer/)
+    expect(shown(id)).toMatch(/carries another install's mark/)
     expect(shown(id)).toMatch(/choose Sign in on this machine again/)
     expect(shown(id)).not.toMatch(/usual SSH path/)
+    expect(launchOf()).toBeNull()
+    forgetRemoteHelperTab(id)
+  })
+})
+
+// Round 2 (R1): an old-marker folder of an account this computer does not
+// hold, and this computer's own folders after its install id changed.
+describe('round 2 (R1): Remove and a launch name folders of an earlier build or install', () => {
+  it('Remove names an old-marker folder of an account this computer does not hold, and says folders of another install all named by this computer\'s accounts may be its own', async () => {
+    plugIn()
+    const list = realMachines()
+    folders.set('profile-gone', signedIn('gone@example.com'))
+    owners.set('profile-gone', OLD)
+    owners.set('profile-personal', OTHER_INSTALL)
+    const r = await list.remove(MACHINE.did)
+    expect(r.ok, r.message).toBe(true)
+    expect(r.message).toMatch(/Signed out Side there first\./)
+    expect(r.message).toMatch(/profile-gone \(a folder an earlier build of the app made there, for an account this computer does not hold\) stays signed in there/)
+    expect(r.message).toMatch(/Personal: its folder there carries another install's mark, and may be this computer's own from an earlier install of the app; it was left as it is\./)
+    expect([...folders.keys()]).toEqual(['profile-personal', 'profile-gone'])
+  })
+
+  it('a launch on an account whose folder there carries another install\'s mark starts nothing, and the refusal offers Adopt; Adopt then makes it this computer\'s and the tab starts', async () => {
+    owners.set('profile-personal', OTHER_INSTALL)
+    const id = 'acct-adoptable'
+    start(id, { profileId: 'profile-personal' })
+    await until(() => notices().length === 1)
+    const n = notices()[0]
+    expect(n).toMatchObject({ kind: 'launch-refused', refusal: { state: 'not-signed-in', adoptable: true } })
+    expect(n.kind === 'launch-refused' && n.refusal.text).toMatch(/choose Adopt on the machine's card/)
+    expect(ownerOf('profile-personal')).toBe(OTHER_INSTALL)
+    forgetRemoteHelperTab(id)
+    const adopted = await adoptRemoteAccounts({ did: MACHINE.did, profileIds: ['profile-personal'] })
+    expect(adopted).toMatchObject({ ok: true, adopted: ['profile-personal'] })
+    expect(ownerOf('profile-personal')).toBe(INSTALL)
+    const id2 = 'acct-adopted'
+    const pty = start(id2, { profileId: 'profile-personal' })
+    await until(() => launchOf() !== null)
+    expect(launchOf()?.env?.CLAUDE_CONFIG_DIR).toBe('/home/nick/.aicc/accounts/profile-personal')
+    pty.kill()
+    forgetRemoteHelperTab(id2)
+  })
+
+  it('a sign-in tab never makes over a folder with another install\'s mark: it says Adopt is the way', async () => {
+    owners.set('profile-personal', OTHER_INSTALL)
+    const id = 'signin-adoptable'
+    start(id, { profileId: 'profile-personal', remoteAccountSignIn: true })
+    await until(() => shown(id).includes('could not start'))
+    expect(shown(id)).toMatch(/carries another install's mark, and nothing of it was changed/)
+    expect(shown(id)).toMatch(/choose Adopt on the machine's card/)
+    expect(ownerOf('profile-personal')).toBe(OTHER_INSTALL)
     expect(launchOf()).toBeNull()
     forgetRemoteHelperTab(id)
   })

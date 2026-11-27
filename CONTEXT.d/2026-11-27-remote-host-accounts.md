@@ -74,6 +74,18 @@ Fix round (independent review, 2 MAJOR, 5 MINOR, 4 NIT):
   for accounts that did not read on this computer says so; a sign-in tab
   that could not start names its own next step.
 
+Round 2 (recheck, R1): two kinds of folder were never removed and blocked an
+account's sign-in there. A folder with the marker of the beta.20 builds
+before the install id was in it is this computer's when its profile id is
+one of this computer's accounts: it reads as that account's, and its marker
+is rewritten at its next sign-in or launch; any other is named by Remove and
+left. This computer's own folders after its install id changed (its records
+lost) read as another install's: when every such folder is named by one of
+this computer's accounts, the card, the launch notice and Remove say they
+may be this computer's own from an earlier install, and Adopt (a new door,
+the user's own choice only) rewrites their markers; nothing adopts or
+removes them by itself.
+
 Tests: helper cargo tests (CI; no toolchain on the build host), vitest unit
 red-first with mutants each shown red (a secret key through, a mismatch
 read as signed in, CLAUDE_CONFIG_DIR dropped, a sibling folder removed in

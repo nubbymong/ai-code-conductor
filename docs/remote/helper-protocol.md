@@ -69,7 +69,15 @@ probe (ADR) must confirm. R5 fixtures fix field types, lengths and refusals.
   install (the app on another computer of the user, or on a shared login,
   signed in on the same host login) is that computer's: `accounts` names it
   `AICC-FIELD <nonce> <profile id> elsewhere` and reads nothing of it, and
-  `account` and `signout` refuse it (`account-folder-elsewhere`). The folder
+  `account` and `signout` refuse it (`account-folder-elsewhere`), but for
+  `account adopt`, the user's own choice on the machine's card for a folder
+  of one of this computer's accounts (its own from an earlier install whose
+  id was lost), which rewrites only its marker. A folder with the marker of
+  the 2.1.3-beta.20 builds before the install id was in it (`aicc-account 1
+  <profile id>`) is read after `AICC-FIELD <nonce> <profile id> old`; one
+  whose profile id the app names (one of its accounts) is this computer's,
+  and `account` rewrites its marker (`adopted old`); any other is left, and
+  Remove names it (`old <id>`). The folder
   is the CLI's config folder for that account
   (`CLAUDE_CONFIG_DIR`): its sign-in files (`.credentials.json`,
   `.claude.json`) are its own, the shared folders (projects, memory, agents,
