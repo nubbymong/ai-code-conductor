@@ -12,6 +12,7 @@ import {
   removeListing, removeNotAnsweringText, machineOwnSignOutText, toSignInCount, joinNames, hostLaunchable, signInOnTitle,
   elsewhereStayText, hostElsewhere, hostEarlierInstall, earlierInstallStayText, oldMarkerStayText, adoptConfirmText, adoptButtonTitle,
   hostAccountNamer, adoptTitleOn, adoptNextText, NAMELESS_ACCOUNT, sentenceStart, ownStaysText, adoptResultText,
+  NOT_HELD_ACCOUNT, notHeldName, folderOfStart, listingCount,
 } from '../../../src/renderer/utils/hostAccounts'
 import type { HostMachineAccounts, HostSignInFacts } from '../../../src/shared/host-accounts'
 import type { TerminalConfig } from '../../../src/renderer/stores/configStore'
@@ -171,6 +172,39 @@ describe('Remove\'s question lists the accounts signed in there (frame 4)', () =
     expect(removeNotAnsweringText('Pi', l([], false))).toContain('The app has not read which accounts are signed in on Pi since it started')
     expect(joinNames(['A', 'B', 'C'])).toBe('A, B and C')
   })
+  // Final review round 3 (F3-1): the counted item for the folders of
+  // accounts this computer no longer holds counts each, so "stay" and "these
+  // accounts" follow how many accounts it names, as main's answer does.
+  it('the folders of accounts no longer on this computer count each account they stand for', () => {
+    const two = removeListing(acc({ accounts: [], others: ['p9', 'p8'] }), nameOf)
+    expect(two.signedIn).toEqual([{ key: 'others', name: '2 accounts no longer on this computer', count: 2 }])
+    expect(listingCount(two)).toBe(2)
+    expect(removeNotAnsweringText('Pi', two)).toContain('now. 2 accounts no longer on this computer stay signed in on Pi until you sign them out there, or end those sign-ins')
+    const one = removeListing(acc({ accounts: [], others: ['p9'] }), nameOf)
+    expect(listingCount(one)).toBe(1)
+    expect(removeNotAnsweringText('Pi', one)).toContain('now. An account no longer on this computer stays signed in on Pi until you sign it out there, or end that sign-in')
+    expect(listingCount(removeListing(acc({ others: ['p9', 'p8'] }), nameOf))).toBe(3)
+  })
+})
+
+// Final review round 3 (F3-1): the words main's answers and these lines share.
+describe('the shared words for accounts (F3-1)', () => {
+  it('an account this computer does not hold, one or several', () => {
+    expect(NOT_HELD_ACCOUNT).toBe('an account no longer on this computer')
+    expect(notHeldName(1)).toBe(NOT_HELD_ACCOUNT)
+    expect(notHeldName(3)).toBe('3 accounts no longer on this computer')
+  })
+  it('a folder where it starts a sentence: a possessive for a name, none for the app\'s own words', () => {
+    expect(folderOfStart('Work')).toBe("Work's folder")
+    expect(folderOfStart(NAMELESS_ACCOUNT)).toBe('The folder of an account with no name')
+    expect(folderOfStart(NOT_HELD_ACCOUNT)).toBe('The folder of an account no longer on this computer')
+  })
+  it('lists join with "and", or with "or"', () => {
+    expect(joinNames([])).toBe('')
+    expect(joinNames(['A'])).toBe('A')
+    expect(joinNames(['A', 'B'])).toBe('A and B')
+    expect(joinNames(['A', 'B', 'C'], 'or')).toBe('A, B or C')
+  })
 })
 
 // MINOR-2 (round 1): an account of this computer whose folder on that machine
@@ -241,9 +275,10 @@ describe('a folder that may be this computer\'s own from an earlier install', ()
     expect(l.oldMarker).toEqual(['zz9'])
     expect(removeListing({ ...read(false), elsewhere: ['p2', 'x8'] }, nameOf)).toMatchObject({ earlier: [], elsewhere: 2 })
     expect(earlierInstallStayText(['Personal'])).toBe('Personal: its folder there carries another install\'s mark, and may be this computer\'s own from an earlier install of the app; Remove leaves it as it is. To sign it out from here, choose Adopt on this card first.')
-    expect(earlierInstallStayText(['Personal', 'Spare'])).toBe('Personal, Spare: their folders there carry another install\'s mark, and may be this computer\'s own from an earlier install of the app; Remove leaves them as they are. To sign them out from here, choose Adopt on this card first.')
-    expect(oldMarkerStayText(['zz9'])).toBe('zz9 (a folder an earlier build of the app made there, for an account this computer does not hold) stays signed in there as it is.')
-    expect(oldMarkerStayText(['zz9', 'zz8'])).toBe('zz9, zz8 (folders an earlier build of the app made there, for accounts this computer does not hold) stay signed in there as they are.')
+    expect(earlierInstallStayText(['Personal', 'Spare'])).toBe('Personal and Spare: their folders there carry another install\'s mark, and may be this computer\'s own from an earlier install of the app; Remove leaves them as they are. To sign them out from here, choose Adopt on this card first.')
+    // Final review round 3 (F3-1): counted as main counts them, never by profile id.
+    expect(oldMarkerStayText(1)).toBe('The folder an earlier build of the app made there for an account no longer on this computer stays signed in there as it is.')
+    expect(oldMarkerStayText(2)).toBe('The folders an earlier build of the app made there for 2 accounts no longer on this computer stay signed in there as they are.')
   })
   it('Adopt asks first, naming the accounts and what it does and does not do', () => {
     expect(adoptConfirmText('Rocky', ['Personal'])).toBe('Adopt Personal on Rocky? Its folder there carries another install\'s mark. If it is this computer\'s own from an earlier install of the app, Adopt makes it this computer\'s again; nothing is signed in, out or removed. If it is the app\'s on another computer, do not adopt it.')
@@ -261,7 +296,10 @@ describe('a folder that may be this computer\'s own from an earlier install', ()
   // helper the account card's and the Accounts here row's hover text both
   // call (the row's own test: remote-machines-accounts.test.tsx). R5-2
   // (round 5): hostAccountNamer is the one naming rule, the sign-in tab's
-  // too, with its own fallback.
+  // too. Final review round 3 (F3-1): an account with no name reads
+  // NAMELESS_ACCOUNT (or a row's own word, 'Account'), and one this computer
+  // does not hold NOT_HELD_ACCOUNT whatever that word is; (F3-3) an email of
+  // spaces only counts as none.
   it('the hover text names the accounts as the confirm does', () => {
     const profiles = [
       { id: 'p2', name: 'Personal', accountEmail: 'p@x.io' },
@@ -269,9 +307,12 @@ describe('a folder that may be this computer\'s own from an earlier install', ()
       { id: 'p4', name: '', accountEmail: 'n@x.io' },
     ]
     const nameOf = hostAccountNamer(profiles, { 's@x.io': 'Spare' })
-    expect(['p2', 'p3', 'p4', 'p9'].map(nameOf)).toEqual(['Personal', 'Spare', 'n@x.io', 'That account'])
-    expect(['p2', 'p3', 'p4', 'p9'].map(hostAccountNamer(profiles, { 's@x.io': 'Spare' }, 'that account'))).toEqual(['Personal', 'Spare', 'n@x.io', 'that account'])
-    expect(hostAccountNamer([{ id: 'p5', name: '', accountEmail: '' }], undefined, 'that account')('p5')).toBe('that account')
+    expect(['p2', 'p3', 'p4', 'p9'].map(nameOf)).toEqual(['Personal', 'Spare', 'n@x.io', NOT_HELD_ACCOUNT])
+    expect(['p2', 'p3', 'p4', 'p9'].map(hostAccountNamer(profiles, { 's@x.io': 'Spare' }, 'Account'))).toEqual(['Personal', 'Spare', 'n@x.io', NOT_HELD_ACCOUNT])
+    expect(hostAccountNamer([{ id: 'p5', name: '', accountEmail: '' }], undefined)('p5')).toBe(NAMELESS_ACCOUNT)
+    expect(hostAccountNamer([{ id: 'p5', name: '', accountEmail: '' }], undefined, 'Account')('p5')).toBe('Account')
+    expect(hostAccountNamer([{ id: 'p6', name: '', accountEmail: '  ' }], undefined)('p6')).toBe(NAMELESS_ACCOUNT)
+    expect(hostAccountNamer([{ id: 'p6', name: '', accountEmail: '  ' }], undefined, 'Account')('p6')).toBe('Account')
     const acc = { ...read(true), elsewhere: ['p2', 'p3', 'zz9'] }
     expect(adoptTitleOn('Rocky', acc, profiles, { 's@x.io': 'Spare' })).toBe("Asks first, then makes the folders for Personal and Spare on Rocky this computer's again. They carry another install's mark and may be this computer's own from an earlier install.")
   })
@@ -317,7 +358,7 @@ describe('the app\'s words for an account, at the start of a sentence (F-3)', ()
   })
   it('Remove\'s sentences and the machine\'s own sign-out name it so', () => {
     expect(earlierInstallStayText([NAMELESS_ACCOUNT])).toMatch(/^An account with no name: its folder there carries another install's mark/)
-    expect(earlierInstallStayText(['Personal', NAMELESS_ACCOUNT])).toMatch(/^Personal, an account with no name: their folders there carry another install's mark/)
+    expect(earlierInstallStayText(['Personal', NAMELESS_ACCOUNT])).toMatch(/^Personal and an account with no name: their folders there carry another install's mark/)
     expect(removeNotAnsweringText('Pi', l([NAMELESS_ACCOUNT]))).toContain('now. An account with no name stays signed in on Pi until you sign it out there')
     expect(removeNotAnsweringText('Pi', l(['an account no longer on this computer']))).toContain('now. An account no longer on this computer stays signed in on Pi')
     expect(removeNotAnsweringText('Pi', l(['Work', NAMELESS_ACCOUNT]))).toContain('now. Work and an account with no name stay signed in on Pi')
@@ -328,9 +369,13 @@ describe('the app\'s words for an account, at the start of a sentence (F-3)', ()
 })
 
 // Final review, round 1 (F-4): Adopt's result names the accounts by this
-// computer's rule (hostAccountNamer), not main's (name, else email, else the
-// profile id). Main's answer gives the ids adopted and, for each one it did
-// not adopt, its reason; a refusal before anything ran is main's own sentence.
+// computer's rule (hostAccountNamer), from the ids main's answer gives (those
+// adopted and, for each one it did not adopt, its reason), not from main's
+// sentence; a refusal before anything ran is main's own sentence. The mocks
+// put a profile id in main's sentence on purpose, as sentinels, so each test
+// proves the dialog writes its own sentence from adopted and notAdopted;
+// since round 2 (F2-1) main names such an account "an account with no name"
+// as well.
 describe('Adopt\'s result (F-4)', () => {
   const nameOf = hostAccountNamer([{ id: 'p1', name: 'Work', accountEmail: 'w@x.io' }, { id: 'p9', name: '', accountEmail: '' }], undefined, NAMELESS_ACCOUNT)
   const gone = "the account's folder on rocky.lan is not there any more"

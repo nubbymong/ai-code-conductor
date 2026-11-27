@@ -15,7 +15,7 @@ import type { ProviderId } from '../../shared/providers'
 import { ProviderMark } from './sidebar/Badges'
 import { PROVIDER_NAMES } from '../provider-names'
 import {
-  adoptTitleOn, adoptableIds, earlierInstallStayText, elsewhereStayText, hostAccountNamer, hostEarlierInstall, hostElsewhere, machineAccountLine, machineLabel, oldMarkerStayText, machineOwnSignOutText, NAMELESS_ACCOUNT, ownStaysText, removeListing, removeNotAnsweringText, sessionMachine, signInOnTitle,
+  adoptTitleOn, adoptableIds, earlierInstallStayText, elsewhereStayText, hostAccountNamer, hostEarlierInstall, hostElsewhere, listingCount, machineAccountLine, machineLabel, oldMarkerStayText, machineOwnSignOutText, ownStaysText, removeListing, removeNotAnsweringText, sessionMachine, signInOnTitle,
   type HostLineTone,
 } from '../utils/hostAccounts'
 import { openHostSignInTab } from '../utils/hostSignIn'
@@ -212,7 +212,8 @@ interface CardAccounts {
   profiles: Array<{ id: string; name: string }>
   /** Final review (F-3): how a sentence names an account (Remove's, the
    *  machine's own sign-out, a row's line): hostAccountNamer with
-   *  NAMELESS_ACCOUNT, as Adopt's hover names it. */
+   *  NAMELESS_ACCOUNT, as Adopt's hover names it (round 3, F3-1: and one
+   *  this computer does not hold as NOT_HELD_ACCOUNT, as main does). */
   nameOf: (profileId: string) => string
   /** A tab on that account runs on this machine now (Sign out waits for it). */
   tabOn: (profileId: string) => boolean
@@ -253,8 +254,11 @@ function MachineCard({ m, switchOn, busy, onCheck, onRemove, onAsk, kept, keptWh
   const [ownConfirm, setOwnConfirm] = useState<string | null>(null)
   const color = m.checked ? 'var(--status-success)' : 'var(--status-warning)'
   const label = machineLabel(m)
-  const nameOf = accounts?.nameOf ?? (() => 'an account of this computer')
+  // Final review round 3 (F3-1): with no accounts listed, no id is one this computer holds.
+  const nameOf = accounts?.nameOf ?? hostAccountNamer([], undefined)
   const listing = removeListing(accounts?.read, nameOf)
+  // How many accounts Remove signs out there first (its counted item counts each).
+  const signingOut = listingCount(listing)
   const remove = async (forget: boolean) => {
     setConfirming(false)
     const r = await onRemove(forget)
@@ -334,9 +338,9 @@ function MachineCard({ m, switchOn, busy, onCheck, onRemove, onAsk, kept, keptWh
       <KeptSessions rows={kept} switchOn={switchOn} busy={busy} onReattach={onReattach} onEnd={onEnd} />
       {confirming === 'ask' && (
         <div role="group" aria-label={`Confirm removing ${m.label}`} className={CONFIRM_CLASS} style={CONFIRM_STYLE}>
-          {listing.signedIn.length > 0 ? (
+          {signingOut > 0 ? (
             <div className="text-xs flex-1 min-w-[12rem] leading-[1.45]" style={{ color: 'var(--text-primary)' }} data-testid="remote-remove-listing">
-              Remove {m.name}? {listing.signedIn.length === 1 ? 'This account is' : 'These accounts are'} signed in there and {listing.signedIn.length === 1 ? 'is' : 'are'} signed out first:
+              Remove {m.name}? {signingOut === 1 ? 'This account is' : 'These accounts are'} signed in there and {signingOut === 1 ? 'is' : 'are'} signed out first:
               <ul className="list-disc my-1 ml-4">{listing.signedIn.map((x) => <li key={x.key}>{x.name}</li>)}</ul>
               {listing.own && <>{ownStaysText(listing.own, label)} </>}
               Then the session helper and its folder in ~/.aicc are deleted.
@@ -344,14 +348,14 @@ function MachineCard({ m, switchOn, busy, onCheck, onRemove, onAsk, kept, keptWh
               {listing.elsewhere > 0 && <> {elsewhereStayText(listing.elsewhere)}</>}
               {/* Round 2 (R2-1): folders that may be this computer's own, and an earlier build's for accounts it does not hold, in main's words. */}
               {listing.earlier.length > 0 && <> {earlierInstallStayText(listing.earlier)}</>}
-              {listing.oldMarker.length > 0 && <> {oldMarkerStayText(listing.oldMarker)}</>}
+              {listing.oldMarker.length > 0 && <> {oldMarkerStayText(listing.oldMarker.length)}</>}
             </div>
           ) : (
             <span className="text-xs flex-1 min-w-[12rem]" style={{ color: 'var(--text-primary)' }}>
-              Remove the session helper from {m.name}? Its folder in ~/.aicc there is deleted.{listing.own ? ` ${ownStaysText(listing.own, label)}` : ''}{listing.elsewhere > 0 ? ` ${elsewhereStayText(listing.elsewhere)}` : ''}{listing.earlier.length > 0 ? ` ${earlierInstallStayText(listing.earlier)}` : ''}{listing.oldMarker.length > 0 ? ` ${oldMarkerStayText(listing.oldMarker)}` : ''}
+              Remove the session helper from {m.name}? Its folder in ~/.aicc there is deleted.{listing.own ? ` ${ownStaysText(listing.own, label)}` : ''}{listing.elsewhere > 0 ? ` ${elsewhereStayText(listing.elsewhere)}` : ''}{listing.earlier.length > 0 ? ` ${earlierInstallStayText(listing.earlier)}` : ''}{listing.oldMarker.length > 0 ? ` ${oldMarkerStayText(listing.oldMarker.length)}` : ''}
             </span>
           )}
-          <DialogButton variant="danger-solid" onClick={() => { void remove(false) }} disabled={busy}>{listing.signedIn.length > 0 ? 'Sign out and remove' : 'Remove'}</DialogButton>
+          <DialogButton variant="danger-solid" onClick={() => { void remove(false) }} disabled={busy}>{signingOut > 0 ? 'Sign out and remove' : 'Remove'}</DialogButton>
           <DialogButton variant="ghost" onClick={() => setConfirming(false)} disabled={busy}>Keep it</DialogButton>
         </div>
       )}
@@ -473,10 +477,10 @@ export default function RemoteMachinesSection({ active = true }: { active?: bool
   // 2.1.3-beta.20 section 5 (frame 4): this computer's accounts on each card.
   // Final review (F-3): named by the one rule (hostAccountNamer): a row reads
   // 'Account' when it has no name, a sentence names it as Adopt's hover does.
+  // Round 3 (F3-1): one this computer does not hold, as main names it.
   const rowName = hostAccountNamer(profiles, aliases, 'Account')
-  const sentenceName = hostAccountNamer(profiles, aliases, NAMELESS_ACCOUNT)
+  const nameOf = hostAccountNamer(profiles, aliases)
   const accountList = profiles.map((p) => ({ id: p.id, name: rowName(p.id) }))
-  const nameOf = (id: string) => (profiles.some((p) => p.id === id) ? sentenceName(id) : 'an account of this computer')
   const accountsOf = (m: RemoteMachineView): CardAccounts | undefined => accountsDoor
     ? {
         read: hostByDid[m.did],

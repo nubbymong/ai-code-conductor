@@ -19,7 +19,7 @@
 // for a sign-in is over.
 import React, { useEffect, useRef, useState } from 'react'
 import { useHostAccountsStore, listenHostAccounts, type HostAdoptAsk, type HostNotice, type HostRun } from '../stores/hostAccountsStore'
-import { adoptableIds, adoptConfirmText, adoptNextText, adoptResultText, hostAccountNamer, NAMELESS_ACCOUNT } from '../utils/hostAccounts'
+import { adoptableIds, adoptConfirmText, adoptNextText, adoptResultText, folderOfStart, hostAccountNamer, sentenceStart } from '../utils/hostAccounts'
 import { useSessionStore } from '../stores/sessionStore'
 import { useAccountProfilesStore } from '../stores/accountProfilesStore'
 import { useSettingsStore } from '../stores/settingsStore'
@@ -34,8 +34,12 @@ import {
 
 const MIDDOT = String.fromCharCode(0xb7)
 
-/** The words of the notice, by why it asks (frame 2). Exported for its test. */
-export function hostNoticeText(n: Pick<HostNotice, 'kind' | 'state' | 'identity' | 'machineName' | 'elsewhere' | 'adoptable'>, who: string, whoMid: string = who): {
+/** The words of the notice, by why it asks (frame 2). Exported for its test.
+ *  `name`: the account as a sentence names it mid-way (hostAccountNamer).
+ *  Final review round 3 (F3-1): it takes a capital where it starts one
+ *  (sentenceStart), and the app's own words for it no possessive
+ *  (folderOfStart), as main's note in the tab says it. */
+export function hostNoticeText(n: Pick<HostNotice, 'kind' | 'state' | 'identity' | 'machineName' | 'elsewhere' | 'adoptable'>, name: string): {
   title: string
   question: string
   why: string
@@ -46,6 +50,8 @@ export function hostNoticeText(n: Pick<HostNotice, 'kind' | 'state' | 'identity'
 } {
   const m = n.machineName
   const launch = n.kind === 'launch'
+  const who = sentenceStart(name)
+  const folder = folderOfStart(name)
   return {
     title: launch ? 'Start session' : 'Switch account',
     // Round 2 (R2-1): main's refusal names the folder as another install's
@@ -53,9 +59,9 @@ export function hostNoticeText(n: Pick<HostNotice, 'kind' | 'state' | 'identity'
     // Round 1 (MINOR-2): otherwise its folder there is the app on another
     // computer's, which main never signs in from here: nothing is offered.
     question: n.adoptable
-      ? `${who}'s folder on ${m} carries another install's mark.`
+      ? `${folder} on ${m} carries another install's mark.`
       : n.elsewhere
-        ? `${who}'s folder on ${m} is used by the app on another computer.`
+        ? `${folder} on ${m} is used by the app on another computer.`
         : n.state === 'someone-else'
           ? `${who} on ${m} is signed in as ${n.identity || 'another account'}, so that sign-in is not used.`
           : `${who} is not signed in on ${m}.`,
@@ -64,7 +70,7 @@ export function hostNoticeText(n: Pick<HostNotice, 'kind' | 'state' | 'identity'
       : n.elsewhere
         ? 'That computer signs it in and out there, so it cannot be signed in from here.'
         : n.state === 'someone-else'
-          ? `${m} keeps its own sign-ins. Signing ${whoMid} in again there replaces that one.`
+          ? `${m} keeps its own sign-ins. Signing ${name} in again there replaces that one.`
           : `${m} keeps its own sign-ins.`,
     signInHint: `Runs Claude Code's own sign-in in a session on ${m}. It stays signed in there, so Remote Control works on ${m}. ${launch ? 'This session starts once it is signed in.' : 'The session moves to it once it is signed in.'}`,
     otherLabel: launch ? 'Or start it on another account' : 'Or switch to another account',
@@ -74,11 +80,12 @@ export function hostNoticeText(n: Pick<HostNotice, 'kind' | 'state' | 'identity'
 }
 
 /** Round 4 (R4-5): the one naming the cards' Adopt hover text uses too.
- *  Round 6 (R6-1): `fallback` for a name that falls mid-sentence. */
-function useAccountName(fallback?: string): (profileId: string) => string {
+ *  Final review round 3 (F3-1): as a sentence names it mid-way
+ *  (NAMELESS_ACCOUNT, NOT_HELD_ACCOUNT); sentenceStart where it starts one. */
+function useAccountName(): (profileId: string) => string {
   const profiles = useAccountProfilesStore((s) => s.profiles)
   const aliases = useSettingsStore((s) => s.settings.accountAliases)
-  return hostAccountNamer(profiles, aliases, fallback)
+  return hostAccountNamer(profiles, aliases)
 }
 
 /** Round 1 (MINOR-4): a dialog gives the keyboard focus back to where it
@@ -97,7 +104,6 @@ function NoticeDialog({ notice }: { notice: HostNotice }) {
   const profiles = useAccountProfilesStore((s) => s.profiles)
   const machines = useHostAccountsStore((s) => s.machines)
   const nameOf = useAccountName()
-  const nameMid = useAccountName('that account')
   useReturnFocus()
   const close = () => useHostAccountsStore.getState().closeNotice(notice.sessionId)
   // Cancel: nothing starts, or the tab stays on its account; it waits for nothing.
@@ -112,8 +118,7 @@ function NoticeDialog({ notice }: { notice: HostNotice }) {
   const [problem, setProblem] = useState<string | null>(null)
   if (!session) return null
 
-  const who = nameOf(notice.profileId)
-  const text = hostNoticeText(notice, who, nameMid(notice.profileId))
+  const text = hostNoticeText(notice, nameOf(notice.profileId))
   const tabName = session.customName?.trim() || session.label || 'this session'
 
   const signIn = () => {
@@ -200,7 +205,7 @@ function NoticeDialog({ notice }: { notice: HostNotice }) {
                   style={DIALOG_INPUT_STYLE}
                   data-testid="host-signin-other-select"
                 >
-                  {others.map((id) => <option key={id} value={id}>{`${nameOf(id)} ${MIDDOT} signed in on ${notice.machineName}`}</option>)}
+                  {others.map((id) => <option key={id} value={id}>{`${sentenceStart(nameOf(id))} ${MIDDOT} signed in on ${notice.machineName}`}</option>)}
                 </select>
                 <DialogButton variant="secondary" onClick={useOther} disabled={!other} testId="host-signin-use-other">Use this account</DialogButton>
               </div>
@@ -247,7 +252,7 @@ function HostRunner({ run }: { run: HostRun }) {
  */
 function AdoptDialog({ ask }: { ask: HostAdoptAsk }) {
   useReturnFocus()
-  const nameOf = useAccountName(NAMELESS_ACCOUNT)
+  const nameOf = useAccountName()
   const [busy, setBusy] = useState(false)
   const store = () => useHostAccountsStore.getState()
   const cancel = () => store().askAdopt(null)

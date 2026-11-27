@@ -21,10 +21,11 @@ import { hostAccountNamer, machineLabel, signInConfigFor, type HostMachineRef } 
 
 /** The account's name as the app's lists name it (its profile's name, else
  *  its alias, else its email), over the stores. Phase 5 round 5 (R5-2): by
- *  the one naming rule, hostAccountNamer; its fallback is lower-case, as it
- *  ends the tab's name. */
+ *  the one naming rule, hostAccountNamer. Final review round 3 (F3-1): with
+ *  its words for an account with no name, or one this computer does not
+ *  hold, in lower case, as they end the tab's name. */
 export function hostAccountName(profileId: string): string {
-  return hostAccountNamer(useAccountProfilesStore.getState().profiles, useSettingsStore.getState().settings.accountAliases, 'that account')(profileId)
+  return hostAccountNamer(useAccountProfilesStore.getState().profiles, useSettingsStore.getState().settings.accountAliases)(profileId)
 }
 
 /** The sign-in tab's name. */
