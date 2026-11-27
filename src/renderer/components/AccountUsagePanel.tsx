@@ -185,7 +185,9 @@ export default function AccountUsagePanel({ onClose, onReauthNavigate, onOpenTok
   const hostByDid = useHostAccountsStore((s) => s.byDid)
   const hostShown = useHostAccountsStore((s) => s.available && s.switchOn && s.machines.length > 0)
   const [hostProblem, setHostProblem] = useState<string | null>(null)
-  useEffect(() => { void useHostAccountsStore.getState().load() }, [])
+  // On open the machines are read again too (the switch or the list may have
+  // changed since), as the Machines page reads them on each open.
+  useEffect(() => { void useHostAccountsStore.getState().load({ force: true }) }, [])
   // The account list drives the cards (a local read, so it resolves at once;
   // the last list shown, while it does). null = not resolved and none shown
   // before (a placeholder card or two show meanwhile).
