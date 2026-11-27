@@ -36,6 +36,13 @@ describe('pty-manager: where the session helper can start a terminal', () => {
     expect(view).toContain('const plainTerminal = shellOnly === true && !ssh && !session?.needsLogin && !session?.transient\n')
     // 2.1.3-beta.19 section 1.2: an SSH tab's saved mark (remoteVia) goes with its spawn, before shellOnly.
     expect(view).toMatch(/\.spawn\(sessionId, \{ cwd, cols, rows, ssh: sshWithReconnect, remoteVia: ssh && session\?\.remoteVia === 'helper' \? 'helper' : undefined, shellOnly, plainTerminal, /)
+    // 2.1.3-beta.20 section 5: a sign-in tab's mark goes with its spawn too, on an SSH tab only.
+    expect(view).toContain("const remoteAccountSignIn = ssh && session?.remoteAccountSignIn === true ? true as const : undefined\n")
+    expect(view).toMatch(/shellOnly, plainTerminal, \.\.\.\(remoteAccountSignIn \? \{ remoteAccountSignIn \} : \{\}\), elevated,/)
+    // A Switch Account on a helper tab carries its conversation into one start (its SSH reconnect), consumed there.
+    expect(view).toContain('const carry = !!ssh && session?.carryConversation === true\n')
+    expect(view).toContain('if (carry) updateSession(sessionId, { carryConversation: undefined })\n')
+    expect(view).toContain('const sshWithReconnect = ssh ? { ...ssh, reconnect: !!session?.sshReachedClaudeRunning || carry } : ssh\n')
     // The first-run install terminal spawns on its own and never asks for it.
     const setup = readFileSync(resolve(ROOT, 'src/renderer/components/SetupDialog.tsx'), 'utf8')
     expect(setup).toContain('window.electronAPI.pty.spawn(')

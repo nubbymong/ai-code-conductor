@@ -1290,14 +1290,22 @@ export default function TerminalView({ sessionId, configId, cwd, shellOnly, elev
             // subscription above), not anything the caller configured.
             // Merging it into a copy of `ssh` keeps that prop's shape a
             // pure reflection of the session's SAVED config.
-            const sshWithReconnect = ssh ? { ...ssh, reconnect: !!session?.sshReachedClaudeRunning } : ssh
+            // 2.1.3-beta.20 section 5: a Switch Account on a helper tab
+            // carries its conversation into this start, once (consumed
+            // here, as askPrompt), so the CLI continues it on the new account.
+            const carry = !!ssh && session?.carryConversation === true
+            if (carry) updateSession(sessionId, { carryConversation: undefined })
+            const sshWithReconnect = ssh ? { ...ssh, reconnect: !!session?.sshReachedClaudeRunning || carry } : ssh
+            // 2.1.3-beta.20 section 5: a sign-in tab (utils/hostSignIn.ts):
+            // main runs the CLI's own sign-in for its account on that machine.
+            const remoteAccountSignIn = ssh && session?.remoteAccountSignIn === true ? true as const : undefined
             // 2.1.3-beta.6: a Terminal only tab or a partner terminal (no
             // session record of its own), which the session helper may carry.
             // The app's own sign-in and install or update tabs are not.
             const plainTerminal = shellOnly === true && !ssh && !session?.needsLogin && !session?.transient
             exitHold.begin()
             window.electronAPI.pty
-              .spawn(sessionId, { cwd, cols, rows, ssh: sshWithReconnect, remoteVia: ssh && session?.remoteVia === 'helper' ? 'helper' : undefined, shellOnly, plainTerminal, elevated, terminalOptions, configId, configLabel, useResumePicker, legacyVersion, effortLevel, permissionMode, extraArgs, disableAutoMemory, enableCodexReview, loggingEnabled, model, provider, codexOptions, profileId: resolvedProfileId, resume, askPrompt, isAsk: session?.kind === 'ask', ...account })
+              .spawn(sessionId, { cwd, cols, rows, ssh: sshWithReconnect, remoteVia: ssh && session?.remoteVia === 'helper' ? 'helper' : undefined, shellOnly, plainTerminal, ...(remoteAccountSignIn ? { remoteAccountSignIn } : {}), elevated, terminalOptions, configId, configLabel, useResumePicker, legacyVersion, effortLevel, permissionMode, extraArgs, disableAutoMemory, enableCodexReview, loggingEnabled, model, provider, codexOptions, profileId: resolvedProfileId, resume, askPrompt, isAsk: session?.kind === 'ask', ...account })
               .then((result) => {
                 const nothingStarted = !!result && typeof result === 'object' && result.started === false
                 // WP2: main refused the launch because its provider is off
