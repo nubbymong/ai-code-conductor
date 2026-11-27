@@ -305,7 +305,7 @@ export const SHOWCASES_211: ShowcasePage[] = [
     heading: 'Usage and spend for Codex',
     tagline: 'Every Codex account gets its own usage and spend, kept apart from every other account and never merged.',
     points: [
-      { lead: 'The Usage page.', rest: 'Every account on one page, with a filter for each assistant. A Codex account signed in with ChatGPT shows its 5-hour and weekly allowance, or its credits; an API-key account is billed per token.' },
+      { lead: 'The Usage page.', rest: 'Every account on one page; with Claude Code also on, a filter shows one assistant at a time. A Codex account signed in with ChatGPT shows its 5-hour and weekly allowance, or its credits; an API-key account is billed per token.' },
       { lead: 'The usage strip.', rest: 'One pill per person at the foot of the window, grouped by provider.' },
       { lead: 'Tokenomics by account.', rest: 'Provider and Account filters, with each figure split by assistant.' },
       { lead: 'Insights for Codex.', rest: 'Pick a Codex account in the Insights account picker and run its report.' },
