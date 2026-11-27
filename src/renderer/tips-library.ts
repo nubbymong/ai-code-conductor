@@ -1136,6 +1136,23 @@ export const TIPS_LIBRARY: Tip[] = [
   },
 
   {
+    id: 'tip.review-model-effort',
+    category: 'agents',
+    complexity: 'intermediate',
+    priority: 55,
+    requires: ['sessions.codex-config'],
+    variants: {
+      primary: {
+        shortText: 'Choose the model and effort of a review',
+        title: 'Code Review: Model, Effort and What Ran',
+        body: 'When you ask for a **Codex review** or a **Claude review**, you can say which **model** and which **effort** it runs on, for example a Codex review on a named model at high effort. A choice the reviewer does not offer is refused with the list of what it does, and nothing runs.\n\nEvery review ends with a line that names the **model** and the **effort** it ran on, and where each came from: **caller** (the asking session\'s choice), **default** or **environment**. Where nothing confirms a value, the line says **requested, not confirmed**.',
+        actionLabel: 'Got it',
+        focusHint: 'The last line of a review reply',
+      },
+    },
+  },
+
+  {
     id: 'tip.codex-restart-pick',
     category: 'sessions',
     complexity: 'simple',
@@ -1472,7 +1489,7 @@ export const TIPS_LIBRARY: Tip[] = [
       primary: {
         shortText: 'The Usage page reuses what your sessions already know',
         title: 'Account Usage, Without the Extra Calls',
-        body: 'The **Usage page** (the person icon on the left rail, once you have two or more accounts) shows the 5-hour and weekly limits for every account. It is cheaper than it looks: an account a **Claude Code session** is using shows the figures that session reported on its status line, so it makes no request at all, the primary account included. Accounts with no session open are fetched one at a time; every card shows its last reading at once and fills in as its fresh one arrives. Sort the cards by **5h left**, **Weekly left** or **Name**: the account with the most room is outlined.\n\nThat is also why the page never refreshes a signed-in account\'s token while anything is using it: sessions, shells, Insights runs and cloud agents all count.\n\nThe status line does not carry paid credits (extra usage), so an account in use shows the credits from its last fetch, marked with their age.\n\n**Codex accounts** work the same way: an open session\'s figures first. For an account signed in with ChatGPT and no session open, opening the page (or Refresh, or a card\'s **Read usage again**) asks Codex to run its own usage check once in that account\'s folder; otherwise the card shows the last reading from its latest session, marked **As of**. A Codex account on paid credits shows its credits under its bars, in Codex credits (a count, not money).',
+        body: 'The **Usage page** (the person icon on the left rail, once you have two or more accounts) shows the 5-hour and weekly limits for every account. It is cheaper than it looks: an account a **Claude Code session** is using shows the figures that session reported on its status line, so it makes no request at all, the primary account included. Accounts with no session open are fetched one at a time; every card shows its last reading at once and fills in as its fresh one arrives. Sort the cards by **5h left**, **Weekly left** or **Name**: the account with the most room is outlined.\n\nThat is also why the page never refreshes a signed-in account\'s token while anything is using it: sessions, shells, Insights runs and cloud agents all count.\n\nThe status line does not carry paid credits (extra usage), so an account in use shows the credits from its last fetch, marked with their age.\n\n**Codex accounts** work the same way: an open session\'s figures first. For an account signed in with ChatGPT and no session open, opening the page (or Refresh, or a card\'s **Read usage again**) asks Codex to run its own usage check once in that account\'s folder; otherwise the card shows the last reading from its latest session, marked **As of**. A Codex account on paid credits shows its credits under its bars, in Codex credits (a count, not money).\n\nA **Claude Code** account that is still signed in renews itself, with no terminal, so an idle account does not ask you to sign in again. A card says **Sign in again**, and why, only when the sign-in is missing, expired or revoked, or is the wrong account.',
         actionLabel: 'Open the Usage page',
         actionTarget: 'account-usage',
       },
@@ -1589,6 +1606,43 @@ export const TIPS_LIBRARY: Tip[] = [
         actionLabel: 'Open Settings',
         actionTarget: 'settings',
         focusHint: 'Settings -- General, under Terminal',
+      },
+    },
+  },
+
+  {
+    id: 'tip.remote-account-sign-in',
+    category: 'advanced',
+    complexity: 'intermediate',
+    priority: 22,
+    provider: 'claude',
+    platforms: ['win32'],
+    variants: {
+      primary: {
+        shortText: 'Sign a Claude account in on a Linux machine',
+        title: 'Accounts on a Linux Machine',
+        body: 'With a Linux machine added for **Remote sessions through the session helper** (a preview, off by default), its card on the **Machines** page lists your Claude Code accounts under **Accounts here**. Press **Sign in on that machine** for an account and a tab on the machine runs Claude Code\'s own sign-in, which you approve as you would here. The sign-in stays **on that machine**, in a folder of its own for the account that only your user there can read. Nothing is copied from this computer.\n\n**Check** reads who is signed in, **Sign out** ends one, and **Remove** signs the accounts out first. A tab through the helper then starts on its config\'s account. If that account is not signed in there, a notice offers to sign in on the machine, use another account, or cancel.',
+        actionLabel: 'Open Machines',
+        actionTarget: 'machines',
+        focusHint: 'Machines -- a Linux machine\'s card, Accounts here',
+      },
+    },
+  },
+
+  {
+    id: 'tip.switch-account-helper-tab',
+    category: 'sessions',
+    complexity: 'intermediate',
+    priority: 22,
+    provider: 'claude',
+    platforms: ['win32'],
+    variants: {
+      primary: {
+        shortText: 'Switch Account works on a helper tab too',
+        title: 'Switch Account on a Machine',
+        body: 'A Claude Code tab through the session helper on a Linux machine has **Switch Account**, as a local tab does: right-click the session in the sidebar. The list marks each account\'s sign-in **on that machine**. Pick one and the conversation carries on under the new account, because every account\'s folder there shares its conversations. Pick an account that is not signed in there and a notice offers **Sign in on that machine** first.\n\nA usual SSH tab and a Terminal only tab still refuse it.',
+        actionLabel: 'Got it',
+        focusHint: 'Right-click a Claude Code session on a Linux machine -- Switch Account',
       },
     },
   },

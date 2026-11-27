@@ -488,7 +488,10 @@ describe('the PR 3 user-facing sweep (P3.16)', () => {
     expect(readme).not.toMatch(/the supported Codex versions offer/)
     expect(stepText('logs')).toMatch(/a local Codex session's conversation \(from its Codex account's sessions folder\)/)
     expect(stepText('logs')).not.toMatch(/tool calls, and thinking/)
-    expect(stepText('multi-account')).toMatch(/every account of each assistant that is on, in a section per assistant when both are/)
+    // 2.1.3-beta.20 (aicc_planning#445, #444): one grid of every account, not a section per assistant, and a still-valid sign-in renews itself.
+    expect(stepText('multi-account')).toMatch(/shows every account at once as one grid of cards, each bar saying what is left/)
+    expect(stepText('multi-account')).not.toMatch(/in a section per assistant when both are/)
+    expect(stepText('multi-account')).toMatch(/still signed in \*\*renews itself\*\*/)
     expect(stepText('multi-account')).not.toMatch(/shows every Claude and Codex account/)
     expect(stepText('multi-account')).toMatch(/Settings, Accounts \(click an account's chip/)
     expect(stepText('multi-account')).not.toMatch(/->/)

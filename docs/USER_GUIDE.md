@@ -587,13 +587,15 @@ not show it. The conversation itself stays in Claude Code's files.
 ### Codex usage
 
 The **Usage page** (the person icon on the left rail, once you have two or
-more accounts) has a Codex section beside the Claude Code one. Each Codex
-account shows its 5-hour and weekly allowance and its plan:
+more accounts) shows every account at once, Codex beside Claude Code, as one
+grid of cards: sort by 5h left, Weekly left or Name, and with both assistants
+on, show one of them. Each Codex account shows its 5-hour and weekly allowance
+and its plan:
 
 - from an open session on the account, when there is one (**Updated**);
 - otherwise, for an account signed in with ChatGPT, from a short check CCC
   asks Codex to run in that account's own folder when you open the page,
-  press **Refresh** or use the card's **Retry** (about a second, one account
+  press **Refresh** or use the card's **Read usage again** (about a second, one account
   at a time). It never runs for an API-key account, for *This computer's
   Codex*, or for an account a session or review is using;
 - otherwise from the account's latest session, marked **As of** with its age.
