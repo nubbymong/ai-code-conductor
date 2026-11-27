@@ -141,7 +141,8 @@ describe('a folder that may be this computer\'s own from an earlier install', ()
   // R5-3 (round 5): the row's hover text comes from adoptTitleOn, the one
   // helper the account card's calls, naming the accounts as Adopt's confirm
   // does. An account with neither a name nor an email is where a copy of the
-  // rule of its own (the row's list names it "Account") used to differ.
+  // rule of its own used to differ. The row itself is named "Account"
+  // (final review F-3: by the same rule, hostAccountNamer, with that fallback).
   it('its Adopt hover text is the account card\'s, from the one helper', async () => {
     const profiles = [...useAccountProfilesStore.getState().profiles, { id: 'p4', name: '', accountEmail: '', active: true } as never]
     useAccountProfilesStore.setState({ profiles })
@@ -155,6 +156,20 @@ describe('a folder that may be this computer\'s own from an earlier install', ()
     }
   })
 
+  // Final review, round 1 (F-3): one naming rule on the card. Its row names
+  // an account with no name "Account"; a sentence names it as Adopt's hover
+  // does, "an account with no name", with a capital where it starts one.
+  it('an account with no name: its row reads Account, and Remove names it as Adopt does', async () => {
+    useAccountProfilesStore.setState({ profiles: [...useAccountProfilesStore.getState().profiles, { id: 'p4', name: '', accountEmail: '', active: true } as never] })
+    install({ read: { ...READ, accounts: [...READ.accounts, { profileId: 'p4', state: 'not-signed-in', facts: null, folder: false }], elsewhere: ['p2', 'p4'], mayBeEarlierInstall: true } })
+    await mount()
+    expect(row('Account')).not.toBeNull()
+    await click(button('Remove'))
+    const text = q('[data-testid="remote-remove-listing"]')?.textContent ?? ''
+    expect(text).toContain("Personal, an account with no name: their folders there carry another install's mark")
+    expect(text).not.toMatch(/\bAccount\b/)
+  })
+
   it('Remove names those folders as main does, and the old-marker folders it leaves', async () => {
     install({ read: { ...READ, elsewhere: ['p2'], mayBeEarlierInstall: true, oldMarker: ['zz9'] } })
     await mount()
@@ -163,6 +178,36 @@ describe('a folder that may be this computer\'s own from an earlier install', ()
     expect(text).toContain('Personal: its folder there carries another install\'s mark, and may be this computer\'s own from an earlier install of the app; Remove leaves it as it is. To sign it out from here, choose Adopt on this card first.')
     expect(text).toContain('zz9 (a folder an earlier build of the app made there, for an account this computer does not hold) stays signed in there as it is.')
     expect(text).not.toContain('used by the app on another computer')
+  })
+})
+
+describe('an account with no name, in a Machines card\'s sentences (final review F-3)', () => {
+  const nameless = () => useAccountProfilesStore.setState({ profiles: [...useAccountProfilesStore.getState().profiles, { id: 'p4', name: '', accountEmail: '', active: true } as never] })
+
+  it('the machine\'s own sign-in: its row, Remove and the sign-out confirm say "an account with no name"', async () => {
+    nameless()
+    install({ read: { ...READ, accounts: [READ.accounts[0], { profileId: 'p4', state: 'machine-own', facts: facts('s@x.io'), folder: false }] } })
+    await mount()
+    expect(row('Account')?.querySelector('[data-testid="remote-account-sub"]')?.textContent).toBe('Rocky was already signed in as an account with no name, so that sign-in is used.')
+    expect((row('Account')?.querySelector('[data-testid="remote-account-signout"]') as HTMLElement).title).toBe('Sign an account with no name out on Rocky')
+    await click(button('Remove'))
+    expect(q('[data-testid="remote-remove-listing"]')?.textContent).toContain('An account with no name is signed in there by Rocky\'s own sign-in, which Remove leaves as it is.')
+    await click(button('Keep it'))
+    await click(row('Account')?.querySelector('[data-testid="remote-account-signout"]'))
+    expect(q('[data-testid="remote-own-signout-confirm"]')?.textContent).toContain('An account with no name is signed in on Rocky by that machine\'s own sign-in (its ~/.claude), not one the app made.')
+  })
+
+  it('the machine does not answer: it names what stays signed in there the same way', async () => {
+    nameless()
+    install({
+      read: { ...READ, own: null, accounts: [READ.accounts[0], { profileId: 'p4', state: 'signed-in-here', facts: facts('n@x.io'), folder: true }] },
+      remove: { ok: false, notAnswering: true, message: 'rocky.lan could not be reached: it did not answer.' },
+    })
+    await mount()
+    await click(button('Remove'))
+    expect([...(q('[data-testid="remote-remove-listing"]')?.querySelectorAll('li') ?? [])].map((li) => li.textContent)).toEqual(['Work', 'an account with no name'])
+    await click(button('Sign out and remove'))
+    expect(q('[data-testid="remote-remove-not-answering"]')?.textContent).toContain('now. Work and an account with no name stay signed in on Rocky (nick@rocky.lan:22) until you sign them out there')
   })
 })
 

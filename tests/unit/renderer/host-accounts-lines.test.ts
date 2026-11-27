@@ -11,7 +11,7 @@ import {
   cardMachineLine, machineAccountLine, switchMachineMark, sessionMachine, signInConfigFor, sshTarget,
   removeListing, removeNotAnsweringText, machineOwnSignOutText, toSignInCount, joinNames, hostLaunchable, signInOnTitle,
   elsewhereStayText, hostElsewhere, hostEarlierInstall, earlierInstallStayText, oldMarkerStayText, adoptConfirmText, adoptButtonTitle,
-  hostAccountNamer, adoptTitleOn, adoptNextText,
+  hostAccountNamer, adoptTitleOn, adoptNextText, NAMELESS_ACCOUNT, sentenceStart, ownStaysText,
 } from '../../../src/renderer/utils/hostAccounts'
 import type { HostMachineAccounts, HostSignInFacts } from '../../../src/shared/host-accounts'
 import type { TerminalConfig } from '../../../src/renderer/stores/configStore'
@@ -299,6 +299,31 @@ describe('a folder that may be this computer\'s own from an earlier install', ()
 describe('signing out a machine\'s own sign-in asks first, naming it so (Q5)', () => {
   it('names it as the machine\'s own sign-in and what signing it out does', () => {
     expect(machineOwnSignOutText('Rocky', 'Work')).toBe('Work is signed in on Rocky by that machine\'s own sign-in (its ~/.claude), not one the app made. Signing it out signs Claude Code out on Rocky for everything that uses that sign-in.')
+  })
+})
+
+// Final review, round 1 (F-3): a sentence on a Machines card names an account
+// with no name as Adopt's hover does (NAMELESS_ACCOUNT). Where the app's own
+// words for an account start a sentence they take a capital (sentenceStart):
+// "an account with no name", and Remove's "an account no longer on this
+// computer". A user's own name or email is never changed.
+describe('the app\'s words for an account, at the start of a sentence (F-3)', () => {
+  const l = (n: string[]) => ({ signedIn: n.map((name) => ({ key: name, name })), own: null, read: true, elsewhere: 0, earlier: [], oldMarker: [] })
+  it('take a capital; a user\'s name or email is left as it is', () => {
+    expect(sentenceStart(NAMELESS_ACCOUNT)).toBe('An account with no name')
+    expect(sentenceStart('an account no longer on this computer')).toBe('An account no longer on this computer')
+    expect(sentenceStart('w@x.io')).toBe('w@x.io')
+    expect(sentenceStart('anna')).toBe('anna')
+  })
+  it('Remove\'s sentences and the machine\'s own sign-out name it so', () => {
+    expect(earlierInstallStayText([NAMELESS_ACCOUNT])).toMatch(/^An account with no name: its folder there carries another install's mark/)
+    expect(earlierInstallStayText(['Personal', NAMELESS_ACCOUNT])).toMatch(/^Personal, an account with no name: their folders there carry another install's mark/)
+    expect(removeNotAnsweringText('Pi', l([NAMELESS_ACCOUNT]))).toContain('now. An account with no name stays signed in on Pi until you sign it out there')
+    expect(removeNotAnsweringText('Pi', l(['an account no longer on this computer']))).toContain('now. An account no longer on this computer stays signed in on Pi')
+    expect(removeNotAnsweringText('Pi', l(['Work', NAMELESS_ACCOUNT]))).toContain('now. Work and an account with no name stay signed in on Pi')
+    expect(machineOwnSignOutText('Rocky', NAMELESS_ACCOUNT)).toMatch(/^An account with no name is signed in on Rocky by that machine's own sign-in/)
+    expect(ownStaysText(NAMELESS_ACCOUNT, 'Rocky')).toBe('An account with no name is signed in there by Rocky\'s own sign-in, which Remove leaves as it is.')
+    expect(ownStaysText('Shared', 'Rocky')).toBe('Shared is signed in there by Rocky\'s own sign-in, which Remove leaves as it is.')
   })
 })
 

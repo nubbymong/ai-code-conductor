@@ -261,6 +261,20 @@ function othersName(n: number): string {
   return n === 1 ? 'an account no longer on this computer' : `${n} accounts no longer on this computer`
 }
 
+/** Final review, round 1 (F-3): a name that starts a sentence. The app's own
+ *  words for an account it cannot name (NAMELESS_ACCOUNT, othersName, "an
+ *  account of this computer") take a capital there; a user's own name or
+ *  email is never changed. */
+export function sentenceStart(name: string): string {
+  return name.startsWith('an account ') ? `A${name.slice(1)}` : name
+}
+
+/** Remove's sentence for the account the machine's own sign-in is, which
+ *  Remove leaves as it is. */
+export function ownStaysText(own: string, machine: string): string {
+  return `${sentenceStart(own)} is signed in there by ${machine}'s own sign-in, which Remove leaves as it is.`
+}
+
 /** Remove's sentence for the folders another computer's app uses there, which stay. */
 export function elsewhereStayText(n: number): string {
   return n === 1
@@ -273,7 +287,7 @@ export function elsewhereStayText(n: number): string {
  *  step that works before Remove: Adopt on this card. */
 export function earlierInstallStayText(names: readonly string[]): string {
   const one = names.length === 1
-  return `${names.join(', ')}: ${one ? 'its folder' : 'their folders'} there ${one ? 'carries' : 'carry'} another install's mark, and may be this computer's own from an earlier install of the app; Remove leaves ${one ? 'it as it is' : 'them as they are'}. To sign ${one ? 'it' : 'them'} out from here, choose Adopt on this card first.`
+  return `${sentenceStart(names.join(', '))}: ${one ? 'its folder' : 'their folders'} there ${one ? 'carries' : 'carry'} another install's mark, and may be this computer's own from an earlier install of the app; Remove leaves ${one ? 'it as it is' : 'them as they are'}. To sign ${one ? 'it' : 'them'} out from here, choose Adopt on this card first.`
 }
 
 /** Round 2 (R2-1): Remove's sentence for the folders an earlier build made
@@ -309,7 +323,10 @@ export type HostNamedProfile = Pick<AccountProfile, 'id' | 'accountEmail' | 'nam
 
 /** Round 6 (R6-1): an account with no name, alias or email, where its name
  *  falls in the middle of a sentence (Adopt's hover text, confirm and next
- *  step). 'That account' stays only where the name starts the sentence. */
+ *  step). The notice keeps 'That account' where the name starts its
+ *  sentence. Final review (F-3): a Machines card's sentences name it so too,
+ *  with a capital where it starts one (sentenceStart); its row reads
+ *  'Account'. */
 export const NAMELESS_ACCOUNT = 'an account with no name'
 
 /** Round 4 (R4-5): an account of this computer by name, as Adopt's confirm
@@ -402,7 +419,7 @@ export function removeNotAnsweringText(machine: string, listing: RemoveListing):
   const n = listing.signedIn.length
   if (n === 0) return `${head} ${tail}`
   const one = n === 1
-  return `${head} ${joinNames(listing.signedIn.map((x) => x.name))} ${one ? 'stays' : 'stay'} signed in on ${machine} until you sign ${one ? 'it' : 'them'} out there, or end ${one ? 'that sign-in' : 'those sign-ins'} ${END_SIGN_IN_THERE}. ${tail}`
+  return `${head} ${sentenceStart(joinNames(listing.signedIn.map((x) => x.name)))} ${one ? 'stays' : 'stay'} signed in on ${machine} until you sign ${one ? 'it' : 'them'} out there, or end ${one ? 'that sign-in' : 'those sign-ins'} ${END_SIGN_IN_THERE}. ${tail}`
 }
 
 /**
@@ -411,7 +428,7 @@ export function removeNotAnsweringText(machine: string, listing: RemoveListing):
  * that signing it out signs Claude Code out there for everything that uses it.
  */
 export function machineOwnSignOutText(machine: string, who: string): string {
-  return `${who} is signed in on ${machine} by that machine's own sign-in (its ~/.claude), not one the app made. Signing it out signs Claude Code out on ${machine} for everything that uses that sign-in.`
+  return `${sentenceStart(who)} is signed in on ${machine} by that machine's own sign-in (its ~/.claude), not one the app made. Signing it out signs Claude Code out on ${machine} for everything that uses that sign-in.`
 }
 
 /** What This computer's card on the Machines page says of its accounts

@@ -10,13 +10,12 @@ import { persistSessionState } from '../session-persistence'
 import { useHostAccountsStore } from '../stores/hostAccountsStore'
 import { useAccountProfilesStore } from '../stores/accountProfilesStore'
 import { useSettingsStore } from '../stores/settingsStore'
-import { resolveAccountName } from '../../shared/account-chip-color'
 import type { HostAccountSignIn, HostMachineAccounts } from '../../shared/host-accounts'
 import type { ProviderId } from '../../shared/providers'
 import { ProviderMark } from './sidebar/Badges'
 import { PROVIDER_NAMES } from '../provider-names'
 import {
-  adoptTitleOn, adoptableIds, earlierInstallStayText, elsewhereStayText, hostEarlierInstall, hostElsewhere, machineAccountLine, machineLabel, oldMarkerStayText, machineOwnSignOutText, removeListing, removeNotAnsweringText, sessionMachine, signInOnTitle,
+  adoptTitleOn, adoptableIds, earlierInstallStayText, elsewhereStayText, hostAccountNamer, hostEarlierInstall, hostElsewhere, machineAccountLine, machineLabel, oldMarkerStayText, machineOwnSignOutText, NAMELESS_ACCOUNT, ownStaysText, removeListing, removeNotAnsweringText, sessionMachine, signInOnTitle,
   type HostLineTone,
 } from '../utils/hostAccounts'
 import { openHostSignInTab } from '../utils/hostSignIn'
@@ -76,8 +75,10 @@ function HowAccountsSignIn({ label }: { label: string }) {
 
 /** One account's row in "Accounts here": the provider mark, the account and
  *  its provider, its sign-in there, and Sign in on that machine or Sign out. */
-function AccountHereRow({ who, line, label, busy, switchOn, tabOpen, onSignIn, onSignOut, onAdopt, adoptTitle }: {
+function AccountHereRow({ who, said, line, label, busy, switchOn, tabOpen, onSignIn, onSignOut, onAdopt, adoptTitle }: {
   who: string
+  /** Final review (F-3): how a sentence names it (CardAccounts.nameOf). */
+  said: string
   line: ReturnType<typeof machineAccountLine>
   label: string
   busy: boolean
@@ -122,7 +123,7 @@ function AccountHereRow({ who, line, label, busy, switchOn, tabOpen, onSignIn, o
           className="inline-flex items-center rounded-md border px-2 py-0.5 text-[11.5px] font-medium whitespace-nowrap disabled:opacity-40 disabled:cursor-not-allowed focus-ring"
           style={{ borderColor: 'var(--border-strong)', color: 'var(--text-secondary)' }}
           disabled={busy || tabOpen}
-          title={tabOpen ? 'A tab runs on this account here' : `Sign ${who} out on ${label}`}
+          title={tabOpen ? 'A tab runs on this account here' : `Sign ${said} out on ${label}`}
           onClick={onSignOut}
           data-testid="remote-account-signout"
         >
@@ -209,6 +210,10 @@ interface CardAccounts {
   read: HostMachineAccounts | undefined
   /** This computer's Claude Code accounts, in their order: id and name. */
   profiles: Array<{ id: string; name: string }>
+  /** Final review (F-3): how a sentence names an account (Remove's, the
+   *  machine's own sign-out, a row's line): hostAccountNamer with
+   *  NAMELESS_ACCOUNT, as Adopt's hover names it. */
+  nameOf: (profileId: string) => string
   /** A tab on that account runs on this machine now (Sign out waits for it). */
   tabOn: (profileId: string) => boolean
   onSignIn: (profileId: string) => void
@@ -248,7 +253,7 @@ function MachineCard({ m, switchOn, busy, onCheck, onRemove, onAsk, kept, keptWh
   const [ownConfirm, setOwnConfirm] = useState<string | null>(null)
   const color = m.checked ? 'var(--status-success)' : 'var(--status-warning)'
   const label = machineLabel(m)
-  const nameOf = (id: string) => accounts?.profiles.find((p) => p.id === id)?.name ?? 'an account of this computer'
+  const nameOf = accounts?.nameOf ?? (() => 'an account of this computer')
   const listing = removeListing(accounts?.read, nameOf)
   const remove = async (forget: boolean) => {
     setConfirming(false)
@@ -270,7 +275,8 @@ function MachineCard({ m, switchOn, busy, onCheck, onRemove, onAsk, kept, keptWh
       <AccountHereRow
         key={p.id}
         who={p.name}
-        line={machineAccountLine(a, label, p.name, { why, elsewhere: hostElsewhere(accounts?.read, p.id), earlierInstall: hostEarlierInstall(accounts?.read, p.id) })}
+        said={nameOf(p.id)}
+        line={machineAccountLine(a, label, nameOf(p.id), { why, elsewhere: hostElsewhere(accounts?.read, p.id), earlierInstall: hostEarlierInstall(accounts?.read, p.id) })}
         onAdopt={() => accounts?.onAdopt()}
         adoptTitle={accounts?.adoptTitle ?? ''}
         label={label}
@@ -332,7 +338,7 @@ function MachineCard({ m, switchOn, busy, onCheck, onRemove, onAsk, kept, keptWh
             <div className="text-xs flex-1 min-w-[12rem] leading-[1.45]" style={{ color: 'var(--text-primary)' }} data-testid="remote-remove-listing">
               Remove {m.name}? {listing.signedIn.length === 1 ? 'This account is' : 'These accounts are'} signed in there and {listing.signedIn.length === 1 ? 'is' : 'are'} signed out first:
               <ul className="list-disc my-1 ml-4">{listing.signedIn.map((x) => <li key={x.key}>{x.name}</li>)}</ul>
-              {listing.own && <>{listing.own} is signed in there by {label}&apos;s own sign-in, which Remove leaves as it is. </>}
+              {listing.own && <>{ownStaysText(listing.own, label)} </>}
               Then the session helper and its folder in ~/.aicc are deleted.
               {/* Round 1 (MINOR-2): folders the app on another computer made there stay. */}
               {listing.elsewhere > 0 && <> {elsewhereStayText(listing.elsewhere)}</>}
@@ -342,7 +348,7 @@ function MachineCard({ m, switchOn, busy, onCheck, onRemove, onAsk, kept, keptWh
             </div>
           ) : (
             <span className="text-xs flex-1 min-w-[12rem]" style={{ color: 'var(--text-primary)' }}>
-              Remove the session helper from {m.name}? Its folder in ~/.aicc there is deleted.{listing.own ? ` ${listing.own} is signed in there by ${label}'s own sign-in, which Remove leaves as it is.` : ''}{listing.elsewhere > 0 ? ` ${elsewhereStayText(listing.elsewhere)}` : ''}{listing.earlier.length > 0 ? ` ${earlierInstallStayText(listing.earlier)}` : ''}{listing.oldMarker.length > 0 ? ` ${oldMarkerStayText(listing.oldMarker)}` : ''}
+              Remove the session helper from {m.name}? Its folder in ~/.aicc there is deleted.{listing.own ? ` ${ownStaysText(listing.own, label)}` : ''}{listing.elsewhere > 0 ? ` ${elsewhereStayText(listing.elsewhere)}` : ''}{listing.earlier.length > 0 ? ` ${earlierInstallStayText(listing.earlier)}` : ''}{listing.oldMarker.length > 0 ? ` ${oldMarkerStayText(listing.oldMarker)}` : ''}
             </span>
           )}
           <DialogButton variant="danger-solid" onClick={() => { void remove(false) }} disabled={busy}>{listing.signedIn.length > 0 ? 'Sign out and remove' : 'Remove'}</DialogButton>
@@ -465,11 +471,17 @@ export default function RemoteMachinesSection({ active = true }: { active?: bool
   const choice = addable.some((c) => c.configId === picked) ? picked : (addable[0]?.configId ?? '')
 
   // 2.1.3-beta.20 section 5 (frame 4): this computer's accounts on each card.
-  const accountList = profiles.map((p) => ({ id: p.id, name: resolveAccountName(p.accountEmail, p.name, aliases) || p.accountEmail || p.name || 'Account' }))
+  // Final review (F-3): named by the one rule (hostAccountNamer): a row reads
+  // 'Account' when it has no name, a sentence names it as Adopt's hover does.
+  const rowName = hostAccountNamer(profiles, aliases, 'Account')
+  const sentenceName = hostAccountNamer(profiles, aliases, NAMELESS_ACCOUNT)
+  const accountList = profiles.map((p) => ({ id: p.id, name: rowName(p.id) }))
+  const nameOf = (id: string) => (profiles.some((p) => p.id === id) ? sentenceName(id) : 'an account of this computer')
   const accountsOf = (m: RemoteMachineView): CardAccounts | undefined => accountsDoor
     ? {
         read: hostByDid[m.did],
         profiles: accountList,
+        nameOf,
         // A tab on that account runs on this machine (Sign out waits for it; main refuses it too).
         tabOn: (profileId) => openSessions.some((s) => s.sessionType === 'ssh' && !s.shellOnly && !s.ptyExited && s.profileId === profileId && sessionMachine(s, [m]) !== undefined),
         // Round 2 (R2-1): the notice host asks first, naming the folders main may adopt.
