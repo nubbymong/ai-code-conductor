@@ -37,12 +37,63 @@ export function hostProfileName(p: { accountEmail?: string; name?: string }, ali
   return resolveAccountName(p.accountEmail ?? '', p.name, aliases).trim()
 }
 
+/** Final review round 3 (F3-1): a profile id this computer does not hold (an
+ *  account removed here, whose folder may still be on a machine), as every
+ *  sentence names it, in main and the renderer alike; never by its profile
+ *  id. Several are counted (notHeldName). */
+export const NOT_HELD_ACCOUNT = 'an account no longer on this computer'
+
+/** Final review round 3 (F3-1): `n` accounts this computer does not hold, as
+ *  one name: NOT_HELD_ACCOUNT, or "2 accounts no longer on this computer". */
+export function notHeldName(n: number): string {
+  return n === 1 ? NOT_HELD_ACCOUNT : `${n} accounts no longer on this computer`
+}
+
 /** Final review, round 1 (F-3): a name that starts a sentence. The app's own
- *  words for an account it cannot name (NAMELESS_ACCOUNT, "an account no
- *  longer on this computer", "an account of this computer") take a capital
- *  there; a user's own name or email is never changed. */
+ *  words for an account it cannot name (NAMELESS_ACCOUNT, NOT_HELD_ACCOUNT)
+ *  take a capital there; a user's own name or email is never changed. */
 export function sentenceStart(name: string): string {
   return name.startsWith('an account ') ? `A${name.slice(1)}` : name
+}
+
+/** Final review round 3 (F3-1): the folder of an account named `name`, where
+ *  it starts a sentence: "Work's folder"; the app's own words for an account
+ *  take no possessive ("The folder of an account with no name"). */
+export function folderOfStart(name: string): string {
+  return name.startsWith('an account ') ? `The folder of ${name}` : `${name}'s folder`
+}
+
+/** Names joined as a sentence lists them: "A", "A and B", "A, B and C" (or,
+ *  with `word` 'or', "A, B or C"). Final review round 3 (F3-1): here, so
+ *  main's answers and the renderer's lines join every list by this one rule. */
+export function joinNames(names: readonly string[], word: 'and' | 'or' = 'and'): string {
+  if (names.length <= 1) return names[0] ?? ''
+  return `${names.slice(0, -1).join(', ')} ${word} ${names[names.length - 1]}`
+}
+
+/** A profile of this computer, as names need it. */
+export type HostNamedProfile = { id: string; accountEmail?: string; name?: string }
+
+/** Final review round 3 (F3-1): how a sentence names an account by its
+ *  profile id, in main and the renderer alike. One of `profiles` by
+ *  hostProfileName, else `nameless` (NAMELESS_ACCOUNT unless a label asks
+ *  for its own word); an id that is not one of them, NOT_HELD_ACCOUNT. */
+export function hostAccountNamer(profiles: readonly HostNamedProfile[], aliases: Readonly<Record<string, string>> | undefined, nameless: string = NAMELESS_ACCOUNT): (profileId: string) => string {
+  return (id) => {
+    const p = profiles.find((x) => x.id === id)
+    if (!p) return NOT_HELD_ACCOUNT
+    return hostProfileName(p, aliases) || nameless
+  }
+}
+
+/** Final review round 3 (F3-1): accounts by profile id, as one list in a
+ *  sentence: each one this computer holds (`held`) by `nameOf`, in order,
+ *  then those it does not hold counted as one name (notHeldName), joined by
+ *  joinNames; `count`, how many accounts that is (for "stays" or "stay"). */
+export function namedAccounts(ids: readonly string[], nameOf: (profileId: string) => string, held: (profileId: string) => boolean): { text: string; count: number } {
+  const names = ids.filter(held).map(nameOf)
+  const notHeld = ids.length - names.length
+  return { text: joinNames(notHeld > 0 ? [...names, notHeldName(notHeld)] : names), count: ids.length }
 }
 
 /**

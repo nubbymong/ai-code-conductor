@@ -330,9 +330,11 @@ describe('the launch\'s binding (3.1.7): the config\'s account decides', () => {
   // Final review, round 2 (F2-1): main names an account of this computer as
   // the renderer does (shared hostProfileName): its name, else its alias,
   // else its email, else "an account with no name", with a capital where that
-  // starts a sentence; its profile id only for one this computer does not hold.
+  // starts a sentence. Round 3 (F3-1): one this computer does not hold is
+  // "an account no longer on this computer", never its profile id; (F3-3) an
+  // email of spaces only counts as none.
   it('F2-1: an account with no name, and one known by its alias, are named as the renderer names them', async () => {
-    const profiles: HostProfile[] = [...PROFILES, { id: 'profile-blank' }, { id: 'profile-lab', accountEmail: 'Lab@Example.com', name: '  ' }]
+    const profiles: HostProfile[] = [...PROFILES, { id: 'profile-blank' }, { id: 'profile-lab', accountEmail: 'Lab@Example.com', name: '  ' }, { id: 'profile-space', accountEmail: '  ' }]
     const acc = await readMachineAccounts(ctx(), MACHINE, { ...VIA, profiles: async () => profiles })
     const aliases = { 'lab@example.com': 'Lab' }
     const text = (id: string, a?: Record<string, string>): string => {
@@ -342,7 +344,8 @@ describe('the launch\'s binding (3.1.7): the config\'s account decides', () => {
     expect(text('profile-blank')).toBe('An account with no name is not signed in on Rocky, so this tab started nothing. Sign it in on that machine from the Machines page, or start this tab on an account that is signed in there.')
     expect(text('profile-lab', aliases)).toMatch(/^Lab is not signed in on Rocky, so/)
     expect(text('profile-lab')).toMatch(/^Lab@Example\.com is not signed in on Rocky, so/)
-    expect(text('profile-gone')).toMatch(/^profile-gone is not signed in on Rocky \(that account is not on this computer any more\)/)
+    expect(text('profile-space')).toBe('An account with no name is not signed in on Rocky, so this tab started nothing. Sign it in on that machine from the Machines page, or start this tab on an account that is signed in there.')
+    expect(text('profile-gone')).toBe('This tab is on an account no longer on this computer, so it started nothing. Start it on an account that is signed in on Rocky.')
   })
 
   it('F2-1: an account with no name starts its sentences with a capital, and the app\'s words for it take no possessive', async () => {
@@ -669,7 +672,7 @@ describe('round 2 (R1): folders of an earlier build, and of an earlier install',
     const r = await adoptAccountFolders(ctx(), MACHINE, via, ['profile-personal', 'profile-lab', 'profile-blank'], { 'lab@example.com': 'Lab' })
     expect(r).toEqual({
       ok: false,
-      message: "Adopted Personal, Lab: their folders there are this computer's now. Not adopted: an account with no name: the account's folder on rocky.lan is not there any more.",
+      message: "Adopted Personal and Lab: their folders there are this computer's now. Not adopted: an account with no name: the account's folder on rocky.lan is not there any more.",
       adopted: ['profile-personal', 'profile-lab'],
       notAdopted: [{ profileId: 'profile-blank', why: "the account's folder on rocky.lan is not there any more" }],
     })

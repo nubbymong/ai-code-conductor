@@ -50,8 +50,8 @@ import type { ProviderRemoteLaunch, RemoteAccounts, RemoteHostFile, RemoteLaunch
 import type { SSHOptions } from '../ssh-options'
 import { ROUTE_WHY, routeSshTab, type PersistentStanding, type Route } from './route'
 import { NoticePty, RemoteDriver, RemoteHelperPty, remoteCwd, remoteHelperCommands, remoteLaunchSpec, remoteSessionId, type RemoteLaunchPlan, type RemoteTabAccount } from './session'
-import { accountAliasesOf, accountFolder, accountName, adoptAccountFolders, hostAccountsState, machineAccounts, readMachineAccounts, signOutListOnMachine, signOutOnMachine, type HostProfile } from './host-accounts'
-import { sentenceStart } from '../../shared/host-accounts'
+import { accountAliasesOf, accountFolder, accountNamer, adoptAccountFolders, hostAccountsState, machineAccounts, readMachineAccounts, signOutListOnMachine, signOutOnMachine, type HostProfile } from './host-accounts'
+import { joinNames, namedAccounts, notHeldName, sentenceStart } from '../../shared/host-accounts'
 import { ACCOUNT_PROFILE_RE } from './scripts'
 import { listKept, machineSessions } from './kept'
 import type { HolderKind } from './scripts'
@@ -654,8 +654,9 @@ export async function signOutRemoteAccount(req: HostSignOutRequest): Promise<Hos
   try { profiles = await a.via.profiles() } catch { profiles = [] }
   // Final review round 2 (F2-1): the Machines page shows this answer word for
   // word, so the account is named as its card names it, with a capital where
-  // that starts a sentence.
-  const who = accountName(profiles.find((p) => p.id === req.profileId), req.profileId, aliasesNow(d))
+  // that starts a sentence. Round 3 (F3-1): a folder of an account this
+  // computer does not hold (a read's `others`) is named so, never by its id.
+  const who = accountNamer(profiles, aliasesNow(d))(req.profileId)
   const Who = sentenceStart(who)
   const ctx = accountsCtx(d)
   const before = await readMachineAccounts(ctx, m, a.via)
@@ -710,38 +711,47 @@ export async function signOutForRemove(m: RemoteMachineRecord): Promise<{ ok: bo
   let profiles: readonly HostProfile[] = []
   try { profiles = await a.via.profiles() } catch { profiles = [] }
   // Final review round 2 (F2-1): named as the machine's card names them (the
-  // page shows this answer as its notice); sentenceStart where a name starts a sentence.
-  const aliases = aliasesNow(d)
-  const nameOf = (id: string): string => accountName(profiles.find((p) => p.id === id), id, aliases)
+  // page shows this answer as its notice); sentenceStart where a name starts a
+  // sentence. Round 3 (F3-1): folders of accounts this computer does not hold
+  // are counted as the card counts them ("an account no longer on this
+  // computer"), and every list is joined as the card joins it (joinNames).
+  const nameOf = accountNamer(profiles, aliasesNow(d))
+  const held = new Set(profiles.map((p) => p.id))
+  const isHeld = (id: string): boolean => held.has(id)
   const ids = [...profiles.map((p) => p.id), ...machineAccounts(m.did, profiles).others]
   const run = await signOutListOnMachine(accountsCtx(d), m, a.via, ids)
-  const done = run.folders.filter((f) => f.removed && f.logout === 0).map((f) => nameOf(f.profileId))
-  const untold = run.folders.filter((f) => f.removed && f.logout !== 0).map((f) => nameOf(f.profileId))
+  const done = namedAccounts(run.folders.filter((f) => f.removed && f.logout === 0).map((f) => f.profileId), nameOf, isHeld)
+  const untold = namedAccounts(run.folders.filter((f) => f.removed && f.logout !== 0).map((f) => f.profileId), nameOf, isHeld)
   d.log(`[remote-helper] Remove's sign-outs on ${m.host}: ${run.folders.map((f) => `${f.profileId} logout ${f.logout ?? 'none'}${f.removed ? ', removed' : ''}`).join('; ') || 'none'}${run.ok ? `${run.deviceGone ? '; its device folder was gone' : ''}${run.left.length ? `; left ${run.left.join(', ')}` : ''}${run.elsewhere.length ? `; another computer's: ${run.elsewhere.join(', ')}` : ''}` : `; stopped: ${run.why}`}`)
   if (!run.ok) {
-    const before = [...done, ...untold]
-    return { ok: false, message: `Nothing more was removed: the accounts signed in on ${name} could not all be signed out (${run.why ?? 'no answer'}).${before.length ? ` Signed out first: ${before.join(', ')}.` : ''}` }
+    const before = namedAccounts(run.folders.filter((f) => f.removed).map((f) => f.profileId), nameOf, isHeld)
+    return { ok: false, message: `Nothing more was removed: the accounts signed in on ${name} could not all be signed out (${run.why ?? 'no answer'}).${before.count ? ` Signed out first: ${before.text}.` : ''}` }
   }
   if (run.deviceGone) return { ok: true, message: (await accountsLeftText(m)).trim() }
   const parts: string[] = []
-  if (done.length) parts.push(`Signed out ${done.join(', ')} there first.`)
-  if (untold.length) parts.push(`Removed the ${untold.length === 1 ? 'sign-in' : 'sign-ins'} of ${untold.join(', ')} from it; Claude Code's sign-out there did not finish for ${untold.length === 1 ? 'it' : 'them'}, so end ${untold.length === 1 ? 'that sign-in' : 'those sign-ins'} ${END_IT_THERE}.`)
+  if (done.count) parts.push(`Signed out ${done.text} there first.`)
+  if (untold.count) {
+    const one = untold.count === 1
+    parts.push(`Removed the ${one ? 'sign-in' : 'sign-ins'} of ${untold.text} from it; Claude Code's sign-out there did not finish for ${one ? 'it' : 'them'}, so end ${one ? 'that sign-in' : 'those sign-ins'} ${END_IT_THERE}.`)
+  }
+  // Round 3 (F3-1): this install's folders the list did not name are for
+  // accounts this computer does not hold, so they are named so (counted).
   if (run.left.length) {
     const one = run.left.length === 1
-    parts.push(`${sentenceStart(run.left.map(nameOf).join(', '))} (${one ? 'an account' : 'accounts'} this computer no longer holds) ${one ? 'stays' : 'stay'} signed in there: sign ${one ? 'it' : 'them'} out there, or end ${one ? 'that sign-in' : 'those sign-ins'} ${END_IT_THERE}.`)
+    parts.push(`${sentenceStart(notHeldName(run.left.length))} ${one ? 'stays' : 'stay'} signed in there: sign ${one ? 'it' : 'them'} out there, or end ${one ? 'that sign-in' : 'those sign-ins'} ${END_IT_THERE}.`)
   }
   // Round 2 (R1): a folder with the marker of the builds before the install id
-  // was in it, for an account this computer does not hold, is left and named.
+  // was in it, for an account this computer does not hold, is left and named
+  // (round 3, F3-1: as every surface names such an account, never by its id).
   if (run.old.length) {
     const one = run.old.length === 1
-    parts.push(`${sentenceStart(run.old.map(nameOf).join(', '))} (${one ? 'a folder' : 'folders'} an earlier build of the app made there, for ${one ? 'an account' : 'accounts'} this computer does not hold) ${one ? 'stays' : 'stay'} signed in there as ${one ? 'it is' : 'they are'}: sign ${one ? 'it' : 'them'} out there, or end ${one ? 'that sign-in' : 'those sign-ins'} ${END_IT_THERE}.`)
+    parts.push(`${one ? 'The folder' : 'The folders'} an earlier build of the app made there for ${notHeldName(run.old.length)} ${one ? 'stays' : 'stay'} signed in there as ${one ? 'it is' : 'they are'}: sign ${one ? 'it' : 'them'} out there, or end ${one ? 'that sign-in' : 'those sign-ins'} ${END_IT_THERE}.`)
   }
   if (run.elsewhere.length) {
     const one = run.elsewhere.length === 1
-    const held = new Set(profiles.map((p) => p.id))
     // Round 2 (R1): every one named by this computer's accounts: most likely its own from an earlier install whose id was lost.
-    parts.push(run.elsewhere.every((id) => held.has(id))
-      ? `${sentenceStart(run.elsewhere.map(nameOf).join(', '))}: ${one ? 'its folder' : 'their folders'} there ${one ? 'carries' : 'carry'} another install's mark, and may be this computer's own from an earlier install of the app; ${one ? 'it was' : 'they were'} left as ${one ? 'it is' : 'they are'}. To sign ${one ? 'it' : 'them'} out from here, add the machine again and choose Adopt on its card; or sign ${one ? 'it' : 'them'} out on that machine.`
+    parts.push(run.elsewhere.every(isHeld)
+      ? `${sentenceStart(joinNames(run.elsewhere.map(nameOf)))}: ${one ? 'its folder' : 'their folders'} there ${one ? 'carries' : 'carry'} another install's mark, and may be this computer's own from an earlier install of the app; ${one ? 'it was' : 'they were'} left as ${one ? 'it is' : 'they are'}. To sign ${one ? 'it' : 'them'} out from here, add the machine again and choose Adopt on its card; or sign ${one ? 'it' : 'them'} out on that machine.`
       : `${one ? 'One account folder' : `${run.elsewhere.length} account folders`} there ${one ? 'is' : 'are'} used by the app on another computer, and ${one ? 'was' : 'were'} left as ${one ? 'it is' : 'they are'}.`)
   }
   return { ok: true, message: parts.join(' ') }
@@ -778,12 +788,16 @@ export async function accountsLeftText(m: RemoteMachineRecord): Promise<string> 
   const name = machineName(m)
   if (acc.readAt === null) return ` The app has not read which accounts are signed in on ${name} since it started; any signed in there stay signed in until you sign them out there, or end those sign-ins ${END_IT_THERE}.`
   // Final review round 2 (F2-1): named as the machine's card names them.
+  // Round 3 (F3-1): its folders of accounts this computer does not hold
+  // counted as the card counts them, never by their ids, and joined as the
+  // card joins them (Remove's not-answering question, removeNotAnsweringText).
   const d = deps
-  const aliases = d ? aliasesNow(d) : undefined
-  const names = [...acc.accounts.filter((x) => x.folder).map((x) => accountName(profiles.find((p) => p.id === x.profileId), x.profileId, aliases)), ...acc.others]
-  if (names.length === 0) return ''
-  const one = names.length === 1
-  return ` ${sentenceStart(names.join(', '))} ${one ? 'stays' : 'stay'} signed in on ${name} until you sign ${one ? 'it' : 'them'} out there, or end ${one ? 'that sign-in' : 'those sign-ins'} ${END_IT_THERE}.`
+  const nameOf = accountNamer(profiles, d ? aliasesNow(d) : undefined)
+  const held = new Set(acc.accounts.map((x) => x.profileId))
+  const left = namedAccounts([...acc.accounts.filter((x) => x.folder).map((x) => x.profileId), ...acc.others], nameOf, (id) => held.has(id))
+  if (left.count === 0) return ''
+  const one = left.count === 1
+  return ` ${sentenceStart(left.text)} ${one ? 'stays' : 'stay'} signed in on ${name} until you sign ${one ? 'it' : 'them'} out there, or end ${one ? 'that sign-in' : 'those sign-ins'} ${END_IT_THERE}.`
 }
 
 /** One machine's sessions, by list mode (2.1.3-beta.19 section 1.2). */
