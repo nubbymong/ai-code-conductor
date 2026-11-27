@@ -448,6 +448,14 @@ describe('Remove, with its account steps (3.1.8; fix round MAJOR-1 and MAJOR-2)'
   })
 })
 
+// A sign-in tab's whole note, as its terminal shows it.
+const signInNote = (text: string) => `[This tab could not start through the session helper on rocky.lan: ${text}]`
+// Phase 5 round 5 (R5-1): a sign-in tab on a folder with another install's
+// mark, the machine not read yet: its own steps only, so it names Check once
+// and adds no second "Press Check ... Sign in on this machine again".
+const NOT_READ_NOTE = signInNote('the account\'s folder on rocky.lan carries another install\'s mark, and nothing of it was changed. Press Check on the Machines page: if the machine\'s card then says it may be this computer\'s own from an earlier install, choose Adopt on the machine\'s card, then Sign in on this machine again; if it is the app\'s on another computer, sign it in there from that computer.')
+const checks = (text: string) => text.split('Press Check on the Machines page').length - 1
+
 describe('fix round: the sign-in method, a kept session\'s attach, and the notes (MINOR-5, NIT-8, NIT-11)', () => {
   it('MINOR-5: a sign-in tab signs in by the account\'s own method', async () => {
     methods['profile-personal'] = 'sso'
@@ -496,8 +504,9 @@ describe('fix round: the sign-in method, a kept session\'s attach, and the notes
     const id = 'signin-elsewhere'
     start(id, { profileId: 'profile-personal', remoteAccountSignIn: true })
     await until(() => shown(id).includes('could not start'))
-    expect(shown(id)).toMatch(/carries another install's mark/)
-    expect(shown(id)).toMatch(/choose Sign in on this machine again/)
+    // R5-1 (round 5): the whole note, its own next steps only.
+    expect(shown(id)).toContain(NOT_READ_NOTE)
+    expect(checks(shown(id))).toBe(1)
     expect(shown(id)).not.toMatch(/usual SSH path/)
     expect(launchOf()).toBeNull()
     forgetRemoteHelperTab(id)
@@ -547,8 +556,9 @@ describe('round 2 (R1): Remove and a launch name folders of an earlier build or 
     const id = 'signin-adoptable'
     start(id, { profileId: 'profile-personal', remoteAccountSignIn: true })
     await until(() => shown(id).includes('could not start'))
-    expect(shown(id)).toMatch(/carries another install's mark, and nothing of it was changed/)
-    expect(shown(id)).toMatch(/choose Adopt on the machine's card/)
+    // R5-1 (round 5): pinned whole; Check is named once.
+    expect(shown(id)).toContain(NOT_READ_NOTE)
+    expect(checks(shown(id))).toBe(1)
     expect(ownerOf('profile-personal')).toBe(OTHER_INSTALL)
     expect(launchOf()).toBeNull()
     forgetRemoteHelperTab(id)
@@ -559,8 +569,10 @@ describe('round 2 (R1): Remove and a launch name folders of an earlier build or 
 // install's mark follows the one Adopt rule, from the machine's last read:
 // read the machine first (as a Check does), then start the sign-in tab.
 describe('round 4 (R4-2): a sign-in tab\'s note follows the machine\'s last read', () => {
-  const note = (text: string) => `[This tab could not start through the session helper on rocky.lan: ${text}]`
+  const note = signInNote
 
+  // R5-1 (round 5): its own steps only. The Adopt dialog reads the machine
+  // again, so the note asks for no Check after Adopt.
   it('every such folder there is for this computer\'s accounts: the note offers Adopt', async () => {
     owners.set('profile-personal', OTHER_INSTALL)
     const [read] = await readRemoteAccounts([MACHINE.did])
@@ -568,7 +580,8 @@ describe('round 4 (R4-2): a sign-in tab\'s note follows the machine\'s last read
     const id = 'signin-earlier'
     start(id, { profileId: 'profile-personal', remoteAccountSignIn: true })
     await until(() => shown(id).includes('could not start'))
-    expect(shown(id)).toContain(note('the account\'s folder on rocky.lan carries another install\'s mark, and nothing of it was changed. It may be this computer\'s own from an earlier install of the app: if so, choose Adopt on the machine\'s card on the Machines page. Press Check on the Machines page, then choose Sign in on this machine again.'))
+    expect(shown(id)).toContain(note('the account\'s folder on rocky.lan carries another install\'s mark, and nothing of it was changed. It may be this computer\'s own from an earlier install of the app: if so, choose Adopt on the machine\'s card on the Machines page, then choose Sign in on this machine again.'))
+    expect(checks(shown(id))).toBe(0)
     expect(ownerOf('profile-personal')).toBe(OTHER_INSTALL)
     expect(launchOf()).toBeNull()
     forgetRemoteHelperTab(id)
