@@ -2,7 +2,7 @@ import { create } from 'zustand'
 import type { HostAccountNotice, HostAccountsState, HostLaunchRefusal, HostMachineAccounts } from '../../shared/host-accounts'
 import type { RemoteMachineView, RemoteMachinesState } from '../../shared/remote-machines'
 import { useSessionStore } from './sessionStore'
-import { hostLaunchable, machineLabel } from '../utils/hostAccounts'
+import { hostElsewhere, hostLaunchable, machineLabel } from '../utils/hostAccounts'
 
 /**
  * 2.1.3-beta.20 section 5 (Accounts across machines): each Linux machine's
@@ -15,6 +15,9 @@ import { hostLaunchable, machineLabel } from '../utils/hostAccounts'
  * Switch Account list (frame 3). Nothing here is saved: the machines are read
  * again in each run, at Check, the start-up list, a sign-in tab's end and
  * each helper tab's launch (main's section 3.1.6), never polled.
+ *
+ * Round 1 (MAJOR-1): a tab waits for one sign-in tab, not for any sign-in of
+ * that account there: see HostWaiting and pruneHostWaits.
  */
 
 /** Why a notice asks (frame 2): a helper tab whose launch started nothing for
@@ -37,6 +40,12 @@ export interface HostNotice {
   /** Accounts of this computer signed in on that machine now (the notice's
    *  "another account" choice), the one asked for left out. */
   signedInThere: string[]
+  /** Round 1 (MINOR-3): the tab's next start continues its conversation (a
+   *  Switch Account's, or a refused start that carried it, or a kept tab). */
+  carry?: boolean
+  /** Round 1 (MINOR-2): the account's folder there is the app on another
+   *  computer's, so no Sign in there is offered. */
+  elsewhere?: boolean
 }
 
 /** What a tab does once a sign-in on its machine ends signed in: start again
@@ -44,20 +53,43 @@ export interface HostNotice {
  *  (`switch`). */
 export type HostRunMode = 'restart' | 'switch'
 
-/** A tab waiting for a sign-in on its machine to end. */
+/** How long a tab waits for its sign-in tab at most (round 1, MAJOR-1). */
+export const SIGN_IN_WAIT_MS = 20 * 60_000
+/** How long after its sign-in tab's terminal ended the tab still waits for
+ *  that sign-in's end (main reads the machine first): a sign-in tab that
+ *  started nothing never sends one. */
+export const SIGN_IN_END_GRACE_MS = 90_000
+
+/**
+ * A tab waiting for ONE sign-in tab (round 1, MAJOR-1): it goes on only when
+ * that sign-in tab ends signed in as that account on that machine, and only
+ * while the tab is still the run it was when it began to wait (`createdAt`:
+ * a Restart or a Switch starts another). Any other way out drops it.
+ */
 export interface HostWaiting {
+  /** The waiting tab, and its run when it began to wait. */
   sessionId: string
+  createdAt: number
+  /** The sign-in tab it waits for. */
+  signInTabId: string
   did: string
   profileId: string
   mode: HostRunMode
+  carry: boolean
+  /** Past this it waits no more. */
+  until: number
+  /** Its sign-in tab's terminal ended: its sign-in end must come by then. */
+  endBy?: number
 }
 
 /** A tab whose wait is over: it starts again, or switches, on `profileId`. */
 export interface HostRun {
   id: number
   sessionId: string
+  createdAt: number
   profileId: string
   mode: HostRunMode
+  carry: boolean
 }
 
 interface HostAccountsStore {
@@ -84,18 +116,37 @@ interface HostAccountsStore {
   setMachines: (state: RemoteMachinesState) => void
   setAccounts: (state: HostAccountsState) => void
   applyAccounts: (m: HostMachineAccounts) => void
+  /** A new notice for a tab drops that tab's wait (it is asked again). */
   openNotice: (n: HostNotice) => void
   closeNotice: (sessionId: string) => void
-  waitForSignIn: (w: HostWaiting) => void
-  /** A sign-in tab ended (`sign-in-ended`): the tabs waiting on that account
-   *  and machine go on when it ended signed in, else stop waiting. */
-  signInEnded: (did: string, profileId: string, launchable: boolean) => void
+  waitForSignIn: (w: Omit<HostWaiting, 'until' | 'endBy'>) => void
+  /** The tab waits no more (Cancel, another account, a switch). */
+  dropWaits: (sessionId: string) => void
+  /** Sign-in tab `signInTabId` ended (`sign-in-ended`): the tab waiting on
+   *  it, for that account and machine, goes on when it ended signed in, else
+   *  stops waiting. Any other sign-in's end changes nothing. */
+  signInEnded: (signInTabId: string, did: string, profileId: string, launchable: boolean) => void
   takeRun: (id: number) => void
   showMessage: (m: { title: string; text: string } | null) => void
 }
 
 let loading: Promise<void> | null = null
 let runSeq = 0
+let pruneTimer: ReturnType<typeof setTimeout> | null = null
+/** The tabs whose last start carried their conversation (round 1, MINOR-3;
+ *  TerminalView notes each SSH start), by session id. */
+const carriedStarts = new Set<string>()
+
+/** TerminalView, at each SSH start: whether it carried the conversation. */
+export function noteStartCarried(sessionId: string, carried: boolean): void {
+  if (carried) carriedStarts.add(sessionId)
+  else carriedStarts.delete(sessionId)
+}
+
+/** The tab's last start carried its conversation (a refused one's retry carries it again). */
+export function startCarried(sessionId: string): boolean {
+  return carriedStarts.has(sessionId)
+}
 
 const INITIAL = {
   available: false,
@@ -144,18 +195,27 @@ export const useHostAccountsStore = create<HostAccountsStore>((set, get) => ({
     set((s) => ({ byDid: { ...s.byDid, [m.did]: m } }))
   },
 
-  openNotice: (n) => set((s) => ({ notices: [...s.notices.filter((x) => x.sessionId !== n.sessionId), n] })),
+  openNotice: (n) => set((s) => ({
+    notices: [...s.notices.filter((x) => x.sessionId !== n.sessionId), n],
+    waiting: s.waiting.filter((w) => w.sessionId !== n.sessionId),
+  })),
 
   closeNotice: (sessionId) => set((s) => ({ notices: s.notices.filter((x) => x.sessionId !== sessionId) })),
 
-  waitForSignIn: (w) => set((s) => ({ waiting: [...s.waiting.filter((x) => x.sessionId !== w.sessionId), w] })),
+  waitForSignIn: (w) => {
+    set((s) => ({ waiting: [...s.waiting.filter((x) => x.sessionId !== w.sessionId), { ...w, until: Date.now() + SIGN_IN_WAIT_MS }] }))
+    schedulePrune()
+  },
 
-  signInEnded: (did, profileId, launchable) => set((s) => {
-    const done = s.waiting.filter((w) => w.did === did && w.profileId === profileId)
+  dropWaits: (sessionId) => set((s) => (s.waiting.some((w) => w.sessionId === sessionId) ? { waiting: s.waiting.filter((w) => w.sessionId !== sessionId) } : {})),
+
+  signInEnded: (signInTabId, did, profileId, launchable) => set((s) => {
+    const mine = (w: HostWaiting) => w.signInTabId === signInTabId && w.did === did && w.profileId === profileId
+    const done = s.waiting.filter(mine)
     if (done.length === 0) return {}
-    const waiting = s.waiting.filter((w) => !(w.did === did && w.profileId === profileId))
+    const waiting = s.waiting.filter((w) => !mine(w))
     if (!launchable) return { waiting }
-    return { waiting, runs: [...s.runs, ...done.map((w) => ({ id: ++runSeq, sessionId: w.sessionId, profileId: w.profileId, mode: w.mode }))] }
+    return { waiting, runs: [...s.runs, ...done.map((w) => ({ id: ++runSeq, sessionId: w.sessionId, createdAt: w.createdAt, profileId: w.profileId, mode: w.mode, carry: w.carry }))] }
   }),
 
   takeRun: (id) => set((s) => ({ runs: s.runs.filter((r) => r.id !== id) })),
@@ -163,16 +223,53 @@ export const useHostAccountsStore = create<HostAccountsStore>((set, get) => ({
   showMessage: (message) => set({ message }),
 }))
 
+/**
+ * Round 1 (MAJOR-1): drop each wait that no longer holds: its waiting tab
+ * closed or started again (another run), its sign-in tab closed, its time
+ * limit passed, or its sign-in tab's terminal ended and no sign-in end came
+ * within the grace. A sign-in tab whose terminal ended starts that grace.
+ * Then the next check is set for the nearest deadline.
+ */
+export function pruneHostWaits(now = Date.now()): void {
+  const store = useHostAccountsStore.getState()
+  if (store.waiting.length === 0) { schedulePrune(); return }
+  const sessions = useSessionStore.getState().sessions
+  let changed = false
+  const waiting: HostWaiting[] = []
+  for (const w of store.waiting) {
+    const tab = sessions.find((s) => s.id === w.sessionId)
+    const signIn = sessions.find((s) => s.id === w.signInTabId)
+    const endBy = w.endBy ?? (signIn?.ptyExited ? now + SIGN_IN_END_GRACE_MS : undefined)
+    const holds = !!tab && tab.createdAt === w.createdAt && !!signIn && now < w.until && !(endBy !== undefined && now > endBy)
+    if (!holds) { changed = true; continue }
+    if (endBy !== w.endBy) changed = true
+    waiting.push(endBy !== w.endBy ? { ...w, endBy } : w)
+  }
+  if (changed) useHostAccountsStore.setState({ waiting })
+  schedulePrune()
+}
+
+/** The next check of the waits, at the nearest deadline (none: no timer). */
+function schedulePrune(): void {
+  if (pruneTimer) { clearTimeout(pruneTimer); pruneTimer = null }
+  const waits = useHostAccountsStore.getState().waiting
+  if (waits.length === 0) return
+  const next = Math.min(...waits.map((w) => Math.min(w.until, w.endBy ?? Infinity)))
+  pruneTimer = setTimeout(() => { pruneTimer = null; pruneHostWaits() }, Math.max(0, next - Date.now()) + 50)
+}
+
 /** For tests: back to a store that read nothing. */
 export function resetHostAccountsStore(): void {
   loading = null
+  if (pruneTimer) { clearTimeout(pruneTimer); pruneTimer = null }
+  carriedStarts.clear()
   useHostAccountsStore.setState({ ...INITIAL })
 }
 
 /** The notice a launch refusal asks (frame 2), or null: a refusal for a
  *  machine whose accounts could not be read says so in its tab and asks
  *  nothing here (its choices would not hold: nothing is known there). */
-export function noticeOfRefusal(sessionId: string, r: HostLaunchRefusal, label?: string): HostNotice | null {
+export function noticeOfRefusal(sessionId: string, r: HostLaunchRefusal, label?: string, more: Pick<HostNotice, 'carry' | 'elsewhere'> = {}): HostNotice | null {
   if (r.state !== 'not-signed-in' && r.state !== 'someone-else') return null
   return {
     kind: 'launch',
@@ -184,12 +281,16 @@ export function noticeOfRefusal(sessionId: string, r: HostLaunchRefusal, label?:
     state: r.state,
     ...(r.identity ? { identity: r.identity } : {}),
     signedInThere: r.signedInThere.filter((id) => id !== r.profileId),
+    ...(more.carry ? { carry: true } : {}),
+    ...(more.elsewhere ? { elsewhere: true } : {}),
   }
 }
 
 /** One push from main (REMOTE_ACCOUNT_NOTICE): a launch that started nothing
- *  opens its notice (for a tab that is still open, and not a sign-in tab); a
- *  sign-in tab's end lets the tabs waiting on it go on. */
+ *  opens its notice (for a tab that is still open, and not a sign-in tab),
+ *  carrying the conversation again when that start carried it or the tab is
+ *  kept, and saying so when the account's folder there is another
+ *  computer's; a sign-in tab's end lets the tab waiting on THAT tab go on. */
 export function handleHostAccountNotice(n: HostAccountNotice): void {
   const store = useHostAccountsStore.getState()
   if (!n || typeof n !== 'object') return
@@ -197,19 +298,25 @@ export function handleHostAccountNotice(n: HostAccountNotice): void {
     const s = useSessionStore.getState().sessions.find((x) => x.id === n.sessionId)
     if (!s || s.remoteAccountSignIn) return
     const m = store.machines.find((x) => x.did === n.refusal?.did)
-    const notice = noticeOfRefusal(n.sessionId, n.refusal, m ? machineLabel(m) : undefined)
+    const kept = s.remoteVia === 'helper' && s.sshConfig?.detachable !== false
+    const notice = noticeOfRefusal(n.sessionId, n.refusal, m ? machineLabel(m) : undefined, {
+      carry: startCarried(n.sessionId) || kept,
+      elsewhere: hostElsewhere(store.byDid[n.refusal?.did ?? ''], n.refusal?.profileId ?? ''),
+    })
     if (notice) store.openNotice(notice)
     return
   }
-  if (n.kind === 'sign-in-ended') store.signInEnded(n.did, n.profileId, hostLaunchable(n.state))
+  if (n.kind === 'sign-in-ended') store.signInEnded(n.sessionId, n.did, n.profileId, hostLaunchable(n.state))
 }
 
-/** The app root listens once: each machine's read as it lands, and each
- *  account notice. Returns the unsubscribe. */
+/** The app root listens once: each machine's read as it lands, each account
+ *  notice, and the tabs (a wait whose tab closed or started again goes).
+ *  Returns the unsubscribe. */
 export function listenHostAccounts(): () => void {
   const remote = window.electronAPI?.machines?.remote
   const offs: Array<() => void> = []
   if (typeof remote?.onAccountsChanged === 'function') offs.push(remote.onAccountsChanged((m) => useHostAccountsStore.getState().applyAccounts(m)))
   if (typeof remote?.onAccountNotice === 'function') offs.push(remote.onAccountNotice((n) => handleHostAccountNotice(n)))
+  offs.push(useSessionStore.subscribe(() => { if (useHostAccountsStore.getState().waiting.length > 0) pruneHostWaits() }))
   return () => { for (const off of offs) { try { off() } catch { /* gone */ } } }
 }

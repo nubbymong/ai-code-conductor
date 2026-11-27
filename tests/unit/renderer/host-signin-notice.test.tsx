@@ -44,7 +44,7 @@ const { useSwitchAccount } = await import('../../../src/renderer/hooks/useSwitch
 const { useSessionStore } = await import('../../../src/renderer/stores/sessionStore')
 const { useConfigStore } = await import('../../../src/renderer/stores/configStore')
 const { useAccountProfilesStore } = await import('../../../src/renderer/stores/accountProfilesStore')
-const { useHostAccountsStore, resetHostAccountsStore } = await import('../../../src/renderer/stores/hostAccountsStore')
+const { useHostAccountsStore, resetHostAccountsStore, pruneHostWaits, noteStartCarried, startCarried, SIGN_IN_WAIT_MS, SIGN_IN_END_GRACE_MS } = await import('../../../src/renderer/stores/hostAccountsStore')
 
 const DID = 'a'.repeat(32)
 const ROCKY = { did: DID, label: 'Rocky', name: 'Rocky (nick@rocky.lan:22)', target: 'nick@rocky.lan:22', checked: true, lastCheck: { at: 1, ok: true }, helperVersion: '0.1.0', system: 'Linux x86-64', inUse: 0 }
@@ -267,5 +267,191 @@ describe('Switch Account on a tab through the session helper (frame 3)', () => {
     expect(endTab).not.toHaveBeenCalled()
     expect(dialog()).toBeNull()
     expect(useSessionStore.getState().sessions[0].profileId).toBe('p1')
+  })
+
+  // MINOR-3 (round 1): a tab main says runs through the helper, with a plain
+  // SSH Connection (not kept): no End, and the restart carries the conversation.
+  it('a tab main says runs through the helper but does not keep: no End, and it starts on the account carrying its conversation', async () => {
+    ;(window as any).electronAPI.ssh = {
+      onFlowState: (_id: string, cb: (m: { state: string }) => void) => { cb({ state: 'through-helper' }); return () => {} },
+      getState: async () => ({ state: 'through-helper' }),
+    }
+    useHostAccountsStore.getState().setAccounts({ machines: [read('signed-in-here', 'signed-in-here')] })
+    await switchTo(tab({ id: 'tab-4', profileId: 'p1', sshConfig: { ...SSH, detachable: false } }), 'p2')
+    expect(endTab).not.toHaveBeenCalled()
+    expect(restartSpy).toHaveBeenCalledWith({ profileId: 'p2', carryConversation: true })
+  })
+
+  // NIT-8 (round 1): with the account not read there, ending the kept session
+  // first could leave the tab with nothing running; it says to Check instead.
+  it('a kept tab, to an account not read there yet: nothing is ended or restarted, and it says to Check first', async () => {
+    useHostAccountsStore.getState().setAccounts({ machines: [read('signed-in-here', 'not-read')] })
+    await switchTo(kept, 'p2')
+    expect(endTab).not.toHaveBeenCalled()
+    expect(restartSpy).not.toHaveBeenCalled()
+    expect(byTest('host-signin-message')?.textContent).toContain('Press Check on Rocky\'s card on the Machines page, then switch again.')
+    resetHostAccountsStore()
+    useHostAccountsStore.getState().setMachines(STATE)
+    act(() => root.unmount())
+    container.remove()
+    await switchTo(kept, 'p2')
+    expect(endTab).not.toHaveBeenCalled()
+    expect(restartSpy).not.toHaveBeenCalled()
+  })
+})
+
+// MAJOR-1 (round 1): the tab that waits for a sign-in goes on only when THAT
+// sign-in tab ends signed in as that account, once. Any other way out drops
+// the wait: Cancel or the other account, a later notice, a Restart or Switch
+// of the tab, either tab closing, a sign-in tab that ends without signing in
+// or never starts, and a time limit.
+describe('the wait for a sign-in is the sign-in tab\'s own, and is dropped on every other way out', () => {
+  async function signInFromNotice(): Promise<string> {
+    await mount(<HostSignInNotice />)
+    await push(refused('tab-1', 'not-signed-in'))
+    await click(byTest('host-signin-here'))
+    const id = useSessionStore.getState().sessions.find((s) => s.remoteAccountSignIn)!.id
+    expect(useHostAccountsStore.getState().waiting).toHaveLength(1)
+    return id
+  }
+  const ended = (sessionId: string, state: 'signed-in-here' | 'not-signed-in' = 'signed-in-here'): HostAccountNotice =>
+    ({ kind: 'sign-in-ended', sessionId, did: DID, profileId: 'p2', state })
+
+  it('its own sign-in tab ending signed in: the tab starts, once', async () => {
+    const signIn = await signInFromNotice()
+    await push(ended(signIn))
+    await push(ended(signIn))
+    expect(restartSpy).toHaveBeenCalledTimes(1)
+    expect(restartSpy).toHaveBeenCalledWith({ profileId: 'p2' })
+  })
+
+  it('another sign-in tab of that account on that machine ending: nothing starts', async () => {
+    await signInFromNotice()
+    await push(ended('another-sign-in-tab'))
+    expect(restartSpy).not.toHaveBeenCalled()
+    expect(useHostAccountsStore.getState().waiting).toHaveLength(1)
+  })
+
+  it('a later notice for the tab, then Use this account: it starts once, on that account, and the sign-in\'s end starts nothing', async () => {
+    const signIn = await signInFromNotice()
+    await push(refused('tab-1', 'not-signed-in'))
+    expect(useHostAccountsStore.getState().waiting).toEqual([])
+    await click(byTest('host-signin-use-other'))
+    await push(ended(signIn))
+    expect(restartSpy).toHaveBeenCalledTimes(1)
+    expect(restartSpy).toHaveBeenCalledWith({ profileId: 'p1' })
+  })
+
+  it('a later notice for the tab, then Cancel: the sign-in\'s end starts nothing', async () => {
+    const signIn = await signInFromNotice()
+    await push(refused('tab-1', 'not-signed-in'))
+    await click(byTest('host-signin-cancel'))
+    await push(ended(signIn))
+    expect(restartSpy).not.toHaveBeenCalled()
+  })
+
+  it('a Restart or a Switch of the tab meanwhile (it starts again): the sign-in\'s end starts nothing', async () => {
+    const signIn = await signInFromNotice()
+    await act(async () => { useSessionStore.getState().updateSession('tab-1', { createdAt: 2 }) })
+    await settle()
+    expect(useHostAccountsStore.getState().waiting).toEqual([])
+    await push(ended(signIn))
+    expect(restartSpy).not.toHaveBeenCalled()
+  })
+
+  it('the sign-in tab closed, or the waiting tab closed: the wait goes', async () => {
+    const signIn = await signInFromNotice()
+    await act(async () => { useSessionStore.getState().removeSession(signIn) })
+    await settle()
+    expect(useHostAccountsStore.getState().waiting).toEqual([])
+    await push(ended(signIn))
+    expect(restartSpy).not.toHaveBeenCalled()
+    act(() => root.unmount())
+    container.remove()
+    resetHostAccountsStore()
+    useHostAccountsStore.getState().setMachines(STATE)
+    useHostAccountsStore.getState().setAccounts({ machines: [read('signed-in-here', 'not-signed-in')] })
+    useSessionStore.setState({ sessions: [tab({})] })
+    const second = await signInFromNotice()
+    await act(async () => { useSessionStore.getState().removeSession('tab-1') })
+    await settle()
+    expect(useHostAccountsStore.getState().waiting).toEqual([])
+    await push(ended(second))
+    expect(restartSpy).not.toHaveBeenCalled()
+  })
+
+  it('a sign-in tab that ends with no sign-in end (it started nothing): the wait goes after a short grace', async () => {
+    const signIn = await signInFromNotice()
+    await act(async () => { useSessionStore.getState().updateSession(signIn, { ptyExited: true }) })
+    await settle()
+    expect(useHostAccountsStore.getState().waiting).toHaveLength(1)
+    pruneHostWaits(Date.now() + SIGN_IN_END_GRACE_MS + 1_000)
+    expect(useHostAccountsStore.getState().waiting).toEqual([])
+    await push(ended(signIn))
+    expect(restartSpy).not.toHaveBeenCalled()
+  })
+
+  it('a sign-in never finished: the wait goes at its time limit', async () => {
+    const signIn = await signInFromNotice()
+    pruneHostWaits(Date.now() + SIGN_IN_END_GRACE_MS + 1_000)
+    expect(useHostAccountsStore.getState().waiting).toHaveLength(1)
+    pruneHostWaits(Date.now() + SIGN_IN_WAIT_MS + 1_000)
+    expect(useHostAccountsStore.getState().waiting).toEqual([])
+    await push(ended(signIn))
+    expect(restartSpy).not.toHaveBeenCalled()
+  })
+})
+
+// MINOR-3 (round 1): a refused start that carried the tab's conversation (a
+// Switch Account's) carries it again on the notice's two ways on.
+describe('a refused start that carried the conversation carries it again', () => {
+  it('Use this account, and the start after the sign-in, both continue the conversation', async () => {
+    await mount(<HostSignInNotice />)
+    noteStartCarried('tab-1', true)
+    await push(refused('tab-1', 'not-signed-in'))
+    await click(byTest('host-signin-use-other'))
+    expect(restartSpy).toHaveBeenLastCalledWith({ profileId: 'p1', carryConversation: true })
+    useSessionStore.getState().updateSession('tab-1', { profileId: 'p2' })
+    noteStartCarried('tab-1', true)
+    await push(refused('tab-1', 'not-signed-in'))
+    await click(byTest('host-signin-here'))
+    const signIn = useSessionStore.getState().sessions.find((s) => s.remoteAccountSignIn)!.id
+    await push({ kind: 'sign-in-ended', sessionId: signIn, did: DID, profileId: 'p2', state: 'signed-in-here' })
+    expect(restartSpy).toHaveBeenLastCalledWith({ profileId: 'p2', carryConversation: true })
+    // A start that did not carry (a new tab's) does not.
+    noteStartCarried('tab-1', false)
+    expect(startCarried('tab-1')).toBe(false)
+  })
+})
+
+// MINOR-4 (round 1): the notice and its message take the keyboard focus, and give it back.
+describe('focus', () => {
+  it('the notice starts on Cancel and gives focus back on close; the message starts on OK', async () => {
+    const outside = document.createElement('button')
+    document.body.appendChild(outside)
+    outside.focus()
+    await mount(<HostSignInNotice />)
+    await push(refused('tab-1', 'not-signed-in'))
+    expect(document.activeElement).toBe(byTest('host-signin-cancel'))
+    await click(byTest('host-signin-cancel'))
+    expect(document.activeElement).toBe(outside)
+    await act(async () => { useHostAccountsStore.getState().showMessage({ title: 'Switch account', text: 'x' }) })
+    await settle()
+    expect(document.activeElement?.textContent).toBe('OK')
+    outside.remove()
+  })
+})
+
+// MINOR-2 (round 1): the account's folder there is the app on another computer's.
+describe('an account whose folder there is another computer\'s', () => {
+  it('the notice says so and offers no Sign in there; another account and Cancel stay', async () => {
+    useHostAccountsStore.getState().setAccounts({ machines: [{ ...read('signed-in-here', 'not-signed-in'), elsewhere: ['p2'] }] })
+    await mount(<HostSignInNotice />)
+    await push(refused('tab-1', 'not-signed-in'))
+    expect(byTest('host-signin-question')?.textContent).toBe('Personal\'s folder on Rocky is used by the app on another computer.')
+    expect(byTest('host-signin-why')?.textContent).toBe('That computer signs it in and out there, so it cannot be signed in from here.')
+    expect(byTest('host-signin-here')).toBeNull()
+    expect(byTest('host-signin-use-other')).not.toBeNull()
+    expect(byTest('host-signin-cancel')).not.toBeNull()
   })
 })

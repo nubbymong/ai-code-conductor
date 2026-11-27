@@ -29,6 +29,7 @@ import { forgetSessionBrowserProfile } from '../stores/sshCloseStore'
 import { hasSpawned, markSpawned, clearSpawned, killSessionPty, isCurrentSpawn } from '../ptyTracker'
 import { spentCommand } from '../utils/commandTerminal'
 import { markKeptByHelper } from '../utils/keptByHelper'
+import { noteStartCarried } from '../stores/hostAccountsStore'
 import { listenForSpawnEnd, reportSpawnEnd } from '../utils/spawnEndNotice'
 import { carryNote, terminalNoteLine } from '../utils/launchNote'
 import { signInBannerText } from '../utils/signInBanner'
@@ -1296,6 +1297,10 @@ export default function TerminalView({ sessionId, configId, cwd, shellOnly, elev
             // here, as askPrompt), so the CLI continues it on the new account.
             const carry = !!ssh && session?.carryConversation === true
             if (carry) updateSession(sessionId, { carryConversation: undefined })
+            // Round 1 (MINOR-3): what this start carried is noted, so a start
+            // main refuses for its account carries it again on the notice's
+            // ways on (stores/hostAccountsStore).
+            if (ssh) noteStartCarried(sessionId, carry)
             const sshWithReconnect = ssh ? { ...ssh, reconnect: !!session?.sshReachedClaudeRunning || carry } : ssh
             // 2.1.3-beta.20 section 5: a sign-in tab (utils/hostSignIn.ts):
             // main runs the CLI's own sign-in for its account on that machine.

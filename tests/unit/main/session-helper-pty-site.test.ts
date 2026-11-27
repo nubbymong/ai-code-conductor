@@ -43,6 +43,8 @@ describe('pty-manager: where the session helper can start a terminal', () => {
     expect(view).toContain('const carry = !!ssh && session?.carryConversation === true\n')
     expect(view).toContain('if (carry) updateSession(sessionId, { carryConversation: undefined })\n')
     expect(view).toContain('const sshWithReconnect = ssh ? { ...ssh, reconnect: !!session?.sshReachedClaudeRunning || carry } : ssh\n')
+    // Round 1 (MINOR-3): each SSH start notes whether it carried, so a refused one's retry carries again.
+    expect(view).toContain('if (ssh) noteStartCarried(sessionId, carry)\n')
     // The first-run install terminal spawns on its own and never asks for it.
     const setup = readFileSync(resolve(ROOT, 'src/renderer/components/SetupDialog.tsx'), 'utf8')
     expect(setup).toContain('window.electronAPI.pty.spawn(')

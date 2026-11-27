@@ -16,13 +16,15 @@
 //    again to that session, which runs on the old account; so its session is
 //    ended first (End, as its close question's), then the tab starts on the
 //    new account. When that End fails the tab stays on its account, starts
-//    again there, and the app says why.
+//    again there, and the app says why. While nothing is known of the account
+//    there (the machine not read yet) nothing is ended: the app says to press
+//    Check first (round 1, NIT-8).
 import type { Session } from '../stores/sessionStore'
 import { useAccountProfilesStore } from '../stores/accountProfilesStore'
 import { useHostAccountsStore } from '../stores/hostAccountsStore'
 import { isAccountActive } from '../../shared/account-types'
 import { persistLastUsedAccount } from '../session-persistence'
-import { hostLaunchable, machineLabel, sessionMachine } from './hostAccounts'
+import { hostElsewhere, hostLaunchable, machineLabel, sessionMachine } from './hostAccounts'
 
 /** Tabs whose switch is ending their kept session: a second pick meanwhile is ignored. */
 const switching = new Set<string>()
@@ -51,6 +53,9 @@ export function switchHelperTabAccount(
   const target = useAccountProfilesStore.getState().profiles.find((p) => p.id === nextId)
   if (!target || !isAccountActive(target)) return 'none'
   const host = useHostAccountsStore.getState()
+  // Round 1 (MAJOR-1): a switch is the tab's own next step; a wait it had for
+  // a sign-in is over.
+  host.dropWaits(session.id)
   const machine = sessionMachine(session, host.machines)
   const acc = machine ? host.byDid[machine.did] : undefined
   const there = acc?.accounts.find((a) => a.profileId === nextId)
@@ -64,14 +69,28 @@ export function switchHelperTabAccount(
       state: there.state,
       ...(there.state === 'someone-else' && there.facts?.identity ? { identity: there.facts.identity } : {}),
       signedInThere: acc.accounts.filter((a) => hostLaunchable(a.state) && a.profileId !== nextId && a.profileId !== session.profileId).map((a) => a.profileId),
+      carry: opts.carry !== false,
+      ...(hostElsewhere(acc, nextId) ? { elsewhere: true } : {}),
     })
     return 'notice'
+  }
+  // The saved mark counts on an SSH Persistent tab only (isHelperTab).
+  const kept = session.remoteVia === 'helper' && session.sshConfig?.detachable !== false
+  // Round 1 (NIT-8): ending a kept session before anything is known of the
+  // account there could leave the tab with nothing running; Check first.
+  if (kept && !hostLaunchable(there?.state)) {
+    const where = machine ? machineLabel(machine) : 'its machine'
+    host.showMessage({
+      title: 'Switch account',
+      text: `Which accounts are signed in on ${where} has not been read yet, so nothing was switched and the session this tab keeps there runs on. Press Check on ${where}'s card on the Machines page, then switch again.`,
+    })
+    return 'none'
   }
   const sessionId = session.id
   switching.add(sessionId)
   void (async () => {
     try {
-      if (session.remoteVia === 'helper') {
+      if (kept) {
         let ended = false
         let why = ''
         try {
