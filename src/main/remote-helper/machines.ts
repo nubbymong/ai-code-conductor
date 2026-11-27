@@ -545,7 +545,9 @@ export class RemoteMachines {
     const nonce = newNonce()
     const listed = await runScript(this.deps.runner, target, 'list', [nonce, m.did, install, m.helper.folder, m.helper.sha256])
     const failed = this.sshFailed(m.host, listed)
-    if (failed) return { ok: false, message: `${m.host} could not be reached: ${failed}.${await left()}` }
+    // 2.1.3-beta.20 section 5: marked, so the card asks again in the
+    // not-answering words, with Remove anyway (`forget`).
+    if (failed) return { ok: false, notAnswering: true, message: `${m.host} could not be reached: ${failed}.${await left()}` }
     const hash = readHashLine(listed.stdout, nonce)
     if (hash?.state === 'ok') {
       const line = afterHashLine(listed.stdout, nonce).split(/\r?\n/).find((l) => l.startsWith('{'))

@@ -349,6 +349,22 @@ describe('remote machines: Remove', () => {
     const r = await m.remove(did)
     expect(r.ok).toBe(false)
     expect(r.message).toMatch(/another install/)
+    // It answered: the card does not ask the not-answering question (2.1.3-beta.20 section 5).
+    expect(r.notAnswering).toBeUndefined()
+    expect(m.list()).toHaveLength(1)
+  })
+
+  // 2.1.3-beta.20 section 5 (frame 4): a machine that does not answer is
+  // marked so, and its card asks again in the not-answering words, with
+  // Remove anyway (forget). Nothing is removed and the record is kept.
+  it('a machine that does not answer: marked notAnswering, nothing removed, the record kept', async () => {
+    const { ssh, m, did } = await added()
+    ssh.host = linuxHost({ list: () => ({ stdout: '', stderr: 'ssh: connect to host rocky.lan port 22: Connection timed out', code: 255 }) })
+    const r = await m.remove(did)
+    expect(r.ok).toBe(false)
+    expect(r.notAnswering).toBe(true)
+    expect(r.message).toMatch(/^rocky\.lan could not be reached: /)
+    expect(ssh.scripts()).toEqual(['list'])
     expect(m.list()).toHaveLength(1)
   })
 
