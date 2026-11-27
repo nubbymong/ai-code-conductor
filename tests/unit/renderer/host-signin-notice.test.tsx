@@ -514,8 +514,8 @@ describe('a folder that may be this computer\'s own from an earlier install', ()
   // Final review round 3 (F3-1): the notice names an account by the one
   // rule main's note in the same tab uses: "an account with no name", with a
   // capital where it starts a sentence and no possessive for the app's own
-  // words; one this computer does not hold, "an account no longer on this
-  // computer". It said "That account" before.
+  // words. It said "That account" before. An account this computer does not
+  // hold gets words of its own (final review round 4, F4-1).
   it('the notice: the app\'s words for an account take a capital where they start a sentence, and no possessive', () => {
     const n = { kind: 'launch' as const, state: 'someone-else' as const, identity: 'other@x.io', machineName: 'Rocky', elsewhere: false, adoptable: false }
     const t = hostNoticeText(n, NAMELESS_ACCOUNT)
@@ -524,7 +524,7 @@ describe('a folder that may be this computer\'s own from an earlier install', ()
     expect(hostNoticeText(n, 'Personal').why).toBe('Rocky keeps its own sign-ins. Signing Personal in again there replaces that one.')
     expect(hostNoticeText({ ...n, state: 'not-signed-in', adoptable: true }, NAMELESS_ACCOUNT).question).toBe("The folder of an account with no name on Rocky carries another install's mark.")
     expect(hostNoticeText({ ...n, state: 'not-signed-in', elsewhere: true }, 'Personal').question).toBe("Personal's folder on Rocky is used by the app on another computer.")
-    expect(hostNoticeText({ ...n, state: 'not-signed-in' }, NOT_HELD_ACCOUNT).question).toBe('An account no longer on this computer is not signed in on Rocky.')
+    expect(hostNoticeText({ ...n, state: 'not-signed-in' }, NOT_HELD_ACCOUNT, false).question).toBe('This tab is on an account no longer on this computer.')
   })
 
   it('the notice for an account with no name: "An account with no name" starts the question, "an account with no name" sits mid-sentence', async () => {
