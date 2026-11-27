@@ -24,6 +24,9 @@ const { useSessionStore } = await import('../../../src/renderer/stores/sessionSt
 const { useConfigStore } = await import('../../../src/renderer/stores/configStore')
 const { useAccountProfilesStore } = await import('../../../src/renderer/stores/accountProfilesStore')
 const { resetHostAccountsStore, useHostAccountsStore } = await import('../../../src/renderer/stores/hostAccountsStore')
+const { useSettingsStore } = await import('../../../src/renderer/stores/settingsStore')
+const { adoptTitleOn, hostAccountNamer } = await import('../../../src/renderer/utils/hostAccounts')
+const { hostAccountName } = await import('../../../src/renderer/utils/hostSignIn')
 
 const DID = 'd'.repeat(32)
 const ROCKY = { did: DID, label: 'Rocky', name: 'Rocky (nick@rocky.lan:22)', target: 'nick@rocky.lan:22', checked: true, lastCheck: { at: Date.now(), ok: true }, helperVersion: '0.1.0', system: 'Linux x86-64', inUse: 0 }
@@ -135,6 +138,23 @@ describe('a folder that may be this computer\'s own from an earlier install', ()
     expect(useHostAccountsStore.getState().adoptAsk).toEqual({ did: DID, machineName: 'Rocky', profileIds: ['p2'] })
   })
 
+  // R5-3 (round 5): the row's hover text comes from adoptTitleOn, the one
+  // helper the account card's calls, naming the accounts as Adopt's confirm
+  // does. An account with neither a name nor an email is where a copy of the
+  // rule of its own (the row's list names it "Account") used to differ.
+  it('its Adopt hover text is the account card\'s, from the one helper', async () => {
+    const profiles = [...useAccountProfilesStore.getState().profiles, { id: 'p4', name: '', accountEmail: '', active: true } as never]
+    useAccountProfilesStore.setState({ profiles })
+    const read: HostMachineAccounts = { ...READ, accounts: [...READ.accounts, { profileId: 'p4', state: 'not-signed-in', facts: null, folder: false }], elsewhere: ['p2', 'p4'], mayBeEarlierInstall: true }
+    install({ read })
+    await mount()
+    const want = adoptTitleOn('Rocky', read, profiles, useSettingsStore.getState().settings.accountAliases)
+    expect(want).toBe("Asks first, then makes the folders for Personal and That account on Rocky this computer's again. They carry another install's mark and may be this computer's own from an earlier install.")
+    for (const who of ['Personal', 'Account']) {
+      expect((row(who)?.querySelector('[data-testid="remote-account-adopt"]') as HTMLElement).title).toBe(want)
+    }
+  })
+
   it('Remove names those folders as main does, and the old-marker folders it leaves', async () => {
     install({ read: { ...READ, elsewhere: ['p2'], mayBeEarlierInstall: true, oldMarker: ['zz9'] } })
     await mount()
@@ -167,6 +187,28 @@ describe('"Accounts here" lists this computer\'s accounts with their sign-in the
     await click(row('Personal')?.querySelector('[data-testid="remote-account-signin"]'))
     const signIn = useSessionStore.getState().sessions.find((s) => s.remoteAccountSignIn)
     expect(signIn).toMatchObject({ label: 'Sign in on Rocky: Personal', profileId: 'p2', sessionType: 'ssh', transient: true, shellOnly: true })
+  })
+
+  // R5-2 (round 5): the sign-in tab names its account by the one naming
+  // rule (hostAccountNamer: the profile's name, else its alias, else its
+  // email), over the stores, with a lower-case fallback for its tab name.
+  it('the sign-in tab names its account by the one naming rule', () => {
+    const before = useSettingsStore.getState().settings
+    const aliases = { 'w@x.io': 'Desk', 'a@x.io': 'Laptop' }
+    try {
+      useSettingsStore.setState({ settings: { ...before, accountAliases: aliases } })
+      const profiles = [
+        ...useAccountProfilesStore.getState().profiles,
+        { id: 'p5', name: '', accountEmail: 'a@x.io', active: true } as never,
+        { id: 'p6', name: '', accountEmail: 'e@x.io', active: true } as never,
+      ]
+      useAccountProfilesStore.setState({ profiles })
+      const ids = ['p1', 'p5', 'p6', 'p9']
+      expect(ids.map(hostAccountName)).toEqual(['Work', 'Laptop', 'e@x.io', 'that account'])
+      expect(ids.map(hostAccountName)).toEqual(ids.map(hostAccountNamer(profiles, aliases, 'that account')))
+    } finally {
+      useSettingsStore.setState({ settings: before })
+    }
   })
 
   it('Sign out signs that account out there; it waits while a tab on that account runs there', async () => {

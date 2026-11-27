@@ -16,7 +16,7 @@ import type { ProviderId } from '../../shared/providers'
 import { ProviderMark } from './sidebar/Badges'
 import { PROVIDER_NAMES } from '../provider-names'
 import {
-  adoptButtonTitle, adoptableIds, earlierInstallStayText, elsewhereStayText, hostEarlierInstall, hostElsewhere, machineAccountLine, machineLabel, oldMarkerStayText, machineOwnSignOutText, removeListing, removeNotAnsweringText, sessionMachine, signInOnTitle,
+  adoptTitleOn, adoptableIds, earlierInstallStayText, elsewhereStayText, hostEarlierInstall, hostElsewhere, machineAccountLine, machineLabel, oldMarkerStayText, machineOwnSignOutText, removeListing, removeNotAnsweringText, sessionMachine, signInOnTitle,
   type HostLineTone,
 } from '../utils/hostAccounts'
 import { openHostSignInTab } from '../utils/hostSignIn'
@@ -216,6 +216,9 @@ interface CardAccounts {
   onSignOut: (profileId: string, confirmMachineOwn: boolean) => Promise<'done' | 'confirm'>
   /** Round 2 (R2-1): Adopt the machine's folders that may be this computer's own (asks first). */
   onAdopt: () => void
+  /** Round 5 (R5-3): the Adopt button's hover text, from adoptTitleOn, the
+   *  helper the account card's uses, naming the accounts as the confirm does. */
+  adoptTitle: string
 }
 
 function MachineCard({ m, switchOn, busy, onCheck, onRemove, onAsk, kept, keptWhy, onReattach, onEnd, accounts }: {
@@ -269,7 +272,7 @@ function MachineCard({ m, switchOn, busy, onCheck, onRemove, onAsk, kept, keptWh
         who={p.name}
         line={machineAccountLine(a, label, p.name, { why, elsewhere: hostElsewhere(accounts?.read, p.id), earlierInstall: hostEarlierInstall(accounts?.read, p.id) })}
         onAdopt={() => accounts?.onAdopt()}
-        adoptTitle={adoptButtonTitle(label, adoptableIds(accounts?.read, new Set(accounts?.profiles.map((x) => x.id) ?? [])).map(nameOf))}
+        adoptTitle={accounts?.adoptTitle ?? ''}
         label={label}
         busy={busy}
         switchOn={switchOn}
@@ -474,6 +477,8 @@ export default function RemoteMachinesSection({ active = true }: { active?: bool
           setNotice(null)
           useHostAccountsStore.getState().askAdopt({ did: m.did, machineName: machineLabel(m), profileIds: adoptableIds(hostByDid[m.did], new Set(profiles.map((p) => p.id))) })
         },
+        // Round 5 (R5-3): the card's, the row's and the confirm's naming are one helper's.
+        adoptTitle: adoptTitleOn(machineLabel(m), hostByDid[m.did], profiles, aliases),
         onSignIn: (profileId) => {
           setNotice(null)
           const r = openHostSignInTab(m, profileId)

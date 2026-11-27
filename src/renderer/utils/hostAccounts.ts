@@ -308,20 +308,24 @@ export function adoptableIds(acc: Pick<HostMachineAccounts, 'elsewhere'> | undef
 export type HostNamedProfile = Pick<AccountProfile, 'id' | 'accountEmail' | 'name'>
 
 /** Round 4 (R4-5): an account of this computer by name, as Adopt's confirm
- *  and the notice name it: its profile's name, else its alias, else its email. */
-export function hostAccountName(profiles: readonly HostNamedProfile[], aliases: Record<string, string> | undefined): (profileId: string) => string {
+ *  and the notice name it: its profile's name, else its alias, else its
+ *  email; `fallback` when it has none of them or is not one of `profiles`.
+ *  Round 5 (R5-2): the one copy of this rule; the sign-in tab's name
+ *  (hostSignIn.ts hostAccountName) calls it over the stores. */
+export function hostAccountNamer(profiles: readonly HostNamedProfile[], aliases: Record<string, string> | undefined, fallback = 'That account'): (profileId: string) => string {
   return (id) => {
     const p = profiles.find((x) => x.id === id)
-    if (!p) return 'That account'
-    return resolveAccountName(p.accountEmail, p.name, aliases) || p.accountEmail || p.name || 'That account'
+    if (!p) return fallback
+    return resolveAccountName(p.accountEmail, p.name, aliases) || p.accountEmail || p.name || fallback
   }
 }
 
-/** Round 4 (R4-5, R4-7): the Adopt button's hover text on an account card:
- *  every folder Adopt takes on that machine (`acc`, its last read), named as
- *  the confirm it opens names them. */
+/** Round 4 (R4-5, R4-7), round 5 (R5-3): the Adopt button's hover text, on
+ *  an account card and on a machine's Accounts here row alike: every folder
+ *  Adopt takes on that machine (`acc`, its last read), named as the confirm
+ *  it opens names them. */
 export function adoptTitleOn(machine: string, acc: Pick<HostMachineAccounts, 'elsewhere'> | undefined, profiles: readonly HostNamedProfile[], aliases: Record<string, string> | undefined): string {
-  return adoptButtonTitle(machine, adoptableIds(acc, new Set(profiles.map((p) => p.id))).map(hostAccountName(profiles, aliases)))
+  return adoptButtonTitle(machine, adoptableIds(acc, new Set(profiles.map((p) => p.id))).map(hostAccountNamer(profiles, aliases)))
 }
 
 /** Asked from a tab's notice: the tab, the account it asked for, and why it

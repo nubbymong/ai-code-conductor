@@ -16,16 +16,15 @@ import { useSessionStore } from '../stores/sessionStore'
 import { useConfigStore } from '../stores/configStore'
 import { useAccountProfilesStore } from '../stores/accountProfilesStore'
 import { useSettingsStore } from '../stores/settingsStore'
-import { resolveAccountName } from '../../shared/account-chip-color'
 import { goToSession } from '../lib/goToSession'
-import { machineLabel, signInConfigFor, type HostMachineRef } from './hostAccounts'
+import { hostAccountNamer, machineLabel, signInConfigFor, type HostMachineRef } from './hostAccounts'
 
-/** The account's name as the app's lists name it (its alias, its name, else its email). */
+/** The account's name as the app's lists name it (its profile's name, else
+ *  its alias, else its email), over the stores. Phase 5 round 5 (R5-2): by
+ *  the one naming rule, hostAccountNamer; its fallback is lower-case, as it
+ *  ends the tab's name. */
 export function hostAccountName(profileId: string): string {
-  const p = useAccountProfilesStore.getState().profiles.find((x) => x.id === profileId)
-  if (!p) return 'that account'
-  const aliases = useSettingsStore.getState().settings.accountAliases
-  return resolveAccountName(p.accountEmail, p.name, aliases) || p.accountEmail || p.name || 'that account'
+  return hostAccountNamer(useAccountProfilesStore.getState().profiles, useSettingsStore.getState().settings.accountAliases, 'that account')(profileId)
 }
 
 /** The sign-in tab's name. */

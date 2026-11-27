@@ -19,7 +19,7 @@
 // for a sign-in is over.
 import React, { useEffect, useRef, useState } from 'react'
 import { useHostAccountsStore, listenHostAccounts, type HostAdoptAsk, type HostNotice, type HostRun } from '../stores/hostAccountsStore'
-import { adoptableIds, adoptConfirmText, adoptNextText, hostAccountName } from '../utils/hostAccounts'
+import { adoptableIds, adoptConfirmText, adoptNextText, hostAccountNamer } from '../utils/hostAccounts'
 import { useSessionStore } from '../stores/sessionStore'
 import { useAccountProfilesStore } from '../stores/accountProfilesStore'
 import { useSettingsStore } from '../stores/settingsStore'
@@ -77,7 +77,7 @@ export function hostNoticeText(n: Pick<HostNotice, 'kind' | 'state' | 'identity'
 function useAccountName(): (profileId: string) => string {
   const profiles = useAccountProfilesStore((s) => s.profiles)
   const aliases = useSettingsStore((s) => s.settings.accountAliases)
-  return hostAccountName(profiles, aliases)
+  return hostAccountNamer(profiles, aliases)
 }
 
 /** Round 1 (MINOR-4): a dialog gives the keyboard focus back to where it

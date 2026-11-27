@@ -11,7 +11,7 @@ import {
   cardMachineLine, machineAccountLine, switchMachineMark, sessionMachine, signInConfigFor, sshTarget,
   removeListing, removeNotAnsweringText, machineOwnSignOutText, toSignInCount, joinNames, hostLaunchable, signInOnTitle,
   elsewhereStayText, hostElsewhere, hostEarlierInstall, earlierInstallStayText, oldMarkerStayText, adoptConfirmText, adoptButtonTitle,
-  hostAccountName, adoptTitleOn, adoptNextText,
+  hostAccountNamer, adoptTitleOn, adoptNextText,
 } from '../../../src/renderer/utils/hostAccounts'
 import type { HostMachineAccounts, HostSignInFacts } from '../../../src/shared/host-accounts'
 import type { TerminalConfig } from '../../../src/renderer/stores/configStore'
@@ -257,15 +257,21 @@ describe('a folder that may be this computer\'s own from an earlier install', ()
   })
   // R4-5 (round 4): the hover text names the accounts as Adopt's confirm
   // names them (the profile's name, else its alias, else its email), so the
-  // two always match; R4-7: one helper, the card's and the row's.
+  // two always match. R4-7, R5-3 (rounds 4 and 5): adoptTitleOn is the one
+  // helper the account card's and the Accounts here row's hover text both
+  // call (the row's own test: remote-machines-accounts.test.tsx). R5-2
+  // (round 5): hostAccountNamer is the one naming rule, the sign-in tab's
+  // too, with its own fallback.
   it('the hover text names the accounts as the confirm does', () => {
     const profiles = [
       { id: 'p2', name: 'Personal', accountEmail: 'p@x.io' },
       { id: 'p3', name: '', accountEmail: 's@x.io' },
       { id: 'p4', name: '', accountEmail: 'n@x.io' },
     ]
-    const nameOf = hostAccountName(profiles, { 's@x.io': 'Spare' })
+    const nameOf = hostAccountNamer(profiles, { 's@x.io': 'Spare' })
     expect(['p2', 'p3', 'p4', 'p9'].map(nameOf)).toEqual(['Personal', 'Spare', 'n@x.io', 'That account'])
+    expect(['p2', 'p3', 'p4', 'p9'].map(hostAccountNamer(profiles, { 's@x.io': 'Spare' }, 'that account'))).toEqual(['Personal', 'Spare', 'n@x.io', 'that account'])
+    expect(hostAccountNamer([{ id: 'p5', name: '', accountEmail: '' }], undefined, 'that account')('p5')).toBe('that account')
     const acc = { ...read(true), elsewhere: ['p2', 'p3', 'zz9'] }
     expect(adoptTitleOn('Rocky', acc, profiles, { 's@x.io': 'Spare' })).toBe("Asks first, then makes the folders for Personal and Spare on Rocky this computer's again. They carry another install's mark and may be this computer's own from an earlier install.")
   })
