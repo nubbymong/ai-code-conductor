@@ -54,7 +54,7 @@ import {
   type ExecResult, type SshRunner, type SshTarget,
 } from './ssh-exec'
 import { LINUX_HELPER_ROWS, linuxHelperRow, type BundledLinuxHelper, type LinuxArch } from './manifest'
-import type { RemoteActionResult, RemoteAddCandidate, RemoteConsent, RemoteMachineView } from '../../shared/remote-machines'
+import type { RemoteActionResult, RemoteAddCandidate, RemoteConsent, RemoteMachineView, RemoteRemoveOptions } from '../../shared/remote-machines'
 import { REMOTE_OTHER_HELPER, REMOTE_TOKEN_RE } from '../../shared/remote-machines'
 
 /** What the app keeps of one added machine. */
@@ -294,6 +294,20 @@ const REFUSED: Record<string, string> = {
   'short-file': 'a file did not arrive whole',
   'file-is-a-folder': 'a folder there has the name of one of the session\'s files',
   held: 'its holder still runs',
+  // An account's own folder (2.1.3-beta.20 section 3: the accounts, account and signout scripts).
+  'accounts-folder-not-private': '~/.aicc/accounts there is not a private folder of yours',
+  'cannot-make-accounts-folder': '~/.aicc/accounts could not be made there',
+  'cannot-make-account-folder': 'the account\'s folder could not be made there',
+  'account-folder-not-the-apps': 'a folder there has the account\'s name but was not made by the app',
+  'account-folder-not-private': 'the account\'s folder there is not a private folder of yours',
+  'cannot-write-marker': 'the account\'s folder could not be marked as the app\'s',
+  'cannot-make-shared-folder': 'a shared folder in ~/.claude could not be made there',
+  'shared-folder-not-a-folder': '~/.claude there is not a folder',
+  'shared-folder-not-yours': '~/.claude there belongs to another user',
+  'cannot-relink': 'a link in the account\'s folder could not be replaced',
+  'cannot-link': 'a link in the account\'s folder could not be made',
+  'settings-is-a-folder': 'a folder there has the name of the account\'s settings file',
+  'bad-profile': 'the account\'s id is not one the app makes',
 }
 
 /** A refusal word a script printed, as a sentence. */
@@ -311,6 +325,18 @@ export interface MachinesDeps {
   readFile?: (file: string) => Promise<Buffer>
   /** How many open tabs go through the helper on this machine. */
   inUse: (did: string) => number
+  /** 2.1.3-beta.20 section 3.1.8: Remove signs out each account signed in on
+   *  the machine (each account folder there) once its holders are listed,
+   *  before the helper goes; a sign-out that fails stops Remove. Absent:
+   *  none. */
+  signOutAccounts?: (m: RemoteMachineRecord) => Promise<{ ok: boolean; message: string }>
+  /** For a machine that does not answer: the accounts still signed in there
+   *  and where to end each, as a sentence that starts with a space ('' for
+   *  none). Absent: none. */
+  accountsLeft?: (m: RemoteMachineRecord) => Promise<string>
+  /** A machine Remove took off the list: what the app keeps of it for the
+   *  run goes (its accounts' last read). */
+  forgotten?: (did: string) => void
   log: (message: string) => void
   now?: () => number
   random?: () => string
@@ -493,19 +519,33 @@ export class RemoteMachines {
     }
   }
 
-  /** Remove: refused while a tab or a held session runs there; then the one fixed removal script. */
-  async remove(did: unknown): Promise<RemoteActionResult> {
+  /** Remove: refused while a tab or a held session runs there; then (2.1.3-beta.20
+   *  section 3.1.8) each account signed in there is signed out, then the one
+   *  fixed removal script. `forget` (the machine did not answer, and the user
+   *  chose to remove it anyway): the app forgets it without reaching it, and
+   *  the answer names the accounts still signed in there and where to end
+   *  each. */
+  async remove(did: unknown, opts: RemoteRemoveOptions = {}): Promise<RemoteActionResult> {
     const m = typeof did === 'string' && DID_RE.test(did) ? this.get(did) : undefined
     if (!m) return { ok: false, message: MACHINE_TEXT.notFound }
     const n = this.deps.inUse(m.did)
     if (n > 0) return { ok: false, message: MACHINE_TEXT.inUse(n) }
+    const left = async (): Promise<string> => {
+      try { return (await this.deps.accountsLeft?.(m)) ?? '' } catch { return '' }
+    }
+    if (opts.forget === true) {
+      const text = await left()
+      this.forget(m)
+      this.deps.log(`[remote-helper] forgot ${m.user}@${m.host}:${m.port} (${m.did.slice(0, 8)}) without reaching it`)
+      return { ok: true, message: `The app forgot ${machineName(m)}; its folder in ~/.aicc there stays.${text}` }
+    }
     const target = { host: m.host, port: m.port, user: m.user }
     const install = this.installId()
     // The holders first: a session still held there keeps the folder.
     const nonce = newNonce()
     const listed = await runScript(this.deps.runner, target, 'list', [nonce, m.did, install, m.helper.folder, m.helper.sha256])
     const failed = this.sshFailed(m.host, listed)
-    if (failed) return { ok: false, message: `${m.host} could not be reached: ${failed}.` }
+    if (failed) return { ok: false, message: `${m.host} could not be reached: ${failed}.${await left()}` }
     const hash = readHashLine(listed.stdout, nonce)
     if (hash?.state === 'ok') {
       const line = afterHashLine(listed.stdout, nonce).split(/\r?\n/).find((l) => l.startsWith('{'))
@@ -513,13 +553,26 @@ export class RemoteMachines {
       if (!listing) return { ok: false, message: `The session helper on ${m.host} did not list its sessions, so nothing was removed.` }
       if (listing.sessions.length > 0) return { ok: false, message: MACHINE_TEXT.holds(listing.sessions.length) }
     }
+    // 2.1.3-beta.20 section 3.1.8: the accounts signed in there, signed out first.
+    let signedOut = ''
+    if (this.deps.signOutAccounts) {
+      const s = await this.deps.signOutAccounts(m)
+      if (!s.ok) return { ok: false, message: s.message }
+      signedOut = s.message ? ` ${s.message}` : ''
+    }
     const removed = await this.runRemove(target, m.did, install)
-    if (!removed.ok) return removed
+    if (!removed.ok) return signedOut ? { ok: false, message: `${removed.message}${signedOut}` } : removed
+    this.forget(m)
+    this.deps.log(`[remote-helper] removed ${m.user}@${m.host}:${m.port} (${m.did.slice(0, 8)})`)
+    return { ok: true, message: `Removed the session helper from ${machineName(m)}.${signedOut}` }
+  }
+
+  /** The machine off the list, and what the app keeps of it for the run. */
+  private forget(m: RemoteMachineRecord): void {
     const f = this.load()
     f.machines = f.machines.filter((x) => x.did !== m.did)
     this.save(f)
-    this.deps.log(`[remote-helper] removed ${m.user}@${m.host}:${m.port} (${m.did.slice(0, 8)})`)
-    return { ok: true, message: `Removed the session helper from ${machineName(m)}.` }
+    try { this.deps.forgotten?.(m.did) } catch { /* the app's own */ }
   }
 
   private async runRemove(target: SshTarget, did: string, install: string): Promise<RemoteActionResult> {

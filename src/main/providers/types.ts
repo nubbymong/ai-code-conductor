@@ -207,6 +207,16 @@ export interface RemoteLaunchOptions {
    *  section 3.2): the built-in tools are on and their server is started.
    *  False: the launch names no tool server of the app's. */
   readonly tools: boolean
+  /** 2.1.3-beta.20 section 3.1.7: the tab's account is signed in on the host
+   *  in a folder of its own, and the CLI runs with this as its config
+   *  folder: absolute, `<host home>/.aicc/accounts/<profile id>`. Absent: the
+   *  CLI runs on the host's own sign-in (a config with no account, or one
+   *  the host's own sign-in is). */
+  readonly configDir?: string
+  /** 2.1.3-beta.20 section 3.1.4: a sign-in tab. The launch runs the CLI's
+   *  own sign-in in `configDir` instead of a session, for the account of
+   *  `email` when this computer knows it. */
+  readonly signIn?: { readonly email?: string }
 }
 
 /** The machine a remote launch runs on, as its last check on the Machines
@@ -260,6 +270,47 @@ export interface RemoteAccountUsage {
   profiles(): Promise<ReadonlyArray<{ id: string; accountEmail?: string }>>
   /** One usage read of one of those profiles. */
   usage(profileId: string): Promise<AccountUsage>
+}
+
+/** 2.1.3-beta.20 section 3: a sign-in's two files, the one that names its
+ *  account and the one that holds its credentials: paths under the host
+ *  user's home folder for the host's own sign-in, plain names in the
+ *  account's folder for an account's. */
+export interface RemoteSignInFiles {
+  readonly identity: string
+  readonly credentials: string
+}
+
+/**
+ * 2.1.3-beta.20 section 3 (Sign in on this machine; ADR-030 D7 Standard
+ * login): what core needs of a provider to keep its accounts signed in on a
+ * host, each in a folder of its own there (`~/.aicc/accounts/<profile id>/`,
+ * which core makes, owner-only). Every name, key and word here is the
+ * package's; core puts each through its own pattern before a script takes it,
+ * and the helper's field mode reads only the keys on its own list.
+ */
+export interface RemoteAccounts {
+  /** The provider's accounts on this computer, in their order, each with
+   *  the email it is signed in as. */
+  profiles(): Promise<ReadonlyArray<{ id: string; accountEmail?: string; name?: string }>>
+  /** A sign-in's files: the host's own, and an account folder's. */
+  readonly files: { readonly own: RemoteSignInFiles; readonly folder: RemoteSignInFiles }
+  /** The keys of a sign-in's fields: the account its identity file names,
+   *  and its credentials' plan, tier and expiry (an integer, ms). */
+  readonly keys: { readonly identity: string; readonly plan: string; readonly tier: string; readonly expiresAt: string }
+  /** The account folder's links (section 3.1.3), each only ever into the
+   *  CLI's own folder in the host user's home (`home`, a plain name): the
+   *  folders, made there when missing, and the files. */
+  readonly links: { readonly home: string; readonly folders: readonly string[]; readonly files: readonly string[] }
+  /** The variable that names the CLI's config folder: the sign-out sets it
+   *  to the account's folder. */
+  readonly configVar: string
+  /** The CLI's own sign-out (section 3.1.8): a program name and its words. */
+  readonly signOut: { readonly program: string; readonly args: readonly string[] }
+  /** The account folder's settings file: its name, and its text from a
+   *  launch's host reads (the host user's own settings made fit for an
+   *  account's folder); null content: none, and a copy there goes. */
+  settingsCopy(reads: readonly RemoteHostFile[]): { readonly name: string; readonly content: string | null }
 }
 
 /** A host read as it came back: its text, or null when it was not read (not
@@ -320,6 +371,11 @@ export interface ProviderRemoteLaunch {
    *  reading serves every tab on an account. Absent: the tab shows no bars
    *  of its own and says they are not available. */
   accountUsage?(): RemoteAccountUsage
+  /** 2.1.3-beta.20 section 3 (Sign in on this machine): the provider's
+   *  accounts as they sign in on a host, each in a folder of its own there
+   *  (RemoteAccounts). Absent: its accounts are not signed in on hosts, and
+   *  its tabs run on the host's own sign-in. */
+  accounts?(): RemoteAccounts
   /** The tab's status line from one status the CLI posted, already cut to
    *  the launch's `statusKeep` (2.1.3-beta.18 section 3.2). Untrusted input;
    *  a remote path in it is display text only, never a transcript path.
