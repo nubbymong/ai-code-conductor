@@ -4,11 +4,15 @@
  * a 1280 px page, two on a 1024 px one, then one; no card is wider than its
  * column and nothing scrolls sideways, at any width.
  *
- * jsdom lays nothing out (the unit tests pin the classes and the order), so
- * this measures them here, in the real app with its real stylesheet, by
+ * jsdom lays nothing out (the unit tests pin the order, and that the page
+ * draws with these class constants: account-usage-panel-streaming.test.tsx),
+ * so this measures them here, in the real app with its real stylesheet, by
  * mounting a page-shaped probe built from the same class constants the page
  * draws with (account-usage-layout.ts): the page body, a band's grid and nine
  * cards, one of them named by a long unbroken email.
+ *
+ * It runs on CI in the Snap e2e job (ci.yml, the Windows runner) on a dispatch
+ * with snap_e2e, after the Snap check; no pull request or push runs it.
  *
  * The widths are the page's, not the window's. The window is at least 1280 px
  * wide (src/main/index.ts), and the sidebar beside the page is 200 to 420 px
