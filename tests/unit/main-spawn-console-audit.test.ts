@@ -15,11 +15,16 @@ import * as path from 'path'
  * on a spawn whose output someone expects to capture: the child gets no console
  * of its own, goes looking for its parent's, and — measured, matrix row 2 —
  * still bleeds while the pipe collects 0 bytes. Every `detached: true` in main
- * today is paired with `stdio: 'ignore'`, i.e. "we deliberately want no output
- * from this one" (a browser, an installer), which is fine and stays fine.
+ * at #379 was paired with `stdio: 'ignore'`, i.e. "we deliberately want no
+ * output from this one" (a browser, an installer), which is fine and stays
+ * fine.
  *
  * So: if you add `detached: true`, you must also say `stdio: 'ignore'`. If you
  * want the output, drop `detached` — main already has no console.
+ *
+ * One spawn is excepted by name (POSIX_OWN_SESSION_SPAWN below): it never runs
+ * on Windows, where `detached` is DETACHED_PROCESS; on POSIX it is setsid, and
+ * that spawn reads its answer from a piped stdout.
  */
 
 const MAIN_DIR = path.resolve(__dirname, '../../src/main')
@@ -91,7 +96,8 @@ function auditLabel(file: string): string {
  * process group of its own, so the question's deadline can SIGKILL the whole
  * group (killGroup, process.kill(-pgid)), and stdout is piped because the
  * answer is read from it. The test "the one exception still finds its
- * spawn" keeps it narrow and live.
+ * spawn, and the same line anywhere else is an offender" keeps it narrow and
+ * live.
  */
 const POSIX_OWN_SESSION_SPAWN = {
   file: 'providers/claude/linux-clipboard-tools.ts',
@@ -149,11 +155,13 @@ describe('main-process spawn options (#379 fix A audit)', () => {
     expect(besideTheException(found)).toEqual([])
 
     // The same line pasted into any other main file, or into a new file whose
-    // name starts with the excepted one, is still an offender.
+    // name starts with the excepted one or whose path ends with it, is still an
+    // offender.
     const pasted = `  ${POSIX_OWN_SESSION_SPAWN.spawn}\n`
     const others = [
       ...files.map(auditLabel).filter((label) => label !== POSIX_OWN_SESSION_SPAWN.file),
       'providers/claude/linux-clipboard-tools-copy.ts',
+      'remote/providers/claude/linux-clipboard-tools.ts',
     ]
     expect(others.length).toBeGreaterThan(20)
     for (const label of others) {
