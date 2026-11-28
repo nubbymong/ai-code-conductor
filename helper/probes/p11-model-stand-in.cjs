@@ -22,7 +22,11 @@
 // inline picture is decoded and named by its SHA-256, its kind (JPEG, PNG,
 // GIF, WebP) and its width and height read from its header; an image given
 // another way (a URL, a file id) is named by that way only. The picture's
-// bytes are never kept or written anywhere.
+// bytes are never kept or written anywhere. Since 2.1.3-beta.21 (ADR-032,
+// plan phase 2, 2.1.7) a PNG is named by the hash of its decoded pixels too
+// (rgbaSha256, and rgbSha256 as a reading; ./png-rgba.cjs): a CLI re-encodes
+// what it reads from the clipboard, so its bytes differ from the app's while
+// its pixels do not.
 //
 // Events go to the `onEvent` callback with the time: the request's path,
 // kind, the run it names, its tool count, its images, and the first 400
@@ -31,6 +35,7 @@
 // body is never kept.
 const http = require('http');
 const crypto = require('crypto');
+const { pngPixelHashes } = require('./png-rgba.cjs');
 
 const MARKER_RE = /p11 probe ([a-z]+-[a-z]+(?:-[a-z]+)?-\d{1,2})\b/;
 const MAX_BODY = 32 * 1024 * 1024;
@@ -40,7 +45,8 @@ const MAX_BODY = 32 * 1024 * 1024;
 function pictureInfo(buf) {
   const info = { bytes: buf.length, sha256: crypto.createHash('sha256').update(buf).digest('hex'), kind: 'unknown', width: null, height: null };
   if (buf.length >= 24 && buf.readUInt32BE(0) === 0x89504e47 && buf.readUInt32BE(4) === 0x0d0a1a0a) {
-    return { ...info, kind: 'png', width: buf.readUInt32BE(16), height: buf.readUInt32BE(20) };
+    const px = pngPixelHashes(buf);
+    return { ...info, kind: 'png', width: buf.readUInt32BE(16), height: buf.readUInt32BE(20), ...(px.unread ? { pixelsUnread: px.unread } : { rgbaSha256: px.rgbaSha256, rgbSha256: px.rgbSha256 }) };
   }
   if (buf.length >= 10 && buf.toString('latin1', 0, 4) === 'GIF8') {
     return { ...info, kind: 'gif', width: buf.readUInt16LE(6), height: buf.readUInt16LE(8) };
