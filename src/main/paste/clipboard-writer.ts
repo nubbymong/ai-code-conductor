@@ -12,11 +12,12 @@
 // that call leaves (both CLIs read CF_DIB; one of them reads the registered
 // PNG format first).
 //
-// macOS and Linux: not in this phase. Phase 3 (plan 3.1) fills each with the
-// formats its CLIs read (macOS public.png and public.tiff, Linux image/png),
-// measured by PM1 and PL1. Until then a write there answers `not-yet` and
-// nothing is written.
+// macOS and Linux (plan 3.1): ./unix-writers.ts, in the formats each OS's
+// CLIs read (macOS public.png and public.tiff, Linux image/png;
+// ./picture-formats.ts), measured by PM1 and PL1. No writer answers
+// `not-yet` since then; the result stays for an OS with no writer.
 import { clipboard, ClipboardItem, type NativeImage } from 'electron'
+import { writeLinuxClipboardPicture, writeMacClipboardPicture } from './unix-writers'
 
 /** What one write did. */
 export type ClipboardWriteResult = 'written' | 'failed' | 'not-yet'
@@ -34,11 +35,7 @@ export const writeWindowsClipboardPicture: PlatformClipboardWriter = async (png)
   }
 }
 
-/** macOS: filled by plan 3.1 (public.png and public.tiff). */
-export const writeMacClipboardPicture: PlatformClipboardWriter = async () => 'not-yet'
-
-/** Linux: filled by plan 3.1 (image/png). */
-export const writeLinuxClipboardPicture: PlatformClipboardWriter = async () => 'not-yet'
+export { writeMacClipboardPicture, writeLinuxClipboardPicture }
 
 /** The writer for `platform`. */
 export function clipboardWriterFor(platform: NodeJS.Platform): PlatformClipboardWriter {
