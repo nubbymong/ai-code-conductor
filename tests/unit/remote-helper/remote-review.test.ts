@@ -130,7 +130,7 @@ describe('a Claude Code tab through the helper registers its folder there at its
 
   it('a tab in the home folder there is not registered, and the log says why', () => {
     expect(start('rr-tab-home', '~')).toEqual({ through: true, target: null })
-    expect(logs.some((l) => l.includes('rr-tab-home: codex_review NOT registered'))).toBe(true)
+    expect(logs.some((l) => l.includes('rr-tab-home: a review on its machine is NOT registered'))).toBe(true)
   })
 
   it('a shell-only tab (the usual path) is not registered', () => {

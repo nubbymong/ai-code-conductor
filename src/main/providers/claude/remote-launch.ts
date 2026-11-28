@@ -348,7 +348,7 @@ export const claudeRemoteLaunch: ProviderRemoteLaunch = {
   accountUsage: () => CLAUDE_ACCOUNT_USAGE,
   accounts: () => CLAUDE_REMOTE_ACCOUNTS,
   // 2.1.3-beta.21 (aicc_planning#446): a Claude Code tab asks for a review
-  // (codex_review) on its machine.
+  // on its machine, run there.
   reviewsOnMachine: true,
   launch: (o: RemoteLaunchOptions, m: RemoteLaunchMachine, helper: RemoteHelperCommands, reads: readonly RemoteHostFile[]): RemoteLaunch => (o.signIn ? claudeSignInLaunch(o, m) : {
     program: m.claudePath ?? REMOTE_CLI_FALLBACK,

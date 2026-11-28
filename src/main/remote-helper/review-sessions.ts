@@ -4,9 +4,9 @@
  * working folder there. A Claude Code tab through the session helper
  * registers at its start (./index.ts remoteHelperPty), once per start, and
  * its registration goes with the session's (conductor-mcp-server.ts
- * unregisterCodexReviewSession, at every spawn's teardown and at its exit).
+ * unregister at every spawn's teardown and at its exit).
  * Registering does not offer the tool: the tool host decides per connection
- * (codex-review-mcp-tool.ts remoteCodexReviewOffered).
+ * (conductor-mcp-server.ts, from the machine's record).
  *
  * SECURITY: a folder that is the host's home folder or a folder above it is
  * never registered, as lifecycle.ts refuses the home folder on this computer:

@@ -1,7 +1,7 @@
 /**
  * A review on the machine a remote session runs on (2.1.3-beta.21,
  * nubbymong/aicc_planning#446): what of it is the remote side's, with no CLI
- * named here. The review tool (codex-review-mcp-tool.ts) decides what runs
+ * named here. The review tool (conductor-mcp-server.ts registers it) decides what runs
  * and what it is sent; this file reads the change there and runs one program
  * there.
  *
@@ -22,7 +22,7 @@
  * - Limits (docs/remote/helper-protocol.md section 10): the host read is a
  *   one-shot exec (EXEC_TIMEOUT_MS, 60 s); the run mode's own limit is the
  *   review's timeout, and its exec gets REMOTE_RUN_EXTRA_MS (30 s) more; an
- *   MCP tool call carrying a codex_review is allowed its timeout plus
+ *   MCP tool call carrying a review is allowed its timeout plus
  *   REMOTE_RELAY_EXTRA_MS (90 s), at most REMOTE_RELAY_MAX_MS (990 s), so the
  *   relay's limit stays above the run's.
  *
@@ -39,10 +39,10 @@ import { machineName, refusalText, type RemoteMachineRecord } from './machines'
 
 /** The run mode's exec past the review's own timeout. */
 export const REMOTE_RUN_EXTRA_MS = 30_000
-/** An MCP tool call carrying a codex_review, past the review's timeout: the
+/** An MCP tool call carrying a review, past the review's timeout: the
  *  host read's 60 s and the run's 30 s. */
 export const REMOTE_RELAY_EXTRA_MS = EXEC_TIMEOUT_MS + REMOTE_RUN_EXTRA_MS
-/** The longest a codex_review's tool call is allowed: 900 s and 90 s. */
+/** The longest a review's tool call is allowed: 900 s and 90 s. */
 export const REMOTE_RELAY_MAX_MS = 990_000
 
 /** A review's limits on a host, for its own timeout: the host read, the run's exec, and the tool call. */

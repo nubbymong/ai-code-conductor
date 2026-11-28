@@ -425,17 +425,17 @@ export function remoteHelperPty(win: OutputWindow, sessionId: string, options: R
   }
   d.log(`[remote-helper] ${sessionId}: through the session helper on ${m.user}@${m.host}:${m.port} (${m.did.slice(0, 8)}), session ${pty.sid}${kind === 'until-ended' ? ', kept until it is ended' : ''}`)
   // 2.1.3-beta.21 (aicc_planning#446): a tab whose provider's remote launch
-  // says it reviews on its machine (a Claude Code tab, whose reviewer is
-  // Codex) may ask for a review there, in its folder there; never for the
+  // says it reviews on its machine (a Claude Code tab) may ask for a review
+  // there, in its folder there; never for the
   // home folder there or a folder above it, as a local tab is never
   // registered for its home folder (lifecycle.ts). Its registration goes with
-  // the session's (conductor-mcp-server.ts unregisterCodexReviewSession);
+  // the session's (the tool host's unregister at the session's teardown);
   // whether the tool is offered is decided per connection, from the
   // machine's record.
   if (remote.reviewsOnMachine === true && options.shellOnly !== true) {
     const reviewCwd = remoteCwd(ssh.remotePath, m.home)
     if (!registerRemoteReviewSession(sessionId, { did: m.did, cwd: reviewCwd }, m.home)) {
-      d.log(`[remote-helper] ${sessionId}: codex_review NOT registered: its folder on ${m.host} resolves to the home folder or above it. Set a real project folder to enable review.`)
+      d.log(`[remote-helper] ${sessionId}: a review on its machine is NOT registered: its folder on ${m.host} resolves to the home folder or above it. Set a real project folder to enable review.`)
     }
   }
   openTabs.set(sessionId, pty)
