@@ -1021,11 +1021,14 @@ export type RunScreenImageResult =
  *  the sentence and Enter. Otherwise why not: the session gone; the ready
  *  composer not seen in the wait before the key (`busy`, a press from outside
  *  the terminal only); no placeholder within the wait; the sentence not
- *  confirmed (the picture is at the prompt, unsent); main reads no screen
- *  for the session (`no-screen`). */
+ *  confirmed (the picture is at the prompt, unsent, and nothing was taken
+ *  back); a prompt up after the placeholder, before the sentence was sent
+ *  (`prompt-on-screen`: Enter would answer the prompt, so the hint does not
+ *  ask for it; review round 2, R2-1); main reads no screen for the session
+ *  (`no-screen`). */
 export type RunScreenClipboardResult =
   | { outcome: 'placeholder' | 'sent' }
-  | { outcome: 'session-gone' | 'busy' | 'no-placeholder' | 'sentence-not-sent' | 'no-screen' }
+  | { outcome: 'session-gone' | 'busy' | 'no-placeholder' | 'sentence-not-sent' | 'prompt-on-screen' | 'no-screen' }
 
 /** ADR-032 (row 14): a CLI's image paste key, as the bytes of one write, or
  *  none: `unbound`, the account's keybindings took the default away and

@@ -184,6 +184,7 @@ function fromDoor(result: ClipboardPasteDoorResult): PasteKeyResult {
     case 'no-placeholder': return notPasted('no-placeholder')
     case 'busy': return notPasted('busy')
     case 'sentence-not-sent': return notPasted('sentence-not-sent')
+    case 'prompt-on-screen': return notPasted('prompt-on-screen')
     case 'session-gone': return notPasted('session-gone')
     case 'refused-key': return notPasted('no-key')
     default: return notPasted('not-available')

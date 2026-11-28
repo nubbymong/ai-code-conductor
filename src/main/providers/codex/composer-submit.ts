@@ -5,7 +5,9 @@
 // prompt button (#333), since 2.1.3-beta.10 section A2 the Watchdog's retry
 // (both through src/main/session-input), and since 2.1.3-beta.17 C6 the Codex
 // image rule for the sentence after an image's placeholder
-// (./session-screen.ts, pasteImageIntoCodexComposer).
+// (./session-screen.ts, pasteImageIntoCodexComposer), and since
+// 2.1.3-beta.21 (ADR-032) the clipboard paste for its sentence
+// (pasteClipboardIntoCodexComposer), which asks for no take-back.
 //
 // PURE: the rule only. The session's screen, its writer, its liveness and the
 // clock are injected (the driver is ./session-screen.ts, which reads a bounded
@@ -150,6 +152,14 @@ export interface ComposerSubmitOptions {
    *  typed is always confirmed or taken back. The Watchdog's retry sets it to
    *  "its incident is still the one it was sent for". */
   stillWanted?: () => boolean
+  /** ADR-032 decision 6 (2.1.3-beta.21 review round 2, R2-1): whether a
+   *  text that was typed but not confirmed is taken back with Ctrl+U (step
+   *  6). Absent or true: it is, as for every caller before 2.1.3-beta.21.
+   *  False: nothing is taken back and no further key is sent; the answer is
+   *  `not-drawn` or `too-tall` as it would have been. The clipboard paste's
+   *  sentence sets it: Ctrl+U clears Codex's whole composer, the picture's
+   *  placeholder with it, and that rule takes nothing back. */
+  takeBack?: boolean
 }
 
 type Ready = 'ready' | 'blocked' | 'waiting'
@@ -220,7 +230,9 @@ function holdsOnlyOwnText(draft: string, text: string, folded: boolean): boolean
  *    and empty, and reports not
  *    delivered (`too-tall` when the composer had grown to its full height,
  *    else `not-drawn`). Whether Ctrl+U clears Codex's rare held-text state
- *    (PB9, not reproduced) is unknown; the phase record carries it.
+ *    (PB9, not reproduced) is unknown; the phase record carries it. A caller
+ *    that sets `takeBack: false` (the clipboard paste, ADR-032 decision 6)
+ *    gets the same answer at once, with no Ctrl+U and no further key.
  * Never sends Ctrl+C. A run that ends meanwhile: `session-gone`, nothing more.
  */
 export async function submitToCodexComposer(text: string, deps: ComposerSubmitDeps, opts: ComposerSubmitOptions): Promise<SubmitTextResult> {
@@ -318,6 +330,13 @@ export async function submitToCodexComposer(text: string, deps: ComposerSubmitDe
   // no prompt up; then the clear is read on screen.
   const { rows } = deps.size()
   const reason: SubmitNotDeliveredReason = !folded && tallest >= rows - COMPOSER_ROW_MARGIN ? 'too-tall' : 'not-drawn'
+  // ADR-032 decision 6 (review round 2, R2-1): a caller that takes nothing
+  // back gets its answer here, with no key sent. The last read above had no
+  // prompt up.
+  if (opts.takeBack === false) {
+    log('the text was not confirmed; nothing taken back (the clipboard route)')
+    return notDelivered(reason)
+  }
   const ingested = wroteAt + submitIngestionWindowMs(codePoints)
   if (deps.now() < ingested) await deps.sleep(ingested - deps.now())
   if (!deps.live()) return notDelivered('session-gone')

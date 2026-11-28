@@ -14,9 +14,15 @@
 //  - A press in the terminal (no sentence): the key at once, whatever the
 //    composer holds; then a placeholder more than before; nothing more.
 //  - Never Ctrl+C, never a path, never a bracketed paste.
+//  - Review round 2 (R2-1): the sentence typed but not drawn within the
+//    primitive's confirm bound: `sentence-not-sent`, no Ctrl+U, and the
+//    picture still in the composer (ADR-032 decision 6: no take-back); a
+//    prompt up after the sentence: `prompt-on-screen`, whose hint does not
+//    ask for Enter. Both red on 713c585f (Ctrl+U cleared the picture; the
+//    prompt answered `sentence-not-sent`).
 // Red on 0c54a1c6: no such rule. Mutants this must catch: the key split over
 // two writes; the key sent inside a bracketed paste; a take-back after no
-// placeholder.
+// placeholder; the sentence handed to the primitive without `takeBack: false`.
 import { describe, it, expect, vi } from 'vitest'
 
 vi.mock('../../../src/main/debug-logger', () => ({ logInfo: vi.fn(), logWarn: vi.fn(), logError: vi.fn() }))
@@ -45,6 +51,10 @@ interface SimOptions {
   typed?: string
   /** A trust prompt comes up this long after the key. */
   promptAfterKeyMs?: number
+  /** How long typed text (not the key) takes to draw; default drawMs. */
+  textDrawMs?: number
+  /** A trust prompt comes up this long after typed text (not the key). */
+  promptAfterTextMs?: number
 }
 
 function sim(opts: SimOptions = {}) {
@@ -91,15 +101,21 @@ function sim(opts: SimOptions = {}) {
         return
       }
       if (data === TAKE_BACK_KEY) { pending = null; images.length = 0; text = ''; return }
-      if ((data === ESC_V || data === CTRL_V) && opts.promptAfterKeyMs !== undefined) promptFrom = t + opts.promptAfterKeyMs
-      pending = { data, at: t + (opts.drawMs ?? 200) }
+      const isKey = data === ESC_V || data === CTRL_V
+      if (isKey && opts.promptAfterKeyMs !== undefined) promptFrom = t + opts.promptAfterKeyMs
+      if (!isKey && opts.promptAfterTextMs !== undefined) promptFrom = t + opts.promptAfterTextMs
+      pending = { data, at: t + (isKey ? (opts.drawMs ?? 200) : (opts.textDrawMs ?? opts.drawMs ?? 200)) }
     },
     live: () => alive,
     now: () => t,
     sleep: async (ms) => { t += Math.max(0, ms) },
     log: () => {},
   }
-  return { deps, writes, turns, end: () => { alive = false }, get now() { return t } }
+  return {
+    deps, writes, turns, end: () => { alive = false }, get now() { return t },
+    /** The pictures the simulated composer holds now. */
+    get images() { return [...images] },
+  }
 }
 
 const datas = (w: Array<{ data: string }>): string[] => w.map((x) => x.data)
@@ -143,6 +159,22 @@ describe('a press from outside the terminal, and Snap', () => {
     expect(datas(s.writes)).toEqual([ESC_V])
   })
 
+  it('the sentence typed but not drawn within the confirm bound: sentence-not-sent, no Ctrl+U, the picture still in the composer', async () => {
+    const s = sim({ textDrawMs: 8_000 })
+    expect(await pasteClipboardIntoCodexComposer(ESC_V, SENTENCE, s.deps, OPTS)).toEqual({ outcome: 'sentence-not-sent' })
+    expect(datas(s.writes)).toEqual([ESC_V, ` ${SENTENCE}`])
+    expect(s.images).toEqual([PICTURE])
+    expect(s.turns).toEqual([])
+  })
+
+  it('a prompt after the sentence is typed: prompt-on-screen (its hint asks for no Enter), nothing more written', async () => {
+    const s = sim({ promptAfterTextMs: 50 })
+    expect(await pasteClipboardIntoCodexComposer(ESC_V, SENTENCE, s.deps, OPTS)).toEqual({ outcome: 'prompt-on-screen' })
+    expect(datas(s.writes)).toEqual([ESC_V, ` ${SENTENCE}`])
+    expect(s.images).toEqual([PICTURE])
+    expect(s.turns).toEqual([])
+  })
+
   it('the run ends after the key: session-gone, nothing more', async () => {
     const s = sim({ drawMs: 1_000 })
     const p = pasteClipboardIntoCodexComposer(ESC_V, SENTENCE, s.deps, OPTS)
@@ -175,7 +207,7 @@ describe('a press in the terminal (the user is writing)', () => {
 
 describe('what the rule never writes', () => {
   it('no Ctrl+C, no take-back, no bracketed paste, no path, in any case above', async () => {
-    for (const o of [{}, { clipboard: null }, { busyUntil: 60_000 }, { promptAfterKeyMs: 10 }, { typed: 'x ' }] as SimOptions[]) {
+    for (const o of [{}, { clipboard: null }, { busyUntil: 60_000 }, { promptAfterKeyMs: 10 }, { typed: 'x ' }, { textDrawMs: 8_000 }, { promptAfterTextMs: 50 }] as SimOptions[]) {
       for (const sentence of [SENTENCE, null]) {
         const s = sim(o)
         await pasteClipboardIntoCodexComposer(ESC_V, sentence, s.deps, OPTS)

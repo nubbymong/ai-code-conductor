@@ -32,7 +32,9 @@
 // clipboard already holds a picture; the copied-file rule ignored; the path
 // fallback restored (a path handed to the door). Red on 0fce95b6: a copied
 // file the writer could not write there answered the generic line (R1-3);
-// the token was taken for no session (R1-2).
+// the token was taken for no session (R1-2). Red on 713c585f: the door's
+// `prompt-on-screen` (a prompt up before the sentence was sent) had no hint
+// line of its own, so it was told to press Enter (review round 2, R2-1).
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 vi.mock('../../../src/main/debug-logger', () => ({ logInfo: vi.fn(), logWarn: vi.fn(), logError: vi.fn() }))
@@ -201,10 +203,16 @@ describe('a Claude Code or Codex session on this computer', () => {
   })
 
   it('the door\'s answers as the hint\'s words', async () => {
-    for (const [outcome, reason] of [['no-placeholder', 'no-placeholder'], ['busy', 'busy'], ['sentence-not-sent', 'sentence-not-sent'], ['session-gone', 'session-gone'], ['refused-key', 'no-key'], ['not-taken', 'not-available'], ['no-screen', 'not-available']] as const) {
+    for (const [outcome, reason] of [['no-placeholder', 'no-placeholder'], ['busy', 'busy'], ['sentence-not-sent', 'sentence-not-sent'], ['prompt-on-screen', 'prompt-on-screen'], ['session-gone', 'session-gone'], ['refused-key', 'no-key'], ['not-taken', 'not-available'], ['no-screen', 'not-available']] as const) {
       doorAnswer = { outcome }
       expect(await press('image', false), outcome).toEqual({ outcome: 'not-pasted', reason, note: PASTE_NOTES[reason] })
     }
+  })
+
+  it('review round 2 (R2-1): a prompt up before the sentence was sent asks for no Enter (it would answer the prompt) and no second paste', () => {
+    expect(PASTE_NOTES['prompt-on-screen']).toBeTruthy()
+    expect(PASTE_NOTES['prompt-on-screen']).not.toMatch(/enter/i)
+    expect(PASTE_NOTES['prompt-on-screen']).not.toMatch(/Alt\+V/)
   })
 
   it('an account binding the table cannot send: no key, nothing typed, the hint for Claude Code\'s own key', async () => {

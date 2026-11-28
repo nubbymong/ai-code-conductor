@@ -45,6 +45,10 @@ export type PasteNotPastedReason =
   | 'no-placeholder'
   /** The sentence after the placeholder was not sent (the picture is at the prompt). */
   | 'sentence-not-sent'
+  /** A prompt came up after the placeholder, before the sentence was sent
+   *  (review round 2, R2-1): Enter would answer the prompt, so the hint does
+   *  not ask for it. */
+  | 'prompt-on-screen'
   /** The CLI was not at a composer that takes a paste within the wait. */
   | 'busy'
   /** The session's key cannot be sent (an account binding the app cannot express). */
@@ -116,6 +120,7 @@ export const PASTE_NOTES: Readonly<Record<PasteNotPastedReason, string>> = {
   'too-large': 'Image too large to paste (max 10 MB).',
   'no-placeholder': 'The picture is on the clipboard, but the session did not show it. Press Alt+V in the session to paste it.',
   'sentence-not-sent': 'The picture is at the prompt and was not sent. Press Enter in the session to send it.',
+  'prompt-on-screen': 'The session is asking a question, so the picture was not sent. Answer the question in the session first; the picture may still be at its prompt.',
   busy: 'The session was busy, so nothing was pasted. The picture is on the clipboard: press Alt+V in the session.',
   'no-key': 'The picture is on the clipboard. Press Claude Code\'s image paste key in the session to paste it.',
   'not-written': 'The picture could not be put on the clipboard, so nothing was pasted.',

@@ -613,9 +613,13 @@ function draftPlaceholders(draft: string | null): number {
  *    more typed, nothing taken back);
  * 4. the sentence, after a space, through the submit primitive past the
  *    placeholder, as the path rule's step 5: Enter only once the screen
- *    shows the placeholder and the whole sentence. Not confirmed: the
- *    primitive's own rule for its text applies, and the answer is
- *    `sentence-not-sent`.
+ *    shows the placeholder and the whole sentence. Not confirmed: nothing
+ *    is taken back (the primitive is asked for `takeBack: false`, since its
+ *    Ctrl+U would clear the placeholder too: review round 2, R2-1), no
+ *    further key is sent, and the answer is `sentence-not-sent` (the picture
+ *    is at the prompt, unsent). A prompt up before the sentence was sent:
+ *    `prompt-on-screen`, whose hint asks for no Enter (Enter would answer
+ *    the prompt).
  * Without one (a press in the terminal: the user is writing): the key at
  * once, whatever the composer holds, then a placeholder more than the
  * composer held before the key, within the wait; nothing more is typed.
@@ -694,9 +698,10 @@ export async function pasteClipboardIntoCodexComposer(key: string, sentence: str
     write: (data) => { typed = true; deps.write(data) },
     log: (msg) => { try { deps.log?.(`the sentence: ${msg}`) } catch { /* a log line never breaks the rule */ } },
   }
-  const result = await submitToCodexComposer(` ${sentence}`, past, { readyWaitMs: IMAGE_SENTENCE_READY_WAIT_MS })
+  const result = await submitToCodexComposer(` ${sentence}`, past, { readyWaitMs: IMAGE_SENTENCE_READY_WAIT_MS, takeBack: false })
   if (result.delivered) return { outcome: 'sent' }
   if (result.reason === 'session-gone') return { outcome: 'session-gone' }
+  if (result.reason === 'prompt-on-screen') return { outcome: 'prompt-on-screen' }
   return { outcome: 'sentence-not-sent' }
 }
 
