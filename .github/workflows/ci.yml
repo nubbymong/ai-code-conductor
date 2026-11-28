@@ -18,7 +18,8 @@ on:
   # pinned ones every run checks. On a dispatch the codex-conformance job runs,
   # with the always-on changelog check, probe-p19, probe-p21, snap-e2e and
   # remote-helper-e2e when the dispatch names them (probe_p19, probe_p21,
-  # snap_e2e, remote_helper_e2e), the
+  # snap_e2e, remote_helper_e2e; snap_e2e_paste adds the Snap spec's clipboard
+  # paste part to snap-e2e), paste-e2e when paste_e2e names its part, the
   # claude-conformance job when
   # claude_rc_version is set, and
   # the Helper job too when the `helper` input is set; every other job's
@@ -72,6 +73,16 @@ on:
         type: boolean
         required: false
         default: false
+      snap_e2e_paste:
+        description: 'With snap_e2e: also run the clipboard image paste''s part of the Snap spec (ADR-032): probe runs probes PW1 and PW2, gate runs C2 on the path route and the clipboard route and C4 under the load grader; empty runs neither'
+        type: string
+        required: false
+        default: ''
+      paste_e2e:
+        description: 'Run the clipboard image paste end-to-end check (paste-e2e, ADR-032) on the macOS and Ubuntu runners: probe runs probes PM1 and PM2 (macOS) and PL1 (Linux), readings runs the app''s own route into Claude Code and Codex; empty runs neither'
+        type: string
+        required: false
+        default: ''
       remote_helper_e2e:
         description: 'Run the remote helper device check (remote-helper-e2e) on the Linux runner: a localhost sshd, the static helper and the fake CLI built here, and the app''s remote-helper code adding the machine, holding a session, carrying its status line, hook events and tool calls, re-attaching and removing it; the readings and the two programs are uploaded'
         type: boolean
@@ -1292,11 +1303,25 @@ jobs:
   # shim as it finds a user's npm install. Its model is a stand-in on a
   # loopback port (probe P11's) and its config names one tool server that
   # cannot start, so Codex shows its warning count.
+  #
+  # The clipboard image paste (plan 2.1.3-beta.21 phase 2; ADR-032): with
+  # snap_e2e_paste set, Claude Code 2.1.332 is installed as well, from its
+  # platform package with scripts off into a prefix of its own (as the
+  # claude-conformance job installs it), and the spec's part three runs:
+  # `probe` (PW2, then PW1 for Codex and for Claude Code) or `gate` (C2 on
+  # the path route, C2 on the clipboard route and C4, eight presses each under
+  # the load grader). The job's timeout is set from the press count times each
+  # test's bound plus the build: 45 minutes for the build and parts one and
+  # two; `probe` adds PW2 (2 min) and two PW1 groups, each its start (3.5 min)
+  # and its one test's bound (9 min) and close (2 min), so 70; `gate` adds
+  # three groups, each its start (3.5 min), 8 presses of 70 s (9.3 min) and
+  # its close (2 min), so 45 + 3 x 14.8, rounded up to 95. Never raised to
+  # answer a red run.
   snap-e2e:
     if: github.event_name == 'workflow_dispatch' && inputs.snap_e2e == true
     name: Snap e2e (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 45
+    timeout-minutes: ${{ inputs.snap_e2e_paste == 'gate' && 95 || inputs.snap_e2e_paste == 'probe' && 70 || 45 }}
     permissions:
       contents: read
     strategy:
@@ -1354,6 +1379,31 @@ jobs:
           NPM_CACHE: ${{ runner.temp }}/npm-snap-codex-cache
         run: npm install --global --prefix "$PREFIX" --ignore-scripts --cache "$NPM_CACHE" --no-audit --no-fund "@openai/codex@$CODEX_VERSION"
 
+      # The Claude Code part three's PW1 and C4 run (see the job's comment above).
+      - name: Resolve this runner's Claude Code package
+        id: claudepkg
+        if: ${{ inputs.snap_e2e_paste != '' }}
+        run: node tests/integration/claude-conformance-ci.mjs package
+
+      - name: Install Claude Code 2.1.332 into its own prefix
+        if: ${{ inputs.snap_e2e_paste != '' }}
+        shell: bash
+        env:
+          CLAUDE_VERSION: '2.1.332'
+          CLAUDE_PACKAGE: ${{ steps.claudepkg.outputs.package }}
+          PREFIX: ${{ runner.temp }}/snap-claude
+          NPM_CACHE: ${{ runner.temp }}/npm-snap-claude-cache
+        run: npm install --global --prefix "$PREFIX" --ignore-scripts --cache "$NPM_CACHE" --no-audit --no-fund "$CLAUDE_PACKAGE@$CLAUDE_VERSION"
+
+      - name: Locate the installed Claude Code
+        id: claudebin
+        if: ${{ inputs.snap_e2e_paste != '' }}
+        shell: bash
+        env:
+          CLAUDE_PACKAGE: ${{ steps.claudepkg.outputs.package }}
+          PREFIX: ${{ runner.temp }}/snap-claude
+        run: node tests/integration/claude-conformance-ci.mjs bin "$PREFIX" "$CLAUDE_PACKAGE"
+
       # A measurement: it prints what the run read and is red only when the
       # script itself could not run. "not measured" (the runner refused the
       # token) is a reading.
@@ -1369,6 +1419,8 @@ jobs:
           SNAP_E2E_OUT: ${{ runner.temp }}/snap-e2e
           SNAP_E2E_HELPER: ${{ github.workspace }}\helper\target\release\aicc-helper.exe
           SNAP_E2E_CODEX: ${{ runner.temp }}/snap-codex
+          SNAP_E2E_PASTE: ${{ inputs.snap_e2e_paste }}
+          SNAP_E2E_CLAUDE: ${{ steps.claudebin.outputs.dir }}
           PLAYWRIGHT_JSON_OUTPUT_NAME: ${{ runner.temp }}/snap-e2e/playwright-report.json
         run: npx playwright test tests/e2e/snap-windows.spec.ts --retries=0 --workers=1 --reporter=list,json
 
@@ -1404,6 +1456,241 @@ jobs:
           name: snap-e2e-${{ matrix.os }}
           path: |
             ${{ runner.temp }}/snap-e2e
+            test-results
+          if-no-files-found: warn
+          retention-days: 30
+
+  # The clipboard image paste on macOS and Linux app machines (plan
+  # 2.1.3-beta.21 phase 3, 3.2 and 3.3; ADR-032; aicc_planning#447), on the
+  # GitHub macOS and Ubuntu runners: the built app (out/main, not packaged)
+  # with real Claude Code 2.1.332 and Codex 0.157.1 against probe P11's model
+  # stand-in on a loopback port (tests/e2e/paste-unix.spec.ts). `probe` runs
+  # probes PM1 and PM2 (macOS) and PL1 (Linux); `readings` runs the app's own
+  # route into each CLI, every press asserted. The two CLIs are installed as
+  # snap-e2e installs them: Codex from npm, Claude Code from its platform
+  # package, each with scripts off into a prefix and a cache of its own.
+  # node-pty and better-sqlite3 are rebuilt for Electron as the Test job
+  # rebuilds them on these systems.
+  #
+  # Linux runs under Xvfb (X11; Wayland is not measured here, and is written
+  # down as not measured). Claude Code reads the clipboard there by running
+  # xclip or wl-paste, so the spec runs once per state of the two: neither
+  # (both removed first), xclip, then wl-clipboard alone (which, under X11,
+  # probe PL1 read does not serve Claude Code); each run is its own
+  # Playwright run with PASTE_E2E_LINUX_TOOLS naming the state, and the next
+  # state's run goes on whatever the last one answered. Unprivileged user
+  # namespaces are allowed on the runner (Ubuntu 24.04's AppArmor restricts
+  # them), so the app starts with Chromium's namespace sandbox on, every
+  # process of it the runner user's. Not the setuid helper: run 46141007842
+  # left each Linux run waiting out Playwright's 30 s worker teardown after
+  # the app was stopped, and a process the root-owned helper starts is one
+  # the runner user cannot stop.
+  #
+  # Playwright runs with --retries=0, and the step after each run fails the
+  # job when its report shows a test retried or reported flaky
+  # (scripts/ci/playwright-no-retry.mjs). A red run is answered by its cause,
+  # never by a retry, a longer timer or a looser bound. The timeout is set
+  # from the presses: about 10 minutes of build and installs; macOS about 12
+  # for either part; Linux, three states, each two tabs' start (4 min) and
+  # its presses (about 4 min for `probe`; for `readings` 9 with xclip and
+  # 3 without): 60 and 50 minutes. Never raised to answer a red run.
+  #
+  # It runs ONLY on a dispatch that names it (`paste_e2e`, `probe` or
+  # `readings`), never on a pull request or a push. It is section evidence:
+  # not one of the checks a PR waits for, not in release.yml and not read by
+  # scripts/release-gate.mjs. It only reads: no secret, read-only
+  # permissions, the actions pinned by commit. What is uploaded as
+  # paste-e2e-<os> is the readings and Playwright's reports.
+  # tests/unit/scripts/paste-e2e-job.test.ts evaluates its condition.
+  paste-e2e:
+    if: github.event_name == 'workflow_dispatch' && (inputs.paste_e2e == 'probe' || inputs.paste_e2e == 'readings')
+    name: Paste e2e (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: ${{ inputs.paste_e2e == 'probe' && 60 || 50 }}
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-latest]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: '24'
+          cache: 'npm'
+
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
+        with:
+          python-version: '3.12'
+
+      - name: Install Python setuptools
+        run: pip install setuptools
+
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Install Electron binary
+        run: node node_modules/electron/install.js
+
+      - name: Rebuild native modules
+        shell: bash
+        run: |
+          node -e "
+          const { rebuild } = require('@electron/rebuild');
+          rebuild({
+            buildPath: process.cwd(),
+            electronVersion: require('./node_modules/electron/package.json').version,
+            onlyModules: ['node-pty', 'better-sqlite3']
+          }).then(() => console.log('rebuild done')).catch(e => { console.error(e); process.exit(1) })
+          "
+
+      - name: Let Electron's sandbox run (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+
+      - name: Install Xvfb (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q xvfb
+
+      - name: Build the app
+        run: npm run build
+
+      - name: Install Codex 0.157.1 into its own prefix
+        shell: bash
+        env:
+          CODEX_VERSION: '0.157.1'
+          PREFIX: ${{ runner.temp }}/paste-codex
+          NPM_CACHE: ${{ runner.temp }}/npm-paste-codex-cache
+        run: npm install --global --prefix "$PREFIX" --ignore-scripts --cache "$NPM_CACHE" --no-audit --no-fund "@openai/codex@$CODEX_VERSION"
+
+      - name: Resolve this runner's Claude Code package
+        id: claudepkg
+        run: node tests/integration/claude-conformance-ci.mjs package
+
+      - name: Install Claude Code 2.1.332 into its own prefix
+        shell: bash
+        env:
+          CLAUDE_VERSION: '2.1.332'
+          CLAUDE_PACKAGE: ${{ steps.claudepkg.outputs.package }}
+          PREFIX: ${{ runner.temp }}/paste-claude
+          NPM_CACHE: ${{ runner.temp }}/npm-paste-claude-cache
+        run: npm install --global --prefix "$PREFIX" --ignore-scripts --cache "$NPM_CACHE" --no-audit --no-fund "$CLAUDE_PACKAGE@$CLAUDE_VERSION"
+
+      - name: Locate the installed Claude Code
+        id: claudebin
+        shell: bash
+        env:
+          CLAUDE_PACKAGE: ${{ steps.claudepkg.outputs.package }}
+          PREFIX: ${{ runner.temp }}/paste-claude
+        run: node tests/integration/claude-conformance-ci.mjs bin "$PREFIX" "$CLAUDE_PACKAGE"
+
+      - name: Run the paste end-to-end check (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        env:
+          PASTE_E2E: ${{ inputs.paste_e2e }}
+          PASTE_E2E_OUT: ${{ runner.temp }}/paste-e2e
+          PASTE_E2E_CODEX: ${{ runner.temp }}/paste-codex
+          PASTE_E2E_CLAUDE: ${{ steps.claudebin.outputs.dir }}
+          PLAYWRIGHT_JSON_OUTPUT_NAME: ${{ runner.temp }}/paste-e2e/report-macos.json
+        run: npx playwright test tests/e2e/paste-unix.spec.ts --retries=0 --workers=1 --reporter=list,json
+
+      - name: Fail a macOS run Playwright retried or reported flaky
+        if: ${{ runner.os == 'macOS' && !cancelled() }}
+        shell: bash
+        env:
+          REPORT: ${{ runner.temp }}/paste-e2e/report-macos.json
+        run: node scripts/ci/playwright-no-retry.mjs "$REPORT"
+
+      - name: Remove xclip and wl-clipboard (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: sudo apt-get remove -y -q xclip wl-clipboard
+
+      - name: Run the paste end-to-end check, neither program (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        env:
+          PASTE_E2E: ${{ inputs.paste_e2e }}
+          PASTE_E2E_LINUX_TOOLS: none
+          PASTE_E2E_OUT: ${{ runner.temp }}/paste-e2e
+          PASTE_E2E_CODEX: ${{ runner.temp }}/paste-codex
+          PASTE_E2E_CLAUDE: ${{ steps.claudebin.outputs.dir }}
+          PLAYWRIGHT_JSON_OUTPUT_NAME: ${{ runner.temp }}/paste-e2e/report-linux-none.json
+        run: xvfb-run -a --server-args="-screen 0 1920x1080x24" npx playwright test tests/e2e/paste-unix.spec.ts --retries=0 --workers=1 --reporter=list,json
+
+      - name: Fail a Linux run Playwright retried or reported flaky, neither program
+        if: ${{ runner.os == 'Linux' && !cancelled() }}
+        shell: bash
+        env:
+          REPORT: ${{ runner.temp }}/paste-e2e/report-linux-none.json
+        run: node scripts/ci/playwright-no-retry.mjs "$REPORT"
+
+      - name: Install xclip (Linux)
+        if: ${{ runner.os == 'Linux' && !cancelled() }}
+        shell: bash
+        run: sudo apt-get install -y -q xclip
+
+      - name: Run the paste end-to-end check, xclip (Linux)
+        if: ${{ runner.os == 'Linux' && !cancelled() }}
+        shell: bash
+        env:
+          PASTE_E2E: ${{ inputs.paste_e2e }}
+          PASTE_E2E_LINUX_TOOLS: xclip
+          PASTE_E2E_OUT: ${{ runner.temp }}/paste-e2e
+          PASTE_E2E_CODEX: ${{ runner.temp }}/paste-codex
+          PASTE_E2E_CLAUDE: ${{ steps.claudebin.outputs.dir }}
+          PLAYWRIGHT_JSON_OUTPUT_NAME: ${{ runner.temp }}/paste-e2e/report-linux-xclip.json
+        run: xvfb-run -a --server-args="-screen 0 1920x1080x24" npx playwright test tests/e2e/paste-unix.spec.ts --retries=0 --workers=1 --reporter=list,json
+
+      - name: Fail a Linux run Playwright retried or reported flaky, xclip
+        if: ${{ runner.os == 'Linux' && !cancelled() }}
+        shell: bash
+        env:
+          REPORT: ${{ runner.temp }}/paste-e2e/report-linux-xclip.json
+        run: node scripts/ci/playwright-no-retry.mjs "$REPORT"
+
+      - name: Swap xclip for wl-clipboard (Linux)
+        if: ${{ runner.os == 'Linux' && !cancelled() }}
+        shell: bash
+        run: |
+          sudo apt-get remove -y -q xclip
+          sudo apt-get install -y -q wl-clipboard
+
+      - name: Run the paste end-to-end check, wl-paste alone (Linux)
+        if: ${{ runner.os == 'Linux' && !cancelled() }}
+        shell: bash
+        env:
+          PASTE_E2E: ${{ inputs.paste_e2e }}
+          PASTE_E2E_LINUX_TOOLS: wl-paste
+          PASTE_E2E_OUT: ${{ runner.temp }}/paste-e2e
+          PASTE_E2E_CODEX: ${{ runner.temp }}/paste-codex
+          PASTE_E2E_CLAUDE: ${{ steps.claudebin.outputs.dir }}
+          PLAYWRIGHT_JSON_OUTPUT_NAME: ${{ runner.temp }}/paste-e2e/report-linux-wl-paste.json
+        run: xvfb-run -a --server-args="-screen 0 1920x1080x24" npx playwright test tests/e2e/paste-unix.spec.ts --retries=0 --workers=1 --reporter=list,json
+
+      - name: Fail a Linux run Playwright retried or reported flaky, wl-paste alone
+        if: ${{ runner.os == 'Linux' && !cancelled() }}
+        shell: bash
+        env:
+          REPORT: ${{ runner.temp }}/paste-e2e/report-linux-wl-paste.json
+        run: node scripts/ci/playwright-no-retry.mjs "$REPORT"
+
+      - name: Upload the readings and the reports
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: paste-e2e-${{ matrix.os }}
+          path: |
+            ${{ runner.temp }}/paste-e2e
             test-results
           if-no-files-found: warn
           retention-days: 30
@@ -1591,7 +1878,27 @@ jobs:
   # modes as its session files name them, reaching the app's side once each,
   # and again after the ssh child is killed (what was posted in the cut
   # arrives once it is back), and two tabs at once each getting only its own;
-  # the end, Remove, nothing left under ~/.aicc.
+  # the end, Remove, nothing left under ~/.aicc. From 2.1.3-beta.21 (plan
+  # phase 6, aicc_planning#446) it then runs tests/live/remote-review.live.ts:
+  # probes PV1 and PV2 against the stand-in Codex the rc step puts on the login
+  # PATH (helper/probes/pv-codex-stand-in.cjs; its header says why not the real
+  # Codex), the gate they decide (the app build's record of a PASS by
+  # architecture, never a file on the host), and one codex_review asked by
+  # REAL Claude Code 2.1.332 (the one install below) in a tab through the
+  # session helper, which probe P11's model stand-in answers with its one
+  # scripted tool_use turn (plan block 6.3's CI line): it runs on the
+  # machine, the tool result Claude Code got carries a footer that names it,
+  # and no review process starts on this runner's app side. Then (plan
+  # 2.1.3-beta.21 block 5.3's CI line, ADR-032) it runs
+  # tests/live/remote-paste.live.ts with REAL Claude Code 2.1.332, installed
+  # here from its platform package with scripts off into a prefix of its own
+  # (as the claude-conformance job installs it), pointed at probe P11's model
+  # stand-in on this runner's loopback: a helper tab's Alt+V and Snap send a
+  # PNG by file.put, the CLI's own Ctrl+V reads it through the clipboard
+  # stand-in, and the turn carries the picture, compared by its decoded RGBA
+  # (helper/probes/png-rgba.cjs). The rc step's interactive login shell reads
+  # the model stand-in's address from an env file that each of the two checks
+  # writes and removes.
   #
   # It runs ONLY on a dispatch that names it (`remote_helper_e2e`), never on a
   # pull request or a push. It is section evidence, like a test-machine line:
@@ -1705,12 +2012,17 @@ jobs:
           set -euo pipefail
           mkdir -p "$HOME/aicc-e2e-bin"
           cp helper/target/remote-helper-e2e/aicc-fake-cli "$HOME/aicc-e2e-bin/claude"
+          # The review check's stand-in Codex (2.1.3-beta.21), found the same way.
+          cp helper/probes/pv-codex-stand-in.cjs "$HOME/aicc-e2e-bin/codex"
+          chmod 755 "$HOME/aicc-e2e-bin/codex"
           old="$RUNNER_TEMP/bashrc.old"
           cp "$HOME/.bashrc" "$old" 2>/dev/null || : > "$old"
           {
             echo 'echo "rc file: hello from ~/.bashrc"'
             cat "$old"
             echo 'case $- in *i*) export AICC_RC_MARK=from-rc; export PATH="$HOME/aicc-e2e-bin:$PATH";; esac'
+            # The model stand-in's address, while the review or the paste check runs (2.1.3-beta.21).
+            echo 'case $- in *i*) [ -f "$HOME/.aicc-e2e-paste-env" ] && . "$HOME/.aicc-e2e-paste-env";; esac'
           } > "$HOME/.bashrc"
           echo '[ -f "$HOME/.bashrc" ] && . "$HOME/.bashrc"' >> "$HOME/.bash_profile"
           exec_sees=$(ssh -o BatchMode=yes -p 2222 "$(whoami)@127.0.0.1" 'echo "${AICC_RC_MARK:-unset} $(command -v claude || echo none)"' | tail -n 1)
@@ -1719,6 +2031,9 @@ jobs:
           echo "an interactive login shell sees: $il_sees"
           [ "$exec_sees" = "unset none" ] || { echo "::error::the exec sees what only a login shell should"; exit 1; }
           [ "$il_sees" = "from-rc $HOME/aicc-e2e-bin/claude" ] || { echo "::error::bash -il does not see the rc file's variable and claude"; exit 1; }
+          codex_sees=$(bash -ilc 'command -v codex && codex --version' </dev/null 2>/dev/null | tail -n 2 | tr '\n' ' ')
+          echo "an interactive login shell's codex: $codex_sees"
+          [ "$codex_sees" = "$HOME/aicc-e2e-bin/codex codex-cli 0.157.1 " ] || { echo "::error::bash -il does not run the stand-in Codex"; exit 1; }
 
       - name: Write the hosts file (no secret)
         shell: bash
@@ -1727,6 +2042,31 @@ jobs:
         run: |
           mkdir -p "$OUT"
           printf '{ "host": "127.0.0.1", "user": "%s", "port": 2222 }\n' "$(whoami)" > "$OUT/hosts.json"
+
+      # 2.1.3-beta.21 (plan blocks 5.3 and 6.3): the real Claude Code the
+      # review check and the paste check run on the host, installed once, from
+      # its platform package with scripts off into a prefix of its own, as the
+      # claude-conformance job installs it.
+      - name: Resolve this runner's Claude Code package
+        id: claudepkg
+        run: node tests/integration/claude-conformance-ci.mjs package
+
+      - name: Install Claude Code 2.1.332 into its own prefix
+        shell: bash
+        env:
+          CLAUDE_VERSION: '2.1.332'
+          CLAUDE_PACKAGE: ${{ steps.claudepkg.outputs.package }}
+          PREFIX: ${{ runner.temp }}/rh-claude
+          NPM_CACHE: ${{ runner.temp }}/npm-rh-claude-cache
+        run: npm install --global --prefix "$PREFIX" --ignore-scripts --cache "$NPM_CACHE" --no-audit --no-fund "$CLAUDE_PACKAGE@$CLAUDE_VERSION"
+
+      - name: Locate the installed Claude Code
+        id: claudebin
+        shell: bash
+        env:
+          CLAUDE_PACKAGE: ${{ steps.claudepkg.outputs.package }}
+          PREFIX: ${{ runner.temp }}/rh-claude
+        run: node tests/integration/claude-conformance-ci.mjs bin "$PREFIX" "$CLAUDE_PACKAGE"
 
       # The default vitest config does not include tests/live, so no other
       # suite runs it; vitest fails when no test file is found, and the next
@@ -1747,6 +2087,53 @@ jobs:
         shell: bash
         env:
           REPORT: ${{ runner.temp }}/remote-helper-e2e/vitest.json
+        run: node scripts/ci/vitest-ran.mjs "$REPORT"
+
+      # 2.1.3-beta.21 (plan phase 6, aicc_planning#446): probes PV1 and PV2 and
+      # a review on the machine, after the device check (never beside it: both
+      # use the account's ~/.aicc), also when that check was red. The review is
+      # asked by the real Claude Code installed above (plan 6.3's CI line), so
+      # the machine is added and Checked after that install.
+      - name: Run the review check on the machine (probes PV1 and PV2, and a review there asked by real Claude Code 2.1.332)
+        if: ${{ !cancelled() }}
+        shell: bash
+        env:
+          REMOTE_HELPER_HOSTS: ${{ runner.temp }}/remote-helper-e2e/hosts.json
+          REMOTE_HELPER_BIN: helper/target/helper-linux-musl/aicc-helper
+          REMOTE_HELPER_MANIFEST: helper/target/helper-manifest/manifest.json
+          REMOTE_REVIEW_CLAUDE: ${{ steps.claudebin.outputs.bin }}
+          REMOTE_REVIEW_CODEX: stand-in
+          REMOTE_HELPER_OUT: ${{ runner.temp }}/remote-helper-e2e
+        run: npx vitest run --config vitest.live.config.ts tests/live/remote-review.live.ts --retry=0 --reporter=default --reporter=json --outputFile.json="$REMOTE_HELPER_OUT/vitest-review.json"
+
+      - name: Fail the review check when no test ran, or one did not pass
+        if: ${{ !cancelled() }}
+        shell: bash
+        env:
+          REPORT: ${{ runner.temp }}/remote-helper-e2e/vitest-review.json
+        run: node scripts/ci/vitest-ran.mjs "$REPORT"
+
+      # 2.1.3-beta.21 (plan block 5.3's CI line, ADR-032): a picture into a
+      # Claude Code tab through the helper, by the CLI's own clipboard paste,
+      # with the real Claude Code installed above, after the review check
+      # (never beside it: both use the account's ~/.aicc), also when that
+      # check was red.
+      - name: Run the clipboard paste check on the machine (real Claude Code 2.1.332)
+        if: ${{ !cancelled() }}
+        shell: bash
+        env:
+          REMOTE_HELPER_HOSTS: ${{ runner.temp }}/remote-helper-e2e/hosts.json
+          REMOTE_HELPER_BIN: helper/target/helper-linux-musl/aicc-helper
+          REMOTE_HELPER_MANIFEST: helper/target/helper-manifest/manifest.json
+          REMOTE_PASTE_CLAUDE: ${{ steps.claudebin.outputs.bin }}
+          REMOTE_HELPER_OUT: ${{ runner.temp }}/remote-helper-e2e
+        run: npx vitest run --config vitest.live.config.ts tests/live/remote-paste.live.ts --retry=0 --reporter=default --reporter=json --outputFile.json="$REMOTE_HELPER_OUT/vitest-paste.json"
+
+      - name: Fail the paste check when no test ran, or one did not pass
+        if: ${{ !cancelled() }}
+        shell: bash
+        env:
+          REPORT: ${{ runner.temp }}/remote-helper-e2e/vitest-paste.json
         run: node scripts/ci/vitest-ran.mjs "$REPORT"
 
       - name: Upload the two programs, the manifest and the readings

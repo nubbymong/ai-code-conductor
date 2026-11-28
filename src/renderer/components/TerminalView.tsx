@@ -68,6 +68,9 @@ import { noteActivityGrace } from '../stores/activeStore'
 import type { ProviderId, CodexOptions, TerminalOptions } from '../../shared/types'
 import { spawnRefusalOf, refusedTabText } from '../../shared/providers'
 import { parentOfPartnerPtyId } from '../../shared/multi-spawn-rule'
+import { reportImagePaste, terminalTakesImagePaste } from '../utils/imagePaste'
+import { useThroughHelper } from '../hooks/useThroughHelper'
+import { matchesImagePasteShortcut, DEFAULT_SHORTCUTS } from '../utils/shortcuts'
 import { TERMINAL_SCROLLBACK_LINES } from '../../shared/terminal-scrollback'
 import { readReplayAtHolderSize, type ReplayAtHolderSize } from '../../shared/replay-at-holder-size'
 import { reconcileRefusedMultiSpawn } from '../utils/refusedMultiSpawn'
@@ -191,6 +194,12 @@ export default function TerminalView({ sessionId, configId, cwd, shellOnly, elev
   // captured prop there would go stale on tab switches. See the paste handler.
   const isActiveRef = useRef(isActive)
   isActiveRef.current = isActive
+  // ADR-032 (plan 2.1.3-beta.21 phase 2, 2.1.4): whether main says this SSH
+  // tab runs through the session helper, read fresh by the image paste's
+  // take rule (a tab on the old SSH path keeps Alt+V as xterm's).
+  const throughHelper = useThroughHelper(sessionId, !!ssh && !shellOnly && parentOfPartnerPtyId(sessionId) === null)
+  const throughHelperRef = useRef(throughHelper)
+  throughHelperRef.current = throughHelper
   // aicc_planning#303: the mounted terminal's output queue (hiddenOutputQueue),
   // for the flush when it is shown below. The init effect's own closures use
   // that run's queue directly.
@@ -1944,6 +1953,18 @@ export default function TerminalView({ sessionId, configId, cwd, shellOnly, elev
         // Never fail silently — a silent no-op is what let #145 go unnoticed.
         onNothingToPaste: () => {
           usePasteHintStore.getState().show(sessionId, 'Nothing to paste — clipboard has no text')
+        },
+        // ADR-032: Alt+V, and Ctrl+V with no text, in a session whose CLI
+        // takes the image paste, go to main as one press (utils/imagePaste.ts).
+        imagePaste: {
+          isImageChord: (e) => matchesImagePasteShortcut(e, { ...DEFAULT_SHORTCUTS, ...(useSettingsStore.getState().settings.keyboardShortcuts || {}) }.pasteImage),
+          takes: () => terminalTakesImagePaste(useSessionStore.getState().sessions.find((s) => s.id === sessionId), { partnerPane: parentOfPartnerPtyId(sessionId) !== null, throughHelper: throughHelperRef.current }),
+          terminalFocused: () => {
+            const pane = xtermContainerRef.current
+            const focused = document.activeElement
+            return !!pane && !!focused && pane.contains(focused)
+          },
+          press: (chord, focused) => reportImagePaste(sessionId, chord, focused),
         },
       })
 

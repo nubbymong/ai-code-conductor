@@ -8,18 +8,29 @@
 // them before: nothing typed, its order or its timing changed. They are
 // built over the run screen's own primitives (`base`), which index.ts hands
 // in, so a test can hand fakes of them.
-import type { RunScreenImageResult, RunScreenTyping, SessionRunScreen } from '../types'
+import type { RunScreenClipboardResult, RunScreenImageResult, RunScreenTyping, SessionRunScreen } from '../types'
 import type { PromptButtonResult, SubmitTextResult } from '../../../shared/types'
 import { codexPromptKeeps } from '../../../shared/codex-screen'
 import { logInfo } from '../../debug-logger'
 
 /** The run screen's own primitives the door members type through: whether
- *  main reads the session's screen, the submit primitive, and the image rule. */
-export type CodexScreenPrimitives = Required<Pick<SessionRunScreen, 'has' | 'submit'>> & Pick<SessionRunScreen, 'submitImage'>
+ *  main reads the session's screen, the submit primitive, the image rule,
+ *  and (ADR-032) the clipboard paste rule. */
+export type CodexScreenPrimitives = Required<Pick<SessionRunScreen, 'has' | 'submit'>> & Pick<SessionRunScreen, 'submitImage' | 'submitClipboard'>
 
 /** The door members, over `base`. */
-export function codexDoorMembers(base: CodexScreenPrimitives): Required<Pick<SessionRunScreen, 'retry' | 'prompt' | 'marker' | 'image' | 'ask'>> {
+export function codexDoorMembers(base: CodexScreenPrimitives): Required<Pick<SessionRunScreen, 'retry' | 'prompt' | 'marker' | 'image' | 'ask' | 'clipboard'>> {
   return {
+    /** ADR-032 (plan 2.1.3-beta.21 phase 2): Codex's own clipboard image
+     *  paste, the key as one write, then its placeholder, then (a press from
+     *  outside the terminal, and Snap) the sentence and Enter through the
+     *  submit primitive (session-screen.ts, pasteClipboardIntoCodexComposer,
+     *  says how). A session whose screen main does not read is not asked
+     *  (`no-screen`). */
+    async clipboard(sessionId: string, key: string, sentence: string | null, opts: { readyWaitMs: number; placeholderWaitMs: number }): Promise<RunScreenClipboardResult> {
+      if (!base.submitClipboard || !base.has(sessionId)) return { outcome: 'no-screen' }
+      return base.submitClipboard(sessionId, key, sentence, { readyWaitMs: opts.readyWaitMs, placeholderWaitMs: opts.placeholderWaitMs })
+    },
     /** The Watchdog's retry: the submit primitive, which types it only at
      *  Codex's ready, empty composer (ready on two reads 300 ms apart), its
      *  Enter only once the text is confirmed on screen, a text not confirmed

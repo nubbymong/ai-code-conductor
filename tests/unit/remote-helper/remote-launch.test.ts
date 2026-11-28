@@ -7,8 +7,12 @@
  *   is the launch d0be048e built in core, byte for byte (argv, folder,
  *   environment and its order), but for the two arguments section 3.2 adds
  *   first: --settings and, while the app serves its tools, --mcp-config, each
- *   naming the session's own file on the host. The "before" is d0be048e's own
- *   code, copied below unchanged but for the one host-account line it called.
+ *   naming the session's own file on the host; and (2.1.3-beta.21, ADR-032)
+ *   the clipboard stand-in's bin/ folder first on PATH: the stand-in's -c
+ *   wrapper with the folder as its first argument after the program, or, for
+ *   a login shell outside the sh family, the folder in front of PATH. The
+ *   "before" is d0be048e's own code, copied below unchanged but for the one
+ *   host-account line it called.
  * - src/main/remote-helper names no flag or variable of a CLI and no path to
  *   a provider's CLI (red on d0be048e: index.ts's four flags and five
  *   CLAUDE_CODE_ variables, session.ts's fallback path).
@@ -82,6 +86,18 @@ function beforeLaunchSpec(m: RemoteMachineRecord, cliArgs: readonly string[], cl
   return { argv, cwd: remoteCwd(remotePath, m.home), env, cols, rows }
 }
 
+/** 2.1.3-beta.21 (ADR-032): the one change the clipboard stand-in makes to a
+ *  launch, written out here rather than taken from the code: in the sh
+ *  family the wrapper becomes the stand-in's and the folder is its first
+ *  argument after the program; outside it the folder goes in front of PATH. */
+function withStandIn(spec: LaunchSpec, m: RemoteMachineRecord, bin: string): LaunchSpec {
+  if (m.shellIsSh) {
+    const [shell, il, c, , program, ...args] = spec.argv
+    return { ...spec, argv: [shell, il, c, 'PATH="$1${PATH:+:$PATH}"; export PATH; shift; exec "$0" "$@"', program, bin, ...args] }
+  }
+  return { ...spec, env: { ...spec.env, PATH: `${bin}:${spec.env.PATH}` } }
+}
+
 describe('the launch is the same, byte for byte (characterisation against d0be048e)', () => {
   const PERMISSION_MODES = ['default', 'acceptEdits', 'auto', 'plan', 'dontAsk', 'bypassPermissions', 'manual']
   const tab = (over: Partial<SSHOptions> = {}): SSHOptions => ({ ...SSH_TAB, ...over })
@@ -118,7 +134,7 @@ describe('the launch is the same, byte for byte (characterisation against d0be04
   ]
   const PATHS: Array<string | undefined> = [undefined, '~', '~/work', '/srv/app', 'rel/dir']
 
-  it('every row: argv, folder and environment equal, in the same order, but for the session files\' arguments first', () => {
+  it('every row: argv, folder and environment equal, in the same order, but for the session files\' arguments first and the stand-in\'s bin/ first on PATH', () => {
     let rows = 0
     const differ: string[] = []
     const sid = remoteSessionId('tab-1')
@@ -128,7 +144,7 @@ describe('the launch is the same, byte for byte (characterisation against d0be04
       // Section 3.2: the session's own files, in its folder on the host, first on the line.
       const folder = `${m.home.replace(/\/+$/, '')}/.aicc/${m.did}/sessions/${sid}`
       const files = ['--settings', `${folder}/settings.json`, ...(tools ? ['--mcp-config', `${folder}/mcp.json`] : [])]
-      const before = beforeLaunchSpec(m, [...files, ...beforeCliArgs(options)], beforeCliEnv(settings, options, systemPrefersDark), options.ssh?.remotePath, 100, 30)
+      const before = withStandIn(beforeLaunchSpec(m, [...files, ...beforeCliArgs(options)], beforeCliEnv(settings, options, systemPrefersDark), options.ssh?.remotePath, 100, 30), m, `${folder}/bin`)
       const after = remoteLaunchOf(claudeRemoteLaunch, m, options, settings, systemPrefersDark, sid, 100, 30, tools).spec
       rows++
       if (JSON.stringify(after) !== JSON.stringify(before)) differ.push(`${JSON.stringify({ m: m.claudePath, remotePath, options, settings, dark, tools })}\n  before ${JSON.stringify(before)}\n  after  ${JSON.stringify(after)}`)
@@ -355,6 +371,8 @@ describe('the real Claude package carries the group', () => {
       { from: 'cwd', path: '.claude/settings.json' },
       { from: 'cwd', path: '.claude/settings.local.json' },
       { from: 'checkout', path: '.claude/settings.local.json' },
+      // 2.1.3-beta.21: the keybindings file of the folder the CLI uses, for its paste key.
+      { from: 'home', path: '.claude/keybindings.json' },
     ])
     const l = claudeRemoteLaunch.launch(o, MACHINE, remoteHelperCommands(MACHINE, 'rmx0123456789'), [])
     expect(l.files.map((f) => f.name)).toEqual(['settings.json', 'mcp.json'])

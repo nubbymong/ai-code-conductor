@@ -16,7 +16,7 @@ probe (ADR) must confirm. R5 fixtures fix field types, lengths and refusals.
   with the `did` and app install id; `helper/<version>-<hash12>/aicc-helper`
   (first 12 hex of its SHA-256; never on `PATH`); `sessions/<sid>/` (0700: spec,
   provider files, socket `s`, `seq`, a bounded spool, the helper log, `holder`
-  from R9, `paste/`); `backup/`; and `edits` (section 8). Nothing is written,
+  from R9, `paste/`; from 2.1.3-beta.21 `bin/`, the clipboard stand-in's two scripts, 0700, section 15); `backup/`; and `edits` (section 8). Nothing is written,
   run or deleted in a `did` folder whose marker lacks this install's ids; the
   app never removes another install's folder, it only lists it (section 8).
 - **Step 1 as built (2.1.3-beta.17).** Under `~/.aicc/<did>/`: `owner`,
@@ -124,7 +124,8 @@ probe (ADR) must confirm. R5 fixtures fix field types, lengths and refusals.
 - **Session id (`sid`)**, chosen by the app: `^[A-Za-z0-9][A-Za-z0-9_-]{7,31}$`.
   Every socket bind and connect happens after a `chdir` into the session
   folder, by the name `s`, so a long home never meets the path limit.
-- **Host home.** Learned once per target (R2's first upload; from R3 the
+- **Host home.** Learned once per target (R2's upload named it, and was not
+  built; from remote step 1 the machine's first Check reads it, and from R3 the
   probe): starts with `/`, at most 1,024 bytes of valid UTF-8, no control (Cc)
   or format (Cf) character. Every later path must start with exactly it; a
   different home stops the device until the user checks it again.
@@ -194,7 +195,8 @@ path goes to ssh with forward slashes, in double quotes inside the option (ssh
 splits on whitespace, reads a backslash as an escape and expands `%`); one
 still holding a backslash, `"` or `%` is refused, naming it. A UNC data folder
 (a redirected profile) is not used: the file goes in a local, owner-only folder
-with no space. A target's first connection (R2's first upload, or R3's probe)
+with no space. A target's first connection (R2's upload, not built; from remote step 1 the
+first exec to the machine; or R3's probe)
 uses `StrictHostKeyChecking=ask`: the question goes to the user through
 askpass, saying whether the user's own known hosts trust that key; nothing
 saved is released on it. On a yes the app reads the new line into the record
@@ -245,7 +247,7 @@ item's alphabet (no space, quote, backslash or metacharacter) is checked first.
 | fixed text | the sub-commands and flags below, and the fixed scripts (sections 13, 14) run as `/bin/sh -c '<script>'` |
 | `did`, `sid`; nonce | section 1; 32 lower-case hex characters, new for every exec |
 | helper folder; expected hash | `^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?-[0-9a-f]{12}$`; 64 hex. Both only from the app's manifest, never from host data |
-| numbers; image name; engine and container (R11) | protocol version, offset, size: decimal integers in range; `paste-<n>.<ext>`; `docker` or `podman`; a container name (for inspect only) `^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$`, then the id inspect returned, 64 hex |
+| numbers; image name; engine and container (R11) | protocol version, offset, size: decimal integers in range; `paste-<n>.<ext>` (the R2 upload's, not built; ADR-032's `file.put` carries the name in-band); `docker` or `podman`; a container name (for inspect only) `^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$`, then the id inspect returned, 64 hex |
 
 No value a host reported (home, tool or CLI path) is put on a command line:
 scripts build paths from `$HOME` and find their tools themselves. Script text
@@ -259,6 +261,7 @@ Values come as arguments after the script; content comes on stdin.
 | `attach --session <sid> --from <offset>` | `ssh -tt`, the terminal, while connected | R9; superseded by `bridge` in step 1 (one connection per session) |
 | `bridge --store <store> --session <sid>` | `ssh -T`, the session's one connection (its terminal and its messages), while connected | step 1 (2.1.3-beta.17): copies its standard input to the holder's socket and the socket to its standard output, byte for byte; exit 0 the holder closed, 3 no holder, 2 usage, 1 otherwise |
 | `selftest`, `list`, `end --session <sid>`, each `--nonce <n>` | one-shot exec | R6 |
+| `run --nonce <n> --timeout <seconds>` | one `ssh -T` exec with no terminal; its request and the program's input on standard input | 2.1.3-beta.21 (protocol change 6, the one-shot run mode, below; aicc_planning#446) |
 
 The CLI or sudo starts `emit` (statusline and hook command, R6, R7), `mcp`
 (stdio MCP server, R8) and `askpass` (sudo wrapper, R11), each with
@@ -288,6 +291,83 @@ build's goes when the store holds no record (nor a `<sid>.json.<pid>.tmp` being
 written), by name and as a real folder, its file then the emptied folder; it
 prints `AICC-RESULT helpers <n>` before `swept <n>`. `sessions` never removes a
 helper folder.
+
+**The one-shot run mode** (ADR-030 protocol change 6, from 2.1.3-beta.21;
+aicc_planning#446; **pending probe PV1** of the 2.1.3-beta.21 plan, phase 6). A `codex_review` from a
+Claude Code helper tab runs on that tab's machine: the app starts, through the
+launcher, `run --nonce <n> --timeout <seconds>` on one `ssh -T` exec, beside
+the tab's own connection. `--timeout` is the review's own timeout, 30 to 900
+seconds (300 by default; `src/main/review-request.ts:15`, `:20-21`, `:43`); each
+option is given once, and nothing else is taken. No value a host reported is
+put on the command line: the run mode reads its request from standard input,
+one line holding a JSON object with exactly `argv`, `cwd` and `env`, at most
+64 KiB, and then the rest of its standard input, at most 2 MiB, is the
+program's standard input (the review's prompt). A request that is not one
+line, is over 64 KiB, or is not exactly that object is refused. The run mode
+reads the whole prompt before it starts the program, and a prompt over 2 MiB
+is refused, never cut. `argv`, `cwd` and `env` follow
+`term.launch`'s rules (section 15, Launch): `argv[0]` is an absolute path,
+started by that exact path with no search of `PATH` and no shell between
+(`execve`), and `env` is the program's whole environment. What they hold is the
+app's choice, never the run mode's: ADR-031's review argv (the review constant
+in `src/main/providers/codex/cli-runner.ts`, plus the model and the effort),
+`argv[0]` the machine record's Codex path, `cwd` the tab's working folder on
+the host, and `env` the host account's variables as a helper tab's launch has
+them (`src/main/remote-helper/session.ts:139`). The program leads a new
+session and process group, and its standard input is closed after the prompt.
+Its standard output is copied to the run mode's, byte for byte, at most 4 MiB;
+its standard error to the run mode's, at most 64 KiB; more is dropped, not
+copied, and does not end the program. If the copied output did
+not end with a line end (a cut, or a last write with no newline), the run mode
+writes one before the result line, so the result line is always the last line
+it writes. Then the run mode prints one line,
+`AICC-RESULT <nonce> {"code":<n>|null,"signal":<n>|null,"timeout":<bool>,"cut":<bool>}`,
+and exits 0. The app takes the last line of the exec's standard output as the
+result line, and treats an exec whose last line is not `AICC-RESULT` with this
+exec's nonce and that object as failed. It reads everything between the
+launcher's `AICC-HASH` line and that last line as the program's output, as
+data (JSON events), never as marked lines, and reads the exec with a standard output cap above the run mode's (the
+4 MiB, an added line end, the preamble, the hash line and the result line), not
+`EXEC_STDOUT_MAX`'s 2 MiB (`src/main/remote-helper/ssh-exec.ts:165`). The run
+mode ends the program's whole group (hangup, then kill after 2 s, as a holder
+ends a tree, section 15) when the program exits, when `--timeout` seconds have
+passed since it started (`timeout` true), when its standard output passes its cap
+(`cut` true), and when its own standard output closes before the program has
+exited (the app ended the exec, section 10); it then exits. The end of its
+standard input is not an end: it comes once the prompt is read. It
+exits 1, with a message on standard error and nothing started, when the request
+is refused or the program cannot start, and 2 on a command line it does not
+take. It writes no file, opens no connection and starts nothing but `argv`.
+When its standard output closed first it writes no result line (it cannot)
+and exits 1.
+
+As built (2.1.3-beta.21, phase 6): `helper/src/run.rs`; the app's side is
+`src/main/remote-helper/review.ts` (`runOnHost`, `parseRunResult`) and the
+`run` fixed script (`scripts.ts`). The program's session is ended as a holder
+ends a tree (hangup and continue to the session, then a kill after 2 s; the
+holder's own `signal_session` and `session_left`). A review's material is read
+on the host by the `reviewread` fixed script (review-diff.ts's hardened git, or
+the named files, as hex, under the same 512 KB bound, refused never cut; the
+range as review-diff.ts parses it), and a Check reads where Codex is, its
+version, the exec's git and the models Codex's own picker lists there (the
+`cliread` fixed script, in a fresh, empty config folder of its own, removed
+after it). Codex's argv, its output reader and its version and model list
+rules come from the Codex package (core's `ProviderRemoteReview`).
+
+**The probes' gate.** A review runs on a machine only once probes PV1 and PV2
+(`tests/live/remote-review.live.ts`, helper/probes/README.md) have passed on
+a host of its architecture: Rocky for Linux x86-64, the Pi for Linux arm64.
+The proof is a property of the app build, never of a file on the machine:
+`REMOTE_REVIEW_PROVEN` in `src/main/codex-review-remote.ts` holds one entry
+for each architecture, null until the commit that records a PASS in
+helper/probes/README.md sets it to the Codex and git versions that run
+passed with (the live file prints the entry). While a machine's architecture
+has no entry, a review there is refused with the reason before anything is
+read or run there, and nothing runs on this computer instead. Once it has
+one, a review runs on any machine of that architecture whose Codex is not
+older than the oldest version the app runs (`CODEX_MIN_SUPPORTED_VERSION`)
+and, for modes `working` and `range`, whose git read at its last Check: no
+exact version is matched, and nothing of it is written or read on the host.
 
 ## 5 Processes
 
@@ -387,7 +467,7 @@ Every control message is a JSON object with a type `t`. Requests carry an
 | `session.list` | app | `session.list.result` | up to 256 `{sid, state, helper, mode, started}`, this `did` only | core, R6 |
 | `status`; `event` | helper | event | `{seq, payload}`, one statusline update; `{seq, kind, payload}`, one hook event | `status`, R6; `hooks`, R7 (not the local `hooks` of section 15) |
 | `session.prepare` | app | `session.prepared` | `{id, files, edits, env, argv, cwd, mode}`; one result per file and edit | `hooks`, R7 |
-| `file.put` | app | `file.stored` | upload one file (below) | `files`, R7 |
+| `file.put` | app | `file.stored` | one picture into the session's `paste/` (below); from 2.1.3-beta.21 on the session's one connection, by section 15's rules (ADR-032) | `paste`, section 15 (the `files` of R7 was not built) |
 | `mcp.open`, `mcp`, `mcp.close` | helper (`mcp` either) | none | `{stream}`; `mcp` adds one JSON-RPC `message` | `mcp`, R8 |
 | `session.start`; `session.detach` | app | `session.started`; `session.detached` | `{id, cols, rows}`, reply `{re, pid}`; close relays, keep the session | `held`, R9 |
 | `session.exit` | helper | event | `{seq, code, signal}` | `held`, R9 |
@@ -400,7 +480,9 @@ session found by `session.list` is ended by a one-shot `end`.
 
 **What the helper may ask and run.** Its requests (`sudo.ask`, `mcp`) are
 questions the app may refuse; none makes the app run, open or write anything.
-It starts only its spec's `argv`, on `session.start`; no general exec or
+It starts only its spec's `argv`, on `session.start`; from 2.1.3-beta.21 also
+the `argv` of a `run` exec the app started (section 4) and, in the clipboard
+stand-in, the real tool its script names (section 15). No general exec or
 file-read request exists. `argv[0]` is a CLI path from the probe report or login
 shell; `cwd` is absolute; `env` names come from the provider's fixed list, none
 secret-named (section 2); `files` go only into the session folder by declared
@@ -413,12 +495,15 @@ names; `edits` name rows of the closed list below; `mode` is `external` or `held
   mode, the names and ages of other `~/.aicc` entries (listed, never opened),
   self-test result (one validator, R3 included); a container's trust facts
   come from the host (section 14).
-- `file.put` `{id, name, size, sha256}`, then `size` bytes as kind 1 frames on
-  channel = request id. `name` is `paste-<n>.<ext>`, `<ext>` from a fixed image
-  list; only into `paste/`, 20 MiB each, 100 MiB per session. `file.stored`
-  `{re, path, sha256}` must give `path` exactly the recorded home plus
-  `/.aicc/<did>/sessions/<sid>/paste/<name>`, and the hash. Attachment by
-  pasted path is **pending probe P4**.
+- `file.put` (ADR-032, from 2.1.3-beta.21) rides the session's one connection
+  (section 15, capability `paste`), not a side channel: `{id, name, size,
+  sha256}`, then `size` bytes as kind 1 frames on that connection's paste
+  channel. `name` is `paste-<n>.png` or `paste-<n>.jpg`; only into `paste/`,
+  20 MiB each, 100 MiB per session. `file.stored` is `{re, sha256}`: it
+  carries no path, and nothing is pasted. The CLI reads the picture through its
+  own clipboard paste, served by the stand-in (section 15). The full rules are
+  section 15's; **pending probe PH1** (ADR-032). Probe P4 (attachment by a
+  pasted path) is withdrawn.
 - `mcp` goes to the Conductor MCP server as the side channel's session, under
   the remote allow-list (threat model 3.5), no local render root, inline
   content only. `sudo.ask` `layer` names the target.
@@ -467,9 +552,11 @@ inside that value (or inserts that key), writes a new file with the same mode,
 and renames it over the old one only if that is unchanged just before (else
 `io`; a writer in that last moment can still lose one update). A golden-file
 test covers fake secrets, integers past 2^53, unicode escapes, key order, CRLF,
-no final newline and a concurrent writer. The old value goes to `edits`. Probe
-P4 confirms file and key (a CLI flag, if one exists, replaces the row); a new
-row needs its own adversarial pass.
+no final newline and a concurrent writer. The old value goes to `edits`.
+ADR-029's probe P4 was named here to confirm file and key (its second half,
+the folder-trust record); ADR-032 withdraws P4, and no probe has taken that
+half over yet. A CLI flag, if one exists, replaces the row; a new row needs
+its own adversarial pass.
 
 | Error code | Meaning | Closes |
 | --- | --- | --- |
@@ -492,10 +579,11 @@ has seen; a gap is logged, and noted on the session if a hook event was lost.
 | What | Limit | On expiry |
 | --- | --- | --- |
 | hello; a one-shot exec | 20 s; 60 s, from ssh start, paused while an askpass prompt is open | `no-hello`; ssh stopped, exec failed |
+| the one-shot run mode (`run`, section 4; from 2.1.3-beta.21) | the review's own timeout (300 s default, at most 900 s, `src/main/review-request.ts:15`, `:20-21`, `:43`) plus 30 s, from ssh start: the exec's own `timeoutMs` (`src/main/remote-helper/ssh-exec.ts:285`), not the one-shot exec's 60 s (`EXEC_TIMEOUT_MS`, `:171`). The run mode itself ends the program at the review's own timeout after its start (`--timeout`) | ssh stopped, exec failed; the run mode ends the program's group when its standard output closes |
 | a reply; `probe`, `session.prepare`, `session.start`, `session.end` | 10 s; 30 s | `timeout` |
-| `file.put` | 30 s between chunks; reply 10 s after the last | `timeout`, partial file removed |
+| `file.put` (section 15) | 30 s between chunks; reply 10 s after the last | `timeout`, partial file removed |
 | heartbeat; helper with no frame from the app | `ping` every 15 s; 60 s | no `pong` in 45 s: link dropped; the relay exits, the holder stays |
-| an MCP tool call | the tool's limit, at most 10 min | `timeout` to the CLI |
+| an MCP tool call | the tool's limit, at most 10 min; a codex_review, its timeout plus 90 s (the host read's 60 s, `src/main/remote-helper/ssh-exec.ts:171`, and the run's 30 s), at most 990 s. As built in 2.1.3-beta.21, neither the relay, the holder nor the app's tool stream limits a call: a codex_review on a machine is bounded by the host read's exec (60 s), its run's exec (its timeout plus 30 s) and the CLI's own MCP timeout, as a review here is | `timeout` to the CLI |
 | `sudo.ask` waiting for the user | 120 s | askpass fails; sudo reports it |
 
 ## 11 A dropped connection
@@ -571,9 +659,12 @@ range; ids from small alphabets). A host-supplied path is never used locally
 or stored in a field the app treats as a local path. Host text (errors,
 versions, prompts, notifications, labels) shows as capped plain text with
 control (Cc) and format (Cf) characters removed, bidi and zero-width included,
-in the window and OS notifications. The only host-derived text typed into a
-terminal is an upload path equal to the recorded home plus the expected folder
-and name (a fixture: a home with CR, ESC and a leading `~`).
+in the window and OS notifications. No host-derived text is typed into a
+terminal (ADR-032, from 2.1.3-beta.21): `file.put`'s reply carries the hash
+only, and a helper tab's paste key is a chord from the app's fixed
+chord-to-bytes table, which the host's keybindings file can only choose from.
+(Before ADR-032 this rule allowed one exception: an upload path equal to the
+recorded home plus the expected folder and name.)
 
 **Budgets per connection** (the helper applies the same to the app):
 
@@ -635,7 +726,8 @@ Tested under dash, bash, busybox sh and macOS sh (fixtures: ADR step R2).
   absent (random 32 hex; the folder checked like `~/.aicc`, 0700), outside any
   shared home; if that fails, there is none. A lost one makes old sessions
   `elsewhere`; the exit above clears them.
-- **R2 upload** (one ssh connection each until R7). `/bin/sh -c '<upload
+- **R2 upload** (not built; superseded by `file.put` on the session's one
+  connection, section 15, which returns no path, ADR-032). (One ssh connection each until R7.) `/bin/sh -c '<upload
   script>' aicc <did> <sid> <name> <size> <nonce>`, image (at most 20 MiB) on
   stdin. With the folder checks down to `paste/`, it refuses at 100 MiB there,
   reads exactly `<size>` bytes to a temporary file, hashes it, links it to
@@ -1081,33 +1173,35 @@ keys for Claude Code are listed under "Field mode's keys" in section 1.
 `["core","local","hooks","mcp"]` from 2.1.3-beta.10,
 `["core","local","hooks","mcp","away","screen"]` from 2.1.3-beta.12 and
 `["core","local","hooks","mcp","away","screen","title"]` from 2.1.3-beta.14 and
-`["core","local","hooks","mcp","away","screen","title","status"]` from 2.1.3-beta.18, `session.state` is `new`
+`["core","local","hooks","mcp","away","screen","title","status"]` from 2.1.3-beta.18 and
+`["core","local","hooks","mcp","away","screen","title","status","paste"]` from 2.1.3-beta.21, `session.state` is `new`
 before a launch and `live` after. The app's first frame must be a `hello.ack` with
 exactly `t`, `proto` and `caps`: `proto` 1, `caps` holding `core` and nothing
 the holder did not offer; `local` allows the messages below, `hooks` the hook
 events, `mcp` the tool streams, `away`, beside `mcp`, kept tool streams,
 `screen` the screen reads and `title`, beside `screen`, the title in them, and
-`status` the status line (all below). A first frame that is raw, or
-JSON off channel 0, gets `bad-frame`; another type `unknown-type`, another
-version `proto-mismatch`, anything else `bad-field`; then the holder closes the
-connection. With no `hello.ack` in 10 s it sends `timeout` and
-closes; after that, with no frame from the app in 60 s it sends `timeout` and
-closes (the app pings every 15 s). Each limit is for the whole frame: one sent
-a byte at a time must still be whole in time. A frame's JSON is at most 4 KiB
-before the `hello.ack`, at most 64 KiB once the session is launched or a launch
-is under way (on a connection that acked `mcp`, which may carry a tool result,
-16 MiB then too), and otherwise 16 MiB as section 6 allows: a larger one is
-`bad-frame` and a close, refused on its header before its payload is read, and
-a payload's buffer grows only as its bytes arrive. At most 16 connections at
-once: the next one gets the hello, `busy`, and is closed. When the holder
-closes a connection after a last message (an `error`, `term.detached`,
-`term.ended`, `term.exit`), it stops writing first, so the app reads that
-message and then the end of the stream; the app then closes its end (the
-holder cuts the connection 2 s later regardless). A write that has not finished
-in 5 s closes the connection; the 5 s are for the whole message, however slowly
-the app reads it. A type the connection does not allow gets `unknown-type` and
-a close; 20 `bad-field` or `too-large` replies in 60 s are allowed, the next
-one closes.
+`status` the status line, and `paste` the session's pictures (all below). A
+first frame that is raw, or JSON off channel 0, gets `bad-frame`; another type
+`unknown-type`, another version `proto-mismatch`, anything else `bad-field`;
+then the holder closes the connection. With no `hello.ack` in 10 s it sends
+`timeout` and closes; after that, with no frame from the app in 60 s it sends
+`timeout` and closes (the app pings every 15 s). Each limit is for the whole
+frame: one sent a byte at a time must still be whole in time. (One exception:
+a frame begun within a picture's chunk wait, the session's pictures, below.) A
+frame's JSON is at most 4 KiB before the `hello.ack`, at most 64 KiB once the
+session is launched or a launch is under way (on a connection that acked
+`mcp`, which may carry a tool result, 16 MiB then too), and otherwise 16 MiB
+as section 6 allows: a larger one is `bad-frame` and a close, refused on its
+header before its payload is read, and a payload's buffer grows only as its
+bytes arrive. At most 16 connections at once: the next one gets the hello,
+`busy`, and is closed. When the holder closes a connection after a last
+message (an `error`, `term.detached`, `term.ended`, `term.exit`), it stops
+writing first, so the app reads that message and then the end of the stream;
+the app then closes its end (the holder cuts the connection 2 s later
+regardless). A write that has not finished in 5 s closes the connection; the 5
+s are for the whole message, however slowly the app reads it. A type the
+connection does not allow gets `unknown-type` and a close; 20 `bad-field` or
+`too-large` replies in 60 s are allowed, the next one closes.
 
 Which errors close the connection here (for the local transport this replaces
 the last column of section 8's table):
@@ -1118,7 +1212,7 @@ the last column of section 8's table):
 | `timeout` | yes: no `hello.ack` in 10 s, or no frame in 60 s |
 | `bad-field` | yes for the first frame; otherwise no, within the budget of 20 in 60 s |
 | `too-large` | no, within that budget |
-| `busy` | yes when 16 connections are served already, the connection fell 256 chunks behind, or no thread could be started to carry its live output; no for typed input not taken, a second launch or a ninth tool stream |
+| `busy` | yes when 16 connections are served already, the connection fell 256 chunks behind, or no thread could be started to carry its live output; no for typed input not taken, a second launch, a ninth tool stream or a second picture while one is being sent |
 | `not-found`, `not-connected`, `io` | no |
 
 | Type | Reply | Fields and rules |
@@ -1140,6 +1234,7 @@ the last column of section 8's table):
 | `mcp.back` | none | `{stream}`, from the holder to a relay that acked `away`, on the relay's number: a connection takes its kept stream again (kept streams, below) |
 | `screen.read` | `screen.rows` `{re, cols, rows, cursor, modes, title?, cut, lines}` | `{id}`; only on a connection that acked `screen`, attached or not, and never from a relay (`unknown-type`); `title` only on a connection that acked `title` too; before a launch, or while the session is ending, `not-found` (screen reads, below) |
 | `screen.tail` | `screen.lines` `{re, cut, lines}` | `{id, count}`, `count` from 1 to 200; as `screen.read` (screen reads, below) |
+| `file.put` | `file.stored` `{re, sha256}` | `{id, name, size, sha256}`, then the picture's bytes on the paste channel; only on a connection that acked `paste`, and only the attached connection, else `not-connected`; one at a time per session, else `busy`; before a launch, or while the session is ending, `not-found` (the session's pictures, below) |
 
 Ids are even, as in section 9, and at most 2^53 - 1. Every message has exactly
 its fields; `code` is present only once the program has exited. The tool
@@ -1221,7 +1316,9 @@ stream messages carry no id: a refusal of one has no `re`.
   it does not yet restore the screen in use or the
   input modes set before `ring_start`. Typed input goes to the holder as raw
   frames on channel 1, accepted only from the attached connection: raw bytes on
-  any other connection or channel are `bad-frame` and a close. Typed input is
+  any other connection or channel are `bad-frame` and a close (but a picture's
+  bytes on the paste channel, channel 2, while its `file.put` is open; the
+  session's pictures, below). Typed input is
   queued for the program and never waited on: while at most 64 frames of typed
   input wait (the program has stopped reading), more gets `busy` and is not
   taken. The program must never see input with a gap in it, so once one frame
@@ -1667,7 +1764,14 @@ for that session reads `screen.read` each time it looks, in place of a pane of
 its own (src/main/providers/codex/session-screen.ts). From 2.1.3-beta.15 only
 a connection that acked both reads it: one that acked `screen` alone (a holder
 that offers no `title`) gets main's own pane, since the title's spinner is the
-rule's only busy sign while a reply streams. Nothing else in the app asks yet.
+rule's only busy sign while a reply streams. From 2.1.3-beta.21 (ADR-032) a
+helper tab on another machine whose CLI reads pictures through the clipboard
+stand-in (below) acks `screen` and `title` on its own connection, and the
+Claude package's clipboard paste reads `screen.read` for Claude Code's
+`[Image #N]` placeholder after the paste key (src/main/providers/claude/
+run-screen.ts holderPlaceholders); that tab's take-over asks no size first
+(helper-pty.ts `sizeFromHolder`), so its replay is shown as before. Nothing
+else in the app asks yet.
 
 - **`screen.read`** `{id}` is answered `screen.rows`: `cols` and `rows`, the
   screen's size; `cursor` `{row, col}`, the cursor's cell from 0 (its column
@@ -1753,6 +1857,144 @@ rule's only busy sign while a reply streams. Nothing else in the app asks yet.
   `io`, and the output, the ring and the attached connection go on.
 - Vectors: the `screen` part of `helper/fixtures/local.json`.
 
+**The session's pictures (capability `paste`, from 2.1.3-beta.21; ADR-032;
+pending probe PH1).** `file.put` brings one picture from this computer to a
+remote session's holder, for the CLI's own clipboard paste there (the
+clipboard stand-in, below). A holder from 2.1.3-beta.21 offers `paste` in its
+hello on every system. The app acks it only on the connection of a helper tab
+on a remote machine, never for a session on this computer, whose pictures go
+through this computer's own clipboard (ADR-032 decision 8). A holder never
+sends `file.put`.
+
+- **`file.put`** `{id, name, size, sha256}`. `name` is `paste-<n>.png` or
+  `paste-<n>.jpg`, `<n>` a decimal number of 1 to 9 digits with no leading
+  zero; any other name, or one already in `paste/`, is `bad-field`. `size` is
+  1 to 20 MiB (20,971,520 bytes), and with what `paste/` holds the session
+  keeps within 100 MiB there: over either is `too-large`. `sha256` is 64
+  lower-case hex characters. Every refusal comes before a byte is taken.
+- **The bytes** follow as raw frames (kind 1) on channel 2, the paste channel,
+  from the same connection, each at most 64 KiB, `size` bytes in all, in
+  order. A byte past `size` is `too-large` and ends the upload, its file
+  removed. Raw bytes on channel 2 with no upload open are `bad-frame` and a
+  close, as on any other channel. Typed input on channel 1 is not held up by
+  an upload.
+- **Where it goes.** The holder makes `sessions/<sid>/paste/` in the session
+  folder beside the store (`<store>/../sessions/<sid>`, section 1) when it is
+  missing, 0700; it must be a real folder of the user's own, not a link, else
+  `io`. It writes the bytes to a new file `paste/.part-<n>` (0600; made new,
+  never through a link and never over a file). After the last byte it checks
+  the SHA-256: equal, it renames the file to `name`, removes the picture before
+  it, and answers `file.stored` `{re, sha256}` within 10 s of the last chunk;
+  not equal, it removes the file and answers `bad-field`. With 30 s and no
+  chunk the upload ends with `timeout` and its partial file is removed, as
+  for one whose connection closes, detaches or is replaced. `paste/` goes with
+  the session folder at the session's end (`unsession`, section 1; the Check's
+  `sweep`).
+- **A frame begun in the chunk wait.** A frame whose first byte comes within
+  the holder's 30 s chunk wait is read whole, within 60 s of that byte, even
+  when the wait runs out meanwhile, and the connection stays up. When the wait
+  did run out meanwhile, a chunk of the picture with bytes in it is still
+  taken as usual; after any other frame, an empty chunk among them, the upload
+  then ends with `timeout`. This is an exception to the rule above (a
+  connection) that each limit is for the whole frame.
+- **What it is not.** The reply carries no path, and nothing is pasted or
+  typed from it: the app then sends the CLI's own paste key as typed input on
+  channel 1 (ADR-032 decision 3), and the CLI reads the picture through the
+  stand-in. The holder decides nothing about the picture and never reads it
+  (ADR-030 row 4).
+
+**The clipboard stand-in (from 2.1.3-beta.21; ADR-032; pending probe PR1).**
+On a Linux host Claude Code reads a picture by running `xclip` or `wl-paste`,
+which it finds by `PATH` (ADR-032's table). For a helper tab whose Claude
+package's remote launch asks for the stand-in, the `files` fixed script
+(section 1's session files; its values gain this build's helper folder and
+`clip`, or `none`) writes, after the session's files, two scripts, `xclip` and
+`wl-paste`, into `sessions/<sid>/bin/` (the folder 0700, each script 0700, not
+the 0600 of the other session files, section 1; each written to a staging name
+and moved over its own), each of two lines:
+
+```
+#!/bin/sh
+exec '<helper>' clip --store '<store>' --session '<sid>' --as <name> [--real '<path>'] -- "$@"
+```
+
+`<helper>` and `<store>` are the session's helper and store paths, built from
+`$HOME` as the fixed scripts build them (section 4), and `<name>` is the
+script's own name. A link alone could not name the session: the CLI runs it by
+`PATH` as `xclip`, and `/proc/self/exe` is the helper binary. `--real` is the
+absolute path of the real tool of that name, as the fixed script's own
+`command -v` finds it outside the session's `bin/` when it writes the scripts,
+and is left out when there is none. No path holding a single quote, a
+backslash or a control character is written: with such a helper or store path
+no `bin/` is written, and image paste in that tab shows as not available yet;
+with such a real tool, `--real` is left out. The script text holds no quote
+or backslash (section 4), so the single quote, double quote and backslash the
+two lines hold and the checks compare come from awk's `printf` by their codes,
+checked by their bytes first; with no awk, no `bin/` is written either. The
+`files` exec answers `clip ok`, or `clip <why>` for a stand-in not written,
+which fails nothing: the session starts, and the tab's image paste is not
+available. The launch then puts
+`sessions/<sid>/bin` first on `PATH`: core's `remoteLaunchSpec`
+(`src/main/remote-helper/session.ts`, through `clipStandInFolder`) does it
+inside the `-c` wrapper text, after the rc files, when the Claude package's
+remote launch asks for the stand-in (`clipStandIn`, a `RemoteLaunch` field,
+not a variable: `remoteLaunchSpec`'s check of the provider's environment
+refuses a variable the launch sets itself, `PATH` among them); for a login
+shell outside the sh family (no wrapper: neither `PLAIN_WRAPPER` nor the
+stand-in's) the folder goes in front of the host account's `PATH`
+(`hostAccountEnv`), where no rc file runs. The wrapper text
+(`CLIP_STAND_IN_WRAPPER`) is
+`PATH="$1${PATH:+:$PATH}"; export PATH; shift; exec "$0" "$@"`, the folder
+the first argument after the program, so no host path is in the text and an
+empty `PATH` gets no trailing colon. A folder that holds a colon, a single
+quote, a backslash or a control character gets no stand-in, and neither does
+a host that is not Linux (the machine's recorded system; Claude Code on macOS
+reads the pasteboard, not `xclip`): its `files` exec is asked for `none`.
+
+```
+aicc-helper clip --store <folder> --session <sid> --as xclip|wl-paste [--real <path>] -- [args...]
+```
+
+`--session` must match the session id pattern, so no path part reaches a
+folder name, and each option is given once; `--` ends them. `--store` is an
+absolute path of plain names below a folder of its own. The mode reads only
+`sessions/<sid>/paste/` beside the store (by the store's own parent, never
+through `..`): the store's parent, `sessions`, the session's folder and
+`paste/` must each be a real folder of the user's own, 0700, never a link.
+The current picture is the file there named `paste-<n>.png` or
+`paste-<n>.jpg` (with more than one, the highest `<n>`; two names sharing it
+are no current picture), a regular file of the user's own of 1 byte to
+20 MiB, opened without following a link, that begins with its type's
+signature (PNG's eight bytes, JPEG's `FF D8 FF`: text under a picture's name
+is no picture); its type, `image/png` or `image/jpeg`, comes from its name.
+It answers only these shapes, Claude Code's (PR1 records the exact argument
+lists):
+
+- as `xclip`: `-selection clipboard`, `-o` and `-t TARGETS`, in any order,
+  each once: it prints the current picture's type and a line end, and exits 0;
+- as `xclip`: `-selection clipboard`, `-o` and `-t <type>`, `<type>` the
+  current picture's type: it writes the picture's bytes and exits 0;
+- as `wl-paste`: `--list-types` (or `-l`): it prints the type and a line end,
+  and exits 0;
+- as `wl-paste`: `--type <type>` (or `-t <type>`), with or without
+  `--no-newline` (or `-n`), `<type>` the current picture's type: it writes the
+  picture's bytes and exits 0.
+
+With no current picture, each of those prints nothing and exits 1 (a list,
+and a read of `image/png` or `image/jpeg`). Any other
+use (another shape, another type, a text read, a write to the clipboard) goes
+to the real tool: its `--real` path is started by `execve`, with no search of
+`PATH`, the arguments after `--` as given and the environment unchanged, and
+its exit status is the tool's. With no `--real` it prints nothing and exits 1.
+The mode never serves text, never reads another session's folder or any other
+file, and never touches a display or the host's clipboard itself; it starts no
+process but the real tool, writes nothing and opens no connection. It exits 2
+on a command line it does not take, a `--real` that is not absolute or lies
+inside the session's `bin/` (by its names, or by its real path) included. On
+Windows a command line it takes exits 1; one it does not take exits 2.
+`bin/` goes with the session folder at the session's end.
+Code: `helper/src/clip.rs`, its tests `helper/tests/clip.rs`.
+
 **Change.** The `hold` and `list` command lines and their exit codes, the
 record and the listing are frozen within version 1; new fields need a new
 record version or capability. A message may gain an optional field, as
@@ -1768,4 +2010,9 @@ and `conpty`. The `mcp` command line (2.1.3-beta.10) is frozen too: its
 options, its exit status (0 at the end of its input, 1 otherwise) and a
 standard output that carries only messages. The `capture` command line (2.1.3-beta.14) is frozen from
 2.1.3-beta.16, when the app's Snap began to run it (`src/main/snap/`): its
-options, its one line and its exit statuses.
+options, its one line and its exit statuses. The `clip` command line and the
+two-line scripts that run it, and the `run` command line of section 4 (both
+written for 2.1.3-beta.21), are frozen the same way once the app first runs
+them: their options, their request and output lines and their exit statuses.
+`file.put` and `file.stored` on the paste channel are frozen with the `paste`
+capability.

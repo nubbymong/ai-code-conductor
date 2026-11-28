@@ -24,7 +24,10 @@
  * `status` (the session's status line, 2.1.3-beta.18) only when it is given
  * the `status` option, which a tab through the session helper on another
  * machine is (remote-helper/session.ts); it then reports each `status` the
- * holder sends.
+ * holder sends. A connection asks for `paste` (the session's pictures,
+ * 2.1.3-beta.21, ADR-032) only when it is given the `paste` option, which
+ * only a tab through the session helper on another machine is
+ * (remote-helper/session.ts); it may then send a picture there (putFile).
  *
  * On a connection that acked `mcp`, the app sends a tool stream's messages
  * (sendMcp) only when the holder would read them, and ends its side of a
@@ -36,8 +39,11 @@
  * 1 MiB, nothing more until its `pong`, and the frames the holder answered
  * `busy` (it takes no input while the program has stopped reading) sent
  * again, so the program never sees input with a gap in it. The keep-alive
- * ping is the same ping.
+ * ping is the same ping. A picture's chunks (putFile) are paced by the same
+ * pings, counted with the typed input: 16 raw frames or 1 MiB of the two
+ * together between two pings, so no more than that is ever ahead of one.
  */
+import { createHash } from 'crypto'
 import * as fs from 'fs'
 import * as net from 'net'
 import * as path from 'path'
@@ -52,6 +58,11 @@ import {
   JSON_DEPTH_MAX,
   LOCAL_CAPS,
   MCP_CAP,
+  PASTE_CAP,
+  PASTE_CHANNEL,
+  PASTE_CHUNK_WAIT_MS,
+  PASTE_NAME_RE,
+  PASTE_PICTURE_MAX,
   PROTO_VERSION,
   SCREEN_CAP,
   STATUS_CAP,
@@ -69,6 +80,7 @@ import {
   readMcp,
   readMcpClose,
   readMcpOpen,
+  readFileStored,
   readScreenRows,
   readStatusFrame,
   type Hello,
@@ -125,6 +137,10 @@ export interface ConnectionOptions {
    *  the holder offers it (2.1.3-beta.18; a tab through the session helper on
    *  another machine). */
   status?: boolean
+  /** This connection sends the session's pictures (`file.put`, putFile):
+   *  `paste` is acked when the holder offers it (2.1.3-beta.21; a tab through
+   *  the session helper on another machine only, ADR-032). */
+  paste?: boolean
   helloTimeoutMs?: number
   replyTimeoutMs?: number
   pingEveryMs?: number
@@ -146,6 +162,14 @@ export const INPUT_BYTES_PER_PING = 1024 * 1024
  *  nothing). */
 export const RESEND_WAIT_MIN_MS = 25
 export const RESEND_WAIT_MAX_MS = 400
+/** A picture's next chunk goes only within this time of its last one written
+ *  (or of its `file.put`): 5 s inside the holder's chunk wait, which runs from
+ *  no earlier than that. Typed input goes first after each pong, so a picture
+ *  can wait rounds for its turn; one whose turn comes later sends no more,
+ *  since the holder may have ended the upload by the time a chunk came, and
+ *  bytes with no upload open close the connection. The holder's `timeout`
+ *  answers it instead. */
+export const PASTE_CHUNK_SEND_MS = PASTE_CHUNK_WAIT_MS - 5_000
 
 type Json = Record<string, unknown>
 
@@ -341,6 +365,11 @@ export class HolderConnection extends EventEmitter<HolderConnectionEvents> {
   /** True when this connection acked `status`: the holder offered it and the
    *  connection asked for it. Only then are status lines reported. */
   readonly status: boolean
+  /** True when this connection acked `paste`: the holder offered it and the
+   *  connection asked for it. Only then may it send a picture (putFile). */
+  readonly paste: boolean
+  /** A picture is being sent on this connection now (one at a time). */
+  private putting = false
   private readonly stream: Duplex
   private readonly reader = new FrameReader('helper_to_app')
   private nextId = 2
@@ -350,8 +379,11 @@ export class HolderConnection extends EventEmitter<HolderConnectionEvents> {
   private readonly replyTimeoutMs: number
   /** Typed input not sent yet: it waits for a pong, or to be sent again. */
   private unsent: Buffer[] = []
-  /** Typed input sent since the last ping went. */
+  /** Typed input sent since the last ping went: what its pong accounts for. */
   private window: Buffer[] = []
+  /** Raw frames, and their bytes, sent since the last ping went: typed input
+   *  and a picture's chunks together (counted()). */
+  private windowFrames = 0
   private windowBytes = 0
   /** The ping on its way: its id, the typed input sent before it, its timer. */
   private ping: { id: number; frames: Buffer[]; timer: ReturnType<typeof setTimeout> } | null = null
@@ -382,12 +414,13 @@ export class HolderConnection extends EventEmitter<HolderConnectionEvents> {
     this.screen = opts.screen === true && hello.caps.includes(SCREEN_CAP)
     this.title = this.screen && opts.title === true && hello.caps.includes(TITLE_CAP)
     this.status = opts.status === true && hello.caps.includes(STATUS_CAP)
+    this.paste = opts.paste === true && hello.caps.includes(PASTE_CAP)
     this.replyTimeoutMs = opts.replyTimeoutMs ?? REPLY_TIMEOUT_MS
     stream.on('data', (chunk: Buffer) => this.onBytes(chunk))
     stream.on('close', () => this.shut())
     stream.on('end', () => this.shut())
     stream.on('error', () => this.shut())
-    stream.write(encodeJsonFrame(helloAck(this.hooks, this.mcp, this.screen, this.title, this.status)))
+    stream.write(encodeJsonFrame(helloAck(this.hooks, this.mcp, this.screen, this.title, this.status, this.paste)))
     if (rest.length > 0) this.onBytes(rest)
     stream.resume()
     const every = opts.pingEveryMs ?? PING_EVERY_MS
@@ -475,6 +508,170 @@ export class HolderConnection extends EventEmitter<HolderConnectionEvents> {
     await this.request({ t: 'screen.read' }, (m, size) => { screen = readScreenRows(m, size, this.title) })
     if (!screen) throw new HolderError('bad-frame', 'the holder answered screen.read with a reply that does not read')
     return screen
+  }
+
+  /**
+   * 2.1.3-beta.21 (ADR-032; section 15, capability `paste`): one picture into
+   * the session's own `paste/` folder on the holder's machine, for its CLI's
+   * own clipboard paste there. `file.put` {id, name, size, sha256} first, and
+   * a ping after it: the holder answers a connection's messages in order and
+   * refuses a `file.put` before it takes a byte, so a refusal comes before
+   * that pong, and no byte goes for a refused picture (bytes on the paste
+   * channel with no upload open close the connection). The ping is the
+   * keep-alive's own (one already on its way is waited out first), so typed
+   * input is paced as before. Then the bytes, as raw frames of at most 64 KiB
+   * on the paste channel, never the terminal's, paced by the pings as typed
+   * input is (a ping after every 16 raw frames or 1 MiB, the typed input's
+   * counted with them, and no chunk until its pong); then the holder's
+   * `file.stored` {re, sha256}, whose hash must be the picture's
+   * (readFileStored; anything else is `bad-frame`). Resolves with that hash:
+   * the reply carries no path, and nothing is typed from it.
+   *
+   * Refused here, with nothing sent: a connection that did not ack `paste`
+   * (`unknown-type`), a name off PASTE_NAME_RE or no byte (`bad-field`), over
+   * 20 MiB (`too-large`), and a second picture while one is being sent
+   * (`busy`). The holder's refusal rejects with its code. Typed input goes on
+   * meanwhile, and first after each pong. The holder ends an upload with 30 s
+   * and no chunk itself; the app's own wait is that and the reply timeout,
+   * from the last chunk written or the last pong, whichever came later. A
+   * picture whose turn does not come within 25 s of its last chunk (or of its
+   * `file.put`; PASTE_CHUNK_SEND_MS) sends no more, and the holder's
+   * `timeout` is its answer, the connection up; once the holder has answered,
+   * the picture waits for no more turns.
+   */
+  async putFile(name: string, bytes: Buffer): Promise<{ sha256: string }> {
+    if (this.closed) throw new HolderError('io', 'the connection is closed')
+    if (!this.paste) throw new HolderError('unknown-type', 'this connection did not ack paste')
+    if (!PASTE_NAME_RE.test(name)) throw new HolderError('bad-field', 'a picture is named paste-<n>.png or paste-<n>.jpg, <n> 1 to 9 digits with no leading zero')
+    if (bytes.length < 1) throw new HolderError('bad-field', 'a picture has at least one byte')
+    if (bytes.length > PASTE_PICTURE_MAX) throw new HolderError('too-large', `a picture is at most ${PASTE_PICTURE_MAX} bytes`)
+    if (this.putting) throw new HolderError('busy', 'a picture is being sent on this connection already')
+    this.putting = true
+    try {
+      const sha256 = createHash('sha256').update(bytes).digest('hex')
+      const id = this.takeId()
+      const wait = PASTE_CHUNK_WAIT_MS + this.replyTimeoutMs
+      const replied = new Promise<Json>((resolve, reject) => {
+        this.waiting.set(id, { resolve, reject, timer: this.replyTimer(id, 'file.put', wait) })
+      })
+      // Read below; a refusal that comes while the bytes go is not left unhandled meanwhile.
+      replied.catch(() => { /* read below */ })
+      const unanswered = (): boolean => this.waiting.has(id)
+      // The holder's chunk wait runs from its read of file.put, and then of
+      // each chunk: never earlier than the write of it here.
+      let lastWrite = Date.now()
+      try {
+        this.stream.write(encodeJsonFrame({ t: 'file.put', id, name, size: bytes.length, sha256 }))
+      } catch (err) {
+        this.dropWaiting(id)
+        throw new HolderError('io', (err as Error).message)
+      }
+      await this.pongAfterNow(unanswered)
+      // Refused (or the connection went): no byte is sent, and the refusal is the answer.
+      if (!unanswered()) return this.stored(await replied, sha256)
+      this.rearm(id, 'file.put', wait)
+      for (let at = 0; at < bytes.length; at += RAW_MAX) {
+        // Paced as typed input is (section 15): no chunk while a ping waits
+        // for its pong, and a ping after every 16 raw frames or 1 MiB, typed
+        // input and the picture's chunks counted together (counted()). So no
+        // more than that is ever ahead of a ping, whose pong would otherwise
+        // come late on a slow link and close the connection.
+        if (this.ping) {
+          while (!this.closed && this.ping && unanswered()) await this.nextPong()
+          if (this.closed || !unanswered()) break
+          // The holder has read every chunk before that ping: the wait runs from now.
+          this.rearm(id, 'file.put', wait)
+        }
+        if (this.closed || !unanswered()) break
+        // Its turn came too late (PASTE_CHUNK_SEND_MS): the holder's timeout answers it.
+        if (Date.now() - lastWrite >= PASTE_CHUNK_SEND_MS) break
+        const chunk = bytes.subarray(at, at + RAW_MAX)
+        let more: boolean
+        try {
+          more = this.stream.write(encodeRawFrame(chunk, PASTE_CHANNEL))
+        } catch {
+          this.close()
+          break
+        }
+        lastWrite = Date.now()
+        this.counted(chunk.length)
+        if (!more) await this.drained()
+        this.rearm(id, 'file.put', wait)
+      }
+      return this.stored(await replied, sha256)
+    } finally {
+      this.putting = false
+    }
+  }
+
+  /** The reply to a `file.put` of the picture whose hash is `sha256`. */
+  private stored(m: Json, sha256: string): { sha256: string } {
+    const r = readFileStored(m)
+    if (!r || r.sha256 !== sha256) throw new HolderError('bad-frame', 'the holder answered file.put with a reply that does not read, or that names another hash')
+    return { sha256: r.sha256 }
+  }
+
+  /** A timer that, after `ms`, rejects request `id` if it still waits on this timer. */
+  private replyTimer(id: number, what: string, ms: number): ReturnType<typeof setTimeout> {
+    const timer = setTimeout(() => {
+      const w = this.waiting.get(id)
+      if (!w || w.timer !== timer) return
+      this.waiting.delete(id)
+      w.reject(new HolderError('timeout', `the holder did not answer ${what}`))
+    }, ms)
+    timer.unref?.()
+    return timer
+  }
+
+  /** Request `id`, still waiting, waits `ms` more from now. */
+  private rearm(id: number, what: string, ms: number): void {
+    const w = this.waiting.get(id)
+    if (!w) return
+    clearTimeout(w.timer)
+    w.timer = this.replyTimer(id, what, ms)
+  }
+
+  private dropWaiting(id: number): void {
+    const w = this.waiting.get(id)
+    if (!w) return
+    clearTimeout(w.timer)
+    this.waiting.delete(id)
+  }
+
+  /** Who waits for the next pong (pongAfterNow); each is called at it, and at the close. */
+  private pongWaiters: Array<() => void> = []
+
+  private nextPong(): Promise<void> {
+    if (this.closed) return Promise.resolve()
+    return new Promise<void>((resolve) => { this.pongWaiters.push(resolve) })
+  }
+
+  /** The pong to a ping sent after everything written so far: the holder
+   *  answers a connection's messages in order, so its answer to anything
+   *  written before comes first. The keep-alive's ping is the one sent (its
+   *  pong accounts for typed input as any other), after one already on its
+   *  way has been answered. Returns at once once the connection is closed,
+   *  and, before its own ping, once `still()` is false (the request it waits
+   *  for was answered meanwhile). */
+  private async pongAfterNow(still: () => boolean): Promise<void> {
+    while (!this.closed && this.ping && still()) await this.nextPong()
+    if (this.closed || !still()) return
+    this.sendPing()
+    if (this.ping) await this.nextPong()
+  }
+
+  /** The stream takes more writes, or it closed. */
+  private drained(): Promise<void> {
+    return new Promise<void>((resolve) => {
+      if (this.closed) { resolve(); return }
+      const done = (): void => {
+        this.stream.off('drain', done)
+        this.stream.off('close', done)
+        resolve()
+      }
+      this.stream.on('drain', done)
+      this.stream.on('close', done)
+    })
   }
 
   private takeId(): number {
@@ -600,9 +797,17 @@ export class HolderConnection extends EventEmitter<HolderConnectionEvents> {
         return
       }
       this.window.push(chunk)
-      this.windowBytes += chunk.length
-      if (this.window.length >= INPUT_FRAMES_PER_PING || this.windowBytes >= INPUT_BYTES_PER_PING) this.sendPing()
+      this.counted(chunk.length)
     }
+  }
+
+  /** One raw frame written, typed input or a picture's chunk: once 16 of them
+   *  or 1 MiB have gone since the last ping, the next ping goes, and neither
+   *  sends more until its pong (section 15). */
+  private counted(bytes: number): void {
+    this.windowFrames += 1
+    this.windowBytes += bytes
+    if (this.windowFrames >= INPUT_FRAMES_PER_PING || this.windowBytes >= INPUT_BYTES_PER_PING) this.sendPing()
   }
 
   /** A ping: the typed input sent before it is accounted for by its pong. A
@@ -614,6 +819,7 @@ export class HolderConnection extends EventEmitter<HolderConnectionEvents> {
     timer.unref?.()
     this.ping = { id, frames: this.window, timer }
     this.window = []
+    this.windowFrames = 0
     this.windowBytes = 0
     try {
       this.stream.write(encodeJsonFrame({ t: 'ping', id }))
@@ -633,6 +839,7 @@ export class HolderConnection extends EventEmitter<HolderConnectionEvents> {
     this.ping = null
     const refused = Math.min(this.busySincePong, ping.frames.length)
     this.busySincePong = 0
+    this.wakePongWaiters()
     if (refused === 0) {
       this.resendWait = 0
       this.pump()
@@ -708,7 +915,15 @@ export class HolderConnection extends EventEmitter<HolderConnectionEvents> {
     this.mcpStreams.clear()
     this.mcpEnded.clear()
     this.mcpCalls.clear()
+    this.wakePongWaiters()
     this.emit('close')
+  }
+
+  /** A pong came, or the connection closed: each waiter for one goes on. */
+  private wakePongWaiters(): void {
+    const waiters = this.pongWaiters
+    this.pongWaiters = []
+    for (const w of waiters) w()
   }
 
   private onBytes(chunk: Buffer): void {

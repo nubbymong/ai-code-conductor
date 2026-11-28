@@ -87,7 +87,7 @@
  */
 import type { IDisposable, IEvent, IPty } from 'node-pty'
 import { StringDecoder } from 'string_decoder'
-import type { HolderConnection } from './connection'
+import { HolderError, type HolderConnection } from './connection'
 import { LAUNCH_LIMITS, type HolderRecord, type LaunchSpec, type ScreenRows } from './protocol'
 import { stripSpoofableText } from '../../shared/safe-text'
 import { TERMINAL_SCROLLBACK_LINES } from '../../shared/terminal-scrollback'
@@ -149,6 +149,12 @@ export interface HelperPtyDriver {
    *  when report.html is written or at its time limit, and an output failure
    *  alone did not stop it on node-pty). Absent or true: ended, as a tab's is. */
   endsOnIoFailure?: boolean
+  /** False: a take-over does not read its holder's size before its attach,
+   *  though its connections ack `screen`, and its replay is shown as it
+   *  comes, at the tab's size (2.1.3-beta.21: a helper tab on another
+   *  machine, whose connection acks `screen` only for its clipboard paste's
+   *  placeholder read, ADR-032). Absent or true: read when acked, as before. */
+  sizeFromHolder?: boolean
 }
 
 /**
@@ -490,6 +496,21 @@ export class HelperPty implements IPty {
     }
   }
 
+  /**
+   * 2.1.3-beta.21 (ADR-032; section 15, capability `paste`): one picture into
+   * the session's own `paste/` folder on its holder's machine
+   * (HolderConnection.putFile), on the connection in use now, while it is
+   * attached. Only a helper tab on another machine's connection acks `paste`
+   * (remote-helper/session.ts), so on any other the connection refuses it
+   * (`unknown-type`). Rejects `not-connected` on the usual way and while no
+   * connection is attached.
+   */
+  putFile(name: string, bytes: Buffer): Promise<{ sha256: string }> {
+    const conn = this.conn
+    if (this.inner || this.exited || !this.attached || !conn || conn.isClosed) return Promise.reject(new HolderError('not-connected', 'no connection is attached to the holder now'))
+    return conn.putFile(name, bytes)
+  }
+
   write(data: string | Buffer): void {
     if (this.exited) return
     if (this.inner) { this.inner.write(data); return }
@@ -691,9 +712,10 @@ export class HelperPty implements IPty {
 
   /** The holder's size, by `screen.read` on `conn`. None when the holder
    *  offers no screen reads or the read fails: the replay is then shown as it
-   *  comes, at the tab's size, as before. */
+   *  comes, at the tab's size, as before; so is a driver's that reads none
+   *  (sizeFromHolder false). */
   private async holderSizeOf(conn: HolderConnection): Promise<{ cols: number; rows: number } | undefined> {
-    if (!conn.screen) return undefined
+    if (!conn.screen || this.driver.sizeFromHolder === false) return undefined
     try {
       const { cols, rows } = await conn.readScreen()
       return { cols, rows }

@@ -326,14 +326,54 @@ export function chooseProto(app: readonly number[], helper: readonly number[]): 
 /** The app's answer to a holder's hello: `core` and `local`, `hooks` when this
  *  connection takes hook events, `mcp` when it carries tool streams,
  *  `screen` when it reads the screen and `title`, beside `screen` only, when
- *  its screen reads take the title, `status` when it takes the status line
- *  (each only ever when the hello offered it). */
-export function helloAck(hooks = false, mcp = false, screen = false, title = false, status = false): { t: 'hello.ack'; proto: number; caps: string[] } {
+ *  its screen reads take the title, `status` when it takes the status line,
+ *  `paste` when it sends the session's pictures (each only ever when the
+ *  hello offered it). */
+export function helloAck(hooks = false, mcp = false, screen = false, title = false, status = false, paste = false): { t: 'hello.ack'; proto: number; caps: string[] } {
   return {
     t: 'hello.ack',
     proto: PROTO_VERSION,
-    caps: [...LOCAL_CAPS, ...(hooks ? [HOOKS_CAP] : []), ...(mcp ? [MCP_CAP] : []), ...(screen ? [SCREEN_CAP] : []), ...(screen && title ? [TITLE_CAP] : []), ...(status ? [STATUS_CAP] : [])],
+    caps: [...LOCAL_CAPS, ...(hooks ? [HOOKS_CAP] : []), ...(mcp ? [MCP_CAP] : []), ...(screen ? [SCREEN_CAP] : []), ...(screen && title ? [TITLE_CAP] : []), ...(status ? [STATUS_CAP] : []), ...(paste ? [PASTE_CAP] : [])],
   }
+}
+
+// ── the session's pictures (section 15, capability `paste`) ──────────────────
+
+/** The session's pictures through the holder (section 15, from
+ *  2.1.3-beta.21; ADR-032): `file.put` brings one picture from this computer
+ *  into the session's own `paste/` folder on the holder's machine, for the
+ *  CLI's own clipboard paste there. Acked only by the connection of a helper
+ *  tab on a remote machine (remote-helper/session.ts), never by one of a
+ *  session on this computer, whose pictures go through this computer's own
+ *  clipboard (ADR-032 decision 8); and only when the holder offers it. */
+export const PASTE_CAP = 'paste'
+/** A picture's bytes travel on this channel, as raw frames, while its
+ *  `file.put` is open; at most RAW_MAX a frame. */
+export const PASTE_CHANNEL = 2
+/** A picture's name: `paste-<n>.png` or `paste-<n>.jpg`, `<n>` 1 to 9
+ *  decimal digits with no leading zero. No other name goes into `paste/`. */
+export const PASTE_NAME_RE = /^paste-[1-9][0-9]{0,8}\.(?:png|jpg)$/
+/** The most one picture may be: 20 MiB. */
+export const PASTE_PICTURE_MAX = 20 * 1024 * 1024
+/** The most a session's `paste/` may hold with a new picture: 100 MiB. */
+export const PASTE_SESSION_MAX = 100 * 1024 * 1024
+/** The holder ends an upload with no chunk in this time (`timeout`, its
+ *  partial file removed; section 10). */
+export const PASTE_CHUNK_WAIT_MS = 30_000
+/** The holder answers `file.stored` within this time of the last chunk. */
+export const PASTE_REPLY_MS = 10_000
+
+/** `file.stored` {re, sha256}, read strictly: exactly those fields, `re` a
+ *  whole number, `sha256` 64 lower-case hex. It carries no path. Null for
+ *  anything else. */
+export function readFileStored(m: unknown): { re: number; sha256: string } | null {
+  if (m === null || typeof m !== 'object' || Array.isArray(m)) return null
+  const r = m as Record<string, unknown>
+  const keys = Object.keys(r)
+  if (keys.length !== 3 || r.t !== 'file.stored' || !('re' in r) || !('sha256' in r)) return null
+  if (typeof r.re !== 'number' || !Number.isSafeInteger(r.re) || r.re < 0) return null
+  if (typeof r.sha256 !== 'string' || !SHA256_RE.test(r.sha256)) return null
+  return { re: r.re, sha256: r.sha256 }
 }
 
 // ── the status line (section 15, capability `status`) ────────────────────────

@@ -122,7 +122,8 @@ describe('sendImageToSession with a Codex session', () => {
   it('on this computer: main is asked as for Alt+V; its fallback\'s note goes to the session\'s paste hint, and the raw line is never typed', async () => {
     codexTab('local')
     h.submitImage.mockResolvedValue({ outcome: 'not-taken' })
-    sendImageToSession('cx9', PATH, SNAP, 'local')
+    // Since 2.1.3-beta.21 the line is main's path-route answer's (ADR-032 row 14).
+    sendImageToSession('cx9', PATH, SNAP, 'local', 'composer')
     await flush()
     expect(h.submitImage).toHaveBeenCalledWith({ sessionId: 'cx9', path: PATH, sentence: SNAP })
     expect(h.writeSessionInput).not.toHaveBeenCalled()

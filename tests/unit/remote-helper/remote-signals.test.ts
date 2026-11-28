@@ -183,9 +183,11 @@ describe('a helper tab\'s own files on its host', () => {
     expect(pty).not.toBeNull()
     await until('the launch', () => holder.launch !== null && holder.attached !== null)
     expect(ssh.scripts()).toEqual(['reads', 'field', 'hold', 'files', 'bridge'])
-    // The reads: the session folder, then the four settings files Claude Code reads, as data on standard input.
+    // The reads: the session folder, then the four settings files Claude Code
+    // reads, then (2.1.3-beta.21) its keybindings file for the paste key, as
+    // data on standard input.
     expect(ssh.calls[0].values.slice(1)).toEqual([MACHINE.did, INSTALL])
-    expect(ssh.calls[0].stdin.toString()).toBe('/home/nick/work\nhome .claude/settings.json\ncwd .claude/settings.json\ncwd .claude/settings.local.json\ncheckout .claude/settings.local.json\n')
+    expect(ssh.calls[0].stdin.toString()).toBe('/home/nick/work\nhome .claude/settings.json\ncwd .claude/settings.json\ncwd .claude/settings.local.json\ncheckout .claude/settings.local.json\nhome .claude/keybindings.json\n')
     // The files: the session's id and the layout on the command line, the bytes on standard input.
     const sid = remoteSessionId(id)
     const files = ssh.calls.find((c) => c.script === 'files')!
@@ -204,9 +206,11 @@ describe('a helper tab\'s own files on its host', () => {
     expect(all).not.toContain(os.homedir())
     expect(all).not.toContain(os.tmpdir())
     expect(all).not.toContain(store)
-    // The CLI is pointed at its own folder's files, first on its line.
+    // The CLI is pointed at its own folder's files, first on its line (after
+    // the wrapper's one argument, 2.1.3-beta.21: the clipboard stand-in's
+    // bin/ folder, which the wrapper puts first on PATH and shifts off).
     const launch = holder.launch as { argv: string[] }
-    expect(launch.argv.slice(4, 9)).toEqual([MACHINE.claudePath, '--settings', `${h.folder}/settings.json`, '--mcp-config', `${h.folder}/mcp.json`])
+    expect(launch.argv.slice(4, 10)).toEqual([MACHINE.claudePath, `${h.folder}/bin`, '--settings', `${h.folder}/settings.json`, '--mcp-config', `${h.folder}/mcp.json`])
     expect(h.folder).toBe(`/home/nick/.aicc/${MACHINE.did}/sessions/${sid}`)
     // Its connection asks for the status line, hook events and tool streams.
     expect(holder.attached!.ackedCaps).toEqual(expect.arrayContaining(['core', 'local', 'hooks', 'mcp', 'status']))
@@ -538,7 +542,9 @@ describe('the status line, hook events and tool streams of a helper tab', () => 
     answering(holder)
     const pty = remoteHelperPty(win, id, { ssh: SSH_TAB }, 100, 30)
     await until('attached', () => holder.attached !== null)
-    expect(holder.attached!.ackedCaps).toEqual(['core', 'local'])
+    // None of the signals. The screen reads and their title stay (2.1.3-beta.21,
+    // ADR-032): a Claude Code tab on a Linux host reads its paste's placeholder there.
+    expect(holder.attached!.ackedCaps).toEqual(['core', 'local', 'screen', 'title'])
     expect(ssh.scripts()).toEqual(['reads', 'field', 'hold', 'files', 'bridge'])
     pty!.kill()
     await until('the holder to end', () => holder.ended)

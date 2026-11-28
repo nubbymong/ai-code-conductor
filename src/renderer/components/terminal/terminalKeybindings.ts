@@ -27,6 +27,21 @@ export interface KeybindingTerminal {
   clearSelection?: () => void
 }
 
+/** The clipboard image paste's part of the keybindings (ADR-032). */
+export interface ImagePasteBinding {
+  /** Whether `e` is the image paste shortcut (Alt+V by default, read fresh). */
+  isImageChord: (e: KeyboardEvent) => boolean
+  /** Read fresh on every keystroke: whether this session's CLI takes the
+   *  image paste now (its kind, the partner view not on screen). */
+  takes: () => boolean
+  /** Whether this terminal itself has the keyboard focus (a press from
+   *  outside it types the sentence and Enter after the picture). */
+  terminalFocused: () => boolean
+  /** Report the press to main; resolves whether it found nothing to paste
+   *  (the text chord with no picture on the clipboard). */
+  press: (chord: 'image' | 'text', focused: boolean) => Promise<boolean>
+}
+
 export interface TerminalKeybindingOptions {
   term: KeybindingTerminal
   /** Read fresh on every keystroke: every session's TerminalView stays mounted and
@@ -38,6 +53,12 @@ export interface TerminalKeybindingOptions {
   /** Called when a paste chord was handled but there was nothing to paste, so the
    *  failure is visible rather than silent — the property that let #145 hide. */
   onNothingToPaste?: () => void
+  /** ADR-032 (plan 2.1.3-beta.21 phase 2, 2.1.4): the clipboard image paste,
+   *  for a session whose CLI takes it (an agent session on
+   *  this computer, or a helper tab; utils/imagePaste.ts). Absent: nothing
+   *  changes, as in a plain terminal, a partner pane or a tab on the old SSH
+   *  path, where Alt+V stays xterm's. */
+  imagePaste?: ImagePasteBinding
   /** Seams, defaulted to the real DOM. */
   doc?: Document
   hasModalOpen?: () => boolean
@@ -59,6 +80,22 @@ export function installTerminalKeybindings(opts: TerminalKeybindingOptions): () 
 
   const onKeyDown = (ev: Event) => {
     const e = ev as KeyboardEvent
+    // ADR-032: Alt+V with this terminal focused, in a session whose CLI takes
+    // the image paste, is reported to main as one press (never typed as ESC v
+    // by xterm, and no path): claimed before xterm's own listener sees it.
+    // A paste chord always takes the paste branch below, even when Settings
+    // rebinds "Paste clipboard image" to it (review round 2, R2-4): text
+    // still pastes as text (ADR-008), and with no text that branch reports
+    // the text chord, so a picture still pastes.
+    const image = opts.imagePaste
+    if (image && image.isImageChord(e) && !isPasteChord(e)) {
+      if (!opts.isActive() || hasModalOpen() || !image.terminalFocused() || !image.takes()) return
+      e.stopPropagation()
+      e.preventDefault()
+      if (e.repeat) return
+      void image.press('image', true)
+      return
+    }
     const paste = isPasteChord(e)
     const copy = !paste && isCopyChord(e)
     if (!paste && !copy) return
@@ -95,6 +132,15 @@ export function installTerminalKeybindings(opts: TerminalKeybindingOptions): () 
         text = ''
       }
       if (!text) {
+        // ADR-032 (plan Q2): no text, and a CLI that takes the image paste:
+        // main pastes a picture if the clipboard holds one; text is never
+        // touched (ADR-008).
+        if (image && image.takes()) {
+          let nothing = true
+          try { nothing = await image.press('text', image.terminalFocused()) } catch { nothing = true }
+          if (nothing) opts.onNothingToPaste?.()
+          return
+        }
         opts.onNothingToPaste?.()
         return
       }

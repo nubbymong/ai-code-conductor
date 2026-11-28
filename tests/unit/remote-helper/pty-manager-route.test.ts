@@ -348,7 +348,8 @@ describe('a tab through the session helper: what goes to its host, and what it t
     // Its own files, in its own folder on the host, and nothing else of the app: no secret goes with the launch.
     const launch = holder.launch as { argv?: string[]; env?: Record<string, string> }
     const folder = remoteHelperCommands(MACHINE, remoteSessionId(id)).folder
-    expect(launch.argv?.slice(4, 9)).toEqual([MACHINE.claudePath, '--settings', `${folder}/settings.json`, '--mcp-config', `${folder}/mcp.json`])
+    // 2.1.3-beta.21: after the program, the clipboard stand-in's bin/ folder, the wrapper's one argument (its own folder too).
+    expect(launch.argv?.slice(4, 10)).toEqual([MACHINE.claudePath, `${folder}/bin`, '--settings', `${folder}/settings.json`, '--mcp-config', `${folder}/mcp.json`])
     expect((launch.argv ?? []).join(' ')).not.toMatch(/--append-system-prompt|statusline|localhost|127\.0\.0\.1|token/i)
     expect(Object.keys(launch.env ?? {}).filter((k) => /TOKEN|SECRET|KEY|^CCC_|^ANTHROPIC/i.test(k))).toEqual([])
     expect(ssh.scripts()).toEqual(['reads', 'field', 'hold', 'files', 'bridge'])

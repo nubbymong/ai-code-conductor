@@ -47,7 +47,8 @@ describe('sendImageToSession on this computer', () => {
 
   it('a session main does not take (not-taken): the sentence and the path typed, then Enter, as before', async () => {
     h.submitImage.mockResolvedValue({ outcome: 'not-taken' })
-    sendImageToSession('cx1', PATH, 'look', 'local')
+    // Since 2.1.3-beta.21 the line is main's path-route answer's (ADR-032 row 14).
+    sendImageToSession('cx1', PATH, 'look', 'local', 'enter')
     await flush()
     expect(h.writeSessionInput).toHaveBeenCalledTimes(1)
     expect(h.writeSessionInput).toHaveBeenCalledWith('cx1', `look ${PATH}\r`)
@@ -55,7 +56,7 @@ describe('sendImageToSession on this computer', () => {
 
   it('an ask that fails: the same typed line', async () => {
     h.submitImage.mockRejectedValue(new Error('no handler'))
-    sendImageToSession('cl1', PATH, 'look', 'local')
+    sendImageToSession('cl1', PATH, 'look', 'local', 'enter')
     await flush()
     expect(h.writeSessionInput).toHaveBeenCalledWith('cl1', `look ${PATH}\r`)
   })

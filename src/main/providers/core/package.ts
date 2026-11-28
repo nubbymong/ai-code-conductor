@@ -426,6 +426,42 @@ export type ReviewRunResult =
 
 export interface ProviderReviewOperations {
   run(input: ReviewRunInput): Promise<ReviewRunResult>
+  /** 2.1.3-beta.21 (aicc_planning#446): a review on another machine, the one
+   *  a remote session runs on. Absent: this provider's CLI does not review
+   *  on another machine. */
+  remote?: ProviderRemoteReview
+}
+
+/**
+ * 2.1.3-beta.21 (aicc_planning#446): what a review on another machine takes
+ * from the reviewing provider's package. Pure: nothing here starts a process
+ * or reads a file. Core runs the CLI on the machine through the session
+ * helper's one-shot run mode (src/main/remote-helper/review.ts), with the
+ * machine's own sign-in, and names no flag or word of it; the package says
+ * what its argv is and how its output and version read.
+ */
+export interface ProviderRemoteReview {
+  /** The CLI's program word, as the machine's login shell finds it on PATH. */
+  readonly program: string
+  /** The oldest CLI version the app runs. */
+  readonly minVersion: string
+  /** The version a `<program> --version` line names, or null. */
+  parseVersion(line: string): string | null
+  /** True for a version older than `minVersion`. */
+  tooOld(version: string): boolean
+  /** The review's argv after the program, for the model and effort main
+   *  took from its allow-lists (ADR-031): the review constant and those two
+   *  values, each one whole element. Refused for a value the package would
+   *  not pass to its CLI. */
+  args(choice: { model?: string; effort?: string }): readonly string[] | { refused: string }
+  /** What the CLI printed on its standard output, read to the review. */
+  readOutput(stdout: string): { text: string | null; usage?: ReviewUsage; error?: string; dropped?: boolean }
+  /** The read of the models the CLI's own picker lists, run on the machine
+   *  in a fresh, empty config folder (the remote helper's `cliread` script):
+   *  its words, and the variable that names its config folder. */
+  readonly modelListRead: { readonly words: readonly string[]; readonly configVariable: string }
+  /** That read's output to its model list, or null when it is not one. */
+  parseModelList(stdout: string): ReadonlyArray<{ id: string; label: string; efforts?: readonly string[] }> | null
 }
 
 /** WP2 PR 4, P4.5 (row 57): one headless background run (a Cloud Agent): a

@@ -29,6 +29,7 @@ import type { ClaudeAuthPorts } from './auth-operations'
 import { CLAUDE_ENABLEMENT } from './enablement'
 import { claudeRemoteLaunch } from './remote-launch'
 import { CLAUDE_RUN_SCREEN } from './run-screen'
+import { CLAUDE_CLIPBOARD_PASTE } from './clipboard-paste'
 
 // The managed-launch surface is re-exported so the composition root and the
 // conformance suite reach it through this entry point, never by deep import.
@@ -96,6 +97,9 @@ export class ClaudeProvider implements SshCapableProvider {
   /** 2.1.3-beta.18 section 4 (aicc_planning#432): how the session input
    *  module's doors type into a Claude Code session (run-screen.ts). */
   readonly runScreen = CLAUDE_RUN_SCREEN
+  /** ADR-032 (row 14): Claude Code's own clipboard image paste, per OS, its
+   *  key read from the account's keybindings (clipboard-paste.ts). */
+  readonly clipboardPaste = CLAUDE_CLIPBOARD_PASTE
 
   resolveBinary(legacyVersion?: LegacyVersion): { cmd: string; args: string[] } | null {
     return resolveClaudeBinary(legacyVersion)

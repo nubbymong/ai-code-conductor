@@ -542,6 +542,28 @@ describe('a crash: held terminals come back', () => {
     expect(h.attached!.frames.map((f) => f.t).filter((t) => t === 'screen.read' || t === 'term.attach')).toEqual(['screen.read', 'term.attach'])
   })
 
+  it("with holders that offer every cap, paste included: a session on this computer acks no paste, since its pictures go through this computer's own clipboard (2.1.3-beta.21, ADR-032 decision 8)", async () => {
+    helper.holderCaps = ['core', 'local', 'hooks', 'mcp', 'away', 'screen', 'title', 'status', 'paste']
+    const m = await startedWith(makeManager(), ON_BOTH)
+    setSessionHelper(m)
+    const id = 'abcdef0123456789abcdefe8'
+    spawnPlainPty({ plain: true, sessionId: id }, SHELL, [], opts())
+    const sid = heldSessionId(id)
+    await until(() => !!helper.holders.get(sid)?.attached, 'the terminal to attach')
+    const plain = helper.holders.get(sid)!
+    expect(plain.caps).toContain('paste')
+    // It acks what it asks for and is offered (the screen reads), never paste.
+    expect(plain.attached!.ackedCaps).toContain('screen')
+    expect(plain.attached!.ackedCaps).not.toContain('paste')
+    const agent = 'abcdef0123456789abcdefe9'
+    spawnAgentPty(claudeTab(agent), SHELL, [], agentOpts())
+    const asid = heldAgentSessionId(agent, 'claude')
+    await until(() => !!helper.holders.get(asid)?.attached, 'the agent session to attach')
+    const held = helper.holders.get(asid)!
+    expect(held.caps).toContain('paste')
+    expect(held.attached!.ackedCaps).not.toContain('paste')
+  })
+
   it("the redraw after a replay from the middle: one resize at the tab's size on the console built into Windows (a plain terminal, launched or taken over, and a Claude Code session), one row shorter and back on node-pty's bundled ConPTY and off Windows (2.1.3-beta.13, plan section A4)", async () => {
     const first = await startedWith(makeManager(), ON_BOTH)
     setSessionHelper(first)

@@ -43,7 +43,10 @@
  * removed at its end (`unsession`), and by the next Check once its holder is
  * gone (`sweep`). From 2.1.3-beta.19 (section 6.3) the list of kept sessions
  * the app takes at start-up and when the Machines page opens (`sessions`)
- * removes them too, so a folder a quit leaves goes at the next start.
+ * removes them too, so a folder a quit leaves goes at the next start. From
+ * 2.1.3-beta.21 (ADR-032) a session's folder may also hold `bin/` (0700), the
+ * clipboard stand-in's two scripts the `files` script writes there
+ * (CLIP_STAND_IN); it goes with the folder.
  *
  * From 2.1.3-beta.20 (section 3, Sign in on this machine) each account
  * signed in on the machine has a folder of its own,
@@ -65,6 +68,7 @@
  * CLI's own sign-out changes.
  */
 import { APP_PTY_ID_RE, HELPER_FOLDER_RE, NONCE_RE, SHA256_RE, SID_RE } from '../session-helper/protocol'
+import { REVIEW_DIFF_MAX_BYTES } from '../review-diff'
 
 /** A device id (section 1): 32 random lower-case hex characters. */
 export const DID_RE = /^[0-9a-f]{32}$/
@@ -277,6 +281,45 @@ export const FIELD_KEY_RE = /^[A-Za-z0-9_-]{1,64}(?:\.[A-Za-z0-9_-]{1,64}){0,15}
 /** The most a field read answers: the helper's field mode prints at most 1 KiB. */
 export const FIELD_VALUE_MAX = 1024
 
+/**
+ * 2.1.3-beta.21 (ADR-032; docs/remote/helper-protocol.md section 15): the
+ * clipboard stand-in's two scripts, `xclip` and `wl-paste`, which the `files`
+ * script writes into the session's `bin/` folder (0700, each script 0700,
+ * written to a staging name and moved over its own) when the launch asks for
+ * them (`C` is `clip`). Each is two lines:
+ *
+ *   #!/bin/sh
+ *   exec '<helper>' clip --store '<store>' --session '<sid>' --as <name> [--real '<path>'] -- "$@"
+ *
+ * `<helper>` is this build's helper (`G`, its folder) and `<store>` the store,
+ * both built from `$HOME`; `--real` is the real tool of that name as `command
+ * -v` finds it on the exec's PATH outside `bin/`, left out when there is none
+ * or its path holds a single quote, a backslash or a control character. With
+ * such a helper, store or `bin/` path no script is written. The script text
+ * cannot hold the single quote, double quote and backslash those lines need
+ * and the checks compare (section 4), so awk prints each by its code
+ * (`printf("%c", n)`) and their bytes are checked first. A stand-in that
+ * cannot be written is said (`clip <why>`) and fails nothing: the session
+ * starts, and its image paste is not available. `clip ok` once both are in
+ * place.
+ */
+const CLIP_STAND_IN = [
+  'cb() { v="$"; q=$(LC_ALL=C awk -v f=%c "BEGIN{printf(f,39)}" </dev/null 2>/dev/null); w=$(LC_ALL=C awk -v f=%c "BEGIN{printf(f,34)}" </dev/null 2>/dev/null); b=$(LC_ALL=C awk -v f=%c "BEGIN{printf(f,92)}" </dev/null 2>/dev/null)',
+  '[ "$(printf "%s%s%s" "$q" "$w" "$b" | od -A n -t x1 | tr -d "[:space:]")" = 27225c ] || { r clip no-awk; return 0; }',
+  'case "$G" in */*|.*|"") r clip bad-helper-folder; return 0;; esac',
+  'P=$A/helper/$G/aicc-helper; Y=$A/store; B=$Q/bin',
+  'for x in "$P" "$Y" "$B"; do case "$x" in *"$q"*|*"$b"*|*[[:cntrl:]]*) r clip bad-path; return 0;; esac; done',
+  '[ -e "$B" ] || [ -L "$B" ] || mkdir "$B" || { r clip cannot-make-bin; return 0; }',
+  'pv "$B" || { r clip bin-not-private; return 0; }',
+  'for t in xclip wl-paste; do R=$(command -v "$t" 2>/dev/null); case "$R" in /*) ;; *) R=;; esac; case "$R" in "$B"/*|*"$q"*|*"$b"*|*[[:cntrl:]]*) R=;; esac; j=; [ -n "$R" ] && j=" --real $q$R$q"; W=$B/.$t.$N; if [ -d "$B/$t" ] && [ ! -L "$B/$t" ]; then r clip bin-file-is-a-folder; return 0; fi; { echo "#!/bin/sh"; echo "exec $q$P$q clip --store $q$Y$q --session $q$X$q --as $t$j -- $w${v}@$w"; } > "$W" || { rm -f -- "$W"; r clip cannot-write; return 0; }; chmod 700 "$W" || { rm -f -- "$W"; r clip cannot-set-mode; return 0; }; mv -f -- "$W" "$B/$t" || { rm -f -- "$W"; r clip cannot-place; return 0; }; done',
+  'r clip ok; }',
+  '[ "$C" = clip ] && cb',
+]
+
+/** The `files` script's stand-in value: `clip` writes the clipboard
+ *  stand-in (CLIP_STAND_IN), `none` does not. */
+export const STAND_IN_RE = /^(clip|none)$/
+
 /** A session's files as the `files` script takes them: `<name>:<size>` for
  *  each, joined by commas, in the order their bytes follow on standard input.
  *  A name never starts with a dot (the script's staging names do). At most
@@ -358,6 +401,125 @@ export const LOGIND_READS: readonly string[] = [
   'r linger "$(loginctl show-user "$(id -un)" -p Linger --value </dev/null 2>/dev/null)"',
 ]
 
+// ── 2.1.3-beta.21: a review on the machine a remote session runs on ──────────
+
+/** The probe's reads for a review on the machine (aicc_planning#446): where
+ *  `codex` is on the exec's PATH and its version, for every login shell (a
+ *  Codex only the exec finds is the record's, with this version: the path
+ *  and the version come from the same lookup, machines.ts), and the exec's
+ *  git version. `W` is `timeout 10` where the machine has it, so a
+ *  `codex --version` that does not answer cannot hold the probe. Whether
+ *  reviews run on a machine is not read there: it is this build's record of
+ *  the probes PV1 and PV2 by architecture (codex-review-remote.ts
+ *  REMOTE_REVIEW_PROVEN). */
+const REVIEW_PROBE_READS = [
+  'W=; command -v timeout >/dev/null 2>&1 && W="timeout 10"',
+  'r codex "$(command -v codex 2>/dev/null)"',
+  'command -v codex >/dev/null 2>&1 && r codex-version "$($W codex --version </dev/null 2>/dev/null | head -n 1)"',
+  'r git "$(git --version </dev/null 2>/dev/null | head -n 1)"',
+]
+
+/** The run mode's timeout, in whole seconds: 30 to 900, a review's own
+ *  (docs/remote/helper-protocol.md section 4; helper/src/run.rs parse_timeout). */
+export const RUN_TIMEOUT_RE = /^([3-9][0-9]|[1-8][0-9]{2}|900)$/
+
+/** The most of a review's material a host read prints (the change, or the
+ *  named files with their names): REVIEW_DIFF_MAX_BYTES, as on this computer. */
+export const REVIEW_READ_MAX = REVIEW_DIFF_MAX_BYTES
+
+/** The most a CLI read (`cliread`) keeps, its marker line and anything a
+ *  login shell's rc files print before it included: a model list of at most
+ *  4 MiB (model-catalogue.ts CODEX_CATALOGUE_MAX_CHARS) and 64 KiB more. */
+export const CLI_READ_MAX = 4 * 1024 * 1024 + 64 * 1024
+
+/** A CLI read's words: plain words, each a letter or one or two dashes then
+ *  letters, digits and dashes, joined by commas (at most 8). */
+export const CLI_ARGS_RE = /^-{0,2}[a-z][a-z0-9-]{0,63}(?:,-{0,2}[a-z][a-z0-9-]{0,63}){0,7}$/
+
+/** `hx`: standard input as one run of lower-case hex. */
+const HEX = 'hx() { od -A n -v -t x1 | tr -d "[:space:]"; }'
+
+/**
+ * The hardened git of review-diff.ts, as a fixed script (aicc_planning#446):
+ * `dg` runs a diff with its output bounded and refused past the bound, never
+ * cut (`M`); `gr` runs one small read. Both in the project folder `w`, with
+ * every GIT_ variable removed, no optional index lock, no prompt and no lazy
+ * fetch, git by the absolute path the exec's PATH finds, and every run's
+ * switches (`X`, GIT_HARDENING) before the subcommand. `gf` refuses with git's
+ * first line of standard error (hex, at most 200 bytes).
+ */
+const REVIEW_GIT = [
+  'G=$(command -v git 2>/dev/null); case "$G" in /*) ;; *) no no-git;; esac',
+  'for v in $(env | cut -d= -f1 | grep -E "^GIT_[A-Za-z0-9_]+$"); do unset "$v"; done',
+  'GIT_OPTIONAL_LOCKS=0; GIT_TERMINAL_PROMPT=0; GIT_NO_LAZY_FETCH=1; export GIT_OPTIONAL_LOCKS GIT_TERMINAL_PROMPT GIT_NO_LAZY_FETCH',
+  'X="--no-pager -c core.fsmonitor=false -c core.pager=cat -c diff.external= -c protocol.allow=never"',
+  'Y="--no-ext-diff --no-textconv --no-color --ignore-submodules=all"',
+  'gf() { r why "$(head -n 1 "$T/err" 2>/dev/null | head -c 200 | hx)"; no "$1"; }',
+  'gr() { ( cd "$w" && "$G" $X --work-tree="$w" "$@" ) </dev/null > "$T/out" 2> "$T/err"; }',
+  'dg() { { ( cd "$w" && "$@" ) </dev/null 2> "$T/err"; echo $? > "$T/code"; } | head -c $((M+1)) > "$T/out"; n=$(wc -c < "$T/out"); n=$((n+0)); [ "$n" -le "$M" ] || no too-large; [ "$(cat "$T/code" 2>/dev/null)" = 0 ] || gf git-failed; r diff "$(hx < "$T/out")"; }',
+]
+
+/**
+ * Mode `working` on the host, as review-diff.ts produceReviewDiff makes it:
+ * where the repository keeps its index and objects, what HEAD is (a commit,
+ * or none yet; anything else is refused), the work tree's value-only
+ * settings carried over (each checked against its own tokens), then the diff
+ * through a PRIVATE git dir in the run's own folder (`T`): its own minimal
+ * config, HEAD as a commit id, the repository's objects by an alternates
+ * entry, its index by GIT_INDEX_FILE, a split index's shared part copied in,
+ * and every filter driver the user's configuration names emptied. The
+ * diffing git reads no repository configuration.
+ */
+const REVIEW_WORKING = [
+  'gr rev-parse --absolute-git-dir --git-common-dir --show-object-format || gf git-failed',
+  'gd=; gc=; fm=; { IFS= read -r gd; IFS= read -r gc; IFS= read -r fm; } < "$T/out"',
+  '[ -n "$gd" ] && [ -n "$gc" ] && [ -n "$fm" ] || gf git-failed',
+  'case "$gc" in /*) ;; *) gc=$w/$gc;; esac',
+  'case "$fm" in sha1) E=4b825dc642cb6eb9a060e54bf8d69288fbee4904;; sha256) E=6ef19b41225c5369f1c104d45d8d85efa9b057b53b14b4b9b939dd74decc5321;; *) no bad-object-format;; esac',
+  'hd=; if gr rev-parse --verify --quiet --end-of-options "HEAD^{commit}"; then IFS= read -r hd < "$T/out"; case "$hd" in *[!0-9a-f]*|"") no bad-head;; esac; [ ${#hd} -eq 40 ] || [ ${#hd} -eq 64 ] || no bad-head; elif gr rev-parse --verify --quiet --end-of-options HEAD; then no head-not-a-commit; fi',
+  'gr config --get-regexp "^core[.](filemode|symlinks|ignorecase|precomposeunicode|trustctime|autocrlf|safecrlf|eol|checkstat)$"; e=$?; [ $e = 0 ] || [ $e = 1 ] || gf git-failed',
+  'c1=; c2=; c3=; c4=; c5=; c6=; c7=; c8=; c9=',
+  'while read -r ky vl xs; do [ -z "$xs" ] || continue; l=$(echo "$vl" | tr A-Z a-z); case "$ky" in core.filemode) case "$l" in true|false|yes|no|on|off|1|0) c1=$l;; esac;; core.symlinks) case "$l" in true|false|yes|no|on|off|1|0) c2=$l;; esac;; core.ignorecase) case "$l" in true|false|yes|no|on|off|1|0) c3=$l;; esac;; core.precomposeunicode) case "$l" in true|false|yes|no|on|off|1|0) c4=$l;; esac;; core.trustctime) case "$l" in true|false|yes|no|on|off|1|0) c5=$l;; esac;; core.autocrlf) case "$l" in true|false|input|yes|no|on|off|1|0) c6=$l;; esac;; core.safecrlf) case "$l" in true|false|warn|yes|no|on|off|1|0) c7=$l;; esac;; core.eol) case "$l" in lf|crlf|native) c8=$l;; esac;; core.checkstat) case "$l" in default|minimal) c9=$l;; esac;; esac; done < "$T/out"',
+  'O=$T/git; mkdir "$O" "$O/refs" "$O/objects" "$O/objects/info" || no cannot-prepare',
+  'if [ -n "$hd" ]; then echo "$hd" > "$O/HEAD"; else echo "ref: refs/heads/unborn" > "$O/HEAD"; fi',
+  '{ echo "[core]"; if [ "$fm" = sha1 ]; then echo "repositoryformatversion = 0"; else echo "repositoryformatversion = 1"; fi; echo "bare = false"; [ -n "$c1" ] && echo "filemode = $c1"; [ -n "$c2" ] && echo "symlinks = $c2"; [ -n "$c3" ] && echo "ignorecase = $c3"; [ -n "$c4" ] && echo "precomposeunicode = $c4"; [ -n "$c5" ] && echo "trustctime = $c5"; [ -n "$c6" ] && echo "autocrlf = $c6"; [ -n "$c7" ] && echo "safecrlf = $c7"; [ -n "$c8" ] && echo "eol = $c8"; [ -n "$c9" ] && echo "checkstat = $c9"; if [ "$fm" != sha1 ]; then echo "[extensions]"; echo "objectformat = $fm"; fi; } > "$O/config" || no cannot-prepare',
+  'echo "$gc/objects" > "$O/objects/info/alternates" || no cannot-prepare',
+  'for n in $(ls -A "$gd" 2>/dev/null); do case "$n" in sharedindex.*) s=${n#sharedindex.}; case "$s" in *[!0-9a-f]*) continue;; esac; [ ${#s} -ge 40 ] && [ ${#s} -le 64 ] && cp -- "$gd/$n" "$O/$n";; esac; done',
+  'GIT_INDEX_FILE=$gd/index; export GIT_INDEX_FILE',
+  '( cd "$T" && "$G" $X --git-dir="$O" config --get-regexp "^filter[.]" ) </dev/null > "$T/out" 2> "$T/err"; e=$?; [ $e = 0 ] || [ $e = 1 ] || gf git-failed',
+  'Z=; while read -r ky xs; do case "$ky" in [Ff][Ii][Ll][Tt][Ee][Rr].*) ;; *) continue;; esac; x=${ky#*.}; nm=${x%.*}; [ "$nm" != "$x" ] && [ -n "$nm" ] || no bad-filter; case "$nm" in *[!A-Za-z0-9._-]*) no bad-filter;; esac; [ ${#nm} -le 100 ] || no bad-filter; case " $Z " in *" $nm "*) ;; *) Z="$Z $nm";; esac; done < "$T/out"',
+  'K=; for nm in $Z; do K="$K -c filter.$nm.clean= -c filter.$nm.smudge= -c filter.$nm.process= -c filter.$nm.required=false"; done',
+  'dg "$G" $X $K --git-dir="$O" --work-tree="$w" diff $Y --end-of-options "${hd:-$E}" --',
+]
+
+/** Mode `range` on the host: tree against tree (no work-tree file is read),
+ *  the range on the next line of standard input, of the range's own
+ *  characters, after --end-of-options. */
+const REVIEW_RANGE = [
+  'IFS= read -r q || q=',
+  'case "$q" in -*|*[!A-Za-z0-9._/~^@{}-]*|"") no bad-range;; esac',
+  'case "$q" in *..*) ;; *) no bad-range;; esac',
+  'dg "$G" $X --work-tree="$w" diff $Y --end-of-options "$q" --',
+]
+
+/**
+ * Mode `paths` on the host, as review-diff.ts produceReviewFiles reads them:
+ * each named file (one relative path a line on standard input, as the app
+ * made it: plain names joined by `/`, never `.` or `..`) only inside the
+ * project folder, every folder on the way and the name itself not a link, a
+ * plain file with one name; a NUL in its first 8000 bytes says it is binary
+ * (its content not sent); its content read once with one byte more than its
+ * size, so one that grew is refused, never cut. The bound counts each name,
+ * each file's line and each file's text together (`t`), and past it the read
+ * is refused. Each file is printed as `file <hex name> <hex text>` or
+ * `binary <hex name>`; a refusal names the file first (`path <hex name>`).
+ */
+const REVIEW_PATHS = [
+  'fl() { r path "$(printf "%s" "$2" | hx)"; no "$1"; }',
+  't=0; U=',
+  'while IFS= read -r p; do [ -n "$p" ] || continue; case "$p" in /*) fl file-outside "$p";; esac; hp=$(printf "%s" "$p" | hx); case " $U " in *" $hp "*) continue;; esac; U="$U $hp"; IFS=/; set -- $p; IFS=$o; x=$w; while [ $# -gt 0 ]; do e=$1; shift; case "$e" in ""|.|..) fl file-outside "$p";; esac; x=$x/$e; [ -L "$x" ] && { [ $# -gt 0 ] && fl file-through-link "$p"; fl file-link "$p"; }; [ -e "$x" ] || fl file-not-found "$p"; if [ $# -gt 0 ]; then [ -d "$x" ] || fl file-not-found "$p"; else [ -d "$x" ] && fl file-folder "$p"; [ -f "$x" ] || fl file-not-a-file "$p"; fi; done; set -- $(ls -ldn "$x"); [ "$2" = 1 ] || fl file-hard-link "$p"; t=$((t+${#p}+66)); [ $t -le $M ] || no files-too-large; if head -c 8000 "$x" | od -A n -v -t x1 | grep -q " 00"; then r binary "$hp"; continue; fi; z=$(wc -c < "$x"); z=$((z+0)); [ $((t+z)) -le $M ] || no files-too-large; head -c $((z+1)) "$x" > "$T/f" 2>/dev/null; y=$(wc -c < "$T/f"); y=$((y+0)); [ $y -le $z ] || fl file-changed "$p"; t=$((t+y)); r file "$hp" "$(hx < "$T/f")"; done',
+]
+
 // ── the scripts ──────────────────────────────────────────────────────────────
 
 /** What a script takes, in order, after its nonce, device id and install id. */
@@ -392,9 +554,13 @@ const SPECS = {
       'r lang "${LANG:-}"',
       ...LOGIND_READS,
       'r claude "$(command -v claude 2>/dev/null)"',
+      // 2.1.3-beta.21 (aicc_planning#446): where `codex` is and its version,
+      // by the same lookup (its version only within 10 s where `timeout` is
+      // there), and the exec's git, for a review on the machine.
+      ...REVIEW_PROBE_READS,
       // `$` alone, so the PATH and the lookup expand in the login shell, not here.
       'v="$"',
-      'case "${S##*/}" in bash|zsh|sh|dash|ksh|mksh|ash|yash) "$S" -ilc "echo AICC-RESULT $N il-path ${v}PATH; echo AICC-RESULT $N il-claude ${v}(command -v claude 2>/dev/null)" </dev/null 2>/dev/null;; esac',
+      'case "${S##*/}" in bash|zsh|sh|dash|ksh|mksh|ash|yash) "$S" -ilc "echo AICC-RESULT $N il-path ${v}PATH; echo AICC-RESULT $N il-claude ${v}(command -v claude 2>/dev/null); echo AICC-RESULT $N il-codex ${v}(command -v codex 2>/dev/null); echo AICC-RESULT $N il-codex-version ${v}(command -v codex >/dev/null 2>&1 && $W codex --version </dev/null 2>/dev/null | head -n 1)" </dev/null 2>/dev/null;; esac',
       'r end ok',
     ]),
   },
@@ -568,15 +734,19 @@ const SPECS = {
    *  into `sessions/<X>/` (made 0700 when missing), before its launch. `L` is
    *  the layout (FILES_LAYOUT_RE): the bytes follow in its order. All of them
    *  are read into a staging file first and checked for their size; each file
-   *  is then cut from it into a staging name and moved over its own name. */
+   *  is then cut from it into a staging name and moved over its own name.
+   *  2.1.3-beta.21: then, when `C` is `clip`, the clipboard stand-in's two
+   *  scripts into the session's `bin/` folder (CLIP_STAND_IN), naming the
+   *  helper in this build's folder `G`. */
   files: {
-    values: [SESSION, { name: 'file layout', re: FILES_LAYOUT_RE }],
+    values: [SESSION, { name: 'file layout', re: FILES_LAYOUT_RE }, FOLDER, { name: 'clipboard stand-in', re: STAND_IN_RE }],
     text: join([
-      'N=$1; D=$2; I=$3; X=$4; L=$5',
+      'N=$1; D=$2; I=$3; X=$4; L=$5; G=$6; C=$7',
       ...CHECKS,
       ...EXISTING,
       'umask 077',
       'case "$X" in *[!A-Za-z0-9_-]*|"") no bad-session;; esac',
+      'case "$C" in clip|none) ;; *) no bad-stand-in;; esac',
       'S=$A/sessions; Q=$S/$X',
       '[ -e "$S" ] || [ -L "$S" ] || mkdir "$S" || no cannot-make-sessions-folder',
       'pv "$S" || no sessions-folder-not-private',
@@ -590,6 +760,7 @@ const SPECS = {
       '[ "$n" -eq "$z" ] || { rm -f -- "$T"; no short-upload; }',
       'p=0; for e in "$@"; do m=${e%%:*}; s=${e##*:}; F=$Q/.$m.$N; if [ -d "$Q/$m" ] && [ ! -L "$Q/$m" ]; then rm -f -- "$T"; no file-is-a-folder; fi; tail -c +$((p+1)) "$T" | head -c "$s" > "$F"; k=$(wc -c < "$F"); k=$((k+0)); if [ "$k" -ne "$s" ]; then rm -f -- "$F" "$T"; no short-file; fi; mv -f -- "$F" "$Q/$m" || { rm -f -- "$F" "$T"; no cannot-place; }; p=$((p+s)); done',
       'rm -f -- "$T"',
+      ...CLIP_STAND_IN,
       'r end ok',
     ]),
   },
@@ -783,6 +954,102 @@ const SPECS = {
       '[ -e "$Q" ] && no still-there',
       'r removed "$P"; done',
       'if [ "$O" = list ]; then for P in $(ls -A "$B"); do case "$P" in [!a-z0-9]*|*[!a-z0-9-]*|"") continue;; esac; if am "$B/$P" "$P"; then r left "$P"; elif aw "$B/$P" "$P"; then r old "$P"; elif ao "$B/$P" "$P"; then r elsewhere "$P"; fi; done; fi',
+      'r end ok',
+    ]),
+  },
+  /** 2.1.3-beta.21 (aicc_planning#446; ADR-030 protocol change 6,
+   *  docs/remote/helper-protocol.md section 4): the helper's one-shot run
+   *  mode, through the launcher. After the hash line, `aicc-helper run
+   *  --nonce <N> --timeout <T>` reads its request line and the program's
+   *  input from standard input, as the app sent them; its standard output is
+   *  the program's, then its result line, last (helper/src/run.rs). The
+   *  program's path and folder are in the request, never on this command
+   *  line: they are values the machine reported. */
+  run: {
+    values: [FOLDER, HASH, { name: 'run timeout', re: RUN_TIMEOUT_RE }],
+    text: join([
+      'N=$1; D=$2; I=$3; F=$4; H=$5; T=$6',
+      ...CHECKS,
+      'case "$T" in *[!0-9]*|"") no bad-timeout;; esac',
+      ...LAUNCH,
+      'exec "$P" run --nonce "$N" --timeout "$T"',
+    ]),
+  },
+  /** 2.1.3-beta.21 (aicc_planning#446): the material of a review on the
+   *  machine, read there by review-diff.ts's rules and printed as data
+   *  (hex), written nowhere but the run's own folder in the device folder,
+   *  `rv-<N>`, which goes when the script ends. Standard input: the project
+   *  folder's absolute path on one line, then the mode (`working`, `range`
+   *  or `paths`), then the range, or the named files one a line. The folder
+   *  counts only when it is a real folder that is not the home folder or a
+   *  folder above it (project-is-home). Writes nothing else. */
+  reviewread: {
+    values: [],
+    text: join([
+      'N=$1; D=$2; I=$3',
+      ...CHECKS,
+      ...EXISTING,
+      ...OWN,
+      HEX,
+      'umask 077',
+      `M=${REVIEW_READ_MAX}`,
+      'o=$IFS',
+      'IFS= read -r c || c=',
+      'IFS= read -r k || k=',
+      'w=; case "$c" in /*) w=$(cd "$c" 2>/dev/null && pwd -P) || w=;; esac',
+      '[ -n "$w" ] || no no-project-folder',
+      'ab "$w" "$h" && no project-is-home',
+      'case "$k" in working|range|paths) ;; *) no bad-mode;; esac',
+      'T=$A/rv-$N',
+      'cl() { [ -d "$T" ] && rm -rf -- "${A:?}/rv-${N:?}"; }',
+      'trap cl EXIT',
+      'mkdir "$T" || no busy',
+      // Each mode is a function of its own: the parts join with "; ", which
+      // cannot follow a `then` or an `else`.
+      `mp() { ${join(REVIEW_PATHS)}; }`,
+      `mg() { ${join(REVIEW_GIT)}; }`,
+      `mr() { ${join(REVIEW_RANGE)}; }`,
+      `mw() { ${join(REVIEW_WORKING)}; }`,
+      'case "$k" in paths) mp;; range) mg; mr;; *) mg; mw;; esac',
+      'r end ok',
+    ]),
+  },
+  /** 2.1.3-beta.21 (aicc_planning#446): one read a provider's CLI makes on
+   *  the machine, in a FRESH, EMPTY config folder made for it in the device
+   *  folder (`cli-<N>/home`, named to the CLI by its config variable `E`)
+   *  and removed after it: the Codex package's model list read (`codex debug
+   *  models --bundled`, as installed-codex-models.ts reads it here). The
+   *  program `X` and its words `W` are the provider package's, plain words
+   *  joined by commas. Through the user's login shell when that is of the sh
+   *  family (its PATH, as a session's launch has it), within 15 s where
+   *  `timeout` is there. What it prints after its marker line (`AICC-CLI
+   *  <N>`, so what rc files print before it is told apart) goes back as hex,
+   *  at most CLI_READ_MAX bytes. */
+  cliread: {
+    values: [{ name: 'program', re: CLI_WORD_RE }, { name: 'words', re: CLI_ARGS_RE }, { name: 'config variable', re: CONFIG_VAR_RE }],
+    text: join([
+      'N=$1; D=$2; I=$3; X=$4; W=$5; E=$6',
+      ...CHECKS,
+      ...EXISTING,
+      HEX,
+      'umask 077',
+      'case "$X" in [!a-z]*|*[!a-z0-9-]*|"") no bad-program;; esac',
+      'case "$W" in *[!a-z0-9,-]*|"") no bad-words;; esac',
+      'case "$E" in [!A-Z]*|*[!A-Z0-9_]*|"") no bad-variable;; esac',
+      'S=$(getent passwd "$(id -un)" 2>/dev/null | cut -d: -f7); [ -n "$S" ] || S=${SHELL:-/bin/sh}',
+      'T=$A/cli-$N',
+      'cl() { [ -d "$T" ] && rm -rf -- "${A:?}/cli-${N:?}"; }',
+      'trap cl EXIT',
+      'mkdir "$T" "$T/home" || no busy',
+      'L=; command -v timeout >/dev/null 2>&1 && L="timeout 15"',
+      'export "$E=$T/home"',
+      'o=$IFS; IFS=,; set -- $W; IFS=$o',
+      // `$` alone, so `$0` and `$@` expand in the login shell: the program and its words, plain words all.
+      'v="$"',
+      `{ case "\${S##*/}" in bash|zsh|sh|dash|ksh|mksh|ash|yash) $L "$S" -ilc "echo AICC-CLI $N; exec \${v}0 \${v}@" "$X" "$@" </dev/null 2>/dev/null;; *) echo "AICC-CLI $N"; command -v "$X" >/dev/null 2>&1 && $L "$X" "$@" </dev/null 2>/dev/null;; esac; } | head -c ${CLI_READ_MAX + 1} > "$T/out"`,
+      'n=$(wc -c < "$T/out"); n=$((n+0))',
+      `[ "$n" -le ${CLI_READ_MAX} ] || no too-large`,
+      'r out "$(hx < "$T/out")"',
       'r end ok',
     ]),
   },

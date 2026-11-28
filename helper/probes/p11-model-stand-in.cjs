@@ -13,7 +13,8 @@
 // and whose user text names a run with the probe's marker, "p11 probe
 // <run>". A turn gets the short text "p11 ok"; any other request a CLI makes
 // on its own (a check, a title) gets "ok", streamed when it asked for a
-// stream. Anything else is a 404. No tool call, no thinking, only text.
+// stream. Anything else is a 404. No thinking, and only text, but for the one
+// scripted review turn below, whose call is a tool_use.
 //
 // The images. Every user message of a request (Claude Code: `messages` whose
 // role is user; Codex: `input` items whose role is user) is read for image
@@ -22,25 +23,58 @@
 // inline picture is decoded and named by its SHA-256, its kind (JPEG, PNG,
 // GIF, WebP) and its width and height read from its header; an image given
 // another way (a URL, a file id) is named by that way only. The picture's
-// bytes are never kept or written anywhere.
+// bytes are never kept or written anywhere. Since 2.1.3-beta.21 (ADR-032,
+// plan phase 2, 2.1.7) a PNG is named by the hash of its decoded pixels too
+// (rgbaSha256, and rgbSha256 as a reading; ./png-rgba.cjs): a CLI re-encodes
+// what it reads from the clipboard, so its bytes differ from the app's while
+// its pixels do not.
 //
 // Events go to the `onEvent` callback with the time: the request's path,
 // kind, the run it names, its tool count, its images, and the first 400
 // characters of the text part that names the run, never the message's other
 // parts (the probe writes personal paths in it as placeholders). A request's
 // body is never kept.
+//
+// One scripted turn (2.1.3-beta.21, plan 6.3's CI line; the review check,
+// tests/live/remote-review.live.ts): a Claude Code turn whose run is
+// `review-tool-<n>` and whose latest user turn (every user message after the
+// last assistant message) names it is the call. It is answered, once per run,
+// with a tool_use of the app's review tool as Claude Code names a `conductor`
+// tool (REVIEW_TOOL, input REVIEW_INPUT: mode working), when the request lists
+// that tool; when it does not, with text that says so. The next request,
+// whose latest user turn carries that tool_use's result, is the answer: it
+// gets the fixed text REVIEW_DONE_TEXT, and its event keeps the result's text
+// (16 KiB at most) and its error flag, which is what the check reads the
+// review's footer from. Each of these events carries `script`: the step, and
+// the tool_use sent or the result read; a step it does not script (`again`,
+// `other`), the request's shape (each message's role and part types, never
+// its text). It never sees a Codex review turn there: the check's stand-in
+// Codex writes its own fixed review text, part of the one recorded change from
+// that CI line (helper/probes/README.md, "Probes PV1 and PV2").
 const http = require('http');
 const crypto = require('crypto');
+const { pngPixelHashes } = require('./png-rgba.cjs');
 
 const MARKER_RE = /p11 probe ([a-z]+-[a-z]+(?:-[a-z]+)?-\d{1,2})\b/;
 const MAX_BODY = 32 * 1024 * 1024;
+
+/** The scripted review turn: its runs, the tool it calls and with what, the
+ *  text that ends it, and its tool_use ids' prefix. */
+const REVIEW_RUN_RE = /^review-tool-\d{1,2}$/;
+const REVIEW_TOOL = 'mcp__conductor__codex_review';
+const REVIEW_INPUT = Object.freeze({ mode: 'working', effort: 'low', timeoutSeconds: 300 });
+const REVIEW_DONE_TEXT = 'p11 review received';
+const REVIEW_NOT_OFFERED_TEXT = 'p11 review: the review tool was not offered';
+const TOOL_USE_PREFIX = 'toolu_p11_';
+const RESULT_TEXT_MAX = 16 * 1024;
 
 /** A picture's kind, width and height from its first bytes (JPEG, PNG, GIF;
  *  WebP's kind only), its length and its SHA-256. */
 function pictureInfo(buf) {
   const info = { bytes: buf.length, sha256: crypto.createHash('sha256').update(buf).digest('hex'), kind: 'unknown', width: null, height: null };
   if (buf.length >= 24 && buf.readUInt32BE(0) === 0x89504e47 && buf.readUInt32BE(4) === 0x0d0a1a0a) {
-    return { ...info, kind: 'png', width: buf.readUInt32BE(16), height: buf.readUInt32BE(20) };
+    const px = pngPixelHashes(buf);
+    return { ...info, kind: 'png', width: buf.readUInt32BE(16), height: buf.readUInt32BE(20), ...(px.unread ? { pixelsUnread: px.unread } : { rgbaSha256: px.rgbaSha256, rgbSha256: px.rgbSha256 }) };
   }
   if (buf.length >= 10 && buf.toString('latin1', 0, 4) === 'GIF8') {
     return { ...info, kind: 'gif', width: buf.readUInt16LE(6), height: buf.readUInt16LE(8) };
@@ -133,6 +167,50 @@ function readResponses(body) {
 
 const toolCount = (body) => (Array.isArray(body && body.tools) ? body.tools.length : 0);
 
+/** The parts of an Anthropic request's latest user turn: every user message
+ *  after its last assistant message (Claude Code 2.1.332 sends its own
+ *  attachments as user messages of their own, after the prompt and after a
+ *  tool result). */
+function latestUserParts(body) {
+  const msgs = Array.isArray(body && body.messages) ? body.messages : [];
+  let at = msgs.length;
+  while (at > 0 && !(msgs[at - 1] && msgs[at - 1].role === 'assistant')) at--;
+  return msgs.slice(at).filter((m) => m && m.role === 'user').flatMap((m) => partsOf(m.content));
+}
+
+/** A request's shape for a reading: each message's role and part types (the last 12), never its text. */
+function messagesShape(body) {
+  const msgs = Array.isArray(body && body.messages) ? body.messages : [];
+  return msgs.slice(-12).map((m) => `${m && typeof m.role === 'string' ? m.role : '?'}:${partsOf(m && m.content).map((p) => (p && typeof p.type === 'string' ? p.type : '?')).join('+')}`);
+}
+
+/** A tool_result's text: a string as it is, its text blocks joined by a line end. */
+function resultText(content) {
+  return partsOf(content).filter((p) => p && typeof p.text === 'string').map((p) => p.text).join('\n');
+}
+
+/**
+ * What the scripted review turn makes of one Claude Code turn whose run is
+ * `run` (`called`: the runs already answered with a tool_use): null when the
+ * run is not a review run; `answer` when the latest user turn carries the
+ * result of a tool_use this stand-in sent; `call` when it names the run
+ * (`offered`: the request lists REVIEW_TOOL; when not, the tools it lists);
+ * `again` for a call of a run already called; `other` for anything else.
+ */
+function reviewStep(body, run, called) {
+  if (typeof run !== 'string' || !REVIEW_RUN_RE.test(run)) return null;
+  const last = latestUserParts(body);
+  const result = last.find((p) => p && p.type === 'tool_result' && typeof p.tool_use_id === 'string' && p.tool_use_id.startsWith(TOOL_USE_PREFIX));
+  if (result) {
+    return { step: 'answer', run, toolResult: { toolUseId: result.tool_use_id, isError: result.is_error === true, text: resultText(result.content).slice(0, RESULT_TEXT_MAX) } };
+  }
+  const named = namedPart(last);
+  if (!named || named.run !== run) return { step: 'other', run };
+  if (called.has(run)) return { step: 'again', run };
+  const tools = (Array.isArray(body.tools) ? body.tools : []).map((t) => (t && typeof t.name === 'string' ? t.name : null)).filter((n) => n !== null);
+  return tools.includes(REVIEW_TOOL) ? { step: 'call', run, offered: true } : { step: 'call', run, offered: false, tools };
+}
+
 /** What one request is: a turn (tools, a named run; for Claude Code a
  *  stream), or a request the CLI made on its own. */
 function classify(path, body) {
@@ -166,6 +244,21 @@ function anthropicReply(res, body, id, text) {
   res.end();
 }
 
+/** The review call: one tool_use block, its input as one JSON delta, stopped
+ *  for the tool. Always streamed: a scripted turn is a Claude Code turn, which
+ *  classify makes a turn only when it asked for a stream. */
+function anthropicToolUseReply(res, body, id, toolUse) {
+  const model = typeof body.model === 'string' ? body.model : 'p11-probe';
+  res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache', connection: 'keep-alive', 'request-id': `req_p11_${id}` });
+  sse(res, 'message_start', { type: 'message_start', message: { id: `msg_p11_${id}`, type: 'message', role: 'assistant', model, content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: 10, output_tokens: 1 } } });
+  sse(res, 'content_block_start', { type: 'content_block_start', index: 0, content_block: { type: 'tool_use', id: toolUse.id, name: toolUse.name, input: {} } });
+  sse(res, 'content_block_delta', { type: 'content_block_delta', index: 0, delta: { type: 'input_json_delta', partial_json: JSON.stringify(toolUse.input) } });
+  sse(res, 'content_block_stop', { type: 'content_block_stop', index: 0 });
+  sse(res, 'message_delta', { type: 'message_delta', delta: { stop_reason: 'tool_use', stop_sequence: null }, usage: { output_tokens: 1 } });
+  sse(res, 'message_stop', { type: 'message_stop' });
+  res.end();
+}
+
 // Codex fails a stream that closes without response.completed.
 function responsesReply(res, body, id, text) {
   const model = typeof body.model === 'string' ? body.model : 'p11-probe';
@@ -191,6 +284,8 @@ function responsesReply(res, body, id, text) {
 /** The stand-in: `listen()` gives its port, `close()` ends it. */
 function createModelStandIn({ onEvent }) {
   let n = 0;
+  /** The review runs already answered with a tool_use. */
+  const called = new Set();
   const srv = http.createServer((req, res) => {
     const chunks = [];
     let size = 0;
@@ -203,9 +298,16 @@ function createModelStandIn({ onEvent }) {
       const base = { ev: 'request', t: Date.now(), id, method: req.method, path, bytes: size, tooBig: size > MAX_BODY, model: typeof body.model === 'string' ? body.model : null, stream: body.stream === true, tools: toolCount(body) };
       const c = req.method === 'POST' ? classify(path, body) : null;
       if (c) {
-        onEvent({ ...base, api: c.api, kind: c.kind, run: c.run, images: c.images, text: c.text ? c.text.slice(0, 400) : null });
-        const text = c.kind === 'turn' ? 'p11 ok' : 'ok';
-        if (c.api === 'anthropic') anthropicReply(res, body, id, text); else responsesReply(res, body, id, text);
+        // The scripted review turn, for a Claude Code turn only.
+        const step = c.api === 'anthropic' && c.kind === 'turn' ? reviewStep(body, c.run, called) : null;
+        const toolUse = step && step.step === 'call' && step.offered ? { id: `${TOOL_USE_PREFIX}${id}`, name: REVIEW_TOOL, input: REVIEW_INPUT } : null;
+        if (toolUse) called.add(step.run);
+        const unscripted = step && (step.step === 'again' || step.step === 'other');
+        const script = step ? { ...step, ...(toolUse ? { toolUse } : {}), ...(unscripted ? { shape: messagesShape(body) } : {}) } : null;
+        onEvent({ ...base, api: c.api, kind: c.kind, run: c.run, images: c.images, text: c.text ? c.text.slice(0, 400) : null, ...(script ? { script } : {}) });
+        const text = !step || unscripted ? (c.kind === 'turn' ? 'p11 ok' : 'ok') : step.step === 'answer' ? REVIEW_DONE_TEXT : REVIEW_NOT_OFFERED_TEXT;
+        if (toolUse) anthropicToolUseReply(res, body, id, toolUse);
+        else if (c.api === 'anthropic') anthropicReply(res, body, id, text); else responsesReply(res, body, id, text);
         onEvent({ ev: 'reply-done', t: Date.now(), id, run: c.run, kind: c.kind });
       } else if (req.method === 'POST' && path === '/v1/messages/count_tokens') {
         onEvent({ ...base, kind: 'count', run: null, images: [] });
@@ -224,4 +326,4 @@ function createModelStandIn({ onEvent }) {
   };
 }
 
-module.exports = { createModelStandIn, classify, readAnthropic, readResponses, pictureInfo, urlPicture, MARKER_RE };
+module.exports = { createModelStandIn, classify, readAnthropic, readResponses, pictureInfo, urlPicture, reviewStep, MARKER_RE, REVIEW_TOOL, REVIEW_INPUT, REVIEW_DONE_TEXT };

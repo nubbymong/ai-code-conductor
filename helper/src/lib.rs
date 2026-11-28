@@ -9,6 +9,7 @@
 #[cfg(unix)]
 pub mod bridge;
 pub mod capture;
+pub mod clip;
 pub mod client;
 pub mod cmdline;
 pub mod consoles;
@@ -19,12 +20,15 @@ pub mod hello;
 pub mod holder;
 pub mod hook;
 pub mod json;
+pub mod paste;
 pub mod pids;
 pub mod pty;
 pub mod random;
 pub mod relay;
 pub mod request;
 pub mod ring;
+#[cfg(unix)]
+pub mod run;
 pub mod screen;
 pub mod selftest;
 pub mod serve;

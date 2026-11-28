@@ -51,6 +51,22 @@ describe('the modules the remote helper device check imports', () => {
       import('../../../src/main/session-helper/protocol'),
       // 2.1.3-beta.20 section 3: an account's folder, its read and its sign-out, run by the live file too.
       import('../../../src/main/remote-helper/host-accounts'),
+      // 2.1.3-beta.21 (aicc_planning#446): a review on the machine (its host
+      // read and its run, its registration, the review tool's remote half,
+      // and the Codex package's review on another machine), which the live
+      // file runs too.
+      import('../../../src/main/remote-helper/review'),
+      import('../../../src/main/remote-helper/review-sessions'),
+      import('../../../src/main/codex-review-remote'),
+      import('../../../src/main/providers/codex/remote-review'),
+      // 2.1.3-beta.21 (probe PH1): the holder connection the live file opens on a link of its own.
+      import('../../../src/main/session-helper/connection'),
+      // 2.1.3-beta.21 (plan block 5.3's CI line): a helper tab's paste
+      // route, the Claude package's clipboard member and the prompt reader
+      // tests/live/remote-paste.live.ts runs against real Claude Code.
+      import('../../../src/main/paste/helper-route'),
+      import('../../../src/main/providers/claude/run-screen'),
+      import('../../../src/shared/claude-screen'),
     ])
     expect(typeof modules[0].remoteLaunchOf).toBe('function')
     expect(typeof modules[5].claudeRemoteLaunch.launch).toBe('function')
@@ -58,6 +74,34 @@ describe('the modules the remote helper device check imports', () => {
     expect(typeof modules[7].listKept).toBe('function')
     expect(typeof modules[8].readRecord).toBe('function')
     expect(typeof modules[9].readMachineAccounts).toBe('function')
+    expect(typeof modules[10].runOnHost).toBe('function')
+    expect(typeof modules[11].registerRemoteReviewSession).toBe('function')
+    expect(typeof modules[12].runRemoteCodexReview).toBe('function')
+    expect(typeof modules[13].codexRemoteReview.args).toBe('function')
+    expect(typeof modules[14].HolderConnection.open).toBe('function')
+    expect(typeof modules[15].helperPasteRoute).toBe('function')
+    expect(typeof modules[16].CLAUDE_RUN_SCREEN.clipboard).toBe('function')
+    expect(typeof modules[17].claudePromptImages).toBe('function')
+  })
+
+  it('the paste check\'s live file imports no other module of the app', async () => {
+    const { readFileSync } = await import('fs')
+    const { resolve } = await import('path')
+    const text = readFileSync(resolve(__dirname, '../../live/remote-paste.live.ts'), 'utf8')
+    const imported = [...text.matchAll(/from '(\.\.\/\.\.\/src\/[^']+)'/g)].map((m) => m[1]).sort()
+    expect(imported).toEqual([
+      '../../src/main/paste/helper-route',
+      '../../src/main/providers/claude/remote-launch',
+      '../../src/main/providers/claude/run-screen',
+      '../../src/main/providers/types',
+      '../../src/main/remote-helper',
+      '../../src/main/remote-helper/machines',
+      '../../src/main/remote-helper/manifest',
+      '../../src/main/remote-helper/session',
+      '../../src/main/remote-helper/ssh-exec',
+      '../../src/shared/claude-screen',
+      '../../src/shared/clipboard-paste',
+    ])
   })
 
   it('the live file imports no other module of the app', async () => {
@@ -76,6 +120,8 @@ describe('the modules the remote helper device check imports', () => {
       '../../src/main/remote-helper/scripts',
       '../../src/main/remote-helper/session',
       '../../src/main/remote-helper/ssh-exec',
+      // 2.1.3-beta.21 (probe PH1): a holder connection on a link of the test's own.
+      '../../src/main/session-helper/connection',
       // 2.1.3-beta.19 section 1.2: the holder records' two shapes, read by section 1.1's reader.
       '../../src/main/session-helper/protocol',
     ])

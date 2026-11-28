@@ -3,20 +3,42 @@ import { useMagicButtonStore } from '../stores/magicButtonStore'
 import WindowPickerModal from './WindowPickerModal'
 import { ReservedLabel } from './command-bar/chips'
 import { sendImageToSession } from '../utils/imageTransfer'
+import { reportSnapPaste } from '../utils/imagePaste'
 import { usePasteHintStore } from '../stores/pasteHintStore'
 import { SNAP_NO_DESKTOP_TEXT, isSnapNotCaptured } from '../../shared/snap-engine'
+import { isSnapPasteAnswer, isSnapPathRouteAnswer, SNAP_RECTANGLE_SENTENCE, SNAP_WINDOW_SENTENCE, type SnapItem } from '../../shared/clipboard-paste'
 
 /** How long the line a press that captured nothing stays up. */
 const SNAP_NOTE_MS = 6000
 
 interface Props {
   sessionId: string
-  // How the picture reaches the session (imageTransfer.ts sendImageToSession):
-  // on this computer main pastes its path into Claude Code or Codex as the
-  // CLI's own paste (a Codex session main cannot paste into gets the line by
-  // the Codex typing rule); over SSH the session is asked to fetch it with the
-  // Conductor MCP server's fetch_host_screenshot tool.
+  // How the picture reaches the session (ADR-032; plan 2.1.3-beta.21 phase
+  // 2, 2.1.5): main's capture keeps the picture and answers a token for it,
+  // never its path; the token goes back on the paste channel, and the paste
+  // module writes the picture to the clipboard and presses the CLI's own
+  // paste key, then the sentence and Enter. A tab on the old SSH path gets
+  // today's request naming the saved file for the Conductor MCP server's
+  // fetch_host_screenshot tool. Only the path route behind the test switch
+  // answers a file, for 2.1.3-beta.20's flow (sendImageToSession).
   sessionType: 'local' | 'ssh'
+}
+
+/** A capture's answer applied: its token handed to the paste (not awaited:
+ *  the capture has ended and the button is usable again while the paste
+ *  runs; its hint, or the old SSH path's request, follows), or on the path
+ *  route only 2.1.3-beta.20's flow. */
+function applySnapAnswer(sessionId: string, answer: unknown, item: SnapItem, sessionType: 'local' | 'ssh'): boolean {
+  const sentence = item === 'window' ? SNAP_WINDOW_SENTENCE : SNAP_RECTANGLE_SENTENCE
+  if (isSnapPasteAnswer(answer)) {
+    void reportSnapPaste(sessionId, answer.snapToken, item, sentence)
+    return true
+  }
+  if (isSnapPathRouteAnswer(answer)) {
+    sendImageToSession(sessionId, answer.pathRoute.file, sentence, sessionType, answer.pathRoute.line)
+    return true
+  }
+  return false
 }
 
 /** Resolves once the page has made two frames: the first animation frame runs
@@ -78,9 +100,9 @@ export default function ScreenshotButton({ sessionId, sessionType }: Props) {
       // The new Snap pictures the screen as soon as it is asked: the menu's
       // close is drawn first, or the menu can be in the picture.
       await afterTwoFrames()
-      const answer = await window.electronAPI.screenshot.captureRectangle()
-      if (typeof answer === 'string' && answer) {
-        sendImageToSession(sessionId, answer, 'I just snapped a region of my screen — please view it.', sessionType)
+      const answer = await window.electronAPI.screenshot.captureRectangle(sessionId)
+      if (applySnapAnswer(sessionId, answer, 'rectangle', sessionType)) {
+        // the token went to the paste; its hint follows
       } else if (isSnapNotCaptured(answer)) {
         // 2.1.3-beta.19 fix round: nothing opened, so say why, above the bar.
         usePasteHintStore.getState().show(sessionId, SNAP_NO_DESKTOP_TEXT, SNAP_NOTE_MS)
@@ -94,10 +116,8 @@ export default function ScreenshotButton({ sessionId, sessionType }: Props) {
     setShowWindowPicker(false)
     setCapturing(true)
     try {
-      const path = await window.electronAPI.screenshot.captureWindow(sourceId)
-      if (path) {
-        sendImageToSession(sessionId, path, 'I just captured a window from my screen — please view it.', sessionType)
-      }
+      const answer = await window.electronAPI.screenshot.captureWindow(sourceId, sessionId)
+      applySnapAnswer(sessionId, answer, 'window', sessionType)
     } finally {
       setCapturing(false)
     }

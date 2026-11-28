@@ -208,6 +208,21 @@
    "how": "system-folder",
    "reason": "Windows PowerShell by its full path in the system folder (powershellPath), no profile. Also runs windows-registry-path.ts's fixed script (the registry PATH read before a check, and Add it to PATH for me), its values passed through the environment."
   },
+  "src/main/providers/claude/linux-clipboard-tools.ts :: deps.spawn(file": {
+   "count": 1,
+   "how": "not-windows",
+   "reason": "Linux only (the clipboard program check answers before any question on every other platform): execInOwnSession, the interactive question's runner, starting the file and argument list askLoginShell gives it (the sh-family login shell, `-l -i -c` and a fixed command), detached in a session of its own, stdin from nowhere, no shell."
+  },
+  "src/main/providers/claude/linux-clipboard-tools.ts :: exec(run.file": {
+   "count": 1,
+   "how": "not-windows",
+   "reason": "Linux only (the clipboard program check answers before any question on every other platform): the user's login shell, started itself with an argument list (login-shell.ts loginShellRun), asked where xclip or wl-paste is with a fixed command (the sh-family launcher, `-l -c`, then `-l -i -c` through execInOwnSession), or, for a login shell outside the sh family, for the PATH it builds (LOGIN_SHELL_PATH_COMMAND); off the main thread, a SIGKILL after its timeout and grace."
+  },
+  "src/main/providers/claude/linux-clipboard-tools.ts :: spawn(file": {
+   "count": 1,
+   "how": "not-windows",
+   "reason": "Linux only: child_process spawn as execInOwnSession's default, the one way that runner starts a process (its deps.spawn site)."
+  },
   "src/main/providers/codex/cli-runner.ts :: deps.spawn(cmd.file": {
    "count": 1,
    "how": "full-path",

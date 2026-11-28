@@ -3174,5 +3174,191 @@
       "stdin": "{\n  \"model\": { \"id\": \"m\" },\n  \"cwd\": \"/home/u/p\"\n}\n",
       "json": "{\"t\":\"status.set\",\"id\":2,\"payload\":{\"model\":{\"id\":\"m\"},\"cwd\":\"/home/u/p\"}}"
     }
+  },
+  "paste": {
+    "_doc": "The session's pictures for docs/remote/helper-protocol.md section 15 (capability paste, from 2.1.3-beta.21; ADR-032). Read by helper/tests/fixtures.rs and tests/unit/main/session-helper-connection-paste.test.ts. offered is what a holder offers; ack the least a connection acks to send file.put (a helper tab on a remote machine acks paste beside the rest it takes). names: valid ones file.put takes, invalid ones it refuses with bad-field. A request is read as a connection that acked core, local and paste reads it; error is the code it is refused with, before a byte is taken. stored is the exact bytes of the reply, which carries no path. limits: channel the paste channel, chunk_bytes the most one raw frame of a picture carries, picture_bytes the most one picture is, session_bytes the most the session's paste folder holds with a new picture, chunk_wait_ms the most time between two chunks in the build the installers carry, reply_ms the most time from the last chunk to the reply, number_digits the most digits of the number in a name.",
+    "offered": [
+      "core",
+      "local",
+      "hooks",
+      "mcp",
+      "away",
+      "screen",
+      "title",
+      "status",
+      "paste"
+    ],
+    "ack": [
+      "core",
+      "local",
+      "paste"
+    ],
+    "limits": {
+      "channel": 2,
+      "chunk_bytes": 65536,
+      "picture_bytes": 20971520,
+      "session_bytes": 104857600,
+      "chunk_wait_ms": 30000,
+      "reply_ms": 10000,
+      "number_digits": 9
+    },
+    "names": {
+      "valid": [
+        "paste-1.png",
+        "paste-1.jpg",
+        "paste-42.png",
+        "paste-999999999.jpg",
+        "paste-100.png"
+      ],
+      "invalid": [
+        "paste-0.png",
+        "paste-01.png",
+        "paste-1234567890.png",
+        "paste-1.gif",
+        "paste-1.PNG",
+        "paste-.png",
+        "../paste-1.png",
+        "paste-1.png/",
+        "x/paste-1.png",
+        ".part-1",
+        "paste-1.jpeg",
+        "paste-1",
+        "paste-1.png ",
+        "paste--1.png",
+        "paste-1.png.png",
+        "Paste-1.png",
+        "paste-+1.png",
+        ""
+      ]
+    },
+    "requests": {
+      "valid": [
+        {
+          "name": "a picture",
+          "json": "{\"t\":\"file.put\",\"id\":2,\"name\":\"paste-1.png\",\"size\":1234,\"sha256\":\"9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08\"}",
+          "expect": {
+            "type": "file.put",
+            "id": 2,
+            "name": "paste-1.png",
+            "size": 1234,
+            "sha256": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
+          }
+        },
+        {
+          "name": "the largest picture, a jpg",
+          "json": "{\"t\":\"file.put\",\"id\":4,\"name\":\"paste-999999999.jpg\",\"size\":20971520,\"sha256\":\"9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08\"}",
+          "expect": {
+            "type": "file.put",
+            "id": 4,
+            "name": "paste-999999999.jpg",
+            "size": 20971520,
+            "sha256": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
+          }
+        },
+        {
+          "name": "one byte",
+          "json": "{\"t\":\"file.put\",\"id\":6,\"name\":\"paste-7.png\",\"size\":1,\"sha256\":\"9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08\"}",
+          "expect": {
+            "type": "file.put",
+            "id": 6,
+            "name": "paste-7.png",
+            "size": 1,
+            "sha256": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
+          }
+        }
+      ],
+      "invalid": [
+        {
+          "name": "a name with a leading zero",
+          "json": "{\"t\":\"file.put\",\"id\":2,\"name\":\"paste-01.png\",\"size\":10,\"sha256\":\"9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08\"}",
+          "error": "bad-field"
+        },
+        {
+          "name": "a name that is a path",
+          "json": "{\"t\":\"file.put\",\"id\":2,\"name\":\"../paste-1.png\",\"size\":10,\"sha256\":\"9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08\"}",
+          "error": "bad-field"
+        },
+        {
+          "name": "a name of another type",
+          "json": "{\"t\":\"file.put\",\"id\":2,\"name\":\"paste-1.gif\",\"size\":10,\"sha256\":\"9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08\"}",
+          "error": "bad-field"
+        },
+        {
+          "name": "a partial file's name",
+          "json": "{\"t\":\"file.put\",\"id\":2,\"name\":\".part-1\",\"size\":10,\"sha256\":\"9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08\"}",
+          "error": "bad-field"
+        },
+        {
+          "name": "a name that is not a string",
+          "json": "{\"t\":\"file.put\",\"id\":2,\"name\":1,\"size\":10,\"sha256\":\"9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08\"}",
+          "error": "bad-field"
+        },
+        {
+          "name": "a size of 0",
+          "json": "{\"t\":\"file.put\",\"id\":2,\"name\":\"paste-1.png\",\"size\":0,\"sha256\":\"9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08\"}",
+          "error": "bad-field"
+        },
+        {
+          "name": "a size one byte over 20 MiB",
+          "json": "{\"t\":\"file.put\",\"id\":2,\"name\":\"paste-1.png\",\"size\":20971521,\"sha256\":\"9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08\"}",
+          "error": "too-large"
+        },
+        {
+          "name": "a size of 2^64 - 1",
+          "json": "{\"t\":\"file.put\",\"id\":2,\"name\":\"paste-1.png\",\"size\":18446744073709551615,\"sha256\":\"9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08\"}",
+          "error": "too-large"
+        },
+        {
+          "name": "a size that is not a whole number",
+          "json": "{\"t\":\"file.put\",\"id\":2,\"name\":\"paste-1.png\",\"size\":1.5,\"sha256\":\"9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08\"}",
+          "error": "bad-field"
+        },
+        {
+          "name": "a size that is a string",
+          "json": "{\"t\":\"file.put\",\"id\":2,\"name\":\"paste-1.png\",\"size\":\"10\",\"sha256\":\"9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08\"}",
+          "error": "bad-field"
+        },
+        {
+          "name": "a sha256 in capitals",
+          "json": "{\"t\":\"file.put\",\"id\":2,\"name\":\"paste-1.png\",\"size\":10,\"sha256\":\"9F86D081884C7D659A2FEAA0C55AD015A3BF4F1B2B0B822CD15D6C15B0F00A08\"}",
+          "error": "bad-field"
+        },
+        {
+          "name": "a sha256 one character short",
+          "json": "{\"t\":\"file.put\",\"id\":2,\"name\":\"paste-1.png\",\"size\":10,\"sha256\":\"f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08\"}",
+          "error": "bad-field"
+        },
+        {
+          "name": "no sha256",
+          "json": "{\"t\":\"file.put\",\"id\":2,\"name\":\"paste-1.png\",\"size\":10}",
+          "error": "bad-field"
+        },
+        {
+          "name": "a path beside the name",
+          "json": "{\"t\":\"file.put\",\"id\":2,\"name\":\"paste-1.png\",\"size\":10,\"sha256\":\"9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08\",\"path\":\"/tmp/x\"}",
+          "error": "bad-field"
+        },
+        {
+          "name": "a field given twice",
+          "json": "{\"t\":\"file.put\",\"id\":2,\"name\":\"paste-1.png\",\"name\":\"paste-2.png\",\"size\":10,\"sha256\":\"9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08\"}",
+          "error": "bad-field"
+        },
+        {
+          "name": "an odd id",
+          "json": "{\"t\":\"file.put\",\"id\":3,\"name\":\"paste-1.png\",\"size\":10,\"sha256\":\"9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08\"}",
+          "error": "bad-field"
+        },
+        {
+          "name": "no id",
+          "json": "{\"t\":\"file.put\",\"name\":\"paste-1.png\",\"size\":10,\"sha256\":\"9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08\"}",
+          "error": "bad-field"
+        }
+      ]
+    },
+    "stored": {
+      "re": 2,
+      "sha256": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+      "json": "{\"t\":\"file.stored\",\"re\":2,\"sha256\":\"9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08\"}"
+    }
   }
 }

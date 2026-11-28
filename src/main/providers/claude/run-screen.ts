@@ -14,10 +14,12 @@
 // there is no `submit`, and no Ask member (Ask Conductor runs on Codex).
 // Each member types only through the run its door hands it (RunScreenTyping,
 // the module's write port), never through the PTY manager.
-import type { RunScreenImageResult, RunScreenTyping, SessionRunScreen } from '../types'
+import type { HeldScreenRows, RunScreenClipboardResult, RunScreenImageResult, RunScreenTyping, SessionRunScreen } from '../types'
 import type { PromptButtonResult } from '../../../shared/types'
-import { queueClaudeMarkerLine } from '../../canvas/claude-marker-typing'
+import { claudePromptImages } from '../../../shared/claude-screen'
+import { queueClaudeMarkerLine, askClaudePrompt } from '../../canvas/claude-marker-typing'
 import { PROMPT_ENTER_DELAY_MS, REPEAT_WINDOW_MS } from '../../session-input/enter-delay'
+import { randomId } from '../../../shared/id'
 
 const PASTE_START = '\u001b[200~'
 const PASTE_END = '\u001b[201~'
@@ -141,6 +143,88 @@ async function pasteClaudeImage(imagePath: string, sentence: string, opts: { set
   return { pasted: true }
 }
 
+/** ADR-032: how often the clipboard paste reads Claude Code's prompt for its
+ *  placeholder (each read is one request to the renderer). */
+export const CLAUDE_PLACEHOLDER_POLL_MS = 150
+
+/** What the clipboard paste rule reads and waits with (a test hands fakes). */
+export interface ClaudeClipboardDeps {
+  /** The image placeholders Claude Code's prompt shows now, or null when the
+   *  prompt cannot be read. */
+  placeholders: () => Promise<number | null>
+  sleep: (ms: number) => Promise<void>
+  now: () => number
+}
+
+/**
+ * ADR-032 (plan 2.1.3-beta.21 phase 2, 2.1.3): Claude Code's own clipboard
+ * image paste. The key goes as ONE write, never inside a bracketed paste, so
+ * Claude Code reads it as its key, then reads the clipboard itself. Then the
+ * placeholder: a new "[Image #N]" in the prompt, read every
+ * CLAUDE_PLACEHOLDER_POLL_MS within `placeholderWaitMs` (the count before the
+ * key is the start; when the prompt cannot be read then, the first count read
+ * after the key is the start, so a picture already at the prompt is never
+ * taken for the new one: review round 1, R1-6). For a
+ * session on this computer it is read from the session's terminal view, as
+ * canvas markers read it (main reads no Claude Code screen, S13); for a tab
+ * through the session helper on its machine whose connection reads its
+ * holder's screen (RunScreenTyping heldScreen, 2.1.3-beta.21 plan block 5.1),
+ * on that screen (holderPlaceholders). With a `sentence` (a press from outside the terminal, and Snap):
+ * a space and the sentence, then Enter as its own write `enterDelayMs` after
+ * it, each only while the run is the one the key went to. Without one,
+ * nothing more: the user is writing. No placeholder in the wait: nothing more
+ * is typed and nothing is taken back (the caller says the picture is on the
+ * clipboard). No path anywhere.
+ */
+export async function pasteClaudeClipboard(key: string, sentence: string | null, opts: { placeholderWaitMs: number; enterDelayMs: number }, typing: RunScreenTyping, deps: ClaudeClipboardDeps): Promise<RunScreenClipboardResult> {
+  if (!typing.live()) return { outcome: 'session-gone' }
+  let before: number | null = null
+  try { before = await deps.placeholders() } catch { before = null }
+  if (!typing.live()) return { outcome: 'session-gone' }
+  typing.write(key)
+  const until = deps.now() + Math.max(0, opts.placeholderWaitMs)
+  for (;;) {
+    await deps.sleep(CLAUDE_PLACEHOLDER_POLL_MS)
+    if (!typing.live()) return { outcome: 'session-gone' }
+    let shown: number | null = null
+    try { shown = await deps.placeholders() } catch { shown = null }
+    if (shown !== null) {
+      if (before === null) before = shown
+      else if (shown > before) break
+    }
+    if (deps.now() >= until) return { outcome: 'no-placeholder' }
+  }
+  if (sentence === null) return { outcome: 'placeholder' }
+  const words = ` ${sentence}`
+  typing.write(words)
+  await typing.settled(words, opts.enterDelayMs)
+  if (!typing.live()) return { outcome: 'session-gone' }
+  typing.write('\r')
+  return { outcome: 'sent' }
+}
+
+/** 2.1.3-beta.21 (plan block 5.1): the placeholder count of a held
+ *  session's Claude Code prompt, read on its holder's screen (a tab through
+ *  the session helper on its machine: RunScreenTyping heldScreen), by the
+ *  same reading of Claude Code's prompt box the terminal view gets
+ *  (shared/claude-screen.ts). Null when no prompt shows (a failed read
+ *  rejects; the rule counts that as no reading). */
+export function holderPlaceholders(read: () => Promise<HeldScreenRows>): () => Promise<number | null> {
+  return async () => claudePromptImages((await read()).lines)
+}
+
+/** The placeholder count of a local session's Claude Code prompt, read from
+ *  its terminal view through the renderer (askClaudePrompt's 'read'). */
+function rendererPlaceholders(sessionId: string): () => Promise<number | null> {
+  const id = `paste-${randomId()}`
+  return async () => {
+    const answer = await askClaudePrompt(sessionId, 'read', '', id)
+    return answer && answer.ok && typeof answer.images === 'number' ? answer.images : null
+  }
+}
+
+const realSleep = (ms: number): Promise<void> => new Promise((resolve) => { setTimeout(resolve, ms) })
+
 /** The Claude Code package's run screen (SessionProvider.runScreen). */
 export const CLAUDE_RUN_SCREEN: SessionRunScreen = {
   open: () => {},
@@ -152,6 +236,8 @@ export const CLAUDE_RUN_SCREEN: SessionRunScreen = {
   prompt: (_sessionId, text, opts, typing) => sendClaudePrompt(text, opts, typing),
   marker: (sessionId, line, opts, typing) => holdClaudeMarker(sessionId, line, opts.canvasId, typing),
   image: (_sessionId, imagePath, sentence, opts, typing) => pasteClaudeImage(imagePath, sentence, opts, typing),
+  // A held session's placeholder on its holder's screen (2.1.3-beta.21), else on its terminal view.
+  clipboard: (sessionId, key, sentence, opts, typing) => pasteClaudeClipboard(key, sentence, opts, typing, { placeholders: typing.heldScreen ? holderPlaceholders(typing.heldScreen) : rendererPlaceholders(sessionId), sleep: realSleep, now: () => Date.now() }),
   // A held terminal's lone Enter typed while it was detached goes this long
   // after the frame before it at the attach again (2.1.3-beta.18 fix round;
   // since 2.1.3-beta.19 section 6.2, aicc_planning#440, each provider's own

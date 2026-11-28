@@ -1,8 +1,8 @@
 {
   "schema": "wp1-legacy-codex-ledger/2",
   "predicateDigest": "100a1233edebdc39a5f9004d3fba980a89ebb15b25872e52076386bc84b03153",
-  "manifestPathDigest": "dc9b0ea3c4ceb401d546946ed0913ba8b2047f91fbd3bcc8d9102d628ef4b615",
-  "manifestHead": "7205dc61706e1267709df4d6eff2f0a189ab4224",
+  "manifestPathDigest": "44026a1f6f3f7757bf991fe0969a74bb1756bdd38830dbfffd787eda519ec7ec",
+  "manifestHead": "b33fd28872956fed6e32d9b5cb2cdad88d1dcd4a",
   "dispositions": {
     "retain": "unchanged observable behaviour, characterization proof",
     "move": "moved behind a package boundary and/or adapted at the call site, regression proof (newPath when relocated)",
@@ -317,7 +317,7 @@
       ],
       "category": "OTHER",
       "disposition": "replace",
-      "evidence": "WP2 PR 4 P4.8 (rows 59, 60; OD20 D5, D7): ubuntu-latest in the test matrix; the codex-conformance job installs the minimum and pinned Codex CLI (a release candidate by dispatch) per OS and runs the no-sign-in checks, no secrets (WP1.30, WP1.71); tests/integration/codex-real-cli-conformance.test.ts; docs/wp1/evidence/ci-matrix.md; WP2 PR 4 P4.8 review (E-4, c75c3acb): every CLI run in the codex-conformance job gets a fresh CODEX_HOME, and the runner's own home is proven untouched (WP1.71); tests/integration/codex-conformance-ci.mjs; docs/wp1/evidence/ci-matrix.md; WP2 PR 4 P4.10 (60b39238, 2eb1b194): the Linux test job blocks after its first green run (CI run 37134624406), and the help captures are asserted on every OS once each OS was reviewed (WP1.30, WP1.71); docs/wp1/evidence/ci-matrix.md; 2.1.3-beta.1 process track (ADR-028): the codex-conformance job keeps its steps, its matrix and the versions it checks; only its start condition changed: on a PR it still needs ci-run, and another label change or an edit of the PR title or description no longer starts it again (a change of base branch does) (WP1.71); tests/unit/scripts/ci-cadence.test.ts; ADR-030 probe P19 (2.1.3-beta.11 section A1): the dispatch-only probe-p19 job installs Claude Code and Codex into prefixes of their own with scripts off and runs the probe, read-only, no secrets (WP1.67); tests/unit/scripts/probe-p19-job.test.ts; 2.1.3-beta.11 (aicc_planning#368, WP1.71): the claude_rc_version input and the claude-conformance job added beside the Codex job, and a header comment that names the Codex rc job names the daily upstream CLI watch reads; no change to a Codex leg; tests/unit/scripts/upstream-cli-watch.test.ts, tests/integration/claude-conformance-lib.test.ts",
+      "evidence": "WP2 PR 4 P4.8 (rows 59, 60; OD20 D5, D7): ubuntu-latest in the test matrix; the codex-conformance job installs the minimum and pinned Codex CLI (a release candidate by dispatch) per OS and runs the no-sign-in checks, no secrets (WP1.30, WP1.71); tests/integration/codex-real-cli-conformance.test.ts; docs/wp1/evidence/ci-matrix.md; WP2 PR 4 P4.8 review (E-4, c75c3acb): every CLI run in the codex-conformance job gets a fresh CODEX_HOME, and the runner's own home is proven untouched (WP1.71); tests/integration/codex-conformance-ci.mjs; docs/wp1/evidence/ci-matrix.md; WP2 PR 4 P4.10 (60b39238, 2eb1b194): the Linux test job blocks after its first green run (CI run 37134624406), and the help captures are asserted on every OS once each OS was reviewed (WP1.30, WP1.71); docs/wp1/evidence/ci-matrix.md; 2.1.3-beta.1 process track (ADR-028): the codex-conformance job keeps its steps, its matrix and the versions it checks; only its start condition changed: on a PR it still needs ci-run, and another label change or an edit of the PR title or description no longer starts it again (a change of base branch does) (WP1.71); tests/unit/scripts/ci-cadence.test.ts; ADR-030 probe P19 (2.1.3-beta.11 section A1): the dispatch-only probe-p19 job installs Claude Code and Codex into prefixes of their own with scripts off and runs the probe, read-only, no secrets (WP1.67); tests/unit/scripts/probe-p19-job.test.ts; 2.1.3-beta.11 (aicc_planning#368, WP1.71): the claude_rc_version input and the claude-conformance job added beside the Codex job, and a header comment that names the Codex rc job names the daily upstream CLI watch reads; no change to a Codex leg; tests/unit/scripts/upstream-cli-watch.test.ts, tests/integration/claude-conformance-lib.test.ts; 2.1.3-beta.21 phase 3 (ADR-032, aicc_planning#447): the paste-e2e job (dispatch only) installs Codex 0.157.1 from npm into a prefix of its own with scripts off, as snap-e2e does, for the clipboard paste on macOS and Linux (WP1.68); tests/unit/scripts/paste-e2e-job.test.ts",
       "note": "the job's name, comments and test paths; no Codex code path; P04 (P4.8 review): CODEX_HOME set to fresh empty folders made by codex-conformance-ci.mjs homes for the PATH check and the flag-drift suite; no global home resolver"
     },
     {
@@ -1723,6 +1723,17 @@
       "note": "the P3 and P6 Linux probe; names Codex only in the list of programs P6 looks up"
     },
     {
+      "path": "helper/probes/pv-codex-stand-in.cjs",
+      "predicates": [
+        "P01",
+        "P14"
+      ],
+      "category": "SCRIPTS",
+      "disposition": "added",
+      "evidence": "new 2.1.3-beta.21 phase 6 (nubbymong/aicc_planning#446) probe support file (helper/probes/pv-codex-stand-in.cjs): a stand-in Codex the remote-helper-e2e job puts on the sshd account's login PATH for the review line, answering only --version, debug models --bundled and the review's exec with fixed JSON events, recording its argv, folder, variable names, terminals and parent; no network, no file but its record (WP1.68); tests/live/remote-review.live.ts, tests/unit/scripts/remote-helper-e2e-job.test.ts",
+      "note": "the real Codex is proven on hosts by PV1; the review argv passes --ignore-user-config, so a real Codex review cannot be pointed at a loopback model in CI"
+    },
+    {
       "path": "helper/src/serve.rs",
       "predicates": [
         "P14"
@@ -2356,6 +2367,18 @@
       ]
     },
     {
+      "path": "src/main/codex-review-remote.ts",
+      "predicates": [
+        "P01",
+        "P04",
+        "P14"
+      ],
+      "category": "REVIEW-MCP",
+      "disposition": "added",
+      "evidence": "new 2.1.3-beta.21 phase 6 (nubbymong/aicc_planning#446) module (src/main/codex-review-remote.ts): codex_review for a Claude Code tab through the session helper, run on that machine with its own Codex sign-in, never on this computer; ADR-031's argv, the output reader and the version rule from the Codex package's ProviderRemoteReview through the registry (no deep import, no provider-name check), the allow-lists against the machine's own Codex list, refused before anything runs for hostile values, an old or missing Codex, or a machine where probes PV1 and PV2 have not passed (WP1.38, WP1.68); tests/unit/main/codex-review-remote.test.ts, tests/unit/main/conductor-mcp-remote-review.test.ts, tests/unit/remote-helper/remote-review.test.ts",
+      "note": "the P04 hits are the machine record field `codex` (`m.codex`), not a Codex home resolver"
+    },
+    {
       "path": "src/main/codex-review-usage.ts",
       "predicates": [
         "P01",
@@ -2679,6 +2702,16 @@
       "disposition": "replace",
       "evidence": "2.1.3-beta.14 section C9 (aicc_planning#362): registering the registry handlers now also follows the installed Codex (followInstalledCodexModels), the one production call that reads the Codex model list with Sentinel off; replacement coverage: dropping that call fails the test (WP1.68); tests/unit/main/registry-handlers-codex-list.test.ts",
       "note": "P14: the import, the call and its comment; the read itself is installed-codex-models.ts"
+    },
+    {
+      "path": "src/main/ipc/remote-machines-handlers.ts",
+      "predicates": [
+        "P14"
+      ],
+      "category": "REVIEW-MCP",
+      "disposition": "added",
+      "evidence": "2.1.3-beta.21 phase 6 (nubbymong/aicc_planning#446): the remote machines' wiring hands the review tool the host side of a review on a machine (its record, the host read and the run) and hands the machines' Check the Codex package's ProviderRemoteReview through the review tool module, which reaches it through the registry; it compares no provider name (WP1.68); tests/unit/main/remote-machines-handlers.test.ts, tests/unit/main/conductor-mcp-remote-review.test.ts",
+      "note": "the P14 hit is the import of codex-review-mcp-tool and one comment"
     },
     {
       "path": "src/main/ipc/tokenomics2-handlers.ts",
@@ -3058,6 +3091,17 @@
       "note": "created by WP2; replaces the legacy runCodexProcess/runCodexStreaming in auth.ts once the auth slice lands"
     },
     {
+      "path": "src/main/providers/codex/clipboard-paste.ts",
+      "predicates": [
+        "P01",
+        "P14"
+      ],
+      "category": "LAUNCH",
+      "disposition": "added",
+      "evidence": "new 2.1.3-beta.21 phase 2 (ADR-032, aicc_planning#447) module: the Codex package's clipboard image paste table (ADR-032 row 14): Codex's own paste key per OS (ESC v on Windows, Ctrl+V elsewhere), the formats its clipboard read takes, that it reads a copied file itself on Windows and macOS, and the path route's composer line behind the test switch; data only, no process, no Codex behaviour changed (WP1.68); tests/unit/main/clipboard-paste-tables.test.ts",
+      "note": "created by the clipboard paste; offered through the registered provider (SessionProvider.clipboardPaste)"
+    },
+    {
       "path": "src/main/providers/codex/composer-submit.ts",
       "predicates": [
         "P01",
@@ -3148,7 +3192,7 @@
       ],
       "category": "LAUNCH",
       "disposition": "move",
-      "evidence": "CodexProvider class contract pinned by tests/wp1/codex-characterization.test.ts C2 (WP1.54); entry-point rule tests/wp1/dependency-boundaries.test.ts (WP1.66); WP2 final fixes: CodexProvider.resolveBinary and resumeCommand, which nothing called, refuse instead of resolving the codex on PATH (not used for Codex: launches go through the managed launch; C2 inverted), and cli.discovery and install.recipes are declared supported, what the package implements; realm.isolated stays unknown because the contract backs it with realms.realmEnvPatch, which Codex does not expose (WP1.17, WP1.18); tests/unit/providers/codex/spawn.test.ts, tests/wp1/provider-conformance.test.ts; WP2 P3 usage track MP3 (owner decision 2026-09-27, docs/wp1/owner-decisions-2026-09-27.md): the wired package exposes the usage port (account.usage supported, unknown unwired) and CodexProvider records each session's allowance by its sessions folder (WP1.41); tests/wp1/provider-conformance.test.ts; tests/unit/providers/codex/telemetry.test.ts; WP2 P3 usage track MP3 round-1 review fixes: the usage port uses the checked sessions folder, and a session opens and releases its realm's live figure (WP1.68); tests/unit/providers/codex/telemetry.test.ts; tests/unit/main/provider-account-usage.test.ts; WP2 P3 usage track MP3 round-2 review fixes: exports the lookup that tells unavailable from no reading, and the day-entry and timeout bounds (WP1.68); tests/unit/providers/codex/usage-last-seen.test.ts; WP2 P3 usage track MP7 (owner decision 2026-09-27, docs/wp1/owner-decisions-2026-09-27.md, the scoped WP1.41 exception; ADR-022): exports the app-server client and the read result type (WP1.41); tests/unit/providers/codex/app-server-client.test.ts; WP2 P3 usage track MP8 (owner decision 2026-09-27, docs/wp1/owner-decisions-2026-09-27.md, the scoped WP1.41 exception; ADR-022): wires the port's read to the auth operations and keys the verdict cache on the proven executable (codexExecutableKey) (WP1.41); tests/unit/main/codex-usage-read.test.ts; WP2 P3 usage track MP9 round 1 (review fixes: B-F1, B-F2, Q-1 to Q-5): the usage index reads a realm's sessions folder held to the canonical-home check (WP1.2); tests/wp1/codex-auth-adapter.test.ts; WP2 PR 3 P3.5: the session telemetry passes the resumed id, the pick file and the claim listener to the watcher (WP1.68); tests/unit/providers/codex/spawn-resume.test.ts; WP2 PR 3 P3.6 (row 22): the realm folders get the conversation carry (conversation-carry.ts), replaceable only by a test (WP1.28); tests/wp1/conversation-carry-service.test.ts; WP2 PR 3 P3.9 (rows 39, 42): the package's setup operations state the supported range and read the proven CLI's model list (model-catalogue.ts), with test ports that never replace the proof (WP1.17, WP1.49); tests/unit/providers/codex/model-catalogue.test.ts; WP2 PR 3 P3.9 round 1: the model list read's empty home is made by codexModelsScratchHome, which first sweeps homes an earlier read left behind (own prefix, real folders, an hour old) (WP1.17); tests/unit/providers/codex/models-scratch-home.test.ts; WP2 PR 3 P3.9 round 2: exports the leftover and scope names of the runner and the reviewer (WP1.17); tests/wp1/cli-discovery.test.ts; WP2 PR 3 P3.9 round 3: exports the run records and observation bounds of the runner (WP1.17); tests/wp1/cli-discovery.test.ts; WP2 PR 3 P3.9 round 4: exports codexChainAlone and CodexObserveReason (WP1.17); tests/wp1/cli-discovery.test.ts; WP2 PR 3 P3.10: the package deploys the hook forwarder, sweeps stale hook folders and offers prepareSessionHooks (a per-launch owner-only hook file); its telemetry source passes the exact claim and the refute through (WP1.68); tests/unit/providers/codex/hooks.test.ts, tests/unit/main/pty-codex-hooks.test.ts; WP2 PR 3 P3.10 round 1 (ADR-009 pass 1, spec, quality and VM findings) (WP1.68): the hook root in this install's data folder, owner-only by the app's folder rule, and the plain-path copy staged at boot (A5, V3); tests/unit/providers/codex/hooks.test.ts; WP2 PR 3 P3.10 round 2 (the round 1 re-review and the VM re-check) (WP1.68): a plain-path copy that could not be made is logged at boot (R7); tests/unit/providers/codex/spawn-hooks.test.ts; WP2 PR 3 P3.10 round 3 (the round 2 re-review and VM re-check) (WP1.68): a hook folder that cannot be made the user's is logged at boot and at a launch (F3); tests/unit/providers/codex/spawn-hooks.test.ts; WP2 PR 3 P3.10 rounds 3b and 4 (the hook wrapper and the picker resolve their helpers from fixed locations; the hook folders prepared asynchronously and read back; approval pairing; the Watchdog episode) (WP1.68): the provider's deploy copies the scripts only; prepareHookFolders prepares the hook folders and says when a preparation leaves sessions without hooks; prepareSessionHooks uses only the prepared root; tests/unit/providers/codex/spawn-hooks.test.ts; WP2 PR 3 P3.12 (rows 31, 32, 65; logs and GitHub context; parity) (WP1.68): passes onRollout to the watcher; tests/unit/providers/codex/spawn-resume.test.ts; WP2 PR 4 P4.4: launch.accountFolders wired to the auth operations (WP1.68); tests/unit/main/account-folders-service.test.ts; WP2 PR 4 P4.5 (row 57): background in the launch kinds and the agent-run port (WP1.46); tests/unit/main/codex-background-launch.test.ts, tests/wp1/provider-conformance.test.ts; WP2 PR 4 lane A round 2 (9e200c0a, the provider port; no behaviour change): the CodexProvider members pty-manager reaches the package through (launchRoute, stagedSkillsDir, runScreen), committed by lane A directly (RBND-1, recorded in the plan's P4.1 record) (WP1.55); tests/unit/main/pty-codex-provider-port.test.ts, tests/wp1/dependency-boundaries.test.ts; WP2 PR 4 owner answers (2026-10-04) (be38c516: removeLegacyMcpServerConfig and the pricing operations on the package; integration round 3: launchRoute removed, no consumer left) (WP1.55); tests/unit/providers/provider-entry-routing.test.ts, tests/unit/providers/codex/spawn-canvas.test.ts; WP2 PR 4 owner answers review fix pass (FA's patch, integrated by FI): the header says the dependency-boundary test holds the deep imports at zero (WP1.55); tests/wp1/dependency-boundaries.test.ts; WP2 PR 4 P4.7 fix pass 1: the package offers the Insights port (insights, createCodexInsightsOperations) that the Insights runner reaches through the registry (WP1.55); tests/wp1/provider-conformance.test.ts, tests/wp1/dependency-boundaries.test.ts; 2.1.3-beta.14 (aicc_planning#358, the code half: the dormant permission hold deleted) (WP1.68): the two marker constants are no longer exported; tests/unit/hooks/permission-hold-gone.test.ts; 2.1.3-beta.17 section C6 (aicc_planning#415): the run screen offers submitImage (submitCodexImage) beside submit (WP1.68); tests/unit/main/session-input-codex-image.test.ts; 2.1.3-beta.18 section 5 (aicc_planning#433, ADR-030 S12): a held Codex session's hook events through its holder (WP1.68); tests/unit/main/session-helper-codex-hooks.test.ts, tests/unit/scripts/codex-hook-forwarder-helper.test.ts; 2.1.3-beta.19 section 6.2 (aicc_planning#440): the run screen declares heldEnterWaitMs (PROMPT_ENTER_DELAY_MS), the wait a held Codex terminal's queued lone Enter keeps behind the frame before it (PB3) (WP1.68); tests/unit/main/session-helper-enter-wait.test.ts",
+      "evidence": "CodexProvider class contract pinned by tests/wp1/codex-characterization.test.ts C2 (WP1.54); entry-point rule tests/wp1/dependency-boundaries.test.ts (WP1.66); WP2 final fixes: CodexProvider.resolveBinary and resumeCommand, which nothing called, refuse instead of resolving the codex on PATH (not used for Codex: launches go through the managed launch; C2 inverted), and cli.discovery and install.recipes are declared supported, what the package implements; realm.isolated stays unknown because the contract backs it with realms.realmEnvPatch, which Codex does not expose (WP1.17, WP1.18); tests/unit/providers/codex/spawn.test.ts, tests/wp1/provider-conformance.test.ts; WP2 P3 usage track MP3 (owner decision 2026-09-27, docs/wp1/owner-decisions-2026-09-27.md): the wired package exposes the usage port (account.usage supported, unknown unwired) and CodexProvider records each session's allowance by its sessions folder (WP1.41); tests/wp1/provider-conformance.test.ts; tests/unit/providers/codex/telemetry.test.ts; WP2 P3 usage track MP3 round-1 review fixes: the usage port uses the checked sessions folder, and a session opens and releases its realm's live figure (WP1.68); tests/unit/providers/codex/telemetry.test.ts; tests/unit/main/provider-account-usage.test.ts; WP2 P3 usage track MP3 round-2 review fixes: exports the lookup that tells unavailable from no reading, and the day-entry and timeout bounds (WP1.68); tests/unit/providers/codex/usage-last-seen.test.ts; WP2 P3 usage track MP7 (owner decision 2026-09-27, docs/wp1/owner-decisions-2026-09-27.md, the scoped WP1.41 exception; ADR-022): exports the app-server client and the read result type (WP1.41); tests/unit/providers/codex/app-server-client.test.ts; WP2 P3 usage track MP8 (owner decision 2026-09-27, docs/wp1/owner-decisions-2026-09-27.md, the scoped WP1.41 exception; ADR-022): wires the port's read to the auth operations and keys the verdict cache on the proven executable (codexExecutableKey) (WP1.41); tests/unit/main/codex-usage-read.test.ts; WP2 P3 usage track MP9 round 1 (review fixes: B-F1, B-F2, Q-1 to Q-5): the usage index reads a realm's sessions folder held to the canonical-home check (WP1.2); tests/wp1/codex-auth-adapter.test.ts; WP2 PR 3 P3.5: the session telemetry passes the resumed id, the pick file and the claim listener to the watcher (WP1.68); tests/unit/providers/codex/spawn-resume.test.ts; WP2 PR 3 P3.6 (row 22): the realm folders get the conversation carry (conversation-carry.ts), replaceable only by a test (WP1.28); tests/wp1/conversation-carry-service.test.ts; WP2 PR 3 P3.9 (rows 39, 42): the package's setup operations state the supported range and read the proven CLI's model list (model-catalogue.ts), with test ports that never replace the proof (WP1.17, WP1.49); tests/unit/providers/codex/model-catalogue.test.ts; WP2 PR 3 P3.9 round 1: the model list read's empty home is made by codexModelsScratchHome, which first sweeps homes an earlier read left behind (own prefix, real folders, an hour old) (WP1.17); tests/unit/providers/codex/models-scratch-home.test.ts; WP2 PR 3 P3.9 round 2: exports the leftover and scope names of the runner and the reviewer (WP1.17); tests/wp1/cli-discovery.test.ts; WP2 PR 3 P3.9 round 3: exports the run records and observation bounds of the runner (WP1.17); tests/wp1/cli-discovery.test.ts; WP2 PR 3 P3.9 round 4: exports codexChainAlone and CodexObserveReason (WP1.17); tests/wp1/cli-discovery.test.ts; WP2 PR 3 P3.10: the package deploys the hook forwarder, sweeps stale hook folders and offers prepareSessionHooks (a per-launch owner-only hook file); its telemetry source passes the exact claim and the refute through (WP1.68); tests/unit/providers/codex/hooks.test.ts, tests/unit/main/pty-codex-hooks.test.ts; WP2 PR 3 P3.10 round 1 (ADR-009 pass 1, spec, quality and VM findings) (WP1.68): the hook root in this install's data folder, owner-only by the app's folder rule, and the plain-path copy staged at boot (A5, V3); tests/unit/providers/codex/hooks.test.ts; WP2 PR 3 P3.10 round 2 (the round 1 re-review and the VM re-check) (WP1.68): a plain-path copy that could not be made is logged at boot (R7); tests/unit/providers/codex/spawn-hooks.test.ts; WP2 PR 3 P3.10 round 3 (the round 2 re-review and VM re-check) (WP1.68): a hook folder that cannot be made the user's is logged at boot and at a launch (F3); tests/unit/providers/codex/spawn-hooks.test.ts; WP2 PR 3 P3.10 rounds 3b and 4 (the hook wrapper and the picker resolve their helpers from fixed locations; the hook folders prepared asynchronously and read back; approval pairing; the Watchdog episode) (WP1.68): the provider's deploy copies the scripts only; prepareHookFolders prepares the hook folders and says when a preparation leaves sessions without hooks; prepareSessionHooks uses only the prepared root; tests/unit/providers/codex/spawn-hooks.test.ts; WP2 PR 3 P3.12 (rows 31, 32, 65; logs and GitHub context; parity) (WP1.68): passes onRollout to the watcher; tests/unit/providers/codex/spawn-resume.test.ts; WP2 PR 4 P4.4: launch.accountFolders wired to the auth operations (WP1.68); tests/unit/main/account-folders-service.test.ts; WP2 PR 4 P4.5 (row 57): background in the launch kinds and the agent-run port (WP1.46); tests/unit/main/codex-background-launch.test.ts, tests/wp1/provider-conformance.test.ts; WP2 PR 4 lane A round 2 (9e200c0a, the provider port; no behaviour change): the CodexProvider members pty-manager reaches the package through (launchRoute, stagedSkillsDir, runScreen), committed by lane A directly (RBND-1, recorded in the plan's P4.1 record) (WP1.55); tests/unit/main/pty-codex-provider-port.test.ts, tests/wp1/dependency-boundaries.test.ts; WP2 PR 4 owner answers (2026-10-04) (be38c516: removeLegacyMcpServerConfig and the pricing operations on the package; integration round 3: launchRoute removed, no consumer left) (WP1.55); tests/unit/providers/provider-entry-routing.test.ts, tests/unit/providers/codex/spawn-canvas.test.ts; WP2 PR 4 owner answers review fix pass (FA's patch, integrated by FI): the header says the dependency-boundary test holds the deep imports at zero (WP1.55); tests/wp1/dependency-boundaries.test.ts; WP2 PR 4 P4.7 fix pass 1: the package offers the Insights port (insights, createCodexInsightsOperations) that the Insights runner reaches through the registry (WP1.55); tests/wp1/provider-conformance.test.ts, tests/wp1/dependency-boundaries.test.ts; 2.1.3-beta.14 (aicc_planning#358, the code half: the dormant permission hold deleted) (WP1.68): the two marker constants are no longer exported; tests/unit/hooks/permission-hold-gone.test.ts; 2.1.3-beta.17 section C6 (aicc_planning#415): the run screen offers submitImage (submitCodexImage) beside submit (WP1.68); tests/unit/main/session-input-codex-image.test.ts; 2.1.3-beta.18 section 5 (aicc_planning#433, ADR-030 S12): a held Codex session's hook events through its holder (WP1.68); tests/unit/main/session-helper-codex-hooks.test.ts, tests/unit/scripts/codex-hook-forwarder-helper.test.ts; 2.1.3-beta.19 section 6.2 (aicc_planning#440): the run screen declares heldEnterWaitMs (PROMPT_ENTER_DELAY_MS), the wait a held Codex terminal's queued lone Enter keeps behind the frame before it (PB3) (WP1.68); tests/unit/main/session-helper-enter-wait.test.ts; 2.1.3-beta.21 phase 2 (ADR-032, aicc_planning#447): the run screen offers submitClipboard (submitCodexClipboard) and the package its clipboardPaste table (WP1.68); tests/unit/main/clipboard-paste-tables.test.ts, tests/unit/main/session-input-ownership.test.ts",
       "note": "becomes the Codex package public entry point; CodexProvider (session parity surface) retained for the runtime work package, its two PATH lookups refused; auth/setup/realm operations exported alongside"
     },
     {
@@ -3303,6 +3347,18 @@
       "note": "created by WP2"
     },
     {
+      "path": "src/main/providers/codex/remote-review.ts",
+      "predicates": [
+        "P01",
+        "P04",
+        "P14"
+      ],
+      "category": "REVIEW-MCP",
+      "disposition": "added",
+      "evidence": "new 2.1.3-beta.21 phase 6 (nubbymong/aicc_planning#446) module in the Codex package (src/main/providers/codex/remote-review.ts), reached from its entry point (review.remote): core's ProviderRemoteReview for a review on another machine, pure; the argv is cli-runner.ts codexReviewArgs, the output the package's own exec event reader, the version cli-contract.ts's, the model list the runner's models constant in a fresh empty CODEX_HOME and model-catalogue.ts's parse (WP1.38, WP1.68); tests/unit/main/codex-review-remote.test.ts, tests/unit/remote-helper/remote-review.test.ts",
+      "note": "the P04 hit is the name of the config variable the remote model list read sets to a fresh, empty folder on the host (never an account folder or ~/.codex)"
+    },
+    {
       "path": "src/main/providers/codex/resume-picker.ts",
       "predicates": [
         "P01",
@@ -3346,7 +3402,7 @@
       ],
       "category": "LAUNCH",
       "disposition": "added",
-      "evidence": "new 2.1.3-beta.18 section 4 (aicc_planning#432) module: the Codex package's door members (retry, prompt, marker, image, ask), the Codex calls the session input module made for a session it tested as Codex, moved unchanged over the package's submit primitive and image rule (WP1.68); tests/unit/main/session-input-codex-image.test.ts, tests/unit/main/session-input-prompt.test.ts, tests/unit/providers/run-screen-doors-wired.test.ts",
+      "evidence": "new 2.1.3-beta.18 section 4 (aicc_planning#432) module: the Codex package's door members (retry, prompt, marker, image, ask), the Codex calls the session input module made for a session it tested as Codex, moved unchanged over the package's submit primitive and image rule (WP1.68); tests/unit/main/session-input-codex-image.test.ts, tests/unit/main/session-input-prompt.test.ts, tests/unit/providers/run-screen-doors-wired.test.ts; 2.1.3-beta.21 phase 2 (ADR-032, aicc_planning#447): the clipboard door member, over the run screen's submitClipboard (WP1.68); tests/unit/main/codex-clipboard-paste.test.ts, tests/unit/main/session-input-ownership.test.ts",
       "note": "P01: the file path; P14: the Codex package's own door rules and their comments"
     },
     {
@@ -3357,7 +3413,7 @@
       ],
       "category": "LAUNCH",
       "disposition": "added",
-      "evidence": "new WP2 PR 4 P4.1 (row 51) module: main's bounded headless pane of each Codex run, one submission at a time (WP1.68); tests/unit/main/codex-session-screen.test.ts; WP2 PR 4 lane A round 2 (9e200c0a, the provider port; no behaviour change): the pane takes the Watchdog's CSI clamp from its caller and refuses to open without one, so it no longer reaches the Claude package (WP1.55); tests/unit/main/codex-session-screen.test.ts; WP2 PR 4 ADR-009 round 1 (63968ba0): changed by the pass's fixes (WP1.55); tests/unit/main/codex-session-screen.test.ts; 2.1.3-beta.17 section C6 (aicc_planning#415): the image rule (pasteImageIntoCodexComposer: wait for the ready, empty composer, the path as a bracketed paste, Codex's placeholder read, the sentence through the submit primitive read past the placeholder, Enter; Ctrl+U take-back only of its own paste) and its driver submitCodexImage, on the same per-run chain as submitCodexText (onRun) (WP1.68); tests/unit/main/codex-image-paste.test.ts, tests/unit/main/codex-session-screen-image.test.ts",
+      "evidence": "new WP2 PR 4 P4.1 (row 51) module: main's bounded headless pane of each Codex run, one submission at a time (WP1.68); tests/unit/main/codex-session-screen.test.ts; WP2 PR 4 lane A round 2 (9e200c0a, the provider port; no behaviour change): the pane takes the Watchdog's CSI clamp from its caller and refuses to open without one, so it no longer reaches the Claude package (WP1.55); tests/unit/main/codex-session-screen.test.ts; WP2 PR 4 ADR-009 round 1 (63968ba0): changed by the pass's fixes (WP1.55); tests/unit/main/codex-session-screen.test.ts; 2.1.3-beta.17 section C6 (aicc_planning#415): the image rule (pasteImageIntoCodexComposer: wait for the ready, empty composer, the path as a bracketed paste, Codex's placeholder read, the sentence through the submit primitive read past the placeholder, Enter; Ctrl+U take-back only of its own paste) and its driver submitCodexImage, on the same per-run chain as submitCodexText (onRun) (WP1.68); tests/unit/main/codex-image-paste.test.ts, tests/unit/main/codex-session-screen-image.test.ts; 2.1.3-beta.21 phase 2 (ADR-032, aicc_planning#447): the clipboard paste rule (pasteClipboardIntoCodexComposer: the ready, empty composer for a press from outside the terminal, the key as one write, Codex's placeholder, the sentence through the submit primitive past it; no path and no take-back) and its driver submitCodexClipboard on the same per-run chain (onRun); the path rule unchanged (WP1.68); tests/unit/main/codex-clipboard-paste.test.ts, tests/unit/main/path-route-doors-frozen.test.ts",
       "note": ""
     },
     {
@@ -3512,6 +3568,37 @@
       "disposition": "replace",
       "evidence": "Claude env shape pinned by tests/wp1/claude-characterization.test.ts C1 and tests/unit/pty-spawn-env.test.ts (both retained as protection, WP1.54); binding/lease behaviour by tests/wp1/launch-handoff.test.ts and tests/wp1/consumer-leases.test.ts (WP1.38, WP1.42, WP1.46); WP2 commit 6g: the Codex spawn identity re-export removed with codex-spawn-identity.ts (tests/wp1/legacy-codex-retired.test.ts, WP1.57); the WP2 final fixes changed comments only (the codex_review registration comment states the per-connection conditions main offers the tool on, and the End comment names the quoted tmux target it kills); the WP2 T24 fix, not Codex code, changed End: endSshRemoteDetailed resolves a detailed result, reads its target the moment it is called, and reads the End sudo marker from the exec output to report container-needs-sudo when a rootful container's sudo needs a password End does not hold (tests/unit/main/ssh-end-remote-password.test.ts); WP2 PR 3 P3.5 (rows 34, 35; parity): the Codex branch resumes a restored session's persisted conversation or, on a Restart, the one the session kept across the kill (never over the picker), starts where the builder says, and keeps the conversation the status line claims, bounded (WP1.38); tests/unit/main/codex-resume-launch.test.ts; WP2 PR 3 P3.6 (row 22): the kept Codex conversation records the account of the launch that resumed or claimed it (getKeptCodexConversationSource), which a Switch account carries it from; session:save still gets the conversation only (WP1.42); tests/unit/main/codex-resume-launch.test.ts; WP2 PR 3 P3.8 (row 40): type-only, the Codex effort union gains max and ultra (the compiled output is unchanged) (WP1.68); tests/unit/main/codex-effort-allowlist.test.ts; WP2 PR 3 P3.8 round 1 (row 69): type-only, the preset union gains plan (the compiled output is unchanged) (WP1.68); tests/unit/main/codex-effort-allowlist.test.ts; WP2 PR 3 P3.10: a Codex launch gets its hook file and gateway registration before the builder, keeps whether its realm's hooks are heard, takes the exact claim from its own hook (never a Claude sink), arms the Watchdog for a local Codex session, and a local spawn that throws after its process started ends that process (the C item); no SSH path changed (WP1.38); tests/unit/main/pty-codex-hooks.test.ts, tests/wp1/launch-handoff-pty.test.ts; WP2 PR 3 P3.10 round 1 (ADR-009 pass 1, spec, quality and VM findings) (WP1.68): a hook's path is a Codex one for as long as the Codex launch's gateway token is registered (B1); a token nothing will use goes (B2); only a conversation a session's Codex started proves another's inferred claim wrong (B4); the transcript route tested (B5); unconfirmed keyed to the session's own hooks, and a live resume by id keeps its doubt (S4); the idle mark and a released path go with the run (Q1, Q3); the picker told which conversations other tabs are on (V2); tests/unit/main/pty-codex-hooks.test.ts, tests/wp1/launch-handoff-pty.test.ts; WP2 PR 3 P3.10 round 2 (the round 1 re-review and the VM re-check) (WP1.68): a killed Codex session's gateway token goes at the kill, its Codex record at the exit (R8); the picker told only of tabs on the same account (R10); tests/unit/main/pty-codex-hooks.test.ts; WP2 PR 3 P3.10 rounds 3b and 4 (the hook wrapper and the picker resolve their helpers from fixed locations; the hook folders prepared asynchronously and read back; approval pairing; the Watchdog episode) (WP1.68): the Codex launch asks prepareSessionHooks for the prepared hook folder, with no folder rule; tests/unit/main/pty-codex-hooks.test.ts; WP2 PR 3 P3.11 (row 62, extra CLI arguments; parity) (WP1.68): the inline codexOptions type gains extraArgs, typing only; tests/unit/providers/codex/spawn-extra-args.test.ts; WP2 PR 3 P3.12 (rows 31, 32, 65; logs and GitHub context; parity) (WP1.68): a local Codex run is recorded (the same gate as Claude's), its watcher's claims reach the Codex log binder after runStart, Claude's transcript discovery is never armed for it, the binder is told at exit; the GitHub Session Context record; no SSH path changes (a Codex session over SSH is refused before spawn); tests/unit/main/pty-codex-logs.test.ts; WP2 PR 3 P3.13 (row 72) (WP1.60): one read-only export, isSessionLiveOrStarting, for the one-at-a-time rule; no SSH path changes; tests/unit/main/codex-multi-spawn-leases.test.ts; WP2 PR 3 P3.15 (row 71): the local Codex spawn on Windows asks node-pty for its bundled ConPTY (useConptyDll, bundledConptyChoice in bundled-conpty.ts) when conpty.dll and OpenConsole.exe are beside the native module node-pty loads, else the system ConPTY, and its launch line says which; the Claude, plain-terminal and SSH spawns are unchanged (WP1.68); tests/unit/main/pty-conpty-per-provider.test.ts, tests/unit/main/bundled-conpty.test.ts, tests/unit/ssh-spawn-callsite.test.ts; WP2 PR 3 P3.15 round 1 (the spec, code-quality and ADR-009 lens findings, and the VM re-check) (WP1.68): the local Codex spawn takes its ConPTY options from the choice only; a synchronous throw under the bundled ConPTY starts the same launch once more on the system ConPTY and, only when that succeeds, turns the choice to the system one (bundledConptyFailed); the launch line names the bundled folder; the Claude, plain-terminal and SSH spawns are unchanged; tests/unit/main/pty-conpty-per-provider.test.ts, tests/unit/ssh-spawn-callsite.test.ts; WP2 PR 3 P3.15 round 2 (the round 1 spec, code-quality and ADR-009 pass 2 findings) (WP1.68): an exit with no known code is logged as unknown and ends the run as exited; a Codex PTY under the bundled ConPTY that ends within 5 s having drawn nothing, and that the app did not end, makes the next launch use the system ConPTY (no relaunch); the fallback assigns the started PTY before reporting; tests/unit/main/pty-conpty-per-provider.test.ts, tests/unit/main/pty-codex-logs.test.ts; WP2 PR 3 P3.15 round 3 (the VM blocker at 98455d52: a write EAGAIN on a PTY input pipe quit the app) (WP1.68): every session's PTY, and the End and liveness helper PTYs, get an error listener on node-pty's Windows input socket (guardPtyInput in pty-input-guard.ts): a failed write never quits the app, is logged once, and a session that has not ended by itself within 3 s is ended with a line in its terminal; no Codex-specific change; tests/unit/main/pty-conpty-per-provider.test.ts, tests/unit/main/pty-input-guard.test.ts, tests/unit/main/ssh-end-remote-password.test.ts; WP2 PR 3 P3.16a main track, M1 (WP1.68): a local Claude session not indexed marks the conversation it is on (its hooks' and status line's transcript, or its exact resume at launch) from the moment it became not indexed; a killed one's window closes when its exit is reported or the grace passes; a switch-off marks either assistant; tests/unit/main/pty-codex-logs.test.ts, tests/unit/main/tokenomics-attribution.test.ts; WP2 PR 3 P3.16a main track round 1 (WP1.68): a Claude session not indexed marks its projects folder until it names a transcript, keeps every transcript it names marked until it ends, takes only a <uuid>.jsonl in its own folder, and is marked only when the switches and rules leave its run out; a killed session's windows close from its exit handler; the per-spawn teardown restarts the integrity count quietly (N1 to N4, N8); tests/unit/main/pty-codex-logs.test.ts, tests/unit/main/pty-integrity-restart.test.ts, tests/unit/main/pty-spawn-waits-for-refresh.test.ts; WP2 PR 3 P3.15 round 4 (the rounds 2-3 reviews and the P3.16a ADR-009 lenses) (WP1.68): every session's PTY and the End and liveness helper PTYs are guarded on their output too (node-pty's output error handler throws without a listener of the app's own), logged once a side, the session ended once after the grace; tests/unit/main/pty-conpty-per-provider.test.ts, tests/unit/main/pty-ssh-io-guard.test.ts, tests/unit/main/ssh-end-remote-password.test.ts; WP2 PR 3 P3.16a main track round 2 (WP1.68): a Claude session not indexed names its projects folder as Claude Code does (claudeProjectDirName: the real path on Linux and macOS, the 200-character cut and hash), as do the resume launch's folder lookups; it takes a <uuid>.jsonl directly in another project's folder under the projects root too, and past its cap covers each name by its folder's window, opened again, or one on the projects root (Q1 to Q3); a Restart's kill restarts the integrity count at its exit instead of ending the session, and a close with no process left ends it (Q5); tests/unit/main/pty-codex-logs.test.ts, tests/unit/main/pty-integrity-restart.test.ts; WP2 PR 3 fixer 3 (P3.16a round 2 reviews and ADR-009 pass 3) (WP1.68): every spawn clears the session's Restart mark in spawnPtyResolved, so a launch main prepares first (a Codex session, or a pinned Claude Code version installed first) ends as any other after a Restart (F2); no Codex-specific change; tests/unit/main/pty-integrity-restart.test.ts; WP2 PR 3 fixer 3, F6 (WP1.68): comments only, the folder Claude Code names is the launch folder's real path on Windows too (claudeProjectDirName); no Codex-specific change; tests/unit/logging/transcript-discovery.test.ts; WP2 PR 3 PR-level ADR-009 round 1 (WP1.68): each local Codex launch's realm and folder are recorded, and a Codex session not indexed holds a cover window on them until it ends; a claim let go closes only its conversation's window (C1); a Claude session not indexed past the record's cap is covered by its folder's window (C2); tests/unit/main/pty-codex-logs.test.ts; WP2 PR 4 P4.1: the Codex branch registers canvas roots and the worktree, passes the guidance, feeds the headless pane; writeCanvasMarkerLine (WP1.68); tests/unit/main/canvas-codex-roots-spawn.test.ts, tests/unit/main/canvas-marker-codex-delivery.test.ts; WP2 PR 4 P4.3 re-review (RASK-1, 56200cd5): an Ask launch runs in the help folder pty:spawn hands it, and a resumed Ask conversation is held to that folder on both branches; P4.1 re-review RA-1 (the realm skills on the master switch only) and RA-5 cleanups (WP1.68); tests/unit/main/ask-launch-folder.test.ts, tests/unit/main/canvas-codex-launch-wiring.test.ts; WP2 PR 4 lane A round 2 (9e200c0a, the provider port; no behaviour change): the Codex package reached only through getProvider('codex') (WP1.55); tests/unit/main/pty-codex-provider-port.test.ts; WP2 PR 4 P4.3 carrier (row 53, fc460f8f): a question not on the launch line typed through the run's submit primitive at Codex's first ready composer, waiting up to 300 s, the characters outside the BMP removed first with the removed notice, and not-delivered raised (WP1.68); tests/unit/main/codex-ask-carrier.test.ts; WP2 PR 4 ADR-009 round 1 (63968ba0): changed by the pass's fixes (WP1.68); tests/unit/main/ask-help-folder-runs.test.ts, tests/unit/main/codex-ask-carrier.test.ts; WP2 PR 4 VM checkpoint fixes (aa581eda), review fixes (758cb407): changed by those fixes (WP1.68); tests/unit/main/canvas-codex-launch-wiring.test.ts; WP2 PR 4 review fixes (988e02a0): changed by those fixes (WP1.68); tests/unit/main/canvas-codex-launch-wiring.test.ts; WP2 PR 4 (c1c34f1f): changed by those commits (WP1.68); tests/unit/main/canvas-codex-launch-wiring.test.ts; WP2 PR 4 owner answers (2026-10-04) (be38c516: the routed imports and their call sites only, behaviour unchanged; integration round 3: the local Codex branch hands the canvas launch no route, version, start folders or environment and records what the launch carried whatever route it took; CodexLaunch.cliVersion removed) (WP1.55, WP1.68); tests/unit/main/canvas-codex-launch-wiring.test.ts, tests/unit/main/pty-codex-provider-port.test.ts, tests/unit/providers/provider-entry-routing.test.ts; WP2 PR 4 fix pass 13 (cdde4930): cleanupSessionResources releases the session's MCP provider record beside unregisterCodexReviewSession (the import on line 71 and lines 6833-6836; the SSH branch unchanged) (WP1.68); tests/unit/main/pty-mcp-provider-revive.test.ts; 2.1.3-beta.19 section 2 (aicc_planning#439): the direct branch's body moved unchanged into the Codex package's local launch group (providers/codex/local-launch.ts); the branch left names no provider and refuses a provider with no group; a provider is direct by its package's group, the rows keep Claude Code's shell launch alone; the teardown's first part is unbindLaunchProvider (WP1.68); tests/unit/main/local-launch-characterisation.test.ts, tests/unit/main/local-launch-third-provider.test.ts, tests/unit/main/pty-local-launch-registry.test.ts",
       "note": "WP2 commit 4: the Codex branch runs only from the prepared launch (executable, realm env with CODEX_HOME, sessions folder) and holds its account lease until its process ends; the binding and lease are taken in pty:spawn through the accounts service. The Claude branch is unchanged (withProfileHome); running Claude sessions are counted for a Claude switch-off. Codex identity capture removed"
+    },
+    {
+      "path": "src/main/remote-helper/machines.ts",
+      "predicates": [
+        "P04",
+        "P14"
+      ],
+      "category": "REVIEW-MCP",
+      "disposition": "added",
+      "evidence": "2.1.3-beta.21 phase 6 (nubbymong/aicc_planning#446): a machine's Check records where Codex is there (the same -il lookup as Claude Code's), its version, the models its own picker lists there (the cliread script, by the package's ProviderRemoteReview passed in its deps), and the exec's git (the probes PV1 and PV2 are the app build's record by architecture, codex-review-remote.ts REMOTE_REVIEW_PROVEN, never read on the host); it imports no Codex package module and compares no provider name (WP1.68); tests/unit/remote-helper/remote-review.test.ts, tests/live/remote-review.live.ts",
+      "note": "the P04 hits are the record field `codex` (`record.codex`, `m.codex`), not a Codex home resolver"
+    },
+    {
+      "path": "src/main/remote-helper/scripts.ts",
+      "predicates": [
+        "P14"
+      ],
+      "category": "REVIEW-MCP",
+      "disposition": "added",
+      "evidence": "2.1.3-beta.21 phase 6 (nubbymong/aicc_planning#446): the probe script also reads where codex is on the exec's PATH and the login shell's, its version within 10 s and the exec's git; the run, reviewread and cliread fixed scripts (the helper's one-shot run mode, review-diff.ts's hardened git on the host, one CLI read in a fresh empty config folder) name no Codex flag (WP1.68); tests/unit/remote-helper/remote-review.test.ts, tests/live/remote-review.live.ts",
+      "note": "the P14 hits are the probe's `command -v codex` lookups and their result keys"
+    },
+    {
+      "path": "src/main/review-request.ts",
+      "predicates": [
+        "P14"
+      ],
+      "category": "REVIEW-MCP",
+      "disposition": "added",
+      "evidence": "new 2.1.3-beta.21 phase 6 (nubbymong/aicc_planning#446) module (src/main/review-request.ts): the provider reviews' request and the rules both review tools share, moved unchanged from codex-review-mcp-tool.ts (the arguments, the request each reviewer is sent, the model and effort allow-lists and their footer words, the one review per session registry), so the review on a remote session's machine shares them under plain Node (WP1.38, WP1.68); tests/unit/main/codex-review-mcp-tool.test.ts, tests/unit/main/codex-review-remote.test.ts",
+      "note": "created by moving code out of codex-review-mcp-tool.ts, which re-exports all of it"
     },
     {
       "path": "src/main/sanitize-restored-spawn-options.ts",
@@ -4148,16 +4235,6 @@
       "note": "session surface (runtime work package); provider conditionals here are outside the WP1 core/shared AST rule scope"
     },
     {
-      "path": "src/renderer/components/ScreenshotButton.tsx",
-      "predicates": [
-        "P11"
-      ],
-      "category": "UI-ONLY",
-      "disposition": "retain",
-      "evidence": "existing file retained; baseline suite green at 6bafcc33 (docs/wp1/baseline-2026-09-19.md); 2.1.3-beta.17 section C6 (aicc_planning#415), comment only: the sessionType comment says main pastes a saved image into Claude Code or Codex on this computer as the CLI's own paste, and a Codex session main cannot paste into gets the line by the Codex typing rule; no Codex code path in the file (WP1.33)",
-      "note": "matched since the 2.1.3-beta.17 release commit (was not matched); P11: one comment"
-    },
-    {
       "path": "src/renderer/components/SessionDialog.tsx",
       "predicates": [
         "P04",
@@ -4741,7 +4818,6 @@
     {
       "path": "src/renderer/hooks/useKeyboardShortcuts.ts",
       "predicates": [
-        "P05",
         "P11"
       ],
       "category": "UI-ONLY",
@@ -5926,6 +6002,17 @@
       "note": "P04: CODEX_HOME an empty folder of the spec's; P05: codexEnabled assertions"
     },
     {
+      "path": "tests/e2e/paste-unix.spec.ts",
+      "predicates": [
+        "P04",
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "new 2.1.3-beta.21 phase 3 (ADR-032, aicc_planning#447) end-to-end spec (tests/e2e/paste-unix.spec.ts), run only by the paste-e2e job on the GitHub macOS and Ubuntu runners: probes PM1, PM2 and PL1, then the app's own clipboard paste route into a Claude Code tab and a Codex tab (real Codex 0.157.1 on a throwaway account folder whose CODEX_HOME and config point at the loopback model stand-in), each turn carrying the picture by its decoded pixels (WP1.2); tests/unit/scripts/paste-e2e-job.test.ts",
+      "note": "created by the clipboard paste on macOS and Linux; never run on this repo's own computers; P04: the account folder's CODEX_HOME for the CLI it starts"
+    },
+    {
       "path": "tests/e2e/session-dialog-permutations.spec.ts",
       "predicates": [
         "P05",
@@ -7032,6 +7119,17 @@
       "note": "P04: each run's CODEX_HOME is a fresh empty temp folder, never a user's"
     },
     {
+      "path": "tests/live/remote-review.live.ts",
+      "predicates": [
+        "P04",
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "new 2.1.3-beta.21 phase 6 (nubbymong/aicc_planning#446) live file (tests/live/remote-review.live.ts): probes PV1 and PV2 through the app's own code against a Linux host (the run mode with no terminal, the review argv with the prompt on stdin and JSON events out, the host read byte for byte equal to review-diff.ts here), the gate they decide (the app build's REMOTE_REVIEW_PROVEN entry by architecture, which a host line's PASS prints), and one codex_review from a Claude Code tab through the relay, run on the machine; dispatch-only remote-helper-e2e job and host lines (WP1.38, WP1.68)",
+      "note": "never part of the unit suite: the default vitest config takes no live file"
+    },
+    {
       "path": "tests/unit/account-web-codex-session.test.ts",
       "predicates": [
         "P01",
@@ -7679,6 +7777,17 @@
       "note": "created by WP2 PR 3 P3.13 round 1 (ADR-009 lens B probe adopted); node-pty faked, the project gate never answers, own temp folders removed"
     },
     {
+      "path": "tests/unit/main/clipboard-paste-tables.test.ts",
+      "predicates": [
+        "P07",
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "new 2.1.3-beta.21 phase 2 (ADR-032, aicc_planning#447) test (tests/unit/main/clipboard-paste-tables.test.ts): each CLI's own image paste key per OS, Claude Code's read from the account's keybindings through the fixed chord table, the formats and the copied-file rule, and each registered provider's table (WP1.2)",
+      "note": "created by the clipboard paste; pure tables and a temp keybindings folder, no process"
+    },
+    {
       "path": "tests/unit/main/cloud-agent-codex.test.ts",
       "predicates": [
         "P01",
@@ -7738,6 +7847,17 @@
       "disposition": "added",
       "evidence": "new WP2 PR 4 P4.5 (row 57) test: the background launch kind prepared, leased and refused remote (WP1.46); tests/unit/main/codex-background-launch.test.ts",
       "note": ""
+    },
+    {
+      "path": "tests/unit/main/codex-clipboard-paste.test.ts",
+      "predicates": [
+        "P01",
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "new 2.1.3-beta.21 phase 2 (ADR-032, aicc_planning#447) test (tests/unit/main/codex-clipboard-paste.test.ts): Codex's clipboard paste rule against a simulated composer: the key as one write, the placeholder, the sentence and Enter only from outside the terminal, no take-back, no Ctrl+C and no path (WP1.2)",
+      "note": "created by the clipboard paste; a simulated composer and a fake clock, no process"
     },
     {
       "path": "tests/unit/main/codex-composer-submit.test.ts",
@@ -7951,6 +8071,19 @@
       "category": "TEST",
       "disposition": "replace",
       "evidence": "WP1.58: rewritten in WP2 commit 5a with the move to a prepared review launch: the install and sign-in gate cases became the prepared-launch refusals (an unverified sign-in, no account, Codex off, accounts not ready); the argv, tmpfile, stream-timeout, exit-code and temp-folder cleanup cases went with the exec, now the Codex reviewer adapter tested in tests/wp1/cli-discovery.test.ts; the path-containment, git-repo guard and session-binding cases are kept; WP2 5a and 5b added the lease, cancel and session-close cases and the claude_review tool cases; adapted in place: tests/unit/main/codex-review-mcp-tool.test.ts; WP2 provider-off enforcement (main refuses every launch of a provider that is off; WP1.60 enable/disable): the suite gained a mock of the launch gate answering on; the run-time refusal is tested in tests/unit/main/review-provider-off.test.ts; 2.1.1-beta.2 (WP1.62): a review that completed while what it left is still being ended keeps its lease until that has ended, and the agent has the review at once; tests/unit/main/codex-review-mcp-tool.test.ts",
+      "note": ""
+    },
+    {
+      "path": "tests/unit/main/codex-review-remote.test.ts",
+      "predicates": [
+        "P01",
+        "P04",
+        "P08",
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "new 2.1.3-beta.21 phase 6 (nubbymong/aicc_planning#446) test (tests/unit/main/codex-review-remote.test.ts): a codex_review from a remote tab runs on its machine, never here: the host argv byte equal to the local one, the machine's own Codex list for the allow-lists, hostile values, an old or missing Codex and an unproven machine refused before anything runs, nothing written here, the footer names the machine, one review per session (WP1.38, WP1.68)",
       "note": ""
     },
     {
@@ -8180,6 +8313,19 @@
       "disposition": "added",
       "evidence": "WP2 regression for the per-spawn MCP (WP1.68): a connection's tool set follows the provider its session's credential was issued to; tests/unit/main/conductor-mcp-provider-binding.test.ts; WP2 PR 4 P4.1 the canvas tools and P4.2 vision and open_in_app_browser for Codex; its config mock names codexEnabled so each provider is offered its review tool (WP1.33); tests/unit/main/conductor-mcp-provider-binding.test.ts; WP2 PR 4 fix pass 13 (cdde4930): release clears one record; a session revived on the other assistant is served that assistant's set on /sse and the matching answer on /mcp; nothing is served between a teardown and the next launch",
       "note": "Codex appears as the provider name the test issues a credential to; no Codex code path"
+    },
+    {
+      "path": "tests/unit/main/conductor-mcp-remote-review.test.ts",
+      "predicates": [
+        "P04",
+        "P05",
+        "P08",
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "new 2.1.3-beta.21 phase 6 (nubbymong/aicc_planning#446) test (tests/unit/main/conductor-mcp-remote-review.test.ts): over a tool stream, the tool host offers codex_review to a registered remote tab whose machine names Codex and runs it there, asks no account of this computer, offers none without Codex there, refuses an unregistered tab (WP1.38, WP1.68)",
+      "note": "the P05 hit is the mocked config's codexEnabled field"
     },
     {
       "path": "tests/unit/main/conductor-mcp-review-switches.test.ts",
@@ -8592,6 +8738,46 @@
       "disposition": "added",
       "evidence": "new WP2 PR 4 P4.4 (row 55) test: the memory channels with the account folders wired: scan, read and delete through the account guard, never .git, writeFrontmatter Claude's only, the sender check (WP1.68); tests/unit/main/memory-account-ipc.test.ts; WP2 PR 4 ADR-009 round 1 (0872d1e4): changed by the pass's fixes (WP1.68); tests/unit/main/memory-account-ipc.test.ts; WP2 PR 4 fix pass 13 (a588c142): a path at the bound is listed and read, one past it is not listed and the channel refuses it; WP2 PR 4 fix pass 13c (859bb49c): non-BMP paths on the Windows and POSIX forms, at the bound and one UTF-16 unit past it, on the listing and every memory channel",
       "note": "host-safe: ipcMain and Claude's scanner mocked"
+    },
+    {
+      "path": "tests/unit/main/paste-linux-clipboard-tool.test.ts",
+      "predicates": [
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "new 2.1.3-beta.21 phase 3 (ADR-032, aicc_planning#447) test (tests/unit/main/paste-linux-clipboard-tool.test.ts): Claude Code on Linux with neither xclip nor wl-paste gets no key and the hint names both; the Codex package's table has no such check (WP1.2)",
+      "note": "created by the clipboard paste on Linux; fake reads, writes and door, no process"
+    },
+    {
+      "path": "tests/unit/main/paste-module.test.ts",
+      "predicates": [
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "new 2.1.3-beta.21 phase 2 (ADR-032, aicc_planning#447) test (tests/unit/main/paste-module.test.ts): the paste module's decisions with fake reads and writes, a Codex session's key and copied-file rule among them (WP1.2)",
+      "note": "created by the clipboard paste; fakes only, no clipboard and no process"
+    },
+    {
+      "path": "tests/unit/main/paste-unix-writers.test.ts",
+      "predicates": [
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "new 2.1.3-beta.21 phase 3 (ADR-032, aicc_planning#447) test (tests/unit/main/paste-unix-writers.test.ts): the macOS writer (public.png and public.tiff in one clipboard.write) and the Linux writer (image/png), each writing every format each registered provider's table (the Codex package's included) names for that OS (WP1.2)",
+      "note": "created by the clipboard paste on macOS and Linux; Electron's clipboard faked, no process"
+    },
+    {
+      "path": "tests/unit/main/path-route-doors-frozen.test.ts",
+      "predicates": [
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "new 2.1.3-beta.21 phase 2 (ADR-032, aicc_planning#447) test (tests/unit/main/path-route-doors-frozen.test.ts): the path route's three doors, Codex's path paste and typed path among them, held to their 49a8ddb9 text for this beta (WP1.2)",
+      "note": "created by the clipboard paste; reads source text only"
     },
     {
       "path": "tests/unit/main/path-utils-home.test.ts",
@@ -9195,6 +9381,16 @@
       "disposition": "added",
       "evidence": "new 2.1.3-beta.14 section A1 test (tests/unit/main/session-helper-update-keep.test.ts, S16 step 4, aicc_planning#387 with #359): an app update on Windows lets go of a held Claude Code or Codex session of a saved tab whose tools go through its holder, records it (provider, conversation, account, Codex hook folder), and the next start logs it, removes the record and its files and ends it before its tab starts a new CLI; an update that does not start ends it at once (WP1.68)",
       "note": "created by 2.1.3-beta.14 section A1; the P13 hits are the second provider's tab (kind codex) and its hook folder; a fake helper in memory and a mocked node-pty, no process starts"
+    },
+    {
+      "path": "tests/unit/main/session-input-clipboard.test.ts",
+      "predicates": [
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "new 2.1.3-beta.21 phase 2 (ADR-032, aicc_planning#447) test (tests/unit/main/session-input-clipboard.test.ts): the clipboard paste door through the Claude Code rule; a Codex session with no clipboard member takes nothing (WP1.2)",
+      "note": "created by the clipboard paste; fake ports and a fake clock, no process"
     },
     {
       "path": "tests/unit/main/session-input-codex-image.test.ts",
@@ -10529,6 +10725,38 @@
       "disposition": "added",
       "evidence": "new 2.1.3-beta.19 section 1.2 test (aicc_planning#437, its second fix round): a real Node process stands in for ssh, closes its output, then exits 3; the bridge stream keeps that exit status, so a kept tab whose holder is gone says so at its first try; its child's HOME, USERPROFILE, APPDATA, LOCALAPPDATA, CLAUDE_CONFIG_DIR and CODEX_HOME all point at its own temp folder; no provider name compared (WP1.68); tests/unit/remote-helper/kept-gone-exit-status-real.test.ts",
       "note": "P04 and P13: the child's CODEX_HOME isolation only; nothing of Codex started; HOST QUARANTINE (CI and VM only)"
+    },
+    {
+      "path": "tests/unit/remote-helper/no-electron-import.test.ts",
+      "predicates": [
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "2.1.3-beta.21 phase 6 (nubbymong/aicc_planning#446): the modules the review live file imports (the host read and run, the registration, the remote review and the Codex package's remote review) load with no Electron, as remote-helper-e2e runs them under plain Node (WP1.68); tests/unit/remote-helper/no-electron-import.test.ts",
+      "note": "the P13 hits are two import paths"
+    },
+    {
+      "path": "tests/unit/remote-helper/remote-review-stand-in.test.ts",
+      "predicates": [
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "new 2.1.3-beta.21 phase 6 (nubbymong/aicc_planning#446) test (tests/unit/remote-helper/remote-review-stand-in.test.ts), split out of tests/unit/remote-helper/remote-review.test.ts so that file starts no process and stays host-runnable: the CI line's stand-in (helper/probes/pv-codex-stand-in.cjs), run under Node from a copy in a temp folder of its own with a minimal environment, reads as the package's remote review reads the real one (its version, its model list and its review events) and exits 2 on any other command line (WP1.38, WP1.68)",
+      "note": ""
+    },
+    {
+      "path": "tests/unit/remote-helper/remote-review.test.ts",
+      "predicates": [
+        "P04",
+        "P08",
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "new 2.1.3-beta.21 phase 6 (nubbymong/aicc_planning#446) test (tests/unit/remote-helper/remote-review.test.ts): the registration (never the host's home folder or above), the Check's Codex, model list and git (no probes' file read or kept), the host read and its bound and refusals, the run mode's request, input bounds and result line, the limits (a 900 s review not cut) and a stop (WP1.38, WP1.68)",
+      "note": ""
     },
     {
       "path": "tests/unit/renderer/SessionRow.effort.test.tsx",
@@ -12606,6 +12834,16 @@
       "note": "loads helper/probes/p3-p6-linux.cjs without connecting to a host"
     },
     {
+      "path": "tests/unit/scripts/paste-e2e-job.test.ts",
+      "predicates": [
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "new 2.1.3-beta.21 phase 3 (ADR-032, aicc_planning#447) test (tests/unit/scripts/paste-e2e-job.test.ts): the paste-e2e job of ci.yml starts only on a dispatch naming its part, installs Codex 0.157.1 and Claude Code 2.1.332 into prefixes of their own with scripts off, and runs the spec with retries off (WP1.2)",
+      "note": "created by the clipboard paste on macOS and Linux; reads ci.yml only"
+    },
+    {
       "path": "tests/unit/scripts/probe-p11.test.ts",
       "predicates": [
         "P13"
@@ -12665,6 +12903,16 @@
       "disposition": "replace",
       "evidence": "existing test retained unchanged; must stay green on the merge candidate (WP1.33); listed in docs/wp1/baseline-test-inventory.json; WP1.33 mapping: WP2 PR 3 P3.8 round 1 (row 39) passes the Codex list to runGate and adds the Codex check's cases (missing refuses, extra warns, a missing or empty list fails closed, only the codex family counts); the existing cases are unchanged; tests/unit/scripts/release-gate.test.ts; WP1.33 mapping: WP2 PR 3 P3.8 round 2 added the duplicate and malformed-list cases; tests/unit/scripts/release-gate.test.ts; WP1.33 mapping: WP2 PR 4 fix pass 10 (eeb09462) passes the Electron version and the floors to runGate (an Electron with no floor for the existing cases, which are otherwise unchanged) and adds the macOS floor cases; tests/unit/scripts/release-gate.test.ts; WP1.33 mapping: WP2 PR 4 fix pass 11 (5789b728) adds the resolved-version, exact-version and unreadable-entry cases and reads codexResult null-safely; tests/unit/scripts/release-gate.test.ts",
       "note": "re-dispositioned in WP2 PR 3 P3.8 round 1 (was retain)"
+    },
+    {
+      "path": "tests/unit/scripts/remote-helper-e2e-job.test.ts",
+      "predicates": [
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "2.1.3-beta.21 phase 6 (nubbymong/aicc_planning#446) case in a 2.1.3-beta.17 test (tests/unit/scripts/remote-helper-e2e-job.test.ts): the job then runs the review check, its own live file with retries off and the stand-in Codex on the login PATH, and fails when that check ran no test or one did not pass (WP1.68)",
+      "note": "the P13 hits name the stand-in Codex and its variable"
     },
     {
       "path": "tests/unit/scripts/snap-e2e-job.test.ts",

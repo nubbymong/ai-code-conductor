@@ -108,6 +108,22 @@
 //! written for it. No status follows a connection's last word, as no hook
 //! event does.
 //!
+//! The session's pictures (capability `paste`, from 2.1.3-beta.21; ADR-032):
+//! the connection attached to the terminal, when it acked `paste`, may send
+//! one picture at a time for the session (`file.put`, then the bytes as raw
+//! frames on the paste channel), into the session's own picture folder
+//! (`paste.rs`), answered `file.stored` with the hash. The upload is that
+//! connection's own: it ends, its partial file removed, when the connection
+//! closes, detaches or is replaced, and when no chunk comes in time
+//! (`paste::CHUNK_WAIT`, answered `timeout`). A read of the next frame waits
+//! only until that time for a frame to begin; one that passes before a byte
+//! of a frame came ends the upload and the connection goes on, its 60 s with
+//! no frame (`IDLE_TIMEOUT`) running on from the last frame, not anew. A
+//! frame that began in time is read whole within 60 s (`IDLE_TIMEOUT`) of
+//! its first byte, and an upload overdue by then ends the same way at the
+//! next read, the connection still up. The folder goes at the session's end.
+//! The holder never reads a picture and decides nothing from one.
+//!
 //! Locks: a connection's stream gate (`Conn::live`) first (the attached
 //! connection's before a relay's, which guards that relay's tool messages),
 //! then the hook events (`Serve::hooks`), then the tool streams
@@ -128,6 +144,7 @@ use crate::frame::{self, Body, Direction, Frame, FrameError};
 use crate::hello::{self, Hello, PROTO_VERSIONS};
 use crate::holder::{lock, HookEvent, HookQueue, Holder};
 use crate::json::Value;
+use crate::paste::{self, Upload};
 use crate::pty::SpawnOptions;
 use crate::request::{self, Allowed, Launch, Refusal, Request, MAX_MCP_TO_APP};
 use crate::ring::RingError;
@@ -158,6 +175,9 @@ pub const TITLE_CAP: &str = "title";
 /// `status.set` from the connection, and `status` to it when it acked
 /// `local` too. A holder that offers it also takes `hookKinds` in a launch.
 pub const STATUS_CAP: &str = "status";
+/// The capability that allows the session's pictures (from 2.1.3-beta.21):
+/// `file.put` from the connection attached to the terminal (`paste.rs`).
+pub const PASTE_CAP: &str = paste::CAP;
 /// What a holder offers in its hello: the frozen core, `local` for the
 /// terminal messages, `hooks` for hook events (from 2.1.3-beta.8), `mcp` for
 /// tool streams (from 2.1.3-beta.10), `away` for kept tool streams and
@@ -169,8 +189,10 @@ pub const STATUS_CAP: &str = "status";
 /// reads the screen (a plain terminal's, from 2.1.3-beta.13; a held Codex
 /// session's, from 2.1.3-beta.14), and `title` beside it on the latter. The
 /// hook mode acks `hook::ACK_CAPS`, the status mode `status::ACK_CAPS` and
-/// the relay `relay::ACK_CAPS`.
-pub const HOLDER_CAPS: [&str; 8] = ["core", "local", HOOKS_CAP, MCP_CAP, AWAY_CAP, SCREEN_CAP, TITLE_CAP, STATUS_CAP];
+/// the relay `relay::ACK_CAPS`. From 2.1.3-beta.21 it offers `paste` last,
+/// for the session's pictures, on every system; the app acks it only on the
+/// connection of a helper tab on a remote machine.
+pub const HOLDER_CAPS: [&str; 9] = ["core", "local", HOOKS_CAP, MCP_CAP, AWAY_CAP, SCREEN_CAP, TITLE_CAP, STATUS_CAP, PASTE_CAP];
 /// The least time between two rounds of `status` (10 a second for the
 /// session, protocol section 12); a status posted between two rounds waits
 /// for the next, and only the newest goes.
@@ -396,10 +418,26 @@ struct State {
 }
 
 /// A stream read that must finish by `until`: each read waits only for what
-/// is left, so a frame sent a byte at a time cannot stretch a limit.
+/// is left, so a frame sent a byte at a time cannot stretch a limit. With
+/// `rest`, the limit is only for a frame to begin: once its first byte has
+/// come, it has until at least `rest` after that byte to finish.
 struct Deadline<'a> {
     stream: &'a mut Stream,
     until: Instant,
+    /// Bytes read so far: while none, the stream is still between frames.
+    read: usize,
+    /// The least time a frame has from its first byte, used once.
+    rest: Option<Duration>,
+}
+
+impl<'a> Deadline<'a> {
+    /// A read of one frame within `limit`. With `quiet` (a picture's chunk
+    /// wait) the limit is for the frame to begin: one whose first byte came
+    /// in time is read whole within 60 s (`IDLE_TIMEOUT`) of that byte, so
+    /// the wait running out never cuts a frame in two.
+    fn new(stream: &'a mut Stream, limit: Duration, quiet: bool) -> Deadline<'a> {
+        Deadline { stream, until: Instant::now() + limit, read: 0, rest: quiet.then_some(IDLE_TIMEOUT) }
+    }
 }
 
 impl Read for Deadline<'_> {
@@ -409,8 +447,56 @@ impl Read for Deadline<'_> {
             return Err(io::Error::new(io::ErrorKind::TimedOut, "the frame did not arrive in time"));
         }
         self.stream.set_read_timeout(Some(left.max(Duration::from_millis(1))))?;
-        self.stream.read(buf)
+        let n = self.stream.read(buf)?;
+        if self.read == 0 && n > 0 {
+            if let Some(rest) = self.rest.take() {
+                self.until = self.until.max(Instant::now() + rest);
+            }
+        }
+        self.read += n;
+        Ok(n)
     }
+}
+
+/// What a read of the next frame gave.
+enum Next {
+    Frame(Frame),
+    /// Its time passed before a byte of a frame came: the stream is still
+    /// whole between two frames (only a read asked to tell this apart).
+    Quiet,
+    /// The stream ended or broke a rule, and the connection closes; it was
+    /// told why when there is a why.
+    Close,
+}
+
+/// How long a connection's next read waits for a frame when it has no
+/// picture on its way: `IDLE_TIMEOUT`, and, for the read just after a
+/// picture's chunk wait ran out (`after_stall`), only what is left of it
+/// since the last frame, so a stall never starts the 60 s anew (none left:
+/// zero, and the connection closes).
+fn idle_limit(after_stall: bool, since_last_frame: Duration) -> Duration {
+    if after_stall {
+        IDLE_TIMEOUT.saturating_sub(since_last_frame)
+    } else {
+        IDLE_TIMEOUT
+    }
+}
+
+/// True for a refusal that counts toward a connection's budget (section
+/// 12): `bad-field` and `too-large`.
+fn counts_toward_budget(r: &Refusal) -> bool {
+    r.code == request::CODE_BAD_FIELD || r.code == request::CODE_TOO_LARGE
+}
+
+/// One refusal more in a connection's budget: true once it holds more than
+/// `REFUSALS_PER_MINUTE` in the last minute, and the connection closes.
+fn over_budget(refusals: &mut VecDeque<Instant>) -> bool {
+    let now = Instant::now();
+    refusals.push_back(now);
+    while refusals.front().map_or(false, |t| now.duration_since(*t) > Duration::from_secs(60)) {
+        refusals.pop_front();
+    }
+    refusals.len() > REFUSALS_PER_MINUTE
 }
 
 /// Whether typed input may go to the program. The program must never see a
@@ -561,6 +647,11 @@ struct Serve {
     next_id: AtomicU64,
     /// Forwarders of live output still running.
     forwarders: AtomicUsize,
+    /// The session's picture folder (`paste::folder_of`), named from the
+    /// store's full path at the start; None when it cannot be named.
+    paste_dir: Option<PathBuf>,
+    /// One picture at a time for the session.
+    paste_slot: paste::Slot,
 }
 
 /// A forwarder is counted from the moment its attach is taken, under the
@@ -749,12 +840,14 @@ fn say_ended(conn: &Conn, re: u64, code: Option<i32>) {
 
 /// What an ack asked for besides the types it allows: a stream the
 /// connection opens kept while the app is away (`away`, which counts only
-/// beside `mcp`), and the title in its screen reads (`title`, which counts
-/// only beside `screen`).
+/// beside `mcp`), the title in its screen reads (`title`, which counts
+/// only beside `screen`), and the session's pictures (`paste`, from
+/// 2.1.3-beta.21: `file.put` and its bytes, read in `converse`).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 struct Asked {
     away: bool,
     title: bool,
+    paste: bool,
 }
 
 /// Check the first frame: a `hello.ack` with exactly `t`, `proto` and `caps`,
@@ -790,7 +883,7 @@ fn check_ack(v: &Value) -> Result<(Allowed, Asked), Refusal> {
         return bad(request::CODE_BAD_FIELD, "caps must hold core");
     }
     let allowed = Allowed { local: seen.contains(&"local"), hooks: seen.contains(&HOOKS_CAP), mcp: seen.contains(&MCP_CAP), screen: seen.contains(&SCREEN_CAP), status: seen.contains(&STATUS_CAP) };
-    Ok((allowed, Asked { away: allowed.mcp && seen.contains(&AWAY_CAP), title: allowed.screen && seen.contains(&TITLE_CAP) }))
+    Ok((allowed, Asked { away: allowed.mcp && seen.contains(&AWAY_CAP), title: allowed.screen && seen.contains(&TITLE_CAP), paste: seen.contains(&PASTE_CAP) }))
 }
 
 impl Serve {
@@ -1435,6 +1528,10 @@ impl Serve {
                 l.remove();
             }
         }
+        // The session's pictures go with it, a partial file among them.
+        if let Some(dir) = &self.paste_dir {
+            paste::remove_folder(dir);
+        }
         // Exiting closes every connection; each reads its last message first.
         let deadline = Instant::now() + transport::LINGER;
         for conn in &told {
@@ -1636,19 +1733,115 @@ impl Serve {
     /// on anything but a frame, say why (when there is a why) and return
     /// None, which closes the connection.
     fn next_frame(&self, conn: &Conn, reader: &mut Stream, limit: Duration, waited: &str, max_json: usize) -> Option<Frame> {
-        let mut timed = Deadline { stream: reader, until: Instant::now() + limit };
-        match frame::read_frame_within(&mut timed, Direction::AppToHelper, max_json) {
-            Ok(Some(f)) => Some(f),
-            Ok(None) => None,
+        match self.read_next(conn, reader, limit, waited, max_json, false) {
+            Next::Frame(f) => Some(f),
+            Next::Quiet | Next::Close => None,
+        }
+    }
+
+    /// `next_frame`, and with `quiet` a limit that passes before a byte of a
+    /// frame came is `Next::Quiet`: nothing is said, and the stream is still
+    /// whole. With `quiet` a frame whose first byte came in time is read
+    /// whole, within 60 s (`IDLE_TIMEOUT`) of that byte (`Deadline::new`);
+    /// when it brought no byte of the picture, the converse loop's next read
+    /// for the overdue upload has no time left and is `Next::Quiet`. A limit
+    /// that passes inside a frame closes the connection, as any other limit
+    /// does (a frame cannot be read on from its middle).
+    fn read_next(&self, conn: &Conn, reader: &mut Stream, limit: Duration, waited: &str, max_json: usize, quiet: bool) -> Next {
+        let mut timed = Deadline::new(reader, limit, quiet);
+        let got = frame::read_frame_within(&mut timed, Direction::AppToHelper, max_json);
+        match got {
+            Ok(Some(f)) => Next::Frame(f),
+            Ok(None) => Next::Close,
             Err(FrameError::BadFrame(why)) => {
                 let _ = conn.send_error(None, frame::CODE_BAD_FRAME, why);
-                None
+                Next::Close
             }
             Err(FrameError::Io(e)) if transport::is_timeout(&e) => {
+                if quiet && timed.read == 0 {
+                    return Next::Quiet;
+                }
                 let _ = conn.send_error(None, request::CODE_TIMEOUT, waited);
-                None
+                Next::Close
             }
-            Err(FrameError::Io(_)) => None,
+            Err(FrameError::Io(_)) => Next::Close,
+        }
+    }
+
+    /// `file.put` from `conn`: before a launch, or while the session is
+    /// ending, `not-found`; from a connection not attached to the terminal,
+    /// `not-connected`; while another picture is being sent in the session,
+    /// `busy`; then the folder and the caps (`paste::Upload::begin`). Every
+    /// refusal comes before a byte is taken.
+    fn begin_put(&self, conn: &Conn, put: paste::Put) -> Result<Upload, Refusal> {
+        let re = Some(put.id);
+        let refused = |code: &'static str, text: &str| Refusal { code, re, text: text.to_string() };
+        {
+            let st = lock(&self.state);
+            if st.ending {
+                return Err(refused(request::CODE_NOT_FOUND, "the session is ending"));
+            }
+            if st.holder.is_none() {
+                return Err(refused(request::CODE_NOT_FOUND, "nothing has been launched yet"));
+            }
+            if st.attached.as_ref().map(|a| a.id) != Some(conn.id) {
+                return Err(refused(request::CODE_NOT_CONNECTED, "only the connection attached to the terminal sends a picture"));
+            }
+        }
+        let dir = self.paste_dir.as_deref().ok_or_else(|| refused(frame::CODE_IO, "the session's picture folder cannot be named"))?;
+        let slot = self.paste_slot.take().ok_or_else(|| refused(request::CODE_BUSY, "a picture is being sent in this session already: one at a time"))?;
+        Upload::begin(put, dir, slot)
+    }
+
+    /// One chunk of the picture `conn` is sending: raw bytes on the paste
+    /// channel. With none being sent, `bad-frame` and a close, as for raw
+    /// bytes on any other channel; from a connection no longer attached (a
+    /// detach or a replacement meanwhile), the upload ends with nothing kept
+    /// and the bytes close it, as raw bytes with no terminal attached do.
+    /// After the last byte, the answer: `file.stored`, or the refusal (which
+    /// counts toward the connection's budget).
+    fn picture_chunk(&self, conn: &Conn, upload: &mut Option<Upload>, bytes: &[u8], refusals: &mut VecDeque<Instant>) -> Flow {
+        if upload.is_none() {
+            let _ = conn.send_error(None, frame::CODE_BAD_FRAME, "raw bytes on the paste channel with no picture being sent");
+            return Flow::Close;
+        }
+        if !self.is_attached(conn) {
+            *upload = None;
+            let _ = conn.send_error(None, frame::CODE_BAD_FRAME, "raw bytes on a connection with no terminal attached");
+            return Flow::Close;
+        }
+        let taken = match upload.as_mut() {
+            Some(u) => u.take(bytes),
+            None => return Flow::Continue,
+        };
+        let answer = match taken {
+            Ok(false) => return Flow::Continue,
+            Ok(true) => match upload.take() {
+                Some(u) => {
+                    let id = u.id;
+                    u.finish().map(|sha| paste::stored_message(id, &sha))
+                }
+                None => return Flow::Continue,
+            },
+            Err(r) => {
+                // The upload is over: its partial file goes with it.
+                *upload = None;
+                Err(r)
+            }
+        };
+        match answer {
+            Ok(stored) => {
+                let _ = conn.send_json(stored);
+                Flow::Continue
+            }
+            Err(r) => {
+                let _ = conn.refuse(&r);
+                if counts_toward_budget(&r) && over_budget(refusals) {
+                    Flow::Close
+                } else {
+                    Flow::Continue
+                }
+            }
         }
     }
 
@@ -1664,12 +1857,12 @@ impl Serve {
             Some(f) => f,
             None => return,
         };
-        let allowed = match &first.body {
+        let (allowed, pictures) = match &first.body {
             Body::Json(v) if first.channel == 0 => match check_ack(v) {
                 Ok((allowed, asked)) => {
                     conn.away.store(asked.away, Ordering::SeqCst);
                     conn.title.store(asked.title, Ordering::SeqCst);
-                    allowed
+                    (allowed, asked.paste)
                 }
                 Err(r) => {
                     let _ = conn.refuse(&r);
@@ -1691,12 +1884,53 @@ impl Serve {
         }
         let mut refusals: VecDeque<Instant> = VecDeque::new();
         let mut input = InputGate::default();
+        // The picture this connection is sending (`paste`), at most one: it
+        // ends, its partial file removed, when this function returns.
+        let mut upload: Option<Upload> = None;
+        // When the last frame came, and whether a chunk wait has just run
+        // out: the read after one waits only what is left of the 60 s with
+        // no frame (IDLE_TIMEOUT), not 60 s more.
+        let mut last_frame = Instant::now();
+        let mut after_stall = false;
         loop {
-            let f = match self.next_frame(conn, reader, IDLE_TIMEOUT, "no frame from the app in 60 seconds", self.max_json(allowed.mcp)) {
-                Some(f) => f,
-                None => return,
+            let next = match &upload {
+                // The next chunk is due: a read waits only until then for a
+                // frame to begin.
+                Some(u) => {
+                    let limit = u.due().saturating_duration_since(Instant::now()).min(IDLE_TIMEOUT);
+                    self.read_next(conn, reader, limit, "a chunk of the picture did not arrive in time", self.max_json(allowed.mcp), true)
+                }
+                None => {
+                    let limit = idle_limit(after_stall, last_frame.elapsed());
+                    after_stall = false;
+                    self.read_next(conn, reader, limit, "no frame from the app in 60 seconds", self.max_json(allowed.mcp), false)
+                }
+            };
+            let f = match next {
+                Next::Frame(f) => {
+                    last_frame = Instant::now();
+                    f
+                }
+                Next::Quiet => {
+                    // No chunk in time: the upload ends, nothing is kept, and
+                    // the connection goes on. Its partial file goes first, so
+                    // the answer never comes before it is gone.
+                    if let Some(u) = upload.take() {
+                        let id = u.id;
+                        drop(u);
+                        let _ = conn.send_error(Some(id), request::CODE_TIMEOUT, "no chunk of the picture came in time: the upload ended and nothing was kept");
+                    }
+                    after_stall = true;
+                    continue;
+                }
+                Next::Close => return,
             };
             match f.body {
+                Body::Raw(bytes) if pictures && f.channel == paste::CHANNEL => {
+                    if self.picture_chunk(conn, &mut upload, &bytes, &mut refusals) == Flow::Close {
+                        return;
+                    }
+                }
                 Body::Raw(bytes) => {
                     if f.channel != TERMINAL_CHANNEL || !self.is_attached(conn) {
                         let _ = conn.send_error(None, frame::CODE_BAD_FRAME, "raw bytes on a connection with no terminal attached");
@@ -1716,6 +1950,21 @@ impl Serve {
                         let _ = conn.send_error(None, frame::CODE_BAD_FRAME, "a control message off channel 0");
                         return;
                     }
+                    // A picture (`paste`): its request is read here, since its
+                    // upload is this connection's own. Without `paste` acked
+                    // it is a type the connection does not allow, below.
+                    if pictures && v.get("t").and_then(Value::as_str) == Some("file.put") {
+                        match paste::parse_put(&v).and_then(|put| self.begin_put(conn, put)) {
+                            Ok(u) => upload = Some(u),
+                            Err(r) => {
+                                let _ = conn.refuse(&r);
+                                if counts_toward_budget(&r) && over_budget(&mut refusals) {
+                                    return;
+                                }
+                            }
+                        }
+                        continue;
+                    }
                     // A hook event is read against the kinds the session's
                     // launch declared (the nine when it declared none).
                     let declared = if v.get("t").and_then(Value::as_str) == Some("hook.event") { lock(&self.state).hook_kinds.clone() } else { None };
@@ -1733,12 +1982,7 @@ impl Serve {
                             if r.code == request::CODE_UNKNOWN_TYPE {
                                 return;
                             }
-                            let now = Instant::now();
-                            refusals.push_back(now);
-                            while refusals.front().map_or(false, |t| now.duration_since(*t) > Duration::from_secs(60)) {
-                                refusals.pop_front();
-                            }
-                            if refusals.len() > REFUSALS_PER_MINUTE {
+                            if over_budget(&mut refusals) {
                                 return;
                             }
                         }
@@ -2179,6 +2423,9 @@ pub fn run(opts: Options) -> io::Result<()> {
     };
     store::write(&opts.store, &record)?;
     drop(store_lock);
+    // The session's picture folder, from the store's full path: the holder
+    // finds it the same whatever its working folder.
+    let paste_dir = std::path::absolute(&opts.store).ok().and_then(|s| paste::folder_of(&s, &opts.sid));
     let serve = Arc::new(Serve {
         opts,
         nonce,
@@ -2206,6 +2453,8 @@ pub fn run(opts: Options) -> io::Result<()> {
         ending: AtomicBool::new(false),
         next_id: AtomicU64::new(1),
         forwarders: AtomicUsize::new(0),
+        paste_dir,
+        paste_slot: paste::Slot::new(),
     });
     let clock = Arc::clone(&serve);
     if let Err(e) = thread::Builder::new().spawn(move || clock.clock()) {
@@ -2251,7 +2500,7 @@ mod tests {
 
     #[test]
     fn hooks_is_offered_and_an_ack_of_it_allows_hook_events() {
-        assert_eq!(HOLDER_CAPS.to_vec(), vec!["core", "local", "hooks", "mcp", "away", "screen", "title", "status"]);
+        assert_eq!(HOLDER_CAPS.to_vec(), vec!["core", "local", "hooks", "mcp", "away", "screen", "title", "status", "paste"]);
         let both = Allowed { local: true, hooks: true, mcp: false, screen: false, status: false };
         assert_eq!(acked("{\"t\":\"hello.ack\",\"proto\":1,\"caps\":[\"core\",\"local\",\"hooks\"]}"), Ok(both));
         assert_eq!(acked("{\"t\":\"hello.ack\",\"proto\":1,\"caps\":[\"core\",\"hooks\"]}"), Ok(Allowed { local: false, hooks: true, mcp: false, screen: false, status: false }));
@@ -2312,7 +2561,7 @@ mod tests {
         // Everything a holder offered before the status line.
         assert_eq!(
             acked_asked("{\"t\":\"hello.ack\",\"proto\":1,\"caps\":[\"core\",\"local\",\"hooks\",\"mcp\",\"away\",\"screen\",\"title\"]}"),
-            Ok((Allowed { local: true, hooks: true, mcp: true, screen: true, status: false }, Asked { away: true, title: true }))
+            Ok((Allowed { local: true, hooks: true, mcp: true, screen: true, status: false }, Asked { away: true, title: true, paste: false }))
         );
         // Without `screen` the title is not asked for: no read can be made.
         assert_eq!(acked_title("{\"t\":\"hello.ack\",\"proto\":1,\"caps\":[\"core\",\"local\",\"title\"]}"), Ok((Allowed { local: true, hooks: false, mcp: false, screen: false, status: false }, false)));
@@ -2323,15 +2572,16 @@ mod tests {
 
     #[test]
     fn status_is_offered_last_and_an_ack_of_it_allows_the_status_line() {
-        assert_eq!(HOLDER_CAPS.last(), Some(&STATUS_CAP));
+        // Last until 2.1.3-beta.21, which adds `paste` after it.
+        assert_eq!(HOLDER_CAPS[7], STATUS_CAP);
         let status_only = Allowed { local: false, hooks: false, mcp: false, screen: false, status: true };
         // The status mode's ack, and the app's for a tab that takes it.
         assert_eq!(acked("{\"t\":\"hello.ack\",\"proto\":1,\"caps\":[\"core\",\"status\"]}"), Ok(status_only));
         assert_eq!(acked("{\"t\":\"hello.ack\",\"proto\":1,\"caps\":[\"core\",\"local\",\"hooks\",\"mcp\",\"status\"]}"), Ok(Allowed { local: true, hooks: true, mcp: true, screen: false, status: true }));
-        // Everything a holder offers.
+        // Everything a holder offered before the session's pictures.
         assert_eq!(
             acked_asked("{\"t\":\"hello.ack\",\"proto\":1,\"caps\":[\"core\",\"local\",\"hooks\",\"mcp\",\"away\",\"screen\",\"title\",\"status\"]}"),
-            Ok((Allowed { local: true, hooks: true, mcp: true, screen: true, status: true }, Asked { away: true, title: true }))
+            Ok((Allowed { local: true, hooks: true, mcp: true, screen: true, status: true }, Asked { away: true, title: true, paste: false }))
         );
         // Every ack from before it: no status.
         assert_eq!(acked("{\"t\":\"hello.ack\",\"proto\":1,\"caps\":[\"core\",\"local\",\"hooks\"]}").map(|a| a.status), Ok(false));
@@ -2342,6 +2592,27 @@ mod tests {
         assert!(!crate::relay::ACK_CAPS.contains(&STATUS_CAP) && !crate::hook::ACK_CAPS.contains(&STATUS_CAP));
         assert_eq!(crate::status::ACK_CAPS, ["core", STATUS_CAP]);
         assert_eq!(STATUS_EVERY, Duration::from_millis(100));
+    }
+
+    #[test]
+    fn paste_is_offered_last_and_an_ack_of_it_asks_for_the_sessions_pictures() {
+        assert_eq!(HOLDER_CAPS.last(), Some(&PASTE_CAP));
+        assert_eq!(PASTE_CAP, "paste");
+        let asked = |text: &str| acked_asked(text).map(|(_, a)| a.paste);
+        // A helper tab on a remote machine: everything a holder offers.
+        assert_eq!(
+            acked_asked("{\"t\":\"hello.ack\",\"proto\":1,\"caps\":[\"core\",\"local\",\"hooks\",\"mcp\",\"away\",\"screen\",\"title\",\"status\",\"paste\"]}"),
+            Ok((Allowed { local: true, hooks: true, mcp: true, screen: true, status: true }, Asked { away: true, title: true, paste: true }))
+        );
+        assert_eq!(asked("{\"t\":\"hello.ack\",\"proto\":1,\"caps\":[\"core\",\"local\",\"paste\"]}"), Ok(true));
+        // Every ack from before it, and a session on this computer's: none.
+        assert_eq!(asked("{\"t\":\"hello.ack\",\"proto\":1,\"caps\":[\"core\",\"local\",\"hooks\",\"mcp\",\"status\"]}"), Ok(false));
+        assert_eq!(asked("{\"t\":\"hello.ack\",\"proto\":1,\"caps\":[\"paste\"]}"), Err(request::CODE_BAD_FIELD));
+        assert_eq!(asked("{\"t\":\"hello.ack\",\"proto\":1,\"caps\":[\"core\",\"paste\",\"paste\"]}"), Err(request::CODE_BAD_FIELD));
+        // No helper mode acks it: only the app's connection sends a picture.
+        for caps in [&crate::relay::ACK_CAPS[..], &crate::hook::ACK_CAPS[..], &crate::status::ACK_CAPS[..]] {
+            assert!(!caps.contains(&PASTE_CAP));
+        }
     }
 
     #[test]
@@ -2523,6 +2794,62 @@ mod tests {
         assert_eq!(REFUSALS_PER_MINUTE, 20);
         assert_eq!(MAX_JSON_BEFORE_ACK, 4 * 1024);
         assert_eq!(MAX_JSON_AFTER_LAUNCH, 64 * 1024);
+    }
+
+    #[test]
+    fn after_a_stalled_picture_the_idle_wait_runs_on_from_the_last_frame() {
+        // 30 s since the last frame when the chunk wait ran out: 30 s are
+        // left of the 60, not 60 more.
+        assert_eq!(idle_limit(true, Duration::from_secs(30)), Duration::from_secs(30));
+        assert_eq!(idle_limit(true, Duration::from_millis(59_500)), Duration::from_millis(500));
+        // None left: zero, and the read closes the connection at once.
+        assert_eq!(idle_limit(true, Duration::from_secs(60)), Duration::ZERO);
+        assert_eq!(idle_limit(true, Duration::from_secs(61)), Duration::ZERO);
+        // Every other read waits the whole 60 s, however long ago the last frame came.
+        assert_eq!(idle_limit(false, Duration::from_secs(30)), IDLE_TIMEOUT);
+        assert_eq!(idle_limit(false, Duration::from_secs(61)), IDLE_TIMEOUT);
+    }
+
+    /// A read with `quiet` (a picture's chunk wait) whose frame began within
+    /// its limit reads that frame whole, though the rest came after the
+    /// limit; any other read keeps its limit for the whole frame, so a frame
+    /// sent slowly never stretches it. Over this OS's own transport.
+    #[test]
+    fn a_frame_begun_within_a_pictures_chunk_wait_is_read_whole_and_any_other_read_keeps_its_limit() {
+        let sent = Frame::raw(TERMINAL_CHANNEL, vec![b'x'; 1000]);
+        let whole = frame::encode(&sent, Direction::AppToHelper).expect("encode");
+        for (quiet, sid) in [(true, "serve-deadline-01"), (false, "serve-deadline-02")] {
+            let listener = Arc::new(Listener::bind(sid).expect("listen"));
+            let server = Arc::clone(&listener);
+            let bytes = whole.clone();
+            let (go, start) = std::sync::mpsc::channel::<()>();
+            // The header at once, the rest 2 s later: after the 800 ms limit.
+            let sender = thread::spawn(move || {
+                let mut s = server.accept().expect("accept");
+                start.recv().expect("the reader is ready");
+                s.write_all_within(&bytes[..9], Duration::from_secs(5)).expect("send the header");
+                thread::sleep(Duration::from_secs(2));
+                let _ = s.write_all_within(&bytes[9..], Duration::from_secs(5));
+                s
+            });
+            let mut stream = transport::connect(listener.endpoint(), Duration::from_secs(10)).expect("connect");
+            let mut timed = Deadline::new(&mut stream, Duration::from_millis(800), quiet);
+            go.send(()).expect("start the sender");
+            let got = frame::read_frame_within(&mut timed, Direction::AppToHelper, frame::MAX_RAW);
+            let read = timed.read;
+            let _kept = sender.join().expect("the sender");
+            if quiet {
+                match got {
+                    Ok(Some(f)) => assert_eq!(f, sent),
+                    other => panic!("a frame begun within the chunk wait was cut off when the wait ran out ({read} bytes read): {other:?}"),
+                }
+            } else {
+                match got {
+                    Err(FrameError::Io(e)) if transport::is_timeout(&e) => assert_eq!(read, 9, "the read stopped elsewhere than after the header"),
+                    other => panic!("a read without quiet waited past its limit for the rest of a frame: {other:?}"),
+                }
+            }
+        }
     }
 
     fn full() -> io::Result<()> {

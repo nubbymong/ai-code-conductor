@@ -337,6 +337,23 @@ export interface RemoteLaunch {
   readonly files: ReadonlyArray<{ readonly name: string; readonly content: string }>
   readonly statusKeep: readonly string[]
   readonly hookKeep: readonly string[]
+  /** 2.1.3-beta.21 (ADR-032; docs/remote/helper-protocol.md section 15, the
+   *  clipboard stand-in): the CLI reads a picture by running `xclip` or
+   *  `wl-paste`, which it finds by PATH. Core then, on a Linux host only
+   *  (remote-helper/session.ts clipStandInFolder), has the session's `files`
+   *  exec write the stand-in's two scripts into the session's `bin/` folder
+   *  and puts that folder first on the CLI's PATH (remoteLaunchSpec). A
+   *  field, not a variable: a provider's `env` may not set PATH. Absent or
+   *  false: neither. */
+  readonly clipStandIn?: boolean
+  /** 2.1.3-beta.21 (ADR-032, row 14; plan block 5.1): the key the app sends
+   *  for the CLI's own image paste in this session, from the provider's
+   *  table and what its host reads found (Claude Code: `chat:imagePaste` in
+   *  the keybindings file of the config folder the session's CLI uses,
+   *  mapped through the package's fixed chord-to-bytes table, so a host
+   *  picks at most a chord from that table, never raw bytes). Absent: the
+   *  session takes no image paste (a sign-in). */
+  readonly imagePasteKey?: PasteKey
 }
 
 /** A status line as a provider gives it for the tab's strip: StatuslineData's
@@ -378,6 +395,12 @@ export interface ProviderRemoteLaunch {
    *  (RemoteAccounts). Absent: its accounts are not signed in on hosts, and
    *  its tabs run on the host's own sign-in. */
   accounts?(): RemoteAccounts
+  /** 2.1.3-beta.21 (aicc_planning#446): true when a tab of this provider
+   *  may ask for a review on its machine, in its folder there, by its
+   *  reviewing provider (the tool host's rule, offeredReviewTool: a Claude
+   *  Code tab's reviewer is Codex). Core registers the tab for it at each
+   *  start (remote-helper/review-sessions.ts). Absent: never. */
+  reviewsOnMachine?: boolean
   /** The tab's status line from one status the CLI posted, already cut to
    *  the launch's `statusKeep` (2.1.3-beta.18 section 3.2). Untrusted input;
    *  a remote path in it is display text only, never a transcript path.
@@ -828,6 +851,11 @@ export interface SessionProvider {
    *  nothing there), and for Codex (P4.1, PB9) main's own reading of each
    *  run's screen and the submit primitive that types into its composer. */
   readonly runScreen?: SessionRunScreen
+  /** Optional (ADR-032 row 14; plan 2.1.3-beta.21 phase 2, 2.1.2): this
+   *  CLI's own clipboard image paste: its key per OS, the formats its read
+   *  takes, and whether it reads a copied file itself. Absent: the paste
+   *  module pastes no picture into this provider's sessions. */
+  readonly clipboardPaste?: ClipboardPasteRule
   /** Subscribe to live telemetry for a spawned session (see TelemetryOptions). */
   ingestSessionTelemetry(
     sessionId: string,
@@ -905,6 +933,11 @@ export interface SessionRunScreen {
    *  waits up to `readyWaitMs` for the ready, empty composer. Never rejects.
    *  Absent: the package has no image rule of this kind. */
   submitImage?(sessionId: string, imagePath: string, sentence: string, opts: { readyWaitMs: number }): Promise<RunScreenImageResult>
+  /** ADR-032 (plan 2.1.3-beta.21 phase 2): the CLI's own clipboard image
+   *  paste on the package's own screen reading, after anything already in
+   *  flight for the run (the door member `clipboard` says what it does).
+   *  Never rejects. Absent: the package reads no screen of its own. */
+  submitClipboard?(sessionId: string, key: string, sentence: string | null, opts: { readyWaitMs: number; placeholderWaitMs: number }): Promise<RunScreenClipboardResult>
 
   // 2.1.3-beta.18 section 4: the doors' members. The session input module
   // calls each for a session this provider runs, with the door's own waits
@@ -944,6 +977,14 @@ export interface SessionRunScreen {
    *  out first, when any were, because the prompt would drop them. Logs the
    *  question by its length only. Never rejects. */
   ask?(sessionId: string, question: string, opts: { readyWaitMs: number; removed: (count: number) => void }): Promise<SubmitTextResult>
+  /** ADR-032 (plan 2.1.3-beta.21 phase 2, 2.1.3): the CLI's own clipboard
+   *  image paste (pasteFromClipboard). `key` goes as ONE write through
+   *  `typing`, never inside a bracketed paste; then the rule reads the CLI's
+   *  image placeholder within `placeholderWaitMs`. With a `sentence` (a press
+   *  from outside the terminal, and Snap) it then types the sentence and
+   *  Enter; without one it types nothing more (the user is writing). No path
+   *  is typed, and nothing is taken back. Never rejects. */
+  clipboard?(sessionId: string, key: string, sentence: string | null, opts: { readyWaitMs: number; placeholderWaitMs: number; enterDelayMs: number }, typing: RunScreenTyping): Promise<RunScreenClipboardResult>
   /** 2.1.3-beta.19 section 6.2 (aicc_planning#440): how long, in ms, a lone
    *  Enter typed while one of this provider's held terminals was detached
    *  waits behind the frame before it once the terminal is attached again
@@ -980,6 +1021,13 @@ export interface RunScreenTyping {
   /** Resolves `delayMs` after the last slice the write port cuts `data`, just
    *  written, into has gone. */
   settled(data: string, delayMs: number): Promise<void>
+  /** 2.1.3-beta.21 (ADR-032; plan block 5.1): the holder's screen of a tab
+   *  through the session helper on its machine whose connection reads it
+   *  (the remote helper's remoteTabScreen, read when the door is asked), for
+   *  a member that reads the CLI's screen there (Claude Code's clipboard
+   *  paste, its placeholder). Absent for every other session, and for a tab
+   *  whose connection reads no screen now. */
+  readonly heldScreen?: () => Promise<HeldScreenRows>
 }
 
 /** Why a run screen's image rule did not paste and send an image: the
@@ -997,6 +1045,55 @@ export type RunScreenImageNotPasted = 'session-gone' | 'refused-text' | 'busy-ti
 export type RunScreenImageResult =
   | { pasted: true }
   | { pasted: false; reason: RunScreenImageNotPasted; left: boolean }
+
+/** ADR-032: what a run screen's clipboard paste member did. `placeholder`:
+ *  the key went and the CLI showed its image placeholder; `sent`: and then
+ *  the sentence and Enter. Otherwise why not: the session gone; the ready
+ *  composer not seen in the wait before the key (`busy`, a press from outside
+ *  the terminal only); no placeholder within the wait; the sentence not
+ *  confirmed (the picture is at the prompt, unsent, and nothing was taken
+ *  back); a prompt up after the key, before the placeholder or the
+ *  sentence's Enter (`prompt-on-screen`: Enter or the key again could act on
+ *  the prompt, so the hint asks for neither; review rounds 2 and 3, R2-1 and
+ *  R3-1); main reads no screen for the session (`no-screen`). */
+export type RunScreenClipboardResult =
+  | { outcome: 'placeholder' | 'sent' }
+  | { outcome: 'session-gone' | 'busy' | 'no-placeholder' | 'sentence-not-sent' | 'prompt-on-screen' | 'no-screen' }
+
+/** ADR-032 (row 14): a CLI's image paste key, as the bytes of one write, or
+ *  none: `unbound`, the account's keybindings took the default away and
+ *  bound nothing; `unexpressible`, it bound a chord the fixed chord table
+ *  cannot send. `from` says where the chord came from. */
+export type PasteKey =
+  | { bytes: string; chord: string; from: 'default' | 'keybindings' }
+  | { bytes: null; chord: string | null; why: 'unbound' | 'unexpressible' }
+
+/** ADR-032 (row 14; plan 2.1.3-beta.21 phase 2, 2.1.2): one CLI's own
+ *  clipboard image paste, per OS. It replaces the renderer's per-provider
+ *  image line (session-capabilities.ts IMAGE_LINES), which only the path
+ *  route behind the test switch still reads, through `pathRouteLine`. */
+export interface ClipboardPasteRule {
+  /** The key the app sends for the CLI's image paste in a session on this
+   *  computer: `accountDir` is the config folder the session's launch gave
+   *  the CLI (its account's own folder; null on this computer's own
+   *  sign-in), whose own keybindings a CLI may read. */
+  key(ctx: { platform: NodeJS.Platform; accountDir: string | null }): PasteKey
+  /** Whether the CLI's clipboard read takes a copied image file itself, so
+   *  the app writes nothing for one. */
+  readsCopiedFile(platform: NodeJS.Platform): boolean
+  /** The clipboard formats the CLI's read takes on `platform` (what the
+   *  writer for that OS must leave on the clipboard). */
+  formats(platform: NodeJS.Platform): readonly string[]
+  /** Whether the program the CLI's clipboard read runs is missing on this
+   *  computer (plan 2.1.3-beta.21 phase 3: Claude Code on Linux runs xclip
+   *  or wl-paste), so the app sends no key and the hint names it; the paste
+   *  module awaits it before the key. Absent: the CLI reads the clipboard
+   *  itself. */
+  clipboardToolMissing?(platform: NodeJS.Platform): boolean | Promise<boolean>
+  /** The path route only (plan Q5, deleted in 2.1.3-beta.22): the line the
+   *  renderer typed when main did not paste the path. */
+  readonly pathRouteLine: 'enter' | 'composer'
+}
 
 export interface SshCapableProvider extends SessionProvider {
   getSshSettingsPath(sessionId: string): string

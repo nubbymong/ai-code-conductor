@@ -32,6 +32,7 @@ let root: Root
 let frames: FrameRequestCallback[] = []
 let visibility: DocumentVisibilityState = 'visible'
 const captureRectangle = vi.fn()
+const imageKey = vi.fn(async (..._a: unknown[]): Promise<unknown> => ({ outcome: 'sent' }))
 
 /** One frame: every callback asked for before it runs. */
 const runFrame = () => {
@@ -59,8 +60,10 @@ beforeEach(() => {
   Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => visibility })
   vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => { frames.push(cb); return frames.length })
   captureRectangle.mockReset()
+  imageKey.mockReset()
+  imageKey.mockImplementation(async () => ({ outcome: 'sent' }))
   sendImageToSession.mockReset()
-  ;(window as any).electronAPI = { screenshot: { captureRectangle, captureWindow: vi.fn() } }
+  ;(window as any).electronAPI = { screenshot: { captureRectangle, captureWindow: vi.fn() }, paste: { imageKey } }
   container = document.createElement('div')
   document.body.appendChild(container)
   root = createRoot(container)
@@ -110,17 +113,45 @@ describe('Snap, Rectangle: the menu closes before the capture is asked (aicc_pla
     expect(captureRectangle).toHaveBeenCalledTimes(1)
   })
 
-  it('the picture still goes to the session, and the button is usable again', async () => {
-    captureRectangle.mockResolvedValue('C:\\shots\\a.jpg')
+  // 2.1.3-beta.21 (ADR-032, plan 2.1.5): the capture names its session and
+  // answers a token for the picture main keeps, never a path; the renderer
+  // hands the token to the paste on the paste channel, and the button is
+  // usable again as soon as the capture ends, while the paste runs.
+  it('the capture names the session; its token goes to the paste channel; the button is usable again before the paste answers', async () => {
+    const { usePasteHintStore } = await import('../../../src/renderer/stores/pasteHintStore')
+    usePasteHintStore.getState().clear('s1')
+    let answerPaste: (r: unknown) => void = () => {}
+    imageKey.mockImplementation(() => new Promise((resolve) => { answerPaste = resolve }))
+    captureRectangle.mockResolvedValue({ snapToken: 'a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6' })
     await openMenuAndPressRectangle()
     expect(snapButton().disabled).toBe(true)
+    await act(async () => { runFrame() })
+    await act(async () => { runFrame() })
+    expect(captureRectangle).toHaveBeenCalledWith('s1')
+    expect(imageKey).toHaveBeenCalledWith({ sessionId: 's1', chord: 'snap', focused: false, snap: { token: 'a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6', item: 'rectangle' } })
+    // The paste has not answered yet, and the button is usable again.
+    expect(snapButton().disabled).toBe(false)
+    await act(async () => { answerPaste({ outcome: 'not-pasted', reason: 'no-placeholder', note: 'The picture is on the clipboard.' }) })
+    expect(usePasteHintStore.getState().hints.s1).toBe('The picture is on the clipboard.')
+    expect(sendImageToSession).not.toHaveBeenCalled()
+    usePasteHintStore.getState().clear('s1')
+  })
+
+  it('a path answered as a bare string (beta.20\'s shape) is not sent anywhere: only the path route\'s answer is', async () => {
+    captureRectangle.mockResolvedValue('C:\\shots\\a.jpg')
+    await openMenuAndPressRectangle()
+    await act(async () => { runFrame() })
+    await act(async () => { runFrame() })
+    expect(sendImageToSession).not.toHaveBeenCalled()
+    captureRectangle.mockResolvedValue({ pathRoute: { file: 'C:\\shots\\a.jpg', line: 'enter' } })
+    await openMenuAndPressRectangle()
     await act(async () => { runFrame() })
     await act(async () => { runFrame() })
     expect(sendImageToSession).toHaveBeenCalledTimes(1)
     expect(sendImageToSession.mock.calls[0][0]).toBe('s1')
     expect(sendImageToSession.mock.calls[0][1]).toBe('C:\\shots\\a.jpg')
     expect(sendImageToSession.mock.calls[0][3]).toBe('local')
-    expect(snapButton().disabled).toBe(false)
+    expect(sendImageToSession.mock.calls[0][4]).toBe('enter')
   })
 })
 

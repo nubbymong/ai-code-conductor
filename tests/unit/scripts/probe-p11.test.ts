@@ -15,11 +15,14 @@ const { composeLocalPathPrompt } = await import('../../../src/renderer/utils/ima
  * each run's outcome, each form's verdict over the runs (the decision lines in
  * the probe's header, each shown able to fail) and what the verdicts mean for
  * X1.2. The probe itself is a measurement, run on the Windows test machine,
- * not here.
+ * not here. Since 2.1.3-beta.21 (plan 6.3's CI line), also the stand-in's one
+ * scripted turn for the review check (tests/live/remote-review.live.ts): which
+ * request is the call and which the answer, and the two replies, read from
+ * the stand-in served on this process's own loopback.
  *
  * Not checked here: the CLIs themselves, the screens the probe answers on its
- * way to a prompt, the stand-in as a running server, and the process clean-up
- * (p19-record.cjs's code, tested in probe-p19-record.test.ts).
+ * way to a prompt, the stand-in as a running server for an image turn, and the
+ * process clean-up (p19-record.cjs's code, tested in probe-p19-record.test.ts).
  */
 
 const PROBES = resolve(__dirname, '../../../helper/probes')
@@ -223,5 +226,142 @@ describe('P11: the record', () => {
     const out = clean({ picturePath: 'C:\\Users\\U\\AppData\\Local\\Temp\\p11-ab12\\claude-paste-1\\x.jpg', text: 'see C:\\\\Users\\\\U\\\\AppData\\\\Local\\\\Temp\\\\p11-ab12\\\\y' }) as Record<string, string>
     expect(out.picturePath).toBe('<temp>\\claude-paste-1\\x.jpg')
     expect(out.text).not.toContain('p11-ab12')
+  })
+})
+
+// 2.1.3-beta.21 (plan 6.3's CI line, tests/live/remote-review.live.ts): the
+// stand-in's one scripted turn, a review asked by real Claude Code. Its two
+// requests are also sent to the stand-in served on this process's loopback.
+type ReviewStep = { step: string; run: string; offered?: boolean; tools?: string[]; toolResult?: { toolUseId: string; isError: boolean; text: string } } | null
+type Sse = Record<string, any>
+const R = req('./p11-model-stand-in.cjs') as {
+  reviewStep: (body: unknown, run: string | null, called: Set<string>) => ReviewStep
+  REVIEW_TOOL: string
+  REVIEW_INPUT: Record<string, unknown>
+  REVIEW_DONE_TEXT: string
+  createModelStandIn: (o: { onEvent: (e: Record<string, unknown>) => void }) => { listen(): Promise<number>; close(): Promise<void> }
+}
+
+describe('P11: the scripted review turn (a tool_use for the review tool, then fixed text)', () => {
+  const ask = 'p11 probe review-tool-1: ask for a review of the working change.'
+  const tools = (...names: string[]) => names.map((name) => ({ name, input_schema: { type: 'object' } }))
+  const first = (offered = true) => ({ stream: true, tools: tools('Read', ...(offered ? ['mcp__conductor__codex_review'] : [])), messages: [{ role: 'user', content: [{ type: 'text', text: '<system-reminder>x</system-reminder>' }, { type: 'text', text: ask }] }] })
+  const second = (id: string, content: unknown, isError?: boolean) => ({
+    stream: true, tools: tools('Read', 'mcp__conductor__codex_review'),
+    messages: [
+      { role: 'user', content: [{ type: 'text', text: ask }] },
+      { role: 'assistant', content: [{ type: 'tool_use', id, name: 'mcp__conductor__codex_review', input: {} }] },
+      { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, content, ...(isError === undefined ? {} : { is_error: isError }) }] },
+    ],
+  })
+  const runOf = (body: unknown) => S.classify('/v1/messages', body)!.run
+
+  it('names the review tool as Claude Code names a conductor tool, and asks for mode working', () => {
+    expect(R.REVIEW_TOOL).toBe('mcp__conductor__codex_review')
+    expect(R.REVIEW_INPUT).toMatchObject({ mode: 'working' })
+    expect(R.REVIEW_DONE_TEXT).toBe('p11 review received')
+  })
+
+  it('a turn whose last user message names a review run is the call, offered only when the request lists the tool', () => {
+    expect(S.classify('/v1/messages', first())).toMatchObject({ kind: 'turn', run: 'review-tool-1' })
+    expect(R.reviewStep(first(), runOf(first()), new Set())).toEqual({ step: 'call', run: 'review-tool-1', offered: true })
+    expect(R.reviewStep(first(false), runOf(first(false)), new Set())).toEqual({ step: 'call', run: 'review-tool-1', offered: false, tools: ['Read'] })
+    // Called once per run: a second ask of the same run is not a call again.
+    expect(R.reviewStep(first(), 'review-tool-1', new Set(['review-tool-1']))).toEqual({ step: 'again', run: 'review-tool-1' })
+  })
+
+  it('the request that carries that tool_use\'s result is the answer, its text read from blocks or a string, its error flag kept', () => {
+    const blocks = second('toolu_p11_3', [{ type: 'text', text: 'line one' }, { type: 'text', text: '---\nfooter' }])
+    expect(runOf(blocks)).toBe('review-tool-1')
+    expect(R.reviewStep(blocks, runOf(blocks), new Set(['review-tool-1']))).toEqual({ step: 'answer', run: 'review-tool-1', toolResult: { toolUseId: 'toolu_p11_3', isError: false, text: 'line one\n---\nfooter' } })
+    expect(R.reviewStep(second('toolu_p11_4', 'all text', true), 'review-tool-1', new Set())!.toolResult).toEqual({ toolUseId: 'toolu_p11_4', isError: true, text: 'all text' })
+  })
+
+  // Claude Code 2.1.332 sends its own attachments as user messages of their
+  // own after the prompt and after a tool result (remote-helper-e2e run
+  // 46155764250: the prompt's request read as `other`): the latest user turn
+  // is every user message after the last assistant message.
+  it('reads the whole latest user turn: the prompt followed by user messages of the CLI\'s own is the call; a result followed by them is the answer', () => {
+    const reminder = { role: 'user', content: [{ type: 'text', text: '<system-reminder>the CLI\'s own</system-reminder>' }] }
+    const call = { ...first(), messages: [...first().messages, reminder, { role: 'user', content: 'more of its own' }] }
+    expect(R.reviewStep(call, runOf(call), new Set())).toEqual({ step: 'call', run: 'review-tool-1', offered: true })
+    const later = second('toolu_p11_5', 'the text')
+    const answer = { ...later, messages: [...later.messages, reminder] }
+    expect(R.reviewStep(answer, runOf(answer), new Set(['review-tool-1']))).toEqual({ step: 'answer', run: 'review-tool-1', toolResult: { toolUseId: 'toolu_p11_5', isError: false, text: 'the text' } })
+    // The prompt before the assistant's tool_use is not the latest turn.
+    const stale = { ...later, messages: [...later.messages.slice(0, 2), reminder] }
+    expect(R.reviewStep(stale, runOf(stale), new Set())).toEqual({ step: 'other', run: 'review-tool-1' })
+  })
+
+  it('anything else is not the review: another run, no run, another tool_use id in a later message with no run named', () => {
+    const other = { ...first(), messages: [{ role: 'user', content: 'p11 probe claude-paste-1: please view the image.' }] }
+    expect(R.reviewStep(other, runOf(other), new Set())).toBeNull()
+    expect(R.reviewStep(first(), null, new Set())).toBeNull()
+    expect(R.reviewStep(second('toolu_other_1', 'x'), 'review-tool-1', new Set())).toEqual({ step: 'other', run: 'review-tool-1' })
+  })
+
+  it('served: the call is answered with a streamed tool_use of the review tool and its input, the result with the fixed text, and both recorded', async () => {
+    const events: Array<Record<string, unknown>> = []
+    const standIn = R.createModelStandIn({ onEvent: (e) => { events.push(e) } })
+    const port = await standIn.listen()
+    const post = async (body: unknown): Promise<Sse[]> => {
+      const r = await fetch(`http://127.0.0.1:${port}/v1/messages`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })
+      expect(r.status).toBe(200)
+      return (await r.text()).split('\n').filter((l) => l.startsWith('data: ')).map((l) => JSON.parse(l.slice(6)) as Sse)
+    }
+    const textOf = (events: Sse[]) => events.filter((e) => e.type === 'content_block_delta').map((e) => e.delta.text).join('')
+    try {
+      const call = await post(first())
+      expect(call.map((e) => e.type)).toEqual(['message_start', 'content_block_start', 'content_block_delta', 'content_block_stop', 'message_delta', 'message_stop'])
+      const start = call.find((e) => e.type === 'content_block_start')!
+      expect(start.content_block).toMatchObject({ type: 'tool_use', name: 'mcp__conductor__codex_review', input: {} })
+      const id = String(start.content_block.id)
+      expect(id).toMatch(/^toolu_p11_\d+$/)
+      const delta = call.find((e) => e.type === 'content_block_delta')!.delta
+      expect(delta.type).toBe('input_json_delta')
+      expect(JSON.parse(delta.partial_json)).toEqual(R.REVIEW_INPUT)
+      expect(call.find((e) => e.type === 'message_delta')!.delta.stop_reason).toBe('tool_use')
+      const answer = await post(second(id, [{ type: 'text', text: 'the review\n\n---\nthe footer' }]))
+      expect(textOf(answer)).toBe('p11 review received')
+      expect(answer.find((e) => e.type === 'message_delta')!.delta.stop_reason).toBe('end_turn')
+      // The same run asked again: plain text, no second call.
+      expect(textOf(await post(first()))).toBe('p11 ok')
+      // A step it does not script carries the request's shape: each message's role and part types, never its text.
+      expect(events.filter((e) => e.ev === 'request').map((e) => e.script)).toEqual([
+        { step: 'call', run: 'review-tool-1', offered: true, toolUse: { id, name: 'mcp__conductor__codex_review', input: R.REVIEW_INPUT } },
+        { step: 'answer', run: 'review-tool-1', toolResult: { toolUseId: id, isError: false, text: 'the review\n\n---\nthe footer' } },
+        { step: 'again', run: 'review-tool-1', shape: ['user:text+text'] },
+      ])
+    } finally {
+      await standIn.close()
+    }
+  })
+
+  it('served: a review run whose request does not list the tool gets text that says so, and no tool_use', async () => {
+    const events: Array<Record<string, unknown>> = []
+    const standIn = R.createModelStandIn({ onEvent: (e) => { events.push(e) } })
+    const port = await standIn.listen()
+    try {
+      const r = await fetch(`http://127.0.0.1:${port}/v1/messages`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(first(false)) })
+      const text = await r.text()
+      expect(text).not.toContain('tool_use')
+      expect(text).toContain('p11 review: the review tool was not offered')
+      expect(events.find((e) => e.ev === 'request')!.script).toEqual({ step: 'call', run: 'review-tool-1', offered: false, tools: ['Read'] })
+    } finally {
+      await standIn.close()
+    }
+  })
+
+  it('a request with no review run carries no script and is answered as before', async () => {
+    const events: Array<Record<string, unknown>> = []
+    const standIn = R.createModelStandIn({ onEvent: (e) => { events.push(e) } })
+    const port = await standIn.listen()
+    try {
+      const r = await fetch(`http://127.0.0.1:${port}/v1/messages`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ stream: true, tools: tools('Read'), messages: [{ role: 'user', content: 'p11 probe claude-paste-1: please view the image.' }] }) })
+      expect(await r.text()).toContain('p11 ok')
+      expect('script' in events.find((e) => e.ev === 'request')!).toBe(false)
+    } finally {
+      await standIn.close()
+    }
   })
 })

@@ -46,7 +46,7 @@ import type { DetachedRemote, DetachedRemoteLiveness } from '../../shared/types'
 import { DEFAULT_PROVIDER_ID, PROVIDER_IDS, type ProviderId } from '../../shared/providers/ids'
 import { tryGetProvider } from '../providers'
 import { colorFgBgValue, resolveHostColorScheme } from '../providers/host-color-scheme'
-import type { ProviderRemoteLaunch, RemoteAccounts, RemoteHostFile, RemoteLaunchOptions } from '../providers/types'
+import type { HeldScreenRows, PasteKey, ProviderRemoteLaunch, RemoteAccounts, RemoteHostFile, RemoteLaunchOptions } from '../providers/types'
 import type { SSHOptions } from '../ssh-options'
 import { ROUTE_WHY, routeSshTab, type PersistentStanding, type Route } from './route'
 import { NoticePty, RemoteDriver, RemoteHelperPty, remoteCwd, remoteHelperCommands, remoteLaunchSpec, remoteSessionId, type RemoteLaunchPlan, type RemoteTabAccount } from './session'
@@ -59,6 +59,7 @@ import { HOST_READS_MAX, hostReadProblem, sessionFilesInput } from './session-fi
 import type { RemoteSignalDeps } from './signals'
 import { machineName, type RemoteMachineRecord, type RemoteMachines } from './machines'
 import type { SshRunner } from './ssh-exec'
+import { registerRemoteReviewSession } from './review-sessions'
 
 export type { RemoteSignalDeps } from './signals'
 
@@ -147,6 +148,33 @@ export function remoteTabsOn(did: string): number {
  *  (the SSH flow overlay is not shown for it). */
 export function isRemoteHelperTab(sessionId: string): boolean {
   return startedThroughHelper.has(sessionId)
+}
+
+/** 2.1.3-beta.21 (ADR-032; plan block 5.1): what the paste route
+ *  (src/main/paste/helper-route.ts) needs of an open tab through the helper:
+ *  whether the clipboard stand-in serves its CLI, the key its launch gave
+ *  for the CLI's image paste, and its picture to its session's folder on the
+ *  machine by file.put (the name it took and its hash back, never a path). */
+export interface RemoteTabPaste {
+  readonly standIn: boolean
+  readonly key: PasteKey | undefined
+  put(bytes: Buffer, kind: 'png' | 'jpg'): Promise<{ name: string; sha256: string }>
+}
+
+/** The paste of this app session's open tab through the helper, or null:
+ *  no such tab open now. */
+export function remoteTabPaste(sessionId: string): RemoteTabPaste | null {
+  const pty = openTabs.get(sessionId)
+  if (!pty) return null
+  return { standIn: pty.pasteStandIn, key: pty.imagePasteKey, put: (bytes, kind) => pty.putPicture(bytes, kind) }
+}
+
+/** 2.1.3-beta.21 (ADR-032): the holder's screen read of this app session's
+ *  open tab through the helper (RemoteHelperPty screenRead), for the Claude
+ *  package's clipboard paste to read its placeholder there; undefined when
+ *  no such tab is open, or its connection reads no screen now. */
+export function remoteTabScreen(sessionId: string): (() => Promise<HeldScreenRows>) | undefined {
+  return openTabs.get(sessionId)?.screenRead
 }
 
 /** The tab was closed or restarted (the renderer's kill door): its start is
@@ -290,7 +318,8 @@ export function remoteLaunchOf(via: ProviderRemoteLaunch, m: RemoteMachineRecord
   const notRead: RemoteHostFile[] = reads.map((r) => ({ from: r.from, path: r.path, content: null }))
   const first = via.launch(launchOptions, m, helper, notRead)
   if (first.files.length > 0) sessionFilesInput(first.files)
-  const spec = remoteLaunchSpec(m, first, remoteTerminalEnv(settings, systemPrefersDark), remotePath, cols, rows)
+  // 2.1.3-beta.21: the session's own folder, whose bin/ the clipboard stand-in's scripts go in.
+  const spec = remoteLaunchSpec(m, first, remoteTerminalEnv(settings, systemPrefersDark), remotePath, cols, rows, helper.folder)
   return { provider: options.provider ?? DEFAULT_PROVIDER_ID, via, options: launchOptions, helper, reads, first, spec }
 }
 
@@ -423,6 +452,20 @@ export function remoteHelperPty(win: OutputWindow, sessionId: string, options: R
     return marked ? startsNothing({ via: 'nothing', why, step: 'press Check on the Machines page, then Restart' }) : usualPath(why)
   }
   d.log(`[remote-helper] ${sessionId}: through the session helper on ${m.user}@${m.host}:${m.port} (${m.did.slice(0, 8)}), session ${pty.sid}${kind === 'until-ended' ? ', kept until it is ended' : ''}`)
+  // 2.1.3-beta.21 (aicc_planning#446): a tab whose provider's remote launch
+  // says it reviews on its machine (a Claude Code tab) may ask for a review
+  // there, in its folder there; never for the
+  // home folder there or a folder above it, as a local tab is never
+  // registered for its home folder (lifecycle.ts). Its registration goes with
+  // the session's (the tool host's unregister at the session's teardown);
+  // whether the tool is offered is decided per connection, from the
+  // machine's record.
+  if (remote.reviewsOnMachine === true && options.shellOnly !== true) {
+    const reviewCwd = remoteCwd(ssh.remotePath, m.home)
+    if (!registerRemoteReviewSession(sessionId, { did: m.did, cwd: reviewCwd }, m.home)) {
+      d.log(`[remote-helper] ${sessionId}: a review on its machine is NOT registered: its folder on ${m.host} resolves to the home folder or above it. Set a real project folder to enable review.`)
+    }
+  }
   openTabs.set(sessionId, pty)
   startedThroughHelper.set(sessionId, pty)
   if (persistent) todayTabs.delete(sessionId)
