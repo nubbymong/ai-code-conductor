@@ -346,6 +346,14 @@ export interface RemoteLaunch {
    *  field, not a variable: a provider's `env` may not set PATH. Absent or
    *  false: neither. */
   readonly clipStandIn?: boolean
+  /** 2.1.3-beta.21 (ADR-032, row 14; plan block 5.1): the key the app sends
+   *  for the CLI's own image paste in this session, from the provider's
+   *  table and what its host reads found (Claude Code: `chat:imagePaste` in
+   *  the keybindings file of the config folder the session's CLI uses,
+   *  mapped through the package's fixed chord-to-bytes table, so a host
+   *  picks at most a chord from that table, never raw bytes). Absent: the
+   *  session takes no image paste (a sign-in). */
+  readonly imagePasteKey?: PasteKey
 }
 
 /** A status line as a provider gives it for the tab's strip: StatuslineData's

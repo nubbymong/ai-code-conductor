@@ -183,9 +183,11 @@ describe('a helper tab\'s own files on its host', () => {
     expect(pty).not.toBeNull()
     await until('the launch', () => holder.launch !== null && holder.attached !== null)
     expect(ssh.scripts()).toEqual(['reads', 'field', 'hold', 'files', 'bridge'])
-    // The reads: the session folder, then the four settings files Claude Code reads, as data on standard input.
+    // The reads: the session folder, then the four settings files Claude Code
+    // reads, then (2.1.3-beta.21) its keybindings file for the paste key, as
+    // data on standard input.
     expect(ssh.calls[0].values.slice(1)).toEqual([MACHINE.did, INSTALL])
-    expect(ssh.calls[0].stdin.toString()).toBe('/home/nick/work\nhome .claude/settings.json\ncwd .claude/settings.json\ncwd .claude/settings.local.json\ncheckout .claude/settings.local.json\n')
+    expect(ssh.calls[0].stdin.toString()).toBe('/home/nick/work\nhome .claude/settings.json\ncwd .claude/settings.json\ncwd .claude/settings.local.json\ncheckout .claude/settings.local.json\nhome .claude/keybindings.json\n')
     // The files: the session's id and the layout on the command line, the bytes on standard input.
     const sid = remoteSessionId(id)
     const files = ssh.calls.find((c) => c.script === 'files')!

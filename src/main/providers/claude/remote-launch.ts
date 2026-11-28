@@ -41,12 +41,24 @@
 // its two scripts into the session's bin/ folder and puts that folder first
 // on the CLI's PATH, and the picture the app sends with `file.put` is what
 // the CLI's own image paste reads. A sign-in launch reads no picture.
+//
+// The key the app sends for that paste (2.1.3-beta.21, plan block 5.1; ADR-032
+// row 14): Claude Code's `chat:imagePaste`, Ctrl+V on a Linux host, unless the
+// keybindings file of the config folder the session's CLI uses rebinds it
+// (`<configDir>/keybindings.json` for a tab on an account's own folder there,
+// else `~/.claude/keybindings.json`). Core reads that file as one more host
+// read (claudeKeybindingsRead, beside CLAUDE_HOST_READS), as data, and the
+// launch gives the key (imagePasteKey) through the package's fixed
+// chord-to-bytes table (./clipboard-paste.ts), so a host picks at most a chord
+// from that table, never raw bytes. A configDir outside the home folder is not
+// read: Ctrl+V, as when there is no file.
 import { concatHookMaps, helperHooksBlockFor, helperStatusCommand } from '../../hooks/helper-hook-commands'
 import { HELPER_HOOK_KINDS } from '../../session-helper/protocol'
 import { SHARED_DIR_NAMES } from '../../../shared/account-folder'
 import { DEFAULT_CLI_AUTH_METHOD, isCliAuthMethod } from '../../../shared/account-web-session'
 import { sanitizeClaudeManagedSettings } from './managed-launch'
-import type { ProviderRemoteLaunch, RemoteAccounts, RemoteAccountUsage, RemoteHelperCommands, RemoteHostField, RemoteHostFile, RemoteHostRead, RemoteLaunch, RemoteLaunchMachine, RemoteLaunchOptions, RemoteStatusLine } from '../types'
+import { claudeImagePasteKey } from './clipboard-paste'
+import type { PasteKey, ProviderRemoteLaunch, RemoteAccounts, RemoteAccountUsage, RemoteHelperCommands, RemoteHostField, RemoteHostFile, RemoteHostRead, RemoteLaunch, RemoteLaunchMachine, RemoteLaunchOptions, RemoteStatusLine } from '../types'
 
 /** Where the CLI is started when the machine's check found none. */
 const REMOTE_CLI_FALLBACK = '/usr/local/bin/claude'
@@ -124,6 +136,40 @@ export function claudeAccountField(o: RemoteLaunchOptions, m: RemoteLaunchMachin
   return o.configDir.startsWith(home) && o.configDir.length > home.length
     ? { file: `${o.configDir.slice(home.length).replace(/\/+$/, '')}/${CLAUDE_ACCOUNT_FIELD.file}`, key: CLAUDE_ACCOUNT_FIELD.key }
     : null
+}
+
+/** Claude Code's keybindings file, in its config folder. */
+export const CLAUDE_KEYBINDINGS_FILE = 'keybindings.json'
+/** One name of a host read's path, as core's reads take it (remote-helper/
+ *  session-files.ts hostReadProblem): a plain name, never `.` or `..`. */
+const PLAIN_READ_NAME_RE = /^[A-Za-z0-9._-]{1,255}$/
+
+/** 2.1.3-beta.21 (plan block 5.1): the host read of the keybindings file of
+ *  the config folder the session's Claude Code uses: `~/.claude/` on the
+ *  host's own sign-in, the account's own folder (`configDir`) as a path under
+ *  the home folder for a tab on it. None for a sign-in, and none for a
+ *  configDir that is not a folder of plain names under the home folder the
+ *  check read (the key is then Ctrl+V, as when there is no file). */
+export function claudeKeybindingsRead(o: RemoteLaunchOptions, m: RemoteLaunchMachine): RemoteHostRead | null {
+  if (o.signIn) return null
+  if (!o.configDir) return { from: 'home', path: `.claude/${CLAUDE_KEYBINDINGS_FILE}` }
+  const home = `${m.home.replace(/\/+$/, '')}/`
+  if (!o.configDir.startsWith(home)) return null
+  const rel = o.configDir.slice(home.length).replace(/\/+$/, '')
+  const names = rel.split('/')
+  if (rel === '' || rel.length > 1000 || names.length > 15 || names.some((n) => !PLAIN_READ_NAME_RE.test(n) || n === '.' || n === '..')) return null
+  return { from: 'home', path: `${rel}/${CLAUDE_KEYBINDINGS_FILE}` }
+}
+
+/** The session's paste key (RemoteLaunch imagePasteKey) from what the host
+ *  reads found: the keybindings file claudeKeybindingsRead names, read as
+ *  Claude Code reads it on Linux, its chord through the fixed table. A host
+ *  through the session helper is Linux or macOS in this release (Windows
+ *  hosts come later, ADR-032), where Claude Code's default is Ctrl+V. */
+export function claudeRemotePasteKey(o: RemoteLaunchOptions, m: RemoteLaunchMachine, reads: readonly RemoteHostFile[]): PasteKey {
+  const want = claudeKeybindingsRead(o, m)
+  const text = want ? reads.find((r) => r.from === want.from && r.path === want.path)?.content ?? null : null
+  return claudeImagePasteKey('linux', text)
 }
 
 /** The host user's own settings (the `home` host read) as an account's
@@ -234,7 +280,9 @@ export function claudeRemoteSettings(helper: RemoteHelperCommands, reads: readon
   // The nine events the app takes, as buildHelperHooksBlock gives a held session on this computer.
   const own = helperHooksBlockFor(target, HELPER_HOOK_KINDS)
   if (statusCommand === null || own === null) throw new Error('the session helper\'s path on the host cannot be put in a status line or hook command safely')
-  const hooks = concatHookMaps(...reads.map((r) => hooksOfSettingsText(r.content)), own)
+  // Only the settings files' hooks (2.1.3-beta.21: the keybindings read is no settings file).
+  const settingsReads = reads.filter((r) => CLAUDE_HOST_READS.some((s) => s.from === r.from && s.path === r.path))
+  const hooks = concatHookMaps(...settingsReads.map((r) => hooksOfSettingsText(r.content)), own)
   const home = CLAUDE_HOST_READS[0]
   const userText = account ? claudeAccountSettingsText(reads) : reads.find((r) => r.from === home.from && r.path === home.path)?.content ?? null
   const user = { ...settingsOfText(userText) }
@@ -350,7 +398,12 @@ function claudeSignInLaunch(o: RemoteLaunchOptions, m: RemoteLaunchMachine): Rem
 }
 
 export const claudeRemoteLaunch: ProviderRemoteLaunch = {
-  hostReads: (o: RemoteLaunchOptions) => (o.signIn ? [] : CLAUDE_HOST_READS),
+  hostReads: (o: RemoteLaunchOptions, m: RemoteLaunchMachine) => {
+    if (o.signIn) return []
+    // 2.1.3-beta.21: then the keybindings file of the folder the CLI uses, for its paste key.
+    const keys = claudeKeybindingsRead(o, m)
+    return keys ? [...CLAUDE_HOST_READS, keys] : CLAUDE_HOST_READS
+  },
   accountField: claudeAccountField,
   accountUsage: () => CLAUDE_ACCOUNT_USAGE,
   accounts: () => CLAUDE_REMOTE_ACCOUNTS,
@@ -368,6 +421,7 @@ export const claudeRemoteLaunch: ProviderRemoteLaunch = {
     statusKeep: CLAUDE_STATUS_KEEP,
     hookKeep: CLAUDE_HOOK_KEEP,
     clipStandIn: true,
+    imagePasteKey: claudeRemotePasteKey(o, m, reads),
   }),
   statusLine: claudeRemoteStatusLine,
 }
