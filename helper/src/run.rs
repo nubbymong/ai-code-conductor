@@ -61,7 +61,7 @@
 
 use crate::hello::{valid_nonce, RESULT_PREFIX};
 use crate::json::{self, Value};
-use crate::pty::session_left;
+use crate::pty::{session_left, signal_session};
 use crate::request::{MAX_ARGV_ITEMS, MAX_ARG_CHARS, MAX_CWD_CHARS, MAX_ENV_ENTRIES, MAX_ENV_NAME_CHARS, MAX_ENV_VALUE_CHARS};
 use std::io::{self, BufRead, Read, Write};
 use std::os::unix::process::{CommandExt, ExitStatusExt};
@@ -322,9 +322,7 @@ fn copy_output(mut from: impl Read, copied: &Mutex<Copied>, events: &Sender<Even
             return;
         }
         let room = MAX_OUTPUT_BYTES - c.total;
-        // MUTANT M3 (the output not capped): the read that passes the cap is
-        // copied whole, so more than MAX_OUTPUT_BYTES reaches standard output.
-        let take = n;
+        let take = n.min(room);
         if take > 0 {
             let stdout = io::stdout();
             let mut out = stdout.lock();
@@ -382,17 +380,6 @@ fn over(child: &mut Child, status: &mut Option<ExitStatus>, sid: libc::pid_t) ->
     reaped(child, status) && !session_left(sid)
 }
 
-/// MUTANT M2 (the child's group not ended): only the program itself is
-/// signalled, and only while it is unreaped; what it started in its session
-/// and group is left running.
-fn signal_program_only(child: &mut Child, status: &mut Option<ExitStatus>, sig: libc::c_int) {
-    if !reaped(child, status) {
-        unsafe {
-            libc::kill(child.id() as libc::pid_t, sig);
-        }
-    }
-}
-
 /// End the program's whole session, as a holder ends a tree
 /// (`pty::unix::Pty::end_tree`): nothing when it has exited and left nothing,
 /// else a hangup, `GRACE` to go, then a kill, and the program reaped.
@@ -405,8 +392,8 @@ fn end_session(child: &mut Child, status: &mut Option<ExitStatus>) {
     if over(child, status, sid) {
         return;
     }
-    signal_program_only(child, status, libc::SIGHUP);
-    signal_program_only(child, status, libc::SIGCONT);
+    signal_session(sid, libc::SIGHUP);
+    signal_session(sid, libc::SIGCONT);
     let deadline = Instant::now() + GRACE;
     while Instant::now() < deadline {
         thread::sleep(Duration::from_millis(20));
@@ -414,7 +401,7 @@ fn end_session(child: &mut Child, status: &mut Option<ExitStatus>) {
             return;
         }
     }
-    signal_program_only(child, status, libc::SIGKILL);
+    signal_session(sid, libc::SIGKILL);
     let deadline = Instant::now() + KILL_WAIT;
     while !reaped(child, status) && Instant::now() < deadline {
         thread::sleep(Duration::from_millis(10));
@@ -455,17 +442,9 @@ pub fn run(nonce: &str, timeout: Duration) -> u8 {
     unsafe {
         libc::signal(libc::SIGCHLD, libc::SIG_DFL);
     }
-    // MUTANT M1 (the argv run through a shell): a program that is not itself a
-    // shell, given an argument holding ; $ or a backquote, is run as one
-    // /bin/sh -c line of its argv joined by spaces.
-    let shelled = !request.argv[0].ends_with("/sh") && request.argv[1..].iter().any(|a| a.contains(';') || a.contains('$') || a.contains('`'));
-    let mut cmd = if shelled { Command::new("/bin/sh") } else { Command::new(&request.argv[0]) };
-    if shelled {
-        cmd.arg("-c").arg(request.argv.join(" "));
-    } else {
-        cmd.args(&request.argv[1..]);
-    }
-    cmd.env_clear()
+    let mut cmd = Command::new(&request.argv[0]);
+    cmd.args(&request.argv[1..])
+        .env_clear()
         .envs(request.env.iter().map(|(k, v)| (k.as_str(), v.as_str())))
         .current_dir(&request.cwd)
         .stdin(Stdio::piped())
