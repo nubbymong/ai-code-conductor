@@ -77,12 +77,13 @@ const { oneOffBroadcastBlocker, broadcastBlocker } = await import('../../../src/
 const { sessionCapabilities } = await import('../../../src/renderer/lib/session-capabilities')
 const { usePasteHintStore } = await import('../../../src/renderer/stores/pasteHintStore')
 
-/** The pressed tab (local, shown), an SSH tab in the background, a Codex tab,
- *  and the tabs a broadcast never reaches. */
+/** The pressed tab (local, shown), an SSH tab in the background, a tab of
+ *  another config, and the tabs a broadcast never reaches. Each agent's own
+ *  line in the chooser is pinned in commandbar-broadcast.test.tsx. */
 const OPEN = [
   { id: 's-1', label: 'here', workingDirectory: '/', color: '#89b4fa', sessionType: 'local', model: 'sonnet', configId: 'cfg' },
   { id: 's-2', label: 'remote', workingDirectory: '/', color: '#89b4fa', sessionType: 'ssh', model: 'sonnet', sshConfig: { host: 'build-box', port: 22, username: 'u', remotePath: '/' } },
-  { id: 's-3', label: 'cx-config', customName: 'cx work', workingDirectory: '/', color: '#89b4fa', sessionType: 'local', model: '', provider: 'codex' },
+  { id: 's-3', label: 'other', workingDirectory: '/', color: '#89b4fa', sessionType: 'local', model: 'sonnet', configId: 'cfg-2' },
   { id: 'sh', label: 'shell', workingDirectory: '/', color: '#89b4fa', sessionType: 'local', model: '', shellOnly: true },
   { id: 'ask', label: 'Ask', workingDirectory: '/', color: '#89b4fa', sessionType: 'local', model: '', kind: 'ask' },
   { id: 'gone', label: 'ended', workingDirectory: '/', color: '#89b4fa', sessionType: 'local', model: '', ptyExited: true },
@@ -229,7 +230,7 @@ describe('choosing it opens the broadcast chooser, and Send reaches the sessions
     await click('menu-send-all')
     await click('broadcast-chooser-choose')
     expect(rows().map((r) => r.dataset.sessionId)).toEqual(['s-1', 's-2', 's-3'])
-    // Untick the SSH tab: Send reaches this tab and the Codex tab only.
+    // Untick the SSH tab: Send reaches this tab and the other config's tab only.
     await act(async () => { tickBox('s-2').click(); await settle() })
     await click('broadcast-chooser-send')
     expect(chooser()).toBeNull()
