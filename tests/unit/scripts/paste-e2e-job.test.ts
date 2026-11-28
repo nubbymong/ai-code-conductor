@@ -184,12 +184,16 @@ describe('ci.yml: the Paste e2e job only reads, runs Playwright once per test, a
 
   it('on Linux: under Xvfb, neither program first (both removed), then xclip, then wl-paste alone; each state named to the spec, for both parts', () => {
     const linux = job.steps.filter((s) => on(s, 'Linux', 'probe') && !on(s, 'macOS', 'probe'))
-    const order = ['Let Electron\'s sandbox helper run (Linux)', 'Install Xvfb (Linux)', 'Remove xclip and wl-clipboard (Linux)', 'Run the paste end-to-end check, neither program (Linux)', 'Install xclip (Linux)', 'Run the paste end-to-end check, xclip (Linux)', 'Swap xclip for wl-clipboard (Linux)', 'Run the paste end-to-end check, wl-paste alone (Linux)']
+    const order = ['Let Electron\'s sandbox run (Linux)', 'Install Xvfb (Linux)', 'Remove xclip and wl-clipboard (Linux)', 'Run the paste end-to-end check, neither program (Linux)', 'Install xclip (Linux)', 'Run the paste end-to-end check, xclip (Linux)', 'Swap xclip for wl-clipboard (Linux)', 'Run the paste end-to-end check, wl-paste alone (Linux)']
     const at = order.map((n) => names().indexOf(n))
     expect(at.every((i) => i >= 0), JSON.stringify(names())).toBe(true)
     expect([...at].sort((a, b) => a - b)).toEqual(at)
     for (const n of order) expect(linux.map((s) => s.name), n).toContain(n)
     expect(String(step('Remove xclip and wl-clipboard (Linux)').run)).toMatch(/apt-get remove -y -q xclip wl-clipboard/)
+    // Chromium's namespace sandbox, every process the runner user's, not the
+    // setuid helper (run 46141007842).
+    expect(String(step('Let Electron\'s sandbox run (Linux)').run).trim()).toBe('sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0')
+    expect(JSON.stringify(job.steps)).not.toMatch(/chmod 4755|chrome-sandbox/)
     expect(String(step('Install xclip (Linux)').run)).toMatch(/apt-get install -y -q xclip$/)
     expect(String(step('Swap xclip for wl-clipboard (Linux)').run)).toMatch(/apt-get remove -y -q xclip\n.*apt-get install -y -q wl-clipboard/)
     const tools = { 'neither program': 'none', xclip: 'xclip', 'wl-paste alone': 'wl-paste' } as const

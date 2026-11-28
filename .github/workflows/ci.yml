@@ -1478,9 +1478,13 @@ jobs:
   # (both removed first), xclip, then wl-clipboard alone (which, under X11,
   # probe PL1 read does not serve Claude Code); each run is its own
   # Playwright run with PASTE_E2E_LINUX_TOOLS naming the state, and the next
-  # state's run goes on whatever the last one answered. Electron's
-  # sandbox helper is made root's and setuid, as Electron's own Linux CI does,
-  # so the app starts with its sandbox on.
+  # state's run goes on whatever the last one answered. Unprivileged user
+  # namespaces are allowed on the runner (Ubuntu 24.04's AppArmor restricts
+  # them), so the app starts with Chromium's namespace sandbox on, every
+  # process of it the runner user's. Not the setuid helper: run 46141007842
+  # left each Linux run waiting out Playwright's 30 s worker teardown after
+  # the app was stopped, and a process the root-owned helper starts is one
+  # the runner user cannot stop.
   #
   # Playwright runs with --retries=0, and the step after each run fails the
   # job when its report shows a test retried or reported flaky
@@ -1544,12 +1548,10 @@ jobs:
           }).then(() => console.log('rebuild done')).catch(e => { console.error(e); process.exit(1) })
           "
 
-      - name: Let Electron's sandbox helper run (Linux)
+      - name: Let Electron's sandbox run (Linux)
         if: runner.os == 'Linux'
         shell: bash
-        run: |
-          sudo chown root:root node_modules/electron/dist/chrome-sandbox
-          sudo chmod 4755 node_modules/electron/dist/chrome-sandbox
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
 
       - name: Install Xvfb (Linux)
         if: runner.os == 'Linux'

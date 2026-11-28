@@ -15,7 +15,9 @@
 // macOS and Linux (plan 3.1): ./unix-writers.ts, in the formats each OS's
 // CLIs read (macOS public.png and public.tiff, Linux image/png;
 // ./picture-formats.ts), measured by PM1 and PL1. No writer answers
-// `not-yet` since then; the result stays for an OS with no writer.
+// `not-yet` since then, so plan s6's "not available on this computer in
+// this beta" lines for Snap and a copied file no longer show; the paste
+// module (./index.ts) still reads the result.
 import { clipboard, ClipboardItem, type NativeImage } from 'electron'
 import { writeLinuxClipboardPicture, writeMacClipboardPicture } from './unix-writers'
 

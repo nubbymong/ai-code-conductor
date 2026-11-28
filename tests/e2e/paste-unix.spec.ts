@@ -250,20 +250,27 @@ async function launch(name: string): Promise<{ claudeProject: string; codexProje
   return { claudeProject, codexProject }
 }
 
+/** This checkout's Electron (the app's own processes run it). */
+const ELECTRON_DIST = path.resolve(__dirname, '../../node_modules/electron/dist')
+
 /** This run's processes still running: their command line names its own
- *  data folder (a mkdtemp folder no other run has). */
+ *  data folder (a mkdtemp folder no other run has), this checkout's
+ *  Electron (one app at a time in this job), or the vision browser the app
+ *  starts at boot (detached, on its own debug profile, so stopping the app
+ *  leaves it: src/main/vision-manager.ts launchBrowser). */
 function leftovers(dataDir: string): Array<{ pid: number; args: string }> {
   const r = spawnSync('/bin/ps', ['-A', '-o', 'pid=,args='], { env: minimalEnv(), encoding: 'utf8', timeout: 30_000 })
+  const ours = (args: string) => args.includes(dataDir) || args.includes(ELECTRON_DIST) || (args.includes('--remote-debugging-port=') && /chrome-debug-\d+/.test(args))
   return (r.stdout ?? '').split('\n').map((l) => /^\s*(\d+)\s+(.*)$/.exec(l)).filter((m): m is RegExpExecArray => !!m)
-    .map((m) => ({ pid: Number(m[1]), args: m[2] })).filter((p) => p.pid !== process.pid && p.args.includes(dataDir))
+    .map((m) => ({ pid: Number(m[1]), args: m[2] })).filter((p) => p.pid !== process.pid && ours(p.args))
 }
 
 /** The end of a run: each CLI ended first (Ctrl+C twice), so no session's
  *  program outlives the app; then the app, the stand-in, and any process of
- *  this run still running, each stopped only while its command line still
- *  names this run's folder. Each step's time is recorded, for a cause (run
- *  46139776011's Linux run with neither program hit Playwright's 30 s worker
- *  teardown after this step had ended). */
+ *  this run still running (leftovers), each stopped only while it is still
+ *  listed as one; a stop the system refuses is recorded. Each step's time is
+ *  recorded, for a cause (runs 46139776011 and 46141007842: Linux runs hit
+ *  Playwright's 30 s worker teardown after this step had ended). */
 async function closeAll(name: string): Promise<void> {
   const t0 = Date.now()
   const marks: Record<string, number> = {}
@@ -280,12 +287,15 @@ async function closeAll(name: string): Promise<void> {
   standIn = undefined
   marks.standInClosed = Date.now() - t0
   const left = dataDir ? leftovers(dataDir) : []
+  const refused: string[] = []
   for (const p of left) {
-    if (!leftovers(dataDir!).some((q) => q.pid === p.pid)) continue
-    try { process.kill(p.pid, 'SIGKILL') } catch { /* gone */ }
+    if (!leftovers(dataDir!).some((q) => q.pid === p.pid && q.args === p.args)) continue
+    try { process.kill(p.pid, 'SIGKILL') } catch (e) { const code = (e as NodeJS.ErrnoException).code; if (code !== 'ESRCH') refused.push(`${p.pid} ${code}`) }
   }
+  await sleep(500)
   marks.swept = Date.now() - t0
-  save(`${name}-teardown`, { marks, leftovers: left.map((p) => ({ pid: p.pid, args: p.args.slice(0, 160) })), after: dataDir ? leftovers(dataDir).length : 0 })
+  const after = dataDir ? leftovers(dataDir) : []
+  save(`${name}-teardown`, { marks, leftovers: left.map((p) => ({ pid: p.pid, args: p.args.slice(0, 160) })), refused, after: after.map((p) => ({ pid: p.pid, args: p.args.slice(0, 160) })) })
 }
 
 /** Which of Claude Code's two Linux programs are installed (command -v). */
@@ -436,6 +446,17 @@ function copyFileOnMac(file: string): string {
 }
 
 const placeholders = async (): Promise<number> => ((await screenOf(ctx!.page)).match(IMAGE_RE) ?? []).length
+/** What stands after the newest placeholder on its row, the composer's (the
+ *  lowest "[Image #N]" on screen; earlier turns stay above it): '' when
+ *  nothing was typed after the key. */
+async function typedAfterPlaceholder(): Promise<string> {
+  const rows = (await terminalRows(ctx!.page)).map((r) => r.replace(/\s+$/, ''))
+  for (let i = rows.length - 1; i >= 0; i--) {
+    const found = [...rows[i].matchAll(IMAGE_RE)]
+    if (found.length) { const last = found[found.length - 1]; return rows[i].slice((last.index ?? 0) + last[0].length).trim() }
+  }
+  return ''
+}
 const requestsWith = (from: number, cli: 'claude' | 'codex', rgba: string) => standInEvents.slice(from).filter((e) => e.ev === 'request' && e.path === (cli === 'codex' ? '/v1/responses' : '/v1/messages') && (e.images ?? []).some((i) => i.rgbaSha256 === rgba))
 const lastImages = (from: number, cli: 'claude' | 'codex') => standInEvents.slice(from).filter((e) => e.ev === 'request' && e.path === (cli === 'codex' ? '/v1/responses' : '/v1/messages')).map((e) => (e.images ?? []).slice(-1).map((i) => ({ kind: i.kind, width: i.width, height: i.height, unread: i.pixelsUnread })))
 
@@ -549,7 +570,7 @@ async function appPress(cli: 'claude' | 'codex', how: 'image-focused' | 'image-o
   }
   if (how === 'image-focused' || how === 'text-chord') {
     await sleep(300)
-    r.typedAfterKey = (await screenOf(ctx!.page)).includes('I just pasted an image')
+    r.typedAfterKey = await typedAfterPlaceholder()
     await ptyWrite(ctx!.page, tabs[cli].sid, ` p11 probe pe-${cli}-${seed}`)
     await sleep(500)
     await ptyWrite(ctx!.page, tabs[cli].sid, '\r')
@@ -645,7 +666,7 @@ test.describe('paste readings: the app\'s own route into Claude Code and Codex',
       for (const r of mine) {
         expect(r.placeholderMs, `${cli} ${r.how}: "[Image #N]" within the app's wait`).not.toBeNull()
         expect(r.turnCarriedPicture, `${cli} ${r.how}: the turn carried the picture, by its pixels`).toBe(true)
-        if (r.how === 'image-focused' || r.how === 'text-chord') expect(r.typedAfterKey, `${cli} ${r.how}: nothing typed after the key`).toBe(false)
+        if (r.how === 'image-focused' || r.how === 'text-chord') expect(r.typedAfterKey, `${cli} ${r.how}: nothing typed after the key on the composer's row`).toBe('')
       }
     })
   }
